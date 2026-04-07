@@ -983,7 +983,7 @@ async function runSearch() {
   const params = new URLSearchParams({ industry, location, title, max: maxRes, minscore: minScore });
 
   try {
-    const es = new EventSource(`http://https://pulseforge-leadgen-production.up.railway.app/api/search?${params}`);
+    const es = new EventSource(`https://pulseforge-leadgen-production.up.railway.app/api/search?${params}`);
 
     es.onmessage = (e) => {
       const msg = JSON.parse(e.data);
@@ -1170,7 +1170,7 @@ function doExport() {
 
 async function exportCSV(leads) {
   try {
-    const res = await fetch('http://https://pulseforge-leadgen-production.up.railway.app/api/export/csv', {
+    const res = await fetch('https://pulseforge-leadgen-production.up.railway.app/api/export/csv', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ leads })
