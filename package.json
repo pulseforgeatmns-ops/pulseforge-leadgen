@@ -1,0 +1,29 @@
+{
+  "name": "lead-gen-app",
+  "version": "1.0.0",
+  "description": "",
+  "main": "leadgen.js",
+  "scripts": {
+  "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pulseforgeatmns-ops/pulseforge-leadgen.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/issues"
+  },
+  "homepage": "https://github.com/pulseforgeatmns-ops/pulseforge-leadgen#readme",
+  "dependencies": {
+    "axios": "^1.14.0",
+    "cors": "^2.8.6",
+    "csv-writer": "^1.6.0",
+    "dotenv": "^17.4.1",
+    "express": "^5.2.1",
+    "googleapis": "^171.4.0"
+  }
+}
