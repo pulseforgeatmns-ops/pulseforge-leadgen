@@ -73,25 +73,7 @@ async function searchGoogle(query, numResults = 10) {
       break;
     }
   }
-      const skipDomains = [
-  // Social
-  'facebook.com','instagram.com','twitter.com','linkedin.com',
-  'youtube.com','tiktok.com','nextdoor.com','reddit.com',
-  // Job boards
-  'ziprecruiter.com','indeed.com','glassdoor.com','monster.com',
-  'careerbuilder.com','simplyhired.com','snagajob.com',
-  // Directories & listings
-  'yelp.com','yellowpages.com','bbb.org','angieslist.com',
-  'thumbtack.com','homeadvisor.com','houzz.com','bark.com',
-  'bizbuysell.com','loopnet.com','businessbroker.net',
-  'bizquest.com','franchisegator.com',
-  // Content & news
-  'businessinsider.com','forbes.com','inc.com','entrepreneur.com',
-  'reddit.com','quora.com','medium.com','nhbr.com',
-  // Gov & misc
-  'sba.gov','census.gov','us.bold.pro','housekeeper.com',
-  'remotebooksonline.com',
-];
+      const skipDomains = ['facebook.com','instagram.com','yelp.com','twitter.com','linkedin.com','youtube.com'];
       return results.filter(r => !skipDomains.some(s => r.url.includes(s)));
 }
 
@@ -102,37 +84,45 @@ async function searchGoogle(query, numResults = 10) {
 // Free tier: 50 searches/mo
 // ─────────────────────────────────────────────────────────────────────
 async function enrichWithProspeo(domain) {
-  const HUNTER_API_KEY = process.env.HUNTER_API_KEY;
-  if (!HUNTER_API_KEY) {
-    console.warn('[WARN] Hunter API key not set — skipping enrichment');
+  if (!PROSPEO_API_KEY) {
+    console.warn('[WARN] Prospeo key not set — skipping enrichment');
     return null;
   }
 
   try {
-    const res = await axios.get('https://api.hunter.io/v2/domain-search', {
-      params: {
-        domain: domain,
-        api_key: HUNTER_API_KEY,
-        limit: 5,
-        type: 'personal',
+    const res = await axios.post('https://api.prospeo.io/search-person',
+      {
+        page: 1,
+        filters: {
+          company: {
+            websites: { include: [domain] }
+          },
+          person_job_title: {
+            include: [CONFIG.jobTitle]
+          }
+        }
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-KEY': PROSPEO_API_KEY
+        }
       }
-    });
+    );
 
-    const emails = res.data?.data?.emails || [];
-    if (!emails.length) return null;
+    const results = res.data?.results || [];
+    if (!results.length) return null;
 
-    const titleFilter = CONFIG.jobTitle.toLowerCase();
-    const match = emails.find(e =>
-      e.position && e.position.toLowerCase().includes(titleFilter)
-    ) || emails[0];
+    const match = results[0];
+    const person = match.person || {};
 
     return {
-      contact: `${match.first_name || ''} ${match.last_name || ''}`.trim(),
-      email:   match.value || null,
-      title:   match.position || null,
-    };
+      contact: `${person.first_name || ''} ${person.last_name || ''}`.trim(),
+      email:   person.email?.email || person.email || null,
+      title:   person.job_title || null,
+};
   } catch (err) {
-    console.warn(`[Hunter] ${domain}:`, err.response?.data?.errors || err.message);
+    console.warn(`[Prospeo] ${domain}:`, err.response?.data || err.message);
     return null;
   }
 }
