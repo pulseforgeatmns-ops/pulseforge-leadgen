@@ -1009,15 +1009,19 @@ async function runSearch() {
       }
     };
 
-    es.onerror = () => {
-      log('warn', 'Server not running — using demo data');
-      useDemoData(minScore);
-      showProgress(false);
-      btn.disabled = false;
-      btn.textContent = '▶ Run Search';
-      state.running = false;
-      es.close();
-    };
+    es.onerror = (e) => {
+  if (state.leads.length > 0) {
+    es.close();
+    return;
+  }
+    log('warn', 'Server not running — using demo data');
+    useDemoData(minScore);
+    showProgress(false);
+    btn.disabled = false;
+    btn.textContent = '▶ Run Search';
+    state.running = false;
+    es.close();
+  };
 
   } catch (err) {
     log('warn', 'Could not connect to server — using demo data');
