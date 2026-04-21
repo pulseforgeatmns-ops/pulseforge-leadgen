@@ -163,6 +163,101 @@ app.post('/api/export/csv', async (req, res) => {
   res.download(filepath, filename, () => fs.unlinkSync(filepath));
 });
 
+// LinkedIn comment posting endpoint — called by n8n on approval
+app.post('/api/post-comment', async (req, res) => {
+  const { postUrl, comment, authorName } = req.body;
+
+  if (!postUrl || !comment) {
+    return res.status(400).json({ error: 'Missing postUrl or comment' });
+  }
+
+  try {
+    const puppeteer = require('puppeteer-extra');
+    const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+    const fs = require('fs');
+    const db = require('./dbClient');
+
+    puppeteer.use(StealthPlugin());
+
+    const SESSION_FILE = './linkedin_session.json';
+
+    if (!fs.existsSync(SESSION_FILE)) {
+      return res.status(500).json({ error: 'No LinkedIn session found' });
+    }
+
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
+
+    const cookies = JSON.parse(fs.readFileSync(SESSION_FILE));
+    await page.setCookie(...cookies);
+
+    await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await new Promise(r => setTimeout(r, 3000 + Math.random() * 2000));
+
+    // Click comment button
+    const commentBtn = await page.$('.comment-button') ||
+                       await page.$('[aria-label="Comment"]') ||
+                       await page.$('.comments-comment-box__text-editor');
+
+    if (!commentBtn) {
+      await browser.close();
+      return res.status(500).json({ error: 'Comment button not found' });
+    }
+
+    await commentBtn.click();
+    await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
+
+    const commentBox = await page.$('.comments-comment-box__text-editor') ||
+                       await page.$('[contenteditable="true"]');
+
+    if (!commentBox) {
+      await browser.close();
+      return res.status(500).json({ error: 'Comment box not found' });
+    }
+
+    await commentBox.click();
+    await new Promise(r => setTimeout(r, 500));
+
+    for (const char of comment) {
+      await commentBox.type(char, { delay: Math.floor(Math.random() * 80) + 30 });
+    }
+
+    await new Promise(r => setTimeout(r, 1000 + Math.random() * 1000));
+
+    const submitBtn = await page.$('.comments-comment-box__submit-button') ||
+                      await page.$('button[type="submit"]');
+
+    if (submitBtn) {
+      await submitBtn.click();
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // Log to second brain
+    await db.logAgentAction(
+      'linkedin_agent',
+      'post_comment',
+      null,
+      postUrl,
+      { comment, authorName },
+      'success'
+    );
+
+    await browser.close();
+
+    console.log(`✓ Comment posted on: ${postUrl}`);
+    res.json({ success: true, postUrl, comment });
+
+  } catch (err) {
+    console.error('Error posting comment:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── SEARCH ────────────────────────────────────────────────────────────
 async function searchSerpAPI(query, numResults, log) {
   if (!SERPAPI_KEY) {
