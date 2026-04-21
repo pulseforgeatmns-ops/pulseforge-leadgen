@@ -369,6 +369,7 @@ app.post('/api/approve-comment/:id', async (req, res) => {
 
     const cookies = JSON.parse(Buffer.from(sessionData, 'base64').toString('utf8'));
 
+    console.log('Launching browser to post comment on:', postUrl);
     const browser = await puppeteer.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox']
