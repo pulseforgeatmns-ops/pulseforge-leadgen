@@ -345,9 +345,95 @@ app.post('/api/approve-comment/:id', async (req, res) => {
   const comments = await db.getPendingComments();
   const comment = comments.find(c => c.id === id);
   if (!comment) return res.status(404).json({ error: 'Not found' });
+  
   await db.updateCommentStatus(id, 'approved');
-  res.json({ success: true });
-});
+
+  // Trigger posting via local server
+  const postUrl = comment.post_url;
+  const commentText = comment.comment;
+  const authorName = comment.author_name;
+
+  if (!postUrl) {
+    return res.json({ success: true, message: 'Approved but no URL to post to' });
+  }
+
+  try {
+    const puppeteer = require('puppeteer-extra');
+    const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+    const fs = require('fs');
+    puppeteer.use(StealthPlugin());
+
+    const SESSION_FILE = './linkedin_session.json';
+    const sessionData = process.env.LINKEDIN_SESSION;
+    if (!sessionData) return res.status(500).json({ error: 'No LinkedIn session' });
+
+    const cookies = JSON.parse(Buffer.from(sessionData, 'base64').toString('utf8'));
+
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
+    await page.setCookie(...cookies);
+
+    await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await new Promise(r => setTimeout(r, 3000 + Math.random() * 2000));
+
+    const commentBtn = await page.$('.comment-button') ||
+                       await page.$('[aria-label="Comment"]') ||
+                       await page.$('.comments-comment-box__text-editor');
+
+    if (!commentBtn) {
+      await browser.close();
+      return res.json({ success: true, message: 'Approved but comment button not found on page' });
+    }
+
+    await commentBtn.click();
+    await new Promise(r => setTimeout(r, 1500));
+
+    const commentBox = await page.$('.comments-comment-box__text-editor') ||
+                       await page.$('[contenteditable="true"]');
+
+    if (!commentBox) {
+      await browser.close();
+      return res.json({ success: true, message: 'Approved but comment box not found' });
+    }
+
+    await commentBox.click();
+    for (const char of commentText) {
+      await commentBox.type(char, { delay: Math.floor(Math.random() * 80) + 30 });
+    }
+
+    await new Promise(r => setTimeout(r, 1000));
+
+    const submitBtn = await page.$('.comments-comment-box__submit-button') ||
+                      await page.$('button[type="submit"]');
+
+    if (submitBtn) {
+      await submitBtn.click();
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    await db.logAgentAction(
+      'linkedin_agent',
+      'post_comment',
+      null,
+      postUrl,
+      { comment: commentText, authorName },
+      'success'
+    );
+
+    await browser.close();
+    await db.updateCommentStatus(id, 'posted');
+    res.json({ success: true, message: 'Comment posted' });
+
+  } catch (err) {
+    console.error('Posting error:', err.message);
+    res.json({ success: true, message: 'Approved but posting failed: ' + err.message });
+  }
+  });
 
 // Reject a comment
 app.post('/api/reject-comment/:id', async (req, res) => {
