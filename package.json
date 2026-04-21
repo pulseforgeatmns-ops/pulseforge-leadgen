@@ -4,7 +4,8 @@
   "description": "",
   "main": "leadgen.js",
   "scripts": {
-  "start": "node server.js"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
   },
   "repository": {
     "type": "git",
@@ -19,11 +20,16 @@
   },
   "homepage": "https://github.com/pulseforgeatmns-ops/pulseforge-leadgen#readme",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.90.0",
     "axios": "^1.14.0",
     "cors": "^2.8.6",
     "csv-writer": "^1.6.0",
-    "dotenv": "^17.4.1",
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "googleapis": "^171.4.0"
+    "googleapis": "^171.4.0",
+    "pg": "^8.20.0",
+    "puppeteer": "^24.42.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }
