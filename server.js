@@ -195,9 +195,6 @@ app.post('/api/post-comment', async (req, res) => {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
 
-    const cookies = JSON.parse(fs.readFileSync(SESSION_FILE));
-    await page.setCookie(...cookies);
-
     await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await new Promise(r => setTimeout(r, 3000 + Math.random() * 2000));
 
