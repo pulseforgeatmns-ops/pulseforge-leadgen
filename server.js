@@ -181,9 +181,11 @@ app.post('/api/post-comment', async (req, res) => {
 
     const SESSION_FILE = './linkedin_session.json';
 
-    if (!fs.existsSync(SESSION_FILE)) {
-      return res.status(500).json({ error: 'No LinkedIn session found' });
-    }
+    const sessionData = process.env.LINKEDIN_SESSION;
+    if (!sessionData) {
+    return res.status(500).json({ error: 'No LinkedIn session found' });
+}
+    const cookies = JSON.parse(Buffer.from(sessionData, 'base64').toString('utf8'));
 
     const browser = await puppeteer.launch({
       headless: true,
