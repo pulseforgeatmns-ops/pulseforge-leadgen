@@ -114,6 +114,31 @@ async function getProspectsByStatus(status) {
   return res.rows;
 }
 
+async function savePendingComment(data) {
+  const res = await pool.query(
+    `INSERT INTO pending_comments 
+      (author_name, author_title, post_content, comment, post_url)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id`,
+    [data.authorName, data.authorTitle, data.postContent, data.comment, data.postUrl]
+  );
+  return res.rows[0]?.id;
+}
+
+async function getPendingComments() {
+  const res = await pool.query(
+    `SELECT * FROM pending_comments WHERE status = 'pending' ORDER BY created_at DESC`
+  );
+  return res.rows;
+}
+
+async function updateCommentStatus(id, status) {
+  await pool.query(
+    `UPDATE pending_comments SET status = $1 WHERE id = $2`,
+    [status, id]
+  );
+}
+
 module.exports = {
   checkDNC,
   getProspect,
@@ -123,5 +148,8 @@ module.exports = {
   logAgentAction,
   addProspect,
   addCompany,
-  getProspectsByStatus
+  getProspectsByStatus,
+  savePendingComment,
+  getPendingComments,
+  updateCommentStatus
 };
