@@ -1,0 +1,193 @@
+require('dotenv').config();
+const pool = require('./db');
+const axios = require('axios');
+const Anthropic = require('@anthropic-ai/sdk');
+
+const client = new Anthropic();
+const AGENT_NAME = 'max_agent';
+
+async function getSystemSnapshot() {
+  // Prospect breakdown by status
+  const prospectStats = await pool.query(`
+    SELECT status, COUNT(*) as count
+    FROM prospects
+    GROUP BY status
+    ORDER BY count DESC
+  `);
+
+  // Recent touchpoints (last 7 days)
+  const recentTouchpoints = await pool.query(`
+    SELECT 
+      p.first_name, p.last_name, p.email,
+      t.channel, t.action_type, t.content_summary,
+      t.created_at
+    FROM touchpoints t
+    JOIN prospects p ON t.prospect_id = p.id
+    WHERE t.created_at > NOW() - INTERVAL '7 days'
+    ORDER BY t.created_at DESC
+    LIMIT 20
+  `);
+
+  // Prospects with no touchpoints (never contacted)
+  const untouched = await pool.query(`
+    SELECT p.first_name, p.last_name, p.email, p.icp_score, p.status
+    FROM prospects p
+    WHERE NOT EXISTS (
+      SELECT 1 FROM touchpoints t WHERE t.prospect_id = p.id
+    )
+    AND p.do_not_contact = false
+    AND p.email IS NOT NULL
+    ORDER BY p.icp_score DESC
+    LIMIT 10
+  `);
+
+  // Prospects touched but gone cold (no activity in 14+ days)
+  const cold = await pool.query(`
+    SELECT 
+      p.first_name, p.last_name, p.email, p.status,
+      MAX(t.created_at) as last_touch,
+      COUNT(t.id) as touch_count
+    FROM prospects p
+    JOIN touchpoints t ON t.prospect_id = p.id
+    WHERE p.do_not_contact = false
+    GROUP BY p.id, p.first_name, p.last_name, p.email, p.status
+    HAVING MAX(t.created_at) < NOW() - INTERVAL '14 days'
+    ORDER BY last_touch ASC
+    LIMIT 10
+  `);
+
+  // Pending comments awaiting approval
+  const pending = await pool.query(`
+    SELECT channel, COUNT(*) as count
+    FROM pending_comments
+    WHERE status = 'pending'
+    GROUP BY channel
+  `);
+
+  // Channel performance
+  const channelStats = await pool.query(`
+    SELECT channel, COUNT(*) as total
+    FROM touchpoints
+    GROUP BY channel
+    ORDER BY total DESC
+  `);
+
+  return {
+    prospectStats: prospectStats.rows,
+    recentTouchpoints: recentTouchpoints.rows,
+    untouched: untouched.rows,
+    cold: cold.rows,
+    pending: pending.rows,
+    channelStats: channelStats.rows
+  };
+}
+
+async function generateInsights(snapshot) {
+  const dataString = JSON.stringify(snapshot, null, 2);
+
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-5',
+    max_tokens: 1000,
+    messages: [{
+      role: 'user',
+      content: `You are Max, the manager agent for Pulseforge — an AI marketing system for local small businesses. 
+
+Here is today's second brain snapshot:
+
+${dataString}
+
+Generate a concise daily digest with:
+1. SYSTEM STATUS — brief overview of what's happening across all agents
+2. TOP PRIORITIES — the 3 most important actions to take today, ranked
+3. WARM SIGNALS — any prospects showing signs of interest worth flagging
+4. RECOMMENDATIONS — 2-3 strategic suggestions based on the data patterns
+5. WATCH LIST — anything that needs attention or looks off
+
+Be direct, specific, and actionable. Use plain text, no markdown. Keep each section to 2-4 sentences max. Write like a sharp operations manager giving a morning briefing.`
+    }]
+  });
+
+  return message.content[0].text;
+}
+
+async function sendDigest(digestText, snapshot) {
+  const pendingSummary = snapshot.pending
+    .map(p => `${p.count} ${p.channel}`)
+    .join(', ') || 'none';
+
+  const subject = `Pulseforge Daily Digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
+
+  const body = `PULSEFORGE DAILY DIGEST
+${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+${'─'.repeat(50)}
+
+${digestText}
+
+${'─'.repeat(50)}
+QUICK STATS
+Prospects in system: ${snapshot.prospectStats.reduce((a, b) => a + parseInt(b.count), 0)}
+Pending approvals: ${pendingSummary}
+Touchpoints this week: ${snapshot.recentTouchpoints.length}
+Untouched prospects: ${snapshot.untouched.length}
+Gone cold (14+ days): ${snapshot.cold.length}
+
+${'─'.repeat(50)}
+Pulseforge · gopulseforge.com
+To adjust digest frequency reply to this email.`;
+
+  try {
+    const response = await axios.post('https://api.brevo.com/v3/smtp/email', {
+      sender: { name: 'Max — Pulseforge', email: 'jacob@gopulseforge.com' },
+      to: [{ email: 'jacob@gopulseforge.com', name: 'Jake Maynard' }],
+      subject,
+      textContent: body
+    }, {
+      headers: {
+        'api-key': process.env.BREVO_API_KEY,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    console.log('Digest sent — Message ID:', response.data.messageId);
+    return true;
+  } catch (err) {
+    console.error('Failed to send digest:', err.response?.data || err.message);
+    return false;
+  }
+}
+
+async function logAgentRun(insights) {
+  await pool.query(`
+    INSERT INTO agent_log (agent_name, action, payload, status, ran_at)
+    VALUES ($1, $2, $3, $4, NOW())
+  `, [AGENT_NAME, 'daily_digest', JSON.stringify({ insights: insights.slice(0, 200) }), 'success']);
+}
+
+async function run() {
+  console.log('\nMax agent running...\n');
+
+  try {
+    console.log('Reading second brain...');
+    const snapshot = await getSystemSnapshot();
+
+    console.log('Generating insights with Claude...');
+    const insights = await generateInsights(snapshot);
+
+    console.log('\n--- DIGEST PREVIEW ---');
+    console.log(insights);
+    console.log('--- END PREVIEW ---\n');
+
+    console.log('Sending digest...');
+    await sendDigest(insights, snapshot);
+
+    await logAgentRun(insights);
+
+    console.log('\nMax complete.');
+  } catch (err) {
+    console.error('Max error:', err.message);
+  }
+
+  pool.end();
+}
+
+run();
