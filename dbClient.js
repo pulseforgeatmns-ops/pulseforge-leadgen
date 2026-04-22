@@ -117,10 +117,10 @@ async function getProspectsByStatus(status) {
 async function savePendingComment(data) {
   const res = await pool.query(
     `INSERT INTO pending_comments 
-      (author_name, author_title, post_content, comment, post_url)
-     VALUES ($1, $2, $3, $4, $5)
+      (author_name, author_title, post_content, comment, post_url, channel)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id`,
-    [data.authorName, data.authorTitle, data.postContent, data.comment, data.postUrl]
+    [data.authorName, data.authorTitle, data.postContent, data.comment, data.postUrl, data.channel || 'linkedin']
   );
   return res.rows[0]?.id;
 }

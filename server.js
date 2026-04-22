@@ -290,7 +290,7 @@ app.get('/approvals', (req, res) => {
 </head>
 <body>
 <h1>Comment approvals</h1>
-<p class="subtitle">Review and approve LinkedIn comment drafts</p>
+<p class="subtitle">Review and approve LinkedIn & Facebook comment drafts</p>
 <div id="drafts">Loading...</div>
 <script>
 async function load() {
@@ -302,6 +302,10 @@ async function load() {
     <div class="card" id="card-\${d.id}">
       <p class="author">\${d.author_name || 'Unknown'}</p>
       <p class="author-title">\${d.author_title || ''}</p>
+      \${d.channel === 'facebook' ? 
+        '<span style="background:#1877F2;color:#fff;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">Facebook</span>' : 
+        '<span style="background:#0A66C2;color:#fff;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">LinkedIn</span>'
+      }
       <p class="label">Post</p>
       <div class="post-content">\${d.post_content || ''}</div>
       <p class="label">Draft comment</p>
