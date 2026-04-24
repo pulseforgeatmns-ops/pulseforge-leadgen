@@ -1374,6 +1374,43 @@ setInterval(() => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeDetail();
 });
+
+// Load live data from API
+async function loadLiveData() {
+  try {
+    const res = await fetch('/api/agent-status');
+    if (!res.ok) return;
+    const data = await res.json();
+
+    // Update metrics
+    document.querySelectorAll('.metric-tile-val')[0].textContent = data.pending;
+    document.querySelectorAll('.metric-tile-val')[2].textContent = data.touchpoints;
+    document.querySelectorAll('.metric-tile-val')[3].textContent = data.prospects;
+
+    // Update agent rings
+    const circumference = 251.2;
+    const ringMap = {
+      scout: 0, link: 1, faye: 2, emmett: 3,
+      max: 4, rex: 5
+    };
+
+    const ringEls = document.querySelectorAll('.ring-fill');
+    Object.entries(data.rings).forEach(([agent, pct]) => {
+      const idx = ringMap[agent];
+      if (ringEls[idx]) {
+        const offset = circumference * (1 - pct);
+        ringEls[idx].style.strokeDashoffset = offset;
+      }
+    });
+
+  } catch (err) {
+    console.error('Failed to load live data:', err);
+  }
+}
+
+loadLiveData();
+setInterval(loadLiveData, 60000);
+
 </script>
 </body>
 </html>

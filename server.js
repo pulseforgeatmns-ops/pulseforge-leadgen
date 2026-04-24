@@ -354,6 +354,52 @@ app.get('/dashboard', requireAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
+// API - Agent status for dashboard
+app.get('/api/agent-status', requireAuth, async (req, res) => {
+  try {
+    const [prospects, touchpoints, pending, agentRuns, channels, weeklyTouchpoints] = await Promise.all([
+      pool.query('SELECT COUNT(*) FROM prospects'),
+      pool.query('SELECT COUNT(*) FROM touchpoints'),
+      pool.query('SELECT COUNT(*) FROM pending_comments WHERE status = $1', ['pending']),
+      pool.query('SELECT agent_name, COUNT(*) as runs, MAX(ran_at) as last_run FROM agent_log GROUP BY agent_name'),
+      pool.query('SELECT channel, COUNT(*) as count FROM pending_comments GROUP BY channel'),
+      pool.query('SELECT COUNT(*) FROM touchpoints WHERE created_at > NOW() - INTERVAL \'7 days\'')
+    ]);
+
+    // Build agent ring percentages
+    const runMap = {};
+    agentRuns.rows.forEach(r => { runMap[r.agent_name] = parseInt(r.runs); });
+
+    const totalProspects = parseInt(prospects.rows[0].count);
+    const totalTouchpoints = parseInt(touchpoints.rows[0].count);
+    const fbPending = channels.rows.find(c => c.channel === 'facebook')?.count || 0;
+    const liPending = channels.rows.find(c => c.channel === 'linkedin')?.count || 0;
+
+    const rings = {
+      scout: Math.min((runMap['scout_agent'] || 0) / 20, 1),
+      link: totalTouchpoints > 0 ? Math.min(parseInt(liPending) / Math.max(runMap['linkedin_agent'] || 1, 1), 1) : 0,
+      faye: totalTouchpoints > 0 ? Math.min(parseInt(fbPending) / Math.max(runMap['facebook_agent'] || 1, 1), 1) : 0,
+      emmett: Math.min((runMap['email_agent'] || 0) / Math.max(totalProspects, 1), 1),
+      max: runMap['max_agent'] ? 1 : 0,
+      rex: runMap['rex_agent'] ? 1 : 0
+    };
+
+    res.json({
+      prospects: totalProspects,
+      touchpoints: totalTouchpoints,
+      pending: parseInt(pending.rows[0].count),
+      weeklyTouchpoints: parseInt(weeklyTouchpoints.rows[0].count),
+      agentRuns: runMap,
+      rings,
+      channels: channels.rows
+    });
+
+  } catch (err) {
+    console.error('API error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Approval dashboard
 app.get('/approvals', (req, res) => {
   res.send(`<!DOCTYPE html>
