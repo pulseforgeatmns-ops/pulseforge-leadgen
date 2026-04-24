@@ -15,6 +15,7 @@ const fs       = require('fs');
 const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
 const bcrypt = require('bcryptjs');
+const pool = require('./db');
 const { createObjectCsvWriter } = require('csv-writer');
 
 const app  = express();
