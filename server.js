@@ -344,6 +344,10 @@ app.post('/api/post-comment', async (req, res) => {
   }
 });
 
+app.get('/dashboard', requireAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+});
+
 // Approval dashboard
 app.get('/approvals', (req, res) => {
   res.send(`<!DOCTYPE html>
