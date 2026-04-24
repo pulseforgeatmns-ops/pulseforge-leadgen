@@ -12,9 +12,30 @@ const axios    = require('axios');
 const cors     = require('cors');
 const path     = require('path');
 const fs       = require('fs');
+const session = require('express-session');
+const bcrypt = require('bcryptjs');
 const { createObjectCsvWriter } = require('csv-writer');
 
 const app  = express();
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'pulseforge-secret-key',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { maxAge: 24 * 60 * 60 * 1000 } // 24 hours
+}));
+
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'pulseforge-secret-key',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { maxAge: 24 * 60 * 60 * 1000 }
+}));
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 const PORT = 3000;
 
 app.use(cors());
@@ -42,6 +63,72 @@ const SKIP_DOMAINS = [
 ];
 
 // ── ROUTES ────────────────────────────────────────────────────────────
+
+// Auth middleware
+function requireAuth(req, res, next) {
+  if (req.session && req.session.authenticated) return next();
+  res.redirect('/login');
+}
+
+// Login page
+app.get('/login', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Pulseforge — Login</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#040810; color:#e8f0fe; font-family:'DM Sans',sans-serif; min-height:100vh; display:flex; align-items:center; justify-content:center; }
+body::before { content:''; position:fixed; inset:0; background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.015) 3px,rgba(0,0,0,0.015) 4px); pointer-events:none; }
+.login-box { width:380px; background:#070d1a; border:1px solid rgba(96,48,177,0.25); border-radius:16px; padding:2.5rem; position:relative; overflow:hidden; }
+.login-box::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,transparent,#8b5cf6,#00d4b4,transparent); }
+.logo { font-family:'Bebas Neue',sans-serif; font-size:1.8rem; letter-spacing:4px; margin-bottom:0.25rem; display:flex; align-items:center; gap:10px; }
+.logo-dot { width:10px; height:10px; background:#8b5cf6; border-radius:50%; box-shadow:0 0 12px #8b5cf6; }
+.subtitle { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:#6b7fa0; letter-spacing:2px; text-transform:uppercase; margin-bottom:2rem; }
+.error { background:rgba(255,59,92,0.1); border:1px solid rgba(255,59,92,0.2); color:#ff3b5c; font-family:'JetBrains Mono',monospace; font-size:0.7rem; padding:0.6rem 0.75rem; border-radius:6px; margin-bottom:1rem; letter-spacing:1px; }
+label { font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:2px; text-transform:uppercase; color:#6b7fa0; display:block; margin-bottom:0.4rem; }
+input { width:100%; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:0.8rem 1rem; color:#e8f0fe; font-family:'DM Sans',sans-serif; font-size:0.9rem; outline:none; transition:border-color 0.2s; margin-bottom:1.25rem; }
+input:focus { border-color:#8b5cf6; background:rgba(139,92,246,0.05); }
+button { width:100%; background:#8b5cf6; border:none; border-radius:6px; padding:0.85rem; color:#040810; font-family:'JetBrains Mono',monospace; font-size:0.75rem; font-weight:500; letter-spacing:2px; text-transform:uppercase; cursor:pointer; transition:all 0.2s; }
+button:hover { background:#7c3aed; box-shadow:0 0 20px rgba(139,92,246,0.4); }
+.version { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:#3a4a6a; text-align:center; margin-top:1.5rem; letter-spacing:1px; }
+</style>
+</head>
+<body>
+<div class="login-box">
+  <div class="logo"><div class="logo-dot"></div>PULSEFORGE</div>
+  <div class="subtitle">Command Center · Restricted Access</div>
+  ${req.query.error ? '<div class="error">⚠ Invalid password — try again</div>' : ''}
+  <form method="POST" action="/login">
+    <label>Password</label>
+    <input type="password" name="password" placeholder="Enter access code" autofocus required>
+    <button type="submit">Access System →</button>
+  </form>
+  <div class="version">Pulseforge v0.6.0 · Phase 6</div>
+</div>
+</body>
+</html>`);
+});
+
+// Login POST
+app.post('/login', async (req, res) => {
+  const { password } = req.body;
+  const correct = process.env.DASHBOARD_PASSWORD;
+  if (password === correct) {
+    req.session.authenticated = true;
+    res.redirect('/dashboard');
+  } else {
+    res.redirect('/login?error=1');
+  }
+});
+
+// Logout
+app.get('/logout', (req, res) => {
+  req.session.destroy();
+  res.redirect('/login');
+});
 
 // Health / API status check
 app.get('/api/status', (req, res) => {
