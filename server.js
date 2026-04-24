@@ -13,6 +13,7 @@ const cors     = require('cors');
 const path     = require('path');
 const fs       = require('fs');
 const session = require('express-session');
+const pgSession = require('connect-pg-simple')(session);
 const bcrypt = require('bcryptjs');
 const { createObjectCsvWriter } = require('csv-writer');
 
@@ -25,6 +26,10 @@ app.use(session({
 }));
 
 app.use(session({
+  store: new pgSession({
+    pool: pool,
+    tableName: 'session'
+  }),
   secret: process.env.SESSION_SECRET || 'pulseforge-secret-key',
   resave: false,
   saveUninitialized: false,
