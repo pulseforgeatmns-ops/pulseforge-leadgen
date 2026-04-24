@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manchester Clean Co | Professional Cleaning Services in Manchester, NH</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #0A0E27;
+            --secondary: #00FF94;
+            --accent: #00D4FF;
+            --grey: #8B93B0;
+            --light: #F5F7FA;
+            --white: #FFFFFF;
+        }
+
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            color: var(--primary);
+            line-height: 1.6;
+            background: var(--white);
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        header {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            background: rgba(10, 14, 39, 0.95);
+            backdrop-filter: blur(10px);
+            z-index: 1000;
+            border-bottom: 1px solid rgba(0, 255, 148, 0.2);
+        }
+
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--white);
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: -1px;
+        }
+
+        .logo span {
+            color: var(--secondary);
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 40px;
+            list-style: none;
+        }
+
+        .nav-links a {
+            color: var(--white);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: color 0.3s;
+        }
+
+        .nav-links a:hover {
+            color: var(--secondary);
+        }
+
+        .mobile-menu-btn {
+            display: none;
+            background: none;
+            border: none;
+            color: var(--white);
+            font-size: 24px;
+            cursor: pointer;
+        }
+
+        .hero {
+            background: linear-gradient(135deg, var(--primary) 0%, #1a1f3a 100%);
+            padding: 180px 24px 120px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -10%;
+            width: 800px;
+            height: 800px;
+            background: radial-gradient(circle, rgba(0, 255, 148, 0.1) 0%, transparent 70%);
+            border-radius: 50%;
+        }
+
+        .hero::after {
+            content: '';
+            position: absolute;
+            bottom: -30%;
+            left: -5%;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(0, 212, 255, 0.08) 0%, transparent 70%);
+            border-radius: 50%;
+        }
+
+        .hero-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        .hero-label {
+            display: inline-block;
+            background: rgba(0, 255, 148, 0.1);
+            color: var(--secondary);
+            padding: 8px 20px;
+            border-radius: 30px;
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(0, 255, 148, 0.3);
+        }
+
+        .hero h1 {
+            font-size: 82px;
+            font-weight: 700;
+            color: var(--white);
+            line-height: 1.1;
+            margin-bottom: 30px;
+            letter-spacing: -2px;
+        }
+
+        .hero h1 .highlight {
+            color: var(--secondary);
+            position: relative;
+            display: inline-block;
+        }
+
+        .hero-subtitle {
+            font-size: 24px;
+            color: var(--grey);
+            max-width: 700px;
+            margin-bottom: 50px;
+            line-height: 1.5;
+        }
+
+        .hero-cta {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 18px 40px;
+            font-size: 16px;
+            font-weight: 600;
+            text-decoration: none;
+            border-radius: 8px;
+            transition: all 0.3s;
+            display: inline-block;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border: none;
+            cursor: pointer;
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        .btn-primary {
+            background: var(--secondary);
+            color: var(--primary);
+        }
+
+        .btn-primary:hover {
+            background: var(--white);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0, 255, 148, 0.3);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--white);
+            border: 2px solid var(--white);
+        }
+
+        .btn-secondary:hover {
+            background: var(--white);
+            color: var(--primary);
+            transform: translateY(-2px);
+        }
+
+        .services {
+            padding: 120px 24px;
+            background: var(--light);
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 80px;
+        }
+
+        .section-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            color: var(--secondary);
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+
+        .section-title {
+            font-size: 56px;
+            font-weight: 700;
+            color: var(--primary);
+            letter-spacing: -1px;
+            margin-bottom: 20px;
+        }
+
+        .section-description {
+            font-size: 20px;
+            color: var(--grey);
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        .services-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 30px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .service-card {
+            background: var(--white);
+            padding: 50px 40px;
+            border-radius: 16px;
+            border: 2px solid transparent;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .service-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+            background: linear-gradient(90deg, var(--secondary), var(--accent));
+            transform: scaleX(0);
+            transition: transform 0.3s;
+        }
+
+        .service-card:hover::before {
+            transform: scaleX(1);
+        }
+
+        .service-card:hover {
+            border-color: var(--secondary);
+            transform: translateY(-5px);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+        }
+
+        .service-card.featured {
+            background: linear-gradient(135deg, var(--primary) 0%, #1a1f3a 100%);
+            border-color: var(--secondary);
+        }
+
+        .service-card.featured * {
+            color: var(--white) !important;
+        }
+
+        .service-icon {
+            font-size: 48px;
+            margin-bottom: 25px;
+            display: block;
+        }
+
+        .service-card h3 {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 15px;
+            letter-spacing: -0.5px;
+        }
+
+        .service-card p {
+            color: var(--grey);
+            font-size: 16px;
+            line-height: 1.7;
+            margin-bottom: 25px;
+        }
+
+        .service-features {
+            list-style: none;
+            margin-bottom: 25px;
+        }
+
+        .service-features li {
+            padding: 10px 0;
+            color: var(--grey);
+            font-size: 15px;
+            position: relative;
+            padding-left: 30px;
+        }
+
+        .service-features li::before {
+            content: '→';
+            position: absolute;
+            left: 0;
+            color: var(--secondary);
+            font-weight: 700;
+        }
+
+        .service-card.featured .service-features li {
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .why-choose {
+            padding: 120px 24px;
+            background: var(--white);
+        }
+
+        .why-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 40px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .why-item {
+            text-align: center;
+            padding: 40px 30px;
+        }
+
+        .why-number {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 64px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--secondary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 20px;
+        }
+
+        .why-item h3 {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 15px;
+        }
+
+        .why-item p {
+            color: var(--grey);
+            font-size: 16px;
+            line-height: 1.7;
+        }
+
+        .service-areas {
+            padding: 120px 24px;
+            background: var(--primary);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .service-areas::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 50%;
+            height: 100%;
+            background: linear-gradient(135deg, transparent 0%, rgba(0, 255, 148, 0.05) 100%);
+        }
+
+        .service-areas .section-title,
+        .service-areas .section-description {
+            color: var(--white);
+        }
+
+        .areas-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        .area-item {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 30px;
+            border-radius: 12px;
+            border: 1px solid rgba(0, 255, 148, 0.2);
+            transition: all 0.3s;
+        }
+
+        .area-item:hover {
+            background: rgba(0, 255, 148, 0.1);
+            border-color: var(--secondary);
+            transform: translateX(5px);
+        }
+
+        .area-item h4 {
+            color: var(--white);
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .area-item p {
+            color: var(--grey);
+            font-size: 14px;
+        }
+
+        .testimonials {
+            padding: 120px 24px;
+            background: var(--light);
+        }
+
+        .testimonials-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 30px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .testimonial-card {
+            background: var(--white);
+            padding: 45px;
+            border-radius: 16px;
+            border: 2px solid transparent;
+            transition: all 0.3s;
+            position: relative;
+        }
+
+        .testimonial-card::before {
+            content: '"';
+            position: absolute;
+            top: 20px;
+            left: 30px;
+            font-size: 120px;
+            color: var(--secondary);
+            opacity: 0.1;
+            font-family: Georgia, serif;
+            line-height: 1;
+        }
+
+        .testimonial-card:hover {
+            border-color: var(--secondary);
+            transform: translateY(-5px);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.08);
+        }
+
+        .testimonial-text {
+            font-size: 17px;
+            line-height: 1.7;
+            color: var(--primary);
+            margin-bottom: 30px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .testimonial-author {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .author-avatar {
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, var(--secondary), var(--accent));
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            color: var(--primary);
+            font-size: 20px;
+        }
+
+        .author-info h5 {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 3px;
+        }
+
+        .author-info p {
+            font-size: 14px;
+            color: var(--grey);
+        }
+
+        .contact {
+            padding: 120px 24px;
+            background: var(--white);
+        }
+
+        .contact-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 80px;
+            align-items: start;
+        }
+
+        .contact-info h2 {
+            font-size: 48px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 30px;
+            letter-spacing: -1px;
+        }
+
+        .contact-info p {
+            font-size: 18px;
+            color: var(--grey);
+            margin-bottom: 40px;
+            line-height: 1.7;
+        }
+
+        .contact-details {
+            display: flex;
+            flex-direction: column;
+            gap: 25px;
+        }
+
+        .contact-item {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .contact-item-icon {
+            width: 50px;
+            height: 50px;
+            background: var(--secondary);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+
+        .contact-item-text h4 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--grey);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+        }
+
+        .contact-item-text p {
+            font-size: 18px;
+            color: var(--primary);
+            font-weight: 600;
+            margin: 0;
+        }
+
+        .contact-form {
+            background: var(--light);
+            padding: 50px;
+            border-radius: 16px;
+            border: 2px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .contact-form:hover {
+            border-color: var(--secondary);
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 15px 20px;
+            font-size: 16px;
+            border: 2px solid #E0E4ED;
+            border-radius: 8px;
+            background: var(--white);
+            font-family: 'Space Grotesk', sans-serif;
+            transition: all 0.3s;
+            color: var(--primary);
+        }
+
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: var(--secondary);
+            box-shadow: 0 0 0 3px rgba(0, 255, 148, 0.1);
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 150px;
+        }
+
+        .form-submit {
+            width: 100%;
+            padding: 18px;
+            font-size: 16px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            background: var(--primary);
+            color: var(--white);
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        .form-submit:hover {
+            background: var(--secondary);
+            color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        footer {
+            background: var(--primary);
+            padding: 80px 24px 40px;
+            color: var(--white);
+        }
+
+        .footer-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            gap: 60px;
+            margin-bottom: 60px;
+        }
+
+        .footer-about h3 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 24px;
+            margin-bottom: 20px;
+            color: var(--secondary);
+        }
+
+        .footer-about p {
+            color: var(--grey);
+            line-height: 1.7;
+            margin-bottom: 25px;
+        }
+
+        .footer-social {
+            display: flex;
+            gap: 15px;
+        }
+
+        .social-link {
+            width: 40px;
+            height: 40px;
+            background: rgba(0, 255, 148, 0.1);
+            border: 1px solid rgba(0, 255, 148, 0.3);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--secondary);
+            text-decoration: none;
+            font-size: 18px;
+            transition: all 0.3s;
+        }
+
+        .social-link:hover {
+            background: var(--secondary);
+            color: var(--primary);
+            transform: translateY(-3px);
+        }
+
+        .footer-links h4 {
+            font-size: 16px;
+            margin-bottom: 20px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--white);
+        }
+
+        .footer-links ul {
+            list-style: none;
+        }
+
+        .footer-links ul li {
+            margin-bottom: 12px;
+        }
+
+        .footer-links ul li a {
+            color: var(--grey);
+            text-decoration: none;
+            transition: color 0.3s;
+            font-size: 15px;
+        }
+
+        .footer-links ul li a:hover {
+            color: var(--secondary);
+        }
+
+        .footer-bottom {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding-top: 40px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--grey);
+            font-size: 14px;
+        }
+
+        .footer-bottom-links {
+            display: flex;
+            gap: 30px;
+        }
+
+        .footer-bottom-links a {
+            color: var(--grey);
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+
+        .footer-bottom-links a:hover {
+            color: var(--secondary);
+        }
+
+        @media (max-width: 968px) {
+            .nav-links {
+                display: none;
+            }
+
+            .mobile-menu-btn {
+                display: block;
+            }
+
+            .hero h1 {
+                font-size: 52px;
+            }
+
+            .hero-subtitle {
+                font-size: 20px;
+            }
+
+            .section-title {
+                font-size: 42px;
+            }
+
+            .contact-container {
+                grid-template-columns: 1fr;
+                gap: 50px;
+            }
+
+            .footer-content {
+                grid-template-columns: 1fr 1fr;
+                gap: 40px;
+            }
+
+            .footer-bottom {
+                flex-direction: column;
+                gap: 20px;
+                text-align: center;
+            }
+
+            .services-grid,
+            .testimonials-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .hero {
+                padding: 140px 24px 80px;
+            }
+
+            .hero h1 {
+                font-size: 38px;
+            }
+
+            .hero-subtitle {
+                font-size: 18px;
+            }
+
+            .hero-cta {
+                flex-direction: column;
+            }
+
+            .btn {
+                width: 100%;
+                text-align: center;
+            }
+
+            .section-title {
+                font-size: 32px;
+            }
+
+            .services,
+            .why-choose,
+            .service-areas,
+            .testimonials,
+            .contact {
+                padding: 80px 24px;
+            }
+
+            .contact-form {
+                padding: 30px 20px;
+            }
+
+            .footer-content {
+                grid-template-columns: 1fr;
+            }
+
+            .areas-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .success-message {
+            display: none;
+            background: var(--secondary);
+            color: var(--primary);
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .success-message.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <nav>
+            <div class="logo">MCC<span>/</span></div>
+            <ul class="nav-links">
+                <li><a href="#services">Services</a></li>
+                <li><a href="#why">Why Us</a></li>
+                <li><a href="#areas">Service Areas</a></li>
+                <li><a href="#testimonials">Testimonials</a></li>
+                <li><a href="#contact">Contact</a></li>
+            </ul>
+            <button class="mobile-menu-btn">☰</button>
+        </nav>
+    </header>
+
+    <section class="hero">
+        <div class="hero-content">
+            <div class="hero-label">Manchester's Premier Cleaning Service</div>
+            <h1>Industrial-Grade <span class="highlight">Clean</span> for Manchester Businesses</h1>
+            <p class="hero-subtitle">From downtown office towers to residential spaces across NH, we deliver precision cleaning that meets the demands of modern commercial environments and discerning homeowners.</p>
+            <div class="hero-cta">
+                <a href="#contact" class="btn btn-primary">Get a Free Quote</a>
+                <a href="tel:+16035550123" class="btn btn-secondary">Call (603) 555-0123</a>
+            </div>
+        </div>
+    </section>
+
+    <section id="services" class="services">
+        <div class="container">
+            <div class="section-header">
+                <div class="section-label">// What We Offer</div>
+                <h2 class="section-title">Cleaning Solutions Built for Manchester</h2>
+                <p class="section-description">Professional cleaning services designed for the unique needs of New Hampshire businesses and homes, from mill district offices to residential neighborhoods.</p>
+            </div>
+            <div class="services-grid">
+                <div class="service-card featured">
+                    <span class="service-icon">🏢</span>
+                    <h3>Commercial Office Cleaning</h3>
+                    <p>Keep your Manchester workspace productive and professional with our comprehensive commercial cleaning services tailored to office environments.</p>
+                    <ul class="service-features">
+                        <li>Daily, weekly, or monthly schedules</li>
+                        <li>After-hours service available</li>
+                        <li>Breakroom and restroom deep cleaning</li>
+                        <li>Floor care and carpet maintenance</li>
+                        <li>Window and glass cleaning</li>
+                        <li>HEPA filtration equipment</li>
+                    </ul>
+                </div>
+                <div class="service-card featured">
+                    <span class="service-icon">🏭</span>
+                    <h3>Industrial & Warehouse</h3>
+                    <p>Specialized cleaning for Manchester's industrial sector, from warehouses to manufacturing facilities requiring rigorous sanitation standards.</p>
+                    <ul class="service-features">
+                        <li>Heavy-duty equipment and training</li>
+                        <li>Compliance with safety protocols</li>
+                        <li>Concrete and epoxy floor cleaning</li>
+                        <li>High-reach areas and machinery</li>
+                        <li>Waste management coordination</li>
+                        <li>Emergency spill response</li>
+                    </ul>
+                </div>
+                <div class="service-card">
+                    <span class="service-icon">🏪</span>
+                    <h3>Retail & Storefront</h3>
+                    <p>First impressions matter. Keep your Manchester retail space welcoming and spotless with our storefront cleaning services.</p>
+                    <ul class="service-features">
+                        <li>Pre-opening cleaning services</li>
+                        <li>Display and fixture dusting</li>
+                        <li>Entrance and sidewalk maintenance</li>
+                        <li>Restroom sanitation</li>
+                    </ul>
+                </div>
+                <div class="service-card">
+                    <span class="service-icon">🏠</span>
+                    <h3>Residential Cleaning</h3>
+                    <p>Professional home cleaning services for Manchester residents who demand excellence in every corner of their living space.</p>
+                    <ul class="service-features">
+                        <li>One-time deep cleans</li>
+                        <li>Recurring maintenance plans</li>
+                        <li>Move-in/move-out cleaning</li>
+                        <li>Kitchen and bathroom specialists</li>
+                    </ul>
+                </div>
+                <div class="service-card">
+                    <span class="service-icon">🏗️</span>
+                    <h3>Post-Construction</h3>
+                    <p>Transform construction sites into pristine spaces ready for occupancy with our specialized post-construction cleaning throughout Manchester.</p>
+                    <ul class="service-features">
+                        <li>Dust and debris removal</li>
+                        <li>Surface polishing and protection</li>
+                        <li>Final touches for inspections</li>
+                        <li>Coordination with contractors</li>
+                    </ul>
+                </div>
+                <div class="service-card">
+                    <span class="service-icon">✨</span>
+                    <h3>Specialized Services</h3>
+                    <p>Custom cleaning solutions for unique Manchester facilities requiring specialized knowledge and equipment.</p>
+                    <ul class="service-features">
+                        <li>Medical office sanitation</li>
+                        <li>School and daycare cleaning</li>
+                        <li>Restaurant kitchen deep clean</li>
+                        <li>Event venue preparation</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="why" class="why-choose">
+        <div class="container

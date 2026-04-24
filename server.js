@@ -506,6 +506,17 @@ async function enrichWithHunter(domain, titleFilter) {
   }
 }
 
+// Sketch mockup preview
+app.get('/preview/:filename', (req, res) => {
+  const { filename } = req.params;
+  const filepath = path.join(__dirname, 'mockups', filename);
+  if (fs.existsSync(filepath)) {
+    res.sendFile(filepath);
+  } else {
+    res.status(404).send('Mockup not found');
+  }
+});
+
 // ── HELPERS ───────────────────────────────────────────────────────────
 function scoreLead(lead) {
   let score = 0;
