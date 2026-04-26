@@ -312,6 +312,7 @@ async function main() {
   if (CONFIG.outputCSV) await exportToCSV(leads, csvFile);
   if (CONFIG.outputSheet) await pushToGoogleSheets(leads, CONFIG.sheetId);
 
+  await saveToDatabase(leads);
   console.log('\n✓ Done.\n');
 }
 
@@ -341,6 +342,30 @@ function parseArgs(argv) {
     }
   }
   return out;
+}
+
+
+async function saveToDatabase(leads) {
+  const pool = require('./db');
+  let saved = 0, skipped = 0;
+  for (const lead of leads) {
+    try {
+      const email = typeof lead.email === 'string' && lead.email.includes('@') ? lead.email : null;
+      const nameParts = (lead.contact || '').trim().split(' ');
+      const firstName = nameParts[0] || lead.company.split(' ')[0];
+      const lastName = nameParts.slice(1).join(' ') || '';
+      const notes = lead.company + ' — ' + lead.url;
+      await pool.query(
+        'INSERT INTO prospects (first_name, last_name, email, status, source, icp_score, notes) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (email) DO NOTHING',
+        [firstName, lastName, email, 'cold', 'scout', lead.score, notes]
+      );
+      saved++;
+    } catch (err) {
+      skipped++;
+    }
+  }
+  console.log('[DB] Saved ' + saved + ' prospects, skipped ' + skipped);
+  pool.end();
 }
 
 main().catch(err => {
