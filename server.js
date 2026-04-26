@@ -400,6 +400,173 @@ app.get('/api/agent-status', requireAuth, async (req, res) => {
   }
 });
 
+// API - Agent status for dashboard
+app.get('/api/agent-status', requireAuth, async (req, res) => {
+  try {
+    const [prospects, touchpoints, pending, agentRuns, channels, weeklyTouchpoints] = await Promise.all([
+      pool.query('SELECT COUNT(*) FROM prospects'),
+      pool.query('SELECT COUNT(*) FROM touchpoints'),
+      pool.query('SELECT COUNT(*) FROM pending_comments WHERE status = $1', ['pending']),
+      pool.query('SELECT agent_name, COUNT(*) as runs, MAX(ran_at) as last_run FROM agent_log GROUP BY agent_name'),
+      pool.query('SELECT channel, COUNT(*) as count FROM pending_comments GROUP BY channel'),
+      pool.query('SELECT COUNT(*) FROM touchpoints WHERE created_at > NOW() - INTERVAL \'7 days\'')
+    ]);
+
+    const runMap = {};
+    agentRuns.rows.forEach(r => { runMap[r.agent_name] = parseInt(r.runs); });
+
+    const totalProspects = parseInt(prospects.rows[0].count);
+    const totalTouchpoints = parseInt(touchpoints.rows[0].count);
+    const fbPending = channels.rows.find(c => c.channel === 'facebook')?.count || 0;
+    const liPending = channels.rows.find(c => c.channel === 'linkedin')?.count || 0;
+
+    const rings = {
+      scout: Math.min((runMap['scout_agent'] || 0) / 20, 1),
+      link: totalTouchpoints > 0 ? Math.min(parseInt(liPending) / Math.max(runMap['linkedin_agent'] || 1, 1), 1) : 0,
+      faye: totalTouchpoints > 0 ? Math.min(parseInt(fbPending) / Math.max(runMap['facebook_agent'] || 1, 1), 1) : 0,
+      emmett: Math.min((runMap['email_agent'] || 0) / Math.max(totalProspects, 1), 1),
+      max: runMap['max_agent'] ? 1 : 0,
+      rex: runMap['rex_agent'] ? 1 : 0
+    };
+
+    res.json({
+      prospects: totalProspects,
+      touchpoints: totalTouchpoints,
+      pending: parseInt(pending.rows[0].count),
+      weeklyTouchpoints: parseInt(weeklyTouchpoints.rows[0].count),
+      agentRuns: runMap,
+      rings,
+      channels: channels.rows
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API - Get pending comments
+app.get('/api/approvals', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, author_name, author_title, post_content, comment, channel, status, created_at
+      FROM pending_comments
+      WHERE status = 'pending'
+      ORDER BY created_at DESC
+      LIMIT 50
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API - Approve or reject a comment
+app.post('/api/approvals/:id', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const { action } = req.body;
+  if (!['approved', 'rejected'].includes(action)) {
+    return res.status(400).json({ error: 'Invalid action' });
+  }
+  try {
+    await pool.query('UPDATE pending_comments SET status = $1 WHERE id = $2', [action, id]);
+    res.json({ success: true, id, action });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API - Live activity feed
+app.get('/api/activity', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT al.agent_name, al.action, al.status, al.ran_at, al.payload,
+        p.first_name, p.last_name
+      FROM agent_log al
+      LEFT JOIN prospects p ON al.prospect_id = p.id
+      ORDER BY al.ran_at DESC
+      LIMIT 20
+    `);
+
+    const agentNameMap = {
+      facebook: 'Faye', linkedin: 'Link', emmett: 'Emmett',
+      max: 'Max', rex: 'Rex', scout: 'Scout', sketch: 'Sketch', email: 'Emmett'
+    };
+
+    const feed = result.rows.map(row => {
+      const rawAgent = row.agent_name?.replace('_agent', '') || 'system';
+      const agent = agentNameMap[rawAgent] || rawAgent.charAt(0).toUpperCase() + rawAgent.slice(1);
+      const minutesAgo = Math.floor((Date.now() - new Date(row.ran_at)) / 60000);
+      const timeLabel = minutesAgo < 60 ? `${minutesAgo}m` : minutesAgo < 1440 ? `${Math.floor(minutesAgo/60)}h` : `${Math.floor(minutesAgo/1440)}d`;
+      const prospect = row.first_name ? `· ${row.first_name} ${row.last_name}`.trim() : '';
+      const actionLabels = {
+        generate_comment: `generated a comment draft ${prospect}`,
+        daily_digest: 'daily digest sent · jacob@gopulseforge.com',
+        weekly_report: 'weekly report dispatched',
+        generate_mockup: `generated a mockup ${prospect}`,
+        outbound: `sent email sequence ${prospect}`,
+        dashboard_trigger: 'triggered from dashboard'
+      };
+      const label = actionLabels[row.action] || row.action;
+      const icons = {
+        Faye: { icon: '📣', color: 'fi-t' }, Link: { icon: '💬', color: 'fi-p' },
+        Emmett: { icon: '✉️', color: 'fi-o' }, Max: { icon: '🧠', color: 'fi-p' },
+        Rex: { icon: '📊', color: 'fi-p' }, Scout: { icon: '🔍', color: 'fi-t' },
+        Sketch: { icon: '🎨', color: 'fi-t' }
+      };
+      const { icon, color } = icons[agent] || { icon: '⚡', color: 'fi-g' };
+      return { agent, action: label, icon, color, time: timeLabel, status: row.status };
+    });
+
+    res.json(feed);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API - Trigger agents
+app.post('/api/run/:agent', requireAuth, async (req, res) => {
+  const { agent } = req.params;
+  const localOnly = ['link', 'faye', 'ivy'];
+  if (localOnly.includes(agent)) {
+    return res.json({ success: false, message: `${agent} requires local execution — run from your terminal` });
+  }
+  const agentModules = {
+    scout: './leadgen', emmett: './emmettAgent',
+    max: './maxAgent', rex: './rexAgent', sketch: './sketchAgent'
+  };
+  if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
+  await pool.query(
+    `INSERT INTO agent_log (agent_name, action, payload, status, ran_at) VALUES ($1, $2, $3, $4, NOW())`,
+    [`${agent}_agent`, 'dashboard_trigger', JSON.stringify({ triggered_by: 'dashboard' }), 'pending']
+  );
+  res.json({ success: true, message: `${agent} triggered successfully` });
+  try {
+    delete require.cache[require.resolve(agentModules[agent])];
+    require(agentModules[agent]);
+  } catch (err) {
+    console.error(`Agent ${agent} error:`, err.message);
+  }
+});
+
+// Cron endpoint - protected by secret key
+app.post('/cron/:agent', async (req, res) => {
+  const { agent } = req.params;
+  const { secret } = req.body;
+  if (secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const agentModules = {
+    max: './maxAgent', rex: './rexAgent', emmett: './emmettAgent'
+  };
+  if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
+  res.json({ success: true });
+  try {
+    delete require.cache[require.resolve(agentModules[agent])];
+    require(agentModules[agent]);
+  } catch (err) {
+    console.error(`Cron agent ${agent} error:`, err.message);
+  }
+});
+
 // Approval dashboard
 app.get('/approvals', (req, res) => {
   res.send(`<!DOCTYPE html>
