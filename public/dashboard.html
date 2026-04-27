@@ -1356,17 +1356,6 @@ async function loadActivityFeed() {
     console.error('Activity feed error:', err);
   }
 }
-    container.innerHTML = feed.map(item => `
-      <div class="feed-item">
-        <div class="feed-icon ${item.color || 'fi-g'}">${item.icon || '⚡'}</div>
-        <div class="feed-text"><strong>${item.agent}</strong> ${item.action}</div>
-        <div class="feed-time">${item.time}</div>
-      </div>
-    `).join('');
-  } catch (err) {
-    console.error('Failed to load activity feed:', err);
-  }
-}
 
 // Load live data from API
 async function loadLiveData() {
