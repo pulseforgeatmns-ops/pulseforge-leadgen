@@ -1341,11 +1341,21 @@ document.addEventListener('keydown', e => {
 async function loadActivityFeed() {
   try {
     const res = await fetch('/api/activity');
+    if (!res.ok) return;
     const feed = await res.json();
     const container = document.getElementById('feedItems');
-      container.innerHTML = '<div class="feed-item" style="opacity:0.4;font-size:11px;padding:8px 0;">No activity yet — run an agent to get started.</div>';
+    if (!container) return;
+    if (!feed || !feed.length) {
+      container.innerHTML = '<div class="feed-item" style="opacity:0.4;font-size:11px;padding:8px 0;">No activity yet.</div>';
       return;
     }
+    container.innerHTML = feed.map(function(item) {
+      return '<div class="feed-item"><div class="feed-icon ' + (item.color||'fi-g') + '">' + (item.icon||'⚡') + '</div><div class="feed-text"><strong>' + item.agent + '</strong> ' + item.action + '</div><div class="feed-time">' + item.time + '</div></div>';
+    }).join('');
+  } catch(err) {
+    console.error('Activity feed error:', err);
+  }
+}
     container.innerHTML = feed.map(item => `
       <div class="feed-item">
         <div class="feed-icon ${item.color || 'fi-g'}">${item.icon || '⚡'}</div>
