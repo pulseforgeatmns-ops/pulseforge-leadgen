@@ -33,6 +33,26 @@ const GOOGLE_API_KEY    = process.env.GOOGLE_API_KEY;
 const GOOGLE_CX         = process.env.GOOGLE_CX;
 const PROSPEO_API_KEY   = process.env.PROSPEO_API_KEY;
 
+
+async function enrichWithHunter(domain) {
+  const HUNTER_KEY = process.env.HUNTER_API_KEY;
+  try {
+    const res = await axios.get('https://api.hunter.io/v2/domain-search', {
+      params: { domain, api_key: HUNTER_KEY, limit: 5, type: 'personal' }
+    });
+    const emails = res.data?.data?.emails || [];
+    const tf = (CONFIG.jobTitle || '').toLowerCase();
+    const match = emails.find(e => e.position?.toLowerCase().includes(tf)) || emails[0];
+    return {
+      contact: (match.first_name || '') + ' ' + (match.last_name || ''),
+      email: match.value || null,
+      title: match.position || null
+    };
+  } catch (err) {
+    return null;
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // STEP 1: Google Custom Search
 // Docs: https://developers.google.com/custom-search/v1/reference/rest/v1/cse/list
@@ -246,7 +266,7 @@ async function main() {
   console.log('─────────────────────────────────────────\n');
 
   // Build search query
-  const query = `"${CONFIG.industry}" business "${CONFIG.location}" "${CONFIG.jobTitle}"`;
+  const query = `"${CONFIG.industry}" "${CONFIG.location}" "${CONFIG.jobTitle}" -indeed -ziprecruiter -thumbtack -glassdoor -yelp -yellowpages -mapquest -bbb -patch -avvo`;
   console.log(`[Google] Searching: ${query}`);
 
   // 1. Google search
@@ -262,13 +282,20 @@ async function main() {
   for (let i = 0; i < leads.length; i++) {
     const lead = leads[i];
     process.stdout.write(`  [${i+1}/${leads.length}] ${lead.url}...`);
-    const enriched = await enrichWithProspeo(lead.url);
+    let enriched = await enrichWithProspeo(lead.url);
     if (enriched) {
       Object.assign(lead, enriched);
       lead.source = [...(lead.source || []), 'prospeo'];
       process.stdout.write(` ✓ ${enriched.email || 'no email'}\n`);
     } else {
-      process.stdout.write(' —\n');
+      enriched = await enrichWithHunter(lead.url);
+      if (enriched) {
+        Object.assign(lead, enriched);
+        lead.source = [...(lead.source || []), 'hunter'];
+        process.stdout.write(` ✓ [Hunter] ${enriched.email || 'no email'}\n`);
+      } else {
+        process.stdout.write(' —\n');
+      }
     }
     // Rate limit: 2 req/sec
     await new Promise(r => setTimeout(r, 1500));
