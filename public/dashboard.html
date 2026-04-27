@@ -1206,48 +1206,10 @@ body::before {
       </div>
     </div>
 
-    <div class="activity-feed">
+    <div class="activity-feed" id="activityFeed">
       <div class="feed-label">Live Activity</div>
-
-      <div class="feed-item">
-        <div class="feed-icon fi-t">📣</div>
-        <div class="feed-text"><strong>Faye</strong> generated 2 drafts — Manchester NH Business</div>
-        <div class="feed-time">2m</div>
-      </div>
-      <div class="feed-item">
-        <div class="feed-icon fi-p">🧠</div>
-        <div class="feed-text"><strong>Max</strong> flagged Bond Logistics as warm — 3 interactions logged</div>
-        <div class="feed-time">8m</div>
-      </div>
-      <div class="feed-item">
-        <div class="feed-icon fi-g">✓</div>
-        <div class="feed-text"><strong>Link</strong> posted approved comment · Sarah Chen · LinkedIn</div>
-        <div class="feed-time">14m</div>
-      </div>
-      <div class="feed-item">
-        <div class="feed-icon fi-o">✉️</div>
-        <div class="feed-text"><strong>Emmett</strong> sent Day 1 sequence · john@testrestaurant.com</div>
-        <div class="feed-time">22m</div>
-      </div>
-      <div class="feed-item">
-        <div class="feed-icon fi-t">🔍</div>
-        <div class="feed-text"><strong>Scout</strong> added 4 prospects · Bedford NH commercial segment</div>
-        <div class="feed-time">1h</div>
-      </div>
-      <div class="feed-item">
-        <div class="feed-icon fi-p">📊</div>
-        <div class="feed-text"><strong>Rex</strong> weekly report dispatched · 62 total actions this week</div>
-        <div class="feed-time">2h</div>
-      </div>
-      <div class="feed-item">
-        <div class="feed-icon fi-g">✓</div>
-        <div class="feed-text"><strong>Faye</strong> comment approved and queued for posting</div>
-        <div class="feed-time">3h</div>
-      </div>
-      <div class="feed-item">
-        <div class="feed-icon fi-p">🧠</div>
-        <div class="feed-text"><strong>Max</strong> daily digest sent · jacob@gopulseforge.com</div>
-        <div class="feed-time">6h</div>
+      <div id="feedItems">
+        <div class="feed-item" style="opacity:0.4;font-size:11px;padding:8px 0;">Loading activity...</div>
       </div>
     </div>
 
@@ -1375,6 +1337,27 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeDetail();
 });
 
+// Load live activity feed from Second Brain
+async function loadActivityFeed() {
+  try {
+    const res = await fetch('/api/activity');
+    const feed = await res.json();
+    const container = document.getElementById('feedItems');
+      container.innerHTML = '<div class="feed-item" style="opacity:0.4;font-size:11px;padding:8px 0;">No activity yet — run an agent to get started.</div>';
+      return;
+    }
+    container.innerHTML = feed.map(item => `
+      <div class="feed-item">
+        <div class="feed-icon ${item.color || 'fi-g'}">${item.icon || '⚡'}</div>
+        <div class="feed-text"><strong>${item.agent}</strong> ${item.action}</div>
+        <div class="feed-time">${item.time}</div>
+      </div>
+    `).join('');
+  } catch (err) {
+    console.error('Failed to load activity feed:', err);
+  }
+}
+
 // Load live data from API
 async function loadLiveData() {
   try {
@@ -1409,7 +1392,9 @@ async function loadLiveData() {
 }
 
 loadLiveData();
+loadActivityFeed();
 setInterval(loadLiveData, 60000);
+setInterval(loadActivityFeed, 30000);
 
 </script>
 </body>
