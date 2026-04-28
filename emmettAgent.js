@@ -12,63 +12,63 @@ const SEQUENCES = {
   cold_outreach: [
     {
       day: 0,
-      subject: "Quick question about {{business_name}}",
+      subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-I came across {{business_name}} and wanted to reach out directly.
+I spent years running restaurants and a cleaning company in New England. The hardest part wasn't the work — it was staying visible when I was too busy doing the work to market it.
 
-Most local businesses I talk to are doing great work but struggle to stay visible online consistently — not because they don't want to, but because there's simply no time.
+Most owners I talk to are in the same spot. Great business, not enough time to stay in front of new customers consistently.
 
-I run Pulseforge, an AI marketing system that handles your online presence automatically. It finds potential customers, engages with them on LinkedIn and via email, and keeps your name in front of the right people — without you having to lift a finger.
+I built a system that handles that automatically — finds local prospects, reaches out on your behalf, keeps your name visible between jobs. It runs in the background while you run the business.
 
-I'd love to put together a quick mockup showing what this could look like for {{business_name}} specifically. No cost, no commitment.
+I'd love to put together a free mockup showing what this could look like specifically for {{business_name}}.
 
-Worth a 10-minute look?
+Worth a look?
 
 Jake Maynard
-Pulseforge
 gopulseforge.com`
     },
     {
       day: 4,
-      subject: "Re: Quick question about {{business_name}}",
+      subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Just following up on my note from a few days ago.
+Sent you a note a few days ago — wanted to follow up once before moving on.
 
-I know inboxes get busy. I put together a quick example of what an automated outreach system could look like for a business like {{business_name}} — took me about 20 minutes to build.
+I know you're busy. That's kind of the whole point.
 
-Happy to send it over if you're curious. No strings attached.
+The businesses I work with aren't struggling — they're good at what they do. They just don't have time to chase new customers on top of everything else. That's the gap I fill.
 
-Jake
-gopulseforge.com`
+If you want to see a free mockup of what consistent outreach could look like for {{business_name}}, just reply and I'll have something over to you same day.
+
+Jake`
     },
     {
       day: 8,
-      subject: "One thing that's working for service businesses in Manchester",
+      subject: "what's actually working in Manchester right now",
       body: `Hi {{first_name}},
 
-I'll keep this short.
+One thing I'm seeing across local businesses right now — the ones growing consistently aren't spending more on ads. They're just staying in front of people longer than their competition.
 
-The businesses I'm seeing grow consistently right now are the ones that stay visible between jobs — not just when they're actively looking for work.
+Most owners go quiet between jobs. The ones winning don't.
 
-Pulseforge automates that visibility. It's running for a few local businesses already and the feedback has been strong.
+I help businesses like {{business_name}} stay visible automatically — no extra time required on your end.
 
-If timing is ever right for {{business_name}}, I'm here.
+Still happy to put together something specific for you if you want to see it in action.
 
 Jake
 gopulseforge.com`
     },
     {
       day: 13,
-      subject: "Last note from me",
+      subject: "closing the loop",
       body: `Hi {{first_name}},
 
-This is my last follow-up — I don't want to clog your inbox.
+Last note from me — I don't want to clutter your inbox.
 
-If you ever want to see what consistent automated outreach could do for {{business_name}}, just reply to this email and I'll put something together for you.
+If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply to this and I'll put something together.
 
-Wishing you a strong season either way.
+Rooting for you either way.
 
 Jake Maynard
 Pulseforge
