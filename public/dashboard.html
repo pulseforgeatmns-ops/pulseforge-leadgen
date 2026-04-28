@@ -775,7 +775,7 @@ body::before {
           <div class="agent-card-role">Lead Scraper</div>
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
-            <button class="deploy-btn live-btn">RUN</button>
+            <button class="deploy-btn live-btn" onclick="runAgent(this)">RUN</button>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:90%"></div></div>
@@ -804,7 +804,7 @@ body::before {
           <div class="agent-card-role">LinkedIn Agent</div>
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
-            <button class="deploy-btn live-btn">RUN</button>
+            <button class="deploy-btn live-btn" onclick="runAgent(this)">RUN</button>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:65%"></div></div>
@@ -833,7 +833,7 @@ body::before {
           <div class="agent-card-role">Facebook Agent</div>
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
-            <button class="deploy-btn live-btn">RUN</button>
+            <button class="deploy-btn live-btn" onclick="runAgent(this)">RUN</button>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:95%"></div></div>
@@ -862,7 +862,7 @@ body::before {
           <div class="agent-card-role">Email Agent</div>
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
-            <button class="deploy-btn live-btn">RUN</button>
+            <button class="deploy-btn live-btn" onclick="runAgent(this)">RUN</button>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:30%"></div></div>
@@ -986,7 +986,7 @@ body::before {
           <div class="agent-card-role">Manager Agent</div>
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
-            <button class="deploy-btn live-btn">RUN</button>
+            <button class="deploy-btn live-btn" onclick="runAgent(this)">RUN</button>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill purple" style="width:100%"></div></div>
@@ -1015,7 +1015,7 @@ body::before {
           <div class="agent-card-role">Reporting Agent</div>
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
-            <button class="deploy-btn live-btn">RUN</button>
+            <button class="deploy-btn live-btn" onclick="runAgent(this)">RUN</button>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:72%; background:var(--green);"></div></div>
@@ -1108,7 +1108,7 @@ body::before {
           <div class="agent-card-role">Mockup Agent</div>
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
-            <button class="deploy-btn live-btn">RUN</button>
+            <button class="deploy-btn live-btn" onclick="runAgent(this)">RUN</button>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:30%"></div></div>
@@ -1339,6 +1339,23 @@ document.addEventListener('keydown', e => {
 });
 
 // Load live activity feed from Second Brain
+async function runAgent(btn) {
+  const card = btn.closest('.agent-card');
+  const agentName = card.querySelector('.agent-card-name').textContent.toLowerCase();
+  btn.textContent = '...';
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/run/' + agentName, { method: 'POST' });
+    const data = await res.json();
+    btn.textContent = data.success ? 'SENT' : 'ERR';
+    setTimeout(() => { btn.textContent = 'RUN'; btn.disabled = false; }, 3000);
+    loadActivityFeed();
+  } catch(err) {
+    btn.textContent = 'ERR';
+    setTimeout(() => { btn.textContent = 'RUN'; btn.disabled = false; }, 3000);
+  }
+}
+
 async function loadActivityFeed() {
   try {
     const res = await fetch('/api/activity');
