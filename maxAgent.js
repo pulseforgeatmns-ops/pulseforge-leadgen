@@ -187,7 +187,6 @@ async function run() {
     console.error('Max error:', err.message);
   }
 
-  pool.end();
 }
 
 run();

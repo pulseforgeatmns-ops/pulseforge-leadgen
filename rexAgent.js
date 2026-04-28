@@ -226,7 +226,6 @@ async function run() {
     await logAgentRun('error').catch(() => {});
   }
 
-  pool.end();
 }
 
 run();
