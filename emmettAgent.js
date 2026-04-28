@@ -79,7 +79,7 @@ gopulseforge.com`
 
 function fillTemplate(template, prospect) {
   const firstName = prospect.first_name || prospect.name?.split(' ')[0] || 'there';
-  const businessName = prospect.company || 'your business';
+  const businessName = prospect.company || prospect.notes?.split('—')[0]?.trim() || 'your business';
 
   return template
     .replace(/{{first_name}}/g, firstName)
@@ -223,7 +223,6 @@ if (!step) continue;
   }
 
   console.log(`\nEmmett complete. Emails sent: ${sent}`);
-  process.exit(0);
 }
 
 run().catch(console.error);
