@@ -1345,7 +1345,7 @@ async function runAgent(btn) {
   btn.textContent = '...';
   btn.disabled = true;
   try {
-    const res = await fetch('/api/run/' + agentName, { method: 'POST' });
+    const res = await fetch('/api/run/' + agentName, { method: 'POST', credentials: 'include' });
     const data = await res.json();
     btn.textContent = data.success ? 'SENT' : 'ERR';
     setTimeout(() => { btn.textContent = 'RUN'; btn.disabled = false; }, 3000);
