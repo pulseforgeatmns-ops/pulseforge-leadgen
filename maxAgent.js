@@ -90,11 +90,18 @@ async function generateInsights(snapshot) {
     max_tokens: 1000,
     messages: [{
       role: 'user',
-      content: `You are Max, the manager agent for Pulseforge — an AI marketing system for local small businesses. 
+      content: `Today's date is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. You are Max, the manager agent for Pulseforge — an AI marketing system for local small businesses. 
 
 Here is today's second brain snapshot:
 
 ${dataString}
+
+Known fixes already implemented (do not flag these as issues):
+- Duplicate send deduplication is fixed — touchpoints are logged correctly
+- Email copy has been completely rewritten with operator-angle messaging
+- All 5 Brevo vertical sequences updated with new copy
+- Riley inbound triage agent is now live and monitoring the inbox
+- RUN buttons on dashboard are working
 
 Generate a concise daily digest with:
 1. SYSTEM STATUS — brief overview of what's happening across all agents
