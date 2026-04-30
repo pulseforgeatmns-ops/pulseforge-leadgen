@@ -1343,16 +1343,33 @@ async function openDetail(key) {
   document.getElementById('detailStatLast').textContent = '...';
 
   try {
-    const res = await fetch('/api/activity', { credentials: 'include' });
-    if (!res.ok) return;
-    const feed = await res.json();
+    const [actRes, statsRes] = await Promise.all([
+      fetch('/api/activity', { credentials: 'include' }),
+      fetch('/api/agent-stats', { credentials: 'include' })
+    ]);
+    const feed = actRes.ok ? await actRes.json() : [];
+    const stats = statsRes.ok ? await statsRes.json() : {};
+
     const agentFeed = feed.filter(f => f.agent.toLowerCase() === a.name.toLowerCase());
+    const agentStats = stats[agentKey] || null;
 
-    // Stats
-    document.getElementById('detailStatRuns').textContent = agentFeed.length || '0';
-    document.getElementById('detailStatLast').textContent = agentFeed[0]?.time || 'Never';
+    // Stats from agent-stats API
+    if (agentStats) {
+      document.getElementById('detailStatRuns').textContent = agentStats.total || '0';
+      const lastRun = agentStats.lastRun ? new Date(agentStats.lastRun) : null;
+      if (lastRun) {
+        const minsAgo = Math.floor((Date.now() - lastRun) / 60000);
+        const label = minsAgo < 60 ? minsAgo + 'm ago' : minsAgo < 1440 ? Math.floor(minsAgo/60) + 'h ago' : Math.floor(minsAgo/1440) + 'd ago';
+        document.getElementById('detailStatLast').textContent = label;
+      } else {
+        document.getElementById('detailStatLast').textContent = 'Never';
+      }
+    } else {
+      document.getElementById('detailStatRuns').textContent = '0';
+      document.getElementById('detailStatLast').textContent = 'Never';
+    }
 
-    // Recent activity
+    // Recent activity from feed
     if (agentFeed.length > 0) {
       document.getElementById('detailRecentActivity').style.display = 'block';
       document.getElementById('detailActivityFeed').innerHTML = agentFeed.slice(0, 3).map(function(item) {
