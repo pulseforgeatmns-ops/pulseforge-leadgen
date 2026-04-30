@@ -757,7 +757,7 @@ body::before {
 
     <div class="agents-grid" id="outreachGrid">
       <!-- Scout -->
-      <div class="agent-card live" onclick="openDetail('scout')">
+      <div class="agent-card live" onclick="openDetail('scout')" data-agent="scout">
         <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(0,212,180,0.15) 0%, transparent 70%)"></div>
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1"><div class="orbit-dot"></div></div>
@@ -786,7 +786,7 @@ body::before {
       </div>
 
       <!-- Link -->
-      <div class="agent-card live" onclick="openDetail('link')">
+      <div class="agent-card live" onclick="openDetail('link')" data-agent="link">
         <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(10,102,194,0.2) 0%, transparent 70%)"></div>
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1"><div class="orbit-dot" style="background:#5b9fd4;box-shadow:0 0 6px #5b9fd4;"></div></div>
@@ -815,7 +815,7 @@ body::before {
       </div>
 
       <!-- Faye -->
-      <div class="agent-card live" onclick="openDetail('faye')">
+      <div class="agent-card live" onclick="openDetail('faye')" data-agent="faye">
         <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(24,119,242,0.2) 0%, transparent 70%)"></div>
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1"><div class="orbit-dot" style="background:#5ba3f5;box-shadow:0 0 6px #5ba3f5;"></div></div>
@@ -844,7 +844,7 @@ body::before {
       </div>
 
       <!-- Emmett -->
-      <div class="agent-card live" onclick="openDetail('emmett')">
+      <div class="agent-card live" onclick="openDetail('emmett')" data-agent="emmett">
         <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(255,107,53,0.15) 0%, transparent 70%)"></div>
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1"><div class="orbit-dot" style="background:#ff6b35;box-shadow:0 0 6px #ff6b35;"></div></div>
@@ -876,7 +876,7 @@ body::before {
     <!-- Planned outreach row -->
     <div class="agents-grid" style="grid-template-columns: repeat(3,1fr); max-width: 75%;">
       <!-- Ivy -->
-      <div class="agent-card" onclick="openDetail('ivy')">
+      <div class="agent-card" onclick="openDetail('ivy')" data-agent="ivy">
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1" style="border-color:rgba(225,48,108,0.15);"></div>
           <div class="orbit-ring orbit-2" style="border-color:rgba(225,48,108,0.08);"></div>
@@ -904,7 +904,7 @@ body::before {
       </div>
 
       <!-- Sam -->
-      <div class="agent-card" onclick="openDetail('sam')">
+      <div class="agent-card" onclick="openDetail('sam')" data-agent="sam">
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1" style="border-color:rgba(0,212,180,0.1);"></div>
           <div class="orbit-ring orbit-2"></div>
@@ -932,7 +932,7 @@ body::before {
       </div>
 
       <!-- Cal -->
-      <div class="agent-card" onclick="openDetail('cal')">
+      <div class="agent-card" onclick="openDetail('cal')" data-agent="cal">
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1" style="border-color:rgba(255,100,100,0.1);"></div>
           <div class="orbit-ring orbit-2"></div>
@@ -968,7 +968,7 @@ body::before {
 
     <div class="agents-grid">
       <!-- Max -->
-      <div class="agent-card live" onclick="openDetail('max')">
+      <div class="agent-card live" onclick="openDetail('max')" data-agent="max">
         <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(139,92,246,0.2) 0%, transparent 70%)"></div>
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1" style="border-color:rgba(139,92,246,0.3);"><div class="orbit-dot orbit-dot-purple"></div></div>
@@ -997,7 +997,7 @@ body::before {
       </div>
 
       <!-- Rex -->
-      <div class="agent-card live" onclick="openDetail('rex')">
+      <div class="agent-card live" onclick="openDetail('rex')" data-agent="rex">
         <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(0,230,118,0.12) 0%, transparent 70%)"></div>
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1" style="border-color:rgba(0,230,118,0.2);"><div class="orbit-dot"></div></div>
@@ -1026,7 +1026,7 @@ body::before {
       </div>
 
       <!-- Riley -->
-      <div class="agent-card live" onclick="openDetail('riley')">
+      <div class="agent-card live" onclick="openDetail('riley')" data-agent="riley">
         <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(100,200,100,0.12) 0%, transparent 70%)"></div>
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1" style="border-color:rgba(100,200,100,0.3);"><div class="orbit-dot" style="background:#64c864;box-shadow:0 0 6px #64c864;"></div></div>
@@ -1055,7 +1055,7 @@ body::before {
       </div>
 
       <!-- Penny -->
-      <div class="agent-card" onclick="openDetail('penny')">
+      <div class="agent-card" onclick="openDetail('penny')" data-agent="penny">
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1" style="border-color:rgba(255,200,0,0.1);"></div>
           <div class="orbit-ring orbit-2"></div>
@@ -1091,7 +1091,7 @@ body::before {
 
     <div class="agents-grid" style="grid-template-columns:repeat(3,1fr); max-width:75%;">
       <!-- Sketch -->
-      <div class="agent-card live" onclick="openDetail('sketch')">
+      <div class="agent-card live" onclick="openDetail('sketch')" data-agent="sketch">
         <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(180,80,255,0.15) 0%, transparent 70%)"></div>
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1" style="border-color:rgba(200,100,255,0.3);"><div class="orbit-dot orbit-dot-purple"></div></div>
@@ -1120,7 +1120,7 @@ body::before {
       </div>
 
       <!-- Paige -->
-      <div class="agent-card" onclick="openDetail('paige')">
+      <div class="agent-card" onclick="openDetail('paige')" data-agent="paige">
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1" style="border-color:rgba(0,200,150,0.12);"></div>
           <div class="orbit-ring orbit-2"></div>
@@ -1148,7 +1148,7 @@ body::before {
       </div>
 
       <!-- Vera -->
-      <div class="agent-card" onclick="openDetail('vera')">
+      <div class="agent-card" onclick="openDetail('vera')" data-agent="vera">
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1" style="border-color:rgba(255,200,0,0.12);"></div>
           <div class="orbit-ring orbit-2"></div>
