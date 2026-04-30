@@ -79,7 +79,9 @@ gopulseforge.com`
 
 function fillTemplate(template, prospect) {
   const firstName = prospect.first_name || prospect.name?.split(' ')[0] || 'there';
-  const businessName = prospect.company || prospect.notes?.split('—')[0]?.trim() || 'your business';
+  const rawDomain = prospect.notes?.split('—')[1]?.trim() || '';
+  const domainName = rawDomain.replace(/\.com|\.net|\.org|\.io/g, '').replace(/[-]/g, ' ').trim();
+  const businessName = prospect.company || (domainName ? domainName.charAt(0).toUpperCase() + domainName.slice(1) : 'your business');
 
   return template
     .replace(/{{first_name}}/g, firstName)
