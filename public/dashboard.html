@@ -883,7 +883,7 @@ body::before {
           <div class="status-ring-wrap">
             <svg class="status-ring-svg" viewBox="0 0 92 92">
               <circle class="ring-track" cx="46" cy="46" r="40"/>
-              <circle class="ring-fill" cx="46" cy="46" r="40" style="stroke-dashoffset:200;"/>
+              <circle class="ring-fill planned" cx="46" cy="46" r="40" style="stroke-dashoffset:230;"/>
             </svg>
           </div>
           <div class="face-orb" style="background: radial-gradient(circle at 40% 35%, rgba(225,48,108,0.2), rgba(0,0,0,0.9)); box-shadow: inset 0 0 20px rgba(0,0,0,0.7);">📸</div>
@@ -892,8 +892,8 @@ body::before {
           <div class="agent-card-name" style="color:rgba(255,255,255,0.6)">IVY</div>
           <div class="agent-card-role">Instagram Agent</div>
           <div class="agent-card-status">
-            <div class="status-tag st-live">LIVE</div>
-            <button class="deploy-btn">RUN</button>
+            <div class="status-tag st-planned">PLANNED</div>
+            <button class="deploy-btn">SOON</button>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
@@ -1026,24 +1026,24 @@ body::before {
       </div>
 
       <!-- Riley -->
-      <div class="agent-card" onclick="openDetail('riley')">
+      <div class="agent-card live" onclick="openDetail('riley')">
         <div class="agent-portrait">
           <div class="orbit-ring orbit-1"></div>
           <div class="orbit-ring orbit-2"></div>
           <div class="status-ring-wrap">
             <svg class="status-ring-svg" viewBox="0 0 92 92">
               <circle class="ring-track" cx="46" cy="46" r="40"/>
-              <circle class="ring-fill planned" cx="46" cy="46" r="40" style="stroke-dashoffset:230;"/>
+              <circle class="ring-fill live" cx="46" cy="46" r="40" style="stroke-dashoffset:200;"/>
             </svg>
           </div>
-          <div class="face-orb" style="background: radial-gradient(circle at 40% 35%, rgba(100,200,100,0.15), rgba(0,0,0,0.9)); box-shadow: inset 0 0 20px rgba(0,0,0,0.7);">🙋</div>
+          <div class="face-orb" style="background: radial-gradient(circle at 40% 35%, rgba(100,200,100,0.3), rgba(0,0,0,0.8)); box-shadow: 0 0 30px rgba(100,200,100,0.2), inset 0 0 20px rgba(0,0,0,0.5);">🙋</div>
         </div>
         <div class="agent-card-footer">
-          <div class="agent-card-name" style="color:rgba(255,255,255,0.6)">RILEY</div>
+          <div class="agent-card-name">RILEY</div>
           <div class="agent-card-role">Receptionist Agent</div>
           <div class="agent-card-status">
-            <div class="status-tag st-planned">PLANNED</div>
-            <button class="deploy-btn">SOON</button>
+            <div class="status-tag st-live">LIVE</div>
+            <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
