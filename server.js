@@ -486,11 +486,13 @@ app.post('/api/approvals/:id', requireAuth, async (req, res) => {
 app.get('/api/agent-stats', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT agent_name, COUNT(*) as total_runs,
+      SELECT 
+        CASE WHEN agent_name = 'email_agent' THEN 'emmett_agent' ELSE agent_name END as agent_name,
+        COUNT(*) as total_runs,
         MAX(ran_at) as last_run,
         COUNT(CASE WHEN ran_at > NOW() - INTERVAL '7 days' THEN 1 END) as week_runs
       FROM agent_log
-      GROUP BY agent_name
+      GROUP BY CASE WHEN agent_name = 'email_agent' THEN 'emmett_agent' ELSE agent_name END
     `);
 
     const daily = await pool.query(`
