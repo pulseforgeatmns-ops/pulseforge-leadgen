@@ -1507,7 +1507,7 @@ async function loadAgentSparklines() {
       const key = agentMap[agentName];
       if (!key) return;
 
-      const card = document.querySelector('[onclick="openDetail('' + key + '')"]');
+      const card = document.querySelector('[data-agent="' + key + '"]');
       if (!card) return;
 
       const bars = card.querySelectorAll('.mini-stat-fill');
