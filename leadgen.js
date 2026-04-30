@@ -15,6 +15,38 @@ const axios = require('axios');
 const { createObjectCsvWriter } = require('csv-writer');
 const { google } = require('googleapis');
 
+
+const DOMAIN_BLACKLIST = [
+  'indeed.com','glassdoor.com','ziprecruiter.com','thumbtack.com',
+  'yelp.com','yellowpages.com','mapquest.com','bbb.org','patch.com',
+  'avvo.com','zoominfo.com','inven.ai','prnewswire.com','ofn.org',
+  'townplanner.com','ccsnh.edu','servpro.com','stanleysteemer.com',
+  'angieslist.com','homeadvisor.com','houzz.com','facebook.com',
+  'linkedin.com','twitter.com','instagram.com','reddit.com',
+  'google.com','bing.com','yahoo.com','amazon.com','wikipedia.org',
+  'us.bold.pro','bold.pro','remotebooksonline.com',
+  'unionleader.com','bizbuysell.com','procore.com','brixrecruiting.com',
+  'windhamnh.gov','lincolnnh.gov','warnernh.gov','portsmouthnh.gov',
+  'nh.gov','nh.us','vermont.gov','govinfo.gov',
+  'vagaro.com','alignable.com','peerspace.com',
+  'tiktok.com','snapchat.com',
+  'businessnhmagazine.com','nhmagazine.com','nhpr.org',
+  'issuu.com','smugmug.com','aptuitivcdn.com',
+  'forbes.com','wmur.com','wokq.com',
+  'trulia.com','zillow.com','bostonrealtyweb.com',
+  'opensecrets.org','novoco.com','dealstream.com',
+  'inmyarea.com','businessesforsale.com','veteranownedbusiness.com',
+  'nbss.edu','grotonherald.com','speedbagcentral.com',
+  'steemer.com','townplanner.com','bizbuysell.com','unionleader.com',
+  'sniffspot.com','woofies.com','brixrecruiting.com','procore.com',
+  'promatcher.com','afoodieaffair.com','dizscafe.com','redarrowdiner.com',
+  'bostonvoyager.com','christopherduffley.com','shoppersmht.com',
+  'opensecrets.org','latimes.com','businesswest.com','macaronikid.com',
+  'crestmontcapital.com','thebedfordmom.com','mhl.org','usmodernist.org',
+  'rackcdn.com','amazonaws.com','whs1959.com','spaindex.com',
+  'sentextsolutions.com','londonderrynh.org'
+];
+
 // ── CLI ARGS ─────────────────────────────────────────────────────────
 const args = parseArgs(process.argv.slice(2));
 const CONFIG = {
@@ -138,7 +170,7 @@ async function enrichWithProspeo(domain) {
 
     return {
       contact: `${person.first_name || ''} ${person.last_name || ''}`.trim(),
-      email:   person.email?.email || person.email || null,
+      email:   typeof person.email === 'object' ? person.email?.email || null : person.email || null,
       title:   person.job_title || null,
 };
   } catch (err) {
@@ -273,16 +305,13 @@ async function main() {
   let leads = await searchGoogle(query, CONFIG.maxResults);
   console.log(`[Google] Found ${leads.length} raw results`);
 
-  // 2. Deduplicate first (saves Prospeo credits)
-  leads = deduplicate(leads);
-  console.log(`[Dedup] ${leads.length} unique domains`);
-
   // 3. Enrich with Prospeo
   console.log(`[Prospeo] Enriching ${leads.length} domains...`);
   for (let i = 0; i < leads.length; i++) {
     const lead = leads[i];
     process.stdout.write(`  [${i+1}/${leads.length}] ${lead.url}...`);
-    let enriched = await enrichWithProspeo(lead.url);
+    const rootDomain = lead.url.replace(/^(?:[^.]+\.)+?([^.]+\.[^.]+)$/, (_, d) => d) || lead.url;
+    let enriched = await enrichWithProspeo(rootDomain);
     if (enriched) {
       Object.assign(lead, enriched);
       lead.source = [...(lead.source || []), 'prospeo'];
@@ -312,6 +341,9 @@ async function main() {
     source:  l.source || ['google'],
     score:   scoreLead(l),
   }));
+
+  leads = leads.filter(l => !DOMAIN_BLACKLIST.some(b => l.url && l.url.includes(b)));
+  console.log("[Blacklist] " + leads.length + " leads after blacklist filter");
 
   // 5. Filter by min score
   const before = leads.length;

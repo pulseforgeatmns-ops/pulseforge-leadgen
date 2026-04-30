@@ -66,6 +66,14 @@ const SKIP_DOMAINS = [
   'quora.com','medium.com','nhbr.com',
   'sba.gov','census.gov','us.bold.pro','housekeeper.com',
   'remotebooksonline.com',
+  'steemer.com','townplanner.com','bizbuysell.com','unionleader.com',
+  'sniffspot.com','woofies.com','brixrecruiting.com','procore.com',
+  'promatcher.com','afoodieaffair.com','dizscafe.com','redarrowdiner.com',
+  'bostonvoyager.com','christopherduffley.com','shoppersmht.com',
+  'opensecrets.org','latimes.com','businesswest.com','macaronikid.com',
+  'crestmontcapital.com','thebedfordmom.com','mhl.org','usmodernist.org',
+  'rackcdn.com','amazonaws.com','whs1959.com','spaindex.com',
+  'sentextsolutions.com','londonderrynh.org'
 ];
 
 // ── ROUTES ────────────────────────────────────────────────────────────
