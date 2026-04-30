@@ -1027,13 +1027,14 @@ body::before {
 
       <!-- Riley -->
       <div class="agent-card live" onclick="openDetail('riley')">
+        <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(100,200,100,0.12) 0%, transparent 70%)"></div>
         <div class="agent-portrait">
-          <div class="orbit-ring orbit-1"></div>
-          <div class="orbit-ring orbit-2"></div>
+          <div class="orbit-ring orbit-1" style="border-color:rgba(100,200,100,0.3);"><div class="orbit-dot" style="background:#64c864;box-shadow:0 0 6px #64c864;"></div></div>
+          <div class="orbit-ring orbit-2" style="border-color:rgba(100,200,100,0.15);"><div class="orbit-dot orbit-dot-purple"></div></div>
           <div class="status-ring-wrap">
             <svg class="status-ring-svg" viewBox="0 0 92 92">
               <circle class="ring-track" cx="46" cy="46" r="40"/>
-              <circle class="ring-fill live" cx="46" cy="46" r="40" style="stroke-dashoffset:200;"/>
+              <circle class="ring-fill live" cx="46" cy="46" r="40" style="stroke-dashoffset:200; stroke:rgba(100,200,100,0.8);"/>
             </svg>
           </div>
           <div class="face-orb" style="background: radial-gradient(circle at 40% 35%, rgba(100,200,100,0.3), rgba(0,0,0,0.8)); box-shadow: 0 0 30px rgba(100,200,100,0.2), inset 0 0 20px rgba(0,0,0,0.5);">🙋</div>
@@ -1046,9 +1047,9 @@ body::before {
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
           <div class="agent-mini-stats">
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:20%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:40%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:15%"></div></div>
           </div>
         </div>
       </div>
