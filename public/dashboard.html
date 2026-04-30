@@ -1249,6 +1249,21 @@ body::before {
   <div class="detail-info">
     <div class="detail-info-title" id="detailTitle">Scout — Lead Scraper</div>
     <div class="detail-desc" id="detailDesc"></div>
+    <div id="detailLiveStats" style="display:none; margin:1rem 0; padding:1rem; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:8px;">
+      <div style="font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:2px; color:#6b7fa0; text-transform:uppercase; margin-bottom:0.75rem;">LIVE STATS</div>
+      <div style="display:flex; gap:2rem;">
+        <div><div style="font-size:1.4rem; font-weight:700; color:#00d4b4;" id="detailStatRuns">—</div><div style="font-size:0.65rem; color:#6b7fa0; font-family:JetBrains Mono,monospace; text-transform:uppercase; letter-spacing:1px;">Total Runs</div></div>
+        <div><div style="font-size:1.4rem; font-weight:700; color:#8b5cf6;" id="detailStatLast">—</div><div style="font-size:0.65rem; color:#6b7fa0; font-family:JetBrains Mono,monospace; text-transform:uppercase; letter-spacing:1px;">Last Active</div></div>
+      </div>
+    </div>
+    <div id="detailMaxRec" style="display:none; margin:1rem 0; padding:1rem; background:rgba(139,92,246,0.06); border:1px solid rgba(139,92,246,0.15); border-radius:8px;">
+      <div style="font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:2px; color:#8b5cf6; text-transform:uppercase; margin-bottom:0.5rem;">⚡ MAX SAYS</div>
+      <div style="font-size:0.85rem; color:#c4b5fd; line-height:1.5;" id="detailMaxRecText"></div>
+    </div>
+    <div id="detailRecentActivity" style="display:none; margin:1rem 0;">
+      <div style="font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:2px; color:#6b7fa0; text-transform:uppercase; margin-bottom:0.75rem;">RECENT ACTIVITY</div>
+      <div id="detailActivityFeed"></div>
+    </div>
     <div class="detail-tasks" id="detailTasks"></div>
   </div>
 </div>
@@ -1271,7 +1286,24 @@ const agentData = {
   vera: { face:'⭐', name:'VERA', role:'Review Agent', title:'Vera — Review Agent', desc:'Vera monitors and manages online reviews. Review velocity is one of the biggest local SEO signals — and most small businesses have no system for it. Vera fixes that automatically.', tasks:['Monitors Google and Yelp for new reviews','Drafts responses to reviews for owner approval','Sends follow-up requests to recent customers asking for a review','Flags negative reviews immediately for rapid response','Review velocity is a top-3 local SEO ranking signal'], ringOffset: 230 },
 };
 
-function openDetail(key) {
+const agentNameMap = {
+  scout: 'scout_agent', link: 'linkedin_agent', faye: 'facebook_agent',
+  emmett: 'emmett_agent', max: 'max_agent', rex: 'rex_agent',
+  riley: 'riley_agent', sketch: 'sketch_agent'
+};
+
+const maxRecommendations = {
+  scout: 'Run Scout on 2 new verticals this week — salon and fitness have not been searched yet. Retail and wellness need Google Places API for better results.',
+  link: 'Link has not posted in 7+ days. Check the approvals queue — drafts may be pending your review.',
+  faye: 'Facebook backlog is the priority. Review pending drafts in the approvals panel and clear the queue.',
+  emmett: 'Open tracking is not configured in Brevo. Enable it to get visibility on which emails are landing.',
+  max: 'Running daily. Next improvement: add per-agent recommendations to the digest based on individual performance data.',
+  rex: 'Rex is generating weekly reports. Consider adding a client-facing version of the report as a Pulseforge deliverable.',
+  riley: 'Riley is live and monitoring the inbox. Run her daily to catch replies before they go cold.',
+  sketch: 'Sketch is ready but needs prospects with no website. Add a no-website flag to Scout to trigger Sketch automatically.'
+};
+
+async function openDetail(key) {
   const a = agentData[key];
   if (!a) return;
   document.getElementById('detailFace').textContent = a.face;
@@ -1288,6 +1320,49 @@ function openDetail(key) {
     tasks.appendChild(div);
   });
   document.getElementById('agentDetail').classList.add('open');
+
+  // Show Max recommendation
+  if (maxRecommendations[key]) {
+    document.getElementById('detailMaxRec').style.display = 'block';
+    document.getElementById('detailMaxRecText').textContent = maxRecommendations[key];
+  } else {
+    document.getElementById('detailMaxRec').style.display = 'none';
+  }
+
+  // Fetch live stats if agent has a backend mapping
+  const agentKey = agentNameMap[key];
+  if (!agentKey) {
+    document.getElementById('detailLiveStats').style.display = 'none';
+    document.getElementById('detailRecentActivity').style.display = 'none';
+    return;
+  }
+
+  document.getElementById('detailLiveStats').style.display = 'block';
+  document.getElementById('detailStatRuns').textContent = '...';
+  document.getElementById('detailStatLast').textContent = '...';
+
+  try {
+    const res = await fetch('/api/activity', { credentials: 'include' });
+    if (!res.ok) return;
+    const feed = await res.json();
+    const agentFeed = feed.filter(f => f.agent.toLowerCase() === a.name.toLowerCase());
+
+    // Stats
+    document.getElementById('detailStatRuns').textContent = agentFeed.length || '0';
+    document.getElementById('detailStatLast').textContent = agentFeed[0]?.time || 'Never';
+
+    // Recent activity
+    if (agentFeed.length > 0) {
+      document.getElementById('detailRecentActivity').style.display = 'block';
+      document.getElementById('detailActivityFeed').innerHTML = agentFeed.slice(0, 3).map(function(item) {
+        return '<div style="font-size:0.8rem; color:#8899bb; padding:0.4rem 0; border-bottom:1px solid rgba(255,255,255,0.04);">' + item.action + ' <span style="color:#4a5a7a; font-size:0.7rem;">' + item.time + ' ago</span></div>';
+      }).join('');
+    } else {
+      document.getElementById('detailRecentActivity').style.display = 'none';
+    }
+  } catch(err) {
+    console.error('Failed to load agent detail data:', err);
+  }
 }
 
 function closeDetail() {
