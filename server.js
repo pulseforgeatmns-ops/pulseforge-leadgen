@@ -482,6 +482,47 @@ app.post('/api/approvals/:id', requireAuth, async (req, res) => {
   }
 });
 
+// API - Agent stats for sparklines
+app.get('/api/agent-stats', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT agent_name, COUNT(*) as total_runs,
+        MAX(ran_at) as last_run,
+        COUNT(CASE WHEN ran_at > NOW() - INTERVAL '7 days' THEN 1 END) as week_runs
+      FROM agent_log
+      GROUP BY agent_name
+    `);
+
+    const daily = await pool.query(`
+      SELECT agent_name, DATE(ran_at) as date, COUNT(*) as count
+      FROM agent_log
+      WHERE ran_at > NOW() - INTERVAL '7 days'
+      GROUP BY agent_name, DATE(ran_at)
+      ORDER BY date ASC
+    `);
+
+    const stats = {};
+    result.rows.forEach(r => {
+      stats[r.agent_name] = {
+        total: parseInt(r.total_runs),
+        weekRuns: parseInt(r.week_runs),
+        lastRun: r.last_run,
+        daily: []
+      };
+    });
+
+    daily.rows.forEach(r => {
+      if (stats[r.agent_name]) {
+        stats[r.agent_name].daily.push({ date: r.date, count: parseInt(r.count) });
+      }
+    });
+
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // API - Live activity feed
 app.get('/api/activity', requireAuth, async (req, res) => {
   try {

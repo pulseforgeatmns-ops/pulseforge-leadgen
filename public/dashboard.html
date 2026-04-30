@@ -1486,8 +1486,48 @@ async function loadLiveData() {
 
 loadLiveData();
 loadActivityFeed();
+loadAgentSparklines();
 setInterval(loadLiveData, 60000);
 setInterval(loadActivityFeed, 30000);
+setInterval(loadAgentSparklines, 300000);
+
+async function loadAgentSparklines() {
+  try {
+    const res = await fetch('/api/agent-stats', { credentials: 'include' });
+    if (!res.ok) return;
+    const stats = await res.json();
+
+    const agentMap = {
+      'scout_agent': 'scout', 'linkedin_agent': 'link', 'facebook_agent': 'faye',
+      'emmett_agent': 'emmett', 'email_agent': 'emmett', 'max_agent': 'max',
+      'rex_agent': 'rex', 'riley_agent': 'riley', 'sketch_agent': 'sketch'
+    };
+
+    Object.entries(stats).forEach(([agentName, data]) => {
+      const key = agentMap[agentName];
+      if (!key) return;
+
+      const card = document.querySelector('[onclick="openDetail('' + key + '')"]');
+      if (!card) return;
+
+      const bars = card.querySelectorAll('.mini-stat-fill');
+      if (!bars.length) return;
+
+      const daily = data.daily || [];
+      const max = Math.max(...daily.map(d => d.count), 1);
+
+      // Fill up to 3 bars with last 3 days of data
+      const last3 = daily.slice(-3);
+      bars.forEach((bar, i) => {
+        const val = last3[i] ? Math.round((last3[i].count / max) * 100) : 0;
+        bar.style.width = val + '%';
+        bar.classList.remove('planned-fill');
+      });
+    });
+  } catch(err) {
+    console.error('Sparkline error:', err);
+  }
+}
 
 </script>
 </body>
