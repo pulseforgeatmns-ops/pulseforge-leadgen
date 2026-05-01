@@ -94,6 +94,7 @@ async function sendEmail(toEmail, toName, subject, body) {
       sender: { name: FROM_NAME, email: FROM_EMAIL },
       to: [{ email: toEmail, name: toName }],
       subject,
+      htmlContent: '<html><body style="font-family:Georgia,serif;font-size:16px;line-height:1.6;color:#1a1a1a;max-width:560px;margin:0 auto;padding:20px;">' + body.replace(/\n/g, '<br>') + '</body></html>',
       textContent: body
     }, {
       headers: {
