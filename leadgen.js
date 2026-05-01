@@ -85,6 +85,52 @@ async function enrichWithHunter(domain) {
   }
 }
 
+
+// ─────────────────────────────────────────────────────────────────────
+// STEP 2c: Scrape website for contact email (fallback for Places leads)
+// ─────────────────────────────────────────────────────────────────────
+async function scrapeWebsiteEmail(domain) {
+  const pages = [
+    `https://${domain}/contact`,
+    `https://${domain}/contact-us`,
+    `https://${domain}/about`,
+    `https://www.${domain}/contact`,
+    `https://www.${domain}`
+  ];
+
+  for (const url of pages) {
+    try {
+      const res = await axios.get(url, {
+        timeout: 5000,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' }
+      });
+      const html = res.data;
+
+      // Extract email from page
+      const emailMatch = html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
+      if (emailMatch) {
+        // Filter out noreply, info@, support@ — prefer personal emails
+        const filtered = emailMatch.filter(e =>
+          !e.includes('noreply') &&
+          !e.includes('no-reply') &&
+          !e.includes('example.com') &&
+          !e.includes('sentry') &&
+          !e.includes('wix') &&
+          !e.includes('squarespace') &&
+          !e.includes('.png') &&
+          !e.includes('.jpg')
+        );
+        if (filtered.length > 0) {
+          return { email: filtered[0], contact: '', title: '' };
+        }
+      }
+    } catch(err) {
+      // try next page
+    }
+  }
+  return null;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // STEP 1: Google Custom Search
 // Docs: https://developers.google.com/custom-search/v1/reference/rest/v1/cse/list
@@ -176,6 +222,63 @@ async function enrichWithProspeo(domain) {
   } catch (err) {
     console.warn(`[Prospeo] ${domain}:`, err.response?.data || err.message);
     return null;
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────
+// STEP 1b: Google Places API Search (Phase 4)
+// Better for retail, wellness, salon, gym verticals
+// Docs: https://developers.google.com/maps/documentation/places/web-service
+// ─────────────────────────────────────────────────────────────────────
+async function searchGooglePlaces(industry, location, numResults = 20) {
+  const PLACES_KEY = process.env.GOOGLE_PLACES_KEY;
+  if (!PLACES_KEY) {
+    console.warn('[WARN] Google Places key not set — skipping Places search');
+    return [];
+  }
+
+  try {
+    const query = `${industry} in ${location}`;
+    const res = await axios.post('https://places.googleapis.com/v1/places:searchText', {
+      textQuery: query,
+      maxResultCount: numResults
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': PLACES_KEY,
+        'X-Goog-FieldMask': 'places.displayName,places.websiteUri,places.nationalPhoneNumber,places.formattedAddress,places.id'
+      }
+    });
+
+    const results = res.data.places || [];
+    const leads = [];
+
+    for (const place of results) {
+      try {
+        if (!place.websiteUri) continue;
+
+        const domain = new URL(place.websiteUri).hostname.replace('www.', '');
+        if (DOMAIN_BLACKLIST.some(b => domain.includes(b))) continue;
+
+        leads.push({
+          company: place.displayName?.text || 'Unknown',
+          url: domain,
+          phone: place.nationalPhoneNumber || '',
+          address: place.formattedAddress || '',
+          source: ['places'],
+          snippet: ''
+        });
+      } catch(err) {
+        // skip individual place errors
+      }
+    }
+
+    console.log(`[Places] Found ${leads.length} results with websites`);
+    return leads;
+  } catch (err) {
+    console.error('[Places] Error:', err.response?.data?.error_message || err.message);
+    return [];
   }
 }
 
@@ -303,6 +406,16 @@ async function main() {
 
   // 1. Google search
   let leads = await searchGoogle(query, CONFIG.maxResults);
+
+  // 1b. Google Places search for retail/wellness verticals
+  const placesVerticals = ['retail', 'salon', 'spa', 'gym', 'fitness', 'wellness', 'boutique', 'barber', 'yoga', 'pilates'];
+  const isPlacesVertical = placesVerticals.some(v => CONFIG.industry.toLowerCase().includes(v));
+  if (isPlacesVertical) {
+    console.log('[Places] Detected retail/wellness vertical — running Google Places search...');
+    const placesLeads = await searchGooglePlaces(CONFIG.industry, CONFIG.location, 20);
+    leads = [...leads, ...placesLeads];
+    console.log(`[Places] Combined total: ${leads.length} raw results`);
+  }
   console.log(`[Google] Found ${leads.length} raw results`);
 
   // 3. Enrich with Prospeo
@@ -323,7 +436,19 @@ async function main() {
         lead.source = [...(lead.source || []), 'hunter'];
         process.stdout.write(` ✓ [Hunter] ${enriched.email || 'no email'}\n`);
       } else {
-        process.stdout.write(' —\n');
+        // For Places leads, try scraping the website directly
+        if (lead.source?.includes('places')) {
+          const scraped = await scrapeWebsiteEmail(lead.url);
+          if (scraped) {
+            Object.assign(lead, scraped);
+            lead.source = [...(lead.source || []), 'scraped'];
+            process.stdout.write(` ✓ [Scraped] ${scraped.email}\n`);
+          } else {
+            process.stdout.write(' —\n');
+          }
+        } else {
+          process.stdout.write(' —\n');
+        }
       }
     }
     // Rate limit: 2 req/sec
