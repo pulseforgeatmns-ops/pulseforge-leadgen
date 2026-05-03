@@ -2,8 +2,10 @@ require('dotenv').config();
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
-const { generateComment } = require('./commentGenerator');
+const Anthropic = require('@anthropic-ai/sdk');
 const db = require('./dbClient');
+
+const client = new Anthropic();
 
 puppeteer.use(StealthPlugin());
 
@@ -104,6 +106,31 @@ async function findPosts(page, groupUrl, maxPosts = 5) {
 
 
 
+async function generateComment(postContent, authorName) {
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 150,
+    messages: [{
+      role: 'user',
+      content: `You are ${agentPersona.name}, ${agentPersona.title}. You're commenting on a Facebook group post as yourself — a real person who has run local businesses and now helps other owners with marketing.
+
+Post by ${authorName}:
+"${postContent.slice(0, 600)}"
+
+Write a Facebook comment (2-3 sentences) that:
+- Responds directly to something specific in the post — show you actually read it
+- Adds a genuine observation or short relevant experience — nothing generic
+- Sounds like a real person, not a marketer — no "great post!", no self-promotion, no pitch
+- Ends naturally — a thought, a question, or just a statement
+- Keeps a conversational, grounded tone
+
+Return only the comment text.`
+    }]
+  });
+
+  return message.content[0].text.trim();
+}
+
 async function run() {
   const browser = await puppeteer.launch({
     headless: false,
@@ -143,12 +170,7 @@ async function run() {
         continue;
       }
 
-      const comment = await generateComment(
-        post.content,
-        post.authorName,
-        '',
-        agentPersona
-      );
+      const comment = await generateComment(post.content, post.authorName);
 
       await db.savePendingComment({
         authorName: post.authorName,
