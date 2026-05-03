@@ -57,29 +57,75 @@ async function pickContentType(companyName) {
   return unused.length > 0 ? unused[0] : CONTENT_TYPES[0];
 }
 
+function buildFacebookPrompt(company, contentType, verticalCtx, location) {
+  const isPulseforge = company.name.toLowerCase().includes('pulseforge');
+
+  const audienceNote = isPulseforge
+    ? `IMPORTANT: Pulseforge's audience is small business owners considering marketing automation — not end customers of another business. Write directly to an owner who is tired of doing repetitive marketing tasks themselves and wants a system that runs in the background.`
+    : `Write as the actual owner of ${company.name} talking to their local community in ${location}.`;
+
+  return `You are writing a Facebook post for ${company.name}'s business page.
+${company.name} is a local ${company.industry || 'business'} in ${location}${isPulseforge ? ' that automates marketing and outreach for small business owners using AI' : ` that uses Pulseforge — an AI system that automates their marketing so the owner can focus on the actual work`}.
+
+Content type: ${contentType}
+Business context: ${verticalCtx}
+
+${audienceNote}
+
+Write a Facebook post (2-4 sentences) that:
+- Sounds like a real person talking, not a brand account — no "excited to announce," no "we pride ourselves"
+- Is specific to ${location} — reference the area naturally
+- For "promotional": leads with a concrete result or offer, ends with a soft CTA
+- For "educational": shares one genuinely useful tip the reader can act on
+- For "seasonal": ties to what's actually happening in ${location} right now
+- For "behind-the-scenes": gives a glimpse of the people or process behind the business
+- For "community": mentions something local — a neighborhood, event, or shared experience
+- May end with 1-2 hashtags only if they feel natural — skip if they don't
+
+No buzzwords. No corporate tone. Write like a person.
+
+Return only the post text.`;
+}
+
+function buildGooglePrompt(company, contentType, verticalCtx, location) {
+  const isPulseforge = company.name.toLowerCase().includes('pulseforge');
+
+  const audienceNote = isPulseforge
+    ? `IMPORTANT: Pulseforge's audience is small business owners searching for ways to automate their marketing — not end customers of another business. Write to an owner who wants leads and visibility without doing the manual work themselves.`
+    : `Write for a potential customer in ${location} who is searching for ${company.industry || 'this type of service'} and deciding whether to call.`;
+
+  return `You are writing a Google Business Profile update for ${company.name}, a local ${company.industry || 'business'} in ${location}${isPulseforge ? ' that helps small business owners automate their marketing using AI' : ''}.
+
+Content type: ${contentType}
+Business context: ${verticalCtx}
+
+${audienceNote}
+
+Write a Google Business update (3-5 sentences) that:
+- Reads like something genuinely useful to someone searching "${company.industry || 'local services'} near me" — not promotional fluff
+- Mentions ${location} or the surrounding area naturally
+- For "promotional": states the offer clearly and why it matters to a new customer
+- For "educational": answers a real question people ask before booking or buying
+- For "seasonal": explains what customers should be thinking about this time of year
+- For "behind-the-scenes": builds trust by describing the team, process, or standards
+- For "community": connects the business to the local area in a credible way
+- NO hashtags, NO emojis — professional but human, not corporate
+
+Return only the post text.`;
+}
+
 async function generatePost(company, contentType, channel) {
   const verticalCtx = getVerticalContext(company.industry);
   const location = company.location || 'Manchester, NH';
 
-  const channelNote = channel === 'google_business'
-    ? 'Google Business Profile update — professional tone, warm but concise, no hashtags, no emojis'
-    : 'Facebook page post — conversational, include a question or CTA to spark engagement, 2-3 relevant hashtags at the end are fine';
+  const prompt = channel === 'google_business'
+    ? buildGooglePrompt(company, contentType, verticalCtx, location)
+    : buildFacebookPrompt(company, contentType, verticalCtx, location);
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 300,
-    messages: [{
-      role: 'user',
-      content: `You are writing a ${contentType} social media post for ${company.name}, a local business in ${location}.
-
-Business focus: ${verticalCtx}
-Post format: ${channelNote}
-Content type: ${contentType}
-
-Write 2-4 sentences. Sound like the actual owner wrote it — friendly, local, genuine. Never corporate or salesy. Be specific to ${location} and what this business does. Do not mention competitors.
-
-Return only the post text. No quotes, no labels, no explanation.`
-    }]
+    messages: [{ role: 'user', content: prompt }]
   });
 
   return message.content[0].text.trim();
