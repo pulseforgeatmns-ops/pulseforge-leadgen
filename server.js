@@ -580,14 +580,14 @@ app.get('/api/activity', requireAuth, async (req, res) => {
 // API - Trigger agents
 app.post('/api/run/:agent', requireAuth, async (req, res) => {
   const { agent } = req.params;
-  const localOnly = ['link', 'faye', 'ivy'];
+  const localOnly = ['ivy'];
   if (localOnly.includes(agent)) {
     return res.json({ success: false, message: `${agent} requires local execution — run from your terminal` });
   }
   const agentModules = {
     scout: './leadgen', emmett: './emmettAgent',
     max: './maxAgent', rex: './rexAgent', sketch: './sketchAgent',
-    paige: './paigeAgent'
+    paige: './paigeAgent', faye: './facebookAgent', link: './linkedinAgent'
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   await pool.query(
