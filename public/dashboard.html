@@ -1142,29 +1142,30 @@ body::before {
       </div>
 
       <!-- Paige -->
-      <div class="agent-card" onclick="openDetail('paige')" data-agent="paige">
+      <div class="agent-card live" onclick="openDetail('paige')" data-agent="paige">
+        <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(0,180,120,0.15) 0%, transparent 70%)"></div>
         <div class="agent-portrait">
-          <div class="orbit-ring orbit-1" style="border-color:rgba(0,200,150,0.12);"></div>
-          <div class="orbit-ring orbit-2"></div>
+          <div class="orbit-ring orbit-1" style="border-color:rgba(0,200,150,0.3);"><div class="orbit-dot" style="background:#00c896;box-shadow:0 0 6px #00c896;"></div></div>
+          <div class="orbit-ring orbit-2" style="border-color:rgba(0,200,150,0.15);"><div class="orbit-dot orbit-dot-purple"></div></div>
           <div class="status-ring-wrap">
             <svg class="status-ring-svg" viewBox="0 0 92 92">
               <circle class="ring-track" cx="46" cy="46" r="40"/>
-              <circle class="ring-fill planned" cx="46" cy="46" r="40" style="stroke-dashoffset:230;"/>
+              <circle class="ring-fill live" cx="46" cy="46" r="40" style="stroke-dashoffset:230; stroke:#00c896;"/>
             </svg>
           </div>
-          <div class="face-orb" style="background: radial-gradient(circle at 40% 35%, rgba(0,180,120,0.15), rgba(0,0,0,0.9)); box-shadow: inset 0 0 20px rgba(0,0,0,0.7);">✍️</div>
+          <div class="face-orb" style="background: radial-gradient(circle at 40% 35%, rgba(0,180,120,0.3), rgba(0,0,0,0.8)); box-shadow: 0 0 30px rgba(0,180,120,0.2), inset 0 0 20px rgba(0,0,0,0.5);">✍️</div>
         </div>
         <div class="agent-card-footer">
-          <div class="agent-card-name" style="color:rgba(255,255,255,0.6)">PAIGE</div>
+          <div class="agent-card-name">PAIGE</div>
           <div class="agent-card-role">Content Agent</div>
           <div class="agent-card-status">
-            <div class="status-tag st-planned">PLANNED</div>
-            <button class="deploy-btn">SOON</button>
+            <div class="status-tag st-live">LIVE</div>
+            <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
           <div class="agent-mini-stats">
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
           </div>
         </div>
       </div>
@@ -1325,14 +1326,14 @@ const agentData = {
   riley: { face:'🙋', name:'RILEY', role:'Receptionist Agent', title:'Riley — Receptionist Agent', desc:'Riley handles inbound. When a prospect fills out a contact form or messages through Google Business Profile, Riley responds immediately, qualifies the lead, and books a call without you lifting a finger.', tasks:['Responds to web form submissions within 60 seconds','Handles Google Business Profile message inquiries','Qualifies leads with natural follow-up questions','Books appointments into the owner\'s calendar','Closes the loop — Pulseforge brings leads in and handles them on arrival'], ringOffset: 230 },
   penny: { face:'💰', name:'PENNY', role:'Ad Agent', title:'Penny — Ad Agent', desc:'Penny manages paid advertising campaigns on Google and Meta. She monitors performance, pauses underperforming ads, and reallocates budget toward what\'s converting — no ad platform expertise required.', tasks:['Manages Google and Meta campaigns automatically','Monitors performance daily and pauses underperformers','Reallocates budget toward highest-converting audiences','Reports spend and results weekly','Ad management fee typically 10–15% of spend'], ringOffset: 230 },
   sketch: { face:'🎨', name:'SKETCH', role:'Mockup Agent', title:'Sketch — Mockup Agent', desc:'Sketch auto-generates a branded HTML mockup for prospects with no website — ready to send as the cold email opener. A personalized mockup of their actual business is the strongest cold outreach hook possible.', tasks:['Triggered when Scout finds a prospect with no website','Generates a branded professional site mockup in seconds','Personalizes layout and copy to the business niche and location','Emmett sends the mockup as the cold email hook','Turns a generic cold email into a tangible deliverable'], ringOffset: 230 },
-  paige: { face:'✍️', name:'PAIGE', role:'Content Agent', title:'Paige — Content Agent', desc:'Paige writes and schedules original content for clients\' own profiles and blogs. While Link and Faye engage on other people\'s posts, Paige builds the client\'s own presence — which compounds for local SEO over time.', tasks:['Writes weekly blog posts targeting local search keywords','Drafts Google Business Profile updates','Creates Facebook and LinkedIn posts for client\'s own page','Schedules content on a consistent cadence','Feeds directly into local SEO strategy'], ringOffset: 230 },
+  paige: { face:'✍️', name:'PAIGE', role:'Content Agent', title:'Paige — Content Agent', desc:'Paige generates original social content for client businesses — Facebook page posts and Google Business updates written in the owner\'s voice. Unlike Link and Faye who engage on other people\'s posts, Paige builds the client\'s own presence from scratch.', tasks:['Pulls active clients from the companies table','Generates Facebook page posts and Google Business updates for each','Rotates 5 content types: promotional, educational, seasonal, behind-the-scenes, community','Personalizes tone to the business vertical — a restaurant sounds different from a cleaning company','All content queued for approval — nothing posts automatically'], ringOffset: 230 },
   vera: { face:'⭐', name:'VERA', role:'Review Agent', title:'Vera — Review Agent', desc:'Vera monitors and manages online reviews. Review velocity is one of the biggest local SEO signals — and most small businesses have no system for it. Vera fixes that automatically.', tasks:['Monitors Google and Yelp for new reviews','Drafts responses to reviews for owner approval','Sends follow-up requests to recent customers asking for a review','Flags negative reviews immediately for rapid response','Review velocity is a top-3 local SEO ranking signal'], ringOffset: 230 },
 };
 
 const agentNameMap = {
   scout: 'scout_agent', link: 'linkedin_agent', faye: 'facebook_agent',
   emmett: 'emmett_agent', max: 'max_agent', rex: 'rex_agent',
-  riley: 'riley_agent', sketch: 'sketch_agent'
+  riley: 'riley_agent', sketch: 'sketch_agent', paige: 'paige_agent'
 };
 
 const maxRecommendations = {
@@ -1343,7 +1344,8 @@ const maxRecommendations = {
   max: 'Running daily. Next improvement: add per-agent recommendations to the digest based on individual performance data.',
   rex: 'Rex is generating weekly reports. Consider adding a client-facing version of the report as a Pulseforge deliverable.',
   riley: 'Riley is live and monitoring the inbox. Run her daily to catch replies before they go cold.',
-  sketch: 'Sketch is ready but needs prospects with no website. Add a no-website flag to Scout to trigger Sketch automatically.'
+  sketch: 'Sketch is ready but needs prospects with no website. Add a no-website flag to Scout to trigger Sketch automatically.',
+  paige: 'Paige is live. Add client companies to the companies table to start generating content. Run weekly — she produces 2 posts per client per run (Facebook + Google Business).'
 };
 
 async function fetchDetailStats() {
@@ -1593,8 +1595,9 @@ async function loadLiveData() {
 const agentColors = {
   scout: '#00d4b4', link: '#5b9fd4', faye: '#5ba3f5', emmett: '#ff6b35',
   max: '#8b5cf6', rex: '#00e676', riley: '#64c864', sketch: '#b450ff',
+  paige: '#00c896',
   ivy: '#2a3a5a', sam: '#2a3a5a', cal: '#2a3a5a',
-  penny: '#2a3a5a', paige: '#2a3a5a', vera: '#2a3a5a'
+  penny: '#2a3a5a', vera: '#2a3a5a'
 };
 
 function fillDays(daily) {
@@ -1658,7 +1661,8 @@ async function loadAgentSparklines() {
     const agentMap = {
       'scout_agent': 'scout', 'linkedin_agent': 'link', 'facebook_agent': 'faye',
       'emmett_agent': 'emmett', 'max_agent': 'max',
-      'rex_agent': 'rex', 'riley_agent': 'riley', 'sketch_agent': 'sketch'
+      'rex_agent': 'rex', 'riley_agent': 'riley', 'sketch_agent': 'sketch',
+      'paige_agent': 'paige'
     };
 
     Object.entries(stats).forEach(([agentName, data]) => {

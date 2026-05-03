@@ -586,7 +586,8 @@ app.post('/api/run/:agent', requireAuth, async (req, res) => {
   }
   const agentModules = {
     scout: './leadgen', emmett: './emmettAgent',
-    max: './maxAgent', rex: './rexAgent', sketch: './sketchAgent'
+    max: './maxAgent', rex: './rexAgent', sketch: './sketchAgent',
+    paige: './paigeAgent'
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   await pool.query(
@@ -610,7 +611,7 @@ app.post('/cron/:agent', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const agentModules = {
-    max: './maxAgent', rex: './rexAgent', emmett: './emmettAgent'
+    max: './maxAgent', rex: './rexAgent', emmett: './emmettAgent', paige: './paigeAgent'
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   res.json({ success: true });
