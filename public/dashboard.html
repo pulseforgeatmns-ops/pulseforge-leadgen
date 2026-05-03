@@ -1010,30 +1010,27 @@ body::before {
       </div>
 
       <!-- Sam -->
-      <div class="agent-card" onclick="openDetail('sam')" data-agent="sam">
+      <div class="agent-card live" onclick="openDetail('sam')" data-agent="sam">
+        <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(34,211,238,0.18) 0%, transparent 70%)"></div>
         <div class="agent-portrait">
-          <div class="orbit-ring orbit-1" style="border-color:rgba(0,212,180,0.1);"></div>
-          <div class="orbit-ring orbit-2"></div>
+          <div class="orbit-ring orbit-1"><div class="orbit-dot" style="background:#22d3ee;box-shadow:0 0 6px #22d3ee;"></div></div>
+          <div class="orbit-ring orbit-2"><div class="orbit-dot orbit-dot-purple"></div></div>
           <div class="status-ring-wrap">
             <svg class="status-ring-svg" viewBox="0 0 92 92">
               <circle class="ring-track" cx="46" cy="46" r="40"/>
-              <circle class="ring-fill planned" cx="46" cy="46" r="40" style="stroke-dashoffset:230;"/>
+              <circle class="ring-fill live" cx="46" cy="46" r="40" style="stroke-dashoffset:35; stroke:#22d3ee;"/>
             </svg>
           </div>
-          <div class="face-orb" style="background: radial-gradient(circle at 40% 35%, rgba(0,150,180,0.2), rgba(0,0,0,0.9)); box-shadow: inset 0 0 20px rgba(0,0,0,0.7);">📱</div>
+          <div class="face-orb" style="background: radial-gradient(circle at 40% 35%, rgba(34,211,238,0.3), rgba(0,0,0,0.8)); box-shadow: 0 0 30px rgba(34,211,238,0.2), inset 0 0 20px rgba(0,0,0,0.5);">📱</div>
         </div>
         <div class="agent-card-footer">
-          <div class="agent-card-name" style="color:rgba(255,255,255,0.6)">SAM</div>
+          <div class="agent-card-name">SAM</div>
           <div class="agent-card-role">SMS Agent</div>
           <div class="agent-card-status">
-            <div class="status-tag st-planned">PLANNED</div>
-            <button class="deploy-btn">SOON</button>
+            <div class="status-tag st-live">LIVE</div>
+            <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
-          <div class="agent-mini-stats">
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
-          </div>
+          <div class="agent-mini-stats"></div>
         </div>
       </div>
 
@@ -1401,6 +1398,11 @@ body::before {
         </div>
       </div>
     </div>
+    <div id="detailSparkline" style="display:none; margin:1.25rem 0;">
+      <div id="detailSparklineTitle" style="font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:2px; text-transform:uppercase; color:#6b7fa0; margin-bottom:0.5rem;"></div>
+      <svg id="detailSparklineSVG" viewBox="0 0 320 75" preserveAspectRatio="none" style="width:100%; height:75px; display:block;"></svg>
+      <div id="detailSparklineWeekStat" style="font-family:'JetBrains Mono',monospace; font-size:0.6rem; color:#6b7fa0; margin-top:0.4rem; letter-spacing:1px;"></div>
+    </div>
     <div id="detailMaxRec" style="display:none; margin:1rem 0; padding:1rem; background:rgba(139,92,246,0.06); border:1px solid rgba(139,92,246,0.15); border-radius:8px;">
       <div style="font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:2px; color:#8b5cf6; text-transform:uppercase; margin-bottom:0.5rem;">⚡ MAX SAYS</div>
       <div style="font-size:0.85rem; color:#c4b5fd; line-height:1.5;" id="detailMaxRecText"></div>
@@ -1420,26 +1422,28 @@ let _liveRings = {}, _currentDetailKey = null;
 const DETAIL_CACHE_TTL = 30000;
 
 const agentData = {
-  scout: { face:'🔍', name:'SCOUT', role:'Lead Scraper', title:'Scout — Lead Scraper', desc:'Scout is your prospector. He searches Google and Hunter.io to find local businesses, grabs their contact info, scores each lead 0–100, and loads them into the second brain ready for outreach.', tasks:['Searches Google for businesses by niche and location','Finds owner emails via Hunter.io','Scores each lead 0–100 based on data quality','Exports to CSV or saves direct to the database','Live at pulseforge-leadgen-production.up.railway.app'], ringOffset: 25 },
-  link: { face:'💬', name:'LINK', role:'LinkedIn Agent', title:'Link — LinkedIn Agent', desc:'Link is your LinkedIn presence. He browses LinkedIn, finds posts from your target clients, writes a contextual comment using AI, and sends it to you for approval before posting anything.', tasks:['Logs in using a saved session so LinkedIn doesn\'t flag it','Finds posts by keyword targeting local business owners','Passes each post to Claude to write a natural comment','Sends drafts to the approval dashboard','Posts only after you approve — nothing goes live without sign-off'], ringOffset: 50 },
-  faye: { face:'📣', name:'FAYE', role:'Facebook Agent', title:'Faye — Facebook Agent', desc:'Faye does the same job as Link but on Facebook — targeting local business groups and community pages across Manchester NH. Same approval gate, same second brain logging.', tasks:['Monitors 9 local Facebook groups for target clients','Drafts contextual comments using Claude AI','Filters non-English posts automatically','Sends all drafts for approval before posting anything','Live — Phase 3 complete'], ringOffset: 63 },
+  scout: { face:'🔍', name:'SCOUT', role:'Lead Scraper', title:'Scout — Lead Scraper', metric:'leads found', desc:'Scout is your prospector. He searches Google and Hunter.io to find local businesses, grabs their contact info, scores each lead 0–100, and loads them into the second brain ready for outreach.', tasks:['Searches Google for businesses by niche and location','Finds owner emails via Hunter.io','Scores each lead 0–100 based on data quality','Exports to CSV or saves direct to the database','Live at pulseforge-leadgen-production.up.railway.app'], ringOffset: 25 },
+  link: { face:'💬', name:'LINK', role:'LinkedIn Agent', title:'Link — LinkedIn Agent', metric:'comments drafted', desc:'Link is your LinkedIn presence. He browses LinkedIn, finds posts from your target clients, writes a contextual comment using AI, and sends it to you for approval before posting anything.', tasks:['Logs in using a saved session so LinkedIn doesn\'t flag it','Finds posts by keyword targeting local business owners','Passes each post to Claude to write a natural comment','Sends drafts to the approval dashboard','Posts only after you approve — nothing goes live without sign-off'], ringOffset: 50 },
+  faye: { face:'📣', name:'FAYE', role:'Facebook Agent', title:'Faye — Facebook Agent', metric:'comments drafted', desc:'Faye does the same job as Link but on Facebook — targeting local business groups and community pages across Manchester NH. Same approval gate, same second brain logging.', tasks:['Monitors 9 local Facebook groups for target clients','Drafts contextual comments using Claude AI','Filters non-English posts automatically','Sends all drafts for approval before posting anything','Live — Phase 3 complete'], ringOffset: 63 },
+  sam: { face:'📱', name:'SAM', role:'SMS Agent', title:'Sam — SMS Agent', metric:'texts sent', desc:'Sam is your SMS closer. He monitors behavioral signals — prospects who\'ve received multiple emails without replying, warm leads, and contacts gone cold — and sends a single timely text at the right moment. Never blasts lists.', tasks:['Triggers on signals, not schedules — no cold blasting','Fires when a prospect receives 3+ emails with no reply','Fires when a prospect status flips to warm','Re-engages prospects silent for 14+ days','Checks for recent SMS contact before sending — never double-texts'], ringOffset: 35 },
   emmett: { face:'✉️', name:'EMMETT', role:'Email Agent', title:'Emmett — Email Agent', desc:'Emmett runs your cold email sequences through Brevo. He checks the second brain before sending so he never emails someone already active on LinkedIn or Facebook. Day 1, 4, 8, 13 — fully automated.', tasks:['Pulls prospects from the second brain by status','Checks if Link or Faye already touched them first','Sends personalized 4-step sequences via Brevo','Respects sequence timing automatically','Logs every send to the second brain for Max to read'], ringOffset: 188 },
   ivy: { face:'📸', name:'IVY', role:'Instagram Agent', title:'Ivy — Instagram Agent', desc:'Ivy handles Instagram engagement — targeting local hashtags, commenting on before/after posts, and replying to stories. Instagram is the highest-visual channel for local service businesses.', tasks:['Targets local hashtags — #manchesternh #nhsmallbusiness','Engages with before/after and workspace posts naturally','Replies to business owners\' stories for personal outreach','Drafts DMs for warm prospects showing high engagement','Same approval gate as Link and Faye'], ringOffset: 230 },
   sam: { face:'📱', name:'SAM', role:'SMS Agent', title:'Sam — SMS Agent', desc:'Sam handles warm follow-up via text. SMS open rates hit 95%+ and response rates for warm prospects reach 30–45%. Sam only texts people who\'ve already shown interest — never cold outreach.', tasks:['Triggers when a prospect opens emails 3+ times without reply','Follows up on web form submissions within minutes','Sends reactivation texts to cold prospects','Built on Twilio — ~$0.008 per message','Only texts confirmed opt-in contacts'], ringOffset: 230 },
   cal: { face:'📞', name:'CAL', role:'Voice Agent', title:'Cal — Voice Agent', desc:'Cal is an AI voice agent that handles warm phone follow-up. When a prospect is clearly interested but hasn\'t converted, Cal calls them, has a real conversation, and books a meeting.', tasks:['Activates on warm signals — multiple opens, link clicks','AI voice is now indistinguishable from human in most cases','Handles objections and answers basic questions','Books appointments directly into the calendar','Compliant — only calls prospects with appropriate consent'], ringOffset: 230 },
-  max: { face:'🧠', name:'MAX', role:'Manager Agent', title:'Max — Manager Agent', desc:'Max is the brain of the operation. He reads everything all other agents have done, scores prospects by engagement, decides who should get touched next and how, and sends a daily briefing to your inbox every morning.', tasks:['Reads the entire second brain every morning','Scores and ranks prospects by engagement signals across all channels','Decides which agent should contact each prospect next','Sends a daily digest with activity summary and recommended actions','Live — Phase 5 complete'], ringOffset: 12 },
-  rex: { face:'📊', name:'REX', role:'Reporting Agent', title:'Rex — Reporting Agent', desc:'Rex tracks what\'s working. He pulls data from the second brain weekly and turns it into a performance report — cost per lead, channel performance, trends, and strategic recommendations.', tasks:['Pulls weekly activity data from the second brain','Calculates actions by channel and agent','Identifies which channels are producing the most engagement','Generates a clean weekly report and sends to your inbox','Eventually becomes a client-facing deliverable'], ringOffset: 25 },
-  riley: { face:'🙋', name:'RILEY', role:'Receptionist Agent', title:'Riley — Receptionist Agent', desc:'Riley handles inbound. When a prospect fills out a contact form or messages through Google Business Profile, Riley responds immediately, qualifies the lead, and books a call without you lifting a finger.', tasks:['Responds to web form submissions within 60 seconds','Handles Google Business Profile message inquiries','Qualifies leads with natural follow-up questions','Books appointments into the owner\'s calendar','Closes the loop — Pulseforge brings leads in and handles them on arrival'], ringOffset: 230 },
+  max: { face:'🧠', name:'MAX', role:'Manager Agent', title:'Max — Manager Agent', metric:'digests sent', desc:'Max is the brain of the operation. He reads everything all other agents have done, scores prospects by engagement, decides who should get touched next and how, and sends a daily briefing to your inbox every morning.', tasks:['Reads the entire second brain every morning','Scores and ranks prospects by engagement signals across all channels','Decides which agent should contact each prospect next','Sends a daily digest with activity summary and recommended actions','Live — Phase 5 complete'], ringOffset: 12 },
+  rex: { face:'📊', name:'REX', role:'Reporting Agent', title:'Rex — Reporting Agent', metric:'reports run', desc:'Rex tracks what\'s working. He pulls data from the second brain weekly and turns it into a performance report — cost per lead, channel performance, trends, and strategic recommendations.', tasks:['Pulls weekly activity data from the second brain','Calculates actions by channel and agent','Identifies which channels are producing the most engagement','Generates a clean weekly report and sends to your inbox','Eventually becomes a client-facing deliverable'], ringOffset: 25 },
+  riley: { face:'🙋', name:'RILEY', role:'Receptionist Agent', title:'Riley — Receptionist Agent', metric:'emails processed', desc:'Riley handles inbound. When a prospect fills out a contact form or messages through Google Business Profile, Riley responds immediately, qualifies the lead, and books a call without you lifting a finger.', tasks:['Responds to web form submissions within 60 seconds','Handles Google Business Profile message inquiries','Qualifies leads with natural follow-up questions','Books appointments into the owner\'s calendar','Closes the loop — Pulseforge brings leads in and handles them on arrival'], ringOffset: 230 },
   penny: { face:'💰', name:'PENNY', role:'Ad Agent', title:'Penny — Ad Agent', desc:'Penny manages paid advertising campaigns on Google and Meta. She monitors performance, pauses underperforming ads, and reallocates budget toward what\'s converting — no ad platform expertise required.', tasks:['Manages Google and Meta campaigns automatically','Monitors performance daily and pauses underperformers','Reallocates budget toward highest-converting audiences','Reports spend and results weekly','Ad management fee typically 10–15% of spend'], ringOffset: 230 },
-  sketch: { face:'🎨', name:'SKETCH', role:'Mockup Agent', title:'Sketch — Mockup Agent', desc:'Sketch auto-generates a branded HTML mockup for prospects with no website — ready to send as the cold email opener. A personalized mockup of their actual business is the strongest cold outreach hook possible.', tasks:['Triggered when Scout finds a prospect with no website','Generates a branded professional site mockup in seconds','Personalizes layout and copy to the business niche and location','Emmett sends the mockup as the cold email hook','Turns a generic cold email into a tangible deliverable'], ringOffset: 230 },
-  paige: { face:'✍️', name:'PAIGE', role:'Content Agent', title:'Paige — Content Agent', desc:'Paige generates original social content for client businesses — Facebook page posts and Google Business updates written in the owner\'s voice. Unlike Link and Faye who engage on other people\'s posts, Paige builds the client\'s own presence from scratch.', tasks:['Pulls active clients from the companies table','Generates Facebook page posts and Google Business updates for each','Rotates 5 content types: promotional, educational, seasonal, behind-the-scenes, community','Personalizes tone to the business vertical — a restaurant sounds different from a cleaning company','All content queued for approval — nothing posts automatically'], ringOffset: 230 },
+  sketch: { face:'🎨', name:'SKETCH', role:'Mockup Agent', title:'Sketch — Mockup Agent', metric:'mockups created', desc:'Sketch auto-generates a branded HTML mockup for prospects with no website — ready to send as the cold email opener. A personalized mockup of their actual business is the strongest cold outreach hook possible.', tasks:['Triggered when Scout finds a prospect with no website','Generates a branded professional site mockup in seconds','Personalizes layout and copy to the business niche and location','Emmett sends the mockup as the cold email hook','Turns a generic cold email into a tangible deliverable'], ringOffset: 230 },
+  paige: { face:'✍️', name:'PAIGE', role:'Content Agent', title:'Paige — Content Agent', metric:'posts generated', desc:'Paige generates original social content for client businesses — Facebook page posts and Google Business updates written in the owner\'s voice. Unlike Link and Faye who engage on other people\'s posts, Paige builds the client\'s own presence from scratch.', tasks:['Pulls active clients from the companies table','Generates Facebook page posts and Google Business updates for each','Rotates 5 content types: promotional, educational, seasonal, behind-the-scenes, community','Personalizes tone to the business vertical — a restaurant sounds different from a cleaning company','All content queued for approval — nothing posts automatically'], ringOffset: 230 },
   vera: { face:'⭐', name:'VERA', role:'Review Agent', title:'Vera — Review Agent', desc:'Vera monitors and manages online reviews. Review velocity is one of the biggest local SEO signals — and most small businesses have no system for it. Vera fixes that automatically.', tasks:['Monitors Google and Yelp for new reviews','Drafts responses to reviews for owner approval','Sends follow-up requests to recent customers asking for a review','Flags negative reviews immediately for rapid response','Review velocity is a top-3 local SEO ranking signal'], ringOffset: 230 },
 };
 
 const agentNameMap = {
   scout: 'scout_agent', link: 'linkedin_agent', faye: 'facebook_agent',
   emmett: 'emmett_agent', max: 'max_agent', rex: 'rex_agent',
-  riley: 'riley_agent', sketch: 'sketch_agent', paige: 'paige_agent'
+  riley: 'riley_agent', sketch: 'sketch_agent', paige: 'paige_agent',
+  sam: 'sam_agent'
 };
 
 const maxRecommendations = {
@@ -1451,7 +1455,8 @@ const maxRecommendations = {
   rex: 'Rex is generating weekly reports. Consider adding a client-facing version of the report as a Pulseforge deliverable.',
   riley: 'Riley is live and monitoring the inbox. Run her daily to catch replies before they go cold.',
   sketch: 'Sketch is ready but needs prospects with no website. Add a no-website flag to Scout to trigger Sketch automatically.',
-  paige: 'Paige is live. Add client companies to the companies table to start generating content. Run weekly — she produces 2 posts per client per run (Facebook + Google Business).'
+  paige: 'Paige is live. Add client companies to the companies table to start generating content. Run weekly — she produces 2 posts per client per run (Facebook + Google Business).',
+  sam: 'Sam fires on behavioral signals. Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER to Railway env vars to activate SMS sending. Prospects need a phone number in the database.'
 };
 
 async function fetchDetailStats() {
@@ -1517,6 +1522,7 @@ async function openDetail(key) {
   if (!agentKey) {
     document.getElementById('detailLiveStats').style.display = 'none';
     document.getElementById('detailRecentActivity').style.display = 'none';
+    document.getElementById('detailSparkline').style.display = 'none';
     return;
   }
 
@@ -1552,6 +1558,34 @@ async function openDetail(key) {
       document.getElementById('detailStatRate').textContent = '—';
     }
 
+    // Detail sparkline
+    const sparkSection = document.getElementById('detailSparkline');
+    if (agentStats && agentStats.daily) {
+      const values = fillDays(agentStats.daily);
+      const color = agentColors[key] || '#2a3a5a';
+      const metric = a.metric || 'actions';
+      const weekTotal = values.reduce((s, v) => s + v, 0);
+      document.getElementById('detailSparklineTitle').textContent = a.name + ' Activity — Last 7 Days';
+      const svg = document.getElementById('detailSparklineSVG');
+      svg.innerHTML = buildDetailSparklineSVG(values, color);
+      const line = svg.querySelector('.detail-spark-line');
+      if (line) {
+        try {
+          const len = line.getTotalLength();
+          line.style.strokeDasharray = len;
+          line.style.strokeDashoffset = len;
+          requestAnimationFrame(() => {
+            line.style.transition = 'stroke-dashoffset 1.2s ease';
+            line.style.strokeDashoffset = '0';
+          });
+        } catch(e) {}
+      }
+      document.getElementById('detailSparklineWeekStat').textContent = weekTotal + ' ' + metric + ' this week';
+      sparkSection.style.display = 'block';
+    } else {
+      sparkSection.style.display = 'none';
+    }
+
     const agentFeed = feed.filter(f => f.agent.toLowerCase() === a.name.toLowerCase());
     if (agentFeed.length > 0) {
       document.getElementById('detailRecentActivity').style.display = 'block';
@@ -1567,6 +1601,7 @@ async function openDetail(key) {
     ['detailStatRuns','detailStatWeek','detailStatLast','detailStatRate'].forEach(id => {
       document.getElementById(id).textContent = '—';
     });
+    document.getElementById('detailSparkline').style.display = 'none';
   }
 }
 
@@ -1798,7 +1833,7 @@ const agentColors = {
   scout: '#00d4b4', link: '#5b9fd4', faye: '#5ba3f5', emmett: '#ff6b35',
   max: '#8b5cf6', rex: '#00e676', riley: '#64c864', sketch: '#b450ff',
   paige: '#00c896',
-  ivy: '#2a3a5a', sam: '#2a3a5a', cal: '#2a3a5a',
+  ivy: '#2a3a5a', sam: '#22d3ee', cal: '#2a3a5a',
   penny: '#2a3a5a', vera: '#2a3a5a'
 };
 
@@ -1838,6 +1873,40 @@ function buildSparklineSVG(values, color) {
     + dots;
 }
 
+function buildDetailSparklineSVG(values, color) {
+  const W = 320, plotTop = 6, plotBot = 52, xPad = 12;
+  const xRange = W - xPad * 2;
+  const max = Math.max(...values, 1);
+  const pts = values.map((v, i) => {
+    const x = xPad + (i / (values.length - 1)) * xRange;
+    const y = plotBot - (v / max) * (plotBot - plotTop);
+    return [+x.toFixed(1), +y.toFixed(1)];
+  });
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    days.push(d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase());
+  }
+  const uid = 'ds' + Math.random().toString(36).slice(2, 7);
+  const pline = pts.map(p => p.join(',')).join(' ');
+  const area = xPad + ',' + plotBot + ' ' + pline + ' ' + (W - xPad) + ',' + plotBot;
+  const dayLabels = days.map((day, i) => {
+    const x = pts[i][0];
+    const isToday = i === 6;
+    return `<text x="${x}" y="72" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="7.5" fill="${isToday ? color : 'rgba(107,127,160,0.7)'}" letter-spacing="0.3">${day}</text>`;
+  }).join('');
+  const dots = pts.filter((_, i) => values[i] > 0)
+    .map(([x, y]) => `<circle cx="${x}" cy="${y}" r="2.5" fill="${color}" style="filter:drop-shadow(0 0 3px ${color})"/>`)
+    .join('');
+  return `<defs><linearGradient id="${uid}" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="${color}" stop-opacity="0.2"/>
+    <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+  </linearGradient></defs>
+  <polygon points="${area}" fill="url(#${uid})"/>
+  <polyline class="detail-spark-line" points="${pline}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="filter:drop-shadow(0 0 4px ${color})"/>
+  ${dots}${dayLabels}`;
+}
+
 async function loadAgentSparklines() {
   // Initialise every card with a flat placeholder immediately
   document.querySelectorAll('[data-agent]').forEach(card => {
@@ -1864,7 +1933,7 @@ async function loadAgentSparklines() {
       'scout_agent': 'scout', 'linkedin_agent': 'link', 'facebook_agent': 'faye',
       'emmett_agent': 'emmett', 'max_agent': 'max',
       'rex_agent': 'rex', 'riley_agent': 'riley', 'sketch_agent': 'sketch',
-      'paige_agent': 'paige'
+      'paige_agent': 'paige', 'sam_agent': 'sam'
     };
 
     Object.entries(stats).forEach(([agentName, data]) => {
