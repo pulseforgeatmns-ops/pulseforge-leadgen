@@ -751,6 +751,168 @@ app.get('/api/activity-timeline', requireAuth, async (req, res) => {
   }
 });
 
+// API - Analytics
+app.get('/api/analytics', requireAuth, async (req, res) => {
+  try {
+    const [vol, reply, icp, agents, funnel, topProspects] = await Promise.all([
+
+      // 1. Outbound volume — email + sms per day, last 30 days
+      pool.query(`
+        SELECT
+          DATE(created_at)::text AS date,
+          channel,
+          COUNT(*) AS count
+        FROM touchpoints
+        WHERE channel IN ('email','sms')
+          AND action_type = 'outbound'
+          AND created_at >= NOW() - INTERVAL '30 days'
+        GROUP BY DATE(created_at), channel
+        ORDER BY date ASC
+      `),
+
+      // 2. Reply rate — inbound vs outbound per week, last 8 weeks
+      pool.query(`
+        SELECT
+          DATE_TRUNC('week', created_at)::text AS week,
+          action_type,
+          COUNT(*) AS count
+        FROM touchpoints
+        WHERE channel = 'email'
+          AND created_at >= NOW() - INTERVAL '56 days'
+        GROUP BY DATE_TRUNC('week', created_at), action_type
+        ORDER BY week ASC
+      `),
+
+      // 3. ICP score distribution
+      pool.query(`
+        SELECT
+          CASE
+            WHEN icp_score IS NULL          THEN 'Unknown'
+            WHEN icp_score BETWEEN 0  AND 20 THEN '0–20'
+            WHEN icp_score BETWEEN 21 AND 40 THEN '21–40'
+            WHEN icp_score BETWEEN 41 AND 60 THEN '41–60'
+            WHEN icp_score BETWEEN 61 AND 80 THEN '61–80'
+            ELSE '81–100'
+          END AS bucket,
+          COUNT(*) AS count
+        FROM prospects
+        WHERE do_not_contact = false
+        GROUP BY bucket
+      `),
+
+      // 4. Agent activity breakdown — last 30 days
+      pool.query(`
+        SELECT agent_name, COUNT(*) AS count
+        FROM agent_log
+        WHERE ran_at >= NOW() - INTERVAL '30 days'
+          AND agent_name IS NOT NULL
+        GROUP BY agent_name
+        ORDER BY count DESC
+      `),
+
+      // 5. Pipeline funnel
+      pool.query(`
+        SELECT
+          COALESCE(status, 'cold') AS stage,
+          COUNT(*) AS count
+        FROM prospects
+        WHERE do_not_contact = false
+        GROUP BY stage
+      `),
+
+      // 6. Top 10 prospects by touchpoint count
+      pool.query(`
+        SELECT
+          p.id,
+          p.first_name,
+          p.last_name,
+          p.notes,
+          p.status,
+          c.name AS company_name,
+          COUNT(t.id)::int AS touchpoint_count,
+          MAX(t.created_at) AS last_contacted_at
+        FROM prospects p
+        LEFT JOIN companies c ON p.company_id = c.id
+        LEFT JOIN touchpoints t ON t.prospect_id = p.id
+        WHERE p.do_not_contact = false
+        GROUP BY p.id, c.name
+        ORDER BY touchpoint_count DESC
+        LIMIT 10
+      `)
+    ]);
+
+    // Build 30-day date spine for volume chart
+    const days = [];
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      days.push(d.toISOString().slice(0, 10));
+    }
+    const volByDay = {};
+    vol.rows.forEach(r => {
+      if (!volByDay[r.date]) volByDay[r.date] = { email: 0, sms: 0 };
+      volByDay[r.date][r.channel] = parseInt(r.count);
+    });
+    const outbound_volume = days.map(d => ({
+      date: d,
+      email: volByDay[d]?.email || 0,
+      sms:   volByDay[d]?.sms   || 0
+    }));
+
+    // Build reply rate per week
+    const weekMap = {};
+    reply.rows.forEach(r => {
+      if (!weekMap[r.week]) weekMap[r.week] = { outbound: 0, inbound: 0 };
+      weekMap[r.week][r.action_type] = parseInt(r.count);
+    });
+    const reply_rate = Object.entries(weekMap).map(([week, v]) => ({
+      week: new Date(week).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      outbound: v.outbound,
+      inbound:  v.inbound,
+      rate: v.outbound > 0 ? Math.round((v.inbound / v.outbound) * 100) : 0
+    }));
+
+    // ICP buckets in fixed order
+    const BUCKETS = ['0–20', '21–40', '41–60', '61–80', '81–100', 'Unknown'];
+    const icpMap = {};
+    icp.rows.forEach(r => { icpMap[r.bucket] = parseInt(r.count); });
+    const icp_distribution = BUCKETS.map(b => ({ bucket: b, count: icpMap[b] || 0 }));
+
+    // Agent breakdown
+    const agent_breakdown = agents.rows.map(r => ({
+      agent: r.agent_name,
+      count: parseInt(r.count)
+    }));
+
+    // Funnel — enforce order, include replied/converted if present
+    const STAGES = ['cold', 'warm', 'replied', 'converted'];
+    const stageMap = {};
+    funnel.rows.forEach(r => { stageMap[r.stage] = parseInt(r.count); });
+    const total = Object.values(stageMap).reduce((s, v) => s + v, 0);
+    const pipeline_funnel = STAGES
+      .filter(s => stageMap[s] !== undefined)
+      .map(s => ({ stage: s, count: stageMap[s], pct: total > 0 ? Math.round((stageMap[s] / total) * 100) : 0 }));
+    // ensure cold always shows even if zero
+    if (!pipeline_funnel.find(f => f.stage === 'cold')) {
+      pipeline_funnel.unshift({ stage: 'cold', count: 0, pct: 0 });
+    }
+
+    // Top prospects
+    const top_prospects = topProspects.rows.map(r => ({
+      id: r.id,
+      name: `${r.first_name} ${r.last_name}`.trim(),
+      business: r.company_name || (r.notes || '').split('—')[0].trim() || `${r.first_name} ${r.last_name}`.trim(),
+      status: r.status || 'cold',
+      touchpoint_count: r.touchpoint_count,
+      last_contacted_at: r.last_contacted_at
+    }));
+
+    res.json({ outbound_volume, reply_rate, icp_distribution, agent_breakdown, pipeline_funnel, top_prospects });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // API - Trigger agents
 app.post('/api/run/:agent', requireAuth, async (req, res) => {
   const { agent } = req.params;

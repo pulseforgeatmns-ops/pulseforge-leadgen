@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pulseforge — Command Center</title>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <style>
 :root {
   --bg: #040810;
@@ -905,6 +906,94 @@ body::before {
 .drawer-tp-summary { color: rgba(255,255,255,0.55); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 400px; }
 .drawer-empty { font-family: 'JetBrains Mono', monospace; font-size: 0.6rem; color: var(--gray); }
 
+/* ── Analytics panel ─────────────────────────────────────────────────── */
+.analytics-area {
+  display: none;
+  overflow-y: auto;
+  padding: 2rem;
+}
+.analytics-area::-webkit-scrollbar { width: 3px; }
+.analytics-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.analytics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
+}
+.analytics-grid .an-full { grid-column: 1 / -1; }
+
+.an-card {
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+}
+.an-card-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.58rem; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--gray); margin-bottom: 1rem;
+}
+.an-chart-wrap { position: relative; height: 180px; }
+.an-chart-wrap canvas { width: 100% !important; }
+
+/* Funnel bars */
+.funnel-row { margin-bottom: 0.65rem; }
+.funnel-label {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 3px;
+}
+.funnel-stage {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem; letter-spacing: 1px; text-transform: uppercase; color: var(--white);
+}
+.funnel-meta { font-size: 0.68rem; color: var(--gray); }
+.funnel-bar-bg {
+  height: 8px; background: rgba(255,255,255,0.05);
+  border-radius: 4px; overflow: hidden;
+}
+.funnel-bar-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
+
+/* Top prospects table */
+.top-table { width: 100%; border-collapse: collapse; font-size: 0.77rem; }
+.top-table th {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.57rem;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--gray); padding: 0 0 0.5rem 0; text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.top-table td {
+  padding: 0.55rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  color: rgba(255,255,255,0.72); vertical-align: middle;
+}
+.top-table tr:last-child td { border-bottom: none; }
+.top-table tbody tr { cursor: pointer; }
+.top-table tbody tr:hover td { color: var(--white); }
+.top-rank {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.6rem;
+  color: var(--gray); width: 24px;
+}
+.top-business { color: var(--white); font-weight: 500; }
+.top-touches {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
+  color: var(--teal); text-align: right; padding-right: 0.5rem;
+}
+.top-last { color: var(--gray); font-size: 0.68rem; text-align: right; }
+
+/* Donut legend */
+.donut-wrap { display: flex; gap: 1.5rem; align-items: center; }
+.donut-canvas-wrap { position: relative; width: 160px; height: 160px; flex-shrink: 0; }
+.donut-legend { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+.donut-legend-item {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 0.72rem; color: rgba(255,255,255,0.7);
+}
+.donut-legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.donut-legend-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.donut-legend-count {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; color: var(--gray);
+}
+
 /* ── Activity panel ──────────────────────────────────────────────────── */
 .activity-area {
   display: none;
@@ -1576,6 +1665,78 @@ body::before {
     <button id="activityLoadMore" onclick="loadMoreTimeline()">Load more</button>
   </div>
 
+  <!-- ANALYTICS AREA -->
+  <div class="analytics-area" id="analyticsArea">
+    <div class="area-header">
+      <div>
+        <div class="area-title">ANALYTICS</div>
+        <div class="area-sub" id="analyticsSub">Loading...</div>
+      </div>
+    </div>
+
+    <div class="analytics-grid">
+
+      <!-- Section 1: Outbound Volume -->
+      <div class="an-card an-full">
+        <div class="an-card-title">Outbound Volume — Last 30 Days</div>
+        <div class="an-chart-wrap" style="height:200px">
+          <canvas id="chartVolume"></canvas>
+        </div>
+      </div>
+
+      <!-- Section 2: Reply Rate -->
+      <div class="an-card">
+        <div class="an-card-title">Reply Rate Trend — Last 8 Weeks</div>
+        <div class="an-chart-wrap">
+          <canvas id="chartReplyRate"></canvas>
+        </div>
+      </div>
+
+      <!-- Section 3: ICP Distribution -->
+      <div class="an-card">
+        <div class="an-card-title">ICP Score Distribution</div>
+        <div class="an-chart-wrap">
+          <canvas id="chartICP"></canvas>
+        </div>
+      </div>
+
+      <!-- Section 4: Agent Activity Donut -->
+      <div class="an-card">
+        <div class="an-card-title">Agent Activity — Last 30 Days</div>
+        <div class="donut-wrap">
+          <div class="donut-canvas-wrap">
+            <canvas id="chartAgents"></canvas>
+          </div>
+          <div class="donut-legend" id="agentDonutLegend"></div>
+        </div>
+      </div>
+
+      <!-- Section 5: Pipeline Funnel -->
+      <div class="an-card">
+        <div class="an-card-title">Pipeline Funnel</div>
+        <div id="funnelRows"></div>
+      </div>
+
+      <!-- Section 6: Top Prospects -->
+      <div class="an-card an-full">
+        <div class="an-card-title">Top 10 Prospects by Engagement</div>
+        <table class="top-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Business</th>
+              <th>Status</th>
+              <th style="text-align:right;padding-right:0.5rem">Touches</th>
+              <th style="text-align:right">Last Contacted</th>
+            </tr>
+          </thead>
+          <tbody id="topProspectsBody"></tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+
   <!-- RIGHT PANEL -->
   <div class="right-panel">
     <div class="panel-header">
@@ -1912,7 +2073,8 @@ const _tabPanels = {
   agents:    document.querySelector('.agents-area'),
   approvals: document.getElementById('approvalsArea'),
   prospects: document.getElementById('prospectsArea'),
-  activity:  document.getElementById('activityArea')
+  activity:  document.getElementById('activityArea'),
+  analytics: document.getElementById('analyticsArea')
 };
 const _tabNames = ['agents','approvals','prospects','activity','analytics'];
 document.querySelectorAll('.nav-tab').forEach((tab, i) => {
@@ -1926,6 +2088,7 @@ document.querySelectorAll('.nav-tab').forEach((tab, i) => {
     if (name === 'approvals') loadApprovals();
     if (name === 'prospects') loadProspects();
     if (name === 'activity')  loadActivity();
+    if (name === 'analytics') loadAnalytics();
   });
 });
 
@@ -2568,6 +2731,325 @@ async function loadActivity() {
     loadMore.textContent = tl.length < 50 ? 'No more' : 'Load more';
   } catch(e) {
     console.error('loadActivity:', e);
+    if (sub) sub.textContent = 'Failed to load';
+  }
+}
+
+// ── ANALYTICS ─────────────────────────────────────────────────────────
+const _chartInstances = {};
+
+function _destroyChart(id) {
+  if (_chartInstances[id]) { _chartInstances[id].destroy(); delete _chartInstances[id]; }
+}
+
+const _chartDefaults = {
+  color: 'rgba(107,127,160,0.7)',
+  borderColor: 'rgba(255,255,255,0.07)',
+  font: { family: "'JetBrains Mono', monospace", size: 9 }
+};
+
+function _baseOptions(extra) {
+  return Object.assign({
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 600 },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#0b1526',
+        borderColor: 'rgba(255,255,255,0.1)',
+        borderWidth: 1,
+        titleColor: '#fff',
+        bodyColor: 'rgba(255,255,255,0.6)',
+        titleFont: _chartDefaults.font,
+        bodyFont: _chartDefaults.font
+      }
+    },
+    scales: {
+      x: {
+        grid: { color: 'rgba(255,255,255,0.04)' },
+        ticks: { color: 'rgba(107,127,160,0.7)', font: _chartDefaults.font, maxRotation: 45 }
+      },
+      y: {
+        grid: { color: 'rgba(255,255,255,0.04)' },
+        ticks: { color: 'rgba(107,127,160,0.7)', font: _chartDefaults.font }
+      }
+    }
+  }, extra || {});
+}
+
+function renderVolumeChart(data) {
+  _destroyChart('volume');
+  const labels = data.map(d => {
+    const dt = new Date(d.date + 'T00:00:00');
+    return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  });
+  const ctx = document.getElementById('chartVolume').getContext('2d');
+  _chartInstances['volume'] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Email',
+          data: data.map(d => d.email),
+          borderColor: '#8b5cf6',
+          backgroundColor: 'rgba(139,92,246,0.08)',
+          borderWidth: 2,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          tension: 0.35,
+          fill: true
+        },
+        {
+          label: 'SMS',
+          data: data.map(d => d.sms),
+          borderColor: '#22d3ee',
+          backgroundColor: 'rgba(34,211,238,0.06)',
+          borderWidth: 2,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          tension: 0.35,
+          fill: true
+        }
+      ]
+    },
+    options: _baseOptions({
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          align: 'end',
+          labels: { color: 'rgba(107,127,160,0.8)', font: _chartDefaults.font, boxWidth: 10, padding: 16 }
+        },
+        tooltip: _baseOptions().plugins.tooltip
+      }
+    })
+  });
+}
+
+function renderReplyRateChart(data) {
+  _destroyChart('reply');
+  const ctx = document.getElementById('chartReplyRate').getContext('2d');
+  _chartInstances['reply'] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: data.map(d => d.week),
+      datasets: [{
+        label: 'Reply rate %',
+        data: data.map(d => d.rate),
+        backgroundColor: data.map(d =>
+          d.rate >= 20 ? 'rgba(0,230,118,0.5)' :
+          d.rate >= 10 ? 'rgba(255,214,0,0.4)' :
+                         'rgba(139,92,246,0.4)'
+        ),
+        borderColor: data.map(d =>
+          d.rate >= 20 ? 'rgba(0,230,118,0.8)' :
+          d.rate >= 10 ? 'rgba(255,214,0,0.7)' :
+                         'rgba(139,92,246,0.7)'
+        ),
+        borderWidth: 1,
+        borderRadius: 4
+      }]
+    },
+    options: _baseOptions({
+      scales: {
+        x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: 'rgba(107,127,160,0.7)', font: _chartDefaults.font, maxRotation: 45 } },
+        y: {
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: {
+            color: 'rgba(107,127,160,0.7)', font: _chartDefaults.font,
+            callback: v => v + '%'
+          },
+          max: Math.max(100, ...(data.map(d => d.rate)))
+        }
+      }
+    })
+  });
+}
+
+function renderICPChart(data) {
+  _destroyChart('icp');
+  const colors = {
+    '0–20':   'rgba(255,95,95,0.55)',
+    '21–40':  'rgba(255,152,0,0.55)',
+    '41–60':  'rgba(255,214,0,0.45)',
+    '61–80':  'rgba(0,212,180,0.5)',
+    '81–100': 'rgba(0,230,118,0.55)',
+    'Unknown':'rgba(107,127,160,0.3)'
+  };
+  const borders = {
+    '0–20':   'rgba(255,95,95,0.8)',
+    '21–40':  'rgba(255,152,0,0.8)',
+    '41–60':  'rgba(255,214,0,0.7)',
+    '61–80':  'rgba(0,212,180,0.8)',
+    '81–100': 'rgba(0,230,118,0.8)',
+    'Unknown':'rgba(107,127,160,0.5)'
+  };
+  const ctx = document.getElementById('chartICP').getContext('2d');
+  _chartInstances['icp'] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: data.map(d => d.bucket),
+      datasets: [{
+        label: 'Prospects',
+        data: data.map(d => d.count),
+        backgroundColor: data.map(d => colors[d.bucket] || 'rgba(107,127,160,0.3)'),
+        borderColor:     data.map(d => borders[d.bucket] || 'rgba(107,127,160,0.5)'),
+        borderWidth: 1,
+        borderRadius: 4
+      }]
+    },
+    options: _baseOptions({
+      scales: {
+        x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: 'rgba(107,127,160,0.7)', font: _chartDefaults.font } },
+        y: {
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: { color: 'rgba(107,127,160,0.7)', font: _chartDefaults.font, precision: 0 }
+        }
+      }
+    })
+  });
+}
+
+function renderAgentDonut(data) {
+  _destroyChart('agents');
+  const AGENT_COLORS = {
+    scout_agent:    '#00d4b4', linkedin_agent: '#5b9fd4', facebook_agent: '#5ba3f5',
+    emmett_agent:   '#ff6b35', max_agent:      '#8b5cf6', rex_agent:      '#00e676',
+    riley_agent:    '#64c864', sketch_agent:   '#b450ff', paige_agent:    '#00c896',
+    sam_agent:      '#22d3ee'
+  };
+  const AGENT_NAMES = {
+    scout_agent: 'Scout', linkedin_agent: 'Link', facebook_agent: 'Faye',
+    emmett_agent: 'Emmett', max_agent: 'Max', rex_agent: 'Rex',
+    riley_agent: 'Riley', sketch_agent: 'Sketch', paige_agent: 'Paige', sam_agent: 'Sam'
+  };
+  const palette = ['#00d4b4','#8b5cf6','#ff6b35','#5b9fd4','#00e676','#5ba3f5','#22d3ee','#b450ff','#00c896','#64c864'];
+  const bgColors = data.map((d, i) => AGENT_COLORS[d.agent] || palette[i % palette.length]);
+  const ctx = document.getElementById('chartAgents').getContext('2d');
+  _chartInstances['agents'] = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: data.map(d => AGENT_NAMES[d.agent] || d.agent),
+      datasets: [{
+        data: data.map(d => d.count),
+        backgroundColor: bgColors,
+        borderColor: '#070d1a',
+        borderWidth: 2,
+        hoverOffset: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '68%',
+      animation: { duration: 600 },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#0b1526',
+          borderColor: 'rgba(255,255,255,0.1)',
+          borderWidth: 1,
+          titleColor: '#fff',
+          bodyColor: 'rgba(255,255,255,0.6)',
+          titleFont: _chartDefaults.font,
+          bodyFont: _chartDefaults.font
+        }
+      }
+    }
+  });
+  // Build legend
+  const legend = document.getElementById('agentDonutLegend');
+  legend.innerHTML = data.map((d, i) => {
+    const name = AGENT_NAMES[d.agent] || d.agent;
+    const color = bgColors[i];
+    return `<div class="donut-legend-item">
+      <div class="donut-legend-dot" style="background:${color}"></div>
+      <span class="donut-legend-name">${name}</span>
+      <span class="donut-legend-count">${d.count}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderFunnel(data) {
+  const STAGE_COLORS = {
+    cold:      '#6b7fa0',
+    warm:      '#ffd600',
+    replied:   '#00d4b4',
+    converted: '#00e676'
+  };
+  const maxCount = Math.max(...data.map(d => d.count), 1);
+  const container = document.getElementById('funnelRows');
+  container.innerHTML = data.map(d => {
+    const color = STAGE_COLORS[d.stage] || '#6b7fa0';
+    const barPct = Math.round((d.count / maxCount) * 100);
+    return `<div class="funnel-row">
+      <div class="funnel-label">
+        <span class="funnel-stage">${d.stage}</span>
+        <span class="funnel-meta">${d.count} · ${d.pct}%</span>
+      </div>
+      <div class="funnel-bar-bg">
+        <div class="funnel-bar-fill" style="width:${barPct}%;background:${color};box-shadow:0 0 6px ${color}40"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderTopProspects(data) {
+  const tbody = document.getElementById('topProspectsBody');
+  tbody.innerHTML = data.map((p, i) => {
+    const s = (p.status || 'cold').toLowerCase();
+    const badgeCls = s === 'hot' ? 'pt-hot' : s === 'warm' ? 'pt-warm' : 'pt-cold';
+    return `<tr onclick="openProspectFromAnalytics(${p.id})">
+      <td class="top-rank">${i + 1}</td>
+      <td class="top-business">${_esc(p.business || p.name)}</td>
+      <td><span class="pt-badge ${badgeCls}">${s}</span></td>
+      <td class="top-touches">${p.touchpoint_count}</td>
+      <td class="top-last">${_relTimeP(p.last_contacted_at)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function openProspectFromAnalytics(id) {
+  // Switch to Prospects tab and open the drawer
+  const tabs = document.querySelectorAll('.nav-tab');
+  tabs.forEach(t => t.classList.remove('active'));
+  tabs[2].classList.add('active');
+  Object.entries(_tabPanels).forEach(([k, el]) => {
+    if (el) el.style.display = (k === 'prospects') ? 'block' : 'none';
+  });
+  loadProspects().then(() => {
+    const row = document.querySelector(`[data-pid="${id}"]`);
+    if (row) {
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      row.click();
+    }
+  });
+}
+
+let _analyticsLoaded = false;
+
+async function loadAnalytics() {
+  if (_analyticsLoaded) return;
+  const sub = document.getElementById('analyticsSub');
+  try {
+    const res = await fetch('/api/analytics', { credentials: 'include' });
+    const d = await res.json();
+
+    renderVolumeChart(d.outbound_volume || []);
+    renderReplyRateChart(d.reply_rate || []);
+    renderICPChart(d.icp_distribution || []);
+    if ((d.agent_breakdown || []).length) renderAgentDonut(d.agent_breakdown);
+    renderFunnel(d.pipeline_funnel || []);
+    renderTopProspects(d.top_prospects || []);
+
+    const totalSent = (d.outbound_volume || []).reduce((s, r) => s + r.email + r.sms, 0);
+    const latestRate = d.reply_rate?.slice(-1)[0]?.rate ?? 0;
+    sub.textContent = `${totalSent} messages last 30d · ${latestRate}% reply rate this week`;
+    _analyticsLoaded = true;
+  } catch(e) {
+    console.error('loadAnalytics:', e);
     if (sub) sub.textContent = 'Failed to load';
   }
 }
