@@ -1612,7 +1612,7 @@ document.querySelectorAll('.nav-tab').forEach((tab, i) => {
     tab.classList.add('active');
     const name = _tabNames[i];
     Object.entries(_tabPanels).forEach(([k, el]) => {
-      if (el) el.style.display = (k === name) ? '' : 'none';
+      if (el) el.style.display = (k === name) ? 'block' : 'none';
     });
     if (name === 'approvals') loadApprovals();
   });
