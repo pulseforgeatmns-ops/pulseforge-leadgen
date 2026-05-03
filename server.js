@@ -615,6 +615,142 @@ app.get('/api/activity', requireAuth, async (req, res) => {
   }
 });
 
+// API - Activity panel (sequences + timeline)
+app.get('/api/activity-panel', requireAuth, async (req, res) => {
+  try {
+    const [seqResult, timelineResult] = await Promise.all([
+      pool.query(`
+        SELECT
+          p.id, p.first_name, p.last_name, p.notes, p.status,
+          c.name as company_name,
+          COUNT(t.id)::int as emails_sent,
+          MAX(t.created_at) as last_touch,
+          CASE
+            WHEN COUNT(t.id) = 1 THEN MAX(t.created_at) + INTERVAL '4 days'
+            WHEN COUNT(t.id) = 2 THEN MAX(t.created_at) + INTERVAL '4 days'
+            WHEN COUNT(t.id) = 3 THEN MAX(t.created_at) + INTERVAL '5 days'
+            ELSE NULL
+          END as next_due_at
+        FROM prospects p
+        LEFT JOIN companies c ON p.company_id = c.id
+        INNER JOIN touchpoints t
+          ON t.prospect_id = p.id
+          AND t.channel = 'email'
+          AND t.action_type = 'outbound'
+        WHERE p.do_not_contact = false
+        GROUP BY p.id, c.name
+        ORDER BY MAX(t.created_at) DESC
+        LIMIT 100
+      `),
+      pool.query(`
+        SELECT
+          al.id, al.agent_name, al.action, al.status, al.ran_at,
+          p.first_name, p.last_name, p.notes as prospect_notes
+        FROM agent_log al
+        LEFT JOIN prospects p ON al.prospect_id = p.id
+        ORDER BY al.ran_at DESC
+        LIMIT 50
+      `)
+    ]);
+
+    const STAGE_LABELS = ['', 'Day 0 sent · next Day 4', 'Day 4 sent · next Day 8', 'Day 8 sent · next Day 13', 'Complete'];
+    const sequences = seqResult.rows.map(r => {
+      const count = r.emails_sent;
+      return {
+        id: r.id,
+        business: r.company_name || (r.notes || '').split('—')[0].trim() || `${r.first_name} ${r.last_name}`.trim(),
+        status: r.status,
+        emails_sent: count,
+        stage_label: STAGE_LABELS[Math.min(count, 4)] || 'Unknown',
+        last_touch: r.last_touch,
+        next_due_at: r.next_due_at,
+        overdue: r.next_due_at ? new Date(r.next_due_at) < new Date() : false,
+        complete: count >= 4
+      };
+    });
+
+    const AGENT_LABELS = {
+      scout: { name: 'Scout', icon: '🔍' }, linkedin: { name: 'Link', icon: '💬' },
+      facebook: { name: 'Faye', icon: '📣' }, emmett: { name: 'Emmett', icon: '✉️' },
+      email: { name: 'Emmett', icon: '✉️' }, max: { name: 'Max', icon: '🧠' },
+      rex: { name: 'Rex', icon: '📊' }, riley: { name: 'Riley', icon: '🙋' },
+      sketch: { name: 'Sketch', icon: '🎨' }, paige: { name: 'Paige', icon: '✍️' },
+      sam: { name: 'Sam', icon: '📱' }
+    };
+    const ACTION_LABELS = {
+      generate_comment: 'drafted comment', daily_digest: 'sent daily digest',
+      weekly_report: 'sent weekly report', generate_mockup: 'generated mockup',
+      outbound: 'sent email', dashboard_trigger: 'triggered from dashboard',
+      send_sms: 'sent SMS', generate_content: 'generated content',
+      triage: 'triaged inbox', batch_sms: 'ran SMS batch'
+    };
+    const timeline = timelineResult.rows.map(r => {
+      const rawAgent = (r.agent_name || '').replace('_agent', '');
+      const agentInfo = AGENT_LABELS[rawAgent] || { name: rawAgent, icon: '⚡' };
+      const prospectName = r.first_name ? `${r.first_name} ${r.last_name}`.trim() : null;
+      const prospectBiz = prospectName || (r.prospect_notes || '').split('—')[0].trim() || null;
+      return {
+        id: r.id,
+        agent: agentInfo.name,
+        icon: agentInfo.icon,
+        action: ACTION_LABELS[r.action] || r.action,
+        prospect: prospectBiz,
+        status: r.status,
+        ran_at: r.ran_at
+      };
+    });
+
+    res.json({ sequences, timeline });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API - Load more timeline items
+app.get('/api/activity-timeline', requireAuth, async (req, res) => {
+  const offset = parseInt(req.query.offset) || 0;
+  try {
+    const result = await pool.query(`
+      SELECT al.id, al.agent_name, al.action, al.status, al.ran_at,
+        p.first_name, p.last_name, p.notes as prospect_notes
+      FROM agent_log al
+      LEFT JOIN prospects p ON al.prospect_id = p.id
+      ORDER BY al.ran_at DESC
+      LIMIT 50 OFFSET $1
+    `, [offset]);
+
+    const AGENT_LABELS = {
+      scout: { name: 'Scout', icon: '🔍' }, linkedin: { name: 'Link', icon: '💬' },
+      facebook: { name: 'Faye', icon: '📣' }, emmett: { name: 'Emmett', icon: '✉️' },
+      email: { name: 'Emmett', icon: '✉️' }, max: { name: 'Max', icon: '🧠' },
+      rex: { name: 'Rex', icon: '📊' }, riley: { name: 'Riley', icon: '🙋' },
+      sketch: { name: 'Sketch', icon: '🎨' }, paige: { name: 'Paige', icon: '✍️' },
+      sam: { name: 'Sam', icon: '📱' }
+    };
+    const ACTION_LABELS = {
+      generate_comment: 'drafted comment', daily_digest: 'sent daily digest',
+      weekly_report: 'sent weekly report', generate_mockup: 'generated mockup',
+      outbound: 'sent email', dashboard_trigger: 'triggered from dashboard',
+      send_sms: 'sent SMS', generate_content: 'generated content',
+      triage: 'triaged inbox', batch_sms: 'ran SMS batch'
+    };
+    const rows = result.rows.map(r => {
+      const rawAgent = (r.agent_name || '').replace('_agent', '');
+      const agentInfo = AGENT_LABELS[rawAgent] || { name: rawAgent, icon: '⚡' };
+      const prospectName = r.first_name ? `${r.first_name} ${r.last_name}`.trim() : null;
+      const prospectBiz = prospectName || (r.prospect_notes || '').split('—')[0].trim() || null;
+      return {
+        id: r.id, agent: agentInfo.name, icon: agentInfo.icon,
+        action: ACTION_LABELS[r.action] || r.action,
+        prospect: prospectBiz, status: r.status, ran_at: r.ran_at
+      };
+    });
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // API - Trigger agents
 app.post('/api/run/:agent', requireAuth, async (req, res) => {
   const { agent } = req.params;
