@@ -135,6 +135,20 @@ async function saveToPendingApprovals(company, content, contentType, channel) {
   const channelLabel = channel === 'facebook_page' ? 'Facebook Page' : 'Google Business';
   const label = `${channelLabel} · ${contentType.charAt(0).toUpperCase() + contentType.slice(1)}`;
 
+  const existing = await pool.query(`
+    SELECT id FROM pending_comments
+    WHERE channel = $1
+      AND post_content = $2
+      AND author_name = $3
+      AND status = 'pending'
+    LIMIT 1
+  `, [channel, label, company.name]);
+
+  if (existing.rows.length > 0) {
+    console.log(`  ↷ Skipping duplicate: ${channel} · ${contentType} for ${company.name}`);
+    return null;
+  }
+
   const res = await pool.query(`
     INSERT INTO pending_comments
       (author_name, author_title, post_content, comment, post_url, channel, status)
@@ -160,6 +174,16 @@ async function logRun(status, payload) {
 
 async function run() {
   console.log('\nPaige agent running...\n');
+  console.log('-- CLEANUP QUERY (run manually in psql to remove existing duplicates) --');
+  console.log(`DELETE FROM pending_comments
+WHERE id NOT IN (
+  SELECT DISTINCT ON (channel, post_content, author_name) id
+  FROM pending_comments
+  WHERE status = 'pending'
+  ORDER BY channel, post_content, author_name, created_at DESC
+)
+AND status = 'pending';`);
+  console.log('------------------------------------------------------------------------\n');
 
   try {
     const clients = await getActiveClients();
@@ -181,8 +205,10 @@ async function run() {
         try {
           const content = await generatePost(company, contentType, channel);
           const id = await saveToPendingApprovals(company, content, contentType, channel);
-          console.log(`  ✓ queued (${id.slice(0, 8)})\n`);
-          generated++;
+          if (id) {
+            console.log(`  ✓ queued (${id.slice(0, 8)})\n`);
+            generated++;
+          }
         } catch (err) {
           console.error(`  ✗ ${company.name}/${channel}: ${err.message}`);
         }
