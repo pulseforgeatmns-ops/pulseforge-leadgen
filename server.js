@@ -482,6 +482,44 @@ app.post('/api/approvals/:id', requireAuth, async (req, res) => {
   }
 });
 
+// API - Prospects table
+app.get('/api/prospects', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        p.id, p.first_name, p.last_name, p.email, p.phone,
+        p.status, p.icp_score, p.notes, p.last_contacted_at,
+        c.name as company_name,
+        COUNT(t.id)::int as touchpoint_count
+      FROM prospects p
+      LEFT JOIN companies c ON p.company_id = c.id
+      LEFT JOIN touchpoints t ON t.prospect_id = p.id
+      WHERE p.do_not_contact = false
+      GROUP BY p.id, c.name
+      ORDER BY p.icp_score DESC NULLS LAST
+      LIMIT 200
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API - Touchpoints for a single prospect
+app.get('/api/prospects/:id/touchpoints', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT channel, action_type, content_summary, outcome, created_at
+      FROM touchpoints
+      WHERE prospect_id = $1
+      ORDER BY created_at ASC
+    `, [req.params.id]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // API - Agent stats for sparklines
 app.get('/api/agent-stats', requireAuth, async (req, res) => {
   try {
