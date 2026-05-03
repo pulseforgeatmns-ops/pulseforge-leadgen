@@ -474,6 +474,9 @@ body::before {
 }
 .mini-stat-fill.purple { background: var(--purple-bright); }
 .mini-stat-fill.planned-fill { background: var(--gray); }
+.agent-sparkline {
+  width: 100%; height: 28px; display: block; overflow: visible;
+}
 
 /* RIGHT PANEL */
 .right-panel {
@@ -705,6 +708,25 @@ body::before {
   flex-shrink: 0;
   box-shadow: 0 0 6px var(--teal);
 }
+.detail-run-btn {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  padding: 8px 22px;
+  border-radius: 5px;
+  border: 1px solid rgba(0,212,180,0.35);
+  background: rgba(0,212,180,0.06);
+  color: var(--teal);
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 0.75rem;
+}
+.detail-run-btn:hover {
+  background: rgba(0,212,180,0.16);
+  box-shadow: 0 0 16px rgba(0,212,180,0.2);
+}
+.detail-run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -1246,15 +1268,30 @@ body::before {
     </div>
     <div class="detail-name" id="detailName">SCOUT</div>
     <div class="detail-role" id="detailRole">Lead Scraper</div>
+    <button class="detail-run-btn" id="detailRunBtn" style="display:none" onclick="runDetailAgent()">▶ RUN AGENT</button>
   </div>
   <div class="detail-info">
     <div class="detail-info-title" id="detailTitle">Scout — Lead Scraper</div>
     <div class="detail-desc" id="detailDesc"></div>
-    <div id="detailLiveStats" style="display:none; margin:1rem 0; padding:1rem; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:8px;">
+    <div id="detailLiveStats" style="display:none; margin:1rem 0;">
       <div style="font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:2px; color:#6b7fa0; text-transform:uppercase; margin-bottom:0.75rem;">LIVE STATS</div>
-      <div style="display:flex; gap:2rem;">
-        <div><div style="font-size:1.4rem; font-weight:700; color:#00d4b4;" id="detailStatRuns">—</div><div style="font-size:0.65rem; color:#6b7fa0; font-family:JetBrains Mono,monospace; text-transform:uppercase; letter-spacing:1px;">Total Runs</div></div>
-        <div><div style="font-size:1.4rem; font-weight:700; color:#8b5cf6;" id="detailStatLast">—</div><div style="font-size:0.65rem; color:#6b7fa0; font-family:JetBrains Mono,monospace; text-transform:uppercase; letter-spacing:1px;">Last Active</div></div>
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:rgba(255,255,255,0.06); border-radius:8px; overflow:hidden;">
+        <div style="background:#0b1526; padding:0.75rem 1rem;">
+          <div style="font-family:'JetBrains Mono',monospace; font-size:0.52rem; color:#6b7fa0; text-transform:uppercase; letter-spacing:1px; margin-bottom:4px;">Total Runs</div>
+          <div id="detailStatRuns" style="font-family:'Bebas Neue',sans-serif; font-size:1.8rem; color:#00d4b4; line-height:1;">—</div>
+        </div>
+        <div style="background:#0b1526; padding:0.75rem 1rem;">
+          <div style="font-family:'JetBrains Mono',monospace; font-size:0.52rem; color:#6b7fa0; text-transform:uppercase; letter-spacing:1px; margin-bottom:4px;">This Week</div>
+          <div id="detailStatWeek" style="font-family:'Bebas Neue',sans-serif; font-size:1.8rem; color:#8b5cf6; line-height:1;">—</div>
+        </div>
+        <div style="background:#0b1526; padding:0.75rem 1rem;">
+          <div style="font-family:'JetBrains Mono',monospace; font-size:0.52rem; color:#6b7fa0; text-transform:uppercase; letter-spacing:1px; margin-bottom:4px;">Last Active</div>
+          <div id="detailStatLast" style="font-family:'Bebas Neue',sans-serif; font-size:1.8rem; color:#e8f0fe; line-height:1;">—</div>
+        </div>
+        <div style="background:#0b1526; padding:0.75rem 1rem;">
+          <div style="font-family:'JetBrains Mono',monospace; font-size:0.52rem; color:#6b7fa0; text-transform:uppercase; letter-spacing:1px; margin-bottom:4px;">Success Rate</div>
+          <div id="detailStatRate" style="font-family:'Bebas Neue',sans-serif; font-size:1.8rem; color:#00e676; line-height:1;">—</div>
+        </div>
       </div>
     </div>
     <div id="detailMaxRec" style="display:none; margin:1rem 0; padding:1rem; background:rgba(139,92,246,0.06); border:1px solid rgba(139,92,246,0.15); border-radius:8px;">
@@ -1270,6 +1307,11 @@ body::before {
 </div>
 
 <script>
+let _statsCache = null, _activityCache = null;
+let _statsCacheTime = 0, _activityCacheTime = 0;
+let _liveRings = {}, _currentDetailKey = null;
+const DETAIL_CACHE_TTL = 30000;
+
 const agentData = {
   scout: { face:'🔍', name:'SCOUT', role:'Lead Scraper', title:'Scout — Lead Scraper', desc:'Scout is your prospector. He searches Google and Hunter.io to find local businesses, grabs their contact info, scores each lead 0–100, and loads them into the second brain ready for outreach.', tasks:['Searches Google for businesses by niche and location','Finds owner emails via Hunter.io','Scores each lead 0–100 based on data quality','Exports to CSV or saves direct to the database','Live at pulseforge-leadgen-production.up.railway.app'], ringOffset: 25 },
   link: { face:'💬', name:'LINK', role:'LinkedIn Agent', title:'Link — LinkedIn Agent', desc:'Link is your LinkedIn presence. He browses LinkedIn, finds posts from your target clients, writes a contextual comment using AI, and sends it to you for approval before posting anything.', tasks:['Logs in using a saved session so LinkedIn doesn\'t flag it','Finds posts by keyword targeting local business owners','Passes each post to Claude to write a natural comment','Sends drafts to the approval dashboard','Posts only after you approve — nothing goes live without sign-off'], ringOffset: 50 },
@@ -1304,14 +1346,33 @@ const maxRecommendations = {
   sketch: 'Sketch is ready but needs prospects with no website. Add a no-website flag to Scout to trigger Sketch automatically.'
 };
 
+async function fetchDetailStats() {
+  if (_statsCache && Date.now() - _statsCacheTime < DETAIL_CACHE_TTL) return _statsCache;
+  const res = await fetch('/api/agent-stats', { credentials: 'include' });
+  _statsCache = res.ok ? await res.json() : {};
+  _statsCacheTime = Date.now();
+  return _statsCache;
+}
+
+async function fetchDetailActivity() {
+  if (_activityCache && Date.now() - _activityCacheTime < DETAIL_CACHE_TTL) return _activityCache;
+  const res = await fetch('/api/activity', { credentials: 'include' });
+  _activityCache = res.ok ? await res.json() : [];
+  _activityCacheTime = Date.now();
+  return _activityCache;
+}
+
 async function openDetail(key) {
   const a = agentData[key];
   if (!a) return;
+  _currentDetailKey = key;
+
   document.getElementById('detailFace').textContent = a.face;
   document.getElementById('detailName').textContent = a.name;
   document.getElementById('detailRole').textContent = a.role;
   document.getElementById('detailTitle').textContent = a.title;
   document.getElementById('detailDesc').textContent = a.desc;
+
   const tasks = document.getElementById('detailTasks');
   tasks.innerHTML = '';
   a.tasks.forEach(t => {
@@ -1320,9 +1381,15 @@ async function openDetail(key) {
     div.textContent = t;
     tasks.appendChild(div);
   });
-  document.getElementById('agentDetail').classList.add('open');
 
-  // Show Max recommendation
+  // Reset ring, then apply live percentage if we have it
+  const ring = document.getElementById('detailRing');
+  ring.style.strokeDashoffset = '439.8';
+  if (_liveRings[key] !== undefined) {
+    ring.style.strokeDashoffset = 439.8 * (1 - _liveRings[key]);
+  }
+
+  // Max recommendation
   if (maxRecommendations[key]) {
     document.getElementById('detailMaxRec').style.display = 'block';
     document.getElementById('detailMaxRecText').textContent = maxRecommendations[key];
@@ -1330,57 +1397,87 @@ async function openDetail(key) {
     document.getElementById('detailMaxRec').style.display = 'none';
   }
 
-  // Fetch live stats if agent has a backend mapping
+  // Run button — only for agents with a backend mapping
   const agentKey = agentNameMap[key];
+  const runBtn = document.getElementById('detailRunBtn');
+  runBtn.style.display = agentKey ? 'inline-block' : 'none';
+  runBtn.textContent = '▶ RUN AGENT';
+  runBtn.disabled = false;
+
+  document.getElementById('agentDetail').classList.add('open');
+
   if (!agentKey) {
     document.getElementById('detailLiveStats').style.display = 'none';
     document.getElementById('detailRecentActivity').style.display = 'none';
     return;
   }
 
+  // Show loading placeholders
   document.getElementById('detailLiveStats').style.display = 'block';
-  document.getElementById('detailStatRuns').textContent = '...';
-  document.getElementById('detailStatLast').textContent = '...';
+  ['detailStatRuns','detailStatWeek','detailStatLast','detailStatRate'].forEach(id => {
+    document.getElementById(id).textContent = '…';
+  });
 
   try {
-    const [actRes, statsRes] = await Promise.all([
-      fetch('/api/activity', { credentials: 'include' }),
-      fetch('/api/agent-stats', { credentials: 'include' })
-    ]);
-    const feed = actRes.ok ? await actRes.json() : [];
-    const stats = statsRes.ok ? await statsRes.json() : {};
-
-    const agentFeed = feed.filter(f => f.agent.toLowerCase() === a.name.toLowerCase());
+    const [feed, stats] = await Promise.all([fetchDetailActivity(), fetchDetailStats()]);
     const agentStats = stats[agentKey] || null;
 
-    // Stats from agent-stats API
     if (agentStats) {
       document.getElementById('detailStatRuns').textContent = agentStats.total || '0';
+      document.getElementById('detailStatWeek').textContent = agentStats.weekRuns || '0';
+
       const lastRun = agentStats.lastRun ? new Date(agentStats.lastRun) : null;
       if (lastRun) {
         const minsAgo = Math.floor((Date.now() - lastRun) / 60000);
-        const label = minsAgo < 60 ? minsAgo + 'm ago' : minsAgo < 1440 ? Math.floor(minsAgo/60) + 'h ago' : Math.floor(minsAgo/1440) + 'd ago';
-        document.getElementById('detailStatLast').textContent = label;
+        document.getElementById('detailStatLast').textContent =
+          minsAgo < 60 ? minsAgo + 'm' : minsAgo < 1440 ? Math.floor(minsAgo/60) + 'h' : Math.floor(minsAgo/1440) + 'd';
       } else {
         document.getElementById('detailStatLast').textContent = 'Never';
       }
+
+      document.getElementById('detailStatRate').textContent = agentStats.total > 0
+        ? Math.round((agentStats.successCount / agentStats.total) * 100) + '%'
+        : '—';
     } else {
-      document.getElementById('detailStatRuns').textContent = '0';
+      ['detailStatRuns','detailStatWeek'].forEach(id => document.getElementById(id).textContent = '0');
       document.getElementById('detailStatLast').textContent = 'Never';
+      document.getElementById('detailStatRate').textContent = '—';
     }
 
-    // Recent activity from feed
+    const agentFeed = feed.filter(f => f.agent.toLowerCase() === a.name.toLowerCase());
     if (agentFeed.length > 0) {
       document.getElementById('detailRecentActivity').style.display = 'block';
-      document.getElementById('detailActivityFeed').innerHTML = agentFeed.slice(0, 3).map(function(item) {
-        return '<div style="font-size:0.8rem; color:#8899bb; padding:0.4rem 0; border-bottom:1px solid rgba(255,255,255,0.04);">' + item.action + ' <span style="color:#4a5a7a; font-size:0.7rem;">' + item.time + ' ago</span></div>';
-      }).join('');
+      document.getElementById('detailActivityFeed').innerHTML = agentFeed.slice(0, 3).map(item =>
+        '<div style="font-size:0.8rem; color:#8899bb; padding:0.4rem 0; border-bottom:1px solid rgba(255,255,255,0.04);">' +
+        item.action + ' <span style="color:#4a5a7a; font-size:0.7rem;">' + item.time + ' ago</span></div>'
+      ).join('');
     } else {
       document.getElementById('detailRecentActivity').style.display = 'none';
     }
   } catch(err) {
     console.error('Failed to load agent detail data:', err);
+    ['detailStatRuns','detailStatWeek','detailStatLast','detailStatRate'].forEach(id => {
+      document.getElementById(id).textContent = '—';
+    });
   }
+}
+
+async function runDetailAgent() {
+  if (!_currentDetailKey) return;
+  const btn = document.getElementById('detailRunBtn');
+  btn.textContent = '…';
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/run/' + _currentDetailKey, { method: 'POST', credentials: 'include' });
+    const data = await res.json();
+    btn.textContent = data.success ? '✓ TRIGGERED' : '⚠ LOCAL ONLY';
+    _statsCacheTime = 0;
+    _activityCacheTime = 0;
+    loadActivityFeed();
+  } catch(err) {
+    btn.textContent = '⚠ ERROR';
+  }
+  setTimeout(() => { btn.textContent = '▶ RUN AGENT'; btn.disabled = false; }, 3000);
 }
 
 function closeDetail() {
@@ -1402,15 +1499,6 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
     tab.classList.add('active');
   });
 });
-
-// Animate stat bars on load
-setTimeout(() => {
-  document.querySelectorAll('.mini-stat-fill').forEach(bar => {
-    const w = bar.style.width;
-    bar.style.width = '0%';
-    setTimeout(() => { bar.style.width = w; bar.style.transition = 'width 1.5s ease'; }, 100);
-  });
-}, 300);
 
 // Random agent activity simulation
 const liveAgents = ['scout','link','faye','emmett','max','rex'];
@@ -1474,6 +1562,7 @@ async function loadLiveData() {
     const res = await fetch('/api/agent-status');
     if (!res.ok) return;
     const data = await res.json();
+    _liveRings = data.rings || {};
 
     // Update metrics
     document.querySelectorAll('.metric-tile-val')[0].textContent = data.pending;
@@ -1501,14 +1590,66 @@ async function loadLiveData() {
   }
 }
 
-loadLiveData();
-loadActivityFeed();
-loadAgentSparklines();
-setInterval(loadLiveData, 60000);
-setInterval(loadActivityFeed, 30000);
-setInterval(loadAgentSparklines, 300000);
+const agentColors = {
+  scout: '#00d4b4', link: '#5b9fd4', faye: '#5ba3f5', emmett: '#ff6b35',
+  max: '#8b5cf6', rex: '#00e676', riley: '#64c864', sketch: '#b450ff',
+  ivy: '#2a3a5a', sam: '#2a3a5a', cal: '#2a3a5a',
+  penny: '#2a3a5a', paige: '#2a3a5a', vera: '#2a3a5a'
+};
+
+function fillDays(daily) {
+  const out = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const ds = d.toISOString().slice(0, 10);
+    const entry = (daily || []).find(e => new Date(e.date).toISOString().slice(0, 10) === ds);
+    out.push(entry ? parseInt(entry.count) : 0);
+  }
+  return out;
+}
+
+function buildSparklineSVG(values, color) {
+  const W = 100, H = 28, pad = 4;
+  const max = Math.max(...values, 1);
+  const pts = values.map((v, i) => {
+    const x = values.length > 1 ? (i / (values.length - 1)) * W : W / 2;
+    const y = H - pad - (v / max) * (H - pad * 2);
+    return [+x.toFixed(2), +y.toFixed(2)];
+  });
+  const uid = 'sg' + Math.random().toString(36).slice(2, 7);
+  const pline = pts.map(p => p.join(',')).join(' ');
+  const area = '0,' + H + ' ' + pline + ' ' + W + ',' + H;
+  const dots = pts
+    .filter((_, i) => values[i] > 0)
+    .map(([x, y]) => '<circle cx="' + x + '" cy="' + y + '" r="1.8" fill="' + color + '" style="filter:drop-shadow(0 0 2px ' + color + ')"/>')
+    .join('');
+  return '<defs><linearGradient id="' + uid + '" x1="0" y1="0" x2="0" y2="1">'
+    + '<stop offset="0%" stop-color="' + color + '" stop-opacity="0.22"/>'
+    + '<stop offset="100%" stop-color="' + color + '" stop-opacity="0"/>'
+    + '</linearGradient></defs>'
+    + '<polygon points="' + area + '" fill="url(#' + uid + ')"/>'
+    + '<polyline class="spark-line" points="' + pline + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="filter:drop-shadow(0 0 3px ' + color + ')"/>'
+    + dots;
+}
 
 async function loadAgentSparklines() {
+  // Initialise every card with a flat placeholder immediately
+  document.querySelectorAll('[data-agent]').forEach(card => {
+    const key = card.dataset.agent;
+    const wrap = card.querySelector('.agent-mini-stats');
+    if (!wrap) return;
+    const color = agentColors[key] || '#2a3a5a';
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 100 28');
+    svg.setAttribute('preserveAspectRatio', 'none');
+    svg.setAttribute('class', 'agent-sparkline');
+    svg.innerHTML = buildSparklineSVG([0, 0, 0, 0, 0, 0, 0], color);
+    wrap.style.cssText = 'margin-top:8px;';
+    wrap.innerHTML = '';
+    wrap.appendChild(svg);
+  });
+
   try {
     const res = await fetch('/api/agent-stats', { credentials: 'include' });
     if (!res.ok) return;
@@ -1516,35 +1657,49 @@ async function loadAgentSparklines() {
 
     const agentMap = {
       'scout_agent': 'scout', 'linkedin_agent': 'link', 'facebook_agent': 'faye',
-      'emmett_agent': 'emmett', 'email_agent': 'emmett', 'max_agent': 'max',
+      'emmett_agent': 'emmett', 'max_agent': 'max',
       'rex_agent': 'rex', 'riley_agent': 'riley', 'sketch_agent': 'sketch'
     };
 
     Object.entries(stats).forEach(([agentName, data]) => {
       const key = agentMap[agentName];
       if (!key) return;
-
       const card = document.querySelector('[data-agent="' + key + '"]');
       if (!card) return;
+      const wrap = card.querySelector('.agent-mini-stats');
+      if (!wrap) return;
+      const svg = wrap.querySelector('svg');
+      if (!svg) return;
 
-      const bars = card.querySelectorAll('.mini-stat-fill');
-      if (!bars.length) return;
+      const values = fillDays(data.daily || []);
+      const color = agentColors[key] || '#2a3a5a';
+      svg.innerHTML = buildSparklineSVG(values, color);
 
-      const daily = data.daily || [];
-      const max = Math.max(...daily.map(d => d.count), 1);
-
-      // Fill up to 3 bars with last 3 days of data
-      const last3 = daily.slice(-3);
-      bars.forEach((bar, i) => {
-        const val = last3[i] ? Math.round((last3[i].count / max) * 100) : 0;
-        bar.style.width = val + '%';
-        bar.classList.remove('planned-fill');
-      });
+      // Animate line drawing left-to-right
+      const line = svg.querySelector('.spark-line');
+      if (line) {
+        try {
+          const len = line.getTotalLength();
+          line.style.strokeDasharray = len;
+          line.style.strokeDashoffset = len;
+          requestAnimationFrame(() => {
+            line.style.transition = 'stroke-dashoffset 1.2s ease';
+            line.style.strokeDashoffset = '0';
+          });
+        } catch(e) {}
+      }
     });
   } catch(err) {
     console.error('Sparkline error:', err);
   }
 }
+
+loadLiveData();
+loadActivityFeed();
+loadAgentSparklines();
+setInterval(loadLiveData, 60000);
+setInterval(loadActivityFeed, 30000);
+setInterval(loadAgentSparklines, 300000);
 
 </script>
 </body>

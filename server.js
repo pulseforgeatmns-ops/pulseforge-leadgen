@@ -486,20 +486,23 @@ app.post('/api/approvals/:id', requireAuth, async (req, res) => {
 app.get('/api/agent-stats', requireAuth, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT 
+      SELECT
         CASE WHEN agent_name = 'email_agent' THEN 'emmett_agent' ELSE agent_name END as agent_name,
         COUNT(*) as total_runs,
         MAX(ran_at) as last_run,
-        COUNT(CASE WHEN ran_at > NOW() - INTERVAL '7 days' THEN 1 END) as week_runs
+        COUNT(CASE WHEN ran_at > NOW() - INTERVAL '7 days' THEN 1 END) as week_runs,
+        COUNT(CASE WHEN status = 'success' THEN 1 END) as success_count
       FROM agent_log
       GROUP BY CASE WHEN agent_name = 'email_agent' THEN 'emmett_agent' ELSE agent_name END
     `);
 
     const daily = await pool.query(`
-      SELECT agent_name, DATE(ran_at) as date, COUNT(*) as count
+      SELECT
+        CASE WHEN agent_name = 'email_agent' THEN 'emmett_agent' ELSE agent_name END as agent_name,
+        DATE(ran_at) as date, COUNT(*) as count
       FROM agent_log
       WHERE ran_at > NOW() - INTERVAL '7 days'
-      GROUP BY agent_name, DATE(ran_at)
+      GROUP BY CASE WHEN agent_name = 'email_agent' THEN 'emmett_agent' ELSE agent_name END, DATE(ran_at)
       ORDER BY date ASC
     `);
 
@@ -508,6 +511,7 @@ app.get('/api/agent-stats', requireAuth, async (req, res) => {
       stats[r.agent_name] = {
         total: parseInt(r.total_runs),
         weekRuns: parseInt(r.week_runs),
+        successCount: parseInt(r.success_count),
         lastRun: r.last_run,
         daily: []
       };
