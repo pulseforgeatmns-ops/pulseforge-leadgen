@@ -727,6 +727,90 @@ body::before {
   box-shadow: 0 0 16px rgba(0,212,180,0.2);
 }
 .detail-run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* APPROVALS AREA */
+.approvals-area {
+  display: none;
+  overflow-y: auto;
+  padding: 2rem;
+}
+.approvals-area::-webkit-scrollbar { width: 3px; }
+.approvals-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.approvals-filters {
+  display: flex; gap: 6px;
+  margin-bottom: 1.5rem; flex-wrap: wrap;
+}
+.filter-btn {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem; letter-spacing: 1px; text-transform: uppercase;
+  padding: 5px 12px; border-radius: 4px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--gray-light); cursor: pointer; transition: all 0.15s;
+}
+.filter-btn:hover { color: var(--white); border-color: var(--gray); }
+.filter-btn.active { background: var(--purple-glow); color: var(--purple-bright); border-color: rgba(139,92,246,0.3); }
+
+.approvals-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 1rem;
+}
+.approval-card {
+  background: var(--bg1); border: 1px solid var(--border);
+  border-radius: 10px; padding: 1rem;
+  transition: border-color 0.2s, opacity 0.3s, transform 0.3s;
+}
+.approval-card:hover { border-color: rgba(139,92,246,0.35); }
+.approval-card.fading { opacity: 0; transform: scale(0.97); pointer-events: none; }
+
+.ac-header { display: flex; align-items: center; gap: 8px; margin-bottom: 0.6rem; }
+.ac-badge {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.55rem;
+  letter-spacing: 1px; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 3px;
+}
+.badge-linkedin { background: rgba(10,102,194,0.15); color: #5b9fd4; border: 1px solid rgba(10,102,194,0.3); }
+.badge-facebook { background: rgba(24,119,242,0.12); color: #5ba3f5; border: 1px solid rgba(24,119,242,0.25); }
+.badge-fbpage   { background: rgba(24,119,242,0.12); color: #5ba3f5; border: 1px solid rgba(24,119,242,0.25); }
+.badge-google   { background: rgba(234,67,53,0.12);  color: #f28b82; border: 1px solid rgba(234,67,53,0.25); }
+
+.ac-agent { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; color: var(--white); letter-spacing: 1px; }
+.ac-time  { font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; color: var(--gray); margin-left: auto; }
+
+.ac-context {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.6rem;
+  color: var(--gray); line-height: 1.5; margin-bottom: 0.5rem;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.ac-comment {
+  font-size: 0.83rem; color: rgba(255,255,255,0.85); line-height: 1.65;
+  margin-bottom: 1rem; padding: 0.75rem;
+  background: rgba(255,255,255,0.03); border-radius: 6px;
+  border-left: 2px solid var(--border);
+}
+.ac-actions { display: flex; gap: 6px; }
+.ac-btn {
+  flex: 1; font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem; letter-spacing: 1px; text-transform: uppercase;
+  padding: 7px 0; border-radius: 4px; cursor: pointer; transition: all 0.15s; border: 1px solid;
+}
+.ac-btn-approve { background: rgba(0,230,118,0.06); color: var(--green); border-color: rgba(0,230,118,0.2); }
+.ac-btn-approve:hover { background: rgba(0,230,118,0.14); box-shadow: 0 0 12px rgba(0,230,118,0.15); }
+.ac-btn-reject  { background: rgba(255,59,92,0.06);  color: var(--red);   border-color: rgba(255,59,92,0.2); }
+.ac-btn-reject:hover  { background: rgba(255,59,92,0.14);  box-shadow: 0 0 12px rgba(255,59,92,0.15); }
+.ac-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.approvals-empty {
+  display: none; flex-direction: column; align-items: center;
+  justify-content: center; min-height: 300px; gap: 0.75rem;
+}
+.approvals-empty.visible { display: flex; }
+.approvals-empty-icon { font-size: 2.5rem; opacity: 0.35; }
+.approvals-empty-text {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+  letter-spacing: 2px; text-transform: uppercase; color: var(--gray);
+}
 </style>
 </head>
 <body>
@@ -1201,6 +1285,28 @@ body::before {
 
   </div>
 
+  <!-- APPROVALS AREA -->
+  <div class="approvals-area" id="approvalsArea">
+    <div class="area-header">
+      <div>
+        <div class="area-title">APPROVAL QUEUE</div>
+        <div class="area-sub" id="approvalsSub">Pending review</div>
+      </div>
+    </div>
+    <div class="approvals-filters">
+      <button class="filter-btn active" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="linkedin">LinkedIn</button>
+      <button class="filter-btn" data-filter="facebook">Facebook</button>
+      <button class="filter-btn" data-filter="facebook_page">Facebook Page</button>
+      <button class="filter-btn" data-filter="google_business">Google Business</button>
+    </div>
+    <div class="approvals-empty" id="approvalsEmpty">
+      <div class="approvals-empty-icon">✓</div>
+      <div class="approvals-empty-text">All clear — nothing pending approval</div>
+    </div>
+    <div class="approvals-grid" id="approvalsGrid"></div>
+  </div>
+
   <!-- RIGHT PANEL -->
   <div class="right-panel">
     <div class="panel-header">
@@ -1494,11 +1600,107 @@ function updateClock() {
 updateClock();
 setInterval(updateClock, 1000);
 
-// Nav tabs
-document.querySelectorAll('.nav-tab').forEach(tab => {
+// Nav tabs — panel switching
+const _tabPanels = {
+  agents:    document.querySelector('.agents-area'),
+  approvals: document.getElementById('approvalsArea')
+};
+const _tabNames = ['agents','approvals','prospects','sequences','analytics'];
+document.querySelectorAll('.nav-tab').forEach((tab, i) => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
+    const name = _tabNames[i];
+    Object.entries(_tabPanels).forEach(([k, el]) => {
+      if (el) el.style.display = (k === name) ? '' : 'none';
+    });
+    if (name === 'approvals') loadApprovals();
+  });
+});
+
+// Approvals
+const _CHANNEL = {
+  linkedin:        { label: 'LinkedIn',        badge: 'badge-linkedin', agent: 'Link'  },
+  facebook:        { label: 'Facebook',        badge: 'badge-facebook', agent: 'Faye'  },
+  facebook_page:   { label: 'Facebook Page',   badge: 'badge-fbpage',   agent: 'Paige' },
+  google_business: { label: 'Google Business', badge: 'badge-google',   agent: 'Paige' },
+};
+let _approvals = [], _approvalFilter = 'all';
+
+function _relTime(d) {
+  const s = Math.floor((Date.now() - new Date(d)) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+function _esc(s) {
+  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function loadApprovals() {
+  try {
+    const res = await fetch('/api/approvals', { credentials: 'include' });
+    _approvals = await res.json();
+    _renderApprovals();
+  } catch(e) { console.error('loadApprovals:', e); }
+}
+
+function _renderApprovals() {
+  const grid  = document.getElementById('approvalsGrid');
+  const empty = document.getElementById('approvalsEmpty');
+  const sub   = document.getElementById('approvalsSub');
+  const visible = _approvalFilter === 'all'
+    ? _approvals
+    : _approvals.filter(i => i.channel === _approvalFilter);
+  sub.textContent = `${_approvals.length} pending · ${visible.length} shown`;
+  grid.innerHTML = '';
+  if (!visible.length) { empty.classList.add('visible'); return; }
+  empty.classList.remove('visible');
+  visible.forEach(item => {
+    const cfg = _CHANNEL[item.channel] || { label: item.channel, badge: 'badge-linkedin', agent: '—' };
+    const card = document.createElement('div');
+    card.className = 'approval-card';
+    card.dataset.id = item.id;
+    card.innerHTML = `
+      <div class="ac-header">
+        <span class="ac-badge ${cfg.badge}">${cfg.label}</span>
+        <span class="ac-agent">${cfg.agent}</span>
+        <span class="ac-time">${_relTime(item.created_at)}</span>
+      </div>
+      <div class="ac-context">${_esc(item.post_content)}</div>
+      <div class="ac-comment">${_esc(item.comment)}</div>
+      <div class="ac-actions">
+        <button class="ac-btn ac-btn-approve" onclick="handleApproval('${_esc(item.id)}','approved',this)">✓ Approve</button>
+        <button class="ac-btn ac-btn-reject"  onclick="handleApproval('${_esc(item.id)}','rejected',this)">✕ Reject</button>
+      </div>`;
+    grid.appendChild(card);
+  });
+}
+
+async function handleApproval(id, action, btn) {
+  const card = btn.closest('.approval-card');
+  card.querySelectorAll('.ac-btn').forEach(b => b.disabled = true);
+  try {
+    const res = await fetch(`/api/approvals/${id}`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action })
+    });
+    if (!res.ok) throw new Error('failed');
+    card.classList.add('fading');
+    setTimeout(() => { _approvals = _approvals.filter(i => i.id !== id); _renderApprovals(); }, 300);
+  } catch(e) {
+    card.querySelectorAll('.ac-btn').forEach(b => b.disabled = false);
+  }
+}
+
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    _approvalFilter = btn.dataset.filter;
+    _renderApprovals();
   });
 });
 
