@@ -1,6 +1,7 @@
 require('dotenv').config();
 const pool = require('./db');
 const Anthropic = require('@anthropic-ai/sdk');
+const { sendTelegramNotification } = require('./utils/telegram');
 
 const client = new Anthropic();
 const AGENT_NAME = 'paige_agent';
@@ -208,6 +209,11 @@ AND status = 'pending';`);
           if (id) {
             console.log(`  ✓ queued (${id.slice(0, 8)})\n`);
             generated++;
+            await sendTelegramNotification({
+              channel,
+              post_content: `${channel === 'facebook_page' ? 'Facebook Page' : 'Google Business'} · ${contentType.charAt(0).toUpperCase() + contentType.slice(1)}`,
+              comment: content,
+            });
           }
         } catch (err) {
           console.error(`  ✗ ${company.name}/${channel}: ${err.message}`);

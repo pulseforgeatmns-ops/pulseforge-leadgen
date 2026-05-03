@@ -4,6 +4,7 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('./dbClient');
+const { sendTelegramNotification } = require('./utils/telegram');
 
 puppeteer.use(StealthPlugin());
 
@@ -216,6 +217,12 @@ async function run() {
           comment,
           postUrl: post.postUrl,
           channel: 'linkedin'
+        });
+
+        await sendTelegramNotification({
+          channel: 'linkedin',
+          post_content: post.content.substring(0, 500),
+          comment,
         });
 
         await db.logAgentAction(
