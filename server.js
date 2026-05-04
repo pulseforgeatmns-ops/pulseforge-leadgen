@@ -924,7 +924,8 @@ app.post('/api/run/:agent', requireAuth, async (req, res) => {
     scout: './leadgen', emmett: './emmettAgent',
     max: './maxAgent', rex: './rexAgent', sketch: './sketchAgent',
     paige: './paigeAgent', faye: './facebookAgent', link: './linkedinAgent',
-    sam: './samAgent', vera: './veraAgent', cal: './calAgent', ivy: './ivyAgent'
+    sam: './samAgent', vera: './veraAgent', cal: './calAgent', ivy: './ivyAgent',
+    penny: './pennyAgent'
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   await pool.query(
@@ -953,6 +954,7 @@ const CRON_MODULES = {
   sam:    './samAgent',
   vera:   './veraAgent',
   cal:    './calAgent',
+  penny:  './pennyAgent',
 };
 
 function runCronAgent(agent, res) {

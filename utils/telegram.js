@@ -13,6 +13,7 @@ const AGENT_NAMES = {
   blog:            'Paige',
   call:            'Cal',
   instagram:       'Ivy',
+  ads_report:      'Penny',
 };
 
 const CHANNEL_LABELS = {
@@ -24,6 +25,7 @@ const CHANNEL_LABELS = {
   blog:            'Blog',
   call:            'Call',
   instagram:       'Instagram',
+  ads_report:      'Ads Report',
 };
 
 function truncate(str, max) {
