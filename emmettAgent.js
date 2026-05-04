@@ -2,7 +2,7 @@ require('dotenv').config();
 const axios = require('axios');
 const db = require('./dbClient');
 
-const AGENT_NAME = 'emmett_agent';
+const AGENT_NAME = 'emmett';
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const FROM_EMAIL = 'jacob@gopulseforge.com';
 const FROM_NAME = 'Jacob Maynard';

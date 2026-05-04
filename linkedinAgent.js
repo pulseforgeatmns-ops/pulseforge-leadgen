@@ -8,7 +8,7 @@ const { sendTelegramNotification } = require('./utils/telegram');
 
 puppeteer.use(StealthPlugin());
 
-const AGENT_NAME = 'linkedin_agent';
+const AGENT_NAME = 'link';
 const SESSION_FILE = './linkedin_session.json';
 
 const client = new Anthropic();

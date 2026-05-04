@@ -10,7 +10,7 @@ const client = new Anthropic();
 
 puppeteer.use(StealthPlugin());
 
-const AGENT_NAME = 'facebook_agent';
+const AGENT_NAME = 'faye';
 const SESSION_FILE = './facebook_session.json';
 
 const agentPersona = {
