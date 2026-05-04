@@ -9,6 +9,7 @@ const AGENT_NAMES = {
   facebook:        'Faye',
   facebook_page:   'Paige',
   google_business: 'Paige',
+  google_review:   'Vera',
 };
 
 const CHANNEL_LABELS = {
@@ -16,6 +17,7 @@ const CHANNEL_LABELS = {
   facebook:        'Facebook',
   facebook_page:   'Facebook Page',
   google_business: 'Google Business',
+  google_review:   'Google Review',
 };
 
 function truncate(str, max) {

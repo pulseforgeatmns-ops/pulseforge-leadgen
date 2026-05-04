@@ -924,7 +924,7 @@ app.post('/api/run/:agent', requireAuth, async (req, res) => {
     scout: './leadgen', emmett: './emmettAgent',
     max: './maxAgent', rex: './rexAgent', sketch: './sketchAgent',
     paige: './paigeAgent', faye: './facebookAgent', link: './linkedinAgent',
-    sam: './samAgent'
+    sam: './samAgent', vera: './veraAgent'
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   await pool.query(
@@ -948,7 +948,7 @@ app.post('/cron/:agent', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const agentModules = {
-    max: './maxAgent', rex: './rexAgent', emmett: './emmettAgent', paige: './paigeAgent', sam: './samAgent'
+    max: './maxAgent', rex: './rexAgent', emmett: './emmettAgent', paige: './paigeAgent', sam: './samAgent', vera: './veraAgent'
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   res.json({ success: true });
@@ -1005,10 +1005,13 @@ async function load() {
     <div class="card" id="card-\${d.id}">
       <p class="author">\${d.author_name || 'Unknown'}</p>
       <p class="author-title">\${d.author_title || ''}</p>
-      \${d.channel === 'facebook' ? 
-        '<span style="background:#1877F2;color:#fff;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">Facebook</span>' : 
-        '<span style="background:#0A66C2;color:#fff;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">LinkedIn</span>'
-      }
+      \${{
+        facebook:       '<span style="background:#1877F2;color:#fff;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">Facebook · Faye</span>',
+        facebook_page:  '<span style="background:#1877F2;color:#fff;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">Facebook Page · Paige</span>',
+        google_business:'<span style="background:#34A853;color:#fff;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">Google Business · Paige</span>',
+        google_review:  '<span style="background:#f4b942;color:#1a1a18;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">Google Review · Vera</span>',
+        linkedin:       '<span style="background:#0A66C2;color:#fff;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">LinkedIn · Link</span>',
+      }[d.channel] || \`<span style="background:#888;color:#fff;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">\${d.channel}</span>\`}
       <p class="label">Post</p>
       <div class="post-content">\${d.post_content || ''}</div>
       <p class="label">Draft comment</p>
