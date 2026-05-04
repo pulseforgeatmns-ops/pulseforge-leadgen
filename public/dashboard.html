@@ -776,6 +776,7 @@ body::before {
 .badge-fbpage   { background: rgba(24,119,242,0.12); color: #5ba3f5; border: 1px solid rgba(24,119,242,0.25); }
 .badge-google   { background: rgba(234,67,53,0.12);  color: #f28b82; border: 1px solid rgba(234,67,53,0.25); }
 .badge-greview  { background: rgba(244,185,66,0.12); color: #f4b942; border: 1px solid rgba(244,185,66,0.3); }
+.badge-blog     { background: rgba(16,185,129,0.12); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
 
 .ac-agent { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; color: var(--white); letter-spacing: 1px; }
 .ac-time  { font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; color: var(--gray); margin-left: auto; }
@@ -1581,6 +1582,7 @@ body::before {
       <button class="filter-btn" data-filter="facebook_page">Facebook Page</button>
       <button class="filter-btn" data-filter="google_business">Google Business</button>
       <button class="filter-btn" data-filter="google_review">Google Review</button>
+      <button class="filter-btn" data-filter="blog">Blog</button>
     </div>
     <div class="approvals-empty" id="approvalsEmpty">
       <div class="approvals-empty-icon">✓</div>
@@ -2103,6 +2105,7 @@ const _CHANNEL = {
   facebook_page:   { label: 'Facebook Page',   badge: 'badge-fbpage',   agent: 'Paige' },
   google_business: { label: 'Google Business', badge: 'badge-google',   agent: 'Paige' },
   google_review:   { label: 'Google Review',   badge: 'badge-greview', agent: 'Vera'  },
+  blog:            { label: 'Blog',            badge: 'badge-blog',    agent: 'Paige' },
 };
 let _approvals = [], _approvalFilter = 'all';
 

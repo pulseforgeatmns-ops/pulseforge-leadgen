@@ -7,7 +7,8 @@ const client = new Anthropic();
 const AGENT_NAME = 'paige';
 
 const CONTENT_TYPES = ['promotional', 'educational', 'seasonal', 'behind-the-scenes', 'community'];
-const CHANNELS = ['facebook_page', 'google_business'];
+const BLOG_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'community', 'seasonal'];
+const CHANNELS = ['facebook_page', 'google_business', 'blog'];
 
 // Vertical-specific context fed into the prompt so Claude sounds right for each business type
 const VERTICAL_PROMPTS = {
@@ -39,12 +40,12 @@ async function getActiveClients() {
 }
 
 // Pick a content type we haven't used recently for this company so posts stay varied
-async function pickContentType(companyName) {
+async function pickContentType(companyName, channel = null) {
   const res = await pool.query(`
     SELECT post_content
     FROM pending_comments
     WHERE author_name = $1
-      AND channel IN ('facebook_page', 'google_business')
+      AND channel IN ('facebook_page', 'google_business', 'blog')
       AND created_at > NOW() - INTERVAL '30 days'
     ORDER BY created_at DESC
     LIMIT 10
@@ -54,8 +55,9 @@ async function pickContentType(companyName) {
     .map(r => r.post_content?.split('·')[1]?.trim().toLowerCase())
     .filter(Boolean);
 
-  const unused = CONTENT_TYPES.filter(t => !recentTypes.some(r => r.includes(t)));
-  return unused.length > 0 ? unused[0] : CONTENT_TYPES[0];
+  const types = channel === 'blog' ? BLOG_CONTENT_TYPES : CONTENT_TYPES;
+  const unused = types.filter(t => !recentTypes.some(r => r.includes(t)));
+  return unused.length > 0 ? unused[0] : types[0];
 }
 
 function buildFacebookPrompt(company, contentType, verticalCtx, location) {
@@ -115,17 +117,64 @@ Write a Google Business update (3-5 sentences) that:
 Return only the post text.`;
 }
 
+function buildBlogPrompt(company, contentType, verticalCtx) {
+  const isPulseforge = company.name.toLowerCase().includes('pulseforge');
+  const location = company.location || 'Manchester, NH';
+
+  const audienceNote = isPulseforge
+    ? `IMPORTANT: Pulseforge's audience is small business owners considering marketing automation — not end customers of another business. Write to an owner who is tired of doing repetitive marketing tasks themselves and wants a system that runs in the background.`
+    : `Write as the owner of ${company.name} — personal, grounded, and expert. This is their business blog, not a corporate content farm.`;
+
+  return `You are writing a blog post for ${company.name}, a local ${company.industry || 'business'} in ${location}${isPulseforge ? ' that automates marketing and outreach for small business owners using AI' : ''}.
+
+Content type: ${contentType}
+Business context: ${verticalCtx}
+
+${audienceNote}
+
+Write a blog post (350-500 words) using this structure:
+# [Title]
+
+[Intro paragraph — mention the business name and what they do, include ${location} naturally]
+
+## [Subheading]
+[Body section]
+
+## [Subheading]
+[Body section]
+
+[Optional third ## section if it fits naturally — skip if it would feel padded]
+
+[Closing paragraph with a soft, non-pushy call to action]
+
+Requirements:
+- Use # for the title and ## for subheadings — no other markdown
+- Mention ${location} or the surrounding area 2-3 times naturally, never forced
+- Sounds like the business owner wrote it — specific, personal, expert
+- For "educational": practical how-to or tips the reader can actually use
+- For "behind-the-scenes": a window into the people, process, or story behind the business
+- For "community": local focus — neighborhoods, events, what it means to serve this area
+- For "seasonal": what customers should know or do this time of year, from an expert's perspective
+- Never open with "In today's digital world" or any generic throat-clearing — start specific
+- No keyword stuffing — mention the business and location where they fit naturally
+- No corporate tone, no "we pride ourselves," no "cutting-edge solutions"
+
+Return only the blog post text with markdown formatting.`;
+}
+
 async function generatePost(company, contentType, channel) {
   const verticalCtx = getVerticalContext(company.industry);
   const location = company.location || 'Manchester, NH';
 
   const prompt = channel === 'google_business'
     ? buildGooglePrompt(company, contentType, verticalCtx, location)
-    : buildFacebookPrompt(company, contentType, verticalCtx, location);
+    : channel === 'blog'
+      ? buildBlogPrompt(company, contentType, verticalCtx)
+      : buildFacebookPrompt(company, contentType, verticalCtx, location);
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 300,
+    max_tokens: channel === 'blog' ? 800 : 300,
     messages: [{ role: 'user', content: prompt }]
   });
 
@@ -133,7 +182,7 @@ async function generatePost(company, contentType, channel) {
 }
 
 async function saveToPendingApprovals(company, content, contentType, channel) {
-  const channelLabel = channel === 'facebook_page' ? 'Facebook Page' : 'Google Business';
+  const channelLabel = { facebook_page: 'Facebook Page', google_business: 'Google Business', blog: 'Blog' }[channel] || channel;
   const label = `${channelLabel} · ${contentType.charAt(0).toUpperCase() + contentType.slice(1)}`;
 
   const existing = await pool.query(`
@@ -200,7 +249,7 @@ AND status = 'pending';`);
 
     for (const company of clients) {
       for (const channel of CHANNELS) {
-        const contentType = await pickContentType(company.name);
+        const contentType = await pickContentType(company.name, channel);
         console.log(`${company.name} — ${channel} — ${contentType}`);
 
         try {
@@ -209,9 +258,10 @@ AND status = 'pending';`);
           if (id) {
             console.log(`  ✓ queued (${id.slice(0, 8)})\n`);
             generated++;
+            const channelLabel = { facebook_page: 'Facebook Page', google_business: 'Google Business', blog: 'Blog' }[channel] || channel;
             await sendTelegramNotification({
               channel,
-              post_content: `${channel === 'facebook_page' ? 'Facebook Page' : 'Google Business'} · ${contentType.charAt(0).toUpperCase() + contentType.slice(1)}`,
+              post_content: `${channelLabel} · ${contentType.charAt(0).toUpperCase() + contentType.slice(1)}`,
               comment: content,
             });
           }
