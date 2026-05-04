@@ -941,23 +941,48 @@ app.post('/api/run/:agent', requireAuth, async (req, res) => {
 });
 
 // Cron endpoint - protected by secret key
+const CRON_MODULES = {
+  scout:  './leadgen',
+  emmett: './emmettAgent',
+  max:    './maxAgent',
+  rex:    './rexAgent',
+  sketch: './sketchAgent',
+  paige:  './paigeAgent',
+  faye:   './facebookAgent',
+  link:   './linkedinAgent',
+  sam:    './samAgent',
+  vera:   './veraAgent',
+};
+
+function runCronAgent(agent, res) {
+  if (!CRON_MODULES[agent]) return res.status(400).json({ error: `Unknown agent: ${agent}` });
+  res.json({ success: true, agent });
+  try {
+    delete require.cache[require.resolve(CRON_MODULES[agent])];
+    require(CRON_MODULES[agent]);
+  } catch (err) {
+    console.error(`[cron] ${agent} error:`, err.message);
+  }
+}
+
+// POST /cron/:agent — triggered by external cron services with secret in body
 app.post('/cron/:agent', async (req, res) => {
   const { agent } = req.params;
-  const { secret } = req.body;
-  if (secret !== process.env.CRON_SECRET) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  const agentModules = {
-    max: './maxAgent', rex: './rexAgent', emmett: './emmettAgent', paige: './paigeAgent', sam: './samAgent', vera: './veraAgent'
-  };
-  if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
-  res.json({ success: true });
-  try {
-    delete require.cache[require.resolve(agentModules[agent])];
-    require(agentModules[agent]);
-  } catch (err) {
-    console.error(`Cron agent ${agent} error:`, err.message);
+  runCronAgent(agent, res);
+});
+
+// GET /cron/:agent — triggered by Railway cron (which sends GET requests)
+app.get('/cron/:agent', async (req, res) => {
+  const { agent } = req.params;
+  const secret = req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
+  runCronAgent(agent, res);
 });
 
 // Approval dashboard
