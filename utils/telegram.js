@@ -2,7 +2,7 @@ const axios = require('axios');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID   = process.env.TELEGRAM_CHAT_ID;
-const DASHBOARD = 'https://openclaw-main-production-945e.up.railway.app';
+const DASHBOARD = 'https://pulseforge-leadgen-production.up.railway.app';
 
 const AGENT_NAMES = {
   linkedin:        'Link',
