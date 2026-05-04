@@ -4,7 +4,7 @@ const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const client = new Anthropic();
-const AGENT_NAME = 'rex_agent';
+const AGENT_NAME = 'rex';
 
 async function getWeeklyData() {
   const weekAgo = "NOW() - INTERVAL '7 days'";

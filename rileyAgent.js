@@ -5,7 +5,7 @@ const db = require('./dbClient');
 const fs = require('fs');
 const path = require('path');
 
-const AGENT_NAME = 'riley_agent';
+const AGENT_NAME = 'riley';
 const CREDENTIALS_PATH = './gmail_credentials.json';
 const TOKEN_PATH = './gmail_token.json';
 const SCOPES = [

@@ -5,7 +5,7 @@ const path = require('path');
 const pool = require('./db');
 
 const client = new Anthropic();
-const AGENT_NAME = 'sketch_agent';
+const AGENT_NAME = 'sketch';
 
 const businessName = process.argv[2];
 const location = process.argv[3] || 'Manchester, NH';

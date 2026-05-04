@@ -4,7 +4,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { sendTelegramNotification } = require('./utils/telegram');
 
 const client = new Anthropic();
-const AGENT_NAME = 'paige_agent';
+const AGENT_NAME = 'paige';
 
 const CONTENT_TYPES = ['promotional', 'educational', 'seasonal', 'behind-the-scenes', 'community'];
 const CHANNELS = ['facebook_page', 'google_business'];

@@ -4,7 +4,7 @@ const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const client = new Anthropic();
-const AGENT_NAME = 'max_agent';
+const AGENT_NAME = 'max';
 
 async function getSystemSnapshot() {
   // Prospect breakdown by status
