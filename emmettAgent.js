@@ -25,7 +25,7 @@ I'd love to put together a free mockup showing what this could look like specifi
 
 Worth a look?
 
-Jake Maynard
+Jacob Maynard
 gopulseforge.com`
     },
     {
@@ -70,7 +70,7 @@ If the timing is ever right and you want to see what automated outreach could do
 
 Rooting for you either way.
 
-Jake Maynard
+Jacob Maynard
 Pulseforge
 gopulseforge.com`
     }
@@ -78,7 +78,8 @@ gopulseforge.com`
 };
 
 function fillTemplate(template, prospect) {
-  const firstName = prospect.first_name || prospect.name?.split(' ')[0] || 'there';
+  const rawName = prospect.first_name || prospect.name?.split(' ')[0] || '';
+  const firstName = (rawName && rawName !== '—') ? rawName : 'there';
   const rawDomain = prospect.notes?.split('—')[1]?.trim() || '';
   const domainName = rawDomain.replace(/\.com|\.net|\.org|\.io/g, '').replace(/[-]/g, ' ').trim();
   const businessName = prospect.company || (domainName ? domainName.charAt(0).toUpperCase() + domainName.slice(1) : 'your business');
