@@ -529,16 +529,122 @@ function parseArgs(argv) {
 }
 
 
+// ─────────────────────────────────────────────────────────────────────
+// VALIDATION — rejects junk business names before DB insert
+//
+// Coverage (tested against 90 names across 18 CSV exports, May 2026):
+//   Catches: street addresses, zip codes, job listings, generic page
+//   words, years, month+year dates, URLs, truncated snippets (...),
+//   listicles, news headlines, social media titles, staff pages,
+//   classified listings, bare locations, bullet-separated page titles,
+//   search result titles (Who is / What is / How to).
+//   Rejection rate on historical data: ~46% (41/90).
+//
+// Known limitations:
+//   - News headlines without "..." e.g. "History About to Unfold for Levi's Lovers"
+//   - Truncated snippets that drop the trailing "..." e.g. "Should you dry scoop your pre"
+//   - "starts with digits" rejects edge cases like "3M" or "24 Hour Fitness"
+// ─────────────────────────────────────────────────────────────────────
+const JUNK_EXACT = new Set([
+  'sitemap','home','contact','index','about','services','products',
+  'blog','news','faq','login','register','search','menu','careers',
+  'jobs','employment','privacy','terms','404','error','page',
+  'manufacturing','retail','consulting','solutions'
+]);
+
+function validateProspect(name) {
+  if (!name || typeof name !== 'string') return false;
+  const n = name.trim();
+
+  const reject = (reason) => { console.log(`Rejected "${n}": ${reason}`); return false; };
+
+  if (n.length < 4)
+    return reject('too short');
+  if (/^CONTACT:/i.test(n))
+    return reject('starts with CONTACT:');
+  if (/http/i.test(n))
+    return reject('contains URL');
+  if (/^\d/.test(n))
+    return reject('starts with digits (address)');
+  if (/\b\d{5}\b/.test(n))
+    return reject('contains zip code');
+  if (/\b(Rd|St|Ave|Blvd|Dr|Route|Rte|Unit|Suite|Ste|Hwy|Ln|Ct|Way|Pl|Pkwy)\s+\d/i.test(n))
+    return reject('street type followed by number');
+  if (/\b(jobs?|employment|hiring|careers?|openings?|positions?|vacanc(?:y|ies))\b/i.test(n))
+    return reject('job listing keyword');
+  if (JUNK_EXACT.has(n.toLowerCase()))
+    return reject('generic web page word');
+  if (/\b20[2-9]\d\b/.test(n))
+    return reject('contains year');
+  if (/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+20\d\d\b/i.test(n))
+    return reject('month + year (job listing date)');
+  if (n.endsWith('...'))
+    return reject('truncated search snippet');
+  if (n.includes('?'))
+    return reject('contains question mark');
+  if (/^Top\s+\d+/i.test(n))
+    return reject('listicle headline');
+  if (/^(Who|What|How)\s+(is|to|are)\b/i.test(n))
+    return reject('search result title');
+  if (/ to (reopen|open|close)\b/i.test(n))
+    return reject('news headline');
+  if (/,\s*\d/.test(n))
+    return reject('embedded address (comma + digits)');
+  if (/\bPt\.\s*\d+|\bPart\s+\d+/i.test(n))
+    return reject('social media series title');
+  if (/\bCore Pt\b|\bRelatable\b|Funny &/i.test(n))
+    return reject('social media content');
+  if (/\b(Archives|Directory|Lookup)\b/i.test(n))
+    return reject('page section title');
+  if (n.includes(' • '))
+    return reject('bullet separator (web page title)');
+  if (/^Find\s/i.test(n))
+    return reject('generic search prompt');
+  if (/^Top Rated\b/i.test(n))
+    return reject('listicle headline (Top Rated)');
+  if (/\bTeam Member/i.test(n))
+    return reject('staff page');
+  if (/\bFor Sale\b/i.test(n))
+    return reject('classified listing');
+  if (n.length <= 25 && /^[\w\s]+,\s*(NH|MA|CT|VT|ME|RI)\s*$/i.test(n))
+    return reject('bare location');
+  if (/^(Meet The|Reviews of)\b/i.test(n))
+    return reject('web page title pattern');
+  // Likely a snippet: longer than 30 chars with no capital letter after the first word
+  if (n.length > 30 && !/\s[A-Z]/.test(n))
+    return reject('no mid-sentence capitals (likely snippet)');
+
+  return true;
+}
+
 async function saveToDatabase(leads) {
   const pool = require('./db');
-  let saved = 0, skipped = 0;
+  let saved = 0, skipped = 0, rejected = 0;
   for (const lead of leads) {
+    const companyName = lead.company.replace(/^CONTACT:\s*/i, '').trim();
+
+    if (!validateProspect(companyName)) {
+      rejected++;
+      continue;
+    }
+
+    // Dedup: skip if a prospect with this business name already exists
+    const dupCheck = await pool.query(
+      `SELECT id FROM prospects WHERE LOWER(TRIM(SPLIT_PART(notes, ' — ', 1))) = LOWER(TRIM($1))`,
+      [companyName]
+    );
+    if (dupCheck.rows.length > 0) {
+      console.log(`Duplicate skipped: ${companyName}`);
+      skipped++;
+      continue;
+    }
+
     try {
       const email = typeof lead.email === 'string' && lead.email.includes('@') ? lead.email : null;
-      const nameParts = (lead.contact || '').trim().split(' ');
-      const firstName = nameParts[0] || lead.company.split(' ')[0];
-      const lastName = nameParts.slice(1).join(' ') || '';
-      const notes = lead.company + ' — ' + lead.url;
+      const nameParts = (lead.contact && lead.contact !== '—' ? lead.contact : '').trim().split(/\s+/).filter(Boolean);
+      const firstName = nameParts[0] || companyName.split(' ')[0];
+      const lastName  = nameParts.slice(1).join(' ') || '';
+      const notes = companyName + ' — ' + lead.url;
       await pool.query(
         'INSERT INTO prospects (first_name, last_name, email, status, source, icp_score, notes) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (email) DO NOTHING',
         [firstName, lastName, email, 'cold', 'scout', lead.score, notes]
@@ -548,7 +654,7 @@ async function saveToDatabase(leads) {
       skipped++;
     }
   }
-  console.log('[DB] Saved ' + saved + ' prospects, skipped ' + skipped);
+  console.log(`[DB] Saved ${saved} prospects, rejected ${rejected} (junk), skipped ${skipped} (errors/dupes)`);
   pool.end();
 }
 
