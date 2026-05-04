@@ -924,7 +924,7 @@ app.post('/api/run/:agent', requireAuth, async (req, res) => {
     scout: './leadgen', emmett: './emmettAgent',
     max: './maxAgent', rex: './rexAgent', sketch: './sketchAgent',
     paige: './paigeAgent', faye: './facebookAgent', link: './linkedinAgent',
-    sam: './samAgent', vera: './veraAgent'
+    sam: './samAgent', vera: './veraAgent', cal: './calAgent'
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   await pool.query(
@@ -952,6 +952,7 @@ const CRON_MODULES = {
   link:   './linkedinAgent',
   sam:    './samAgent',
   vera:   './veraAgent',
+  cal:    './calAgent',
 };
 
 function runCronAgent(agent, res) {
@@ -1280,6 +1281,121 @@ function extractDomain(url) {
 }
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── BLAND.AI WEBHOOK ──────────────────────────────────────────────────
+// Receives call completion callbacks. Parses transcript for booked time,
+// creates a Google Calendar event if appointment was made, notifies Telegram.
+app.post('/webhooks/bland', async (req, res) => {
+  res.sendStatus(200); // Acknowledge immediately
+
+  const { call_id, status, duration, transcript, summary, metadata } = req.body || {};
+  if (!call_id) return;
+
+  const prospectId  = metadata?.prospect_id;
+  const companyName = metadata?.company_name || 'Unknown';
+
+  console.log(`[bland webhook] call_id=${call_id} status=${status} prospect=${prospectId}`);
+
+  try {
+    // Update touchpoint outcome
+    if (prospectId) {
+      await pool.query(`
+        UPDATE touchpoints
+        SET outcome = $1, payload = payload || $2::jsonb
+        WHERE prospect_id = $3
+          AND channel = 'call'
+          AND external_ref = $4
+      `, [
+        status || 'completed',
+        JSON.stringify({ duration, summary }),
+        prospectId,
+        call_id,
+      ]);
+    }
+
+    // Parse transcript for booked appointment using Claude
+    const fullText = typeof transcript === 'string'
+      ? transcript
+      : Array.isArray(transcript) ? transcript.map(t => `${t.user}: ${t.text}`).join('\n') : '';
+
+    if (!fullText || status !== 'completed') return;
+
+    const Anthropic = require('@anthropic-ai/sdk');
+    const anthropic = new Anthropic();
+
+    const parseRes = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 200,
+      messages: [{
+        role: 'user',
+        content: `Read this phone call transcript and extract booking information if a discovery call was booked.
+
+Transcript:
+${fullText.slice(0, 3000)}
+
+Respond with JSON only — no explanation:
+{
+  "booked": true/false,
+  "agreed_day": "Monday" or null,
+  "agreed_time": "2pm" or null,
+  "agreed_iso": "ISO 8601 datetime in America/New_York if determinable, else null",
+  "confirmed_email": "email if stated, else null",
+  "prospect_name": "name if stated, else null"
+}`
+      }]
+    });
+
+    let parsed;
+    try {
+      const raw = parseRes.content[0].text.trim();
+      parsed = JSON.parse(raw.replace(/^```json\n?/, '').replace(/\n?```$/, ''));
+    } catch {
+      console.log('[bland webhook] Could not parse Claude response');
+      return;
+    }
+
+    const { createCalendarEvent, notify } = require('./calAgent');
+
+    let calendarCreated = false;
+    if (parsed.booked && parsed.agreed_iso) {
+      const event = await createCalendarEvent(
+        parsed.prospect_name || 'Prospect',
+        companyName,
+        parsed.agreed_iso
+      );
+      calendarCreated = !!event;
+    }
+
+    const lines = [
+      parsed.booked ? `✅ Discovery call BOOKED — Cal` : `📞 Call complete — Cal`,
+      ``,
+      `Business: ${companyName}`,
+      `Outcome: ${status || 'completed'}`,
+      duration ? `Duration: ${Math.round(duration / 60)} min` : null,
+    ];
+
+    if (parsed.booked) {
+      if (parsed.agreed_day || parsed.agreed_time) {
+        lines.push(`Agreed time: ${[parsed.agreed_day, parsed.agreed_time].filter(Boolean).join(' ')}`);
+      }
+      if (parsed.confirmed_email) lines.push(`Email confirmed: ${parsed.confirmed_email}`);
+      lines.push(calendarCreated ? `📅 Calendar invite created` : `⚠️ Calendar invite skipped — set GOOGLE_CALENDAR_REFRESH_TOKEN`);
+    }
+
+    await notify(lines.filter(l => l !== null).join('\n'));
+
+    await pool.query(
+      `INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())`,
+      ['cal_agent', 'call_completed', prospectId,
+       JSON.stringify({ call_id, booked: parsed.booked, calendar_created: calendarCreated }),
+       'success']
+    );
+
+  } catch (err) {
+    console.error('[bland webhook] Error processing callback:', err.message);
+  }
+});
 
 // ── START ─────────────────────────────────────────────────────────────
 app.listen(PORT, () => {

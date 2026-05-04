@@ -1319,29 +1319,30 @@ body::before {
       </div>
 
       <!-- Cal -->
-      <div class="agent-card" onclick="openDetail('cal')" data-agent="cal">
+      <div class="agent-card live" onclick="openDetail('cal')" data-agent="cal">
+        <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(245,158,11,0.15) 0%, transparent 70%)"></div>
         <div class="agent-portrait">
-          <div class="orbit-ring orbit-1" style="border-color:rgba(255,100,100,0.1);"></div>
-          <div class="orbit-ring orbit-2"></div>
+          <div class="orbit-ring orbit-1" style="border-color:rgba(245,158,11,0.3);"><div class="orbit-dot" style="background:#f59e0b;box-shadow:0 0 6px #f59e0b;"></div></div>
+          <div class="orbit-ring orbit-2" style="border-color:rgba(245,158,11,0.15);"><div class="orbit-dot orbit-dot-purple"></div></div>
           <div class="status-ring-wrap">
             <svg class="status-ring-svg" viewBox="0 0 92 92">
               <circle class="ring-track" cx="46" cy="46" r="40"/>
-              <circle class="ring-fill planned" cx="46" cy="46" r="40" style="stroke-dashoffset:230;"/>
+              <circle class="ring-fill live" cx="46" cy="46" r="40" style="stroke-dashoffset:230; stroke:#f59e0b;"/>
             </svg>
           </div>
-          <div class="face-orb" style="background: radial-gradient(circle at 40% 35%, rgba(255,80,80,0.15), rgba(0,0,0,0.9)); box-shadow: inset 0 0 20px rgba(0,0,0,0.7);">📞</div>
+          <div class="face-orb" style="background: radial-gradient(circle at 40% 35%, rgba(245,158,11,0.3), rgba(0,0,0,0.8)); box-shadow: 0 0 30px rgba(245,158,11,0.2), inset 0 0 20px rgba(0,0,0,0.5);">📞</div>
         </div>
         <div class="agent-card-footer">
-          <div class="agent-card-name" style="color:rgba(255,255,255,0.6)">CAL</div>
-          <div class="agent-card-role">Voice Agent</div>
+          <div class="agent-card-name">CAL</div>
+          <div class="agent-card-role">Calling Agent</div>
           <div class="agent-card-status">
-            <div class="status-tag st-planned">PLANNED</div>
-            <button class="deploy-btn">SOON</button>
+            <div class="status-tag st-live">LIVE</div>
+            <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
           <div class="agent-mini-stats">
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
           </div>
         </div>
       </div>
@@ -1867,7 +1868,7 @@ const agentData = {
   emmett: { face:'✉️', name:'EMMETT', role:'Email Agent', title:'Emmett — Email Agent', desc:'Emmett runs your cold email sequences through Brevo. He checks the second brain before sending so he never emails someone already active on LinkedIn or Facebook. Day 1, 4, 8, 13 — fully automated.', tasks:['Pulls prospects from the second brain by status','Checks if Link or Faye already touched them first','Sends personalized 4-step sequences via Brevo','Respects sequence timing automatically','Logs every send to the second brain for Max to read'], ringOffset: 188 },
   ivy: { face:'📸', name:'IVY', role:'Instagram Agent', title:'Ivy — Instagram Agent', desc:'Ivy handles Instagram engagement — targeting local hashtags, commenting on before/after posts, and replying to stories. Instagram is the highest-visual channel for local service businesses.', tasks:['Targets local hashtags — #manchesternh #nhsmallbusiness','Engages with before/after and workspace posts naturally','Replies to business owners\' stories for personal outreach','Drafts DMs for warm prospects showing high engagement','Same approval gate as Link and Faye'], ringOffset: 230 },
   sam: { face:'📱', name:'SAM', role:'SMS Agent', title:'Sam — SMS Agent', desc:'Sam handles warm follow-up via text. SMS open rates hit 95%+ and response rates for warm prospects reach 30–45%. Sam only texts people who\'ve already shown interest — never cold outreach.', tasks:['Triggers when a prospect opens emails 3+ times without reply','Follows up on web form submissions within minutes','Sends reactivation texts to cold prospects','Built on Twilio — ~$0.008 per message','Only texts confirmed opt-in contacts'], ringOffset: 230 },
-  cal: { face:'📞', name:'CAL', role:'Voice Agent', title:'Cal — Voice Agent', desc:'Cal is an AI voice agent that handles warm phone follow-up. When a prospect is clearly interested but hasn\'t converted, Cal calls them, has a real conversation, and books a meeting.', tasks:['Activates on warm signals — multiple opens, link clicks','AI voice is now indistinguishable from human in most cases','Handles objections and answers basic questions','Books appointments directly into the calendar','Compliant — only calls prospects with appropriate consent'], ringOffset: 230 },
+  cal: { face:'📞', name:'CAL', role:'Calling Agent', title:'Cal — Calling Agent', metric:'calls made', desc:'Cal makes outbound calls to warm prospects who have received 3+ emails with no reply. He introduces himself as calling on behalf of Jacob at Pulseforge, handles objections naturally, and books discovery calls directly into the calendar.', tasks:['Targets warm prospects with ICP score ≥60 and 3+ unanswered emails','Calls via Bland.ai — real AI voice, not robotic','Script focuses on booking a 20-minute discovery call with Jacob','Handles objections — cost, timing, existing marketing — and redirects','Parses call transcript and creates Google Calendar event automatically'], ringOffset: 230 },
   max: { face:'🧠', name:'MAX', role:'Manager Agent', title:'Max — Manager Agent', metric:'digests sent', desc:'Max is the brain of the operation. He reads everything all other agents have done, scores prospects by engagement, decides who should get touched next and how, and sends a daily briefing to your inbox every morning.', tasks:['Reads the entire second brain every morning','Scores and ranks prospects by engagement signals across all channels','Decides which agent should contact each prospect next','Sends a daily digest with activity summary and recommended actions','Live — Phase 5 complete'], ringOffset: 12 },
   rex: { face:'📊', name:'REX', role:'Reporting Agent', title:'Rex — Reporting Agent', metric:'reports run', desc:'Rex tracks what\'s working. He pulls data from the second brain weekly and turns it into a performance report — cost per lead, channel performance, trends, and strategic recommendations.', tasks:['Pulls weekly activity data from the second brain','Calculates actions by channel and agent','Identifies which channels are producing the most engagement','Generates a clean weekly report and sends to your inbox','Eventually becomes a client-facing deliverable'], ringOffset: 25 },
   riley: { face:'🙋', name:'RILEY', role:'Receptionist Agent', title:'Riley — Receptionist Agent', metric:'emails processed', desc:'Riley handles inbound. When a prospect fills out a contact form or messages through Google Business Profile, Riley responds immediately, qualifies the lead, and books a call without you lifting a finger.', tasks:['Responds to web form submissions within 60 seconds','Handles Google Business Profile message inquiries','Qualifies leads with natural follow-up questions','Books appointments into the owner\'s calendar','Closes the loop — Pulseforge brings leads in and handles them on arrival'], ringOffset: 230 },
@@ -1881,7 +1882,7 @@ const agentNameMap = {
   scout: 'scout_agent', link: 'linkedin_agent', faye: 'facebook_agent',
   emmett: 'emmett_agent', max: 'max_agent', rex: 'rex_agent',
   riley: 'riley_agent', sketch: 'sketch_agent', paige: 'paige_agent',
-  sam: 'sam_agent', vera: 'vera_agent'
+  sam: 'sam_agent', vera: 'vera_agent', cal: 'cal_agent'
 };
 
 const maxRecommendations = {
@@ -1895,7 +1896,8 @@ const maxRecommendations = {
   sketch: 'Sketch is ready but needs prospects with no website. Add a no-website flag to Scout to trigger Sketch automatically.',
   paige: 'Paige is live. Add client companies to the companies table to start generating content. Run weekly — she produces 2 posts per client per run (Facebook + Google Business).',
   sam: 'Sam fires on behavioral signals. Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER to Railway env vars to activate SMS sending. Prospects need a phone number in the database.',
-  vera: 'Vera is live. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN to Railway env vars to activate review monitoring. Run weekly — she checks all GBP locations and drafts responses for any new reviews.'
+  vera: 'Vera is live. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN to Railway env vars to activate review monitoring. Run weekly — she checks all GBP locations and drafts responses for any new reviews.',
+  cal: 'Cal is live. Add BLAND_API_KEY to Railway to activate calling. For calendar booking, add GOOGLE_CALENDAR_REFRESH_TOKEN (needs calendar scope — separate from the GBP token). Cal only calls warm prospects with ICP ≥60 and 3+ unanswered emails — safe to run daily.'
 };
 
 async function fetchDetailStats() {
@@ -2305,7 +2307,7 @@ const agentColors = {
   scout: '#00d4b4', link: '#5b9fd4', faye: '#5ba3f5', emmett: '#ff6b35',
   max: '#8b5cf6', rex: '#00e676', riley: '#64c864', sketch: '#b450ff',
   paige: '#00c896',
-  ivy: '#2a3a5a', sam: '#22d3ee', cal: '#2a3a5a',
+  ivy: '#2a3a5a', sam: '#22d3ee', cal: '#f59e0b',
   penny: '#2a3a5a', vera: '#f4b942'
 };
 
@@ -2405,7 +2407,7 @@ async function loadAgentSparklines() {
       'scout_agent': 'scout', 'linkedin_agent': 'link', 'facebook_agent': 'faye',
       'emmett_agent': 'emmett', 'max_agent': 'max',
       'rex_agent': 'rex', 'riley_agent': 'riley', 'sketch_agent': 'sketch',
-      'paige_agent': 'paige', 'sam_agent': 'sam', 'vera_agent': 'vera'
+      'paige_agent': 'paige', 'sam_agent': 'sam', 'vera_agent': 'vera', 'cal_agent': 'cal'
     };
 
     Object.entries(stats).forEach(([agentName, data]) => {

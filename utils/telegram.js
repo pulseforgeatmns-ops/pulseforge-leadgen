@@ -11,6 +11,7 @@ const AGENT_NAMES = {
   google_business: 'Paige',
   google_review:   'Vera',
   blog:            'Paige',
+  call:            'Cal',
 };
 
 const CHANNEL_LABELS = {
@@ -20,6 +21,7 @@ const CHANNEL_LABELS = {
   google_business: 'Google Business',
   google_review:   'Google Review',
   blog:            'Blog',
+  call:            'Call',
 };
 
 function truncate(str, max) {
