@@ -1133,7 +1133,7 @@ body::before {
       </div>
       <div class="area-actions">
         <button class="btn-outline">Filter</button>
-        <button class="btn-run-all">▶ Deploy All Live</button>
+        <button class="btn-run-all" onclick="runAllLive(this)">▶ Deploy All Live</button>
       </div>
     </div>
 
@@ -2213,6 +2213,31 @@ async function runAgent(btn) {
     btn.textContent = 'ERR';
     setTimeout(() => { btn.textContent = 'RUN'; btn.disabled = false; }, 3000);
   }
+}
+
+async function runAllLive(btn) {
+  const liveCards = [...document.querySelectorAll('.agent-card.live')];
+  const agents = liveCards
+    .map(card => card.querySelector('.agent-card-name')?.textContent?.trim().toLowerCase())
+    .filter(Boolean);
+
+  btn.textContent = '⏳ Running...';
+  btn.disabled = true;
+
+  let ok = 0, fail = 0;
+  for (const name of agents) {
+    try {
+      const res = await fetch('/api/run/' + name, { method: 'POST', credentials: 'include' });
+      const data = await res.json();
+      data.success ? ok++ : fail++;
+    } catch {
+      fail++;
+    }
+  }
+
+  btn.textContent = `✓ ${ok} sent${fail ? ` · ${fail} failed` : ''}`;
+  setTimeout(() => { btn.textContent = '▶ Deploy All Live'; btn.disabled = false; }, 4000);
+  loadActivityFeed();
 }
 
 async function loadActivityFeed() {
