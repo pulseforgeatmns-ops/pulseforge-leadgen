@@ -924,7 +924,7 @@ app.post('/api/run/:agent', requireAuth, async (req, res) => {
     scout: './leadgen', emmett: './emmettAgent',
     max: './maxAgent', rex: './rexAgent', sketch: './sketchAgent',
     paige: './paigeAgent', faye: './facebookAgent', link: './linkedinAgent',
-    sam: './samAgent', vera: './veraAgent', cal: './calAgent'
+    sam: './samAgent', vera: './veraAgent', cal: './calAgent', ivy: './ivyAgent'
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   await pool.query(

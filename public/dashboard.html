@@ -776,7 +776,8 @@ body::before {
 .badge-fbpage   { background: rgba(24,119,242,0.12); color: #5ba3f5; border: 1px solid rgba(24,119,242,0.25); }
 .badge-google   { background: rgba(234,67,53,0.12);  color: #f28b82; border: 1px solid rgba(234,67,53,0.25); }
 .badge-greview  { background: rgba(244,185,66,0.12); color: #f4b942; border: 1px solid rgba(244,185,66,0.3); }
-.badge-blog     { background: rgba(16,185,129,0.12); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
+.badge-blog      { background: rgba(16,185,129,0.12);  color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
+.badge-instagram { background: rgba(225,48,108,0.12);  color: #e1306c; border: 1px solid rgba(225,48,108,0.3); }
 
 .ac-agent { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; color: var(--white); letter-spacing: 1px; }
 .ac-time  { font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; color: var(--gray); margin-left: auto; }
@@ -1266,29 +1267,30 @@ body::before {
     <!-- Planned outreach row -->
     <div class="agents-grid" style="grid-template-columns: repeat(3,1fr); max-width: 75%;">
       <!-- Ivy -->
-      <div class="agent-card" onclick="openDetail('ivy')" data-agent="ivy">
+      <div class="agent-card live" onclick="openDetail('ivy')" data-agent="ivy">
+        <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(225,48,108,0.18) 0%, transparent 70%)"></div>
         <div class="agent-portrait">
-          <div class="orbit-ring orbit-1" style="border-color:rgba(225,48,108,0.15);"></div>
-          <div class="orbit-ring orbit-2" style="border-color:rgba(225,48,108,0.08);"></div>
+          <div class="orbit-ring orbit-1" style="border-color:rgba(225,48,108,0.35);"><div class="orbit-dot" style="background:#e1306c;box-shadow:0 0 6px #e1306c;"></div></div>
+          <div class="orbit-ring orbit-2" style="border-color:rgba(225,48,108,0.15);"><div class="orbit-dot orbit-dot-purple"></div></div>
           <div class="status-ring-wrap">
             <svg class="status-ring-svg" viewBox="0 0 92 92">
               <circle class="ring-track" cx="46" cy="46" r="40"/>
-              <circle class="ring-fill planned" cx="46" cy="46" r="40" style="stroke-dashoffset:230;"/>
+              <circle class="ring-fill live" cx="46" cy="46" r="40" style="stroke-dashoffset:230; stroke:#e1306c;"/>
             </svg>
           </div>
-          <div class="face-orb" style="background: radial-gradient(circle at 40% 35%, rgba(225,48,108,0.2), rgba(0,0,0,0.9)); box-shadow: inset 0 0 20px rgba(0,0,0,0.7);">📸</div>
+          <div class="face-orb" style="background: radial-gradient(circle at 40% 35%, rgba(225,48,108,0.3), rgba(0,0,0,0.8)); box-shadow: 0 0 30px rgba(225,48,108,0.2), inset 0 0 20px rgba(0,0,0,0.5);">📸</div>
         </div>
         <div class="agent-card-footer">
-          <div class="agent-card-name" style="color:rgba(255,255,255,0.6)">IVY</div>
+          <div class="agent-card-name">IVY</div>
           <div class="agent-card-role">Instagram Agent</div>
           <div class="agent-card-status">
-            <div class="status-tag st-planned">PLANNED</div>
-            <button class="deploy-btn">SOON</button>
+            <div class="status-tag st-live">LIVE</div>
+            <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
           <div class="agent-mini-stats">
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
-            <div class="mini-stat-bar"><div class="mini-stat-fill planned-fill" style="width:0%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
           </div>
         </div>
       </div>
@@ -1584,6 +1586,7 @@ body::before {
       <button class="filter-btn" data-filter="google_business">Google Business</button>
       <button class="filter-btn" data-filter="google_review">Google Review</button>
       <button class="filter-btn" data-filter="blog">Blog</button>
+      <button class="filter-btn" data-filter="instagram">Instagram</button>
     </div>
     <div class="approvals-empty" id="approvalsEmpty">
       <div class="approvals-empty-icon">✓</div>
@@ -1882,7 +1885,7 @@ const agentNameMap = {
   scout: 'scout_agent', link: 'linkedin_agent', faye: 'facebook_agent',
   emmett: 'emmett_agent', max: 'max_agent', rex: 'rex_agent',
   riley: 'riley_agent', sketch: 'sketch_agent', paige: 'paige_agent',
-  sam: 'sam_agent', vera: 'vera_agent', cal: 'cal_agent'
+  sam: 'sam_agent', vera: 'vera_agent', cal: 'cal_agent', ivy: 'ivy_agent'
 };
 
 const maxRecommendations = {
@@ -1897,7 +1900,8 @@ const maxRecommendations = {
   paige: 'Paige is live. Add client companies to the companies table to start generating content. Run weekly — she produces 2 posts per client per run (Facebook + Google Business).',
   sam: 'Sam fires on behavioral signals. Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER to Railway env vars to activate SMS sending. Prospects need a phone number in the database.',
   vera: 'Vera is live. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN to Railway env vars to activate review monitoring. Run weekly — she checks all GBP locations and drafts responses for any new reviews.',
-  cal: 'Cal is live. Add BLAND_API_KEY to Railway to activate calling. For calendar booking, add GOOGLE_CALENDAR_REFRESH_TOKEN (needs calendar scope — separate from the GBP token). Cal only calls warm prospects with ICP ≥60 and 3+ unanswered emails — safe to run daily.'
+  cal: 'Cal is live. Add BLAND_API_KEY to Railway to activate calling. For calendar booking, add GOOGLE_CALENDAR_REFRESH_TOKEN (needs calendar scope — separate from the GBP token). Cal only calls warm prospects with ICP ≥60 and 3+ unanswered emails — safe to run daily.',
+  ivy: 'Ivy requires a local session — run from your terminal, not Railway. Log in to Instagram in a real browser, export cookies to instagram_session.json, then run node ivyAgent.js. Max 8 drafts per run to stay under Instagram detection thresholds.'
 };
 
 async function fetchDetailStats() {
@@ -2107,7 +2111,8 @@ const _CHANNEL = {
   facebook_page:   { label: 'Facebook Page',   badge: 'badge-fbpage',   agent: 'Paige' },
   google_business: { label: 'Google Business', badge: 'badge-google',   agent: 'Paige' },
   google_review:   { label: 'Google Review',   badge: 'badge-greview', agent: 'Vera'  },
-  blog:            { label: 'Blog',            badge: 'badge-blog',    agent: 'Paige' },
+  blog:            { label: 'Blog',            badge: 'badge-blog',      agent: 'Paige' },
+  instagram:       { label: 'Instagram',       badge: 'badge-instagram', agent: 'Ivy'   },
 };
 let _approvals = [], _approvalFilter = 'all';
 
@@ -2307,7 +2312,7 @@ const agentColors = {
   scout: '#00d4b4', link: '#5b9fd4', faye: '#5ba3f5', emmett: '#ff6b35',
   max: '#8b5cf6', rex: '#00e676', riley: '#64c864', sketch: '#b450ff',
   paige: '#00c896',
-  ivy: '#2a3a5a', sam: '#22d3ee', cal: '#f59e0b',
+  ivy: '#e1306c', sam: '#22d3ee', cal: '#f59e0b',
   penny: '#2a3a5a', vera: '#f4b942'
 };
 
@@ -2407,7 +2412,7 @@ async function loadAgentSparklines() {
       'scout_agent': 'scout', 'linkedin_agent': 'link', 'facebook_agent': 'faye',
       'emmett_agent': 'emmett', 'max_agent': 'max',
       'rex_agent': 'rex', 'riley_agent': 'riley', 'sketch_agent': 'sketch',
-      'paige_agent': 'paige', 'sam_agent': 'sam', 'vera_agent': 'vera', 'cal_agent': 'cal'
+      'paige_agent': 'paige', 'sam_agent': 'sam', 'vera_agent': 'vera', 'cal_agent': 'cal', 'ivy_agent': 'ivy'
     };
 
     Object.entries(stats).forEach(([agentName, data]) => {
