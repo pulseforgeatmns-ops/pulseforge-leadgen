@@ -663,15 +663,15 @@ body::before {
 }
 .agent-detail.open { display: flex; gap: 3rem; align-items: flex-start; }
 .detail-close {
-  position: fixed; top: 68px; right: 2rem; z-index: 55;
+  position: fixed; top: 68px; right: 2rem; z-index: 200;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 0.7rem; letter-spacing: 2px;
-  text-transform: uppercase; color: var(--gray-light);
-  cursor: pointer; background: rgba(7,13,26,0.9); border: 1px solid var(--border);
-  border-radius: 4px; padding: 0.35rem 0.75rem;
-  transition: color 0.2s, border-color 0.2s;
+  font-size: 0.7rem; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--teal); cursor: pointer;
+  background: rgba(4,8,16,0.92); border: 1px solid rgba(0,212,180,0.35);
+  border-radius: 5px; padding: 0.4rem 0.9rem;
+  transition: background 0.2s, border-color 0.2s;
 }
-.detail-close:hover { color: var(--teal); border-color: var(--teal); }
+.detail-close:hover { background: rgba(0,212,180,0.1); border-color: var(--teal); }
 
 .detail-portrait {
   width: 200px; flex-shrink: 0;
@@ -1856,9 +1856,11 @@ body::before {
   <div class="sb-item right">Pulseforge v0.6.0 · Phase 6 Complete</div>
 </div>
 
+<!-- AGENT DETAIL CLOSE — outside the panel so display:none on parent never hides it -->
+<button class="detail-close" id="detailCloseBtn" onclick="closeDetail()" style="display:none">← BACK</button>
+
 <!-- AGENT DETAIL OVERLAY -->
 <div class="agent-detail" id="agentDetail">
-  <button class="detail-close" onclick="closeDetail()">✕ CLOSE</button>
   <div class="detail-portrait">
     <div class="detail-orb-wrap">
       <svg class="detail-ring-svg" viewBox="0 0 160 160">
@@ -2020,6 +2022,7 @@ async function openDetail(key) {
   runBtn.disabled = false;
 
   document.getElementById('agentDetail').classList.add('open');
+  document.getElementById('detailCloseBtn').style.display = 'block';
 
   if (!agentKey) {
     document.getElementById('detailLiveStats').style.display = 'none';
@@ -2127,6 +2130,7 @@ async function runDetailAgent() {
 
 function closeDetail() {
   document.getElementById('agentDetail').classList.remove('open');
+  document.getElementById('detailCloseBtn').style.display = 'none';
 }
 
 // Clock
