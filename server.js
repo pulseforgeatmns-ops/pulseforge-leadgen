@@ -17,6 +17,7 @@ const pgSession = require('connect-pg-simple')(session);
 const bcrypt = require('bcryptjs');
 const pool = require('./db');
 const { createObjectCsvWriter } = require('csv-writer');
+const { publishBlogPost } = require('./utils/blogPublisher');
 
 const app  = express();
 app.use(session({
@@ -468,8 +469,19 @@ app.post('/api/approvals/:id', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Invalid action' });
   }
   try {
-    await pool.query('UPDATE pending_comments SET status = $1 WHERE id = $2', [action, id]);
+    const result = await pool.query(
+      'UPDATE pending_comments SET status = $1 WHERE id = $2 RETURNING *',
+      [action, id]
+    );
     res.json({ success: true, id, action });
+
+    // Fire-and-forget blog publish — don't block the API response
+    const item = result.rows[0];
+    if (item && action === 'approved' && item.channel === 'blog') {
+      publishBlogPost(item).catch(err =>
+        console.error('[BlogPublisher] Failed to publish:', err.response?.data || err.message)
+      );
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
