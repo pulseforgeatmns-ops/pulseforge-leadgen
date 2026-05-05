@@ -309,15 +309,16 @@ function scoreLead(lead) {
   if (TARGET_VERTICAL.some(k => hay.includes(k)))    vertical = 25;
   else if (ADJACENT_VERTICAL.some(k => hay.includes(k))) vertical = 15;
 
-  // 2. Location (0–20)
+  // 2. Location (0–20) — addr preferred, falls back to hay for SerpAPI leads
   const NH_SUBURBS = [
     'bedford','goffstown','hooksett','londonderry','auburn','candia',
     'derry','merrimack','nashua','concord'
   ];
+  const locHay = addr || hay;
   let location = 0;
-  if (addr.includes('manchester'))                    location = 20;
-  else if (NH_SUBURBS.some(c => addr.includes(c)))   location = 15;
-  else if (addr.includes(' nh') || addr.includes('new hampshire')) location = 8;
+  if (locHay.includes('manchester'))                      location = 20;
+  else if (NH_SUBURBS.some(c => locHay.includes(c)))     location = 15;
+  else if (locHay.includes(' nh') || locHay.includes('new hampshire')) location = 8;
 
   // 3. Contact quality (0–20)
   const hasEmail = lead.email && lead.email !== '—' && lead.email.includes('@');
