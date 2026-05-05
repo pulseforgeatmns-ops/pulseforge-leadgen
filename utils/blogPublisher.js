@@ -265,6 +265,7 @@ async function publishBlogPost(item) {
     ORDER BY created_at DESC
   `);
 
+  const seen  = new Set();
   const posts = rows.map(r => {
     const t   = extractTitle(r.comment || '');
     const ds  = new Date(r.created_at).toISOString().split('T')[0];
@@ -276,6 +277,10 @@ async function publishBlogPost(item) {
       category: cat ? cat.charAt(0).toUpperCase() + cat.slice(1) : 'Blog',
       path:     `blog/${ds}-${slugify(t)}.html`,
     };
+  }).filter(p => {
+    if (seen.has(p.path)) return false;
+    seen.add(p.path);
+    return true;
   });
 
   const indexHtml  = buildIndexHtml(posts);
