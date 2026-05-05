@@ -115,7 +115,6 @@ async function sendEmail(toEmail, toName, subject, body) {
 async function getProspectsForEmail() {
   const pool = require('./db');
 
-  // Get prospects that are cold and have an email
   const res = await pool.query(`
     SELECT p.*, c.name as company
     FROM prospects p
@@ -123,12 +122,11 @@ async function getProspectsForEmail() {
     WHERE p.status = 'cold'
     AND p.email IS NOT NULL
     AND p.email != ''
-    AND NOT EXISTS (
-      SELECT 1 FROM touchpoints t
-      WHERE t.prospect_id = p.id
-      AND t.channel = 'email'
-      AND t.created_at > NOW() - INTERVAL '14 days'
-    )
+    AND p.do_not_contact IS NOT TRUE
+    AND (
+      SELECT COUNT(*) FROM touchpoints t
+      WHERE t.prospect_id = p.id AND t.channel = 'email'
+    ) < 4
     LIMIT 20
   `);
 

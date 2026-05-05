@@ -2662,7 +2662,8 @@ function _agentColorByLabel(label) {
   const map = {
     Scout: '#00d4b4', Link: '#5b9fd4', Faye: '#5ba3f5', Emmett: '#ff6b35',
     Max: '#8b5cf6', Rex: '#00e676', Riley: '#64c864', Sketch: '#b450ff',
-    Paige: '#00c896', Sam: '#22d3ee'
+    Paige: '#00c896', Sam: '#22d3ee', Vera: '#f4b942', Cal: '#f59e0b',
+    Ivy: '#e1306c', Penny: '#f59e0b'
   };
   return map[label] || '#6b7fa0';
 }
@@ -2758,6 +2759,7 @@ async function loadActivity() {
   const sub = document.getElementById('activitySub');
   try {
     const res = await fetch('/api/activity-panel', { credentials: 'include' });
+    if (!res.ok) throw new Error(`activity-panel returned ${res.status}`);
     const data = await res.json();
 
     const seqs = data.sequences || [];

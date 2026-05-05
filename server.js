@@ -20,13 +20,6 @@ const { createObjectCsvWriter } = require('csv-writer');
 
 const app  = express();
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'pulseforge-secret-key',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { maxAge: 24 * 60 * 60 * 1000 } // 24 hours
-}));
-
-app.use(session({
   store: new pgSession({
     pool: pool,
     tableName: 'session'
@@ -675,14 +668,18 @@ app.get('/api/activity-panel', requireAuth, async (req, res) => {
       email: { name: 'Emmett', icon: '✉️' }, max: { name: 'Max', icon: '🧠' },
       rex: { name: 'Rex', icon: '📊' }, riley: { name: 'Riley', icon: '🙋' },
       sketch: { name: 'Sketch', icon: '🎨' }, paige: { name: 'Paige', icon: '✍️' },
-      sam: { name: 'Sam', icon: '📱' }
+      sam: { name: 'Sam', icon: '📱' }, vera: { name: 'Vera', icon: '⭐' },
+      cal: { name: 'Cal', icon: '📞' }, ivy: { name: 'Ivy', icon: '📸' },
+      penny: { name: 'Penny', icon: '💰' }
     };
     const ACTION_LABELS = {
       generate_comment: 'drafted comment', daily_digest: 'sent daily digest',
       weekly_report: 'sent weekly report', generate_mockup: 'generated mockup',
       outbound: 'sent email', dashboard_trigger: 'triggered from dashboard',
       send_sms: 'sent SMS', generate_content: 'generated content',
-      triage: 'triaged inbox', batch_sms: 'ran SMS batch'
+      triage: 'triaged inbox', batch_sms: 'ran SMS batch',
+      analyze_account: 'analyzed ad account', initiate_call: 'initiated call',
+      analyze_reviews: 'analyzed reviews'
     };
     const timeline = timelineResult.rows.map(r => {
       const rawAgent = (r.agent_name || '').replace('_agent', '');
@@ -725,14 +722,18 @@ app.get('/api/activity-timeline', requireAuth, async (req, res) => {
       email: { name: 'Emmett', icon: '✉️' }, max: { name: 'Max', icon: '🧠' },
       rex: { name: 'Rex', icon: '📊' }, riley: { name: 'Riley', icon: '🙋' },
       sketch: { name: 'Sketch', icon: '🎨' }, paige: { name: 'Paige', icon: '✍️' },
-      sam: { name: 'Sam', icon: '📱' }
+      sam: { name: 'Sam', icon: '📱' }, vera: { name: 'Vera', icon: '⭐' },
+      cal: { name: 'Cal', icon: '📞' }, ivy: { name: 'Ivy', icon: '📸' },
+      penny: { name: 'Penny', icon: '💰' }
     };
     const ACTION_LABELS = {
       generate_comment: 'drafted comment', daily_digest: 'sent daily digest',
       weekly_report: 'sent weekly report', generate_mockup: 'generated mockup',
       outbound: 'sent email', dashboard_trigger: 'triggered from dashboard',
       send_sms: 'sent SMS', generate_content: 'generated content',
-      triage: 'triaged inbox', batch_sms: 'ran SMS batch'
+      triage: 'triaged inbox', batch_sms: 'ran SMS batch',
+      analyze_account: 'analyzed ad account', initiate_call: 'initiated call',
+      analyze_reviews: 'analyzed reviews'
     };
     const rows = result.rows.map(r => {
       const rawAgent = (r.agent_name || '').replace('_agent', '');

@@ -284,21 +284,68 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
 
 // ─────────────────────────────────────────────────────────────────────
 // STEP 3: Score each lead (0–100)
-// Weights:
-//   email verified   +35
-//   contact name     +20
-//   job title match  +15
-//   domain quality   +15
-//   both sources     +15
+// Factors: vertical (25) + location (20) + contact (20) + web (20) + size (15)
 // ─────────────────────────────────────────────────────────────────────
 function scoreLead(lead) {
-  let score = 0;
-  if (lead.email && lead.email !== '—')      score += 35;
-  if (lead.contact && lead.contact !== '—')  score += 20;
-  if (lead.title && lead.title !== '—')      score += 15;
-  if (lead.url && !lead.url.includes('yelp') && !lead.url.includes('facebook')) score += 15;
-  if (lead.source?.includes('google') && lead.source?.includes('prospeo'))      score += 15;
-  return Math.min(score, 100);
+  const hay = (
+    (lead.company || '') + ' ' +
+    (lead.url     || '') + ' ' +
+    (lead.snippet || '')
+  ).toLowerCase();
+  const addr = (lead.address || '').toLowerCase();
+
+  // 1. Vertical (0–25)
+  const TARGET_VERTICAL = [
+    'clean','cleaning','cleaner','restaurant','cafe','diner','eatery',
+    'hvac','heating','cooling','air conditioning','salon','hair','spa',
+    'beauty','retail','shop','store','boutique','auto','automotive',
+    'mechanic','repair'
+  ];
+  const ADJACENT_VERTICAL = [
+    'landscap','lawn','property management','hotel','hospitality',
+    'motel','gym','fitness'
+  ];
+  let vertical = 5;
+  if (TARGET_VERTICAL.some(k => hay.includes(k)))    vertical = 25;
+  else if (ADJACENT_VERTICAL.some(k => hay.includes(k))) vertical = 15;
+
+  // 2. Location (0–20)
+  const NH_SUBURBS = [
+    'bedford','goffstown','hooksett','londonderry','auburn','candia',
+    'derry','merrimack','nashua','concord'
+  ];
+  let location = 0;
+  if (addr.includes('manchester'))                    location = 20;
+  else if (NH_SUBURBS.some(c => addr.includes(c)))   location = 15;
+  else if (addr.includes(' nh') || addr.includes('new hampshire')) location = 8;
+
+  // 3. Contact quality (0–20)
+  const hasEmail = lead.email && lead.email !== '—' && lead.email.includes('@');
+  const hasPhone = !!(lead.phone && lead.phone !== '');
+  let contact = 0;
+  if (hasEmail && hasPhone) contact = 20;
+  else if (hasEmail)        contact = 12;
+  else if (hasPhone)        contact = 8;
+
+  // 4. Web presence (0–20)
+  const JUNK_DOMAINS = ['yelp','facebook','google','yellowpages','bbb.org','tripadvisor'];
+  const hasRealUrl = lead.url && !JUNK_DOMAINS.some(d => lead.url.includes(d));
+  const hasSocial  = /instagram|facebook|social|twitter|tiktok|linkedin/.test(hay);
+  let web = 0;
+  if (hasRealUrl && hasSocial) web = 20;
+  else if (hasRealUrl)         web = 12;
+
+  // 5. Business size signals (0–15)
+  const SIZE_STRONG = ['llc','inc','corp','commercial','team','staff',' locations'];
+  const hasStrong  = SIZE_STRONG.some(k => hay.includes(k));
+  const hasBasic   = hasPhone || !!(lead.address);
+  let size = 0;
+  if (hasStrong)    size = 15;
+  else if (hasBasic) size = 8;
+
+  const total = vertical + location + contact + web + size;
+  console.log(`  ICP Score: ${total} (vertical:${vertical} location:${location} contact:${contact} web:${web} size:${size}) — ${lead.company}`);
+  return Math.min(total, 100);
 }
 
 // ─────────────────────────────────────────────────────────────────────
