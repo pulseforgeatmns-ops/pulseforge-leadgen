@@ -1150,7 +1150,7 @@ body::before {
   <div class="topbar-right">
     <div class="sys-status">
       <div class="sys-dot"></div>
-      6 LIVE · 7 PLANNED
+      <span id="agentLivePlannedCount">14 LIVE · 0 PLANNED</span>
     </div>
     <div class="clock" id="clock">--:--:--</div>
     <div class="user-avatar">JM</div>
@@ -1166,7 +1166,7 @@ body::before {
     <div class="area-header">
       <div>
         <div class="area-title">AGENT ROSTER</div>
-        <div class="area-sub">13 agents · 6 live · 7 planned · Click any agent to view details</div>
+        <div class="area-sub" id="agentRosterSub">14 agents · 14 live · 0 planned · Click any agent to view details</div>
       </div>
       <div class="area-actions">
         <button class="btn-outline">Filter</button>
@@ -3193,6 +3193,17 @@ async function loadWeeklyStats() {
 })();
 
 loadWeeklyStats();
+
+// ── AGENT ROSTER COUNTS ───────────────────────────────────────────
+(function updateAgentCounts() {
+  const live    = document.querySelectorAll('.agent-card.live').length;
+  const planned = document.querySelectorAll('.agent-card.planned').length;
+  const total   = live + planned;
+  const hdr = document.getElementById('agentLivePlannedCount');
+  const sub = document.getElementById('agentRosterSub');
+  if (hdr) hdr.textContent = planned > 0 ? `${live} LIVE · ${planned} PLANNED` : `${live} LIVE`;
+  if (sub) sub.textContent = `${total} agent${total !== 1 ? 's' : ''} · ${live} live${planned > 0 ? ` · ${planned} planned` : ''} · Click any agent to view details`;
+})();
 
 </script>
 </body>
