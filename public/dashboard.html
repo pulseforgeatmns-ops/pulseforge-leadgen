@@ -420,6 +420,32 @@ body::before {
   letter-spacing: 2px;
   line-height: 1;
   margin-bottom: 2px;
+  cursor: default;
+}
+#agentTooltip {
+  position: fixed;
+  background: #1a1a2e;
+  border: 1px solid #00c896;
+  border-radius: 8px;
+  padding: 8px 14px;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+  z-index: 9999;
+  white-space: nowrap;
+}
+#agentTooltip .tt-num {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #00c896;
+  line-height: 1;
+}
+#agentTooltip .tt-label {
+  font-size: 0.65rem;
+  color: #a0a0c0;
+  margin-top: 3px;
+  letter-spacing: 0.04em;
 }
 .agent-card-role {
   font-family: 'JetBrains Mono', monospace;
@@ -3109,6 +3135,48 @@ loadAgentSparklines();
 setInterval(loadLiveData, 60000);
 setInterval(loadActivityFeed, 30000);
 setInterval(loadAgentSparklines, 300000);
+
+// ── AGENT WEEKLY STATS TOOLTIP ────────────────────────────────────
+let _weeklyStats = {};
+
+async function loadWeeklyStats() {
+  try {
+    const res = await fetch('/api/agent-weekly-stats', { credentials: 'include' });
+    if (res.ok) _weeklyStats = await res.json();
+  } catch (_) {}
+}
+
+(function initAgentTooltips() {
+  const tt = document.createElement('div');
+  tt.id = 'agentTooltip';
+  tt.innerHTML = '<div class="tt-num">—</div><div class="tt-label"></div>';
+  document.body.appendChild(tt);
+
+  document.querySelectorAll('.agent-card.live .agent-card-name').forEach(nameEl => {
+    const card = nameEl.closest('[data-agent]');
+    if (!card) return;
+    const key = card.dataset.agent;
+
+    nameEl.addEventListener('mouseenter', () => {
+      const stat = _weeklyStats[key];
+      if (!stat) return;
+      tt.querySelector('.tt-num').textContent = stat.count;
+      tt.querySelector('.tt-label').textContent = stat.label;
+
+      const rect = nameEl.getBoundingClientRect();
+      tt.style.left = (rect.left + rect.width / 2) + 'px';
+      tt.style.top  = (rect.top - 8) + 'px';
+      tt.style.transform = 'translateX(-50%) translateY(-100%)';
+      tt.style.opacity = '1';
+    });
+
+    nameEl.addEventListener('mouseleave', () => {
+      tt.style.opacity = '0';
+    });
+  });
+})();
+
+loadWeeklyStats();
 
 </script>
 </body>

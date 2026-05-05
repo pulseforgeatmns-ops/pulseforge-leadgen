@@ -572,6 +572,51 @@ app.get('/api/agent-stats', requireAuth, async (req, res) => {
   }
 });
 
+// API - Agent weekly stats for hover tooltips
+app.get('/api/agent-weekly-stats', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        LOWER(REPLACE(REPLACE(agent_name, '_agent', ''), 'email', 'emmett')) AS agent,
+        action,
+        COUNT(*) AS count
+      FROM agent_log
+      WHERE ran_at > NOW() - INTERVAL '7 days'
+        AND status = 'success'
+      GROUP BY agent, action
+    `);
+
+    const raw = {};
+    for (const r of rows) {
+      if (!raw[r.agent]) raw[r.agent] = {};
+      raw[r.agent][r.action] = parseInt(r.count);
+    }
+
+    const pick = (r, ...actions) => actions.reduce((s, a) => s + (r[a] || 0), 0);
+
+    const stats = {
+      scout:    { count: pick(raw.scout    || {}, 'run'),                                    label: 'prospects found'    },
+      emmett:   { count: pick(raw.emmett   || {}, 'outbound'),                               label: 'emails sent'        },
+      link:     { count: pick(raw.linkedin || {}, 'generate_comment'),                       label: 'drafts generated'   },
+      faye:     { count: pick(raw.facebook || {}, 'generate_comment'),                       label: 'drafts generated'   },
+      paige:    { count: pick(raw.paige    || {}, 'generate_content'),                       label: 'posts generated'    },
+      max:      { count: pick(raw.max      || {}, 'daily_digest', 'weekly_report'),          label: 'digests sent'       },
+      sam:      { count: pick(raw.sam      || {}, 'send_sms', 'batch_sms'),                  label: 'SMS sent'           },
+      rex:      { count: pick(raw.rex      || {}, 'weekly_report', 'run'),                   label: 'reports generated'  },
+      riley:    { count: pick(raw.riley    || {}, 'triage'),                                 label: 'emails triaged'     },
+      vera:     { count: pick(raw.vera     || {}, 'analyze_reviews', 'run'),                 label: 'reviews monitored'  },
+      cal:      { count: pick(raw.cal      || {}, 'initiate_call', 'run'),                   label: 'calls initiated'    },
+      ivy:      { count: pick(raw.ivy      || {}, 'generate_comment'),                       label: 'drafts generated'   },
+      penny:    { count: pick(raw.penny    || {}, 'analyze_account', 'run'),                 label: 'accounts analyzed'  },
+      sketch:   { count: pick(raw.sketch   || {}, 'generate_mockup', 'run'),                 label: 'mockups generated'  },
+    };
+
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // API - Live activity feed
 app.get('/api/activity', requireAuth, async (req, res) => {
   try {
