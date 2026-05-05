@@ -39,25 +39,38 @@ async function getActiveClients() {
   return res.rows;
 }
 
-// Pick a content type we haven't used recently for this company so posts stay varied
+// Pick a content type not used recently for this company+channel so posts rotate
 async function pickContentType(companyName, channel = null) {
+  const types = channel === 'blog' ? BLOG_CONTENT_TYPES : CONTENT_TYPES;
+
+  // Scope to the same channel so facebook/google posts don't crowd out blog history
+  const channelClause = channel ? `AND channel = $2` : `AND channel IN ('facebook_page', 'google_business', 'blog')`;
+  const params = channel ? [companyName, channel] : [companyName];
+
   const res = await pool.query(`
     SELECT post_content
     FROM pending_comments
     WHERE author_name = $1
-      AND channel IN ('facebook_page', 'google_business', 'blog')
-      AND created_at > NOW() - INTERVAL '30 days'
+      ${channelClause}
+      AND created_at > NOW() - INTERVAL '60 days'
     ORDER BY created_at DESC
-    LIMIT 10
-  `, [companyName]);
+    LIMIT 20
+  `, params);
 
+  // Extract the type segment: "Blog · Educational" → "educational"
   const recentTypes = res.rows
-    .map(r => r.post_content?.split('·')[1]?.trim().toLowerCase())
+    .map(r => r.post_content?.split('·').pop()?.trim().toLowerCase())
     .filter(Boolean);
 
-  const types = channel === 'blog' ? BLOG_CONTENT_TYPES : CONTENT_TYPES;
-  const unused = types.filter(t => !recentTypes.some(r => r.includes(t)));
-  return unused.length > 0 ? unused[0] : types[0];
+  // Return the first type that hasn't been used recently
+  const unused = types.filter(t => !recentTypes.includes(t));
+  if (unused.length > 0) return unused[0];
+
+  // All types used — pick the least recently used (furthest back in DESC list)
+  for (let i = recentTypes.length - 1; i >= 0; i--) {
+    if (types.includes(recentTypes[i])) return recentTypes[i];
+  }
+  return types[0];
 }
 
 function buildFacebookPrompt(company, contentType, verticalCtx, location) {
