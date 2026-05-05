@@ -8,7 +8,8 @@ const AGENT_NAME = 'paige';
 
 const CONTENT_TYPES = ['promotional', 'educational', 'seasonal', 'behind-the-scenes', 'community'];
 const BLOG_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'community', 'seasonal'];
-const CHANNELS = ['facebook_page', 'google_business', 'blog'];
+const LINKEDIN_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'results', 'community'];
+const CHANNELS = ['facebook_page', 'google_business', 'blog', 'linkedin_page'];
 
 // Vertical-specific context fed into the prompt so Claude sounds right for each business type
 const VERTICAL_PROMPTS = {
@@ -41,7 +42,11 @@ async function getActiveClients() {
 
 // Pick a content type not used recently for this company+channel so posts rotate
 async function pickContentType(companyName, channel = null) {
-  const types = channel === 'blog' ? BLOG_CONTENT_TYPES : CONTENT_TYPES;
+  const types = channel === 'blog'
+    ? BLOG_CONTENT_TYPES
+    : channel === 'linkedin_page'
+      ? LINKEDIN_CONTENT_TYPES
+      : CONTENT_TYPES;
 
   // Scope to the same channel so facebook/google posts don't crowd out blog history
   const channelClause = channel ? `AND channel = $2` : `AND channel IN ('facebook_page', 'google_business', 'blog')`;
@@ -175,6 +180,42 @@ Requirements:
 Return only the blog post text with markdown formatting.`;
 }
 
+function buildLinkedInPrompt(company, contentType, verticalCtx) {
+  const isPulseforge = company.name.toLowerCase().includes('pulseforge');
+  const location = company.location || 'Manchester, NH';
+
+  const audienceNote = isPulseforge
+    ? `IMPORTANT: Pulseforge's audience is small business owners considering marketing automation. Write to an owner who is tired of doing repetitive marketing tasks and wants a system that runs in the background. Speak to pain points: time wasted on marketing, inconsistent social presence, missed leads.`
+    : `Write as the brand voice of ${company.name} — use "we" and "${company.name}", not "I". Speak to local customers and business owners in ${location}.`;
+
+  return `You are writing a LinkedIn page post for ${company.name}, a local ${company.industry || 'business'} in ${location}${isPulseforge ? ' that automates marketing and outreach for small business owners using AI' : ''}.
+
+Content type: ${contentType}
+Business context: ${verticalCtx}
+
+${audienceNote}
+
+Write a LinkedIn post (150-250 words) with this structure:
+- First line: a specific hook — no fluff openers like "excited to share" or "we're thrilled"
+- 2-3 short paragraphs or punchy line breaks
+- Final line: a question or soft CTA to drive comments
+- Last line: 3-5 relevant hashtags
+
+Voice and tone:
+- Brand voice — use "we" and "${company.name}", not "I"
+- Confident local expert, never corporate, never salesy
+- Mention Manchester NH or New Hampshire naturally where it fits — don't force it
+- NO URLs in the post text
+- For "educational": one specific insight or actionable tip — not generic advice
+- For "behind-the-scenes": a genuine look at how ${isPulseforge ? 'the automation system works or how we build it' : `${company.name} operates day to day`}
+- For "results": a concrete outcome — time saved, leads generated, or a client win (keep clients anonymous)
+- For "community": connect to the local small business ecosystem in New Hampshire
+
+No buzzwords. No "we're excited to announce." Write like a knowledgeable local operator who has been in the trenches.
+
+Return only the post text.`;
+}
+
 async function generatePost(company, contentType, channel) {
   const verticalCtx = getVerticalContext(company.industry);
   const location = company.location || 'Manchester, NH';
@@ -183,11 +224,13 @@ async function generatePost(company, contentType, channel) {
     ? buildGooglePrompt(company, contentType, verticalCtx, location)
     : channel === 'blog'
       ? buildBlogPrompt(company, contentType, verticalCtx)
-      : buildFacebookPrompt(company, contentType, verticalCtx, location);
+      : channel === 'linkedin_page'
+        ? buildLinkedInPrompt(company, contentType, verticalCtx)
+        : buildFacebookPrompt(company, contentType, verticalCtx, location);
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: channel === 'blog' ? 800 : 300,
+    max_tokens: channel === 'blog' ? 800 : channel === 'linkedin_page' ? 450 : 300,
     messages: [{ role: 'user', content: prompt }]
   });
 
@@ -195,8 +238,18 @@ async function generatePost(company, contentType, channel) {
 }
 
 async function saveToPendingApprovals(company, content, contentType, channel) {
-  const channelLabel = { facebook_page: 'Facebook Page', google_business: 'Google Business', blog: 'Blog' }[channel] || channel;
+  const channelLabel = {
+    facebook_page:   'Facebook Page',
+    google_business: 'Google Business',
+    blog:            'Blog',
+    linkedin_page:   'LinkedIn Page',
+  }[channel] || channel;
   const label = `${channelLabel} · ${contentType.charAt(0).toUpperCase() + contentType.slice(1)}`;
+
+  // LinkedIn Page posts carry a first-comment URL posted via Buffer after approval
+  const storedContent = channel === 'linkedin_page'
+    ? `POST: ${content}\nFIRST_COMMENT: https://gopulseforge.com`
+    : content;
 
   const existing = await pool.query(`
     SELECT id FROM pending_comments
@@ -221,7 +274,7 @@ async function saveToPendingApprovals(company, content, contentType, channel) {
     company.name,
     company.industry || 'Local Business',
     label,
-    content,
+    storedContent,
     channel
   ]);
 
@@ -271,7 +324,7 @@ AND status = 'pending';`);
           if (id) {
             console.log(`  ✓ queued (${id.slice(0, 8)})\n`);
             generated++;
-            const channelLabel = { facebook_page: 'Facebook Page', google_business: 'Google Business', blog: 'Blog' }[channel] || channel;
+            const channelLabel = { facebook_page: 'Facebook Page', google_business: 'Google Business', blog: 'Blog', linkedin_page: 'LinkedIn Page' }[channel] || channel;
             await sendTelegramNotification({
               channel,
               post_content: `${channelLabel} · ${contentType.charAt(0).toUpperCase() + contentType.slice(1)}`,

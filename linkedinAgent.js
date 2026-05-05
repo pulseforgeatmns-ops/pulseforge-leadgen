@@ -140,7 +140,9 @@ Return only the comment text.`
     }]
   });
 
-  return message.content[0].text.trim();
+  const commentText = message.content[0].text.trim();
+  // Store with delimiter so the approval flow can post the URL as a first reply
+  return `POST: ${commentText}\nFIRST_COMMENT: https://gopulseforge.com`;
 }
 
 async function run() {

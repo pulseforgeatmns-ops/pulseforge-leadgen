@@ -798,6 +798,7 @@ body::before {
   padding: 2px 7px; border-radius: 3px;
 }
 .badge-linkedin { background: rgba(10,102,194,0.15); color: #5b9fd4; border: 1px solid rgba(10,102,194,0.3); }
+.badge-lnpage  { background: rgba(10,102,194,0.2);  color: #4a90d9; border: 1px solid rgba(10,102,194,0.4); }
 .badge-facebook { background: rgba(24,119,242,0.12); color: #5ba3f5; border: 1px solid rgba(24,119,242,0.25); }
 .badge-fbpage   { background: rgba(24,119,242,0.12); color: #5ba3f5; border: 1px solid rgba(24,119,242,0.25); }
 .badge-google   { background: rgba(234,67,53,0.12);  color: #f28b82; border: 1px solid rgba(234,67,53,0.25); }
@@ -820,6 +821,12 @@ body::before {
   background: rgba(255,255,255,0.03); border-radius: 6px;
   border-left: 2px solid var(--border);
 }
+.ac-first-comment {
+  font-size: 0.72rem; color: var(--purple); margin-bottom: 0.75rem;
+  padding: 0.35rem 0.6rem; background: rgba(96,48,177,0.12);
+  border-radius: 4px; border-left: 2px solid var(--purple);
+}
+.ac-first-comment a { color: var(--purple); text-decoration: underline; }
 .ac-actions { display: flex; gap: 6px; }
 .ac-btn {
   flex: 1; font-family: 'JetBrains Mono', monospace;
@@ -1615,6 +1622,7 @@ body::before {
       <button class="filter-btn" data-filter="google_review">Google Review</button>
       <button class="filter-btn" data-filter="blog">Blog</button>
       <button class="filter-btn" data-filter="instagram">Instagram</button>
+      <button class="filter-btn" data-filter="linkedin_page">LinkedIn Page</button>
       <button class="filter-btn" data-filter="ads_report">Ads Report</button>
     </div>
     <div class="approvals-empty" id="approvalsEmpty">
@@ -2145,6 +2153,7 @@ const _CHANNEL = {
   blog:            { label: 'Blog',            badge: 'badge-blog',      agent: 'Paige' },
   instagram:       { label: 'Instagram',       badge: 'badge-instagram', agent: 'Ivy'   },
   ads_report:      { label: 'Ads Report',      badge: 'badge-ads',       agent: 'Penny' },
+  linkedin_page:   { label: 'LinkedIn Page',   badge: 'badge-lnpage',    agent: 'Paige' },
 };
 let _approvals = [], _approvalFilter = 'all';
 
@@ -2157,6 +2166,12 @@ function _relTime(d) {
 }
 function _esc(s) {
   return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function _parseComment(raw) {
+  if (!raw || !raw.startsWith('POST: ')) return { main: raw || '', firstUrl: null };
+  const parts = raw.split('\nFIRST_COMMENT: ');
+  return { main: parts[0].replace(/^POST: /, '').trim(), firstUrl: parts[1]?.trim() || null };
 }
 
 async function loadApprovals() {
@@ -2190,7 +2205,8 @@ function _renderApprovals() {
         <span class="ac-time">${_relTime(item.created_at)}</span>
       </div>
       <div class="ac-context">${_esc(item.post_content)}</div>
-      <div class="ac-comment">${_esc(item.comment)}</div>
+      <div class="ac-comment">${_esc(_parseComment(item.comment).main)}</div>
+      ${_parseComment(item.comment).firstUrl ? `<div class="ac-first-comment">First reply: <a href="${_esc(_parseComment(item.comment).firstUrl)}" target="_blank">${_esc(_parseComment(item.comment).firstUrl)}</a></div>` : ''}
       <div class="ac-actions">
         <button class="ac-btn ac-btn-approve" onclick="handleApproval('${_esc(item.id)}','approved',this)">✓ Approve</button>
         <button class="ac-btn ac-btn-reject"  onclick="handleApproval('${_esc(item.id)}','rejected',this)">✕ Reject</button>

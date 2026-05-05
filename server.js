@@ -260,10 +260,19 @@ app.post('/api/export/csv', async (req, res) => {
 
 // LinkedIn comment posting endpoint — called by n8n on approval
 app.post('/api/post-comment', async (req, res) => {
-  const { postUrl, comment, authorName } = req.body;
+  const { postUrl, comment: rawComment, authorName } = req.body;
 
-  if (!postUrl || !comment) {
+  if (!postUrl || !rawComment) {
     return res.status(400).json({ error: 'Missing postUrl or comment' });
+  }
+
+  // Parse delimiter format: POST: {main text}\nFIRST_COMMENT: {url}
+  let mainComment = rawComment;
+  let firstCommentUrl = null;
+  if (rawComment.startsWith('POST: ')) {
+    const parts = rawComment.split('\nFIRST_COMMENT: ');
+    mainComment = parts[0].replace(/^POST: /, '').trim();
+    firstCommentUrl = parts[1]?.trim() || null;
   }
 
   try {
@@ -274,12 +283,10 @@ app.post('/api/post-comment', async (req, res) => {
 
     puppeteer.use(StealthPlugin());
 
-    const SESSION_FILE = './linkedin_session.json';
-
     const sessionData = process.env.LINKEDIN_SESSION;
     if (!sessionData) {
-    return res.status(500).json({ error: 'No LinkedIn session found' });
-}
+      return res.status(500).json({ error: 'No LinkedIn session found' });
+    }
     const cookies = JSON.parse(Buffer.from(sessionData, 'base64').toString('utf8'));
 
     const browser = await puppeteer.launch({
@@ -289,6 +296,7 @@ app.post('/api/post-comment', async (req, res) => {
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
+    await page.setCookie(...cookies);
 
     await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await new Promise(r => setTimeout(r, 3000 + Math.random() * 2000));
@@ -317,7 +325,7 @@ app.post('/api/post-comment', async (req, res) => {
     await commentBox.click();
     await new Promise(r => setTimeout(r, 500));
 
-    for (const char of comment) {
+    for (const char of mainComment) {
       await commentBox.type(char, { delay: Math.floor(Math.random() * 80) + 30 });
     }
 
@@ -328,7 +336,57 @@ app.post('/api/post-comment', async (req, res) => {
 
     if (submitBtn) {
       await submitBtn.click();
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    // Post first reply with URL if present
+    if (firstCommentUrl) {
+      const replyPosted = await page.evaluate((commentStart) => {
+        const items = document.querySelectorAll('.comments-comment-item');
+        for (const item of items) {
+          const textEl = item.querySelector(
+            '.comments-comment-item__main-content, ' +
+            '.comments-comment-texteditor, ' +
+            '.feed-shared-update-v2__description'
+          );
+          if (textEl?.innerText?.includes(commentStart)) {
+            const replyBtn = item.querySelector(
+              'button[aria-label*="Reply"], ' +
+              '.comments-comment-action--reply button, ' +
+              '.comments-comment-social-bar__reply-action-button'
+            );
+            if (replyBtn) { replyBtn.click(); return true; }
+          }
+        }
+        return false;
+      }, mainComment.slice(0, 25));
+
+      if (replyPosted) {
+        await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
+
+        const replyBox = await page.$('.comments-comment-box--is-comment-reply [contenteditable="true"]') ||
+                         await page.$('.ql-editor[contenteditable="true"]');
+
+        if (replyBox) {
+          await replyBox.click();
+          await new Promise(r => setTimeout(r, 400));
+          for (const char of firstCommentUrl) {
+            await replyBox.type(char, { delay: Math.floor(Math.random() * 60) + 20 });
+          }
+          await new Promise(r => setTimeout(r, 800));
+
+          const replySubmit = await page.$('.comments-comment-box--is-comment-reply .comments-comment-box__submit-button') ||
+                              await page.$('.comments-comment-box__submit-button:last-of-type');
+
+          if (replySubmit) {
+            await replySubmit.click();
+            await new Promise(r => setTimeout(r, 2000));
+            console.log(`✓ First reply posted: ${firstCommentUrl}`);
+          }
+        }
+      } else {
+        console.warn('[post-comment] Could not find comment to reply to — skipping first reply');
+      }
     }
 
     // Log to second brain
@@ -337,14 +395,14 @@ app.post('/api/post-comment', async (req, res) => {
       'post_comment',
       null,
       postUrl,
-      { comment, authorName },
+      { comment: mainComment, firstCommentUrl, authorName },
       'success'
     );
 
     await browser.close();
 
     console.log(`✓ Comment posted on: ${postUrl}`);
-    res.json({ success: true, postUrl, comment });
+    res.json({ success: true, postUrl, comment: mainComment, firstCommentUrl });
 
   } catch (err) {
     console.error('Error posting comment:', err.message);
@@ -475,12 +533,25 @@ app.post('/api/approvals/:id', requireAuth, async (req, res) => {
     );
     res.json({ success: true, id, action });
 
-    // Fire-and-forget blog publish — don't block the API response
+    // Fire-and-forget post-approval side effects
     const item = result.rows[0];
-    if (item && action === 'approved' && item.channel === 'blog') {
-      publishBlogPost(item).catch(err =>
-        console.error('[BlogPublisher] Failed to publish:', err.response?.data || err.message)
-      );
+    if (item && action === 'approved') {
+      if (item.channel === 'blog') {
+        publishBlogPost(item).catch(err =>
+          console.error('[BlogPublisher] Failed to publish:', err.response?.data || err.message)
+        );
+      } else if (item.channel === 'linkedin_page') {
+        // Parse delimiter to extract main post and first-comment URL
+        const rawComment = item.comment || '';
+        const parts = rawComment.startsWith('POST: ')
+          ? rawComment.split('\nFIRST_COMMENT: ')
+          : [rawComment, null];
+        const mainPost    = parts[0].replace(/^POST: /, '').trim();
+        const firstComment = parts[1]?.trim() || null;
+        console.log(`[LinkedIn Page] Approved — Buffer posting pending manual action`);
+        console.log(`  Post (${mainPost.length} chars): ${mainPost.slice(0, 80)}...`);
+        if (firstComment) console.log(`  First comment: ${firstComment}`);
+      }
     }
   } catch (err) {
     res.status(500).json({ error: err.message });
