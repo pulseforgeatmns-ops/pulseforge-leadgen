@@ -275,7 +275,7 @@ async function publishBlogPost(item) {
       excerpt:  extractExcerpt(r.comment || ''),
       dateStr:  ds,
       category: cat ? cat.charAt(0).toUpperCase() + cat.slice(1) : 'Blog',
-      path:     `blog/${ds}-${slugify(t)}.html`,
+      path:     `./${ds}-${slugify(t)}.html`,
     };
   }).filter(p => {
     if (seen.has(p.path)) return false;
