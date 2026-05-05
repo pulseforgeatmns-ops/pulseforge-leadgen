@@ -18,6 +18,7 @@ const bcrypt = require('bcryptjs');
 const pool = require('./db');
 const { createObjectCsvWriter } = require('csv-writer');
 const { publishBlogPost } = require('./utils/blogPublisher');
+const { generateDemoData } = require('./utils/demoData');
 
 const app  = express();
 app.use(session({
@@ -412,6 +413,69 @@ app.post('/api/post-comment', async (req, res) => {
 
 app.get('/dashboard', requireAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+});
+
+// ── DEMO MODE — no auth required ──────────────────────────────────
+app.get('/demo', (req, res) => {
+  const dashPath = path.join(__dirname, 'public', 'dashboard.html');
+  let html;
+  try { html = fs.readFileSync(dashPath, 'utf8'); }
+  catch (e) { return res.status(500).send('Dashboard not found'); }
+
+  const demoData = generateDemoData();
+
+  const demoScript = `<script>
+(function() {
+  window.DEMO_MODE = true;
+  window.DEMO_DATA = ${JSON.stringify(demoData)};
+  var _demoCycle = 0;
+  var _realFetch = window.fetch.bind(window);
+
+  function demoResp(data) {
+    return Promise.resolve({
+      ok: true, status: 200,
+      json: function() { return Promise.resolve(data); },
+      text: function() { return Promise.resolve(JSON.stringify(data)); }
+    });
+  }
+
+  window.fetch = function(url, opts) {
+    if (!window.DEMO_MODE) return _realFetch(url, opts);
+    var p = (url || '').split('?')[0];
+
+    if (p === '/api/agent-status')       return demoResp(window.DEMO_DATA.agentStatus);
+    if (p === '/api/agent-weekly-stats') return demoResp(window.DEMO_DATA.agentWeeklyStats);
+    if (p === '/api/agent-stats')        return demoResp(window.DEMO_DATA.agentStats);
+    if (p === '/api/approvals') {
+      if (opts && opts.method === 'POST') return demoResp({ success: true });
+      return demoResp(window.DEMO_DATA.approvals);
+    }
+    if (/^\\/api\\/approvals\\//.test(p))  return demoResp({ success: true });
+    if (p === '/api/prospects')          return demoResp(window.DEMO_DATA.prospects);
+    if (/^\\/api\\/prospects\\/.+\\/touchpoints$/.test(p)) return demoResp(window.DEMO_DATA.touchpoints);
+    if (p === '/api/activity') {
+      var events = window.DEMO_DATA.activityEvents;
+      var slice = [];
+      for (var i = 0; i < 8; i++) {
+        var ev = events[(_demoCycle + i) % events.length];
+        slice.push(Object.assign({}, ev, { time: i === 0 ? 'now' : (i + 1) + 'm' }));
+      }
+      _demoCycle = (_demoCycle + 1) % events.length;
+      return demoResp(slice);
+    }
+    if (p === '/api/activity-panel')     return demoResp(window.DEMO_DATA.activityPanel);
+    if (p === '/api/activity-timeline')  return demoResp(window.DEMO_DATA.activityTimeline);
+    if (p === '/api/analytics')          return demoResp(window.DEMO_DATA.analytics);
+    if (/^\\/api\\/run\\//.test(p))        return demoResp({ success: false, message: 'Agents are read-only in demo mode.' });
+    return demoResp({});
+  };
+})();
+</script>`;
+
+  // Inject before </head> so fetch is overridden before any dashboard scripts run
+  html = html.replace('</head>', demoScript + '\n</head>');
+  res.setHeader('Content-Type', 'text/html');
+  res.send(html);
 });
 
 // API - Agent status for dashboard

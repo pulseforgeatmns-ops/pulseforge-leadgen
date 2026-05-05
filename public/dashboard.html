@@ -1130,9 +1130,26 @@ body::before {
   transition: all 0.15s;
 }
 #activityLoadMore:hover { color: var(--white); border-color: rgba(255,255,255,0.2); }
+
+/* ── DEMO BANNER ── */
+.demo-banner {
+  display: none; position: sticky; top: 0; z-index: 10000;
+  background: #f59e0b; color: #0d0d0d; text-align: center;
+  padding: 0.55rem 1rem; font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem; font-weight: 500; letter-spacing: 0.04em;
+  animation: demoPulse 3s ease-in-out infinite;
+}
+.demo-banner.visible { display: block; }
+.demo-banner a { color: #0d0d0d; font-weight: 700; text-decoration: underline; margin-left: 0.6rem; }
+@keyframes demoPulse { 0%,100%{opacity:1} 50%{opacity:0.82} }
 </style>
 </head>
 <body>
+
+<div class="demo-banner" id="demoBanner">
+  ⚡ DEMO MODE — This is sample data for a cleaning company client.
+  <a href="https://gopulseforge.com/#contact" target="_blank">Book a call to see your real pipeline →</a>
+</div>
 
 <!-- TOP BAR -->
 <div class="topbar">
@@ -3193,6 +3210,14 @@ async function loadWeeklyStats() {
 })();
 
 loadWeeklyStats();
+
+// ── DEMO MODE INIT ────────────────────────────────────────────────
+if (window.DEMO_MODE) {
+  document.getElementById('demoBanner')?.classList.add('visible');
+  document.title = 'Pulseforge — Live Demo';
+  // Cycle the activity feed every 4s so the demo feels live
+  setInterval(loadActivityFeed, 4000);
+}
 
 // ── AGENT ROSTER COUNTS ───────────────────────────────────────────
 (function updateAgentCounts() {
