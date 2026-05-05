@@ -80,9 +80,7 @@ gopulseforge.com`
 function fillTemplate(template, prospect) {
   const rawName = prospect.first_name || prospect.name?.split(' ')[0] || '';
   const firstName = (rawName && rawName !== '—') ? rawName : 'there';
-  const rawDomain = prospect.notes?.split('—')[1]?.trim() || '';
-  const domainName = rawDomain.replace(/\.com|\.net|\.org|\.io/g, '').replace(/[-]/g, ' ').trim();
-  const businessName = prospect.company || (domainName ? domainName.charAt(0).toUpperCase() + domainName.slice(1) : 'your business');
+  const businessName = prospect.company || prospect.notes?.split('—')[0]?.trim() || 'your business';
 
   return template
     .replace(/{{first_name}}/g, firstName)
@@ -122,6 +120,8 @@ async function getProspectsForEmail() {
     WHERE p.status = 'cold'
     AND p.email IS NOT NULL
     AND p.email != ''
+    AND p.email NOT LIKE '%@domain.com'
+    AND p.email NOT LIKE '%@example.com'
     AND p.do_not_contact IS NOT TRUE
     AND (
       SELECT COUNT(*) FROM touchpoints t
