@@ -575,40 +575,51 @@ app.get('/api/agent-stats', requireAuth, async (req, res) => {
 // API - Agent weekly stats for hover tooltips
 app.get('/api/agent-weekly-stats', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query(`
-      SELECT
-        LOWER(REPLACE(REPLACE(agent_name, '_agent', ''), 'email', 'emmett')) AS agent,
-        action,
-        COUNT(*) AS count
-      FROM agent_log
-      WHERE ran_at > NOW() - INTERVAL '7 days'
-        AND status = 'success'
-      GROUP BY agent, action
-    `);
+    const WEEK = `created_at > NOW() - INTERVAL '7 days'`;
+    const WEEK_AL = `ran_at > NOW() - INTERVAL '7 days'`;
+
+    const [logRows, emmettRow, scoutRow, linkRow, fayeRow, ivyRow] = await Promise.all([
+      // agent_log — covers Paige, Max, Riley, Cal, Vera, Rex, Sam, Penny, Sketch
+      pool.query(`
+        SELECT LOWER(REPLACE(agent_name, '_agent', '')) AS agent, action, COUNT(*) AS count
+        FROM agent_log
+        WHERE ${WEEK_AL} AND status = 'success'
+        GROUP BY agent, action
+      `),
+      // Emmett → touchpoints (emails sent as outbound)
+      pool.query(`SELECT COUNT(*) AS count FROM touchpoints WHERE channel = 'email' AND action_type = 'outbound' AND ${WEEK}`),
+      // Scout → prospects saved this week via scout
+      pool.query(`SELECT COUNT(*) AS count FROM prospects WHERE source = 'scout' AND ${WEEK}`),
+      // Link → pending_comments for linkedin
+      pool.query(`SELECT COUNT(*) AS count FROM pending_comments WHERE channel = 'linkedin' AND ${WEEK}`),
+      // Faye → pending_comments for facebook
+      pool.query(`SELECT COUNT(*) AS count FROM pending_comments WHERE channel = 'facebook' AND ${WEEK}`),
+      // Ivy → pending_comments for instagram
+      pool.query(`SELECT COUNT(*) AS count FROM pending_comments WHERE channel = 'instagram' AND ${WEEK}`),
+    ]);
 
     const raw = {};
-    for (const r of rows) {
+    for (const r of logRows.rows) {
       if (!raw[r.agent]) raw[r.agent] = {};
       raw[r.agent][r.action] = parseInt(r.count);
     }
-
     const pick = (r, ...actions) => actions.reduce((s, a) => s + (r[a] || 0), 0);
 
     const stats = {
-      scout:    { count: pick(raw.scout    || {}, 'run'),                                    label: 'prospects found'    },
-      emmett:   { count: pick(raw.emmett   || {}, 'outbound'),                               label: 'emails sent'        },
-      link:     { count: pick(raw.linkedin || {}, 'generate_comment'),                       label: 'drafts generated'   },
-      faye:     { count: pick(raw.facebook || {}, 'generate_comment'),                       label: 'drafts generated'   },
-      paige:    { count: pick(raw.paige    || {}, 'generate_content'),                       label: 'posts generated'    },
-      max:      { count: pick(raw.max      || {}, 'daily_digest', 'weekly_report'),          label: 'digests sent'       },
-      sam:      { count: pick(raw.sam      || {}, 'send_sms', 'batch_sms'),                  label: 'SMS sent'           },
-      rex:      { count: pick(raw.rex      || {}, 'weekly_report', 'run'),                   label: 'reports generated'  },
-      riley:    { count: pick(raw.riley    || {}, 'triage'),                                 label: 'emails triaged'     },
-      vera:     { count: pick(raw.vera     || {}, 'analyze_reviews', 'run'),                 label: 'reviews monitored'  },
-      cal:      { count: pick(raw.cal      || {}, 'initiate_call', 'run'),                   label: 'calls initiated'    },
-      ivy:      { count: pick(raw.ivy      || {}, 'generate_comment'),                       label: 'drafts generated'   },
-      penny:    { count: pick(raw.penny    || {}, 'analyze_account', 'run'),                 label: 'accounts analyzed'  },
-      sketch:   { count: pick(raw.sketch   || {}, 'generate_mockup', 'run'),                 label: 'mockups generated'  },
+      scout:  { count: parseInt(scoutRow.rows[0].count),                                    label: 'prospects found'   },
+      emmett: { count: parseInt(emmettRow.rows[0].count),                                   label: 'emails sent'       },
+      link:   { count: parseInt(linkRow.rows[0].count),                                     label: 'drafts generated'  },
+      faye:   { count: parseInt(fayeRow.rows[0].count),                                     label: 'drafts generated'  },
+      ivy:    { count: parseInt(ivyRow.rows[0].count),                                      label: 'drafts generated'  },
+      paige:  { count: pick(raw.paige  || {}, 'generate_content'),                          label: 'posts generated'   },
+      max:    { count: pick(raw.max    || {}, 'daily_digest', 'weekly_report'),             label: 'digests sent'      },
+      sam:    { count: pick(raw.sam    || {}, 'send_sms', 'batch_sms'),                     label: 'SMS sent'          },
+      rex:    { count: pick(raw.rex    || {}, 'weekly_report', 'run'),                      label: 'reports generated' },
+      riley:  { count: pick(raw.riley  || {}, 'triage', 'classify_email'),                  label: 'emails triaged'    },
+      vera:   { count: pick(raw.vera   || {}, 'analyze_reviews', 'run'),                    label: 'reviews monitored' },
+      cal:    { count: pick(raw.cal    || {}, 'initiate_call', 'run'),                      label: 'calls initiated'   },
+      penny:  { count: pick(raw.penny  || {}, 'analyze_account', 'run'),                    label: 'accounts analyzed' },
+      sketch: { count: pick(raw.sketch || {}, 'generate_mockup', 'run'),                    label: 'mockups generated' },
     };
 
     res.json(stats);
