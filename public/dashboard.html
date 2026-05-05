@@ -663,14 +663,15 @@ body::before {
 }
 .agent-detail.open { display: flex; gap: 3rem; align-items: flex-start; }
 .detail-close {
-  position: absolute; top: 1.5rem; right: 2rem;
+  position: fixed; top: 68px; right: 2rem; z-index: 55;
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.7rem; letter-spacing: 2px;
   text-transform: uppercase; color: var(--gray-light);
-  cursor: pointer; background: none; border: none;
-  transition: color 0.2s;
+  cursor: pointer; background: rgba(7,13,26,0.9); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.35rem 0.75rem;
+  transition: color 0.2s, border-color 0.2s;
 }
-.detail-close:hover { color: var(--teal); }
+.detail-close:hover { color: var(--teal); border-color: var(--teal); }
 
 .detail-portrait {
   width: 200px; flex-shrink: 0;
