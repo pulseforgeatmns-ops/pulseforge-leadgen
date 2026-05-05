@@ -703,7 +703,6 @@ async function saveToDatabase(leads) {
     }
   }
   console.log(`[DB] Saved ${saved} prospects, rejected ${rejected} (junk), skipped ${skipped} (errors/dupes)`);
-  pool.end();
 }
 
 main().catch(err => {

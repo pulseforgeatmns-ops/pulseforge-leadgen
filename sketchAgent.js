@@ -134,7 +134,6 @@ async function run() {
     await logAgentRun(businessName, '', 'error').catch(() => {});
   }
 
-  pool.end();
 }
 
 run();
