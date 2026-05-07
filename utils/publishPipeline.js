@@ -64,8 +64,10 @@ async function resolveGBPLocation(token) {
 
 async function publishToGoogleBusiness(item) {
   const needed = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REFRESH_TOKEN'];
-  if (needed.some(k => !process.env[k])) {
-    console.warn('[GBP Publisher] Missing Google OAuth credentials — skipping');
+  const missing = needed.filter(k => !process.env[k]);
+  console.log('[GBP Publisher] credential check:', needed.map(k => `${k}=${!!process.env[k]}`).join(' '));
+  if (missing.length > 0) {
+    console.warn('[GBP Publisher] Missing credentials:', missing, '— skipping');
     return;
   }
   try {
