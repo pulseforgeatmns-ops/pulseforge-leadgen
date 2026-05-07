@@ -644,7 +644,7 @@ function validateProspect(name) {
     return reject('social media content');
   if (/\b(Archives|Directory|Lookup)\b/i.test(n))
     return reject('page section title');
-  if (n.includes(' • '))
+  if (n.includes('•'))
     return reject('bullet separator (web page title)');
   if (/^Find\s/i.test(n))
     return reject('generic search prompt');
@@ -662,6 +662,28 @@ function validateProspect(name) {
   if (n.length > 30 && !/\s[A-Z]/.test(n))
     return reject('no mid-sentence capitals (likely snippet)');
 
+  // ── NEW RULES ──────────────────────────────────────────────────────────────
+  if (/email\s*(&|and)\s*phone/i.test(n))
+    return reject('data scraper result (email & phone)');
+  if (n.includes('#'))
+    return reject('contains hashtag (social media content)');
+  if (/^sketch\s+mockup:/i.test(n))
+    return reject('sketch mockup label');
+  if (n.startsWith('$'))
+    return reject('starts with dollar sign (price listing)');
+  if (/^About\s+\S/i.test(n))
+    return reject('web page "About" title');
+  if (/^Contact\s+Us$/i.test(n))
+    return reject('"Contact Us" page title');
+  if (/^Home\s+(cleaning|services|maintenance|repair|improvement|solutions|care|pros?)\b/i.test(n))
+    return reject('generic SEO page title (Home + category)');
+  // Two title-cased words with no business indicator = likely a person's name from a scraper
+  if (/^[A-Z][a-z]{2,14}\s[A-Z][a-z]{2,14}$/.test(n)) {
+    const BIZ_WORDS = /\b(llc|inc|corp|co|company|group|services|solutions|studio|labs|works|consulting|cleaning|plumbing|hvac|landscaping|roofing|electric|construction|contracting|design|media|management|properties|realty|agency|associates|partners|industries|enterprise|foundation|center|institute)\b/i;
+    if (!BIZ_WORDS.test(n))
+      return reject('likely a personal name, not a business');
+  }
+
   return true;
 }
 
@@ -672,6 +694,11 @@ async function saveToDatabase(leads) {
     const companyName = lead.company.replace(/^CONTACT:\s*/i, '').trim();
 
     if (!validateProspect(companyName)) {
+      rejected++;
+      continue;
+    }
+    if ((lead.score || 0) < 40) {
+      console.log(`Score too low (${lead.score}): ${companyName}`);
       rejected++;
       continue;
     }
