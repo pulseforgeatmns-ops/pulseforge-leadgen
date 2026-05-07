@@ -27,6 +27,8 @@ const {
 } = require('./utils/publishPipeline');
 const { generateDemoData } = require('./utils/demoData');
 
+console.log('[env check] GBP creds:', !!process.env.GOOGLE_CLIENT_ID, !!process.env.GOOGLE_CLIENT_SECRET, !!process.env.GOOGLE_REFRESH_TOKEN);
+
 const app  = express();
 app.use(session({
   store: new pgSession({
