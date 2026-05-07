@@ -68,6 +68,7 @@ async function resolveGBPLocation(token) {
   if (!loc) throw new Error('No GBP locations found');
   // loc.name is "locations/987654321" — build full v4 path for local posts
   const locationId = loc.name.split('/')[1];
+  console.log('[GBP Publisher] Using account:', accountId, 'location:', locationId);
   return `accounts/${accountId}/locations/${locationId}`;
 }
 
@@ -94,7 +95,7 @@ async function publishToGoogleBusiness(item) {
     await logResult('google_business', 'publish_post', item.id, 'success', { location, chars: text.length });
     console.log(`[GBP Publisher] Posted to ${location}`);
   } catch (err) {
-    console.error('[GBP Publisher] Failed:', err.response?.data || err.message);
+    console.log('[GBP Publisher] Full error:', JSON.stringify(err.response?.data || err.message, null, 2));
     await logResult('google_business', 'publish_post', item.id, 'error', { error: err.message });
   }
 }
