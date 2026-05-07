@@ -219,12 +219,12 @@ async function publishToLinkedInPage(item) {
   }
   const { main } = parseComment(item.comment || '');
   const escaped = main.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  const query = `mutation CreateIdea { createIdea(input: { organizationId: "${orgId}", content: { text: "${escaped}" } }) { idea { id } } }`;
+  console.log('[Buffer] Query:', query);
   try {
     const res = await axios.post(
       'https://api.bufferapp.com/graphql',
-      {
-        query: `mutation CreateIdea { createIdea(input: { organizationId: "${orgId}", content: { text: "${escaped}" } }) { idea { id } } }`,
-      },
+      { query },
       {
         headers: {
           Authorization:  `Bearer ${token}`,
@@ -241,7 +241,9 @@ async function publishToLinkedInPage(item) {
     await logResult('linkedin_page', 'publish_post', item.id, 'success', { orgId, ideaId, chars: main.length });
     console.log(`[LinkedIn Page Publisher] Idea created in Buffer — id: ${ideaId}`);
   } catch (err) {
-    console.error('[LinkedIn Page Publisher] Failed:', err.response?.data || err.message);
+    console.log('[Buffer] Full error response:', JSON.stringify(err.response?.data || err.message, null, 2));
+    console.log('[Buffer] Status:', err.response?.status);
+    console.log('[Buffer] Token present:', !!process.env.BUFFER_ACCESS_TOKEN);
     await logResult('linkedin_page', 'publish_post', item.id, 'error', { error: err.message });
   }
 }
