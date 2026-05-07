@@ -18,6 +18,13 @@ const bcrypt = require('bcryptjs');
 const pool = require('./db');
 const { createObjectCsvWriter } = require('csv-writer');
 const { publishBlogPost } = require('./utils/blogPublisher');
+const {
+  publishToGoogleBusiness,
+  publishToFacebookPage,
+  publishFayeComment,
+  publishToLinkedInPage,
+  publishLinkComment,
+} = require('./utils/publishPipeline');
 const { generateDemoData } = require('./utils/demoData');
 
 const app  = express();
@@ -42,6 +49,15 @@ const PORT = 3000;
 app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname)); // serves dashboard HTML
+
+// Recover from malformed JSON bodies so cron routes can still read req.query.secret
+app.use((err, req, res, next) => {
+  if (err.status === 400 && err.type === 'entity.parse.failed') {
+    req.body = {};
+    return next();
+  }
+  next(err);
+});
 
 // ── CONFIG ────────────────────────────────────────────────────────────
 const SERPAPI_KEY   = process.env.SERPAPI_KEY;
@@ -597,24 +613,22 @@ app.post('/api/approvals/:id', requireAuth, async (req, res) => {
     );
     res.json({ success: true, id, action });
 
-    // Fire-and-forget post-approval side effects
+    // Fire-and-forget publish pipelines for all approved channels
     const item = result.rows[0];
     if (item && action === 'approved') {
-      if (item.channel === 'blog') {
-        publishBlogPost(item).catch(err =>
-          console.error('[BlogPublisher] Failed to publish:', err.response?.data || err.message)
+      const publishers = {
+        blog:             () => publishBlogPost(item),
+        google_business:  () => publishToGoogleBusiness(item),
+        facebook_page:    () => publishToFacebookPage(item),
+        facebook:         () => publishFayeComment(item),
+        linkedin_page:    () => publishToLinkedInPage(item),
+        linkedin:         () => publishLinkComment(item),
+      };
+      const publish = publishers[item.channel];
+      if (publish) {
+        publish().catch(err =>
+          console.error(`[Publisher:${item.channel}] Unhandled error:`, err.message)
         );
-      } else if (item.channel === 'linkedin_page') {
-        // Parse delimiter to extract main post and first-comment URL
-        const rawComment = item.comment || '';
-        const parts = rawComment.startsWith('POST: ')
-          ? rawComment.split('\nFIRST_COMMENT: ')
-          : [rawComment, null];
-        const mainPost    = parts[0].replace(/^POST: /, '').trim();
-        const firstComment = parts[1]?.trim() || null;
-        console.log(`[LinkedIn Page] Approved — Buffer posting pending manual action`);
-        console.log(`  Post (${mainPost.length} chars): ${mainPost.slice(0, 80)}...`);
-        if (firstComment) console.log(`  First comment: ${firstComment}`);
       }
     }
   } catch (err) {
