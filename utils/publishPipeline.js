@@ -218,20 +218,12 @@ async function publishToLinkedInPage(item) {
     return;
   }
   const { main } = parseComment(item.comment || '');
-  const title = main.split('\n')[0].slice(0, 80) || 'LinkedIn Post';
+  const escaped = main.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
   try {
     const res = await axios.post(
       'https://api.bufferapp.com/graphql',
       {
-        query: `mutation CreateIdea($orgId: String!, $title: String!, $text: String!) {
-  createIdea(input: {
-    organizationId: $orgId,
-    content: { title: $title, text: $text }
-  }) {
-    idea { id }
-  }
-}`,
-        variables: { orgId, title, text: main },
+        query: `mutation CreateIdea { createIdea(input: { organizationId: "${orgId}", content: { text: "${escaped}" } }) { idea { id } } }`,
       },
       {
         headers: {
