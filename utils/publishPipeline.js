@@ -211,19 +211,34 @@ async function publishFayeComment(item) {
 // ── 4. LINKEDIN PAGE (BUFFER API) ─────────────────────────────────────────────
 
 async function publishToLinkedInPage(item) {
-  const token = process.env.BUFFER_ACCESS_TOKEN;
-  const orgId = process.env.BUFFER_ORGANIZATION_ID || '69dc4e817d33823e83e929c7';
+  const token     = process.env.BUFFER_ACCESS_TOKEN;
+  const channelId = process.env.BUFFER_CHANNEL_ID || '69dc4fd9031bfa423cf9941c';
   if (!token) {
     console.warn('[LinkedIn Page Publisher] BUFFER_ACCESS_TOKEN not set — skipping');
     return;
   }
-  const { main } = parseComment(item.comment || '');
-  const escaped = main.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
-  const query = `mutation CreateIdea { createIdea(input: { organizationId: "${orgId}", content: { text: "${escaped}" } }) { idea { id } } }`;
-  console.log('[Buffer] Query:', query);
+  const { main, firstUrl } = parseComment(item.comment || '');
+  if (firstUrl) {
+    console.log(`[LinkedIn Page Publisher] First comment URL (manual post needed): ${firstUrl}`);
+  }
+  const query = `mutation CreatePost {
+  createPost(input: {
+    text: ${JSON.stringify(main)},
+    channelId: ${JSON.stringify(channelId)},
+    schedulingType: automatic,
+    mode: addToQueue
+  }) {
+    ... on PostActionSuccess {
+      post { id text dueAt }
+    }
+    ... on MutationError {
+      message
+    }
+  }
+}`;
   try {
     const res = await axios.post(
-      'https://api.bufferapp.com/graphql',
+      'https://api.buffer.com',
       { query },
       {
         headers: {
@@ -236,14 +251,18 @@ async function publishToLinkedInPage(item) {
     if (gqlErrors?.length) {
       throw new Error(JSON.stringify(gqlErrors));
     }
-    const ideaId = res.data?.data?.createIdea?.idea?.id;
+    const mutErr = res.data?.data?.createPost?.message;
+    if (mutErr) {
+      throw new Error(`MutationError: ${mutErr}`);
+    }
+    const postId = res.data?.data?.createPost?.post?.id;
+    const dueAt  = res.data?.data?.createPost?.post?.dueAt;
     await updateStatus(item.id, 'posted');
-    await logResult('linkedin_page', 'publish_post', item.id, 'success', { orgId, ideaId, chars: main.length });
-    console.log(`[LinkedIn Page Publisher] Idea created in Buffer — id: ${ideaId}`);
+    await logResult('linkedin_page', 'publish_post', item.id, 'success', { channelId, postId, dueAt });
+    console.log(`[LinkedIn Page Publisher] Queued in Buffer — id: ${postId}, due: ${dueAt}`);
   } catch (err) {
     console.log('[Buffer] Full error response:', JSON.stringify(err.response?.data || err.message, null, 2));
     console.log('[Buffer] Status:', err.response?.status);
-    console.log('[Buffer] Token present:', !!process.env.BUFFER_ACCESS_TOKEN);
     await logResult('linkedin_page', 'publish_post', item.id, 'error', { error: err.message });
   }
 }
