@@ -211,24 +211,43 @@ async function publishFayeComment(item) {
 // ── 4. LINKEDIN PAGE (BUFFER API) ─────────────────────────────────────────────
 
 async function publishToLinkedInPage(item) {
-  const token     = process.env.BUFFER_ACCESS_TOKEN;
-  const channelId = process.env.BUFFER_CHANNEL_ID;
-  if (!token || !channelId) {
-    console.warn('[LinkedIn Page Publisher] BUFFER_ACCESS_TOKEN or BUFFER_CHANNEL_ID not set — skipping');
+  const token = process.env.BUFFER_ACCESS_TOKEN;
+  const orgId = process.env.BUFFER_ORGANIZATION_ID || '69dc4e817d33823e83e929c7';
+  if (!token) {
+    console.warn('[LinkedIn Page Publisher] BUFFER_ACCESS_TOKEN not set — skipping');
     return;
   }
   const { main } = parseComment(item.comment || '');
+  const title = main.split('\n')[0].slice(0, 80) || 'LinkedIn Post';
   try {
-    await axios.post('https://api.bufferapp.com/1/updates/create.json', null, {
-      params: {
-        access_token:    token,
-        'profile_ids[]': channelId,
-        text:            main,
+    const res = await axios.post(
+      'https://api.bufferapp.com/graphql',
+      {
+        query: `mutation CreateIdea($orgId: String!, $title: String!, $text: String!) {
+  createIdea(input: {
+    organizationId: $orgId,
+    content: { title: $title, text: $text }
+  }) {
+    idea { id }
+  }
+}`,
+        variables: { orgId, title, text: main },
       },
-    });
+      {
+        headers: {
+          Authorization:  `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    const gqlErrors = res.data?.errors;
+    if (gqlErrors?.length) {
+      throw new Error(JSON.stringify(gqlErrors));
+    }
+    const ideaId = res.data?.data?.createIdea?.idea?.id;
     await updateStatus(item.id, 'posted');
-    await logResult('linkedin_page', 'publish_post', item.id, 'success', { channelId, chars: main.length });
-    console.log(`[LinkedIn Page Publisher] Posted via Buffer to channel ${channelId}`);
+    await logResult('linkedin_page', 'publish_post', item.id, 'success', { orgId, ideaId, chars: main.length });
+    console.log(`[LinkedIn Page Publisher] Idea created in Buffer — id: ${ideaId}`);
   } catch (err) {
     console.error('[LinkedIn Page Publisher] Failed:', err.response?.data || err.message);
     await logResult('linkedin_page', 'publish_post', item.id, 'error', { error: err.message });
