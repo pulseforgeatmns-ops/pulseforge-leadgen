@@ -5,7 +5,9 @@ const fs    = require('fs');
 const path  = require('path');
 const pool  = require('../db');
 
-const GBP_BASE = 'https://mybusiness.googleapis.com/v4';
+const GBP_BASE      = 'https://mybusiness.googleapis.com/v4';
+const ACCT_MGMT_BASE = 'https://mybusinessaccountmanagement.googleapis.com/v1';
+const BIZ_INFO_BASE  = 'https://mybusinessbusinessinformation.googleapis.com/v1';
 
 // ── SHARED HELPERS ────────────────────────────────────────────────────────────
 
@@ -48,18 +50,25 @@ async function resolveGBPLocation(token) {
   if (process.env.GBP_ACCOUNT_ID && process.env.GBP_LOCATION_ID) {
     return `accounts/${process.env.GBP_ACCOUNT_ID}/locations/${process.env.GBP_LOCATION_ID}`;
   }
-  const acctRes = await axios.get(`${GBP_BASE}/accounts`, {
+  // New account management API (v4 accounts endpoint is deprecated)
+  const acctRes = await axios.get(`${ACCT_MGMT_BASE}/accounts`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   const account = acctRes.data.accounts?.[0];
   if (!account) throw new Error('No GBP accounts accessible');
-  const locsRes = await axios.get(`${GBP_BASE}/${account.name}/locations`, {
+  // account.name is "accounts/123456789" — extract numeric ID for the v1 locations URL
+  const accountId = account.name.split('/')[1];
+
+  // New business information API (v4 locations endpoint is deprecated)
+  const locsRes = await axios.get(`${BIZ_INFO_BASE}/accounts/${accountId}/locations`, {
     headers: { Authorization: `Bearer ${token}` },
-    params: { readMask: 'name,title' },
+    params: { readMask: 'name' },
   });
   const loc = locsRes.data.locations?.[0];
   if (!loc) throw new Error('No GBP locations found');
-  return loc.name;
+  // loc.name is "locations/987654321" — build full v4 path for local posts
+  const locationId = loc.name.split('/')[1];
+  return `accounts/${accountId}/locations/${locationId}`;
 }
 
 async function publishToGoogleBusiness(item) {
