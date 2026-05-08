@@ -4,7 +4,6 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('./dbClient');
-const { sendTelegramNotification } = require('./utils/telegram');
 
 const client = new Anthropic();
 
@@ -182,11 +181,6 @@ async function run() {
         channel: 'facebook'
       });
 
-      await sendTelegramNotification({
-        channel: 'facebook',
-        post_content: post.content.substring(0, 500),
-        comment,
-      });
 
       await db.logAgentAction(
         AGENT_NAME,

@@ -287,7 +287,6 @@ async function run() {
 
   let reports   = 0;
   let totalFlags = 0;
-  const telegramLines = ['💰 Penny — Ad Performance Report', ''];
 
   for (const account of accounts) {
     const label = `${account.company_name} / ${account.platform}`;
@@ -317,9 +316,6 @@ async function run() {
         console.log(`  ✓ Report saved (${id.slice(0, 8)}) — ${result.flags.length} flag${result.flags.length !== 1 ? 's' : ''}`);
         reports++;
         totalFlags += result.flags.length;
-        const icon = result.flags.length > 0 ? '⚠️' : '✅';
-        const plat = account.platform === 'google_ads' ? 'Google' : 'Meta';
-        telegramLines.push(`${icon} ${account.company_name} (${plat}): ${result.flags.length} flag${result.flags.length !== 1 ? 's' : ''}`);
       }
 
       await db.logAgentAction(AGENT_NAME, 'analyze_account', null, null, {
@@ -340,21 +336,6 @@ async function run() {
     }
 
     await new Promise(r => setTimeout(r, 1500));
-  }
-
-  if (reports > 0) {
-    const appUrl = process.env.APP_URL || 'https://pulseforge-leadgen-production.up.railway.app';
-    telegramLines.push('', `${reports} report${reports !== 1 ? 's' : ''} queued · ${totalFlags} flag${totalFlags !== 1 ? 's' : ''} total`);
-    telegramLines.push(`→ Review: ${appUrl}`);
-
-    const BOT = process.env.TELEGRAM_BOT_TOKEN;
-    const CHAT = process.env.TELEGRAM_CHAT_ID;
-    if (BOT && CHAT) {
-      await axios.post(`https://api.telegram.org/bot${BOT}/sendMessage`, {
-        chat_id: CHAT,
-        text:    telegramLines.join('\n'),
-      }).catch(err => console.error('Telegram error:', err.message));
-    }
   }
 
   await db.logAgentAction(AGENT_NAME, 'run', null, null, {

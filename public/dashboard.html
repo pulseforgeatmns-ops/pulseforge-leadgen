@@ -632,6 +632,51 @@ body::before {
   line-height: 1.6;
 }
 
+/* ACTIONS AREA */
+.actions-area { display: none; overflow-y: auto; height: 100%; padding: 1.5rem 2rem; }
+.actions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1rem; margin-top: 1rem; }
+.action-card {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 1.1rem 1.2rem; display: flex; flex-direction: column; gap: 0.6rem;
+  transition: border-color 0.2s;
+}
+.action-card:hover { border-color: rgba(96,48,177,0.5); }
+.action-card.urgent { border-color: rgba(255,107,53,0.5); }
+.action-card.urgent .action-card-title::before { content: '🔥 '; }
+.action-card-type {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.52rem; letter-spacing: 2px;
+  text-transform: uppercase; color: var(--gray-light);
+}
+.action-card-title { font-size: 0.85rem; font-weight: 600; color: var(--white); line-height: 1.3; }
+.action-card-desc { font-size: 0.73rem; color: rgba(255,255,255,0.55); line-height: 1.55; }
+.action-card-footer { display: flex; gap: 0.5rem; margin-top: 0.3rem; }
+.action-btn-exec {
+  flex: 1; padding: 0.4rem 0; border: none; border-radius: 6px;
+  background: var(--purple); color: var(--white);
+  font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1px;
+  cursor: pointer; transition: opacity 0.2s;
+}
+.action-btn-exec:hover { opacity: 0.85; }
+.action-btn-dismiss {
+  padding: 0.4rem 0.75rem; border: 1px solid var(--border); border-radius: 6px;
+  background: transparent; color: var(--gray-light);
+  font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1px;
+  cursor: pointer; transition: color 0.2s;
+}
+.action-btn-dismiss:hover { color: var(--red); border-color: var(--red); }
+.action-age {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.55rem;
+  color: var(--gray); margin-top: auto; padding-top: 0.3rem;
+}
+.actions-empty { text-align: center; padding: 4rem; color: var(--gray-light); }
+.actions-empty-icon { font-size: 2rem; margin-bottom: 0.75rem; }
+.actions-empty-text { font-size: 0.8rem; }
+.tab-badge {
+  display: inline-block; background: var(--orange); color: #fff;
+  border-radius: 9px; font-size: 0.55rem; font-family: 'JetBrains Mono', monospace;
+  padding: 1px 5px; margin-left: 5px; vertical-align: middle; line-height: 1.4;
+}
+
 /* STATUS BAR */
 .statusbar {
   height: 26px;
@@ -1274,6 +1319,7 @@ body::before {
   <div class="nav-tabs">
     <div class="nav-tab active">Agents</div>
     <div class="nav-tab">Approvals</div>
+    <div class="nav-tab">Actions<span class="tab-badge" id="actionsBadge" style="display:none">0</span></div>
     <div class="nav-tab">Prospects</div>
     <div class="nav-tab">Activity</div>
     <div class="nav-tab">Analytics</div>
@@ -1791,6 +1837,21 @@ body::before {
     <div class="approvals-grid" id="approvalsGrid"></div>
   </div>
 
+  <!-- ACTIONS AREA -->
+  <div class="actions-area" id="actionsArea">
+    <div class="area-header">
+      <div>
+        <div class="area-title">MAX · ACTION ITEMS</div>
+        <div class="area-sub" id="actionsSub">Recommendations from Max's daily analysis</div>
+      </div>
+    </div>
+    <div class="actions-empty" id="actionsEmpty" style="display:none">
+      <div class="actions-empty-icon">✓</div>
+      <div class="actions-empty-text">No pending action items — Max will deposit new ones on his next run</div>
+    </div>
+    <div class="actions-grid" id="actionsGrid"></div>
+  </div>
+
   <!-- PROSPECTS AREA -->
   <div class="prospects-area" id="prospectsArea">
     <div class="area-header">
@@ -2043,8 +2104,8 @@ body::before {
     </div>
 
     <div class="max-digest">
-      <div class="max-label"><div class="max-dot"></div>MAX · DAILY BRIEF</div>
-      <div class="max-text">Facebook backlog is the priority today — 21 pending drafts. Email channel underutilized at 3 sends all-time. Recommend activating multi-channel sequence for all cold prospects this week.</div>
+      <div class="max-label"><div class="max-dot"></div>MAX · DAILY BRIEF <span id="maxBriefAge" style="font-size:0.55rem;color:var(--gray);margin-left:8px;font-family:'JetBrains Mono',monospace;"></span></div>
+      <div class="max-text" id="maxBriefText">Loading...</div>
     </div>
   </div>
 
@@ -2349,11 +2410,12 @@ setInterval(updateClock, 1000);
 const _tabPanels = {
   agents:    document.querySelector('.agents-area'),
   approvals: document.getElementById('approvalsArea'),
+  actions:   document.getElementById('actionsArea'),
   prospects: document.getElementById('prospectsArea'),
   activity:  document.getElementById('activityArea'),
   analytics: document.getElementById('analyticsArea')
 };
-const _tabNames = ['agents','approvals','prospects','activity','analytics'];
+const _tabNames = ['agents','approvals','actions','prospects','activity','analytics'];
 document.querySelectorAll('.nav-tab').forEach((tab, i) => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
@@ -2363,6 +2425,7 @@ document.querySelectorAll('.nav-tab').forEach((tab, i) => {
       if (el) el.style.display = (k === name) ? 'block' : 'none';
     });
     if (name === 'approvals') loadApprovals();
+    if (name === 'actions')   loadActions();
     if (name === 'prospects') loadProspects();
     if (name === 'activity')  loadActivity();
     if (name === 'analytics') loadAnalytics();
@@ -3359,10 +3422,9 @@ function renderTopProspects(data) {
 }
 
 function openProspectFromAnalytics(id) {
-  // Switch to Prospects tab and open the drawer
   const tabs = document.querySelectorAll('.nav-tab');
   tabs.forEach(t => t.classList.remove('active'));
-  tabs[2].classList.add('active');
+  tabs[3].classList.add('active');
   Object.entries(_tabPanels).forEach(([k, el]) => {
     if (el) el.style.display = (k === 'prospects') ? 'block' : 'none';
   });
@@ -3649,6 +3711,122 @@ async function loadWeeklyStats() {
 })();
 
 loadWeeklyStats();
+
+// ── MAX DAILY BRIEF ───────────────────────────────────────────────
+async function loadMaxBrief() {
+  const textEl = document.getElementById('maxBriefText');
+  const ageEl  = document.getElementById('maxBriefAge');
+  try {
+    const res = await fetch('/api/max-brief', { credentials: 'include' });
+    if (!res.ok) return;
+    const d = await res.json();
+    if (d.insights) {
+      if (textEl) textEl.textContent = d.insights;
+      if (ageEl && d.ran_at) {
+        const ago = Math.round((Date.now() - new Date(d.ran_at)) / 3600000);
+        ageEl.textContent = ago < 1 ? '< 1h ago' : ago < 24 ? `${ago}h ago` : `${Math.round(ago/24)}d ago`;
+      }
+    } else {
+      if (textEl) textEl.textContent = 'Max hasn\'t run yet — trigger him from the Agents tab to generate today\'s brief.';
+    }
+  } catch(e) {
+    console.error('loadMaxBrief:', e);
+  }
+}
+
+// ── ACTIONS TAB ───────────────────────────────────────────────────
+let _actionsLoaded = false;
+
+async function loadActions() {
+  const grid   = document.getElementById('actionsGrid');
+  const empty  = document.getElementById('actionsEmpty');
+  const sub    = document.getElementById('actionsSub');
+  const badge  = document.getElementById('actionsBadge');
+  try {
+    const res = await fetch('/api/actions', { credentials: 'include' });
+    if (!res.ok) return;
+    const actions = await res.json();
+    _actionsLoaded = true;
+
+    if (badge) {
+      if (actions.length > 0) { badge.textContent = actions.length; badge.style.display = 'inline-block'; }
+      else { badge.style.display = 'none'; }
+    }
+
+    if (!actions.length) {
+      if (grid)  grid.innerHTML = '';
+      if (empty) empty.style.display = 'block';
+      if (sub)   sub.textContent = 'No pending action items';
+      return;
+    }
+
+    if (empty) empty.style.display = 'none';
+    if (sub)   sub.textContent = `${actions.length} pending action${actions.length !== 1 ? 's' : ''} from Max`;
+
+    const urgentTypes = ['follow_up_clicked'];
+    if (grid) grid.innerHTML = actions.map(a => {
+      const isUrgent = urgentTypes.includes(a.action_type);
+      const typeLabel = a.action_type.replace(/_/g, ' ').toUpperCase();
+      const age = (() => {
+        const mins = Math.round((Date.now() - new Date(a.created_at)) / 60000);
+        if (mins < 60) return `${mins}m ago`;
+        if (mins < 1440) return `${Math.round(mins/60)}h ago`;
+        return `${Math.round(mins/1440)}d ago`;
+      })();
+      return `<div class="action-card${isUrgent ? ' urgent' : ''}" id="ac-${a.id}">
+        <div class="action-card-type">${typeLabel}</div>
+        <div class="action-card-title">${a.title}</div>
+        <div class="action-card-desc">${a.description}</div>
+        <div class="action-card-footer">
+          <button class="action-btn-exec" onclick="execAction('${a.id}')">✓ MARK DONE</button>
+          <button class="action-btn-dismiss" onclick="dismissAction('${a.id}')">Dismiss</button>
+        </div>
+        <div class="action-age">${age}</div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    console.error('loadActions:', e);
+  }
+}
+
+async function execAction(id) {
+  const card = document.getElementById(`ac-${id}`);
+  if (card) card.style.opacity = '0.4';
+  try {
+    await fetch(`/api/actions/${id}/execute`, { method: 'POST', credentials: 'include', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ result: 'Marked done from dashboard' }) });
+    if (card) card.remove();
+    const remaining = document.querySelectorAll('.action-card').length;
+    const badge = document.getElementById('actionsBadge');
+    if (badge) { badge.textContent = remaining; if (!remaining) badge.style.display = 'none'; }
+    if (!remaining) { const empty = document.getElementById('actionsEmpty'); if (empty) empty.style.display = 'block'; }
+  } catch(e) { if (card) card.style.opacity = '1'; }
+}
+
+async function dismissAction(id) {
+  const card = document.getElementById(`ac-${id}`);
+  if (card) card.style.opacity = '0.4';
+  try {
+    await fetch(`/api/actions/${id}/dismiss`, { method: 'POST', credentials: 'include' });
+    if (card) card.remove();
+    const remaining = document.querySelectorAll('.action-card').length;
+    const badge = document.getElementById('actionsBadge');
+    if (badge) { badge.textContent = remaining; if (!remaining) badge.style.display = 'none'; }
+    if (!remaining) { const empty = document.getElementById('actionsEmpty'); if (empty) empty.style.display = 'block'; }
+  } catch(e) { if (card) card.style.opacity = '1'; }
+}
+
+// Load on page init
+loadMaxBrief();
+// Pre-fetch action count for badge
+(async () => {
+  try {
+    const res = await fetch('/api/actions', { credentials: 'include' });
+    if (!res.ok) return;
+    const actions = await res.json();
+    const badge = document.getElementById('actionsBadge');
+    if (badge && actions.length > 0) { badge.textContent = actions.length; badge.style.display = 'inline-block'; }
+  } catch(_) {}
+})();
 
 // ── DEMO MODE INIT ────────────────────────────────────────────────
 if (window.DEMO_MODE) {

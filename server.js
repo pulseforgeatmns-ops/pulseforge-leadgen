@@ -1377,6 +1377,63 @@ app.get('/api/analytics/email', requireAuth, async (req, res) => {
   }
 });
 
+// API - Max daily brief (latest from agent_log)
+app.get('/api/max-brief', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT payload, ran_at
+      FROM agent_log
+      WHERE agent_name = 'max' AND action = 'daily_digest'
+      ORDER BY ran_at DESC
+      LIMIT 1
+    `);
+    if (!result.rows.length) return res.json({ insights: null, ran_at: null });
+    const row = result.rows[0];
+    res.json({ insights: row.payload?.insights || null, ran_at: row.ran_at });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API - Agent actions (deposited by Max)
+app.get('/api/actions', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, created_by, action_type, title, description, payload, status, created_at, executed_at, result
+      FROM agent_actions
+      WHERE status IN ('pending', 'in_progress')
+      ORDER BY created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/actions/:id/dismiss', requireAuth, async (req, res) => {
+  try {
+    await pool.query(
+      `UPDATE agent_actions SET status = 'dismissed', executed_at = NOW() WHERE id = $1`,
+      [req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/actions/:id/execute', requireAuth, async (req, res) => {
+  try {
+    await pool.query(
+      `UPDATE agent_actions SET status = 'executed', executed_at = NOW(), result = $2 WHERE id = $1`,
+      [req.params.id, req.body.result || 'Marked done from dashboard']
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // API - Trigger agents
 app.post('/api/run/:agent', requireAuth, async (req, res) => {
   const { agent } = req.params;
@@ -1865,7 +1922,25 @@ Respond with JSON only — no explanation:
 });
 
 // ── START ─────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+async function ensureAgentActionsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agent_actions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      created_by TEXT DEFAULT 'max',
+      action_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      payload JSONB,
+      status TEXT DEFAULT 'pending',
+      executed_at TIMESTAMPTZ,
+      result TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+}
+
+app.listen(PORT, async () => {
+  await ensureAgentActionsTable().catch(e => console.error('[startup] agent_actions table error:', e.message));
   console.log(`\n🔷 Pulseforge Lead Engine Server`);
   console.log(`─────────────────────────────────`);
   console.log(`   http://localhost:${PORT}`);

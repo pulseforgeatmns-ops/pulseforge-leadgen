@@ -149,15 +149,6 @@ async function createCalendarEvent(prospectName, businessName, agreedTimeISO) {
   }
 }
 
-// ── TELEGRAM ───────────────────────────────────────────────────────────────
-async function notify(text) {
-  const BOT = process.env.TELEGRAM_BOT_TOKEN;
-  const CHAT = process.env.TELEGRAM_CHAT_ID;
-  if (!BOT || !CHAT) return;
-  await axios.post(`https://api.telegram.org/bot${BOT}/sendMessage`, { chat_id: CHAT, text })
-    .catch(err => console.error('Cal Telegram error:', err.message));
-}
-
 // ── MAIN ───────────────────────────────────────────────────────────────────
 async function run() {
   console.log('\nCal agent running...\n');
@@ -210,16 +201,6 @@ async function run() {
         'success'
       );
 
-      await notify([
-        `📞 Cal initiated a call`,
-        ``,
-        `Prospect: ${fullName}`,
-        `Business: ${companyName || 'Unknown'}`,
-        `Phone: ${prospect.phone}`,
-        `ICP Score: ${prospect.icp_score}`,
-        `Call ID: ${callId}`,
-      ].join('\n'));
-
       initiated++;
       await new Promise(r => setTimeout(r, 2000));
 
@@ -240,6 +221,6 @@ async function run() {
   console.log(`\nCal complete — ${initiated} call${initiated !== 1 ? 's' : ''} initiated.`);
 }
 
-module.exports = { createCalendarEvent, notify };
+module.exports = { createCalendarEvent };
 
 run().catch(console.error);

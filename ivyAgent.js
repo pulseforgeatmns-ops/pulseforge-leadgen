@@ -4,7 +4,6 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('./dbClient');
-const { sendTelegramNotification } = require('./utils/telegram');
 
 puppeteer.use(StealthPlugin());
 
@@ -217,11 +216,6 @@ async function run() {
           channel:      'instagram'
         });
 
-        await sendTelegramNotification({
-          channel:      'instagram',
-          post_content: post.caption.substring(0, 500),
-          comment,
-        });
 
         await db.logAgentAction(
           AGENT_NAME,
@@ -242,18 +236,6 @@ async function run() {
     }
 
     await randomDelay(8000, 15000);
-  }
-
-  if (drafted > 0) {
-    const axios = require('axios');
-    const BOT = process.env.TELEGRAM_BOT_TOKEN;
-    const CHAT = process.env.TELEGRAM_CHAT_ID;
-    if (BOT && CHAT) {
-      await axios.post(`https://api.telegram.org/bot${BOT}/sendMessage`, {
-        chat_id: CHAT,
-        text: `📸 Ivy complete — ${drafted} Instagram comment draft${drafted !== 1 ? 's' : ''} queued for approval.`,
-      }).catch(() => {});
-    }
   }
 
   console.log(`\nIvy complete — ${drafted} comment${drafted !== 1 ? 's' : ''} queued for approval.`);

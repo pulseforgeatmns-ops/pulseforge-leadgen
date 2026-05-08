@@ -107,40 +107,6 @@ async function draftResponse(review, companyName, industry, location) {
   return msg.content[0].text.trim();
 }
 
-// ── TELEGRAM NOTIFICATION ──────────────────────────────────────────────
-async function notifyTelegram(companyName, review, draft) {
-  const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-  const CHAT_ID   = process.env.TELEGRAM_CHAT_ID;
-  if (!BOT_TOKEN || !CHAT_ID) return;
-
-  const stars      = STAR_NUM[review.starRating] || 3;
-  const starEmoji  = '⭐'.repeat(stars);
-  const urgent     = stars <= 2;
-  const reviewer   = review.reviewer?.displayName || 'Anonymous';
-  const snippet    = (review.comment || '').slice(0, 100);
-
-  const text = [
-    `${urgent ? '🚨 URGENT' : '⭐ New'} Google review — ${companyName}`,
-    '',
-    `${starEmoji} ${reviewer}:`,
-    snippet || '(no written comment)',
-    '',
-    'Draft response:',
-    draft.slice(0, 200),
-    '',
-    `→ Approve: ${DASHBOARD}/approvals`,
-  ].join('\n');
-
-  try {
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      chat_id: CHAT_ID,
-      text,
-    });
-  } catch (err) {
-    console.error('[Vera] Telegram failed:', err.response?.data?.description || err.message);
-  }
-}
-
 // ── AGENT LOG ──────────────────────────────────────────────────────────
 async function logRun(status, details) {
   try {
@@ -254,7 +220,6 @@ async function main() {
           continue;
         }
 
-        await notifyTelegram(title, review, draft);
         totalDrafted++;
       }
 
