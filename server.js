@@ -17,6 +17,43 @@ const pgSession = require('connect-pg-simple')(session);
 const bcrypt = require('bcryptjs');
 const pool = require('./db');
 const { createObjectCsvWriter } = require('csv-writer');
+
+const BREVO_EVENT_MAP = {
+  opened:       'email_opened',
+  clicked:      'email_clicked',
+  hard_bounce:  'email_bounced',
+  soft_bounce:  'email_soft_bounce',
+  unsubscribed: 'email_unsubscribed',
+  spam:         'email_spam',
+};
+
+async function checkAndUpdateWarmStatus(prospectId, email) {
+  try {
+    const res = await pool.query(`
+      SELECT
+        COUNT(CASE WHEN action_type = 'email_opened'
+              AND created_at > NOW() - INTERVAL '14 days' THEN 1 END)::int AS opens_14d,
+        COUNT(CASE WHEN action_type = 'email_clicked' THEN 1 END)::int AS clicks_all
+      FROM touchpoints
+      WHERE prospect_id = $1 AND channel = 'email'
+    `, [prospectId]);
+    const { opens_14d, clicks_all } = res.rows[0];
+    const opens  = parseInt(opens_14d  || 0);
+    const clicks = parseInt(clicks_all || 0);
+    if (clicks >= 1 || opens >= 3) {
+      const upd = await pool.query(
+        `UPDATE prospects SET status = 'warm', updated_at = NOW()
+         WHERE id = $1 AND status = 'cold' RETURNING id`,
+        [prospectId]
+      );
+      if (upd.rows.length > 0) {
+        console.log(`[Riley] ${email} upgraded to warm — ${opens} opens / ${clicks} clicks`);
+      }
+    }
+  } catch (err) {
+    console.error('[Riley] checkAndUpdateWarmStatus error:', err.message);
+  }
+}
 const { publishBlogPost } = require('./utils/blogPublisher');
 const {
   publishToGoogleBusiness,
@@ -89,6 +126,79 @@ const SKIP_DOMAINS = [
 ];
 
 // ── ROUTES ────────────────────────────────────────────────────────────
+
+// ── BREVO EMAIL TRACKING WEBHOOKS ─────────────────────────────────────────────
+app.post('/webhooks/brevo', (req, res) => {
+  res.status(200).json({ ok: true });
+  setImmediate(async () => {
+    try {
+      const payload = req.body || {};
+      const event      = payload.event;
+      const email      = (payload.email || '').toLowerCase().trim();
+      const actionType = BREVO_EVENT_MAP[event];
+
+      if (!actionType || !email) return;
+
+      const prospectRes = await pool.query(
+        `SELECT id, status FROM prospects WHERE LOWER(email) = $1 LIMIT 1`,
+        [email]
+      );
+      if (!prospectRes.rows.length) {
+        console.warn(`[Riley] No prospect for email: ${email} (event: ${event})`);
+        return;
+      }
+      const prospect = prospectRes.rows[0];
+
+      // Log touchpoint
+      const outcomeJson = JSON.stringify({
+        event,
+        subject:    payload.subject  || null,
+        link:       payload.link     || null,
+        brevo_id:   payload.id       || null,
+        message_id: payload.messageId || null,
+        date:       payload.date     || null,
+      });
+      await pool.query(`
+        INSERT INTO touchpoints
+          (prospect_id, channel, action_type, content_summary, outcome, sentiment, external_ref)
+        VALUES ($1, 'email', $2, $3, $4, 'neutral', $5)
+      `, [
+        prospect.id, actionType,
+        payload.subject || null,
+        outcomeJson,
+        payload.messageId || null,
+      ]);
+
+      // DNC for bounces / spam / unsubscribes
+      if (['email_bounced', 'email_spam', 'email_unsubscribed'].includes(actionType)) {
+        await pool.query(
+          `UPDATE prospects SET do_not_contact = true, updated_at = NOW() WHERE id = $1`,
+          [prospect.id]
+        );
+        console.log(`[Riley] ${email} marked do_not_contact (${event})`);
+      }
+
+      // Warm signal check
+      if (['email_opened', 'email_clicked'].includes(actionType)) {
+        await checkAndUpdateWarmStatus(prospect.id, email);
+      }
+
+      // agent_log
+      await pool.query(`
+        INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)
+        VALUES ('riley', $1, $2, $3, 'success', NOW())
+      `, [
+        actionType,
+        prospect.id,
+        JSON.stringify({ event, email, subject: payload.subject, link: payload.link }),
+      ]);
+
+      console.log(`[Riley] Tracked ${event} for ${email}`);
+    } catch (err) {
+      console.error('[Riley] Webhook error:', err.message);
+    }
+  });
+});
 
 // Auth middleware
 function requireAuth(req, res, next) {
@@ -837,6 +947,8 @@ app.get('/api/activity-panel', requireAuth, async (req, res) => {
           c.name as company_name,
           COUNT(t.id)::int as emails_sent,
           MAX(t.created_at) as last_touch,
+          COALESCE(eng.open_count,  0)::int as open_count,
+          COALESCE(eng.click_count, 0)::int as click_count,
           CASE
             WHEN COUNT(t.id) = 1 THEN MAX(t.created_at) + INTERVAL '4 days'
             WHEN COUNT(t.id) = 2 THEN MAX(t.created_at) + INTERVAL '4 days'
@@ -849,8 +961,17 @@ app.get('/api/activity-panel', requireAuth, async (req, res) => {
           ON t.prospect_id = p.id
           AND t.channel = 'email'
           AND t.action_type = 'outbound'
+        LEFT JOIN (
+          SELECT
+            prospect_id,
+            COUNT(CASE WHEN action_type = 'email_opened'  THEN 1 END)::int AS open_count,
+            COUNT(CASE WHEN action_type = 'email_clicked' THEN 1 END)::int AS click_count
+          FROM touchpoints
+          WHERE channel = 'email'
+          GROUP BY prospect_id
+        ) eng ON eng.prospect_id = p.id
         WHERE p.do_not_contact = false
-        GROUP BY p.id, c.name
+        GROUP BY p.id, c.name, eng.open_count, eng.click_count
         ORDER BY MAX(t.created_at) DESC
         LIMIT 100
       `),
@@ -869,15 +990,19 @@ app.get('/api/activity-panel', requireAuth, async (req, res) => {
     const sequences = seqResult.rows.map(r => {
       const count = r.emails_sent;
       return {
-        id: r.id,
-        business: r.company_name || (r.notes || '').split('—')[0].trim() || `${r.first_name} ${r.last_name}`.trim(),
-        status: r.status,
-        emails_sent: count,
-        stage_label: STAGE_LABELS[Math.min(count, 4)] || 'Unknown',
-        last_touch: r.last_touch,
-        next_due_at: r.next_due_at,
-        overdue: r.next_due_at ? new Date(r.next_due_at) < new Date() : false,
-        complete: count >= 4
+        id:           r.id,
+        business:     r.company_name || (r.notes || '').split('—')[0].trim() || `${r.first_name} ${r.last_name}`.trim(),
+        status:       r.status,
+        emails_sent:  count,
+        stage_label:  STAGE_LABELS[Math.min(count, 4)] || 'Unknown',
+        last_touch:   r.last_touch,
+        next_due_at:  r.next_due_at,
+        overdue:      r.next_due_at ? new Date(r.next_due_at) < new Date() : false,
+        complete:     count >= 4,
+        open_count:   r.open_count  || 0,
+        click_count:  r.click_count || 0,
+        has_opened:   (r.open_count  || 0) > 0,
+        has_clicked:  (r.click_count || 0) > 0,
       };
     });
 
@@ -1193,6 +1318,60 @@ app.get('/api/analytics/top-posts', requireAuth, async (req, res) => {
       LIMIT $1
     `, [limit]);
     res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API - Email engagement stats
+app.get('/api/analytics/email', requireAuth, async (req, res) => {
+  try {
+    const [totals, weekTotals, warmUpgraded] = await Promise.all([
+      pool.query(`
+        SELECT
+          COUNT(CASE WHEN action_type = 'outbound'            THEN 1 END)::int AS sent_total,
+          COUNT(CASE WHEN action_type = 'email_opened'        THEN 1 END)::int AS opened_total,
+          COUNT(CASE WHEN action_type = 'email_clicked'       THEN 1 END)::int AS clicked_total,
+          COUNT(CASE WHEN action_type = 'email_bounced'       THEN 1 END)::int AS bounced_total,
+          COUNT(CASE WHEN action_type = 'email_unsubscribed'  THEN 1 END)::int AS unsub_total
+        FROM touchpoints WHERE channel = 'email'
+      `),
+      pool.query(`
+        SELECT
+          COUNT(CASE WHEN action_type = 'outbound'           THEN 1 END)::int AS sent_week,
+          COUNT(CASE WHEN action_type = 'email_opened'       THEN 1 END)::int AS opened_week,
+          COUNT(CASE WHEN action_type = 'email_clicked'      THEN 1 END)::int AS clicked_week,
+          COUNT(CASE WHEN action_type = 'email_bounced'      THEN 1 END)::int AS bounced_week
+        FROM touchpoints
+        WHERE channel = 'email' AND created_at > NOW() - INTERVAL '7 days'
+      `),
+      pool.query(`
+        SELECT COUNT(*)::int AS count
+        FROM prospects
+        WHERE status = 'warm'
+          AND updated_at > NOW() - INTERVAL '7 days'
+          AND EXISTS (
+            SELECT 1 FROM touchpoints t
+            WHERE t.prospect_id = prospects.id AND t.action_type = 'email_clicked'
+          )
+      `),
+    ]);
+
+    const t  = totals.rows[0];
+    const w  = weekTotals.rows[0];
+
+    const pct = (num, den) => den > 0 ? +((num / den) * 100).toFixed(1) : 0;
+
+    res.json({
+      sent_total:     t.sent_total,
+      sent_week:      w.sent_week,
+      open_rate:      pct(t.opened_total, t.sent_total),
+      click_rate:     pct(t.clicked_total, t.sent_total),
+      bounce_rate:    pct(t.bounced_total, t.sent_total),
+      unsub_rate:     pct(t.unsub_total, t.sent_total),
+      open_rate_week: pct(w.opened_week, w.sent_week),
+      warm_upgraded_week: warmUpgraded.rows[0].count,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

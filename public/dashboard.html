@@ -1166,6 +1166,34 @@ body::before {
 .seq-next-overdue { color: var(--orange); }
 .seq-next-ok      { color: var(--gray-light); }
 
+/* Email engagement signals */
+.eng-dot {
+  display: inline-block; width: 7px; height: 7px;
+  border-radius: 50%; margin-right: 5px; flex-shrink: 0;
+  vertical-align: middle; position: relative; top: -1px;
+}
+.eng-dot-opened  { background: var(--teal);   box-shadow: 0 0 4px var(--teal); }
+.eng-dot-clicked { background: #00ff88;        box-shadow: 0 0 6px #00ff88;    }
+.seq-business-cell { display: flex; align-items: center; }
+
+/* Email performance stats strip */
+.email-perf-strip {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.75rem;
+}
+.email-perf-tile {
+  background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+  border-radius: 8px; padding: 0.75rem 1rem;
+}
+.email-perf-label {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.55rem;
+  letter-spacing: 1.5px; text-transform: uppercase; color: var(--gray); margin-bottom: 4px;
+}
+.email-perf-val {
+  font-size: 1.25rem; font-weight: 600; color: var(--white); line-height: 1;
+}
+.email-perf-sub { font-size: 0.65rem; color: rgba(255,255,255,0.4); margin-top: 2px; }
+
 /* Timeline */
 .tl-filter-bar {
   display: flex; gap: 6px; flex-wrap: wrap;
@@ -1920,6 +1948,14 @@ body::before {
     </div>
 
     <div class="analytics-grid" id="contentAnalyticsGrid">
+
+      <!-- Email Performance -->
+      <div class="an-card an-full" id="emailPerfCard">
+        <div class="an-card-title">Email Performance</div>
+        <div class="email-perf-strip" id="emailPerfStrip">
+          <div class="no-data-note">Loading…</div>
+        </div>
+      </div>
 
       <!-- Channel performance cards -->
       <div class="an-card an-full">
@@ -2933,7 +2969,16 @@ function renderSequences(rows) {
     const nextDueFmt = r.next_due_at ? _fmtDate(r.next_due_at) : '—';
     const nextCls = r.overdue ? 'seq-next-overdue' : 'seq-next-ok';
     return `<tr>
-      <td class="seq-name">${_esc(r.business || '—')}</td>
+      <td>
+        <div class="seq-business-cell">
+          ${r.has_clicked
+            ? `<span class="eng-dot eng-dot-clicked" title="${r.click_count} click${r.click_count !== 1 ? 's' : ''} — warm signal"></span>`
+            : r.has_opened
+              ? `<span class="eng-dot eng-dot-opened" title="${r.open_count} open${r.open_count !== 1 ? 's' : ''}"></span>`
+              : ''}
+          <span class="seq-name">${_esc(r.business || '—')}</span>
+        </div>
+      </td>
       <td style="text-align:center">${r.emails_sent}</td>
       <td style="color:var(--gray-light);font-size:0.7rem">${_esc(r.stage_label || '')}</td>
       <td style="color:var(--gray)">${_relTimeA(r.last_touch)}</td>
@@ -3358,6 +3403,36 @@ async function loadAnalytics() {
   loadContentAnalytics();
 }
 
+async function loadEmailAnalytics() {
+  try {
+    const res = await fetch('/api/analytics/email', { credentials: 'include' });
+    if (!res.ok) return;
+    const d = await res.json();
+
+    const strip = document.getElementById('emailPerfStrip');
+    if (!strip) return;
+
+    const tiles = [
+      { label: 'Sent Total',   val: (d.sent_total  || 0).toLocaleString(), sub: `${d.sent_week || 0} this week` },
+      { label: 'Open Rate',    val: `${d.open_rate  || 0}%`, sub: `${d.open_rate_week || 0}% this week` },
+      { label: 'Click Rate',   val: `${d.click_rate || 0}%`, sub: 'any link click' },
+      { label: 'Bounce Rate',  val: `${d.bounce_rate || 0}%`, sub: 'hard bounces' },
+      { label: 'Unsub Rate',   val: `${d.unsub_rate  || 0}%`, sub: 'unsubscribed' },
+      { label: 'Warm Upgraded', val: d.warm_upgraded_week || 0, sub: 'via email this week' },
+    ];
+
+    strip.innerHTML = tiles.map(t => `
+      <div class="email-perf-tile">
+        <div class="email-perf-label">${t.label}</div>
+        <div class="email-perf-val">${t.val}</div>
+        <div class="email-perf-sub">${t.sub}</div>
+      </div>
+    `).join('');
+  } catch(e) {
+    console.error('loadEmailAnalytics:', e);
+  }
+}
+
 // ── CONTENT ANALYTICS ────────────────────────────────────────────────────────
 
 const CHANNEL_LABELS = {
@@ -3379,6 +3454,7 @@ async function loadContentAnalytics() {
     renderContentTypeBars(summary);
     renderBestTimesHeatmap(summary);
     renderTopPostsTable(topPosts);
+    loadEmailAnalytics();
 
     const subEl = document.getElementById('contentPerfSub');
     if (subEl) {

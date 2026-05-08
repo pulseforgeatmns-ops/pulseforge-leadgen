@@ -98,6 +98,37 @@ async function getSystemSnapshot() {
     GROUP BY channel
   `).catch(() => ({ rows: [] }));
 
+  // Prospects clicked a link today — high priority signals
+  const clickedToday = await pool.query(`
+    SELECT DISTINCT p.id, p.first_name, p.last_name, c.name as company_name
+    FROM touchpoints t
+    JOIN prospects p ON t.prospect_id = p.id
+    LEFT JOIN companies c ON p.company_id = c.id
+    WHERE t.action_type = 'email_clicked'
+      AND t.created_at > NOW() - INTERVAL '1 day'
+  `).catch(() => ({ rows: [] }));
+
+  // Warm upgrades today
+  const warmToday = await pool.query(`
+    SELECT COUNT(*)::int AS count FROM prospects
+    WHERE status = 'warm'
+      AND updated_at > NOW() - INTERVAL '1 day'
+      AND EXISTS (
+        SELECT 1 FROM touchpoints t WHERE t.prospect_id = prospects.id
+          AND t.action_type = 'email_clicked'
+      )
+  `).catch(() => ({ rows: [{ count: 0 }] }));
+
+  // Email open rate this week
+  const emailStats = await pool.query(`
+    SELECT
+      COUNT(CASE WHEN action_type = 'outbound'      THEN 1 END)::int AS sent,
+      COUNT(CASE WHEN action_type = 'email_opened'  THEN 1 END)::int AS opened,
+      COUNT(CASE WHEN action_type = 'email_clicked' THEN 1 END)::int AS clicked
+    FROM touchpoints
+    WHERE channel = 'email' AND created_at > NOW() - INTERVAL '7 days'
+  `).catch(() => ({ rows: [{ sent: 0, opened: 0, clicked: 0 }] }));
+
   return {
     prospectStats: prospectStats.rows,
     recentTouchpoints: recentTouchpoints.rows,
@@ -108,6 +139,9 @@ async function getSystemSnapshot() {
     recentPosts: recentPosts.rows,
     bestContentTypes: bestContentTypes.rows,
     postFreq: postFreq.rows,
+    clickedToday:  clickedToday.rows,
+    warmToday:     warmToday.rows[0]?.count || 0,
+    emailStats:    emailStats.rows[0],
   };
 }
 
@@ -134,9 +168,9 @@ Known fixes already implemented (do not flag these as issues):
 
 Generate a concise daily digest with:
 1. SYSTEM STATUS — brief overview of what's happening across all agents
-2. TOP PRIORITIES — the 3 most important actions to take today, ranked
-3. CONTENT INTELLIGENCE — which content types and channels are performing above or below average based on post_analytics; flag any channel that hasn't posted in 7+ days; note if performance data is still accumulating if the tables are empty
-4. WARM SIGNALS — any prospects showing signs of interest worth flagging
+2. TOP PRIORITIES — the 3 most important actions to take today, ranked; if any prospects are in clickedToday, flag them as URGENT: "🔥 [Business] clicked a link in your email — Cal or Sam should follow up today"
+3. CONTENT INTELLIGENCE — which content types and channels are performing above or below average based on post_analytics; flag any channel that hasn't posted in 7+ days; note if performance data is still accumulating if the tables are empty; email open rate this week if data available
+4. WARM SIGNALS — any prospects showing signs of interest worth flagging; include email opens/clicks from today
 5. RECOMMENDATIONS — 2-3 strategic suggestions based on the data patterns
 6. WATCH LIST — anything that needs attention or looks off
 

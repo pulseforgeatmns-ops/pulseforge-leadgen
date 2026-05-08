@@ -77,6 +77,22 @@ gopulseforge.com`
   ]
 };
 
+const WARM_STEP = {
+  subject: "saw you checked us out — quick question",
+  body: `Hi {{first_name}},
+
+Noticed you clicked through on one of my earlier notes — wanted to reach out directly.
+
+The fact that you looked means something. I know the inbox is noisy.
+
+I'd love to show you what consistent automated outreach could look like specifically for {{business_name}} — I can have something over to you same day.
+
+Worth a quick conversation this week?
+
+Jacob Maynard
+gopulseforge.com`
+};
+
 function fillTemplate(template, prospect) {
   const rawName = prospect.first_name || prospect.name?.split(' ')[0] || '';
   const firstName = (rawName && rawName !== '—') ? rawName : 'there';
@@ -117,7 +133,13 @@ async function getProspectsForEmail() {
     SELECT p.*, c.name as company
     FROM prospects p
     LEFT JOIN companies c ON p.company_id = c.id
-    WHERE p.status = 'cold'
+    WHERE (p.status = 'cold' OR (
+      p.status = 'warm'
+      AND EXISTS (
+        SELECT 1 FROM touchpoints t2
+        WHERE t2.prospect_id = p.id AND t2.channel = 'email'
+      )
+    ))
     AND p.email IS NOT NULL
     AND p.email != ''
     AND p.email NOT LIKE '%@domain.com'
@@ -140,6 +162,7 @@ async function getNextSequenceStep(prospectId) {
     SELECT * FROM touchpoints
     WHERE prospect_id = $1
     AND channel = 'email'
+    AND action_type IN ('outbound', 'email_warm')
     ORDER BY created_at ASC
   `, [prospectId]);
 
@@ -170,6 +193,26 @@ async function getNextSequenceStep(prospectId) {
   return nextStep;
 }
 
+async function hasClickedEmail(prospectId) {
+  const pool = require('./db');
+  const res = await pool.query(`
+    SELECT 1 FROM touchpoints
+    WHERE prospect_id = $1 AND channel = 'email' AND action_type = 'email_clicked'
+    LIMIT 1
+  `, [prospectId]);
+  return res.rows.length > 0;
+}
+
+async function hasSentWarmEmail(prospectId) {
+  const pool = require('./db');
+  const res = await pool.query(`
+    SELECT 1 FROM touchpoints
+    WHERE prospect_id = $1 AND channel = 'email' AND action_type = 'email_warm'
+    LIMIT 1
+  `, [prospectId]);
+  return res.rows.length > 0;
+}
+
 async function run() {
   console.log('\nEmmett agent running...\n');
 
@@ -189,38 +232,68 @@ async function run() {
 
     console.log('Processing prospect:', prospect.first_name, prospect.email);
 
-  let step;
-try {
-  step = await getNextSequenceStep(prospect.id);
-  console.log('Step result:', step);
-} catch (err) {
-  console.error('getNextSequenceStep error:', err.message);
-  continue;
-}
-if (!step) continue;
+    // Per-prospect DNC check (safety net in case status changed since query)
+    const pool2 = require('./db');
+    const dncCheck = await pool2.query(
+      'SELECT do_not_contact FROM prospects WHERE id = $1', [prospect.id]
+    );
+    if (dncCheck.rows[0]?.do_not_contact) {
+      console.log(`Skipping ${prospect.email} — do_not_contact`);
+      continue;
+    }
 
-    const subject = fillTemplate(step.subject, prospect);
-    const body = fillTemplate(step.body, prospect);
+    let step;
+    try {
+      step = await getNextSequenceStep(prospect.id);
+      console.log('Step result:', step);
+    } catch (err) {
+      console.error('getNextSequenceStep error:', err.message);
+      continue;
+    }
+    if (!step) continue;
+
+    // Check for warm email substitution on Day 4+ follow-ups
+    let useWarm = false;
+    if (step.day > 0) {
+      const clicked  = await hasClickedEmail(prospect.id);
+      const warmSent = await hasSentWarmEmail(prospect.id);
+      if (clicked && warmSent) {
+        console.log(`${prospect.email} already received warm email — skipping`);
+        continue;
+      }
+      if (clicked && !warmSent) {
+        useWarm = true;
+        console.log(`Emmett: ${prospect.email} has clicked — sending warm sequence instead of standard follow-up`);
+      }
+    }
+
+    const activeStep = useWarm ? WARM_STEP : step;
+    const subject = fillTemplate(activeStep.subject, prospect);
+    const body    = fillTemplate(activeStep.body,    prospect);
 
     console.log(`Sending to: ${prospect.email} (${prospect.name})`);
     console.log(`Subject: ${subject}`);
 
-   const success = await sendEmail(prospect.email, `${prospect.first_name} ${prospect.last_name}`, subject, body);
+    const success = await sendEmail(
+      prospect.email,
+      `${prospect.first_name} ${prospect.last_name}`,
+      subject,
+      body
+    );
 
     if (success) {
       await db.logTouchpoint(
         prospect.id,
         'email',
-        'outbound',
+        useWarm ? 'email_warm' : 'outbound',
         subject,
-        { step: step.day, sequence: 'cold_outreach' },
+        useWarm ? { sequence: 'warm_outreach' } : { step: step.day, sequence: 'cold_outreach' },
         'neutral'
       );
       sent++;
       console.log('Touchpoint logged.\n');
     }
 
-    // Small delay between sends
     await new Promise(r => setTimeout(r, 2000));
   }
 

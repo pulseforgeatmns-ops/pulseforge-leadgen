@@ -131,6 +131,55 @@ async function getWeeklyData() {
     LIMIT 1
   `).catch(() => ({ rows: [] }));
 
+  // Email funnel this week
+  const emailFunnel = await pool.query(`
+    SELECT
+      COUNT(CASE WHEN action_type = 'outbound'           THEN 1 END)::int AS sent,
+      COUNT(CASE WHEN action_type = 'email_opened'       THEN 1 END)::int AS opened,
+      COUNT(CASE WHEN action_type = 'email_clicked'      THEN 1 END)::int AS clicked,
+      COUNT(CASE WHEN action_type = 'email_bounced'      THEN 1 END)::int AS bounced,
+      COUNT(CASE WHEN action_type = 'email_soft_bounce'  THEN 1 END)::int AS soft_bounced,
+      COUNT(CASE WHEN action_type = 'email_unsubscribed' THEN 1 END)::int AS unsubscribed,
+      COUNT(CASE WHEN action_type = 'email_spam'         THEN 1 END)::int AS spam
+    FROM touchpoints
+    WHERE channel = 'email' AND created_at > ${weekAgo}
+  `).catch(() => ({ rows: [{}] }));
+
+  // Email engagement by sequence day
+  const emailByDay = await pool.query(`
+    SELECT
+      content_summary AS subject,
+      COUNT(*)::int AS sent
+    FROM touchpoints
+    WHERE channel = 'email' AND action_type = 'outbound'
+      AND created_at > ${weekAgo}
+    GROUP BY content_summary
+    ORDER BY sent DESC
+    LIMIT 10
+  `).catch(() => ({ rows: [] }));
+
+  // DNC additions this week
+  const dncAdded = await pool.query(`
+    SELECT COUNT(*)::int AS count FROM prospects
+    WHERE do_not_contact = true AND updated_at > ${weekAgo}
+  `).catch(() => ({ rows: [{ count: 0 }] }));
+
+  // Email performance by vertical
+  const emailByVertical = await pool.query(`
+    SELECT
+      co.industry,
+      COUNT(CASE WHEN t.action_type = 'outbound'      THEN 1 END)::int AS sent,
+      COUNT(CASE WHEN t.action_type = 'email_opened'  THEN 1 END)::int AS opened,
+      COUNT(CASE WHEN t.action_type = 'email_clicked' THEN 1 END)::int AS clicked
+    FROM touchpoints t
+    JOIN prospects p ON t.prospect_id = p.id
+    JOIN companies co ON p.company_id = co.id
+    WHERE t.channel = 'email' AND t.created_at > ${weekAgo}
+    GROUP BY co.industry
+    ORDER BY opened DESC
+    LIMIT 8
+  `).catch(() => ({ rows: [] }));
+
   return {
     weekOf: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
     agentActivity: agentActivity.rows,
@@ -145,6 +194,10 @@ async function getWeeklyData() {
     contentPerf: contentPerf.rows,
     topPost: topPost.rows[0] || null,
     worstPost: worstPost.rows[0] || null,
+    emailFunnel:     emailFunnel.rows[0] || {},
+    emailByDay:      emailByDay.rows,
+    dncAdded:        dncAdded.rows[0]?.count || 0,
+    emailByVertical: emailByVertical.rows,
   };
 }
 
@@ -166,12 +219,13 @@ Generate a weekly performance report with these sections:
 
 1. WEEK IN REVIEW — 2-3 sentences summarizing overall system activity and health
 2. CHANNEL PERFORMANCE — how each channel (LinkedIn, Facebook, email) performed this week, what's working and what's lagging
-3. CONTENT PERFORMANCE — which content types and channels are getting the most engagement this week; call out the top and worst performing posts if data is available; note if content performance data is still accumulating if the table is empty
-4. PIPELINE HEALTH — state of the prospect pipeline, who's moving and who's stalled
-5. APPROVAL RATE — comment and content approval patterns, anything worth noting
-6. TRENDS — patterns emerging from the data that weren't visible last week
-7. RECOMMENDATIONS FOR NEXT WEEK — 3 specific, actionable things to do differently or double down on
-8. NORTH STAR METRIC — one single number or fact that best represents this week's performance
+3. EMAIL PERFORMANCE — use emailFunnel, emailByVertical, emailByDay data: open rate, click rate, bounce rate; which vertical has highest open rate; which subject lines drove the most engagement; which sequence day (Day 0/4/8/13) performed best based on subject patterns; DNC additions this week; note if tracking data is still accumulating if tables are empty
+4. CONTENT PERFORMANCE — which content types and channels are getting the most engagement; call out top and worst posts if data is available
+5. PIPELINE HEALTH — state of the prospect pipeline, who's moving and who's stalled
+6. APPROVAL RATE — comment and content approval patterns, anything worth noting
+7. TRENDS — patterns emerging from the data that weren't visible last week
+8. RECOMMENDATIONS FOR NEXT WEEK — 3 specific, actionable things to do differently or double down on
+9. NORTH STAR METRIC — one single number or fact that best represents this week's performance
 
 Be analytical and direct. Use plain text. Back every claim with a specific number from the data. Write like a sharp analyst delivering a board update — confident, data-driven, no fluff.`
     }]
