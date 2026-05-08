@@ -230,6 +230,32 @@ ${posts.length ? cards : '    <p class="empty">No posts yet — check back soon.
 </html>`;
 }
 
+// ── ANALYTICS TRACKING ──────────────────────────────────────────────
+async function savePostAnalytics(item, platformPostId = null) {
+  try {
+    const companyRes = await pool.query(
+      'SELECT id FROM companies WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) LIMIT 1',
+      [item.author_name]
+    );
+    const companyId   = companyRes.rows[0]?.id || null;
+    const contentType = item.post_content?.split('·').pop()?.trim().toLowerCase() || null;
+    const now = new Date();
+    await pool.query(`
+      INSERT INTO post_analytics
+        (pending_id, company_id, channel, content_type, post_text, platform_post_id,
+         published_at, post_day_of_week, post_hour)
+      VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7,$8)
+      ON CONFLICT (pending_id) DO NOTHING
+    `, [
+      item.id, companyId, item.channel, contentType,
+      (item.comment || '').slice(0, 2000), platformPostId,
+      now.getDay(), now.getHours(),
+    ]);
+  } catch (err) {
+    console.error('[Analytics] blog savePostAnalytics failed:', err.message);
+  }
+}
+
 // ── PUBLISH ─────────────────────────────────────────────────────────
 async function publishBlogPost(item) {
   if (!GITHUB_TOKEN || !GITHUB_REPO) {
@@ -256,6 +282,9 @@ async function publishBlogPost(item) {
   const existing = await ghGet(postPath);
   await ghPut(postPath, postHtml, `Add blog post: ${title}`, existing?.sha);
   console.log(`[BlogPublisher] Published: ${postPath}`);
+
+  // Record in post_analytics
+  await savePostAnalytics(item, postPath);
 
   // Rebuild index from all approved blog posts in the DB
   const { rows } = await pool.query(`

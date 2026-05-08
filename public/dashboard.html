@@ -1040,6 +1040,83 @@ body::before {
   font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; color: var(--gray);
 }
 
+/* ── Content analytics ───────────────────────────────────────────────── */
+.content-analytics-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 2.5rem; margin-bottom: 1rem;
+}
+.content-analytics-title {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.58rem;
+  letter-spacing: 2px; text-transform: uppercase; color: var(--gray);
+}
+.channel-perf-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem;
+}
+.ch-perf-card {
+  background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+  border-radius: 8px; padding: 0.85rem 1rem;
+}
+.ch-perf-name {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.6rem;
+  letter-spacing: 1.5px; text-transform: uppercase; color: var(--gray); margin-bottom: 0.5rem;
+}
+.ch-perf-val {
+  font-size: 1.4rem; font-weight: 600; color: var(--teal); line-height: 1;
+  margin-bottom: 0.25rem;
+}
+.ch-perf-meta { font-size: 0.68rem; color: rgba(255,255,255,0.4); }
+.ct-bar-row { margin-bottom: 0.7rem; }
+.ct-bar-label {
+  display: flex; justify-content: space-between; margin-bottom: 3px;
+  font-size: 0.7rem; color: rgba(255,255,255,0.7);
+}
+.ct-bar-pct {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; color: var(--gray);
+}
+.ct-bar-bg {
+  height: 7px; background: rgba(255,255,255,0.05); border-radius: 4px; overflow: hidden;
+}
+.ct-bar-fill { height: 100%; border-radius: 4px; background: var(--purple); transition: width 0.5s ease; }
+.heatmap-wrap { overflow-x: auto; }
+.heatmap-grid {
+  display: grid; gap: 3px; min-width: 300px;
+}
+.heatmap-cell {
+  height: 18px; border-radius: 3px; background: rgba(255,255,255,0.04);
+  transition: background 0.3s;
+}
+.heatmap-day-label {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.52rem;
+  color: var(--gray); text-align: center; padding-top: 1px; letter-spacing: 0.5px;
+}
+.heatmap-hour-label {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.5rem; color: var(--gray);
+  text-align: right; padding-right: 4px; line-height: 18px;
+}
+.top-posts-preview {
+  max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: rgba(255,255,255,0.6); font-size: 0.75rem;
+}
+.top-posts-channel {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.58rem;
+  letter-spacing: 1px; text-transform: uppercase; color: var(--purple);
+}
+.top-posts-type {
+  font-size: 0.68rem; color: var(--gray); margin-top: 1px;
+}
+.top-posts-eng {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+  color: var(--teal); text-align: right;
+}
+.top-posts-num {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+  color: rgba(255,255,255,0.5); text-align: right;
+}
+.no-data-note {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.62rem;
+  color: var(--gray); padding: 1.5rem 0; text-align: center; letter-spacing: 0.5px;
+}
+
 /* ── Activity panel ──────────────────────────────────────────────────── */
 .activity-area {
   display: none;
@@ -1627,6 +1704,34 @@ body::before {
           </div>
         </div>
       </div>
+
+      <div class="agent-card live" onclick="openDetail('analytics')" data-agent="analytics">
+        <div class="agent-card-glow" style="background: radial-gradient(ellipse at 50% 0%, rgba(0,212,180,0.15) 0%, transparent 70%)"></div>
+        <div class="agent-portrait">
+          <div class="orbit-ring orbit-1" style="border-color:rgba(0,212,180,0.3);"><div class="orbit-dot" style="background:#00d4b4;box-shadow:0 0 6px #00d4b4;"></div></div>
+          <div class="orbit-ring orbit-2" style="border-color:rgba(0,212,180,0.15);"><div class="orbit-dot orbit-dot-purple"></div></div>
+          <div class="status-ring-wrap">
+            <svg class="status-ring-svg" viewBox="0 0 92 92">
+              <circle class="ring-track" cx="46" cy="46" r="40"/>
+              <circle class="ring-fill live" cx="46" cy="46" r="40" style="stroke-dashoffset:230; stroke:#00d4b4;"/>
+            </svg>
+          </div>
+          <div class="face-orb" style="background: radial-gradient(circle at 40% 35%, rgba(0,212,180,0.3), rgba(0,0,0,0.8)); box-shadow: 0 0 30px rgba(0,212,180,0.2), inset 0 0 20px rgba(0,0,0,0.5);">📊</div>
+        </div>
+        <div class="agent-card-footer">
+          <div class="agent-card-name">ANALYTICS</div>
+          <div class="agent-card-role">Content Intelligence</div>
+          <div class="agent-card-status">
+            <div class="status-tag st-live">LIVE</div>
+            <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
+          </div>
+          <div class="agent-mini-stats">
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
+            <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
+          </div>
+        </div>
+      </div>
     </div>
 
   </div>
@@ -1803,6 +1908,61 @@ body::before {
             </tr>
           </thead>
           <tbody id="topProspectsBody"></tbody>
+        </table>
+      </div>
+
+    </div>
+
+    <!-- Content Performance Section -->
+    <div class="content-analytics-header">
+      <div class="content-analytics-title">Content Performance</div>
+      <span id="contentPerfSub" style="font-family:'JetBrains Mono',monospace;font-size:0.58rem;color:var(--gray);letter-spacing:1px"></span>
+    </div>
+
+    <div class="analytics-grid" id="contentAnalyticsGrid">
+
+      <!-- Channel performance cards -->
+      <div class="an-card an-full">
+        <div class="an-card-title">Channel Performance Overview</div>
+        <div class="channel-perf-row" id="channelPerfCards">
+          <div class="no-data-note">Waiting for post analytics data…</div>
+        </div>
+      </div>
+
+      <!-- Content type engagement bars -->
+      <div class="an-card">
+        <div class="an-card-title">Content Type · Avg Engagement Rate</div>
+        <div id="contentTypeBars">
+          <div class="no-data-note">No data yet</div>
+        </div>
+      </div>
+
+      <!-- Best times heatmap -->
+      <div class="an-card">
+        <div class="an-card-title">Best Times to Post (Day × Time Block)</div>
+        <div class="heatmap-wrap">
+          <div id="bestTimesHeatmap">
+            <div class="no-data-note">No data yet</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Top posts table -->
+      <div class="an-card an-full">
+        <div class="an-card-title">Top Posts by Engagement Rate</div>
+        <table class="top-table">
+          <thead>
+            <tr>
+              <th>Channel</th>
+              <th>Preview</th>
+              <th style="text-align:right">Engagement</th>
+              <th style="text-align:right">Likes</th>
+              <th style="text-align:right">Comments</th>
+              <th style="text-align:right">Shares</th>
+              <th style="text-align:right">Reach</th>
+            </tr>
+          </thead>
+          <tbody id="topPostsBody"><tr><td colspan="7" class="no-data-note">No data yet</td></tr></tbody>
         </table>
       </div>
 
@@ -3194,6 +3354,175 @@ async function loadAnalytics() {
     console.error('loadAnalytics:', e);
     if (sub) sub.textContent = 'Failed to load';
   }
+  // Load content performance in parallel
+  loadContentAnalytics();
+}
+
+// ── CONTENT ANALYTICS ────────────────────────────────────────────────────────
+
+const CHANNEL_LABELS = {
+  facebook_page: 'Facebook', google_business: 'Google Biz',
+  linkedin_page: 'LinkedIn', blog: 'Blog',
+  facebook: 'FB Comment', linkedin: 'LI Comment',
+};
+
+async function loadContentAnalytics() {
+  try {
+    const [sumRes, topRes] = await Promise.all([
+      fetch('/api/analytics/summary', { credentials: 'include' }),
+      fetch('/api/analytics/top-posts', { credentials: 'include' }),
+    ]);
+    const summary  = await sumRes.json();
+    const topPosts = await topRes.json();
+
+    renderChannelPerfCards(summary);
+    renderContentTypeBars(summary);
+    renderBestTimesHeatmap(summary);
+    renderTopPostsTable(topPosts);
+
+    const subEl = document.getElementById('contentPerfSub');
+    if (subEl) {
+      const totalPosts = summary.reduce((s, r) => s + (r.post_count || 0), 0);
+      subEl.textContent = totalPosts
+        ? `${totalPosts} published posts tracked`
+        : 'No post data yet — approve and publish content to populate';
+    }
+  } catch(e) {
+    console.error('loadContentAnalytics:', e);
+  }
+}
+
+function renderChannelPerfCards(summary) {
+  const el = document.getElementById('channelPerfCards');
+  if (!summary.length) return;
+
+  // Aggregate by channel
+  const byChannel = {};
+  for (const r of summary) {
+    if (!byChannel[r.channel]) byChannel[r.channel] = { totalPosts: 0, engSum: 0, rows: 0 };
+    byChannel[r.channel].totalPosts += r.post_count || 0;
+    byChannel[r.channel].engSum     += parseFloat(r.avg_engagement_rate || 0);
+    byChannel[r.channel].rows++;
+  }
+
+  const cards = Object.entries(byChannel).map(([ch, v]) => {
+    const avgEng = v.rows > 0 ? (v.engSum / v.rows).toFixed(2) : '0.00';
+    return `<div class="ch-perf-card">
+      <div class="ch-perf-name">${CHANNEL_LABELS[ch] || ch}</div>
+      <div class="ch-perf-val">${avgEng}%</div>
+      <div class="ch-perf-meta">${v.totalPosts} post${v.totalPosts !== 1 ? 's' : ''} · avg engagement</div>
+    </div>`;
+  });
+
+  el.innerHTML = cards.length ? cards.join('') : '<div class="no-data-note">No data yet</div>';
+}
+
+function renderContentTypeBars(summary) {
+  const el = document.getElementById('contentTypeBars');
+  if (!summary.length) { el.innerHTML = '<div class="no-data-note">No data yet</div>'; return; }
+
+  // Aggregate by content type across all channels
+  const byType = {};
+  for (const r of summary) {
+    if (!r.content_type) continue;
+    if (!byType[r.content_type]) byType[r.content_type] = { engSum: 0, rows: 0 };
+    byType[r.content_type].engSum += parseFloat(r.avg_engagement_rate || 0);
+    byType[r.content_type].rows++;
+  }
+
+  const entries = Object.entries(byType)
+    .map(([t, v]) => ({ type: t, avg: v.rows > 0 ? v.engSum / v.rows : 0 }))
+    .sort((a, b) => b.avg - a.avg);
+
+  if (!entries.length) { el.innerHTML = '<div class="no-data-note">No data yet</div>'; return; }
+
+  const maxVal = entries[0].avg || 1;
+  el.innerHTML = entries.map(e => {
+    const pct = Math.round((e.avg / maxVal) * 100);
+    const label = e.type.charAt(0).toUpperCase() + e.type.slice(1);
+    return `<div class="ct-bar-row">
+      <div class="ct-bar-label">
+        <span>${label}</span>
+        <span class="ct-bar-pct">${e.avg.toFixed(2)}%</span>
+      </div>
+      <div class="ct-bar-bg"><div class="ct-bar-fill" style="width:${pct}%"></div></div>
+    </div>`;
+  }).join('');
+}
+
+function renderBestTimesHeatmap(summary) {
+  const el = document.getElementById('bestTimesHeatmap');
+  const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const TIME_BLOCKS = [
+    { label: '6–9 AM',   hours: [6,7,8] },
+    { label: '9–12 PM',  hours: [9,10,11] },
+    { label: '12–3 PM',  hours: [12,13,14] },
+    { label: '3–6 PM',   hours: [15,16,17] },
+    { label: '6–9 PM',   hours: [18,19,20] },
+    { label: '9 PM+',    hours: [21,22,23,0,1,2,3,4,5] },
+  ];
+
+  // Build a 7×6 counts grid from best_day_of_week and best_hour
+  const grid = Array.from({ length: 6 }, () => Array(7).fill(0));
+  for (const r of summary) {
+    const day  = r.best_day_of_week;
+    const hour = r.best_hour;
+    if (day == null || hour == null) continue;
+    const blockIdx = TIME_BLOCKS.findIndex(b => b.hours.includes(hour));
+    if (blockIdx >= 0 && day >= 0 && day <= 6) {
+      grid[blockIdx][day] += r.post_count || 1;
+    }
+  }
+
+  const maxVal = Math.max(1, ...grid.flat());
+
+  // Render: header row + data rows
+  let html = `<div style="display:grid;grid-template-columns:55px repeat(7,1fr);gap:3px;margin-bottom:2px">
+    <div></div>
+    ${DAY_NAMES.map(d => `<div class="heatmap-day-label">${d}</div>`).join('')}
+  </div>`;
+
+  for (let b = 0; b < TIME_BLOCKS.length; b++) {
+    html += `<div style="display:grid;grid-template-columns:55px repeat(7,1fr);gap:3px;margin-bottom:3px">
+      <div class="heatmap-hour-label">${TIME_BLOCKS[b].label}</div>`;
+    for (let d = 0; d < 7; d++) {
+      const v = grid[b][d];
+      const intensity = Math.round((v / maxVal) * 100);
+      const alpha = (0.06 + (intensity / 100) * 0.7).toFixed(2);
+      const tip = v > 0 ? `${v} post${v !== 1 ? 's' : ''} · ${DAY_NAMES[d]} ${TIME_BLOCKS[b].label}` : '';
+      html += `<div class="heatmap-cell" title="${tip}"
+        style="background:rgba(139,92,246,${alpha})"></div>`;
+    }
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
+function renderTopPostsTable(posts) {
+  const tbody = document.getElementById('topPostsBody');
+  if (!posts.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="no-data-note">No posts with engagement data yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = posts.map(p => {
+    const ch = CHANNEL_LABELS[p.channel] || p.channel;
+    const preview = _esc((p.post_preview || '').trim());
+    const type = p.content_type ? p.content_type.charAt(0).toUpperCase() + p.content_type.slice(1) : '—';
+    const eng = parseFloat(p.engagement_rate || 0).toFixed(2);
+    return `<tr>
+      <td>
+        <div class="top-posts-channel">${ch}</div>
+        <div class="top-posts-type">${type}</div>
+      </td>
+      <td><div class="top-posts-preview" title="${preview}">${preview || '—'}</div></td>
+      <td class="top-posts-eng">${eng}%</td>
+      <td class="top-posts-num">${p.likes || 0}</td>
+      <td class="top-posts-num">${p.comments || 0}</td>
+      <td class="top-posts-num">${p.shares || 0}</td>
+      <td class="top-posts-num">${p.reach ? p.reach.toLocaleString() : '—'}</td>
+    </tr>`;
+  }).join('');
 }
 
 loadLiveData();

@@ -97,6 +97,40 @@ async function getWeeklyData() {
     LIMIT 5
   `);
 
+  // Content performance this week
+  const contentPerf = await pool.query(`
+    SELECT channel, content_type,
+           COUNT(*) AS posts_published,
+           ROUND(AVG(engagement_rate), 4) AS avg_engagement,
+           MAX(engagement_rate) AS best_engagement
+    FROM post_analytics
+    WHERE published_at > ${weekAgo}
+    GROUP BY channel, content_type
+    ORDER BY avg_engagement DESC
+    LIMIT 10
+  `).catch(() => ({ rows: [] }));
+
+  // Top post this week
+  const topPost = await pool.query(`
+    SELECT channel, content_type, post_text,
+           likes, comments, shares, reach, engagement_rate
+    FROM post_analytics
+    WHERE published_at > ${weekAgo}
+      AND engagement_rate > 0
+    ORDER BY engagement_rate DESC
+    LIMIT 1
+  `).catch(() => ({ rows: [] }));
+
+  // Worst post this week
+  const worstPost = await pool.query(`
+    SELECT channel, content_type, post_text, engagement_rate
+    FROM post_analytics
+    WHERE published_at > ${weekAgo}
+      AND metrics_fetched_at IS NOT NULL
+    ORDER BY engagement_rate ASC
+    LIMIT 1
+  `).catch(() => ({ rows: [] }));
+
   return {
     weekOf: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
     agentActivity: agentActivity.rows,
@@ -107,7 +141,10 @@ async function getWeeklyData() {
     approvalRate: approvalRate.rows,
     activityByDay: activityByDay.rows,
     emailStats: emailStats.rows,
-    mostNurtured: mostNurtured.rows
+    mostNurtured: mostNurtured.rows,
+    contentPerf: contentPerf.rows,
+    topPost: topPost.rows[0] || null,
+    worstPost: worstPost.rows[0] || null,
   };
 }
 
@@ -129,11 +166,12 @@ Generate a weekly performance report with these sections:
 
 1. WEEK IN REVIEW — 2-3 sentences summarizing overall system activity and health
 2. CHANNEL PERFORMANCE — how each channel (LinkedIn, Facebook, email) performed this week, what's working and what's lagging
-3. PIPELINE HEALTH — state of the prospect pipeline, who's moving and who's stalled
-4. APPROVAL RATE — comment and content approval patterns, anything worth noting
-5. TRENDS — patterns emerging from the data that weren't visible last week
-6. RECOMMENDATIONS FOR NEXT WEEK — 3 specific, actionable things to do differently or double down on
-7. NORTH STAR METRIC — one single number or fact that best represents this week's performance
+3. CONTENT PERFORMANCE — which content types and channels are getting the most engagement this week; call out the top and worst performing posts if data is available; note if content performance data is still accumulating if the table is empty
+4. PIPELINE HEALTH — state of the prospect pipeline, who's moving and who's stalled
+5. APPROVAL RATE — comment and content approval patterns, anything worth noting
+6. TRENDS — patterns emerging from the data that weren't visible last week
+7. RECOMMENDATIONS FOR NEXT WEEK — 3 specific, actionable things to do differently or double down on
+8. NORTH STAR METRIC — one single number or fact that best represents this week's performance
 
 Be analytical and direct. Use plain text. Back every claim with a specific number from the data. Write like a sharp analyst delivering a board update — confident, data-driven, no fluff.`
     }]

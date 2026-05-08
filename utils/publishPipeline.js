@@ -34,6 +34,31 @@ function parseComment(raw) {
   };
 }
 
+async function savePostAnalytics(item, platformPostId = null) {
+  try {
+    const companyRes = await pool.query(
+      'SELECT id FROM companies WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) LIMIT 1',
+      [item.author_name]
+    );
+    const companyId  = companyRes.rows[0]?.id || null;
+    const contentType = item.post_content?.split('·').pop()?.trim().toLowerCase() || null;
+    const now = new Date();
+    await pool.query(`
+      INSERT INTO post_analytics
+        (pending_id, company_id, channel, content_type, post_text, platform_post_id,
+         published_at, post_day_of_week, post_hour)
+      VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7,$8)
+      ON CONFLICT (pending_id) DO NOTHING
+    `, [
+      item.id, companyId, item.channel, contentType,
+      (item.comment || '').slice(0, 2000), platformPostId,
+      now.getDay(), now.getHours(),
+    ]);
+  } catch (err) {
+    console.error('[Analytics] savePostAnalytics failed:', err.message);
+  }
+}
+
 // ── 1. GOOGLE BUSINESS PROFILE ────────────────────────────────────────────────
 
 async function getGoogleAccessToken() {
@@ -75,7 +100,6 @@ async function resolveGBPLocation(token) {
 async function publishToGoogleBusiness(item) {
   const needed = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REFRESH_TOKEN'];
   const missing = needed.filter(k => !process.env[k]);
-  console.log('[GBP Publisher] credential check:', needed.map(k => `${k}=${!!process.env[k]}`).join(' '));
   if (missing.length > 0) {
     console.warn('[GBP Publisher] Missing credentials:', missing, '— skipping');
     return;
@@ -85,17 +109,19 @@ async function publishToGoogleBusiness(item) {
     const location = await resolveGBPLocation(token);
     const text     = (item.comment || '').trim();
 
-    await axios.post(
+    const gbpRes = await axios.post(
       `${GBP_BASE}/${location}/localPosts`,
       { languageCode: 'en-US', summary: text, topicType: 'STANDARD' },
       { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
     );
 
+    const platformPostId = gbpRes.data?.name || null;
     await updateStatus(item.id, 'posted');
+    await savePostAnalytics(item, platformPostId);
     await logResult('google_business', 'publish_post', item.id, 'success', { location, chars: text.length });
     console.log(`[GBP Publisher] Posted to ${location}`);
   } catch (err) {
-    console.log('[GBP Publisher] Full error:', JSON.stringify(err.response?.data || err.message, null, 2));
+    console.error('[GBP Publisher] Failed:', err.response?.data || err.message);
     await logResult('google_business', 'publish_post', item.id, 'error', { error: err.message });
   }
 }
@@ -111,10 +137,12 @@ async function publishToFacebookPage(item) {
   }
   try {
     const text = (item.comment || '').trim();
-    await axios.post(`https://graph.facebook.com/${pageId}/feed`, null, {
+    const fbRes = await axios.post(`https://graph.facebook.com/${pageId}/feed`, null, {
       params: { message: text, access_token: pageToken },
     });
+    const platformPostId = fbRes.data?.id || null;
     await updateStatus(item.id, 'posted');
+    await savePostAnalytics(item, platformPostId);
     await logResult('facebook_page', 'publish_post', item.id, 'success', { pageId, chars: text.length });
     console.log(`[FB Page Publisher] Posted to page ${pageId}`);
   } catch (err) {
@@ -198,6 +226,7 @@ async function publishFayeComment(item) {
     await new Promise(r => setTimeout(r, 2500));
 
     await updateStatus(item.id, 'posted');
+    await savePostAnalytics(item, null);
     await logResult('facebook', 'post_comment', item.id, 'success', { url: item.post_url });
     console.log(`[Faye Publisher] Comment posted on ${item.post_url}`);
   } catch (err) {
@@ -238,6 +267,7 @@ async function publishToLinkedInPage(item) {
 }`;
   try {
     const res = await axios.post(
+
       'https://api.buffer.com',
       { query },
       {
@@ -258,11 +288,11 @@ async function publishToLinkedInPage(item) {
     const postId = res.data?.data?.createPost?.post?.id;
     const dueAt  = res.data?.data?.createPost?.post?.dueAt;
     await updateStatus(item.id, 'posted');
+    await savePostAnalytics(item, postId || null);
     await logResult('linkedin_page', 'publish_post', item.id, 'success', { channelId, postId, dueAt });
     console.log(`[LinkedIn Page Publisher] Queued in Buffer — id: ${postId}, due: ${dueAt}`);
   } catch (err) {
-    console.log('[Buffer] Full error response:', JSON.stringify(err.response?.data || err.message, null, 2));
-    console.log('[Buffer] Status:', err.response?.status);
+    console.error('[LinkedIn Page Publisher] Failed:', err.response?.data || err.message);
     await logResult('linkedin_page', 'publish_post', item.id, 'error', { error: err.message });
   }
 }
@@ -394,6 +424,7 @@ async function publishLinkComment(item) {
     }
 
     await updateStatus(item.id, 'posted');
+    await savePostAnalytics(item, null);
     await logResult('linkedin', 'post_comment', item.id, 'success', { url: item.post_url, firstCommentUrl });
     console.log(`[Link Publisher] Comment posted on ${item.post_url}`);
   } catch (err) {

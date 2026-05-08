@@ -72,13 +72,42 @@ async function getSystemSnapshot() {
     ORDER BY total DESC
   `);
 
+  // Recent posts published (last 2 days) with engagement data
+  const recentPosts = await pool.query(`
+    SELECT channel, content_type, engagement_rate, likes, comments, shares, reach,
+           metrics_fetched_at
+    FROM post_analytics
+    WHERE published_at > NOW() - INTERVAL '2 days'
+    ORDER BY published_at DESC
+    LIMIT 10
+  `).catch(() => ({ rows: [] }));
+
+  // Best performing content type per channel (all time)
+  const bestContentTypes = await pool.query(`
+    SELECT channel, content_type, avg_engagement_rate, post_count
+    FROM content_performance_summary
+    WHERE post_count >= 2
+    ORDER BY channel, avg_engagement_rate DESC
+  `).catch(() => ({ rows: [] }));
+
+  // Channel posting frequency: posts in last 7 days vs expected (4 channels × 1/week)
+  const postFreq = await pool.query(`
+    SELECT channel, COUNT(*) AS posts_this_week
+    FROM post_analytics
+    WHERE published_at > NOW() - INTERVAL '7 days'
+    GROUP BY channel
+  `).catch(() => ({ rows: [] }));
+
   return {
     prospectStats: prospectStats.rows,
     recentTouchpoints: recentTouchpoints.rows,
     untouched: untouched.rows,
     cold: cold.rows,
     pending: pending.rows,
-    channelStats: channelStats.rows
+    channelStats: channelStats.rows,
+    recentPosts: recentPosts.rows,
+    bestContentTypes: bestContentTypes.rows,
+    postFreq: postFreq.rows,
   };
 }
 
@@ -106,9 +135,10 @@ Known fixes already implemented (do not flag these as issues):
 Generate a concise daily digest with:
 1. SYSTEM STATUS — brief overview of what's happening across all agents
 2. TOP PRIORITIES — the 3 most important actions to take today, ranked
-3. WARM SIGNALS — any prospects showing signs of interest worth flagging
-4. RECOMMENDATIONS — 2-3 strategic suggestions based on the data patterns
-5. WATCH LIST — anything that needs attention or looks off
+3. CONTENT INTELLIGENCE — which content types and channels are performing above or below average based on post_analytics; flag any channel that hasn't posted in 7+ days; note if performance data is still accumulating if the tables are empty
+4. WARM SIGNALS — any prospects showing signs of interest worth flagging
+5. RECOMMENDATIONS — 2-3 strategic suggestions based on the data patterns
+6. WATCH LIST — anything that needs attention or looks off
 
 Be direct, specific, and actionable. Use plain text, no markdown. Keep each section to 2-4 sentences max. Write like a sharp operations manager giving a morning briefing.`
     }]

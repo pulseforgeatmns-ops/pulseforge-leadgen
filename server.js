@@ -27,7 +27,6 @@ const {
 } = require('./utils/publishPipeline');
 const { generateDemoData } = require('./utils/demoData');
 
-console.log('[env check] GBP creds:', !!process.env.GOOGLE_CLIENT_ID, !!process.env.GOOGLE_CLIENT_SECRET, !!process.env.GOOGLE_REFRESH_TOKEN);
 
 const app  = express();
 app.use(session({
@@ -769,8 +768,9 @@ app.get('/api/agent-weekly-stats', requireAuth, async (req, res) => {
       riley:  { count: pick(raw.riley  || {}, 'triage', 'classify_email'),                  label: 'emails triaged'    },
       vera:   { count: pick(raw.vera   || {}, 'analyze_reviews', 'run'),                    label: 'reviews monitored' },
       cal:    { count: pick(raw.cal    || {}, 'initiate_call', 'run'),                      label: 'calls initiated'   },
-      penny:  { count: pick(raw.penny  || {}, 'analyze_account', 'run'),                    label: 'accounts analyzed' },
-      sketch: { count: pick(raw.sketch || {}, 'generate_mockup', 'run'),                    label: 'mockups generated' },
+      penny:     { count: pick(raw.penny     || {}, 'analyze_account', 'run'),              label: 'accounts analyzed' },
+      sketch:    { count: pick(raw.sketch    || {}, 'generate_mockup', 'run'),              label: 'mockups generated' },
+      analytics: { count: pick(raw.analytics || {}, 'fetch_metrics', 'run'),               label: 'posts analyzed'    },
     };
 
     res.json(stats);
@@ -1133,6 +1133,71 @@ app.get('/api/analytics', requireAuth, async (req, res) => {
   }
 });
 
+// API - Content analytics: recent posts with metrics
+app.get('/api/analytics/posts', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        pa.id, pa.channel, pa.content_type, pa.post_text,
+        pa.platform_post_id, pa.published_at,
+        pa.post_day_of_week, pa.post_hour,
+        pa.likes, pa.comments, pa.shares, pa.reach, pa.clicks,
+        pa.engagement_rate, pa.metrics_fetched_at,
+        c.name AS company_name
+      FROM post_analytics pa
+      LEFT JOIN companies c ON pa.company_id = c.id
+      ORDER BY pa.published_at DESC
+      LIMIT 100
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API - Content performance summary by channel/type
+app.get('/api/analytics/summary', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        cps.channel, cps.content_type,
+        cps.post_count, cps.avg_likes, cps.avg_comments,
+        cps.avg_shares, cps.avg_reach, cps.avg_engagement_rate,
+        cps.best_day_of_week, cps.best_hour,
+        c.name AS company_name
+      FROM content_performance_summary cps
+      LEFT JOIN companies c ON cps.company_id = c.id
+      ORDER BY cps.avg_engagement_rate DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API - Top posts by engagement rate
+app.get('/api/analytics/top-posts', requireAuth, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+    const result = await pool.query(`
+      SELECT
+        pa.id, pa.channel, pa.content_type,
+        LEFT(pa.post_text, 120) AS post_preview,
+        pa.published_at, pa.likes, pa.comments, pa.shares,
+        pa.reach, pa.engagement_rate,
+        c.name AS company_name
+      FROM post_analytics pa
+      LEFT JOIN companies c ON pa.company_id = c.id
+      WHERE pa.engagement_rate > 0
+      ORDER BY pa.engagement_rate DESC
+      LIMIT $1
+    `, [limit]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // API - Trigger agents
 app.post('/api/run/:agent', requireAuth, async (req, res) => {
   const { agent } = req.params;
@@ -1145,7 +1210,7 @@ app.post('/api/run/:agent', requireAuth, async (req, res) => {
     max: './maxAgent', rex: './rexAgent', sketch: './sketchAgent',
     paige: './paigeAgent', faye: './facebookAgent', link: './linkedinAgent',
     sam: './samAgent', vera: './veraAgent', cal: './calAgent', ivy: './ivyAgent',
-    penny: './pennyAgent'
+    penny: './pennyAgent', analytics: './analyticsAgent',
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   await pool.query(
@@ -1163,18 +1228,19 @@ app.post('/api/run/:agent', requireAuth, async (req, res) => {
 
 // Cron endpoint - protected by secret key
 const CRON_MODULES = {
-  scout:  './leadgen',
-  emmett: './emmettAgent',
-  max:    './maxAgent',
-  rex:    './rexAgent',
-  sketch: './sketchAgent',
-  paige:  './paigeAgent',
-  faye:   './facebookAgent',
-  link:   './linkedinAgent',
-  sam:    './samAgent',
-  vera:   './veraAgent',
-  cal:    './calAgent',
-  penny:  './pennyAgent',
+  scout:     './leadgen',
+  emmett:    './emmettAgent',
+  max:       './maxAgent',
+  rex:       './rexAgent',
+  sketch:    './sketchAgent',
+  paige:     './paigeAgent',
+  faye:      './facebookAgent',
+  link:      './linkedinAgent',
+  sam:       './samAgent',
+  vera:      './veraAgent',
+  cal:       './calAgent',
+  penny:     './pennyAgent',
+  analytics: './analyticsAgent',
 };
 
 function runCronAgent(agent, res) {

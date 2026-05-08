@@ -40,15 +40,47 @@ async function getActiveClients() {
   return res.rows;
 }
 
-// Pick a content type not used recently for this company+channel so posts rotate
-async function pickContentType(companyName, channel = null) {
+// Pick a content type — uses performance weighting when ≥4 posts have data, else round-robin
+async function pickContentType(companyName, channel = null, companyId = null) {
   const types = channel === 'blog'
     ? BLOG_CONTENT_TYPES
     : channel === 'linkedin_page'
       ? LINKEDIN_CONTENT_TYPES
       : CONTENT_TYPES;
 
-  // Scope to the same channel so facebook/google posts don't crowd out blog history
+  // Try performance-weighted selection if we have enough data
+  if (companyId && channel) {
+    try {
+      const perfRes = await pool.query(`
+        SELECT content_type, avg_engagement_rate, post_count
+        FROM content_performance_summary
+        WHERE company_id = $1 AND channel = $2
+          AND content_type = ANY($3)
+        ORDER BY avg_engagement_rate DESC
+      `, [companyId, channel, types]);
+
+      const rows = perfRes.rows.filter(r => r.post_count >= 4);
+      if (rows.length >= 2) {
+        // Weighted random: top third 50%, middle 30%, bottom 20%
+        const third = Math.ceil(rows.length / 3);
+        const top    = rows.slice(0, third);
+        const mid    = rows.slice(third, third * 2);
+        const bot    = rows.slice(third * 2);
+
+        const rand = Math.random();
+        let pool_choice;
+        if (rand < 0.50 && top.length)           pool_choice = top;
+        else if (rand < 0.80 && mid.length)      pool_choice = mid;
+        else if (bot.length)                      pool_choice = bot;
+        else                                      pool_choice = top;
+
+        const pick = pool_choice[Math.floor(Math.random() * pool_choice.length)];
+        return pick.content_type;
+      }
+    } catch (_) {}
+  }
+
+  // Fallback: round-robin based on recent pending_comments history
   const channelClause = channel ? `AND channel = $2` : `AND channel IN ('facebook_page', 'google_business', 'blog')`;
   const params = channel ? [companyName, channel] : [companyName];
 
@@ -62,16 +94,13 @@ async function pickContentType(companyName, channel = null) {
     LIMIT 20
   `, params);
 
-  // Extract the type segment: "Blog · Educational" → "educational"
   const recentTypes = res.rows
     .map(r => r.post_content?.split('·').pop()?.trim().toLowerCase())
     .filter(Boolean);
 
-  // Return the first type that hasn't been used recently
   const unused = types.filter(t => !recentTypes.includes(t));
   if (unused.length > 0) return unused[0];
 
-  // All types used — pick the least recently used (furthest back in DESC list)
   for (let i = recentTypes.length - 1; i >= 0; i--) {
     if (types.includes(recentTypes[i])) return recentTypes[i];
   }
@@ -315,7 +344,7 @@ AND status = 'pending';`);
 
     for (const company of clients) {
       for (const channel of CHANNELS) {
-        const contentType = await pickContentType(company.name, channel);
+        const contentType = await pickContentType(company.name, channel, company.id);
         console.log(`${company.name} — ${channel} — ${contentType}`);
 
         try {
