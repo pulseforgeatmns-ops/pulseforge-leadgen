@@ -20,7 +20,7 @@ async function logResult(channel, action, itemId, status, details) {
     await pool.query(
       `INSERT INTO agent_log (agent_name, action, payload, status, ran_at)
        VALUES ($1, $2, $3, $4, NOW())`,
-      [`${channel}_publisher`, action, JSON.stringify({ id: itemId, ...details }), status]
+      ['paige', action, JSON.stringify({ id: itemId, ...details }), status]
     );
   } catch (_) {}
 }

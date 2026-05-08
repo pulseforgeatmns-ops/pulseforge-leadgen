@@ -1223,11 +1223,49 @@ app.get('/api/analytics', requireAuth, async (req, res) => {
     icp.rows.forEach(r => { icpMap[r.bucket] = parseInt(r.count); });
     const icp_distribution = BUCKETS.map(b => ({ bucket: b, count: icpMap[b] || 0 }));
 
-    // Agent breakdown
-    const agent_breakdown = agents.rows.map(r => ({
-      agent: r.agent_name,
-      count: parseInt(r.count)
-    }));
+    // Agent breakdown — normalize dirty historical names then merge duplicates
+    const AGENT_NAME_MAP = {
+      faye_agent:              'faye',
+      faye_agent1:             'faye',
+      facebook_agent:          'faye',
+      link_agent:              'link',
+      link_agent1:             'link',
+      linkedin_agent:          'link',
+      cal_agent:               'cal',
+      analytics_agent:         'analytics',
+      emmett_agent:            'emmett',
+      emmett_agent1:           'emmett',
+      email_agent:             'emmett',
+      scout_agent:             'scout',
+      sketch_agent:            'sketch',
+      max_agent:               'max',
+      rex_agent:               'rex',
+      riley_agent:             'riley',
+      sam_agent:               'sam',
+      vera_agent:              'vera',
+      paige_agent:             'paige',
+      penny_agent:             'penny',
+      ivy_agent:               'ivy',
+      facebook_page_publisher: 'paige',
+      linkedin_page_publisher: 'paige',
+      google_business_publisher: 'paige',
+      blog_publisher:          'paige',
+    };
+    function normalizeAgentName(raw) {
+      if (!raw) return 'unknown';
+      const lower = raw.toLowerCase();
+      if (AGENT_NAME_MAP[lower]) return AGENT_NAME_MAP[lower];
+      // strip trailing _agent or _publisher suffix
+      return lower.replace(/_(agent|publisher)\d*$/, '').replace(/\d+$/, '');
+    }
+    const agentTotals = {};
+    agents.rows.forEach(r => {
+      const name = normalizeAgentName(r.agent_name);
+      agentTotals[name] = (agentTotals[name] || 0) + parseInt(r.count);
+    });
+    const agent_breakdown = Object.entries(agentTotals)
+      .map(([agent, count]) => ({ agent, count }))
+      .sort((a, b) => b.count - a.count);
 
     // Funnel — enforce order, include replied/converted if present
     const STAGES = ['cold', 'warm', 'replied', 'converted'];
@@ -1451,7 +1489,7 @@ app.post('/api/run/:agent', requireAuth, async (req, res) => {
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   await pool.query(
     `INSERT INTO agent_log (agent_name, action, payload, status, ran_at) VALUES ($1, $2, $3, $4, NOW())`,
-    [`${agent}_agent`, 'dashboard_trigger', JSON.stringify({ triggered_by: 'dashboard' }), 'pending']
+    [agent, 'dashboard_trigger', JSON.stringify({ triggered_by: 'dashboard' }), 'pending']
   );
   res.json({ success: true, message: `${agent} triggered successfully` });
   try {

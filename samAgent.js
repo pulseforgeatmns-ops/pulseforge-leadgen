@@ -2,7 +2,7 @@ require('dotenv').config();
 const pool = require('./db');
 const db = require('./dbClient');
 
-const AGENT_NAME = 'sam_agent';
+const AGENT_NAME = 'sam';
 
 const ACCOUNT_SID    = process.env.TWILIO_ACCOUNT_SID;
 const AUTH_TOKEN     = process.env.TWILIO_AUTH_TOKEN;
