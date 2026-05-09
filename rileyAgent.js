@@ -22,14 +22,6 @@ async function getAuthClient() {
   const { client_secret, client_id, redirect_uris } = credentials.installed;
   const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
 
-  // Use env variable on Railway, file locally
-  if (process.env.GMAIL_TOKEN) {
-    const token = JSON.parse(process.env.GMAIL_TOKEN);
-    oAuth2Client.setCredentials(token);
-    return oAuth2Client;
-  }
-
-  // Use env variable on Railway, file locally
   if (process.env.GMAIL_TOKEN) {
     const token = JSON.parse(process.env.GMAIL_TOKEN);
     oAuth2Client.setCredentials(token);

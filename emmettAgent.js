@@ -213,6 +213,12 @@ async function hasSentWarmEmail(prospectId) {
   return res.rows.length > 0;
 }
 
+function humanDelay() {
+  const ms = (45 + Math.random() * 45) * 1000; // 45–90 seconds
+  console.log(`Waiting ${Math.round(ms / 1000)}s before next send...`);
+  return new Promise(r => setTimeout(r, ms));
+}
+
 async function run() {
   console.log('\nEmmett agent running...\n');
 
@@ -223,11 +229,21 @@ async function run() {
 
   let sent = 0;
   const dailyLimit = 40;
+  const industryCap = 5; // max sends per industry per run
+  const industryCounts = {};
 
   for (const prospect of prospects) {
     if (sent >= dailyLimit) {
       console.log('Daily send limit reached.');
       break;
+    }
+
+    // Industry cap — prevent blasting a single vertical in one run
+    const industry = (prospect.industry || 'unknown').toLowerCase();
+    industryCounts[industry] = (industryCounts[industry] || 0);
+    if (industryCounts[industry] >= industryCap) {
+      console.log(`Skipping ${prospect.email} — industry cap reached for "${industry}"`);
+      continue;
     }
 
     console.log('Processing prospect:', prospect.first_name, prospect.email);
@@ -290,11 +306,12 @@ async function run() {
         useWarm ? { sequence: 'warm_outreach' } : { step: step.day, sequence: 'cold_outreach' },
         'neutral'
       );
+      industryCounts[industry]++;
       sent++;
       console.log('Touchpoint logged.\n');
     }
 
-    await new Promise(r => setTimeout(r, 2000));
+    if (sent < dailyLimit) await humanDelay();
   }
 
   console.log(`\nEmmett complete. Emails sent: ${sent}`);
