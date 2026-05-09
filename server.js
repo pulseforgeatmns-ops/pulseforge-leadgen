@@ -19,12 +19,13 @@ const pool = require('./db');
 const { createObjectCsvWriter } = require('csv-writer');
 
 const BREVO_EVENT_MAP = {
-  opened:       'email_opened',
-  clicked:      'email_clicked',
-  hard_bounce:  'email_bounced',
-  soft_bounce:  'email_soft_bounce',
-  unsubscribed: 'email_unsubscribed',
-  spam:         'email_spam',
+  opened:           'email_opened',
+  click:            'email_clicked',   // Brevo sends 'click' not 'clicked'
+  loaded_by_proxy:  'email_opened',    // Apple Mail Privacy Protection — treat as open
+  hard_bounce:      'email_bounced',
+  soft_bounce:      'email_soft_bounce',
+  unsubscribed:     'email_unsubscribed',
+  spam:             'email_spam',
 };
 
 async function checkAndUpdateWarmStatus(prospectId, email) {
