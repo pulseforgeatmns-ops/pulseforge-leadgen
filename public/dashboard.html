@@ -621,16 +621,27 @@ body::before {
   text-transform: uppercase; color: var(--purple-bright);
   display: flex; align-items: center; gap: 6px;
   margin-bottom: 0.5rem;
+  cursor: pointer; user-select: none;
 }
+.max-label:hover { opacity: 0.8; }
 .max-dot {
   width: 5px; height: 5px; border-radius: 50%;
   background: var(--purple-bright);
   box-shadow: 0 0 6px var(--purple-bright);
 }
+.max-chevron {
+  margin-left: auto; font-size: 0.6rem; color: var(--purple-bright);
+  transition: transform 0.2s;
+}
+.max-digest.expanded .max-chevron { transform: rotate(180deg); }
 .max-text {
   font-size: 0.75rem; color: rgba(255,255,255,0.65);
   line-height: 1.6;
+  max-height: 3.6rem;
+  overflow: hidden;
+  transition: max-height 0.3s ease;
 }
+.max-digest.expanded .max-text { max-height: 600px; }
 
 /* ACTIONS AREA */
 .actions-area { display: none; overflow-y: auto; height: 100%; padding: 1.5rem 2rem; }
@@ -2103,8 +2114,12 @@ body::before {
       </div>
     </div>
 
-    <div class="max-digest">
-      <div class="max-label"><div class="max-dot"></div>MAX · DAILY BRIEF <span id="maxBriefAge" style="font-size:0.55rem;color:var(--gray);margin-left:8px;font-family:'JetBrains Mono',monospace;"></span></div>
+    <div class="max-digest" id="maxDigest">
+      <div class="max-label" onclick="document.getElementById('maxDigest').classList.toggle('expanded')">
+        <div class="max-dot"></div>MAX · DAILY BRIEF
+        <span id="maxBriefAge" style="font-size:0.55rem;color:var(--gray);margin-left:4px;font-family:'JetBrains Mono',monospace;"></span>
+        <span class="max-chevron">▲</span>
+      </div>
       <div class="max-text" id="maxBriefText">Loading...</div>
     </div>
   </div>
