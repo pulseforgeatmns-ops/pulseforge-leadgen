@@ -641,7 +641,12 @@ body::before {
   overflow: hidden;
   transition: max-height 0.3s ease;
 }
-.max-digest.expanded .max-text { max-height: 600px; }
+.max-digest.expanded .max-text {
+  max-height: 220px;
+  overflow-y: auto;
+}
+.max-digest.expanded .max-text::-webkit-scrollbar { width: 2px; }
+.max-digest.expanded .max-text::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.4); border-radius: 2px; }
 
 /* ACTIONS AREA */
 .actions-area { display: none; overflow-y: auto; height: 100%; padding: 1.5rem 2rem; }
@@ -834,6 +839,18 @@ body::before {
 }
 .filter-btn:hover { color: var(--white); border-color: var(--gray); }
 .filter-btn.active { background: var(--purple-glow); color: var(--purple-bright); border-color: rgba(139,92,246,0.3); }
+
+.prospect-search {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem; letter-spacing: 0.5px;
+  padding: 5px 10px; border-radius: 4px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--white); outline: none;
+  width: 180px; transition: border-color 0.15s;
+  margin-left: auto;
+}
+.prospect-search::placeholder { color: var(--gray); }
+.prospect-search:focus { border-color: rgba(139,92,246,0.4); }
 
 .approvals-grid {
   display: grid;
@@ -1878,6 +1895,7 @@ body::before {
       <button class="filter-btn" data-pfilter="untouched">Untouched</button>
       <button class="filter-btn" data-pfilter="has_phone">Has Phone</button>
       <button class="filter-btn" data-pfilter="has_email">Has Email</button>
+      <input class="prospect-search" id="prospectSearch" type="text" placeholder="Search prospects...">
     </div>
     <div class="prospects-table-wrap">
       <table class="prospects-table">
@@ -2823,7 +2841,7 @@ async function loadAgentSparklines() {
 }
 
 // ── PROSPECTS ─────────────────────────────────────────────────────────
-let _prospects = [], _prospectFilter = 'all', _prospectSort = { col: 'icp_score', dir: 'desc' };
+let _prospects = [], _prospectFilter = 'all', _prospectSearch = '', _prospectSort = { col: 'icp_score', dir: 'desc' };
 let _expandedProspectId = null;
 
 function _parseBusiness(row) {
@@ -2855,14 +2873,25 @@ function _statusBadge(status) {
 }
 
 function _filterProspects(data) {
+  let result;
   switch (_prospectFilter) {
-    case 'cold':      return data.filter(p => (p.status || 'cold') === 'cold');
-    case 'warm':      return data.filter(p => p.status === 'warm');
-    case 'untouched': return data.filter(p => !p.touchpoint_count || p.touchpoint_count === 0);
-    case 'has_phone': return data.filter(p => p.phone);
-    case 'has_email': return data.filter(p => p.email);
-    default:          return data;
+    case 'cold':      result = data.filter(p => (p.status || 'cold') === 'cold'); break;
+    case 'warm':      result = data.filter(p => p.status === 'warm'); break;
+    case 'untouched': result = data.filter(p => !p.touchpoint_count || p.touchpoint_count === 0); break;
+    case 'has_phone': result = data.filter(p => p.phone); break;
+    case 'has_email': result = data.filter(p => p.email); break;
+    default:          result = data;
   }
+  if (_prospectSearch) {
+    const q = _prospectSearch.toLowerCase();
+    result = result.filter(p => {
+      const biz = _parseBusiness(p).toLowerCase();
+      const email = (p.email || '').toLowerCase();
+      const name = ((p.first_name || '') + ' ' + (p.last_name || '')).toLowerCase();
+      return biz.includes(q) || email.includes(q) || name.includes(q);
+    });
+  }
+  return result;
 }
 
 function _sortProspects(data) {
@@ -2992,6 +3021,13 @@ document.querySelectorAll('[data-pfilter]').forEach(btn => {
     _expandedProspectId = null;
     _renderProspects();
   });
+});
+
+// Prospects search
+document.getElementById('prospectSearch').addEventListener('input', e => {
+  _prospectSearch = e.target.value.trim();
+  _expandedProspectId = null;
+  _renderProspects();
 });
 
 // Prospects column sort
