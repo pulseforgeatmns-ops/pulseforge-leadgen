@@ -93,6 +93,149 @@ Jacob Maynard
 gopulseforge.com`
 };
 
+function getSequenceForProspect(prospect) {
+  const vertical = (prospect.vertical || '').toLowerCase();
+  if (vertical.includes('restaurant') || vertical.includes('cafe') || vertical.includes('diner')) {
+    return 'restaurant';
+  }
+  if (vertical.includes('salon') || vertical.includes('hair') || vertical.includes('spa') || vertical.includes('barber')) {
+    return 'salon';
+  }
+  if (vertical.includes('cleaning') || vertical.includes('cleaner')) {
+    return 'cleaning';
+  }
+  if (vertical.includes('fitness') || vertical.includes('gym') || vertical.includes('yoga')) {
+    return 'fitness';
+  }
+  return 'cold_outreach'; // default fallback
+}
+
+restaurant: [
+  {
+    day: 0,
+    subject: "{{business_name}} — honest question",
+    body: `Hi {{first_name}},
+
+I spent years running restaurants in New England. The hardest part was not the service or the food. It was staying visible when I was too busy running the floor to think about marketing.
+
+Most owners I talk to are in the same spot. Great restaurant, not enough time to stay in front of new customers consistently.
+
+I built a system that handles that automatically. It finds local prospects, reaches out on your behalf, and keeps your name visible between rushes. It runs in the background while you run the restaurant.
+
+One question: is getting more new customers through the door something you are actively working on right now?
+
+Jacob Maynard
+Pulseforge`
+  },
+  {
+    day: 4,
+    subject: "still thinking about {{business_name}}",
+    body: `Hi {{first_name}},
+
+Sent you a note a few days ago. Wanted to follow up once before moving on.
+
+I know you are busy. That is kind of the whole point.
+
+The restaurants I work with are not struggling. They are good at what they do. They just do not have time to chase new customers on top of running the kitchen, managing staff, and everything else. That is the gap I fill.
+
+If you want to see a free mockup of what consistent outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+
+Jacob`
+  },
+  {
+    day: 8,
+    subject: "what is actually working in Manchester right now",
+    body: `Hi {{first_name}},
+
+One thing I am seeing across local restaurants right now. The ones growing consistently are not spending more on ads. They are just staying in front of people longer than their competition.
+
+Most owners go quiet between services. The ones winning do not.
+
+I help restaurants like {{business_name}} stay visible automatically. No extra time required on your end.
+
+Quick question before I move on. Are you currently doing anything to stay in front of customers between visits, or is it mostly word of mouth at this point?
+
+Jacob`
+  },
+  {
+    day: 13,
+    subject: "closing the loop",
+    body: `Hi {{first_name}},
+
+Last note from me. I do not want to clutter your inbox.
+
+If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply to this and I will put something together.
+
+Rooting for you either way.
+
+Jacob Maynard
+Pulseforge
+gopulseforge.com`
+  }
+],
+
+salon: [
+  {
+    day: 0,
+    subject: "{{business_name}} — honest question",
+    body: `Hi {{first_name}},
+
+I work with local service businesses in Southern NH on one specific problem: staying visible to new customers without adding more to your plate.
+
+Most salon owners I talk to are fully booked with existing clients but not consistently bringing in new ones. The referral pipeline is unpredictable and there is never enough time to market between appointments.
+
+I built a system that handles outreach automatically. It finds local prospects, reaches out on your behalf, and keeps your name in front of people who are actively looking for a stylist. It runs in the background while you focus on clients.
+
+Is bringing in new clients consistently something you are actively working on right now?
+
+Jacob Maynard
+Pulseforge`
+  },
+  {
+    day: 4,
+    subject: "still thinking about {{business_name}}",
+    body: `Hi {{first_name}},
+
+Sent you a note a few days ago. Wanted to follow up once before moving on.
+
+The salons I work with are not struggling. They are talented and their existing clients love them. The challenge is always the same: not enough time between appointments to market consistently.
+
+If you want to see a free mockup of what automated outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+
+Jacob`
+  },
+  {
+    day: 8,
+    subject: "what is actually working in Southern NH right now",
+    body: `Hi {{first_name}},
+
+One thing I am seeing across local salons right now. The ones growing consistently are not running more ads. They are just staying in front of new clients longer than their competition.
+
+Most stylists go quiet between bookings. The ones building a waitlist do not.
+
+I help salons like {{business_name}} stay visible automatically. No extra time required on your end.
+
+Are you currently doing anything to bring in new clients consistently, or is it mostly referrals and repeat bookings?
+
+Jacob`
+  },
+  {
+    day: 13,
+    subject: "closing the loop",
+    body: `Hi {{first_name}},
+
+Last note from me. I do not want to clutter your inbox.
+
+If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply and I will put something together.
+
+Rooting for you either way.
+
+Jacob Maynard
+Pulseforge
+gopulseforge.com`
+  }
+],
+
 function fillTemplate(template, prospect) {
   const rawName = prospect.first_name || prospect.name?.split(' ')[0] || '';
   const firstName = (rawName && rawName !== '—') ? rawName : 'there';
@@ -155,7 +298,7 @@ async function getProspectsForEmail() {
   return res.rows;
 }
 
-async function getNextSequenceStep(prospectId) {
+async function getNextSequenceStep(prospectId, prospect) {
   const pool = require('./db');
 
   const res = await pool.query(`
@@ -167,7 +310,8 @@ async function getNextSequenceStep(prospectId) {
   `, [prospectId]);
 
   const emailsSent = res.rows.length;
-  const sequence = SEQUENCES.cold_outreach;
+  const sequenceKey = getSequenceForProspect(prospect);
+  const sequence = SEQUENCES[sequenceKey] || SEQUENCES.cold_outreach;
 
 
   if (emailsSent >= sequence.length) {
@@ -260,7 +404,7 @@ async function run() {
 
     let step;
     try {
-      step = await getNextSequenceStep(prospect.id);
+      step = await getNextSequenceStep(prospect.id, prospect);
       console.log('Step result:', step);
     } catch (err) {
       console.error('getNextSequenceStep error:', err.message);
