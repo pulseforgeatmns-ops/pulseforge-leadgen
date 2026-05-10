@@ -7,7 +7,8 @@ const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const FROM_EMAIL = 'jacob@gopulseforge.com';
 const FROM_NAME = 'Jacob Maynard';
 
-// Email sequence definitionsconst SEQUENCES = {
+// Email sequence definitions
+const SEQUENCES = {
   cold_outreach: [
     {
       day: 0,
