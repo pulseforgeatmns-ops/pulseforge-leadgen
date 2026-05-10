@@ -464,7 +464,7 @@ async function main() {
   let leads = await searchGoogle(query, CONFIG.maxResults);
 
   // 1b. Google Places search for retail/wellness verticals
-  const placesVerticals = ['retail', 'salon', 'spa', 'gym', 'fitness', 'wellness', 'boutique', 'barber', 'yoga', 'pilates', 'restaurant', 'cafe', 'diner', 'cleaning', 'property'];
+  const placesVerticals = ['retail', 'salon', 'spa', 'gym', 'fitness', 'wellness', 'boutique', 'barber', 'yoga', 'pilates', 'restaurant', 'cafe', 'diner', 'cleaning', 'property', 'landscap', 'lawn'];
   const isPlacesVertical = placesVerticals.some(v => CONFIG.industry.toLowerCase().includes(v));
   if (isPlacesVertical) {
     console.log('[Places] Detected retail/wellness vertical — running Google Places search...');
