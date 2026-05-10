@@ -159,6 +159,7 @@ Write a Google Business update (3-5 sentences) that:
 - For "behind-the-scenes": builds trust by describing the team, process, or standards
 - For "community": connects the business to the local area in a credible way
 - NO hashtags, NO emojis — professional but human, not corporate
+- Never use dashes or hyphens in any content you write — not as punctuation, not as separators, not in any context.
 
 Return only the post text.`;
 }
