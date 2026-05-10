@@ -44,7 +44,7 @@ const DOMAIN_BLACKLIST = [
   'opensecrets.org','latimes.com','businesswest.com','macaronikid.com',
   'crestmontcapital.com','thebedfordmom.com','mhl.org','usmodernist.org',
   'rackcdn.com','amazonaws.com','whs1959.com','spaindex.com',
-  'sentextsolutions.com','londonderrynh.org'
+  'sentextsolutions.com','londonderrynh.org',
   'nhpr.org','vagaro.com','rocketreach.co','experience.com',
   'nextdoor.com','promatcher.com','bizbuysell.com','turno.com',
   'pmrepublic.com','inmyarea.com','bark.com','expertise.com',
