@@ -8,8 +8,11 @@ const FROM_EMAIL = 'jacob@gopulseforge.com';
 const FROM_NAME = 'Jacob Maynard';
 
 // Email sequence definitions
+const DEMO_URL = 'https://pulseforge-leadgen-production.up.railway.app/demo';
+const CALENDLY_URL = 'https://calendly.com/jacob-gopulseforge/20min';
+
 const SEQUENCES = {
-  cold_outreach: [
+  cleaning: [
     {
       day: 0,
       subject: "{{business_name}} — honest question",
@@ -21,9 +24,7 @@ Most owners I talk to are in the same spot. Great business, not enough time to s
 
 I built a system that handles that automatically — finds local prospects, reaches out on your behalf, keeps your name visible between jobs. It runs in the background while you run the business.
 
-I'd love to put together a free mockup showing what this could look like specifically for {{business_name}}.
-
-Worth a look?
+Reply and I'll send over a quick overview of what this looks like for a business like {{business_name}}.
 
 Jacob Maynard
 gopulseforge.com`
@@ -39,7 +40,8 @@ I know you're busy. That's kind of the whole point.
 
 The businesses I work with aren't struggling — they're good at what they do. They just don't have time to chase new customers on top of everything else. That's the gap I fill.
 
-If you want to see a free mockup of what consistent outreach could look like for {{business_name}}, just reply and I'll have something over to you same day.
+If you want to see what the system actually looks like running:
+${DEMO_URL}
 
 Jake`
     },
@@ -54,10 +56,10 @@ Most owners go quiet between jobs. The ones winning don't.
 
 I help businesses like {{business_name}} stay visible automatically — no extra time required on your end.
 
-Still happy to put together something specific for you if you want to see it in action.
+If this is relevant for {{business_name}}, here's a link to grab 20 minutes with me:
+${CALENDLY_URL}
 
-Jake
-gopulseforge.com`
+Jake`
     },
     {
       day: 13,
@@ -66,7 +68,9 @@ gopulseforge.com`
 
 Last note from me — I don't want to clutter your inbox.
 
-If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply to this and I'll put something together.
+If the timing is ever right, the demo is here: ${DEMO_URL}
+
+Or just reply anytime — I'll put something together for {{business_name}} same day.
 
 Rooting for you either way.
 
@@ -279,7 +283,13 @@ async function getProspectsForEmail() {
   return res.rows;
 }
 
-async function getNextSequenceStep(prospectId, prospect) {
+function getSequenceForProspect(prospect) {
+  const industry = (prospect.industry || '').toLowerCase();
+  if (industry.includes('cleaning')) return 'cleaning';
+  return 'cleaning';
+}
+
+async function getNextSequenceStep(prospect) {
   const pool = require('./db');
 
   const res = await pool.query(`
@@ -288,11 +298,10 @@ async function getNextSequenceStep(prospectId, prospect) {
     AND channel = 'email'
     AND action_type IN ('outbound', 'email_warm')
     ORDER BY created_at ASC
-  `, [prospectId]);
+  `, [prospect.id]);
 
   const emailsSent = res.rows.length;
-  const sequenceKey = getSequenceForProspect(prospect);
-  const sequence = SEQUENCES[sequenceKey] || SEQUENCES.cold_outreach;
+  const sequence = SEQUENCES[getSequenceForProspect(prospect)];
 
 
   if (emailsSent >= sequence.length) {
@@ -385,7 +394,7 @@ async function run() {
 
     let step;
     try {
-      step = await getNextSequenceStep(prospect.id, prospect);
+      step = await getNextSequenceStep(prospect);
       console.log('Step result:', step);
     } catch (err) {
       console.error('getNextSequenceStep error:', err.message);
