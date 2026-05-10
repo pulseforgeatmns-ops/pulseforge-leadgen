@@ -1519,10 +1519,18 @@ const CRON_MODULES = {
   riley:     './rileyAgent',
 };
 
-function runCronAgent(agent, res) {
+function runCronAgent(agent, res, query = {}) {
   if (!CRON_MODULES[agent]) return res.status(400).json({ error: `Unknown agent: ${agent}` });
   res.json({ success: true, agent });
   try {
+    if (agent === 'scout') {
+      process.argv = [
+        'node', 'leadgen.js',
+        '--industry', query.industry || 'cleaning',
+        '--location', query.location || 'Manchester NH',
+        '--max',      query.max      || '25',
+      ];
+    }
     delete require.cache[require.resolve(CRON_MODULES[agent])];
     require(CRON_MODULES[agent]);
   } catch (err) {
@@ -1537,17 +1545,16 @@ app.post('/cron/:agent', async (req, res) => {
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  runCronAgent(agent, res);
+  runCronAgent(agent, res, req.query);
 });
 
-// GET /cron/:agent — triggered by Railway cron (which sends GET requests)
 app.get('/cron/:agent', async (req, res) => {
   const { agent } = req.params;
   const secret = req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  runCronAgent(agent, res);
+  runCronAgent(agent, res, req.query);
 });
 
 // Approval dashboard
