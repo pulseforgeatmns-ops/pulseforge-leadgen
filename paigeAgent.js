@@ -130,6 +130,7 @@ Write a Facebook post (2-4 sentences) that:
 - For "behind-the-scenes": gives a glimpse of the people or process behind the business
 - For "community": mentions something local — a neighborhood, event, or shared experience
 - May end with 1-2 hashtags only if they feel natural — skip if they don't
+- Never use dashes or hyphens in any content you write — not as punctuation, not as separators, not in any context.
 
 No buzzwords. No corporate tone. Write like a person.
 
@@ -205,6 +206,7 @@ Requirements:
 - Never open with "In today's digital world" or any generic throat-clearing — start specific
 - No keyword stuffing — mention the business and location where they fit naturally
 - No corporate tone, no "we pride ourselves," no "cutting-edge solutions"
+- Never use dashes or hyphens in any content you write — not as punctuation, not as separators, not in any context.
 
 Return only the blog post text with markdown formatting.`;
 }
@@ -239,6 +241,7 @@ Voice and tone:
 - For "behind-the-scenes": a genuine look at how ${isPulseforge ? 'the automation system works or how we build it' : `${company.name} operates day to day`}
 - For "results": a concrete outcome — time saved, leads generated, or a client win (keep clients anonymous)
 - For "community": connect to the local small business ecosystem in New Hampshire
+- Never use dashes or hyphens in any content you write — not as punctuation, not as separators, not in any context.
 
 No buzzwords. No "we're excited to announce." Write like a knowledgeable local operator who has been in the trenches.
 
