@@ -725,9 +725,9 @@ async function saveToDatabase(leads) {
       const lastName  = nameParts.slice(1).join(' ') || '';
       const notes = companyName + ' — ' + lead.url;
       await pool.query(
-        'INSERT INTO prospects (first_name, last_name, email, status, source, icp_score, notes) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (email) DO NOTHING',
-        [firstName, lastName, email, 'cold', 'scout', lead.score, notes]
-      );
+      'INSERT INTO prospects (first_name, last_name, email, status, source, icp_score, notes, vertical) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (email) DO NOTHING',
+      [firstName, lastName, email, 'cold', 'scout', lead.score, notes, CONFIG.industry]
+    );
       saved++;
     } catch (err) {
       skipped++;
