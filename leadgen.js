@@ -452,6 +452,10 @@ async function main() {
   console.log(`  Min score: ${CONFIG.minScore}`);
   console.log('─────────────────────────────────────────\n');
 
+  if (!process.env.GOOGLE_PLACES_KEY) {
+    console.warn('[WARN] GOOGLE_PLACES_KEY is not set — Google Places search will be skipped for Places-eligible verticals');
+  }
+
   // Build search query
   const query = `"${CONFIG.industry}" "${CONFIG.location}" "${CONFIG.jobTitle}" -indeed -ziprecruiter -thumbtack -glassdoor -yelp -yellowpages -mapquest -bbb -patch -avvo`;
   console.log(`[Google] Searching: ${query}`);
@@ -460,7 +464,7 @@ async function main() {
   let leads = await searchGoogle(query, CONFIG.maxResults);
 
   // 1b. Google Places search for retail/wellness verticals
-  const placesVerticals = ['retail', 'salon', 'spa', 'gym', 'fitness', 'wellness', 'boutique', 'barber', 'yoga', 'pilates'];
+  const placesVerticals = ['retail', 'salon', 'spa', 'gym', 'fitness', 'wellness', 'boutique', 'barber', 'yoga', 'pilates', 'restaurant', 'cafe', 'diner', 'cleaning', 'property'];
   const isPlacesVertical = placesVerticals.some(v => CONFIG.industry.toLowerCase().includes(v));
   if (isPlacesVertical) {
     console.log('[Places] Detected retail/wellness vertical — running Google Places search...');
