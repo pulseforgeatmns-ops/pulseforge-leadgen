@@ -117,7 +117,7 @@ router.get('/api/prospects', requireAuth, async (req, res) => {
     const result = await pool.query(`
       SELECT
         p.id, p.first_name, p.last_name, p.email, p.phone,
-        p.status, p.icp_score, p.notes, p.last_contacted_at,
+        p.status, p.icp_score, p.notes, p.last_contacted_at, p.created_at,
         c.name as company_name,
         COUNT(t.id)::int as touchpoint_count
       FROM prospects p

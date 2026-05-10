@@ -1897,6 +1897,13 @@ body::before {
       <button class="filter-btn" data-pfilter="has_email">Has Email</button>
       <input class="prospect-search" id="prospectSearch" type="text" placeholder="Search prospects...">
     </div>
+    <div class="approvals-filters" style="margin-bottom:0.75rem;gap:0.5rem;align-items:center;">
+      <label style="font-family:'JetBrains Mono',monospace;font-size:0.6rem;letter-spacing:1px;color:var(--muted);text-transform:uppercase;">From</label>
+      <input type="date" id="prospectDateFrom" style="background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--white);font-size:0.75rem;font-family:'JetBrains Mono',monospace;">
+      <label style="font-family:'JetBrains Mono',monospace;font-size:0.6rem;letter-spacing:1px;color:var(--muted);text-transform:uppercase;">To</label>
+      <input type="date" id="prospectDateTo" style="background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--white);font-size:0.75rem;font-family:'JetBrains Mono',monospace;">
+      <button id="prospectDateClear" style="background:transparent;border:1px solid var(--border);border-radius:6px;padding:4px 10px;color:var(--muted);font-size:0.7rem;font-family:'JetBrains Mono',monospace;cursor:pointer;letter-spacing:1px;">Clear</button>
+    </div>
     <div class="prospects-table-wrap">
       <table class="prospects-table">
         <thead>
@@ -1908,6 +1915,7 @@ body::before {
             <th data-pcol="touchpoints">Touches</th>
             <th data-pcol="phone">Phone</th>
             <th data-pcol="email">Email</th>
+            <th data-pcol="created_at">Date Added</th>
           </tr>
         </thead>
         <tbody id="prospectsTableBody"></tbody>
@@ -2842,6 +2850,7 @@ async function loadAgentSparklines() {
 
 // ── PROSPECTS ─────────────────────────────────────────────────────────
 let _prospects = [], _prospectFilter = 'all', _prospectSearch = '', _prospectSort = { col: 'icp_score', dir: 'desc' };
+let _prospectDateFrom = null, _prospectDateTo = null;
 let _expandedProspectId = null;
 
 function _parseBusiness(row) {
@@ -2891,6 +2900,14 @@ function _filterProspects(data) {
       return biz.includes(q) || email.includes(q) || name.includes(q);
     });
   }
+  if (_prospectDateFrom) {
+    result = result.filter(p => p.created_at && new Date(p.created_at) >= _prospectDateFrom);
+  }
+  if (_prospectDateTo) {
+    const toEnd = new Date(_prospectDateTo);
+    toEnd.setHours(23, 59, 59, 999);
+    result = result.filter(p => p.created_at && new Date(p.created_at) <= toEnd);
+  }
   return result;
 }
 
@@ -2907,6 +2924,7 @@ function _sortProspects(data) {
       case 'touchpoints':   av = a.touchpoint_count ?? 0; bv = b.touchpoint_count ?? 0; break;
       case 'phone':         av = a.phone ? 1 : 0; bv = b.phone ? 1 : 0; break;
       case 'email':         av = a.email ? 1 : 0; bv = b.email ? 1 : 0; break;
+      case 'created_at':    av = a.created_at ? new Date(a.created_at).getTime() : 0; bv = b.created_at ? new Date(b.created_at).getTime() : 0; break;
       default: return 0;
     }
     if (av < bv) return -1 * mul;
@@ -2942,7 +2960,8 @@ function _renderProspects() {
       <td>${_relTimeP(p.last_contacted_at)}</td>
       <td>${p.touchpoint_count ?? 0}</td>
       <td class="${p.phone ? 'pt-check' : 'pt-dash'}">${p.phone ? '✓' : '—'}</td>
-      <td class="${p.email ? 'pt-check' : 'pt-dash'}">${p.email ? '✓' : '—'}</td>`;
+      <td class="${p.email ? 'pt-check' : 'pt-dash'}">${p.email ? '✓' : '—'}</td>
+      <td style="color:var(--muted);font-size:0.72rem;">${p.created_at ? new Date(p.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—'}</td>`;
     tr.addEventListener('click', () => toggleProspectDrawer(p, tr, visible));
     tbody.appendChild(tr);
 
@@ -3027,6 +3046,25 @@ document.querySelectorAll('[data-pfilter]').forEach(btn => {
 document.getElementById('prospectSearch').addEventListener('input', e => {
   _prospectSearch = e.target.value.trim();
   _expandedProspectId = null;
+  _renderProspects();
+});
+
+// Prospects date range filter
+document.getElementById('prospectDateFrom').addEventListener('change', e => {
+  _prospectDateFrom = e.target.value ? new Date(e.target.value) : null;
+  _expandedProspectId = null;
+  _renderProspects();
+});
+document.getElementById('prospectDateTo').addEventListener('change', e => {
+  _prospectDateTo = e.target.value ? new Date(e.target.value) : null;
+  _expandedProspectId = null;
+  _renderProspects();
+});
+document.getElementById('prospectDateClear').addEventListener('click', () => {
+  _prospectDateFrom = null;
+  _prospectDateTo = null;
+  document.getElementById('prospectDateFrom').value = '';
+  document.getElementById('prospectDateTo').value = '';
   _renderProspects();
 });
 
