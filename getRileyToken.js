@@ -19,7 +19,8 @@ function loadCredentials() {
 }
 
 const credentials = loadCredentials();
-const { client_id, client_secret } = credentials.installed;
+const credKeys = credentials.installed || credentials.web;
+const { client_id, client_secret } = credKeys;
 const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, REDIRECT_URI);
 
 const authUrl = oAuth2Client.generateAuthUrl({ access_type: 'offline', scope: SCOPES, prompt: 'consent' });
