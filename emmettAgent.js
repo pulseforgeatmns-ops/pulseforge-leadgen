@@ -224,7 +224,17 @@ function getSequenceForProspect(prospect) {
 function fillTemplate(template, prospect) {
   const rawName = prospect.first_name || prospect.name?.split(' ')[0] || '';
   const firstName = (rawName && rawName !== '—') ? rawName : 'there';
-  const businessName = prospect.company || prospect.notes?.split('—')[0]?.trim() || 'your business';
+
+  let businessName = prospect.company || '';
+  if (!businessName) {
+    const fromNotes = prospect.notes?.split('—')[0]?.trim() || '';
+    // Clean domain-style names
+    businessName = fromNotes
+      .replace(/\.(com|net|org|io|us)$/i, '')
+      .replace(/^(www\.)/i, '')
+      .trim();
+  }
+  if (!businessName || businessName.length < 4) businessName = 'your business';
 
   return template
     .replace(/{{first_name}}/g, firstName)
