@@ -726,7 +726,11 @@ async function saveToDatabase(leads) {
       const JUNK_EMAILS = ['user@domain.com', 'info@example.com', 'test@test.com', 'admin@domain.com'];
       const email = typeof lead.email === 'string' && lead.email.includes('@') && !JUNK_EMAILS.includes(lead.email.toLowerCase()) ? lead.email : null;
       const nameParts = (lead.contact && lead.contact !== '—' ? lead.contact : '').trim().split(/\s+/).filter(Boolean);
-      const firstName = nameParts[0] || companyName.split(' ')[0];
+
+      // Use contact first name if available and looks like a real person name
+      // Otherwise fall back to 'there' so Emmett greets warmly without using a business name
+      const looksLikePerson = nameParts.length >= 2 || (nameParts.length === 1 && /^[A-Z][a-z]{2,}$/.test(nameParts[0]));
+      const firstName = looksLikePerson ? nameParts[0] : 'there';
       const lastName  = nameParts.slice(1).join(' ') || '';
       const notes = companyName + ' — ' + lead.url;
       await pool.query(
