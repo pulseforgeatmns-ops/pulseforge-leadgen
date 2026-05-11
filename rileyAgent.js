@@ -59,7 +59,7 @@ async function getUnreadEmails(auth) {
   const gmail = google.gmail({ version: 'v1', auth });
   const res = await gmail.users.messages.list({
     userId: 'me',
-    q: 'is:unread -from:me -from:warmupinbox.com -from:amazonses.com -from:dmarc -from:noreply-dmarc -from:linkedin.com -from:google.com -from:brevo.com -from:mailer-daemon',
+    q: 'is:unread -from:me -from:warmupinbox.com -from:amazonses.com -from:dmarc -from:noreply-dmarc -from:linkedin.com -from:google.com -from:brevo.com -from:mailer-daemon -from:calendly.com -from:notifications -subject:"Unlock" -subject:"Supercharge" -subject:"Optimize" -subject:"Reimagine" -subject:"Curious About Your Approach" -subject:"Quick Question About Your"',
     maxResults: 20
   });
 
@@ -224,6 +224,13 @@ async function run() {
 
   for (const email of emails) {
     console.log(`Processing: ${email.subject} — ${email.from}`);
+
+    const prospect = await findProspectByEmail(email.from);
+    if (!prospect) {
+      console.log('  [Riley] No prospect match — skipping classification for ' + email.from);
+      await markAsRead(auth, email.id);
+      continue;
+    }
     const result = await classifyEmail(email);
     console.log(`  → ${result.classification}: ${result.reason}`);
 
@@ -245,15 +252,10 @@ async function run() {
       result.classification === 'negative' ? 'flagged' : 'success'
     );
 
-    const prospect = await findProspectByEmail(email.from);
-    if (prospect) {
-      await updateProspectFromReply(prospect, result.classification);
-      await logInboundTouchpoint(prospect, email, result.classification);
-      if (result.classification === 'interested') {
-        await depositInterestedAction(prospect, email, result.suggested_reply);
-      }
-    } else {
-      console.log('  [Riley] No prospect match found for ' + email.from);
+    await updateProspectFromReply(prospect, result.classification);
+    await logInboundTouchpoint(prospect, email, result.classification);
+    if (result.classification === 'interested') {
+      await depositInterestedAction(prospect, email, result.suggested_reply);
     }
 
     // Mark as read so we don't reprocess
