@@ -806,6 +806,7 @@ router.post('/api/run/:agent', requireAuth, async (req, res) => {
     paige: '../paigeAgent', faye: '../facebookAgent', link: '../linkedinAgent',
     sam: '../samAgent', vera: '../veraAgent', cal: '../calAgent', ivy: '../ivyAgent',
     penny: '../pennyAgent', analytics: '../analyticsAgent', riley: '../rileyAgent',
+    warm_signal: '../warmSignalAgent',
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   await pool.query(

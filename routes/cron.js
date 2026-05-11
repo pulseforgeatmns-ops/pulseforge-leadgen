@@ -15,7 +15,8 @@ const CRON_MODULES = {
   cal:       '../calAgent',
   penny:     '../pennyAgent',
   analytics: '../analyticsAgent',
-  riley:     '../rileyAgent',
+  riley:       '../rileyAgent',
+  warm_signal: '../warmSignalAgent',
 };
 
 function runCronAgent(agent, res) {
