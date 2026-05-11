@@ -18,20 +18,31 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── AUTH ──────────────────────────────────────────────────────────────
 async function getAuthClient() {
-  const credentials = process.env.GMAIL_CREDENTIALS ? JSON.parse(process.env.GMAIL_CREDENTIALS) : JSON.parse(fs.readFileSync(CREDENTIALS_PATH));
+  const credentials = process.env.GMAIL_CREDENTIALS
+    ? JSON.parse(process.env.GMAIL_CREDENTIALS)
+    : JSON.parse(fs.readFileSync(CREDENTIALS_PATH));
   const { client_secret, client_id, redirect_uris } = credentials.installed;
   const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
 
-  if (process.env.GMAIL_TOKEN) {
-    const token = JSON.parse(process.env.GMAIL_TOKEN);
-    oAuth2Client.setCredentials(token);
-    return oAuth2Client;
-  }
+  // Try env token first, then token file — fall through on invalid/expired grant
+  const rawToken = process.env.GMAIL_TOKEN
+    || (fs.existsSync(TOKEN_PATH) ? fs.readFileSync(TOKEN_PATH, 'utf8') : null);
 
-  if (fs.existsSync(TOKEN_PATH)) {
-    const token = JSON.parse(fs.readFileSync(TOKEN_PATH));
-    oAuth2Client.setCredentials(token);
-    return oAuth2Client;
+  if (rawToken) {
+    try {
+      const token = JSON.parse(rawToken);
+      oAuth2Client.setCredentials(token);
+      // Probe with a token refresh to catch stale credentials before use
+      await oAuth2Client.getAccessToken();
+      return oAuth2Client;
+    } catch (err) {
+      const code = err.response?.data?.error || err.message || '';
+      if (code.includes('invalid_grant') || code.includes('invalid_client')) {
+        console.warn('[Riley] Stored token is invalid or expired — falling through to re-auth');
+      } else {
+        throw err;
+      }
+    }
   }
 
   const authUrl = oAuth2Client.generateAuthUrl({ access_type: 'offline', scope: SCOPES });
@@ -41,7 +52,7 @@ async function getAuthClient() {
 
   const readline = require('readline');
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  
+
   return new Promise((resolve) => {
     rl.question('Code: ', async (code) => {
       rl.close();
