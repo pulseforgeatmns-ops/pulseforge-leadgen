@@ -21,8 +21,8 @@ async function getAuthClient() {
   const credentials = process.env.GMAIL_CREDENTIALS
     ? JSON.parse(process.env.GMAIL_CREDENTIALS)
     : JSON.parse(fs.readFileSync(CREDENTIALS_PATH));
-  const { client_secret, client_id, redirect_uris } = credentials.installed;
-  const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+  const { client_secret, client_id } = credentials.installed;
+  const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, 'http://localhost:3000');
 
   // Try env token first, then token file — fall through on invalid/expired grant
   const rawToken = process.env.GMAIL_TOKEN
