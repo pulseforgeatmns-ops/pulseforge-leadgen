@@ -49,6 +49,7 @@ const DOMAIN_BLACKLIST = [
   'nextdoor.com','promatcher.com','bizbuysell.com','turno.com',
   'pmrepublic.com','inmyarea.com','bark.com','expertise.com',
   'thumbtack.com','angi.com','porch.com','homeguide.com',
+  'housekeeper.com','manchesterhousecleaning.com','co.uk',
 ];
 
 // ── CLI ARGS ─────────────────────────────────────────────────────────
@@ -473,6 +474,10 @@ async function main() {
     console.log(`[Places] Combined total: ${leads.length} raw results`);
   }
   console.log(`[Google] Found ${leads.length} raw results`);
+
+  // Pre-enrichment blacklist — strip junk domains before spending Prospeo/Hunter credits
+  leads = leads.filter(l => !DOMAIN_BLACKLIST.some(b => l.url && l.url.includes(b)));
+  console.log(`[Pre-enrichment blacklist] ${leads.length} leads after filtering`);
 
   // 3. Enrich with Prospeo
   console.log(`[Prospeo] Enriching ${leads.length} domains...`);
