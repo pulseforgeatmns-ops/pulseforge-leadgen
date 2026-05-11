@@ -202,24 +202,194 @@ Jacob Maynard
 Pulseforge
 gopulseforge.com`
     }
+  ],
+
+  fitness: [
+    {
+      day: 0,
+      subject: "{{business_name}} — honest question",
+      body: `Hi {{first_name}},
+
+I work with local fitness studios and gyms in Southern NH on one specific problem: keeping your schedule full without spending your time chasing new members.
+
+Most studio owners I talk to are great at what they do but inconsistent at bringing in new clients. Word of mouth works until it does not. And there is never enough time between classes to market consistently.
+
+I built a system that handles outreach automatically. It finds local prospects, reaches out on your behalf, and keeps your name in front of people who are actively looking for a gym or studio. It runs in the background while you focus on your members.
+
+Is growing your membership consistently something you are actively working on right now?
+
+Jacob Maynard
+Pulseforge`
+    },
+    {
+      day: 4,
+      subject: "still thinking about {{business_name}}",
+      body: `Hi {{first_name}},
+
+Sent you a note a few days ago. Wanted to follow up once before moving on.
+
+The studios I work with are not struggling. They have great instructors and loyal members. The challenge is always the same: memberships plateau because there is no consistent way to reach new people between managing classes and running the business.
+
+If you want to see a free mockup of what automated outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+
+Jacob`
+    },
+    {
+      day: 8,
+      subject: "what is actually working for fitness studios in Southern NH",
+      body: `Hi {{first_name}},
+
+One thing I am seeing across local studios right now. The ones growing their membership are not running more ads. They are just staying visible to new people longer than their competition.
+
+Most owners go quiet between sessions. The ones building waitlists do not.
+
+I help studios like {{business_name}} stay visible automatically. No extra time required on your end.
+
+Are you currently doing anything to bring in new members consistently, or is it mostly referrals and word of mouth?
+
+Jacob`
+    },
+    {
+      day: 13,
+      subject: "closing the loop",
+      body: `Hi {{first_name}},
+
+Last note from me. I do not want to clutter your inbox.
+
+If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply to this and I will put something together.
+
+Rooting for you either way.
+
+Jacob Maynard
+Pulseforge
+gopulseforge.com`
+    }
+  ],
+
+  property: [
+    {
+      day: 0,
+      subject: "{{business_name}} — honest question",
+      body: `Hi {{first_name}},
+
+I work with local property management companies in Southern NH on one specific problem: keeping units filled without relying entirely on Zillow and word of mouth.
+
+Most property managers I talk to spend more time than they should chasing leads manually. The pipeline is inconsistent and there is never enough time between managing tenants and owners to market the portfolio properly.
+
+I built a system that handles outreach automatically. It identifies local prospects, reaches out on your behalf, and keeps your properties in front of people who are actively looking. It runs in the background while you manage the day to day.
+
+Is filling vacancies faster and more consistently something you are actively working on right now?
+
+Jacob Maynard
+Pulseforge`
+    },
+    {
+      day: 4,
+      subject: "still thinking about {{business_name}}",
+      body: `Hi {{first_name}},
+
+Sent you a note a few days ago. Wanted to follow up once before moving on.
+
+The property management companies I work with are not struggling. They have solid portfolios and good relationships with their owners. The challenge is always the same: vacancy periods stretch longer than they should because outreach is inconsistent or manual.
+
+If you want to see a free mockup of what automated outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+
+Jacob`
+    },
+    {
+      day: 8,
+      subject: "what is actually working for property managers in Southern NH",
+      body: `Hi {{first_name}},
+
+One thing I am seeing across local property management companies right now. The ones keeping vacancy rates low are not spending more on listing sites. They are just staying in front of prospective tenants and owner referrals longer than their competition.
+
+Most companies go quiet between leases. The ones with full portfolios do not.
+
+I help companies like {{business_name}} stay visible automatically. No extra time required on your end.
+
+Are you currently doing anything to generate consistent leads for vacancies, or is it mostly listing sites and referrals?
+
+Jacob`
+    },
+    {
+      day: 13,
+      subject: "closing the loop",
+      body: `Hi {{first_name}},
+
+Last note from me. I do not want to clutter your inbox.
+
+If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply to this and I will put something together.
+
+Rooting for you either way.
+
+Jacob Maynard
+Pulseforge
+gopulseforge.com`
+    }
+  ],
+
+  landscaping: [
+    {
+      day: 0,
+      subject: "{{business_name}} — honest question",
+      body: `Hi {{first_name}},
+
+I work with local lawn care and landscaping companies in Southern NH on one specific problem: keeping the schedule full year round without relying on door knocking and referrals alone.
+
+Most owners I talk to are great at the work but inconsistent at bringing in new clients. Spring fills up fast but the pipeline for summer and fall maintenance is always thinner than it should be.
+
+I built a system that handles outreach automatically. It finds local homeowners and commercial properties in your area, reaches out on your behalf, and keeps your name visible between jobs. It runs in the background while you run the crew.
+
+Is keeping the schedule consistently full something you are actively working on right now?
+
+Jacob Maynard
+Pulseforge`
+    },
+    {
+      day: 4,
+      subject: "still thinking about {{business_name}}",
+      body: `Hi {{first_name}},
+
+Sent you a note a few days ago. Wanted to follow up once before moving on.
+
+The landscaping companies I work with are not struggling. They do great work and their existing clients love them. The challenge is always the same: the off-season pipeline dries up and spring scramble is stressful every year.
+
+If you want to see a free mockup of what consistent outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+
+Jacob`
+    },
+    {
+      day: 8,
+      subject: "what is actually working for landscapers in Southern NH",
+      body: `Hi {{first_name}},
+
+One thing I am seeing across local landscaping companies right now. The ones with full schedules are not spending more on ads. They are just staying in front of new clients longer than their competition.
+
+Most owners go quiet between jobs. The ones with waitlists do not.
+
+I help companies like {{business_name}} stay visible automatically. No extra time required on your end.
+
+Are you currently doing anything to bring in new clients consistently, or is it mostly referrals and repeat customers?
+
+Jacob`
+    },
+    {
+      day: 13,
+      subject: "closing the loop",
+      body: `Hi {{first_name}},
+
+Last note from me. I do not want to clutter your inbox.
+
+If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply to this and I will put something together.
+
+Rooting for you either way.
+
+Jacob Maynard
+Pulseforge
+gopulseforge.com`
+    }
   ]
 };
-function getSequenceForProspect(prospect) {
-  const vertical = (prospect.vertical || '').toLowerCase();
-  if (vertical.includes('restaurant') || vertical.includes('cafe') || vertical.includes('diner')) {
-    return 'restaurant';
-  }
-  if (vertical.includes('salon') || vertical.includes('hair') || vertical.includes('spa') || vertical.includes('barber')) {
-    return 'salon';
-  }
-  if (vertical.includes('cleaning') || vertical.includes('cleaner')) {
-    return 'cleaning';
-  }
-  if (vertical.includes('fitness') || vertical.includes('gym') || vertical.includes('yoga')) {
-    return 'fitness';
-  }
-  return 'cold_outreach'; // default fallback
-}
 
 function fillTemplate(template, prospect) {
   const rawName = prospect.first_name || prospect.name?.split(' ')[0] || '';
@@ -294,8 +464,22 @@ async function getProspectsForEmail() {
 }
 
 function getSequenceForProspect(prospect) {
-  const industry = (prospect.industry || '').toLowerCase();
-  if (industry.includes('cleaning')) return 'cleaning';
+  const vertical = (prospect.vertical || prospect.industry || '').toLowerCase();
+  if (vertical.includes('salon') || vertical.includes('hair') || vertical.includes('spa') || vertical.includes('barber')) {
+    return 'salon';
+  }
+  if (vertical.includes('restaurant') || vertical.includes('cafe') || vertical.includes('diner')) {
+    return 'restaurant';
+  }
+  if (vertical.includes('fitness') || vertical.includes('gym') || vertical.includes('yoga') || vertical.includes('pilates') || vertical.includes('studio') || vertical.includes('barre')) {
+    return 'fitness';
+  }
+  if (vertical.includes('property') || vertical.includes('management') || vertical.includes('millcity')) {
+    return 'property';
+  }
+  if (vertical.includes('landscap') || vertical.includes('lawn')) {
+    return 'landscaping';
+  }
   return 'cleaning';
 }
 
