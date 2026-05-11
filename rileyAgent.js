@@ -124,6 +124,76 @@ For suggested_reply: write a short, warm, human reply from Jacob if classificati
   }
 }
 
+// ── PROSPECT MATCHING ─────────────────────────────────────────────────
+async function findProspectByEmail(fromEmail) {
+  const pool = require('./db');
+  const emailMatch = fromEmail.match(/[\w.+-]+@[\w-]+\.[\w.]+/);
+  if (!emailMatch) return null;
+  const email = emailMatch[0].toLowerCase();
+  const res = await pool.query(
+    'SELECT * FROM prospects WHERE LOWER(email) = $1 LIMIT 1',
+    [email]
+  );
+  return res.rows[0] || null;
+}
+
+async function updateProspectFromReply(prospect, classification) {
+  const pool = require('./db');
+  if (classification === 'interested') {
+    await pool.query(
+      'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2',
+      ['warm', prospect.id]
+    );
+    console.log(`  [Riley] ${prospect.email} upgraded to warm`);
+  }
+  if (classification === 'unsubscribe') {
+    await pool.query(
+      'UPDATE prospects SET do_not_contact = true, updated_at = NOW() WHERE id = $1',
+      [prospect.id]
+    );
+    console.log(`  [Riley] ${prospect.email} marked do_not_contact`);
+  }
+  if (classification === 'not_now') {
+    await pool.query(
+      'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2',
+      ['not_now', prospect.id]
+    );
+    console.log(`  [Riley] ${prospect.email} marked not_now`);
+  }
+}
+
+async function logInboundTouchpoint(prospect, email, classification) {
+  const pool = require('./db');
+  await pool.query(
+    'INSERT INTO touchpoints (prospect_id, channel, action_type, content_summary, outcome, sentiment, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())',
+    [
+      prospect.id,
+      'email',
+      'inbound',
+      email.subject,
+      JSON.stringify({ from: email.from, classification }),
+      classification === 'interested' ? 'positive' : classification === 'negative' ? 'negative' : 'neutral'
+    ]
+  );
+}
+
+async function depositInterestedAction(prospect, email, suggestedReply) {
+  const pool = require('./db');
+  const bizName = prospect.notes?.split('—')[0]?.trim() || prospect.email;
+  await pool.query(
+    'INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())',
+    [
+      'riley',
+      'reply_required',
+      'Warm reply from ' + bizName,
+      prospect.email + ' replied to your outreach. Suggested reply below — approve or edit before sending.',
+      JSON.stringify({ prospect_id: prospect.id, email: prospect.email, subject: email.subject, from: email.from, body: email.body, suggested_reply: suggestedReply }),
+      'pending'
+    ]
+  );
+  console.log('  [Riley] Action deposited for Max');
+}
+
 // ── MARK READ ─────────────────────────────────────────────────────────
 async function markAsRead(auth, messageId) {
   const gmail = google.gmail({ version: 'v1', auth });
@@ -174,6 +244,17 @@ async function run() {
       },
       result.classification === 'negative' ? 'flagged' : 'success'
     );
+
+    const prospect = await findProspectByEmail(email.from);
+    if (prospect) {
+      await updateProspectFromReply(prospect, result.classification);
+      await logInboundTouchpoint(prospect, email, result.classification);
+      if (result.classification === 'interested') {
+        await depositInterestedAction(prospect, email, result.suggested_reply);
+      }
+    } else {
+      console.log('  [Riley] No prospect match found for ' + email.from);
+    }
 
     // Mark as read so we don't reprocess
     await markAsRead(auth, email.id);
