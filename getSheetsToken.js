@@ -1,18 +1,19 @@
 require('dotenv').config();
 const { google } = require('googleapis');
 const http = require('http');
+const fs = require('fs');
 
+const CREDENTIALS_PATH = './sheets_credentials.json';
 const REDIRECT_URI = 'http://localhost:3001';
 const SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
   'https://www.googleapis.com/auth/drive.file',
 ];
 
-const oAuth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  REDIRECT_URI
-);
+const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH));
+const { client_id, client_secret } = credentials.installed || credentials.web;
+
+const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, REDIRECT_URI);
 
 const authUrl = oAuth2Client.generateAuthUrl({
   access_type: 'offline',
