@@ -106,7 +106,7 @@ async function pickContentType(companyName, channel = null, companyId = null) {
   return types[0];
 }
 
-function buildFacebookPrompt(company, contentType, verticalCtx, location) {
+function buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType) {
   const isPulseforge = company.name.toLowerCase().includes('pulseforge');
 
   const audienceNote = isPulseforge
@@ -134,10 +134,20 @@ Write a Facebook post (2-4 sentences) that:
 
 No buzzwords. No corporate tone. Write like a person.
 
+VARIETY RULES — enforce these on every post:
+- Never start a post with "Most small business owners" or any variation of that phrase
+- Never start consecutive posts with the same opening word or phrase
+- Rotate the angle on every post — do not repeat the same core message within 7 days
+- Avoid these overused openers: "Most", "Many", "As a", "If you're a", "Running a small business"
+- Each post must make ONE specific point — not a general observation about small business
+- Use concrete specifics — a season, a day of week, a specific service, a local reference — rather than broad statements
+- If the previous post was educational, this one should be promotional or behind-the-scenes, and vice versa
+${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. This post must feel distinct from that — different angle, different opening, different structure.` : ''}
+
 Return only the post text.`;
 }
 
-function buildGooglePrompt(company, contentType, verticalCtx, location) {
+function buildGooglePrompt(company, contentType, verticalCtx, location, lastContentType) {
   const isPulseforge = company.name.toLowerCase().includes('pulseforge');
 
   const audienceNote = isPulseforge
@@ -162,10 +172,20 @@ Write a Google Business update (3-5 sentences) that:
 - NO hashtags, NO emojis — professional but human, not corporate
 - Never use dashes or hyphens in any content you write — not as punctuation, not as separators, not in any context.
 
+VARIETY RULES — enforce these on every post:
+- Never start a post with "Most small business owners" or any variation of that phrase
+- Never start consecutive posts with the same opening word or phrase
+- Rotate the angle on every post — do not repeat the same core message within 7 days
+- Avoid these overused openers: "Most", "Many", "As a", "If you're a", "Running a small business"
+- Each post must make ONE specific point — not a general observation about small business
+- Use concrete specifics — a season, a day of week, a specific service, a local reference — rather than broad statements
+- If the previous post was educational, this one should be promotional or behind-the-scenes, and vice versa
+${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. This post must feel distinct from that — different angle, different opening, different structure.` : ''}
+
 Return only the post text.`;
 }
 
-function buildBlogPrompt(company, contentType, verticalCtx) {
+function buildBlogPrompt(company, contentType, verticalCtx, lastContentType) {
   const isPulseforge = company.name.toLowerCase().includes('pulseforge');
   const location = company.location || 'Manchester, NH';
 
@@ -208,10 +228,20 @@ Requirements:
 - No corporate tone, no "we pride ourselves," no "cutting-edge solutions"
 - Never use dashes or hyphens in any content you write — not as punctuation, not as separators, not in any context.
 
+VARIETY RULES — enforce these on every post:
+- Never start a post with "Most small business owners" or any variation of that phrase
+- Never start consecutive posts with the same opening word or phrase
+- Rotate the angle on every post — do not repeat the same core message within 7 days
+- Avoid these overused openers: "Most", "Many", "As a", "If you're a", "Running a small business"
+- Each post must make ONE specific point — not a general observation about small business
+- Use concrete specifics — a season, a day of week, a specific service, a local reference — rather than broad statements
+- If the previous post was educational, this one should be promotional or behind-the-scenes, and vice versa
+${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. This post must feel distinct from that — different angle, different opening, different structure.` : ''}
+
 Return only the blog post text with markdown formatting.`;
 }
 
-function buildLinkedInPrompt(company, contentType, verticalCtx) {
+function buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType) {
   const isPulseforge = company.name.toLowerCase().includes('pulseforge');
   const location = company.location || 'Manchester, NH';
 
@@ -245,20 +275,46 @@ Voice and tone:
 
 No buzzwords. No "we're excited to announce." Write like a knowledgeable local operator who has been in the trenches.
 
+VARIETY RULES — enforce these on every post:
+- Never start a post with "Most small business owners" or any variation of that phrase
+- Never start consecutive posts with the same opening word or phrase
+- Rotate the angle on every post — do not repeat the same core message within 7 days
+- Avoid these overused openers: "Most", "Many", "As a", "If you're a", "Running a small business"
+- Each post must make ONE specific point — not a general observation about small business
+- Use concrete specifics — a season, a day of week, a specific service, a local reference — rather than broad statements
+- If the previous post was educational, this one should be promotional or behind-the-scenes, and vice versa
+${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. This post must feel distinct from that — different angle, different opening, different structure.` : ''}
+
 Return only the post text.`;
+}
+
+async function getLastContentType(companyName, channel) {
+  const res = await pool.query(`
+    SELECT post_content FROM pending_comments
+    WHERE author_name = $1 AND channel = $2
+    ORDER BY created_at DESC LIMIT 1
+  `, [companyName, channel]);
+  if (!res.rows.length) return null;
+  const parts = res.rows[0].post_content?.split('·');
+  return parts?.length > 1 ? parts[1].trim().toLowerCase() : null;
 }
 
 async function generatePost(company, contentType, channel) {
   const verticalCtx = getVerticalContext(company.industry);
   const location = company.location || 'Manchester, NH';
+  const lastContentType = await getLastContentType(company.name, channel);
+
+  if (lastContentType) {
+    console.log(`  [variety] Last ${channel} post type: ${lastContentType} → generating: ${contentType}`);
+  }
 
   const prompt = channel === 'google_business'
-    ? buildGooglePrompt(company, contentType, verticalCtx, location)
+    ? buildGooglePrompt(company, contentType, verticalCtx, location, lastContentType)
     : channel === 'blog'
-      ? buildBlogPrompt(company, contentType, verticalCtx)
+      ? buildBlogPrompt(company, contentType, verticalCtx, lastContentType)
       : channel === 'linkedin_page'
-        ? buildLinkedInPrompt(company, contentType, verticalCtx)
-        : buildFacebookPrompt(company, contentType, verticalCtx, location);
+        ? buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType)
+        : buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType);
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
