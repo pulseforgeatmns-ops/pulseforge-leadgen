@@ -79,7 +79,11 @@ async function run() {
     const rowIndex = rows.findIndex((r, i) => {
       if (i === 0) return false; // skip header
       const cellBiz = (r[2] || '').trim().toLowerCase();
-      return cellBiz === bizName.toLowerCase();
+      const dbBiz = bizName.toLowerCase();
+      return cellBiz === dbBiz ||
+        cellBiz.includes(dbBiz) ||
+        dbBiz.includes(cellBiz) ||
+        cellBiz.split(' ')[0] === dbBiz.split(' ')[0];
     });
 
     if (rowIndex === -1) {
