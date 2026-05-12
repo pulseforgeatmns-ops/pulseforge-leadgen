@@ -11,6 +11,7 @@ const FROM_NAME = 'Jacob Maynard';
 const DEMO_URL = 'https://pulseforge-leadgen-production.up.railway.app/demo';
 const CALENDLY_URL = 'https://calendly.com/jacob-gopulseforge/20min';
 
+// A/B TEST ACTIVE: restaurant vs restaurant_b — remove restaurant_b when test concludes
 const SEQUENCES = {
   cleaning: [
     {
@@ -142,6 +143,70 @@ Pulseforge
 gopulseforge.com`
     }
   ],
+  restaurant_b: [
+    {
+      day: 0,
+      subject: "{{business_name}} — honest question",
+      body: `Hi {{first_name}},
+
+I spent years running restaurants in New England. The hardest part was not the service or the food. It was staying visible when I was too busy running the floor to think about marketing.
+
+Most owners I talk to are in the same spot. Great restaurant, not enough time to stay in front of new customers consistently.
+
+I built a system that handles that automatically. It finds local prospects, reaches out on your behalf, and keeps your name visible between rushes. It runs in the background while you run the restaurant.
+
+Take a look at what we have built for restaurants like yours at gopulseforge.com/restaurant — then reply back if it is worth a conversation.
+
+Jacob Maynard
+Pulseforge`
+    },
+    {
+      day: 4,
+      subject: "still thinking about {{business_name}}",
+      body: `Hi {{first_name}},
+
+Sent you a note a few days ago. Wanted to follow up once before moving on.
+
+I know you are busy. That is kind of the whole point.
+
+The restaurants I work with are not struggling. They are good at what they do. They just do not have time to chase new customers on top of running the kitchen, managing staff, and everything else. That is the gap I fill.
+
+If you want to see a free mockup of what consistent outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+
+Jacob`
+    },
+    {
+      day: 8,
+      subject: "what is actually working in Manchester right now",
+      body: `Hi {{first_name}},
+
+One thing I am seeing across local restaurants right now. The ones growing consistently are not spending more on ads. They are just staying in front of people longer than their competition.
+
+Most owners go quiet between services. The ones winning do not.
+
+I help restaurants like {{business_name}} stay visible automatically. No extra time required on your end.
+
+Take a look at what this looks like in practice at gopulseforge.com/restaurant — then reply back if it is worth a conversation.
+
+Jacob`
+    },
+    {
+      day: 13,
+      subject: "closing the loop",
+      body: `Hi {{first_name}},
+
+Last note from me. I do not want to clutter your inbox.
+
+If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply to this and I will put something together.
+
+Rooting for you either way.
+
+Jacob Maynard
+Pulseforge
+gopulseforge.com`
+    }
+  ],
+
   salon: [
     {
       day: 0,
@@ -655,7 +720,8 @@ function getSequenceForProspect(prospect) {
     return 'salon';
   }
   if (vertical.includes('restaurant') || vertical.includes('cafe') || vertical.includes('diner')) {
-    return 'restaurant';
+    // A/B TEST — restaurant CTA test — remove when test is complete (target: 50 sends per variant)
+    return prospect.id % 2 === 0 ? 'restaurant_b' : 'restaurant';
   }
   if (vertical.includes('fitness') || vertical.includes('gym') || vertical.includes('yoga') || vertical.includes('pilates') || vertical.includes('studio') || vertical.includes('barre')) {
     return 'fitness';
