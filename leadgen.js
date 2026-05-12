@@ -693,8 +693,9 @@ function validateProspect(name) {
   if (/^Home\s+(cleaning|services|maintenance|repair|improvement|solutions|care|pros?)\b/i.test(n))
     return reject('generic SEO page title (Home + category)');
   // Two title-cased words with no business indicator = likely a person's name from a scraper
+  // Only reject if neither word is a known business keyword
   if (/^[A-Z][a-z]{2,14}\s[A-Z][a-z]{2,14}$/.test(n)) {
-    const BIZ_WORDS = /\b(llc|inc|corp|co|company|group|services|solutions|studio|labs|works|consulting|cleaning|plumbing|hvac|landscaping|roofing|electric|construction|contracting|design|media|management|properties|realty|agency|associates|partners|industries|enterprise|foundation|center|institute)\b/i;
+    const BIZ_WORDS = /\b(llc|inc|corp|co|company|group|services|solutions|studio|labs|works|consulting|cleaning|plumbing|hvac|landscaping|roofing|electric|construction|contracting|design|media|management|properties|realty|agency|associates|partners|industries|enterprise|foundation|center|institute|strength|fitness|performance|training|athletics|wellness|health|gym|salon|spa|club|team)\b/i;
     if (!BIZ_WORDS.test(n))
       return reject('likely a personal name, not a business');
   }
