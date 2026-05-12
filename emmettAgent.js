@@ -388,6 +388,192 @@ Jacob Maynard
 Pulseforge
 gopulseforge.com`
     }
+  ],
+
+  home_services: [
+    {
+      day: 0,
+      subject: "{{business_name}} — honest question",
+      body: `Hi {{first_name}},
+
+I work with local home service companies in Southern NH on one specific problem: staying visible to homeowners between jobs so the pipeline does not go quiet.
+
+Most owners I talk to get plenty of repeat business from happy customers but are not consistently reaching new homeowners. Referrals are great until they are not enough.
+
+I built a system that handles outreach automatically. It finds local homeowners in your area, reaches out on your behalf, and keeps {{business_name}} visible year round. It runs in the background while you run the jobs.
+
+Is building a more consistent pipeline of new homeowners something you are actively working on?
+
+Jacob Maynard
+Pulseforge`
+    },
+    {
+      day: 4,
+      subject: "still thinking about {{business_name}}",
+      body: `Hi {{first_name}},
+
+Sent you a note a few days ago. Wanted to follow up once before moving on.
+
+The home service companies I work with are not struggling. They do great work. The challenge is always the same: the work fills the schedule but not enough new homeowners are finding them consistently.
+
+If you want to see a free mockup of what that outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+
+Jacob`
+    },
+    {
+      day: 8,
+      subject: "what is actually working for home services in Southern NH",
+      body: `Hi {{first_name}},
+
+One thing I am seeing across local home service companies right now. The ones with full schedules are not relying on referrals alone. They are staying in front of new homeowners consistently.
+
+Most owners go quiet between jobs. The ones with waitlists do not.
+
+I help companies like {{business_name}} stay visible automatically. No extra time required on your end.
+
+Are you currently doing anything to reach new homeowners consistently, or is it mostly word of mouth?
+
+Jacob`
+    },
+    {
+      day: 13,
+      subject: "closing the loop",
+      body: `Hi {{first_name}},
+
+Last note from me. I do not want to clutter your inbox.
+
+If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply and I will put something together.
+
+Rooting for you either way.
+
+Jacob Maynard
+Pulseforge
+gopulseforge.com`
+    }
+  ],
+
+  auto: [
+    {
+      day: 0,
+      subject: "{{business_name}} — honest question",
+      body: `Hi {{first_name}},
+
+I work with local auto repair shops in Southern NH on one specific problem: keeping the service bay full without waiting for walk-ins and hoping word of mouth is enough.
+
+Most shop owners I talk to are excellent mechanics with loyal repeat customers. The challenge is not the quality of work. It is staying consistently in front of local car owners who have not found them yet.
+
+I built a system that handles that automatically. It finds local car owners in your area, reaches out on your behalf, and keeps {{business_name}} visible between service intervals. It runs in the background while you run the shop.
+
+Is building a steadier flow of new customers something you are working on right now?
+
+Jacob Maynard
+Pulseforge`
+    },
+    {
+      day: 4,
+      subject: "still thinking about {{business_name}}",
+      body: `Hi {{first_name}},
+
+Sent you a note a few days ago. Wanted to follow up once before moving on.
+
+The shops I work with are not struggling. They do honest work and their regulars keep coming back. The gap is always the same: not enough new customers finding them between the ones who already know them.
+
+If you want to see a free mockup of what consistent outreach could look like for {{business_name}}, just reply and I will have something over same day.
+
+Jacob`
+    },
+    {
+      day: 8,
+      subject: "what is actually working for auto shops in Southern NH",
+      body: `Hi {{first_name}},
+
+One pattern I keep seeing across local auto shops right now. The ones with bays consistently full are not spending more on ads. They are just staying in front of local car owners longer than the shop down the street.
+
+Most shops wait for the phone to ring. The ones with no open slots do not.
+
+I help shops like {{business_name}} stay visible automatically. No extra time on your end.
+
+Are you currently doing anything to reach new customers consistently, or is it mostly repeat and referral?
+
+Jacob`
+    },
+    {
+      day: 13,
+      subject: "closing the loop",
+      body: `Hi {{first_name}},
+
+Last note from me. I do not want to clutter your inbox.
+
+If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply and I will put something together.
+
+Rooting for you either way.
+
+Jacob Maynard
+Pulseforge
+gopulseforge.com`
+    }
+  ],
+
+  med_spa: [
+    {
+      day: 0,
+      subject: "{{business_name}} — honest question",
+      body: `Hi {{first_name}},
+
+I work with local med spas and aesthetic practices in Southern NH on one specific problem: consistent new client acquisition without depending entirely on word of mouth and Instagram.
+
+Most owners I talk to have strong retention with existing clients. The challenge is staying visible to people who are actively searching for aesthetic services but have not found {{business_name}} yet.
+
+I built a system that handles outreach automatically. It finds and reaches out to local prospects on your behalf, keeps your name visible to people searching in your area, and runs in the background while you focus on clients.
+
+Is bringing in new clients more consistently something you are actively working on?
+
+Jacob Maynard
+Pulseforge`
+    },
+    {
+      day: 4,
+      subject: "still thinking about {{business_name}}",
+      body: `Hi {{first_name}},
+
+Sent you a note a few days ago. Wanted to follow up once before moving on.
+
+The practices I work with are not struggling. They have skilled providers and clients who love them. The gap is always the same: not enough new people finding them consistently outside of referrals.
+
+If you want to see a free mockup of what that outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+
+Jacob`
+    },
+    {
+      day: 8,
+      subject: "what is actually working for med spas in Southern NH",
+      body: `Hi {{first_name}},
+
+One thing I am seeing across local aesthetic practices right now. The ones growing consistently are not just posting more on Instagram. They are staying in front of local prospects who are actively looking but have not booked yet.
+
+Most practices rely on existing clients to spread the word. The ones with waitlists do more than that.
+
+I help practices like {{business_name}} stay visible to new clients automatically. No extra time required on your end.
+
+Are you currently doing anything to reach new clients consistently outside of social media and referrals?
+
+Jacob`
+    },
+    {
+      day: 13,
+      subject: "closing the loop",
+      body: `Hi {{first_name}},
+
+Last note from me. I do not want to clutter your inbox.
+
+If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply and I will put something together.
+
+Rooting for you either way.
+
+Jacob Maynard
+Pulseforge
+gopulseforge.com`
+    }
   ]
 };
 
@@ -479,6 +665,15 @@ function getSequenceForProspect(prospect) {
   }
   if (vertical.includes('landscap') || vertical.includes('lawn')) {
     return 'landscaping';
+  }
+  if (vertical.includes('home') || vertical.includes('services') || vertical.includes('hvac') || vertical.includes('plumb') || vertical.includes('electric') || vertical.includes('handyman')) {
+    return 'home_services';
+  }
+  if (vertical.includes('auto') || vertical.includes('repair') || vertical.includes('mechanic') || vertical.includes('car')) {
+    return 'auto';
+  }
+  if (vertical.includes('med') || vertical.includes('aesthetic') || vertical.includes('botox') || vertical.includes('laser')) {
+    return 'med_spa';
   }
   return 'cleaning';
 }
