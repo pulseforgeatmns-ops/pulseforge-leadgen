@@ -18,9 +18,9 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── AUTH ──────────────────────────────────────────────────────────────
 async function getAuthClient() {
-  const credentials = process.env.GMAIL_CREDENTIALS
-    ? JSON.parse(process.env.GMAIL_CREDENTIALS)
-    : JSON.parse(fs.readFileSync(CREDENTIALS_PATH));
+  const rawCreds = process.env.GMAIL_CREDENTIALS || fs.readFileSync(CREDENTIALS_PATH, 'utf8');
+  console.log('[Riley] Parsing credentials, first 50 chars:', rawCreds.slice(0, 50));
+  const credentials = JSON.parse(rawCreds);
   const credKeys = credentials.installed || credentials.web;
   const { client_secret, client_id } = credKeys;
   const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, 'http://localhost:3001');
