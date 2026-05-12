@@ -18,21 +18,18 @@ async function getAccessToken() {
 
 // ── SHEET HELPERS ─────────────────────────────────────────────────────
 async function getSheetRows(token) {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/A:O`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Setter%20Leads!A:O`;
   const res = await axios.get(url, { headers: { Authorization: `Bearer ${token}` } });
   return res.data.values || [];
 }
 
 async function updateSetterNotes(token, rowIndex, value) {
-  // rowIndex is 0-based array index; Sheets rows are 1-based
-  const range = `O${rowIndex + 1}`;
+  const range = `Setter Leads!O${rowIndex + 1}`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}?valueInputOption=RAW`;
   await axios.put(
-    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}`,
+    url,
     { range, majorDimension: 'ROWS', values: [[value]] },
-    {
-      headers: { Authorization: `Bearer ${token}` },
-      params:  { valueInputOption: 'RAW' },
-    }
+    { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
   );
 }
 
