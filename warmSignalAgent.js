@@ -7,20 +7,32 @@ const SHEET_ID   = '1DPVhzWGCHrAInxPDqeU5_Br208bPAf6qIgUy3wIp7QE';
 
 // ── GOOGLE AUTH ───────────────────────────────────────────────────────
 async function getAccessToken() {
-  const res = await axios.post('https://oauth2.googleapis.com/token', {
-    client_id:     process.env.GOOGLE_CLIENT_ID,
-    client_secret: process.env.GOOGLE_CLIENT_SECRET,
-    refresh_token: process.env.GOOGLE_SHEETS_REFRESH_TOKEN,
-    grant_type:    'refresh_token',
-  });
-  return res.data.access_token;
+  try {
+    const res = await axios.post('https://oauth2.googleapis.com/token', {
+      client_id:     process.env.GOOGLE_CLIENT_ID,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET,
+      refresh_token: process.env.GOOGLE_SHEETS_REFRESH_TOKEN,
+      grant_type:    'refresh_token',
+    });
+    console.log('[warm_signal] Access token obtained successfully');
+    return res.data.access_token;
+  } catch (err) {
+    console.error('[warm_signal] Token error:', JSON.stringify(err.response?.data || err.message));
+    throw err;
+  }
 }
 
 // ── SHEET HELPERS ─────────────────────────────────────────────────────
 async function getSheetRows(token) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Setter%20Leads!A:O`;
-  const res = await axios.get(url, { headers: { Authorization: `Bearer ${token}` } });
-  return res.data.values || [];
+  try {
+    const res = await axios.get(url, { headers: { Authorization: `Bearer ${token}` } });
+    console.log(`[warm_signal] Sheet rows fetched: ${res.data.values?.length || 0}`);
+    return res.data.values || [];
+  } catch (err) {
+    console.error('[warm_signal] Sheets read error:', JSON.stringify(err.response?.data || err.message));
+    throw err;
+  }
 }
 
 async function updateSetterNotes(token, rowIndex, value) {
