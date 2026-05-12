@@ -648,6 +648,68 @@ body::before {
 .max-digest.expanded .max-text::-webkit-scrollbar { width: 2px; }
 .max-digest.expanded .max-text::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.4); border-radius: 2px; }
 
+/* MAX BRIEF BANNER */
+.max-brief-banner {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--purple-bright);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.max-brief-banner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.max-brief-banner-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--purple-bright);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.max-brief-banner-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--purple-bright);
+  box-shadow: 0 0 6px var(--purple-bright);
+  flex-shrink: 0;
+}
+.max-brief-banner-date {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.55rem;
+  color: var(--gray-light);
+  margin-left: 4px;
+}
+.max-brief-banner-regen {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.58rem;
+  letter-spacing: 1px;
+  background: transparent;
+  border: 1px solid rgba(139,92,246,0.35);
+  color: var(--purple-bright);
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+.max-brief-banner-regen:hover { background: rgba(139,92,246,0.12); border-color: var(--purple-bright); }
+.max-brief-banner-regen:disabled { opacity: 0.4; cursor: not-allowed; }
+.max-brief-banner-text {
+  font-size: 0.8rem;
+  color: rgba(232,240,254,0.75);
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
 /* ACTIONS AREA */
 .actions-area { display: none; overflow-y: auto; height: 100%; padding: 1.5rem 2rem; }
 .actions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1rem; margin-top: 1rem; }
@@ -1367,6 +1429,19 @@ body::before {
 
   <!-- AGENTS AREA -->
   <div class="agents-area">
+
+    <!-- MAX BRIEF BANNER -->
+    <div class="max-brief-banner" id="maxBriefBanner">
+      <div class="max-brief-banner-header">
+        <div class="max-brief-banner-title">
+          <div class="max-brief-banner-dot"></div>
+          Max &mdash; Daily Brief
+          <span class="max-brief-banner-date" id="maxBriefBannerDate"></span>
+        </div>
+        <button class="max-brief-banner-regen" id="maxBriefRegenBtn" onclick="regenMaxBrief(this)">&#9654; Regenerate</button>
+      </div>
+      <div class="max-brief-banner-text" id="maxBriefBannerText">Loading...</div>
+    </div>
 
     <div class="area-header">
       <div>
@@ -3822,6 +3897,54 @@ async function loadMaxBrief() {
     console.error('loadMaxBrief:', e);
   }
 }
+
+// ── MAX BRIEF BANNER ─────────────────────────────────────────────
+async function loadMaxBriefBanner() {
+  const textEl = document.getElementById('maxBriefBannerText');
+  const dateEl = document.getElementById('maxBriefBannerDate');
+  try {
+    const res = await fetch('/api/max-brief', { credentials: 'include' });
+    if (!res.ok) throw new Error('not ok');
+    const d = await res.json();
+
+    const brief = d.brief || d.insights;
+    const ts    = d.created_at || d.ran_at;
+
+    if (brief) {
+      if (textEl) textEl.textContent = brief;
+      if (dateEl && ts) {
+        const date = new Date(ts);
+        const isToday = date.toDateString() === new Date().toDateString();
+        dateEl.textContent = isToday
+          ? 'Generated today at ' + date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+          : 'Generated ' + date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      }
+    } else {
+      if (textEl) textEl.textContent = 'No brief generated yet today — click Regenerate to run Max now.';
+      if (dateEl) dateEl.textContent = '';
+    }
+  } catch(e) {
+    if (textEl) textEl.textContent = 'No brief generated yet today — click Regenerate to run Max now.';
+  }
+}
+
+async function regenMaxBrief(btn) {
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  try {
+    await fetch('/api/run/max', { method: 'POST', credentials: 'include' });
+    setTimeout(async () => {
+      await loadMaxBriefBanner();
+      btn.disabled = false;
+      btn.textContent = '▶ Regenerate';
+    }, 8000);
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = '▶ Regenerate';
+  }
+}
+
+loadMaxBriefBanner();
 
 // ── ACTIONS TAB ───────────────────────────────────────────────────
 let _actionsLoaded = false;
