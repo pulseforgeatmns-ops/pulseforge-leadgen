@@ -54,7 +54,7 @@ const DOMAIN_BLACKLIST = [
 
 // ── CLI ARGS ─────────────────────────────────────────────────────────
 const args = parseArgs(process.argv.slice(2));
-const CONFIG = {
+let CONFIG = {
   industry:    args.industry  || 'cleaning',
   location:    args.location  || 'Manchester NH',
   jobTitle:    args.title     || 'owner',
@@ -753,7 +753,19 @@ async function saveToDatabase(leads) {
   console.log(`[DB] Saved ${saved} prospects, rejected ${rejected} (junk), skipped ${skipped} (errors/dupes)`);
 }
 
-main().catch(err => {
-  console.error('[FATAL]', err.message);
-  process.exit(1);
-});
+async function run(params = {}) {
+  if (params.industry) CONFIG.industry = params.industry;
+  if (params.location) CONFIG.location = params.location;
+  if (params.jobTitle) CONFIG.jobTitle = params.jobTitle;
+  if (params.maxResults) CONFIG.maxResults = parseInt(params.maxResults);
+  await main();
+}
+
+module.exports = { run };
+
+if (require.main === module) {
+  main().catch(err => {
+    console.error('[FATAL]', err.message);
+    process.exit(1);
+  });
+}
