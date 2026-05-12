@@ -284,7 +284,7 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
     console.log(`[Places] Found ${leads.length} results with websites`);
     return leads;
   } catch (err) {
-    console.error('[Places] Error:', err.message, err.response?.data || '');
+    console.error('[Places] Error full:', JSON.stringify(err.response?.data, null, 2));
     return [];
   }
 }
