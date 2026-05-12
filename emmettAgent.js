@@ -457,7 +457,7 @@ async function getProspectsForEmail() {
       SELECT COUNT(*) FROM touchpoints t
       WHERE t.prospect_id = p.id AND t.channel = 'email'
     ) < 4
-    LIMIT 20
+    LIMIT 100
   `);
 
   return res.rows;
@@ -556,8 +556,8 @@ async function run() {
   console.log('Prospects found:', JSON.stringify(prospects, null, 2));
 
   let sent = 0;
-  const dailyLimit = 40;
-  const industryCap = 5; // max sends per industry per run
+  const dailyLimit = 100;
+  const industryCap = 15; // max sends per industry per run
   const industryCounts = {};
 
   for (const prospect of prospects) {
