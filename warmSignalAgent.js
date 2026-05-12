@@ -26,11 +26,16 @@ async function getSheetRows(token) {
 async function updateSetterNotes(token, rowIndex, value) {
   const range = `Setter Leads!O${rowIndex + 1}`;
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(range)}?valueInputOption=RAW`;
-  await axios.put(
-    url,
-    { range, majorDimension: 'ROWS', values: [[value]] },
-    { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
-  );
+  try {
+    await axios.put(
+      url,
+      { range, majorDimension: 'ROWS', values: [[value]] },
+      { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    console.error('[warm_signal] Sheets write error:', JSON.stringify(err.response?.data || err.message));
+    throw err;
+  }
 }
 
 // ── MAIN ──────────────────────────────────────────────────────────────
