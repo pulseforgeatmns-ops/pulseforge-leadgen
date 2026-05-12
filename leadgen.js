@@ -252,7 +252,7 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': PLACES_KEY,
-        'X-Goog-FieldMask': 'places.displayName,places.websiteUri,places.nationalPhoneNumber,places.formattedAddress,places.id'
+        'X-Goog-FieldMask': 'places.displayName,places.websiteUri,places.nationalPhoneNumber,places.formattedPhoneNumber,places.formattedAddress,places.id'
       }
     });
 
@@ -266,10 +266,12 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
         const domain = new URL(place.websiteUri).hostname.replace('www.', '');
         if (DOMAIN_BLACKLIST.some(b => domain.includes(b))) continue;
 
+        const phone = place.nationalPhoneNumber || place.formattedPhoneNumber || null;
+        console.log('[Places] Phone for', place.displayName?.text, ':', phone);
         leads.push({
           company: place.displayName?.text || 'Unknown',
           url: domain,
-          phone: place.nationalPhoneNumber || '',
+          phone,
           address: place.formattedAddress || '',
           source: ['places'],
           snippet: ''
