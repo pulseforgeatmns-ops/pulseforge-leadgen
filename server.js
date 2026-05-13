@@ -78,6 +78,7 @@ app.use('/', require('./routes/webhooks'));
 app.use('/', require('./routes/cron'));
 app.use('/', require('./routes/api'));
 app.use('/', require('./routes/approvals'));
+app.use('/client', require('./routes/client'));
 
 // ── AUTH MIDDLEWARE ───────────────────────────────────────────────────
 function requireAuth(req, res, next) {
@@ -469,6 +470,66 @@ app.get('/demo', (req, res) => {
 });
 
 // Sketch mockup preview
+app.get('/preview', (req, res) => {
+  res.redirect('/client/preview');
+});
+
+app.get('/mockups', (req, res) => {
+  const mockupsDir = path.join(__dirname, 'mockups');
+  let files = [];
+
+  try {
+    files = fs.readdirSync(mockupsDir)
+      .filter(file => file.endsWith('.html'))
+      .map(file => {
+        const filepath = path.join(mockupsDir, file);
+        return { file, mtime: fs.statSync(filepath).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch (err) {
+    console.error('[preview] Failed to read mockups:', err.message);
+  }
+
+  if (files.length === 1) {
+    return res.redirect(`/preview/${encodeURIComponent(files[0].file)}`);
+  }
+
+  const rows = files.map(item => `
+    <a class="mockup" href="/preview/${encodeURIComponent(item.file)}">
+      <span>${item.file.replace(/-/g, ' ').replace(/\.html$/, '')}</span>
+      <small>${new Date(item.mtime).toLocaleString()}</small>
+    </a>
+  `).join('');
+
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulseforge Preview</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: #050711; color: #edf2ff; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.wrap { width: min(760px, 100%); }
+h1 { margin: 0 0 8px; font-size: clamp(2rem, 5vw, 4rem); line-height: 1; }
+p { color: #8b96b5; margin: 0 0 22px; }
+.mockups { display: grid; gap: 10px; }
+.mockup { display: flex; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid rgba(139, 92, 246, 0.28); border-radius: 8px; background: rgba(255,255,255,0.04); color: #edf2ff; text-decoration: none; }
+.mockup:hover { border-color: rgba(139, 92, 246, 0.7); background: rgba(139, 92, 246, 0.09); }
+small { color: #8b96b5; white-space: nowrap; }
+.empty { border: 1px solid rgba(139, 92, 246, 0.28); border-radius: 8px; padding: 18px; color: #8b96b5; background: rgba(255,255,255,0.04); }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1>Mockup Preview</h1>
+  <p>${files.length ? 'Choose a generated mockup to preview.' : 'No generated mockups were found yet.'}</p>
+  <div class="mockups">${rows || '<div class="empty">Run Sketch to generate a mockup, then refresh this page.</div>'}</div>
+</main>
+</body>
+</html>`);
+});
+
 app.get('/preview/:filename', (req, res) => {
   const { filename } = req.params;
   const filepath = path.join(__dirname, 'mockups', filename);

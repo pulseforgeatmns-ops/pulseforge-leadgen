@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pulseforge Client Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #050711;
+      --panel: #0b1020;
+      --panel-2: #10162a;
+      --line: rgba(151, 117, 250, 0.2);
+      --line-strong: rgba(151, 117, 250, 0.4);
+      --purple: #8b5cf6;
+      --purple-2: #a78bfa;
+      --teal: #28d7bc;
+      --green: #39e58c;
+      --red: #ff5c7a;
+      --text: #edf2ff;
+      --muted: #8b96b5;
+      --muted-2: #5f6b89;
+      --shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 20% 0%, rgba(139, 92, 246, 0.26), transparent 36rem),
+        radial-gradient(circle at 90% 10%, rgba(40, 215, 188, 0.12), transparent 28rem),
+        linear-gradient(180deg, #060914 0%, #03050b 100%);
+      font-family: "DM Sans", system-ui, sans-serif;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image: linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px);
+      background-size: 100% 4px;
+      opacity: 0.45;
+    }
+
+    button, input { font: inherit; }
+
+    .shell {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+      position: relative;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 60px;
+      margin-bottom: 30px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .mark {
+      width: 14px;
+      height: 14px;
+      border-radius: 999px;
+      background: var(--purple);
+      box-shadow: 0 0 22px rgba(139, 92, 246, 0.9);
+      flex: 0 0 auto;
+    }
+
+    .brand-name {
+      font-family: "Bebas Neue", sans-serif;
+      font-size: clamp(2rem, 4vw, 3.2rem);
+      line-height: 0.9;
+      letter-spacing: 0.08em;
+      white-space: nowrap;
+    }
+
+    .client-chip {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 9px 12px;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      max-width: 40vw;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .ghost-btn {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--muted);
+      border-radius: 7px;
+      padding: 10px 12px;
+      cursor: pointer;
+    }
+
+    .ghost-btn:hover { border-color: var(--line-strong); color: var(--text); }
+
+    .hero {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 28px;
+      margin-bottom: 22px;
+    }
+
+    .eyebrow {
+      color: var(--purple-2);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(2rem, 5vw, 4.5rem);
+      line-height: 0.95;
+      letter-spacing: 0;
+      max-width: 780px;
+    }
+
+    .subline {
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 1rem;
+      max-width: 680px;
+    }
+
+    .timestamp {
+      color: var(--muted-2);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.72rem;
+      text-align: right;
+      flex: 0 0 auto;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 14px;
+    }
+
+    .panel {
+      background: linear-gradient(180deg, rgba(16, 22, 42, 0.92), rgba(9, 14, 28, 0.92));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .metric {
+      grid-column: span 3;
+      min-height: 150px;
+      padding: 18px;
+      position: relative;
+    }
+
+    .metric::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto;
+      height: 2px;
+      background: linear-gradient(90deg, var(--purple), transparent);
+    }
+
+    .label {
+      color: var(--muted);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      line-height: 1.45;
+      text-transform: uppercase;
+      min-height: 32px;
+    }
+
+    .value {
+      font-size: clamp(2.4rem, 5vw, 4rem);
+      font-weight: 700;
+      margin-top: 18px;
+      line-height: 0.95;
+    }
+
+    .detail {
+      color: var(--muted-2);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.72rem;
+      margin-top: 10px;
+    }
+
+    .wide { grid-column: span 8; }
+    .side { grid-column: span 4; }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      padding: 16px 18px;
+    }
+
+    .section-title {
+      margin: 0;
+      font-size: 1rem;
+      letter-spacing: 0;
+    }
+
+    .section-kicker {
+      color: var(--muted-2);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      white-space: nowrap;
+    }
+
+    .touch-list, .agent-list {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .touch {
+      display: grid;
+      grid-template-columns: 110px 1fr auto;
+      gap: 14px;
+      align-items: center;
+      padding: 14px 18px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+    }
+
+    .touch:last-child, .agent:last-child { border-bottom: none; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--purple-2);
+      background: rgba(139, 92, 246, 0.08);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 6px 9px;
+    }
+
+    .touch-title {
+      color: var(--text);
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .touch-meta {
+      color: var(--muted);
+      font-size: 0.88rem;
+      margin-top: 3px;
+      overflow-wrap: anywhere;
+    }
+
+    .date {
+      color: var(--muted-2);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.7rem;
+      white-space: nowrap;
+    }
+
+    .content-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      padding: 18px;
+    }
+
+    .content-item {
+      background: rgba(255, 255, 255, 0.035);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 8px;
+      padding: 14px;
+      min-height: 100px;
+    }
+
+    .content-label {
+      color: var(--muted);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .content-value {
+      font-size: 2.25rem;
+      font-weight: 700;
+      margin-top: 10px;
+    }
+
+    .agent {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 14px 18px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+    }
+
+    .agent-main {
+      min-width: 0;
+    }
+
+    .agent-name {
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .agent-meta {
+      color: var(--muted-2);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.68rem;
+      margin-top: 4px;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--muted-2);
+    }
+
+    .status.active { color: var(--green); }
+    .status.active .dot {
+      background: var(--green);
+      box-shadow: 0 0 12px rgba(57, 229, 140, 0.8);
+    }
+
+    .empty {
+      color: var(--muted);
+      padding: 20px 18px;
+    }
+
+    .login-wrap {
+      min-height: 100vh;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      position: relative;
+    }
+
+    .login-card {
+      width: min(410px, 100%);
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(16, 22, 42, 0.96), rgba(8, 12, 24, 0.96));
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 28px;
+    }
+
+    .login-card .brand-name { font-size: 2.5rem; }
+
+    .login-title {
+      margin: 22px 0 8px;
+      font-size: 1.35rem;
+    }
+
+    .login-copy {
+      color: var(--muted);
+      margin: 0 0 22px;
+      line-height: 1.5;
+    }
+
+    .pin-input {
+      width: 100%;
+      min-height: 48px;
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      padding: 0 14px;
+      outline: none;
+      letter-spacing: 0.18em;
+    }
+
+    .pin-input:focus {
+      border-color: var(--purple);
+      box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.14);
+    }
+
+    .primary-btn {
+      width: 100%;
+      min-height: 48px;
+      border: 0;
+      border-radius: 7px;
+      background: var(--purple);
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 12px;
+    }
+
+    .primary-btn:hover { background: #7c3aed; }
+
+    .error {
+      display: none;
+      color: var(--red);
+      background: rgba(255, 92, 122, 0.1);
+      border: 1px solid rgba(255, 92, 122, 0.2);
+      border-radius: 7px;
+      padding: 10px 12px;
+      margin-top: 12px;
+      font-size: 0.88rem;
+    }
+
+    [data-view="dashboard"] .login-wrap { display: none; }
+    [data-view="dashboard"] .shell { display: block; }
+    [data-view="login"] .login-wrap { display: flex; }
+    [data-view="login"] .shell { display: none; }
+
+    @media (max-width: 900px) {
+      .hero { align-items: flex-start; flex-direction: column; }
+      .timestamp { text-align: left; }
+      .metric { grid-column: span 6; }
+      .wide, .side { grid-column: span 12; }
+      .touch { grid-template-columns: 1fr; gap: 8px; }
+      .date { white-space: normal; }
+      .client-chip { max-width: 52vw; }
+    }
+
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 24px, 1180px); padding-top: 18px; }
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .client-chip { max-width: 100%; }
+      .metric { grid-column: span 12; min-height: 132px; }
+      .content-grid { grid-template-columns: 1fr; }
+      .section-head { align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body data-view="login">
+  <main class="login-wrap">
+    <section class="login-card">
+      <div class="brand">
+        <div class="mark"></div>
+        <div class="brand-name">PULSEFORGE</div>
+      </div>
+      <h2 class="login-title" id="loginBusiness">Client dashboard</h2>
+      <p class="login-copy">Enter your client PIN to view this account.</p>
+      <form id="loginForm">
+        <input class="pin-input" id="pin" name="pin" type="password" inputmode="numeric" autocomplete="one-time-code" placeholder="PIN" required autofocus>
+        <button class="primary-btn" type="submit">Log in</button>
+      </form>
+      <div class="error" id="loginError"></div>
+    </section>
+  </main>
+
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark"></div>
+        <div class="brand-name">PULSEFORGE</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+        <div class="client-chip" id="clientVertical">Loading</div>
+        <button class="ghost-btn" id="logoutBtn" type="button">Logout</button>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div>
+        <div class="eyebrow">Client Performance</div>
+        <h1 id="businessName">Dashboard</h1>
+        <div class="subline" id="clientSubline">Read-only performance snapshot.</div>
+      </div>
+      <div class="timestamp" id="generatedAt">Loading</div>
+    </section>
+
+    <section class="grid">
+      <article class="panel metric">
+        <div class="label">Prospects found this month</div>
+        <div class="value" id="prospectsMonth">0</div>
+        <div class="detail" id="prospectsDetail">Vertical pipeline</div>
+      </article>
+      <article class="panel metric">
+        <div class="label">Emails sent this week</div>
+        <div class="value" id="emailsWeek">0</div>
+        <div class="detail">Outbound and warm outreach</div>
+      </article>
+      <article class="panel metric">
+        <div class="label">Email open rate</div>
+        <div class="value"><span id="openRate">0</span>%</div>
+        <div class="detail" id="openDetail">0 of 0 contacts opened</div>
+      </article>
+      <article class="panel metric">
+        <div class="label">Content published this week</div>
+        <div class="value" id="contentTotal">0</div>
+        <div class="detail">GBP, Facebook, LinkedIn</div>
+      </article>
+
+      <article class="panel wide">
+        <div class="section-head">
+          <h2 class="section-title">Recent Touchpoints</h2>
+          <div class="section-kicker">Last 10 actions</div>
+        </div>
+        <div class="touch-list" id="touchpoints"></div>
+      </article>
+
+      <aside class="panel side">
+        <div class="section-head">
+          <h2 class="section-title">Agent Status</h2>
+          <div class="section-kicker">Live system</div>
+        </div>
+        <div class="agent-list" id="agents"></div>
+      </aside>
+
+      <article class="panel wide">
+        <div class="section-head">
+          <h2 class="section-title">Content Published</h2>
+          <div class="section-kicker">This week</div>
+        </div>
+        <div class="content-grid">
+          <div class="content-item">
+            <div class="content-label">Google Business Profile</div>
+            <div class="content-value" id="gbpCount">0</div>
+          </div>
+          <div class="content-item">
+            <div class="content-label">Facebook</div>
+            <div class="content-value" id="facebookCount">0</div>
+          </div>
+          <div class="content-item">
+            <div class="content-label">LinkedIn</div>
+            <div class="content-value" id="linkedinCount">0</div>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    const clientId = location.pathname.split('/').filter(Boolean)[1];
+    const base = `/client/${clientId}`;
+    const knownAgents = ['Scout', 'Emmett', 'Riley', 'Paige', 'Faye', 'Link', 'Sam', 'Cal'];
+
+    const els = {
+      businessName: document.getElementById('businessName'),
+      clientSubline: document.getElementById('clientSubline'),
+      clientVertical: document.getElementById('clientVertical'),
+      generatedAt: document.getElementById('generatedAt'),
+      prospectsMonth: document.getElementById('prospectsMonth'),
+      prospectsDetail: document.getElementById('prospectsDetail'),
+      emailsWeek: document.getElementById('emailsWeek'),
+      openRate: document.getElementById('openRate'),
+      openDetail: document.getElementById('openDetail'),
+      contentTotal: document.getElementById('contentTotal'),
+      touchpoints: document.getElementById('touchpoints'),
+      agents: document.getElementById('agents'),
+      gbpCount: document.getElementById('gbpCount'),
+      facebookCount: document.getElementById('facebookCount'),
+      linkedinCount: document.getElementById('linkedinCount'),
+      loginBusiness: document.getElementById('loginBusiness'),
+      loginForm: document.getElementById('loginForm'),
+      loginError: document.getElementById('loginError'),
+      pin: document.getElementById('pin'),
+      logoutBtn: document.getElementById('logoutBtn'),
+    };
+
+    function setView(view) {
+      document.body.dataset.view = view;
+      if (view === 'login') setTimeout(() => els.pin.focus(), 0);
+    }
+
+    function fmtNumber(value) {
+      return new Intl.NumberFormat().format(Number(value || 0));
+    }
+
+    function fmtDate(value) {
+      if (!value) return 'No runs yet';
+      return new Intl.DateTimeFormat(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      }).format(new Date(value));
+    }
+
+    function titleCase(value) {
+      return String(value || '')
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, char => char.toUpperCase());
+    }
+
+    function touchSummary(item) {
+      const action = titleCase(item.action_type);
+      const summary = item.content_summary || item.outcome || '';
+      return summary ? `${action}: ${summary}` : action;
+    }
+
+    function renderClient(client) {
+      const business = client.business_name || client.name || 'Client Dashboard';
+      els.businessName.textContent = business;
+      els.loginBusiness.textContent = business;
+      els.clientVertical.textContent = client.vertical || 'Client';
+      els.clientSubline.textContent = client.vertical
+        ? `${titleCase(client.vertical)} performance snapshot`
+        : 'Performance snapshot';
+      els.prospectsDetail.textContent = client.vertical
+        ? `${titleCase(client.vertical)} vertical`
+        : 'Client vertical';
+    }
+
+    function renderTouchpoints(items) {
+      if (!items.length) {
+        els.touchpoints.innerHTML = '<div class="empty">No touchpoints recorded yet.</div>';
+        return;
+      }
+
+      els.touchpoints.innerHTML = items.map(item => `
+        <div class="touch">
+          <div><span class="pill">${item.channel || 'system'}</span></div>
+          <div>
+            <div class="touch-title">${escapeHtml(item.prospect || 'Prospect')}</div>
+            <div class="touch-meta">${escapeHtml(touchSummary(item))}</div>
+          </div>
+          <div class="date">${fmtDate(item.created_at)}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderAgents(agentRows) {
+      const byName = new Map(agentRows.map(agent => [agent.name, agent]));
+      const ordered = [
+        ...knownAgents.map(name => byName.get(name) || { name, active: false, week_runs: 0 }),
+        ...agentRows.filter(agent => !knownAgents.includes(agent.name)),
+      ];
+
+      els.agents.innerHTML = ordered.map(agent => `
+        <div class="agent">
+          <div class="agent-main">
+            <div class="agent-name">${escapeHtml(agent.name)}</div>
+            <div class="agent-meta">${fmtNumber(agent.week_runs)} runs this week</div>
+          </div>
+          <div class="status ${agent.active ? 'active' : ''}">
+            <span class="dot"></span>
+            ${agent.active ? 'Active' : 'Standby'}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderDashboard(data) {
+      renderClient(data.client);
+
+      const stats = data.stats || {};
+      els.generatedAt.textContent = `Updated ${fmtDate(data.generated_at)}`;
+      els.prospectsMonth.textContent = fmtNumber(stats.prospects_this_month);
+      els.emailsWeek.textContent = fmtNumber(stats.emails_sent_this_week);
+      els.openRate.textContent = Number(stats.open_rate || 0).toFixed(1).replace('.0', '');
+      els.openDetail.textContent = `${fmtNumber(stats.opened_contacts)} of ${fmtNumber(stats.emailed_contacts)} contacts opened`;
+
+      const content = data.content_published_this_week || {};
+      els.gbpCount.textContent = fmtNumber(content.gbp);
+      els.facebookCount.textContent = fmtNumber(content.facebook);
+      els.linkedinCount.textContent = fmtNumber(content.linkedin);
+      els.contentTotal.textContent = fmtNumber((content.gbp || 0) + (content.facebook || 0) + (content.linkedin || 0));
+
+      renderTouchpoints(data.recent_touchpoints || []);
+      renderAgents(data.agents || []);
+    }
+
+    function escapeHtml(value) {
+      return String(value || '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;',
+      }[char]));
+    }
+
+    async function loadSession() {
+      const res = await fetch(`${base}/api/session`, { credentials: 'include' });
+      if (!res.ok) throw new Error('Client not found');
+      const data = await res.json();
+      renderClient(data.client);
+      if (data.authenticated) {
+        await loadDashboard();
+      } else {
+        setView('login');
+      }
+    }
+
+    async function loadDashboard() {
+      const res = await fetch(`${base}/api/dashboard`, { credentials: 'include' });
+      if (res.status === 401) {
+        setView('login');
+        return;
+      }
+      if (!res.ok) throw new Error('Unable to load dashboard');
+      renderDashboard(await res.json());
+      setView('dashboard');
+    }
+
+    els.loginForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      els.loginError.style.display = 'none';
+
+      const res = await fetch(`${base}/login`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: els.pin.value }),
+      });
+
+      if (!res.ok) {
+        els.loginError.textContent = 'Invalid PIN. Please try again.';
+        els.loginError.style.display = 'block';
+        els.pin.select();
+        return;
+      }
+
+      els.pin.value = '';
+      await loadDashboard();
+    });
+
+    els.logoutBtn.addEventListener('click', async () => {
+      await fetch(`${base}/logout`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      setView('login');
+    });
+
+    loadSession().catch(err => {
+      els.loginError.textContent = err.message;
+      els.loginError.style.display = 'block';
+      setView('login');
+    });
+  </script>
+</body>
+</html>
