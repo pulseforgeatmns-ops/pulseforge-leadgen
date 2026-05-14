@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulseforge — Setter Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #040810;
+  --bg1: #070d1a;
+  --bg2: #0b1526;
+  --bg3: #101e33;
+  --purple: #6030b1;
+  --purple-bright: #8b5cf6;
+  --purple-glow: rgba(96,48,177,0.2);
+  --teal: #00d4b4;
+  --teal-dim: rgba(0,212,180,0.12);
+  --orange: #ff6b35;
+  --green: #00e676;
+  --green-dim: rgba(0,230,118,0.1);
+  --red: #ff3b5c;
+  --yellow: #ffd600;
+  --white: #e8f0fe;
+  --gray: #3a4a6a;
+  --gray-light: #6b7fa0;
+  --border: rgba(96,48,177,0.18);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%; overflow:hidden; background:var(--bg); }
+body { font-family:'DM Sans',sans-serif; color:var(--white); display:flex; flex-direction:column; }
+body::before { content:''; position:fixed; inset:0; background:repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.015) 3px, rgba(0,0,0,0.015) 4px); pointer-events:none; z-index:1000; }
+.topbar { height:52px; background:rgba(7,13,26,0.97); border-bottom:1px solid var(--border); display:flex; align-items:center; padding:0 2rem; gap:2rem; flex-shrink:0; backdrop-filter:blur(20px); position:relative; z-index:100; min-width:0; }
+.topbar::after { content:''; position:absolute; bottom:0; left:0; right:0; height:1px; background:linear-gradient(90deg, transparent 0%, var(--purple-bright) 30%, var(--teal) 70%, transparent 100%); opacity:0.4; }
+.logo { font-family:'Bebas Neue',sans-serif; font-size:1.4rem; letter-spacing:4px; color:var(--white); display:flex; align-items:center; gap:10px; flex-shrink:0; }
+.logo-mark { width:28px; height:28px; border:1.5px solid var(--purple-bright); border-radius:6px; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; flex-shrink:0; }
+.logo-mark::before { content:''; position:absolute; width:12px; height:12px; background:var(--purple-bright); border-radius:50%; box-shadow:0 0 12px var(--purple-bright); animation:logoPulse 3s ease infinite; }
+@keyframes logoPulse { 0%,100%{transform:scale(0.8);opacity:0.8} 50%{transform:scale(1.1);opacity:1} }
+.nav-tabs { display:flex; gap:0; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:6px; padding:3px; margin-left:1rem; }
+.nav-tab { font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1.5px; text-transform:uppercase; padding:5px 14px; border-radius:4px; cursor:pointer; color:var(--gray-light); transition:all 0.2s; }
+.nav-tab.active { background:var(--purple-glow); color:var(--purple-bright); border:1px solid rgba(139,92,246,0.3); }
+.nav-tab:hover:not(.active) { color:var(--white); }
+.topbar-right { margin-left:auto; display:flex; align-items:center; gap:1.25rem; }
+.sys-status { display:flex; align-items:center; gap:6px; font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--green); background:var(--green-dim); border:1px solid rgba(0,230,118,0.15); padding:4px 12px; border-radius:99px; white-space:nowrap; }
+.sys-dot { width:5px; height:5px; background:var(--green); border-radius:50%; box-shadow:0 0 8px var(--green); animation:sysPulse 2s ease infinite; }
+@keyframes sysPulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.clock { font-family:'JetBrains Mono',monospace; font-size:0.72rem; color:var(--gray-light); letter-spacing:2px; }
+.main { flex:1; display:grid; grid-template-columns:minmax(0, 1fr) 340px; overflow:hidden; }
+.work-area { overflow-y:auto; overflow-x:hidden; padding:2rem; height:100%; min-width:0; }
+.work-area::-webkit-scrollbar, .activity-feed::-webkit-scrollbar { width:3px; }
+.work-area::-webkit-scrollbar-thumb, .activity-feed::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+.area-header { display:flex; align-items:flex-end; justify-content:space-between; gap:1rem; margin-bottom:1.5rem; }
+.area-title { font-family:'Bebas Neue',sans-serif; font-size:1.5rem; letter-spacing:3px; color:var(--white); }
+.area-sub { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--gray-light); margin-top:3px; letter-spacing:1px; text-transform:uppercase; }
+.metrics-strip { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:1rem; margin-bottom:1.5rem; }
+.metric-card { background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:1rem; position:relative; overflow:hidden; min-height:96px; }
+.metric-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg, var(--purple-bright), transparent); opacity:0.65; }
+.metric-label { font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:var(--gray); letter-spacing:2px; text-transform:uppercase; margin-bottom:0.55rem; }
+.metric-value { font-family:'Bebas Neue',sans-serif; font-size:2.35rem; line-height:1; letter-spacing:1px; }
+.metric-value.t { color:var(--teal); } .metric-value.p { color:var(--purple-bright); } .metric-value.g { color:var(--green); } .metric-value.o { color:var(--orange); }
+.metric-note { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:var(--gray-light); margin-top:0.35rem; }
+.panel { display:none; }
+.panel.active { display:block; }
+.panel-card { background:var(--bg1); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+.table-wrap { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:0.78rem; }
+th { font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:1.5px; text-transform:uppercase; color:var(--gray); padding:0.75rem 1rem; text-align:left; border-bottom:1px solid var(--border); white-space:nowrap; }
+td { padding:0.72rem 1rem; border-bottom:1px solid rgba(255,255,255,0.03); color:rgba(255,255,255,0.75); white-space:nowrap; vertical-align:middle; }
+tr:hover td { background:rgba(139,92,246,0.04); }
+.lead-name { color:var(--white); font-weight:600; cursor:pointer; }
+.mono { font-family:'JetBrains Mono',monospace; font-size:0.66rem; color:var(--gray-light); }
+.score { font-family:'JetBrains Mono',monospace; font-size:0.62rem; padding:3px 7px; border-radius:3px; letter-spacing:1px; }
+.score.high { color:var(--green); background:var(--green-dim); border:1px solid rgba(0,230,118,0.2); }
+.score.mid { color:var(--yellow); background:rgba(255,214,0,0.08); border:1px solid rgba(255,214,0,0.18); }
+.score.low { color:var(--red); background:rgba(255,59,92,0.08); border:1px solid rgba(255,59,92,0.18); }
+.status-actions { display:flex; gap:5px; align-items:center; }
+.btn { font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:1px; text-transform:uppercase; padding:5px 9px; border-radius:4px; border:1px solid var(--border); background:transparent; color:var(--gray-light); cursor:pointer; transition:all 0.15s; }
+.btn:hover { border-color:var(--teal); color:var(--teal); }
+.btn.primary { color:var(--purple-bright); border-color:rgba(139,92,246,0.3); background:var(--purple-glow); }
+.btn.dead:hover { border-color:var(--red); color:var(--red); }
+.empty { padding:2rem; text-align:center; font-family:'JetBrains Mono',monospace; color:var(--gray); font-size:0.68rem; letter-spacing:1.5px; text-transform:uppercase; }
+.pipeline-grid { display:grid; grid-template-columns:repeat(5, minmax(180px, 1fr)); gap:1rem; overflow-x:auto; padding-bottom:0.5rem; }
+.stage { background:var(--bg1); border:1px solid var(--border); border-radius:10px; min-height:420px; overflow:hidden; }
+.stage-head { padding:0.85rem; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+.stage-title { font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1.5px; text-transform:uppercase; color:var(--gray-light); }
+.stage-count { font-family:'Bebas Neue',sans-serif; color:var(--purple-bright); font-size:1.25rem; }
+.stage-body { padding:0.75rem; display:flex; flex-direction:column; gap:0.6rem; }
+.lead-card { background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); border-radius:8px; padding:0.75rem; }
+.lead-card-title { font-weight:600; color:var(--white); font-size:0.82rem; margin-bottom:0.45rem; line-height:1.35; }
+.lead-card-meta { display:flex; align-items:center; justify-content:space-between; gap:0.4rem; margin-bottom:0.6rem; }
+select, textarea, input { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:6px; color:var(--white); font-family:'DM Sans',sans-serif; outline:none; }
+select { padding:0.45rem 0.55rem; width:100%; }
+textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
+.activity-layout { display:grid; grid-template-columns:360px minmax(0, 1fr); gap:1rem; }
+.form-card { background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:1rem; height:max-content; }
+.form-title { font-family:'Bebas Neue',sans-serif; font-size:1.05rem; letter-spacing:2px; margin-bottom:0.9rem; }
+.field { margin-bottom:0.85rem; }
+.field label { display:block; font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:var(--gray); letter-spacing:1.5px; text-transform:uppercase; margin-bottom:0.35rem; }
+.activity-list { background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:0.9rem; max-height:620px; overflow:auto; }
+.activity-item { display:grid; grid-template-columns:30px minmax(0,1fr) auto; gap:0.75rem; padding:0.75rem 0; border-bottom:1px solid rgba(255,255,255,0.04); }
+.activity-icon { width:26px; height:26px; border-radius:6px; display:flex; align-items:center; justify-content:center; background:var(--teal-dim); border:1px solid rgba(0,212,180,0.15); font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--teal); text-transform:uppercase; }
+.activity-text { font-size:0.78rem; color:rgba(255,255,255,0.7); line-height:1.5; min-width:0; }
+.activity-text strong { color:var(--white); }
+.activity-time { font-family:'JetBrains Mono',monospace; color:var(--gray); font-size:0.55rem; white-space:nowrap; }
+.detail-drawer { position:fixed; right:340px; top:52px; bottom:0; width:380px; background:var(--bg1); border-left:1px solid var(--border); box-shadow:-20px 0 60px rgba(0,0,0,0.45); z-index:90; transform:translateX(110%); transition:transform 0.25s ease; padding:1.25rem; overflow:auto; }
+.detail-drawer.open { transform:translateX(0); }
+.detail-title { font-family:'Bebas Neue',sans-serif; font-size:1.35rem; letter-spacing:2px; margin-bottom:0.25rem; }
+.detail-meta { font-family:'JetBrains Mono',monospace; color:var(--gray-light); font-size:0.62rem; letter-spacing:1px; text-transform:uppercase; margin-bottom:1rem; }
+.detail-block { padding:0.8rem 0; border-top:1px solid rgba(255,255,255,0.05); }
+.detail-label { font-family:'JetBrains Mono',monospace; font-size:0.56rem; color:var(--gray); letter-spacing:1.5px; text-transform:uppercase; margin-bottom:0.3rem; }
+.detail-val { color:rgba(255,255,255,0.78); font-size:0.82rem; line-height:1.55; word-break:break-word; }
+.right-panel { background:var(--bg1); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
+.panel-header { padding:1.25rem; border-bottom:1px solid var(--border); flex-shrink:0; }
+.panel-title { font-family:'Bebas Neue',sans-serif; font-size:1rem; letter-spacing:2px; }
+.panel-sub { font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:var(--gray-light); margin-top:3px; }
+.agent-strip { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--border); border-bottom:1px solid var(--border); flex-shrink:0; }
+.agent-tile { background:var(--bg1); padding:0.85rem; display:flex; align-items:center; justify-content:space-between; min-height:62px; }
+.agent-name { font-family:'Bebas Neue',sans-serif; letter-spacing:2px; font-size:1rem; }
+.agent-role { font-family:'JetBrains Mono',monospace; font-size:0.52rem; color:var(--gray-light); letter-spacing:1px; text-transform:uppercase; margin-top:2px; }
+.agent-dot { width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); }
+.activity-feed { flex:1; overflow-y:auto; padding:1rem; }
+.feed-label { font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:2px; text-transform:uppercase; color:var(--gray); margin-bottom:0.75rem; }
+.feed-item { display:flex; gap:8px; align-items:flex-start; padding:0.65rem 0; border-bottom:1px solid rgba(255,255,255,0.03); cursor:pointer; }
+.feed-icon { width:24px; height:24px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:0.68rem; flex-shrink:0; background:var(--purple-glow); border:1px solid rgba(139,92,246,0.2); color:var(--purple-bright); font-family:'JetBrains Mono',monospace; }
+.feed-text { font-size:0.73rem; color:rgba(255,255,255,0.6); line-height:1.5; flex:1; min-width:0; }
+.feed-text strong { color:var(--white); font-weight:600; }
+.feed-time { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:var(--gray); margin-top:2px; white-space:nowrap; }
+@media (max-width: 1080px) {
+  html, body { overflow:auto; }
+  body { min-height:100%; }
+  .main { display:flex; flex-direction:column; overflow:visible; }
+  .work-area { height:auto; overflow:visible; padding:1rem; }
+  .right-panel { border-left:0; border-top:1px solid var(--border); min-height:460px; }
+  .metrics-strip { grid-template-columns:repeat(2, minmax(0,1fr)); }
+  .pipeline-grid { grid-template-columns:repeat(5, 260px); }
+  .activity-layout { grid-template-columns:1fr; }
+  .detail-drawer { right:0; width:min(380px,100vw); }
+}
+@media (max-width: 720px) {
+  .topbar { height:auto; min-height:52px; padding:0.75rem 1rem; gap:0.75rem; flex-wrap:wrap; }
+  .nav-tabs { order:3; width:100%; margin-left:0; overflow-x:auto; }
+  .topbar-right { margin-left:0; }
+  .clock { display:none; }
+  .metrics-strip { grid-template-columns:1fr; }
+  th, td { padding:0.65rem; }
+}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="logo"><div class="logo-mark"></div>SETTER DASHBOARD</div>
+  <div class="nav-tabs">
+    <div class="nav-tab active" data-tab="queue">Queue</div>
+    <div class="nav-tab" data-tab="pipeline">Pipeline</div>
+    <div class="nav-tab" data-tab="activity">Activity</div>
+  </div>
+  <div class="topbar-right">
+    <div class="sys-status"><div class="sys-dot"></div><span id="liveState">LIVE</span></div>
+    <div class="clock" id="clock">--:--</div>
+  </div>
+</div>
+
+<main class="main">
+  <section class="work-area">
+    <div class="area-header">
+      <div>
+        <div class="area-title" id="panelTitle">LEADS QUEUE</div>
+        <div class="area-sub" id="panelSub">Uncontacted Scout-qualified leads</div>
+      </div>
+      <button class="btn" id="refreshBtn">Refresh</button>
+    </div>
+
+    <div class="metrics-strip">
+      <div class="metric-card"><div class="metric-label">Leads Today</div><div class="metric-value t" id="leadsToday">0</div><div class="metric-note">Scout qualified</div></div>
+      <div class="metric-card"><div class="metric-label">Leads This Week</div><div class="metric-value p" id="leadsWeek">0</div><div class="metric-note">Rolling 7 days</div></div>
+      <div class="metric-card"><div class="metric-label">Contacted Rate</div><div class="metric-value g" id="contactedRate">0%</div><div class="metric-note" id="contactedNote">0 contacted</div></div>
+      <div class="metric-card"><div class="metric-label">Dead / Unresponsive</div><div class="metric-value o" id="deadCount">0</div><div class="metric-note" id="bookedNote">0% booked</div></div>
+    </div>
+
+    <section class="panel active" id="queuePanel">
+      <div class="panel-card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Business</th><th>Vertical</th><th>City</th><th>Score</th><th>Date Added</th><th>Phone / Email</th><th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="queueRows"><tr><td colspan="7" class="empty">Loading leads</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="pipelinePanel">
+      <div class="pipeline-grid" id="pipelineGrid"></div>
+    </section>
+
+    <section class="panel" id="activityPanel">
+      <div class="activity-layout">
+        <form class="form-card" id="activityForm">
+          <div class="form-title">LOG TOUCHPOINT</div>
+          <div class="field"><label for="leadSelect">Lead</label><select id="leadSelect" required></select></div>
+          <div class="field"><label for="actionType">Action</label><select id="actionType" required><option value="call">Call</option><option value="email">Email</option><option value="text">Text</option></select></div>
+          <div class="field"><label for="notes">Notes</label><textarea id="notes" placeholder="Outcome, next step, objections"></textarea></div>
+          <button class="btn primary" type="submit">Save Activity</button>
+        </form>
+        <div class="activity-list" id="activityList"><div class="empty">Loading activity</div></div>
+      </div>
+    </section>
+  </section>
+
+  <aside class="right-panel">
+    <div class="panel-header">
+      <div class="panel-title">SCOUT FEED</div>
+      <div class="panel-sub" id="feedSub">Auto-refreshing every 60s</div>
+    </div>
+    <div class="agent-strip" id="agentStrip"></div>
+    <div class="activity-feed">
+      <div class="feed-label">Incoming Leads</div>
+      <div id="scoutFeed"><div class="empty">Loading feed</div></div>
+    </div>
+  </aside>
+</main>
+
+<aside class="detail-drawer" id="detailDrawer">
+  <button class="btn" id="closeDetail">Close</button>
+  <div style="height:1rem"></div>
+  <div class="detail-title" id="detailName">Lead</div>
+  <div class="detail-meta" id="detailMeta">Scout qualified</div>
+  <div class="detail-block"><div class="detail-label">Contact</div><div class="detail-val" id="detailContact"></div></div>
+  <div class="detail-block"><div class="detail-label">Website</div><div class="detail-val" id="detailWebsite"></div></div>
+  <div class="detail-block"><div class="detail-label">Notes</div><div class="detail-val" id="detailNotes"></div></div>
+  <div class="detail-block"><div class="detail-label">Move Stage</div><select id="detailStatus"></select></div>
+</aside>
+
+<script>
+const stages = ['new','contacted','follow_up','booked','dead'];
+const stageLabels = { new:'New', contacted:'Contacted', follow_up:'Follow-up', booked:'Booked', dead:'Dead' };
+const agents = [
+  ['SCOUT','Prospecting'], ['EMMETT','Email'], ['RILEY','Follow-up'],
+  ['PAIGE','Content'], ['VERA','Verifier'], ['MAX','Observer']
+];
+let leads = [];
+let feed = [];
+let pipeline = {};
+let activeTab = 'queue';
+let selectedLead = null;
+
+function fmtDate(value) {
+  if (!value) return '-';
+  return new Date(value).toLocaleDateString([], { month:'short', day:'numeric' });
+}
+
+function fmtTime(value) {
+  if (!value) return '';
+  return new Date(value).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    ...options
+  });
+  if (res.status === 401) {
+    location.href = '/login';
+    return null;
+  }
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function setClock() {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+}
+
+function renderAgents() {
+  document.getElementById('agentStrip').innerHTML = agents.map(([name, role]) => `
+    <div class="agent-tile">
+      <div><div class="agent-name">${name}</div><div class="agent-role">${role}</div></div>
+      <div class="agent-dot"></div>
+    </div>
+  `).join('');
+}
+
+function statusButtons(lead) {
+  return `<div class="status-actions">
+    <button class="btn" data-status="contacted" data-id="${lead.id}">Contacted</button>
+    <button class="btn" data-status="follow_up" data-id="${lead.id}">Follow-up</button>
+    <button class="btn primary" data-status="booked" data-id="${lead.id}">Booked</button>
+    <button class="btn dead" data-status="dead" data-id="${lead.id}">Dead</button>
+  </div>`;
+}
+
+function renderQueue() {
+  const body = document.getElementById('queueRows');
+  if (!leads.length) {
+    body.innerHTML = '<tr><td colspan="7" class="empty">No new Scout-qualified leads waiting</td></tr>';
+    return;
+  }
+  body.innerHTML = leads.map(lead => `
+    <tr>
+      <td><span class="lead-name" data-open="${lead.id}">${lead.business_name}</span><div class="mono">${lead.contact_name || 'No contact name'}</div></td>
+      <td>${lead.vertical}</td>
+      <td>${lead.city}</td>
+      <td><span class="score ${lead.score_band}">${lead.score}</span></td>
+      <td>${fmtDate(lead.date_added)}</td>
+      <td><div>${lead.phone || '-'}</div><div class="mono">${lead.email || '-'}</div></td>
+      <td>${statusButtons(lead)}</td>
+    </tr>
+  `).join('');
+}
+
+function renderLeadSelect() {
+  const select = document.getElementById('leadSelect');
+  const all = Object.values(pipeline).flat();
+  const source = all.length ? all : leads;
+  select.innerHTML = source.map(lead => `<option value="${lead.id}">${lead.business_name} · ${stageLabels[lead.status] || lead.status}</option>`).join('');
+}
+
+function renderPipeline() {
+  const grid = document.getElementById('pipelineGrid');
+  grid.innerHTML = stages.map(stage => {
+    const items = pipeline[stage] || [];
+    return `<div class="stage">
+      <div class="stage-head"><div class="stage-title">${stageLabels[stage]}</div><div class="stage-count">${items.length}</div></div>
+      <div class="stage-body">
+        ${items.length ? items.map(lead => `
+          <div class="lead-card">
+            <div class="lead-card-title" data-open="${lead.id}">${lead.business_name}</div>
+            <div class="lead-card-meta"><span class="mono">${lead.vertical}</span><span class="score ${lead.score_band}">${lead.score}</span></div>
+            <select data-select-status="${lead.id}">
+              ${stages.map(s => `<option value="${s}" ${s === lead.status ? 'selected' : ''}>${stageLabels[s]}</option>`).join('')}
+            </select>
+          </div>
+        `).join('') : '<div class="empty">No leads</div>'}
+      </div>
+    </div>`;
+  }).join('');
+  renderLeadSelect();
+}
+
+function renderFeed() {
+  const box = document.getElementById('scoutFeed');
+  document.getElementById('feedSub').textContent = `${feed.length} recent leads · Auto-refreshing`;
+  if (!feed.length) {
+    box.innerHTML = '<div class="empty">No recent Scout leads</div>';
+    return;
+  }
+  box.innerHTML = feed.map(lead => `
+    <div class="feed-item" data-open="${lead.id}">
+      <div class="feed-icon">${lead.score}</div>
+      <div class="feed-text"><strong>${lead.business_name}</strong><br>${lead.vertical} · ${lead.city}</div>
+      <div class="feed-time">${fmtTime(lead.date_added)}</div>
+    </div>
+  `).join('');
+}
+
+function renderMetrics(m) {
+  document.getElementById('leadsToday').textContent = m.leads_today || 0;
+  document.getElementById('leadsWeek').textContent = m.leads_week || 0;
+  document.getElementById('contactedRate').textContent = `${m.contacted_rate || 0}%`;
+  document.getElementById('deadCount').textContent = m.dead || 0;
+  document.getElementById('contactedNote').textContent = `${m.contacted || 0} of ${m.total || 0} contacted`;
+  document.getElementById('bookedNote').textContent = `${m.booked_rate || 0}% booked`;
+}
+
+async function loadMetrics() {
+  const metrics = await api('/setter/api/metrics');
+  if (metrics) renderMetrics(metrics);
+}
+
+async function loadFeed() {
+  feed = await api('/setter/api/scout-feed') || [];
+  renderFeed();
+}
+
+async function loadQueue() {
+  leads = await api('/setter/api/leads') || [];
+  renderQueue();
+  renderLeadSelect();
+}
+
+async function loadPipeline() {
+  const data = await api('/setter/api/pipeline');
+  pipeline = data?.grouped || {};
+  renderPipeline();
+}
+
+async function loadActivity() {
+  const activity = await api('/setter/api/activity') || [];
+  const list = document.getElementById('activityList');
+  if (!activity.length) {
+    list.innerHTML = '<div class="empty">No logged touchpoints yet</div>';
+    return;
+  }
+  list.innerHTML = activity.map(item => `
+    <div class="activity-item">
+      <div class="activity-icon">${item.action_type.slice(0,1)}</div>
+      <div class="activity-text"><strong>${item.business_name}</strong> · ${item.action_type}<br>${item.notes || 'No notes'}</div>
+      <div class="activity-time">${fmtDate(item.created_at)} ${fmtTime(item.created_at)}</div>
+    </div>
+  `).join('');
+}
+
+async function refreshAll() {
+  document.getElementById('liveState').textContent = 'SYNC';
+  try {
+    await Promise.all([loadMetrics(), loadFeed(), loadQueue(), loadPipeline(), loadActivity()]);
+    document.getElementById('liveState').textContent = 'LIVE';
+  } catch (err) {
+    console.error(err);
+    document.getElementById('liveState').textContent = 'ERROR';
+  }
+}
+
+async function updateStatus(id, status) {
+  const original = leads.find(l => l.id === id);
+  leads = leads.filter(l => l.id !== id);
+  renderQueue();
+  try {
+    await api(`/setter/api/leads/${id}/status`, { method:'PATCH', body:JSON.stringify({ status }) });
+    await Promise.all([loadMetrics(), loadQueue(), loadPipeline(), loadActivity()]);
+    if (selectedLead?.id === id) selectedLead.status = status;
+  } catch (err) {
+    if (original) leads.unshift(original);
+    renderQueue();
+    alert('Status update failed');
+  }
+}
+
+function findLead(id) {
+  return leads.find(l => l.id === id) || feed.find(l => l.id === id) || Object.values(pipeline).flat().find(l => l.id === id);
+}
+
+function openDetail(id) {
+  const lead = findLead(id);
+  if (!lead) return;
+  selectedLead = lead;
+  document.getElementById('detailName').textContent = lead.business_name;
+  document.getElementById('detailMeta').textContent = `${lead.vertical} · ${lead.city} · score ${lead.score}`;
+  document.getElementById('detailContact').innerHTML = `${lead.contact_name || 'No contact'}<br>${lead.phone || '-'}<br>${lead.email || '-'}`;
+  document.getElementById('detailWebsite').textContent = lead.website || '-';
+  document.getElementById('detailNotes').textContent = lead.notes || '-';
+  document.getElementById('detailStatus').innerHTML = stages.map(s => `<option value="${s}" ${s === lead.status ? 'selected' : ''}>${stageLabels[s]}</option>`).join('');
+  document.getElementById('detailDrawer').classList.add('open');
+}
+
+function setTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.nav-tab').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
+  document.querySelectorAll('.panel').forEach(panel => panel.classList.remove('active'));
+  document.getElementById(`${tab}Panel`).classList.add('active');
+  const titles = { queue:['LEADS QUEUE','Uncontacted Scout-qualified leads'], pipeline:['PIPELINE BOARD','Stage counts and movement'], activity:['ACTIVITY LOG','Manual setter touchpoints'] };
+  document.getElementById('panelTitle').textContent = titles[tab][0];
+  document.getElementById('panelSub').textContent = titles[tab][1];
+}
+
+document.addEventListener('click', event => {
+  const tab = event.target.closest('.nav-tab');
+  if (tab) setTab(tab.dataset.tab);
+  const statusBtn = event.target.closest('[data-status]');
+  if (statusBtn) updateStatus(statusBtn.dataset.id, statusBtn.dataset.status);
+  const open = event.target.closest('[data-open]');
+  if (open) openDetail(open.dataset.open);
+});
+
+document.addEventListener('change', event => {
+  const selector = event.target.closest('[data-select-status]');
+  if (selector) updateStatus(selector.dataset.selectStatus, selector.value);
+});
+
+document.getElementById('detailStatus').addEventListener('change', event => {
+  if (selectedLead) updateStatus(selectedLead.id, event.target.value);
+});
+document.getElementById('closeDetail').addEventListener('click', () => document.getElementById('detailDrawer').classList.remove('open'));
+document.getElementById('refreshBtn').addEventListener('click', refreshAll);
+document.getElementById('activityForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  await api('/setter/api/activity', {
+    method:'POST',
+    body:JSON.stringify({
+      lead_id: document.getElementById('leadSelect').value,
+      action_type: document.getElementById('actionType').value,
+      notes: document.getElementById('notes').value
+    })
+  });
+  document.getElementById('notes').value = '';
+  await Promise.all([loadMetrics(), loadQueue(), loadPipeline(), loadActivity()]);
+});
+
+renderAgents();
+setClock();
+setInterval(setClock, 10000);
+refreshAll();
+setInterval(refreshAll, 60000);
+</script>
+</body>
+</html>

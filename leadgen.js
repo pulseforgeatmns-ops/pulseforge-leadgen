@@ -14,6 +14,7 @@ require('dotenv').config();
 const axios = require('axios');
 const { createObjectCsvWriter } = require('csv-writer');
 const { google } = require('googleapis');
+const { appendQualifiedScoutLead } = require('./utils/setterSheet');
 
 
 const DOMAIN_BLACKLIST = [
@@ -705,7 +706,7 @@ function validateProspect(name) {
 
 async function saveToDatabase(leads) {
   const pool = require('./db');
-  let saved = 0, skipped = 0, rejected = 0;
+  let saved = 0, skipped = 0, rejected = 0, setterQueued = 0, setterSkipped = 0, setterFailed = 0;
   for (const lead of leads) {
     const companyName = lead.company.replace(/^CONTACT:\s*/i, '').trim();
 
@@ -742,16 +743,30 @@ async function saveToDatabase(leads) {
       const lastName  = nameParts.slice(1).join(' ') || '';
       const notes = companyName + ' — ' + lead.url;
       const phone = lead.phone || null;
-      await pool.query(
-      'INSERT INTO prospects (first_name, last_name, email, phone, status, source, icp_score, notes, vertical) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (email) DO NOTHING',
+      const insert = await pool.query(
+      'INSERT INTO prospects (first_name, last_name, email, phone, status, source, icp_score, notes, vertical) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (email) DO NOTHING RETURNING id',
       [firstName, lastName, email, phone, 'cold', 'scout', lead.score, notes, CONFIG.industry]
     );
+      if (!insert.rows.length) {
+        skipped++;
+        continue;
+      }
       saved++;
+
+      try {
+        const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
+        if (handoff.appended) setterQueued++;
+        else setterSkipped++;
+      } catch (err) {
+        setterFailed++;
+        console.error(`[Setter] Handoff failed for ${companyName}: ${err.message}`);
+      }
     } catch (err) {
       skipped++;
     }
   }
   console.log(`[DB] Saved ${saved} prospects, rejected ${rejected} (junk), skipped ${skipped} (errors/dupes)`);
+  console.log(`[Setter] Queued ${setterQueued}, skipped ${setterSkipped}, failed ${setterFailed}`);
 }
 
 async function run(params = {}) {

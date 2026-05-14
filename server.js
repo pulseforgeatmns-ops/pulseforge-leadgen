@@ -79,6 +79,7 @@ app.use('/', require('./routes/cron'));
 app.use('/', require('./routes/api'));
 app.use('/', require('./routes/approvals'));
 app.use('/client', require('./routes/client'));
+app.use('/setter', require('./routes/setter'));
 
 // ── AUTH MIDDLEWARE ───────────────────────────────────────────────────
 function requireAuth(req, res, next) {
