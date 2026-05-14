@@ -19,6 +19,7 @@ const CRON_MODULES = {
   riley:       '../rileyAgent',
   warm_signal: '../warmSignalAgent',
   setter_handoff: '../setterHandoffAgent',
+  handoff_utility: '../setterHandoffAgent',
 };
 
 function runCronAgent(agent, res, query = {}) {
@@ -31,9 +32,9 @@ function runCronAgent(agent, res, query = {}) {
       mod.run({ industry: query.industry, location: query.location }).catch(err => {
         console.error(`[cron] scout run error:`, err.message);
       });
-    } else if (agent === 'setter_handoff' && typeof mod.run === 'function') {
+    } else if ((agent === 'setter_handoff' || agent === 'handoff_utility') && typeof mod.run === 'function') {
       mod.run({ lookbackDays: query.lookbackDays }).catch(err => {
-        console.error(`[cron] setter_handoff run error:`, err.message);
+        console.error(`[cron] ${agent} run error:`, err.message);
       });
     }
   } catch (err) {

@@ -1,15 +1,11 @@
 const express = require('express');
 const path = require('path');
 const pool = require('../db');
+const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 
 const STAGES = ['new', 'contacted', 'follow_up', 'booked', 'dead'];
-
-function requireAuth(req, res, next) {
-  if (req.session && req.session.authenticated) return next();
-  res.redirect('/login');
-}
 
 function isMax(req) {
   return req.query.role === 'max';
@@ -19,37 +15,45 @@ function hasMaxSecret(req) {
   return isMax(req) && process.env.CRON_SECRET && req.query.secret === process.env.CRON_SECRET;
 }
 
-function requireApiAuth(req, res, next) {
-  if (req.session && req.session.authenticated) return next();
-  res.status(401).json({ error: 'Unauthorized' });
-}
-
 function requireMetricsRead(req, res, next) {
   if (hasMaxSecret(req)) return next();
-  return requireApiAuth(req, res, next);
+  return sessionAuth(req, res, err => {
+    if (err) return next(err);
+    return requireRole('admin', 'manager', 'setter')(req, res, next);
+  });
 }
 
 function requireSetterRead(req, res, next) {
   if (isMax(req)) return res.status(403).json({ error: 'Setter-only endpoint' });
-  return requireApiAuth(req, res, next);
+  return sessionAuth(req, res, err => {
+    if (err) return next(err);
+    return requireRole('admin', 'manager', 'setter')(req, res, next);
+  });
 }
 
 function requireSetterWrite(req, res, next) {
   if (isMax(req)) return res.status(403).json({ error: 'Read-only role' });
-  return requireApiAuth(req, res, next);
+  return sessionAuth(req, res, err => {
+    if (err) return next(err);
+    return requireRole('admin', 'manager', 'setter')(req, res, next);
+  });
 }
 
 async function ensureSetterSchema() {
   await pool.query(`
     ALTER TABLE prospects
     ADD COLUMN IF NOT EXISTS setter_status TEXT DEFAULT 'new',
+    ADD COLUMN IF NOT EXISTS setter_visible BOOLEAN DEFAULT false,
     ADD COLUMN IF NOT EXISTS setter_updated_at TIMESTAMPTZ DEFAULT NOW()
   `);
   await pool.query(`
     UPDATE prospects
-    SET setter_status = 'new'
-    WHERE setter_status IS NULL
-      AND source = 'scout'
+    SET setter_status = COALESCE(setter_status, 'new'),
+        setter_visible = true,
+        setter_updated_at = COALESCE(setter_updated_at, NOW())
+    WHERE source = 'scout'
+      AND COALESCE(icp_score, 0) >= 40
+      AND COALESCE(do_not_contact, false) = false
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS activity_log (
@@ -109,6 +113,7 @@ async function getLeads(where = '', params = [], limit = 250) {
     SELECT p.*
     FROM prospects p
     WHERE p.source = 'scout'
+      AND COALESCE(p.setter_visible, false) = true
       AND COALESCE(p.do_not_contact, false) = false
       AND COALESCE(p.icp_score, 0) >= 40
       ${where}
@@ -118,12 +123,12 @@ async function getLeads(where = '', params = [], limit = 250) {
   return rows.map(mapLead);
 }
 
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', sessionAuth, requireRole('admin', 'manager', 'setter'), async (req, res) => {
   await ensureSetterSchema().catch(err => console.error('[setter] schema error:', err.message));
   res.sendFile(path.join(__dirname, '..', 'public', 'setter-dashboard.html'));
 });
 
-router.get('/api/metrics', requireMetricsRead, async (req, res) => {
+async function metricsHandler(req, res) {
   try {
     await ensureSetterSchema();
     const { rows } = await pool.query(`
@@ -136,6 +141,7 @@ router.get('/api/metrics', requireMetricsRead, async (req, res) => {
         COUNT(*)::int AS total
       FROM prospects
       WHERE source = 'scout'
+        AND COALESCE(setter_visible, false) = true
         AND COALESCE(do_not_contact, false) = false
         AND COALESCE(icp_score, 0) >= 40
     `);
@@ -157,9 +163,9 @@ router.get('/api/metrics', requireMetricsRead, async (req, res) => {
     console.error('[setter] metrics error:', err.message);
     res.status(500).json({ error: 'Unable to load metrics' });
   }
-});
+}
 
-router.get('/api/scout-feed', requireMetricsRead, async (req, res) => {
+async function feedHandler(req, res) {
   try {
     await ensureSetterSchema();
     const leads = await getLeads(`AND p.created_at >= NOW() - INTERVAL '7 days'`, [], 80);
@@ -168,7 +174,13 @@ router.get('/api/scout-feed', requireMetricsRead, async (req, res) => {
     console.error('[setter] scout feed error:', err.message);
     res.status(500).json({ error: 'Unable to load scout feed' });
   }
-});
+}
+
+router.get('/api/metrics', requireMetricsRead, metricsHandler);
+router.get('/metrics', requireMetricsRead, metricsHandler);
+router.get('/api/scout-feed', requireMetricsRead, feedHandler);
+router.get('/api/feed', requireMetricsRead, feedHandler);
+router.get('/feed', requireMetricsRead, feedHandler);
 
 router.get('/api/leads', requireSetterRead, async (req, res) => {
   try {
@@ -208,7 +220,7 @@ router.patch('/api/leads/:id/status', requireSetterWrite, async (req, res) => {
     await ensureSetterSchema();
     const { rows } = await pool.query(`
       UPDATE prospects
-      SET setter_status = $1, setter_updated_at = NOW()
+      SET setter_status = $1, setter_visible = true, setter_updated_at = NOW()
       WHERE id = $2 AND source = 'scout'
       RETURNING *
     `, [status, req.params.id]);
@@ -264,7 +276,7 @@ router.post('/api/activity', requireSetterWrite, async (req, res) => {
   }
   try {
     await ensureSetterSchema();
-    const setterId = req.session?.user || req.sessionID || 'setter';
+    const setterId = req.user?.id || null;
     const { rows } = await pool.query(`
       INSERT INTO activity_log (lead_id, action_type, notes, setter_id)
       VALUES ($1, $2, $3, $4)

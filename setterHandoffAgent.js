@@ -5,7 +5,16 @@ require('dotenv').config();
 const pool = require('./db');
 const { appendQualifiedScoutLead, hasSetterSheetAuth } = require('./utils/setterSheet');
 
-const AGENT_NAME = 'setter_handoff';
+const AGENT_NAME = 'handoff_utility';
+
+async function ensureSetterQueueColumns() {
+  await pool.query(`
+    ALTER TABLE prospects
+    ADD COLUMN IF NOT EXISTS setter_status TEXT DEFAULT 'new',
+    ADD COLUMN IF NOT EXISTS setter_visible BOOLEAN DEFAULT false,
+    ADD COLUMN IF NOT EXISTS setter_updated_at TIMESTAMPTZ DEFAULT NOW()
+  `);
+}
 
 function leadFromProspect(row) {
   const [businessName, website = ''] = String(row.notes || '').split(' — ');
@@ -27,10 +36,7 @@ async function run(params = {}) {
   console.log('─────────────────────────────────');
   console.log(`Lookback: ${lookbackDays} day(s)\n`);
 
-  if (!hasSetterSheetAuth()) {
-    console.warn('[setter_handoff] Missing Google Sheets auth; no setter rows can be written in this environment.');
-    return;
-  }
+  await ensureSetterQueueColumns();
 
   const { rows } = await pool.query(`
     SELECT id, first_name, last_name, email, phone, job_title, notes, vertical, icp_score, created_at
@@ -42,11 +48,28 @@ async function run(params = {}) {
     ORDER BY icp_score DESC NULLS LAST, created_at DESC
   `, [lookbackDays]);
 
+  if (rows.length) {
+    await pool.query(`
+      UPDATE prospects
+      SET setter_status = COALESCE(setter_status, 'new'),
+          setter_visible = true,
+          setter_updated_at = NOW()
+      WHERE id = ANY($1::uuid[])
+    `, [rows.map(row => row.id)]);
+  }
+
   let appended = 0;
   let skipped = 0;
   let failed = 0;
 
+  const canWriteSheet = hasSetterSheetAuth();
+  if (!canWriteSheet) {
+    skipped = rows.length;
+    console.warn('[setter_handoff] Missing Google Sheets auth; DB setter visibility was updated but no sheet rows were written.');
+  }
+
   for (const prospect of rows) {
+    if (!canWriteSheet) break;
     const lead = leadFromProspect(prospect);
     try {
       const handoff = await appendQualifiedScoutLead(lead, prospect.vertical);

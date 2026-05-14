@@ -17,9 +17,12 @@ const pgSession = require('connect-pg-simple')(session);
 const pool     = require('./db');
 const { createObjectCsvWriter } = require('csv-writer');
 const { generateDemoData } = require('./utils/demoData');
+const { bcrypt, getUserCount, initAuth, requireAuth, requireRole } = require('./middleware/auth');
 
 const app  = express();
 const PORT = 3000;
+
+initAuth().catch(err => console.error('[auth] init error:', err.message));
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),
@@ -32,6 +35,21 @@ app.use(session({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
+app.use((req, res, next) => {
+  if (req.path === '/public/dashboard.html' || req.path === '/dashboard.html') {
+    return requireAuth(req, res, err => {
+      if (err) return next(err);
+      return requireRole('admin', 'manager')(req, res, next);
+    });
+  }
+  if (req.path === '/public/setter-dashboard.html' || req.path === '/setter-dashboard.html') {
+    return requireAuth(req, res, err => {
+      if (err) return next(err);
+      return requireRole('admin', 'manager', 'setter')(req, res, next);
+    });
+  }
+  return next();
+});
 app.use(express.static(__dirname));
 
 // Recover from malformed JSON bodies so cron routes can still read req.query.secret
@@ -78,14 +96,10 @@ app.use('/', require('./routes/webhooks'));
 app.use('/', require('./routes/cron'));
 app.use('/', require('./routes/api'));
 app.use('/', require('./routes/approvals'));
+app.use('/', require('./routes/users'));
 app.use('/client', require('./routes/client'));
 app.use('/setter', require('./routes/setter'));
-
-// ── AUTH MIDDLEWARE ───────────────────────────────────────────────────
-function requireAuth(req, res, next) {
-  if (req.session && req.session.authenticated) return next();
-  res.redirect('/login');
-}
+app.use('/api/setter', require('./routes/setter'));
 
 // Login page
 app.get('/login', (req, res) => {
@@ -117,10 +131,12 @@ button:hover { background:#7c3aed; box-shadow:0 0 20px rgba(139,92,246,0.4); }
 <div class="login-box">
   <div class="logo"><div class="logo-dot"></div>PULSEFORGE</div>
   <div class="subtitle">Command Center · Restricted Access</div>
-  ${req.query.error ? '<div class="error">⚠ Invalid password — try again</div>' : ''}
+  ${req.query.error ? '<div class="error">Invalid credentials — try again</div>' : ''}
   <form method="POST" action="/login">
+    <label>Email</label>
+    <input type="email" name="email" placeholder="you@pulseforge.com" autofocus>
     <label>Password</label>
-    <input type="password" name="password" placeholder="Enter access code" autofocus required>
+    <input type="password" name="password" placeholder="Enter password" required>
     <button type="submit">Access System →</button>
   </form>
   <div class="version">Pulseforge v0.6.0 · Phase 6</div>
@@ -130,14 +146,34 @@ button:hover { background:#7c3aed; box-shadow:0 0 20px rgba(139,92,246,0.4); }
 });
 
 app.post('/login', async (req, res) => {
-  const { password } = req.body;
-  const correct = process.env.DASHBOARD_PASSWORD;
-  if (password === correct) {
+  const { email, password } = req.body;
+  await initAuth();
+  const userCount = await getUserCount();
+
+  if (userCount > 0) {
+    const { rows } = await pool.query(`
+      SELECT id, name, email, password_hash, role, active
+      FROM users
+      WHERE LOWER(email) = LOWER($1)
+      LIMIT 1
+    `, [email || '']);
+    const user = rows[0];
+    const ok = user && user.active && await bcrypt.compare(password || '', user.password_hash);
+    if (!ok) return res.redirect('/login?error=1');
+
+    req.session.user = { id: user.id, name: user.name, email: user.email, role: user.role };
     req.session.authenticated = true;
-    res.redirect('/dashboard');
-  } else {
-    res.redirect('/login?error=1');
+    await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+    return res.redirect(user.role === 'setter' ? '/setter' : '/dashboard');
   }
+
+  if (password === process.env.DASHBOARD_PASSWORD) {
+    req.session.user = { id: null, name: 'Legacy Admin', email: email || 'legacy@pulseforge.local', role: 'admin' };
+    req.session.authenticated = true;
+    return res.redirect('/dashboard');
+  }
+
+  res.redirect('/login?error=1');
 });
 
 app.get('/logout', (req, res) => {
@@ -155,7 +191,7 @@ app.get('/api/status', (req, res) => {
 });
 
 // Main search endpoint — SSE stream for real-time log updates
-app.get('/api/search', async (req, res) => {
+app.get('/api/search', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   const { industry = 'cleaning', location = 'Manchester NH', title = 'owner', max = 25, minscore = 40 } = req.query;
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -227,7 +263,7 @@ app.get('/api/search', async (req, res) => {
 });
 
 // CSV export
-app.post('/api/export/csv', async (req, res) => {
+app.post('/api/export/csv', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   const { leads } = req.body;
   if (!leads?.length) return res.status(400).json({ error: 'No leads' });
 
@@ -258,7 +294,7 @@ app.post('/api/export/csv', async (req, res) => {
 });
 
 // LinkedIn comment posting endpoint — called by n8n on approval
-app.post('/api/post-comment', async (req, res) => {
+app.post('/api/post-comment', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   const { postUrl, comment: rawComment, authorName } = req.body;
 
   if (!postUrl || !rawComment) {
@@ -404,7 +440,7 @@ app.post('/api/post-comment', async (req, res) => {
   }
 });
 
-app.get('/dashboard', requireAuth, (req, res) => {
+app.get('/dashboard', requireAuth, requireRole('admin', 'manager'), (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 

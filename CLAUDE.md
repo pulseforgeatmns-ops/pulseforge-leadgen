@@ -82,6 +82,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 | `companies` | Scraped companies: name, industry, size, location, website, icp_score, tech_stack |
 | `prospects` | Individual contacts: name, email, phone, job_title, linkedin_url, icp_score, status (cold/warm/hot), do_not_contact, last_contacted_at, vertical (TEXT — populated by Scout at insert time based on CONFIG.industry), setter_status (enum: new \| contacted \| follow_up \| booked \| dead), setter_visible (boolean — true = qualifies for setter queue, set by setterHandoffAgent) |
 | `activity_log` | Setter contact log: id, lead_id (FK → prospects), action_type (call \| email \| text), notes, created_at, setter_id |
+| `users` | Auth accounts: id, name, email, password_hash, role (admin \| manager \| setter), active, created_at, last_login_at |
 | `touchpoints` | Every agent action: channel, action_type, content_summary, outcome, sentiment, external_ref |
 | `agent_log` | Audit trail for every agent run: agent_name, action, prospect_id, payload, status, error_msg, duration_ms |
 | `agent_actions` | Actionable items deposited by agents for dashboard review: id, created_by, action_type, title, description, payload, status, executed_at, result, created_at — used by Max and Riley |
@@ -142,7 +143,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 ---
 
 ## Auth Model
-Session-based. `POST /login` checks `DASHBOARD_PASSWORD` env var via bcrypt. `requireAuth` middleware redirects unauthenticated requests to `/login`. The `/demo` and `/webhooks/*` and `/cron/*` routes are intentionally unauthenticated (cron is guarded by `CRON_SECRET` instead).
+Session-based multi-user auth. `POST /login` accepts email + password, checks against users table, stores { id, name, email, role } in session. `requireAuth` middleware gates all protected routes. `requireRole(...roles)` enforces per-route role access. Roles: admin (full access), manager (full access except user management), setter (/setter only). Admin UI at `/admin/users` for creating and managing accounts. Falls back to `DASHBOARD_PASSWORD` env var if users table is empty.
 
 ---
 
@@ -162,3 +163,4 @@ Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. The
 - **GOOGLE_SHEETS_REFRESH_TOKEN vs GOOGLE_REFRESH_TOKEN** — `GOOGLE_REFRESH_TOKEN` is for GBP/Calendar. `GOOGLE_SHEETS_REFRESH_TOKEN` is for Sheets write access in warmSignalAgent. They use different OAuth clients and scopes — do not conflate them.
 - **Scout → setter pipeline (fixed May 14 2026)** — Scout writes prospects to the DB but does not self-qualify leads for the setter. setterHandoffAgent.js handles the handoff: it evaluates icp_score against a threshold and sets setter_visible = true on qualifying rows. Prior to this fix, 170 leads had accumulated in prospects without ever surfacing in the setter queue. Backfill was run manually to resolve the gap. Always run setterHandoffAgent after a Scout batch or wire it into the Scout cron chain.
 - **calBatchAgent.js was present in an earlier version of CLAUDE.md but may have been dropped during a recent edit.** Confirm it is restored in both the File Map and Agent Roster.
+- **Multi-user auth (added May 2026)** — replaced single DASHBOARD_PASSWORD with users table. DASHBOARD_PASSWORD fallback remains for empty-DB safety. First setter: William Hernandez (created via admin UI post-deploy). setter_id on activity_log rows references users.id.

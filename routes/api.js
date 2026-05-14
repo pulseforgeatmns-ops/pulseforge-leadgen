@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { publishBlogPost } = require('../utils/blogPublisher');
 const {
   publishToGoogleBusiness,
@@ -10,10 +11,11 @@ const {
   publishLinkComment,
 } = require('../utils/publishPipeline');
 
-function requireAuth(req, res, next) {
-  if (req.session && req.session.authenticated) return next();
-  res.redirect('/login');
-}
+const requireAuth = [sessionAuth, requireRole('admin', 'manager')];
+
+router.get('/api/me', sessionAuth, (req, res) => {
+  res.json({ user: req.user });
+});
 
 // Agent status for dashboard (deduplicated — was registered twice in server.js)
 router.get('/api/agent-status', requireAuth, async (req, res) => {

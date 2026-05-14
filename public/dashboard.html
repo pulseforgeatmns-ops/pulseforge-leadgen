@@ -1452,6 +1452,7 @@ body::before {
     <div class="nav-tab">Prospects</div>
     <div class="nav-tab">Activity</div>
     <div class="nav-tab">Analytics</div>
+    <div class="nav-tab" id="usersTab" style="display:none">Users</div>
   </div>
   <div class="topbar-right">
     <div class="sys-status">
@@ -2578,6 +2579,10 @@ const _tabPanels = {
 };
 const _tabNames = ['agents','approvals','actions','prospects','activity','analytics'];
 document.querySelectorAll('.nav-tab').forEach((tab, i) => {
+  if (tab.id === 'usersTab') {
+    tab.addEventListener('click', () => { location.href = '/admin/users'; });
+    return;
+  }
   tab.addEventListener('click', () => {
     document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
@@ -2592,6 +2597,13 @@ document.querySelectorAll('.nav-tab').forEach((tab, i) => {
     if (name === 'analytics') loadAnalytics();
   });
 });
+
+fetch('/api/me', { credentials: 'include' })
+  .then(res => res.ok ? res.json() : null)
+  .then(data => {
+    if (data?.user?.role === 'admin') document.getElementById('usersTab').style.display = 'block';
+  })
+  .catch(() => {});
 
 // Approvals
 const _CHANNEL = {

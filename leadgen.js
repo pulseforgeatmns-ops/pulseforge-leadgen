@@ -707,6 +707,7 @@ function validateProspect(name) {
 async function saveToDatabase(leads) {
   const pool = require('./db');
   let saved = 0, skipped = 0, rejected = 0, setterQueued = 0, setterSkipped = 0, setterFailed = 0;
+  await ensureSetterQueueColumns(pool);
   for (const lead of leads) {
     const companyName = lead.company.replace(/^CONTACT:\s*/i, '').trim();
 
@@ -752,8 +753,18 @@ async function saveToDatabase(leads) {
         continue;
       }
       saved++;
+      const prospectId = insert.rows[0].id;
 
       try {
+        await pool.query(`
+          UPDATE prospects
+          SET setter_status = 'new',
+              setter_visible = true,
+              setter_updated_at = NOW()
+          WHERE id = $1
+            AND COALESCE(icp_score, 0) >= 40
+            AND COALESCE(do_not_contact, false) = false
+        `, [prospectId]);
         const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
         if (handoff.appended) setterQueued++;
         else setterSkipped++;
@@ -767,6 +778,15 @@ async function saveToDatabase(leads) {
   }
   console.log(`[DB] Saved ${saved} prospects, rejected ${rejected} (junk), skipped ${skipped} (errors/dupes)`);
   console.log(`[Setter] Queued ${setterQueued}, skipped ${setterSkipped}, failed ${setterFailed}`);
+}
+
+async function ensureSetterQueueColumns(pool) {
+  await pool.query(`
+    ALTER TABLE prospects
+    ADD COLUMN IF NOT EXISTS setter_status TEXT DEFAULT 'new',
+    ADD COLUMN IF NOT EXISTS setter_visible BOOLEAN DEFAULT false,
+    ADD COLUMN IF NOT EXISTS setter_updated_at TIMESTAMPTZ DEFAULT NOW()
+  `);
 }
 
 async function run(params = {}) {

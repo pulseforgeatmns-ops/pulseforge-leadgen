@@ -1,7 +1,10 @@
 const express = require('express');
 const router = express.Router();
+const { requireAuth, requireRole } = require('../middleware/auth');
 
-router.get('/approvals', (req, res) => {
+const managerAccess = [requireAuth, requireRole('admin', 'manager')];
+
+router.get('/approvals', ...managerAccess, (req, res) => {
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -81,13 +84,13 @@ load();
 </html>`);
 });
 
-router.get('/api/pending-comments', async (req, res) => {
+router.get('/api/pending-comments', ...managerAccess, async (req, res) => {
   const db = require('../dbClient');
   const comments = await db.getPendingComments();
   res.json(comments);
 });
 
-router.post('/api/approve-comment/:id', async (req, res) => {
+router.post('/api/approve-comment/:id', ...managerAccess, async (req, res) => {
   const db = require('../dbClient');
   const { id } = req.params;
   const comments = await db.getPendingComments();
@@ -181,7 +184,7 @@ router.post('/api/approve-comment/:id', async (req, res) => {
   }
 });
 
-router.post('/api/reject-comment/:id', async (req, res) => {
+router.post('/api/reject-comment/:id', ...managerAccess, async (req, res) => {
   const db = require('../dbClient');
   const { id } = req.params;
   await db.updateCommentStatus(id, 'rejected');
