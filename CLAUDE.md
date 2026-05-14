@@ -19,6 +19,8 @@ An AI-powered lead generation and outreach CRM for Pulseforge. It scrapes leads,
 | `dbClient.js` | Helper functions wrapping common DB operations: `checkDNC`, `logTouchpoint`, `logAgentAction`, `addProspect`, `addCompany`, `savePendingComment`, etc. |
 | `railway.json` | Railway deploy config: `node server.js` |
 | `warmSignalAgent.js` | Warm Signal Agent — detects prospects with 2+ opens in 7 days, flags them in Setter Lead List Google Sheet |
+| `setterHandoffAgent.js` | Handoff Utility — runs after Scout or manually to mark qualified prospects as setter-visible and backfill the setter queue |
+| `calBatchAgent.js` | Cal Batch — Bland.ai batch calling for cold prospects with phone numbers |
 | `getSheetsToken.js` | Helper script to generate GOOGLE_SHEETS_REFRESH_TOKEN OAuth token with spreadsheets scope |
 | `getRileyToken.js` | Helper script to generate Gmail OAuth token for Riley |
 | `utils/publishPipeline.js` | Publishes approved content to Google Business Profile, Facebook Page, LinkedIn Page (via Buffer GraphQL), and handles comment publishing for Faye/Link. |
@@ -33,11 +35,12 @@ Each agent is a standalone JS module that reads from the DB and writes results b
 
 | File | Agent Name | Role |
 |---|---|---|
-| `maxAgent.js` | Max | Daily manager briefing — pulls system snapshot, generates AI summary of pipeline health |
+| `maxAgent.js` | Max | Daily manager briefing — pulls system snapshot, generates AI summary of pipeline health. Has read-only API access to /api/setter/metrics and /api/setter/feed for pipeline monitoring. No write permissions. |
 | `paigeAgent.js` | Paige | Content creation — writes posts for GBP, Facebook, LinkedIn; queues to `pending_comments` for approval |
 | `emmettAgent.js` | Emmett | Email outreach — writes and sends cold email sequences via Brevo API |
 | `rileyAgent.js` | Riley | Inbound triage — reads Gmail inbox, classifies replies from known prospects (interested/not_now/unsubscribe/out_of_office/wrong_person/negative), updates prospect status, logs inbound touchpoints, deposits action cards for interested replies. Also processes Brevo email event webhooks. |
 | `warmSignalAgent.js` | Warm Signal | Detects 2+ opens in 7 days, writes 🔥 2ND OPEN flag to Setter Lead List Google Sheet |
+| `setterHandoffAgent.js` | handoff_utility | Runs after Scout to evaluate newly inserted prospect rows. Applies scoring threshold and writes qualified leads to the setter queue with `setter_status = 'new'` and `setter_visible = true`. Also serves as a backfill agent for historical prospects that were never handed off. Triggered post-Scout via n8n/Railway cron or manual invocation. |
 | `rexAgent.js` | Rex | Reporting — weekly performance summaries |
 | `samAgent.js` | Sam | SMS outreach via Twilio |
 | `ivyAgent.js` | Ivy | Instagram engagement |
@@ -45,6 +48,7 @@ Each agent is a standalone JS module that reads from the DB and writes results b
 | `facebookAgent.js` | Faye | Facebook — monitors local group posts, drafts comments for approval |
 | `veraAgent.js` | Vera | Review monitoring — watches GBP reviews, drafts response copy |
 | `calAgent.js` | Cal | Google Calendar — books discovery calls |
+| `calBatchAgent.js` | Cal Batch | Bland.ai batch calling for cold prospects with phone numbers |
 | `analyticsAgent.js` | Analytics | Pulls post performance data, writes back to `post_analytics` table |
 | `sketchAgent.js` | Sketch | Site mockup generator using Puppeteer |
 | `pennyAgent.js` | Penny | (check file for current role) |
@@ -65,6 +69,8 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 - **Analytics**: `/api/analytics`, `/api/analytics/posts`, `/api/analytics/summary`, `/api/analytics/top-posts`, `/api/analytics/email` — in `routes/api.js`
 - **Activity**: `/api/activity`, `/api/activity-panel`, `/api/activity-timeline` — in `routes/api.js`
 - **Dashboard UI**: `GET /dashboard` → serves `public/dashboard.html`; `GET /demo` → unauthenticated demo mode — in `server.js`
+- **Setter dashboard**: `GET /setter` → authenticated setter UI (queue, pipeline, activity log, metrics strip, Scout feed). Requires setter or admin role. — in `routes/setter.js`
+- **Setter API (read-only)**: `GET /api/setter/metrics`, `GET /api/setter/feed` — consumed by Max for pipeline monitoring. No write access. — in `routes/setter.js`
 - **Brevo warm signal**: Brevo POSTs email events here → Riley logs touchpoints and upgrades cold→warm automatically — in `routes/webhooks.js`
 
 ---
@@ -74,7 +80,8 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 | Table | What it holds |
 |---|---|
 | `companies` | Scraped companies: name, industry, size, location, website, icp_score, tech_stack |
-| `prospects` | Individual contacts: name, email, phone, job_title, linkedin_url, icp_score, status (cold/warm/hot), do_not_contact, last_contacted_at, vertical (TEXT — populated by Scout at insert time based on CONFIG.industry) |
+| `prospects` | Individual contacts: name, email, phone, job_title, linkedin_url, icp_score, status (cold/warm/hot), do_not_contact, last_contacted_at, vertical (TEXT — populated by Scout at insert time based on CONFIG.industry), setter_status (enum: new \| contacted \| follow_up \| booked \| dead), setter_visible (boolean — true = qualifies for setter queue, set by setterHandoffAgent) |
+| `activity_log` | Setter contact log: id, lead_id (FK → prospects), action_type (call \| email \| text), notes, created_at, setter_id |
 | `touchpoints` | Every agent action: channel, action_type, content_summary, outcome, sentiment, external_ref |
 | `agent_log` | Audit trail for every agent run: agent_name, action, prospect_id, payload, status, error_msg, duration_ms |
 | `agent_actions` | Actionable items deposited by agents for dashboard review: id, created_by, action_type, title, description, payload, status, executed_at, result, created_at — used by Max and Riley |
@@ -110,6 +117,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 - `BREVO_API_KEY` — Email sending + webhook tracking (Emmett)
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` — SMS (Sam)
 - `BLAND_API_KEY` — AI phone calls
+- `BLAND_PHONE_NUMBER` — Bland.ai caller ID for Cal batch calls
 
 **Social Publishing**
 - `FACEBOOK_PAGE_ACCESS_TOKEN`, `FACEBOOK_PAGE_ID`, `FACEBOOK_APP_SECRET` — Facebook Page posts (Faye/Paige)
@@ -152,3 +160,5 @@ Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. The
 - **Email sequences** — live entirely in `emmettAgent.js` in the `SEQUENCES` object. To add a new vertical: add the sequence array, add a routing condition in `getSequenceForProspect`.
 - **GMAIL_CREDENTIALS format** — the Railway env var must be the full credentials JSON starting with `{"web":` — not just the client secret file.
 - **GOOGLE_SHEETS_REFRESH_TOKEN vs GOOGLE_REFRESH_TOKEN** — `GOOGLE_REFRESH_TOKEN` is for GBP/Calendar. `GOOGLE_SHEETS_REFRESH_TOKEN` is for Sheets write access in warmSignalAgent. They use different OAuth clients and scopes — do not conflate them.
+- **Scout → setter pipeline (fixed May 14 2026)** — Scout writes prospects to the DB but does not self-qualify leads for the setter. setterHandoffAgent.js handles the handoff: it evaluates icp_score against a threshold and sets setter_visible = true on qualifying rows. Prior to this fix, 170 leads had accumulated in prospects without ever surfacing in the setter queue. Backfill was run manually to resolve the gap. Always run setterHandoffAgent after a Scout batch or wire it into the Scout cron chain.
+- **calBatchAgent.js was present in an earlier version of CLAUDE.md but may have been dropped during a recent edit.** Confirm it is restored in both the File Map and Agent Roster.
