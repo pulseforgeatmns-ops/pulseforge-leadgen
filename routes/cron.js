@@ -19,6 +19,7 @@ const CRON_MODULES = {
   riley:       '../rileyAgent',
   warm_signal: '../warmSignalAgent',
   setter_handoff: '../setterHandoffAgent',
+  sync_setter:    '../syncSetterLeadList',
   handoff_utility: '../setterHandoffAgent',
 };
 
