@@ -70,7 +70,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 - **Activity**: `/api/activity`, `/api/activity-panel`, `/api/activity-timeline` — in `routes/api.js`
 - **Dashboard UI**: `GET /dashboard` → serves `public/dashboard.html`; `GET /demo` → unauthenticated demo mode — in `server.js`
 - **Setter dashboard**: `GET /setter` → authenticated setter UI (queue, pipeline, activity log, metrics strip, Scout feed). Requires setter or admin role. — in `routes/setter.js`
-- **Setter API (read-only)**: `GET /api/setter/metrics`, `GET /api/setter/feed` — consumed by Max for pipeline monitoring. No write access. — in `routes/setter.js`
+- **Setter API (read-only)**: `GET /api/setter/metrics`, `GET /api/setter/feed` — consumed by Max for pipeline monitoring. No write access. `PATCH /api/setter/leads/:id/notes`, `PATCH /api/setter/leads/:id/callback`, `PATCH /api/setter/leads/:id/hot`, `POST /api/setter/leads/:id/quick-log-call`, `POST /api/setter/leads/:id/enrich-phone`, `GET /api/setter/stats/today` — in `routes/setter.js`
 - **Brevo warm signal**: Brevo POSTs email events here → Riley logs touchpoints and upgrades cold→warm automatically — in `routes/webhooks.js`
 
 ---
@@ -80,7 +80,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 | Table | What it holds |
 |---|---|
 | `companies` | Scraped companies: name, industry, size, location, website, icp_score, tech_stack |
-| `prospects` | Individual contacts: name, email, phone, job_title, linkedin_url, icp_score, status (cold/warm/hot), do_not_contact, last_contacted_at, vertical (TEXT — populated by Scout at insert time based on CONFIG.industry), setter_status (enum: new \| contacted \| follow_up \| booked \| dead), setter_visible (boolean — true = qualifies for setter queue, set by setterHandoffAgent) |
+| `prospects` | Individual contacts: name, email, phone, job_title, linkedin_url, icp_score, status (cold/warm/hot), do_not_contact, last_contacted_at, vertical (TEXT — populated by Scout at insert time based on CONFIG.industry), setter_status (enum: new \| contacted \| follow_up \| booked \| dead), setter_visible (boolean — true = qualifies for setter queue, set by setterHandoffAgent), notes (text — setter scratchpad, auto-saved on blur), callback_at (timestamptz — scheduled follow-up, shown as "Due Today" queue section), is_hot (boolean — hot lead flag, sorts to top of stage) |
 | `activity_log` | Setter contact log: id, lead_id (FK → prospects), action_type (call \| email \| text), notes, created_at, setter_id |
 | `users` | Auth accounts: id, name, email, password_hash, role (admin \| manager \| setter), active, created_at, last_login_at |
 | `touchpoints` | Every agent action: channel, action_type, content_summary, outcome, sentiment, external_ref |
@@ -164,3 +164,5 @@ Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. The
 - **Scout → setter pipeline (fixed May 14 2026)** — Scout writes prospects to the DB but does not self-qualify leads for the setter. setterHandoffAgent.js handles the handoff: it evaluates icp_score against a threshold and sets setter_visible = true on qualifying rows. Prior to this fix, 170 leads had accumulated in prospects without ever surfacing in the setter queue. Backfill was run manually to resolve the gap. Always run setterHandoffAgent after a Scout batch or wire it into the Scout cron chain.
 - **calBatchAgent.js was present in an earlier version of CLAUDE.md but may have been dropped during a recent edit.** Confirm it is restored in both the File Map and Agent Roster.
 - **Multi-user auth (added May 2026)** — replaced single DASHBOARD_PASSWORD with users table. DASHBOARD_PASSWORD fallback remains for empty-DB safety. First setter: William Hernandez (created via admin UI post-deploy). setter_id on activity_log rows references users.id.
+- **Phone enrichment on setter dashboard uses Prospeo API (PROSPEO_API_KEY).** Matches the same request pattern as leadgen.js. Logs to agent_log with agent_name = 'setter'.
+- **Setter dashboard call logging uses the existing activity_log table (action_type='call').** attempt_count is computed at query time — not stored. Daily goal tracker scopes to setter_id + today's date so it resets automatically at midnight without a cron job.

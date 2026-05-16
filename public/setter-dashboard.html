@@ -59,6 +59,23 @@ body::before { content:''; position:fixed; inset:0; background:repeating-linear-
 .metric-value { font-family:'Bebas Neue',sans-serif; font-size:2.35rem; line-height:1; letter-spacing:1px; }
 .metric-value.t { color:var(--teal); } .metric-value.p { color:var(--purple-bright); } .metric-value.g { color:var(--green); } .metric-value.o { color:var(--orange); }
 .metric-note { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:var(--gray-light); margin-top:0.35rem; }
+.goal-strip { background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:0.8rem 1rem; margin:-0.5rem 0 1.5rem; display:grid; grid-template-columns:auto minmax(120px,1fr); align-items:center; gap:1rem; }
+.goal-label { font-family:'JetBrains Mono',monospace; font-size:0.64rem; color:var(--gray-light); letter-spacing:1px; text-transform:uppercase; }
+.goal-bar { height:6px; border-radius:99px; background:rgba(255,255,255,0.06); overflow:hidden; }
+.goal-fill { height:100%; width:0%; background:var(--gray-light); transition:width 0.25s ease, background 0.25s ease; }
+.goal-fill.low { background:var(--yellow); } .goal-fill.met { background:var(--green); }
+.queue-tools { display:flex; align-items:center; gap:0.5rem; margin-bottom:1rem; }
+.search-wrap { position:relative; width:min(360px, 100%); }
+.search-input { width:100%; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:0.62rem 2.2rem 0.62rem 0.75rem; color:var(--white); font-family:'DM Sans',sans-serif; outline:none; }
+.search-clear { position:absolute; right:6px; top:50%; transform:translateY(-50%); width:24px; height:24px; padding:0; display:none; align-items:center; justify-content:center; }
+.search-clear.visible { display:flex; }
+.section-head { display:flex; align-items:center; justify-content:space-between; gap:0.75rem; margin:1rem 0 0.6rem; }
+.section-title { font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1.5px; text-transform:uppercase; color:var(--gray-light); }
+.due-card { border-color:rgba(255,214,0,0.28); margin-bottom:1rem; }
+.due-card::before { content:''; display:block; height:2px; background:linear-gradient(90deg, var(--yellow), transparent); opacity:0.75; }
+.hot-row td { background:rgba(255,214,0,0.035); }
+.due-row td { background:rgba(255,214,0,0.045); }
+.overdue-row td { background:rgba(255,59,92,0.055); }
 .panel { display:none; }
 .panel.active { display:block; }
 .panel-card { background:var(--bg1); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
@@ -69,6 +86,17 @@ td { padding:0.72rem 1rem; border-bottom:1px solid rgba(255,255,255,0.03); color
 tr:hover td { background:rgba(139,92,246,0.04); }
 .lead-name { color:var(--white); font-weight:600; cursor:pointer; }
 .mono { font-family:'JetBrains Mono',monospace; font-size:0.66rem; color:var(--gray-light); }
+.lead-line { display:flex; align-items:center; gap:0.45rem; flex-wrap:wrap; }
+.age { font-family:'JetBrains Mono',monospace; font-size:0.55rem; padding:2px 5px; border-radius:3px; }
+.age.fresh { color:var(--green); background:var(--green-dim); }
+.age.aging { color:var(--yellow); background:rgba(255,214,0,0.08); }
+.age.cold { color:var(--red); background:rgba(255,59,92,0.08); }
+.attempt-badge { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:var(--gray-light); border:1px solid rgba(255,255,255,0.08); border-radius:99px; padding:2px 7px; }
+.row-actions { display:flex; align-items:center; gap:5px; flex-wrap:wrap; min-width:150px; }
+.icon-btn { width:28px; height:28px; padding:0; display:inline-flex; align-items:center; justify-content:center; font-size:0.78rem; }
+.icon-btn.hot { color:var(--yellow); border-color:rgba(255,214,0,0.35); background:rgba(255,214,0,0.08); }
+.logged-status { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:var(--green); opacity:0; transition:opacity 0.25s ease; }
+.logged-status.visible { opacity:1; }
 .score { font-family:'JetBrains Mono',monospace; font-size:0.62rem; padding:3px 7px; border-radius:3px; letter-spacing:1px; }
 .score.high { color:var(--green); background:var(--green-dim); border:1px solid rgba(0,230,118,0.2); }
 .score.mid { color:var(--yellow); background:rgba(255,214,0,0.08); border:1px solid rgba(255,214,0,0.18); }
@@ -78,6 +106,8 @@ tr:hover td { background:rgba(139,92,246,0.04); }
 .btn:hover { border-color:var(--teal); color:var(--teal); }
 .btn.primary { color:var(--purple-bright); border-color:rgba(139,92,246,0.3); background:var(--purple-glow); }
 .btn.dead:hover { border-color:var(--red); color:var(--red); }
+.btn.loading::before { content:''; width:8px; height:8px; border:1px solid currentColor; border-top-color:transparent; border-radius:50%; display:inline-block; margin-right:6px; animation:spin 0.8s linear infinite; vertical-align:-1px; }
+@keyframes spin { to { transform:rotate(360deg); } }
 .empty { padding:2rem; text-align:center; font-family:'JetBrains Mono',monospace; color:var(--gray); font-size:0.68rem; letter-spacing:1.5px; text-transform:uppercase; }
 .pipeline-grid { display:grid; grid-template-columns:repeat(5, minmax(180px, 1fr)); gap:1rem; overflow-x:auto; padding-bottom:0.5rem; }
 .stage { background:var(--bg1); border:1px solid var(--border); border-radius:10px; min-height:420px; overflow:hidden; }
@@ -86,6 +116,7 @@ tr:hover td { background:rgba(139,92,246,0.04); }
 .stage-count { font-family:'Bebas Neue',sans-serif; color:var(--purple-bright); font-size:1.25rem; }
 .stage-body { padding:0.75rem; display:flex; flex-direction:column; gap:0.6rem; }
 .lead-card { background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); border-radius:8px; padding:0.75rem; }
+.lead-card.hot { border-color:rgba(255,214,0,0.24); background:rgba(255,214,0,0.045); }
 .lead-card-title { font-weight:600; color:var(--white); font-size:0.82rem; margin-bottom:0.45rem; line-height:1.35; }
 .lead-card-meta { display:flex; align-items:center; justify-content:space-between; gap:0.4rem; margin-bottom:0.6rem; }
 select, textarea, input { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:6px; color:var(--white); font-family:'DM Sans',sans-serif; outline:none; }
@@ -102,13 +133,23 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
 .activity-text { font-size:0.78rem; color:rgba(255,255,255,0.7); line-height:1.5; min-width:0; }
 .activity-text strong { color:var(--white); }
 .activity-time { font-family:'JetBrains Mono',monospace; color:var(--gray); font-size:0.55rem; white-space:nowrap; }
-.detail-drawer { position:fixed; right:340px; top:52px; bottom:0; width:380px; background:var(--bg1); border-left:1px solid var(--border); box-shadow:-20px 0 60px rgba(0,0,0,0.45); z-index:90; transform:translateX(110%); transition:transform 0.25s ease; padding:1.25rem; overflow:auto; }
+.detail-drawer { position:fixed; right:340px; top:52px; bottom:0; width:380px; background:var(--bg1); border-left:1px solid var(--border); box-shadow:-20px 0 60px rgba(0,0,0,0.45); z-index:90; transform:translateX(calc(100% + 340px)); transition:transform 0.25s ease; padding:1.25rem; overflow:auto; }
 .detail-drawer.open { transform:translateX(0); }
 .detail-title { font-family:'Bebas Neue',sans-serif; font-size:1.35rem; letter-spacing:2px; margin-bottom:0.25rem; }
 .detail-meta { font-family:'JetBrains Mono',monospace; color:var(--gray-light); font-size:0.62rem; letter-spacing:1px; text-transform:uppercase; margin-bottom:1rem; }
 .detail-block { padding:0.8rem 0; border-top:1px solid rgba(255,255,255,0.05); }
 .detail-label { font-family:'JetBrains Mono',monospace; font-size:0.56rem; color:var(--gray); letter-spacing:1.5px; text-transform:uppercase; margin-bottom:0.3rem; }
 .detail-val { color:rgba(255,255,255,0.78); font-size:0.82rem; line-height:1.55; word-break:break-word; }
+.detail-note-head { display:flex; justify-content:space-between; align-items:center; gap:0.5rem; margin-bottom:0.35rem; }
+.note-count, .muted-status { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:var(--gray-light); }
+.detail-notes { min-height:120px; font-size:0.82rem; line-height:1.55; }
+.phone-row { display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; }
+.detail-top-actions { display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.75rem; }
+.contact-launch { display:grid; grid-template-columns:1fr 1fr; gap:0.6rem; margin-top:0.65rem; }
+.launch-btn { display:flex; align-items:center; justify-content:center; min-height:44px; text-decoration:none; }
+.callback-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:0.5rem; align-items:center; }
+.callback-set { margin-top:0.5rem; display:flex; align-items:center; justify-content:space-between; gap:0.6rem; flex-wrap:wrap; }
+.callback-input { width:100%; padding:0.58rem 0.65rem; }
 .right-panel { background:var(--bg1); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
 .panel-header { padding:1.25rem; border-bottom:1px solid var(--border); flex-shrink:0; }
 .panel-title { font-family:'Bebas Neue',sans-serif; font-size:1rem; letter-spacing:2px; }
@@ -176,23 +217,53 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
       <div class="metric-card"><div class="metric-label">Contacted Rate</div><div class="metric-value g" id="contactedRate">0%</div><div class="metric-note" id="contactedNote">0 contacted</div></div>
       <div class="metric-card"><div class="metric-label">Dead / Unresponsive</div><div class="metric-value o" id="deadCount">0</div><div class="metric-note" id="bookedNote">0% booked</div></div>
     </div>
+    <div class="goal-strip">
+      <div class="goal-label" id="goalLabel">Calls today: 0 / 20</div>
+      <div class="goal-bar"><div class="goal-fill" id="goalFill"></div></div>
+    </div>
 
     <section class="panel active" id="queuePanel">
+      <div class="queue-tools">
+        <div class="search-wrap">
+          <input class="search-input" id="leadSearch" placeholder="Search leads..." autocomplete="off">
+          <button class="btn search-clear" id="clearSearch" type="button">x</button>
+        </div>
+      </div>
+      <div class="section-head"><div class="section-title">Due Today</div><div class="mono" id="dueCount">0 callbacks</div></div>
+      <div class="panel-card due-card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Business</th><th>Callback</th><th>Score</th><th>Phone / Email</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="dueRows"><tr><td colspan="5" class="empty">Loading callbacks</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="section-head"><div class="section-title">New Leads</div><div class="mono" id="newCount">0 leads</div></div>
       <div class="panel-card">
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Business</th><th>Vertical</th><th>City</th><th>Score</th><th>Date Added</th><th>Phone / Email</th><th>Status</th>
+                <th>Business</th><th>Vertical</th><th>City</th><th>Score</th><th>Date Added</th><th>Phone / Email</th><th>Status</th><th>Actions</th>
               </tr>
             </thead>
-            <tbody id="queueRows"><tr><td colspan="7" class="empty">Loading leads</td></tr></tbody>
+            <tbody id="queueRows"><tr><td colspan="8" class="empty">Loading leads</td></tr></tbody>
           </table>
         </div>
       </div>
     </section>
 
     <section class="panel" id="pipelinePanel">
+      <div class="queue-tools">
+        <div class="search-wrap">
+          <input class="search-input" id="pipelineSearch" placeholder="Search leads..." autocomplete="off">
+          <button class="btn search-clear" id="clearPipelineSearch" type="button">x</button>
+        </div>
+      </div>
       <div class="pipeline-grid" id="pipelineGrid"></div>
     </section>
 
@@ -226,11 +297,32 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
 <aside class="detail-drawer" id="detailDrawer">
   <button class="btn" id="closeDetail">Close</button>
   <div style="height:1rem"></div>
+  <div class="detail-top-actions">
+    <button class="btn icon-btn" id="detailHotBtn" title="Toggle hot lead">⚡</button>
+    <span class="attempt-badge" id="detailAttempts">0 attempts</span>
+  </div>
   <div class="detail-title" id="detailName">Lead</div>
   <div class="detail-meta" id="detailMeta">Scout qualified</div>
   <div class="detail-block"><div class="detail-label">Contact</div><div class="detail-val" id="detailContact"></div></div>
+  <div class="detail-block">
+    <div class="detail-label">Phone</div>
+    <div class="phone-row"><div class="detail-val" id="detailPhone"></div><button class="btn" id="enrichPhoneBtn">Enrich phone</button><span class="muted-status" id="phoneStatus"></span></div>
+    <div class="contact-launch" id="contactLaunch"></div>
+  </div>
+  <div class="detail-block">
+    <div class="detail-label">Schedule callback</div>
+    <div class="callback-row">
+      <input class="callback-input" id="callbackInput" type="datetime-local">
+      <button class="btn primary" id="saveCallbackBtn">Save</button>
+    </div>
+    <div class="callback-set" id="callbackSet"></div>
+  </div>
+  <div class="detail-block">
+    <div class="detail-note-head"><div class="detail-label">Notes</div><div class="note-count" id="noteCount">0 characters</div></div>
+    <textarea class="detail-notes" id="detailNotesInput" placeholder="Add notes about this lead..."></textarea>
+    <div class="muted-status" id="notesStatus"></div>
+  </div>
   <div class="detail-block"><div class="detail-label">Website</div><div class="detail-val" id="detailWebsite"></div></div>
-  <div class="detail-block"><div class="detail-label">Notes</div><div class="detail-val" id="detailNotes"></div></div>
   <div class="detail-block"><div class="detail-label">Move Stage</div><select id="detailStatus"></select></div>
 </aside>
 
@@ -242,10 +334,15 @@ const agents = [
   ['PAIGE','Content'], ['VERA','Verifier'], ['MAX','Observer']
 ];
 let leads = [];
+let dueLeads = [];
 let feed = [];
 let pipeline = {};
 let activeTab = 'queue';
 let selectedLead = null;
+let queueSearch = '';
+let pipelineSearch = '';
+let searchTimer = null;
+const loggedTimers = {};
 
 function fmtDate(value) {
   if (!value) return '-';
@@ -255,6 +352,40 @@ function fmtDate(value) {
 function fmtTime(value) {
   if (!value) return '';
   return new Date(value).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+}
+
+function fmtDateTime(value) {
+  if (!value) return '-';
+  return `${fmtDate(value)} ${fmtTime(value)}`;
+}
+
+function ageInfo(value) {
+  const created = value ? new Date(value).getTime() : Date.now();
+  const days = Math.max(0, Math.floor((Date.now() - created) / 86400000));
+  const label = days >= 30 ? '30d+' : `${days}d`;
+  const klass = days <= 7 ? 'fresh' : days <= 14 ? 'aging' : 'cold';
+  return { label, klass };
+}
+
+function isOverdue(value) {
+  return value && new Date(value).getTime() < Date.now();
+}
+
+function callbackLocalValue(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function rowTools(lead) {
+  const attempts = Number(lead.attempt_count || 0);
+  return `<div class="row-actions">
+    <button class="btn icon-btn ${lead.is_hot ? 'hot' : ''}" data-hot="${lead.id}" title="Toggle hot lead">⚡</button>
+    <button class="btn" data-quick-call="${lead.id}" type="button">☎ Logged</button>
+    <span class="attempt-badge" id="attempts-${lead.id}">${attempts} attempt${attempts === 1 ? '' : 's'}</span>
+    <span class="logged-status" id="logged-${lead.id}">Logged ✓</span>
+  </div>`;
 }
 
 async function api(path, options = {}) {
@@ -295,19 +426,39 @@ function statusButtons(lead) {
 
 function renderQueue() {
   const body = document.getElementById('queueRows');
+  document.getElementById('newCount').textContent = `${leads.length} lead${leads.length === 1 ? '' : 's'}`;
   if (!leads.length) {
-    body.innerHTML = '<tr><td colspan="7" class="empty">No new Scout-qualified leads waiting</td></tr>';
+    body.innerHTML = `<tr><td colspan="8" class="empty">${queueSearch ? 'No matching leads' : 'No new Scout-qualified leads waiting'}</td></tr>`;
     return;
   }
   body.innerHTML = leads.map(lead => `
-    <tr>
-      <td><span class="lead-name" data-open="${lead.id}">${lead.business_name}</span><div class="mono">${lead.contact_name || 'No contact name'}</div></td>
+    <tr class="${lead.is_hot ? 'hot-row' : ''}">
+      <td><div class="lead-line"><span class="lead-name" data-open="${lead.id}">${lead.business_name}</span><span class="age ${ageInfo(lead.date_added).klass}">${ageInfo(lead.date_added).label}</span></div><div class="mono">${lead.contact_name || 'No contact name'}</div></td>
       <td>${lead.vertical}</td>
       <td>${lead.city}</td>
       <td><span class="score ${lead.score_band}">${lead.score}</span></td>
       <td>${fmtDate(lead.date_added)}</td>
       <td><div>${lead.phone || '-'}</div><div class="mono">${lead.email || '-'}</div></td>
       <td>${statusButtons(lead)}</td>
+      <td>${rowTools(lead)}</td>
+    </tr>
+  `).join('');
+}
+
+function renderDue() {
+  const body = document.getElementById('dueRows');
+  document.getElementById('dueCount').textContent = `${dueLeads.length} callback${dueLeads.length === 1 ? '' : 's'}`;
+  if (!dueLeads.length) {
+    body.innerHTML = `<tr><td colspan="5" class="empty">${queueSearch ? 'No matching callbacks' : 'No callbacks due today'}</td></tr>`;
+    return;
+  }
+  body.innerHTML = dueLeads.map(lead => `
+    <tr class="${isOverdue(lead.callback_at) ? 'overdue-row' : 'due-row'} ${lead.is_hot ? 'hot-row' : ''}">
+      <td><div class="lead-line"><span class="lead-name" data-open="${lead.id}">${lead.business_name}</span><span class="age ${ageInfo(lead.date_added).klass}">${ageInfo(lead.date_added).label}</span></div><div class="mono">${lead.contact_name || 'No contact name'} · ${stageLabels[lead.status] || lead.status}</div></td>
+      <td><div>${fmtDateTime(lead.callback_at)}</div><div class="mono">${isOverdue(lead.callback_at) ? 'Overdue' : 'Today'}</div></td>
+      <td><span class="score ${lead.score_band}">${lead.score}</span></td>
+      <td><div>${lead.phone || '-'}</div><div class="mono">${lead.email || '-'}</div></td>
+      <td>${rowTools(lead)}</td>
     </tr>
   `).join('');
 }
@@ -315,7 +466,7 @@ function renderQueue() {
 function renderLeadSelect() {
   const select = document.getElementById('leadSelect');
   const all = Object.values(pipeline).flat();
-  const source = all.length ? all : leads;
+  const source = all.length ? all : [...dueLeads, ...leads];
   select.innerHTML = source.map(lead => `<option value="${lead.id}">${lead.business_name} · ${stageLabels[lead.status] || lead.status}</option>`).join('');
 }
 
@@ -327,14 +478,15 @@ function renderPipeline() {
       <div class="stage-head"><div class="stage-title">${stageLabels[stage]}</div><div class="stage-count">${items.length}</div></div>
       <div class="stage-body">
         ${items.length ? items.map(lead => `
-          <div class="lead-card">
-            <div class="lead-card-title" data-open="${lead.id}">${lead.business_name}</div>
-            <div class="lead-card-meta"><span class="mono">${lead.vertical}</span><span class="score ${lead.score_band}">${lead.score}</span></div>
+          <div class="lead-card ${lead.is_hot ? 'hot' : ''}">
+            <div class="lead-card-title" data-open="${lead.id}">${lead.is_hot ? '⚡ ' : ''}${lead.business_name}</div>
+            <div class="lead-card-meta"><span class="mono">${lead.vertical} · ${ageInfo(lead.date_added).label}</span><span class="score ${lead.score_band}">${lead.score}</span></div>
+            <div class="lead-card-meta"><span class="attempt-badge">${lead.attempt_count || 0} attempts</span><button class="btn icon-btn ${lead.is_hot ? 'hot' : ''}" data-hot="${lead.id}" type="button">⚡</button></div>
             <select data-select-status="${lead.id}">
               ${stages.map(s => `<option value="${s}" ${s === lead.status ? 'selected' : ''}>${stageLabels[s]}</option>`).join('')}
             </select>
           </div>
-        `).join('') : '<div class="empty">No leads</div>'}
+        `).join('') : `<div class="empty">${pipelineSearch ? 'No matches' : 'No leads'}</div>`}
       </div>
     </div>`;
   }).join('');
@@ -363,12 +515,28 @@ function renderMetrics(m) {
   document.getElementById('contactedRate').textContent = `${m.contacted_rate || 0}%`;
   document.getElementById('deadCount').textContent = m.dead || 0;
   document.getElementById('contactedNote').textContent = `${m.contacted || 0} of ${m.total || 0} contacted`;
-  document.getElementById('bookedNote').textContent = `${m.booked_rate || 0}% booked`;
+  document.getElementById('bookedNote').textContent = `${m.booked_rate || 0}% booked · ${m.hot || 0} hot`;
+}
+
+function renderTodayStats(stats) {
+  const calls = Number(stats?.calls_today || 0);
+  const goal = Number(stats?.goal || 20);
+  const pct = goal ? Math.min(100, Math.round((calls / goal) * 100)) : 0;
+  const fill = document.getElementById('goalFill');
+  document.getElementById('goalLabel').textContent = `Calls today: ${calls} / ${goal}`;
+  fill.style.width = `${pct}%`;
+  fill.classList.toggle('low', calls < goal / 2);
+  fill.classList.toggle('met', calls >= goal);
 }
 
 async function loadMetrics() {
   const metrics = await api('/setter/api/metrics');
   if (metrics) renderMetrics(metrics);
+}
+
+async function loadTodayStats() {
+  const stats = await api('/setter/api/stats/today');
+  if (stats) renderTodayStats(stats);
 }
 
 async function loadFeed() {
@@ -377,13 +545,21 @@ async function loadFeed() {
 }
 
 async function loadQueue() {
-  leads = await api('/setter/api/leads') || [];
+  const qs = queueSearch ? `?search=${encodeURIComponent(queueSearch)}` : '';
+  leads = await api(`/setter/api/leads${qs}`) || [];
   renderQueue();
   renderLeadSelect();
 }
 
+async function loadDue() {
+  const qs = `?due=today${queueSearch ? `&search=${encodeURIComponent(queueSearch)}` : ''}`;
+  dueLeads = await api(`/setter/api/leads${qs}`) || [];
+  renderDue();
+}
+
 async function loadPipeline() {
-  const data = await api('/setter/api/pipeline');
+  const qs = pipelineSearch ? `?search=${encodeURIComponent(pipelineSearch)}` : '';
+  const data = await api(`/setter/api/pipeline${qs}`);
   pipeline = data?.grouped || {};
   renderPipeline();
 }
@@ -407,7 +583,7 @@ async function loadActivity() {
 async function refreshAll() {
   document.getElementById('liveState').textContent = 'SYNC';
   try {
-    await Promise.all([loadMetrics(), loadFeed(), loadQueue(), loadPipeline(), loadActivity()]);
+    await Promise.all([loadMetrics(), loadTodayStats(), loadFeed(), loadQueue(), loadDue(), loadPipeline(), loadActivity()]);
     document.getElementById('liveState').textContent = 'LIVE';
   } catch (err) {
     console.error(err);
@@ -421,7 +597,7 @@ async function updateStatus(id, status) {
   renderQueue();
   try {
     await api(`/setter/api/leads/${id}/status`, { method:'PATCH', body:JSON.stringify({ status }) });
-    await Promise.all([loadMetrics(), loadQueue(), loadPipeline(), loadActivity()]);
+    await Promise.all([loadMetrics(), loadTodayStats(), loadQueue(), loadDue(), loadPipeline(), loadActivity()]);
     if (selectedLead?.id === id) selectedLead.status = status;
   } catch (err) {
     if (original) leads.unshift(original);
@@ -430,19 +606,194 @@ async function updateStatus(id, status) {
   }
 }
 
+function setNotesStatus(text) {
+  document.getElementById('notesStatus').textContent = text;
+  if (text) setTimeout(() => {
+    if (document.getElementById('notesStatus').textContent === text) document.getElementById('notesStatus').textContent = '';
+  }, 2200);
+}
+
+function updateNoteCount() {
+  const value = document.getElementById('detailNotesInput').value || '';
+  document.getElementById('noteCount').textContent = `${value.length} character${value.length === 1 ? '' : 's'}`;
+}
+
+async function saveLeadNotes() {
+  if (!selectedLead) return;
+  const notes = document.getElementById('detailNotesInput').value;
+  try {
+    const data = await api(`/setter/api/leads/${selectedLead.id}/notes`, { method:'PATCH', body:JSON.stringify({ notes }) });
+    selectedLead.notes = data.lead?.notes || notes;
+    replaceLead(data.lead);
+    setNotesStatus('Saved');
+  } catch (err) {
+    setNotesStatus('Save failed');
+  }
+}
+
+function replaceLead(lead) {
+  if (!lead) return;
+  leads = leads.map(item => item.id === lead.id ? lead : item);
+  dueLeads = dueLeads.map(item => item.id === lead.id ? lead : item);
+  feed = feed.map(item => item.id === lead.id ? lead : item);
+  Object.keys(pipeline).forEach(stage => {
+    pipeline[stage] = (pipeline[stage] || []).map(item => item.id === lead.id ? lead : item);
+  });
+}
+
+function renderPhoneTools(lead) {
+  document.getElementById('detailPhone').textContent = lead.phone || '-';
+  document.getElementById('phoneStatus').textContent = '';
+  document.getElementById('enrichPhoneBtn').style.display = lead.phone ? 'none' : 'inline-block';
+  document.getElementById('enrichPhoneBtn').disabled = false;
+  document.getElementById('enrichPhoneBtn').classList.remove('loading');
+  document.getElementById('enrichPhoneBtn').textContent = 'Enrich phone';
+  document.getElementById('contactLaunch').innerHTML = lead.phone ? `
+    <a class="btn primary launch-btn" href="tel:${lead.phone}">Call</a>
+    <a class="btn launch-btn" href="sms:${lead.phone}">Text</a>
+  ` : '';
+}
+
+async function enrichPhone() {
+  if (!selectedLead) return;
+  const btn = document.getElementById('enrichPhoneBtn');
+  const status = document.getElementById('phoneStatus');
+  btn.disabled = true;
+  btn.classList.add('loading');
+  btn.textContent = 'Enriching...';
+  status.textContent = '';
+  try {
+    const data = await api(`/setter/api/leads/${selectedLead.id}/enrich-phone`, { method:'POST', body:JSON.stringify({}) });
+    if (data.phone) {
+      selectedLead.phone = data.phone;
+      replaceLead(selectedLead);
+      document.getElementById('detailPhone').textContent = data.phone;
+      btn.classList.remove('loading');
+      btn.style.display = 'none';
+      renderPhoneTools(selectedLead);
+      renderQueue();
+      renderDue();
+      renderPipeline();
+    } else {
+      status.textContent = 'No phone found';
+      btn.disabled = false;
+      btn.classList.remove('loading');
+      btn.textContent = 'Enrich phone';
+    }
+  } catch (err) {
+    status.textContent = 'No phone found';
+    btn.disabled = false;
+    btn.classList.remove('loading');
+    btn.textContent = 'Enrich phone';
+  }
+}
+
+async function toggleHot(id) {
+  const lead = findLead(id);
+  if (!lead) return;
+  const next = !lead.is_hot;
+  lead.is_hot = next;
+  replaceLead(lead);
+  renderQueue();
+  renderDue();
+  renderPipeline();
+  renderDetailHot();
+  try {
+    const data = await api(`/setter/api/leads/${id}/hot`, { method:'PATCH', body:JSON.stringify({ is_hot: next }) });
+    replaceLead(data.lead);
+    await Promise.all([loadMetrics(), loadQueue(), loadDue(), loadPipeline()]);
+    if (selectedLead?.id === id) {
+      selectedLead = findLead(id) || data.lead;
+      renderDetailHot();
+    }
+  } catch (err) {
+    lead.is_hot = !next;
+    replaceLead(lead);
+    renderQueue();
+    renderDue();
+    renderPipeline();
+    alert('Hot flag update failed');
+  }
+}
+
+async function quickLogCall(id) {
+  const lead = findLead(id);
+  if (!lead) return;
+  try {
+    const data = await api(`/setter/api/leads/${id}/quick-log-call`, { method:'POST', body:JSON.stringify({}) });
+    const count = Number(data.attempt_count || 0);
+    lead.attempt_count = count;
+    if (lead.status === 'new') lead.status = 'contacted';
+    replaceLead(lead);
+    renderQueue();
+    renderDue();
+    renderPipeline();
+    if (selectedLead?.id === id) {
+      selectedLead.attempt_count = count;
+      renderDetailHot();
+    }
+    const status = document.getElementById(`logged-${id}`);
+    if (status) {
+      status.classList.add('visible');
+      clearTimeout(loggedTimers[id]);
+      loggedTimers[id] = setTimeout(() => status.classList.remove('visible'), 1500);
+    }
+    await Promise.all([loadMetrics(), loadTodayStats(), loadActivity()]);
+  } catch (err) {
+    alert('Call log failed');
+  }
+}
+
+function renderDetailHot() {
+  if (!selectedLead) return;
+  const btn = document.getElementById('detailHotBtn');
+  const attempts = Number(selectedLead.attempt_count || 0);
+  btn.classList.toggle('hot', Boolean(selectedLead.is_hot));
+  document.getElementById('detailAttempts').textContent = `${attempts} attempt${attempts === 1 ? '' : 's'}`;
+}
+
+function renderCallback(lead) {
+  document.getElementById('callbackInput').value = callbackLocalValue(lead.callback_at);
+  document.getElementById('callbackSet').innerHTML = lead.callback_at ? `
+    <span class="muted-status">Scheduled ${fmtDateTime(lead.callback_at)}</span>
+    <button class="btn dead" id="clearCallbackBtn" type="button">Clear</button>
+  ` : '<span class="muted-status">No callback scheduled</span>';
+  const clear = document.getElementById('clearCallbackBtn');
+  if (clear) clear.addEventListener('click', () => saveCallback(null));
+}
+
+async function saveCallback(value) {
+  if (!selectedLead) return;
+  const raw = value === null ? null : document.getElementById('callbackInput').value;
+  const callback_at = raw ? new Date(raw).toISOString() : null;
+  try {
+    const data = await api(`/setter/api/leads/${selectedLead.id}/callback`, { method:'PATCH', body:JSON.stringify({ callback_at }) });
+    selectedLead = data.lead;
+    replaceLead(data.lead);
+    renderCallback(selectedLead);
+    await Promise.all([loadQueue(), loadDue(), loadPipeline()]);
+  } catch (err) {
+    alert('Callback update failed');
+  }
+}
+
 function findLead(id) {
-  return leads.find(l => l.id === id) || feed.find(l => l.id === id) || Object.values(pipeline).flat().find(l => l.id === id);
+  return leads.find(l => l.id === id) || dueLeads.find(l => l.id === id) || feed.find(l => l.id === id) || Object.values(pipeline).flat().find(l => l.id === id);
 }
 
 function openDetail(id) {
   const lead = findLead(id);
   if (!lead) return;
   selectedLead = lead;
+  renderDetailHot();
   document.getElementById('detailName').textContent = lead.business_name;
-  document.getElementById('detailMeta').textContent = `${lead.vertical} · ${lead.city} · score ${lead.score}`;
-  document.getElementById('detailContact').innerHTML = `${lead.contact_name || 'No contact'}<br>${lead.phone || '-'}<br>${lead.email || '-'}`;
+  document.getElementById('detailMeta').textContent = `${lead.is_hot ? 'Hot · ' : ''}${lead.vertical} · ${lead.city} · score ${lead.score}`;
+  document.getElementById('detailContact').innerHTML = `${lead.contact_name || 'No contact'}<br>${lead.email || '-'}`;
+  renderPhoneTools(lead);
+  renderCallback(lead);
+  document.getElementById('detailNotesInput').value = lead.notes || '';
+  updateNoteCount();
   document.getElementById('detailWebsite').textContent = lead.website || '-';
-  document.getElementById('detailNotes').textContent = lead.notes || '-';
   document.getElementById('detailStatus').innerHTML = stages.map(s => `<option value="${s}" ${s === lead.status ? 'selected' : ''}>${stageLabels[s]}</option>`).join('');
   document.getElementById('detailDrawer').classList.add('open');
 }
@@ -460,6 +811,18 @@ function setTab(tab) {
 document.addEventListener('click', event => {
   const tab = event.target.closest('.nav-tab');
   if (tab) setTab(tab.dataset.tab);
+  const hotBtn = event.target.closest('[data-hot]');
+  if (hotBtn) {
+    event.stopPropagation();
+    toggleHot(hotBtn.dataset.hot);
+    return;
+  }
+  const quickBtn = event.target.closest('[data-quick-call]');
+  if (quickBtn) {
+    event.stopPropagation();
+    quickLogCall(quickBtn.dataset.quickCall);
+    return;
+  }
   const statusBtn = event.target.closest('[data-status]');
   if (statusBtn) updateStatus(statusBtn.dataset.id, statusBtn.dataset.status);
   const open = event.target.closest('[data-open]');
@@ -474,8 +837,39 @@ document.addEventListener('change', event => {
 document.getElementById('detailStatus').addEventListener('change', event => {
   if (selectedLead) updateStatus(selectedLead.id, event.target.value);
 });
+document.getElementById('detailNotesInput').addEventListener('input', updateNoteCount);
+document.getElementById('detailNotesInput').addEventListener('blur', saveLeadNotes);
+document.getElementById('enrichPhoneBtn').addEventListener('click', enrichPhone);
+document.getElementById('detailHotBtn').addEventListener('click', () => {
+  if (selectedLead) toggleHot(selectedLead.id);
+});
+document.getElementById('saveCallbackBtn').addEventListener('click', () => saveCallback());
 document.getElementById('closeDetail').addEventListener('click', () => document.getElementById('detailDrawer').classList.remove('open'));
 document.getElementById('refreshBtn').addEventListener('click', refreshAll);
+document.getElementById('leadSearch').addEventListener('input', event => {
+  queueSearch = event.target.value.trim();
+  document.getElementById('clearSearch').classList.toggle('visible', Boolean(queueSearch));
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => Promise.all([loadQueue(), loadDue()]), 300);
+});
+document.getElementById('pipelineSearch').addEventListener('input', event => {
+  pipelineSearch = event.target.value.trim();
+  document.getElementById('clearPipelineSearch').classList.toggle('visible', Boolean(pipelineSearch));
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(loadPipeline, 300);
+});
+document.getElementById('clearSearch').addEventListener('click', () => {
+  document.getElementById('leadSearch').value = '';
+  queueSearch = '';
+  document.getElementById('clearSearch').classList.remove('visible');
+  Promise.all([loadQueue(), loadDue()]);
+});
+document.getElementById('clearPipelineSearch').addEventListener('click', () => {
+  document.getElementById('pipelineSearch').value = '';
+  pipelineSearch = '';
+  document.getElementById('clearPipelineSearch').classList.remove('visible');
+  loadPipeline();
+});
 document.getElementById('activityForm').addEventListener('submit', async event => {
   event.preventDefault();
   await api('/setter/api/activity', {
@@ -487,7 +881,7 @@ document.getElementById('activityForm').addEventListener('submit', async event =
     })
   });
   document.getElementById('notes').value = '';
-  await Promise.all([loadMetrics(), loadQueue(), loadPipeline(), loadActivity()]);
+  await Promise.all([loadMetrics(), loadTodayStats(), loadQueue(), loadDue(), loadPipeline(), loadActivity()]);
 });
 
 renderAgents();
