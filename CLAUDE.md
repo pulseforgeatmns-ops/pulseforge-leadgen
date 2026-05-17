@@ -36,7 +36,7 @@ Each agent is a standalone JS module that reads from the DB and writes results b
 | File | Agent Name | Role |
 |---|---|---|
 | `maxAgent.js` | Max | Daily manager briefing — pulls system snapshot, generates AI summary of pipeline health. Has read-only API access to /api/setter/metrics and /api/setter/feed for pipeline monitoring. No write permissions. |
-| `paigeAgent.js` | Paige | Content creation — writes posts for GBP, Facebook, LinkedIn; queues to `pending_comments` for approval |
+| `paigeAgent.js` | Paige | Content creation — writes posts for GBP, Facebook, LinkedIn; queues to `pending_comments` for approval. Includes anti-repetition logic (pulls last 30 posts per channel, injects avoid-list into prompt) and a 3-dimension quality scoring step (specificity, originality, hook_strength). Regenerates once if total score < 21/30. Logs scores to agent_log for Max reporting. |
 | `emmettAgent.js` | Emmett | Email outreach — writes and sends cold email sequences via Brevo API |
 | `rileyAgent.js` | Riley | Inbound triage — reads Gmail inbox, classifies replies from known prospects (interested/not_now/unsubscribe/out_of_office/wrong_person/negative), updates prospect status, logs inbound touchpoints, deposits action cards for interested replies. Also processes Brevo email event webhooks. |
 | `warmSignalAgent.js` | Warm Signal | Detects 2+ opens in 7 days, writes 🔥 2ND OPEN flag to Setter Lead List Google Sheet |
@@ -166,3 +166,4 @@ Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. The
 - **Multi-user auth (added May 2026)** — replaced single DASHBOARD_PASSWORD with users table. DASHBOARD_PASSWORD fallback remains for empty-DB safety. First setter: William Hernandez (created via admin UI post-deploy). setter_id on activity_log rows references users.id.
 - **Phone enrichment on setter dashboard uses Prospeo API (PROSPEO_API_KEY).** Matches the same request pattern as leadgen.js. Logs to agent_log with agent_name = 'setter'.
 - **Setter dashboard call logging uses the existing activity_log table (action_type='call').** attempt_count is computed at query time — not stored. Daily goal tracker scopes to setter_id + today's date so it resets automatically at midnight without a cron job.
+- **Paige content scoring (added May 2026)** — after generation, a second Claude API call scores each draft on specificity, originality, and hook_strength (max 30). Drafts scoring below 21 are regenerated once. Max reads these scores from agent_log WHERE agent_name='paige' AND action='content_scored' for weekly quality trend reporting.

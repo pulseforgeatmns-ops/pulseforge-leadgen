@@ -9,6 +9,7 @@ const CONTENT_TYPES = ['promotional', 'educational', 'seasonal', 'behind-the-sce
 const BLOG_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'community', 'seasonal'];
 const LINKEDIN_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'results', 'community'];
 const CHANNELS = ['facebook_page', 'google_business', 'blog', 'linkedin_page'];
+const MIN_QUALITY_SCORE = 21;
 
 // Vertical-specific context fed into the prompt so Claude sounds right for each business type
 const VERTICAL_PROMPTS = {
@@ -26,6 +27,77 @@ function getVerticalContext(industry) {
   const lower = (industry || '').toLowerCase();
   const match = Object.entries(VERTICAL_PROMPTS).find(([k]) => lower.includes(k));
   return match ? match[1] : `local ${industry || 'business'} services`;
+}
+
+function uniqueList(values, limit = 12) {
+  return [...new Set(values.filter(Boolean).map(v => String(v).trim()).filter(Boolean))].slice(0, limit);
+}
+
+function firstWords(text, count = 8) {
+  return String(text || '')
+    .replace(/^POST:\s*/i, '')
+    .replace(/[#*_`]/g, '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, count)
+    .join(' ');
+}
+
+function extractRecentThemes(rows) {
+  const seasonalTerms = ['summer', 'winter', 'spring', 'fall', 'autumn', 'holiday', 'holidays', 'christmas', 'thanksgiving', 'new year', 'memorial day', 'labor day'];
+  const locationTerms = ['manchester', 'nh', 'new hampshire', 'local'];
+  const serviceTerms = ['cleaning', 'cleaners', 'salon', 'restaurant', 'fitness', 'gym', 'landscaping', 'lawn', 'plumbing', 'hvac', 'auto', 'marketing', 'automation'];
+  const patternTerms = [
+    'did you know',
+    'are you looking',
+    'as a local business owner',
+    'most small business owners',
+    'many business owners',
+    'if you are',
+    'if you’re',
+    'running a small business',
+    'when it comes to',
+    'in today',
+    'we know',
+    'we understand'
+  ];
+
+  const texts = rows.map(row => row.comment || row.post_content || '').filter(Boolean);
+  const lowerTexts = texts.map(text => text.toLowerCase());
+
+  return {
+    seasonal: uniqueList(seasonalTerms.filter(term => lowerTexts.some(text => text.includes(term)))),
+    location: uniqueList(locationTerms.filter(term => lowerTexts.some(text => text.includes(term)))),
+    openings: uniqueList(texts.map(text => firstWords(text)), 30),
+    services: uniqueList(serviceTerms.filter(term => lowerTexts.some(text => text.includes(term)))),
+    patterns: uniqueList(patternTerms.filter(term => lowerTexts.some(text => text.includes(term)))),
+  };
+}
+
+async function getRecentThemes(channel) {
+  const res = await pool.query(`
+    SELECT post_content, comment, created_at
+    FROM pending_comments
+    WHERE channel = $1
+    ORDER BY created_at DESC
+    LIMIT 30
+  `, [channel]);
+  return extractRecentThemes(res.rows);
+}
+
+function formatThemeList(values) {
+  return values?.length ? values.join('; ') : 'none found';
+}
+
+function buildContentRules(recentThemes) {
+  return `CONTENT RULES — YOU MUST FOLLOW THESE:
+- Do NOT use any seasonal reference (summer, winter, spring, fall, holidays) as the hook or opening angle
+- Do NOT open with a location name (Manchester, NH, New Hampshire, local)
+- Do NOT reuse any of these recent opening phrases: ${formatThemeList(recentThemes.openings)}
+- Do NOT use these structural patterns: ${formatThemeList(recentThemes.patterns)}
+- Avoid repeating these recent service angles unless the post has a clearly different hook: ${formatThemeList(recentThemes.services)}
+- Lead with a specific result, outcome, stat, or question that creates genuine curiosity — not a seasonal or geographic observation
+- Every post must have a concrete hook in the first line that works without knowing the location or time of year`;
 }
 
 async function getActiveClients() {
@@ -299,14 +371,76 @@ async function getLastContentType(companyName, channel) {
   return parts?.length > 1 ? parts[1].trim().toLowerCase() : null;
 }
 
+async function createDraft(prompt, systemPrompt, channel) {
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: channel === 'blog' ? 800 : channel === 'linkedin_page' ? 450 : 300,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: prompt }]
+  });
+
+  return message.content[0].text.trim();
+}
+
+function parseScoreJson(text) {
+  const raw = String(text || '').trim();
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON object returned from quality scoring');
+  const parsed = JSON.parse(match[0].replace(/'/g, '"'));
+  const specificity = Number(parsed.specificity || 0);
+  const originality = Number(parsed.originality || 0);
+  const hookStrength = Number(parsed.hook_strength || 0);
+  return {
+    specificity,
+    originality,
+    hook_strength: hookStrength,
+    total: Number(parsed.total || specificity + originality + hookStrength),
+    weak_dimension: parsed.weak_dimension || 'none',
+    reason: parsed.reason || '',
+  };
+}
+
+async function scoreDraft(draft) {
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 220,
+    messages: [{
+      role: 'user',
+      content: `Score this social media post on three dimensions (1-10 each):
+
+1. SPECIFICITY — Does it mention a concrete result, number, outcome,
+   or specific scenario? (10 = very specific, 1 = vague platitudes)
+
+2. ORIGINALITY — Does it avoid clichés, seasonal hooks, and location
+   name-drops as the main angle? (10 = fresh angle, 1 = recycled formula)
+
+3. HOOK STRENGTH — Does the opening line give someone a reason to stop
+   scrolling and keep reading? (10 = compelling, 1 = forgettable)
+
+Return ONLY a JSON object:
+{ 'specificity': X, 'originality': X, 'hook_strength': X, 'total': X,
+  'weak_dimension': 'specificity|originality|hook_strength|none',
+  'reason': 'one sentence explanation of the lowest score' }
+
+Post to score:
+${draft}`
+    }]
+  });
+
+  return parseScoreJson(message.content[0].text);
+}
+
 async function generatePost(company, contentType, channel) {
   const verticalCtx = getVerticalContext(company.industry);
   const location = company.location || 'Manchester, NH';
   const lastContentType = await getLastContentType(company.name, channel);
+  const recentThemes = await getRecentThemes(channel);
+  const systemPrompt = buildContentRules(recentThemes);
 
   if (lastContentType) {
     console.log(`  [variety] Last ${channel} post type: ${lastContentType} → generating: ${contentType}`);
   }
+  console.log(`  [themes] Recent openings checked: ${recentThemes.openings.length}; patterns: ${recentThemes.patterns.length}`);
 
   const prompt = channel === 'google_business'
     ? buildGooglePrompt(company, contentType, verticalCtx, location, lastContentType)
@@ -316,13 +450,59 @@ async function generatePost(company, contentType, channel) {
         ? buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType)
         : buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType);
 
-  const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: channel === 'blog' ? 800 : channel === 'linkedin_page' ? 450 : 300,
-    messages: [{ role: 'user', content: prompt }]
-  });
+  const firstDraft = await createDraft(prompt, systemPrompt, channel);
+  const firstScore = await scoreDraft(firstDraft);
+  let finalDraft = firstDraft;
+  let finalScore = firstScore;
+  let regenerated = false;
 
-  return message.content[0].text.trim();
+  if (firstScore.total < MIN_QUALITY_SCORE) {
+    regenerated = true;
+    console.log(`  [quality] Score ${firstScore.total}/30, regenerating for ${firstScore.weak_dimension}`);
+    const regenPrompt = `${prompt}
+
+Your previous draft scored low on ${firstScore.weak_dimension}: ${firstScore.reason}.
+Write a new version that specifically addresses this weakness.
+Return only the rewritten post text.`;
+    const secondDraft = await createDraft(regenPrompt, systemPrompt, channel);
+    const secondScore = await scoreDraft(secondDraft);
+    if (secondScore.total > firstScore.total) {
+      finalDraft = secondDraft;
+      finalScore = secondScore;
+    }
+  } else {
+    console.log(`  [quality] Score ${firstScore.total}/30`);
+  }
+
+  return { content: finalDraft, quality: finalScore, regenerated };
+}
+
+async function logQualityScore(channel, quality, regenerated, post) {
+  const payload = {
+    channel,
+    scores: {
+      specificity: quality.specificity,
+      originality: quality.originality,
+      hook_strength: quality.hook_strength,
+      total: quality.total,
+    },
+    specificity: quality.specificity,
+    originality: quality.originality,
+    hook_strength: quality.hook_strength,
+    total: quality.total,
+    regenerated,
+    weak_dimension: quality.weak_dimension === 'none' ? null : quality.weak_dimension,
+    post_preview: String(post || '').slice(0, 80),
+  };
+  await pool.query(`
+    INSERT INTO agent_log (agent_name, action, payload, status, ran_at)
+    VALUES ($1, $2, $3, $4, NOW())
+  `, [
+    AGENT_NAME,
+    'content_scored',
+    JSON.stringify(payload),
+    quality.total >= MIN_QUALITY_SCORE ? 'good' : 'low_score_used_best',
+  ]);
 }
 
 async function saveToPendingApprovals(company, content, contentType, channel) {
@@ -407,12 +587,13 @@ AND status = 'pending';`);
         console.log(`${company.name} — ${channel} — ${contentType}`);
 
         try {
-          const content = await generatePost(company, contentType, channel);
+          const postResult = await generatePost(company, contentType, channel);
+          const content = postResult.content;
           const id = await saveToPendingApprovals(company, content, contentType, channel);
           if (id) {
+            await logQualityScore(channel, postResult.quality, postResult.regenerated, content);
             console.log(`  ✓ queued (${id.slice(0, 8)})\n`);
             generated++;
-            const channelLabel = { facebook_page: 'Facebook Page', google_business: 'Google Business', blog: 'Blog', linkedin_page: 'LinkedIn Page' }[channel] || channel;
           }
         } catch (err) {
           console.error(`  ✗ ${company.name}/${channel}: ${err.message}`);

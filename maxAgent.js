@@ -129,6 +129,18 @@ async function getSystemSnapshot() {
     WHERE channel = 'email' AND created_at > NOW() - INTERVAL '7 days'
   `).catch(() => ({ rows: [{ sent: 0, opened: 0, clicked: 0 }] }));
 
+  const contentQuality = await pool.query(`
+    SELECT
+      ROUND(AVG(COALESCE(NULLIF(payload->>'total', '')::int, NULLIF(payload->'scores'->>'total', '')::int))::numeric, 1) AS avg_score,
+      COUNT(*) FILTER (WHERE payload->>'regenerated' = 'true')::int AS regenerated_count,
+      COUNT(*)::int AS total_scored,
+      MODE() WITHIN GROUP (ORDER BY NULLIF(payload->>'weak_dimension', '')) AS most_common_weakness
+    FROM agent_log
+    WHERE agent_name = 'paige'
+      AND action = 'content_scored'
+      AND ran_at >= NOW() - INTERVAL '7 days'
+  `).catch(() => ({ rows: [{ avg_score: null, regenerated_count: 0, total_scored: 0, most_common_weakness: null }] }));
+
   return {
     prospectStats: prospectStats.rows,
     recentTouchpoints: recentTouchpoints.rows,
@@ -142,6 +154,7 @@ async function getSystemSnapshot() {
     clickedToday:  clickedToday.rows,
     warmToday:     warmToday.rows[0]?.count || 0,
     emailStats:    emailStats.rows[0],
+    contentQuality: contentQuality.rows[0],
   };
 }
 
@@ -169,7 +182,7 @@ Known fixes already implemented (do not flag these as issues):
 Generate a concise daily digest with:
 1. SYSTEM STATUS — brief overview of what's happening across all agents
 2. TOP PRIORITIES — the 3 most important actions to take today, ranked; if any prospects are in clickedToday, flag them as URGENT: "🔥 [Business] clicked a link in your email — Cal or Sam should follow up today"
-3. CONTENT INTELLIGENCE — which content types and channels are performing above or below average based on post_analytics; flag any channel that hasn't posted in 7+ days; note if performance data is still accumulating if the tables are empty; email open rate this week if data available
+3. CONTENT INTELLIGENCE — which content types and channels are performing above or below average based on post_analytics; flag any channel that hasn't posted in 7+ days; note if performance data is still accumulating if the tables are empty; email open rate this week and Paige content quality if data available
 4. WARM SIGNALS — any prospects showing signs of interest worth flagging; include email opens/clicks from today
 5. RECOMMENDATIONS — 2-3 strategic suggestions based on the data patterns
 6. WATCH LIST — anything that needs attention or looks off
@@ -185,6 +198,11 @@ async function sendDigest(digestText, snapshot) {
   const pendingSummary = snapshot.pending
     .map(p => `${p.count} ${p.channel}`)
     .join(', ') || 'none';
+  const contentQuality = snapshot.contentQuality || {};
+  const contentQualityBlock = `CONTENT QUALITY (last 7 days):
+Avg score: ${contentQuality.avg_score ?? 'n/a'}/30
+Posts regenerated: ${contentQuality.regenerated_count || 0}/${contentQuality.total_scored || 0}
+Most common weakness: ${contentQuality.most_common_weakness || 'none'}`;
 
   const subject = `Pulseforge Daily Digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
 
@@ -193,6 +211,9 @@ ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 
 ${'─'.repeat(50)}
 
 ${digestText}
+
+${'─'.repeat(50)}
+${contentQualityBlock}
 
 ${'─'.repeat(50)}
 QUICK STATS
