@@ -65,6 +65,7 @@ body::before { content:''; position:fixed; inset:0; background:repeating-linear-
 .goal-fill { height:100%; width:0%; background:var(--gray-light); transition:width 0.25s ease, background 0.25s ease; }
 .goal-fill.low { background:var(--yellow); } .goal-fill.met { background:var(--green); }
 .queue-tools { display:flex; align-items:center; gap:0.5rem; margin-bottom:1rem; }
+.bulk-status { font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:var(--gray-light); letter-spacing:1px; }
 .search-wrap { position:relative; width:min(360px, 100%); }
 .search-input { width:100%; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:0.62rem 2.2rem 0.62rem 0.75rem; color:var(--white); font-family:'DM Sans',sans-serif; outline:none; }
 .search-clear { position:absolute; right:6px; top:50%; transform:translateY(-50%); width:24px; height:24px; padding:0; display:none; align-items:center; justify-content:center; }
@@ -228,6 +229,8 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
           <input class="search-input" id="leadSearch" placeholder="Search leads..." autocomplete="off">
           <button class="btn search-clear" id="clearSearch" type="button">x</button>
         </div>
+        <button class="btn" id="bulkEnrichPhonesBtn" type="button">Enrich missing phones</button>
+        <span class="bulk-status" id="bulkEnrichStatus"></span>
       </div>
       <div class="section-head"><div class="section-title">Due Today</div><div class="mono" id="dueCount">0 callbacks</div></div>
       <div class="panel-card due-card">
@@ -343,6 +346,7 @@ let queueSearch = '';
 let pipelineSearch = '';
 let searchTimer = null;
 const loggedTimers = {};
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function fmtDate(value) {
   if (!value) return '-';
@@ -688,6 +692,46 @@ async function enrichPhone() {
   }
 }
 
+function setBulkEnrichStatus(text) {
+  document.getElementById('bulkEnrichStatus').textContent = text;
+}
+
+async function bulkEnrichMissingPhones() {
+  const btn = document.getElementById('bulkEnrichPhonesBtn');
+  btn.disabled = true;
+  btn.classList.add('loading');
+  setBulkEnrichStatus('Loading missing phones...');
+  try {
+    const missing = await api('/setter/api/leads?missing_phone=true&all_statuses=true') || [];
+    if (!missing.length) {
+      setBulkEnrichStatus('No missing phones');
+      return;
+    }
+    let found = 0;
+    let checked = 0;
+    for (let i = 0; i < missing.length; i += 10) {
+      const batch = missing.slice(i, i + 10);
+      setBulkEnrichStatus(`Enriching ${i + 1}-${i + batch.length} of ${missing.length}...`);
+      const results = await Promise.all(batch.map(lead =>
+        api(`/setter/api/leads/${lead.id}/enrich-phone`, { method:'POST', body:JSON.stringify({}) })
+          .catch(() => ({ phone: null }))
+      ));
+      checked += batch.length;
+      found += results.filter(result => result.phone).length;
+      setBulkEnrichStatus(`${checked}/${missing.length} checked · ${found} found`);
+      if (i + 10 < missing.length) await sleep(1000);
+    }
+    await Promise.all([loadQueue(), loadDue(), loadPipeline(), loadFeed()]);
+    setBulkEnrichStatus(`Done · ${found} phone${found === 1 ? '' : 's'} found`);
+  } catch (err) {
+    console.error(err);
+    setBulkEnrichStatus('Bulk enrich failed');
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('loading');
+  }
+}
+
 async function toggleHot(id) {
   const lead = findLead(id);
   if (!lead) return;
@@ -840,6 +884,7 @@ document.getElementById('detailStatus').addEventListener('change', event => {
 document.getElementById('detailNotesInput').addEventListener('input', updateNoteCount);
 document.getElementById('detailNotesInput').addEventListener('blur', saveLeadNotes);
 document.getElementById('enrichPhoneBtn').addEventListener('click', enrichPhone);
+document.getElementById('bulkEnrichPhonesBtn').addEventListener('click', bulkEnrichMissingPhones);
 document.getElementById('detailHotBtn').addEventListener('click', () => {
   if (selectedLead) toggleHot(selectedLead.id);
 });

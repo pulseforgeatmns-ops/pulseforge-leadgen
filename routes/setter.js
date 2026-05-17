@@ -173,17 +173,6 @@ function searchWhere(search, params) {
   `;
 }
 
-function splitName(row) {
-  const full = `${row.first_name || ''} ${row.last_name || ''}`.trim();
-  if (!full || full.toLowerCase() === 'there') return {};
-  const parts = full.split(/\s+/);
-  return { full_name: full, first_name: parts[0], last_name: parts.slice(1).join(' ') };
-}
-
-function usableEmail(email) {
-  return typeof email === 'string' && email.includes('@') && !email.includes('*');
-}
-
 function pickPhone(data) {
   const person = data?.person || {};
   const company = data?.company || {};
@@ -196,47 +185,45 @@ function pickPhone(data) {
     null;
 }
 
+function normalizeWebsite(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    return new URL(raw.startsWith('http') ? raw : `https://${raw}`).hostname.replace(/^www\./, '');
+  } catch (err) {
+    return raw.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+  }
+}
+
 async function prospeoEnrichPhone(row) {
   const key = process.env.PROSPEO_API_KEY;
   if (!key) return null;
-  const companyName = businessName(row);
-  const companyWebsite = website(row);
-  const name = splitName(row);
-  const data = {
-    ...(usableEmail(row.email) ? { email: row.email } : {}),
-    ...(name.full_name ? { full_name: name.full_name } : {}),
-    ...(companyName ? { company_name: companyName } : {}),
-    ...(companyWebsite ? { company_website: companyWebsite } : {}),
-  };
-  if (!data.email && !data.full_name) return null;
-
+  const companyWebsite = normalizeWebsite(website(row));
+  if (!companyWebsite) return null;
   const headers = { 'Content-Type': 'application/json', 'X-KEY': key };
   try {
-    const direct = await axios.post('https://api.prospeo.io/enrich-person', {
-      enrich_mobile: true,
-      data,
-    }, { headers });
-    const phone = pickPhone(direct.data);
-    if (phone) return phone;
+    const res = await axios.post('https://api.prospeo.io/search-person',
+      {
+        page: 1,
+        filters: {
+          company: {
+            websites: { include: [companyWebsite] }
+          },
+          person_job_title: {
+            include: ['owner']
+          }
+        }
+      },
+      { headers }
+    );
+    const results = res.data?.results || [];
+    for (const result of results) {
+      const phone = pickPhone(result);
+      if (phone) return phone;
+    }
+    return null;
   } catch (err) {
-    console.warn('[setter] Prospeo direct enrich:', err.response?.data || err.message);
-  }
-
-  if (!companyWebsite) return null;
-  try {
-    const search = await axios.post('https://api.prospeo.io/search-person', {
-      page: 1,
-      filters: { company: { websites: { include: [companyWebsite] } } },
-    }, { headers });
-    const personId = search.data?.results?.[0]?.person?.person_id || search.data?.results?.[0]?.person_id;
-    if (!personId) return null;
-    const enriched = await axios.post('https://api.prospeo.io/enrich-person', {
-      enrich_mobile: true,
-      data: { person_id: personId },
-    }, { headers });
-    return pickPhone(enriched.data);
-  } catch (err) {
-    console.warn('[setter] Prospeo search enrich:', err.response?.data || err.message);
+    console.warn(`[setter] Prospeo ${companyWebsite}:`, err.response?.data || err.message);
     return null;
   }
 }
@@ -308,15 +295,23 @@ router.get(['/api/leads', '/leads'], requireSetterRead, async (req, res) => {
     const status = req.query.status;
     const params = [];
     const search = searchWhere(req.query.search, params);
-    const where = req.query.due === 'today'
-      ? `${search} AND p.callback_at IS NOT NULL AND p.callback_at < (CURRENT_DATE + INTERVAL '1 day')`
-      : status && STAGES.includes(status)
-      ? `${search} AND COALESCE(p.setter_status, 'new') = $${params.push(status)}`
-      : `${search} AND COALESCE(p.setter_status, 'new') = 'new'`;
+    const filters = [search];
+    if (req.query.due === 'today') {
+      filters.push(`AND p.callback_at IS NOT NULL AND p.callback_at < (CURRENT_DATE + INTERVAL '1 day')`);
+    } else if (status && STAGES.includes(status)) {
+      filters.push(`AND COALESCE(p.setter_status, 'new') = $${params.push(status)}`);
+    } else if (req.query.all_statuses !== 'true') {
+      filters.push(`AND COALESCE(p.setter_status, 'new') = 'new'`);
+    }
+    if (req.query.missing_phone === 'true') {
+      filters.push(`AND NULLIF(BTRIM(COALESCE(p.phone, '')), '') IS NULL`);
+    }
+    const where = filters.join('\n');
     const order = req.query.due === 'today'
       ? 'p.callback_at ASC NULLS LAST'
       : undefined;
-    res.json(await getLeads(where, params, 250, order));
+    const limit = req.query.missing_phone === 'true' ? 2000 : 250;
+    res.json(await getLeads(where, params, limit, order));
   } catch (err) {
     console.error('[setter] leads error:', err.message);
     res.status(500).json({ error: 'Unable to load leads' });
