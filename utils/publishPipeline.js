@@ -15,12 +15,12 @@ async function updateStatus(id, status) {
   await pool.query('UPDATE pending_comments SET status = $1 WHERE id = $2', [status, id]);
 }
 
-async function logResult(channel, action, itemId, status, details) {
+async function logResult(channel, action, item, status, details) {
   try {
     await pool.query(
-      `INSERT INTO agent_log (agent_name, action, payload, status, ran_at)
-       VALUES ($1, $2, $3, $4, NOW())`,
-      ['paige', action, JSON.stringify({ id: itemId, ...details }), status]
+      `INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+       VALUES ($1, $2, $3, $4, NOW(), $5)`,
+      ['paige', action, JSON.stringify({ id: item.id, channel, ...details }), status, item.client_id || 1]
     );
   } catch (_) {}
 }
@@ -37,8 +37,8 @@ function parseComment(raw) {
 async function savePostAnalytics(item, platformPostId = null) {
   try {
     const companyRes = await pool.query(
-      'SELECT id FROM companies WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) LIMIT 1',
-      [item.author_name]
+      'SELECT id FROM companies WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND client_id = $2 LIMIT 1',
+      [item.author_name, item.client_id || 1]
     );
     const companyId  = companyRes.rows[0]?.id || null;
     const contentType = item.post_content?.split('·').pop()?.trim().toLowerCase() || null;
@@ -46,13 +46,13 @@ async function savePostAnalytics(item, platformPostId = null) {
     await pool.query(`
       INSERT INTO post_analytics
         (pending_id, company_id, channel, content_type, post_text, platform_post_id,
-         published_at, post_day_of_week, post_hour)
-      VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7,$8)
+         published_at, post_day_of_week, post_hour, client_id)
+      VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7,$8,$9)
       ON CONFLICT (pending_id) DO NOTHING
     `, [
       item.id, companyId, item.channel, contentType,
       (item.comment || '').slice(0, 2000), platformPostId,
-      now.getDay(), now.getHours(),
+      now.getDay(), now.getHours(), item.client_id || 1,
     ]);
   } catch (err) {
     console.error('[Analytics] savePostAnalytics failed:', err.message);
@@ -118,11 +118,11 @@ async function publishToGoogleBusiness(item) {
     const platformPostId = gbpRes.data?.name || null;
     await updateStatus(item.id, 'posted');
     await savePostAnalytics(item, platformPostId);
-    await logResult('google_business', 'publish_post', item.id, 'success', { location, chars: text.length });
+    await logResult('google_business', 'publish_post', item, 'success', { location, chars: text.length });
     console.log(`[GBP Publisher] Posted to ${location}`);
   } catch (err) {
     console.error('[GBP Publisher] Failed:', err.response?.data || err.message);
-    await logResult('google_business', 'publish_post', item.id, 'error', { error: err.message });
+    await logResult('google_business', 'publish_post', item, 'error', { error: err.message });
   }
 }
 
@@ -143,11 +143,11 @@ async function publishToFacebookPage(item) {
     const platformPostId = fbRes.data?.id || null;
     await updateStatus(item.id, 'posted');
     await savePostAnalytics(item, platformPostId);
-    await logResult('facebook_page', 'publish_post', item.id, 'success', { pageId, chars: text.length });
+    await logResult('facebook_page', 'publish_post', item, 'success', { pageId, chars: text.length });
     console.log(`[FB Page Publisher] Posted to page ${pageId}`);
   } catch (err) {
     console.error('[FB Page Publisher] Failed:', err.response?.data || err.message);
-    await logResult('facebook_page', 'publish_post', item.id, 'error', { error: err.message });
+    await logResult('facebook_page', 'publish_post', item, 'error', { error: err.message });
   }
 }
 
@@ -172,7 +172,7 @@ async function publishFayeComment(item) {
   const cookies = loadFacebookCookies();
   if (!cookies) {
     console.warn('[Faye Publisher] No Facebook session found (FACEBOOK_SESSION env or facebook_session.json) — skipping');
-    await logResult('facebook', 'post_comment', item.id, 'error', { error: 'no_session' });
+    await logResult('facebook', 'post_comment', item, 'error', { error: 'no_session' });
     return;
   }
 
@@ -193,7 +193,7 @@ async function publishFayeComment(item) {
     if (page.url().includes('login')) {
       console.warn('[Faye Publisher] Facebook session expired');
       await updateStatus(item.id, 'session_expired');
-      await logResult('facebook', 'post_comment', item.id, 'error', { error: 'session_expired' });
+      await logResult('facebook', 'post_comment', item, 'error', { error: 'session_expired' });
       return;
     }
 
@@ -212,7 +212,7 @@ async function publishFayeComment(item) {
     if (!commentBox) {
       console.warn('[Faye Publisher] Comment box not found');
       await updateStatus(item.id, 'error');
-      await logResult('facebook', 'post_comment', item.id, 'error', { error: 'comment_box_not_found', url: item.post_url });
+      await logResult('facebook', 'post_comment', item, 'error', { error: 'comment_box_not_found', url: item.post_url });
       return;
     }
 
@@ -227,11 +227,11 @@ async function publishFayeComment(item) {
 
     await updateStatus(item.id, 'posted');
     await savePostAnalytics(item, null);
-    await logResult('facebook', 'post_comment', item.id, 'success', { url: item.post_url });
+    await logResult('facebook', 'post_comment', item, 'success', { url: item.post_url });
     console.log(`[Faye Publisher] Comment posted on ${item.post_url}`);
   } catch (err) {
     console.error('[Faye Publisher] Error:', err.message);
-    await logResult('facebook', 'post_comment', item.id, 'error', { error: err.message });
+    await logResult('facebook', 'post_comment', item, 'error', { error: err.message });
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
@@ -291,11 +291,11 @@ async function publishToLinkedInPage(item) {
     const sharedNow = res.data?.data?.createPost?.post?.sharedNow;
     await updateStatus(item.id, 'posted');
     await savePostAnalytics(item, postId || null);
-    await logResult('linkedin_page', 'publish_post', item.id, 'success', { channelId, postId, dueAt, sentAt, sharedNow });
+    await logResult('linkedin_page', 'publish_post', item, 'success', { channelId, postId, dueAt, sentAt, sharedNow });
     console.log(`[LinkedIn Page Publisher] Sent via Buffer — id: ${postId}, sent: ${sentAt || 'pending'}`);
   } catch (err) {
     console.error('[LinkedIn Page Publisher] Failed:', err.response?.data || err.message);
-    await logResult('linkedin_page', 'publish_post', item.id, 'error', { error: err.message });
+    await logResult('linkedin_page', 'publish_post', item, 'error', { error: err.message });
   }
 }
 
@@ -320,7 +320,7 @@ async function publishLinkComment(item) {
   const cookies = loadLinkedInCookies();
   if (!cookies) {
     console.warn('[Link Publisher] No LinkedIn session found (LINKEDIN_SESSION env or linkedin_session.json) — skipping');
-    await logResult('linkedin', 'post_comment', item.id, 'error', { error: 'no_session' });
+    await logResult('linkedin', 'post_comment', item, 'error', { error: 'no_session' });
     return;
   }
 
@@ -343,7 +343,7 @@ async function publishLinkComment(item) {
     if (page.url().includes('/login') || page.url().includes('/checkpoint')) {
       console.warn('[Link Publisher] LinkedIn session expired');
       await updateStatus(item.id, 'session_expired');
-      await logResult('linkedin', 'post_comment', item.id, 'error', { error: 'session_expired' });
+      await logResult('linkedin', 'post_comment', item, 'error', { error: 'session_expired' });
       return;
     }
 
@@ -361,7 +361,7 @@ async function publishLinkComment(item) {
     if (!commentBox) {
       console.warn('[Link Publisher] Comment box not found');
       await updateStatus(item.id, 'error');
-      await logResult('linkedin', 'post_comment', item.id, 'error', { error: 'comment_box_not_found', url: item.post_url });
+      await logResult('linkedin', 'post_comment', item, 'error', { error: 'comment_box_not_found', url: item.post_url });
       return;
     }
 
@@ -427,11 +427,11 @@ async function publishLinkComment(item) {
 
     await updateStatus(item.id, 'posted');
     await savePostAnalytics(item, null);
-    await logResult('linkedin', 'post_comment', item.id, 'success', { url: item.post_url, firstCommentUrl });
+    await logResult('linkedin', 'post_comment', item, 'success', { url: item.post_url, firstCommentUrl });
     console.log(`[Link Publisher] Comment posted on ${item.post_url}`);
   } catch (err) {
     console.error('[Link Publisher] Error:', err.message);
-    await logResult('linkedin', 'post_comment', item.id, 'error', { error: err.message });
+    await logResult('linkedin', 'post_comment', item, 'error', { error: err.message });
   } finally {
     if (browser) await browser.close().catch(() => {});
   }

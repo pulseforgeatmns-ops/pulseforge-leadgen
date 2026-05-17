@@ -15,6 +15,7 @@ const axios = require('axios');
 const { createObjectCsvWriter } = require('csv-writer');
 const { google } = require('googleapis');
 const { appendQualifiedScoutLead } = require('./utils/setterSheet');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 
 const DOMAIN_BLACKLIST = [
@@ -65,7 +66,9 @@ let CONFIG = {
   outputCSV:   args.csv       !== 'false',
   outputSheet: args.sheet     !== 'false',
   sheetId:     args.sheetid   || process.env.GOOGLE_SHEET_ID || '',
+  clientId:    getRuntimeClientId(args),
 };
+let CLIENT_CONFIG = null;
 
 const GOOGLE_API_KEY    = process.env.GOOGLE_API_KEY;
 const GOOGLE_CX         = process.env.GOOGLE_CX;
@@ -352,8 +355,19 @@ function scoreLead(lead) {
   if (hasStrong)    size = 15;
   else if (hasBasic) size = 8;
 
-  const total = vertical + location + contact + web + size;
-  console.log(`  ICP Score: ${total} (vertical:${vertical} location:${location} contact:${contact} web:${web} size:${size}) — ${lead.company}`);
+  let clientBoost = 0;
+  if (CONFIG.clientId === 2) {
+    const targetSignals = ['hoa', 'homeowners association', 'landlord', 'property management', 'property manager', 'bank', 'reo', 'foreclosure', 'real estate developer'];
+    const countySignals = ['kanawha', 'putnam', 'cabell'];
+    if (targetSignals.some(k => hay.includes(k))) clientBoost += 12;
+    if (countySignals.some(k => locHay.includes(k) || hay.includes(k))) clientBoost += 8;
+    if (['charleston', 'dunbar', 'st albans', 'scott depot', 'teays valley', 'hurricane', 'huntington', 'barboursville'].some(k => locHay.includes(k) || hay.includes(k))) {
+      clientBoost += 5;
+    }
+  }
+
+  const total = vertical + location + contact + web + size + clientBoost;
+  console.log(`  ICP Score: ${total} (vertical:${vertical} location:${location} contact:${contact} web:${web} size:${size} client:${clientBoost}) — ${lead.company}`);
   return Math.min(total, 100);
 }
 
@@ -723,8 +737,8 @@ async function saveToDatabase(leads) {
 
     // Dedup: skip if a prospect with this business name already exists
     const dupCheck = await pool.query(
-      `SELECT id FROM prospects WHERE LOWER(TRIM(SPLIT_PART(notes, ' — ', 1))) = LOWER(TRIM($1))`,
-      [companyName]
+      `SELECT id FROM prospects WHERE client_id = $2 AND LOWER(TRIM(SPLIT_PART(notes, ' — ', 1))) = LOWER(TRIM($1))`,
+      [companyName, CONFIG.clientId]
     );
     if (dupCheck.rows.length > 0) {
       console.log(`Duplicate skipped: ${companyName}`);
@@ -744,9 +758,13 @@ async function saveToDatabase(leads) {
       const lastName  = nameParts.slice(1).join(' ') || '';
       const notes = companyName + ' — ' + lead.url;
       const phone = lead.phone || null;
+      const serviceArea = (CLIENT_CONFIG?.service_area || []).find(area => {
+        const needle = String(area).toLowerCase();
+        return (lead.address || '').toLowerCase().includes(needle) || notes.toLowerCase().includes(needle);
+      }) || null;
       const insert = await pool.query(
-      'INSERT INTO prospects (first_name, last_name, email, phone, status, source, icp_score, notes, vertical) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (email) DO NOTHING RETURNING id',
-      [firstName, lastName, email, phone, 'cold', 'scout', lead.score, notes, CONFIG.industry]
+      'INSERT INTO prospects (first_name, last_name, email, phone, status, source, icp_score, notes, vertical, client_id, service_area_match) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (email) DO NOTHING RETURNING id',
+      [firstName, lastName, email, phone, 'cold', 'scout', lead.score, notes, CONFIG.industry, CONFIG.clientId, serviceArea]
     );
       if (!insert.rows.length) {
         skipped++;
@@ -762,12 +780,17 @@ async function saveToDatabase(leads) {
               setter_visible = true,
               setter_updated_at = NOW()
           WHERE id = $1
+            AND client_id = $2
             AND COALESCE(icp_score, 0) >= 40
             AND COALESCE(do_not_contact, false) = false
-        `, [prospectId]);
-        const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
-        if (handoff.appended) setterQueued++;
-        else setterSkipped++;
+        `, [prospectId, CONFIG.clientId]);
+        if (CONFIG.clientId === 1) {
+          const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
+          if (handoff.appended) setterQueued++;
+          else setterSkipped++;
+        } else {
+          setterSkipped++;
+        }
       } catch (err) {
         setterFailed++;
         console.error(`[Setter] Handoff failed for ${companyName}: ${err.message}`);
@@ -785,11 +808,16 @@ async function ensureSetterQueueColumns(pool) {
     ALTER TABLE prospects
     ADD COLUMN IF NOT EXISTS setter_status TEXT DEFAULT 'new',
     ADD COLUMN IF NOT EXISTS setter_visible BOOLEAN DEFAULT false,
-    ADD COLUMN IF NOT EXISTS setter_updated_at TIMESTAMPTZ DEFAULT NOW()
+    ADD COLUMN IF NOT EXISTS setter_updated_at TIMESTAMPTZ DEFAULT NOW(),
+    ADD COLUMN IF NOT EXISTS service_area_match TEXT
   `);
 }
 
 async function run(params = {}) {
+  CONFIG.clientId = getRuntimeClientId(params);
+  process.env.ACTIVE_CLIENT_ID = String(CONFIG.clientId);
+  CLIENT_CONFIG = await getClientConfig(CONFIG.clientId);
+  if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CONFIG.clientId}`);
   if (params.industry) CONFIG.industry = params.industry;
   if (params.location) CONFIG.location = params.location;
   if (params.jobTitle) CONFIG.jobTitle = params.jobTitle;
@@ -800,7 +828,7 @@ async function run(params = {}) {
 module.exports = { run };
 
 if (require.main === module) {
-  main().catch(err => {
+  run({ client_id: CONFIG.clientId }).catch(err => {
     console.error('[FATAL]', err.message);
     process.exit(1);
   });

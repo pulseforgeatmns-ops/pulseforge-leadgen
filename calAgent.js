@@ -2,8 +2,10 @@ require('dotenv').config();
 const axios = require('axios');
 const pool = require('./db');
 const db = require('./dbClient');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'cal';
+const CLIENT_ID = getRuntimeClientId();
 const MAX_CALLS_PER_RUN = 10;
 // Needs https://www.googleapis.com/auth/calendar scope — separate from the GBP token
 const CALENDAR_REFRESH_TOKEN = process.env.GOOGLE_CALENDAR_REFRESH_TOKEN;
@@ -152,6 +154,12 @@ async function createCalendarEvent(prospectName, businessName, agreedTimeISO) {
 // ── MAIN ───────────────────────────────────────────────────────────────────
 async function run() {
   console.log('\nCal agent running...\n');
+  const clientConfig = await getClientConfig(CLIENT_ID);
+  if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
+  if (CLIENT_ID !== 1) {
+    console.log('Cal calling is enabled only for Pulseforge client_id=1.');
+    return;
+  }
 
   if (!process.env.BLAND_API_KEY) {
     console.warn('Cal: BLAND_API_KEY not set — exiting. Add it to Railway env vars to activate calling.');

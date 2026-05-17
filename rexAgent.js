@@ -2,9 +2,11 @@ require('dotenv').config();
 const pool = require('./db');
 const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const client = new Anthropic();
 const AGENT_NAME = 'rex';
+const CLIENT_ID = getRuntimeClientId();
 
 async function getWeeklyData() {
   const weekAgo = "NOW() - INTERVAL '7 days'";
@@ -289,13 +291,19 @@ Rex runs every Sunday. Reply to adjust reporting cadence.`;
 
 async function logAgentRun(status) {
   await pool.query(`
-    INSERT INTO agent_log (agent_name, action, payload, status, ran_at)
-    VALUES ($1, $2, $3, $4, NOW())
-  `, [AGENT_NAME, 'weekly_report', JSON.stringify({ week: new Date().toISOString() }), status]);
+    INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+    VALUES ($1, $2, $3, $4, NOW(), $5)
+  `, [AGENT_NAME, 'weekly_report', JSON.stringify({ week: new Date().toISOString(), client_id: CLIENT_ID }), status, CLIENT_ID]);
 }
 
 async function run() {
   console.log('\nRex agent running...\n');
+  const clientConfig = await getClientConfig(CLIENT_ID);
+  if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
+  if (CLIENT_ID !== 1) {
+    console.log('Rex weekly reporting is enabled only for Pulseforge client_id=1.');
+    return;
+  }
 
   try {
     console.log('Pulling weekly data...');

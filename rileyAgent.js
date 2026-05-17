@@ -4,8 +4,10 @@ const Anthropic = require('@anthropic-ai/sdk');
 const db = require('./dbClient');
 const fs = require('fs');
 const path = require('path');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'riley';
+const CLIENT_ID = getRuntimeClientId();
 const CREDENTIALS_PATH = './gmail_credentials.json';
 const TOKEN_PATH = './gmail_token.json';
 const SCOPES = [
@@ -179,8 +181,8 @@ async function findProspectByEmail(fromEmail) {
   if (!emailMatch) return null;
   const email = emailMatch[0].toLowerCase();
   const res = await pool.query(
-    'SELECT * FROM prospects WHERE LOWER(email) = $1 LIMIT 1',
-    [email]
+    'SELECT * FROM prospects WHERE LOWER(email) = $1 AND client_id = $2 LIMIT 1',
+    [email, CLIENT_ID]
   );
   return res.rows[0] || null;
 }
@@ -189,22 +191,22 @@ async function updateProspectFromReply(prospect, classification) {
   const pool = require('./db');
   if (classification === 'interested') {
     await pool.query(
-      'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2',
-      ['warm', prospect.id]
+      'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3',
+      ['warm', prospect.id, CLIENT_ID]
     );
     console.log(`  [Riley] ${prospect.email} upgraded to warm`);
   }
   if (classification === 'unsubscribe') {
     await pool.query(
-      'UPDATE prospects SET do_not_contact = true, updated_at = NOW() WHERE id = $1',
-      [prospect.id]
+      'UPDATE prospects SET do_not_contact = true, updated_at = NOW() WHERE id = $1 AND client_id = $2',
+      [prospect.id, CLIENT_ID]
     );
     console.log(`  [Riley] ${prospect.email} marked do_not_contact`);
   }
   if (classification === 'not_now') {
     await pool.query(
-      'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2',
-      ['not_now', prospect.id]
+      'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3',
+      ['not_now', prospect.id, CLIENT_ID]
     );
     console.log(`  [Riley] ${prospect.email} marked not_now`);
   }
@@ -213,14 +215,15 @@ async function updateProspectFromReply(prospect, classification) {
 async function logInboundTouchpoint(prospect, email, classification) {
   const pool = require('./db');
   await pool.query(
-    'INSERT INTO touchpoints (prospect_id, channel, action_type, content_summary, outcome, sentiment, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())',
+    'INSERT INTO touchpoints (prospect_id, channel, action_type, content_summary, outcome, sentiment, created_at, client_id) VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)',
     [
       prospect.id,
       'email',
       'inbound',
       email.subject,
       JSON.stringify({ from: email.from, classification }),
-      classification === 'interested' ? 'positive' : classification === 'negative' ? 'negative' : 'neutral'
+      classification === 'interested' ? 'positive' : classification === 'negative' ? 'negative' : 'neutral',
+      CLIENT_ID
     ]
   );
 }
@@ -229,14 +232,15 @@ async function depositInterestedAction(prospect, email, suggestedReply) {
   const pool = require('./db');
   const bizName = prospect.notes?.split('—')[0]?.trim() || prospect.email;
   await pool.query(
-    'INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())',
+    'INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, created_at, client_id) VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)',
     [
       'riley',
       'reply_required',
       'Warm reply from ' + bizName,
       prospect.email + ' replied to your outreach. Suggested reply below — approve or edit before sending.',
       JSON.stringify({ prospect_id: prospect.id, email: prospect.email, subject: email.subject, from: email.from, body: email.body, suggested_reply: suggestedReply }),
-      'pending'
+      'pending',
+      CLIENT_ID
     ]
   );
   console.log('  [Riley] Action deposited for Max');
@@ -256,6 +260,12 @@ async function markAsRead(auth, messageId) {
 async function run() {
   console.log('\n🤝 Riley — Inbound Triage Agent');
   console.log('─────────────────────────────────\n');
+  const clientConfig = await getClientConfig(CLIENT_ID);
+  if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
+  if (CLIENT_ID !== 1) {
+    console.log('Riley currently monitors jacob@gopulseforge.com only. MSHI triage is manual until forwarding or a second OAuth is configured.');
+    return;
+  }
 
   const auth = await getAuthClient();
   const emails = await getUnreadEmails(auth);

@@ -18,11 +18,13 @@ const pool     = require('./db');
 const { createObjectCsvWriter } = require('csv-writer');
 const { generateDemoData } = require('./utils/demoData');
 const { bcrypt, getUserCount, initAuth, requireAuth, requireRole } = require('./middleware/auth');
+const { ensureClientArchitecture } = require('./utils/clientContext');
 
 const app  = express();
 const PORT = 3000;
 
 initAuth().catch(err => console.error('[auth] init error:', err.message));
+ensureClientArchitecture().catch(err => console.error('[clients] init error:', err.message));
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),
@@ -35,6 +37,12 @@ app.use(session({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors());
+app.use((req, _res, next) => {
+  if (req.session && req.session.authenticated && !req.session.active_client_id) {
+    req.session.active_client_id = 1;
+  }
+  next();
+});
 app.use((req, res, next) => {
   if (req.path === '/public/dashboard.html' || req.path === '/dashboard.html') {
     return requireAuth(req, res, err => {
@@ -163,6 +171,7 @@ app.post('/login', async (req, res) => {
 
     req.session.user = { id: user.id, name: user.name, email: user.email, role: user.role };
     req.session.authenticated = true;
+    req.session.active_client_id = 1;
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
     return res.redirect(user.role === 'setter' ? '/setter' : '/dashboard');
   }
@@ -170,6 +179,7 @@ app.post('/login', async (req, res) => {
   if (password === process.env.DASHBOARD_PASSWORD) {
     req.session.user = { id: null, name: 'Legacy Admin', email: email || 'legacy@pulseforge.local', role: 'admin' };
     req.session.authenticated = true;
+    req.session.active_client_id = 1;
     return res.redirect('/dashboard');
   }
 

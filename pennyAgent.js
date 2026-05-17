@@ -3,10 +3,12 @@ const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
 const pool = require('./db');
 const db = require('./dbClient');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 // Uses Google Ads REST API (GAQL over HTTPS) instead of the google-ads-api gRPC package —
 // consistent with the rest of the codebase and avoids native binary issues on Railway.
 const AGENT_NAME = 'penny';
+const CLIENT_ID = getRuntimeClientId();
 const GOOGLE_ADS_VERSION = 'v18';
 const META_API_VERSION = 'v20.0';
 
@@ -269,6 +271,12 @@ async function saveReport(companyName, platform, report, flags) {
 // ── MAIN ───────────────────────────────────────────────────────────────────
 async function run() {
   console.log('\nPenny agent running...\n');
+  const clientConfig = await getClientConfig(CLIENT_ID);
+  if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
+  if (CLIENT_ID !== 1) {
+    console.log('Penny ads analysis is enabled only for Pulseforge client_id=1.');
+    return;
+  }
 
   await ensureSchema();
 

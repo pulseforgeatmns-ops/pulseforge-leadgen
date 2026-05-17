@@ -4,6 +4,7 @@ require('dotenv').config();
 
 const pool = require('./db');
 const { appendQualifiedScoutLead, hasSetterSheetAuth } = require('./utils/setterSheet');
+const { getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'handoff_utility';
 
@@ -32,9 +33,16 @@ function leadFromProspect(row) {
 
 async function run(params = {}) {
   const lookbackDays = Number(params.lookbackDays || process.env.SETTER_HANDOFF_LOOKBACK_DAYS || 7);
+  const clientId = getRuntimeClientId(params);
   console.log('\nSetter Handoff Agent');
   console.log('─────────────────────────────────');
   console.log(`Lookback: ${lookbackDays} day(s)\n`);
+  console.log(`Client: ${clientId}\n`);
+
+  if (clientId !== 1) {
+    console.log('Setter handoff is enabled only for Pulseforge client_id=1.');
+    return;
+  }
 
   await ensureSetterQueueColumns();
 
@@ -44,9 +52,10 @@ async function run(params = {}) {
     WHERE source = 'scout'
       AND COALESCE(icp_score, 0) >= 40
       AND COALESCE(do_not_contact, false) = false
+      AND client_id = $2
       AND created_at >= NOW() - ($1::int * INTERVAL '1 day')
     ORDER BY icp_score DESC NULLS LAST, created_at DESC
-  `, [lookbackDays]);
+  `, [lookbackDays, clientId]);
 
   if (rows.length) {
     await pool.query(`
@@ -54,8 +63,8 @@ async function run(params = {}) {
       SET setter_status = COALESCE(setter_status, 'new'),
           setter_visible = true,
           setter_updated_at = NOW()
-      WHERE id = ANY($1::uuid[])
-    `, [rows.map(row => row.id)]);
+      WHERE id = ANY($1::uuid[]) AND client_id = $2
+    `, [rows.map(row => row.id), clientId]);
   }
 
   let appended = 0;
@@ -76,12 +85,13 @@ async function run(params = {}) {
       if (handoff.appended) {
         appended++;
         await pool.query(`
-          INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)
-          VALUES ($1, 'queue_setter_lead', $2, $3, 'success', NOW())
+          INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+          VALUES ($1, 'queue_setter_lead', $2, $3, 'success', NOW(), $4)
         `, [
           AGENT_NAME,
           prospect.id,
           JSON.stringify({ business_name: lead.company, vertical: prospect.vertical, score: lead.score }),
+          clientId,
         ]);
       } else {
         skipped++;
@@ -93,12 +103,13 @@ async function run(params = {}) {
   }
 
   await pool.query(`
-    INSERT INTO agent_log (agent_name, action, payload, status, ran_at)
-    VALUES ($1, 'backfill_setter_queue', $2, $3, NOW())
+    INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+    VALUES ($1, 'backfill_setter_queue', $2, $3, NOW(), $4)
   `, [
     AGENT_NAME,
-    JSON.stringify({ candidates: rows.length, appended, skipped, failed, lookbackDays }),
+    JSON.stringify({ candidates: rows.length, appended, skipped, failed, lookbackDays, client_id: clientId }),
     failed ? 'error' : 'success',
+    clientId,
   ]).catch(() => {});
 
   console.log(`Candidates: ${rows.length}`);

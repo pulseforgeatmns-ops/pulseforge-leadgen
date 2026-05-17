@@ -131,6 +131,29 @@ body::before {
   margin-left: auto;
   display: flex; align-items: center; gap: 1.25rem;
 }
+.client-switcher {
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(139,92,246,0.08);
+  border: 1px solid rgba(139,92,246,0.25);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.client-switcher label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.55rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--gray-light);
+}
+.client-switcher select {
+  background: #070d1a;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--white);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  padding: 3px 20px 3px 6px;
+}
 .sys-status {
   display: flex; align-items: center; gap: 6px;
   font-family: 'JetBrains Mono', monospace;
@@ -1455,6 +1478,10 @@ body::before {
     <div class="nav-tab" id="usersTab" style="display:none">Users</div>
   </div>
   <div class="topbar-right">
+    <div class="client-switcher">
+      <label for="clientSelector">Client</label>
+      <select id="clientSelector"></select>
+    </div>
     <div class="sys-status">
       <div class="sys-dot"></div>
       <span id="agentLivePlannedCount">14 LIVE · 0 PLANNED</span>
@@ -2604,6 +2631,33 @@ fetch('/api/me', { credentials: 'include' })
     if (data?.user?.role === 'admin') document.getElementById('usersTab').style.display = 'block';
   })
   .catch(() => {});
+
+async function loadClientSelector() {
+  const selector = document.getElementById('clientSelector');
+  if (!selector) return;
+  try {
+    const res = await fetch('/api/clients', { credentials: 'include' });
+    if (!res.ok) return;
+    const data = await res.json();
+    selector.innerHTML = (data.clients || []).map(c =>
+      `<option value="${c.id}" ${Number(c.id) === Number(data.active_client_id) ? 'selected' : ''}>${_esc(c.name)}</option>`
+    ).join('');
+    selector.onchange = async () => {
+      await fetch('/api/clients/active', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: selector.value })
+      });
+      _statsCacheTime = 0;
+      _activityCacheTime = 0;
+      await Promise.all([loadLiveData(), loadActivityFeed(), loadApprovals(), loadProspects(), loadActions()]);
+      if (document.getElementById('analyticsArea')?.style.display !== 'none') loadAnalytics();
+    };
+  } catch(e) {
+    console.error('loadClientSelector:', e);
+  }
+}
 
 // Approvals
 const _CHANNEL = {
@@ -3884,6 +3938,7 @@ function renderTopPostsTable(posts) {
   }).join('');
 }
 
+loadClientSelector();
 loadLiveData();
 loadActivityFeed();
 loadAgentSparklines();

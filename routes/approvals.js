@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { publishToLinkedInPage } = require('../utils/publishPipeline');
+const { getRequestClientId } = require('../utils/clientContext');
 
 const managerAccess = [requireAuth, requireRole('admin', 'manager')];
 
@@ -88,6 +89,7 @@ load();
 
 router.get('/api/pending-comments', ...managerAccess, async (req, res) => {
   const db = require('../dbClient');
+  process.env.ACTIVE_CLIENT_ID = String(getRequestClientId(req));
   const comments = await db.getPendingComments();
   res.json(comments);
 });
@@ -95,6 +97,7 @@ router.get('/api/pending-comments', ...managerAccess, async (req, res) => {
 router.post('/api/approve-comment/:id', ...managerAccess, async (req, res) => {
   const db = require('../dbClient');
   const { id } = req.params;
+  process.env.ACTIVE_CLIENT_ID = String(getRequestClientId(req));
   const comments = await db.getPendingComments();
   const comment = comments.find(c => c.id === id);
   if (!comment) return res.status(404).json({ error: 'Not found' });

@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { normalizeClientId } = require('../utils/clientContext');
 
 const CRON_MODULES = {
   scout:     '../leadgen',
@@ -25,16 +26,18 @@ const CRON_MODULES = {
 
 function runCronAgent(agent, res, query = {}) {
   if (!CRON_MODULES[agent]) return res.status(400).json({ error: `Unknown agent: ${agent}` });
-  res.json({ success: true, agent });
+  const clientId = normalizeClientId(query.client_id || query.clientId);
+  res.json({ success: true, agent, client_id: clientId });
   try {
     delete require.cache[require.resolve(CRON_MODULES[agent])];
+    process.env.ACTIVE_CLIENT_ID = String(clientId);
     const mod = require(CRON_MODULES[agent]);
     if (agent === 'scout' && typeof mod.run === 'function') {
-      mod.run({ industry: query.industry, location: query.location }).catch(err => {
+      mod.run({ industry: query.industry, location: query.location, client_id: clientId }).catch(err => {
         console.error(`[cron] scout run error:`, err.message);
       });
     } else if ((agent === 'setter_handoff' || agent === 'handoff_utility') && typeof mod.run === 'function') {
-      mod.run({ lookbackDays: query.lookbackDays }).catch(err => {
+      mod.run({ lookbackDays: query.lookbackDays, client_id: clientId }).catch(err => {
         console.error(`[cron] ${agent} run error:`, err.message);
       });
     }

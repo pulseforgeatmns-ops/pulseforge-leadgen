@@ -1,9 +1,11 @@
 require('dotenv').config();
 const axios = require('axios');
 const pool  = require('./db');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'warm_signal';
 const SHEET_ID   = '1DPVhzWGCHrAInxPDqeU5_Br208bPAf6qIgUy3wIp7QE';
+const CLIENT_ID = getRuntimeClientId();
 
 // ── GOOGLE AUTH ───────────────────────────────────────────────────────
 async function getAccessToken() {
@@ -54,6 +56,12 @@ async function updateSetterNotes(token, rowIndex, value) {
 async function run() {
   console.log('\n🔥 Warm Signal Agent');
   console.log('─────────────────────────────────\n');
+  const clientConfig = await getClientConfig(CLIENT_ID);
+  if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
+  if (CLIENT_ID !== 1) {
+    console.log('Warm Signal sheet sync is enabled only for Pulseforge client_id=1.');
+    return;
+  }
 
   // 1. Query warm prospects with 2+ opens in last 7 days
   const { rows: prospects } = await pool.query(`
@@ -61,14 +69,15 @@ async function run() {
       COUNT(t.id) as open_count,
       MAX(t.created_at) as last_open
     FROM prospects p
-    JOIN touchpoints t ON t.prospect_id = p.id
+    JOIN touchpoints t ON t.prospect_id = p.id AND t.client_id = p.client_id
     WHERE t.action_type = 'email_opened'
+      AND p.client_id = $1
       AND t.created_at > NOW() - INTERVAL '7 days'
       AND p.do_not_contact = false
     GROUP BY p.id
     HAVING COUNT(t.id) >= 2
     ORDER BY last_open DESC
-  `);
+  `, [CLIENT_ID]);
 
   if (!prospects.length) {
     console.log('No warm signals found.');
@@ -121,13 +130,14 @@ async function run() {
     console.log(`  [flagged] ${bizName} → "${flagValue}" (row ${rowIndex + 1})`);
 
     await pool.query(
-      `INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)
-       VALUES ($1, $2, $3, $4, 'success', NOW())`,
+      `INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+       VALUES ($1, $2, $3, $4, 'success', NOW(), $5)`,
       [
         AGENT_NAME,
         'flag_sheet',
         prospect.id,
         JSON.stringify({ biz_name: bizName, flag: flagValue, sheet_row: rowIndex + 1 }),
+        CLIENT_ID,
       ]
     );
 

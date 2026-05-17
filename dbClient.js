@@ -1,19 +1,22 @@
 const pool = require('./db');
+const { getRuntimeClientId } = require('./utils/clientContext');
 
 // Check do not contact before any agent acts
 async function checkDNC(prospectId) {
+  const clientId = getRuntimeClientId();
   const res = await pool.query(
-    'SELECT do_not_contact FROM prospects WHERE id = $1',
-    [prospectId]
+    'SELECT do_not_contact FROM prospects WHERE id = $1 AND client_id = $2',
+    [prospectId, clientId]
   );
   return res.rows[0]?.do_not_contact ?? true;
 }
 
 // Get full prospect record
 async function getProspect(prospectId) {
+  const clientId = getRuntimeClientId();
   const res = await pool.query(
-    'SELECT * FROM prospects WHERE id = $1',
-    [prospectId]
+    'SELECT * FROM prospects WHERE id = $1 AND client_id = $2',
+    [prospectId, clientId]
   );
   return res.rows[0];
 }
@@ -29,43 +32,47 @@ async function getProspectSummary(prospectId) {
 
 // Update prospect status
 async function updateProspectStatus(prospectId, status) {
+  const clientId = getRuntimeClientId();
   await pool.query(
-    'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2',
-    [status, prospectId]
+    'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3',
+    [status, prospectId, clientId]
   );
 }
 
 // Log a touchpoint after any agent action
 async function logTouchpoint(prospectId, channel, actionType, contentSummary, outcome, sentiment, agentId, externalRef = null) {
+  const clientId = getRuntimeClientId();
   await pool.query(
     `INSERT INTO touchpoints 
-      (prospect_id, channel, action_type, content_summary, outcome, sentiment, agent_id, external_ref)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [prospectId, channel, actionType, contentSummary, outcome, sentiment, agentId, externalRef]
+      (prospect_id, channel, action_type, content_summary, outcome, sentiment, agent_id, external_ref, client_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [prospectId, channel, actionType, contentSummary, outcome, sentiment, agentId, externalRef, clientId]
   );
   // Update last contacted timestamp
   await pool.query(
-    'UPDATE prospects SET last_contacted_at = NOW() WHERE id = $1',
-    [prospectId]
+    'UPDATE prospects SET last_contacted_at = NOW() WHERE id = $1 AND client_id = $2',
+    [prospectId, clientId]
   );
 }
 
 // Log every agent action to audit trail
 async function logAgentAction(agentName, action, prospectId, targetUrl, payload, status, errorMsg = null, durationMs = null) {
+  const clientId = getRuntimeClientId();
   await pool.query(
     `INSERT INTO agent_log 
-      (agent_name, action, prospect_id, target_url, payload, status, error_msg, duration_ms)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [agentName, action, prospectId, targetUrl, JSON.stringify(payload), status, errorMsg, durationMs]
+      (agent_name, action, prospect_id, target_url, payload, status, error_msg, duration_ms, client_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [agentName, action, prospectId, targetUrl, JSON.stringify(payload), status, errorMsg, durationMs, clientId]
   );
 }
 
 // Add a new prospect
 async function addProspect(data) {
+  const clientId = getRuntimeClientId(data);
   const res = await pool.query(
     `INSERT INTO prospects 
-      (company_id, first_name, last_name, email, phone, job_title, decision_maker, linkedin_url, facebook_url, source, icp_score)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      (company_id, first_name, last_name, email, phone, job_title, decision_maker, linkedin_url, facebook_url, source, icp_score, client_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      ON CONFLICT (email) DO NOTHING
      RETURNING id`,
     [
@@ -79,7 +86,8 @@ async function addProspect(data) {
       data.linkedin_url || null,
       data.facebook_url || null,
       data.source || 'manual',
-      data.icp_score || 0
+      data.icp_score || 0,
+      clientId
     ]
   );
   return res.rows[0]?.id;
@@ -87,10 +95,11 @@ async function addProspect(data) {
 
 // Add a company
 async function addCompany(data) {
+  const clientId = getRuntimeClientId(data);
   const res = await pool.query(
     `INSERT INTO companies 
-      (name, industry, size, location, website, icp_score, tech_stack)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+      (name, industry, size, location, website, icp_score, tech_stack, client_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id`,
     [
       data.name,
@@ -99,7 +108,8 @@ async function addCompany(data) {
       data.location || null,
       data.website || null,
       data.icp_score || 0,
-      data.tech_stack || []
+      data.tech_stack || [],
+      clientId
     ]
   );
   return res.rows[0]?.id;
@@ -107,35 +117,40 @@ async function addCompany(data) {
 
 // Get all active prospects for a given status
 async function getProspectsByStatus(status) {
+  const clientId = getRuntimeClientId();
   const res = await pool.query(
-    'SELECT * FROM prospect_summary WHERE status = $1 AND do_not_contact = false ORDER BY icp_score DESC',
-    [status]
+    'SELECT * FROM prospects WHERE status = $1 AND do_not_contact = false AND client_id = $2 ORDER BY icp_score DESC',
+    [status, clientId]
   );
   return res.rows;
 }
 
 async function savePendingComment(data) {
+  const clientId = getRuntimeClientId(data);
   const res = await pool.query(
     `INSERT INTO pending_comments 
-      (author_name, author_title, post_content, comment, post_url, channel)
-     VALUES ($1, $2, $3, $4, $5, $6)
+      (author_name, author_title, post_content, comment, post_url, channel, client_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
-    [data.authorName, data.authorTitle, data.postContent, data.comment, data.postUrl, data.channel || 'linkedin']
+    [data.authorName, data.authorTitle, data.postContent, data.comment, data.postUrl, data.channel || 'linkedin', clientId]
   );
   return res.rows[0]?.id;
 }
 
 async function getPendingComments() {
+  const clientId = getRuntimeClientId();
   const res = await pool.query(
-    `SELECT * FROM pending_comments WHERE status = 'pending' ORDER BY created_at DESC`
+    `SELECT * FROM pending_comments WHERE status = 'pending' AND client_id = $1 ORDER BY created_at DESC`,
+    [clientId]
   );
   return res.rows;
 }
 
 async function updateCommentStatus(id, status) {
+  const clientId = getRuntimeClientId();
   await pool.query(
-    `UPDATE pending_comments SET status = $1 WHERE id = $2`,
-    [status, id]
+    `UPDATE pending_comments SET status = $1 WHERE id = $2 AND client_id = $3`,
+    [status, id, clientId]
   );
 }
 

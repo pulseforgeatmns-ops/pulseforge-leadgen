@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
+const { getActiveClients, getRequestClientId, normalizeClientId } = require('../utils/clientContext');
 const { publishBlogPost } = require('../utils/blogPublisher');
 const {
   publishToGoogleBusiness,
@@ -14,19 +15,45 @@ const {
 const requireAuth = [sessionAuth, requireRole('admin', 'manager')];
 
 router.get('/api/me', sessionAuth, (req, res) => {
-  res.json({ user: req.user });
+  res.json({ user: req.user, active_client_id: req.session?.active_client_id || 1 });
+});
+
+router.get('/api/clients', requireAuth, async (req, res) => {
+  try {
+    res.json({
+      active_client_id: req.session.active_client_id || 1,
+      clients: await getActiveClients(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/clients/active', requireAuth, async (req, res) => {
+  const clientId = normalizeClientId(req.body.client_id || req.query.client_id);
+  try {
+    const clients = await getActiveClients();
+    if (!clients.find(c => c.id === clientId)) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+    req.session.active_client_id = clientId;
+    res.json({ ok: true, active_client_id: clientId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Agent status for dashboard (deduplicated — was registered twice in server.js)
 router.get('/api/agent-status', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const [prospects, touchpoints, pending, agentRuns, channels, weeklyTouchpoints] = await Promise.all([
-      pool.query('SELECT COUNT(*) FROM prospects'),
-      pool.query('SELECT COUNT(*) FROM touchpoints'),
-      pool.query('SELECT COUNT(*) FROM pending_comments WHERE status = $1', ['pending']),
-      pool.query('SELECT agent_name, COUNT(*) as runs, MAX(ran_at) as last_run FROM agent_log GROUP BY agent_name'),
-      pool.query('SELECT channel, COUNT(*) as count FROM pending_comments GROUP BY channel'),
-      pool.query('SELECT COUNT(*) FROM touchpoints WHERE created_at > NOW() - INTERVAL \'7 days\'')
+      pool.query('SELECT COUNT(*) FROM prospects WHERE client_id = $1', [clientId]),
+      pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1', [clientId]),
+      pool.query('SELECT COUNT(*) FROM pending_comments WHERE status = $1 AND client_id = $2', ['pending', clientId]),
+      pool.query('SELECT agent_name, COUNT(*) as runs, MAX(ran_at) as last_run FROM agent_log WHERE client_id = $1 GROUP BY agent_name', [clientId]),
+      pool.query('SELECT channel, COUNT(*) as count FROM pending_comments WHERE client_id = $1 GROUP BY channel', [clientId]),
+      pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1 AND created_at > NOW() - INTERVAL \'7 days\'', [clientId])
     ]);
 
     const runMap = {};
@@ -64,13 +91,14 @@ router.get('/api/agent-status', requireAuth, async (req, res) => {
 // Get pending approvals
 router.get('/api/approvals', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const result = await pool.query(`
-      SELECT id, author_name, author_title, post_content, comment, channel, status, created_at
+      SELECT id, author_name, author_title, post_content, comment, channel, status, created_at, client_id
       FROM pending_comments
-      WHERE status = 'pending'
+      WHERE status = 'pending' AND client_id = $1
       ORDER BY created_at DESC
       LIMIT 50
-    `);
+    `, [clientId]);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -85,9 +113,10 @@ router.post('/api/approvals/:id', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Invalid action' });
   }
   try {
+    const clientId = getRequestClientId(req);
     const result = await pool.query(
-      'UPDATE pending_comments SET status = $1 WHERE id = $2 RETURNING *',
-      [action, id]
+      'UPDATE pending_comments SET status = $1 WHERE id = $2 AND client_id = $3 RETURNING *',
+      [action, id, clientId]
     );
     res.json({ success: true, id, action });
 
@@ -116,6 +145,7 @@ router.post('/api/approvals/:id', requireAuth, async (req, res) => {
 // Prospects table
 router.get('/api/prospects', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT
         p.id, p.first_name, p.last_name, p.email, p.phone,
@@ -123,13 +153,14 @@ router.get('/api/prospects', requireAuth, async (req, res) => {
         c.name as company_name,
         COUNT(t.id)::int as touchpoint_count
       FROM prospects p
-      LEFT JOIN companies c ON p.company_id = c.id
-      LEFT JOIN touchpoints t ON t.prospect_id = p.id
+      LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+      LEFT JOIN touchpoints t ON t.prospect_id = p.id AND t.client_id = p.client_id
       WHERE p.do_not_contact = false
+        AND p.client_id = $1
       GROUP BY p.id, c.name
       ORDER BY p.icp_score DESC NULLS LAST
       LIMIT 200
-    `);
+    `, [clientId]);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -139,12 +170,13 @@ router.get('/api/prospects', requireAuth, async (req, res) => {
 // Touchpoints for a single prospect
 router.get('/api/prospects/:id/touchpoints', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT channel, action_type, content_summary, outcome, created_at
       FROM touchpoints
-      WHERE prospect_id = $1
+      WHERE prospect_id = $1 AND client_id = $2
       ORDER BY created_at ASC
-    `, [req.params.id]);
+    `, [req.params.id, clientId]);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -154,6 +186,7 @@ router.get('/api/prospects/:id/touchpoints', requireAuth, async (req, res) => {
 // Agent stats for sparklines
 router.get('/api/agent-stats', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT
         CASE WHEN agent_name = 'email_agent' THEN 'emmett_agent' ELSE agent_name END as agent_name,
@@ -162,18 +195,19 @@ router.get('/api/agent-stats', requireAuth, async (req, res) => {
         COUNT(CASE WHEN ran_at > NOW() - INTERVAL '7 days' THEN 1 END) as week_runs,
         COUNT(CASE WHEN status = 'success' THEN 1 END) as success_count
       FROM agent_log
+      WHERE client_id = $1
       GROUP BY CASE WHEN agent_name = 'email_agent' THEN 'emmett_agent' ELSE agent_name END
-    `);
+    `, [clientId]);
 
     const daily = await pool.query(`
       SELECT
         CASE WHEN agent_name = 'email_agent' THEN 'emmett_agent' ELSE agent_name END as agent_name,
         DATE(ran_at) as date, COUNT(*) as count
       FROM agent_log
-      WHERE ran_at > NOW() - INTERVAL '7 days'
+      WHERE client_id = $1 AND ran_at > NOW() - INTERVAL '7 days'
       GROUP BY CASE WHEN agent_name = 'email_agent' THEN 'emmett_agent' ELSE agent_name END, DATE(ran_at)
       ORDER BY date ASC
-    `);
+    `, [clientId]);
 
     const stats = {};
     result.rows.forEach(r => {
@@ -201,6 +235,7 @@ router.get('/api/agent-stats', requireAuth, async (req, res) => {
 // Agent weekly stats for hover tooltips
 router.get('/api/agent-weekly-stats', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const WEEK = `created_at > NOW() - INTERVAL '7 days'`;
     const WEEK_AL = `ran_at > NOW() - INTERVAL '7 days'`;
 
@@ -208,14 +243,14 @@ router.get('/api/agent-weekly-stats', requireAuth, async (req, res) => {
       pool.query(`
         SELECT LOWER(REPLACE(agent_name, '_agent', '')) AS agent, action, COUNT(*) AS count
         FROM agent_log
-        WHERE ${WEEK_AL} AND status = 'success'
+        WHERE ${WEEK_AL} AND status = 'success' AND client_id = $1
         GROUP BY agent, action
-      `),
-      pool.query(`SELECT COUNT(*) AS count FROM touchpoints WHERE channel = 'email' AND action_type = 'outbound' AND ${WEEK}`),
-      pool.query(`SELECT COUNT(*) AS count FROM prospects WHERE source = 'scout' AND ${WEEK}`),
-      pool.query(`SELECT COUNT(*) AS count FROM pending_comments WHERE channel = 'linkedin' AND ${WEEK}`),
-      pool.query(`SELECT COUNT(*) AS count FROM pending_comments WHERE channel = 'facebook' AND ${WEEK}`),
-      pool.query(`SELECT COUNT(*) AS count FROM pending_comments WHERE channel = 'instagram' AND ${WEEK}`),
+      `, [clientId]),
+      pool.query(`SELECT COUNT(*) AS count FROM touchpoints WHERE client_id = $1 AND channel = 'email' AND action_type = 'outbound' AND ${WEEK}`, [clientId]),
+      pool.query(`SELECT COUNT(*) AS count FROM prospects WHERE client_id = $1 AND source = 'scout' AND ${WEEK}`, [clientId]),
+      pool.query(`SELECT COUNT(*) AS count FROM pending_comments WHERE client_id = $1 AND channel = 'linkedin' AND ${WEEK}`, [clientId]),
+      pool.query(`SELECT COUNT(*) AS count FROM pending_comments WHERE client_id = $1 AND channel = 'facebook' AND ${WEEK}`, [clientId]),
+      pool.query(`SELECT COUNT(*) AS count FROM pending_comments WHERE client_id = $1 AND channel = 'instagram' AND ${WEEK}`, [clientId]),
     ]);
 
     const raw = {};
@@ -252,14 +287,16 @@ router.get('/api/agent-weekly-stats', requireAuth, async (req, res) => {
 // Live activity feed
 router.get('/api/activity', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT al.agent_name, al.action, al.status, al.ran_at, al.payload,
         p.first_name, p.last_name
       FROM agent_log al
-      LEFT JOIN prospects p ON al.prospect_id = p.id
+      LEFT JOIN prospects p ON al.prospect_id = p.id AND p.client_id = al.client_id
+      WHERE al.client_id = $1
       ORDER BY al.ran_at DESC
       LIMIT 20
-    `);
+    `, [clientId]);
 
     const agentNameMap = {
       facebook: 'Faye', linkedin: 'Link', emmett: 'Emmett',
@@ -300,6 +337,7 @@ router.get('/api/activity', requireAuth, async (req, res) => {
 // Activity panel (sequences + timeline)
 router.get('/api/activity-panel', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const [seqResult, timelineResult] = await Promise.all([
       pool.query(`
         SELECT
@@ -316,9 +354,10 @@ router.get('/api/activity-panel', requireAuth, async (req, res) => {
             ELSE NULL
           END as next_due_at
         FROM prospects p
-        LEFT JOIN companies c ON p.company_id = c.id
+        LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
         INNER JOIN touchpoints t
           ON t.prospect_id = p.id
+          AND t.client_id = p.client_id
           AND t.channel = 'email'
           AND t.action_type = 'outbound'
         LEFT JOIN (
@@ -327,23 +366,25 @@ router.get('/api/activity-panel', requireAuth, async (req, res) => {
             COUNT(CASE WHEN action_type = 'email_opened'  THEN 1 END)::int AS open_count,
             COUNT(CASE WHEN action_type = 'email_clicked' THEN 1 END)::int AS click_count
           FROM touchpoints
-          WHERE channel = 'email'
+          WHERE channel = 'email' AND client_id = $1
           GROUP BY prospect_id
         ) eng ON eng.prospect_id = p.id
         WHERE p.do_not_contact = false
+          AND p.client_id = $1
         GROUP BY p.id, c.name, eng.open_count, eng.click_count
         ORDER BY MAX(t.created_at) DESC
         LIMIT 100
-      `),
+      `, [clientId]),
       pool.query(`
         SELECT
           al.id, al.agent_name, al.action, al.status, al.ran_at,
           p.first_name, p.last_name, p.notes as prospect_notes
         FROM agent_log al
-        LEFT JOIN prospects p ON al.prospect_id = p.id
+        LEFT JOIN prospects p ON al.prospect_id = p.id AND p.client_id = al.client_id
+        WHERE al.client_id = $1
         ORDER BY al.ran_at DESC
         LIMIT 50
-      `)
+      `, [clientId])
     ]);
 
     const STAGE_LABELS = ['', 'Day 0 sent · next Day 4', 'Day 4 sent · next Day 8', 'Day 8 sent · next Day 13', 'Complete'];
@@ -411,14 +452,16 @@ router.get('/api/activity-panel', requireAuth, async (req, res) => {
 router.get('/api/activity-timeline', requireAuth, async (req, res) => {
   const offset = parseInt(req.query.offset) || 0;
   try {
+    const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT al.id, al.agent_name, al.action, al.status, al.ran_at,
         p.first_name, p.last_name, p.notes as prospect_notes
       FROM agent_log al
-      LEFT JOIN prospects p ON al.prospect_id = p.id
+      LEFT JOIN prospects p ON al.prospect_id = p.id AND p.client_id = al.client_id
+      WHERE al.client_id = $2
       ORDER BY al.ran_at DESC
       LIMIT 50 OFFSET $1
-    `, [offset]);
+    `, [offset, clientId]);
 
     const AGENT_LABELS = {
       scout: { name: 'Scout', icon: '🔍' }, linkedin: { name: 'Link', icon: '💬' },
@@ -459,6 +502,7 @@ router.get('/api/activity-timeline', requireAuth, async (req, res) => {
 // Analytics
 router.get('/api/analytics', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const [vol, reply, icp, agents, funnel, topProspects] = await Promise.all([
       pool.query(`
         SELECT
@@ -468,10 +512,11 @@ router.get('/api/analytics', requireAuth, async (req, res) => {
         FROM touchpoints
         WHERE channel IN ('email','sms')
           AND action_type = 'outbound'
+          AND client_id = $1
           AND created_at >= NOW() - INTERVAL '30 days'
         GROUP BY DATE(created_at), channel
         ORDER BY date ASC
-      `),
+      `, [clientId]),
       pool.query(`
         SELECT
           DATE_TRUNC('week', created_at)::text AS week,
@@ -479,10 +524,11 @@ router.get('/api/analytics', requireAuth, async (req, res) => {
           COUNT(*) AS count
         FROM touchpoints
         WHERE channel = 'email'
+          AND client_id = $1
           AND created_at >= NOW() - INTERVAL '56 days'
         GROUP BY DATE_TRUNC('week', created_at), action_type
         ORDER BY week ASC
-      `),
+      `, [clientId]),
       pool.query(`
         SELECT
           CASE
@@ -495,25 +541,26 @@ router.get('/api/analytics', requireAuth, async (req, res) => {
           END AS bucket,
           COUNT(*) AS count
         FROM prospects
-        WHERE do_not_contact = false
+        WHERE do_not_contact = false AND client_id = $1
         GROUP BY bucket
-      `),
+      `, [clientId]),
       pool.query(`
         SELECT agent_name, COUNT(*) AS count
         FROM agent_log
-        WHERE ran_at >= NOW() - INTERVAL '30 days'
+        WHERE client_id = $1
+          AND ran_at >= NOW() - INTERVAL '30 days'
           AND agent_name IS NOT NULL
         GROUP BY agent_name
         ORDER BY count DESC
-      `),
+      `, [clientId]),
       pool.query(`
         SELECT
           COALESCE(status, 'cold') AS stage,
           COUNT(*) AS count
         FROM prospects
-        WHERE do_not_contact = false
+        WHERE do_not_contact = false AND client_id = $1
         GROUP BY stage
-      `),
+      `, [clientId]),
       pool.query(`
         SELECT
           p.id,
@@ -525,13 +572,14 @@ router.get('/api/analytics', requireAuth, async (req, res) => {
           COUNT(t.id)::int AS touchpoint_count,
           MAX(t.created_at) AS last_contacted_at
         FROM prospects p
-        LEFT JOIN companies c ON p.company_id = c.id
-        LEFT JOIN touchpoints t ON t.prospect_id = p.id
+        LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+        LEFT JOIN touchpoints t ON t.prospect_id = p.id AND t.client_id = p.client_id
         WHERE p.do_not_contact = false
+          AND p.client_id = $1
         GROUP BY p.id, c.name
         ORDER BY touchpoint_count DESC
         LIMIT 10
-      `)
+      `, [clientId])
     ]);
 
     const days = [];
@@ -623,6 +671,7 @@ router.get('/api/analytics', requireAuth, async (req, res) => {
 // Content analytics: recent posts with metrics
 router.get('/api/analytics/posts', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT
         pa.id, pa.channel, pa.content_type, pa.post_text,
@@ -632,10 +681,11 @@ router.get('/api/analytics/posts', requireAuth, async (req, res) => {
         pa.engagement_rate, pa.metrics_fetched_at,
         c.name AS company_name
       FROM post_analytics pa
-      LEFT JOIN companies c ON pa.company_id = c.id
+      LEFT JOIN companies c ON pa.company_id = c.id AND c.client_id = pa.client_id
+      WHERE pa.client_id = $1
       ORDER BY pa.published_at DESC
       LIMIT 100
-    `);
+    `, [clientId]);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -645,6 +695,7 @@ router.get('/api/analytics/posts', requireAuth, async (req, res) => {
 // Content performance summary by channel/type
 router.get('/api/analytics/summary', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT
         cps.channel, cps.content_type,
@@ -654,8 +705,9 @@ router.get('/api/analytics/summary', requireAuth, async (req, res) => {
         c.name AS company_name
       FROM content_performance_summary cps
       LEFT JOIN companies c ON cps.company_id = c.id
+      WHERE COALESCE(c.client_id, $1) = $1
       ORDER BY cps.avg_engagement_rate DESC
-    `);
+    `, [clientId]);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -666,6 +718,7 @@ router.get('/api/analytics/summary', requireAuth, async (req, res) => {
 router.get('/api/analytics/top-posts', requireAuth, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+    const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT
         pa.id, pa.channel, pa.content_type,
@@ -674,11 +727,12 @@ router.get('/api/analytics/top-posts', requireAuth, async (req, res) => {
         pa.reach, pa.engagement_rate,
         c.name AS company_name
       FROM post_analytics pa
-      LEFT JOIN companies c ON pa.company_id = c.id
+      LEFT JOIN companies c ON pa.company_id = c.id AND c.client_id = pa.client_id
       WHERE pa.engagement_rate > 0
+        AND pa.client_id = $2
       ORDER BY pa.engagement_rate DESC
       LIMIT $1
-    `, [limit]);
+    `, [limit, clientId]);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -688,6 +742,7 @@ router.get('/api/analytics/top-posts', requireAuth, async (req, res) => {
 // Email engagement stats
 router.get('/api/analytics/email', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const [totals, weekTotals, warmUpgraded] = await Promise.all([
       pool.query(`
         SELECT
@@ -696,8 +751,8 @@ router.get('/api/analytics/email', requireAuth, async (req, res) => {
           COUNT(CASE WHEN action_type = 'email_clicked'       THEN 1 END)::int AS clicked_total,
           COUNT(CASE WHEN action_type = 'email_bounced'       THEN 1 END)::int AS bounced_total,
           COUNT(CASE WHEN action_type = 'email_unsubscribed'  THEN 1 END)::int AS unsub_total
-        FROM touchpoints WHERE channel = 'email'
-      `),
+        FROM touchpoints WHERE channel = 'email' AND client_id = $1
+      `, [clientId]),
       pool.query(`
         SELECT
           COUNT(CASE WHEN action_type = 'outbound'           THEN 1 END)::int AS sent_week,
@@ -705,18 +760,19 @@ router.get('/api/analytics/email', requireAuth, async (req, res) => {
           COUNT(CASE WHEN action_type = 'email_clicked'      THEN 1 END)::int AS clicked_week,
           COUNT(CASE WHEN action_type = 'email_bounced'      THEN 1 END)::int AS bounced_week
         FROM touchpoints
-        WHERE channel = 'email' AND created_at > NOW() - INTERVAL '7 days'
-      `),
+        WHERE channel = 'email' AND client_id = $1 AND created_at > NOW() - INTERVAL '7 days'
+      `, [clientId]),
       pool.query(`
         SELECT COUNT(*)::int AS count
         FROM prospects
         WHERE status = 'warm'
+          AND client_id = $1
           AND updated_at > NOW() - INTERVAL '7 days'
           AND EXISTS (
             SELECT 1 FROM touchpoints t
-            WHERE t.prospect_id = prospects.id AND t.action_type = 'email_clicked'
+            WHERE t.prospect_id = prospects.id AND t.client_id = prospects.client_id AND t.action_type = 'email_clicked'
           )
-      `),
+      `, [clientId]),
     ]);
 
     const t = totals.rows[0];
@@ -741,13 +797,14 @@ router.get('/api/analytics/email', requireAuth, async (req, res) => {
 // Max daily brief
 router.get('/api/max-brief', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT payload, ran_at
       FROM agent_log
-      WHERE agent_name = 'max' AND action = 'daily_digest'
+      WHERE agent_name = 'max' AND action = 'daily_digest' AND client_id = $1
       ORDER BY ran_at DESC
       LIMIT 1
-    `);
+    `, [clientId]);
     if (!result.rows.length) return res.json({ insights: null, ran_at: null });
     const row = result.rows[0];
     res.json({ insights: row.payload?.insights || null, ran_at: row.ran_at });
@@ -759,12 +816,14 @@ router.get('/api/max-brief', requireAuth, async (req, res) => {
 // Agent actions (deposited by Max)
 router.get('/api/actions', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT id, created_by, action_type, title, description, payload, status, created_at, executed_at, result
       FROM agent_actions
       WHERE status IN ('pending', 'in_progress')
+        AND client_id = $1
       ORDER BY created_at DESC
-    `);
+    `, [clientId]);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -773,9 +832,10 @@ router.get('/api/actions', requireAuth, async (req, res) => {
 
 router.post('/api/actions/:id/dismiss', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     await pool.query(
-      `UPDATE agent_actions SET status = 'dismissed', executed_at = NOW() WHERE id = $1`,
-      [req.params.id]
+      `UPDATE agent_actions SET status = 'dismissed', executed_at = NOW() WHERE id = $1 AND client_id = $2`,
+      [req.params.id, clientId]
     );
     res.json({ ok: true });
   } catch (err) {
@@ -785,9 +845,10 @@ router.post('/api/actions/:id/dismiss', requireAuth, async (req, res) => {
 
 router.post('/api/actions/:id/execute', requireAuth, async (req, res) => {
   try {
+    const clientId = getRequestClientId(req);
     await pool.query(
-      `UPDATE agent_actions SET status = 'executed', executed_at = NOW(), result = $2 WHERE id = $1`,
-      [req.params.id, req.body.result || 'Marked done from dashboard']
+      `UPDATE agent_actions SET status = 'executed', executed_at = NOW(), result = $2 WHERE id = $1 AND client_id = $3`,
+      [req.params.id, req.body.result || 'Marked done from dashboard', clientId]
     );
     res.json({ ok: true });
   } catch (err) {
@@ -798,6 +859,7 @@ router.post('/api/actions/:id/execute', requireAuth, async (req, res) => {
 // Trigger agents
 router.post('/api/run/:agent', requireAuth, async (req, res) => {
   const { agent } = req.params;
+  const clientId = getRequestClientId(req);
   const localOnly = ['ivy'];
   if (localOnly.includes(agent)) {
     return res.json({ success: false, message: `${agent} requires local execution — run from your terminal` });
@@ -812,13 +874,17 @@ router.post('/api/run/:agent', requireAuth, async (req, res) => {
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   await pool.query(
-    `INSERT INTO agent_log (agent_name, action, payload, status, ran_at) VALUES ($1, $2, $3, $4, NOW())`,
-    [agent, 'dashboard_trigger', JSON.stringify({ triggered_by: 'dashboard' }), 'pending']
+    `INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+    [agent, 'dashboard_trigger', JSON.stringify({ triggered_by: 'dashboard', client_id: clientId }), 'pending', clientId]
   );
   res.json({ success: true, message: `${agent} triggered successfully` });
   try {
     delete require.cache[require.resolve(agentModules[agent])];
-    require(agentModules[agent]);
+    process.env.ACTIVE_CLIENT_ID = String(clientId);
+    const mod = require(agentModules[agent]);
+    if (agent === 'scout' && typeof mod.run === 'function') {
+      mod.run({ client_id: clientId }).catch(err => console.error(`Agent ${agent} error:`, err.message));
+    }
   } catch (err) {
     console.error(`Agent ${agent} error:`, err.message);
   }

@@ -2,12 +2,15 @@ require('dotenv').config();
 const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
 const pool = require('./db');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'vera';
 const GBP_BASE   = 'https://mybusiness.googleapis.com/v4';
 const DASHBOARD  = process.env.DASHBOARD_URL || 'https://openclaw-main-production-945e.up.railway.app';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const CLIENT_ID = getRuntimeClientId();
+let CLIENT_CONFIG = null;
 
 const STAR_NUM = { ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5 };
 
@@ -73,8 +76,9 @@ async function findCompany(locationTitle) {
     `SELECT id, name, industry, location, last_review_check
      FROM companies
      WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))
+       AND client_id = $2
      LIMIT 1`,
-    [locationTitle]
+    [locationTitle, CLIENT_ID]
   );
   return res.rows[0] || null;
 }
@@ -97,7 +101,9 @@ async function draftResponse(review, companyName, industry, location) {
   const msg = await anthropic.messages.create({
     model:      'claude-sonnet-4-6',
     max_tokens: 220,
-    system: `You are the owner of ${companyName}, a ${industry || 'local business'}${location ? ' in ' + location : ''}. Write a genuine Google review response. Sound like the business owner wrote it — not a marketing agency. 2–4 sentences max. No exclamation mark spam. No hollow openers like "Thank you for your feedback!"`,
+    system: CLIENT_ID === 2
+      ? `This is Mountain State Home Innovations — a locally owned WV contractor run by Brad and Dustin. They do all work themselves. Communication and customer satisfaction are their core values. Always thank the reviewer for the specific service they mention. Never be generic. Sign off as Brad & Dustin, MSHI.`
+      : `You are the owner of ${companyName}, a ${industry || 'local business'}${location ? ' in ' + location : ''}. Write a genuine Google review response. Sound like the business owner wrote it — not a marketing agency. 2–4 sentences max. No exclamation mark spam. No hollow openers like "Thank you for your feedback!"`,
     messages: [{
       role:    'user',
       content: `${stars}-star review from ${reviewer}:\n"${reviewText}"\n\nTone: ${toneGuide}\n\nWrite the response:`,
@@ -111,15 +117,39 @@ async function draftResponse(review, companyName, industry, location) {
 async function logRun(status, details) {
   try {
     await pool.query(
-      `INSERT INTO agent_log (agent_name, action, payload, status) VALUES ($1, $2, $3, $4)`,
-      [AGENT_NAME, 'review_check', JSON.stringify(details), status]
+      `INSERT INTO agent_log (agent_name, action, payload, status, client_id) VALUES ($1, $2, $3, $4, $5)`,
+      [AGENT_NAME, 'review_check', JSON.stringify(details), status, CLIENT_ID]
     );
   } catch (_) {}
+}
+
+async function notifyNegativeReview(title, reviewer, stars, snippet) {
+  await pool.query(`
+    INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, client_id)
+    VALUES ('vera', 'negative_review', $1, $2, $3, 'pending', $4)
+  `, [
+    `Negative review needs owner response: ${title}`,
+    `${reviewer} left a ${stars}-star review. Brad and Dustin should reply personally.`,
+    JSON.stringify({ reviewer, stars, snippet, client_id: CLIENT_ID }),
+    CLIENT_ID,
+  ]);
+
+  if (!process.env.BREVO_API_KEY) return;
+  await axios.post('https://api.brevo.com/v3/smtp/email', {
+    sender: { name: 'Vera — Pulseforge', email: 'jacob@gopulseforge.com' },
+    to: [{ email: CLIENT_CONFIG?.email || 'mshomeinnovations@gmail.com', name: 'Brad & Dustin' }],
+    subject: `MSHI review needs your response: ${stars} stars`,
+    textContent: `${reviewer} left a ${stars}-star review for ${title}.\n\n${snippet || '(no written review)'}\n\nVera did not draft a response because MSHI negative reviews are owner-handled.`
+  }, {
+    headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' }
+  }).catch(err => console.error('[Vera] Negative review notification failed:', err.response?.data || err.message));
 }
 
 // ── MAIN ───────────────────────────────────────────────────────────────
 async function main() {
   console.log('[Vera] Starting Google Business review check...');
+  CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
+  if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
 
   if (!credentialsConfigured()) {
     console.warn('[Vera] GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN not set — skipping');
@@ -194,6 +224,11 @@ async function main() {
         const snippet    = (review.comment || '').slice(0, 100);
         const postContent = `${starEmoji} ${reviewer}: ${snippet}`;
 
+        if (CLIENT_ID === 2 && stars < 4) {
+          await notifyNegativeReview(title, reviewer, stars, snippet);
+          continue;
+        }
+
         let draft;
         try {
           draft = await draftResponse(review, title, company?.industry, company?.location);
@@ -205,14 +240,15 @@ async function main() {
         try {
           await pool.query(
             `INSERT INTO pending_comments
-               (author_name, author_title, post_content, comment, post_url, channel)
-             VALUES ($1, $2, $3, $4, $5, 'google_review')`,
+               (author_name, author_title, post_content, comment, post_url, channel, client_id)
+             VALUES ($1, $2, $3, $4, $5, 'google_review', $6)`,
             [
               title,
               `${stars} star${stars !== 1 ? 's' : ''}`,
               postContent,
               draft,
               review.name || '',
+              CLIENT_ID,
             ]
           );
         } catch (err) {

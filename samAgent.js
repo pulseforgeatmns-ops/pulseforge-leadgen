@@ -1,8 +1,10 @@
 require('dotenv').config();
 const pool = require('./db');
 const db = require('./dbClient');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'sam';
+const CLIENT_ID = getRuntimeClientId();
 
 const ACCOUNT_SID    = process.env.TWILIO_ACCOUNT_SID;
 const AUTH_TOKEN     = process.env.TWILIO_AUTH_TOKEN;
@@ -39,10 +41,11 @@ async function alreadyContactedBySMS(prospectId) {
   const res = await pool.query(`
     SELECT 1 FROM touchpoints
     WHERE prospect_id = $1
+      AND client_id = $2
       AND channel = 'sms'
       AND created_at > NOW() - INTERVAL '7 days'
     LIMIT 1
-  `, [prospectId]);
+  `, [prospectId, CLIENT_ID]);
   return res.rows.length > 0;
 }
 
@@ -55,9 +58,9 @@ async function sendSMS(prospectId, messageOverride = null) {
   const res = await pool.query(
     `SELECT p.*, c.name as company_name
      FROM prospects p
-     LEFT JOIN companies c ON p.company_id = c.id
-     WHERE p.id = $1`,
-    [prospectId]
+     LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+     WHERE p.id = $1 AND p.client_id = $2`,
+    [prospectId, CLIENT_ID]
   );
   const prospect = res.rows[0];
 
@@ -98,27 +101,31 @@ async function getSequenceNoReply() {
     SELECT p.id, p.first_name, p.last_name, p.phone
     FROM prospects p
     WHERE p.phone IS NOT NULL AND p.phone != ''
+      AND p.client_id = $1
       AND p.do_not_contact = false
       AND (
         SELECT COUNT(*) FROM touchpoints t
         WHERE t.prospect_id = p.id
+          AND t.client_id = p.client_id
           AND t.channel = 'email'
           AND t.action_type = 'outbound'
       ) >= 3
       AND NOT EXISTS (
         SELECT 1 FROM touchpoints t
         WHERE t.prospect_id = p.id
+          AND t.client_id = p.client_id
           AND t.channel = 'email'
           AND t.action_type = 'inbound'
       )
       AND NOT EXISTS (
         SELECT 1 FROM touchpoints t
         WHERE t.prospect_id = p.id
+          AND t.client_id = p.client_id
           AND t.channel = 'sms'
           AND t.created_at > NOW() - INTERVAL '7 days'
       )
     LIMIT 10
-  `);
+  `, [CLIENT_ID]);
   return res.rows;
 }
 
@@ -128,16 +135,18 @@ async function getWarmProspects() {
     SELECT p.id, p.first_name, p.last_name, p.phone
     FROM prospects p
     WHERE p.status = 'warm'
+      AND p.client_id = $1
       AND p.phone IS NOT NULL AND p.phone != ''
       AND p.do_not_contact = false
       AND NOT EXISTS (
         SELECT 1 FROM touchpoints t
         WHERE t.prospect_id = p.id
+          AND t.client_id = p.client_id
           AND t.channel = 'sms'
           AND t.created_at > NOW() - INTERVAL '7 days'
       )
     LIMIT 10
-  `);
+  `, [CLIENT_ID]);
   return res.rows;
 }
 
@@ -147,24 +156,26 @@ async function getReEngagement() {
     SELECT p.id, p.first_name, p.last_name, p.phone
     FROM prospects p
     WHERE p.phone IS NOT NULL AND p.phone != ''
+      AND p.client_id = $1
       AND p.do_not_contact = false
       AND p.status = 'cold'
       AND EXISTS (
         SELECT 1 FROM touchpoints t
-        WHERE t.prospect_id = p.id AND t.channel = 'email'
+        WHERE t.prospect_id = p.id AND t.client_id = p.client_id AND t.channel = 'email'
       )
       AND (
         SELECT MAX(t.created_at) FROM touchpoints t
-        WHERE t.prospect_id = p.id
+        WHERE t.prospect_id = p.id AND t.client_id = p.client_id
       ) < NOW() - INTERVAL '14 days'
       AND NOT EXISTS (
         SELECT 1 FROM touchpoints t
         WHERE t.prospect_id = p.id
+          AND t.client_id = p.client_id
           AND t.channel = 'sms'
           AND t.created_at > NOW() - INTERVAL '7 days'
       )
     LIMIT 10
-  `);
+  `, [CLIENT_ID]);
   return res.rows;
 }
 
@@ -172,6 +183,8 @@ async function getReEngagement() {
 
 async function run() {
   console.log('\nSam agent running...\n');
+  const clientConfig = await getClientConfig(CLIENT_ID);
+  if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
 
   const twilioClient = getTwilioClient();
   if (!twilioClient) {
@@ -213,8 +226,8 @@ async function run() {
   }
 
   await pool.query(
-    `INSERT INTO agent_log (agent_name, action, payload, status, ran_at) VALUES ($1, $2, $3, $4, NOW())`,
-    [AGENT_NAME, 'batch_sms', JSON.stringify({ sent, triggers: { noReply: noReply.length, warm: warm.length, reEngage: reEngage.length } }), 'success']
+    `INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+    [AGENT_NAME, 'batch_sms', JSON.stringify({ sent, triggers: { noReply: noReply.length, warm: warm.length, reEngage: reEngage.length }, client_id: CLIENT_ID }), 'success', CLIENT_ID]
   );
 
   console.log(`\nSam complete — ${sent} SMS sent.`);

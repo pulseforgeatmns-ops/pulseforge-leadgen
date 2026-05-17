@@ -3,8 +3,10 @@ require('dotenv').config();
 
 const axios = require('axios');
 const pool  = require('./db');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'analytics';
+const CLIENT_ID = getRuntimeClientId();
 
 // ── SCHEMA ────────────────────────────────────────────────────────────────────
 
@@ -28,9 +30,11 @@ async function ensureSchema() {
       clicks             INT DEFAULT 0,
       engagement_rate    NUMERIC(6,4) DEFAULT 0,
       metrics_fetched_at TIMESTAMPTZ,
+      client_id          INTEGER REFERENCES clients(id) DEFAULT 1,
       created_at         TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id) DEFAULT 1`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_performance_summary (
       id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -76,10 +80,11 @@ async function fetchFBPageMetrics() {
     SELECT id, platform_post_id
     FROM post_analytics
     WHERE channel = 'facebook_page'
+      AND client_id = $1
       AND platform_post_id IS NOT NULL
       AND metrics_fetched_at IS NULL
     LIMIT 50
-  `);
+  `, [CLIENT_ID]);
 
   if (!rows.length) {
     console.log('[Analytics] No unanalyzed Facebook posts');
@@ -144,10 +149,11 @@ async function fetchBufferMetrics() {
     SELECT id, platform_post_id
     FROM post_analytics
     WHERE channel = 'linkedin_page'
+      AND client_id = $1
       AND platform_post_id IS NOT NULL
       AND metrics_fetched_at IS NULL
     LIMIT 50
-  `);
+  `, [CLIENT_ID]);
 
   if (!rows.length) {
     console.log('[Analytics] No unanalyzed LinkedIn posts');
@@ -228,8 +234,9 @@ async function rebuildSummary() {
       MODE() WITHIN GROUP (ORDER BY post_hour)        AS best_hour
     FROM post_analytics
     WHERE content_type IS NOT NULL
+      AND client_id = $1
     GROUP BY company_id, channel, content_type
-  `);
+  `, [CLIENT_ID]);
 
   for (const r of rows) {
     await pool.query(`
@@ -267,17 +274,18 @@ async function markUnfetchableAsAttempted() {
     UPDATE post_analytics
     SET metrics_fetched_at = NOW()
     WHERE channel IN ('google_business', 'facebook', 'linkedin', 'blog')
+      AND client_id = $1
       AND metrics_fetched_at IS NULL
-  `);
+  `, [CLIENT_ID]);
 }
 
 // ── LOGGING ───────────────────────────────────────────────────────────────────
 
 async function logRun(status, payload) {
   await pool.query(`
-    INSERT INTO agent_log (agent_name, action, payload, status, ran_at)
-    VALUES ($1, $2, $3, $4, NOW())
-  `, [AGENT_NAME, 'fetch_metrics', JSON.stringify(payload), status]);
+    INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+    VALUES ($1, $2, $3, $4, NOW(), $5)
+  `, [AGENT_NAME, 'fetch_metrics', JSON.stringify({ ...payload, client_id: CLIENT_ID }), status, CLIENT_ID]);
 }
 
 // ── MAIN ──────────────────────────────────────────────────────────────────────
@@ -285,6 +293,8 @@ async function logRun(status, payload) {
 async function run() {
   console.log('\nAnalytics agent running...\n');
   try {
+    const clientConfig = await getClientConfig(CLIENT_ID);
+    if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
     await ensureSchema();
     console.log('[Analytics] Schema ready');
 

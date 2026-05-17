@@ -4,12 +4,14 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('./dbClient');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const client = new Anthropic();
 
 puppeteer.use(StealthPlugin());
 
 const AGENT_NAME = 'faye';
+const CLIENT_ID = getRuntimeClientId();
 const SESSION_FILE = './facebook_session.json';
 
 const agentPersona = {
@@ -132,6 +134,11 @@ Return only the comment text.`
 }
 
 async function run() {
+  const clientConfig = await getClientConfig(CLIENT_ID);
+  if (CLIENT_ID === 2 && !clientConfig?.facebook_url) {
+    console.log('Faye disabled for MSHI until Facebook page exists.');
+    return;
+  }
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']

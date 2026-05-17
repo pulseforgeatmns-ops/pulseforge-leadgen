@@ -2,18 +2,22 @@ require('dotenv').config();
 const pool = require('./db');
 const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const client = new Anthropic();
 const AGENT_NAME = 'max';
+const CLIENT_ID = getRuntimeClientId();
+let CLIENT_CONFIG = null;
 
 async function getSystemSnapshot() {
   // Prospect breakdown by status
   const prospectStats = await pool.query(`
     SELECT status, COUNT(*) as count
     FROM prospects
+    WHERE client_id = $1
     GROUP BY status
     ORDER BY count DESC
-  `);
+  `, [CLIENT_ID]);
 
   // Recent touchpoints (last 7 days)
   const recentTouchpoints = await pool.query(`
@@ -24,9 +28,11 @@ async function getSystemSnapshot() {
     FROM touchpoints t
     JOIN prospects p ON t.prospect_id = p.id
     WHERE t.created_at > NOW() - INTERVAL '7 days'
+      AND t.client_id = $1
+      AND p.client_id = $1
     ORDER BY t.created_at DESC
     LIMIT 20
-  `);
+  `, [CLIENT_ID]);
 
   // Prospects with no touchpoints (never contacted)
   const untouched = await pool.query(`
@@ -37,9 +43,10 @@ async function getSystemSnapshot() {
     )
     AND p.do_not_contact = false
     AND p.email IS NOT NULL
+    AND p.client_id = $1
     ORDER BY p.icp_score DESC
     LIMIT 10
-  `);
+  `, [CLIENT_ID]);
 
   // Prospects touched but gone cold (no activity in 14+ days)
   const cold = await pool.query(`
@@ -48,39 +55,41 @@ async function getSystemSnapshot() {
       MAX(t.created_at) as last_touch,
       COUNT(t.id) as touch_count
     FROM prospects p
-    JOIN touchpoints t ON t.prospect_id = p.id
+    JOIN touchpoints t ON t.prospect_id = p.id AND t.client_id = p.client_id
     WHERE p.do_not_contact = false
+      AND p.client_id = $1
     GROUP BY p.id, p.first_name, p.last_name, p.email, p.status
     HAVING MAX(t.created_at) < NOW() - INTERVAL '14 days'
     ORDER BY last_touch ASC
     LIMIT 10
-  `);
+  `, [CLIENT_ID]);
 
   // Pending comments awaiting approval
   const pending = await pool.query(`
     SELECT channel, COUNT(*) as count
     FROM pending_comments
-    WHERE status = 'pending'
+    WHERE status = 'pending' AND client_id = $1
     GROUP BY channel
-  `);
+  `, [CLIENT_ID]);
 
   // Channel performance
   const channelStats = await pool.query(`
     SELECT channel, COUNT(*) as total
     FROM touchpoints
+    WHERE client_id = $1
     GROUP BY channel
     ORDER BY total DESC
-  `);
+  `, [CLIENT_ID]);
 
   // Recent posts published (last 2 days) with engagement data
   const recentPosts = await pool.query(`
     SELECT channel, content_type, engagement_rate, likes, comments, shares, reach,
            metrics_fetched_at
     FROM post_analytics
-    WHERE published_at > NOW() - INTERVAL '2 days'
+    WHERE client_id = $1 AND published_at > NOW() - INTERVAL '2 days'
     ORDER BY published_at DESC
     LIMIT 10
-  `).catch(() => ({ rows: [] }));
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
   // Best performing content type per channel (all time)
   const bestContentTypes = await pool.query(`
@@ -94,30 +103,34 @@ async function getSystemSnapshot() {
   const postFreq = await pool.query(`
     SELECT channel, COUNT(*) AS posts_this_week
     FROM post_analytics
-    WHERE published_at > NOW() - INTERVAL '7 days'
+    WHERE client_id = $1 AND published_at > NOW() - INTERVAL '7 days'
     GROUP BY channel
-  `).catch(() => ({ rows: [] }));
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
   // Prospects clicked a link today — high priority signals
   const clickedToday = await pool.query(`
     SELECT DISTINCT p.id, p.first_name, p.last_name, c.name as company_name
     FROM touchpoints t
     JOIN prospects p ON t.prospect_id = p.id
-    LEFT JOIN companies c ON p.company_id = c.id
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
     WHERE t.action_type = 'email_clicked'
+      AND t.client_id = $1
+      AND p.client_id = $1
       AND t.created_at > NOW() - INTERVAL '1 day'
-  `).catch(() => ({ rows: [] }));
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
   // Warm upgrades today
   const warmToday = await pool.query(`
     SELECT COUNT(*)::int AS count FROM prospects
     WHERE status = 'warm'
+      AND client_id = $1
       AND updated_at > NOW() - INTERVAL '1 day'
       AND EXISTS (
         SELECT 1 FROM touchpoints t WHERE t.prospect_id = prospects.id
+          AND t.client_id = prospects.client_id
           AND t.action_type = 'email_clicked'
       )
-  `).catch(() => ({ rows: [{ count: 0 }] }));
+  `, [CLIENT_ID]).catch(() => ({ rows: [{ count: 0 }] }));
 
   // Email open rate this week
   const emailStats = await pool.query(`
@@ -126,8 +139,8 @@ async function getSystemSnapshot() {
       COUNT(CASE WHEN action_type = 'email_opened'  THEN 1 END)::int AS opened,
       COUNT(CASE WHEN action_type = 'email_clicked' THEN 1 END)::int AS clicked
     FROM touchpoints
-    WHERE channel = 'email' AND created_at > NOW() - INTERVAL '7 days'
-  `).catch(() => ({ rows: [{ sent: 0, opened: 0, clicked: 0 }] }));
+    WHERE channel = 'email' AND client_id = $1 AND created_at > NOW() - INTERVAL '7 days'
+  `, [CLIENT_ID]).catch(() => ({ rows: [{ sent: 0, opened: 0, clicked: 0 }] }));
 
   const contentQuality = await pool.query(`
     SELECT
@@ -138,8 +151,9 @@ async function getSystemSnapshot() {
     FROM agent_log
     WHERE agent_name = 'paige'
       AND action = 'content_scored'
+      AND client_id = $1
       AND ran_at >= NOW() - INTERVAL '7 days'
-  `).catch(() => ({ rows: [{ avg_score: null, regenerated_count: 0, total_scored: 0, most_common_weakness: null }] }));
+  `, [CLIENT_ID]).catch(() => ({ rows: [{ avg_score: null, regenerated_count: 0, total_scored: 0, most_common_weakness: null }] }));
 
   return {
     prospectStats: prospectStats.rows,
@@ -155,10 +169,35 @@ async function getSystemSnapshot() {
     warmToday:     warmToday.rows[0]?.count || 0,
     emailStats:    emailStats.rows[0],
     contentQuality: contentQuality.rows[0],
+    client: CLIENT_CONFIG,
   };
 }
 
 async function generateInsights(snapshot) {
+  if (CLIENT_ID === 2) {
+    const newLeads = snapshot.prospectStats.reduce((sum, r) => sum + parseInt(r.count || 0), 0);
+    const cities = [...new Set(snapshot.untouched
+      .map(p => (p.notes || '').match(/\b(Charleston|Dunbar|St Albans|Scott Depot|Teays Valley|Hurricane|Huntington|Barboursville)\b/i)?.[0])
+      .filter(Boolean))].join(', ') || 'your service area';
+    const outbound = snapshot.emailStats?.sent || 0;
+    const replies = snapshot.recentTouchpoints.filter(t => ['reply', 'inbound', 'email_reply'].includes(t.action_type)).length;
+    const pending = snapshot.pending.reduce((sum, p) => sum + parseInt(p.count || 0), 0);
+    const actionItems = [];
+    if (pending) actionItems.push(`${pending} post${pending === 1 ? '' : 's'} pending your approval`);
+    if (snapshot.clickedToday.length) actionItems.push(`${snapshot.clickedToday.length} warm lead${snapshot.clickedToday.length === 1 ? '' : 's'} clicked an email`);
+    if (!actionItems.length) actionItems.push('No urgent items right now');
+
+    return `Good morning Brad & Dustin — here's your MSHI update for ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}
+
+LEADS: ${newLeads} total leads in the system; newest focus is ${cities}
+OUTREACH: ${outbound} emails sent in the last 7 days, ${replies} replies detected
+REVIEWS: No new review activity flagged in this snapshot
+CONTENT: ${pending} posts pending your approval
+ACTION NEEDED: ${actionItems.join('; ')}
+
+— Pulseforge`;
+  }
+
   const dataString = JSON.stringify(snapshot, null, 2);
 
   const message = await client.messages.create({
@@ -166,7 +205,7 @@ async function generateInsights(snapshot) {
     max_tokens: 1000,
     messages: [{
       role: 'user',
-      content: `Today's date is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. You are Max, the manager agent for Pulseforge — an AI marketing system for local small businesses. 
+      content: `Today's date is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. You are Max, the manager agent for Pulseforge — an AI marketing system for local small businesses.
 
 Here is today's second brain snapshot:
 
@@ -204,9 +243,13 @@ Avg score: ${contentQuality.avg_score ?? 'n/a'}/30
 Posts regenerated: ${contentQuality.regenerated_count || 0}/${contentQuality.total_scored || 0}
 Most common weakness: ${contentQuality.most_common_weakness || 'none'}`;
 
-  const subject = `Pulseforge Daily Digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
+  const toEmail = CLIENT_CONFIG?.max_email || 'jacob@gopulseforge.com';
+  const toName = CLIENT_ID === 2 ? 'Brad & Dustin' : 'Jake Maynard';
+  const subject = `${CLIENT_ID === 2 ? 'MSHI' : 'Pulseforge'} Daily Digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
 
-  const body = `PULSEFORGE DAILY DIGEST
+  const body = CLIENT_ID === 2 ? `${digestText}
+
+Pulseforge · gopulseforge.com` : `PULSEFORGE DAILY DIGEST
 ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 ${'─'.repeat(50)}
 
@@ -230,7 +273,7 @@ To adjust digest frequency reply to this email.`;
   try {
     const response = await axios.post('https://api.brevo.com/v3/smtp/email', {
       sender: { name: 'Max — Pulseforge', email: 'jacob@gopulseforge.com' },
-      to: [{ email: 'jacob@gopulseforge.com', name: 'Jake Maynard' }],
+      to: [{ email: toEmail, name: toName }],
       subject,
       textContent: body
     }, {
@@ -250,9 +293,9 @@ To adjust digest frequency reply to this email.`;
 
 async function logAgentRun(insights) {
   await pool.query(`
-    INSERT INTO agent_log (agent_name, action, payload, status, ran_at)
-    VALUES ($1, $2, $3, $4, NOW())
-  `, [AGENT_NAME, 'daily_digest', JSON.stringify({ insights: insights.slice(0, 2000) }), 'success']);
+    INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+    VALUES ($1, $2, $3, $4, NOW(), $5)
+  `, [AGENT_NAME, 'daily_digest', JSON.stringify({ insights: insights.slice(0, 2000), client_id: CLIENT_ID }), 'success', CLIENT_ID]);
 }
 
 async function createActions(snapshot) {
@@ -274,10 +317,11 @@ async function createActions(snapshot) {
       SELECT agent_name, MAX(ran_at) as last_run
       FROM agent_log
       WHERE agent_name NOT IN ('riley')
+        AND client_id = $1
       GROUP BY agent_name
       HAVING MAX(ran_at) < NOW() - INTERVAL '48 hours'
       ORDER BY last_run ASC
-    `);
+    `, [CLIENT_ID]);
     for (const a of idleAgents.rows) {
       actions.push({
         action_type: 'agent_idle',
@@ -325,22 +369,22 @@ async function createActions(snapshot) {
   for (const action of actions) {
     try {
       await pool.query(`
-        INSERT INTO agent_actions (created_by, action_type, title, description, payload, status)
-        VALUES ('max', $1, $2, $3, $4, 'pending')
+        INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, client_id)
+        VALUES ('max', $1, $2, $3, $4, 'pending', $5)
         ON CONFLICT ON CONSTRAINT agent_actions_action_type_payload_key DO NOTHING
-      `, [action.action_type, action.title, action.description, JSON.stringify(action.payload)]);
+      `, [action.action_type, action.title, action.description, JSON.stringify(action.payload), CLIENT_ID]);
     } catch (_) {
       // Fallback if constraint doesn't exist — just insert
       try {
         await pool.query(`
-          INSERT INTO agent_actions (created_by, action_type, title, description, payload, status)
-          SELECT 'max', $1, $2, $3, $4, 'pending'
+          INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, client_id)
+          SELECT 'max', $1, $2, $3, $4, 'pending', $5
           WHERE NOT EXISTS (
             SELECT 1 FROM agent_actions
-            WHERE action_type = $1 AND status = 'pending'
+            WHERE action_type = $1 AND status = 'pending' AND client_id = $5
               AND created_at > NOW() - INTERVAL '24 hours'
           )
-        `, [action.action_type, action.title, action.description, JSON.stringify(action.payload)]);
+        `, [action.action_type, action.title, action.description, JSON.stringify(action.payload), CLIENT_ID]);
       } catch (e2) {
         console.error('[Max] createActions insert error:', e2.message);
       }
@@ -353,6 +397,8 @@ async function run() {
   console.log('\nMax agent running...\n');
 
   try {
+    CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
+    if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
     console.log('Reading second brain...');
     const snapshot = await getSystemSnapshot();
 

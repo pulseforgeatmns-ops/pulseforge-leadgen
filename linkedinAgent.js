@@ -4,11 +4,13 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('./dbClient');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 puppeteer.use(StealthPlugin());
 
 const AGENT_NAME = 'link';
 const SESSION_FILE = './linkedin_session.json';
+const CLIENT_ID = getRuntimeClientId();
 
 const client = new Anthropic();
 
@@ -145,6 +147,12 @@ Return only the comment text.`
 }
 
 async function run() {
+  const clientConfig = await getClientConfig(CLIENT_ID);
+  if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
+  if (CLIENT_ID !== 1) {
+    console.log('Link engagement is enabled only for Pulseforge client_id=1.');
+    return;
+  }
   const browser = await puppeteer.launch({
     headless: false,
     args: ['--no-sandbox', '--disable-setuid-sandbox']

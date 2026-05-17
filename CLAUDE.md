@@ -26,6 +26,7 @@ An AI-powered lead generation and outreach CRM for Pulseforge. It scrapes leads,
 | `utils/publishPipeline.js` | Publishes approved content to Google Business Profile, Facebook Page, LinkedIn Page (via Buffer GraphQL), and handles comment publishing for Faye/Link. |
 | `utils/blogPublisher.js` | GitHub-based blog post publisher. |
 | `utils/demoData.js` | Generates fake live-feed data for the unauthenticated `/demo` route. |
+| `utils/clientContext.js` | `getClientConfig(clientId)` loads full client config from `clients`; also owns idempotent client architecture migration/backfill helpers. Called by agents/routes to scope behavior and queries. |
 
 ---
 
@@ -55,6 +56,17 @@ Each agent is a standalone JS module that reads from the DB and writes results b
 
 ---
 
+## Clients
+
+| Client ID | Client | Contact | Location | Notes |
+|---|---|---|---|---|
+| 1 | Pulseforge | jacob@gopulseforge.com | Manchester NH | Existing NH pipeline. All pre-migration data backfilled to `client_id=1`. |
+| 2 | MSHI | mshomeinnovations@gmail.com | Charleston WV | Mountain State Home Innovations. Owners: Brad Hudson & Dustin Allison. License: WV065578. Avg job: $10k-$25k. Sequence: `home_renovation`. Sender: Brad & Dustin. Max briefing: 8AM EST → mshomeinnovations@gmail.com. Pending: website, Facebook page, Riley forwarding. |
+
+MSHI Scout cron targets: `POST /cron/scout?client_id=2&industry=home_renovation&location=Charleston%20WV`, `decks/Charleston WV`, `siding/Charleston WV`, `home_renovation/Huntington WV`, `home_renovation/Hurricane WV`. MSHI Max cron: `POST /cron/max?client_id=2&secret={CRON_SECRET}` at 8:00 AM EST.
+
+---
+
 ## Key Route Groups
 
 Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.js`, and `routes/approvals.js`. Only auth, session, and a handful of core routes remain in `server.js`.
@@ -79,15 +91,16 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 
 | Table | What it holds |
 |---|---|
-| `companies` | Scraped companies: name, industry, size, location, website, icp_score, tech_stack |
-| `prospects` | Individual contacts: name, email, phone, job_title, linkedin_url, icp_score, status (cold/warm/hot), do_not_contact, last_contacted_at, vertical (TEXT — populated by Scout at insert time based on CONFIG.industry), setter_status (enum: new \| contacted \| follow_up \| booked \| dead), setter_visible (boolean — true = qualifies for setter queue, set by setterHandoffAgent), notes (text — setter scratchpad, auto-saved on blur), callback_at (timestamptz — scheduled follow-up, shown as "Due Today" queue section), is_hot (boolean — hot lead flag, sorts to top of stage) |
-| `activity_log` | Setter contact log: id, lead_id (FK → prospects), action_type (call \| email \| text), notes, created_at, setter_id |
+| `clients` | Master client registry. All agents and data tables reference `client_id`. `client_id=1` = Pulseforge (NH). `client_id=2` = MSHI (WV). Stores all per-client config: brand voice, sequences, service area, agent settings. |
+| `companies` | Scraped companies: name, industry, size, location, website, icp_score, tech_stack, `client_id` |
+| `prospects` | Individual contacts: name, email, phone, job_title, linkedin_url, icp_score, status (cold/warm/hot), do_not_contact, last_contacted_at, vertical (TEXT — populated by Scout at insert time based on CONFIG.industry), service_area_match, setter_status (enum: new \| contacted \| follow_up \| booked \| dead), setter_visible (boolean — true = qualifies for setter queue, set by setterHandoffAgent), notes (text — setter scratchpad, auto-saved on blur), callback_at (timestamptz — scheduled follow-up, shown as "Due Today" queue section), is_hot (boolean — hot lead flag, sorts to top of stage), `client_id` |
+| `activity_log` | Setter contact log: id, lead_id (FK → prospects), action_type (call \| email \| text), notes, created_at, setter_id, `client_id` |
 | `users` | Auth accounts: id, name, email, password_hash, role (admin \| manager \| setter), active, created_at, last_login_at |
-| `touchpoints` | Every agent action: channel, action_type, content_summary, outcome, sentiment, external_ref |
-| `agent_log` | Audit trail for every agent run: agent_name, action, prospect_id, payload, status, error_msg, duration_ms |
-| `agent_actions` | Actionable items deposited by agents for dashboard review: id, created_by, action_type, title, description, payload, status, executed_at, result, created_at — used by Max and Riley |
-| `pending_comments` | Content queued for human approval before publish: post_content, comment, post_url, channel, status |
-| `post_analytics` | Published post performance: platform, post_id, impressions, clicks, etc. |
+| `touchpoints` | Every agent action: channel, action_type, content_summary, outcome, sentiment, external_ref, `client_id` |
+| `agent_log` | Audit trail for every agent run: agent_name, action, prospect_id, payload, status, error_msg, duration_ms, `client_id` |
+| `agent_actions` | Actionable items deposited by agents for dashboard review: id, created_by, action_type, title, description, payload, status, executed_at, result, created_at, `client_id` — used by Max and Riley |
+| `pending_comments` | Content queued for human approval before publish: post_content, comment, post_url, channel, status, `client_id` |
+| `post_analytics` | Published post performance: platform, post_id, impressions, clicks, etc., `client_id` |
 | `prospect_summary` | View that joins prospects + companies for agent reads |
 | `session` | connect-pg-simple session store |
 
@@ -167,3 +180,6 @@ Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. The
 - **Phone enrichment on setter dashboard uses Prospeo API (PROSPEO_API_KEY).** Matches the same request pattern as leadgen.js. Logs to agent_log with agent_name = 'setter'.
 - **Setter dashboard call logging uses the existing activity_log table (action_type='call').** attempt_count is computed at query time — not stored. Daily goal tracker scopes to setter_id + today's date so it resets automatically at midnight without a cron job.
 - **Paige content scoring (added May 2026)** — after generation, a second Claude API call scores each draft on specificity, originality, and hook_strength (max 30). Drafts scoring below 21 are regenerated once. Max reads these scores from agent_log WHERE agent_name='paige' AND action='content_scored' for weekly quality trend reporting.
+- **Multi-client architecture (added May 2026)** — all primary data tables carry `client_id` FK to `clients`. Agents accept `client_id` via `POST /api/run/:agent?client_id=1` or `/cron/:agent?client_id=2` and scope DB reads/writes accordingly. Dashboard has a client selector in the header and stores the active client in `req.session.active_client_id`. Existing data backfilled to `client_id=1` (Pulseforge). MSHI is `client_id=2`. To add a new client: INSERT into `clients`, add client-specific cron jobs with `client_id`, and add any needed email sequence to `emmettAgent.js` `SEQUENCES`.
+- **MSHI notes** — no website yet (`clients.website = 'PENDING_BUILD'`). No Facebook page yet; Faye and Paige social posting are disabled for MSHI until Brad/Dustin create the Facebook Business Page, add jacob@gopulseforge.com as editor, and `clients.facebook_url` is updated. Riley does not monitor the MSHI inbox; reply triage is manual until forwarding to jacob@gopulseforge.com or a second Gmail OAuth is configured. Max briefing sends to mshomeinnovations@gmail.com at 8:00 AM EST daily.
+- **MSHI website to-do** — separate build task. Follow the Whittaker pattern: GitHub Pages deploy, services for siding/decks/windows/interior renovation/emergency repair, lead form to mshomeinnovations@gmail.com, prominent GBP link, visible license WV065578, before/after gallery, and service area list/map for Kanawha, Putnam, and Cabell Counties.

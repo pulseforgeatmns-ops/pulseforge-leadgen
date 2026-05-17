@@ -1,11 +1,14 @@
 require('dotenv').config();
 const axios = require('axios');
 const db = require('./dbClient');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'emmett';
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const FROM_EMAIL = 'jacob@gopulseforge.com';
-const FROM_NAME = 'Jacob Maynard';
+let FROM_NAME = 'Jacob Maynard';
+const CLIENT_ID = getRuntimeClientId();
+let CLIENT_CONFIG = null;
 
 // Email sequence definitions
 const DEMO_URL = 'https://pulseforge-leadgen-production.up.railway.app/demo';
@@ -13,6 +16,67 @@ const CALENDLY_URL = 'https://calendly.com/jacob-gopulseforge/20min';
 
 // A/B TEST ACTIVE: restaurant vs restaurant_b — remove restaurant_b when test concludes
 const SEQUENCES = {
+  home_renovation: [
+    {
+      day: 0,
+      subject: "Quick question about {{business_name}}",
+      body: `Hi {{first_name}},
+
+We handle exterior and interior renovations for property managers, HOAs, landlords, and banks across the Charleston area.
+
+The thing our clients usually notice first is communication. We show up, keep you updated at every step, and Brad or Dustin are the ones doing the work instead of handing it off to a crew you have never met.
+
+We offer free estimates and are licensed in WV under WV065578.
+
+Would it be worth a quick conversation?
+
+Brad & Dustin
+Mountain State Home Innovations`
+    },
+    {
+      day: 4,
+      subject: "Re: Quick question about {{business_name}}",
+      body: `Hi {{first_name}},
+
+Most contractors go quiet after the estimate. We do not.
+
+Every client gets direct access to Brad or Dustin throughout the project, which matters when you are managing properties, board expectations, repairs, weather delays, or emergency damage.
+
+Happy to do a free walkthrough of any properties you manage in Kanawha, Putnam, or Cabell County. Just reply here.
+
+Brad & Dustin`
+    },
+    {
+      day: 8,
+      subject: "What we've done for other property teams",
+      body: `Hi {{first_name}},
+
+Before Mountain State Home Innovations, we subcontracted for larger WV firms including Tri-State Exterior Solutions, St Albans Windows, and Secure Construction. That gave us a lot of experience doing quality work at scale while still caring about the details.
+
+Decks and siding are two of our highest priority services right now, along with windows, interior renovations, and repair work when something needs attention quickly.
+
+You can see our Google profile here:
+https://share.google/KeVYcU4QxVwfur0cN
+
+If you want us to take a look at a property, just reply and we can set up a free estimate.
+
+Brad & Dustin`
+    },
+    {
+      day: 13,
+      subject: "Closing the loop",
+      body: `Hi {{first_name}},
+
+Last note from us. We know you are busy, so we will keep it simple.
+
+If timing ever works out, we would be glad to give you a free estimate with no obligation.
+
+Our number is 304-483-3655. Brad or Dustin will pick up.
+
+Brad & Dustin
+Mountain State Home Innovations`
+    }
+  ],
   cleaning: [
     {
       day: 0,
@@ -691,14 +755,15 @@ async function getProspectsForEmail() {
   const res = await pool.query(`
     SELECT p.*, c.name as company
     FROM prospects p
-    LEFT JOIN companies c ON p.company_id = c.id
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
     WHERE (p.status = 'cold' OR (
       p.status = 'warm'
       AND EXISTS (
         SELECT 1 FROM touchpoints t2
-        WHERE t2.prospect_id = p.id AND t2.channel = 'email'
+        WHERE t2.prospect_id = p.id AND t2.client_id = p.client_id AND t2.channel = 'email'
       )
     ))
+    AND p.client_id = $1
     AND p.email IS NOT NULL
     AND p.email != ''
     AND p.email NOT LIKE '%@domain.com'
@@ -706,16 +771,27 @@ async function getProspectsForEmail() {
     AND p.do_not_contact IS NOT TRUE
     AND (
       SELECT COUNT(*) FROM touchpoints t
-      WHERE t.prospect_id = p.id AND t.channel = 'email'
+      WHERE t.prospect_id = p.id AND t.client_id = p.client_id AND t.channel = 'email'
     ) < 4
     LIMIT 100
-  `);
+  `, [CLIENT_ID]);
 
   return res.rows;
 }
 
 function getSequenceForProspect(prospect) {
   const vertical = (prospect.vertical || prospect.industry || '').toLowerCase();
+  if (
+    vertical === 'home_renovation' ||
+    vertical === 'decks' ||
+    vertical === 'siding' ||
+    vertical === 'exterior_remodeling' ||
+    vertical === 'interior_renovation' ||
+    vertical === 'emergency_repair' ||
+    vertical === 'windows'
+  ) {
+    return 'home_renovation';
+  }
   if (vertical.includes('salon') || vertical.includes('hair') || vertical.includes('spa') || vertical.includes('barber')) {
     return 'salon';
   }
@@ -750,10 +826,11 @@ async function getNextSequenceStep(prospect) {
   const res = await pool.query(`
     SELECT * FROM touchpoints
     WHERE prospect_id = $1
+    AND client_id = $2
     AND channel = 'email'
     AND action_type IN ('outbound', 'email_warm')
     ORDER BY created_at ASC
-  `, [prospect.id]);
+  `, [prospect.id, CLIENT_ID]);
 
   const emailsSent = res.rows.length;
   const sequence = SEQUENCES[getSequenceForProspect(prospect)];
@@ -786,9 +863,9 @@ async function hasClickedEmail(prospectId) {
   const pool = require('./db');
   const res = await pool.query(`
     SELECT 1 FROM touchpoints
-    WHERE prospect_id = $1 AND channel = 'email' AND action_type = 'email_clicked'
+    WHERE prospect_id = $1 AND client_id = $2 AND channel = 'email' AND action_type = 'email_clicked'
     LIMIT 1
-  `, [prospectId]);
+  `, [prospectId, CLIENT_ID]);
   return res.rows.length > 0;
 }
 
@@ -796,9 +873,9 @@ async function hasSentWarmEmail(prospectId) {
   const pool = require('./db');
   const res = await pool.query(`
     SELECT 1 FROM touchpoints
-    WHERE prospect_id = $1 AND channel = 'email' AND action_type = 'email_warm'
+    WHERE prospect_id = $1 AND client_id = $2 AND channel = 'email' AND action_type = 'email_warm'
     LIMIT 1
-  `, [prospectId]);
+  `, [prospectId, CLIENT_ID]);
   return res.rows.length > 0;
 }
 
@@ -810,6 +887,9 @@ function humanDelay() {
 
 async function run() {
   console.log('\nEmmett agent running...\n');
+  CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
+  if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
+  FROM_NAME = CLIENT_CONFIG.sender_name || FROM_NAME;
 
   const prospects = await getProspectsForEmail();
   console.log(`Found ${prospects.length} prospects to contact\n`);
@@ -840,7 +920,7 @@ async function run() {
     // Per-prospect DNC check (safety net in case status changed since query)
     const pool2 = require('./db');
     const dncCheck = await pool2.query(
-      'SELECT do_not_contact FROM prospects WHERE id = $1', [prospect.id]
+      'SELECT do_not_contact FROM prospects WHERE id = $1 AND client_id = $2', [prospect.id, CLIENT_ID]
     );
     if (dncCheck.rows[0]?.do_not_contact) {
       console.log(`Skipping ${prospect.email} — do_not_contact`);

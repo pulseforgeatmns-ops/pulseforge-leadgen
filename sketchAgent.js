@@ -3,9 +3,11 @@ const Anthropic = require('@anthropic-ai/sdk');
 const fs = require('fs');
 const path = require('path');
 const pool = require('./db');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const client = new Anthropic();
 const AGENT_NAME = 'sketch';
+const CLIENT_ID = getRuntimeClientId();
 
 const businessName = process.argv[2];
 const location = process.argv[3] || 'Manchester, NH';
@@ -113,6 +115,12 @@ async function logAgentRun(businessName, previewUrl, status) {
 
 async function run() {
   try {
+    const clientConfig = await getClientConfig(CLIENT_ID);
+    if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
+    if (CLIENT_ID !== 1) {
+      console.log('Sketch mockups are enabled only for Pulseforge client_id=1.');
+      return;
+    }
     // Generate the mockup
     const html = await generateMockup(businessName, location);
 

@@ -1,6 +1,7 @@
 require('dotenv').config();
 const pool = require('./db');
 const Anthropic = require('@anthropic-ai/sdk');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const client = new Anthropic();
 const AGENT_NAME = 'paige';
@@ -10,6 +11,8 @@ const BLOG_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'community', 'se
 const LINKEDIN_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'results', 'community'];
 const CHANNELS = ['facebook_page', 'google_business', 'blog', 'linkedin_page'];
 const MIN_QUALITY_SCORE = 21;
+const CLIENT_ID = getRuntimeClientId();
+let CLIENT_CONFIG = null;
 
 // Vertical-specific context fed into the prompt so Claude sounds right for each business type
 const VERTICAL_PROMPTS = {
@@ -79,9 +82,10 @@ async function getRecentThemes(channel) {
     SELECT post_content, comment, created_at
     FROM pending_comments
     WHERE channel = $1
+      AND client_id = $2
     ORDER BY created_at DESC
     LIMIT 30
-  `, [channel]);
+  `, [channel, CLIENT_ID]);
   return extractRecentThemes(res.rows);
 }
 
@@ -105,9 +109,10 @@ async function getActiveClients() {
     SELECT id, name, industry, location, website, notes
     FROM companies
     WHERE name IS NOT NULL AND name != ''
+      AND client_id = $1
     ORDER BY created_at DESC
     LIMIT 20
-  `);
+  `, [CLIENT_ID]);
   return res.rows;
 }
 
@@ -160,10 +165,11 @@ async function pickContentType(companyName, channel = null, companyId = null) {
     FROM pending_comments
     WHERE author_name = $1
       ${channelClause}
+      AND client_id = $${channel ? 3 : 2}
       AND created_at > NOW() - INTERVAL '60 days'
     ORDER BY created_at DESC
     LIMIT 20
-  `, params);
+  `, [...params, CLIENT_ID]);
 
   const recentTypes = res.rows
     .map(r => r.post_content?.split('·').pop()?.trim().toLowerCase())
@@ -363,9 +369,9 @@ Return only the post text.`;
 async function getLastContentType(companyName, channel) {
   const res = await pool.query(`
     SELECT post_content FROM pending_comments
-    WHERE author_name = $1 AND channel = $2
+    WHERE author_name = $1 AND channel = $2 AND client_id = $3
     ORDER BY created_at DESC LIMIT 1
-  `, [companyName, channel]);
+  `, [companyName, channel, CLIENT_ID]);
   if (!res.rows.length) return null;
   const parts = res.rows[0].post_content?.split('·');
   return parts?.length > 1 ? parts[1].trim().toLowerCase() : null;
@@ -435,7 +441,17 @@ async function generatePost(company, contentType, channel) {
   const location = company.location || 'Manchester, NH';
   const lastContentType = await getLastContentType(company.name, channel);
   const recentThemes = await getRecentThemes(channel);
-  const systemPrompt = buildContentRules(recentThemes);
+  const clientContext = CLIENT_ID === 2 ? `
+
+MSHI CLIENT CONTEXT:
+- Client: Mountain State Home Innovations, locally owned WV contractor run by Brad and Dustin
+- Tone: energetic, professional, personable, not corporate
+- Themes: ${CLIENT_CONFIG?.paige_themes || 'seasonal exterior tips, project spotlights, before/after features, technical tips, emergency repair awareness'}
+- Lead with specific tips, outcomes, project scenarios, communication, reliability, and owner-done work
+- Reference WV locations naturally only when relevant
+- Never attack competitors or mention negative customer experiences
+- License WV065578 may be used in trust-building posts` : '';
+  const systemPrompt = `${buildContentRules(recentThemes)}${clientContext}`;
 
   if (lastContentType) {
     console.log(`  [variety] Last ${channel} post type: ${lastContentType} → generating: ${contentType}`);
@@ -495,13 +511,14 @@ async function logQualityScore(channel, quality, regenerated, post) {
     post_preview: String(post || '').slice(0, 80),
   };
   await pool.query(`
-    INSERT INTO agent_log (agent_name, action, payload, status, ran_at)
-    VALUES ($1, $2, $3, $4, NOW())
+    INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+    VALUES ($1, $2, $3, $4, NOW(), $5)
   `, [
     AGENT_NAME,
     'content_scored',
     JSON.stringify(payload),
     quality.total >= MIN_QUALITY_SCORE ? 'good' : 'low_score_used_best',
+    CLIENT_ID,
   ]);
 }
 
@@ -525,8 +542,9 @@ async function saveToPendingApprovals(company, content, contentType, channel) {
       AND post_content = $2
       AND author_name = $3
       AND status = 'pending'
+      AND client_id = $4
     LIMIT 1
-  `, [channel, label, company.name]);
+  `, [channel, label, company.name, CLIENT_ID]);
 
   if (existing.rows.length > 0) {
     console.log(`  ↷ Skipping duplicate: ${channel} · ${contentType} for ${company.name}`);
@@ -535,15 +553,16 @@ async function saveToPendingApprovals(company, content, contentType, channel) {
 
   const res = await pool.query(`
     INSERT INTO pending_comments
-      (author_name, author_title, post_content, comment, post_url, channel, status)
-    VALUES ($1, $2, $3, $4, NULL, $5, 'pending')
+      (author_name, author_title, post_content, comment, post_url, channel, status, client_id)
+    VALUES ($1, $2, $3, $4, NULL, $5, 'pending', $6)
     RETURNING id
   `, [
     company.name,
     company.industry || 'Local Business',
     label,
     storedContent,
-    channel
+    channel,
+    CLIENT_ID
   ]);
 
   return res.rows[0].id;
@@ -551,13 +570,20 @@ async function saveToPendingApprovals(company, content, contentType, channel) {
 
 async function logRun(status, payload) {
   await pool.query(`
-    INSERT INTO agent_log (agent_name, action, payload, status, ran_at)
-    VALUES ($1, $2, $3, $4, NOW())
-  `, [AGENT_NAME, 'generate_content', JSON.stringify(payload), status]);
+    INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+    VALUES ($1, $2, $3, $4, NOW(), $5)
+  `, [AGENT_NAME, 'generate_content', JSON.stringify(payload), status, CLIENT_ID]);
 }
 
 async function run() {
   console.log('\nPaige agent running...\n');
+  CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
+  if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
+  if (CLIENT_ID === 2 && !CLIENT_CONFIG.facebook_url) {
+    console.log('MSHI Paige disabled until Facebook page is created and connected.');
+    await logRun('success', { client_id: CLIENT_ID, skipped: 'facebook_page_missing' });
+    return;
+  }
   console.log('-- CLEANUP QUERY (run manually in psql to remove existing duplicates) --');
   console.log(`DELETE FROM pending_comments
 WHERE id NOT IN (
