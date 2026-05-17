@@ -255,10 +255,10 @@ async function publishToLinkedInPage(item) {
     text: ${JSON.stringify(main)},
     channelId: ${JSON.stringify(channelId)},
     schedulingType: automatic,
-    mode: addToQueue
+    mode: shareNow
   }) {
     ... on PostActionSuccess {
-      post { id text dueAt }
+      post { id text dueAt sentAt sharedNow }
     }
     ... on MutationError {
       message
@@ -287,10 +287,12 @@ async function publishToLinkedInPage(item) {
     }
     const postId = res.data?.data?.createPost?.post?.id;
     const dueAt  = res.data?.data?.createPost?.post?.dueAt;
+    const sentAt = res.data?.data?.createPost?.post?.sentAt;
+    const sharedNow = res.data?.data?.createPost?.post?.sharedNow;
     await updateStatus(item.id, 'posted');
     await savePostAnalytics(item, postId || null);
-    await logResult('linkedin_page', 'publish_post', item.id, 'success', { channelId, postId, dueAt });
-    console.log(`[LinkedIn Page Publisher] Queued in Buffer — id: ${postId}, due: ${dueAt}`);
+    await logResult('linkedin_page', 'publish_post', item.id, 'success', { channelId, postId, dueAt, sentAt, sharedNow });
+    console.log(`[LinkedIn Page Publisher] Sent via Buffer — id: ${postId}, sent: ${sentAt || 'pending'}`);
   } catch (err) {
     console.error('[LinkedIn Page Publisher] Failed:', err.response?.data || err.message);
     await logResult('linkedin_page', 'publish_post', item.id, 'error', { error: err.message });

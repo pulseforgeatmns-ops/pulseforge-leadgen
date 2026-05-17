@@ -36,7 +36,7 @@ Each agent is a standalone JS module that reads from the DB and writes results b
 | File | Agent Name | Role |
 |---|---|---|
 | `maxAgent.js` | Max | Daily manager briefing — pulls system snapshot, generates AI summary of pipeline health. Has read-only API access to /api/setter/metrics and /api/setter/feed for pipeline monitoring. No write permissions. |
-| `paigeAgent.js` | Paige | Content creation — writes posts for GBP, Facebook, LinkedIn; queues to `pending_comments` for approval. Includes anti-repetition logic (pulls last 30 posts per channel, injects avoid-list into prompt) and a 3-dimension quality scoring step (specificity, originality, hook_strength). Regenerates once if total score < 21/30. Logs scores to agent_log for Max reporting. |
+| `paigeAgent.js` | Paige | Content creation — writes posts for GBP, Facebook, LinkedIn; queues to `pending_comments` for approval. LinkedIn Page posts queue to `pending_comments` (`status = 'pending'`) for human approval before publishing. Does NOT call Buffer directly. Buffer is called by `publishPipeline.js` on approval. Includes anti-repetition logic (pulls last 30 posts per channel, injects avoid-list into prompt) and a 3-dimension quality scoring step (specificity, originality, hook_strength). Regenerates once if total score < 21/30. Logs scores to agent_log for Max reporting. |
 | `emmettAgent.js` | Emmett | Email outreach — writes and sends cold email sequences via Brevo API |
 | `rileyAgent.js` | Riley | Inbound triage — reads Gmail inbox, classifies replies from known prospects (interested/not_now/unsubscribe/out_of_office/wrong_person/negative), updates prospect status, logs inbound touchpoints, deposits action cards for interested replies. Also processes Brevo email event webhooks. |
 | `warmSignalAgent.js` | Warm Signal | Detects 2+ opens in 7 days, writes 🔥 2ND OPEN flag to Setter Lead List Google Sheet |
@@ -148,7 +148,7 @@ Session-based multi-user auth. `POST /login` accepts email + password, checks ag
 ---
 
 ## Approval Flow
-Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. They write to `pending_comments` with `status = 'pending'`. The dashboard surfaces these under the Approvals tab. `POST /api/approve-comment/:id` triggers `publishPipeline.js` to actually push to the platform. This is intentional — nothing goes public without human sign-off.
+Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. They write to `pending_comments` with `status = 'pending'`. This includes LinkedIn Page posts — Paige queues them, Buffer publishes them only after dashboard approval via `publishPipeline.js`. The dashboard surfaces these under the Approvals tab. This is intentional — nothing goes public without human sign-off.
 
 ---
 
