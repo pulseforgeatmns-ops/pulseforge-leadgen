@@ -7,6 +7,7 @@ const { appendQualifiedScoutLead, hasSetterSheetAuth } = require('./utils/setter
 const { getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'handoff_utility';
+const SETTER_ICP_THRESHOLD = 70;
 
 async function ensureSetterQueueColumns() {
   await pool.query(`
@@ -46,16 +47,26 @@ async function run(params = {}) {
 
   await ensureSetterQueueColumns();
 
+  const cleanup = await pool.query(`
+    UPDATE prospects
+    SET setter_visible = false,
+        setter_updated_at = NOW()
+    WHERE client_id = $1
+      AND COALESCE(setter_visible, false) = true
+      AND COALESCE(icp_score, 0) < $2
+    RETURNING id
+  `, [clientId, SETTER_ICP_THRESHOLD]);
+
   const { rows } = await pool.query(`
     SELECT id, first_name, last_name, email, phone, job_title, notes, vertical, icp_score, created_at
     FROM prospects
     WHERE source = 'scout'
-      AND COALESCE(icp_score, 0) >= 40
+      AND COALESCE(icp_score, 0) >= $3
       AND COALESCE(do_not_contact, false) = false
       AND client_id = $2
       AND created_at >= NOW() - ($1::int * INTERVAL '1 day')
     ORDER BY icp_score DESC NULLS LAST, created_at DESC
-  `, [lookbackDays, clientId]);
+  `, [lookbackDays, clientId, SETTER_ICP_THRESHOLD]);
 
   if (rows.length) {
     await pool.query(`
@@ -107,11 +118,12 @@ async function run(params = {}) {
     VALUES ($1, 'backfill_setter_queue', $2, $3, NOW(), $4)
   `, [
     AGENT_NAME,
-    JSON.stringify({ candidates: rows.length, appended, skipped, failed, lookbackDays, client_id: clientId }),
+    JSON.stringify({ candidates: rows.length, hidden_below_threshold: cleanup.rowCount, appended, skipped, failed, lookbackDays, client_id: clientId, icp_threshold: SETTER_ICP_THRESHOLD }),
     failed ? 'error' : 'success',
     clientId,
   ]).catch(() => {});
 
+  console.log(`Hidden <${SETTER_ICP_THRESHOLD}: ${cleanup.rowCount}`);
   console.log(`Candidates: ${rows.length}`);
   console.log(`Appended:   ${appended}`);
   console.log(`Skipped:    ${skipped}`);
