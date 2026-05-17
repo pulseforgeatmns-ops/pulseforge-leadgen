@@ -1,8 +1,10 @@
 const express = require('express');
 const path = require('path');
+const axios = require('axios');
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { enrichPhoneWaterfall } = require('../phoneEnrich');
+const { ensureCloserSchema } = require('../utils/closerSchema');
 
 const router = express.Router();
 
@@ -42,6 +44,7 @@ function requireSetterWrite(req, res, next) {
 }
 
 async function ensureSetterSchema() {
+  await ensureCloserSchema();
   await pool.query(`
     ALTER TABLE prospects
     ADD COLUMN IF NOT EXISTS notes TEXT,
@@ -174,6 +177,58 @@ function composeNotes(existing, scratchpad) {
   const base = baseNotes(existing);
   const clean = String(scratchpad || '').trimEnd();
   return clean ? `${base}${SETTER_NOTES_MARKER}${clean}` : base;
+}
+
+function appendHandoffNote(existing, handoffNote) {
+  const clean = String(handoffNote || '').trim();
+  if (!clean) return existing;
+  const current = setterNotes(existing).trim();
+  const next = current ? `${current}\n\nHandoff note for Levi:\n${clean}` : `Handoff note for Levi:\n${clean}`;
+  return composeNotes(existing, next);
+}
+
+async function getLeviCloser() {
+  const configuredId = Number(process.env.LEVI_CLOSER_ID || 0);
+  const params = [];
+  let filter = "role = 'closer' AND active = true";
+  if (configuredId) {
+    params.push(configuredId);
+    filter += ` AND id = $${params.length}`;
+  }
+  const { rows } = await pool.query(`
+    SELECT id, name, email
+    FROM users
+    WHERE ${filter}
+    ORDER BY id ASC
+    LIMIT 1
+  `, params);
+  return rows[0] || null;
+}
+
+function handoffDescription(row, notes) {
+  const contact = `${row.first_name || ''} ${row.last_name || ''}`.trim() || 'No contact name';
+  return [
+    `${businessName(row)} · ${row.vertical || 'unknown'} · ${cityFor(row)}`,
+    `Contact: ${contact} · ${row.phone || 'no phone'} · ${row.email || 'no email'}`,
+    `Setter notes: ${notes || 'None'}`,
+    `Score: ${row.icp_score || 0} · Added: ${row.created_at ? new Date(row.created_at).toLocaleDateString() : 'unknown'}`,
+  ].join('\n');
+}
+
+async function sendCloserHandoffEmail(closer, row, description) {
+  if (!closer?.email || !process.env.BREVO_API_KEY) return false;
+  await axios.post('https://api.brevo.com/v3/smtp/email', {
+    sender: { name: 'Pulseforge Setter', email: 'jacob@gopulseforge.com' },
+    to: [{ email: closer.email, name: closer.name || 'Levi' }],
+    subject: `New booked call — ${businessName(row)}`,
+    textContent: `Levi,\n\nWilliam booked a new call for you.\n\n${description}\n\nReview it in the closer dashboard:\n${process.env.APP_URL || 'https://gopulseforge.com'}/closer\n\n— Pulseforge`,
+  }, {
+    headers: {
+      'api-key': process.env.BREVO_API_KEY,
+      'Content-Type': 'application/json',
+    },
+  });
+  return true;
 }
 
 function searchWhere(search, params) {
@@ -324,14 +379,71 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
   if (!STAGES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
   try {
     await ensureSetterSchema();
-    const { rows } = await pool.query(`
-      UPDATE prospects
-      SET setter_status = $1, setter_visible = true, setter_updated_at = NOW()
-      WHERE id = $2 AND source = 'scout'
-      RETURNING *
-    `, [status, req.params.id]);
+    const handoffNote = String(req.body.handoff_note || '').slice(0, 5000);
+    let rows;
+    let handoff = null;
+
+    if (status === 'booked') {
+      const current = await pool.query(`
+        SELECT *
+        FROM prospects
+        WHERE id = $1 AND source = 'scout'
+      `, [req.params.id]);
+      if (!current.rows.length) return res.status(404).json({ error: 'Lead not found' });
+
+      const closer = await getLeviCloser();
+      const notes = appendHandoffNote(current.rows[0].notes, handoffNote);
+      const update = await pool.query(`
+        UPDATE prospects
+        SET setter_status = 'booked',
+            setter_visible = true,
+            setter_updated_at = NOW(),
+            booked_at = COALESCE(booked_at, NOW()),
+            closer_id = COALESCE($1, closer_id),
+            closer_status = 'booked',
+            notes = $2
+        WHERE id = $3 AND source = 'scout'
+        RETURNING *
+      `, [closer?.id || null, notes, req.params.id]);
+      rows = update.rows;
+
+      if (closer) {
+        const description = handoffDescription(rows[0], setterNotes(rows[0].notes));
+        await pool.query(`
+          INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, client_id)
+          VALUES ('setter', 'closer_handoff', $1, $2, $3, 'pending', $4)
+        `, [
+          `New booked call — ${businessName(rows[0])}`,
+          description,
+          JSON.stringify({
+            prospect_id: rows[0].id,
+            setter_id: req.user?.id || null,
+            closer_id: closer.id,
+          }),
+          rows[0].client_id || 1,
+        ]);
+
+        let emailed = false;
+        try {
+          emailed = await sendCloserHandoffEmail(closer, rows[0], description);
+        } catch (emailErr) {
+          console.error('[setter] closer handoff email error:', emailErr.response?.data || emailErr.message);
+        }
+        handoff = { assigned: true, closer_id: closer.id, closer_name: closer.name, emailed };
+      } else {
+        handoff = { assigned: false, reason: 'No active closer user found' };
+      }
+    } else {
+      const update = await pool.query(`
+        UPDATE prospects
+        SET setter_status = $1, setter_visible = true, setter_updated_at = NOW()
+        WHERE id = $2 AND source = 'scout'
+        RETURNING *
+      `, [status, req.params.id]);
+      rows = update.rows;
+    }
     if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
-    res.json({ success: true, lead: mapLead(rows[0]) });
+    res.json({ success: true, lead: mapLead(rows[0]), handoff });
   } catch (err) {
     console.error('[setter] status error:', err.message);
     res.status(500).json({ error: 'Unable to update status' });

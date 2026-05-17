@@ -155,6 +155,29 @@ async function getSystemSnapshot() {
       AND ran_at >= NOW() - INTERVAL '7 days'
   `, [CLIENT_ID]).catch(() => ({ rows: [{ avg_score: null, regenerated_count: 0, total_scored: 0, most_common_weakness: null }] }));
 
+  const closerMetrics = await pool.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE p.booked_at >= date_trunc('week', NOW()))::int AS booked_week,
+      COUNT(*) FILTER (WHERE p.closer_status IN ('showed','closed') OR p.setter_status = 'closed')::int AS showed,
+      COUNT(*) FILTER (WHERE p.booked_at IS NOT NULL)::int AS booked_total,
+      COUNT(*) FILTER (WHERE p.setter_status = 'closed')::int AS closed,
+      COALESCE(SUM(p.mrr_value) FILTER (
+        WHERE p.setter_status = 'closed'
+          AND p.closed_at >= date_trunc('month', NOW())
+      ), 0)::numeric AS mrr_this_month,
+      COALESCE(SUM(c.commission_amt) FILTER (WHERE c.status = 'pending'), 0)::numeric AS pending_commissions
+    FROM prospects p
+    LEFT JOIN commissions c ON c.prospect_id = p.id
+    WHERE p.client_id = $1
+  `, [CLIENT_ID]).catch(() => ({ rows: [{
+    booked_week: 0,
+    showed: 0,
+    booked_total: 0,
+    closed: 0,
+    mrr_this_month: 0,
+    pending_commissions: 0,
+  }] }));
+
   return {
     prospectStats: prospectStats.rows,
     recentTouchpoints: recentTouchpoints.rows,
@@ -169,12 +192,14 @@ async function getSystemSnapshot() {
     warmToday:     warmToday.rows[0]?.count || 0,
     emailStats:    emailStats.rows[0],
     contentQuality: contentQuality.rows[0],
+    closerMetrics: closerMetrics.rows[0],
     client: CLIENT_CONFIG,
   };
 }
 
 async function generateInsights(snapshot) {
   if (CLIENT_ID === 2) {
+    const closer = snapshot.closerMetrics || {};
     const newLeads = snapshot.prospectStats.reduce((sum, r) => sum + parseInt(r.count || 0), 0);
     const cities = [...new Set(snapshot.untouched
       .map(p => (p.notes || '').match(/\b(Charleston|Dunbar|St Albans|Scott Depot|Teays Valley|Hurricane|Huntington|Barboursville)\b/i)?.[0])
@@ -193,6 +218,7 @@ LEADS: ${newLeads} total leads in the system; newest focus is ${cities}
 OUTREACH: ${outbound} emails sent in the last 7 days, ${replies} replies detected
 REVIEWS: No new review activity flagged in this snapshot
 CONTENT: ${pending} posts pending your approval
+CLOSER: ${closer.booked_week || 0} booked calls this week, $${Number(closer.mrr_this_month || 0).toLocaleString()} MRR closed this month
 ACTION NEEDED: ${actionItems.join('; ')}
 
 — Pulseforge`;
@@ -223,8 +249,9 @@ Generate a concise daily digest with:
 2. TOP PRIORITIES — the 3 most important actions to take today, ranked; if any prospects are in clickedToday, flag them as URGENT: "🔥 [Business] clicked a link in your email — Cal or Sam should follow up today"
 3. CONTENT INTELLIGENCE — which content types and channels are performing above or below average based on post_analytics; flag any channel that hasn't posted in 7+ days; note if performance data is still accumulating if the tables are empty; email open rate this week and Paige content quality if data available
 4. WARM SIGNALS — any prospects showing signs of interest worth flagging; include email opens/clicks from today
-5. RECOMMENDATIONS — 2-3 strategic suggestions based on the data patterns
-6. WATCH LIST — anything that needs attention or looks off
+5. CLOSER METRICS — include booked calls this week, show rate, close rate, MRR closed this month, and pending commission liability
+6. RECOMMENDATIONS — 2-3 strategic suggestions based on the data patterns
+7. WATCH LIST — anything that needs attention or looks off
 
 Be direct, specific, and actionable. Use plain text, no markdown. Keep each section to 2-4 sentences max. Write like a sharp operations manager giving a morning briefing.`
     }]
@@ -238,6 +265,16 @@ async function sendDigest(digestText, snapshot) {
     .map(p => `${p.count} ${p.channel}`)
     .join(', ') || 'none';
   const contentQuality = snapshot.contentQuality || {};
+  const closer = snapshot.closerMetrics || {};
+  const bookedTotal = Number(closer.booked_total || 0);
+  const showed = Number(closer.showed || 0);
+  const closed = Number(closer.closed || 0);
+  const closerBlock = `CLOSER METRICS
+Booked calls this week: ${closer.booked_week || 0}
+Show rate: ${bookedTotal ? ((showed / bookedTotal) * 100).toFixed(1) : 0}%
+Close rate: ${showed ? ((closed / showed) * 100).toFixed(1) : 0}%
+MRR closed this month: $${Number(closer.mrr_this_month || 0).toLocaleString()}
+Pending commission liability: $${Number(closer.pending_commissions || 0).toLocaleString()}`;
   const contentQualityBlock = `CONTENT QUALITY (last 7 days):
 Avg score: ${contentQuality.avg_score ?? 'n/a'}/30
 Posts regenerated: ${contentQuality.regenerated_count || 0}/${contentQuality.total_scored || 0}
@@ -254,6 +291,9 @@ ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 
 ${'─'.repeat(50)}
 
 ${digestText}
+
+${'─'.repeat(50)}
+${closerBlock}
 
 ${'─'.repeat(50)}
 ${contentQualityBlock}

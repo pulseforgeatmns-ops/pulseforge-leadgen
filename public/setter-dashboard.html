@@ -151,6 +151,12 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
 .callback-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:0.5rem; align-items:center; }
 .callback-set { margin-top:0.5rem; display:flex; align-items:center; justify-content:space-between; gap:0.6rem; flex-wrap:wrap; }
 .callback-input { width:100%; padding:0.58rem 0.65rem; }
+.handoff-modal { position:fixed; inset:0; background:rgba(4,8,16,0.76); z-index:2000; display:none; align-items:center; justify-content:center; padding:1rem; }
+.handoff-modal.open { display:flex; }
+.handoff-box { width:min(520px,100%); background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:1rem; box-shadow:0 30px 80px rgba(0,0,0,0.5); }
+.handoff-title { font-family:'Bebas Neue',sans-serif; font-size:1.25rem; letter-spacing:3px; margin-bottom:0.35rem; }
+.handoff-sub { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--gray-light); letter-spacing:1px; text-transform:uppercase; margin-bottom:0.8rem; }
+.handoff-actions { display:flex; justify-content:flex-end; gap:0.6rem; margin-top:0.8rem; }
 .right-panel { background:var(--bg1); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
 .panel-header { padding:1.25rem; border-bottom:1px solid var(--border); flex-shrink:0; }
 .panel-title { font-family:'Bebas Neue',sans-serif; font-size:1rem; letter-spacing:2px; }
@@ -329,6 +335,18 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   <div class="detail-block"><div class="detail-label">Move Stage</div><select id="detailStatus"></select></div>
 </aside>
 
+<div class="handoff-modal" id="handoffModal">
+  <div class="handoff-box">
+    <div class="handoff-title">HANDOFF TO LEVI</div>
+    <div class="handoff-sub">Add final context before this booked call moves to the closer queue.</div>
+    <textarea id="handoffNoteInput" placeholder="Handoff note for Levi..."></textarea>
+    <div class="handoff-actions">
+      <button class="btn" id="cancelHandoffBtn" type="button">Cancel</button>
+      <button class="btn primary" id="confirmHandoffBtn" type="button">Hand off</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const stages = ['new','contacted','follow_up','booked','dead'];
 const stageLabels = { new:'New', contacted:'Contacted', follow_up:'Follow-up', booked:'Booked', dead:'Dead' };
@@ -346,6 +364,7 @@ let queueSearch = '';
 let pipelineSearch = '';
 let searchTimer = null;
 const loggedTimers = {};
+let handoffResolve = null;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function fmtDate(value) {
@@ -595,14 +614,44 @@ async function refreshAll() {
   }
 }
 
+function requestHandoffNote(lead) {
+  const modal = document.getElementById('handoffModal');
+  const input = document.getElementById('handoffNoteInput');
+  input.value = lead?.notes || '';
+  modal.classList.add('open');
+  input.focus();
+  return new Promise(resolve => {
+    handoffResolve = resolve;
+  });
+}
+
+function closeHandoffModal(value) {
+  document.getElementById('handoffModal').classList.remove('open');
+  const resolve = handoffResolve;
+  handoffResolve = null;
+  if (resolve) resolve(value);
+}
+
 async function updateStatus(id, status) {
   const original = leads.find(l => l.id === id);
+  let handoff_note = '';
+  if (status === 'booked') {
+    const note = await requestHandoffNote(findLead(id));
+    if (note === null) return;
+    handoff_note = note;
+  }
   leads = leads.filter(l => l.id !== id);
   renderQueue();
   try {
-    await api(`/setter/api/leads/${id}/status`, { method:'PATCH', body:JSON.stringify({ status }) });
+    const data = await api(`/setter/api/leads/${id}/status`, { method:'PATCH', body:JSON.stringify({ status, handoff_note }) });
     await Promise.all([loadMetrics(), loadTodayStats(), loadQueue(), loadDue(), loadPipeline(), loadActivity()]);
     if (selectedLead?.id === id) selectedLead.status = status;
+    if (status === 'booked') {
+      document.getElementById('liveState').textContent = data?.handoff?.assigned ? 'HANDED OFF TO LEVI ✓' : 'BOOKED';
+      setTimeout(() => {
+        if (document.getElementById('liveState').textContent.includes('HANDED')) document.getElementById('liveState').textContent = 'LIVE';
+      }, 1800);
+    }
   } catch (err) {
     if (original) leads.unshift(original);
     renderQueue();
@@ -882,6 +931,11 @@ document.addEventListener('change', event => {
 
 document.getElementById('detailStatus').addEventListener('change', event => {
   if (selectedLead) updateStatus(selectedLead.id, event.target.value);
+});
+document.getElementById('confirmHandoffBtn').addEventListener('click', () => closeHandoffModal(document.getElementById('handoffNoteInput').value));
+document.getElementById('cancelHandoffBtn').addEventListener('click', () => closeHandoffModal(null));
+document.getElementById('handoffModal').addEventListener('click', event => {
+  if (event.target.id === 'handoffModal') closeHandoffModal(null);
 });
 document.getElementById('detailNotesInput').addEventListener('input', updateNoteCount);
 document.getElementById('detailNotesInput').addEventListener('blur', saveLeadNotes);

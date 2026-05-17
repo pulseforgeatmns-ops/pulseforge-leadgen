@@ -19,12 +19,14 @@ const { createObjectCsvWriter } = require('csv-writer');
 const { generateDemoData } = require('./utils/demoData');
 const { bcrypt, getUserCount, initAuth, requireAuth, requireRole } = require('./middleware/auth');
 const { ensureClientArchitecture } = require('./utils/clientContext');
+const { ensureCloserSchema } = require('./utils/closerSchema');
 
 const app  = express();
 const PORT = 3000;
 
 initAuth().catch(err => console.error('[auth] init error:', err.message));
 ensureClientArchitecture().catch(err => console.error('[clients] init error:', err.message));
+ensureCloserSchema().catch(err => console.error('[closer] init error:', err.message));
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),
@@ -54,6 +56,12 @@ app.use((req, res, next) => {
     return requireAuth(req, res, err => {
       if (err) return next(err);
       return requireRole('admin', 'manager', 'setter')(req, res, next);
+    });
+  }
+  if (req.path === '/public/closer-dashboard.html' || req.path === '/closer-dashboard.html') {
+    return requireAuth(req, res, err => {
+      if (err) return next(err);
+      return requireRole('admin', 'manager', 'closer')(req, res, next);
     });
   }
   return next();
@@ -108,6 +116,8 @@ app.use('/', require('./routes/users'));
 app.use('/client', require('./routes/client'));
 app.use('/setter', require('./routes/setter'));
 app.use('/api/setter', require('./routes/setter'));
+app.use('/closer', require('./routes/closer'));
+app.use('/api/closer', require('./routes/closer'));
 
 // Login page
 app.get('/login', (req, res) => {
@@ -173,7 +183,9 @@ app.post('/login', async (req, res) => {
     req.session.authenticated = true;
     req.session.active_client_id = 1;
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
-    return res.redirect(user.role === 'setter' ? '/setter' : '/dashboard');
+    if (user.role === 'setter') return res.redirect('/setter');
+    if (user.role === 'closer') return res.redirect('/closer');
+    return res.redirect('/dashboard');
   }
 
   if (password === process.env.DASHBOARD_PASSWORD) {

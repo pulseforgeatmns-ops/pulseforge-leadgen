@@ -14,6 +14,7 @@ An AI-powered lead generation and outreach CRM for Pulseforge. It scrapes leads,
 | `routes/cron.js` | CRON_MODULES, runCronAgent, GET/POST /cron/:agent handlers |
 | `routes/webhooks.js` | POST /webhooks/brevo and /webhooks/bland with BREVO_EVENT_MAP and checkAndUpdateWarmStatus |
 | `routes/approvals.js` | /approvals dashboard, /api/pending-comments, /api/approve-comment/:id, /api/reject-comment/:id |
+| `routes/closer.js` | /closer dashboard and closer APIs for booked-call pipeline, call status updates, closing prospects, and commission tracking |
 | `leadgen.js` | CLI tool — scrapes leads from Google Custom Search + Prospeo, scores them, exports CSV/Sheets. Run via `node leadgen.js --industry "cleaning" --location "Manchester NH"` |
 | `db.js` | Creates and exports the shared `pg.Pool` using `DATABASE_URL`. All agents and server import from here. Never call `pool.end()` in agents — it closes the shared pool. |
 | `dbClient.js` | Helper functions wrapping common DB operations: `checkDNC`, `logTouchpoint`, `logAgentAction`, `addProspect`, `addCompany`, `savePendingComment`, etc. |
@@ -27,6 +28,7 @@ An AI-powered lead generation and outreach CRM for Pulseforge. It scrapes leads,
 | `utils/blogPublisher.js` | GitHub-based blog post publisher. |
 | `utils/demoData.js` | Generates fake live-feed data for the unauthenticated `/demo` route. |
 | `utils/clientContext.js` | `getClientConfig(clientId)` loads full client config from `clients`; also owns idempotent client architecture migration/backfill helpers. Called by agents/routes to scope behavior and queries. |
+| `utils/closerSchema.js` | Idempotent closer-role migration helper: users role constraint, prospect closer fields, and `commissions` table. |
 
 ---
 
@@ -82,6 +84,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 - **Activity**: `/api/activity`, `/api/activity-panel`, `/api/activity-timeline` — in `routes/api.js`
 - **Dashboard UI**: `GET /dashboard` → serves `public/dashboard.html`; `GET /demo` → unauthenticated demo mode — in `server.js`
 - **Setter dashboard**: `GET /setter` → authenticated setter UI (queue, pipeline, activity log, metrics strip, Scout feed). Requires setter or admin role. — in `routes/setter.js`
+- **Closer dashboard**: `GET /closer` → authenticated closer UI (pipeline, commission tracker, metrics strip). `requireRole('admin', 'manager', 'closer')` — in `routes/closer.js`
 - **Setter API (read-only)**: `GET /api/setter/metrics`, `GET /api/setter/feed` — consumed by Max for pipeline monitoring. No write access. `PATCH /api/setter/leads/:id/notes`, `PATCH /api/setter/leads/:id/callback`, `PATCH /api/setter/leads/:id/hot`, `POST /api/setter/leads/:id/quick-log-call`, `POST /api/setter/leads/:id/enrich-phone`, `GET /api/setter/stats/today` — in `routes/setter.js`
 - **Brevo warm signal**: Brevo POSTs email events here → Riley logs touchpoints and upgrades cold→warm automatically — in `routes/webhooks.js`
 
@@ -93,14 +96,15 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 |---|---|
 | `clients` | Master client registry. All agents and data tables reference `client_id`. `client_id=1` = Pulseforge (NH). `client_id=2` = MSHI (WV). Stores all per-client config: brand voice, sequences, service area, agent settings. |
 | `companies` | Scraped companies: name, industry, size, location, website, icp_score, tech_stack, `client_id` |
-| `prospects` | Individual contacts: name, email, phone, job_title, linkedin_url, icp_score, status (cold/warm/hot), do_not_contact, last_contacted_at, vertical (TEXT — populated by Scout at insert time based on CONFIG.industry), service_area_match, setter_status (enum: new \| contacted \| follow_up \| booked \| dead), setter_visible (boolean — true = qualifies for setter queue, set by setterHandoffAgent), notes (text — setter scratchpad, auto-saved on blur), callback_at (timestamptz — scheduled follow-up, shown as "Due Today" queue section), is_hot (boolean — hot lead flag, sorts to top of stage), `client_id` |
+| `prospects` | Individual contacts: name, email, phone, job_title, linkedin_url, icp_score, status (cold/warm/hot), do_not_contact, last_contacted_at, vertical (TEXT — populated by Scout at insert time based on CONFIG.industry), service_area_match, setter_status (enum: new \| contacted \| follow_up \| booked \| dead), setter_visible (boolean — true = qualifies for setter queue, set by setterHandoffAgent), notes (text — setter scratchpad, auto-saved on blur), callback_at (timestamptz — scheduled follow-up, shown as "Due Today" queue section), is_hot (boolean — hot lead flag, sorts to top of stage), closer_id (FK → users), booked_at, closed_at, mrr_value, close_notes, closer_status, `client_id` |
 | `activity_log` | Setter contact log: id, lead_id (FK → prospects), action_type (call \| email \| text), notes, created_at, setter_id, `client_id` |
-| `users` | Auth accounts: id, name, email, password_hash, role (admin \| manager \| setter), active, created_at, last_login_at |
+| `users` | Auth accounts: id, name, email, password_hash, role (admin \| manager \| setter \| closer), active, created_at, last_login_at |
 | `touchpoints` | Every agent action: channel, action_type, content_summary, outcome, sentiment, external_ref, `client_id` |
 | `agent_log` | Audit trail for every agent run: agent_name, action, prospect_id, payload, status, error_msg, duration_ms, `client_id` |
 | `agent_actions` | Actionable items deposited by agents for dashboard review: id, created_by, action_type, title, description, payload, status, executed_at, result, created_at, `client_id` — used by Max and Riley |
 | `pending_comments` | Content queued for human approval before publish: post_content, comment, post_url, channel, status, `client_id` |
 | `post_analytics` | Published post performance: platform, post_id, impressions, clicks, etc., `client_id` |
+| `commissions` | Closer commission records: closer_id, prospect_id, mrr_amount, commission_rate (0.15 default), commission_amt (generated), status, closed_at, paid_at, `client_id` |
 | `prospect_summary` | View that joins prospects + companies for agent reads |
 | `session` | connect-pg-simple session store |
 
@@ -156,7 +160,13 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 ---
 
 ## Auth Model
-Session-based multi-user auth. `POST /login` accepts email + password, checks against users table, stores { id, name, email, role } in session. `requireAuth` middleware gates all protected routes. `requireRole(...roles)` enforces per-route role access. Roles: admin (full access), manager (full access except user management), setter (/setter only). Admin UI at `/admin/users` for creating and managing accounts. Falls back to `DASHBOARD_PASSWORD` env var if users table is empty.
+Session-based multi-user auth. `POST /login` accepts email + password, checks against users table, stores { id, name, email, role } in session. `requireAuth` middleware gates all protected routes. `requireRole(...roles)` enforces per-route role access. Roles: admin (full access), manager (full access except user management), setter (/setter only), closer (/closer only). Admin UI at `/admin/users` for creating and managing accounts. Falls back to `DASHBOARD_PASSWORD` env var if users table is empty.
+
+## Team Roster
+
+| Name | Role | Email | Notes |
+|---|---|---|---|
+| Levi TBD | closer | TBD | 15% MRR commission. Create active closer account in `/admin/users` once last name/email are confirmed. |
 
 ---
 
@@ -183,3 +193,4 @@ Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. The
 - **Multi-client architecture (added May 2026)** — all primary data tables carry `client_id` FK to `clients`. Agents accept `client_id` via `POST /api/run/:agent?client_id=1` or `/cron/:agent?client_id=2` and scope DB reads/writes accordingly. Dashboard has a client selector in the header and stores the active client in `req.session.active_client_id`. Existing data backfilled to `client_id=1` (Pulseforge). MSHI is `client_id=2`. To add a new client: INSERT into `clients`, add client-specific cron jobs with `client_id`, and add any needed email sequence to `emmettAgent.js` `SEQUENCES`.
 - **MSHI notes** — no website yet (`clients.website = 'PENDING_BUILD'`). No Facebook page yet; Faye and Paige social posting are disabled for MSHI until Brad/Dustin create the Facebook Business Page, add jacob@gopulseforge.com as editor, and `clients.facebook_url` is updated. Riley does not monitor the MSHI inbox; reply triage is manual until forwarding to jacob@gopulseforge.com or a second Gmail OAuth is configured. Max briefing sends to mshomeinnovations@gmail.com at 8:00 AM EST daily.
 - **MSHI website to-do** — separate build task. Follow the Whittaker pattern: GitHub Pages deploy, services for siding/decks/windows/interior renovation/emergency repair, lead form to mshomeinnovations@gmail.com, prominent GBP link, visible license WV065578, before/after gallery, and service area list/map for Kanawha, Putnam, and Cabell Counties.
+- **Setter → closer handoff (added May 2026)** — when William marks a prospect as `booked`, the system auto-assigns `closer_id`, writes `booked_at`, creates an `agent_actions` row of type `closer_handoff`, and emails Levi with prospect details and setter notes. Commission tracking lives in the `commissions` table. Rate: 15% MRR. Closer role has access to `/closer` only.

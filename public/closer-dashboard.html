@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulseforge — Closer Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root { --bg:#040810; --bg1:#070d1a; --bg2:#0b1526; --purple:#6030b1; --purple-bright:#8b5cf6; --teal:#00d4b4; --green:#00e676; --amber:#ffd600; --red:#ff3b5c; --white:#e8f0fe; --gray:#3a4a6a; --gray-light:#6b7fa0; --border:rgba(96,48,177,0.18); }
+* { box-sizing:border-box; margin:0; padding:0; }
+html, body { min-height:100%; background:var(--bg); color:var(--white); font-family:'DM Sans',sans-serif; }
+body::before { content:''; position:fixed; inset:0; background:repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.015) 3px, rgba(0,0,0,0.015) 4px); pointer-events:none; }
+.topbar { height:56px; background:rgba(7,13,26,0.97); border-bottom:1px solid var(--border); display:flex; align-items:center; gap:1.2rem; padding:0 1.5rem; position:sticky; top:0; z-index:10; }
+.logo { font-family:'Bebas Neue',sans-serif; letter-spacing:4px; font-size:1.45rem; white-space:nowrap; }
+.tabs { display:flex; gap:0; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:6px; padding:3px; }
+.tab { font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1.4px; text-transform:uppercase; color:var(--gray-light); padding:6px 14px; border-radius:4px; cursor:pointer; border:0; background:transparent; }
+.tab.active { background:rgba(96,48,177,0.2); color:var(--purple-bright); border:1px solid rgba(139,92,246,0.3); }
+.right { margin-left:auto; display:flex; align-items:center; gap:1rem; }
+.status { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--green); background:rgba(0,230,118,0.1); border:1px solid rgba(0,230,118,0.16); border-radius:99px; padding:4px 11px; }
+a { color:var(--teal); text-decoration:none; font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1px; text-transform:uppercase; }
+main { padding:1.5rem; }
+.metrics { display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:1rem; margin-bottom:1.25rem; }
+.metric { background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:1rem; min-height:90px; }
+.label { font-family:'JetBrains Mono',monospace; font-size:0.56rem; color:var(--gray); letter-spacing:1.6px; text-transform:uppercase; margin-bottom:0.45rem; }
+.value { font-family:'Bebas Neue',sans-serif; font-size:2rem; line-height:1; letter-spacing:1px; }
+.value.teal { color:var(--teal); } .value.green { color:var(--green); } .value.amber { color:var(--amber); } .value.purple { color:var(--purple-bright); }
+.panel { background:var(--bg1); border:1px solid var(--border); border-radius:10px; overflow:hidden; display:none; }
+.panel.active { display:block; }
+.panel-head { display:flex; justify-content:space-between; align-items:flex-end; gap:1rem; padding:1rem; border-bottom:1px solid var(--border); }
+.title { font-family:'Bebas Neue',sans-serif; font-size:1.4rem; letter-spacing:3px; }
+.sub { font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:1px; color:var(--gray-light); text-transform:uppercase; margin-top:3px; }
+table { width:100%; border-collapse:collapse; }
+th { color:var(--gray); font-family:'JetBrains Mono',monospace; font-size:0.56rem; letter-spacing:1.4px; text-transform:uppercase; text-align:left; padding:0.75rem 0.85rem; border-bottom:1px solid var(--border); white-space:nowrap; }
+td { padding:0.85rem; border-bottom:1px solid rgba(255,255,255,0.04); vertical-align:top; color:rgba(232,240,254,0.82); font-size:0.9rem; }
+.mono { font-family:'JetBrains Mono',monospace; font-size:0.66rem; color:var(--gray-light); margin-top:4px; line-height:1.45; }
+.notes { max-width:360px; color:rgba(232,240,254,0.72); line-height:1.35; white-space:pre-wrap; }
+.actions { display:flex; gap:0.35rem; flex-wrap:wrap; min-width:210px; }
+button { border:1px solid var(--border); color:var(--gray-light); background:transparent; border-radius:5px; padding:0.52rem 0.62rem; cursor:pointer; font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:1px; text-transform:uppercase; }
+button:hover { color:var(--white); border-color:rgba(139,92,246,0.35); }
+button.primary { background:rgba(96,48,177,0.22); color:var(--purple-bright); border-color:rgba(139,92,246,0.35); }
+button.good { color:var(--green); border-color:rgba(0,230,118,0.25); }
+button.danger { color:var(--red); border-color:rgba(255,59,92,0.25); }
+.badge { display:inline-flex; font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:1px; text-transform:uppercase; color:var(--teal); border:1px solid rgba(0,212,180,0.22); border-radius:4px; padding:3px 7px; }
+.totals { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:0.8rem; padding:1rem; border-top:1px solid var(--border); background:rgba(255,255,255,0.02); }
+.total-box { font-family:'JetBrains Mono',monospace; font-size:0.66rem; color:var(--gray-light); }
+.total-box strong { display:block; margin-top:0.35rem; color:var(--white); font-size:0.95rem; }
+.empty { color:var(--gray-light); text-align:center; padding:2rem; }
+@media (max-width: 980px) { .metrics { grid-template-columns:repeat(2, minmax(0,1fr)); } .topbar { flex-wrap:wrap; height:auto; padding:0.8rem 1rem; } main { padding:1rem; } table { min-width:900px; } .panel { overflow-x:auto; } }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="logo">PULSEFORGE CLOSER</div>
+  <div class="tabs">
+    <button class="tab active" data-tab="pipeline">Pipeline</button>
+    <button class="tab" data-tab="commissions">Commissions</button>
+  </div>
+  <div class="right"><div class="status" id="liveState">LIVE</div><a href="/logout">Logout</a></div>
+</div>
+<main>
+  <section class="metrics">
+    <div class="metric"><div class="label">Booked This Week</div><div class="value teal" id="bookedWeek">0</div></div>
+    <div class="metric"><div class="label">Show Rate</div><div class="value amber" id="showRate">0%</div></div>
+    <div class="metric"><div class="label">Close Rate</div><div class="value green" id="closeRate">0%</div></div>
+    <div class="metric"><div class="label">MRR This Month</div><div class="value purple" id="mrrMonth">$0</div></div>
+    <div class="metric"><div class="label">Commission Earned</div><div class="value green" id="commissionMonth">$0</div></div>
+  </section>
+  <section class="panel active" id="pipelinePanel">
+    <div class="panel-head"><div><div class="title">BOOKED CALLS</div><div class="sub">William to Levi handoff queue</div></div><button id="refreshBtn">Refresh</button></div>
+    <table>
+      <thead><tr><th>Business</th><th>Vertical</th><th>City</th><th>Score</th><th>Booked</th><th>Setter Notes</th><th>Contact</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody id="pipelineRows"><tr><td colspan="9" class="empty">Loading...</td></tr></tbody>
+    </table>
+  </section>
+  <section class="panel" id="commissionsPanel">
+    <div class="panel-head"><div><div class="title">COMMISSION TRACKER</div><div class="sub">15% of closed MRR</div></div></div>
+    <table>
+      <thead><tr><th>Business</th><th>MRR</th><th>Commission</th><th>Status</th><th>Closed</th><th>Paid</th><th>Actions</th></tr></thead>
+      <tbody id="commissionRows"><tr><td colspan="7" class="empty">Loading...</td></tr></tbody>
+    </table>
+    <div class="totals">
+      <div class="total-box">Total MRR closed<strong id="totalMrr">$0</strong></div>
+      <div class="total-box">Commission earned<strong id="totalCommission">$0</strong></div>
+      <div class="total-box">Commission paid<strong id="paidCommission">$0</strong></div>
+      <div class="total-box">Pending payout<strong id="pendingCommission">$0</strong></div>
+    </div>
+  </section>
+</main>
+<script>
+let pipeline = [];
+let commissions = [];
+function money(value) { return '$' + Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 0 }); }
+function date(value) { return value ? new Date(value).toLocaleDateString() : '-'; }
+async function api(path, options = {}) {
+  const res = await fetch(path, { credentials:'include', headers:{'Content-Type':'application/json'}, ...options });
+  if (res.status === 401) { location.href = '/login'; return null; }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+function renderMetrics(m) {
+  document.getElementById('bookedWeek').textContent = m.booked_week || 0;
+  document.getElementById('showRate').textContent = (m.show_rate || 0) + '%';
+  document.getElementById('closeRate').textContent = (m.close_rate || 0) + '%';
+  document.getElementById('mrrMonth').textContent = money(m.mrr_month);
+  document.getElementById('commissionMonth').textContent = money(m.commission_month);
+}
+function renderPipeline() {
+  const body = document.getElementById('pipelineRows');
+  if (!pipeline.length) {
+    body.innerHTML = '<tr><td colspan="9" class="empty">No booked calls assigned right now</td></tr>';
+    return;
+  }
+  body.innerHTML = pipeline.map(lead => `
+    <tr>
+      <td><strong>${lead.business_name}</strong><div class="mono">${lead.contact_name || 'No contact name'}</div></td>
+      <td>${lead.vertical}</td>
+      <td>${lead.city}</td>
+      <td><span class="badge">${lead.score}</span></td>
+      <td>${date(lead.booked_at)}</td>
+      <td><div class="notes">${lead.setter_notes || '-'}</div></td>
+      <td>${lead.phone || '-'}<div class="mono">${lead.email || '-'}</div></td>
+      <td><span class="badge">${lead.call_status || 'booked'}</span></td>
+      <td><div class="actions">
+        <button data-status="contacted" data-id="${lead.id}">Contacted</button>
+        <button data-status="showed" data-id="${lead.id}">Showed</button>
+        <button class="good" data-close="${lead.id}">Closed</button>
+        <button class="danger" data-status="lost" data-id="${lead.id}">Lost</button>
+      </div></td>
+    </tr>
+  `).join('');
+}
+function renderCommissions() {
+  const body = document.getElementById('commissionRows');
+  if (!commissions.length) {
+    body.innerHTML = '<tr><td colspan="7" class="empty">No commissions yet</td></tr>';
+  } else {
+    body.innerHTML = commissions.map(c => `
+      <tr>
+        <td><strong>${c.business_name}</strong></td>
+        <td>${money(c.mrr_amount)}</td>
+        <td>${money(c.commission_amt)}</td>
+        <td><span class="badge">${c.status}</span></td>
+        <td>${date(c.closed_at)}</td>
+        <td>${date(c.paid_at)}</td>
+        <td><button class="primary" data-pay="${c.id}" ${c.status === 'paid' ? 'disabled' : ''}>Mark Paid</button></td>
+      </tr>
+    `).join('');
+  }
+  const totalMrr = commissions.reduce((sum, c) => sum + Number(c.mrr_amount || 0), 0);
+  const totalCommission = commissions.reduce((sum, c) => sum + Number(c.commission_amt || 0), 0);
+  const paid = commissions.filter(c => c.status === 'paid').reduce((sum, c) => sum + Number(c.commission_amt || 0), 0);
+  const pending = commissions.filter(c => c.status === 'pending').reduce((sum, c) => sum + Number(c.commission_amt || 0), 0);
+  document.getElementById('totalMrr').textContent = money(totalMrr);
+  document.getElementById('totalCommission').textContent = money(totalCommission);
+  document.getElementById('paidCommission').textContent = money(paid);
+  document.getElementById('pendingCommission').textContent = money(pending);
+}
+async function loadAll() {
+  try {
+    document.getElementById('liveState').textContent = 'SYNC';
+    const [metrics, pipe, comms] = await Promise.all([
+      api('/closer/api/metrics'),
+      api('/closer/api/pipeline'),
+      api('/closer/api/commissions')
+    ]);
+    renderMetrics(metrics);
+    pipeline = pipe || [];
+    commissions = comms || [];
+    renderPipeline();
+    renderCommissions();
+    document.getElementById('liveState').textContent = 'LIVE';
+  } catch (err) {
+    console.error(err);
+    document.getElementById('liveState').textContent = 'ERROR';
+  }
+}
+document.addEventListener('click', async event => {
+  const tab = event.target.closest('[data-tab]');
+  if (tab) {
+    document.querySelectorAll('.tab').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab.dataset.tab));
+    document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active', panel.id === tab.dataset.tab + 'Panel'));
+  }
+  const status = event.target.closest('[data-status]');
+  if (status) {
+    await api('/closer/api/prospects/' + status.dataset.id + '/status', { method:'PATCH', body:JSON.stringify({ status: status.dataset.status }) });
+    await loadAll();
+  }
+  const close = event.target.closest('[data-close]');
+  if (close) {
+    const mrr = prompt('Monthly recurring revenue amount');
+    if (!mrr) return;
+    const notes = prompt('Close notes, optional') || '';
+    await api('/closer/api/prospects/' + close.dataset.close + '/close', { method:'POST', body:JSON.stringify({ mrr_amount: Number(mrr), notes }) });
+    await loadAll();
+  }
+  const pay = event.target.closest('[data-pay]');
+  if (pay && !pay.disabled) {
+    try { await api('/closer/api/commissions/' + pay.dataset.pay + '/pay', { method:'PATCH', body:JSON.stringify({}) }); await loadAll(); }
+    catch (err) { alert(err.message); }
+  }
+});
+document.getElementById('refreshBtn').addEventListener('click', loadAll);
+loadAll();
+setInterval(loadAll, 60000);
+</script>
+</body>
+</html>
