@@ -65,6 +65,8 @@ Each agent is a standalone JS module that reads from the DB and writes results b
 | 1 | Pulseforge | jacob@gopulseforge.com | Manchester NH | Existing NH pipeline. All pre-migration data backfilled to `client_id=1`. |
 | 2 | MSHI | mshomeinnovations@gmail.com | Charleston WV | Mountain State Home Innovations. Owners: Brad Hudson & Dustin Allison. License: WV065578. Avg job: $10k-$25k. Sequence: `home_renovation`. Sender: Brad & Dustin. Max briefing: 8AM EST → mshomeinnovations@gmail.com. Pending: website, Facebook page, Riley forwarding. |
 
+Pulseforge Scout markets for William's setter territory: Manchester NH and Charleston WV. Charleston WV runs as `client_id=1` with a 15-prospect cap per vertical for: cleaning, hvac, roofing, auto_repair, dental, salon, fitness, restaurant, landscaping. Setter visibility still requires `icp_score >= 70`.
+
 MSHI Scout cron targets: `POST /cron/scout?client_id=2&industry=home_renovation&location=Charleston%20WV`, `decks/Charleston WV`, `siding/Charleston WV`, `home_renovation/Huntington WV`, `home_renovation/Hurricane WV`. MSHI Max cron: `POST /cron/max?client_id=2&secret={CRON_SECRET}` at 8:00 AM EST.
 
 ---
@@ -185,6 +187,7 @@ Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. The
 - **GMAIL_CREDENTIALS format** — the Railway env var must be the full credentials JSON starting with `{"web":` — not just the client secret file.
 - **GOOGLE_SHEETS_REFRESH_TOKEN vs GOOGLE_REFRESH_TOKEN** — `GOOGLE_REFRESH_TOKEN` is for GBP/Calendar. `GOOGLE_SHEETS_REFRESH_TOKEN` is for Sheets write access in warmSignalAgent. They use different OAuth clients and scopes — do not conflate them.
 - **Scout → setter pipeline (fixed May 14 2026)** — Scout writes prospects to the DB but does not self-qualify leads for the setter. setterHandoffAgent.js handles the handoff: it evaluates icp_score against a threshold and sets setter_visible = true on qualifying rows. Prior to this fix, 170 leads had accumulated in prospects without ever surfacing in the setter queue. Backfill was run manually to resolve the gap. Always run setterHandoffAgent after a Scout batch or wire it into the Scout cron chain.
+- **Charleston WV Pulseforge Scout market (added May 2026)** — Charleston WV is part of William's setter territory for `client_id=1` Pulseforge. Scout runs are capped at 15 prospects per vertical and staggered across cleaning, hvac, roofing, auto_repair, dental, salon, fitness, restaurant, and landscaping. The active setter threshold remains `icp_score >= 70`.
 - **calBatchAgent.js was present in an earlier version of CLAUDE.md but may have been dropped during a recent edit.** Confirm it is restored in both the File Map and Agent Roster.
 - **Multi-user auth (added May 2026)** — replaced single DASHBOARD_PASSWORD with users table. DASHBOARD_PASSWORD fallback remains for empty-DB safety. First setter: William Hernandez (created via admin UI post-deploy). setter_id on activity_log rows references users.id.
 - **Phone enrichment on setter dashboard uses Prospeo API (PROSPEO_API_KEY).** Matches the same request pattern as leadgen.js. Logs to agent_log with agent_name = 'setter'.

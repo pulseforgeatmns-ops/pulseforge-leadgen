@@ -33,7 +33,12 @@ function runCronAgent(agent, res, query = {}) {
     process.env.ACTIVE_CLIENT_ID = String(clientId);
     const mod = require(CRON_MODULES[agent]);
     if (agent === 'scout' && typeof mod.run === 'function') {
-      mod.run({ industry: query.industry, location: query.location, client_id: clientId }).catch(err => {
+      mod.run({
+        industry: query.industry,
+        location: query.location,
+        maxResults: query.maxResults || query.max || query.limit,
+        client_id: clientId,
+      }).catch(err => {
         console.error(`[cron] scout run error:`, err.message);
       });
     } else if ((agent === 'setter_handoff' || agent === 'handoff_utility') && typeof mod.run === 'function') {

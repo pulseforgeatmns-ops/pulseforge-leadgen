@@ -73,6 +73,7 @@ let CLIENT_CONFIG = null;
 const GOOGLE_API_KEY    = process.env.GOOGLE_API_KEY;
 const GOOGLE_CX         = process.env.GOOGLE_CX;
 const PROSPEO_API_KEY   = process.env.PROSPEO_API_KEY;
+const SETTER_ICP_THRESHOLD = 70;
 
 
 async function enrichWithHunter(domain) {
@@ -781,10 +782,10 @@ async function saveToDatabase(leads) {
               setter_updated_at = NOW()
           WHERE id = $1
             AND client_id = $2
-            AND COALESCE(icp_score, 0) >= 40
+            AND COALESCE(icp_score, 0) >= $3
             AND COALESCE(do_not_contact, false) = false
-        `, [prospectId, CONFIG.clientId]);
-        if (CONFIG.clientId === 1) {
+        `, [prospectId, CONFIG.clientId, SETTER_ICP_THRESHOLD]);
+        if (CONFIG.clientId === 1 && (lead.score || 0) >= SETTER_ICP_THRESHOLD) {
           const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
           if (handoff.appended) setterQueued++;
           else setterSkipped++;
