@@ -1,8 +1,8 @@
 const express = require('express');
 const path = require('path');
-const axios = require('axios');
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
+const { enrichPhoneWaterfall } = require('../phoneEnrich');
 
 const router = express.Router();
 
@@ -171,61 +171,6 @@ function searchWhere(search, params) {
       OR 'Manchester NH' ILIKE $${idx}
     )
   `;
-}
-
-function pickPhone(data) {
-  const person = data?.person || {};
-  const company = data?.company || {};
-  return person.mobile?.mobile_international ||
-    person.mobile?.mobile_national ||
-    person.mobile?.mobile ||
-    company.phone_hq?.phone_hq_international ||
-    company.phone_hq?.phone_hq_national ||
-    company.phone_hq?.phone_hq ||
-    null;
-}
-
-function normalizeWebsite(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  try {
-    return new URL(raw.startsWith('http') ? raw : `https://${raw}`).hostname.replace(/^www\./, '');
-  } catch (err) {
-    return raw.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
-  }
-}
-
-async function prospeoEnrichPhone(row) {
-  const key = process.env.PROSPEO_API_KEY;
-  if (!key) return null;
-  const companyWebsite = normalizeWebsite(website(row));
-  if (!companyWebsite) return null;
-  const headers = { 'Content-Type': 'application/json', 'X-KEY': key };
-  try {
-    const res = await axios.post('https://api.prospeo.io/search-person',
-      {
-        page: 1,
-        filters: {
-          company: {
-            websites: { include: [companyWebsite] }
-          },
-          person_job_title: {
-            include: ['owner']
-          }
-        }
-      },
-      { headers }
-    );
-    const results = res.data?.results || [];
-    for (const result of results) {
-      const phone = pickPhone(result);
-      if (phone) return phone;
-    }
-    return null;
-  } catch (err) {
-    console.warn(`[setter] Prospeo ${companyWebsite}:`, err.response?.data || err.message);
-    return null;
-  }
 }
 
 router.get('/', sessionAuth, requireRole('admin', 'manager', 'setter'), async (req, res) => {
@@ -448,10 +393,16 @@ router.post(['/api/leads/:id/enrich-phone', '/leads/:id/enrich-phone'], requireS
     `, [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
 
-    const phone = await prospeoEnrichPhone(rows[0]);
+    const enrichment = await enrichPhoneWaterfall({
+      ...rows[0],
+      business_name: businessName(rows[0]),
+      website: website(rows[0]),
+      city: cityFor(rows[0]),
+    }, { verbose: req.query.debug === 'true' });
+    const phone = enrichment.phone;
     if (phone) {
       status = 'success';
-      payload = { phone };
+      payload = { phone, source: enrichment.source, chain: enrichment.chain };
       await pool.query('UPDATE prospects SET phone = $1, updated_at = NOW() WHERE id = $2', [phone, req.params.id]);
       await pool.query(`
         INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)
@@ -463,7 +414,7 @@ router.post(['/api/leads/:id/enrich-phone', '/leads/:id/enrich-phone'], requireS
     await pool.query(`
       INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)
       VALUES ('setter', 'phone_enrich', $1, $2, $3, NOW())
-    `, [req.params.id, JSON.stringify({ reason: 'No phone found' }), status]);
+    `, [req.params.id, JSON.stringify({ reason: 'No phone found', chain: enrichment.chain }), status]);
     res.json({ phone: null });
   } catch (err) {
     console.error('[setter] phone enrich error:', err.response?.data || err.message);

@@ -712,10 +712,12 @@ async function bulkEnrichMissingPhones() {
     for (let i = 0; i < missing.length; i += 10) {
       const batch = missing.slice(i, i + 10);
       setBulkEnrichStatus(`Enriching ${i + 1}-${i + batch.length} of ${missing.length}...`);
-      const results = await Promise.all(batch.map(lead =>
-        api(`/setter/api/leads/${lead.id}/enrich-phone`, { method:'POST', body:JSON.stringify({}) })
+      const results = await Promise.all(batch.map((lead, offset) => {
+        const leadIndex = i + offset;
+        const debug = leadIndex < 3 ? '?debug=true' : '';
+        return api(`/setter/api/leads/${lead.id}/enrich-phone${debug}`, { method:'POST', body:JSON.stringify({}) })
           .catch(() => ({ phone: null }))
-      ));
+      }));
       checked += batch.length;
       found += results.filter(result => result.phone).length;
       setBulkEnrichStatus(`${checked}/${missing.length} checked · ${found} found`);
