@@ -47,6 +47,7 @@ async function ensureSetterSchema() {
     ADD COLUMN IF NOT EXISTS notes TEXT,
     ADD COLUMN IF NOT EXISTS callback_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS is_hot BOOLEAN DEFAULT false,
+    ADD COLUMN IF NOT EXISTS enrichment_attempted BOOLEAN DEFAULT false,
     ADD COLUMN IF NOT EXISTS setter_status TEXT DEFAULT 'new',
     ADD COLUMN IF NOT EXISTS setter_visible BOOLEAN DEFAULT false,
     ADD COLUMN IF NOT EXISTS setter_updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -136,6 +137,26 @@ async function getLeads(where = '', params = [], limit = 250, orderBy = 'COALESC
     ORDER BY ${sort}
     LIMIT $${params.length + 1}
   `, [...params, limit]);
+  return rows.map(mapLead);
+}
+
+async function getMissingPhoneProspects(limit = 2000) {
+  const { rows } = await pool.query(`
+    SELECT p.*,
+      (
+        SELECT COUNT(*)::int
+        FROM activity_log al
+        WHERE al.lead_id = p.id
+          AND al.action_type = 'call'
+      ) AS attempt_count
+    FROM prospects p
+    WHERE NULLIF(BTRIM(COALESCE(p.phone, '')), '') IS NULL
+      AND COALESCE(p.enrichment_attempted, false) = false
+    ORDER BY COALESCE(p.setter_visible, false) DESC,
+      COALESCE(p.icp_score, 0) DESC,
+      p.created_at DESC
+    LIMIT $1
+  `, [limit]);
   return rows.map(mapLead);
 }
 
@@ -237,6 +258,9 @@ router.get('/feed', requireMetricsRead, feedHandler);
 router.get(['/api/leads', '/leads'], requireSetterRead, async (req, res) => {
   try {
     await ensureSetterSchema();
+    if (req.query.missing_phone === 'true') {
+      return res.json(await getMissingPhoneProspects(2000));
+    }
     const status = req.query.status;
     const params = [];
     const search = searchWhere(req.query.search, params);
@@ -248,15 +272,11 @@ router.get(['/api/leads', '/leads'], requireSetterRead, async (req, res) => {
     } else if (req.query.all_statuses !== 'true') {
       filters.push(`AND COALESCE(p.setter_status, 'new') = 'new'`);
     }
-    if (req.query.missing_phone === 'true') {
-      filters.push(`AND NULLIF(BTRIM(COALESCE(p.phone, '')), '') IS NULL`);
-    }
     const where = filters.join('\n');
     const order = req.query.due === 'today'
       ? 'p.callback_at ASC NULLS LAST'
       : undefined;
-    const limit = req.query.missing_phone === 'true' ? 2000 : 250;
-    res.json(await getLeads(where, params, limit, order));
+    res.json(await getLeads(where, params, 250, order));
   } catch (err) {
     console.error('[setter] leads error:', err.message);
     res.status(500).json({ error: 'Unable to load leads' });
@@ -402,8 +422,8 @@ router.post(['/api/leads/:id/enrich-phone', '/leads/:id/enrich-phone'], requireS
     const phone = enrichment.phone;
     if (phone) {
       status = 'success';
-      payload = { phone, source: enrichment.source, chain: enrichment.chain };
-      await pool.query('UPDATE prospects SET phone = $1, updated_at = NOW() WHERE id = $2', [phone, req.params.id]);
+      payload = { phone, source_hit: enrichment.source, source: enrichment.source, chain: enrichment.chain };
+      await pool.query('UPDATE prospects SET phone = $1, enrichment_attempted = true, updated_at = NOW() WHERE id = $2', [phone, req.params.id]);
       await pool.query(`
         INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)
         VALUES ('setter', 'phone_enrich', $1, $2, $3, NOW())
@@ -411,13 +431,15 @@ router.post(['/api/leads/:id/enrich-phone', '/leads/:id/enrich-phone'], requireS
       return res.json({ phone });
     }
 
+    await pool.query('UPDATE prospects SET enrichment_attempted = true, updated_at = NOW() WHERE id = $1', [req.params.id]);
     await pool.query(`
       INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)
       VALUES ('setter', 'phone_enrich', $1, $2, $3, NOW())
-    `, [req.params.id, JSON.stringify({ reason: 'No phone found', chain: enrichment.chain }), status]);
+    `, [req.params.id, JSON.stringify({ reason: 'No phone found', source_hit: null, chain: enrichment.chain }), status]);
     res.json({ phone: null });
   } catch (err) {
     console.error('[setter] phone enrich error:', err.response?.data || err.message);
+    await pool.query('UPDATE prospects SET enrichment_attempted = true, updated_at = NOW() WHERE id = $1', [req.params.id]).catch(() => {});
     await pool.query(`
       INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, error_msg, ran_at)
       VALUES ('setter', 'phone_enrich', $1, $2, 'no_result', $3, NOW())
