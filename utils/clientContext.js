@@ -201,6 +201,13 @@ async function ensureClientArchitecture() {
 
   await pool.query(`SELECT setval(pg_get_serial_sequence('clients', 'id'), GREATEST((SELECT MAX(id) FROM clients), 1))`);
 
+  await pool.query(`
+    INSERT INTO clients (name, slug, email, city, state, active)
+    VALUES ('McLeod Legal Services', 'mcleod', 'ashley@mcleodlegal.com',
+            'Manchester', 'NH', false)
+    ON CONFLICT (slug) DO NOTHING
+  `);
+
   for (const table of CLIENT_SCOPED_TABLES) {
     await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS client_id integer REFERENCES clients(id) DEFAULT 1`);
     await pool.query(`UPDATE ${table} SET client_id = 1 WHERE client_id IS NULL`);

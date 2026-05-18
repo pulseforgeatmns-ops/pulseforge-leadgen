@@ -29,6 +29,12 @@
 * { margin:0; padding:0; box-sizing:border-box; }
 html, body { height:100%; overflow:hidden; background:var(--bg); }
 body { font-family:'DM Sans',sans-serif; color:var(--white); display:flex; flex-direction:column; }
+body.light-mode { --bg:#f5f5f0; --bg1:#ffffff; --bg2:#eaeae4; --bg3:#ffffff; --white:#1a1a18; --gray-light:#4a4a45; --gray:#8a8a85; --border:rgba(0,0,0,0.1); background:var(--bg); }
+body, .topbar, .right-panel, .metric-card, .panel-card, .stage, .lead-card, .form-card, .activity-list, .agent-tile, input, select, textarea, table, th, td, .btn { transition:background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease; }
+body.light-mode .topbar { background:rgba(255,255,255,0.94); }
+body.light-mode input, body.light-mode select, body.light-mode textarea, body.light-mode .nav-tabs { background:rgba(0,0,0,0.035); }
+body.light-mode td { color:rgba(26,26,24,0.76); border-bottom-color:rgba(0,0,0,0.06); }
+body.light-mode tr:hover td { background:rgba(139,92,246,0.08); }
 body::before { content:''; position:fixed; inset:0; background:repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.015) 3px, rgba(0,0,0,0.015) 4px); pointer-events:none; z-index:1000; }
 .topbar { height:52px; background:rgba(7,13,26,0.97); border-bottom:1px solid var(--border); display:flex; align-items:center; padding:0 2rem; gap:2rem; flex-shrink:0; backdrop-filter:blur(20px); position:relative; z-index:100; min-width:0; }
 .topbar::after { content:''; position:absolute; bottom:0; left:0; right:0; height:1px; background:linear-gradient(90deg, transparent 0%, var(--purple-bright) 30%, var(--teal) 70%, transparent 100%); opacity:0.4; }
@@ -45,6 +51,8 @@ body::before { content:''; position:fixed; inset:0; background:repeating-linear-
 .sys-dot { width:5px; height:5px; background:var(--green); border-radius:50%; box-shadow:0 0 8px var(--green); animation:sysPulse 2s ease infinite; }
 @keyframes sysPulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 .clock { font-family:'JetBrains Mono',monospace; font-size:0.72rem; color:var(--gray-light); letter-spacing:2px; }
+.theme-toggle { width:32px; height:32px; border-radius:50%; border:1px solid var(--border); background:rgba(255,255,255,0.04); color:var(--white); display:inline-flex; align-items:center; justify-content:center; cursor:pointer; font-size:0.9rem; transition:all 0.2s; }
+.theme-toggle:hover { border-color:var(--purple-bright); color:var(--purple-bright); }
 .main { flex:1; display:grid; grid-template-columns:minmax(0, 1fr) 340px; overflow:hidden; }
 .work-area { overflow-y:auto; overflow-x:hidden; padding:2rem; height:100%; min-width:0; }
 .work-area::-webkit-scrollbar, .activity-feed::-webkit-scrollbar { width:3px; }
@@ -205,6 +213,7 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   <div class="topbar-right">
     <div class="sys-status"><div class="sys-dot"></div><span id="liveState">LIVE</span></div>
     <div class="clock" id="clock">--:--</div>
+    <button class="theme-toggle" id="themeToggle" type="button" title="Toggle theme">🌙</button>
   </div>
 </div>
 
@@ -354,6 +363,7 @@ const agents = [
   ['SCOUT','Prospecting'], ['EMMETT','Email'], ['RILEY','Follow-up'],
   ['PAIGE','Content'], ['VERA','Verifier'], ['MAX','Observer']
 ];
+const THEME_KEY = 'pulseforge-theme';
 let leads = [];
 let dueLeads = [];
 let feed = [];
@@ -366,6 +376,22 @@ let searchTimer = null;
 const loggedTimers = {};
 let handoffResolve = null;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function applyTheme(theme) {
+  const light = theme === 'light';
+  document.body.classList.toggle('light-mode', light);
+  const btn = document.getElementById('themeToggle');
+  if (btn) {
+    btn.textContent = light ? '☀️' : '🌙';
+    btn.title = light ? 'Switch to dark mode' : 'Switch to light mode';
+  }
+}
+applyTheme(localStorage.getItem(THEME_KEY) || 'dark');
+document.getElementById('themeToggle')?.addEventListener('click', () => {
+  const next = document.body.classList.contains('light-mode') ? 'dark' : 'light';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+});
 
 function fmtDate(value) {
   if (!value) return '-';

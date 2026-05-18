@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
-const { getActiveClients, getRequestClientId, normalizeClientId } = require('../utils/clientContext');
+const { ensureClientArchitecture, getActiveClients, getRequestClientId, normalizeClientId } = require('../utils/clientContext');
+const { ensureCloserSchema } = require('../utils/closerSchema');
 const { publishBlogPost } = require('../utils/blogPublisher');
 const {
   publishToGoogleBusiness,
@@ -39,6 +40,202 @@ router.post('/api/clients/active', requireAuth, async (req, res) => {
     req.session.active_client_id = clientId;
     res.json({ ok: true, active_client_id: clientId });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/agent-visibility', requireAuth, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const [clientResult, prospectsWithEmail] = await Promise.all([
+      pool.query('SELECT id, facebook_url, gbp_url, max_email FROM clients WHERE id = $1', [clientId]),
+      pool.query(`
+        SELECT COUNT(*)::int AS count
+        FROM prospects
+        WHERE client_id = $1 AND NULLIF(TRIM(email), '') IS NOT NULL
+      `, [clientId]),
+    ]);
+    const client = clientResult.rows[0] || {};
+    const hasTwilio = Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER);
+    const hasCalendar = Boolean(
+      (process.env.GOOGLE_CALENDAR_REFRESH_TOKEN || process.env.GOOGLE_CALENDAR_TOKEN || process.env.GOOGLE_REFRESH_TOKEN) &&
+      (process.env.GOOGLE_CALENDAR_ID || process.env.GOOGLE_CLIENT_ID)
+    );
+
+    res.json({
+      scout: true,
+      emmett: Number(prospectsWithEmail.rows[0]?.count || 0) > 0,
+      paige: Boolean(client.facebook_url || client.gbp_url),
+      faye: Boolean(client.facebook_url),
+      vera: Boolean(client.gbp_url),
+      riley: Boolean(client.max_email),
+      max: true,
+      rex: true,
+      sam: hasTwilio,
+      cal: hasCalendar,
+      link: false,
+      ivy: false,
+      sketch: false,
+      penny: false,
+      analytics: true,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/pipeline', requireAuth, async (_req, res) => {
+  try {
+    await ensureClientArchitecture();
+    await ensureCloserSchema();
+    await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS assigned_city TEXT');
+    await pool.query(`
+      INSERT INTO clients (name, slug, email, city, state, active)
+      VALUES ('McLeod Legal Services', 'mcleod', 'ashley@mcleodlegal.com',
+              'Manchester', 'NH', false)
+      ON CONFLICT (slug) DO NOTHING
+    `);
+
+    const agentNames = [
+      'Scout', 'Emmett', 'Riley', 'Paige', 'Max', 'Rex', 'Vera', 'Faye',
+      'Link', 'Sam', 'Cal', 'CalBatch', 'WarmSignal', 'Analytics',
+      'Sketch', 'SetterHandoff',
+    ];
+    const agentKeys = {
+      scout_agent: 'Scout', scout: 'Scout',
+      emmett_agent: 'Emmett', email_agent: 'Emmett', emmett: 'Emmett',
+      riley_agent: 'Riley', riley: 'Riley',
+      paige_agent: 'Paige', paige: 'Paige',
+      max_agent: 'Max', max: 'Max',
+      rex_agent: 'Rex', rex: 'Rex',
+      vera_agent: 'Vera', vera: 'Vera',
+      facebook_agent: 'Faye', faye: 'Faye',
+      linkedin_agent: 'Link', link: 'Link',
+      sam_agent: 'Sam', sam: 'Sam',
+      cal_agent: 'Cal', cal: 'Cal',
+      cal_batch_agent: 'CalBatch', calbatch: 'CalBatch', cal_batch: 'CalBatch',
+      warm_signal_agent: 'WarmSignal', warm_signal: 'WarmSignal', warmsignal: 'WarmSignal',
+      analytics_agent: 'Analytics', analytics: 'Analytics',
+      sketch_agent: 'Sketch', sketch: 'Sketch',
+      setter_handoff_agent: 'SetterHandoff', setterhandoff: 'SetterHandoff', handoff_utility: 'SetterHandoff',
+    };
+
+    const [clients, revenueMrr, revenueBooked, revenuePayouts, setters, closers, logs] = await Promise.all([
+      pool.query(`
+        SELECT
+          c.id, c.name, c.slug, c.email, c.city, c.state,
+          c.max_email, c.active, c.created_at,
+          COUNT(DISTINCT p.id)::int as prospect_count,
+          COUNT(DISTINCT p.id) FILTER (
+            WHERE p.setter_status = 'booked')::int as booked_count,
+          COUNT(DISTINCT p.id) FILTER (
+            WHERE p.setter_status = 'closed')::int as closed_count
+        FROM clients c
+        LEFT JOIN prospects p ON p.client_id = c.id
+        GROUP BY c.id
+        ORDER BY c.created_at ASC
+      `),
+      pool.query(`SELECT COALESCE(SUM(mrr_amount), 0)::numeric as confirmed_mrr FROM commissions WHERE status != 'void'`),
+      pool.query(`SELECT COUNT(*)::int as booked_pending FROM prospects WHERE setter_status = 'booked' AND closed_at IS NULL`),
+      pool.query(`
+        SELECT
+          COALESCE(SUM(commission_amt) FILTER (
+            WHERE status = 'pending'), 0)::numeric as pending_payout,
+          COALESCE(SUM(commission_amt) FILTER (
+            WHERE status = 'paid'), 0)::numeric as paid_out
+        FROM commissions
+      `),
+      pool.query(`
+        SELECT
+          u.id, u.name, u.assigned_city,
+          COUNT(DISTINCT p.id) FILTER (
+            WHERE p.setter_visible = true
+            AND p.setter_status = 'new')::int as queue_size,
+          COUNT(DISTINCT al.id) FILTER (
+            WHERE al.action_type = 'call'
+            AND DATE(al.created_at) = CURRENT_DATE)::int as calls_today,
+          COUNT(DISTINCT p.id) FILTER (
+            WHERE p.setter_status = 'booked'
+            AND p.booked_at >= DATE_TRUNC('week', CURRENT_DATE)
+            )::int as booked_this_week
+        FROM users u
+        LEFT JOIN prospects p ON p.setter_visible = true
+        LEFT JOIN activity_log al ON al.setter_id::text = u.id::text
+        WHERE u.role = 'setter' AND u.active = true
+        GROUP BY u.id, u.name, u.assigned_city
+        ORDER BY u.name ASC
+      `),
+      pool.query(`
+        SELECT
+          u.id, u.name,
+          COUNT(p.id) FILTER (
+            WHERE p.closer_id = u.id
+            AND p.setter_status = 'booked'
+            AND p.closed_at IS NULL)::int as pending_calls,
+          COUNT(p.id) FILTER (
+            WHERE p.closer_id = u.id
+            AND p.closer_status = 'showed'
+            AND p.booked_at >= DATE_TRUNC('week', CURRENT_DATE)
+            )::int as showed_this_week,
+          COUNT(p.id) FILTER (
+            WHERE p.closer_id = u.id
+            AND p.setter_status = 'closed'
+            AND p.closed_at >= DATE_TRUNC('month', CURRENT_DATE)
+            )::int as closed_this_month,
+          COALESCE(SUM(p.mrr_value) FILTER (
+            WHERE p.setter_status = 'closed'
+            AND p.closed_at >= DATE_TRUNC('month', CURRENT_DATE)
+            ), 0)::numeric as mrr_this_month,
+          COUNT(p.id) FILTER (
+            WHERE p.closer_id = u.id
+            AND p.setter_status = 'booked')::int as total_booked,
+          COUNT(p.id) FILTER (
+            WHERE p.closer_id = u.id
+            AND p.closer_status = 'showed')::int as total_showed
+        FROM users u
+        LEFT JOIN prospects p ON p.closer_id = u.id
+        WHERE u.role = 'closer' AND u.active = true
+        GROUP BY u.id, u.name
+        ORDER BY u.name ASC
+      `),
+      pool.query(`
+        SELECT DISTINCT ON (agent_name)
+          agent_name, status, ran_at, error_msg, duration_ms
+        FROM agent_log
+        ORDER BY agent_name, ran_at DESC
+      `),
+    ]);
+
+    const latestByAgent = {};
+    logs.rows.forEach(row => {
+      const normalized = agentKeys[String(row.agent_name || '').toLowerCase()];
+      if (normalized && !latestByAgent[normalized]) latestByAgent[normalized] = row;
+    });
+
+    res.json({
+      refreshed_at: new Date().toISOString(),
+      clients: clients.rows,
+      revenue: {
+        confirmed_mrr: Number(revenueMrr.rows[0]?.confirmed_mrr || 0),
+        booked_pending: Number(revenueBooked.rows[0]?.booked_pending || 0),
+        pending_payout: Number(revenuePayouts.rows[0]?.pending_payout || 0),
+        paid_out: Number(revenuePayouts.rows[0]?.paid_out || 0),
+        mrr_target: 5000,
+        breakeven: 250,
+      },
+      setters: setters.rows,
+      closers: closers.rows.map(row => ({
+        ...row,
+        show_rate: Number(row.total_booked || 0) ? +((Number(row.total_showed || 0) / Number(row.total_booked || 0)) * 100).toFixed(1) : 0,
+        commission_earned: +(Number(row.mrr_this_month || 0) * 0.15).toFixed(2),
+      })),
+      agents: agentNames.map(name => ({
+        name,
+        ...(latestByAgent[name] || { status: 'never_run', ran_at: null, error_msg: null, duration_ms: null }),
+      })),
+    });
+  } catch (err) {
+    console.error('[pipeline] error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -883,6 +1080,8 @@ router.post('/api/run/:agent', requireAuth, async (req, res) => {
     process.env.ACTIVE_CLIENT_ID = String(clientId);
     const mod = require(agentModules[agent]);
     if (agent === 'scout' && typeof mod.run === 'function') {
+      mod.run({ client_id: clientId }).catch(err => console.error(`Agent ${agent} error:`, err.message));
+    } else if (typeof mod.run === 'function') {
       mod.run({ client_id: clientId }).catch(err => console.error(`Agent ${agent} error:`, err.message));
     }
   } catch (err) {
