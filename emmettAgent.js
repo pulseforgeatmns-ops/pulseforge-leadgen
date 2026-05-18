@@ -908,7 +908,7 @@ async function run() {
     }
 
     // Industry cap — prevent blasting a single vertical in one run
-    const industry = (prospect.industry || 'unknown').toLowerCase();
+    const industry = (prospect.vertical || 'unknown').toLowerCase();
     industryCounts[industry] = (industryCounts[industry] || 0);
     if (industryCounts[industry] >= industryCap) {
       console.log(`Skipping ${prospect.email} — industry cap reached for "${industry}"`);
@@ -978,12 +978,46 @@ async function run() {
       industryCounts[industry]++;
       sent++;
       console.log('Touchpoint logged.\n');
+    } else {
+      await db.logAgentAction(
+        AGENT_NAME,
+        'send_failure',
+        prospect.id,
+        null,
+        { prospect_id: prospect.id, email: prospect.email, client_id: CLIENT_ID },
+        'failed',
+        `Brevo send failed for ${prospect.email}`
+      );
     }
 
     if (sent < dailyLimit) await humanDelay();
   }
 
   console.log(`\nEmmett complete. Emails sent: ${sent}`);
+  await db.logAgentAction(
+    AGENT_NAME,
+    'cron_run',
+    null,
+    null,
+    { sent, prospects_evaluated: prospects.length, client_id: CLIENT_ID },
+    'completed'
+  );
 }
 
-run().catch(console.error);
+run().catch(async (err) => {
+  try {
+    await db.logAgentAction(
+      AGENT_NAME,
+      'cron_run',
+      null,
+      null,
+      { client_id: CLIENT_ID },
+      'failed',
+      err.message
+    );
+  } catch (logErr) {
+    console.error('Failed to log Emmett fatal error:', logErr.message);
+  }
+  console.error(err);
+  throw err;
+});

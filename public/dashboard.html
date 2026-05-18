@@ -79,6 +79,29 @@ body.light-mode textarea {
 body.light-mode td { color: rgba(26,26,24,0.76); border-bottom-color: rgba(0,0,0,0.06); }
 body.light-mode tr:hover td { background: rgba(139,92,246,0.08); }
 body.light-mode .ring-track { stroke: rgba(0,0,0,0.08); }
+body.light-mode .approvals-area,
+body.light-mode .approvals-area .area-title,
+body.light-mode .approval-card,
+body.light-mode .ac-agent,
+body.light-mode .ac-comment,
+body.light-mode .ac-first-comment,
+body.light-mode .ac-pub-status,
+body.light-mode .approvals-empty {
+  color: var(--text-primary);
+}
+body.light-mode .approvals-area .area-sub,
+body.light-mode .ac-context,
+body.light-mode .ac-time,
+body.light-mode .approvals-empty-text {
+  color: var(--text-secondary);
+}
+body.light-mode .ac-comment {
+  background: rgba(0,0,0,0.035);
+  border-left-color: var(--border-color);
+}
+body.light-mode .ac-badge {
+  color: var(--text-primary);
+}
 
 body::before {
   content: '';
