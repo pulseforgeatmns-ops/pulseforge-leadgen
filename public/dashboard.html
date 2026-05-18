@@ -259,13 +259,16 @@ body::before {
 }
 .theme-toggle:hover { border-color: var(--purple-bright); color: var(--purple-bright); }
 .agent-card.not-configured {
-  opacity: 0.4;
+  opacity: 0.55;
   filter: grayscale(1);
 }
 .agent-card.not-configured:hover {
   transform: none;
   border-color: var(--border);
   box-shadow: none;
+}
+body.light-mode .agent-card:not(.not-configured) {
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
 }
 
 /* MAIN LAYOUT */
@@ -2587,6 +2590,7 @@ body::before {
 let _statsCache = null, _activityCache = null;
 let _statsCacheTime = 0, _activityCacheTime = 0;
 let _liveRings = {}, _currentDetailKey = null;
+let _currentUserRole = null;
 const DETAIL_CACHE_TTL = 30000;
 const THEME_KEY = 'pulseforge-theme';
 
@@ -2864,12 +2868,14 @@ fetch('/api/me', { credentials: 'include' })
   .then(res => res.ok ? res.json() : null)
   .then(data => {
     const role = data?.user?.role;
+    _currentUserRole = role;
     const isOperator = ['admin', 'manager'].includes(role);
     if (role === 'admin') document.getElementById('usersTab').style.display = 'block';
     const pipelineTab = document.getElementById('pipelineTab');
     if (pipelineTab) pipelineTab.style.display = isOperator ? '' : 'none';
     const switcher = document.querySelector('.client-switcher');
     if (switcher && !isOperator) switcher.remove();
+    loadAgentVisibility();
   })
   .catch(() => {});
 
@@ -2903,6 +2909,13 @@ async function loadClientSelector() {
 }
 
 async function loadAgentVisibility() {
+  if (['admin', 'manager'].includes(_currentUserRole)) {
+    document.querySelectorAll('.agent-card[data-agent]').forEach(card => {
+      card.classList.remove('not-configured');
+      card.title = '';
+    });
+    return;
+  }
   try {
     const res = await fetch('/api/agent-visibility', { credentials: 'include' });
     if (!res.ok) return;
@@ -4290,7 +4303,6 @@ async function loadPipeline() {
 document.getElementById('pipelineRefreshBtn')?.addEventListener('click', loadPipeline);
 
 loadClientSelector();
-loadAgentVisibility();
 loadLiveData();
 loadActivityFeed();
 loadAgentSparklines();

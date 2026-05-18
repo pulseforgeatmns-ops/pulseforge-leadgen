@@ -132,6 +132,7 @@ router.get('/api/pipeline', requireAuth, async (_req, res) => {
             WHERE p.setter_status = 'closed')::int as closed_count
         FROM clients c
         LEFT JOIN prospects p ON p.client_id = c.id
+        WHERE c.slug != 'pulseforge'
         GROUP BY c.id
         ORDER BY c.created_at ASC
       `),
