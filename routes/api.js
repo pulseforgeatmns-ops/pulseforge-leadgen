@@ -14,6 +14,12 @@ const {
 } = require('../utils/publishPipeline');
 
 const requireAuth = [sessionAuth, requireRole('admin', 'manager')];
+const EXCLUDE_COMMAND_FEED_ACTIONS_SQL = `
+  NOT (
+    LOWER(REPLACE(COALESCE(al.agent_name, ''), '_agent', '')) = 'max'
+    AND COALESCE(al.action, '') IN ('daily_brief', 'daily_digest')
+  )
+`;
 
 router.get('/api/me', sessionAuth, (req, res) => {
   res.json({ user: req.user, active_client_id: req.session?.active_client_id || 1 });
@@ -492,6 +498,7 @@ router.get('/api/activity', requireAuth, async (req, res) => {
       FROM agent_log al
       LEFT JOIN prospects p ON al.prospect_id = p.id AND p.client_id = al.client_id
       WHERE al.client_id = $1
+        AND ${EXCLUDE_COMMAND_FEED_ACTIONS_SQL}
       ORDER BY al.ran_at DESC
       LIMIT 20
     `, [clientId]);
@@ -580,6 +587,7 @@ router.get('/api/activity-panel', requireAuth, async (req, res) => {
         FROM agent_log al
         LEFT JOIN prospects p ON al.prospect_id = p.id AND p.client_id = al.client_id
         WHERE al.client_id = $1
+          AND ${EXCLUDE_COMMAND_FEED_ACTIONS_SQL}
         ORDER BY al.ran_at DESC
         LIMIT 50
       `, [clientId])
@@ -657,6 +665,7 @@ router.get('/api/activity-timeline', requireAuth, async (req, res) => {
       FROM agent_log al
       LEFT JOIN prospects p ON al.prospect_id = p.id AND p.client_id = al.client_id
       WHERE al.client_id = $2
+        AND ${EXCLUDE_COMMAND_FEED_ACTIONS_SQL}
       ORDER BY al.ran_at DESC
       LIMIT 50 OFFSET $1
     `, [offset, clientId]);

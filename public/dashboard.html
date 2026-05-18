@@ -610,7 +610,7 @@ body.light-mode .agent-card:not(.not-configured) {
 
 /* RIGHT PANEL */
 .right-panel {
-  background: var(--bg1);
+  background: #ffffff;
   border-left: 1px solid var(--border);
   display: flex; flex-direction: column;
   overflow: hidden;
@@ -625,11 +625,12 @@ body.light-mode .agent-card:not(.not-configured) {
   font-family: 'Bebas Neue', sans-serif;
   font-size: 1rem;
   letter-spacing: 2px;
+  color: #1a1a18;
 }
 .panel-sub {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.58rem;
-  color: var(--gray-light);
+  color: #4a4a45;
   margin-top: 3px;
 }
 
@@ -643,7 +644,7 @@ body.light-mode .agent-card:not(.not-configured) {
   flex-shrink: 0;
 }
 .metric-tile {
-  background: var(--bg1);
+  background: #ffffff;
   padding: 0.9rem;
 }
 .metric-tile-label {
@@ -683,14 +684,14 @@ body.light-mode .agent-card:not(.not-configured) {
   font-size: 0.58rem;
   letter-spacing: 2px;
   text-transform: uppercase;
-  color: var(--gray);
+  color: #4a4a45;
   margin-bottom: 0.75rem;
 }
 
 .feed-item {
   display: flex; gap: 8px; align-items: flex-start;
   padding: 0.6rem 0;
-  border-bottom: 1px solid rgba(255,255,255,0.03);
+  border-bottom: 1px solid rgba(0,0,0,0.08);
 }
 .feed-icon {
   width: 24px; height: 24px;
@@ -703,12 +704,12 @@ body.light-mode .agent-card:not(.not-configured) {
 .fi-g { background: var(--green-dim); border: 1px solid rgba(0,230,118,0.15); }
 .fi-o { background: rgba(255,107,53,0.1); border: 1px solid rgba(255,107,53,0.15); }
 .feed-text {
-  font-size: 0.73rem; color: rgba(255,255,255,0.6); line-height: 1.5; flex: 1;
+  font-size: 0.73rem; color: #1a1a18; line-height: 1.5; flex: 1;
 }
-.feed-text strong { color: var(--white); font-weight: 600; }
+.feed-text strong { color: #1a1a18; font-weight: 600; }
 .feed-time {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 0.55rem; color: var(--gray); flex-shrink: 0; margin-top: 2px;
+  font-size: 0.55rem; color: #4a4a45; flex-shrink: 0; margin-top: 2px;
 }
 
 /* Max digest */
@@ -753,7 +754,7 @@ body.light-mode .agent-card:not(.not-configured) {
 
 /* MAX BRIEF BANNER */
 .max-brief-banner {
-  background: var(--bg2);
+  background: #ffffff;
   border: 1px solid var(--border);
   border-left: 3px solid var(--purple-bright);
   border-radius: 8px;
@@ -824,7 +825,7 @@ body.light-mode .agent-card:not(.not-configured) {
 }
 .max-brief-banner-preview {
   font-size: 0.8rem;
-  color: rgba(232,240,254,0.75);
+  color: #1a1a18;
   line-height: 1.65;
   white-space: pre-wrap;
   display: -webkit-box;
@@ -2506,14 +2507,6 @@ body.light-mode .agent-card:not(.not-configured) {
       </div>
     </div>
 
-    <div class="max-digest" id="maxDigest">
-      <div class="max-label" onclick="document.getElementById('maxDigest').classList.toggle('expanded')">
-        <div class="max-dot"></div>MAX · DAILY BRIEF
-        <span id="maxBriefAge" style="font-size:0.55rem;color:var(--gray);margin-left:4px;font-family:'JetBrains Mono',monospace;"></span>
-        <span class="max-chevron">▲</span>
-      </div>
-      <div class="max-text" id="maxBriefText">Loading...</div>
-    </div>
   </div>
 
 </div>
@@ -4517,8 +4510,6 @@ async function dismissAction(id) {
   } catch(e) { if (card) card.style.opacity = '1'; }
 }
 
-// Load on page init
-loadMaxBrief();
 // Pre-fetch action count for badge
 (async () => {
   try {
