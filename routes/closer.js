@@ -185,7 +185,7 @@ router.get(['/api/commissions', '/commissions'], sessionAuth, requireRole('admin
       filter = `AND c.closer_id = $${params.length}`;
     }
     const { rows } = await pool.query(`
-      SELECT c.*, p.notes, p.first_name, p.last_name, p.email, p.vertical, p.city
+      SELECT c.*, p.notes, p.first_name, p.last_name, p.email, p.vertical
       FROM commissions c
       JOIN prospects p ON p.id = c.prospect_id
       WHERE c.client_id = $1 ${filter}
