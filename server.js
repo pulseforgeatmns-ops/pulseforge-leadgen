@@ -7,6 +7,14 @@
  */
 
 require('dotenv').config();
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught:', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled:', err);
+});
+
 const express  = require('express');
 const axios    = require('axios');
 const cors     = require('cors');
