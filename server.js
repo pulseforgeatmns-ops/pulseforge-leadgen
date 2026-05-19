@@ -30,7 +30,7 @@ const { ensureClientArchitecture } = require('./utils/clientContext');
 const { ensureCloserSchema } = require('./utils/closerSchema');
 
 const app  = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 initAuth().catch(err => console.error('[auth] init error:', err.message));
 ensureClientArchitecture().catch(err => console.error('[clients] init error:', err.message));
