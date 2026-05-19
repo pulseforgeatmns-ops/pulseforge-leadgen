@@ -4,9 +4,11 @@ const pool = require('../db');
 
 const BREVO_EVENT_MAP = {
   opened:           'email_opened',
+  email_opened:     'email_opened',
   click:            'email_clicked',
   loaded_by_proxy:  'email_opened',
   hard_bounce:      'email_bounced',
+  email_bounced:    'email_bounced',
   soft_bounce:      'email_soft_bounce',
   unsubscribed:     'email_unsubscribed',
   spam:             'email_spam',
@@ -51,9 +53,15 @@ router.post('/webhooks/brevo', (req, res) => {
 
       if (!actionType || !email) return;
 
+      const payloadClientId = Number(payload.client_id || payload.clientId || payload.metadata?.client_id) || null;
+      const prospectParams = payloadClientId ? [email, payloadClientId] : [email];
       const prospectRes = await pool.query(
-        `SELECT id, status FROM prospects WHERE LOWER(email) = $1 LIMIT 1`,
-        [email]
+        `SELECT id, status, client_id
+         FROM prospects
+         WHERE LOWER(email) = $1
+         ${payloadClientId ? 'AND client_id = $2' : ''}
+         LIMIT 1`,
+        prospectParams
       );
       if (!prospectRes.rows.length) {
         console.warn(`[Riley] No prospect for email: ${email} (event: ${event})`);
@@ -71,19 +79,22 @@ router.post('/webhooks/brevo', (req, res) => {
       });
       await pool.query(`
         INSERT INTO touchpoints
-          (prospect_id, channel, action_type, content_summary, outcome, sentiment, external_ref)
-        VALUES ($1, 'email', $2, $3, $4, 'neutral', $5)
+          (prospect_id, channel, action_type, content_summary, outcome, sentiment, external_ref, client_id)
+        VALUES ($1, 'email', $2, $3, $4, 'neutral', $5, $6)
       `, [
         prospect.id, actionType,
         payload.subject || null,
         outcomeJson,
         payload.messageId || null,
+        prospect.client_id,
       ]);
 
       if (['email_bounced', 'email_spam', 'email_unsubscribed'].includes(actionType)) {
         await pool.query(
-          `UPDATE prospects SET do_not_contact = true, updated_at = NOW() WHERE id = $1`,
-          [prospect.id]
+          `UPDATE prospects
+           SET do_not_contact = true, updated_at = NOW()
+           WHERE LOWER(email) = $1 AND client_id = $2`,
+          [email, prospect.client_id]
         );
         console.log(`[Riley] ${email} marked do_not_contact (${event})`);
       }

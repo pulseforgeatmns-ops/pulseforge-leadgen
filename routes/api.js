@@ -387,6 +387,220 @@ router.get('/api/prospects/:id/touchpoints', requireAuth, async (req, res) => {
   }
 });
 
+router.get('/api/prospects/:id/preview', requireAuth, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const result = await pool.query(`
+      SELECT
+        p.id, p.first_name, p.last_name, p.email, p.phone, p.vertical,
+        p.status, p.icp_score, p.last_contacted_at, p.notes,
+        c.name AS company_name, c.location AS city,
+        COALESCE(eng.open_count, 0)::int AS open_count,
+        eng.last_open_at,
+        COALESCE(seq.send_count, 0)::int AS send_count
+      FROM prospects p
+      LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+      LEFT JOIN (
+        SELECT prospect_id,
+          COUNT(*) FILTER (WHERE action_type IN ('open', 'email_opened'))::int AS open_count,
+          MAX(created_at) FILTER (WHERE action_type IN ('open', 'email_opened')) AS last_open_at
+        FROM touchpoints
+        WHERE client_id = $2 AND channel = 'email'
+        GROUP BY prospect_id
+      ) eng ON eng.prospect_id = p.id
+      LEFT JOIN (
+        SELECT prospect_id,
+          COUNT(*) FILTER (WHERE action_type IN ('send', 'outbound', 'email_warm'))::int AS send_count
+        FROM touchpoints
+        WHERE client_id = $2 AND channel = 'email'
+        GROUP BY prospect_id
+      ) seq ON seq.prospect_id = p.id
+      WHERE p.id = $1 AND p.client_id = $2
+      LIMIT 1
+    `, [req.params.id, clientId]);
+    if (!result.rows.length) return res.status(404).json({ error: 'Prospect not found' });
+    const r = result.rows[0];
+    const sequenceStep = r.send_count <= 0 ? 'Not started'
+      : r.send_count === 1 ? 'Day 0 email'
+      : r.send_count === 2 ? 'Day 4 email'
+      : r.send_count === 3 ? 'Day 8 email'
+      : 'Day 13 email';
+    res.set('Cache-Control', 'private, max-age=30');
+    res.json({
+      id: r.id,
+      name: r.company_name || String(r.notes || '').split('—')[0].trim() || `${r.first_name || ''} ${r.last_name || ''}`.trim(),
+      contact_name: `${r.first_name || ''} ${r.last_name || ''}`.trim(),
+      email: r.email,
+      phone: r.phone,
+      vertical: r.vertical,
+      city: r.city,
+      icp_score: r.icp_score,
+      status: r.status,
+      last_contacted_at: r.last_contacted_at,
+      open_count: r.open_count,
+      sequence_step: sequenceStep,
+      last_open_at: r.last_open_at,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/prospects/:id/detail', requireAuth, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const prospectRes = await pool.query(`
+      SELECT
+        p.*, c.name AS company_name, c.location AS city, c.website,
+        u.name AS closer_name,
+        COALESCE(eng.open_count, 0)::int AS open_count,
+        COALESCE(eng.click_count, 0)::int AS click_count,
+        COALESCE(seq.send_count, 0)::int AS send_count,
+        eng.last_open_at
+      FROM prospects p
+      LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+      LEFT JOIN users u ON u.id = p.closer_id
+      LEFT JOIN (
+        SELECT prospect_id,
+          COUNT(*) FILTER (WHERE action_type IN ('open', 'email_opened'))::int AS open_count,
+          COUNT(*) FILTER (WHERE action_type IN ('click', 'email_clicked'))::int AS click_count,
+          MAX(created_at) FILTER (WHERE action_type IN ('open', 'email_opened')) AS last_open_at
+        FROM touchpoints
+        WHERE client_id = $2 AND channel = 'email'
+        GROUP BY prospect_id
+      ) eng ON eng.prospect_id = p.id
+      LEFT JOIN (
+        SELECT prospect_id,
+          COUNT(*) FILTER (WHERE action_type IN ('send', 'outbound', 'email_warm'))::int AS send_count
+        FROM touchpoints
+        WHERE client_id = $2 AND channel = 'email'
+        GROUP BY prospect_id
+      ) seq ON seq.prospect_id = p.id
+      WHERE p.id = $1 AND p.client_id = $2
+      LIMIT 1
+    `, [req.params.id, clientId]);
+    if (!prospectRes.rows.length) return res.status(404).json({ error: 'Prospect not found' });
+
+    const historyRes = await pool.query(`
+      SELECT t.id, t.channel, t.action_type, t.content_summary, t.outcome,
+        t.sentiment, t.agent_id, t.created_at, u.name AS logged_by
+      FROM touchpoints t
+      LEFT JOIN users u ON t.agent_id = u.id::text
+      WHERE t.prospect_id = $1 AND t.client_id = $2
+      ORDER BY t.created_at DESC
+    `, [req.params.id, clientId]);
+
+    const p = prospectRes.rows[0];
+    const sends = historyRes.rows
+      .filter(t => t.channel === 'email' && ['send', 'outbound', 'email_warm'].includes(t.action_type))
+      .slice()
+      .reverse();
+    const sequenceDays = [0, 4, 8, 13];
+    const sequence = sequenceDays.map((day, index) => {
+      const sent = sends[index] || null;
+      const sentAt = sent?.created_at ? new Date(sent.created_at) : null;
+      const nextSentAt = sends[index + 1]?.created_at ? new Date(sends[index + 1].created_at) : null;
+      const related = historyRes.rows.filter(t => {
+        if (t.channel !== 'email' || !['open', 'email_opened', 'click', 'email_clicked'].includes(t.action_type)) return false;
+        const created = new Date(t.created_at);
+        return sentAt && created >= sentAt && (!nextSentAt || created < nextSentAt);
+      });
+      return {
+        day,
+        status: sent ? 'sent' : index === sends.length ? 'current' : 'pending',
+        sent_at: sent?.created_at || null,
+        opened: related.some(t => ['open', 'email_opened'].includes(t.action_type)),
+        clicked: related.some(t => ['click', 'email_clicked'].includes(t.action_type)),
+      };
+    });
+    const lastSend = sends[sends.length - 1]?.created_at ? new Date(sends[sends.length - 1].created_at) : null;
+    const nextDays = p.send_count === 1 || p.send_count === 2 ? 4 : p.send_count === 3 ? 5 : null;
+    const nextScheduled = nextDays && lastSend ? new Date(lastSend.getTime() + nextDays * 86400000).toISOString() : null;
+
+    res.json({
+      id: p.id,
+      name: p.company_name || String(p.notes || '').split('—')[0].trim() || `${p.first_name || ''} ${p.last_name || ''}`.trim(),
+      contact_name: `${p.first_name || ''} ${p.last_name || ''}`.trim(),
+      email: p.email,
+      phone: p.phone,
+      vertical: p.vertical,
+      city: p.city,
+      website: p.website,
+      icp_score: p.icp_score,
+      status: p.status,
+      setter_status: p.setter_status,
+      closer_id: p.closer_id,
+      closer_name: p.closer_name,
+      notes: p.notes,
+      created_at: p.created_at,
+      last_contacted_at: p.last_contacted_at,
+      open_count: p.open_count,
+      click_count: p.click_count,
+      send_count: p.send_count,
+      last_open_at: p.last_open_at,
+      sequence_step: p.send_count <= 0 ? 'Not started' : `Day ${sequenceDays[Math.min(p.send_count - 1, 3)]} email`,
+      next_scheduled_send_at: nextScheduled,
+      history: historyRes.rows,
+      email_opens: historyRes.rows.filter(t => ['open', 'email_opened'].includes(t.action_type)),
+      sequence,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/prospects/:id/touch', requireAuth, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const actionType = String(req.body.action_type || 'manual_touch').slice(0, 80);
+    const notes = String(req.body.notes || '').slice(0, 2000);
+    const outcome = String(req.body.outcome || 'neutral').slice(0, 120);
+    const result = await pool.query(`
+      INSERT INTO touchpoints
+        (prospect_id, channel, action_type, content_summary, outcome, sentiment, agent_id, client_id)
+      SELECT p.id, $3, $4, $5, $6, 'neutral', $7, p.client_id
+      FROM prospects p
+      WHERE p.id = $1 AND p.client_id = $2
+      RETURNING id, created_at
+    `, [req.params.id, clientId, req.body.channel || 'manual', actionType, notes, outcome, String(req.user?.id || '')]);
+    if (!result.rows.length) return res.status(404).json({ error: 'Prospect not found' });
+    await pool.query('UPDATE prospects SET last_contacted_at = NOW(), updated_at = NOW() WHERE id = $1 AND client_id = $2', [req.params.id, clientId]);
+    res.json({ success: true, touchpoint: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/api/prospects/:id/status', requireAuth, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const status = String(req.body.status || '').toLowerCase();
+    if (!['cold', 'warm', 'hot', 'dead'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    const result = await pool.query(
+      'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3 RETURNING id, status',
+      [status, req.params.id, clientId]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Prospect not found' });
+    res.json({ success: true, prospect: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/api/prospects/:id/do-not-contact', requireAuth, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const result = await pool.query(
+      'UPDATE prospects SET do_not_contact = true, updated_at = NOW() WHERE id = $1 AND client_id = $2 RETURNING id, do_not_contact',
+      [req.params.id, clientId]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Prospect not found' });
+    res.json({ success: true, prospect: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Agent stats for sparklines
 router.get('/api/agent-stats', requireAuth, async (req, res) => {
   try {
@@ -494,9 +708,24 @@ router.get('/api/activity', requireAuth, async (req, res) => {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT al.agent_name, al.action, al.status, al.ran_at, al.payload,
-        p.first_name, p.last_name
+        COALESCE(
+          al.prospect_id,
+          CASE
+            WHEN (al.payload->>'prospect_id') ~* '^[0-9a-f-]{36}$' THEN (al.payload->>'prospect_id')::uuid
+            ELSE NULL
+          END
+        ) AS prospect_id,
+        p.first_name, p.last_name, p.notes as prospect_notes
       FROM agent_log al
-      LEFT JOIN prospects p ON al.prospect_id = p.id AND p.client_id = al.client_id
+      LEFT JOIN prospects p
+        ON p.id = COALESCE(
+          al.prospect_id,
+          CASE
+            WHEN (al.payload->>'prospect_id') ~* '^[0-9a-f-]{36}$' THEN (al.payload->>'prospect_id')::uuid
+            ELSE NULL
+          END
+        )
+        AND p.client_id = al.client_id
       WHERE al.client_id = $1
         AND ${EXCLUDE_COMMAND_FEED_ACTIONS_SQL}
       ORDER BY al.ran_at DESC
@@ -520,7 +749,14 @@ router.get('/api/activity', requireAuth, async (req, res) => {
         weekly_report: 'weekly report dispatched',
         generate_mockup: `generated a mockup ${prospect}`,
         outbound: `sent email sequence ${prospect}`,
-        dashboard_trigger: 'triggered from dashboard'
+        dashboard_trigger: 'triggered from dashboard',
+        email_opened: `email opened ${prospect}`,
+        open: `email opened ${prospect}`,
+        email_clicked: `link clicked ${prospect}`,
+        click: `link clicked ${prospect}`,
+        reply: `reply received ${prospect}`,
+        inbound: `reply received ${prospect}`,
+        call_answered: `phone call answered ${prospect}`
       };
       const label = actionLabels[row.action] || row.action;
       const icons = {
@@ -530,7 +766,15 @@ router.get('/api/activity', requireAuth, async (req, res) => {
         Sketch: { icon: '🎨', color: 'fi-t' }
       };
       const { icon, color } = icons[agent] || { icon: '⚡', color: 'fi-g' };
-      return { agent, action: label, icon, color, time: timeLabel, status: row.status };
+      const rawAction = String(row.action || '').toLowerCase();
+      const isWarmSignal = ['open', 'email_opened', 'click', 'email_clicked', 'reply', 'inbound', 'call_answered'].includes(rawAction);
+      return {
+        agent, action: label, raw_action: rawAction, icon, color,
+        time: timeLabel, ran_at: row.ran_at, status: row.status,
+        prospect_id: row.prospect_id,
+        prospect: prospect || (row.prospect_notes || '').split('—')[0].trim() || null,
+        is_warm_signal: isWarmSignal
+      };
     });
 
     res.json(feed);

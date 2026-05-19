@@ -710,11 +710,42 @@ body.light-mode .agent-card:not(.not-configured) {
   color: #4a4a45;
   margin-bottom: 0.75rem;
 }
+.feed-filter {
+  display: flex; gap: 5px; margin-bottom: 0.65rem;
+}
+.feed-filter-btn {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.55rem; letter-spacing: 1px; text-transform: uppercase;
+  padding: 4px 8px; border: 1px solid var(--border);
+  border-radius: 4px; background: transparent; color: var(--gray-light);
+  cursor: pointer;
+}
+.feed-filter-btn.active {
+  color: var(--orange);
+  border-color: rgba(255,107,53,0.35);
+  background: rgba(255,107,53,0.08);
+}
 
 .feed-item {
   display: flex; gap: 8px; align-items: flex-start;
-  padding: 0.6rem 0;
+  padding: 0.6rem 0.45rem;
   border-bottom: 1px solid rgba(0,0,0,0.08);
+  border-left: 2px solid transparent;
+  border-radius: 5px;
+  cursor: default;
+}
+.feed-item.has-prospect { cursor: pointer; }
+.feed-item.warm-signal {
+  border-left-color: var(--orange);
+  background: rgba(255,107,53,0.08);
+  box-shadow: 0 1px 6px rgba(0,0,0,0.08);
+}
+.signal-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.5rem; letter-spacing: 1px;
+  color: var(--orange);
+  border: 1px solid rgba(255,107,53,0.35);
+  border-radius: 3px; padding: 1px 4px; margin-left: 4px;
 }
 .feed-icon {
   width: 24px; height: 24px;
@@ -730,10 +761,75 @@ body.light-mode .agent-card:not(.not-configured) {
   font-size: 0.73rem; color: #1a1a18; line-height: 1.5; flex: 1;
 }
 .feed-text strong { color: #1a1a18; font-weight: 600; }
+.feed-prospect { color: inherit; }
+.warm-signal .feed-prospect { font-weight: 700; color: var(--white); }
 .feed-time {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.55rem; color: #4a4a45; flex-shrink: 0; margin-top: 2px;
 }
+.prospect-preview-card {
+  position: fixed; z-index: 3000; width: 280px;
+  background: var(--bg1); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,0.28);
+  color: var(--white); display: none; overflow: hidden;
+}
+.preview-head, .preview-section, .preview-actions { padding: 0.75rem; border-bottom: 1px solid var(--border); }
+.preview-actions { border-bottom: 0; display: flex; gap: 6px; }
+.preview-title { display: flex; gap: 7px; align-items: center; font-weight: 700; font-size: 0.82rem; }
+.score-badge { font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); }
+.score-high { color: var(--green); background: var(--green-dim); }
+.score-mid { color: var(--orange); background: rgba(255,107,53,0.08); }
+.score-low { color: var(--gray-light); background: rgba(107,127,160,0.08); }
+.preview-meta, .preview-line { color: var(--gray-light); font-size: 0.68rem; line-height: 1.55; }
+.preview-btn {
+  flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 0.55rem;
+  text-transform: uppercase; border: 1px solid var(--border); background: transparent;
+  color: var(--white); border-radius: 4px; padding: 6px; cursor: pointer;
+}
+.prospect-modal-backdrop {
+  position: fixed; inset: 0; z-index: 3100; background: rgba(0,0,0,0.58);
+  display: none; align-items: center; justify-content: center; padding: 1.5rem;
+}
+.prospect-modal {
+  width: min(760px, 96vw); max-height: 88vh; overflow: hidden;
+  background: var(--bg1); border: 1px solid var(--border); border-radius: 10px;
+  color: var(--white); display: flex; flex-direction: column;
+  box-shadow: 0 18px 60px rgba(0,0,0,0.45);
+}
+.pm-head { padding: 1rem 1.1rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; gap: 1rem; }
+.pm-title { font-size: 1.25rem; font-weight: 700; }
+.pm-meta { color: var(--gray-light); font-size: 0.72rem; margin-top: 4px; }
+.pm-close { background: transparent; border: 1px solid var(--border); color: var(--white); border-radius: 5px; width: 30px; height: 30px; cursor: pointer; }
+.pm-tabs { display: flex; gap: 6px; padding: 0.75rem 1rem 0; }
+.pm-tab { border: 1px solid var(--border); background: transparent; color: var(--gray-light); border-radius: 4px; padding: 6px 10px; cursor: pointer; font-size: 0.65rem; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; }
+.pm-tab.active { color: var(--purple-bright); background: var(--purple-glow); }
+.pm-body { padding: 1rem; overflow-y: auto; min-height: 320px; }
+.pm-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem; }
+.pm-box { border: 1px solid var(--border); border-radius: 7px; padding: 0.8rem; background: rgba(255,255,255,0.025); }
+.pm-label { font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; color: var(--gray); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+.pm-value { font-size: 0.78rem; line-height: 1.45; }
+.history-row { border-left: 2px solid var(--border); padding: 0.55rem 0 0.55rem 0.7rem; font-size: 0.72rem; }
+.history-row.signal { border-left-color: var(--orange); background: rgba(255,107,53,0.06); }
+.history-row.reply { border-left-color: var(--green); background: rgba(0,230,118,0.05); }
+.history-row.manual { border-left-color: var(--purple); background: rgba(139,92,246,0.06); }
+.seq-step { display: flex; justify-content: space-between; gap: 1rem; border: 1px solid var(--border); border-radius: 6px; padding: 0.65rem; margin-bottom: 0.5rem; font-size: 0.72rem; }
+.pm-actions { position: sticky; bottom: 0; background: var(--bg1); border-top: 1px solid var(--border); padding: 0.8rem 1rem; display: flex; gap: 8px; flex-wrap: wrap; }
+.pm-action-btn, .pm-select, .pm-input {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.6rem; border: 1px solid var(--border);
+  background: transparent; color: var(--white); border-radius: 4px; padding: 7px 9px;
+}
+.pm-action-btn { cursor: pointer; text-transform: uppercase; }
+.touch-form { display: none; width: 100%; gap: 6px; }
+.touch-form.visible { display: flex; }
+.pm-toast { color: var(--green); font-size: 0.65rem; align-self: center; min-width: 70px; }
+body.light-mode .prospect-preview-card,
+body.light-mode .prospect-modal,
+body.light-mode .pm-close,
+body.light-mode .preview-btn,
+body.light-mode .pm-action-btn,
+body.light-mode .pm-select,
+body.light-mode .pm-input { color: var(--text-primary); }
+body.light-mode .warm-signal .feed-prospect { color: var(--text-primary); }
 
 /* Max digest */
 .max-digest {
@@ -2525,6 +2621,10 @@ body.light-mode .agent-card:not(.not-configured) {
 
     <div class="activity-feed" id="activityFeed">
       <div class="feed-label">Live Activity</div>
+      <div class="feed-filter">
+        <button class="feed-filter-btn active" type="button" data-feed-filter="all">All</button>
+        <button class="feed-filter-btn" type="button" data-feed-filter="warm">Warm signals only</button>
+      </div>
       <div id="feedItems">
         <div class="feed-item" style="opacity:0.4;font-size:11px;padding:8px 0;">Loading activity...</div>
       </div>
@@ -2546,6 +2646,11 @@ body.light-mode .agent-card:not(.not-configured) {
 
 <!-- AGENT DETAIL CLOSE — outside the panel so display:none on parent never hides it -->
 <button class="detail-close" id="detailCloseBtn" onclick="closeDetail()" style="display:none">← BACK</button>
+
+<div class="prospect-preview-card" id="prospectPreview"></div>
+<div class="prospect-modal-backdrop" id="prospectModalBackdrop">
+  <div class="prospect-modal" id="prospectModal"></div>
+</div>
 
 <!-- AGENT DETAIL OVERLAY -->
 <div class="agent-detail" id="agentDetail">
@@ -3128,23 +3233,296 @@ async function runAllLive(btn) {
   loadActivityFeed();
 }
 
+let _feedItemsCache = [];
+let _feedFilterMode = 'all';
+let _previewHideTimer = null;
+let _activePreviewProspectId = null;
+let _activeModalProspectId = null;
+
+function _scoreClass(score) {
+  const n = Number(score || 0);
+  if (n >= 90) return 'score-high';
+  if (n >= 70) return 'score-mid';
+  return 'score-low';
+}
+
+function _fmtDateShort(d) {
+  if (!d) return 'Never';
+  return new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function _feedActionHtml(item) {
+  const text = String(item.action || '');
+  const prospect = item.prospect ? String(item.prospect).replace(/^·\s*/, '') : '';
+  if (!prospect) return _esc(text);
+  return _esc(text).replace(_esc(prospect), `<span class="feed-prospect">${_esc(prospect)}</span>`);
+}
+
+function renderActivityFeedItems() {
+  const container = document.getElementById('feedItems');
+  if (!container) return;
+  const visible = _feedFilterMode === 'warm'
+    ? _feedItemsCache.filter(item => item.is_warm_signal)
+    : _feedItemsCache;
+  if (!visible.length) {
+    container.innerHTML = '<div class="feed-item" style="opacity:0.4;font-size:11px;padding:8px 0;">No activity yet.</div>';
+    return;
+  }
+  container.innerHTML = visible.map(function(item) {
+    const warm = item.is_warm_signal ? ' warm-signal' : '';
+    const hoverable = item.prospect_id ? ' has-prospect' : '';
+    const badge = item.is_warm_signal ? '<span class="signal-badge">SIGNAL</span>' : '';
+    return `<div class="feed-item${warm}${hoverable}" data-prospect-id="${_esc(item.prospect_id || '')}">
+      <div class="feed-icon ${_esc(item.color || 'fi-g')}">${_esc(item.icon || '⚡')}</div>
+      <div class="feed-text"><strong>${_esc(item.agent || 'System')}</strong>${badge} ${_feedActionHtml(item)}</div>
+      <div class="feed-time">${_esc(item.time || '')}</div>
+    </div>`;
+  }).join('');
+  container.querySelectorAll('.feed-item.has-prospect').forEach(el => {
+    el.addEventListener('mouseenter', () => showProspectPreview(el, el.dataset.prospectId));
+    el.addEventListener('mouseleave', schedulePreviewHide);
+    el.addEventListener('click', () => openProspectModal(el.dataset.prospectId));
+  });
+}
+
 async function loadActivityFeed() {
   try {
     const res = await fetch('/api/activity');
     if (!res.ok) return;
     const feed = await res.json();
-    const container = document.getElementById('feedItems');
-    if (!container) return;
-    if (!feed || !feed.length) {
-      container.innerHTML = '<div class="feed-item" style="opacity:0.4;font-size:11px;padding:8px 0;">No activity yet.</div>';
-      return;
-    }
-    container.innerHTML = feed.map(function(item) {
-      return '<div class="feed-item"><div class="feed-icon ' + (item.color||'fi-g') + '">' + (item.icon||'⚡') + '</div><div class="feed-text"><strong>' + item.agent + '</strong> ' + item.action + '</div><div class="feed-time">' + item.time + '</div></div>';
-    }).join('');
+    _feedItemsCache = feed || [];
+    renderActivityFeedItems();
   } catch(err) {
     console.error('Activity feed error:', err);
   }
+}
+
+document.querySelectorAll('[data-feed-filter]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    _feedFilterMode = btn.dataset.feedFilter;
+    document.querySelectorAll('[data-feed-filter]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderActivityFeedItems();
+  });
+});
+
+async function showProspectPreview(anchor, prospectId) {
+  if (!prospectId) return;
+  clearTimeout(_previewHideTimer);
+  _activePreviewProspectId = prospectId;
+  const card = document.getElementById('prospectPreview');
+  card.style.display = 'block';
+  card.innerHTML = '<div class="preview-section">Loading prospect...</div>';
+  positionPreviewCard(anchor, card);
+  try {
+    const res = await fetch(`/api/prospects/${encodeURIComponent(prospectId)}/preview`, { credentials: 'include' });
+    if (!res.ok || _activePreviewProspectId !== prospectId) return;
+    const p = await res.json();
+    card.innerHTML = `
+      <div class="preview-head">
+        <div class="preview-title"><span class="score-badge ${_scoreClass(p.icp_score)}">${p.icp_score ?? '—'}</span><span>${_esc(p.name || 'Unknown')}</span></div>
+        <div class="preview-meta">${_esc(p.contact_name || 'No contact')} · ${_esc(p.vertical || 'unknown')} · ${_esc(p.city || '—')}</div>
+      </div>
+      <div class="preview-section">
+        <div class="preview-line">📧 ${_esc(p.email || 'No email')}</div>
+        <div class="preview-line">📞 ${_esc(p.phone || 'No phone')}</div>
+      </div>
+      <div class="preview-section">
+        <div class="preview-line">Status: ${_statusBadge(p.status)}</div>
+        <div class="preview-line">Sequence: ${_esc(p.sequence_step || '—')}</div>
+        <div class="preview-line">Opens: ${p.open_count || 0} total · Last: ${p.last_open_at ? _relTimeP(p.last_open_at) : 'Never'}</div>
+        <div class="preview-line">Last touched: ${_fmtDateShort(p.last_contacted_at)}</div>
+      </div>
+      <div class="preview-actions">
+        <button class="preview-btn" type="button" onclick="openProspectModal('${_esc(prospectId)}', 'touch')">Log touch</button>
+        <button class="preview-btn" type="button" onclick="openProspectsFor('${_esc(prospectId)}')">View prospect →</button>
+      </div>`;
+    positionPreviewCard(anchor, card);
+  } catch(e) {
+    card.innerHTML = '<div class="preview-section">Preview unavailable.</div>';
+  }
+}
+
+function positionPreviewCard(anchor, card) {
+  const r = anchor.getBoundingClientRect();
+  const width = 280;
+  const left = Math.max(12, r.left - width - 14);
+  let top = r.top + (r.height / 2) - 150;
+  top = Math.max(12, Math.min(top, window.innerHeight - 330));
+  card.style.left = left + 'px';
+  card.style.top = top + 'px';
+}
+
+function schedulePreviewHide() {
+  clearTimeout(_previewHideTimer);
+  _previewHideTimer = setTimeout(() => {
+    document.getElementById('prospectPreview').style.display = 'none';
+    _activePreviewProspectId = null;
+  }, 200);
+}
+
+document.getElementById('prospectPreview').addEventListener('mouseenter', () => clearTimeout(_previewHideTimer));
+document.getElementById('prospectPreview').addEventListener('mouseleave', schedulePreviewHide);
+
+async function openProspectModal(prospectId, initialAction) {
+  if (!prospectId) return;
+  _activeModalProspectId = prospectId;
+  const backdrop = document.getElementById('prospectModalBackdrop');
+  const modal = document.getElementById('prospectModal');
+  backdrop.style.display = 'flex';
+  modal.innerHTML = '<div class="pm-body">Loading prospect...</div>';
+  try {
+    const res = await fetch(`/api/prospects/${encodeURIComponent(prospectId)}/detail`, { credentials: 'include' });
+    if (!res.ok) throw new Error('detail unavailable');
+    const p = await res.json();
+    modal.innerHTML = prospectModalHtml(p);
+    bindProspectModal(p);
+    if (initialAction === 'touch') toggleTouchForm(true);
+  } catch(e) {
+    modal.innerHTML = '<div class="pm-body">Prospect detail unavailable.</div>';
+  }
+}
+
+function prospectModalHtml(p) {
+  return `
+    <div class="pm-head">
+      <div>
+        <div class="pm-title">${_esc(p.name || 'Unknown')}</div>
+        <div class="pm-meta">${_esc(p.contact_name || 'No contact')} · ${_esc(p.vertical || 'unknown')} · ${_esc(p.city || '—')} · <span class="score-badge ${_scoreClass(p.icp_score)}">${p.icp_score ?? '—'}</span></div>
+        <div class="pm-meta">${_statusBadge(p.status)} · Last touched ${_relTimeP(p.last_contacted_at)}</div>
+      </div>
+      <button class="pm-close" type="button" onclick="closeProspectModal()">✕</button>
+    </div>
+    <div class="pm-tabs">
+      <button class="pm-tab active" data-pm-tab="overview">Overview</button>
+      <button class="pm-tab" data-pm-tab="history">History</button>
+      <button class="pm-tab" data-pm-tab="sequence">Sequence</button>
+    </div>
+    <div class="pm-body">
+      <div class="pm-panel" data-pm-panel="overview">${overviewHtml(p)}</div>
+      <div class="pm-panel" data-pm-panel="history" style="display:none">${historyHtml(p.history || [])}</div>
+      <div class="pm-panel" data-pm-panel="sequence" style="display:none">${sequenceHtml(p)}</div>
+    </div>
+    <div class="pm-actions">
+      <button class="pm-action-btn" type="button" id="pmLogTouch">Log touch ✉</button>
+      <select class="pm-select" id="pmStatusSelect">
+        ${['cold','warm','hot','dead'].map(s => `<option value="${s}" ${s === (p.status || '').toLowerCase() ? 'selected' : ''}>${s}</option>`).join('')}
+      </select>
+      <button class="pm-action-btn" type="button" id="pmDnc">Mark do not contact</button>
+      <button class="pm-action-btn" type="button" onclick="openProspectsFor('${_esc(p.id)}')">View in prospects tab →</button>
+      <span class="pm-toast" id="pmToast"></span>
+      <div class="touch-form" id="pmTouchForm">
+        <input class="pm-input" id="pmTouchAction" placeholder="action type" value="manual_touch">
+        <input class="pm-input" id="pmTouchNotes" placeholder="notes">
+        <input class="pm-input" id="pmTouchOutcome" placeholder="outcome" value="neutral">
+        <button class="pm-action-btn" type="button" id="pmTouchSubmit">Save</button>
+      </div>
+    </div>`;
+}
+
+function overviewHtml(p) {
+  const days = p.created_at ? Math.max(0, Math.floor((Date.now() - new Date(p.created_at)) / 86400000)) : '—';
+  return `<div class="pm-grid">
+    <div class="pm-box"><div class="pm-label">Contact</div><div class="pm-value">${_esc(p.email || 'No email')}<br>${_esc(p.phone || 'No phone')}</div></div>
+    <div class="pm-box"><div class="pm-label">Business</div><div class="pm-value">${_esc(p.vertical || 'unknown')} · ${_esc(p.city || '—')}<br>${p.website ? `<a href="${_esc(p.website)}" target="_blank">${_esc(p.website)}</a>` : 'No website'}</div></div>
+    <div class="pm-box"><div class="pm-label">Pipeline</div><div class="pm-value">Status: ${_esc(p.status || 'cold')}<br>Setter: ${_esc(p.setter_status || '—')}<br>Closer: ${_esc(p.closer_name || p.closer_id || '—')}</div></div>
+    <div class="pm-box"><div class="pm-label">Stats</div><div class="pm-value">${p.open_count || 0} opens · ${p.send_count || 0} sends<br>${days} days in pipeline</div></div>
+    <div class="pm-box" style="grid-column:1/-1"><div class="pm-label">Notes</div><div class="pm-value">${_esc(p.notes || 'No notes')}</div></div>
+  </div>`;
+}
+
+function historyHtml(history) {
+  if (!history.length) return '<div class="pm-box">No touchpoints yet.</div>';
+  return history.map(t => {
+    const a = String(t.action_type || '').toLowerCase();
+    const cls = ['open','email_opened','click','email_clicked'].includes(a) ? 'signal' : ['reply','inbound'].includes(a) ? 'reply' : a.includes('manual') ? 'manual' : '';
+    return `<div class="history-row ${cls}">
+      <strong>${_fmtDateShort(t.created_at)}</strong> · ${_esc(t.channel || '')} · ${_esc(t.action_type || '')}
+      <div>${_esc(t.content_summary || t.outcome || '—')}</div>
+      <div class="preview-meta">${_esc(t.logged_by || t.agent_id || '')}</div>
+    </div>`;
+  }).join('');
+}
+
+function sequenceHtml(p) {
+  return `<div class="pm-box" style="margin-bottom:0.75rem">Current: ${_esc(p.sequence_step || '—')} · Next: ${p.next_scheduled_send_at ? _fmtDateShort(p.next_scheduled_send_at) : 'Not scheduled'}</div>` +
+    (p.sequence || []).map(step => `<div class="seq-step">
+      <div>Day ${step.day}: ${step.status === 'sent' ? 'sent ✓' : step.status}</div>
+      <div>opened ${step.opened ? '✓' : '✗'} · clicked ${step.clicked ? '✓' : '✗'}</div>
+    </div>`).join('');
+}
+
+function bindProspectModal(p) {
+  document.querySelectorAll('.pm-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.pm-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      document.querySelectorAll('.pm-panel').forEach(panel => panel.style.display = panel.dataset.pmPanel === tab.dataset.pmTab ? 'block' : 'none');
+    });
+  });
+  document.getElementById('pmLogTouch').onclick = () => toggleTouchForm();
+  document.getElementById('pmTouchSubmit').onclick = () => submitModalTouch(p.id);
+  document.getElementById('pmStatusSelect').onchange = e => updateModalStatus(p.id, e.target.value);
+  document.getElementById('pmDnc').onclick = () => markModalDnc(p.id);
+}
+
+function toggleTouchForm(force) {
+  document.getElementById('pmTouchForm')?.classList.toggle('visible', force);
+}
+
+function modalToast(text) {
+  const el = document.getElementById('pmToast');
+  if (!el) return;
+  el.textContent = text;
+  setTimeout(() => { el.textContent = ''; }, 2200);
+}
+
+async function submitModalTouch(id) {
+  await fetch(`/api/prospects/${encodeURIComponent(id)}/touch`, {
+    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action_type: document.getElementById('pmTouchAction').value,
+      notes: document.getElementById('pmTouchNotes').value,
+      outcome: document.getElementById('pmTouchOutcome').value
+    })
+  });
+  modalToast('Logged ✓');
+}
+
+async function updateModalStatus(id, status) {
+  await fetch(`/api/prospects/${encodeURIComponent(id)}/status`, {
+    method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status })
+  });
+  modalToast('Updated ✓');
+}
+
+async function markModalDnc(id) {
+  if (!confirm('Are you sure?')) return;
+  await fetch(`/api/prospects/${encodeURIComponent(id)}/do-not-contact`, { method: 'PATCH', credentials: 'include' });
+  modalToast('Updated ✓');
+}
+
+function closeProspectModal() {
+  document.getElementById('prospectModalBackdrop').style.display = 'none';
+  _activeModalProspectId = null;
+}
+
+document.getElementById('prospectModalBackdrop').addEventListener('click', e => {
+  if (e.target.id === 'prospectModalBackdrop') closeProspectModal();
+});
+
+function openProspectsFor(id) {
+  closeProspectModal();
+  schedulePreviewHide();
+  document.querySelector('.nav-tab[data-tab="prospects"]')?.click();
+  _prospectSearch = '';
+  const row = _prospects.find(p => p.id === id);
+  if (row) _prospectSearch = _parseBusiness(row);
+  const search = document.getElementById('prospectSearch');
+  if (search) search.value = _prospectSearch;
+  _expandedProspectId = id;
+  _renderProspects();
 }
 
 // Load live data from API
