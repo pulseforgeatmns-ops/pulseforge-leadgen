@@ -773,6 +773,10 @@ async function getProspectsForEmail() {
       SELECT COUNT(*) FROM touchpoints t
       WHERE t.prospect_id = p.id AND t.client_id = p.client_id AND t.channel = 'email'
     ) < 4
+    ORDER BY
+      CASE WHEN p.status = 'warm' THEN 0 ELSE 1 END ASC,
+      p.icp_score DESC NULLS LAST,
+      p.last_contacted_at ASC NULLS FIRST
     LIMIT 100
   `, [CLIENT_ID]);
 

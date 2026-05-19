@@ -10,6 +10,7 @@ const AGENT_NAME = 'riley';
 const CLIENT_ID = getRuntimeClientId();
 const CREDENTIALS_PATH = './gmail_credentials.json';
 const TOKEN_PATH = './gmail_token.json';
+const DOWNLOADS_CREDENTIALS_PATH = path.join(process.env.HOME || '.', 'Downloads', 'riley_credentials.json');
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.send',
@@ -19,70 +20,72 @@ const SCOPES = [
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ── AUTH ──────────────────────────────────────────────────────────────
-async function getAuthClient() {
-  // Path 1: GMAIL_TOKEN + Pulseforge Web OAuth client (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)
-  if (process.env.GMAIL_TOKEN && process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-    try {
-      const token = JSON.parse(process.env.GMAIL_TOKEN);
-      const oAuth2Client = new google.auth.OAuth2(
-        process.env.GOOGLE_CLIENT_ID,
-        process.env.GOOGLE_CLIENT_SECRET,
-        'http://localhost:3001'
-      );
-      oAuth2Client.setCredentials(token);
-      console.log('[Riley] Auth path: GMAIL_TOKEN + GOOGLE_CLIENT_ID/SECRET');
-      return oAuth2Client;
-    } catch (err) {
-      console.warn('[Riley] GMAIL_TOKEN parse failed, trying next path:', err.message);
-    }
-  }
-
-  // Path 2: GMAIL_CREDENTIALS (env or file) + GMAIL_TOKEN (env or file)
-  let oAuth2Client;
+function parseJsonSource(label, raw) {
+  if (!raw) return null;
   try {
-    const rawCreds = process.env.GMAIL_CREDENTIALS || (fs.existsSync(CREDENTIALS_PATH) ? fs.readFileSync(CREDENTIALS_PATH, 'utf8') : null);
-    if (rawCreds) {
-      const credentials = JSON.parse(rawCreds);
-      const credKeys = credentials.installed || credentials.web;
-      const { client_secret, client_id } = credKeys;
-      oAuth2Client = new google.auth.OAuth2(client_id, client_secret, 'http://localhost:3001');
-      console.log('[Riley] Auth path: GMAIL_CREDENTIALS parsed successfully');
-    }
+    return JSON.parse(String(raw).trim());
   } catch (err) {
-    console.warn('[Riley] GMAIL_CREDENTIALS parse failed:', err.message);
+    throw new Error(`${label} is not valid JSON: ${err.message}`);
+  }
+}
+
+function readFileIfPresent(filePath) {
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null;
+}
+
+function loadOAuthCredentials() {
+  const rawCreds = process.env.GMAIL_CREDENTIALS
+    || readFileIfPresent(CREDENTIALS_PATH)
+    || readFileIfPresent(DOWNLOADS_CREDENTIALS_PATH);
+
+  if (rawCreds) {
+    const credentials = parseJsonSource('GMAIL_CREDENTIALS', rawCreds);
+    const credKeys = credentials.installed || credentials.web;
+    if (!credKeys?.client_id || !credKeys?.client_secret) {
+      throw new Error('GMAIL_CREDENTIALS must contain installed or web OAuth client JSON');
+    }
+    console.log('[Riley] Auth credentials: Gmail OAuth JSON');
+    return credKeys;
   }
 
-  if (!oAuth2Client) {
-    // Fallback client using web OAuth vars so we can at least attempt re-auth
-    oAuth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      'http://localhost:3001'
-    );
-    console.warn('[Riley] Auth path: fallback to GOOGLE_CLIENT_ID/SECRET only (no valid credentials source)');
+  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    console.warn('[Riley] Auth credentials: fallback GOOGLE_CLIENT_ID/SECRET');
+    return {
+      client_id: process.env.GOOGLE_CLIENT_ID,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET,
+    };
   }
 
+  throw new Error('Missing Gmail OAuth credentials. Set GMAIL_CREDENTIALS to the full JSON string.');
+}
+
+async function getAuthClient() {
+  const { client_id, client_secret } = loadOAuthCredentials();
+  const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, 'http://localhost:3001');
   const rawToken = process.env.GMAIL_TOKEN
-    || (fs.existsSync(TOKEN_PATH) ? fs.readFileSync(TOKEN_PATH, 'utf8') : null);
+    || readFileIfPresent(TOKEN_PATH);
 
   if (rawToken) {
     try {
-      const token = JSON.parse(rawToken);
+      const token = parseJsonSource('GMAIL_TOKEN', rawToken);
       oAuth2Client.setCredentials(token);
       await oAuth2Client.getAccessToken();
-      console.log('[Riley] Auth path: GMAIL_CREDENTIALS + token set, access token refreshed');
+      console.log('[Riley] Auth token: parsed and refreshed');
       return oAuth2Client;
     } catch (err) {
-      const code = err.response?.data?.error || err.message || '';
-      if (code.includes('invalid_grant') || code.includes('invalid_client')) {
-        console.warn('[Riley] Stored token is invalid or expired — falling through to re-auth');
-      } else {
-        throw err;
+      const authError = err.response?.data?.error || err.message || '';
+      if (!authError.includes('invalid_grant') && !authError.includes('invalid_client')) throw err;
+      if (!process.stdin.isTTY) {
+        throw new Error(`Stored GMAIL_TOKEN is invalid or expired (${authError}). Regenerate it with getRileyToken.js and update Railway/local env.`);
       }
+      console.warn('[Riley] Stored token is invalid or expired — falling through to re-auth');
     }
   }
 
   // Path 3: Interactive re-auth (local only — will not work on Railway)
+  if (!process.stdin.isTTY) {
+    throw new Error('Missing GMAIL_TOKEN. Regenerate it with getRileyToken.js and update Railway/local env.');
+  }
   console.log('[Riley] Auth path: interactive re-auth');
   const authUrl = oAuth2Client.generateAuthUrl({ access_type: 'offline', scope: SCOPES });
   console.log('\n🔐 Authorize Riley by visiting this URL:\n');
@@ -332,4 +335,11 @@ async function run() {
   console.log('Riley complete.');
 }
 
-run().catch(console.error);
+module.exports = { run, getAuthClient };
+
+if (require.main === module) {
+  run().catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
+}

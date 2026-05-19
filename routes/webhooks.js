@@ -56,10 +56,13 @@ router.post('/webhooks/brevo', (req, res) => {
       const payloadClientId = Number(payload.client_id || payload.clientId || payload.metadata?.client_id) || null;
       const prospectParams = payloadClientId ? [email, payloadClientId] : [email];
       const prospectRes = await pool.query(
-        `SELECT id, status, client_id
-         FROM prospects
-         WHERE LOWER(email) = $1
-         ${payloadClientId ? 'AND client_id = $2' : ''}
+        `SELECT
+           p.id, p.status, p.client_id, p.first_name, p.last_name, p.notes,
+           c.name AS company_name
+         FROM prospects p
+         LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+         WHERE LOWER(p.email) = $1
+         ${payloadClientId ? 'AND p.client_id = $2' : ''}
          LIMIT 1`,
         prospectParams
       );
@@ -88,6 +91,75 @@ router.post('/webhooks/brevo', (req, res) => {
         payload.messageId || null,
         prospect.client_id,
       ]);
+
+      if (actionType === 'email_opened') {
+        const openRes = await pool.query(`
+          SELECT COUNT(*)::int AS open_count
+          FROM touchpoints
+          WHERE prospect_id = $1
+            AND client_id = $2
+            AND channel = 'email'
+            AND action_type = 'email_opened'
+            AND created_at >= NOW() - INTERVAL '24 hours'
+        `, [prospect.id, prospect.client_id]);
+        const openCount = Number(openRes.rows[0]?.open_count || 0);
+
+        if (openCount >= 2) {
+          const company =
+            prospect.company_name ||
+            String(prospect.notes || '').split('—')[0].trim() ||
+            `${prospect.first_name || ''} ${prospect.last_name || ''}`.trim() ||
+            email;
+          const alertPayload = {
+            prospect_id: prospect.id,
+            email,
+            company,
+            open_count: openCount,
+            client_id: prospect.client_id,
+          };
+
+          const hotFlagRes = await pool.query(`
+            INSERT INTO touchpoints
+              (prospect_id, channel, action_type, content_summary, outcome, sentiment, client_id)
+            SELECT $1, 'email', 'hot_flag', $2, $3, 'positive', $4
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM touchpoints
+              WHERE prospect_id = $1
+                AND client_id = $4
+                AND action_type = 'hot_flag'
+                AND created_at >= NOW() - INTERVAL '24 hours'
+            )
+            RETURNING id
+          `, [
+            prospect.id,
+            `Hot flag: ${openCount} email opens in 24 hours`,
+            JSON.stringify(alertPayload),
+            prospect.client_id,
+          ]);
+
+          if (hotFlagRes.rows.length) {
+            await pool.query(
+              `UPDATE prospects
+               SET is_hot = true,
+                   setter_visible = true,
+                   setter_updated_at = NOW(),
+                   updated_at = NOW()
+               WHERE id = $1 AND client_id = $2`,
+              [prospect.id, prospect.client_id]
+            );
+
+            await pool.query(`
+              INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+              VALUES ('riley', 'hot_prospect_alert', $1, $2, 'pending', NOW(), $3)
+            `, [
+              prospect.id,
+              JSON.stringify(alertPayload),
+              prospect.client_id,
+            ]);
+          }
+        }
+      }
 
       if (['email_bounced', 'email_spam', 'email_unsubscribed'].includes(actionType)) {
         await pool.query(

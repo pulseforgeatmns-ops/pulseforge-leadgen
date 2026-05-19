@@ -392,7 +392,9 @@ function parseScoreJson(text) {
   const raw = String(text || '').trim();
   const match = raw.match(/\{[\s\S]*\}/);
   if (!match) throw new Error('No JSON object returned from quality scoring');
-  const parsed = JSON.parse(match[0].replace(/'/g, '"'));
+  const rawText = match[0].replace(/'/g, '"');
+  const clean = rawText.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+  const parsed = JSON.parse(clean);
   const specificity = Number(parsed.specificity || 0);
   const originality = Number(parsed.originality || 0);
   const hookStrength = Number(parsed.hook_strength || 0);

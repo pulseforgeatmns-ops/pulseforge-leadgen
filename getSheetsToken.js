@@ -3,7 +3,7 @@ const { google } = require('googleapis');
 const http = require('http');
 const fs = require('fs');
 
-const CREDENTIALS_PATH = './sheets_credentials.json';
+const CREDENTIALS_PATH = require('path').join(__dirname, 'sheets_credentials.json');
 const REDIRECT_URI = 'http://localhost:3001';
 const SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
