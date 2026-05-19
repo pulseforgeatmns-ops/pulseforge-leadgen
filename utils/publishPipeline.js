@@ -122,7 +122,7 @@ async function publishToGoogleBusiness(item) {
     console.log(`[GBP Publisher] Posted to ${location}`);
   } catch (err) {
     console.error('[GBP Publisher] Failed:', err.response?.data || err.message);
-    await logResult('google_business', 'publish_post', item, 'error', { error: err.message });
+    await logResult('google_business', 'publish_post', item, 'failed', { error: err.message });
   }
 }
 
@@ -147,7 +147,7 @@ async function publishToFacebookPage(item) {
     console.log(`[FB Page Publisher] Posted to page ${pageId}`);
   } catch (err) {
     console.error('[FB Page Publisher] Failed:', err.response?.data || err.message);
-    await logResult('facebook_page', 'publish_post', item, 'error', { error: err.message });
+    await logResult('facebook_page', 'publish_post', item, 'failed', { error: err.message });
   }
 }
 
@@ -172,7 +172,7 @@ async function publishFayeComment(item) {
   const cookies = loadFacebookCookies();
   if (!cookies) {
     console.warn('[Faye Publisher] No Facebook session found (FACEBOOK_SESSION env or facebook_session.json) — skipping');
-    await logResult('facebook', 'post_comment', item, 'error', { error: 'no_session' });
+    await logResult('facebook', 'post_comment', item, 'failed', { error: 'no_session' });
     return;
   }
 
@@ -193,7 +193,7 @@ async function publishFayeComment(item) {
     if (page.url().includes('login')) {
       console.warn('[Faye Publisher] Facebook session expired');
       await updateStatus(item.id, 'session_expired');
-      await logResult('facebook', 'post_comment', item, 'error', { error: 'session_expired' });
+      await logResult('facebook', 'post_comment', item, 'failed', { error: 'session_expired' });
       return;
     }
 
@@ -212,7 +212,7 @@ async function publishFayeComment(item) {
     if (!commentBox) {
       console.warn('[Faye Publisher] Comment box not found');
       await updateStatus(item.id, 'error');
-      await logResult('facebook', 'post_comment', item, 'error', { error: 'comment_box_not_found', url: item.post_url });
+      await logResult('facebook', 'post_comment', item, 'failed', { error: 'comment_box_not_found', url: item.post_url });
       return;
     }
 
@@ -231,7 +231,7 @@ async function publishFayeComment(item) {
     console.log(`[Faye Publisher] Comment posted on ${item.post_url}`);
   } catch (err) {
     console.error('[Faye Publisher] Error:', err.message);
-    await logResult('facebook', 'post_comment', item, 'error', { error: err.message });
+    await logResult('facebook', 'post_comment', item, 'failed', { error: err.message });
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
@@ -295,7 +295,7 @@ async function publishToLinkedInPage(item) {
     console.log(`[LinkedIn Page Publisher] Sent via Buffer — id: ${postId}, sent: ${sentAt || 'pending'}`);
   } catch (err) {
     console.error('[LinkedIn Page Publisher] Failed:', err.response?.data || err.message);
-    await logResult('linkedin_page', 'publish_post', item, 'error', { error: err.message });
+    await logResult('linkedin_page', 'publish_post', item, 'failed', { error: err.message });
   }
 }
 
@@ -320,7 +320,7 @@ async function publishLinkComment(item) {
   const cookies = loadLinkedInCookies();
   if (!cookies) {
     console.warn('[Link Publisher] No LinkedIn session found (LINKEDIN_SESSION env or linkedin_session.json) — skipping');
-    await logResult('linkedin', 'post_comment', item, 'error', { error: 'no_session' });
+    await logResult('linkedin', 'post_comment', item, 'failed', { error: 'no_session' });
     return;
   }
 
@@ -343,7 +343,7 @@ async function publishLinkComment(item) {
     if (page.url().includes('/login') || page.url().includes('/checkpoint')) {
       console.warn('[Link Publisher] LinkedIn session expired');
       await updateStatus(item.id, 'session_expired');
-      await logResult('linkedin', 'post_comment', item, 'error', { error: 'session_expired' });
+      await logResult('linkedin', 'post_comment', item, 'failed', { error: 'session_expired' });
       return;
     }
 
@@ -361,7 +361,7 @@ async function publishLinkComment(item) {
     if (!commentBox) {
       console.warn('[Link Publisher] Comment box not found');
       await updateStatus(item.id, 'error');
-      await logResult('linkedin', 'post_comment', item, 'error', { error: 'comment_box_not_found', url: item.post_url });
+      await logResult('linkedin', 'post_comment', item, 'failed', { error: 'comment_box_not_found', url: item.post_url });
       return;
     }
 
@@ -431,7 +431,7 @@ async function publishLinkComment(item) {
     console.log(`[Link Publisher] Comment posted on ${item.post_url}`);
   } catch (err) {
     console.error('[Link Publisher] Error:', err.message);
-    await logResult('linkedin', 'post_comment', item, 'error', { error: err.message });
+    await logResult('linkedin', 'post_comment', item, 'failed', { error: err.message });
   } finally {
     if (browser) await browser.close().catch(() => {});
   }

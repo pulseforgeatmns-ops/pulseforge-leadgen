@@ -323,9 +323,16 @@ async function run() {
     console.log('\nRex complete.');
   } catch (err) {
     console.error('Rex error:', err.message);
-    await logAgentRun('error').catch(() => {});
+    await logAgentRun('failed').catch(() => {});
   }
 
 }
 
-run();
+module.exports = { run };
+
+if (require.main === module) {
+  run().catch(err => {
+    console.error('[Rex] Fatal error:', err.message);
+    process.exit(1);
+  });
+}

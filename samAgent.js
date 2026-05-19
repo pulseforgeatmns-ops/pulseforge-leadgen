@@ -85,7 +85,7 @@ async function sendSMS(prospectId, messageOverride = null) {
     console.log(`  ✓ SMS sent to ${prospect.first_name} ${prospect.last_name} (${prospect.phone})`);
     return { sent: true, prospectId };
   } catch (err) {
-    await db.logAgentAction(AGENT_NAME, 'send_sms', prospectId, null, { phone: prospect.phone }, 'error', err.message);
+    await db.logAgentAction(AGENT_NAME, 'send_sms', prospectId, null, { phone: prospect.phone }, 'failed', err.message);
     console.error(`  ✗ SMS failed for ${prospect.first_name} ${prospect.last_name}: ${err.message}`);
     return { sent: false, reason: err.message };
   }
@@ -233,6 +233,11 @@ async function run() {
   console.log(`\nSam complete — ${sent} SMS sent.`);
 }
 
-module.exports = { sendSMS };
+module.exports = { sendSMS, run };
 
-run().catch(console.error);
+if (require.main === module) {
+  run().catch(err => {
+    console.error('[Sam] Fatal error:', err.message);
+    process.exit(1);
+  });
+}

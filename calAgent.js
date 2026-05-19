@@ -220,7 +220,7 @@ async function run() {
         prospect.id,
         null,
         { phone: prospect.phone, error: err.message },
-        'error'
+        'failed'
       );
     }
   }
@@ -229,6 +229,11 @@ async function run() {
   console.log(`\nCal complete — ${initiated} call${initiated !== 1 ? 's' : ''} initiated.`);
 }
 
-module.exports = { createCalendarEvent };
+module.exports = { createCalendarEvent, run };
 
-run().catch(console.error);
+if (require.main === module) {
+  run().catch(err => {
+    console.error('[Cal] Fatal error:', err.message);
+    process.exit(1);
+  });
+}

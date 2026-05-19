@@ -149,7 +149,11 @@ async function run() {
   console.log(`─────────────────────────────────\n`);
 }
 
-run().catch(err => {
-  console.error('[warm_signal] Fatal error:', err.message);
-  process.exit(1);
-});
+module.exports = { run };
+
+if (require.main === module) {
+  run().catch(err => {
+    console.error('[warm_signal] Fatal error:', err.message);
+    process.exit(1);
+  });
+}

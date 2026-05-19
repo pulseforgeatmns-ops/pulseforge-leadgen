@@ -307,8 +307,15 @@ async function run() {
     console.log('\nAnalytics agent complete.');
   } catch (err) {
     console.error('Analytics agent error:', err.message);
-    await logRun('error', { error: err.message }).catch(() => {});
+    await logRun('failed', { error: err.message }).catch(() => {});
   }
 }
 
-run();
+module.exports = { run };
+
+if (require.main === module) {
+  run().catch(err => {
+    console.error('[Analytics] Fatal error:', err.message);
+    process.exit(1);
+  });
+}

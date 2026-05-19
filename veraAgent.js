@@ -163,7 +163,7 @@ async function main() {
     token = await getAccessToken();
   } catch (err) {
     console.error('[Vera] OAuth token refresh failed:', err.response?.data || err.message);
-    await logRun('error', { error: 'token_refresh_failed' });
+    await logRun('failed', { error: 'token_refresh_failed' });
     return;
   }
 
@@ -172,7 +172,7 @@ async function main() {
     accounts = await fetchAccounts(token);
   } catch (err) {
     console.error('[Vera] Failed to fetch GBP accounts:', err.response?.data || err.message);
-    await logRun('error', { error: 'fetch_accounts_failed' });
+    await logRun('failed', { error: 'fetch_accounts_failed' });
     return;
   }
 
@@ -273,8 +273,12 @@ async function main() {
   console.log(`[Vera] Done — ${totalNew} new reviews, ${totalDrafted} drafts saved.`);
 }
 
-main().catch(async err => {
-  console.error('[Vera] Fatal:', err.message);
-  await logRun('error', { error: err.message });
-  process.exit(1);
-});
+module.exports = { run: main };
+
+if (require.main === module) {
+  main().catch(async err => {
+    console.error('[Vera] Fatal:', err.message);
+    await logRun('failed', { error: err.message });
+    process.exit(1);
+  });
+}

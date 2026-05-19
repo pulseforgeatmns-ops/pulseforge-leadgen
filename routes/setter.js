@@ -514,7 +514,7 @@ router.patch(['/api/leads/:id/hot', '/leads/:id/hot'], requireSetterWrite, async
 });
 
 router.post(['/api/leads/:id/enrich-phone', '/leads/:id/enrich-phone'], requireSetterWrite, async (req, res) => {
-  let status = 'no_result';
+  let status = 'skipped';
   let payload = {};
   try {
     await ensureSetterSchema();
@@ -554,7 +554,7 @@ router.post(['/api/leads/:id/enrich-phone', '/leads/:id/enrich-phone'], requireS
     await pool.query('UPDATE prospects SET enrichment_attempted = true, updated_at = NOW() WHERE id = $1', [req.params.id]).catch(() => {});
     await pool.query(`
       INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, error_msg, ran_at)
-      VALUES ('setter', 'phone_enrich', $1, $2, 'no_result', $3, NOW())
+      VALUES ('setter', 'phone_enrich', $1, $2, 'failed', $3, NOW())
     `, [req.params.id, JSON.stringify(payload), err.message]).catch(() => {});
     res.status(500).json({ error: 'Unable to enrich phone', phone: null });
   }

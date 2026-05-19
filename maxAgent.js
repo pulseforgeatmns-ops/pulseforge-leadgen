@@ -464,4 +464,11 @@ async function run() {
 
 }
 
-run();
+module.exports = { run };
+
+if (require.main === module) {
+  run().catch(err => {
+    console.error('[Max] Fatal error:', err.message);
+    process.exit(1);
+  });
+}

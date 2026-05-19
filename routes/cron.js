@@ -45,6 +45,10 @@ function runCronAgent(agent, res, query = {}) {
       mod.run({ lookbackDays: query.lookbackDays, client_id: clientId }).catch(err => {
         console.error(`[cron] ${agent} run error:`, err.message);
       });
+    } else if (typeof mod.run === 'function') {
+      mod.run({ client_id: clientId }).catch(err => {
+        console.error(`[cron] ${agent} run error:`, err.message);
+      });
     }
   } catch (err) {
     console.error(`[cron] ${agent} error:`, err.message);

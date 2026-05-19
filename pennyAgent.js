@@ -340,7 +340,7 @@ async function run() {
         company:  account.company_name,
         platform: account.platform,
         error:    msg,
-      }, 'error');
+      }, 'failed');
     }
 
     await new Promise(r => setTimeout(r, 1500));
@@ -355,4 +355,11 @@ async function run() {
   console.log(`\nPenny complete — ${reports} report${reports !== 1 ? 's' : ''} queued, ${totalFlags} total flag${totalFlags !== 1 ? 's' : ''}.`);
 }
 
-run().catch(console.error);
+module.exports = { run };
+
+if (require.main === module) {
+  run().catch(err => {
+    console.error('[Penny] Fatal error:', err.message);
+    process.exit(1);
+  });
+}

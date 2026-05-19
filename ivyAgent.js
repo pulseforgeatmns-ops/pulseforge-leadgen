@@ -250,4 +250,11 @@ async function run() {
   await browser.close();
 }
 
-run().catch(console.error);
+module.exports = { run };
+
+if (require.main === module) {
+  run().catch(err => {
+    console.error('[Ivy] Fatal error:', err.message);
+    process.exit(1);
+  });
+}

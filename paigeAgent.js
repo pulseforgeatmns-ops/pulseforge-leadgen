@@ -517,7 +517,7 @@ async function logQualityScore(channel, quality, regenerated, post) {
     AGENT_NAME,
     'content_scored',
     JSON.stringify(payload),
-    quality.total >= MIN_QUALITY_SCORE ? 'good' : 'low_score_used_best',
+    'success',
     CLIENT_ID,
   ]);
 }
@@ -633,8 +633,15 @@ AND status = 'pending';`);
     console.log(`\nPaige complete — ${generated} post${generated !== 1 ? 's' : ''} queued for approval.`);
   } catch (err) {
     console.error('Paige error:', err.message);
-    await logRun('error', { error: err.message }).catch(() => {});
+    await logRun('failed', { error: err.message }).catch(() => {});
   }
 }
 
-run().catch(console.error);
+module.exports = { run };
+
+if (require.main === module) {
+  run().catch(err => {
+    console.error('[Paige] Fatal error:', err.message);
+    process.exit(1);
+  });
+}

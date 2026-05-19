@@ -1000,24 +1000,27 @@ async function run() {
     null,
     null,
     { sent, prospects_evaluated: prospects.length, client_id: CLIENT_ID },
-    'completed'
+    'success'
   );
 }
 
-run().catch(async (err) => {
-  try {
-    await db.logAgentAction(
-      AGENT_NAME,
-      'cron_run',
-      null,
-      null,
-      { client_id: CLIENT_ID },
-      'failed',
-      err.message
-    );
-  } catch (logErr) {
-    console.error('Failed to log Emmett fatal error:', logErr.message);
-  }
-  console.error(err);
-  throw err;
-});
+module.exports = { run };
+
+if (require.main === module) {
+  run().catch(async (err) => {
+    try {
+      await db.logAgentAction(
+        AGENT_NAME,
+        'cron_run',
+        null,
+        null,
+        { client_id: CLIENT_ID },
+        'failed',
+        err.message
+      );
+    } catch (logErr) {
+      console.error('Failed to log Emmett fatal error:', logErr.message);
+    }
+    console.error(err);
+  });
+}

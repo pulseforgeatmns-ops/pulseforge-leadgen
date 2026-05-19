@@ -9,13 +9,8 @@ const client = new Anthropic();
 const AGENT_NAME = 'sketch';
 const CLIENT_ID = getRuntimeClientId();
 
-const businessName = process.argv[2];
-const location = process.argv[3] || 'Manchester, NH';
-
-if (!businessName) {
-  console.error('Usage: node sketchAgent.js "Business Name" "City, State"');
-  process.exit(1);
-}
+const defaultBusinessName = process.argv[2];
+const defaultLocation = process.argv[3] || 'Manchester, NH';
 
 function slugify(str) {
   return str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -113,7 +108,11 @@ async function logAgentRun(businessName, previewUrl, status) {
   );
 }
 
-async function run() {
+async function run(params = {}) {
+  const businessName = params.businessName || params.business_name || defaultBusinessName;
+  const location = params.location || defaultLocation;
+  if (!businessName) throw new Error('Sketch requires a businessName');
+
   try {
     const clientConfig = await getClientConfig(CLIENT_ID);
     if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
@@ -139,9 +138,20 @@ async function run() {
 
   } catch (err) {
     console.error('Sketch error:', err.message);
-    await logAgentRun(businessName, '', 'error').catch(() => {});
+    await logAgentRun(businessName, '', 'failed').catch(() => {});
   }
 
 }
 
-run();
+module.exports = { run };
+
+if (require.main === module) {
+  if (!defaultBusinessName) {
+    console.error('Usage: node sketchAgent.js "Business Name" "City, State"');
+    process.exit(1);
+  }
+  run().catch(err => {
+    console.error('[Sketch] Fatal error:', err.message);
+    process.exit(1);
+  });
+}

@@ -119,7 +119,7 @@ async function run(params = {}) {
   `, [
     AGENT_NAME,
     JSON.stringify({ candidates: rows.length, hidden_below_threshold: cleanup.rowCount, appended, skipped, failed, lookbackDays, client_id: clientId, icp_threshold: SETTER_ICP_THRESHOLD }),
-    failed ? 'error' : 'success',
+    failed ? 'failed' : 'success',
     clientId,
   ]).catch(() => {});
 
