@@ -21,12 +21,12 @@ function money(value) {
   return Number(value || 0);
 }
 
-router.get('/', sessionAuth, requireRole('admin', 'manager', 'closer'), async (_req, res) => {
+router.get('/', sessionAuth, requireRole('admin', 'manager', 'closer', 'sales'), async (_req, res) => {
   await ensureCloserSchema().catch(err => console.error('[closer] schema error:', err.message));
   res.sendFile(path.join(__dirname, '..', 'public', 'closer-dashboard.html'));
 });
 
-router.get(['/api/metrics', '/metrics'], sessionAuth, requireRole('admin', 'manager', 'closer'), async (req, res) => {
+router.get(['/api/metrics', '/metrics'], sessionAuth, requireRole('admin', 'manager', 'closer', 'sales'), async (req, res) => {
   try {
     await ensureCloserSchema();
     const params = [clientId(req)];
@@ -61,7 +61,7 @@ router.get(['/api/metrics', '/metrics'], sessionAuth, requireRole('admin', 'mana
   }
 });
 
-router.get(['/api/pipeline', '/pipeline'], sessionAuth, requireRole('admin', 'manager', 'closer'), async (req, res) => {
+router.get(['/api/pipeline', '/pipeline'], sessionAuth, requireRole('admin', 'manager', 'closer', 'sales'), async (req, res) => {
   try {
     await ensureCloserSchema();
     const params = [clientId(req)];
@@ -96,7 +96,7 @@ router.get(['/api/pipeline', '/pipeline'], sessionAuth, requireRole('admin', 'ma
   }
 });
 
-router.patch(['/api/prospects/:id/status', '/prospects/:id/status'], sessionAuth, requireRole('admin', 'manager', 'closer'), async (req, res) => {
+router.patch(['/api/prospects/:id/status', '/prospects/:id/status'], sessionAuth, requireRole('admin', 'manager', 'closer', 'sales'), async (req, res) => {
   const status = String(req.body.status || '');
   if (!CLOSER_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid closer status' });
   try {
@@ -124,7 +124,7 @@ router.patch(['/api/prospects/:id/status', '/prospects/:id/status'], sessionAuth
   }
 });
 
-router.post(['/api/prospects/:id/close', '/prospects/:id/close'], sessionAuth, requireRole('admin', 'manager', 'closer'), async (req, res) => {
+router.post(['/api/prospects/:id/close', '/prospects/:id/close'], sessionAuth, requireRole('admin', 'manager', 'closer', 'sales'), async (req, res) => {
   const mrr = Number(req.body.mrr_amount || 0);
   if (!Number.isFinite(mrr) || mrr <= 0) return res.status(400).json({ error: 'MRR amount is required' });
   try {
@@ -175,7 +175,7 @@ router.post(['/api/prospects/:id/close', '/prospects/:id/close'], sessionAuth, r
   }
 });
 
-router.get(['/api/commissions', '/commissions'], sessionAuth, requireRole('admin', 'manager', 'closer'), async (req, res) => {
+router.get(['/api/commissions', '/commissions'], sessionAuth, requireRole('admin', 'manager', 'closer', 'sales'), async (req, res) => {
   try {
     await ensureCloserSchema();
     const params = [clientId(req)];

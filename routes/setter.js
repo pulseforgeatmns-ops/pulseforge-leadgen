@@ -23,7 +23,7 @@ function requireMetricsRead(req, res, next) {
   if (hasMaxSecret(req)) return next();
   return sessionAuth(req, res, err => {
     if (err) return next(err);
-    return requireRole('admin', 'manager', 'setter')(req, res, next);
+    return requireRole('admin', 'manager', 'setter', 'sales')(req, res, next);
   });
 }
 
@@ -31,7 +31,7 @@ function requireSetterRead(req, res, next) {
   if (isMax(req)) return res.status(403).json({ error: 'Setter-only endpoint' });
   return sessionAuth(req, res, err => {
     if (err) return next(err);
-    return requireRole('admin', 'manager', 'setter')(req, res, next);
+    return requireRole('admin', 'manager', 'setter', 'sales')(req, res, next);
   });
 }
 
@@ -39,7 +39,7 @@ function requireSetterWrite(req, res, next) {
   if (isMax(req)) return res.status(403).json({ error: 'Read-only role' });
   return sessionAuth(req, res, err => {
     if (err) return next(err);
-    return requireRole('admin', 'manager', 'setter')(req, res, next);
+    return requireRole('admin', 'manager', 'setter', 'sales')(req, res, next);
   });
 }
 
@@ -249,7 +249,7 @@ function searchWhere(search, params) {
   `;
 }
 
-router.get('/', sessionAuth, requireRole('admin', 'manager', 'setter'), async (req, res) => {
+router.get('/', sessionAuth, requireRole('admin', 'manager', 'setter', 'sales'), async (req, res) => {
   await ensureSetterSchema().catch(err => console.error('[setter] schema error:', err.message));
   res.sendFile(path.join(__dirname, '..', 'public', 'setter-dashboard.html'));
 });

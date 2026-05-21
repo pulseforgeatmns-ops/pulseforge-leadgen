@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs');
 const pool = require('../db');
 
-const ROLES = ['admin', 'manager', 'setter', 'closer'];
+const ROLES = ['admin', 'manager', 'setter', 'closer', 'sales'];
 let initPromise;
 
 function isApiRequest(req) {
@@ -15,7 +15,7 @@ async function ensureUsersTable() {
       name TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK (role in ('admin', 'manager', 'setter', 'closer')),
+      role TEXT NOT NULL CHECK (role in ('admin', 'manager', 'setter', 'closer', 'sales')),
       active BOOLEAN NOT NULL DEFAULT true,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       last_login_at TIMESTAMPTZ
@@ -26,7 +26,7 @@ async function ensureUsersTable() {
     await pool.query('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check');
     await pool.query(`
       ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN ('admin', 'manager', 'setter', 'closer'))
+      CHECK (role IN ('admin', 'manager', 'setter', 'closer', 'sales'))
     `);
   } finally {
     await pool.query('SELECT pg_advisory_unlock(91720260517)');
@@ -82,6 +82,7 @@ function requireRole(...roles) {
       if (roles.includes(req.user?.role)) return next();
       if (req.user?.role === 'setter' && !isApiRequest(req)) return res.redirect('/setter');
       if (req.user?.role === 'closer' && !isApiRequest(req)) return res.redirect('/closer');
+      if (req.user?.role === 'sales' && !isApiRequest(req)) return res.redirect('/setter');
       return res.status(403).json({ error: 'Forbidden' });
     };
 

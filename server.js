@@ -66,13 +66,13 @@ app.use((req, res, next) => {
   if (req.path === '/public/setter-dashboard.html' || req.path === '/setter-dashboard.html') {
     return requireAuth(req, res, err => {
       if (err) return next(err);
-      return requireRole('admin', 'manager', 'setter')(req, res, next);
+      return requireRole('admin', 'manager', 'setter', 'sales')(req, res, next);
     });
   }
   if (req.path === '/public/closer-dashboard.html' || req.path === '/closer-dashboard.html') {
     return requireAuth(req, res, err => {
       if (err) return next(err);
-      return requireRole('admin', 'manager', 'closer')(req, res, next);
+      return requireRole('admin', 'manager', 'closer', 'sales')(req, res, next);
     });
   }
   return next();
@@ -196,6 +196,7 @@ app.post('/login', async (req, res) => {
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
     if (user.role === 'setter') return res.redirect('/setter');
     if (user.role === 'closer') return res.redirect('/closer');
+    if (user.role === 'sales') return res.redirect('/setter');
     return res.redirect('/dashboard');
   }
 

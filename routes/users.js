@@ -67,7 +67,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
     <input id="name" placeholder="Name" required>
     <input id="email" type="email" placeholder="Email" required>
     <input id="password" type="password" minlength="8" placeholder="Password" required>
-    <select id="role"><option value="setter">Setter</option><option value="closer">Closer</option><option value="manager">Manager</option><option value="admin">Admin</option></select>
+    <select id="role"><option value="setter">Setter</option><option value="closer">Closer</option><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select>
     <button class="primary" type="submit">Add User</button>
   </form>
   <table>
@@ -76,7 +76,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
   </table>
 </section>
 <script>
-const roles = ['admin','manager','setter','closer'];
+const roles = ['admin','manager','setter','closer','sales'];
 const msg = document.getElementById('msg');
 function say(text) { msg.textContent = text; setTimeout(() => { if (msg.textContent === text) msg.textContent = ''; }, 3500); }
 async function api(path, options = {}) {
