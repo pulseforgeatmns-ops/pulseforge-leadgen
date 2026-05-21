@@ -577,6 +577,27 @@ async function logRun(status, payload) {
   `, [AGENT_NAME, 'generate_content', JSON.stringify(payload), status, CLIENT_ID]);
 }
 
+// Records a per-channel generation failure to agent_log so we can query
+// `SELECT * FROM agent_log WHERE action = 'generate_content_error'` and
+// see exactly which channel/company blew up and why. Best-effort — never
+// throws so it can't mask the original error.
+async function logChannelError(company, channel, err) {
+  const payload = {
+    channel,
+    company: company?.name || null,
+    error: err?.message || String(err),
+    stack_preview: String(err?.stack || '').split('\n').slice(0, 4).join('\n'),
+  };
+  try {
+    await pool.query(`
+      INSERT INTO agent_log (agent_name, action, payload, status, error_msg, ran_at, client_id)
+      VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+    `, [AGENT_NAME, 'generate_content_error', JSON.stringify(payload), 'failed', payload.error, CLIENT_ID]);
+  } catch (logErr) {
+    console.error(`  [logChannelError] failed to write: ${logErr.message}`);
+  }
+}
+
 async function run() {
   console.log('\nPaige agent running...\n');
   CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
@@ -608,6 +629,8 @@ AND status = 'pending';`);
     }
 
     let generated = 0;
+    const channelsFailed = [];
+    const channelsQueued = [];
 
     for (const company of clients) {
       for (const channel of CHANNELS) {
@@ -622,17 +645,26 @@ AND status = 'pending';`);
             await logQualityScore(channel, postResult.quality, postResult.regenerated, content);
             console.log(`  ✓ queued (${id.slice(0, 8)})\n`);
             generated++;
+            channelsQueued.push(`${company.name}/${channel}`);
           }
         } catch (err) {
           console.error(`  ✗ ${company.name}/${channel}: ${err.message}`);
+          channelsFailed.push(`${company.name}/${channel}`);
+          await logChannelError(company, channel, err);
         }
 
         await new Promise(r => setTimeout(r, 1500));
       }
     }
 
-    await logRun('success', { clients_processed: clients.length, posts_generated: generated });
-    console.log(`\nPaige complete — ${generated} post${generated !== 1 ? 's' : ''} queued for approval.`);
+    await logRun('success', {
+      clients_processed: clients.length,
+      posts_generated: generated,
+      channels_queued: channelsQueued,
+      channels_failed: channelsFailed,
+    });
+    console.log(`\nPaige complete — ${generated} post${generated !== 1 ? 's' : ''} queued, ${channelsFailed.length} channel${channelsFailed.length !== 1 ? 's' : ''} failed.`);
+    if (channelsFailed.length) console.log(`  Failed: ${channelsFailed.join(', ')}`);
   } catch (err) {
     console.error('Paige error:', err.message);
     await logRun('failed', { error: err.message }).catch(() => {});
