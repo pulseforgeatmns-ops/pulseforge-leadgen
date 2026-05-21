@@ -11,6 +11,16 @@ const router = express.Router();
 const STAGES = ['new', 'contacted', 'follow_up', 'booked', 'dead'];
 const SETTER_NOTES_MARKER = '\n\n--- setter notes ---\n';
 
+// Returns ` AND <alias>client_id = $N` (and pushes the value into params) when
+// the logged-in user has a client_id assigned. Returns '' otherwise so admin,
+// manager, cron, and legacy-session callers (no user.client_id) see all clients.
+function clientFilter(req, params, alias = 'p.') {
+  const cid = req?.session?.user?.client_id;
+  if (!cid && cid !== 0) return '';
+  params.push(cid);
+  return ` AND ${alias}client_id = $${params.length}`;
+}
+
 function isMax(req) {
   return req.query.role === 'max';
 }
@@ -121,8 +131,9 @@ function mapLead(row) {
   };
 }
 
-async function getLeads(where = '', params = [], limit = 250, orderBy = 'COALESCE(p.is_hot, false) DESC, p.icp_score DESC NULLS LAST, p.created_at DESC') {
+async function getLeads(where = '', params = [], limit = 250, orderBy = 'COALESCE(p.is_hot, false) DESC, p.icp_score DESC NULLS LAST, p.created_at DESC', req = null) {
   const sort = orderBy || 'COALESCE(p.is_hot, false) DESC, p.icp_score DESC NULLS LAST, p.created_at DESC';
+  const clientScope = clientFilter(req, params);
   const { rows } = await pool.query(`
     SELECT p.*,
       (
@@ -136,6 +147,7 @@ async function getLeads(where = '', params = [], limit = 250, orderBy = 'COALESC
       AND COALESCE(p.setter_visible, false) = true
       AND COALESCE(p.do_not_contact, false) = false
       AND COALESCE(p.icp_score, 0) >= 40
+      ${clientScope}
       ${where}
     ORDER BY ${sort}
     LIMIT $${params.length + 1}
@@ -257,6 +269,8 @@ router.get('/', sessionAuth, requireRole('admin', 'manager', 'setter', 'sales'),
 async function metricsHandler(req, res) {
   try {
     await ensureSetterSchema();
+    const params = [];
+    const clientScope = clientFilter(req, params, '');
     const { rows } = await pool.query(`
       SELECT
         COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::int AS leads_today,
@@ -271,7 +285,8 @@ async function metricsHandler(req, res) {
         AND COALESCE(setter_visible, false) = true
         AND COALESCE(do_not_contact, false) = false
         AND COALESCE(icp_score, 0) >= 40
-    `);
+        ${clientScope}
+    `, params);
     const m = rows[0] || {};
     const total = Number(m.total || 0);
     const contacted = Number(m.contacted || 0);
@@ -296,7 +311,7 @@ async function metricsHandler(req, res) {
 async function feedHandler(req, res) {
   try {
     await ensureSetterSchema();
-    const leads = await getLeads(`AND p.created_at >= NOW() - INTERVAL '7 days'`, [], 80);
+    const leads = await getLeads(`AND p.created_at >= NOW() - INTERVAL '7 days'`, [], 80, undefined, req);
     res.json(leads);
   } catch (err) {
     console.error('[setter] scout feed error:', err.message);
@@ -331,7 +346,7 @@ router.get(['/api/leads', '/leads'], requireSetterRead, async (req, res) => {
     const order = req.query.due === 'today'
       ? 'p.callback_at ASC NULLS LAST'
       : undefined;
-    res.json(await getLeads(where, params, 250, order));
+    res.json(await getLeads(where, params, 250, order, req));
   } catch (err) {
     console.error('[setter] leads error:', err.message);
     res.status(500).json({ error: 'Unable to load leads' });
@@ -361,7 +376,7 @@ router.get(['/api/pipeline', '/pipeline'], requireSetterRead, async (req, res) =
   try {
     await ensureSetterSchema();
     const params = [];
-    const leads = await getLeads(searchWhere(req.query.search, params), params, 500);
+    const leads = await getLeads(searchWhere(req.query.search, params), params, 500, undefined, req);
     const grouped = Object.fromEntries(STAGES.map(stage => [stage, []]));
     for (const lead of leads) {
       const stage = STAGES.includes(lead.status) ? lead.status : 'new';

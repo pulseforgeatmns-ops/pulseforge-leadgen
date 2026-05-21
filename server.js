@@ -188,7 +188,7 @@ app.post('/login', async (req, res) => {
 
   if (userCount > 0) {
     const { rows } = await pool.query(`
-      SELECT id, name, email, password_hash, role, active
+      SELECT id, name, email, password_hash, role, active, client_id
       FROM users
       WHERE LOWER(email) = LOWER($1)
       LIMIT 1
@@ -197,9 +197,15 @@ app.post('/login', async (req, res) => {
     const ok = user && user.active && await bcrypt.compare(password || '', user.password_hash);
     if (!ok) return res.redirect('/login?error=1');
 
-    req.session.user = { id: user.id, name: user.name, email: user.email, role: user.role };
+    req.session.user = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      client_id: user.client_id || null,
+    };
     req.session.authenticated = true;
-    req.session.active_client_id = 1;
+    req.session.active_client_id = user.client_id || 1;
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
     if (user.role === 'setter') return res.redirect('/setter');
     if (user.role === 'closer') return res.redirect('/closer');
