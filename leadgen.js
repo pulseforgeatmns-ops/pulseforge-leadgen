@@ -736,13 +736,24 @@ async function saveToDatabase(leads) {
       continue;
     }
 
-    // Dedup: skip if a prospect with this business name already exists
+    // Dedup: skip if a prospect with the same business name already exists in the same city.
+    // City is taken from the first token of CONFIG.location (e.g., "Manchester NH" -> "Manchester").
+    // If the existing prospect has no city info recorded, fall back to a name-only match within the client.
+    const cityScope = String(CONFIG.location || '').split(/\s+/)[0] || '';
     const dupCheck = await pool.query(
-      `SELECT id FROM prospects WHERE client_id = $2 AND LOWER(TRIM(SPLIT_PART(notes, ' — ', 1))) = LOWER(TRIM($1))`,
-      [companyName, CONFIG.clientId]
+      `SELECT id FROM prospects
+         WHERE client_id = $2
+           AND LOWER(TRIM(SPLIT_PART(notes, ' — ', 1))) = LOWER(TRIM($1))
+           AND (
+             $3 = ''
+             OR service_area_match ILIKE '%' || $3 || '%'
+             OR notes ILIKE '%' || $3 || '%'
+             OR service_area_match IS NULL
+           )`,
+      [companyName, CONFIG.clientId, cityScope]
     );
     if (dupCheck.rows.length > 0) {
-      console.log(`Duplicate skipped: ${companyName}`);
+      console.log(`Duplicate skipped: ${companyName} (${cityScope || 'any city'})`);
       skipped++;
       continue;
     }
@@ -763,9 +774,10 @@ async function saveToDatabase(leads) {
         const needle = String(area).toLowerCase();
         return (lead.address || '').toLowerCase().includes(needle) || notes.toLowerCase().includes(needle);
       }) || null;
+      const discoveryMethod = Array.isArray(lead.source) && lead.source.includes('places') ? 'google_places' : 'serpapi';
       const insert = await pool.query(
-      'INSERT INTO prospects (first_name, last_name, email, phone, status, source, icp_score, notes, vertical, client_id, service_area_match) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (email) DO NOTHING RETURNING id',
-      [firstName, lastName, email, phone, 'cold', 'scout', lead.score, notes, CONFIG.industry, CONFIG.clientId, serviceArea]
+      'INSERT INTO prospects (first_name, last_name, email, phone, status, source, icp_score, notes, vertical, client_id, service_area_match, discovery_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (email) DO NOTHING RETURNING id',
+      [firstName, lastName, email, phone, 'cold', 'scout', lead.score, notes, CONFIG.industry, CONFIG.clientId, serviceArea, discoveryMethod]
     );
       if (!insert.rows.length) {
         skipped++;
@@ -810,7 +822,8 @@ async function ensureSetterQueueColumns(pool) {
     ADD COLUMN IF NOT EXISTS setter_status TEXT DEFAULT 'new',
     ADD COLUMN IF NOT EXISTS setter_visible BOOLEAN DEFAULT false,
     ADD COLUMN IF NOT EXISTS setter_updated_at TIMESTAMPTZ DEFAULT NOW(),
-    ADD COLUMN IF NOT EXISTS service_area_match TEXT
+    ADD COLUMN IF NOT EXISTS service_area_match TEXT,
+    ADD COLUMN IF NOT EXISTS discovery_method TEXT
   `);
 }
 
