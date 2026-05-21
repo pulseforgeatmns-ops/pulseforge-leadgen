@@ -64,10 +64,21 @@ Each agent is a standalone JS module that reads from the DB and writes results b
 |---|---|---|---|---|
 | 1 | Pulseforge | jacob@gopulseforge.com | Manchester NH | Existing NH pipeline. All pre-migration data backfilled to `client_id=1`. |
 | 2 | MSHI | mshomeinnovations@gmail.com | Charleston WV | Mountain State Home Innovations. Owners: Brad Hudson & Dustin Allison. License: WV065578. Avg job: $10k-$25k. Sequence: `home_renovation`. Sender: Brad & Dustin. Max briefing: 8AM EST → mshomeinnovations@gmail.com. Pending: website, Facebook page, Riley forwarding. |
+| 5 | Pulseforge Nashville | jacob@gopulseforge.com | Nashville TN | Slug `pulseforge-nashville`. Service area `{Nashville}`. Declared verticals: cleaning, restaurant, salon, fitness, home_services, auto, landscaping, med_spa. Sender: Jacob Maynard. Added May 2026. |
 
 Pulseforge Scout markets for William's setter territory: Manchester NH and Charleston WV. Charleston WV runs as `client_id=1` with a 15-prospect cap per vertical for: cleaning, hvac, roofing, auto_repair, dental, salon, fitness, restaurant, landscaping. Setter visibility still requires `icp_score >= 70`.
 
 MSHI Scout cron targets: `POST /cron/scout?client_id=2&industry=home_renovation&location=Charleston%20WV`, `decks/Charleston WV`, `siding/Charleston WV`, `home_renovation/Huntington WV`, `home_renovation/Hurricane WV`. MSHI Max cron: `POST /cron/max?client_id=2&secret={CRON_SECRET}` at 8:00 AM EST.
+
+Pulseforge Nashville Scout cron targets (`client_id=5`, location `Nashville%20TN`, schedule on Railway):
+- `POST /cron/scout?client_id=5&industry=cleaning&location=Nashville%20TN`
+- `POST /cron/scout?client_id=5&industry=restaurant&location=Nashville%20TN`
+- `POST /cron/scout?client_id=5&industry=salon&location=Nashville%20TN`
+- `POST /cron/scout?client_id=5&industry=fitness&location=Nashville%20TN`
+- `POST /cron/scout?client_id=5&industry=home_services&location=Nashville%20TN`
+- `POST /cron/scout?client_id=5&industry=auto&location=Nashville%20TN`
+- `POST /cron/scout?client_id=5&industry=landscaping&location=Nashville%20TN`
+- `POST /cron/scout?client_id=5&industry=med_spa&location=Nashville%20TN`
 
 ---
 
