@@ -715,7 +715,7 @@ async function ensureAgentActionsTable() {
   `);
 }
 
-app.listen(PORT, async () => {
+app.listen(PORT, '0.0.0.0', async () => {
   await ensureAgentActionsTable().catch(e => console.error('[startup] agent_actions table error:', e.message));
   console.log(`\n🔷 Pulseforge Lead Engine Server`);
   console.log(`─────────────────────────────────`);
