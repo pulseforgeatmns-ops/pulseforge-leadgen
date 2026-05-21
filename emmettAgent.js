@@ -901,7 +901,7 @@ async function run() {
   console.log('Prospects found:', JSON.stringify(prospects, null, 2));
 
   let sent = 0;
-  const dailyLimit = 100;
+  const dailyLimit = 150;
   const industryCap = 15; // max sends per industry per run
   const industryCounts = {};
 
