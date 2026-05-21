@@ -172,29 +172,34 @@ router.post('/api/users', ...adminOnly, async (req, res) => {
 });
 
 router.patch('/api/users/:id', ...adminOnly, async (req, res) => {
-  await initAuth();
-  const id = Number(req.params.id);
-  const updates = [];
-  const values = [];
-  if (req.body.role !== undefined) {
-    if (!validateRole(req.body.role)) return res.status(400).json({ error: 'Invalid role' });
-    values.push(req.body.role);
-    updates.push(`role = $${values.length}`);
+  try {
+    await initAuth();
+    const id = Number(req.params.id);
+    const updates = [];
+    const values = [];
+    if (req.body.role !== undefined) {
+      if (!validateRole(req.body.role)) return res.status(400).json({ error: 'Invalid role' });
+      values.push(req.body.role);
+      updates.push(`role = $${values.length}`);
+    }
+    if (req.body.active !== undefined) {
+      if (id === req.user.id && req.body.active === false) return res.status(400).json({ error: 'Cannot deactivate your own account' });
+      values.push(Boolean(req.body.active));
+      updates.push(`active = $${values.length}`);
+    }
+    if (!updates.length) return res.status(400).json({ error: 'No updates provided' });
+    values.push(id);
+    const { rows } = await pool.query(`
+      UPDATE users SET ${updates.join(', ')}
+      WHERE id = $${values.length}
+      RETURNING id, name, email, role, active, created_at, last_login_at
+    `, values);
+    if (!rows.length) return res.status(404).json({ error: 'User not found' });
+    res.json(publicUser(rows[0]));
+  } catch (err) {
+    console.error('[users] PATCH error:', err.code, err.message);
+    res.status(500).json({ error: err.message || 'Failed to update user' });
   }
-  if (req.body.active !== undefined) {
-    if (id === req.user.id && req.body.active === false) return res.status(400).json({ error: 'Cannot deactivate your own account' });
-    values.push(Boolean(req.body.active));
-    updates.push(`active = $${values.length}`);
-  }
-  if (!updates.length) return res.status(400).json({ error: 'No updates provided' });
-  values.push(id);
-  const { rows } = await pool.query(`
-    UPDATE users SET ${updates.join(', ')}
-    WHERE id = $${values.length}
-    RETURNING id, name, email, role, active, created_at, last_login_at
-  `, values);
-  if (!rows.length) return res.status(404).json({ error: 'User not found' });
-  res.json(publicUser(rows[0]));
 });
 
 router.post('/api/users/:id/reset-password', ...adminOnly, async (req, res) => {

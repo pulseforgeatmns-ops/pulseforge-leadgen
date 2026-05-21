@@ -23,7 +23,17 @@ async function ensureUsersTable() {
   `);
   await pool.query('SELECT pg_advisory_lock(91720260517)');
   try {
-    await pool.query('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check');
+    const { rows: existing } = await pool.query(`
+      SELECT con.conname
+      FROM pg_constraint con
+      JOIN pg_class cls ON cls.oid = con.conrelid
+      WHERE cls.relname = 'users'
+        AND con.contype = 'c'
+        AND pg_get_constraintdef(con.oid) ILIKE '%role%'
+    `);
+    for (const row of existing) {
+      await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS "${row.conname}"`);
+    }
     await pool.query(`
       ALTER TABLE users ADD CONSTRAINT users_role_check
       CHECK (role IN ('admin', 'manager', 'setter', 'closer', 'sales'))
