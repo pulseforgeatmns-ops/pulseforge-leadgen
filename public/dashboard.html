@@ -259,6 +259,7 @@ body::before {
   color: var(--gray-light);
   letter-spacing: 2px;
 }
+.user-menu { position: relative; }
 .user-avatar {
   width: 32px; height: 32px;
   border-radius: 50%;
@@ -268,7 +269,39 @@ body::before {
   font-size: 0.65rem; font-weight: 700;
   color: var(--purple-bright);
   box-shadow: 0 0 12px rgba(139,92,246,0.3);
+  cursor: pointer;
+  user-select: none;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 1px;
 }
+.user-avatar:hover { box-shadow: 0 0 16px rgba(139,92,246,0.5); }
+.user-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 160px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  padding: 4px;
+  display: none;
+  z-index: 1000;
+}
+.user-dropdown.open { display: block; }
+.user-dropdown a {
+  display: block;
+  padding: 8px 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-primary);
+  text-decoration: none;
+  border-radius: 4px;
+  transition: background-color 0.15s, color 0.15s;
+}
+.user-dropdown a:hover { background: var(--purple-glow); color: var(--purple-bright); }
 .theme-toggle {
   width: 32px; height: 32px;
   border-radius: 50%;
@@ -1771,7 +1804,12 @@ body.light-mode .warm-signal .feed-prospect { color: var(--text-primary); }
     </div>
     <div class="clock" id="clock">--:--:--</div>
     <button class="theme-toggle" id="themeToggle" type="button" title="Toggle theme">🌙</button>
-    <div class="user-avatar">JM</div>
+    <div class="user-menu" id="userMenu">
+      <div class="user-avatar" id="userAvatar" title="Account">--</div>
+      <div class="user-dropdown" id="userDropdown">
+        <a href="/logout">Logout</a>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2985,10 +3023,25 @@ document.querySelectorAll('.nav-tab').forEach((tab, i) => {
   });
 });
 
+function computeInitials(user) {
+  if (!user) return '--';
+  const name = (user.name || '').trim();
+  if (name) {
+    const parts = name.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    if (parts[0].length >= 2) return parts[0].slice(0, 2).toUpperCase();
+    return parts[0][0].toUpperCase();
+  }
+  const email = (user.email || '').trim();
+  if (email) return email.slice(0, 2).toUpperCase();
+  return '--';
+}
+
 fetch('/api/me', { credentials: 'include' })
   .then(res => res.ok ? res.json() : null)
   .then(data => {
-    const role = data?.user?.role;
+    const user = data?.user;
+    const role = user?.role;
     _currentUserRole = role;
     const isOperator = ['admin', 'manager'].includes(role);
     if (role === 'admin') document.getElementById('usersTab').style.display = 'block';
@@ -2996,9 +3049,27 @@ fetch('/api/me', { credentials: 'include' })
     if (pipelineTab) pipelineTab.style.display = isOperator ? '' : 'none';
     const switcher = document.querySelector('.client-switcher');
     if (switcher && !isOperator) switcher.remove();
+    const avatar = document.getElementById('userAvatar');
+    if (avatar) {
+      avatar.textContent = computeInitials(user);
+      if (user?.name || user?.email) avatar.title = user.name || user.email;
+    }
     loadAgentVisibility();
   })
   .catch(() => {});
+
+(function setupUserMenu() {
+  const avatar = document.getElementById('userAvatar');
+  const dropdown = document.getElementById('userDropdown');
+  if (!avatar || !dropdown) return;
+  avatar.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdown.classList.toggle('open');
+  });
+  document.addEventListener('click', (e) => {
+    if (!dropdown.contains(e.target) && e.target !== avatar) dropdown.classList.remove('open');
+  });
+})();
 
 async function loadClientSelector() {
   const selector = document.getElementById('clientSelector');
