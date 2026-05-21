@@ -1,3 +1,6 @@
+process.on('uncaughtException', err => { console.error('UNCAUGHT:', err); process.exit(1); });
+process.on('unhandledRejection', reason => { console.error('UNHANDLED:', reason); process.exit(1); });
+
 /**
  * Pulseforge Lead Engine — Express Server
  * =========================================
@@ -715,12 +718,17 @@ async function ensureAgentActionsTable() {
   `);
 }
 
-app.listen(PORT, '0.0.0.0', async () => {
-  await ensureAgentActionsTable().catch(e => console.error('[startup] agent_actions table error:', e.message));
-  console.log(`\n🔷 Pulseforge Lead Engine Server`);
-  console.log(`─────────────────────────────────`);
-  console.log(`   http://localhost:${PORT}`);
-  console.log(`   SerpAPI : ${SERPAPI_KEY ? '✓' : '✗ not set'}`);
-  console.log(`   Hunter  : ${HUNTER_KEY  ? '✓' : '✗ not set'}`);
-  console.log(`─────────────────────────────────\n`);
-});
+try {
+  app.listen(PORT, '0.0.0.0', async () => {
+    await ensureAgentActionsTable().catch(e => console.error('[startup] agent_actions table error:', e.message));
+    console.log(`\n🔷 Pulseforge Lead Engine Server`);
+    console.log(`─────────────────────────────────`);
+    console.log(`   http://localhost:${PORT}`);
+    console.log(`   SerpAPI : ${SERPAPI_KEY ? '✓' : '✗ not set'}`);
+    console.log(`   Hunter  : ${HUNTER_KEY  ? '✓' : '✗ not set'}`);
+    console.log(`─────────────────────────────────\n`);
+  });
+} catch (err) {
+  console.error('LISTEN FAILED:', err);
+  throw err;
+}
