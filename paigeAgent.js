@@ -390,11 +390,22 @@ async function createDraft(prompt, systemPrompt, channel) {
 
 function parseScoreJson(text) {
   const raw = String(text || '').trim();
-  const match = raw.match(/\{[\s\S]*\}/);
+  // Strip ```json / ``` code fences if present, then locate the JSON object.
+  const defenced = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+  const match = defenced.match(/\{[\s\S]*\}/);
   if (!match) throw new Error('No JSON object returned from quality scoring');
-  const rawText = match[0].replace(/'/g, '"');
-  const clean = rawText.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
-  const parsed = JSON.parse(clean);
+
+  // Prefer strict JSON (the prompt now demands double quotes). Only if that
+  // fails do we attempt the single→double quote swap as a last-resort
+  // recovery. The blanket replace can corrupt valid JSON when a string value
+  // contains an apostrophe, so it must be the fallback, not the primary path.
+  let parsed;
+  try {
+    parsed = JSON.parse(match[0]);
+  } catch (_) {
+    parsed = JSON.parse(match[0].replace(/'/g, '"'));
+  }
+
   const specificity = Number(parsed.specificity || 0);
   const originality = Number(parsed.originality || 0);
   const hookStrength = Number(parsed.hook_strength || 0);
@@ -425,10 +436,12 @@ async function scoreDraft(draft) {
 3. HOOK STRENGTH — Does the opening line give someone a reason to stop
    scrolling and keep reading? (10 = compelling, 1 = forgettable)
 
-Return ONLY a JSON object:
-{ 'specificity': X, 'originality': X, 'hook_strength': X, 'total': X,
-  'weak_dimension': 'specificity|originality|hook_strength|none',
-  'reason': 'one sentence explanation of the lowest score' }
+Return ONLY a strict JSON object with double-quoted keys and string values.
+Do not wrap in code fences. Do not include any prose before or after.
+Use this exact shape:
+{ "specificity": X, "originality": X, "hook_strength": X, "total": X,
+  "weak_dimension": "specificity|originality|hook_strength|none",
+  "reason": "one sentence explanation of the lowest score (avoid quotation marks inside)" }
 
 Post to score:
 ${draft}`
