@@ -75,6 +75,12 @@ app.use((req, res, next) => {
       return requireRole('admin', 'manager', 'closer', 'sales')(req, res, next);
     });
   }
+  if (req.path === '/public/sales-dashboard.html' || req.path === '/sales-dashboard.html') {
+    return requireAuth(req, res, err => {
+      if (err) return next(err);
+      return requireRole('sales')(req, res, next);
+    });
+  }
   return next();
 });
 app.use(express.static(__dirname));
@@ -129,6 +135,7 @@ app.use('/setter', require('./routes/setter'));
 app.use('/api/setter', require('./routes/setter'));
 app.use('/closer', require('./routes/closer'));
 app.use('/api/closer', require('./routes/closer'));
+app.use('/sales', require('./routes/sales'));
 
 // Login page
 app.get('/login', (req, res) => {
@@ -196,7 +203,7 @@ app.post('/login', async (req, res) => {
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
     if (user.role === 'setter') return res.redirect('/setter');
     if (user.role === 'closer') return res.redirect('/closer');
-    if (user.role === 'sales') return res.redirect('/setter');
+    if (user.role === 'sales') return res.redirect('/sales');
     return res.redirect('/dashboard');
   }
 

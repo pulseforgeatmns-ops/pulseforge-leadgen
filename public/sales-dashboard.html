@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulseforge — Sales</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #040810;
+  --bg1: #070d1a;
+  --purple: #6030b1;
+  --purple-bright: #8b5cf6;
+  --teal: #00d4b4;
+  --green: #00e676;
+  --white: #e8f0fe;
+  --gray: #3a4a6a;
+  --gray-light: #6b7fa0;
+  --border: rgba(96,48,177,0.18);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: var(--bg); color: var(--white); font-family: 'DM Sans', sans-serif; overflow: hidden; }
+body { display: flex; flex-direction: column; }
+body.light-mode {
+  --bg: #f5f5f0; --bg1: #ffffff; --white: #1a1a18;
+  --gray-light: #4a4a45; --gray: #8a8a85;
+  --border: rgba(0,0,0,0.1);
+  background: var(--bg);
+}
+body::before {
+  content: ''; position: fixed; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.015) 3px, rgba(0,0,0,0.015) 4px);
+}
+.topbar {
+  height: 56px; background: rgba(7,13,26,0.97);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 1.2rem; padding: 0 1.5rem;
+  position: relative; z-index: 10; flex-shrink: 0;
+}
+body.light-mode .topbar { background: rgba(255,255,255,0.94); }
+.logo {
+  font-family: 'Bebas Neue', sans-serif; letter-spacing: 4px; font-size: 1.45rem;
+  display: flex; align-items: center; gap: 10px; white-space: nowrap;
+}
+.logo-dot { width: 9px; height: 9px; background: var(--purple-bright); border-radius: 50%; box-shadow: 0 0 10px var(--purple-bright); }
+.tabs {
+  display: flex; gap: 0;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px;
+}
+body.light-mode .tabs { background: rgba(0,0,0,0.035); }
+.tab {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.62rem;
+  letter-spacing: 1.4px; text-transform: uppercase;
+  color: var(--gray-light);
+  padding: 6px 14px; border-radius: 4px; cursor: pointer;
+  border: 0; background: transparent;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+}
+.tab:hover { color: var(--white); }
+.tab.active {
+  background: rgba(96,48,177,0.2);
+  color: var(--purple-bright);
+  border: 1px solid rgba(139,92,246,0.3);
+}
+.right { margin-left: auto; display: flex; align-items: center; gap: 1rem; }
+.sys-status {
+  display: flex; align-items: center; gap: 8px;
+  font-family: 'JetBrains Mono', monospace; font-size: 0.62rem;
+  color: var(--green); background: rgba(0,230,118,0.1);
+  border: 1px solid rgba(0,230,118,0.16);
+  border-radius: 99px; padding: 4px 11px;
+}
+.sys-dot {
+  width: 5px; height: 5px; background: var(--green); border-radius: 50%;
+  box-shadow: 0 0 8px var(--green);
+  animation: sysPulse 2s ease infinite;
+}
+@keyframes sysPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.user-menu { position: relative; }
+.user-avatar {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: rgba(96,48,177,0.2);
+  border: 1.5px solid var(--purple-bright);
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem; font-weight: 700; letter-spacing: 1px;
+  color: var(--purple-bright);
+  box-shadow: 0 0 12px rgba(139,92,246,0.3);
+  cursor: pointer; user-select: none;
+}
+.user-avatar:hover { box-shadow: 0 0 16px rgba(139,92,246,0.5); }
+.user-dropdown {
+  position: absolute; top: calc(100% + 8px); right: 0;
+  min-width: 160px; background: var(--bg1);
+  border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  padding: 4px; display: none; z-index: 1000;
+}
+.user-dropdown.open { display: block; }
+.user-dropdown a {
+  display: block; padding: 8px 12px;
+  font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--white); text-decoration: none; border-radius: 4px;
+}
+.user-dropdown a:hover { background: rgba(96,48,177,0.2); color: var(--purple-bright); }
+.main {
+  flex: 1; position: relative; overflow: hidden;
+}
+.panel {
+  position: absolute; inset: 0;
+  display: none;
+  background: var(--bg);
+}
+.panel.active { display: block; }
+.panel iframe {
+  width: 100%; height: 100%;
+  border: 0; display: block;
+  background: var(--bg);
+}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="logo"><div class="logo-dot"></div>PULSEFORGE SALES</div>
+  <div class="tabs" role="tablist">
+    <button class="tab active" type="button" data-panel="setter" role="tab" aria-selected="true">Setter Queue</button>
+    <button class="tab" type="button" data-panel="closer" role="tab" aria-selected="false">Closer Pipeline</button>
+  </div>
+  <div class="right">
+    <div class="sys-status"><div class="sys-dot"></div><span>SALES MODE</span></div>
+    <div class="user-menu" id="userMenu">
+      <div class="user-avatar" id="userAvatar" title="Account">--</div>
+      <div class="user-dropdown" id="userDropdown">
+        <a href="/logout">Logout</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="panel active" id="panel-setter">
+    <iframe id="frame-setter" src="/setter" title="Setter Queue" loading="eager"></iframe>
+  </div>
+  <div class="panel" id="panel-closer">
+    <iframe id="frame-closer" data-src="/closer" title="Closer Pipeline" loading="lazy"></iframe>
+  </div>
+</div>
+
+<script>
+(function() {
+  const tabs = document.querySelectorAll('.tab');
+  const panels = {
+    setter: document.getElementById('panel-setter'),
+    closer: document.getElementById('panel-closer'),
+  };
+  const lazyFrames = document.querySelectorAll('iframe[data-src]');
+  const loaded = new Set(['setter']);
+
+  function activate(name) {
+    if (!panels[name]) return;
+    tabs.forEach(t => {
+      const isActive = t.dataset.panel === name;
+      t.classList.toggle('active', isActive);
+      t.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    Object.entries(panels).forEach(([key, panel]) => {
+      panel.classList.toggle('active', key === name);
+    });
+    if (!loaded.has(name)) {
+      const frame = document.getElementById('frame-' + name);
+      if (frame && frame.dataset.src) {
+        frame.src = frame.dataset.src;
+        frame.removeAttribute('data-src');
+      }
+      loaded.add(name);
+    }
+    try { history.replaceState(null, '', '#' + name); } catch (e) {}
+  }
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => activate(tab.dataset.panel));
+  });
+
+  const initial = (window.location.hash || '').replace('#', '');
+  if (initial && panels[initial]) activate(initial);
+
+  const stored = localStorage.getItem('pulseforge-theme');
+  if (stored === 'light') document.body.classList.add('light-mode');
+})();
+
+(function setupUser() {
+  function computeInitials(user) {
+    if (!user) return '--';
+    const name = (user.name || '').trim();
+    if (name) {
+      const parts = name.split(/\s+/).filter(Boolean);
+      if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+      if (parts[0].length >= 2) return parts[0].slice(0, 2).toUpperCase();
+      return parts[0][0].toUpperCase();
+    }
+    const email = (user.email || '').trim();
+    if (email) return email.slice(0, 2).toUpperCase();
+    return '--';
+  }
+
+  fetch('/api/me', { credentials: 'include' })
+    .then(res => res.ok ? res.json() : null)
+    .then(data => {
+      const user = data && data.user;
+      const avatar = document.getElementById('userAvatar');
+      if (!avatar) return;
+      avatar.textContent = computeInitials(user);
+      if (user && (user.name || user.email)) avatar.title = user.name || user.email;
+    })
+    .catch(() => {});
+
+  const avatar = document.getElementById('userAvatar');
+  const dropdown = document.getElementById('userDropdown');
+  if (!avatar || !dropdown) return;
+  avatar.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdown.classList.toggle('open');
+  });
+  document.addEventListener('click', (e) => {
+    if (!dropdown.contains(e.target) && e.target !== avatar) dropdown.classList.remove('open');
+  });
+})();
+</script>
+</body>
+</html>

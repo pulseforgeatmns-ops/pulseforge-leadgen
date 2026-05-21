@@ -80,9 +80,10 @@ function requireRole(...roles) {
   return (req, res, next) => {
     const check = () => {
       if (roles.includes(req.user?.role)) return next();
+      if (req.user?.role === 'sales' && !isApiRequest(req)) return res.redirect('/sales');
       if (req.user?.role === 'setter' && !isApiRequest(req)) return res.redirect('/setter');
       if (req.user?.role === 'closer' && !isApiRequest(req)) return res.redirect('/closer');
-      if (req.user?.role === 'sales' && !isApiRequest(req)) return res.redirect('/setter');
+      if (['admin', 'manager'].includes(req.user?.role) && !isApiRequest(req)) return res.redirect('/dashboard');
       return res.status(403).json({ error: 'Forbidden' });
     };
 
