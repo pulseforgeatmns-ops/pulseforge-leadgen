@@ -5,6 +5,7 @@ const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext')
 
 const AGENT_NAME = 'sam';
 const CLIENT_ID = getRuntimeClientId();
+let CLIENT_CONFIG = null;
 
 const ACCOUNT_SID    = process.env.TWILIO_ACCOUNT_SID;
 const AUTH_TOKEN     = process.env.TWILIO_AUTH_TOKEN;
@@ -31,8 +32,12 @@ const MESSAGES = {
     `Hey ${p.first_name}, wanted to reach out directly — I think there's a real fit here and I'd love to connect when you have 10 minutes. - Jacob at Pulseforge`,
 
   // 14+ days since last contact, still no reply
-  re_engagement: (p) =>
-    `Hey ${p.first_name}, just checking back in — if timing was off before, I'm still happy to put something together for you. - Jacob at Pulseforge`,
+  re_engagement: (p) => {
+    const sender = CLIENT_CONFIG?.sender_name || 'Jacob at Pulseforge';
+    const raw = (p.first_name || '').trim();
+    const greeting = !raw || /^there$/i.test(raw) ? 'Hey,' : `Hey ${raw},`;
+    return `${greeting} just checking back in — if timing was off before, I'm still happy to put something together for you. - ${sender}`;
+  },
 };
 
 // ── DEDUP CHECK ───────────────────────────────────────────────────────
@@ -243,8 +248,8 @@ async function processReengagementTriggers(sendFn, dailyLimit, sentCount) {
 
 async function run() {
   console.log('\nSam agent running...\n');
-  const clientConfig = await getClientConfig(CLIENT_ID);
-  if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
+  CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
+  if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
 
   const twilioClient = getTwilioClient();
   if (!twilioClient) {
