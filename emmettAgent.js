@@ -726,15 +726,17 @@ function fillTemplate(template, prospect) {
     .replace(/{{business_name}}/g, businessName);
 }
 
-async function sendEmail(toEmail, toName, subject, body) {
+async function sendEmail(toEmail, toName, subject, body, tags) {
   try {
-    const response = await axios.post('https://api.brevo.com/v3/smtp/email', {
+    const payload = {
       sender: { name: FROM_NAME, email: FROM_EMAIL },
       to: [{ email: toEmail, name: toName }],
       subject,
       htmlContent: '<html><body style="font-family:Georgia,serif;font-size:16px;line-height:1.6;color:#1a1a1a;max-width:560px;margin:0 auto;padding:20px;">' + body.replace(/\n/g, '<br>') + '</body></html>',
       textContent: body
-    }, {
+    };
+    if (Array.isArray(tags) && tags.length) payload.tags = tags;
+    const response = await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
       headers: {
         'api-key': BREVO_API_KEY,
         'Content-Type': 'application/json'
@@ -963,11 +965,14 @@ async function run() {
     console.log(`Sending to: ${prospect.email} (${prospect.name})`);
     console.log(`Subject: ${subject}`);
 
+    const sequenceName = getSequenceForProspect(prospect);
+    const tags = [sequenceName, `step_${step.day}`, prospect.vertical].filter(Boolean);
     const success = await sendEmail(
       prospect.email,
       `${prospect.first_name} ${prospect.last_name}`,
       subject,
-      body
+      body,
+      tags
     );
 
     if (success) {
