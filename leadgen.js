@@ -238,9 +238,24 @@ async function enrichWithProspeo(domain) {
 
 // ─────────────────────────────────────────────────────────────────────
 // STEP 1b: Google Places API Search (Phase 4)
-// Better for retail, wellness, salon, gym verticals
+// Secondary local business discovery — runs after SerpAPI, not instead of it
 // Docs: https://developers.google.com/maps/documentation/places/web-service
 // ─────────────────────────────────────────────────────────────────────
+const PLACES_TEXTSEARCH = 'https://maps.googleapis.com/maps/api/place/textsearch/json';
+const PLACES_DETAILS    = 'https://maps.googleapis.com/maps/api/place/details/json';
+
+async function fetchPlaceDetails(placeId, apiKey) {
+  const res = await axios.get(PLACES_DETAILS, {
+    params: {
+      place_id: placeId,
+      fields: 'name,formatted_address,formatted_phone_number,website,place_id',
+      key: apiKey,
+    },
+  });
+  if (res.data.status !== 'OK') return null;
+  return res.data.result;
+}
+
 async function searchGooglePlaces(industry, location, numResults = 20) {
   const PLACES_KEY = process.env.GOOGLE_PLACES_KEY;
   if (!PLACES_KEY) {
@@ -248,40 +263,42 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
     return [];
   }
 
+  const leads = [];
+  const query = `${industry} ${location}`;
+
   try {
-    const query = `${industry} in ${location}`;
-    const res = await axios.post('https://places.googleapis.com/v1/places:searchText', {
-      textQuery: query,
-      maxResultCount: numResults
-    }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': PLACES_KEY,
-        'X-Goog-FieldMask': 'places.displayName,places.websiteUri,places.nationalPhoneNumber,places.formattedAddress,places.id'
-      }
+    const res = await axios.get(PLACES_TEXTSEARCH, {
+      params: { query, key: PLACES_KEY },
     });
 
-    const results = res.data.places || [];
-    const leads = [];
+    const status = res.data.status;
+    if (status !== 'OK' && status !== 'ZERO_RESULTS') {
+      console.error('[Places] Text Search status:', status, res.data.error_message || '');
+      return [];
+    }
 
-    for (const place of results) {
+    const results = (res.data.results || []).slice(0, numResults);
+
+    for (const hit of results) {
       try {
-        if (!place.websiteUri) continue;
+        const details = await fetchPlaceDetails(hit.place_id, PLACES_KEY);
+        if (!details?.website) continue;
 
-        const domain = new URL(place.websiteUri).hostname.replace('www.', '');
-        if (DOMAIN_BLACKLIST.some(b => domain.includes(b))) continue;
+        const domain = extractDomain(details.website);
+        if (!domain || DOMAIN_BLACKLIST.some(b => domain.includes(b))) continue;
 
-        const phone = place.nationalPhoneNumber || null;
-        console.log('[Places] Phone for', place.displayName?.text, ':', phone);
         leads.push({
-          company: place.displayName?.text || 'Unknown',
+          company: details.name || hit.name || 'Unknown',
           url: domain,
-          phone,
-          address: place.formattedAddress || '',
-          source: ['places'],
-          snippet: ''
+          phone: details.formatted_phone_number || null,
+          address: details.formatted_address || hit.formatted_address || '',
+          place_id: details.place_id || hit.place_id,
+          source: ['google_places'],
+          snippet: '',
         });
-      } catch(err) {
+
+        await new Promise(r => setTimeout(r, 200));
+      } catch (err) {
         // skip individual place errors
       }
     }
@@ -289,7 +306,7 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
     console.log(`[Places] Found ${leads.length} results with websites`);
     return leads;
   } catch (err) {
-    console.error('[Places] Error full:', JSON.stringify(err.response?.data, null, 2));
+    console.error('[Places] Error:', err.response?.data || err.message);
     return [];
   }
 }
@@ -472,26 +489,25 @@ async function main() {
   console.log('─────────────────────────────────────────\n');
 
   if (!process.env.GOOGLE_PLACES_KEY) {
-    console.warn('[WARN] GOOGLE_PLACES_KEY is not set — Google Places search will be skipped for Places-eligible verticals');
+    console.warn('[WARN] GOOGLE_PLACES_KEY is not set — Google Places search will be skipped');
   }
 
   // Build search query
   const query = `"${CONFIG.industry}" "${CONFIG.location}" "${CONFIG.jobTitle}" -indeed -ziprecruiter -thumbtack -glassdoor -yelp -yellowpages -mapquest -bbb -patch -avvo`;
   console.log(`[Google] Searching: ${query}`);
 
-  // 1. Google search
+  // 1. SerpAPI search
   let leads = await searchGoogle(query, CONFIG.maxResults);
+  console.log(`[SerpAPI] Found ${leads.length} raw results`);
 
-  // 1b. Google Places search for retail/wellness verticals
-  const placesVerticals = ['retail', 'salon', 'spa', 'gym', 'fitness', 'wellness', 'boutique', 'barber', 'yoga', 'pilates', 'restaurant', 'cafe', 'diner', 'cleaning', 'property', 'landscap', 'lawn'];
-  const isPlacesVertical = placesVerticals.some(v => CONFIG.industry.toLowerCase().includes(v));
-  if (isPlacesVertical) {
-    console.log('[Places] Detected retail/wellness vertical — running Google Places search...');
-    const placesLeads = await searchGooglePlaces(CONFIG.industry, CONFIG.location, 20);
+  // 1b. Google Places search (additive — secondary local discovery)
+  console.log(`[Places] Searching: "${CONFIG.industry}" in ${CONFIG.location}`);
+  const placesLeads = await searchGooglePlaces(CONFIG.industry, CONFIG.location, 20);
+  if (placesLeads.length) {
     leads = [...leads, ...placesLeads];
-    console.log(`[Places] Combined total: ${leads.length} raw results`);
   }
-  console.log(`[Google] Found ${leads.length} raw results`);
+  leads = deduplicate(leads);
+  console.log(`[Combined] ${leads.length} unique domains after SerpAPI + Places`);
 
   // Pre-enrichment blacklist — strip junk domains before spending Prospeo/Hunter credits
   leads = leads.filter(l => !DOMAIN_BLACKLIST.some(b => l.url && l.url.includes(b)));
@@ -515,8 +531,8 @@ async function main() {
         lead.source = [...(lead.source || []), 'hunter'];
         process.stdout.write(` ✓ [Hunter] ${enriched.email || 'no email'}\n`);
       } else {
-        // For Places leads, try scraping the website directly
-        if (lead.source?.includes('places')) {
+        // For Google Places leads, try scraping the website directly
+        if (lead.source?.includes('google_places')) {
           const scraped = await scrapeWebsiteEmail(lead.url);
           if (scraped) {
             Object.assign(lead, scraped);
@@ -774,7 +790,7 @@ async function saveToDatabase(leads) {
         const needle = String(area).toLowerCase();
         return (lead.address || '').toLowerCase().includes(needle) || notes.toLowerCase().includes(needle);
       }) || null;
-      const discoveryMethod = Array.isArray(lead.source) && lead.source.includes('places') ? 'google_places' : 'serpapi';
+      const discoveryMethod = Array.isArray(lead.source) && lead.source.includes('google_places') ? 'google_places' : 'serpapi';
       const insert = await pool.query(
       'INSERT INTO prospects (first_name, last_name, email, phone, status, source, icp_score, notes, vertical, client_id, service_area_match, discovery_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (email) DO NOTHING RETURNING id',
       [firstName, lastName, email, phone, 'cold', 'scout', lead.score, notes, CONFIG.industry, CONFIG.clientId, serviceArea, discoveryMethod]
