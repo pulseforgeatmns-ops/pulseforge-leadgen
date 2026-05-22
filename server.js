@@ -137,6 +137,54 @@ app.use('/closer', require('./routes/closer'));
 app.use('/api/closer', require('./routes/closer'));
 app.use('/sales', require('./routes/sales'));
 
+// TEMP: one-shot GBP account/location lookup. CRON_SECRET-gated so it can be
+// curled without a session cookie. REMOVE AFTER MSHI IDs ARE CAPTURED.
+app.get('/admin/_gbp-lookup', async (req, res) => {
+  if (!process.env.CRON_SECRET || req.query.secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const tokenRes = await axios.post('https://oauth2.googleapis.com/token', {
+      client_id:     process.env.GOOGLE_CLIENT_ID,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET,
+      refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
+      grant_type:    'refresh_token',
+    });
+    const token = tokenRes.data.access_token;
+    const acctRes = await axios.get('https://mybusinessaccountmanagement.googleapis.com/v1/accounts', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const accounts = acctRes.data.accounts || [];
+    const out = [];
+    for (const account of accounts) {
+      const accountId = account.name.split('/')[1];
+      let locations = [];
+      try {
+        const locRes = await axios.get(`https://mybusinessbusinessinformation.googleapis.com/v1/accounts/${accountId}/locations`, {
+          headers: { Authorization: `Bearer ${token}` },
+          params: { readMask: 'name,title,storefrontAddress' },
+        });
+        locations = (locRes.data.locations || []).map(loc => ({
+          location_id: loc.name.split('/')[1],
+          title: loc.title || null,
+          city: loc.storefrontAddress?.locality || null,
+          state: loc.storefrontAddress?.administrativeArea || null,
+        }));
+      } catch (err) {
+        locations = [{ error: err.response?.data?.error?.message || err.message }];
+      }
+      out.push({
+        account_id: accountId,
+        account_name: account.accountName || null,
+        locations,
+      });
+    }
+    res.json({ accounts: out });
+  } catch (err) {
+    res.status(500).json({ error: err.response?.data || err.message });
+  }
+});
+
 // Login page
 app.get('/login', (req, res) => {
   res.send(`<!DOCTYPE html>
