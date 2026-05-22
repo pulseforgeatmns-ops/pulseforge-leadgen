@@ -14,8 +14,23 @@ require('dotenv').config();
 const axios = require('axios');
 const { createObjectCsvWriter } = require('csv-writer');
 const { google } = require('googleapis');
+const pool = require('./db');
 const { appendQualifiedScoutLead } = require('./utils/setterSheet');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+
+// Write one agent_log row per Scout run so we can answer
+// "did Scout run? for which client/industry/location? did it find anything?"
+// without trawling Railway stdout. Best-effort — never throws.
+async function logScoutRun(status, payload) {
+  try {
+    await pool.query(`
+      INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+      VALUES ($1, $2, $3, $4, NOW(), $5)
+    `, ['scout', 'scrape', JSON.stringify(payload), status, CONFIG.clientId]);
+  } catch (err) {
+    console.error('[logScoutRun] failed to write:', err.message);
+  }
+}
 
 
 const DOMAIN_BLACKLIST = [
@@ -591,8 +606,9 @@ async function main() {
   if (CONFIG.outputCSV) await exportToCSV(leads, csvFile);
   if (CONFIG.outputSheet) await pushToGoogleSheets(leads, CONFIG.sheetId);
 
-  await saveToDatabase(leads);
+  const dbStats = await saveToDatabase(leads);
   console.log('\n✓ Done.\n');
+  return { leads_scored: leads.length, ...dbStats };
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -736,7 +752,6 @@ function validateProspect(name) {
 }
 
 async function saveToDatabase(leads) {
-  const pool = require('./db');
   let saved = 0, skipped = 0, rejected = 0, setterQueued = 0, setterSkipped = 0, setterFailed = 0;
   await ensureSetterQueueColumns(pool);
   for (const lead of leads) {
@@ -830,6 +845,7 @@ async function saveToDatabase(leads) {
   }
   console.log(`[DB] Saved ${saved} prospects, rejected ${rejected} (junk), skipped ${skipped} (errors/dupes)`);
   console.log(`[Setter] Queued ${setterQueued}, skipped ${setterSkipped}, failed ${setterFailed}`);
+  return { saved, skipped, rejected, setter_queued: setterQueued, setter_skipped: setterSkipped, setter_failed: setterFailed };
 }
 
 async function ensureSetterQueueColumns(pool) {
@@ -852,7 +868,30 @@ async function run(params = {}) {
   if (params.location) CONFIG.location = params.location;
   if (params.jobTitle) CONFIG.jobTitle = params.jobTitle;
   if (params.maxResults) CONFIG.maxResults = parseInt(params.maxResults);
-  await main();
+
+  const startedAt = Date.now();
+  const runContext = {
+    industry: CONFIG.industry,
+    location: CONFIG.location,
+    job_title: CONFIG.jobTitle,
+    max_results: CONFIG.maxResults,
+  };
+  await logScoutRun('running', runContext);
+  try {
+    const stats = await main();
+    await logScoutRun('success', {
+      ...runContext,
+      duration_ms: Date.now() - startedAt,
+      ...(stats || {}),
+    });
+  } catch (err) {
+    await logScoutRun('failed', {
+      ...runContext,
+      duration_ms: Date.now() - startedAt,
+      error: err.message,
+    });
+    throw err;
+  }
 }
 
 module.exports = { run };
