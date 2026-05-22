@@ -10,7 +10,8 @@ const CONTENT_TYPES = ['promotional', 'educational', 'seasonal', 'behind-the-sce
 const BLOG_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'community', 'seasonal'];
 const LINKEDIN_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'results', 'community'];
 const CHANNELS = ['facebook_page', 'google_business', 'blog', 'linkedin_page'];
-const MIN_QUALITY_SCORE = 21;
+const MIN_QUALITY_SCORE = 24;
+const MIN_HOOK_SCORE = 8;
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
 
@@ -490,13 +491,31 @@ MSHI CLIENT CONTEXT:
   let finalScore = firstScore;
   let regenerated = false;
 
-  if (firstScore.total < MIN_QUALITY_SCORE) {
+  if (firstScore.total < MIN_QUALITY_SCORE || firstScore.hook_strength < MIN_HOOK_SCORE) {
     regenerated = true;
     console.log(`  [quality] Score ${firstScore.total}/30, regenerating for ${firstScore.weak_dimension}`);
     const regenPrompt = `${prompt}
 
-Your previous draft scored low on ${firstScore.weak_dimension}: ${firstScore.reason}.
-Write a new version that specifically addresses this weakness.
+Your previous draft scored ${firstScore.hook_strength}/10 on hook strength. Reason: ${firstScore.reason}.
+
+A strong hook is the ONLY thing that matters in the first line. Here are examples of strong vs weak:
+
+WEAK: "We help local businesses stay on top of their marketing."
+WEAK: "Running a small business is tough, especially when it comes to marketing."
+WEAK: "Most business owners don't realize how much time they spend on marketing."
+
+STRONG: "A cleaning company in Manchester booked 11 new clients last month without running a single ad."
+STRONG: "Your competitor just automated their entire follow-up sequence. You're still doing it by hand."
+STRONG: "The businesses winning right now have one thing in common — and it's not their ad budget."
+
+The first line must create a reason to keep reading. It should be specific, surprising, or create a gap the reader wants to close. No generic observations. No "most business owners." No "running a small business."
+
+Rewrite the post with a completely different opening line that hits one of these patterns:
+- A specific result or number ("booked 11 clients", "saved 6 hours a week")
+- A competitive tension ("your competitor just...", "while you were...")
+- A counterintuitive claim ("the businesses winning aren't spending more on ads")
+- A direct challenge ("you're losing leads every day you don't have this")
+
 Return only the rewritten post text.`;
     const secondDraft = await createDraft(regenPrompt, systemPrompt, channel);
     const secondScore = await scoreDraft(secondDraft);
