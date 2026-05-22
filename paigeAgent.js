@@ -103,6 +103,7 @@ function buildContentRules(recentThemes) {
 - Avoid repeating these recent service angles unless the post has a clearly different hook: ${formatThemeList(recentThemes.services)}
 - Lead with a specific result, outcome, stat, or question that creates genuine curiosity — not a seasonal or geographic observation
 - Every post must have a concrete hook in the first line that works without knowing the location or time of year
+- Write in a natural, conversational tone. Always use contractions — it's, don't, that's, you're, we're, isn't, hasn't, won't, can't. Never write "it is", "do not", "that is", "you are", "we are" when a contraction would sound more natural. The content should sound like a sharp business owner wrote it, not a marketing agency.
 
 HOOK WRITING — NON-NEGOTIABLE:
 Every post must open with a strong hook in the first line. Strong hooks include: a counterintuitive statement, a specific number or statistic, a direct question that creates curiosity, or a bold claim. Never start a post with "I", "We", "At [company]", or a generic greeting. The first line must stop the scroll. Examples of weak hooks: "We help local businesses grow." Examples of strong hooks: "Most local businesses lose 40% of potential customers before they ever pick up the phone." or "The restaurants winning right now aren't spending more on ads."`;
