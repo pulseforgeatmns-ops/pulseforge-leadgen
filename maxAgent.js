@@ -433,6 +433,196 @@ async function createActions(snapshot) {
   console.log(`[Max] Deposited ${actions.length} action(s) into agent_actions`);
 }
 
+async function insertAgentLog(action, payload, status = 'success', prospectId = null) {
+  await pool.query(`
+    INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+    VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+  `, [AGENT_NAME, action, prospectId, JSON.stringify({ ...payload, client_id: CLIENT_ID }), status, CLIENT_ID]);
+}
+
+function prospectCompanySql(alias = 'p') {
+  return `COALESCE(c.name, NULLIF(TRIM(SPLIT_PART(${alias}.notes, ' — ', 1)), ''), CONCAT(${alias}.first_name, ' ', ${alias}.last_name))`;
+}
+
+// Trigger 1 — warm prospects stale 14+ days → queue Sam re-engagement via cold status
+async function runReengagementTrigger() {
+  const res = await pool.query(`
+    SELECT
+      p.id,
+      p.email,
+      ${prospectCompanySql('p')} AS company
+    FROM prospects p
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+    WHERE p.client_id = $1
+      AND p.status = 'warm'
+      AND COALESCE(p.do_not_contact, false) = false
+      AND (
+        SELECT MAX(t.created_at)
+        FROM touchpoints t
+        WHERE t.prospect_id = p.id AND t.client_id = p.client_id
+      ) < NOW() - INTERVAL '14 days'
+      AND NOT EXISTS (
+        SELECT 1 FROM agent_log al
+        WHERE al.prospect_id = p.id
+          AND al.client_id = p.client_id
+          AND al.action = 'reengagement_trigger'
+          AND al.status = 'pending'
+      )
+  `, [CLIENT_ID]);
+
+  let count = 0;
+  for (const row of res.rows) {
+    await insertAgentLog('reengagement_trigger', {
+      prospect_id: row.id,
+      email: row.email,
+      company: row.company,
+    }, 'pending', row.id);
+    await pool.query(
+      `UPDATE prospects SET status = 'cold', updated_at = NOW() WHERE id = $1 AND client_id = $2`,
+      [row.id, CLIENT_ID]
+    );
+    count++;
+  }
+
+  await insertAgentLog('reengagement_trigger_summary', { count });
+  console.log(`[Max] Trigger 1 (re-engagement): ${count} prospect(s) reverted to cold`);
+  return count;
+}
+
+// Trigger 2 — exhausted cold email sequences with no reply → mark dead
+async function runMarkSequenceDeadTrigger() {
+  const res = await pool.query(`
+    SELECT
+      p.id,
+      p.email,
+      ${prospectCompanySql('p')} AS company
+    FROM prospects p
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+    WHERE p.client_id = $1
+      AND p.status = 'cold'
+      AND COALESCE(p.do_not_contact, false) = false
+      AND (
+        SELECT COUNT(*)::int
+        FROM touchpoints t
+        WHERE t.prospect_id = p.id
+          AND t.client_id = p.client_id
+          AND t.channel = 'email'
+          AND t.action_type = 'outbound'
+      ) >= 4
+      AND NOT EXISTS (
+        SELECT 1 FROM touchpoints t
+        WHERE t.prospect_id = p.id
+          AND t.client_id = p.client_id
+          AND t.channel = 'email'
+          AND t.action_type IN ('inbound', 'reply', 'email_reply')
+      )
+      AND (
+        SELECT MAX(t.created_at)
+        FROM touchpoints t
+        WHERE t.prospect_id = p.id
+          AND t.client_id = p.client_id
+          AND t.channel = 'email'
+          AND t.action_type = 'outbound'
+      ) < NOW() - INTERVAL '14 days'
+  `, [CLIENT_ID]);
+
+  let count = 0;
+  for (const row of res.rows) {
+    await pool.query(
+      `UPDATE prospects SET status = 'dead', updated_at = NOW() WHERE id = $1 AND client_id = $2`,
+      [row.id, CLIENT_ID]
+    );
+    await insertAgentLog('auto_marked_dead', {
+      prospect_id: row.id,
+      email: row.email,
+      company: row.company,
+    }, 'success', row.id);
+    count++;
+  }
+
+  await insertAgentLog('auto_marked_dead_summary', { count });
+  console.log(`[Max] Trigger 2 (sequence complete): ${count} prospect(s) marked dead`);
+  return count;
+}
+
+// Trigger 3 — low Paige content scores → queue regeneration on next Paige run
+async function runPaigeQualityGateTrigger() {
+  const res = await pool.query(`
+    SELECT id, payload, client_id
+    FROM agent_log
+    WHERE agent_name = 'paige'
+      AND action = 'content_scored'
+      AND client_id = $1
+      AND ran_at >= NOW() - INTERVAL '24 hours'
+      AND COALESCE(
+        NULLIF(payload->>'total', '')::int,
+        NULLIF(payload->'scores'->>'total', '')::int
+      ) < 20
+      AND NOT EXISTS (
+        SELECT 1 FROM agent_log pending
+        WHERE pending.agent_name = 'max'
+          AND pending.action = 'paige_regenerate_trigger'
+          AND pending.status = 'pending'
+          AND pending.client_id = agent_log.client_id
+          AND pending.payload->>'channel' = agent_log.payload->>'channel'
+          AND pending.ran_at >= NOW() - INTERVAL '24 hours'
+      )
+  `, [CLIENT_ID]);
+
+  let count = 0;
+  for (const row of res.rows) {
+    const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : (row.payload || {});
+    const channel = payload.channel;
+    if (!channel) continue;
+
+    await insertAgentLog('paige_regenerate_trigger', {
+      channel,
+      source_log_id: row.id,
+      total: payload.total ?? payload.scores?.total ?? null,
+    }, 'pending');
+    count++;
+  }
+
+  await insertAgentLog('paige_regenerate_trigger_summary', { count });
+  console.log(`[Max] Trigger 3 (Paige quality gate): ${count} regenerate trigger(s) queued`);
+  return count;
+}
+
+async function runAutonomousTriggers() {
+  const summary = { reengagement: 0, marked_dead: 0, paige_regenerate: 0, errors: [] };
+
+  try {
+    summary.reengagement = await runReengagementTrigger();
+  } catch (err) {
+    summary.errors.push({ trigger: 'reengagement', message: err.message });
+    console.error('[Max] Trigger 1 failed:', err.message);
+  }
+
+  try {
+    summary.marked_dead = await runMarkSequenceDeadTrigger();
+  } catch (err) {
+    summary.errors.push({ trigger: 'auto_marked_dead', message: err.message });
+    console.error('[Max] Trigger 2 failed:', err.message);
+  }
+
+  try {
+    summary.paige_regenerate = await runPaigeQualityGateTrigger();
+  } catch (err) {
+    summary.errors.push({ trigger: 'paige_regenerate', message: err.message });
+    console.error('[Max] Trigger 3 failed:', err.message);
+  }
+
+  await insertAgentLog('autonomous_triggers_summary', {
+    count: summary.reengagement + summary.marked_dead + summary.paige_regenerate,
+    reengagement: summary.reengagement,
+    marked_dead: summary.marked_dead,
+    paige_regenerate: summary.paige_regenerate,
+    errors: summary.errors,
+  }, summary.errors.length ? 'partial' : 'success');
+
+  console.log('[Max] Autonomous triggers complete:', summary);
+}
+
 async function run() {
   console.log('\nMax agent running...\n');
 
@@ -456,6 +646,9 @@ async function run() {
 
     console.log('Creating action items...');
     await createActions(snapshot);
+
+    console.log('Running autonomous triggers...');
+    await runAutonomousTriggers();
 
     console.log('\nMax complete.');
   } catch (err) {
