@@ -613,6 +613,76 @@ async function logRun(status, payload) {
   `, [AGENT_NAME, 'generate_content', JSON.stringify(payload), status, CLIENT_ID]);
 }
 
+function parseLogPayload(payload) {
+  if (!payload) return {};
+  return typeof payload === 'string' ? JSON.parse(payload) : payload;
+}
+
+async function completeRegenerateTrigger(triggerId, status = 'completed') {
+  await pool.query(
+    `UPDATE agent_log SET status = $1 WHERE id = $2 AND agent_name = 'max' AND action = 'paige_regenerate_trigger'`,
+    [status, triggerId]
+  );
+}
+
+// Max quality-gate triggers — run before normal generation
+async function processRegenerateTriggers() {
+  const triggers = await pool.query(`
+    SELECT id, payload
+    FROM agent_log
+    WHERE agent_name = 'max'
+      AND action = 'paige_regenerate_trigger'
+      AND status = 'pending'
+      AND client_id = $1
+      AND ran_at >= NOW() - INTERVAL '24 hours'
+    ORDER BY ran_at ASC
+  `, [CLIENT_ID]);
+
+  if (!triggers.rows.length) return { triggers: 0, regenerated: 0 };
+
+  const clients = await getActiveClients();
+  if (!clients.length) {
+    for (const row of triggers.rows) {
+      await completeRegenerateTrigger(row.id, 'completed');
+    }
+    return { triggers: triggers.rows.length, regenerated: 0 };
+  }
+
+  let regenerated = 0;
+  console.log(`[Paige] Processing ${triggers.rows.length} Max regenerate trigger(s)...`);
+
+  for (const row of triggers.rows) {
+    const payload = parseLogPayload(row.payload);
+    const channel = payload.channel;
+    if (!channel || !CHANNELS.includes(channel)) {
+      await completeRegenerateTrigger(row.id);
+      continue;
+    }
+
+    for (const company of clients) {
+      const contentType = await pickContentType(company.name, channel, company.id);
+      console.log(`  [regenerate] ${company.name} — ${channel} — ${contentType}`);
+      try {
+        const postResult = await generatePost(company, contentType, channel);
+        const id = await saveToPendingApprovals(company, postResult.content, contentType, channel);
+        if (id) {
+          await logQualityScore(channel, postResult.quality, true, postResult.content);
+          console.log(`  ✓ regenerated (${id.slice(0, 8)})`);
+          regenerated++;
+        }
+      } catch (err) {
+        console.error(`  ✗ regenerate ${company.name}/${channel}: ${err.message}`);
+        await logChannelError(company, channel, err);
+      }
+      await new Promise(r => setTimeout(r, 1500));
+    }
+
+    await completeRegenerateTrigger(row.id);
+  }
+
+  return { triggers: triggers.rows.length, regenerated };
+}
+
 // Records a per-channel generation failure to agent_log so we can query
 // `SELECT * FROM agent_log WHERE action = 'generate_content_error'` and
 // see exactly which channel/company blew up and why. Best-effort — never
@@ -658,9 +728,19 @@ AND status = 'pending';`);
     const clients = await getActiveClients();
     console.log(`Found ${clients.length} client${clients.length !== 1 ? 's' : ''}.\n`);
 
+    const regenerateResult = await processRegenerateTriggers();
+    if (regenerateResult.triggers) {
+      console.log(`[Paige] Regenerate pass: ${regenerateResult.regenerated} post(s) from ${regenerateResult.triggers} trigger(s)\n`);
+    }
+
     if (!clients.length) {
       console.log('No clients in the companies table. Add companies to get started.');
-      await logRun('success', { clients_processed: 0, posts_generated: 0 });
+      await logRun('success', {
+        clients_processed: 0,
+        posts_generated: 0,
+        max_regenerate_triggers: regenerateResult.triggers,
+        max_regenerated: regenerateResult.regenerated,
+      });
       return;
     }
 
@@ -698,6 +778,8 @@ AND status = 'pending';`);
       posts_generated: generated,
       channels_queued: channelsQueued,
       channels_failed: channelsFailed,
+      max_regenerate_triggers: regenerateResult.triggers,
+      max_regenerated: regenerateResult.regenerated,
     });
     console.log(`\nPaige complete — ${generated} post${generated !== 1 ? 's' : ''} queued, ${channelsFailed.length} channel${channelsFailed.length !== 1 ? 's' : ''} failed.`);
     if (channelsFailed.length) console.log(`  Failed: ${channelsFailed.join(', ')}`);

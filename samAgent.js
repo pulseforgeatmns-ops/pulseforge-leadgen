@@ -179,6 +179,66 @@ async function getReEngagement() {
   return res.rows;
 }
 
+function parseLogPayload(payload) {
+  if (!payload) return {};
+  return typeof payload === 'string' ? JSON.parse(payload) : payload;
+}
+
+async function completeReengagementTrigger(triggerId, status = 'completed') {
+  await pool.query(
+    `UPDATE agent_log SET status = $1 WHERE id = $2 AND agent_name = 'max' AND action = 'reengagement_trigger'`,
+    [status, triggerId]
+  );
+}
+
+// Max re-engagement triggers — run before normal SMS triggers
+async function processReengagementTriggers(sendFn, dailyLimit, sentCount) {
+  const res = await pool.query(`
+    SELECT id, prospect_id, payload
+    FROM agent_log
+    WHERE agent_name = 'max'
+      AND action = 'reengagement_trigger'
+      AND status = 'pending'
+      AND client_id = $1
+      AND ran_at >= NOW() - INTERVAL '24 hours'
+    ORDER BY ran_at ASC
+  `, [CLIENT_ID]);
+
+  if (!res.rows.length) return { processed: 0, sent: 0 };
+
+  console.log(`Max re-engagement triggers: ${res.rows.length} pending`);
+  let sent = 0;
+
+  for (const row of res.rows) {
+    if (sentCount + sent >= dailyLimit) break;
+
+    const payload = parseLogPayload(row.payload);
+    const prospectId = row.prospect_id || payload.prospect_id;
+    if (!prospectId) {
+      await completeReengagementTrigger(row.id);
+      continue;
+    }
+
+    const prospectRes = await pool.query(
+      `SELECT id, first_name, last_name, phone, do_not_contact
+       FROM prospects WHERE id = $1 AND client_id = $2`,
+      [prospectId, CLIENT_ID]
+    );
+    const prospect = prospectRes.rows[0];
+    if (!prospect) {
+      await completeReengagementTrigger(row.id);
+      continue;
+    }
+
+    const result = await sendFn(prospectId, MESSAGES.re_engagement(prospect));
+    if (result.sent) sent++;
+    await completeReengagementTrigger(row.id);
+    await new Promise(r => setTimeout(r, 1500));
+  }
+
+  return { processed: res.rows.length, sent };
+}
+
 // ── RUN ───────────────────────────────────────────────────────────────
 
 async function run() {
@@ -194,6 +254,10 @@ async function run() {
 
   let sent = 0;
   const dailyLimit = 20;
+
+  const maxReengage = await processReengagementTriggers(sendSMS, dailyLimit, sent);
+  sent += maxReengage.sent;
+  console.log(`Max re-engagement: ${maxReengage.sent} SMS sent (${maxReengage.processed} trigger(s) processed)\n`);
 
   // Trigger 1: sequence, no reply
   const noReply = await getSequenceNoReply();
@@ -227,7 +291,16 @@ async function run() {
 
   await pool.query(
     `INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
-    [AGENT_NAME, 'batch_sms', JSON.stringify({ sent, triggers: { noReply: noReply.length, warm: warm.length, reEngage: reEngage.length }, client_id: CLIENT_ID }), 'success', CLIENT_ID]
+    [AGENT_NAME, 'batch_sms', JSON.stringify({
+      sent,
+      triggers: {
+        maxReengage: maxReengage,
+        noReply: noReply.length,
+        warm: warm.length,
+        reEngage: reEngage.length,
+      },
+      client_id: CLIENT_ID,
+    }), 'success', CLIENT_ID]
   );
 
   console.log(`\nSam complete — ${sent} SMS sent.`);
