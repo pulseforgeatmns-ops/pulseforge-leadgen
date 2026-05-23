@@ -3924,6 +3924,10 @@ function _buildDrawerRow(p, colSpan) {
   const notes = p.notes ? `<div class="drawer-notes">📋 ${_esc(p.notes)}</div>` : '';
   dr.innerHTML = `<td colspan="${colSpan}">
     ${notes}
+    <div class="drawer-actions" style="display:flex;gap:8px;margin:0.4rem 0 0.6rem;">
+      <button class="pm-action-btn" type="button" onclick="event.stopPropagation(); openProspectModal('${_esc(p.id)}', 'touch')">Log Manual Touch</button>
+      <button class="pm-action-btn" type="button" onclick="event.stopPropagation(); openProspectModal('${_esc(p.id)}')">View detail →</button>
+    </div>
     <div class="drawer-touchpoints" id="drawer-tp-${p.id}">
       <span class="drawer-empty">Loading touchpoints...</span>
     </div>
