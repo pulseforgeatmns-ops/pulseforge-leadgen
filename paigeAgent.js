@@ -618,7 +618,10 @@ function parseLogPayload(payload) {
   return typeof payload === 'string' ? JSON.parse(payload) : payload;
 }
 
-async function completeRegenerateTrigger(triggerId, status = 'completed') {
+// agent_log_status_check only allows: success | failed | skipped | pending.
+// Default to 'success' (the codebase convention for "done OK") so this UPDATE
+// never throws and bypasses the main channel loop in run().
+async function completeRegenerateTrigger(triggerId, status = 'success') {
   await pool.query(
     `UPDATE agent_log SET status = $1 WHERE id = $2 AND agent_name = 'max' AND action = 'paige_regenerate_trigger'`,
     [status, triggerId]
@@ -643,7 +646,7 @@ async function processRegenerateTriggers() {
   const clients = await getActiveClients();
   if (!clients.length) {
     for (const row of triggers.rows) {
-      await completeRegenerateTrigger(row.id, 'completed');
+      await completeRegenerateTrigger(row.id, 'success');
     }
     return { triggers: triggers.rows.length, regenerated: 0 };
   }
