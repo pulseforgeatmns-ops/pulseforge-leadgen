@@ -3475,7 +3475,7 @@ function prospectModalHtml(p) {
       <div class="pm-panel" data-pm-panel="sequence" style="display:none">${sequenceHtml(p)}</div>
     </div>
     <div class="pm-actions">
-      <button class="pm-action-btn" type="button" id="pmLogTouch">Log touch ✉</button>
+      <button class="pm-action-btn" type="button" id="pmLogTouch">Log Manual Touch</button>
       <select class="pm-select" id="pmStatusSelect">
         ${['cold','warm','hot','dead'].map(s => `<option value="${s}" ${s === (p.status || '').toLowerCase() ? 'selected' : ''}>${s}</option>`).join('')}
       </select>
@@ -3483,10 +3483,21 @@ function prospectModalHtml(p) {
       <button class="pm-action-btn" type="button" onclick="openProspectsFor('${_esc(p.id)}')">View in prospects tab →</button>
       <span class="pm-toast" id="pmToast"></span>
       <div class="touch-form" id="pmTouchForm">
-        <input class="pm-input" id="pmTouchAction" placeholder="action type" value="manual_touch">
-        <input class="pm-input" id="pmTouchNotes" placeholder="notes">
-        <input class="pm-input" id="pmTouchOutcome" placeholder="outcome" value="neutral">
-        <button class="pm-action-btn" type="button" id="pmTouchSubmit">Save</button>
+        <select class="pm-select" id="pmTouchChannel" title="Channel">
+          <option value="email">Email</option>
+          <option value="phone">Phone</option>
+          <option value="sms">SMS</option>
+          <option value="in_person">In Person</option>
+        </select>
+        <input class="pm-input" id="pmTouchNotes" placeholder="Note (1–2 sentences, optional)">
+        <select class="pm-select" id="pmTouchOutcome" title="Outcome">
+          <option value="sent">Sent</option>
+          <option value="no_answer">No Answer</option>
+          <option value="left_voicemail">Left Voicemail</option>
+          <option value="contacted">Contacted</option>
+          <option value="not_interested">Not Interested</option>
+        </select>
+        <button class="pm-action-btn" type="button" id="pmTouchSubmit">Submit</button>
       </div>
     </div>`;
 }
@@ -3549,15 +3560,27 @@ function modalToast(text) {
 }
 
 async function submitModalTouch(id) {
-  await fetch(`/api/prospects/${encodeURIComponent(id)}/touch`, {
-    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action_type: document.getElementById('pmTouchAction').value,
-      notes: document.getElementById('pmTouchNotes').value,
-      outcome: document.getElementById('pmTouchOutcome').value
-    })
-  });
-  modalToast('Logged ✓');
+  const channel = document.getElementById('pmTouchChannel')?.value || 'email';
+  const notes   = document.getElementById('pmTouchNotes')?.value || '';
+  const outcome = document.getElementById('pmTouchOutcome')?.value || 'sent';
+  try {
+    const res = await fetch(`/api/prospects/${encodeURIComponent(id)}/touch`, {
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel,
+        action_type: 'outbound',
+        notes,
+        outcome,
+      })
+    });
+    if (!res.ok) throw new Error('request failed');
+    modalToast('Touch logged ✓');
+    toggleTouchForm(false);
+    const noteField = document.getElementById('pmTouchNotes');
+    if (noteField) noteField.value = '';
+  } catch (e) {
+    modalToast('Failed to log');
+  }
 }
 
 async function updateModalStatus(id, status) {
