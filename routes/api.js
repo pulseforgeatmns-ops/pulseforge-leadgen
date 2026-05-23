@@ -1264,6 +1264,24 @@ router.get('/api/max-brief', requireAuth, async (req, res) => {
   }
 });
 
+// Message Max — conversational query answered against the live snapshot.
+// Does not touch the daily digest, cron behavior, or autonomous triggers.
+router.post('/api/max-chat', requireAuth, async (req, res) => {
+  const clientId = getRequestClientId(req);
+  const question = (req.body?.message || '').toString().trim();
+  if (!question) return res.status(400).json({ error: 'Message is required' });
+  if (question.length > 1000) return res.status(400).json({ error: 'Message too long' });
+  try {
+    process.env.ACTIVE_CLIENT_ID = String(clientId);
+    delete require.cache[require.resolve('../maxAgent')];
+    const max = require('../maxAgent');
+    const answer = await max.answerQuestion(question);
+    res.json({ answer });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Agent actions (deposited by Max)
 router.get('/api/actions', requireAuth, async (req, res) => {
   try {

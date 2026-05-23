@@ -260,6 +260,46 @@ Be direct, specific, and actionable. Use plain text, no markdown. Keep each sect
   return message.content[0].text;
 }
 
+// Conversational query — operator asks Max a question; answered against the
+// live snapshot. Does NOT send email, deposit actions, or run triggers.
+async function answerQuestion(question) {
+  if (!question || !String(question).trim()) {
+    throw new Error('Question is required');
+  }
+  CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
+  if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
+
+  const snapshot = await getSystemSnapshot();
+  const dataString = JSON.stringify(snapshot, null, 2);
+  const clientName = CLIENT_CONFIG?.name || (CLIENT_ID === 2 ? 'MSHI' : 'Pulseforge');
+
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-5',
+    max_tokens: 1000,
+    messages: [{
+      role: 'user',
+      content: `Today's date is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. You are Max, the manager agent for ${clientName} — an AI marketing system for local small businesses.
+
+Here is the current second brain snapshot:
+
+${dataString}
+
+The operator is asking you a direct question about the pipeline. Answer it specifically and concisely using the snapshot data above. If the snapshot doesn't contain the answer, say so plainly rather than guessing. Use plain text, no markdown. Write like a sharp operations manager — direct and to the point.
+
+Operator question: ${String(question).trim()}`
+    }]
+  });
+
+  const answer = message.content[0]?.text || '';
+
+  await insertAgentLog('chat_query', {
+    question: String(question).trim().slice(0, 1000),
+    answer: answer.slice(0, 2000),
+  });
+
+  return answer;
+}
+
 async function sendDigest(digestText, snapshot) {
   const pendingSummary = snapshot.pending
     .map(p => `${p.count} ${p.channel}`)
@@ -657,7 +697,7 @@ async function run() {
 
 }
 
-module.exports = { run };
+module.exports = { run, answerQuestion };
 
 if (require.main === module) {
   run().catch(err => {

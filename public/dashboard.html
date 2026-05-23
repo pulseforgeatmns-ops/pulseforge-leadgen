@@ -1005,6 +1005,84 @@ body.light-mode .warm-signal .feed-prospect { color: var(--text-primary); }
 .max-brief-banner-toggle:hover { opacity: 1; }
 .max-brief-banner.expanded .max-brief-banner-toggle { display: none; }
 
+/* MESSAGE MAX */
+.max-chat {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--purple-bright);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.75rem;
+}
+.max-chat-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--purple-bright);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 0.75rem;
+}
+.max-chat-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.max-chat-input {
+  flex: 1;
+  font-family: inherit;
+  font-size: 0.8rem;
+  color: #1a1a18;
+  background: #f7f7f5;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.55rem 0.75rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.max-chat-input:focus { border-color: var(--purple-bright); }
+.max-chat-send {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  background: var(--purple-bright);
+  border: 1px solid var(--purple-bright);
+  color: #ffffff;
+  padding: 0.55rem 1rem;
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+.max-chat-send:hover { opacity: 0.88; }
+.max-chat-send:disabled { opacity: 0.4; cursor: not-allowed; }
+.max-chat-history {
+  margin-top: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.max-chat-exchange {
+  border-top: 1px solid var(--border);
+  padding-top: 0.7rem;
+}
+.max-chat-question {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.5px;
+  color: var(--gray-light);
+  margin-bottom: 0.4rem;
+}
+.max-chat-answer {
+  font-size: 0.8rem;
+  color: #1a1a18;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
 /* ACTIONS AREA */
 .actions-area { display: none; overflow-y: auto; height: 100%; padding: 1.5rem 2rem; }
 .actions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1rem; margin-top: 1rem; }
@@ -1836,6 +1914,20 @@ body.light-mode .warm-signal .feed-prospect { color: var(--text-primary); }
         <div class="max-brief-banner-preview" id="maxBriefBannerText">Loading...</div>
         <span class="max-brief-banner-toggle" onclick="toggleMaxBrief()">Read more ▸</span>
       </div>
+    </div>
+
+    <!-- MESSAGE MAX -->
+    <div class="max-chat" id="maxChat">
+      <div class="max-chat-title">
+        <div class="max-brief-banner-dot"></div>
+        Message Max
+      </div>
+      <form class="max-chat-form" id="maxChatForm" onsubmit="return sendMaxMessage(event)">
+        <input class="max-chat-input" id="maxChatInput" type="text" autocomplete="off"
+               placeholder="Ask Max anything about your pipeline...">
+        <button class="max-chat-send" id="maxChatSend" type="submit">Send</button>
+      </form>
+      <div class="max-chat-history" id="maxChatHistory"></div>
     </div>
 
     <div class="area-header">
@@ -4927,6 +5019,61 @@ async function regenMaxBrief(btn) {
 }
 
 loadMaxBriefBanner();
+
+// ── MESSAGE MAX ──────────────────────────────────────────────────
+const _maxChatHistory = [];
+
+function renderMaxChatHistory() {
+  const el = document.getElementById('maxChatHistory');
+  if (!el) return;
+  el.innerHTML = _maxChatHistory.map(x => `
+    <div class="max-chat-exchange">
+      <div class="max-chat-question">You: ${escapeHtml(x.question)}</div>
+      <div class="max-chat-answer">${escapeHtml(x.answer)}</div>
+    </div>
+  `).join('');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+async function sendMaxMessage(event) {
+  event.preventDefault();
+  const input = document.getElementById('maxChatInput');
+  const btn   = document.getElementById('maxChatSend');
+  const question = (input.value || '').trim();
+  if (!question) return false;
+
+  input.value = '';
+  btn.disabled = true;
+  btn.textContent = '...';
+
+  _maxChatHistory.unshift({ question, answer: 'Max is thinking...' });
+  if (_maxChatHistory.length > 3) _maxChatHistory.length = 3;
+  renderMaxChatHistory();
+
+  try {
+    const res = await fetch('/api/max-chat', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: question }),
+    });
+    const d = await res.json();
+    _maxChatHistory[0].answer = res.ok
+      ? (d.answer || 'No response.')
+      : ('Error: ' + (d.error || 'request failed'));
+  } catch (e) {
+    _maxChatHistory[0].answer = 'Error: ' + e.message;
+  }
+  renderMaxChatHistory();
+  btn.disabled = false;
+  btn.textContent = 'Send';
+  return false;
+}
 
 // ── ACTIONS TAB ───────────────────────────────────────────────────
 let _actionsLoaded = false;
