@@ -40,7 +40,9 @@ async function getSystemSnapshot() {
     SELECT p.first_name, p.last_name, p.email, p.icp_score, p.status
     FROM prospects p
     WHERE NOT EXISTS (
-      SELECT 1 FROM touchpoints t WHERE t.prospect_id = p.id
+      SELECT 1 FROM touchpoints t
+      WHERE t.prospect_id = p.id
+        AND t.client_id = p.client_id
     )
     AND p.do_not_contact = false
     AND p.email IS NOT NULL
@@ -94,11 +96,13 @@ async function getSystemSnapshot() {
 
   // Best performing content type per channel (all time)
   const bestContentTypes = await pool.query(`
-    SELECT channel, content_type, avg_engagement_rate, post_count
-    FROM content_performance_summary
-    WHERE post_count >= 2
-    ORDER BY channel, avg_engagement_rate DESC
-  `).catch(() => ({ rows: [] }));
+    SELECT cps.channel, cps.content_type, cps.avg_engagement_rate, cps.post_count
+    FROM content_performance_summary cps
+    JOIN companies c ON cps.company_id = c.id
+    WHERE c.client_id = $1
+      AND cps.post_count >= 2
+    ORDER BY cps.channel, cps.avg_engagement_rate DESC
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
   // Channel posting frequency: posts in last 7 days vs expected (4 channels × 1/week)
   const postFreq = await pool.query(`
@@ -168,7 +172,7 @@ async function getSystemSnapshot() {
       ), 0)::numeric AS mrr_this_month,
       COALESCE(SUM(c.commission_amt) FILTER (WHERE c.status = 'pending'), 0)::numeric AS pending_commissions
     FROM prospects p
-    LEFT JOIN commissions c ON c.prospect_id = p.id
+    LEFT JOIN commissions c ON c.prospect_id = p.id AND c.client_id = p.client_id
     WHERE p.client_id = $1
   `, [CLIENT_ID]).catch(() => ({ rows: [{
     booked_week: 0,
