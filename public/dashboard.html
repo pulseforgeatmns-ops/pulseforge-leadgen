@@ -3782,6 +3782,7 @@ let _previewHideTimer = null;
 let _activePreviewProspectId = null;
 let _activeModalProspectId = null;
 let _assignableSettersCache = null;
+let _feedDelegationBound = false;
 
 function _scoreClass(score) {
   const n = Number(score || 0);
@@ -3805,6 +3806,7 @@ function _feedActionHtml(item) {
 function renderActivityFeedItems() {
   const container = document.getElementById('feedItems');
   if (!container) return;
+  bindActivityFeedDelegation();
   const visible = _feedFilterMode === 'warm'
     ? _feedItemsCache.filter(item => item.is_warm_signal)
     : _feedItemsCache;
@@ -3832,14 +3834,50 @@ function renderActivityFeedItems() {
   container.querySelectorAll('.feed-item.has-prospect').forEach(el => {
     el.addEventListener('mouseenter', () => showProspectPreview(el, el.dataset.prospectId));
     el.addEventListener('mouseleave', schedulePreviewHide);
-    el.addEventListener('click', () => openProspectModal(el.dataset.prospectId));
   });
-  container.querySelectorAll('.feed-detail-toggle').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+}
+
+function bindActivityFeedDelegation() {
+  if (_feedDelegationBound) return;
+  const container = document.getElementById('feedItems');
+  if (!container) return;
+  _feedDelegationBound = true;
+  container.addEventListener('click', (e) => {
+    const detailBtn = e.target.closest('.feed-detail-toggle');
+    if (detailBtn && container.contains(detailBtn)) {
+      e.preventDefault();
       e.stopPropagation();
-      toggleActivityDetail(btn);
-    });
+      console.log('[activity-details] chevron click', { id: detailBtn.dataset.logId });
+      toggleActivityDetail(detailBtn);
+      return;
+    }
+
+    const feedItem = e.target.closest('.feed-item.has-prospect');
+    if (feedItem && container.contains(feedItem) && feedItem.dataset.prospectId) {
+      openProspectModal(feedItem.dataset.prospectId);
+    }
   });
+}
+
+async function fetchActivityDetails(logId) {
+  console.log('[activity-details] fetch start', { id: logId });
+  const res = await fetch(`/api/activity/${encodeURIComponent(logId)}/details`, { credentials: 'include' });
+  console.log('[activity-details] fetch complete', { id: logId, ok: res.ok, status: res.status });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (err) {
+    console.error('[activity-details] json parse failed', { id: logId, error: err.message });
+    throw err;
+  }
+  console.log('[activity-details] response parsed', {
+    id: logId,
+    keys: data && typeof data === 'object' ? Object.keys(data) : [],
+    fieldsIsArray: Array.isArray(data?.fields),
+    fieldCount: Array.isArray(data?.fields) ? data.fields.length : 0,
+  });
+  if (!res.ok) throw new Error(data?.error || `activity details returned ${res.status}`);
+  return data;
 }
 
 async function toggleActivityDetail(btn) {
@@ -3862,26 +3900,26 @@ async function toggleActivityDetail(btn) {
   if (!panel.dataset.loaded) {
     panel.innerHTML = '<div class="feed-detail-empty">Loading details…</div>';
     try {
-      const res = await fetch(`/api/activity/${encodeURIComponent(btn.dataset.logId)}/details`, { credentials: 'include' });
-      if (!res.ok) throw new Error('unavailable');
-      const data = await res.json();
+      const data = await fetchActivityDetails(btn.dataset.logId);
       panel.innerHTML = renderActivityDetailHtml(data);
       panel.dataset.loaded = '1';
       bindActivityDetailActions(panel, data);
     } catch (err) {
+      console.error('[activity-details] render failed', { id: btn.dataset.logId, error: err.message });
       panel.innerHTML = '<div class="feed-detail-empty">Details unavailable.</div>';
     }
   }
 }
 
 function renderActivityDetailHtml(data) {
-  const rows = (data.fields || []).map(field =>
+  const fields = Array.isArray(data?.fields) ? data.fields : [];
+  const rows = fields.map(field =>
     `<div class="feed-detail-line"><span class="feed-detail-label">${_esc(field.label)}</span><span class="feed-detail-value">${_esc(field.value)}</span></div>`
   ).join('');
-  const actions = (data.actions || []).map(a =>
+  const actions = (Array.isArray(data?.actions) ? data.actions : []).map(a =>
     `<button type="button" class="feed-detail-action" data-action="${_esc(a.key)}">${_esc(a.label)}</button>`
   ).join('');
-  return `<div class="feed-detail-head">${_esc(data.title || 'Details')}</div>
+  return `<div class="feed-detail-head">${_esc(data?.title || 'Details')}</div>
     ${rows || '<div class="feed-detail-empty">No details.</div>'}
     ${actions ? `<div class="feed-detail-actions">${actions}</div>` : ''}`;
 }
@@ -3944,7 +3982,11 @@ async function showProspectPreview(anchor, prospectId) {
   positionPreviewCard(anchor, card);
   try {
     const res = await fetch(`/api/prospects/${encodeURIComponent(prospectId)}/preview`, { credentials: 'include' });
-    if (!res.ok || _activePreviewProspectId !== prospectId) return;
+    if (_activePreviewProspectId !== prospectId) return;
+    if (!res.ok) {
+      card.innerHTML = '<div class="preview-section">Prospect unavailable.</div>';
+      return;
+    }
     const p = await res.json();
     card.innerHTML = `
       <div class="preview-head">
@@ -3967,7 +4009,10 @@ async function showProspectPreview(anchor, prospectId) {
       </div>`;
     positionPreviewCard(anchor, card);
   } catch(e) {
-    card.innerHTML = '<div class="preview-section">Preview unavailable.</div>';
+    if (_activePreviewProspectId === prospectId) {
+      card.innerHTML = '<div class="preview-section">Preview unavailable.</div>';
+    }
+    console.error('Prospect preview error:', e);
   }
 }
 
@@ -4783,7 +4828,7 @@ function _normalizeTimelineItem(item) {
 }
 
 function _detailValue(details, labels) {
-  const fields = details?.fields || [];
+  const fields = Array.isArray(details?.fields) ? details.fields : [];
   const wanted = labels.map(l => l.toLowerCase());
   const found = fields.find(f => wanted.includes(String(f.label || '').toLowerCase()));
   return found?.value || '—';
@@ -4793,6 +4838,7 @@ function _renderTimelineDetails(item) {
   const details = _tlDetailsCache.get(String(item.id));
   if (!details) return '<div class="tl-loading">Loading details...</div>';
   if (details.error) return '<div class="tl-loading">Details unavailable.</div>';
+  const detailFields = Array.isArray(details.fields) ? details.fields : [];
   const prospectValue = _detailValue(details, ['Prospect']);
   const rows = [
     ['Prospect', prospectValue === '—' ? (item.prospect || '—') : prospectValue],
@@ -4804,7 +4850,7 @@ function _renderTimelineDetails(item) {
     ['Vertical', _detailValue(details, ['Vertical'])]
   ];
   const consumed = new Set(['prospect', 'company', 'email', 'prospect email', 'icp score', 'total opens', 'opens in 24h', 'last email subject', 'vertical']);
-  const extras = (details.fields || [])
+  const extras = detailFields
     .filter(field => !consumed.has(String(field.label || '').toLowerCase()))
     .slice(0, 3)
     .map(field => [field.label, field.value]);
@@ -4877,10 +4923,9 @@ async function _fetchTimelineDetails(items) {
   const missing = items.filter(item => item.id != null && !_tlDetailsCache.has(String(item.id))).slice(0, TL_PAGE_SIZE);
   await Promise.all(missing.map(async item => {
     try {
-      const res = await fetch(`/api/activity/${encodeURIComponent(item.id)}/details`, { credentials: 'include' });
-      if (!res.ok) throw new Error('unavailable');
-      _tlDetailsCache.set(String(item.id), await res.json());
+      _tlDetailsCache.set(String(item.id), await fetchActivityDetails(item.id));
     } catch (err) {
+      console.error('[activity-details] timeline fetch failed', { id: item.id, error: err.message });
       _tlDetailsCache.set(String(item.id), { error: true });
     }
   }));

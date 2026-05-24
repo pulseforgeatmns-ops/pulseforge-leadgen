@@ -805,6 +805,8 @@ router.get('/api/agent-weekly-stats', requireAuth, async (req, res) => {
 router.get('/api/activity', requireAuth, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
     const result = await pool.query(`
       SELECT al.id, al.agent_name, al.action, al.status, al.ran_at, al.payload,
         COALESCE(
@@ -828,8 +830,8 @@ router.get('/api/activity', requireAuth, async (req, res) => {
       WHERE al.client_id = $1
         AND ${EXCLUDE_COMMAND_FEED_ACTIONS_SQL}
       ORDER BY al.ran_at DESC
-      LIMIT 20
-    `, [clientId]);
+      LIMIT $2 OFFSET $3
+    `, [clientId, limit, offset]);
 
     const agentNameMap = {
       facebook: 'Faye', linkedin: 'Link', emmett: 'Emmett',
@@ -914,8 +916,11 @@ function sequenceStepLabel(sendCount) {
 
 router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
   try {
-    const logId = parseInt(req.params.id, 10);
-    if (!Number.isInteger(logId)) return res.status(400).json({ error: 'Invalid id' });
+    const logId = String(req.params.id || '').trim();
+    console.log('[activity-details] hit', { id: logId });
+    if (!/^[0-9a-f-]{36}$/i.test(logId) && !/^\d+$/.test(logId)) {
+      return res.status(400).json({ error: 'Invalid id' });
+    }
     const clientId = getRequestClientId(req);
 
     const prospectIdSql = `COALESCE(
@@ -934,11 +939,14 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
         ON p.id = ${prospectIdSql}
         AND p.client_id = COALESCE(al.client_id, $2)
       LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
-      WHERE al.id = $1 AND (al.client_id = $2 OR al.client_id IS NULL)
+      WHERE al.id::text = $1 AND (al.client_id = $2 OR al.client_id IS NULL)
       LIMIT 1
     `, [logId, clientId]);
 
-    if (!logRes.rows.length) return res.status(404).json({ error: 'Activity not found' });
+    if (!logRes.rows.length) {
+      console.log('[activity-details] not_found', { id: logId, client_id: clientId });
+      return res.status(404).json({ error: 'Activity not found' });
+    }
     const row = logRes.rows[0];
     const action = String(row.action || '');
     const payload = row.payload || {};
@@ -1049,15 +1057,25 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
         break;
     }
 
-    res.json({
+    const responseBody = {
       id: row.id,
       action,
       title: activityDetailTitle(action),
       prospect_id: row.prospect_id || null,
       fields,
       actions,
+    };
+    console.log('[activity-details] response', {
+      id: responseBody.id,
+      action: responseBody.action,
+      title: responseBody.title,
+      prospect_id: responseBody.prospect_id,
+      fields: responseBody.fields,
+      actions: responseBody.actions.map(a => a.key),
     });
+    res.json(responseBody);
   } catch (err) {
+    console.error('[activity-details] error', { id: req.params.id, error: err.message });
     res.status(500).json({ error: err.message });
   }
 });
