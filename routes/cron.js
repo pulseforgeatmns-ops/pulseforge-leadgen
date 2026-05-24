@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { normalizeClientId } = require('../utils/clientContext');
+const { runScoutExpansionCron } = require('../scoutExpansion');
 
 const CRON_MODULES = {
   scout:     '../leadgen',
@@ -54,6 +55,24 @@ function runCronAgent(agent, res, query = {}) {
     console.error(`[cron] ${agent} error:`, err.message);
   }
 }
+
+async function handleScoutExpansionCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const clientId = normalizeClientId(req.query.client_id || req.query.clientId);
+  try {
+    const result = await runScoutExpansionCron(clientId);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[cron] scoutExpansion error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+router.post('/cron/scoutExpansion', handleScoutExpansionCron);
+router.get('/cron/scoutExpansion', handleScoutExpansionCron);
 
 router.post('/cron/:agent', async (req, res) => {
   const { agent } = req.params;

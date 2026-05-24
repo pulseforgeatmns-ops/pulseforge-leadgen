@@ -31,6 +31,7 @@ const { generateDemoData } = require('./utils/demoData');
 const { bcrypt, getUserCount, initAuth, requireAuth, requireRole } = require('./middleware/auth');
 const { ensureClientArchitecture } = require('./utils/clientContext');
 const { ensureCloserSchema } = require('./utils/closerSchema');
+const { ensureScoutExpansionTables } = require('./scoutExpansion');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -38,6 +39,7 @@ const PORT = process.env.PORT || 3000;
 initAuth().catch(err => console.error('[auth] init error:', err.message));
 ensureClientArchitecture().catch(err => console.error('[clients] init error:', err.message));
 ensureCloserSchema().catch(err => console.error('[closer] init error:', err.message));
+ensureScoutExpansionTables().catch(err => console.error('[scoutExpansion] init error:', err.message));
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),
