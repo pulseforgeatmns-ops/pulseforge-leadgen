@@ -3,6 +3,7 @@ const pool = require('./db');
 const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { getExpansionReport } = require('./scoutExpansion');
 
 const client = new Anthropic();
 const AGENT_NAME = 'max';
@@ -260,7 +261,72 @@ Be direct, specific, and actionable. Use plain text, no markdown. Keep each sect
   return message.content[0].text;
 }
 
-async function sendDigest(digestText, snapshot) {
+function formatScoutExpansionSection(report) {
+  if (!report) return '';
+
+  const {
+    yieldByCombo = [],
+    saturatedThisWeek = [],
+    queuedForExpansion = [],
+    successfullyExpanded = [],
+  } = report;
+
+  const hasActivity =
+    saturatedThisWeek.length > 0 ||
+    queuedForExpansion.length > 0 ||
+    successfullyExpanded.length > 0;
+  if (!hasActivity) return '';
+
+  const lines = ['SCOUT EXPANSION'];
+  const activeYields = [...yieldByCombo]
+    .filter(y => Number(y.prospects_found || 0) > 0)
+    .sort((a, b) => b.prospects_found - a.prospects_found);
+  if (activeYields.length) {
+    const yieldBits = activeYields.slice(0, 4).map(y => `${y.vertical}/${y.location} ${y.prospects_found}`);
+    const yieldExtra = activeYields.length > 4 ? ` (+${activeYields.length - 4} more)` : '';
+    lines.push(`Yield: ${yieldBits.join(', ')}${yieldExtra}.`);
+  }
+
+  if (saturatedThisWeek.length) {
+    const satBits = saturatedThisWeek
+      .slice(0, 5)
+      .map(s => `${s.vertical}/${s.location} (${s.prospects_found})`);
+    const satExtra = saturatedThisWeek.length > satBits.length
+      ? ` +${saturatedThisWeek.length - satBits.length} more`
+      : '';
+    lines.push(`Saturated: ${satBits.join(', ')}${satExtra}.`);
+  }
+
+  if (queuedForExpansion.length) {
+    const queueBits = queuedForExpansion
+      .slice(0, 5)
+      .map(q => `${q.location} (${q.vertical})`);
+    const queueExtra = queuedForExpansion.length > queueBits.length
+      ? ` +${queuedForExpansion.length - queueBits.length} more`
+      : '';
+    lines.push(`Queued: ${queueBits.join(', ')}${queueExtra}.`);
+  }
+
+  if (successfullyExpanded.length) {
+    const winBits = successfullyExpanded
+      .slice(0, 5)
+      .map(e => `${e.location}/${e.vertical} (${e.prospects_found})`);
+    const winExtra = successfullyExpanded.length > winBits.length
+      ? ` +${successfullyExpanded.length - winBits.length} more`
+      : '';
+    lines.push(`Expanded: ${winBits.join(', ')}${winExtra}.`);
+  } else if (queuedForExpansion.length) {
+    lines.push('Expansion scouts running — no first prospects from new markets yet.');
+  }
+
+  return lines.slice(0, 6).join('\n');
+}
+
+async function sendDigest(digestText, snapshot, expansionReport) {
+  const scoutExpansionBlock = formatScoutExpansionSection(expansionReport);
+  const scoutExpansionSection = scoutExpansionBlock
+    ? `\n${'─'.repeat(50)}\n${scoutExpansionBlock}\n`
+    : '';
   const pendingSummary = snapshot.pending
     .map(p => `${p.count} ${p.channel}`)
     .join(', ') || 'none';
@@ -285,12 +351,13 @@ Most common weakness: ${contentQuality.most_common_weakness || 'none'}`;
   const subject = `${CLIENT_ID === 2 ? 'MSHI' : 'Pulseforge'} Daily Digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
 
   const body = CLIENT_ID === 2 ? `${digestText}
-
+${scoutExpansionSection}
 Pulseforge · gopulseforge.com` : `PULSEFORGE DAILY DIGEST
 ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 ${'─'.repeat(50)}
 
 ${digestText}
+${scoutExpansionSection}
 
 ${'─'.repeat(50)}
 ${closerBlock}
@@ -632,6 +699,14 @@ async function run() {
     console.log('Reading second brain...');
     const snapshot = await getSystemSnapshot();
 
+    let expansionReport = null;
+    try {
+      console.log('Loading scout expansion report...');
+      expansionReport = await getExpansionReport(CLIENT_ID);
+    } catch (err) {
+      console.error('[Max] scout expansion report error:', err.message);
+    }
+
     console.log('Generating insights with Claude...');
     const insights = await generateInsights(snapshot);
 
@@ -640,7 +715,7 @@ async function run() {
     console.log('--- END PREVIEW ---\n');
 
     console.log('Sending digest...');
-    await sendDigest(insights, snapshot);
+    await sendDigest(insights, snapshot, expansionReport);
 
     await logAgentRun(insights);
 
