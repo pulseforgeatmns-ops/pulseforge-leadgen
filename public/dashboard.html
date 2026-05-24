@@ -1226,36 +1226,55 @@ body.light-mode .ask-max-answer { color: var(--text-primary); }
 .action-card-desc { font-size: 0.73rem; color: #a0a0b8; line-height: 1.55; }
 .action-card-footer { display: flex; gap: 0.5rem; margin-top: 0.3rem; }
 .action-btn-exec {
-  flex: 1; padding: 0.4rem 0; border: none; border-radius: 6px;
-  background: var(--purple); color: var(--white);
-  font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1px;
-  cursor: pointer; transition: opacity 0.2s;
-}
-.action-btn-exec:hover { opacity: 0.85; }
-.action-btn-exec:disabled, .action-btn-dismiss:disabled { opacity: 0.5; cursor: not-allowed; }
-.action-max-response {
-  border: 0.5px solid rgba(124,77,219,0.3);
-  border-left: 3px solid var(--accent);
-  background: var(--purple-glow);
+  flex: 1;
+  background: #7c4ddb;
+  color: #ffffff;
+  border: none;
   border-radius: 8px;
-  padding: 0.7rem 0.8rem;
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  transition: background 0.2s;
 }
-.action-max-response-label {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.55rem; letter-spacing: 1.5px; text-transform: uppercase;
-  color: var(--accent-light); margin-bottom: 0.4rem;
-}
-.action-max-response-text {
-  font-size: 0.76rem; color: var(--text-secondary);
-  line-height: 1.6; white-space: pre-wrap;
-}
+.action-btn-exec:hover:not(:disabled) { background: #6a3dc7; }
+.action-btn-exec:disabled { opacity: 0.75; cursor: wait; }
 .action-btn-dismiss {
-  padding: 0.4rem 0.75rem; border: 1px solid var(--border); border-radius: 6px;
-  background: transparent; color: var(--gray-light);
-  font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1px;
-  cursor: pointer; transition: color 0.2s;
+  background: transparent;
+  border: 0.5px solid rgba(255,255,255,0.12);
+  color: #7a7890;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
 }
-.action-btn-dismiss:hover { color: var(--red); border-color: var(--red); }
+.action-btn-dismiss:hover:not(:disabled) { color: #a8a6bc; border-color: rgba(255,255,255,0.22); }
+.action-btn-dismiss:disabled { opacity: 0.6; cursor: not-allowed; }
+.action-max-response {
+  display: none;
+  margin-top: 0.15rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 8px;
+  background: rgba(124, 77, 219, 0.12);
+  border: 1px solid rgba(124, 77, 219, 0.28);
+  font-size: 0.75rem;
+  color: #c8c4e8;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.action-max-response.visible { display: block; }
+body.light-mode .action-btn-dismiss {
+  border-color: rgba(0,0,0,0.12);
+  color: #6b6a78;
+}
+body.light-mode .action-max-response {
+  background: rgba(124, 77, 219, 0.08);
+  color: #4a4560;
+}
 .action-age {
   font-family: 'JetBrains Mono', monospace; font-size: 0.55rem;
   color: #6b758e; margin-top: auto; padding-top: 0.3rem;
@@ -5462,14 +5481,15 @@ async function loadActions() {
         if (mins < 1440) return `${Math.round(mins/60)}h ago`;
         return `${Math.round(mins/1440)}d ago`;
       })();
-      return `<div class="action-card${isUrgent ? ' urgent' : ''}" id="ac-${a.id}">
+      return `<div class="action-card${isUrgent ? ' urgent' : ''}" id="ac-${a.id}" data-title="${_esc(a.title)}" data-description="${_esc(a.description)}">
         <div class="action-card-type">${typeLabel}</div>
-        <div class="action-card-title">${a.title}</div>
-        <div class="action-card-desc">${a.description}</div>
+        <div class="action-card-title">${_esc(a.title)}</div>
+        <div class="action-card-desc">${_esc(a.description)}</div>
         <div class="action-card-footer">
-          <button class="action-btn-exec" onclick="execAction('${a.id}')">✓ MARK DONE</button>
-          <button class="action-btn-dismiss" onclick="dismissAction('${a.id}')">Dismiss</button>
+          <button type="button" class="action-btn-exec" onclick="execAction('${a.id}')">Mark Done</button>
+          <button type="button" class="action-btn-dismiss" onclick="dismissAction('${a.id}')">Dismiss</button>
         </div>
+        <div class="action-max-response" id="ac-response-${a.id}"></div>
         <div class="action-age">${age}</div>
       </div>`;
     }).join('');
@@ -5478,68 +5498,77 @@ async function loadActions() {
   }
 }
 
-function _refreshActionsEmptyState() {
+function updateActionsBadgeCount() {
   const remaining = document.querySelectorAll('.action-card').length;
   const badge = document.getElementById('actionsBadge');
-  if (badge) { badge.textContent = remaining; if (!remaining) badge.style.display = 'none'; }
-  if (!remaining) { const empty = document.getElementById('actionsEmpty'); if (empty) empty.style.display = 'block'; }
+  if (badge) {
+    badge.textContent = remaining;
+    badge.style.display = remaining > 0 ? 'inline-block' : 'none';
+  }
+  if (!remaining) {
+    const empty = document.getElementById('actionsEmpty');
+    if (empty) empty.style.display = 'block';
+    const sub = document.getElementById('actionsSub');
+    if (sub) sub.textContent = 'No pending action items';
+  }
 }
 
 async function execAction(id) {
   const card = document.getElementById(`ac-${id}`);
   if (!card) return;
-  const execBtn    = card.querySelector('.action-btn-exec');
+
+  const btn = card.querySelector('.action-btn-exec');
   const dismissBtn = card.querySelector('.action-btn-dismiss');
-  if (execBtn && execBtn.disabled) return; // already processing
-  const title = (card.querySelector('.action-card-title')?.textContent || '').trim();
-  const desc  = (card.querySelector('.action-card-desc')?.textContent || '').trim();
-  const message = `Execute this action: ${title}${desc ? ` — ${desc}` : ''}`;
+  const responseEl = card.querySelector('.action-max-response');
+  const title = card.dataset.title || '';
+  const description = card.dataset.description || '';
 
-  // Loading state on the button while Max responds
-  if (execBtn)    { execBtn.disabled = true; execBtn.textContent = 'Max working…'; }
-  if (dismissBtn)   dismissBtn.disabled = true;
+  if (btn?.disabled) return;
 
-  // Hand the action to Max so he processes it autonomously
-  let answer;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Working...';
+  }
+  if (dismissBtn) dismissBtn.disabled = true;
+
+  let maxAnswer = '';
   try {
     const res = await fetch('/api/max/ask', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: message })
+      body: JSON.stringify({
+        question: `Execute this action: ${title} — ${description}`,
+      }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Max did not respond');
-    answer = data.answer || 'Max processed the action but returned no message.';
+    if (!res.ok) throw new Error(data.error || 'Max did not answer');
+    maxAnswer = data.answer || 'Max did not return a response.';
+    if (responseEl) {
+      responseEl.textContent = maxAnswer;
+      responseEl.classList.add('visible');
+    }
   } catch (err) {
-    answer = `Max could not process this action: ${err.message}`;
+    maxAnswer = `Unable to reach Max: ${err.message}`;
+    if (responseEl) {
+      responseEl.textContent = maxAnswer;
+      responseEl.classList.add('visible');
+    }
   }
 
-  // Show Max's response inline below the action card
-  let resp = card.querySelector('.action-max-response');
-  if (!resp) {
-    resp = document.createElement('div');
-    resp.className = 'action-max-response';
-    card.insertBefore(resp, card.querySelector('.action-card-footer'));
-  }
-  resp.innerHTML = `<div class="action-max-response-label">⚡ Max</div><div class="action-max-response-text">${_esc(answer)}</div>`;
-  if (execBtn) execBtn.textContent = '✓ Done';
+  await new Promise(resolve => setTimeout(resolve, 2000));
 
-  // Mark the action done on the backend
   try {
     await fetch(`/api/actions/${id}/execute`, {
-      method: 'POST', credentials: 'include',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ result: answer.slice(0, 1000) })
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result: maxAnswer.slice(0, 1000) || 'Executed via Max from dashboard' }),
     });
-  } catch(_) {}
+  } catch (_) {}
 
-  // Dismiss the card once the user has had time to read Max's response
-  setTimeout(() => {
-    card.style.transition = 'opacity 0.4s ease';
-    card.style.opacity = '0';
-    setTimeout(() => { card.remove(); _refreshActionsEmptyState(); }, 400);
-  }, 6000);
+  card.remove();
+  updateActionsBadgeCount();
 }
 
 async function dismissAction(id) {
@@ -5548,10 +5577,7 @@ async function dismissAction(id) {
   try {
     await fetch(`/api/actions/${id}/dismiss`, { method: 'POST', credentials: 'include' });
     if (card) card.remove();
-    const remaining = document.querySelectorAll('.action-card').length;
-    const badge = document.getElementById('actionsBadge');
-    if (badge) { badge.textContent = remaining; if (!remaining) badge.style.display = 'none'; }
-    if (!remaining) { const empty = document.getElementById('actionsEmpty'); if (empty) empty.style.display = 'block'; }
+    updateActionsBadgeCount();
   } catch(e) { if (card) card.style.opacity = '1'; }
 }
 
