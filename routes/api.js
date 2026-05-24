@@ -1563,6 +1563,27 @@ router.get('/api/max-brief', requireAuth, async (req, res) => {
   }
 });
 
+// Rex cross-market executive summary
+router.get('/api/rex-executive-summary', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT payload, ran_at
+      FROM agent_log
+      WHERE agent_name = 'rex'
+        AND action = 'executive_summary'
+        AND status = 'success'
+      ORDER BY ran_at DESC
+      LIMIT 1
+    `);
+    if (!result.rows.length) return res.json({ summary: null, ran_at: null });
+    const row = result.rows[0];
+    const payload = typeof row.payload === 'string' ? JSON.parse(row.payload || '{}') : (row.payload || {});
+    res.json({ summary: payload.summary || null, ran_at: row.ran_at });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Agent actions (deposited by Max)
 router.get('/api/actions', requireAuth, async (req, res) => {
   try {

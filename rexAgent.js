@@ -296,6 +296,178 @@ async function logAgentRun(status) {
   `, [AGENT_NAME, 'weekly_report', JSON.stringify({ week: new Date().toISOString(), client_id: CLIENT_ID }), status, CLIENT_ID]);
 }
 
+function pct(num, den) {
+  return den > 0 ? +((Number(num || 0) / Number(den || 0)) * 100).toFixed(1) : 0;
+}
+
+function money(value) {
+  return `$${Number(value || 0).toLocaleString()}`;
+}
+
+function marketName(row) {
+  return row.name || row.business_name || `Client ${row.client_id}`;
+}
+
+async function getCrossMarketExecutiveData() {
+  const weekAgo = "NOW() - INTERVAL '7 days'";
+  const [marketOverview, hotSignals] = await Promise.all([
+    pool.query(`
+      WITH prospect_stats AS (
+        SELECT
+          client_id,
+          COUNT(*)::int AS total_prospects,
+          COUNT(*) FILTER (WHERE status = 'warm')::int AS warm_count,
+          COUNT(*) FILTER (WHERE status = 'cold' AND COALESCE(do_not_contact, false) = false)::int AS cold_count,
+          COUNT(*) FILTER (WHERE source = 'scout' AND created_at > ${weekAgo})::int AS scout_new_week,
+          COUNT(*) FILTER (WHERE booked_at > ${weekAgo})::int AS booked_calls,
+          COALESCE(SUM(mrr_value) FILTER (WHERE setter_status = 'closed'), 0)::numeric AS mrr
+        FROM prospects
+        GROUP BY client_id
+      ),
+      touchpoint_stats AS (
+        SELECT
+          client_id,
+          COUNT(*) FILTER (WHERE channel = 'email' AND action_type = 'outbound' AND created_at > ${weekAgo})::int AS emails_sent_week,
+          COUNT(*) FILTER (WHERE channel = 'email' AND action_type = 'email_opened' AND created_at > ${weekAgo})::int AS emails_opened_week,
+          COUNT(*) FILTER (WHERE channel = 'email' AND action_type IN ('email_clicked', 'click') AND created_at > ${weekAgo})::int AS email_clicks_week,
+          COUNT(*) FILTER (WHERE channel = 'email' AND action_type IN ('email_bounced', 'email_soft_bounce') AND created_at > ${weekAgo})::int AS email_bounces_week,
+          COUNT(*) FILTER (WHERE channel = 'phone' AND created_at > ${weekAgo})::int AS setter_calls_week
+        FROM touchpoints
+        GROUP BY client_id
+      ),
+      post_stats AS (
+        SELECT
+          client_id,
+          COUNT(*) FILTER (WHERE published_at > ${weekAgo})::int AS posts_published_week
+        FROM post_analytics
+        GROUP BY client_id
+      )
+      SELECT
+        c.id AS client_id,
+        c.name,
+        c.business_name,
+        COALESCE(ps.total_prospects, 0)::int AS total_prospects,
+        COALESCE(ps.warm_count, 0)::int AS warm_count,
+        COALESCE(ps.cold_count, 0)::int AS cold_count,
+        COALESCE(ps.scout_new_week, 0)::int AS scout_new_week,
+        COALESCE(ps.booked_calls, 0)::int AS booked_calls,
+        COALESCE(ps.mrr, 0)::numeric AS mrr,
+        COALESCE(ts.emails_sent_week, 0)::int AS emails_sent_week,
+        COALESCE(ts.emails_opened_week, 0)::int AS emails_opened_week,
+        COALESCE(ts.email_clicks_week, 0)::int AS email_clicks_week,
+        COALESCE(ts.email_bounces_week, 0)::int AS email_bounces_week,
+        COALESCE(ts.setter_calls_week, 0)::int AS setter_calls_week,
+        COALESCE(pos.posts_published_week, 0)::int AS posts_published_week
+      FROM clients c
+      LEFT JOIN prospect_stats ps ON ps.client_id = c.id
+      LEFT JOIN touchpoint_stats ts ON ts.client_id = c.id
+      LEFT JOIN post_stats pos ON pos.client_id = c.id
+      WHERE COALESCE(c.active, true) = true
+      ORDER BY c.name ASC
+    `),
+    pool.query(`
+      SELECT
+        p.id,
+        p.first_name,
+        p.last_name,
+        p.email,
+        p.status,
+        p.icp_score,
+        p.notes,
+        c.name AS client_name,
+        co.name AS company_name
+      FROM prospects p
+      JOIN clients c ON c.id = p.client_id
+      LEFT JOIN companies co ON co.id = p.company_id AND co.client_id = p.client_id
+      WHERE COALESCE(p.is_hot, false) = true
+      ORDER BY p.updated_at DESC NULLS LAST, p.created_at DESC
+      LIMIT 20
+    `).catch(() => ({ rows: [] })),
+  ]);
+
+  return {
+    markets: marketOverview.rows.map(row => ({
+      ...row,
+      open_rate: pct(row.emails_opened_week, row.emails_sent_week),
+      bounce_rate: pct(row.email_bounces_week, row.emails_sent_week),
+      warm_signals_week: Number(row.emails_opened_week || 0) + Number(row.email_clicks_week || 0),
+    })),
+    hotSignals: hotSignals.rows,
+  };
+}
+
+function formatCrossMarketExecutiveSummary(data) {
+  const markets = data.markets || [];
+  const hotSignals = data.hotSignals || [];
+  const weekOf = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const topOpen = [...markets].sort((a, b) => b.open_rate - a.open_rate)[0];
+  const topWarm = [...markets].sort((a, b) => b.warm_signals_week - a.warm_signals_week)[0];
+  const thinnestCold = [...markets].sort((a, b) => Number(a.cold_count || 0) - Number(b.cold_count || 0))[0];
+  const flags = [];
+
+  for (const m of markets) {
+    const name = marketName(m);
+    if (m.bounce_rate > 10) flags.push(`${name}: ${m.bounce_rate}% bounce rate`);
+    if (Number(m.setter_calls_week || 0) === 0) flags.push(`${name}: 0 setter calls logged`);
+    if (Number(m.scout_new_week || 0) < 5) flags.push(`${name}: ${m.scout_new_week || 0} new Scout prospects this week`);
+  }
+
+  const marketLines = markets.length
+    ? markets.map(m => {
+      const name = marketName(m);
+      return `${name}: ${m.total_prospects || 0} prospects, ${m.warm_count || 0} warm, ${m.emails_sent_week || 0} emails sent, ${m.open_rate}% open rate, ${m.booked_calls || 0} booked calls, ${money(m.mrr)} MRR.`;
+    }).join('\n')
+    : 'No active client markets found.';
+
+  const hotLines = hotSignals.length
+    ? hotSignals.map(p => {
+      const prospect = `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email || 'Unknown prospect';
+      const company = p.company_name || String(p.notes || '').split('—')[0].trim() || 'unknown company';
+      return `${p.client_name}: ${prospect} at ${company}${p.icp_score != null ? ` (ICP ${p.icp_score})` : ''}`;
+    }).join('\n')
+    : 'No hot prospects currently flagged across markets.';
+
+  return `REX WEEKLY EXECUTIVE SUMMARY
+Generated ${weekOf}
+
+MARKET OVERVIEW
+${marketLines}
+
+TOP PERFORMER
+Highest open rate: ${topOpen ? `${marketName(topOpen)} at ${topOpen.open_rate}%` : 'n/a'}.
+Most warm signals this week: ${topWarm ? `${marketName(topWarm)} with ${topWarm.warm_signals_week} opens/clicks` : 'n/a'}.
+
+PIPELINE HEALTH
+Thinnest cold prospect pool: ${thinnestCold ? `${marketName(thinnestCold)} with ${thinnestCold.cold_count || 0} cold prospects. Scout should prioritize this market if volume is below target.` : 'n/a'}
+
+SETTER ACTIVITY
+${markets.length ? markets.map(m => `${marketName(m)}: ${m.setter_calls_week || 0} calls logged this week`).join('\n') : 'No setter activity data found.'}
+
+CONTENT
+${markets.length ? markets.map(m => `${marketName(m)}: ${m.posts_published_week || 0} posts published this week`).join('\n') : 'No content publishing data found.'}
+
+HOT SIGNALS
+${hotLines}
+
+FLAGS
+${flags.length ? flags.join('\n') : 'No cross-market flags tripped this week.'}`;
+}
+
+async function logExecutiveSummary(summary) {
+  await pool.query(`
+    INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+    VALUES ($1, $2, $3, $4, NOW(), $5)
+  `, [AGENT_NAME, 'executive_summary', JSON.stringify({ summary, generated_at: new Date().toISOString() }), 'success', CLIENT_ID]);
+}
+
+async function generateAndLogExecutiveSummary() {
+  console.log('Generating cross-market executive summary...');
+  const data = await getCrossMarketExecutiveData();
+  const summary = formatCrossMarketExecutiveSummary(data);
+  await logExecutiveSummary(summary);
+  return summary;
+}
+
 async function run() {
   console.log('\nRex agent running...\n');
   const clientConfig = await getClientConfig(CLIENT_ID);
@@ -320,6 +492,7 @@ async function run() {
     await sendReport(report, data);
 
     await logAgentRun('success');
+    await generateAndLogExecutiveSummary();
     console.log('\nRex complete.');
   } catch (err) {
     console.error('Rex error:', err.message);

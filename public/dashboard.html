@@ -1665,6 +1665,30 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
 }
 .an-chart-wrap { position: relative; height: 180px; }
 .an-chart-wrap canvas { width: 100% !important; }
+.rex-report-card {
+  background: linear-gradient(180deg, rgba(0,230,118,0.06), rgba(18,18,26,0.96));
+  border-color: rgba(0,230,118,0.18);
+}
+.rex-report-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+.rex-report-date {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem;
+  color: rgba(255,255,255,0.42);
+  white-space: nowrap;
+}
+.rex-report-text {
+  margin: 0;
+  white-space: pre-wrap;
+  color: rgba(255,255,255,0.76);
+  font-size: 0.78rem;
+  line-height: 1.62;
+}
 
 /* Funnel bars */
 .funnel-row { margin-bottom: 0.65rem; }
@@ -2906,6 +2930,15 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
     </div>
 
     <div class="analytics-grid">
+
+      <!-- Rex Weekly Report -->
+      <div class="an-card an-full rex-report-card">
+        <div class="rex-report-head">
+          <div class="an-card-title" style="margin-bottom:0">Rex Weekly Report</div>
+          <div class="rex-report-date" id="rexReportDate">Loading...</div>
+        </div>
+        <pre class="rex-report-text" id="rexReportText">Loading Rex's latest executive summary...</pre>
+      </div>
 
       <!-- Section 1: Outbound Volume -->
       <div class="an-card an-full">
@@ -5223,6 +5256,7 @@ async function loadAnalytics() {
   if (_analyticsLoaded) return;
   const sub = document.getElementById('analyticsSub');
   try {
+    loadRexExecutiveSummary();
     const res = await fetch('/api/analytics', { credentials: 'include' });
     const d = await res.json();
 
@@ -5243,6 +5277,27 @@ async function loadAnalytics() {
   }
   // Load content performance in parallel
   loadContentAnalytics();
+}
+
+async function loadRexExecutiveSummary() {
+  const textEl = document.getElementById('rexReportText');
+  const dateEl = document.getElementById('rexReportDate');
+  try {
+    const res = await fetch('/api/rex-executive-summary', { credentials: 'include' });
+    if (!res.ok) throw new Error('unavailable');
+    const d = await res.json();
+    if (!d.summary) {
+      if (textEl) textEl.textContent = 'No Rex executive summary has been generated yet.';
+      if (dateEl) dateEl.textContent = 'Not generated';
+      return;
+    }
+    if (textEl) textEl.textContent = d.summary;
+    if (dateEl) dateEl.textContent = d.ran_at ? `Generated ${_fmtTimestamp(d.ran_at)}` : 'Generated';
+  } catch(e) {
+    console.error('loadRexExecutiveSummary:', e);
+    if (textEl) textEl.textContent = 'Unable to load Rex executive summary.';
+    if (dateEl) dateEl.textContent = 'Unavailable';
+  }
 }
 
 async function loadEmailAnalytics() {
