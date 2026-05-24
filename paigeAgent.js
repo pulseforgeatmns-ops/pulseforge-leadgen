@@ -106,7 +106,13 @@ function buildContentRules(recentThemes) {
 - Write in a natural, conversational tone. Always use contractions — it's, don't, that's, you're, we're, isn't, hasn't, won't, can't. Never write "it is", "do not", "that is", "you are", "we are" when a contraction would sound more natural. The content should sound like a sharp business owner wrote it, not a marketing agency.
 
 HOOK WRITING — NON-NEGOTIABLE:
-Every post must open with a strong hook in the first line. Strong hooks include: a counterintuitive statement, a specific number or statistic, a direct question that creates curiosity, or a bold claim. Never start a post with "I", "We", "At [company]", or a generic greeting. The first line must stop the scroll. Examples of weak hooks: "We help local businesses grow." Examples of strong hooks: "Most local businesses lose 40% of potential customers before they ever pick up the phone." or "The restaurants winning right now aren't spending more on ads."`;
+Every post must open with a strong hook in the first line. Strong hooks include: a counterintuitive statement, a specific number or statistic, a direct question that creates curiosity, or a bold claim. Never start a post with "I", "We", "At [company]", or a generic greeting. The first line must stop the scroll. Examples of weak hooks: "We help local businesses grow." Examples of strong hooks: "Most local businesses lose 40% of potential customers before they ever pick up the phone." or "The restaurants winning right now aren't spending more on ads."
+
+ORIGINALITY — NON-NEGOTIABLE:
+Every piece of content must feel like it was written for the first time. Never reuse the same opening premise, stat, or scenario you've used before. Rotate through these content angles and never use the same angle twice in a row: (1) a specific before/after story, (2) a counterintuitive industry stat, (3) a common mistake local businesses make, (4) a behind-the-scenes look at how the system works, (5) a client result framed as a case study, (6) a local market observation specific to Manchester NH. If you catch yourself writing something that sounds like something Pulseforge has said before, stop and pick a different angle.
+
+CTA — NON-NEGOTIABLE:
+Every post must end with exactly one of these CTAs — rotate them, never use the same one twice in a row: (1) 'Reply and I'll show you what this looks like for [business type] in Manchester.' (2) 'Drop a comment — what's the one part of your follow-up process you wish ran itself?' (3) 'DM us and we'll put together a free mockup for your business this week.' (4) 'Curious what this would cost for a business your size? Reply and I'll break it down.' Never end with a generic 'reach out' or 'contact us' line.`;
 }
 
 async function getActiveClients() {
