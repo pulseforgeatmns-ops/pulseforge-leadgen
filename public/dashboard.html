@@ -1880,44 +1880,165 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
 
 /* Timeline */
 .tl-filter-bar {
-  display: flex; gap: 6px; flex-wrap: wrap;
-  margin-bottom: 1rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+  padding: 1rem;
+  background: #12121a;
+  border: 1px solid rgba(139,92,246,0.16);
+  border-radius: 8px;
 }
-.tl-pill {
+.tl-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.tl-filter-label {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 0.58rem; letter-spacing: 1px; text-transform: uppercase;
-  padding: 4px 10px; border-radius: 4px; cursor: pointer;
-  background: rgba(255,255,255,0.04); color: var(--gray);
-  border: 1px solid rgba(255,255,255,0.07);
-  transition: all 0.15s;
+  font-size: 0.56rem;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.42);
 }
-.tl-pill:hover  { color: var(--white); border-color: rgba(255,255,255,0.15); }
-.tl-pill.active { color: var(--teal); background: rgba(0,212,180,0.08); border-color: rgba(0,212,180,0.25); }
-
-.tl-list { display: flex; flex-direction: column; gap: 0; }
+.tl-select {
+  width: 100%;
+  height: 34px;
+  background: #0a0a0f;
+  color: rgba(255,255,255,0.86);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  padding: 0 0.7rem;
+  font-size: 0.74rem;
+  outline: none;
+}
+.tl-select:focus {
+  border-color: rgba(139,92,246,0.55);
+  box-shadow: 0 0 0 2px rgba(139,92,246,0.12);
+}
+.tl-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.tl-list::before {
+  content: '';
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 13px;
+  width: 1px;
+  background: linear-gradient(180deg, rgba(139,92,246,0.08), rgba(139,92,246,0.45), rgba(139,92,246,0.08));
+}
 .tl-item {
-  display: flex; align-items: flex-start; gap: 12px;
-  padding: 0.6rem 0;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 0.85rem;
+  padding: 0 0 1rem;
 }
-.tl-item:last-child { border-bottom: none; }
-.tl-dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  flex-shrink: 0; margin-top: 5px;
+.tl-marker {
+  position: relative;
+  z-index: 1;
+  width: 11px;
+  height: 11px;
+  margin: 1.1rem auto 0;
+  border-radius: 50%;
+  background: var(--purple);
+  box-shadow: 0 0 0 4px #0a0a0f, 0 0 14px rgba(139,92,246,0.35);
 }
-.tl-body { flex: 1; min-width: 0; }
-.tl-top {
-  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
-  margin-bottom: 2px;
+.tl-card {
+  background: #12121a;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
 }
-.tl-agent {
-  font-family: 'JetBrains Mono', monospace; font-size: 0.6rem;
-  letter-spacing: 1px; text-transform: uppercase; color: var(--teal);
+.tl-card:hover {
+  border-color: rgba(139,92,246,0.22);
+}
+.tl-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.55rem;
+}
+.tl-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.tl-agent-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.58rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(139,92,246,0.28);
+  background: rgba(139,92,246,0.12);
+  color: #c4b5fd;
+}
+.tl-agent-purple { border-color: rgba(139,92,246,0.35); background: rgba(139,92,246,0.14); color: #c4b5fd; }
+.tl-agent-teal { border-color: rgba(0,212,180,0.32); background: rgba(0,212,180,0.11); color: var(--teal); }
+.tl-agent-amber { border-color: rgba(245,158,11,0.34); background: rgba(245,158,11,0.12); color: #fbbf24; }
+.tl-agent-red { border-color: rgba(239,68,68,0.35); background: rgba(239,68,68,0.12); color: #f87171; }
+.tl-action {
+  color: var(--white);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.tl-time {
   flex-shrink: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.63rem;
+  color: rgba(255,255,255,0.44);
+  line-height: 1.5;
+  text-align: right;
 }
-.tl-action { font-size: 0.77rem; color: rgba(255,255,255,0.7); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tl-time { font-family: 'JetBrains Mono', monospace; font-size: 0.6rem; color: var(--gray); flex-shrink: 0; }
-.tl-payload { font-size: 0.68rem; color: var(--gray); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 0.55rem;
+}
+.tl-detail {
+  min-width: 0;
+  padding: 0.55rem 0.65rem;
+  background: rgba(10,10,15,0.72);
+  border: 1px solid rgba(255,255,255,0.045);
+  border-radius: 6px;
+}
+.tl-detail-label {
+  display: block;
+  margin-bottom: 0.22rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.54rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.34);
+}
+.tl-detail-value {
+  display: block;
+  overflow-wrap: anywhere;
+  color: rgba(255,255,255,0.78);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+.tl-empty, .tl-loading {
+  position: relative;
+  z-index: 1;
+  color: var(--gray);
+  font-size: 0.75rem;
+  padding: 1rem 0 1rem 2.75rem;
+}
+@media (max-width: 720px) {
+  .tl-filter-bar { grid-template-columns: 1fr; }
+  .tl-head { flex-direction: column; gap: 0.4rem; }
+  .tl-time { text-align: left; }
+}
 
 #activityLoadMore {
   display: block; margin: 1.25rem auto 0;
@@ -2737,7 +2858,38 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
     </div>
 
     <div class="tl-filter-bar" id="tlFilterBar">
-      <div class="tl-pill active" data-tlagent="all">All</div>
+      <label class="tl-filter-field">
+        <span class="tl-filter-label">Agent</span>
+        <select class="tl-select" id="tlAgentFilter">
+          <option value="all">All</option>
+          <option value="Emmett">Emmett</option>
+          <option value="Riley">Riley</option>
+          <option value="Paige">Paige</option>
+          <option value="Scout">Scout</option>
+          <option value="Max">Max</option>
+          <option value="Sam">Sam</option>
+        </select>
+      </label>
+      <label class="tl-filter-field">
+        <span class="tl-filter-label">Action Type</span>
+        <select class="tl-select" id="tlActionFilter">
+          <option value="all">All</option>
+          <option value="email_opened">Email Opened</option>
+          <option value="hot_flag">Hot Flag</option>
+          <option value="bounce">Bounce</option>
+          <option value="content">Content</option>
+          <option value="scout">Scout</option>
+          <option value="sms">SMS</option>
+        </select>
+      </label>
+      <label class="tl-filter-field">
+        <span class="tl-filter-label">Date Range</span>
+        <select class="tl-select" id="tlDateFilter">
+          <option value="today">Today</option>
+          <option value="week">This Week</option>
+          <option value="all">All Time</option>
+        </select>
+      </label>
     </div>
 
     <div class="tl-list" id="tlList"></div>
@@ -4485,7 +4637,8 @@ document.querySelectorAll('[data-pcol]').forEach(th => {
 });
 
 // ── ACTIVITY ──────────────────────────────────────────────────────────
-let _tlOffset = 0, _tlFilter = 'all', _tlItems = [], _tlAgents = new Set();
+let _tlOffset = 0, _tlItems = [], _tlDetailsCache = new Map(), _tlLoading = false, _tlDone = false;
+const TL_PAGE_SIZE = 50;
 
 function _relTimeA(d) {
   if (!d) return '—';
@@ -4501,14 +4654,133 @@ function _fmtDate(d) {
   return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function _agentColorByLabel(label) {
-  const map = {
-    Scout: '#00d4b4', Link: '#5b9fd4', Faye: '#5ba3f5', Emmett: '#ff6b35',
-    Max: '#8b5cf6', Rex: '#00e676', Riley: '#64c864', Sketch: '#b450ff',
-    Paige: '#00c896', Sam: '#22d3ee', Vera: '#f4b942', Cal: '#f59e0b',
-    Ivy: '#e1306c', Penny: '#f59e0b'
+function _fmtTimestamp(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit'
+  });
+}
+
+function _plainActionLabel(action) {
+  const raw = String(action || '').toLowerCase();
+  const labels = {
+    email_opened: 'Email Opened', open: 'Email Opened',
+    email_clicked: 'Email Clicked', click: 'Email Clicked',
+    email_bounced: 'Bounce', email_soft_bounce: 'Soft Bounce',
+    hot_prospect_alert: 'Hot Flag', hot_flag: 'Hot Flag',
+    generate_content: 'Content', content_scored: 'Content Scored',
+    generate_comment: 'Content', send_sms: 'SMS Sent', sent_sms: 'SMS Sent', batch_sms: 'SMS Batch',
+    scout: 'Scout', scrape: 'Scout Run', found_prospect: 'Scout Prospect Found', outbound: 'Email Sent', sent_email: 'Email Sent',
+    daily_digest: 'Daily Digest', weekly_report: 'Weekly Report',
+    cron_run: 'Cron Run', dashboard_trigger: 'Dashboard Trigger',
+    reply: 'Reply Received', inbound: 'Reply Received',
+    call_answered: 'Call Answered', send_failure: 'Send Failure'
   };
-  return map[label] || '#6b7fa0';
+  if (labels[raw]) return labels[raw];
+  return raw.split('_').filter(Boolean).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ') || 'Activity';
+}
+
+function _actionCategory(item) {
+  const raw = String(item.raw_action || item.action || '').toLowerCase();
+  const agent = String(item.agent || '').toLowerCase();
+  const label = String(item.action || '').toLowerCase();
+  if (raw.includes('bounce') || label.includes('bounce')) return 'bounce';
+  if (raw.includes('hot') || label.includes('hot')) return 'hot_flag';
+  if (raw === 'email_opened' || raw === 'open' || label.includes('email opened')) return 'email_opened';
+  if (raw.includes('content') || raw.includes('comment') || agent === 'paige') return 'content';
+  if (raw.includes('sms') || agent === 'sam') return 'sms';
+  if (agent === 'scout' || raw.includes('scout') || raw.includes('scrape')) return 'scout';
+  return 'other';
+}
+
+function _timelineBadgeClass(item) {
+  const category = _actionCategory(item);
+  const agent = String(item.agent || '');
+  if (category === 'bounce') return 'tl-agent-red';
+  if (category === 'hot_flag') return 'tl-agent-amber';
+  if (agent === 'Riley' || item.is_warm_signal) return 'tl-agent-teal';
+  if (['Paige', 'Scout', 'Max'].includes(agent)) return 'tl-agent-purple';
+  return 'tl-agent-purple';
+}
+
+function _timelineMarkerColor(item) {
+  const cls = _timelineBadgeClass(item);
+  if (cls.includes('red')) return '#ef4444';
+  if (cls.includes('amber')) return '#f59e0b';
+  if (cls.includes('teal')) return '#00d4b4';
+  return '#8b5cf6';
+}
+
+function _activityDateVisible(ranAt, mode) {
+  if (mode === 'all' || !ranAt) return true;
+  const d = new Date(ranAt);
+  const now = new Date();
+  if (mode === 'today') {
+    return d.getFullYear() === now.getFullYear()
+      && d.getMonth() === now.getMonth()
+      && d.getDate() === now.getDate();
+  }
+  if (mode === 'week') {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - start.getDay());
+    return d >= start;
+  }
+  return true;
+}
+
+function _activityMatchesFilters(item) {
+  const agent = document.getElementById('tlAgentFilter')?.value || 'all';
+  const action = document.getElementById('tlActionFilter')?.value || 'all';
+  const dateRange = document.getElementById('tlDateFilter')?.value || 'today';
+  if (agent !== 'all' && item.agent !== agent) return false;
+  if (action !== 'all' && _actionCategory(item) !== action) return false;
+  return _activityDateVisible(item.ran_at, dateRange);
+}
+
+function _normalizeTimelineItem(item) {
+  const rawAction = item.raw_action || String(item.action || '').toLowerCase().replace(/\s+/g, '_');
+  return {
+    ...item,
+    raw_action: rawAction,
+    action_label: _plainActionLabel(rawAction),
+    ran_at: item.ran_at || item.created_at || item.time_at || null
+  };
+}
+
+function _detailValue(details, labels) {
+  const fields = details?.fields || [];
+  const wanted = labels.map(l => l.toLowerCase());
+  const found = fields.find(f => wanted.includes(String(f.label || '').toLowerCase()));
+  return found?.value || '—';
+}
+
+function _renderTimelineDetails(item) {
+  const details = _tlDetailsCache.get(String(item.id));
+  if (!details) return '<div class="tl-loading">Loading details...</div>';
+  if (details.error) return '<div class="tl-loading">Details unavailable.</div>';
+  const prospectValue = _detailValue(details, ['Prospect']);
+  const rows = [
+    ['Prospect', prospectValue === '—' ? (item.prospect || '—') : prospectValue],
+    ['Company', _detailValue(details, ['Company'])],
+    ['Email', _detailValue(details, ['Email', 'Prospect email'])],
+    ['ICP Score', _detailValue(details, ['ICP score'])],
+    ['Open Count', _detailValue(details, ['Total opens', 'Opens in 24h'])],
+    ['Subject Line', _detailValue(details, ['Last email subject'])],
+    ['Vertical', _detailValue(details, ['Vertical'])]
+  ];
+  const consumed = new Set(['prospect', 'company', 'email', 'prospect email', 'icp score', 'total opens', 'opens in 24h', 'last email subject', 'vertical']);
+  const extras = (details.fields || [])
+    .filter(field => !consumed.has(String(field.label || '').toLowerCase()))
+    .slice(0, 3)
+    .map(field => [field.label, field.value]);
+  return `<div class="tl-details">${rows.concat(extras).map(([label, value]) => `
+    <div class="tl-detail">
+      <span class="tl-detail-label">${_esc(label)}</span>
+      <span class="tl-detail-value">${_esc(value || '—')}</span>
+    </div>
+  `).join('')}</div>`;
 }
 
 function renderSequences(rows) {
@@ -4542,68 +4814,82 @@ function renderSequences(rows) {
   }).join('');
 }
 
-function _buildPills() {
-  const bar = document.getElementById('tlFilterBar');
-  const active = _tlFilter;
-  bar.innerHTML = `<div class="tl-pill${active === 'all' ? ' active' : ''}" data-tlagent="all">All</div>`;
-  _tlAgents.forEach(name => {
-    const pill = document.createElement('div');
-    pill.className = 'tl-pill' + (active === name ? ' active' : '');
-    pill.dataset.tlagent = name;
-    pill.textContent = name.toUpperCase();
-    bar.appendChild(pill);
-  });
-  bar.querySelectorAll('.tl-pill').forEach(pill => {
-    pill.addEventListener('click', () => {
-      bar.querySelectorAll('.tl-pill').forEach(p => p.classList.remove('active'));
-      pill.classList.add('active');
-      _tlFilter = pill.dataset.tlagent;
-      _renderTimeline();
-    });
-  });
-}
-
 function _renderTimeline() {
   const list = document.getElementById('tlList');
-  const visible = _tlFilter === 'all' ? _tlItems : _tlItems.filter(i => i.agent === _tlFilter);
+  const visible = _tlItems.filter(_activityMatchesFilters);
   if (!visible.length) {
-    list.innerHTML = '<div style="color:var(--gray);font-size:0.75rem;padding:1rem 0;">No activity recorded yet.</div>';
+    list.innerHTML = '<div class="tl-empty">No activity matches these filters.</div>';
     return;
   }
   list.innerHTML = visible.map(item => {
-    const color = _agentColorByLabel(item.agent);
-    const agentLabel = (item.agent || '').toUpperCase();
-    const prospectPart = item.prospect ? ` · ${item.prospect}` : '';
+    const color = _timelineMarkerColor(item);
+    const agentLabel = item.agent || 'System';
     return `<div class="tl-item">
-      <div class="tl-dot" style="background:${color};box-shadow:0 0 4px ${color}"></div>
-      <div class="tl-body">
-        <div class="tl-top">
-          <span class="tl-agent" style="color:${color}">${agentLabel}</span>
-          <span class="tl-action">${_esc((item.action || '') + prospectPart)}</span>
-          <span class="tl-time">${_relTimeA(item.ran_at)}</span>
+      <div class="tl-marker" style="background:${color};box-shadow:0 0 0 4px #0a0a0f,0 0 14px ${color}66"></div>
+      <div class="tl-card">
+        <div class="tl-head">
+          <div class="tl-title-row">
+            <span class="tl-agent-badge ${_timelineBadgeClass(item)}">${_esc(agentLabel)}</span>
+            <span class="tl-action">${_esc(item.action_label || _plainActionLabel(item.raw_action || item.action))}</span>
+          </div>
+          <div class="tl-time">${_esc(_fmtTimestamp(item.ran_at))}</div>
         </div>
+        ${_renderTimelineDetails(item)}
       </div>
     </div>`;
   }).join('');
 }
 
+async function _fetchTimelineDetails(items) {
+  const missing = items.filter(item => item.id != null && !_tlDetailsCache.has(String(item.id))).slice(0, TL_PAGE_SIZE);
+  await Promise.all(missing.map(async item => {
+    try {
+      const res = await fetch(`/api/activity/${encodeURIComponent(item.id)}/details`, { credentials: 'include' });
+      if (!res.ok) throw new Error('unavailable');
+      _tlDetailsCache.set(String(item.id), await res.json());
+    } catch (err) {
+      _tlDetailsCache.set(String(item.id), { error: true });
+    }
+  }));
+  _renderTimeline();
+}
+
+async function _fetchActivityPage(offset) {
+  const feedRes = await fetch(`/api/activity?limit=${TL_PAGE_SIZE}&offset=${offset}`, { credentials: 'include' });
+  if (!feedRes.ok) throw new Error(`activity returned ${feedRes.status}`);
+  const feedRows = await feedRes.json();
+  if ((feedRows || []).length >= TL_PAGE_SIZE) return feedRows || [];
+
+  const timelineRes = await fetch(`/api/activity-timeline?offset=${offset}`, { credentials: 'include' });
+  if (!timelineRes.ok) return feedRows || [];
+  const timelineRows = await timelineRes.json();
+  const byId = new Map((timelineRows || []).map(row => [String(row.id), row]));
+  (feedRows || []).forEach(row => byId.set(String(row.id), { ...(byId.get(String(row.id)) || {}), ...row }));
+  return byId.size ? [...byId.values()] : (feedRows || []);
+}
+
 async function loadMoreTimeline() {
+  if (_tlLoading || _tlDone) return;
   const btn = document.getElementById('activityLoadMore');
   btn.textContent = '...';
   btn.disabled = true;
+  _tlLoading = true;
   try {
-    const res = await fetch(`/api/activity-timeline?offset=${_tlOffset}`, { credentials: 'include' });
-    const rows = await res.json();
-    rows.forEach(r => { if (r.agent) _tlAgents.add(r.agent); });
-    _tlItems = _tlItems.concat(rows);
-    _tlOffset += rows.length;
-    _buildPills();
+    const rows = (await _fetchActivityPage(_tlOffset)).map(_normalizeTimelineItem);
+    const seen = new Set(_tlItems.map(item => String(item.id)));
+    const fresh = rows.filter(item => item.id == null || !seen.has(String(item.id)));
+    _tlItems = _tlItems.concat(fresh);
+    _tlOffset += fresh.length;
+    _tlDone = fresh.length < TL_PAGE_SIZE;
     _renderTimeline();
-    btn.textContent = rows.length < 50 ? 'No more' : 'Load more';
-    btn.disabled = rows.length < 50;
+    await _fetchTimelineDetails(fresh);
+    btn.textContent = _tlDone ? 'No more' : 'Load more';
+    btn.disabled = _tlDone;
   } catch(e) {
     btn.textContent = 'Load more';
     btn.disabled = false;
+  } finally {
+    _tlLoading = false;
   }
 }
 
@@ -4619,22 +4905,25 @@ async function loadActivity() {
     const active = seqs.filter(s => !s.complete).length;
     sub.textContent = `${seqs.length} in sequence · ${active} active`;
 
-    const tl = data.timeline || [];
-    _tlItems = tl;
-    _tlOffset = tl.length;
-    _tlAgents = new Set();
-    tl.forEach(r => { if (r.agent) _tlAgents.add(r.agent); });
-    _buildPills();
-    _renderTimeline();
-
-    const loadMore = document.getElementById('activityLoadMore');
-    loadMore.disabled = tl.length < 50;
-    loadMore.textContent = tl.length < 50 ? 'No more' : 'Load more';
+    _tlOffset = 0;
+    _tlItems = [];
+    _tlDetailsCache = new Map();
+    _tlDone = false;
+    await loadMoreTimeline();
   } catch(e) {
     console.error('loadActivity:', e);
     if (sub) sub.textContent = 'Failed to load';
   }
 }
+
+document.querySelectorAll('#tlAgentFilter, #tlActionFilter, #tlDateFilter').forEach(select => {
+  select.addEventListener('change', _renderTimeline);
+});
+document.getElementById('activityArea')?.addEventListener('scroll', () => {
+  const area = document.getElementById('activityArea');
+  if (!area || _tlLoading || _tlDone) return;
+  if (area.scrollTop + area.clientHeight >= area.scrollHeight - 220) loadMoreTimeline();
+});
 
 // ── ANALYTICS ─────────────────────────────────────────────────────────
 const _chartInstances = {};
