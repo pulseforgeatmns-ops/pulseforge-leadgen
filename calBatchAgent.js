@@ -9,7 +9,7 @@ const db = require('./dbClient');
 
 const AGENT_NAME = 'cal';
 const MAX_BATCH_SIZE = 25;
-const BLAND_BATCH_URL = 'https://api.bland.ai/v1/batches';
+const BLAND_BATCH_URL = 'https://api.bland.ai/v2/batches/create';
 
 const BASE_PROMPT = `You are Cal, an appointment setter for Pulseforge, an AI marketing and automation agency based in Manchester, New Hampshire. You are calling local service business owners in Southern New Hampshire on behalf of Jacob Maynard.
 
@@ -122,14 +122,22 @@ function buildCallData(prospects) {
 
 async function createBlandBatch(callData) {
   const payload = {
-    name: `Pulseforge Auto Batch — ${formatDateForBatchName()}`,
-    base_prompt: BASE_PROMPT,
-    call_data: callData,
-    voice: 'walter',
-    wait_for_greeting: true,
-    interruption_threshold: 1500,
-    from: process.env.BLAND_PHONE_NUMBER,
-    max_duration: 2,
+    description: `Pulseforge Auto Batch — ${formatDateForBatchName()}`,
+    call_objects: callData.map(call => ({
+      phone_number: call.phone_number,
+      request_data: {
+        first_name: call.first_name,
+        business_name: call.business_name,
+      },
+    })),
+    global: {
+      task: BASE_PROMPT,
+      voice: 'walter',
+      wait_for_greeting: true,
+      interruption_threshold: 1500,
+      from: process.env.BLAND_PHONE_NUMBER,
+      max_duration: 2,
+    },
   };
 
   const res = await axios.post(BLAND_BATCH_URL, payload, {
@@ -143,7 +151,7 @@ async function createBlandBatch(callData) {
 }
 
 async function logBatchTouchpoints(formattedProspects, batchResponse) {
-  const externalRef = batchResponse?.batch_id || batchResponse?.id || null;
+  const externalRef = batchResponse?.data?.batch_id || batchResponse?.batch_id || batchResponse?.id || null;
 
   for (const item of formattedProspects) {
     await db.logTouchpoint(
@@ -206,7 +214,7 @@ async function run() {
       null,
       null,
       {
-        batch_name: payload.name,
+        batch_name: payload.description,
         calls_queued: callData.length,
         skipped,
         bland_response: response,
