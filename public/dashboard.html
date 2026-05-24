@@ -1026,6 +1026,74 @@ body.light-mode .warm-signal .feed-prospect { color: var(--text-primary); }
 }
 .max-brief-banner-toggle:hover { opacity: 1; }
 .max-brief-banner.expanded .max-brief-banner-toggle { display: none; }
+.ask-max-panel {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--purple-bright);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin: -0.9rem 0 1.75rem;
+}
+.ask-max-form {
+  display: flex;
+  gap: 0.55rem;
+  align-items: stretch;
+}
+.ask-max-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgba(139,92,246,0.28);
+  border-radius: 4px;
+  background: rgba(139,92,246,0.04);
+  color: #1a1a18;
+  padding: 0.65rem 0.75rem;
+  font-size: 0.82rem;
+}
+.ask-max-input:focus {
+  outline: none;
+  border-color: var(--purple-bright);
+  box-shadow: 0 0 0 2px rgba(139,92,246,0.12);
+}
+.ask-max-send {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.58rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  background: transparent;
+  border: 1px solid rgba(139,92,246,0.35);
+  color: var(--purple-bright);
+  padding: 0 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.ask-max-send:disabled { opacity: 0.45; cursor: not-allowed; }
+.ask-max-history { margin-top: 0.8rem; }
+.ask-max-empty {
+  font-size: 0.74rem;
+  color: var(--gray-light);
+}
+.ask-max-exchange {
+  padding: 0.85rem 0;
+  border-top: 1px solid rgba(139,92,246,0.16);
+}
+.ask-max-exchange:first-child { padding-top: 0; border-top: 0; }
+.ask-max-question {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.58rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--purple-bright);
+  margin-bottom: 0.35rem;
+}
+.ask-max-answer {
+  font-size: 0.8rem;
+  color: #1a1a18;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+body.light-mode .ask-max-panel,
+body.light-mode .ask-max-input,
+body.light-mode .ask-max-answer { color: var(--text-primary); }
 
 /* ACTIONS AREA */
 .actions-area { display: none; overflow-y: auto; height: 100%; padding: 1.5rem 2rem; }
@@ -1857,6 +1925,16 @@ body.light-mode .warm-signal .feed-prospect { color: var(--text-primary); }
       <div class="max-brief-banner-body" id="maxBriefBannerBody" style="display:none;">
         <div class="max-brief-banner-preview" id="maxBriefBannerText">Loading...</div>
         <span class="max-brief-banner-toggle" onclick="toggleMaxBrief()">Read more ▸</span>
+      </div>
+    </div>
+
+    <div class="ask-max-panel" id="askMaxPanel">
+      <form class="ask-max-form" id="askMaxForm">
+        <input class="ask-max-input" id="askMaxInput" type="text" placeholder="Ask Max anything about your pipeline..." autocomplete="off">
+        <button class="ask-max-send" id="askMaxSend" type="submit">Send</button>
+      </form>
+      <div class="ask-max-history" id="askMaxHistory">
+        <div class="ask-max-empty">Ask a question and Max will answer from current pipeline context.</div>
       </div>
     </div>
 
@@ -5030,6 +5108,60 @@ async function regenMaxBrief(btn) {
 }
 
 loadMaxBriefBanner();
+
+// ── ASK MAX ───────────────────────────────────────────────────────
+let _askMaxExchanges = [];
+
+function renderAskMaxHistory() {
+  const history = document.getElementById('askMaxHistory');
+  if (!history) return;
+  if (!_askMaxExchanges.length) {
+    history.innerHTML = '<div class="ask-max-empty">Ask a question and Max will answer from current pipeline context.</div>';
+    return;
+  }
+  history.innerHTML = _askMaxExchanges.map(item => `
+    <div class="ask-max-exchange">
+      <div class="ask-max-question">${_esc(item.question)}</div>
+      <div class="ask-max-answer">${_esc(item.answer)}</div>
+    </div>
+  `).join('');
+}
+
+async function submitAskMax(e) {
+  e.preventDefault();
+  const input = document.getElementById('askMaxInput');
+  const btn = document.getElementById('askMaxSend');
+  const question = (input?.value || '').trim();
+  if (!question) return;
+  if (input) input.value = '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Asking...';
+  }
+  try {
+    const res = await fetch('/api/max/ask', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Max did not answer');
+    _askMaxExchanges.unshift({ question, answer: data.answer || 'Max did not return a response.' });
+    _askMaxExchanges = _askMaxExchanges.slice(0, 3);
+  } catch (err) {
+    _askMaxExchanges.unshift({ question, answer: `Unable to ask Max: ${err.message}` });
+    _askMaxExchanges = _askMaxExchanges.slice(0, 3);
+  } finally {
+    renderAskMaxHistory();
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Send';
+    }
+  }
+}
+
+document.getElementById('askMaxForm')?.addEventListener('submit', submitAskMax);
 
 // ── ACTIONS TAB ───────────────────────────────────────────────────
 let _actionsLoaded = false;
