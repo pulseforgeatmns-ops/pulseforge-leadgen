@@ -703,6 +703,54 @@ Jacob Maynard
 Pulseforge
 gopulseforge.com`
     }
+  ],
+
+  re_engagement: [
+    {
+      day: 0,
+      subject: "still thinking about {{business_name}}",
+      body: `Hi {{first_name}},
+
+Reached out a few weeks ago — wanted to check back in before moving on.
+
+I know timing matters. If growing your customer base consistently is still on your radar, I'd love to show you what we've put together for businesses like {{business_name}}.
+
+Takes 20 minutes. No pitch, just a look at what the system actually does.
+
+Worth a conversation?
+
+Jacob Maynard
+Pulseforge`
+    },
+    {
+      day: 4,
+      subject: "one thing I'm seeing in Manchester right now",
+      body: `Hi {{first_name}},
+
+One pattern I keep seeing across local businesses right now — the ones picking up new customers consistently aren't doing anything complicated. They're just staying visible longer than their competition.
+
+Most owners go quiet between jobs. The ones growing don't.
+
+I help businesses like {{business_name}} stay visible automatically. If you want to see what that looks like in practice, here's 20 minutes with me:
+https://calendly.com/jacob-gopulseforge/20min
+
+Jacob`
+    },
+    {
+      day: 8,
+      subject: "closing the loop on {{business_name}}",
+      body: `Hi {{first_name}},
+
+Last note from me — I don't want to clutter your inbox.
+
+If the timing ever works out, reply to this and I'll put something together for {{business_name}} same day. No forms, no pressure.
+
+Rooting for you either way.
+
+Jacob Maynard
+Pulseforge
+gopulseforge.com`
+    }
   ]
 };
 
@@ -755,15 +803,25 @@ async function getProspectsForEmail() {
   const pool = require('./db');
 
   const res = await pool.query(`
-    SELECT p.*, c.name as company
+    SELECT
+      p.*,
+      c.name as company,
+      COALESCE(email_stats.outbound_email_count, 0)::int AS outbound_email_count,
+      email_stats.last_touchpoint_at
     FROM prospects p
     LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*) FILTER (WHERE t.channel = 'email' AND t.action_type = 'outbound')::int AS outbound_email_count,
+        COUNT(*) FILTER (WHERE t.channel = 'email')::int AS email_touchpoint_count,
+        MAX(t.created_at) AS last_touchpoint_at
+      FROM touchpoints t
+      WHERE t.prospect_id = p.id AND t.client_id = p.client_id
+    ) email_stats ON true
     WHERE (p.status = 'cold' OR (
       p.status = 'warm'
-      AND EXISTS (
-        SELECT 1 FROM touchpoints t2
-        WHERE t2.prospect_id = p.id AND t2.client_id = p.client_id AND t2.channel = 'email'
-      )
+      AND COALESCE(email_stats.outbound_email_count, 0) > 0
+      AND email_stats.last_touchpoint_at <= NOW() - INTERVAL '14 days'
     ))
     AND p.client_id = $1
     AND p.email IS NOT NULL
@@ -772,9 +830,9 @@ async function getProspectsForEmail() {
     AND p.email NOT LIKE '%@example.com'
     AND p.do_not_contact IS NOT TRUE
     AND (
-      SELECT COUNT(*) FROM touchpoints t
-      WHERE t.prospect_id = p.id AND t.client_id = p.client_id AND t.channel = 'email'
-    ) < 4
+      p.status = 'warm'
+      OR COALESCE(email_stats.email_touchpoint_count, 0) < 4
+    )
     ORDER BY
       CASE WHEN p.status = 'warm' THEN 0 ELSE 1 END ASC,
       p.icp_score DESC NULLS LAST,
@@ -786,6 +844,19 @@ async function getProspectsForEmail() {
 }
 
 function getSequenceForProspect(prospect) {
+  const lastTouchpointAt = prospect.last_touchpoint_at ? new Date(prospect.last_touchpoint_at) : null;
+  const daysSinceLastTouchpoint = lastTouchpointAt
+    ? (Date.now() - lastTouchpointAt.getTime()) / (1000 * 60 * 60 * 24)
+    : null;
+  if (
+    prospect.status === 'warm' &&
+    Number(prospect.outbound_email_count || 0) > 0 &&
+    daysSinceLastTouchpoint !== null &&
+    daysSinceLastTouchpoint >= 14
+  ) {
+    return 're_engagement';
+  }
+
   const vertical = (prospect.vertical || prospect.industry || '').toLowerCase();
   if (
     vertical === 'home_renovation' ||
@@ -828,18 +899,24 @@ function getSequenceForProspect(prospect) {
 
 async function getNextSequenceStep(prospect) {
   const pool = require('./db');
+  const sequenceName = getSequenceForProspect(prospect);
+  const isReEngagement = sequenceName === 're_engagement';
 
   const res = await pool.query(`
     SELECT * FROM touchpoints
     WHERE prospect_id = $1
     AND client_id = $2
     AND channel = 'email'
-    AND action_type IN ('outbound', 'email_warm')
+    AND ${
+      isReEngagement
+        ? "action_type = 'outbound' AND COALESCE(outcome, '') LIKE '%re_engagement%'"
+        : "action_type IN ('outbound', 'email_warm')"
+    }
     ORDER BY created_at ASC
   `, [prospect.id, CLIENT_ID]);
 
   const emailsSent = res.rows.length;
-  const sequence = SEQUENCES[getSequenceForProspect(prospect)];
+  const sequence = SEQUENCES[sequenceName];
 
 
   if (emailsSent >= sequence.length) {
@@ -945,7 +1022,8 @@ async function run() {
 
     // Check for warm email substitution on Day 4+ follow-ups
     let useWarm = false;
-    if (step.day > 0) {
+    const sequenceName = getSequenceForProspect(prospect);
+    if (sequenceName !== 're_engagement' && step.day > 0) {
       const clicked  = await hasClickedEmail(prospect.id);
       const warmSent = await hasSentWarmEmail(prospect.id);
       if (clicked && warmSent) {
@@ -965,7 +1043,6 @@ async function run() {
     console.log(`Sending to: ${prospect.email} (${prospect.name})`);
     console.log(`Subject: ${subject}`);
 
-    const sequenceName = getSequenceForProspect(prospect);
     const tags = [sequenceName, `step_${step.day}`, prospect.vertical].filter(Boolean);
     const success = await sendEmail(
       prospect.email,
@@ -981,7 +1058,7 @@ async function run() {
         'email',
         useWarm ? 'email_warm' : 'outbound',
         subject,
-        useWarm ? { sequence: 'warm_outreach' } : { step: step.day, sequence: 'cold_outreach' },
+        useWarm ? { sequence: 'warm_outreach' } : { step: step.day, sequence: sequenceName === 're_engagement' ? 're_engagement' : 'cold_outreach' },
         'neutral'
       );
       industryCounts[industry]++;
