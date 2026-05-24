@@ -707,7 +707,7 @@ router.get('/api/activity', requireAuth, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
-      SELECT al.agent_name, al.action, al.status, al.ran_at, al.payload,
+      SELECT al.id, al.agent_name, al.action, al.status, al.ran_at, al.payload,
         COALESCE(
           al.prospect_id,
           CASE
@@ -769,6 +769,7 @@ router.get('/api/activity', requireAuth, async (req, res) => {
       const rawAction = String(row.action || '').toLowerCase();
       const isWarmSignal = ['open', 'email_opened', 'click', 'email_clicked', 'reply', 'inbound', 'call_answered'].includes(rawAction);
       return {
+        id: row.id,
         agent, action: label, raw_action: rawAction, icon, color,
         time: timeLabel, ran_at: row.ran_at, status: row.status,
         prospect_id: row.prospect_id,
@@ -778,6 +779,205 @@ router.get('/api/activity', requireAuth, async (req, res) => {
     });
 
     res.json(feed);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Expandable detail panel for a single live-feed (agent_log) item
+const ACTIVITY_DETAIL_AGENTS = {
+  scout: 'Scout', linkedin: 'Link', facebook: 'Faye', emmett: 'Emmett',
+  email: 'Emmett', max: 'Max', rex: 'Rex', riley: 'Riley', sketch: 'Sketch',
+  paige: 'Paige', sam: 'Sam', vera: 'Vera', cal: 'Cal', ivy: 'Ivy', penny: 'Penny',
+};
+const SEQUENCE_DAYS = [0, 4, 8, 13];
+
+function activityDetailTitle(action) {
+  const titles = {
+    email_opened: 'Email Opened',
+    email_bounced: 'Email Bounced',
+    email_soft_bounce: 'Email Soft Bounce',
+    hot_prospect_alert: 'Hot Prospect Alert',
+    reengagement_trigger: 'Re-engagement Trigger',
+    auto_marked_dead: 'Auto-marked Dead',
+    content_scored: 'Content Scored',
+    cron_run: 'Cron Run',
+    send_failure: 'Send Failure',
+  };
+  return titles[action] || action;
+}
+
+function sequenceStepLabel(sendCount) {
+  if (!sendCount || sendCount < 1) return 'No email sent yet';
+  const idx = Math.min(sendCount, SEQUENCE_DAYS.length);
+  return `Step ${idx} — Day ${SEQUENCE_DAYS[idx - 1]}`;
+}
+
+router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
+  try {
+    const logId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(logId)) return res.status(400).json({ error: 'Invalid id' });
+    const clientId = getRequestClientId(req);
+
+    const prospectIdSql = `COALESCE(
+      al.prospect_id,
+      CASE WHEN (al.payload->>'prospect_id') ~* '^[0-9a-f-]{36}$' THEN (al.payload->>'prospect_id')::uuid ELSE NULL END
+    )`;
+    const logRes = await pool.query(`
+      SELECT al.id, al.agent_name, al.action, al.status, al.ran_at, al.payload,
+        al.error_msg, al.duration_ms, al.client_id,
+        ${prospectIdSql} AS prospect_id,
+        p.first_name, p.last_name, p.email AS prospect_email, p.phone, p.vertical,
+        p.icp_score, p.status AS prospect_status, p.last_contacted_at, p.notes,
+        c.name AS company_name
+      FROM agent_log al
+      LEFT JOIN prospects p
+        ON p.id = ${prospectIdSql}
+        AND p.client_id = COALESCE(al.client_id, $2)
+      LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+      WHERE al.id = $1 AND (al.client_id = $2 OR al.client_id IS NULL)
+      LIMIT 1
+    `, [logId, clientId]);
+
+    if (!logRes.rows.length) return res.status(404).json({ error: 'Activity not found' });
+    const row = logRes.rows[0];
+    const action = String(row.action || '');
+    const payload = row.payload || {};
+    const effectiveClientId = row.client_id || clientId;
+
+    const companyName = row.company_name
+      || String(row.notes || '').split('—')[0].trim()
+      || payload.company
+      || null;
+    const prospectName = (`${row.first_name || ''} ${row.last_name || ''}`).trim() || null;
+
+    let eng = {};
+    let lastSubject = null;
+    if (row.prospect_id) {
+      const engRes = await pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE action_type IN ('open','email_opened'))::int AS open_count,
+          COUNT(*) FILTER (WHERE action_type IN ('open','email_opened')
+            AND created_at >= NOW() - INTERVAL '24 hours')::int AS open_count_24h,
+          COUNT(*)::int AS touch_count,
+          COUNT(*) FILTER (WHERE channel = 'email'
+            AND action_type IN ('outbound','email_warm','send'))::int AS send_count,
+          MAX(created_at) AS last_touch_at
+        FROM touchpoints
+        WHERE prospect_id = $1 AND client_id = $2
+      `, [row.prospect_id, effectiveClientId]);
+      eng = engRes.rows[0] || {};
+      const subjRes = await pool.query(`
+        SELECT content_summary AS subject
+        FROM touchpoints
+        WHERE prospect_id = $1 AND client_id = $2
+          AND channel = 'email' AND action_type IN ('outbound','email_warm','send')
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [row.prospect_id, effectiveClientId]);
+      lastSubject = subjRes.rows[0]?.subject || null;
+    }
+
+    const daysSince = (d) => d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400000) : null;
+    const fmtDate = (d) => d ? new Date(d).toISOString().slice(0, 10) : '—';
+
+    const fields = [];
+    const f = (label, value) => fields.push({ label, value: (value === null || value === undefined || value === '') ? '—' : String(value) });
+    let actions = [];
+
+    switch (action) {
+      case 'email_opened':
+        f('Prospect', prospectName);
+        f('Company', companyName);
+        f('Email', row.prospect_email || payload.email);
+        f('Vertical', row.vertical);
+        f('ICP score', row.icp_score);
+        f('Total opens', eng.open_count ?? 0);
+        f('Last email subject', lastSubject || payload.subject);
+        break;
+      case 'email_bounced':
+      case 'email_soft_bounce':
+        f('Prospect', prospectName);
+        f('Email', row.prospect_email || payload.email);
+        f('Bounce type', action === 'email_bounced' ? 'Hard' : 'Soft');
+        f('Sequence step bounced', sequenceStepLabel(eng.send_count));
+        break;
+      case 'hot_prospect_alert':
+        f('Prospect', prospectName);
+        f('Company', companyName);
+        f('ICP score', row.icp_score);
+        f('Opens in 24h', payload.open_count ?? eng.open_count_24h ?? 0);
+        f('Phone', row.phone);
+        actions = [
+          { key: 'assign_setter', label: 'Assign to Setter' },
+          { key: 'log_touch', label: 'Log Touch' },
+        ];
+        break;
+      case 'reengagement_trigger':
+        f('Prospect', prospectName);
+        f('Company', companyName);
+        f('Days since last touch', daysSince(eng.last_touch_at ?? row.last_contacted_at));
+        f('Current status', row.prospect_status);
+        break;
+      case 'auto_marked_dead':
+        f('Prospect', prospectName);
+        f('Company', companyName);
+        f('Touch count', eng.touch_count ?? 0);
+        f('Last contact date', fmtDate(eng.last_touch_at ?? row.last_contacted_at));
+        break;
+      case 'content_scored':
+        f('Channel', payload.channel);
+        f('Score', `${payload.total ?? payload.scores?.total ?? '—'}/30`);
+        f('Weak dimension', payload.weak_dimension || 'none');
+        f('Regenerated', payload.regenerated ? 'Yes' : 'No');
+        break;
+      case 'cron_run': {
+        const rawAgent = String(row.agent_name || '').replace('_agent', '').toLowerCase();
+        f('Agent', ACTIVITY_DETAIL_AGENTS[rawAgent] || row.agent_name || 'System');
+        f('Sent count', payload.sent ?? 0);
+        f('Prospects evaluated', payload.prospects_evaluated ?? '—');
+        f('Duration', row.duration_ms != null ? `${row.duration_ms} ms` : '—');
+        break;
+      }
+      case 'send_failure':
+        f('Prospect email', row.prospect_email || payload.email);
+        f('Error message', row.error_msg || 'Unknown error');
+        break;
+      default:
+        f('Action', action);
+        f('Status', row.status);
+        if (prospectName) f('Prospect', prospectName);
+        break;
+    }
+
+    res.json({
+      id: row.id,
+      action,
+      title: activityDetailTitle(action),
+      prospect_id: row.prospect_id || null,
+      fields,
+      actions,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Quick action: surface a prospect to the setter queue
+router.post('/api/prospects/:id/assign-setter', requireAuth, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const result = await pool.query(`
+      UPDATE prospects
+      SET setter_visible = true,
+          setter_status = COALESCE(setter_status, 'new'),
+          setter_updated_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $1 AND client_id = $2
+      RETURNING id
+    `, [req.params.id, clientId]);
+    if (!result.rows.length) return res.status(404).json({ error: 'Prospect not found' });
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

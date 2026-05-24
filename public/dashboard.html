@@ -800,6 +800,48 @@ body.light-mode .agent-card:not(.not-configured) {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.55rem; color: #4a4a45; flex-shrink: 0; margin-top: 2px;
 }
+.feed-detail-toggle {
+  flex-shrink: 0; margin-top: 1px; margin-left: 2px;
+  width: 16px; height: 16px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 4px; color: #4a4a45; cursor: pointer;
+  font-size: 0.7rem; line-height: 1;
+  transition: transform 0.15s ease;
+}
+.feed-detail-toggle:hover { color: #1a1a18; border-color: rgba(0,0,0,0.25); }
+.feed-detail-toggle.open { transform: rotate(90deg); }
+.feed-detail-panel {
+  margin: 0 0.45rem 0.5rem 34px;
+  padding: 0.55rem 0.65rem;
+  background: rgba(0,0,0,0.03);
+  border: 1px solid rgba(0,0,0,0.08);
+  border-left: 2px solid rgba(0,0,0,0.18);
+  border-radius: 5px;
+  font-size: 0.7rem; color: #1a1a18;
+}
+.warm-signal + .feed-detail-panel { border-left-color: var(--orange); }
+.feed-detail-head {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.55rem; letter-spacing: 1px; text-transform: uppercase;
+  color: #4a4a45; margin-bottom: 0.4rem;
+}
+.feed-detail-line {
+  display: flex; justify-content: space-between; gap: 10px;
+  padding: 2px 0; line-height: 1.5;
+}
+.feed-detail-label { color: #4a4a45; flex-shrink: 0; }
+.feed-detail-value { color: #1a1a18; text-align: right; word-break: break-word; }
+.feed-detail-empty { color: #4a4a45; font-style: italic; }
+.feed-detail-actions { display: flex; gap: 6px; margin-top: 0.5rem; }
+.feed-detail-action {
+  flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 0.55rem;
+  text-transform: uppercase; border: 1px solid rgba(0,0,0,0.18);
+  background: transparent; color: #1a1a18; border-radius: 4px;
+  padding: 6px; cursor: pointer;
+}
+.feed-detail-action:hover { background: rgba(0,0,0,0.05); }
+.feed-detail-action:disabled { opacity: 0.6; cursor: default; }
 .prospect-preview-card {
   position: fixed; z-index: 3000; width: 280px;
   background: var(--bg1); border: 1px solid var(--border);
@@ -3343,16 +3385,100 @@ function renderActivityFeedItems() {
     const warm = item.is_warm_signal ? ' warm-signal' : '';
     const hoverable = item.prospect_id ? ' has-prospect' : '';
     const badge = item.is_warm_signal ? '<span class="signal-badge">SIGNAL</span>' : '';
-    return `<div class="feed-item${warm}${hoverable}" data-prospect-id="${_esc(item.prospect_id || '')}">
-      <div class="feed-icon ${_esc(item.color || 'fi-g')}">${_esc(item.icon || '⚡')}</div>
-      <div class="feed-text"><strong>${_esc(item.agent || 'System')}</strong>${badge} ${_feedActionHtml(item)}</div>
-      <div class="feed-time">${_esc(item.time || '')}</div>
+    const chevron = item.id != null
+      ? `<button type="button" class="feed-detail-toggle" data-log-id="${_esc(String(item.id))}" title="Details" aria-expanded="false">›</button>`
+      : '';
+    return `<div class="feed-row" data-log-id="${_esc(String(item.id == null ? '' : item.id))}">
+      <div class="feed-item${warm}${hoverable}" data-prospect-id="${_esc(item.prospect_id || '')}">
+        <div class="feed-icon ${_esc(item.color || 'fi-g')}">${_esc(item.icon || '⚡')}</div>
+        <div class="feed-text"><strong>${_esc(item.agent || 'System')}</strong>${badge} ${_feedActionHtml(item)}</div>
+        <div class="feed-time">${_esc(item.time || '')}</div>
+        ${chevron}
+      </div>
+      <div class="feed-detail-panel" style="display:none"></div>
     </div>`;
   }).join('');
   container.querySelectorAll('.feed-item.has-prospect').forEach(el => {
     el.addEventListener('mouseenter', () => showProspectPreview(el, el.dataset.prospectId));
     el.addEventListener('mouseleave', schedulePreviewHide);
     el.addEventListener('click', () => openProspectModal(el.dataset.prospectId));
+  });
+  container.querySelectorAll('.feed-detail-toggle').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleActivityDetail(btn);
+    });
+  });
+}
+
+async function toggleActivityDetail(btn) {
+  const row = btn.closest('.feed-row');
+  if (!row) return;
+  const panel = row.querySelector('.feed-detail-panel');
+  if (!panel) return;
+  const isOpen = panel.classList.contains('open');
+  if (isOpen) {
+    panel.classList.remove('open');
+    panel.style.display = 'none';
+    btn.classList.remove('open');
+    btn.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  btn.classList.add('open');
+  btn.setAttribute('aria-expanded', 'true');
+  panel.style.display = 'block';
+  panel.classList.add('open');
+  if (!panel.dataset.loaded) {
+    panel.innerHTML = '<div class="feed-detail-empty">Loading details…</div>';
+    try {
+      const res = await fetch(`/api/activity/${encodeURIComponent(btn.dataset.logId)}/details`, { credentials: 'include' });
+      if (!res.ok) throw new Error('unavailable');
+      const data = await res.json();
+      panel.innerHTML = renderActivityDetailHtml(data);
+      panel.dataset.loaded = '1';
+      bindActivityDetailActions(panel, data);
+    } catch (err) {
+      panel.innerHTML = '<div class="feed-detail-empty">Details unavailable.</div>';
+    }
+  }
+}
+
+function renderActivityDetailHtml(data) {
+  const rows = (data.fields || []).map(field =>
+    `<div class="feed-detail-line"><span class="feed-detail-label">${_esc(field.label)}</span><span class="feed-detail-value">${_esc(field.value)}</span></div>`
+  ).join('');
+  const actions = (data.actions || []).map(a =>
+    `<button type="button" class="feed-detail-action" data-action="${_esc(a.key)}">${_esc(a.label)}</button>`
+  ).join('');
+  return `<div class="feed-detail-head">${_esc(data.title || 'Details')}</div>
+    ${rows || '<div class="feed-detail-empty">No details.</div>'}
+    ${actions ? `<div class="feed-detail-actions">${actions}</div>` : ''}`;
+}
+
+function bindActivityDetailActions(panel, data) {
+  panel.querySelectorAll('.feed-detail-action').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const key = btn.dataset.action;
+      if (key === 'log_touch') {
+        if (data.prospect_id) openProspectModal(data.prospect_id, 'touch');
+        return;
+      }
+      if (key === 'assign_setter' && data.prospect_id) {
+        btn.disabled = true;
+        const original = btn.textContent;
+        btn.textContent = 'Assigning…';
+        try {
+          const res = await fetch(`/api/prospects/${encodeURIComponent(data.prospect_id)}/assign-setter`, {
+            method: 'POST', credentials: 'include',
+          });
+          btn.textContent = res.ok ? 'Assigned ✓' : 'Failed';
+        } catch (err) {
+          btn.textContent = 'Failed';
+          btn.disabled = false;
+        }
+      }
+    });
   });
 }
 
