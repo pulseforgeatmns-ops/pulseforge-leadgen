@@ -1220,10 +1220,10 @@ body.light-mode .ask-max-answer { color: var(--text-primary); }
 .action-card.urgent .action-card-title::before { content: '🔥 '; }
 .action-card-type {
   font-family: 'JetBrains Mono', monospace; font-size: 0.52rem; letter-spacing: 2px;
-  text-transform: uppercase; color: var(--gray-light);
+  text-transform: uppercase; color: #8890a8;
 }
-.action-card-title { font-size: 0.85rem; font-weight: 600; color: var(--white); line-height: 1.3; }
-.action-card-desc { font-size: 0.73rem; color: rgba(255,255,255,0.55); line-height: 1.55; }
+.action-card-title { font-size: 0.85rem; font-weight: 600; color: #f0eeff; line-height: 1.3; }
+.action-card-desc { font-size: 0.73rem; color: #a0a0b8; line-height: 1.55; }
 .action-card-footer { display: flex; gap: 0.5rem; margin-top: 0.3rem; }
 .action-btn-exec {
   flex: 1; padding: 0.4rem 0; border: none; border-radius: 6px;
@@ -1241,8 +1241,15 @@ body.light-mode .ask-max-answer { color: var(--text-primary); }
 .action-btn-dismiss:hover { color: var(--red); border-color: var(--red); }
 .action-age {
   font-family: 'JetBrains Mono', monospace; font-size: 0.55rem;
-  color: var(--gray); margin-top: auto; padding-top: 0.3rem;
+  color: #6b758e; margin-top: auto; padding-top: 0.3rem;
 }
+body.light-mode .action-card { background: var(--bg-card); border-color: var(--border-color); }
+body.light-mode .action-card-type { color: var(--text-secondary); }
+body.light-mode .action-card-title { color: var(--text-primary); }
+body.light-mode .action-card-desc { color: var(--text-secondary); }
+body.light-mode .action-age { color: var(--text-muted); }
+body.light-mode .actions-empty,
+body.light-mode .actions-empty-text { color: var(--text-secondary); }
 .actions-empty { text-align: center; padding: 4rem; color: var(--gray-light); }
 .actions-empty-icon { font-size: 2rem; margin-bottom: 0.75rem; }
 .actions-empty-text { font-size: 0.8rem; }
@@ -5394,6 +5401,14 @@ document.getElementById('askMaxForm')?.addEventListener('submit', submitAskMax);
 // ── ACTIONS TAB ───────────────────────────────────────────────────
 let _actionsLoaded = false;
 
+function isVisibleAction(a) {
+  const type = String(a.action_type || a.type || '').toLowerCase();
+  if (type === 'agent_idle') return false;
+  const category = String(a.action_type || a.type || '').replace(/_/g, ' ').toUpperCase();
+  if (category === 'AGENT IDLE') return false;
+  return true;
+}
+
 async function loadActions() {
   const grid   = document.getElementById('actionsGrid');
   const empty  = document.getElementById('actionsEmpty');
@@ -5402,7 +5417,7 @@ async function loadActions() {
   try {
     const res = await fetch('/api/actions', { credentials: 'include' });
     if (!res.ok) return;
-    const actions = await res.json();
+    const actions = (await res.json()).filter(isVisibleAction);
     _actionsLoaded = true;
 
     if (badge) {
@@ -5477,7 +5492,7 @@ async function dismissAction(id) {
   try {
     const res = await fetch('/api/actions', { credentials: 'include' });
     if (!res.ok) return;
-    const actions = await res.json();
+    const actions = (await res.json()).filter(isVisibleAction);
     const badge = document.getElementById('actionsBadge');
     if (badge && actions.length > 0) { badge.textContent = actions.length; badge.style.display = 'inline-block'; }
   } catch(_) {}

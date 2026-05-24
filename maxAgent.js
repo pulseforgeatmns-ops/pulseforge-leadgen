@@ -418,27 +418,6 @@ async function createActions(snapshot) {
     });
   }
 
-  // Agents idle 48h+
-  try {
-    const idleAgents = await pool.query(`
-      SELECT agent_name, MAX(ran_at) as last_run
-      FROM agent_log
-      WHERE agent_name NOT IN ('riley')
-        AND client_id = $1
-      GROUP BY agent_name
-      HAVING MAX(ran_at) < NOW() - INTERVAL '48 hours'
-      ORDER BY last_run ASC
-    `, [CLIENT_ID]);
-    for (const a of idleAgents.rows) {
-      actions.push({
-        action_type: 'agent_idle',
-        title: `${a.agent_name} hasn't run in 48+ hours`,
-        description: `${a.agent_name} last ran ${new Date(a.last_run).toLocaleDateString()}. Check the cron schedule or run it manually from the dashboard.`,
-        payload: { agent_name: a.agent_name, last_run: a.last_run },
-      });
-    }
-  } catch (_) {}
-
   // >10 untouched prospects
   if (snapshot.untouched.length >= 10) {
     actions.push({
