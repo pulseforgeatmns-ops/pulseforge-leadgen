@@ -14,12 +14,26 @@ const {
 } = require('../utils/publishPipeline');
 
 const requireAuth = [sessionAuth, requireRole('admin', 'manager')];
+let prospectSetterAssignmentSchemaPromise;
 const EXCLUDE_COMMAND_FEED_ACTIONS_SQL = `
   NOT (
     LOWER(REPLACE(COALESCE(al.agent_name, ''), '_agent', '')) = 'max'
     AND COALESCE(al.action, '') IN ('daily_brief', 'daily_digest')
   )
 `;
+
+function ensureProspectSetterAssignmentSchema() {
+  if (!prospectSetterAssignmentSchemaPromise) {
+    prospectSetterAssignmentSchemaPromise = pool.query(`
+      ALTER TABLE prospects
+      ADD COLUMN IF NOT EXISTS assigned_setter_id INTEGER REFERENCES users(id)
+    `).catch(err => {
+      prospectSetterAssignmentSchemaPromise = null;
+      throw err;
+    });
+  }
+  return prospectSetterAssignmentSchemaPromise;
+}
 
 router.get('/api/me', sessionAuth, (req, res) => {
   res.json({ user: req.user, active_client_id: req.session?.active_client_id || 1 });
@@ -448,11 +462,14 @@ router.get('/api/prospects/:id/preview', requireAuth, async (req, res) => {
 
 router.get('/api/prospects/:id/detail', requireAuth, async (req, res) => {
   try {
+    await ensureProspectSetterAssignmentSchema();
     const clientId = getRequestClientId(req);
     const prospectRes = await pool.query(`
       SELECT
         p.*, c.name AS company_name, c.location AS city, c.website,
         u.name AS closer_name,
+        su.name AS assigned_setter_name,
+        su.email AS assigned_setter_email,
         COALESCE(eng.open_count, 0)::int AS open_count,
         COALESCE(eng.click_count, 0)::int AS click_count,
         COALESCE(seq.send_count, 0)::int AS send_count,
@@ -460,6 +477,7 @@ router.get('/api/prospects/:id/detail', requireAuth, async (req, res) => {
       FROM prospects p
       LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
       LEFT JOIN users u ON u.id = p.closer_id
+      LEFT JOIN users su ON su.id = p.assigned_setter_id
       LEFT JOIN (
         SELECT prospect_id,
           COUNT(*) FILTER (WHERE action_type IN ('open', 'email_opened'))::int AS open_count,
@@ -529,6 +547,9 @@ router.get('/api/prospects/:id/detail', requireAuth, async (req, res) => {
       icp_score: p.icp_score,
       status: p.status,
       setter_status: p.setter_status,
+      assigned_setter_id: p.assigned_setter_id,
+      assigned_setter_name: p.assigned_setter_name,
+      assigned_setter_email: p.assigned_setter_email,
       closer_id: p.closer_id,
       closer_name: p.closer_name,
       notes: p.notes,
@@ -546,6 +567,84 @@ router.get('/api/prospects/:id/detail', requireAuth, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/setters/assignable', requireAuth, async (_req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, name, email, role
+      FROM users
+      WHERE role IN ('setter', 'sales')
+        AND active = true
+      ORDER BY name ASC, email ASC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/prospects/:id/assign-setter', requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await ensureProspectSetterAssignmentSchema();
+    const clientId = getRequestClientId(req);
+    const setterId = Number.parseInt(req.body.setter_id, 10);
+    const note = String(req.body.note || '').slice(0, 2000).trim();
+    if (!Number.isInteger(setterId)) return res.status(400).json({ error: 'Setter is required' });
+
+    await client.query('BEGIN');
+    const setterRes = await client.query(`
+      SELECT id, name, email
+      FROM users
+      WHERE id = $1
+        AND role IN ('setter', 'sales')
+        AND active = true
+      LIMIT 1
+    `, [setterId]);
+    if (!setterRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Setter not found' });
+    }
+
+    const prospectRes = await client.query(`
+      UPDATE prospects
+      SET setter_visible = true,
+          assigned_setter_id = $1,
+          setter_status = COALESCE(setter_status, 'new'),
+          setter_updated_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $2
+        AND client_id = $3
+      RETURNING id, client_id
+    `, [setterId, req.params.id, clientId]);
+    if (!prospectRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Prospect not found' });
+    }
+
+    const setter = setterRes.rows[0];
+    const subject = `Assigned to setter ${setter.name}`;
+    await client.query(`
+      INSERT INTO touchpoints
+        (prospect_id, channel, action_type, content_summary, outcome, sentiment, agent_id, client_id)
+      VALUES ($1, 'manual', 'setter_assigned', $2, $3, 'neutral', $4, $5)
+    `, [
+      prospectRes.rows[0].id,
+      subject,
+      note || null,
+      String(req.user?.id || ''),
+      prospectRes.rows[0].client_id,
+    ]);
+
+    await client.query('COMMIT');
+    res.json({ success: true, setter });
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_rollbackErr) {}
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
   }
 });
 

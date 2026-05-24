@@ -855,8 +855,30 @@ body.light-mode .agent-card:not(.not-configured) {
 .touch-form { display: none; width: 100%; gap: 6px; }
 .touch-form.visible { display: flex; }
 .pm-toast { color: var(--green); font-size: 0.65rem; align-self: center; min-width: 70px; }
+.setter-assign-backdrop {
+  position: fixed; inset: 0; z-index: 3200; display: none;
+  align-items: center; justify-content: center; padding: 1rem;
+  background: rgba(0,0,0,0.45);
+}
+.setter-assign-backdrop.visible { display: flex; }
+.setter-assign-modal {
+  width: min(420px, 94vw); border: 1px solid var(--border);
+  border-radius: 8px; background: var(--bg1); padding: 1rem;
+  box-shadow: 0 16px 42px rgba(0,0,0,0.42);
+}
+.setter-assign-title { font-size: 0.92rem; font-weight: 700; margin-bottom: 0.35rem; }
+.setter-assign-sub { color: var(--gray-light); font-size: 0.68rem; line-height: 1.45; margin-bottom: 0.8rem; }
+.setter-assign-field { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.7rem; }
+.setter-assign-field label {
+  font-family: 'JetBrains Mono', monospace; color: var(--gray);
+  font-size: 0.55rem; letter-spacing: 1px; text-transform: uppercase;
+}
+.setter-assign-field .pm-select, .setter-assign-field .pm-input { width: 100%; }
+.setter-assign-field textarea.pm-input { min-height: 86px; resize: vertical; line-height: 1.4; }
+.setter-assign-actions { display: flex; justify-content: flex-end; gap: 8px; }
 body.light-mode .prospect-preview-card,
 body.light-mode .prospect-modal,
+body.light-mode .setter-assign-modal,
 body.light-mode .pm-close,
 body.light-mode .preview-btn,
 body.light-mode .pm-action-btn,
@@ -3145,7 +3167,7 @@ function _relTime(d) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 function _esc(s) {
-  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function _parseComment(raw) {
@@ -3309,6 +3331,7 @@ let _feedFilterMode = 'all';
 let _previewHideTimer = null;
 let _activePreviewProspectId = null;
 let _activeModalProspectId = null;
+let _assignableSettersCache = null;
 
 function _scoreClass(score) {
   const n = Number(score || 0);
@@ -3476,6 +3499,7 @@ function prospectModalHtml(p) {
     </div>
     <div class="pm-actions">
       <button class="pm-action-btn" type="button" id="pmLogTouch">Log Manual Touch</button>
+      <button class="pm-action-btn" type="button" id="pmAssignSetter">Assign to Setter</button>
       <select class="pm-select" id="pmStatusSelect">
         ${['cold','warm','hot','dead'].map(s => `<option value="${s}" ${s === (p.status || '').toLowerCase() ? 'selected' : ''}>${s}</option>`).join('')}
       </select>
@@ -3499,6 +3523,26 @@ function prospectModalHtml(p) {
         </select>
         <button class="pm-action-btn" type="button" id="pmTouchSubmit">Submit</button>
       </div>
+    </div>
+    <div class="setter-assign-backdrop" id="pmAssignBackdrop">
+      <div class="setter-assign-modal" onclick="event.stopPropagation()">
+        <div class="setter-assign-title">Assign to Setter</div>
+        <div class="setter-assign-sub">Make this prospect visible in the setter queue and add an assignment touchpoint.</div>
+        <div class="setter-assign-field">
+          <label for="pmSetterSelect">Setter</label>
+          <select class="pm-select" id="pmSetterSelect">
+            <option value="">Loading setters...</option>
+          </select>
+        </div>
+        <div class="setter-assign-field">
+          <label for="pmSetterNote">Note</label>
+          <textarea class="pm-input" id="pmSetterNote" placeholder="Optional context for the setter"></textarea>
+        </div>
+        <div class="setter-assign-actions">
+          <button class="pm-action-btn" type="button" id="pmAssignCancel">Cancel</button>
+          <button class="pm-action-btn" type="button" id="pmAssignSubmit">Assign</button>
+        </div>
+      </div>
     </div>`;
 }
 
@@ -3507,7 +3551,7 @@ function overviewHtml(p) {
   return `<div class="pm-grid">
     <div class="pm-box"><div class="pm-label">Contact</div><div class="pm-value">${_esc(p.email || 'No email')}<br>${_esc(p.phone || 'No phone')}</div></div>
     <div class="pm-box"><div class="pm-label">Business</div><div class="pm-value">${_esc(p.vertical || 'unknown')} · ${_esc(p.city || '—')}<br>${p.website ? `<a href="${_esc(p.website)}" target="_blank">${_esc(p.website)}</a>` : 'No website'}</div></div>
-    <div class="pm-box"><div class="pm-label">Pipeline</div><div class="pm-value">Status: ${_esc(p.status || 'cold')}<br>Setter: ${_esc(p.setter_status || '—')}<br>Closer: ${_esc(p.closer_name || p.closer_id || '—')}</div></div>
+    <div class="pm-box"><div class="pm-label">Pipeline</div><div class="pm-value">Status: ${_esc(p.status || 'cold')}<br>Setter: ${_esc(p.assigned_setter_name || p.setter_status || '—')}${p.assigned_setter_email ? `<br>${_esc(p.assigned_setter_email)}` : ''}<br>Closer: ${_esc(p.closer_name || p.closer_id || '—')}</div></div>
     <div class="pm-box"><div class="pm-label">Stats</div><div class="pm-value">${p.open_count || 0} opens · ${p.send_count || 0} sends<br>${days} days in pipeline</div></div>
     <div class="pm-box" style="grid-column:1/-1"><div class="pm-label">Notes</div><div class="pm-value">${_esc(p.notes || 'No notes')}</div></div>
   </div>`;
@@ -3543,6 +3587,10 @@ function bindProspectModal(p) {
     });
   });
   document.getElementById('pmLogTouch').onclick = () => toggleTouchForm();
+  document.getElementById('pmAssignSetter').onclick = () => openSetterAssignModal(p.id);
+  document.getElementById('pmAssignBackdrop').onclick = closeSetterAssignModal;
+  document.getElementById('pmAssignCancel').onclick = closeSetterAssignModal;
+  document.getElementById('pmAssignSubmit').onclick = () => submitSetterAssignment(p.id);
   document.getElementById('pmTouchSubmit').onclick = () => submitModalTouch(p.id);
   document.getElementById('pmStatusSelect').onchange = e => updateModalStatus(p.id, e.target.value);
   document.getElementById('pmDnc').onclick = () => markModalDnc(p.id);
@@ -3557,6 +3605,61 @@ function modalToast(text) {
   if (!el) return;
   el.textContent = text;
   setTimeout(() => { el.textContent = ''; }, 2200);
+}
+
+async function getAssignableSetters() {
+  if (_assignableSettersCache) return _assignableSettersCache;
+  const res = await fetch('/api/setters/assignable', { credentials: 'include' });
+  if (!res.ok) throw new Error('setters unavailable');
+  _assignableSettersCache = await res.json();
+  return _assignableSettersCache;
+}
+
+async function openSetterAssignModal(id) {
+  const backdrop = document.getElementById('pmAssignBackdrop');
+  const select = document.getElementById('pmSetterSelect');
+  const note = document.getElementById('pmSetterNote');
+  if (!backdrop || !select) return;
+  backdrop.classList.add('visible');
+  select.innerHTML = '<option value="">Loading setters...</option>';
+  if (note) note.value = '';
+  try {
+    const setters = await getAssignableSetters();
+    select.innerHTML = setters.length
+      ? '<option value="">Select a setter</option>' + setters.map(s => `<option value="${_esc(s.id)}">${_esc(s.name)} — ${_esc(s.email)}</option>`).join('')
+      : '<option value="">No active setters found</option>';
+  } catch (e) {
+    select.innerHTML = '<option value="">Failed to load setters</option>';
+  }
+}
+
+function closeSetterAssignModal() {
+  document.getElementById('pmAssignBackdrop')?.classList.remove('visible');
+}
+
+async function submitSetterAssignment(id) {
+  const setter_id = document.getElementById('pmSetterSelect')?.value || '';
+  const note = document.getElementById('pmSetterNote')?.value || '';
+  if (!setter_id) {
+    modalToast('Choose a setter');
+    return;
+  }
+  const btn = document.getElementById('pmAssignSubmit');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(`/api/prospects/${encodeURIComponent(id)}/assign-setter`, {
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ setter_id, note })
+    });
+    if (!res.ok) throw new Error('request failed');
+    const data = await res.json();
+    closeSetterAssignModal();
+    modalToast(`Assigned to ${data.setter?.name || 'setter'} ✓`);
+  } catch (e) {
+    modalToast('Assign failed');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function submitModalTouch(id) {
