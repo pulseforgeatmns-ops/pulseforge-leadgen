@@ -1232,6 +1232,23 @@ body.light-mode .ask-max-answer { color: var(--text-primary); }
   cursor: pointer; transition: opacity 0.2s;
 }
 .action-btn-exec:hover { opacity: 0.85; }
+.action-btn-exec:disabled, .action-btn-dismiss:disabled { opacity: 0.5; cursor: not-allowed; }
+.action-max-response {
+  border: 0.5px solid rgba(124,77,219,0.3);
+  border-left: 3px solid var(--accent);
+  background: var(--purple-glow);
+  border-radius: 8px;
+  padding: 0.7rem 0.8rem;
+}
+.action-max-response-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.55rem; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--accent-light); margin-bottom: 0.4rem;
+}
+.action-max-response-text {
+  font-size: 0.76rem; color: var(--text-secondary);
+  line-height: 1.6; white-space: pre-wrap;
+}
 .action-btn-dismiss {
   padding: 0.4rem 0.75rem; border: 1px solid var(--border); border-radius: 6px;
   background: transparent; color: var(--gray-light);
@@ -5461,17 +5478,68 @@ async function loadActions() {
   }
 }
 
+function _refreshActionsEmptyState() {
+  const remaining = document.querySelectorAll('.action-card').length;
+  const badge = document.getElementById('actionsBadge');
+  if (badge) { badge.textContent = remaining; if (!remaining) badge.style.display = 'none'; }
+  if (!remaining) { const empty = document.getElementById('actionsEmpty'); if (empty) empty.style.display = 'block'; }
+}
+
 async function execAction(id) {
   const card = document.getElementById(`ac-${id}`);
-  if (card) card.style.opacity = '0.4';
+  if (!card) return;
+  const execBtn    = card.querySelector('.action-btn-exec');
+  const dismissBtn = card.querySelector('.action-btn-dismiss');
+  if (execBtn && execBtn.disabled) return; // already processing
+  const title = (card.querySelector('.action-card-title')?.textContent || '').trim();
+  const desc  = (card.querySelector('.action-card-desc')?.textContent || '').trim();
+  const message = `Execute this action: ${title}${desc ? ` — ${desc}` : ''}`;
+
+  // Loading state on the button while Max responds
+  if (execBtn)    { execBtn.disabled = true; execBtn.textContent = 'Max working…'; }
+  if (dismissBtn)   dismissBtn.disabled = true;
+
+  // Hand the action to Max so he processes it autonomously
+  let answer;
   try {
-    await fetch(`/api/actions/${id}/execute`, { method: 'POST', credentials: 'include', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ result: 'Marked done from dashboard' }) });
-    if (card) card.remove();
-    const remaining = document.querySelectorAll('.action-card').length;
-    const badge = document.getElementById('actionsBadge');
-    if (badge) { badge.textContent = remaining; if (!remaining) badge.style.display = 'none'; }
-    if (!remaining) { const empty = document.getElementById('actionsEmpty'); if (empty) empty.style.display = 'block'; }
-  } catch(e) { if (card) card.style.opacity = '1'; }
+    const res = await fetch('/api/max/ask', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: message })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Max did not respond');
+    answer = data.answer || 'Max processed the action but returned no message.';
+  } catch (err) {
+    answer = `Max could not process this action: ${err.message}`;
+  }
+
+  // Show Max's response inline below the action card
+  let resp = card.querySelector('.action-max-response');
+  if (!resp) {
+    resp = document.createElement('div');
+    resp.className = 'action-max-response';
+    card.insertBefore(resp, card.querySelector('.action-card-footer'));
+  }
+  resp.innerHTML = `<div class="action-max-response-label">⚡ Max</div><div class="action-max-response-text">${_esc(answer)}</div>`;
+  if (execBtn) execBtn.textContent = '✓ Done';
+
+  // Mark the action done on the backend
+  try {
+    await fetch(`/api/actions/${id}/execute`, {
+      method: 'POST', credentials: 'include',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ result: answer.slice(0, 1000) })
+    });
+  } catch(_) {}
+
+  // Dismiss the card once the user has had time to read Max's response
+  setTimeout(() => {
+    card.style.transition = 'opacity 0.4s ease';
+    card.style.opacity = '0';
+    setTimeout(() => { card.remove(); _refreshActionsEmptyState(); }, 400);
+  }, 6000);
 }
 
 async function dismissAction(id) {
