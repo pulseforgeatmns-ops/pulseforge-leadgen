@@ -30,13 +30,11 @@ async function getCallCandidates() {
         WHERE t.prospect_id = p.id
           AND t.channel = 'email'
           AND t.action_type = 'outbound'
-          AND t.created_at > NOW() - INTERVAL '14 days'
-      ) >= 3
+      ) >= 1
       AND NOT EXISTS (
         SELECT 1 FROM touchpoints t2
         WHERE t2.prospect_id = p.id
           AND t2.channel = 'call'
-          AND t2.created_at > NOW() - INTERVAL '7 days'
       )
     ORDER BY p.icp_score DESC
     LIMIT $1
