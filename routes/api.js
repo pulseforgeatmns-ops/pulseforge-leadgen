@@ -950,7 +950,64 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
     const row = logRes.rows[0];
     const action = String(row.action || '');
     const payload = row.payload || {};
-    const effectiveClientId = row.client_id || clientId;
+
+    // Bounce-event fallback: Riley/Brevo sometimes logs bounces under one client_id
+    // while the prospect actually lives under a different one (e.g. NH log row,
+    // Nashville prospect). The strict-client JOIN above silently misses, so re-run
+    // an unscoped lookup so the detail panel can still surface name/company/score.
+    // The session already has access to this log row (which references prospect_id),
+    // so widening this single lookup does not expose any new prospect.
+    const isBounceEvent = action === 'email_bounced' || action === 'email_soft_bounce';
+    let recoveredClientId = null;
+    if (isBounceEvent && !row.first_name && !row.last_name && !row.prospect_email) {
+      let fbRes = null;
+      if (row.prospect_id) {
+        fbRes = await pool.query(`
+          SELECT p.id, p.first_name, p.last_name, p.email AS prospect_email, p.phone,
+                 p.vertical, p.icp_score, p.status AS prospect_status,
+                 p.last_contacted_at, p.notes, p.client_id AS p_client_id,
+                 c.name AS company_name
+          FROM prospects p
+          LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+          WHERE p.id = $1
+          LIMIT 1
+        `, [row.prospect_id]);
+      }
+      if ((!fbRes || !fbRes.rows.length) && payload && payload.email) {
+        fbRes = await pool.query(`
+          SELECT p.id, p.first_name, p.last_name, p.email AS prospect_email, p.phone,
+                 p.vertical, p.icp_score, p.status AS prospect_status,
+                 p.last_contacted_at, p.notes, p.client_id AS p_client_id,
+                 c.name AS company_name
+          FROM prospects p
+          LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+          WHERE LOWER(p.email) = LOWER($1)
+          ORDER BY p.last_contacted_at DESC NULLS LAST
+          LIMIT 1
+        `, [payload.email]);
+      }
+      if (fbRes && fbRes.rows.length) {
+        const fb = fbRes.rows[0];
+        row.prospect_id = row.prospect_id || fb.id;
+        row.first_name = fb.first_name;
+        row.last_name = fb.last_name;
+        row.prospect_email = fb.prospect_email;
+        row.phone = fb.phone;
+        row.vertical = fb.vertical;
+        row.icp_score = fb.icp_score;
+        row.prospect_status = fb.prospect_status;
+        row.last_contacted_at = fb.last_contacted_at;
+        row.notes = fb.notes;
+        row.company_name = fb.company_name;
+        recoveredClientId = fb.p_client_id;
+        console.log('[activity-details] bounce_fallback_recovered', {
+          id: row.id, prospect_id: row.prospect_id,
+          log_client_id: row.client_id, prospect_client_id: recoveredClientId,
+        });
+      }
+    }
+
+    const effectiveClientId = recoveredClientId || row.client_id || clientId;
 
     const companyName = row.company_name
       || String(row.notes || '').split('—')[0].trim()
@@ -1005,7 +1062,11 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
       case 'email_bounced':
       case 'email_soft_bounce':
         f('Prospect', prospectName);
+        f('Company', companyName);
         f('Email', row.prospect_email || payload.email);
+        f('Vertical', row.vertical);
+        f('ICP score', row.icp_score);
+        f('Total touchpoints', eng.touch_count ?? 0);
         f('Bounce type', action === 'email_bounced' ? 'Hard' : 'Soft');
         f('Sequence step bounced', sequenceStepLabel(eng.send_count));
         break;
