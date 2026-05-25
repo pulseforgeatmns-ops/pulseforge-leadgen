@@ -94,7 +94,9 @@ router.post('/webhooks/brevo', (req, res) => {
 
       if (actionType === 'email_opened') {
         const openRes = await pool.query(`
-          SELECT COUNT(*)::int AS open_count
+          SELECT
+            COUNT(*)::int AS open_count,
+            EXTRACT(EPOCH FROM (MAX(created_at) - MIN(created_at))) / 60 AS open_spread_minutes
           FROM touchpoints
           WHERE prospect_id = $1
             AND client_id = $2
@@ -103,8 +105,9 @@ router.post('/webhooks/brevo', (req, res) => {
             AND created_at >= NOW() - INTERVAL '24 hours'
         `, [prospect.id, prospect.client_id]);
         const openCount = Number(openRes.rows[0]?.open_count || 0);
+        const openSpreadMinutes = Number(openRes.rows[0]?.open_spread_minutes || 0);
 
-        if (openCount >= 2) {
+        if (openCount >= 2 && openSpreadMinutes >= 10) {
           const company =
             prospect.company_name ||
             String(prospect.notes || '').split('—')[0].trim() ||
