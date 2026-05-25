@@ -64,6 +64,32 @@ async function loadPipelineContext(clientId) {
   };
 }
 
+function shouldLoadProspectContext(question) {
+  return /\b(prospect|prospects|contact|contacts|lead|leads|ready|warm|hot|flag|flagging|trigger|emmett|send|email|outreach|follow[-\s]?up|name|names)\b/i.test(question);
+}
+
+async function loadProspectContext(clientId) {
+  const prospectContext = await pool.query(`
+    SELECT p.id, p.first_name, p.last_name,
+           COALESCE(c.name, NULLIF(TRIM(SPLIT_PART(p.notes, ' — ', 1)), '')) AS company,
+           p.email, p.phone, p.vertical, c.location AS city, p.icp_score, p.status, p.is_hot,
+           (SELECT COUNT(*)::int FROM touchpoints t WHERE t.prospect_id = p.id AND t.client_id = p.client_id) as touch_count
+    FROM prospects p
+    LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+    WHERE p.client_id = $1
+    AND p.do_not_contact IS NOT TRUE
+    AND p.status IN ('cold', 'warm')
+    AND p.email IS NOT NULL
+    ORDER BY
+      CASE WHEN p.status = 'warm' THEN 0 ELSE 1 END,
+      p.is_hot DESC NULLS LAST,
+      p.icp_score DESC
+    LIMIT 20
+  `, [clientId]);
+
+  return prospectContext.rows;
+}
+
 router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
   try {
     const question = String(req.body?.question || '').trim().slice(0, 2000);
@@ -72,14 +98,20 @@ router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
 
     const clientId = getRequestClientId(req);
     const context = await loadPipelineContext(clientId);
+    const actionableProspects = shouldLoadProspectContext(question)
+      ? await loadProspectContext(clientId)
+      : [];
     const message = await anthropic.messages.create({
       model: process.env.MAX_CHAT_MODEL || 'claude-sonnet-4-5',
       max_tokens: 700,
-      system: `You are Max, the manager agent for Pulseforge. You answer operator questions about the sales and marketing pipeline using only the provided database context. Be concise, direct, and practical. If the context does not contain enough evidence, say what is missing instead of inventing details. Prioritize warm signals, pipeline risk, next actions, and anomalies.`,
+      system: `You are Max, the manager agent for Pulseforge. You answer operator questions about the sales and marketing pipeline using only the provided database context. Be concise, direct, and practical. If the context does not contain enough evidence, say what is missing instead of inventing details. Prioritize warm signals, pipeline risk, next actions, and anomalies. When the user asks you to take an action like triggering Emmett or flagging prospects, respond with the specific prospect names and emails from the context provided, and confirm what action you would take. You have access to real prospect data - use it.`,
       messages: [{
         role: 'user',
         content: `Current pipeline context:
 ${JSON.stringify(context, null, 2)}
+
+Actionable prospect context:
+${JSON.stringify(actionableProspects, null, 2)}
 
 User question:
 ${question}`,
