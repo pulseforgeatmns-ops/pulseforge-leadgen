@@ -72,6 +72,82 @@ function digestSnapshotWithMarketLabels(snapshot) {
   };
 }
 
+function normalizeCompanyName(value) {
+  if (!value) return '';
+  return String(value)
+    .replace(/\s*\([^)]*\)\s*$/, '') // drop trailing market parenthetical
+    .toLowerCase()
+    .replace(/[^a-z0-9&]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Business names actually handed to the LLM this run — the only ones it may reference.
+function snapshotCompanyNameSet(snapshot) {
+  const names = new Set();
+  for (const key of ['recentTouchpoints', 'untouched', 'cold', 'clickedToday']) {
+    for (const row of snapshot[key] || []) {
+      for (const v of [row.raw_company_name, row.company_name, row.company_name_with_market]) {
+        const n = normalizeCompanyName(v);
+        if (n) names.add(n);
+      }
+    }
+  }
+  return names;
+}
+
+async function getKnownCompanyNames() {
+  const res = await pool.query(
+    `SELECT name FROM companies WHERE client_id = $1 AND name IS NOT NULL`,
+    [CLIENT_ID]
+  ).catch(() => ({ rows: [] }));
+  const names = new Set();
+  for (const row of res.rows) {
+    const n = normalizeCompanyName(row.name);
+    if (n) names.add(n);
+  }
+  return names;
+}
+
+// Post-generation guardrail: strip any business the model named that does not
+// trace back to a fetched snapshot row or a row in the companies table.
+async function verifyDigestProspects(digestText, snapshot) {
+  if (!digestText) return digestText;
+
+  const allowed = snapshotCompanyNameSet(snapshot);
+  for (const n of await getKnownCompanyNames()) allowed.add(n);
+
+  // Max is instructed to tag every prospect mention as "Business Name (Market ST)".
+  // Only treat parentheticals carrying a state token as company mentions.
+  const mentionRe = /([A-Z][A-Za-z0-9&'.\-]*(?:\s+[A-Z0-9&][A-Za-z0-9&'.\-]*)*)\s*\(([^)]+)\)/g;
+  const flagged = new Set();
+  let match;
+  while ((match = mentionRe.exec(digestText)) !== null) {
+    const [full, rawName, market] = match;
+    if (!hasStateToken(market)) continue;
+    if (allowed.has(normalizeCompanyName(rawName))) continue;
+    flagged.add(full.trim());
+  }
+
+  if (!flagged.size) {
+    await insertAgentLog('digest_prospect_validation', { flagged: 0 }).catch(() => {});
+    return digestText;
+  }
+
+  let cleaned = digestText;
+  for (const mention of flagged) {
+    console.warn(`[Max] Digest referenced unverified business "${mention}" — stripping from output`);
+    cleaned = cleaned.split(mention).join('[unverified prospect removed]');
+  }
+
+  await insertAgentLog('digest_prospect_validation', {
+    flagged: flagged.size,
+    stripped: [...flagged],
+  }, 'partial').catch(() => {});
+
+  return cleaned;
+}
+
 async function getSystemSnapshot() {
   // Prospect breakdown by status
   const prospectStats = await pool.query(`
@@ -371,6 +447,7 @@ Generate a concise daily digest with:
 
 Be direct, specific, and actionable. Use plain text, no markdown. Keep each section to 2-4 sentences max. Write like a sharp operations manager giving a morning briefing.`
         + `\n\nWhenever you mention a prospect by business name in TOP PRIORITIES, WARM SIGNALS, WATCH LIST, or RECOMMENDATIONS, use company_name_with_market exactly so the market appears in parentheses, e.g. "TT Hair Salon (Manchester NH)".`
+        + `\n\nCRITICAL: Only reference businesses that appear in the snapshot above (in recentTouchpoints, untouched, cold, or clickedToday). Never invent, infer, or recall a company name from memory. Copy every business name verbatim from the snapshot's company_name_with_market field. If a section has no qualifying prospects in the snapshot, say so plainly instead of naming any business.`
     }]
   });
 
@@ -906,7 +983,8 @@ async function run() {
     }
 
     console.log('Generating insights with Claude...');
-    const insights = await generateInsights(snapshot);
+    const rawInsights = await generateInsights(snapshot);
+    const insights = await verifyDigestProspects(rawInsights, snapshot);
 
     console.log('\n--- DIGEST PREVIEW ---');
     console.log(insights);
