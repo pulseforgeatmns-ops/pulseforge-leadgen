@@ -53,6 +53,8 @@ body::before { content:''; position:fixed; inset:0; background:repeating-linear-
 .clock { font-family:'JetBrains Mono',monospace; font-size:0.72rem; color:var(--gray-light); letter-spacing:2px; }
 .theme-toggle { width:32px; height:32px; border-radius:50%; border:1px solid var(--border); background:rgba(255,255,255,0.04); color:var(--white); display:inline-flex; align-items:center; justify-content:center; cursor:pointer; font-size:0.9rem; transition:all 0.2s; }
 .theme-toggle:hover { border-color:var(--purple-bright); color:var(--purple-bright); }
+.logout-link { font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:1px; text-transform:uppercase; color:var(--gray-light); text-decoration:none; border:1px solid var(--border); border-radius:4px; padding:6px 9px; background:rgba(255,255,255,0.025); transition:all 0.2s; white-space:nowrap; }
+.logout-link:hover { color:var(--white); border-color:rgba(255,255,255,0.18); background:rgba(255,255,255,0.045); }
 .main { flex:1; display:grid; grid-template-columns:minmax(0, 1fr) 340px; overflow:hidden; }
 .work-area { overflow-y:auto; overflow-x:hidden; padding:2rem; height:100%; min-width:0; }
 .work-area::-webkit-scrollbar, .activity-feed::-webkit-scrollbar { width:3px; }
@@ -214,6 +216,7 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
     <div class="sys-status"><div class="sys-dot"></div><span id="liveState">LIVE</span></div>
     <div class="clock" id="clock">--:--</div>
     <button class="theme-toggle" id="themeToggle" type="button" title="Toggle theme">🌙</button>
+    <a class="logout-link" href="/logout">Log out</a>
   </div>
 </div>
 
