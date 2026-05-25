@@ -979,9 +979,43 @@ body.light-mode .agent-card:not(.not-configured) {
   background: transparent; color: var(--white); border-radius: 4px; padding: 7px 9px;
 }
 .pm-action-btn { cursor: pointer; text-transform: uppercase; }
+.pm-action-btn.danger, .prospect-row-btn.danger {
+  color: var(--red);
+  border-color: rgba(255,59,92,0.28);
+  background: rgba(255,59,92,0.06);
+}
 .touch-form { display: none; width: 100%; gap: 6px; }
 .touch-form.visible { display: flex; }
 .pm-toast { color: var(--green); font-size: 0.65rem; align-self: center; min-width: 70px; }
+.prospect-edit-backdrop {
+  position: fixed; inset: 0; z-index: 3150; background: rgba(0,0,0,0.62);
+  display: none; align-items: center; justify-content: center; padding: 1.5rem;
+}
+.prospect-edit-modal {
+  width: min(680px, 96vw); max-height: 88vh; overflow: hidden;
+  background: var(--bg1); border: 1px solid var(--border); border-radius: 10px;
+  color: var(--white); display: flex; flex-direction: column;
+  box-shadow: 0 18px 60px rgba(0,0,0,0.48);
+}
+.prospect-edit-form { padding: 1rem; overflow-y: auto; }
+.prospect-edit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+.prospect-edit-field { display: flex; flex-direction: column; gap: 0.35rem; }
+.prospect-edit-field.full { grid-column: 1 / -1; }
+.prospect-edit-field label {
+  font-family: 'JetBrains Mono', monospace; color: var(--gray);
+  font-size: 0.55rem; letter-spacing: 1px; text-transform: uppercase;
+}
+.prospect-edit-field input,
+.prospect-edit-field select,
+.prospect-edit-field textarea {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
+  border: 1px solid var(--border); background: rgba(255,255,255,0.035);
+  color: var(--white); border-radius: 5px; padding: 8px 9px; outline: none;
+}
+.prospect-edit-field textarea { min-height: 110px; resize: vertical; line-height: 1.45; }
+.prospect-edit-check { flex-direction: row; align-items: center; gap: 0.5rem; }
+.prospect-edit-check input { width: auto; }
+.prospect-edit-actions { border-top: 1px solid var(--border); padding: 0.85rem 1rem; display: flex; justify-content: flex-end; gap: 8px; }
 .setter-assign-backdrop {
   position: fixed; inset: 0; z-index: 3200; display: none;
   align-items: center; justify-content: center; padding: 1rem;
@@ -1009,8 +1043,13 @@ body.light-mode .setter-assign-modal,
 body.light-mode .pm-close,
 body.light-mode .preview-btn,
 body.light-mode .pm-action-btn,
+body.light-mode .prospect-row-btn,
 body.light-mode .pm-select,
-body.light-mode .pm-input { color: var(--text-primary); }
+body.light-mode .pm-input,
+body.light-mode .prospect-edit-modal,
+body.light-mode .prospect-edit-field input,
+body.light-mode .prospect-edit-field select,
+body.light-mode .prospect-edit-field textarea { color: var(--text-primary); }
 body.light-mode .warm-signal .feed-prospect { color: var(--text-primary); }
 
 /* Max digest */
@@ -1650,6 +1689,14 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
 }
 .drawer-tp-summary { color: rgba(255,255,255,0.55); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 400px; }
 .drawer-empty { font-family: 'JetBrains Mono', monospace; font-size: 0.6rem; color: var(--gray); }
+.prospect-row-actions { display: flex; gap: 6px; }
+.prospect-row-btn {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; letter-spacing: 1px;
+  text-transform: uppercase; padding: 5px 8px; border-radius: 4px;
+  border: 1px solid var(--border); background: transparent; color: var(--gray-light);
+  cursor: pointer;
+}
+.prospect-row-btn:hover { color: var(--white); border-color: var(--gray); }
 
 /* ── Analytics panel ─────────────────────────────────────────────────── */
 .analytics-area {
@@ -2852,6 +2899,7 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
             <th data-pcol="phone">Phone</th>
             <th data-pcol="email">Email</th>
             <th data-pcol="created_at">Date Added</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody id="prospectsTableBody"></tbody>
@@ -3175,6 +3223,9 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
 <div class="prospect-preview-card" id="prospectPreview"></div>
 <div class="prospect-modal-backdrop" id="prospectModalBackdrop">
   <div class="prospect-modal" id="prospectModal"></div>
+</div>
+<div class="prospect-edit-backdrop" id="prospectEditBackdrop">
+  <div class="prospect-edit-modal" id="prospectEditModal"></div>
 </div>
 
 <!-- AGENT DETAIL OVERLAY -->
@@ -4170,6 +4221,7 @@ function prospectModalHtml(p) {
     </div>
     <div class="pm-actions">
       <button class="pm-action-btn" type="button" id="pmLogTouch">Log Manual Touch</button>
+      <button class="pm-action-btn" type="button" id="pmEditProspect">Edit Prospect</button>
       <button class="pm-action-btn" type="button" id="pmAssignSetter">Assign to Setter</button>
       <select class="pm-select" id="pmStatusSelect">
         ${['cold','warm','hot','dead'].map(s => `<option value="${s}" ${s === (p.status || '').toLowerCase() ? 'selected' : ''}>${s}</option>`).join('')}
@@ -4258,6 +4310,7 @@ function bindProspectModal(p) {
     });
   });
   document.getElementById('pmLogTouch').onclick = () => toggleTouchForm();
+  document.getElementById('pmEditProspect').onclick = () => openProspectEdit(p.id);
   document.getElementById('pmAssignSetter').onclick = () => openSetterAssignModal(p.id);
   document.getElementById('pmAssignBackdrop').onclick = closeSetterAssignModal;
   document.getElementById('pmAssignCancel').onclick = closeSetterAssignModal;
@@ -4580,6 +4633,24 @@ function _parseBusiness(row) {
   return before || (row.first_name + ' ' + row.last_name).trim() || '—';
 }
 
+function _splitProspectLocation(location) {
+  const raw = String(location || '').trim();
+  if (!raw) return { city: '', state: '' };
+  const commaParts = raw.split(',').map(p => p.trim()).filter(Boolean);
+  if (commaParts.length >= 2) return { city: commaParts.slice(0, -1).join(', '), state: commaParts[commaParts.length - 1] };
+  const words = raw.split(/\s+/);
+  if (words.length > 1 && words[words.length - 1].length <= 3) {
+    return { city: words.slice(0, -1).join(' '), state: words[words.length - 1] };
+  }
+  return { city: raw, state: '' };
+}
+
+function _prospectVerticalOptions(selected) {
+  const verticals = [...new Set(_prospects.map(p => p.vertical).filter(Boolean).map(v => String(v).trim()))].sort();
+  if (selected && !verticals.includes(selected)) verticals.unshift(selected);
+  return verticals.map(v => `<option value="${_esc(v)}" ${v === selected ? 'selected' : ''}>${_esc(v)}</option>`).join('');
+}
+
 function _relTimeP(d) {
   if (!d) return 'Never';
   const s = Math.floor((Date.now() - new Date(d)) / 1000);
@@ -4681,12 +4752,18 @@ function _renderProspects() {
       <td>${p.touchpoint_count ?? 0}</td>
       <td class="${p.phone ? 'pt-check' : 'pt-dash'}">${p.phone ? '✓' : '—'}</td>
       <td class="${p.email ? 'pt-check' : 'pt-dash'}">${p.email ? '✓' : '—'}</td>
-      <td style="color:var(--muted);font-size:0.72rem;">${p.created_at ? new Date(p.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—'}</td>`;
+      <td style="color:var(--muted);font-size:0.72rem;">${p.created_at ? new Date(p.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—'}</td>
+      <td>
+        <div class="prospect-row-actions">
+          <button class="prospect-row-btn" type="button" onclick="event.stopPropagation(); openProspectEdit('${_esc(p.id)}')">Edit</button>
+          <button class="prospect-row-btn danger" type="button" onclick="event.stopPropagation(); deleteProspect('${_esc(p.id)}')">Delete</button>
+        </div>
+      </td>`;
     tr.addEventListener('click', () => toggleProspectDrawer(p, tr, visible));
     tbody.appendChild(tr);
 
     if (p.id === _expandedProspectId) {
-      tbody.appendChild(_buildDrawerRow(p, visible.length));
+      tbody.appendChild(_buildDrawerRow(p, 9));
     }
   });
 }
@@ -4700,6 +4777,8 @@ function _buildDrawerRow(p, colSpan) {
     ${notes}
     <div class="drawer-actions" style="display:flex;gap:8px;margin:0.4rem 0 0.6rem;">
       <button class="pm-action-btn" type="button" onclick="event.stopPropagation(); openProspectModal('${_esc(p.id)}', 'touch')">Log Manual Touch</button>
+      <button class="pm-action-btn" type="button" onclick="event.stopPropagation(); openProspectEdit('${_esc(p.id)}')">Edit Prospect</button>
+      <button class="pm-action-btn danger" type="button" onclick="event.stopPropagation(); deleteProspect('${_esc(p.id)}')">Delete</button>
       <button class="pm-action-btn" type="button" onclick="event.stopPropagation(); openProspectModal('${_esc(p.id)}')">View detail →</button>
     </div>
     <div class="drawer-touchpoints" id="drawer-tp-${p.id}">
@@ -4723,7 +4802,7 @@ async function toggleProspectDrawer(p, tr, visible) {
 
   _expandedProspectId = p.id;
   tr.classList.add('expanded');
-  const dr = _buildDrawerRow(p, 7);
+  const dr = _buildDrawerRow(p, 9);
   tr.after(dr);
 
   try {
@@ -4754,6 +4833,174 @@ async function loadProspects() {
     _renderProspects();
   } catch(e) { console.error('loadProspects:', e); }
 }
+
+function openProspectEdit(id) {
+  const p = _prospects.find(row => row.id === id);
+  if (!p) return;
+  const location = _splitProspectLocation(p.city);
+  const modal = document.getElementById('prospectEditModal');
+  const backdrop = document.getElementById('prospectEditBackdrop');
+  const original = {
+    first_name: p.first_name || '',
+    last_name: p.last_name || '',
+    company: _parseBusiness(p) === '—' ? '' : _parseBusiness(p),
+    email: p.email || '',
+    phone: p.phone || '',
+    vertical: p.vertical || '',
+    city: location.city,
+    state: location.state,
+    icp_score: p.icp_score ?? '',
+    status: (p.status || 'cold').toLowerCase(),
+    do_not_contact: Boolean(p.do_not_contact),
+    notes: p.notes || '',
+  };
+  modal.dataset.prospectId = id;
+  modal.dataset.original = JSON.stringify(original);
+  modal.innerHTML = `
+    <div class="pm-head">
+      <div>
+        <div class="pm-title">Edit Prospect</div>
+        <div class="pm-meta">${_esc(original.company || `${original.first_name} ${original.last_name}`.trim() || 'Unknown prospect')}</div>
+      </div>
+      <button class="pm-close" type="button" onclick="closeProspectEdit()">✕</button>
+    </div>
+    <form class="prospect-edit-form" id="prospectEditForm">
+      <div class="prospect-edit-grid">
+        <div class="prospect-edit-field"><label for="peFirstName">First name</label><input id="peFirstName" name="first_name" value="${_esc(original.first_name)}"></div>
+        <div class="prospect-edit-field"><label for="peLastName">Last name</label><input id="peLastName" name="last_name" value="${_esc(original.last_name)}"></div>
+        <div class="prospect-edit-field full"><label for="peCompany">Company</label><input id="peCompany" name="company" value="${_esc(original.company)}"></div>
+        <div class="prospect-edit-field"><label for="peEmail">Email</label><input id="peEmail" name="email" type="email" value="${_esc(original.email)}"></div>
+        <div class="prospect-edit-field"><label for="pePhone">Phone</label><input id="pePhone" name="phone" value="${_esc(original.phone)}"></div>
+        <div class="prospect-edit-field">
+          <label for="peVertical">Vertical</label>
+          <select id="peVertical" name="vertical">
+            <option value="">Unknown</option>
+            ${_prospectVerticalOptions(original.vertical)}
+          </select>
+        </div>
+        <div class="prospect-edit-field"><label for="peIcpScore">ICP Score</label><input id="peIcpScore" name="icp_score" type="number" min="0" max="100" value="${_esc(original.icp_score)}"></div>
+        <div class="prospect-edit-field"><label for="peCity">City</label><input id="peCity" name="city" value="${_esc(original.city)}"></div>
+        <div class="prospect-edit-field"><label for="peState">State</label><input id="peState" name="state" value="${_esc(original.state)}"></div>
+        <div class="prospect-edit-field">
+          <label for="peStatus">Status</label>
+          <select id="peStatus" name="status">
+            ${['cold','warm','dead'].map(s => `<option value="${s}" ${s === original.status ? 'selected' : ''}>${s}</option>`).join('')}
+          </select>
+        </div>
+        <label class="prospect-edit-field prospect-edit-check">
+          <input id="peDnc" name="do_not_contact" type="checkbox" ${original.do_not_contact ? 'checked' : ''}>
+          <span>Do Not Contact</span>
+        </label>
+        <div class="prospect-edit-field full"><label for="peNotes">Notes</label><textarea id="peNotes" name="notes">${_esc(original.notes)}</textarea></div>
+      </div>
+    </form>
+    <div class="prospect-edit-actions">
+      <span class="pm-toast" id="peToast"></span>
+      <button class="pm-action-btn" type="button" onclick="closeProspectEdit()">Cancel</button>
+      <button class="pm-action-btn" type="button" id="peSave">Save Changes</button>
+    </div>`;
+  backdrop.style.display = 'flex';
+  document.getElementById('peSave').onclick = submitProspectEdit;
+}
+
+function closeProspectEdit() {
+  document.getElementById('prospectEditBackdrop').style.display = 'none';
+}
+
+function editToast(text) {
+  const el = document.getElementById('peToast');
+  if (!el) return;
+  el.textContent = text;
+  setTimeout(() => { el.textContent = ''; }, 2200);
+}
+
+function _readProspectEditForm() {
+  return {
+    first_name: document.getElementById('peFirstName')?.value.trim() || '',
+    last_name: document.getElementById('peLastName')?.value.trim() || '',
+    company: document.getElementById('peCompany')?.value.trim() || '',
+    email: document.getElementById('peEmail')?.value.trim() || '',
+    phone: document.getElementById('pePhone')?.value.trim() || '',
+    vertical: document.getElementById('peVertical')?.value.trim() || '',
+    city: document.getElementById('peCity')?.value.trim() || '',
+    state: document.getElementById('peState')?.value.trim() || '',
+    icp_score: document.getElementById('peIcpScore')?.value === '' ? '' : Number(document.getElementById('peIcpScore').value),
+    status: document.getElementById('peStatus')?.value || 'cold',
+    do_not_contact: Boolean(document.getElementById('peDnc')?.checked),
+    notes: document.getElementById('peNotes')?.value.trim() || '',
+  };
+}
+
+function _changedProspectFields(original, current) {
+  const changed = {};
+  Object.keys(current).forEach(key => {
+    if (current[key] !== original[key]) changed[key] = current[key];
+  });
+  return changed;
+}
+
+function _mergeUpdatedProspect(updated) {
+  if (!updated?.id) return;
+  if (updated.do_not_contact) {
+    _prospects = _prospects.filter(p => p.id !== updated.id);
+  } else {
+    const idx = _prospects.findIndex(p => p.id === updated.id);
+    if (idx >= 0) _prospects[idx] = { ..._prospects[idx], ...updated };
+  }
+  if (_expandedProspectId === updated.id && updated.do_not_contact) _expandedProspectId = null;
+  _renderProspects();
+}
+
+async function submitProspectEdit() {
+  const modal = document.getElementById('prospectEditModal');
+  const id = modal?.dataset.prospectId;
+  if (!id) return;
+  const original = JSON.parse(modal.dataset.original || '{}');
+  const current = _readProspectEditForm();
+  const changed = _changedProspectFields(original, current);
+  if (!Object.keys(changed).length) {
+    editToast('No changes');
+    return;
+  }
+  const btn = document.getElementById('peSave');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(`/api/prospects/${encodeURIComponent(id)}`, {
+      method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(changed),
+    });
+    if (!res.ok) throw new Error('save failed');
+    const data = await res.json();
+    _mergeUpdatedProspect(data.prospect);
+    closeProspectEdit();
+  } catch (e) {
+    editToast('Save failed');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function deleteProspect(id) {
+  const p = _prospects.find(row => row.id === id);
+  const label = p ? _parseBusiness(p) : 'this prospect';
+  if (!confirm(`Delete ${label}? This will mark the prospect do-not-contact and dead.`)) return;
+  try {
+    const res = await fetch(`/api/prospects/${encodeURIComponent(id)}`, {
+      method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ do_not_contact: true, status: 'dead' }),
+    });
+    if (!res.ok) throw new Error('delete failed');
+    const data = await res.json();
+    _mergeUpdatedProspect(data.prospect || { id, do_not_contact: true });
+    if (_activeModalProspectId === id) closeProspectModal();
+  } catch (e) {
+    alert('Failed to delete prospect.');
+  }
+}
+
+document.getElementById('prospectEditBackdrop').addEventListener('click', e => {
+  if (e.target.id === 'prospectEditBackdrop') closeProspectEdit();
+});
 
 // Prospects filter buttons
 document.querySelectorAll('[data-pfilter]').forEach(btn => {

@@ -366,9 +366,9 @@ router.get('/api/prospects', requireAuth, async (req, res) => {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT
-        p.id, p.first_name, p.last_name, p.email, p.phone,
-        p.status, p.icp_score, p.notes, p.last_contacted_at, p.created_at,
-        c.name as company_name,
+        p.id, p.company_id, p.first_name, p.last_name, p.email, p.phone,
+        p.vertical, p.status, p.icp_score, p.do_not_contact, p.notes, p.last_contacted_at, p.created_at,
+        c.name as company_name, c.location AS city,
         COUNT(t.id)::int as touchpoint_count
       FROM prospects p
       LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
@@ -382,6 +382,162 @@ router.get('/api/prospects', requireAuth, async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+async function selectUpdatedProspect(id, clientId) {
+  const result = await pool.query(`
+    SELECT
+      p.id, p.company_id, p.first_name, p.last_name, p.email, p.phone,
+      p.vertical, p.status, p.icp_score, p.do_not_contact, p.notes,
+      p.last_contacted_at, p.created_at,
+      c.name AS company_name, c.location AS city,
+      COALESCE(tp.touchpoint_count, 0)::int AS touchpoint_count
+    FROM prospects p
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+    LEFT JOIN (
+      SELECT prospect_id, COUNT(*)::int AS touchpoint_count
+      FROM touchpoints
+      WHERE client_id = $2
+      GROUP BY prospect_id
+    ) tp ON tp.prospect_id = p.id
+    WHERE p.id = $1 AND p.client_id = $2
+    LIMIT 1
+  `, [id, clientId]);
+  return result.rows[0] || null;
+}
+
+function cleanNullable(value, maxLength = 500) {
+  if (value === null) return null;
+  if (value === undefined) return undefined;
+  const cleaned = String(value).trim().slice(0, maxLength);
+  return cleaned || null;
+}
+
+function combineLocation(city, state) {
+  const cleanedCity = cleanNullable(city, 120);
+  const cleanedState = cleanNullable(state, 40);
+  return [cleanedCity, cleanedState].filter(Boolean).join(', ') || null;
+}
+
+function splitLocation(location) {
+  const parts = String(location || '').split(',').map(part => part.trim()).filter(Boolean);
+  if (parts.length >= 2) return { city: parts.slice(0, -1).join(', '), state: parts[parts.length - 1] };
+  const words = String(location || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length > 1 && words[words.length - 1].length <= 3) {
+    return { city: words.slice(0, -1).join(' '), state: words[words.length - 1] };
+  }
+  return { city: String(location || '').trim(), state: '' };
+}
+
+router.put('/api/prospects/:id', requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const clientId = getRequestClientId(req);
+    const currentRes = await client.query(`
+      SELECT p.*, c.name AS company_name, c.location AS company_location
+      FROM prospects p
+      LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+      WHERE p.id = $1 AND p.client_id = $2
+      LIMIT 1
+    `, [req.params.id, clientId]);
+    if (!currentRes.rows.length) return res.status(404).json({ error: 'Prospect not found' });
+
+    const current = currentRes.rows[0];
+    const has = key => Object.prototype.hasOwnProperty.call(req.body || {}, key);
+    const prospectFields = [];
+    const values = [];
+    const addProspectField = (column, value) => {
+      if (current[column] === value) return;
+      values.push(value);
+      prospectFields.push(`${column} = $${values.length}`);
+    };
+
+    if (has('first_name')) addProspectField('first_name', cleanNullable(req.body.first_name, 120));
+    if (has('last_name')) addProspectField('last_name', cleanNullable(req.body.last_name, 120));
+    if (has('email')) addProspectField('email', cleanNullable(req.body.email, 320));
+    if (has('phone')) addProspectField('phone', cleanNullable(req.body.phone, 80));
+    if (has('vertical')) addProspectField('vertical', cleanNullable(req.body.vertical, 120));
+    if (has('notes')) addProspectField('notes', cleanNullable(req.body.notes, 4000));
+
+    if (has('icp_score')) {
+      const score = req.body.icp_score === null || req.body.icp_score === '' ? null : Number(req.body.icp_score);
+      if (score !== null && (!Number.isFinite(score) || score < 0 || score > 100)) {
+        return res.status(400).json({ error: 'ICP score must be between 0 and 100' });
+      }
+      addProspectField('icp_score', score);
+    }
+
+    if (has('status')) {
+      const status = String(req.body.status || '').toLowerCase();
+      if (!['cold', 'warm', 'dead'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+      addProspectField('status', status);
+    }
+
+    if (has('do_not_contact')) {
+      addProspectField('do_not_contact', Boolean(req.body.do_not_contact));
+    }
+
+    const companyChanged = has('company') && cleanNullable(req.body.company, 220) !== (current.company_name || null);
+    const existingLocation = splitLocation(current.company_location);
+    const location = (has('city') || has('state')) ? combineLocation(
+      has('city') ? req.body.city : existingLocation.city,
+      has('state') ? req.body.state : existingLocation.state
+    ) : undefined;
+    const locationChanged = location !== undefined && location !== (current.company_location || null);
+
+    await client.query('BEGIN');
+
+    if (companyChanged || locationChanged) {
+      const companyName = has('company') ? cleanNullable(req.body.company, 220) : current.company_name;
+      const companyNameForWrite = companyName || 'Unknown Company';
+      const companyLocation = location !== undefined ? location : current.company_location;
+      if (current.company_id) {
+        const setParts = [];
+        const companyValues = [];
+        if (companyChanged) {
+          companyValues.push(companyNameForWrite);
+          setParts.push(`name = $${companyValues.length}`);
+        }
+        if (locationChanged) {
+          companyValues.push(companyLocation);
+          setParts.push(`location = $${companyValues.length}`);
+        }
+        if (setParts.length) {
+          companyValues.push(current.company_id, clientId);
+          await client.query(`
+            UPDATE companies
+            SET ${setParts.join(', ')}, updated_at = NOW()
+            WHERE id = $${companyValues.length - 1} AND client_id = $${companyValues.length}
+          `, companyValues);
+        }
+      } else if (companyName || companyLocation) {
+        const companyRes = await client.query(`
+          INSERT INTO companies (name, industry, location, client_id)
+          VALUES ($1, $2, $3, $4)
+          RETURNING id
+        `, [companyNameForWrite, req.body.vertical || current.vertical || null, companyLocation || null, clientId]);
+        addProspectField('company_id', companyRes.rows[0].id);
+      }
+    }
+
+    if (prospectFields.length) {
+      values.push(req.params.id, clientId);
+      await client.query(`
+        UPDATE prospects
+        SET ${prospectFields.join(', ')}, updated_at = NOW()
+        WHERE id = $${values.length - 1} AND client_id = $${values.length}
+      `, values);
+    }
+
+    await client.query('COMMIT');
+    const updated = await selectUpdatedProspect(req.params.id, clientId);
+    res.json({ success: true, prospect: updated });
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_rollbackErr) {}
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
   }
 });
 
