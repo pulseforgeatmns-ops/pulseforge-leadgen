@@ -4162,7 +4162,9 @@ async function showProspectPreview(anchor, prospectId) {
     positionPreviewCard(anchor, card);
   } catch(e) {
     if (_activePreviewProspectId === prospectId) {
-      card.innerHTML = '<div class="preview-section">Preview unavailable.</div>';
+      // Preview lookup failed — hide the card silently rather than showing an error.
+      card.innerHTML = '';
+      card.style.display = 'none';
     }
     console.error('Prospect preview error:', e);
   }
@@ -4204,7 +4206,9 @@ async function openProspectModal(prospectId, initialAction) {
     bindProspectModal(p);
     if (initialAction === 'touch') toggleTouchForm(true);
   } catch(e) {
-    modal.innerHTML = '<div class="pm-body">Prospect detail unavailable.</div>';
+    // Detail lookup failed — close the modal silently rather than showing an error.
+    closeProspectModal();
+    console.error('Prospect detail error:', e);
   }
 }
 
@@ -4848,7 +4852,7 @@ async function loadProspects() {
     console.error('loadProspects:', e);
     _prospects = [];
     if (sub) sub.textContent = 'Failed to load prospects';
-    if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted);padding:1rem;">Prospects unavailable.</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted);padding:1rem;">No prospects found</td></tr>';
   }
 }
 
