@@ -10,6 +10,68 @@ const AGENT_NAME = 'max';
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
 
+const CLIENT_MARKET_LABELS = {
+  1: 'Manchester NH',
+  2: 'Charleston WV',
+  5: 'Nashville TN',
+};
+
+function compactMarketLabel(value) {
+  return String(value || '')
+    .replace(/\s*,\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function hasStateToken(value) {
+  return /\b[A-Z]{2}\b/.test(String(value || '').toUpperCase());
+}
+
+function clientMarketLabel() {
+  return CLIENT_MARKET_LABELS[CLIENT_ID] || compactMarketLabel([CLIENT_CONFIG?.city, CLIENT_CONFIG?.state].filter(Boolean).join(' '));
+}
+
+function prospectMarketLabel(prospect = {}) {
+  const serviceArea = compactMarketLabel(prospect.service_area_match);
+  if (!serviceArea) return clientMarketLabel();
+  if (hasStateToken(serviceArea)) return serviceArea;
+
+  const state = CLIENT_CONFIG?.state || clientMarketLabel().split(' ').pop();
+  return compactMarketLabel([serviceArea, state].filter(Boolean).join(' '));
+}
+
+function formatProspectBusinessLabel(prospect = {}) {
+  const business = prospect.company_name || prospect.company || prospect.business_name;
+  if (!business) return business;
+
+  const market = prospectMarketLabel(prospect);
+  if (!market || String(business).includes(`(${market})`)) return business;
+  return `${business} (${market})`;
+}
+
+function enrichProspectLabels(rows = []) {
+  return rows.map(row => {
+    const companyNameWithMarket = formatProspectBusinessLabel(row);
+    return {
+      ...row,
+      raw_company_name: row.company_name,
+      company_name: companyNameWithMarket || row.company_name,
+      company_name_with_market: companyNameWithMarket,
+      market_label: prospectMarketLabel(row),
+    };
+  });
+}
+
+function digestSnapshotWithMarketLabels(snapshot) {
+  return {
+    ...snapshot,
+    recentTouchpoints: enrichProspectLabels(snapshot.recentTouchpoints),
+    untouched: enrichProspectLabels(snapshot.untouched),
+    cold: enrichProspectLabels(snapshot.cold),
+    clickedToday: enrichProspectLabels(snapshot.clickedToday),
+  };
+}
+
 async function getSystemSnapshot() {
   // Prospect breakdown by status
   const prospectStats = await pool.query(`
@@ -24,10 +86,13 @@ async function getSystemSnapshot() {
   const recentTouchpoints = await pool.query(`
     SELECT 
       p.first_name, p.last_name, p.email,
+      ${prospectCompanySql('p')} AS company_name,
+      p.notes, p.service_area_match,
       t.channel, t.action_type, t.content_summary,
       t.created_at
     FROM touchpoints t
     JOIN prospects p ON t.prospect_id = p.id
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
     WHERE t.created_at > NOW() - INTERVAL '7 days'
       AND t.client_id = $1
       AND p.client_id = $1
@@ -37,8 +102,12 @@ async function getSystemSnapshot() {
 
   // Prospects with no touchpoints (never contacted)
   const untouched = await pool.query(`
-    SELECT p.first_name, p.last_name, p.email, p.icp_score, p.status
+    SELECT
+      p.first_name, p.last_name, p.email, p.icp_score, p.status,
+      ${prospectCompanySql('p')} AS company_name,
+      p.notes, p.service_area_match
     FROM prospects p
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
     WHERE NOT EXISTS (
       SELECT 1 FROM touchpoints t
       WHERE t.prospect_id = p.id
@@ -55,13 +124,16 @@ async function getSystemSnapshot() {
   const cold = await pool.query(`
     SELECT 
       p.first_name, p.last_name, p.email, p.status,
+      ${prospectCompanySql('p')} AS company_name,
+      p.notes, p.service_area_match,
       MAX(t.created_at) as last_touch,
       COUNT(t.id) as touch_count
     FROM prospects p
     JOIN touchpoints t ON t.prospect_id = p.id AND t.client_id = p.client_id
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
     WHERE p.do_not_contact = false
       AND p.client_id = $1
-    GROUP BY p.id, p.first_name, p.last_name, p.email, p.status
+    GROUP BY p.id, p.first_name, p.last_name, p.email, p.status, c.name, p.notes, p.service_area_match
     HAVING MAX(t.created_at) < NOW() - INTERVAL '14 days'
     ORDER BY last_touch ASC
     LIMIT 10
@@ -114,7 +186,10 @@ async function getSystemSnapshot() {
 
   // Prospects clicked a link today — high priority signals
   const clickedToday = await pool.query(`
-    SELECT DISTINCT p.id, p.first_name, p.last_name, c.name as company_name
+    SELECT DISTINCT
+      p.id, p.first_name, p.last_name,
+      ${prospectCompanySql('p')} AS company_name,
+      p.notes, p.service_area_match
     FROM touchpoints t
     JOIN prospects p ON t.prospect_id = p.id
     LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
@@ -265,7 +340,7 @@ ACTION NEEDED: ${actionItems.join('; ')}
 — Pulseforge`;
   }
 
-  const dataString = JSON.stringify(snapshot, null, 2);
+  const dataString = JSON.stringify(digestSnapshotWithMarketLabels(snapshot), null, 2);
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-5',
@@ -295,6 +370,7 @@ Generate a concise daily digest with:
 7. WATCH LIST — anything that needs attention or looks off
 
 Be direct, specific, and actionable. Use plain text, no markdown. Keep each section to 2-4 sentences max. Write like a sharp operations manager giving a morning briefing.`
+        + `\n\nWhenever you mention a prospect by business name in TOP PRIORITIES, WARM SIGNALS, WATCH LIST, or RECOMMENDATIONS, use company_name_with_market exactly so the market appears in parentheses, e.g. "TT Hair Salon (Manchester NH)".`
     }]
   });
 
