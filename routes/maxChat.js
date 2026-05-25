@@ -65,10 +65,36 @@ async function loadPipelineContext(clientId) {
 }
 
 function shouldLoadProspectContext(question) {
-  return /\b(prospect|prospects|contact|contacts|lead|leads|ready|warm|hot|flag|flagging|trigger|emmett|send|email|outreach|follow[-\s]?up|name|names)\b/i.test(question);
+  return /\b(prospect|prospects|contact|contacts|lead|leads|ready|warm|hot|flag|flagging|trigger|emmett|send|email|outreach|follow[-\s]?up|name|names)\b/i.test(question)
+    || getProspectSearchTerms(question).length > 0;
 }
 
-async function loadProspectContext(clientId) {
+function getProspectSearchTerms(question) {
+  const stopWords = new Set([
+    'Max', 'Pulseforge', 'Emmett', 'What', 'Who', 'Which', 'Where', 'When', 'Why', 'How',
+    'Can', 'Could', 'Would', 'Should', 'Please', 'Send', 'Flag', 'Trigger', 'Show', 'Find',
+  ]);
+  const terms = new Set();
+
+  for (const match of question.matchAll(/["']([^"']{2,80})["']/g)) {
+    terms.add(match[1].trim());
+  }
+
+  for (const match of question.matchAll(/\b[A-Z][a-zA-Z0-9&.'-]*(?:\s+[A-Z][a-zA-Z0-9&.'-]*){0,4}\b/g)) {
+    const words = match[0].trim().split(/\s+/);
+    while (words.length && stopWords.has(words[0])) words.shift();
+    const term = words.join(' ');
+    if (!stopWords.has(term) && term.length >= 3) terms.add(term);
+  }
+
+  return [...terms].slice(0, 5);
+}
+
+function dedupeProspects(prospects) {
+  return [...new Map(prospects.map(prospect => [prospect.id, prospect])).values()];
+}
+
+async function loadProspectContext(clientId, question) {
   const prospectContext = await pool.query(`
     SELECT p.id, p.first_name, p.last_name,
            COALESCE(c.name, NULLIF(TRIM(SPLIT_PART(p.notes, ' — ', 1)), '')) AS company,
@@ -84,10 +110,36 @@ async function loadProspectContext(clientId) {
       CASE WHEN p.status = 'warm' THEN 0 ELSE 1 END,
       p.is_hot DESC NULLS LAST,
       p.icp_score DESC
-    LIMIT 20
+    LIMIT 50
   `, [clientId]);
 
-  return prospectContext.rows;
+  const searchTerms = getProspectSearchTerms(question);
+  if (!searchTerms.length) return prospectContext.rows;
+
+  const searchResults = await Promise.all(searchTerms.map(term => pool.query(`
+    SELECT p.id, p.first_name, p.last_name,
+           COALESCE(c.name, NULLIF(TRIM(SPLIT_PART(p.notes, ' — ', 1)), '')) AS company,
+           p.email, p.phone, p.vertical, c.location AS city, p.icp_score, p.status, p.is_hot,
+           (SELECT COUNT(*)::int FROM touchpoints t WHERE t.prospect_id = p.id AND t.client_id = p.client_id) as touch_count
+    FROM prospects p
+    LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+    WHERE p.client_id = $1
+      AND (
+        COALESCE(c.name, NULLIF(TRIM(SPLIT_PART(p.notes, ' — ', 1)), '')) ILIKE $2
+        OR p.first_name ILIKE $2
+        OR p.last_name ILIKE $2
+      )
+    ORDER BY
+      CASE WHEN p.status = 'warm' THEN 0 ELSE 1 END,
+      p.is_hot DESC NULLS LAST,
+      p.icp_score DESC
+    LIMIT 20
+  `, [clientId, `%${term}%`])));
+
+  return dedupeProspects([
+    ...prospectContext.rows,
+    ...searchResults.flatMap(result => result.rows),
+  ]);
 }
 
 router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
@@ -99,7 +151,7 @@ router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
     const clientId = getRequestClientId(req);
     const context = await loadPipelineContext(clientId);
     const actionableProspects = shouldLoadProspectContext(question)
-      ? await loadProspectContext(clientId)
+      ? await loadProspectContext(clientId, question)
       : [];
     const message = await anthropic.messages.create({
       model: process.env.MAX_CHAT_MODEL || 'claude-sonnet-4-5',
