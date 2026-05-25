@@ -154,6 +154,13 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
 .resource-copy a:hover { text-decoration:underline; }
 .resource-list { margin-left:1rem; color:rgba(255,255,255,0.72); font-size:0.86rem; line-height:1.7; }
 .resource-list li { margin-bottom:0.35rem; }
+.quick-ref { width:100%; border-collapse:collapse; font-size:0.84rem; margin-top:0.4rem; }
+.quick-ref th, .quick-ref td { white-space:normal; padding:0.65rem 0.75rem; }
+.quick-ref th { width:190px; color:var(--gray-light); }
+.quick-ref a { color:var(--teal); text-decoration:none; }
+.quick-ref a:hover { text-decoration:underline; }
+.calendar-button { display:inline-flex; align-items:center; justify-content:center; margin-top:0.85rem; min-height:40px; padding:0.65rem 0.95rem; border-radius:5px; border:1px solid rgba(0,212,180,0.35); background:var(--teal-dim); color:var(--teal); font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1px; text-transform:uppercase; text-decoration:none; }
+.calendar-button:hover { color:var(--white); border-color:var(--teal); }
 .script-block { display:grid; gap:0.75rem; }
 .script-step { border-top:1px solid rgba(255,255,255,0.05); padding-top:0.75rem; }
 .script-step:first-child { border-top:0; padding-top:0; }
@@ -327,6 +334,21 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
 
     <section class="panel" id="resourcesPanel">
       <div class="resources-grid">
+        <div class="resource-card full">
+          <div class="resource-label">Quick Reference</div>
+          <div class="resource-title">Setter Links</div>
+          <table class="quick-ref">
+            <tbody>
+              <tr><th>Dashboard Login</th><td><a href="https://pulseforge-leadgen-production.up.railway.app/login" target="_blank" rel="noopener">pulseforge-leadgen-production.up.railway.app/login</a></td></tr>
+              <tr><th>Book a Call</th><td><a href="https://calendly.com/jacob-gopulseforge/new-meeting" target="_blank" rel="noopener">https://calendly.com/jacob-gopulseforge/new-meeting</a></td></tr>
+              <tr><th>Demo</th><td><a href="https://pulseforge-leadgen-production.up.railway.app/demo" target="_blank" rel="noopener">https://pulseforge-leadgen-production.up.railway.app/demo</a></td></tr>
+              <tr><th>Jacob's Email</th><td><a href="mailto:jacob@gopulseforge.com">jacob@gopulseforge.com</a></td></tr>
+              <tr><th>Time Zone</th><td>All calls booked in Eastern Time (ET)</td></tr>
+            </tbody>
+          </table>
+          <a class="calendar-button" href="https://calendly.com/jacob-gopulseforge/new-meeting" target="_blank" rel="noopener">Open Jacob's Calendly</a>
+        </div>
+
         <div class="resource-card">
           <div class="resource-label">Dashboard Link</div>
           <div class="resource-title">Main Login</div>
@@ -363,6 +385,10 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
               <div class="script-line">"The way it works is Jacob - he's the founder - does a quick 20-minute walkthrough, no pitch, just shows you what the system actually does for a business like yours. He has a couple spots open this week. Would [Tuesday] or [Wednesday] work?"</div>
             </div>
             <div class="script-step">
+              <div class="script-heading">Close</div>
+              <div class="script-line">"Perfect — here's Jacob's calendar link, you can grab a time right now: calendly.com/jacob-gopulseforge/new-meeting. Takes 30 seconds. Want me to stay on while you grab a spot?"</div>
+            </div>
+            <div class="script-step">
               <div class="script-heading">If They Ask What You Do</div>
               <div class="script-line">"Basically we build an automated outreach system that finds local prospects, reaches out on your behalf, and keeps your business visible between jobs - all running in the background while you focus on the actual work. Most owners we talk to are great at what they do but don't have time to market consistently. That's the gap we fill."</div>
             </div>
@@ -385,7 +411,7 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
             </div>
             <div class="script-step">
               <div class="script-heading">Close</div>
-              <div class="script-line">"Perfect - let me grab your best email and I'll have Jacob send a calendar invite. What's the best one to use?"</div>
+              <div class="script-line">"Perfect — here's Jacob's calendar link, you can grab a time right now: calendly.com/jacob-gopulseforge/new-meeting. Takes 30 seconds. Want me to stay on while you grab a spot?"</div>
             </div>
             <div class="script-step">
               <div class="script-heading">Opened Email Follow-Up</div>
@@ -421,6 +447,35 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
               <div class="script-line"><strong>"We're too busy"</strong><br>"That's actually the best time to set this up - so when things slow down the pipeline is already full. Takes 20 minutes to see it. Worth a look?"</div>
             </div>
           </div>
+        </div>
+
+        <div class="resource-card">
+          <div class="resource-label">Common Situations</div>
+          <div class="resource-title">Handling Guides</div>
+          <div class="faq-list">
+            <div class="faq-item">
+              <div class="faq-q">If they ask for the demo</div>
+              <div class="faq-a">Send the demo link, then offer calendar: <a href="https://pulseforge-leadgen-production.up.railway.app/demo" target="_blank" rel="noopener">pulseforge-leadgen-production.up.railway.app/demo</a></div>
+            </div>
+            <div class="faq-item">
+              <div class="faq-q">If they ask for pricing</div>
+              <div class="faq-a">Do not quote. Redirect to Jacob's calendar so he can cover pricing on the call.</div>
+            </div>
+            <div class="faq-item">
+              <div class="faq-q">If they want a one-pager</div>
+              <div class="faq-a">Log the touchpoint, then flag for Jacob to send manually.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="resource-card">
+          <div class="resource-label">After Booking</div>
+          <div class="resource-title">Immediate Steps</div>
+          <ul class="resource-list">
+            <li>Log as "Booked" in dashboard immediately.</li>
+            <li>Text Jacob - confirm for hot leads.</li>
+            <li>Verify their email is correct in the system.</li>
+          </ul>
         </div>
 
         <div class="resource-card">
