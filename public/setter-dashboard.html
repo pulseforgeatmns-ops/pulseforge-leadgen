@@ -144,6 +144,28 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
 .activity-text { font-size:0.78rem; color:rgba(255,255,255,0.7); line-height:1.5; min-width:0; }
 .activity-text strong { color:var(--white); }
 .activity-time { font-family:'JetBrains Mono',monospace; color:var(--gray); font-size:0.55rem; white-space:nowrap; }
+.resources-grid { display:grid; grid-template-columns:minmax(0, 1.1fr) minmax(280px, 0.9fr); gap:1rem; align-items:start; }
+.resource-card { background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:1rem; }
+.resource-card.full { grid-column:1 / -1; }
+.resource-label { font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:1.5px; text-transform:uppercase; color:var(--gray); margin-bottom:0.55rem; }
+.resource-title { font-family:'Bebas Neue',sans-serif; font-size:1.25rem; letter-spacing:2px; color:var(--white); margin-bottom:0.45rem; }
+.resource-copy { color:rgba(255,255,255,0.72); font-size:0.86rem; line-height:1.65; }
+.resource-copy a { color:var(--teal); text-decoration:none; }
+.resource-copy a:hover { text-decoration:underline; }
+.resource-list { margin-left:1rem; color:rgba(255,255,255,0.72); font-size:0.86rem; line-height:1.7; }
+.resource-list li { margin-bottom:0.35rem; }
+.script-block { display:grid; gap:0.75rem; }
+.script-step { border-top:1px solid rgba(255,255,255,0.05); padding-top:0.75rem; }
+.script-step:first-child { border-top:0; padding-top:0; }
+.script-heading { font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1.5px; text-transform:uppercase; color:var(--teal); margin-bottom:0.35rem; }
+.script-line { color:rgba(255,255,255,0.78); font-size:0.84rem; line-height:1.65; margin-bottom:0.45rem; }
+.script-line:last-child { margin-bottom:0; }
+.faq-list { display:grid; gap:0.75rem; }
+.faq-item { border-top:1px solid rgba(255,255,255,0.05); padding-top:0.75rem; }
+.faq-item:first-child { border-top:0; padding-top:0; }
+.faq-q { font-weight:600; color:var(--white); margin-bottom:0.25rem; }
+.faq-a { color:rgba(255,255,255,0.68); font-size:0.84rem; line-height:1.55; }
+.commission-value { font-family:'Bebas Neue',sans-serif; font-size:2.15rem; line-height:1; letter-spacing:1px; color:var(--green); margin:0.35rem 0; }
 .detail-drawer { position:fixed; right:340px; top:52px; bottom:0; width:380px; background:var(--bg1); border-left:1px solid var(--border); box-shadow:-20px 0 60px rgba(0,0,0,0.45); z-index:90; transform:translateX(calc(100% + 340px)); transition:transform 0.25s ease; padding:1.25rem; overflow:auto; }
 .detail-drawer.open { transform:translateX(0); }
 .detail-title { font-family:'Bebas Neue',sans-serif; font-size:1.35rem; letter-spacing:2px; margin-bottom:0.25rem; }
@@ -192,6 +214,7 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   .metrics-strip { grid-template-columns:repeat(2, minmax(0,1fr)); }
   .pipeline-grid { grid-template-columns:repeat(5, 260px); }
   .activity-layout { grid-template-columns:1fr; }
+  .resources-grid { grid-template-columns:1fr; }
   .detail-drawer { right:0; width:min(380px,100vw); }
 }
 @media (max-width: 720px) {
@@ -211,6 +234,7 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
     <div class="nav-tab active" data-tab="queue">Queue</div>
     <div class="nav-tab" data-tab="pipeline">Pipeline</div>
     <div class="nav-tab" data-tab="activity">Activity</div>
+    <div class="nav-tab" data-tab="resources">Resources</div>
   </div>
   <div class="topbar-right">
     <div class="sys-status"><div class="sys-dot"></div><span id="liveState">LIVE</span></div>
@@ -298,6 +322,154 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
           <button class="btn primary" type="submit">Save Activity</button>
         </form>
         <div class="activity-list" id="activityList"><div class="empty">Loading activity</div></div>
+      </div>
+    </section>
+
+    <section class="panel" id="resourcesPanel">
+      <div class="resources-grid">
+        <div class="resource-card">
+          <div class="resource-label">Dashboard Link</div>
+          <div class="resource-title">Main Login</div>
+          <div class="resource-copy">
+            <a href="https://pulseforge-leadgen-production.up.railway.app/login" target="_blank" rel="noopener">pulseforge-leadgen-production.up.railway.app/login</a>
+          </div>
+        </div>
+
+        <div class="resource-card">
+          <div class="resource-label">Commission Structure</div>
+          <div class="commission-value">$25 + 10%</div>
+          <ul class="resource-list">
+            <li>$25 for every discovery call that shows up, not just booked - they actually attend.</li>
+            <li>10% of monthly recurring revenue for every client that closes - ongoing, for as long as they stay.</li>
+            <li>Example: 5 clients closed at $250/month = $250/month recurring every month on top of show bonuses.</li>
+            <li>Paid via Venmo/Zelle - same week as the show or close.</li>
+            <li>1099 independent contractor - you set your own hours.</li>
+          </ul>
+        </div>
+
+        <div class="resource-card full">
+          <div class="resource-label">Call Scripts</div>
+          <div class="resource-title">Cold Call</div>
+          <div class="script-block">
+            <div class="script-step">
+              <div class="script-heading">Opener</div>
+              <div class="script-line">For prospects who have not received an email yet - fresh outreach.</div>
+              <div class="script-line">"Hey, is this [name]? Hey, my name's [your name] - I'm reaching out on behalf of Pulseforge, we work with local businesses in the area on one specific thing: bringing in new customers consistently without adding more to your plate. Is that something that's on your radar right now for [business name]?"</div>
+              <div class="script-line">If yes: "Perfect - that's exactly what we help with. Can I grab 20 minutes of your time this week to show you what it looks like?"</div>
+              <div class="script-line">If no/not right now: "Totally fair - can I ask, is it more a timing thing or just not a priority right now?"</div>
+            </div>
+            <div class="script-step">
+              <div class="script-heading">Transition to Booking</div>
+              <div class="script-line">"The way it works is Jacob - he's the founder - does a quick 20-minute walkthrough, no pitch, just shows you what the system actually does for a business like yours. He has a couple spots open this week. Would [Tuesday] or [Wednesday] work?"</div>
+            </div>
+            <div class="script-step">
+              <div class="script-heading">If They Ask What You Do</div>
+              <div class="script-line">"Basically we build an automated outreach system that finds local prospects, reaches out on your behalf, and keeps your business visible between jobs - all running in the background while you focus on the actual work. Most owners we talk to are great at what they do but don't have time to market consistently. That's the gap we fill."</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="resource-card full">
+          <div class="resource-label">Call Scripts</div>
+          <div class="resource-title">Warm Follow-Up</div>
+          <div class="script-block">
+            <div class="script-step">
+              <div class="script-heading">Opener</div>
+              <div class="script-line">"Hey, is this [name]? Hey, my name's [your name] - I'm calling on behalf of Jacob Maynard at Pulseforge. He reached out to you recently about [business name] and I'm just following up to see if you had a chance to look at anything he sent over."</div>
+              <div class="script-line">If yes: "Awesome - what did you think?"</div>
+              <div class="script-line">If no: "No worries at all - basically what we do is help local businesses in the area bring in new customers automatically. Jacob wanted me to reach out and see if that's something you'd be open to learning more about."</div>
+            </div>
+            <div class="script-step">
+              <div class="script-heading">The Ask</div>
+              <div class="script-line">"He has a few spots open this week for a quick 20-minute call - no pitch, he'd just walk you through what the system looks like for a business like yours. Would [day] or [day] work for you?"</div>
+            </div>
+            <div class="script-step">
+              <div class="script-heading">Close</div>
+              <div class="script-line">"Perfect - let me grab your best email and I'll have Jacob send a calendar invite. What's the best one to use?"</div>
+            </div>
+            <div class="script-step">
+              <div class="script-heading">Opened Email Follow-Up</div>
+              <div class="script-line">For prospects who received an email and opened it.</div>
+              <div class="script-line">"Hey [name], this is [your name] calling from Pulseforge - Jacob sent you an email recently about [business name] and I'm just following up to make sure it didn't get lost. Did you get a chance to see it?"</div>
+              <div class="script-line">If yes: "Great - what did you think? Was any of it relevant to where you're at right now?"</div>
+              <div class="script-line">If no: "No worries - basically Jacob works with local [vertical] businesses on bringing in new customers consistently. He wanted me to reach out personally and see if it's worth a quick conversation."</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="resource-card full">
+          <div class="resource-label">Call Scripts</div>
+          <div class="resource-title">Objections &amp; Rebuttals</div>
+          <div class="script-block">
+            <div class="script-step">
+              <div class="script-heading">Warm Follow-Up Objections</div>
+              <div class="script-line"><strong>"I'm not interested"</strong><br>"Totally understand - can I ask, is it more that timing's off or just not something you're focused on right now?"</div>
+              <div class="script-line"><strong>"I'm too busy"</strong><br>"That's exactly why people reach out to us honestly - the whole point is it runs without you. But I get it - would a different week work better?"</div>
+              <div class="script-line"><strong>"How much does it cost?"</strong><br>"That's a great question for Jacob - he'd go over all of that on the call. It varies based on what you need. That's actually why the 20 minutes is worth it."</div>
+              <div class="script-line"><strong>"Send me more info"</strong><br>"For sure - I'll have Jacob send something over today. And if it looks good, would you be open to a quick call after you've had a chance to look?"</div>
+              <div class="script-line"><strong>"We already have a marketing company"</strong><br>"That's great - this is actually different. We're not replacing what you have, we're handling the outreach side specifically. Jacob can show you exactly how it fits in 20 minutes."</div>
+              <div class="script-line"><strong>"Call me back later"</strong><br>"Of course - when's a better time? I want to make sure I catch you when it works."</div>
+              <div class="script-line"><strong>"How did you get my number?"</strong><br>"Your business is listed publicly - we reach out to local businesses in the area. I apologize if the timing isn't great. Is there a better time to connect?"</div>
+            </div>
+            <div class="script-step">
+              <div class="script-heading">Cold Call Objections</div>
+              <div class="script-line"><strong>"How did you get my number?"</strong><br>"Your business is publicly listed - we reach out to local businesses in the area. Sorry if the timing isn't great, is there a better time?"</div>
+              <div class="script-line"><strong>"I already get too many calls like this"</strong><br>"I hear you - I'll keep it quick. We're not selling ads or SEO. This is a system that does outbound for you automatically. Takes 20 minutes to see if it's even relevant. Worth it?"</div>
+              <div class="script-line"><strong>"What does it cost?"</strong><br>"Depends on what you need - Jacob covers all of that on the call. The 20 minutes is free, no obligation."</div>
+              <div class="script-line"><strong>"I don't have time right now"</strong><br>"Completely understand - when's a better time this week? I'll put it in the calendar and get out of your way."</div>
+              <div class="script-line"><strong>"Not interested"</strong><br>"Fair enough - before I let you go, quick question: is it that you're happy with how new customers are coming in right now, or just not the right timing?"</div>
+              <div class="script-line"><strong>"We're too busy"</strong><br>"That's actually the best time to set this up - so when things slow down the pipeline is already full. Takes 20 minutes to see it. Worth a look?"</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="resource-card">
+          <div class="resource-label">Daily Goals</div>
+          <div class="resource-title">Daily Targets</div>
+          <ul class="resource-list">
+            <li>20 calls per day minimum.</li>
+            <li>2-3 booked appointments per day target.</li>
+            <li>Log every call outcome in the dashboard - no exceptions.</li>
+            <li>Check your hot flags first - these are your warmest leads.</li>
+          </ul>
+        </div>
+
+        <div class="resource-card">
+          <div class="resource-label">FAQ</div>
+          <div class="resource-title">Common Questions</div>
+          <div class="faq-list">
+            <div class="faq-item">
+              <div class="faq-q">How do I log a call?</div>
+              <div class="faq-a">Use the Quick Log button on each lead in your queue. Select the outcome and it saves automatically.</div>
+            </div>
+            <div class="faq-item">
+              <div class="faq-q">What if a lead has no phone number?</div>
+              <div class="faq-a">Click "Enrich Phone" on the lead card. The system will try to find a number automatically.</div>
+            </div>
+            <div class="faq-item">
+              <div class="faq-q">What do I do with a warm reply?</div>
+              <div class="faq-a">Flag it immediately using the hot flag button and text Jacob at jacob@gopulseforge.com.</div>
+            </div>
+            <div class="faq-item">
+              <div class="faq-q">When do I get paid?</div>
+              <div class="faq-a">Same week a call shows or a client closes. Jacob will reach out to confirm and send payment.</div>
+            </div>
+            <div class="faq-item">
+              <div class="faq-q">Who do I contact with questions?</div>
+              <div class="faq-a">Jacob Maynard - jacob@gopulseforge.com or text directly.</div>
+            </div>
+            <div class="faq-item">
+              <div class="faq-q">What's the login link?</div>
+              <div class="faq-a">pulseforge-leadgen-production.up.railway.app/login</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="resource-card">
+          <div class="resource-label">Contact</div>
+          <div class="resource-title">Need Help?</div>
+          <div class="resource-copy">Email <a href="mailto:jacob@gopulseforge.com">jacob@gopulseforge.com</a> for questions, blocked leads, script help, or payout questions.</div>
+        </div>
       </div>
     </section>
   </section>
@@ -927,7 +1099,12 @@ function setTab(tab) {
   document.querySelectorAll('.nav-tab').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
   document.querySelectorAll('.panel').forEach(panel => panel.classList.remove('active'));
   document.getElementById(`${tab}Panel`).classList.add('active');
-  const titles = { queue:['LEADS QUEUE','Uncontacted Scout-qualified leads'], pipeline:['PIPELINE BOARD','Stage counts and movement'], activity:['ACTIVITY LOG','Manual setter touchpoints'] };
+  const titles = {
+    queue:['LEADS QUEUE','Uncontacted Scout-qualified leads'],
+    pipeline:['PIPELINE BOARD','Stage counts and movement'],
+    activity:['ACTIVITY LOG','Manual setter touchpoints'],
+    resources:['RESOURCES','Scripts, commissions, FAQ, and support']
+  };
   document.getElementById('panelTitle').textContent = titles[tab][0];
   document.getElementById('panelSub').textContent = titles[tab][1];
 }
