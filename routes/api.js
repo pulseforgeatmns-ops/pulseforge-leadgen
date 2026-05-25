@@ -999,7 +999,9 @@ router.get('/api/activity', requireAuth, async (req, res) => {
       const agent = agentNameMap[rawAgent] || rawAgent.charAt(0).toUpperCase() + rawAgent.slice(1);
       const minutesAgo = Math.floor((Date.now() - new Date(row.ran_at)) / 60000);
       const timeLabel = minutesAgo < 60 ? `${minutesAgo}m` : minutesAgo < 1440 ? `${Math.floor(minutesAgo/60)}h` : `${Math.floor(minutesAgo/1440)}d`;
-      const prospect = row.first_name ? `· ${row.first_name} ${row.last_name}`.trim() : '';
+      const companyName = (row.prospect_notes || '').split('—')[0].trim() || null;
+      const prospectName = cleanProspectName(row.first_name, row.last_name, companyName);
+      const prospect = prospectName && prospectName !== 'Unknown contact' ? `· ${prospectName}` : '';
       const actionLabels = {
         generate_comment: `generated a comment draft ${prospect}`,
         daily_digest: 'daily digest sent · jacob@gopulseforge.com',
@@ -1030,7 +1032,7 @@ router.get('/api/activity', requireAuth, async (req, res) => {
         agent, action: label, raw_action: rawAction, icon, color,
         time: timeLabel, ran_at: row.ran_at, status: row.status,
         prospect_id: row.prospect_id,
-        prospect: prospect || (row.prospect_notes || '').split('—')[0].trim() || null,
+        prospect: prospectName || null,
         is_warm_signal: isWarmSignal
       };
     });
@@ -1048,6 +1050,14 @@ const ACTIVITY_DETAIL_AGENTS = {
   paige: 'Paige', sam: 'Sam', vera: 'Vera', cal: 'Cal', ivy: 'Ivy', penny: 'Penny',
 };
 const SEQUENCE_DAYS = [0, 4, 8, 13];
+
+function cleanProspectName(firstName, lastName, companyName) {
+  const first = String(firstName || '').trim();
+  const last = String(lastName || '').trim();
+  const generic = !first || first.toLowerCase() === 'there';
+  if (!generic) return `${first} ${last}`.trim();
+  return companyName || 'Unknown contact';
+}
 
 function activityDetailTitle(action) {
   const titles = {
@@ -1171,7 +1181,7 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
       || String(row.notes || '').split('—')[0].trim()
       || payload.company
       || null;
-    const prospectName = (`${row.first_name || ''} ${row.last_name || ''}`).trim() || null;
+    const prospectName = cleanProspectName(row.first_name, row.last_name, companyName);
 
     let eng = {};
     let lastSubject = null;
@@ -1424,8 +1434,8 @@ router.get('/api/activity-panel', requireAuth, async (req, res) => {
     const timeline = timelineResult.rows.map(r => {
       const rawAgent = (r.agent_name || '').replace('_agent', '');
       const agentInfo = AGENT_LABELS[rawAgent] || { name: rawAgent, icon: '⚡' };
-      const prospectName = r.first_name ? `${r.first_name} ${r.last_name}`.trim() : null;
-      const prospectBiz = prospectName || (r.prospect_notes || '').split('—')[0].trim() || null;
+      const companyName = (r.prospect_notes || '').split('—')[0].trim() || null;
+      const prospectBiz = cleanProspectName(r.first_name, r.last_name, companyName);
       return {
         id: r.id,
         agent: agentInfo.name,
@@ -1481,8 +1491,8 @@ router.get('/api/activity-timeline', requireAuth, async (req, res) => {
     const rows = result.rows.map(r => {
       const rawAgent = (r.agent_name || '').replace('_agent', '');
       const agentInfo = AGENT_LABELS[rawAgent] || { name: rawAgent, icon: '⚡' };
-      const prospectName = r.first_name ? `${r.first_name} ${r.last_name}`.trim() : null;
-      const prospectBiz = prospectName || (r.prospect_notes || '').split('—')[0].trim() || null;
+      const companyName = (r.prospect_notes || '').split('—')[0].trim() || null;
+      const prospectBiz = cleanProspectName(r.first_name, r.last_name, companyName);
       return {
         id: r.id, agent: agentInfo.name, icon: agentInfo.icon,
         action: ACTION_LABELS[r.action] || r.action,

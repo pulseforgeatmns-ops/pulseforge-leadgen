@@ -89,6 +89,20 @@ const GOOGLE_API_KEY    = process.env.GOOGLE_API_KEY;
 const GOOGLE_CX         = process.env.GOOGLE_CX;
 const PROSPEO_API_KEY   = process.env.PROSPEO_API_KEY;
 const SETTER_ICP_THRESHOLD = 70;
+const GENERIC_CONTACT_NAMES = new Set(['there', 'info', 'hello', 'contact', 'admin', 'support', 'sales']);
+const GENERIC_EMAIL_PREFIX_RE = /^(?:info|hello|contact|admin|support|sales|office|team|service|customerservice|customer\.?service|no-?reply|noreply|mail|inquir(?:y|ies))[\w.+-]*$/i;
+
+function sanitizeFirstName(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const local = raw.includes('@') ? raw.split('@')[0] : raw;
+  const cleaned = local.trim().replace(/^["'`]+|["'`]+$/g, '');
+  if (!cleaned) return null;
+  const normalized = cleaned.toLowerCase();
+  if (GENERIC_CONTACT_NAMES.has(normalized)) return null;
+  if (GENERIC_EMAIL_PREFIX_RE.test(normalized)) return null;
+  return cleaned;
+}
 
 
 async function enrichWithHunter(domain) {
@@ -794,11 +808,11 @@ async function saveToDatabase(leads) {
       const email = typeof lead.email === 'string' && lead.email.includes('@') && !JUNK_EMAILS.includes(lead.email.toLowerCase()) ? lead.email : null;
       const nameParts = (lead.contact && lead.contact !== '—' ? lead.contact : '').trim().split(/\s+/).filter(Boolean);
 
-      // Use contact first name if available and looks like a real person name
-      // Otherwise fall back to 'there' so Emmett greets warmly without using a business name
+      // Use contact first name if available and looks like a real person name.
+      // Keep generic inbox names null so downstream copy can use company/name fallbacks.
       const looksLikePerson = nameParts.length >= 2 || (nameParts.length === 1 && /^[A-Z][a-z]{2,}$/.test(nameParts[0]));
-      const firstName = looksLikePerson ? nameParts[0] : 'there';
-      const lastName  = nameParts.slice(1).join(' ') || '';
+      const firstName = sanitizeFirstName(looksLikePerson ? nameParts[0] : null);
+      const lastName  = firstName ? nameParts.slice(1).join(' ') || null : null;
       const notes = companyName + ' — ' + lead.url;
       const phone = lead.phone || null;
       const serviceArea = (CLIENT_CONFIG?.service_area || []).find(area => {
