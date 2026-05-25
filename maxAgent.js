@@ -183,6 +183,41 @@ async function getSystemSnapshot() {
     pending_commissions: 0,
   }] }));
 
+  // Copy performance — Emmett email_sent logs (last 7 days) grouped by sequence/step,
+  // joined to touchpoints to compute open rate per sequence/step combo.
+  const copyPerformance = await pool.query(`
+    SELECT
+      s.sequence,
+      s.step,
+      COUNT(*)::int AS sent,
+      COUNT(*) FILTER (WHERE o.opened)::int AS opens
+    FROM (
+      SELECT
+        al.prospect_id,
+        al.client_id,
+        al.ran_at,
+        al.payload->>'sequence' AS sequence,
+        al.payload->>'step'     AS step
+      FROM agent_log al
+      WHERE al.agent_name = 'emmett'
+        AND al.action = 'email_sent'
+        AND al.client_id = $1
+        AND al.ran_at >= NOW() - INTERVAL '7 days'
+    ) s
+    LEFT JOIN LATERAL (
+      SELECT TRUE AS opened
+      FROM touchpoints t
+      WHERE t.prospect_id = s.prospect_id
+        AND t.client_id = s.client_id
+        AND t.channel = 'email'
+        AND t.action_type IN ('open', 'email_opened')
+        AND t.created_at >= s.ran_at
+      LIMIT 1
+    ) o ON TRUE
+    GROUP BY s.sequence, s.step
+    ORDER BY s.sequence, s.step
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+
   return {
     prospectStats: prospectStats.rows,
     recentTouchpoints: recentTouchpoints.rows,
@@ -198,6 +233,7 @@ async function getSystemSnapshot() {
     emailStats:    emailStats.rows[0],
     contentQuality: contentQuality.rows[0],
     closerMetrics: closerMetrics.rows[0],
+    copyPerformance: copyPerformance.rows,
     client: CLIENT_CONFIG,
   };
 }
@@ -350,12 +386,28 @@ Avg score: ${contentQuality.avg_score ?? 'n/a'}/30
 Posts regenerated: ${contentQuality.regenerated_count || 0}/${contentQuality.total_scored || 0}
 Most common weakness: ${contentQuality.most_common_weakness || 'none'}`;
 
+  const copyPerf = snapshot.copyPerformance || [];
+  const copyPerfBlock = copyPerf.length
+    ? 'COPY PERFORMANCE (last 7 days)\n' + copyPerf.map(r => {
+        const sent = Number(r.sent || 0);
+        const opens = Number(r.opens || 0);
+        const rate = sent ? (opens / sent) * 100 : 0;
+        const rateStr = rate % 1 === 0 ? rate.toFixed(0) : rate.toFixed(1);
+        const openWord = opens === 1 ? 'open' : 'opens';
+        const flag = (sent >= 30 && rate < 8) ? '  ⚠ COPY REVIEW NEEDED' : '';
+        return `${r.sequence} / day_${r.step}: ${sent} sent, ${opens} ${openWord} (${rateStr}%)${flag}`;
+      }).join('\n')
+    : 'COPY PERFORMANCE (last 7 days)\nNo Emmett sends logged yet — data will populate as emails go out.';
+
   const toEmail = CLIENT_CONFIG?.max_email || 'jacob@gopulseforge.com';
   const toName = CLIENT_ID === 2 ? 'Brad & Dustin' : 'Jake Maynard';
   const subject = `${CLIENT_ID === 2 ? 'MSHI' : 'Pulseforge'} Daily Digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
 
   const body = CLIENT_ID === 2 ? `${digestText}
 ${scoutExpansionSection}
+${'─'.repeat(50)}
+${copyPerfBlock}
+
 Pulseforge · gopulseforge.com` : `PULSEFORGE DAILY DIGEST
 ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 ${'─'.repeat(50)}
@@ -368,6 +420,9 @@ ${closerBlock}
 
 ${'─'.repeat(50)}
 ${contentQualityBlock}
+
+${'─'.repeat(50)}
+${copyPerfBlock}
 
 ${'─'.repeat(50)}
 QUICK STATS
@@ -638,8 +693,84 @@ async function runPaigeQualityGateTrigger() {
   return count;
 }
 
+// Trigger 4 — underperforming email copy → flag for human review
+// Any sequence/step combo with an open rate below 8% and 30+ sends in the last
+// 7 days gets a copy_review_needed flag (status 'pending') so it surfaces in the digest.
+async function runCopyReviewTrigger() {
+  const res = await pool.query(`
+    SELECT
+      s.sequence,
+      s.step,
+      COUNT(*)::int AS sent,
+      COUNT(*) FILTER (WHERE o.opened)::int AS opens,
+      (ARRAY_AGG(DISTINCT s.subject) FILTER (WHERE s.subject IS NOT NULL AND s.subject <> ''))[1:3] AS sample_subjects
+    FROM (
+      SELECT
+        al.prospect_id,
+        al.client_id,
+        al.ran_at,
+        al.payload->>'sequence' AS sequence,
+        al.payload->>'step'     AS step,
+        al.payload->>'subject'  AS subject
+      FROM agent_log al
+      WHERE al.agent_name = 'emmett'
+        AND al.action = 'email_sent'
+        AND al.client_id = $1
+        AND al.ran_at >= NOW() - INTERVAL '7 days'
+    ) s
+    LEFT JOIN LATERAL (
+      SELECT TRUE AS opened
+      FROM touchpoints t
+      WHERE t.prospect_id = s.prospect_id
+        AND t.client_id = s.client_id
+        AND t.channel = 'email'
+        AND t.action_type IN ('open', 'email_opened')
+        AND t.created_at >= s.ran_at
+      LIMIT 1
+    ) o ON TRUE
+    GROUP BY s.sequence, s.step
+    HAVING COUNT(*) >= 30
+      AND (COUNT(*) FILTER (WHERE o.opened))::numeric / NULLIF(COUNT(*), 0) < 0.08
+  `, [CLIENT_ID]);
+
+  let count = 0;
+  for (const row of res.rows) {
+    const sent = Number(row.sent || 0);
+    const opens = Number(row.opens || 0);
+    const openRate = sent ? Number(((opens / sent) * 100).toFixed(1)) : 0;
+
+    // De-dup: skip if a pending copy_review_needed already exists for this combo in the last 7 days
+    const existing = await pool.query(`
+      SELECT 1 FROM agent_log
+      WHERE agent_name = 'max'
+        AND action = 'copy_review_needed'
+        AND status = 'pending'
+        AND client_id = $1
+        AND payload->>'sequence' = $2
+        AND payload->>'step' = $3
+        AND ran_at >= NOW() - INTERVAL '7 days'
+      LIMIT 1
+    `, [CLIENT_ID, row.sequence, String(row.step)]);
+    if (existing.rows.length) continue;
+
+    await insertAgentLog('copy_review_needed', {
+      sequence: row.sequence,
+      step: row.step,
+      sent,
+      opens,
+      open_rate: openRate,
+      sample_subjects: row.sample_subjects || [],
+    }, 'pending');
+    count++;
+  }
+
+  await insertAgentLog('copy_review_needed_summary', { count });
+  console.log(`[Max] Trigger 4 (copy review): ${count} flag(s) raised`);
+  return count;
+}
+
 async function runAutonomousTriggers() {
-  const summary = { reengagement: 0, marked_dead: 0, paige_regenerate: 0, errors: [] };
+  const summary = { reengagement: 0, marked_dead: 0, paige_regenerate: 0, copy_review: 0, errors: [] };
 
   try {
     summary.reengagement = await runReengagementTrigger();
@@ -662,11 +793,19 @@ async function runAutonomousTriggers() {
     console.error('[Max] Trigger 3 failed:', err.message);
   }
 
+  try {
+    summary.copy_review = await runCopyReviewTrigger();
+  } catch (err) {
+    summary.errors.push({ trigger: 'copy_review', message: err.message });
+    console.error('[Max] Trigger 4 failed:', err.message);
+  }
+
   await insertAgentLog('autonomous_triggers_summary', {
-    count: summary.reengagement + summary.marked_dead + summary.paige_regenerate,
+    count: summary.reengagement + summary.marked_dead + summary.paige_regenerate + summary.copy_review,
     reengagement: summary.reengagement,
     marked_dead: summary.marked_dead,
     paige_regenerate: summary.paige_regenerate,
+    copy_review: summary.copy_review,
     errors: summary.errors,
   }, summary.errors.length ? 'partial' : 'success');
 

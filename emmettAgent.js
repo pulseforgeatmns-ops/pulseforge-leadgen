@@ -10,9 +10,7 @@ let FROM_NAME = 'Jacob Maynard';
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
 
-// Email sequence definitions
-const DEMO_URL = 'https://pulseforge-leadgen-production.up.railway.app/demo';
-const CALENDLY_URL = 'https://calendly.com/jacob-gopulseforge/20min';
+// Email sequence definitions — reply-based CTAs only (no external/Calendly/demo links in bodies)
 
 // A/B TEST ACTIVE: restaurant vs restaurant_b — remove restaurant_b when test concludes
 const SEQUENCES = {
@@ -28,7 +26,7 @@ The thing our clients usually notice first is communication. We show up, keep yo
 
 We offer free estimates and are licensed in WV under WV065578.
 
-Would it be worth a quick conversation?
+Are you planning any exterior or interior work on your properties this year?
 
 Brad & Dustin
 Mountain State Home Innovations`
@@ -42,7 +40,7 @@ Most contractors go quiet after the estimate. We do not.
 
 Every client gets direct access to Brad or Dustin throughout the project, which matters when you are managing properties, board expectations, repairs, weather delays, or emergency damage.
 
-Happy to do a free walkthrough of any properties you manage in Kanawha, Putnam, or Cabell County. Just reply here.
+If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
 Brad & Dustin`
     },
@@ -55,10 +53,7 @@ Before Mountain State Home Innovations, we subcontracted for larger WV firms inc
 
 Decks and siding are two of our highest priority services right now, along with windows, interior renovations, and repair work when something needs attention quickly.
 
-You can see our Google profile here:
-https://share.google/KeVYcU4QxVwfur0cN
-
-If you want us to take a look at a property, just reply and we can set up a free estimate.
+Are you currently working with a contractor you trust for this kind of work, or is it more as-needed when something comes up?
 
 Brad & Dustin`
     },
@@ -69,9 +64,9 @@ Brad & Dustin`
 
 Last note from us. We know you are busy, so we will keep it simple.
 
-If timing ever works out, we would be glad to give you a free estimate with no obligation.
-
 Our number is 304-483-3655. Brad or Dustin will pick up.
+
+If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Brad & Dustin
 Mountain State Home Innovations`
@@ -89,10 +84,9 @@ Most owners I talk to are in the same spot. Great business, not enough time to s
 
 I built a system that handles that automatically — finds local prospects, reaches out on your behalf, keeps your name visible between jobs. It runs in the background while you run the business.
 
-Reply and I'll send over a quick overview of what this looks like for a business like {{business_name}}.
+Is bringing in new customers consistently something you're actively working on right now?
 
-Jacob Maynard
-gopulseforge.com`
+Jacob Maynard`
     },
     {
       day: 4,
@@ -105,8 +99,7 @@ I know you're busy. That's kind of the whole point.
 
 The businesses I work with aren't struggling — they're good at what they do. They just don't have time to chase new customers on top of everything else. That's the gap I fill.
 
-If you want to see what the system actually looks like running:
-${DEMO_URL}
+If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
 Jake`
     },
@@ -121,8 +114,7 @@ Most owners go quiet between jobs. The ones winning don't.
 
 I help businesses like {{business_name}} stay visible automatically — no extra time required on your end.
 
-If this is relevant for {{business_name}}, here's a link to grab 20 minutes with me:
-${CALENDLY_URL}
+Are you currently doing anything to stay in front of new customers consistently, or is it mostly word of mouth at this point?
 
 Jake`
     },
@@ -133,9 +125,7 @@ Jake`
 
 Last note from me — I don't want to clutter your inbox.
 
-If the timing is ever right, the demo is here: ${DEMO_URL}
-
-Or just reply anytime — I'll put something together for {{business_name}} same day.
+If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -172,7 +162,7 @@ I know you are busy. That is kind of the whole point.
 
 The restaurants I work with are not struggling. They are good at what they do. They just do not have time to chase new customers on top of running the kitchen, managing staff, and everything else. That is the gap I fill.
 
-If you want to see a free mockup of what consistent outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
 Jacob`
     },
@@ -187,7 +177,7 @@ Most owners go quiet between services. The ones winning do not.
 
 I help restaurants like {{business_name}} stay visible automatically. No extra time required on your end.
 
-Quick question before I move on. Are you currently doing anything to stay in front of customers between visits, or is it mostly word of mouth at this point?
+Are you currently doing anything to stay in front of new customers between visits, or is it mostly word of mouth at this point?
 
 Jacob`
     },
@@ -198,7 +188,7 @@ Jacob`
 
 Last note from me. I do not want to clutter your inbox.
 
-If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply to this and I will put something together.
+If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -219,7 +209,7 @@ Most owners I talk to are in the same spot. Great restaurant, not enough time to
 
 I built a system that handles that automatically. It finds local prospects, reaches out on your behalf, and keeps your name visible between rushes. It runs in the background while you run the restaurant.
 
-Take a look at what we have built for restaurants like yours at gopulseforge.com/restaurant — then reply back if it is worth a conversation.
+Is bringing in new customers consistently something you're actively working on right now?
 
 Jacob Maynard
 Pulseforge`
@@ -235,7 +225,7 @@ I know you are busy. That is kind of the whole point.
 
 The restaurants I work with are not struggling. They are good at what they do. They just do not have time to chase new customers on top of running the kitchen, managing staff, and everything else. That is the gap I fill.
 
-If you want to see a free mockup of what consistent outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
 Jacob`
     },
@@ -250,7 +240,7 @@ Most owners go quiet between services. The ones winning do not.
 
 I help restaurants like {{business_name}} stay visible automatically. No extra time required on your end.
 
-Take a look at what this looks like in practice at gopulseforge.com/restaurant — then reply back if it is worth a conversation.
+Are you currently doing anything to stay in front of new customers between rushes, or is it mostly word of mouth at this point?
 
 Jacob`
     },
@@ -261,7 +251,7 @@ Jacob`
 
 Last note from me. I do not want to clutter your inbox.
 
-If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply to this and I will put something together.
+If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -297,7 +287,7 @@ Sent you a note a few days ago. Wanted to follow up once before moving on.
 
 The salons I work with are not struggling. They are talented and their existing clients love them. The challenge is always the same: not enough time between appointments to market consistently.
 
-If you want to see a free mockup of what automated outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
 Jacob`
     },
@@ -323,7 +313,7 @@ Jacob`
 
 Last note from me. I do not want to clutter your inbox.
 
-If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply and I will put something together.
+If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -359,7 +349,7 @@ Sent you a note a few days ago. Wanted to follow up once before moving on.
 
 The studios I work with are not struggling. They have great instructors and loyal members. The challenge is always the same: memberships plateau because there is no consistent way to reach new people between managing classes and running the business.
 
-If you want to see a free mockup of what automated outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
 Jacob`
     },
@@ -385,7 +375,7 @@ Jacob`
 
 Last note from me. I do not want to clutter your inbox.
 
-If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply to this and I will put something together.
+If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -421,7 +411,7 @@ Sent you a note a few days ago. Wanted to follow up once before moving on.
 
 The property management companies I work with are not struggling. They have solid portfolios and good relationships with their owners. The challenge is always the same: vacancy periods stretch longer than they should because outreach is inconsistent or manual.
 
-If you want to see a free mockup of what automated outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
 Jacob`
     },
@@ -447,7 +437,7 @@ Jacob`
 
 Last note from me. I do not want to clutter your inbox.
 
-If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply to this and I will put something together.
+If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -483,7 +473,7 @@ Sent you a note a few days ago. Wanted to follow up once before moving on.
 
 The landscaping companies I work with are not struggling. They do great work and their existing clients love them. The challenge is always the same: the off-season pipeline dries up and spring scramble is stressful every year.
 
-If you want to see a free mockup of what consistent outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
 Jacob`
     },
@@ -509,7 +499,7 @@ Jacob`
 
 Last note from me. I do not want to clutter your inbox.
 
-If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply to this and I will put something together.
+If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -545,7 +535,7 @@ Sent you a note a few days ago. Wanted to follow up once before moving on.
 
 The home service companies I work with are not struggling. They do great work. The challenge is always the same: the work fills the schedule but not enough new homeowners are finding them consistently.
 
-If you want to see a free mockup of what that outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
 Jacob`
     },
@@ -571,7 +561,7 @@ Jacob`
 
 Last note from me. I do not want to clutter your inbox.
 
-If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply and I will put something together.
+If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -607,7 +597,7 @@ Sent you a note a few days ago. Wanted to follow up once before moving on.
 
 The shops I work with are not struggling. They do honest work and their regulars keep coming back. The gap is always the same: not enough new customers finding them between the ones who already know them.
 
-If you want to see a free mockup of what consistent outreach could look like for {{business_name}}, just reply and I will have something over same day.
+If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
 Jacob`
     },
@@ -633,7 +623,7 @@ Jacob`
 
 Last note from me. I do not want to clutter your inbox.
 
-If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply and I will put something together.
+If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -669,7 +659,7 @@ Sent you a note a few days ago. Wanted to follow up once before moving on.
 
 The practices I work with are not struggling. They have skilled providers and clients who love them. The gap is always the same: not enough new people finding them consistently outside of referrals.
 
-If you want to see a free mockup of what that outreach could look like for {{business_name}}, just reply and I will have something over to you same day.
+If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
 Jacob`
     },
@@ -695,7 +685,7 @@ Jacob`
 
 Last note from me. I do not want to clutter your inbox.
 
-If the timing is ever right and you want to see what automated outreach could do for {{business_name}}, just reply and I will put something together.
+If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -715,9 +705,9 @@ Reached out a few weeks ago — wanted to check back in before moving on.
 
 I know timing matters. If growing your customer base consistently is still on your radar, I'd love to show you what we've put together for businesses like {{business_name}}.
 
-Takes 20 minutes. No pitch, just a look at what the system actually does.
+No pitch, just a look at what the system actually does.
 
-Worth a conversation?
+Is growing your customer base consistently still something you're working on right now?
 
 Jacob Maynard
 Pulseforge`
@@ -731,8 +721,7 @@ One pattern I keep seeing across local businesses right now — the ones picking
 
 Most owners go quiet between jobs. The ones growing don't.
 
-I help businesses like {{business_name}} stay visible automatically. If you want to see what that looks like in practice, here's 20 minutes with me:
-https://calendly.com/jacob-gopulseforge/20min
+I help businesses like {{business_name}} stay visible automatically. If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
 Jacob`
     },
@@ -743,7 +732,7 @@ Jacob`
 
 Last note from me — I don't want to clutter your inbox.
 
-If the timing ever works out, reply to this and I'll put something together for {{business_name}} same day. No forms, no pressure.
+If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -1070,6 +1059,15 @@ async function run() {
         subject,
         useWarm ? { sequence: 'warm_outreach' } : { step: step.day, sequence: sequenceName === 're_engagement' ? 're_engagement' : 'cold_outreach' },
         'neutral'
+      );
+      // Copy performance log — gives Max visibility into exactly what copy went out, by sequence/step/vertical
+      await db.logAgentAction(
+        AGENT_NAME,
+        'email_sent',
+        prospect.id,
+        null,
+        { sequence: sequenceName, step: step.day, vertical: prospect.vertical, subject: subject, client_id: CLIENT_ID },
+        'success'
       );
       industryCounts[industry]++;
       sent++;
