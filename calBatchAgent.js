@@ -83,8 +83,9 @@ async function getBatchCandidates() {
         SELECT 1
         FROM touchpoints t
         WHERE t.prospect_id = p.id
-          AND t.channel = 'phone'
+          AND t.channel = 'manual'
           AND t.action_type = 'outbound'
+          AND t.agent_id = 'cal'
       )
     ORDER BY p.icp_score DESC NULLS LAST, p.created_at ASC
     LIMIT $1
@@ -156,7 +157,7 @@ async function logBatchTouchpoints(formattedProspects, batchResponse) {
   for (const item of formattedProspects) {
     await db.logTouchpoint(
       item.prospect.id,
-      'phone',
+      'manual',
       'outbound',
       `Cal batch call — ${item.businessName}`,
       'pending',

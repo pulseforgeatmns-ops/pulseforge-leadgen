@@ -34,7 +34,9 @@ async function getCallCandidates() {
       AND NOT EXISTS (
         SELECT 1 FROM touchpoints t2
         WHERE t2.prospect_id = p.id
-          AND t2.channel = 'call'
+          AND t2.channel = 'manual'
+          AND t2.action_type = 'outbound'
+          AND t2.agent_id = 'cal'
       )
     ORDER BY p.icp_score DESC
     LIMIT $1
@@ -189,7 +191,7 @@ async function run() {
 
       await db.logTouchpoint(
         prospect.id,
-        'call',
+        'manual',
         'outbound',
         `Outbound call via Bland.ai — ${companyName}`,
         'pending',
