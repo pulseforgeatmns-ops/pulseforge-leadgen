@@ -3955,20 +3955,24 @@ function _detailTimestamp(value) {
   });
 }
 
-function _detailPayloadText(payload) {
-  if (payload === null || payload === undefined || payload === '') return '{}';
-  if (typeof payload === 'string') {
-    try {
-      return JSON.stringify(JSON.parse(payload), null, 2);
-    } catch {
-      return payload;
-    }
-  }
+function _detailFormatValue(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   try {
-    return JSON.stringify(payload, null, 2);
+    return JSON.stringify(value);
   } catch {
-    return String(payload);
+    return String(value);
   }
+}
+
+function _detailPayloadFields(payload) {
+  let obj = payload;
+  if (typeof obj === 'string') {
+    try { obj = JSON.parse(obj); } catch { return [{ label: 'Payload', value: obj }]; }
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return [];
+  return Object.keys(obj).map(key => ({ label: key, value: _detailFormatValue(obj[key]) }));
 }
 
 function _detailStructuredFields(data) {
@@ -3978,28 +3982,37 @@ function _detailStructuredFields(data) {
 }
 
 function renderActivityDetailHtml(data) {
-  const fields = _detailStructuredFields(data);
-  const baseRows = [
-    { label: 'Action Type', value: data?.action || data?.title || '—' },
-    { label: 'Timestamp', value: _detailTimestamp(data?.ran_at || data?.timestamp || data?.created_at) },
-  ];
+  const structured = _detailStructuredFields(data);
+  const baseRows = [];
+  if (data?.agent_name) baseRows.push({ label: 'Agent', value: data.agent_name });
+  baseRows.push({ label: 'Action Type', value: data?.action || data?.title || '—' });
+  baseRows.push({ label: 'Timestamp', value: _detailTimestamp(data?.ran_at || data?.timestamp || data?.created_at) });
   if (data?.status) baseRows.push({ label: 'Status', value: data.status });
+  if (data?.duration_ms != null) baseRows.push({ label: 'Duration', value: `${data.duration_ms} ms` });
+  if (data?.error_msg) baseRows.push({ label: 'Error', value: data.error_msg });
   if (data?.prospect_id && data?.prospect_found === false) {
     baseRows.push({ label: 'Prospect', value: 'No matching prospect row' });
   }
-  const rows = baseRows.concat(fields).map(field =>
+
+  // Fallback: when the API didn't curate fields for this action (≤1 structured field)
+  // or the prospect lookup failed, dump the raw payload as key-value pairs so the
+  // panel always shows something useful.
+  const useFallback = structured.length <= 1 || data?.prospect_found === false;
+  const usedLabels = new Set(
+    baseRows.concat(structured).map(r => String(r.label || '').toLowerCase())
+  );
+  const payloadRows = useFallback
+    ? _detailPayloadFields(data?.payload).filter(r => !usedLabels.has(String(r.label || '').toLowerCase()))
+    : [];
+
+  const rows = baseRows.concat(structured, payloadRows).map(field =>
     `<div class="feed-detail-line"><span class="feed-detail-label">${_esc(field.label)}</span><span class="feed-detail-value">${_esc(field.value)}</span></div>`
   ).join('');
   const actions = (Array.isArray(data?.actions) ? data.actions : []).map(a =>
     `<button type="button" class="feed-detail-action" data-action="${_esc(a.key)}">${_esc(a.label)}</button>`
   ).join('');
-  const shouldShowPayload = fields.length === 0 || data?.prospect_found === false;
-  const payload = shouldShowPayload
-    ? `<pre class="feed-detail-json">${_esc(_detailPayloadText(data?.payload))}</pre>`
-    : '';
   return `<div class="feed-detail-head">${_esc(data?.title || 'Details')}</div>
     ${rows || '<div class="feed-detail-empty">No details.</div>'}
-    ${payload}
     ${actions ? `<div class="feed-detail-actions">${actions}</div>` : ''}`;
 }
 
