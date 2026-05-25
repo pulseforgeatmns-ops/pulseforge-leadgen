@@ -4827,11 +4827,20 @@ async function toggleProspectDrawer(p, tr, visible) {
 }
 
 async function loadProspects() {
+  const sub = document.getElementById('prospectsSub');
+  const tbody = document.getElementById('prospectsTableBody');
+  if (sub) sub.textContent = 'Loading...';
   try {
     const res = await fetch('/api/prospects', { credentials: 'include' });
+    if (!res.ok) throw new Error('prospects unavailable');
     _prospects = await res.json();
     _renderProspects();
-  } catch(e) { console.error('loadProspects:', e); }
+  } catch(e) {
+    console.error('loadProspects:', e);
+    _prospects = [];
+    if (sub) sub.textContent = 'Failed to load prospects';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted);padding:1rem;">Prospects unavailable.</td></tr>';
+  }
 }
 
 function openProspectEdit(id) {

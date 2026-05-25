@@ -375,7 +375,7 @@ router.get('/api/prospects', requireAuth, async (req, res) => {
       LEFT JOIN touchpoints t ON t.prospect_id = p.id AND t.client_id = p.client_id
       WHERE p.do_not_contact = false
         AND p.client_id = $1
-      GROUP BY p.id, c.name
+      GROUP BY p.id, c.name, c.location
       ORDER BY p.icp_score DESC NULLS LAST
       LIMIT 200
     `, [clientId]);
