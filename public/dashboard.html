@@ -4134,7 +4134,9 @@ async function showProspectPreview(anchor, prospectId) {
     const res = await fetch(`/api/prospects/${encodeURIComponent(prospectId)}/preview`, { credentials: 'include' });
     if (_activePreviewProspectId !== prospectId) return;
     if (!res.ok) {
-      card.innerHTML = '<div class="preview-section">Prospect unavailable.</div>';
+      // Prospect lookup failed — show nothing rather than an error message.
+      card.innerHTML = '';
+      card.style.display = 'none';
       return;
     }
     const p = await res.json();
