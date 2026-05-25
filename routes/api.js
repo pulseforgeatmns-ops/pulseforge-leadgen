@@ -1107,15 +1107,17 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
     const action = String(row.action || '');
     const payload = row.payload || {};
 
-    // Bounce-event fallback: Riley/Brevo sometimes logs bounces under one client_id
-    // while the prospect actually lives under a different one (e.g. NH log row,
-    // Nashville prospect). The strict-client JOIN above silently misses, so re-run
-    // an unscoped lookup so the detail panel can still surface name/company/score.
-    // The session already has access to this log row (which references prospect_id),
-    // so widening this single lookup does not expose any new prospect.
-    const isBounceEvent = action === 'email_bounced' || action === 'email_soft_bounce';
+    // Brevo/Riley webhook fallback: Riley logs Brevo email events (opens, clicks,
+    // bounces) under one client_id while the prospect actually lives under a
+    // different one (e.g. NH log row, Nashville prospect). The strict-client JOIN
+    // above silently misses, so re-run an unscoped lookup so the detail panel can
+    // still surface name/company/score. The session already has access to this log
+    // row (which references prospect_id), so widening this single lookup does not
+    // expose any new prospect.
+    const isBrevoEvent = action === 'email_bounced' || action === 'email_soft_bounce'
+      || action === 'email_opened' || action === 'email_clicked';
     let recoveredClientId = null;
-    if (isBounceEvent && !row.first_name && !row.last_name && !row.prospect_email) {
+    if (isBrevoEvent && !row.first_name && !row.last_name && !row.prospect_email) {
       let fbRes = null;
       if (row.prospect_id) {
         fbRes = await pool.query(`

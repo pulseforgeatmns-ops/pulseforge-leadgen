@@ -3916,8 +3916,10 @@ function bindActivityFeedDelegation() {
     }
 
     const feedItem = e.target.closest('.feed-item.has-prospect');
-    if (feedItem && container.contains(feedItem) && feedItem.dataset.prospectId) {
-      openProspectModal(feedItem.dataset.prospectId);
+    if (feedItem && container.contains(feedItem)) {
+      const row = feedItem.closest('.feed-row');
+      const toggle = row && row.querySelector('.feed-detail-toggle');
+      if (toggle) toggleActivityDetail(toggle);
     }
   });
 
