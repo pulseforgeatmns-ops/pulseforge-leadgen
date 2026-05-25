@@ -1803,7 +1803,7 @@ router.get('/api/analytics/email', requireAuth, async (req, res) => {
 // Max daily brief
 router.get('/api/max-brief', requireAuth, async (req, res) => {
   try {
-    const clientId = getRequestClientId(req);
+    const clientId = normalizeClientId(req.session?.active_client_id || 1);
     const result = await pool.query(`
       SELECT payload, ran_at
       FROM agent_log
@@ -1811,9 +1811,16 @@ router.get('/api/max-brief', requireAuth, async (req, res) => {
       ORDER BY ran_at DESC
       LIMIT 1
     `, [clientId]);
-    if (!result.rows.length) return res.json({ insights: null, ran_at: null });
+    if (!result.rows.length) {
+      return res.json({
+        client_id: clientId,
+        insights: null,
+        ran_at: null,
+        message: 'No brief generated yet for this client',
+      });
+    }
     const row = result.rows[0];
-    res.json({ insights: row.payload?.insights || null, ran_at: row.ran_at });
+    res.json({ client_id: clientId, insights: row.payload?.insights || null, ran_at: row.ran_at });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

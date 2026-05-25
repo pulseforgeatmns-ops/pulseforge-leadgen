@@ -6070,7 +6070,8 @@ async function loadMaxBrief() {
         ageEl.textContent = ago < 1 ? '< 1h ago' : ago < 24 ? `${ago}h ago` : `${Math.round(ago/24)}d ago`;
       }
     } else {
-      if (textEl) textEl.textContent = 'Max hasn\'t run yet — trigger him from the Agents tab to generate today\'s brief.';
+      if (textEl) textEl.textContent = d.message || 'No brief generated yet for this client';
+      if (ageEl) ageEl.textContent = '';
     }
   } catch(e) {
     console.error('loadMaxBrief:', e);
@@ -6100,12 +6101,13 @@ async function loadMaxBriefBanner() {
           : 'Generated ' + date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       }
     } else {
-      if (textEl) textEl.textContent = 'No brief generated yet today — click Regenerate to run Max now.';
+      if (textEl) textEl.textContent = d.message || 'No brief generated yet for this client';
       if (dateEl) dateEl.textContent = '';
     }
     if (bodyEl) bodyEl.style.display = 'block';
   } catch(e) {
-    if (textEl) textEl.textContent = 'No brief generated yet today — click Regenerate to run Max now.';
+    if (textEl) textEl.textContent = 'No brief generated yet for this client';
+    if (dateEl) dateEl.textContent = '';
     if (bodyEl) bodyEl.style.display = 'block';
   }
 }
