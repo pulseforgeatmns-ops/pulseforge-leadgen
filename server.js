@@ -209,6 +209,10 @@ body::before { content:''; position:fixed; inset:0; background:repeating-linear-
 label { font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:2px; text-transform:uppercase; color:#6b7fa0; display:block; margin-bottom:0.4rem; }
 input { width:100%; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:0.8rem 1rem; color:#e8f0fe; font-family:'DM Sans',sans-serif; font-size:0.9rem; outline:none; transition:border-color 0.2s; margin-bottom:1.25rem; }
 input:focus { border-color:#8b5cf6; background:rgba(139,92,246,0.05); }
+.password-field { position:relative; margin-bottom:1.25rem; }
+.password-field input { padding-right:4.7rem; margin-bottom:0; }
+.toggle-password { position:absolute; right:0.45rem; top:50%; transform:translateY(-50%); width:auto; background:transparent; border:1px solid rgba(255,255,255,0.08); border-radius:5px; padding:0.35rem 0.55rem; color:#6b7fa0; font-size:0.58rem; letter-spacing:1px; }
+.toggle-password:hover { color:#e8f0fe; border-color:#8b5cf6; background:rgba(139,92,246,0.08); box-shadow:none; }
 button { width:100%; background:#8b5cf6; border:none; border-radius:6px; padding:0.85rem; color:#040810; font-family:'JetBrains Mono',monospace; font-size:0.75rem; font-weight:500; letter-spacing:2px; text-transform:uppercase; cursor:pointer; transition:all 0.2s; }
 button:hover { background:#7c3aed; box-shadow:0 0 20px rgba(139,92,246,0.4); }
 .version { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:#3a4a6a; text-align:center; margin-top:1.5rem; letter-spacing:1px; }
@@ -223,11 +227,26 @@ button:hover { background:#7c3aed; box-shadow:0 0 20px rgba(139,92,246,0.4); }
     <label>Email</label>
     <input type="email" name="email" placeholder="you@pulseforge.com" autofocus>
     <label>Password</label>
-    <input type="password" name="password" placeholder="Enter password" required>
+    <div class="password-field">
+      <input id="login-password" type="password" name="password" placeholder="Enter password" required>
+      <button class="toggle-password" type="button" data-toggle-password="login-password" aria-label="Show password">Show</button>
+    </div>
     <button type="submit">Access System →</button>
   </form>
   <div class="version">Pulseforge v0.6.0 · Phase 6</div>
 </div>
+<script>
+document.addEventListener('click', function(e) {
+  const button = e.target.closest('[data-toggle-password]');
+  if (!button) return;
+  const input = document.getElementById(button.dataset.togglePassword);
+  if (!input) return;
+  const show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  button.textContent = show ? 'Hide' : 'Show';
+  button.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+});
+</script>
 </body>
 </html>`);
 });

@@ -50,8 +50,11 @@ body::before {
 .login-dot { width:10px; height:10px; background:var(--purple-bright); border-radius:50%; box-shadow:0 0 12px var(--purple-bright); }
 .login-sub { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--gray-light); letter-spacing:2px; text-transform:uppercase; margin-bottom:2rem; }
 .login-card label { font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:2px; text-transform:uppercase; color:var(--gray-light); display:block; margin-bottom:0.5rem; }
-.pin-input { width:100%; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:0.85rem 1rem; color:var(--white); outline:none; margin-bottom:1rem; letter-spacing:0.22em; }
+.password-field { position:relative; margin-bottom:1rem; }
+.pin-input { width:100%; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:0.85rem 4.7rem 0.85rem 1rem; color:var(--white); outline:none; letter-spacing:0.22em; }
 .pin-input:focus { border-color:var(--purple-bright); background:rgba(139,92,246,0.06); }
+.toggle-password { position:absolute; right:0.45rem; top:50%; transform:translateY(-50%); background:transparent; border:1px solid rgba(255,255,255,0.08); border-radius:5px; padding:0.35rem 0.55rem; color:var(--gray-light); font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:1px; text-transform:uppercase; cursor:pointer; }
+.toggle-password:hover { color:var(--white); border-color:var(--purple-bright); background:rgba(139,92,246,0.08); }
 .login-btn { width:100%; background:var(--purple-bright); border:none; border-radius:6px; padding:0.85rem; color:var(--white); font-family:'JetBrains Mono',monospace; font-size:0.72rem; letter-spacing:2px; text-transform:uppercase; cursor:pointer; }
 .login-error { display:none; margin-top:0.85rem; padding:0.65rem; color:var(--red); background:rgba(255,59,92,0.08); border:1px solid rgba(255,59,92,0.18); border-radius:6px; font-size:0.75rem; }
 [data-auth="login"] .login-screen { display:flex; }
@@ -230,7 +233,10 @@ body::before {
     <div class="login-logo"><div class="login-dot"></div>PULSEFORGE</div>
     <div class="login-sub" id="loginSub">Client command center</div>
     <label for="pin">4-digit PIN</label>
-    <input class="pin-input" id="pin" type="password" inputmode="numeric" maxlength="4" autocomplete="one-time-code" required>
+    <div class="password-field">
+      <input class="pin-input" id="pin" type="password" inputmode="numeric" maxlength="4" autocomplete="one-time-code" required>
+      <button class="toggle-password" type="button" data-toggle-password="pin" aria-label="Show PIN">Show</button>
+    </div>
     <button class="login-btn" type="submit">Access Dashboard</button>
     <div class="login-error" id="loginError">Invalid PIN. Please try again.</div>
   </form>
@@ -396,6 +402,17 @@ let prospects = [];
 let activity = [];
 let approvalFilter = 'all';
 let prospectFilter = 'all';
+
+document.addEventListener('click', function(e) {
+  const button = e.target.closest('[data-toggle-password]');
+  if (!button) return;
+  const input = document.getElementById(button.dataset.togglePassword);
+  if (!input) return;
+  const show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  button.textContent = show ? 'Hide' : 'Show';
+  button.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+});
 let prospectSearch = '';
 let charts = [];
 

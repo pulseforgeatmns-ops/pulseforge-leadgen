@@ -41,10 +41,19 @@ a { color:var(--teal); text-decoration:none; }
 .panel { background:var(--bg1); border:1px solid var(--border); border-radius:10px; overflow:hidden; margin-bottom:1rem; }
 .form { display:grid; grid-template-columns:1.2fr 1.4fr 1fr 0.8fr auto; gap:0.75rem; padding:1rem; border-bottom:1px solid var(--border); }
 input, select { width:100%; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:0.7rem; color:var(--white); outline:none; }
+.password-field { position:relative; }
+.password-field input { padding-right:4.6rem; }
+.toggle-password { position:absolute; right:0.35rem; top:50%; transform:translateY(-50%); color:var(--gray-light); background:transparent; border-color:rgba(255,255,255,0.08); padding:0.38rem 0.5rem; }
+.toggle-password:hover { color:var(--white); border-color:rgba(139,92,246,0.35); }
 button { border:1px solid var(--border); color:var(--gray-light); background:transparent; border-radius:5px; padding:0.65rem 0.8rem; cursor:pointer; }
 button.primary { background:rgba(96,48,177,0.2); color:var(--purple-bright); border-color:rgba(139,92,246,0.35); }
 button.danger { color:var(--red); border-color:rgba(255,59,92,0.25); }
 button.good { color:var(--green); border-color:rgba(0,230,118,0.25); }
+.modal-backdrop { position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:1rem; background:rgba(4,8,16,0.72); z-index:20; }
+.modal-backdrop.open { display:flex; }
+.modal { width:min(380px, 100%); background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:1rem; box-shadow:0 24px 80px rgba(0,0,0,0.45); }
+.modal-title { font-family:'JetBrains Mono',monospace; color:var(--white); font-size:0.72rem; letter-spacing:1.5px; text-transform:uppercase; margin-bottom:0.75rem; }
+.modal-actions { display:flex; justify-content:flex-end; gap:0.5rem; margin-top:0.85rem; }
 table { width:100%; border-collapse:collapse; }
 th { font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:1.5px; text-transform:uppercase; color:var(--gray); padding:0.75rem 1rem; text-align:left; border-bottom:1px solid var(--border); }
 td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color:rgba(255,255,255,0.76); }
@@ -66,7 +75,10 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
   <form class="form" id="addForm">
     <input id="name" placeholder="Name" required>
     <input id="email" type="email" placeholder="Email" required>
-    <input id="password" type="password" minlength="8" placeholder="Password" required>
+    <div class="password-field">
+      <input id="password" type="password" minlength="8" placeholder="Password" required>
+      <button class="toggle-password" type="button" data-toggle-password="password" aria-label="Show password">Show</button>
+    </div>
     <select id="role"><option value="setter">Setter</option><option value="closer">Closer</option><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select>
     <button class="primary" type="submit">Add User</button>
   </form>
@@ -75,9 +87,23 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
     <tbody id="rows"><tr><td colspan="6">Loading...</td></tr></tbody>
   </table>
 </section>
+<div class="modal-backdrop" id="resetModal" aria-hidden="true">
+  <form class="modal" id="resetForm">
+    <div class="modal-title">Reset Password</div>
+    <div class="password-field">
+      <input id="resetPassword" type="password" minlength="8" placeholder="New password" required>
+      <button class="toggle-password" type="button" data-toggle-password="resetPassword" aria-label="Show password">Show</button>
+    </div>
+    <div class="modal-actions">
+      <button type="button" id="cancelReset">Cancel</button>
+      <button class="primary" type="submit">Reset</button>
+    </div>
+  </form>
+</div>
 <script>
 const roles = ['admin','manager','setter','closer','sales'];
 const msg = document.getElementById('msg');
+let resetUserId = null;
 function say(text) { msg.textContent = text; setTimeout(() => { if (msg.textContent === text) msg.textContent = ''; }, 3500); }
 async function api(path, options = {}) {
   const res = await fetch(path, { credentials:'include', headers:{'Content-Type':'application/json'}, ...options });
@@ -118,6 +144,40 @@ document.getElementById('addForm').addEventListener('submit', async e => {
     e.target.reset(); say('User created'); load();
   } catch (err) { say(err.message); }
 });
+function closeResetModal() {
+  resetUserId = null;
+  document.getElementById('resetForm').reset();
+  document.getElementById('resetPassword').type = 'password';
+  document.querySelector('[data-toggle-password="resetPassword"]').textContent = 'Show';
+  document.getElementById('resetModal').classList.remove('open');
+  document.getElementById('resetModal').setAttribute('aria-hidden', 'true');
+}
+function openResetModal(id) {
+  resetUserId = id;
+  document.getElementById('resetModal').classList.add('open');
+  document.getElementById('resetModal').setAttribute('aria-hidden', 'false');
+  document.getElementById('resetPassword').focus();
+}
+document.addEventListener('click', e => {
+  const button = e.target.closest('[data-toggle-password]');
+  if (!button) return;
+  const input = document.getElementById(button.dataset.togglePassword);
+  if (!input) return;
+  const show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  button.textContent = show ? 'Hide' : 'Show';
+  button.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+});
+document.getElementById('cancelReset').addEventListener('click', closeResetModal);
+document.getElementById('resetModal').addEventListener('click', e => { if (e.target.id === 'resetModal') closeResetModal(); });
+document.getElementById('resetForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  if (!resetUserId) return;
+  try {
+    await api('/api/users/' + resetUserId + '/reset-password', { method:'POST', body:JSON.stringify({ password:document.getElementById('resetPassword').value }) });
+    closeResetModal(); say('Password reset');
+  } catch (err) { say(err.message); }
+});
 document.addEventListener('change', async e => {
   const id = e.target.dataset.role;
   if (!id) return;
@@ -130,8 +190,7 @@ document.addEventListener('click', async e => {
   try {
     if (activeId) { await api('/api/users/' + activeId, { method:'PATCH', body:JSON.stringify({ active:e.target.dataset.value === 'true' }) }); say('Status updated'); load(); }
     if (resetId) {
-      const password = prompt('New password, minimum 8 characters');
-      if (password) { await api('/api/users/' + resetId + '/reset-password', { method:'POST', body:JSON.stringify({ password }) }); say('Password reset'); }
+      openResetModal(resetId);
     }
     if (deleteId && confirm('Hard delete this user? Deactivate is safer.')) { await api('/api/users/' + deleteId, { method:'DELETE' }); say('User deleted'); load(); }
   } catch (err) { say(err.message); }
