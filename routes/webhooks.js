@@ -211,7 +211,7 @@ router.post('/webhooks/bland', async (req, res) => {
         UPDATE touchpoints
         SET outcome = $1, payload = payload || $2::jsonb
         WHERE prospect_id = $3
-          AND channel = 'manual'
+          AND channel = 'phone'
           AND action_type = 'outbound'
           AND agent_id = 'cal'
           AND external_ref = $4

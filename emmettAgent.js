@@ -969,6 +969,16 @@ function humanDelay() {
 }
 
 async function run() {
+  const HOLIDAYS_2026 = [
+    '2026-01-01', '2026-01-19', '2026-02-16', '2026-05-25',
+    '2026-07-04', '2026-09-07', '2026-11-11', '2026-11-26', '2026-12-25'
+  ];
+  const today = new Date().toISOString().split('T')[0];
+  if (HOLIDAYS_2026.includes(today)) {
+    console.log(`Holiday detected (${today}) — skipping run`);
+    return;
+  }
+
   console.log('\nEmmett agent running...\n');
   CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
   if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);

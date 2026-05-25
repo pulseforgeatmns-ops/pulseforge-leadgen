@@ -34,7 +34,7 @@ async function getCallCandidates() {
       AND NOT EXISTS (
         SELECT 1 FROM touchpoints t2
         WHERE t2.prospect_id = p.id
-          AND t2.channel = 'manual'
+          AND t2.channel = 'phone'
           AND t2.action_type = 'outbound'
           AND t2.agent_id = 'cal'
       )
@@ -153,6 +153,16 @@ async function createCalendarEvent(prospectName, businessName, agreedTimeISO) {
 
 // ── MAIN ───────────────────────────────────────────────────────────────────
 async function run() {
+  const HOLIDAYS_2026 = [
+    '2026-01-01', '2026-01-19', '2026-02-16', '2026-05-25',
+    '2026-07-04', '2026-09-07', '2026-11-11', '2026-11-26', '2026-12-25'
+  ];
+  const today = new Date().toISOString().split('T')[0];
+  if (HOLIDAYS_2026.includes(today)) {
+    console.log(`Holiday detected (${today}) — skipping run`);
+    return;
+  }
+
   console.log('\nCal agent running...\n');
   const clientConfig = await getClientConfig(CLIENT_ID);
   if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
@@ -191,7 +201,7 @@ async function run() {
 
       await db.logTouchpoint(
         prospect.id,
-        'manual',
+        'phone',
         'outbound',
         `Outbound call via Bland.ai — ${companyName}`,
         'pending',

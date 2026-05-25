@@ -83,7 +83,7 @@ async function getBatchCandidates() {
         SELECT 1
         FROM touchpoints t
         WHERE t.prospect_id = p.id
-          AND t.channel = 'manual'
+          AND t.channel = 'phone'
           AND t.action_type = 'outbound'
           AND t.agent_id = 'cal'
       )
@@ -157,7 +157,7 @@ async function logBatchTouchpoints(formattedProspects, batchResponse) {
   for (const item of formattedProspects) {
     await db.logTouchpoint(
       item.prospect.id,
-      'manual',
+      'phone',
       'outbound',
       `Cal batch call — ${item.businessName}`,
       'pending',
@@ -169,6 +169,16 @@ async function logBatchTouchpoints(formattedProspects, batchResponse) {
 }
 
 async function run() {
+  const HOLIDAYS_2026 = [
+    '2026-01-01', '2026-01-19', '2026-02-16', '2026-05-25',
+    '2026-07-04', '2026-09-07', '2026-11-11', '2026-11-26', '2026-12-25'
+  ];
+  const today = new Date().toISOString().split('T')[0];
+  if (HOLIDAYS_2026.includes(today)) {
+    console.log(`Holiday detected (${today}) — skipping run`);
+    return;
+  }
+
   const startedAt = Date.now();
   console.log('\nCal batch agent running...\n');
 
