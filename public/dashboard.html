@@ -903,6 +903,21 @@ body.light-mode .agent-card:not(.not-configured) {
 .feed-detail-label { color: var(--text-secondary); flex-shrink: 0; }
 .feed-detail-value { color: var(--white); text-align: right; word-break: break-word; }
 .feed-detail-empty { color: var(--text-secondary); font-style: italic; }
+.feed-detail-json {
+  margin-top: 0.45rem;
+  padding: 0.55rem;
+  border: 0.5px solid rgba(255,255,255,0.08);
+  border-radius: 5px;
+  background: rgba(0,0,0,0.18);
+  color: rgba(255,255,255,0.68);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.58rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+}
 .feed-detail-actions { display: flex; gap: 6px; margin-top: 0.5rem; }
 .feed-detail-action {
   flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 0.55rem;
@@ -3821,7 +3836,7 @@ function renderActivityFeedItems() {
     const chevron = item.id != null
       ? `<button type="button" class="feed-detail-toggle" data-log-id="${_esc(String(item.id))}" title="Details" aria-expanded="false">›</button>`
       : '';
-    return `<div class="feed-row" data-log-id="${_esc(String(item.id == null ? '' : item.id))}">
+    return `<div class="feed-row" data-log-id="${_esc(String(item.id == null ? '' : item.id))}" data-log-action="${_esc(item.raw_action || item.action || '')}" data-ran-at="${_esc(item.ran_at || '')}">
       <div class="feed-item${warm}${hoverable}" data-prospect-id="${_esc(item.prospect_id || '')}">
         <div class="feed-icon ${_esc(item.color || 'fi-g')}">${_esc(item.icon || '⚡')}</div>
         <div class="feed-text"><strong>${_esc(item.agent || 'System')}</strong>${badge} ${_feedActionHtml(item)}</div>
@@ -3831,10 +3846,6 @@ function renderActivityFeedItems() {
       <div class="feed-detail-panel" style="display:none"></div>
     </div>`;
   }).join('');
-  container.querySelectorAll('.feed-item.has-prospect').forEach(el => {
-    el.addEventListener('mouseenter', () => showProspectPreview(el, el.dataset.prospectId));
-    el.addEventListener('mouseleave', schedulePreviewHide);
-  });
 }
 
 function bindActivityFeedDelegation() {
@@ -3842,6 +3853,7 @@ function bindActivityFeedDelegation() {
   const container = document.getElementById('feedItems');
   if (!container) return;
   _feedDelegationBound = true;
+
   container.addEventListener('click', (e) => {
     const detailBtn = e.target.closest('.feed-detail-toggle');
     if (detailBtn && container.contains(detailBtn)) {
@@ -3856,6 +3868,20 @@ function bindActivityFeedDelegation() {
     if (feedItem && container.contains(feedItem) && feedItem.dataset.prospectId) {
       openProspectModal(feedItem.dataset.prospectId);
     }
+  });
+
+  container.addEventListener('mouseover', (e) => {
+    const feedItem = e.target.closest('.feed-item.has-prospect');
+    if (!feedItem || !container.contains(feedItem)) return;
+    if (feedItem.contains(e.relatedTarget)) return;
+    showProspectPreview(feedItem, feedItem.dataset.prospectId);
+  });
+
+  container.addEventListener('mouseout', (e) => {
+    const feedItem = e.target.closest('.feed-item.has-prospect');
+    if (!feedItem || !container.contains(feedItem)) return;
+    if (feedItem.contains(e.relatedTarget)) return;
+    schedulePreviewHide();
   });
 }
 
@@ -3897,30 +3923,83 @@ async function toggleActivityDetail(btn) {
   btn.setAttribute('aria-expanded', 'true');
   panel.style.display = 'block';
   panel.classList.add('open');
-  if (!panel.dataset.loaded) {
-    panel.innerHTML = '<div class="feed-detail-empty">Loading details…</div>';
-    try {
-      const data = await fetchActivityDetails(btn.dataset.logId);
-      panel.innerHTML = renderActivityDetailHtml(data);
-      panel.dataset.loaded = '1';
-      bindActivityDetailActions(panel, data);
-    } catch (err) {
-      console.error('[activity-details] render failed', { id: btn.dataset.logId, error: err.message });
-      panel.innerHTML = '<div class="feed-detail-empty">Details unavailable.</div>';
-    }
+  if (panel.dataset.loaded) return;
+
+  panel.innerHTML = '<div class="feed-detail-empty">Loading details…</div>';
+  try {
+    const data = await fetchActivityDetails(btn.dataset.logId);
+    panel.innerHTML = renderActivityDetailHtml(data);
+    panel.dataset.loaded = '1';
+    bindActivityDetailActions(panel, data);
+  } catch (err) {
+    console.error('[activity-details] render failed', { id: btn.dataset.logId, error: err.message });
+    panel.innerHTML = renderActivityDetailHtml({
+      action: row.dataset.logAction || btn.dataset.action || 'unknown',
+      title: 'Details unavailable',
+      ran_at: row.dataset.ranAt || null,
+      payload: { error: err.message, id: btn.dataset.logId },
+      fields: [],
+      actions: [],
+    });
+    panel.dataset.loaded = '1';
   }
 }
 
+function _detailTimestamp(value) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', second: '2-digit'
+  });
+}
+
+function _detailPayloadText(payload) {
+  if (payload === null || payload === undefined || payload === '') return '{}';
+  if (typeof payload === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(payload), null, 2);
+    } catch {
+      return payload;
+    }
+  }
+  try {
+    return JSON.stringify(payload, null, 2);
+  } catch {
+    return String(payload);
+  }
+}
+
+function _detailStructuredFields(data) {
+  return Array.isArray(data?.fields)
+    ? data.fields.filter(field => field && field.label != null)
+    : [];
+}
+
 function renderActivityDetailHtml(data) {
-  const fields = Array.isArray(data?.fields) ? data.fields : [];
-  const rows = fields.map(field =>
+  const fields = _detailStructuredFields(data);
+  const baseRows = [
+    { label: 'Action Type', value: data?.action || data?.title || '—' },
+    { label: 'Timestamp', value: _detailTimestamp(data?.ran_at || data?.timestamp || data?.created_at) },
+  ];
+  if (data?.status) baseRows.push({ label: 'Status', value: data.status });
+  if (data?.prospect_id && data?.prospect_found === false) {
+    baseRows.push({ label: 'Prospect', value: 'No matching prospect row' });
+  }
+  const rows = baseRows.concat(fields).map(field =>
     `<div class="feed-detail-line"><span class="feed-detail-label">${_esc(field.label)}</span><span class="feed-detail-value">${_esc(field.value)}</span></div>`
   ).join('');
   const actions = (Array.isArray(data?.actions) ? data.actions : []).map(a =>
     `<button type="button" class="feed-detail-action" data-action="${_esc(a.key)}">${_esc(a.label)}</button>`
   ).join('');
+  const shouldShowPayload = fields.length === 0 || data?.prospect_found === false;
+  const payload = shouldShowPayload
+    ? `<pre class="feed-detail-json">${_esc(_detailPayloadText(data?.payload))}</pre>`
+    : '';
   return `<div class="feed-detail-head">${_esc(data?.title || 'Details')}</div>
     ${rows || '<div class="feed-detail-empty">No details.</div>'}
+    ${payload}
     ${actions ? `<div class="feed-detail-actions">${actions}</div>` : ''}`;
 }
 
@@ -4837,29 +4916,28 @@ function _detailValue(details, labels) {
 function _renderTimelineDetails(item) {
   const details = _tlDetailsCache.get(String(item.id));
   if (!details) return '<div class="tl-loading">Loading details...</div>';
-  if (details.error) return '<div class="tl-loading">Details unavailable.</div>';
-  const detailFields = Array.isArray(details.fields) ? details.fields : [];
-  const prospectValue = _detailValue(details, ['Prospect']);
-  const rows = [
-    ['Prospect', prospectValue === '—' ? (item.prospect || '—') : prospectValue],
-    ['Company', _detailValue(details, ['Company'])],
-    ['Email', _detailValue(details, ['Email', 'Prospect email'])],
-    ['ICP Score', _detailValue(details, ['ICP score'])],
-    ['Open Count', _detailValue(details, ['Total opens', 'Opens in 24h'])],
-    ['Subject Line', _detailValue(details, ['Last email subject'])],
-    ['Vertical', _detailValue(details, ['Vertical'])]
+  const effective = details.error
+    ? { action: item.raw_action || item.action || 'unknown', ran_at: item.ran_at, status: 'unavailable', fields: [], payload: details.payload || { error: true } }
+    : details;
+  const detailFields = _detailStructuredFields(effective);
+  const prospectValue = _detailValue(effective, ['Prospect']);
+  const baseRows = [
+    ['Action Type', effective.action || item.raw_action || item.action || '—'],
+    ['Timestamp', _detailTimestamp(effective.ran_at || item.ran_at)],
   ];
-  const consumed = new Set(['prospect', 'company', 'email', 'prospect email', 'icp score', 'total opens', 'opens in 24h', 'last email subject', 'vertical']);
-  const extras = detailFields
-    .filter(field => !consumed.has(String(field.label || '').toLowerCase()))
-    .slice(0, 3)
-    .map(field => [field.label, field.value]);
-  return `<div class="tl-details">${rows.concat(extras).map(([label, value]) => `
+  if (effective.status) baseRows.push(['Status', effective.status]);
+  if (effective.prospect_id && effective.prospect_found === false) baseRows.push(['Prospect', 'No matching prospect row']);
+  if (item.prospect && prospectValue === '—' && detailFields.length > 0) baseRows.push(['Prospect', item.prospect]);
+  const rows = baseRows.concat(detailFields.map(field => [field.label, field.value]));
+  const payloadBlock = detailFields.length === 0
+    ? `<pre class="feed-detail-json">${_esc(_detailPayloadText(effective.payload))}</pre>`
+    : '';
+  return `<div class="tl-details">${rows.slice(0, detailFields.length ? 10 : 4).map(([label, value]) => `
     <div class="tl-detail">
       <span class="tl-detail-label">${_esc(label)}</span>
       <span class="tl-detail-value">${_esc(value || '—')}</span>
     </div>
-  `).join('')}</div>`;
+  `).join('')}</div>${payloadBlock}`;
 }
 
 function renderSequences(rows) {

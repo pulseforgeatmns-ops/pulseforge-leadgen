@@ -1051,8 +1051,6 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
         f('Error message', row.error_msg || 'Unknown error');
         break;
       default:
-        f('Action', action);
-        f('Status', row.status);
         if (prospectName) f('Prospect', prospectName);
         break;
     }
@@ -1060,17 +1058,28 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
     const responseBody = {
       id: row.id,
       action,
+      agent_name: row.agent_name || null,
+      status: row.status || null,
+      ran_at: row.ran_at || null,
       title: activityDetailTitle(action),
       prospect_id: row.prospect_id || null,
       fields,
       actions,
+      payload,
+      error_msg: row.error_msg || null,
+      duration_ms: row.duration_ms ?? null,
+      prospect_found: Boolean(row.prospect_id && (row.first_name || row.last_name || row.prospect_email || row.phone || row.notes)),
     };
     console.log('[activity-details] response', {
       id: responseBody.id,
       action: responseBody.action,
+      status: responseBody.status,
+      ran_at: responseBody.ran_at,
       title: responseBody.title,
       prospect_id: responseBody.prospect_id,
+      prospect_found: responseBody.prospect_found,
       fields: responseBody.fields,
+      payload: responseBody.payload,
       actions: responseBody.actions.map(a => a.key),
     });
     res.json(responseBody);
