@@ -15,6 +15,57 @@ const MIN_HOOK_SCORE = 8;
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
 
+const PULSEFORGE_TOPIC_BANK = [
+  {
+    label: 'Behind the scenes',
+    guidance: "what actually runs when a client's phone is quiet",
+  },
+  {
+    label: 'Client result story',
+    guidance: 'a specific, local, anonymized client result story',
+  },
+  {
+    label: 'Common follow-up mistake',
+    guidance: 'a common mistake local businesses make with follow-up',
+  },
+  {
+    label: 'Tool and system explainer',
+    guidance: 'what n8n, automation, or an AI workflow actually does in plain English',
+  },
+  {
+    label: 'Contrarian take',
+    guidance: "why more leads isn't always the answer",
+  },
+  {
+    label: 'Human side',
+    guidance: 'the bartender builds an AI agency story, grounded and practical',
+  },
+  {
+    label: 'Before and after workflow',
+    guidance: 'a workflow transformation from manual chaos to automatic follow-through',
+  },
+  {
+    label: 'Industry-specific pain point',
+    guidance: 'one pain point for a restaurant, cleaner, contractor, salon, gym, or local service owner',
+  },
+  {
+    label: 'AI agent FAQ',
+    guidance: 'what an AI agent actually does all day',
+  },
+  {
+    label: 'Local market observation',
+    guidance: 'a Manchester NH small business observation',
+  },
+  {
+    label: 'Cost of doing nothing',
+    guidance: 'what no automation quietly costs a local business',
+  },
+  {
+    label: 'Day in the life',
+    guidance: 'a day in the life of an automated system',
+  },
+];
+
 // Vertical-specific context fed into the prompt so Claude sounds right for each business type
 const VERTICAL_PROMPTS = {
   cleaning:    'spotless results, reliable local team, before-and-after transformations, booking convenience, trust and consistency',
@@ -45,6 +96,77 @@ function firstWords(text, count = 8) {
     .filter(Boolean)
     .slice(0, count)
     .join(' ');
+}
+
+function cleanPostText(text) {
+  return String(text || '')
+    .replace(/^POST:\s*/i, '')
+    .replace(/\nFIRST_COMMENT:[\s\S]*$/i, '')
+    .replace(/[#*_`]/g, '')
+    .trim();
+}
+
+function extractCoreAngle(text) {
+  const cleaned = cleanPostText(text);
+  const firstLine = cleaned
+    .split(/\n+/)
+    .map(line => line.trim())
+    .find(Boolean) || '';
+  const hook = firstLine || firstWords(cleaned, 14);
+  return hook
+    .replace(/\s+/g, ' ')
+    .replace(/[.!?]+$/, '')
+    .slice(0, 160)
+    .trim();
+}
+
+function getPulseforgeTopicAngle(date = new Date()) {
+  const day = Number(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    day: 'numeric',
+  }).format(date));
+  return PULSEFORGE_TOPIC_BANK[(day - 1) % PULSEFORGE_TOPIC_BANK.length];
+}
+
+function formatUsedAngles(angles) {
+  return angles?.length
+    ? angles.map(angle => `- ${angle}`).join('\n')
+    : '- none found in the last 14 days';
+}
+
+async function getRecentPublishedAngles() {
+  const res = await pool.query(`
+    SELECT
+      al.payload,
+      al.ran_at,
+      pc.comment,
+      pc.post_content
+    FROM agent_log al
+    LEFT JOIN pending_comments pc
+      ON pc.id::text = al.payload->>'id'
+      AND pc.client_id = al.client_id
+    WHERE al.client_id = $1
+      AND al.ran_at >= NOW() - INTERVAL '14 days'
+      AND (
+        al.action IN ('post_published', 'published_post', 'publish_post', 'content_published', 'blog_published')
+        OR al.action ILIKE '%publish%'
+      )
+      AND al.status IN ('success', 'completed', 'posted')
+    ORDER BY al.ran_at DESC
+    LIMIT 40
+  `, [CLIENT_ID]);
+
+  return uniqueList(res.rows.map(row => {
+    const payload = parseLogPayload(row.payload);
+    return extractCoreAngle(
+      row.comment ||
+      payload.post ||
+      payload.content ||
+      payload.post_content ||
+      payload.comment ||
+      row.post_content
+    );
+  }), 20);
 }
 
 function extractRecentThemes(rows) {
@@ -94,7 +216,12 @@ function formatThemeList(values) {
   return values?.length ? values.join('; ') : 'none found';
 }
 
-function buildContentRules(recentThemes) {
+function buildContentRules(recentThemes, recentPublishedAngles = [], topicAngle = null) {
+  const topicBlock = topicAngle ? `
+TODAY'S PULSEFORGE TOPIC BUCKET:
+- ${topicAngle.label}: ${topicAngle.guidance}
+- If writing for Pulseforge, make this the core angle for today's posts. Do not drift into a different bucket unless the channel absolutely requires it.` : '';
+
   return `CONTENT RULES — YOU MUST FOLLOW THESE:
 - Do NOT use any seasonal reference (summer, winter, spring, fall, holidays) as the hook or opening angle
 - Do NOT open with a location name (Manchester, NH, New Hampshire, local)
@@ -104,12 +231,19 @@ function buildContentRules(recentThemes) {
 - Lead with a specific result, outcome, stat, or question that creates genuine curiosity — not a seasonal or geographic observation
 - Every post must have a concrete hook in the first line that works without knowing the location or time of year
 - Write in a natural, conversational tone. Always use contractions — it's, don't, that's, you're, we're, isn't, hasn't, won't, can't. Never write "it is", "do not", "that is", "you are", "we are" when a contraction would sound more natural. The content should sound like a sharp business owner wrote it, not a marketing agency.
+${topicBlock}
+
+USED-ANGLES MEMORY — DO NOT REUSE:
+These hooks or angles appeared in published posts from the last 14 days:
+${formatUsedAngles(recentPublishedAngles)}
+
+If any of these ideas appear above, do not use competitor comparison hooks, do not open with statistics about lead response rates, and do not use "your competitor just", "40% of leads", or "follow-up speed" angles. Even if they are not listed, avoid those angles for Pulseforge unless a human explicitly asks for them.
 
 HOOK WRITING — NON-NEGOTIABLE:
-Every post must open with a strong hook in the first line. Strong hooks include: a counterintuitive statement, a specific number or statistic, a direct question that creates curiosity, or a bold claim. Never start a post with "I", "We", "At [company]", or a generic greeting. The first line must stop the scroll. Examples of weak hooks: "We help local businesses grow." Examples of strong hooks: "Most local businesses lose 40% of potential customers before they ever pick up the phone." or "The restaurants winning right now aren't spending more on ads."
+Every post must open with a strong hook in the first line. Strong hooks include: a counterintuitive statement, a specific operational detail, a direct question that creates curiosity, or a bold claim. Never start a post with "I", "We", "At [company]", or a generic greeting. The first line must stop the scroll. Examples of weak hooks: "We help local businesses grow." Examples of strong hooks: "The quietest part of a local business is usually where the leak is." or "A booking request should not depend on whether the owner checked their inbox at the right minute."
 
 ORIGINALITY — NON-NEGOTIABLE:
-Every piece of content must feel like it was written for the first time. Never reuse the same opening premise, stat, or scenario you've used before. Rotate through these content angles and never use the same angle twice in a row: (1) a specific before/after story, (2) a counterintuitive industry stat, (3) a common mistake local businesses make, (4) a behind-the-scenes look at how the system works, (5) a client result framed as a case study, (6) a local market observation specific to Manchester NH. If you catch yourself writing something that sounds like something Pulseforge has said before, stop and pick a different angle.
+Every piece of content must feel like it was written for the first time. Never reuse the same opening premise, stat, or scenario you've used before. If you catch yourself writing something that sounds like something Pulseforge has said before, stop and pick a different angle from today's topic bucket.
 
 CTA — NON-NEGOTIABLE:
 Every post must end with exactly one of these CTAs — rotate them, never use the same one twice in a row: (1) 'Reply and I'll show you what this looks like for [business type] in Manchester.' (2) 'Drop a comment — what's the one part of your follow-up process you wish ran itself?' (3) 'DM us and we'll put together a free mockup for your business this week.' (4) 'Curious what this would cost for a business your size? Reply and I'll break it down.' Never end with a generic 'reach out' or 'contact us' line.`;
@@ -430,7 +564,7 @@ function parseScoreJson(text) {
   };
 }
 
-async function scoreDraft(draft) {
+async function scoreDraft(draft, recentPublishedAngles = []) {
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 220,
@@ -443,6 +577,11 @@ async function scoreDraft(draft) {
 
 2. ORIGINALITY — Does it avoid clichés, seasonal hooks, and location
    name-drops as the main angle? (10 = fresh angle, 1 = recycled formula)
+   Use this recent 14-day published angle list as the main originality reference:
+${formatUsedAngles(recentPublishedAngles)}
+   Originality scores below 7 should only occur if the post reuses a hook
+   or angle seen in the last 14 days. A fresh angle on a familiar topic can
+   still score 8+.
 
 3. HOOK STRENGTH — Does the opening line give someone a reason to stop
    scrolling and keep reading? (10 = compelling, 1 = forgettable)
@@ -467,6 +606,9 @@ async function generatePost(company, contentType, channel) {
   const location = company.location || 'Manchester, NH';
   const lastContentType = await getLastContentType(company.name, channel);
   const recentThemes = await getRecentThemes(channel);
+  const isPulseforge = company.name.toLowerCase().includes('pulseforge');
+  const recentPublishedAngles = await getRecentPublishedAngles();
+  const topicAngle = isPulseforge ? getPulseforgeTopicAngle() : null;
   const clientContext = CLIENT_ID === 2 ? `
 
 MSHI CLIENT CONTEXT:
@@ -477,12 +619,16 @@ MSHI CLIENT CONTEXT:
 - Reference WV locations naturally only when relevant
 - Never attack competitors or mention negative customer experiences
 - License WV065578 may be used in trust-building posts` : '';
-  const systemPrompt = `${buildContentRules(recentThemes)}${clientContext}`;
+  const systemPrompt = `${buildContentRules(recentThemes, recentPublishedAngles, topicAngle)}${clientContext}`;
 
   if (lastContentType) {
     console.log(`  [variety] Last ${channel} post type: ${lastContentType} → generating: ${contentType}`);
   }
   console.log(`  [themes] Recent openings checked: ${recentThemes.openings.length}; patterns: ${recentThemes.patterns.length}`);
+  if (isPulseforge && topicAngle) {
+    console.log(`  [topic] ${topicAngle.label}`);
+  }
+  console.log(`  [memory] Recent published angles checked: ${recentPublishedAngles.length}`);
 
   const prompt = channel === 'google_business'
     ? buildGooglePrompt(company, contentType, verticalCtx, location, lastContentType)
@@ -493,7 +639,7 @@ MSHI CLIENT CONTEXT:
         : buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType);
 
   const firstDraft = await createDraft(prompt, systemPrompt, channel);
-  const firstScore = await scoreDraft(firstDraft);
+  const firstScore = await scoreDraft(firstDraft, recentPublishedAngles);
   let finalDraft = firstDraft;
   let finalScore = firstScore;
   let regenerated = false;
@@ -511,21 +657,22 @@ WEAK: "We help local businesses stay on top of their marketing."
 WEAK: "Running a small business is tough, especially when it comes to marketing."
 WEAK: "Most business owners don't realize how much time they spend on marketing."
 
-STRONG: "A cleaning company in Manchester booked 11 new clients last month without running a single ad."
-STRONG: "Your competitor just automated their entire follow-up sequence. You're still doing it by hand."
-STRONG: "The businesses winning right now have one thing in common — and it's not their ad budget."
+STRONG: "A cleaning company owner can miss three booking requests before lunch without ever noticing the pattern."
+STRONG: "The phone going quiet is not always a demand problem."
+STRONG: "One tiny handoff between inbox and calendar can decide whether a lead turns into revenue."
 
 The first line must create a reason to keep reading. It should be specific, surprising, or create a gap the reader wants to close. No generic observations. No "most business owners." No "running a small business."
+Do not use competitor comparison hooks, lead response rate statistics, "your competitor just", "40% of leads", or "follow-up speed" angles. Use today's topic bucket instead: ${topicAngle ? `${topicAngle.label}: ${topicAngle.guidance}` : 'the most distinct available angle'}.
 
 Rewrite the post with a completely different opening line that hits one of these patterns:
-- A specific result or number ("booked 11 clients", "saved 6 hours a week")
-- A competitive tension ("your competitor just...", "while you were...")
+- A specific operational detail ("the missed handoff between inbox and calendar")
+- A quiet business problem ("the phone is quiet but the system is still working")
 - A counterintuitive claim ("the businesses winning aren't spending more on ads")
-- A direct challenge ("you're losing leads every day you don't have this")
+- A direct question ("which part of the follow-up process should not depend on you?")
 
 Return only the rewritten post text.`;
     const secondDraft = await createDraft(regenPrompt, systemPrompt, channel);
-    const secondScore = await scoreDraft(secondDraft);
+    const secondScore = await scoreDraft(secondDraft, recentPublishedAngles);
     if (secondScore.total > firstScore.total) {
       finalDraft = secondDraft;
       finalScore = secondScore;
@@ -621,7 +768,12 @@ async function logRun(status, payload) {
 
 function parseLogPayload(payload) {
   if (!payload) return {};
-  return typeof payload === 'string' ? JSON.parse(payload) : payload;
+  if (typeof payload !== 'string') return payload;
+  try {
+    return JSON.parse(payload);
+  } catch (_) {
+    return {};
+  }
 }
 
 // agent_log_status_check only allows: success | failed | skipped | pending.
