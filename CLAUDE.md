@@ -9,7 +9,7 @@ An AI-powered lead generation and outreach CRM for Pulseforge. It scrapes leads,
 
 | File | Purpose |
 |---|---|
-| `server.js` | Entry point. ~370 lines after route split. Handles auth, session, login/logout, /dashboard, /demo, /preview, /api/status, /api/search, /api/export/csv, /api/post-comment, and app.listen. |
+| `server.js` | Entry point. ~370 lines after route split. Handles auth, session, login/logout, /dashboard, /preview, /api/status, /api/search, /api/export/csv, /api/post-comment, and app.listen. |
 | `routes/api.js` | All /api/* dashboard routes (19 endpoints) |
 | `routes/cron.js` | CRON_MODULES, runCronAgent, GET/POST /cron/:agent handlers |
 | `routes/webhooks.js` | POST /webhooks/brevo and /webhooks/bland with BREVO_EVENT_MAP and checkAndUpdateWarmStatus |
@@ -26,7 +26,6 @@ An AI-powered lead generation and outreach CRM for Pulseforge. It scrapes leads,
 | `getRileyToken.js` | Helper script to generate Gmail OAuth token for Riley |
 | `utils/publishPipeline.js` | Publishes approved content to Google Business Profile, Facebook Page, LinkedIn Page (via Buffer GraphQL), and handles comment publishing for Faye/Link. |
 | `utils/blogPublisher.js` | GitHub-based blog post publisher. |
-| `utils/demoData.js` | Generates fake live-feed data for the unauthenticated `/demo` route. |
 | `utils/clientContext.js` | `getClientConfig(clientId)` loads full client config from `clients`; also owns idempotent client architecture migration/backfill helpers. Called by agents/routes to scope behavior and queries. |
 | `utils/closerSchema.js` | Idempotent closer-role migration helper: users role constraint, prospect closer fields, and `commissions` table. |
 
@@ -97,7 +96,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 - **Analytics**: `/api/analytics`, `/api/analytics/posts`, `/api/analytics/summary`, `/api/analytics/top-posts`, `/api/analytics/email` — in `routes/api.js`
 - **Pipeline view**: `GET /api/pipeline` → full business snapshot across clients, revenue, setters, closers, and agent health. `requireRole('admin', 'manager')` — in `routes/api.js`
 - **Activity**: `/api/activity`, `/api/activity-panel`, `/api/activity-timeline` — in `routes/api.js`
-- **Dashboard UI**: `GET /dashboard` → serves `public/dashboard.html`; `GET /demo` → unauthenticated demo mode — in `server.js`
+- **Dashboard UI**: `GET /dashboard` → serves `public/dashboard.html` — in `server.js`
 - **Setter dashboard**: `GET /setter` → authenticated setter UI (queue, pipeline, activity log, metrics strip, Scout feed). Requires setter or admin role. — in `routes/setter.js`
 - **Closer dashboard**: `GET /closer` → authenticated closer UI (pipeline, commission tracker, metrics strip). `requireRole('admin', 'manager', 'closer')` — in `routes/closer.js`
 - **Setter API (read-only)**: `GET /api/setter/metrics`, `GET /api/setter/feed` — consumed by Max for pipeline monitoring. No write access. `PATCH /api/setter/leads/:id/notes`, `PATCH /api/setter/leads/:id/callback`, `PATCH /api/setter/leads/:id/hot`, `POST /api/setter/leads/:id/quick-log-call`, `POST /api/setter/leads/:id/enrich-phone`, `GET /api/setter/stats/today` — in `routes/setter.js`
