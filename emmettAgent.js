@@ -971,7 +971,15 @@ async function getEffectiveSendConfig(baseConfig) {
   return { ...baseConfig, dailyCap: baseConfig.ramp.newDailyCap, ramped: true };
 }
 
-function isWithinSendingWindow(date = new Date()) {
+function sendingWindowEndHour(clientId = CLIENT_ID) {
+  return Number(clientId) === 5 ? 16 : 14;
+}
+
+function sendingWindowLabel(clientId = CLIENT_ID) {
+  return `Tuesday-Thursday 9am-${Number(clientId) === 5 ? '4pm' : '2pm'} ET`;
+}
+
+function isWithinSendingWindow(date = new Date(), clientId = CLIENT_ID) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
     weekday: 'short',
@@ -980,7 +988,7 @@ function isWithinSendingWindow(date = new Date()) {
   }).formatToParts(date);
   const weekday = parts.find(p => p.type === 'weekday')?.value;
   const hour = Number(parts.find(p => p.type === 'hour')?.value);
-  return ['Tue', 'Wed', 'Thu'].includes(weekday) && hour >= 9 && hour < 14;
+  return ['Tue', 'Wed', 'Thu'].includes(weekday) && hour >= 9 && hour < sendingWindowEndHour(clientId);
 }
 
 async function logSkippedOutsideWindow() {
@@ -991,7 +999,7 @@ async function logSkippedOutsideWindow() {
     null,
     {
       client_id: CLIENT_ID,
-      window: 'Tuesday-Thursday 9am-2pm ET',
+      window: sendingWindowLabel(CLIENT_ID),
       checked_at: new Date().toISOString(),
     },
     'success'
@@ -1190,11 +1198,21 @@ function humanDelay() {
   return new Promise(r => setTimeout(r, ms));
 }
 
-async function run() {
-  if (!isWithinSendingWindow()) {
-    console.log('Outside Emmett sending window (Tuesday-Thursday 9am-2pm ET) — skipping run');
+function isDashboardTrigger(context = {}) {
+  return context?.triggered_by === 'dashboard' ||
+    context?.triggeredBy === 'dashboard' ||
+    context?.source === 'dashboard';
+}
+
+async function run(context = {}) {
+  const dashboardOverride = isDashboardTrigger(context);
+  if (!dashboardOverride && !isWithinSendingWindow()) {
+    console.log(`Outside Emmett sending window (${sendingWindowLabel(CLIENT_ID)}) — skipping run`);
     await logSkippedOutsideWindow();
     return;
+  }
+  if (dashboardOverride) {
+    console.log('Dashboard-triggered Emmett run — bypassing sending window check');
   }
 
   const HOLIDAYS_2026 = [

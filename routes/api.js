@@ -1964,7 +1964,9 @@ router.post('/api/run/:agent', requireAuth, async (req, res) => {
 
       const result = agent === 'scout'
         ? await mod.run({ client_id: clientId })
-        : await mod.run({ client_id: clientId });
+        : agent === 'emmett'
+          ? await mod.run({ client_id: clientId, triggered_by: 'dashboard' })
+          : await mod.run({ client_id: clientId });
 
       if (triggerLogId) {
         await pool.query(`
