@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { publishToLinkedInPage } = require('../utils/publishPipeline');
+const { publishToLinkedInPage, publishToLinkedInPersonal } = require('../utils/publishPipeline');
 const { getRequestClientId } = require('../utils/clientContext');
 
 const managerAccess = [requireAuth, requireRole('admin', 'manager')];
@@ -57,6 +57,7 @@ async function load() {
         google_review:  '<span style="background:#f4b942;color:#1a1a18;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">Google Review · Vera</span>',
         linkedin:       '<span style="background:#0A66C2;color:#fff;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">LinkedIn · Link</span>',
         linkedin_page:  '<span style="background:#0A66C2;color:#fff;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">LinkedIn Page · Paige</span>',
+        linkedin_personal:'<span style="background:#0A66C2;color:#fff;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">LinkedIn Personal · Paige</span>',
       }[d.channel] || \`<span style="background:#888;color:#fff;font-size:10px;padding:2px 8px;border-radius:99px;margin-bottom:10px;display:inline-block;">\${d.channel}</span>\`}
       <p class="label">Post</p>
       <div class="post-content">\${d.post_content || ''}</div>
@@ -113,6 +114,13 @@ router.post('/api/approve-comment/:id', ...managerAccess, async (req, res) => {
       console.error('[Publisher:linkedin_page] Unhandled error:', err.message)
     );
     return res.json({ success: true, message: 'Approved — publishing LinkedIn Page post via Buffer' });
+  }
+
+  if (!postUrl && comment.channel === 'linkedin_personal') {
+    publishToLinkedInPersonal(comment).catch(err =>
+      console.error('[Publisher:linkedin_personal] Unhandled error:', err.message)
+    );
+    return res.json({ success: true, message: 'Approved — publishing LinkedIn Personal post via Buffer' });
   }
 
   if (!postUrl) {

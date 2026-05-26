@@ -237,18 +237,25 @@ async function publishFayeComment(item) {
   }
 }
 
-// ── 4. LINKEDIN PAGE (BUFFER API) ─────────────────────────────────────────────
+// ── 4. LINKEDIN (BUFFER API) ──────────────────────────────────────────────────
 
-async function publishToLinkedInPage(item) {
+async function publishToBufferLinkedIn(item, options = {}) {
+  const channel = options.channel || item.channel || 'linkedin_page';
+  const label = options.label || 'LinkedIn Page';
   const token     = process.env.BUFFER_ACCESS_TOKEN;
-  const channelId = process.env.BUFFER_CHANNEL_ID || '69dc4fd9031bfa423cf9941c';
+  const hasChannelOverride = Object.prototype.hasOwnProperty.call(options, 'channelId');
+  const channelId = hasChannelOverride ? options.channelId : process.env.BUFFER_CHANNEL_ID || '69dc4fd9031bfa423cf9941c';
   if (!token) {
-    console.warn('[LinkedIn Page Publisher] BUFFER_ACCESS_TOKEN not set — skipping');
+    console.warn(`[${label} Publisher] BUFFER_ACCESS_TOKEN not set — skipping`);
+    return;
+  }
+  if (!channelId) {
+    console.warn(`[${label} Publisher] Buffer channel ID not set — skipping`);
     return;
   }
   const { main, firstUrl } = parseComment(item.comment || '');
   if (firstUrl) {
-    console.log(`[LinkedIn Page Publisher] First comment URL (manual post needed): ${firstUrl}`);
+    console.log(`[${label} Publisher] First comment URL (manual post needed): ${firstUrl}`);
   }
   const query = `mutation CreatePost {
   createPost(input: {
@@ -291,12 +298,28 @@ async function publishToLinkedInPage(item) {
     const sharedNow = res.data?.data?.createPost?.post?.sharedNow;
     await updateStatus(item.id, 'posted');
     await savePostAnalytics(item, postId || null);
-    await logResult('linkedin_page', 'publish_post', item, 'success', { channelId, postId, dueAt, sentAt, sharedNow });
-    console.log(`[LinkedIn Page Publisher] Sent via Buffer — id: ${postId}, sent: ${sentAt || 'pending'}`);
+    await logResult(channel, 'publish_post', item, 'success', { channelId, postId, dueAt, sentAt, sharedNow });
+    console.log(`[${label} Publisher] Sent via Buffer — id: ${postId}, sent: ${sentAt || 'pending'}`);
   } catch (err) {
-    console.error('[LinkedIn Page Publisher] Failed:', err.response?.data || err.message);
-    await logResult('linkedin_page', 'publish_post', item, 'failed', { error: err.message });
+    console.error(`[${label} Publisher] Failed:`, err.response?.data || err.message);
+    await logResult(channel, 'publish_post', item, 'failed', { error: err.message });
   }
+}
+
+async function publishToLinkedInPage(item) {
+  return publishToBufferLinkedIn(item, {
+    channel: 'linkedin_page',
+    label: 'LinkedIn Page',
+    channelId: process.env.BUFFER_CHANNEL_ID || '69dc4fd9031bfa423cf9941c',
+  });
+}
+
+async function publishToLinkedInPersonal(item) {
+  return publishToBufferLinkedIn(item, {
+    channel: 'linkedin_personal',
+    label: 'LinkedIn Personal',
+    channelId: process.env.BUFFER_LINKEDIN_PERSONAL_ID,
+  });
 }
 
 // ── 5. LINK (LINKEDIN COMMENT VIA PUPPETEER) ──────────────────────────────────
@@ -442,5 +465,6 @@ module.exports = {
   publishToFacebookPage,
   publishFayeComment,
   publishToLinkedInPage,
+  publishToLinkedInPersonal,
   publishLinkComment,
 };

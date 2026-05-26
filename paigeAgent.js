@@ -10,6 +10,8 @@ const CONTENT_TYPES = ['promotional', 'educational', 'seasonal', 'behind-the-sce
 const BLOG_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'community', 'seasonal'];
 const LINKEDIN_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'results', 'community'];
 const CHANNELS = ['facebook_page', 'google_business', 'blog', 'linkedin_page'];
+const CLIENT_1_CHANNELS = [...CHANNELS, 'linkedin_personal'];
+const ALL_CHANNELS = [...new Set([...CHANNELS, ...CLIENT_1_CHANNELS])];
 const MIN_QUALITY_SCORE = 24;
 const MIN_HOOK_SCORE = 8;
 const CLIENT_ID = getRuntimeClientId();
@@ -93,6 +95,10 @@ const CHANNEL_TOPIC_LENSES = {
     label: 'POV angle',
     guidance: 'Use the topic as a first-person industry observation or contrarian operator take. Build credibility. No overt sales pitch.',
   },
+  linkedin_personal: {
+    label: 'founder journey angle',
+    guidance: 'Use the topic through Jacob Maynard personally: behind the scenes, bartending, the agency grind, what he built, or a specific client win. It must not use the same narrative arc as the Pulseforge LinkedIn page.',
+  },
   google_business: {
     label: 'local proof angle',
     guidance: 'Use the topic to prove Pulseforge is legitimate, local to Manchester NH, and useful to someone who just found the business on Google.',
@@ -161,12 +167,13 @@ function extractCoreAngle(text) {
     .trim();
 }
 
-function getPulseforgeTopicAngle(date = new Date()) {
+function getPulseforgeTopicAngle(date = new Date(), channel = null) {
   const day = Number(new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
     day: 'numeric',
   }).format(date));
-  return PULSEFORGE_TOPIC_BANK[(day - 1) % PULSEFORGE_TOPIC_BANK.length];
+  const offset = channel === 'linkedin_personal' ? 5 : 0;
+  return PULSEFORGE_TOPIC_BANK[(day - 1 + offset) % PULSEFORGE_TOPIC_BANK.length];
 }
 
 function seededIndex(seed, size) {
@@ -345,11 +352,20 @@ async function getActiveClients() {
   return res.rows;
 }
 
+function isPulseforgeCompany(company) {
+  return String(company?.name || '').toLowerCase().includes('pulseforge');
+}
+
+function getChannelsForCompany(company) {
+  if (CLIENT_ID !== 1 || !isPulseforgeCompany(company)) return CHANNELS;
+  return CLIENT_1_CHANNELS;
+}
+
 // Pick a content type — uses performance weighting when ≥4 posts have data, else round-robin
 async function pickContentType(companyName, channel = null, companyId = null) {
   const types = channel === 'blog'
     ? BLOG_CONTENT_TYPES
-    : channel === 'linkedin_page'
+    : channel === 'linkedin_page' || channel === 'linkedin_personal'
       ? LINKEDIN_CONTENT_TYPES
       : CONTENT_TYPES;
 
@@ -627,6 +643,55 @@ ${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. T
 Return only the post text.`;
 }
 
+function buildLinkedInPersonalPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy) {
+  const location = company.location || 'Manchester, NH';
+
+  return `You are writing a LinkedIn personal profile post for Jacob Maynard, founder of Pulseforge in ${location}.
+
+Content type: ${contentType}
+Business context: ${verticalCtx}
+
+${channelStrategy}
+
+LINKEDIN PERSONAL PROFILE STRATEGY:
+- Purpose: personal brand, founder journey, behind the scenes, and credibility through lived experience
+- Format: 150-250 words
+- Voice: written as Jacob Maynard personally, never as Pulseforge
+- Use "I built this", "I noticed", "I learned", and "my clients" where natural
+- Never use "we built this" or sound like a company page
+- More personal than the Pulseforge LinkedIn page: bartending, the agency grind, specific client wins, building systems late after service shifts, or lessons from local business owners
+- If today's topic appears on other channels, this profile must use the founder journey angle only and must not reuse the Pulseforge LinkedIn page's core narrative arc
+- No hard sell, no demo pitch, no "book a call" style ending
+- Use no more than 2-3 hashtags
+
+Write a LinkedIn personal profile post (150-250 words) with this structure:
+- First line: a personal, specific, scroll-stopping hook. It may start with "I" when the line is concrete and personal.
+- 2-4 short paragraphs or punchy line breaks
+- Include one grounded detail from Jacob's perspective: bartending, building Pulseforge, a real client pattern, or the daily agency grind
+- Final line: a human reflection or low-pressure thought, not a sales pitch
+- Last line: 2-3 relevant hashtags max
+
+Voice and tone:
+- Sounds like a person, not a brand account
+- Founder/operator perspective, direct and honest
+- Mention Pulseforge only if it feels natural; the post is about Jacob's lens, not company promotion
+- For "behind-the-scenes": show what Jacob is building or learning
+- For "results": describe a specific anonymized client win from Jacob's perspective
+- For "educational": teach through a personal story, not generic advice
+- For "community": connect to Manchester NH, bartending, or local small business owners
+- Never use dashes or hyphens in any content you write — not as punctuation, not as separators, not in any context.
+
+VARIETY RULES — enforce these on every post:
+- Never start a post with "Most small business owners" or any variation of that phrase
+- Never start consecutive posts with the same opening word or phrase
+- Rotate the angle on every post — do not repeat the same core message within 7 days
+- Avoid these overused openers: "Most", "Many", "As a", "If you're a", "Running a small business"
+- Each post must make ONE specific point — not a general observation about small business
+${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. This post must feel distinct from that — different angle, different opening, different structure.` : ''}
+
+Return only the post text.`;
+}
+
 async function getLastContentType(companyName, channel) {
   const res = await pool.query(`
     SELECT post_content FROM pending_comments
@@ -641,7 +706,7 @@ async function getLastContentType(companyName, channel) {
 async function createDraft(prompt, systemPrompt, channel) {
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: channel === 'blog' ? 1000 : channel === 'linkedin_page' ? 450 : 300,
+    max_tokens: channel === 'blog' ? 1000 : channel === 'linkedin_page' || channel === 'linkedin_personal' ? 450 : 300,
     system: systemPrompt,
     messages: [{ role: 'user', content: prompt }]
   });
@@ -722,9 +787,9 @@ async function generatePost(company, contentType, channel) {
   const location = company.location || 'Manchester, NH';
   const lastContentType = await getLastContentType(company.name, channel);
   const recentThemes = await getRecentThemes(channel);
-  const isPulseforge = company.name.toLowerCase().includes('pulseforge');
+  const isPulseforge = isPulseforgeCompany(company);
   const recentPublishedAngles = await getRecentPublishedAngles();
-  const topicAngle = isPulseforge ? getPulseforgeTopicAngle() : null;
+  const topicAngle = isPulseforge ? getPulseforgeTopicAngle(new Date(), channel) : null;
   const blogCloser = channel === 'blog' ? getBlogCloser(channel) : null;
   const facebookCta = channel === 'facebook_page' ? getFacebookCta(channel) : null;
   const channelStrategy = buildChannelStrategyBlock(channel, topicAngle);
@@ -759,6 +824,8 @@ MSHI CLIENT CONTEXT:
     ? buildGooglePrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy)
     : channel === 'blog'
       ? buildBlogPrompt(company, contentType, verticalCtx, lastContentType, blogCloser, channelStrategy)
+      : channel === 'linkedin_personal'
+        ? buildLinkedInPersonalPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy)
       : channel === 'linkedin_page'
         ? buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy)
         : buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy, facebookCta);
@@ -844,6 +911,7 @@ async function saveToPendingApprovals(company, content, contentType, channel) {
     google_business: 'Google Business',
     blog:            'Blog',
     linkedin_page:   'LinkedIn Page',
+    linkedin_personal:'LinkedIn Personal',
   }[channel] || channel;
   const label = `${channelLabel} · ${contentType.charAt(0).toUpperCase() + contentType.slice(1)}`;
 
@@ -940,12 +1008,15 @@ async function processRegenerateTriggers() {
   for (const row of triggers.rows) {
     const payload = parseLogPayload(row.payload);
     const channel = payload.channel;
-    if (!channel || !CHANNELS.includes(channel)) {
+    if (!channel || !ALL_CHANNELS.includes(channel)) {
       await completeRegenerateTrigger(row.id);
       continue;
     }
 
     for (const company of clients) {
+      if (channel === 'linkedin_personal' && (CLIENT_ID !== 1 || !isPulseforgeCompany(company))) {
+        continue;
+      }
       const contentType = await pickContentType(company.name, channel, company.id);
       console.log(`  [regenerate] ${company.name} — ${channel} — ${contentType}`);
       try {
@@ -1035,7 +1106,7 @@ AND status = 'pending';`);
     const channelsQueued = [];
 
     for (const company of clients) {
-      for (const channel of CHANNELS) {
+      for (const channel of getChannelsForCompany(company)) {
         const contentType = await pickContentType(company.name, channel, company.id);
         console.log(`${company.name} — ${channel} — ${contentType}`);
 

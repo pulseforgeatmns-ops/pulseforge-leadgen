@@ -10,6 +10,7 @@ const {
   publishToFacebookPage,
   publishFayeComment,
   publishToLinkedInPage,
+  publishToLinkedInPersonal,
   publishLinkComment,
 } = require('../utils/publishPipeline');
 
@@ -346,6 +347,7 @@ router.post('/api/approvals/:id', requireAuth, async (req, res) => {
         facebook_page:    () => publishToFacebookPage(item),
         facebook:         () => publishFayeComment(item),
         linkedin_page:    () => publishToLinkedInPage(item),
+        linkedin_personal:() => publishToLinkedInPersonal(item),
         linkedin:         () => publishLinkComment(item),
       };
       const publish = publishers[item.channel];
