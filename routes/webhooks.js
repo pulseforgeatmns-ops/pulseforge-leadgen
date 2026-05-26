@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { handleWarmSignalSms } = require('../rileyAgent');
 
 const BREVO_EVENT_MAP = {
   opened:           'email_opened',
@@ -13,6 +14,12 @@ const BREVO_EVENT_MAP = {
   unsubscribed:     'email_unsubscribed',
   spam:             'email_spam',
 };
+
+function signalIso(value) {
+  const parsed = value ? new Date(value) : null;
+  if (parsed && !Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  return new Date().toISOString();
+}
 
 async function checkAndUpdateWarmStatus(prospectId, email) {
   try {
@@ -57,7 +64,8 @@ router.post('/webhooks/brevo', (req, res) => {
       const prospectParams = payloadClientId ? [email, payloadClientId] : [email];
       const prospectRes = await pool.query(
         `SELECT
-           p.id, p.status, p.client_id, p.first_name, p.last_name, p.notes,
+           p.id, p.status, p.client_id, p.first_name, p.last_name, p.email,
+           p.vertical, p.icp_score, p.notes,
            c.name AS company_name
          FROM prospects p
          LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
@@ -95,17 +103,34 @@ router.post('/webhooks/brevo', (req, res) => {
       if (actionType === 'email_opened') {
         const openRes = await pool.query(`
           SELECT
-            COUNT(*)::int AS open_count,
-            EXTRACT(EPOCH FROM (MAX(created_at) - MIN(created_at))) / 60 AS open_spread_minutes
+            COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours')::int AS open_count,
+            COUNT(*)::int AS total_open_count,
+            EXTRACT(EPOCH FROM (
+              MAX(created_at) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours') -
+              MIN(created_at) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours')
+            )) / 60 AS open_spread_minutes
           FROM touchpoints
           WHERE prospect_id = $1
             AND client_id = $2
             AND channel = 'email'
             AND action_type = 'email_opened'
-            AND created_at >= NOW() - INTERVAL '24 hours'
         `, [prospect.id, prospect.client_id]);
         const openCount = Number(openRes.rows[0]?.open_count || 0);
+        const totalOpenCount = Number(openRes.rows[0]?.total_open_count || 0);
         const openSpreadMinutes = Number(openRes.rows[0]?.open_spread_minutes || 0);
+
+        if (totalOpenCount >= 2) {
+          await handleWarmSignalSms({
+            prospect_id: prospect.id,
+            client_id: prospect.client_id,
+            trigger: '2+ opens',
+            signal_timestamp: signalIso(payload.date),
+            subject: payload.subject || null,
+            total_opens: totalOpenCount,
+            email,
+            company: prospect.company_name,
+          });
+        }
 
         if (openCount >= 2 && openSpreadMinutes >= 10) {
           const company =
@@ -118,6 +143,9 @@ router.post('/webhooks/brevo', (req, res) => {
             email,
             company,
             open_count: openCount,
+            total_opens: totalOpenCount,
+            subject: payload.subject || null,
+            signal_timestamp: signalIso(payload.date),
             client_id: prospect.client_id,
           };
 
@@ -176,6 +204,18 @@ router.post('/webhooks/brevo', (req, res) => {
 
       if (['email_opened', 'email_clicked'].includes(actionType)) {
         await checkAndUpdateWarmStatus(prospect.id, email);
+      }
+
+      if (actionType === 'email_clicked') {
+        await handleWarmSignalSms({
+          prospect_id: prospect.id,
+          client_id: prospect.client_id,
+          trigger: 'click',
+          signal_timestamp: signalIso(payload.date),
+          subject: payload.subject || null,
+          email,
+          company: prospect.company_name,
+        });
       }
 
       await pool.query(`
