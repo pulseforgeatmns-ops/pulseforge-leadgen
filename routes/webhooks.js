@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const { handleWarmSignalSms } = require('../rileyAgent');
+const { depositWarmSignalAction } = require('../rileyAgent');
 
 const BREVO_EVENT_MAP = {
   opened:           'email_opened',
@@ -120,7 +120,7 @@ router.post('/webhooks/brevo', (req, res) => {
         const openSpreadMinutes = Number(openRes.rows[0]?.open_spread_minutes || 0);
 
         if (totalOpenCount >= 2) {
-          await handleWarmSignalSms({
+          await depositWarmSignalAction({
             prospect_id: prospect.id,
             client_id: prospect.client_id,
             trigger: '2+ opens',
@@ -207,7 +207,7 @@ router.post('/webhooks/brevo', (req, res) => {
       }
 
       if (actionType === 'email_clicked') {
-        await handleWarmSignalSms({
+        await depositWarmSignalAction({
           prospect_id: prospect.id,
           client_id: prospect.client_id,
           trigger: 'click',

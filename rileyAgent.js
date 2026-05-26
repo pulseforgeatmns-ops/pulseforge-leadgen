@@ -5,7 +5,6 @@ const db = require('./dbClient');
 const fs = require('fs');
 const path = require('path');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
-const twilio = require('twilio');
 
 const AGENT_NAME = 'riley';
 const CLIENT_ID = getRuntimeClientId();
@@ -19,17 +18,7 @@ const SCOPES = [
 ];
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-const TWILIO_FROM = process.env.TWILIO_FROM || process.env.TWILIO_PHONE_NUMBER;
-const NOTIFY_PHONE = process.env.NOTIFY_PHONE || process.env.JACOB_PHONE;
-const NOTIFICATION_ACTION = 'sms_notification';
 const PRICE_TERMS = ['price', 'cost', 'how much', 'interested'];
-const MARKET_LABELS = {
-  1: 'Manchester NH',
-  2: 'Charleston WV',
-  5: 'Nashville TN',
-};
 
 // ── AUTH ──────────────────────────────────────────────────────────────
 function parseJsonSource(label, raw) {
@@ -396,29 +385,7 @@ function hasPricingIntent(body) {
   return PRICE_TERMS.some(term => lower.includes(term));
 }
 
-function getTwilioClient() {
-  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_FROM || !NOTIFY_PHONE) return null;
-  return twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
-}
-
-function marketLabel(clientId = CLIENT_ID) {
-  return MARKET_LABELS[Number(clientId)] || 'Unknown market';
-}
-
-function isSmsQuietWindowOpen(date = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: false,
-  }).formatToParts(date);
-  const hour = Number(parts.find(p => p.type === 'hour')?.value || 0);
-  const minute = Number(parts.find(p => p.type === 'minute')?.value || 0);
-  const minutes = (hour * 60) + minute;
-  return minutes >= (8 * 60 + 30) && minutes <= (22 * 60 + 30);
-}
-
-async function getWarmSignalContext(prospectId, clientId = CLIENT_ID, fallback = {}) {
+async function getWarmSignalActionContext(prospectId, clientId = CLIENT_ID, fallback = {}) {
   const pool = require('./db');
   const res = await pool.query(`
     SELECT
@@ -478,130 +445,10 @@ async function getWarmSignalContext(prospectId, clientId = CLIENT_ID, fallback =
   };
 }
 
-function buildWarmSignalMessage(ctx) {
-  const market = marketLabel(ctx.client_id);
-  return `🔥 Warm signal — ${ctx.company} (${market})
-${ctx.first_name || 'there'} opened your email ${ctx.total_opens || 0}x
-Subject: ${ctx.last_email_subject || 'Unknown subject'}
-ICP: ${ctx.icp_score || 0} | ${ctx.email || 'No email'}`;
-}
-
-async function hasSmsSentToday(prospectId, clientId = CLIENT_ID) {
-  const pool = require('./db');
-  const res = await pool.query(`
-    SELECT 1
-    FROM agent_log
-    WHERE agent_name = $1
-      AND action = 'sms_sent'
-      AND prospect_id = $2
-      AND client_id = $3
-      AND DATE(ran_at) = CURRENT_DATE
-    LIMIT 1
-  `, [AGENT_NAME, prospectId, clientId]);
-  return res.rows.length > 0;
-}
-
-async function hasSmsQueuedToday(prospectId, clientId = CLIENT_ID) {
-  const pool = require('./db');
-  const res = await pool.query(`
-    SELECT 1
-    FROM agent_log
-    WHERE agent_name = $1
-      AND action = 'sms_queued'
-      AND status = 'pending'
-      AND prospect_id = $2
-      AND client_id = $3
-      AND DATE(ran_at) = CURRENT_DATE
-    LIMIT 1
-  `, [AGENT_NAME, prospectId, clientId]);
-  return res.rows.length > 0;
-}
-
-async function logSmsSent(payload) {
-  await db.logAgentAction(
-    AGENT_NAME,
-    'sms_sent',
-    payload.prospect_id,
-    null,
-    {
-      prospect_id: payload.prospect_id,
-      company: payload.company,
-      message: payload.message,
-      timestamp: new Date().toISOString(),
-      trigger: payload.trigger,
-      client_id: payload.client_id,
-    },
-    'success'
-  );
-}
-
-async function logSmsFailed(payload, error) {
-  await db.logAgentAction(
-    AGENT_NAME,
-    'sms_sent',
-    payload.prospect_id,
-    null,
-    {
-      prospect_id: payload.prospect_id,
-      company: payload.company,
-      message: payload.message,
-      timestamp: new Date().toISOString(),
-      trigger: payload.trigger,
-      error,
-      client_id: payload.client_id,
-    },
-    'failed',
-    error
-  );
-}
-
-async function queueWarmSignalSms(payload) {
-  if (await hasSmsQueuedToday(payload.prospect_id, payload.client_id)) {
-    console.log(`  [Riley] SMS already queued today for ${payload.email || payload.prospect_id}`);
-    return false;
-  }
-  await db.logAgentAction(
-    AGENT_NAME,
-    'sms_queued',
-    payload.prospect_id,
-    null,
-    { ...payload, queued_at: new Date().toISOString() },
-    'pending'
-  );
-  console.log(`  [Riley] Warm signal SMS queued for ${payload.email || payload.prospect_id}`);
-  return true;
-}
-
-async function sendWarmSignalSmsPayload(payload) {
-  if (await hasSmsSentToday(payload.prospect_id, payload.client_id)) {
-    console.log(`  [Riley] SMS skipped for ${payload.email || payload.prospect_id} — already sent today`);
-    return false;
-  }
-
-  const twilioClient = getTwilioClient();
-  if (!twilioClient) {
-    await queueWarmSignalSms({ ...payload, queue_reason: 'twilio_not_configured' });
-    return false;
-  }
-
-  try {
-    await twilioClient.messages.create({
-      body: payload.message,
-      from: TWILIO_FROM,
-      to: NOTIFY_PHONE,
-    });
-    await logSmsSent(payload);
-    console.log(`  [Riley] Warm signal SMS sent for ${payload.email || payload.prospect_id}`);
-    return true;
-  } catch (err) {
-    await logSmsFailed(payload, err.message).catch(() => {});
-    throw err;
-  }
-}
-
-async function handleWarmSignalSms({ prospect_id, client_id = CLIENT_ID, trigger, signal_timestamp = null, subject = null, total_opens = null, email = null, company = null }) {
+async function depositWarmSignalAction({ prospect_id, client_id = CLIENT_ID, trigger, signal_timestamp = null, subject = null, total_opens = null, email = null, company = null }) {
   if (!prospect_id) return false;
-  const ctx = await getWarmSignalContext(prospect_id, client_id, {
+  const pool = require('./db');
+  const ctx = await getWarmSignalActionContext(prospect_id, client_id, {
     subject,
     total_opens,
     email,
@@ -617,116 +464,45 @@ async function handleWarmSignalSms({ prospect_id, client_id = CLIENT_ID, trigger
     icp_score: ctx.icp_score,
     total_opens: total_opens != null ? Number(total_opens) : ctx.total_opens,
     last_email_subject: subject || ctx.last_email_subject,
-    market: marketLabel(ctx.client_id),
     trigger,
     signal_timestamp: signal_timestamp || new Date().toISOString(),
   };
-  payload.message = buildWarmSignalMessage(payload);
 
-  if (await hasSmsSentToday(payload.prospect_id, payload.client_id)) return false;
-  if (!isSmsQuietWindowOpen()) return queueWarmSignalSms({ ...payload, queue_reason: 'outside_quiet_hours' });
-  return sendWarmSignalSmsPayload(payload);
-}
-
-async function processQueuedWarmSignalSms() {
-  if (!isSmsQuietWindowOpen()) return 0;
-  if (!getTwilioClient()) return 0;
-  const pool = require('./db');
-  const res = await pool.query(`
-    SELECT id, prospect_id, payload, client_id
-    FROM agent_log
-    WHERE agent_name = $1
-      AND action = 'sms_queued'
-      AND status = 'pending'
-    ORDER BY ran_at ASC
-    LIMIT 25
-  `, [AGENT_NAME]);
-
-  let sent = 0;
-  for (const row of res.rows) {
-    const payload = typeof row.payload === 'string' ? JSON.parse(row.payload || '{}') : (row.payload || {});
-    try {
-      const didSend = await sendWarmSignalSmsPayload({
-        ...payload,
-        prospect_id: payload.prospect_id || row.prospect_id,
-        client_id: payload.client_id || row.client_id || CLIENT_ID,
-      });
-      if (didSend) sent++;
-      await pool.query(
-        `UPDATE agent_log SET status = $1, payload = payload || $2::jsonb WHERE id = $3`,
-        ['success', JSON.stringify({ processed_at: new Date().toISOString(), sent: didSend }), row.id]
-      );
-    } catch (err) {
-      await pool.query(
-        `UPDATE agent_log SET status = 'failed', error_msg = $1, payload = payload || $2::jsonb WHERE id = $3`,
-        [err.message, JSON.stringify({ processed_at: new Date().toISOString(), error: err.message }), row.id]
-      );
-      console.error('[Riley] Queued SMS failed:', err.message);
-    }
-  }
-  return sent;
-}
-
-async function recentlyNotified(prospectId) {
-  if (!prospectId) return false;
-  const pool = require('./db');
-  const res = await pool.query(`
-    SELECT 1
-    FROM agent_log
-    WHERE agent_name = $1
-      AND action = $2
-      AND prospect_id = $3
-      AND client_id = $4
-      AND ran_at > NOW() - INTERVAL '24 hours'
-    LIMIT 1
-  `, [AGENT_NAME, NOTIFICATION_ACTION, prospectId, CLIENT_ID]);
-  return res.rows.length > 0;
-}
-
-async function logNotification(prospectId, notificationType, body, status, extra = {}) {
-  await db.logAgentAction(
+  const title = `Warm signal — ${payload.company}`;
+  const description = `${payload.company} triggered a warm signal (${trigger || 'signal'}). Sam should send the warm-signal SMS notification.`;
+  const inserted = await pool.query(`
+    INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, created_at, client_id)
+    SELECT $1, $2, $3, $4, $5, 'pending', NOW(), $6
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM agent_actions
+      WHERE action_type = $2
+        AND status = 'pending'
+        AND client_id = $6
+        AND payload->>'prospect_id' = $7
+        AND created_at >= NOW() - INTERVAL '24 hours'
+    )
+    RETURNING id
+  `, [
     AGENT_NAME,
-    NOTIFICATION_ACTION,
-    prospectId,
-    null,
-    { notification_type: notificationType, to: NOTIFY_PHONE || null, body, client_id: CLIENT_ID, ...extra },
-    status
-  );
-}
-
-async function notifyJacob(prospect, notificationType, body, extra = {}) {
-  try {
-    if (!prospect?.id) return;
-    if (await recentlyNotified(prospect.id)) {
-      console.log(`  [Riley] SMS skipped for ${prospect.email || prospect.id} — recent notification exists`);
-      return;
-    }
-
-    if (process.env.TWILIO_A2P_APPROVED !== 'true') {
-      console.log(`  [Riley] SMS would send (${notificationType}): ${body}`);
-      await logNotification(prospect.id, notificationType, body, 'skipped', { reason: 'twilio_a2p_not_approved', ...extra });
-      return;
-    }
-
-    const twilioClient = getTwilioClient();
-    if (!twilioClient) {
-      console.log(`  [Riley] SMS would send (${notificationType}) but Twilio/NOTIFY_PHONE is not configured: ${body}`);
-      await logNotification(prospect.id, notificationType, body, 'skipped', { reason: 'twilio_not_configured', ...extra });
-      return;
-    }
-
-    await twilioClient.messages.create({ body, from: TWILIO_FROM, to: NOTIFY_PHONE });
-    await logNotification(prospect.id, notificationType, body, 'success', extra);
-    console.log(`  [Riley] SMS sent to Jacob (${notificationType})`);
-  } catch (err) {
-    console.error(`  [Riley] SMS failed (${notificationType}):`, err.message);
-    await logNotification(prospect?.id, notificationType, body, 'failed', { error: err.message, ...extra }).catch(() => {});
+    'warm_signal',
+    title,
+    description,
+    JSON.stringify(payload),
+    payload.client_id,
+    String(payload.prospect_id),
+  ]);
+  if (inserted.rows.length) {
+    console.log(`  [Riley] Warm signal action deposited for Sam: ${payload.email || payload.prospect_id}`);
+    return true;
   }
+  console.log(`  [Riley] Warm signal action already pending for ${payload.email || payload.prospect_id}`);
+  return false;
 }
 
 async function notifyWarmReply(prospect, email, classification) {
   if (classification !== 'warm') return;
-  await handleWarmSignalSms({
+  await depositWarmSignalAction({
     prospect_id: prospect.id,
     client_id: CLIENT_ID,
     trigger: 'reply',
@@ -737,7 +513,7 @@ async function notifyWarmReply(prospect, email, classification) {
   });
 }
 
-async function processHotSignalNotifications() {
+async function processHotSignalActions() {
   const pool = require('./db');
   try {
     const res = await pool.query(`
@@ -757,7 +533,7 @@ async function processHotSignalNotifications() {
       const payload = typeof row.payload === 'string' ? JSON.parse(row.payload || '{}') : (row.payload || {});
       const prospect = { id: row.prospect_id, first_name: row.first_name, email: row.email, notes: row.notes, company_name: row.company_name };
       const opens = payload.open_count || payload.opens || 2;
-      await handleWarmSignalSms({
+      await depositWarmSignalAction({
         prospect_id: row.prospect_id,
         client_id: CLIENT_ID,
         trigger: '2+ opens',
@@ -769,42 +545,12 @@ async function processHotSignalNotifications() {
       });
     }
   } catch (err) {
-    console.error('[Riley] Hot signal notification scan failed:', err.message);
-  }
-}
-
-async function processBookedCallNotifications() {
-  const pool = require('./db');
-  try {
-    const res = await pool.query(`
-      SELECT t.prospect_id, t.content_summary, p.first_name, p.email, p.notes, c.name AS company_name
-      FROM touchpoints t
-      JOIN prospects p ON p.id = t.prospect_id AND p.client_id = t.client_id
-      LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
-      WHERE t.client_id = $1
-        AND t.action_type = 'booked'
-        AND t.created_at > NOW() - INTERVAL '24 hours'
-      ORDER BY t.created_at DESC
-      LIMIT 20
-    `, [CLIENT_ID]);
-
-    for (const row of res.rows) {
-      const prospect = { id: row.prospect_id, first_name: row.first_name, email: row.email, notes: row.notes, company_name: row.company_name };
-      await notifyJacob(
-        prospect,
-        'booked_call',
-        `📅 ${firstName(prospect)} at ${companyName(prospect)} booked a call. Check the closer pipeline.`,
-        { source_action: 'booked', summary: row.content_summary }
-      );
-    }
-  } catch (err) {
-    console.error('[Riley] Booked call notification scan failed:', err.message);
+    console.error('[Riley] Hot signal action scan failed:', err.message);
   }
 }
 
 async function processEventNotifications() {
-  await processHotSignalNotifications();
-  await processBookedCallNotifications();
+  await processHotSignalActions();
 }
 
 // ── MARK READ ─────────────────────────────────────────────────────────
@@ -831,7 +577,6 @@ async function run() {
   console.log('─────────────────────────────────\n');
   const clientConfig = await getClientConfig(CLIENT_ID);
   if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
-  await processQueuedWarmSignalSms();
   if (CLIENT_ID !== 1) {
     console.log('Riley currently monitors jacob@gopulseforge.com only. MSHI triage is manual until forwarding or a second OAuth is configured.');
     return;
@@ -920,7 +665,7 @@ async function run() {
   console.log('Riley complete.');
 }
 
-module.exports = { run, getAuthClient, handleWarmSignalSms, processQueuedWarmSignalSms };
+module.exports = { run, getAuthClient, depositWarmSignalAction };
 
 if (require.main === module) {
   run().catch(err => {

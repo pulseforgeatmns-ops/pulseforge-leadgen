@@ -9,11 +9,17 @@ let CLIENT_CONFIG = null;
 
 const ACCOUNT_SID    = process.env.TWILIO_ACCOUNT_SID;
 const AUTH_TOKEN     = process.env.TWILIO_AUTH_TOKEN;
-const FROM_NUMBER    = process.env.TWILIO_PHONE_NUMBER;
+const FROM_NUMBER    = process.env.TWILIO_FROM || process.env.TWILIO_PHONE_NUMBER;
+const NOTIFY_PHONE   = process.env.NOTIFY_PHONE || process.env.JACOB_PHONE;
+const MARKET_LABELS = {
+  1: 'Manchester NH',
+  2: 'Charleston WV',
+  5: 'Nashville TN',
+};
 
 function getTwilioClient() {
   if (!ACCOUNT_SID || !AUTH_TOKEN || !FROM_NUMBER) {
-    console.warn('Sam: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, or TWILIO_PHONE_NUMBER not set — SMS disabled');
+    console.warn('Sam: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, or TWILIO_FROM/TWILIO_PHONE_NUMBER not set — SMS disabled');
     return null;
   }
   const twilio = require('twilio');
@@ -189,6 +195,208 @@ function parseLogPayload(payload) {
   return typeof payload === 'string' ? JSON.parse(payload) : payload;
 }
 
+function marketLabel(clientId = CLIENT_ID) {
+  return MARKET_LABELS[Number(clientId)] || 'Unknown market';
+}
+
+function isWarmSignalSmsWindowOpen(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const hour = Number(parts.find(p => p.type === 'hour')?.value || 0);
+  const minute = Number(parts.find(p => p.type === 'minute')?.value || 0);
+  const minutes = (hour * 60) + minute;
+  return minutes >= (8 * 60 + 30) && minutes <= (22 * 60 + 30);
+}
+
+function buildWarmSignalNotification(payload, prospect) {
+  const company = payload.company || prospect.company_name || 'Unknown company';
+  const firstName = payload.first_name || prospect.first_name || 'there';
+  const opens = Number(payload.total_opens || prospect.total_opens || 0);
+  const subject = payload.last_email_subject || payload.subject || prospect.last_email_subject || 'Unknown subject';
+  const icpScore = Number(payload.icp_score || prospect.icp_score || 0);
+  const email = payload.email || prospect.email || 'No email';
+
+  return `🔥 Warm signal — ${company} (${marketLabel(payload.client_id || prospect.client_id)})
+${firstName} opened your email ${opens}x
+Subject: ${subject}
+ICP: ${icpScore} | ${email}`;
+}
+
+async function completeWarmSignalAction(actionId, result) {
+  await pool.query(
+    `UPDATE agent_actions
+     SET status = 'executed',
+         executed_at = NOW(),
+         result = $2
+     WHERE id = $1`,
+    [actionId, result]
+  );
+}
+
+async function hasWarmSignalSmsSentToday(prospectId, clientId = CLIENT_ID) {
+  const res = await pool.query(`
+    SELECT 1
+    FROM agent_log
+    WHERE agent_name = $1
+      AND action = 'sms_sent'
+      AND prospect_id = $2
+      AND client_id = $3
+      AND DATE(ran_at) = CURRENT_DATE
+    LIMIT 1
+  `, [AGENT_NAME, prospectId, clientId]);
+  return res.rows.length > 0;
+}
+
+async function hasWarmSignalSmsQueuedToday(prospectId, clientId = CLIENT_ID) {
+  const res = await pool.query(`
+    SELECT 1
+    FROM agent_log
+    WHERE agent_name = $1
+      AND action = 'sms_queued'
+      AND prospect_id = $2
+      AND client_id = $3
+      AND DATE(ran_at) = CURRENT_DATE
+    LIMIT 1
+  `, [AGENT_NAME, prospectId, clientId]);
+  return res.rows.length > 0;
+}
+
+async function logWarmSignalSms(action, prospect, message, status, extra = {}, errorMsg = null) {
+  await db.logAgentAction(
+    AGENT_NAME,
+    status === 'skipped_dnc' ? 'sms_skipped_dnc' : status === 'queued' ? 'sms_queued' : 'sms_sent',
+    prospect.id,
+    null,
+    {
+      prospect_id: prospect.id,
+      company: action.company || prospect.company_name,
+      message,
+      timestamp: new Date().toISOString(),
+      trigger: action.trigger || 'warm_signal',
+      source_action_id: action.action_id || null,
+      client_id: prospect.client_id || CLIENT_ID,
+      ...extra,
+    },
+    status === 'failed' ? 'failed' : 'success',
+    errorMsg
+  );
+}
+
+async function processWarmSignalActions(twilioClient, dailyLimit, sentCount) {
+  const res = await pool.query(`
+    SELECT id, payload, client_id
+    FROM agent_actions
+    WHERE action_type = 'warm_signal'
+      AND status = 'pending'
+      AND client_id = $1
+    ORDER BY created_at ASC
+    LIMIT 25
+  `, [CLIENT_ID]);
+
+  if (!res.rows.length) return { processed: 0, sent: 0, queued: 0, skipped_dnc: 0 };
+  console.log(`Warm-signal actions: ${res.rows.length} pending`);
+
+  let sent = 0;
+  let queued = 0;
+  let skippedDnc = 0;
+
+  for (const row of res.rows) {
+    if (sentCount + sent >= dailyLimit) break;
+    const payload = { ...parseLogPayload(row.payload), action_id: row.id };
+    const prospectId = payload.prospect_id;
+    if (!prospectId) {
+      await completeWarmSignalAction(row.id, 'Skipped: missing prospect_id');
+      continue;
+    }
+
+    const prospectRes = await pool.query(`
+      SELECT
+        p.id,
+        p.client_id,
+        p.first_name,
+        p.email,
+        p.icp_score,
+        p.do_not_contact,
+        c.name AS company_name,
+        COALESCE(eng.total_opens, 0)::int AS total_opens,
+        outbound.content_summary AS last_email_subject
+      FROM prospects p
+      LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS total_opens
+        FROM touchpoints t
+        WHERE t.prospect_id = p.id
+          AND t.client_id = p.client_id
+          AND t.channel = 'email'
+          AND t.action_type IN ('open', 'email_opened')
+      ) eng ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT content_summary
+        FROM touchpoints t
+        WHERE t.prospect_id = p.id
+          AND t.client_id = p.client_id
+          AND t.channel = 'email'
+          AND t.action_type IN ('outbound', 'email_warm', 'send')
+        ORDER BY t.created_at DESC
+        LIMIT 1
+      ) outbound ON TRUE
+      WHERE p.id = $1
+        AND p.client_id = $2
+      LIMIT 1
+    `, [prospectId, payload.client_id || row.client_id || CLIENT_ID]);
+    const prospect = prospectRes.rows[0];
+    if (!prospect) {
+      await completeWarmSignalAction(row.id, 'Skipped: prospect not found');
+      continue;
+    }
+
+    const message = buildWarmSignalNotification(payload, prospect);
+    if (prospect.do_not_contact) {
+      await logWarmSignalSms(payload, prospect, message, 'skipped_dnc', { reason: 'do_not_contact' });
+      await completeWarmSignalAction(row.id, 'Skipped: do_not_contact');
+      skippedDnc++;
+      continue;
+    }
+
+    if (await hasWarmSignalSmsSentToday(prospect.id, prospect.client_id)) {
+      await completeWarmSignalAction(row.id, 'Skipped: sms already sent today');
+      continue;
+    }
+
+    if (!isWarmSignalSmsWindowOpen()) {
+      if (!(await hasWarmSignalSmsQueuedToday(prospect.id, prospect.client_id))) {
+        await logWarmSignalSms(payload, prospect, message, 'queued', { reason: 'outside_quiet_hours' });
+      }
+      queued++;
+      continue;
+    }
+
+    if (!NOTIFY_PHONE) {
+      await logWarmSignalSms(payload, prospect, message, 'failed', { reason: 'notify_phone_missing' }, 'NOTIFY_PHONE/JACOB_PHONE is not configured');
+      await completeWarmSignalAction(row.id, 'Failed: NOTIFY_PHONE/JACOB_PHONE is not configured');
+      continue;
+    }
+
+    try {
+      await twilioClient.messages.create({ body: message, from: FROM_NUMBER, to: NOTIFY_PHONE });
+      await logWarmSignalSms(payload, prospect, message, 'sent', { to: NOTIFY_PHONE });
+      await completeWarmSignalAction(row.id, 'Sent warm-signal SMS notification');
+      sent++;
+    } catch (err) {
+      await logWarmSignalSms(payload, prospect, message, 'failed', { to: NOTIFY_PHONE }, err.message);
+      await completeWarmSignalAction(row.id, `Failed: ${err.message}`);
+    }
+
+    await new Promise(r => setTimeout(r, 1500));
+  }
+
+  return { processed: res.rows.length, sent, queued, skipped_dnc: skippedDnc };
+}
+
 async function completeReengagementTrigger(triggerId, status = 'completed') {
   await pool.query(
     `UPDATE agent_log SET status = $1 WHERE id = $2 AND agent_name = 'max' AND action = 'reengagement_trigger'`,
@@ -270,6 +478,10 @@ async function run() {
   let sent = 0;
   const dailyLimit = 20;
 
+  const warmSignalActions = await processWarmSignalActions(twilioClient, dailyLimit, sent);
+  sent += warmSignalActions.sent;
+  console.log(`Warm-signal actions: ${warmSignalActions.sent} SMS sent, ${warmSignalActions.queued} queued, ${warmSignalActions.skipped_dnc} skipped DNC (${warmSignalActions.processed} action(s) processed)\n`);
+
   const maxReengage = await processReengagementTriggers(sendSMS, dailyLimit, sent);
   sent += maxReengage.sent;
   console.log(`Max re-engagement: ${maxReengage.sent} SMS sent (${maxReengage.processed} trigger(s) processed)\n`);
@@ -309,6 +521,7 @@ async function run() {
     [AGENT_NAME, 'batch_sms', JSON.stringify({
       sent,
       triggers: {
+        warmSignalActions,
         maxReengage: maxReengage,
         noReply: noReply.length,
         warm: warm.length,
