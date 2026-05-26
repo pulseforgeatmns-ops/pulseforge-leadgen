@@ -83,7 +83,7 @@ async function getBatchCandidates() {
         SELECT 1
         FROM touchpoints t
         WHERE t.prospect_id = p.id
-          AND t.channel = 'phone'
+          AND t.channel = 'call'
           AND t.action_type = 'outbound'
           AND t.agent_id = 'cal'
       )
@@ -157,7 +157,7 @@ async function logBatchTouchpoints(formattedProspects, batchResponse) {
   for (const item of formattedProspects) {
     await db.logTouchpoint(
       item.prospect.id,
-      'phone',
+      'call',
       'outbound',
       `Cal batch call — ${item.businessName}`,
       'pending',
