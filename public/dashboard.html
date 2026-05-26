@@ -4452,11 +4452,24 @@ async function submitModalTouch(id) {
 }
 
 async function updateModalStatus(id, status) {
-  await fetch(`/api/prospects/${encodeURIComponent(id)}/status`, {
-    method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status })
-  });
-  modalToast('Updated ✓');
+  try {
+    const res = await fetch(`/api/prospects/${encodeURIComponent(id)}/status`, {
+      method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || data.error || 'Status update failed');
+    if (data.prospect) {
+      _mergeUpdatedProspect(data.prospect);
+      _pipelineProspects = _pipelineProspects.map(p => String(p.id) === String(id) ? { ...p, ...data.prospect } : p);
+      renderProspectPipeline?.();
+      _renderProspects();
+    }
+    modalToast('Updated ✓');
+  } catch (e) {
+    console.error('updateModalStatus:', e);
+    modalToast(e.message || 'Status update failed');
+  }
 }
 
 async function markModalDnc(id) {
@@ -6049,7 +6062,7 @@ async function updateProspectPipelineStatus(id, status) {
     prospect.status = previous;
     _pipelineDroppedProspectId = null;
     renderProspectPipeline();
-    alert('Prospect status update failed');
+    alert(`Prospect status update failed: ${e.message}`);
   }
 }
 

@@ -24,6 +24,42 @@ const EXCLUDE_COMMAND_FEED_ACTIONS_SQL = `
   )
 `;
 
+const PROSPECT_STATUS_VALUES = ['cold', 'warm', 'contacted', 'booked', 'closed'];
+const PROSPECT_STATUS_CONSTRAINT_VALUES = [...PROSPECT_STATUS_VALUES, 'hot', 'dead'];
+let prospectsStatusSchemaPromise;
+
+function sqlStringList(values) {
+  return values.map(value => "'" + String(value).replace(/'/g, "''") + "'").join(', ');
+}
+
+function ensureProspectsStatusSchema() {
+  if (!prospectsStatusSchemaPromise) {
+    prospectsStatusSchemaPromise = (async () => {
+      const current = await pool.query(`
+        SELECT pg_get_constraintdef(oid) AS definition
+        FROM pg_constraint
+        WHERE conrelid = 'prospects'::regclass
+          AND conname = 'prospects_status_check'
+        LIMIT 1
+      `).catch(err => {
+        console.warn('[api] unable to inspect prospects_status_check:', err.message);
+        return { rows: [] };
+      });
+      console.log('[api] prospects_status_check current:', current.rows[0]?.definition || 'missing');
+      await pool.query(`
+        ALTER TABLE prospects
+        DROP CONSTRAINT IF EXISTS prospects_status_check,
+        ADD CONSTRAINT prospects_status_check
+          CHECK (status IS NULL OR status IN (${sqlStringList(PROSPECT_STATUS_CONSTRAINT_VALUES)}))
+      `);
+      console.log('[api] prospects_status_check allowed:', PROSPECT_STATUS_CONSTRAINT_VALUES.join(', '));
+    })().catch(err => {
+      prospectsStatusSchemaPromise = null;
+      throw err;
+    });
+  }
+  return prospectsStatusSchemaPromise;
+}
 function ensureProspectSetterAssignmentSchema() {
   if (!prospectSetterAssignmentSchemaPromise) {
     prospectSetterAssignmentSchemaPromise = pool.query(`
@@ -845,18 +881,43 @@ router.post('/api/prospects/:id/touch', requireAuth, async (req, res) => {
 });
 
 router.patch('/api/prospects/:id/status', requireAuth, async (req, res) => {
+  let clientId = null;
+  let status = null;
   try {
-    const clientId = getRequestClientId(req);
-    const status = String(req.body.status || '').toLowerCase();
-    if (!['cold', 'warm', 'contacted', 'booked', 'closed', 'hot', 'dead'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    clientId = getRequestClientId(req);
+    status = String(req.body?.status || '').toLowerCase();
+    if (!PROSPECT_STATUS_VALUES.includes(status)) {
+      return res.status(400).json({
+        error: `Invalid status. Allowed: ${PROSPECT_STATUS_VALUES.join(', ')}`,
+        allowed_statuses: PROSPECT_STATUS_VALUES,
+      });
+    }
+
+    await ensureProspectsStatusSchema();
     const result = await pool.query(
       'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3 RETURNING id',
       [status, req.params.id, clientId]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Prospect not found' });
-    res.json({ success: true, prospect: await selectUpdatedProspect(req.params.id, clientId) });
+
+    const updated = await selectUpdatedProspect(req.params.id, clientId);
+    res.json({ success: true, prospect: updated });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[api] prospect status update error:', {
+      prospect_id: req.params.id,
+      client_id: clientId,
+      requested_status: status || req.body?.status || null,
+      message: err.message,
+      code: err.code,
+      constraint: err.constraint,
+      detail: err.detail,
+    });
+    res.status(500).json({
+      error: 'Prospect status update failed',
+      message: err.message,
+      code: err.code || null,
+      constraint: err.constraint || null,
+    });
   }
 });
 
