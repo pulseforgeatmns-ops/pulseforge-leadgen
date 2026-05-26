@@ -24,6 +24,71 @@ function getEmmettClientConfig(clientId = CLIENT_ID) {
 
 // A/B TEST ACTIVE: restaurant vs restaurant_b — remove restaurant_b when test concludes
 const SEQUENCES = {
+  mshi: [
+    {
+      day: 0,
+      subject: "Quick question about {{business_name}}",
+      body: `Hi {{first_name}},
+
+My name is Brad — I run Mountain State Home Innovations out of Charleston with my partner Dustin.
+
+We specialize in decks, siding, and exterior work across Kanawha, Putnam, and Cabell County. Licensed WV065578.
+
+I came across {{business_name}} and wanted to reach out directly. We do a lot of work for property managers and HOAs who need reliable contractors they can call without the runaround.
+
+Would it be worth a quick conversation?
+
+Brad
+Mountain State Home Innovations
+304-483-3655`
+    },
+    {
+      day: 4,
+      subject: "Re: Quick question about {{business_name}}",
+      body: `Hi {{first_name}},
+
+Just following up in case my last note got buried.
+
+One thing that sets us apart — most contractors go quiet after the estimate. We don't. Every client gets direct access to Brad or Dustin throughout the whole project. For property managers who need fast turnaround on damage or wear, that matters.
+
+We're happy to do a free walkthrough of any properties you manage in Kanawha, Putnam, or Cabell County — just reply here and we'll set it up.
+
+Brad
+Mountain State Home Innovations
+304-483-3655`
+    },
+    {
+      day: 8,
+      subject: "What we've done for other property managers in WV",
+      body: `Hi {{first_name}},
+
+We've done subcontract work with some of the larger WV firms — Tri-State Exterior Solutions, St Albans Windows, Secure Construction — so we know what quality at scale looks like.
+
+Decks and siding are our highest volume work. If {{business_name}} has properties that need attention, we'd love to put together a free estimate.
+
+You can also see our Google reviews here: https://share.google/KeVYcU4QxVwfur0cN
+
+Brad
+Mountain State Home Innovations
+304-483-3655`
+    },
+    {
+      day: 13,
+      subject: "Closing the loop",
+      body: `Hi {{first_name}},
+
+I don't want to keep filling up your inbox so I'll leave it here.
+
+If the timing ever works out, give us a call — Brad or Dustin will pick up.
+
+304-483-3655
+
+No obligation, free estimate, local crew. We'll be here.
+
+Brad
+Mountain State Home Innovations`
+    }
+  ],
   home_renovation: [
     {
       day: 0,
@@ -802,6 +867,34 @@ async function sendEmail(toEmail, toName, subject, body, tags) {
   }
 }
 
+function stripForbiddenMshiCopy(body, prospect) {
+  if (Number(prospect.client_id) !== 2) return body;
+
+  const forbidden = [
+    /\bPulseforge\b/gi,
+    /\bAI\b/gi,
+    /\bautomation\b/gi,
+    /\bmarketing agency\b/gi,
+  ];
+  let cleaned = body;
+  let stripped = false;
+
+  for (const pattern of forbidden) {
+    pattern.lastIndex = 0;
+    if (pattern.test(cleaned)) {
+      stripped = true;
+      pattern.lastIndex = 0;
+      cleaned = cleaned.replace(pattern, '').replace(/[ \t]{2,}/g, ' ');
+    }
+  }
+
+  if (stripped) {
+    console.warn(`Warning: stripped forbidden MSHI copy before sending to ${prospect.email}`);
+  }
+
+  return cleaned;
+}
+
 async function getEmailsSentToday() {
   const pool = require('./db');
   const res = await pool.query(`
@@ -971,6 +1064,8 @@ async function getProspectsForEmail() {
 }
 
 function getSequenceForProspect(prospect) {
+  if (Number(prospect.client_id) === 2) return 'mshi';
+
   const lastTouchpointAt = prospect.last_touchpoint_at ? new Date(prospect.last_touchpoint_at) : null;
   const daysSinceLastTouchpoint = lastTouchpointAt
     ? (Date.now() - lastTouchpointAt.getTime()) / (1000 * 60 * 60 * 24)
@@ -1184,7 +1279,7 @@ async function run() {
     // Check for warm email substitution on Day 4+ follow-ups
     let useWarm = false;
     const sequenceName = getSequenceForProspect(prospect);
-    if (sequenceName !== 're_engagement' && step.day > 0) {
+    if (sequenceName !== 'mshi' && sequenceName !== 're_engagement' && step.day > 0) {
       const clicked  = await hasClickedEmail(prospect.id);
       const warmSent = await hasSentWarmEmail(prospect.id);
       if (clicked && warmSent) {
@@ -1199,7 +1294,8 @@ async function run() {
 
     const activeStep = useWarm ? WARM_STEP : step;
     const subject = fillTemplate(activeStep.subject, prospect);
-    const body    = fillTemplate(activeStep.body,    prospect);
+    let body      = fillTemplate(activeStep.body,    prospect);
+    body = stripForbiddenMshiCopy(body, prospect);
 
     console.log(`Sending to: ${prospect.email} (${prospect.name})`);
     console.log(`Subject: ${subject}`);
