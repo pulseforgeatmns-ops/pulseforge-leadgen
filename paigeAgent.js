@@ -66,6 +66,17 @@ const PULSEFORGE_TOPIC_BANK = [
   },
 ];
 
+const BLOG_CLOSER_BANK = [
+  "If any of this sounds familiar, visit https://gopulseforge.com/contact and we'll map out what your first automated sequence would look like.",
+  "The businesses getting ahead right now aren't working harder. They built something that works without them. We build that.",
+  'Want to see what this looks like for your specific business? We do free workflow audits for Manchester-area businesses.',
+  "This is exactly what we set up for clients in the first 30 days. If you're curious what that looks like, reach out.",
+  'Most of our clients are surprised how little it takes to get the first sequence live. Happy to walk you through it.',
+  "We've built this for restaurants, cleaners, contractors, and salons across NH. The playbook is the same. The results aren't.",
+  "If you're still following up manually, you're leaving jobs on the table. Let's fix that.",
+  'The setup takes less than a week. The follow-up runs forever.',
+];
+
 // Vertical-specific context fed into the prompt so Claude sounds right for each business type
 const VERTICAL_PROMPTS = {
   cleaning:    'spotless results, reliable local team, before-and-after transformations, booking convenience, trust and consistency',
@@ -126,6 +137,25 @@ function getPulseforgeTopicAngle(date = new Date()) {
     day: 'numeric',
   }).format(date));
   return PULSEFORGE_TOPIC_BANK[(day - 1) % PULSEFORGE_TOPIC_BANK.length];
+}
+
+function seededIndex(seed, size) {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = ((hash << 5) - hash) + seed.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash) % size;
+}
+
+function getBlogCloser(channel, date = new Date()) {
+  const dateKey = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+  return BLOG_CLOSER_BANK[seededIndex(`${dateKey}:${channel}`, BLOG_CLOSER_BANK.length)];
 }
 
 function formatUsedAngles(angles) {
@@ -243,10 +273,7 @@ HOOK WRITING — NON-NEGOTIABLE:
 Every post must open with a strong hook in the first line. Strong hooks include: a counterintuitive statement, a specific operational detail, a direct question that creates curiosity, or a bold claim. Never start a post with "I", "We", "At [company]", or a generic greeting. The first line must stop the scroll. Examples of weak hooks: "We help local businesses grow." Examples of strong hooks: "The quietest part of a local business is usually where the leak is." or "A booking request should not depend on whether the owner checked their inbox at the right minute."
 
 ORIGINALITY — NON-NEGOTIABLE:
-Every piece of content must feel like it was written for the first time. Never reuse the same opening premise, stat, or scenario you've used before. If you catch yourself writing something that sounds like something Pulseforge has said before, stop and pick a different angle from today's topic bucket.
-
-CTA — NON-NEGOTIABLE:
-Every post must end with exactly one of these CTAs — rotate them, never use the same one twice in a row: (1) 'Reply and I'll show you what this looks like for [business type] in Manchester.' (2) 'Drop a comment — what's the one part of your follow-up process you wish ran itself?' (3) 'DM us and we'll put together a free mockup for your business this week.' (4) 'Curious what this would cost for a business your size? Reply and I'll break it down.' Never end with a generic 'reach out' or 'contact us' line.`;
+Every piece of content must feel like it was written for the first time. Never reuse the same opening premise, stat, or scenario you've used before. If you catch yourself writing something that sounds like something Pulseforge has said before, stop and pick a different angle from today's topic bucket.`;
 }
 
 async function getActiveClients() {
@@ -408,7 +435,7 @@ ${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. T
 Return only the post text.`;
 }
 
-function buildBlogPrompt(company, contentType, verticalCtx, lastContentType) {
+function buildBlogPrompt(company, contentType, verticalCtx, lastContentType, blogCloser) {
   const isPulseforge = company.name.toLowerCase().includes('pulseforge');
   const location = company.location || 'Manchester, NH';
 
@@ -436,7 +463,7 @@ Write a blog post (350-500 words) using this structure:
 
 [Optional third ## section if it fits naturally — skip if it would feel padded]
 
-[Closing paragraph with a soft, non-pushy call to action]
+[Closing paragraph using the required closer below]
 
 Requirements:
 - Use # for the title and ## for subheadings — no other markdown
@@ -450,6 +477,8 @@ Requirements:
 - No keyword stuffing — mention the business and location where they fit naturally
 - No corporate tone, no "we pride ourselves," no "cutting-edge solutions"
 - Never use dashes or hyphens in any content you write — not as punctuation, not as separators, not in any context.
+- End the post with this exact closer, adjusted only if needed for grammar: "${blogCloser}"
+- Never use engagement-bait questions as blog closers. Do not end with "drop a comment", "what do you think", "let us know below", or any request for comments.
 
 VARIETY RULES — enforce these on every post:
 - Never start a post with "Most small business owners" or any variation of that phrase
@@ -609,6 +638,7 @@ async function generatePost(company, contentType, channel) {
   const isPulseforge = company.name.toLowerCase().includes('pulseforge');
   const recentPublishedAngles = await getRecentPublishedAngles();
   const topicAngle = isPulseforge ? getPulseforgeTopicAngle() : null;
+  const blogCloser = channel === 'blog' ? getBlogCloser(channel) : null;
   const clientContext = CLIENT_ID === 2 ? `
 
 MSHI CLIENT CONTEXT:
@@ -628,12 +658,15 @@ MSHI CLIENT CONTEXT:
   if (isPulseforge && topicAngle) {
     console.log(`  [topic] ${topicAngle.label}`);
   }
+  if (blogCloser) {
+    console.log(`  [blog closer] ${blogCloser}`);
+  }
   console.log(`  [memory] Recent published angles checked: ${recentPublishedAngles.length}`);
 
   const prompt = channel === 'google_business'
     ? buildGooglePrompt(company, contentType, verticalCtx, location, lastContentType)
     : channel === 'blog'
-      ? buildBlogPrompt(company, contentType, verticalCtx, lastContentType)
+      ? buildBlogPrompt(company, contentType, verticalCtx, lastContentType, blogCloser)
       : channel === 'linkedin_page'
         ? buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType)
         : buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType);
