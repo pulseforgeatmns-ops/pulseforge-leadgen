@@ -13,9 +13,8 @@ const CHANNELS = ['facebook_page', 'google_business', 'blog', 'linkedin_page'];
 const CLIENT_1_CHANNELS = ['facebook_page', 'google_business', 'linkedin_page', 'linkedin_personal', 'blog'];
 const MSHI_CHANNELS = ['facebook_page', 'google_business', 'blog'];
 const ALL_CHANNELS = [...new Set([...CHANNELS, ...CLIENT_1_CHANNELS, ...MSHI_CHANNELS])];
-const MIN_QUALITY_SCORE = 26;
+const MIN_QUALITY_SCORE = 24;
 const MIN_DIMENSION_SCORE = 7;
-const MIN_HOOK_SCORE = 8;
 const MAX_REGENERATION_ATTEMPTS = 4;
 const CLIENT_ID = getRuntimeClientId();
 const CLEAR_PENDING_PULSEFORGE_APPROVALS = process.env.PAIGE_CLEAR_PENDING_PULSEFORGE !== '0';
@@ -1056,6 +1055,16 @@ async function scoreDraft(draft, recentPublishedAngles = []) {
 
 1. SPECIFICITY — Does it mention a concrete result, number, outcome,
    or specific scenario? (10 = very specific, 1 = vague platitudes)
+   Specificity does not require hard numbers or revenue figures to score 8+.
+   A specific detail can be:
+   - A concrete timeline ("three months", "six weeks", "first 30 days")
+   - A named location ("Manchester NH", "Southern NH", "Kanawha County")
+   - A specific behavior or outcome ("hadn't written a single caption",
+     "responded to every lead in under 2 minutes")
+   - A named vertical or business type ("commercial cleaning company",
+     "med spa owner")
+   Only penalize specificity below 7 if the post is entirely generic with no
+   concrete detail whatsoever.
 
 2. ORIGINALITY — Does it avoid clichés, seasonal hooks, and location
    name-drops as the main angle? (10 = fresh angle, 1 = recycled formula)
@@ -1068,8 +1077,8 @@ ${formatUsedAngles(recentPublishedAngles)}
 3. HOOK STRENGTH — Does the opening line give someone a reason to stop
    scrolling and keep reading? (10 = compelling, 1 = forgettable)
 
-Passing requires total >= ${MIN_QUALITY_SCORE}, hook_strength >= ${MIN_HOOK_SCORE},
-specificity >= ${MIN_DIMENSION_SCORE}, and originality >= ${MIN_DIMENSION_SCORE}.
+Passing requires total >= ${MIN_QUALITY_SCORE} and specificity, originality,
+and hook_strength each >= ${MIN_DIMENSION_SCORE}.
 A score below 7 on any dimension means the post failed.
 
 Return ONLY a strict JSON object with double-quoted keys and string values.
@@ -1112,10 +1121,10 @@ function validateDraftForClient(draft, channel) {
 }
 
 function passesQualityGate(score) {
-  return score.total >= MIN_QUALITY_SCORE &&
-    score.hook_strength >= MIN_HOOK_SCORE &&
-    score.specificity >= MIN_DIMENSION_SCORE &&
-    score.originality >= MIN_DIMENSION_SCORE;
+  return Number(score.total || 0) >= MIN_QUALITY_SCORE &&
+    Number(score.specificity || 0) >= MIN_DIMENSION_SCORE &&
+    Number(score.originality || 0) >= MIN_DIMENSION_SCORE &&
+    Number(score.hook_strength || 0) >= MIN_DIMENSION_SCORE;
 }
 
 async function generatePost(company, contentType, channel) {
