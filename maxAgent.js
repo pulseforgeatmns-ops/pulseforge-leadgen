@@ -10,6 +10,18 @@ const AGENT_NAME = 'max';
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
 
+const DIGEST_AGENT_NAMING_RULES = `Agent naming rules — use these exactly, never substitute:
+
+Emmett = the email outreach agent. He sends cold emails, manages sequences, tracks opens and clicks.
+Vera = the Google Business Profile review response agent. She does NOT send emails. Only mention Vera in context of GBP reviews.
+Riley = the receptionist/triage agent. She monitors inbound signals and classifies replies.
+Paige = the content agent. She generates and publishes social posts and blog content.
+Sam = the SMS agent. He sends text notifications.
+Cal = the calling agent. He makes outbound Bland.ai calls.
+Scout = the lead scraper. He finds and enriches new prospects.
+
+Never attribute email sending, open rates, or click rates to Vera. That data always belongs to Emmett.`;
+
 const CLIENT_MARKET_LABELS = {
   1: 'Manchester NH',
   2: 'Charleston WV',
@@ -421,6 +433,7 @@ ACTION NEEDED: ${actionItems.join('; ')}
   const message = await client.messages.create({
     model: 'claude-sonnet-4-5',
     max_tokens: 1000,
+    system: DIGEST_AGENT_NAMING_RULES,
     messages: [{
       role: 'user',
       content: `Today's date is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. You are Max, the manager agent for Pulseforge — an AI marketing system for local small businesses.
