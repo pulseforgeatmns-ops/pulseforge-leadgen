@@ -636,6 +636,67 @@ function extractDomain(url) {
   }
 }
 
+function normalizeDomain(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  try {
+    return new URL(raw.includes('://') ? raw : `https://${raw}`)
+      .hostname
+      .replace(/^www\./i, '')
+      .toLowerCase();
+  } catch {
+    const domain = raw
+      .replace(/^https?:\/\//i, '')
+      .replace(/^www\./i, '')
+      .split(/[/?#\s]/)[0]
+      .replace(/[.,;:]+$/g, '')
+      .toLowerCase();
+    return domain || null;
+  }
+}
+
+async function findOrCreateCompany({ name, domain, lead }) {
+  const existing = await pool.query(
+    `SELECT id
+       FROM companies
+      WHERE client_id = $2
+        AND LOWER(TRIM(name)) = LOWER(TRIM($1))
+      LIMIT 1`,
+    [name, CONFIG.clientId]
+  );
+  if (existing.rows.length) {
+    await pool.query(
+      `UPDATE companies
+          SET domain = COALESCE(domain, $1),
+              website = COALESCE(website, $2),
+              updated_at = NOW()
+        WHERE id = $3
+          AND client_id = $4`,
+      [domain, lead.url || null, existing.rows[0].id, CONFIG.clientId]
+    );
+    return existing.rows[0].id;
+  }
+
+  const inserted = await pool.query(
+    `INSERT INTO companies (name, domain, website, industry, location, client_id, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW())
+     ON CONFLICT DO NOTHING
+     RETURNING id`,
+    [name, domain, lead.url || null, CONFIG.industry || null, lead.address || CONFIG.location || null, CONFIG.clientId]
+  );
+  if (inserted.rows.length) return inserted.rows[0].id;
+
+  const fallback = await pool.query(
+    `SELECT id
+       FROM companies
+      WHERE client_id = $2
+        AND LOWER(TRIM(name)) = LOWER(TRIM($1))
+      LIMIT 1`,
+    [name, CONFIG.clientId]
+  );
+  return fallback.rows[0]?.id || null;
+}
+
 function detectType(lead) {
   const techKeywords = ['saas','software','app','tech','io','platform','ai','cloud','data'];
   const d = (lead.url + lead.company + (lead.snippet || '')).toLowerCase();
@@ -768,6 +829,7 @@ function validateProspect(name) {
 async function saveToDatabase(leads) {
   let saved = 0, skipped = 0, rejected = 0, setterQueued = 0, setterSkipped = 0, setterFailed = 0;
   await ensureSetterQueueColumns(pool);
+  await ensureCompanyColumns(pool);
   for (const lead of leads) {
     const companyName = lead.company.replace(/^CONTACT:\s*/i, '').trim();
 
@@ -786,14 +848,19 @@ async function saveToDatabase(leads) {
     // If the existing prospect has no city info recorded, fall back to a name-only match within the client.
     const cityScope = String(CONFIG.location || '').split(/\s+/)[0] || '';
     const dupCheck = await pool.query(
-      `SELECT id FROM prospects
-         WHERE client_id = $2
-           AND LOWER(TRIM(SPLIT_PART(notes, ' — ', 1))) = LOWER(TRIM($1))
+      `SELECT p.id
+         FROM prospects p
+         LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+        WHERE p.client_id = $2
+          AND (
+            LOWER(TRIM(c.name)) = LOWER(TRIM($1))
+            OR LOWER(TRIM(SPLIT_PART(COALESCE(p.notes, ''), ' — ', 1))) = LOWER(TRIM($1))
+          )
            AND (
              $3 = ''
-             OR service_area_match ILIKE '%' || $3 || '%'
-             OR notes ILIKE '%' || $3 || '%'
-             OR service_area_match IS NULL
+             OR p.service_area_match ILIKE '%' || $3 || '%'
+             OR c.location ILIKE '%' || $3 || '%'
+             OR p.service_area_match IS NULL
            )`,
       [companyName, CONFIG.clientId, cityScope]
     );
@@ -813,16 +880,18 @@ async function saveToDatabase(leads) {
       const looksLikePerson = nameParts.length >= 2 || (nameParts.length === 1 && /^[A-Z][a-z]{2,}$/.test(nameParts[0]));
       const firstName = sanitizeFirstName(looksLikePerson ? nameParts[0] : null);
       const lastName  = firstName ? nameParts.slice(1).join(' ') || null : null;
-      const notes = companyName + ' — ' + lead.url;
+      const domain = normalizeDomain(lead.url);
       const phone = lead.phone || null;
       const serviceArea = (CLIENT_CONFIG?.service_area || []).find(area => {
         const needle = String(area).toLowerCase();
-        return (lead.address || '').toLowerCase().includes(needle) || notes.toLowerCase().includes(needle);
+        return (lead.address || '').toLowerCase().includes(needle) || (domain || '').includes(needle);
       }) || null;
       const discoveryMethod = Array.isArray(lead.source) && lead.source.includes('google_places') ? 'google_places' : 'serpapi';
+      const companyId = await findOrCreateCompany({ name: companyName, domain, lead });
+      if (!companyId) throw new Error(`Unable to link company for ${companyName}`);
       const insert = await pool.query(
-      'INSERT INTO prospects (first_name, last_name, email, phone, status, source, icp_score, notes, vertical, client_id, service_area_match, discovery_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (email) DO NOTHING RETURNING id',
-      [firstName, lastName, email, phone, 'cold', 'scout', lead.score, notes, CONFIG.industry, CONFIG.clientId, serviceArea, discoveryMethod]
+      'INSERT INTO prospects (company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical, client_id, service_area_match, discovery_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (email) DO NOTHING RETURNING id',
+      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, null, CONFIG.industry, CONFIG.clientId, serviceArea, discoveryMethod]
     );
       if (!insert.rows.length) {
         skipped++;
@@ -870,6 +939,13 @@ async function ensureSetterQueueColumns(pool) {
     ADD COLUMN IF NOT EXISTS setter_updated_at TIMESTAMPTZ DEFAULT NOW(),
     ADD COLUMN IF NOT EXISTS service_area_match TEXT,
     ADD COLUMN IF NOT EXISTS discovery_method TEXT
+  `);
+}
+
+async function ensureCompanyColumns(pool) {
+  await pool.query(`
+    ALTER TABLE companies
+    ADD COLUMN IF NOT EXISTS domain TEXT
   `);
 }
 
