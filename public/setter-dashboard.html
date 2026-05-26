@@ -127,6 +127,9 @@ tr:hover td { background:rgba(139,92,246,0.04); }
 .stage-count { font-family:'Bebas Neue',sans-serif; color:var(--purple-bright); font-size:1.25rem; }
 .stage-body { padding:0.75rem; display:flex; flex-direction:column; gap:0.6rem; }
 .lead-card { background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); border-radius:8px; padding:0.75rem; }
+.lead-card[draggable="true"] { cursor:grab; }
+.lead-card.dragging { opacity:0.45; transform:scale(0.98); cursor:grabbing; }
+.lead-card.dropped { animation:cardDrop 0.32s ease; border-color:var(--teal); box-shadow:0 0 22px rgba(0,212,180,0.18); }
 .lead-card.hot { border-color:rgba(255,214,0,0.24); background:rgba(255,214,0,0.045); }
 .lead-card-title { font-weight:600; color:var(--white); font-size:0.82rem; margin-bottom:0.45rem; line-height:1.35; }
 .lead-card-meta { display:flex; align-items:center; justify-content:space-between; gap:0.4rem; margin-bottom:0.6rem; }
@@ -161,6 +164,7 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
 .quick-ref a:hover { text-decoration:underline; }
 .calendar-button { display:inline-flex; align-items:center; justify-content:center; margin-top:0.85rem; min-height:40px; padding:0.65rem 0.95rem; border-radius:5px; border:1px solid rgba(0,212,180,0.35); background:var(--teal-dim); color:var(--teal); font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1px; text-transform:uppercase; text-decoration:none; }
 .calendar-button:hover { color:var(--white); border-color:var(--teal); }
+@keyframes cardDrop { 0%{transform:scale(0.96);opacity:0.75} 55%{transform:scale(1.02)} 100%{transform:scale(1);opacity:1} }
 .script-block { display:grid; gap:0.75rem; }
 .script-step { border-top:1px solid rgba(255,255,255,0.05); padding-top:0.75rem; }
 .script-step:first-child { border-top:0; padding-top:0; }
@@ -605,6 +609,8 @@ let pipelineSearch = '';
 let searchTimer = null;
 const loggedTimers = {};
 let handoffResolve = null;
+let draggedLeadId = null;
+let lastDroppedLeadId = null;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function applyTheme(theme) {
@@ -753,11 +759,11 @@ function renderPipeline() {
   const grid = document.getElementById('pipelineGrid');
   grid.innerHTML = stages.map(stage => {
     const items = pipeline[stage] || [];
-    return `<div class="stage">
+    return `<div class="stage" data-drop-status="${stage}">
       <div class="stage-head"><div class="stage-title">${stageLabels[stage]}</div><div class="stage-count">${items.length}</div></div>
       <div class="stage-body">
         ${items.length ? items.map(lead => `
-          <div class="lead-card ${lead.is_hot ? 'hot' : ''}">
+          <div class="lead-card ${lead.is_hot ? 'hot' : ''} ${String(lead.id) === String(lastDroppedLeadId) ? 'dropped' : ''}" draggable="true" data-lead-id="${lead.id}" data-current-status="${lead.status}">
             <div class="lead-card-title" data-open="${lead.id}">${lead.is_hot ? '⚡ ' : ''}${lead.business_name}</div>
             <div class="lead-card-meta"><span class="mono">${lead.vertical} · ${ageInfo(lead.date_added).label}</span><span class="score ${lead.score_band}">${lead.score}</span></div>
             <div class="lead-card-meta"><span class="attempt-badge">${lead.attempt_count || 0} attempts</span><button class="btn icon-btn ${lead.is_hot ? 'hot' : ''}" data-hot="${lead.id}" type="button">⚡</button></div>
@@ -770,6 +776,15 @@ function renderPipeline() {
     </div>`;
   }).join('');
   renderLeadSelect();
+  if (lastDroppedLeadId) {
+    const id = lastDroppedLeadId;
+    setTimeout(() => {
+      if (String(lastDroppedLeadId) === String(id)) {
+        document.querySelector(`[data-lead-id="${id}"]`)?.classList.remove('dropped');
+        lastDroppedLeadId = null;
+      }
+    }, 380);
+  }
 }
 
 function renderFeed() {
@@ -888,7 +903,7 @@ function closeHandoffModal(value) {
   if (resolve) resolve(value);
 }
 
-async function updateStatus(id, status) {
+async function updateStatus(id, status, options = {}) {
   const original = leads.find(l => l.id === id);
   let handoff_note = '';
   if (status === 'booked') {
@@ -900,6 +915,7 @@ async function updateStatus(id, status) {
   renderQueue();
   try {
     const data = await api(`/setter/api/leads/${id}/status`, { method:'PATCH', body:JSON.stringify({ status, handoff_note }) });
+    if (options.animateDrop) lastDroppedLeadId = id;
     await Promise.all([loadMetrics(), loadTodayStats(), loadQueue(), loadDue(), loadPipeline(), loadActivity()]);
     if (selectedLead?.id === id) selectedLead.status = status;
     if (status === 'booked') {
@@ -1188,6 +1204,46 @@ document.addEventListener('click', event => {
 document.addEventListener('change', event => {
   const selector = event.target.closest('[data-select-status]');
   if (selector) updateStatus(selector.dataset.selectStatus, selector.value);
+});
+
+document.addEventListener('dragstart', event => {
+  const card = event.target.closest('.lead-card[draggable="true"]');
+  if (!card) return;
+  draggedLeadId = card.dataset.leadId;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', draggedLeadId);
+  card.classList.add('dragging');
+});
+
+document.addEventListener('dragend', event => {
+  event.target.closest('.lead-card')?.classList.remove('dragging');
+  document.querySelectorAll('.stage.drag-over').forEach(stage => stage.classList.remove('drag-over'));
+  draggedLeadId = null;
+});
+
+document.addEventListener('dragover', event => {
+  const stage = event.target.closest('.stage[data-drop-status]');
+  if (!stage || !draggedLeadId) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  stage.classList.add('drag-over');
+});
+
+document.addEventListener('dragleave', event => {
+  const stage = event.target.closest('.stage[data-drop-status]');
+  if (stage && !stage.contains(event.relatedTarget)) stage.classList.remove('drag-over');
+});
+
+document.addEventListener('drop', event => {
+  const stage = event.target.closest('.stage[data-drop-status]');
+  if (!stage || !draggedLeadId) return;
+  event.preventDefault();
+  stage.classList.remove('drag-over');
+  const id = event.dataTransfer.getData('text/plain') || draggedLeadId;
+  const targetStatus = stage.dataset.dropStatus;
+  const lead = findLead(id);
+  if (!lead || lead.status === targetStatus) return;
+  updateStatus(id, targetStatus, { animateDrop: true });
 });
 
 document.getElementById('detailStatus').addEventListener('change', event => {

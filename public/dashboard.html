@@ -2214,6 +2214,20 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
 .pipeline-table { width: 100%; border-collapse: collapse; }
 .pipeline-table th { padding: 0.7rem 0.75rem; }
 .pipeline-table td { padding: 0.8rem 0.75rem; }
+.prospect-pipeline-grid { display: grid; grid-template-columns: repeat(5, minmax(190px, 1fr)); gap: 1rem; overflow-x: auto; padding-bottom: 0.5rem; }
+.prospect-pipeline-column { background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; min-height: 360px; overflow: hidden; transition: border-color 0.2s ease, box-shadow 0.2s ease; }
+.prospect-pipeline-column.drag-over { border-color: var(--teal); box-shadow: 0 0 0 1px rgba(0,212,180,0.25), 0 0 26px rgba(0,212,180,0.12); }
+.prospect-pipeline-head { padding: 0.8rem 0.85rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.prospect-pipeline-title { font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; letter-spacing: 1.6px; text-transform: uppercase; color: var(--gray-light); }
+.prospect-pipeline-count { font-family: 'Bebas Neue', sans-serif; font-size: 1.25rem; color: var(--purple-bright); }
+.prospect-pipeline-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.prospect-pipeline-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 0.75rem; cursor: grab; transition: opacity 0.2s ease, transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease; }
+.prospect-pipeline-card.dragging { opacity: 0.45; transform: scale(0.98); cursor: grabbing; }
+.prospect-pipeline-card.dropped { animation: pipelineCardDrop 0.32s ease; border-color: var(--teal); box-shadow: 0 0 22px rgba(0,212,180,0.18); }
+.prospect-pipeline-name { color: var(--white); font-weight: 600; font-size: 0.82rem; line-height: 1.35; margin-bottom: 0.5rem; }
+.prospect-pipeline-meta { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.45rem; font-family: 'JetBrains Mono', monospace; font-size: 0.56rem; color: var(--gray-light); }
+.prospect-pipeline-email { font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; color: var(--gray); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@keyframes pipelineCardDrop { 0%{transform:scale(0.96);opacity:0.75} 55%{transform:scale(1.02)} 100%{transform:scale(1);opacity:1} }
 .mini-progress { height: 6px; width: 92px; background: rgba(255,255,255,0.06); border-radius: 99px; overflow: hidden; margin-top: 0.35rem; }
 .mini-progress div { height: 100%; width: 0%; background: var(--teal); }
 .agent-health-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
@@ -2224,6 +2238,7 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
 @media (max-width: 1180px) {
   .pipeline-grid-4, .agent-health-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .pipeline-grid-clients { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .prospect-pipeline-grid { grid-template-columns: repeat(5, 240px); }
 }
 @media (max-width: 720px) {
   .pipeline-area { padding: 1rem; }
@@ -3179,6 +3194,11 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
       <div class="section-divider"><div class="section-divider-label">Agent Health</div><div class="section-divider-line"></div></div>
       <div class="agent-health-grid" id="agentHealthGrid"></div>
     </div>
+
+    <div class="pipeline-section">
+      <div class="section-divider"><div class="section-divider-label">PROSPECT PIPELINE</div><div class="section-divider-line"></div></div>
+      <div class="prospect-pipeline-grid" id="prospectPipelineGrid"></div>
+    </div>
   </div>
 
   </div><!-- /center-col -->
@@ -3288,6 +3308,11 @@ let _statsCache = null, _activityCache = null;
 let _statsCacheTime = 0, _activityCacheTime = 0;
 let _liveRings = {}, _currentDetailKey = null;
 let _currentUserRole = null;
+let _pipelineProspects = [];
+let _pipelineDraggedProspectId = null;
+let _pipelineDroppedProspectId = null;
+const PROSPECT_PIPELINE_STAGES = ['cold', 'warm', 'contacted', 'booked', 'closed'];
+const PROSPECT_PIPELINE_LABELS = { cold: 'Cold', warm: 'Warm', contacted: 'Contacted', booked: 'Booked', closed: 'Closed' };
 const DETAIL_CACHE_TTL = 30000;
 const THEME_KEY = 'pulseforge-theme';
 
@@ -4240,7 +4265,7 @@ function prospectModalHtml(p) {
       <button class="pm-action-btn" type="button" id="pmEditProspect">Edit Prospect</button>
       <button class="pm-action-btn" type="button" id="pmAssignSetter">Assign to Setter</button>
       <select class="pm-select" id="pmStatusSelect">
-        ${['cold','warm','hot','dead'].map(s => `<option value="${s}" ${s === (p.status || '').toLowerCase() ? 'selected' : ''}>${s}</option>`).join('')}
+        ${['cold','warm','contacted','booked','closed','hot','dead'].map(s => `<option value="${s}" ${s === (p.status || '').toLowerCase() ? 'selected' : ''}>${s}</option>`).join('')}
       </select>
       <button class="pm-action-btn" type="button" id="pmDnc">Mark do not contact</button>
       <button class="pm-action-btn" type="button" onclick="openProspectsFor('${_esc(p.id)}')">View in prospects tab →</button>
@@ -4684,7 +4709,7 @@ function _icpClass(score) {
 
 function _statusBadge(status) {
   const s = (status || 'cold').toLowerCase();
-  const cls = s === 'hot' ? 'pt-hot' : s === 'warm' ? 'pt-warm' : 'pt-cold';
+  const cls = ['hot', 'warm', 'booked', 'closed', 'contacted'].includes(s) ? 'pt-warm' : 'pt-cold';
   return `<span class="pt-badge ${cls}">${s}</span>`;
 }
 
@@ -4909,7 +4934,7 @@ function openProspectEdit(id) {
         <div class="prospect-edit-field">
           <label for="peStatus">Status</label>
           <select id="peStatus" name="status">
-            ${['cold','warm','dead'].map(s => `<option value="${s}" ${s === original.status ? 'selected' : ''}>${s}</option>`).join('')}
+            ${['cold','warm','contacted','booked','closed','dead'].map(s => `<option value="${s}" ${s === original.status ? 'selected' : ''}>${s}</option>`).join('')}
           </select>
         </div>
         <label class="prospect-edit-field prospect-edit-check">
@@ -5944,6 +5969,90 @@ function agentHealth(agent) {
   return { label: status || 'Unknown', cls: 'gray' };
 }
 
+function normalizeProspectPipelineStatus(status) {
+  const raw = String(status || 'cold').toLowerCase();
+  if (PROSPECT_PIPELINE_STAGES.includes(raw)) return raw;
+  if (raw === 'hot') return 'warm';
+  return 'cold';
+}
+
+function renderProspectPipeline() {
+  const grid = document.getElementById('prospectPipelineGrid');
+  if (!grid) return;
+  const grouped = Object.fromEntries(PROSPECT_PIPELINE_STAGES.map(stage => [stage, []]));
+  _pipelineProspects.forEach(p => grouped[normalizeProspectPipelineStatus(p.status)].push(p));
+  grid.innerHTML = PROSPECT_PIPELINE_STAGES.map(stage => {
+    const items = grouped[stage] || [];
+    return `<div class="prospect-pipeline-column" data-prospect-drop-status="${stage}">
+      <div class="prospect-pipeline-head"><div class="prospect-pipeline-title">${PROSPECT_PIPELINE_LABELS[stage]}</div><div class="prospect-pipeline-count">${items.length}</div></div>
+      <div class="prospect-pipeline-body">
+        ${items.length ? items.map(p => `
+          <div class="prospect-pipeline-card ${String(p.id) === String(_pipelineDroppedProspectId) ? 'dropped' : ''}" draggable="true" data-pipeline-prospect-id="${_esc(p.id)}" data-current-status="${_esc(normalizeProspectPipelineStatus(p.status))}">
+            <div class="prospect-pipeline-name">${_esc(_parseBusiness(p))}</div>
+            <div class="prospect-pipeline-meta"><span>${_esc(p.vertical || 'unknown')}</span><span class="${_icpClass(p.icp_score ?? 0)}">ICP ${p.icp_score ?? '—'}</span></div>
+            <div class="prospect-pipeline-meta"><span>Last: ${_relTimeP(p.last_contacted_at)}</span></div>
+            <div class="prospect-pipeline-email">${_esc(p.email || 'No email')}</div>
+          </div>`).join('') : '<div class="no-data-note">No prospects</div>'}
+      </div>
+    </div>`;
+  }).join('');
+  if (_pipelineDroppedProspectId) {
+    const id = _pipelineDroppedProspectId;
+    setTimeout(() => {
+      if (String(_pipelineDroppedProspectId) === String(id)) {
+        document.querySelectorAll('[data-pipeline-prospect-id]').forEach(card => {
+          if (String(card.dataset.pipelineProspectId) === String(id)) card.classList.remove('dropped');
+        });
+        _pipelineDroppedProspectId = null;
+      }
+    }, 380);
+  }
+}
+
+async function loadProspectPipeline() {
+  const grid = document.getElementById('prospectPipelineGrid');
+  if (!grid) return;
+  try {
+    grid.innerHTML = '<div class="no-data-note">Loading prospect pipeline...</div>';
+    const res = await fetch('/api/prospects', { credentials: 'include' });
+    if (!res.ok) throw new Error('prospects unavailable');
+    _pipelineProspects = await res.json();
+    renderProspectPipeline();
+  } catch (e) {
+    console.error('loadProspectPipeline:', e);
+    _pipelineProspects = [];
+    grid.innerHTML = '<div class="no-data-note">Prospect pipeline failed to load</div>';
+  }
+}
+
+async function updateProspectPipelineStatus(id, status) {
+  const prospect = _pipelineProspects.find(p => String(p.id) === String(id));
+  if (!prospect || normalizeProspectPipelineStatus(prospect.status) === status) return;
+  const previous = prospect.status || 'cold';
+  prospect.status = status;
+  _pipelineDroppedProspectId = id;
+  renderProspectPipeline();
+  try {
+    const res = await fetch(`/api/prospects/${encodeURIComponent(id)}/status`, {
+      method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Status update failed');
+    const updated = data.prospect || { id, status };
+    _pipelineProspects = _pipelineProspects.map(p => String(p.id) === String(id) ? { ...p, ...updated } : p);
+    _mergeUpdatedProspect(updated);
+    renderProspectPipeline();
+    if (document.getElementById('prospectsArea')?.style.display !== 'none') _renderProspects();
+  } catch (e) {
+    console.error('updateProspectPipelineStatus:', e);
+    prospect.status = previous;
+    _pipelineDroppedProspectId = null;
+    renderProspectPipeline();
+    alert('Prospect status update failed');
+  }
+}
+
 function renderPipeline(data) {
   const revenue = data.revenue || {};
   const confirmed = Number(revenue.confirmed_mrr || 0);
@@ -6001,6 +6110,7 @@ async function loadPipeline() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Pipeline request failed');
     renderPipeline(data);
+    await loadProspectPipeline();
   } catch(e) {
     console.error('loadPipeline:', e);
     document.getElementById('pipelineSub').textContent = 'Pipeline failed to load';
@@ -6010,6 +6120,44 @@ async function loadPipeline() {
 }
 
 document.getElementById('pipelineRefreshBtn')?.addEventListener('click', loadPipeline);
+
+document.addEventListener('dragstart', event => {
+  const card = event.target.closest('.prospect-pipeline-card[draggable="true"]');
+  if (!card) return;
+  _pipelineDraggedProspectId = card.dataset.pipelineProspectId;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', _pipelineDraggedProspectId);
+  card.classList.add('dragging');
+});
+
+document.addEventListener('dragend', event => {
+  event.target.closest('.prospect-pipeline-card')?.classList.remove('dragging');
+  document.querySelectorAll('.prospect-pipeline-column.drag-over').forEach(col => col.classList.remove('drag-over'));
+  _pipelineDraggedProspectId = null;
+});
+
+document.addEventListener('dragover', event => {
+  const col = event.target.closest('.prospect-pipeline-column[data-prospect-drop-status]');
+  if (!col || !_pipelineDraggedProspectId) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  col.classList.add('drag-over');
+});
+
+document.addEventListener('dragleave', event => {
+  const col = event.target.closest('.prospect-pipeline-column[data-prospect-drop-status]');
+  if (col && !col.contains(event.relatedTarget)) col.classList.remove('drag-over');
+});
+
+document.addEventListener('drop', event => {
+  const col = event.target.closest('.prospect-pipeline-column[data-prospect-drop-status]');
+  if (!col || !_pipelineDraggedProspectId) return;
+  event.preventDefault();
+  col.classList.remove('drag-over');
+  const id = event.dataTransfer.getData('text/plain') || _pipelineDraggedProspectId;
+  updateProspectPipelineStatus(id, col.dataset.prospectDropStatus);
+});
+
 
 loadClientSelector();
 loadLiveData();
