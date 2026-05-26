@@ -52,6 +52,32 @@ async function updateSetterNotes(token, rowIndex, value) {
   }
 }
 
+async function prospectExists(prospectId, clientId = CLIENT_ID) {
+  if (!prospectId) return false;
+  const res = await pool.query(
+    'SELECT 1 FROM prospects WHERE id = $1 AND client_id = $2 LIMIT 1',
+    [prospectId, clientId]
+  );
+  return res.rows.length > 0;
+}
+
+async function logSignalDroppedNoProspect(prospect, trigger = 'sheet_flag') {
+  await pool.query(`
+    INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+    VALUES ($1, 'signal_dropped_no_prospect', NULL, $2, 'skipped', NOW(), $3)
+  `, [
+    AGENT_NAME,
+    JSON.stringify({
+      prospect_id: prospect?.id || null,
+      email: prospect?.email || null,
+      trigger,
+      reason: 'prospect_not_found',
+      client_id: CLIENT_ID,
+    }),
+    CLIENT_ID,
+  ]);
+}
+
 // ── MAIN ──────────────────────────────────────────────────────────────
 async function run() {
   console.log('\n🔥 Warm Signal Agent');
@@ -93,6 +119,12 @@ async function run() {
   let flagged = 0;
 
   for (const prospect of prospects) {
+    if (!(await prospectExists(prospect.id, CLIENT_ID))) {
+      await logSignalDroppedNoProspect(prospect);
+      console.warn(`[warm_signal] Dropped sheet warm signal for missing prospect_id=${prospect.id}`);
+      continue;
+    }
+
     const bizName = (prospect.notes || '').split('—')[0].trim() ||
                     `${prospect.first_name} ${prospect.last_name}`.trim();
 

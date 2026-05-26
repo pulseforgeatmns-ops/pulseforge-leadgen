@@ -287,6 +287,7 @@ async function logWarmSignalSms(action, prospect, message, status, extra = {}, e
 }
 
 async function processWarmSignalActions(twilioClient, dailyLimit, sentCount) {
+  const { logSignalDroppedNoProspect } = require('./rileyAgent');
   const res = await pool.query(`
     SELECT id, payload, client_id
     FROM agent_actions
@@ -350,6 +351,13 @@ async function processWarmSignalActions(twilioClient, dailyLimit, sentCount) {
     `, [prospectId, payload.client_id || row.client_id || CLIENT_ID]);
     const prospect = prospectRes.rows[0];
     if (!prospect) {
+      await logSignalDroppedNoProspect({
+        prospect_id: prospectId,
+        client_id: payload.client_id || row.client_id || CLIENT_ID,
+        source: AGENT_NAME,
+        trigger: payload.trigger || 'warm_signal',
+        payload: { source_action_id: row.id, action_type: 'warm_signal' },
+      });
       await completeWarmSignalAction(row.id, 'Skipped: prospect not found');
       continue;
     }
