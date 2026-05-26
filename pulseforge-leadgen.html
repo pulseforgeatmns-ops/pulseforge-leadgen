@@ -919,18 +919,6 @@ const state = {
   running: false
 };
 
-// ── MOCK DATA for demo ──────────────────────────────────────────────
-const mockLeads = [
-  { id:1, company:'Clean Sweep Pro', url:'cleansweeppro.com', contact:'Mike Torres', email:'mike@cleansweeppro.com', title:'Owner', type:'smb', sources:['google','prospeo'], score:92 },
-  { id:2, company:'Granite State HVAC', url:'granitehvac.com', contact:'Sarah Leblanc', email:'s.leblanc@granitehvac.com', title:'General Manager', type:'smb', sources:['google','prospeo'], score:85 },
-  { id:3, company:'Brightpath SaaS', url:'brightpathapp.io', contact:'Dana Kim', email:'dana@brightpathapp.io', title:'CEO', type:'tech', sources:['prospeo'], score:78 },
-  { id:4, company:'Manchester Auto Detail', url:'manchesterautodetail.com', contact:'—', email:'—', title:'—', type:'smb', sources:['google'], score:41 },
-  { id:5, company:'Loopwise Inc', url:'loopwise.io', contact:'Jordan Reeves', email:'jordan@loopwise.io', title:'Founder', type:'tech', sources:['google','prospeo'], score:88 },
-  { id:6, company:'NH Restaurant Group', url:'nhrestaurantgroup.com', contact:'Paul Rossi', email:'paul@nhrg.com', title:'Owner', type:'smb', sources:['google','prospeo'], score:76 },
-  { id:7, company:'FlowMetrics', url:'flowmetrics.co', contact:'—', email:'—', title:'CTO', type:'tech', sources:['google'], score:33 },
-  { id:8, company:'Elm St. Cleaning', url:'elmstcleaning.com', contact:'Tina Walsh', email:'tina@elmstcleaning.com', title:'Owner', type:'smb', sources:['prospeo'], score:69 },
-];
-
 // ── CONFIG ──────────────────────────────────────────────────────────
 function openConfig() {
   document.getElementById('cfg-google-key').value = state.config.googleKey;
@@ -1055,8 +1043,10 @@ async function runSearch() {
     es.close();
     return;
   }
-    log('warn', 'Server not running — using demo data');
-    useDemoData(minScore);
+    log('error', 'Search API connection failed — no leads loaded');
+    state.leads = [];
+    renderTable();
+    updateStats([], 0);
     showProgress(false);
     btn.disabled = false;
     btn.textContent = '▶ Run Search';
@@ -1065,21 +1055,15 @@ async function runSearch() {
   };
 
   } catch (err) {
-    log('warn', 'Could not connect to server — using demo data');
-    useDemoData(minScore);
+    log('error', 'Could not connect to search API — no leads loaded');
+    state.leads = [];
+    renderTable();
+    updateStats([], 0);
     showProgress(false);
     btn.disabled = false;
     btn.textContent = '▶ Run Search';
     state.running = false;
   }
-}
-
-function useDemoData(minScore) {
-  const filtered = mockLeads.filter(l => l.score >= minScore);
-  state.leads = filtered;
-  renderTable();
-  updateStats(filtered, mockLeads.length - filtered.length);
-  log('info', `Demo mode — ${filtered.length} leads loaded`);
 }
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }

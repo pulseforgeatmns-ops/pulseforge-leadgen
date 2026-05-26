@@ -20,7 +20,7 @@ function getEmmettClientConfig(clientId = CLIENT_ID) {
   return clientConfig[clientId] || clientConfig[1];
 }
 
-// Email sequence definitions — reply-based CTAs only (no external/Calendly/demo links in bodies)
+// Email sequence definitions — reply-based CTAs only (no external or Calendly links in bodies)
 
 // A/B TEST ACTIVE: restaurant vs restaurant_b — remove restaurant_b when test concludes
 const SEQUENCES = {

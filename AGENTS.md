@@ -9,7 +9,7 @@ An AI-powered lead generation and outreach CRM for Pulseforge. It scrapes leads,
 
 | File | Purpose |
 |---|---|
-| `server.js` | Entry point. ~370 lines after route split. Handles auth, session, login/logout, /dashboard, /demo, /preview, /api/status, /api/search, /api/export/csv, /api/post-comment, and app.listen. |
+| `server.js` | Entry point. Handles auth, session, login/logout, /dashboard, /preview, /api/status, /api/search, /api/export/csv, /api/post-comment, and app.listen. |
 | `routes/api.js` | All /api/* dashboard routes (19 endpoints) |
 | `routes/cron.js` | CRON_MODULES, runCronAgent, GET/POST /cron/:agent handlers |
 | `routes/webhooks.js` | POST /webhooks/brevo and /webhooks/bland with BREVO_EVENT_MAP and checkAndUpdateWarmStatus |
@@ -24,7 +24,6 @@ An AI-powered lead generation and outreach CRM for Pulseforge. It scrapes leads,
 | `getRileyToken.js` | Helper script to generate Gmail OAuth token for Riley |
 | `utils/publishPipeline.js` | Publishes approved content to Google Business Profile, Facebook Page, LinkedIn Page (via Buffer GraphQL), and handles comment publishing for Faye/Link. |
 | `utils/blogPublisher.js` | GitHub-based blog post publisher. |
-| `utils/demoData.js` | Generates fake live-feed data for the unauthenticated `/demo` route. |
 
 ---
 
@@ -66,7 +65,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 - **Pending comments**: `GET /api/pending-comments`, `POST /api/approve-comment/:id`, `POST /api/reject-comment/:id` — in `routes/approvals.js`
 - **Analytics**: `/api/analytics`, `/api/analytics/posts`, `/api/analytics/summary`, `/api/analytics/top-posts`, `/api/analytics/email` — in `routes/api.js`
 - **Activity**: `/api/activity`, `/api/activity-panel`, `/api/activity-timeline` — in `routes/api.js`
-- **Dashboard UI**: `GET /dashboard` → serves `public/dashboard.html`; `GET /demo` → unauthenticated demo mode — in `server.js`
+- **Dashboard UI**: `GET /dashboard` → serves `public/dashboard.html` with authenticated live data only — in `server.js`
 - **Brevo warm signal**: Brevo POSTs email events here → Riley logs touchpoints and upgrades cold→warm automatically — in `routes/webhooks.js`
 
 ---
@@ -136,7 +135,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 ---
 
 ## Auth Model
-Session-based. `POST /login` checks `DASHBOARD_PASSWORD` env var via bcrypt. `requireAuth` middleware redirects unauthenticated requests to `/login`. The `/demo` and `/webhooks/*` and `/cron/*` routes are intentionally unauthenticated (cron is guarded by `CRON_SECRET` instead).
+Session-based. `POST /login` checks `DASHBOARD_PASSWORD` env var via bcrypt. `requireAuth` middleware redirects unauthenticated requests to `/login`. The `/webhooks/*` and `/cron/*` routes are intentionally unauthenticated (cron is guarded by `CRON_SECRET` instead).
 
 ---
 

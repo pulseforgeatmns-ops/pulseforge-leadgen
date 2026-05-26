@@ -909,7 +909,7 @@ LINKEDIN STRATEGY:
 - Format: 150-250 words
 - Tone: first-person POV, industry observation or contrarian take, no overt sales pitch
 - If today's topic appears on other channels, LinkedIn must use the POV angle only
-- No hard sell, no demo pitch, no "book a call" style ending
+- No hard sell, no product walkthrough pitch, no "book a call" style ending
 - Use no more than 2-3 hashtags
 
 Write a LinkedIn post (150-250 words) with this structure:
@@ -962,7 +962,7 @@ LINKEDIN PERSONAL PROFILE STRATEGY:
 - Never use "we built this" or sound like a company page
 - More personal than the Pulseforge LinkedIn page: bartending, the agency grind, specific client wins, building systems late after service shifts, or lessons from local business owners
 - If today's topic appears on other channels, this profile must use the founder journey angle only and must not reuse the Pulseforge LinkedIn page's core narrative arc
-- No hard sell, no demo pitch, no "book a call" style ending
+- No hard sell, no product walkthrough pitch, no "book a call" style ending
 - Use no more than 2-3 hashtags
 
 Write a LinkedIn personal profile post (150-250 words) with this structure:
