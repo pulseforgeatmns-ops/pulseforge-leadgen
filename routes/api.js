@@ -488,7 +488,7 @@ router.put('/api/prospects/:id', requireAuth, async (req, res) => {
 
     if (has('status')) {
       const status = String(req.body.status || '').toLowerCase();
-      if (!['cold', 'warm', 'dead'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+      if (!['cold', 'warm', 'contacted', 'booked', 'closed', 'hot', 'dead'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
       addProspectField('status', status);
     }
 
@@ -848,13 +848,13 @@ router.patch('/api/prospects/:id/status', requireAuth, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const status = String(req.body.status || '').toLowerCase();
-    if (!['cold', 'warm', 'hot', 'dead'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    if (!['cold', 'warm', 'contacted', 'booked', 'closed', 'hot', 'dead'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
     const result = await pool.query(
-      'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3 RETURNING id, status',
+      'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3 RETURNING id',
       [status, req.params.id, clientId]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Prospect not found' });
-    res.json({ success: true, prospect: result.rows[0] });
+    res.json({ success: true, prospect: await selectUpdatedProspect(req.params.id, clientId) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
