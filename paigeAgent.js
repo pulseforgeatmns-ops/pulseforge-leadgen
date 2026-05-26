@@ -77,6 +77,36 @@ const BLOG_CLOSER_BANK = [
   'The setup takes less than a week. The follow-up runs forever.',
 ];
 
+const FACEBOOK_CTA_BANK = [
+  "If this sounds familiar, we'll show you what the first sequence could look like.",
+  'Send us a message and we can map the handoff that should be automated first.',
+  'A simple workflow audit is usually enough to find the first fix.',
+  'We can sketch the first automation for your business this week.',
+  'The first step is usually smaller than owners think.',
+  'If the manual follow-up is getting old, we can help tighten it up.',
+  'We build the quiet systems that keep the next step moving.',
+  'Reach out when you want the follow-up to stop living in your head.',
+];
+
+const CHANNEL_TOPIC_LENSES = {
+  linkedin_page: {
+    label: 'POV angle',
+    guidance: 'Use the topic as a first-person industry observation or contrarian operator take. Build credibility. No overt sales pitch.',
+  },
+  google_business: {
+    label: 'local proof angle',
+    guidance: 'Use the topic to prove Pulseforge is legitimate, local to Manchester NH, and useful to someone who just found the business on Google.',
+  },
+  facebook_page: {
+    label: 'client story angle',
+    guidance: 'Use the topic as a relatable client scenario or human moment. Warm, conversational, story-first.',
+  },
+  blog: {
+    label: 'full breakdown angle',
+    guidance: 'Use the topic as a useful educational breakdown with practical steps, then position Pulseforge naturally as the solution.',
+  },
+};
+
 // Vertical-specific context fed into the prompt so Claude sounds right for each business type
 const VERTICAL_PROMPTS = {
   cleaning:    'spotless results, reliable local team, before-and-after transformations, booking convenience, trust and consistency',
@@ -156,6 +186,33 @@ function getBlogCloser(channel, date = new Date()) {
     day: '2-digit',
   }).format(date);
   return BLOG_CLOSER_BANK[seededIndex(`${dateKey}:${channel}`, BLOG_CLOSER_BANK.length)];
+}
+
+function getFacebookCta(channel, date = new Date()) {
+  const dateKey = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+  return FACEBOOK_CTA_BANK[seededIndex(`${dateKey}:${channel}`, FACEBOOK_CTA_BANK.length)];
+}
+
+function buildChannelStrategyBlock(channel, topicAngle = null) {
+  const lens = CHANNEL_TOPIC_LENSES[channel];
+  const topicLine = topicAngle
+    ? `Today's shared topic bucket is "${topicAngle.label}: ${topicAngle.guidance}".`
+    : 'No Pulseforge topic bucket is active for this company.';
+
+  if (!lens) return '';
+  const exampleLine = topicAngle?.label === 'Behind the scenes'
+    ? 'Example: if the bucket is behind the scenes about what runs while the owner sleeps, LinkedIn gets the POV angle, Google Business gets the local proof angle, Facebook gets the client story angle, and the blog gets the full breakdown.'
+    : '';
+  return `CHANNEL STRATEGY — DO NOT BLEND FORMATS:
+${topicLine}
+This channel must use the ${lens.label}: ${lens.guidance}
+Do not reuse the same core angle or narrative arc across channels on the same day. Same topic bucket, different channel lens.
+${exampleLine}`;
 }
 
 function formatUsedAngles(angles) {
@@ -356,7 +413,7 @@ async function pickContentType(companyName, channel = null, companyId = null) {
   return types[0];
 }
 
-function buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType) {
+function buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy, facebookCta) {
   const isPulseforge = company.name.toLowerCase().includes('pulseforge');
 
   const audienceNote = isPulseforge
@@ -370,13 +427,20 @@ Content type: ${contentType}
 Business context: ${verticalCtx}
 
 ${audienceNote}
+${channelStrategy}
 
-Write a Facebook post (2-4 sentences) that:
+FACEBOOK STRATEGY:
+- Purpose: story-first, conversational, human content that makes the business feel real
+- Format: 100-175 words, warm tone, short paragraphs
+- Lead with a relatable moment, specific client scenario, or small business owner situation
+- Make it feel like a human story, not a thought leadership post and not a search listing
+- If today's topic appears on other channels, Facebook must use the client story angle only
+- End with this CTA or a natural close variation: "${facebookCta}"
 - Sounds like a real person talking, not a brand account — no "excited to announce," no "we pride ourselves"
 - Is specific to ${location} — reference the area naturally
-- For "promotional": leads with a concrete result or offer, ends with a soft CTA
-- For "educational": shares one genuinely useful tip the reader can act on
-- For "seasonal": ties to what's actually happening in ${location} right now
+- For "promotional": leads with a concrete result or offer, ends with the CTA above
+- For "educational": teaches through a short scenario, not an abstract tip list
+- For "seasonal": ties to what's actually happening in ${location} right now through a human moment
 - For "behind-the-scenes": gives a glimpse of the people or process behind the business
 - For "community": mentions something local — a neighborhood, event, or shared experience
 - May end with 1-2 hashtags only if they feel natural — skip if they don't
@@ -397,7 +461,7 @@ ${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. T
 Return only the post text.`;
 }
 
-function buildGooglePrompt(company, contentType, verticalCtx, location, lastContentType) {
+function buildGooglePrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy) {
   const isPulseforge = company.name.toLowerCase().includes('pulseforge');
 
   const audienceNote = isPulseforge
@@ -410,10 +474,16 @@ Content type: ${contentType}
 Business context: ${verticalCtx}
 
 ${audienceNote}
+${channelStrategy}
 
-Write a Google Business update (3-5 sentences) that:
+GOOGLE BUSINESS STRATEGY:
+- Purpose: short, local, search-intent proof for someone who just found Pulseforge on Google and wants to know if we're legit
+- Format: 75-100 words max, no hashtags, no emojis, no long story arc
+- Tone: practical, clear, credible, locally grounded in Manchester NH
+- Mention Manchester NH or the surrounding area naturally
+- If today's topic appears on other channels, Google Business must use the local proof angle only
+- End with a soft CTA, not a comment prompt
 - Reads like something genuinely useful to someone searching "${company.industry || 'local services'} near me" — not promotional fluff
-- Mentions ${location} or the surrounding area naturally
 - For "promotional": states the offer clearly and why it matters to a new customer
 - For "educational": answers a real question people ask before booking or buying
 - For "seasonal": explains what customers should be thinking about this time of year
@@ -435,7 +505,7 @@ ${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. T
 Return only the post text.`;
 }
 
-function buildBlogPrompt(company, contentType, verticalCtx, lastContentType, blogCloser) {
+function buildBlogPrompt(company, contentType, verticalCtx, lastContentType, blogCloser, channelStrategy) {
   const isPulseforge = company.name.toLowerCase().includes('pulseforge');
   const location = company.location || 'Manchester, NH';
 
@@ -449,8 +519,16 @@ Content type: ${contentType}
 Business context: ${verticalCtx}
 
 ${audienceNote}
+${channelStrategy}
 
-Write a blog post (350-500 words) using this structure:
+BLOG STRATEGY:
+- Purpose: long-form educational content that teaches something useful and positions Pulseforge as the solution naturally
+- Format: 400-600 words
+- Tone: clear, useful, grounded, not salesy
+- If today's topic appears on other channels, the blog must use the full breakdown angle only
+- Build the reader's understanding before mentioning the offer
+
+Write a blog post (400-600 words) using this structure:
 # [Title]
 
 [Intro paragraph — mention the business name and what they do, include ${location} naturally]
@@ -493,12 +571,12 @@ ${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. T
 Return only the blog post text with markdown formatting.`;
 }
 
-function buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType) {
+function buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy) {
   const isPulseforge = company.name.toLowerCase().includes('pulseforge');
   const location = company.location || 'Manchester, NH';
 
   const audienceNote = isPulseforge
-    ? `IMPORTANT: Pulseforge's audience is small business owners considering marketing automation. Write to an owner who is tired of doing repetitive marketing tasks and wants a system that runs in the background. Speak to pain points: time wasted on marketing, inconsistent social presence, missed leads.`
+    ? `IMPORTANT: Pulseforge's audience is small business owners considering marketing automation. Write from a first-person operator POV to owners who are tired of repetitive marketing tasks and want a system that runs in the background.`
     : `Write as the brand voice of ${company.name} — use "we" and "${company.name}", not "I". Speak to local customers and business owners in ${location}.`;
 
   return `You are writing a LinkedIn page post for ${company.name}, a local ${company.industry || 'business'} in ${location}${isPulseforge ? ' that automates marketing and outreach for small business owners using AI' : ''}.
@@ -507,15 +585,24 @@ Content type: ${contentType}
 Business context: ${verticalCtx}
 
 ${audienceNote}
+${channelStrategy}
+
+LINKEDIN STRATEGY:
+- Purpose: thought leadership and credibility
+- Format: 150-250 words
+- Tone: first-person POV, industry observation or contrarian take, no overt sales pitch
+- If today's topic appears on other channels, LinkedIn must use the POV angle only
+- No hard sell, no demo pitch, no "book a call" style ending
+- Use no more than 2-3 hashtags
 
 Write a LinkedIn post (150-250 words) with this structure:
-- First line: a specific hook — no fluff openers like "excited to share" or "we're thrilled"
+- First line: a specific industry observation or contrarian hook — no fluff openers like "excited to share" or "we're thrilled"
 - 2-3 short paragraphs or punchy line breaks
-- Final line: a question or soft CTA to drive comments
-- Last line: 3-5 relevant hashtags
+- Final line: a thoughtful statement or low-pressure question, not a sales pitch
+- Last line: 2-3 relevant hashtags max
 
 Voice and tone:
-- Brand voice — use "we" and "${company.name}", not "I"
+- First-person POV for Pulseforge — use "I" when writing as Pulseforge; for non-Pulseforge clients, use "we" and "${company.name}"
 - Confident local expert, never corporate, never salesy
 - Mention Manchester NH or New Hampshire naturally where it fits — don't force it
 - NO URLs in the post text
@@ -554,7 +641,7 @@ async function getLastContentType(companyName, channel) {
 async function createDraft(prompt, systemPrompt, channel) {
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: channel === 'blog' ? 800 : channel === 'linkedin_page' ? 450 : 300,
+    max_tokens: channel === 'blog' ? 1000 : channel === 'linkedin_page' ? 450 : 300,
     system: systemPrompt,
     messages: [{ role: 'user', content: prompt }]
   });
@@ -639,6 +726,8 @@ async function generatePost(company, contentType, channel) {
   const recentPublishedAngles = await getRecentPublishedAngles();
   const topicAngle = isPulseforge ? getPulseforgeTopicAngle() : null;
   const blogCloser = channel === 'blog' ? getBlogCloser(channel) : null;
+  const facebookCta = channel === 'facebook_page' ? getFacebookCta(channel) : null;
+  const channelStrategy = buildChannelStrategyBlock(channel, topicAngle);
   const clientContext = CLIENT_ID === 2 ? `
 
 MSHI CLIENT CONTEXT:
@@ -661,15 +750,18 @@ MSHI CLIENT CONTEXT:
   if (blogCloser) {
     console.log(`  [blog closer] ${blogCloser}`);
   }
+  if (facebookCta) {
+    console.log(`  [facebook cta] ${facebookCta}`);
+  }
   console.log(`  [memory] Recent published angles checked: ${recentPublishedAngles.length}`);
 
   const prompt = channel === 'google_business'
-    ? buildGooglePrompt(company, contentType, verticalCtx, location, lastContentType)
+    ? buildGooglePrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy)
     : channel === 'blog'
-      ? buildBlogPrompt(company, contentType, verticalCtx, lastContentType, blogCloser)
+      ? buildBlogPrompt(company, contentType, verticalCtx, lastContentType, blogCloser, channelStrategy)
       : channel === 'linkedin_page'
-        ? buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType)
-        : buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType);
+        ? buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy)
+        : buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy, facebookCta);
 
   const firstDraft = await createDraft(prompt, systemPrompt, channel);
   const firstScore = await scoreDraft(firstDraft, recentPublishedAngles);
