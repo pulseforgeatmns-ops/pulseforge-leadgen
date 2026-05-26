@@ -4060,8 +4060,11 @@ function renderActivityDetailHtml(data) {
     : [];
 
   const rows = baseRows.concat(structured, payloadRows).map(field => {
-    const value = String(field.label || '').toLowerCase() === 'prospect'
+    const labelKey = String(field.label || '').toLowerCase();
+    const value = labelKey === 'prospect'
       ? _cleanProspectDisplayName(field.value, companyValue)
+      : labelKey === 'signal received'
+        ? _detailTimestamp(field.value)
       : field.value;
     return `<div class="feed-detail-line"><span class="feed-detail-label">${_esc(field.label)}</span><span class="feed-detail-value">${_esc(value)}</span></div>`;
   }

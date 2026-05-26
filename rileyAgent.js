@@ -230,6 +230,75 @@ async function hasOutboundEmail(prospectId) {
   return res.rows.length > 0;
 }
 
+async function getTotalEmailOpens(prospectId) {
+  const pool = require('./db');
+  const res = await pool.query(`
+    SELECT COUNT(*)::int AS total_opens
+    FROM touchpoints
+    WHERE prospect_id = $1
+      AND client_id = $2
+      AND channel = 'email'
+      AND action_type IN ('open', 'email_opened')
+  `, [prospectId, CLIENT_ID]);
+  return res.rows[0]?.total_opens || 0;
+}
+
+function triageBucket(classification, email) {
+  if (classification === 'warm' && hasPricingIntent(email?.body)) return 'hot';
+  if (classification === 'warm') return 'warm';
+  if (classification === 'unsubscribe') return 'unsubscribe';
+  return 'cold';
+}
+
+function triageTrigger(classification) {
+  if (classification === 'unsubscribe') return 'reply';
+  if (classification === 'warm' || classification === 'not_now' || classification === 'wrong_person') return 'reply';
+  return 'reply';
+}
+
+function recommendedTriageAction(classification, suggestedReply) {
+  if (classification === 'warm') return suggestedReply ? 'Review and send the suggested reply.' : 'Reply personally and move this prospect into warm follow-up.';
+  if (classification === 'unsubscribe') return 'Do not contact again. Prospect has been marked DNC.';
+  if (classification === 'not_now') return 'Follow up in 30 days unless they reply sooner.';
+  if (classification === 'wrong_person') return 'Find the right decision maker before sending more outreach.';
+  if (classification === 'auto_reply') return 'No action needed unless the auto-reply includes a return date.';
+  return 'Review the reply and decide the next step.';
+}
+
+function signalTimestampFromEmail(email) {
+  const parsed = email?.date ? new Date(email.date) : null;
+  if (parsed && !Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  return new Date().toISOString();
+}
+
+async function logTriageAction(prospect, email, classification, suggestedReply) {
+  const totalOpens = await getTotalEmailOpens(prospect.id);
+  await db.logAgentAction(
+    AGENT_NAME,
+    'triage',
+    prospect.id,
+    null,
+    {
+      action: 'triage',
+      prospect_name: `${prospect.first_name || ''} ${prospect.last_name || ''}`.trim() || firstName(prospect),
+      company: companyName(prospect),
+      email: prospect.email,
+      vertical: prospect.vertical || null,
+      icp_score: Number(prospect.icp_score || 0),
+      total_opens: totalOpens,
+      triage_bucket: triageBucket(classification, email),
+      trigger: triageTrigger(classification),
+      recommended_action: recommendedTriageAction(classification, suggestedReply),
+      signal_timestamp: signalTimestampFromEmail(email),
+      classification,
+      subject: email.subject,
+      from: email.from,
+      client_id: CLIENT_ID,
+    },
+    'success'
+  );
+}
+
 async function updateProspectFromReply(prospect, classification) {
   const pool = require('./db');
   if (classification === 'warm') {
@@ -510,13 +579,13 @@ async function run() {
   } catch (err) {
     gmailFailed = true;
     console.error('[Riley] Gmail processing failed:', err.message);
-    await db.logAgentAction(AGENT_NAME, 'triage', null, null, { error: err.message, client_id: CLIENT_ID }, 'failed').catch(() => {});
+    await db.logAgentAction(AGENT_NAME, 'triage_summary', null, null, { error: err.message, client_id: CLIENT_ID }, 'failed').catch(() => {});
   }
 
   if (!emails.length) {
     if (!gmailFailed) {
       console.log('No unread emails to process.');
-      await db.logAgentAction(AGENT_NAME, 'triage', null, null, { emails_processed: 0 }, 'success');
+      await db.logAgentAction(AGENT_NAME, 'triage_summary', null, null, { emails_processed: 0 }, 'success');
     }
     await processEventNotifications();
     return;
@@ -549,23 +618,7 @@ async function run() {
 
       stats[result.classification] = (stats[result.classification] || 0) + 1;
 
-      await db.logAgentAction(
-        AGENT_NAME,
-        'reply_classified',
-        prospect.id,
-        null,
-        {
-          prospect_id: prospect.id,
-          email: prospect.email,
-          from: email.from,
-          subject: email.subject,
-          classification: result.classification,
-          reason: result.reason,
-          suggested_reply: result.suggested_reply,
-          client_id: CLIENT_ID
-        },
-        'success'
-      );
+      await logTriageAction(prospect, email, result.classification, result.suggested_reply);
 
       await updateProspectFromReply(prospect, result.classification);
       await logInboundTouchpoint(prospect, email, result.classification);
@@ -580,7 +633,7 @@ async function run() {
       console.error(`  [Riley] Failed to process ${email.from}:`, err.message);
       await db.logAgentAction(
         AGENT_NAME,
-        'reply_classified',
+        'triage_failed',
         null,
         null,
         { from: email.from, subject: email.subject, error: err.message, client_id: CLIENT_ID },
@@ -594,7 +647,7 @@ async function run() {
   Object.entries(stats).forEach(([k, v]) => { if (v > 0) console.log(`  ${k}: ${v}`); });
   console.log('─────────────────────────────────────────────────\n');
 
-  await db.logAgentAction(AGENT_NAME, 'triage', null, null, { ...stats, emails_processed: emails.length }, 'success');
+  await db.logAgentAction(AGENT_NAME, 'triage_summary', null, null, { ...stats, emails_processed: emails.length }, 'success');
   await processEventNotifications();
 
   console.log('Riley complete.');

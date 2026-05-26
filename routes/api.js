@@ -999,9 +999,11 @@ router.get('/api/activity', requireAuth, async (req, res) => {
       const agent = agentNameMap[rawAgent] || rawAgent.charAt(0).toUpperCase() + rawAgent.slice(1);
       const minutesAgo = Math.floor((Date.now() - new Date(row.ran_at)) / 60000);
       const timeLabel = minutesAgo < 60 ? `${minutesAgo}m` : minutesAgo < 1440 ? `${Math.floor(minutesAgo/60)}h` : `${Math.floor(minutesAgo/1440)}d`;
-      const companyName = (row.prospect_notes || '').split('—')[0].trim() || null;
+      const payload = row.payload || {};
+      const companyName = (row.prospect_notes || '').split('—')[0].trim() || payload.company || null;
       const prospectName = cleanProspectName(row.first_name, row.last_name, companyName);
-      const prospect = prospectName && prospectName !== 'Unknown contact' ? `· ${prospectName}` : '';
+      const displayProspectName = payload.prospect_name || prospectName;
+      const prospect = displayProspectName && displayProspectName !== 'Unknown contact' ? `· ${displayProspectName}` : '';
       const actionLabels = {
         generate_comment: `generated a comment draft ${prospect}`,
         daily_digest: 'daily digest sent · jacob@gopulseforge.com',
@@ -1015,24 +1017,26 @@ router.get('/api/activity', requireAuth, async (req, res) => {
         click: `link clicked ${prospect}`,
         reply: `reply received ${prospect}`,
         inbound: `reply received ${prospect}`,
-        call_answered: `phone call answered ${prospect}`
+        call_answered: `phone call answered ${prospect}`,
+        triage: `triaged reply ${prospect}`,
+        triage_summary: 'triaged inbox'
       };
       const label = actionLabels[row.action] || row.action;
       const icons = {
         Faye: { icon: '📣', color: 'fi-t' }, Link: { icon: '💬', color: 'fi-p' },
         Emmett: { icon: '✉️', color: 'fi-o' }, Max: { icon: '🧠', color: 'fi-p' },
         Rex: { icon: '📊', color: 'fi-p' }, Scout: { icon: '🔍', color: 'fi-t' },
-        Sketch: { icon: '🎨', color: 'fi-t' }
+        Sketch: { icon: '🎨', color: 'fi-t' }, Riley: { icon: '🤝', color: 'fi-t' }
       };
       const { icon, color } = icons[agent] || { icon: '⚡', color: 'fi-g' };
       const rawAction = String(row.action || '').toLowerCase();
-      const isWarmSignal = ['open', 'email_opened', 'click', 'email_clicked', 'reply', 'inbound', 'call_answered'].includes(rawAction);
+      const isWarmSignal = ['open', 'email_opened', 'click', 'email_clicked', 'reply', 'inbound', 'call_answered', 'triage'].includes(rawAction);
       return {
         id: row.id,
         agent, action: label, raw_action: rawAction, icon, color,
         time: timeLabel, ran_at: row.ran_at, status: row.status,
         prospect_id: row.prospect_id,
-        prospect: prospectName || null,
+        prospect: displayProspectName || null,
         is_warm_signal: isWarmSignal
       };
     });
@@ -1065,6 +1069,8 @@ function activityDetailTitle(action) {
     email_bounced: 'Email Bounced',
     email_soft_bounce: 'Email Soft Bounce',
     hot_prospect_alert: 'Hot Prospect Alert',
+    triage: 'Triage',
+    triage_summary: 'Triage Summary',
     reengagement_trigger: 'Re-engagement Trigger',
     auto_marked_dead: 'Auto-marked Dead',
     content_scored: 'Content Scored',
@@ -1248,6 +1254,18 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
           { key: 'assign_setter', label: 'Assign to Setter' },
           { key: 'log_touch', label: 'Log Touch' },
         ];
+        break;
+      case 'triage':
+        f('Prospect', payload.prospect_name || prospectName);
+        f('Company', payload.company || companyName);
+        f('Email', payload.email || row.prospect_email);
+        f('Vertical', payload.vertical || row.vertical);
+        f('ICP Score', payload.icp_score ?? row.icp_score);
+        f('Total Opens', payload.total_opens ?? eng.open_count ?? 0);
+        f('Triage Bucket', payload.triage_bucket);
+        f('Trigger', payload.trigger);
+        f('Recommended Next Action', payload.recommended_action);
+        f('Signal Received', payload.signal_timestamp);
         break;
       case 'reengagement_trigger':
         f('Prospect', prospectName);
