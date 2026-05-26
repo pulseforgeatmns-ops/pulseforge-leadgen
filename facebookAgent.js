@@ -31,6 +31,19 @@ const TARGET_GROUPS = [
   'https://www.facebook.com/groups/301392468019063',
 ];
 
+function isRailwayRuntime() {
+  return Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
+}
+
+function assertCanRunFaye() {
+  if (isRailwayRuntime()) {
+    throw new Error('Faye uses local Puppeteer browser automation and cannot run on Railway. Run facebookAgent.js locally with a valid Facebook session.');
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('ANTHROPIC_API_KEY is missing; Faye cannot generate comments.');
+  }
+}
+
 function randomDelay(min, max) {
   return new Promise(resolve =>
     setTimeout(resolve, Math.floor(Math.random() * (max - min + 1)) + min)
@@ -51,6 +64,12 @@ async function saveSession(page) {
 }
 
 async function loadSession(page) {
+  if (process.env.FACEBOOK_SESSION) {
+    const cookies = JSON.parse(Buffer.from(process.env.FACEBOOK_SESSION, 'base64').toString('utf8'));
+    await page.setCookie(...cookies);
+    console.log('Facebook session loaded from env');
+    return true;
+  }
   if (!fs.existsSync(SESSION_FILE)) return false;
   const cookies = JSON.parse(fs.readFileSync(SESSION_FILE));
   await page.setCookie(...cookies);
@@ -137,80 +156,88 @@ async function run() {
   const clientConfig = await getClientConfig(CLIENT_ID);
   if (CLIENT_ID === 2 && !clientConfig?.facebook_url) {
     console.log('Faye disabled for MSHI until Facebook page exists.');
-    return;
+    return { skipped: true, reason: 'facebook_page_missing', client_id: CLIENT_ID };
   }
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
+  assertCanRunFaye();
+  let browser;
+  let drafted = 0;
+  try {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
 
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 800 });
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
 
-  const sessionLoaded = await loadSession(page);
+    const sessionLoaded = await loadSession(page);
 
-  if (sessionLoaded) {
-    const loggedIn = await isLoggedIn(page);
-    if (!loggedIn) {
-      console.log('Session expired — please log in manually');
+    if (sessionLoaded) {
+      const loggedIn = await isLoggedIn(page);
+      if (!loggedIn) {
+        console.log('Session expired — please log in manually');
+        await page.goto('https://www.facebook.com/login', { waitUntil: 'domcontentloaded' });
+        console.log('Waiting 60 seconds for manual login...');
+        await randomDelay(60000, 60000);
+        await saveSession(page);
+      }
+    } else {
+      console.log('No session found — please log in manually');
       await page.goto('https://www.facebook.com/login', { waitUntil: 'domcontentloaded' });
       console.log('Waiting 60 seconds for manual login...');
       await randomDelay(60000, 60000);
       await saveSession(page);
     }
-  } else {
-    console.log('No session found — please log in manually');
-    await page.goto('https://www.facebook.com/login', { waitUntil: 'domcontentloaded' });
-    console.log('Waiting 60 seconds for manual login...');
-    await randomDelay(60000, 60000);
-    await saveSession(page);
-  }
 
-  console.log('\nFacebook agent running...\n');
+    console.log('\nFacebook agent running...\n');
 
-  for (const groupUrl of TARGET_GROUPS) {
-    const posts = await findPosts(page, groupUrl, 3);
+    for (const groupUrl of TARGET_GROUPS) {
+      const posts = await findPosts(page, groupUrl, 3);
 
-    for (const post of posts) {
+      for (const post of posts) {
         if (!isEnglish(post.content)) {
-        console.log(`Skipping non-English post by: ${post.authorName}`);
-        continue;
+          console.log(`Skipping non-English post by: ${post.authorName}`);
+          continue;
+        }
+
+        const comment = await generateComment(post.content, post.authorName);
+
+        await db.savePendingComment({
+          authorName: post.authorName,
+          authorTitle: 'Facebook Group Member',
+          postContent: post.content.substring(0, 500),
+          comment,
+          postUrl: post.postUrl,
+          channel: 'facebook'
+        });
+
+
+        await db.logAgentAction(
+          AGENT_NAME,
+          'generate_comment',
+          null,
+          post.postUrl,
+          { comment, authorName: post.authorName },
+          'success'
+        );
+
+        console.log(`\nPost by: ${post.authorName}`);
+        console.log(`Comment: ${comment}`);
+        console.log(`URL: ${post.postUrl}`);
+        console.log('Draft saved.');
+        drafted++;
+
+        await randomDelay(5000, 10000);
       }
 
-      const comment = await generateComment(post.content, post.authorName);
-
-      await db.savePendingComment({
-        authorName: post.authorName,
-        authorTitle: 'Facebook Group Member',
-        postContent: post.content.substring(0, 500),
-        comment,
-        postUrl: post.postUrl,
-        channel: 'facebook'
-      });
-
-
-      await db.logAgentAction(
-        AGENT_NAME,
-        'generate_comment',
-        null,
-        post.postUrl,
-        { comment, authorName: post.authorName },
-        'success'
-      );
-
-      console.log(`\nPost by: ${post.authorName}`);
-      console.log(`Comment: ${comment}`);
-      console.log(`URL: ${post.postUrl}`);
-      console.log('Draft saved.');
-
-      await randomDelay(5000, 10000);
+      await randomDelay(15000, 25000);
     }
 
-    await randomDelay(15000, 25000);
+    console.log('\nFacebook agent complete.');
+    return { drafted, groups_scanned: TARGET_GROUPS.length, client_id: CLIENT_ID };
+  } finally {
+    if (browser) await browser.close().catch(() => {});
   }
-
-  console.log('\nFacebook agent complete.');
-  await browser.close();
 }
 
 module.exports = { run };

@@ -16,6 +16,7 @@ const {
 
 const requireAuth = [sessionAuth, requireRole('admin', 'manager')];
 let prospectSetterAssignmentSchemaPromise;
+let agentLogStatusSchemaPromise;
 const EXCLUDE_COMMAND_FEED_ACTIONS_SQL = `
   NOT (
     LOWER(REPLACE(COALESCE(al.agent_name, ''), '_agent', '')) = 'max'
@@ -34,6 +35,21 @@ function ensureProspectSetterAssignmentSchema() {
     });
   }
   return prospectSetterAssignmentSchemaPromise;
+}
+
+function ensureAgentLogStatusSchema() {
+  if (!agentLogStatusSchemaPromise) {
+    agentLogStatusSchemaPromise = pool.query(`
+      ALTER TABLE agent_log
+      DROP CONSTRAINT IF EXISTS agent_log_status_check,
+      ADD CONSTRAINT agent_log_status_check
+        CHECK (status IN ('success', 'failed', 'skipped', 'pending', 'completed', 'posted', 'in_progress'))
+    `).catch(err => {
+      agentLogStatusSchemaPromise = null;
+      throw err;
+    });
+  }
+  return agentLogStatusSchemaPromise;
 }
 
 router.get('/api/me', sessionAuth, (req, res) => {
@@ -1927,23 +1943,58 @@ router.post('/api/run/:agent', requireAuth, async (req, res) => {
     warm_signal: '../warmSignalAgent',
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
-  await pool.query(
-    `INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+  await ensureAgentLogStatusSchema();
+  const triggerLog = await pool.query(
+    `INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+     VALUES ($1, $2, $3, $4, NOW(), $5)
+     RETURNING id`,
     [agent, 'dashboard_trigger', JSON.stringify({ triggered_by: 'dashboard', client_id: clientId }), 'pending', clientId]
   );
+  const triggerLogId = triggerLog.rows[0]?.id;
   res.json({ success: true, message: `${agent} triggered successfully` });
-  try {
-    delete require.cache[require.resolve(agentModules[agent])];
-    process.env.ACTIVE_CLIENT_ID = String(clientId);
-    const mod = require(agentModules[agent]);
-    if (agent === 'scout' && typeof mod.run === 'function') {
-      mod.run({ client_id: clientId }).catch(err => console.error(`Agent ${agent} error:`, err.message));
-    } else if (typeof mod.run === 'function') {
-      mod.run({ client_id: clientId }).catch(err => console.error(`Agent ${agent} error:`, err.message));
+
+  (async () => {
+    try {
+      delete require.cache[require.resolve(agentModules[agent])];
+      process.env.ACTIVE_CLIENT_ID = String(clientId);
+      const mod = require(agentModules[agent]);
+      if (typeof mod.run !== 'function') {
+        throw new Error(`Agent ${agent} does not export run()`);
+      }
+
+      const result = agent === 'scout'
+        ? await mod.run({ client_id: clientId })
+        : await mod.run({ client_id: clientId });
+
+      if (triggerLogId) {
+        await pool.query(`
+          UPDATE agent_log
+             SET status = 'completed',
+                 payload = COALESCE(payload, '{}'::jsonb) || $2::jsonb
+           WHERE id = $1
+        `, [triggerLogId, JSON.stringify({ completed_at: new Date().toISOString(), result: result || null })]);
+      }
+    } catch (err) {
+      console.error(`Agent ${agent} error:`, err.message);
+      if (triggerLogId) {
+        await pool.query(`
+          UPDATE agent_log
+             SET status = 'failed',
+                 error_msg = $2,
+                 payload = COALESCE(payload, '{}'::jsonb) || $3::jsonb
+           WHERE id = $1
+        `, [
+          triggerLogId,
+          err.message,
+          JSON.stringify({
+            failed_at: new Date().toISOString(),
+            error: err.message,
+            stack_preview: String(err.stack || '').split('\n').slice(0, 4).join('\n'),
+          }),
+        ]).catch(logErr => console.error(`Agent ${agent} trigger log update failed:`, logErr.message));
+      }
     }
-  } catch (err) {
-    console.error(`Agent ${agent} error:`, err.message);
-  }
+  })();
 });
 
 module.exports = router;

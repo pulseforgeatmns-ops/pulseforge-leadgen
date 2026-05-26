@@ -27,6 +27,19 @@ const RELEVANT_KEYWORDS = [
   'referrals', 'reviews', 'google', 'visibility', 'social media'
 ];
 
+function isRailwayRuntime() {
+  return Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
+}
+
+function assertCanRunLink() {
+  if (isRailwayRuntime()) {
+    throw new Error('Link uses local Puppeteer browser automation and cannot run on Railway. Run linkedinAgent.js locally with a valid LinkedIn session.');
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('ANTHROPIC_API_KEY is missing; Link cannot generate comments.');
+  }
+}
+
 function randomDelay(min, max) {
   return new Promise(resolve =>
     setTimeout(resolve, Math.floor(Math.random() * (max - min + 1)) + min)
@@ -40,6 +53,12 @@ async function saveSession(page) {
 }
 
 async function loadSession(page) {
+  if (process.env.LINKEDIN_SESSION) {
+    const cookies = JSON.parse(Buffer.from(process.env.LINKEDIN_SESSION, 'base64').toString('utf8'));
+    await page.setCookie(...cookies);
+    console.log('LinkedIn session loaded from env');
+    return true;
+  }
   if (!fs.existsSync(SESSION_FILE)) return false;
   try {
     const cookies = JSON.parse(fs.readFileSync(SESSION_FILE));
@@ -151,107 +170,112 @@ async function run() {
   if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
   if (CLIENT_ID !== 1) {
     console.log('Link engagement is enabled only for Pulseforge client_id=1.');
-    return;
+    return { skipped: true, reason: 'client_not_enabled', client_id: CLIENT_ID };
   }
-  const browser = await puppeteer.launch({
-    headless: false,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
+  assertCanRunLink();
+  let browser;
+  let drafted = 0;
+  const limit = 10;
+  try {
+    browser = await puppeteer.launch({
+      headless: false,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
 
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 800 });
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
 
-  const sessionLoaded = await loadSession(page);
+    const sessionLoaded = await loadSession(page);
 
-  if (sessionLoaded) {
-    const loggedIn = await isLoggedIn(page);
-    if (!loggedIn) {
-      console.log('Session expired — please log in manually');
+    if (sessionLoaded) {
+      const loggedIn = await isLoggedIn(page);
+      if (!loggedIn) {
+        console.log('Session expired — please log in manually');
+        await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded' });
+        console.log('Waiting 90 seconds for manual login...');
+        await randomDelay(90000, 90000);
+        await saveSession(page);
+      }
+    } else {
+      console.log('No session — please log in manually');
       await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded' });
       console.log('Waiting 90 seconds for manual login...');
       await randomDelay(90000, 90000);
       await saveSession(page);
     }
-  } else {
-    console.log('No session — please log in manually');
-    await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded' });
-    console.log('Waiting 90 seconds for manual login...');
-    await randomDelay(90000, 90000);
-    await saveSession(page);
-  }
 
-  console.log('\nLinkedIn agent running...\n');
+    console.log('\nLinkedIn agent running...\n');
 
-  // Search for small business content
-  const searchUrls = [
-    'https://www.linkedin.com/search/results/content/?keywords=small%20business%20owner%20marketing&datePosted=past-week&sortBy=relevance',
-    'https://www.linkedin.com/search/results/content/?keywords=local%20business%20growth%20customers&datePosted=past-week&sortBy=relevance',
-    'https://www.linkedin.com/feed/',
-  ];
+    // Search for small business content
+    const searchUrls = [
+      'https://www.linkedin.com/search/results/content/?keywords=small%20business%20owner%20marketing&datePosted=past-week&sortBy=relevance',
+      'https://www.linkedin.com/search/results/content/?keywords=local%20business%20growth%20customers&datePosted=past-week&sortBy=relevance',
+      'https://www.linkedin.com/feed/',
+    ];
 
-  let drafted = 0;
-  const limit = 10;
-
-  for (const url of searchUrls) {
-    if (drafted >= limit) break;
-
-    console.log(`Scanning: ${url}`);
-    try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await randomDelay(4000, 6000);
-    } catch (err) {
-      console.error(`Navigation failed: ${err.message}`);
-      continue;
-    }
-
-    const posts = await extractPosts(page);
-    console.log(`Found ${posts.length} posts`);
-
-    for (const post of posts) {
+    for (const url of searchUrls) {
       if (drafted >= limit) break;
-      if (!isRelevant(post.content)) {
-        console.log(`  Skipping (off-topic): ${post.authorName}`);
+
+      console.log(`Scanning: ${url}`);
+      try {
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await randomDelay(4000, 6000);
+      } catch (err) {
+        console.error(`Navigation failed: ${err.message}`);
         continue;
       }
 
-      console.log(`  Drafting comment for: ${post.authorName}`);
+      const posts = await extractPosts(page);
+      console.log(`Found ${posts.length} posts`);
 
-      try {
-        const comment = await generateComment(post.content, post.authorName);
+      for (const post of posts) {
+        if (drafted >= limit) break;
+        if (!isRelevant(post.content)) {
+          console.log(`  Skipping (off-topic): ${post.authorName}`);
+          continue;
+        }
 
-        await db.savePendingComment({
-          authorName: post.authorName,
-          authorTitle: 'LinkedIn',
-          postContent: post.content.substring(0, 500),
-          comment,
-          postUrl: post.postUrl,
-          channel: 'linkedin'
-        });
+        console.log(`  Drafting comment for: ${post.authorName}`);
+
+        try {
+          const comment = await generateComment(post.content, post.authorName);
+
+          await db.savePendingComment({
+            authorName: post.authorName,
+            authorTitle: 'LinkedIn',
+            postContent: post.content.substring(0, 500),
+            comment,
+            postUrl: post.postUrl,
+            channel: 'linkedin'
+          });
 
 
-        await db.logAgentAction(
-          AGENT_NAME,
-          'generate_comment',
-          null,
-          post.postUrl,
-          { comment, authorName: post.authorName },
-          'success'
-        );
+          await db.logAgentAction(
+            AGENT_NAME,
+            'generate_comment',
+            null,
+            post.postUrl,
+            { comment, authorName: post.authorName },
+            'success'
+          );
 
-        console.log(`  ✓ queued — "${comment.slice(0, 60)}..."`);
-        drafted++;
-      } catch (err) {
-        console.error(`  ✗ ${post.authorName}: ${err.message}`);
+          console.log(`  ✓ queued — "${comment.slice(0, 60)}..."`);
+          drafted++;
+        } catch (err) {
+          console.error(`  ✗ ${post.authorName}: ${err.message}`);
+        }
+
+        await randomDelay(3000, 6000);
       }
 
-      await randomDelay(3000, 6000);
+      await randomDelay(10000, 20000);
     }
 
-    await randomDelay(10000, 20000);
+    console.log(`\nLinkedIn agent complete — ${drafted} comment${drafted !== 1 ? 's' : ''} queued for approval.`);
+    return { drafted, limit, client_id: CLIENT_ID };
+  } finally {
+    if (browser) await browser.close().catch(() => {});
   }
-
-  console.log(`\nLinkedIn agent complete — ${drafted} comment${drafted !== 1 ? 's' : ''} queued for approval.`);
-  await browser.close();
 }
 
 module.exports = { run };
