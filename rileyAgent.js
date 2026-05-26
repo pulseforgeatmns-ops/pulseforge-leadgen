@@ -237,6 +237,34 @@ async function getTotalEmailOpens(prospectId) {
   return res.rows[0]?.total_opens || 0;
 }
 
+async function prospectExists(prospectId, clientId = CLIENT_ID) {
+  if (!prospectId) return false;
+  const pool = require('./db');
+  const res = await pool.query(
+    'SELECT 1 FROM prospects WHERE id = $1 AND client_id = $2 LIMIT 1',
+    [prospectId, clientId]
+  );
+  return res.rows.length > 0;
+}
+
+async function logSignalDroppedNoProspect({ prospect_id, client_id = CLIENT_ID, source = AGENT_NAME, trigger = null, payload = {} }) {
+  const pool = require('./db');
+  await pool.query(`
+    INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+    VALUES ($1, 'signal_dropped_no_prospect', NULL, $2, 'skipped', NOW(), $3)
+  `, [
+    source,
+    JSON.stringify({
+      prospect_id: prospect_id || null,
+      trigger,
+      reason: 'prospect_not_found',
+      client_id,
+      ...payload,
+    }),
+    client_id,
+  ]);
+}
+
 function triageBucket(classification, email) {
   if (classification === 'warm' && hasPricingIntent(email?.body)) return 'hot';
   if (classification === 'warm') return 'warm';
@@ -351,6 +379,16 @@ async function logInboundTouchpoint(prospect, email, classification) {
 }
 
 async function depositInterestedAction(prospect, email, suggestedReply) {
+  if (!(await prospectExists(prospect?.id, CLIENT_ID))) {
+    await logSignalDroppedNoProspect({
+      prospect_id: prospect?.id,
+      trigger: 'reply_required',
+      payload: { email: prospect?.email || email?.from || null, subject: email?.subject || null },
+    });
+    console.warn(`  [Riley] Dropped reply_required signal for missing prospect_id=${prospect?.id || 'none'}`);
+    return false;
+  }
+
   const pool = require('./db');
   const bizName = prospect.notes?.split('—')[0]?.trim() || prospect.email;
   await pool.query(
@@ -366,6 +404,7 @@ async function depositInterestedAction(prospect, email, suggestedReply) {
     ]
   );
   console.log('  [Riley] Action deposited for Max');
+  return true;
 }
 
 function companyName(prospect) {
@@ -425,7 +464,8 @@ async function getWarmSignalActionContext(prospectId, clientId = CLIENT_ID, fall
     LIMIT 1
   `, [prospectId, clientId]);
 
-  const row = res.rows[0] || {};
+  const row = res.rows[0];
+  if (!row) return null;
   const company =
     row.company_name ||
     String(row.notes || '').split('—')[0].trim() ||
@@ -454,6 +494,16 @@ async function depositWarmSignalAction({ prospect_id, client_id = CLIENT_ID, tri
     email,
     company,
   });
+  if (!ctx) {
+    await logSignalDroppedNoProspect({
+      prospect_id,
+      client_id,
+      trigger: trigger || 'warm_signal',
+      payload: { email, company, subject, total_opens },
+    });
+    console.warn(`  [Riley] Dropped warm signal for missing prospect_id=${prospect_id}`);
+    return false;
+  }
   const payload = {
     prospect_id: ctx.prospect_id,
     client_id: ctx.client_id,
@@ -665,7 +715,7 @@ async function run() {
   console.log('Riley complete.');
 }
 
-module.exports = { run, getAuthClient, depositWarmSignalAction };
+module.exports = { run, getAuthClient, depositWarmSignalAction, logSignalDroppedNoProspect, prospectExists };
 
 if (require.main === module) {
   run().catch(err => {

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const { depositWarmSignalAction } = require('../rileyAgent');
+const { depositWarmSignalAction, logSignalDroppedNoProspect, prospectExists } = require('../rileyAgent');
 
 const BREVO_EVENT_MAP = {
   opened:           'email_opened',
@@ -21,24 +21,36 @@ function signalIso(value) {
   return new Date().toISOString();
 }
 
-async function checkAndUpdateWarmStatus(prospectId, email) {
+async function checkAndUpdateWarmStatus(prospectId, email, clientId) {
   try {
+    if (!(await prospectExists(prospectId, clientId))) {
+      await logSignalDroppedNoProspect({
+        prospect_id: prospectId,
+        client_id: clientId,
+        source: 'riley',
+        trigger: 'warm_status_update',
+        payload: { email },
+      });
+      console.warn(`[Riley] Dropped warm status update for missing prospect_id=${prospectId}`);
+      return;
+    }
+
     const res = await pool.query(`
       SELECT
         COUNT(CASE WHEN action_type = 'email_opened'
               AND created_at > NOW() - INTERVAL '14 days' THEN 1 END)::int AS opens_14d,
         COUNT(CASE WHEN action_type = 'email_clicked' THEN 1 END)::int AS clicks_all
       FROM touchpoints
-      WHERE prospect_id = $1 AND channel = 'email'
-    `, [prospectId]);
+      WHERE prospect_id = $1 AND client_id = $2 AND channel = 'email'
+    `, [prospectId, clientId]);
     const { opens_14d, clicks_all } = res.rows[0];
     const opens  = parseInt(opens_14d  || 0);
     const clicks = parseInt(clicks_all || 0);
     if (clicks >= 1 || opens >= 3) {
       const upd = await pool.query(
         `UPDATE prospects SET status = 'warm', updated_at = NOW()
-         WHERE id = $1 AND status = 'cold' RETURNING id`,
-        [prospectId]
+         WHERE id = $1 AND client_id = $2 AND status = 'cold' RETURNING id`,
+        [prospectId, clientId]
       );
       if (upd.rows.length > 0) {
         console.log(`[Riley] ${email} upgraded to warm — ${opens} opens / ${clicks} clicks`);
@@ -203,7 +215,7 @@ router.post('/webhooks/brevo', (req, res) => {
       }
 
       if (['email_opened', 'email_clicked'].includes(actionType)) {
-        await checkAndUpdateWarmStatus(prospect.id, email);
+        await checkAndUpdateWarmStatus(prospect.id, email, prospect.client_id);
       }
 
       if (actionType === 'email_clicked') {
