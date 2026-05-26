@@ -10,6 +10,16 @@ let FROM_NAME = 'Jacob Maynard';
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
 
+const clientConfig = {
+  1: { dailyCap: 100, verticalCap: 15 },
+  2: { dailyCap: 40, verticalCap: 10 },
+  5: { dailyCap: 30, verticalCap: 8, ramp: { afterDays: 14, bounceCeiling: 0.03, newDailyCap: 50 } },
+};
+
+function getEmmettClientConfig(clientId = CLIENT_ID) {
+  return clientConfig[clientId] || clientConfig[1];
+}
+
 // Email sequence definitions — reply-based CTAs only (no external/Calendly/demo links in bodies)
 
 // A/B TEST ACTIVE: restaurant vs restaurant_b — remove restaurant_b when test concludes
@@ -781,11 +791,139 @@ async function sendEmail(toEmail, toName, subject, body, tags) {
     });
 
     console.log(`Email sent to ${toEmail} — Message ID: ${response.data.messageId}`);
-    return true;
+    return { success: true, messageId: response.data.messageId };
   } catch (err) {
-    console.error(`Failed to send to ${toEmail}:`, err.response?.data || err.message);
-    return false;
+    const errorDetail = err.response?.data || err.message;
+    console.error(`Failed to send to ${toEmail}:`, errorDetail);
+    return {
+      success: false,
+      error: typeof errorDetail === 'string' ? errorDetail : JSON.stringify(errorDetail),
+    };
   }
+}
+
+async function getEmailsSentToday() {
+  const pool = require('./db');
+  const res = await pool.query(`
+    SELECT COUNT(*)::int AS count
+    FROM agent_log
+    WHERE action = 'email_sent'
+      AND client_id = $1
+      AND DATE(ran_at) = CURRENT_DATE
+  `, [CLIENT_ID]);
+  return res.rows[0]?.count || 0;
+}
+
+async function getEffectiveSendConfig(baseConfig) {
+  if (!baseConfig.ramp || CLIENT_ID !== 5) return { ...baseConfig, ramped: false };
+
+  const pool = require('./db');
+  const stats = await pool.query(`
+    SELECT
+      MIN(ran_at) AS first_sent_at,
+      COUNT(*)::int AS total_sent
+    FROM agent_log
+    WHERE action = 'email_sent'
+      AND client_id = $1
+  `, [CLIENT_ID]);
+  const firstSentAt = stats.rows[0]?.first_sent_at;
+  const totalSent = Number(stats.rows[0]?.total_sent || 0);
+  if (!firstSentAt || totalSent === 0) return { ...baseConfig, ramped: false };
+
+  const bounceStats = await pool.query(`
+    SELECT COUNT(*)::int AS bounced
+    FROM touchpoints
+    WHERE client_id = $1
+      AND channel = 'email'
+      AND action_type IN ('email_bounced', 'email_soft_bounce')
+  `, [CLIENT_ID]);
+
+  const bounced = Number(bounceStats.rows[0]?.bounced || 0);
+  const bounceRate = totalSent ? bounced / totalSent : 0;
+  const daysSinceFirstSend = (Date.now() - new Date(firstSentAt).getTime()) / (1000 * 60 * 60 * 24);
+  const shouldRamp =
+    daysSinceFirstSend >= baseConfig.ramp.afterDays &&
+    bounceRate < baseConfig.ramp.bounceCeiling;
+
+  if (!shouldRamp) return { ...baseConfig, ramped: false };
+
+  const existingRampLog = await pool.query(`
+    SELECT 1
+    FROM agent_log
+    WHERE agent_name = $1
+      AND action = 'cap_ramped'
+      AND client_id = $2
+    LIMIT 1
+  `, [AGENT_NAME, CLIENT_ID]);
+
+  if (!existingRampLog.rows.length) {
+    await db.logAgentAction(
+      AGENT_NAME,
+      'cap_ramped',
+      null,
+      null,
+      {
+        client_id: CLIENT_ID,
+        previous_daily_cap: baseConfig.dailyCap,
+        new_daily_cap: baseConfig.ramp.newDailyCap,
+        days_since_first_send: Number(daysSinceFirstSend.toFixed(1)),
+        bounce_rate: Number(bounceRate.toFixed(4)),
+        bounced,
+        total_sent: totalSent,
+      },
+      'success'
+    );
+  }
+
+  return { ...baseConfig, dailyCap: baseConfig.ramp.newDailyCap, ramped: true };
+}
+
+function isWithinSendingWindow(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+    hour: 'numeric',
+    hour12: false,
+  }).formatToParts(date);
+  const weekday = parts.find(p => p.type === 'weekday')?.value;
+  const hour = Number(parts.find(p => p.type === 'hour')?.value);
+  return ['Tue', 'Wed', 'Thu'].includes(weekday) && hour >= 9 && hour < 14;
+}
+
+async function logSkippedOutsideWindow() {
+  await db.logAgentAction(
+    AGENT_NAME,
+    'skipped_outside_window',
+    null,
+    null,
+    {
+      client_id: CLIENT_ID,
+      window: 'Tuesday-Thursday 9am-2pm ET',
+      checked_at: new Date().toISOString(),
+    },
+    'success'
+  );
+}
+
+async function createEmailSendLog(prospect, payload) {
+  const pool = require('./db');
+  const res = await pool.query(`
+    INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+    VALUES ($1, 'email_sent', $2, $3, 'pending', NOW(), $4)
+    RETURNING id
+  `, [AGENT_NAME, prospect.id, JSON.stringify(payload), CLIENT_ID]);
+  return res.rows[0].id;
+}
+
+async function completeEmailSendLog(logId, payload, status = 'completed') {
+  const pool = require('./db');
+  await pool.query(`
+    UPDATE agent_log
+    SET status = $1,
+        payload = $2
+    WHERE id = $3
+      AND client_id = $4
+  `, [status, JSON.stringify(payload), logId, CLIENT_ID]);
 }
 
 async function getProspectsForEmail() {
@@ -846,7 +984,7 @@ function getSequenceForProspect(prospect) {
     return 're_engagement';
   }
 
-  const vertical = (prospect.vertical || prospect.industry || '').toLowerCase();
+  const vertical = (prospect.vertical || '').toLowerCase();
   if (
     vertical === 'home_renovation' ||
     vertical === 'decks' ||
@@ -958,6 +1096,12 @@ function humanDelay() {
 }
 
 async function run() {
+  if (!isWithinSendingWindow()) {
+    console.log('Outside Emmett sending window (Tuesday-Thursday 9am-2pm ET) — skipping run');
+    await logSkippedOutsideWindow();
+    return;
+  }
+
   const HOLIDAYS_2026 = [
     '2026-01-01', '2026-01-19', '2026-02-16', '2026-05-25',
     '2026-07-04', '2026-09-07', '2026-11-11', '2026-11-26', '2026-12-25'
@@ -973,15 +1117,33 @@ async function run() {
   if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
   FROM_NAME = CLIENT_CONFIG.sender_name || FROM_NAME;
 
+  const sendConfig = await getEffectiveSendConfig(getEmmettClientConfig(CLIENT_ID));
+  const alreadySentToday = await getEmailsSentToday();
+  const remainingCapacity = Math.max(0, sendConfig.dailyCap - alreadySentToday);
+  console.log(`Daily cap: ${sendConfig.dailyCap}${sendConfig.ramped ? ' (ramped)' : ''}; already sent today: ${alreadySentToday}; remaining capacity: ${remainingCapacity}`);
+
+  if (remainingCapacity <= 0) {
+    console.log('Daily send limit already reached from database count.');
+    await db.logAgentAction(
+      AGENT_NAME,
+      'cron_run',
+      null,
+      null,
+      { sent: 0, prospects_evaluated: 0, daily_cap: sendConfig.dailyCap, already_sent_today: alreadySentToday, client_id: CLIENT_ID },
+      'success'
+    );
+    return;
+  }
+
   const prospects = await getProspectsForEmail();
   console.log(`Found ${prospects.length} prospects to contact\n`);
 
   console.log('Prospects found:', JSON.stringify(prospects, null, 2));
 
   let sent = 0;
-  const dailyLimit = 150;
-  const industryCap = 15; // max sends per industry per run
-  const industryCounts = {};
+  const dailyLimit = remainingCapacity;
+  const verticalCap = sendConfig.verticalCap; // max sends per vertical per run
+  const verticalCounts = {};
 
   for (const prospect of prospects) {
     if (sent >= dailyLimit) {
@@ -989,11 +1151,11 @@ async function run() {
       break;
     }
 
-    // Industry cap — prevent blasting a single vertical in one run
-    const industry = (prospect.vertical || 'unknown').toLowerCase();
-    industryCounts[industry] = (industryCounts[industry] || 0);
-    if (industryCounts[industry] >= industryCap) {
-      console.log(`Skipping ${prospect.email} — industry cap reached for "${industry}"`);
+    // Vertical cap — prevent blasting a single vertical in one run
+    const vertical = (prospect.vertical || 'unknown').toLowerCase();
+    verticalCounts[vertical] = (verticalCounts[vertical] || 0);
+    if (verticalCounts[vertical] >= verticalCap) {
+      console.log(`Skipping ${prospect.email} — vertical cap reached for "${vertical}"`);
       continue;
     }
 
@@ -1043,7 +1205,16 @@ async function run() {
     console.log(`Subject: ${subject}`);
 
     const tags = [sequenceName, `step_${step.day}`, prospect.vertical].filter(Boolean);
-    const success = await sendEmail(
+    const logPayload = {
+      sequence: sequenceName,
+      step: step.day,
+      vertical: prospect.vertical,
+      subject,
+      client_id: CLIENT_ID,
+      email: prospect.email,
+    };
+    const sendLogId = await createEmailSendLog(prospect, logPayload);
+    const result = await sendEmail(
       prospect.email,
       `${prospect.first_name} ${prospect.last_name}`,
       subject,
@@ -1051,7 +1222,8 @@ async function run() {
       tags
     );
 
-    if (success) {
+    if (result.success) {
+      await completeEmailSendLog(sendLogId, { ...logPayload, message_id: result.messageId }, 'completed');
       await db.logTouchpoint(
         prospect.id,
         'email',
@@ -1060,28 +1232,11 @@ async function run() {
         useWarm ? { sequence: 'warm_outreach' } : { step: step.day, sequence: sequenceName === 're_engagement' ? 're_engagement' : 'cold_outreach' },
         'neutral'
       );
-      // Copy performance log — gives Max visibility into exactly what copy went out, by sequence/step/vertical
-      await db.logAgentAction(
-        AGENT_NAME,
-        'email_sent',
-        prospect.id,
-        null,
-        { sequence: sequenceName, step: step.day, vertical: prospect.vertical, subject: subject, client_id: CLIENT_ID },
-        'success'
-      );
-      industryCounts[industry]++;
+      verticalCounts[vertical]++;
       sent++;
       console.log('Touchpoint logged.\n');
     } else {
-      await db.logAgentAction(
-        AGENT_NAME,
-        'send_failure',
-        prospect.id,
-        null,
-        { prospect_id: prospect.id, email: prospect.email, client_id: CLIENT_ID },
-        'failed',
-        `Brevo send failed for ${prospect.email}`
-      );
+      await completeEmailSendLog(sendLogId, { ...logPayload, error: result.error }, 'failed');
     }
 
     if (sent < dailyLimit) await humanDelay();
@@ -1093,7 +1248,15 @@ async function run() {
     'cron_run',
     null,
     null,
-    { sent, prospects_evaluated: prospects.length, client_id: CLIENT_ID },
+    {
+      sent,
+      prospects_evaluated: prospects.length,
+      daily_cap: sendConfig.dailyCap,
+      already_sent_today: alreadySentToday,
+      remaining_capacity: remainingCapacity,
+      vertical_cap: verticalCap,
+      client_id: CLIENT_ID,
+    },
     'success'
   );
 }
