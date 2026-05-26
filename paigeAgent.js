@@ -10,13 +10,29 @@ const CONTENT_TYPES = ['promotional', 'educational', 'seasonal', 'behind-the-sce
 const BLOG_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'community', 'seasonal'];
 const LINKEDIN_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'results', 'community'];
 const CHANNELS = ['facebook_page', 'google_business', 'blog', 'linkedin_page'];
-const CLIENT_1_CHANNELS = [...CHANNELS, 'linkedin_personal'];
+const CLIENT_1_CHANNELS = ['facebook_page', 'google_business', 'linkedin_page', 'linkedin_personal', 'blog'];
 const MSHI_CHANNELS = ['facebook_page', 'google_business', 'blog'];
 const ALL_CHANNELS = [...new Set([...CHANNELS, ...CLIENT_1_CHANNELS, ...MSHI_CHANNELS])];
-const MIN_QUALITY_SCORE = 24;
+const MIN_QUALITY_SCORE = 26;
+const MIN_DIMENSION_SCORE = 7;
 const MIN_HOOK_SCORE = 8;
+const MAX_REGENERATION_ATTEMPTS = 4;
 const CLIENT_ID = getRuntimeClientId();
+const CLEAR_PENDING_PULSEFORGE_APPROVALS = process.env.PAIGE_CLEAR_PENDING_PULSEFORGE !== '0';
 let CLIENT_CONFIG = null;
+
+const PULSEFORGE_POV_RULE = `PULSEFORGE POV — NON-NEGOTIABLE:
+You are writing content FOR Pulseforge, an AI marketing and automation agency. Write from Pulseforge's point of view. Reference client verticals as examples of businesses we help — never write as if Pulseforge IS a lawn care company, auto shop, or any other business. Wrong: 'A client called us about her yard...' written as a lawn care company. Correct: 'A lawn care company in Southern NH came to us because...' written as Pulseforge telling the story.`;
+
+const PROFESSIONAL_COPYWRITER_QUALITY_RULE = `PROFESSIONAL COPYWRITER QUALITY BAR — NON-NEGOTIABLE:
+Write at a professional copywriter level. Every post must have:
+
+- A specific, unexpected opening line that earns attention — not a statistic, not 'Most businesses...', not 'Did you know'
+- A concrete detail that makes it feel real — a number, a timeline, a specific vertical, a location, a named outcome
+- A clear point of view — Pulseforge has an opinion, not just information
+- A closer that creates forward motion — not engagement bait, not a question for comments
+
+Scoring targets: hook_strength 8+, specificity 8+, originality 8+. A score below 7 on any dimension means the post failed. Regenerate until all three dimensions hit 7 or above before passing to publish.`;
 
 const PULSEFORGE_TOPIC_BANK = [
   {
@@ -382,11 +398,16 @@ function formatThemeList(values) {
   return values?.length ? values.join('; ') : 'none found';
 }
 
-function buildContentRules(recentThemes, recentPublishedAngles = [], topicAngle = null) {
+function buildContentRules(recentThemes, recentPublishedAngles = [], topicAngle = null, isPulseforge = false) {
   const topicBlock = topicAngle ? `
 TODAY'S PULSEFORGE TOPIC BUCKET:
 - ${topicAngle.label}: ${topicAngle.guidance}
 - If writing for Pulseforge, make this the core angle for today's posts. Do not drift into a different bucket unless the channel absolutely requires it.` : '';
+  const pulseforgeRules = isPulseforge ? `
+${PULSEFORGE_POV_RULE}
+
+${PROFESSIONAL_COPYWRITER_QUALITY_RULE}
+` : '';
 
   return `CONTENT RULES — YOU MUST FOLLOW THESE:
 - Do NOT use any seasonal reference (summer, winter, spring, fall, holidays) as the hook or opening angle
@@ -398,6 +419,7 @@ TODAY'S PULSEFORGE TOPIC BUCKET:
 - Every post must have a concrete hook in the first line that works without knowing the location or time of year
 - Write in a natural, conversational tone. Always use contractions — it's, don't, that's, you're, we're, isn't, hasn't, won't, can't. Never write "it is", "do not", "that is", "you are", "we are" when a contraction would sound more natural. The content should sound like a sharp business owner wrote it, not a marketing agency.
 ${topicBlock}
+${pulseforgeRules}
 
 USED-ANGLES MEMORY — DO NOT REUSE:
 These hooks or angles appeared in published posts from the last 14 days:
@@ -465,10 +487,62 @@ function isPulseforgeCompany(company) {
   return String(company?.name || '').toLowerCase().includes('pulseforge');
 }
 
+function getPulseforgeCompanyFromConfig() {
+  if (CLIENT_ID !== 1 || !CLIENT_CONFIG) return null;
+  const cityState = [CLIENT_CONFIG.city, CLIENT_CONFIG.state].filter(Boolean).join(', ');
+  return {
+    id: null,
+    name: CLIENT_CONFIG.business_name || CLIENT_CONFIG.name || 'Pulseforge',
+    industry: CLIENT_CONFIG.vertical || 'AI marketing and automation agency',
+    location: cityState || 'Manchester, NH',
+    website: CLIENT_CONFIG.website || 'https://gopulseforge.com',
+    notes: CLIENT_CONFIG.differentiators || CLIENT_CONFIG.brand_voice || null,
+  };
+}
+
+function getGenerationClients(companies) {
+  if (CLIENT_ID !== 1) return companies;
+  const pulseforgeCompanies = companies.filter(isPulseforgeCompany);
+  if (pulseforgeCompanies.length) return pulseforgeCompanies.slice(0, 1);
+  const pulseforgeCompany = getPulseforgeCompanyFromConfig();
+  return pulseforgeCompany ? [pulseforgeCompany] : [];
+}
+
 function getChannelsForCompany(company) {
   if (CLIENT_ID === 2) return MSHI_CHANNELS;
   if (CLIENT_ID !== 1 || !isPulseforgeCompany(company)) return CHANNELS;
   return CLIENT_1_CHANNELS;
+}
+
+async function rejectPendingPulseforgeApprovals(companies) {
+  if (CLIENT_ID !== 1 || !CLEAR_PENDING_PULSEFORGE_APPROVALS) return 0;
+
+  const pulseforgeNames = getGenerationClients(companies).map(company => company.name);
+  if (!pulseforgeNames.length) return 0;
+
+  const res = await pool.query(`
+    UPDATE pending_comments
+    SET status = 'rejected'
+    WHERE client_id = $1
+      AND status = 'pending'
+      AND author_name = ANY($2)
+      AND channel = ANY($3)
+  `, [CLIENT_ID, pulseforgeNames, CLIENT_1_CHANNELS]);
+
+  const rejected = res.rowCount || 0;
+  if (rejected) {
+    await pool.query(`
+      INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+      VALUES ($1, $2, $3, $4, NOW(), $5)
+    `, [
+      AGENT_NAME,
+      'pulseforge_pending_approvals_cleared',
+      JSON.stringify({ rejected, channels: CLIENT_1_CHANNELS, author_names: pulseforgeNames }),
+      'success',
+      CLIENT_ID,
+    ]);
+  }
+  return rejected;
 }
 
 // Pick a content type — uses performance weighting when ≥4 posts have data, else round-robin
@@ -841,7 +915,7 @@ LINKEDIN STRATEGY:
 Write a LinkedIn post (150-250 words) with this structure:
 - First line: a specific industry observation or contrarian hook — no fluff openers like "excited to share" or "we're thrilled"
 - 2-3 short paragraphs or punchy line breaks
-- Final line: a thoughtful statement or low-pressure question, not a sales pitch
+- Final line: a thoughtful forward-moving statement, not a sales pitch and not a question for comments
 - Last line: 2-3 relevant hashtags max
 
 Voice and tone:
@@ -895,7 +969,7 @@ Write a LinkedIn personal profile post (150-250 words) with this structure:
 - First line: a personal, specific, scroll-stopping hook. It may start with "I" when the line is concrete and personal.
 - 2-4 short paragraphs or punchy line breaks
 - Include one grounded detail from Jacob's perspective: bartending, building Pulseforge, a real client pattern, or the daily agency grind
-- Final line: a human reflection or low-pressure thought, not a sales pitch
+- Final line: a human forward-moving reflection, not a sales pitch and not a question for comments
 - Last line: 2-3 relevant hashtags max
 
 Voice and tone:
@@ -994,6 +1068,10 @@ ${formatUsedAngles(recentPublishedAngles)}
 3. HOOK STRENGTH — Does the opening line give someone a reason to stop
    scrolling and keep reading? (10 = compelling, 1 = forgettable)
 
+Passing requires total >= ${MIN_QUALITY_SCORE}, hook_strength >= ${MIN_HOOK_SCORE},
+specificity >= ${MIN_DIMENSION_SCORE}, and originality >= ${MIN_DIMENSION_SCORE}.
+A score below 7 on any dimension means the post failed.
+
 Return ONLY a strict JSON object with double-quoted keys and string values.
 Do not wrap in code fences. Do not include any prose before or after.
 Use this exact shape:
@@ -1033,6 +1111,13 @@ function validateDraftForClient(draft, channel) {
   return issues;
 }
 
+function passesQualityGate(score) {
+  return score.total >= MIN_QUALITY_SCORE &&
+    score.hook_strength >= MIN_HOOK_SCORE &&
+    score.specificity >= MIN_DIMENSION_SCORE &&
+    score.originality >= MIN_DIMENSION_SCORE;
+}
+
 async function generatePost(company, contentType, channel) {
   const verticalCtx = getVerticalContext(company.industry);
   const isMshi = CLIENT_ID === 2;
@@ -1058,7 +1143,7 @@ async function generatePost(company, contentType, channel) {
     : buildChannelStrategyBlock(channel, topicAngle);
   const systemPrompt = isMshi
     ? buildMshiContentRules(recentThemes, recentPublishedAngles, topicAngle)
-    : buildContentRules(recentThemes, recentPublishedAngles, topicAngle);
+    : buildContentRules(recentThemes, recentPublishedAngles, topicAngle, isPulseforge);
 
   if (lastContentType) {
     console.log(`  [variety] Last ${channel} post type: ${lastContentType} → generating: ${contentType}`);
@@ -1095,32 +1180,35 @@ async function generatePost(company, contentType, channel) {
           ? buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy)
           : buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy, facebookCta);
 
-  const firstDraft = await createDraft(prompt, systemPrompt, channel);
-  const firstScore = await scoreDraft(firstDraft, recentPublishedAngles);
-  const firstValidationIssues = validateDraftForClient(firstDraft, channel);
-  let finalDraft = firstDraft;
-  let finalScore = firstScore;
-  let finalValidationIssues = firstValidationIssues;
+  let draft = await createDraft(prompt, systemPrompt, channel);
+  let score = await scoreDraft(draft, recentPublishedAngles);
+  let validationIssues = validateDraftForClient(draft, channel);
+  let finalDraft = draft;
+  let finalScore = score;
+  let finalValidationIssues = validationIssues;
   let regenerated = false;
+  let regenerationAttempts = 0;
 
-  if (firstValidationIssues.length || firstScore.total < MIN_QUALITY_SCORE || firstScore.hook_strength < MIN_HOOK_SCORE) {
+  while ((validationIssues.length || !passesQualityGate(score)) && regenerationAttempts < MAX_REGENERATION_ATTEMPTS) {
     regenerated = true;
-    if (firstValidationIssues.length) {
-      console.log(`  [validation] Regenerating for MSHI rules: ${firstValidationIssues.join(', ')}`);
+    regenerationAttempts++;
+    if (validationIssues.length) {
+      console.log(`  [validation] Regenerating attempt ${regenerationAttempts}/${MAX_REGENERATION_ATTEMPTS} for client rules: ${validationIssues.join(', ')}`);
     } else {
-      console.log(`  [quality] Score ${firstScore.total}/30, regenerating for ${firstScore.weak_dimension}`);
+      console.log(`  [quality] Score ${score.total}/30, regenerating attempt ${regenerationAttempts}/${MAX_REGENERATION_ATTEMPTS} for ${score.weak_dimension}`);
     }
 
     const regenPrompt = isMshi
       ? [
           prompt,
           '',
-          `Your previous draft failed these MSHI validation rules: ${firstValidationIssues.join(', ') || 'quality threshold'}.`,
-          `Your previous draft scored ${firstScore.total}/30 overall and ${firstScore.hook_strength}/10 on hook strength. Reason: ${firstScore.reason}.`,
+          `Your previous draft failed these MSHI validation rules: ${validationIssues.join(', ') || 'quality threshold'}.`,
+          `Your previous draft scored ${score.total}/30 overall, with specificity ${score.specificity}/10, originality ${score.originality}/10, and hook strength ${score.hook_strength}/10. Reason: ${score.reason}.`,
           '',
           'Rewrite it with a completely different opening line and keep it specific to Brad, Dustin, Mountain State Home Innovations, and West Virginia homeowners.',
           'Do not mention Pulseforge, AI, automation, marketing, pricing, competitors, or LinkedIn.',
           'Do not include dollar amounts, percentages, package prices, or negative comparisons.',
+          `The final score must be ${MIN_QUALITY_SCORE}/30 or higher, and specificity, originality, and hook_strength must each be at least ${MIN_DIMENSION_SCORE}/10.`,
           `Use today's MSHI topic bucket: ${topicAngle ? topicAngle.label + ': ' + topicAngle.guidance : 'the most distinct available MSHI angle'}.`,
           '',
           'Return only the rewritten content.',
@@ -1128,39 +1216,50 @@ async function generatePost(company, contentType, channel) {
       : [
           prompt,
           '',
-          `Your previous draft scored ${firstScore.hook_strength}/10 on hook strength. Reason: ${firstScore.reason}.`,
+          `Your previous draft scored ${score.total}/30 total, with specificity ${score.specificity}/10, originality ${score.originality}/10, and hook strength ${score.hook_strength}/10. Reason: ${score.reason}.`,
+          '',
+          'A strong hook is the ONLY thing that matters in the first line. Here are examples of strong vs weak:',
+          '',
+          'WEAK: "We help local businesses stay on top of their marketing."',
+          'WEAK: "Running a small business is tough, especially when it comes to marketing."',
+          'WEAK: "Most business owners don\'t realize how much time they spend on marketing."',
+          '',
+          'STRONG: "A cleaning company owner can miss three booking requests before lunch without ever noticing the pattern."',
+          'STRONG: "The phone going quiet is not always a demand problem."',
+          'STRONG: "One tiny handoff between inbox and calendar can decide whether a lead turns into revenue."',
           '',
           'The first line must create a reason to keep reading. It should be specific, surprising, or create a gap the reader wants to close.',
           'No generic observations. No "most business owners." No "running a small business."',
           'Do not use competitor comparison hooks, lead response rate statistics, "your competitor just", "40% of leads", or "follow-up speed" angles.',
           `Use today's topic bucket instead: ${topicAngle ? topicAngle.label + ': ' + topicAngle.guidance : 'the most distinct available angle'}.`,
+          `The final score must be ${MIN_QUALITY_SCORE}/30 or higher, and specificity, originality, and hook_strength must each be at least ${MIN_DIMENSION_SCORE}/10. Do not pass along a merely acceptable post.`,
           '',
           'Return only the rewritten post text.',
         ].join('\n');
 
-    const secondDraft = await createDraft(regenPrompt, systemPrompt, channel);
-    const secondScore = await scoreDraft(secondDraft, recentPublishedAngles);
-    const secondValidationIssues = validateDraftForClient(secondDraft, channel);
-    if (firstValidationIssues.length) {
-      if (secondValidationIssues.length) {
-        throw new Error(`MSHI content failed validation: ${secondValidationIssues.join(', ')}`);
-      }
-      finalDraft = secondDraft;
-      finalScore = secondScore;
-      finalValidationIssues = secondValidationIssues;
-    } else if (!secondValidationIssues.length && secondScore.total > firstScore.total) {
-      finalDraft = secondDraft;
-      finalScore = secondScore;
-      finalValidationIssues = secondValidationIssues;
+    draft = await createDraft(regenPrompt, systemPrompt, channel);
+    score = await scoreDraft(draft, recentPublishedAngles);
+    validationIssues = validateDraftForClient(draft, channel);
+    if (!validationIssues.length && (finalValidationIssues.length || score.total > finalScore.total)) {
+      finalDraft = draft;
+      finalScore = score;
+      finalValidationIssues = validationIssues;
     }
-  } else {
-    console.log(`  [quality] Score ${firstScore.total}/30`);
   }
 
   if (finalValidationIssues.length) {
-    throw new Error(`MSHI content failed validation: ${finalValidationIssues.join(', ')}`);
+    await logContentFailed(company, channel, contentType, finalScore, regenerationAttempts, finalDraft);
+    console.log(`  [validation] Failed after ${regenerationAttempts} regeneration attempt(s): ${finalValidationIssues.join(', ')}; skipping ${channel}`);
+    return { content: null, quality: finalScore, regenerated, failed: true, regenerationAttempts };
   }
 
+  if (!passesQualityGate(finalScore)) {
+    await logContentFailed(company, channel, contentType, finalScore, regenerationAttempts, finalDraft);
+    console.log(`  [quality] Failed after ${regenerationAttempts} regeneration attempt(s), best score ${finalScore.total}/30; skipping ${channel}`);
+    return { content: null, quality: finalScore, regenerated, failed: true, regenerationAttempts };
+  }
+
+  console.log(`  [quality] Score ${finalScore.total}/30 after ${regenerationAttempts} regeneration attempt(s)`);
   return { content: finalDraft, quality: finalScore, regenerated };
 }
 
@@ -1193,6 +1292,37 @@ async function logQualityScore(channel, quality, regenerated, post) {
   ]);
 }
 
+async function logContentFailed(company, channel, contentType, quality, regenerationAttempts, post) {
+  const payload = {
+    company: company?.name || null,
+    channel,
+    content_type: contentType,
+    best_score: quality.total,
+    scores: {
+      specificity: quality.specificity,
+      originality: quality.originality,
+      hook_strength: quality.hook_strength,
+      total: quality.total,
+    },
+    regeneration_attempts: regenerationAttempts,
+    minimum_required_score: MIN_QUALITY_SCORE,
+    minimum_dimension_score: MIN_DIMENSION_SCORE,
+    weak_dimension: quality.weak_dimension === 'none' ? null : quality.weak_dimension,
+    reason: quality.reason || '',
+    post_preview: String(post || '').slice(0, 160),
+  };
+  await pool.query(`
+    INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+    VALUES ($1, $2, $3, $4, NOW(), $5)
+  `, [
+    AGENT_NAME,
+    'content_failed',
+    JSON.stringify(payload),
+    'failed',
+    CLIENT_ID,
+  ]);
+}
+
 async function saveToPendingApprovals(company, content, contentType, channel) {
   const channelLabel = {
     facebook_page:   'Facebook Page',
@@ -1207,6 +1337,22 @@ async function saveToPendingApprovals(company, content, contentType, channel) {
   const storedContent = channel === 'linkedin_page'
     ? `POST: ${content}\nFIRST_COMMENT: https://gopulseforge.com`
     : content;
+
+  if (CLIENT_ID === 1 && isPulseforgeCompany(company)) {
+    const channelExisting = await pool.query(`
+      SELECT id FROM pending_comments
+      WHERE channel = $1
+        AND author_name = $2
+        AND status = 'pending'
+        AND client_id = $3
+      LIMIT 1
+    `, [channel, company.name, CLIENT_ID]);
+
+    if (channelExisting.rows.length > 0) {
+      console.log(`  ↷ Skipping duplicate pending Pulseforge channel: ${channel}`);
+      return null;
+    }
+  }
 
   const existing = await pool.query(`
     SELECT id FROM pending_comments
@@ -1282,7 +1428,7 @@ async function processRegenerateTriggers() {
 
   if (!triggers.rows.length) return { triggers: 0, regenerated: 0 };
 
-  const clients = await getActiveClients();
+  const clients = getGenerationClients(await getActiveClients());
   if (!clients.length) {
     for (const row of triggers.rows) {
       await completeRegenerateTrigger(row.id, 'success');
@@ -1311,6 +1457,7 @@ async function processRegenerateTriggers() {
       console.log(`  [regenerate] ${company.name} — ${channel} — ${contentType}`);
       try {
         const postResult = await generatePost(company, contentType, channel);
+        if (postResult.failed) continue;
         const id = await saveToPendingApprovals(company, postResult.content, contentType, channel);
         if (id) {
           await logQualityScore(channel, postResult.quality, true, postResult.content);
@@ -1370,7 +1517,13 @@ AND status = 'pending';`);
   console.log('------------------------------------------------------------------------\n');
 
   try {
-    const clients = await getActiveClients();
+    const allClients = await getActiveClients();
+    const rejectedPulseforgePending = await rejectPendingPulseforgeApprovals(allClients);
+    if (rejectedPulseforgePending) {
+      console.log(`[Paige] Rejected ${rejectedPulseforgePending} pending Pulseforge approval(s) before regenerating.`);
+    }
+
+    const clients = getGenerationClients(allClients);
     console.log(`Found ${clients.length} client${clients.length !== 1 ? 's' : ''}.\n`);
 
     const regenerateResult = await processRegenerateTriggers();
@@ -1383,6 +1536,7 @@ AND status = 'pending';`);
       await logRun('success', {
         clients_processed: 0,
         posts_generated: 0,
+        pulseforge_pending_rejected: rejectedPulseforgePending,
         max_regenerate_triggers: regenerateResult.triggers,
         max_regenerated: regenerateResult.regenerated,
       });
@@ -1400,6 +1554,10 @@ AND status = 'pending';`);
 
         try {
           const postResult = await generatePost(company, contentType, channel);
+          if (postResult.failed) {
+            channelsFailed.push(`${company.name}/${channel}`);
+            continue;
+          }
           const content = postResult.content;
           const id = await saveToPendingApprovals(company, content, contentType, channel);
           if (id) {
@@ -1423,6 +1581,7 @@ AND status = 'pending';`);
       posts_generated: generated,
       channels_queued: channelsQueued,
       channels_failed: channelsFailed,
+      pulseforge_pending_rejected: rejectedPulseforgePending,
       max_regenerate_triggers: regenerateResult.triggers,
       max_regenerated: regenerateResult.regenerated,
     });
