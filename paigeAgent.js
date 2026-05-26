@@ -11,7 +11,8 @@ const BLOG_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'community', 'se
 const LINKEDIN_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'results', 'community'];
 const CHANNELS = ['facebook_page', 'google_business', 'blog', 'linkedin_page'];
 const CLIENT_1_CHANNELS = [...CHANNELS, 'linkedin_personal'];
-const ALL_CHANNELS = [...new Set([...CHANNELS, ...CLIENT_1_CHANNELS])];
+const MSHI_CHANNELS = ['facebook_page', 'google_business', 'blog'];
+const ALL_CHANNELS = [...new Set([...CHANNELS, ...CLIENT_1_CHANNELS, ...MSHI_CHANNELS])];
 const MIN_QUALITY_SCORE = 24;
 const MIN_HOOK_SCORE = 8;
 const CLIENT_ID = getRuntimeClientId();
@@ -90,6 +91,32 @@ const FACEBOOK_CTA_BANK = [
   'Reach out when you want the follow-up to stop living in your head.',
 ];
 
+const MSHI_TOPIC_BANK = [
+  { label: 'Before/after project reveal', guidance: 'show the visible change and what Brad and Dustin fixed for the homeowner' },
+  { label: 'Seasonal maintenance tip', guidance: 'practical advice for decks, siding, gutters, and exterior upkeep in West Virginia weather' },
+  { label: 'Why hire a local contractor vs national chain', guidance: 'explain the value of direct access, local accountability, and owner-done work without attacking competitors' },
+  { label: 'Project spotlight: deck build', guidance: 'break down a deck build from walkthrough to finished outdoor space' },
+  { label: 'Project spotlight: siding installation', guidance: 'explain what siding work protects and why details matter' },
+  { label: 'Emergency repair story', guidance: 'tell a practical repair story focused on fast response, safety, and protecting the home' },
+  { label: 'What to look for when hiring a contractor in WV', guidance: 'give homeowner-friendly checks like license, communication, references, and clear scope' },
+  { label: 'Meet Brad and Dustin', guidance: 'introduce the owners as local tradespeople who personally stay involved in the work' },
+  { label: 'Client testimonial highlight', guidance: 'turn a homeowner compliment into a specific proof point without sounding polished or corporate' },
+  { label: 'How long does X project take?', guidance: 'explain realistic project timelines at a high level without quoting pricing or guarantees' },
+  { label: 'WV weather and what it does to your home exterior', guidance: 'connect rain, humidity, storms, and seasonal swings to decks, siding, windows, and repairs' },
+  { label: 'Free estimate — what to expect', guidance: 'walk homeowners through a no-pressure property walkthrough and direct conversation with Brad or Dustin' },
+];
+
+const MSHI_CTA_BANK = [
+  'Call Brad or Dustin directly at 304-483-3655 for a free estimate.',
+  "We serve Kanawha, Putnam, and Cabell County. Reach out and we'll come to you.",
+  'Licensed, local, and we pick up the phone. 304-483-3655.',
+  'Free walkthrough of your property — no obligation, no pressure.',
+  'Every estimate is free. Every job is done by Brad and Dustin personally.',
+];
+
+const MSHI_SERVICE_AREAS = 'Kanawha, Putnam, and Cabell County';
+const MSHI_CORE_SERVICES = 'decks, siding, exterior remodeling, windows, and emergency repair';
+
 const CHANNEL_TOPIC_LENSES = {
   linkedin_page: {
     label: 'POV angle',
@@ -127,6 +154,9 @@ const VERTICAL_PROMPTS = {
 
 function getVerticalContext(industry) {
   const lower = (industry || '').toLowerCase();
+  if (CLIENT_ID === 2) {
+    return `local WV exterior contracting: ${MSHI_CORE_SERVICES}; locally owned, licensed WV065578, Brad and Dustin do the work themselves, direct owner access throughout the project`;
+  }
   const match = Object.entries(VERTICAL_PROMPTS).find(([k]) => lower.includes(k));
   return match ? match[1] : `local ${industry || 'business'} services`;
 }
@@ -176,6 +206,17 @@ function getPulseforgeTopicAngle(date = new Date(), channel = null) {
   return PULSEFORGE_TOPIC_BANK[(day - 1 + offset) % PULSEFORGE_TOPIC_BANK.length];
 }
 
+
+function getMshiTopicAngle(date = new Date(), channel = null) {
+  const day = Number(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    day: 'numeric',
+  }).format(date));
+  const channelOffsets = { facebook_page: 0, google_business: 4, blog: 8 };
+  const offset = channelOffsets[channel] || 0;
+  return MSHI_TOPIC_BANK[(day - 1 + offset) % MSHI_TOPIC_BANK.length];
+}
+
 function seededIndex(seed, size) {
   let hash = 0;
   for (let i = 0; i < seed.length; i++) {
@@ -205,6 +246,17 @@ function getFacebookCta(channel, date = new Date()) {
   return FACEBOOK_CTA_BANK[seededIndex(`${dateKey}:${channel}`, FACEBOOK_CTA_BANK.length)];
 }
 
+
+function getMshiCta(channel, date = new Date()) {
+  const dateKey = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+  return MSHI_CTA_BANK[seededIndex(`${dateKey}:${channel}`, MSHI_CTA_BANK.length)];
+}
+
 function buildChannelStrategyBlock(channel, topicAngle = null) {
   const lens = CHANNEL_TOPIC_LENSES[channel];
   const topicLine = topicAngle
@@ -220,6 +272,26 @@ ${topicLine}
 This channel must use the ${lens.label}: ${lens.guidance}
 Do not reuse the same core angle or narrative arc across channels on the same day. Same topic bucket, different channel lens.
 ${exampleLine}`;
+}
+
+
+function buildMshiChannelStrategyBlock(channel, topicAngle) {
+  const strategies = {
+    facebook_page: { format: 'Project stories, before/after, community presence', tone: 'Warm, personal, local', length: '100-150 words', guidance: 'Use the topic as a homeowner-facing story from Brad and Dustin. It should feel like a real update from a local contractor, not an ad.' },
+    google_business: { format: 'Search-intent, local proof', tone: 'Short, specific to Charleston WV', length: '75-100 words', guidance: 'Use the topic to help someone searching for a local WV contractor understand what MSHI does and why they can trust Brad and Dustin.' },
+    blog: { format: 'Project breakdowns, homeowner tips, seasonal advice', tone: 'Educational, practical', length: '400-600 words', guidance: 'Use the topic as a useful article for homeowners, property managers, or HOAs deciding how to handle exterior work.' },
+  };
+  const strategy = strategies[channel];
+  if (!strategy) return '';
+
+  return `MSHI CHANNEL STRATEGY — DO NOT BLEND FORMATS:
+Today's MSHI topic bucket is "${topicAngle.label}: ${topicAngle.guidance}".
+Channel: ${channel}
+Format: ${strategy.format}
+Tone: ${strategy.tone}
+Length: ${strategy.length}
+Execution: ${strategy.guidance}
+Do not reuse the same core angle or narrative arc across channels on the same day. Same topic bucket, different channel lens.`;
 }
 
 function formatUsedAngles(angles) {
@@ -340,6 +412,43 @@ ORIGINALITY — NON-NEGOTIABLE:
 Every piece of content must feel like it was written for the first time. Never reuse the same opening premise, stat, or scenario you've used before. If you catch yourself writing something that sounds like something Pulseforge has said before, stop and pick a different angle from today's topic bucket.`;
 }
 
+
+function buildMshiContentRules(recentThemes, recentPublishedAngles = [], topicAngle = null) {
+  const topicBlock = topicAngle ? `
+TODAY'S MSHI TOPIC BUCKET:
+- ${topicAngle.label}: ${topicAngle.guidance}
+- Make this the core angle for today's content. Keep the same topic bucket but change the channel lens.` : '';
+
+  return `CONTENT RULES — YOU MUST FOLLOW THESE:
+- Write as Brad and Dustin from Mountain State Home Innovations, not as a marketing agency and not as a polished brand voice
+- Voice: local, personal, West Virginia proud, and plain spoken. These are tradespeople, not marketers
+- Audience: homeowners, property managers, and HOAs in ${MSHI_SERVICE_AREAS}
+- Reference real service areas naturally: Kanawha County, Putnam County, Cabell County, Charleston WV, Huntington WV, Hurricane WV, and nearby communities
+- Highlight trust points when they fit: locally owned, licensed WV065578, Brad and Dustin do the work themselves, and customers have direct access throughout the project
+- Core services to feature: ${MSHI_CORE_SERVICES}
+- Do NOT generate LinkedIn content for MSHI
+- Never mention Pulseforge, AI, automation, or a marketing agency
+- Never include pricing specifics, dollar amounts, percentages, or package prices
+- Never make negative references to competitors. If comparing local vs national chains, keep it positive and focused on accountability and direct access
+- Do NOT reuse any of these recent opening phrases: ${formatThemeList(recentThemes.openings)}
+- Do NOT use these structural patterns: ${formatThemeList(recentThemes.patterns)}
+- Avoid repeating these recent service angles unless the post has a clearly different hook: ${formatThemeList(recentThemes.services)}
+- Lead with a concrete project detail, homeowner concern, practical tip, or local proof point
+- Every post must have a clear first line that makes a homeowner want to keep reading
+- Use contractions naturally. Keep the language plain and direct
+${topicBlock}
+
+USED-ANGLES MEMORY — DO NOT REUSE:
+These hooks or angles appeared in published posts from the last 14 days:
+${formatUsedAngles(recentPublishedAngles)}
+
+HOOK WRITING — NON-NEGOTIABLE:
+Every post must open with a strong hook in the first line. Strong hooks include a visible project detail, a homeowner problem, a practical warning, or a direct question. Never start with "At Mountain State Home Innovations," "We're excited," "Spring is here," or generic contractor language.
+
+ORIGINALITY — NON-NEGOTIABLE:
+Every piece of content must feel specific to Brad, Dustin, the homeowner, and the job. If the draft sounds like any contractor in any state could have written it, rewrite it with a real WV service area, service, or job detail.`;
+}
+
 async function getActiveClients() {
   const res = await pool.query(`
     SELECT id, name, industry, location, website, notes
@@ -357,6 +466,7 @@ function isPulseforgeCompany(company) {
 }
 
 function getChannelsForCompany(company) {
+  if (CLIENT_ID === 2) return MSHI_CHANNELS;
   if (CLIENT_ID !== 1 || !isPulseforgeCompany(company)) return CHANNELS;
   return CLIENT_1_CHANNELS;
 }
@@ -587,6 +697,123 @@ ${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. T
 Return only the blog post text with markdown formatting.`;
 }
 
+
+function buildMshiFacebookPrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy, cta) {
+  return `You are writing a Facebook post for ${company.name}'s business page.
+${company.name} is Mountain State Home Innovations, a locally owned West Virginia contractor run by Brad and Dustin.
+
+Content type: ${contentType}
+Business context: ${verticalCtx}
+
+${channelStrategy}
+
+MSHI FACEBOOK STRATEGY:
+- Channel purpose: primary local contractor channel for project stories, before/after photos, and community presence
+- Audience: homeowners, property managers, and HOAs in ${MSHI_SERVICE_AREAS}
+- Format: 100-150 words, short paragraphs, no corporate polish
+- Tone: warm, personal, local, West Virginia proud, and plain spoken
+- Write as Brad and Dustin. Use "we" naturally, but make it sound like tradespeople talking to neighbors
+- Feature real services when relevant: ${MSHI_CORE_SERVICES}
+- Reference Charleston WV, Kanawha County, Putnam County, or Cabell County naturally when it fits
+- Highlight locally owned, licensed WV065578, owner-done work, and direct access during the project when relevant
+- End with this CTA or a close variation that keeps the meaning: "${cta}"
+- Never mention Pulseforge, AI, automation, marketing, pricing, or competitors
+
+VARIETY RULES — enforce these on every post:
+- Never start consecutive posts with the same opening word or phrase
+- Rotate the angle on every post — do not repeat the same core message within 7 days
+- Avoid generic contractor openers like "Looking to upgrade your home" or "Your home deserves the best"
+- Each post must make ONE specific point: a project detail, homeowner concern, service tip, or local proof point
+${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. This post must feel distinct from that — different angle, different opening, different structure.` : ''}
+
+Return only the post text.`;
+}
+
+function buildMshiGooglePrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy, cta) {
+  return `You are writing a Google Business Profile update for ${company.name}.
+${company.name} is Mountain State Home Innovations, a licensed WV contractor run by Brad and Dustin.
+
+Content type: ${contentType}
+Business context: ${verticalCtx}
+
+${channelStrategy}
+
+MSHI GOOGLE BUSINESS STRATEGY:
+- Channel purpose: search-intent, local proof for someone deciding whether to call a Charleston WV contractor
+- Audience: homeowners, property managers, and HOAs in ${MSHI_SERVICE_AREAS}
+- Format: 75-100 words, short and specific
+- Tone: clear, practical, credible, and locally grounded
+- Mention Charleston WV or the surrounding WV service area naturally
+- Feature one concrete service or trust point: ${MSHI_CORE_SERVICES}, licensed WV065578, Brad and Dustin do the work themselves, or direct access throughout the project
+- End with this CTA or a close variation that keeps the meaning: "${cta}"
+- No hashtags and no emojis
+- Never mention Pulseforge, AI, automation, marketing, pricing, or competitors
+
+VARIETY RULES — enforce these on every post:
+- Never start consecutive posts with the same opening word or phrase
+- Rotate the angle on every post — do not repeat the same core message within 7 days
+- Avoid generic contractor openers like "Looking to upgrade your home" or "Your home deserves the best"
+- Each post must answer one practical question or prove one reason to trust MSHI
+${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. This post must feel distinct from that — different angle, different opening, different structure.` : ''}
+
+Return only the post text.`;
+}
+
+function buildMshiBlogPrompt(company, contentType, verticalCtx, lastContentType, blogCloser, channelStrategy) {
+  const location = company.location || 'Charleston WV';
+
+  return `You are writing a blog post for ${company.name}.
+${company.name} is Mountain State Home Innovations, a locally owned West Virginia contractor run by Brad and Dustin.
+
+Content type: ${contentType}
+Business context: ${verticalCtx}
+
+${channelStrategy}
+
+MSHI BLOG STRATEGY:
+- Channel purpose: SEO, long-form project stories, and helpful content for homeowners
+- Audience: homeowners, property managers, and HOAs in ${MSHI_SERVICE_AREAS}
+- Format: 400-600 words
+- Tone: educational, practical, local, and plain spoken
+- Write as Brad and Dustin, not as a marketing agency
+- Build the reader's understanding before mentioning the estimate
+- Feature one or more core services when relevant: ${MSHI_CORE_SERVICES}
+- Reference ${location}, Charleston WV, Kanawha County, Putnam County, or Cabell County naturally
+- Highlight locally owned, licensed WV065578, Brad and Dustin doing the work themselves, and direct access throughout the project when relevant
+- Never mention Pulseforge, AI, automation, marketing, pricing, or competitors
+
+Write a blog post (400-600 words) using this structure:
+# [Title]
+
+[Intro paragraph with a specific homeowner problem, project detail, or WV weather issue]
+
+## [Subheading]
+[Body section]
+
+## [Subheading]
+[Body section]
+
+[Optional third ## section if it fits naturally — skip if it would feel padded]
+
+[Closing paragraph using the required closer below]
+
+Requirements:
+- Use # for the title and ## for subheadings — no other markdown
+- No keyword stuffing
+- No corporate tone, no "we pride ourselves," no "industry-leading"
+- End the post with this exact closer, adjusted only if needed for grammar: "${blogCloser}"
+- Never use engagement-bait questions as blog closers. Do not end with "drop a comment", "what do you think", "let us know below", or any request for comments
+
+VARIETY RULES — enforce these on every post:
+- Never start consecutive posts with the same opening word or phrase
+- Rotate the angle on every post — do not repeat the same core message within 7 days
+- Avoid generic contractor openers like "Looking to upgrade your home" or "Your home deserves the best"
+- Each post must make ONE specific point: a project breakdown, homeowner tip, seasonal advice, or service explanation
+${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. This post must feel distinct from that — different angle, different opening, different structure.` : ''}
+
+Return only the blog post text with markdown formatting.`;
+}
+
 function buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy) {
   const isPulseforge = company.name.toLowerCase().includes('pulseforge');
   const location = company.location || 'Manchester, NH';
@@ -782,34 +1009,62 @@ ${draft}`
   return parseScoreJson(message.content[0].text);
 }
 
+function validateDraftForClient(draft, channel) {
+  if (CLIENT_ID !== 2) return [];
+
+  const text = String(draft || '');
+  const checks = [
+    { label: 'mentions Pulseforge', pattern: /\bpulseforge\b/i },
+    { label: 'mentions AI', pattern: /\bAI\b/i },
+    { label: 'mentions automation', pattern: /\bautomation\b|\bautomated\b|\bautomate\b/i },
+    { label: 'mentions marketing agency', pattern: /\bmarketing agency\b|\bmarketers?\b/i },
+    { label: 'includes pricing specifics', pattern: /\$\s*\d|\b\d+(?:,\d{3})*(?:\.\d{2})?\s*(?:dollars|bucks)\b|\b\d+%\b/i },
+    { label: 'uses negative competitor framing', pattern: /\bcompetitors?\b|\bcut corners\b|\brip(?:s|ped)? off\b|\bbad contractors?\b|\bcheap contractors?\b/i },
+  ];
+
+  const issues = checks
+    .filter(check => check.pattern.test(text))
+    .map(check => check.label);
+
+  if (channel === 'linkedin_page' || channel === 'linkedin_personal') {
+    issues.push('LinkedIn content is disabled for MSHI');
+  }
+
+  return issues;
+}
+
 async function generatePost(company, contentType, channel) {
   const verticalCtx = getVerticalContext(company.industry);
-  const location = company.location || 'Manchester, NH';
+  const isMshi = CLIENT_ID === 2;
+  const location = company.location || (isMshi ? 'Charleston WV' : 'Manchester, NH');
   const lastContentType = await getLastContentType(company.name, channel);
   const recentThemes = await getRecentThemes(channel);
   const isPulseforge = isPulseforgeCompany(company);
   const recentPublishedAngles = await getRecentPublishedAngles();
-  const topicAngle = isPulseforge ? getPulseforgeTopicAngle(new Date(), channel) : null;
-  const blogCloser = channel === 'blog' ? getBlogCloser(channel) : null;
-  const facebookCta = channel === 'facebook_page' ? getFacebookCta(channel) : null;
-  const channelStrategy = buildChannelStrategyBlock(channel, topicAngle);
-  const clientContext = CLIENT_ID === 2 ? `
-
-MSHI CLIENT CONTEXT:
-- Client: Mountain State Home Innovations, locally owned WV contractor run by Brad and Dustin
-- Tone: energetic, professional, personable, not corporate
-- Themes: ${CLIENT_CONFIG?.paige_themes || 'seasonal exterior tips, project spotlights, before/after features, technical tips, emergency repair awareness'}
-- Lead with specific tips, outcomes, project scenarios, communication, reliability, and owner-done work
-- Reference WV locations naturally only when relevant
-- Never attack competitors or mention negative customer experiences
-- License WV065578 may be used in trust-building posts` : '';
-  const systemPrompt = `${buildContentRules(recentThemes, recentPublishedAngles, topicAngle)}${clientContext}`;
+  const topicAngle = isMshi
+    ? getMshiTopicAngle(new Date(), channel)
+    : isPulseforge
+      ? getPulseforgeTopicAngle(new Date(), channel)
+      : null;
+  const blogCloser = channel === 'blog'
+    ? (isMshi ? getMshiCta(channel) : getBlogCloser(channel))
+    : null;
+  const facebookCta = channel === 'facebook_page'
+    ? (isMshi ? getMshiCta(channel) : getFacebookCta(channel))
+    : null;
+  const mshiCta = isMshi ? getMshiCta(channel) : null;
+  const channelStrategy = isMshi
+    ? buildMshiChannelStrategyBlock(channel, topicAngle)
+    : buildChannelStrategyBlock(channel, topicAngle);
+  const systemPrompt = isMshi
+    ? buildMshiContentRules(recentThemes, recentPublishedAngles, topicAngle)
+    : buildContentRules(recentThemes, recentPublishedAngles, topicAngle);
 
   if (lastContentType) {
     console.log(`  [variety] Last ${channel} post type: ${lastContentType} → generating: ${contentType}`);
   }
   console.log(`  [themes] Recent openings checked: ${recentThemes.openings.length}; patterns: ${recentThemes.patterns.length}`);
-  if (isPulseforge && topicAngle) {
+  if ((isPulseforge || isMshi) && topicAngle) {
     console.log(`  [topic] ${topicAngle.label}`);
   }
   if (blogCloser) {
@@ -820,57 +1075,90 @@ MSHI CLIENT CONTEXT:
   }
   console.log(`  [memory] Recent published angles checked: ${recentPublishedAngles.length}`);
 
-  const prompt = channel === 'google_business'
-    ? buildGooglePrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy)
-    : channel === 'blog'
-      ? buildBlogPrompt(company, contentType, verticalCtx, lastContentType, blogCloser, channelStrategy)
-      : channel === 'linkedin_personal'
-        ? buildLinkedInPersonalPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy)
-      : channel === 'linkedin_page'
-        ? buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy)
-        : buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy, facebookCta);
+  if (isMshi && !MSHI_CHANNELS.includes(channel)) {
+    throw new Error(`MSHI does not generate ${channel} content`);
+  }
+
+  const prompt = isMshi
+    ? channel === 'google_business'
+      ? buildMshiGooglePrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy, mshiCta)
+      : channel === 'blog'
+        ? buildMshiBlogPrompt(company, contentType, verticalCtx, lastContentType, blogCloser, channelStrategy)
+        : buildMshiFacebookPrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy, facebookCta)
+    : channel === 'google_business'
+      ? buildGooglePrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy)
+      : channel === 'blog'
+        ? buildBlogPrompt(company, contentType, verticalCtx, lastContentType, blogCloser, channelStrategy)
+        : channel === 'linkedin_personal'
+          ? buildLinkedInPersonalPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy)
+        : channel === 'linkedin_page'
+          ? buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy)
+          : buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy, facebookCta);
 
   const firstDraft = await createDraft(prompt, systemPrompt, channel);
   const firstScore = await scoreDraft(firstDraft, recentPublishedAngles);
+  const firstValidationIssues = validateDraftForClient(firstDraft, channel);
   let finalDraft = firstDraft;
   let finalScore = firstScore;
+  let finalValidationIssues = firstValidationIssues;
   let regenerated = false;
 
-  if (firstScore.total < MIN_QUALITY_SCORE || firstScore.hook_strength < MIN_HOOK_SCORE) {
+  if (firstValidationIssues.length || firstScore.total < MIN_QUALITY_SCORE || firstScore.hook_strength < MIN_HOOK_SCORE) {
     regenerated = true;
-    console.log(`  [quality] Score ${firstScore.total}/30, regenerating for ${firstScore.weak_dimension}`);
-    const regenPrompt = `${prompt}
+    if (firstValidationIssues.length) {
+      console.log(`  [validation] Regenerating for MSHI rules: ${firstValidationIssues.join(', ')}`);
+    } else {
+      console.log(`  [quality] Score ${firstScore.total}/30, regenerating for ${firstScore.weak_dimension}`);
+    }
 
-Your previous draft scored ${firstScore.hook_strength}/10 on hook strength. Reason: ${firstScore.reason}.
+    const regenPrompt = isMshi
+      ? [
+          prompt,
+          '',
+          `Your previous draft failed these MSHI validation rules: ${firstValidationIssues.join(', ') || 'quality threshold'}.`,
+          `Your previous draft scored ${firstScore.total}/30 overall and ${firstScore.hook_strength}/10 on hook strength. Reason: ${firstScore.reason}.`,
+          '',
+          'Rewrite it with a completely different opening line and keep it specific to Brad, Dustin, Mountain State Home Innovations, and West Virginia homeowners.',
+          'Do not mention Pulseforge, AI, automation, marketing, pricing, competitors, or LinkedIn.',
+          'Do not include dollar amounts, percentages, package prices, or negative comparisons.',
+          `Use today's MSHI topic bucket: ${topicAngle ? topicAngle.label + ': ' + topicAngle.guidance : 'the most distinct available MSHI angle'}.`,
+          '',
+          'Return only the rewritten content.',
+        ].join('\n')
+      : [
+          prompt,
+          '',
+          `Your previous draft scored ${firstScore.hook_strength}/10 on hook strength. Reason: ${firstScore.reason}.`,
+          '',
+          'The first line must create a reason to keep reading. It should be specific, surprising, or create a gap the reader wants to close.',
+          'No generic observations. No "most business owners." No "running a small business."',
+          'Do not use competitor comparison hooks, lead response rate statistics, "your competitor just", "40% of leads", or "follow-up speed" angles.',
+          `Use today's topic bucket instead: ${topicAngle ? topicAngle.label + ': ' + topicAngle.guidance : 'the most distinct available angle'}.`,
+          '',
+          'Return only the rewritten post text.',
+        ].join('\n');
 
-A strong hook is the ONLY thing that matters in the first line. Here are examples of strong vs weak:
-
-WEAK: "We help local businesses stay on top of their marketing."
-WEAK: "Running a small business is tough, especially when it comes to marketing."
-WEAK: "Most business owners don't realize how much time they spend on marketing."
-
-STRONG: "A cleaning company owner can miss three booking requests before lunch without ever noticing the pattern."
-STRONG: "The phone going quiet is not always a demand problem."
-STRONG: "One tiny handoff between inbox and calendar can decide whether a lead turns into revenue."
-
-The first line must create a reason to keep reading. It should be specific, surprising, or create a gap the reader wants to close. No generic observations. No "most business owners." No "running a small business."
-Do not use competitor comparison hooks, lead response rate statistics, "your competitor just", "40% of leads", or "follow-up speed" angles. Use today's topic bucket instead: ${topicAngle ? `${topicAngle.label}: ${topicAngle.guidance}` : 'the most distinct available angle'}.
-
-Rewrite the post with a completely different opening line that hits one of these patterns:
-- A specific operational detail ("the missed handoff between inbox and calendar")
-- A quiet business problem ("the phone is quiet but the system is still working")
-- A counterintuitive claim ("the businesses winning aren't spending more on ads")
-- A direct question ("which part of the follow-up process should not depend on you?")
-
-Return only the rewritten post text.`;
     const secondDraft = await createDraft(regenPrompt, systemPrompt, channel);
     const secondScore = await scoreDraft(secondDraft, recentPublishedAngles);
-    if (secondScore.total > firstScore.total) {
+    const secondValidationIssues = validateDraftForClient(secondDraft, channel);
+    if (firstValidationIssues.length) {
+      if (secondValidationIssues.length) {
+        throw new Error(`MSHI content failed validation: ${secondValidationIssues.join(', ')}`);
+      }
       finalDraft = secondDraft;
       finalScore = secondScore;
+      finalValidationIssues = secondValidationIssues;
+    } else if (!secondValidationIssues.length && secondScore.total > firstScore.total) {
+      finalDraft = secondDraft;
+      finalScore = secondScore;
+      finalValidationIssues = secondValidationIssues;
     }
   } else {
     console.log(`  [quality] Score ${firstScore.total}/30`);
+  }
+
+  if (finalValidationIssues.length) {
+    throw new Error(`MSHI content failed validation: ${finalValidationIssues.join(', ')}`);
   }
 
   return { content: finalDraft, quality: finalScore, regenerated };
@@ -1014,7 +1302,9 @@ async function processRegenerateTriggers() {
     }
 
     for (const company of clients) {
-      if (channel === 'linkedin_personal' && (CLIENT_ID !== 1 || !isPulseforgeCompany(company))) {
+      const allowedChannels = getChannelsForCompany(company);
+      if (!allowedChannels.includes(channel)) {
+        console.log(`  [regenerate] skipping ${company.name}/${channel}: channel disabled for client ${CLIENT_ID}`);
         continue;
       }
       const contentType = await pickContentType(company.name, channel, company.id);
@@ -1066,9 +1356,7 @@ async function run() {
   CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
   if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
   if (CLIENT_ID === 2 && !CLIENT_CONFIG.facebook_url) {
-    console.log('MSHI Paige disabled until Facebook page is created and connected.');
-    await logRun('success', { client_id: CLIENT_ID, skipped: 'facebook_page_missing' });
-    return;
+    console.log('MSHI Facebook page is not connected yet; Paige will still queue Facebook, Google Business, and blog drafts for approval.');
   }
   console.log('-- CLEANUP QUERY (run manually in psql to remove existing duplicates) --');
   console.log(`DELETE FROM pending_comments
