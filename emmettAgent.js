@@ -347,11 +347,11 @@ Pulseforge
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Sent you a note a few days ago. Wanted to follow up once before moving on.
+Following up in case my last note got buried.
 
-The salons I work with are not struggling. They are talented and their existing clients love them. The challenge is always the same: not enough time between appointments to market consistently.
+What I build for salons: automated follow-up that re-engages lapsed clients, captures new ones from your Google listing, and keeps your chair full without you chasing anyone.
 
-If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
+If you want to see what that looks like for {{business_name}}, just reply here — I'll have a free mockup to you same day.
 
 Jacob`
     },
