@@ -509,7 +509,7 @@ router.put('/api/prospects/:id', requireOperator, async (req, res) => {
 
     if (has('status')) {
       const status = String(req.body.status || '').toLowerCase();
-      if (!['cold', 'warm', 'contacted', 'booked', 'closed', 'hot', 'dead'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+      if (!['cold', 'contacted', 'warm', 'dead', 'disqualified', 'closed'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
       addProspectField('status', status);
     }
 
@@ -869,7 +869,7 @@ router.patch('/api/prospects/:id/status', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const status = String(req.body.status || '').toLowerCase();
-    if (!['cold', 'warm', 'contacted', 'booked', 'closed', 'hot', 'dead'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    if (!['cold', 'contacted', 'warm', 'dead', 'disqualified', 'closed'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
     const result = await pool.query(
       'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3 RETURNING id',
       [status, req.params.id, clientId]

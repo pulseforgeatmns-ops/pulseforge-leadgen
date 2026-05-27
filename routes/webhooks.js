@@ -46,10 +46,10 @@ async function checkAndUpdateWarmStatus(prospectId, email, clientId) {
     const { opens_14d, clicks_all } = res.rows[0];
     const opens  = parseInt(opens_14d  || 0);
     const clicks = parseInt(clicks_all || 0);
-    if (clicks >= 1 || opens >= 3) {
+    if (clicks >= 1 || opens >= 2) {
       const upd = await pool.query(
         `UPDATE prospects SET status = 'warm', updated_at = NOW()
-         WHERE id = $1 AND client_id = $2 AND status = 'cold' RETURNING id`,
+         WHERE id = $1 AND client_id = $2 AND status IN ('cold', 'contacted') RETURNING id`,
         [prospectId, clientId]
       );
       if (upd.rows.length > 0) {
@@ -207,11 +207,13 @@ router.post('/webhooks/brevo', (req, res) => {
       if (['email_bounced', 'email_spam', 'email_unsubscribed'].includes(actionType)) {
         await pool.query(
           `UPDATE prospects
-           SET do_not_contact = true, updated_at = NOW()
+           SET do_not_contact = true,
+               status = CASE WHEN status = 'closed' THEN status ELSE 'dead' END,
+               updated_at = NOW()
            WHERE LOWER(email) = $1 AND client_id = $2`,
           [email, prospect.client_id]
         );
-        console.log(`[Riley] ${email} marked do_not_contact (${event})`);
+        console.log(`[Riley] ${email} marked do_not_contact + dead (${event})`);
       }
 
       if (['email_opened', 'email_clicked'].includes(actionType)) {

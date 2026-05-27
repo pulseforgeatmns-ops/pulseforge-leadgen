@@ -1346,6 +1346,14 @@ async function run(context = {}) {
         useWarm ? { sequence: 'warm_outreach' } : { step: step.day, sequence: sequenceName === 're_engagement' ? 're_engagement' : 'cold_outreach' },
         'neutral'
       );
+      if (step.day === 0 && !useWarm) {
+        const pool = require('./db');
+        await pool.query(
+          `UPDATE prospects SET status = 'contacted', updated_at = NOW()
+           WHERE id = $1 AND client_id = $2 AND status = 'cold'`,
+          [prospect.id, CLIENT_ID]
+        );
+      }
       verticalCounts[vertical]++;
       sent++;
       console.log('Touchpoint logged.\n');

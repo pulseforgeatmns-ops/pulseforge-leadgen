@@ -15,7 +15,7 @@ async function loadPipelineContext(clientId) {
         COUNT(*)::int AS total,
         COUNT(*) FILTER (WHERE status = 'cold')::int AS cold,
         COUNT(*) FILTER (WHERE status = 'warm')::int AS warm,
-        COUNT(*) FILTER (WHERE status = 'hot')::int AS hot,
+        COUNT(*) FILTER (WHERE is_hot = true)::int AS hot,
         COUNT(*) FILTER (WHERE status = 'dead')::int AS dead,
         COUNT(*) FILTER (WHERE COALESCE(setter_visible, false) = true)::int AS setter_visible,
         COUNT(*) FILTER (WHERE setter_status = 'booked')::int AS booked,

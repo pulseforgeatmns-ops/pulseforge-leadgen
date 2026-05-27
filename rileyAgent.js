@@ -325,17 +325,22 @@ async function updateProspectFromReply(prospect, classification) {
   const pool = require('./db');
   if (classification === 'warm') {
     await pool.query(
-      'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3',
-      ['warm', prospect.id, CLIENT_ID]
+      `UPDATE prospects SET status = 'warm', updated_at = NOW()
+       WHERE id = $1 AND client_id = $2 AND status <> 'closed'`,
+      [prospect.id, CLIENT_ID]
     );
     console.log(`  [Riley] ${prospect.email} upgraded to warm`);
   }
   if (classification === 'unsubscribe') {
     await pool.query(
-      'UPDATE prospects SET do_not_contact = true, updated_at = NOW() WHERE id = $1 AND client_id = $2',
+      `UPDATE prospects
+       SET do_not_contact = true,
+           status = CASE WHEN status = 'closed' THEN status ELSE 'dead' END,
+           updated_at = NOW()
+       WHERE id = $1 AND client_id = $2`,
       [prospect.id, CLIENT_ID]
     );
-    console.log(`  [Riley] ${prospect.email} marked do_not_contact`);
+    console.log(`  [Riley] ${prospect.email} marked do_not_contact + dead`);
   }
   if (classification === 'not_now') {
     await pool.query(`
@@ -603,6 +608,34 @@ async function processEventNotifications() {
   await processHotSignalActions();
 }
 
+// Reset prospects that were contacted but have shown no touchpoint activity
+// in 21+ days back to 'cold' so they re-enter the cold outreach pool.
+async function resetStaleContactedProspects() {
+  const pool = require('./db');
+  try {
+    const res = await pool.query(`
+      UPDATE prospects p
+      SET status = 'cold', updated_at = NOW()
+      WHERE p.client_id = $1
+        AND p.status = 'contacted'
+        AND NOT EXISTS (
+          SELECT 1 FROM touchpoints t
+          WHERE t.prospect_id = p.id
+            AND t.client_id = p.client_id
+            AND t.created_at > NOW() - INTERVAL '21 days'
+        )
+      RETURNING p.id
+    `, [CLIENT_ID]);
+    if (res.rows.length > 0) {
+      console.log(`[Riley] Reset ${res.rows.length} stale contacted prospect(s) to cold (21d no activity)`);
+      await db.logAgentAction(AGENT_NAME, 'stale_contacted_reset', null, null,
+        { reset_count: res.rows.length, client_id: CLIENT_ID }, 'success').catch(() => {});
+    }
+  } catch (err) {
+    console.error('[Riley] resetStaleContactedProspects error:', err.message);
+  }
+}
+
 // ── MARK READ ─────────────────────────────────────────────────────────
 async function markAsRead(auth, messageId) {
   const gmail = google.gmail({ version: 'v1', auth });
@@ -627,6 +660,9 @@ async function run() {
   console.log('─────────────────────────────────\n');
   const clientConfig = await getClientConfig(CLIENT_ID);
   if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
+
+  await resetStaleContactedProspects();
+
   if (CLIENT_ID !== 1) {
     console.log('Riley currently monitors jacob@gopulseforge.com only. MSHI triage is manual until forwarding or a second OAuth is configured.');
     return;

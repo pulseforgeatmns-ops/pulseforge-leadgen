@@ -3473,8 +3473,8 @@ let _currentUserRole = null;
 let _pipelineProspects = [];
 let _pipelineDraggedProspectId = null;
 let _pipelineDroppedProspectId = null;
-const PROSPECT_PIPELINE_STAGES = ['cold', 'warm', 'contacted', 'booked', 'closed'];
-const PROSPECT_PIPELINE_LABELS = { cold: 'Cold', warm: 'Warm', contacted: 'Contacted', booked: 'Booked', closed: 'Closed' };
+const PROSPECT_PIPELINE_STAGES = ['cold', 'contacted', 'warm', 'closed'];
+const PROSPECT_PIPELINE_LABELS = { cold: 'Cold', contacted: 'Contacted', warm: 'Warm', closed: 'Closed' };
 const DETAIL_CACHE_TTL = 30000;
 const THEME_KEY = 'pulseforge-theme';
 
@@ -4502,7 +4502,7 @@ function prospectModalHtml(p) {
       <button class="pm-action-btn" type="button" id="pmEditProspect">Edit Prospect</button>
       <button class="pm-action-btn" type="button" id="pmAssignSetter">Assign to Setter</button>
       <select class="pm-select" id="pmStatusSelect">
-        ${['cold','warm','contacted','booked','closed','hot','dead'].map(s => `<option value="${s}" ${s === (p.status || '').toLowerCase() ? 'selected' : ''}>${s}</option>`).join('')}
+        ${['cold','contacted','warm','closed','dead','disqualified'].map(s => `<option value="${s}" ${s === (p.status || '').toLowerCase() ? 'selected' : ''}>${s}</option>`).join('')}
       </select>
       <button class="pm-action-btn" type="button" id="pmDnc">Mark do not contact</button>
       <button class="pm-action-btn" type="button" onclick="openProspectsFor('${_esc(p.id)}')">View in prospects tab →</button>
@@ -4947,7 +4947,7 @@ function _icpClass(score) {
 
 function _statusBadge(status) {
   const s = (status || 'cold').toLowerCase();
-  const cls = ['hot', 'warm', 'booked', 'closed', 'contacted'].includes(s) ? 'pt-warm' : 'pt-cold';
+  const cls = ['warm', 'closed', 'contacted'].includes(s) ? 'pt-warm' : 'pt-cold';
   return `<span class="pt-badge ${cls}">${s}</span>`;
 }
 
@@ -5172,7 +5172,7 @@ function openProspectEdit(id) {
         <div class="prospect-edit-field">
           <label for="peStatus">Status</label>
           <select id="peStatus" name="status">
-            ${['cold','warm','contacted','booked','closed','dead'].map(s => `<option value="${s}" ${s === original.status ? 'selected' : ''}>${s}</option>`).join('')}
+            ${['cold','contacted','warm','closed','dead','disqualified'].map(s => `<option value="${s}" ${s === original.status ? 'selected' : ''}>${s}</option>`).join('')}
           </select>
         </div>
         <label class="prospect-edit-field prospect-edit-check">
@@ -6212,6 +6212,8 @@ function normalizeProspectPipelineStatus(status) {
   const raw = String(status || 'cold').toLowerCase();
   if (PROSPECT_PIPELINE_STAGES.includes(raw)) return raw;
   if (raw === 'hot') return 'warm';
+  if (raw === 'booked') return 'closed';
+  if (raw === 'dead' || raw === 'disqualified') return 'cold';
   return 'cold';
 }
 

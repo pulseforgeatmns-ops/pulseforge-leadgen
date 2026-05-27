@@ -212,6 +212,29 @@ async function ensureClientArchitecture() {
     await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS client_id integer REFERENCES clients(id) DEFAULT 1`);
     await pool.query(`UPDATE ${table} SET client_id = 1 WHERE client_id IS NULL`);
   }
+
+  await ensureProspectStatusConstraint();
+}
+
+// Canonical prospect.status domain. 'hot' is no longer a status (use is_hot);
+// 'booked' lives in setter_status/closer pipeline, not prospects.status.
+const PROSPECT_STATUSES = ['cold', 'contacted', 'warm', 'dead', 'disqualified', 'closed'];
+
+async function ensureProspectStatusConstraint() {
+  // Normalize any legacy/out-of-domain values before tightening the constraint
+  // so the ADD CONSTRAINT cannot fail on existing rows.
+  await pool.query(`UPDATE prospects SET status = 'warm' WHERE status = 'hot'`);
+  await pool.query(`UPDATE prospects SET status = 'closed' WHERE status = 'booked'`);
+  await pool.query(
+    `UPDATE prospects SET status = 'cold' WHERE status IS NOT NULL AND NOT (status = ANY ($1))`,
+    [PROSPECT_STATUSES]
+  );
+
+  await pool.query(`ALTER TABLE prospects DROP CONSTRAINT IF EXISTS prospects_status_check`);
+  await pool.query(
+    `ALTER TABLE prospects ADD CONSTRAINT prospects_status_check
+       CHECK (status = ANY (ARRAY['cold','contacted','warm','dead','disqualified','closed']))`
+  );
 }
 
 async function getClientConfig(clientId = DEFAULT_CLIENT_ID) {
@@ -233,7 +256,9 @@ async function getActiveClients() {
 module.exports = {
   DEFAULT_CLIENT_ID,
   CLIENT_SCOPED_TABLES,
+  PROSPECT_STATUSES,
   ensureClientArchitecture,
+  ensureProspectStatusConstraint,
   getActiveClients,
   getClientConfig,
   getRequestClientId,
