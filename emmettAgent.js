@@ -153,54 +153,44 @@ Mountain State Home Innovations`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-I spent years running restaurants and a cleaning company in New England. The hardest part wasn't the work — it was staying visible when I was too busy doing the work to market it.
+Most cleaning companies in Manchester are getting leads — the problem is usually what happens after. Inquiry comes in, owner's on a job, nobody follows up fast enough, and the lead books somebody else.
 
-Most owners I talk to are in the same spot. Great business, not enough time to stay in front of new customers consistently.
+Is that something you're running into at {{business_name}}, or have you got a system that keeps up with it?
 
-I built a system that handles that automatically — finds local prospects, reaches out on your behalf, keeps your name visible between jobs. It runs in the background while you run the business.
-
-Is bringing in new customers consistently something you're actively working on right now?
-
-Jacob Maynard`
+Jacob Maynard
+Pulseforge
+(603) 293-5816`
     },
     {
       day: 4,
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Sent you a note a few days ago — wanted to follow up once before moving on.
+Didn't hear back — totally fine, just wanted to make sure my last note landed.
 
-I know you're busy. That's kind of the whole point.
+One thing I've been building for cleaning companies in Southern NH: a system that texts new leads within 2 minutes, follows up automatically if they don't respond, and books appointments without the owner touching anything.
 
-The businesses I work with aren't struggling — they're good at what they do. They just don't have time to chase new customers on top of everything else. That's the gap I fill.
+If that's something worth a look for {{business_name}}, just reply here and I'll put together a free mockup same day.
 
-If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
-
-Jake`
+Jacob`
     },
     {
       day: 8,
-      subject: "what's actually working in Manchester right now",
+      subject: "quick question about {{business_name}}",
       body: `Hi {{first_name}},
 
-One thing I'm seeing across local businesses right now — the ones growing consistently aren't spending more on ads. They're just staying in front of people longer than their competition.
+One last question — are you currently doing anything to follow up with leads automatically, or is it still mostly manual when you get a chance?
 
-Most owners go quiet between jobs. The ones winning don't.
+Happy to show you what's working for cleaning companies in Southern NH. Just reply here.
 
-I help businesses like {{business_name}} stay visible automatically — no extra time required on your end.
-
-Are you currently doing anything to stay in front of new customers consistently, or is it mostly word of mouth at this point?
-
-Jake`
+Jacob`
     },
     {
       day: 13,
       subject: "closing the loop",
       body: `Hi {{first_name}},
 
-Last note from me — I don't want to clutter your inbox.
-
-If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
+I won't keep filling up your inbox. If the timing's ever right, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -342,42 +332,35 @@ gopulseforge.com`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-I work with local service businesses in Southern NH on one specific problem: staying visible to new customers without adding more to your plate.
+Salons in Manchester live and die by repeat bookings and referrals — but the ones growing fastest right now are the ones capturing new clients automatically between appointments.
 
-Most salon owners I talk to are fully booked with existing clients but not consistently bringing in new ones. The referral pipeline is unpredictable and there is never enough time to market between appointments.
-
-I built a system that handles outreach automatically. It finds local prospects, reaches out on your behalf, and keeps your name in front of people who are actively looking for a stylist. It runs in the background while you focus on clients.
-
-Is bringing in new clients consistently something you are actively working on right now?
+Is bringing in new clients consistently something you're actively working on at {{business_name}}, or is it mostly word of mouth at this point?
 
 Jacob Maynard
-Pulseforge`
+Pulseforge
+(603) 293-5816`
     },
     {
       day: 4,
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Sent you a note a few days ago. Wanted to follow up once before moving on.
+Following up in case my last note got buried.
 
-The salons I work with are not struggling. They are talented and their existing clients love them. The challenge is always the same: not enough time between appointments to market consistently.
+What I build for salons: automated follow-up that re-engages lapsed clients, captures new ones from your Google listing, and keeps your chair full without you chasing anyone.
 
-If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
+If you want to see what that looks like for {{business_name}}, just reply here — I'll have a free mockup to you same day.
 
 Jacob`
     },
     {
       day: 8,
-      subject: "what is actually working in Southern NH right now",
+      subject: "quick question about {{business_name}}",
       body: `Hi {{first_name}},
 
-One thing I am seeing across local salons right now. The ones growing consistently are not running more ads. They are just staying in front of new clients longer than their competition.
+One last question — are you currently doing anything to bring in new clients outside of referrals and social media, or is that still the main source?
 
-Most stylists go quiet between bookings. The ones building a waitlist do not.
-
-I help salons like {{business_name}} stay visible automatically. No extra time required on your end.
-
-Are you currently doing anything to bring in new clients consistently, or is it mostly referrals and repeat bookings?
+Happy to show you what else is working for salons in Southern NH right now. Just reply here.
 
 Jacob`
     },
@@ -386,9 +369,7 @@ Jacob`
       subject: "closing the loop",
       body: `Hi {{first_name}},
 
-Last note from me. I do not want to clutter your inbox.
-
-If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
+Last note from me. If the timing ever works out, just reply — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -652,42 +633,35 @@ gopulseforge.com`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-I work with local auto repair shops in Southern NH on one specific problem: keeping the service bay full without waiting for walk-ins and hoping word of mouth is enough.
+Auto shops in Manchester are busier than ever right now — but the ones adding real revenue aren't just doing more jobs, they're capturing customers who never came back after the first visit.
 
-Most shop owners I talk to are excellent mechanics with loyal repeat customers. The challenge is not the quality of work. It is staying consistently in front of local car owners who have not found them yet.
-
-I built a system that handles that automatically. It finds local car owners in your area, reaches out on your behalf, and keeps {{business_name}} visible between service intervals. It runs in the background while you run the shop.
-
-Is building a steadier flow of new customers something you are working on right now?
+Is building a steadier flow of new and returning customers something you're working on at {{business_name}}, or is it pretty much steady as she goes?
 
 Jacob Maynard
-Pulseforge`
+Pulseforge
+(603) 293-5816`
     },
     {
       day: 4,
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Sent you a note a few days ago. Wanted to follow up once before moving on.
+Just following up — didn't want my last note to get lost.
 
-The shops I work with are not struggling. They do honest work and their regulars keep coming back. The gap is always the same: not enough new customers finding them between the ones who already know them.
+What I build for auto shops: automated outreach that brings back lapsed customers, follows up on estimates that went quiet, and keeps new leads from slipping through.
 
-If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
+If you want to see a free mockup of what that looks like for {{business_name}}, just reply here and I'll have it to you same day.
 
 Jacob`
     },
     {
       day: 8,
-      subject: "what is actually working for auto shops in Southern NH",
+      subject: "quick question about {{business_name}}",
       body: `Hi {{first_name}},
 
-One pattern I keep seeing across local auto shops right now. The ones with bays consistently full are not spending more on ads. They are just staying in front of local car owners longer than the shop down the street.
+Last question — are you currently doing anything to follow up with customers after a job, or is it mostly repeat and referral when it happens?
 
-Most shops wait for the phone to ring. The ones with no open slots do not.
-
-I help shops like {{business_name}} stay visible automatically. No extra time on your end.
-
-Are you currently doing anything to reach new customers consistently, or is it mostly repeat and referral?
+Happy to show you what's working for shops in Southern NH. Just reply here.
 
 Jacob`
     },
@@ -696,9 +670,7 @@ Jacob`
       subject: "closing the loop",
       body: `Hi {{first_name}},
 
-Last note from me. I do not want to clutter your inbox.
-
-If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
+Won't keep filling up your inbox. If the timing ever works out, just reply — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
@@ -817,6 +789,10 @@ gopulseforge.com`
     }
   ]
 };
+
+// Fallback step used when a clicked/warm prospect is selected. Defaults to the
+// cleaning Day 4 step until a dedicated warm sequence is defined.
+const WARM_STEP = SEQUENCES.cleaning.find(step => step.day === 4);
 
 function fillTemplate(template, prospect) {
   const rawName = prospect.first_name || prospect.name?.split(' ')[0] || '';
