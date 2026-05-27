@@ -334,16 +334,13 @@ gopulseforge.com`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-I work with local service businesses in Southern NH on one specific problem: staying visible to new customers without adding more to your plate.
+Salons in Manchester live and die by repeat bookings and referrals — but the ones growing fastest right now are the ones capturing new clients automatically between appointments.
 
-Most salon owners I talk to are fully booked with existing clients but not consistently bringing in new ones. The referral pipeline is unpredictable and there is never enough time to market between appointments.
-
-I built a system that handles outreach automatically. It finds local prospects, reaches out on your behalf, and keeps your name in front of people who are actively looking for a stylist. It runs in the background while you focus on clients.
-
-Is bringing in new clients consistently something you are actively working on right now?
+Is bringing in new clients consistently something you're actively working on at {{business_name}}, or is it mostly word of mouth at this point?
 
 Jacob Maynard
-Pulseforge`
+Pulseforge
+(603) 293-5816`
     },
     {
       day: 4,
