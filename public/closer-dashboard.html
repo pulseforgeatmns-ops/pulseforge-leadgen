@@ -77,14 +77,20 @@ body.light-mode .ck-card .ck-notes { color:rgba(26,26,24,0.72); }
 .m-sheet .actions { display:flex; flex-direction:column; gap:0.6rem; margin-top:1rem; }
 .m-sheet .actions button { min-height:48px; font-size:0.9rem; width:100%; }
 /* Hamburger / drawer base (mobile only) */
-.mobile-hamburger, .mobile-backdrop, .nav-close { display:none; }
+.mobile-hamburger, .mobile-backdrop, .nav-close, .drawer-logout { display:none; }
+.status.state-sync { color:var(--gray-light); background:rgba(107,127,160,0.08); border-color:var(--border); }
+.status.state-reconnecting { color:var(--amber); background:rgba(255,214,0,0.1); border-color:rgba(255,214,0,0.25); }
+.status.state-error { color:var(--red); background:rgba(255,59,92,0.1); border-color:rgba(255,59,92,0.25); }
 @media (max-width: 980px) { .topbar { flex-wrap:wrap; height:auto; padding:0.8rem 1rem; } main { padding:1rem; } }
 @media (max-width: 768px) {
   html, body { overflow-x:hidden; }
   main { padding:1rem; }
-  .topbar { flex-wrap:nowrap; height:56px; padding:0 0.9rem; gap:0.6rem; }
+  /* Drop sticky stacking context so the fixed nav drawer isn't trapped behind the backdrop */
+  .topbar { flex-wrap:nowrap; height:56px; padding:0 0.9rem; gap:0.6rem; position:static; z-index:auto; }
   .logo { font-size:1.2rem; letter-spacing:2px; }
   .right { gap:0.6rem; }
+  .right a[href="/logout"] { display:none; }
+  .drawer-logout { display:flex; align-items:center; width:100%; min-height:48px; padding:14px; margin-top:0.5rem; border-top:1px solid var(--border); border-radius:0; font-size:0.95rem; letter-spacing:1px; color:var(--gray-light); }
   /* Hamburger */
   .mobile-hamburger { display:flex; align-items:center; justify-content:center; width:44px; height:44px; background:transparent; border:none; color:var(--white); cursor:pointer; flex-shrink:0; padding:0; }
   .mobile-hamburger svg { width:24px; height:24px; }
@@ -130,6 +136,7 @@ body.light-mode .ck-card .ck-notes { color:rgba(26,26,24,0.72); }
     <button class="nav-close" id="navClose" type="button" aria-label="Close menu">&times;</button>
     <button class="tab active" data-tab="pipeline">Pipeline</button>
     <button class="tab" data-tab="commissions">Commissions</button>
+    <a class="drawer-logout" href="/logout">Logout</a>
   </div>
   <div class="right"><div class="status" id="liveState">LIVE</div><button class="theme-toggle" id="themeToggle" type="button" title="Toggle theme">🌙</button><a href="/logout">Logout</a></div>
 </div>
@@ -294,23 +301,49 @@ function renderCommissions() {
   document.getElementById('paidCommission').textContent = money(paid);
   document.getElementById('pendingCommission').textContent = money(pending);
 }
+let _closerRetryTimer = null;
+
+function setLiveState(state) {
+  const el = document.getElementById('liveState');
+  if (!el) return;
+  const labels = { live: 'LIVE', sync: 'SYNC', reconnecting: 'RECONNECTING', error: 'ERROR' };
+  el.textContent = labels[state] || 'LIVE';
+  el.classList.remove('state-error', 'state-reconnecting', 'state-sync');
+  if (state === 'error') el.classList.add('state-error');
+  else if (state === 'reconnecting') el.classList.add('state-reconnecting');
+  else if (state === 'sync') el.classList.add('state-sync');
+}
+
+function scheduleCloserRetry() {
+  if (_closerRetryTimer) return;
+  _closerRetryTimer = setTimeout(() => {
+    _closerRetryTimer = null;
+    setLiveState('reconnecting');
+    loadAll();
+  }, 30000);
+}
+
 async function loadAll() {
-  try {
-    document.getElementById('liveState').textContent = 'SYNC';
-    const [metrics, pipe, comms] = await Promise.all([
-      api('/closer/api/metrics'),
-      api('/closer/api/pipeline'),
-      api('/closer/api/commissions')
-    ]);
-    renderMetrics(metrics);
-    pipeline = pipe || [];
-    commissions = comms || [];
-    renderPipeline();
-    renderCommissions();
-    document.getElementById('liveState').textContent = 'LIVE';
-  } catch (err) {
-    console.error(err);
-    document.getElementById('liveState').textContent = 'ERROR';
+  if (document.getElementById('liveState')?.textContent !== 'RECONNECTING') setLiveState('sync');
+  // Critical = the pipeline (core view). Background = metrics + commissions:
+  // their failures are logged but must not flip the header to ERROR.
+  const [pipeRes, metricsRes, commsRes] = await Promise.allSettled([
+    api('/closer/api/pipeline'),
+    api('/closer/api/metrics'),
+    api('/closer/api/commissions')
+  ]);
+  if (pipeRes.status === 'fulfilled') { pipeline = pipeRes.value || []; renderPipeline(); }
+  if (metricsRes.status === 'fulfilled' && metricsRes.value) renderMetrics(metricsRes.value);
+  if (commsRes.status === 'fulfilled') { commissions = commsRes.value || []; renderCommissions(); }
+  [metricsRes, commsRes].filter(r => r.status === 'rejected')
+    .forEach(r => console.error('[closer] non-critical fetch failed:', r.reason?.message || r.reason));
+  if (pipeRes.status === 'rejected') {
+    console.error('[closer] critical fetch failed:', pipeRes.reason?.message || pipeRes.reason);
+    setLiveState('error');
+    scheduleCloserRetry();
+  } else {
+    if (_closerRetryTimer) { clearTimeout(_closerRetryTimer); _closerRetryTimer = null; }
+    setLiveState('live');
   }
 }
 document.addEventListener('click', async event => {

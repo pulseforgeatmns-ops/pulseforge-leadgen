@@ -50,6 +50,12 @@ body::before { content:''; position:fixed; inset:0; background:repeating-linear-
 .sys-status { display:flex; align-items:center; gap:6px; font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--green); background:var(--green-dim); border:1px solid rgba(0,230,118,0.15); padding:4px 12px; border-radius:99px; white-space:nowrap; }
 .sys-dot { width:5px; height:5px; background:var(--green); border-radius:50%; box-shadow:0 0 8px var(--green); animation:sysPulse 2s ease infinite; }
 @keyframes sysPulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.sys-status.state-sync { color:var(--gray-light); background:rgba(107,127,160,0.08); border-color:var(--border); }
+.sys-status.state-sync .sys-dot { background:var(--gray-light); box-shadow:none; animation:none; }
+.sys-status.state-reconnecting { color:var(--yellow); background:rgba(255,214,0,0.1); border-color:rgba(255,214,0,0.25); }
+.sys-status.state-reconnecting .sys-dot { background:var(--yellow); box-shadow:0 0 8px var(--yellow); animation:sysPulse 1s ease infinite; }
+.sys-status.state-error { color:var(--red); background:rgba(255,59,92,0.1); border-color:rgba(255,59,92,0.25); }
+.sys-status.state-error .sys-dot { background:var(--red); box-shadow:0 0 8px var(--red); animation:none; }
 .clock { font-family:'JetBrains Mono',monospace; font-size:0.72rem; color:var(--gray-light); letter-spacing:2px; }
 .theme-toggle { width:32px; height:32px; border-radius:50%; border:1px solid var(--border); background:rgba(255,255,255,0.04); color:var(--white); display:inline-flex; align-items:center; justify-content:center; cursor:pointer; font-size:0.9rem; transition:all 0.2s; }
 .theme-toggle:hover { border-color:var(--purple-bright); color:var(--purple-bright); }
@@ -216,7 +222,7 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
 .feed-text { font-size:0.73rem; color:rgba(255,255,255,0.6); line-height:1.5; flex:1; min-width:0; }
 .feed-text strong { color:var(--white); font-weight:600; }
 .feed-time { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:var(--gray); margin-top:2px; white-space:nowrap; }
-.mobile-hamburger,.mobile-backdrop,.nav-close,.sheet-handle { display:none; }
+.mobile-hamburger,.mobile-backdrop,.nav-close,.sheet-handle,.drawer-logout { display:none; }
 .m-sheet { position:fixed; left:0; right:0; bottom:0; z-index:1500; background:var(--bg1); border-top:1px solid var(--border); border-radius:18px 18px 0 0; box-shadow:0 -10px 34px rgba(0,0,0,.5); transform:translateY(100%); transition:transform .3s ease; max-height:85vh; overflow-y:auto; padding:1.25rem; }
 .m-sheet.open { transform:translateY(0); }
 .m-sheet-handle { width:42px; height:5px; border-radius:99px; background:var(--gray); margin:0 auto .9rem; }
@@ -250,7 +256,9 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   input, select, textarea { font-size:16px; }
 
   /* Topbar / hamburger */
-  .topbar { height:52px; min-height:52px; flex-wrap:nowrap; padding:0 0.75rem; gap:0.6rem; }
+  /* Drop the stacking context (backdrop-filter + positioned z-index) so the
+     fixed nav drawer is not trapped behind the body-level backdrop. */
+  .topbar { height:52px; min-height:52px; flex-wrap:nowrap; padding:0 0.75rem; gap:0.6rem; position:static; z-index:auto; backdrop-filter:none; -webkit-backdrop-filter:none; }
   .mobile-hamburger { display:flex; align-items:center; justify-content:center; width:44px; height:44px; background:transparent; border:none; color:var(--white); cursor:pointer; flex-shrink:0; padding:0; }
   .mobile-hamburger svg { width:24px; height:24px; }
   .logo { font-size:1.1rem; letter-spacing:2px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -262,6 +270,8 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   .nav-tabs { position:fixed; top:0; left:0; bottom:0; width:82%; max-width:300px; transform:translateX(-100%); transition:transform .28s ease; z-index:1200; background:var(--bg1); box-shadow:0 0 44px rgba(0,0,0,.6); padding:3.25rem 1rem 1rem; flex-direction:column; gap:.35rem; align-items:stretch; margin-left:0; overflow-y:auto; border-radius:0; order:0; }
   .nav-tabs.open { transform:translateX(0); }
   .nav-tab { width:100%; text-align:left; min-height:48px; font-size:0.95rem; padding:14px; display:flex; align-items:center; }
+  .drawer-logout { display:flex; align-items:center; width:100%; min-height:48px; padding:14px; margin-top:0.5rem; border-top:1px solid var(--border); border-radius:0; font-size:0.95rem; letter-spacing:1px; }
+  .topbar-right .logout-link { display:none; }
   .mobile-backdrop { display:block; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:1100; opacity:0; visibility:hidden; transition:opacity .28s,visibility .28s; }
   .mobile-backdrop.open { opacity:1; visibility:visible; }
   .nav-close { display:flex; align-items:center; justify-content:center; position:absolute; top:.5rem; right:.5rem; width:44px; height:44px; background:transparent; border:none; color:var(--white); font-size:2rem; line-height:1; cursor:pointer; }
@@ -374,6 +384,7 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
     <div class="nav-tab" data-tab="pipeline">Pipeline</div>
     <div class="nav-tab" data-tab="activity">Activity</div>
     <div class="nav-tab" data-tab="resources">Resources</div>
+    <a class="drawer-logout logout-link" href="/logout">Logout</a>
   </div>
   <div class="topbar-right">
     <div class="sys-status"><div class="sys-dot"></div><span id="liveState">LIVE</span></div>
@@ -1005,14 +1016,51 @@ async function loadActivity() {
   `).join('');
 }
 
+let _setterRetryTimer = null;
+
+function setLiveState(state) {
+  const el = document.getElementById('liveState');
+  if (!el) return;
+  const wrap = el.closest('.sys-status');
+  const labels = { live: 'LIVE', sync: 'SYNC', reconnecting: 'RECONNECTING', error: 'ERROR' };
+  el.textContent = labels[state] || 'LIVE';
+  if (wrap) {
+    wrap.classList.remove('state-error', 'state-reconnecting', 'state-sync');
+    if (state === 'error') wrap.classList.add('state-error');
+    else if (state === 'reconnecting') wrap.classList.add('state-reconnecting');
+    else if (state === 'sync') wrap.classList.add('state-sync');
+  }
+}
+
+async function runLoaders(loaders) {
+  const results = await Promise.allSettled(loaders.map(fn => fn()));
+  return results.filter(r => r.status === 'rejected').map(r => r.reason);
+}
+
+function scheduleSetterRetry() {
+  if (_setterRetryTimer) return;
+  _setterRetryTimer = setTimeout(() => {
+    _setterRetryTimer = null;
+    setLiveState('reconnecting');
+    refreshAll();
+  }, 30000);
+}
+
 async function refreshAll() {
-  document.getElementById('liveState').textContent = 'SYNC';
-  try {
-    await Promise.all([loadMetrics(), loadTodayStats(), loadFeed(), loadQueue(), loadDue(), loadPipeline(), loadActivity()]);
-    document.getElementById('liveState').textContent = 'LIVE';
-  } catch (err) {
-    console.error(err);
-    document.getElementById('liveState').textContent = 'ERROR';
+  // Critical = core setter data; a failure here surfaces a red ERROR + auto-retry.
+  // Background = supplementary panels; their failures are logged but never flip the header.
+  const critical = [loadMetrics, loadQueue, loadDue, loadPipeline];
+  const background = [loadTodayStats, loadFeed, loadActivity];
+  if (document.getElementById('liveState')?.textContent !== 'RECONNECTING') setLiveState('sync');
+  const [criticalErrors, backgroundErrors] = await Promise.all([runLoaders(critical), runLoaders(background)]);
+  backgroundErrors.forEach(e => console.error('[setter] non-critical fetch failed:', e?.message || e));
+  if (criticalErrors.length) {
+    criticalErrors.forEach(e => console.error('[setter] critical fetch failed:', e?.message || e));
+    setLiveState('error');
+    scheduleSetterRetry();
+  } else {
+    if (_setterRetryTimer) { clearTimeout(_setterRetryTimer); _setterRetryTimer = null; }
+    setLiveState('live');
   }
 }
 

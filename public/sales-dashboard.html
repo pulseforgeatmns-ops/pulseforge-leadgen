@@ -121,10 +121,12 @@ body.light-mode .tabs { background: rgba(0,0,0,0.035); }
   background: var(--bg);
 }
 /* ---------- MOBILE (≤768px): hamburger nav, no overflow ---------- */
-.mobile-hamburger, .mobile-backdrop, .nav-close { display: none; }
+.mobile-hamburger, .mobile-backdrop, .nav-close, .drawer-logout { display: none; }
 @media (max-width: 768px) {
   html, body { overflow-x: hidden; }
-  .topbar { gap: 0.6rem; padding: 0 0.9rem; }
+  /* Drop the positioned stacking context so the fixed nav drawer escapes to the
+     root context and renders above the body-level backdrop. */
+  .topbar { gap: 0.6rem; padding: 0 0.9rem; position: static; z-index: auto; }
   .logo { font-size: 1.1rem; letter-spacing: 2px; }
   .mobile-hamburger {
     display: flex; align-items: center; justify-content: center;
@@ -143,6 +145,7 @@ body.light-mode .tabs { background: rgba(0,0,0,0.035); }
   }
   .tabs.open { transform: translateX(0); }
   .tab { width: 100%; text-align: left; min-height: 48px; font-size: 0.95rem; padding: 14px; }
+  .drawer-logout { display: flex; align-items: center; width: 100%; min-height: 48px; padding: 14px; margin-top: 0.5rem; border-top: 1px solid var(--border); color: var(--gray-light); font-size: 0.95rem; text-decoration: none; font-family: 'JetBrains Mono', monospace; letter-spacing: 1px; text-transform: uppercase; }
   .mobile-backdrop {
     display: block; position: fixed; inset: 0;
     background: rgba(0,0,0,0.55); z-index: 1100;
@@ -172,6 +175,7 @@ body.light-mode .tabs { background: rgba(0,0,0,0.035); }
     <button class="nav-close" id="navClose" type="button" aria-label="Close menu">&times;</button>
     <button class="tab active" type="button" data-panel="setter" role="tab" aria-selected="true">Setter Queue</button>
     <button class="tab" type="button" data-panel="closer" role="tab" aria-selected="false">Closer Pipeline</button>
+    <a class="drawer-logout" href="/logout">Logout</a>
   </div>
   <div class="right">
     <div class="sys-status"><div class="sys-dot"></div><span>SALES MODE</span></div>
