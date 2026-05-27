@@ -2232,12 +2232,187 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
   .pipeline-area { padding: 1rem; }
   .pipeline-grid-4, .pipeline-grid-clients, .agent-health-grid { grid-template-columns: 1fr; }
 }
+
+/* ============================================================
+   MOBILE OPTIMIZATION — phones (320px–768px)
+   Rebuilt responsive layout: off-canvas nav, stacked stats,
+   single-column roster, swipeable kanban, bottom-sheet feed.
+   ============================================================ */
+.mobile-hamburger,
+.sidebar-close,
+.mobile-backdrop,
+.sheet-handle { display: none; }
+
+@media (max-width: 768px) {
+  html, body { overflow: hidden; }
+  body { grid-template-columns: 1fr; }
+  .content-col { grid-column: 1 / -1; }
+
+  /* readable base font, prevent iOS tap-zoom on inputs */
+  input, select, textarea { font-size: 16px; }
+
+  /* ---------- OFF-CANVAS SIDEBAR / HAMBURGER ---------- */
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 82%; max-width: 300px;
+    transform: translateX(-100%);
+    transition: transform 0.28s ease;
+    z-index: 1200;
+    padding: 1.25rem 1rem;
+    box-shadow: 0 0 44px rgba(0,0,0,0.6);
+  }
+  .sidebar.open { transform: translateX(0); }
+  .mobile-backdrop {
+    display: block;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 1100;
+    opacity: 0; visibility: hidden;
+    transition: opacity 0.28s ease, visibility 0.28s ease;
+  }
+  .mobile-backdrop.open { opacity: 1; visibility: visible; }
+  .sidebar-close {
+    display: flex; align-items: center; justify-content: center;
+    position: absolute; top: 0.5rem; right: 0.5rem;
+    width: 44px; height: 44px;
+    background: transparent; border: none;
+    color: var(--text-secondary); font-size: 2rem; line-height: 1;
+    cursor: pointer; z-index: 2;
+  }
+  .mobile-hamburger {
+    display: flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; margin-left: -0.5rem;
+    background: transparent; border: none;
+    color: var(--white); cursor: pointer; flex-shrink: 0;
+  }
+  .mobile-hamburger svg { width: 24px; height: 24px; }
+  .nav-tab { font-size: 0.78rem; padding: 14px; min-height: 48px; }
+  .nav-tab svg { width: 20px; height: 20px; }
+  .sidebar-foot { padding-top: 1rem; }
+  .client-switcher { padding: 11px 14px; }
+  .client-switcher select { font-size: 0.9rem; }
+
+  /* ---------- TOP BAR ---------- */
+  .topbar { height: 56px; padding: 0 0.9rem; gap: 0.55rem; }
+  .greeting { min-width: 0; flex: 1 1 auto; margin-right: 0.4rem; }
+  .greeting-hi { font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .greeting-sub { display: none; }
+  .topbar-right { gap: 0.55rem; }
+  .clock { display: none; }
+  .sys-status { font-size: 0.55rem; padding: 6px 9px; }
+  .theme-toggle { width: 40px; height: 40px; flex-shrink: 0; }
+  .user-avatar { width: 40px; height: 40px; flex-shrink: 0; }
+
+  /* ---------- CONTENT AREAS ---------- */
+  .agents-area, .approvals-area, .actions-area,
+  .prospects-area, .activity-area, .analytics-area, .pipeline-area {
+    padding: 1rem;
+    padding-bottom: 76px; /* clearance for collapsed feed sheet */
+    overflow-x: hidden;
+  }
+  .area-header { flex-direction: column; align-items: flex-start; gap: 0.85rem; margin-bottom: 1.25rem; }
+  .area-title { font-size: 1.6rem; }
+  .area-sub { font-size: 0.7rem; }
+  .area-actions { width: 100%; flex-wrap: wrap; }
+  .btn-run-all, .btn-outline { min-height: 44px; font-size: 0.7rem; padding: 11px 16px; }
+
+  /* ---------- STAT CARDS (single column) ---------- */
+  .stat-row { grid-template-columns: 1fr; gap: 0.75rem; padding: 1rem 1rem 0; }
+  .metric-tile, .stat-card { padding: 1.15rem 1.25rem; }
+  .metric-tile-val, .stat-card-val { font-size: 1.85rem; }
+  .metric-tile-label, .stat-card-label { font-size: 0.72rem; }
+  .metric-tile-change, .stat-card-sub { font-size: 0.68rem; }
+
+  /* ---------- AGENT ROSTER (single column, big RUN) ---------- */
+  .agents-grid, .agents-grid-3 {
+    grid-template-columns: 1fr !important;
+    gap: 0.75rem !important;
+    max-width: none !important;
+  }
+  .agent-card-footer { padding: 1rem 1.1rem; }
+  .agent-card-name { font-size: 1rem; }
+  .agent-card-role { font-size: 0.7rem; }
+  .status-tag { font-size: 0.65rem; padding: 5px 10px; }
+  .deploy-btn { min-height: 44px; min-width: 92px; font-size: 0.7rem; padding: 12px 18px; }
+
+  /* Max brief + ask-max controls */
+  .ask-max-input { min-height: 44px; }
+  .ask-max-send, .max-brief-banner-regen { min-height: 44px; }
+
+  /* ---------- APPROVALS (full-width, thumb-friendly) ---------- */
+  .approvals-grid { grid-template-columns: 1fr; gap: 0.85rem; }
+  .approval-card { padding: 1.1rem; }
+  .ac-comment { font-size: 0.9rem; }
+  .ac-actions { gap: 10px; }
+  .ac-btn { min-height: 48px; font-size: 0.74rem; }
+  .approvals-filters { gap: 8px; }
+  .filter-btn { min-height: 40px; font-size: 0.66rem; padding: 10px 14px; }
+  .prospect-search { width: 100%; margin-left: 0; min-height: 40px; }
+
+  /* ---------- ANALYTICS ---------- */
+  .analytics-grid { grid-template-columns: 1fr; gap: 1rem; }
+  .an-card { padding: 1.1rem 1.2rem; }
+
+  /* ---------- PIPELINE KANBAN (swipe between columns) ---------- */
+  .prospect-pipeline-grid {
+    grid-auto-flow: column;
+    grid-auto-columns: 85vw;
+    grid-template-columns: none !important;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    gap: 0.75rem;
+  }
+  .prospect-pipeline-column { scroll-snap-align: center; min-height: 320px; }
+  .prospect-pipeline-name { font-size: 0.95rem; }
+  .prospect-pipeline-email { font-size: 0.7rem; }
+  .prospect-pipeline-meta { font-size: 0.68rem; }
+  .prospects-table-wrap, .pipeline-table-card { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* ---------- COMMAND FEED → BOTTOM SHEET ---------- */
+  .main { flex-direction: column; }
+  .right-panel {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    width: 100%; height: 76vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -10px 34px rgba(0,0,0,0.5);
+    transform: translateY(calc(100% - 58px));
+    transition: transform 0.3s ease;
+    z-index: 90;
+  }
+  .right-panel.expanded { transform: translateY(0); }
+  .sheet-handle {
+    display: flex; align-items: center; justify-content: center;
+    height: 24px; flex-shrink: 0; cursor: grab; touch-action: none;
+  }
+  .sheet-handle span { width: 42px; height: 5px; border-radius: 99px; background: var(--gray); }
+  .panel-header { cursor: pointer; padding: 0.35rem 1.1rem 0.85rem; touch-action: none; }
+  .activity-feed { touch-action: pan-y; }
+  .feed-filter-btn { min-height: 40px; }
+
+  /* ---------- STATUS BAR (hidden on phones) ---------- */
+  .statusbar { display: none; }
+
+  /* ---------- AGENT DETAIL OVERLAY ---------- */
+  .agent-detail { top: 56px; left: 0; right: 0; bottom: 0; padding: 1.25rem; }
+  .agent-detail.open { flex-direction: column; gap: 1.5rem; }
+  .detail-close { top: auto; bottom: 1rem; right: 1rem; min-height: 44px; }
+  .detail-run-btn { min-height: 48px; }
+}
 </style>
 </head>
 <body>
 
+<!-- MOBILE NAV BACKDROP -->
+<div class="mobile-backdrop" id="mobileBackdrop"></div>
+
 <!-- SIDEBAR -->
-<div class="sidebar">
+<div class="sidebar" id="sidebar">
+  <button class="sidebar-close" id="sidebarClose" type="button" aria-label="Close menu">&times;</button>
   <div class="logo">
     <div class="logo-mark"></div>
     PULSEFORGE
@@ -2265,6 +2440,9 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
 
 <!-- TOP BAR -->
 <div class="topbar">
+  <button class="mobile-hamburger" id="mobileHamburger" type="button" aria-label="Open menu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+  </button>
   <div class="greeting">
     <div class="greeting-hi">Good morning</div>
     <div class="greeting-sub">Pulseforge Command Center</div>
@@ -3187,8 +3365,9 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
   </div><!-- /center-col -->
 
   <!-- RIGHT PANEL -->
-  <div class="right-panel">
-    <div class="panel-header">
+  <div class="right-panel" id="rightPanel">
+    <div class="sheet-handle" id="sheetHandle"><span></span></div>
+    <div class="panel-header" id="panelHeader">
       <div class="panel-title">COMMAND FEED</div>
       <div class="panel-sub">Live system activity · Updates in real time</div>
     </div>
@@ -3639,6 +3818,54 @@ fetch('/api/me', { credentials: 'include' })
   document.addEventListener('click', (e) => {
     if (!dropdown.contains(e.target) && e.target !== avatar) dropdown.classList.remove('open');
   });
+})();
+
+(function setupMobileNav() {
+  const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('mobileBackdrop');
+  const hamburger = document.getElementById('mobileHamburger');
+  const closeBtn = document.getElementById('sidebarClose');
+  if (!sidebar || !backdrop) return;
+  const open = () => { sidebar.classList.add('open'); backdrop.classList.add('open'); };
+  const close = () => { sidebar.classList.remove('open'); backdrop.classList.remove('open'); };
+  hamburger?.addEventListener('click', open);
+  closeBtn?.addEventListener('click', close);
+  backdrop.addEventListener('click', close);
+  // pick a tab → close the drawer
+  sidebar.querySelectorAll('.nav-tab').forEach(t => t.addEventListener('click', close));
+})();
+
+(function setupCommandFeedSheet() {
+  const panel = document.getElementById('rightPanel');
+  const handle = document.getElementById('sheetHandle');
+  const header = document.getElementById('panelHeader');
+  if (!panel) return;
+  const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+  const expand = () => panel.classList.add('expanded');
+  const collapse = () => panel.classList.remove('expanded');
+  const toggle = () => panel.classList.toggle('expanded');
+
+  let startY = null, swiped = false;
+  const onStart = (e) => { if (!isMobile()) return; startY = e.touches[0].clientY; swiped = false; };
+  const onMove = (e) => {
+    if (!isMobile() || startY === null) return;
+    const dy = e.touches[0].clientY - startY;
+    if (Math.abs(dy) > 40) {
+      swiped = true;
+      if (dy < 0) expand(); else collapse();
+      startY = null;
+    }
+  };
+  const onClick = () => { if (!isMobile()) return; if (swiped) { swiped = false; return; } toggle(); };
+
+  [handle, header].forEach(el => {
+    if (!el) return;
+    el.addEventListener('touchstart', onStart, { passive: true });
+    el.addEventListener('touchmove', onMove, { passive: true });
+    el.addEventListener('click', onClick);
+  });
+  // collapse the sheet if we resize back to desktop
+  window.addEventListener('resize', () => { if (!isMobile()) collapse(); });
 })();
 
 async function loadClientSelector() {
