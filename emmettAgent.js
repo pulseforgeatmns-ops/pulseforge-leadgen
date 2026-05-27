@@ -176,11 +176,11 @@ The businesses I work with aren't struggling — they're good at what they do. T
 
 If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
-Jake`
+Jacob`
     },
     {
       day: 8,
-      subject: "what's actually working in Manchester right now",
+      subject: "quick question about {{business_name}}",
       body: `Hi {{first_name}},
 
 One thing I'm seeing across local businesses right now — the ones growing consistently aren't spending more on ads. They're just staying in front of people longer than their competition.
@@ -191,7 +191,7 @@ I help businesses like {{business_name}} stay visible automatically — no extra
 
 Are you currently doing anything to stay in front of new customers consistently, or is it mostly word of mouth at this point?
 
-Jake`
+Jacob`
     },
     {
       day: 13,
@@ -368,7 +368,7 @@ Jacob`
     },
     {
       day: 8,
-      subject: "what is actually working in Southern NH right now",
+      subject: "quick question about {{business_name}}",
       body: `Hi {{first_name}},
 
 One thing I am seeing across local salons right now. The ones growing consistently are not running more ads. They are just staying in front of new clients longer than their competition.
@@ -678,7 +678,7 @@ Jacob`
     },
     {
       day: 8,
-      subject: "what is actually working for auto shops in Southern NH",
+      subject: "quick question about {{business_name}}",
       body: `Hi {{first_name}},
 
 One pattern I keep seeing across local auto shops right now. The ones with bays consistently full are not spending more on ads. They are just staying in front of local car owners longer than the shop down the street.
@@ -817,6 +817,10 @@ gopulseforge.com`
     }
   ]
 };
+
+// Fallback step used when a clicked/warm prospect is selected. Defaults to the
+// cleaning Day 4 step until a dedicated warm sequence is defined.
+const WARM_STEP = SEQUENCES.cleaning.find(step => step.day === 4);
 
 function fillTemplate(template, prospect) {
   const rawName = prospect.first_name || prospect.name?.split(' ')[0] || '';
