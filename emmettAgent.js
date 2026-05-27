@@ -661,13 +661,9 @@ Jacob`
       subject: "quick question about {{business_name}}",
       body: `Hi {{first_name}},
 
-One pattern I keep seeing across local auto shops right now. The ones with bays consistently full are not spending more on ads. They are just staying in front of local car owners longer than the shop down the street.
+Last question — are you currently doing anything to follow up with customers after a job, or is it mostly repeat and referral when it happens?
 
-Most shops wait for the phone to ring. The ones with no open slots do not.
-
-I help shops like {{business_name}} stay visible automatically. No extra time on your end.
-
-Are you currently doing anything to reach new customers consistently, or is it mostly repeat and referral?
+Happy to show you what's working for shops in Southern NH. Just reply here.
 
 Jacob`
     },
