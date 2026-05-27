@@ -6,7 +6,7 @@ async function ensureCloserSchema() {
   await pool.query('SELECT pg_advisory_lock(91720260517)');
   try {
     // Drop every CHECK constraint on users that references `role`, then add
-    // the canonical one that includes 'sales'. The old version of this code
+    // the canonical one that includes dashboard roles beyond admin/manager. The old version of this code
     // hardcoded the constraint name and excluded 'sales', which threw
     // "check constraint ... is violated by some row" once any user had
     // role='sales' (Levi).
@@ -23,7 +23,7 @@ async function ensureCloserSchema() {
     }
     await pool.query(`
       ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN ('admin', 'manager', 'setter', 'closer', 'sales'))
+      CHECK (role IN ('admin', 'manager', 'setter', 'closer', 'sales', 'viewer'))
     `);
   } finally {
     await pool.query('SELECT pg_advisory_unlock(91720260517)');

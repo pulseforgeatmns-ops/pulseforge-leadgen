@@ -14,7 +14,8 @@ const {
   publishLinkComment,
 } = require('../utils/publishPipeline');
 
-const requireAuth = [sessionAuth, requireRole('admin', 'manager')];
+const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
+const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer')];
 let prospectSetterAssignmentSchemaPromise;
 let agentLogStatusSchemaPromise;
 const EXCLUDE_COMMAND_FEED_ACTIONS_SQL = `
@@ -56,7 +57,7 @@ router.get('/api/me', sessionAuth, (req, res) => {
   res.json({ user: req.user, active_client_id: req.session?.active_client_id || 1 });
 });
 
-router.get('/api/clients', requireAuth, async (req, res) => {
+router.get('/api/clients', requireOperator, async (req, res) => {
   try {
     res.json({
       active_client_id: req.session.active_client_id || 1,
@@ -67,7 +68,7 @@ router.get('/api/clients', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/api/clients/active', requireAuth, async (req, res) => {
+router.post('/api/clients/active', requireOperator, async (req, res) => {
   const clientId = normalizeClientId(req.body.client_id || req.query.client_id);
   try {
     const clients = await getActiveClients();
@@ -81,7 +82,7 @@ router.post('/api/clients/active', requireAuth, async (req, res) => {
   }
 });
 
-router.get('/api/agent-visibility', requireAuth, async (req, res) => {
+router.get('/api/agent-visibility', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const [clientResult, prospectsWithEmail] = await Promise.all([
@@ -121,7 +122,7 @@ router.get('/api/agent-visibility', requireAuth, async (req, res) => {
   }
 });
 
-router.get('/api/pipeline', requireAuth, async (_req, res) => {
+router.get('/api/pipeline', requireDashboardRead, async (_req, res) => {
   try {
     await ensureClientArchitecture();
     await ensureCloserSchema();
@@ -279,7 +280,7 @@ router.get('/api/pipeline', requireAuth, async (_req, res) => {
 });
 
 // Agent status for dashboard (deduplicated — was registered twice in server.js)
-router.get('/api/agent-status', requireAuth, async (req, res) => {
+router.get('/api/agent-status', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const [prospects, touchpoints, pending, agentRuns, channels, weeklyTouchpoints] = await Promise.all([
@@ -324,7 +325,7 @@ router.get('/api/agent-status', requireAuth, async (req, res) => {
 });
 
 // Get pending approvals
-router.get('/api/approvals', requireAuth, async (req, res) => {
+router.get('/api/approvals', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -341,7 +342,7 @@ router.get('/api/approvals', requireAuth, async (req, res) => {
 });
 
 // Approve or reject a comment
-router.post('/api/approvals/:id', requireAuth, async (req, res) => {
+router.post('/api/approvals/:id', requireOperator, async (req, res) => {
   const { id } = req.params;
   const { action } = req.body;
   if (!['approved', 'rejected'].includes(action)) {
@@ -379,7 +380,7 @@ router.post('/api/approvals/:id', requireAuth, async (req, res) => {
 });
 
 // Prospects table
-router.get('/api/prospects', requireAuth, async (req, res) => {
+router.get('/api/prospects', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -394,6 +395,26 @@ router.get('/api/prospects', requireAuth, async (req, res) => {
       WHERE p.do_not_contact = false
         AND p.client_id = $1
       GROUP BY p.id, c.name, c.location
+      ORDER BY p.icp_score DESC NULLS LAST
+      LIMIT 200
+    `, [clientId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/prospect-pipeline', requireDashboardRead, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const result = await pool.query(`
+      SELECT
+        p.id, p.vertical, p.status, p.icp_score, p.last_contacted_at,
+        c.name as company_name
+      FROM prospects p
+      LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+      WHERE p.do_not_contact = false
+        AND p.client_id = $1
       ORDER BY p.icp_score DESC NULLS LAST
       LIMIT 200
     `, [clientId]);
@@ -448,7 +469,7 @@ function splitLocation(location) {
   return { city: String(location || '').trim(), state: '' };
 }
 
-router.put('/api/prospects/:id', requireAuth, async (req, res) => {
+router.put('/api/prospects/:id', requireOperator, async (req, res) => {
   const client = await pool.connect();
   try {
     const clientId = getRequestClientId(req);
@@ -560,7 +581,7 @@ router.put('/api/prospects/:id', requireAuth, async (req, res) => {
 });
 
 // Touchpoints for a single prospect
-router.get('/api/prospects/:id/touchpoints', requireAuth, async (req, res) => {
+router.get('/api/prospects/:id/touchpoints', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -575,7 +596,7 @@ router.get('/api/prospects/:id/touchpoints', requireAuth, async (req, res) => {
   }
 });
 
-router.get('/api/prospects/:id/preview', requireAuth, async (req, res) => {
+router.get('/api/prospects/:id/preview', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -634,7 +655,7 @@ router.get('/api/prospects/:id/preview', requireAuth, async (req, res) => {
   }
 });
 
-router.get('/api/prospects/:id/detail', requireAuth, async (req, res) => {
+router.get('/api/prospects/:id/detail', requireOperator, async (req, res) => {
   try {
     await ensureProspectSetterAssignmentSchema();
     const clientId = getRequestClientId(req);
@@ -744,7 +765,7 @@ router.get('/api/prospects/:id/detail', requireAuth, async (req, res) => {
   }
 });
 
-router.get('/api/setters/assignable', requireAuth, async (_req, res) => {
+router.get('/api/setters/assignable', requireOperator, async (_req, res) => {
   try {
     const result = await pool.query(`
       SELECT id, name, email, role
@@ -759,7 +780,7 @@ router.get('/api/setters/assignable', requireAuth, async (_req, res) => {
   }
 });
 
-router.post('/api/prospects/:id/assign-setter', requireAuth, async (req, res) => {
+router.post('/api/prospects/:id/assign-setter', requireOperator, async (req, res) => {
   const client = await pool.connect();
   try {
     await ensureProspectSetterAssignmentSchema();
@@ -822,7 +843,7 @@ router.post('/api/prospects/:id/assign-setter', requireAuth, async (req, res) =>
   }
 });
 
-router.post('/api/prospects/:id/touch', requireAuth, async (req, res) => {
+router.post('/api/prospects/:id/touch', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const actionType = String(req.body.action_type || 'manual_touch').slice(0, 80);
@@ -844,7 +865,7 @@ router.post('/api/prospects/:id/touch', requireAuth, async (req, res) => {
   }
 });
 
-router.patch('/api/prospects/:id/status', requireAuth, async (req, res) => {
+router.patch('/api/prospects/:id/status', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const status = String(req.body.status || '').toLowerCase();
@@ -860,7 +881,7 @@ router.patch('/api/prospects/:id/status', requireAuth, async (req, res) => {
   }
 });
 
-router.patch('/api/prospects/:id/do-not-contact', requireAuth, async (req, res) => {
+router.patch('/api/prospects/:id/do-not-contact', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(
@@ -875,7 +896,7 @@ router.patch('/api/prospects/:id/do-not-contact', requireAuth, async (req, res) 
 });
 
 // Agent stats for sparklines
-router.get('/api/agent-stats', requireAuth, async (req, res) => {
+router.get('/api/agent-stats', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -924,7 +945,7 @@ router.get('/api/agent-stats', requireAuth, async (req, res) => {
 });
 
 // Agent weekly stats for hover tooltips
-router.get('/api/agent-weekly-stats', requireAuth, async (req, res) => {
+router.get('/api/agent-weekly-stats', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const WEEK = `created_at > NOW() - INTERVAL '7 days'`;
@@ -976,7 +997,7 @@ router.get('/api/agent-weekly-stats', requireAuth, async (req, res) => {
 });
 
 // Live activity feed
-router.get('/api/activity', requireAuth, async (req, res) => {
+router.get('/api/activity', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
@@ -1104,7 +1125,7 @@ function sequenceStepLabel(sendCount) {
   return `Step ${idx} — Day ${SEQUENCE_DAYS[idx - 1]}`;
 }
 
-router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
+router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) => {
   try {
     const logId = String(req.params.id || '').trim();
     console.log('[activity-details] hit', { id: logId });
@@ -1329,7 +1350,7 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
       title: activityDetailTitle(action),
       prospect_id: row.prospect_id || null,
       fields,
-      actions,
+      actions: req.user?.role === 'viewer' ? [] : actions,
       payload,
       error_msg: row.error_msg || null,
       duration_ms: row.duration_ms ?? null,
@@ -1355,7 +1376,7 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
 });
 
 // Quick action: surface a prospect to the setter queue
-router.post('/api/prospects/:id/assign-setter', requireAuth, async (req, res) => {
+router.post('/api/prospects/:id/assign-setter', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -1375,7 +1396,7 @@ router.post('/api/prospects/:id/assign-setter', requireAuth, async (req, res) =>
 });
 
 // Activity panel (sequences + timeline)
-router.get('/api/activity-panel', requireAuth, async (req, res) => {
+router.get('/api/activity-panel', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const [seqResult, timelineResult] = await Promise.all([
@@ -1490,7 +1511,7 @@ router.get('/api/activity-panel', requireAuth, async (req, res) => {
 });
 
 // Load more timeline items
-router.get('/api/activity-timeline', requireAuth, async (req, res) => {
+router.get('/api/activity-timeline', requireDashboardRead, async (req, res) => {
   const offset = parseInt(req.query.offset) || 0;
   try {
     const clientId = getRequestClientId(req);
@@ -1542,7 +1563,7 @@ router.get('/api/activity-timeline', requireAuth, async (req, res) => {
 });
 
 // Analytics
-router.get('/api/analytics', requireAuth, async (req, res) => {
+router.get('/api/analytics', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const [vol, reply, icp, agents, funnel, topProspects] = await Promise.all([
@@ -1711,7 +1732,7 @@ router.get('/api/analytics', requireAuth, async (req, res) => {
 });
 
 // Content analytics: recent posts with metrics
-router.get('/api/analytics/posts', requireAuth, async (req, res) => {
+router.get('/api/analytics/posts', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -1735,7 +1756,7 @@ router.get('/api/analytics/posts', requireAuth, async (req, res) => {
 });
 
 // Content performance summary by channel/type
-router.get('/api/analytics/summary', requireAuth, async (req, res) => {
+router.get('/api/analytics/summary', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -1757,7 +1778,7 @@ router.get('/api/analytics/summary', requireAuth, async (req, res) => {
 });
 
 // Top posts by engagement rate
-router.get('/api/analytics/top-posts', requireAuth, async (req, res) => {
+router.get('/api/analytics/top-posts', requireDashboardRead, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 10, 50);
     const clientId = getRequestClientId(req);
@@ -1782,7 +1803,7 @@ router.get('/api/analytics/top-posts', requireAuth, async (req, res) => {
 });
 
 // Email engagement stats
-router.get('/api/analytics/email', requireAuth, async (req, res) => {
+router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const [totals, weekTotals, warmUpgraded] = await Promise.all([
@@ -1837,7 +1858,7 @@ router.get('/api/analytics/email', requireAuth, async (req, res) => {
 });
 
 // Max daily brief
-router.get('/api/max-brief', requireAuth, async (req, res) => {
+router.get('/api/max-brief', requireDashboardRead, async (req, res) => {
   try {
     const clientId = normalizeClientId(req.session?.active_client_id || 1);
     const result = await pool.query(`
@@ -1863,7 +1884,7 @@ router.get('/api/max-brief', requireAuth, async (req, res) => {
 });
 
 // Rex cross-market executive summary
-router.get('/api/rex-executive-summary', requireAuth, async (req, res) => {
+router.get('/api/rex-executive-summary', requireDashboardRead, async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT payload, ran_at
@@ -1884,7 +1905,7 @@ router.get('/api/rex-executive-summary', requireAuth, async (req, res) => {
 });
 
 // Agent actions (deposited by Max)
-router.get('/api/actions', requireAuth, async (req, res) => {
+router.get('/api/actions', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -1900,7 +1921,7 @@ router.get('/api/actions', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/api/actions/:id/dismiss', requireAuth, async (req, res) => {
+router.post('/api/actions/:id/dismiss', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     await pool.query(
@@ -1913,7 +1934,7 @@ router.post('/api/actions/:id/dismiss', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/api/actions/:id/execute', requireAuth, async (req, res) => {
+router.post('/api/actions/:id/execute', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     await pool.query(
@@ -1927,7 +1948,7 @@ router.post('/api/actions/:id/execute', requireAuth, async (req, res) => {
 });
 
 // Trigger agents
-router.post('/api/run/:agent', requireAuth, async (req, res) => {
+router.post('/api/run/:agent', requireOperator, async (req, res) => {
   const { agent } = req.params;
   const clientId = getRequestClientId(req);
   const localOnly = ['ivy'];

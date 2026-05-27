@@ -2210,6 +2210,7 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
 .prospect-pipeline-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.6rem; }
 .prospect-pipeline-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 0.75rem; cursor: grab; transition: opacity 0.2s ease, transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease; }
 .prospect-pipeline-card.dragging { opacity: 0.45; transform: scale(0.98); cursor: grabbing; }
+body.viewer-role .prospect-pipeline-card { cursor: default; }
 .prospect-pipeline-card.dropped { animation: pipelineCardDrop 0.32s ease; border-color: var(--teal); box-shadow: 0 0 22px rgba(0,212,180,0.18); }
 .prospect-pipeline-name { color: var(--white); font-weight: 600; font-size: 0.82rem; line-height: 1.35; margin-bottom: 0.5rem; }
 .prospect-pipeline-meta { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.45rem; font-family: 'JetBrains Mono', monospace; font-size: 0.56rem; color: var(--gray-light); }
@@ -3298,6 +3299,26 @@ const PROSPECT_PIPELINE_LABELS = { cold: 'Cold', warm: 'Warm', contacted: 'Conta
 const DETAIL_CACHE_TTL = 30000;
 const THEME_KEY = 'pulseforge-theme';
 
+function isViewerRole() {
+  return _currentUserRole === 'viewer';
+}
+
+function canTakeDashboardActions() {
+  return ['admin', 'manager'].includes(_currentUserRole);
+}
+
+function applyViewerPermissions() {
+  if (!isViewerRole()) return;
+  document.body.classList.add('viewer-role');
+  document.querySelectorAll('[data-tab="approvals"], [data-tab="actions"], [data-tab="prospects"], #usersTab').forEach(el => el?.remove());
+  document.querySelector('.stat-row')?.remove();
+  document.getElementById('askMaxPanel')?.remove();
+  document.getElementById('maxBriefRegenBtn')?.remove();
+  document.querySelector('.agents-area .area-actions')?.remove();
+  const rosterSub = document.getElementById('agentRosterSub');
+  if (rosterSub) rosterSub.textContent = 'Read-only roster · click any agent to view details';
+}
+
 function applyTheme(theme) {
   const light = theme === 'light';
   document.body.classList.toggle('light-mode', light);
@@ -3409,10 +3430,10 @@ async function openDetail(key) {
     document.getElementById('detailMaxRec').style.display = 'none';
   }
 
-  // Run button — only for agents with a backend mapping
+  // Run button — only for operators and agents with a backend mapping
   const agentKey = agentNameMap[key];
   const runBtn = document.getElementById('detailRunBtn');
-  runBtn.style.display = agentKey ? 'inline-block' : 'none';
+  runBtn.style.display = (agentKey && canTakeDashboardActions()) ? 'inline-block' : 'none';
   runBtn.textContent = '▶ RUN AGENT';
   runBtn.disabled = false;
 
@@ -3506,6 +3527,7 @@ async function openDetail(key) {
 }
 
 async function runDetailAgent() {
+  if (!canTakeDashboardActions()) return;
   if (!_currentDetailKey) return;
   const btn = document.getElementById('detailRunBtn');
   btn.textContent = '…';
@@ -3554,6 +3576,7 @@ document.querySelectorAll('.nav-tab').forEach((tab, i) => {
   tab.addEventListener('click', () => {
     const name = tab.dataset.tab;
     if (!name) return;
+    if (isViewerRole() && !['agents', 'activity', 'analytics', 'pipeline'].includes(name)) return;
     document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
     Object.entries(_tabPanels).forEach(([k, el]) => {
@@ -3589,11 +3612,13 @@ fetch('/api/me', { credentials: 'include' })
     const role = user?.role;
     _currentUserRole = role;
     const isOperator = ['admin', 'manager'].includes(role);
+    const isViewer = role === 'viewer';
     if (role === 'admin') document.getElementById('usersTab').style.display = 'block';
     const pipelineTab = document.getElementById('pipelineTab');
-    if (pipelineTab) pipelineTab.style.display = isOperator ? '' : 'none';
+    if (pipelineTab) pipelineTab.style.display = (isOperator || isViewer) ? '' : 'none';
     const switcher = document.querySelector('.client-switcher');
     if (switcher && !isOperator) switcher.remove();
+    applyViewerPermissions();
     const avatar = document.getElementById('userAvatar');
     if (avatar) {
       avatar.textContent = computeInitials(user);
@@ -3808,6 +3833,7 @@ document.addEventListener('keydown', e => {
 
 // Load live activity feed from Second Brain
 async function runAgent(btn) {
+  if (!canTakeDashboardActions()) return;
   const card = btn.closest('.agent-card');
   const agentName = card.querySelector('.agent-card-name').textContent.toLowerCase();
   btn.textContent = '...';
@@ -3825,6 +3851,7 @@ async function runAgent(btn) {
 }
 
 async function runAllLive(btn) {
+  if (!canTakeDashboardActions()) return;
   const liveCards = [...document.querySelectorAll('.agent-card.live')];
   const agents = liveCards
     .map(card => card.querySelector('.agent-card-name')?.textContent?.trim().toLowerCase())
@@ -4076,7 +4103,7 @@ function renderActivityDetailHtml(data) {
     return `<div class="feed-detail-line"><span class="feed-detail-label">${_esc(field.label)}</span><span class="feed-detail-value">${_esc(value)}</span></div>`;
   }
   ).join('');
-  const actions = (Array.isArray(data?.actions) ? data.actions : []).map(a =>
+  const actions = (isViewerRole() ? [] : (Array.isArray(data?.actions) ? data.actions : [])).map(a =>
     `<button type="button" class="feed-detail-action" data-action="${_esc(a.key)}">${_esc(a.label)}</button>`
   ).join('');
   return `<div class="feed-detail-head">${_esc(data?.title || 'Details')}</div>
@@ -4085,6 +4112,7 @@ function renderActivityDetailHtml(data) {
 }
 
 function bindActivityDetailActions(panel, data) {
+  if (!canTakeDashboardActions()) return;
   panel.querySelectorAll('.feed-detail-action').forEach(btn => {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -4478,9 +4506,10 @@ async function loadLiveData() {
     _liveRings = data.rings || {};
 
     // Update metrics
-    document.querySelectorAll('.metric-tile-val')[0].textContent = data.pending;
-    document.querySelectorAll('.metric-tile-val')[2].textContent = data.touchpoints;
-    document.querySelectorAll('.metric-tile-val')[3].textContent = data.prospects;
+    const metricVals = document.querySelectorAll('.metric-tile-val');
+    if (metricVals[0]) metricVals[0].textContent = data.pending;
+    if (metricVals[2]) metricVals[2].textContent = data.touchpoints;
+    if (metricVals[3]) metricVals[3].textContent = data.prospects;
 
     // Update agent rings
     const circumference = 251.2;
@@ -4653,7 +4682,7 @@ function _parseBusiness(row) {
   if (row.company_name) return row.company_name;
   const notes = row.notes || '';
   const before = notes.split('—')[0].trim();
-  return before || (row.first_name + ' ' + row.last_name).trim() || '—';
+  return before || [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || '—';
 }
 
 function _splitProspectLocation(location) {
@@ -5652,7 +5681,7 @@ function renderTopProspects(data) {
   tbody.innerHTML = data.map((p, i) => {
     const s = (p.status || 'cold').toLowerCase();
     const badgeCls = s === 'hot' ? 'pt-hot' : s === 'warm' ? 'pt-warm' : 'pt-cold';
-    return `<tr onclick="openProspectFromAnalytics(${p.id})">
+    return `<tr ${isViewerRole() ? '' : `onclick="openProspectFromAnalytics(${p.id})"`}>
       <td class="top-rank">${i + 1}</td>
       <td class="top-business">${_esc(p.business || p.name)}</td>
       <td><span class="pt-badge ${badgeCls}">${s}</span></td>
@@ -5663,6 +5692,7 @@ function renderTopProspects(data) {
 }
 
 function openProspectFromAnalytics(id) {
+  if (!canTakeDashboardActions()) return;
   const tabs = document.querySelectorAll('.nav-tab');
   tabs.forEach(t => t.classList.remove('active'));
   tabs[3].classList.add('active');
@@ -5969,7 +5999,7 @@ function renderProspectPipeline() {
       <div class="prospect-pipeline-head"><div class="prospect-pipeline-title">${PROSPECT_PIPELINE_LABELS[stage]}</div><div class="prospect-pipeline-count">${items.length}</div></div>
       <div class="prospect-pipeline-body">
         ${items.length ? items.map(p => `
-          <div class="prospect-pipeline-card ${String(p.id) === String(_pipelineDroppedProspectId) ? 'dropped' : ''}" draggable="true" data-pipeline-prospect-id="${_esc(p.id)}" data-current-status="${_esc(normalizeProspectPipelineStatus(p.status))}">
+          <div class="prospect-pipeline-card ${String(p.id) === String(_pipelineDroppedProspectId) ? 'dropped' : ''}" draggable="${isViewerRole() ? 'false' : 'true'}" data-pipeline-prospect-id="${_esc(p.id)}" data-current-status="${_esc(normalizeProspectPipelineStatus(p.status))}">
             <div class="prospect-pipeline-name">${_esc(_parseBusiness(p))}</div>
             <div class="prospect-pipeline-meta"><span>${_esc(p.vertical || 'unknown')}</span><span class="${_icpClass(p.icp_score ?? 0)}">ICP ${p.icp_score ?? '—'}</span></div>
             <div class="prospect-pipeline-meta"><span>Last: ${_relTimeP(p.last_contacted_at)}</span></div>
@@ -5996,7 +6026,7 @@ async function loadProspectPipeline() {
   if (!grid) return;
   try {
     grid.innerHTML = '<div class="no-data-note">Loading prospect pipeline...</div>';
-    const res = await fetch('/api/prospects', { credentials: 'include' });
+    const res = await fetch(isViewerRole() ? '/api/prospect-pipeline' : '/api/prospects', { credentials: 'include' });
     if (!res.ok) throw new Error('prospects unavailable');
     _pipelineProspects = await res.json();
     renderProspectPipeline();
@@ -6008,6 +6038,7 @@ async function loadProspectPipeline() {
 }
 
 async function updateProspectPipelineStatus(id, status) {
+  if (!canTakeDashboardActions()) return;
   const prospect = _pipelineProspects.find(p => String(p.id) === String(id));
   if (!prospect || normalizeProspectPipelineStatus(prospect.status) === status) return;
   const previous = prospect.status || 'cold';
@@ -6104,6 +6135,7 @@ async function loadPipeline() {
 document.getElementById('pipelineRefreshBtn')?.addEventListener('click', loadPipeline);
 
 document.addEventListener('dragstart', event => {
+  if (!canTakeDashboardActions()) return;
   const card = event.target.closest('.prospect-pipeline-card[draggable="true"]');
   if (!card) return;
   _pipelineDraggedProspectId = card.dataset.pipelineProspectId;
@@ -6119,6 +6151,7 @@ document.addEventListener('dragend', event => {
 });
 
 document.addEventListener('dragover', event => {
+  if (!canTakeDashboardActions()) return;
   const col = event.target.closest('.prospect-pipeline-column[data-prospect-drop-status]');
   if (!col || !_pipelineDraggedProspectId) return;
   event.preventDefault();
@@ -6132,6 +6165,7 @@ document.addEventListener('dragleave', event => {
 });
 
 document.addEventListener('drop', event => {
+  if (!canTakeDashboardActions()) return;
   const col = event.target.closest('.prospect-pipeline-column[data-prospect-drop-status]');
   if (!col || !_pipelineDraggedProspectId) return;
   event.preventDefault();
@@ -6260,6 +6294,7 @@ function toggleMaxBrief() {
 }
 
 async function regenMaxBrief(btn) {
+  if (!canTakeDashboardActions()) return;
   btn.disabled = true;
   btn.textContent = 'Running...';
   try {
@@ -6297,6 +6332,7 @@ function renderAskMaxHistory() {
 
 async function submitAskMax(e) {
   e.preventDefault();
+  if (!canTakeDashboardActions()) return;
   const input = document.getElementById('askMaxInput');
   const btn = document.getElementById('askMaxSend');
   const question = (input?.value || '').trim();
@@ -6343,6 +6379,7 @@ function isVisibleAction(a) {
 }
 
 async function loadActions() {
+  if (!canTakeDashboardActions()) return;
   const grid   = document.getElementById('actionsGrid');
   const empty  = document.getElementById('actionsEmpty');
   const sub    = document.getElementById('actionsSub');
@@ -6411,6 +6448,7 @@ function updateActionsBadgeCount() {
 }
 
 async function execAction(id) {
+  if (!canTakeDashboardActions()) return;
   const card = document.getElementById(`ac-${id}`);
   if (!card) return;
 
@@ -6469,6 +6507,7 @@ async function execAction(id) {
 }
 
 async function dismissAction(id) {
+  if (!canTakeDashboardActions()) return;
   const card = document.getElementById(`ac-${id}`);
   if (card) card.style.opacity = '0.4';
   try {
@@ -6480,6 +6519,7 @@ async function dismissAction(id) {
 
 // Pre-fetch action count for badge
 (async () => {
+  if (isViewerRole()) return;
   try {
     const res = await fetch('/api/actions', { credentials: 'include' });
     if (!res.ok) return;

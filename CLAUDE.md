@@ -94,7 +94,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 - **Approvals**: `GET /api/approvals`, `POST /api/approvals/:id` (approve/reject content before publish) — in `routes/approvals.js`
 - **Pending comments**: `GET /api/pending-comments`, `POST /api/approve-comment/:id`, `POST /api/reject-comment/:id` — in `routes/approvals.js`
 - **Analytics**: `/api/analytics`, `/api/analytics/posts`, `/api/analytics/summary`, `/api/analytics/top-posts`, `/api/analytics/email` — in `routes/api.js`
-- **Pipeline view**: `GET /api/pipeline` → full business snapshot across clients, revenue, setters, closers, and agent health. `requireRole('admin', 'manager')` — in `routes/api.js`
+- **Pipeline view**: `GET /api/pipeline` → full business snapshot across clients, revenue, setters, closers, and agent health. `GET /api/prospect-pipeline` → read-only kanban data for dashboard viewers. — in `routes/api.js`
 - **Activity**: `/api/activity`, `/api/activity-panel`, `/api/activity-timeline` — in `routes/api.js`
 - **Dashboard UI**: `GET /dashboard` → serves `public/dashboard.html` with authenticated live data only — in `server.js`
 - **Setter dashboard**: `GET /setter` → authenticated setter UI (queue, pipeline, activity log, metrics strip, Scout feed). Requires setter or admin role. — in `routes/setter.js`
@@ -112,7 +112,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 | `companies` | Scraped companies: name, industry, size, location, website, icp_score, tech_stack, `client_id` |
 | `prospects` | Individual contacts: name, email, phone, job_title, linkedin_url, icp_score, status (cold/warm/hot), do_not_contact, last_contacted_at, vertical (TEXT — populated by Scout at insert time based on CONFIG.industry), service_area_match, setter_status (enum: new \| contacted \| follow_up \| booked \| dead), setter_visible (boolean — true = qualifies for setter queue, set by setterHandoffAgent), notes (text — setter scratchpad, auto-saved on blur), callback_at (timestamptz — scheduled follow-up, shown as "Due Today" queue section), is_hot (boolean — hot lead flag, sorts to top of stage), closer_id (FK → users), booked_at, closed_at, mrr_value, close_notes, closer_status, `client_id` |
 | `activity_log` | Setter contact log: id, lead_id (FK → prospects), action_type (call \| email \| text), notes, created_at, setter_id, `client_id` |
-| `users` | Auth accounts: id, name, email, password_hash, role (admin \| manager \| setter \| closer), active, created_at, last_login_at |
+| `users` | Auth accounts: id, name, email, password_hash, role (admin \| manager \| viewer \| setter \| closer \| sales), active, created_at, last_login_at |
 | `touchpoints` | Every agent action: channel, action_type, content_summary, outcome, sentiment, external_ref, `client_id` |
 | `agent_log` | Audit trail for every agent run: agent_name, action, prospect_id, payload, status, error_msg, duration_ms, `client_id` |
 | `agent_actions` | Actionable items deposited by agents for dashboard review: id, created_by, action_type, title, description, payload, status, executed_at, result, created_at, `client_id` — used by Max and Riley |
@@ -174,7 +174,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 ---
 
 ## Auth Model
-Session-based multi-user auth. `POST /login` accepts email + password, checks against users table, stores { id, name, email, role } in session. `requireAuth` middleware gates all protected routes. `requireRole(...roles)` enforces per-route role access. Roles: admin (full access), manager (full access except user management), setter (/setter only), closer (/closer only). Admin UI at `/admin/users` for creating and managing accounts. Falls back to `DASHBOARD_PASSWORD` env var if users table is empty.
+Session-based multi-user auth. `POST /login` accepts email + password, checks against users table, stores { id, name, email, role } in session. `requireAuth` middleware gates all protected routes. `requireRole(...roles)` enforces per-route role access. Roles: admin (full access), manager (full access except user management), viewer (dashboard read-only: agents, activity, pipeline, analytics), setter (/setter only), closer (/closer only), sales (/sales only). Admin UI at `/admin/users` for creating and managing accounts. Falls back to `DASHBOARD_PASSWORD` env var if users table is empty.
 
 ## Team Roster
 
@@ -206,7 +206,7 @@ Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. The
 - **Setter dashboard call logging uses the existing activity_log table (action_type='call').** attempt_count is computed at query time — not stored. Daily goal tracker scopes to setter_id + today's date so it resets automatically at midnight without a cron job.
 - **Paige content scoring (added May 2026)** — after generation, a second Claude API call scores each draft on specificity, originality, and hook_strength (max 30). Drafts scoring below 21 are regenerated once. Max reads these scores from agent_log WHERE agent_name='paige' AND action='content_scored' for weekly quality trend reporting.
 - **Multi-client architecture (added May 2026)** — all primary data tables carry `client_id` FK to `clients`. Agents accept `client_id` via `POST /api/run/:agent?client_id=1` or `/cron/:agent?client_id=2` and scope DB reads/writes accordingly. Dashboard has a client selector in the header and stores the active client in `req.session.active_client_id`. Existing data backfilled to `client_id=1` (Pulseforge). MSHI is `client_id=2`. To add a new client: INSERT into `clients`, add client-specific cron jobs with `client_id`, and add any needed email sequence to `emmettAgent.js` `SEQUENCES`.
-- **Pipeline dashboard (added May 2026)** — operator-only tab combining client status, revenue metrics, setter/closer performance, and agent health. Auto-refreshes every 5 min. McLeod Legal seeded as inactive client (`active=false`).
+- **Pipeline dashboard (added May 2026)** — combines client status, revenue metrics, setter/closer performance, agent health, and a prospect kanban. Admin/manager can edit pipeline state; viewer can see it read-only. Auto-refreshes every 5 min. McLeod Legal seeded as inactive client (`active=false`).
 - **Dark/light mode (added May 2026)** — toggle in nav, persisted via localStorage key `pulseforge-theme`. Applies to dashboard, setter, and closer views. Default: dark.
 - **Client dropdown (May 2026)** — scoped to admin/manager roles only. Setter and closer roles cannot switch client context.
 - **Agent visibility on client dashboard** — agents greyed out (opacity 0.4) when not configured for active client. Logic based on clients table field population, not hardcoded.

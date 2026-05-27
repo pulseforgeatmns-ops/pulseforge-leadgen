@@ -79,7 +79,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
       <input id="password" type="password" minlength="8" placeholder="Password" required>
       <button class="toggle-password" type="button" data-toggle-password="password" aria-label="Show password">Show</button>
     </div>
-    <select id="role"><option value="setter">Setter</option><option value="closer">Closer</option><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select>
+	    <select id="role"><option value="viewer">Viewer</option><option value="setter">Setter</option><option value="closer">Closer</option><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select>
     <button class="primary" type="submit">Add User</button>
   </form>
   <table>
@@ -101,7 +101,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
   </form>
 </div>
 <script>
-const roles = ['admin','manager','setter','closer','sales'];
+	const roles = ['admin','manager','viewer','setter','closer','sales'];
 const msg = document.getElementById('msg');
 let resetUserId = null;
 function say(text) { msg.textContent = text; setTimeout(() => { if (msg.textContent === text) msg.textContent = ''; }, 3500); }
