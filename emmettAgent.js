@@ -153,15 +153,13 @@ Mountain State Home Innovations`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-I spent years running restaurants and a cleaning company in New England. The hardest part wasn't the work — it was staying visible when I was too busy doing the work to market it.
+Most cleaning companies in Manchester are getting leads — the problem is usually what happens after. Inquiry comes in, owner's on a job, nobody follows up fast enough, and the lead books somebody else.
 
-Most owners I talk to are in the same spot. Great business, not enough time to stay in front of new customers consistently.
+Is that something you're running into at {{business_name}}, or have you got a system that keeps up with it?
 
-I built a system that handles that automatically — finds local prospects, reaches out on your behalf, keeps your name visible between jobs. It runs in the background while you run the business.
-
-Is bringing in new customers consistently something you're actively working on right now?
-
-Jacob Maynard`
+Jacob Maynard
+Pulseforge
+(603) 293-5816`
     },
     {
       day: 4,
