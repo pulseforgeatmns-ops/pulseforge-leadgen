@@ -648,11 +648,11 @@ Pulseforge
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Sent you a note a few days ago. Wanted to follow up once before moving on.
+Just following up — didn't want my last note to get lost.
 
-The shops I work with are not struggling. They do honest work and their regulars keep coming back. The gap is always the same: not enough new customers finding them between the ones who already know them.
+What I build for auto shops: automated outreach that brings back lapsed customers, follows up on estimates that went quiet, and keeps new leads from slipping through.
 
-If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
+If you want to see a free mockup of what that looks like for {{business_name}}, just reply here and I'll have it to you same day.
 
 Jacob`
     },
