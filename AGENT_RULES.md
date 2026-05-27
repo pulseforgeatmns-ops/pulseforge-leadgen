@@ -34,6 +34,17 @@ Always skip: facebook.com, instagram.com, twitter.com, linkedin.com, youtube.com
 - Prospeo deprecated endpoint — replaced with Hunter.io
 - Agent log entries were using inconsistent names: standardized to `'scout'` everywhere
 
+### Email Validation (May 27 2026)
+- Email validation rejects: file-extension domains, placeholder domains like `godaddy.com`, invalid `@` count, under 6 chars, or any string containing spaces
+- Invalid emails are nulled but the prospect record is kept
+
+### Saturation Tracking (scout_queue)
+- `scout_queue` table now tracks saturation per client / vertical / location
+- Saturation thresholds: auto 50, cleaning 50, restaurant 60, fitness 40, salon 40, med_spa 30, landscaping 30, property_management 40, home_services 30, auto_repair 50, default 40
+- `scout_queue` must be populated with all active verticals before each run
+- `prospect_count` must update after each run
+- `saturated = true` and `status = 'saturated'` must be set together — never one without the other
+
 ---
 
 ## EMMETT (emmettAgent.js)
@@ -75,6 +86,15 @@ const clientConfig = {
 - All agent_log entries stuck at `pending` → now updated to `completed` or `failed` after each send
 - No sending window enforcement in code → Tuesday–Thursday 9am–2pm ET now enforced in emmettAgent.js
 
+### Updates (May 27 2026)
+- Best performing subject line format: `business_name — honest question`
+- Cleaning, salon, and auto sequences fully rewritten May 27 2026
+- `WARM_STEP` is now defined as the cleaning Day 4 fallback
+- "Jake" corrected to "Jacob" in all signatures
+- Cron runs 4x daily: 9am, 11am, 1pm, 3pm ET via cron-jobs.org
+- Email body is NOT logged to agent_log payload — only subject and metadata are persisted
+- Zero clicks on cold outreach is expected — reply-only CTA, no links in body
+
 ---
 
 ## MAX (maxAgent.js)
@@ -102,6 +122,11 @@ Apply to: warm signals, top priorities, watch list, recommendations sections.
 ### Known Issues Fixed
 - LLM was hallucinating prospect names (e.g. "TT Hair Salon") not present in DB → validation pass added
 - Prospect names were missing market context → market label appended to all prospect references
+
+### Agent Naming Rules (May 27 2026)
+- Emmett sends emails, Vera handles GBP reviews only, Riley triages inbound, Paige posts content, Sam sends SMS, Cal calls, Scout scrapes
+- Never attribute email open rates or send volume to Vera
+- Market labels are required on all prospect mentions: client_id 1 = Manchester NH, client_id 2 = Charleston WV, client_id 5 = Nashville TN
 
 ---
 
@@ -140,6 +165,42 @@ If the topic rotation selects the same angle bucket, each channel must express a
 - LLM hallucinating prospect names → validation pass (shared pattern with Max)
 - Originality scoring chronically low (4–6) → topic rotation bank + used-angles memory added
 
+### Updates (May 27 2026)
+- All content for client_id 1 must be written from Pulseforge's POV — never as the client business
+- One post per channel per run maximum — 5 posts total
+- Channels: `facebook_page`, `google_business`, `linkedin_page`, `linkedin_personal`, `blog`
+- `attempt_count` is now logged to the `content_scored` payload
+- Passing threshold: total 24 or above AND all three dimensions 7 or above
+- LinkedIn personal channel ID: `6a15b291c687a22dd42a62ad` — first-person Jacob Maynard voice, not Pulseforge brand voice
+- MSHI content (client_id 2): Facebook, Google Business, Blog only — no LinkedIn
+
+---
+
+## PROSPECTS
+
+### Status Progression (May 27 2026)
+- `cold` → `contacted` on Day 0 send
+- `contacted` → `warm` on 2+ opens or a click
+- `warm` → `dead` on bounce or unsubscribe
+- `contacted` status added to the constraint May 27 2026
+- Legacy values migrated: `hot` → `warm`, `booked` → `closed`
+- Riley resets `contacted` prospects with no touchpoint in 21 days back to `cold`
+
+### Kanban
+- Columns: Cold, Contacted, Warm, Booked, Closed
+- Drag and drop updates `prospects.status` via `PATCH /api/prospects/:id/status`
+
+---
+
+## SAM (samAgent.js)
+
+### Warm Signal Notifications (May 27 2026)
+- Sam owns all Twilio SMS warm signal notifications — NOT Riley
+- Riley deposits `warm_signal` into `agent_actions`; Sam picks it up and sends
+- Quiet hours: 8:30am to 10:30pm ET — queue overnight signals and send at 8:30am
+- Dedup: one SMS per prospect per day max
+- Check `do_not_contact` before sending — log `sms_skipped_dnc` if blocked
+
 ---
 
 ## GENERAL RULES (all agents)
@@ -160,6 +221,13 @@ If the topic rotation selects the same angle bucket, each channel must express a
 - PORT must come from `process.env.PORT` — never hardcode 3000
 - Pool connections must complete before `pool.end()` — use `require.main === module` guards
 - Cron secret: `pulseforge-cron-2024`
+
+### Updates (May 27 2026)
+- `touchpoints.channel` constraint: email, linkedin, facebook, manual, call, sms
+- Dashboard triggers bypass Emmett's sending window — manual triggers always send regardless of time
+- Nashville sending window: 9am to 4pm ET (extended from 2pm)
+- Viewer role added to user management — read-only access to agents, activity, pipeline, analytics
+- GBP API reapplication submitted May 27 2026, case ID 7-5222000041067, expect response by June 6
 
 ---
 
