@@ -360,13 +360,9 @@ Jacob`
       subject: "quick question about {{business_name}}",
       body: `Hi {{first_name}},
 
-One thing I am seeing across local salons right now. The ones growing consistently are not running more ads. They are just staying in front of new clients longer than their competition.
+One last question — are you currently doing anything to bring in new clients outside of referrals and social media, or is that still the main source?
 
-Most stylists go quiet between bookings. The ones building a waitlist do not.
-
-I help salons like {{business_name}} stay visible automatically. No extra time required on your end.
-
-Are you currently doing anything to bring in new clients consistently, or is it mostly referrals and repeat bookings?
+Happy to show you what else is working for salons in Southern NH right now. Just reply here.
 
 Jacob`
     },
