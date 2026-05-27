@@ -179,11 +179,9 @@ Jacob`
       subject: "quick question about {{business_name}}",
       body: `Hi {{first_name}},
 
-Last one from me on this — genuinely curious.
+One last question — are you currently doing anything to follow up with leads automatically, or is it still mostly manual when you get a chance?
 
-Are you currently doing anything to follow up with leads automatically, or is it still mostly manual when you get a chance?
-
-Either way, happy to show you what it looks like. Just reply here.
+Happy to show you what's working for cleaning companies in Southern NH. Just reply here.
 
 Jacob`
     },
