@@ -95,21 +95,17 @@ const SETTER_ICP_THRESHOLD = 70;
 // prospects in a vertical, Scout stops scraping it and rotates to the
 // least-saturated queued vertical instead. Keys are normalized (snake_case).
 const SATURATION_THRESHOLDS = {
-  cleaning: 150,
-  restaurant: 150,
-  salon: 120,
-  fitness: 120,
-  hvac: 100,
-  roofing: 100,
-  auto_repair: 100,
-  dental: 80,
-  med_spa: 80,
-  property_management: 80,
-  landscaping: 120,
-  home_services: 150,
-  home_renovation: 120,
+  auto: 50,
+  cleaning: 50,
+  restaurant: 60,
+  fitness: 40,
+  salon: 40,
+  med_spa: 30,
+  landscaping: 30,
+  property_management: 40,
+  home_services: 30,
+  default: 40,
 };
-const DEFAULT_SATURATION_THRESHOLD = 100;
 
 // Standardize a free-form industry/vertical label to snake_case.
 // e.g. "Home Services" -> "home_services", "auto repair" -> "auto_repair",
@@ -125,7 +121,7 @@ function getSaturationThreshold(vertical) {
   const key = normalizeVertical(vertical);
   return Object.prototype.hasOwnProperty.call(SATURATION_THRESHOLDS, key)
     ? SATURATION_THRESHOLDS[key]
-    : DEFAULT_SATURATION_THRESHOLD;
+    : SATURATION_THRESHOLDS.default;
 }
 
 const GENERIC_CONTACT_NAMES = new Set(['there', 'info', 'hello', 'contact', 'admin', 'support', 'sales']);
@@ -1001,7 +997,7 @@ async function ensureScoutQueue(pool) {
       vertical       TEXT NOT NULL,
       location       TEXT NOT NULL DEFAULT '',
       prospect_count INTEGER NOT NULL DEFAULT 0,
-      threshold      INTEGER NOT NULL DEFAULT ${DEFAULT_SATURATION_THRESHOLD},
+      threshold      INTEGER NOT NULL DEFAULT ${SATURATION_THRESHOLDS.default},
       saturated      BOOLEAN NOT NULL DEFAULT false,
       status         TEXT NOT NULL DEFAULT 'queued',
       last_run_at    TIMESTAMPTZ,
