@@ -166,13 +166,11 @@ Pulseforge
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Sent you a note a few days ago — wanted to follow up once before moving on.
+Didn't hear back — totally fine, just wanted to make sure my last note landed.
 
-I know you're busy. That's kind of the whole point.
+One thing I've been building for cleaning companies in Southern NH: a system that texts new leads within 2 minutes, follows up automatically if they don't respond, and books appointments without the owner touching anything.
 
-The businesses I work with aren't struggling — they're good at what they do. They just don't have time to chase new customers on top of everything else. That's the gap I fill.
-
-If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
+If that's something worth a look for {{business_name}}, just reply here and I'll put together a free mockup same day.
 
 Jacob`
     },
