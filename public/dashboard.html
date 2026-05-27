@@ -2317,12 +2317,12 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
   .area-actions { width: 100%; flex-wrap: wrap; }
   .btn-run-all, .btn-outline { min-height: 44px; font-size: 0.7rem; padding: 11px 16px; }
 
-  /* ---------- STAT CARDS (single column) ---------- */
-  .stat-row { grid-template-columns: 1fr; gap: 0.75rem; padding: 1rem 1rem 0; }
-  .metric-tile, .stat-card { padding: 1.15rem 1.25rem; }
-  .metric-tile-val, .stat-card-val { font-size: 1.85rem; }
-  .metric-tile-label, .stat-card-label { font-size: 0.72rem; }
-  .metric-tile-change, .stat-card-sub { font-size: 0.68rem; }
+  /* ---------- STAT CARDS (compact 2x2, ~180px total) ---------- */
+  .stat-row { grid-template-columns: 1fr 1fr; gap: 0.55rem; padding: 0.7rem 0.9rem 0; }
+  .metric-tile, .stat-card { padding: 0.65rem 0.8rem; border-radius: 9px; }
+  .metric-tile-label, .stat-card-label { font-size: 0.56rem; letter-spacing: 1px; margin-bottom: 0.28rem; }
+  .metric-tile-val, .stat-card-val { font-size: 1.55rem; }
+  .metric-tile-change, .stat-card-sub { font-size: 0.55rem; margin-top: 0.22rem; }
 
   /* ---------- AGENT ROSTER (single column, big RUN) ---------- */
   .agents-grid, .agents-grid-3 {
