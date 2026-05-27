@@ -179,13 +179,11 @@ Jacob`
       subject: "quick question about {{business_name}}",
       body: `Hi {{first_name}},
 
-One thing I'm seeing across local businesses right now — the ones growing consistently aren't spending more on ads. They're just staying in front of people longer than their competition.
+Last one from me on this — genuinely curious.
 
-Most owners go quiet between jobs. The ones winning don't.
+Are you currently doing anything to follow up with leads automatically, or is it still mostly manual when you get a chance?
 
-I help businesses like {{business_name}} stay visible automatically — no extra time required on your end.
-
-Are you currently doing anything to stay in front of new customers consistently, or is it mostly word of mouth at this point?
+Either way, happy to show you what it looks like. Just reply here.
 
 Jacob`
     },
