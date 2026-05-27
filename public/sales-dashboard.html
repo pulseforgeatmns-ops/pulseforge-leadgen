@@ -120,12 +120,56 @@ body.light-mode .tabs { background: rgba(0,0,0,0.035); }
   border: 0; display: block;
   background: var(--bg);
 }
+/* ---------- MOBILE (≤768px): hamburger nav, no overflow ---------- */
+.mobile-hamburger, .mobile-backdrop, .nav-close { display: none; }
+@media (max-width: 768px) {
+  html, body { overflow-x: hidden; }
+  .topbar { gap: 0.6rem; padding: 0 0.9rem; }
+  .logo { font-size: 1.1rem; letter-spacing: 2px; }
+  .mobile-hamburger {
+    display: flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; margin-left: -0.4rem; padding: 0;
+    background: transparent; border: none; color: var(--white); cursor: pointer; flex-shrink: 0;
+  }
+  .mobile-hamburger svg { width: 24px; height: 24px; }
+  .tabs {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: 82%; max-width: 300px;
+    transform: translateX(-100%); transition: transform 0.28s ease;
+    z-index: 1200; background: var(--bg1);
+    box-shadow: 0 0 44px rgba(0,0,0,0.6);
+    padding: 3.25rem 1rem 1rem;
+    flex-direction: column; gap: 0.35rem; align-items: stretch; border-radius: 0;
+  }
+  .tabs.open { transform: translateX(0); }
+  .tab { width: 100%; text-align: left; min-height: 48px; font-size: 0.95rem; padding: 14px; }
+  .mobile-backdrop {
+    display: block; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.55); z-index: 1100;
+    opacity: 0; visibility: hidden;
+    transition: opacity 0.28s ease, visibility 0.28s ease;
+  }
+  .mobile-backdrop.open { opacity: 1; visibility: visible; }
+  .nav-close {
+    display: flex; align-items: center; justify-content: center;
+    position: absolute; top: 0.5rem; right: 0.5rem;
+    width: 44px; height: 44px;
+    background: transparent; border: none; color: var(--white);
+    font-size: 2rem; line-height: 1; cursor: pointer;
+  }
+  .sys-status span { display: none; }
+  .sys-status { padding: 6px 8px; }
+  .user-dropdown a { min-height: 44px; display: flex; align-items: center; }
+}
 </style>
 </head>
 <body>
+<div class="mobile-backdrop" id="mobileBackdrop"></div>
 <div class="topbar">
+  <button class="mobile-hamburger" id="mobileHamburger" type="button" aria-label="Open menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
   <div class="logo"><div class="logo-dot"></div>PULSEFORGE SALES</div>
   <div class="tabs" role="tablist">
+    <button class="nav-close" id="navClose" type="button" aria-label="Close menu">&times;</button>
     <button class="tab active" type="button" data-panel="setter" role="tab" aria-selected="true">Setter Queue</button>
     <button class="tab" type="button" data-panel="closer" role="tab" aria-selected="false">Closer Pipeline</button>
   </div>
@@ -189,6 +233,20 @@ body.light-mode .tabs { background: rgba(0,0,0,0.035); }
 
   const stored = localStorage.getItem('pulseforge-theme');
   if (stored === 'light') document.body.classList.add('light-mode');
+})();
+
+(function setupMobileNav() {
+  const nav = document.querySelector('.tabs');
+  const backdrop = document.getElementById('mobileBackdrop');
+  const hamburger = document.getElementById('mobileHamburger');
+  const closeBtn = document.getElementById('navClose');
+  if (!nav || !backdrop) return;
+  const open = () => { nav.classList.add('open'); backdrop.classList.add('open'); };
+  const close = () => { nav.classList.remove('open'); backdrop.classList.remove('open'); };
+  hamburger && hamburger.addEventListener('click', open);
+  closeBtn && closeBtn.addEventListener('click', close);
+  backdrop.addEventListener('click', close);
+  nav.querySelectorAll('.tab').forEach(t => t.addEventListener('click', close));
 })();
 
 (function setupUser() {

@@ -52,13 +52,82 @@ button.danger { color:var(--red); border-color:rgba(255,59,92,0.25); }
 .total-box { font-family:'JetBrains Mono',monospace; font-size:0.66rem; color:var(--gray-light); }
 .total-box strong { display:block; margin-top:0.35rem; color:var(--white); font-size:0.95rem; }
 .empty { color:var(--gray-light); text-align:center; padding:2rem; }
-@media (max-width: 980px) { .metrics { grid-template-columns:repeat(2, minmax(0,1fr)); } .topbar { flex-wrap:wrap; height:auto; padding:0.8rem 1rem; } main { padding:1rem; } table { min-width:900px; } .panel { overflow-x:auto; } }
+/* Closer kanban (replaces pipeline table on all widths) */
+.closer-kanban { display:grid; grid-template-columns:repeat(5,minmax(220px,1fr)); gap:1rem; padding:1rem; overflow-x:auto; }
+.ck-col { background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:10px; padding:0.6rem; display:flex; flex-direction:column; gap:0.6rem; min-height:80px; }
+.ck-col-head { font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:1.4px; text-transform:uppercase; color:var(--gray-light); padding:0.25rem 0.25rem 0.4rem; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+.ck-col-count { color:var(--purple-bright); }
+.ck-empty { color:var(--gray-light); font-family:'JetBrains Mono',monospace; font-size:0.6rem; text-align:center; padding:1rem 0.25rem; opacity:0.7; }
+.ck-card { background:var(--bg1); border:1px solid var(--border); border-radius:8px; padding:0.75rem; cursor:pointer; display:flex; flex-direction:column; gap:0.45rem; }
+.ck-card:hover { border-color:rgba(139,92,246,0.35); }
+.ck-card .ck-biz { font-weight:600; color:var(--white); font-size:0.95rem; }
+.ck-card .ck-meta { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--gray-light); line-height:1.5; }
+.ck-card .ck-notes { color:rgba(232,240,254,0.72); font-size:0.82rem; line-height:1.35; white-space:pre-wrap; }
+body.light-mode .ck-card .ck-notes { color:rgba(26,26,24,0.72); }
+.ck-card .actions { display:flex; gap:0.35rem; flex-wrap:wrap; margin-top:0.2rem; }
+/* Reusable bottom slide-up sheet */
+.m-sheet { position:fixed; left:0; right:0; bottom:0; z-index:1500; background:var(--bg1); border-top:1px solid var(--border); border-radius:18px 18px 0 0; box-shadow:0 -10px 34px rgba(0,0,0,.5); transform:translateY(100%); transition:transform .3s ease; max-height:85vh; overflow-y:auto; padding:1.25rem; }
+.m-sheet.open { transform:translateY(0); }
+.m-sheet-handle { width:42px; height:5px; border-radius:99px; background:var(--gray); margin:0 auto .9rem; }
+.m-sheet-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:1499; opacity:0; visibility:hidden; transition:opacity .25s,visibility .25s; }
+.m-sheet-backdrop.open { opacity:1; visibility:visible; }
+.m-sheet-title { font-family:'Bebas Neue',sans-serif; font-size:1.5rem; letter-spacing:2px; margin-bottom:0.3rem; }
+.m-sheet-sub { font-family:'JetBrains Mono',monospace; font-size:0.7rem; color:var(--gray-light); line-height:1.6; margin-bottom:0.9rem; }
+.m-sheet-bigval { font-family:'Bebas Neue',sans-serif; font-size:3.5rem; line-height:1; letter-spacing:1px; color:var(--purple-bright); margin-bottom:0.6rem; }
+.m-sheet .actions { display:flex; flex-direction:column; gap:0.6rem; margin-top:1rem; }
+.m-sheet .actions button { min-height:48px; font-size:0.9rem; width:100%; }
+/* Hamburger / drawer base (mobile only) */
+.mobile-hamburger, .mobile-backdrop, .nav-close { display:none; }
+@media (max-width: 980px) { .topbar { flex-wrap:wrap; height:auto; padding:0.8rem 1rem; } main { padding:1rem; } }
+@media (max-width: 768px) {
+  html, body { overflow-x:hidden; }
+  main { padding:1rem; }
+  .topbar { flex-wrap:nowrap; height:56px; padding:0 0.9rem; gap:0.6rem; }
+  .logo { font-size:1.2rem; letter-spacing:2px; }
+  .right { gap:0.6rem; }
+  /* Hamburger */
+  .mobile-hamburger { display:flex; align-items:center; justify-content:center; width:44px; height:44px; background:transparent; border:none; color:var(--white); cursor:pointer; flex-shrink:0; padding:0; }
+  .mobile-hamburger svg { width:24px; height:24px; }
+  /* Drawer nav */
+  .tabs { position:fixed; top:0; left:0; bottom:0; width:82%; max-width:300px; transform:translateX(-100%); transition:transform .28s ease; z-index:1200; background:var(--bg1); box-shadow:0 0 44px rgba(0,0,0,.6); padding:3.25rem 1rem 1rem; flex-direction:column; gap:.35rem; align-items:stretch; border-radius:0; overflow-y:auto; border:none; }
+  .tabs.open { transform:translateX(0); }
+  .tab { width:100%; text-align:left; min-height:48px; font-size:0.95rem; padding:14px; }
+  .mobile-backdrop { display:block; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:1100; opacity:0; visibility:hidden; transition:opacity .28s,visibility .28s; }
+  .mobile-backdrop.open { opacity:1; visibility:visible; }
+  .nav-close { display:flex; align-items:center; justify-content:center; position:absolute; top:.5rem; right:.5rem; width:44px; height:44px; background:transparent; border:none; color:var(--white); font-size:2rem; line-height:1; cursor:pointer; }
+  /* Metrics 2x2 compact, tappable */
+  .metrics { grid-template-columns:1fr 1fr; gap:.55rem; }
+  .metric { padding:0.75rem; min-height:auto; cursor:pointer; }
+  .metric .value { font-size:1.6rem; }
+  /* Pipeline kanban → horizontal swipe, one stage per screen */
+  .closer-kanban { grid-auto-flow:column; grid-auto-columns:88vw; grid-template-columns:none!important; display:grid; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; gap:.75rem; padding:0.75rem; }
+  .ck-col { scroll-snap-align:center; }
+  .ck-card .actions button { min-height:44px; flex:1; }
+  /* Commissions table → stacked cards */
+  #commissionsPanel table, #commissionsPanel thead, #commissionsPanel tbody, #commissionsPanel th, #commissionsPanel td, #commissionsPanel tr { display:block; }
+  #commissionsPanel thead { display:none; }
+  #commissionsPanel tbody tr { border:1px solid var(--border); border-radius:10px; margin:0 1rem .75rem; padding:.4rem .25rem; background:var(--bg1); }
+  #commissionsPanel td { display:flex; justify-content:space-between; gap:1rem; align-items:center; padding:.55rem .85rem; border-bottom:1px solid rgba(255,255,255,.04); white-space:normal; text-align:right; font-size:0.9rem; }
+  #commissionsPanel td:last-child { border-bottom:0; }
+  #commissionsPanel td::before { content:attr(data-label); color:var(--gray); font-family:'JetBrains Mono',monospace; font-size:.62rem; letter-spacing:1px; text-transform:uppercase; text-align:left; flex-shrink:0; }
+  #commissionsPanel td.empty { display:block; text-align:center; }
+  #commissionsPanel td.empty::before { content:''; }
+  .totals { grid-template-columns:1fr 1fr; }
+  /* Touch targets & fonts */
+  button, .tab, .nav-close, .mobile-hamburger, a.launch-btn { min-height:44px; }
+  button { font-size:0.85rem; padding:0.6rem 0.8rem; }
+  td, .ck-card .ck-notes, .notes { font-size:0.9rem; }
+  input, select, textarea { font-size:16px; }
+}
 </style>
 </head>
 <body>
+<div class="mobile-backdrop" id="mobileBackdrop"></div>
 <div class="topbar">
+  <button class="mobile-hamburger" id="mobileHamburger" type="button" aria-label="Open menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
   <div class="logo">PULSEFORGE CLOSER</div>
   <div class="tabs">
+    <button class="nav-close" id="navClose" type="button" aria-label="Close menu">&times;</button>
     <button class="tab active" data-tab="pipeline">Pipeline</button>
     <button class="tab" data-tab="commissions">Commissions</button>
   </div>
@@ -73,11 +142,8 @@ button.danger { color:var(--red); border-color:rgba(255,59,92,0.25); }
     <div class="metric"><div class="label">Commission Earned</div><div class="value green" id="commissionMonth">$0</div></div>
   </section>
   <section class="panel active" id="pipelinePanel">
-    <div class="panel-head"><div><div class="title">BOOKED CALLS</div><div class="sub">William to Levi handoff queue</div></div><button id="refreshBtn">Refresh</button></div>
-    <table>
-      <thead><tr><th>Business</th><th>Vertical</th><th>City</th><th>Score</th><th>Booked</th><th>Setter Notes</th><th>Contact</th><th>Status</th><th>Actions</th></tr></thead>
-      <tbody id="pipelineRows"><tr><td colspan="9" class="empty">Loading...</td></tr></tbody>
-    </table>
+    <div class="panel-head"><div><div class="title">BOOKED CALLS</div><div class="sub">William to Levi handoff queue · swipe stages</div></div><button id="refreshBtn">Refresh</button></div>
+    <div class="closer-kanban" id="pipelineRows"><div class="ck-empty">Loading...</div></div>
   </section>
   <section class="panel" id="commissionsPanel">
     <div class="panel-head"><div><div class="title">COMMISSION TRACKER</div><div class="sub">15% of closed MRR</div></div></div>
@@ -93,6 +159,8 @@ button.danger { color:var(--red); border-color:rgba(255,59,92,0.25); }
     </div>
   </section>
 </main>
+<div class="m-sheet-backdrop" id="mSheetBackdrop"></div>
+<div class="m-sheet" id="mSheet"><div class="m-sheet-handle"></div><div id="mSheetBody"></div></div>
 <script>
 let pipeline = [];
 let commissions = [];
@@ -128,30 +196,77 @@ function renderMetrics(m) {
   document.getElementById('mrrMonth').textContent = money(m.mrr_month);
   document.getElementById('commissionMonth').textContent = money(m.commission_month);
 }
+const PIPELINE_STAGES = [
+  { key:'booked', title:'Booked' },
+  { key:'contacted', title:'Contacted' },
+  { key:'showed', title:'Showed' },
+  { key:'closed', title:'Closed' },
+  { key:'lost', title:'Lost' }
+];
+function leadActionsHtml(lead) {
+  return `<div class="actions">
+    <button data-status="contacted" data-id="${lead.id}">Contacted</button>
+    <button data-status="showed" data-id="${lead.id}">Showed</button>
+    <button class="good" data-close="${lead.id}">Closed</button>
+    <button class="danger" data-status="lost" data-id="${lead.id}">Lost</button>
+  </div>`;
+}
 function renderPipeline() {
   const body = document.getElementById('pipelineRows');
-  if (!pipeline.length) {
-    body.innerHTML = '<tr><td colspan="9" class="empty">No booked calls assigned right now</td></tr>';
-    return;
-  }
-  body.innerHTML = pipeline.map(lead => `
-    <tr>
-      <td><strong>${lead.business_name}</strong><div class="mono">${lead.contact_name || 'No contact name'}</div></td>
-      <td>${lead.vertical}</td>
-      <td>${lead.city}</td>
-      <td><span class="badge">${lead.score}</span></td>
-      <td>${date(lead.booked_at)}</td>
-      <td><div class="notes">${lead.setter_notes || '-'}</div></td>
-      <td>${lead.phone || '-'}<div class="mono">${lead.email || '-'}</div></td>
-      <td><span class="badge">${lead.call_status || 'booked'}</span></td>
-      <td><div class="actions">
-        <button data-status="contacted" data-id="${lead.id}">Contacted</button>
-        <button data-status="showed" data-id="${lead.id}">Showed</button>
-        <button class="good" data-close="${lead.id}">Closed</button>
-        <button class="danger" data-status="lost" data-id="${lead.id}">Lost</button>
-      </div></td>
-    </tr>
-  `).join('');
+  const byStage = {};
+  PIPELINE_STAGES.forEach(s => { byStage[s.key] = []; });
+  pipeline.forEach(lead => {
+    const st = lead.call_status || 'booked';
+    (byStage[st] || (byStage[st] = [])).push(lead);
+  });
+  body.innerHTML = PIPELINE_STAGES.map(stage => {
+    const leads = byStage[stage.key] || [];
+    const cards = leads.length
+      ? leads.map(lead => `
+        <div class="ck-card" data-lead="${lead.id}">
+          <div class="ck-biz">${lead.business_name}</div>
+          <div class="ck-meta">${lead.contact_name || 'No contact name'}</div>
+          <div class="ck-meta">${lead.vertical || '-'} · ${lead.city || '-'} · <span class="badge">${lead.score}</span></div>
+          <div class="ck-meta">Booked ${date(lead.booked_at)}</div>
+          <div class="ck-meta">${lead.phone || '-'} · ${lead.email || '-'}</div>
+          ${lead.setter_notes ? `<div class="ck-notes">${lead.setter_notes}</div>` : ''}
+          ${leadActionsHtml(lead)}
+        </div>`).join('')
+      : '<div class="ck-empty">No leads</div>';
+    return `<div class="ck-col">
+      <div class="ck-col-head">${stage.title}<span class="ck-col-count">${leads.length}</span></div>
+      ${cards}
+    </div>`;
+  }).join('');
+}
+function openLeadSheet(id) {
+  const lead = pipeline.find(l => String(l.id) === String(id));
+  if (!lead) return;
+  document.getElementById('mSheetBody').innerHTML = `
+    <div class="m-sheet-title">${lead.business_name}</div>
+    <div class="m-sheet-sub">${lead.contact_name || 'No contact name'}<br>
+      ${lead.vertical || '-'} · ${lead.city || '-'} · Score ${lead.score}<br>
+      Booked ${date(lead.booked_at)} · Status ${lead.call_status || 'booked'}<br>
+      ${lead.phone || '-'} · ${lead.email || '-'}</div>
+    ${lead.setter_notes ? `<div class="ck-notes">${lead.setter_notes}</div>` : ''}
+    ${leadActionsHtml(lead)}`;
+  openSheet();
+}
+function openMetricSheet(card) {
+  const label = (card.querySelector('.label') || {}).textContent || '';
+  const value = (card.querySelector('.value') || {}).textContent || '';
+  document.getElementById('mSheetBody').innerHTML = `
+    <div class="m-sheet-sub">${label}</div>
+    <div class="m-sheet-bigval">${value}</div>`;
+  openSheet();
+}
+function openSheet() {
+  document.getElementById('mSheet').classList.add('open');
+  document.getElementById('mSheetBackdrop').classList.add('open');
+}
+function closeSheet() {
+  document.getElementById('mSheet').classList.remove('open');
+  document.getElementById('mSheetBackdrop').classList.remove('open');
 }
 function renderCommissions() {
   const body = document.getElementById('commissionRows');
@@ -160,13 +275,13 @@ function renderCommissions() {
   } else {
     body.innerHTML = commissions.map(c => `
       <tr>
-        <td><strong>${c.business_name}</strong></td>
-        <td>${money(c.mrr_amount)}</td>
-        <td>${money(c.commission_amt)}</td>
-        <td><span class="badge">${c.status}</span></td>
-        <td>${date(c.closed_at)}</td>
-        <td>${date(c.paid_at)}</td>
-        <td><button class="primary" data-pay="${c.id}" ${c.status === 'paid' ? 'disabled' : ''}>Mark Paid</button></td>
+        <td data-label="Business"><strong>${c.business_name}</strong></td>
+        <td data-label="MRR">${money(c.mrr_amount)}</td>
+        <td data-label="Commission">${money(c.commission_amt)}</td>
+        <td data-label="Status"><span class="badge">${c.status}</span></td>
+        <td data-label="Closed">${date(c.closed_at)}</td>
+        <td data-label="Paid">${date(c.paid_at)}</td>
+        <td data-label="Actions"><button class="primary" data-pay="${c.id}" ${c.status === 'paid' ? 'disabled' : ''}>Mark Paid</button></td>
       </tr>
     `).join('');
   }
@@ -206,6 +321,7 @@ document.addEventListener('click', async event => {
   }
   const status = event.target.closest('[data-status]');
   if (status) {
+    closeSheet();
     await api('/closer/api/prospects/' + status.dataset.id + '/status', { method:'PATCH', body:JSON.stringify({ status: status.dataset.status }) });
     await loadAll();
   }
@@ -213,6 +329,7 @@ document.addEventListener('click', async event => {
   if (close) {
     const mrr = prompt('Monthly recurring revenue amount');
     if (!mrr) return;
+    closeSheet();
     const notes = prompt('Close notes, optional') || '';
     await api('/closer/api/prospects/' + close.dataset.close + '/close', { method:'POST', body:JSON.stringify({ mrr_amount: Number(mrr), notes }) });
     await loadAll();
@@ -222,7 +339,30 @@ document.addEventListener('click', async event => {
     try { await api('/closer/api/commissions/' + pay.dataset.pay + '/pay', { method:'PATCH', body:JSON.stringify({}) }); await loadAll(); }
     catch (err) { alert(err.message); }
   }
+  // Open lead detail sheet when tapping a card (but not its action buttons)
+  if (!status && !close && !tab) {
+    const metric = event.target.closest('.metric');
+    if (metric && window.matchMedia('(max-width: 768px)').matches) { openMetricSheet(metric); return; }
+    const card = event.target.closest('.ck-card');
+    if (card && !event.target.closest('button')) { openLeadSheet(card.dataset.lead); }
+  }
 });
+// Mobile slide-in nav drawer
+(function setupMobileNav(){
+  const nav=document.querySelector('.tabs');
+  const backdrop=document.getElementById('mobileBackdrop');
+  const hamburger=document.getElementById('mobileHamburger');
+  const closeBtn=document.getElementById('navClose');
+  if(!nav||!backdrop)return;
+  const open=()=>{nav.classList.add('open');backdrop.classList.add('open');};
+  const close=()=>{nav.classList.remove('open');backdrop.classList.remove('open');};
+  hamburger&&hamburger.addEventListener('click',open);
+  closeBtn&&closeBtn.addEventListener('click',close);
+  backdrop.addEventListener('click',close);
+  nav.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',close));
+})();
+// Bottom sheet close handlers
+document.getElementById('mSheetBackdrop').addEventListener('click', closeSheet);
 document.getElementById('refreshBtn').addEventListener('click', loadAll);
 loadAll();
 setInterval(loadAll, 60000);
