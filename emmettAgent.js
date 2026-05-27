@@ -192,9 +192,7 @@ Jacob`
       subject: "closing the loop",
       body: `Hi {{first_name}},
 
-Last note from me — I don't want to clutter your inbox.
-
-If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
+I won't keep filling up your inbox. If the timing's ever right, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
 
 Rooting for you either way.
 
