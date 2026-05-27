@@ -21,12 +21,12 @@ const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext')
 // Write one agent_log row per Scout run so we can answer
 // "did Scout run? for which client/industry/location? did it find anything?"
 // without trawling Railway stdout. Best-effort — never throws.
-async function logScoutRun(status, payload) {
+async function logScoutRun(status, payload, action = 'scrape') {
   try {
     await pool.query(`
       INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
       VALUES ($1, $2, $3, $4, NOW(), $5)
-    `, ['scout', 'scrape', JSON.stringify(payload), status, CONFIG.clientId]);
+    `, ['scout', action, JSON.stringify(payload), status, CONFIG.clientId]);
   } catch (err) {
     console.error('[logScoutRun] failed to write:', err.message);
   }
@@ -82,6 +82,7 @@ let CONFIG = {
   outputSheet: args.sheet     !== 'false',
   sheetId:     args.sheetid   || process.env.GOOGLE_SHEET_ID || '',
   clientId:    getRuntimeClientId(args),
+  vertical:    normalizeVertical(args.industry || 'cleaning'),
 };
 let CLIENT_CONFIG = null;
 
@@ -89,6 +90,44 @@ const GOOGLE_API_KEY    = process.env.GOOGLE_API_KEY;
 const GOOGLE_CX         = process.env.GOOGLE_CX;
 const PROSPEO_API_KEY   = process.env.PROSPEO_API_KEY;
 const SETTER_ICP_THRESHOLD = 70;
+
+// Per-vertical saturation caps. Once a client has accumulated this many
+// prospects in a vertical, Scout stops scraping it and rotates to the
+// least-saturated queued vertical instead. Keys are normalized (snake_case).
+const SATURATION_THRESHOLDS = {
+  cleaning: 150,
+  restaurant: 150,
+  salon: 120,
+  fitness: 120,
+  hvac: 100,
+  roofing: 100,
+  auto_repair: 100,
+  dental: 80,
+  med_spa: 80,
+  property_management: 80,
+  landscaping: 120,
+  home_services: 150,
+  home_renovation: 120,
+};
+const DEFAULT_SATURATION_THRESHOLD = 100;
+
+// Standardize a free-form industry/vertical label to snake_case.
+// e.g. "Home Services" -> "home_services", "auto repair" -> "auto_repair",
+// null/empty -> "unknown".
+function normalizeVertical(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return 'unknown';
+  const slug = raw.toLowerCase().replace(/[\s\-]+/g, '_').replace(/^_+|_+$/g, '');
+  return slug || 'unknown';
+}
+
+function getSaturationThreshold(vertical) {
+  const key = normalizeVertical(vertical);
+  return Object.prototype.hasOwnProperty.call(SATURATION_THRESHOLDS, key)
+    ? SATURATION_THRESHOLDS[key]
+    : DEFAULT_SATURATION_THRESHOLD;
+}
+
 const GENERIC_CONTACT_NAMES = new Set(['there', 'info', 'hello', 'contact', 'admin', 'support', 'sales']);
 const GENERIC_EMAIL_PREFIX_RE = /^(?:info|hello|contact|admin|support|sales|office|team|service|customerservice|customer\.?service|no-?reply|noreply|mail|inquir(?:y|ies))[\w.+-]*$/i;
 
@@ -891,7 +930,7 @@ async function saveToDatabase(leads) {
       if (!companyId) throw new Error(`Unable to link company for ${companyName}`);
       const insert = await pool.query(
       'INSERT INTO prospects (company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical, client_id, service_area_match, discovery_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (email) DO NOTHING RETURNING id',
-      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, null, CONFIG.industry, CONFIG.clientId, serviceArea, discoveryMethod]
+      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, null, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod]
     );
       if (!insert.rows.length) {
         skipped++;
@@ -949,6 +988,140 @@ async function ensureCompanyColumns(pool) {
   `);
 }
 
+// scout_queue tracks, per client + vertical + location, how many prospects
+// have accumulated and whether the vertical is saturated. It drives the
+// queue rotation: when a requested vertical is saturated, Scout pulls the
+// next least-saturated queued item instead.
+async function ensureScoutQueue(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS scout_queue (
+      id             SERIAL PRIMARY KEY,
+      client_id      INTEGER NOT NULL DEFAULT 1 REFERENCES clients(id),
+      industry       TEXT NOT NULL DEFAULT '',
+      vertical       TEXT NOT NULL,
+      location       TEXT NOT NULL DEFAULT '',
+      prospect_count INTEGER NOT NULL DEFAULT 0,
+      threshold      INTEGER NOT NULL DEFAULT ${DEFAULT_SATURATION_THRESHOLD},
+      saturated      BOOLEAN NOT NULL DEFAULT false,
+      status         TEXT NOT NULL DEFAULT 'queued',
+      last_run_at    TIMESTAMPTZ,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS scout_queue_client_vertical_location_idx
+    ON scout_queue (client_id, vertical, location)
+  `);
+}
+
+// One-time-safe migration: rewrite any non-snake_case vertical values
+// (e.g. "home services", "auto repair", NULL) to the normalized form.
+async function normalizeExistingVerticals(pool) {
+  await pool.query(`
+    UPDATE prospects
+    SET vertical = LOWER(REGEXP_REPLACE(TRIM(vertical), '[\\s\\-]+', '_', 'g'))
+    WHERE vertical IS NOT NULL
+      AND TRIM(vertical) <> ''
+      AND vertical <> LOWER(REGEXP_REPLACE(TRIM(vertical), '[\\s\\-]+', '_', 'g'))
+  `);
+  await pool.query(`
+    UPDATE prospects
+    SET vertical = 'unknown'
+    WHERE vertical IS NULL OR TRIM(vertical) = ''
+  `);
+}
+
+async function getProspectCount(clientId, vertical) {
+  const res = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM prospects WHERE client_id = $1 AND vertical = $2`,
+    [clientId, vertical]
+  );
+  return res.rows[0]?.count || 0;
+}
+
+// Recompute prospect_count + saturated for every queued vertical of a client
+// so rotation picks an accurate "lowest count" item.
+async function refreshQueueCounts(clientId) {
+  await pool.query(`
+    UPDATE scout_queue sq
+    SET prospect_count = COALESCE(sub.cnt, 0),
+        saturated = COALESCE(sub.cnt, 0) >= sq.threshold,
+        updated_at = NOW()
+    FROM (
+      SELECT vertical, COUNT(*)::int AS cnt
+      FROM prospects
+      WHERE client_id = $1
+      GROUP BY vertical
+    ) sub
+    WHERE sq.client_id = $1 AND sq.vertical = sub.vertical
+  `, [clientId]);
+}
+
+async function upsertQueueItem({ clientId, industry, vertical, location, count, threshold, saturated }) {
+  await pool.query(`
+    INSERT INTO scout_queue (client_id, industry, vertical, location, prospect_count, threshold, saturated, status, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', NOW())
+    ON CONFLICT (client_id, vertical, location) DO UPDATE SET
+      industry = EXCLUDED.industry,
+      prospect_count = EXCLUDED.prospect_count,
+      threshold = EXCLUDED.threshold,
+      saturated = EXCLUDED.saturated,
+      updated_at = NOW()
+  `, [clientId, industry || vertical, vertical, location || '', count, threshold, saturated]);
+}
+
+// Next item to scrape: the unsaturated queued vertical with the fewest prospects.
+async function pickNextQueueItem(clientId) {
+  const res = await pool.query(`
+    SELECT industry, vertical, location, prospect_count
+    FROM scout_queue
+    WHERE client_id = $1 AND saturated = false
+    ORDER BY prospect_count ASC, id ASC
+    LIMIT 1
+  `, [clientId]);
+  return res.rows[0] || null;
+}
+
+// Decide what Scout should actually scrape this run. Records the requested
+// target in the queue; if it is saturated, logs vertical_saturated and rotates
+// to the least-saturated queued item. Returns { skip: true } when nothing is
+// left to scrape.
+async function resolveScoutTarget({ clientId, industry, location }) {
+  await ensureScoutQueue(pool);
+  await normalizeExistingVerticals(pool);
+  await refreshQueueCounts(clientId);
+
+  const vertical = normalizeVertical(industry);
+  const threshold = getSaturationThreshold(vertical);
+  const count = await getProspectCount(clientId, vertical);
+  const saturated = count >= threshold;
+
+  await upsertQueueItem({ clientId, industry, vertical, location, count, threshold, saturated });
+
+  if (!saturated) {
+    return { industry, location, vertical, saturated: false };
+  }
+
+  console.log(`[Scout] "${vertical}" saturated for client ${clientId}: ${count}/${threshold} prospects — rotating queue`);
+  await logScoutRun('skipped', { vertical, industry, location, prospect_count: count, threshold }, 'vertical_saturated');
+
+  const next = await pickNextQueueItem(clientId);
+  if (!next) {
+    console.log('[Scout] No unsaturated queue items remain — skipping run');
+    return { skip: true, vertical, saturated: true };
+  }
+
+  console.log(`[Scout] Rotated to "${next.vertical}" (${next.prospect_count} prospects, lowest in queue)`);
+  return {
+    industry: next.industry || next.vertical,
+    location: next.location || location,
+    vertical: next.vertical,
+    saturated: false,
+    rotatedFrom: vertical,
+  };
+}
+
 async function run(params = {}) {
   CONFIG.clientId = getRuntimeClientId(params);
   process.env.ACTIVE_CLIENT_ID = String(CONFIG.clientId);
@@ -959,16 +1132,38 @@ async function run(params = {}) {
   if (params.jobTitle) CONFIG.jobTitle = params.jobTitle;
   if (params.maxResults) CONFIG.maxResults = parseInt(params.maxResults);
 
+  // Saturation gate + queue rotation. May redirect this run to a different
+  // vertical, or skip entirely when every queued vertical is saturated.
+  const target = await resolveScoutTarget({
+    clientId: CONFIG.clientId,
+    industry: CONFIG.industry,
+    location: CONFIG.location,
+  });
+  if (target.skip) {
+    return { skipped: true, reason: 'saturated', vertical: target.vertical };
+  }
+  CONFIG.industry = target.industry;
+  CONFIG.location = target.location;
+  CONFIG.vertical = target.vertical;
+
   const startedAt = Date.now();
   const runContext = {
     industry: CONFIG.industry,
     location: CONFIG.location,
+    vertical: CONFIG.vertical,
     job_title: CONFIG.jobTitle,
     max_results: CONFIG.maxResults,
+    ...(target.rotatedFrom ? { rotated_from: target.rotatedFrom } : {}),
   };
   await logScoutRun('running', runContext);
   try {
     const stats = await main();
+    await pool.query(
+      `UPDATE scout_queue SET last_run_at = NOW(), updated_at = NOW()
+       WHERE client_id = $1 AND vertical = $2 AND location = $3`,
+      [CONFIG.clientId, CONFIG.vertical, CONFIG.location || '']
+    );
+    await refreshQueueCounts(CONFIG.clientId);
     await logScoutRun('success', {
       ...runContext,
       duration_ms: Date.now() - startedAt,
