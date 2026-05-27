@@ -635,16 +635,13 @@ gopulseforge.com`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-I work with local auto repair shops in Southern NH on one specific problem: keeping the service bay full without waiting for walk-ins and hoping word of mouth is enough.
+Auto shops in Manchester are busier than ever right now — but the ones adding real revenue aren't just doing more jobs, they're capturing customers who never came back after the first visit.
 
-Most shop owners I talk to are excellent mechanics with loyal repeat customers. The challenge is not the quality of work. It is staying consistently in front of local car owners who have not found them yet.
-
-I built a system that handles that automatically. It finds local car owners in your area, reaches out on your behalf, and keeps {{business_name}} visible between service intervals. It runs in the background while you run the shop.
-
-Is building a steadier flow of new customers something you are working on right now?
+Is building a steadier flow of new and returning customers something you're working on at {{business_name}}, or is it pretty much steady as she goes?
 
 Jacob Maynard
-Pulseforge`
+Pulseforge
+(603) 293-5816`
     },
     {
       day: 4,
