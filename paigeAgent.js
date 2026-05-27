@@ -1260,10 +1260,10 @@ async function generatePost(company, contentType, channel) {
   }
 
   console.log(`  [quality] Score ${finalScore.total}/30 after ${regenerationAttempts} regeneration attempt(s)`);
-  return { content: finalDraft, quality: finalScore, regenerated };
+  return { content: finalDraft, quality: finalScore, regenerated, regenerationAttempts };
 }
 
-async function logQualityScore(channel, quality, regenerated, post) {
+async function logQualityScore(channel, quality, regenerated, post, attemptCount = 0) {
   const payload = {
     channel,
     scores: {
@@ -1276,6 +1276,7 @@ async function logQualityScore(channel, quality, regenerated, post) {
     originality: quality.originality,
     hook_strength: quality.hook_strength,
     total: quality.total,
+    attempt_count: attemptCount,
     regenerated,
     weak_dimension: quality.weak_dimension === 'none' ? null : quality.weak_dimension,
     post_preview: String(post || '').slice(0, 80),
@@ -1460,7 +1461,7 @@ async function processRegenerateTriggers() {
         if (postResult.failed) continue;
         const id = await saveToPendingApprovals(company, postResult.content, contentType, channel);
         if (id) {
-          await logQualityScore(channel, postResult.quality, true, postResult.content);
+          await logQualityScore(channel, postResult.quality, true, postResult.content, postResult.regenerationAttempts);
           console.log(`  ✓ regenerated (${id.slice(0, 8)})`);
           regenerated++;
         }
@@ -1561,7 +1562,7 @@ AND status = 'pending';`);
           const content = postResult.content;
           const id = await saveToPendingApprovals(company, content, contentType, channel);
           if (id) {
-            await logQualityScore(channel, postResult.quality, postResult.regenerated, content);
+            await logQualityScore(channel, postResult.quality, postResult.regenerated, content, postResult.regenerationAttempts);
             console.log(`  ✓ queued (${id.slice(0, 8)})\n`);
             generated++;
             channelsQueued.push(`${company.name}/${channel}`);
