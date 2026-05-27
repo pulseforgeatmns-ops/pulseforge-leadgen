@@ -861,6 +861,20 @@ function validateProspect(name) {
   return true;
 }
 
+// Returns a rejection reason string if the email is invalid, else null.
+// Empty/absent emails are not rejections — they just mean "no email".
+const EMAIL_PLACEHOLDER_DOMAINS = ['godaddy.com', 'example.com', 'test.com'];
+function emailRejection(email) {
+  if (typeof email !== 'string' || !email.trim()) return null;
+  const e = email.trim();
+  if (/\s/.test(e)) return 'contains spaces';
+  if (e.length < 6) return 'too short';
+  if ((e.match(/@/g) || []).length !== 1) return 'invalid @ count';
+  if (/\.(webp|png|jpg|gif|svg|pdf)$/i.test(e)) return 'file extension domain';
+  if (EMAIL_PLACEHOLDER_DOMAINS.includes(e.split('@')[1].toLowerCase())) return 'placeholder domain';
+  return null;
+}
+
 async function saveToDatabase(leads) {
   let saved = 0, skipped = 0, rejected = 0, setterQueued = 0, setterSkipped = 0, setterFailed = 0;
   await ensureSetterQueueColumns(pool);
@@ -907,7 +921,16 @@ async function saveToDatabase(leads) {
 
     try {
       const JUNK_EMAILS = ['user@domain.com', 'info@example.com', 'test@test.com', 'admin@domain.com'];
-      const email = typeof lead.email === 'string' && lead.email.includes('@') && !JUNK_EMAILS.includes(lead.email.toLowerCase()) ? lead.email : null;
+      let email = null;
+      const rawEmail = typeof lead.email === 'string' ? lead.email.trim() : '';
+      if (rawEmail) {
+        const reason = emailRejection(rawEmail) || (JUNK_EMAILS.includes(rawEmail.toLowerCase()) ? 'junk address' : null);
+        if (reason) {
+          await logScoutRun('rejected', { email: lead.email, reason }, 'email_rejected');
+        } else {
+          email = rawEmail;
+        }
+      }
       const nameParts = (lead.contact && lead.contact !== '—' ? lead.contact : '').trim().split(/\s+/).filter(Boolean);
 
       // Use contact first name if available and looks like a real person name.
