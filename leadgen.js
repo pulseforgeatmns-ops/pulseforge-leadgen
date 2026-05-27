@@ -1036,35 +1036,62 @@ async function getProspectCount(clientId, vertical) {
   return res.rows[0]?.count || 0;
 }
 
-// Recompute prospect_count + saturated for every queued vertical of a client
-// so rotation picks an accurate "lowest count" item.
+// Recompute prospect_count + saturated + status for EVERY queued vertical of a
+// client (including zero-count rows) from the live prospects table, so rotation
+// picks an accurate "lowest count" item and saturated/status never drift apart.
 async function refreshQueueCounts(clientId) {
   await pool.query(`
     UPDATE scout_queue sq
-    SET prospect_count = COALESCE(sub.cnt, 0),
-        saturated = COALESCE(sub.cnt, 0) >= sq.threshold,
+    SET prospect_count = calc.cnt,
+        saturated = (calc.cnt >= sq.threshold),
+        status = CASE WHEN calc.cnt >= sq.threshold THEN 'saturated' ELSE 'queued' END,
         updated_at = NOW()
     FROM (
-      SELECT vertical, COUNT(*)::int AS cnt
-      FROM prospects
-      WHERE client_id = $1
-      GROUP BY vertical
-    ) sub
-    WHERE sq.client_id = $1 AND sq.vertical = sub.vertical
+      SELECT sq2.id, COALESCE(p.cnt, 0) AS cnt
+      FROM scout_queue sq2
+      LEFT JOIN (
+        SELECT vertical, COUNT(*)::int AS cnt
+        FROM prospects
+        WHERE client_id = $1
+        GROUP BY vertical
+      ) p ON p.vertical = sq2.vertical
+      WHERE sq2.client_id = $1
+    ) calc
+    WHERE sq.id = calc.id
   `, [clientId]);
 }
 
+// Seed a row for every active vertical declared on the client so the queue is
+// complete before selection/rotation. Existing rows are left untouched.
+async function seedClientVerticals(clientId, verticals, location) {
+  const list = Array.isArray(verticals) ? verticals : [];
+  const seen = new Set();
+  for (const raw of list) {
+    const vertical = normalizeVertical(raw);
+    if (!vertical || vertical === 'unknown' || seen.has(vertical)) continue;
+    seen.add(vertical);
+    const threshold = getSaturationThreshold(vertical);
+    await pool.query(`
+      INSERT INTO scout_queue (client_id, industry, vertical, location, prospect_count, threshold, saturated, status, updated_at)
+      VALUES ($1, $2, $3, $4, 0, $5, false, 'queued', NOW())
+      ON CONFLICT (client_id, vertical, location) DO NOTHING
+    `, [clientId, vertical, vertical, location || '', threshold]);
+  }
+}
+
 async function upsertQueueItem({ clientId, industry, vertical, location, count, threshold, saturated }) {
+  const status = saturated ? 'saturated' : 'queued';
   await pool.query(`
     INSERT INTO scout_queue (client_id, industry, vertical, location, prospect_count, threshold, saturated, status, updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', NOW())
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
     ON CONFLICT (client_id, vertical, location) DO UPDATE SET
       industry = EXCLUDED.industry,
       prospect_count = EXCLUDED.prospect_count,
       threshold = EXCLUDED.threshold,
       saturated = EXCLUDED.saturated,
+      status = EXCLUDED.status,
       updated_at = NOW()
-  `, [clientId, industry || vertical, vertical, location || '', count, threshold, saturated]);
+  `, [clientId, industry || vertical, vertical, location || '', count, threshold, saturated, status]);
 }
 
 // Next item to scrape: the unsaturated queued vertical with the fewest prospects.
@@ -1083,9 +1110,12 @@ async function pickNextQueueItem(clientId) {
 // target in the queue; if it is saturated, logs vertical_saturated and rotates
 // to the least-saturated queued item. Returns { skip: true } when nothing is
 // left to scrape.
-async function resolveScoutTarget({ clientId, industry, location }) {
+async function resolveScoutTarget({ clientId, industry, location, verticals }) {
   await ensureScoutQueue(pool);
   await normalizeExistingVerticals(pool);
+  // Ensure every active vertical for this client exists in the queue before we
+  // select/rotate. The requested industry is always included as a fallback.
+  await seedClientVerticals(clientId, [...(verticals || []), industry], location);
   await refreshQueueCounts(clientId);
 
   const vertical = normalizeVertical(industry);
@@ -1134,6 +1164,7 @@ async function run(params = {}) {
     clientId: CONFIG.clientId,
     industry: CONFIG.industry,
     location: CONFIG.location,
+    verticals: CLIENT_CONFIG.verticals,
   });
   if (target.skip) {
     return { skipped: true, reason: 'saturated', vertical: target.vertical };
