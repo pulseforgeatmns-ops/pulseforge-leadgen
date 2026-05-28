@@ -73,7 +73,7 @@ const DOMAIN_BLACKLIST = [
 const args = parseArgs(process.argv.slice(2));
 let CONFIG = {
   industry:    args.industry  || 'cleaning',
-  location:    args.location  || 'Manchester NH',
+  location:    sanitizeQueueLocation(args.location || 'Manchester NH'),
   jobTitle:    args.title     || 'owner',
   maxResults:  parseInt(args.max || '25'),
   minScore:    parseInt(args.minscore || '40'),
@@ -122,6 +122,21 @@ function getSaturationThreshold(vertical) {
   return Object.prototype.hasOwnProperty.call(SATURATION_THRESHOLDS, key)
     ? SATURATION_THRESHOLDS[key]
     : SATURATION_THRESHOLDS.default;
+}
+
+function sanitizeQueueLocation(value) {
+  return String(value == null ? '' : value)
+    .replace(/https?:\/\/\S*/gi, ' ')
+    .replace(/\bwww\.\S*/gi, ' ')
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function locationToIlikePattern(location) {
+  const cleaned = sanitizeQueueLocation(location);
+  if (!cleaned) return '%';
+  return `%${cleaned.split(/\s+/).join('%')}%`;
 }
 
 const GENERIC_CONTACT_NAMES = new Set(['there', 'info', 'hello', 'contact', 'admin', 'support', 'sales']);
@@ -1032,6 +1047,64 @@ async function ensureScoutQueue(pool) {
     CREATE UNIQUE INDEX IF NOT EXISTS scout_queue_client_vertical_location_idx
     ON scout_queue (client_id, vertical, location)
   `);
+  await pool.query(`
+    WITH normalized AS (
+      SELECT id,
+             client_id,
+             LOWER(REGEXP_REPLACE(TRIM(vertical), '[\\s\\-]+', '_', 'g')) AS clean_vertical,
+             TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(location, 'https?://\\S*', '', 'gi'), '\\mwww\\.\\S*', '', 'gi'), '[^[:alnum:] ]+', ' ', 'g')) AS clean_location
+      FROM scout_queue
+    ),
+    ranked AS (
+      SELECT id,
+             clean_location,
+             ROW_NUMBER() OVER (PARTITION BY client_id, clean_vertical, clean_location ORDER BY id) AS rn
+      FROM normalized
+      WHERE clean_vertical <> ''
+        AND clean_location <> ''
+    )
+    DELETE FROM scout_queue sq
+    USING ranked r
+    WHERE sq.id = r.id
+      AND r.rn > 1
+  `);
+  await pool.query(`
+    UPDATE scout_queue
+    SET vertical = LOWER(REGEXP_REPLACE(TRIM(vertical), '[\\s\\-]+', '_', 'g')),
+        location = TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(location, 'https?://\\S*', '', 'gi'), '\\mwww\\.\\S*', '', 'gi'), '[^[:alnum:] ]+', ' ', 'g')),
+        updated_at = NOW()
+    WHERE location ~* 'https?://|www\\.|[^[:alnum:] ]'
+       OR location <> TRIM(location)
+       OR vertical <> LOWER(REGEXP_REPLACE(TRIM(vertical), '[\\s\\-]+', '_', 'g'))
+  `);
+  await pool.query(`
+    UPDATE scout_queue
+    SET threshold = CASE
+          WHEN vertical = 'auto' THEN 50
+          WHEN vertical = 'cleaning' THEN 50
+          WHEN vertical = 'restaurant' THEN 60
+          WHEN vertical = 'fitness' THEN 40
+          WHEN vertical = 'salon' THEN 40
+          WHEN vertical = 'med_spa' THEN 30
+          WHEN vertical = 'landscaping' THEN 30
+          WHEN vertical = 'property_management' THEN 40
+          WHEN vertical = 'home_services' THEN 30
+          ELSE 40
+        END,
+        updated_at = NOW()
+    WHERE threshold <> CASE
+          WHEN vertical = 'auto' THEN 50
+          WHEN vertical = 'cleaning' THEN 50
+          WHEN vertical = 'restaurant' THEN 60
+          WHEN vertical = 'fitness' THEN 40
+          WHEN vertical = 'salon' THEN 40
+          WHEN vertical = 'med_spa' THEN 30
+          WHEN vertical = 'landscaping' THEN 30
+          WHEN vertical = 'property_management' THEN 40
+          WHEN vertical = 'home_services' THEN 30
+          ELSE 40
+        END
+  `);
 }
 
 // One-time-safe migration: rewrite any non-snake_case vertical values
@@ -1051,10 +1124,15 @@ async function normalizeExistingVerticals(pool) {
   `);
 }
 
-async function getProspectCount(clientId, vertical) {
+async function getProspectCount(clientId, vertical, location) {
   const res = await pool.query(
-    `SELECT COUNT(*)::int AS count FROM prospects WHERE client_id = $1 AND vertical = $2`,
-    [clientId, vertical]
+    `SELECT COUNT(*)::int AS count
+       FROM prospects p
+       LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+      WHERE p.client_id = $1
+        AND p.vertical = $2
+        AND COALESCE(p.service_area_match, c.location, '') ILIKE $3`,
+    [clientId, vertical, locationToIlikePattern(location)]
   );
   return res.rows[0]?.count || 0;
 }
@@ -1073,14 +1151,62 @@ async function refreshQueueCounts(clientId) {
       SELECT sq2.id, COALESCE(p.cnt, 0) AS cnt
       FROM scout_queue sq2
       LEFT JOIN (
-        SELECT vertical, COUNT(*)::int AS cnt
-        FROM prospects
-        WHERE client_id = $1
-        GROUP BY vertical
-      ) p ON p.vertical = sq2.vertical
+        SELECT sq3.id,
+               COUNT(p.id) FILTER (
+                 WHERE COALESCE(p.service_area_match, c.location, '') ILIKE (
+                   '%' || REGEXP_REPLACE(TRIM(sq3.location), '\\s+', '%', 'g') || '%'
+                 )
+               )::int AS cnt
+        FROM scout_queue sq3
+        LEFT JOIN prospects p
+          ON p.client_id = sq3.client_id
+         AND p.vertical = sq3.vertical
+        LEFT JOIN companies c
+          ON c.id = p.company_id
+         AND c.client_id = p.client_id
+        WHERE sq3.client_id = $1
+        GROUP BY sq3.id
+      ) p ON p.id = sq2.id
       WHERE sq2.client_id = $1
     ) calc
     WHERE sq.id = calc.id
+  `, [clientId]);
+}
+
+async function seedExpansionQueueMarkets(clientId) {
+  const exists = await pool.query(`SELECT to_regclass('public.scout_expansion_queue') AS table_name`);
+  if (!exists.rows[0]?.table_name) return;
+
+  await pool.query(`
+    INSERT INTO scout_queue (client_id, industry, vertical, location, prospect_count, threshold, saturated, status, updated_at)
+    SELECT DISTINCT
+      q.client_id,
+      q.vertical,
+      LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')),
+      TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(q.location, 'https?://\\S*', '', 'gi'), '\\mwww\\.\\S*', '', 'gi'), '[^[:alnum:] ]+', ' ', 'g')) AS clean_location,
+      0,
+      CASE
+        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'auto' THEN 50
+        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'cleaning' THEN 50
+        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'restaurant' THEN 60
+        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'fitness' THEN 40
+        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'salon' THEN 40
+        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'med_spa' THEN 30
+        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'landscaping' THEN 30
+        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'property_management' THEN 40
+        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'home_services' THEN 30
+        ELSE 40
+      END,
+      false,
+      'queued',
+      NOW()
+    FROM scout_expansion_queue q
+    WHERE q.client_id = $1
+      AND q.status = 'pending'
+      AND q.vertical IS NOT NULL
+      AND LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) <> 'unknown'
+      AND TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(q.location, 'https?://\\S*', '', 'gi'), '\\mwww\\.\\S*', '', 'gi'), '[^[:alnum:] ]+', ' ', 'g')) <> ''
+    ON CONFLICT (client_id, vertical, location) DO NOTHING
   `, [clientId]);
 }
 
@@ -1089,6 +1215,7 @@ async function refreshQueueCounts(clientId) {
 async function seedClientVerticals(clientId, verticals, location) {
   const list = Array.isArray(verticals) ? verticals : [];
   const seen = new Set();
+  const cleanLocation = sanitizeQueueLocation(location);
   for (const raw of list) {
     const vertical = normalizeVertical(raw);
     if (!vertical || vertical === 'unknown' || seen.has(vertical)) continue;
@@ -1098,12 +1225,13 @@ async function seedClientVerticals(clientId, verticals, location) {
       INSERT INTO scout_queue (client_id, industry, vertical, location, prospect_count, threshold, saturated, status, updated_at)
       VALUES ($1, $2, $3, $4, 0, $5, false, 'queued', NOW())
       ON CONFLICT (client_id, vertical, location) DO NOTHING
-    `, [clientId, vertical, vertical, location || '', threshold]);
+    `, [clientId, vertical, vertical, cleanLocation, threshold]);
   }
 }
 
 async function upsertQueueItem({ clientId, industry, vertical, location, count, threshold, saturated }) {
   const status = saturated ? 'saturated' : 'queued';
+  const cleanLocation = sanitizeQueueLocation(location);
   await pool.query(`
     INSERT INTO scout_queue (client_id, industry, vertical, location, prospect_count, threshold, saturated, status, updated_at)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
@@ -1114,7 +1242,7 @@ async function upsertQueueItem({ clientId, industry, vertical, location, count, 
       saturated = EXCLUDED.saturated,
       status = EXCLUDED.status,
       updated_at = NOW()
-  `, [clientId, industry || vertical, vertical, location || '', count, threshold, saturated, status]);
+  `, [clientId, industry || vertical, vertical, cleanLocation, count, threshold, saturated, status]);
 }
 
 // Next item to scrape: the unsaturated queued vertical with the fewest prospects.
@@ -1136,24 +1264,26 @@ async function pickNextQueueItem(clientId) {
 async function resolveScoutTarget({ clientId, industry, location, verticals }) {
   await ensureScoutQueue(pool);
   await normalizeExistingVerticals(pool);
+  const cleanLocation = sanitizeQueueLocation(location);
   // Ensure every active vertical for this client exists in the queue before we
   // select/rotate. The requested industry is always included as a fallback.
-  await seedClientVerticals(clientId, [...(verticals || []), industry], location);
+  await seedClientVerticals(clientId, [...(verticals || []), industry], cleanLocation);
+  await seedExpansionQueueMarkets(clientId);
   await refreshQueueCounts(clientId);
 
   const vertical = normalizeVertical(industry);
   const threshold = getSaturationThreshold(vertical);
-  const count = await getProspectCount(clientId, vertical);
+  const count = await getProspectCount(clientId, vertical, cleanLocation);
   const saturated = count >= threshold;
 
-  await upsertQueueItem({ clientId, industry, vertical, location, count, threshold, saturated });
+  await upsertQueueItem({ clientId, industry, vertical, location: cleanLocation, count, threshold, saturated });
 
   if (!saturated) {
-    return { industry, location, vertical, saturated: false };
+    return { industry, location: cleanLocation, vertical, saturated: false };
   }
 
   console.log(`[Scout] "${vertical}" saturated for client ${clientId}: ${count}/${threshold} prospects — rotating queue`);
-  await logScoutRun('skipped', { vertical, industry, location, prospect_count: count, threshold }, 'vertical_saturated');
+  await logScoutRun('skipped', { vertical, industry, location: cleanLocation, prospect_count: count, threshold }, 'vertical_saturated');
 
   const next = await pickNextQueueItem(clientId);
   if (!next) {
@@ -1164,7 +1294,7 @@ async function resolveScoutTarget({ clientId, industry, location, verticals }) {
   console.log(`[Scout] Rotated to "${next.vertical}" (${next.prospect_count} prospects, lowest in queue)`);
   return {
     industry: next.industry || next.vertical,
-    location: next.location || location,
+    location: next.location || cleanLocation,
     vertical: next.vertical,
     saturated: false,
     rotatedFrom: vertical,
@@ -1177,7 +1307,7 @@ async function run(params = {}) {
   CLIENT_CONFIG = await getClientConfig(CONFIG.clientId);
   if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CONFIG.clientId}`);
   if (params.industry) CONFIG.industry = params.industry;
-  if (params.location) CONFIG.location = params.location;
+  if (params.location) CONFIG.location = sanitizeQueueLocation(params.location);
   if (params.jobTitle) CONFIG.jobTitle = params.jobTitle;
   if (params.maxResults) CONFIG.maxResults = parseInt(params.maxResults);
 
