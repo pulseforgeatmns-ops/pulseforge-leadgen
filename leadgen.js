@@ -250,6 +250,7 @@ async function searchGoogle(query, numResults = 10) {
   }
 
   const results = [];
+  const socialLinks = []; // { key, facebook_url?, instagram_url? } captured from social results
   const pages = Math.ceil(numResults / 10);
 
   for (let page = 0; page < pages; page++) {
@@ -266,8 +267,20 @@ async function searchGoogle(query, numResults = 10) {
 
       const items = res.data.organic_results || [];
       for (const item of items) {
+        const link = item.link || '';
+        const company = item.title.split('|')[0].split('-')[0].trim();
+        // Capture facebook/instagram profile links so they can be attached to the
+        // matching business lead instead of being discarded as junk domains.
+        if (/facebook\.com/i.test(link)) {
+          socialLinks.push({ key: socialKey(company), facebook_url: link });
+          continue;
+        }
+        if (/instagram\.com/i.test(link)) {
+          socialLinks.push({ key: socialKey(company), instagram_url: link });
+          continue;
+        }
         results.push({
-          company: item.title.split('|')[0].split('-')[0].trim(),
+          company,
           url:     extractDomain(item.link),
           snippet: item.snippet,
           source:  ['google'],
@@ -278,8 +291,26 @@ async function searchGoogle(query, numResults = 10) {
       break;
     }
   }
+
+  // Attach captured social URLs to the business lead whose name matches.
+  for (const lead of results) {
+    const key = socialKey(lead.company);
+    if (!key) continue;
+    for (const social of socialLinks) {
+      if (social.key !== key) continue;
+      if (social.facebook_url && !lead.facebook_url) lead.facebook_url = social.facebook_url;
+      if (social.instagram_url && !lead.instagram_url) lead.instagram_url = social.instagram_url;
+    }
+  }
+
       const skipDomains = ['facebook.com','instagram.com','yelp.com','twitter.com','linkedin.com','youtube.com'];
       return results.filter(r => !skipDomains.some(s => r.url.includes(s)));
+}
+
+// Normalized key for fuzzy-matching company names across SerpAPI result types
+// (e.g. a business's website result and its Facebook page result).
+function socialKey(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -345,7 +376,7 @@ async function fetchPlaceDetails(placeId, apiKey) {
   const res = await axios.get(PLACES_DETAILS, {
     params: {
       place_id: placeId,
-      fields: 'name,formatted_address,formatted_phone_number,website,place_id',
+      fields: 'name,formatted_address,formatted_phone_number,website,place_id,rating,user_ratings_total',
       key: apiKey,
     },
   });
@@ -390,6 +421,8 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
           phone: details.formatted_phone_number || null,
           address: details.formatted_address || hit.formatted_address || '',
           place_id: details.place_id || hit.place_id,
+          google_rating: details.rating ?? hit.rating ?? null,
+          google_review_count: details.user_ratings_total ?? hit.user_ratings_total ?? null,
           source: ['google_places'],
           snippet: '',
         });
@@ -652,6 +685,12 @@ async function main() {
     type:    detectType(l),
     source:  l.source || ['google'],
     score:   scoreLead(l),
+    phone:   l.phone || null,
+    address: l.address || null,
+    google_rating:        l.google_rating ?? null,
+    google_review_count:  l.google_review_count ?? null,
+    facebook_url:         l.facebook_url || null,
+    instagram_url:        l.instagram_url || null,
   }));
 
   leads = leads.filter(l => !isBlacklistedDomain(l.url));
@@ -973,11 +1012,19 @@ async function saveToDatabase(leads) {
         return (lead.address || '').toLowerCase().includes(needle) || (domain || '').includes(needle);
       }) || null;
       const discoveryMethod = Array.isArray(lead.source) && lead.source.includes('google_places') ? 'google_places' : 'serpapi';
+      const websiteUrl = lead.url || null;
+      const hasWebsite = !!(domain || websiteUrl);
+      const facebookUrl = lead.facebook_url || null;
+      const instagramUrl = lead.instagram_url || null;
+      const hasFacebook = !!facebookUrl;
+      const hasInstagram = !!instagramUrl;
+      const googleRating = lead.google_rating ?? null;
+      const googleReviewCount = lead.google_review_count ?? null;
       const companyId = await findOrCreateCompany({ name: companyName, domain, lead });
       if (!companyId) throw new Error(`Unable to link company for ${companyName}`);
       const insert = await pool.query(
-      'INSERT INTO prospects (company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical, client_id, service_area_match, discovery_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (email) DO NOTHING RETURNING id',
-      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, null, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod]
+      'INSERT INTO prospects (company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical, client_id, service_area_match, discovery_method, has_website, google_review_count, google_rating, has_facebook, has_instagram, facebook_url, instagram_url, website_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) ON CONFLICT (email) DO NOTHING RETURNING id',
+      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, null, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, websiteUrl]
     );
       if (!insert.rows.length) {
         skipped++;
