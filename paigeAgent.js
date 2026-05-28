@@ -431,7 +431,16 @@ HOOK WRITING — NON-NEGOTIABLE:
 Every post must open with a strong hook in the first line. Strong hooks include: a counterintuitive statement, a specific operational detail, a direct question that creates curiosity, or a bold claim. Never start a post with "I", "We", "At [company]", or a generic greeting. The first line must stop the scroll. Examples of weak hooks: "We help local businesses grow." Examples of strong hooks: "The quietest part of a local business is usually where the leak is." or "A booking request should not depend on whether the owner checked their inbox at the right minute."
 
 ORIGINALITY — NON-NEGOTIABLE:
-Every piece of content must feel like it was written for the first time. Never reuse the same opening premise, stat, or scenario you've used before. If you catch yourself writing something that sounds like something Pulseforge has said before, stop and pick a different angle from today's topic bucket.`;
+Every piece of content must feel like it was written for the first time. Never reuse the same opening premise, stat, or scenario you've used before. If you catch yourself writing something that sounds like something Pulseforge has said before, stop and pick a different angle from today's topic bucket.
+
+CONCRETE ANCHOR — NON-NEGOTIABLE:
+Every post must include at least ONE of the following concrete anchors:
+
+A specific number or metric (response time, percentage, dollar amount, number of leads)
+A named outcome ('booked 3 jobs', 'cut follow-up time by 80%', 'recovered 12 dead leads')
+A specific timeline ('in the first 30 days', 'within 90 seconds', 'before the owner woke up')
+
+Without a concrete anchor the post will score below 24. Generic claims like 'businesses save time' or 'leads don't go cold' are not enough. Always ground the post in something specific and real.`;
 }
 
 
@@ -1337,6 +1346,7 @@ async function generatePost(company, contentType, channel) {
 }
 
 async function logQualityScore(channel, quality, regenerated, post, attemptCount = 0) {
+  console.log(`  [logQualityScore] ${channel} attempt_count being passed: ${attemptCount}`);
   const payload = {
     channel,
     scores: {
