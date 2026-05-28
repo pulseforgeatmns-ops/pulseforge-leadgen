@@ -22,11 +22,13 @@ const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext')
 // "did Scout run? for which client/industry/location? did it find anything?"
 // without trawling Railway stdout. Best-effort — never throws.
 async function logScoutRun(status, payload, action = 'scrape') {
+  const allowedStatuses = new Set(['success', 'failed', 'pending', 'completed', 'skipped']);
+  const safeStatus = allowedStatuses.has(status) ? status : 'skipped';
   try {
     await pool.query(`
       INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
       VALUES ($1, $2, $3, $4, NOW(), $5)
-    `, ['scout', action, JSON.stringify(payload), status, CONFIG.clientId]);
+    `, ['scout', action, JSON.stringify(payload), safeStatus, CONFIG.clientId]);
   } catch (err) {
     console.error('[logScoutRun] failed to write:', err.message);
   }
@@ -37,6 +39,7 @@ const DOMAIN_BLACKLIST = [
   'indeed.com','glassdoor.com','ziprecruiter.com','thumbtack.com',
   'yelp.com','yellowpages.com','mapquest.com','bbb.org','patch.com',
   'avvo.com','zoominfo.com','inven.ai','prnewswire.com','ofn.org',
+  'cbsnews.com','bebee.com','amesburyma.gov',
   'townplanner.com','ccsnh.edu','servpro.com','stanleysteemer.com',
   'angieslist.com','homeadvisor.com','houzz.com','facebook.com',
   'linkedin.com','twitter.com','instagram.com','reddit.com',
@@ -49,7 +52,10 @@ const DOMAIN_BLACKLIST = [
   'tiktok.com','snapchat.com',
   'businessnhmagazine.com','nhmagazine.com','nhpr.org',
   'issuu.com','smugmug.com','aptuitivcdn.com',
-  'forbes.com','wmur.com','wokq.com',
+  'forbes.com','wmur.com','wokq.com','cnn.com','foxnews.com','nbcnews.com',
+  'abcnews.go.com','usatoday.com','apnews.com','reuters.com','bloomberg.com',
+  'nytimes.com','washingtonpost.com','wsj.com','npr.org','pbs.org',
+  'bostonglobe.com','masslive.com','wcvb.com','nbcboston.com','boston.com',
   'trulia.com','zillow.com','bostonrealtyweb.com',
   'opensecrets.org','novoco.com','dealstream.com',
   'inmyarea.com','businessesforsale.com','veteranownedbusiness.com',
@@ -68,6 +74,13 @@ const DOMAIN_BLACKLIST = [
   'thumbtack.com','angi.com','porch.com','homeguide.com',
   'housekeeper.com','manchesterhousecleaning.com','co.uk',
 ];
+
+function isBlacklistedDomain(domain) {
+  const host = String(domain || '').toLowerCase().replace(/^www\./, '');
+  if (!host) return true;
+  if (host.endsWith('.gov')) return true;
+  return DOMAIN_BLACKLIST.some(blocked => host === blocked || host.endsWith(`.${blocked}`) || host.includes(blocked));
+}
 
 // ── CLI ARGS ─────────────────────────────────────────────────────────
 const args = parseArgs(process.argv.slice(2));
@@ -157,11 +170,16 @@ function sanitizeFirstName(value) {
 
 async function enrichWithHunter(domain) {
   const HUNTER_KEY = process.env.HUNTER_API_KEY;
+  if (!HUNTER_KEY) {
+    console.warn('[WARN] Hunter key not set — skipping Hunter enrichment');
+    return null;
+  }
   try {
     const res = await axios.get('https://api.hunter.io/v2/domain-search', {
       params: { domain, api_key: HUNTER_KEY, limit: 5, type: 'personal' }
     });
     const emails = res.data?.data?.emails || [];
+    if (!emails.length) return null;
     const tf = (CONFIG.jobTitle || '').toLowerCase();
     const match = emails.find(e => e.position?.toLowerCase().includes(tf)) || emails[0];
     return {
@@ -364,7 +382,7 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
         if (!details?.website) continue;
 
         const domain = extractDomain(details.website);
-        if (!domain || DOMAIN_BLACKLIST.some(b => domain.includes(b))) continue;
+        if (!domain || isBlacklistedDomain(domain)) continue;
 
         leads.push({
           company: details.name || hit.name || 'Unknown',
@@ -589,7 +607,7 @@ async function main() {
   console.log(`[Combined] ${leads.length} unique domains after SerpAPI + Places`);
 
   // Pre-enrichment blacklist — strip junk domains before spending Prospeo/Hunter credits
-  leads = leads.filter(l => !DOMAIN_BLACKLIST.some(b => l.url && l.url.includes(b)));
+  leads = leads.filter(l => !isBlacklistedDomain(l.url));
   console.log(`[Pre-enrichment blacklist] ${leads.length} leads after filtering`);
 
   // 3. Enrich with Prospeo
@@ -604,22 +622,17 @@ async function main() {
       lead.source = [...(lead.source || []), 'prospeo'];
       process.stdout.write(` ✓ ${enriched.email || 'no email'}\n`);
     } else {
-      enriched = await enrichWithHunter(lead.url);
+      enriched = await enrichWithHunter(rootDomain);
       if (enriched) {
         Object.assign(lead, enriched);
         lead.source = [...(lead.source || []), 'hunter'];
         process.stdout.write(` ✓ [Hunter] ${enriched.email || 'no email'}\n`);
       } else {
-        // For Google Places leads, try scraping the website directly
-        if (lead.source?.includes('google_places')) {
-          const scraped = await scrapeWebsiteEmail(lead.url);
-          if (scraped) {
-            Object.assign(lead, scraped);
-            lead.source = [...(lead.source || []), 'scraped'];
-            process.stdout.write(` ✓ [Scraped] ${scraped.email}\n`);
-          } else {
-            process.stdout.write(' —\n');
-          }
+        const scraped = await scrapeWebsiteEmail(rootDomain);
+        if (scraped) {
+          Object.assign(lead, scraped);
+          lead.source = [...(lead.source || []), 'scraped'];
+          process.stdout.write(` ✓ [Scraped] ${scraped.email}\n`);
         } else {
           process.stdout.write(' —\n');
         }
@@ -641,7 +654,7 @@ async function main() {
     score:   scoreLead(l),
   }));
 
-  leads = leads.filter(l => !DOMAIN_BLACKLIST.some(b => l.url && l.url.includes(b)));
+  leads = leads.filter(l => !isBlacklistedDomain(l.url));
   console.log("[Blacklist] " + leads.length + " leads after blacklist filter");
 
   // 5. Filter by min score
@@ -941,7 +954,7 @@ async function saveToDatabase(leads) {
       if (rawEmail) {
         const reason = emailRejection(rawEmail) || (JUNK_EMAILS.includes(rawEmail.toLowerCase()) ? 'junk address' : null);
         if (reason) {
-          await logScoutRun('rejected', { email: lead.email, reason }, 'email_rejected');
+          await logScoutRun('skipped', { email: lead.email, reason }, 'email_rejected');
         } else {
           email = rawEmail;
         }
@@ -1335,7 +1348,7 @@ async function run(params = {}) {
     max_results: CONFIG.maxResults,
     ...(target.rotatedFrom ? { rotated_from: target.rotatedFrom } : {}),
   };
-  await logScoutRun('running', runContext);
+  await logScoutRun('pending', runContext);
   try {
     const stats = await main();
     await pool.query(
