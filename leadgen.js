@@ -1024,7 +1024,16 @@ async function ensureSetterQueueColumns(pool) {
     ADD COLUMN IF NOT EXISTS setter_visible BOOLEAN DEFAULT false,
     ADD COLUMN IF NOT EXISTS setter_updated_at TIMESTAMPTZ DEFAULT NOW(),
     ADD COLUMN IF NOT EXISTS service_area_match TEXT,
-    ADD COLUMN IF NOT EXISTS discovery_method TEXT
+    ADD COLUMN IF NOT EXISTS discovery_method TEXT,
+    ADD COLUMN IF NOT EXISTS has_website BOOLEAN,
+    ADD COLUMN IF NOT EXISTS google_review_count INTEGER,
+    ADD COLUMN IF NOT EXISTS google_rating NUMERIC,
+    ADD COLUMN IF NOT EXISTS has_facebook BOOLEAN,
+    ADD COLUMN IF NOT EXISTS has_instagram BOOLEAN,
+    ADD COLUMN IF NOT EXISTS facebook_url TEXT,
+    ADD COLUMN IF NOT EXISTS instagram_url TEXT,
+    ADD COLUMN IF NOT EXISTS website_url TEXT,
+    ADD COLUMN IF NOT EXISTS employee_count_estimate TEXT
   `);
 }
 
