@@ -1,7 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const { depositWarmSignalAction, logSignalDroppedNoProspect, prospectExists } = require('../rileyAgent');
+const {
+  depositWarmSignalAction,
+  logSignalDroppedNoProspect,
+  prospectExists,
+  qualifyingOpenSignal,
+} = require('../rileyAgent');
 
 const BREVO_EVENT_MAP = {
   opened:           'email_opened',
@@ -35,25 +40,24 @@ async function checkAndUpdateWarmStatus(prospectId, email, clientId) {
       return;
     }
 
-    const res = await pool.query(`
-      SELECT
-        COUNT(CASE WHEN action_type = 'email_opened'
-              AND created_at > NOW() - INTERVAL '14 days' THEN 1 END)::int AS opens_14d,
-        COUNT(CASE WHEN action_type = 'email_clicked' THEN 1 END)::int AS clicks_all
+    const clickRes = await pool.query(`
+      SELECT COUNT(*)::int AS clicks_all
       FROM touchpoints
       WHERE prospect_id = $1 AND client_id = $2 AND channel = 'email'
+        AND action_type = 'email_clicked'
     `, [prospectId, clientId]);
-    const { opens_14d, clicks_all } = res.rows[0];
-    const opens  = parseInt(opens_14d  || 0);
-    const clicks = parseInt(clicks_all || 0);
-    if (clicks >= 1 || opens >= 2) {
+    const clicks = Number(clickRes.rows[0]?.clicks_all || 0);
+    const gate = await qualifyingOpenSignal(prospectId, clientId);
+
+    if (clicks >= 1 || gate.qualifies) {
       const upd = await pool.query(
         `UPDATE prospects SET status = 'warm', updated_at = NOW()
          WHERE id = $1 AND client_id = $2 AND status IN ('cold', 'contacted') RETURNING id`,
         [prospectId, clientId]
       );
       if (upd.rows.length > 0) {
-        console.log(`[Riley] ${email} upgraded to warm — ${opens} opens / ${clicks} clicks`);
+        const spreadFmt = gate.spread_minutes.toFixed(1);
+        console.log(`[Riley] ${email} upgraded to warm — ${gate.total_opens} opens (spread ${spreadFmt}m) / ${clicks} clicks`);
       }
     }
   } catch (err) {
@@ -113,49 +117,36 @@ router.post('/webhooks/brevo', (req, res) => {
       ]);
 
       if (actionType === 'email_opened') {
-        const openRes = await pool.query(`
-          SELECT
-            COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours')::int AS open_count,
-            COUNT(*)::int AS total_open_count,
-            EXTRACT(EPOCH FROM (
-              MAX(created_at) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours') -
-              MIN(created_at) FILTER (WHERE created_at >= NOW() - INTERVAL '24 hours')
-            )) / 60 AS open_spread_minutes
-          FROM touchpoints
-          WHERE prospect_id = $1
-            AND client_id = $2
-            AND channel = 'email'
-            AND action_type = 'email_opened'
-        `, [prospect.id, prospect.client_id]);
-        const openCount = Number(openRes.rows[0]?.open_count || 0);
-        const totalOpenCount = Number(openRes.rows[0]?.total_open_count || 0);
-        const openSpreadMinutes = Number(openRes.rows[0]?.open_spread_minutes || 0);
+        // Single open-trigger gate: ≥2 opens AND ≥5 min between first & most
+        // recent open. Filters preview-pane bursts that fire in seconds while
+        // catching genuine re-engagement when someone reopens minutes/hours later.
+        const gate = await qualifyingOpenSignal(prospect.id, prospect.client_id);
 
-        if (totalOpenCount >= 2) {
+        if (gate.qualifies) {
           await depositWarmSignalAction({
             prospect_id: prospect.id,
             client_id: prospect.client_id,
-            trigger: '2+ opens',
+            trigger: 'qualifying_opens',
             signal_timestamp: signalIso(payload.date),
             subject: payload.subject || null,
-            total_opens: totalOpenCount,
+            total_opens: gate.total_opens,
             email,
             company: prospect.company_name,
           });
-        }
 
-        if (openCount >= 2 && openSpreadMinutes >= 10) {
           const company =
             prospect.company_name ||
             String(prospect.notes || '').split('—')[0].trim() ||
             `${prospect.first_name || ''} ${prospect.last_name || ''}`.trim() ||
             email;
+          const spreadMinutes = Number(gate.spread_minutes.toFixed(1));
           const alertPayload = {
             prospect_id: prospect.id,
             email,
             company,
-            open_count: openCount,
-            total_opens: totalOpenCount,
+            open_count: gate.total_opens,
+            total_opens: gate.total_opens,
+            spread_minutes: spreadMinutes,
             subject: payload.subject || null,
             signal_timestamp: signalIso(payload.date),
             client_id: prospect.client_id,
@@ -176,7 +167,7 @@ router.post('/webhooks/brevo', (req, res) => {
             RETURNING id
           `, [
             prospect.id,
-            `Hot flag: ${openCount} email opens in 24 hours`,
+            `Hot flag: ${gate.total_opens} email opens spread over ${spreadMinutes} min`,
             JSON.stringify(alertPayload),
             prospect.client_id,
           ]);

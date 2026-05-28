@@ -751,7 +751,52 @@ async function run() {
   console.log('Riley complete.');
 }
 
-module.exports = { run, getAuthClient, depositWarmSignalAction, logSignalDroppedNoProspect, prospectExists };
+// ── WARM-OPEN GATE ──────────────────────────────────────────────────────────
+// Single source of truth for the open-based warm signal trigger. We require:
+//   • at least 2 email opens for the prospect
+//   • at least 5 minutes between the first open and the most recent open
+// This filters out preview-pane artifacts that fire in seconds while still
+// catching genuine re-engagement when someone comes back to the email later.
+const QUALIFYING_OPEN_MIN_COUNT = 2;
+const QUALIFYING_OPEN_MIN_SPREAD_MINUTES = 5;
+
+async function qualifyingOpenSignal(prospectId, clientId = CLIENT_ID) {
+  if (!prospectId) return { qualifies: false, total_opens: 0, spread_minutes: 0 };
+  const pool = require('./db');
+  const res = await pool.query(`
+    SELECT
+      COUNT(*)::int AS total_opens,
+      MIN(created_at) AS first_open,
+      MAX(created_at) AS last_open,
+      EXTRACT(EPOCH FROM (MAX(created_at) - MIN(created_at))) / 60 AS spread_minutes
+    FROM touchpoints
+    WHERE prospect_id = $1
+      AND client_id = $2
+      AND channel = 'email'
+      AND action_type IN ('open', 'email_opened')
+  `, [prospectId, clientId]);
+  const row = res.rows[0] || {};
+  const total = Number(row.total_opens || 0);
+  const spread = Number(row.spread_minutes || 0);
+  return {
+    qualifies: total >= QUALIFYING_OPEN_MIN_COUNT && spread >= QUALIFYING_OPEN_MIN_SPREAD_MINUTES,
+    total_opens: total,
+    spread_minutes: spread,
+    first_open: row.first_open || null,
+    last_open: row.last_open || null,
+  };
+}
+
+module.exports = {
+  run,
+  getAuthClient,
+  depositWarmSignalAction,
+  logSignalDroppedNoProspect,
+  prospectExists,
+  qualifyingOpenSignal,
+  QUALIFYING_OPEN_MIN_COUNT,
+  QUALIFYING_OPEN_MIN_SPREAD_MINUTES,
+};
 
 if (require.main === module) {
   run().catch(err => {

@@ -265,10 +265,18 @@ async function hasWarmSignalSmsQueuedToday(prospectId, clientId = CLIENT_ID) {
   return res.rows.length > 0;
 }
 
+const WARM_SMS_LOG_ACTION = {
+  skipped_dnc:  'sms_skipped_dnc',
+  skipped_gate: 'sms_skipped_gate',
+  queued:       'sms_queued',
+  sent:         'sms_sent',
+  failed:       'sms_sent',
+};
+
 async function logWarmSignalSms(action, prospect, message, status, extra = {}, errorMsg = null) {
   await db.logAgentAction(
     AGENT_NAME,
-    status === 'skipped_dnc' ? 'sms_skipped_dnc' : status === 'queued' ? 'sms_queued' : 'sms_sent',
+    WARM_SMS_LOG_ACTION[status] || 'sms_sent',
     prospect.id,
     null,
     {
@@ -286,8 +294,10 @@ async function logWarmSignalSms(action, prospect, message, status, extra = {}, e
   );
 }
 
+const OPEN_TRIGGER_LABELS = new Set(['qualifying_opens', '2+ opens']);
+
 async function processWarmSignalActions(twilioClient, dailyLimit, sentCount) {
-  const { logSignalDroppedNoProspect } = require('./rileyAgent');
+  const { logSignalDroppedNoProspect, qualifyingOpenSignal } = require('./rileyAgent');
   const res = await pool.query(`
     SELECT id, payload, client_id
     FROM agent_actions
@@ -368,6 +378,23 @@ async function processWarmSignalActions(twilioClient, dailyLimit, sentCount) {
       await completeWarmSignalAction(row.id, 'Skipped: do_not_contact');
       skippedDnc++;
       continue;
+    }
+
+    // Re-verify the open gate for opens-triggered actions. Pending rows deposited
+    // before the gate tightened may no longer qualify; skip them rather than send.
+    if (OPEN_TRIGGER_LABELS.has(payload.trigger)) {
+      const gate = await qualifyingOpenSignal(prospect.id, prospect.client_id);
+      if (!gate.qualifies) {
+        const spreadFmt = Number(gate.spread_minutes).toFixed(1);
+        const reason = `open_gate_unmet: ${gate.total_opens} opens, spread ${spreadFmt}m`;
+        await logWarmSignalSms(payload, prospect, message, 'skipped_gate', {
+          reason,
+          total_opens: gate.total_opens,
+          spread_minutes: gate.spread_minutes,
+        });
+        await completeWarmSignalAction(row.id, `Skipped: ${reason}`);
+        continue;
+      }
     }
 
     if (await hasWarmSignalSmsSentToday(prospect.id, prospect.client_id)) {
