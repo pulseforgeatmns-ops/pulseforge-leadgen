@@ -3069,6 +3069,7 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
           <tr>
             <th data-pcol="business">Business</th>
             <th data-pcol="status">Status</th>
+            <th data-pcol="setter">Setter</th>
             <th data-pcol="icp_score">ICP</th>
             <th data-pcol="last_contacted">Last Contacted</th>
             <th data-pcol="touchpoints">Touches</th>
@@ -4552,7 +4553,7 @@ function overviewHtml(p) {
   return `<div class="pm-grid">
     <div class="pm-box"><div class="pm-label">Contact</div><div class="pm-value">${_esc(p.email || 'No email')}<br>${_esc(p.phone || 'No phone')}</div></div>
     <div class="pm-box"><div class="pm-label">Business</div><div class="pm-value">${_esc(p.vertical || 'unknown')} · ${_esc(p.city || '—')}<br>${p.website ? `<a href="${_esc(p.website)}" target="_blank">${_esc(p.website)}</a>` : 'No website'}</div></div>
-    <div class="pm-box"><div class="pm-label">Pipeline</div><div class="pm-value">Status: ${_esc(p.status || 'cold')}<br>Setter: ${_esc(p.assigned_setter_name || p.setter_status || '—')}${p.assigned_setter_email ? `<br>${_esc(p.assigned_setter_email)}` : ''}<br>Closer: ${_esc(p.closer_name || p.closer_id || '—')}</div></div>
+    <div class="pm-box"><div class="pm-label">Pipeline</div><div class="pm-value">Status: ${_esc(p.status || 'cold')}<br>Setter: ${_esc(p.assigned_setter_name || 'Unassigned')}${p.assigned_setter_email ? `<br>${_esc(p.assigned_setter_email)}` : ''}<br>Closer: ${_esc(p.closer_name || p.closer_id || '—')}</div></div>
     <div class="pm-box"><div class="pm-label">Stats</div><div class="pm-value">${p.open_count || 0} opens · ${p.send_count || 0} sends<br>${days} days in pipeline</div></div>
     <div class="pm-box" style="grid-column:1/-1"><div class="pm-label">Notes</div><div class="pm-value">${_esc(p.notes || 'No notes')}</div></div>
   </div>`;
@@ -4989,6 +4990,7 @@ function _sortProspects(data) {
     switch (col) {
       case 'business':      av = _parseBusiness(a).toLowerCase(); bv = _parseBusiness(b).toLowerCase(); break;
       case 'status':        av = a.status || ''; bv = b.status || ''; break;
+      case 'setter':        av = (a.assigned_setter_name || '').toLowerCase(); bv = (b.assigned_setter_name || '').toLowerCase(); break;
       case 'icp_score':     av = a.icp_score ?? -1; bv = b.icp_score ?? -1; break;
       case 'last_contacted':av = a.last_contacted_at ? new Date(a.last_contacted_at).getTime() : 0; bv = b.last_contacted_at ? new Date(b.last_contacted_at).getTime() : 0; break;
       case 'touchpoints':   av = a.touchpoint_count ?? 0; bv = b.touchpoint_count ?? 0; break;
@@ -5023,9 +5025,13 @@ function _renderProspects() {
     const tr = document.createElement('tr');
     tr.dataset.pid = p.id;
     if (p.id === _expandedProspectId) tr.classList.add('expanded');
+    const setterCell = p.assigned_setter_name
+      ? `<td>${_esc(p.assigned_setter_name)}</td>`
+      : `<td class="pt-dash">—</td>`;
     tr.innerHTML = `
       <td class="pt-business">${_esc(_parseBusiness(p))}</td>
       <td>${_statusBadge(p.status)}</td>
+      ${setterCell}
       <td class="${_icpClass(p.icp_score ?? 0)}">${p.icp_score ?? '—'}</td>
       <td>${_relTimeP(p.last_contacted_at)}</td>
       <td>${p.touchpoint_count ?? 0}</td>
@@ -5042,7 +5048,7 @@ function _renderProspects() {
     tbody.appendChild(tr);
 
     if (p.id === _expandedProspectId) {
-      tbody.appendChild(_buildDrawerRow(p, 9));
+      tbody.appendChild(_buildDrawerRow(p, 10));
     }
   });
 }
@@ -5081,7 +5087,7 @@ async function toggleProspectDrawer(p, tr, visible) {
 
   _expandedProspectId = p.id;
   tr.classList.add('expanded');
-  const dr = _buildDrawerRow(p, 9);
+  const dr = _buildDrawerRow(p, 10);
   tr.after(dr);
 
   try {

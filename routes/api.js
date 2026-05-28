@@ -387,14 +387,17 @@ router.get('/api/prospects', requireOperator, async (req, res) => {
       SELECT
         p.id, p.company_id, p.first_name, p.last_name, p.email, p.phone,
         p.vertical, p.status, p.icp_score, p.do_not_contact, p.notes, p.last_contacted_at, p.created_at,
+        p.assigned_setter_id,
+        su.name AS assigned_setter_name,
         c.name as company_name, c.location AS city,
         COUNT(t.id)::int as touchpoint_count
       FROM prospects p
       LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+      LEFT JOIN users su ON su.id = p.assigned_setter_id
       LEFT JOIN touchpoints t ON t.prospect_id = p.id AND t.client_id = p.client_id
       WHERE p.do_not_contact = false
         AND p.client_id = $1
-      GROUP BY p.id, c.name, c.location
+      GROUP BY p.id, c.name, c.location, su.name
       ORDER BY p.icp_score DESC NULLS LAST
       LIMIT 200
     `, [clientId]);
@@ -430,10 +433,13 @@ async function selectUpdatedProspect(id, clientId) {
       p.id, p.company_id, p.first_name, p.last_name, p.email, p.phone,
       p.vertical, p.status, p.icp_score, p.do_not_contact, p.notes,
       p.last_contacted_at, p.created_at,
+      p.assigned_setter_id,
+      su.name AS assigned_setter_name,
       c.name AS company_name, c.location AS city,
       COALESCE(tp.touchpoint_count, 0)::int AS touchpoint_count
     FROM prospects p
     LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+    LEFT JOIN users su ON su.id = p.assigned_setter_id
     LEFT JOIN (
       SELECT prospect_id, COUNT(*)::int AS touchpoint_count
       FROM touchpoints
@@ -1144,12 +1150,15 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
         ${prospectIdSql} AS prospect_id,
         p.first_name, p.last_name, p.email AS prospect_email, p.phone, p.vertical,
         p.icp_score, p.status AS prospect_status, p.last_contacted_at, p.notes,
+        p.assigned_setter_id,
+        su.name AS assigned_setter_name,
         c.name AS company_name
       FROM agent_log al
       LEFT JOIN prospects p
         ON p.id = ${prospectIdSql}
         AND p.client_id = COALESCE(al.client_id, $2)
       LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+      LEFT JOIN users su ON su.id = p.assigned_setter_id
       WHERE al.id::text = $1 AND (al.client_id = $2 OR al.client_id IS NULL)
       LIMIT 1
     `, [logId, clientId]);
@@ -1179,9 +1188,12 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
           SELECT p.id, p.first_name, p.last_name, p.email AS prospect_email, p.phone,
                  p.vertical, p.icp_score, p.status AS prospect_status,
                  p.last_contacted_at, p.notes, p.client_id AS p_client_id,
+                 p.assigned_setter_id,
+                 su.name AS assigned_setter_name,
                  c.name AS company_name
           FROM prospects p
           LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+          LEFT JOIN users su ON su.id = p.assigned_setter_id
           WHERE p.id = $1
           LIMIT 1
         `, [row.prospect_id]);
@@ -1191,9 +1203,12 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
           SELECT p.id, p.first_name, p.last_name, p.email AS prospect_email, p.phone,
                  p.vertical, p.icp_score, p.status AS prospect_status,
                  p.last_contacted_at, p.notes, p.client_id AS p_client_id,
+                 p.assigned_setter_id,
+                 su.name AS assigned_setter_name,
                  c.name AS company_name
           FROM prospects p
           LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+          LEFT JOIN users su ON su.id = p.assigned_setter_id
           WHERE LOWER(p.email) = LOWER($1)
           ORDER BY p.last_contacted_at DESC NULLS LAST
           LIMIT 1
@@ -1212,6 +1227,8 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
         row.last_contacted_at = fb.last_contacted_at;
         row.notes = fb.notes;
         row.company_name = fb.company_name;
+        row.assigned_setter_id = fb.assigned_setter_id;
+        row.assigned_setter_name = fb.assigned_setter_name;
         recoveredClientId = fb.p_client_id;
         console.log('[activity-details] bounce_fallback_recovered', {
           id: row.id, prospect_id: row.prospect_id,
@@ -1262,11 +1279,16 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
     const f = (label, value) => fields.push({ label, value: (value === null || value === undefined || value === '') ? '—' : String(value) });
     let actions = [];
 
+    // Surface the assigned setter wherever the panel mentions the prospect.
+    // Fallback to "Unassigned" so the panel never silently omits this column.
+    const setterLabel = row.assigned_setter_name || (row.prospect_id ? 'Unassigned' : null);
+
     switch (action) {
       case 'email_opened':
         f('Prospect', prospectName);
         f('Company', companyName);
         f('Email', row.prospect_email || payload.email);
+        f('Setter', setterLabel);
         f('Vertical', row.vertical);
         f('ICP score', row.icp_score);
         f('Total opens', eng.open_count ?? 0);
@@ -1277,6 +1299,7 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
         f('Prospect', prospectName);
         f('Company', companyName);
         f('Email', row.prospect_email || payload.email);
+        f('Setter', setterLabel);
         f('Vertical', row.vertical);
         f('ICP score', row.icp_score);
         f('Total touchpoints', eng.touch_count ?? 0);
@@ -1286,6 +1309,7 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
       case 'hot_prospect_alert':
         f('Prospect', prospectName);
         f('Company', companyName);
+        f('Setter', setterLabel);
         f('ICP score', row.icp_score);
         f('Opens in 24h', payload.open_count ?? eng.open_count_24h ?? 0);
         f('Phone', row.phone);
@@ -1298,6 +1322,7 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
         f('Prospect', payload.prospect_name || prospectName);
         f('Company', payload.company || companyName);
         f('Email', payload.email || row.prospect_email);
+        f('Setter', setterLabel);
         f('Vertical', payload.vertical || row.vertical);
         f('ICP Score', payload.icp_score ?? row.icp_score);
         f('Total Opens', payload.total_opens ?? eng.open_count ?? 0);
@@ -1309,12 +1334,14 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
       case 'reengagement_trigger':
         f('Prospect', prospectName);
         f('Company', companyName);
+        f('Setter', setterLabel);
         f('Days since last touch', daysSince(eng.last_touch_at ?? row.last_contacted_at));
         f('Current status', row.prospect_status);
         break;
       case 'auto_marked_dead':
         f('Prospect', prospectName);
         f('Company', companyName);
+        f('Setter', setterLabel);
         f('Touch count', eng.touch_count ?? 0);
         f('Last contact date', fmtDate(eng.last_touch_at ?? row.last_contacted_at));
         break;
@@ -1337,7 +1364,10 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
         f('Error message', row.error_msg || 'Unknown error');
         break;
       default:
-        if (prospectName) f('Prospect', prospectName);
+        if (prospectName) {
+          f('Prospect', prospectName);
+          if (setterLabel) f('Setter', setterLabel);
+        }
         break;
     }
 
