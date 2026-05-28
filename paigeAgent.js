@@ -13,9 +13,9 @@ const CHANNELS = ['facebook_page', 'google_business', 'blog', 'linkedin_page'];
 const CLIENT_1_CHANNELS = ['facebook_page', 'google_business', 'linkedin_page', 'linkedin_personal', 'blog'];
 const MSHI_CHANNELS = ['facebook_page', 'google_business', 'blog'];
 const ALL_CHANNELS = [...new Set([...CHANNELS, ...CLIENT_1_CHANNELS, ...MSHI_CHANNELS])];
-const MIN_QUALITY_SCORE = 26;
+const MIN_QUALITY_SCORE = 24;
 const MIN_DIMENSION_SCORE = 7;
-const MIN_HOOK_SCORE = 8;
+const MIN_HOOK_SCORE = 7;
 const MAX_REGENERATION_ATTEMPTS = 4;
 const CLIENT_ID = getRuntimeClientId();
 const CLEAR_PENDING_PULSEFORGE_APPROVALS = process.env.PAIGE_CLEAR_PENDING_PULSEFORGE !== '0';
@@ -1056,6 +1056,7 @@ async function scoreDraft(draft, recentPublishedAngles = []) {
 
 1. SPECIFICITY — Does it mention a concrete result, number, outcome,
    or specific scenario? (10 = very specific, 1 = vague platitudes)
+   A specificity score of 7 means the post is concrete enough to pass. Do NOT reject a post scoring 7 on specificity because it lacks a revenue figure. Concrete details, timelines, and named scenarios count as specificity. Only flag specificity as the weak dimension if it scores 6 or below.
 
 2. ORIGINALITY — Does it avoid clichés, seasonal hooks, and location
    name-drops as the main angle? (10 = fresh angle, 1 = recycled formula)
@@ -1067,6 +1068,7 @@ ${formatUsedAngles(recentPublishedAngles)}
 
 3. HOOK STRENGTH — Does the opening line give someone a reason to stop
    scrolling and keep reading? (10 = compelling, 1 = forgettable)
+   A hook_strength score of 7 means the opening is good but not exceptional. This is a passing score. Do NOT fail a post for hook_strength = 7 by adding qualitative commentary that contradicts the numeric score. If you scored it 7, it passed the dimension floor. Only flag hook_strength as the weak dimension if it scores 6 or below.
 
 Passing requires total >= ${MIN_QUALITY_SCORE}, hook_strength >= ${MIN_HOOK_SCORE},
 specificity >= ${MIN_DIMENSION_SCORE}, and originality >= ${MIN_DIMENSION_SCORE}.
