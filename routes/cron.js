@@ -10,6 +10,7 @@ const CRON_MODULES = {
   rex:       '../rexAgent',
   sketch:    '../sketchAgent',
   paige:     '../paigeAgent',
+  enrich_prospects: '../enrichProspects',
   faye:      '../facebookAgent',
   link:      '../linkedinAgent',
   sam:       '../samAgent',

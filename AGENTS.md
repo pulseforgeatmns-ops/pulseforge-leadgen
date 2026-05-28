@@ -49,6 +49,7 @@ Each agent is a standalone JS module that reads from the DB and writes results b
 | `analyticsAgent.js` | Analytics | Pulls post performance data, writes back to `post_analytics` table |
 | `sketchAgent.js` | Sketch | Site mockup generator using Puppeteer |
 | `pennyAgent.js` | Penny | (check file for current role) |
+| `enrichProspects.js` | enrich_prospects | Daily enrichment pass for newly added prospects (last 7 days): if `email` and `phone` are both NULL and DNC is false, uses Hunter domain search to backfill phone/email and logs each attempt to `agent_log` (`action=enrichment_attempt`). |
 
 ---
 
