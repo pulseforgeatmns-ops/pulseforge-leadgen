@@ -14,6 +14,13 @@ const CLIENT_1_CHANNELS = ['facebook_page', 'google_business', 'linkedin_page', 
 const MSHI_CHANNELS = ['facebook_page', 'google_business', 'blog'];
 const ALL_CHANNELS = [...new Set([...CHANNELS, ...CLIENT_1_CHANNELS, ...MSHI_CHANNELS])];
 const MIN_QUALITY_SCORE = 24;
+const CHANNEL_MIN_SCORES = {
+  google_business: 21,
+  facebook_page: 24,
+  linkedin_page: 24,
+  linkedin_personal: 24,
+  blog: 24,
+};
 const MIN_DIMENSION_SCORE = 7;
 const MIN_HOOK_SCORE = 7;
 const MAX_REGENERATION_ATTEMPTS = 4;
@@ -1122,8 +1129,9 @@ function validateDraftForClient(draft, channel) {
   return issues;
 }
 
-function passesQualityGate(score) {
-  return score.total >= MIN_QUALITY_SCORE &&
+function passesQualityGate(score, channel) {
+  const minTotal = CHANNEL_MIN_SCORES[channel] || MIN_QUALITY_SCORE;
+  return score.total >= minTotal &&
     score.hook_strength >= MIN_HOOK_SCORE &&
     score.specificity >= MIN_DIMENSION_SCORE &&
     score.originality >= MIN_DIMENSION_SCORE;
@@ -1256,7 +1264,7 @@ async function generatePost(company, contentType, channel) {
 
     logQualityGateComparison('initial', score);
 
-    while ((validationIssues.length || !passesQualityGate(score)) && regenerationAttempts < MAX_REGENERATION_ATTEMPTS) {
+    while ((validationIssues.length || !passesQualityGate(score, channel)) && regenerationAttempts < MAX_REGENERATION_ATTEMPTS) {
       regenerated = true;
       regenerationAttempts++;
       if (validationIssues.length) {
@@ -1334,7 +1342,7 @@ async function generatePost(company, contentType, channel) {
     return { content: null, quality: finalScore, regenerated, failed: true, regenerationAttempts };
   }
 
-  if (!passesQualityGate(finalScore)) {
+  if (!passesQualityGate(finalScore, channel)) {
     logQualityGateComparison('final_compare', finalScore);
     await logContentFailed(company, channel, contentType, finalScore, regenerationAttempts, finalDraft);
     console.log(`  [quality] Failed after ${regenerationAttempts} regeneration attempt(s), best score ${finalScore.total}/30; skipping ${channel}`);
