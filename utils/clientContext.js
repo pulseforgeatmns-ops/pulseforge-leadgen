@@ -230,11 +230,28 @@ async function ensureProspectStatusConstraint() {
     [PROSPECT_STATUSES]
   );
 
-  await pool.query(`ALTER TABLE prospects DROP CONSTRAINT IF EXISTS prospects_status_check`);
-  await pool.query(
-    `ALTER TABLE prospects ADD CONSTRAINT prospects_status_check
-       CHECK (status = ANY (ARRAY['cold','contacted','warm','dead','disqualified','closed']))`
-  );
+  // Idempotent constraint creation. The previous DROP-then-ADD pattern crashed
+  // on Railway when multiple instances booted in parallel: instance B could
+  // recreate the constraint between instance A's DROP and ADD, and A's ADD
+  // would then fail with "constraint prospects_status_check already exists".
+  // Check pg_constraint and skip the ADD when the constraint is already in
+  // place. If the allowed-values list ever needs to change, drop the
+  // constraint manually first; the next startup will recreate it.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'prospects_status_check'
+          AND conrelid = 'prospects'::regclass
+      ) THEN
+        ALTER TABLE prospects
+          ADD CONSTRAINT prospects_status_check
+          CHECK (status = ANY (ARRAY['cold','contacted','warm','dead','disqualified','closed']));
+      END IF;
+    END$$;
+  `);
 }
 
 async function getClientConfig(clientId = DEFAULT_CLIENT_ID) {
