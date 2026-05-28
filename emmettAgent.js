@@ -21,8 +21,6 @@ function getEmmettClientConfig(clientId = CLIENT_ID) {
 }
 
 // Email sequence definitions — reply-based CTAs only (no external or Calendly links in bodies)
-
-// A/B TEST ACTIVE: restaurant vs restaurant_b — remove restaurant_b when test concludes
 const SEQUENCES = {
   mshi: [
     {
@@ -176,7 +174,7 @@ The businesses I work with aren't struggling — they're good at what they do. T
 
 If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
 
-Jake`
+Jacob`
     },
     {
       day: 8,
@@ -191,7 +189,7 @@ I help businesses like {{business_name}} stay visible automatically — no extra
 
 Are you currently doing anything to stay in front of new customers consistently, or is it mostly word of mouth at this point?
 
-Jake`
+Jacob`
     },
     {
       day: 13,
@@ -272,70 +270,6 @@ Pulseforge
 gopulseforge.com`
     }
   ],
-  restaurant_b: [
-    {
-      day: 0,
-      subject: "{{business_name}} — honest question",
-      body: `Hi {{first_name}},
-
-I spent years running restaurants in New England. The hardest part was not the service or the food. It was staying visible when I was too busy running the floor to think about marketing.
-
-Most owners I talk to are in the same spot. Great restaurant, not enough time to stay in front of new customers consistently.
-
-I built a system that handles that automatically. It finds local prospects, reaches out on your behalf, and keeps your name visible between rushes. It runs in the background while you run the restaurant.
-
-Is bringing in new customers consistently something you're actively working on right now?
-
-Jacob Maynard
-Pulseforge`
-    },
-    {
-      day: 4,
-      subject: "still thinking about {{business_name}}",
-      body: `Hi {{first_name}},
-
-Sent you a note a few days ago. Wanted to follow up once before moving on.
-
-I know you are busy. That is kind of the whole point.
-
-The restaurants I work with are not struggling. They are good at what they do. They just do not have time to chase new customers on top of running the kitchen, managing staff, and everything else. That is the gap I fill.
-
-If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
-
-Jacob`
-    },
-    {
-      day: 8,
-      subject: "what is actually working in Manchester right now",
-      body: `Hi {{first_name}},
-
-One thing I am seeing across local restaurants right now. The ones growing consistently are not spending more on ads. They are just staying in front of people longer than their competition.
-
-Most owners go quiet between services. The ones winning do not.
-
-I help restaurants like {{business_name}} stay visible automatically. No extra time required on your end.
-
-Are you currently doing anything to stay in front of new customers between rushes, or is it mostly word of mouth at this point?
-
-Jacob`
-    },
-    {
-      day: 13,
-      subject: "closing the loop",
-      body: `Hi {{first_name}},
-
-Last note from me. I do not want to clutter your inbox.
-
-If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
-
-Rooting for you either way.
-
-Jacob Maynard
-Pulseforge
-gopulseforge.com`
-    }
-  ],
-
   salon: [
     {
       day: 0,
@@ -818,6 +752,11 @@ gopulseforge.com`
   ]
 };
 
+// Warm substitution step used by main() when a prospect has clicked but has not
+// yet received the warm follow-up. Falls back to the cleaning Day 4 step so
+// the useWarm branch always has a valid {subject, body, day} to fill.
+const WARM_STEP = SEQUENCES.cleaning.find(step => step.day === 4) || SEQUENCES.cleaning[1];
+
 function fillTemplate(template, prospect) {
   const rawName = prospect.first_name || prospect.name?.split(' ')[0] || '';
   const firstName = (rawName && rawName !== '—') ? rawName : 'there';
@@ -1103,8 +1042,7 @@ function getSequenceForProspect(prospect) {
     return 'salon';
   }
   if (vertical.includes('restaurant') || vertical.includes('cafe') || vertical.includes('diner')) {
-    // A/B TEST — restaurant CTA test — remove when test is complete (target: 50 sends per variant)
-    return prospect.id % 2 === 0 ? 'restaurant_b' : 'restaurant';
+    return 'restaurant';
   }
   if (vertical.includes('fitness') || vertical.includes('gym') || vertical.includes('yoga') || vertical.includes('pilates') || vertical.includes('studio') || vertical.includes('barre')) {
     return 'fitness';
