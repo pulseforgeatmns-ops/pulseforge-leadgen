@@ -81,6 +81,8 @@ function digestSnapshotWithMarketLabels(snapshot) {
     untouched: enrichProspectLabels(snapshot.untouched),
     cold: enrichProspectLabels(snapshot.cold),
     clickedToday: enrichProspectLabels(snapshot.clickedToday),
+    topICP: enrichProspectLabels(snapshot.topICP || []),
+    heatingUp: enrichProspectLabels(snapshot.heatingUp || []),
   };
 }
 
@@ -97,7 +99,7 @@ function normalizeCompanyName(value) {
 // Business names actually handed to the LLM this run — the only ones it may reference.
 function snapshotCompanyNameSet(snapshot) {
   const names = new Set();
-  for (const key of ['recentTouchpoints', 'untouched', 'cold', 'clickedToday']) {
+  for (const key of ['recentTouchpoints', 'untouched', 'cold', 'clickedToday', 'topICP', 'heatingUp']) {
     for (const row of snapshot[key] || []) {
       for (const v of [row.raw_company_name, row.company_name, row.company_name_with_market]) {
         const n = normalizeCompanyName(v);
@@ -383,9 +385,54 @@ async function getSystemSnapshot() {
     ORDER BY s.sequence, s.step
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
+  // Top 5 prospects by current ICP score (engagement-weighted via dynamic recalc)
+  const topICP = await pool.query(`
+    SELECT
+      p.id, p.first_name, p.last_name, p.email, p.icp_score, p.status,
+      ${prospectCompanySql('p')} AS company_name,
+      p.notes, p.service_area_match
+    FROM prospects p
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+    WHERE p.client_id = $1
+      AND COALESCE(p.do_not_contact, false) = false
+      AND p.status <> 'dead'
+    ORDER BY p.icp_score DESC NULLS LAST
+    LIMIT 5
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+
+  // Heating up — prospects whose ICP score rose 10+ points in the last 7 days,
+  // measured as (latest new_score − earliest old_score) across the window.
+  const heatingUp = await pool.query(`
+    WITH window_changes AS (
+      SELECT
+        h.prospect_id,
+        (ARRAY_AGG(h.old_score ORDER BY h.created_at ASC))[1]  AS start_score,
+        (ARRAY_AGG(h.new_score ORDER BY h.created_at DESC))[1] AS end_score
+      FROM icp_score_history h
+      WHERE h.created_at > NOW() - INTERVAL '7 days'
+      GROUP BY h.prospect_id
+    )
+    SELECT
+      p.id, p.first_name, p.last_name, p.email, p.icp_score, p.status,
+      ${prospectCompanySql('p')} AS company_name,
+      p.notes, p.service_area_match,
+      wc.start_score, wc.end_score,
+      (wc.end_score - wc.start_score) AS score_delta
+    FROM window_changes wc
+    JOIN prospects p ON p.id = wc.prospect_id
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+    WHERE p.client_id = $1
+      AND wc.start_score IS NOT NULL
+      AND (wc.end_score - wc.start_score) >= 10
+    ORDER BY score_delta DESC
+    LIMIT 10
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+
   return {
     prospectStats: prospectStats.rows,
     recentTouchpoints: recentTouchpoints.rows,
+    topICP: topICP.rows,
+    heatingUp: heatingUp.rows,
     untouched: untouched.rows,
     cold: cold.rows,
     pending: pending.rows,
@@ -448,6 +495,13 @@ function buildDeterministicDigest(snapshot, autoExec) {
     exceptions.push(`${snapshot.clickedToday.length} prospect${snapshot.clickedToday.length === 1 ? '' : 's'} clicked an email today${labels.length ? ` (${labels.join(', ')})` : ''} — worth personal outreach`);
   }
   if (replies) exceptions.push(`${replies} new repl${replies === 1 ? 'y' : 'ies'} this week`);
+  if ((snapshot.heatingUp || []).length) {
+    const labels = snapshot.heatingUp
+      .slice(0, 3)
+      .map(p => `${formatProspectBusinessLabel(p) || p.email} (+${p.score_delta} ICP)`)
+      .filter(Boolean);
+    exceptions.push(`${snapshot.heatingUp.length} prospect${snapshot.heatingUp.length === 1 ? '' : 's'} heating up — ICP rose 10+ pts this week${labels.length ? ` (${labels.join(', ')})` : ''}`);
+  }
   if (pending) exceptions.push(`${pending} post${pending === 1 ? '' : 's'} awaiting approval`);
   if (snapshot.warmToday) exceptions.push(`${snapshot.warmToday} prospect${snapshot.warmToday === 1 ? '' : 's'} upgraded to warm today`);
 
@@ -506,8 +560,8 @@ ${dataString}
 Generate a tight, streamlined digest with EXACTLY these four sections, in order:
 
 1. ACTIONS EXECUTED — One short paragraph restating the auto-executed actions above in a manager's voice.
-2. EXCEPTIONS — Items needing a human decision. Only include: warm signals worth personal outreach (from clickedToday), new replies (from recentTouchpoints with action_type reply / inbound / email_reply), unusual patterns. If none, say "No exceptions today."
-3. PIPELINE SNAPSHOT — 3-4 lines max. Pull from closerMetrics, prospectStats, pending. Example lines: booked calls this week, MRR closed this month, total pending approvals, warm prospects today.
+2. EXCEPTIONS — Items needing a human decision. Only include: warm signals worth personal outreach (from clickedToday), new replies (from recentTouchpoints with action_type reply / inbound / email_reply), prospects heating up (from heatingUp — ICP score rose 10+ points in the last 7 days, copy the company name verbatim and note the score_delta), unusual patterns. If none, say "No exceptions today."
+3. PIPELINE SNAPSHOT — 3-4 lines max. Pull from closerMetrics, prospectStats, pending, topICP (highest-scoring prospects). Example lines: booked calls this week, MRR closed this month, total pending approvals, warm prospects today, top ICP prospect.
 4. RECOMMENDATION — ONE recommendation only, if any. If nothing is actionable, omit the section entirely.
 
 Style rules:

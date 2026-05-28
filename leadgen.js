@@ -17,6 +17,7 @@ const { google } = require('googleapis');
 const pool = require('./db');
 const { appendQualifiedScoutLead } = require('./utils/setterSheet');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { recordScoutBaseline } = require('./utils/icpScoring');
 
 // Write one agent_log row per Scout run so we can answer
 // "did Scout run? for which client/industry/location? did it find anything?"
@@ -1032,6 +1033,12 @@ async function saveToDatabase(leads) {
       }
       saved++;
       const prospectId = insert.rows[0].id;
+
+      // Seed icp_score_history with Scout's initial score so dynamic ICP
+      // recalculation has a baseline to diff future engagement changes against.
+      await recordScoutBaseline(prospectId, lead.score, 'scout_initial').catch(err =>
+        console.error(`[Scout] recordScoutBaseline failed for ${companyName}: ${err.message}`)
+      );
 
       try {
         await pool.query(`

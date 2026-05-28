@@ -31,6 +31,7 @@ const { bcrypt, getUserCount, initAuth, requireAuth, requireRole } = require('./
 const { ensureClientArchitecture } = require('./utils/clientContext');
 const { ensureCloserSchema } = require('./utils/closerSchema');
 const { ensureScoutExpansionTables } = require('./scoutExpansion');
+const { ensureIcpScoreHistoryTable } = require('./utils/icpScoring');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -39,6 +40,7 @@ initAuth().catch(err => console.error('[auth] init error:', err.message));
 ensureClientArchitecture().catch(err => console.error('[clients] init error:', err.message));
 ensureCloserSchema().catch(err => console.error('[closer] init error:', err.message));
 ensureScoutExpansionTables().catch(err => console.error('[scoutExpansion] init error:', err.message));
+ensureIcpScoreHistoryTable().catch(err => console.error('[icpScoring] init error:', err.message));
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),

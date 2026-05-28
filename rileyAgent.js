@@ -5,6 +5,7 @@ const db = require('./dbClient');
 const fs = require('fs');
 const path = require('path');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { recalculateICP } = require('./utils/icpScoring');
 
 const AGENT_NAME = 'riley';
 const CLIENT_ID = getRuntimeClientId();
@@ -555,6 +556,19 @@ async function depositWarmSignalAction({ prospect_id, client_id = CLIENT_ID, tri
   return false;
 }
 
+// Riley owns ICP recalculation for every inbound email signal it processes
+// (opens, clicks, replies, bounces, unsubscribes). The Brevo webhook handler
+// calls this for open/click/bounce/unsubscribe events; run() calls it for
+// classified replies. Best-effort — a recalc failure never blocks triage.
+async function recalcICPAfterEmailEvent(prospectId, clientId = CLIENT_ID, eventType = 'email_event') {
+  if (!prospectId) return;
+  try {
+    await recalculateICP(prospectId, { clientId, reason: `riley:${eventType}` });
+  } catch (err) {
+    console.error(`[Riley] recalcICPAfterEmailEvent (${eventType}) failed for ${prospectId}:`, err.message);
+  }
+}
+
 async function notifyWarmReply(prospect, email, classification) {
   if (classification !== 'warm') return;
   await depositWarmSignalAction({
@@ -725,6 +739,11 @@ async function run() {
         await notifyWarmReply(prospect, email, result.classification);
       }
 
+      // Reply/unsubscribe both shift engagement — recompute the ICP score so
+      // the new signal (or penalty) is reflected immediately.
+      const eventType = result.classification === 'unsubscribe' ? 'unsubscribe' : 'reply';
+      await recalcICPAfterEmailEvent(prospect.id, CLIENT_ID, eventType);
+
       await safeMarkAsRead(auth, email.id);
       await new Promise(r => setTimeout(r, 1000));
     } catch (err) {
@@ -794,6 +813,7 @@ module.exports = {
   logSignalDroppedNoProspect,
   prospectExists,
   qualifyingOpenSignal,
+  recalcICPAfterEmailEvent,
   QUALIFYING_OPEN_MIN_COUNT,
   QUALIFYING_OPEN_MIN_SPREAD_MINUTES,
 };

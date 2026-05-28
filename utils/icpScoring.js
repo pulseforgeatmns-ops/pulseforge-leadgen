@@ -1,0 +1,375 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Dynamic ICP Scoring
+// =============================================================================
+// recalculateICP(prospectId) recomputes a prospect's ICP score by combining a
+// deterministic base score (same component breakdown Scout uses at scrape time)
+// with an engagement bonus/penalty layer derived from the prospect's live
+// touchpoint, agent_log, activity_log, and pipeline history.
+//
+// Base components (max 100):
+//   vertical match   0-25
+//   location match   0-20
+//   contact quality  0-20
+//   web presence     0-12
+//   size estimate    0-15
+//   client fit       0-8
+//
+// Engagement bonus (added on top of base):
+//   1 email open                     +3
+//   3+ email opens                   +8   (tiered — highest tier only)
+//   5+ email opens                   +15
+//   email reply (any)                +20
+//   link click                       +10
+//   voicemail left by Cal            +5   (Cal outcome — highest tier only)
+//   Cal call answered                +10
+//   Cal call answered + interested   +20
+//   setter contacted                 +10
+//   discovery call booked            +25
+//
+// Penalties:
+//   hard bounce                      -20
+//   unsubscribe                      -30
+//   5+ touches, no response in 30d   -10
+//
+// Final score is clamped to [0, 100]. Every change is written to
+// icp_score_history with the old score, new score, and a reason string.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const sharedPool = require('../db');
+const { getClientConfig, getRuntimeClientId } = require('./clientContext');
+
+// ── TABLE MIGRATION ──────────────────────────────────────────────────────────
+// Idempotent. Wired into server.js startup alongside the other ensure* helpers,
+// and called lazily on the first recalc as a safety net.
+let _historyTableReady = false;
+async function ensureIcpScoreHistoryTable() {
+  await sharedPool.query(`
+    CREATE TABLE IF NOT EXISTS icp_score_history (
+      id SERIAL PRIMARY KEY,
+      prospect_id UUID REFERENCES prospects(id),
+      old_score INTEGER,
+      new_score INTEGER,
+      reason TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  await sharedPool.query(`
+    CREATE INDEX IF NOT EXISTS icp_score_history_prospect_idx
+      ON icp_score_history (prospect_id, created_at DESC)
+  `);
+  await sharedPool.query(`
+    CREATE INDEX IF NOT EXISTS icp_score_history_created_idx
+      ON icp_score_history (created_at DESC)
+  `);
+  _historyTableReady = true;
+}
+
+async function ensureHistoryReady() {
+  if (_historyTableReady) return;
+  try {
+    await ensureIcpScoreHistoryTable();
+  } catch (err) {
+    console.error('[icpScoring] ensureIcpScoreHistoryTable failed:', err.message);
+  }
+}
+
+function clampScore(value) {
+  return Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+}
+
+// ── BASE SCORE ───────────────────────────────────────────────────────────────
+const TARGET_VERTICALS = new Set([
+  'cleaning', 'restaurant', 'hvac', 'salon', 'spa', 'beauty', 'retail',
+  'auto', 'auto_repair', 'automotive', 'roofing', 'dental', 'home_renovation',
+  'decks', 'siding', 'windows', 'exterior_remodeling', 'interior_renovation',
+]);
+const ADJACENT_VERTICALS = new Set([
+  'landscaping', 'lawn', 'property_management', 'hotel', 'hospitality',
+  'fitness', 'gym', 'med_spa', 'home_services', 'emergency_repair',
+]);
+
+function scoreVertical(prospect) {
+  const vertical = String(prospect.vertical || '').toLowerCase().trim();
+  if (TARGET_VERTICALS.has(vertical)) return 25;
+  if (ADJACENT_VERTICALS.has(vertical)) return 15;
+
+  // Fall back to a keyword sweep across vertical + company name for free-form values.
+  const hay = `${vertical} ${prospect.company_name || ''} ${prospect.industry || ''}`.toLowerCase();
+  if ([...TARGET_VERTICALS].some(k => hay.includes(k.replace(/_/g, ' ')) || hay.includes(k))) return 25;
+  if ([...ADJACENT_VERTICALS].some(k => hay.includes(k.replace(/_/g, ' ')) || hay.includes(k))) return 15;
+  return 5;
+}
+
+const NH_SUBURBS = [
+  'bedford', 'goffstown', 'hooksett', 'londonderry', 'auburn', 'candia',
+  'derry', 'merrimack', 'nashua', 'concord',
+];
+
+function scoreLocation(prospect, clientConfig) {
+  const locHay = `${prospect.service_area_match || ''} ${prospect.company_location || ''}`.toLowerCase();
+  if (!locHay.trim()) return 0;
+
+  const city = String(clientConfig?.city || '').toLowerCase().trim();
+  const state = String(clientConfig?.state || '').toLowerCase().trim();
+  const serviceArea = Array.isArray(clientConfig?.service_area) ? clientConfig.service_area : [];
+
+  // Manchester NH (client 1) keeps Scout's original suburb-aware ladder.
+  if (Number(prospect.client_id) === 1) {
+    if (locHay.includes('manchester')) return 20;
+    if (NH_SUBURBS.some(c => locHay.includes(c))) return 15;
+    if (locHay.includes(' nh') || locHay.includes('new hampshire')) return 8;
+    return 0;
+  }
+
+  if (city && locHay.includes(city)) return 20;
+  if (serviceArea.some(area => area && locHay.includes(String(area).toLowerCase()))) return 15;
+  if (state && locHay.includes(state)) return 8;
+  return 0;
+}
+
+function scoreContact(prospect) {
+  const hasEmail = !!(prospect.email && String(prospect.email).includes('@'));
+  const hasPhone = !!(prospect.phone && String(prospect.phone).trim());
+  if (hasEmail && hasPhone) return 20;
+  if (hasEmail) return 12;
+  if (hasPhone) return 8;
+  return 0;
+}
+
+function scoreWeb(prospect) {
+  const hasSite = !!(prospect.has_website || prospect.website_url || prospect.company_website || prospect.company_domain);
+  const hasSocial = !!(prospect.has_facebook || prospect.has_instagram || prospect.facebook_url || prospect.instagram_url);
+  if (hasSite && hasSocial) return 12;
+  if (hasSite) return 8;
+  if (hasSocial) return 4;
+  return 0;
+}
+
+function scoreSize(prospect) {
+  const hay = `${prospect.company_name || ''} ${prospect.employee_count_estimate || ''} ${prospect.company_size || ''}`.toLowerCase();
+  const STRONG = ['llc', 'inc', 'corp', 'commercial', 'team', 'staff', 'locations', 'group'];
+  const hasStrong = STRONG.some(k => hay.includes(k)) || !!prospect.employee_count_estimate || !!prospect.company_size;
+  const hasBasic = !!(prospect.phone || prospect.company_location);
+  if (hasStrong) return 15;
+  if (hasBasic) return 8;
+  return 0;
+}
+
+function scoreClientFit(prospect, clientConfig) {
+  const hay = `${prospect.company_name || ''} ${prospect.service_area_match || ''} ${prospect.company_location || ''}`.toLowerCase();
+
+  // MSHI (client 2): reward HOA/property/county signals like Scout does.
+  if (Number(prospect.client_id) === 2) {
+    const targetSignals = ['hoa', 'homeowners association', 'landlord', 'property management', 'property manager', 'bank', 'reo', 'foreclosure'];
+    const countySignals = ['kanawha', 'putnam', 'cabell'];
+    if (targetSignals.some(k => hay.includes(k))) return 8;
+    if (countySignals.some(k => hay.includes(k))) return 6;
+    return 2;
+  }
+
+  const targetClients = Array.isArray(clientConfig?.target_clients) ? clientConfig.target_clients : [];
+  if (targetClients.length && targetClients.some(t => t && hay.includes(String(t).toLowerCase()))) return 8;
+  if (prospect.service_area_match) return 4;
+  return 0;
+}
+
+function computeBaseScore(prospect, clientConfig) {
+  const components = {
+    vertical: scoreVertical(prospect),
+    location: scoreLocation(prospect, clientConfig),
+    contact: scoreContact(prospect),
+    web: scoreWeb(prospect),
+    size: scoreSize(prospect),
+    client_fit: scoreClientFit(prospect, clientConfig),
+  };
+  const total = Object.values(components).reduce((sum, n) => sum + n, 0);
+  return { total, components };
+}
+
+// ── ENGAGEMENT + PENALTIES ─────────────────────────────────────────────────
+async function gatherEngagement(prospectId, clientId) {
+  const touch = await sharedPool.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE channel = 'email' AND action_type IN ('open', 'email_opened'))::int                              AS opens,
+      COUNT(*) FILTER (WHERE channel = 'email' AND action_type = 'email_clicked')::int                                        AS clicks,
+      COUNT(*) FILTER (WHERE action_type IN ('inbound_reply', 'inbound', 'reply', 'email_reply'))::int                        AS replies,
+      COUNT(*) FILTER (WHERE action_type = 'email_bounced')::int                                                              AS hard_bounces,
+      COUNT(*) FILTER (WHERE action_type IN ('email_unsubscribed', 'unsubscribed', 'email_spam'))::int                        AS unsubscribes,
+      COUNT(*) FILTER (WHERE channel = 'phone' AND agent_id = 'cal' AND LOWER(COALESCE(outcome, '')) LIKE '%voicemail%')::int AS cal_voicemails,
+      COUNT(*) FILTER (WHERE channel = 'phone' AND agent_id = 'cal' AND LOWER(COALESCE(outcome, '')) IN ('completed', 'answered'))::int AS cal_answered,
+      COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '30 days')::int                                                    AS touches_30d
+    FROM touchpoints
+    WHERE prospect_id = $1 AND client_id = $2
+  `, [prospectId, clientId]);
+
+  // "Answered and interested" — a Cal call that the transcript parser flagged as
+  // a booking. Logged by the bland webhook as cal_agent/call_completed booked=true.
+  const calInterested = await sharedPool.query(`
+    SELECT COUNT(*)::int AS count
+    FROM agent_log
+    WHERE prospect_id = $1
+      AND client_id = $2
+      AND agent_name IN ('cal', 'cal_agent')
+      AND action = 'call_completed'
+      AND (payload->>'booked') = 'true'
+  `, [prospectId, clientId]).catch(() => ({ rows: [{ count: 0 }] }));
+
+  // Setter contact — a logged activity_log row. lead_id is a globally-unique
+  // prospect UUID, so no client_id filter is needed (and the column is not
+  // guaranteed to exist on activity_log across environments).
+  const setter = await sharedPool.query(`
+    SELECT EXISTS (
+      SELECT 1 FROM activity_log al WHERE al.lead_id = $1
+    ) AS has_activity
+  `, [prospectId]).catch(() => ({ rows: [{ has_activity: false }] }));
+
+  const row = touch.rows[0] || {};
+  return {
+    opens: Number(row.opens || 0),
+    clicks: Number(row.clicks || 0),
+    replies: Number(row.replies || 0),
+    hard_bounces: Number(row.hard_bounces || 0),
+    unsubscribes: Number(row.unsubscribes || 0),
+    cal_voicemails: Number(row.cal_voicemails || 0),
+    cal_answered: Number(row.cal_answered || 0),
+    cal_interested: Number(calInterested.rows[0]?.count || 0),
+    touches_30d: Number(row.touches_30d || 0),
+    setter_has_activity: !!setter.rows[0]?.has_activity,
+  };
+}
+
+function computeEngagementBonus(eng, prospect) {
+  let bonus = 0;
+
+  // Email opens — tiered, highest applicable tier only.
+  if (eng.opens >= 5) bonus += 15;
+  else if (eng.opens >= 3) bonus += 8;
+  else if (eng.opens >= 1) bonus += 3;
+
+  if (eng.replies > 0) bonus += 20;
+  if (eng.clicks > 0) bonus += 10;
+
+  // Cal outcome — tiered, highest applicable tier only.
+  if (eng.cal_interested > 0) bonus += 20;
+  else if (eng.cal_answered > 0) bonus += 10;
+  else if (eng.cal_voicemails > 0) bonus += 5;
+
+  const setterContacted = eng.setter_has_activity ||
+    ['contacted', 'follow_up', 'booked'].includes(String(prospect.setter_status || ''));
+  if (setterContacted) bonus += 10;
+
+  const booked = !!prospect.booked_at || String(prospect.setter_status || '') === 'booked';
+  if (booked) bonus += 25;
+
+  return bonus;
+}
+
+function computePenalties(eng, prospect) {
+  let penalty = 0;
+  if (eng.hard_bounces > 0) penalty += 20;
+  if (eng.unsubscribes > 0) penalty += 30;
+  // 5+ touches in the last 30 days with no reply at all.
+  if (eng.touches_30d >= 5 && eng.replies === 0) penalty += 10;
+  return penalty;
+}
+
+// ── PROSPECT LOADER ──────────────────────────────────────────────────────────
+async function loadProspect(prospectId, clientId) {
+  const res = await sharedPool.query(`
+    SELECT
+      p.id, p.client_id, p.email, p.phone, p.vertical, p.icp_score,
+      p.service_area_match, p.has_website, p.website_url,
+      p.has_facebook, p.has_instagram, p.facebook_url, p.instagram_url,
+      p.employee_count_estimate, p.setter_status, p.booked_at, p.do_not_contact,
+      c.name AS company_name, c.location AS company_location,
+      c.website AS company_website, c.domain AS company_domain,
+      c.industry AS industry, c.size AS company_size
+    FROM prospects p
+    LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+    WHERE p.id = $1 AND p.client_id = $2
+    LIMIT 1
+  `, [prospectId, clientId]);
+  return res.rows[0] || null;
+}
+
+// ── PUBLIC: recalculateICP ─────────────────────────────────────────────────
+// Recomputes and persists a prospect's ICP score. Returns a result object;
+// never throws on a missing prospect (returns { found: false }).
+async function recalculateICP(prospectId, options = {}) {
+  if (!prospectId) return { found: false };
+  await ensureHistoryReady();
+
+  const clientId = options.clientId != null ? Number(options.clientId) : getRuntimeClientId();
+  const reason = options.reason || 'recalculation';
+
+  const prospect = await loadProspect(prospectId, clientId);
+  if (!prospect) {
+    console.warn(`[icpScoring] recalculateICP: prospect ${prospectId} not found for client ${clientId}`);
+    return { found: false };
+  }
+
+  let clientConfig = null;
+  try {
+    clientConfig = await getClientConfig(clientId);
+  } catch (err) {
+    console.error('[icpScoring] getClientConfig failed:', err.message);
+  }
+
+  const base = computeBaseScore(prospect, clientConfig);
+  const eng = await gatherEngagement(prospectId, clientId);
+  const bonus = computeEngagementBonus(eng, prospect);
+  const penalty = computePenalties(eng, prospect);
+
+  const oldScore = prospect.icp_score == null ? null : Number(prospect.icp_score);
+  const newScore = clampScore(base.total + bonus - penalty);
+
+  if (oldScore === newScore) {
+    return { found: true, changed: false, old_score: oldScore, new_score: newScore, base: base.total, engagement: bonus, penalties: penalty };
+  }
+
+  await sharedPool.query(
+    `UPDATE prospects SET icp_score = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3`,
+    [newScore, prospectId, clientId]
+  );
+  await logScoreChange(prospectId, oldScore, newScore, reason);
+
+  console.log(`[icpScoring] ${prospectId} ICP ${oldScore ?? 'null'} → ${newScore} (base ${base.total} + eng ${bonus} - pen ${penalty}) [${reason}]`);
+  return {
+    found: true,
+    changed: true,
+    old_score: oldScore,
+    new_score: newScore,
+    base: base.total,
+    base_components: base.components,
+    engagement: bonus,
+    penalties: penalty,
+  };
+}
+
+// Write a single row to icp_score_history. Best-effort — logs but never throws.
+async function logScoreChange(prospectId, oldScore, newScore, reason) {
+  try {
+    await ensureHistoryReady();
+    await sharedPool.query(
+      `INSERT INTO icp_score_history (prospect_id, old_score, new_score, reason)
+       VALUES ($1, $2, $3, $4)`,
+      [prospectId, oldScore, newScore, String(reason || 'recalculation').slice(0, 200)]
+    );
+  } catch (err) {
+    console.error('[icpScoring] logScoreChange failed:', err.message);
+  }
+}
+
+// Record Scout's initial score for a freshly inserted prospect (old_score = null).
+async function recordScoutBaseline(prospectId, score, reason = 'scout_initial') {
+  if (!prospectId) return;
+  await logScoreChange(prospectId, null, clampScore(score), reason);
+}
+
+module.exports = {
+  recalculateICP,
+  recordScoutBaseline,
+  logScoreChange,
+  ensureIcpScoreHistoryTable,
+  computeBaseScore,
+};

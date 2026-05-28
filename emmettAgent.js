@@ -2,6 +2,7 @@ require('dotenv').config();
 const axios = require('axios');
 const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { recalculateICP } = require('./utils/icpScoring');
 
 const AGENT_NAME = 'emmett';
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
@@ -973,12 +974,54 @@ async function getProspectsForEmail() {
     )
     ORDER BY
       CASE WHEN p.status = 'warm' THEN 0 ELSE 1 END ASC,
+      -- icp_score carries the dynamic engagement bonus (opens, clicks, replies,
+      -- calls), so highest-scoring prospects get contacted first within each tier.
       p.icp_score DESC NULLS LAST,
       p.last_contacted_at ASC NULLS FIRST
     LIMIT 100
   `, [CLIENT_ID]);
 
   return res.rows;
+}
+
+// Recompute ICP for prospects that have accumulated 5+ touches in the last 30
+// days without ever replying. recalculateICP applies the -10 no-response
+// penalty, demoting stalled prospects so engaged ones sort ahead of them on
+// the next run. Best-effort — never blocks the send loop.
+async function recalcStalledNoResponseProspects() {
+  const pool = require('./db');
+  try {
+    const res = await pool.query(`
+      SELECT p.id
+      FROM prospects p
+      WHERE p.client_id = $1
+        AND COALESCE(p.do_not_contact, false) = false
+        AND (
+          SELECT COUNT(*) FROM touchpoints t
+          WHERE t.prospect_id = p.id
+            AND t.client_id = p.client_id
+            AND t.created_at > NOW() - INTERVAL '30 days'
+        ) >= 5
+        AND NOT EXISTS (
+          SELECT 1 FROM touchpoints t
+          WHERE t.prospect_id = p.id
+            AND t.client_id = p.client_id
+            AND t.action_type IN ('inbound_reply', 'inbound', 'reply', 'email_reply')
+        )
+    `, [CLIENT_ID]);
+
+    for (const row of res.rows) {
+      await recalculateICP(row.id, { clientId: CLIENT_ID, reason: 'emmett:5_touch_no_response_30d' })
+        .catch(err => console.error(`[Emmett] recalculateICP failed for ${row.id}: ${err.message}`));
+    }
+    if (res.rows.length) {
+      console.log(`[Emmett] Recalculated ICP for ${res.rows.length} stalled (5+ touch, no-response) prospect(s)`);
+    }
+    return res.rows.length;
+  } catch (err) {
+    console.error('[Emmett] recalcStalledNoResponseProspects error:', err.message);
+    return 0;
+  }
 }
 
 function getSequenceForProspect(prospect) {
@@ -1272,6 +1315,10 @@ async function run(context = {}) {
 
     if (sent < dailyLimit) await humanDelay();
   }
+
+  // After outreach, demote stalled no-response prospects via the dynamic ICP
+  // penalty so they fall below engaged prospects on the next run.
+  await recalcStalledNoResponseProspects();
 
   console.log(`\nEmmett complete. Emails sent: ${sent}`);
   await db.logAgentAction(

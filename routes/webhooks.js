@@ -6,6 +6,7 @@ const {
   logSignalDroppedNoProspect,
   prospectExists,
   qualifyingOpenSignal,
+  recalcICPAfterEmailEvent,
 } = require('../rileyAgent');
 
 const BREVO_EVENT_MAP = {
@@ -221,6 +222,12 @@ router.post('/webhooks/brevo', (req, res) => {
           email,
           company: prospect.company_name,
         });
+      }
+
+      // Recompute the prospect's ICP score so this engagement signal (open /
+      // click) or penalty (bounce / unsubscribe / spam) is reflected at once.
+      if (['email_opened', 'email_clicked', 'email_bounced', 'email_unsubscribed', 'email_spam'].includes(actionType)) {
+        await recalcICPAfterEmailEvent(prospect.id, prospect.client_id, actionType);
       }
 
       await pool.query(`
