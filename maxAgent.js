@@ -424,37 +424,66 @@ function extractTextFromMessage(message) {
   return joined;
 }
 
-async function generateInsights(snapshot, autoExec) {
-  console.log(`[Max] generateInsights called for client_id=${CLIENT_ID} (autoExec keys: ${autoExec ? Object.keys(autoExec).join(',') : 'none'})`);
-
+// Build the four-section digest directly from snapshot data. Used as the
+// LLM fallback and as the MSHI deterministic path. Same shape as the LLM
+// output (ACTIONS EXECUTED / EXCEPTIONS / PIPELINE SNAPSHOT / RECOMMENDATION)
+// so the dashboard format never regresses to the old verbose template.
+function buildDeterministicDigest(snapshot, autoExec) {
   const autoExecLine = formatAutoExecSummary(autoExec);
   const closer = snapshot.closerMetrics || {};
+  const replies = snapshot.recentTouchpoints.filter(t =>
+    ['reply', 'inbound', 'email_reply'].includes(t.action_type)
+  ).length;
+  const pending = snapshot.pending.reduce((sum, p) => sum + parseInt(p.count || 0), 0);
+  const totalProspects = snapshot.prospectStats.reduce((sum, r) => sum + parseInt(r.count || 0), 0);
 
-  if (CLIENT_ID === 2) {
-    const replies = snapshot.recentTouchpoints.filter(t => ['reply', 'inbound', 'email_reply'].includes(t.action_type)).length;
-    const pending = snapshot.pending.reduce((sum, p) => sum + parseInt(p.count || 0), 0);
-    const exceptions = [];
-    if (snapshot.clickedToday.length) {
-      exceptions.push(`${snapshot.clickedToday.length} prospect${snapshot.clickedToday.length === 1 ? '' : 's'} clicked an email today — worth a personal note`);
-    }
-    if (replies) exceptions.push(`${replies} new repl${replies === 1 ? 'y' : 'ies'} detected this week`);
-    if (pending) exceptions.push(`${pending} post${pending === 1 ? '' : 's'} awaiting approval`);
-    if (!exceptions.length) exceptions.push('No exceptions today.');
+  const exceptions = [];
+  if (snapshot.clickedToday.length) {
+    const labels = snapshot.clickedToday
+      .slice(0, 3)
+      .map(p => formatProspectBusinessLabel(p) || p.email || `${p.first_name || ''} ${p.last_name || ''}`.trim())
+      .filter(Boolean);
+    exceptions.push(`${snapshot.clickedToday.length} prospect${snapshot.clickedToday.length === 1 ? '' : 's'} clicked an email today${labels.length ? ` (${labels.join(', ')})` : ''} — worth personal outreach`);
+  }
+  if (replies) exceptions.push(`${replies} new repl${replies === 1 ? 'y' : 'ies'} this week`);
+  if (pending) exceptions.push(`${pending} post${pending === 1 ? '' : 's'} awaiting approval`);
+  if (snapshot.warmToday) exceptions.push(`${snapshot.warmToday} prospect${snapshot.warmToday === 1 ? '' : 's'} upgraded to warm today`);
 
-    return `Good morning Brad & Dustin — your MSHI update for ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}
+  const exceptionsText = exceptions.length
+    ? exceptions.map(e => `- ${e}`).join('\n')
+    : 'No exceptions today.';
+
+  let recommendation = '';
+  if (snapshot.clickedToday.length) {
+    recommendation = `RECOMMENDATION: Have Cal or Sam reach out to today's email clickers while they're hot.`;
+  } else if (pending >= 3) {
+    recommendation = `RECOMMENDATION: Clear the approval queue — ${pending} posts are blocking the content calendar.`;
+  } else if (snapshot.cold.length >= 5 && (autoExec?.stale_reset || 0) === 0) {
+    recommendation = `RECOMMENDATION: ${snapshot.cold.length} prospects are 14+ days cold — consider a re-engagement push.`;
+  }
+
+  const greeting = CLIENT_ID === 2
+    ? `Good morning Brad & Dustin — your MSHI update for ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}`
+    : `Pulseforge daily digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
+
+  return `${greeting}
 
 ACTIONS EXECUTED: ${autoExecLine}
 
-EXCEPTIONS: ${exceptions.join('; ')}
+EXCEPTIONS:
+${exceptionsText}
 
 PIPELINE SNAPSHOT
 Booked calls this week: ${closer.booked_week || 0}
 MRR closed this month: $${Number(closer.mrr_this_month || 0).toLocaleString()}
 Pending approvals: ${pending}
+Total prospects: ${totalProspects}${recommendation ? `\n\n${recommendation}` : ''}
 
 — Pulseforge`;
-  }
+}
 
+async function generateInsightsViaLLM(snapshot, autoExec) {
+  const autoExecLine = formatAutoExecSummary(autoExec);
   const dataString = JSON.stringify(digestSnapshotWithMarketLabels(snapshot), null, 2);
 
   const message = await client.messages.create({
@@ -488,8 +517,33 @@ Style rules:
   });
 
   const text = extractTextFromMessage(message);
-  console.log(`[Max] generateInsights produced ${text.length} chars (stop_reason=${message?.stop_reason || 'unknown'})`);
+  console.log(`[Max] generateInsights LLM produced ${text.length} chars (stop_reason=${message?.stop_reason || 'unknown'})`);
   return text;
+}
+
+async function generateInsights(snapshot, autoExec) {
+  console.log(`[Max] generateInsights called for client_id=${CLIENT_ID} (autoExec keys: ${autoExec ? Object.keys(autoExec).join(',') : 'none'})`);
+
+  // MSHI is always deterministic (no LLM cost or latency for a 2-line update).
+  if (CLIENT_ID === 2) {
+    console.log('[Max] MSHI client — using deterministic digest path.');
+    return buildDeterministicDigest(snapshot, autoExec);
+  }
+
+  // For Pulseforge clients we prefer the LLM-shaped digest, but fall back to
+  // the deterministic four-section template on any failure. This guarantees
+  // every dashboard trigger writes a fresh daily_digest row instead of
+  // silently leaving the previous day's brief in place.
+  try {
+    return await generateInsightsViaLLM(snapshot, autoExec);
+  } catch (err) {
+    console.error(`[Max] LLM digest failed (${err.message}) — falling back to deterministic template.`);
+    await insertAgentLog('digest_llm_fallback', {
+      reason: err.message,
+      stack: (err.stack || '').slice(0, 1500),
+    }, 'partial').catch(() => {});
+    return buildDeterministicDigest(snapshot, autoExec);
+  }
 }
 
 function formatScoutExpansionSection(report) {
@@ -1211,10 +1265,19 @@ async function runAutonomousTriggers() {
   console.log('[Max] Autonomous triggers complete:', summary);
 }
 
-async function run() {
-  console.log('\nMax agent running...\n');
+async function run(args = {}) {
+  const triggeredBy = args.triggered_by || args.triggeredBy || 'unspecified';
+  const requestedClientId = args.client_id ?? args.clientId ?? null;
+  const startedAt = new Date().toISOString();
+  console.log(`\n[Max] run() invoked at ${startedAt} triggered_by=${triggeredBy} requested_client_id=${requestedClientId ?? '(none)'} effective_client_id=${CLIENT_ID}\n`);
+  if (requestedClientId != null && Number(requestedClientId) !== Number(CLIENT_ID)) {
+    console.warn(`[Max] client_id arg (${requestedClientId}) does not match module CLIENT_ID (${CLIENT_ID}) — the route should have reset ACTIVE_CLIENT_ID and reloaded the module before calling run().`);
+  }
 
   const result = {
+    triggered_by: triggeredBy,
+    client_id: CLIENT_ID,
+    started_at: startedAt,
     auto_exec: null,
     digest: { generated: false, sent: false, length: 0, error: null },
     errors: [],
