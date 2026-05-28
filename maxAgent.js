@@ -401,7 +401,32 @@ async function getSystemSnapshot() {
   };
 }
 
+// Concatenate every text-type content block. Anthropic occasionally returns
+// multiple blocks (e.g. with thinking enabled or when responses are split);
+// the previous `message.content[0].text` only read the first block and broke
+// silently — returning undefined — when block 0 was non-text or content was
+// empty. Throw a descriptive error so the outer handler can log it instead.
+function extractTextFromMessage(message) {
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  const texts = blocks
+    .filter(b => b && b.type === 'text' && typeof b.text === 'string')
+    .map(b => b.text);
+  const joined = texts.join('\n').trim();
+  if (!joined) {
+    const shape = JSON.stringify({
+      block_count: blocks.length,
+      block_types: blocks.map(b => b?.type),
+      stop_reason: message?.stop_reason || null,
+      usage: message?.usage || null,
+    });
+    throw new Error(`Claude response contained no usable text — ${shape}`);
+  }
+  return joined;
+}
+
 async function generateInsights(snapshot, autoExec) {
+  console.log(`[Max] generateInsights called for client_id=${CLIENT_ID} (autoExec keys: ${autoExec ? Object.keys(autoExec).join(',') : 'none'})`);
+
   const autoExecLine = formatAutoExecSummary(autoExec);
   const closer = snapshot.closerMetrics || {};
 
@@ -462,7 +487,9 @@ Style rules:
     }]
   });
 
-  return message.content[0].text;
+  const text = extractTextFromMessage(message);
+  console.log(`[Max] generateInsights produced ${text.length} chars (stop_reason=${message?.stop_reason || 'unknown'})`);
+  return text;
 }
 
 function formatScoutExpansionSection(report) {
@@ -527,6 +554,13 @@ function formatScoutExpansionSection(report) {
 }
 
 async function sendDigest(digestText, snapshot, expansionReport) {
+  // Refuse to ship an empty or non-string digest — better to skip the email
+  // and surface the failure than to send "null" / "undefined" to the client.
+  if (typeof digestText !== 'string' || !digestText.trim()) {
+    console.error(`[Max] sendDigest refused — digestText is ${typeof digestText} / ${digestText === null ? 'null' : digestText === undefined ? 'undefined' : 'empty'}`);
+    return false;
+  }
+
   const scoutExpansionBlock = formatScoutExpansionSection(expansionReport);
   const scoutExpansionSection = scoutExpansionBlock
     ? `\n${'─'.repeat(50)}\n${scoutExpansionBlock}\n`
@@ -570,10 +604,11 @@ To adjust digest frequency reply to this email.`;
 }
 
 async function logAgentRun(insights) {
+  const safeInsights = typeof insights === 'string' ? insights.slice(0, 2000) : '';
   await pool.query(`
     INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
     VALUES ($1, $2, $3, $4, NOW(), $5)
-  `, [AGENT_NAME, 'daily_digest', JSON.stringify({ insights: insights.slice(0, 2000), client_id: CLIENT_ID }), 'success', CLIENT_ID]);
+  `, [AGENT_NAME, 'daily_digest', JSON.stringify({ insights: safeInsights, client_id: CLIENT_ID }), 'success', CLIENT_ID]);
 }
 
 async function createActions(snapshot) {
@@ -1179,13 +1214,19 @@ async function runAutonomousTriggers() {
 async function run() {
   console.log('\nMax agent running...\n');
 
+  const result = {
+    auto_exec: null,
+    digest: { generated: false, sent: false, length: 0, error: null },
+    errors: [],
+  };
+
   try {
     CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
     if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
 
     console.log('Running auto-execute actions...');
-    const autoExec = await runAutoExecuteActions();
-    console.log('[Max] Auto-execute summary:', autoExec);
+    result.auto_exec = await runAutoExecuteActions();
+    console.log('[Max] Auto-execute summary:', result.auto_exec);
 
     console.log('Reading second brain...');
     const snapshot = await getSystemSnapshot();
@@ -1196,20 +1237,57 @@ async function run() {
       expansionReport = await getExpansionReport(CLIENT_ID);
     } catch (err) {
       console.error('[Max] scout expansion report error:', err.message);
+      result.errors.push({ step: 'scout_expansion_report', message: err.message });
     }
 
-    console.log('Generating insights with Claude...');
-    const rawInsights = await generateInsights(snapshot, autoExec);
-    const insights = await verifyDigestProspects(rawInsights, snapshot);
+    // Wrap the digest generation block on its own so a failure here writes a
+    // visible `digest_generation_failed` row to agent_log (and surfaces on
+    // dashboard_trigger.result) instead of being silently swallowed by the
+    // outer catch. The auto-execute side effects above are already committed
+    // and we still want createActions / runAutonomousTriggers to run.
+    try {
+      console.log('Generating insights with Claude...');
+      const rawInsights = await generateInsights(snapshot, result.auto_exec);
+      const insights = await verifyDigestProspects(rawInsights, snapshot);
 
-    console.log('\n--- DIGEST PREVIEW ---');
-    console.log(insights);
-    console.log('--- END PREVIEW ---\n');
+      if (typeof insights !== 'string' || !insights.trim()) {
+        throw new Error(`Digest generation returned ${insights === null ? 'null' : typeof insights} — refusing to send empty digest`);
+      }
+      result.digest.generated = true;
+      result.digest.length = insights.length;
 
-    console.log('Sending digest...');
-    await sendDigest(insights, snapshot, expansionReport);
+      console.log('\n--- DIGEST PREVIEW ---');
+      console.log(insights);
+      console.log('--- END PREVIEW ---\n');
 
-    await logAgentRun(insights);
+      console.log('Sending digest...');
+      result.digest.sent = await sendDigest(insights, snapshot, expansionReport);
+
+      await logAgentRun(insights);
+    } catch (err) {
+      result.digest.error = err.message;
+      result.errors.push({ step: 'digest_generation', message: err.message });
+      console.error('[Max] digest generation failed:', err.message);
+      console.error(err.stack);
+      try {
+        await pool.query(`
+          INSERT INTO agent_log (agent_name, action, payload, status, error_msg, ran_at, client_id)
+          VALUES ($1, 'digest_generation_failed', $2, 'failed', $3, NOW(), $4)
+        `, [
+          AGENT_NAME,
+          JSON.stringify({
+            error: err.message,
+            stack: (err.stack || '').slice(0, 2000),
+            auto_exec: result.auto_exec,
+            client_id: CLIENT_ID,
+          }),
+          err.message,
+          CLIENT_ID,
+        ]);
+      } catch (logErr) {
+        console.error('[Max] could not write digest_generation_failed log:', logErr.message);
+      }
+    }
 
     console.log('Creating action items...');
     await createActions(snapshot);
@@ -1220,8 +1298,10 @@ async function run() {
     console.log('\nMax complete.');
   } catch (err) {
     console.error('Max error:', err.message);
+    result.errors.push({ step: 'run', message: err.message });
   }
 
+  return result;
 }
 
 module.exports = { run };
