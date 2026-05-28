@@ -152,10 +152,12 @@ async function verifyDigestProspects(digestText, snapshot) {
     cleaned = cleaned.split(mention).join('[unverified prospect removed]');
   }
 
+  // 'success' — stripping unverified prospects is the intended outcome of
+  // this validation pass. agent_log_status_check does not accept 'partial'.
   await insertAgentLog('digest_prospect_validation', {
     flagged: flagged.size,
     stripped: [...flagged],
-  }, 'partial').catch(() => {});
+  }, 'success').catch(() => {});
 
   return cleaned;
 }
@@ -538,10 +540,12 @@ async function generateInsights(snapshot, autoExec) {
     return await generateInsightsViaLLM(snapshot, autoExec);
   } catch (err) {
     console.error(`[Max] LLM digest failed (${err.message}) — falling back to deterministic template.`);
+    // 'failed' — this row only fires when the LLM threw, so it should surface
+    // in failure dashboards. agent_log_status_check does not accept 'partial'.
     await insertAgentLog('digest_llm_fallback', {
       reason: err.message,
       stack: (err.stack || '').slice(0, 1500),
-    }, 'partial').catch(() => {});
+    }, 'failed').catch(() => {});
     return buildDeterministicDigest(snapshot, autoExec);
   }
 }
@@ -976,10 +980,30 @@ async function runCopyReviewTrigger() {
 // "Actions executed" section.
 
 async function ensureCalQueueTable() {
+  // prospects.id is UUID (server.js seeds it with gen_random_uuid()), so
+  // cal_queue.prospect_id must also be UUID. An earlier version of this
+  // function created the column as INTEGER, which made every INSERT and
+  // every "JOIN ... ON q.prospect_id = p.id" fail with
+  // "operator does not exist: integer = uuid". Drop the table if the old
+  // schema still exists — cal_queue is short-lived working state, no rows
+  // ever landed under the broken type, so there is nothing to migrate.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'cal_queue'
+          AND column_name = 'prospect_id'
+          AND data_type = 'integer'
+      ) THEN
+        DROP TABLE cal_queue;
+      END IF;
+    END$$;
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cal_queue (
       id SERIAL PRIMARY KEY,
-      prospect_id INTEGER NOT NULL,
+      prospect_id UUID NOT NULL,
       client_id INTEGER NOT NULL,
       priority INTEGER NOT NULL DEFAULT 1,
       reason TEXT,
@@ -1204,8 +1228,10 @@ async function runAutoExecuteActions() {
     }
   }
 
+  // 'failed' when any sub-step errored, otherwise 'success'.
+  // agent_log_status_check does not accept 'partial'.
   await insertAgentLog('auto_execute_summary', summary,
-    summary.errors.length ? 'partial' : 'success'
+    summary.errors.length ? 'failed' : 'success'
   );
   return summary;
 }
@@ -1260,7 +1286,9 @@ async function runAutonomousTriggers() {
     paige_regenerate: summary.paige_regenerate,
     copy_review: summary.copy_review,
     errors: summary.errors,
-  }, summary.errors.length ? 'partial' : 'success');
+  // 'failed' when any sub-trigger errored, otherwise 'success'.
+  // agent_log_status_check does not accept 'partial'.
+  }, summary.errors.length ? 'failed' : 'success');
 
   console.log('[Max] Autonomous triggers complete:', summary);
 }
