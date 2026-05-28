@@ -205,37 +205,66 @@ async function scrapeWebsiteEmail(domain) {
     `https://www.${domain}`
   ];
 
+  let email = null;
+  let facebook_url = null;
+  let instagram_url = null;
+
   for (const url of pages) {
     try {
       const res = await axios.get(url, {
         timeout: 5000,
         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' }
       });
-      const html = res.data;
+      const html = typeof res.data === 'string' ? res.data : '';
+
+      // Capture social links present on the page
+      const social = extractSocialLinks(html);
+      if (!facebook_url) facebook_url = social.facebook_url;
+      if (!instagram_url) instagram_url = social.instagram_url;
 
       // Extract email from page
-      const emailMatch = html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
-      if (emailMatch) {
-        // Filter out noreply, info@, support@ — prefer personal emails
-        const filtered = emailMatch.filter(e =>
-          !e.includes('noreply') &&
-          !e.includes('no-reply') &&
-          !e.includes('example.com') &&
-          !e.includes('sentry') &&
-          !e.includes('wix') &&
-          !e.includes('squarespace') &&
-          !e.includes('.png') &&
-          !e.includes('.jpg')
-        );
-        if (filtered.length > 0) {
-          return { email: filtered[0], contact: '', title: '' };
+      if (!email) {
+        const emailMatch = html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
+        if (emailMatch) {
+          // Filter out noreply, info@, support@ — prefer personal emails
+          const filtered = emailMatch.filter(e =>
+            !e.includes('noreply') &&
+            !e.includes('no-reply') &&
+            !e.includes('example.com') &&
+            !e.includes('sentry') &&
+            !e.includes('wix') &&
+            !e.includes('squarespace') &&
+            !e.includes('.png') &&
+            !e.includes('.jpg')
+          );
+          if (filtered.length > 0) email = filtered[0];
         }
       }
+
+      if (email && facebook_url && instagram_url) break;
     } catch(err) {
       // try next page
     }
   }
-  return null;
+
+  if (!email && !facebook_url && !instagram_url) return null;
+  const out = { email, contact: '', title: '' };
+  if (facebook_url) { out.facebook_url = facebook_url; out.has_facebook = true; }
+  if (instagram_url) { out.instagram_url = instagram_url; out.has_instagram = true; }
+  return out;
+}
+
+// Pull facebook.com / instagram.com profile links out of free-form text
+// (SerpAPI snippets/links, scraped website HTML). Returns nulls when absent.
+function extractSocialLinks(...texts) {
+  const text = texts.filter(Boolean).join(' ');
+  const out = { facebook_url: null, instagram_url: null };
+  if (!text) return out;
+  const fb = text.match(/https?:\/\/(?:www\.)?facebook\.com\/[A-Za-z0-9_.\-/?=&%]+/i);
+  if (fb) out.facebook_url = fb[0];
+  const ig = text.match(/https?:\/\/(?:www\.)?instagram\.com\/[A-Za-z0-9_.\-/?=&%]+/i);
+  if (ig) out.instagram_url = ig[0];
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -266,11 +295,19 @@ async function searchGoogle(query, numResults = 10) {
 
       const items = res.data.organic_results || [];
       for (const item of items) {
+        const domain = extractDomain(item.link);
+        const social = extractSocialLinks(item.snippet, item.link);
         results.push({
           company: item.title.split('|')[0].split('-')[0].trim(),
-          url:     extractDomain(item.link),
+          url:     domain,
           snippet: item.snippet,
           source:  ['google'],
+          has_website:   !!domain,
+          website_url:   item.link || null,
+          has_facebook:  !!social.facebook_url,
+          facebook_url:  social.facebook_url,
+          has_instagram: !!social.instagram_url,
+          instagram_url: social.instagram_url,
         });
       }
     } catch (err) {
@@ -345,7 +382,7 @@ async function fetchPlaceDetails(placeId, apiKey) {
   const res = await axios.get(PLACES_DETAILS, {
     params: {
       place_id: placeId,
-      fields: 'name,formatted_address,formatted_phone_number,website,place_id',
+      fields: 'name,formatted_address,formatted_phone_number,website,place_id,rating,user_ratings_total,price_level',
       key: apiKey,
     },
   });
@@ -384,6 +421,11 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
         const domain = extractDomain(details.website);
         if (!domain || isBlacklistedDomain(domain)) continue;
 
+        // price_level (0–4) is Google's only coarse business-size signal here.
+        const priceLevel = details.price_level ?? hit.price_level;
+        const employeeCountEstimate =
+          priceLevel != null ? `price_level:${priceLevel}` : null;
+
         leads.push({
           company: details.name || hit.name || 'Unknown',
           url: domain,
@@ -392,6 +434,11 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
           place_id: details.place_id || hit.place_id,
           source: ['google_places'],
           snippet: '',
+          has_website: true,
+          website_url: details.website || null,
+          google_review_count: Number(details.user_ratings_total ?? hit.user_ratings_total) || 0,
+          google_rating: Number(details.rating ?? hit.rating) || 0,
+          employee_count_estimate: employeeCountEstimate,
         });
 
         await new Promise(r => setTimeout(r, 200));
@@ -470,6 +517,19 @@ function scoreLead(lead) {
   if (hasStrong)    size = 15;
   else if (hasBasic) size = 8;
 
+  // 6. Enrichment signals (0–28) — captured during the scrape phase from
+  // Google Places + website/SerpAPI. No website is NOT penalized: those
+  // businesses often need the most help, so they stay worth outreach.
+  let enrichment = 0;
+  const hasWebsite = lead.has_website != null ? !!lead.has_website : hasRealUrl;
+  if (hasWebsite) enrichment += 5;
+  const reviewCount = Number(lead.google_review_count) || 0;
+  if (reviewCount >= 50)      enrichment += 10;
+  else if (reviewCount >= 10) enrichment += 5;
+  const rating = Number(lead.google_rating) || 0;
+  if (rating >= 4.0) enrichment += 5;
+  if (lead.has_facebook) enrichment += 3;
+
   let clientBoost = 0;
   if (CONFIG.clientId === 2) {
     const targetSignals = ['hoa', 'homeowners association', 'landlord', 'property management', 'property manager', 'bank', 'reo', 'foreclosure', 'real estate developer'];
@@ -481,8 +541,8 @@ function scoreLead(lead) {
     }
   }
 
-  const total = vertical + location + contact + web + size + clientBoost;
-  console.log(`  ICP Score: ${total} (vertical:${vertical} location:${location} contact:${contact} web:${web} size:${size} client:${clientBoost}) — ${lead.company}`);
+  const total = vertical + location + contact + web + size + clientBoost + enrichment;
+  console.log(`  ICP Score: ${total} (vertical:${vertical} location:${location} contact:${contact} web:${web} size:${size} client:${clientBoost} enrichment:${enrichment}) — ${lead.company}`);
   return Math.min(total, 100);
 }
 
@@ -632,7 +692,7 @@ async function main() {
         if (scraped) {
           Object.assign(lead, scraped);
           lead.source = [...(lead.source || []), 'scraped'];
-          process.stdout.write(` ✓ [Scraped] ${scraped.email}\n`);
+          process.stdout.write(` ✓ [Scraped] ${scraped.email || 'social only'}\n`);
         } else {
           process.stdout.write(' —\n');
         }
@@ -642,8 +702,10 @@ async function main() {
     await new Promise(r => setTimeout(r, 1500));
   }
 
-  // 4. Fill missing fields
+  // 4. Fill missing fields — spread preserves enrichment data (website/social/
+  // reviews/rating) and phone/address captured during the scrape phase.
   leads = leads.map(l => ({
+    ...l,
     company: l.company || 'Unknown',
     url:     l.url || '',
     contact: l.contact || '—',
@@ -907,6 +969,7 @@ async function saveToDatabase(leads) {
   let saved = 0, skipped = 0, rejected = 0, setterQueued = 0, setterSkipped = 0, setterFailed = 0;
   await ensureSetterQueueColumns(pool);
   await ensureCompanyColumns(pool);
+  await ensureEnrichmentColumns(pool);
   for (const lead of leads) {
     const companyName = lead.company.replace(/^CONTACT:\s*/i, '').trim();
 
@@ -973,11 +1036,23 @@ async function saveToDatabase(leads) {
         return (lead.address || '').toLowerCase().includes(needle) || (domain || '').includes(needle);
       }) || null;
       const discoveryMethod = Array.isArray(lead.source) && lead.source.includes('google_places') ? 'google_places' : 'serpapi';
+
+      // Enrichment data captured during the scrape phase.
+      const hasWebsite = lead.has_website != null ? !!lead.has_website : !!domain;
+      const websiteUrl = lead.website_url || lead.url || null;
+      const googleReviewCount = Math.trunc(Number(lead.google_review_count) || 0);
+      const googleRating = Number(lead.google_rating) || 0;
+      const hasFacebook = !!lead.has_facebook;
+      const hasInstagram = !!lead.has_instagram;
+      const facebookUrl = lead.facebook_url || null;
+      const instagramUrl = lead.instagram_url || null;
+      const employeeCountEstimate = lead.employee_count_estimate || null;
+
       const companyId = await findOrCreateCompany({ name: companyName, domain, lead });
       if (!companyId) throw new Error(`Unable to link company for ${companyName}`);
       const insert = await pool.query(
-      'INSERT INTO prospects (company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical, client_id, service_area_match, discovery_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (email) DO NOTHING RETURNING id',
-      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, null, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod]
+      'INSERT INTO prospects (company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical, client_id, service_area_match, discovery_method, has_website, website_url, google_review_count, google_rating, has_facebook, has_instagram, facebook_url, instagram_url, employee_count_estimate) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) ON CONFLICT (email) DO NOTHING RETURNING id',
+      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, null, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, websiteUrl, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, employeeCountEstimate]
     );
       if (!insert.rows.length) {
         skipped++;
@@ -1032,6 +1107,23 @@ async function ensureCompanyColumns(pool) {
   await pool.query(`
     ALTER TABLE companies
     ADD COLUMN IF NOT EXISTS domain TEXT
+  `);
+}
+
+// Self-healing migration for Scout's scrape-phase enrichment columns. Mirrors
+// the startup migration in utils/clientContext.js so a Scout run never inserts
+// before the columns exist (CLI/cron may run on a node that hasn't rebooted).
+async function ensureEnrichmentColumns(pool) {
+  await pool.query(`
+    ALTER TABLE prospects ADD COLUMN IF NOT EXISTS has_website boolean DEFAULT false;
+    ALTER TABLE prospects ADD COLUMN IF NOT EXISTS google_review_count integer DEFAULT 0;
+    ALTER TABLE prospects ADD COLUMN IF NOT EXISTS google_rating numeric(2,1) DEFAULT 0;
+    ALTER TABLE prospects ADD COLUMN IF NOT EXISTS has_facebook boolean DEFAULT false;
+    ALTER TABLE prospects ADD COLUMN IF NOT EXISTS has_instagram boolean DEFAULT false;
+    ALTER TABLE prospects ADD COLUMN IF NOT EXISTS facebook_url text;
+    ALTER TABLE prospects ADD COLUMN IF NOT EXISTS instagram_url text;
+    ALTER TABLE prospects ADD COLUMN IF NOT EXISTS website_url text;
+    ALTER TABLE prospects ADD COLUMN IF NOT EXISTS employee_count_estimate text;
   `);
 }
 
