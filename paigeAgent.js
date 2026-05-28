@@ -1120,6 +1120,52 @@ function passesQualityGate(score) {
     score.originality >= MIN_DIMENSION_SCORE;
 }
 
+function getQualityGateSnapshot(score) {
+  const total = Number(score?.total || 0);
+  const hook = Number(score?.hook_strength || 0);
+  const spec = Number(score?.specificity || 0);
+  const orig = Number(score?.originality || 0);
+
+  const snapshot = {
+    thresholds: {
+      total: MIN_QUALITY_SCORE,
+      hook_strength: MIN_HOOK_SCORE,
+      specificity: MIN_DIMENSION_SCORE,
+      originality: MIN_DIMENSION_SCORE,
+    },
+    scores: {
+      total,
+      hook_strength: hook,
+      specificity: spec,
+      originality: orig,
+    },
+  };
+
+  const checks = {
+    total: total >= snapshot.thresholds.total,
+    hook_strength: hook >= snapshot.thresholds.hook_strength,
+    specificity: spec >= snapshot.thresholds.specificity,
+    originality: orig >= snapshot.thresholds.originality,
+  };
+
+  const failed = Object.entries(checks)
+    .filter(([, ok]) => !ok)
+    .map(([k]) => k);
+
+  return { ...snapshot, checks, failed, passes: failed.length === 0 };
+}
+
+function logQualityGateComparison(contextLabel, score) {
+  const snap = getQualityGateSnapshot(score);
+  const failed = snap.failed.length ? `failed=[${snap.failed.join(', ')}]` : 'failed=[]';
+  console.log(
+    `  [quality_gate] ${contextLabel} ` +
+    `scores(total=${snap.scores.total}, hook=${snap.scores.hook_strength}, spec=${snap.scores.specificity}, orig=${snap.scores.originality}) ` +
+    `thresholds(total=${snap.thresholds.total}, hook=${snap.thresholds.hook_strength}, spec=${snap.thresholds.specificity}, orig=${snap.thresholds.originality}) ` +
+    `${failed} passes=${snap.passes}`
+  );
+}
+
 async function generatePost(company, contentType, channel) {
   const verticalCtx = getVerticalContext(company.industry);
   const isMshi = CLIENT_ID === 2;
@@ -1182,71 +1228,95 @@ async function generatePost(company, contentType, channel) {
           ? buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy)
           : buildFacebookPrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy, facebookCta);
 
-  let draft = await createDraft(prompt, systemPrompt, channel);
-  let score = await scoreDraft(draft, recentPublishedAngles);
-  let validationIssues = validateDraftForClient(draft, channel);
-  let finalDraft = draft;
-  let finalScore = score;
-  let finalValidationIssues = validationIssues;
+  let draft = null;
+  let score = null;
+  let validationIssues = [];
+  let finalDraft = null;
+  let finalScore = null;
+  let finalValidationIssues = [];
   let regenerated = false;
   let regenerationAttempts = 0;
 
-  while ((validationIssues.length || !passesQualityGate(score)) && regenerationAttempts < MAX_REGENERATION_ATTEMPTS) {
-    regenerated = true;
-    regenerationAttempts++;
-    if (validationIssues.length) {
-      console.log(`  [validation] Regenerating attempt ${regenerationAttempts}/${MAX_REGENERATION_ATTEMPTS} for client rules: ${validationIssues.join(', ')}`);
-    } else {
-      console.log(`  [quality] Score ${score.total}/30, regenerating attempt ${regenerationAttempts}/${MAX_REGENERATION_ATTEMPTS} for ${score.weak_dimension}`);
-    }
-
-    const regenPrompt = isMshi
-      ? [
-          prompt,
-          '',
-          `Your previous draft failed these MSHI validation rules: ${validationIssues.join(', ') || 'quality threshold'}.`,
-          `Your previous draft scored ${score.total}/30 overall, with specificity ${score.specificity}/10, originality ${score.originality}/10, and hook strength ${score.hook_strength}/10. Reason: ${score.reason}.`,
-          '',
-          'Rewrite it with a completely different opening line and keep it specific to Brad, Dustin, Mountain State Home Innovations, and West Virginia homeowners.',
-          'Do not mention Pulseforge, AI, automation, marketing, pricing, competitors, or LinkedIn.',
-          'Do not include dollar amounts, percentages, package prices, or negative comparisons.',
-          `The final score must be ${MIN_QUALITY_SCORE}/30 or higher, and specificity, originality, and hook_strength must each be at least ${MIN_DIMENSION_SCORE}/10.`,
-          `Use today's MSHI topic bucket: ${topicAngle ? topicAngle.label + ': ' + topicAngle.guidance : 'the most distinct available MSHI angle'}.`,
-          '',
-          'Return only the rewritten content.',
-        ].join('\n')
-      : [
-          prompt,
-          '',
-          `Your previous draft scored ${score.total}/30 total, with specificity ${score.specificity}/10, originality ${score.originality}/10, and hook strength ${score.hook_strength}/10. Reason: ${score.reason}.`,
-          '',
-          'A strong hook is the ONLY thing that matters in the first line. Here are examples of strong vs weak:',
-          '',
-          'WEAK: "We help local businesses stay on top of their marketing."',
-          'WEAK: "Running a small business is tough, especially when it comes to marketing."',
-          'WEAK: "Most business owners don\'t realize how much time they spend on marketing."',
-          '',
-          'STRONG: "A cleaning company owner can miss three booking requests before lunch without ever noticing the pattern."',
-          'STRONG: "The phone going quiet is not always a demand problem."',
-          'STRONG: "One tiny handoff between inbox and calendar can decide whether a lead turns into revenue."',
-          '',
-          'The first line must create a reason to keep reading. It should be specific, surprising, or create a gap the reader wants to close.',
-          'No generic observations. No "most business owners." No "running a small business."',
-          'Do not use competitor comparison hooks, lead response rate statistics, "your competitor just", "40% of leads", or "follow-up speed" angles.',
-          `Use today's topic bucket instead: ${topicAngle ? topicAngle.label + ': ' + topicAngle.guidance : 'the most distinct available angle'}.`,
-          `The final score must be ${MIN_QUALITY_SCORE}/30 or higher, and specificity, originality, and hook_strength must each be at least ${MIN_DIMENSION_SCORE}/10. Do not pass along a merely acceptable post.`,
-          '',
-          'Return only the rewritten post text.',
-        ].join('\n');
-
-    draft = await createDraft(regenPrompt, systemPrompt, channel);
+  try {
+    draft = await createDraft(prompt, systemPrompt, channel);
     score = await scoreDraft(draft, recentPublishedAngles);
     validationIssues = validateDraftForClient(draft, channel);
-    if (!validationIssues.length && (finalValidationIssues.length || score.total > finalScore.total)) {
-      finalDraft = draft;
-      finalScore = score;
-      finalValidationIssues = validationIssues;
+    finalDraft = draft;
+    finalScore = score;
+    finalValidationIssues = validationIssues;
+
+    logQualityGateComparison('initial', score);
+
+    while ((validationIssues.length || !passesQualityGate(score)) && regenerationAttempts < MAX_REGENERATION_ATTEMPTS) {
+      regenerated = true;
+      regenerationAttempts++;
+      if (validationIssues.length) {
+        console.log(`  [validation] Regenerating attempt ${regenerationAttempts}/${MAX_REGENERATION_ATTEMPTS} for client rules: ${validationIssues.join(', ')}`);
+      } else {
+        console.log(`  [quality] Score ${score.total}/30, regenerating attempt ${regenerationAttempts}/${MAX_REGENERATION_ATTEMPTS} for ${score.weak_dimension}`);
+      }
+
+      const regenPrompt = isMshi
+        ? [
+            prompt,
+            '',
+            `Your previous draft failed these MSHI validation rules: ${validationIssues.join(', ') || 'quality threshold'}.`,
+            `Your previous draft scored ${score.total}/30 overall, with specificity ${score.specificity}/10, originality ${score.originality}/10, and hook strength ${score.hook_strength}/10. Reason: ${score.reason}.`,
+            '',
+            'Rewrite it with a completely different opening line and keep it specific to Brad, Dustin, Mountain State Home Innovations, and West Virginia homeowners.',
+            'Do not mention Pulseforge, AI, automation, marketing, pricing, competitors, or LinkedIn.',
+            'Do not include dollar amounts, percentages, package prices, or negative comparisons.',
+            `The final score must be ${MIN_QUALITY_SCORE}/30 or higher, and specificity, originality, and hook_strength must each be at least ${MIN_DIMENSION_SCORE}/10.`,
+            `Use today's MSHI topic bucket: ${topicAngle ? topicAngle.label + ': ' + topicAngle.guidance : 'the most distinct available MSHI angle'}.`,
+            '',
+            'Return only the rewritten content.',
+          ].join('\n')
+        : [
+            prompt,
+            '',
+            `Your previous draft scored ${score.total}/30 total, with specificity ${score.specificity}/10, originality ${score.originality}/10, and hook strength ${score.hook_strength}/10. Reason: ${score.reason}.`,
+            '',
+            'A strong hook is the ONLY thing that matters in the first line. Here are examples of strong vs weak:',
+            '',
+            'WEAK: "We help local businesses stay on top of their marketing."',
+            'WEAK: "Running a small business is tough, especially when it comes to marketing."',
+            'WEAK: "Most business owners don\'t realize how much time they spend on marketing."',
+            '',
+            'STRONG: "A cleaning company owner can miss three booking requests before lunch without ever noticing the pattern."',
+            'STRONG: "The phone going quiet is not always a demand problem."',
+            'STRONG: "One tiny handoff between inbox and calendar can decide whether a lead turns into revenue."',
+            '',
+            'The first line must create a reason to keep reading. It should be specific, surprising, or create a gap the reader wants to close.',
+            'No generic observations. No "most business owners." No "running a small business."',
+            'Do not use competitor comparison hooks, lead response rate statistics, "your competitor just", "40% of leads", or "follow-up speed" angles.',
+            `Use today's topic bucket instead: ${topicAngle ? topicAngle.label + ': ' + topicAngle.guidance : 'the most distinct available angle'}.`,
+            `The final score must be ${MIN_QUALITY_SCORE}/30 or higher, and specificity, originality, and hook_strength must each be at least ${MIN_DIMENSION_SCORE}/10. Do not pass along a merely acceptable post.`,
+            '',
+            'Return only the rewritten post text.',
+          ].join('\n');
+
+      draft = await createDraft(regenPrompt, systemPrompt, channel);
+      score = await scoreDraft(draft, recentPublishedAngles);
+      validationIssues = validateDraftForClient(draft, channel);
+
+      logQualityGateComparison(`attempt_${regenerationAttempts}`, score);
+
+      if (!validationIssues.length && (finalValidationIssues.length || score.total > finalScore.total)) {
+        finalDraft = draft;
+        finalScore = score;
+        finalValidationIssues = validationIssues;
+      }
     }
+  } catch (err) {
+    // If scoring/generation breaks mid-loop, this channel currently fails via logChannelError.
+    // Make a best-effort attempt to log a content_failed row as well so the failure isn't silent.
+    const fallbackScore = finalScore || score || { specificity: 0, originality: 0, hook_strength: 0, total: 0, weak_dimension: 'none', reason: `error: ${err.message}` };
+    try {
+      await logContentFailed(company, channel, contentType, fallbackScore, regenerationAttempts, finalDraft || draft || '');
+    } catch (logErr) {
+      console.error(`  [content_failed] log write failed: ${logErr.message}`);
+    }
+    throw err;
   }
 
   if (finalValidationIssues.length) {
@@ -1256,6 +1326,7 @@ async function generatePost(company, contentType, channel) {
   }
 
   if (!passesQualityGate(finalScore)) {
+    logQualityGateComparison('final_compare', finalScore);
     await logContentFailed(company, channel, contentType, finalScore, regenerationAttempts, finalDraft);
     console.log(`  [quality] Failed after ${regenerationAttempts} regeneration attempt(s), best score ${finalScore.total}/30; skipping ${channel}`);
     return { content: null, quality: finalScore, regenerated, failed: true, regenerationAttempts };
@@ -1314,16 +1385,21 @@ async function logContentFailed(company, channel, contentType, quality, regenera
     reason: quality.reason || '',
     post_preview: String(post || '').slice(0, 160),
   };
-  await pool.query(`
-    INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
-    VALUES ($1, $2, $3, $4, NOW(), $5)
-  `, [
-    AGENT_NAME,
-    'content_failed',
-    JSON.stringify(payload),
-    'failed',
-    CLIENT_ID,
-  ]);
+  try {
+    await pool.query(`
+      INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+      VALUES ($1, $2, $3, $4, NOW(), $5)
+    `, [
+      AGENT_NAME,
+      'content_failed',
+      JSON.stringify(payload),
+      'failed',
+      CLIENT_ID,
+    ]);
+  } catch (err) {
+    console.error(`  [content_failed] Failed to write agent_log row: ${err.message}`);
+    throw err;
+  }
 }
 
 async function saveToPendingApprovals(company, content, contentType, channel) {
