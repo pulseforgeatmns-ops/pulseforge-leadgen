@@ -11,7 +11,40 @@ const MAX_CALLS_PER_RUN = 10;
 const CALENDAR_REFRESH_TOKEN = process.env.GOOGLE_CALENDAR_REFRESH_TOKEN;
 
 // ── QUERY ──────────────────────────────────────────────────────────────────
-async function getCallCandidates() {
+// Max's auto-execute pipeline pushes prospects into cal_queue. Pull those first
+// so Cal works the prioritized list before falling back to its normal selection.
+async function getQueuedCandidates(limit) {
+  const res = await pool.query(`
+    SELECT
+      p.id, p.first_name, p.last_name, p.email, p.phone,
+      p.status, p.icp_score, p.do_not_contact,
+      c.name  AS company_name,
+      c.industry,
+      c.location,
+      q.id   AS cal_queue_id,
+      q.reason AS cal_queue_reason,
+      q.priority AS cal_queue_priority
+    FROM cal_queue q
+    JOIN prospects p ON p.id = q.prospect_id AND p.client_id = q.client_id
+    LEFT JOIN companies c ON p.company_id = c.id
+    WHERE q.client_id = $1
+      AND q.status = 'pending'
+      AND COALESCE(p.do_not_contact, false) = false
+      AND p.phone IS NOT NULL AND p.phone != ''
+    ORDER BY q.priority ASC, q.created_at ASC
+    LIMIT $2
+  `, [CLIENT_ID, limit]).catch(err => {
+    // cal_queue may not exist yet on a fresh DB — Max bootstraps it but Cal
+    // can run independently before Max's first run. Treat missing table as empty.
+    if (err.code === '42P01') return { rows: [] };
+    throw err;
+  });
+  return res.rows;
+}
+
+async function getCallCandidates(excludeIds = []) {
+  const remaining = MAX_CALLS_PER_RUN - excludeIds.length;
+  if (remaining <= 0) return [];
   const res = await pool.query(`
     SELECT
       p.id, p.first_name, p.last_name, p.email, p.phone,
@@ -25,6 +58,7 @@ async function getCallCandidates() {
       AND p.do_not_contact = false
       AND p.phone IS NOT NULL AND p.phone != ''
       AND p.icp_score >= 60
+      AND ($2::int[] IS NULL OR NOT (p.id = ANY($2::int[])))
       AND (
         SELECT COUNT(*) FROM touchpoints t
         WHERE t.prospect_id = p.id
@@ -40,8 +74,16 @@ async function getCallCandidates() {
       )
     ORDER BY p.icp_score DESC
     LIMIT $1
-  `, [MAX_CALLS_PER_RUN]);
+  `, [remaining, excludeIds.length ? excludeIds : null]);
   return res.rows;
+}
+
+async function markCalQueueCompleted(queueId) {
+  if (!queueId) return;
+  await pool.query(
+    `UPDATE cal_queue SET status = 'completed' WHERE id = $1`,
+    [queueId]
+  );
 }
 
 // ── BLAND.AI ───────────────────────────────────────────────────────────────
@@ -176,8 +218,11 @@ async function run() {
     return;
   }
 
-  const candidates = await getCallCandidates();
-  console.log(`Found ${candidates.length} candidate${candidates.length !== 1 ? 's' : ''} for calling.\n`);
+  const queued = await getQueuedCandidates(MAX_CALLS_PER_RUN);
+  const queuedIds = queued.map(q => q.id);
+  const fillCandidates = await getCallCandidates(queuedIds);
+  const candidates = [...queued, ...fillCandidates];
+  console.log(`Found ${candidates.length} candidate${candidates.length !== 1 ? 's' : ''} for calling (${queued.length} from cal_queue, ${fillCandidates.length} from normal selection).\n`);
 
   if (!candidates.length) {
     console.log('No qualifying prospects to call this run.');
@@ -190,8 +235,9 @@ async function run() {
   for (const prospect of candidates) {
     const companyName = prospect.company_name || '';
     const fullName = [prospect.first_name, prospect.last_name].filter(Boolean).join(' ') || 'Unknown';
+    const queueLabel = prospect.cal_queue_id ? ` [queued: ${prospect.cal_queue_reason || 'pending'}]` : '';
 
-    console.log(`Calling: ${fullName} — ${companyName} (${prospect.phone})`);
+    console.log(`Calling: ${fullName} — ${companyName} (${prospect.phone})${queueLabel}`);
 
     try {
       const result = await initiateCall(prospect, companyName);
@@ -215,9 +261,19 @@ async function run() {
         'initiate_call',
         prospect.id,
         null,
-        { call_id: callId, phone: prospect.phone, company: companyName },
+        {
+          call_id: callId,
+          phone: prospect.phone,
+          company: companyName,
+          cal_queue_id: prospect.cal_queue_id || null,
+          cal_queue_reason: prospect.cal_queue_reason || null,
+        },
         'success'
       );
+
+      if (prospect.cal_queue_id) {
+        await markCalQueueCompleted(prospect.cal_queue_id);
+      }
 
       initiated++;
       await new Promise(r => setTimeout(r, 2000));

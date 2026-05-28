@@ -401,29 +401,31 @@ async function getSystemSnapshot() {
   };
 }
 
-async function generateInsights(snapshot) {
+async function generateInsights(snapshot, autoExec) {
+  const autoExecLine = formatAutoExecSummary(autoExec);
+  const closer = snapshot.closerMetrics || {};
+
   if (CLIENT_ID === 2) {
-    const closer = snapshot.closerMetrics || {};
-    const newLeads = snapshot.prospectStats.reduce((sum, r) => sum + parseInt(r.count || 0), 0);
-    const cities = [...new Set(snapshot.untouched
-      .map(p => (p.notes || '').match(/\b(Charleston|Dunbar|St Albans|Scott Depot|Teays Valley|Hurricane|Huntington|Barboursville)\b/i)?.[0])
-      .filter(Boolean))].join(', ') || 'your service area';
-    const outbound = snapshot.emailStats?.sent || 0;
     const replies = snapshot.recentTouchpoints.filter(t => ['reply', 'inbound', 'email_reply'].includes(t.action_type)).length;
     const pending = snapshot.pending.reduce((sum, p) => sum + parseInt(p.count || 0), 0);
-    const actionItems = [];
-    if (pending) actionItems.push(`${pending} post${pending === 1 ? '' : 's'} pending your approval`);
-    if (snapshot.clickedToday.length) actionItems.push(`${snapshot.clickedToday.length} warm lead${snapshot.clickedToday.length === 1 ? '' : 's'} clicked an email`);
-    if (!actionItems.length) actionItems.push('No urgent items right now');
+    const exceptions = [];
+    if (snapshot.clickedToday.length) {
+      exceptions.push(`${snapshot.clickedToday.length} prospect${snapshot.clickedToday.length === 1 ? '' : 's'} clicked an email today — worth a personal note`);
+    }
+    if (replies) exceptions.push(`${replies} new repl${replies === 1 ? 'y' : 'ies'} detected this week`);
+    if (pending) exceptions.push(`${pending} post${pending === 1 ? '' : 's'} awaiting approval`);
+    if (!exceptions.length) exceptions.push('No exceptions today.');
 
-    return `Good morning Brad & Dustin — here's your MSHI update for ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}
+    return `Good morning Brad & Dustin — your MSHI update for ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}
 
-LEADS: ${newLeads} total leads in the system; newest focus is ${cities}
-OUTREACH: ${outbound} emails sent in the last 7 days, ${replies} replies detected
-REVIEWS: No new review activity flagged in this snapshot
-CONTENT: ${pending} posts pending your approval
-CLOSER: ${closer.booked_week || 0} booked calls this week, $${Number(closer.mrr_this_month || 0).toLocaleString()} MRR closed this month
-ACTION NEEDED: ${actionItems.join('; ')}
+ACTIONS EXECUTED: ${autoExecLine}
+
+EXCEPTIONS: ${exceptions.join('; ')}
+
+PIPELINE SNAPSHOT
+Booked calls this week: ${closer.booked_week || 0}
+MRR closed this month: $${Number(closer.mrr_this_month || 0).toLocaleString()}
+Pending approvals: ${pending}
 
 — Pulseforge`;
   }
@@ -432,37 +434,31 @@ ACTION NEEDED: ${actionItems.join('; ')}
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-5',
-    max_tokens: 1000,
+    max_tokens: 500,
     system: DIGEST_AGENT_NAMING_RULES,
     messages: [{
       role: 'user',
-      content: `Today's date is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. You are Max, the manager agent for Pulseforge — an AI marketing system for local small businesses.
+      content: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. You are Max, the manager agent for Pulseforge.
 
-Here is today's second brain snapshot:
+Max already auto-executed these actions before this digest was generated. Do NOT repeat, re-flag, or recommend them:
+${autoExecLine}
+
+Second brain snapshot (the ONLY source for prospect references):
 
 ${dataString}
 
-Known fixes already implemented (do not flag these as issues):
-- Duplicate send deduplication is fixed — touchpoints are logged correctly
-- Email copy has been completely rewritten with operator-angle messaging
-- All 5 Brevo vertical sequences updated with new copy
-- Riley inbound triage agent is now live and monitoring the inbox
-- RUN buttons on dashboard are working
+Generate a tight, streamlined digest with EXACTLY these four sections, in order:
 
-Click rate context: Pulseforge email sequences use reply-only CTAs with no links in the email body. A click rate of 0% is expected and normal — do NOT flag zero clicks as a red flag, broken tracking, or a deliverability issue. Only flag click rate if it was previously above 0% and dropped, which would indicate a technical regression. Remove any language suggesting 0% clicks is a problem.
+1. ACTIONS EXECUTED — One short paragraph restating the auto-executed actions above in a manager's voice.
+2. EXCEPTIONS — Items needing a human decision. Only include: warm signals worth personal outreach (from clickedToday), new replies (from recentTouchpoints with action_type reply / inbound / email_reply), unusual patterns. If none, say "No exceptions today."
+3. PIPELINE SNAPSHOT — 3-4 lines max. Pull from closerMetrics, prospectStats, pending. Example lines: booked calls this week, MRR closed this month, total pending approvals, warm prospects today.
+4. RECOMMENDATION — ONE recommendation only, if any. If nothing is actionable, omit the section entirely.
 
-Generate a concise daily digest with:
-1. SYSTEM STATUS — brief overview of what's happening across all agents
-2. TOP PRIORITIES — the 3 most important actions to take today, ranked; if any prospects are in clickedToday, flag them as URGENT: "🔥 [Business] clicked a link in your email — Cal or Sam should follow up today"
-3. CONTENT INTELLIGENCE — which content types and channels are performing above or below average based on post_analytics; flag any channel that hasn't posted in 7+ days; note if performance data is still accumulating if the tables are empty; email open rate this week and Paige content quality if data available
-4. WARM SIGNALS — any prospects showing signs of interest worth flagging; include email opens/clicks from today
-5. CLOSER METRICS — include booked calls this week, show rate, close rate, MRR closed this month, and pending commission liability
-6. RECOMMENDATIONS — 2-3 strategic suggestions based on the data patterns
-7. WATCH LIST — anything that needs attention or looks off
-
-Be direct, specific, and actionable. Use plain text, no markdown. Keep each section to 2-4 sentences max. Write like a sharp operations manager giving a morning briefing.`
-        + `\n\nWhenever you mention a prospect by business name in TOP PRIORITIES, WARM SIGNALS, WATCH LIST, or RECOMMENDATIONS, use company_name_with_market exactly so the market appears in parentheses, e.g. "TT Hair Salon (Manchester NH)".`
-        + `\n\nCRITICAL: Only reference businesses that appear in the snapshot above (in recentTouchpoints, untouched, cold, or clickedToday). Never invent, infer, or recall a company name from memory. Copy every business name verbatim from the snapshot's company_name_with_market field. If a section has no qualifying prospects in the snapshot, say so plainly instead of naming any business.`
+Style rules:
+- Plain text. No markdown. No headers beyond the four labels above.
+- DO NOT include: click rate commentary, generic content quality observations, routine bounce mentions, untouched prospect lists, copy performance.
+- When naming a prospect, copy company_name_with_market verbatim from the snapshot, e.g. "TT Hair Salon (Manchester NH)". Never invent a business name.
+- Keep total length under 200 words.`
     }]
   });
 
@@ -535,37 +531,6 @@ async function sendDigest(digestText, snapshot, expansionReport) {
   const scoutExpansionSection = scoutExpansionBlock
     ? `\n${'─'.repeat(50)}\n${scoutExpansionBlock}\n`
     : '';
-  const pendingSummary = snapshot.pending
-    .map(p => `${p.count} ${p.channel}`)
-    .join(', ') || 'none';
-  const contentQuality = snapshot.contentQuality || {};
-  const closer = snapshot.closerMetrics || {};
-  const bookedTotal = Number(closer.booked_total || 0);
-  const showed = Number(closer.showed || 0);
-  const closed = Number(closer.closed || 0);
-  const closerBlock = `CLOSER METRICS
-Booked calls this week: ${closer.booked_week || 0}
-Show rate: ${bookedTotal ? ((showed / bookedTotal) * 100).toFixed(1) : 0}%
-Close rate: ${showed ? ((closed / showed) * 100).toFixed(1) : 0}%
-MRR closed this month: $${Number(closer.mrr_this_month || 0).toLocaleString()}
-Pending commission liability: $${Number(closer.pending_commissions || 0).toLocaleString()}`;
-  const contentQualityBlock = `CONTENT QUALITY (last 7 days):
-Avg score: ${contentQuality.avg_score ?? 'n/a'}/30
-Posts regenerated: ${contentQuality.regenerated_count || 0}/${contentQuality.total_scored || 0}
-Most common weakness: ${contentQuality.most_common_weakness || 'none'}`;
-
-  const copyPerf = snapshot.copyPerformance || [];
-  const copyPerfBlock = copyPerf.length
-    ? 'COPY PERFORMANCE (last 7 days)\n' + copyPerf.map(r => {
-        const sent = Number(r.sent || 0);
-        const opens = Number(r.opens || 0);
-        const rate = sent ? (opens / sent) * 100 : 0;
-        const rateStr = rate % 1 === 0 ? rate.toFixed(0) : rate.toFixed(1);
-        const openWord = opens === 1 ? 'open' : 'opens';
-        const flag = (sent >= 30 && rate < 8) ? '  ⚠ COPY REVIEW NEEDED' : '';
-        return `${r.sequence} / day_${r.step}: ${sent} sent, ${opens} ${openWord} (${rateStr}%)${flag}`;
-      }).join('\n')
-    : 'COPY PERFORMANCE (last 7 days)\nNo Emmett sends logged yet — data will populate as emails go out.';
 
   const toEmail = CLIENT_CONFIG?.max_email || 'jacob@gopulseforge.com';
   const toName = CLIENT_ID === 2 ? 'Brad & Dustin' : 'Jake Maynard';
@@ -573,33 +538,12 @@ Most common weakness: ${contentQuality.most_common_weakness || 'none'}`;
 
   const body = CLIENT_ID === 2 ? `${digestText}
 ${scoutExpansionSection}
-${'─'.repeat(50)}
-${copyPerfBlock}
-
 Pulseforge · gopulseforge.com` : `PULSEFORGE DAILY DIGEST
 ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 ${'─'.repeat(50)}
 
 ${digestText}
 ${scoutExpansionSection}
-
-${'─'.repeat(50)}
-${closerBlock}
-
-${'─'.repeat(50)}
-${contentQualityBlock}
-
-${'─'.repeat(50)}
-${copyPerfBlock}
-
-${'─'.repeat(50)}
-QUICK STATS
-Prospects in system: ${snapshot.prospectStats.reduce((a, b) => a + parseInt(b.count), 0)}
-Pending approvals: ${pendingSummary}
-Touchpoints this week: ${snapshot.recentTouchpoints.length}
-Untouched prospects: ${snapshot.untouched.length}
-Gone cold (14+ days): ${snapshot.cold.length}
-
 ${'─'.repeat(50)}
 Pulseforge · gopulseforge.com
 To adjust digest frequency reply to this email.`;
@@ -937,6 +881,258 @@ async function runCopyReviewTrigger() {
   return count;
 }
 
+// ── AUTO-EXECUTE ACTIONS ────────────────────────────────────────────────────
+// Low-risk cleanup work Max performs automatically before generating the digest.
+// All actions log to agent_log and return counts that feed the digest's
+// "Actions executed" section.
+
+async function ensureCalQueueTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cal_queue (
+      id SERIAL PRIMARY KEY,
+      prospect_id INTEGER NOT NULL,
+      client_id INTEGER NOT NULL,
+      priority INTEGER NOT NULL DEFAULT 1,
+      reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      status TEXT NOT NULL DEFAULT 'pending'
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS cal_queue_pending_idx
+      ON cal_queue (client_id, status, priority, created_at)
+  `);
+}
+
+// 1. Mark hard-bounce prospects dead + DNC.
+async function runMarkBouncesDead() {
+  const res = await pool.query(`
+    SELECT DISTINCT p.id, p.email, ${prospectCompanySql('p')} AS company
+    FROM agent_log al
+    JOIN prospects p ON p.id = al.prospect_id
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+    WHERE al.agent_name = 'riley'
+      AND al.action = 'email_bounced'
+      AND al.payload->>'event' = 'hard_bounce'
+      AND al.ran_at > NOW() - INTERVAL '24 hours'
+      AND p.client_id = $1
+      AND (p.status IS DISTINCT FROM 'dead' OR COALESCE(p.do_not_contact, false) = false)
+  `, [CLIENT_ID]);
+
+  let count = 0;
+  for (const row of res.rows) {
+    await pool.query(
+      `UPDATE prospects
+       SET status = 'dead', do_not_contact = true, updated_at = NOW()
+       WHERE id = $1 AND client_id = $2`,
+      [row.id, CLIENT_ID]
+    );
+    await insertAgentLog('auto_marked_dead', {
+      prospect_id: row.id,
+      email: row.email,
+      company: row.company,
+      reason: 'hard_bounce',
+    }, 'success', row.id);
+    count++;
+  }
+  await insertAgentLog('auto_marked_dead_bounce_summary', { count });
+  console.log(`[Max] Auto-action: marked ${count} hard-bounce prospect(s) dead`);
+  return count;
+}
+
+// 2. Null out generic inbox addresses (info@, contact@, etc.).
+async function runNullGenericEmails() {
+  const res = await pool.query(`
+    SELECT id, email FROM prospects
+    WHERE client_id = $1
+      AND email IS NOT NULL
+      AND LOWER(SPLIT_PART(email, '@', 1)) IN ('info','contact','support','office','admin','hello')
+  `, [CLIENT_ID]);
+
+  let count = 0;
+  for (const row of res.rows) {
+    await pool.query(
+      `UPDATE prospects SET email = NULL, updated_at = NOW()
+       WHERE id = $1 AND client_id = $2`,
+      [row.id, CLIENT_ID]
+    );
+    await insertAgentLog('auto_email_nulled', {
+      prospect_id: row.id,
+      previous_email: row.email,
+    }, 'success', row.id);
+    count++;
+  }
+  await insertAgentLog('auto_email_nulled_summary', { count });
+  console.log(`[Max] Auto-action: nulled ${count} generic-inbox email(s)`);
+  return count;
+}
+
+// 3. Queue warm/hot prospects for Cal if no Cal call in the last 7 days.
+async function runQueueWarmForCal() {
+  const res = await pool.query(`
+    SELECT p.id, p.status, p.is_hot
+    FROM prospects p
+    WHERE p.client_id = $1
+      AND COALESCE(p.do_not_contact, false) = false
+      AND (p.is_hot = true OR p.status = 'warm')
+      AND NOT EXISTS (
+        SELECT 1 FROM touchpoints t
+        WHERE t.prospect_id = p.id AND t.client_id = p.client_id
+          AND t.channel = 'phone' AND t.agent_id = 'cal'
+          AND t.created_at > NOW() - INTERVAL '7 days'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM cal_queue q
+        WHERE q.prospect_id = p.id AND q.client_id = p.client_id
+          AND q.status = 'pending'
+      )
+  `, [CLIENT_ID]);
+
+  let count = 0;
+  for (const row of res.rows) {
+    const reason = row.is_hot ? 'is_hot' : 'warm_status';
+    await pool.query(
+      `INSERT INTO cal_queue (prospect_id, client_id, priority, reason, status)
+       VALUES ($1, $2, 1, $3, 'pending')`,
+      [row.id, CLIENT_ID, reason]
+    );
+    await insertAgentLog('auto_queued_cal', {
+      prospect_id: row.id,
+      priority: 1,
+      reason,
+    }, 'success', row.id);
+    count++;
+  }
+  await insertAgentLog('auto_queued_cal_summary', { count });
+  console.log(`[Max] Auto-action: queued ${count} warm prospect(s) for Cal`);
+  return count;
+}
+
+// 4. Hand off 5+ touchpoint no-response prospects to Cal for a nurture call.
+async function runHandoff5TouchNoReply() {
+  const res = await pool.query(`
+    SELECT p.id
+    FROM prospects p
+    WHERE p.client_id = $1
+      AND p.status IN ('cold', 'contacted')
+      AND COALESCE(p.do_not_contact, false) = false
+      AND (
+        SELECT COUNT(*) FROM touchpoints t
+        WHERE t.prospect_id = p.id AND t.client_id = p.client_id
+      ) >= 5
+      AND NOT EXISTS (
+        SELECT 1 FROM touchpoints t
+        WHERE t.prospect_id = p.id AND t.client_id = p.client_id
+          AND t.action_type IN ('inbound', 'reply', 'email_reply')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM cal_queue q
+        WHERE q.prospect_id = p.id AND q.client_id = p.client_id
+          AND q.status = 'pending'
+      )
+  `, [CLIENT_ID]);
+
+  let count = 0;
+  for (const row of res.rows) {
+    await pool.query(
+      `INSERT INTO cal_queue (prospect_id, client_id, priority, reason, status)
+       VALUES ($1, $2, 2, '5_touch_no_reply', 'pending')`,
+      [row.id, CLIENT_ID]
+    );
+    await insertAgentLog('auto_queued_cal_nurture', {
+      prospect_id: row.id,
+      priority: 2,
+      reason: '5_touch_no_reply',
+    }, 'success', row.id);
+    count++;
+  }
+  await insertAgentLog('auto_queued_cal_nurture_summary', { count });
+  console.log(`[Max] Auto-action: queued ${count} 5+ touch no-reply prospect(s) for Cal`);
+  return count;
+}
+
+// 5. Reset 'contacted' prospects stale for 21+ days back to cold so Emmett re-enters them.
+async function runResetStaleSequences() {
+  const res = await pool.query(`
+    SELECT p.id
+    FROM prospects p
+    WHERE p.client_id = $1
+      AND p.status = 'contacted'
+      AND COALESCE(p.do_not_contact, false) = false
+      AND (
+        SELECT MAX(t.created_at) FROM touchpoints t
+        WHERE t.prospect_id = p.id AND t.client_id = p.client_id
+      ) < NOW() - INTERVAL '21 days'
+  `, [CLIENT_ID]);
+
+  let count = 0;
+  for (const row of res.rows) {
+    await pool.query(
+      `UPDATE prospects SET status = 'cold', updated_at = NOW()
+       WHERE id = $1 AND client_id = $2`,
+      [row.id, CLIENT_ID]
+    );
+    await insertAgentLog('auto_reset_stale', {
+      prospect_id: row.id,
+    }, 'success', row.id);
+    count++;
+  }
+  await insertAgentLog('auto_reset_stale_summary', { count });
+  console.log(`[Max] Auto-action: reset ${count} stale 'contacted' prospect(s) to cold`);
+  return count;
+}
+
+async function runAutoExecuteActions() {
+  const summary = {
+    bounces_dead: 0,
+    emails_nulled: 0,
+    queued_cal_warm: 0,
+    queued_cal_nurture: 0,
+    stale_reset: 0,
+    errors: [],
+  };
+
+  try { await ensureCalQueueTable(); }
+  catch (err) {
+    summary.errors.push({ step: 'ensure_cal_queue', message: err.message });
+    console.error('[Max] cal_queue bootstrap failed:', err.message);
+  }
+
+  const steps = [
+    ['bounces_dead',        runMarkBouncesDead],
+    ['emails_nulled',       runNullGenericEmails],
+    ['queued_cal_warm',     runQueueWarmForCal],
+    ['queued_cal_nurture',  runHandoff5TouchNoReply],
+    ['stale_reset',         runResetStaleSequences],
+  ];
+
+  for (const [key, fn] of steps) {
+    try {
+      summary[key] = await fn();
+    } catch (err) {
+      summary.errors.push({ step: key, message: err.message });
+      console.error(`[Max] auto-action ${key} failed:`, err.message);
+    }
+  }
+
+  await insertAgentLog('auto_execute_summary', summary,
+    summary.errors.length ? 'partial' : 'success'
+  );
+  return summary;
+}
+
+function formatAutoExecSummary(autoExec) {
+  if (!autoExec) return 'No auto-executed actions this run.';
+  const parts = [];
+  if (autoExec.bounces_dead)       parts.push(`${autoExec.bounces_dead} hard-bounce prospect${autoExec.bounces_dead === 1 ? '' : 's'} marked dead`);
+  if (autoExec.emails_nulled)      parts.push(`${autoExec.emails_nulled} generic inbox email${autoExec.emails_nulled === 1 ? '' : 's'} nulled`);
+  if (autoExec.queued_cal_warm)    parts.push(`${autoExec.queued_cal_warm} warm prospect${autoExec.queued_cal_warm === 1 ? '' : 's'} queued for Cal`);
+  if (autoExec.queued_cal_nurture) parts.push(`${autoExec.queued_cal_nurture} 5+ touch no-reply prospect${autoExec.queued_cal_nurture === 1 ? '' : 's'} queued for Cal nurture`);
+  if (autoExec.stale_reset)        parts.push(`${autoExec.stale_reset} stale sequence${autoExec.stale_reset === 1 ? '' : 's'} reset to cold`);
+  if (!parts.length) parts.push('No auto-executable items today.');
+  return parts.join('; ');
+}
+
 async function runAutonomousTriggers() {
   const summary = { reengagement: 0, marked_dead: 0, paige_regenerate: 0, copy_review: 0, errors: [] };
 
@@ -986,6 +1182,11 @@ async function run() {
   try {
     CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
     if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
+
+    console.log('Running auto-execute actions...');
+    const autoExec = await runAutoExecuteActions();
+    console.log('[Max] Auto-execute summary:', autoExec);
+
     console.log('Reading second brain...');
     const snapshot = await getSystemSnapshot();
 
@@ -998,7 +1199,7 @@ async function run() {
     }
 
     console.log('Generating insights with Claude...');
-    const rawInsights = await generateInsights(snapshot);
+    const rawInsights = await generateInsights(snapshot, autoExec);
     const insights = await verifyDigestProspects(rawInsights, snapshot);
 
     console.log('\n--- DIGEST PREVIEW ---');
