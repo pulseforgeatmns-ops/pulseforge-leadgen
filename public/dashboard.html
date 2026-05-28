@@ -4172,7 +4172,6 @@ function bindActivityFeedDelegation() {
     if (detailBtn && container.contains(detailBtn)) {
       e.preventDefault();
       e.stopPropagation();
-      console.log('[activity-details] chevron click', { id: detailBtn.dataset.logId });
       toggleActivityDetail(detailBtn);
       return;
     }
@@ -4201,22 +4200,13 @@ function bindActivityFeedDelegation() {
 }
 
 async function fetchActivityDetails(logId) {
-  console.log('[activity-details] fetch start', { id: logId });
   const res = await fetch(`/api/activity/${encodeURIComponent(logId)}/details`, { credentials: 'include' });
-  console.log('[activity-details] fetch complete', { id: logId, ok: res.ok, status: res.status });
   let data = null;
   try {
     data = await res.json();
   } catch (err) {
-    console.error('[activity-details] json parse failed', { id: logId, error: err.message });
     throw err;
   }
-  console.log('[activity-details] response parsed', {
-    id: logId,
-    keys: data && typeof data === 'object' ? Object.keys(data) : [],
-    fieldsIsArray: Array.isArray(data?.fields),
-    fieldCount: Array.isArray(data?.fields) ? data.fields.length : 0,
-  });
   if (!res.ok) throw new Error(data?.error || `activity details returned ${res.status}`);
   return data;
 }
@@ -5564,16 +5554,23 @@ function _renderTimeline() {
   }).join('');
 }
 
+// Cap concurrent detail fetches. A 50-item page used to fire 50 parallel
+// requests at once, contributing to a Railway logging storm (and starving
+// other server work). Process in small batches instead.
+const TL_DETAILS_CONCURRENCY = 4;
+
 async function _fetchTimelineDetails(items) {
   const missing = items.filter(item => item.id != null && !_tlDetailsCache.has(String(item.id))).slice(0, TL_PAGE_SIZE);
-  await Promise.all(missing.map(async item => {
-    try {
-      _tlDetailsCache.set(String(item.id), await fetchActivityDetails(item.id));
-    } catch (err) {
-      console.error('[activity-details] timeline fetch failed', { id: item.id, error: err.message });
-      _tlDetailsCache.set(String(item.id), { error: true });
-    }
-  }));
+  for (let i = 0; i < missing.length; i += TL_DETAILS_CONCURRENCY) {
+    const batch = missing.slice(i, i + TL_DETAILS_CONCURRENCY);
+    await Promise.all(batch.map(async item => {
+      try {
+        _tlDetailsCache.set(String(item.id), await fetchActivityDetails(item.id));
+      } catch (err) {
+        _tlDetailsCache.set(String(item.id), { error: true });
+      }
+    }));
+  }
   _renderTimeline();
 }
 
@@ -5616,8 +5613,20 @@ async function loadMoreTimeline() {
   }
 }
 
-async function loadActivity() {
+// Minimum gap between full loadActivity() runs. Tab switches and panel
+// refreshes were triggering rapid back-to-back loads, each one firing a
+// page worth of /api/activity/:id/details calls.
+const LOAD_ACTIVITY_MIN_INTERVAL_MS = 10000;
+let _lastActivityLoadAt = 0;
+let _activityLoadInFlight = false;
+
+async function loadActivity(opts = {}) {
   const sub = document.getElementById('activitySub');
+  const now = Date.now();
+  if (!opts.force && (_activityLoadInFlight || now - _lastActivityLoadAt < LOAD_ACTIVITY_MIN_INTERVAL_MS)) {
+    return;
+  }
+  _activityLoadInFlight = true;
   try {
     const res = await fetch('/api/activity-panel', { credentials: 'include' });
     if (!res.ok) throw new Error(`activity-panel returned ${res.status}`);
@@ -5636,16 +5645,29 @@ async function loadActivity() {
   } catch(e) {
     console.error('loadActivity:', e);
     if (sub) sub.textContent = 'Failed to load';
+  } finally {
+    _lastActivityLoadAt = Date.now();
+    _activityLoadInFlight = false;
   }
 }
 
 document.querySelectorAll('#tlAgentFilter, #tlActionFilter, #tlDateFilter').forEach(select => {
   select.addEventListener('change', _renderTimeline);
 });
+
+// Debounce scroll-driven pagination. Scroll events fire at 60–120Hz; without
+// a debounce, even with the _tlLoading guard, the moment one page finishes
+// the next scroll tick can immediately fire another loadMoreTimeline.
+let _tlScrollDebounce = null;
 document.getElementById('activityArea')?.addEventListener('scroll', () => {
-  const area = document.getElementById('activityArea');
-  if (!area || _tlLoading || _tlDone) return;
-  if (area.scrollTop + area.clientHeight >= area.scrollHeight - 220) loadMoreTimeline();
+  if (_tlLoading || _tlDone) return;
+  if (_tlScrollDebounce) return;
+  _tlScrollDebounce = setTimeout(() => {
+    _tlScrollDebounce = null;
+    const area = document.getElementById('activityArea');
+    if (!area || _tlLoading || _tlDone) return;
+    if (area.scrollTop + area.clientHeight >= area.scrollHeight - 220) loadMoreTimeline();
+  }, 250);
 });
 
 // ── ANALYTICS ─────────────────────────────────────────────────────────

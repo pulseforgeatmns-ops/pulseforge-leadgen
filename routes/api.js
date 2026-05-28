@@ -1134,7 +1134,6 @@ function sequenceStepLabel(sendCount) {
 router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) => {
   try {
     const logId = String(req.params.id || '').trim();
-    console.log('[activity-details] hit', { id: logId });
     if (!/^[0-9a-f-]{36}$/i.test(logId) && !/^\d+$/.test(logId)) {
       return res.status(400).json({ error: 'Invalid id' });
     }
@@ -1164,7 +1163,6 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
     `, [logId, clientId]);
 
     if (!logRes.rows.length) {
-      console.log('[activity-details] not_found', { id: logId, client_id: clientId });
       return res.status(404).json({ error: 'Activity not found' });
     }
     const row = logRes.rows[0];
@@ -1230,10 +1228,6 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
         row.assigned_setter_id = fb.assigned_setter_id;
         row.assigned_setter_name = fb.assigned_setter_name;
         recoveredClientId = fb.p_client_id;
-        console.log('[activity-details] bounce_fallback_recovered', {
-          id: row.id, prospect_id: row.prospect_id,
-          log_client_id: row.client_id, prospect_client_id: recoveredClientId,
-        });
       }
     }
 
@@ -1386,18 +1380,6 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
       duration_ms: row.duration_ms ?? null,
       prospect_found: Boolean(row.prospect_id && (row.first_name || row.last_name || row.prospect_email || row.phone || row.notes)),
     };
-    console.log('[activity-details] response', {
-      id: responseBody.id,
-      action: responseBody.action,
-      status: responseBody.status,
-      ran_at: responseBody.ran_at,
-      title: responseBody.title,
-      prospect_id: responseBody.prospect_id,
-      prospect_found: responseBody.prospect_found,
-      fields: responseBody.fields,
-      payload: responseBody.payload,
-      actions: responseBody.actions.map(a => a.key),
-    });
     res.json(responseBody);
   } catch (err) {
     console.error('[activity-details] error', { id: req.params.id, error: err.message });

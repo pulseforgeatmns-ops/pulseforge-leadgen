@@ -1309,9 +1309,12 @@ async function run(args = {}) {
     // outer catch. The auto-execute side effects above are already committed
     // and we still want createActions / runAutonomousTriggers to run.
     try {
+      console.log('[Max] Starting digest generation...');
       console.log('Generating insights with Claude...');
       const rawInsights = await generateInsights(snapshot, result.auto_exec);
+      console.log(`[Max] generateInsights returned (type=${typeof rawInsights}, length=${typeof rawInsights === 'string' ? rawInsights.length : 'n/a'})`);
       const insights = await verifyDigestProspects(rawInsights, snapshot);
+      console.log(`[Max] verifyDigestProspects returned (type=${typeof insights}, length=${typeof insights === 'string' ? insights.length : 'n/a'})`);
 
       if (typeof insights !== 'string' || !insights.trim()) {
         throw new Error(`Digest generation returned ${insights === null ? 'null' : typeof insights} — refusing to send empty digest`);
