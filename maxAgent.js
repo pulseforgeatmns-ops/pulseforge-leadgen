@@ -449,6 +449,8 @@ Known fixes already implemented (do not flag these as issues):
 - Riley inbound triage agent is now live and monitoring the inbox
 - RUN buttons on dashboard are working
 
+Click rate context: Pulseforge email sequences use reply-only CTAs with no links in the email body. A click rate of 0% is expected and normal — do NOT flag zero clicks as a red flag, broken tracking, or a deliverability issue. Only flag click rate if it was previously above 0% and dropped, which would indicate a technical regression. Remove any language suggesting 0% clicks is a problem.
+
 Generate a concise daily digest with:
 1. SYSTEM STATUS — brief overview of what's happening across all agents
 2. TOP PRIORITIES — the 3 most important actions to take today, ranked; if any prospects are in clickedToday, flag them as URGENT: "🔥 [Business] clicked a link in your email — Cal or Sam should follow up today"
