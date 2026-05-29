@@ -20,6 +20,19 @@ const SCOPES = [
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const PRICE_TERMS = ['price', 'cost', 'how much', 'interested'];
+const VALID_REPLY_BUCKETS = new Set([
+  'interested',
+  'not_now',
+  'negative',
+  'unsubscribe',
+  'wrong_person',
+  'out_of_office',
+  'unknown',
+]);
+const LEGACY_REPLY_BUCKETS = {
+  warm: 'interested',
+  auto_reply: 'out_of_office',
+};
 
 // ── AUTH ──────────────────────────────────────────────────────────────
 function parseJsonSource(label, raw) {
@@ -33,6 +46,16 @@ function parseJsonSource(label, raw) {
 
 function readFileIfPresent(filePath) {
   return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null;
+}
+
+function persistGmailToken(token) {
+  if (!token?.refresh_token && !token?.access_token) return;
+  try {
+    fs.writeFileSync(TOKEN_PATH, JSON.stringify(token, null, 2));
+    console.log('[Riley] Gmail token refreshed and saved to gmail_token.json');
+  } catch (err) {
+    console.warn('[Riley] Gmail token refreshed but could not be saved:', err.message);
+  }
 }
 
 function loadOAuthCredentials() {
@@ -70,8 +93,30 @@ async function getAuthClient() {
   if (rawToken) {
     try {
       const token = parseJsonSource('GMAIL_TOKEN', rawToken);
+      let latestToken = { ...token };
+      oAuth2Client.on('tokens', (tokens) => {
+        latestToken = {
+          ...latestToken,
+          ...tokens,
+          refresh_token: tokens.refresh_token || latestToken.refresh_token,
+        };
+        persistGmailToken(latestToken);
+      });
       oAuth2Client.setCredentials(token);
-      await oAuth2Client.getAccessToken();
+      const expiresSoon = token.expiry_date && token.expiry_date <= Date.now() + (5 * 60 * 1000);
+      if (token.refresh_token && expiresSoon) {
+        console.log('[Riley] Gmail access token expiring soon — refreshing before inbox read');
+        const refresh = await oAuth2Client.refreshAccessToken();
+        latestToken = {
+          ...latestToken,
+          ...refresh.credentials,
+          refresh_token: refresh.credentials.refresh_token || latestToken.refresh_token,
+        };
+        oAuth2Client.setCredentials(latestToken);
+        persistGmailToken(latestToken);
+      } else {
+        await oAuth2Client.getAccessToken();
+      }
       console.log('[Riley] Auth token: parsed and refreshed');
       return oAuth2Client;
     } catch (err) {
@@ -153,23 +198,39 @@ async function getUnreadEmails(auth) {
 }
 
 // ── CLASSIFY ──────────────────────────────────────────────────────────
-async function classifyEmail(email) {
+function normalizeReplyClassification(rawClassification) {
+  const normalized = String(rawClassification || '').trim().toLowerCase();
+  const bucket = LEGACY_REPLY_BUCKETS[normalized] || normalized;
+  if (VALID_REPLY_BUCKETS.has(bucket)) return bucket;
+  console.warn(`[Riley] Invalid reply classification bucket "${rawClassification}" — using unknown`);
+  return 'unknown';
+}
+
+async function classifyReply(email) {
   const prompt = `You are Riley, an inbound email triage agent for Pulseforge, an AI marketing agency run by Jacob Maynard in Manchester NH.
 
 Classify this email into exactly one category:
-- warm: genuine interest, wants more info, asks about pricing, or asks for next steps
+- interested: genuine interest, wants more info, asks about pricing, or asks for next steps
 - not_now: busy, not right time, maybe later, polite decline
-- unsubscribe: remove me, stop emailing, not interested, unsubscribe
-- auto_reply: out of office, automated response, vacation, away message
+- negative: clear rejection, no interest, already has a provider, hostile or dismissive reply
+- unsubscribe: remove me, stop emailing, unsubscribe, do not contact
 - wrong_person: not the decision maker, wrong company, wrong person
+- out_of_office: out of office, automated response, vacation, away message
+- unknown: unclear, spam, unrelated, or cannot classify confidently
 
 Email:
 From: ${email.from}
 Subject: ${email.subject}
 Body: ${email.body}
 
-Respond with JSON only: { "classification": "warm|not_now|unsubscribe|auto_reply|wrong_person", "reason": "...", "suggested_reply": "..." }
-For suggested_reply: write a short, warm, human reply from Jacob if classification is warm or not_now. Leave blank for others.`;
+Respond with JSON only: { "classification": "interested|not_now|negative|unsubscribe|wrong_person|out_of_office|unknown", "reason": "...", "suggested_reply": "..." }
+For suggested_reply: write a short, warm, human reply from Jacob if classification is interested or not_now. Leave blank for others.`;
+
+  console.log('[Riley] Classifying raw reply:', JSON.stringify({
+    from: email.from,
+    subject: email.subject,
+    body: email.body,
+  }));
 
   const response = await anthropic.messages.create({
     model: 'claude-opus-4-5',
@@ -182,15 +243,17 @@ For suggested_reply: write a short, warm, human reply from Jacob if classificati
     const match = text.match(/\{[\s\S]*\}/);
     if (match) {
       const parsed = JSON.parse(match[0]);
-      const allowed = new Set(['warm', 'not_now', 'unsubscribe', 'auto_reply', 'wrong_person']);
-      if (parsed.classification === 'interested') parsed.classification = 'warm';
-      if (parsed.classification === 'out_of_office') parsed.classification = 'auto_reply';
-      if (!allowed.has(parsed.classification)) parsed.classification = 'not_now';
+      parsed.classification = normalizeReplyClassification(parsed.classification);
+      console.log('[Riley] Classification result:', JSON.stringify(parsed));
       return parsed;
     }
-    return { classification: 'not_now', reason: 'no json found', suggested_reply: '' };
+    const fallback = { classification: 'unknown', reason: 'no json found', suggested_reply: '' };
+    console.log('[Riley] Classification result:', JSON.stringify(fallback));
+    return fallback;
   } catch(e) {
-    return { classification: 'not_now', reason: 'parse error: ' + e.message, suggested_reply: '' };
+    const fallback = { classification: 'unknown', reason: 'parse error: ' + e.message, suggested_reply: '' };
+    console.log('[Riley] Classification result:', JSON.stringify(fallback));
+    return fallback;
   }
 }
 
@@ -267,24 +330,25 @@ async function logSignalDroppedNoProspect({ prospect_id, client_id = CLIENT_ID, 
 }
 
 function triageBucket(classification, email) {
-  if (classification === 'warm' && hasPricingIntent(email?.body)) return 'hot';
-  if (classification === 'warm') return 'warm';
+  if (classification === 'interested' && hasPricingIntent(email?.body)) return 'hot';
+  if (classification === 'interested') return 'warm';
   if (classification === 'unsubscribe') return 'unsubscribe';
   return 'cold';
 }
 
 function triageTrigger(classification) {
   if (classification === 'unsubscribe') return 'reply';
-  if (classification === 'warm' || classification === 'not_now' || classification === 'wrong_person') return 'reply';
+  if (classification === 'interested' || classification === 'not_now' || classification === 'wrong_person' || classification === 'negative') return 'reply';
   return 'reply';
 }
 
 function recommendedTriageAction(classification, suggestedReply) {
-  if (classification === 'warm') return suggestedReply ? 'Review and send the suggested reply.' : 'Reply personally and move this prospect into warm follow-up.';
+  if (classification === 'interested') return suggestedReply ? 'Review and send the suggested reply.' : 'Reply personally and move this prospect into warm follow-up.';
   if (classification === 'unsubscribe') return 'Do not contact again. Prospect has been marked DNC.';
   if (classification === 'not_now') return 'Follow up in 30 days unless they reply sooner.';
+  if (classification === 'negative') return 'Do not continue this thread unless Jacob chooses to respond personally.';
   if (classification === 'wrong_person') return 'Find the right decision maker before sending more outreach.';
-  if (classification === 'auto_reply') return 'No action needed unless the auto-reply includes a return date.';
+  if (classification === 'out_of_office') return 'No action needed unless the auto-reply includes a return date.';
   return 'Review the reply and decide the next step.';
 }
 
@@ -322,9 +386,50 @@ async function logTriageAction(prospect, email, classification, suggestedReply) 
   );
 }
 
+async function logReplyClassified(prospect, email, result) {
+  await db.logAgentAction(
+    AGENT_NAME,
+    'reply_classified',
+    prospect.id,
+    null,
+    {
+      gmail_message_id: email.id,
+      from: email.from,
+      subject: email.subject,
+      body: email.body,
+      classification: result.classification,
+      reason: result.reason || '',
+      suggested_reply: result.suggested_reply || '',
+      human_review_required: result.classification === 'interested',
+      client_id: CLIENT_ID,
+    },
+    'success'
+  );
+}
+
+async function logReplyClassifiedSkipped(prospect, email, reason) {
+  await db.logAgentAction(
+    AGENT_NAME,
+    'reply_classified',
+    prospect?.id || null,
+    null,
+    {
+      gmail_message_id: email.id,
+      from: email.from,
+      subject: email.subject,
+      body: email.body,
+      classification: 'unknown',
+      reason,
+      skipped: true,
+      client_id: CLIENT_ID,
+    },
+    'skipped'
+  );
+}
+
 async function updateProspectFromReply(prospect, classification) {
   const pool = require('./db');
-  if (classification === 'warm') {
+  if (classification === 'interested') {
     await pool.query(
       `UPDATE prospects SET status = 'warm', updated_at = NOW()
        WHERE id = $1 AND client_id = $2 AND status <> 'closed'`,
@@ -358,11 +463,13 @@ async function logInboundTouchpoint(prospect, email, classification) {
   const pool = require('./db');
   const actionType = classification === 'unsubscribe'
     ? 'unsubscribed'
-    : classification === 'auto_reply'
-      ? 'auto_reply'
+    : classification === 'out_of_office'
+      ? 'out_of_office'
       : 'inbound_reply';
-  const sentiment = classification === 'warm'
+  const sentiment = classification === 'interested'
     ? 'positive'
+    : classification === 'negative' || classification === 'unsubscribe'
+      ? 'negative'
     : 'neutral';
   const outcome = {
     from: email.from,
@@ -404,12 +511,20 @@ async function depositInterestedAction(prospect, email, suggestedReply) {
       'reply_required',
       'Warm reply from ' + bizName,
       prospect.email + ' replied to your outreach. Suggested reply below — approve or edit before sending.',
-      JSON.stringify({ prospect_id: prospect.id, email: prospect.email, subject: email.subject, from: email.from, body: email.body, suggested_reply: suggestedReply }),
+      JSON.stringify({
+        prospect_id: prospect.id,
+        email: prospect.email,
+        subject: email.subject,
+        from: email.from,
+        body: email.body,
+        suggested_reply: suggestedReply,
+        human_review_required: true,
+      }),
       'pending',
       CLIENT_ID
     ]
   );
-  console.log('  [Riley] Action deposited for Max');
+  console.log('  [Riley] Human review action deposited for Max');
   return true;
 }
 
@@ -570,7 +685,7 @@ async function recalcICPAfterEmailEvent(prospectId, clientId = CLIENT_ID, eventT
 }
 
 async function notifyWarmReply(prospect, email, classification) {
-  if (classification !== 'warm') return;
+  if (classification !== 'interested') return false;
   await depositWarmSignalAction({
     prospect_id: prospect.id,
     client_id: CLIENT_ID,
@@ -580,6 +695,7 @@ async function notifyWarmReply(prospect, email, classification) {
     email: prospect.email,
     company: companyName(prospect),
   });
+  return true;
 }
 
 async function processHotSignalActions() {
@@ -705,7 +821,15 @@ async function run() {
 
   console.log(`Found ${emails.length} unread emails. Classifying...\n`);
 
-  let stats = { warm: 0, not_now: 0, unsubscribe: 0, auto_reply: 0, wrong_person: 0 };
+  let stats = {
+    interested: 0,
+    not_now: 0,
+    negative: 0,
+    unsubscribe: 0,
+    wrong_person: 0,
+    out_of_office: 0,
+    unknown: 0,
+  };
 
   for (const email of emails) {
     console.log(`Processing: ${email.subject} — ${email.from}`);
@@ -714,6 +838,7 @@ async function run() {
       const prospect = await findProspectByEmail(email.from);
       if (!prospect) {
         console.log('  [Riley] No prospect match — skipping classification for ' + email.from);
+        await logReplyClassifiedSkipped(null, email, 'no_prospect_match');
         await safeMarkAsRead(auth, email.id);
         continue;
       }
@@ -721,20 +846,22 @@ async function run() {
       const hasOutbound = await hasOutboundEmail(prospect.id);
       if (!hasOutbound) {
         console.log(`  [Riley] ${prospect.email} has no Emmett outbound touchpoint — skipping`);
+        await logReplyClassifiedSkipped(prospect, email, 'no_outbound_touchpoint');
         await safeMarkAsRead(auth, email.id);
         continue;
       }
 
-      const result = await classifyEmail(email);
+      const result = await classifyReply(email);
       console.log(`  → ${result.classification}: ${result.reason}`);
 
       stats[result.classification] = (stats[result.classification] || 0) + 1;
 
+      await logReplyClassified(prospect, email, result);
       await logTriageAction(prospect, email, result.classification, result.suggested_reply);
 
       await updateProspectFromReply(prospect, result.classification);
       await logInboundTouchpoint(prospect, email, result.classification);
-      if (result.classification === 'warm') {
+      if (result.classification === 'interested') {
         await depositInterestedAction(prospect, email, result.suggested_reply);
         await notifyWarmReply(prospect, email, result.classification);
       }
@@ -809,6 +936,8 @@ async function qualifyingOpenSignal(prospectId, clientId = CLIENT_ID) {
 module.exports = {
   run,
   getAuthClient,
+  classifyReply,
+  normalizeReplyClassification,
   depositWarmSignalAction,
   logSignalDroppedNoProspect,
   prospectExists,
