@@ -948,6 +948,527 @@ function prospectCompanySql(alias = 'p') {
   return `COALESCE(c.name, NULLIF(TRIM(SPLIT_PART(${alias}.notes, ' — ', 1)), ''), CONCAT(${alias}.first_name, ' ', ${alias}.last_name))`;
 }
 
+function pct(numerator, denominator, digits = 1) {
+  const den = Number(denominator || 0);
+  if (!den) return 0;
+  return Number(((Number(numerator || 0) / den) * 100).toFixed(digits));
+}
+
+function classifySubjectFormat(subject) {
+  const s = String(subject || '').trim();
+  const lower = s.toLowerCase();
+  if (!s) return 'blank subject';
+  if (/\?/.test(s)) return 'question subject';
+  if (/^quick\b|quick question/.test(lower)) return 'quick question subject';
+  if (/still thinking|checking back|following up/.test(lower)) return 'follow-up subject';
+  if (/^[a-z0-9 '&.-]+$/.test(s) && s === lower) return 'lowercase casual subject';
+  if (/—|-/.test(s)) return 'business-name dash subject';
+  if (/\b(grow|lead|customer|booking|revenue|busy|missed)\b/i.test(s)) return 'outcome-led subject';
+  return 'direct subject';
+}
+
+function topVsOthers(rows, metricKey) {
+  const sorted = [...rows].sort((a, b) => Number(b[metricKey] || 0) - Number(a[metricKey] || 0));
+  const top = sorted[0];
+  if (!top || sorted.length < 2) return { top, othersAvg: 0, second: sorted[1] || null };
+  const rest = sorted.slice(1);
+  const othersAvg = rest.reduce((sum, r) => sum + Number(r[metricKey] || 0), 0) / rest.length;
+  return { top, othersAvg, second: sorted[1] || null };
+}
+
+function patternPriority(type) {
+  const order = {
+    email_subject_format: 100,
+    vertical_reply_leader: 95,
+    icp_heating_up: 90,
+    voicemail_rate: 85,
+    zero_answered_vertical: 80,
+    low_email_find_rate: 75,
+    worst_sequence_step: 70,
+    icp_predictive: 65,
+    best_call_time: 60,
+    best_open_day: 55,
+    scout_pipeline_health: 50,
+  };
+  return order[type] || 0;
+}
+
+function formatPatternsSection(patternInsights = []) {
+  const meaningful = patternInsights.filter(p => p?.insight && p?.suggested_action);
+  if (!meaningful.length) return '';
+
+  const lines = ['PATTERNS'];
+  for (const p of meaningful.slice(0, 3)) {
+    lines.push(`- ${p.insight} Why it matters: ${p.why_it_matters} Suggested action: ${p.suggested_action}`);
+  }
+  return lines.join('\n');
+}
+
+function injectPatternsSection(digestText, patternInsights = []) {
+  const block = formatPatternsSection(patternInsights);
+  if (!block || typeof digestText !== 'string') return digestText;
+  if (/^PATTERNS\b/m.test(digestText)) return digestText;
+
+  const exceptionsIdx = digestText.search(/\n\s*EXCEPTIONS\s*:/i);
+  if (exceptionsIdx !== -1) {
+    return `${digestText.slice(0, exceptionsIdx).trimEnd()}\n\n${block}\n${digestText.slice(exceptionsIdx)}`;
+  }
+
+  const snapshotIdx = digestText.search(/\n\s*PIPELINE SNAPSHOT\b/i);
+  if (snapshotIdx !== -1) {
+    return `${digestText.slice(0, snapshotIdx).trimEnd()}\n\n${block}\n${digestText.slice(snapshotIdx)}`;
+  }
+
+  return `${digestText.trimEnd()}\n\n${block}`;
+}
+
+async function queryPattern(sql, params = [], fallbackRows = []) {
+  try {
+    const res = await pool.query(sql, params);
+    return res.rows || [];
+  } catch (err) {
+    console.warn(`[Max] pattern query skipped: ${err.message}`);
+    return fallbackRows;
+  }
+}
+
+async function logPatternInsight(pattern) {
+  await insertAgentLog('pattern_detected', {
+    pattern_type: pattern.pattern_type,
+    insight: pattern.insight,
+    why_it_matters: pattern.why_it_matters,
+    suggested_action: pattern.suggested_action,
+    evidence: pattern.evidence || {},
+  }).catch(err => console.warn('[Max] pattern_detected log failed:', err.message));
+}
+
+function addPattern(patterns, pattern) {
+  if (!pattern?.insight || !pattern?.suggested_action) return;
+  patterns.push({
+    priority: pattern.priority ?? patternPriority(pattern.pattern_type),
+    ...pattern,
+  });
+}
+
+async function analyzePatterns({ expansionReport = null } = {}) {
+  const patterns = [];
+  const weekly = {
+    generated_at: new Date().toISOString(),
+    client_id: CLIENT_ID,
+    email_performance: {},
+    icp_scoring: {},
+    call_dispositions: {},
+    scout: {},
+  };
+
+  const subjectRows = await queryPattern(`
+    SELECT subject_line, SUM(sends)::int AS sends, SUM(opens)::int AS opens
+    FROM email_performance
+    WHERE client_id = $1 AND COALESCE(subject_line, '') <> ''
+    GROUP BY subject_line
+    HAVING SUM(sends) >= 10
+  `, [CLIENT_ID]);
+  const subjectFormats = new Map();
+  for (const row of subjectRows) {
+    const format = classifySubjectFormat(row.subject_line);
+    const current = subjectFormats.get(format) || { format, sends: 0, opens: 0 };
+    current.sends += Number(row.sends || 0);
+    current.opens += Number(row.opens || 0);
+    subjectFormats.set(format, current);
+  }
+  const subjectFormatRows = [...subjectFormats.values()]
+    .filter(r => r.sends >= 10)
+    .map(r => ({ ...r, open_rate: pct(r.opens, r.sends) }));
+  weekly.email_performance.subject_formats = subjectFormatRows;
+  const subjectCompare = topVsOthers(subjectFormatRows, 'open_rate');
+  if (subjectCompare.top && subjectCompare.othersAvg > 0 && subjectCompare.top.open_rate >= subjectCompare.othersAvg * 1.2) {
+    addPattern(patterns, {
+      pattern_type: 'email_subject_format',
+      insight: `${subjectCompare.top.format} is leading subject performance at ${subjectCompare.top.open_rate}% open rate vs ${subjectCompare.othersAvg.toFixed(1)}% for other formats.`,
+      why_it_matters: 'Subject format is one of the fastest levers for improving reply volume without changing list quality.',
+      suggested_action: `Use the ${subjectCompare.top.format} structure in the next email copy test and pause weaker formats until more data accumulates.`,
+      evidence: subjectCompare.top,
+    });
+  }
+
+  const worstStepRows = await queryPattern(`
+    SELECT DISTINCT ON (vertical)
+      vertical, sequence, step, SUM(sends)::int AS sends, SUM(opens)::int AS opens,
+      ROUND(SUM(opens)::numeric / NULLIF(SUM(sends), 0) * 100, 1) AS open_rate
+    FROM email_performance
+    WHERE client_id = $1 AND COALESCE(vertical, '') <> ''
+    GROUP BY vertical, sequence, step
+    HAVING SUM(sends) >= 10
+    ORDER BY vertical, ROUND(SUM(opens)::numeric / NULLIF(SUM(sends), 0) * 100, 1) ASC
+  `, [CLIENT_ID]);
+  weekly.email_performance.worst_steps_by_vertical = worstStepRows;
+  const weakStep = worstStepRows
+    .filter(r => Number(r.open_rate || 0) < 10)
+    .sort((a, b) => Number(a.open_rate || 0) - Number(b.open_rate || 0))[0];
+  if (weakStep) {
+    addPattern(patterns, {
+      pattern_type: 'worst_sequence_step',
+      insight: `${weakStep.vertical} ${weakStep.sequence || 'sequence'} step ${weakStep.step} is underperforming at ${Number(weakStep.open_rate || 0).toFixed(1)}% open rate.`,
+      why_it_matters: 'A weak step can drag down the rest of the sequence before prospects ever reach the stronger follow-ups.',
+      suggested_action: `Rewrite or replace ${weakStep.vertical} step ${weakStep.step}, then watch the next 20 sends before expanding volume.`,
+      evidence: weakStep,
+    });
+  }
+
+  const verticalReplyRows = await queryPattern(`
+    SELECT vertical, SUM(sends)::int AS sends, SUM(replies)::int AS replies,
+      ROUND(SUM(replies)::numeric / NULLIF(SUM(sends), 0) * 100, 2) AS reply_rate
+    FROM email_performance
+    WHERE client_id = $1 AND COALESCE(vertical, '') <> ''
+    GROUP BY vertical
+    HAVING SUM(sends) >= 10
+    ORDER BY reply_rate DESC
+  `, [CLIENT_ID]);
+  weekly.email_performance.vertical_reply_rates = verticalReplyRows;
+  const verticalCompare = topVsOthers(verticalReplyRows, 'reply_rate');
+  if (verticalCompare.top && verticalCompare.othersAvg > 0 && Number(verticalCompare.top.reply_rate || 0) >= verticalCompare.othersAvg * 2) {
+    addPattern(patterns, {
+      pattern_type: 'vertical_reply_leader',
+      insight: `${verticalCompare.top.vertical} is the strongest reply vertical at ${Number(verticalCompare.top.reply_rate || 0).toFixed(1)}%, about 2x+ the rest.`,
+      why_it_matters: 'Reply rate is closer to revenue intent than opens, so this is a volume allocation signal.',
+      suggested_action: `Shift more Scout and Emmett volume toward ${verticalCompare.top.vertical} while keeping a smaller test stream in the other verticals.`,
+      evidence: { top: verticalCompare.top, others_avg_reply_rate: Number(verticalCompare.othersAvg.toFixed(2)) },
+    });
+  }
+
+  const openDayRows = await queryPattern(`
+    WITH sends AS (
+      SELECT prospect_id, client_id, ran_at
+      FROM agent_log
+      WHERE agent_name = 'emmett'
+        AND action = 'email_sent'
+        AND client_id = $1
+        AND ran_at >= NOW() - INTERVAL '60 days'
+    )
+    SELECT
+      TO_CHAR(s.ran_at, 'FMDay') AS day_name,
+      EXTRACT(DOW FROM s.ran_at)::int AS dow,
+      COUNT(*)::int AS sends,
+      COUNT(o.opened_at)::int AS opens,
+      ROUND(COUNT(o.opened_at)::numeric / NULLIF(COUNT(*), 0) * 100, 1) AS open_rate
+    FROM sends s
+    LEFT JOIN LATERAL (
+      SELECT al.ran_at AS opened_at
+      FROM agent_log al
+      WHERE al.client_id = s.client_id
+        AND al.prospect_id = s.prospect_id
+        AND al.action = 'email_opened'
+        AND al.ran_at >= s.ran_at
+        AND al.ran_at < s.ran_at + INTERVAL '14 days'
+      LIMIT 1
+    ) o ON TRUE
+    GROUP BY day_name, dow
+    HAVING COUNT(*) >= 10
+    ORDER BY open_rate DESC
+  `, [CLIENT_ID]);
+  weekly.email_performance.open_rate_by_send_day = openDayRows;
+  if (openDayRows.length >= 2 && Number(openDayRows[0].open_rate || 0) >= Number(openDayRows[1].open_rate || 0) + 10) {
+    addPattern(patterns, {
+      pattern_type: 'best_open_day',
+      insight: `${openDayRows[0].day_name} sends have the highest open rate at ${Number(openDayRows[0].open_rate || 0).toFixed(1)}%.`,
+      why_it_matters: 'Send timing may be giving Emmett an easy lift without changing copy.',
+      suggested_action: `Bias new cold sends toward ${openDayRows[0].day_name} and compare again after another week of data.`,
+      evidence: openDayRows[0],
+    });
+  }
+
+  const heatingRows = await queryPattern(`
+    WITH window_changes AS (
+      SELECT
+        h.prospect_id,
+        (ARRAY_AGG(h.old_score ORDER BY h.created_at ASC))[1] AS start_score,
+        (ARRAY_AGG(h.new_score ORDER BY h.created_at DESC))[1] AS end_score
+      FROM icp_score_history h
+      JOIN prospects p ON p.id = h.prospect_id
+      WHERE p.client_id = $1
+        AND h.created_at >= NOW() - INTERVAL '7 days'
+      GROUP BY h.prospect_id
+    )
+    SELECT p.id, p.email, ${prospectCompanySql('p')} AS company_name,
+      p.vertical, wc.start_score, wc.end_score,
+      (wc.end_score - wc.start_score) AS score_delta
+    FROM window_changes wc
+    JOIN prospects p ON p.id = wc.prospect_id
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+    WHERE p.client_id = $1 AND (wc.end_score - wc.start_score) >= 15
+    ORDER BY score_delta DESC
+    LIMIT 10
+  `, [CLIENT_ID]);
+  weekly.icp_scoring.heating_up_7d = heatingRows;
+  if (heatingRows.length) {
+    const top = heatingRows[0];
+    addPattern(patterns, {
+      pattern_type: 'icp_heating_up',
+      insight: `${heatingRows.length} prospect${heatingRows.length === 1 ? '' : 's'} gained 15+ ICP points in the last 7 days; ${top.company_name || top.email} is up ${top.score_delta}.`,
+      why_it_matters: 'Fast score movement usually means fresh engagement and a higher chance of conversion.',
+      suggested_action: `Have Cal or Sam prioritize the top ${Math.min(heatingRows.length, 3)} heating prospects before the signal cools.`,
+      evidence: heatingRows.slice(0, 5),
+    });
+  }
+
+  const predictiveRows = await queryPattern(`
+    SELECT
+      ROUND(AVG(p.icp_score) FILTER (WHERE replied.prospect_id IS NOT NULL)::numeric, 1) AS avg_replied_icp,
+      ROUND(AVG(p.icp_score) FILTER (WHERE replied.prospect_id IS NULL)::numeric, 1) AS avg_no_reply_icp,
+      COUNT(*) FILTER (WHERE replied.prospect_id IS NOT NULL)::int AS replied_count,
+      COUNT(*) FILTER (WHERE replied.prospect_id IS NULL)::int AS no_reply_count
+    FROM prospects p
+    LEFT JOIN (
+      SELECT DISTINCT prospect_id, client_id
+      FROM touchpoints
+      WHERE client_id = $1
+        AND action_type IN ('inbound_reply', 'inbound', 'reply', 'email_reply')
+    ) replied ON replied.prospect_id = p.id AND replied.client_id = p.client_id
+    WHERE p.client_id = $1
+      AND p.icp_score IS NOT NULL
+  `, [CLIENT_ID]);
+  const predictive = predictiveRows[0] || {};
+  weekly.icp_scoring.reply_predictiveness = predictive;
+  if (Number(predictive.replied_count || 0) >= 5 && Number(predictive.no_reply_count || 0) >= 20) {
+    const delta = Number(predictive.avg_replied_icp || 0) - Number(predictive.avg_no_reply_icp || 0);
+    if (Math.abs(delta) >= 10) {
+      addPattern(patterns, {
+        pattern_type: 'icp_predictive',
+        insight: `Replied prospects average ${predictive.avg_replied_icp} ICP vs ${predictive.avg_no_reply_icp} for non-repliers.`,
+        why_it_matters: delta > 0 ? 'The score is behaving predictively, so prioritizing high-ICP work should improve efficiency.' : 'The score may be overvaluing traits that are not translating into replies.',
+        suggested_action: delta > 0 ? 'Keep routing highest-ICP prospects into faster follow-up paths.' : 'Review scoring weights against recent replies before using ICP as the main prioritization rule.',
+        evidence: predictive,
+      });
+    }
+  }
+
+  const callOverallRows = await queryPattern(`
+    SELECT COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE disposition = 'voicemail')::int AS voicemail,
+      COUNT(*) FILTER (WHERE disposition IN ('answered_interested', 'answered_not_interested', 'answered_callback'))::int AS answered
+    FROM call_dispositions
+    WHERE client_id = $1
+      AND created_at >= NOW() - INTERVAL '30 days'
+  `, [CLIENT_ID]);
+  const callOverall = callOverallRows[0] || {};
+  callOverall.voicemail_rate = pct(callOverall.voicemail, callOverall.total);
+  callOverall.answered_rate = pct(callOverall.answered, callOverall.total);
+  weekly.call_dispositions.overall_30d = callOverall;
+  if (Number(callOverall.total || 0) >= 10 && Number(callOverall.voicemail_rate || 0) > 70) {
+    addPattern(patterns, {
+      pattern_type: 'voicemail_rate',
+      insight: `Cal's voicemail rate is ${callOverall.voicemail_rate}% over the last 30 days.`,
+      why_it_matters: 'A high voicemail rate means call volume is being spent when owners are less reachable.',
+      suggested_action: 'Consider adjusting call timing and testing a different call window for the next batch.',
+      evidence: callOverall,
+    });
+  }
+
+  const callHourRows = await queryPattern(`
+    SELECT EXTRACT(HOUR FROM created_at)::int AS hour,
+      COUNT(*)::int AS calls,
+      COUNT(*) FILTER (WHERE disposition IN ('answered_interested', 'answered_not_interested', 'answered_callback'))::int AS answered,
+      ROUND(COUNT(*) FILTER (WHERE disposition IN ('answered_interested', 'answered_not_interested', 'answered_callback'))::numeric / NULLIF(COUNT(*), 0) * 100, 1) AS answered_rate
+    FROM call_dispositions
+    WHERE client_id = $1
+      AND created_at >= NOW() - INTERVAL '60 days'
+    GROUP BY hour
+    HAVING COUNT(*) >= 5
+    ORDER BY answered_rate DESC
+  `, [CLIENT_ID]);
+  weekly.call_dispositions.answered_rate_by_hour = callHourRows;
+  if (callHourRows.length >= 2 && Number(callHourRows[0].answered_rate || 0) >= Number(callHourRows[1].answered_rate || 0) + 15) {
+    const label = `${Number(callHourRows[0].hour || 0)}:00`;
+    addPattern(patterns, {
+      pattern_type: 'best_call_time',
+      insight: `${label} is Cal's best answered-call window at ${Number(callHourRows[0].answered_rate || 0).toFixed(1)}%.`,
+      why_it_matters: 'Call timing is a controllable variable that can raise answer volume without adding leads.',
+      suggested_action: `Schedule the next Cal batch around ${label} and compare answered rate against the current baseline.`,
+      evidence: callHourRows[0],
+    });
+  }
+
+  const zeroAnsweredRows = await queryPattern(`
+    SELECT p.vertical,
+      COUNT(*)::int AS calls,
+      COUNT(*) FILTER (WHERE cd.disposition IN ('answered_interested', 'answered_not_interested', 'answered_callback'))::int AS answered
+    FROM call_dispositions cd
+    JOIN prospects p ON p.id = cd.prospect_id AND p.client_id = cd.client_id
+    WHERE cd.client_id = $1
+      AND cd.created_at >= NOW() - INTERVAL '14 days'
+      AND COALESCE(p.vertical, '') <> ''
+    GROUP BY p.vertical
+    HAVING COUNT(*) >= 3
+      AND COUNT(*) FILTER (WHERE cd.disposition IN ('answered_interested', 'answered_not_interested', 'answered_callback')) = 0
+    ORDER BY calls DESC
+  `, [CLIENT_ID]);
+  weekly.call_dispositions.zero_answered_verticals_14d = zeroAnsweredRows;
+  if (zeroAnsweredRows.length) {
+    const top = zeroAnsweredRows[0];
+    addPattern(patterns, {
+      pattern_type: 'zero_answered_vertical',
+      insight: `${top.vertical} has 0 answered calls across ${top.calls} calls in the last 14 days.`,
+      why_it_matters: 'That vertical may have bad phone data, poor timing, or a low-fit call motion.',
+      suggested_action: `Review ${top.vertical} call records before adding more call volume there.`,
+      evidence: top,
+    });
+  }
+
+  const emailFindRows = await queryPattern(`
+    SELECT vertical, COUNT(*)::int AS prospects,
+      COUNT(*) FILTER (WHERE email IS NOT NULL AND email LIKE '%@%')::int AS with_email,
+      ROUND(COUNT(*) FILTER (WHERE email IS NOT NULL AND email LIKE '%@%')::numeric / NULLIF(COUNT(*), 0) * 100, 1) AS email_find_rate
+    FROM prospects
+    WHERE client_id = $1
+      AND source = 'scout'
+      AND created_at >= NOW() - INTERVAL '30 days'
+      AND COALESCE(vertical, '') <> ''
+    GROUP BY vertical
+    HAVING COUNT(*) >= 10
+    ORDER BY email_find_rate ASC
+  `, [CLIENT_ID]);
+  weekly.scout.email_find_rate_by_vertical = emailFindRows;
+  const lowFind = emailFindRows.find(r => Number(r.email_find_rate || 0) < 20);
+  if (lowFind) {
+    addPattern(patterns, {
+      pattern_type: 'low_email_find_rate',
+      insight: `${lowFind.vertical} Scout email find rate is only ${Number(lowFind.email_find_rate || 0).toFixed(1)}% over the last 30 days.`,
+      why_it_matters: 'Low enrichment yield creates dead lead volume before Emmett can work it.',
+      suggested_action: `Improve enrichment sources or pause ${lowFind.vertical} scraping until contact quality recovers.`,
+      evidence: lowFind,
+    });
+  }
+
+  const scoutHealthRows = await queryPattern(`
+    SELECT
+      COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days')::int AS queued_this_week,
+      COUNT(*) FILTER (WHERE status = 'completed' AND created_at >= NOW() - INTERVAL '7 days')::int AS completed_this_week
+    FROM scout_expansion_queue
+    WHERE client_id = $1
+  `, [CLIENT_ID]);
+  const scoutHealth = scoutHealthRows[0] || {};
+  scoutHealth.saturated_this_week = expansionReport?.saturatedThisWeek?.length || 0;
+  weekly.scout.pipeline_health = scoutHealth;
+  if (Number(scoutHealth.saturated_this_week || 0) || Number(scoutHealth.queued_this_week || 0)) {
+    addPattern(patterns, {
+      pattern_type: 'scout_pipeline_health',
+      insight: `Scout has ${scoutHealth.queued_this_week || 0} new market${Number(scoutHealth.queued_this_week || 0) === 1 ? '' : 's'} queued and ${scoutHealth.saturated_this_week || 0} market${Number(scoutHealth.saturated_this_week || 0) === 1 ? '' : 's'} going saturated.`,
+      why_it_matters: 'This shows whether top-of-funnel inventory is being replenished before active markets dry up.',
+      suggested_action: Number(scoutHealth.saturated_this_week || 0) > Number(scoutHealth.queued_this_week || 0)
+        ? 'Add more adjacent markets to the Scout queue before prospect supply tightens.'
+        : 'Let Scout process the queued markets and compare yield before adding more expansion.',
+      evidence: scoutHealth,
+      priority: 45,
+    });
+  }
+
+  const dailyInsights = patterns
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0))
+    .slice(0, 3);
+
+  for (const pattern of dailyInsights) {
+    await logPatternInsight(pattern);
+  }
+
+  const today = new Date();
+  if (today.getDay() === 1) {
+    weekly.trends = await buildWeeklyPatternTrends();
+    await insertAgentLog('weekly_pattern_report', weekly)
+      .catch(err => console.warn('[Max] weekly_pattern_report log failed:', err.message));
+  }
+
+  console.log(`[Max] Pattern analysis found ${patterns.length} notable pattern(s), ${dailyInsights.length} included in digest.`);
+  return { dailyInsights, weeklyReport: weekly, allPatterns: patterns };
+}
+
+async function buildWeeklyPatternTrends() {
+  const trends = {};
+  const weeklyEmail = await queryPattern(`
+    SELECT bucket,
+      SUM(sends)::int AS sends,
+      SUM(opens)::int AS opens,
+      SUM(replies)::int AS replies,
+      ROUND(SUM(opens)::numeric / NULLIF(SUM(sends), 0) * 100, 1) AS open_rate,
+      ROUND(SUM(replies)::numeric / NULLIF(SUM(sends), 0) * 100, 2) AS reply_rate
+    FROM (
+      SELECT CASE
+          WHEN last_updated >= date_trunc('week', NOW()) THEN 'this_week'
+          WHEN last_updated >= date_trunc('week', NOW()) - INTERVAL '7 days'
+            AND last_updated < date_trunc('week', NOW()) THEN 'last_week'
+        END AS bucket,
+        sends, opens, replies
+      FROM email_performance
+      WHERE client_id = $1
+        AND last_updated >= date_trunc('week', NOW()) - INTERVAL '7 days'
+    ) x
+    WHERE bucket IS NOT NULL
+    GROUP BY bucket
+  `, [CLIENT_ID]);
+  trends.email_performance = weeklyEmail;
+
+  trends.icp_scoring = await queryPattern(`
+    SELECT bucket,
+      COUNT(*) FILTER (WHERE score_delta >= 15)::int AS heating_up,
+      ROUND(AVG(score_delta)::numeric, 1) AS avg_delta
+    FROM (
+      SELECT CASE
+          WHEN h.created_at >= date_trunc('week', NOW()) THEN 'this_week'
+          WHEN h.created_at >= date_trunc('week', NOW()) - INTERVAL '7 days'
+            AND h.created_at < date_trunc('week', NOW()) THEN 'last_week'
+        END AS bucket,
+        h.new_score - h.old_score AS score_delta
+      FROM icp_score_history h
+      JOIN prospects p ON p.id = h.prospect_id
+      WHERE p.client_id = $1
+        AND h.created_at >= date_trunc('week', NOW()) - INTERVAL '7 days'
+    ) x
+    WHERE bucket IS NOT NULL
+    GROUP BY bucket
+  `, [CLIENT_ID]);
+
+  trends.call_dispositions = await queryPattern(`
+    SELECT bucket,
+      COUNT(*)::int AS calls,
+      ROUND(COUNT(*) FILTER (WHERE disposition = 'voicemail')::numeric / NULLIF(COUNT(*), 0) * 100, 1) AS voicemail_rate,
+      ROUND(COUNT(*) FILTER (WHERE disposition IN ('answered_interested', 'answered_not_interested', 'answered_callback'))::numeric / NULLIF(COUNT(*), 0) * 100, 1) AS answered_rate
+    FROM (
+      SELECT CASE
+          WHEN created_at >= date_trunc('week', NOW()) THEN 'this_week'
+          WHEN created_at >= date_trunc('week', NOW()) - INTERVAL '7 days'
+            AND created_at < date_trunc('week', NOW()) THEN 'last_week'
+        END AS bucket,
+        disposition
+      FROM call_dispositions
+      WHERE client_id = $1
+        AND created_at >= date_trunc('week', NOW()) - INTERVAL '7 days'
+    ) x
+    WHERE bucket IS NOT NULL
+    GROUP BY bucket
+  `, [CLIENT_ID]);
+
+  trends.scout = await queryPattern(`
+    SELECT bucket,
+      COUNT(*)::int AS markets_tracked,
+      COUNT(*) FILTER (WHERE prospects_found < 5)::int AS saturated_markets,
+      SUM(prospects_found)::int AS prospects_found
+    FROM (
+      SELECT CASE
+          WHEN week_start >= date_trunc('week', NOW())::date THEN 'this_week'
+          WHEN week_start >= (date_trunc('week', NOW()) - INTERVAL '7 days')::date
+            AND week_start < date_trunc('week', NOW())::date THEN 'last_week'
+        END AS bucket,
+        prospects_found
+      FROM scout_yield
+      WHERE client_id = $1
+        AND week_start >= (date_trunc('week', NOW()) - INTERVAL '7 days')::date
+    ) x
+    WHERE bucket IS NOT NULL
+    GROUP BY bucket
+  `, [CLIENT_ID]);
+
+  return trends;
+}
+
 // Trigger 1 — warm prospects stale 14+ days → queue Sam re-engagement via cold status
 async function runReengagementTrigger() {
   const res = await pool.query(`
@@ -1522,6 +2043,7 @@ async function run(args = {}) {
     client_id: CLIENT_ID,
     started_at: startedAt,
     auto_exec: null,
+    patterns: { detected: 0, included: 0, weekly_report_logged: false },
     digest: { generated: false, sent: false, length: 0, error: null },
     errors: [],
   };
@@ -1546,6 +2068,22 @@ async function run(args = {}) {
       result.errors.push({ step: 'scout_expansion_report', message: err.message });
     }
 
+    let patternAnalysis = { dailyInsights: [], weeklyReport: null, allPatterns: [] };
+    try {
+      console.log('Analyzing performance patterns...');
+      patternAnalysis = await analyzePatterns({ expansionReport });
+      result.patterns.detected = patternAnalysis.allPatterns.length;
+      result.patterns.included = patternAnalysis.dailyInsights.length;
+      result.patterns.weekly_report_logged = new Date().getDay() === 1;
+    } catch (err) {
+      console.error('[Max] pattern analysis error:', err.message);
+      result.errors.push({ step: 'pattern_analysis', message: err.message });
+      await insertAgentLog('pattern_analysis_failed', {
+        error: err.message,
+        stack: (err.stack || '').slice(0, 1500),
+      }, 'failed').catch(() => {});
+    }
+
     // Wrap the digest generation block on its own so a failure here writes a
     // visible `digest_generation_failed` row to agent_log (and surfaces on
     // dashboard_trigger.result) instead of being silently swallowed by the
@@ -1556,7 +2094,8 @@ async function run(args = {}) {
       console.log('Generating insights with Claude...');
       const rawInsights = await generateInsights(snapshot, result.auto_exec);
       console.log(`[Max] generateInsights returned (type=${typeof rawInsights}, length=${typeof rawInsights === 'string' ? rawInsights.length : 'n/a'})`);
-      const insights = await verifyDigestProspects(rawInsights, snapshot);
+      const verifiedInsights = await verifyDigestProspects(rawInsights, snapshot);
+      const insights = injectPatternsSection(verifiedInsights, patternAnalysis.dailyInsights);
       console.log(`[Max] verifyDigestProspects returned (type=${typeof insights}, length=${typeof insights === 'string' ? insights.length : 'n/a'})`);
 
       if (typeof insights !== 'string' || !insights.trim()) {
