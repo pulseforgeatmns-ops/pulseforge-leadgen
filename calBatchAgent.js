@@ -2,6 +2,7 @@ require('dotenv').config();
 const axios = require('axios');
 const pool = require('./db');
 const db = require('./dbClient');
+const { recalculateICP } = require('./utils/icpScoring');
 
 // Cal Batch Agent
 // Schedule this in cron-jobs.org to run daily at 10am Eastern:
@@ -10,6 +11,18 @@ const db = require('./dbClient');
 const AGENT_NAME = 'cal';
 const MAX_BATCH_SIZE = 25;
 const BLAND_BATCH_URL = 'https://api.bland.ai/v2/batches/create';
+const BLAND_CALLS_URL = 'https://api.bland.ai/v1/calls';
+const DISPOSITION_VALUES = new Set([
+  'voicemail',
+  'answered_interested',
+  'answered_not_interested',
+  'answered_callback',
+  'no_answer',
+  'wrong_number',
+  'disconnected',
+]);
+const POLL_INTERVAL_MS = Number(process.env.CAL_BATCH_POLL_INTERVAL_MS || 15000);
+const POLL_TIMEOUT_MS = Number(process.env.CAL_BATCH_POLL_TIMEOUT_MS || 8 * 60 * 1000);
 
 const BASE_PROMPT = `You are Cal, an appointment setter for Pulseforge, an AI marketing and automation agency based in Manchester, New Hampshire. You are calling local service business owners in Southern New Hampshire on behalf of Jacob Maynard.
 
@@ -73,12 +86,37 @@ function formatDateForBatchName(date = new Date()) {
 
 async function getBatchCandidates() {
   const res = await pool.query(`
-    SELECT id, first_name, phone, notes
-    FROM prospects p
-    WHERE p.phone IS NOT NULL
+    WITH queued AS (
+      SELECT
+        p.id, p.first_name, p.phone, p.notes, p.client_id,
+        c.name AS company_name,
+        q.id AS cal_queue_id,
+        q.reason AS cal_queue_reason,
+        q.priority AS cal_queue_priority
+      FROM cal_queue q
+      JOIN prospects p ON p.id = q.prospect_id AND p.client_id = q.client_id
+      LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+      WHERE q.status = 'pending'
+        AND p.phone IS NOT NULL
+        AND p.phone != ''
+        AND COALESCE(p.do_not_contact, false) = false
+      ORDER BY q.priority ASC, q.created_at ASC
+      LIMIT $1
+    ),
+    fill AS (
+      SELECT
+        p.id, p.first_name, p.phone, p.notes, p.client_id,
+        c.name AS company_name,
+        NULL::integer AS cal_queue_id,
+        NULL::text AS cal_queue_reason,
+        NULL::integer AS cal_queue_priority
+      FROM prospects p
+      LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+      WHERE p.phone IS NOT NULL
       AND p.phone != ''
       AND p.status = 'cold'
-      AND p.do_not_contact = false
+      AND COALESCE(p.do_not_contact, false) = false
+      AND NOT EXISTS (SELECT 1 FROM queued q WHERE q.id = p.id)
       AND NOT EXISTS (
         SELECT 1
         FROM touchpoints t
@@ -87,7 +125,12 @@ async function getBatchCandidates() {
           AND t.action_type = 'outbound'
           AND t.agent_id = 'cal'
       )
-    ORDER BY p.icp_score DESC NULLS LAST, p.created_at ASC
+      ORDER BY p.icp_score DESC NULLS LAST, p.created_at ASC
+      LIMIT $1
+    )
+    SELECT * FROM queued
+    UNION ALL
+    SELECT * FROM fill
     LIMIT $1
   `, [MAX_BATCH_SIZE]);
 
@@ -100,7 +143,7 @@ function buildCallData(prospects) {
 
   for (const prospect of prospects) {
     const phoneNumber = formatPhoneNumber(prospect.phone);
-    const businessName = extractBusinessName(prospect.notes);
+    const businessName = prospect.company_name || extractBusinessName(prospect.notes);
 
     if (!phoneNumber) {
       skipped.push({ prospect_id: prospect.id, phone: prospect.phone, reason: 'invalid_phone' });
@@ -114,6 +157,13 @@ function buildCallData(prospects) {
         phone_number: phoneNumber,
         first_name: prospect.first_name || '',
         business_name: businessName,
+        metadata: {
+          prospect_id: prospect.id,
+          client_id: prospect.client_id || 1,
+          company_name: businessName,
+          cal_queue_id: prospect.cal_queue_id || null,
+          agent: AGENT_NAME,
+        },
       },
     });
   }
@@ -126,6 +176,7 @@ async function createBlandBatch(callData) {
     description: `Pulseforge Auto Batch — ${formatDateForBatchName()}`,
     call_objects: callData.map(call => ({
       phone_number: call.phone_number,
+      metadata: call.metadata,
       request_data: {
         first_name: call.first_name,
         business_name: call.business_name,
@@ -135,6 +186,8 @@ async function createBlandBatch(callData) {
       task: BASE_PROMPT,
       voice: 'walter',
       wait_for_greeting: true,
+      answered_by_enabled: true,
+      amd: true,
       interruption_threshold: 1500,
       from: process.env.BLAND_PHONE_NUMBER,
       max_duration: 2,
@@ -149,6 +202,45 @@ async function createBlandBatch(callData) {
   });
 
   return { payload, response: res.data };
+}
+
+async function ensureCallDispositionSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cal_queue (
+      id SERIAL PRIMARY KEY,
+      prospect_id UUID NOT NULL,
+      client_id INTEGER NOT NULL,
+      priority INTEGER NOT NULL DEFAULT 1,
+      reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      status TEXT NOT NULL DEFAULT 'pending'
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE cal_queue ADD COLUMN IF NOT EXISTS disposition TEXT;
+    ALTER TABLE cal_queue ADD COLUMN IF NOT EXISTS disposition_notes TEXT;
+    ALTER TABLE cal_queue ADD COLUMN IF NOT EXISTS called_at TIMESTAMP;
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS call_dispositions (
+      id SERIAL PRIMARY KEY,
+      prospect_id UUID REFERENCES prospects(id),
+      client_id INTEGER,
+      call_duration_seconds INTEGER,
+      disposition TEXT,
+      notes TEXT,
+      cal_queue_id INTEGER,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS call_dispositions_client_created_idx
+      ON call_dispositions (client_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS call_dispositions_prospect_idx
+      ON call_dispositions (prospect_id, created_at DESC)
+  `);
 }
 
 async function logBatchTouchpoints(formattedProspects, batchResponse) {
@@ -166,6 +258,241 @@ async function logBatchTouchpoints(formattedProspects, batchResponse) {
       externalRef
     );
   }
+}
+
+function getBatchId(batchResponse) {
+  return batchResponse?.data?.batch_id || batchResponse?.batch_id || batchResponse?.id || null;
+}
+
+async function fetchBatchCalls(batchId) {
+  const res = await axios.get(BLAND_CALLS_URL, {
+    headers: { authorization: process.env.BLAND_API_KEY },
+    params: { batch_id: batchId, limit: MAX_BATCH_SIZE },
+  });
+  if (Array.isArray(res.data?.calls)) return res.data.calls;
+  if (Array.isArray(res.data?.data)) return res.data.data;
+  if (Array.isArray(res.data)) return res.data;
+  return [];
+}
+
+async function fetchCallDetails(callId) {
+  const res = await axios.get(`${BLAND_CALLS_URL}/${callId}`, {
+    headers: { authorization: process.env.BLAND_API_KEY },
+  });
+  return res.data;
+}
+
+function isCallFinished(call) {
+  const status = String(call.status || call.queue_status || '').toLowerCase();
+  return call.completed === true ||
+    ['completed', 'complete', 'failed', 'busy', 'no-answer', 'canceled', 'unknown', 'call_error', 'complete_error', 'queue_error', 'pre_queue_error'].includes(status);
+}
+
+async function pollBatchCallDetails(batchId, expectedCount) {
+  const started = Date.now();
+  let latestCalls = [];
+
+  while (Date.now() - started < POLL_TIMEOUT_MS) {
+    latestCalls = await fetchBatchCalls(batchId);
+    const finished = latestCalls.filter(isCallFinished);
+    console.log(`Bland batch ${batchId}: ${finished.length}/${expectedCount} call result${expectedCount !== 1 ? 's' : ''} ready.`);
+
+    if (latestCalls.length >= expectedCount && finished.length >= expectedCount) break;
+    await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
+
+  const details = [];
+  for (const call of latestCalls.filter(isCallFinished)) {
+    if (!call.call_id) continue;
+    try {
+      details.push(await fetchCallDetails(call.call_id));
+    } catch (err) {
+      console.warn(`Could not fetch Bland call details for ${call.call_id}:`, err.response?.data || err.message);
+      details.push(call);
+    }
+  }
+  return details;
+}
+
+function callDurationSeconds(details) {
+  const corrected = Number(details?.corrected_duration);
+  if (Number.isFinite(corrected) && corrected >= 0) return Math.round(corrected);
+  const minutes = Number(details?.call_length);
+  if (Number.isFinite(minutes) && minutes >= 0) return Math.round(minutes * 60);
+  return null;
+}
+
+function textForDisposition(details) {
+  const parts = [
+    details?.status,
+    details?.queue_status,
+    details?.answered_by,
+    details?.error_message,
+    details?.summary,
+    details?.concatenated_transcript,
+    JSON.stringify(details?.analysis || {}),
+  ];
+  return parts.filter(Boolean).join(' ').toLowerCase();
+}
+
+function mapBlandDisposition(details) {
+  const answeredBy = String(details?.answered_by || '').toLowerCase();
+  const status = String(details?.status || details?.queue_status || '').toLowerCase();
+  const text = textForDisposition(details);
+
+  if (/\bwrong (number|person)\b|not (the right|correct) number/.test(text)) return 'wrong_number';
+  if (/not in service|number.*(disconnected|invalid|not found)|temporarily unavailable/.test(text)) return 'disconnected';
+  if (status === 'no-answer' || answeredBy === 'no-answer' || status === 'busy' || status === 'canceled') return 'no_answer';
+  if (answeredBy === 'voicemail' || /voicemail|answering machine/.test(text)) return 'voicemail';
+  if (/call (me )?back|callback|better time|try again|later today|tomorrow|next week|next month/.test(text)) return 'answered_callback';
+  if (/not interested|no thanks|don't call|do not call|stop calling|remove me/.test(text)) return 'answered_not_interested';
+  if (/booked|scheduled|calendly|discovery call|interested|sounds good|send me|yes[,.\s]|yeah[,.\s]|sure[,.\s]/.test(text)) return 'answered_interested';
+  if (answeredBy === 'human' || answeredBy === 'unknown') return 'answered_not_interested';
+  if (status === 'failed') return 'disconnected';
+  return 'no_answer';
+}
+
+function extractNotes(details) {
+  return String(details?.summary || details?.error_message || details?.concatenated_transcript || '').slice(0, 1000);
+}
+
+function nextBusinessDayTen() {
+  const date = new Date();
+  date.setDate(date.getDate() + 1);
+  date.setHours(10, 0, 0, 0);
+  while ([0, 6].includes(date.getDay())) {
+    date.setDate(date.getDate() + 1);
+  }
+  return date;
+}
+
+function extractCallbackAt(details) {
+  const candidates = [
+    details?.analysis?.callback_at,
+    details?.analysis?.callback_time,
+    details?.variables?.callback_at,
+    details?.variables?.callback_time,
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const date = new Date(candidate);
+    if (!isNaN(date.getTime())) return date;
+  }
+  return nextBusinessDayTen();
+}
+
+async function applyProspectDisposition(prospectId, clientId, disposition, details) {
+  if (disposition === 'answered_interested') {
+    await pool.query(
+      `UPDATE prospects SET status = 'warm', is_hot = true, updated_at = NOW()
+       WHERE id = $1 AND client_id = $2`,
+      [prospectId, clientId]
+    );
+  } else if (disposition === 'answered_callback') {
+    await pool.query(
+      `UPDATE prospects SET callback_at = $1, setter_status = 'follow_up', updated_at = NOW()
+       WHERE id = $2 AND client_id = $3`,
+      [extractCallbackAt(details), prospectId, clientId]
+    );
+  } else if (disposition === 'answered_not_interested') {
+    await pool.query(
+      `UPDATE prospects SET status = 'cold', updated_at = NOW()
+       WHERE id = $1 AND client_id = $2`,
+      [prospectId, clientId]
+    );
+  } else if (disposition === 'wrong_number') {
+    await pool.query(
+      `UPDATE prospects SET status = 'dead', do_not_contact = true, updated_at = NOW()
+       WHERE id = $1 AND client_id = $2`,
+      [prospectId, clientId]
+    );
+  }
+
+  if (['answered_interested', 'answered_callback', 'answered_not_interested', 'voicemail'].includes(disposition)) {
+    await recalculateICP(prospectId, {
+      clientId,
+      reason: `call_disposition:${disposition}`,
+    }).catch(err => console.warn(`ICP recalc failed for ${prospectId}:`, err.message));
+  }
+}
+
+async function recordCallDisposition(item, details) {
+  const clientId = Number(item.prospect.client_id || details?.metadata?.client_id || 1);
+  const disposition = mapBlandDisposition(details);
+  if (!DISPOSITION_VALUES.has(disposition)) return null;
+
+  const durationSeconds = callDurationSeconds(details);
+  const notes = extractNotes(details);
+  const queueId = item.prospect.cal_queue_id || details?.metadata?.cal_queue_id || null;
+
+  await pool.query(
+    `INSERT INTO call_dispositions
+      (prospect_id, client_id, call_duration_seconds, disposition, notes, cal_queue_id)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [item.prospect.id, clientId, durationSeconds, disposition, notes, queueId]
+  );
+
+  if (queueId) {
+    await pool.query(
+      `UPDATE cal_queue
+       SET status = 'completed', disposition = $1, disposition_notes = $2, called_at = NOW()
+       WHERE id = $3`,
+      [disposition, notes, queueId]
+    );
+  }
+
+  await applyProspectDisposition(item.prospect.id, clientId, disposition, details);
+
+  await db.logAgentAction(
+    AGENT_NAME,
+    'call_disposition',
+    item.prospect.id,
+    null,
+    {
+      prospect_id: item.prospect.id,
+      disposition,
+      call_duration: durationSeconds,
+      company: item.businessName,
+      call_id: details?.call_id || null,
+      cal_queue_id: queueId,
+    },
+    'success'
+  );
+
+  return { prospect_id: item.prospect.id, disposition, call_duration: durationSeconds, company: item.businessName };
+}
+
+function matchCallToProspect(details, formattedProspects, usedIds) {
+  const metadataProspectId = details?.metadata?.prospect_id || details?.variables?.prospect_id;
+  if (metadataProspectId) {
+    const byMetadata = formattedProspects.find(item => String(item.prospect.id) === String(metadataProspectId) && !usedIds.has(item.prospect.id));
+    if (byMetadata) return byMetadata;
+  }
+
+  const to = formatPhoneNumber(details?.to || details?.request_data?.phone_number || details?.variables?.to);
+  if (!to) return null;
+  return formattedProspects.find(item => item.callData.phone_number === to && !usedIds.has(item.prospect.id)) || null;
+}
+
+async function processBatchDispositions(formattedProspects, batchResponse) {
+  const batchId = getBatchId(batchResponse);
+  if (!batchId) {
+    console.warn('No Bland batch_id returned; skipping disposition polling.');
+    return [];
+  }
+
+  const callDetails = await pollBatchCallDetails(batchId, formattedProspects.length);
+  const usedIds = new Set();
+  const recorded = [];
+
+  for (const details of callDetails) {
+    const item = matchCallToProspect(details, formattedProspects, usedIds);
+    if (!item) continue;
+    usedIds.add(item.prospect.id);
+    const disposition = await recordCallDisposition(item, details);
+    if (disposition) recorded.push(disposition);
+  }
+
+  return recorded;
 }
 
 async function run() {
@@ -193,6 +520,8 @@ async function run() {
   }
 
   try {
+    await ensureCallDispositionSchema();
+
     const prospects = await getBatchCandidates();
     const { formattedProspects, skipped } = buildCallData(prospects);
 
@@ -218,6 +547,7 @@ async function run() {
     const { payload, response } = await createBlandBatch(callData);
 
     await logBatchTouchpoints(formattedProspects, response);
+    const dispositions = await processBatchDispositions(formattedProspects, response);
 
     await db.logAgentAction(
       AGENT_NAME,
@@ -227,6 +557,7 @@ async function run() {
       {
         batch_name: payload.description,
         calls_queued: callData.length,
+        dispositions_recorded: dispositions.length,
         skipped,
         bland_response: response,
       },
@@ -235,7 +566,7 @@ async function run() {
       Date.now() - startedAt
     );
 
-    console.log(`Cal batch complete — queued ${callData.length} call${callData.length !== 1 ? 's' : ''}.`);
+    console.log(`Cal batch complete — queued ${callData.length} call${callData.length !== 1 ? 's' : ''}, recorded ${dispositions.length} disposition${dispositions.length !== 1 ? 's' : ''}.`);
   } catch (err) {
     console.error('Cal batch failed:', err.response?.data || err.message);
     await db.logAgentAction(
@@ -255,9 +586,12 @@ module.exports = {
   BASE_PROMPT,
   buildCallData,
   createBlandBatch,
+  ensureCallDispositionSchema,
   extractBusinessName,
   formatPhoneNumber,
   getBatchCandidates,
+  mapBlandDisposition,
+  processBatchDispositions,
   run,
 };
 

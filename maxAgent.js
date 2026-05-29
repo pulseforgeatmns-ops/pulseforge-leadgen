@@ -83,6 +83,7 @@ function digestSnapshotWithMarketLabels(snapshot) {
     clickedToday: enrichProspectLabels(snapshot.clickedToday),
     topICP: enrichProspectLabels(snapshot.topICP || []),
     heatingUp: enrichProspectLabels(snapshot.heatingUp || []),
+    callInterested: enrichProspectLabels(snapshot.callInterested || []),
   };
 }
 
@@ -99,7 +100,7 @@ function normalizeCompanyName(value) {
 // Business names actually handed to the LLM this run — the only ones it may reference.
 function snapshotCompanyNameSet(snapshot) {
   const names = new Set();
-  for (const key of ['recentTouchpoints', 'untouched', 'cold', 'clickedToday', 'topICP', 'heatingUp']) {
+  for (const key of ['recentTouchpoints', 'untouched', 'cold', 'clickedToday', 'topICP', 'heatingUp', 'callInterested']) {
     for (const row of snapshot[key] || []) {
       for (const v of [row.raw_company_name, row.company_name, row.company_name_with_market]) {
         const n = normalizeCompanyName(v);
@@ -350,6 +351,50 @@ async function getSystemSnapshot() {
     pending_commissions: 0,
   }] }));
 
+  const callDispositionStats = await pool.query(`
+    WITH weekly AS (
+      SELECT disposition
+      FROM call_dispositions
+      WHERE client_id = $1
+        AND created_at >= NOW() - INTERVAL '7 days'
+    )
+    SELECT
+      COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE disposition = 'voicemail')::int AS voicemail,
+      COUNT(*) FILTER (WHERE disposition IN ('answered_interested', 'answered_not_interested', 'answered_callback'))::int AS answered,
+      COUNT(*) FILTER (WHERE disposition = 'answered_interested')::int AS interested,
+      COALESCE(ROUND(COUNT(*) FILTER (WHERE disposition = 'voicemail')::numeric / NULLIF(COUNT(*), 0) * 100, 1), 0) AS voicemail_pct,
+      COALESCE(ROUND(COUNT(*) FILTER (WHERE disposition IN ('answered_interested', 'answered_not_interested', 'answered_callback'))::numeric / NULLIF(COUNT(*), 0) * 100, 1), 0) AS answered_pct,
+      COALESCE(ROUND(COUNT(*) FILTER (WHERE disposition = 'answered_interested')::numeric / NULLIF(COUNT(*), 0) * 100, 1), 0) AS interested_pct
+    FROM weekly
+  `, [CLIENT_ID]).catch(() => ({ rows: [{
+    total: 0,
+    voicemail: 0,
+    answered: 0,
+    interested: 0,
+    voicemail_pct: 0,
+    answered_pct: 0,
+    interested_pct: 0,
+  }] }));
+
+  const callInterested = await pool.query(`
+    SELECT DISTINCT ON (p.id)
+      p.id, p.first_name, p.last_name, p.email, p.icp_score, p.status,
+      ${prospectCompanySql('p')} AS company_name,
+      p.notes, p.service_area_match,
+      cd.call_duration_seconds,
+      cd.notes AS disposition_notes,
+      cd.created_at AS answered_at
+    FROM call_dispositions cd
+    JOIN prospects p ON p.id = cd.prospect_id AND p.client_id = cd.client_id
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+    WHERE cd.client_id = $1
+      AND cd.disposition = 'answered_interested'
+      AND cd.created_at >= NOW() - INTERVAL '7 days'
+    ORDER BY p.id, cd.created_at DESC
+    LIMIT 10
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+
   // Copy performance — Emmett email_sent logs (last 7 days) grouped by sequence/step,
   // joined to touchpoints to compute open rate per sequence/step combo.
   const copyPerformance = await pool.query(`
@@ -483,6 +528,8 @@ async function getSystemSnapshot() {
     emailStats:    emailStats.rows[0],
     contentQuality: contentQuality.rows[0],
     closerMetrics: closerMetrics.rows[0],
+    callDispositionStats: callDispositionStats.rows[0],
+    callInterested: callInterested.rows,
     copyPerformance: copyPerformance.rows,
     client: CLIENT_CONFIG,
   };
@@ -518,6 +565,7 @@ function extractTextFromMessage(message) {
 function buildDeterministicDigest(snapshot, autoExec) {
   const autoExecLine = formatAutoExecSummary(autoExec);
   const closer = snapshot.closerMetrics || {};
+  const callStats = snapshot.callDispositionStats || {};
   const replies = snapshot.recentTouchpoints.filter(t =>
     ['reply', 'inbound', 'email_reply'].includes(t.action_type)
   ).length;
@@ -542,6 +590,13 @@ function buildDeterministicDigest(snapshot, autoExec) {
   }
   if (pending) exceptions.push(`${pending} post${pending === 1 ? '' : 's'} awaiting approval`);
   if (snapshot.warmToday) exceptions.push(`${snapshot.warmToday} prospect${snapshot.warmToday === 1 ? '' : 's'} upgraded to warm today`);
+  if ((snapshot.callInterested || []).length) {
+    const labels = snapshot.callInterested
+      .slice(0, 3)
+      .map(p => formatProspectBusinessLabel(p) || p.email || `${p.first_name || ''} ${p.last_name || ''}`.trim())
+      .filter(Boolean);
+    exceptions.push(`TOP PRIORITY: ${snapshot.callInterested.length} prospect${snapshot.callInterested.length === 1 ? '' : 's'} answered Cal as interested${labels.length ? ` (${labels.join(', ')})` : ''}`);
+  }
 
   const exceptionsText = exceptions.length
     ? exceptions.map(e => `- ${e}`).join('\n')
@@ -569,6 +624,7 @@ ${exceptionsText}
 
 PIPELINE SNAPSHOT
 Booked calls this week: ${closer.booked_week || 0}
+Cal dispositions this week: ${callStats.total || 0} total, ${callStats.voicemail_pct || 0}% voicemail, ${callStats.answered_pct || 0}% answered, ${callStats.interested_pct || 0}% interested
 MRR closed this month: $${Number(closer.mrr_this_month || 0).toLocaleString()}
 Pending approvals: ${pending}
 Total prospects: ${totalProspects}${recommendation ? `\n\n${recommendation}` : ''}
@@ -598,8 +654,8 @@ ${dataString}
 Generate a tight, streamlined digest with EXACTLY these four sections, in order:
 
 1. ACTIONS EXECUTED — One short paragraph restating the auto-executed actions above in a manager's voice.
-2. EXCEPTIONS — Items needing a human decision. Only include: warm signals worth personal outreach (from clickedToday), new replies (from recentTouchpoints with action_type reply / inbound / email_reply), prospects heating up (from heatingUp — ICP score rose 10+ points in the last 7 days, copy the company name verbatim and note the score_delta), unusual patterns. If none, say "No exceptions today."
-3. PIPELINE SNAPSHOT — 3-4 lines max. Pull from closerMetrics, prospectStats, pending, topICP (highest-scoring prospects). Example lines: booked calls this week, MRR closed this month, total pending approvals, warm prospects today, top ICP prospect.
+2. EXCEPTIONS — Items needing a human decision. Only include: warm signals worth personal outreach (from clickedToday), new replies (from recentTouchpoints with action_type reply / inbound / email_reply), prospects heating up (from heatingUp — ICP score rose 10+ points in the last 7 days, copy the company name verbatim and note the score_delta), prospects who answered Cal as interested (from callInterested — label these TOP PRIORITY), unusual patterns. If none, say "No exceptions today."
+3. PIPELINE SNAPSHOT — 3-4 lines max. Pull from closerMetrics, callDispositionStats, prospectStats, pending, topICP (highest-scoring prospects). Include weekly Cal disposition percentages when callDispositionStats.total > 0: voicemail %, answered %, interested %. Example lines: booked calls this week, Cal call disposition breakdown, MRR closed this month, total pending approvals, warm prospects today, top ICP prospect.
 4. RECOMMENDATION — ONE recommendation only, if any. If nothing is actionable, omit the section entirely.
 
 Style rules:
@@ -1150,8 +1206,29 @@ async function ensureCalQueueTable() {
     )
   `);
   await pool.query(`
+    ALTER TABLE cal_queue ADD COLUMN IF NOT EXISTS disposition TEXT;
+    ALTER TABLE cal_queue ADD COLUMN IF NOT EXISTS disposition_notes TEXT;
+    ALTER TABLE cal_queue ADD COLUMN IF NOT EXISTS called_at TIMESTAMP;
+  `);
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS cal_queue_pending_idx
       ON cal_queue (client_id, status, priority, created_at)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS call_dispositions (
+      id SERIAL PRIMARY KEY,
+      prospect_id UUID REFERENCES prospects(id),
+      client_id INTEGER,
+      call_duration_seconds INTEGER,
+      disposition TEXT,
+      notes TEXT,
+      cal_queue_id INTEGER,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS call_dispositions_client_created_idx
+      ON call_dispositions (client_id, created_at DESC)
   `);
 }
 

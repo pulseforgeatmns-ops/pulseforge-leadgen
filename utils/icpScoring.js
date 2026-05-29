@@ -214,6 +214,25 @@ async function gatherEngagement(prospectId, clientId) {
       AND (payload->>'booked') = 'true'
   `, [prospectId, clientId]).catch(() => ({ rows: [{ count: 0 }] }));
 
+  const dispositions = await sharedPool.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE disposition = 'voicemail')::int AS voicemail,
+      COUNT(*) FILTER (WHERE disposition = 'answered_interested')::int AS answered_interested,
+      COUNT(*) FILTER (WHERE disposition = 'answered_callback')::int AS answered_callback,
+      COUNT(*) FILTER (WHERE disposition = 'answered_not_interested')::int AS answered_not_interested,
+      COUNT(*) FILTER (WHERE disposition IN ('answered_interested', 'answered_callback', 'answered_not_interested'))::int AS answered
+    FROM call_dispositions
+    WHERE prospect_id = $1 AND client_id = $2
+  `, [prospectId, clientId]).catch(() => ({
+    rows: [{
+      voicemail: 0,
+      answered_interested: 0,
+      answered_callback: 0,
+      answered_not_interested: 0,
+      answered: 0,
+    }],
+  }));
+
   // Setter contact — a logged activity_log row. lead_id is a globally-unique
   // prospect UUID, so no client_id filter is needed (and the column is not
   // guaranteed to exist on activity_log across environments).
@@ -224,15 +243,18 @@ async function gatherEngagement(prospectId, clientId) {
   `, [prospectId]).catch(() => ({ rows: [{ has_activity: false }] }));
 
   const row = touch.rows[0] || {};
+  const dispositionRow = dispositions.rows[0] || {};
   return {
     opens: Number(row.opens || 0),
     clicks: Number(row.clicks || 0),
     replies: Number(row.replies || 0),
     hard_bounces: Number(row.hard_bounces || 0),
     unsubscribes: Number(row.unsubscribes || 0),
-    cal_voicemails: Number(row.cal_voicemails || 0),
-    cal_answered: Number(row.cal_answered || 0),
-    cal_interested: Number(calInterested.rows[0]?.count || 0),
+    cal_voicemails: Number(row.cal_voicemails || 0) + Number(dispositionRow.voicemail || 0),
+    cal_answered: Number(row.cal_answered || 0) + Number(dispositionRow.answered || 0),
+    cal_interested: Number(calInterested.rows[0]?.count || 0) + Number(dispositionRow.answered_interested || 0),
+    cal_callback: Number(dispositionRow.answered_callback || 0),
+    cal_not_interested: Number(dispositionRow.answered_not_interested || 0),
     touches_30d: Number(row.touches_30d || 0),
     setter_has_activity: !!setter.rows[0]?.has_activity,
   };
@@ -251,6 +273,7 @@ function computeEngagementBonus(eng, prospect) {
 
   // Cal outcome — tiered, highest applicable tier only.
   if (eng.cal_interested > 0) bonus += 20;
+  else if (eng.cal_callback > 0) bonus += 10;
   else if (eng.cal_answered > 0) bonus += 10;
   else if (eng.cal_voicemails > 0) bonus += 5;
 
@@ -268,6 +291,7 @@ function computePenalties(eng, prospect) {
   let penalty = 0;
   if (eng.hard_bounces > 0) penalty += 20;
   if (eng.unsubscribes > 0) penalty += 30;
+  if (eng.cal_not_interested > 0) penalty += 5;
   // 5+ touches in the last 30 days with no reply at all.
   if (eng.touches_30d >= 5 && eng.replies === 0) penalty += 10;
   return penalty;
