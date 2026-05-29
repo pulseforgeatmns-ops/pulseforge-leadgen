@@ -17,6 +17,7 @@ const SCOPES = [
   'https://www.googleapis.com/auth/gmail.send',
   'https://www.googleapis.com/auth/gmail.modify'
 ];
+const TOKEN_REFRESH_WINDOW_MS = 5 * 60 * 1000;
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const PRICE_TERMS = ['price', 'cost', 'how much', 'interested'];
@@ -58,6 +59,93 @@ function persistGmailToken(token) {
   }
 }
 
+function tokenExpiresSoon(token) {
+  const expiry = Number(token?.expiry_date || token?.expires_at || 0);
+  if (!expiry) return true;
+  return expiry <= Date.now() + TOKEN_REFRESH_WINDOW_MS;
+}
+
+function loadRileyEnvToken() {
+  if (!process.env.RILEY_ACCESS_TOKEN && !process.env.RILEY_REFRESH_TOKEN) return null;
+  return {
+    access_token: process.env.RILEY_ACCESS_TOKEN || null,
+    refresh_token: process.env.RILEY_REFRESH_TOKEN || null,
+    expiry_date: Number(process.env.RILEY_TOKEN_EXPIRY || process.env.RILEY_ACCESS_TOKEN_EXPIRY || 0) || null,
+    token_type: 'Bearer',
+  };
+}
+
+async function refreshRileyAccessToken({ client_id, client_secret, refresh_token }) {
+  if (!refresh_token) {
+    throw new Error('RILEY_REFRESH_TOKEN is missing');
+  }
+
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id,
+      client_secret,
+      refresh_token,
+      grant_type: 'refresh_token',
+    }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const details = data.error_description || data.error || res.statusText;
+    throw new Error(`Google token refresh failed: ${details}`);
+  }
+
+  const expiryDate = Date.now() + Number(data.expires_in || 3600) * 1000;
+  process.env.RILEY_ACCESS_TOKEN = data.access_token;
+  process.env.RILEY_TOKEN_EXPIRY = String(expiryDate);
+  return {
+    access_token: data.access_token,
+    refresh_token,
+    expiry_date: expiryDate,
+    token_type: data.token_type || 'Bearer',
+    scope: data.scope,
+  };
+}
+
+async function logTokenRefreshFailed(err) {
+  const message = err?.message || String(err);
+  console.error('[Riley] Gmail token refresh failed:', message);
+  await db.logAgentAction(
+    AGENT_NAME,
+    'token_refresh_failed',
+    null,
+    null,
+    { error: message, client_id: CLIENT_ID },
+    'failed',
+    message
+  ).catch(logErr => console.error('[Riley] Failed to log token_refresh_failed:', logErr.message));
+}
+
+async function ensureFreshRileyToken(token, credentials, options = {}) {
+  if (!tokenExpiresSoon(token)) return token;
+  if (!token?.refresh_token) {
+    await logTokenRefreshFailed(new Error('RILEY_REFRESH_TOKEN is missing'));
+    return null;
+  }
+
+  console.log('[Riley] Gmail access token expired/expiring soon — refreshing before inbox read');
+  try {
+    const refreshed = await refreshRileyAccessToken({
+      client_id: credentials.client_id,
+      client_secret: credentials.client_secret,
+      refresh_token: token.refresh_token,
+    });
+    if (options.persist) persistGmailToken(refreshed);
+    console.log('[Riley] Gmail access token refreshed for this run');
+    return refreshed;
+  } catch (err) {
+    await logTokenRefreshFailed(err);
+    return null;
+  }
+}
+
 function loadOAuthCredentials() {
   const rawCreds = process.env.GMAIL_CREDENTIALS
     || readFileIfPresent(CREDENTIALS_PATH)
@@ -85,8 +173,18 @@ function loadOAuthCredentials() {
 }
 
 async function getAuthClient() {
-  const { client_id, client_secret } = loadOAuthCredentials();
+  const credentials = loadOAuthCredentials();
+  const { client_id, client_secret } = credentials;
   const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, 'http://localhost:3001');
+  const rileyEnvToken = loadRileyEnvToken();
+  if (rileyEnvToken) {
+    const token = await ensureFreshRileyToken(rileyEnvToken, credentials);
+    if (!token) return null;
+    oAuth2Client.setCredentials(token);
+    console.log('[Riley] Auth token: RILEY_ACCESS_TOKEN/RILEY_REFRESH_TOKEN');
+    return oAuth2Client;
+  }
+
   const rawToken = process.env.GMAIL_TOKEN
     || readFileIfPresent(TOKEN_PATH);
 
@@ -103,18 +201,11 @@ async function getAuthClient() {
         persistGmailToken(latestToken);
       });
       oAuth2Client.setCredentials(token);
-      const expiresSoon = token.expiry_date && token.expiry_date <= Date.now() + (5 * 60 * 1000);
-      if (token.refresh_token && expiresSoon) {
-        console.log('[Riley] Gmail access token expiring soon — refreshing before inbox read');
-        const refresh = await oAuth2Client.refreshAccessToken();
-        latestToken = {
-          ...latestToken,
-          ...refresh.credentials,
-          refresh_token: refresh.credentials.refresh_token || latestToken.refresh_token,
-        };
+      if (token.refresh_token && tokenExpiresSoon(token)) {
+        latestToken = await ensureFreshRileyToken(token, credentials, { persist: true });
+        if (!latestToken) return null;
         oAuth2Client.setCredentials(latestToken);
-        persistGmailToken(latestToken);
-      } else {
+      } else if (!token.refresh_token) {
         await oAuth2Client.getAccessToken();
       }
       console.log('[Riley] Auth token: parsed and refreshed');
@@ -123,7 +214,7 @@ async function getAuthClient() {
       const authError = err.response?.data?.error || err.message || '';
       if (!authError.includes('invalid_grant') && !authError.includes('invalid_client')) throw err;
       if (!process.stdin.isTTY) {
-        throw new Error(`Stored GMAIL_TOKEN is invalid or expired (${authError}). Regenerate it with getRileyToken.js and update Railway/local env.`);
+        throw new Error(`Stored GMAIL_TOKEN is invalid or expired (${authError}). Regenerate it with getRileyToken.js and set RILEY_ACCESS_TOKEN/RILEY_REFRESH_TOKEN in Railway/local env.`);
       }
       console.warn('[Riley] Stored token is invalid or expired — falling through to re-auth');
     }
@@ -131,10 +222,10 @@ async function getAuthClient() {
 
   // Path 3: Interactive re-auth (local only — will not work on Railway)
   if (!process.stdin.isTTY) {
-    throw new Error('Missing GMAIL_TOKEN. Regenerate it with getRileyToken.js and update Railway/local env.');
+    throw new Error('Missing Riley Gmail tokens. Regenerate them with getRileyToken.js and set RILEY_ACCESS_TOKEN/RILEY_REFRESH_TOKEN in Railway/local env.');
   }
   console.log('[Riley] Auth path: interactive re-auth');
-  const authUrl = oAuth2Client.generateAuthUrl({ access_type: 'offline', scope: SCOPES });
+  const authUrl = oAuth2Client.generateAuthUrl({ access_type: 'offline', prompt: 'consent', scope: SCOPES });
   console.log('\n🔐 Authorize Riley by visiting this URL:\n');
   console.log(authUrl);
   console.log('\nAfter authorizing, paste the code here:');
@@ -803,6 +894,12 @@ async function run() {
   let gmailFailed = false;
   try {
     auth = await getAuthClient();
+    if (!auth) {
+      gmailFailed = true;
+      console.log('[Riley] Gmail auth unavailable after token refresh failure — exiting triage gracefully.');
+      await processEventNotifications();
+      return;
+    }
     emails = await getUnreadEmails(auth);
   } catch (err) {
     gmailFailed = true;
