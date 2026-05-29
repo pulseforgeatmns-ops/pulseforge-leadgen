@@ -428,9 +428,47 @@ async function getSystemSnapshot() {
     LIMIT 10
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
+  // Email performance rollup (email_performance table — populated by Emmett on
+  // send and the Brevo webhook on open/click/bounce). Three angles for the
+  // weekly digest: best subjects, worst step per vertical, hot verticals.
+  const topSubjects = await pool.query(`
+    SELECT subject_line, sends, opens, open_rate
+    FROM email_performance
+    WHERE client_id = $1 AND sends >= 10 AND COALESCE(subject_line, '') <> ''
+    ORDER BY open_rate DESC, sends DESC
+    LIMIT 3
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+
+  const worstStepsByVertical = await pool.query(`
+    SELECT DISTINCT ON (vertical)
+      vertical, sequence, step, sends, open_rate
+    FROM email_performance
+    WHERE client_id = $1 AND sends > 0 AND COALESCE(vertical, '') <> ''
+    ORDER BY vertical, open_rate ASC, sends DESC
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+
+  const highPerformingVerticals = await pool.query(`
+    SELECT
+      vertical,
+      SUM(sends)::int AS sends,
+      SUM(replies)::int AS replies,
+      ROUND(SUM(replies)::numeric / NULLIF(SUM(sends), 0) * 100, 2) AS reply_rate
+    FROM email_performance
+    WHERE client_id = $1 AND COALESCE(vertical, '') <> ''
+    GROUP BY vertical
+    HAVING SUM(sends) > 0
+      AND (SUM(replies)::numeric / NULLIF(SUM(sends), 0)) * 100 > 2
+    ORDER BY reply_rate DESC
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+
   return {
     prospectStats: prospectStats.rows,
     recentTouchpoints: recentTouchpoints.rows,
+    emailPerformance: {
+      topSubjects: topSubjects.rows,
+      worstStepsByVertical: worstStepsByVertical.rows,
+      highPerformingVerticals: highPerformingVerticals.rows,
+    },
     topICP: topICP.rows,
     heatingUp: heatingUp.rows,
     untouched: untouched.rows,
@@ -665,6 +703,47 @@ function formatScoutExpansionSection(report) {
   return lines.slice(0, 6).join('\n');
 }
 
+// Weekly email performance section appended to the digest. Surfaces the three
+// asks: top subject lines by open rate (min 10 sends), the worst-performing
+// sequence step per vertical, and any vertical replying above 2%.
+function formatEmailPerformanceSection(perf) {
+  if (!perf) return '';
+  const {
+    topSubjects = [],
+    worstStepsByVertical = [],
+    highPerformingVerticals = [],
+  } = perf;
+
+  if (!topSubjects.length && !worstStepsByVertical.length && !highPerformingVerticals.length) {
+    return '';
+  }
+
+  const lines = ['EMAIL PERFORMANCE'];
+
+  if (topSubjects.length) {
+    lines.push('Top subject lines by open rate (min 10 sends):');
+    topSubjects.forEach((s, i) => {
+      lines.push(`  ${i + 1}. "${s.subject_line}" — ${Number(s.open_rate || 0).toFixed(1)}% open (${s.sends} sends)`);
+    });
+  }
+
+  if (worstStepsByVertical.length) {
+    const bits = worstStepsByVertical.map(w =>
+      `${w.vertical} ${w.sequence || '?'}/step ${w.step} (${Number(w.open_rate || 0).toFixed(1)}% open)`
+    );
+    lines.push(`Worst step per vertical: ${bits.join(', ')}.`);
+  }
+
+  if (highPerformingVerticals.length) {
+    const bits = highPerformingVerticals.map(h =>
+      `${h.vertical} (${Number(h.reply_rate || 0).toFixed(1)}% reply)`
+    );
+    lines.push(`High-performing verticals (reply >2%): ${bits.join(', ')}.`);
+  }
+
+  return lines.join('\n');
+}
+
 async function sendDigest(digestText, snapshot, expansionReport) {
   // Refuse to ship an empty or non-string digest — better to skip the email
   // and surface the failure than to send "null" / "undefined" to the client.
@@ -678,18 +757,23 @@ async function sendDigest(digestText, snapshot, expansionReport) {
     ? `\n${'─'.repeat(50)}\n${scoutExpansionBlock}\n`
     : '';
 
+  const emailPerfBlock = formatEmailPerformanceSection(snapshot?.emailPerformance);
+  const emailPerfSection = emailPerfBlock
+    ? `\n${'─'.repeat(50)}\n${emailPerfBlock}\n`
+    : '';
+
   const toEmail = CLIENT_CONFIG?.max_email || 'jacob@gopulseforge.com';
   const toName = CLIENT_ID === 2 ? 'Brad & Dustin' : 'Jake Maynard';
   const subject = `${CLIENT_ID === 2 ? 'MSHI' : 'Pulseforge'} Daily Digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
 
   const body = CLIENT_ID === 2 ? `${digestText}
-${scoutExpansionSection}
+${scoutExpansionSection}${emailPerfSection}
 Pulseforge · gopulseforge.com` : `PULSEFORGE DAILY DIGEST
 ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 ${'─'.repeat(50)}
 
 ${digestText}
-${scoutExpansionSection}
+${scoutExpansionSection}${emailPerfSection}
 ${'─'.repeat(50)}
 Pulseforge · gopulseforge.com
 To adjust digest frequency reply to this email.`;

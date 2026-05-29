@@ -28,6 +28,7 @@ An AI-powered lead generation and outreach CRM for Pulseforge. It scrapes leads,
 | `utils/blogPublisher.js` | GitHub-based blog post publisher. |
 | `utils/clientContext.js` | `getClientConfig(clientId)` loads full client config from `clients`; also owns idempotent client architecture migration/backfill helpers. Called by agents/routes to scope behavior and queries. |
 | `utils/closerSchema.js` | Idempotent closer-role migration helper: users role constraint, prospect closer fields, and `commissions` table. |
+| `utils/emailPerformance.js` | Email performance tracking. `ensureEmailPerformanceTable()` startup migration + `recordSend` / `recordEvent` upserts keyed on client_id/vertical/sequence/step/subject_line. Emmett calls `recordSend` after each send; `routes/webhooks.js` calls `recordEvent` on open/click/bounce. Powers Max's weekly EMAIL PERFORMANCE digest section. |
 
 ---
 
@@ -118,6 +119,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 | `agent_actions` | Actionable items deposited by agents for dashboard review: id, created_by, action_type, title, description, payload, status, executed_at, result, created_at, `client_id` — used by Max and Riley |
 | `pending_comments` | Content queued for human approval before publish: post_content, comment, post_url, channel, status, `client_id` |
 | `post_analytics` | Published post performance: platform, post_id, impressions, clicks, etc., `client_id` |
+| `email_performance` | Email outreach performance per subject line / sequence step / vertical: sends, opens, clicks, replies, bounces, open_rate, reply_rate, `client_id`. Upserted by `utils/emailPerformance.js` (Emmett on send, Brevo webhook on event). |
 | `commissions` | Closer commission records: closer_id, prospect_id, mrr_amount, commission_rate (0.15 default), commission_amt (generated), status, closed_at, paid_at, `client_id` |
 | `prospect_summary` | View that joins prospects + companies for agent reads |
 | `session` | connect-pg-simple session store |

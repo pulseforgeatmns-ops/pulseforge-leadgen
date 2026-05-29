@@ -3,6 +3,7 @@ const axios = require('axios');
 const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { recalculateICP } = require('./utils/icpScoring');
+const { recordSend } = require('./utils/emailPerformance');
 
 const AGENT_NAME = 'emmett';
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
@@ -1305,6 +1306,14 @@ async function run(context = {}) {
            WHERE id = $1 AND client_id = $2 AND status = 'cold'`,
           [prospect.id, CLIENT_ID]
         );
+      }
+      // Track send for subject/sequence/step/vertical performance reporting.
+      // Uses the same sequence/step/subject/vertical recorded in agent_log so
+      // the webhook's recordEvent can roll opens/clicks/bounces into this row.
+      try {
+        await recordSend(CLIENT_ID, prospect.vertical, sequenceName, step.day, subject);
+      } catch (perfErr) {
+        console.error('[Emmett] recordSend failed:', perfErr.message);
       }
       verticalCounts[vertical]++;
       sent++;

@@ -8,6 +8,56 @@ const {
   qualifyingOpenSignal,
   recalcICPAfterEmailEvent,
 } = require('../rileyAgent');
+const { recordEvent } = require('../utils/emailPerformance');
+
+// Map a tracked email action_type to the email_performance event verb.
+const PERF_EVENT_MAP = {
+  email_opened: 'open',
+  email_clicked: 'click',
+  email_bounced: 'bounce',
+  email_soft_bounce: 'bounce',
+};
+
+// Roll an email engagement event into email_performance, pulling the
+// vertical / sequence / step that Emmett recorded for this send from agent_log.
+// Matches on the Brevo message_id when available, falling back to the
+// prospect's most recent send. Best-effort — never throws into the webhook.
+async function recordPerformanceEvent(prospect, actionType, messageId) {
+  const perfEvent = PERF_EVENT_MAP[actionType];
+  if (!perfEvent) return;
+  try {
+    const params = [prospect.id, prospect.client_id];
+    let sql = `
+      SELECT payload FROM agent_log
+      WHERE agent_name = 'emmett' AND action = 'email_sent'
+        AND prospect_id = $1 AND client_id = $2`;
+    if (messageId) {
+      sql += ` AND payload->>'message_id' = $3`;
+      params.push(messageId);
+    }
+    sql += ` ORDER BY ran_at DESC LIMIT 1`;
+
+    let logRes = await pool.query(sql, params);
+    if (!logRes.rows.length && messageId) {
+      logRes = await pool.query(`
+        SELECT payload FROM agent_log
+        WHERE agent_name = 'emmett' AND action = 'email_sent'
+          AND prospect_id = $1 AND client_id = $2
+        ORDER BY ran_at DESC LIMIT 1
+      `, [prospect.id, prospect.client_id]);
+    }
+
+    const raw = logRes.rows[0]?.payload;
+    const sendPayload = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
+    const vertical = sendPayload.vertical ?? prospect.vertical ?? '';
+    const sequence = sendPayload.sequence ?? '';
+    const step = sendPayload.step ?? 0;
+
+    await recordEvent(prospect.client_id, vertical, sequence, step, perfEvent);
+  } catch (err) {
+    console.error('[Riley] recordPerformanceEvent error:', err.message);
+  }
+}
 
 const BREVO_EVENT_MAP = {
   opened:           'email_opened',
@@ -229,6 +279,9 @@ router.post('/webhooks/brevo', (req, res) => {
       if (['email_opened', 'email_clicked', 'email_bounced', 'email_unsubscribed', 'email_spam'].includes(actionType)) {
         await recalcICPAfterEmailEvent(prospect.id, prospect.client_id, actionType);
       }
+
+      // Roll opens / clicks / bounces into the email_performance table.
+      await recordPerformanceEvent(prospect, actionType, payload.messageId);
 
       await pool.query(`
         INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)

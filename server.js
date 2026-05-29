@@ -32,6 +32,7 @@ const { ensureClientArchitecture } = require('./utils/clientContext');
 const { ensureCloserSchema } = require('./utils/closerSchema');
 const { ensureScoutExpansionTables } = require('./scoutExpansion');
 const { ensureIcpScoreHistoryTable } = require('./utils/icpScoring');
+const { ensureEmailPerformanceTable } = require('./utils/emailPerformance');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -41,6 +42,7 @@ ensureClientArchitecture().catch(err => console.error('[clients] init error:', e
 ensureCloserSchema().catch(err => console.error('[closer] init error:', err.message));
 ensureScoutExpansionTables().catch(err => console.error('[scoutExpansion] init error:', err.message));
 ensureIcpScoreHistoryTable().catch(err => console.error('[icpScoring] init error:', err.message));
+ensureEmailPerformanceTable().catch(err => console.error('[emailPerformance] init error:', err.message));
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),
