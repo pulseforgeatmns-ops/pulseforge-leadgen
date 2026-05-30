@@ -862,6 +862,29 @@ To adjust digest frequency reply to this email.`;
 // per-client digest processing. Best-effort — callers wrap this so a failure
 // never blocks the client-facing digests.
 async function sendInternalOpsDigest() {
+  // run() is invoked once per client (the module is reloaded per CLIENT_ID),
+  // but this digest is cross-client and should go out at most once per day.
+  // Claim the day's slot up front with an agent_log marker; if a row for today
+  // already exists, another run already sent it — skip.
+  const claim = await pool.query(`
+    INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+    SELECT $1, 'ops_digest_sent', $2, 'success', NOW(), $3
+    WHERE NOT EXISTS (
+      SELECT 1 FROM agent_log
+      WHERE agent_name = $1 AND action = 'ops_digest_sent'
+        AND DATE(ran_at) = CURRENT_DATE
+    )
+    RETURNING id
+  `, [AGENT_NAME, JSON.stringify({ client_id: CLIENT_ID }), CLIENT_ID]).catch(err => {
+    console.warn('[Max] ops digest dedupe claim failed:', err.message);
+    return { rows: [] };
+  });
+
+  if (!claim.rows.length) {
+    console.log('[Max] ops digest already sent today — skipping.');
+    return false;
+  }
+
   // PER-CLIENT ROLLUP — pull each metric grouped by client_id in one pass so
   // we do not fan out a query per client.
   const clients = await getActiveClients();
@@ -976,6 +999,9 @@ Pulseforge · internal ops`;
     return true;
   } catch (err) {
     console.error('Failed to send ops digest:', err.response?.data || err.message);
+    // Release the day's slot so a later run can retry — a failed send should
+    // not permanently consume today's dedupe marker.
+    await pool.query('DELETE FROM agent_log WHERE id = $1', [claim.rows[0].id]).catch(() => {});
     return false;
   }
 }
