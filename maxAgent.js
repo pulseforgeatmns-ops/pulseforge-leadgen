@@ -2,7 +2,7 @@ require('dotenv').config();
 const pool = require('./db');
 const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
-const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { getClientConfig, getRuntimeClientId, getActiveClients } = require('./utils/clientContext');
 const { getExpansionReport } = require('./scoutExpansion');
 
 const client = new Anthropic();
@@ -851,6 +851,131 @@ To adjust digest frequency reply to this email.`;
     return true;
   } catch (err) {
     console.error('Failed to send digest:', err.response?.data || err.message);
+    return false;
+  }
+}
+
+// Internal ops digest — a single cross-client operations summary sent to the
+// Pulseforge team (not to any individual client). Combines a per-client rollup
+// (emails sent/failed today, warm count, pending actions) with the latest
+// system health snapshot from monitor_state. Sent once per run, after all
+// per-client digest processing. Best-effort — callers wrap this so a failure
+// never blocks the client-facing digests.
+async function sendInternalOpsDigest() {
+  // PER-CLIENT ROLLUP — pull each metric grouped by client_id in one pass so
+  // we do not fan out a query per client.
+  const clients = await getActiveClients();
+
+  const emailsSent = await pool.query(`
+    SELECT client_id, COUNT(*)::int AS count
+    FROM agent_log
+    WHERE action = 'email_sent' AND DATE(ran_at) = CURRENT_DATE
+    GROUP BY client_id
+  `).catch(() => ({ rows: [] }));
+
+  const emailsFailed = await pool.query(`
+    SELECT client_id, COUNT(*)::int AS count
+    FROM agent_log
+    WHERE action = 'email_failed' AND DATE(ran_at) = CURRENT_DATE
+    GROUP BY client_id
+  `).catch(() => ({ rows: [] }));
+
+  const warmProspects = await pool.query(`
+    SELECT client_id, COUNT(*)::int AS count
+    FROM prospects
+    WHERE status = 'warm'
+    GROUP BY client_id
+  `).catch(() => ({ rows: [] }));
+
+  const pendingActions = await pool.query(`
+    SELECT client_id, COUNT(*)::int AS count
+    FROM agent_actions
+    WHERE status = 'pending'
+    GROUP BY client_id
+  `).catch(() => ({ rows: [] }));
+
+  const sentByClient    = new Map(emailsSent.rows.map(r => [Number(r.client_id), r.count]));
+  const failedByClient  = new Map(emailsFailed.rows.map(r => [Number(r.client_id), r.count]));
+  const warmByClient    = new Map(warmProspects.rows.map(r => [Number(r.client_id), r.count]));
+  const pendingByClient = new Map(pendingActions.rows.map(r => [Number(r.client_id), r.count]));
+
+  const rollupLines = clients.map(c => {
+    const id = Number(c.id);
+    return [
+      `${c.name} (client_id=${id})`,
+      `  Emails sent today: ${sentByClient.get(id) || 0}`,
+      `  Emails failed today: ${failedByClient.get(id) || 0}`,
+      `  Warm prospects: ${warmByClient.get(id) || 0}`,
+      `  Pending agent actions: ${pendingByClient.get(id) || 0}`,
+    ].join('\n');
+  });
+
+  const rollupSection = rollupLines.length
+    ? rollupLines.join('\n\n')
+    : 'No active clients to report.';
+
+  // SYSTEM HEALTH — latest monitor_state snapshot. monitor_state is owned by
+  // the external pulse-health process; SELECT * so an unexpected column name
+  // for the digest text does not break the query.
+  let healthSection = 'No health snapshot yet — run pulse-health.';
+  let alertLevel = null;
+  let checkedAt = null;
+  const health = await pool.query(`
+    SELECT * FROM monitor_state ORDER BY checked_at DESC LIMIT 1
+  `).catch(() => ({ rows: [] }));
+
+  if (health.rows.length) {
+    const row = health.rows[0];
+    alertLevel = row.alert_level || null;
+    checkedAt = row.checked_at || null;
+    const digestText = row.digest ?? row.digest_text ?? row.summary ?? row.state ?? '';
+    healthSection = [
+      `Alert level: ${alertLevel || 'unknown'}`,
+      `Checked at: ${checkedAt ? new Date(checkedAt).toISOString() : 'unknown'}`,
+      '',
+      String(digestText || '').trim() || '(no digest text)',
+    ].join('\n');
+  }
+
+  // Subject — prepend an urgency tag based on the latest alert level.
+  const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  let subject = `Pulseforge Ops — ${today}`;
+  if (alertLevel === 'critical') subject = `[ACTION REQUIRED] ${subject}`;
+  else if (alertLevel === 'warn') subject = `[HEADS UP] ${subject}`;
+
+  const body = `PULSEFORGE INTERNAL OPS DIGEST
+${today}
+${'─'.repeat(50)}
+
+PER-CLIENT ROLLUP
+
+${rollupSection}
+
+${'─'.repeat(50)}
+SYSTEM HEALTH
+
+${healthSection}
+
+${'─'.repeat(50)}
+Pulseforge · internal ops`;
+
+  try {
+    const response = await axios.post('https://api.brevo.com/v3/smtp/email', {
+      sender: { name: 'Max — Pulseforge', email: 'jacob@mail.gopulseforge.com' },
+      to: [{ email: 'jacob@gopulseforge.com' }],
+      subject,
+      textContent: body
+    }, {
+      headers: {
+        'api-key': process.env.BREVO_API_KEY,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    console.log('Ops digest sent — Message ID:', response.data.messageId);
+    return true;
+  } catch (err) {
+    console.error('Failed to send ops digest:', err.response?.data || err.message);
     return false;
   }
 }
@@ -2142,6 +2267,16 @@ async function run(args = {}) {
 
     console.log('Running autonomous triggers...');
     await runAutonomousTriggers();
+
+    // Internal cross-client ops digest. Wrapped so a failure here never blocks
+    // the per-client digests that already ran above.
+    try {
+      console.log('Sending internal ops digest...');
+      await sendInternalOpsDigest();
+    } catch (err) {
+      console.error('[Max] internal ops digest failed:', err.message);
+      result.errors.push({ step: 'internal_ops_digest', message: err.message });
+    }
 
     console.log('\nMax complete.');
   } catch (err) {
