@@ -27,6 +27,12 @@ const CLIENT_COLUMNS = [
   ['lead_with', 'text'],
   ['never_say', 'text'],
   ['sender_name', 'text'],
+  ['sender_email', 'text'],
+  ['smtp_host', 'text'],
+  ['smtp_port', 'integer default 587'],
+  ['smtp_user', 'text'],
+  ['smtp_pass', 'text'],
+  ['sending_domain', 'text'],
   ['email_sequence', 'text'],
   ['vera_signoff', 'text'],
   ['vera_negative', 'text'],
@@ -206,6 +212,28 @@ async function ensureClientArchitecture() {
     VALUES ('McLeod Legal Services', 'mcleod', 'ashley@mcleodlegal.com',
             'Manchester', 'NH', false)
     ON CONFLICT (slug) DO NOTHING
+  `);
+
+  await pool.query(`
+    UPDATE clients SET
+      sender_email = 'jacob@mail.gopulseforge.com',
+      sender_name = 'Jacob Maynard',
+      sending_domain = 'mail.gopulseforge.com'
+    WHERE id = 1
+  `);
+  await pool.query(`
+    UPDATE clients SET
+      sender_email = 'brad@mail.mshomeinnovations.com',
+      sender_name = 'Brad Hudson',
+      sending_domain = 'mail.mshomeinnovations.com'
+    WHERE id = 2
+  `);
+  await pool.query(`
+    UPDATE clients SET
+      sender_email = 'outreach@mail.gopulseforge.com',
+      sender_name = 'Jacob Maynard',
+      sending_domain = 'mail.gopulseforge.com'
+    WHERE id = 5
   `);
 
   for (const table of CLIENT_SCOPED_TABLES) {

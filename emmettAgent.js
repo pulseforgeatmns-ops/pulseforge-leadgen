@@ -1,16 +1,16 @@
 require('dotenv').config();
-const axios = require('axios');
+const nodemailer = require('nodemailer');
 const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { recalculateICP } = require('./utils/icpScoring');
 const { recordSend } = require('./utils/emailPerformance');
 
 const AGENT_NAME = 'emmett';
-const BREVO_API_KEY = process.env.BREVO_API_KEY;
 let FROM_EMAIL = 'jacob@gopulseforge.com';
 let FROM_NAME = 'Jacob Maynard';
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
+let MAIL_TRANSPORTER = null;
 
 const clientConfig = {
   1: { dailyCap: 100, verticalCap: 15 },
@@ -750,25 +750,57 @@ function fillTemplate(template, prospect) {
     .replace(/{{business_name}}/g, businessName);
 }
 
+function getDefaultSmtpConfig() {
+  return {
+    host: process.env.BREVO_SMTP_HOST || process.env.SMTP_HOST || 'smtp-relay.brevo.com',
+    port: Number(process.env.BREVO_SMTP_PORT || process.env.SMTP_PORT || 587),
+    user: process.env.BREVO_SMTP_USER || process.env.BREVO_SMTP_LOGIN || process.env.SMTP_USER,
+    pass: process.env.BREVO_SMTP_PASS || process.env.BREVO_SMTP_PASSWORD || process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.BREVO_API_KEY,
+  };
+}
+
+function getClientSmtpConfig() {
+  if (CLIENT_CONFIG?.smtp_host && CLIENT_CONFIG?.smtp_user && CLIENT_CONFIG?.smtp_pass) {
+    return {
+      host: CLIENT_CONFIG.smtp_host,
+      port: Number(CLIENT_CONFIG.smtp_port || 587),
+      user: CLIENT_CONFIG.smtp_user,
+      pass: CLIENT_CONFIG.smtp_pass,
+    };
+  }
+  return getDefaultSmtpConfig();
+}
+
+function createMailTransporter() {
+  const smtpConfig = getClientSmtpConfig();
+  if (!smtpConfig.host || !smtpConfig.user || !smtpConfig.pass) {
+    throw new Error('SMTP credentials missing: configure client smtp_host/smtp_user/smtp_pass or default SMTP env vars');
+  }
+  return nodemailer.createTransport({
+    host: smtpConfig.host,
+    port: smtpConfig.port,
+    secure: smtpConfig.port === 465,
+    auth: {
+      user: smtpConfig.user,
+      pass: smtpConfig.pass,
+    },
+  });
+}
+
 async function sendEmail(toEmail, toName, subject, body, tags) {
   try {
-    const payload = {
-      sender: { name: FROM_NAME, email: FROM_EMAIL },
-      to: [{ email: toEmail, name: toName }],
+    if (!MAIL_TRANSPORTER) MAIL_TRANSPORTER = createMailTransporter();
+    const info = await MAIL_TRANSPORTER.sendMail({
+      from: { name: FROM_NAME, address: FROM_EMAIL },
+      to: [{ name: toName, address: toEmail }],
       subject,
-      htmlContent: '<html><body style="font-family:Georgia,serif;font-size:16px;line-height:1.6;color:#1a1a1a;max-width:560px;margin:0 auto;padding:20px;">' + body.replace(/\n/g, '<br>') + '</body></html>',
-      textContent: body
-    };
-    if (Array.isArray(tags) && tags.length) payload.tags = tags;
-    const response = await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
-      headers: {
-        'api-key': BREVO_API_KEY,
-        'Content-Type': 'application/json'
-      }
+      html: '<html><body style="font-family:Georgia,serif;font-size:16px;line-height:1.6;color:#1a1a1a;max-width:560px;margin:0 auto;padding:20px;">' + body.replace(/\n/g, '<br>') + '</body></html>',
+      text: body,
+      headers: Array.isArray(tags) && tags.length ? { 'X-Mailin-Tag': tags.join(',') } : undefined,
     });
 
-    console.log(`Email sent to ${toEmail} — Message ID: ${response.data.messageId}`);
-    return { success: true, messageId: response.data.messageId };
+    console.log(`Email sent to ${toEmail} — Message ID: ${info.messageId}`);
+    return { success: true, messageId: info.messageId };
   } catch (err) {
     const errorDetail = err.response?.data || err.message;
     console.error(`Failed to send to ${toEmail}:`, errorDetail);
@@ -1181,8 +1213,10 @@ async function run(context = {}) {
   console.log('\nEmmett agent running...\n');
   CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
   if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
-  FROM_NAME = CLIENT_CONFIG.sender_name || FROM_NAME;
-  FROM_EMAIL = CLIENT_CONFIG.sender_email || FROM_EMAIL;
+  FROM_EMAIL = CLIENT_CONFIG.sender_email || 'jacob@gopulseforge.com';
+  FROM_NAME = CLIENT_CONFIG.sender_name || 'Jacob Maynard';
+  MAIL_TRANSPORTER = createMailTransporter();
+  console.log(`Sending as: ${FROM_NAME} <${FROM_EMAIL}>`);
 
   const sendConfig = await getEffectiveSendConfig(getEmmettClientConfig(CLIENT_ID));
   const alreadySentToday = await getEmailsSentToday();
@@ -1280,6 +1314,8 @@ async function run(context = {}) {
       subject,
       client_id: CLIENT_ID,
       email: prospect.email,
+      from_email: FROM_EMAIL,
+      from_name: FROM_NAME,
     };
     const sendLogId = await createEmailSendLog(prospect, logPayload);
     const result = await sendEmail(
