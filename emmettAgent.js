@@ -7,7 +7,7 @@ const { recordSend } = require('./utils/emailPerformance');
 
 const AGENT_NAME = 'emmett';
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
-const FROM_EMAIL = 'jacob@gopulseforge.com';
+let FROM_EMAIL = 'jacob@gopulseforge.com';
 let FROM_NAME = 'Jacob Maynard';
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
@@ -1182,6 +1182,7 @@ async function run(context = {}) {
   CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
   if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
   FROM_NAME = CLIENT_CONFIG.sender_name || FROM_NAME;
+  FROM_EMAIL = CLIENT_CONFIG.sender_email || FROM_EMAIL;
 
   const sendConfig = await getEffectiveSendConfig(getEmmettClientConfig(CLIENT_ID));
   const alreadySentToday = await getEmailsSentToday();
