@@ -18,6 +18,8 @@ const pool = require('./db');
 const { appendQualifiedScoutLead } = require('./utils/setterSheet');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { recordScoutBaseline } = require('./utils/icpScoring');
+const { validateEmail } = require('./utils/emailValidation');
+const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -957,10 +959,57 @@ function emailRejection(email) {
   return null;
 }
 
+async function resolveEmailVerification(email, lead) {
+  const sources = Array.isArray(lead.source) ? lead.source : [];
+  const fromProspeo = sources.includes('prospeo');
+  const fromScraped = sources.includes('scraped');
+
+  if (fromProspeo) {
+    return {
+      emailVerified: true,
+      emailVerificationMethod: 'prospeo',
+      verifiedAt: new Date(),
+      doNotContact: false,
+      reject: false,
+    };
+  }
+
+  const validation = await validateEmail(email);
+  if (!validation.valid) {
+    return {
+      emailVerified: false,
+      emailVerificationMethod: validation.reason,
+      verifiedAt: null,
+      doNotContact: validation.reason === 'no_mx_record',
+      reject: validation.reason === 'no_mx_record',
+      rejectReason: validation.reason,
+    };
+  }
+
+  if (validation.isRole && fromScraped) {
+    return {
+      emailVerified: false,
+      emailVerificationMethod: 'mx_lookup_role',
+      verifiedAt: new Date(),
+      doNotContact: false,
+      reject: false,
+    };
+  }
+
+  return {
+    emailVerified: true,
+    emailVerificationMethod: 'mx_lookup',
+    verifiedAt: new Date(),
+    doNotContact: false,
+    reject: false,
+  };
+}
+
 async function saveToDatabase(leads) {
   let saved = 0, skipped = 0, rejected = 0, setterQueued = 0, setterSkipped = 0, setterFailed = 0;
   await ensureSetterQueueColumns(pool);
   await ensureCompanyColumns(pool);
+  await ensureEmailVerificationColumns();
   for (const lead of leads) {
     const companyName = lead.company.replace(/^CONTACT:\s*/i, '').trim();
 
@@ -1004,13 +1053,31 @@ async function saveToDatabase(leads) {
     try {
       const JUNK_EMAILS = ['user@domain.com', 'info@example.com', 'test@test.com', 'admin@domain.com'];
       let email = null;
+      let emailVerified = false;
+      let emailVerificationMethod = null;
+      let verifiedAt = null;
+      let doNotContact = false;
       const rawEmail = typeof lead.email === 'string' ? lead.email.trim() : '';
-      if (rawEmail) {
+      if (rawEmail && rawEmail !== '—') {
         const reason = emailRejection(rawEmail) || (JUNK_EMAILS.includes(rawEmail.toLowerCase()) ? 'junk address' : null);
         if (reason) {
           await logScoutRun('skipped', { email: lead.email, reason }, 'email_rejected');
         } else {
+          const verification = await resolveEmailVerification(rawEmail, lead);
+          if (verification.reject) {
+            await logScoutRun('skipped', {
+              email: rawEmail,
+              reason: verification.rejectReason || 'no_mx_record',
+              company: companyName,
+            }, 'email_rejected');
+            rejected++;
+            continue;
+          }
           email = rawEmail;
+          emailVerified = verification.emailVerified;
+          emailVerificationMethod = verification.emailVerificationMethod;
+          verifiedAt = verification.verifiedAt;
+          doNotContact = verification.doNotContact;
         }
       }
       const nameParts = (lead.contact && lead.contact !== '—' ? lead.contact : '').trim().split(/\s+/).filter(Boolean);
@@ -1038,8 +1105,14 @@ async function saveToDatabase(leads) {
       const companyId = await findOrCreateCompany({ name: companyName, domain, lead });
       if (!companyId) throw new Error(`Unable to link company for ${companyName}`);
       const insert = await pool.query(
-      'INSERT INTO prospects (company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical, client_id, service_area_match, discovery_method, has_website, google_review_count, google_rating, has_facebook, has_instagram, facebook_url, instagram_url, website_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) ON CONFLICT (email) DO NOTHING RETURNING id',
-      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, null, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, websiteUrl]
+      `INSERT INTO prospects (
+        company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical,
+        client_id, service_area_match, discovery_method, has_website, google_review_count, google_rating,
+        has_facebook, has_instagram, facebook_url, instagram_url, website_url,
+        email_verified, email_verification_method, verified_at, do_not_contact
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+      ON CONFLICT (email) DO NOTHING RETURNING id`,
+      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, null, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, websiteUrl, emailVerified, emailVerificationMethod, verifiedAt, doNotContact]
     );
       if (!insert.rows.length) {
         skipped++;

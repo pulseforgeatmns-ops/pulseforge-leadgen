@@ -1284,6 +1284,19 @@ async function run(context = {}) {
       continue;
     }
 
+    if (prospect.email_verified === false) {
+      console.log(`Skipping ${prospect.email} — email not verified`);
+      await db.logAgentAction(
+        AGENT_NAME,
+        'email_skipped',
+        prospect.id,
+        null,
+        { reason: 'unverified', prospect_id: prospect.id, client_id: prospect.client_id },
+        'success'
+      );
+      continue;
+    }
+
     let step;
     try {
       step = await getNextSequenceStep(prospect);

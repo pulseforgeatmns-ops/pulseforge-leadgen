@@ -506,6 +506,73 @@ async function getSystemSnapshot() {
     ORDER BY reply_rate DESC
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
+  const emailVerificationStats = await pool.query(`
+    SELECT
+      CASE
+        WHEN email_verified IS TRUE THEN 'verified'
+        WHEN email_verified IS FALSE THEN 'unverified'
+        ELSE 'unchecked'
+      END AS status,
+      COUNT(*)::int AS count
+    FROM prospects
+    WHERE client_id = $1
+      AND email IS NOT NULL
+      AND TRIM(email) <> ''
+    GROUP BY 1
+    ORDER BY count DESC
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+
+  const bounceRateByVerificationMethod = await pool.query(`
+    SELECT
+      COALESCE(p.email_verification_method, 'unknown') AS method,
+      COUNT(DISTINCT p.id)::int AS prospects,
+      COUNT(DISTINCT p.id) FILTER (
+        WHERE EXISTS (
+          SELECT 1 FROM touchpoints t
+          WHERE t.prospect_id = p.id
+            AND t.client_id = p.client_id
+            AND t.channel = 'email'
+            AND t.action_type IN ('email_bounced', 'bounce')
+        )
+      )::int AS bounced,
+      COALESCE(ROUND(
+        COUNT(DISTINCT p.id) FILTER (
+          WHERE EXISTS (
+            SELECT 1 FROM touchpoints t
+            WHERE t.prospect_id = p.id
+              AND t.client_id = p.client_id
+              AND t.channel = 'email'
+              AND t.action_type IN ('email_bounced', 'bounce')
+          )
+        )::numeric / NULLIF(COUNT(DISTINCT p.id), 0) * 100,
+        1
+      ), 0) AS bounce_rate_pct
+    FROM prospects p
+    WHERE p.client_id = $1
+      AND p.email IS NOT NULL
+      AND TRIM(p.email) <> ''
+    GROUP BY 1
+    HAVING COUNT(DISTINCT p.id) >= 5
+    ORDER BY bounce_rate_pct DESC, prospects DESC
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+
+  const topRejectedDomains = await pool.query(`
+    SELECT
+      LOWER(SPLIT_PART(al.payload->>'email', '@', 2)) AS domain,
+      COUNT(*)::int AS rejected_count
+    FROM agent_log al
+    WHERE al.agent_name = 'scout'
+      AND al.action = 'email_rejected'
+      AND al.client_id = $1
+      AND al.ran_at >= NOW() - INTERVAL '30 days'
+      AND COALESCE(al.payload->>'reason', '') IN ('no_mx_record', 'invalid_format')
+      AND COALESCE(al.payload->>'email', '') LIKE '%@%'
+    GROUP BY 1
+    HAVING LOWER(SPLIT_PART(al.payload->>'email', '@', 2)) <> ''
+    ORDER BY rejected_count DESC
+    LIMIT 5
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+
   return {
     prospectStats: prospectStats.rows,
     recentTouchpoints: recentTouchpoints.rows,
@@ -513,6 +580,11 @@ async function getSystemSnapshot() {
       topSubjects: topSubjects.rows,
       worstStepsByVertical: worstStepsByVertical.rows,
       highPerformingVerticals: highPerformingVerticals.rows,
+    },
+    emailVerification: {
+      byStatus: emailVerificationStats.rows,
+      bounceRateByMethod: bounceRateByVerificationMethod.rows,
+      topRejectedDomains: topRejectedDomains.rows,
     },
     topICP: topICP.rows,
     heatingUp: heatingUp.rows,
@@ -800,6 +872,36 @@ function formatEmailPerformanceSection(perf) {
   return lines.join('\n');
 }
 
+function formatEmailVerificationSection(verification) {
+  if (!verification) return '';
+  const { byStatus = [], bounceRateByMethod = [], topRejectedDomains = [] } = verification;
+
+  if (!byStatus.length && !bounceRateByMethod.length && !topRejectedDomains.length) {
+    return '';
+  }
+
+  const lines = ['EMAIL VERIFICATION'];
+
+  if (byStatus.length) {
+    const bits = byStatus.map(s => `${s.status}: ${s.count}`);
+    lines.push(`Prospects by verification status: ${bits.join(', ')}.`);
+  }
+
+  if (bounceRateByMethod.length) {
+    const bits = bounceRateByMethod.map(r =>
+      `${r.method} (${Number(r.bounce_rate_pct || 0).toFixed(1)}% bounce, n=${r.prospects})`
+    );
+    lines.push(`Bounce rate by verification method: ${bits.join('; ')}.`);
+  }
+
+  if (topRejectedDomains.length) {
+    const bits = topRejectedDomains.map(d => `${d.domain} (${d.rejected_count})`);
+    lines.push(`Top rejected domains (30d, no MX): ${bits.join(', ')}.`);
+  }
+
+  return lines.join('\n');
+}
+
 async function sendDigest(digestText, snapshot, expansionReport) {
   // Refuse to ship an empty or non-string digest — better to skip the email
   // and surface the failure than to send "null" / "undefined" to the client.
@@ -818,18 +920,23 @@ async function sendDigest(digestText, snapshot, expansionReport) {
     ? `\n${'─'.repeat(50)}\n${emailPerfBlock}\n`
     : '';
 
+  const emailVerificationBlock = formatEmailVerificationSection(snapshot?.emailVerification);
+  const emailVerificationSection = emailVerificationBlock
+    ? `\n${'─'.repeat(50)}\n${emailVerificationBlock}\n`
+    : '';
+
   const toEmail = CLIENT_CONFIG?.max_email || 'jacob@gopulseforge.com';
   const toName = CLIENT_ID === 2 ? 'Brad & Dustin' : 'Jake Maynard';
   const subject = `${CLIENT_ID === 2 ? 'MSHI' : 'Pulseforge'} Daily Digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
 
   const body = CLIENT_ID === 2 ? `${digestText}
-${scoutExpansionSection}${emailPerfSection}
+${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}
 Pulseforge · gopulseforge.com` : `PULSEFORGE DAILY DIGEST
 ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 ${'─'.repeat(50)}
 
 ${digestText}
-${scoutExpansionSection}${emailPerfSection}
+${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}
 ${'─'.repeat(50)}
 Pulseforge · gopulseforge.com
 To adjust digest frequency reply to this email.`;
