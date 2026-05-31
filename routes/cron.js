@@ -185,6 +185,7 @@ async function handlePulseHealthCron(req, res) {
         SELECT id, agent_name, action, payload, status, error_msg, ran_at, client_id
         FROM agent_log
         WHERE payload ? 'error'
+          AND action != 'email_sent'
           AND ran_at >= NOW() - INTERVAL '24 hours'
         ORDER BY ran_at DESC
         LIMIT 15
@@ -213,6 +214,10 @@ async function handlePulseHealthCron(req, res) {
       max_tokens: 500,
       system: `You are the Pulseforge health monitor. Terse, signal-dense, no preamble.
 Report to Jacob who wants the truth and one action item — not reassurance.
+Historical context: email failures are logged with action='email_failed'.
+If you see Connection timeouts only in rows where action='email_sent',
+those are pre-fix stale data and must NOT be flagged as current failures.
+Only count action='email_failed' rows as real failures.
 Classify alert_level as: critical (zero sends in window, or any
 Connection timeout), warn (failure spike, vertical drift, cap near 40),
 or ok.
