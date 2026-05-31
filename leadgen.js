@@ -332,9 +332,9 @@ function socialKey(name) {
 // STEP 2: Prospeo Domain Search
 // Docs: https://prospeo.io/api
 // Takes a domain → returns contacts with name, title, email
-// Starter plan search endpoints: 1 req/sec — throttle to ~0.9/sec + backoff on 429
+// Starter plan search endpoints: 30 req/min — throttle to ~28/min + backoff on 429
 // ─────────────────────────────────────────────────────────────────────
-const PROSPEO_THROTTLE_MS = 1100;
+const PROSPEO_THROTTLE_MS = 2100;
 const PROSPEO_RATE_LIMIT_BACKOFF_MS = [1000, 2000, 4000];
 
 function isProspeoRateLimited(err) {
