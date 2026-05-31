@@ -331,50 +331,102 @@ function socialKey(name) {
 // STEP 2: Prospeo Domain Search
 // Docs: https://prospeo.io/api
 // Takes a domain → returns contacts with name, title, email
-// Free tier: 50 searches/mo
+// Starter plan: 5 req/sec — throttle to ~4/sec with 250ms spacing + backoff on 429
 // ─────────────────────────────────────────────────────────────────────
+const PROSPEO_THROTTLE_MS = 250;
+const PROSPEO_RATE_LIMIT_BACKOFF_MS = [1000, 2000, 4000];
+
+function isProspeoRateLimited(err) {
+  if (err?.response?.status === 429) return true;
+  const body = err?.response?.data;
+  const text = typeof body === 'string'
+    ? body
+    : JSON.stringify(body || err?.message || '');
+  return /rate\s*limit/i.test(text);
+}
+
+async function prospeoRequestDelay() {
+  await new Promise(r => setTimeout(r, PROSPEO_THROTTLE_MS));
+}
+
+async function callProspeoSearchPerson(domain) {
+  const res = await axios.post('https://api.prospeo.io/search-person',
+    {
+      page: 1,
+      filters: {
+        company: {
+          websites: { include: [domain] }
+        },
+        person_job_title: {
+          include: [CONFIG.jobTitle]
+        }
+      }
+    },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-KEY': PROSPEO_API_KEY
+      }
+    }
+  );
+
+  const results = res.data?.results || [];
+  if (!results.length) return null;
+
+  const match = results[0];
+  const person = match.person || {};
+
+  return {
+    contact: `${person.first_name || ''} ${person.last_name || ''}`.trim(),
+    email: typeof person.email === 'object' ? person.email?.email || null : person.email || null,
+    title: person.job_title || null,
+  };
+}
+
 async function enrichWithProspeo(domain) {
   if (!PROSPEO_API_KEY) {
     console.warn('[WARN] Prospeo key not set — skipping enrichment');
     return null;
   }
 
-  try {
-    const res = await axios.post('https://api.prospeo.io/search-person',
-      {
-        page: 1,
-        filters: {
-          company: {
-            websites: { include: [domain] }
-          },
-          person_job_title: {
-            include: [CONFIG.jobTitle]
-          }
-        }
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'X-KEY': PROSPEO_API_KEY
-        }
+  const maxAttempts = 1 + PROSPEO_RATE_LIMIT_BACKOFF_MS.length;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await prospeoRequestDelay();
+    try {
+      return await callProspeoSearchPerson(domain);
+    } catch (err) {
+      const rateLimited = isProspeoRateLimited(err);
+      const backoffMs = PROSPEO_RATE_LIMIT_BACKOFF_MS[attempt];
+
+      if (rateLimited && backoffMs != null) {
+        await logScoutRun('skipped', {
+          domain,
+          attempt: attempt + 1,
+          backoff_ms: backoffMs,
+          error: err.response?.data || err.message,
+        }, 'prospeo_rate_limited');
+        console.warn(`[Prospeo] ${domain}: rate limited — retry in ${backoffMs}ms (attempt ${attempt + 1})`);
+        await new Promise(r => setTimeout(r, backoffMs));
+        continue;
       }
-    );
 
-    const results = res.data?.results || [];
-    if (!results.length) return null;
-
-    const match = results[0];
-    const person = match.person || {};
-
-    return {
-      contact: `${person.first_name || ''} ${person.last_name || ''}`.trim(),
-      email:   typeof person.email === 'object' ? person.email?.email || null : person.email || null,
-      title:   person.job_title || null,
-};
-  } catch (err) {
-    console.warn(`[Prospeo] ${domain}:`, err.response?.data || err.message);
-    return null;
+      if (rateLimited) {
+        await logScoutRun('skipped', {
+          domain,
+          attempt: attempt + 1,
+          exhausted: true,
+          error: err.response?.data || err.message,
+        }, 'prospeo_rate_limited');
+        console.warn(`[Prospeo] ${domain}: rate limit retries exhausted`);
+      } else {
+        console.warn(`[Prospeo] ${domain}:`, err.response?.data || err.message);
+      }
+      return null;
+    }
   }
+
+  return null;
 }
 
 
