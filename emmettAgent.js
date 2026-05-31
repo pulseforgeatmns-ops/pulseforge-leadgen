@@ -1,4 +1,5 @@
 require('dotenv').config();
+const axios = require('axios');
 const nodemailer = require('nodemailer');
 const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
@@ -789,18 +790,28 @@ function createMailTransporter() {
 
 async function sendEmail(toEmail, toName, subject, body, tags) {
   try {
-    if (!MAIL_TRANSPORTER) MAIL_TRANSPORTER = createMailTransporter();
-    const info = await MAIL_TRANSPORTER.sendMail({
-      from: { name: FROM_NAME, address: FROM_EMAIL },
-      to: [{ name: toName, address: toEmail }],
+    if (!process.env.BREVO_API_KEY) {
+      return { success: false, error: 'BREVO_API_KEY not set' };
+    }
+
+    const payload = {
+      sender: { name: FROM_NAME, email: FROM_EMAIL },
+      to: [{ email: toEmail, name: toName }],
       subject,
-      html: '<html><body style="font-family:Georgia,serif;font-size:16px;line-height:1.6;color:#1a1a1a;max-width:560px;margin:0 auto;padding:20px;">' + body.replace(/\n/g, '<br>') + '</body></html>',
-      text: body,
-      headers: Array.isArray(tags) && tags.length ? { 'X-Mailin-Tag': tags.join(',') } : undefined,
+      htmlContent: '<html><body style="font-family:Georgia,serif;font-size:16px;line-height:1.6;color:#1a1a1a;max-width:560px;margin:0 auto;padding:20px;">' + body.replace(/\n/g, '<br>') + '</body></html>',
+      textContent: body,
+    };
+    if (Array.isArray(tags) && tags.length) {
+      payload.tags = tags.map(String);
+    }
+
+    const res = await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
+      headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
+      timeout: 15000,
     });
 
-    console.log(`Email sent to ${toEmail} — Message ID: ${info.messageId}`);
-    return { success: true, messageId: info.messageId };
+    console.log(`Email sent to ${toEmail} — Message ID: ${res.data?.messageId}`);
+    return { success: true, messageId: res.data?.messageId };
   } catch (err) {
     const errorDetail = err.response?.data || err.message;
     console.error(`Failed to send to ${toEmail}:`, errorDetail);
@@ -954,21 +965,22 @@ async function createEmailSendLog(prospect, payload) {
   const pool = require('./db');
   const res = await pool.query(`
     INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
-    VALUES ($1, 'email_sent', $2, $3, 'pending', NOW(), $4)
+    VALUES ($1, 'email_pending', $2, $3, 'pending', NOW(), $4)
     RETURNING id
   `, [AGENT_NAME, prospect.id, JSON.stringify(payload), CLIENT_ID]);
   return res.rows[0].id;
 }
 
-async function completeEmailSendLog(logId, payload, status = 'completed') {
+async function completeEmailSendLog(logId, action, payload, status = 'completed') {
   const pool = require('./db');
   await pool.query(`
     UPDATE agent_log
-    SET status = $1,
-        payload = $2
-    WHERE id = $3
-      AND client_id = $4
-  `, [status, JSON.stringify(payload), logId, CLIENT_ID]);
+    SET action = $1,
+        status = $2,
+        payload = $3
+    WHERE id = $4
+      AND client_id = $5
+  `, [action, status, JSON.stringify(payload), logId, CLIENT_ID]);
 }
 
 async function getProspectsForEmail() {
@@ -1327,7 +1339,7 @@ async function run(context = {}) {
     );
 
     if (result.success) {
-      await completeEmailSendLog(sendLogId, { ...logPayload, message_id: result.messageId }, 'completed');
+      await completeEmailSendLog(sendLogId, 'email_sent', { ...logPayload, message_id: result.messageId }, 'completed');
       await db.logTouchpoint(
         prospect.id,
         'email',
@@ -1356,7 +1368,7 @@ async function run(context = {}) {
       sent++;
       console.log('Touchpoint logged.\n');
     } else {
-      await completeEmailSendLog(sendLogId, { ...logPayload, error: result.error }, 'failed');
+      await completeEmailSendLog(sendLogId, 'email_failed', { ...logPayload, error: result.error }, 'failed');
     }
 
     if (sent < dailyLimit) await humanDelay();
