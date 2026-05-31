@@ -19,6 +19,16 @@ const { appendQualifiedScoutLead } = require('./utils/setterSheet');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { recordScoutBaseline } = require('./utils/icpScoring');
 
+function normalizeCompanyName(raw) {
+  if (!raw || typeof raw !== 'string') return raw;
+  return raw
+    .split('|')[0]
+    .split('—')[0]
+    .split(' - ')[0]
+    .split(/:\s/)[0]
+    .trim();
+}
+
 // Write one agent_log row per Scout run so we can answer
 // "did Scout run? for which client/industry/location? did it find anything?"
 // without trawling Railway stdout. Best-effort — never throws.
@@ -269,7 +279,7 @@ async function searchGoogle(query, numResults = 10) {
       const items = res.data.organic_results || [];
       for (const item of items) {
         const link = item.link || '';
-        const company = item.title.split('|')[0].split('-')[0].trim();
+        const company = normalizeCompanyName(item.title);
         // Capture facebook/instagram profile links so they can be attached to the
         // matching business lead instead of being discarded as junk domains.
         if (/facebook\.com/i.test(link)) {
@@ -417,7 +427,7 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
         if (!domain || isBlacklistedDomain(domain)) continue;
 
         leads.push({
-          company: details.name || hit.name || 'Unknown',
+          company: normalizeCompanyName(details.name || hit.name || 'Unknown'),
           url: domain,
           phone: details.formatted_phone_number || null,
           address: details.formatted_address || hit.formatted_address || '',
@@ -887,6 +897,10 @@ function validateProspect(name) {
     return reject('page section title');
   if (n.includes('•'))
     return reject('bullet separator (web page title)');
+  if (n.includes('|'))
+    return reject('contains pipe separator (SEO-stuffed name)');
+  if (n.includes('—'))
+    return reject('contains em-dash (SEO-stuffed name)');
   if (/^Find\s/i.test(n))
     return reject('generic search prompt');
   if (/^Top Rated\b/i.test(n))
