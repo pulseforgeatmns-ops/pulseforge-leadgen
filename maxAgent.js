@@ -573,6 +573,29 @@ async function getSystemSnapshot() {
     LIMIT 5
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
+  const unreachableTotal = await pool.query(`
+    SELECT COUNT(*)::int AS count
+    FROM scout_unenriched
+    WHERE client_id = $1
+  `, [CLIENT_ID]).catch(() => ({ rows: [{ count: 0 }] }));
+
+  const topUnreachableDomains = await pool.query(`
+    SELECT domain, company, enrichment_attempts::int AS enrichment_attempts
+    FROM scout_unenriched
+    WHERE client_id = $1
+      AND COALESCE(domain, '') <> ''
+    ORDER BY enrichment_attempts DESC, last_attempt_at DESC
+    LIMIT 10
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+
+  const unreachableBySource = await pool.query(`
+    SELECT COALESCE(source, 'unknown') AS source, COUNT(*)::int AS count
+    FROM scout_unenriched
+    WHERE client_id = $1
+    GROUP BY 1
+    ORDER BY count DESC
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+
   return {
     prospectStats: prospectStats.rows,
     recentTouchpoints: recentTouchpoints.rows,
@@ -585,6 +608,11 @@ async function getSystemSnapshot() {
       byStatus: emailVerificationStats.rows,
       bounceRateByMethod: bounceRateByVerificationMethod.rows,
       topRejectedDomains: topRejectedDomains.rows,
+    },
+    unreachableCompanies: {
+      total: unreachableTotal.rows[0]?.count || 0,
+      topDomains: topUnreachableDomains.rows,
+      bySource: unreachableBySource.rows,
     },
     topICP: topICP.rows,
     heatingUp: heatingUp.rows,
@@ -902,6 +930,30 @@ function formatEmailVerificationSection(verification) {
   return lines.join('\n');
 }
 
+function formatUnreachableCompaniesSection(unreachable) {
+  if (!unreachable) return '';
+  const { total = 0, topDomains = [], bySource = [] } = unreachable;
+  if (!total && !topDomains.length && !bySource.length) return '';
+
+  const lines = ['UNREACHABLE COMPANIES'];
+  lines.push(`Total in scout_unenriched: ${total}.`);
+
+  if (topDomains.length) {
+    lines.push('Top domains by enrichment attempts:');
+    topDomains.forEach((row, i) => {
+      const label = row.company || row.domain;
+      lines.push(`  ${i + 1}. ${row.domain} (${label}) — ${row.enrichment_attempts} attempt(s)`);
+    });
+  }
+
+  if (bySource.length) {
+    const bits = bySource.map(s => `${s.source}: ${s.count}`);
+    lines.push(`By discovery source: ${bits.join(', ')}.`);
+  }
+
+  return lines.join('\n');
+}
+
 async function sendDigest(digestText, snapshot, expansionReport) {
   // Refuse to ship an empty or non-string digest — better to skip the email
   // and surface the failure than to send "null" / "undefined" to the client.
@@ -925,18 +977,23 @@ async function sendDigest(digestText, snapshot, expansionReport) {
     ? `\n${'─'.repeat(50)}\n${emailVerificationBlock}\n`
     : '';
 
+  const unreachableBlock = formatUnreachableCompaniesSection(snapshot?.unreachableCompanies);
+  const unreachableSection = unreachableBlock
+    ? `\n${'─'.repeat(50)}\n${unreachableBlock}\n`
+    : '';
+
   const toEmail = CLIENT_CONFIG?.max_email || 'jacob@gopulseforge.com';
   const toName = CLIENT_ID === 2 ? 'Brad & Dustin' : 'Jake Maynard';
   const subject = `${CLIENT_ID === 2 ? 'MSHI' : 'Pulseforge'} Daily Digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
 
   const body = CLIENT_ID === 2 ? `${digestText}
-${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}
+${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
 Pulseforge · gopulseforge.com` : `PULSEFORGE DAILY DIGEST
 ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 ${'─'.repeat(50)}
 
 ${digestText}
-${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}
+${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
 ${'─'.repeat(50)}
 Pulseforge · gopulseforge.com
 To adjust digest frequency reply to this email.`;

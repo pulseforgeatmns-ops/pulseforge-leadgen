@@ -34,6 +34,7 @@ const { ensureScoutExpansionTables } = require('./scoutExpansion');
 const { ensureIcpScoreHistoryTable } = require('./utils/icpScoring');
 const { ensureEmailPerformanceTable } = require('./utils/emailPerformance');
 const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
+const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { ensureCallDispositionSchema } = require('./calBatchAgent');
 
 const app  = express();
@@ -46,6 +47,7 @@ ensureScoutExpansionTables().catch(err => console.error('[scoutExpansion] init e
 ensureIcpScoreHistoryTable().catch(err => console.error('[icpScoring] init error:', err.message));
 ensureEmailPerformanceTable().catch(err => console.error('[emailPerformance] init error:', err.message));
 ensureEmailVerificationColumns().catch(err => console.error('[emailVerification] init error:', err.message));
+ensureScoutUnenrichedTable().catch(err => console.error('[scoutUnenriched] init error:', err.message));
 ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init error:', err.message));
 
 app.use(session({

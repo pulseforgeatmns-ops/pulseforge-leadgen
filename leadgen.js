@@ -20,6 +20,7 @@ const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext')
 const { recordScoutBaseline } = require('./utils/icpScoring');
 const { validateEmail } = require('./utils/emailValidation');
 const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
+const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -1005,11 +1006,107 @@ async function resolveEmailVerification(email, lead) {
   };
 }
 
+async function resolveScoutEmail(lead, companyName) {
+  const JUNK_EMAILS = ['user@domain.com', 'info@example.com', 'test@test.com', 'admin@domain.com'];
+  const rawEmail = typeof lead.email === 'string' ? lead.email.trim() : '';
+
+  if (!rawEmail || rawEmail === '—') {
+    return { insertTarget: 'unenriched', reason: 'no_email', email: null };
+  }
+
+  const rejectReason = emailRejection(rawEmail) || (JUNK_EMAILS.includes(rawEmail.toLowerCase()) ? 'junk address' : null);
+  if (rejectReason) {
+    return { insertTarget: 'unenriched', reason: rejectReason, email: rawEmail };
+  }
+
+  const verification = await resolveEmailVerification(rawEmail, lead);
+  if (verification.reject) {
+    return {
+      insertTarget: 'unenriched',
+      reason: verification.rejectReason || 'no_mx_record',
+      email: rawEmail,
+    };
+  }
+
+  return {
+    insertTarget: 'prospect',
+    email: rawEmail,
+    emailVerified: verification.emailVerified,
+    emailVerificationMethod: verification.emailVerificationMethod,
+    verifiedAt: verification.verifiedAt,
+    doNotContact: verification.doNotContact,
+  };
+}
+
+async function upsertScoutUnenriched({
+  companyName,
+  domain,
+  websiteUrl,
+  discoveryMethod,
+  reason,
+  email,
+}) {
+  const notes = [
+    reason ? `reason: ${reason}` : null,
+    email ? `last_email: ${email}` : null,
+  ].filter(Boolean).join(', ') || null;
+
+  if (domain) {
+    const existing = await pool.query(
+      `SELECT id FROM scout_unenriched
+       WHERE client_id = $1 AND LOWER(domain) = LOWER($2)
+       LIMIT 1`,
+      [CONFIG.clientId, domain]
+    );
+    if (existing.rows.length) {
+      await pool.query(`
+        UPDATE scout_unenriched
+        SET enrichment_attempts = enrichment_attempts + 1,
+            last_attempt_at = NOW(),
+            company = COALESCE($1, company),
+            website_url = COALESCE($2, website_url),
+            vertical = COALESCE($3, vertical),
+            location = COALESCE($4, location),
+            source = COALESCE($5, source),
+            notes = COALESCE($6, notes)
+        WHERE id = $7
+      `, [
+        companyName,
+        websiteUrl,
+        CONFIG.vertical,
+        CONFIG.location,
+        discoveryMethod,
+        notes,
+        existing.rows[0].id,
+      ]);
+      return 'updated';
+    }
+  }
+
+  await pool.query(`
+    INSERT INTO scout_unenriched (
+      client_id, company, website_url, domain, vertical, location, source, notes
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+  `, [
+    CONFIG.clientId,
+    companyName,
+    websiteUrl,
+    domain,
+    CONFIG.vertical,
+    CONFIG.location,
+    discoveryMethod,
+    notes,
+  ]);
+  return 'inserted';
+}
+
 async function saveToDatabase(leads) {
-  let saved = 0, skipped = 0, rejected = 0, setterQueued = 0, setterSkipped = 0, setterFailed = 0;
+  let saved = 0, skipped = 0, rejected = 0, unenriched = 0;
+  let setterQueued = 0, setterSkipped = 0, setterFailed = 0;
   await ensureSetterQueueColumns(pool);
   await ensureCompanyColumns(pool);
   await ensureEmailVerificationColumns();
+  await ensureScoutUnenrichedTable();
   for (const lead of leads) {
     const companyName = lead.company.replace(/^CONTACT:\s*/i, '').trim();
 
@@ -1051,35 +1148,38 @@ async function saveToDatabase(leads) {
     }
 
     try {
-      const JUNK_EMAILS = ['user@domain.com', 'info@example.com', 'test@test.com', 'admin@domain.com'];
-      let email = null;
-      let emailVerified = false;
-      let emailVerificationMethod = null;
-      let verifiedAt = null;
-      let doNotContact = false;
-      const rawEmail = typeof lead.email === 'string' ? lead.email.trim() : '';
-      if (rawEmail && rawEmail !== '—') {
-        const reason = emailRejection(rawEmail) || (JUNK_EMAILS.includes(rawEmail.toLowerCase()) ? 'junk address' : null);
-        if (reason) {
-          await logScoutRun('skipped', { email: lead.email, reason }, 'email_rejected');
-        } else {
-          const verification = await resolveEmailVerification(rawEmail, lead);
-          if (verification.reject) {
-            await logScoutRun('skipped', {
-              email: rawEmail,
-              reason: verification.rejectReason || 'no_mx_record',
-              company: companyName,
-            }, 'email_rejected');
-            rejected++;
-            continue;
-          }
-          email = rawEmail;
-          emailVerified = verification.emailVerified;
-          emailVerificationMethod = verification.emailVerificationMethod;
-          verifiedAt = verification.verifiedAt;
-          doNotContact = verification.doNotContact;
-        }
+      const domain = normalizeDomain(lead.url);
+      const discoveryMethod = Array.isArray(lead.source) && lead.source.includes('google_places')
+        ? 'google_places'
+        : 'serpapi';
+      const websiteUrl = lead.url || null;
+
+      const emailResolution = await resolveScoutEmail(lead, companyName);
+      if (emailResolution.insertTarget === 'unenriched') {
+        await upsertScoutUnenriched({
+          companyName,
+          domain,
+          websiteUrl,
+          discoveryMethod,
+          reason: emailResolution.reason,
+          email: emailResolution.email,
+        });
+        await logScoutRun('skipped', {
+          company: companyName,
+          domain,
+          reason: emailResolution.reason,
+          discovery_method: discoveryMethod,
+        }, 'scout_skipped_no_email');
+        unenriched++;
+        continue;
       }
+
+      const email = emailResolution.email;
+      const emailVerified = emailResolution.emailVerified;
+      const emailVerificationMethod = emailResolution.emailVerificationMethod;
+      const verifiedAt = emailResolution.verifiedAt;
+      const doNotContact = emailResolution.doNotContact;
+
       const nameParts = (lead.contact && lead.contact !== '—' ? lead.contact : '').trim().split(/\s+/).filter(Boolean);
 
       // Use contact first name if available and looks like a real person name.
@@ -1087,14 +1187,11 @@ async function saveToDatabase(leads) {
       const looksLikePerson = nameParts.length >= 2 || (nameParts.length === 1 && /^[A-Z][a-z]{2,}$/.test(nameParts[0]));
       const firstName = sanitizeFirstName(looksLikePerson ? nameParts[0] : null);
       const lastName  = firstName ? nameParts.slice(1).join(' ') || null : null;
-      const domain = normalizeDomain(lead.url);
       const phone = lead.phone || null;
       const serviceArea = (CLIENT_CONFIG?.service_area || []).find(area => {
         const needle = String(area).toLowerCase();
         return (lead.address || '').toLowerCase().includes(needle) || (domain || '').includes(needle);
       }) || null;
-      const discoveryMethod = Array.isArray(lead.source) && lead.source.includes('google_places') ? 'google_places' : 'serpapi';
-      const websiteUrl = lead.url || null;
       const hasWebsite = !!(domain || websiteUrl);
       const facebookUrl = lead.facebook_url || null;
       const instagramUrl = lead.instagram_url || null;
@@ -1153,9 +1250,9 @@ async function saveToDatabase(leads) {
       skipped++;
     }
   }
-  console.log(`[DB] Saved ${saved} prospects, rejected ${rejected} (junk), skipped ${skipped} (errors/dupes)`);
+  console.log(`[DB] Saved ${saved} prospects, ${unenriched} unreachable (scout_unenriched), rejected ${rejected} (junk), skipped ${skipped} (errors/dupes)`);
   console.log(`[Setter] Queued ${setterQueued}, skipped ${setterSkipped}, failed ${setterFailed}`);
-  return { saved, skipped, rejected, setter_queued: setterQueued, setter_skipped: setterSkipped, setter_failed: setterFailed };
+  return { saved, skipped, rejected, unenriched, setter_queued: setterQueued, setter_skipped: setterSkipped, setter_failed: setterFailed };
 }
 
 async function ensureSetterQueueColumns(pool) {
@@ -1522,7 +1619,40 @@ async function run(params = {}) {
   }
 }
 
-module.exports = { run };
+async function runEnrichmentChain(domain, jobTitle = 'owner') {
+  const savedTitle = CONFIG.jobTitle;
+  CONFIG.jobTitle = jobTitle;
+  try {
+    let enriched = await enrichWithProspeo(domain);
+    if (enriched) {
+      enriched.source = ['prospeo'];
+      return enriched;
+    }
+    enriched = await enrichWithHunter(domain);
+    if (enriched) {
+      enriched.source = ['hunter'];
+      return enriched;
+    }
+    enriched = await scrapeWebsiteEmail(domain);
+    if (enriched) {
+      enriched.source = ['scraped'];
+      return enriched;
+    }
+    return null;
+  } finally {
+    CONFIG.jobTitle = savedTitle;
+  }
+}
+
+module.exports = {
+  run,
+  enrichWithProspeo,
+  enrichWithHunter,
+  scrapeWebsiteEmail,
+  normalizeDomain,
+  resolveEmailVerification,
+  runEnrichmentChain,
+};
 
 if (require.main === module) {
   run({ client_id: CONFIG.clientId }).catch(err => {
