@@ -1284,7 +1284,7 @@ async function run(context = {}) {
       continue;
     }
 
-    if (prospect.email_verified === false) {
+    if (prospect.verified_at != null && prospect.email_verified === false) {
       console.log(`Skipping ${prospect.email} — email not verified`);
       await db.logAgentAction(
         AGENT_NAME,
