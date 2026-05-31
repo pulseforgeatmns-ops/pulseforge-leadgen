@@ -21,6 +21,7 @@ const { recordScoutBaseline } = require('./utils/icpScoring');
 const { validateEmail } = require('./utils/emailValidation');
 const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
 const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
+const { acquireScoutLockWithWait, releaseScoutLock, getActiveScoutLock } = require('./utils/scoutLock');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -331,9 +332,9 @@ function socialKey(name) {
 // STEP 2: Prospeo Domain Search
 // Docs: https://prospeo.io/api
 // Takes a domain → returns contacts with name, title, email
-// Starter plan: 5 req/sec — throttle to ~4/sec with 250ms spacing + backoff on 429
+// Starter plan search endpoints: 1 req/sec — throttle to ~0.9/sec + backoff on 429
 // ─────────────────────────────────────────────────────────────────────
-const PROSPEO_THROTTLE_MS = 250;
+const PROSPEO_THROTTLE_MS = 1100;
 const PROSPEO_RATE_LIMIT_BACKOFF_MS = [1000, 2000, 4000];
 
 function isProspeoRateLimited(err) {
@@ -1647,8 +1648,34 @@ async function run(params = {}) {
     max_results: CONFIG.maxResults,
     ...(target.rotatedFrom ? { rotated_from: target.rotatedFrom } : {}),
   };
-  await logScoutRun('pending', runContext);
+
+  const lockMeta = {
+    clientId: CONFIG.clientId,
+    industry: CONFIG.industry,
+    vertical: CONFIG.vertical,
+    location: CONFIG.location,
+  };
+
+  const lockHolder = await acquireScoutLockWithWait(lockMeta);
+  if (!lockHolder) {
+    const active = await getActiveScoutLock();
+    await logScoutRun('skipped', {
+      ...runContext,
+      reason: 'scout_lock_timeout',
+      wait_ms: 5 * 60 * 1000,
+      active_lock: active || null,
+    }, 'scout_lock_timeout');
+    console.log('[Scout] Global lock timeout — another Scout run is still active');
+    return { skipped: true, reason: 'scout_lock_timeout' };
+  }
+
+  await logScoutRun('success', {
+    ...runContext,
+    holder_id: lockHolder,
+  }, 'scout_lock_acquired');
+
   try {
+    await logScoutRun('pending', runContext);
     const stats = await main();
     await pool.query(
       `UPDATE scout_queue SET last_run_at = NOW(), updated_at = NOW()
@@ -1661,6 +1688,7 @@ async function run(params = {}) {
       duration_ms: Date.now() - startedAt,
       ...(stats || {}),
     });
+    return stats;
   } catch (err) {
     await logScoutRun('failed', {
       ...runContext,
@@ -1668,6 +1696,13 @@ async function run(params = {}) {
       error: err.message,
     });
     throw err;
+  } finally {
+    const released = await releaseScoutLock(lockHolder);
+    await logScoutRun(released ? 'success' : 'skipped', {
+      ...runContext,
+      holder_id: lockHolder,
+      released,
+    }, 'scout_lock_released');
   }
 }
 
