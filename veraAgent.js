@@ -5,7 +5,9 @@ const pool = require('./db');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'vera';
-const GBP_BASE   = 'https://mybusiness.googleapis.com/v4';
+const GBP_ACCOUNT_MGMT_BASE = 'https://mybusinessaccountmanagement.googleapis.com/v1';
+const GBP_BUSINESS_INFO_BASE = 'https://mybusinessbusinessinformation.googleapis.com/v1';
+const GBP_REVIEWS_BASE = 'https://mybusiness.googleapis.com/v4';
 const DASHBOARD  = process.env.DASHBOARD_URL || 'https://openclaw-main-production-945e.up.railway.app';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -42,8 +44,8 @@ async function ensureSchema() {
 }
 
 // ── GBP API HELPERS ────────────────────────────────────────────────────
-async function gbpGet(token, path, params = {}) {
-  const res = await axios.get(`${GBP_BASE}/${path}`, {
+async function gbpGet(token, baseUrl, path, params = {}) {
+  const res = await axios.get(`${baseUrl}/${path}`, {
     headers: { Authorization: `Bearer ${token}` },
     params,
   });
@@ -51,19 +53,19 @@ async function gbpGet(token, path, params = {}) {
 }
 
 async function fetchAccounts(token) {
-  const data = await gbpGet(token, 'accounts');
+  const data = await gbpGet(token, GBP_ACCOUNT_MGMT_BASE, 'accounts');
   return data.accounts || [];
 }
 
 async function fetchLocations(token, accountName) {
-  const data = await gbpGet(token, `${accountName}/locations`, {
+  const data = await gbpGet(token, GBP_BUSINESS_INFO_BASE, `${accountName}/locations`, {
     readMask: 'name,title,websiteUri',
   });
   return data.locations || [];
 }
 
 async function fetchReviews(token, locationName) {
-  const data = await gbpGet(token, `${locationName}/reviews`, {
+  const data = await gbpGet(token, GBP_REVIEWS_BASE, `${locationName}/reviews`, {
     orderBy: 'updateTime desc',
     pageSize: 20,
   });
