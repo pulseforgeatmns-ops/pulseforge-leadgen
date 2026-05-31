@@ -144,8 +144,65 @@ async function getWeeklyData() {
       COUNT(CASE WHEN action_type = 'email_unsubscribed' THEN 1 END)::int AS unsubscribed,
       COUNT(CASE WHEN action_type = 'email_spam'         THEN 1 END)::int AS spam
     FROM touchpoints
-    WHERE channel = 'email' AND created_at > ${weekAgo}
-  `).catch(() => ({ rows: [{}] }));
+    WHERE channel = 'email'
+      AND client_id = $1
+      AND created_at > ${weekAgo}
+  `, [CLIENT_ID]).catch(() => ({ rows: [{}] }));
+
+  const emailReplyMetrics = await pool.query(`
+    SELECT
+      (
+        SELECT COUNT(*)::int
+        FROM agent_log
+        WHERE action = 'email_sent'
+          AND client_id = $1
+          AND ran_at > ${weekAgo}
+      ) AS sent,
+      (
+        SELECT COUNT(*)::int
+        FROM agent_log r
+        WHERE r.action = 'email_reply_received'
+          AND r.client_id = $1
+          AND r.ran_at > ${weekAgo}
+          AND EXISTS (
+            SELECT 1
+            FROM agent_log s
+            WHERE s.prospect_id = r.prospect_id
+              AND s.client_id = r.client_id
+              AND s.action = 'email_sent'
+              AND s.ran_at > ${weekAgo}
+          )
+      ) AS replies
+  `, [CLIENT_ID]).catch(() => ({ rows: [{ sent: 0, replies: 0 }] }));
+
+  const warmSignalsSent = await pool.query(`
+    SELECT COUNT(*)::int AS count
+    FROM agent_log
+    WHERE action = 'warm_signal_text_sent'
+      AND client_id = $1
+      AND ran_at > ${weekAgo}
+  `, [CLIENT_ID]).catch(() => ({ rows: [{ count: 0 }] }));
+
+  const discoveryCallsBooked = await pool.query(`
+    SELECT COUNT(*)::int AS count
+    FROM prospects
+    WHERE closer_status = 'booked'
+      AND client_id = $1
+      AND updated_at > ${weekAgo}
+  `, [CLIENT_ID]).catch(() => ({ rows: [{ count: 0 }] }));
+
+  const emailRejections = await pool.query(`
+    SELECT
+      COALESCE(payload->>'reason', 'unknown') AS reason,
+      COUNT(*)::int AS count
+    FROM agent_log
+    WHERE agent_name = 'scout'
+      AND action = 'email_rejected'
+      AND client_id = $1
+      AND ran_at > ${weekAgo}
+    GROUP BY 1
+    ORDER BY count DESC
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
   // Email engagement by sequence day
   const emailByDay = await pool.query(`
@@ -197,6 +254,10 @@ async function getWeeklyData() {
     topPost: topPost.rows[0] || null,
     worstPost: worstPost.rows[0] || null,
     emailFunnel:     emailFunnel.rows[0] || {},
+    emailReplyMetrics: emailReplyMetrics.rows[0] || { sent: 0, replies: 0 },
+    warmSignalsSent: warmSignalsSent.rows[0]?.count || 0,
+    discoveryCallsBooked: discoveryCallsBooked.rows[0]?.count || 0,
+    emailRejections: emailRejections.rows,
     emailByDay:      emailByDay.rows,
     dncAdded:        dncAdded.rows[0]?.count || 0,
     emailByVertical: emailByVertical.rows,
@@ -221,7 +282,7 @@ Generate a weekly performance report with these sections:
 
 1. WEEK IN REVIEW — 2-3 sentences summarizing overall system activity and health
 2. CHANNEL PERFORMANCE — how each channel (LinkedIn, Facebook, email) performed this week, what's working and what's lagging
-3. EMAIL PERFORMANCE — use emailFunnel, emailByVertical, emailByDay data: open rate, click rate, bounce rate; which vertical has highest open rate; which subject lines drove the most engagement; which sequence day (Day 0/4/8/13) performed best based on subject patterns; DNC additions this week; note if tracking data is still accumulating if tables are empty
+3. EMAIL PERFORMANCE — use emailFunnel, emailReplyMetrics, emailByVertical, emailByDay data. Treat reply rate (emailReplyMetrics.replies / emailReplyMetrics.sent) as the primary engagement metric — do NOT emphasize click rate (sequences are reply-driven; click rate is N/A). Report open rate, reply rate, bounce rate, warmSignalsSent, discoveryCallsBooked, and emailRejections breakdown; which vertical has highest open rate; which subject lines drove the most sends; DNC additions this week; note if tracking data is still accumulating if tables are empty
 4. CONTENT PERFORMANCE — which content types and channels are getting the most engagement; call out top and worst posts if data is available
 5. PIPELINE HEALTH — state of the prospect pipeline, who's moving and who's stalled
 6. APPROVAL RATE — comment and content approval patterns, anything worth noting
@@ -250,6 +311,9 @@ Week of ${data.weekOf}
 ${'═'.repeat(50)}
 
 ${reportText}
+
+${'═'.repeat(50)}
+${formatFunnelMetrics(data)}
 
 ${'═'.repeat(50)}
 RAW NUMBERS THIS WEEK
@@ -298,6 +362,31 @@ async function logAgentRun(status) {
 
 function pct(num, den) {
   return den > 0 ? +((Number(num || 0) / Number(den || 0)) * 100).toFixed(1) : 0;
+}
+
+function formatRejectionBreakdown(rejections = []) {
+  if (!rejections.length) return '  None this week';
+  return rejections.map(r => `  ${r.reason}: ${r.count}`).join('\n');
+}
+
+function formatFunnelMetrics(data) {
+  const f = data.emailFunnel || {};
+  const sent = Number(f.sent || 0);
+  const opened = Number(f.opened || 0);
+  const bounced = Number(f.bounced || 0) + Number(f.soft_bounced || 0);
+  const replySent = Number(data.emailReplyMetrics?.sent || 0);
+  const replies = Number(data.emailReplyMetrics?.replies || 0);
+
+  return `FUNNEL METRICS
+Open rate: ${pct(opened, sent)}% (${opened}/${sent})
+Click rate: N/A (reply-driven sequences)
+Reply rate: ${pct(replies, replySent)}% (${replies}/${replySent}) — primary engagement metric
+Bounce rate: ${pct(bounced, sent)}% (${bounced}/${sent})
+Warm signals generated this week: ${data.warmSignalsSent ?? 0}
+Discovery calls booked this week: ${data.discoveryCallsBooked ?? 0}
+
+Email rejection breakdown (Scout):
+${formatRejectionBreakdown(data.emailRejections)}`;
 }
 
 function money(value) {
