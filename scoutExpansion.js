@@ -233,7 +233,7 @@ async function queueExpansionsForSaturated(clientId) {
 
 async function fireScoutCron({ clientId, vertical, location }) {
   const appUrl = (process.env.APP_URL || 'https://pulseforge-leadgen-production.up.railway.app').replace(/\/$/, '');
-  const url = `${appUrl}/cron/scout?client_id=${clientId}&industry=${vertical}&location=${encodeURIComponent(location)}&secret=${process.env.CRON_SECRET}`;
+  const url = `${appUrl}/cron/scout?client_id=${clientId}&industry=${vertical}&location=${encodeURIComponent(location)}&max=75&secret=${process.env.CRON_SECRET}`;
   const res = await axios.post(url, null, { timeout: 15000, validateStatus: () => true });
   if (res.status >= 400) {
     throw new Error(`Scout cron returned HTTP ${res.status}: ${JSON.stringify(res.data)}`);

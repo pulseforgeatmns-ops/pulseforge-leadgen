@@ -99,7 +99,7 @@ let CONFIG = {
   industry:    args.industry  || 'cleaning',
   location:    sanitizeQueueLocation(args.location || 'Manchester NH'),
   jobTitle:    args.title     || 'owner',
-  maxResults:  parseInt(args.max || '25'),
+  maxResults:  parseInt(args.max || '75'),
   minScore:    parseInt(args.minscore || '40'),
   mode:        args.mode      || 'both',     // smb | tech | both
   outputCSV:   args.csv       !== 'false',
