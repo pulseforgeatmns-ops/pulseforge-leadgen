@@ -21,6 +21,7 @@ const CLIENT_COLUMNS = [
   ['avg_job_value', 'text'],
   ['service_area', 'text[]'],
   ['verticals', 'text[]'],
+  ['enabled_agents', 'text[]'],
   ['target_clients', 'text'],
   ['brand_voice', 'text'],
   ['differentiators', 'text'],
@@ -207,6 +208,17 @@ async function ensureClientArchitecture() {
       max_email = EXCLUDED.max_email,
       max_time = EXCLUDED.max_time,
       active = true
+  `);
+
+  await pool.query(`
+    UPDATE clients
+    SET enabled_agents = ARRAY['scout','emmett','paige','faye','vera','max','rex']
+    WHERE id = 2
+  `);
+  await pool.query(`
+    UPDATE clients
+    SET enabled_agents = ARRAY['scout','emmett','paige','faye','vera','max','rex','cal','link','ivy','sam','riley','sketch','penny']
+    WHERE id = 1
   `);
 
   await pool.query(`SELECT setval(pg_get_serial_sequence('clients', 'id'), GREATEST((SELECT MAX(id) FROM clients), 1))`);

@@ -21,20 +21,30 @@ const CLIENT_TABLE_SQL = `
     name TEXT,
     business_name TEXT,
     vertical TEXT,
+    enabled_agents TEXT[],
     pin TEXT,
     email TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
   )
 `;
 
-const CLEANING_AGENTS = ['scout', 'emmett', 'riley', 'paige', 'vera', 'max'];
+const DEFAULT_CLIENT_AGENTS = ['scout', 'emmett', 'paige', 'faye', 'vera', 'max', 'rex'];
+const AGENT_ORDER = ['scout', 'emmett', 'paige', 'faye', 'vera', 'max', 'rex', 'cal', 'link', 'ivy', 'sam', 'riley', 'sketch', 'penny'];
 const AGENT_META = {
   scout:  { name: 'Scout',  label: 'SCOUT',  role: 'Lead Scraper',        icon: '🔍', color: '#00d4b4', ringOffset: 25 },
   emmett: { name: 'Emmett', label: 'EMMETT', role: 'Email Agent',         icon: '✉️', color: '#ff6b35', ringOffset: 188 },
-  riley:  { name: 'Riley',  label: 'RILEY',  role: 'Receptionist Agent',  icon: '🙋', color: '#64c864', ringOffset: 200 },
   paige:  { name: 'Paige',  label: 'PAIGE',  role: 'Content Agent',       icon: '✍️', color: '#00c896', ringOffset: 230 },
+  faye:   { name: 'Faye',   label: 'FAYE',   role: 'Facebook Agent',      icon: 'f', color: '#5ba3f5', ringOffset: 180 },
   vera:   { name: 'Vera',   label: 'VERA',   role: 'Review Agent',        icon: '⭐', color: '#f4b942', ringOffset: 230 },
   max:    { name: 'Max',    label: 'MAX',    role: 'Manager Agent',       icon: '🧠', color: '#8b5cf6', ringOffset: 12 },
+  rex:    { name: 'Rex',    label: 'REX',    role: 'Reporting Agent',     icon: '▣', color: '#00e676', ringOffset: 95 },
+  cal:    { name: 'Cal',    label: 'CAL',    role: 'Calendar Agent',      icon: '◷', color: '#22d3ee', ringOffset: 140 },
+  link:   { name: 'Link',   label: 'LINK',   role: 'LinkedIn Agent',      icon: 'in', color: '#5b9fd4', ringOffset: 170 },
+  ivy:    { name: 'Ivy',    label: 'IVY',    role: 'Instagram Agent',     icon: '◎', color: '#ff4d9d', ringOffset: 210 },
+  sam:    { name: 'Sam',    label: 'SAM',    role: 'SMS Agent',           icon: '☎', color: '#22d3ee', ringOffset: 35 },
+  riley:  { name: 'Riley',  label: 'RILEY',  role: 'Receptionist Agent',  icon: '🙋', color: '#64c864', ringOffset: 200 },
+  sketch: { name: 'Sketch', label: 'SKETCH', role: 'Mockup Agent',        icon: '▧', color: '#b450ff', ringOffset: 215 },
+  penny:  { name: 'Penny',  label: 'PENNY',  role: 'Ads Agent',           icon: '$', color: '#ffaa33', ringOffset: 120 },
 };
 const AGENT_ALIASES = {
   scout: 'scout',
@@ -47,10 +57,35 @@ const AGENT_ALIASES = {
   riley_agent: 'riley',
   paige: 'paige',
   paige_agent: 'paige',
+  facebook: 'faye',
+  facebook_agent: 'faye',
+  faye: 'faye',
+  faye_agent: 'faye',
   vera: 'vera',
   vera_agent: 'vera',
   max: 'max',
   max_agent: 'max',
+  rex: 'rex',
+  rex_agent: 'rex',
+  cal: 'cal',
+  cal_agent: 'cal',
+  calbatch: 'cal',
+  cal_batch: 'cal',
+  cal_batch_agent: 'cal',
+  linkedin: 'link',
+  linkedin_agent: 'link',
+  link: 'link',
+  link_agent: 'link',
+  instagram: 'ivy',
+  instagram_agent: 'ivy',
+  ivy: 'ivy',
+  ivy_agent: 'ivy',
+  sam: 'sam',
+  sam_agent: 'sam',
+  sketch: 'sketch',
+  sketch_agent: 'sketch',
+  penny: 'penny',
+  penny_agent: 'penny',
 };
 const PREVIEW_CLIENT = {
   id: 'preview',
@@ -65,6 +100,7 @@ let clientsTableReady = false;
 async function ensureClientsTable() {
   if (clientsTableReady) return;
   await pool.query(CLIENT_TABLE_SQL);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS enabled_agents TEXT[]`);
   clientsTableReady = true;
 }
 
@@ -73,10 +109,12 @@ function normalizeAgentName(name = '') {
   return AGENT_ALIASES[cleaned] || AGENT_ALIASES[cleaned.replace(/_agent$/, '')] || cleaned.replace(/_agent$/, '');
 }
 
-function clientAgentsFor(vertical = '') {
-  const v = vertical.toLowerCase();
-  if (v.includes('clean')) return CLEANING_AGENTS;
-  return CLEANING_AGENTS;
+function clientAgentsFor(client = {}) {
+  const configured = Array.isArray(client.enabled_agents)
+    ? client.enabled_agents.map(normalizeAgentName).filter(key => AGENT_META[key])
+    : [];
+  const unique = [...new Set(configured.length ? configured : DEFAULT_CLIENT_AGENTS)];
+  return AGENT_ORDER.filter(key => unique.includes(key));
 }
 
 async function getClient(clientId) {
@@ -84,7 +122,7 @@ async function getClient(clientId) {
   if (!/^\d+$/.test(String(clientId))) return null;
 
   const { rows } = await pool.query(
-    `SELECT id, name, business_name, vertical, email, pin
+    `SELECT id, name, business_name, vertical, email, pin, enabled_agents
      FROM clients
      WHERE id = $1
      LIMIT 1`,
@@ -100,6 +138,7 @@ function publicClient(client) {
     business_name: client.business_name,
     vertical: client.vertical,
     email: client.email,
+    enabled_agents: client.enabled_agents || [],
   };
 }
 
@@ -120,21 +159,6 @@ async function requireClient(req, res, next) {
     console.error('[client] auth error:', err.message);
     res.status(500).json({ error: 'Unable to load client' });
   }
-}
-
-function prospectVerticalClause(alias = 'p') {
-  return `LOWER(TRIM(COALESCE(${alias}.vertical, ''))) = LOWER(TRIM($1))`;
-}
-
-function companyVerticalClause(alias = 'c') {
-  return `LOWER(TRIM(COALESCE(${alias}.industry, ''))) = LOWER(TRIM($1))`;
-}
-
-function approvalVerticalClause() {
-  return `(
-    LOWER(TRIM(COALESCE(pc.author_title, ''))) = LOWER(TRIM($1))
-    OR LOWER(TRIM(COALESCE(c.industry, ''))) = LOWER(TRIM($1))
-  )`;
 }
 
 function prospectName(row) {
@@ -160,7 +184,7 @@ function previewNow() {
 
 function previewPayload() {
   const { hoursAgo, daysAgo } = previewNow();
-  const agents = clientAgentsFor(PREVIEW_CLIENT.vertical).map((key, index) => ({
+  const agents = clientAgentsFor({ ...PREVIEW_CLIENT, enabled_agents: DEFAULT_CLIENT_AGENTS }).map((key, index) => ({
     key,
     ...AGENT_META[key],
     active: index < 3,
@@ -184,9 +208,14 @@ function previewPayload() {
     stats: {
       prospects_this_month: 42,
       emails_sent_this_week: 118,
+      emails_sent_total: 324,
       open_rate: 38.6,
       opened_contacts: 27,
       emailed_contacts: 70,
+      response_rate: 7.1,
+      replied_contacts: 5,
+      warm_signals: 8,
+      warm_prospects: 12,
       pending_approvals: 3,
       content_published_week: 6,
       total_touchpoints: 284,
@@ -267,13 +296,18 @@ function previewAnalytics() {
 }
 
 async function buildDashboardData(client) {
+  const clientId = client.id;
   const vertical = client.vertical || '';
-  const allowed = clientAgentsFor(vertical);
+  const allowed = clientAgentsFor(client);
 
   const [
     prospectsMonth,
     emailsWeek,
+    emailsTotal,
     emailEngagement,
+    emailResponses,
+    warmSignals,
+    warmProspects,
     totalProspects,
     totalTouchpoints,
     pendingApprovals,
@@ -281,50 +315,75 @@ async function buildDashboardData(client) {
     contentWeek,
     agents,
   ] = await Promise.all([
-    pool.query(`SELECT COUNT(*)::int AS count FROM prospects p WHERE ${prospectVerticalClause('p')} AND p.created_at >= DATE_TRUNC('month', NOW())`, [vertical]),
+    pool.query(`SELECT COUNT(*)::int AS count FROM prospects p WHERE p.client_id = $1 AND p.created_at >= DATE_TRUNC('month', NOW())`, [clientId]),
     pool.query(`
       SELECT COUNT(*)::int AS count
-      FROM touchpoints t JOIN prospects p ON p.id = t.prospect_id
-      WHERE ${prospectVerticalClause('p')} AND t.channel = 'email'
+      FROM touchpoints t
+      WHERE t.client_id = $1 AND t.channel = 'email'
         AND t.action_type IN ('outbound', 'email_warm')
         AND t.created_at >= NOW() - INTERVAL '7 days'
-    `, [vertical]),
+    `, [clientId]),
+    pool.query(`
+      SELECT COUNT(*)::int AS count
+      FROM touchpoints t
+      WHERE t.client_id = $1 AND t.channel = 'email'
+        AND t.action_type IN ('outbound', 'email_warm')
+    `, [clientId]),
     pool.query(`
       WITH emailed AS (
-        SELECT DISTINCT p.id FROM prospects p JOIN touchpoints t ON t.prospect_id = p.id
-        WHERE ${prospectVerticalClause('p')} AND t.channel = 'email' AND t.action_type IN ('outbound', 'email_warm')
+        SELECT DISTINCT t.prospect_id FROM touchpoints t
+        WHERE t.client_id = $1 AND t.channel = 'email' AND t.action_type IN ('outbound', 'email_warm')
       ),
       opened AS (
-        SELECT DISTINCT p.id FROM prospects p JOIN touchpoints t ON t.prospect_id = p.id
-        WHERE ${prospectVerticalClause('p')} AND t.channel = 'email' AND t.action_type = 'email_opened'
+        SELECT DISTINCT t.prospect_id FROM touchpoints t
+        WHERE t.client_id = $1 AND t.channel = 'email' AND t.action_type IN ('open', 'email_opened')
       )
       SELECT (SELECT COUNT(*)::int FROM emailed) AS emailed_count, (SELECT COUNT(*)::int FROM opened) AS opened_count
-    `, [vertical]),
-    pool.query(`SELECT COUNT(*)::int AS count FROM prospects p WHERE ${prospectVerticalClause('p')}`, [vertical]),
-    pool.query(`SELECT COUNT(*)::int AS count FROM touchpoints t JOIN prospects p ON p.id = t.prospect_id WHERE ${prospectVerticalClause('p')}`, [vertical]),
+    `, [clientId]),
+    pool.query(`
+      SELECT COUNT(DISTINCT prospect_id)::int AS count
+      FROM touchpoints
+      WHERE client_id = $1
+        AND channel = 'email'
+        AND action_type IN ('inbound_reply', 'reply', 'email_reply')
+    `, [clientId]),
+    pool.query(`
+      SELECT COUNT(*)::int AS count
+      FROM (
+        SELECT prospect_id
+        FROM touchpoints
+        WHERE client_id = $1
+          AND channel = 'email'
+          AND action_type IN ('open', 'email_opened')
+          AND created_at >= NOW() - INTERVAL '7 days'
+        GROUP BY prospect_id
+        HAVING COUNT(*) >= 2
+      ) signals
+    `, [clientId]),
+    pool.query(`SELECT COUNT(*)::int AS count FROM prospects p WHERE p.client_id = $1 AND p.status = 'warm'`, [clientId]),
+    pool.query(`SELECT COUNT(*)::int AS count FROM prospects p WHERE p.client_id = $1`, [clientId]),
+    pool.query(`SELECT COUNT(*)::int AS count FROM touchpoints t WHERE t.client_id = $1`, [clientId]),
     pool.query(`
       SELECT COUNT(*)::int AS count
       FROM pending_comments pc
-      LEFT JOIN companies c ON LOWER(TRIM(c.name)) = LOWER(TRIM(pc.author_name))
-      WHERE pc.status = 'pending' AND ${approvalVerticalClause()}
-    `, [vertical]),
+      WHERE pc.status = 'pending' AND pc.client_id = $1
+    `, [clientId]),
     pool.query(`
       SELECT t.channel, t.action_type, t.content_summary, t.outcome, t.sentiment, t.created_at,
         p.first_name, p.last_name, p.notes, c.name AS company_name
       FROM touchpoints t
       JOIN prospects p ON p.id = t.prospect_id
-      LEFT JOIN companies c ON c.id = p.company_id
-      WHERE ${prospectVerticalClause('p')}
+      LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+      WHERE t.client_id = $1 AND p.client_id = $1
       ORDER BY t.created_at DESC
       LIMIT 10
-    `, [vertical]),
+    `, [clientId]),
     pool.query(`
       SELECT pa.channel, COUNT(*)::int AS count
       FROM post_analytics pa
-      LEFT JOIN companies c ON c.id = pa.company_id
-      WHERE pa.published_at >= DATE_TRUNC('week', NOW()) AND ${companyVerticalClause('c')}
+      WHERE pa.client_id = $1 AND pa.published_at >= DATE_TRUNC('week', NOW())
       GROUP BY pa.channel
-    `, [vertical]),
+    `, [clientId]),
     pool.query(`
       WITH latest AS (
         SELECT DISTINCT ON (LOWER(REPLACE(agent_name, '_agent', '')))
@@ -332,24 +391,27 @@ async function buildDashboardData(client) {
           status,
           ran_at
         FROM agent_log
+        WHERE client_id = $1
         ORDER BY LOWER(REPLACE(agent_name, '_agent', '')), ran_at DESC
       ),
       week_runs AS (
         SELECT LOWER(REPLACE(agent_name, '_agent', '')) AS raw_agent, COUNT(*)::int AS runs
         FROM agent_log
-        WHERE ran_at >= NOW() - INTERVAL '7 days'
+        WHERE client_id = $1 AND ran_at >= NOW() - INTERVAL '7 days'
         GROUP BY LOWER(REPLACE(agent_name, '_agent', ''))
       )
       SELECT l.raw_agent, l.status, l.ran_at, COALESCE(w.runs, 0)::int AS week_runs
       FROM latest l
       LEFT JOIN week_runs w ON w.raw_agent = l.raw_agent
-    `),
+    `, [clientId]),
   ]);
 
   const engagement = emailEngagement.rows[0] || {};
   const emailedCount = Number(engagement.emailed_count || 0);
   const openedCount = Number(engagement.opened_count || 0);
+  const repliedCount = Number(emailResponses.rows[0]?.count || 0);
   const openRate = emailedCount > 0 ? +((openedCount / emailedCount) * 100).toFixed(1) : 0;
+  const responseRate = emailedCount > 0 ? +((repliedCount / emailedCount) * 100).toFixed(1) : 0;
   const runRows = new Map();
   for (const row of agents.rows) {
     const key = normalizeAgentName(row.raw_agent);
@@ -389,9 +451,14 @@ async function buildDashboardData(client) {
     stats: {
       prospects_this_month: Number(prospectsMonth.rows[0]?.count || 0),
       emails_sent_this_week: Number(emailsWeek.rows[0]?.count || 0),
+      emails_sent_total: Number(emailsTotal.rows[0]?.count || 0),
       open_rate: openRate,
       opened_contacts: openedCount,
       emailed_contacts: emailedCount,
+      response_rate: responseRate,
+      replied_contacts: repliedCount,
+      warm_signals: Number(warmSignals.rows[0]?.count || 0),
+      warm_prospects: Number(warmProspects.rows[0]?.count || 0),
       pending_approvals: Number(pendingApprovals.rows[0]?.count || 0),
       content_published_week: Object.values(content).reduce((sum, count) => sum + count, 0),
       total_touchpoints: Number(totalTouchpoints.rows[0]?.count || 0),
@@ -411,35 +478,35 @@ async function buildDashboardData(client) {
   };
 }
 
-async function getProspects(vertical) {
+async function getProspects(clientId) {
   const { rows } = await pool.query(`
     SELECT p.id, p.first_name, p.last_name, p.email, p.phone, p.status, p.icp_score, p.notes,
       p.last_contacted_at, p.created_at, c.name AS company_name, COUNT(t.id)::int AS touchpoint_count
     FROM prospects p
-    LEFT JOIN companies c ON p.company_id = c.id
-    LEFT JOIN touchpoints t ON t.prospect_id = p.id
-    WHERE p.do_not_contact = false AND ${prospectVerticalClause('p')}
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+    LEFT JOIN touchpoints t ON t.prospect_id = p.id AND t.client_id = p.client_id
+    WHERE p.do_not_contact = false AND p.client_id = $1
     GROUP BY p.id, c.name
     ORDER BY p.icp_score DESC NULLS LAST
     LIMIT 200
-  `, [vertical]);
+  `, [clientId]);
   return rows.map(row => ({
     ...row,
     business: prospectName(row),
   }));
 }
 
-async function getActivity(vertical, limit = 50) {
+async function getActivity(clientId, limit = 50) {
   const { rows } = await pool.query(`
     SELECT t.id, t.channel, t.action_type, t.content_summary, t.outcome, t.created_at,
       p.first_name, p.last_name, p.notes, c.name AS company_name
     FROM touchpoints t
     JOIN prospects p ON p.id = t.prospect_id
-    LEFT JOIN companies c ON c.id = p.company_id
-    WHERE ${prospectVerticalClause('p')}
+    LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+    WHERE t.client_id = $1 AND p.client_id = $1
     ORDER BY t.created_at DESC
     LIMIT $2
-  `, [vertical, limit]);
+  `, [clientId, limit]);
   return rows.map(row => ({
     id: row.id,
     agent: row.channel === 'email' ? 'Emmett' : row.channel === 'google_review' ? 'Vera' : 'Paige',
@@ -452,33 +519,32 @@ async function getActivity(vertical, limit = 50) {
   }));
 }
 
-async function getApprovals(vertical) {
+async function getApprovals(clientId) {
   const { rows } = await pool.query(`
     SELECT pc.id, pc.author_name, pc.author_title, pc.post_content, pc.comment, pc.channel, pc.status, pc.created_at
     FROM pending_comments pc
-    LEFT JOIN companies c ON LOWER(TRIM(c.name)) = LOWER(TRIM(pc.author_name))
-    WHERE pc.status = 'pending' AND ${approvalVerticalClause()}
+    WHERE pc.status = 'pending' AND pc.client_id = $1
     ORDER BY pc.created_at DESC
     LIMIT 100
-  `, [vertical]);
+  `, [clientId]);
   return rows;
 }
 
-async function getAnalytics(vertical) {
+async function getAnalytics(clientId) {
   const [volume, reply, icp, funnel, topProspects, content, email] = await Promise.all([
     pool.query(`
       SELECT DATE(t.created_at)::text AS date, t.channel, COUNT(*)::int AS count
-      FROM touchpoints t JOIN prospects p ON p.id = t.prospect_id
-      WHERE ${prospectVerticalClause('p')} AND t.channel IN ('email','sms')
+      FROM touchpoints t
+      WHERE t.client_id = $1 AND t.channel IN ('email','sms')
         AND t.action_type IN ('outbound', 'email_warm') AND t.created_at >= NOW() - INTERVAL '30 days'
       GROUP BY DATE(t.created_at), t.channel ORDER BY date ASC
-    `, [vertical]),
+    `, [clientId]),
     pool.query(`
       SELECT DATE_TRUNC('week', t.created_at)::date::text AS week, t.action_type, COUNT(*)::int AS count
-      FROM touchpoints t JOIN prospects p ON p.id = t.prospect_id
-      WHERE ${prospectVerticalClause('p')} AND t.channel = 'email' AND t.created_at >= NOW() - INTERVAL '56 days'
+      FROM touchpoints t
+      WHERE t.client_id = $1 AND t.channel = 'email' AND t.created_at >= NOW() - INTERVAL '56 days'
       GROUP BY DATE_TRUNC('week', t.created_at), t.action_type ORDER BY week ASC
-    `, [vertical]),
+    `, [clientId]),
     pool.query(`
       SELECT CASE
         WHEN icp_score IS NULL THEN 'Unknown'
@@ -488,37 +554,36 @@ async function getAnalytics(vertical) {
         WHEN icp_score BETWEEN 61 AND 80 THEN '61-80'
         ELSE '81-100'
       END AS bucket, COUNT(*)::int AS count
-      FROM prospects p WHERE p.do_not_contact = false AND ${prospectVerticalClause('p')}
+      FROM prospects p WHERE p.do_not_contact = false AND p.client_id = $1
       GROUP BY bucket
-    `, [vertical]),
-    pool.query(`SELECT status AS stage, COUNT(*)::int AS count FROM prospects p WHERE ${prospectVerticalClause('p')} GROUP BY status`, [vertical]),
+    `, [clientId]),
+    pool.query(`SELECT status AS stage, COUNT(*)::int AS count FROM prospects p WHERE p.client_id = $1 GROUP BY status`, [clientId]),
     pool.query(`
       SELECT p.id, p.status, p.icp_score, p.last_contacted_at, p.first_name, p.last_name, p.notes,
         c.name AS company_name, COUNT(t.id)::int AS touchpoint_count
       FROM prospects p
-      LEFT JOIN companies c ON p.company_id = c.id
-      LEFT JOIN touchpoints t ON t.prospect_id = p.id
-      WHERE p.do_not_contact = false AND ${prospectVerticalClause('p')}
+      LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+      LEFT JOIN touchpoints t ON t.prospect_id = p.id AND t.client_id = p.client_id
+      WHERE p.do_not_contact = false AND p.client_id = $1
       GROUP BY p.id, c.name
       ORDER BY COUNT(t.id) DESC, p.icp_score DESC NULLS LAST
       LIMIT 10
-    `, [vertical]),
+    `, [clientId]),
     pool.query(`
       SELECT pa.channel, COUNT(*)::int AS posts, AVG(pa.engagement_rate)::float AS engagement_rate
       FROM post_analytics pa
-      LEFT JOIN companies c ON c.id = pa.company_id
-      WHERE ${companyVerticalClause('c')} AND pa.published_at >= NOW() - INTERVAL '30 days'
+      WHERE pa.client_id = $1 AND pa.published_at >= NOW() - INTERVAL '30 days'
       GROUP BY pa.channel
       ORDER BY posts DESC
-    `, [vertical]),
+    `, [clientId]),
     pool.query(`
       SELECT
         COUNT(CASE WHEN t.action_type IN ('outbound', 'email_warm') THEN 1 END)::int AS sent_week,
         COUNT(CASE WHEN t.action_type = 'email_opened' THEN 1 END)::int AS opened_week,
         COUNT(CASE WHEN t.action_type = 'email_clicked' THEN 1 END)::int AS clicked_week
-      FROM touchpoints t JOIN prospects p ON p.id = t.prospect_id
-      WHERE ${prospectVerticalClause('p')} AND t.channel = 'email' AND t.created_at >= NOW() - INTERVAL '7 days'
-    `, [vertical]),
+      FROM touchpoints t
+      WHERE t.client_id = $1 AND t.channel = 'email' AND t.created_at >= NOW() - INTERVAL '7 days'
+    `, [clientId]),
   ]);
 
   const weekMap = {};
@@ -659,7 +724,7 @@ router.get('/:clientId/api/dashboard', requireClient, async (req, res) => {
 
 router.get('/:clientId/api/prospects', requireClient, async (req, res) => {
   try {
-    res.json(await getProspects(req.client.vertical || ''));
+    res.json(await getProspects(req.client.id));
   } catch (err) {
     console.error('[client] prospects error:', err.message);
     res.status(500).json({ error: 'Unable to load prospects' });
@@ -672,9 +737,9 @@ router.get('/:clientId/api/prospects/:prospectId/touchpoints', requireClient, as
       SELECT t.channel, t.action_type, t.content_summary, t.outcome, t.created_at
       FROM touchpoints t
       JOIN prospects p ON p.id = t.prospect_id
-      WHERE t.prospect_id = $2 AND ${prospectVerticalClause('p')}
+      WHERE t.prospect_id = $2 AND t.client_id = $1 AND p.client_id = $1
       ORDER BY t.created_at ASC
-    `, [req.client.vertical || '', req.params.prospectId]);
+    `, [req.client.id, req.params.prospectId]);
     res.json(rows);
   } catch (err) {
     console.error('[client] prospect touchpoints error:', err.message);
@@ -684,7 +749,7 @@ router.get('/:clientId/api/prospects/:prospectId/touchpoints', requireClient, as
 
 router.get('/:clientId/api/activity', requireClient, async (req, res) => {
   try {
-    res.json(await getActivity(req.client.vertical || ''));
+    res.json(await getActivity(req.client.id));
   } catch (err) {
     console.error('[client] activity error:', err.message);
     res.status(500).json({ error: 'Unable to load activity' });
@@ -693,7 +758,7 @@ router.get('/:clientId/api/activity', requireClient, async (req, res) => {
 
 router.get('/:clientId/api/approvals', requireClient, async (req, res) => {
   try {
-    res.json(await getApprovals(req.client.vertical || ''));
+    res.json(await getApprovals(req.client.id));
   } catch (err) {
     console.error('[client] approvals error:', err.message);
     res.status(500).json({ error: 'Unable to load approvals' });
@@ -710,14 +775,13 @@ router.post('/:clientId/api/approvals/:id', requireClient, async (req, res) => {
     const { rows } = await pool.query(`
       SELECT pc.*
       FROM pending_comments pc
-      LEFT JOIN companies c ON LOWER(TRIM(c.name)) = LOWER(TRIM(pc.author_name))
-      WHERE pc.id = $2 AND pc.status = 'pending' AND ${approvalVerticalClause()}
+      WHERE pc.id = $2 AND pc.status = 'pending' AND pc.client_id = $1
       LIMIT 1
-    `, [req.client.vertical || '', req.params.id]);
+    `, [req.client.id, req.params.id]);
     const item = rows[0];
     if (!item) return res.status(404).json({ error: 'Approval not found' });
 
-    await pool.query('UPDATE pending_comments SET status = $1 WHERE id = $2', [action, item.id]);
+    await pool.query('UPDATE pending_comments SET status = $1 WHERE id = $2 AND client_id = $3', [action, item.id, req.client.id]);
     res.json({ success: true, id: item.id, action });
 
     if (action === 'approved') {
@@ -741,7 +805,7 @@ router.post('/:clientId/api/approvals/:id', requireClient, async (req, res) => {
 
 router.get('/:clientId/api/analytics', requireClient, async (req, res) => {
   try {
-    res.json(await getAnalytics(req.client.vertical || ''));
+    res.json(await getAnalytics(req.client.id));
   } catch (err) {
     console.error('[client] analytics error:', err.message);
     res.status(500).json({ error: 'Unable to load analytics' });

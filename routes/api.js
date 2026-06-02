@@ -86,7 +86,7 @@ router.get('/api/agent-visibility', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const [clientResult, prospectsWithEmail] = await Promise.all([
-      pool.query('SELECT id, facebook_url, gbp_url, max_email FROM clients WHERE id = $1', [clientId]),
+      pool.query('SELECT id, facebook_url, gbp_url, max_email, enabled_agents FROM clients WHERE id = $1', [clientId]),
       pool.query(`
         SELECT COUNT(*)::int AS count
         FROM prospects
@@ -116,6 +116,7 @@ router.get('/api/agent-visibility', requireDashboardRead, async (req, res) => {
       sketch: false,
       penny: false,
       analytics: true,
+      enabled_agents: client.enabled_agents || [],
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

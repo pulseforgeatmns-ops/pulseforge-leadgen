@@ -3494,7 +3494,7 @@ function applyViewerPermissions() {
     ? '[data-tab="approvals"], [data-tab="actions"], #usersTab'
     : '[data-tab="approvals"], [data-tab="actions"], [data-tab="prospects"], #usersTab';
   document.querySelectorAll(selector).forEach(el => el?.remove());
-  document.querySelector('.stat-row')?.remove();
+  if (_currentUserRole !== 'client') document.querySelector('.stat-row')?.remove();
   document.getElementById('askMaxPanel')?.remove();
   document.getElementById('maxBriefRegenBtn')?.remove();
   document.querySelector('.agents-area .area-actions')?.remove();
@@ -3904,21 +3904,32 @@ async function loadClientSelector() {
 async function loadAgentVisibility() {
   if (['admin', 'manager'].includes(_currentUserRole)) {
     document.querySelectorAll('.agent-card[data-agent]').forEach(card => {
+      card.style.display = '';
       card.classList.remove('not-configured');
       card.title = '';
     });
+    updateAgentCounts();
     return;
   }
   try {
     const res = await fetch('/api/agent-visibility', { credentials: 'include' });
     if (!res.ok) return;
     const visibility = await res.json();
+    const enabled = Array.isArray(visibility.enabled_agents)
+      ? new Set(visibility.enabled_agents.map(agent => String(agent).toLowerCase()))
+      : null;
     document.querySelectorAll('.agent-card[data-agent]').forEach(card => {
       const key = card.dataset.agent;
+      if (_currentUserRole === 'client' && enabled && !enabled.has(key)) {
+        card.style.display = 'none';
+        return;
+      }
+      card.style.display = '';
       const configured = visibility[key] !== false;
       card.classList.toggle('not-configured', !configured);
       card.title = configured ? '' : 'Not configured for this client';
     });
+    updateAgentCounts();
   } catch(e) {
     console.error('loadAgentVisibility:', e);
   }
@@ -6799,15 +6810,18 @@ async function dismissAction(id) {
 })();
 
 // ── AGENT ROSTER COUNTS ───────────────────────────────────────────
-(function updateAgentCounts() {
-  const live    = document.querySelectorAll('.agent-card.live').length;
-  const planned = document.querySelectorAll('.agent-card.planned').length;
+function updateAgentCounts() {
+  const visibleCards = Array.from(document.querySelectorAll('.agent-card[data-agent]'))
+    .filter(card => card.style.display !== 'none');
+  const live    = visibleCards.filter(card => card.classList.contains('live')).length;
+  const planned = visibleCards.filter(card => card.classList.contains('planned')).length;
   const total   = live + planned;
   const hdr = document.getElementById('agentLivePlannedCount');
   const sub = document.getElementById('agentRosterSub');
   if (hdr) hdr.textContent = planned > 0 ? `${live} LIVE · ${planned} PLANNED` : `${live} LIVE`;
   if (sub) sub.textContent = `${total} agent${total !== 1 ? 's' : ''} · ${live} live${planned > 0 ? ` · ${planned} planned` : ''} · Click any agent to view details`;
-})();
+}
+updateAgentCounts();
 
 </script>
 </body>

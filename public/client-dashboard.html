@@ -96,6 +96,12 @@ body::before {
 .section-divider { display:flex; align-items:center; gap:1rem; margin-bottom:1.25rem; margin-top:0.5rem; }
 .section-divider-label { font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:3px; text-transform:uppercase; color:var(--gray); flex-shrink:0; }
 .section-divider-line { flex:1; height:1px; background:linear-gradient(90deg, var(--border), transparent); }
+.client-stat-row { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:0.85rem; margin-bottom:1.5rem; }
+.client-stat-card { background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:0.95rem 1rem; min-width:0; }
+.client-stat-label { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:var(--gray); letter-spacing:1.6px; text-transform:uppercase; margin-bottom:0.45rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.client-stat-val { font-family:'Bebas Neue',sans-serif; font-size:1.8rem; line-height:1; letter-spacing:1px; color:var(--white); }
+.client-stat-val.t { color:var(--teal); } .client-stat-val.p { color:var(--purple-bright); } .client-stat-val.g { color:var(--green); } .client-stat-val.o { color:var(--orange); } .client-stat-val.y { color:var(--yellow); }
+.client-stat-sub { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:var(--gray-light); margin-top:0.35rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .agents-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:1rem; margin-bottom:1.5rem; max-width:75%; }
 .agent-card { background:var(--bg1); border:1px solid var(--border); border-radius:12px; padding:0; cursor:pointer; transition:all 0.3s; position:relative; overflow:hidden; aspect-ratio:0.75; display:flex; flex-direction:column; }
 .agent-card:hover { border-color:rgba(0,212,180,0.4); transform:translateY(-3px); box-shadow:0 12px 40px rgba(0,0,0,0.4), 0 0 30px rgba(0,212,180,0.1); }
@@ -222,9 +228,9 @@ body::before {
 .sb-item { font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:var(--gray); display:flex; align-items:center; gap:5px; }
 .sb-item span { color:var(--teal); }
 .sb-item.right { margin-left:auto; }
-@media (max-width:1100px) { .main{grid-template-columns:1fr;} .right-panel{display:none;} .agents-grid{grid-template-columns:repeat(2,minmax(0,1fr));max-width:100%;} }
+@media (max-width:1100px) { .main{grid-template-columns:1fr;} .right-panel{display:none;} .client-stat-row{grid-template-columns:repeat(3,minmax(0,1fr));} .agents-grid{grid-template-columns:repeat(2,minmax(0,1fr));max-width:100%;} }
 @media (max-width:900px) { .topbar{gap:1rem;} .topbar-right{display:none;} .nav-tabs{margin-left:auto;overflow-x:auto;min-width:0;} }
-@media (max-width:760px) { .topbar{padding:0 1rem;gap:0.75rem;} .logo{font-size:1rem;letter-spacing:2px;max-width:210px;} .nav-tabs{overflow-x:auto;margin-left:0;min-width:0;} .nav-tab{padding:5px 10px;} .topbar-right{display:none;} .agents-area,.approvals-area,.prospects-area,.activity-area,.analytics-area{padding:1rem;} .agents-grid,.analytics-grid{grid-template-columns:1fr;} }
+@media (max-width:760px) { .topbar{padding:0 1rem;gap:0.75rem;} .logo{font-size:1rem;letter-spacing:2px;max-width:210px;} .nav-tabs{overflow-x:auto;margin-left:0;min-width:0;} .nav-tab{padding:5px 10px;} .topbar-right{display:none;} .agents-area,.approvals-area,.prospects-area,.activity-area,.analytics-area{padding:1rem;} .client-stat-row,.agents-grid,.analytics-grid{grid-template-columns:1fr;} }
 </style>
 </head>
 <body data-auth="login">
@@ -266,6 +272,13 @@ body::before {
           <div class="area-title" id="agentTitle">AGENT ROSTER</div>
           <div class="area-sub" id="agentRosterSub">Client-visible agents · Read-only</div>
         </div>
+      </div>
+      <div class="client-stat-row" id="clientStatsRow">
+        <div class="client-stat-card"><div class="client-stat-label">Leads</div><div class="client-stat-val t" id="statLeads">0</div><div class="client-stat-sub" id="statLeadsSub">0 new this month</div></div>
+        <div class="client-stat-card"><div class="client-stat-label">Emails Sent</div><div class="client-stat-val o" id="statEmails">0</div><div class="client-stat-sub" id="statEmailsSub">0 total</div></div>
+        <div class="client-stat-card"><div class="client-stat-label">Open Rate</div><div class="client-stat-val p" id="statOpenRate">0%</div><div class="client-stat-sub" id="statOpenSub">0 of 0 opened</div></div>
+        <div class="client-stat-card"><div class="client-stat-label">Response Rate</div><div class="client-stat-val g" id="statResponseRate">0%</div><div class="client-stat-sub" id="statResponseSub">0 replies</div></div>
+        <div class="client-stat-card"><div class="client-stat-label">Warm Signals</div><div class="client-stat-val y" id="statWarmSignals">0</div><div class="client-stat-sub" id="statWarmSub">0 warm prospects</div></div>
       </div>
       <div class="section-divider"><div class="section-divider-label">Active Client Agents</div><div class="section-divider-line"></div></div>
       <div class="agents-grid" id="agentsGrid"></div>
@@ -478,6 +491,16 @@ function renderClientHeader() {
 function renderDashboard() {
   renderClientHeader();
   const stats = dashboard.stats || {};
+  document.getElementById('statLeads').textContent = fmtNum(stats.total_prospects);
+  document.getElementById('statLeadsSub').textContent = `${fmtNum(stats.prospects_this_month)} new this month`;
+  document.getElementById('statEmails').textContent = fmtNum(stats.emails_sent_this_week);
+  document.getElementById('statEmailsSub').textContent = `${fmtNum(stats.emails_sent_total)} total`;
+  document.getElementById('statOpenRate').textContent = pct(stats.open_rate);
+  document.getElementById('statOpenSub').textContent = `${fmtNum(stats.opened_contacts)} of ${fmtNum(stats.emailed_contacts)} opened`;
+  document.getElementById('statResponseRate').textContent = pct(stats.response_rate);
+  document.getElementById('statResponseSub').textContent = `${fmtNum(stats.replied_contacts)} replies`;
+  document.getElementById('statWarmSignals').textContent = fmtNum(stats.warm_signals);
+  document.getElementById('statWarmSub').textContent = `${fmtNum(stats.warm_prospects)} warm prospects`;
   document.getElementById('metricPending').textContent = fmtNum(stats.pending_approvals);
   document.getElementById('metricOpenRate').textContent = pct(stats.open_rate);
   document.getElementById('metricOpenDetail').textContent = `${fmtNum(stats.opened_contacts)} of ${fmtNum(stats.emailed_contacts)} opened`;
