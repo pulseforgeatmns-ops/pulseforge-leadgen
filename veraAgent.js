@@ -15,6 +15,11 @@ const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
 
 const STAR_NUM = { ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5 };
+const GBP_THROTTLE_MS = 6500;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 // ── CREDENTIALS ────────────────────────────────────────────────────────
 function credentialsConfigured() {
@@ -44,12 +49,40 @@ async function ensureSchema() {
 }
 
 // ── GBP API HELPERS ────────────────────────────────────────────────────
+let lastThrottledGbpAt = 0;
+
+async function waitForGbpThrottle() {
+  if (!lastThrottledGbpAt) return;
+  const elapsed = Date.now() - lastThrottledGbpAt;
+  if (elapsed < GBP_THROTTLE_MS) {
+    await sleep(GBP_THROTTLE_MS - elapsed);
+  }
+}
+
+function markGbpThrottle() {
+  lastThrottledGbpAt = Date.now();
+}
+
 async function gbpGet(token, baseUrl, path, params = {}) {
-  const res = await axios.get(`${baseUrl}/${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-    params,
-  });
-  return res.data;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await axios.get(`${baseUrl}/${path}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params,
+      });
+      return res.data;
+    } catch (err) {
+      if (err.response?.status === 429) {
+        if (attempt === 0) {
+          console.warn(`[Vera] GBP rate limit (429) on ${path} — retrying in 60s`);
+          await sleep(60000);
+          continue;
+        }
+        console.warn(`[Vera] GBP rate limit (429) on ${path} after retry — skipping`);
+      }
+      throw err;
+    }
+  }
 }
 
 async function fetchAccounts(token) {
@@ -58,18 +91,28 @@ async function fetchAccounts(token) {
 }
 
 async function fetchLocations(token, accountName) {
-  const data = await gbpGet(token, GBP_BUSINESS_INFO_BASE, `${accountName}/locations`, {
-    readMask: 'name,title,websiteUri',
-  });
-  return data.locations || [];
+  await waitForGbpThrottle();
+  try {
+    const data = await gbpGet(token, GBP_BUSINESS_INFO_BASE, `${accountName}/locations`, {
+      readMask: 'name,title,websiteUri',
+    });
+    return data.locations || [];
+  } finally {
+    markGbpThrottle();
+  }
 }
 
 async function fetchReviews(token, locationName) {
-  const data = await gbpGet(token, GBP_REVIEWS_BASE, `${locationName}/reviews`, {
-    orderBy: 'updateTime desc',
-    pageSize: 20,
-  });
-  return data.reviews || [];
+  await waitForGbpThrottle();
+  try {
+    const data = await gbpGet(token, GBP_REVIEWS_BASE, `${locationName}/reviews`, {
+      orderBy: 'updateTime desc',
+      pageSize: 20,
+    });
+    return data.reviews || [];
+  } finally {
+    markGbpThrottle();
+  }
 }
 
 // ── COMPANY MATCHING ───────────────────────────────────────────────────
