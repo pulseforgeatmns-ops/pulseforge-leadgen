@@ -3,6 +3,7 @@ require('dotenv').config();
 const axios = require('axios');
 const pool = require('./db');
 const { normalizeClientId } = require('./utils/clientContext');
+const { invalidOutreachEmailReason } = require('./utils/emailGuard');
 
 const AGENT_NAME = 'enrich_prospects';
 
@@ -33,6 +34,8 @@ function normalizeDomain(value) {
 }
 
 function emailRejection(email) {
+  const guardReason = invalidOutreachEmailReason(email);
+  if (guardReason) return guardReason;
   if (typeof email !== 'string' || !email.trim()) return 'empty';
   const e = email.trim();
   if (/\s/.test(e)) return 'contains spaces';
@@ -244,4 +247,3 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-

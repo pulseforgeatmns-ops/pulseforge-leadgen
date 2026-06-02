@@ -18,36 +18,97 @@ const PERF_EVENT_MAP = {
   email_soft_bounce: 'bounce',
 };
 
+function brevoMessageId(payload = {}) {
+  return payload.messageId ||
+    payload.message_id ||
+    payload['message-id'] ||
+    payload['messageId'] ||
+    payload['Message-ID'] ||
+    null;
+}
+
+async function resolveProspectForBrevoEvent({ email, clientId, messageId, subject }) {
+  if (messageId) {
+    const byMessage = await pool.query(`
+      SELECT
+        p.id, p.status, p.client_id, p.first_name, p.last_name, p.email,
+        p.vertical, p.icp_score, p.notes,
+        c.name AS company_name
+      FROM agent_log al
+      JOIN prospects p ON p.id = al.prospect_id AND p.client_id = al.client_id
+      LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+      WHERE al.agent_name = 'emmett'
+        AND al.action = 'email_sent'
+        AND al.payload->>'message_id' = $1
+      ORDER BY al.ran_at DESC
+      LIMIT 1
+    `, [messageId]);
+    if (byMessage.rows.length) return byMessage;
+  }
+
+  const params = [email, subject || null];
+  if (clientId) params.push(clientId);
+  return pool.query(
+    `SELECT
+       p.id, p.status, p.client_id, p.first_name, p.last_name, p.email,
+       p.vertical, p.icp_score, p.notes,
+       c.name AS company_name
+     FROM prospects p
+     LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+     LEFT JOIN LATERAL (
+       SELECT al.ran_at
+       FROM agent_log al
+       WHERE al.agent_name = 'emmett'
+         AND al.action = 'email_sent'
+         AND al.prospect_id = p.id
+         AND al.client_id = p.client_id
+         AND ($2::text IS NULL OR al.payload->>'subject' = $2)
+       ORDER BY al.ran_at DESC
+       LIMIT 1
+     ) latest_send ON TRUE
+     WHERE LOWER(p.email) = $1
+     ${clientId ? 'AND p.client_id = $3' : ''}
+     ORDER BY latest_send.ran_at DESC NULLS LAST, p.created_at DESC
+     LIMIT 1`,
+    params
+  );
+}
+
 // Roll an email engagement event into email_performance, pulling the
 // vertical / sequence / step that Emmett recorded for this send from agent_log.
 // Matches on the Brevo message_id when available, falling back to the
 // prospect's most recent send. Best-effort — never throws into the webhook.
-async function recordPerformanceEvent(prospect, actionType, messageId) {
+async function findMatchingSend(prospect, messageId, subject = null) {
+  const params = [prospect.id, prospect.client_id];
+  let sql = `
+    SELECT payload FROM agent_log
+    WHERE agent_name = 'emmett' AND action = 'email_sent'
+      AND prospect_id = $1 AND client_id = $2`;
+  if (messageId) {
+    sql += ` AND payload->>'message_id' = $3`;
+    params.push(messageId);
+  }
+  sql += ` ORDER BY ran_at DESC LIMIT 1`;
+
+  let logRes = await pool.query(sql, params);
+  if (!logRes.rows.length) {
+    logRes = await pool.query(`
+      SELECT payload FROM agent_log
+      WHERE agent_name = 'emmett' AND action = 'email_sent'
+        AND prospect_id = $1 AND client_id = $2
+        AND ($3::text IS NULL OR payload->>'subject' = $3)
+      ORDER BY ran_at DESC LIMIT 1
+    `, [prospect.id, prospect.client_id, subject || null]);
+  }
+
+  return logRes.rows[0]?.payload || null;
+}
+
+async function recordPerformanceEvent(prospect, actionType, messageId, subject = null) {
   const perfEvent = PERF_EVENT_MAP[actionType];
   if (!perfEvent) return;
   try {
-    const params = [prospect.id, prospect.client_id];
-    let sql = `
-      SELECT payload FROM agent_log
-      WHERE agent_name = 'emmett' AND action = 'email_sent'
-        AND prospect_id = $1 AND client_id = $2`;
-    if (messageId) {
-      sql += ` AND payload->>'message_id' = $3`;
-      params.push(messageId);
-    }
-    sql += ` ORDER BY ran_at DESC LIMIT 1`;
-
-    let logRes = await pool.query(sql, params);
-    if (!logRes.rows.length && messageId) {
-      logRes = await pool.query(`
-        SELECT payload FROM agent_log
-        WHERE agent_name = 'emmett' AND action = 'email_sent'
-          AND prospect_id = $1 AND client_id = $2
-        ORDER BY ran_at DESC LIMIT 1
-      `, [prospect.id, prospect.client_id]);
-    }
-
-    const raw = logRes.rows[0]?.payload;
+    const raw = await findMatchingSend(prospect, messageId, subject);
     const sendPayload = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
     const vertical = sendPayload.vertical ?? prospect.vertical ?? '';
     const sequence = sendPayload.sequence ?? '';
@@ -63,10 +124,15 @@ const BREVO_EVENT_MAP = {
   opened:           'email_opened',
   email_opened:     'email_opened',
   click:            'email_clicked',
+  clicked:          'email_clicked',
   loaded_by_proxy:  'email_opened',
+  loadedByProxy:    'email_opened',
+  loadedbyproxy:    'email_opened',
   hard_bounce:      'email_bounced',
+  hardBounces:      'email_bounced',
   email_bounced:    'email_bounced',
   soft_bounce:      'email_soft_bounce',
+  softBounces:      'email_soft_bounce',
   unsubscribed:     'email_unsubscribed',
   spam:             'email_spam',
 };
@@ -128,19 +194,13 @@ router.post('/webhooks/brevo', (req, res) => {
       if (!actionType || !email) return;
 
       const payloadClientId = Number(payload.client_id || payload.clientId || payload.metadata?.client_id) || null;
-      const prospectParams = payloadClientId ? [email, payloadClientId] : [email];
-      const prospectRes = await pool.query(
-        `SELECT
-           p.id, p.status, p.client_id, p.first_name, p.last_name, p.email,
-           p.vertical, p.icp_score, p.notes,
-           c.name AS company_name
-         FROM prospects p
-         LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
-         WHERE LOWER(p.email) = $1
-         ${payloadClientId ? 'AND p.client_id = $2' : ''}
-         LIMIT 1`,
-        prospectParams
-      );
+      const messageId = brevoMessageId(payload);
+      const prospectRes = await resolveProspectForBrevoEvent({
+        email,
+        clientId: payloadClientId,
+        messageId,
+        subject: payload.subject || null,
+      });
       if (!prospectRes.rows.length) {
         console.warn(`[Riley] No prospect for email: ${email} (event: ${event})`);
         return;
@@ -152,7 +212,7 @@ router.post('/webhooks/brevo', (req, res) => {
         subject:    payload.subject  || null,
         link:       payload.link     || null,
         brevo_id:   payload.id       || null,
-        message_id: payload.messageId || null,
+        message_id: messageId,
         date:       payload.date     || null,
       });
       await pool.query(`
@@ -163,7 +223,7 @@ router.post('/webhooks/brevo', (req, res) => {
         prospect.id, actionType,
         payload.subject || null,
         outcomeJson,
-        payload.messageId || null,
+        messageId,
         prospect.client_id,
       ]);
 
@@ -281,7 +341,7 @@ router.post('/webhooks/brevo', (req, res) => {
       }
 
       // Roll opens / clicks / bounces into the email_performance table.
-      await recordPerformanceEvent(prospect, actionType, payload.messageId);
+      await recordPerformanceEvent(prospect, actionType, messageId, payload.subject || null);
 
       await pool.query(`
         INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)

@@ -5,6 +5,7 @@ const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { recalculateICP } = require('./utils/icpScoring');
 const { recordSend } = require('./utils/emailPerformance');
+const { invalidOutreachEmailReason } = require('./utils/emailGuard');
 
 const AGENT_NAME = 'emmett';
 let FROM_EMAIL = 'jacob@gopulseforge.com';
@@ -810,8 +811,16 @@ async function sendEmail(toEmail, toName, subject, body, tags) {
       timeout: 15000,
     });
 
-    console.log(`Email sent to ${toEmail} — Message ID: ${res.data?.messageId}`);
-    return { success: true, messageId: res.data?.messageId };
+    const messageId =
+      res.data?.messageId ||
+      res.data?.messageID ||
+      res.data?.message_id ||
+      res.data?.messageIds?.[0] ||
+      res.headers?.['message-id'] ||
+      res.headers?.['x-message-id'] ||
+      null;
+    console.log(`Email sent to ${toEmail} — Message ID: ${messageId || 'not returned'}`);
+    return { success: true, messageId, brevoResponse: res.data || null };
   } catch (err) {
     const errorDetail = err.response?.data || err.message;
     console.error(`Failed to send to ${toEmail}:`, errorDetail);
@@ -1013,6 +1022,14 @@ async function getProspectsForEmail() {
     AND p.email NOT LIKE '%@domain.com'
     AND p.email NOT LIKE '%@example.com'
     AND p.do_not_contact IS NOT TRUE
+    AND NOT EXISTS (
+      SELECT 1
+      FROM touchpoints tb
+      JOIN prospects pb ON pb.id = tb.prospect_id AND pb.client_id = tb.client_id
+      WHERE LOWER(pb.email) = LOWER(p.email)
+        AND tb.channel = 'email'
+        AND tb.action_type = 'email_bounced'
+    )
     AND (
       p.status = 'warm'
       OR COALESCE(email_stats.email_touchpoint_count, 0) < 4
@@ -1189,6 +1206,21 @@ async function hasSentWarmEmail(prospectId) {
   return res.rows.length > 0;
 }
 
+async function hasPriorStepSend(prospectId, stepDay) {
+  const pool = require('./db');
+  const res = await pool.query(`
+    SELECT 1
+    FROM agent_log
+    WHERE agent_name = $1
+      AND action = 'email_sent'
+      AND prospect_id = $2
+      AND client_id = $3
+      AND payload->>'step' = $4
+    LIMIT 1
+  `, [AGENT_NAME, prospectId, CLIENT_ID, String(stepDay)]);
+  return res.rows.length > 0;
+}
+
 function humanDelay() {
   const ms = (45 + Math.random() * 45) * 1000; // 45–90 seconds
   console.log(`Waiting ${Math.round(ms / 1000)}s before next send...`);
@@ -1307,6 +1339,33 @@ async function run(context = {}) {
     }
     if (!step) continue;
 
+    const invalidEmailReason = invalidOutreachEmailReason(prospect.email);
+    if (invalidEmailReason) {
+      console.log(`Skipping ${prospect.email} — invalid email (${invalidEmailReason})`);
+      await db.logAgentAction(
+        AGENT_NAME,
+        'email_skipped',
+        prospect.id,
+        null,
+        { reason: invalidEmailReason, prospect_id: prospect.id, email: prospect.email, client_id: prospect.client_id },
+        'success'
+      );
+      continue;
+    }
+
+    if (await hasPriorStepSend(prospect.id, step.day)) {
+      console.log(`Skipping ${prospect.email} — prior step ${step.day} send already exists`);
+      await db.logAgentAction(
+        AGENT_NAME,
+        'email_skipped',
+        prospect.id,
+        null,
+        { reason: 'prior_step_send', prospect_id: prospect.id, step: step.day, client_id: prospect.client_id },
+        'success'
+      );
+      continue;
+    }
+
     // Check for warm email substitution on Day 4+ follow-ups
     let useWarm = false;
     const sequenceName = getSequenceForProspect(prospect);
@@ -1352,7 +1411,11 @@ async function run(context = {}) {
     );
 
     if (result.success) {
-      await completeEmailSendLog(sendLogId, 'email_sent', { ...logPayload, message_id: result.messageId }, 'completed');
+      await completeEmailSendLog(sendLogId, 'email_sent', {
+        ...logPayload,
+        message_id: result.messageId,
+        brevo_response: result.brevoResponse || null,
+      }, 'completed');
       await db.logTouchpoint(
         prospect.id,
         'email',

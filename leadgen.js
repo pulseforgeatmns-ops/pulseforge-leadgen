@@ -19,6 +19,7 @@ const { appendQualifiedScoutLead } = require('./utils/setterSheet');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { recordScoutBaseline } = require('./utils/icpScoring');
 const { validateEmail } = require('./utils/emailValidation');
+const { invalidOutreachEmailReason } = require('./utils/emailGuard');
 const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
 const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { acquireScoutLockWithWait, releaseScoutLock, getActiveScoutLock } = require('./utils/scoutLock');
@@ -1004,6 +1005,8 @@ function validateProspect(name) {
 const EMAIL_PLACEHOLDER_DOMAINS = ['godaddy.com', 'example.com', 'test.com'];
 function emailRejection(email) {
   if (typeof email !== 'string' || !email.trim()) return null;
+  const guardReason = invalidOutreachEmailReason(email);
+  if (guardReason) return guardReason;
   const e = email.trim();
   if (/\s/.test(e)) return 'contains spaces';
   if (e.length < 6) return 'too short';
