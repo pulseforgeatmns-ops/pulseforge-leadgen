@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const axios = require('axios');
+const { awaitProspeoSlot } = require('./utils/prospeoThrottle');
 
 const GOOGLE_PLACES_ENDPOINT = 'https://places.googleapis.com/v1/places:searchText';
 const GOOGLE_PLACE_DETAILS_ENDPOINT = 'https://places.googleapis.com/v1/places';
@@ -170,6 +171,8 @@ async function prospeoAttempt(lead, options) {
 
   const domain = normalizeDomain(leadWebsite(lead));
   if (!domain) return { source: 'prospeo', phone: null, skipped: 'missing_domain' };
+
+  await awaitProspeoSlot();
 
   const res = await axios.post(PROSPEO_SEARCH_ENDPOINT, {
     page: 1,

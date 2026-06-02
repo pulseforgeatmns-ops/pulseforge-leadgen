@@ -23,6 +23,7 @@ const { invalidOutreachEmailReason } = require('./utils/emailGuard');
 const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
 const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { acquireScoutLockWithWait, releaseScoutLock, getActiveScoutLock } = require('./utils/scoutLock');
+const { awaitProspeoSlot } = require('./utils/prospeoThrottle');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -335,7 +336,6 @@ function socialKey(name) {
 // Takes a domain → returns contacts with name, title, email
 // Starter plan search endpoints: 30 req/min — throttle to ~28/min + backoff on 429
 // ─────────────────────────────────────────────────────────────────────
-const PROSPEO_THROTTLE_MS = 2100;
 const PROSPEO_RATE_LIMIT_BACKOFF_MS = [1000, 2000, 4000];
 
 function isProspeoRateLimited(err) {
@@ -347,11 +347,9 @@ function isProspeoRateLimited(err) {
   return /rate\s*limit/i.test(text);
 }
 
-async function prospeoRequestDelay() {
-  await new Promise(r => setTimeout(r, PROSPEO_THROTTLE_MS));
-}
-
 async function callProspeoSearchPerson(domain) {
+  await awaitProspeoSlot();
+
   const res = await axios.post('https://api.prospeo.io/search-person',
     {
       page: 1,
@@ -394,7 +392,6 @@ async function enrichWithProspeo(domain) {
   const maxAttempts = 1 + PROSPEO_RATE_LIMIT_BACKOFF_MS.length;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    await prospeoRequestDelay();
     try {
       return await callProspeoSearchPerson(domain);
     } catch (err) {
