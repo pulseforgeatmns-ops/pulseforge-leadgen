@@ -3480,7 +3480,7 @@ const DETAIL_CACHE_TTL = 30000;
 const THEME_KEY = 'pulseforge-theme';
 
 function isViewerRole() {
-  return _currentUserRole === 'viewer';
+  return ['viewer', 'client'].includes(_currentUserRole);
 }
 
 function canTakeDashboardActions() {
@@ -3490,7 +3490,10 @@ function canTakeDashboardActions() {
 function applyViewerPermissions() {
   if (!isViewerRole()) return;
   document.body.classList.add('viewer-role');
-  document.querySelectorAll('[data-tab="approvals"], [data-tab="actions"], [data-tab="prospects"], #usersTab').forEach(el => el?.remove());
+  const selector = _currentUserRole === 'client'
+    ? '[data-tab="approvals"], [data-tab="actions"], #usersTab'
+    : '[data-tab="approvals"], [data-tab="actions"], [data-tab="prospects"], #usersTab';
+  document.querySelectorAll(selector).forEach(el => el?.remove());
   document.querySelector('.stat-row')?.remove();
   document.getElementById('askMaxPanel')?.remove();
   document.getElementById('maxBriefRegenBtn')?.remove();
@@ -3792,7 +3795,7 @@ fetch('/api/me', { credentials: 'include' })
     const role = user?.role;
     _currentUserRole = role;
     const isOperator = ['admin', 'manager'].includes(role);
-    const isViewer = role === 'viewer';
+    const isViewer = ['viewer', 'client'].includes(role);
     if (role === 'admin') document.getElementById('usersTab').style.display = 'block';
     const pipelineTab = document.getElementById('pipelineTab');
     if (pipelineTab) pipelineTab.style.display = (isOperator || isViewer) ? '' : 'none';
@@ -4489,13 +4492,15 @@ function prospectModalHtml(p) {
       <div class="pm-panel" data-pm-panel="sequence" style="display:none">${sequenceHtml(p)}</div>
     </div>
     <div class="pm-actions">
-      <button class="pm-action-btn" type="button" id="pmLogTouch">Log Manual Touch</button>
-      <button class="pm-action-btn" type="button" id="pmEditProspect">Edit Prospect</button>
-      <button class="pm-action-btn" type="button" id="pmAssignSetter">Assign to Setter</button>
-      <select class="pm-select" id="pmStatusSelect">
-        ${['cold','contacted','warm','closed','dead','disqualified'].map(s => `<option value="${s}" ${s === (p.status || '').toLowerCase() ? 'selected' : ''}>${s}</option>`).join('')}
-      </select>
-      <button class="pm-action-btn" type="button" id="pmDnc">Mark do not contact</button>
+      ${canTakeDashboardActions() ? `
+        <button class="pm-action-btn" type="button" id="pmLogTouch">Log Manual Touch</button>
+        <button class="pm-action-btn" type="button" id="pmEditProspect">Edit Prospect</button>
+        <button class="pm-action-btn" type="button" id="pmAssignSetter">Assign to Setter</button>
+        <select class="pm-select" id="pmStatusSelect">
+          ${['cold','contacted','warm','closed','dead','disqualified'].map(s => `<option value="${s}" ${s === (p.status || '').toLowerCase() ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+        <button class="pm-action-btn" type="button" id="pmDnc">Mark do not contact</button>
+      ` : ''}
       <button class="pm-action-btn" type="button" onclick="openProspectsFor('${_esc(p.id)}')">View in prospects tab →</button>
       <span class="pm-toast" id="pmToast"></span>
       <div class="touch-form" id="pmTouchForm">
@@ -4578,6 +4583,7 @@ function bindProspectModal(p) {
       document.querySelectorAll('.pm-panel').forEach(panel => panel.style.display = panel.dataset.pmPanel === tab.dataset.pmTab ? 'block' : 'none');
     });
   });
+  if (!canTakeDashboardActions()) return;
   document.getElementById('pmLogTouch').onclick = () => toggleTouchForm();
   document.getElementById('pmEditProspect').onclick = () => openProspectEdit(p.id);
   document.getElementById('pmAssignSetter').onclick = () => openSetterAssignModal(p.id);
@@ -5018,6 +5024,10 @@ function _renderProspects() {
     const setterCell = p.assigned_setter_name
       ? `<td>${_esc(p.assigned_setter_name)}</td>`
       : `<td class="pt-dash">—</td>`;
+    const rowActions = canTakeDashboardActions()
+      ? `<button class="prospect-row-btn" type="button" onclick="event.stopPropagation(); openProspectEdit('${_esc(p.id)}')">Edit</button>
+          <button class="prospect-row-btn danger" type="button" onclick="event.stopPropagation(); deleteProspect('${_esc(p.id)}')">Delete</button>`
+      : `<button class="prospect-row-btn" type="button" onclick="event.stopPropagation(); openProspectModal('${_esc(p.id)}')">View</button>`;
     tr.innerHTML = `
       <td class="pt-business">${_esc(_parseBusiness(p))}</td>
       <td>${_statusBadge(p.status)}</td>
@@ -5030,8 +5040,7 @@ function _renderProspects() {
       <td style="color:var(--muted);font-size:0.72rem;">${p.created_at ? new Date(p.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—'}</td>
       <td>
         <div class="prospect-row-actions">
-          <button class="prospect-row-btn" type="button" onclick="event.stopPropagation(); openProspectEdit('${_esc(p.id)}')">Edit</button>
-          <button class="prospect-row-btn danger" type="button" onclick="event.stopPropagation(); deleteProspect('${_esc(p.id)}')">Delete</button>
+          ${rowActions}
         </div>
       </td>`;
     tr.addEventListener('click', () => toggleProspectDrawer(p, tr, visible));
@@ -5048,13 +5057,16 @@ function _buildDrawerRow(p, colSpan) {
   dr.className = 'prospect-drawer';
   dr.dataset.drawer = p.id;
   const notes = p.notes ? `<div class="drawer-notes">📋 ${_esc(p.notes)}</div>` : '';
+  const actionButtons = canTakeDashboardActions()
+    ? `<button class="pm-action-btn" type="button" onclick="event.stopPropagation(); openProspectModal('${_esc(p.id)}', 'touch')">Log Manual Touch</button>
+      <button class="pm-action-btn" type="button" onclick="event.stopPropagation(); openProspectEdit('${_esc(p.id)}')">Edit Prospect</button>
+      <button class="pm-action-btn danger" type="button" onclick="event.stopPropagation(); deleteProspect('${_esc(p.id)}')">Delete</button>
+      <button class="pm-action-btn" type="button" onclick="event.stopPropagation(); openProspectModal('${_esc(p.id)}')">View detail →</button>`
+    : `<button class="pm-action-btn" type="button" onclick="event.stopPropagation(); openProspectModal('${_esc(p.id)}')">View detail →</button>`;
   dr.innerHTML = `<td colspan="${colSpan}">
     ${notes}
     <div class="drawer-actions" style="display:flex;gap:8px;margin:0.4rem 0 0.6rem;">
-      <button class="pm-action-btn" type="button" onclick="event.stopPropagation(); openProspectModal('${_esc(p.id)}', 'touch')">Log Manual Touch</button>
-      <button class="pm-action-btn" type="button" onclick="event.stopPropagation(); openProspectEdit('${_esc(p.id)}')">Edit Prospect</button>
-      <button class="pm-action-btn danger" type="button" onclick="event.stopPropagation(); deleteProspect('${_esc(p.id)}')">Delete</button>
-      <button class="pm-action-btn" type="button" onclick="event.stopPropagation(); openProspectModal('${_esc(p.id)}')">View detail →</button>
+      ${actionButtons}
     </div>
     <div class="drawer-touchpoints" id="drawer-tp-${p.id}">
       <span class="drawer-empty">Loading touchpoints...</span>

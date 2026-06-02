@@ -11,6 +11,8 @@ function publicUser(row) {
     name: row.name,
     email: row.email,
     role: row.role,
+    client_id: row.client_id,
+    client_name: row.client_name,
     active: row.active,
     created_at: row.created_at,
     last_login_at: row.last_login_at,
@@ -19,6 +21,18 @@ function publicUser(row) {
 
 function validateRole(role) {
   return ROLES.includes(role);
+}
+
+function normalizeClientId(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const id = Number.parseInt(value, 10);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+async function validateClientId(clientId) {
+  if (!clientId) return true;
+  const { rowCount } = await pool.query('SELECT 1 FROM clients WHERE id = $1 LIMIT 1', [clientId]);
+  return rowCount > 0;
 }
 
 router.get('/admin/users', ...adminOnly, (req, res) => {
@@ -39,7 +53,7 @@ body { min-height:100vh; background:var(--bg); color:var(--white); font-family:'
 a, button { font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1px; text-transform:uppercase; }
 a { color:var(--teal); text-decoration:none; }
 .panel { background:var(--bg1); border:1px solid var(--border); border-radius:10px; overflow:hidden; margin-bottom:1rem; }
-.form { display:grid; grid-template-columns:1.2fr 1.4fr 1fr 0.8fr auto; gap:0.75rem; padding:1rem; border-bottom:1px solid var(--border); }
+.form { display:grid; grid-template-columns:1.2fr 1.4fr 1fr 0.8fr 1fr auto; gap:0.75rem; padding:1rem; border-bottom:1px solid var(--border); }
 input, select { width:100%; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:0.7rem; color:var(--white); outline:none; }
 .password-field { position:relative; }
 .password-field input { padding-right:4.6rem; }
@@ -62,6 +76,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
 .active { color:var(--green); border-color:rgba(0,230,118,0.25); }
 .inactive { color:var(--red); border-color:rgba(255,59,92,0.25); }
 .msg { min-height:1.2rem; color:var(--gray-light); font-size:0.78rem; margin-bottom:0.75rem; }
+.note { color:var(--gray-light); font-size:0.72rem; line-height:1.45; margin:-0.35rem 0 0.75rem; }
 @media (max-width: 900px) { body { padding:1rem; } .form { grid-template-columns:1fr; } table { font-size:0.8rem; } th:nth-child(5), td:nth-child(5) { display:none; } }
 </style>
 </head>
@@ -71,6 +86,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
   <a href="/dashboard">Back to dashboard</a>
 </div>
 <div class="msg" id="msg"></div>
+<div class="note">Use Client for external tenant read-only access. Viewer is internal/admin-shared and is not tenant-locked.</div>
 <section class="panel">
   <form class="form" id="addForm">
     <input id="name" placeholder="Name" required>
@@ -79,12 +95,13 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
       <input id="password" type="password" minlength="8" placeholder="Password" required>
       <button class="toggle-password" type="button" data-toggle-password="password" aria-label="Show password">Show</button>
     </div>
-	    <select id="role"><option value="viewer">Viewer</option><option value="setter">Setter</option><option value="closer">Closer</option><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select>
+	    <select id="role"><option value="client">Client</option><option value="viewer">Viewer (Internal)</option><option value="setter">Setter</option><option value="closer">Closer</option><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select>
+    <select id="clientId"><option value="">No client</option></select>
     <button class="primary" type="submit">Add User</button>
   </form>
   <table>
-    <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
-    <tbody id="rows"><tr><td colspan="6">Loading...</td></tr></tbody>
+    <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Client</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
+    <tbody id="rows"><tr><td colspan="7">Loading...</td></tr></tbody>
   </table>
 </section>
 <div class="modal-backdrop" id="resetModal" aria-hidden="true">
@@ -101,9 +118,10 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
   </form>
 </div>
 <script>
-	const roles = ['admin','manager','viewer','setter','closer','sales'];
+	const roles = ['admin','manager','viewer','client','setter','closer','sales'];
 const msg = document.getElementById('msg');
 let resetUserId = null;
+let clients = [];
 function say(text) { msg.textContent = text; setTimeout(() => { if (msg.textContent === text) msg.textContent = ''; }, 3500); }
 async function api(path, options = {}) {
   const res = await fetch(path, { credentials:'include', headers:{'Content-Type':'application/json'}, ...options });
@@ -112,13 +130,23 @@ async function api(path, options = {}) {
   return data;
 }
 function date(v) { return v ? new Date(v).toLocaleString() : '-'; }
+function roleLabel(role) { return role === 'viewer' ? 'viewer (internal)' : role; }
+function clientOptions(selected) {
+  return '<option value="">No client</option>' + clients.map(c => \`<option value="\${c.id}" \${Number(c.id) === Number(selected) ? 'selected' : ''}>\${c.name}</option>\`).join('');
+}
+async function loadClients() {
+  const data = await api('/api/clients');
+  clients = data.clients || [];
+  document.getElementById('clientId').innerHTML = clientOptions('');
+}
 async function load() {
   const users = await api('/api/users');
   document.getElementById('rows').innerHTML = users.map(u => \`
     <tr>
       <td>\${u.name}</td>
       <td>\${u.email}</td>
-      <td><select data-role="\${u.id}">\${roles.map(r => \`<option value="\${r}" \${r === u.role ? 'selected' : ''}>\${r}</option>\`).join('')}</select></td>
+      <td><select data-role="\${u.id}">\${roles.map(r => \`<option value="\${r}" \${r === u.role ? 'selected' : ''}>\${roleLabel(r)}</option>\`).join('')}</select></td>
+      <td><select data-client="\${u.id}">\${clientOptions(u.client_id)}</select></td>
       <td><span class="badge \${u.active ? 'active' : 'inactive'}">\${u.active ? 'active' : 'inactive'}</span></td>
       <td>\${date(u.last_login_at)}</td>
       <td><div class="actions">
@@ -138,7 +166,8 @@ document.getElementById('addForm').addEventListener('submit', async e => {
         name: document.getElementById('name').value,
         email: document.getElementById('email').value,
         password: document.getElementById('password').value,
-        role: document.getElementById('role').value
+        role: document.getElementById('role').value,
+        client_id: document.getElementById('clientId').value
       })
     });
     e.target.reset(); say('User created'); load();
@@ -180,8 +209,11 @@ document.getElementById('resetForm').addEventListener('submit', async e => {
 });
 document.addEventListener('change', async e => {
   const id = e.target.dataset.role;
-  if (!id) return;
-  try { await api('/api/users/' + id, { method:'PATCH', body:JSON.stringify({ role:e.target.value }) }); say('Role updated'); load(); } catch (err) { say(err.message); load(); }
+  const clientId = e.target.dataset.client;
+  if (!id && !clientId) return;
+  const targetId = id || clientId;
+  const payload = id ? { role:e.target.value } : { client_id:e.target.value };
+  try { await api('/api/users/' + targetId, { method:'PATCH', body:JSON.stringify(payload) }); say(id ? 'Role updated' : 'Client updated'); load(); } catch (err) { say(err.message); load(); }
 });
 document.addEventListener('click', async e => {
   const activeId = e.target.dataset.active;
@@ -195,7 +227,7 @@ document.addEventListener('click', async e => {
     if (deleteId && confirm('Hard delete this user? Deactivate is safer.')) { await api('/api/users/' + deleteId, { method:'DELETE' }); say('User deleted'); load(); }
   } catch (err) { say(err.message); }
 });
-load().catch(err => say(err.message));
+loadClients().then(load).catch(err => say(err.message));
 </script>
 </body>
 </html>`);
@@ -204,9 +236,11 @@ load().catch(err => say(err.message));
 router.get('/api/users', ...adminOnly, async (req, res) => {
   await initAuth();
   const { rows } = await pool.query(`
-    SELECT id, name, email, role, active, created_at, last_login_at
-    FROM users
-    ORDER BY created_at DESC
+    SELECT u.id, u.name, u.email, u.role, u.client_id, c.name AS client_name,
+      u.active, u.created_at, u.last_login_at
+    FROM users u
+    LEFT JOIN clients c ON c.id = u.client_id
+    ORDER BY u.created_at DESC
   `);
   res.json(rows.map(publicUser));
 });
@@ -214,15 +248,18 @@ router.get('/api/users', ...adminOnly, async (req, res) => {
 router.post('/api/users', ...adminOnly, async (req, res) => {
   await initAuth();
   const { name, email, password, role } = req.body;
+  const clientId = normalizeClientId(req.body.client_id);
   if (!name || !email || !password || !validateRole(role)) return res.status(400).json({ error: 'Invalid user' });
   if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  if (role === 'client' && !clientId) return res.status(400).json({ error: 'Client role requires a client' });
+  if (clientId && !(await validateClientId(clientId))) return res.status(400).json({ error: 'Invalid client' });
   const hash = await bcrypt.hash(password, 12);
   try {
     const { rows } = await pool.query(`
-      INSERT INTO users (name, email, password_hash, role)
-      VALUES ($1, $2, $3, $4)
-      RETURNING id, name, email, role, active, created_at, last_login_at
-    `, [name.trim(), email.toLowerCase().trim(), hash, role]);
+      INSERT INTO users (name, email, password_hash, role, client_id)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, name, email, role, client_id, active, created_at, last_login_at
+    `, [name.trim(), email.toLowerCase().trim(), hash, role, clientId]);
     res.status(201).json(publicUser(rows[0]));
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Email already exists' });
@@ -241,6 +278,27 @@ router.patch('/api/users/:id', ...adminOnly, async (req, res) => {
       values.push(req.body.role);
       updates.push(`role = $${values.length}`);
     }
+    if (req.body.client_id !== undefined) {
+      const clientId = normalizeClientId(req.body.client_id);
+      if (clientId && !(await validateClientId(clientId))) return res.status(400).json({ error: 'Invalid client' });
+      values.push(clientId);
+      updates.push(`client_id = $${values.length}`);
+    }
+    if (req.body.client_id !== undefined && req.body.role === undefined) {
+      const existing = await pool.query('SELECT role FROM users WHERE id = $1', [id]);
+      if (existing.rows[0]?.role === 'client' && !normalizeClientId(req.body.client_id)) {
+        return res.status(400).json({ error: 'Client role requires a client' });
+      }
+    }
+    if (req.body.role === 'client') {
+      if (req.body.client_id !== undefined && !normalizeClientId(req.body.client_id)) {
+        return res.status(400).json({ error: 'Client role requires a client' });
+      }
+      if (req.body.client_id === undefined) {
+        const existing = await pool.query('SELECT client_id FROM users WHERE id = $1', [id]);
+        if (!existing.rows[0]?.client_id) return res.status(400).json({ error: 'Client role requires a client' });
+      }
+    }
     if (req.body.active !== undefined) {
       if (id === req.user.id && req.body.active === false) return res.status(400).json({ error: 'Cannot deactivate your own account' });
       values.push(Boolean(req.body.active));
@@ -251,7 +309,7 @@ router.patch('/api/users/:id', ...adminOnly, async (req, res) => {
     const { rows } = await pool.query(`
       UPDATE users SET ${updates.join(', ')}
       WHERE id = $${values.length}
-      RETURNING id, name, email, role, active, created_at, last_login_at
+      RETURNING id, name, email, role, client_id, active, created_at, last_login_at
     `, values);
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
     res.json(publicUser(rows[0]));

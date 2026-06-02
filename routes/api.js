@@ -15,7 +15,7 @@ const {
 } = require('../utils/publishPipeline');
 
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
-const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer')];
+const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
 let prospectSetterAssignmentSchemaPromise;
 let agentLogStatusSchemaPromise;
 const EXCLUDE_COMMAND_FEED_ACTIONS_SQL = `
@@ -54,7 +54,7 @@ function ensureAgentLogStatusSchema() {
 }
 
 router.get('/api/me', sessionAuth, (req, res) => {
-  res.json({ user: req.user, active_client_id: req.session?.active_client_id || 1 });
+  res.json({ user: req.user, active_client_id: getRequestClientId(req) || req.session?.active_client_id || 1 });
 });
 
 router.get('/api/clients', requireOperator, async (req, res) => {
@@ -122,7 +122,7 @@ router.get('/api/agent-visibility', requireDashboardRead, async (req, res) => {
   }
 });
 
-router.get('/api/pipeline', requireDashboardRead, async (_req, res) => {
+router.get('/api/pipeline', requireDashboardRead, async (req, res) => {
   try {
     await ensureClientArchitecture();
     await ensureCloserSchema();
@@ -158,6 +158,15 @@ router.get('/api/pipeline', requireDashboardRead, async (_req, res) => {
       setter_handoff_agent: 'SetterHandoff', setterhandoff: 'SetterHandoff', handoff_utility: 'SetterHandoff',
     };
 
+    const clientId = getRequestClientId(req);
+    const clientScoped = req.user?.role === 'client';
+    const clientParams = clientScoped ? [clientId] : [];
+    const clientsFilter = clientScoped ? 'AND c.id = $1' : '';
+    const scopedAnd = clientScoped ? 'AND client_id = $1' : '';
+    const scopedWhere = clientScoped ? 'WHERE client_id = $1' : '';
+    const prospectClientAnd = clientScoped ? 'AND p.client_id = $1' : '';
+    const activityClientJoin = clientScoped ? 'AND al.client_id = p.client_id' : '';
+
     const [clients, revenueMrr, revenueBooked, revenuePayouts, setters, closers, logs] = await Promise.all([
       pool.query(`
         SELECT
@@ -171,11 +180,12 @@ router.get('/api/pipeline', requireDashboardRead, async (_req, res) => {
         FROM clients c
         LEFT JOIN prospects p ON p.client_id = c.id
         WHERE c.slug != 'pulseforge'
+          ${clientsFilter}
         GROUP BY c.id
         ORDER BY c.created_at ASC
-      `),
-      pool.query(`SELECT COALESCE(SUM(mrr_amount), 0)::numeric as confirmed_mrr FROM commissions WHERE status != 'void'`),
-      pool.query(`SELECT COUNT(*)::int as booked_pending FROM prospects WHERE setter_status = 'booked' AND closed_at IS NULL`),
+      `, clientParams),
+      pool.query(`SELECT COALESCE(SUM(mrr_amount), 0)::numeric as confirmed_mrr FROM commissions WHERE status != 'void' ${scopedAnd}`, clientParams),
+      pool.query(`SELECT COUNT(*)::int as booked_pending FROM prospects WHERE setter_status = 'booked' AND closed_at IS NULL ${scopedAnd}`, clientParams),
       pool.query(`
         SELECT
           COALESCE(SUM(commission_amt) FILTER (
@@ -183,7 +193,8 @@ router.get('/api/pipeline', requireDashboardRead, async (_req, res) => {
           COALESCE(SUM(commission_amt) FILTER (
             WHERE status = 'paid'), 0)::numeric as paid_out
         FROM commissions
-      `),
+        ${scopedWhere}
+      `, clientParams),
       pool.query(`
         SELECT
           u.id, u.name, u.assigned_city,
@@ -199,11 +210,12 @@ router.get('/api/pipeline', requireDashboardRead, async (_req, res) => {
             )::int as booked_this_week
         FROM users u
         LEFT JOIN prospects p ON p.setter_visible = true
-        LEFT JOIN activity_log al ON al.setter_id::text = u.id::text
+        LEFT JOIN activity_log al ON al.setter_id::text = u.id::text ${activityClientJoin}
         WHERE u.role = 'setter' AND u.active = true
+          ${prospectClientAnd}
         GROUP BY u.id, u.name, u.assigned_city
         ORDER BY u.name ASC
-      `),
+      `, clientParams),
       pool.query(`
         SELECT
           u.id, u.name,
@@ -234,15 +246,17 @@ router.get('/api/pipeline', requireDashboardRead, async (_req, res) => {
         FROM users u
         LEFT JOIN prospects p ON p.closer_id = u.id
         WHERE u.role = 'closer' AND u.active = true
+          ${prospectClientAnd}
         GROUP BY u.id, u.name
         ORDER BY u.name ASC
-      `),
+      `, clientParams),
       pool.query(`
         SELECT DISTINCT ON (agent_name)
           agent_name, status, ran_at, error_msg, duration_ms
         FROM agent_log
+        ${scopedWhere}
         ORDER BY agent_name, ran_at DESC
-      `),
+      `, clientParams),
     ]);
 
     const latestByAgent = {};
@@ -380,7 +394,7 @@ router.post('/api/approvals/:id', requireOperator, async (req, res) => {
 });
 
 // Prospects table
-router.get('/api/prospects', requireOperator, async (req, res) => {
+router.get('/api/prospects', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -587,7 +601,7 @@ router.put('/api/prospects/:id', requireOperator, async (req, res) => {
 });
 
 // Touchpoints for a single prospect
-router.get('/api/prospects/:id/touchpoints', requireOperator, async (req, res) => {
+router.get('/api/prospects/:id/touchpoints', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -602,7 +616,7 @@ router.get('/api/prospects/:id/touchpoints', requireOperator, async (req, res) =
   }
 });
 
-router.get('/api/prospects/:id/preview', requireOperator, async (req, res) => {
+router.get('/api/prospects/:id/preview', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -661,7 +675,7 @@ router.get('/api/prospects/:id/preview', requireOperator, async (req, res) => {
   }
 });
 
-router.get('/api/prospects/:id/detail', requireOperator, async (req, res) => {
+router.get('/api/prospects/:id/detail', requireDashboardRead, async (req, res) => {
   try {
     await ensureProspectSetterAssignmentSchema();
     const clientId = getRequestClientId(req);
@@ -1374,7 +1388,7 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
       title: activityDetailTitle(action),
       prospect_id: row.prospect_id || null,
       fields,
-      actions: req.user?.role === 'viewer' ? [] : actions,
+      actions: ['viewer', 'client'].includes(req.user?.role) ? [] : actions,
       payload,
       error_msg: row.error_msg || null,
       duration_ms: row.duration_ms ?? null,
@@ -1872,7 +1886,7 @@ router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
 // Max daily brief
 router.get('/api/max-brief', requireDashboardRead, async (req, res) => {
   try {
-    const clientId = normalizeClientId(req.session?.active_client_id || 1);
+    const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT payload, ran_at
       FROM agent_log

@@ -70,6 +70,10 @@ function getRuntimeClientId(params = {}) {
 }
 
 function getRequestClientId(req) {
+  if (req?.user?.role === 'client') {
+    const id = parseInt(req.user.client_id, 10);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  }
   return normalizeClientId(
     req?.query?.client_id ||
     req?.body?.client_id ||

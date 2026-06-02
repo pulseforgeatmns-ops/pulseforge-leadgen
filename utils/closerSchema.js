@@ -23,7 +23,7 @@ async function ensureCloserSchema() {
     }
     await pool.query(`
       ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN ('admin', 'manager', 'setter', 'closer', 'sales', 'viewer'))
+      CHECK (role IN ('admin', 'manager', 'setter', 'closer', 'sales', 'viewer', 'client'))
     `);
   } finally {
     await pool.query('SELECT pg_advisory_unlock(91720260517)');

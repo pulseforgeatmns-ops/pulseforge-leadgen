@@ -73,7 +73,7 @@ app.use((req, res, next) => {
   if (req.path === '/public/dashboard.html' || req.path === '/dashboard.html') {
     return requireAuth(req, res, err => {
       if (err) return next(err);
-      return requireRole('admin', 'manager', 'viewer')(req, res, next);
+      return requireRole('admin', 'manager', 'viewer', 'client')(req, res, next);
     });
   }
   if (req.path === '/public/setter-dashboard.html' || req.path === '/setter-dashboard.html') {
@@ -570,7 +570,7 @@ app.post('/api/post-comment', requireAuth, requireRole('admin', 'manager'), asyn
   }
 });
 
-app.get('/dashboard', requireAuth, requireRole('admin', 'manager', 'viewer'), (req, res) => {
+app.get('/dashboard', requireAuth, requireRole('admin', 'manager', 'viewer', 'client'), (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
