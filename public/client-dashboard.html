@@ -282,6 +282,7 @@ body::before {
       </div>
       <div class="section-divider"><div class="section-divider-label">Active Client Agents</div><div class="section-divider-line"></div></div>
       <div class="agents-grid" id="agentsGrid"></div>
+      <div class="no-data-note" id="agentsEmpty" style="display:none;">Agent stack not configured — contact support.</div>
     </div>
 
     <div class="approvals-area" id="approvalsPanel">
@@ -515,7 +516,15 @@ function renderDashboard() {
 }
 
 function renderAgents(agents) {
-  document.getElementById('agentsGrid').innerHTML = agents.map(agent => {
+  const grid = document.getElementById('agentsGrid');
+  const empty = document.getElementById('agentsEmpty');
+  if (!agents.length) {
+    grid.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  grid.innerHTML = agents.map(agent => {
     const ring = 251.2 * (1 - Number(agent.ring || 0));
     const statusClass = agent.active ? 'st-live' : 'st-standby';
     const statusText = agent.active ? 'LIVE' : 'STANDBY';

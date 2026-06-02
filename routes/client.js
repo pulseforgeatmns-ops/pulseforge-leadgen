@@ -28,7 +28,7 @@ const CLIENT_TABLE_SQL = `
   )
 `;
 
-const DEFAULT_CLIENT_AGENTS = ['scout', 'emmett', 'paige', 'faye', 'vera', 'max', 'rex'];
+const PREVIEW_CLIENT_AGENTS = ['scout', 'emmett', 'paige', 'faye', 'vera', 'max', 'rex'];
 const AGENT_ORDER = ['scout', 'emmett', 'paige', 'faye', 'vera', 'max', 'rex', 'cal', 'link', 'ivy', 'sam', 'riley', 'sketch', 'penny'];
 const AGENT_META = {
   scout:  { name: 'Scout',  label: 'SCOUT',  role: 'Lead Scraper',        icon: '🔍', color: '#00d4b4', ringOffset: 25 },
@@ -113,7 +113,7 @@ function clientAgentsFor(client = {}) {
   const configured = Array.isArray(client.enabled_agents)
     ? client.enabled_agents.map(normalizeAgentName).filter(key => AGENT_META[key])
     : [];
-  const unique = [...new Set(configured.length ? configured : DEFAULT_CLIENT_AGENTS)];
+  const unique = [...new Set(configured)];
   return AGENT_ORDER.filter(key => unique.includes(key));
 }
 
@@ -184,7 +184,7 @@ function previewNow() {
 
 function previewPayload() {
   const { hoursAgo, daysAgo } = previewNow();
-  const agents = clientAgentsFor({ ...PREVIEW_CLIENT, enabled_agents: DEFAULT_CLIENT_AGENTS }).map((key, index) => ({
+  const agents = clientAgentsFor({ ...PREVIEW_CLIENT, enabled_agents: PREVIEW_CLIENT_AGENTS }).map((key, index) => ({
     key,
     ...AGENT_META[key],
     active: index < 3,
