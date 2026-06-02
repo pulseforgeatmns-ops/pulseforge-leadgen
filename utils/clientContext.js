@@ -232,23 +232,23 @@ async function ensureClientArchitecture() {
 
   await pool.query(`
     UPDATE clients SET
-      sender_email = 'jacob@mail.gopulseforge.com',
+      sender_email = 'jacob@gopulseforge.com',
       sender_name = 'Jacob Maynard',
-      sending_domain = 'mail.gopulseforge.com'
+      sending_domain = 'gopulseforge.com'
     WHERE id = 1
   `);
   await pool.query(`
     UPDATE clients SET
-      sender_email = 'brad@mail.mshomeinnovations.com',
+      sender_email = 'brad@mshomeinnovations.com',
       sender_name = 'Brad Hudson',
-      sending_domain = 'mail.mshomeinnovations.com'
+      sending_domain = 'mshomeinnovations.com'
     WHERE id = 2
   `);
   await pool.query(`
     UPDATE clients SET
-      sender_email = 'outreach@mail.gopulseforge.com',
+      sender_email = 'outreach@gopulseforge.com',
       sender_name = 'Jacob Maynard',
-      sending_domain = 'mail.gopulseforge.com'
+      sending_domain = 'gopulseforge.com'
     WHERE id = 5
   `);
 
