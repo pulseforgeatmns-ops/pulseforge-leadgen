@@ -199,6 +199,8 @@ app.get('/admin/_gbp-lookup', async (req, res) => {
   }
 });
 
+app.get('/', (req, res) => res.redirect('/login'));
+
 // Login page
 app.get('/login', (req, res) => {
   res.send(`<!DOCTYPE html>
