@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const axios = require('axios');
 const { awaitProspeoSlot } = require('./utils/prospeoThrottle');
+const { checkProspeoQuota, recordProspeoCall, trip429 } = require('./utils/prospeoBreaker');
 
 const GOOGLE_PLACES_ENDPOINT = 'https://places.googleapis.com/v1/places:searchText';
 const GOOGLE_PLACE_DETAILS_ENDPOINT = 'https://places.googleapis.com/v1/places';
@@ -172,25 +173,40 @@ async function prospeoAttempt(lead, options) {
   const domain = normalizeDomain(leadWebsite(lead));
   if (!domain) return { source: 'prospeo', phone: null, skipped: 'missing_domain' };
 
-  await awaitProspeoSlot();
+  const quota = await checkProspeoQuota();
+  if (!quota.ok) {
+    return { source: 'prospeo', phone: null, skipped: quota.reason };
+  }
 
-  const res = await axios.post(PROSPEO_SEARCH_ENDPOINT, {
-    page: 1,
-    filters: {
-      company: {
-        websites: { include: [domain] },
+  await awaitProspeoSlot();
+  await recordProspeoCall();
+
+  let res;
+  try {
+    res = await axios.post(PROSPEO_SEARCH_ENDPOINT, {
+      page: 1,
+      filters: {
+        company: {
+          websites: { include: [domain] },
+        },
+        person_job_title: {
+          include: DEFAULT_TITLES,
+        },
       },
-      person_job_title: {
-        include: DEFAULT_TITLES,
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-KEY': key,
       },
-    },
-  }, {
-    headers: {
-      'Content-Type': 'application/json',
-      'X-KEY': key,
-    },
-    timeout: 30000,
-  });
+      timeout: 30000,
+    });
+  } catch (err) {
+    if (err.response?.status === 429) {
+      trip429();
+      return { source: 'prospeo', phone: null, skipped: 'rate_limited' };
+    }
+    throw err;
+  }
 
   logVerbose(verbose, 'Prospeo search-person raw response', res.data);
   const results = res.data?.results || [];

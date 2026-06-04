@@ -24,6 +24,7 @@ const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSch
 const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { acquireScoutLockWithWait, releaseScoutLock, getActiveScoutLock } = require('./utils/scoutLock');
 const { awaitProspeoSlot } = require('./utils/prospeoThrottle');
+const { checkProspeoQuota, recordProspeoCall, trip429 } = require('./utils/prospeoBreaker');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -389,6 +390,13 @@ async function enrichWithProspeo(domain) {
     return null;
   }
 
+  const quota = await checkProspeoQuota();
+  if (!quota.ok) {
+    console.warn(`[Prospeo] Skipped (${quota.reason}): ${quota.count ?? '?'}/${quota.cap}`);
+    return null;
+  }
+  await recordProspeoCall();
+
   const maxAttempts = 1 + PROSPEO_RATE_LIMIT_BACKOFF_MS.length;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -396,6 +404,7 @@ async function enrichWithProspeo(domain) {
       return await callProspeoSearchPerson(domain);
     } catch (err) {
       const rateLimited = isProspeoRateLimited(err);
+      if (rateLimited) trip429();
       const backoffMs = PROSPEO_RATE_LIMIT_BACKOFF_MS[attempt];
 
       if (rateLimited && backoffMs != null) {
