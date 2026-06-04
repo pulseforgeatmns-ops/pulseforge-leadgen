@@ -1259,6 +1259,11 @@ async function saveToDatabase(leads) {
         const needle = String(area).toLowerCase();
         return (lead.address || '').toLowerCase().includes(needle) || (domain || '').includes(needle);
       }) || null;
+      if (serviceArea === null && Array.isArray(CLIENT_CONFIG?.service_area) && CLIENT_CONFIG.service_area.length > 0) {
+        console.log(`[Scout] Out-of-area prospect skipped: ${companyName} (${lead.address || 'no address'})`);
+        skipped++;
+        continue;
+      }
       const hasWebsite = !!(domain || websiteUrl);
       const facebookUrl = lead.facebook_url || null;
       const instagramUrl = lead.instagram_url || null;
