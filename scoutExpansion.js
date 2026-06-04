@@ -101,6 +101,11 @@ async function countProspectsByCombo(clientId, sinceDays = LOOKBACK_DAYS) {
 
 async function getTrackedCombos(clientId) {
   const weekStart = getWeekStart();
+  const { rows: clientRows } = await pool.query(
+    `SELECT state FROM clients WHERE id = $1`,
+    [clientId]
+  );
+  const clientState = clientRows[0]?.state || null;
   const { rows } = await pool.query(
     `SELECT DISTINCT vertical, location
      FROM scout_yield
@@ -109,7 +114,10 @@ async function getTrackedCombos(clientId) {
   );
   const combos = new Set(rows.map(r => `${r.vertical}\0${r.location}`));
 
-  for (const base of Object.keys(EXPANSION_MAPS)) {
+  const eligibleBases = clientState
+    ? Object.keys(EXPANSION_MAPS).filter(base => base.split(' ').pop() === clientState)
+    : [];
+  for (const base of eligibleBases) {
     const { rows: verticals } = await pool.query(
       `SELECT DISTINCT vertical FROM prospects
        WHERE client_id = $1 AND source = 'scout' AND vertical IS NOT NULL`,
@@ -190,6 +198,11 @@ async function hasMarketBeenTried(clientId, vertical, location) {
 
 async function queueExpansionsForSaturated(clientId) {
   const weekStart = getWeekStart();
+  const { rows: clientRows } = await pool.query(
+    `SELECT state FROM clients WHERE id = $1`,
+    [clientId]
+  );
+  const clientState = clientRows[0]?.state || null;
   const { rows: saturatedRows } = await pool.query(
     `SELECT vertical, location, prospects_found
      FROM scout_yield
@@ -201,6 +214,8 @@ async function queueExpansionsForSaturated(clientId) {
 
   const queued = [];
   for (const row of saturatedRows) {
+    const rowState = row.location.split(' ').pop();
+    if (clientState && rowState !== clientState) continue;
     const adjacent = EXPANSION_MAPS[row.location];
     if (!adjacent?.length) continue;
 
