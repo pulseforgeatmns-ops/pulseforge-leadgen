@@ -214,6 +214,11 @@ async function run() {
     ];
 
     for (const url of searchUrls) {
+      const stillActive = await getClientConfig(CLIENT_ID);
+      if (!stillActive) {
+        throw new Error(`[LinkedIn] Client ${CLIENT_ID} deactivated mid-run — aborting`);
+      }
+
       if (drafted >= limit) break;
 
       console.log(`Scanning: ${url}`);

@@ -119,6 +119,11 @@ async function run() {
   let flagged = 0;
 
   for (const prospect of prospects) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[warm_signal] Client ${CLIENT_ID} deactivated mid-run — aborting`);
+    }
+
     if (!(await prospectExists(prospect.id, CLIENT_ID))) {
       await logSignalDroppedNoProspect(prospect);
       console.warn(`[warm_signal] Dropped sheet warm signal for missing prospect_id=${prospect.id}`);

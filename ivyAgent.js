@@ -200,6 +200,11 @@ async function run() {
   let drafted = 0;
 
   for (const hashtag of TARGET_HASHTAGS) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Ivy] Client ${CLIENT_ID} deactivated mid-run — aborting`);
+    }
+
     if (drafted >= MAX_DRAFTS) break;
 
     console.log(`\nScanning #${hashtag}...`);

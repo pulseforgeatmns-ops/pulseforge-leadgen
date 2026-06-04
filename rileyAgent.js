@@ -929,6 +929,11 @@ async function run() {
   };
 
   for (const email of emails) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Riley] Client ${CLIENT_ID} deactivated mid-run — aborting`);
+    }
+
     console.log(`Processing: ${email.subject} — ${email.from}`);
 
     try {

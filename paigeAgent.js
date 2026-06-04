@@ -1645,6 +1645,11 @@ AND status = 'pending';`);
     const channelsQueued = [];
 
     for (const company of clients) {
+      const stillActive = await getClientConfig(CLIENT_ID);
+      if (!stillActive) {
+        throw new Error(`[Paige] Client ${CLIENT_ID} deactivated mid-run — aborting`);
+      }
+
       for (const channel of getChannelsForCompany(company)) {
         const contentType = await pickContentType(company.name, channel, company.id);
         console.log(`${company.name} — ${channel} — ${contentType}`);

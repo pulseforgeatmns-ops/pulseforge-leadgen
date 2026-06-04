@@ -297,6 +297,11 @@ async function run() {
   let totalFlags = 0;
 
   for (const account of accounts) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Penny] Client ${CLIENT_ID} deactivated mid-run — aborting`);
+    }
+
     const label = `${account.company_name} / ${account.platform}`;
     console.log(`Analyzing: ${label}`);
 
