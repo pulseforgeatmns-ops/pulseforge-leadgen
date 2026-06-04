@@ -711,6 +711,11 @@ async function main() {
   // 3. Enrich with Prospeo
   console.log(`[Prospeo] Enriching ${leads.length} domains...`);
   for (let i = 0; i < leads.length; i++) {
+    const stillActive = await getClientConfig(CONFIG.clientId);
+    if (!stillActive) {
+      throw new Error(`[Scout] Client ${CONFIG.clientId} deactivated mid-run — aborting at lead ${i+1}/${leads.length}`);
+    }
+
     const lead = leads[i];
     process.stdout.write(`  [${i+1}/${leads.length}] ${lead.url}...`);
     const rootDomain = lead.url.replace(/^(?:[^.]+\.)+?([^.]+\.[^.]+)$/, (_, d) => d) || lead.url;
