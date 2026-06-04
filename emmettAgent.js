@@ -1291,6 +1291,11 @@ async function run(context = {}) {
   const verticalCounts = {};
 
   for (const prospect of prospects) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Emmett] Client ${CLIENT_ID} deactivated mid-run — aborting after ${sent} sends`);
+    }
+
     if (sent >= dailyLimit) {
       console.log('Daily send limit reached.');
       break;
@@ -1491,5 +1496,6 @@ if (require.main === module) {
       console.error('Failed to log Emmett fatal error:', logErr.message);
     }
     console.error(err);
+    process.exit(1);
   });
 }
