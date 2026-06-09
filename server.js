@@ -37,6 +37,7 @@ const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSch
 const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { ensureScoutLockTable } = require('./utils/scoutLock');
 const { ensureCallDispositionSchema } = require('./calBatchAgent');
+const { ensureMiraSchema } = require('./utils/miraSchema');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -51,6 +52,7 @@ ensureEmailVerificationColumns().catch(err => console.error('[emailVerification]
 ensureScoutUnenrichedTable().catch(err => console.error('[scoutUnenriched] init error:', err.message));
 ensureScoutLockTable().catch(err => console.error('[scoutLock] init error:', err.message));
 ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init error:', err.message));
+ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),

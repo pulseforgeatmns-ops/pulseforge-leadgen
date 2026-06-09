@@ -1,4 +1,5 @@
 const express = require('express');
+const axios = require('axios');
 const router = express.Router();
 const pool = require('../db');
 const {
@@ -9,6 +10,11 @@ const {
   recalcICPAfterEmailEvent,
 } = require('../rileyAgent');
 const { recordEvent } = require('../utils/emailPerformance');
+const { ensureMiraSchema } = require('../utils/miraSchema');
+
+const miraSchemaReady = ensureMiraSchema().catch(err => {
+  console.error('[mira] schema error:', err.message);
+});
 
 // Map a tracked email action_type to the email_performance event verb.
 const PERF_EVENT_MAP = {
@@ -17,6 +23,198 @@ const PERF_EVENT_MAP = {
   email_bounced: 'bounce',
   email_soft_bounce: 'bounce',
 };
+
+const MIRA_ACK = {
+  voice: '🎙️ Got it',
+  text: '📝 Got it',
+  photo: '🖼️ Got it',
+  link: '🔗 Got it',
+  document: '📝 Got it',
+};
+
+function normalizeChatId(value) {
+  return value === undefined || value === null ? '' : String(value).trim();
+}
+
+function telegramMessage(update = {}) {
+  return update.message || update.edited_message || null;
+}
+
+function extractTelegramUrl(message = {}) {
+  const text = message.text || message.caption || '';
+  const entities = message.entities || message.caption_entities || [];
+  const textLink = entities.find(entity => entity.type === 'text_link' && entity.url);
+  if (textLink) return textLink.url;
+
+  const urlEntity = entities.find(entity => entity.type === 'url');
+  if (urlEntity && Number.isInteger(urlEntity.offset) && Number.isInteger(urlEntity.length)) {
+    return text.slice(urlEntity.offset, urlEntity.offset + urlEntity.length);
+  }
+
+  const match = text.match(/\bhttps?:\/\/[^\s<>"']+/i) || text.match(/\bwww\.[^\s<>"']+/i);
+  if (!match) return null;
+  return match[0].startsWith('www.') ? `https://${match[0]}` : match[0];
+}
+
+function parseMiraCapture(message = {}) {
+  const rawText = message.text || message.caption || null;
+
+  if (message.voice?.file_id) {
+    return {
+      content_type: 'voice',
+      raw_text: rawText,
+      voice_file_id: message.voice.file_id,
+      photo_file_id: null,
+      link_url: null,
+    };
+  }
+
+  if (Array.isArray(message.photo) && message.photo.length) {
+    const photo = message.photo[message.photo.length - 1];
+    return {
+      content_type: 'photo',
+      raw_text: rawText,
+      voice_file_id: null,
+      photo_file_id: photo.file_id,
+      link_url: extractTelegramUrl(message),
+    };
+  }
+
+  if (message.document?.file_id) {
+    return {
+      content_type: 'document',
+      raw_text: rawText,
+      voice_file_id: null,
+      photo_file_id: null,
+      document_file_id: message.document.file_id,
+      link_url: null,
+    };
+  }
+
+  const linkUrl = extractTelegramUrl(message);
+  return {
+    content_type: linkUrl ? 'link' : 'text',
+    raw_text: rawText,
+    voice_file_id: null,
+    photo_file_id: null,
+    link_url: linkUrl,
+  };
+}
+
+async function sendMiraAck(chatId, contentType, captureId) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) {
+    console.warn('[mira] TELEGRAM_BOT_TOKEN not set; ack skipped');
+    return;
+  }
+
+  const prefix = MIRA_ACK[contentType] || '📝 Got it';
+  await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    chat_id: chatId,
+    text: `${prefix} #${captureId}`,
+  }, { timeout: 800 });
+}
+
+async function getTelegramFileUrl(fileId) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken || !fileId) return null;
+
+  const fileRes = await axios.get(`https://api.telegram.org/bot${botToken}/getFile`, {
+    params: { file_id: fileId },
+    timeout: 5000,
+  });
+  const filePath = fileRes.data?.result?.file_path;
+  return filePath ? `https://api.telegram.org/file/bot${botToken}/${filePath}` : null;
+}
+
+async function updateMiraFileUrl(captureId, capture) {
+  try {
+    if (capture.content_type === 'voice' && capture.voice_file_id) {
+      const voiceUrl = await getTelegramFileUrl(capture.voice_file_id);
+      if (voiceUrl) {
+        await pool.query('UPDATE capture_inbox SET voice_url = $1 WHERE id = $2', [voiceUrl, captureId]);
+      }
+      return;
+    }
+
+    if (capture.content_type === 'photo' && capture.photo_file_id) {
+      const photoUrl = await getTelegramFileUrl(capture.photo_file_id);
+      if (photoUrl) {
+        await pool.query('UPDATE capture_inbox SET photo_url = $1 WHERE id = $2', [photoUrl, captureId]);
+      }
+    }
+  } catch (err) {
+    console.error('[mira] file URL fetch error:', err.response?.data?.description || err.message);
+  }
+}
+
+router.post('/telegram/mira', async (req, res) => {
+  const update = req.body || {};
+  const message = telegramMessage(update);
+  const chatId = normalizeChatId(message?.chat?.id);
+  const jacobChatId = normalizeChatId(process.env.JACOB_TELEGRAM_CHAT_ID);
+
+  if (!jacobChatId) {
+    console.error('[mira] JACOB_TELEGRAM_CHAT_ID not set');
+    return res.sendStatus(500);
+  }
+
+  if (!message || chatId !== jacobChatId) {
+    if (chatId && chatId !== jacobChatId) {
+      console.log(`[mira] rejected telegram chat_id=${chatId}`);
+    }
+    return res.sendStatus(200);
+  }
+
+  try {
+    await miraSchemaReady;
+    const capture = parseMiraCapture(message);
+    const rawMetadata = {
+      update_id: update.update_id || null,
+      chat: message.chat || null,
+      from: message.from || null,
+      message_date: message.date || null,
+      entities: message.entities || null,
+      caption_entities: message.caption_entities || null,
+      voice: message.voice || null,
+      photo: message.photo || null,
+      document: message.document || null,
+    };
+
+    const insert = await pool.query(`
+      INSERT INTO capture_inbox
+        (telegram_msg_id, content_type, raw_text, voice_file_id, photo_file_id, link_url, raw_metadata, status)
+      VALUES
+        ($1, $2, $3, $4, $5, $6, $7::jsonb, 'new')
+      RETURNING id
+    `, [
+      message.message_id || null,
+      capture.content_type,
+      capture.raw_text,
+      capture.voice_file_id,
+      capture.photo_file_id,
+      capture.link_url,
+      JSON.stringify(rawMetadata),
+    ]);
+
+    const captureId = insert.rows[0].id;
+
+    try {
+      await sendMiraAck(chatId, capture.content_type, captureId);
+    } catch (err) {
+      console.error('[mira] ack failed:', err.response?.data?.description || err.message);
+    }
+
+    res.status(200).json({ ok: true });
+
+    if (capture.voice_file_id || capture.photo_file_id) {
+      setImmediate(() => updateMiraFileUrl(captureId, capture));
+    }
+  } catch (err) {
+    console.error('[mira] webhook error:', err.stack || err.message);
+    res.sendStatus(500);
+  }
+});
 
 function brevoMessageId(payload = {}) {
   return payload.messageId ||

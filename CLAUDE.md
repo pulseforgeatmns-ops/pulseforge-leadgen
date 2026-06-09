@@ -68,7 +68,7 @@ Each agent is a standalone JS module that reads from the DB and writes results b
 
 Pulseforge Scout markets for William's setter territory: Manchester NH and Charleston WV. Charleston WV runs as `client_id=1` with a 15-prospect cap per vertical for: cleaning, hvac, roofing, auto_repair, dental, salon, fitness, restaurant, landscaping. Setter visibility still requires `icp_score >= 70`.
 
-MSHI Scout cron targets: `POST /cron/scout?client_id=2&industry=home_renovation&location=Charleston%20WV`, `decks/Charleston WV`, `siding/Charleston WV`, `home_renovation/Huntington WV`, `home_renovation/Hurricane WV`. MSHI Max cron: `POST /cron/max?client_id=2&secret={CRON_SECRET}` at 8:00 AM EST.
+MSHI Scout customer-channel map (`client_id=2`): Scout plans seed `property_management`, `probate_estate`, `renovation_lender`, `insurance_restoration`, `home_inspector`, and `listing_agent` across Charleston, South Charleston, St. Albans, Dunbar, Nitro, Cross Lanes, and Hurricane WV. These are customer/referral-partner verticals, not MSHI service types. Google Places query seeds live in `leadgen.js` `CLIENT_SCOUT_PLANS`. Do not add hand-built channels `real_estate_investor`, `property_preservation`, or `bank_reo` to Scout. MSHI Max cron: `POST /cron/max?client_id=2&secret={CRON_SECRET}` at 8:00 AM EST.
 
 Pulseforge Nashville Scout cron targets (`client_id=5`, location `Nashville%20TN`, schedule on Railway):
 - `POST /cron/scout?client_id=5&industry=cleaning&location=Nashville%20TN`
