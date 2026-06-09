@@ -26,6 +26,66 @@ function getEmmettClientConfig(clientId = CLIENT_ID) {
 
 // Email sequence definitions — reply-based CTAs only (no external or Calendly links in bodies)
 const SEQUENCES = {
+  mshi_property_management: [
+    {
+      day: 0,
+      subject: "one crew for your turns and repairs",
+      body: `Brad here from Mountain State Home Innovations. I know managing units means a steady stream of make-readies and repairs between tenants, and chasing reliable contractors for it is its own headache.
+
+We handle turn work and renovations for property managers in the valley, one point of contact, fast turns to cut your vacancy days.
+
+Want me to send a couple recent before-and-afters? If it looks useful I can be your backup crew for the next turn and earn the rest from there.
+
+Brad Hudson
+Mountain State Home Innovations`
+    },
+    {
+      day: 4,
+      subject: "Re: one crew for your turns and repairs",
+      body: `Hi {{first_name}},
+
+Just following up in case my last note got buried.
+
+One thing that sets us apart — most contractors go quiet after the estimate. We don't. Every client gets direct access to Brad or Dustin throughout the whole project. For property managers who need fast turnaround on damage or wear, that matters.
+
+We're happy to do a free walkthrough of any properties you manage in Kanawha, Putnam, or Cabell County — just reply here and we'll set it up.
+
+Brad
+Mountain State Home Innovations
+304-483-3655`
+    },
+    {
+      day: 8,
+      subject: "What we've done for other property managers in WV",
+      body: `Hi {{first_name}},
+
+We've done subcontract work with some of the larger WV firms — Tri-State Exterior Solutions, St Albans Windows, Secure Construction — so we know what quality at scale looks like.
+
+Decks and siding are our highest volume work. If {{business_name}} has properties that need attention, we'd love to put together a free estimate.
+
+You can also see our Google reviews here: https://share.google/KeVYcU4QxVwfur0cN
+
+Brad
+Mountain State Home Innovations
+304-483-3655`
+    },
+    {
+      day: 13,
+      subject: "Closing the loop",
+      body: `Hi {{first_name}},
+
+I don't want to keep filling up your inbox so I'll leave it here.
+
+If the timing ever works out, give us a call — Brad or Dustin will pick up.
+
+304-483-3655
+
+No obligation, free estimate, local crew. We'll be here.
+
+Brad
+Mountain State Home Innovations`
+    }
+  ],
   mshi: [
     {
       day: 0,
@@ -776,7 +836,8 @@ function getClientSmtpConfig() {
 function createMailTransporter() {
   const smtpConfig = getClientSmtpConfig();
   if (!smtpConfig.host || !smtpConfig.user || !smtpConfig.pass) {
-    throw new Error('SMTP credentials missing: configure client smtp_host/smtp_user/smtp_pass or default SMTP env vars');
+    console.warn('SMTP credentials missing; continuing with Brevo API send path');
+    return null;
   }
   return nodemailer.createTransport({
     host: smtpConfig.host,
@@ -992,8 +1053,16 @@ async function completeEmailSendLog(logId, action, payload, status = 'completed'
   `, [action, status, JSON.stringify(payload), logId, CLIENT_ID]);
 }
 
-async function getProspectsForEmail() {
+async function getProspectsForEmail(options = {}) {
   const pool = require('./db');
+  const targetVertical = options.targetVertical || options.target_vertical || null;
+  const firstTouchOnly = options.firstTouchOnly || options.first_touch_only || false;
+  const excludeActionTypes = Array.isArray(options.excludeActionTypes)
+    ? options.excludeActionTypes.filter(Boolean).map(String)
+    : [];
+  const targetEmails = Array.isArray(options.targetEmails)
+    ? options.targetEmails.filter(Boolean).map(email => String(email).toLowerCase())
+    : [];
 
   const res = await pool.query(`
     SELECT
@@ -1022,6 +1091,36 @@ async function getProspectsForEmail() {
     AND p.email NOT LIKE '%@domain.com'
     AND p.email NOT LIKE '%@example.com'
     AND p.do_not_contact IS NOT TRUE
+    AND ($2::text IS NULL OR LOWER(COALESCE(p.vertical, '')) = LOWER($2::text))
+    AND (
+      cardinality($7::text[]) = 0
+      OR LOWER(p.email) = ANY($7::text[])
+    )
+    AND (
+      cardinality($6::text[]) = 0
+      OR NOT EXISTS (
+        SELECT 1
+        FROM touchpoints tx
+        WHERE tx.prospect_id = p.id
+          AND tx.client_id = p.client_id
+          AND tx.action_type = ANY($6::text[])
+      )
+    )
+    AND (
+      $3::boolean IS NOT TRUE
+      OR (
+        p.status = 'cold'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM agent_log al
+          WHERE al.agent_name = $4
+            AND al.action = 'email_sent'
+            AND al.prospect_id = p.id
+            AND al.client_id = p.client_id
+            AND COALESCE(al.payload->>'from_email', '') = $5
+        )
+      )
+    )
     AND NOT EXISTS (
       SELECT 1
       FROM touchpoints tb
@@ -1041,7 +1140,7 @@ async function getProspectsForEmail() {
       p.icp_score DESC NULLS LAST,
       p.last_contacted_at ASC NULLS FIRST
     LIMIT 100
-  `, [CLIENT_ID]);
+  `, [CLIENT_ID, targetVertical, firstTouchOnly, AGENT_NAME, FROM_EMAIL, excludeActionTypes, targetEmails]);
 
   return res.rows;
 }
@@ -1087,7 +1186,11 @@ async function recalcStalledNoResponseProspects() {
 }
 
 function getSequenceForProspect(prospect) {
-  if (Number(prospect.client_id) === 2) return 'mshi';
+  const vertical = (prospect.vertical || '').toLowerCase();
+  if (Number(prospect.client_id) === 2) {
+    if (vertical === 'property_management') return 'mshi_property_management';
+    return 'mshi';
+  }
 
   const lastTouchpointAt = prospect.last_touchpoint_at ? new Date(prospect.last_touchpoint_at) : null;
   const daysSinceLastTouchpoint = lastTouchpointAt
@@ -1102,7 +1205,6 @@ function getSequenceForProspect(prospect) {
     return 're_engagement';
   }
 
-  const vertical = (prospect.vertical || '').toLowerCase();
   if (
     vertical === 'home_renovation' ||
     vertical === 'decks' ||
@@ -1145,19 +1247,32 @@ async function getNextSequenceStep(prospect) {
   const pool = require('./db');
   const sequenceName = getSequenceForProspect(prospect);
   const isReEngagement = sequenceName === 're_engagement';
+  const isMshiSequence = sequenceName === 'mshi' || sequenceName === 'mshi_property_management';
 
-  const res = await pool.query(`
-    SELECT * FROM touchpoints
-    WHERE prospect_id = $1
-    AND client_id = $2
-    AND channel = 'email'
-    AND ${
-      isReEngagement
-        ? "action_type = 'outbound' AND COALESCE(outcome, '') LIKE '%re_engagement%'"
-        : "action_type IN ('outbound', 'email_warm')"
-    }
-    ORDER BY created_at ASC
-  `, [prospect.id, CLIENT_ID]);
+  const res = isMshiSequence
+    ? await pool.query(`
+        SELECT ran_at AS created_at
+        FROM agent_log
+        WHERE agent_name = $1
+          AND action = 'email_sent'
+          AND prospect_id = $2
+          AND client_id = $3
+          AND payload->>'sequence' = $4
+          AND COALESCE(payload->>'from_email', '') = $5
+        ORDER BY ran_at ASC
+      `, [AGENT_NAME, prospect.id, CLIENT_ID, sequenceName, FROM_EMAIL])
+    : await pool.query(`
+        SELECT * FROM touchpoints
+        WHERE prospect_id = $1
+        AND client_id = $2
+        AND channel = 'email'
+        AND ${
+          isReEngagement
+            ? "action_type = 'outbound' AND COALESCE(outcome, '') LIKE '%re_engagement%'"
+            : "action_type IN ('outbound', 'email_warm')"
+        }
+        ORDER BY created_at ASC
+      `, [prospect.id, CLIENT_ID]);
 
   const emailsSent = res.rows.length;
   const sequence = SEQUENCES[sequenceName];
@@ -1206,7 +1321,7 @@ async function hasSentWarmEmail(prospectId) {
   return res.rows.length > 0;
 }
 
-async function hasPriorStepSend(prospectId, stepDay) {
+async function hasPriorStepSend(prospectId, stepDay, sequenceName) {
   const pool = require('./db');
   const res = await pool.query(`
     SELECT 1
@@ -1216,8 +1331,10 @@ async function hasPriorStepSend(prospectId, stepDay) {
       AND prospect_id = $2
       AND client_id = $3
       AND payload->>'step' = $4
+      AND payload->>'sequence' = $5
+      AND COALESCE(payload->>'from_email', '') = $6
     LIMIT 1
-  `, [AGENT_NAME, prospectId, CLIENT_ID, String(stepDay)]);
+  `, [AGENT_NAME, prospectId, CLIENT_ID, String(stepDay), sequenceName, FROM_EMAIL]);
   return res.rows.length > 0;
 }
 
@@ -1280,13 +1397,14 @@ async function run(context = {}) {
     return;
   }
 
-  const prospects = await getProspectsForEmail();
+  const prospects = await getProspectsForEmail(context);
   console.log(`Found ${prospects.length} prospects to contact\n`);
 
   console.log('Prospects found:', JSON.stringify(prospects, null, 2));
 
   let sent = 0;
-  const dailyLimit = remainingCapacity;
+  const requestedMaxSends = Number(context.max_sends || context.maxSends || 0);
+  const dailyLimit = requestedMaxSends > 0 ? Math.min(remainingCapacity, requestedMaxSends) : remainingCapacity;
   const verticalCap = sendConfig.verticalCap; // max sends per vertical per run
   const verticalCounts = {};
 
@@ -1344,6 +1462,8 @@ async function run(context = {}) {
     }
     if (!step) continue;
 
+    const sequenceName = getSequenceForProspect(prospect);
+
     const invalidEmailReason = invalidOutreachEmailReason(prospect.email);
     if (invalidEmailReason) {
       console.log(`Skipping ${prospect.email} — invalid email (${invalidEmailReason})`);
@@ -1358,7 +1478,7 @@ async function run(context = {}) {
       continue;
     }
 
-    if (await hasPriorStepSend(prospect.id, step.day)) {
+    if (await hasPriorStepSend(prospect.id, step.day, sequenceName)) {
       console.log(`Skipping ${prospect.email} — prior step ${step.day} send already exists`);
       await db.logAgentAction(
         AGENT_NAME,
@@ -1373,7 +1493,6 @@ async function run(context = {}) {
 
     // Check for warm email substitution on Day 4+ follow-ups
     let useWarm = false;
-    const sequenceName = getSequenceForProspect(prospect);
     if (sequenceName !== 'mshi' && sequenceName !== 're_engagement' && step.day > 0) {
       const clicked  = await hasClickedEmail(prospect.id);
       const warmSent = await hasSentWarmEmail(prospect.id);
@@ -1394,6 +1513,9 @@ async function run(context = {}) {
 
     console.log(`Sending to: ${prospect.email} (${prospect.name})`);
     console.log(`Subject: ${subject}`);
+    if (sent === 0) {
+      console.log(`From header: ${FROM_NAME} <${FROM_EMAIL}>`);
+    }
 
     const tags = [sequenceName, `step_${step.day}`, prospect.vertical].filter(Boolean);
     const logPayload = {
@@ -1450,6 +1572,9 @@ async function run(context = {}) {
       console.log('Touchpoint logged.\n');
     } else {
       await completeEmailSendLog(sendLogId, 'email_failed', { ...logPayload, error: result.error }, 'failed');
+      if (context.stopOnSendError) {
+        throw new Error(`Brevo send failed for prospect ${prospect.id}: ${result.error}`);
+      }
     }
 
     if (sent < dailyLimit) await humanDelay();
