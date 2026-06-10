@@ -39,6 +39,7 @@ const { ensureScoutLockTable } = require('./utils/scoutLock');
 const { ensureCallDispositionSchema } = require('./calBatchAgent');
 const { ensureMiraSchema } = require('./utils/miraSchema');
 const { startMiraTranscriptionWorker } = require('./miraTranscriptionAgent');
+const { startMiraClassifierWorker } = require('./miraClassifierAgent');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -55,6 +56,7 @@ ensureScoutLockTable().catch(err => console.error('[scoutLock] init error:', err
 ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init error:', err.message));
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
 startMiraTranscriptionWorker();
+startMiraClassifierWorker();
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),
