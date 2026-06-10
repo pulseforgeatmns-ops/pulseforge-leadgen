@@ -102,9 +102,9 @@ function parseMiraCapture(message = {}) {
 }
 
 async function sendMiraAck(chatId, contentType, captureId) {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const botToken = process.env.MIRA_TELEGRAM_BOT_TOKEN;
   if (!botToken) {
-    console.warn('[mira] TELEGRAM_BOT_TOKEN not set; ack skipped');
+    console.warn('[mira] MIRA_TELEGRAM_BOT_TOKEN not set; ack skipped');
     return;
   }
 
@@ -116,7 +116,7 @@ async function sendMiraAck(chatId, contentType, captureId) {
 }
 
 async function getTelegramFileUrl(fileId) {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const botToken = process.env.MIRA_TELEGRAM_BOT_TOKEN;
   if (!botToken || !fileId) return null;
 
   const fileRes = await axios.get(`https://api.telegram.org/bot${botToken}/getFile`, {
