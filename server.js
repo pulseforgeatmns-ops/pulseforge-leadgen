@@ -38,6 +38,7 @@ const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { ensureScoutLockTable } = require('./utils/scoutLock');
 const { ensureCallDispositionSchema } = require('./calBatchAgent');
 const { ensureMiraSchema } = require('./utils/miraSchema');
+const { startMiraTranscriptionWorker } = require('./miraTranscriptionAgent');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -53,6 +54,7 @@ ensureScoutUnenrichedTable().catch(err => console.error('[scoutUnenriched] init 
 ensureScoutLockTable().catch(err => console.error('[scoutLock] init error:', err.message));
 ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init error:', err.message));
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
+startMiraTranscriptionWorker();
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),

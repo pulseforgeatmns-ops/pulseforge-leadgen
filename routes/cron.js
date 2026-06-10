@@ -28,6 +28,7 @@ const CRON_MODULES = {
   setter_handoff: '../setterHandoffAgent',
   sync_setter:    '../syncSetterLeadList',
   handoff_utility: '../setterHandoffAgent',
+  mira_transcription: '../miraTranscriptionAgent',
 };
 
 function runCronAgent(agent, res, query = {}) {
