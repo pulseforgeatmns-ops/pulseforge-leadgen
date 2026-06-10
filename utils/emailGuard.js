@@ -17,6 +17,7 @@ function invalidOutreachEmailReason(value) {
   const [local, domainRaw] = email.split('@');
   const domain = String(domainRaw || '').toLowerCase();
   if (!local || !domain) return 'invalid_format';
+  if (/^(?:abuse|phishing|postmaster|security)$/i.test(local)) return 'reserved_abuse_mailbox';
   if (domain.startsWith('www.')) return 'leading_www_domain';
   if (domain.includes('..')) return 'malformed_domain';
   if (PLACEHOLDER_DOMAIN_RE.test(domain)) return 'placeholder_domain';

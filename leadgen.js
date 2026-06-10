@@ -138,6 +138,44 @@ const SATURATION_THRESHOLDS = {
   default: 40,
 };
 
+const MSHI_SCOUT_CITIES = [
+  'Charleston',
+  'South Charleston',
+  'St. Albans',
+  'Dunbar',
+  'Nitro',
+  'Cross Lanes',
+  'Hurricane',
+];
+
+const CLIENT_SCOUT_PLANS = {
+  2: {
+    cities: MSHI_SCOUT_CITIES,
+    verticals: {
+      property_management: [
+        'property management company {city} WV',
+      ],
+      probate_estate: [
+        'probate attorney {city} WV',
+        'estate sale company {city} WV',
+      ],
+      renovation_lender: [
+        'mortgage broker {city} WV',
+      ],
+      insurance_restoration: [
+        'insurance agency {city} WV',
+        'public adjuster {city} WV',
+      ],
+      home_inspector: [
+        'home inspector {city} WV',
+      ],
+      listing_agent: [
+        'real estate agent {city} WV',
+      ],
+    },
+  },
+};
+
 // Standardize a free-form industry/vertical label to snake_case.
 // e.g. "Home Services" -> "home_services", "auto repair" -> "auto_repair",
 // null/empty -> "unknown".
@@ -162,6 +200,47 @@ function sanitizeQueueLocation(value) {
     .replace(/[^a-zA-Z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function normalizeGeoText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cityFromLocation(location) {
+  return sanitizeQueueLocation(location)
+    .replace(/\b[A-Z]{2}\b$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getClientScoutPlan(clientId) {
+  return CLIENT_SCOUT_PLANS[Number(clientId)] || null;
+}
+
+function getPlannedVerticals(clientId) {
+  const plan = getClientScoutPlan(clientId);
+  return plan ? Object.keys(plan.verticals || {}) : [];
+}
+
+function getPlannedLocations(clientId, fallbackLocation) {
+  const plan = getClientScoutPlan(clientId);
+  const cities = Array.isArray(plan?.cities) ? plan.cities : [];
+  if (!cities.length) return [sanitizeQueueLocation(fallbackLocation)];
+  return cities.map(city => sanitizeQueueLocation(`${city} WV`));
+}
+
+function getSearchQueriesForTarget() {
+  const plan = getClientScoutPlan(CONFIG.clientId);
+  const seeds = plan?.verticals?.[CONFIG.vertical];
+  if (!Array.isArray(seeds) || seeds.length === 0) {
+    return [sanitizeQueueLocation(`${CONFIG.industry} ${CONFIG.location}`)];
+  }
+  const city = cityFromLocation(CONFIG.location);
+  return seeds.map(seed => seed.replace(/\{city\}/g, city).trim());
 }
 
 function locationToIlikePattern(location) {
@@ -272,6 +351,7 @@ async function searchGoogle(query, numResults = 10) {
   const pages = Math.ceil(numResults / 10);
 
   for (let page = 0; page < pages; page++) {
+    if (results.length >= numResults) break;
     try {
       const res = await axios.get('https://serpapi.com/search', {
         params: {
@@ -283,7 +363,8 @@ async function searchGoogle(query, numResults = 10) {
         }
       });
 
-      const items = res.data.organic_results || [];
+      const remaining = Math.max(numResults - results.length, 0);
+      const items = (res.data.organic_results || []).slice(0, remaining);
       for (const item of items) {
         const link = item.link || '';
         const company = normalizeCompanyName(item.title);
@@ -303,6 +384,7 @@ async function searchGoogle(query, numResults = 10) {
           snippet: item.snippet,
           source:  ['google'],
         });
+        if (results.length >= numResults) break;
       }
     } catch (err) {
       console.error('[SerpAPI] Error:', err.response?.data?.error || err.message);
@@ -466,7 +548,7 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
   }
 
   const leads = [];
-  const query = `${industry} ${location}`;
+  const query = sanitizeQueueLocation(`${industry || ''} ${location || ''}`);
 
   try {
     const res = await axios.get(PLACES_TEXTSEARCH, {
@@ -542,6 +624,15 @@ function scoreLead(lead) {
   if (TARGET_VERTICAL.some(k => hay.includes(k)))    vertical = 25;
   else if (ADJACENT_VERTICAL.some(k => hay.includes(k))) vertical = 15;
 
+  if (CONFIG.clientId === 2) {
+    const MSHI_TARGET_VERTICAL = [
+      'property management', 'property manager', 'probate', 'estate sale',
+      'mortgage broker', 'insurance agency', 'public adjuster',
+      'home inspector', 'real estate agent', 'realtor',
+    ];
+    if (MSHI_TARGET_VERTICAL.some(k => hay.includes(k))) vertical = 25;
+  }
+
   // 2. Location (0–20) — addr preferred, falls back to hay for SerpAPI leads
   const NH_SUBURBS = [
     'bedford','goffstown','hooksett','londonderry','auburn','candia',
@@ -549,7 +640,13 @@ function scoreLead(lead) {
   ];
   const locHay = addr || hay;
   let location = 0;
-  if (locHay.includes('manchester'))                      location = 20;
+  if (CONFIG.clientId === 2) {
+    const wvCore = ['charleston', 'south charleston', 'st albans', 'dunbar', 'nitro', 'cross lanes', 'hurricane'];
+    const wvAdjacent = ['kanawha', 'putnam', 'cabell', 'scott depot', 'teays valley', 'huntington', 'barboursville'];
+    if (wvCore.some(c => locHay.includes(c) || hay.includes(c))) location = 20;
+    else if (wvAdjacent.some(c => locHay.includes(c) || hay.includes(c))) location = 15;
+    else if (locHay.includes(' wv') || locHay.includes('west virginia')) location = 8;
+  } else if (locHay.includes('manchester'))                      location = 20;
   else if (NH_SUBURBS.some(c => locHay.includes(c)))     location = 15;
   else if (locHay.includes(' nh') || locHay.includes('new hampshire')) location = 8;
 
@@ -579,11 +676,16 @@ function scoreLead(lead) {
 
   let clientBoost = 0;
   if (CONFIG.clientId === 2) {
-    const targetSignals = ['hoa', 'homeowners association', 'landlord', 'property management', 'property manager', 'bank', 'reo', 'foreclosure', 'real estate developer'];
+    const targetSignals = [
+      'hoa', 'homeowners association', 'landlord', 'property management',
+      'property manager', 'probate', 'estate sale', 'mortgage broker',
+      'insurance agency', 'public adjuster', 'home inspector',
+      'real estate agent', 'realtor',
+    ];
     const countySignals = ['kanawha', 'putnam', 'cabell'];
     if (targetSignals.some(k => hay.includes(k))) clientBoost += 12;
     if (countySignals.some(k => locHay.includes(k) || hay.includes(k))) clientBoost += 8;
-    if (['charleston', 'dunbar', 'st albans', 'scott depot', 'teays valley', 'hurricane', 'huntington', 'barboursville'].some(k => locHay.includes(k) || hay.includes(k))) {
+    if (['charleston', 'south charleston', 'st albans', 'dunbar', 'nitro', 'cross lanes', 'scott depot', 'teays valley', 'hurricane', 'huntington', 'barboursville'].some(k => locHay.includes(k) || hay.includes(k))) {
       clientBoost += 5;
     }
   }
@@ -696,20 +798,26 @@ async function main() {
     console.warn('[WARN] GOOGLE_PLACES_KEY is not set — Google Places search will be skipped');
   }
 
-  // Build search query
-  const query = `"${CONFIG.industry}" "${CONFIG.location}" "${CONFIG.jobTitle}" -indeed -ziprecruiter -thumbtack -glassdoor -yelp -yellowpages -mapquest -bbb -patch -avvo`;
-  console.log(`[Google] Searching: ${query}`);
+  const searchQueries = getSearchQueriesForTarget();
+  let leads = [];
 
-  // 1. SerpAPI search
-  let leads = await searchGoogle(query, CONFIG.maxResults);
-  console.log(`[SerpAPI] Found ${leads.length} raw results`);
+  for (const searchQuery of searchQueries) {
+    const googleQuery = `"${searchQuery}" -indeed -ziprecruiter -thumbtack -glassdoor -yelp -yellowpages -mapquest -bbb -patch -avvo`;
+    console.log(`[Google] Searching: ${googleQuery}`);
 
-  // 1b. Google Places search (additive — secondary local discovery)
-  console.log(`[Places] Searching: "${CONFIG.industry}" in ${CONFIG.location}`);
-  const placesLeads = await searchGooglePlaces(CONFIG.industry, CONFIG.location, 20);
-  if (placesLeads.length) {
-    leads = [...leads, ...placesLeads];
+    // 1. SerpAPI search
+    const serpLeads = await searchGoogle(googleQuery, CONFIG.maxResults);
+    console.log(`[SerpAPI] Found ${serpLeads.length} raw results for "${searchQuery}"`);
+    leads = [...leads, ...serpLeads];
+
+    // 1b. Google Places search (additive — secondary local discovery)
+    console.log(`[Places] Searching: "${searchQuery}"`);
+    const placesLeads = await searchGooglePlaces(searchQuery, '', Math.min(CONFIG.maxResults, 20));
+    if (placesLeads.length) {
+      leads = [...leads, ...placesLeads];
+    }
   }
+
   leads = deduplicate(leads);
   console.log(`[Combined] ${leads.length} unique domains after SerpAPI + Places`);
 
@@ -1003,7 +1111,8 @@ function validateProspect(name) {
   // Two title-cased words with no business indicator = likely a person's name from a scraper
   // Only reject if neither word is a known business keyword
   if (/^[A-Z][a-z]{2,14}\s[A-Z][a-z]{2,14}$/.test(n)) {
-    const BIZ_WORDS = /\b(llc|inc|corp|co|company|group|services|solutions|studio|labs|works|consulting|cleaning|plumbing|hvac|landscaping|roofing|electric|construction|contracting|design|media|management|properties|realty|agency|associates|partners|industries|enterprise|foundation|center|institute|strength|fitness|performance|training|athletics|wellness|health|gym|salon|spa|club|team)\b/i;
+    if (CONFIG.clientId === 2 && CONFIG.vertical === 'listing_agent') return true;
+    const BIZ_WORDS = /\b(llc|inc|corp|co|company|group|services|solutions|studio|labs|works|consulting|cleaning|plumbing|hvac|landscaping|roofing|electric|construction|contracting|design|media|management|properties|realty|realtor|agency|associates|partners|industries|enterprise|foundation|center|institute|strength|fitness|performance|training|athletics|wellness|health|gym|salon|spa|club|team|law|legal|mortgage|lending|loans?|insurance|inspections?|inspector|estate|auctions?)\b/i;
     if (!BIZ_WORDS.test(n))
       return reject('likely a personal name, not a business');
   }
@@ -1255,9 +1364,11 @@ async function saveToDatabase(leads) {
       const firstName = sanitizeFirstName(looksLikePerson ? nameParts[0] : null);
       const lastName  = firstName ? nameParts.slice(1).join(' ') || null : null;
       const phone = lead.phone || null;
+      const addressHay = normalizeGeoText(lead.address || '');
+      const domainHay = normalizeGeoText(domain || '');
       const serviceArea = (CLIENT_CONFIG?.service_area || []).find(area => {
-        const needle = String(area).toLowerCase();
-        return (lead.address || '').toLowerCase().includes(needle) || (domain || '').includes(needle);
+        const needle = normalizeGeoText(area);
+        return needle && (addressHay.includes(needle) || domainHay.includes(needle));
       }) || null;
       if (serviceArea === null && Array.isArray(CLIENT_CONFIG?.service_area) && CLIENT_CONFIG.service_area.length > 0) {
         console.log(`[Scout] Out-of-area prospect skipped: ${companyName} (${lead.address || 'no address'})`);
@@ -1547,17 +1658,19 @@ async function seedExpansionQueueMarkets(clientId) {
 async function seedClientVerticals(clientId, verticals, location) {
   const list = Array.isArray(verticals) ? verticals : [];
   const seen = new Set();
-  const cleanLocation = sanitizeQueueLocation(location);
+  const cleanLocations = getPlannedLocations(clientId, location);
   for (const raw of list) {
     const vertical = normalizeVertical(raw);
     if (!vertical || vertical === 'unknown' || seen.has(vertical)) continue;
     seen.add(vertical);
     const threshold = getSaturationThreshold(vertical);
-    await pool.query(`
-      INSERT INTO scout_queue (client_id, industry, vertical, location, prospect_count, threshold, saturated, status, updated_at)
-      VALUES ($1, $2, $3, $4, 0, $5, false, 'queued', NOW())
-      ON CONFLICT (client_id, vertical, location) DO NOTHING
-    `, [clientId, vertical, vertical, cleanLocation, threshold]);
+    for (const cleanLocation of cleanLocations) {
+      await pool.query(`
+        INSERT INTO scout_queue (client_id, industry, vertical, location, prospect_count, threshold, saturated, status, updated_at)
+        VALUES ($1, $2, $3, $4, 0, $5, false, 'queued', NOW())
+        ON CONFLICT (client_id, vertical, location) DO NOTHING
+      `, [clientId, vertical, vertical, cleanLocation, threshold]);
+    }
   }
 }
 
@@ -1578,14 +1691,23 @@ async function upsertQueueItem({ clientId, industry, vertical, location, count, 
 }
 
 // Next item to scrape: the unsaturated queued vertical with the fewest prospects.
-async function pickNextQueueItem(clientId) {
+async function pickNextQueueItem(clientId, allowedVerticals = []) {
+  const allowed = Array.isArray(allowedVerticals)
+    ? allowedVerticals.map(normalizeVertical).filter(v => v && v !== 'unknown')
+    : [];
+  const params = [clientId];
+  let allowedClause = '';
+  if (allowed.length) {
+    params.push(allowed);
+    allowedClause = ` AND vertical = ANY($${params.length})`;
+  }
   const res = await pool.query(`
     SELECT industry, vertical, location, prospect_count
     FROM scout_queue
-    WHERE client_id = $1 AND saturated = false
+    WHERE client_id = $1 AND saturated = false${allowedClause}
     ORDER BY prospect_count ASC, id ASC
     LIMIT 1
-  `, [clientId]);
+  `, params);
   return res.rows[0] || null;
 }
 
@@ -1597,13 +1719,38 @@ async function resolveScoutTarget({ clientId, industry, location, verticals }) {
   await ensureScoutQueue(pool);
   await normalizeExistingVerticals(pool);
   const cleanLocation = sanitizeQueueLocation(location);
+  const plannedVerticals = getPlannedVerticals(clientId);
+  const activeVerticals = plannedVerticals.length ? plannedVerticals : verticals;
   // Ensure every active vertical for this client exists in the queue before we
-  // select/rotate. The requested industry is always included as a fallback.
-  await seedClientVerticals(clientId, [...(verticals || []), industry], cleanLocation);
+  // select/rotate. Client-specific plans are authoritative; other clients keep
+  // the requested industry as a fallback.
+  await seedClientVerticals(
+    clientId,
+    plannedVerticals.length ? activeVerticals : [...(activeVerticals || []), industry],
+    cleanLocation
+  );
   await seedExpansionQueueMarkets(clientId);
   await refreshQueueCounts(clientId);
 
   const vertical = normalizeVertical(industry);
+
+  if (plannedVerticals.length && !plannedVerticals.includes(vertical)) {
+    console.log(`[Scout] "${vertical}" is not in client ${clientId}'s Scout plan — rotating to planned queue`);
+    await logScoutRun('skipped', { vertical, industry, location: cleanLocation }, 'vertical_not_in_scout_plan');
+    const next = await pickNextQueueItem(clientId, plannedVerticals);
+    if (!next) {
+      console.log('[Scout] No planned queue items remain — skipping run');
+      return { skip: true, vertical, saturated: true };
+    }
+    return {
+      industry: next.industry || next.vertical,
+      location: next.location || cleanLocation,
+      vertical: next.vertical,
+      saturated: false,
+      rotatedFrom: vertical,
+    };
+  }
+
   const threshold = getSaturationThreshold(vertical);
   const count = await getProspectCount(clientId, vertical, cleanLocation);
   const saturated = count >= threshold;
@@ -1617,7 +1764,7 @@ async function resolveScoutTarget({ clientId, industry, location, verticals }) {
   console.log(`[Scout] "${vertical}" saturated for client ${clientId}: ${count}/${threshold} prospects — rotating queue`);
   await logScoutRun('skipped', { vertical, industry, location: cleanLocation, prospect_count: count, threshold }, 'vertical_saturated');
 
-  const next = await pickNextQueueItem(clientId);
+  const next = await pickNextQueueItem(clientId, plannedVerticals);
   if (!next) {
     console.log('[Scout] No unsaturated queue items remain — skipping run');
     return { skip: true, vertical, saturated: true };
