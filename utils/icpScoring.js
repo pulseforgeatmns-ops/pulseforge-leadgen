@@ -82,6 +82,7 @@ const TARGET_VERTICALS = new Set([
   'cleaning', 'restaurant', 'hvac', 'salon', 'spa', 'beauty', 'retail',
   'auto', 'auto_repair', 'automotive', 'roofing', 'dental', 'home_renovation',
   'decks', 'siding', 'windows', 'exterior_remodeling', 'interior_renovation',
+  'probate_attorney',
 ]);
 const ADJACENT_VERTICALS = new Set([
   'landscaping', 'lawn', 'property_management', 'hotel', 'hospitality',
@@ -160,8 +161,12 @@ function scoreClientFit(prospect, clientConfig) {
 
   // MSHI (client 2): reward HOA/property/county signals like Scout does.
   if (Number(prospect.client_id) === 2) {
-    const targetSignals = ['hoa', 'homeowners association', 'landlord', 'property management', 'property manager', 'bank', 'reo', 'foreclosure'];
-    const countySignals = ['kanawha', 'putnam', 'cabell'];
+    const targetSignals = [
+      'hoa', 'homeowners association', 'landlord', 'property management',
+      'property manager', 'bank', 'reo', 'foreclosure', 'probate',
+      'estate planning', 'estate sale', 'executor',
+    ];
+    const countySignals = ['kanawha', 'putnam', 'cabell', 'logan', 'boone', 'lincoln', 'fayette'];
     if (targetSignals.some(k => hay.includes(k))) return 8;
     if (countySignals.some(k => hay.includes(k))) return 6;
     return 2;

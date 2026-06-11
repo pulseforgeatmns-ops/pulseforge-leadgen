@@ -91,6 +91,9 @@ const DOMAIN_BLACKLIST = [
   'pmrepublic.com','inmyarea.com','bark.com','expertise.com',
   'thumbtack.com','angi.com','porch.com','homeguide.com',
   'housekeeper.com','manchesterhousecleaning.com','co.uk',
+  'legacy.com','dignitymemorial.com','tributearchive.com',
+  'everloved.com','echovita.com','obitsarchive.com','obituary.com',
+  'obituarieshelp.org','afterall.com',
 ];
 
 function isBlacklistedDomain(domain) {
@@ -98,6 +101,29 @@ function isBlacklistedDomain(domain) {
   if (!host) return true;
   if (host.endsWith('.gov')) return true;
   return DOMAIN_BLACKLIST.some(blocked => host === blocked || host.endsWith(`.${blocked}`) || host.includes(blocked));
+}
+
+const REJECTED_PROSPECT_NAME_PATTERNS = [
+  /^Obituary information for/i,
+  / Email Formats?$/i,
+  /^Condo.*HOA Renovations/i,
+];
+
+function rejectedProspectNameReason(name) {
+  const clean = String(name || '').trim();
+  if (!clean) return null;
+  if (REJECTED_PROSPECT_NAME_PATTERNS.some(pattern => pattern.test(clean))) {
+    return 'blocked prospect name pattern';
+  }
+  return null;
+}
+
+function preEnrichmentRejectReason(lead) {
+  const nameReason = rejectedProspectNameReason(lead?.company);
+  if (nameReason) return nameReason;
+  const domain = normalizeDomain(lead?.url);
+  if (isBlacklistedDomain(domain)) return 'blocked domain';
+  return null;
 }
 
 // ── CLI ARGS ─────────────────────────────────────────────────────────
@@ -134,6 +160,7 @@ const SATURATION_THRESHOLDS = {
   med_spa: 30,
   landscaping: 30,
   property_management: 40,
+  probate_attorney: 40,
   home_services: 30,
   default: 40,
 };
@@ -148,16 +175,40 @@ const MSHI_SCOUT_CITIES = [
   'Hurricane',
 ];
 
+const MSHI_PROBATE_ATTORNEY_GEO = [
+  { city: 'Charleston', state: 'WV' },
+  { city: 'South Charleston', state: 'WV' },
+  { city: 'St. Albans', state: 'WV' },
+  { city: 'Dunbar', state: 'WV' },
+  { city: 'Nitro', state: 'WV' },
+  { city: 'Cross Lanes', state: 'WV' },
+  { city: 'Hurricane', state: 'WV' },
+  { city: 'Teays Valley', state: 'WV' },
+  { city: 'Scott Depot', state: 'WV' },
+  { city: 'Huntington', state: 'WV' },
+  { city: 'Barboursville', state: 'WV' },
+  { city: 'Logan', state: 'WV' },
+  { city: 'Madison', state: 'WV' },
+  { city: 'Hamlin', state: 'WV' },
+  { city: 'Fayetteville', state: 'WV' },
+  { city: 'Beckley', state: 'WV' },
+];
+
 const CLIENT_SCOUT_PLANS = {
   2: {
     cities: MSHI_SCOUT_CITIES,
+    geoByVertical: {
+      probate_attorney: MSHI_PROBATE_ATTORNEY_GEO,
+    },
     verticals: {
       property_management: [
         'property management company {city} WV',
       ],
-      probate_estate: [
-        'probate attorney {city} WV',
-        'estate sale company {city} WV',
+      probate_attorney: [
+        'probate attorney {city} {state}',
+        'estate attorney {city} {state}',
+        'estate planning attorney {city} {state}',
+        'trust and estate attorney {city} {state}',
       ],
       renovation_lender: [
         'mortgage broker {city} WV',
@@ -226,8 +277,13 @@ function getPlannedVerticals(clientId) {
   return plan ? Object.keys(plan.verticals || {}) : [];
 }
 
-function getPlannedLocations(clientId, fallbackLocation) {
+function getPlannedLocations(clientId, fallbackLocation, vertical = CONFIG.vertical) {
   const plan = getClientScoutPlan(clientId);
+  const normalizedVertical = normalizeVertical(vertical);
+  const geoTargets = Array.isArray(plan?.geoByVertical?.[normalizedVertical])
+    ? plan.geoByVertical[normalizedVertical]
+    : null;
+  if (geoTargets?.length) return geoTargets.map(({ city, state }) => sanitizeQueueLocation(`${city} ${state}`));
   const cities = Array.isArray(plan?.cities) ? plan.cities : [];
   if (!cities.length) return [sanitizeQueueLocation(fallbackLocation)];
   return cities.map(city => sanitizeQueueLocation(`${city} WV`));
@@ -240,7 +296,11 @@ function getSearchQueriesForTarget() {
     return [sanitizeQueueLocation(`${CONFIG.industry} ${CONFIG.location}`)];
   }
   const city = cityFromLocation(CONFIG.location);
-  return seeds.map(seed => seed.replace(/\{city\}/g, city).trim());
+  const state = sanitizeQueueLocation(CONFIG.location).split(/\s+/).pop() || CLIENT_CONFIG?.state || '';
+  return seeds.map(seed => seed
+    .replace(/\{city\}/g, city)
+    .replace(/\{state\}/g, state)
+    .trim());
 }
 
 function locationToIlikePattern(location) {
@@ -333,6 +393,38 @@ async function scrapeWebsiteEmail(domain) {
     }
   }
   return null;
+}
+
+async function fetchProbateWebsiteSignals(domain) {
+  if (CONFIG.vertical !== 'probate_attorney' || !domain) return [];
+
+  const urls = [
+    `https://${domain}`,
+    `https://${domain}/practice-areas`,
+    `https://${domain}/services`,
+    `https://${domain}/probate`,
+    `https://${domain}/estate-planning`,
+  ];
+  const signals = new Set();
+
+  for (const url of urls) {
+    try {
+      const res = await axios.get(url, {
+        timeout: 4000,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
+      });
+      const text = String(res.data || '').toLowerCase().replace(/<[^>]*>/g, ' ');
+      if (/\bprobate\b/.test(text)) signals.add('probate');
+      if (/\bestate\s+sale(s)?\b/.test(text)) signals.add('estate_sale');
+      if (/\bexecutor(s)?\b|\bexecutrix\b/.test(text)) signals.add('executor');
+      if (/\bestate\s+planning\b/.test(text)) signals.add('estate_planning');
+      if (signals.size >= 3) break;
+    } catch(err) {
+      // try next service page
+    }
+  }
+
+  return [...signals];
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -626,7 +718,8 @@ function scoreLead(lead) {
 
   if (CONFIG.clientId === 2) {
     const MSHI_TARGET_VERTICAL = [
-      'property management', 'property manager', 'probate', 'estate sale',
+      'property management', 'property manager', 'probate', 'estate attorney',
+      'estate planning', 'trust and estate', 'estate sale', 'executor',
       'mortgage broker', 'insurance agency', 'public adjuster',
       'home inspector', 'real estate agent', 'realtor',
     ];
@@ -642,7 +735,7 @@ function scoreLead(lead) {
   let location = 0;
   if (CONFIG.clientId === 2) {
     const wvCore = ['charleston', 'south charleston', 'st albans', 'dunbar', 'nitro', 'cross lanes', 'hurricane'];
-    const wvAdjacent = ['kanawha', 'putnam', 'cabell', 'scott depot', 'teays valley', 'huntington', 'barboursville'];
+    const wvAdjacent = ['kanawha', 'putnam', 'cabell', 'logan', 'boone', 'lincoln', 'fayette', 'scott depot', 'teays valley', 'huntington', 'barboursville', 'madison', 'hamlin', 'fayetteville', 'beckley'];
     if (wvCore.some(c => locHay.includes(c) || hay.includes(c))) location = 20;
     else if (wvAdjacent.some(c => locHay.includes(c) || hay.includes(c))) location = 15;
     else if (locHay.includes(' wv') || locHay.includes('west virginia')) location = 8;
@@ -678,20 +771,42 @@ function scoreLead(lead) {
   if (CONFIG.clientId === 2) {
     const targetSignals = [
       'hoa', 'homeowners association', 'landlord', 'property management',
-      'property manager', 'probate', 'estate sale', 'mortgage broker',
+      'property manager', 'probate', 'estate attorney', 'estate planning',
+      'trust and estate', 'estate sale', 'executor', 'mortgage broker',
       'insurance agency', 'public adjuster', 'home inspector',
       'real estate agent', 'realtor',
     ];
-    const countySignals = ['kanawha', 'putnam', 'cabell'];
+    const countySignals = ['kanawha', 'putnam', 'cabell', 'logan', 'boone', 'lincoln', 'fayette'];
     if (targetSignals.some(k => hay.includes(k))) clientBoost += 12;
     if (countySignals.some(k => locHay.includes(k) || hay.includes(k))) clientBoost += 8;
-    if (['charleston', 'south charleston', 'st albans', 'dunbar', 'nitro', 'cross lanes', 'scott depot', 'teays valley', 'hurricane', 'huntington', 'barboursville'].some(k => locHay.includes(k) || hay.includes(k))) {
+    if (['charleston', 'south charleston', 'st albans', 'dunbar', 'nitro', 'cross lanes', 'scott depot', 'teays valley', 'hurricane', 'huntington', 'barboursville', 'logan', 'madison', 'hamlin', 'fayetteville', 'beckley'].some(k => locHay.includes(k) || hay.includes(k))) {
       clientBoost += 5;
     }
   }
 
-  const total = vertical + location + contact + web + size + clientBoost;
-  console.log(`  ICP Score: ${total} (vertical:${vertical} location:${location} contact:${contact} web:${web} size:${size} client:${clientBoost}) — ${lead.company}`);
+  let probateAdjustment = 0;
+  if (CONFIG.clientId === 2 && CONFIG.vertical === 'probate_attorney') {
+    const siteSignals = Array.isArray(lead.websiteSignals) ? lead.websiteSignals : [];
+    const serviceSignals = ['probate', 'estate_sale', 'executor', 'estate_planning'];
+    const smallFirmSignals = [
+      'solo', 'sole practitioner', 'principal attorney', 'founding attorney',
+      'law office of', 'law offices of', 'attorney at law', 'pllc',
+    ];
+    const bigFirmSignals = [
+      'biglaw', 'national law firm', 'international law firm', 'multi-state',
+      'multistate', 'offices nationwide', 'nationwide', 'global law firm',
+      'am law', 'multiple offices', 'regional offices',
+    ];
+
+    if (serviceSignals.some(signal => siteSignals.includes(signal))) probateAdjustment += 12;
+    if (smallFirmSignals.some(k => hay.includes(k))) probateAdjustment += 8;
+    if (bigFirmSignals.some(k => hay.includes(k))) probateAdjustment -= 20;
+    if (/\b(100|200|500)\+?\s+(attorneys|lawyers)\b/i.test(hay)) probateAdjustment -= 20;
+    if (/\b(offices|locations)\s+(in|across)\s+\d+\s+states\b/i.test(hay)) probateAdjustment -= 20;
+  }
+
+  const total = Math.max(0, vertical + location + contact + web + size + clientBoost + probateAdjustment);
+  console.log(`  ICP Score: ${total} (vertical:${vertical} location:${location} contact:${contact} web:${web} size:${size} client:${clientBoost} probate:${probateAdjustment}) — ${lead.company}`);
   return Math.min(total, 100);
 }
 
@@ -821,9 +936,17 @@ async function main() {
   leads = deduplicate(leads);
   console.log(`[Combined] ${leads.length} unique domains after SerpAPI + Places`);
 
-  // Pre-enrichment blacklist — strip junk domains before spending Prospeo/Hunter credits
-  leads = leads.filter(l => !isBlacklistedDomain(l.url));
-  console.log(`[Pre-enrichment blacklist] ${leads.length} leads after filtering`);
+  // Pre-enrichment blacklist — strip junk domains/names before spending Prospeo/Hunter credits
+  const beforePreEnrichment = leads.length;
+  leads = leads.filter(l => {
+    const reason = preEnrichmentRejectReason(l);
+    if (reason) {
+      console.log(`[Pre-enrichment reject] ${l.company || l.url || 'unknown'}: ${reason}`);
+      return false;
+    }
+    return true;
+  });
+  console.log(`[Pre-enrichment blacklist] ${leads.length} leads after filtering (${beforePreEnrichment - leads.length} removed)`);
 
   // 3. Enrich with Prospeo
   console.log(`[Prospeo] Enriching ${leads.length} domains...`);
@@ -862,6 +985,17 @@ async function main() {
     await new Promise(r => setTimeout(r, 1500));
   }
 
+  if (CONFIG.vertical === 'probate_attorney') {
+    console.log(`[Probate] Checking website service-line signals for ${leads.length} domains...`);
+    for (const lead of leads) {
+      const domain = normalizeDomain(lead.url);
+      lead.websiteSignals = await fetchProbateWebsiteSignals(domain);
+      if (lead.websiteSignals.length) {
+        console.log(`  ${domain}: ${lead.websiteSignals.join(', ')}`);
+      }
+    }
+  }
+
   // 4. Fill missing fields
   leads = leads.map(l => ({
     company: l.company || 'Unknown',
@@ -878,6 +1012,7 @@ async function main() {
     google_review_count:  l.google_review_count ?? null,
     facebook_url:         l.facebook_url || null,
     instagram_url:        l.instagram_url || null,
+    websiteSignals:       l.websiteSignals || [],
   }));
 
   leads = leads.filter(l => !isBlacklistedDomain(l.url));
@@ -992,6 +1127,13 @@ function detectType(lead) {
   return techKeywords.some(k => d.includes(k)) ? 'tech' : 'smb';
 }
 
+function getScoutPreferredChannel() {
+  if (CONFIG.clientId === 2 && ['property_management', 'probate_attorney'].includes(CONFIG.vertical)) {
+    return 'phone';
+  }
+  return null;
+}
+
 function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
@@ -1033,6 +1175,9 @@ function validateProspect(name) {
 
   const reject = (reason) => { console.log(`Rejected "${n}": ${reason}`); return false; };
 
+  const blockedNameReason = rejectedProspectNameReason(n);
+  if (blockedNameReason)
+    return reject(blockedNameReason);
   if (n.length < 4)
     return reject('too short');
   if (/^CONTACT:/i.test(n))
@@ -1382,6 +1527,7 @@ async function saveToDatabase(leads) {
       const hasInstagram = !!instagramUrl;
       const googleRating = lead.google_rating ?? null;
       const googleReviewCount = lead.google_review_count ?? null;
+      const preferredChannel = getScoutPreferredChannel();
       const companyId = await findOrCreateCompany({ name: companyName, domain, lead });
       if (!companyId) throw new Error(`Unable to link company for ${companyName}`);
       const insert = await pool.query(
@@ -1389,10 +1535,10 @@ async function saveToDatabase(leads) {
         company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical,
         client_id, service_area_match, discovery_method, has_website, google_review_count, google_rating,
         has_facebook, has_instagram, facebook_url, instagram_url, website_url,
-        email_verified, email_verification_method, verified_at, do_not_contact
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+        email_verified, email_verification_method, verified_at, do_not_contact, preferred_channel
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
       ON CONFLICT (email) DO NOTHING RETURNING id`,
-      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, null, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, websiteUrl, emailVerified, emailVerificationMethod, verifiedAt, doNotContact]
+      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, null, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, websiteUrl, emailVerified, emailVerificationMethod, verifiedAt, doNotContact, preferredChannel]
     );
       if (!insert.rows.length) {
         skipped++;
@@ -1454,6 +1600,7 @@ async function ensureSetterQueueColumns(pool) {
     ADD COLUMN IF NOT EXISTS facebook_url TEXT,
     ADD COLUMN IF NOT EXISTS instagram_url TEXT,
     ADD COLUMN IF NOT EXISTS website_url TEXT,
+    ADD COLUMN IF NOT EXISTS preferred_channel TEXT,
     ADD COLUMN IF NOT EXISTS employee_count_estimate TEXT
   `);
 }
@@ -1531,6 +1678,7 @@ async function ensureScoutQueue(pool) {
           WHEN vertical = 'med_spa' THEN 30
           WHEN vertical = 'landscaping' THEN 30
           WHEN vertical = 'property_management' THEN 40
+          WHEN vertical = 'probate_attorney' THEN 40
           WHEN vertical = 'home_services' THEN 30
           ELSE 40
         END,
@@ -1544,6 +1692,7 @@ async function ensureScoutQueue(pool) {
           WHEN vertical = 'med_spa' THEN 30
           WHEN vertical = 'landscaping' THEN 30
           WHEN vertical = 'property_management' THEN 40
+          WHEN vertical = 'probate_attorney' THEN 40
           WHEN vertical = 'home_services' THEN 30
           ELSE 40
         END
@@ -1637,6 +1786,7 @@ async function seedExpansionQueueMarkets(clientId) {
         WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'med_spa' THEN 30
         WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'landscaping' THEN 30
         WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'property_management' THEN 40
+        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'probate_attorney' THEN 40
         WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'home_services' THEN 30
         ELSE 40
       END,
@@ -1658,11 +1808,11 @@ async function seedExpansionQueueMarkets(clientId) {
 async function seedClientVerticals(clientId, verticals, location) {
   const list = Array.isArray(verticals) ? verticals : [];
   const seen = new Set();
-  const cleanLocations = getPlannedLocations(clientId, location);
   for (const raw of list) {
     const vertical = normalizeVertical(raw);
     if (!vertical || vertical === 'unknown' || seen.has(vertical)) continue;
     seen.add(vertical);
+    const cleanLocations = getPlannedLocations(clientId, location, vertical);
     const threshold = getSaturationThreshold(vertical);
     for (const cleanLocation of cleanLocations) {
       await pool.query(`
