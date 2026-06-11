@@ -18,13 +18,29 @@ async function ensureMiraSchema() {
       confidence      NUMERIC(3,2),
       client_id       INT,
       routed_to_table TEXT,
-      routed_to_id    BIGINT,
+      routed_to_id    TEXT,
       status          TEXT NOT NULL DEFAULT 'new'
                       CHECK (status IN ('new', 'transcribed', 'classified', 'routed', 'review_needed', 'failed')),
       raw_metadata    JSONB,
       classifier_notes TEXT,
       processed_at    TIMESTAMPTZ
     )
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'capture_inbox'
+          AND column_name = 'routed_to_id'
+          AND data_type <> 'text'
+      ) THEN
+        ALTER TABLE capture_inbox
+        ALTER COLUMN routed_to_id TYPE TEXT USING routed_to_id::TEXT;
+      END IF;
+    END $$;
   `);
 
   await pool.query(`
