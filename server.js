@@ -40,6 +40,7 @@ const { ensureCallDispositionSchema } = require('./calBatchAgent');
 const { ensureMiraSchema } = require('./utils/miraSchema');
 const { startMiraTranscriptionWorker } = require('./miraTranscriptionAgent');
 const { startMiraClassifierWorker } = require('./miraClassifierAgent');
+const { startMiraRouterWorker } = require('./miraRouterAgent');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -57,6 +58,7 @@ ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
 startMiraTranscriptionWorker();
 startMiraClassifierWorker();
+startMiraRouterWorker();
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),

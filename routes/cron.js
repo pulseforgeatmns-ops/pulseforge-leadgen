@@ -30,6 +30,7 @@ const CRON_MODULES = {
   handoff_utility: '../setterHandoffAgent',
   mira_transcription: '../miraTranscriptionAgent',
   mira_classifier: '../miraClassifierAgent',
+  mira_router: '../miraRouterAgent',
 };
 
 function runCronAgent(agent, res, query = {}) {
