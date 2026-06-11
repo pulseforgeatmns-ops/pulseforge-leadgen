@@ -6,7 +6,7 @@ const AGENT_NAME = 'mira_router';
 const DEFAULT_LIMIT = 10;
 const WORKER_INTERVAL_MS = 15 * 60 * 1000;
 const ADVISORY_LOCK_KEY = 91720260604;
-const TODOIST_API_BASE = 'https://api.todoist.com/rest/v2';
+const TODOIST_API_BASE = 'https://api.todoist.com/api/v1';
 
 let intervalHandle = null;
 let intervalRunning = false;
@@ -82,31 +82,41 @@ async function getTodoistProjectMap() {
     throw new Error('TODOIST_API_TOKEN not set');
   }
 
-  const response = await fetch(`${TODOIST_API_BASE}/projects`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
-
-  const bodyText = await response.text();
-  let body;
-  try {
-    body = bodyText ? JSON.parse(bodyText) : [];
-  } catch (_) {
-    body = { raw: bodyText };
-  }
-
-  if (!response.ok) {
-    const message = body?.error || body?.raw || `Todoist projects failed with HTTP ${response.status}`;
-    throw new Error(message);
-  }
-
   const map = new Map();
-  for (const project of body || []) {
-    if (project?.name && project?.id) {
-      map.set(normalizeName(project.name), String(project.id));
+  let cursor = null;
+
+  do {
+    const url = new URL(`${TODOIST_API_BASE}/projects`);
+    url.searchParams.set('limit', '200');
+    if (cursor) url.searchParams.set('cursor', cursor);
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const bodyText = await response.text();
+    let body;
+    try {
+      body = bodyText ? JSON.parse(bodyText) : {};
+    } catch (_) {
+      body = { raw: bodyText };
     }
-  }
+
+    if (!response.ok) {
+      const message = body?.error || body?.raw || `Todoist projects failed with HTTP ${response.status}`;
+      throw new Error(message);
+    }
+
+    for (const project of body.results || []) {
+      if (project?.name && project?.id) {
+        map.set(normalizeName(project.name), String(project.id));
+      }
+    }
+    cursor = body.next_cursor || null;
+  } while (cursor);
+
   todoistProjectMap = map;
   return todoistProjectMap;
 }
