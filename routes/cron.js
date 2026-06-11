@@ -31,6 +31,7 @@ const CRON_MODULES = {
   mira_transcription: '../miraTranscriptionAgent',
   mira_classifier: '../miraClassifierAgent',
   mira_router: '../miraRouterAgent',
+  mira_digest: '../miraDigestAgent',
 };
 
 function runCronAgent(agent, res, query = {}) {

@@ -11,6 +11,11 @@ const {
 } = require('../rileyAgent');
 const { recordEvent } = require('../utils/emailPerformance');
 const { ensureMiraSchema } = require('../utils/miraSchema');
+const {
+  VALID_MIRA_CATEGORIES,
+  correctMiraCapture,
+  sendMiraTelegramMessage,
+} = require('../utils/miraCorrections');
 
 const miraSchemaReady = ensureMiraSchema().catch(err => {
   console.error('[mira] schema error:', err.message);
@@ -38,6 +43,10 @@ function normalizeChatId(value) {
 
 function telegramMessage(update = {}) {
   return update.message || update.edited_message || null;
+}
+
+function telegramCallbackQuery(update = {}) {
+  return update.callback_query || null;
 }
 
 function extractTelegramUrl(message = {}) {
@@ -115,6 +124,76 @@ async function sendMiraAck(chatId, contentType, captureId) {
   }, { timeout: 800 });
 }
 
+async function answerMiraCallback(callbackQueryId, text = null) {
+  const botToken = process.env.MIRA_TELEGRAM_BOT_TOKEN;
+  if (!botToken || !callbackQueryId) return;
+
+  await axios.post(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+    callback_query_id: callbackQueryId,
+    ...(text ? { text } : {}),
+  }, { timeout: 3000 });
+}
+
+function buildMiraCategoryKeyboard(captureId) {
+  return {
+    inline_keyboard: [
+      VALID_MIRA_CATEGORIES.slice(0, 2).map(category => ({
+        text: category,
+        callback_data: `mira_correct:${captureId}:${category}`,
+      })),
+      VALID_MIRA_CATEGORIES.slice(2, 4).map(category => ({
+        text: category,
+        callback_data: `mira_correct:${captureId}:${category}`,
+      })),
+      VALID_MIRA_CATEGORIES.slice(4, 6).map(category => ({
+        text: category,
+        callback_data: `mira_correct:${captureId}:${category}`,
+      })),
+      VALID_MIRA_CATEGORIES.slice(6, 8).map(category => ({
+        text: category,
+        callback_data: `mira_correct:${captureId}:${category}`,
+      })),
+    ],
+  };
+}
+
+async function sendMiraCorrectionReply(result) {
+  await sendMiraTelegramMessage(`Fixed. ${result.snippet} now classified as ${result.corrected_class}.`);
+}
+
+async function handleMiraCorrectCommand(message) {
+  const match = String(message.text || '').trim().match(/^\/correct(?:@\w+)?\s+(\d+)\s+([a-z_]+)\s*$/i);
+  if (!match) {
+    await sendMiraTelegramMessage('Use /correct <capture_id> <new_category>.');
+    return;
+  }
+
+  const captureId = Number(match[1]);
+  const newCategory = match[2];
+  const result = await correctMiraCapture(captureId, newCategory);
+  await sendMiraCorrectionReply(result);
+}
+
+async function handleMiraCallback(callbackQuery) {
+  const data = String(callbackQuery.data || '');
+
+  if (data.startsWith('mira_fix:')) {
+    const captureId = Number(data.split(':')[1]);
+    await answerMiraCallback(callbackQuery.id);
+    await sendMiraTelegramMessage(`Fix #${captureId}: choose the right category.`, {
+      reply_markup: buildMiraCategoryKeyboard(captureId),
+    });
+    return;
+  }
+
+  if (data.startsWith('mira_correct:')) {
+    const [, captureIdText, newCategory] = data.split(':');
+    const result = await correctMiraCapture(Number(captureIdText), newCategory);
+    await answerMiraCallback(callbackQuery.id, 'Fixed.');
+    await sendMiraCorrectionReply(result);
+  }
+}
+
 async function getTelegramFileUrl(fileId) {
   const botToken = process.env.MIRA_TELEGRAM_BOT_TOKEN;
   if (!botToken || !fileId) return null;
@@ -150,8 +229,9 @@ async function updateMiraFileUrl(captureId, capture) {
 
 router.post('/telegram/mira', async (req, res) => {
   const update = req.body || {};
+  const callbackQuery = telegramCallbackQuery(update);
   const message = telegramMessage(update);
-  const chatId = normalizeChatId(message?.chat?.id);
+  const chatId = normalizeChatId(callbackQuery?.message?.chat?.id || message?.chat?.id);
   const jacobChatId = normalizeChatId(process.env.JACOB_TELEGRAM_CHAT_ID);
 
   if (!jacobChatId) {
@@ -159,7 +239,7 @@ router.post('/telegram/mira', async (req, res) => {
     return res.sendStatus(500);
   }
 
-  if (!message || chatId !== jacobChatId) {
+  if ((!message && !callbackQuery) || chatId !== jacobChatId) {
     if (chatId && chatId !== jacobChatId) {
       console.log(`[mira] rejected telegram chat_id=${chatId}`);
     }
@@ -168,6 +248,25 @@ router.post('/telegram/mira', async (req, res) => {
 
   try {
     await miraSchemaReady;
+
+    if (callbackQuery) {
+      res.status(200).json({ ok: true });
+      handleMiraCallback(callbackQuery).catch(err => {
+        console.error('[mira] callback error:', err.response?.data?.description || err.message);
+        answerMiraCallback(callbackQuery.id, 'Could not fix this one.').catch(() => {});
+      });
+      return;
+    }
+
+    if (String(message.text || '').trim().startsWith('/correct')) {
+      res.status(200).json({ ok: true });
+      handleMiraCorrectCommand(message).catch(err => {
+        console.error('[mira] correct command error:', err.response?.data?.description || err.message);
+        sendMiraTelegramMessage(`Could not correct capture: ${err.message}`).catch(() => {});
+      });
+      return;
+    }
+
     const capture = parseMiraCapture(message);
     const rawMetadata = {
       update_id: update.update_id || null,
