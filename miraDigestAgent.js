@@ -3,6 +3,7 @@ require('dotenv').config();
 const pool = require('./db');
 const { ensureMiraSchema } = require('./utils/miraSchema');
 const { sendMiraTelegramMessage, truncate } = require('./utils/miraCorrections');
+const { buildAnchorAppendix } = require('./utils/miraAnchor');
 
 const AGENT_NAME = 'mira_digest';
 const DIGEST_TZ = process.env.MIRA_TIMEZONE || 'America/New_York';
@@ -163,7 +164,9 @@ async function logDigest(status, payload = {}, errorMsg = null) {
 async function run() {
   await ensureMiraSchema();
   const rows = await fetchDigestRows();
-  const text = buildDigestMessage(rows);
+  const digestText = buildDigestMessage(rows);
+  const anchorSection = await buildAnchorAppendix();
+  const text = anchorSection ? `${digestText}\n${anchorSection}` : digestText;
   const reviewRows = rows.filter(row => row.status === 'review_needed' || row.classification === 'decision_needed');
   const replyMarkup = buildInlineKeyboard(reviewRows);
 
