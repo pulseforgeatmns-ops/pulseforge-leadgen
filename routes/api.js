@@ -4,6 +4,7 @@ const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { ensureClientArchitecture, getActiveClients, getRequestClientId, normalizeClientId } = require('../utils/clientContext');
 const { ensureCloserSchema } = require('../utils/closerSchema');
+const { getTodoistSnapshot, getCurrentAnchor } = require('../utils/miraContext');
 const { publishBlogPost } = require('../utils/blogPublisher');
 const {
   publishToGoogleBusiness,
@@ -2045,6 +2046,116 @@ router.post('/api/run/:agent', requireOperator, async (req, res) => {
       }
     }
   })();
+});
+
+// ---------------------------------------------------------------------------
+// Mira context endpoint (READ-ONLY — for Claude.ai consumption)
+//
+// GET /api/mira/context returns a JSON snapshot of Jacob's current Mira state so
+// an external Claude.ai conversation can read live context when Jacob talks to
+// it. This endpoint is strictly read-only: it issues SELECT-only DB reads and
+// outbound Todoist GET requests, and never mutates any Mira table, agent, or
+// schema. It does NOT use session auth — instead it is guarded by the
+// MIRA_CONTEXT_SECRET env var (passed as ?secret=... or an
+// `Authorization: Bearer <secret>` header), mirroring the CRON_SECRET guard
+// pattern used by the /cron routes.
+// ---------------------------------------------------------------------------
+function requireMiraContextSecret(req, res, next) {
+  const expected = process.env.MIRA_CONTEXT_SECRET;
+  // Fail closed: if the secret is not configured the endpoint stays locked.
+  if (!expected) return res.status(401).json({ error: 'Unauthorized' });
+
+  const header = String(req.get('authorization') || '');
+  const bearer = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : null;
+  const provided = req.query.secret || bearer;
+  if (!provided || provided !== expected) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+router.get('/api/mira/context', requireMiraContextSecret, async (req, res) => {
+  try {
+    // Every table read below is SELECT-only and individually fault-isolated: a
+    // missing or empty table yields [] / null instead of failing the snapshot.
+    const safeRows = (promise, fallback = []) => promise.then(r => r.rows).catch(err => {
+      console.error('[mira_context] query failed:', err.message);
+      return fallback;
+    });
+
+    const [
+      recentCaptures,
+      openBlockers,
+      activeClients,
+      recentClientNotes,
+      recentCorrections,
+      currentAnchor,
+      todoist,
+    ] = await Promise.all([
+      // Last 10 captures with a 150-char preview of transcript (preferred) or raw_text.
+      safeRows(pool.query(`
+        SELECT id,
+               LEFT(COALESCE(NULLIF(transcript, ''), raw_text, ''), 150) AS content_preview,
+               classification, status, received_at
+        FROM capture_inbox
+        ORDER BY received_at DESC
+        LIMIT 10
+      `)),
+      // Open (unresolved) blockers, oldest first, with days_open computed at read time.
+      safeRows(pool.query(`
+        SELECT id, content, blocking,
+               GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400))::int AS days_open
+        FROM blockers
+        WHERE resolved = false
+        ORDER BY created_at ASC
+      `)),
+      // Active clients. The clients table uses an `active` boolean (there is no
+      // `status` column), so "status='active'" maps to active = true here.
+      safeRows(pool.query(`
+        SELECT id, name FROM clients WHERE active = true ORDER BY name ASC
+      `)),
+      // Last 10 client notes joined to the client name, 150-char content preview.
+      safeRows(pool.query(`
+        SELECT cn.created_at,
+               c.name AS client_name,
+               LEFT(COALESCE(cn.content, ''), 150) AS content_preview
+        FROM client_notes cn
+        LEFT JOIN clients c ON c.id = cn.client_id
+        ORDER BY cn.created_at DESC
+        LIMIT 10
+      `)),
+      // Last 5 Mira misclassification corrections.
+      safeRows(pool.query(`
+        SELECT original_class, corrected_class, created_at
+        FROM mira_corrections
+        ORDER BY created_at DESC
+        LIMIT 5
+      `)),
+      getCurrentAnchor(pool).catch(err => {
+        console.error('[mira_context] anchor failed:', err.message);
+        return null;
+      }),
+      getTodoistSnapshot().catch(err => {
+        console.error('[mira_context] todoist failed:', err.message);
+        return { configured: false, open_tasks_count: 0, stale_tasks: [], error: err.message };
+      }),
+    ]);
+
+    res.json({
+      now: new Date().toISOString(),
+      recent_captures: recentCaptures,
+      current_anchor: currentAnchor,
+      open_tasks_count: todoist.open_tasks_count,
+      stale_tasks: todoist.stale_tasks,
+      open_blockers: openBlockers,
+      active_clients: activeClients,
+      recent_client_notes: recentClientNotes,
+      recent_corrections: recentCorrections,
+    });
+  } catch (err) {
+    console.error('[mira_context] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;
