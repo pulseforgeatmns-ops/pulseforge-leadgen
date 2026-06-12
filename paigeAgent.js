@@ -1010,6 +1010,64 @@ const LINKEDIN_HARD_RULES = `HARD RULES — NEVER VIOLATE:
 9. Never invent. No fabricated quotes, no made-up metrics, no clients that do not exist. Skip the slot before generating slop.
 10. Brand voice never mixes. This post is one brand only.`;
 
+// Few-shot tonal grounding: one worked example per format/brand. Reference only,
+// never templates to copy verbatim. Loaded as the last thing in the system prompt
+// (end of buildLinkedInRules), immediately above the user prompt.
+const LINKEDIN_FEW_SHOT = {
+  punch: {
+    pulseforge: `We disabled an agent this week.
+Cal, our voice outbound channel, off after six weeks of strong connect rates and zero conversion. Healthy top-of-funnel, broken middle.
+Voice AI isn't there yet for cold outbound. Connect rate is a vanity metric when the eight seconds after pickup decide everything.`,
+    jacob_personal: `Killed an agent yesterday.
+Cal, our voice outbound, disabled after six weeks of healthy connect rates and zero meaningful conversion.
+Lesson: connect rate is a vanity metric when the bot's voice doesn't pass for human. The eight seconds after pickup are the whole ballgame.`,
+  },
+  numbers: {
+    pulseforge: `5 prospects sent. 1 closed recurring revenue. 0 cold emails fired.
+That's the unit economics of regional outbound when you stop chasing volume and start building a list short enough to call by name.
+Most agencies can't sell that model because their pricing depends on send volume. Ours doesn't.`,
+    jacob_personal: `5 prospects handed off. 1 booked on the first call. 0 cold emails sent.
+Brad and Dustin at MSHI dialed their first batch yesterday. Single dial, recurring revenue locked.
+Twenty-eight days from contract signed to model validated. I quoted them sixty to ninety.`,
+  },
+  quote: {
+    pulseforge: `"I'd rather have 5 names I can actually win than 500 I'll never call." Brad Hudson, MSHI, week two.
+We'd been pricing for the 500-name version because that's what every outbound agency on the internet sells.
+Brad's version is harder to deliver, more expensive to run, worth more to the buyer. Curious how many operators are pricing the easy version of the work?`,
+    jacob_personal: `"Connect rate is a vanity metric." That was me, on a call with my voice agent vendor, six weeks into Cal.
+I'd been chasing the wrong number because the wrong number was the easy one to chase.
+Killed Cal yesterday. What's the metric you've been tracking that you should have killed sooner?`,
+  },
+  stake: {
+    pulseforge: `Cold email volume doesn't work in markets under 50,000 people.
+We've watched it across two client deployments now. The math breaks when one bad send hits the inbox of everyone the recipient drinks with on Saturday. Reputation poisons faster than you can warm new domains.
+Our model for those markets: hand-built lists in the single digits. Sounds wasteful. Closes faster. Every time.
+Different math. Different pricing. Different agency.`,
+    jacob_personal: `Cold email is dead in sub-50K population markets.
+Not "underperforming." Not "needs a better hook." Dead. The math doesn't work when one bad send hits the inbox of everyone the recipient drinks with on Saturday.
+I learned this watching a perfectly good DKIM-aligned campaign in West Virginia get burned in seven sends because two recipients knew each other.
+If you're running outbound in a tight regional market and getting real results from volume, tell me where I'm wrong.`,
+  },
+  decision_log: {
+    pulseforge: `Decision yesterday: we're pausing commission-only setter recruiting until our hiring structure has a real commitment gate.
+Tradeoff accepted: slower setter pipeline for two to three weeks. Stop hiring people whose math depends on desperation.
+Metric we're watching: show-rate on the next five hires. Above 80% by July 15 means the gate is calibrated. Below means the structure needs another pass.`,
+    jacob_personal: `Made a call yesterday: commission-only setter recruiting is paused until I build a real commitment gate.
+Means slower MSHI growth for two to three weeks. Means I stop hiring people whose math depends on desperation.
+Metric I'm watching: show-rate on the next five hires. If it's not above 80% by July 15, the gate isn't tight enough yet.`,
+  },
+};
+
+// Fail fast at module load: hard rule #1 forbids em-dashes, so no reference
+// example may contain one.
+for (const [fmt, brands] of Object.entries(LINKEDIN_FEW_SHOT)) {
+  for (const [brandKey, text] of Object.entries(brands)) {
+    if (/—/.test(text)) {
+      throw new Error(`LINKEDIN_FEW_SHOT[${fmt}][${brandKey}] contains an em-dash, which violates hard rule #1`);
+    }
+  }
+}
+
 function getBrandForChannel(channel) {
   return LINKEDIN_BRAND_BY_CHANNEL[channel] || null;
 }
@@ -1043,7 +1101,11 @@ Hard length cap: ${spec.maxWords} words. Do not exceed it.
 ${LINKEDIN_HARD_RULES}
 
 CANONICAL SOURCE MATERIAL — anchor every specific claim to something on this list. Never invent:
-${LINKEDIN_CANONICAL_SOURCE_MATERIAL}${personalBackground}`;
+${LINKEDIN_CANONICAL_SOURCE_MATERIAL}${personalBackground}
+
+Reference example for ${format} in the ${brand} voice (do not copy verbatim, match the discipline):
+
+${LINKEDIN_FEW_SHOT[format][brand]}`;
 }
 
 // Format rotation: exclude the brand's last 3 LinkedIn formats from this run.
