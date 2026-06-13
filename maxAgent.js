@@ -315,6 +315,16 @@ async function getSystemSnapshot() {
     WHERE channel = 'email' AND client_id = $1 AND created_at > NOW() - INTERVAL '7 days'
   `, [CLIENT_ID]).catch(() => ({ rows: [{ sent: 0, opened: 0, clicked: 0 }] }));
 
+  const unmatchedStatusUpdates = await pool.query(`
+    SELECT payload, ran_at
+    FROM agent_log
+    WHERE agent_name = 'riley'
+      AND action IN ('inbound_unmatched_bounce', 'inbound_unmatched_autoresponder', 'inbound_unmatched_deflection')
+      AND client_id = $1
+      AND ran_at >= NOW() - INTERVAL '24 hours'
+    ORDER BY ran_at DESC
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+
   const contentQuality = await pool.query(`
     SELECT
       ROUND(AVG(COALESCE(NULLIF(payload->>'total', '')::int, NULLIF(payload->'scores'->>'total', '')::int))::numeric, 1) AS avg_score,
@@ -626,6 +636,7 @@ async function getSystemSnapshot() {
     clickedToday:  clickedToday.rows,
     warmToday:     warmToday.rows[0]?.count || 0,
     emailStats:    emailStats.rows[0],
+    unmatchedStatusUpdates: unmatchedStatusUpdates.rows,
     contentQuality: contentQuality.rows[0],
     closerMetrics: closerMetrics.rows[0],
     callDispositionStats: callDispositionStats.rows[0],
@@ -690,6 +701,23 @@ function buildDeterministicDigest(snapshot, autoExec) {
   }
   if (pending) exceptions.push(`${pending} post${pending === 1 ? '' : 's'} awaiting approval`);
   if (snapshot.warmToday) exceptions.push(`${snapshot.warmToday} prospect${snapshot.warmToday === 1 ? '' : 's'} upgraded to warm today`);
+  if ((snapshot.unmatchedStatusUpdates || []).length) {
+    const labels = snapshot.unmatchedStatusUpdates
+      .slice(0, 3)
+      .map(row => {
+        let payload = row.payload || {};
+        if (typeof payload === 'string') {
+          try {
+            payload = JSON.parse(payload || '{}');
+          } catch (_) {
+            payload = {};
+          }
+        }
+        return `${payload.subject || 'No subject'} from ${payload.sender || payload.from || 'unknown sender'}`;
+      })
+      .filter(Boolean);
+    exceptions.push(`Unmatched status updates (24h): ${snapshot.unmatchedStatusUpdates.length}${labels.length ? ` (${labels.join('; ')})` : ''}`);
+  }
   if ((snapshot.callInterested || []).length) {
     const labels = snapshot.callInterested
       .slice(0, 3)
@@ -754,7 +782,7 @@ ${dataString}
 Generate a tight, streamlined digest with EXACTLY these four sections, in order:
 
 1. ACTIONS EXECUTED — One short paragraph restating the auto-executed actions above in a manager's voice.
-2. EXCEPTIONS — Items needing a human decision. Only include: warm signals worth personal outreach (from clickedToday), new replies (from recentTouchpoints with action_type reply / inbound / email_reply), prospects heating up (from heatingUp — ICP score rose 10+ points in the last 7 days, copy the company name verbatim and note the score_delta), prospects who answered Cal as interested (from callInterested — label these TOP PRIORITY), unusual patterns. If none, say "No exceptions today."
+2. EXCEPTIONS — Items needing a human decision. Only include: warm signals worth personal outreach (from clickedToday), new replies (from recentTouchpoints with action_type reply / inbound / email_reply), unmatched status updates from Riley (from unmatchedStatusUpdates — show as "Unmatched status updates (24h)" because these indicate prospect-matching issues), prospects heating up (from heatingUp — ICP score rose 10+ points in the last 7 days, copy the company name verbatim and note the score_delta), prospects who answered Cal as interested (from callInterested — label these TOP PRIORITY), unusual patterns. If none, say "No exceptions today."
 3. PIPELINE SNAPSHOT — 3-4 lines max. Pull from closerMetrics, callDispositionStats, prospectStats, pending, topICP (highest-scoring prospects). Include weekly Cal disposition percentages when callDispositionStats.total > 0: voicemail %, answered %, interested %. Example lines: booked calls this week, Cal call disposition breakdown, MRR closed this month, total pending approvals, warm prospects today, top ICP prospect.
 4. RECOMMENDATION — ONE recommendation only, if any. If nothing is actionable, omit the section entirely.
 

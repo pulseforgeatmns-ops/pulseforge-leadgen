@@ -531,7 +531,7 @@ router.put('/api/prospects/:id', requireOperator, async (req, res) => {
 
     if (has('status')) {
       const status = String(req.body.status || '').toLowerCase();
-      if (!['cold', 'contacted', 'warm', 'dead', 'disqualified', 'closed'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+      if (!['cold', 'contacted', 'warm', 'dead', 'disqualified', 'closed', 'bounced', 'auto_responder', 'do_not_email'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
       addProspectField('status', status);
     }
 

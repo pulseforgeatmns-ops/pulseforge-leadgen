@@ -11,3 +11,4 @@ sheets_credentials.json
 .env.save
 client_secret_*.json
 .DS_Store
+*.bak

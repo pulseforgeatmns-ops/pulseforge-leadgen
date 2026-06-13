@@ -1,0 +1,37 @@
+{
+  "vendor_domains": [
+    "smartlead.ai",
+    "smartlead-team.com",
+    "apollo.io",
+    "justcall.io",
+    "instantly.ai",
+    "lemlist.com",
+    "mailshake.com",
+    "reply.io",
+    "hunter.io",
+    "close.com",
+    "outreach.io",
+    "salesloft.com",
+    "saaslabs.co"
+  ],
+  "system_domains": [
+    "indeed.com",
+    "indeedemail.com",
+    "brevo.com",
+    "stripe.com",
+    "railway.app",
+    "github.com",
+    "google.com",
+    "linkedin.com",
+    "microsoft.com"
+  ],
+  "dmarc_senders": [
+    "noreply-dmarc-support@google.com"
+  ],
+  "dmarc_sender_domains": [
+    "fastmail.com",
+    "mimecast.org",
+    "secureserver.net",
+    "microsoft.com"
+  ]
+}
