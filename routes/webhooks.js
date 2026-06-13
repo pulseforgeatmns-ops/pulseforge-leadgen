@@ -16,6 +16,12 @@ const {
   correctMiraCapture,
   sendMiraTelegramMessage,
 } = require('../utils/miraCorrections');
+const {
+  isWithinAnchorWindow,
+  getAnchorForToday,
+  parseAnchorReply,
+  insertAnchor,
+} = require('../utils/miraAnchor');
 
 const miraSchemaReady = ensureMiraSchema().catch(err => {
   console.error('[mira] schema error:', err.message);
@@ -174,6 +180,36 @@ async function handleMiraCorrectCommand(message) {
   await sendMiraCorrectionReply(result);
 }
 
+// Morning Anchor: the first plain-text reply during the 6am–noon ET window
+// (when no anchor is set yet) is Jacob committing to his day's anchor. Parse it
+// into a primary/secondary anchor, persist it, and confirm back over Telegram.
+// A "skip today" / "out today" style reply is stored as a no-anchor day.
+async function handleMiraAnchorReply(message) {
+  const text = String(message.text || '').trim();
+  const parsed = await parseAnchorReply(text);
+
+  const inserted = await insertAnchor({
+    primary_anchor: parsed.no_anchor ? null : parsed.primary_anchor,
+    secondary_anchors: parsed.secondary_anchors || [],
+    completion_notes: parsed.completion_notes || null,
+  });
+
+  // ON CONFLICT returned nothing — an anchor was already set (race). Stay quiet.
+  if (!inserted) return;
+
+  if (parsed.no_anchor || !parsed.primary_anchor) {
+    const notes = parsed.completion_notes ? ` (${parsed.completion_notes})` : '';
+    await sendMiraTelegramMessage(`Noted — no anchor set for today.${notes} Take care of what you need to.`);
+    return;
+  }
+
+  const secondary = parsed.secondary_anchors || [];
+  let reply = `Anchor set: ${parsed.primary_anchor}.`;
+  if (secondary.length) reply += ` Secondary: ${secondary.join(', ')}.`;
+  reply += ' End of day check at 9:30 PM.';
+  await sendMiraTelegramMessage(reply);
+}
+
 async function handleMiraCallback(callbackQuery) {
   const data = String(callbackQuery.data || '');
 
@@ -263,6 +299,23 @@ router.post('/telegram/mira', async (req, res) => {
       handleMiraCorrectCommand(message).catch(err => {
         console.error('[mira] correct command error:', err.response?.data?.description || err.message);
         sendMiraTelegramMessage(`Could not correct capture: ${err.message}`).catch(() => {});
+      });
+      return;
+    }
+
+    // Morning Anchor interception: a plain-text reply in the 6am–noon ET window,
+    // before any anchor is set for today, is Jacob committing to his day's
+    // anchor — not a thought to capture. Handle it and stop here.
+    const anchorReplyText = String(message.text || '').trim();
+    if (
+      anchorReplyText &&
+      !anchorReplyText.startsWith('/') &&
+      isWithinAnchorWindow() &&
+      !(await getAnchorForToday())
+    ) {
+      res.status(200).json({ ok: true });
+      handleMiraAnchorReply(message).catch(err => {
+        console.error('[mira] anchor reply error:', err.response?.data?.description || err.message);
       });
       return;
     }

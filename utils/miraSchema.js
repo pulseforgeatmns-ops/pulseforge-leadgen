@@ -128,6 +128,19 @@ async function ensureMiraSchema() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS daily_anchors (
+      id                BIGSERIAL PRIMARY KEY,
+      anchor_date       DATE UNIQUE NOT NULL,
+      primary_anchor    TEXT,
+      secondary_anchors TEXT[],
+      set_at            TIMESTAMPTZ,
+      completed_at      TIMESTAMPTZ,
+      completion_notes  TEXT,
+      source_capture_id BIGINT REFERENCES capture_inbox(id)
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS mira_corrections (
       id                  BIGSERIAL PRIMARY KEY,
       capture_id          BIGINT REFERENCES capture_inbox(id),
