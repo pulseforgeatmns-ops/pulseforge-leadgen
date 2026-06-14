@@ -154,6 +154,7 @@ Return only the comment text.`
 
 async function run() {
   const clientConfig = await getClientConfig(CLIENT_ID);
+  if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
   if (CLIENT_ID === 2 && !clientConfig?.facebook_url) {
     console.log('Faye disabled for MSHI until Facebook page exists.');
     return { skipped: true, reason: 'facebook_page_missing', client_id: CLIENT_ID };
@@ -191,10 +192,22 @@ async function run() {
 
     console.log('\nFacebook agent running...\n');
 
-    for (const groupUrl of TARGET_GROUPS) {
+    for (let i = 0; i < TARGET_GROUPS.length; i++) {
+      const groupUrl = TARGET_GROUPS[i];
+      const stillActive = await getClientConfig(CLIENT_ID);
+      if (!stillActive) {
+        throw new Error(`[Faye] Client ${CLIENT_ID} deactivated mid-run — aborting at group ${i + 1}/${TARGET_GROUPS.length} after ${drafted} drafts`);
+      }
+
       const posts = await findPosts(page, groupUrl, 3);
 
-      for (const post of posts) {
+      for (let j = 0; j < posts.length; j++) {
+        const post = posts[j];
+        const stillActiveInner = await getClientConfig(CLIENT_ID);
+        if (!stillActiveInner) {
+          throw new Error(`[Faye] Client ${CLIENT_ID} deactivated mid-run — aborting at group ${i + 1}/${TARGET_GROUPS.length}, post ${j + 1}/${posts.length} after ${drafted} drafts`);
+        }
+
         if (!isEnglish(post.content)) {
           console.log(`Skipping non-English post by: ${post.authorName}`);
           continue;
