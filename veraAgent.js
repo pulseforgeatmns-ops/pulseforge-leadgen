@@ -229,7 +229,13 @@ async function main() {
 
   let totalNew = 0, totalDrafted = 0;
 
-  for (const account of accounts) {
+  for (let i = 0; i < accounts.length; i++) {
+    const account = accounts[i];
+    const stillActiveAcct = await getClientConfig(CLIENT_ID);
+    if (!stillActiveAcct) {
+      throw new Error(`[Vera] Client ${CLIENT_ID} deactivated mid-run — aborting at account ${i + 1}/${accounts.length}`);
+    }
+
     let locations;
     try {
       locations = await fetchLocations(token, account.name);
@@ -238,7 +244,13 @@ async function main() {
       continue;
     }
 
-    for (const location of locations) {
+    for (let j = 0; j < locations.length; j++) {
+      const location = locations[j];
+      const stillActiveLoc = await getClientConfig(CLIENT_ID);
+      if (!stillActiveLoc) {
+        throw new Error(`[Vera] Client ${CLIENT_ID} deactivated mid-run — aborting at account ${i + 1}/${accounts.length}, location ${j + 1}/${locations.length}`);
+      }
+
       const title      = location.title || location.name;
       const company    = await findCompany(title);
       // Default lookback: 7 days if Vera has never run for this location
@@ -262,7 +274,13 @@ async function main() {
       console.log(`[Vera] ${title}: ${newReviews.length} new review(s)`);
       totalNew += newReviews.length;
 
-      for (const review of newReviews) {
+      for (let k = 0; k < newReviews.length; k++) {
+        const review = newReviews[k];
+        const stillActiveReview = await getClientConfig(CLIENT_ID);
+        if (!stillActiveReview) {
+          throw new Error(`[Vera] Client ${CLIENT_ID} deactivated mid-run — aborting at account ${i + 1}/${accounts.length}, location ${j + 1}/${locations.length}, review ${k + 1}/${newReviews.length} after ${totalDrafted} drafts`);
+        }
+
         const stars      = STAR_NUM[review.starRating] || 3;
         const starEmoji  = '⭐'.repeat(stars);
         const reviewer   = review.reviewer?.displayName || 'Anonymous';
