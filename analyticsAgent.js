@@ -92,7 +92,13 @@ async function fetchFBPageMetrics() {
   }
 
   let updated = 0;
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Analytics] Client ${CLIENT_ID} deactivated mid-run — aborting at FB metric row ${i + 1}/${rows.length} after ${updated} updated`);
+    }
+
     try {
       const res = await axios.get(`https://graph.facebook.com/${row.platform_post_id}`, {
         params: {
@@ -161,7 +167,13 @@ async function fetchBufferMetrics() {
   }
 
   let updated = 0;
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Analytics] Client ${CLIENT_ID} deactivated mid-run — aborting at Buffer metric row ${i + 1}/${rows.length} after ${updated} updated`);
+    }
+
     try {
       const query = `query {
   post(id: ${JSON.stringify(row.platform_post_id)}) {
@@ -238,7 +250,13 @@ async function rebuildSummary() {
     GROUP BY company_id, channel, content_type
   `, [CLIENT_ID]);
 
-  for (const r of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Analytics] Client ${CLIENT_ID} deactivated mid-run — aborting at summary row ${i + 1}/${rows.length}`);
+    }
+
     await pool.query(`
       INSERT INTO content_performance_summary
         (company_id, channel, content_type, post_count, avg_likes, avg_comments,

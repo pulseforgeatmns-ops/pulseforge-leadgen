@@ -315,7 +315,13 @@ async function processWarmSignalActions(twilioClient, dailyLimit, sentCount) {
   let queued = 0;
   let skippedDnc = 0;
 
-  for (const row of res.rows) {
+  for (let i = 0; i < res.rows.length; i++) {
+    const row = res.rows[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Sam] Client ${CLIENT_ID} deactivated mid-run — aborting at warm signal action ${i + 1}/${res.rows.length} after ${sent} sent`);
+    }
+
     if (sentCount + sent >= dailyLimit) break;
     const payload = { ...parseLogPayload(row.payload), action_id: row.id };
     const prospectId = payload.prospect_id;
@@ -457,7 +463,13 @@ async function processReengagementTriggers(sendFn, dailyLimit, sentCount) {
   console.log(`Max re-engagement triggers: ${res.rows.length} pending`);
   let sent = 0;
 
-  for (const row of res.rows) {
+  for (let i = 0; i < res.rows.length; i++) {
+    const row = res.rows[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Sam] Client ${CLIENT_ID} deactivated mid-run — aborting at reengagement trigger ${i + 1}/${res.rows.length} after ${sent} sent`);
+    }
+
     if (sentCount + sent >= dailyLimit) break;
 
     const payload = parseLogPayload(row.payload);
@@ -524,7 +536,13 @@ async function run() {
   // Trigger 1: sequence, no reply
   const noReply = await getSequenceNoReply();
   console.log(`Trigger 1 (3+ emails, no reply): ${noReply.length} prospects`);
-  for (const p of noReply) {
+  for (let i = 0; i < noReply.length; i++) {
+    const p = noReply[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Sam] Client ${CLIENT_ID} deactivated mid-run — aborting at noReply prospect ${i + 1}/${noReply.length} after ${sent} sent`);
+    }
+
     if (sent >= dailyLimit) break;
     const result = await sendSMS(p.id, MESSAGES.sequence_no_reply(p));
     if (result.sent) sent++;
@@ -534,7 +552,13 @@ async function run() {
   // Trigger 2: warm prospects
   const warm = await getWarmProspects();
   console.log(`\nTrigger 2 (warm status): ${warm.length} prospects`);
-  for (const p of warm) {
+  for (let i = 0; i < warm.length; i++) {
+    const p = warm[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Sam] Client ${CLIENT_ID} deactivated mid-run — aborting at warm prospect ${i + 1}/${warm.length} after ${sent} sent`);
+    }
+
     if (sent >= dailyLimit) break;
     const result = await sendSMS(p.id, MESSAGES.warm_signal(p));
     if (result.sent) sent++;
@@ -544,7 +568,13 @@ async function run() {
   // Trigger 3: re-engagement
   const reEngage = await getReEngagement();
   console.log(`\nTrigger 3 (14+ days, re-engagement): ${reEngage.length} prospects`);
-  for (const p of reEngage) {
+  for (let i = 0; i < reEngage.length; i++) {
+    const p = reEngage[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Sam] Client ${CLIENT_ID} deactivated mid-run — aborting at reEngage prospect ${i + 1}/${reEngage.length} after ${sent} sent`);
+    }
+
     if (sent >= dailyLimit) break;
     const result = await sendSMS(p.id, MESSAGES.re_engagement(p));
     if (result.sent) sent++;
