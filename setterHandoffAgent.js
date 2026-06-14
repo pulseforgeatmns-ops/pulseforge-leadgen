@@ -4,7 +4,7 @@ require('dotenv').config();
 
 const pool = require('./db');
 const { appendQualifiedScoutLead, hasSetterSheetAuth } = require('./utils/setterSheet');
-const { getRuntimeClientId } = require('./utils/clientContext');
+const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'handoff_utility';
 const SETTER_ICP_THRESHOLD = 70;
@@ -35,6 +35,9 @@ function leadFromProspect(row) {
 async function run(params = {}) {
   const lookbackDays = Number(params.lookbackDays || process.env.SETTER_HANDOFF_LOOKBACK_DAYS || 7);
   const clientId = getRuntimeClientId(params);
+  const clientConfig = await getClientConfig(clientId);
+  if (!clientConfig) throw new Error(`Active client not found: ${clientId}`);
+
   console.log('\nSetter Handoff Agent');
   console.log('─────────────────────────────────');
   console.log(`Lookback: ${lookbackDays} day(s)\n`);
@@ -88,8 +91,14 @@ async function run(params = {}) {
     console.warn('[setter_handoff] Missing Google Sheets auth; DB setter visibility was updated but no sheet rows were written.');
   }
 
-  for (const prospect of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const stillActive = await getClientConfig(clientId);
+    if (!stillActive) {
+      throw new Error(`[setterHandoff] Client ${clientId} deactivated mid-run — aborting at item ${i + 1}/${rows.length} after ${appended} handoffs processed`);
+    }
+
     if (!canWriteSheet) break;
+    const prospect = rows[i];
     const lead = leadFromProspect(prospect);
     try {
       const handoff = await appendQualifiedScoutLead(lead, prospect.vertical);
