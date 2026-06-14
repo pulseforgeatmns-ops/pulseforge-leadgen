@@ -966,6 +966,89 @@ router.get('/api/agent-stats', requireDashboardRead, async (req, res) => {
   }
 });
 
+// Agent health strip for dashboard cards
+router.get('/api/agent-health', requireDashboardRead, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const result = await pool.query(`
+      WITH roster(agent_key) AS (
+        VALUES
+          ('scout'), ('emmett'), ('riley'), ('paige'), ('max'), ('rex'), ('vera'), ('faye'),
+          ('link'), ('sam'), ('cal'), ('cal_batch'), ('warm_signal'), ('analytics'),
+          ('sketch'), ('setter_handoff'), ('ivy'), ('penny')
+      ),
+      scoped AS (
+        SELECT
+          CASE
+            WHEN LOWER(agent_name) IN ('email_agent', 'emmett_agent', 'emmett') THEN 'emmett'
+            WHEN LOWER(agent_name) IN ('facebook_agent', 'faye_agent', 'faye', 'facebook') THEN 'faye'
+            WHEN LOWER(agent_name) IN ('linkedin_agent', 'link_agent', 'link', 'linkedin') THEN 'link'
+            WHEN LOWER(agent_name) IN ('warm_signal_agent', 'warm_signal', 'warmsignal') THEN 'warm_signal'
+            WHEN LOWER(agent_name) IN ('setter_handoff_agent', 'handoff_utility', 'setterhandoff') THEN 'setter_handoff'
+            WHEN LOWER(agent_name) IN ('cal_batch_agent', 'cal_batch', 'calbatch') THEN 'cal_batch'
+            ELSE REGEXP_REPLACE(LOWER(agent_name), '_agent$', '')
+          END AS agent_key,
+          agent_name,
+          status,
+          error_msg,
+          duration_ms,
+          ran_at
+        FROM agent_log
+        WHERE client_id = $1
+      ),
+      latest AS (
+        SELECT DISTINCT ON (agent_key)
+          agent_key, agent_name, status AS last_status, error_msg, duration_ms, ran_at AS last_run
+        FROM scoped
+        ORDER BY agent_key, ran_at DESC
+      ),
+      rollup_24h AS (
+        SELECT
+          agent_key,
+          COUNT(*)::int AS runs_24h,
+          COUNT(*) FILTER (WHERE status IN ('error', 'failed'))::int AS errors_24h
+        FROM scoped
+        WHERE ran_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY agent_key
+      )
+      SELECT
+        r.agent_key,
+        l.agent_name,
+        l.last_run,
+        COALESCE(l.last_status, 'never_run') AS last_status,
+        l.error_msg,
+        l.duration_ms,
+        COALESCE(roll.errors_24h, 0)::int AS errors_24h,
+        COALESCE(roll.runs_24h, 0)::int AS runs_24h
+      FROM roster r
+      LEFT JOIN latest l ON l.agent_key = r.agent_key
+      LEFT JOIN rollup_24h roll ON roll.agent_key = r.agent_key
+      ORDER BY r.agent_key
+    `, [clientId]);
+
+    const agents = {};
+    result.rows.forEach(row => {
+      agents[row.agent_key] = {
+        agent_name: row.agent_name || row.agent_key,
+        last_run: row.last_run,
+        last_status: row.last_status,
+        error_msg: row.error_msg,
+        duration_ms: row.duration_ms,
+        errors_24h: Number(row.errors_24h || 0),
+        runs_24h: Number(row.runs_24h || 0),
+      };
+    });
+
+    res.json({
+      refreshed_at: new Date().toISOString(),
+      client_id: clientId,
+      agents,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Agent weekly stats for hover tooltips
 router.get('/api/agent-weekly-stats', requireDashboardRead, async (req, res) => {
   try {

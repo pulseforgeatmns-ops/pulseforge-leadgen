@@ -681,6 +681,31 @@ body.light-mode .agent-card:not(.not-configured) {
 .agent-card-status {
   display: flex; align-items: center; justify-content: space-between;
 }
+.agent-health-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 7px;
+  padding: 4px 6px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 4px;
+  background: rgba(0,0,0,0.22);
+  color: var(--gray-light);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.5rem;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.health-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #666;
+  box-shadow: 0 0 6px rgba(255,255,255,0.08);
+  flex: 0 0 auto;
+}
 .status-tag {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.55rem;
@@ -2566,6 +2591,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
+          </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:90%"></div></div>
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:70%"></div></div>
@@ -2594,6 +2624,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
+          </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:65%"></div></div>
@@ -2624,6 +2659,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
+          </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:95%"></div></div>
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:40%"></div></div>
@@ -2652,6 +2692,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
+          </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:30%"></div></div>
@@ -2685,6 +2730,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
+          </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
@@ -2714,6 +2764,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
+          </div>
           <div class="agent-mini-stats"></div>
         </div>
       </div>
@@ -2738,6 +2793,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
+          </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
@@ -2776,6 +2836,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
+          </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill purple" style="width:100%"></div></div>
             <div class="mini-stat-bar"><div class="mini-stat-fill purple" style="width:88%"></div></div>
@@ -2804,6 +2869,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
+          </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:72%; background:var(--green);"></div></div>
@@ -2834,6 +2904,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
+          </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:20%"></div></div>
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:40%"></div></div>
@@ -2862,6 +2937,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
+          </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
@@ -2900,6 +2980,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
+          </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:30%"></div></div>
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:50%"></div></div>
@@ -2928,6 +3013,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
+          </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
@@ -2958,6 +3048,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
           </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
+          </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
@@ -2985,6 +3080,11 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
+          </div>
+          <div class="agent-health-strip">
+            <span class="health-dot" data-health-field="status"></span>
+            <span data-health-field="last-run">--</span>
+            <span data-health-field="errors-24h">0 err</span>
           </div>
           <div class="agent-mini-stats">
             <div class="mini-stat-bar"><div class="mini-stat-fill" style="width:0%"></div></div>
@@ -4767,6 +4867,52 @@ async function loadLiveData() {
   }
 }
 
+function formatHealthTime(value) {
+  if (!value) return '—';
+  const then = new Date(value).getTime();
+  if (!Number.isFinite(then)) return '—';
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function healthStatusColor(status) {
+  const s = String(status || '').toLowerCase();
+  if (['success', 'completed', 'posted'].includes(s)) return '#00d4b4';
+  if (['pending', 'in_progress'].includes(s)) return '#ffa726';
+  if (['failed', 'error'].includes(s)) return '#ff4444';
+  return '#666';
+}
+
+async function loadAgentHealth() {
+  try {
+    const res = await fetch('/api/agent-health', { credentials: 'include' });
+    if (!res.ok) return;
+    const data = await res.json();
+    Object.entries(data.agents || {}).forEach(([key, agent]) => {
+      const card = document.querySelector('[data-agent="' + key + '"]');
+      if (!card) return;
+      const dot = card.querySelector('[data-health-field="status"]');
+      const lastRun = card.querySelector('[data-health-field="last-run"]');
+      const errors = card.querySelector('[data-health-field="errors-24h"]');
+      const color = healthStatusColor(agent.last_status);
+      if (dot) {
+        dot.style.background = color;
+        dot.style.boxShadow = `0 0 6px ${color}66`;
+        dot.title = agent.last_status || 'never_run';
+      }
+      if (lastRun) lastRun.textContent = formatHealthTime(agent.last_run);
+      if (errors) errors.textContent = `${Number(agent.errors_24h || 0)} err`;
+    });
+  } catch (err) {
+    console.error('Failed to load agent health:', err);
+  }
+}
+
 const agentColors = {
   scout: '#00d4b4', link: '#5b9fd4', faye: '#5ba3f5', emmett: '#ff6b35',
   max: '#8b5cf6', rex: '#00e676', riley: '#64c864', sketch: '#b450ff',
@@ -6457,9 +6603,11 @@ document.addEventListener('drop', event => {
 
 loadClientSelector();
 loadLiveData();
+loadAgentHealth();
 loadActivityFeed();
 loadAgentSparklines();
 setInterval(loadLiveData, 60000);
+setInterval(loadAgentHealth, 30000);
 setInterval(loadActivityFeed, 30000);
 setInterval(loadAgentSparklines, 300000);
 setInterval(() => {
