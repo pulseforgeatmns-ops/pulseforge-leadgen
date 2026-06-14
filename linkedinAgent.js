@@ -27,19 +27,6 @@ const RELEVANT_KEYWORDS = [
   'referrals', 'reviews', 'google', 'visibility', 'social media'
 ];
 
-function isRailwayRuntime() {
-  return Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
-}
-
-function assertCanRunLink() {
-  if (isRailwayRuntime()) {
-    throw new Error('Link uses local Puppeteer browser automation and cannot run on Railway. Run linkedinAgent.js locally with a valid LinkedIn session.');
-  }
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY is missing; Link cannot generate comments.');
-  }
-}
-
 function randomDelay(min, max) {
   return new Promise(resolve =>
     setTimeout(resolve, Math.floor(Math.random() * (max - min + 1)) + min)
@@ -172,13 +159,12 @@ async function run() {
     console.log('Link engagement is enabled only for Pulseforge client_id=1.');
     return { skipped: true, reason: 'client_not_enabled', client_id: CLIENT_ID };
   }
-  assertCanRunLink();
   let browser;
   let drafted = 0;
   const limit = 10;
   try {
     browser = await puppeteer.launch({
-      headless: false,
+      headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 

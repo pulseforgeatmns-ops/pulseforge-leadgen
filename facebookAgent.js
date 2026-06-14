@@ -31,19 +31,6 @@ const TARGET_GROUPS = [
   'https://www.facebook.com/groups/301392468019063',
 ];
 
-function isRailwayRuntime() {
-  return Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
-}
-
-function assertCanRunFaye() {
-  if (isRailwayRuntime()) {
-    throw new Error('Faye uses local Puppeteer browser automation and cannot run on Railway. Run facebookAgent.js locally with a valid Facebook session.');
-  }
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY is missing; Faye cannot generate comments.');
-  }
-}
-
 function randomDelay(min, max) {
   return new Promise(resolve =>
     setTimeout(resolve, Math.floor(Math.random() * (max - min + 1)) + min)
@@ -159,7 +146,6 @@ async function run() {
     console.log('Faye disabled for MSHI until Facebook page exists.');
     return { skipped: true, reason: 'facebook_page_missing', client_id: CLIENT_ID };
   }
-  assertCanRunFaye();
   let browser;
   let drafted = 0;
   try {
