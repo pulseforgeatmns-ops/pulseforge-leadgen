@@ -1059,7 +1059,13 @@ async function createActions(snapshot) {
   const actions = [];
 
   // Clicked-not-warm: prospects who clicked but aren't warm yet
-  for (const p of snapshot.clickedToday) {
+  for (let i = 0; i < snapshot.clickedToday.length; i++) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at createActions click ${i + 1}/${snapshot.clickedToday.length}`);
+    }
+
+    const p = snapshot.clickedToday[i];
     actions.push({
       action_type: 'follow_up_clicked',
       title: `Follow up with ${p.first_name} ${p.last_name}`,
@@ -1102,7 +1108,13 @@ async function createActions(snapshot) {
 
   if (actions.length === 0) return;
 
-  for (const action of actions) {
+  for (let i = 0; i < actions.length; i++) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at createActions insert ${i + 1}/${actions.length}`);
+    }
+
+    const action = actions[i];
     try {
       await pool.query(`
         INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, client_id)
@@ -1558,7 +1570,13 @@ async function analyzePatterns({ expansionReport = null } = {}) {
     .sort((a, b) => (b.priority || 0) - (a.priority || 0))
     .slice(0, 3);
 
-  for (const pattern of dailyInsights) {
+  for (let i = 0; i < dailyInsights.length; i++) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at daily insight ${i + 1}/${dailyInsights.length}`);
+    }
+
+    const pattern = dailyInsights[i];
     await logPatternInsight(pattern);
   }
 
@@ -1688,7 +1706,13 @@ async function runReengagementTrigger() {
   `, [CLIENT_ID]);
 
   let count = 0;
-  for (const row of res.rows) {
+  for (let i = 0; i < res.rows.length; i++) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at reengagement row ${i + 1}/${res.rows.length} after ${count} processed`);
+    }
+
+    const row = res.rows[i];
     await insertAgentLog('reengagement_trigger', {
       prospect_id: row.id,
       email: row.email,
@@ -1744,7 +1768,13 @@ async function runMarkSequenceDeadTrigger() {
   `, [CLIENT_ID]);
 
   let count = 0;
-  for (const row of res.rows) {
+  for (let i = 0; i < res.rows.length; i++) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at mark dead row ${i + 1}/${res.rows.length} after ${count} processed`);
+    }
+
+    const row = res.rows[i];
     await pool.query(
       `UPDATE prospects SET status = 'dead', updated_at = NOW() WHERE id = $1 AND client_id = $2`,
       [row.id, CLIENT_ID]
@@ -1787,7 +1817,13 @@ async function runPaigeQualityGateTrigger() {
   `, [CLIENT_ID]);
 
   let count = 0;
-  for (const row of res.rows) {
+  for (let i = 0; i < res.rows.length; i++) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at paige gate row ${i + 1}/${res.rows.length} after ${count} processed`);
+    }
+
+    const row = res.rows[i];
     const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : (row.payload || {});
     const channel = payload.channel;
     if (!channel) continue;
@@ -1846,7 +1882,13 @@ async function runCopyReviewTrigger() {
   `, [CLIENT_ID]);
 
   let count = 0;
-  for (const row of res.rows) {
+  for (let i = 0; i < res.rows.length; i++) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at copy review row ${i + 1}/${res.rows.length} after ${count} processed`);
+    }
+
+    const row = res.rows[i];
     const sent = Number(row.sent || 0);
     const opens = Number(row.opens || 0);
     const openRate = sent ? Number(((opens / sent) * 100).toFixed(1)) : 0;
@@ -1961,7 +2003,13 @@ async function runMarkBouncesDead() {
   `, [CLIENT_ID]);
 
   let count = 0;
-  for (const row of res.rows) {
+  for (let i = 0; i < res.rows.length; i++) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at bounces row ${i + 1}/${res.rows.length} after ${count} processed`);
+    }
+
+    const row = res.rows[i];
     await pool.query(
       `UPDATE prospects
        SET status = 'dead', do_not_contact = true, updated_at = NOW()
@@ -1991,7 +2039,13 @@ async function runNullGenericEmails() {
   `, [CLIENT_ID]);
 
   let count = 0;
-  for (const row of res.rows) {
+  for (let i = 0; i < res.rows.length; i++) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at email nulling row ${i + 1}/${res.rows.length} after ${count} processed`);
+    }
+
+    const row = res.rows[i];
     await pool.query(
       `UPDATE prospects SET email = NULL, updated_at = NOW()
        WHERE id = $1 AND client_id = $2`,
@@ -2030,7 +2084,13 @@ async function runQueueWarmForCal() {
   `, [CLIENT_ID]);
 
   let count = 0;
-  for (const row of res.rows) {
+  for (let i = 0; i < res.rows.length; i++) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at cal warm row ${i + 1}/${res.rows.length} after ${count} processed`);
+    }
+
+    const row = res.rows[i];
     const reason = row.is_hot ? 'is_hot' : 'warm_status';
     await pool.query(
       `INSERT INTO cal_queue (prospect_id, client_id, priority, reason, status)
@@ -2074,7 +2134,13 @@ async function runHandoff5TouchNoReply() {
   `, [CLIENT_ID]);
 
   let count = 0;
-  for (const row of res.rows) {
+  for (let i = 0; i < res.rows.length; i++) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at cal nurture row ${i + 1}/${res.rows.length} after ${count} processed`);
+    }
+
+    const row = res.rows[i];
     await pool.query(
       `INSERT INTO cal_queue (prospect_id, client_id, priority, reason, status)
        VALUES ($1, $2, 2, '5_touch_no_reply', 'pending')`,
@@ -2107,7 +2173,13 @@ async function runResetStaleSequences() {
   `, [CLIENT_ID]);
 
   let count = 0;
-  for (const row of res.rows) {
+  for (let i = 0; i < res.rows.length; i++) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at stale reset row ${i + 1}/${res.rows.length} after ${count} processed`);
+    }
+
+    const row = res.rows[i];
     await pool.query(
       `UPDATE prospects SET status = 'cold', updated_at = NOW()
        WHERE id = $1 AND client_id = $2`,
