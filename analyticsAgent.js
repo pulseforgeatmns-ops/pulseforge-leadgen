@@ -42,6 +42,7 @@ async function ensureSchema() {
       channel             TEXT NOT NULL,
       content_type        TEXT NOT NULL,
       post_count          INT DEFAULT 0,
+      measured_count      INT DEFAULT 0,
       avg_likes           NUMERIC(8,2) DEFAULT 0,
       avg_comments        NUMERIC(8,2) DEFAULT 0,
       avg_shares          NUMERIC(8,2) DEFAULT 0,
@@ -53,6 +54,7 @@ async function ensureSchema() {
       UNIQUE (company_id, channel, content_type)
     )
   `);
+  await pool.query(`ALTER TABLE content_performance_summary ADD COLUMN IF NOT EXISTS measured_count INT DEFAULT 0`);
 }
 
 // ── GOOGLE ACCESS TOKEN ───────────────────────────────────────────────────────
@@ -154,7 +156,7 @@ async function fetchBufferMetrics() {
   const { rows } = await pool.query(`
     SELECT id, platform_post_id
     FROM post_analytics
-    WHERE channel = 'linkedin_page'
+    WHERE channel IN ('linkedin_page', 'linkedin_personal')
       AND client_id = $1
       AND platform_post_id IS NOT NULL
       AND metrics_fetched_at IS NULL
@@ -237,11 +239,12 @@ async function rebuildSummary() {
       channel,
       content_type,
       COUNT(*)                          AS post_count,
+      COUNT(*) FILTER (WHERE metrics_fetched_at IS NOT NULL) AS measured_count,
       ROUND(AVG(likes), 2)              AS avg_likes,
       ROUND(AVG(comments), 2)           AS avg_comments,
       ROUND(AVG(shares), 2)             AS avg_shares,
       ROUND(AVG(reach), 2)              AS avg_reach,
-      ROUND(AVG(engagement_rate), 4)    AS avg_engagement_rate,
+      ROUND(AVG(engagement_rate) FILTER (WHERE metrics_fetched_at IS NOT NULL), 4) AS avg_engagement_rate,
       MODE() WITHIN GROUP (ORDER BY post_day_of_week) AS best_day_of_week,
       MODE() WITHIN GROUP (ORDER BY post_hour)        AS best_hour
     FROM post_analytics
@@ -259,12 +262,13 @@ async function rebuildSummary() {
 
     await pool.query(`
       INSERT INTO content_performance_summary
-        (company_id, channel, content_type, post_count, avg_likes, avg_comments,
+        (company_id, channel, content_type, post_count, measured_count, avg_likes, avg_comments,
          avg_shares, avg_reach, avg_engagement_rate, best_day_of_week, best_hour, updated_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
       ON CONFLICT (company_id, channel, content_type)
       DO UPDATE SET
         post_count          = EXCLUDED.post_count,
+        measured_count      = EXCLUDED.measured_count,
         avg_likes           = EXCLUDED.avg_likes,
         avg_comments        = EXCLUDED.avg_comments,
         avg_shares          = EXCLUDED.avg_shares,
@@ -275,7 +279,7 @@ async function rebuildSummary() {
         updated_at          = NOW()
     `, [
       r.company_id, r.channel, r.content_type,
-      r.post_count, r.avg_likes, r.avg_comments,
+      r.post_count, r.measured_count, r.avg_likes, r.avg_comments,
       r.avg_shares, r.avg_reach, r.avg_engagement_rate,
       r.best_day_of_week, r.best_hour,
     ]);

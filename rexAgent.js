@@ -103,12 +103,13 @@ async function getWeeklyData() {
   const contentPerf = await pool.query(`
     SELECT channel, content_type,
            COUNT(*) AS posts_published,
-           ROUND(AVG(engagement_rate), 4) AS avg_engagement,
+           COUNT(*) FILTER (WHERE metrics_fetched_at IS NOT NULL) AS measured_count,
+           ROUND(AVG(engagement_rate) FILTER (WHERE metrics_fetched_at IS NOT NULL), 4) AS avg_engagement,
            MAX(engagement_rate) AS best_engagement
     FROM post_analytics
     WHERE published_at > ${weekAgo}
     GROUP BY channel, content_type
-    ORDER BY avg_engagement DESC
+    ORDER BY avg_engagement DESC NULLS LAST
     LIMIT 10
   `).catch(() => ({ rows: [] }));
 
@@ -250,7 +251,7 @@ async function getWeeklyData() {
     activityByDay: activityByDay.rows,
     emailStats: emailStats.rows,
     mostNurtured: mostNurtured.rows,
-    contentPerf: contentPerf.rows,
+    contentPerf: contentPerf.rows.map(formatContentPerfRow),
     topPost: topPost.rows[0] || null,
     worstPost: worstPost.rows[0] || null,
     emailFunnel:     emailFunnel.rows[0] || {},
@@ -295,6 +296,23 @@ Be analytical and direct. Use plain text. Back every claim with a specific numbe
   });
 
   return message.content[0].text;
+}
+
+function formatContentPerfRow(row) {
+  const postsPublished = Number(row.posts_published || 0);
+  const measuredCount = Number(row.measured_count || 0);
+  const avgEngagement = row.avg_engagement == null ? null : Number(row.avg_engagement);
+  const hasMeasuredAvg = measuredCount > 0 && Number.isFinite(avgEngagement);
+
+  return {
+    ...row,
+    posts_published: postsPublished,
+    measured_count: measuredCount,
+    avg_engagement: hasMeasuredAvg ? avgEngagement : null,
+    avg_engagement_display: hasMeasuredAvg
+      ? `${avgEngagement.toFixed(4)} (${measuredCount} of ${postsPublished} measured)`
+      : `0 of ${postsPublished} measured`,
+  };
 }
 
 async function sendReport(reportText, data) {
