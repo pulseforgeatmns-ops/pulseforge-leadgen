@@ -4,8 +4,8 @@ const nodemailer = require('nodemailer');
 const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { recalculateICP } = require('./utils/icpScoring');
-const { recordSend } = require('./utils/emailPerformance');
 const { invalidOutreachEmailReason } = require('./utils/emailGuard');
+const { normalizeRootDomain, rootDomainFromEmail } = require('./utils/brevoEvents');
 
 const AGENT_NAME = 'emmett';
 let FROM_EMAIL = 'jacob@gopulseforge.com';
@@ -22,6 +22,117 @@ const clientConfig = {
 
 function getEmmettClientConfig(clientId = CLIENT_ID) {
   return clientConfig[clientId] || clientConfig[1];
+}
+
+function normalizeSendingDomain(value) {
+  return normalizeRootDomain(value) || rootDomainFromEmail(value) || 'unknown.local';
+}
+
+async function activeGlobalEmailHalt() {
+  const pool = require('./db');
+  try {
+    const res = await pool.query(`
+      SELECT id
+      FROM blockers
+      WHERE resolved = false
+        AND blocking = 'emmett_global_halt'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `);
+    return res.rows[0] || null;
+  } catch (err) {
+    if (err.code !== '42P01') console.error('[Emmett] global halt check failed:', err.message);
+    return null;
+  }
+}
+
+async function writeEmailBlocker(kind, sendingDomain, health) {
+  const pool = require('./db');
+  const isHalt = kind === 'halted';
+  const blocking = isHalt ? 'emmett_global_halt' : `emmett_domain_pause:${sendingDomain}`;
+  const content = isHalt
+    ? `Emmett halted because ${sendingDomain} reached ${health.bouncePct}% bounces over ${health.sends} sends in 7 days.`
+    : `Emmett paused ${sendingDomain} because it reached ${health.bouncePct}% bounces over ${health.sends} sends in 7 days.`;
+
+  try {
+    await pool.query(`
+      INSERT INTO blockers (client_id, content, blocking)
+      SELECT $1, $2, $3
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM blockers
+        WHERE resolved = false
+          AND blocking = $3
+      )
+    `, [isHalt ? null : CLIENT_ID, content, blocking]);
+  } catch (err) {
+    if (err.code !== '42P01') console.error('[Emmett] blocker write failed:', err.message);
+  }
+}
+
+async function logDomainHealthAlert(action, health, status = 'skipped') {
+  await db.logAgentAction(
+    AGENT_NAME,
+    action,
+    null,
+    null,
+    {
+      client_id: CLIENT_ID,
+      sending_domain: health.sendingDomain,
+      bounce_pct: health.bouncePct,
+      sends: health.sends,
+      bounces: health.bounces,
+    },
+    status
+  );
+}
+
+async function checkSendingDomainHealth(sendingDomain) {
+  const normalizedDomain = normalizeSendingDomain(sendingDomain);
+  const activeHalt = await activeGlobalEmailHalt();
+  if (activeHalt) {
+    return { status: 'halted', bouncePct: 0, sends: 0, bounces: 0, sendingDomain: normalizedDomain };
+  }
+
+  const pool = require('./db');
+  const res = await pool.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE event_type IN ('hard_bounce','blocked')) AS bounces,
+      COUNT(*) FILTER (WHERE event_type = 'sent') AS sends,
+      ROUND(100.0 * COUNT(*) FILTER (WHERE event_type IN ('hard_bounce','blocked'))
+            / NULLIF(COUNT(*) FILTER (WHERE event_type = 'sent'), 0), 2) AS bounce_pct
+    FROM email_events
+    WHERE event_at >= NOW() - INTERVAL '7 days'
+      AND sending_domain = $1
+  `, [normalizedDomain]);
+
+  const row = res.rows[0] || {};
+  const health = {
+    status: 'ok',
+    bouncePct: Number(row.bounce_pct || 0),
+    sends: Number(row.sends || 0),
+    bounces: Number(row.bounces || 0),
+    sendingDomain: normalizedDomain,
+  };
+
+  if (health.sends < 20) return health;
+
+  if (health.bouncePct >= 4.0) {
+    health.status = 'halted';
+    await writeEmailBlocker('halted', normalizedDomain, health);
+    await logDomainHealthAlert('sending_domain_halted', health, 'failed');
+    console.error(`[Emmett] Critical bounce alert for ${normalizedDomain}: ${health.bouncePct}% over ${health.sends} sends`);
+    return health;
+  }
+
+  if (health.bouncePct >= 2.0) {
+    health.status = 'paused';
+    await writeEmailBlocker('paused', normalizedDomain, health);
+    await logDomainHealthAlert('sending_domain_paused', health, 'skipped');
+    console.warn(`[Emmett] Bounce warning for ${normalizedDomain}: ${health.bouncePct}% over ${health.sends} sends`);
+  }
+
+  return health;
 }
 
 // Email sequence definitions — reply-based CTAs only (no external or Calendly links in bodies)
@@ -1379,6 +1490,47 @@ async function run(context = {}) {
   MAIL_TRANSPORTER = createMailTransporter();
   console.log(`Sending as: ${FROM_NAME} <${FROM_EMAIL}>`);
 
+  const sendingDomain = normalizeSendingDomain(CLIENT_CONFIG.sending_domain || FROM_EMAIL);
+  const domainHealth = await checkSendingDomainHealth(sendingDomain);
+  if (domainHealth.status === 'halted') {
+    console.error(`[Emmett] Sends halted. Resolve the Emmett blocker before restarting sends.`);
+    await db.logAgentAction(
+      AGENT_NAME,
+      'cron_run',
+      null,
+      null,
+      {
+        sent: 0,
+        prospects_evaluated: 0,
+        client_id: CLIENT_ID,
+        sending_domain: sendingDomain,
+        domain_health: domainHealth,
+        reason: 'domain_halted',
+      },
+      'failed'
+    );
+    return;
+  }
+  if (domainHealth.status === 'paused') {
+    console.warn(`[Emmett] Sends paused for ${sendingDomain}. Bounce rate is ${domainHealth.bouncePct}% over ${domainHealth.sends} sends.`);
+    await db.logAgentAction(
+      AGENT_NAME,
+      'cron_run',
+      null,
+      null,
+      {
+        sent: 0,
+        prospects_evaluated: 0,
+        client_id: CLIENT_ID,
+        sending_domain: sendingDomain,
+        domain_health: domainHealth,
+        reason: 'domain_paused',
+      },
+      'skipped'
+    );
+    return;
+  }
+
   const sendConfig = await getEffectiveSendConfig(getEmmettClientConfig(CLIENT_ID));
   const alreadySentToday = await getEmailsSentToday();
   const remainingCapacity = Math.max(0, sendConfig.dailyCap - alreadySentToday);
@@ -1559,14 +1711,6 @@ async function run(context = {}) {
           [prospect.id, CLIENT_ID]
         );
       }
-      // Track send for subject/sequence/step/vertical performance reporting.
-      // Uses the same sequence/step/subject/vertical recorded in agent_log so
-      // the webhook's recordEvent can roll opens/clicks/bounces into this row.
-      try {
-        await recordSend(CLIENT_ID, prospect.vertical, sequenceName, step.day, subject);
-      } catch (perfErr) {
-        console.error('[Emmett] recordSend failed:', perfErr.message);
-      }
       verticalCounts[vertical]++;
       sent++;
       console.log('Touchpoint logged.\n');
@@ -1603,7 +1747,7 @@ async function run(context = {}) {
   );
 }
 
-module.exports = { run };
+module.exports = { run, checkSendingDomainHealth };
 
 if (require.main === module) {
   run().catch(async (err) => {

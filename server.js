@@ -68,8 +68,15 @@ app.use(session({
   cookie: { maxAge: 24 * 60 * 60 * 1000 }
 }));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+function captureBrevoRawBody(req, _res, buf) {
+  const requestPath = String(req.originalUrl || '').split('?')[0];
+  if (requestPath === '/api/webhooks/brevo' || requestPath === '/webhooks/brevo') {
+    req.rawBody = Buffer.from(buf);
+  }
+}
+
+app.use(express.json({ verify: captureBrevoRawBody }));
+app.use(express.urlencoded({ extended: true, verify: captureBrevoRawBody }));
 app.use(cors());
 app.use((req, _res, next) => {
   if (req.session && req.session.authenticated && !req.session.active_client_id) {

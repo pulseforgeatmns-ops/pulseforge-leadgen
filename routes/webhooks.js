@@ -1,5 +1,6 @@
 const express = require('express');
 const axios = require('axios');
+const crypto = require('crypto');
 const router = express.Router();
 const pool = require('../db');
 const {
@@ -9,7 +10,11 @@ const {
   qualifyingOpenSignal,
   recalcICPAfterEmailEvent,
 } = require('../rileyAgent');
-const { recordEvent } = require('../utils/emailPerformance');
+const {
+  insertBrevoEvent,
+  internalEventType,
+  recipientEmail,
+} = require('../utils/brevoEvents');
 const { ensureMiraSchema } = require('../utils/miraSchema');
 const {
   VALID_MIRA_CATEGORIES,
@@ -26,14 +31,6 @@ const {
 const miraSchemaReady = ensureMiraSchema().catch(err => {
   console.error('[mira] schema error:', err.message);
 });
-
-// Map a tracked email action_type to the email_performance event verb.
-const PERF_EVENT_MAP = {
-  email_opened: 'open',
-  email_clicked: 'click',
-  email_bounced: 'bounce',
-  email_soft_bounce: 'bounce',
-};
 
 const MIRA_ACK = {
   voice: '🎙️ Got it',
@@ -374,118 +371,9 @@ function brevoMessageId(payload = {}) {
     payload['message-id'] ||
     payload['messageId'] ||
     payload['Message-ID'] ||
+    payload.uuid ||
     null;
 }
-
-async function resolveProspectForBrevoEvent({ email, clientId, messageId, subject }) {
-  if (messageId) {
-    const byMessage = await pool.query(`
-      SELECT
-        p.id, p.status, p.client_id, p.first_name, p.last_name, p.email,
-        p.vertical, p.icp_score, p.notes,
-        c.name AS company_name
-      FROM agent_log al
-      JOIN prospects p ON p.id = al.prospect_id AND p.client_id = al.client_id
-      LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
-      WHERE al.agent_name = 'emmett'
-        AND al.action = 'email_sent'
-        AND al.payload->>'message_id' = $1
-      ORDER BY al.ran_at DESC
-      LIMIT 1
-    `, [messageId]);
-    if (byMessage.rows.length) return byMessage;
-  }
-
-  const params = [email, subject || null];
-  if (clientId) params.push(clientId);
-  return pool.query(
-    `SELECT
-       p.id, p.status, p.client_id, p.first_name, p.last_name, p.email,
-       p.vertical, p.icp_score, p.notes,
-       c.name AS company_name
-     FROM prospects p
-     LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
-     LEFT JOIN LATERAL (
-       SELECT al.ran_at
-       FROM agent_log al
-       WHERE al.agent_name = 'emmett'
-         AND al.action = 'email_sent'
-         AND al.prospect_id = p.id
-         AND al.client_id = p.client_id
-         AND ($2::text IS NULL OR al.payload->>'subject' = $2)
-       ORDER BY al.ran_at DESC
-       LIMIT 1
-     ) latest_send ON TRUE
-     WHERE LOWER(p.email) = $1
-     ${clientId ? 'AND p.client_id = $3' : ''}
-     ORDER BY latest_send.ran_at DESC NULLS LAST, p.created_at DESC
-     LIMIT 1`,
-    params
-  );
-}
-
-// Roll an email engagement event into email_performance, pulling the
-// vertical / sequence / step that Emmett recorded for this send from agent_log.
-// Matches on the Brevo message_id when available, falling back to the
-// prospect's most recent send. Best-effort — never throws into the webhook.
-async function findMatchingSend(prospect, messageId, subject = null) {
-  const params = [prospect.id, prospect.client_id];
-  let sql = `
-    SELECT payload FROM agent_log
-    WHERE agent_name = 'emmett' AND action = 'email_sent'
-      AND prospect_id = $1 AND client_id = $2`;
-  if (messageId) {
-    sql += ` AND payload->>'message_id' = $3`;
-    params.push(messageId);
-  }
-  sql += ` ORDER BY ran_at DESC LIMIT 1`;
-
-  let logRes = await pool.query(sql, params);
-  if (!logRes.rows.length) {
-    logRes = await pool.query(`
-      SELECT payload FROM agent_log
-      WHERE agent_name = 'emmett' AND action = 'email_sent'
-        AND prospect_id = $1 AND client_id = $2
-        AND ($3::text IS NULL OR payload->>'subject' = $3)
-      ORDER BY ran_at DESC LIMIT 1
-    `, [prospect.id, prospect.client_id, subject || null]);
-  }
-
-  return logRes.rows[0]?.payload || null;
-}
-
-async function recordPerformanceEvent(prospect, actionType, messageId, subject = null) {
-  const perfEvent = PERF_EVENT_MAP[actionType];
-  if (!perfEvent) return;
-  try {
-    const raw = await findMatchingSend(prospect, messageId, subject);
-    const sendPayload = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
-    const vertical = sendPayload.vertical ?? prospect.vertical ?? '';
-    const sequence = sendPayload.sequence ?? '';
-    const step = sendPayload.step ?? 0;
-
-    await recordEvent(prospect.client_id, vertical, sequence, step, perfEvent);
-  } catch (err) {
-    console.error('[Riley] recordPerformanceEvent error:', err.message);
-  }
-}
-
-const BREVO_EVENT_MAP = {
-  opened:           'email_opened',
-  email_opened:     'email_opened',
-  click:            'email_clicked',
-  clicked:          'email_clicked',
-  loaded_by_proxy:  'email_opened',
-  loadedByProxy:    'email_opened',
-  loadedbyproxy:    'email_opened',
-  hard_bounce:      'email_bounced',
-  hardBounces:      'email_bounced',
-  email_bounced:    'email_bounced',
-  soft_bounce:      'email_soft_bounce',
-  softBounces:      'email_soft_bounce',
-  unsubscribed:     'email_unsubscribed',
-  spam:             'email_spam',
-};
 
 function signalIso(value) {
   const parsed = value ? new Date(value) : null;
@@ -532,182 +420,238 @@ async function checkAndUpdateWarmStatus(prospectId, email, clientId) {
   }
 }
 
-router.post('/webhooks/brevo', (req, res) => {
-  res.status(200).json({ ok: true });
-  setImmediate(async () => {
-    try {
-      const payload = req.body || {};
-      const event      = payload.event;
-      const email      = (payload.email || '').toLowerCase().trim();
-      const actionType = BREVO_EVENT_MAP[event];
+function getBrevoSignature(req) {
+  return req.get('x-brevo-signature') ||
+    req.get('x-sib-signature') ||
+    req.get('x-sendinblue-signature') ||
+    req.get('x-mailin-signature') ||
+    '';
+}
 
-      if (!actionType || !email) return;
+function safeCompare(a, b) {
+  const left = Buffer.from(String(a || ''));
+  const right = Buffer.from(String(b || ''));
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
 
-      const payloadClientId = Number(payload.client_id || payload.clientId || payload.metadata?.client_id) || null;
-      const messageId = brevoMessageId(payload);
-      const prospectRes = await resolveProspectForBrevoEvent({
-        email,
-        clientId: payloadClientId,
-        messageId,
+function verifyBrevoSignature(req) {
+  const secret = process.env.BREVO_WEBHOOK_SECRET;
+  const signature = getBrevoSignature(req);
+  if (!secret || !signature) return false;
+
+  const rawBody = Buffer.isBuffer(req.rawBody)
+    ? req.rawBody
+    : Buffer.from(JSON.stringify(req.body || {}));
+  const hex = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  const base64 = crypto.createHmac('sha256', secret).update(rawBody).digest('base64');
+  const candidates = String(signature)
+    .split(',')
+    .map(part => part.trim().split('=').pop())
+    .filter(Boolean);
+
+  return candidates.some(candidate =>
+    safeCompare(candidate, hex) ||
+    safeCompare(candidate, `sha256=${hex}`) ||
+    safeCompare(candidate, base64)
+  );
+}
+
+function actionTypeForEmailEvent(eventType) {
+  return {
+    opened: 'email_opened',
+    clicked: 'email_clicked',
+    soft_bounce: 'email_soft_bounce',
+    hard_bounce: 'email_bounced',
+    blocked: 'email_bounced',
+    spam: 'email_spam',
+    unsubscribed: 'email_unsubscribed',
+    replied: 'email_reply',
+  }[eventType] || null;
+}
+
+async function loadProspectForBrevoSideEffects(prospectId, clientId) {
+  const res = await pool.query(`
+    SELECT
+      p.id, p.status, p.client_id, p.first_name, p.last_name, p.email,
+      p.vertical, p.icp_score, p.notes,
+      c.name AS company_name
+    FROM prospects p
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+    WHERE p.id = $1
+      AND p.client_id = $2
+    LIMIT 1
+  `, [prospectId, clientId]);
+  return res.rows[0] || null;
+}
+
+async function processBrevoEventSideEffects(result, payload) {
+  if (!result.inserted || !result.prospect_id || !result.client_id) return;
+  const actionType = actionTypeForEmailEvent(result.event_type);
+  if (!actionType) return;
+
+  const prospect = await loadProspectForBrevoSideEffects(result.prospect_id, result.client_id);
+  if (!prospect) return;
+
+  const email = result.recipient_email;
+  const messageId = brevoMessageId(payload);
+  const outcomeJson = JSON.stringify({
+    event: payload.event || null,
+    subject: payload.subject || null,
+    link: payload.link || null,
+    brevo_id: payload.id || null,
+    message_id: messageId,
+    date: payload.date || null,
+  });
+
+  await pool.query(`
+    INSERT INTO touchpoints
+      (prospect_id, channel, action_type, content_summary, outcome, sentiment, external_ref, client_id)
+    VALUES ($1, 'email', $2, $3, $4, 'neutral', $5, $6)
+  `, [
+    prospect.id,
+    actionType,
+    payload.subject || null,
+    outcomeJson,
+    messageId,
+    prospect.client_id,
+  ]);
+
+  if (actionType === 'email_opened') {
+    const gate = await qualifyingOpenSignal(prospect.id, prospect.client_id);
+
+    if (gate.qualifies) {
+      await depositWarmSignalAction({
+        prospect_id: prospect.id,
+        client_id: prospect.client_id,
+        trigger: 'qualifying_opens',
+        signal_timestamp: signalIso(payload.date),
         subject: payload.subject || null,
+        total_opens: gate.total_opens,
+        email,
+        company: prospect.company_name,
       });
-      if (!prospectRes.rows.length) {
-        console.warn(`[Riley] No prospect for email: ${email} (event: ${event})`);
-        return;
-      }
-      const prospect = prospectRes.rows[0];
 
-      const outcomeJson = JSON.stringify({
-        event,
-        subject:    payload.subject  || null,
-        link:       payload.link     || null,
-        brevo_id:   payload.id       || null,
-        message_id: messageId,
-        date:       payload.date     || null,
-      });
-      await pool.query(`
+      const company =
+        prospect.company_name ||
+        String(prospect.notes || '').split('\u2014')[0].trim() ||
+        `${prospect.first_name || ''} ${prospect.last_name || ''}`.trim() ||
+        email;
+      const spreadMinutes = Number(gate.spread_minutes.toFixed(1));
+      const alertPayload = {
+        prospect_id: prospect.id,
+        email,
+        company,
+        open_count: gate.total_opens,
+        total_opens: gate.total_opens,
+        spread_minutes: spreadMinutes,
+        subject: payload.subject || null,
+        signal_timestamp: signalIso(payload.date),
+        client_id: prospect.client_id,
+      };
+
+      const hotFlagRes = await pool.query(`
         INSERT INTO touchpoints
-          (prospect_id, channel, action_type, content_summary, outcome, sentiment, external_ref, client_id)
-        VALUES ($1, 'email', $2, $3, $4, 'neutral', $5, $6)
+          (prospect_id, channel, action_type, content_summary, outcome, sentiment, client_id)
+        SELECT $1, 'email', 'hot_flag', $2, $3, 'positive', $4
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM touchpoints
+          WHERE prospect_id = $1
+            AND client_id = $4
+            AND action_type = 'hot_flag'
+            AND created_at >= NOW() - INTERVAL '24 hours'
+        )
+        RETURNING id
       `, [
-        prospect.id, actionType,
-        payload.subject || null,
-        outcomeJson,
-        messageId,
+        prospect.id,
+        `Hot flag: ${gate.total_opens} email opens spread over ${spreadMinutes} min`,
+        JSON.stringify(alertPayload),
         prospect.client_id,
       ]);
 
-      if (actionType === 'email_opened') {
-        // Single open-trigger gate: ≥2 opens AND ≥5 min between first & most
-        // recent open. Filters preview-pane bursts that fire in seconds while
-        // catching genuine re-engagement when someone reopens minutes/hours later.
-        const gate = await qualifyingOpenSignal(prospect.id, prospect.client_id);
-
-        if (gate.qualifies) {
-          await depositWarmSignalAction({
-            prospect_id: prospect.id,
-            client_id: prospect.client_id,
-            trigger: 'qualifying_opens',
-            signal_timestamp: signalIso(payload.date),
-            subject: payload.subject || null,
-            total_opens: gate.total_opens,
-            email,
-            company: prospect.company_name,
-          });
-
-          const company =
-            prospect.company_name ||
-            String(prospect.notes || '').split('—')[0].trim() ||
-            `${prospect.first_name || ''} ${prospect.last_name || ''}`.trim() ||
-            email;
-          const spreadMinutes = Number(gate.spread_minutes.toFixed(1));
-          const alertPayload = {
-            prospect_id: prospect.id,
-            email,
-            company,
-            open_count: gate.total_opens,
-            total_opens: gate.total_opens,
-            spread_minutes: spreadMinutes,
-            subject: payload.subject || null,
-            signal_timestamp: signalIso(payload.date),
-            client_id: prospect.client_id,
-          };
-
-          const hotFlagRes = await pool.query(`
-            INSERT INTO touchpoints
-              (prospect_id, channel, action_type, content_summary, outcome, sentiment, client_id)
-            SELECT $1, 'email', 'hot_flag', $2, $3, 'positive', $4
-            WHERE NOT EXISTS (
-              SELECT 1
-              FROM touchpoints
-              WHERE prospect_id = $1
-                AND client_id = $4
-                AND action_type = 'hot_flag'
-                AND created_at >= NOW() - INTERVAL '24 hours'
-            )
-            RETURNING id
-          `, [
-            prospect.id,
-            `Hot flag: ${gate.total_opens} email opens spread over ${spreadMinutes} min`,
-            JSON.stringify(alertPayload),
-            prospect.client_id,
-          ]);
-
-          if (hotFlagRes.rows.length) {
-            await pool.query(
-              `UPDATE prospects
-               SET is_hot = true,
-                   setter_visible = true,
-                   setter_updated_at = NOW(),
-                   updated_at = NOW()
-               WHERE id = $1 AND client_id = $2`,
-              [prospect.id, prospect.client_id]
-            );
-
-            await pool.query(`
-              INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
-              VALUES ('riley', 'hot_prospect_alert', $1, $2, 'pending', NOW(), $3)
-            `, [
-              prospect.id,
-              JSON.stringify(alertPayload),
-              prospect.client_id,
-            ]);
-          }
-        }
-      }
-
-      if (['email_bounced', 'email_spam', 'email_unsubscribed'].includes(actionType)) {
+      if (hotFlagRes.rows.length) {
         await pool.query(
           `UPDATE prospects
-           SET do_not_contact = true,
-               status = CASE WHEN status = 'closed' THEN status ELSE 'dead' END,
+           SET is_hot = true,
+               setter_visible = true,
+               setter_updated_at = NOW(),
                updated_at = NOW()
-           WHERE LOWER(email) = $1 AND client_id = $2`,
-          [email, prospect.client_id]
+           WHERE id = $1 AND client_id = $2`,
+          [prospect.id, prospect.client_id]
         );
-        console.log(`[Riley] ${email} marked do_not_contact + dead (${event})`);
+
+        await pool.query(`
+          INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+          VALUES ('riley', 'hot_prospect_alert', $1, $2, 'pending', NOW(), $3)
+        `, [
+          prospect.id,
+          JSON.stringify(alertPayload),
+          prospect.client_id,
+        ]);
       }
+    }
+  }
 
-      if (['email_opened', 'email_clicked'].includes(actionType)) {
-        await checkAndUpdateWarmStatus(prospect.id, email, prospect.client_id);
+  if (['email_bounced', 'email_spam', 'email_unsubscribed'].includes(actionType)) {
+    await pool.query(
+      `UPDATE prospects
+       SET do_not_contact = true,
+           status = CASE WHEN status = 'closed' THEN status ELSE 'dead' END,
+           updated_at = NOW()
+       WHERE LOWER(email) = $1 AND client_id = $2`,
+      [email, prospect.client_id]
+    );
+    console.log(`[Brevo] ${email} marked do_not_contact and dead (${result.event_type})`);
+  }
+
+  if (['email_opened', 'email_clicked'].includes(actionType)) {
+    await checkAndUpdateWarmStatus(prospect.id, email, prospect.client_id);
+  }
+
+  if (actionType === 'email_clicked') {
+    await depositWarmSignalAction({
+      prospect_id: prospect.id,
+      client_id: prospect.client_id,
+      trigger: 'click',
+      signal_timestamp: signalIso(payload.date),
+      subject: payload.subject || null,
+      email,
+      company: prospect.company_name,
+    });
+  }
+
+  if (['email_opened', 'email_clicked', 'email_bounced', 'email_unsubscribed', 'email_spam'].includes(actionType)) {
+    await recalcICPAfterEmailEvent(prospect.id, prospect.client_id, actionType);
+  }
+}
+
+function handleBrevoWebhook(req, res) {
+  if (!verifyBrevoSignature(req)) {
+    return res.status(401).json({ error: 'Invalid Brevo webhook signature' });
+  }
+
+  const payload = req.body || {};
+  const eventType = internalEventType(payload);
+  const email = recipientEmail(payload);
+  res.status(200).json({ ok: true });
+
+  setImmediate(async () => {
+    try {
+      const result = await insertBrevoEvent(payload);
+      if (result.skipped) {
+        console.warn(`[Brevo] Skipped webhook event: ${result.reason || 'unknown'}`);
+        return;
       }
-
-      if (actionType === 'email_clicked') {
-        await depositWarmSignalAction({
-          prospect_id: prospect.id,
-          client_id: prospect.client_id,
-          trigger: 'click',
-          signal_timestamp: signalIso(payload.date),
-          subject: payload.subject || null,
-          email,
-          company: prospect.company_name,
-        });
-      }
-
-      // Recompute the prospect's ICP score so this engagement signal (open /
-      // click) or penalty (bounce / unsubscribe / spam) is reflected at once.
-      if (['email_opened', 'email_clicked', 'email_bounced', 'email_unsubscribed', 'email_spam'].includes(actionType)) {
-        await recalcICPAfterEmailEvent(prospect.id, prospect.client_id, actionType);
-      }
-
-      // Roll opens / clicks / bounces into the email_performance table.
-      await recordPerformanceEvent(prospect, actionType, messageId, payload.subject || null);
-
-      await pool.query(`
-        INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)
-        VALUES ('riley', $1, $2, $3, 'success', NOW())
-      `, [
-        actionType,
-        prospect.id,
-        JSON.stringify({ event, email, subject: payload.subject, link: payload.link }),
-      ]);
-
-      console.log(`[Riley] Tracked ${event} for ${email}`);
+      await processBrevoEventSideEffects(result, payload);
+      console.log(`[Brevo] Received ${eventType || result.event_type} for ${email || result.recipient_email}`);
     } catch (err) {
-      console.error('[Riley] Webhook error:', err.message);
+      console.error('[Brevo] Webhook persistence error:', err.message);
     }
   });
-});
+}
+
+router.post('/api/webhooks/brevo', handleBrevoWebhook);
+router.post('/webhooks/brevo', handleBrevoWebhook);
 
 router.post('/webhooks/bland', async (req, res) => {
   res.sendStatus(200);
