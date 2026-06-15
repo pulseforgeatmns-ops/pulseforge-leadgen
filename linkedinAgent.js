@@ -194,9 +194,13 @@ async function run() {
 
     // Search for small business content
     const searchUrls = [
-      'https://www.linkedin.com/search/results/content/?keywords=small%20business%20owner%20marketing&datePosted=past-week&sortBy=relevance',
-      'https://www.linkedin.com/search/results/content/?keywords=local%20business%20growth%20customers&datePosted=past-week&sortBy=relevance',
-      'https://www.linkedin.com/feed/',
+      'https://www.linkedin.com/in/retentionadam/recent-activity/all/',
+      'https://www.linkedin.com/in/justinwelsh/recent-activity/all/',
+      'https://www.linkedin.com/in/coldemailwizard/recent-activity/all/',
+      'https://www.linkedin.com/in/jasondbay/recent-activity/all/',
+      'https://www.linkedin.com/in/anthony-natoli/recent-activity/all/',
+      'https://www.linkedin.com/in/outboundsales/recent-activity/all/',
+      'https://www.linkedin.com/in/morganjingramamp/recent-activity/all/',
     ];
 
     for (const url of searchUrls) {
