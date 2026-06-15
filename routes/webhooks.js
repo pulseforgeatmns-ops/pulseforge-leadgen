@@ -625,11 +625,7 @@ async function processBrevoEventSideEffects(result, payload) {
   }
 }
 
-function handleBrevoWebhook(req, res) {
-  if (!verifyBrevoSignature(req)) {
-    return res.status(401).json({ error: 'Invalid Brevo webhook signature' });
-  }
-
+function acceptBrevoWebhook(req, res) {
   const payload = req.body || {};
   const eventType = internalEventType(payload);
   const email = recipientEmail(payload);
@@ -650,8 +646,16 @@ function handleBrevoWebhook(req, res) {
   });
 }
 
-router.post('/api/webhooks/brevo', handleBrevoWebhook);
-router.post('/webhooks/brevo', handleBrevoWebhook);
+function handleSignedBrevoWebhook(req, res) {
+  if (!verifyBrevoSignature(req)) {
+    return res.status(401).json({ error: 'Invalid Brevo webhook signature' });
+  }
+
+  return acceptBrevoWebhook(req, res);
+}
+
+router.post('/api/webhooks/brevo', handleSignedBrevoWebhook);
+router.post('/webhooks/brevo', acceptBrevoWebhook);
 
 router.post('/webhooks/bland', async (req, res) => {
   res.sendStatus(200);
