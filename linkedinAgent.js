@@ -230,6 +230,12 @@ async function run() {
       console.log(`Scanning: ${url}`);
       try {
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        try {
+          await page.waitForSelector('[data-urn*="urn:li:activity"]', { timeout: 30000 });
+        } catch (e) {
+          console.log(`No posts rendered on ${url} after 30s wait, skipping`);
+          continue;
+        }
         await randomDelay(4000, 6000);
       } catch (err) {
         console.error(`Navigation failed: ${err.message}`);
