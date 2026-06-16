@@ -483,36 +483,100 @@ async function getSystemSnapshot() {
     LIMIT 10
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
-  // Email performance rollup (email_performance table — populated by Emmett on
-  // send and the Brevo webhook on open/click/bounce). Three angles for the
-  // weekly digest: best subjects, worst step per vertical, hot verticals.
+  // Email performance rollup from email_events. Three angles for the weekly
+  // digest: best subjects, worst step per vertical, hot verticals.
   const topSubjects = await pool.query(`
-    SELECT subject_line, sends, opens, open_rate
-    FROM email_performance
-    WHERE client_id = $1 AND sends >= 10 AND COALESCE(subject_line, '') <> ''
-    ORDER BY open_rate DESC, sends DESC
+    SELECT
+      subject_line,
+      GREATEST(
+        COUNT(*) FILTER (WHERE event_type = 'sent'),
+        COUNT(*) FILTER (WHERE event_type = 'delivered')
+      )::int AS sends,
+      COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opens,
+      ROUND(
+        COUNT(*) FILTER (WHERE event_type = 'opened')::numeric
+          / NULLIF(COUNT(*) FILTER (WHERE event_type = 'delivered'), 0) * 100,
+        1
+      ) AS open_rate
+    FROM email_events
+    WHERE client_id = $1
+      AND COALESCE(subject_line, '') <> ''
+      AND event_at >= NOW() - INTERVAL '90 days'
+    GROUP BY subject_line
+    HAVING GREATEST(
+      COUNT(*) FILTER (WHERE event_type = 'sent'),
+      COUNT(*) FILTER (WHERE event_type = 'delivered')
+    ) >= 10
+    ORDER BY open_rate DESC NULLS LAST, sends DESC
     LIMIT 3
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
   const worstStepsByVertical = await pool.query(`
+    WITH rollup AS (
+      SELECT
+        COALESCE(NULLIF(p.vertical, ''), 'unknown') AS vertical,
+        ee.sequence,
+        ee.step,
+        GREATEST(
+          COUNT(*) FILTER (WHERE ee.event_type = 'sent'),
+          COUNT(*) FILTER (WHERE ee.event_type = 'delivered')
+        )::int AS sends,
+        ROUND(
+          COUNT(*) FILTER (WHERE ee.event_type = 'opened')::numeric
+            / NULLIF(COUNT(*) FILTER (WHERE ee.event_type = 'delivered'), 0) * 100,
+          1
+        ) AS open_rate
+      FROM email_events ee
+      LEFT JOIN LATERAL (
+        SELECT vertical
+        FROM prospects p
+        WHERE p.client_id = ee.client_id
+          AND LOWER(p.email) = LOWER(ee.recipient_email)
+        ORDER BY p.created_at DESC
+        LIMIT 1
+      ) p ON true
+      WHERE ee.client_id = $1
+        AND ee.event_at >= NOW() - INTERVAL '90 days'
+      GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown'), ee.sequence, ee.step
+    )
     SELECT DISTINCT ON (vertical)
       vertical, sequence, step, sends, open_rate
-    FROM email_performance
-    WHERE client_id = $1 AND sends > 0 AND COALESCE(vertical, '') <> ''
-    ORDER BY vertical, open_rate ASC, sends DESC
+    FROM rollup
+    WHERE sends > 0 AND vertical <> 'unknown'
+    ORDER BY vertical, open_rate ASC NULLS FIRST, sends DESC
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
   const highPerformingVerticals = await pool.query(`
+    WITH rollup AS (
+      SELECT
+        COALESCE(NULLIF(p.vertical, ''), 'unknown') AS vertical,
+        GREATEST(
+          COUNT(*) FILTER (WHERE ee.event_type = 'sent'),
+          COUNT(*) FILTER (WHERE ee.event_type = 'delivered')
+        )::int AS sends,
+        COUNT(*) FILTER (WHERE ee.event_type = 'replied')::int AS replies
+      FROM email_events ee
+      LEFT JOIN LATERAL (
+        SELECT vertical
+        FROM prospects p
+        WHERE p.client_id = ee.client_id
+          AND LOWER(p.email) = LOWER(ee.recipient_email)
+        ORDER BY p.created_at DESC
+        LIMIT 1
+      ) p ON true
+      WHERE ee.client_id = $1
+        AND ee.event_at >= NOW() - INTERVAL '90 days'
+      GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown')
+    )
     SELECT
       vertical,
-      SUM(sends)::int AS sends,
-      SUM(replies)::int AS replies,
-      ROUND(SUM(replies)::numeric / NULLIF(SUM(sends), 0) * 100, 2) AS reply_rate
-    FROM email_performance
-    WHERE client_id = $1 AND COALESCE(vertical, '') <> ''
-    GROUP BY vertical
-    HAVING SUM(sends) > 0
-      AND (SUM(replies)::numeric / NULLIF(SUM(sends), 0)) * 100 > 2
+      sends,
+      replies,
+      ROUND(replies::numeric / NULLIF(sends, 0) * 100, 2) AS reply_rate
+    FROM rollup
+    WHERE vertical <> 'unknown'
+      AND sends > 0
+      AND (replies::numeric / NULLIF(sends, 0)) * 100 > 2
     ORDER BY reply_rate DESC
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
@@ -538,21 +602,19 @@ async function getSystemSnapshot() {
       COUNT(DISTINCT p.id)::int AS prospects,
       COUNT(DISTINCT p.id) FILTER (
         WHERE EXISTS (
-          SELECT 1 FROM touchpoints t
-          WHERE t.prospect_id = p.id
-            AND t.client_id = p.client_id
-            AND t.channel = 'email'
-            AND t.action_type IN ('email_bounced', 'bounce')
+          SELECT 1 FROM email_events ee
+          WHERE ee.client_id = p.client_id
+            AND LOWER(ee.recipient_email) = LOWER(p.email)
+            AND ee.event_type IN ('hard_bounce', 'blocked')
         )
       )::int AS bounced,
       COALESCE(ROUND(
         COUNT(DISTINCT p.id) FILTER (
           WHERE EXISTS (
-            SELECT 1 FROM touchpoints t
-            WHERE t.prospect_id = p.id
-              AND t.client_id = p.client_id
-              AND t.channel = 'email'
-              AND t.action_type IN ('email_bounced', 'bounce')
+            SELECT 1 FROM email_events ee
+            WHERE ee.client_id = p.client_id
+              AND LOWER(ee.recipient_email) = LOWER(p.email)
+              AND ee.event_type IN ('hard_bounce', 'blocked')
           )
         )::numeric / NULLIF(COUNT(DISTINCT p.id), 0) * 100,
         1
@@ -1266,11 +1328,22 @@ async function analyzePatterns({ expansionReport = null } = {}) {
   };
 
   const subjectRows = await queryPattern(`
-    SELECT subject_line, SUM(sends)::int AS sends, SUM(opens)::int AS opens
-    FROM email_performance
-    WHERE client_id = $1 AND COALESCE(subject_line, '') <> ''
+    SELECT
+      subject_line,
+      GREATEST(
+        COUNT(*) FILTER (WHERE event_type = 'sent'),
+        COUNT(*) FILTER (WHERE event_type = 'delivered')
+      )::int AS sends,
+      COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opens
+    FROM email_events
+    WHERE client_id = $1
+      AND COALESCE(subject_line, '') <> ''
+      AND event_at >= NOW() - INTERVAL '90 days'
     GROUP BY subject_line
-    HAVING SUM(sends) >= 10
+    HAVING GREATEST(
+      COUNT(*) FILTER (WHERE event_type = 'sent'),
+      COUNT(*) FILTER (WHERE event_type = 'delivered')
+    ) >= 10
   `, [CLIENT_ID]);
   const subjectFormats = new Map();
   for (const row of subjectRows) {
@@ -1296,14 +1369,40 @@ async function analyzePatterns({ expansionReport = null } = {}) {
   }
 
   const worstStepRows = await queryPattern(`
+    WITH rollup AS (
+      SELECT
+        COALESCE(NULLIF(p.vertical, ''), 'unknown') AS vertical,
+        ee.sequence,
+        ee.step,
+        GREATEST(
+          COUNT(*) FILTER (WHERE ee.event_type = 'sent'),
+          COUNT(*) FILTER (WHERE ee.event_type = 'delivered')
+        )::int AS sends,
+        COUNT(*) FILTER (WHERE ee.event_type = 'opened')::int AS opens,
+        ROUND(
+          COUNT(*) FILTER (WHERE ee.event_type = 'opened')::numeric
+            / NULLIF(COUNT(*) FILTER (WHERE ee.event_type = 'delivered'), 0) * 100,
+          1
+        ) AS open_rate
+      FROM email_events ee
+      LEFT JOIN LATERAL (
+        SELECT vertical
+        FROM prospects p
+        WHERE p.client_id = ee.client_id
+          AND LOWER(p.email) = LOWER(ee.recipient_email)
+        ORDER BY p.created_at DESC
+        LIMIT 1
+      ) p ON true
+      WHERE ee.client_id = $1
+        AND ee.event_at >= NOW() - INTERVAL '90 days'
+      GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown'), ee.sequence, ee.step
+    )
     SELECT DISTINCT ON (vertical)
-      vertical, sequence, step, SUM(sends)::int AS sends, SUM(opens)::int AS opens,
-      ROUND(SUM(opens)::numeric / NULLIF(SUM(sends), 0) * 100, 1) AS open_rate
-    FROM email_performance
-    WHERE client_id = $1 AND COALESCE(vertical, '') <> ''
-    GROUP BY vertical, sequence, step
-    HAVING SUM(sends) >= 10
-    ORDER BY vertical, ROUND(SUM(opens)::numeric / NULLIF(SUM(sends), 0) * 100, 1) ASC
+      vertical, sequence, step, sends, opens, open_rate
+    FROM rollup
+    WHERE vertical <> 'unknown'
+      AND sends >= 10
+    ORDER BY vertical, open_rate ASC NULLS FIRST
   `, [CLIENT_ID]);
   weekly.email_performance.worst_steps_by_vertical = worstStepRows;
   const weakStep = worstStepRows
@@ -1320,12 +1419,32 @@ async function analyzePatterns({ expansionReport = null } = {}) {
   }
 
   const verticalReplyRows = await queryPattern(`
-    SELECT vertical, SUM(sends)::int AS sends, SUM(replies)::int AS replies,
-      ROUND(SUM(replies)::numeric / NULLIF(SUM(sends), 0) * 100, 2) AS reply_rate
-    FROM email_performance
-    WHERE client_id = $1 AND COALESCE(vertical, '') <> ''
-    GROUP BY vertical
-    HAVING SUM(sends) >= 10
+    WITH rollup AS (
+      SELECT
+        COALESCE(NULLIF(p.vertical, ''), 'unknown') AS vertical,
+        GREATEST(
+          COUNT(*) FILTER (WHERE ee.event_type = 'sent'),
+          COUNT(*) FILTER (WHERE ee.event_type = 'delivered')
+        )::int AS sends,
+        COUNT(*) FILTER (WHERE ee.event_type = 'replied')::int AS replies
+      FROM email_events ee
+      LEFT JOIN LATERAL (
+        SELECT vertical
+        FROM prospects p
+        WHERE p.client_id = ee.client_id
+          AND LOWER(p.email) = LOWER(ee.recipient_email)
+        ORDER BY p.created_at DESC
+        LIMIT 1
+      ) p ON true
+      WHERE ee.client_id = $1
+        AND ee.event_at >= NOW() - INTERVAL '90 days'
+      GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown')
+    )
+    SELECT vertical, sends, replies,
+      ROUND(replies::numeric / NULLIF(sends, 0) * 100, 2) AS reply_rate
+    FROM rollup
+    WHERE vertical <> 'unknown'
+      AND sends >= 10
     ORDER BY reply_rate DESC
   `, [CLIENT_ID]);
   weekly.email_performance.vertical_reply_rates = verticalReplyRows;
@@ -1595,21 +1714,35 @@ async function buildWeeklyPatternTrends() {
   const trends = {};
   const weeklyEmail = await queryPattern(`
     SELECT bucket,
-      SUM(sends)::int AS sends,
-      SUM(opens)::int AS opens,
-      SUM(replies)::int AS replies,
-      ROUND(SUM(opens)::numeric / NULLIF(SUM(sends), 0) * 100, 1) AS open_rate,
-      ROUND(SUM(replies)::numeric / NULLIF(SUM(sends), 0) * 100, 2) AS reply_rate
+      GREATEST(
+        COUNT(*) FILTER (WHERE event_type = 'sent'),
+        COUNT(*) FILTER (WHERE event_type = 'delivered')
+      )::int AS sends,
+      COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opens,
+      COUNT(*) FILTER (WHERE event_type = 'replied')::int AS replies,
+      ROUND(
+        COUNT(*) FILTER (WHERE event_type = 'opened')::numeric
+          / NULLIF(COUNT(*) FILTER (WHERE event_type = 'delivered'), 0) * 100,
+        1
+      ) AS open_rate,
+      ROUND(
+        COUNT(*) FILTER (WHERE event_type = 'replied')::numeric
+          / NULLIF(GREATEST(
+            COUNT(*) FILTER (WHERE event_type = 'sent'),
+            COUNT(*) FILTER (WHERE event_type = 'delivered')
+          ), 0) * 100,
+        2
+      ) AS reply_rate
     FROM (
       SELECT CASE
-          WHEN last_updated >= date_trunc('week', NOW()) THEN 'this_week'
-          WHEN last_updated >= date_trunc('week', NOW()) - INTERVAL '7 days'
-            AND last_updated < date_trunc('week', NOW()) THEN 'last_week'
+          WHEN event_at >= date_trunc('week', NOW()) THEN 'this_week'
+          WHEN event_at >= date_trunc('week', NOW()) - INTERVAL '7 days'
+            AND event_at < date_trunc('week', NOW()) THEN 'last_week'
         END AS bucket,
-        sends, opens, replies
-      FROM email_performance
+        event_type
+      FROM email_events
       WHERE client_id = $1
-        AND last_updated >= date_trunc('week', NOW()) - INTERVAL '7 days'
+        AND event_at >= date_trunc('week', NOW()) - INTERVAL '7 days'
     ) x
     WHERE bucket IS NOT NULL
     GROUP BY bucket

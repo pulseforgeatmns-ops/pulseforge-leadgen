@@ -19,12 +19,36 @@ const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
 let prospectSetterAssignmentSchemaPromise;
 let agentLogStatusSchemaPromise;
+const tableColumnCache = new Map();
 const EXCLUDE_COMMAND_FEED_ACTIONS_SQL = `
   NOT (
     LOWER(REPLACE(COALESCE(al.agent_name, ''), '_agent', '')) = 'max'
     AND COALESCE(al.action, '') IN ('daily_brief', 'daily_digest')
   )
 `;
+
+function pct(num, den) {
+  const n = Number(num || 0);
+  const d = Number(den || 0);
+  return d > 0 ? +((n / d) * 100).toFixed(1) : 0;
+}
+
+function analyticsWindowDays(value) {
+  const days = Number.parseInt(value, 10);
+  return [7, 30, 90].includes(days) ? days : 7;
+}
+
+async function tableColumns(tableName) {
+  if (!tableColumnCache.has(tableName)) {
+    tableColumnCache.set(tableName, pool.query(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = $1
+    `, [tableName]).then(result => new Set(result.rows.map(row => row.column_name))));
+  }
+  return tableColumnCache.get(tableName);
+}
 
 function ensureProspectSetterAssignmentSchema() {
   if (!prospectSetterAssignmentSchemaPromise) {
@@ -1107,7 +1131,13 @@ router.get('/api/activity', requireDashboardRead, async (req, res) => {
     const clientId = getRequestClientId(req);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-    const result = await pool.query(`
+    const perSourceLimit = Math.max(20, Math.min(limit + offset, 100));
+    const excludedColumns = await tableColumns('excluded_prospect_log');
+    const excludedTimeSelect = excludedColumns.has('created_at') ? 'epl.created_at' : 'NOW()';
+    const excludedOrder = excludedColumns.has('created_at') ? 'epl.created_at DESC' : 'epl.id DESC';
+
+    const [agentResult, emailResult, excludedResult] = await Promise.all([
+      pool.query(`
       SELECT al.id, al.agent_name, al.action, al.status, al.ran_at, al.payload,
         COALESCE(
           al.prospect_id,
@@ -1130,21 +1160,83 @@ router.get('/api/activity', requireDashboardRead, async (req, res) => {
       WHERE al.client_id = $1
         AND ${EXCLUDE_COMMAND_FEED_ACTIONS_SQL}
       ORDER BY al.ran_at DESC
-      LIMIT $2 OFFSET $3
-    `, [clientId, limit, offset]);
+      LIMIT $2
+    `, [clientId, perSourceLimit]),
+      pool.query(`
+        SELECT
+          ee.id,
+          ee.event_type,
+          ee.event_at,
+          ee.recipient_email,
+          ee.sending_domain,
+          ee.subject_line,
+          ee.prospect_id AS event_prospect_id,
+          p.id AS prospect_id,
+          p.first_name,
+          p.last_name,
+          p.notes AS prospect_notes,
+          c.name AS company_name
+        FROM email_events ee
+        LEFT JOIN LATERAL (
+          SELECT p.*
+          FROM prospects p
+          WHERE p.client_id = ee.client_id
+            AND (
+              p.id = ee.prospect_id
+              OR LOWER(p.email) = LOWER(ee.recipient_email)
+            )
+          ORDER BY (p.id = ee.prospect_id) DESC, p.created_at DESC
+          LIMIT 1
+        ) p ON true
+        LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+        WHERE ee.client_id = $1
+        ORDER BY ee.event_at DESC
+        LIMIT $2
+      `, [clientId, perSourceLimit]),
+      pool.query(`
+        SELECT
+          epl.id,
+          epl.email,
+          epl.domain,
+          epl.source,
+          epl.exclusion_reason,
+          epl.exclusion_detail,
+          ${excludedTimeSelect} AS created_at,
+          p.id AS prospect_id,
+          p.first_name,
+          p.last_name,
+          p.notes AS prospect_notes,
+          c.name AS company_name
+        FROM excluded_prospect_log epl
+        LEFT JOIN LATERAL (
+          SELECT p.*
+          FROM prospects p
+          WHERE p.client_id = $1
+            AND LOWER(p.email) = LOWER(epl.email)
+          ORDER BY p.created_at DESC
+          LIMIT 1
+        ) p ON true
+        LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+        ORDER BY ${excludedOrder}
+        LIMIT $2
+      `, [clientId, perSourceLimit]),
+    ]);
 
     const agentNameMap = {
       facebook: 'Faye', linkedin: 'Link', emmett: 'Emmett',
       max: 'Max', rex: 'Rex', scout: 'Scout', sketch: 'Sketch', email: 'Emmett'
     };
+    const timeLabelFor = (value) => {
+      const minutesAgo = Math.max(0, Math.floor((Date.now() - new Date(value)) / 60000));
+      return minutesAgo < 60 ? `${minutesAgo}m` : minutesAgo < 1440 ? `${Math.floor(minutesAgo/60)}h` : `${Math.floor(minutesAgo/1440)}d`;
+    };
+    const companyFromNotes = (notes) => String(notes || '').split(/\s(?:\u2013|\u2014|-)\s/)[0].trim() || null;
 
-    const feed = result.rows.map(row => {
+    const agentFeed = agentResult.rows.map(row => {
       const rawAgent = row.agent_name?.replace('_agent', '') || 'system';
       const agent = agentNameMap[rawAgent] || rawAgent.charAt(0).toUpperCase() + rawAgent.slice(1);
-      const minutesAgo = Math.floor((Date.now() - new Date(row.ran_at)) / 60000);
-      const timeLabel = minutesAgo < 60 ? `${minutesAgo}m` : minutesAgo < 1440 ? `${Math.floor(minutesAgo/60)}h` : `${Math.floor(minutesAgo/1440)}d`;
       const payload = row.payload || {};
-      const companyName = (row.prospect_notes || '').split('—')[0].trim() || payload.company || null;
+      const companyName = companyFromNotes(row.prospect_notes) || payload.company || null;
       const prospectName = cleanProspectName(row.first_name, row.last_name, companyName);
       const displayProspectName = payload.prospect_name || prospectName;
       const prospect = displayProspectName && displayProspectName !== 'Unknown contact' ? `· ${displayProspectName}` : '';
@@ -1177,13 +1269,79 @@ router.get('/api/activity', requireDashboardRead, async (req, res) => {
       const isWarmSignal = ['open', 'email_opened', 'click', 'email_clicked', 'reply', 'inbound', 'call_answered', 'triage'].includes(rawAction);
       return {
         id: row.id,
+        source: 'agent_log',
+        detail_id: row.id,
+        detailable: true,
         agent, action: label, raw_action: rawAction, icon, color,
-        time: timeLabel, ran_at: row.ran_at, status: row.status,
+        time: timeLabelFor(row.ran_at), ran_at: row.ran_at, status: row.status,
         prospect_id: row.prospect_id,
         prospect: displayProspectName || null,
         is_warm_signal: isWarmSignal
       };
     });
+
+    const eventLabels = {
+      sent: 'email sent',
+      delivered: 'email delivered',
+      opened: 'email opened',
+      clicked: 'link clicked',
+      replied: 'reply received',
+      hard_bounce: 'hard bounce recorded',
+      soft_bounce: 'soft bounce recorded',
+      blocked: 'email blocked',
+      unsubscribed: 'unsubscribe recorded',
+      spam: 'spam complaint recorded',
+    };
+    const emailFeed = emailResult.rows.map(row => {
+      const rawAction = String(row.event_type || 'email_event').toLowerCase();
+      const companyName = row.company_name || companyFromNotes(row.prospect_notes);
+      const prospectName = cleanProspectName(row.first_name, row.last_name, companyName) || row.recipient_email;
+      const warm = ['opened', 'clicked', 'replied'].includes(rawAction);
+      const risk = ['hard_bounce', 'soft_bounce', 'blocked', 'unsubscribed', 'spam'].includes(rawAction);
+      return {
+        id: `email_event:${row.id}`,
+        source: 'email_events',
+        detailable: false,
+        agent: rawAction === 'replied' ? 'Riley' : 'Emmett',
+        action: `${eventLabels[rawAction] || rawAction.replace(/_/g, ' ')} · ${prospectName || row.recipient_email}`,
+        raw_action: rawAction,
+        icon: risk ? '!' : warm ? '↗' : '@',
+        color: risk ? 'fi-o' : warm ? 'fi-t' : 'fi-p',
+        time: timeLabelFor(row.event_at),
+        ran_at: row.event_at,
+        status: rawAction,
+        prospect_id: row.prospect_id || row.event_prospect_id || null,
+        prospect: prospectName || row.recipient_email,
+        is_warm_signal: warm,
+      };
+    });
+
+    const excludedFeed = excludedResult.rows.map(row => {
+      const detail = row.exclusion_detail || {};
+      const companyName = row.company_name || companyFromNotes(row.prospect_notes) || detail.company || row.domain || row.email;
+      const reason = row.exclusion_reason || 'excluded';
+      return {
+        id: `track1:${row.id}`,
+        source: 'excluded_prospect_log',
+        detailable: false,
+        agent: 'Scout',
+        action: `Track 1 excluded ${companyName || row.email || 'prospect'} · ${reason}`,
+        raw_action: 'track1_excluded',
+        icon: '×',
+        color: 'fi-o',
+        time: timeLabelFor(row.created_at),
+        ran_at: row.created_at,
+        status: reason,
+        prospect_id: row.prospect_id || detail.prospect_id || null,
+        prospect: companyName || row.email,
+        is_warm_signal: false,
+      };
+    });
+
+    const feed = agentFeed
+      .concat(emailFeed, excludedFeed)
+      .sort((a, b) => new Date(b.ran_at || 0) - new Date(a.ran_at || 0))
+      .slice(offset, offset + limit);
 
     res.json(feed);
   } catch (err) {
@@ -1917,25 +2075,131 @@ router.get('/api/analytics/top-posts', requireDashboardRead, async (req, res) =>
 router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
-    const [totals, weekTotals, warmUpgraded] = await Promise.all([
+    const days = analyticsWindowDays(req.query.days);
+    const [prospectColumns, excludedColumns] = await Promise.all([
+      tableColumns('prospects'),
+      tableColumns('excluded_prospect_log'),
+    ]);
+    const hasEmailStatus = prospectColumns.has('email_status');
+    const excludedHasCreatedAt = excludedColumns.has('created_at');
+
+    const pipelineSql = hasEmailStatus ? `
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (
+          WHERE COALESCE(email_status, 'unverified_legacy') = 'valid'
+            AND COALESCE(do_not_contact, false) = false
+        )::int AS sendable,
+        COUNT(*) FILTER (WHERE COALESCE(do_not_contact, false) = true)::int AS excluded,
+        COUNT(*) FILTER (
+          WHERE COALESCE(do_not_contact, false) = false
+            AND COALESCE(NULLIF(email_status, ''), 'unverified_legacy') IN ('unknown', 'unverified_legacy')
+        )::int AS unknown
+      FROM prospects
+      WHERE client_id = $1
+    ` : `
+      SELECT
+        COUNT(*)::int AS total,
+        0::int AS sendable,
+        COUNT(*) FILTER (WHERE COALESCE(do_not_contact, false) = true)::int AS excluded,
+        COUNT(*) FILTER (WHERE COALESCE(do_not_contact, false) = false)::int AS unknown
+      FROM prospects
+      WHERE client_id = $1
+    `;
+    const verifierSql = hasEmailStatus ? `
+      SELECT
+        CASE
+          WHEN COALESCE(NULLIF(email_status, ''), 'unverified_legacy') IN ('valid', 'invalid', 'catchall', 'risky', 'unknown', 'unverified_legacy')
+            THEN COALESCE(NULLIF(email_status, ''), 'unverified_legacy')
+          ELSE 'unknown'
+        END AS status,
+        COUNT(*)::int AS count
+      FROM prospects
+      WHERE client_id = $1
+      GROUP BY status
+    ` : `
+      SELECT 'unverified_legacy' AS status, COUNT(*)::int AS count
+      FROM prospects
+      WHERE client_id = $1
+    `;
+    const track1Where = excludedHasCreatedAt
+      ? "WHERE epl.created_at >= NOW() - INTERVAL '7 days'"
+      : '';
+
+    const [totals, weekTotals, domainBreakdown, verticalBreakdown, pipelineHealth, track1Reasons, verifierStats, warmUpgraded] = await Promise.all([
       pool.query(`
         SELECT
-          COUNT(CASE WHEN action_type = 'outbound'            THEN 1 END)::int AS sent_total,
-          COUNT(CASE WHEN action_type = 'email_opened'        THEN 1 END)::int AS opened_total,
-          COUNT(CASE WHEN action_type = 'email_clicked'       THEN 1 END)::int AS clicked_total,
-          COUNT(CASE WHEN action_type = 'email_bounced'       THEN 1 END)::int AS bounced_total,
-          COUNT(CASE WHEN action_type = 'email_unsubscribed'  THEN 1 END)::int AS unsub_total
-        FROM touchpoints WHERE channel = 'email' AND client_id = $1
+          COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent_total,
+          COUNT(*) FILTER (WHERE event_type = 'delivered')::int AS delivered_total,
+          COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opened_total,
+          COUNT(*) FILTER (WHERE event_type = 'clicked')::int AS clicked_total,
+          COUNT(*) FILTER (WHERE event_type = 'replied')::int AS replied_total,
+          COUNT(*) FILTER (WHERE event_type IN ('hard_bounce', 'blocked'))::int AS bounced_total,
+          COUNT(*) FILTER (WHERE event_type = 'unsubscribed')::int AS unsub_total
+        FROM email_events
+        WHERE client_id = $1
+          AND event_at >= NOW() - ($2 * INTERVAL '1 day')
+      `, [clientId, days]),
+      pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent_week,
+          COUNT(*) FILTER (WHERE event_type = 'delivered')::int AS delivered_week,
+          COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opened_week,
+          COUNT(*) FILTER (WHERE event_type = 'clicked')::int AS clicked_week,
+          COUNT(*) FILTER (WHERE event_type IN ('hard_bounce', 'blocked'))::int AS bounced_week
+        FROM email_events
+        WHERE client_id = $1
+          AND event_at >= NOW() - INTERVAL '7 days'
       `, [clientId]),
       pool.query(`
         SELECT
-          COUNT(CASE WHEN action_type = 'outbound'           THEN 1 END)::int AS sent_week,
-          COUNT(CASE WHEN action_type = 'email_opened'       THEN 1 END)::int AS opened_week,
-          COUNT(CASE WHEN action_type = 'email_clicked'      THEN 1 END)::int AS clicked_week,
-          COUNT(CASE WHEN action_type = 'email_bounced'      THEN 1 END)::int AS bounced_week
-        FROM touchpoints
-        WHERE channel = 'email' AND client_id = $1 AND created_at > NOW() - INTERVAL '7 days'
-      `, [clientId]),
+          COALESCE(NULLIF(sending_domain, ''), 'unknown') AS sending_domain,
+          COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent,
+          COUNT(*) FILTER (WHERE event_type = 'delivered')::int AS delivered,
+          COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opened,
+          COUNT(*) FILTER (WHERE event_type = 'clicked')::int AS clicked,
+          COUNT(*) FILTER (WHERE event_type = 'replied')::int AS replied,
+          COUNT(*) FILTER (WHERE event_type IN ('hard_bounce', 'blocked'))::int AS bounced
+        FROM email_events
+        WHERE client_id = $1
+          AND event_at >= NOW() - ($2 * INTERVAL '1 day')
+        GROUP BY sending_domain
+        ORDER BY bounced DESC, sent DESC, delivered DESC
+      `, [clientId, days]),
+      pool.query(`
+        SELECT
+          COALESCE(NULLIF(p.vertical, ''), 'unknown') AS vertical,
+          COUNT(*) FILTER (WHERE ee.event_type = 'sent')::int AS sent,
+          COUNT(*) FILTER (WHERE ee.event_type = 'delivered')::int AS delivered,
+          COUNT(*) FILTER (WHERE ee.event_type = 'opened')::int AS opened,
+          COUNT(*) FILTER (WHERE ee.event_type = 'clicked')::int AS clicked,
+          COUNT(*) FILTER (WHERE ee.event_type = 'replied')::int AS replied,
+          COUNT(*) FILTER (WHERE ee.event_type IN ('hard_bounce', 'blocked'))::int AS bounced
+        FROM email_events ee
+        LEFT JOIN LATERAL (
+          SELECT vertical
+          FROM prospects p
+          WHERE p.client_id = ee.client_id
+            AND LOWER(p.email) = LOWER(ee.recipient_email)
+          ORDER BY p.created_at DESC
+          LIMIT 1
+        ) p ON true
+        WHERE ee.client_id = $1
+          AND ee.event_at >= NOW() - ($2 * INTERVAL '1 day')
+        GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown')
+        ORDER BY delivered DESC, sent DESC
+      `, [clientId, days]),
+      pool.query(pipelineSql, [clientId]),
+      pool.query(`
+        SELECT
+          COALESCE(NULLIF(epl.exclusion_reason, ''), 'unknown') AS reason,
+          COUNT(*)::int AS count
+        FROM excluded_prospect_log epl
+        ${track1Where}
+        GROUP BY reason
+        ORDER BY count DESC, reason ASC
+      `),
+      pool.query(verifierSql, [clientId]),
       pool.query(`
         SELECT COUNT(*)::int AS count
         FROM prospects
@@ -1943,25 +2207,61 @@ router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
           AND client_id = $1
           AND updated_at > NOW() - INTERVAL '7 days'
           AND EXISTS (
-            SELECT 1 FROM touchpoints t
-            WHERE t.prospect_id = prospects.id AND t.client_id = prospects.client_id AND t.action_type = 'email_clicked'
+            SELECT 1 FROM email_events ee
+            WHERE ee.client_id = prospects.client_id
+              AND LOWER(ee.recipient_email) = LOWER(prospects.email)
+              AND ee.event_type = 'clicked'
           )
       `, [clientId]),
     ]);
 
     const t = totals.rows[0];
     const w = weekTotals.rows[0];
-    const pct = (num, den) => den > 0 ? +((num / den) * 100).toFixed(1) : 0;
+    const denominator = Number(t.sent_total || 0) >= Number(t.delivered_total || 0)
+      ? Number(t.sent_total || 0)
+      : Number(t.delivered_total || 0);
+    const denominatorLabel = Number(t.sent_total || 0) >= Number(t.delivered_total || 0) ? 'sent' : 'delivered fallback';
+    const weekDenominator = Number(w.sent_week || 0) >= Number(w.delivered_week || 0)
+      ? Number(w.sent_week || 0)
+      : Number(w.delivered_week || 0);
+    const decorateBreakdown = row => {
+      const den = Number(row.sent || 0) >= Number(row.delivered || 0)
+        ? Number(row.sent || 0)
+        : Number(row.delivered || 0);
+      const denLabel = Number(row.sent || 0) >= Number(row.delivered || 0) ? 'sent' : 'delivered fallback';
+      return {
+        ...row,
+        denominator: den,
+        denominator_label: denLabel,
+        open_rate: pct(row.opened, Number(row.delivered || 0)),
+        reply_rate: pct(row.replied, den),
+        bounce_pct: pct(row.bounced, den),
+        kill_switch_bounce_pct: pct(row.bounced, row.sent),
+      };
+    };
 
     res.json({
-      sent_total:         t.sent_total,
-      sent_week:          w.sent_week,
-      open_rate:          pct(t.opened_total, t.sent_total),
-      click_rate:         pct(t.clicked_total, t.sent_total),
-      bounce_rate:        pct(t.bounced_total, t.sent_total),
-      unsub_rate:         pct(t.unsub_total, t.sent_total),
-      open_rate_week:     pct(w.opened_week, w.sent_week),
+      days,
+      denominator_label:  denominatorLabel,
+      sent_total:         denominator,
+      raw_sent_total:     t.sent_total,
+      delivered_total:    t.delivered_total,
+      sent_week:          weekDenominator,
+      raw_sent_week:      w.sent_week,
+      delivered_week:     w.delivered_week,
+      open_rate:          pct(t.opened_total, t.delivered_total),
+      click_rate:         pct(t.clicked_total, denominator),
+      reply_rate:         pct(t.replied_total, denominator),
+      bounce_rate:        pct(t.bounced_total, denominator),
+      unsub_rate:         pct(t.unsub_total, denominator),
+      open_rate_week:     pct(w.opened_week, w.delivered_week),
       warm_upgraded_week: warmUpgraded.rows[0].count,
+      pipeline_health:    pipelineHealth.rows[0],
+      track1_reasons:     track1Reasons.rows,
+      track1_window_days: excludedHasCreatedAt ? 7 : null,
+      verifier_stats:     verifierStats.rows,
+      domain_health:      domainBreakdown.rows.map(decorateBreakdown),
+      vertical_breakdown: verticalBreakdown.rows.map(decorateBreakdown),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

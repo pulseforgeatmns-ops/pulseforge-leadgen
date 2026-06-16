@@ -1975,10 +1975,35 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
   display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 0.75rem;
 }
+.email-card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; margin-bottom: 1rem;
+}
+.email-card-head .an-card-title { margin-bottom: 0; }
+.email-window-toggle {
+  display: inline-flex; gap: 2px; padding: 2px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+}
+.email-window-btn {
+  border: 0; border-radius: 6px; padding: 5px 9px;
+  background: transparent; color: var(--gray);
+  font-family: 'JetBrains Mono', monospace; font-size: 0.56rem;
+  letter-spacing: 1px; cursor: pointer;
+}
+.email-window-btn.active {
+  background: rgba(0,212,180,0.14); color: var(--teal);
+}
+.email-denom-note {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.58rem;
+  color: var(--gray); letter-spacing: 0.5px; margin-top: 0.8rem;
+}
 .email-perf-tile {
   background: rgba(255,255,255,0.03); border: 1px solid var(--border);
   border-radius: 8px; padding: 0.75rem 1rem;
 }
+.email-perf-tile.warn { border-color: rgba(255,214,0,0.24); }
+.email-perf-tile.danger { border-color: rgba(255,107,53,0.28); }
 .email-perf-label {
   font-family: 'JetBrains Mono', monospace; font-size: 0.55rem;
   letter-spacing: 1.5px; text-transform: uppercase; color: var(--gray); margin-bottom: 4px;
@@ -1987,6 +2012,10 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
   font-size: 1.25rem; font-weight: 600; color: var(--white); line-height: 1;
 }
 .email-perf-sub { font-size: 0.65rem; color: rgba(255,255,255,0.4); margin-top: 2px; }
+.domain-health-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
 
 /* Timeline */
 .tl-filter-bar {
@@ -3350,9 +3379,52 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
 
       <!-- Email Performance -->
       <div class="an-card an-full" id="emailPerfCard">
-        <div class="an-card-title">Email Performance</div>
+        <div class="email-card-head">
+          <div class="an-card-title">Email Performance</div>
+          <div class="email-window-toggle" aria-label="Email analytics window">
+            <button class="email-window-btn active" type="button" data-email-window="7">7D</button>
+            <button class="email-window-btn" type="button" data-email-window="30">30D</button>
+            <button class="email-window-btn" type="button" data-email-window="90">90D</button>
+          </div>
+        </div>
         <div class="email-perf-strip" id="emailPerfStrip">
           <div class="no-data-note">Loading…</div>
+        </div>
+        <div class="email-denom-note" id="emailDenomNote"></div>
+      </div>
+
+      <div class="an-card an-full">
+        <div class="an-card-title">Pipeline Health</div>
+        <div class="email-perf-strip" id="pipelineHealthCards">
+          <div class="no-data-note">Loading...</div>
+        </div>
+      </div>
+
+      <div class="an-card">
+        <div class="an-card-title">Track 1 Activity</div>
+        <div class="email-perf-strip" id="track1ReasonCards">
+          <div class="no-data-note">Loading...</div>
+        </div>
+      </div>
+
+      <div class="an-card">
+        <div class="an-card-title">Track 4 Verifier Stats</div>
+        <div class="email-perf-strip" id="track4StatusCards">
+          <div class="no-data-note">Loading...</div>
+        </div>
+      </div>
+
+      <div class="an-card an-full">
+        <div class="an-card-title">Sending Domain Health</div>
+        <div class="domain-health-grid" id="sendingDomainCards">
+          <div class="no-data-note">Loading...</div>
+        </div>
+      </div>
+
+      <div class="an-card an-full">
+        <div class="an-card-title">Email Performance by Vertical</div>
+        <div class="domain-health-grid" id="verticalEmailCards">
+          <div class="no-data-note">Loading...</div>
         </div>
       </div>
 
@@ -4260,8 +4332,9 @@ function renderActivityFeedItems() {
     const warm = item.is_warm_signal ? ' warm-signal' : '';
     const hoverable = item.prospect_id ? ' has-prospect' : '';
     const badge = item.is_warm_signal ? '<span class="signal-badge">SIGNAL</span>' : '';
-    const chevron = item.id != null
-      ? `<button type="button" class="feed-detail-toggle" data-log-id="${_esc(String(item.id))}" title="Details" aria-expanded="false">›</button>`
+    const detailId = item.detail_id || item.id;
+    const chevron = item.detailable !== false && detailId != null
+      ? `<button type="button" class="feed-detail-toggle" data-log-id="${_esc(String(detailId))}" title="Details" aria-expanded="false">›</button>`
       : '';
     return `<div class="feed-row" data-log-id="${_esc(String(item.id == null ? '' : item.id))}" data-log-action="${_esc(item.raw_action || item.action || '')}" data-ran-at="${_esc(item.ran_at || '')}">
       <div class="feed-item${warm}${hoverable}" data-prospect-id="${_esc(item.prospect_id || '')}">
@@ -5615,7 +5688,8 @@ function _normalizeTimelineItem(item) {
     ...item,
     raw_action: rawAction,
     action_label: _plainActionLabel(rawAction),
-    ran_at: item.ran_at || item.created_at || item.time_at || null
+    ran_at: item.ran_at || item.created_at || item.time_at || null,
+    detailable: item.detailable !== false
   };
 }
 
@@ -5636,6 +5710,19 @@ function _cleanProspectDisplayName(value, fallback) {
 }
 
 function _renderTimelineDetails(item) {
+  if (item.detailable === false) {
+    const rows = [
+      ['Source', item.source || 'activity'],
+      ['Status', item.status || item.raw_action || 'recorded'],
+      ['Prospect', item.prospect || '-'],
+    ];
+    return `<div class="tl-details">${rows.map(([label, value]) => `
+      <div class="tl-detail">
+        <span class="tl-detail-label">${_esc(label)}</span>
+        <span class="tl-detail-value">${_esc(value || '-')}</span>
+      </div>
+    `).join('')}</div>`;
+  }
   const details = _tlDetailsCache.get(String(item.id));
   if (!details) return '<div class="tl-loading">Loading details...</div>';
   const effective = details.error
@@ -5729,12 +5816,12 @@ function _renderTimeline() {
 const TL_DETAILS_CONCURRENCY = 4;
 
 async function _fetchTimelineDetails(items) {
-  const missing = items.filter(item => item.id != null && !_tlDetailsCache.has(String(item.id))).slice(0, TL_PAGE_SIZE);
+  const missing = items.filter(item => item.detailable !== false && item.id != null && !_tlDetailsCache.has(String(item.id))).slice(0, TL_PAGE_SIZE);
   for (let i = 0; i < missing.length; i += TL_DETAILS_CONCURRENCY) {
     const batch = missing.slice(i, i + TL_DETAILS_CONCURRENCY);
     await Promise.all(batch.map(async item => {
       try {
-        _tlDetailsCache.set(String(item.id), await fetchActivityDetails(item.id));
+        _tlDetailsCache.set(String(item.id), await fetchActivityDetails(item.detail_id || item.id));
       } catch (err) {
         _tlDetailsCache.set(String(item.id), { error: true });
       }
@@ -6133,6 +6220,7 @@ function openProspectFromAnalytics(id) {
 }
 
 let _analyticsLoaded = false;
+let _emailAnalyticsWindow = 7;
 
 async function loadAnalytics() {
   if (_analyticsLoaded) return;
@@ -6184,7 +6272,7 @@ async function loadRexExecutiveSummary() {
 
 async function loadEmailAnalytics() {
   try {
-    const res = await fetch('/api/analytics/email', { credentials: 'include' });
+    const res = await fetch(`/api/analytics/email?days=${_emailAnalyticsWindow}`, { credentials: 'include' });
     if (!res.ok) return;
     const d = await res.json();
 
@@ -6192,25 +6280,102 @@ async function loadEmailAnalytics() {
     if (!strip) return;
 
     const tiles = [
-      { label: 'Sent Total',   val: (d.sent_total  || 0).toLocaleString(), sub: `${d.sent_week || 0} this week` },
-      { label: 'Open Rate',    val: `${d.open_rate  || 0}%`, sub: `${d.open_rate_week || 0}% this week` },
+      { label: d.denominator_label === 'sent' ? 'Sent Total' : 'Delivered Total', val: (d.sent_total  || 0).toLocaleString(), sub: `${d.sent_week || 0} last 7 days` },
+      { label: 'Open Rate',    val: `${d.open_rate  || 0}%`, sub: `${d.open_rate_week || 0}% last 7 days` },
       { label: 'Click Rate',   val: `${d.click_rate || 0}%`, sub: 'any link click' },
-      { label: 'Bounce Rate',  val: `${d.bounce_rate || 0}%`, sub: 'hard bounces' },
+      { label: 'Reply Rate',   val: `${d.reply_rate || 0}%`, sub: 'replied events' },
+      { label: 'Bounce Rate',  val: `${d.bounce_rate || 0}%`, sub: 'hard bounce or blocked', cls: Number(d.bounce_rate || 0) >= 4 ? 'danger' : Number(d.bounce_rate || 0) >= 2 ? 'warn' : '' },
       { label: 'Unsub Rate',   val: `${d.unsub_rate  || 0}%`, sub: 'unsubscribed' },
-      { label: 'Warm Upgraded', val: d.warm_upgraded_week || 0, sub: 'via email this week' },
+      { label: 'Warm Upgraded', val: d.warm_upgraded_week || 0, sub: 'via email last 7 days' },
     ];
 
     strip.innerHTML = tiles.map(t => `
-      <div class="email-perf-tile">
+      <div class="email-perf-tile ${_esc(t.cls || '')}">
         <div class="email-perf-label">${t.label}</div>
         <div class="email-perf-val">${t.val}</div>
         <div class="email-perf-sub">${t.sub}</div>
       </div>
     `).join('');
+
+    const note = document.getElementById('emailDenomNote');
+    if (note) {
+      note.textContent = d.denominator_label === 'sent'
+        ? `Window: last ${d.days || _emailAnalyticsWindow} days. Rates use sent events.`
+        : `Window: last ${d.days || _emailAnalyticsWindow} days. Rates use delivered fallback because sent events are sparse in backfill.`;
+    }
+
+    renderMetricTiles('pipelineHealthCards', [
+      { label: 'Total Prospects', val: d.pipeline_health?.total || 0, sub: 'all records' },
+      { label: 'Sendable', val: d.pipeline_health?.sendable || 0, sub: 'valid and not DNC' },
+      { label: 'Excluded', val: d.pipeline_health?.excluded || 0, sub: 'do not contact' },
+      { label: 'Unknown', val: d.pipeline_health?.unknown || 0, sub: 'needs verifier' },
+    ]);
+
+    renderMetricTiles('track1ReasonCards', (d.track1_reasons || []).map(row => ({
+      label: row.reason,
+      val: row.count,
+      sub: d.track1_window_days ? 'last 7 days' : 'all logged'
+    })), 'No Track 1 exclusions found.');
+
+    const statusOrder = ['valid', 'invalid', 'catchall', 'risky', 'unknown', 'unverified_legacy'];
+    const verifierMap = new Map((d.verifier_stats || []).map(row => [row.status, row.count]));
+    renderMetricTiles('track4StatusCards', statusOrder.map(status => ({
+      label: status.replace(/_/g, ' '),
+      val: verifierMap.get(status) || 0,
+      sub: 'email status'
+    })));
+
+    renderDomainCards('sendingDomainCards', d.domain_health || [], 'sending_domain', 'No sending domain data yet.');
+    renderDomainCards('verticalEmailCards', d.vertical_breakdown || [], 'vertical', 'No vertical email data yet.');
   } catch(e) {
     console.error('loadEmailAnalytics:', e);
   }
 }
+
+function renderMetricTiles(id, tiles, emptyText = 'No data yet') {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (!tiles.length) {
+    el.innerHTML = `<div class="no-data-note">${_esc(emptyText)}</div>`;
+    return;
+  }
+  el.innerHTML = tiles.map(t => `
+    <div class="email-perf-tile ${_esc(t.cls || '')}">
+      <div class="email-perf-label">${_esc(t.label || '')}</div>
+      <div class="email-perf-val">${Number(t.val || 0).toLocaleString()}</div>
+      <div class="email-perf-sub">${_esc(t.sub || '')}</div>
+    </div>
+  `).join('');
+}
+
+function renderDomainCards(id, rows, key, emptyText) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (!rows.length) {
+    el.innerHTML = `<div class="no-data-note">${_esc(emptyText)}</div>`;
+    return;
+  }
+  el.innerHTML = rows.map(row => {
+    const bounce = Number(row.bounce_pct || 0);
+    const cls = bounce >= 4 ? 'danger' : bounce >= 2 ? 'warn' : '';
+    const name = row[key] || 'unknown';
+    return `<div class="email-perf-tile ${cls}">
+      <div class="email-perf-label">${_esc(name)}</div>
+      <div class="email-perf-val">${bounce}%</div>
+      <div class="email-perf-sub">${Number(row.bounced || 0).toLocaleString()} bounces / ${Number(row.denominator || 0).toLocaleString()} ${_esc(row.denominator_label || 'sent')}</div>
+      <div class="email-perf-sub">Open ${row.open_rate || 0}% · Reply ${row.reply_rate || 0}% · Kill ${row.kill_switch_bounce_pct || 0}%</div>
+    </div>`;
+  }).join('');
+}
+
+document.querySelectorAll('[data-email-window]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    _emailAnalyticsWindow = Number(btn.dataset.emailWindow) || 7;
+    document.querySelectorAll('[data-email-window]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    loadEmailAnalytics();
+  });
+});
 
 // ── CONTENT ANALYTICS ────────────────────────────────────────────────────────
 
