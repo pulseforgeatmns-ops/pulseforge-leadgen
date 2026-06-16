@@ -25,6 +25,7 @@ const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { acquireScoutLockWithWait, releaseScoutLock, getActiveScoutLock } = require('./utils/scoutLock');
 const { awaitProspeoSlot } = require('./utils/prospeoThrottle');
 const { checkProspeoQuota, recordProspeoCall, trip429 } = require('./utils/prospeoBreaker');
+const { shouldExcludeProspect, extractEmailDomain } = require('./utils/prospectFilter');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -49,6 +50,23 @@ async function logScoutRun(status, payload, action = 'scrape') {
     `, ['scout', action, JSON.stringify(payload), safeStatus, CONFIG.clientId]);
   } catch (err) {
     console.error('[logScoutRun] failed to write:', err.message);
+  }
+}
+
+async function logExcludedProspect({ email, source, exclusion }) {
+  try {
+    await pool.query(`
+      INSERT INTO excluded_prospect_log (email, domain, source, exclusion_reason, exclusion_detail)
+      VALUES ($1, $2, $3, $4, $5::jsonb)
+    `, [
+      email || null,
+      extractEmailDomain(email),
+      source || 'scout',
+      exclusion.reason,
+      JSON.stringify(exclusion.detail || {}),
+    ]);
+  } catch (err) {
+    console.error('[Scout] excluded_prospect_log write failed:', err.message);
   }
 }
 
@@ -1500,6 +1518,27 @@ async function saveToDatabase(leads) {
       const emailVerificationMethod = emailResolution.emailVerificationMethod;
       const verifiedAt = emailResolution.verifiedAt;
       const doNotContact = emailResolution.doNotContact;
+
+      const exclusion = await shouldExcludeProspect({
+        email,
+        websiteUrl,
+        source: discoveryMethod,
+      });
+      if (exclusion.excluded) {
+        await logExcludedProspect({ email, source: discoveryMethod, exclusion });
+        await logScoutRun('skipped', {
+          company: companyName,
+          email,
+          domain: extractEmailDomain(email),
+          website_url: websiteUrl,
+          discovery_method: discoveryMethod,
+          exclusion_reason: exclusion.reason,
+          exclusion_detail: exclusion.detail || {},
+        }, 'prospect_excluded');
+        console.log(`[Scout] Excluded prospect ${email}: ${exclusion.reason}`);
+        skipped++;
+        continue;
+      }
 
       const nameParts = (lead.contact && lead.contact !== '—' ? lead.contact : '').trim().split(/\s+/).filter(Boolean);
 
