@@ -1202,6 +1202,7 @@ async function getProspectsForEmail(options = {}) {
     AND p.email NOT LIKE '%@domain.com'
     AND p.email NOT LIKE '%@example.com'
     AND p.do_not_contact IS NOT TRUE
+    AND p.email_status = 'valid'
     AND ($2::text IS NULL OR LOWER(COALESCE(p.vertical, '')) = LOWER($2::text))
     AND (
       cardinality($7::text[]) = 0
@@ -1584,15 +1585,28 @@ async function run(context = {}) {
     // Per-prospect DNC check (safety net in case status changed since query)
     const pool2 = require('./db');
     const dncCheck = await pool2.query(
-      'SELECT do_not_contact FROM prospects WHERE id = $1 AND client_id = $2', [prospect.id, CLIENT_ID]
+      'SELECT do_not_contact, email_status FROM prospects WHERE id = $1 AND client_id = $2', [prospect.id, CLIENT_ID]
     );
     if (dncCheck.rows[0]?.do_not_contact) {
-      console.log(`Skipping ${prospect.email} — do_not_contact`);
+      console.log(`Skipping ${prospect.email} because do_not_contact is true`);
+      continue;
+    }
+
+    if (dncCheck.rows[0]?.email_status !== 'valid') {
+      console.log(`Skipping ${prospect.email} because email_status is not valid`);
+      await db.logAgentAction(
+        AGENT_NAME,
+        'email_skipped',
+        prospect.id,
+        null,
+        { reason: 'email_status_not_valid', email_status: dncCheck.rows[0]?.email_status || null, prospect_id: prospect.id, client_id: prospect.client_id },
+        'success'
+      );
       continue;
     }
 
     if (prospect.verified_at != null && prospect.email_verified === false) {
-      console.log(`Skipping ${prospect.email} — email not verified`);
+      console.log(`Skipping ${prospect.email} because email is not verified`);
       await db.logAgentAction(
         AGENT_NAME,
         'email_skipped',

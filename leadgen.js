@@ -18,7 +18,7 @@ const pool = require('./db');
 const { appendQualifiedScoutLead } = require('./utils/setterSheet');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { recordScoutBaseline } = require('./utils/icpScoring');
-const { validateEmail } = require('./utils/emailValidation');
+const { verifyEmail } = require('./utils/emailVerifier');
 const { invalidOutreachEmailReason } = require('./utils/emailGuard');
 const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
 const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
@@ -1300,52 +1300,25 @@ function emailRejection(email) {
 }
 
 async function resolveEmailVerification(email, lead) {
-  const sources = Array.isArray(lead.source) ? lead.source : [];
-  const fromProspeo = sources.includes('prospeo');
-  const fromScraped = sources.includes('scraped');
-
-  if (fromProspeo) {
-    return {
-      emailVerified: true,
-      emailVerificationMethod: 'prospeo',
-      verifiedAt: new Date(),
-      doNotContact: false,
-      reject: false,
-    };
-  }
-
-  const validation = await validateEmail(email);
-  if (!validation.valid) {
-    return {
-      emailVerified: false,
-      emailVerificationMethod: validation.reason,
-      verifiedAt: null,
-      doNotContact: validation.reason === 'no_mx_record',
-      reject: validation.reason === 'no_mx_record',
-      rejectReason: validation.reason,
-    };
-  }
-
-  if (validation.isRole && fromScraped) {
-    return {
-      emailVerified: false,
-      emailVerificationMethod: 'mx_lookup_role',
-      verifiedAt: new Date(),
-      doNotContact: false,
-      reject: false,
-    };
-  }
+  const result = await verifyEmail(email);
+  const doNotContact = ['invalid', 'catchall', 'risky'].includes(result.status);
 
   return {
-    emailVerified: true,
-    emailVerificationMethod: 'mx_lookup',
+    emailVerified: result.valid,
+    emailVerificationMethod: 'bouncer',
     verifiedAt: new Date(),
-    doNotContact: false,
+    doNotContact,
+    emailStatus: result.status,
+    verifierResponse: result.raw,
+    verifierCheckedAt: new Date(),
+    note: doNotContact
+      ? `Email verifier marked ${result.status}${result.reason ? ` (${result.reason})` : ''}; outbound disabled.`
+      : null,
     reject: false,
   };
 }
 
-async function resolveScoutEmail(lead, companyName) {
+function resolveScoutEmailCandidate(lead) {
   const JUNK_EMAILS = ['user@domain.com', 'info@example.com', 'test@test.com', 'admin@domain.com'];
   const rawEmail = typeof lead.email === 'string' ? lead.email.trim() : '';
 
@@ -1358,6 +1331,17 @@ async function resolveScoutEmail(lead, companyName) {
     return { insertTarget: 'unenriched', reason: rejectReason, email: rawEmail };
   }
 
+  return {
+    insertTarget: 'prospect',
+    email: rawEmail,
+  };
+}
+
+async function resolveScoutEmail(lead, companyName) {
+  const candidate = resolveScoutEmailCandidate(lead);
+  if (candidate.insertTarget !== 'prospect') return candidate;
+
+  const rawEmail = candidate.email;
   const verification = await resolveEmailVerification(rawEmail, lead);
   if (verification.reject) {
     return {
@@ -1374,6 +1358,10 @@ async function resolveScoutEmail(lead, companyName) {
     emailVerificationMethod: verification.emailVerificationMethod,
     verifiedAt: verification.verifiedAt,
     doNotContact: verification.doNotContact,
+    emailStatus: verification.emailStatus,
+    verifierResponse: verification.verifierResponse,
+    verifierCheckedAt: verification.verifierCheckedAt,
+    note: verification.note,
   };
 }
 
@@ -1493,31 +1481,27 @@ async function saveToDatabase(leads) {
         : 'serpapi';
       const websiteUrl = lead.url || null;
 
-      const emailResolution = await resolveScoutEmail(lead, companyName);
-      if (emailResolution.insertTarget === 'unenriched') {
+      const emailCandidate = resolveScoutEmailCandidate(lead);
+      if (emailCandidate.insertTarget === 'unenriched') {
         await upsertScoutUnenriched({
           companyName,
           domain,
           websiteUrl,
           discoveryMethod,
-          reason: emailResolution.reason,
-          email: emailResolution.email,
+          reason: emailCandidate.reason,
+          email: emailCandidate.email,
         });
         await logScoutRun('skipped', {
           company: companyName,
           domain,
-          reason: emailResolution.reason,
+          reason: emailCandidate.reason,
           discovery_method: discoveryMethod,
         }, 'scout_skipped_no_email');
         unenriched++;
         continue;
       }
 
-      const email = emailResolution.email;
-      const emailVerified = emailResolution.emailVerified;
-      const emailVerificationMethod = emailResolution.emailVerificationMethod;
-      const verifiedAt = emailResolution.verifiedAt;
-      const doNotContact = emailResolution.doNotContact;
+      const email = emailCandidate.email;
 
       const exclusion = await shouldExcludeProspect({
         email,
@@ -1539,6 +1523,16 @@ async function saveToDatabase(leads) {
         skipped++;
         continue;
       }
+
+      const verification = await resolveEmailVerification(email, lead);
+      const emailVerified = verification.emailVerified;
+      const emailVerificationMethod = verification.emailVerificationMethod;
+      const verifiedAt = verification.verifiedAt;
+      const doNotContact = verification.doNotContact;
+      const emailStatus = verification.emailStatus;
+      const verifierResponse = verification.verifierResponse;
+      const verifierCheckedAt = verification.verifierCheckedAt;
+      const prospectNote = verification.note;
 
       const nameParts = (lead.contact && lead.contact !== '—' ? lead.contact : '').trim().split(/\s+/).filter(Boolean);
 
@@ -1574,10 +1568,11 @@ async function saveToDatabase(leads) {
         company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical,
         client_id, service_area_match, discovery_method, has_website, google_review_count, google_rating,
         has_facebook, has_instagram, facebook_url, instagram_url, website_url,
-        email_verified, email_verification_method, verified_at, do_not_contact, preferred_channel
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+        email_verified, email_verification_method, verified_at, do_not_contact, preferred_channel,
+        email_status, verifier_response, verifier_checked_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28::jsonb, $29)
       ON CONFLICT (email) DO NOTHING RETURNING id`,
-      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, null, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, websiteUrl, emailVerified, emailVerificationMethod, verifiedAt, doNotContact, preferredChannel]
+      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, prospectNote, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, websiteUrl, emailVerified, emailVerificationMethod, verifiedAt, doNotContact, preferredChannel, emailStatus, JSON.stringify(verifierResponse || null), verifierCheckedAt]
     );
       if (!insert.rows.length) {
         skipped++;
