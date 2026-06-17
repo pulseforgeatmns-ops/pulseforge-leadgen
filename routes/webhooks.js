@@ -27,6 +27,7 @@ const {
   parseAnchorReply,
   insertAnchor,
 } = require('../utils/miraAnchor');
+const { handleWarmTelegramCallback } = require('../warmRoutingAgent');
 
 const miraSchemaReady = ensureMiraSchema().catch(err => {
   console.error('[mira] schema error:', err.message);
@@ -210,6 +211,11 @@ async function handleMiraAnchorReply(message) {
 async function handleMiraCallback(callbackQuery) {
   const data = String(callbackQuery.data || '');
 
+  if (/^(working|today|tomorrow):[0-9a-f-]+$/i.test(data)) {
+    await handleWarmTelegramCallback(callbackQuery);
+    return;
+  }
+
   if (data.startsWith('mira_fix:')) {
     const captureId = Number(data.split(':')[1]);
     await answerMiraCallback(callbackQuery.id);
@@ -284,6 +290,16 @@ router.post('/telegram/mira', async (req, res) => {
 
     if (callbackQuery) {
       res.status(200).json({ ok: true });
+      const callbackData = String(callbackQuery.data || '');
+
+      if (/^(working|today|tomorrow):/.test(callbackData)) {
+        handleWarmTelegramCallback(callbackQuery).catch(err => {
+          console.error('[warm_routing] callback error:', err.response?.data?.description || err.message);
+          answerMiraCallback(callbackQuery.id, 'Could not process warm action.').catch(() => {});
+        });
+        return;
+      }
+
       handleMiraCallback(callbackQuery).catch(err => {
         console.error('[mira] callback error:', err.response?.data?.description || err.message);
         answerMiraCallback(callbackQuery.id, 'Could not fix this one.').catch(() => {});

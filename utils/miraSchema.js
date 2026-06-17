@@ -50,6 +50,28 @@ async function ensureMiraSchema() {
     CREATE INDEX IF NOT EXISTS idx_capture_inbox_received_at ON capture_inbox(received_at DESC)
   `);
 
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS capture_type TEXT`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS source TEXT`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS linked_entity_type TEXT`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS linked_entity_id TEXT`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS linked_capture_id BIGINT`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS captured_at TIMESTAMPTZ`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'capture_inbox_linked_capture_id_fkey'
+          AND conrelid = 'capture_inbox'::regclass
+      ) THEN
+        ALTER TABLE capture_inbox
+          ADD CONSTRAINT capture_inbox_linked_capture_id_fkey
+          FOREIGN KEY (linked_capture_id) REFERENCES capture_inbox(id);
+      END IF;
+    END $$;
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS client_notes (
       id             BIGSERIAL PRIMARY KEY,
@@ -150,6 +172,22 @@ async function ensureMiraSchema() {
       corrected_routed_to TEXT,
       note                TEXT,
       created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mira_warm_capture_log (
+      id BIGSERIAL PRIMARY KEY,
+      warm_trigger_fire_id BIGINT UNIQUE,
+      prospect_id UUID,
+      company TEXT,
+      trigger_reason TEXT,
+      icp_score INTEGER,
+      fired_at TIMESTAMPTZ,
+      resolved_action TEXT,
+      resolved_at TIMESTAMPTZ,
+      time_to_resolution_minutes INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
 }

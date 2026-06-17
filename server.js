@@ -41,6 +41,7 @@ const { ensureMiraSchema } = require('./utils/miraSchema');
 const { startMiraTranscriptionWorker } = require('./miraTranscriptionAgent');
 const { startMiraClassifierWorker } = require('./miraClassifierAgent');
 const { startMiraRouterWorker } = require('./miraRouterAgent');
+const { ensureWarmRoutingSchema, startWarmRoutingScheduler } = require('./warmRoutingAgent');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -56,9 +57,11 @@ ensureScoutUnenrichedTable().catch(err => console.error('[scoutUnenriched] init 
 ensureScoutLockTable().catch(err => console.error('[scoutLock] init error:', err.message));
 ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init error:', err.message));
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
+ensureWarmRoutingSchema().catch(err => console.error('[warmRouting] init error:', err.message));
 startMiraTranscriptionWorker();
 startMiraClassifierWorker();
 startMiraRouterWorker();
+startWarmRoutingScheduler();
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),
@@ -585,7 +588,7 @@ app.post('/api/post-comment', requireAuth, requireRole('admin', 'manager'), asyn
   }
 });
 
-app.get('/dashboard', requireAuth, requireRole('admin', 'manager', 'viewer', 'client'), (req, res) => {
+app.get(['/dashboard', '/dashboard/warm'], requireAuth, requireRole('admin', 'manager', 'viewer', 'client'), (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 

@@ -2479,7 +2479,8 @@ router.get('/api/mira/context', requireMiraContextSecret, async (req, res) => {
       safeRows(pool.query(`
         SELECT id,
                LEFT(COALESCE(NULLIF(transcript, ''), raw_text, ''), 150) AS content_preview,
-               classification, status, received_at
+               classification, status, received_at,
+               capture_type, source, linked_entity_type, linked_entity_id, linked_capture_id, captured_at
         FROM capture_inbox
         ORDER BY received_at DESC
         LIMIT 10

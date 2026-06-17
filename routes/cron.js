@@ -32,6 +32,7 @@ const CRON_MODULES = {
   mira_classifier: '../miraClassifierAgent',
   mira_router: '../miraRouterAgent',
   mira_digest: '../miraDigestAgent',
+  warm_routing: '../warmRoutingAgent',
 };
 
 function runCronAgent(agent, res, query = {}) {
