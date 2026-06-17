@@ -53,6 +53,16 @@ async function logScoutRun(status, payload, action = 'scrape') {
   }
 }
 
+async function recordEmailEnrichmentMethod(domain, method, details = {}) {
+  const normalizedMethod = method || 'none';
+  console.log(`[Enrichment] ${domain}: method=${normalizedMethod}`);
+  await logScoutRun(normalizedMethod === 'none' ? 'skipped' : 'success', {
+    domain,
+    method: normalizedMethod,
+    ...details,
+  }, 'email_enrichment_method');
+}
+
 async function logExcludedProspect({ email, source, exclusion }) {
   try {
     await pool.query(`
@@ -577,6 +587,10 @@ async function callProspeoSearchPerson(domain) {
 }
 
 async function enrichWithProspeo(domain) {
+  if (process.env.PROSPEO_ENABLED !== 'true') {
+    return null;
+  }
+
   if (!PROSPEO_API_KEY) {
     console.warn('[WARN] Prospeo key not set — skipping enrichment');
     return null;
@@ -966,8 +980,8 @@ async function main() {
   });
   console.log(`[Pre-enrichment blacklist] ${leads.length} leads after filtering (${beforePreEnrichment - leads.length} removed)`);
 
-  // 3. Enrich with Prospeo
-  console.log(`[Prospeo] Enriching ${leads.length} domains...`);
+  // 3. Enrich with email waterfall
+  console.log(`[Enrichment] Running email waterfall for ${leads.length} domains...`);
   for (let i = 0; i < leads.length; i++) {
     const stillActive = await getClientConfig(CONFIG.clientId);
     if (!stillActive) {
@@ -977,28 +991,36 @@ async function main() {
     const lead = leads[i];
     process.stdout.write(`  [${i+1}/${leads.length}] ${lead.url}...`);
     const rootDomain = lead.url.replace(/^(?:[^.]+\.)+?([^.]+\.[^.]+)$/, (_, d) => d) || lead.url;
+    let enrichmentMethod = 'none';
     let enriched = await enrichWithProspeo(rootDomain);
     if (enriched) {
       Object.assign(lead, enriched);
       lead.source = [...(lead.source || []), 'prospeo'];
+      enrichmentMethod = 'prospeo';
       process.stdout.write(` ✓ ${enriched.email || 'no email'}\n`);
     } else {
       enriched = await enrichWithHunter(rootDomain);
       if (enriched) {
         Object.assign(lead, enriched);
         lead.source = [...(lead.source || []), 'hunter'];
+        enrichmentMethod = 'hunter';
         process.stdout.write(` ✓ [Hunter] ${enriched.email || 'no email'}\n`);
       } else {
         const scraped = await scrapeWebsiteEmail(rootDomain);
         if (scraped) {
           Object.assign(lead, scraped);
           lead.source = [...(lead.source || []), 'scraped'];
+          enrichmentMethod = 'scraped';
           process.stdout.write(` ✓ [Scraped] ${scraped.email}\n`);
         } else {
           process.stdout.write(' —\n');
         }
       }
     }
+    await recordEmailEnrichmentMethod(rootDomain, enrichmentMethod, {
+      source: lead.source || [],
+      has_email: Boolean(lead.email),
+    });
     // Rate limit: 2 req/sec
     await new Promise(r => setTimeout(r, 1500));
   }
@@ -1305,7 +1327,7 @@ async function resolveEmailVerification(email, lead) {
 
   return {
     emailVerified: result.valid,
-    emailVerificationMethod: 'bouncer',
+    emailVerificationMethod: result.method || result.vendor || 'mx_lookup',
     verifiedAt: new Date(),
     doNotContact,
     emailStatus: result.status,
@@ -2063,18 +2085,22 @@ async function runEnrichmentChain(domain, jobTitle = 'owner') {
     let enriched = await enrichWithProspeo(domain);
     if (enriched) {
       enriched.source = ['prospeo'];
+      await recordEmailEnrichmentMethod(domain, 'prospeo', { source: enriched.source, has_email: Boolean(enriched.email) });
       return enriched;
     }
     enriched = await enrichWithHunter(domain);
     if (enriched) {
       enriched.source = ['hunter'];
+      await recordEmailEnrichmentMethod(domain, 'hunter', { source: enriched.source, has_email: Boolean(enriched.email) });
       return enriched;
     }
     enriched = await scrapeWebsiteEmail(domain);
     if (enriched) {
       enriched.source = ['scraped'];
+      await recordEmailEnrichmentMethod(domain, 'scraped', { source: enriched.source, has_email: Boolean(enriched.email) });
       return enriched;
     }
+    await recordEmailEnrichmentMethod(domain, 'none');
     return null;
   } finally {
     CONFIG.jobTitle = savedTitle;

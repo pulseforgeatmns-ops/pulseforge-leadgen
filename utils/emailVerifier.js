@@ -1,4 +1,5 @@
 const pool = require('../db');
+const { validateEmail } = require('./emailValidation');
 
 const BOUNCER_VERIFY_URL = 'https://api.usebouncer.com/v1.1/email/verify';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -43,13 +44,16 @@ function mapBouncerResponse(raw) {
 }
 
 async function logVerifierCall({ email, raw, durationMs }) {
-  if (logOverride) return logOverride({ email, raw, durationMs });
+  const method = raw?.method || raw?.vendor || 'unknown';
+  console.log(`[EmailVerifier] method=${method} email=${email} duration_ms=${durationMs}`);
+
+  if (logOverride) return logOverride({ email, raw, durationMs, method });
 
   try {
     await pool.query(`
-      INSERT INTO verifier_call_log (vendor, email, response, duration_ms)
+      INSERT INTO verifier_call_log (vendor, email, response_payload, duration_ms)
       VALUES ($1, $2, $3::jsonb, $4)
-    `, ['bouncer', email, JSON.stringify(raw || null), durationMs]);
+    `, [method, email, JSON.stringify(raw || null), durationMs]);
   } catch (err) {
     console.error(`[EmailVerifier] verifier_call_log insert failed: ${err.message}`);
   }
@@ -69,23 +73,81 @@ function setCached(email, result) {
   cache.set(email, { cachedAt: Date.now(), result });
 }
 
+function isProspeoVerificationEnabled() {
+  return process.env.PROSPEO_ENABLED === 'true';
+}
+
+function mapMxResponse(validation) {
+  const method = validation.isRole ? 'mx_lookup_role' : 'mx_lookup';
+  const status = validation.valid ? (validation.isRole ? 'role' : 'valid') : 'invalid';
+  const reason = validation.valid ? validation.reason : validation.reason || 'mx_lookup_failed';
+
+  return {
+    status,
+    valid: validation.valid && !validation.isRole,
+    reason,
+    raw: {
+      status,
+      reason,
+      method,
+      is_role: validation.isRole,
+    },
+    vendor: method,
+    method,
+  };
+}
+
+async function verifyWithMx(normalizedEmail, startedAt) {
+  const validation = await validateEmail(normalizedEmail);
+  const result = mapMxResponse(validation);
+  await logVerifierCall({
+    email: normalizedEmail,
+    raw: result.raw,
+    durationMs: Date.now() - startedAt,
+  });
+  return result;
+}
+
 async function verifyEmail(email) {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail || !normalizedEmail.includes('@')) {
-    return { status: 'invalid', valid: false, reason: 'invalid_format', raw: null, vendor: 'bouncer' };
+    const result = {
+      status: 'invalid',
+      valid: false,
+      reason: 'invalid_format',
+      raw: { status: 'invalid', reason: 'invalid_format', method: 'mx_lookup' },
+      vendor: 'mx_lookup',
+      method: 'mx_lookup',
+    };
+    await logVerifierCall({ email: normalizedEmail || String(email || ''), raw: result.raw, durationMs: 0 });
+    return result;
   }
 
   const cached = getCached(normalizedEmail);
-  if (cached) return cached;
+  if (cached) {
+    await logVerifierCall({
+      email: normalizedEmail,
+      raw: { ...(cached.raw || {}), cached: true },
+      durationMs: 0,
+    });
+    return cached;
+  }
 
-  const apiKey = process.env.BOUNCER_API_KEY;
-  if (!apiKey) {
-    const result = { status: 'unknown', valid: false, reason: 'verifier_not_configured', raw: null, vendor: 'bouncer' };
+  const startedAt = Date.now();
+
+  if (!isProspeoVerificationEnabled()) {
+    const result = await verifyWithMx(normalizedEmail, startedAt);
     setCached(normalizedEmail, result);
     return result;
   }
 
-  const startedAt = Date.now();
+  const apiKey = process.env.BOUNCER_API_KEY;
+  if (!apiKey) {
+    const result = await verifyWithMx(normalizedEmail, startedAt);
+    setCached(normalizedEmail, result);
+    return result;
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   let raw = null;
@@ -123,13 +185,18 @@ async function verifyEmail(email) {
       ? mapBouncerResponse(raw)
       : { status: 'unknown', valid: false, reason: raw.reason || 'http_error', raw, vendor: 'bouncer' };
 
-    await logVerifierCall({ email: normalizedEmail, raw, durationMs: Date.now() - startedAt });
+    result.method = result.vendor;
+    await logVerifierCall({
+      email: normalizedEmail,
+      raw: { ...raw, method: result.method },
+      durationMs: Date.now() - startedAt,
+    });
     setCached(normalizedEmail, result);
     return result;
   } catch (err) {
     const reason = err?.name === 'AbortError' ? 'verifier_timeout' : 'verifier_timeout';
-    raw = { status: 'unknown', reason, error: err?.message || reason };
-    const result = { status: 'unknown', valid: false, reason, raw, vendor: 'bouncer' };
+    raw = { status: 'unknown', reason, error: err?.message || reason, method: 'bouncer' };
+    const result = { status: 'unknown', valid: false, reason, raw, vendor: 'bouncer', method: 'bouncer' };
     await logVerifierCall({ email: normalizedEmail, raw, durationMs: Date.now() - startedAt });
     setCached(normalizedEmail, result);
     return result;

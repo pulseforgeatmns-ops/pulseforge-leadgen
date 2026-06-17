@@ -36,6 +36,7 @@ const cases = [
 
 async function run() {
   process.env.BOUNCER_API_KEY = process.env.BOUNCER_API_KEY || 'smoke-test-key';
+  process.env.PROSPEO_ENABLED = 'true';
   const logged = [];
 
   _test.setTestHooks({

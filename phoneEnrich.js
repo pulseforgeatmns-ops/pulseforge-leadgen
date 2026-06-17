@@ -18,6 +18,7 @@ function envStatus() {
       length: process.env.APOLLO_API_KEY ? process.env.APOLLO_API_KEY.length : 0,
     },
     PROSPEO_API_KEY: Boolean(process.env.PROSPEO_API_KEY),
+    PROSPEO_ENABLED: process.env.PROSPEO_ENABLED === 'true',
   };
 }
 
@@ -168,6 +169,7 @@ async function apolloAttempt(lead, options) {
 async function prospeoAttempt(lead, options) {
   const verbose = Boolean(options.verbose);
   const key = process.env.PROSPEO_API_KEY;
+  if (process.env.PROSPEO_ENABLED !== 'true') return { source: 'prospeo', phone: null, skipped: 'prospeo_disabled' };
   if (!key) return { source: 'prospeo', phone: null, skipped: 'missing_prospeo_key' };
 
   const domain = normalizeDomain(leadWebsite(lead));
