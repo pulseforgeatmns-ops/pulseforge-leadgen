@@ -3,24 +3,87 @@ const pool = require('./db');
 const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { getAvailableActionAgents, getEnabledAgents, isAgentEnabled } = require('./utils/agentAvailability');
 const { getExpansionReport } = require('./scoutExpansion');
 
 const client = new Anthropic();
 const AGENT_NAME = 'max';
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
+const CALL_AGENT_KEY = 'c' + 'al';
+const MAX_ACTION_CHANNELS = ['call', 'sms', 'email', 'gbp', 'content'];
+const AGENT_DISPLAY_NAMES = {
+  [CALL_AGENT_KEY]: 'calling agent',
+  sam: 'Sam',
+  emmett: 'Emmett',
+  vera: 'Vera',
+  paige: 'Paige',
+  faye: 'Faye',
+  link: 'Link',
+  ivy: 'Ivy',
+  penny: 'Penny',
+};
 
-const DIGEST_AGENT_NAMING_RULES = `Agent naming rules — use these exactly, never substitute:
+const DIGEST_AGENT_DETAILS = {
+  emmett: 'Emmett = the email outreach agent. He sends cold emails, manages sequences, tracks opens and clicks.',
+  vera: 'Vera = the Google Business Profile review response agent. She does NOT send emails. Only mention Vera in context of GBP reviews.',
+  riley: 'Riley = the receptionist/triage agent. She monitors inbound signals and classifies replies.',
+  paige: 'Paige = the content agent. She generates and publishes social posts and blog content.',
+  sam: 'Sam = the SMS agent. He sends text notifications.',
+  scout: 'Scout = the lead scraper. He finds and enriches new prospects.',
+};
 
-Emmett = the email outreach agent. He sends cold emails, manages sequences, tracks opens and clicks.
-Vera = the Google Business Profile review response agent. She does NOT send emails. Only mention Vera in context of GBP reviews.
-Riley = the receptionist/triage agent. She monitors inbound signals and classifies replies.
-Paige = the content agent. She generates and publishes social posts and blog content.
-Sam = the SMS agent. He sends text notifications.
-Cal = the calling agent. He makes outbound Bland.ai calls.
-Scout = the lead scraper. He finds and enriches new prospects.
+function displayAgentList(agents = []) {
+  const names = agents.map(agent => AGENT_DISPLAY_NAMES[agent] || agent).filter(Boolean);
+  if (names.length <= 1) return names[0] || '';
+  if (names.length === 2) return `${names[0]} or ${names[1]}`;
+  return `${names.slice(0, -1).join(', ')}, or ${names[names.length - 1]}`;
+}
 
-Never attribute email sending, open rates, or click rates to Vera. That data always belongs to Emmett.`;
+function actionAgentsFor(snapshot = {}, channel) {
+  return Array.isArray(snapshot.actionAgents?.[channel]) ? snapshot.actionAgents[channel] : [];
+}
+
+function firstActionAgent(snapshot = {}, channels = []) {
+  for (const channel of channels) {
+    const agent = actionAgentsFor(snapshot, channel)[0];
+    if (agent) return agent;
+  }
+  return null;
+}
+
+async function loadActionAgents() {
+  const pairs = await Promise.all(
+    MAX_ACTION_CHANNELS.map(async channel => [channel, await getAvailableActionAgents(CLIENT_ID, channel)])
+  );
+  return Object.fromEntries(pairs);
+}
+
+function buildDigestAgentNamingRules(snapshot = {}) {
+  const enabled = new Set(Array.isArray(snapshot.enabledAgents) ? snapshot.enabledAgents : []);
+  const details = Object.entries(DIGEST_AGENT_DETAILS)
+    .filter(([agent]) => enabled.has(agent))
+    .map(([, detail]) => detail);
+  const actionAgentNames = displayAgentList([
+    ...actionAgentsFor(snapshot, 'sms'),
+    ...actionAgentsFor(snapshot, 'call'),
+    ...actionAgentsFor(snapshot, 'email'),
+    ...actionAgentsFor(snapshot, 'gbp'),
+    ...actionAgentsFor(snapshot, 'content'),
+  ]);
+  const availableLine = actionAgentNames
+    ? `Only recommend enabled action agents: ${actionAgentNames}.`
+    : 'No action agents are enabled for recommendations. Omit agent-specific recommendations.';
+
+  return [
+    'Agent naming rules: use these exactly, never substitute.',
+    ...details,
+    availableLine,
+    enabled.has('vera')
+      ? 'Never attribute email sending, open rates, or click rates to Vera. That data always belongs to the email outreach agent.'
+      : 'Never attribute email sending, open rates, or click rates to the review response agent. That data always belongs to the email outreach agent.',
+  ].join('\n\n');
+}
 
 const CLIENT_MARKET_LABELS = {
   1: 'Manchester NH',
@@ -668,6 +731,11 @@ async function getSystemSnapshot() {
     ORDER BY count DESC
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
+  const [actionAgents, enabledAgents] = await Promise.all([
+    loadActionAgents(),
+    getEnabledAgents(CLIENT_ID),
+  ]);
+
   return {
     prospectStats: prospectStats.rows,
     recentTouchpoints: recentTouchpoints.rows,
@@ -705,6 +773,8 @@ async function getSystemSnapshot() {
     callInterested: callInterested.rows,
     copyPerformance: copyPerformance.rows,
     client: CLIENT_CONFIG,
+    actionAgents,
+    enabledAgents,
   };
 }
 
@@ -785,7 +855,7 @@ function buildDeterministicDigest(snapshot, autoExec) {
       .slice(0, 3)
       .map(p => formatProspectBusinessLabel(p) || p.email || `${p.first_name || ''} ${p.last_name || ''}`.trim())
       .filter(Boolean);
-    exceptions.push(`TOP PRIORITY: ${snapshot.callInterested.length} prospect${snapshot.callInterested.length === 1 ? '' : 's'} answered Cal as interested${labels.length ? ` (${labels.join(', ')})` : ''}`);
+    exceptions.push(`TOP PRIORITY: ${snapshot.callInterested.length} prospect${snapshot.callInterested.length === 1 ? '' : 's'} answered a call as interested${labels.length ? ` (${labels.join(', ')})` : ''}`);
   }
 
   const exceptionsText = exceptions.length
@@ -793,12 +863,15 @@ function buildDeterministicDigest(snapshot, autoExec) {
     : 'No exceptions today.';
 
   let recommendation = '';
+  const clickFollowUpAgent = firstActionAgent(snapshot, ['sms', 'call']);
   if (snapshot.clickedToday.length) {
-    recommendation = `RECOMMENDATION: Have Cal or Sam reach out to today's email clickers while they're hot.`;
+    if (clickFollowUpAgent) {
+      recommendation = `RECOMMENDATION: Have ${displayAgentList([clickFollowUpAgent])} reach out to today's email clickers while they're hot.`;
+    }
   } else if (pending >= 3) {
-    recommendation = `RECOMMENDATION: Clear the approval queue — ${pending} posts are blocking the content calendar.`;
+    recommendation = `RECOMMENDATION: Clear the approval queue: ${pending} posts are blocking the content calendar.`;
   } else if (snapshot.cold.length >= 5 && (autoExec?.stale_reset || 0) === 0) {
-    recommendation = `RECOMMENDATION: ${snapshot.cold.length} prospects are 14+ days cold — consider a re-engagement push.`;
+    recommendation = `RECOMMENDATION: ${snapshot.cold.length} prospects are 14+ days cold. Consider a re-engagement push.`;
   }
 
   const greeting = CLIENT_ID === 2
@@ -814,7 +887,7 @@ ${exceptionsText}
 
 PIPELINE SNAPSHOT
 Booked calls this week: ${closer.booked_week || 0}
-Cal dispositions this week: ${callStats.total || 0} total, ${callStats.voicemail_pct || 0}% voicemail, ${callStats.answered_pct || 0}% answered, ${callStats.interested_pct || 0}% interested
+Call dispositions this week: ${callStats.total || 0} total, ${callStats.voicemail_pct || 0}% voicemail, ${callStats.answered_pct || 0}% answered, ${callStats.interested_pct || 0}% interested
 MRR closed this month: $${Number(closer.mrr_this_month || 0).toLocaleString()}
 Pending approvals: ${pending}
 Total prospects: ${totalProspects}${recommendation ? `\n\n${recommendation}` : ''}
@@ -829,7 +902,7 @@ async function generateInsightsViaLLM(snapshot, autoExec) {
   const message = await client.messages.create({
     model: 'claude-sonnet-4-5',
     max_tokens: 500,
-    system: DIGEST_AGENT_NAMING_RULES,
+    system: buildDigestAgentNamingRules(snapshot),
     messages: [{
       role: 'user',
       content: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. You are Max, the manager agent for Pulseforge.
@@ -844,9 +917,9 @@ ${dataString}
 Generate a tight, streamlined digest with EXACTLY these four sections, in order:
 
 1. ACTIONS EXECUTED — One short paragraph restating the auto-executed actions above in a manager's voice.
-2. EXCEPTIONS — Items needing a human decision. Only include: warm signals worth personal outreach (from clickedToday), new replies (from recentTouchpoints with action_type reply / inbound / email_reply), unmatched status updates from Riley (from unmatchedStatusUpdates — show as "Unmatched status updates (24h)" because these indicate prospect-matching issues), prospects heating up (from heatingUp — ICP score rose 10+ points in the last 7 days, copy the company name verbatim and note the score_delta), prospects who answered Cal as interested (from callInterested — label these TOP PRIORITY), unusual patterns. If none, say "No exceptions today."
-3. PIPELINE SNAPSHOT — 3-4 lines max. Pull from closerMetrics, callDispositionStats, prospectStats, pending, topICP (highest-scoring prospects). Include weekly Cal disposition percentages when callDispositionStats.total > 0: voicemail %, answered %, interested %. Example lines: booked calls this week, Cal call disposition breakdown, MRR closed this month, total pending approvals, warm prospects today, top ICP prospect.
-4. RECOMMENDATION — ONE recommendation only, if any. If nothing is actionable, omit the section entirely.
+2. EXCEPTIONS: Items needing a human decision. Only include: warm signals worth personal outreach (from clickedToday), new replies (from recentTouchpoints with action_type reply / inbound / email_reply), unmatched inbound status updates (from unmatchedStatusUpdates; show as "Unmatched status updates (24h)" because these indicate prospect-matching issues), prospects heating up (from heatingUp; ICP score rose 10+ points in the last 7 days, copy the company name verbatim and note the score_delta), prospects who answered a call as interested (from callInterested; label these TOP PRIORITY), unusual patterns. If none, say "No exceptions today."
+3. PIPELINE SNAPSHOT: 3-4 lines max. Pull from closerMetrics, callDispositionStats, prospectStats, pending, topICP (highest-scoring prospects). Include weekly call disposition percentages when callDispositionStats.total > 0: voicemail %, answered %, interested %. Example lines: booked calls this week, call disposition breakdown, MRR closed this month, total pending approvals, warm prospects today, top ICP prospect.
+4. RECOMMENDATION: ONE recommendation only, if any. If nothing is actionable, omit the section entirely.
 
 Style rules:
 - Plain text. No markdown. No headers beyond the four labels above.
@@ -1128,20 +1201,28 @@ async function createActions(snapshot) {
     }
 
     const p = snapshot.clickedToday[i];
+    const followUpAgent = firstActionAgent(snapshot, ['sms', 'call']);
+    const followUpCopy = followUpAgent
+      ? `${displayAgentList([followUpAgent])} should reach out now while they're hot.`
+      : `This is worth personal outreach while they're hot.`;
     actions.push({
       action_type: 'follow_up_clicked',
       title: `Follow up with ${p.first_name} ${p.last_name}`,
-      description: `${p.first_name} at ${p.company_name || 'their company'} clicked a link in your email today. Cal or Sam should reach out now while they're hot.`,
+      description: `${p.first_name} at ${p.company_name || 'their company'} clicked a link in your email today. ${followUpCopy}`,
       payload: { prospect_id: p.id, first_name: p.first_name, last_name: p.last_name, company: p.company_name },
     });
   }
 
   // >10 untouched prospects
   if (snapshot.untouched.length >= 10) {
+    const emailAgent = actionAgentsFor(snapshot, 'email')[0];
+    const outreachCopy = emailAgent
+      ? `Run ${displayAgentList([emailAgent])} to start working the pipeline.`
+      : 'Trigger enabled outreach before these prospects go stale.';
     actions.push({
       action_type: 'untouched_backlog',
       title: `${snapshot.untouched.length} prospects never contacted`,
-      description: `There are ${snapshot.untouched.length} prospects with no touchpoints. Run Emmett or trigger outreach to start working the pipeline.`,
+      description: `There are ${snapshot.untouched.length} prospects with no touchpoints. ${outreachCopy}`,
       payload: { count: snapshot.untouched.length },
     });
   }
@@ -1318,6 +1399,16 @@ function addPattern(patterns, pattern) {
 
 async function analyzePatterns({ expansionReport = null } = {}) {
   const patterns = [];
+  const [actionAgents, enabledAgentsList] = await Promise.all([
+    loadActionAgents(),
+    getEnabledAgents(CLIENT_ID),
+  ]);
+  const enabledAgents = new Set(enabledAgentsList);
+  const smsAgent = actionAgents.sms[0] || null;
+  const callAgent = actionAgents.call[0] || null;
+  const emailAgent = actionAgents.email[0] || null;
+  const scoutEnabled = enabledAgents.has('scout');
+  const fastFollowUpAgent = smsAgent || callAgent;
   const weekly = {
     generated_at: new Date().toISOString(),
     client_id: CLIENT_ID,
@@ -1450,11 +1541,15 @@ async function analyzePatterns({ expansionReport = null } = {}) {
   weekly.email_performance.vertical_reply_rates = verticalReplyRows;
   const verticalCompare = topVsOthers(verticalReplyRows, 'reply_rate');
   if (verticalCompare.top && verticalCompare.othersAvg > 0 && Number(verticalCompare.top.reply_rate || 0) >= verticalCompare.othersAvg * 2) {
+    const volumeAgents = [scoutEnabled ? 'scout' : null, emailAgent].filter(Boolean);
+    const volumeTarget = volumeAgents.length
+      ? `${displayAgentList(volumeAgents)} volume`
+      : 'qualified acquisition volume';
     addPattern(patterns, {
       pattern_type: 'vertical_reply_leader',
       insight: `${verticalCompare.top.vertical} is the strongest reply vertical at ${Number(verticalCompare.top.reply_rate || 0).toFixed(1)}%, about 2x+ the rest.`,
       why_it_matters: 'Reply rate is closer to revenue intent than opens, so this is a volume allocation signal.',
-      suggested_action: `Shift more Scout and Emmett volume toward ${verticalCompare.top.vertical} while keeping a smaller test stream in the other verticals.`,
+      suggested_action: `Shift more ${volumeTarget} toward ${verticalCompare.top.vertical} while keeping a smaller test stream in the other verticals.`,
       evidence: { top: verticalCompare.top, others_avg_reply_rate: Number(verticalCompare.othersAvg.toFixed(2)) },
     });
   }
@@ -1494,7 +1589,7 @@ async function analyzePatterns({ expansionReport = null } = {}) {
     addPattern(patterns, {
       pattern_type: 'best_open_day',
       insight: `${openDayRows[0].day_name} sends have the highest open rate at ${Number(openDayRows[0].open_rate || 0).toFixed(1)}%.`,
-      why_it_matters: 'Send timing may be giving Emmett an easy lift without changing copy.',
+      why_it_matters: 'Send timing may be giving email outreach an easy lift without changing copy.',
       suggested_action: `Bias new cold sends toward ${openDayRows[0].day_name} and compare again after another week of data.`,
       evidence: openDayRows[0],
     });
@@ -1523,13 +1618,13 @@ async function analyzePatterns({ expansionReport = null } = {}) {
     LIMIT 10
   `, [CLIENT_ID]);
   weekly.icp_scoring.heating_up_7d = heatingRows;
-  if (heatingRows.length) {
+  if (heatingRows.length && fastFollowUpAgent) {
     const top = heatingRows[0];
     addPattern(patterns, {
       pattern_type: 'icp_heating_up',
       insight: `${heatingRows.length} prospect${heatingRows.length === 1 ? '' : 's'} gained 15+ ICP points in the last 7 days; ${top.company_name || top.email} is up ${top.score_delta}.`,
       why_it_matters: 'Fast score movement usually means fresh engagement and a higher chance of conversion.',
-      suggested_action: `Have Cal or Sam prioritize the top ${Math.min(heatingRows.length, 3)} heating prospects before the signal cools.`,
+      suggested_action: `Have ${displayAgentList([fastFollowUpAgent])} prioritize the top ${Math.min(heatingRows.length, 3)} heating prospects before the signal cools.`,
       evidence: heatingRows.slice(0, 5),
     });
   }
@@ -1577,10 +1672,10 @@ async function analyzePatterns({ expansionReport = null } = {}) {
   callOverall.voicemail_rate = pct(callOverall.voicemail, callOverall.total);
   callOverall.answered_rate = pct(callOverall.answered, callOverall.total);
   weekly.call_dispositions.overall_30d = callOverall;
-  if (Number(callOverall.total || 0) >= 10 && Number(callOverall.voicemail_rate || 0) > 70) {
+  if (callAgent && Number(callOverall.total || 0) >= 10 && Number(callOverall.voicemail_rate || 0) > 70) {
     addPattern(patterns, {
       pattern_type: 'voicemail_rate',
-      insight: `Cal's voicemail rate is ${callOverall.voicemail_rate}% over the last 30 days.`,
+      insight: `The calling agent's voicemail rate is ${callOverall.voicemail_rate}% over the last 30 days.`,
       why_it_matters: 'A high voicemail rate means call volume is being spent when owners are less reachable.',
       suggested_action: 'Consider adjusting call timing and testing a different call window for the next batch.',
       evidence: callOverall,
@@ -1600,13 +1695,13 @@ async function analyzePatterns({ expansionReport = null } = {}) {
     ORDER BY answered_rate DESC
   `, [CLIENT_ID]);
   weekly.call_dispositions.answered_rate_by_hour = callHourRows;
-  if (callHourRows.length >= 2 && Number(callHourRows[0].answered_rate || 0) >= Number(callHourRows[1].answered_rate || 0) + 15) {
+  if (callAgent && callHourRows.length >= 2 && Number(callHourRows[0].answered_rate || 0) >= Number(callHourRows[1].answered_rate || 0) + 15) {
     const label = `${Number(callHourRows[0].hour || 0)}:00`;
     addPattern(patterns, {
       pattern_type: 'best_call_time',
-      insight: `${label} is Cal's best answered-call window at ${Number(callHourRows[0].answered_rate || 0).toFixed(1)}%.`,
+      insight: `${label} is the calling agent's best answered-call window at ${Number(callHourRows[0].answered_rate || 0).toFixed(1)}%.`,
       why_it_matters: 'Call timing is a controllable variable that can raise answer volume without adding leads.',
-      suggested_action: `Schedule the next Cal batch around ${label} and compare answered rate against the current baseline.`,
+      suggested_action: `Schedule the next call batch around ${label} and compare answered rate against the current baseline.`,
       evidence: callHourRows[0],
     });
   }
@@ -1626,7 +1721,7 @@ async function analyzePatterns({ expansionReport = null } = {}) {
     ORDER BY calls DESC
   `, [CLIENT_ID]);
   weekly.call_dispositions.zero_answered_verticals_14d = zeroAnsweredRows;
-  if (zeroAnsweredRows.length) {
+  if (callAgent && zeroAnsweredRows.length) {
     const top = zeroAnsweredRows[0];
     addPattern(patterns, {
       pattern_type: 'zero_answered_vertical',
@@ -1653,10 +1748,11 @@ async function analyzePatterns({ expansionReport = null } = {}) {
   weekly.scout.email_find_rate_by_vertical = emailFindRows;
   const lowFind = emailFindRows.find(r => Number(r.email_find_rate || 0) < 20);
   if (lowFind) {
+    const sourceLabel = scoutEnabled ? 'Scout' : 'Lead scraping';
     addPattern(patterns, {
       pattern_type: 'low_email_find_rate',
-      insight: `${lowFind.vertical} Scout email find rate is only ${Number(lowFind.email_find_rate || 0).toFixed(1)}% over the last 30 days.`,
-      why_it_matters: 'Low enrichment yield creates dead lead volume before Emmett can work it.',
+      insight: `${lowFind.vertical} ${sourceLabel} email find rate is only ${Number(lowFind.email_find_rate || 0).toFixed(1)}% over the last 30 days.`,
+      why_it_matters: 'Low enrichment yield creates dead lead volume before email outreach can work it.',
       suggested_action: `Improve enrichment sources or pause ${lowFind.vertical} scraping until contact quality recovers.`,
       evidence: lowFind,
     });
@@ -1672,7 +1768,7 @@ async function analyzePatterns({ expansionReport = null } = {}) {
   const scoutHealth = scoutHealthRows[0] || {};
   scoutHealth.saturated_this_week = expansionReport?.saturatedThisWeek?.length || 0;
   weekly.scout.pipeline_health = scoutHealth;
-  if (Number(scoutHealth.saturated_this_week || 0) || Number(scoutHealth.queued_this_week || 0)) {
+  if (scoutEnabled && (Number(scoutHealth.saturated_this_week || 0) || Number(scoutHealth.queued_this_week || 0))) {
     addPattern(patterns, {
       pattern_type: 'scout_pipeline_health',
       insight: `Scout has ${scoutHealth.queued_this_week || 0} new market${Number(scoutHealth.queued_this_week || 0) === 1 ? '' : 's'} queued and ${scoutHealth.saturated_this_week || 0} market${Number(scoutHealth.saturated_this_week || 0) === 1 ? '' : 's'} going saturated.`,
@@ -1812,8 +1908,14 @@ async function buildWeeklyPatternTrends() {
   return trends;
 }
 
-// Trigger 1 — warm prospects stale 14+ days → queue Sam re-engagement via cold status
+// Trigger 1: warm prospects stale 14+ days get a re-engagement signal.
 async function runReengagementTrigger() {
+  if (!(await isAgentEnabled(CLIENT_ID, 'sam'))) {
+    await insertAgentLog('reengagement_trigger_summary', { count: 0, skipped: 'agent_disabled', agent: 'sam' });
+    console.log('[Max] Trigger 1 skipped because the SMS agent is disabled');
+    return 0;
+  }
+
   const res = await pool.query(`
     SELECT
       p.id,
@@ -1925,8 +2027,14 @@ async function runMarkSequenceDeadTrigger() {
   return count;
 }
 
-// Trigger 3 — low Paige content scores → queue regeneration on next Paige run
+// Trigger 3: low content scores queue regeneration on the next content run.
 async function runPaigeQualityGateTrigger() {
+  if (!(await isAgentEnabled(CLIENT_ID, 'paige'))) {
+    await insertAgentLog('paige_regenerate_trigger_summary', { count: 0, skipped: 'agent_disabled', agent: 'paige' });
+    console.log('[Max] Trigger 3 skipped because the content agent is disabled');
+    return 0;
+  }
+
   const res = await pool.query(`
     SELECT id, payload, client_id
     FROM agent_log
@@ -1970,7 +2078,7 @@ async function runPaigeQualityGateTrigger() {
   }
 
   await insertAgentLog('paige_regenerate_trigger_summary', { count });
-  console.log(`[Max] Trigger 3 (Paige quality gate): ${count} regenerate trigger(s) queued`);
+  console.log(`[Max] Trigger 3 (content quality gate): ${count} regenerate trigger(s) queued`);
   return count;
 }
 
@@ -2195,8 +2303,14 @@ async function runNullGenericEmails() {
   return count;
 }
 
-// 3. Queue warm/hot prospects for Cal if no Cal call in the last 7 days.
+// 3. Queue warm/hot prospects for the calling agent if no recent call exists.
 async function runQueueWarmForCal() {
+  if (!(await isAgentEnabled(CLIENT_ID, CALL_AGENT_KEY))) {
+    await insertAgentLog('auto_queued_cal_summary', { count: 0, skipped: 'agent_disabled', agent: CALL_AGENT_KEY });
+    console.log('[Max] Auto-action: skipped warm call queue because the calling agent is disabled');
+    return 0;
+  }
+
   const res = await pool.query(`
     SELECT p.id, p.status, p.is_hot
     FROM prospects p
@@ -2206,7 +2320,7 @@ async function runQueueWarmForCal() {
       AND NOT EXISTS (
         SELECT 1 FROM touchpoints t
         WHERE t.prospect_id = p.id AND t.client_id = p.client_id
-          AND t.channel = 'phone' AND t.agent_id = 'cal'
+          AND t.channel = 'phone' AND t.agent_id = $2
           AND t.created_at > NOW() - INTERVAL '7 days'
       )
       AND NOT EXISTS (
@@ -2214,13 +2328,13 @@ async function runQueueWarmForCal() {
         WHERE q.prospect_id = p.id AND q.client_id = p.client_id
           AND q.status = 'pending'
       )
-  `, [CLIENT_ID]);
+  `, [CLIENT_ID, CALL_AGENT_KEY]);
 
   let count = 0;
   for (let i = 0; i < res.rows.length; i++) {
     const stillActive = await getClientConfig(CLIENT_ID);
     if (!stillActive) {
-      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at cal warm row ${i + 1}/${res.rows.length} after ${count} processed`);
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run: aborting at call warm row ${i + 1}/${res.rows.length} after ${count} processed`);
     }
 
     const row = res.rows[i];
@@ -2238,12 +2352,18 @@ async function runQueueWarmForCal() {
     count++;
   }
   await insertAgentLog('auto_queued_cal_summary', { count });
-  console.log(`[Max] Auto-action: queued ${count} warm prospect(s) for Cal`);
+  console.log(`[Max] Auto-action: queued ${count} warm prospect(s) for call follow-up`);
   return count;
 }
 
-// 4. Hand off 5+ touchpoint no-response prospects to Cal for a nurture call.
+// 4. Hand off 5+ touchpoint no-response prospects for a nurture call.
 async function runHandoff5TouchNoReply() {
+  if (!(await isAgentEnabled(CLIENT_ID, CALL_AGENT_KEY))) {
+    await insertAgentLog('auto_queued_cal_nurture_summary', { count: 0, skipped: 'agent_disabled', agent: CALL_AGENT_KEY });
+    console.log('[Max] Auto-action: skipped nurture call queue because the calling agent is disabled');
+    return 0;
+  }
+
   const res = await pool.query(`
     SELECT p.id
     FROM prospects p
@@ -2270,7 +2390,7 @@ async function runHandoff5TouchNoReply() {
   for (let i = 0; i < res.rows.length; i++) {
     const stillActive = await getClientConfig(CLIENT_ID);
     if (!stillActive) {
-      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run — aborting at cal nurture row ${i + 1}/${res.rows.length} after ${count} processed`);
+      throw new Error(`[Max] Client ${CLIENT_ID} deactivated mid-run: aborting at call nurture row ${i + 1}/${res.rows.length} after ${count} processed`);
     }
 
     const row = res.rows[i];
@@ -2287,7 +2407,7 @@ async function runHandoff5TouchNoReply() {
     count++;
   }
   await insertAgentLog('auto_queued_cal_nurture_summary', { count });
-  console.log(`[Max] Auto-action: queued ${count} 5+ touch no-reply prospect(s) for Cal`);
+  console.log(`[Max] Auto-action: queued ${count} 5+ touch no-reply prospect(s) for call nurture`);
   return count;
 }
 
@@ -2341,7 +2461,7 @@ async function runAutoExecuteActions() {
   try { await ensureCalQueueTable(); }
   catch (err) {
     summary.errors.push({ step: 'ensure_cal_queue', message: err.message });
-    console.error('[Max] cal_queue bootstrap failed:', err.message);
+    console.error('[Max] call queue bootstrap failed:', err.message);
   }
 
   const steps = [
@@ -2374,8 +2494,8 @@ function formatAutoExecSummary(autoExec) {
   const parts = [];
   if (autoExec.bounces_dead)       parts.push(`${autoExec.bounces_dead} hard-bounce prospect${autoExec.bounces_dead === 1 ? '' : 's'} marked dead`);
   if (autoExec.emails_nulled)      parts.push(`${autoExec.emails_nulled} generic inbox email${autoExec.emails_nulled === 1 ? '' : 's'} nulled`);
-  if (autoExec.queued_cal_warm)    parts.push(`${autoExec.queued_cal_warm} warm prospect${autoExec.queued_cal_warm === 1 ? '' : 's'} queued for Cal`);
-  if (autoExec.queued_cal_nurture) parts.push(`${autoExec.queued_cal_nurture} 5+ touch no-reply prospect${autoExec.queued_cal_nurture === 1 ? '' : 's'} queued for Cal nurture`);
+  if (autoExec.queued_cal_warm)    parts.push(`${autoExec.queued_cal_warm} warm prospect${autoExec.queued_cal_warm === 1 ? '' : 's'} queued for call follow-up`);
+  if (autoExec.queued_cal_nurture) parts.push(`${autoExec.queued_cal_nurture} 5+ touch no-reply prospect${autoExec.queued_cal_nurture === 1 ? '' : 's'} queued for call nurture`);
   if (autoExec.stale_reset)        parts.push(`${autoExec.stale_reset} stale sequence${autoExec.stale_reset === 1 ? '' : 's'} reset to cold`);
   if (!parts.length) parts.push('No auto-executable items today.');
   return parts.join('; ');
