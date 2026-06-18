@@ -14,6 +14,7 @@ const {
   publishToLinkedInPersonal,
   publishLinkComment,
 } = require('../utils/publishPipeline');
+const { normalizeVertical } = require('../utils/normalize');
 
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
@@ -542,7 +543,7 @@ router.put('/api/prospects/:id', requireOperator, async (req, res) => {
     if (has('last_name')) addProspectField('last_name', cleanNullable(req.body.last_name, 120));
     if (has('email')) addProspectField('email', cleanNullable(req.body.email, 320));
     if (has('phone')) addProspectField('phone', cleanNullable(req.body.phone, 80));
-    if (has('vertical')) addProspectField('vertical', cleanNullable(req.body.vertical, 120));
+    if (has('vertical')) addProspectField('vertical', normalizeVertical(cleanNullable(req.body.vertical, 120)));
     if (has('notes')) addProspectField('notes', cleanNullable(req.body.notes, 4000));
 
     if (has('icp_score')) {
@@ -620,6 +621,9 @@ router.put('/api/prospects/:id', requireOperator, async (req, res) => {
     res.json({ success: true, prospect: updated });
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch (_rollbackErr) {}
+    if (err.code === '23514' && /vertical_canonical_chk/.test(err.constraint || '')) {
+      return res.status(400).json({ error: 'Vertical must use lowercase snake_case.' });
+    }
     res.status(500).json({ error: err.message });
   } finally {
     client.release();

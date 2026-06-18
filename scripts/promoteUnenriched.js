@@ -9,6 +9,7 @@ const pool = require('../db');
 const { normalizeDomain, runEnrichmentChain, resolveEmailVerification } = require('../leadgen');
 const { ensureEmailVerificationColumns } = require('../utils/emailVerificationSchema');
 const { ensureScoutUnenrichedTable } = require('../utils/scoutUnenrichedSchema');
+const { normalizeVertical } = require('../utils/normalize');
 
 function parseArg(name) {
   const prefix = `--${name}=`;
@@ -97,6 +98,7 @@ async function promoteRecord(record) {
   if (!companyId) throw new Error('Unable to create company row');
 
   const discoveryMethod = record.source || 'manual_promote';
+  const vertical = normalizeVertical(record.vertical) || 'unknown';
   const insert = await pool.query(`
     INSERT INTO prospects (
       company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical,
@@ -109,7 +111,7 @@ async function promoteRecord(record) {
     companyId,
     enriched.email,
     `Promoted from scout_unenriched (${record.id})`,
-    record.vertical,
+    vertical,
     record.client_id,
     record.location,
     discoveryMethod,

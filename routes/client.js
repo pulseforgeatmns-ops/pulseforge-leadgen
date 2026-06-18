@@ -91,7 +91,7 @@ const PREVIEW_CLIENT = {
   id: 'preview',
   name: 'Jordan Rivera',
   business_name: 'Manchester Clean Co.',
-  vertical: 'commercial cleaning',
+  vertical: 'commercial_cleaning',
   email: 'owner@manchestercleanco.example',
 };
 

@@ -26,6 +26,7 @@ const { acquireScoutLockWithWait, releaseScoutLock, getActiveScoutLock } = requi
 const { awaitProspeoSlot } = require('./utils/prospeoThrottle');
 const { checkProspeoQuota, recordProspeoCall, trip429 } = require('./utils/prospeoBreaker');
 const { shouldExcludeProspect, extractEmailDomain } = require('./utils/prospectFilter');
+const { normalizeVertical } = require('./utils/normalize');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -167,7 +168,7 @@ let CONFIG = {
   outputSheet: args.sheet     !== 'false',
   sheetId:     args.sheetid   || process.env.GOOGLE_SHEET_ID || '',
   clientId:    getRuntimeClientId(args),
-  vertical:    normalizeVertical(args.industry || 'cleaning'),
+  vertical:    normalizeVertical(args.industry || 'cleaning') || 'unknown',
 };
 let CLIENT_CONFIG = null;
 
@@ -255,18 +256,8 @@ const CLIENT_SCOUT_PLANS = {
   },
 };
 
-// Standardize a free-form industry/vertical label to snake_case.
-// e.g. "Home Services" -> "home_services", "auto repair" -> "auto_repair",
-// null/empty -> "unknown".
-function normalizeVertical(value) {
-  const raw = String(value == null ? '' : value).trim();
-  if (!raw) return 'unknown';
-  const slug = raw.toLowerCase().replace(/[\s\-]+/g, '_').replace(/^_+|_+$/g, '');
-  return slug || 'unknown';
-}
-
 function getSaturationThreshold(vertical) {
-  const key = normalizeVertical(vertical);
+  const key = normalizeVertical(vertical) || 'unknown';
   return Object.prototype.hasOwnProperty.call(SATURATION_THRESHOLDS, key)
     ? SATURATION_THRESHOLDS[key]
     : SATURATION_THRESHOLDS.default;
@@ -1697,7 +1688,7 @@ async function ensureScoutQueue(pool) {
     WITH normalized AS (
       SELECT id,
              client_id,
-             LOWER(REGEXP_REPLACE(TRIM(vertical), '[\\s\\-]+', '_', 'g')) AS clean_vertical,
+             LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) AS clean_vertical,
              TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(location, 'https?://\\S*', '', 'gi'), '\\mwww\\.\\S*', '', 'gi'), '[^[:alnum:] ]+', ' ', 'g')) AS clean_location
       FROM scout_queue
     ),
@@ -1716,12 +1707,12 @@ async function ensureScoutQueue(pool) {
   `);
   await pool.query(`
     UPDATE scout_queue
-    SET vertical = LOWER(REGEXP_REPLACE(TRIM(vertical), '[\\s\\-]+', '_', 'g')),
+    SET vertical = LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')),
         location = TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(location, 'https?://\\S*', '', 'gi'), '\\mwww\\.\\S*', '', 'gi'), '[^[:alnum:] ]+', ' ', 'g')),
         updated_at = NOW()
     WHERE location ~* 'https?://|www\\.|[^[:alnum:] ]'
        OR location <> TRIM(location)
-       OR vertical <> LOWER(REGEXP_REPLACE(TRIM(vertical), '[\\s\\-]+', '_', 'g'))
+       OR vertical <> LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g'))
   `);
   await pool.query(`
     UPDATE scout_queue
@@ -1760,10 +1751,10 @@ async function ensureScoutQueue(pool) {
 async function normalizeExistingVerticals(pool) {
   await pool.query(`
     UPDATE prospects
-    SET vertical = LOWER(REGEXP_REPLACE(TRIM(vertical), '[\\s\\-]+', '_', 'g'))
+    SET vertical = LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g'))
     WHERE vertical IS NOT NULL
       AND TRIM(vertical) <> ''
-      AND vertical <> LOWER(REGEXP_REPLACE(TRIM(vertical), '[\\s\\-]+', '_', 'g'))
+      AND vertical <> LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g'))
   `);
   await pool.query(`
     UPDATE prospects
@@ -1830,20 +1821,20 @@ async function seedExpansionQueueMarkets(clientId) {
     SELECT DISTINCT
       q.client_id,
       q.vertical,
-      LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')),
+      LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')),
       TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(q.location, 'https?://\\S*', '', 'gi'), '\\mwww\\.\\S*', '', 'gi'), '[^[:alnum:] ]+', ' ', 'g')) AS clean_location,
       0,
       CASE
-        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'auto' THEN 50
-        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'cleaning' THEN 50
-        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'restaurant' THEN 60
-        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'fitness' THEN 40
-        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'salon' THEN 40
-        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'med_spa' THEN 30
-        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'landscaping' THEN 30
-        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'property_management' THEN 40
-        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'probate_attorney' THEN 40
-        WHEN LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) = 'home_services' THEN 30
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'auto' THEN 50
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'cleaning' THEN 50
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'restaurant' THEN 60
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'fitness' THEN 40
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'salon' THEN 40
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'med_spa' THEN 30
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'landscaping' THEN 30
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'property_management' THEN 40
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'probate_attorney' THEN 40
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'home_services' THEN 30
         ELSE 40
       END,
       false,
@@ -1853,7 +1844,7 @@ async function seedExpansionQueueMarkets(clientId) {
     WHERE q.client_id = $1
       AND q.status = 'pending'
       AND q.vertical IS NOT NULL
-      AND LOWER(REGEXP_REPLACE(TRIM(q.vertical), '[\\s\\-]+', '_', 'g')) <> 'unknown'
+      AND LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) <> 'unknown'
       AND TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(q.location, 'https?://\\S*', '', 'gi'), '\\mwww\\.\\S*', '', 'gi'), '[^[:alnum:] ]+', ' ', 'g')) <> ''
     ON CONFLICT (client_id, vertical, location) DO NOTHING
   `, [clientId]);
@@ -1938,7 +1929,7 @@ async function resolveScoutTarget({ clientId, industry, location, verticals }) {
   await seedExpansionQueueMarkets(clientId);
   await refreshQueueCounts(clientId);
 
-  const vertical = normalizeVertical(industry);
+  const vertical = normalizeVertical(industry) || 'unknown';
 
   if (plannedVerticals.length && !plannedVerticals.includes(vertical)) {
     console.log(`[Scout] "${vertical}" is not in client ${clientId}'s Scout plan — rotating to planned queue`);
@@ -2115,6 +2106,7 @@ module.exports = {
   normalizeDomain,
   resolveEmailVerification,
   runEnrichmentChain,
+  normalizeVertical,
 };
 
 if (require.main === module) {

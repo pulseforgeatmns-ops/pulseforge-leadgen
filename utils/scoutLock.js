@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const pool = require('../db');
+const { normalizeVertical } = require('./normalize');
 
 const LOCK_KEY = 'global';
 const POLL_MS = 5000;
@@ -49,7 +50,7 @@ async function tryAcquireScoutLock(meta) {
     holderId,
     meta.clientId ?? null,
     meta.industry ?? null,
-    meta.vertical ?? null,
+    normalizeVertical(meta.vertical),
     meta.location ?? null,
   ]);
 

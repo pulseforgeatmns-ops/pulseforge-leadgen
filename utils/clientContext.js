@@ -123,7 +123,7 @@ async function ensureClientArchitecture() {
 
   await pool.query(`
     INSERT INTO clients (id, name, slug, business_name, vertical, email, city, state, active)
-    VALUES (1, 'Pulseforge', 'pulseforge', 'Pulseforge', 'marketing automation', 'jacob@gopulseforge.com', 'Manchester', 'NH', true)
+    VALUES (1, 'Pulseforge', 'pulseforge', 'Pulseforge', 'marketing_automation', 'jacob@gopulseforge.com', 'Manchester', 'NH', true)
     ON CONFLICT (id) DO UPDATE SET
       name = EXCLUDED.name,
       slug = EXCLUDED.slug,

@@ -5,6 +5,7 @@
 const axios = require('axios');
 const pool = require('./db');
 const { normalizeClientId } = require('./utils/clientContext');
+const { normalizeVertical } = require('./utils/normalize');
 
 const SATURATION_THRESHOLD = 5;
 const LOOKBACK_DAYS = 7;
@@ -92,8 +93,9 @@ async function countProspectsByCombo(clientId, sinceDays = LOOKBACK_DAYS) {
   const counts = new Map();
   for (const row of rows) {
     const location = matchProspectLocation(row.notes, row.service_area_match);
-    if (!location || !row.vertical) continue;
-    const key = `${row.vertical}\0${location}`;
+    const vertical = normalizeVertical(row.vertical);
+    if (!location || !vertical) continue;
+    const key = `${vertical}\0${location}`;
     counts.set(key, (counts.get(key) || 0) + 1);
   }
   return counts;
@@ -112,7 +114,11 @@ async function getTrackedCombos(clientId) {
      WHERE client_id = $1 AND week_start >= $2::date - INTERVAL '28 days'`,
     [clientId, weekStart]
   );
-  const combos = new Set(rows.map(r => `${r.vertical}\0${r.location}`));
+  const combos = new Set();
+  for (const row of rows) {
+    const vertical = normalizeVertical(row.vertical);
+    if (vertical) combos.add(`${vertical}\0${row.location}`);
+  }
 
   const eligibleBases = clientState
     ? Object.keys(EXPANSION_MAPS).filter(base => base.split(' ').pop() === clientState)
@@ -123,8 +129,9 @@ async function getTrackedCombos(clientId) {
        WHERE client_id = $1 AND source = 'scout' AND vertical IS NOT NULL`,
       [clientId]
     );
-    for (const { vertical } of verticals) {
-      combos.add(`${vertical}\0${base}`);
+    for (const row of verticals) {
+      const vertical = normalizeVertical(row.vertical);
+      if (vertical) combos.add(`${vertical}\0${base}`);
     }
   }
 
@@ -141,7 +148,9 @@ async function recordYieldSnapshot(clientId) {
   const recorded = [];
 
   for (const key of combos) {
-    const [vertical, location] = key.split('\0');
+    const [rawVertical, location] = key.split('\0');
+    const vertical = normalizeVertical(rawVertical);
+    if (!vertical) continue;
     const prospectsFound = counts.get(key) || 0;
     await pool.query(
       `INSERT INTO scout_yield (client_id, vertical, location, prospects_found, week_start)
@@ -214,13 +223,15 @@ async function queueExpansionsForSaturated(clientId) {
 
   const queued = [];
   for (const row of saturatedRows) {
+    const vertical = normalizeVertical(row.vertical);
+    if (!vertical) continue;
     const rowState = row.location.split(' ').pop();
     if (clientState && rowState !== clientState) continue;
     const adjacent = EXPANSION_MAPS[row.location];
     if (!adjacent?.length) continue;
 
     for (const nextLocation of adjacent) {
-      const tried = await hasMarketBeenTried(clientId, row.vertical, nextLocation);
+      const tried = await hasMarketBeenTried(clientId, vertical, nextLocation);
       if (tried) continue;
 
       const insert = await pool.query(
@@ -234,9 +245,9 @@ async function queueExpansionsForSaturated(clientId) {
          RETURNING id, vertical, location, triggered_by`,
         [
           clientId,
-          row.vertical,
+          vertical,
           nextLocation,
-          `saturation:${row.vertical}:${row.location}`,
+          `saturation:${vertical}:${row.location}`,
         ]
       );
       if (insert.rows[0]) queued.push(insert.rows[0]);
