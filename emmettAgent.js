@@ -1191,7 +1191,7 @@ async function getProspectsForEmail(options = {}) {
       FROM touchpoints t
       WHERE t.prospect_id = p.id AND t.client_id = p.client_id
     ) email_stats ON true
-    WHERE (p.status = 'cold' OR (
+    WHERE (p.status IN ('cold', 'contacted') OR (
       p.status = 'warm'
       AND COALESCE(email_stats.outbound_email_count, 0) > 0
       AND email_stats.last_touchpoint_at <= NOW() - INTERVAL '14 days'
@@ -1202,7 +1202,10 @@ async function getProspectsForEmail(options = {}) {
     AND p.email NOT LIKE '%@domain.com'
     AND p.email NOT LIKE '%@example.com'
     AND p.do_not_contact IS NOT TRUE
-    AND p.email_status = 'valid'
+    AND (
+      p.email_status IN ('valid', 'role')
+      OR (p.email_status = 'unverified_legacy' AND p.status = 'contacted')
+    )
     AND ($2::text IS NULL OR LOWER(COALESCE(p.vertical, '')) = LOWER($2::text))
     AND (
       cardinality($7::text[]) = 0
@@ -1585,14 +1588,16 @@ async function run(context = {}) {
     // Per-prospect DNC check (safety net in case status changed since query)
     const pool2 = require('./db');
     const dncCheck = await pool2.query(
-      'SELECT do_not_contact, email_status FROM prospects WHERE id = $1 AND client_id = $2', [prospect.id, CLIENT_ID]
+      'SELECT do_not_contact, email_status, status FROM prospects WHERE id = $1 AND client_id = $2', [prospect.id, CLIENT_ID]
     );
     if (dncCheck.rows[0]?.do_not_contact) {
       console.log(`Skipping ${prospect.email} because do_not_contact is true`);
       continue;
     }
 
-    if (dncCheck.rows[0]?.email_status !== 'valid') {
+    const safeEmailStatus = ['valid', 'role'].includes(dncCheck.rows[0]?.email_status)
+      || (dncCheck.rows[0]?.email_status === 'unverified_legacy' && dncCheck.rows[0]?.status === 'contacted');
+    if (!safeEmailStatus) {
       console.log(`Skipping ${prospect.email} because email_status is not valid`);
       await db.logAgentAction(
         AGENT_NAME,
