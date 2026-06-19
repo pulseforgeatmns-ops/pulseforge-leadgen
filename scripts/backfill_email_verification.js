@@ -54,7 +54,7 @@ async function updateProspect(row, result) {
         verifier_checked_at = NOW(),
         do_not_contact = CASE WHEN $5::boolean THEN true ELSE do_not_contact END,
         notes = CASE
-          WHEN $5::boolean THEN CONCAT_WS(E'\n', NULLIF(notes, ''), $6)
+          WHEN $5::boolean THEN CONCAT_WS(E'\n', NULLIF(notes, ''), $6::text)
           ELSE notes
         END
     WHERE id = $7
