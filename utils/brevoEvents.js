@@ -110,7 +110,56 @@ function normalizeRootDomain(value) {
 }
 
 function eventAt(payload = {}) {
-  const value = payload.date || payload.ts || payload.timestamp || payload.event_at || payload.created_at;
+  const timestamp = Number(payload.ts);
+  if (payload.ts != null && payload.ts !== '' && Number.isFinite(timestamp)) {
+    return new Date(timestamp * 1000);
+  }
+
+  if (payload.date) {
+    const match = String(payload.date).match(
+      /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/
+    );
+    if (match) {
+      const [, year, month, day, hour, minute, second, milliseconds = '0'] = match;
+      const localAsUtc = Date.UTC(
+        Number(year),
+        Number(month) - 1,
+        Number(day),
+        Number(hour),
+        Number(minute),
+        Number(second),
+        Number(milliseconds.padEnd(3, '0'))
+      );
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      });
+      const offsetAt = utcMillis => {
+        const probe = Math.floor(utcMillis / 1000) * 1000;
+        const parts = formatter.formatToParts(new Date(probe));
+        const part = type => Number(parts.find(item => item.type === type).value);
+        return Date.UTC(
+          part('year'),
+          part('month') - 1,
+          part('day'),
+          part('hour'),
+          part('minute'),
+          part('second')
+        ) - probe;
+      };
+      let utc = localAsUtc - offsetAt(localAsUtc);
+      utc = localAsUtc - offsetAt(utc);
+      return new Date(utc);
+    }
+  }
+
+  const value = payload.date || payload.timestamp || payload.event_at || payload.created_at;
   if (!value) return new Date();
   const parsed = new Date(value);
   if (!Number.isNaN(parsed.getTime())) return parsed;
@@ -341,6 +390,7 @@ async function insertBrevoEvent(rawPayload = {}) {
 module.exports = {
   BREVO_EVENT_MAP,
   brevoMessageId,
+  eventAt,
   insertBrevoEvent,
   internalEventType,
   normalizeRootDomain,
