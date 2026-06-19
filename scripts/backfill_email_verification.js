@@ -30,19 +30,20 @@ async function updateProspect(row, result) {
   await pool.query(`
     UPDATE prospects
     SET email_verified = $1,
-        email_verification_method = 'bouncer',
+        email_verification_method = $2,
         verified_at = NOW(),
-        email_status = $2,
-        verifier_response = $3::jsonb,
+        email_status = $3,
+        verifier_response = $4::jsonb,
         verifier_checked_at = NOW(),
-        do_not_contact = CASE WHEN $4::boolean THEN true ELSE do_not_contact END,
+        do_not_contact = CASE WHEN $5::boolean THEN true ELSE do_not_contact END,
         notes = CASE
-          WHEN $4::boolean THEN CONCAT_WS(E'\n', NULLIF(notes, ''), $5)
+          WHEN $5::boolean THEN CONCAT_WS(E'\n', NULLIF(notes, ''), $6)
           ELSE notes
         END
-    WHERE id = $6
+    WHERE id = $7
   `, [
     result.valid,
+    result.method,
     result.status,
     JSON.stringify(result.raw || null),
     markDnc,

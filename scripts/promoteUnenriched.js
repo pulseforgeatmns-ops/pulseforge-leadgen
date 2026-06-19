@@ -103,22 +103,27 @@ async function promoteRecord(record) {
     INSERT INTO prospects (
       company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical,
       client_id, service_area_match, discovery_method, website_url,
-      email_verified, email_verification_method, verified_at, do_not_contact
-    ) VALUES ($1, NULL, NULL, $2, NULL, 'cold', 'scout', 70, $3, $4, $5, $6, $7, $8, $9, $10, $11, false)
+      email_verified, email_verification_method, verified_at, do_not_contact,
+      email_status, verifier_response, verifier_checked_at
+    ) VALUES ($1, NULL, NULL, $2, NULL, 'cold', 'scout', 70, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15)
     ON CONFLICT (email) DO NOTHING
     RETURNING id
   `, [
     companyId,
     enriched.email,
-    `Promoted from scout_unenriched (${record.id})`,
+    verification.note || `Promoted from scout_unenriched (${record.id})`,
     vertical,
     record.client_id,
     record.location,
     discoveryMethod,
     record.website_url,
-    true,
-    verification.emailVerificationMethod || 'manual_promote',
-    verification.verifiedAt || new Date(),
+    verification.emailVerified,
+    verification.emailVerificationMethod,
+    verification.verifiedAt,
+    verification.doNotContact,
+    verification.emailStatus,
+    JSON.stringify(verification.verifierResponse || null),
+    verification.verifierCheckedAt,
   ]);
 
   if (!insert.rows.length) {

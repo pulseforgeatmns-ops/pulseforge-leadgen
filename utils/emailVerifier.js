@@ -73,8 +73,8 @@ function setCached(email, result) {
   cache.set(email, { cachedAt: Date.now(), result });
 }
 
-function isProspeoVerificationEnabled() {
-  return process.env.PROSPEO_ENABLED === 'true';
+function isBouncerEnabled() {
+  return String(process.env.BOUNCER_ENABLED || '').toLowerCase() === 'true';
 }
 
 function mapMxResponse(validation) {
@@ -135,7 +135,7 @@ async function verifyEmail(email) {
 
   const startedAt = Date.now();
 
-  if (!isProspeoVerificationEnabled()) {
+  if (!isBouncerEnabled()) {
     const result = await verifyWithMx(normalizedEmail, startedAt);
     setCached(normalizedEmail, result);
     return result;
