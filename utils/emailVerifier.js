@@ -43,17 +43,17 @@ function mapBouncerResponse(raw) {
   return { status: 'unknown', valid: false, reason: reason || rawStatus || 'unknown', raw, vendor: 'bouncer' };
 }
 
-async function logVerifierCall({ email, raw, durationMs }) {
+async function logVerifierCall({ email, status, raw, durationMs }) {
   const method = raw?.method || raw?.vendor || 'unknown';
-  console.log(`[EmailVerifier] method=${method} email=${email} duration_ms=${durationMs}`);
+  console.log(`[EmailVerifier] method=${method} status=${status} email=${email} duration_ms=${durationMs}`);
 
-  if (logOverride) return logOverride({ email, raw, durationMs, method });
+  if (logOverride) return logOverride({ email, status, raw, durationMs, method });
 
   try {
     await pool.query(`
-      INSERT INTO verifier_call_log (vendor, email, response_payload, duration_ms)
-      VALUES ($1, $2, $3::jsonb, $4)
-    `, [method, email, JSON.stringify(raw || null), durationMs]);
+      INSERT INTO verifier_call_log (vendor, email, status, response_payload, duration_ms)
+      VALUES ($1, $2, $3, $4::jsonb, $5)
+    `, [method, email, status, JSON.stringify(raw || null), durationMs]);
   } catch (err) {
     console.error(`[EmailVerifier] verifier_call_log insert failed: ${err.message}`);
   }
@@ -102,6 +102,7 @@ async function verifyWithMx(normalizedEmail, startedAt) {
   const result = mapMxResponse(validation);
   await logVerifierCall({
     email: normalizedEmail,
+    status: result.status,
     raw: result.raw,
     durationMs: Date.now() - startedAt,
   });
@@ -119,7 +120,12 @@ async function verifyEmail(email) {
       vendor: 'mx_lookup',
       method: 'mx_lookup',
     };
-    await logVerifierCall({ email: normalizedEmail || String(email || ''), raw: result.raw, durationMs: 0 });
+    await logVerifierCall({
+      email: normalizedEmail || String(email || ''),
+      status: result.status,
+      raw: result.raw,
+      durationMs: 0,
+    });
     return result;
   }
 
@@ -127,6 +133,7 @@ async function verifyEmail(email) {
   if (cached) {
     await logVerifierCall({
       email: normalizedEmail,
+      status: cached.status,
       raw: { ...(cached.raw || {}), cached: true },
       durationMs: 0,
     });
@@ -156,13 +163,13 @@ async function verifyEmail(email) {
     const fetchImpl = fetchOverride || globalThis.fetch;
     if (typeof fetchImpl !== 'function') throw new Error('fetch_unavailable');
 
-    const response = await fetchImpl(BOUNCER_VERIFY_URL, {
-      method: 'POST',
+    const verifyUrl = new URL(BOUNCER_VERIFY_URL);
+    verifyUrl.searchParams.set('email', normalizedEmail);
+    const response = await fetchImpl(verifyUrl.toString(), {
+      method: 'GET',
       headers: {
-        'content-type': 'application/json',
         'x-api-key': apiKey,
       },
-      body: JSON.stringify({ email: normalizedEmail }),
       signal: controller.signal,
     });
 
@@ -188,6 +195,7 @@ async function verifyEmail(email) {
     result.method = result.vendor;
     await logVerifierCall({
       email: normalizedEmail,
+      status: result.status,
       raw: { ...raw, method: result.method },
       durationMs: Date.now() - startedAt,
     });
@@ -197,7 +205,12 @@ async function verifyEmail(email) {
     const reason = err?.name === 'AbortError' ? 'verifier_timeout' : 'verifier_timeout';
     raw = { status: 'unknown', reason, error: err?.message || reason, method: 'bouncer' };
     const result = { status: 'unknown', valid: false, reason, raw, vendor: 'bouncer', method: 'bouncer' };
-    await logVerifierCall({ email: normalizedEmail, raw, durationMs: Date.now() - startedAt });
+    await logVerifierCall({
+      email: normalizedEmail,
+      status: result.status,
+      raw,
+      durationMs: Date.now() - startedAt,
+    });
     setCached(normalizedEmail, result);
     return result;
   } finally {

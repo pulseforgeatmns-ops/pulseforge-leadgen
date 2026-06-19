@@ -38,6 +38,7 @@ async function run() {
   process.env.BOUNCER_API_KEY = process.env.BOUNCER_API_KEY || 'smoke-test-key';
   process.env.BOUNCER_ENABLED = 'true';
   const logged = [];
+  const requests = [];
 
   _test.setTestHooks({
     logImpl: entry => {
@@ -53,11 +54,14 @@ async function run() {
         logImpl: entry => {
           logged.push(entry);
         },
-        fetchImpl: async () => ({
-          ok: true,
-          status: 200,
-          json: async () => testCase.raw,
-        }),
+        fetchImpl: async (url, options) => {
+          requests.push({ url, options });
+          return {
+            ok: true,
+            status: 200,
+            json: async () => testCase.raw,
+          };
+        },
       });
 
       const result = await verifyEmail(`smoke-${i}@example.test`);
@@ -68,6 +72,14 @@ async function run() {
     }
 
     assert.strictEqual(logged.length, cases.length, 'logs one verifier call per test case');
+    assert.strictEqual(requests.length, cases.length, 'makes one verifier request per test case');
+    requests.forEach((request, index) => {
+      const url = new URL(request.url);
+      assert.strictEqual(request.options.method, 'GET', cases[index].name);
+      assert.strictEqual(url.searchParams.get('email'), `smoke-${index}@example.test`, cases[index].name);
+      assert.strictEqual(request.options.headers['x-api-key'], process.env.BOUNCER_API_KEY, cases[index].name);
+      assert.strictEqual(logged[index].status, cases[index].expected.status, cases[index].name);
+    });
     console.log('[smokeEmailVerifier] All verifier mapping smoke tests passed');
   } finally {
     _test.setTestHooks();

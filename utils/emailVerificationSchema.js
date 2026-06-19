@@ -11,12 +11,22 @@ async function ensureEmailVerificationColumns() {
 
     CREATE TABLE IF NOT EXISTS verifier_call_log (
       id BIGSERIAL PRIMARY KEY,
-      vendor TEXT NOT NULL,
       email TEXT NOT NULL,
+      prospect_id UUID,
+      vendor TEXT NOT NULL,
+      status TEXT NOT NULL,
+      cost_credits NUMERIC,
       response_payload JSONB,
       duration_ms INTEGER,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      called_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    ALTER TABLE verifier_call_log ADD COLUMN IF NOT EXISTS prospect_id UUID;
+    ALTER TABLE verifier_call_log ADD COLUMN IF NOT EXISTS status TEXT;
+    ALTER TABLE verifier_call_log ADD COLUMN IF NOT EXISTS cost_credits NUMERIC;
+    ALTER TABLE verifier_call_log ADD COLUMN IF NOT EXISTS called_at TIMESTAMPTZ DEFAULT NOW();
+    UPDATE verifier_call_log SET status = 'unknown' WHERE status IS NULL;
+    ALTER TABLE verifier_call_log ALTER COLUMN status SET NOT NULL;
   `);
 }
 
