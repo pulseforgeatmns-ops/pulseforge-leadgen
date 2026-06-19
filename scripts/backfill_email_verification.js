@@ -1,6 +1,7 @@
 /**
  * Backfill Bouncer email verification for legacy prospects.
- * Usage: node scripts/backfill_email_verification.js [--client_id=1]
+ * Usage: node scripts/backfill_email_verification.js
+ *   [--client_id=1] [--statuses=cold,contacted] [--max=600]
  */
 require('dotenv').config();
 const pool = require('../db');
@@ -13,6 +14,22 @@ function parseClientId(argv) {
   const flag = argv.find(a => a.startsWith('--client_id='));
   if (flag) return Number.parseInt(flag.split('=')[1], 10) || null;
   return null;
+}
+
+function parseStatuses(argv) {
+  const flag = argv.find(a => a.startsWith('--statuses='));
+  if (!flag) return [];
+  return flag.split('=')[1].split(',').map(value => value.trim()).filter(Boolean);
+}
+
+function parseMaxCalls(argv) {
+  const flag = argv.find(a => a.startsWith('--max='));
+  if (!flag) return MAX_CALLS;
+  const requested = Number.parseInt(flag.split('=')[1], 10);
+  if (!Number.isInteger(requested) || requested <= 0) {
+    throw new Error('--max must be a positive integer');
+  }
+  return Math.min(requested, MAX_CALLS);
 }
 
 function shouldMarkDnc(status) {
@@ -55,13 +72,23 @@ async function updateProspect(row, result) {
 }
 
 async function run() {
-  const clientId = parseClientId(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const clientId = parseClientId(argv);
+  const statuses = parseStatuses(argv);
+  const maxCalls = parseMaxCalls(argv);
   const params = [];
   let clientFilter = '';
+  let statusFilter = '';
   if (clientId) {
     params.push(clientId);
     clientFilter = `AND client_id = $${params.length}`;
   }
+  if (statuses.length) {
+    params.push(statuses);
+    statusFilter = `AND status = ANY($${params.length}::text[])`;
+  }
+  params.push(maxCalls);
+  const limitPlaceholder = `$${params.length}`;
 
   const { rows } = await pool.query(`
     SELECT id, email
@@ -71,7 +98,9 @@ async function run() {
       AND (email_status IS NULL OR email_status = 'unverified_legacy')
       AND (verifier_checked_at IS NULL OR verifier_checked_at <= NOW() - INTERVAL '30 days')
       ${clientFilter}
+      ${statusFilter}
     ORDER BY id ASC
+    LIMIT ${limitPlaceholder}
   `, params);
 
   console.log(`[backfill_email_verification] Processing ${rows.length} prospect(s)${clientId ? ` for client_id=${clientId}` : ''}`);
@@ -82,8 +111,8 @@ async function run() {
   let calls = 0;
 
   for (let i = 0; i < rows.length; i++) {
-    if (calls >= MAX_CALLS) {
-      console.error(`[backfill_email_verification] Stopping because call ceiling reached at ${MAX_CALLS}`);
+    if (calls >= maxCalls) {
+      console.error(`[backfill_email_verification] Stopping because call ceiling reached at ${maxCalls}`);
       break;
     }
 
