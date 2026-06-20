@@ -324,8 +324,67 @@ router.get('/api/pipeline', requireDashboardRead, async (req, res) => {
 router.get('/api/agent-status', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
-    const [prospects, touchpoints, pending, agentRuns, channels, weeklyTouchpoints] = await Promise.all([
-      pool.query('SELECT COUNT(*) FROM prospects WHERE client_id = $1', [clientId]),
+    const [prospectBreakdown, touchpoints, pending, agentRuns, channels, weeklyTouchpoints] = await Promise.all([
+      pool.query(`
+        WITH classified AS (
+          SELECT
+            p.id,
+            CASE
+              WHEN p.status IN ('dead', 'disqualified', 'closed', 'bounced', 'do_not_email')
+                OR COALESCE(p.do_not_contact, false) = true
+                OR LOWER(COALESCE(p.email_status, '')) IN ('bounced', 'invalid', 'invalid_legacy', 'opted_out', 'unsubscribed')
+                OR EXISTS (
+                  SELECT 1
+                  FROM email_events ee
+                  WHERE ee.prospect_id = p.id
+                    AND ee.client_id = p.client_id
+                    AND ee.event_type IN ('hard_bounce', 'blocked', 'spam', 'unsubscribed')
+                )
+                OR (
+                  EXISTS (
+                    SELECT 1
+                    FROM sequences s
+                    WHERE s.prospect_id = p.id
+                      AND s.status = 'completed'
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM email_events ee
+                    WHERE ee.prospect_id = p.id
+                      AND ee.client_id = p.client_id
+                      AND ee.event_type IN ('opened', 'clicked', 'replied')
+                      AND ee.event_at >= NOW() - INTERVAL '14 days'
+                  )
+                )
+              THEN 'dead'
+              WHEN EXISTS (
+                SELECT 1
+                FROM sequences s
+                WHERE s.prospect_id = p.id
+                  AND s.status = 'active'
+                  AND s.next_send_at > NOW()
+              )
+                OR EXISTS (
+                  SELECT 1
+                  FROM email_events ee
+                  WHERE ee.prospect_id = p.id
+                    AND ee.client_id = p.client_id
+                    AND ee.event_type IN ('opened', 'clicked', 'replied')
+                    AND ee.event_at >= NOW() - INTERVAL '14 days'
+                )
+              THEN 'active'
+              ELSE 'cold'
+            END AS bucket
+          FROM prospects p
+          WHERE p.client_id = $1
+        )
+        SELECT
+          COUNT(*) FILTER (WHERE bucket = 'active')::int AS active,
+          COUNT(*) FILTER (WHERE bucket = 'cold')::int AS cold,
+          COUNT(*) FILTER (WHERE bucket = 'dead')::int AS dead,
+          COUNT(*)::int AS total
+        FROM classified
+      `, [clientId]),
       pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1', [clientId]),
       pool.query('SELECT COUNT(*) FROM pending_comments WHERE status = $1 AND client_id = $2', ['pending', clientId]),
       pool.query('SELECT agent_name, COUNT(*) as runs, MAX(ran_at) as last_run FROM agent_log WHERE client_id = $1 GROUP BY agent_name', [clientId]),
@@ -336,7 +395,11 @@ router.get('/api/agent-status', requireDashboardRead, async (req, res) => {
     const runMap = {};
     agentRuns.rows.forEach(r => { runMap[r.agent_name] = parseInt(r.runs); });
 
-    const totalProspects = parseInt(prospects.rows[0].count);
+    const prospectCounts = prospectBreakdown.rows[0] || {};
+    const activeProspects = Number(prospectCounts.active || 0);
+    const coldProspects = Number(prospectCounts.cold || 0);
+    const deadProspects = Number(prospectCounts.dead || 0);
+    const totalProspects = Number(prospectCounts.total || 0);
     const totalTouchpoints = parseInt(touchpoints.rows[0].count);
     const fbPending = channels.rows.find(c => c.channel === 'facebook')?.count || 0;
     const liPending = channels.rows.find(c => c.channel === 'linkedin')?.count || 0;
@@ -351,7 +414,13 @@ router.get('/api/agent-status', requireDashboardRead, async (req, res) => {
     };
 
     res.json({
-      prospects: totalProspects,
+      prospects: activeProspects,
+      prospectBreakdown: {
+        active: activeProspects,
+        cold: coldProspects,
+        dead: deadProspects,
+        total: totalProspects,
+      },
       touchpoints: totalTouchpoints,
       pending: parseInt(pending.rows[0].count),
       weeklyTouchpoints: parseInt(weeklyTouchpoints.rows[0].count),
@@ -1136,10 +1205,6 @@ router.get('/api/activity', requireDashboardRead, async (req, res) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
     const perSourceLimit = Math.max(20, Math.min(limit + offset, 100));
-    const excludedColumns = await tableColumns('excluded_prospect_log');
-    const excludedTimeSelect = excludedColumns.has('created_at') ? 'epl.created_at' : 'NOW()';
-    const excludedOrder = excludedColumns.has('created_at') ? 'epl.created_at DESC' : 'epl.id DESC';
-
     const [agentResult, emailResult, excludedResult] = await Promise.all([
       pool.query(`
       SELECT al.id, al.agent_name, al.action, al.status, al.ran_at, al.payload,
@@ -1205,7 +1270,7 @@ router.get('/api/activity', requireDashboardRead, async (req, res) => {
           epl.source,
           epl.exclusion_reason,
           epl.exclusion_detail,
-          ${excludedTimeSelect} AS created_at,
+          epl.excluded_at AS created_at,
           p.id AS prospect_id,
           p.first_name,
           p.last_name,
@@ -1221,7 +1286,7 @@ router.get('/api/activity', requireDashboardRead, async (req, res) => {
           LIMIT 1
         ) p ON true
         LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
-        ORDER BY ${excludedOrder}
+        ORDER BY epl.excluded_at DESC
         LIMIT $2
       `, [clientId, perSourceLimit]),
     ]);
@@ -1250,6 +1315,8 @@ router.get('/api/activity', requireDashboardRead, async (req, res) => {
         weekly_report: 'weekly report dispatched',
         generate_mockup: `generated a mockup ${prospect}`,
         outbound: `sent email sequence ${prospect}`,
+        email_sent: `Email sent ${prospect}`,
+        email_skipped: `Email skipped ${prospect}`,
         dashboard_trigger: 'triggered from dashboard',
         email_opened: `email opened ${prospect}`,
         open: `email opened ${prospect}`,
