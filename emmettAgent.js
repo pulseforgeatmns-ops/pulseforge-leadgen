@@ -695,7 +695,7 @@ Pulseforge
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Declined estimates and first-time visits become lost revenue when nobody has time to revisit them.
+An estimate that leaves without follow-up usually means the customer found a price comparison somewhere else.
 
 Automatic reminders can bring those customers back without adding calls to the service desk.
 
@@ -710,13 +710,13 @@ Jacob`
 
 Are you currently following up with customers after a job, or is repeat service still mostly left to memory and referrals?
 
-If the process is manual, I can sketch a service-reminder flow for {{business_name}}.
+I can sketch a service-reminder flow for {{business_name}} either way.
 
 Jacob`
     },
     {
       day: 13,
-      subject: "before winter service prep",
+      subject: "{{business_name}} — keeping it brief",
       body: `Hi {{first_name}},
 
 Customers due for service who have not heard from {{business_name}} are revenue sitting in the repair history.
@@ -811,7 +811,7 @@ Pulseforge`
 
 Forms, calls, and DMs become expensive leaks when they depend on someone remembering to respond between jobs.
 
-A lightweight response flow can keep those inquiries alive at {{business_name}}. Want me to sketch one for {{business_name}}?
+A lightweight response flow can keep those inquiries alive. Want me to sketch one for {{business_name}}?
 
 Jacob`
     },
