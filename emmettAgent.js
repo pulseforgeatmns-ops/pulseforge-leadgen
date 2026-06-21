@@ -203,7 +203,7 @@ Mountain State Home Innovations`
       subject: "when estate repairs delay the case",
       body: `Hi {{first_name}},
 
-Unresolved water damage or deferred maintenance can add weeks before an estate property is ready to list or transfer. MSHI handles documented repairs in WV, keeps out-of-state heirs updated, and gives the attorney one point of contact.
+Unresolved water damage or deferred maintenance can add weeks before an estate property is ready to list or transfer. Mountain State Home Innovations handles documented repairs in WV, keeps out-of-state heirs updated, and gives the attorney one point of contact.
 
 Worth a brief call this week to see if we'd fit any properties currently in your case load? Or if an estate property needs contractor coordination now, I can review the details and send back a one-page assessment either way.
 
@@ -216,7 +216,7 @@ Mountain State Home Innovations
       subject: "Re: when estate repairs delay the case",
       body: `Hi {{first_name}},
 
-When heirs live out of state, contractor coordination often lands with the attorney even when it does not fit neatly into billable casework. MSHI can absorb the heir communication, repair scheduling, and written project documentation through one WV point of contact.
+When heirs live out of state, contractor coordination often lands with the attorney even when it does not fit neatly into billable casework. Mountain State Home Innovations can absorb the heir communication, repair scheduling, and written project documentation through one WV point of contact.
 
 Worth a brief conversation about any current cases? Or send me details on a case where the property is holding things up and I'll send back what we would handle.
 
@@ -229,7 +229,7 @@ Mountain State Home Innovations
       subject: "how are estate repairs handled now?",
       body: `Hi {{first_name}},
 
-When a probate case stalls because the property is not sale-ready, are you coordinating repairs directly or routing that work to the heirs? In either case, MSHI can manage the WV repair scope, document progress, and keep everyone informed without adding another project to your case load.
+When a probate case stalls because the property is not sale-ready, are you coordinating repairs directly or routing that work to the heirs? In either case, Mountain State Home Innovations can manage the WV repair scope, document progress, and keep everyone informed without adding another project to your case load.
 
 I can sketch what handing that off would look like for one of your current cases.
 
@@ -240,7 +240,9 @@ Mountain State Home Innovations
     {
       day: 13,
       subject: "before the next probate filing rush",
-      body: `Unresolved estate repairs will keep stretching probate timelines until there is a reliable contractor handoff. Okay to circle back at the end of the quarter, before the year-end probate filing rush?
+      body: `Hi {{first_name}},
+
+Unresolved estate repairs will keep stretching probate timelines until there is a reliable contractor handoff. Okay to circle back at the end of the quarter, before the year-end probate filing rush?
 
 Brad Hudson
 Mountain State Home Innovations
@@ -253,7 +255,7 @@ Mountain State Home Innovations
       subject: "protecting margin on the next rehab",
       body: `Hi {{first_name}},
 
-Each week a rehab runs long adds interest, taxes, insurance, and utilities directly against the deal's margin. MSHI scopes WV rehabs for realistic costs and timelines, then provides one point of contact across the project.
+Each week a rehab runs long adds interest, taxes, insurance, and utilities directly against the deal's margin. Mountain State Home Innovations scopes WV rehabs for realistic costs and timelines, then provides one point of contact across the project.
 
 Worth a quick call this week to talk through your next acquisition? Or send me the address of a property you're working through and I'll send back our rehab estimate, free and useful as a second opinion either way.
 
@@ -266,7 +268,7 @@ Mountain State Home Innovations
       subject: "Re: protecting margin on the next rehab",
       body: `Hi {{first_name}},
 
-When a rehab budget jumps after demolition, the original scope usually missed conditions behind the walls or local code requirements. MSHI builds those WV details into the estimate so the projected number has a better chance of holding through the work.
+When a rehab budget jumps after demolition, the original scope usually missed conditions behind the walls or local code requirements. Mountain State Home Innovations builds those WV details into the estimate so the projected number has a better chance of holding through the work.
 
 Worth a brief conversation about an upcoming project? Or send me a quote you're sitting on and I'll send back what we would say about the scope.
 
@@ -279,7 +281,7 @@ Mountain State Home Innovations
       subject: "who is carrying the GC role?",
       body: `Hi {{first_name}},
 
-Are you GC-ing your flips yourself, or do you have a contractor partner handling the full rehab scope? Whether the priority is acquisition cadence, a shorter holding period, or a clean exit, MSHI can take ownership of the WV scope through one point of contact.
+Are you GC-ing your flips yourself, or do you have a contractor partner handling the full rehab scope? Whether the priority is acquisition cadence, a shorter holding period, or a clean exit, Mountain State Home Innovations can take ownership of the WV scope through one point of contact.
 
 I can map out what bringing one of your properties through our scope would look like.
 
@@ -290,7 +292,9 @@ Mountain State Home Innovations
     {
       day: 13,
       subject: "before the next acquisition closes",
-      body: `Carrying costs on the next deal will keep compounding until the contractor relationship is locked in. Okay to circle back before your next acquisition closes?
+      body: `Hi {{first_name}},
+
+Carrying costs on the next deal will keep compounding until the contractor relationship is locked in. Okay to circle back before your next acquisition closes?
 
 Brad Hudson
 Mountain State Home Innovations
