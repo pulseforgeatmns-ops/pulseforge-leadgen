@@ -326,9 +326,9 @@ Mountain State Home Innovations`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-Most cleaning companies in Manchester are getting leads — the problem is usually what happens after. Inquiry comes in, owner's on a job, nobody follows up fast enough, and the lead books somebody else.
+A cleaning quote that waits until the end of the workday is usually calling the next company by then.
 
-Is that something you're running into at {{business_name}}, or have you got a system that keeps up with it?
+When the owner is on a job, fast follow-up is hard to do consistently. Are new inquiries at {{business_name}} getting a reply within a few minutes, or only when someone gets free?
 
 Jacob Maynard
 Pulseforge
@@ -339,11 +339,11 @@ Pulseforge
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Didn't hear back — totally fine, just wanted to make sure my last note landed.
+Missed calls and web forms cool off fastest while the crew is still on-site.
 
-One thing I've been building for cleaning companies in Southern NH: a system that texts new leads within 2 minutes, follows up automatically if they don't respond, and books appointments without the owner touching anything.
+A two-minute text and automatic follow-up can keep those quotes alive without pulling anyone off a job.
 
-If that's something worth a look for {{business_name}}, just reply here and I'll put together a free mockup same day.
+Want me to mock up that workflow for {{business_name}}?
 
 Jacob`
     },
@@ -352,20 +352,20 @@ Jacob`
       subject: "quick question about {{business_name}}",
       body: `Hi {{first_name}},
 
-One last question — are you currently doing anything to follow up with leads automatically, or is it still mostly manual when you get a chance?
+Are you currently following up with new cleaning leads automatically, or is it still mostly manual when someone gets a chance?
 
-Happy to show you what's working for cleaning companies in Southern NH. Just reply here.
+If manual follow-up is the bottleneck, I can sketch the two-minute response flow for {{business_name}}.
 
 Jacob`
     },
     {
       day: 13,
-      subject: "closing the loop",
+      subject: "before the next cleaning rush",
       body: `Hi {{first_name}},
 
-I won't keep filling up your inbox. If the timing's ever right, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
+Unanswered cleaning quotes at {{business_name}} will keep cooling off while the crew is busy.
 
-Rooting for you either way.
+Okay to circle back at the start of next quarter, before spring deep-clean demand picks up?
 
 Jacob Maynard
 Pulseforge
@@ -378,13 +378,9 @@ gopulseforge.com`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-I spent years running restaurants in New England. The hardest part was not the service or the food. It was staying visible when I was too busy running the floor to think about marketing.
+A guest who visits {{business_name}} once and never hears from you again has little reason to choose you over the next new spot.
 
-Most owners I talk to are in the same spot. Great restaurant, not enough time to stay in front of new customers consistently.
-
-I built a system that handles that automatically. It finds local prospects, reaches out on your behalf, and keeps your name visible between rushes. It runs in the background while you run the restaurant.
-
-One question: is getting more new customers through the door something you are actively working on right now?
+That gap leaves slower nights dependent on walk-ins and social posts. Are you doing anything now to bring first-time guests back for a second visit?
 
 Jacob Maynard
 Pulseforge`
@@ -394,13 +390,11 @@ Pulseforge`
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Sent you a note a few days ago. Wanted to follow up once before moving on.
+A slow Tuesday stays slow when last month's guests are not given a reason to return.
 
-I know you are busy. That is kind of the whole point.
+Automated reminders and local outreach can fill that gap between rushes without adding another task for the floor team.
 
-The restaurants I work with are not struggling. They are good at what they do. They just do not have time to chase new customers on top of running the kitchen, managing staff, and everything else. That is the gap I fill.
-
-If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
+Want a quick mockup built around {{business_name}}?
 
 Jacob`
     },
@@ -409,26 +403,20 @@ Jacob`
       subject: "what is actually working in Manchester right now",
       body: `Hi {{first_name}},
 
-One thing I am seeing across local restaurants right now. The ones growing consistently are not spending more on ads. They are just staying in front of people longer than their competition.
+Are you currently bringing past guests back between visits, or is {{business_name}} still relying mostly on word of mouth and social posts?
 
-Most owners go quiet between services. The ones winning do not.
-
-I help restaurants like {{business_name}} stay visible automatically. No extra time required on your end.
-
-Are you currently doing anything to stay in front of new customers between visits, or is it mostly word of mouth at this point?
+If repeat visits are the gap, I can map out a simple return-guest campaign.
 
 Jacob`
     },
     {
       day: 13,
-      subject: "closing the loop",
+      subject: "before the next busy season",
       body: `Hi {{first_name}},
 
-Last note from me. I do not want to clutter your inbox.
+Uneven weekday covers at {{business_name}} will stay dependent on chance until past guests have a reason to return.
 
-If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
-
-Rooting for you either way.
+Okay to circle back before holiday planning starts?
 
 Jacob Maynard
 Pulseforge
@@ -441,9 +429,9 @@ gopulseforge.com`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-Salons in Manchester live and die by repeat bookings and referrals — but the ones growing fastest right now are the ones capturing new clients automatically between appointments.
+Every client who leaves {{business_name}} without a future appointment is a chair you have to refill later.
 
-Is bringing in new clients consistently something you're actively working on at {{business_name}}, or is it mostly word of mouth at this point?
+That turns retention into a constant acquisition job. Are most clients rebooking before they leave, or does the calendar depend on reminders and referrals?
 
 Jacob Maynard
 Pulseforge
@@ -454,11 +442,11 @@ Pulseforge
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Following up in case my last note got buried.
+Gaps in next month's calendar start with clients who leave this month without rebooking.
 
-What I build for salons: automated follow-up that re-engages lapsed clients, captures new ones from your Google listing, and keeps your chair full without you chasing anyone.
+Automatic reminders can bring lapsed clients back and respond to new Google leads while the team stays with clients.
 
-If you want to see what that looks like for {{business_name}}, just reply here — I'll have a free mockup to you same day.
+Want me to sketch that flow for {{business_name}}?
 
 Jacob`
     },
@@ -467,20 +455,20 @@ Jacob`
       subject: "quick question about {{business_name}}",
       body: `Hi {{first_name}},
 
-One last question — are you currently doing anything to bring in new clients outside of referrals and social media, or is that still the main source?
+Are you currently bringing in new clients outside referrals and social media, or are those still the main sources?
 
-Happy to show you what else is working for salons in Southern NH right now. Just reply here.
+If that mix feels narrow, I can map out another acquisition path for {{business_name}}.
 
 Jacob`
     },
     {
       day: 13,
-      subject: "closing the loop",
+      subject: "before peak booking season",
       body: `Hi {{first_name}},
 
-Last note from me. If the timing ever works out, just reply — I'll put something together for {{business_name}} same day. No forms, no pressure.
+A client overdue for a cut, color, or treatment is a booking opportunity sitting untouched in {{business_name}}'s list.
 
-Rooting for you either way.
+Okay to circle back a month before prom and wedding season?
 
 Jacob Maynard
 Pulseforge
@@ -494,13 +482,9 @@ gopulseforge.com`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-I work with local fitness studios and gyms in Southern NH on one specific problem: keeping your schedule full without spending your time chasing new members.
+Every trial guest who leaves {{business_name}} without a same-day response is more likely to join the studio that texts first.
 
-Most studio owners I talk to are great at what they do but inconsistent at bringing in new clients. Word of mouth works until it does not. And there is never enough time between classes to market consistently.
-
-I built a system that handles outreach automatically. It finds local prospects, reaches out on your behalf, and keeps your name in front of people who are actively looking for a gym or studio. It runs in the background while you focus on your members.
-
-Is growing your membership consistently something you are actively working on right now?
+That makes membership growth depend on front-desk bandwidth between classes. Are trial leads getting an immediate reply now?
 
 Jacob Maynard
 Pulseforge`
@@ -510,11 +494,9 @@ Pulseforge`
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Sent you a note a few days ago. Wanted to follow up once before moving on.
+Empty spots in next week's classes often trace back to trial leads that never got a second touch.
 
-The studios I work with are not struggling. They have great instructors and loyal members. The challenge is always the same: memberships plateau because there is no consistent way to reach new people between managing classes and running the business.
-
-If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
+A short automated sequence can answer, remind, and invite each lead without adding front-desk work. Want a mockup for {{business_name}}?
 
 Jacob`
     },
@@ -523,26 +505,20 @@ Jacob`
       subject: "what is actually working for fitness studios in Southern NH",
       body: `Hi {{first_name}},
 
-One thing I am seeing across local studios right now. The ones growing their membership are not running more ads. They are just staying visible to new people longer than their competition.
+Are trial leads at {{business_name}} getting a same-day text and a second invitation, or is follow-up still handled between classes?
 
-Most owners go quiet between sessions. The ones building waitlists do not.
-
-I help studios like {{business_name}} stay visible automatically. No extra time required on your end.
-
-Are you currently doing anything to bring in new members consistently, or is it mostly referrals and word of mouth?
+If the process is manual, I can sketch a simple trial-to-member flow.
 
 Jacob`
     },
     {
       day: 13,
-      subject: "closing the loop",
+      subject: "before the January rush",
       body: `Hi {{first_name}},
 
-Last note from me. I do not want to clutter your inbox.
+Unconverted trial leads leave empty spots in classes that could be full at {{business_name}}.
 
-If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
-
-Rooting for you either way.
+Okay to circle back in November, before January resolution demand begins?
 
 Jacob Maynard
 Pulseforge
@@ -556,13 +532,9 @@ gopulseforge.com`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-I work with local property management companies in Southern NH on one specific problem: keeping units filled without relying entirely on Zillow and word of mouth.
+Each extra day a unit sits vacant costs rent while its listing competes beside dozens of similar units.
 
-Most property managers I talk to spend more time than they should chasing leads manually. The pipeline is inconsistent and there is never enough time between managing tenants and owners to market the portfolio properly.
-
-I built a system that handles outreach automatically. It identifies local prospects, reaches out on your behalf, and keeps your properties in front of people who are actively looking. It runs in the background while you manage the day to day.
-
-Is filling vacancies faster and more consistently something you are actively working on right now?
+Fast inquiry response matters most when the team is already handling tenants and owners. Are prospects at {{business_name}} getting an immediate reply?
 
 Jacob Maynard
 Pulseforge`
@@ -572,11 +544,9 @@ Pulseforge`
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Sent you a note a few days ago. Wanted to follow up once before moving on.
+Leasing inquiries that wait until tenant issues settle are often touring another unit first.
 
-The property management companies I work with are not struggling. They have solid portfolios and good relationships with their owners. The challenge is always the same: vacancy periods stretch longer than they should because outreach is inconsistent or manual.
-
-If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
+An automated first response can protect the lead until someone is free. Want a mockup for {{business_name}}?
 
 Jacob`
     },
@@ -585,26 +555,20 @@ Jacob`
       subject: "what is actually working for property managers in Southern NH",
       body: `Hi {{first_name}},
 
-One thing I am seeing across local property management companies right now. The ones keeping vacancy rates low are not spending more on listing sites. They are just staying in front of prospective tenants and owner referrals longer than their competition.
+Are leasing inquiries at {{business_name}} getting an immediate response and scheduled follow-up, or is the process still manual between tenant issues?
 
-Most companies go quiet between leases. The ones with full portfolios do not.
-
-I help companies like {{business_name}} stay visible automatically. No extra time required on your end.
-
-Are you currently doing anything to generate consistent leads for vacancies, or is it mostly listing sites and referrals?
+If manual response is stretching vacancy time, I can map out a lighter workflow.
 
 Jacob`
     },
     {
       day: 13,
-      subject: "closing the loop",
+      subject: "before the next turn season",
       body: `Hi {{first_name}},
 
-Last note from me. I do not want to clutter your inbox.
+Unanswered leasing inquiries at {{business_name}} turn into vacancy days while prospects tour other units.
 
-If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
-
-Rooting for you either way.
+Okay to circle back 60 days before your next turn season?
 
 Jacob Maynard
 Pulseforge
@@ -618,13 +582,9 @@ gopulseforge.com`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-I work with local lawn care and landscaping companies in Southern NH on one specific problem: keeping the schedule full year round without relying on door knocking and referrals alone.
+When spring quote requests pile up faster than the crew can answer them, summer maintenance slots go to the company that replies first.
 
-Most owners I talk to are great at the work but inconsistent at bringing in new clients. Spring fills up fast but the pipeline for summer and fall maintenance is always thinner than it should be.
-
-I built a system that handles outreach automatically. It finds local homeowners and commercial properties in your area, reaches out on your behalf, and keeps your name visible between jobs. It runs in the background while you run the crew.
-
-Is keeping the schedule consistently full something you are actively working on right now?
+Is {{business_name}} responding while the crew is on-site, or are estimates waiting until the workday ends?
 
 Jacob Maynard
 Pulseforge`
@@ -634,11 +594,9 @@ Pulseforge`
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Sent you a note a few days ago. Wanted to follow up once before moving on.
+A landscaping estimate that waits until the crew gets off-site is often booked elsewhere before dinner.
 
-The landscaping companies I work with are not struggling. They do great work and their existing clients love them. The challenge is always the same: the off-season pipeline dries up and spring scramble is stressful every year.
-
-If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
+An immediate text can hold the conversation until someone can quote the work. Want a mockup for {{business_name}}?
 
 Jacob`
     },
@@ -647,26 +605,20 @@ Jacob`
       subject: "what is actually working for landscapers in Southern NH",
       body: `Hi {{first_name}},
 
-One thing I am seeing across local landscaping companies right now. The ones with full schedules are not spending more on ads. They are just staying in front of new clients longer than their competition.
+Are new quote requests at {{business_name}} getting a same-day response and a second touch, or is follow-up still handled after the crew gets back?
 
-Most owners go quiet between jobs. The ones with waitlists do not.
-
-I help companies like {{business_name}} stay visible automatically. No extra time required on your end.
-
-Are you currently doing anything to bring in new clients consistently, or is it mostly referrals and repeat customers?
+If the process is manual, I can sketch a simple estimate follow-up flow.
 
 Jacob`
     },
     {
       day: 13,
-      subject: "closing the loop",
+      subject: "before spring quote season",
       body: `Hi {{first_name}},
 
-Last note from me. I do not want to clutter your inbox.
+Estimates that never get a second touch leave summer work sitting in {{business_name}}'s lead list.
 
-If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
-
-Rooting for you either way.
+Okay to circle back in late winter, before spring quote season starts?
 
 Jacob Maynard
 Pulseforge
@@ -680,13 +632,9 @@ gopulseforge.com`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-I work with local home service companies in Southern NH on one specific problem: staying visible to homeowners between jobs so the pipeline does not go quiet.
+A homeowner who calls {{business_name}} during a job and reaches voicemail usually calls the next contractor before the crew is free.
 
-Most owners I talk to get plenty of repeat business from happy customers but are not consistently reaching new homeowners. Referrals are great until they are not enough.
-
-I built a system that handles outreach automatically. It finds local homeowners in your area, reaches out on your behalf, and keeps {{business_name}} visible year round. It runs in the background while you run the jobs.
-
-Is building a more consistent pipeline of new homeowners something you are actively working on?
+Are missed calls getting an immediate text now, or does follow-up wait until the workday ends?
 
 Jacob Maynard
 Pulseforge`
@@ -696,11 +644,9 @@ Pulseforge`
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Sent you a note a few days ago. Wanted to follow up once before moving on.
+The highest-intent home service leads often arrive while every tech is busy.
 
-The home service companies I work with are not struggling. They do great work. The challenge is always the same: the work fills the schedule but not enough new homeowners are finding them consistently.
-
-If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
+An immediate text can keep a missed caller from booking the next contractor. Want a mockup for {{business_name}}?
 
 Jacob`
     },
@@ -709,26 +655,20 @@ Jacob`
       subject: "what is actually working for home services in Southern NH",
       body: `Hi {{first_name}},
 
-One thing I am seeing across local home service companies right now. The ones with full schedules are not relying on referrals alone. They are staying in front of new homeowners consistently.
+Are missed calls and web forms at {{business_name}} getting an immediate response, or is someone calling back after the crew finishes the job?
 
-Most owners go quiet between jobs. The ones with waitlists do not.
-
-I help companies like {{business_name}} stay visible automatically. No extra time required on your end.
-
-Are you currently doing anything to reach new homeowners consistently, or is it mostly word of mouth?
+If callbacks are delayed, I can map out a simple lead-capture flow.
 
 Jacob`
     },
     {
       day: 13,
-      subject: "closing the loop",
+      subject: "before the next project cycle",
       body: `Hi {{first_name}},
 
-Last note from me. I do not want to clutter your inbox.
+Missed calls that never get a second touch are jobs another contractor can win from {{business_name}}.
 
-If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
-
-Rooting for you either way.
+Okay to circle back at the start of next quarter, after the current project cycle clears?
 
 Jacob Maynard
 Pulseforge
@@ -742,9 +682,9 @@ gopulseforge.com`
       subject: "{{business_name}} — honest question",
       body: `Hi {{first_name}},
 
-Auto shops in Manchester are busier than ever right now — but the ones adding real revenue aren't just doing more jobs, they're capturing customers who never came back after the first visit.
+Every first-time customer who leaves {{business_name}} without a service reminder is one oil change away from becoming another shop's regular.
 
-Is building a steadier flow of new and returning customers something you're working on at {{business_name}}, or is it pretty much steady as she goes?
+Are reminders going out before the next service interval, or does repeat business depend on the customer remembering?
 
 Jacob Maynard
 Pulseforge
@@ -755,11 +695,11 @@ Pulseforge
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Just following up — didn't want my last note to get lost.
+An estimate that leaves without follow-up usually means the customer found a price comparison somewhere else.
 
-What I build for auto shops: automated outreach that brings back lapsed customers, follows up on estimates that went quiet, and keeps new leads from slipping through.
+Automatic reminders can bring those customers back without adding calls to the service desk.
 
-If you want to see a free mockup of what that looks like for {{business_name}}, just reply here and I'll have it to you same day.
+Want me to mock up that flow for {{business_name}}?
 
 Jacob`
     },
@@ -768,20 +708,20 @@ Jacob`
       subject: "quick question about {{business_name}}",
       body: `Hi {{first_name}},
 
-Last question — are you currently doing anything to follow up with customers after a job, or is it mostly repeat and referral when it happens?
+Are you currently following up with customers after a job, or is repeat service still mostly left to memory and referrals?
 
-Happy to show you what's working for shops in Southern NH. Just reply here.
+I can sketch a service-reminder flow for {{business_name}} either way.
 
 Jacob`
     },
     {
       day: 13,
-      subject: "closing the loop",
+      subject: "{{business_name}} — keeping it brief",
       body: `Hi {{first_name}},
 
-Won't keep filling up your inbox. If the timing ever works out, just reply — I'll put something together for {{business_name}} same day. No forms, no pressure.
+Customers due for service who have not heard from {{business_name}} are revenue sitting in the repair history.
 
-Rooting for you either way.
+Okay to circle back before winter service prep begins?
 
 Jacob Maynard
 Pulseforge
@@ -857,13 +797,9 @@ gopulseforge.com`
       subject: "still thinking about {{business_name}}",
       body: `Hi {{first_name}},
 
-Reached out a few weeks ago — wanted to check back in before moving on.
+New inquiries that wait hours for a reply are usually contacting another local business before anyone calls back.
 
-I know timing matters. If growing your customer base consistently is still on your radar, I'd love to show you what we've put together for businesses like {{business_name}}.
-
-No pitch, just a look at what the system actually does.
-
-Is growing your customer base consistently still something you're working on right now?
+Is that response gap still showing up at {{business_name}}, or has the follow-up process changed?
 
 Jacob Maynard
 Pulseforge`
@@ -873,24 +809,20 @@ Pulseforge`
       subject: "one thing I'm seeing in Manchester right now",
       body: `Hi {{first_name}},
 
-One pattern I keep seeing across local businesses right now — the ones picking up new customers consistently aren't doing anything complicated. They're just staying visible longer than their competition.
+Forms, calls, and DMs become expensive leaks when they depend on someone remembering to respond between jobs.
 
-Most owners go quiet between jobs. The ones growing don't.
-
-I help businesses like {{business_name}} stay visible automatically. If you want to see a free mockup of what that could look like for {{business_name}}, just reply here and I'll have something over to you same day.
+A lightweight response flow can keep those inquiries alive. Want me to sketch one for {{business_name}}?
 
 Jacob`
     },
     {
       day: 8,
-      subject: "closing the loop on {{business_name}}",
+      subject: "another look at {{business_name}} in 90 days",
       body: `Hi {{first_name}},
 
-Last note from me — I don't want to clutter your inbox.
+Unanswered inquiries at {{business_name}} will keep getting colder until the response process changes.
 
-If the timing ever works out, just reply to this — I'll put something together for {{business_name}} same day. No forms, no pressure.
-
-Rooting for you either way.
+Okay to circle back in 90 days to see whether follow-up is still a bottleneck?
 
 Jacob Maynard
 Pulseforge
@@ -1331,6 +1263,9 @@ function getSequenceForProspect(prospect) {
   ) {
     return 'home_renovation';
   }
+  if (vertical.includes('med') || vertical.includes('aesthetic') || vertical.includes('botox') || vertical.includes('laser')) {
+    return 'med_spa';
+  }
   if (vertical.includes('salon') || vertical.includes('hair') || vertical.includes('spa') || vertical.includes('barber')) {
     return 'salon';
   }
@@ -1351,9 +1286,6 @@ function getSequenceForProspect(prospect) {
   }
   if (vertical.includes('auto') || vertical.includes('repair') || vertical.includes('mechanic') || vertical.includes('car')) {
     return 'auto';
-  }
-  if (vertical.includes('med') || vertical.includes('aesthetic') || vertical.includes('botox') || vertical.includes('laser')) {
-    return 'med_spa';
   }
   return 'cleaning';
 }
