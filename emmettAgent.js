@@ -197,6 +197,106 @@ Brad
 Mountain State Home Innovations`
     }
   ],
+  mshi_probate_attorney: [
+    {
+      day: 0,
+      subject: "when estate repairs delay the case",
+      body: `Hi {{first_name}},
+
+Unresolved water damage or deferred maintenance can add weeks before an estate property is ready to list or transfer. MSHI handles documented repairs in WV, keeps out-of-state heirs updated, and gives the attorney one point of contact.
+
+Worth a brief call this week to see if we'd fit any properties currently in your case load? Or if an estate property needs contractor coordination now, I can review the details and send back a one-page assessment either way.
+
+Brad Hudson
+Mountain State Home Innovations
+304-483-3655`
+    },
+    {
+      day: 4,
+      subject: "Re: when estate repairs delay the case",
+      body: `Hi {{first_name}},
+
+When heirs live out of state, contractor coordination often lands with the attorney even when it does not fit neatly into billable casework. MSHI can absorb the heir communication, repair scheduling, and written project documentation through one WV point of contact.
+
+Worth a brief conversation about any current cases? Or send me details on a case where the property is holding things up and I'll send back what we would handle.
+
+Brad Hudson
+Mountain State Home Innovations
+304-483-3655`
+    },
+    {
+      day: 8,
+      subject: "how are estate repairs handled now?",
+      body: `Hi {{first_name}},
+
+When a probate case stalls because the property is not sale-ready, are you coordinating repairs directly or routing that work to the heirs? In either case, MSHI can manage the WV repair scope, document progress, and keep everyone informed without adding another project to your case load.
+
+I can sketch what handing that off would look like for one of your current cases.
+
+Brad Hudson
+Mountain State Home Innovations
+304-483-3655`
+    },
+    {
+      day: 13,
+      subject: "before the next probate filing rush",
+      body: `Unresolved estate repairs will keep stretching probate timelines until there is a reliable contractor handoff. Okay to circle back at the end of the quarter, before the year-end probate filing rush?
+
+Brad Hudson
+Mountain State Home Innovations
+304-483-3655`
+    }
+  ],
+  mshi_investor_flipper: [
+    {
+      day: 0,
+      subject: "protecting margin on the next rehab",
+      body: `Hi {{first_name}},
+
+Each week a rehab runs long adds interest, taxes, insurance, and utilities directly against the deal's margin. MSHI scopes WV rehabs for realistic costs and timelines, then provides one point of contact across the project.
+
+Worth a quick call this week to talk through your next acquisition? Or send me the address of a property you're working through and I'll send back our rehab estimate, free and useful as a second opinion either way.
+
+Brad Hudson
+Mountain State Home Innovations
+304-483-3655`
+    },
+    {
+      day: 4,
+      subject: "Re: protecting margin on the next rehab",
+      body: `Hi {{first_name}},
+
+When a rehab budget jumps after demolition, the original scope usually missed conditions behind the walls or local code requirements. MSHI builds those WV details into the estimate so the projected number has a better chance of holding through the work.
+
+Worth a brief conversation about an upcoming project? Or send me a quote you're sitting on and I'll send back what we would say about the scope.
+
+Brad Hudson
+Mountain State Home Innovations
+304-483-3655`
+    },
+    {
+      day: 8,
+      subject: "who is carrying the GC role?",
+      body: `Hi {{first_name}},
+
+Are you GC-ing your flips yourself, or do you have a contractor partner handling the full rehab scope? Whether the priority is acquisition cadence, a shorter holding period, or a clean exit, MSHI can take ownership of the WV scope through one point of contact.
+
+I can map out what bringing one of your properties through our scope would look like.
+
+Brad Hudson
+Mountain State Home Innovations
+304-483-3655`
+    },
+    {
+      day: 13,
+      subject: "before the next acquisition closes",
+      body: `Carrying costs on the next deal will keep compounding until the contractor relationship is locked in. Okay to circle back before your next acquisition closes?
+
+Brad Hudson
+Mountain State Home Innovations
+304-483-3655`
+    }
+  ],
   mshi: [
     {
       day: 0,
@@ -1304,6 +1404,8 @@ function getSequenceForProspect(prospect) {
   const vertical = (prospect.vertical || '').toLowerCase();
   if (Number(prospect.client_id) === 2) {
     if (vertical === 'property_management') return 'mshi_property_management';
+    if (vertical === 'probate_attorney') return 'mshi_probate_attorney';
+    if (vertical === 'investor_flipper') return 'mshi_investor_flipper';
     return 'mshi';
   }
 
@@ -1362,7 +1464,12 @@ async function getNextSequenceStep(prospect) {
   const pool = require('./db');
   const sequenceName = getSequenceForProspect(prospect);
   const isReEngagement = sequenceName === 're_engagement';
-  const isMshiSequence = sequenceName === 'mshi' || sequenceName === 'mshi_property_management';
+  const isMshiSequence = [
+    'mshi',
+    'mshi_property_management',
+    'mshi_probate_attorney',
+    'mshi_investor_flipper',
+  ].includes(sequenceName);
 
   const res = isMshiSequence
     ? await pool.query(`
@@ -1664,7 +1771,12 @@ async function run(context = {}) {
 
     // Check for warm email substitution on Day 4+ follow-ups
     let useWarm = false;
-    if (sequenceName !== 'mshi' && sequenceName !== 're_engagement' && step.day > 0) {
+    const usesMshiVerticalFollowups = [
+      'mshi',
+      'mshi_probate_attorney',
+      'mshi_investor_flipper',
+    ].includes(sequenceName);
+    if (!usesMshiVerticalFollowups && sequenceName !== 're_engagement' && step.day > 0) {
       const clicked  = await hasClickedEmail(prospect.id);
       const warmSent = await hasSentWarmEmail(prospect.id);
       if (clicked && warmSent) {
