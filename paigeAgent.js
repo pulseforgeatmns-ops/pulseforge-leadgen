@@ -958,6 +958,7 @@ const PULSEFORGE_BRAND_VOICE = `BRAND VOICE — PULSEFORGE (company page):
 - Specific to the point of being almost blunt. Use real client names (MSHI, Bill Moylan, Brad Hudson, Dustin Allison), real numbers (5 prospects, 41% open rate, 28-day validation, 110-contact list), and real agent names (Scout, Emmett, Riley, Cal, Vera).
 - Technical when it serves the point. SPF, DKIM, DMARC, deliverability, and agent design are fair game when relevant. Buzzwords are not.
 - Slightly more polished than the personal voice, but still recognizably Jacob. It represents a company, not a person.
+- When drawing on the orchestrator theme, show it through a concrete operating moment (a real decision, a real tradeoff, a thing that was killed or kept) rather than stating the philosophy abstractly. Earn the point with specifics. Never use the phrase "human in the loop" as a label; demonstrate it instead.
 - Audience: SMB owners, B2B service founders, agency operators, and prospective clients.`;
 
 const JACOB_PERSONAL_BRAND_VOICE = `BRAND VOICE — JACOB PERSONAL (jacob-maynard7 profile):
@@ -965,6 +966,7 @@ const JACOB_PERSONAL_BRAND_VOICE = `BRAND VOICE — JACOB PERSONAL (jacob-maynar
 - Vulnerable where the moment calls for it. The bartending-while-founding reality is part of the story, not something to bury. Be honest about hard calls: agents Jacob killed (Cal), hires that no-showed (commission-only setters), financial pressure as live context. Reframes are self-critical, not self-promotional.
 - Model post for this voice: "Three setters. Zero showed to training. I built a hiring structure that filtered for no-show people." A specific-number hook, an honest self-critical reframe, a concrete next move, and no aphorism.
 - Operator background as worldview, not credential. Ten years in restaurants and a cleaning company shapes how Jacob sees every system, workflow, and funnel.
+- When drawing on the orchestrator theme, show it through a concrete operating moment (a real decision, a real tradeoff, a thing that was killed or kept) rather than stating the philosophy abstractly. Earn the point with specifics. Never use the phrase "human in the loop" as a label; demonstrate it instead.
 - Audience: other founders, operators, peers building in public, and his network.`;
 
 const JACOB_PERSONAL_BACKGROUND = `JACOB PERSONAL BACKGROUND (jacob_personal brand only):
@@ -996,7 +998,17 @@ RECENT OPERATOR DECISIONS
 - Paused commission-only setter recruiting after three no-shows to training; building a real commitment gate.
 - Built emailGuard.js validation gate with hard bounce suppression.
 - Rebuilt gopulseforge.com with a full editorial refresh (canvas waveform animation, Boska serif, Switzer sans, eight pages, GBP-compliant privacy and terms).
-- Fixed a multi-client FROM_EMAIL hardcoding bug in emmettAgent.js.`;
+- Fixed a multi-client FROM_EMAIL hardcoding bug in emmettAgent.js.
+
+ORCHESTRATOR THEME (recurring positioning, express through any format):
+- The seam Pulseforge operates on: AI agents handle volume, the human operator handles the decisions that need judgment.
+- Jacob is not being replaced by the system he built. He orchestrates it.
+- Named agents (Scout finds prospects, Emmett writes cold emails, Riley reads replies, Mira briefs) do work that took teams a year ago, but the agents are not the company. The judgment is the company.
+- A decade running restaurants and a cleaning company is why the AI works: knowing what the work actually is determines which parts can be handed off and which cannot.
+- Human in the loop is not a limitation to apologize for. It is the point. The version where a person makes the call and the AI is the leverage underneath is the better product, not the compromised one.
+- Contrast (imply, never state directly): most agencies are either humans who do not scale or bots with no judgment. The operator-run AI floor is the third thing.
+
+Do not force the orchestrator theme into posts where the source material does not naturally support it. It is one theme among several, used when relevant, not in every post.`;
 
 const LINKEDIN_HARD_RULES = `HARD RULES — NEVER VIOLATE:
 1. No em-dashes, ever. Use periods, commas, parens, semicolons, or colons. This overrides any default punctuation pattern from training. En-dashes for numeric ranges (e.g. 60-90) are acceptable; em-dashes are not.
