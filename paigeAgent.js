@@ -904,6 +904,443 @@ ${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. T
 Return only the blog post text with markdown formatting.`;
 }
 
+// ── LINKEDIN BRAND-AWARE CONTENT (v2) ─────────────────────────────────────────
+// Brand voice is derived directly from the LinkedIn destination channel. The two
+// LinkedIn destinations already exist as distinct channels that route to separate
+// Buffer channels in publishPipeline.js, so no brand_voice column or extra
+// client_id is needed — the brand is a pure function of the channel:
+//   linkedin_page     → Pulseforge company page  → brand 'pulseforge'
+//   linkedin_personal → Jacob's personal profile  → brand 'jacob_personal'
+const LINKEDIN_BRAND_BY_CHANNEL = {
+  linkedin_page: 'pulseforge',
+  linkedin_personal: 'jacob_personal',
+};
+const LINKEDIN_V2_MODULE = 'linkedin_content_v2';
+const LINKEDIN_FORMATS = ['punch', 'numbers', 'quote', 'stake', 'decision_log'];
+
+const LINKEDIN_FORMAT_SPECS = {
+  punch: {
+    when: 'a sharp diagnosis, an agent kill, or a decisive moment',
+    structure: 'a specific event or number, one line of context, then the stake or implication',
+    maxWords: 80,
+  },
+  numbers: {
+    when: 'there are real results to report or a recent client win',
+    structure: 'three numbers as the opening line, one paragraph of context, then the implication (not the lesson)',
+    maxWords: 120,
+  },
+  quote: {
+    when: "a client, peer, or Jacob's past self said something real and quotable",
+    structure: 'a direct quote (attributed), a brief setup of when and why, what it reframed, then an open question to the reader',
+    maxWords: 140,
+  },
+  stake: {
+    when: 'Jacob genuinely disagrees with the consensus',
+    structure: 'a declared claim with no hedge, the reason in his own words, a specific example, then a closing line that invites disagreement',
+    maxWords: 180,
+  },
+  decision_log: {
+    when: 'Jacob just made a real call with a tradeoff worth naming',
+    structure: 'the decision in present tense, the tradeoff accepted, the metric being watched, then a dated prediction',
+    maxWords: 140,
+  },
+};
+
+// Hard rule #2 / #5 enforcement list (see LINKEDIN_HARD_RULES).
+const LINKEDIN_BANNED_VOCAB = [
+  'leverage', 'synergize', 'synergy', 'unlock', 'elevate', 'empower', 'transform',
+  'ecosystem', 'journey', 'hustle', 'grind', 'blessed', 'humbled',
+  'excited to announce', 'thrilled',
+];
+
+const PULSEFORGE_BRAND_VOICE = `BRAND VOICE — PULSEFORGE (company page):
+- Plain confidence. Pulseforge exists because Jacob ran restaurants and a cleaning company for over a decade and watched leaky funnels kill businesses. That operator background is the credibility on every post. Never trade it for tech-founder posture.
+- Specific to the point of being almost blunt. Use real client names (MSHI, Bill Moylan, Brad Hudson, Dustin Allison), real numbers (5 prospects, 41% open rate, 28-day validation, 110-contact list), and real agent names (Scout, Emmett, Riley, Cal, Vera).
+- Technical when it serves the point. SPF, DKIM, DMARC, deliverability, and agent design are fair game when relevant. Buzzwords are not.
+- Slightly more polished than the personal voice, but still recognizably Jacob. It represents a company, not a person.
+- When drawing on the orchestrator theme, show it through a concrete operating moment (a real decision, a real tradeoff, a thing that was killed or kept) rather than stating the philosophy abstractly. Earn the point with specifics. Never use the phrase "human in the loop" as a label; demonstrate it instead.
+- Audience: SMB owners, B2B service founders, agency operators, and prospective clients.`;
+
+const JACOB_PERSONAL_BRAND_VOICE = `BRAND VOICE — JACOB PERSONAL (jacob-maynard7 profile):
+- First-person founder voice. Jacob Maynard posting as himself, mid-build, about the Pulseforge journey and the operator experience that informs it. Use "I", not "we".
+- Vulnerable where the moment calls for it. The bartending-while-founding reality is part of the story, not something to bury. Be honest about hard calls: agents Jacob killed (Cal), hires that no-showed (commission-only setters), financial pressure as live context. Reframes are self-critical, not self-promotional.
+- Model post for this voice: "Three setters. Zero showed to training. I built a hiring structure that filtered for no-show people." A specific-number hook, an honest self-critical reframe, a concrete next move, and no aphorism.
+- Operator background as worldview, not credential. Ten years in restaurants and a cleaning company shapes how Jacob sees every system, workflow, and funnel.
+- When drawing on the orchestrator theme, show it through a concrete operating moment (a real decision, a real tradeoff, a thing that was killed or kept) rather than stating the philosophy abstractly. Earn the point with specifics. Never use the phrase "human in the loop" as a label; demonstrate it instead.
+- Audience: other founders, operators, peers building in public, and his network.`;
+
+const JACOB_PERSONAL_BACKGROUND = `JACOB PERSONAL BACKGROUND (jacob_personal brand only):
+- Over a decade as an operator: restaurants and a cleaning company.
+- Currently bartending alongside Pulseforge for runway.
+- Father, based in Manchester and Goffstown NH.
+- Enrolled in FES (Frontend Engineering Skills), working through JavaScript toward React.
+- Built a personal OS layer (Mira) on Telegram, live and capturing.`;
+
+const LINKEDIN_CANONICAL_SOURCE_MATERIAL = `ACTIVE CLIENTS AND WINS
+- Mountain State Home Innovations (Brad Hudson, Dustin Allison, Charleston WV): regional contractor, hand-built five-name list model, first call closed recurring revenue, model validated in 28 days against 60-90 quoted.
+- Bill Moylan (Upwork, CFO recruiter list, Brevo setup): 41% open rate proof point on a 110-contact verified list.
+- McLeod Legal (client_id=3): active.
+- Pulseforge Nashville (client_id=5): active.
+- MSHI strategic pivot: away from volume cold email toward B2B relationship channels (property management, investors and flippers, banks and REO, listing agents, probate attorneys).
+
+AGENT SYSTEM (15+ agents, Railway, Node.js, Postgres)
+- Scout: lead scraping, Google Places API for retail and wellness verticals.
+- Emmett: cold email via Brevo, per-client FROM_EMAIL config, duplicate-send guard (commit 85f3dd6).
+- Riley: Gmail OAuth inbound triage.
+- Paige: content generation (this agent).
+- Mira: personal OS Telegram capture, eight-table schema, live on @Mira_JM_bot.
+- Cal: Bland.ai voice. Disabled after six weeks despite healthy connect rates and zero meaningful conversion.
+- Vera: GBP posting. Down pending the Google API reapplication window opening June 25.
+- Max, Rex, Sam, Faye, Link, Sketch: supporting roles.
+
+RECENT OPERATOR DECISIONS
+- Disabled Cal after six weeks.
+- Paused commission-only setter recruiting after three no-shows to training; building a real commitment gate.
+- Built emailGuard.js validation gate with hard bounce suppression.
+- Rebuilt gopulseforge.com with a full editorial refresh (canvas waveform animation, Boska serif, Switzer sans, eight pages, GBP-compliant privacy and terms).
+- Fixed a multi-client FROM_EMAIL hardcoding bug in emmettAgent.js.
+
+ORCHESTRATOR THEME (recurring positioning, express through any format):
+- The seam Pulseforge operates on: AI agents handle volume, the human operator handles the decisions that need judgment.
+- Jacob is not being replaced by the system he built. He orchestrates it.
+- Named agents (Scout finds prospects, Emmett writes cold emails, Riley reads replies, Mira briefs) do work that took teams a year ago, but the agents are not the company. The judgment is the company.
+- A decade running restaurants and a cleaning company is why the AI works: knowing what the work actually is determines which parts can be handed off and which cannot.
+- Human in the loop is not a limitation to apologize for. It is the point. The version where a person makes the call and the AI is the leverage underneath is the better product, not the compromised one.
+- Contrast (imply, never state directly): most agencies are either humans who do not scale or bots with no judgment. The operator-run AI floor is the third thing.
+
+Do not force the orchestrator theme into posts where the source material does not naturally support it. It is one theme among several, used when relevant, not in every post.`;
+
+const LINKEDIN_HARD_RULES = `HARD RULES — NEVER VIOLATE:
+1. No em-dashes, ever. Use periods, commas, parens, semicolons, or colons. This overrides any default punctuation pattern from training. En-dashes for numeric ranges (e.g. 60-90) are acceptable; em-dashes are not.
+2. No "HUGE WIN" energy. No all-caps hooks, no double exclamation marks, no "excited to announce".
+3. No aphorism kickers. Never end on a written-for-LinkedIn wisdom line. End on a stake, a question, a metric, or a date.
+4. No generic hashtags. Banned: #FounderLessons, #AIAutomation, #SmallBusiness, #Entrepreneurship, #Hustle. Use niche tags (#ManchesterNH, #CharlestonWV, #ContractorMarketing) or none.
+5. No banned vocabulary: leverage, synergize, unlock, elevate, empower, transform, ecosystem, journey, hustle, grind, blessed, humbled, "excited to announce", "thrilled".
+6. The first line works standalone. Assume the reader sees only the first two lines before "see more".
+7. Specific over abstract, always. Every claim is anchored to real source material from the canonical list. If a claim cannot be anchored, cut it.
+8. Length discipline. Stay within the format's word cap.
+9. Never invent. No fabricated quotes, no made-up metrics, no clients that do not exist. Skip the slot before generating slop.
+10. Brand voice never mixes. This post is one brand only.`;
+
+// Few-shot tonal grounding: one worked example per format/brand. Reference only,
+// never templates to copy verbatim. Loaded as the last thing in the system prompt
+// (end of buildLinkedInRules), immediately above the user prompt.
+const LINKEDIN_FEW_SHOT = {
+  punch: {
+    pulseforge: `We disabled an agent this week.
+Cal, our voice outbound channel, off after six weeks of strong connect rates and zero conversion. Healthy top-of-funnel, broken middle.
+Voice AI isn't there yet for cold outbound. Connect rate is a vanity metric when the eight seconds after pickup decide everything.`,
+    jacob_personal: `Killed an agent yesterday.
+Cal, our voice outbound, disabled after six weeks of healthy connect rates and zero meaningful conversion.
+Lesson: connect rate is a vanity metric when the bot's voice doesn't pass for human. The eight seconds after pickup are the whole ballgame.`,
+  },
+  numbers: {
+    pulseforge: `5 prospects sent. 1 closed recurring revenue. 0 cold emails fired.
+That's the unit economics of regional outbound when you stop chasing volume and start building a list short enough to call by name.
+Most agencies can't sell that model because their pricing depends on send volume. Ours doesn't.`,
+    jacob_personal: `5 prospects handed off. 1 booked on the first call. 0 cold emails sent.
+Brad and Dustin at MSHI dialed their first batch yesterday. Single dial, recurring revenue locked.
+Twenty-eight days from contract signed to model validated. I quoted them sixty to ninety.`,
+  },
+  quote: {
+    pulseforge: `"I'd rather have 5 names I can actually win than 500 I'll never call." Brad Hudson, MSHI, week two.
+We'd been pricing for the 500-name version because that's what every outbound agency on the internet sells.
+Brad's version is harder to deliver, more expensive to run, worth more to the buyer. Curious how many operators are pricing the easy version of the work?`,
+    jacob_personal: `"Connect rate is a vanity metric." That was me, on a call with my voice agent vendor, six weeks into Cal.
+I'd been chasing the wrong number because the wrong number was the easy one to chase.
+Killed Cal yesterday. What's the metric you've been tracking that you should have killed sooner?`,
+  },
+  stake: {
+    pulseforge: `Cold email volume doesn't work in markets under 50,000 people.
+We've watched it across two client deployments now. The math breaks when one bad send hits the inbox of everyone the recipient drinks with on Saturday. Reputation poisons faster than you can warm new domains.
+Our model for those markets: hand-built lists in the single digits. Sounds wasteful. Closes faster. Every time.
+Different math. Different pricing. Different agency.`,
+    jacob_personal: `Cold email is dead in sub-50K population markets.
+Not "underperforming." Not "needs a better hook." Dead. The math doesn't work when one bad send hits the inbox of everyone the recipient drinks with on Saturday.
+I learned this watching a perfectly good DKIM-aligned campaign in West Virginia get burned in seven sends because two recipients knew each other.
+If you're running outbound in a tight regional market and getting real results from volume, tell me where I'm wrong.`,
+  },
+  decision_log: {
+    pulseforge: `Decision yesterday: we're pausing commission-only setter recruiting until our hiring structure has a real commitment gate.
+Tradeoff accepted: slower setter pipeline for two to three weeks. Stop hiring people whose math depends on desperation.
+Metric we're watching: show-rate on the next five hires. Above 80% by July 15 means the gate is calibrated. Below means the structure needs another pass.`,
+    jacob_personal: `Made a call yesterday: commission-only setter recruiting is paused until I build a real commitment gate.
+Means slower MSHI growth for two to three weeks. Means I stop hiring people whose math depends on desperation.
+Metric I'm watching: show-rate on the next five hires. If it's not above 80% by July 15, the gate isn't tight enough yet.`,
+  },
+};
+
+// Fail fast at module load: hard rule #1 forbids em-dashes, so no reference
+// example may contain one.
+for (const [fmt, brands] of Object.entries(LINKEDIN_FEW_SHOT)) {
+  for (const [brandKey, text] of Object.entries(brands)) {
+    if (/—/.test(text)) {
+      throw new Error(`LINKEDIN_FEW_SHOT[${fmt}][${brandKey}] contains an em-dash, which violates hard rule #1`);
+    }
+  }
+}
+
+function getBrandForChannel(channel) {
+  return LINKEDIN_BRAND_BY_CHANNEL[channel] || null;
+}
+
+function isLinkedInV2Channel(channel) {
+  return Object.prototype.hasOwnProperty.call(LINKEDIN_BRAND_BY_CHANNEL, channel);
+}
+
+// jacob_personal only publishes once its Buffer channel is wired (the June 10
+// Todoist task). Pulseforge ships immediately; jacob_personal auto-enables when
+// BUFFER_LINKEDIN_PERSONAL_ID is configured. PAIGE_ENABLE_JACOB_PERSONAL=1 forces
+// it on (orphan rows acceptable temporarily); =0 forces it off.
+function jacobPersonalEnabled() {
+  if (process.env.PAIGE_ENABLE_JACOB_PERSONAL === '1') return true;
+  if (process.env.PAIGE_ENABLE_JACOB_PERSONAL === '0') return false;
+  return Boolean(process.env.BUFFER_LINKEDIN_PERSONAL_ID);
+}
+
+function buildLinkedInRules(brand, format) {
+  const voice = brand === 'jacob_personal' ? JACOB_PERSONAL_BRAND_VOICE : PULSEFORGE_BRAND_VOICE;
+  const spec = LINKEDIN_FORMAT_SPECS[format];
+  const personalBackground = brand === 'jacob_personal' ? `\n\n${JACOB_PERSONAL_BACKGROUND}` : '';
+
+  return `${voice}
+
+FORMAT FOR THIS POST — ${format.toUpperCase()} (runs IN ADDITION to the content rules above, never instead of them):
+Use this when: ${spec.when}.
+Structure: ${spec.structure}.
+Hard length cap: ${spec.maxWords} words. Do not exceed it.
+
+${LINKEDIN_HARD_RULES}
+
+CANONICAL SOURCE MATERIAL — anchor every specific claim to something on this list. Never invent:
+${LINKEDIN_CANONICAL_SOURCE_MATERIAL}${personalBackground}
+
+Reference example for ${format} in the ${brand} voice (do not copy verbatim, match the discipline):
+
+${LINKEDIN_FEW_SHOT[format][brand]}`;
+}
+
+// Format rotation: exclude the brand's last 3 LinkedIn formats from this run.
+async function getRecentLinkedInFormats(brand) {
+  const res = await pool.query(`
+    SELECT format
+    FROM pending_comments
+    WHERE client_id = $1
+      AND brand = $2
+      AND channel = ANY($3)
+      AND format IS NOT NULL
+    ORDER BY created_at DESC
+    LIMIT 3
+  `, [CLIENT_ID, brand, Object.keys(LINKEDIN_BRAND_BY_CHANNEL)]);
+  return res.rows.map(r => r.format).filter(Boolean);
+}
+
+function chooseLinkedInFormat(recentFormats = []) {
+  const blocked = new Set(recentFormats);
+  let eligible = LINKEDIN_FORMATS.filter(f => !blocked.has(f));
+  if (!eligible.length) eligible = LINKEDIN_FORMATS.slice();
+  return eligible[Math.floor(Math.random() * eligible.length)];
+}
+
+function buildLinkedInV2Prompt(company, brand, format) {
+  const spec = LINKEDIN_FORMAT_SPECS[format];
+  const persona = brand === 'jacob_personal'
+    ? "Jacob Maynard posting as himself on his personal LinkedIn profile"
+    : "the Pulseforge company LinkedIn page";
+  const audience = brand === 'jacob_personal'
+    ? "other founders, operators, peers building in public, and Jacob's network"
+    : 'SMB owners, B2B service founders, agency operators, and prospective clients';
+
+  return `You are writing ONE LinkedIn post for ${persona}.
+Brand: ${brand}
+Format: ${format} (use when ${spec.when})
+Audience: ${audience}
+
+Write the post in the ${format} structure, in the brand voice, and following every hard rule in the system prompt. Keep it under ${spec.maxWords} words. Ground every specific claim in the canonical source material. If that material is too thin to anchor this post in real, specific facts, return an empty source_anchors array and do not fabricate anything to fill the slot.
+
+Return ONLY a strict JSON object with double-quoted keys. No code fences, no prose before or after:
+{
+  "format": "${format}",
+  "post_body": "<full post text, ready to publish, with no hashtags inside the body>",
+  "hashtags": ["#ManchesterNH"],
+  "source_anchors": ["<short label for each real canonical fact you anchored to>"]
+}
+"hashtags" may be an empty array. "source_anchors" MUST list the real canonical facts you used. If you cannot anchor the post in real facts, return "source_anchors" as an empty array and a best-effort post_body, and the slot will be skipped.`;
+}
+
+function parseLinkedInJson(text) {
+  const raw = String(text || '').trim();
+  const defenced = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+  const match = defenced.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON object returned from LinkedIn generation');
+
+  let parsed;
+  try {
+    parsed = JSON.parse(match[0]);
+  } catch (_) {
+    parsed = JSON.parse(match[0].replace(/'/g, '"'));
+  }
+
+  const hashtags = Array.isArray(parsed.hashtags)
+    ? parsed.hashtags.map(h => String(h).trim()).filter(Boolean)
+    : [];
+  const sourceAnchors = Array.isArray(parsed.source_anchors)
+    ? parsed.source_anchors.map(a => String(a).trim()).filter(Boolean)
+    : [];
+
+  return {
+    format: parsed.format || null,
+    post_body: String(parsed.post_body || '').trim(),
+    hashtags,
+    source_anchors: sourceAnchors,
+  };
+}
+
+// Enforces the cheap, deterministic hard rules (em-dash, banned vocab, HUGE WIN
+// energy). Quality/specificity/hook are handled by the shared scoreDraft gate.
+function validateLinkedInDraft(postBody) {
+  const text = String(postBody || '');
+  const issues = [];
+  if (text.includes('—')) issues.push('contains an em-dash');
+  if (/!!/.test(text)) issues.push('uses double exclamation marks');
+  for (const term of LINKEDIN_BANNED_VOCAB) {
+    const re = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if (re.test(text)) issues.push(`uses banned word "${term}"`);
+  }
+  return issues;
+}
+
+async function createLinkedInDraft(prompt, systemPrompt) {
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 900,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: prompt }],
+  });
+  return message.content[0].text.trim();
+}
+
+async function logLinkedInSkip(company, channel, brand, format, reason) {
+  // agent_log_status_check forbids a custom 'insufficient_material' status, so the
+  // reason lives in the payload and action while status stays 'skipped'.
+  try {
+    await pool.query(`
+      INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+      VALUES ($1, $2, $3, $4, NOW(), $5)
+    `, [
+      AGENT_NAME,
+      'linkedin_content_skipped',
+      JSON.stringify({
+        module: LINKEDIN_V2_MODULE,
+        company: company?.name || null,
+        channel,
+        brand,
+        format: format || null,
+        reason,
+      }),
+      'skipped',
+      CLIENT_ID,
+    ]);
+  } catch (err) {
+    console.error(`  [linkedin] skip log failed: ${err.message}`);
+  }
+}
+
+// Brand-aware LinkedIn generation. Runs the shared buildContentRules() (HOOK
+// WRITING NON-NEGOTIABLE block included) AND buildLinkedInRules() concatenated on
+// top, enforces format rotation, and requires a non-empty source_anchors array.
+async function generateLinkedInPost(company, channel) {
+  const brand = getBrandForChannel(channel);
+  if (!brand) throw new Error(`generateLinkedInPost called for non-LinkedIn channel: ${channel}`);
+
+  if (brand === 'jacob_personal' && !jacobPersonalEnabled()) {
+    console.log('  [linkedin] jacob_personal Buffer channel not wired yet — skipping slot');
+    await logLinkedInSkip(company, channel, brand, null, 'channel_unwired');
+    return { content: null, failed: true, skipped: true };
+  }
+
+  const recentFormats = await getRecentLinkedInFormats(brand);
+  const format = chooseLinkedInFormat(recentFormats);
+  const recentThemes = await getRecentThemes(channel);
+  const recentPublishedAngles = await getRecentPublishedAngles();
+  // buildContentRules keeps the HOOK WRITING / ORIGINALITY / CONCRETE ANCHOR
+  // blocks. isPulseforge=true adds the company-POV rule for the company page;
+  // jacob_personal passes false so the first-person founder voice is not boxed
+  // into company POV. buildLinkedInRules is appended, never substituted.
+  const systemPrompt = `${buildContentRules(recentThemes, recentPublishedAngles, null, brand === 'pulseforge')}
+
+${buildLinkedInRules(brand, format)}`;
+  const basePrompt = buildLinkedInV2Prompt(company, brand, format);
+
+  console.log(`  [linkedin] brand=${brand} format=${format} (recent formats: ${recentFormats.join(', ') || 'none'})`);
+
+  let prompt = basePrompt;
+  let best = null; // { parsed, score }
+  let attempts = 0;
+
+  for (; attempts <= MAX_REGENERATION_ATTEMPTS; attempts++) {
+    const raw = await createLinkedInDraft(prompt, systemPrompt);
+    const parsed = parseLinkedInJson(raw);
+
+    if (!parsed.source_anchors.length) {
+      if (best) break; // we already have an anchored draft; stop regenerating
+      console.log('  [linkedin] empty source_anchors — insufficient material, skipping slot');
+      await logLinkedInSkip(company, channel, brand, format, 'insufficient_material');
+      return { content: null, failed: true, insufficientMaterial: true };
+    }
+
+    const score = await scoreDraft(parsed.post_body, recentPublishedAngles);
+    const issues = validateLinkedInDraft(parsed.post_body);
+    logQualityGateComparison(`linkedin_${brand}_${attempts === 0 ? 'initial' : 'attempt_' + attempts}`, score);
+
+    if (!best || score.total > best.score.total) best = { parsed, score };
+
+    if (!issues.length && passesQualityGate(score, channel)) {
+      best = { parsed, score };
+      break;
+    }
+    if (attempts === MAX_REGENERATION_ATTEMPTS) break;
+
+    prompt = [
+      basePrompt,
+      '',
+      issues.length ? `Your previous draft broke these hard rules: ${issues.join('; ')}. Fix every one.` : '',
+      `Your previous draft scored ${score.total}/30 (specificity ${score.specificity}, originality ${score.originality}, hook ${score.hook_strength}). Reason: ${score.reason}.`,
+      `Rewrite it. Keep the ${format} format and the ${brand} brand voice, stay under ${LINKEDIN_FORMAT_SPECS[format].maxWords} words, anchor every claim to the canonical source material, and return the same strict JSON shape.`,
+    ].filter(Boolean).join('\n');
+  }
+
+  if (!best) return { content: null, failed: true };
+
+  const finalIssues = validateLinkedInDraft(best.parsed.post_body);
+  if (finalIssues.length || !passesQualityGate(best.score, channel)) {
+    await logContentFailed(company, channel, format, best.score, attempts, best.parsed.post_body);
+    console.log(`  [linkedin] failed gate after ${attempts} attempt(s): ${finalIssues.join(', ') || 'best score ' + best.score.total + '/30'}; skipping ${channel}`);
+    return { content: null, failed: true, quality: best.score };
+  }
+
+  const hashtags = best.parsed.hashtags || [];
+  const postBody = hashtags.length
+    ? `${best.parsed.post_body}\n\n${hashtags.join(' ')}`
+    : best.parsed.post_body;
+
+  console.log(`  [linkedin] ${brand}/${format} passed — ${best.score.total}/30 after ${attempts} attempt(s), anchors: ${best.parsed.source_anchors.join(', ')}`);
+
+  return {
+    content: postBody,
+    quality: best.score,
+    regenerated: attempts > 0,
+    regenerationAttempts: attempts,
+    failed: false,
+    meta: {
+      brand,
+      format,
+      source_anchors: best.parsed.source_anchors,
+      hashtags,
+    },
+  };
+}
+
 function buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy) {
   const isPulseforge = company.name.toLowerCase().includes('pulseforge');
   const location = company.location || 'Manchester, NH';
@@ -1353,6 +1790,15 @@ async function generatePost(company, contentType, channel) {
   return { content: finalDraft, quality: finalScore, regenerated, regenerationAttempts };
 }
 
+// Dispatch: LinkedIn channels use the brand-aware v2 path; everything else
+// (blog, Facebook, GBP) keeps the existing generatePost flow untouched.
+async function producePost(company, contentType, channel) {
+  if (isLinkedInV2Channel(channel)) {
+    return generateLinkedInPost(company, channel);
+  }
+  return generatePost(company, contentType, channel);
+}
+
 async function logQualityScore(channel, quality, regenerated, post, attemptCount = 0) {
   console.log(`  [logQualityScore] ${channel} attempt_count being passed: ${attemptCount}`);
   const payload = {
@@ -1420,7 +1866,7 @@ async function logContentFailed(company, channel, contentType, quality, regenera
   }
 }
 
-async function saveToPendingApprovals(company, content, contentType, channel) {
+async function saveToPendingApprovals(company, content, contentType, channel, meta = null) {
   const channelLabel = {
     facebook_page:   'Facebook Page',
     google_business: 'Google Business',
@@ -1428,7 +1874,9 @@ async function saveToPendingApprovals(company, content, contentType, channel) {
     linkedin_page:   'LinkedIn Page',
     linkedin_personal:'LinkedIn Personal',
   }[channel] || channel;
-  const label = `${channelLabel} · ${contentType.charAt(0).toUpperCase() + contentType.slice(1)}`;
+  // For LinkedIn v2 the "content type" slot is the rotation format (punch, numbers, …).
+  const typeLabel = meta?.format || contentType;
+  const label = `${channelLabel} · ${typeLabel.charAt(0).toUpperCase() + typeLabel.slice(1)}`;
 
   // LinkedIn Page posts carry a first-comment URL posted via Buffer after approval
   const storedContent = channel === 'linkedin_page'
@@ -1468,8 +1916,9 @@ async function saveToPendingApprovals(company, content, contentType, channel) {
 
   const res = await pool.query(`
     INSERT INTO pending_comments
-      (author_name, author_title, post_content, comment, post_url, channel, status, client_id)
-    VALUES ($1, $2, $3, $4, NULL, $5, 'pending', $6)
+      (author_name, author_title, post_content, comment, post_url, channel, status, client_id,
+       brand, format, source_anchors)
+    VALUES ($1, $2, $3, $4, NULL, $5, 'pending', $6, $7, $8, $9)
     RETURNING id
   `, [
     company.name,
@@ -1477,10 +1926,29 @@ async function saveToPendingApprovals(company, content, contentType, channel) {
     label,
     storedContent,
     channel,
-    CLIENT_ID
+    CLIENT_ID,
+    meta?.brand || null,
+    meta?.format || null,
+    meta?.source_anchors ? JSON.stringify(meta.source_anchors) : null,
   ]);
 
   return res.rows[0].id;
+}
+
+// Idempotent startup migration for the LinkedIn v2 output columns. Follows the
+// codebase convention of ADD COLUMN IF NOT EXISTS at run time.
+async function ensurePendingCommentsLinkedInColumns() {
+  try {
+    await pool.query(`
+      ALTER TABLE pending_comments
+        ADD COLUMN IF NOT EXISTS brand TEXT,
+        ADD COLUMN IF NOT EXISTS format TEXT,
+        ADD COLUMN IF NOT EXISTS source_anchors JSONB
+    `);
+  } catch (err) {
+    console.error(`[Paige] pending_comments LinkedIn column migration failed: ${err.message}`);
+    throw err;
+  }
 }
 
 async function logRun(status, payload) {
@@ -1553,9 +2021,9 @@ async function processRegenerateTriggers() {
       const contentType = await pickContentType(company.name, channel, company.id);
       console.log(`  [regenerate] ${company.name} — ${channel} — ${contentType}`);
       try {
-        const postResult = await generatePost(company, contentType, channel);
+        const postResult = await producePost(company, contentType, channel);
         if (postResult.failed) continue;
-        const id = await saveToPendingApprovals(company, postResult.content, contentType, channel);
+        const id = await saveToPendingApprovals(company, postResult.content, contentType, channel, postResult.meta);
         if (id) {
           await logQualityScore(channel, postResult.quality, true, postResult.content, postResult.regenerationAttempts);
           console.log(`  ✓ regenerated (${id.slice(0, 8)})`);
@@ -1599,6 +2067,7 @@ async function run() {
   console.log('\nPaige agent running...\n');
   CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
   if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
+  await ensurePendingCommentsLinkedInColumns();
   if (CLIENT_ID === 2 && !CLIENT_CONFIG.facebook_url) {
     console.log('MSHI Facebook page is not connected yet; Paige will still queue Facebook, Google Business, and blog drafts for approval.');
   }
@@ -1655,13 +2124,13 @@ AND status = 'pending';`);
         console.log(`${company.name} — ${channel} — ${contentType}`);
 
         try {
-          const postResult = await generatePost(company, contentType, channel);
+          const postResult = await producePost(company, contentType, channel);
           if (postResult.failed) {
             channelsFailed.push(`${company.name}/${channel}`);
             continue;
           }
           const content = postResult.content;
-          const id = await saveToPendingApprovals(company, content, contentType, channel);
+          const id = await saveToPendingApprovals(company, content, contentType, channel, postResult.meta);
           if (id) {
             await logQualityScore(channel, postResult.quality, postResult.regenerated, content, postResult.regenerationAttempts);
             console.log(`  ✓ queued (${id.slice(0, 8)})\n`);
