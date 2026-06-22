@@ -5,6 +5,9 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { getAvailableActionAgents, getEnabledAgents, isAgentEnabled } = require('./utils/agentAvailability');
 const { getExpansionReport } = require('./scoutExpansion');
+const { computeDailyHealth, formatDailyHealthMessage } = require('./utils/dailyHealth');
+const { ensureHealthSchema, upsertDailyHealth } = require('./utils/healthSchema');
+const { sendMiraTelegramMessage } = require('./utils/miraCorrections');
 
 const client = new Anthropic();
 const AGENT_NAME = 'max';
@@ -1117,7 +1120,7 @@ function formatUnreachableCompaniesSection(unreachable) {
   return lines.join('\n');
 }
 
-async function sendDigest(digestText, snapshot, expansionReport) {
+async function sendDigest(digestText, snapshot, expansionReport, dailyHealth = null) {
   // Refuse to ship an empty or non-string digest — better to skip the email
   // and surface the failure than to send "null" / "undefined" to the client.
   if (typeof digestText !== 'string' || !digestText.trim()) {
@@ -1145,22 +1148,34 @@ async function sendDigest(digestText, snapshot, expansionReport) {
     ? `\n${'─'.repeat(50)}\n${unreachableBlock}\n`
     : '';
 
+  const healthBlock = dailyHealth ? formatDailyHealthMessage(dailyHealth) : '';
+  const healthSection = healthBlock
+    ? `${healthBlock}\n${'─'.repeat(50)}\n\n`
+    : '';
+
   const toEmail = CLIENT_CONFIG?.max_email || 'jacob@gopulseforge.com';
   const toName = CLIENT_ID === 2 ? 'Brad & Dustin' : 'Jake Maynard';
   const subject = `${CLIENT_ID === 2 ? 'MSHI' : 'Pulseforge'} Daily Digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
 
-  const body = CLIENT_ID === 2 ? `${digestText}
+  const body = CLIENT_ID === 2 ? `${healthSection}${digestText}
 ${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
 Pulseforge · gopulseforge.com` : `PULSEFORGE DAILY DIGEST
 ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 ${'─'.repeat(50)}
 
-${digestText}
+${healthSection}${digestText}
 ${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
 ${'─'.repeat(50)}
 Pulseforge · gopulseforge.com
 To adjust digest frequency reply to this email.`;
 
+  // Telegram gets the same core Max digest with health at the top. The longer
+  // email-only analytical appendices stay out so the message remains below
+  // Telegram's size limit and scannable on a phone.
+  const telegramBody = `${healthSection}${digestText}`.trim();
+
+  let emailSent = false;
+  let telegramSent = false;
   try {
     const response = await axios.post('https://api.brevo.com/v3/smtp/email', {
       sender: { name: 'Max — Pulseforge', email: 'jacob@gopulseforge.com' },
@@ -1175,11 +1190,20 @@ To adjust digest frequency reply to this email.`;
     });
 
     console.log('Digest sent — Message ID:', response.data.messageId);
-    return true;
+    emailSent = true;
   } catch (err) {
     console.error('Failed to send digest:', err.response?.data || err.message);
-    return false;
   }
+
+  try {
+    const telegramResponse = await sendMiraTelegramMessage(telegramBody);
+    telegramSent = Boolean(telegramResponse);
+    if (telegramSent) console.log('Max digest sent to Telegram');
+  } catch (telegramErr) {
+    console.error('Failed to send Max digest to Telegram:', telegramErr.response?.data || telegramErr.message);
+  }
+
+  return emailSent || telegramSent;
 }
 
 async function logAgentRun(insights) {
@@ -2562,6 +2586,7 @@ async function run(args = {}) {
     auto_exec: null,
     patterns: { detected: 0, included: 0, weekly_report_logged: false },
     digest: { generated: false, sent: false, length: 0, error: null },
+    daily_health: { computed: false, persisted: false, flags: [], error: null },
     errors: [],
   };
 
@@ -2575,6 +2600,31 @@ async function run(args = {}) {
 
     console.log('Reading second brain...');
     const snapshot = await getSystemSnapshot();
+
+    // Max's primary Pulseforge run owns the single system-wide health snapshot.
+    // Client-specific Max runs do not overwrite it or send duplicate health alerts.
+    let dailyHealth = null;
+    if (CLIENT_ID === 1) {
+      try {
+        console.log('Computing daily system health...');
+        await ensureHealthSchema();
+        dailyHealth = await computeDailyHealth({ now: new Date() });
+        result.daily_health.computed = true;
+        result.daily_health.flags = dailyHealth.health_flags;
+        await upsertDailyHealth(dailyHealth);
+        result.daily_health.persisted = true;
+        await insertAgentLog('daily_health_appended', {
+          health_flags: dailyHealth.health_flags,
+          send_count_today: dailyHealth.send_count_today,
+          bounce_rate_today: dailyHealth.bounce_rate_today,
+        });
+      } catch (err) {
+        result.daily_health.error = err.message;
+        result.errors.push({ step: 'daily_health', message: err.message });
+        console.error('[Max] daily health failed:', err.message);
+        await insertAgentLog('daily_health_appended', { error: err.message }, 'failed').catch(() => {});
+      }
+    }
 
     let expansionReport = null;
     try {
@@ -2626,7 +2676,7 @@ async function run(args = {}) {
       console.log('--- END PREVIEW ---\n');
 
       console.log('Sending digest...');
-      result.digest.sent = await sendDigest(insights, snapshot, expansionReport);
+      result.digest.sent = await sendDigest(insights, snapshot, expansionReport, dailyHealth);
 
       await logAgentRun(insights);
     } catch (err) {
