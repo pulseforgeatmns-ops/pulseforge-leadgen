@@ -182,7 +182,7 @@ async function correctMiraCapture(captureId, newCategory) {
 
 async function sendMiraTelegramMessage(text, extra = {}) {
   const botToken = process.env.MIRA_TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.JACOB_TELEGRAM_CHAT_ID;
+  const chatId = process.env.MIRA_TELEGRAM_CHAT_ID || process.env.JACOB_TELEGRAM_CHAT_ID;
   if (!botToken || !chatId) {
     console.warn('[mira] Telegram env missing; message skipped');
     return null;

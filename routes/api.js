@@ -2545,6 +2545,9 @@ router.get('/api/mira/context', requireMiraContextSecret, async (req, res) => {
       recentCorrections,
       currentAnchor,
       todoist,
+      dailyHealthYesterday,
+      dailyHealthToday,
+      dailyHealthTrend,
     ] = await Promise.all([
       // Last 10 captures with a 150-char preview of transcript (preferred) or raw_text.
       safeRows(pool.query(`
@@ -2594,6 +2597,24 @@ router.get('/api/mira/context', requireMiraContextSecret, async (req, res) => {
         console.error('[mira_context] todoist failed:', err.message);
         return { configured: false, open_tasks_count: 0, stale_tasks: [], error: err.message };
       }),
+      safeRows(pool.query(`
+        SELECT *
+        FROM daily_health_log
+        WHERE log_date = CURRENT_DATE - 1
+      `)),
+      safeRows(pool.query(`
+        SELECT *
+        FROM daily_health_log
+        WHERE log_date = CURRENT_DATE
+      `)),
+      safeRows(pool.query(`
+        SELECT log_date, send_count_today, bounce_count_today, reply_count_today,
+               warm_signals_fired_today, health_flags
+        FROM daily_health_log
+        WHERE log_date >= CURRENT_DATE - 6
+          AND log_date <= CURRENT_DATE
+        ORDER BY log_date DESC
+      `)),
     ]);
 
     res.json({
@@ -2606,6 +2627,9 @@ router.get('/api/mira/context', requireMiraContextSecret, async (req, res) => {
       active_clients: activeClients,
       recent_client_notes: recentClientNotes,
       recent_corrections: recentCorrections,
+      daily_health_yesterday: dailyHealthYesterday[0] || null,
+      daily_health_today: dailyHealthToday[0] || null,
+      daily_health_trend_7d: dailyHealthTrend,
     });
   } catch (err) {
     console.error('[mira_context] error:', err.message);
