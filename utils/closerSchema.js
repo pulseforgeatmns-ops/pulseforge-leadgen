@@ -35,7 +35,7 @@ async function ensureCloserSchema() {
     ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS mrr_value NUMERIC(10,2),
     ADD COLUMN IF NOT EXISTS close_notes TEXT,
-    ADD COLUMN IF NOT EXISTS closer_status TEXT DEFAULT 'booked'
+    ADD COLUMN IF NOT EXISTS closer_status TEXT
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS commissions (

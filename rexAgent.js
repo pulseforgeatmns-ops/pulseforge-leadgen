@@ -187,9 +187,9 @@ async function getWeeklyData() {
   const discoveryCallsBooked = await pool.query(`
     SELECT COUNT(*)::int AS count
     FROM prospects
-    WHERE closer_status = 'booked'
+    WHERE booked_at > ${weekAgo}
+      AND setter_status = 'booked'
       AND client_id = $1
-      AND updated_at > ${weekAgo}
   `, [CLIENT_ID]).catch(() => ({ rows: [{ count: 0 }] }));
 
   const emailRejections = await pool.query(`
