@@ -102,6 +102,21 @@ async function sendSMS(prospectId, messageOverride = null) {
   }
 }
 
+async function sendOpsAlertSMS(message, options = {}) {
+  const twilioClient = getTwilioClient();
+  if (!twilioClient) return { sent: false, reason: 'twilio_not_configured' };
+
+  const to = options.to || process.env.OPS_ALERT_PHONE;
+  if (!to) return { sent: false, reason: 'OPS_ALERT_PHONE not configured' };
+
+  try {
+    const result = await twilioClient.messages.create({ body: message, from: FROM_NUMBER, to });
+    return { sent: true, messageSid: result.sid || null, to };
+  } catch (err) {
+    return { sent: false, reason: err.message, to };
+  }
+}
+
 // ── TRIGGER QUERIES ───────────────────────────────────────────────────
 
 // Trigger 1: 3+ emails sent in sequence, no inbound reply logged
@@ -599,7 +614,7 @@ async function run() {
   console.log(`\nSam complete — ${sent} SMS sent.`);
 }
 
-module.exports = { sendSMS, run };
+module.exports = { sendSMS, sendOpsAlertSMS, run };
 
 if (require.main === module) {
   run().catch(err => {

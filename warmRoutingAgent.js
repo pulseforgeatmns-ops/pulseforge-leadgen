@@ -1,9 +1,11 @@
 require('dotenv').config();
 
 const axios = require('axios');
+const { randomUUID } = require('crypto');
 const pool = require('./db');
 const { getRuntimeClientId } = require('./utils/clientContext');
 const { ensureMiraSchema } = require('./utils/miraSchema');
+const { reportAgentRun } = require('./utils/agentObservability');
 
 const AGENT_NAME = 'warm_routing';
 const CLIENT_ID = getRuntimeClientId();
@@ -23,6 +25,27 @@ const TRIGGER_REASONS = [
 
 let intervalHandle = null;
 let intervalRunning = false;
+
+function makeRunId(clientId) {
+  return `warm_routing_run-${clientId || 'none'}-${new Date().toISOString()}-${randomUUID()}`;
+}
+
+async function reportWarmRoutingRun({ clientId, runId, attempts, successes, skipped, errorSample = null }) {
+  try {
+    return await reportAgentRun({
+      agent: 'warm_routing_run',
+      clientId,
+      runId,
+      attempts,
+      successes,
+      skipped,
+      errorSample,
+    });
+  } catch (err) {
+    console.error('[warm_routing] Observability report failed:', err.message);
+    return null;
+  }
+}
 
 function truncate(value, max = 1200) {
   const text = value === undefined || value === null ? '' : String(value);
@@ -787,7 +810,10 @@ async function withWorkerLock(fn) {
 
 async function run(params = {}) {
   const clientId = getRuntimeClientId(params);
-  return withWorkerLock(async () => {
+  const runId = makeRunId(clientId);
+  let result;
+  try {
+    result = await withWorkerLock(async () => {
     await ensureWarmRoutingSchema();
     await backfillEmailTouchedAt(clientId);
     await snapshotIcpScores(clientId);
@@ -825,6 +851,24 @@ async function run(params = {}) {
 
     return { scanned: prospects.length, fires, skipped, auto_escalated: autoEscalated, digest, results };
   });
+  } catch (err) {
+    const failed = { attempts: 1, successes: 0, skipped: 0, errorSample: { error: err.message }, failed: true };
+    await reportWarmRoutingRun({ clientId, runId, ...failed });
+    return failed;
+  }
+  const idleLockSkip = result.skipped === true && result.reason === 'worker_already_running';
+  if (idleLockSkip) {
+    const idle = { ...result, attempts: 0, successes: 0, skipped: 0, errorSample: null, idle: true };
+    await reportWarmRoutingRun({ clientId, runId, attempts: idle.attempts, successes: idle.successes, skipped: idle.skipped, errorSample: idle.errorSample });
+    return idle;
+  }
+  const routeSkips = Number.isFinite(Number(result.skipped)) ? Number(result.skipped) : 0;
+  const attempts = Number(result.attempts ?? ((result.fires || 0) + routeSkips));
+  const successes = Number(result.successes ?? (result.fires || 0));
+  const skipped = routeSkips;
+  const errorSample = result.errorSample || result.results?.find(row => row.error) || null;
+  await reportWarmRoutingRun({ clientId, runId, attempts, successes, skipped, errorSample });
+  return { ...result, attempts, successes, skipped, errorSample };
 }
 
 function startWarmRoutingScheduler(options = {}) {

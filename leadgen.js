@@ -12,6 +12,7 @@
 
 require('dotenv').config();
 const axios = require('axios');
+const { randomUUID } = require('crypto');
 const { createObjectCsvWriter } = require('csv-writer');
 const { google } = require('googleapis');
 const pool = require('./db');
@@ -28,6 +29,7 @@ const { checkProspeoQuota, recordProspeoCall, trip429 } = require('./utils/prosp
 const { shouldExcludeProspect, extractEmailDomain } = require('./utils/prospectFilter');
 const { normalizeVertical } = require('./utils/normalize');
 const { SCOUT_SKIP_REASONS, ensureScoutSkipLogTable, logScoutSkip } = require('./utils/scoutSkipLog');
+const { reportAgentRun } = require('./utils/agentObservability');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -56,6 +58,62 @@ async function logScoutRun(status, payload, action = 'scrape') {
     console.error('[logScoutRun] failed to write:', err.message);
     return null;
   }
+}
+
+function makeScoutObservabilityRunId() {
+  return `scout-${CONFIG.clientId || 'none'}-${new Date().toISOString()}-${randomUUID()}`;
+}
+
+async function reportScoutRun({ runId, attempts, successes, skipped, errorSample = null }) {
+  try {
+    return await reportAgentRun({
+      agent: 'scout',
+      clientId: CONFIG.clientId,
+      runId,
+      attempts,
+      successes,
+      skipped,
+      errorSample,
+    });
+  } catch (err) {
+    console.error('[Scout] Observability report failed:', err.message);
+    return null;
+  }
+}
+
+async function getScoutSkipSummary(runId) {
+  if (!runId) return { total: 0, dbErrorSample: null };
+  try {
+    const [countResult, dbErrorResult] = await Promise.all([
+      pool.query('SELECT COUNT(*)::int AS count FROM scout_skip_log WHERE run_id = $1', [String(runId)]),
+      pool.query(`
+        SELECT detail
+        FROM scout_skip_log
+        WHERE run_id = $1 AND skip_reason = $2
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [String(runId), SCOUT_SKIP_REASONS.DB_ERROR]),
+    ]);
+    return {
+      total: countResult.rows[0]?.count || 0,
+      dbErrorSample: dbErrorResult.rows[0]?.detail || null,
+    };
+  } catch (err) {
+    console.error('[Scout] Skip summary lookup failed:', err.message);
+    return { total: 0, dbErrorSample: { error: err.message } };
+  }
+}
+
+async function resolveScoutObservabilityStats(stats, runId, fallbackError = null) {
+  const dbErrors = Number(stats?.skipped_breakdown?.[SCOUT_SKIP_REASONS.DB_ERROR] || 0);
+  const saved = Number(stats?.saved || 0);
+  const skipSummary = await getScoutSkipSummary(runId);
+  return {
+    attempts: saved + dbErrors,
+    successes: saved,
+    skipped: skipSummary.total,
+    errorSample: skipSummary.dbErrorSample || (fallbackError ? { error: fallbackError.message } : null),
+  };
 }
 
 function incrementBreakdown(breakdown, reason) {
@@ -2069,6 +2127,7 @@ async function resolveScoutTarget({ clientId, industry, location, verticals }) {
 
 async function run(params = {}) {
   CONFIG.clientId = getRuntimeClientId(params);
+  const observabilityRunId = makeScoutObservabilityRunId();
   process.env.ACTIVE_CLIENT_ID = String(CONFIG.clientId);
   CLIENT_CONFIG = await getClientConfig(CONFIG.clientId);
   if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CONFIG.clientId}`);
@@ -2086,7 +2145,9 @@ async function run(params = {}) {
     verticals: CLIENT_CONFIG.verticals,
   });
   if (target.skip) {
-    return { skipped: true, reason: 'saturated', vertical: target.vertical };
+    const result = { attempts: 0, successes: 0, skipped: 0, errorSample: null, skipped_run: true, reason: 'saturated', vertical: target.vertical };
+    await reportScoutRun({ runId: observabilityRunId, ...result });
+    return result;
   }
   CONFIG.industry = target.industry;
   CONFIG.location = target.location;
@@ -2119,7 +2180,9 @@ async function run(params = {}) {
       active_lock: active || null,
     }, 'scout_lock_timeout');
     console.log('[Scout] Global lock timeout — another Scout run is still active');
-    return { skipped: true, reason: 'scout_lock_timeout' };
+    const result = { attempts: 0, successes: 0, skipped: 0, errorSample: null, skipped_run: true, reason: 'scout_lock_timeout' };
+    await reportScoutRun({ runId: observabilityRunId, ...result });
+    return result;
   }
 
   await logScoutRun('success', {
@@ -2130,6 +2193,7 @@ async function run(params = {}) {
   try {
     const runId = await logScoutRun('pending', runContext);
     const stats = await main({ runId });
+    const observability = await resolveScoutObservabilityStats(stats, runId);
     await pool.query(
       `UPDATE scout_queue SET last_run_at = NOW(), updated_at = NOW()
        WHERE client_id = $1 AND vertical = $2 AND location = $3`,
@@ -2140,15 +2204,25 @@ async function run(params = {}) {
       ...runContext,
       duration_ms: Date.now() - startedAt,
       ...(stats || {}),
+      observability,
     });
-    return stats;
+    await reportScoutRun({ runId: observabilityRunId, ...observability });
+    return { ...(stats || {}), ...observability };
   } catch (err) {
     await logScoutRun('failed', {
       ...runContext,
       duration_ms: Date.now() - startedAt,
       error: err.message,
     });
-    throw err;
+    const result = {
+      attempts: 1,
+      successes: 0,
+      skipped: 0,
+      errorSample: { error: err.message },
+      failed: true,
+    };
+    await reportScoutRun({ runId: observabilityRunId, ...result });
+    return result;
   } finally {
     const released = await releaseScoutLock(lockHolder);
     await logScoutRun(released ? 'success' : 'skipped', {

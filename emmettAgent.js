@@ -1,11 +1,14 @@
 require('dotenv').config();
 const axios = require('axios');
+const { randomUUID } = require('crypto');
 const nodemailer = require('nodemailer');
 const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { recalculateICP } = require('./utils/icpScoring');
 const { invalidOutreachEmailReason } = require('./utils/emailGuard');
 const { normalizeRootDomain, rootDomainFromEmail } = require('./utils/brevoEvents');
+const { AI_TELL_PHRASES } = require('./utils/voiceRules');
+const { reportAgentRun } = require('./utils/agentObservability');
 
 const AGENT_NAME = 'emmett';
 let FROM_EMAIL = 'jacob@gopulseforge.com';
@@ -13,6 +16,36 @@ let FROM_NAME = 'Jacob Maynard';
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
 let MAIL_TRANSPORTER = null;
+
+function makeRunId() {
+  return `${AGENT_NAME}-${CLIENT_ID || 'none'}-${new Date().toISOString()}-${randomUUID()}`;
+}
+
+function sendErrorSample(result, prospect = null) {
+  if (!result?.error) return null;
+  return {
+    prospect_id: prospect?.id || null,
+    email: prospect?.email || null,
+    error: result.error,
+  };
+}
+
+async function reportEmmettRun({ runId, attempts, successes, skipped = 0, errorSample = null }) {
+  try {
+    return await reportAgentRun({
+      agent: AGENT_NAME,
+      clientId: CLIENT_ID,
+      runId,
+      attempts,
+      successes,
+      skipped,
+      errorSample,
+    });
+  } catch (err) {
+    console.error('[Emmett] Observability report failed:', err.message);
+    return null;
+  }
+}
 
 const clientConfig = {
   1: { dailyCap: 100, verticalCap: 15 },
@@ -26,6 +59,20 @@ function getEmmettClientConfig(clientId = CLIENT_ID) {
 
 function normalizeSendingDomain(value) {
   return normalizeRootDomain(value) || rootDomainFromEmail(value) || 'unknown.local';
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function findAiTellPhrases(text) {
+  const value = String(text || '');
+  return AI_TELL_PHRASES.filter(phrase => {
+    const escaped = escapeRegex(phrase);
+    const isSingleWord = /^[a-z']+$/i.test(phrase);
+    const pattern = isSingleWord ? `\\b${escaped}\\b` : escaped;
+    return new RegExp(pattern, 'i').test(value);
+  });
 }
 
 async function activeGlobalEmailHalt() {
@@ -1509,11 +1556,23 @@ function isDashboardTrigger(context = {}) {
 }
 
 async function run(context = {}) {
+  const runId = makeRunId();
+  let attempts = 0;
+  let successes = 0;
+  let skipped = 0;
+  let errorSample = null;
+  const finish = async (extra = {}) => {
+    const result = { attempts, successes, skipped, errorSample, ...extra };
+    await reportEmmettRun({ runId, ...result });
+    return result;
+  };
+
+  try {
   const dashboardOverride = isDashboardTrigger(context);
   if (!dashboardOverride && !isWithinSendingWindow()) {
     console.log(`Outside Emmett sending window (${sendingWindowLabel(CLIENT_ID)}) — skipping run`);
     await logSkippedOutsideWindow();
-    return;
+    return finish({ idle: true, reason: 'outside_sending_window' });
   }
   if (dashboardOverride) {
     console.log('Dashboard-triggered Emmett run — bypassing sending window check');
@@ -1526,7 +1585,7 @@ async function run(context = {}) {
   const today = new Date().toISOString().split('T')[0];
   if (HOLIDAYS_2026.includes(today)) {
     console.log(`Holiday detected (${today}) — skipping run`);
-    return;
+    return finish({ idle: true, reason: 'holiday' });
   }
 
   console.log('\nEmmett agent running...\n');
@@ -1556,7 +1615,7 @@ async function run(context = {}) {
       },
       'failed'
     );
-    return;
+    return finish({ idle: true, reason: 'domain_halted' });
   }
   if (domainHealth.status === 'paused') {
     console.warn(`[Emmett] Sends paused for ${sendingDomain}. Bounce rate is ${domainHealth.bouncePct}% over ${domainHealth.sends} sends.`);
@@ -1575,7 +1634,7 @@ async function run(context = {}) {
       },
       'skipped'
     );
-    return;
+    return finish({ idle: true, reason: 'domain_paused' });
   }
 
   const sendConfig = await getEffectiveSendConfig(getEmmettClientConfig(CLIENT_ID));
@@ -1593,7 +1652,7 @@ async function run(context = {}) {
       { sent: 0, prospects_evaluated: 0, daily_cap: sendConfig.dailyCap, already_sent_today: alreadySentToday, client_id: CLIENT_ID },
       'success'
     );
-    return;
+    return finish({ idle: true, reason: 'daily_cap' });
   }
 
   const prospects = await getProspectsForEmail(context);
@@ -1729,6 +1788,26 @@ async function run(context = {}) {
     const subject = fillTemplate(activeStep.subject, prospect);
     let body      = fillTemplate(activeStep.body,    prospect);
     body = stripForbiddenMshiCopy(body, prospect);
+    const aiTellPhrases = findAiTellPhrases(`${subject}\n${body}`);
+    if (aiTellPhrases.length) {
+      console.warn(`Skipping ${prospect.email} because AI-tell phrase is present in outbound copy: ${aiTellPhrases.join(', ')}`);
+      await db.logAgentAction(
+        AGENT_NAME,
+        'email_skipped',
+        prospect.id,
+        null,
+        {
+          reason: 'ai_tell_phrase',
+          phrases: aiTellPhrases,
+          prospect_id: prospect.id,
+          step: step.day,
+          sequence: sequenceName,
+          client_id: prospect.client_id,
+        },
+        'success'
+      );
+      continue;
+    }
 
     console.log(`Sending to: ${prospect.email} (${prospect.name})`);
     console.log(`Subject: ${subject}`);
@@ -1748,6 +1827,7 @@ async function run(context = {}) {
       from_name: FROM_NAME,
     };
     const sendLogId = await createEmailSendLog(prospect, logPayload);
+    attempts++;
     const result = await sendEmail(
       prospect.email,
       `${prospect.first_name} ${prospect.last_name}`,
@@ -1780,8 +1860,10 @@ async function run(context = {}) {
       }
       verticalCounts[vertical]++;
       sent++;
+      successes++;
       console.log('Touchpoint logged.\n');
     } else {
+      errorSample = errorSample || sendErrorSample(result, prospect);
       await completeEmailSendLog(sendLogId, 'email_failed', { ...logPayload, error: result.error }, 'failed');
       if (context.stopOnSendError) {
         throw new Error(`Brevo send failed for prospect ${prospect.id}: ${result.error}`);
@@ -1809,9 +1891,16 @@ async function run(context = {}) {
       remaining_capacity: remainingCapacity,
       vertical_cap: verticalCap,
       client_id: CLIENT_ID,
+      attempts,
+      successes,
     },
     'success'
   );
+  return finish();
+  } catch (err) {
+    errorSample = errorSample || { error: err.message };
+    return finish({ failed: true });
+  }
 }
 
 module.exports = { run, checkSendingDomainHealth };

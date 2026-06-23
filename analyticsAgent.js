@@ -2,11 +2,43 @@
 require('dotenv').config();
 
 const axios = require('axios');
+const { randomUUID } = require('crypto');
 const pool  = require('./db');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { reportAgentRun } = require('./utils/agentObservability');
 
 const AGENT_NAME = 'analytics';
 const CLIENT_ID = getRuntimeClientId();
+let bufferMetricsSchemaPromise;
+
+function makeRunId() {
+  return `${AGENT_NAME}-${CLIENT_ID || 'none'}-${new Date().toISOString()}-${randomUUID()}`;
+}
+
+function errorSampleFrom(err, row = null) {
+  return {
+    post_analytics_id: row?.id || null,
+    platform_post_id: row?.platform_post_id || null,
+    error: err.response?.data || err.message,
+  };
+}
+
+async function reportAnalyticsRun({ runId, attempts, successes, skipped = 0, errorSample = null }) {
+  try {
+    return await reportAgentRun({
+      agent: AGENT_NAME,
+      clientId: CLIENT_ID,
+      runId,
+      attempts,
+      successes,
+      skipped,
+      errorSample,
+    });
+  } catch (err) {
+    console.error('[Analytics] Observability report failed:', err.message);
+    return null;
+  }
+}
 
 // ── SCHEMA ────────────────────────────────────────────────────────────────────
 
@@ -30,11 +62,13 @@ async function ensureSchema() {
       clicks             INT DEFAULT 0,
       engagement_rate    NUMERIC(6,4) DEFAULT 0,
       metrics_fetched_at TIMESTAMPTZ,
+      buffer_metrics_updated_at TIMESTAMPTZ,
       client_id          INTEGER REFERENCES clients(id) DEFAULT 1,
       created_at         TIMESTAMPTZ DEFAULT NOW()
     )
   `);
   await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id) DEFAULT 1`);
+  await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS buffer_metrics_updated_at TIMESTAMPTZ`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_performance_summary (
       id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -55,6 +89,19 @@ async function ensureSchema() {
     )
   `);
   await pool.query(`ALTER TABLE content_performance_summary ADD COLUMN IF NOT EXISTS measured_count INT DEFAULT 0`);
+}
+
+function ensureBufferMetricsSchema() {
+  if (!bufferMetricsSchemaPromise) {
+    bufferMetricsSchemaPromise = pool.query(`
+      ALTER TABLE post_analytics
+        ADD COLUMN IF NOT EXISTS buffer_metrics_updated_at TIMESTAMPTZ
+    `).catch(err => {
+      bufferMetricsSchemaPromise = null;
+      throw err;
+    });
+  }
+  return bufferMetricsSchemaPromise;
 }
 
 // ── GOOGLE ACCESS TOKEN ───────────────────────────────────────────────────────
@@ -146,12 +193,103 @@ async function fetchFBPageMetrics() {
 
 // ── BUFFER / LINKEDIN METRICS ─────────────────────────────────────────────────
 
-async function fetchBufferMetrics() {
+function buildBufferMetricsQuery(postId) {
+  return `query {
+  post(input: { id: ${JSON.stringify(postId)} }) {
+    id
+    text
+    metrics {
+      type
+      name
+      value
+      unit
+    }
+    metricsUpdatedAt
+  }
+}`;
+}
+
+function numericMetric(value) {
+  if (value == null) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function metricLookup(metrics) {
+  if (!Array.isArray(metrics)) return null;
+  const lookup = new Map();
+  for (const metric of metrics) {
+    if (!metric?.type || lookup.has(metric.type)) continue;
+    lookup.set(metric.type, metric);
+  }
+  return lookup;
+}
+
+function metricValue(lookup, type) {
+  if (!lookup?.has(type)) return null;
+  return numericMetric(lookup.get(type)?.value);
+}
+
+function chooseShareMetric(lookup) {
+  const reposts = metricValue(lookup, 'reposts');
+  const shares = metricValue(lookup, 'shares');
+  if (reposts != null) return { type: 'reposts', value: reposts };
+  if (shares != null) return { type: 'shares', value: shares };
+  return { type: null, value: null };
+}
+
+function mapBufferPostMetrics(metrics) {
+  const lookup = metricLookup(metrics);
+  if (!lookup) return null;
+
+  const impressions = metricValue(lookup, 'impressions');
+  const likes = metricValue(lookup, 'reactions');
+  const comments = metricValue(lookup, 'comments');
+  const shareMetric = chooseShareMetric(lookup);
+  const engagementValues = [likes, comments, shareMetric.value].filter(value => value != null);
+  const engagement_rate = impressions > 0 && engagementValues.length
+    ? (engagementValues.reduce((sum, value) => sum + value, 0) / impressions * 100).toFixed(4)
+    : null;
+
+  return {
+    likes,
+    comments,
+    shares: shareMetric.value,
+    reach: impressions,
+    clicks: null,
+    engagement_rate,
+    buffer_engagement_rate: metricValue(lookup, 'engagementRate'),
+    share_metric_type: shareMetric.type,
+  };
+}
+
+async function fetchBufferMetrics(options = {}) {
   const token = process.env.BUFFER_ACCESS_TOKEN;
   if (!token) {
     console.log('[Analytics] BUFFER_ACCESS_TOKEN not set — skipping Buffer metrics');
-    return;
+    return { attempts: 0, successes: 0, skipped: 0, errorSample: null };
   }
+  await ensureBufferMetricsSchema();
+
+  const requestedLimit = Number(options.limit || 50);
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(requestedLimit, 50))
+    : 50;
+  const params = [CLIENT_ID];
+  let filter = '';
+  if (options.postAnalyticsId) {
+    params.push(options.postAnalyticsId);
+    filter += ` AND id = $${params.length}`;
+  }
+  if (options.platformPostId) {
+    params.push(options.platformPostId);
+    filter += ` AND platform_post_id = $${params.length}`;
+  }
+  if (options.channel) {
+    params.push(options.channel);
+    filter += ` AND channel = $${params.length}`;
+  }
+  params.push(limit);
 
   const { rows } = await pool.query(`
     SELECT id, platform_post_id
@@ -160,15 +298,17 @@ async function fetchBufferMetrics() {
       AND client_id = $1
       AND platform_post_id IS NOT NULL
       AND metrics_fetched_at IS NULL
-    LIMIT 50
-  `, [CLIENT_ID]);
+      ${filter}
+    LIMIT $${params.length}
+  `, params);
 
   if (!rows.length) {
     console.log('[Analytics] No unanalyzed LinkedIn posts');
-    return;
+    return { attempts: 0, successes: 0, skipped: 0, errorSample: null };
   }
 
   let updated = 0;
+  let errorSample = null;
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const stillActive = await getClientConfig(CLIENT_ID);
@@ -177,26 +317,29 @@ async function fetchBufferMetrics() {
     }
 
     try {
-      const query = `query {
-  post(id: ${JSON.stringify(row.platform_post_id)}) {
-    id
-    statistics {
-      likes
-      comments
-      shares
-      impressions
-      clicks
-    }
-  }
-}`;
+      const query = buildBufferMetricsQuery(row.platform_post_id);
       const res = await axios.post(
         'https://api.buffer.com',
         { query },
         { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
       );
 
-      const stats = res.data?.data?.post?.statistics;
-      if (!stats) {
+      const gqlErrors = res.data?.errors;
+      if (gqlErrors?.length) {
+        throw new Error(JSON.stringify(gqlErrors));
+      }
+
+      const post = res.data?.data?.post;
+      const metrics = post?.metrics;
+      if (options.logRawMetrics) {
+        console.log('[Analytics] Raw Buffer metrics payload:', JSON.stringify({
+          platform_post_id: row.platform_post_id,
+          metricsUpdatedAt: post?.metricsUpdatedAt || null,
+          metrics,
+        }, null, 2));
+      }
+      const mapped = mapBufferPostMetrics(metrics);
+      if (!mapped) {
         await pool.query(
           `UPDATE post_analytics SET metrics_fetched_at = NOW() WHERE id = $1`,
           [row.id]
@@ -205,28 +348,41 @@ async function fetchBufferMetrics() {
         continue;
       }
 
-      const likes    = stats.likes      || 0;
-      const comments = stats.comments   || 0;
-      const shares   = stats.shares     || 0;
-      const reach    = stats.impressions || 0;
-      const clicks   = stats.clicks     || 0;
-      const engagement_rate = reach > 0
-        ? ((likes + comments + shares + clicks) / reach * 100).toFixed(4)
-        : 0;
-
       await pool.query(`
         UPDATE post_analytics
         SET likes = $1, comments = $2, shares = $3, reach = $4, clicks = $5,
-            engagement_rate = $6, metrics_fetched_at = NOW()
-        WHERE id = $7
-      `, [likes, comments, shares, reach, clicks, engagement_rate, row.id]);
+            engagement_rate = $6, metrics_fetched_at = NOW(),
+            buffer_metrics_updated_at = $7
+        WHERE id = $8
+      `, [
+        mapped.likes,
+        mapped.comments,
+        mapped.shares,
+        mapped.reach,
+        mapped.clicks,
+        mapped.engagement_rate,
+        post?.metricsUpdatedAt || null,
+        row.id,
+      ]);
+      if (options.logRawMetrics) {
+        console.log('[Analytics] Buffer metric mapping:', JSON.stringify({
+          platform_post_id: row.platform_post_id,
+          mapped_reactions_to_likes: mapped.likes,
+          mapped_share_metric_type: mapped.share_metric_type,
+          mapped_share_metric_value: mapped.shares,
+          computed_engagement_rate: mapped.engagement_rate,
+          buffer_engagement_rate: mapped.buffer_engagement_rate,
+        }, null, 2));
+      }
       updated++;
     } catch (err) {
+      errorSample = errorSample || errorSampleFrom(err, row);
       console.warn(`[Analytics] Buffer post ${row.platform_post_id} metrics failed:`, err.response?.data || err.message);
     }
     await new Promise(r => setTimeout(r, 300));
   }
   console.log(`[Analytics] Buffer/LinkedIn metrics updated: ${updated}/${rows.length}`);
+  return { attempts: rows.length, successes: updated, skipped: 0, errorSample };
 }
 
 // ── SUMMARY REBUILD ───────────────────────────────────────────────────────────
@@ -313,6 +469,12 @@ async function logRun(status, payload) {
 // ── MAIN ──────────────────────────────────────────────────────────────────────
 
 async function run() {
+  const runId = makeRunId();
+  let attempts = 0;
+  let successes = 0;
+  let skipped = 0;
+  let errorSample = null;
+
   console.log('\nAnalytics agent running...\n');
   try {
     const clientConfig = await getClientConfig(CLIENT_ID);
@@ -322,18 +484,32 @@ async function run() {
 
     await markUnfetchableAsAttempted();
     await fetchFBPageMetrics();
-    await fetchBufferMetrics();
+    const bufferStats = await fetchBufferMetrics();
+    attempts = bufferStats?.attempts || 0;
+    successes = bufferStats?.successes || 0;
+    skipped = bufferStats?.skipped || 0;
+    errorSample = bufferStats?.errorSample || null;
     await rebuildSummary();
 
-    await logRun('success', { ran_at: new Date().toISOString() });
+    await logRun('success', { ran_at: new Date().toISOString(), attempts, successes, skipped });
+    await reportAnalyticsRun({ runId, attempts, successes, skipped, errorSample });
     console.log('\nAnalytics agent complete.');
+    return { attempts, successes, skipped, errorSample };
   } catch (err) {
+    errorSample = errorSample || errorSampleFrom(err);
     console.error('Analytics agent error:', err.message);
     await logRun('failed', { error: err.message }).catch(() => {});
+    await reportAnalyticsRun({ runId, attempts, successes, skipped, errorSample });
+    return { attempts, successes, skipped, errorSample, failed: true };
   }
 }
 
-module.exports = { run };
+module.exports = {
+  run,
+  fetchBufferMetrics,
+  buildBufferMetricsQuery,
+  mapBufferPostMetrics,
+};
 
 if (require.main === module) {
   run().catch(err => {

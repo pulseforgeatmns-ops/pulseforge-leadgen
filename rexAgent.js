@@ -2,11 +2,45 @@ require('dotenv').config();
 const pool = require('./db');
 const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
+const { randomUUID } = require('crypto');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { reportAgentRun } = require('./utils/agentObservability');
 
 const client = new Anthropic();
 const AGENT_NAME = 'rex';
 const CLIENT_ID = getRuntimeClientId();
+let lastSendReportError = null;
+
+function makeRunId() {
+  return `${AGENT_NAME}-${CLIENT_ID || 'none'}-${new Date().toISOString()}-${randomUUID()}`;
+}
+
+function captureErrorSample(err) {
+  if (!err) return null;
+  if (err.response?.data) return err.response.data;
+  return {
+    message: err.message,
+    code: err.code || null,
+    status: err.response?.status || null,
+  };
+}
+
+async function reportRexRun({ runId, attempts, successes, skipped = 0, errorSample = null }) {
+  try {
+    return await reportAgentRun({
+      agent: AGENT_NAME,
+      clientId: CLIENT_ID,
+      runId,
+      attempts,
+      successes,
+      skipped,
+      errorSample,
+    });
+  } catch (err) {
+    console.error('[Rex] Observability report failed:', err.message);
+    return null;
+  }
+}
 
 async function getWeeklyData() {
   const weekAgo = "NOW() - INTERVAL '7 days'";
@@ -240,6 +274,8 @@ async function getWeeklyData() {
     LIMIT 8
   `).catch(() => ({ rows: [] }));
 
+  const slotTestVerdict = await getSlotTestVerdict();
+
   return {
     weekOf: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
     agentActivity: agentActivity.rows,
@@ -262,6 +298,7 @@ async function getWeeklyData() {
     emailByDay:      emailByDay.rows,
     dncAdded:        dncAdded.rows[0]?.count || 0,
     emailByVertical: emailByVertical.rows,
+    slotTestVerdict,
   };
 }
 
@@ -315,7 +352,86 @@ function formatContentPerfRow(row) {
   };
 }
 
+function parseStats(stats) {
+  if (!stats) return null;
+  if (typeof stats === 'object') return stats;
+  try {
+    return JSON.parse(stats);
+  } catch (_) {
+    return null;
+  }
+}
+
+function engagementRate(stats) {
+  const impressions = Number(stats?.impressions || 0);
+  if (impressions <= 0) return null;
+  return (
+    Number(stats?.reactions || 0) +
+    Number(stats?.comments || 0) +
+    Number(stats?.saves || 0)
+  ) / impressions;
+}
+
+function buildSlotTestVerdict(pairs) {
+  const slot1Wins = pairs.filter(pair => pair.winner === 1).length;
+  const slot2Wins = pairs.filter(pair => pair.winner === 2).length;
+  const count = pairs.length;
+  if (count < 6) {
+    return `Slot test: ${count}/10 pairs collected, not yet conclusive (Slot 1 leading ${slot1Wins}-${slot2Wins}).`;
+  }
+
+  const leader = slot1Wins >= slot2Wins ? 1 : 2;
+  const leaderWins = Math.max(slot1Wins, slot2Wins);
+  if (leaderWins / count >= 0.7) {
+    return `Slot test: Slot ${leader} wins (${slot1Wins}-${slot2Wins}). Recommend defaulting new posts to Slot ${leader}.`;
+  }
+
+  return `Slot test: inconclusive (${slot1Wins}-${slot2Wins} across ${count} pairs). Slot timing not a meaningful lever. Recommend closing the test.`;
+}
+
+async function getSlotTestVerdict() {
+  try {
+    const res = await pool.query(`
+      SELECT id, format, slot, stats, posted_at, created_at
+      FROM pending_comments
+      WHERE client_id = $1
+        AND channel = 'linkedin_personal'
+        AND slot IN (1, 2)
+        AND format IS NOT NULL
+        AND stats IS NOT NULL
+      ORDER BY format, COALESCE(posted_at, created_at), created_at
+    `, [CLIENT_ID]);
+
+    const byFormat = new Map();
+    for (const row of res.rows) {
+      if (!byFormat.has(row.format)) byFormat.set(row.format, { 1: [], 2: [] });
+      byFormat.get(row.format)[Number(row.slot)].push(row);
+    }
+
+    const pairs = [];
+    for (const group of byFormat.values()) {
+      const count = Math.min(group[1].length, group[2].length);
+      for (let i = 0; i < count; i++) {
+        const slot1Rate = engagementRate(parseStats(group[1][i].stats));
+        const slot2Rate = engagementRate(parseStats(group[2][i].stats));
+        if (slot1Rate == null || slot2Rate == null) continue;
+        pairs.push({
+          winner: slot1Rate > slot2Rate ? 1 : slot2Rate > slot1Rate ? 2 : null,
+          slot1Rate,
+          slot2Rate,
+        });
+      }
+    }
+
+    return buildSlotTestVerdict(pairs.slice(0, 10));
+  } catch (err) {
+    console.warn('[Rex] Slot test verdict skipped:', err.message);
+    return 'Slot test: 0/10 pairs collected, not yet conclusive (Slot 1 leading 0-0).';
+  }
+}
+
 async function sendReport(reportText, data) {
+  lastSendReportError = null;
   const totalActions = data.agentActivity.reduce((a, b) => a + parseInt(b.count), 0);
   const totalProspects = data.pipeline.reduce((a, b) => a + parseInt(b.count), 0);
   const pendingCount = data.pendingByChannel
@@ -329,6 +445,8 @@ Week of ${data.weekOf}
 ${'═'.repeat(50)}
 
 ${reportText}
+
+${data.slotTestVerdict || 'Slot test: 0/10 pairs collected, not yet conclusive (Slot 1 leading 0-0).'}
 
 ${'═'.repeat(50)}
 ${formatFunnelMetrics(data)}
@@ -366,7 +484,8 @@ Rex runs every Sunday. Reply to adjust reporting cadence.`;
     console.log('Report sent — Message ID:', response.data.messageId);
     return true;
   } catch (err) {
-    console.error('Failed to send report:', err.response?.data || err.message);
+    lastSendReportError = captureErrorSample(err);
+    console.error('Failed to send report:', lastSendReportError);
     return false;
   }
 }
@@ -576,15 +695,22 @@ async function generateAndLogExecutiveSummary() {
 }
 
 async function run() {
+  const runId = makeRunId();
+  let attempts = 0;
+  let successes = 0;
+  let errorSample = null;
+
   console.log('\nRex agent running...\n');
   const clientConfig = await getClientConfig(CLIENT_ID);
   if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
   if (CLIENT_ID !== 1) {
     console.log('Rex weekly reporting is enabled only for Pulseforge client_id=1.');
+    await reportRexRun({ runId, attempts, successes, skipped: 0, errorSample });
     return;
   }
 
   try {
+    attempts = 1;
     console.log('Pulling weekly data...');
     const data = await getWeeklyData();
 
@@ -596,14 +722,26 @@ async function run() {
     console.log('--- END PREVIEW ---\n');
 
     console.log('Sending report...');
-    await sendReport(report, data);
+    const sent = await sendReport(report, data);
+    successes = sent ? 1 : 0;
+
+    if (!sent) {
+      errorSample = lastSendReportError || 'sendReport returned false';
+      await logAgentRun('failed').catch(() => {});
+      await reportRexRun({ runId, attempts, successes, skipped: 0, errorSample });
+      console.log('\nRex failed: weekly report send did not complete.');
+      return;
+    }
 
     await logAgentRun('success');
     await generateAndLogExecutiveSummary();
+    await reportRexRun({ runId, attempts, successes, skipped: 0, errorSample });
     console.log('\nRex complete.');
   } catch (err) {
+    errorSample = errorSample || captureErrorSample(err);
     console.error('Rex error:', err.message);
     await logAgentRun('failed').catch(() => {});
+    await reportRexRun({ runId, attempts, successes, skipped: 0, errorSample });
   }
 
 }

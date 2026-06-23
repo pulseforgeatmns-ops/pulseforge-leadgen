@@ -1,4 +1,5 @@
 require('dotenv').config();
+const { randomUUID } = require('crypto');
 const { google } = require('googleapis');
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('./dbClient');
@@ -6,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { recalculateICP } = require('./utils/icpScoring');
+const { reportAgentRun } = require('./utils/agentObservability');
 
 const AGENT_NAME = 'riley';
 const CLIENT_ID = getRuntimeClientId();
@@ -55,6 +57,27 @@ const VALID_REPLY_BUCKETS = new Set([
   'out_of_office',
   'unknown',
 ]);
+
+function makeRunId() {
+  return `${AGENT_NAME}-${CLIENT_ID || 'none'}-${new Date().toISOString()}-${randomUUID()}`;
+}
+
+async function reportRileyRun({ runId, attempts, successes, skipped = 0, errorSample = null }) {
+  try {
+    return await reportAgentRun({
+      agent: AGENT_NAME,
+      clientId: CLIENT_ID,
+      runId,
+      attempts,
+      successes,
+      skipped,
+      errorSample,
+    });
+  } catch (err) {
+    console.error('[Riley] Observability report failed:', err.message);
+    return null;
+  }
+}
 const LEGACY_REPLY_BUCKETS = {
   warm: 'interested',
   auto_reply: 'out_of_office',
@@ -1547,6 +1570,18 @@ async function safeApplyRileyLabels(auth, messageId, tier) {
 
 // ── MAIN ──────────────────────────────────────────────────────────────
 async function run() {
+  const runId = makeRunId();
+  let attempts = 0;
+  let successes = 0;
+  let skipped = 0;
+  let errorSample = null;
+  const finish = async (extra = {}) => {
+    const result = { attempts, successes, skipped, errorSample, ...extra };
+    await reportRileyRun({ runId, ...result });
+    return result;
+  };
+
+  try {
   console.log('\n🤝 Riley — Inbound Triage Agent');
   console.log('─────────────────────────────────\n');
   const clientConfig = await getClientConfig(CLIENT_ID);
@@ -1556,7 +1591,7 @@ async function run() {
 
   if (CLIENT_ID !== 1) {
     console.log('Riley currently monitors jacob@gopulseforge.com only. MSHI triage is manual until forwarding or a second OAuth is configured.');
-    return;
+    return finish({ idle: true, reason: 'non_client_1' });
   }
 
   let emails = [];
@@ -1568,12 +1603,18 @@ async function run() {
       gmailFailed = true;
       console.log('[Riley] Gmail auth unavailable after token refresh failure — exiting triage gracefully.');
       await processEventNotifications();
-      return;
+      attempts = 1;
+      successes = 0;
+      errorSample = { error: 'Gmail auth unavailable after token refresh failure', client_id: CLIENT_ID };
+      return finish({ failed: true, reason: 'gmail_auth_unavailable' });
     }
     emails = await getUnreadEmails(auth);
   } catch (err) {
     gmailFailed = true;
     console.error('[Riley] Gmail processing failed:', err.message);
+    attempts = 1;
+    successes = 0;
+    errorSample = { error: err.message, client_id: CLIENT_ID };
     await db.logAgentAction(AGENT_NAME, 'triage_summary', null, null, { error: err.message, client_id: CLIENT_ID }, 'failed').catch(() => {});
   }
 
@@ -1583,7 +1624,8 @@ async function run() {
       await db.logAgentAction(AGENT_NAME, 'triage_summary', null, null, { emails_processed: 0 }, 'success');
     }
     await processEventNotifications();
-    return;
+    if (gmailFailed) return finish({ failed: true, reason: 'gmail_failed' });
+    return finish({ idle: true, reason: 'zero_unread' });
   }
 
   console.log(`Found ${emails.length} unprocessed inbox emails. Classifying...\n`);
@@ -1611,6 +1653,7 @@ async function run() {
     console.log(`Processing: ${email.subject} — ${email.from}`);
 
     try {
+      attempts++;
       const inbound = await classifyInbound(email, { logHaiku: true });
       console.log(`  [Riley] Tier ${inbound.tier} → ${inbound.action}: ${inbound.reason}`);
 
@@ -1618,6 +1661,7 @@ async function run() {
         stats.tier4_noise += 1;
         await logInboundNoise(email, inbound.reason);
         await safeApplyRileyLabels(auth, email.id, inbound.tier);
+        successes++;
         continue;
       }
 
@@ -1625,6 +1669,7 @@ async function run() {
         stats.tier3_unidentified += 1;
         await logInboundUnidentified(email, inbound.reason);
         await safeApplyRileyLabels(auth, email.id, inbound.tier);
+        successes++;
         continue;
       }
 
@@ -1650,10 +1695,12 @@ async function run() {
             'completed'
           );
           await safeApplyRileyLabels(auth, email.id, inbound.tier);
+          successes++;
           continue;
         }
         await updateProspectStatus(inbound.prospectId, inbound.newStatus, inbound.autoResponderUntil || null);
         await safeApplyRileyLabels(auth, email.id, inbound.tier);
+        successes++;
         continue;
       }
 
@@ -1662,6 +1709,7 @@ async function run() {
         console.log('  [Riley] Classifier returned missing prospect — logging unidentified for ' + email.from);
         await logInboundUnidentified(email, 'matched_prospect_not_found');
         await safeApplyRileyLabels(auth, email.id, 3);
+        successes++;
         continue;
       }
 
@@ -1687,9 +1735,11 @@ async function run() {
       await recalcICPAfterEmailEvent(prospect.id, CLIENT_ID, eventType);
 
       await safeApplyRileyLabels(auth, email.id, inbound.tier);
+      successes++;
       await new Promise(r => setTimeout(r, 1000));
     } catch (err) {
       console.error(`  [Riley] Failed to process ${email.from}:`, err.message);
+      errorSample = errorSample || { from: email.from, subject: email.subject, error: err.message, client_id: CLIENT_ID };
       await db.logAgentAction(
         AGENT_NAME,
         'triage_failed',
@@ -1710,6 +1760,11 @@ async function run() {
   await processEventNotifications();
 
   console.log('Riley complete.');
+  return finish();
+  } catch (err) {
+    errorSample = errorSample || { error: err.message, client_id: CLIENT_ID };
+    return finish({ failed: true });
+  }
 }
 
 // ── WARM-OPEN GATE ──────────────────────────────────────────────────────────

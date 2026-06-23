@@ -2,17 +2,20 @@ require('dotenv').config();
 const pool = require('./db');
 const axios = require('axios');
 const Anthropic = require('@anthropic-ai/sdk');
+const { randomUUID } = require('crypto');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { getAvailableActionAgents, getEnabledAgents, isAgentEnabled } = require('./utils/agentAvailability');
 const { getExpansionReport } = require('./scoutExpansion');
 const { computeDailyHealth, formatDailyHealthMessage } = require('./utils/dailyHealth');
 const { ensureHealthSchema, upsertDailyHealth } = require('./utils/healthSchema');
 const { sendMiraTelegramMessage } = require('./utils/miraCorrections');
+const { reportAgentRun } = require('./utils/agentObservability');
 
 const client = new Anthropic();
 const AGENT_NAME = 'max';
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
+let lastDigestSendError = null;
 const CALL_AGENT_KEY = 'c' + 'al';
 const MAX_ACTION_CHANNELS = ['call', 'sms', 'email', 'gbp', 'content'];
 const AGENT_DISPLAY_NAMES = {
@@ -35,6 +38,32 @@ const DIGEST_AGENT_DETAILS = {
   sam: 'Sam = the SMS agent. He sends text notifications.',
   scout: 'Scout = the lead scraper. He finds and enriches new prospects.',
 };
+
+function makeRunId() {
+  return `${AGENT_NAME}-${CLIENT_ID || 'none'}-${new Date().toISOString()}-${randomUUID()}`;
+}
+
+function captureSendError(err) {
+  if (!err) return null;
+  return err.response?.data || err.message;
+}
+
+async function reportMaxRun({ runId, attempts, successes, skipped = 0, errorSample = null }) {
+  try {
+    return await reportAgentRun({
+      agent: AGENT_NAME,
+      clientId: CLIENT_ID,
+      runId,
+      attempts,
+      successes,
+      skipped,
+      errorSample,
+    });
+  } catch (err) {
+    console.error('[Max] Observability report failed:', err.message);
+    return null;
+  }
+}
 
 function displayAgentList(agents = []) {
   const names = agents.map(agent => AGENT_DISPLAY_NAMES[agent] || agent).filter(Boolean);
@@ -734,6 +763,31 @@ async function getSystemSnapshot() {
     ORDER BY count DESC
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
+  const postsNeedingStats = await pool.query(`
+    SELECT
+      pc.id,
+      pc.post_content,
+      pc.comment,
+      pc.post_url,
+      pc.posted_at,
+      pc.created_at,
+      pa.platform_post_id
+    FROM pending_comments pc
+    LEFT JOIN post_analytics pa
+      ON pa.pending_id = pc.id
+      AND pa.client_id = pc.client_id
+    WHERE pc.client_id = $1
+      AND pc.channel = 'linkedin_personal'
+      AND pc.status = 'posted'
+      AND pc.stats IS NULL
+      AND COALESCE(pc.posted_at, pc.created_at) <= NOW() - INTERVAL '48 hours'
+    ORDER BY COALESCE(pc.posted_at, pc.created_at) ASC
+    LIMIT 10
+  `, [CLIENT_ID]).catch(err => {
+    console.warn('[Max] LinkedIn stats-due query skipped:', err.message);
+    return { rows: [] };
+  });
+
   const [actionAgents, enabledAgents] = await Promise.all([
     loadActionAgents(),
     getEnabledAgents(CLIENT_ID),
@@ -770,6 +824,7 @@ async function getSystemSnapshot() {
     warmToday:     warmToday.rows[0]?.count || 0,
     emailStats:    emailStats.rows[0],
     unmatchedStatusUpdates: unmatchedStatusUpdates.rows,
+    postsNeedingStats: postsNeedingStats.rows,
     contentQuality: contentQuality.rows[0],
     closerMetrics: closerMetrics.rows[0],
     callDispositionStats: callDispositionStats.rows[0],
@@ -1120,11 +1175,35 @@ function formatUnreachableCompaniesSection(unreachable) {
   return lines.join('\n');
 }
 
+function linkedinPostHook(row) {
+  const text = String(row?.comment || row?.post_content || '')
+    .replace(/^POST:\s*/i, '')
+    .replace(/\nFIRST_COMMENT:[\s\S]*$/i, '')
+    .trim();
+  const firstLine = text.split(/\n+/).map(line => line.trim()).find(Boolean);
+  return (firstLine || 'Untitled LinkedIn personal post').slice(0, 120);
+}
+
+function linkedinPostUrl(row) {
+  return row.post_url || (row.platform_post_id ? `Buffer post ${row.platform_post_id}` : 'no permalink stored');
+}
+
+function formatLinkedInStatsDueSection(posts = []) {
+  if (!posts.length) return '';
+  const lines = ['Posts needing stats (48h+):'];
+  for (const row of posts) {
+    lines.push(`${linkedinPostHook(row)} — ${linkedinPostUrl(row)}`);
+  }
+  return lines.join('\n');
+}
+
 async function sendDigest(digestText, snapshot, expansionReport, dailyHealth = null) {
+  lastDigestSendError = null;
   // Refuse to ship an empty or non-string digest — better to skip the email
   // and surface the failure than to send "null" / "undefined" to the client.
   if (typeof digestText !== 'string' || !digestText.trim()) {
-    console.error(`[Max] sendDigest refused — digestText is ${typeof digestText} / ${digestText === null ? 'null' : digestText === undefined ? 'undefined' : 'empty'}`);
+    lastDigestSendError = `sendDigest refused: digestText is ${typeof digestText} / ${digestText === null ? 'null' : digestText === undefined ? 'undefined' : 'empty'}`;
+    console.error(`[Max] ${lastDigestSendError}`);
     return false;
   }
 
@@ -1148,6 +1227,11 @@ async function sendDigest(digestText, snapshot, expansionReport, dailyHealth = n
     ? `\n${'─'.repeat(50)}\n${unreachableBlock}\n`
     : '';
 
+  const linkedInStatsDueBlock = formatLinkedInStatsDueSection(snapshot?.postsNeedingStats || []);
+  const linkedInStatsDueSection = linkedInStatsDueBlock
+    ? `\n${'─'.repeat(50)}\n${linkedInStatsDueBlock}\n`
+    : '';
+
   const healthBlock = dailyHealth ? formatDailyHealthMessage(dailyHealth) : '';
   const healthSection = healthBlock
     ? `${healthBlock}\n${'─'.repeat(50)}\n\n`
@@ -1158,13 +1242,13 @@ async function sendDigest(digestText, snapshot, expansionReport, dailyHealth = n
   const subject = `${CLIENT_ID === 2 ? 'MSHI' : 'Pulseforge'} Daily Digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
 
   const body = CLIENT_ID === 2 ? `${healthSection}${digestText}
-${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
+${linkedInStatsDueSection}${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
 Pulseforge · gopulseforge.com` : `PULSEFORGE DAILY DIGEST
 ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 ${'─'.repeat(50)}
 
 ${healthSection}${digestText}
-${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
+${linkedInStatsDueSection}${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
 ${'─'.repeat(50)}
 Pulseforge · gopulseforge.com
 To adjust digest frequency reply to this email.`;
@@ -1172,7 +1256,7 @@ To adjust digest frequency reply to this email.`;
   // Telegram gets the same core Max digest with health at the top. The longer
   // email-only analytical appendices stay out so the message remains below
   // Telegram's size limit and scannable on a phone.
-  const telegramBody = `${healthSection}${digestText}`.trim();
+  const telegramBody = `${healthSection}${digestText}${linkedInStatsDueSection}`.trim();
 
   let emailSent = false;
   let telegramSent = false;
@@ -1192,7 +1276,9 @@ To adjust digest frequency reply to this email.`;
     console.log('Digest sent — Message ID:', response.data.messageId);
     emailSent = true;
   } catch (err) {
-    console.error('Failed to send digest:', err.response?.data || err.message);
+    const emailError = captureSendError(err);
+    lastDigestSendError = { ...(typeof lastDigestSendError === 'object' && lastDigestSendError ? lastDigestSendError : {}), email: emailError };
+    console.error('Failed to send digest:', emailError);
   }
 
   try {
@@ -1200,9 +1286,12 @@ To adjust digest frequency reply to this email.`;
     telegramSent = Boolean(telegramResponse);
     if (telegramSent) console.log('Max digest sent to Telegram');
   } catch (telegramErr) {
-    console.error('Failed to send Max digest to Telegram:', telegramErr.response?.data || telegramErr.message);
+    const telegramError = captureSendError(telegramErr);
+    lastDigestSendError = { ...(typeof lastDigestSendError === 'object' && lastDigestSendError ? lastDigestSendError : {}), telegram: telegramError };
+    console.error('Failed to send Max digest to Telegram:', telegramError);
   }
 
+  if (emailSent || telegramSent) lastDigestSendError = null;
   return emailSent || telegramSent;
 }
 
@@ -2571,6 +2660,8 @@ async function runAutonomousTriggers() {
 }
 
 async function run(args = {}) {
+  const runId = makeRunId();
+  const attempts = 1;
   const triggeredBy = args.triggered_by || args.triggeredBy || 'unspecified';
   const requestedClientId = args.client_id ?? args.clientId ?? null;
   const startedAt = new Date().toISOString();
@@ -2716,7 +2807,12 @@ async function run(args = {}) {
     result.errors.push({ step: 'run', message: err.message });
   }
 
-  return result;
+  const successes = result.digest.sent === true ? 1 : 0;
+  const errorSample = successes
+    ? null
+    : (lastDigestSendError || result.digest.error || result.errors[0] || 'Max digest was not sent');
+  await reportMaxRun({ runId, attempts, successes, skipped: 0, errorSample });
+  return { ...result, attempts, successes, skipped: 0, errorSample };
 }
 
 module.exports = { run };
