@@ -27,6 +27,7 @@ const { awaitProspeoSlot } = require('./utils/prospeoThrottle');
 const { checkProspeoQuota, recordProspeoCall, trip429 } = require('./utils/prospeoBreaker');
 const { shouldExcludeProspect, extractEmailDomain } = require('./utils/prospectFilter');
 const { normalizeVertical } = require('./utils/normalize');
+const { SCOUT_SKIP_REASONS, ensureScoutSkipLogTable, logScoutSkip } = require('./utils/scoutSkipLog');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -45,13 +46,37 @@ async function logScoutRun(status, payload, action = 'scrape') {
   const allowedStatuses = new Set(['success', 'failed', 'pending', 'completed', 'skipped']);
   const safeStatus = allowedStatuses.has(status) ? status : 'skipped';
   try {
-    await pool.query(`
+    const result = await pool.query(`
       INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
       VALUES ($1, $2, $3, $4, NOW(), $5)
+      RETURNING id
     `, ['scout', action, JSON.stringify(payload), safeStatus, CONFIG.clientId]);
+    return result.rows[0]?.id || null;
   } catch (err) {
     console.error('[logScoutRun] failed to write:', err.message);
+    return null;
   }
+}
+
+function incrementBreakdown(breakdown, reason) {
+  breakdown[reason] = (breakdown[reason] || 0) + 1;
+}
+
+function scoutDiscoveryMethod(lead) {
+  return Array.isArray(lead?.source) && lead.source.includes('google_places') ? 'google_places' : 'serpapi';
+}
+
+function scoutCandidateIdentifier(lead, companyName) {
+  const email = typeof lead?.email === 'string' && lead.email !== '—' ? lead.email.trim() : '';
+  return email || normalizeDomain(lead?.url) || `${companyName || lead?.company || 'unknown'} @ ${CONFIG.location}`;
+}
+
+async function persistScoutSkip(runId, lead, skipReason, detail = {}, companyName = null) {
+  return logScoutSkip({
+    runId, clientId: CONFIG.clientId, vertical: CONFIG.vertical, location: CONFIG.location,
+    searchQuery: lead?.search_query || null, discoveryMethod: scoutDiscoveryMethod(lead),
+    skipReason, candidateIdentifier: scoutCandidateIdentifier(lead, companyName), detail,
+  });
 }
 
 async function recordEmailEnrichmentMethod(domain, method, details = {}) {
@@ -834,18 +859,6 @@ function scoreLead(lead) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// STEP 4: Deduplicate by domain
-// ─────────────────────────────────────────────────────────────────────
-function deduplicate(leads) {
-  const seen = new Set();
-  return leads.filter(l => {
-    if (seen.has(l.url)) return false;
-    seen.add(l.url);
-    return true;
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────
 // STEP 5: Export to CSV
 // ─────────────────────────────────────────────────────────────────────
 async function exportToCSV(leads, filename) {
@@ -922,7 +935,9 @@ async function pushToGoogleSheets(leads, sheetId) {
 // ─────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────
-async function main() {
+async function main({ runId = null } = {}) {
+  await ensureScoutSkipLogTable();
+  const preSaveStats = { skipped: 0, rejected: 0, skipped_breakdown: {} };
   console.log('\n🔷 Pulseforge Lead Engine');
   console.log('─────────────────────────────────────────');
   console.log(`  Industry : ${CONFIG.industry}`);
@@ -944,31 +959,59 @@ async function main() {
     console.log(`[Google] Searching: ${googleQuery}`);
 
     // 1. SerpAPI search
-    const serpLeads = await searchGoogle(googleQuery, CONFIG.maxResults);
+    const serpLeads = (await searchGoogle(googleQuery, CONFIG.maxResults)).map(lead => ({ ...lead, search_query: searchQuery }));
     console.log(`[SerpAPI] Found ${serpLeads.length} raw results for "${searchQuery}"`);
     leads = [...leads, ...serpLeads];
 
     // 1b. Google Places search (additive — secondary local discovery)
     console.log(`[Places] Searching: "${searchQuery}"`);
-    const placesLeads = await searchGooglePlaces(searchQuery, '', Math.min(CONFIG.maxResults, 20));
+    const placesLeads = (await searchGooglePlaces(searchQuery, '', Math.min(CONFIG.maxResults, 20))).map(lead => ({ ...lead, search_query: searchQuery }));
     if (placesLeads.length) {
       leads = [...leads, ...placesLeads];
     }
   }
 
-  leads = deduplicate(leads);
+  const uniqueLeads = [];
+  const seenDomains = new Set();
+  for (const lead of leads) {
+    const domain = normalizeDomain(lead.url);
+    if (domain && seenDomains.has(domain)) {
+      incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.DUPLICATE);
+      preSaveStats.skipped++;
+      await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.DUPLICATE, { match: 'within_run_domain', domain });
+      continue;
+    }
+    if (domain) seenDomains.add(domain);
+    uniqueLeads.push(lead);
+  }
+  leads = uniqueLeads;
   console.log(`[Combined] ${leads.length} unique domains after SerpAPI + Places`);
 
   // Pre-enrichment blacklist — strip junk domains/names before spending Prospeo/Hunter credits
   const beforePreEnrichment = leads.length;
-  leads = leads.filter(l => {
+  const preEnrichmentAccepted = [];
+  for (const l of leads) {
+    const missingFields = [];
+    if (!String(l.company || '').trim()) missingFields.push('company');
+    if (!normalizeDomain(l.url)) missingFields.push('domain');
+    if (missingFields.length) {
+      incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD);
+      preSaveStats.skipped++;
+      await persistScoutSkip(runId, l, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD, { missing_fields: missingFields, stage: 'pre_enrichment' });
+      continue;
+    }
     const reason = preEnrichmentRejectReason(l);
     if (reason) {
       console.log(`[Pre-enrichment reject] ${l.company || l.url || 'unknown'}: ${reason}`);
-      return false;
+      incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.PRE_ENRICHMENT_REJECT);
+      preSaveStats.skipped++;
+      preSaveStats.rejected++;
+      await persistScoutSkip(runId, l, SCOUT_SKIP_REASONS.PRE_ENRICHMENT_REJECT, { reason });
+      continue;
     }
-    return true;
-  });
+    preEnrichmentAccepted.push(l);
+  }
+  leads = preEnrichmentAccepted;
   console.log(`[Pre-enrichment blacklist] ${leads.length} leads after filtering (${beforePreEnrichment - leads.length} removed)`);
 
   // 3. Enrich with email waterfall
@@ -1044,14 +1087,31 @@ async function main() {
     facebook_url:         l.facebook_url || null,
     instagram_url:        l.instagram_url || null,
     websiteSignals:       l.websiteSignals || [],
+    search_query:          l.search_query || null,
   }));
 
-  leads = leads.filter(l => !isBlacklistedDomain(l.url));
+  const postEnrichmentAccepted = [];
+  for (const l of leads) {
+    if (!isBlacklistedDomain(l.url)) { postEnrichmentAccepted.push(l); continue; }
+    incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.PRE_ENRICHMENT_REJECT);
+    preSaveStats.skipped++;
+    preSaveStats.rejected++;
+    await persistScoutSkip(runId, l, SCOUT_SKIP_REASONS.PRE_ENRICHMENT_REJECT, { reason: 'blocked domain after enrichment', domain: normalizeDomain(l.url) });
+  }
+  leads = postEnrichmentAccepted;
   console.log("[Blacklist] " + leads.length + " leads after blacklist filter");
 
   // 5. Filter by min score
   const before = leads.length;
-  leads = leads.filter(l => l.score >= CONFIG.minScore);
+  const scoredLeads = [];
+  for (const l of leads) {
+    if (l.score >= CONFIG.minScore) { scoredLeads.push(l); continue; }
+    incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.LOW_SCORE);
+    preSaveStats.skipped++;
+    preSaveStats.rejected++;
+    await persistScoutSkip(runId, l, SCOUT_SKIP_REASONS.LOW_SCORE, { score: l.score, minimum_score: CONFIG.minScore });
+  }
+  leads = scoredLeads;
   console.log(`\n[Score] Filtered to ${leads.length} leads (removed ${before - leads.length} below ${CONFIG.minScore}%)`);
 
   // 6. Sort by score desc
@@ -1075,7 +1135,7 @@ async function main() {
   if (CONFIG.outputCSV) await exportToCSV(leads, csvFile);
   if (CONFIG.outputSheet) await pushToGoogleSheets(leads, CONFIG.sheetId);
 
-  const dbStats = await saveToDatabase(leads);
+  const dbStats = await saveToDatabase(leads, { runId, ...preSaveStats });
   console.log('\n✓ Done.\n');
   return { leads_scored: leads.length, ...dbStats };
 }
@@ -1440,31 +1500,55 @@ async function upsertScoutUnenriched({
   return 'inserted';
 }
 
-async function saveToDatabase(leads) {
-  let saved = 0, skipped = 0, rejected = 0, unenriched = 0;
+async function saveToDatabase(leads, {
+  runId = null, skipped: initialSkipped = 0, rejected: initialRejected = 0,
+  skipped_breakdown: initialBreakdown = {},
+} = {}) {
+  let saved = 0, skipped = initialSkipped, rejected = initialRejected, unenriched = 0;
+  const skippedBreakdown = { ...initialBreakdown };
   let setterQueued = 0, setterSkipped = 0, setterFailed = 0;
   await ensureSetterQueueColumns(pool);
   await ensureCompanyColumns(pool);
   await ensureEmailVerificationColumns();
   await ensureScoutUnenrichedTable();
+  await ensureScoutSkipLogTable();
   for (const lead of leads) {
-    const companyName = lead.company.replace(/^CONTACT:\s*/i, '').trim();
+    let companyName = null;
+    try {
+      companyName = String(lead.company || '').replace(/^CONTACT:\s*/i, '').trim();
+      const domain = normalizeDomain(lead.url);
+      const discoveryMethod = scoutDiscoveryMethod(lead);
+      const websiteUrl = lead.url || null;
 
-    if (!validateProspect(companyName)) {
-      rejected++;
-      continue;
-    }
-    if ((lead.score || 0) < 40) {
-      console.log(`Score too low (${lead.score}): ${companyName}`);
-      rejected++;
-      continue;
-    }
+      const missingFields = [];
+      if (!companyName || companyName.toLowerCase() === 'unknown') missingFields.push('company');
+      if (!domain) missingFields.push('domain');
+      if (missingFields.length) {
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD);
+        skipped++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD, { missing_fields: missingFields }, companyName);
+        continue;
+      }
+
+      if (!validateProspect(companyName)) {
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.INVALID_PROSPECT);
+        skipped++; rejected++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.INVALID_PROSPECT, { reason: 'validateProspect rejected candidate' }, companyName);
+        continue;
+      }
+      if ((lead.score || 0) < 40) {
+        console.log(`Score too low (${lead.score}): ${companyName}`);
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.LOW_SCORE);
+        skipped++; rejected++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.LOW_SCORE, { score: lead.score || 0, minimum_score: 40 }, companyName);
+        continue;
+      }
 
     // Dedup: skip if a prospect with the same business name already exists in the same city.
     // City is taken from the first token of CONFIG.location (e.g., "Manchester NH" -> "Manchester").
     // If the existing prospect has no city info recorded, fall back to a name-only match within the client.
-    const cityScope = String(CONFIG.location || '').split(/\s+/)[0] || '';
-    const dupCheck = await pool.query(
+      const cityScope = String(CONFIG.location || '').split(/\s+/)[0] || '';
+      const dupCheck = await pool.query(
       `SELECT p.id
          FROM prospects p
          LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
@@ -1481,18 +1565,13 @@ async function saveToDatabase(leads) {
            )`,
       [companyName, CONFIG.clientId, cityScope]
     );
-    if (dupCheck.rows.length > 0) {
-      console.log(`Duplicate skipped: ${companyName} (${cityScope || 'any city'})`);
-      skipped++;
-      continue;
-    }
-
-    try {
-      const domain = normalizeDomain(lead.url);
-      const discoveryMethod = Array.isArray(lead.source) && lead.source.includes('google_places')
-        ? 'google_places'
-        : 'serpapi';
-      const websiteUrl = lead.url || null;
+      if (dupCheck.rows.length > 0) {
+        console.log(`Duplicate skipped: ${companyName} (${cityScope || 'any city'})`);
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.DUPLICATE);
+        skipped++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.DUPLICATE, { match: 'company_name_and_city', city_scope: cityScope || null, existing_prospect_id: dupCheck.rows[0].id }, companyName);
+        continue;
+      }
 
       const emailCandidate = resolveScoutEmailCandidate(lead);
       if (emailCandidate.insertTarget === 'unenriched') {
@@ -1510,6 +1589,9 @@ async function saveToDatabase(leads) {
           reason: emailCandidate.reason,
           discovery_method: discoveryMethod,
         }, 'scout_skipped_no_email');
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.NO_EMAIL);
+        skipped++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.NO_EMAIL, { reason: emailCandidate.reason, email: emailCandidate.email, unenriched_action: 'upserted' }, companyName);
         unenriched++;
         continue;
       }
@@ -1533,6 +1615,7 @@ async function saveToDatabase(leads) {
           exclusion_detail: exclusion.detail || {},
         }, 'prospect_excluded');
         console.log(`[Scout] Excluded prospect ${email}: ${exclusion.reason}`);
+        incrementBreakdown(skippedBreakdown, 'excluded_filter');
         skipped++;
         continue;
       }
@@ -1563,7 +1646,9 @@ async function saveToDatabase(leads) {
       }) || null;
       if (serviceArea === null && Array.isArray(CLIENT_CONFIG?.service_area) && CLIENT_CONFIG.service_area.length > 0) {
         console.log(`[Scout] Out-of-area prospect skipped: ${companyName} (${lead.address || 'no address'})`);
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.OUT_OF_AREA);
         skipped++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.OUT_OF_AREA, { address: lead.address || null, candidate_domain: domain, allowed_service_area: CLIENT_CONFIG.service_area }, companyName);
         continue;
       }
       const hasWebsite = !!(domain || websiteUrl);
@@ -1588,7 +1673,9 @@ async function saveToDatabase(leads) {
       [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, prospectNote, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, websiteUrl, emailVerified, emailVerificationMethod, verifiedAt, doNotContact, preferredChannel, emailStatus, JSON.stringify(verifierResponse || null), verifierCheckedAt]
     );
       if (!insert.rows.length) {
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.INSERT_CONFLICT);
         skipped++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.INSERT_CONFLICT, { conflict_target: 'prospects.email', email }, companyName);
         continue;
       }
       saved++;
@@ -1623,12 +1710,15 @@ async function saveToDatabase(leads) {
         console.error(`[Setter] Handoff failed for ${companyName}: ${err.message}`);
       }
     } catch (err) {
+      incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.DB_ERROR);
       skipped++;
+      await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.DB_ERROR, { error: err.message, code: err.code || null, constraint: err.constraint || null }, companyName);
+      console.error(`[Scout] Database save failed for ${companyName || scoutCandidateIdentifier(lead)}: ${err.message}`);
     }
   }
   console.log(`[DB] Saved ${saved} prospects, ${unenriched} unreachable (scout_unenriched), rejected ${rejected} (junk), skipped ${skipped} (errors/dupes)`);
   console.log(`[Setter] Queued ${setterQueued}, skipped ${setterSkipped}, failed ${setterFailed}`);
-  return { saved, skipped, rejected, unenriched, setter_queued: setterQueued, setter_skipped: setterSkipped, setter_failed: setterFailed };
+  return { saved, skipped, skipped_breakdown: skippedBreakdown, rejected, unenriched, setter_queued: setterQueued, setter_skipped: setterSkipped, setter_failed: setterFailed };
 }
 
 async function ensureSetterQueueColumns(pool) {
@@ -2038,8 +2128,8 @@ async function run(params = {}) {
   }, 'scout_lock_acquired');
 
   try {
-    await logScoutRun('pending', runContext);
-    const stats = await main();
+    const runId = await logScoutRun('pending', runContext);
+    const stats = await main({ runId });
     await pool.query(
       `UPDATE scout_queue SET last_run_at = NOW(), updated_at = NOW()
        WHERE client_id = $1 AND vertical = $2 AND location = $3`,
