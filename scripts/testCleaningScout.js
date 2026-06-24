@@ -111,11 +111,14 @@ const SAMPLE_LEADS = [
   },
 ];
 
+// client_id=10 setter-qualifying threshold is 60 (moderate pilot threshold —
+// CLEANING_SETTER_THRESHOLD in leadgen.js), NOT 70+.
+const THRESHOLD = 60;
 function bucket(score) {
-  if (score >= 70) return '70-100 (setter-qualifying)';
-  if (score >= 50) return '50-69  (review)';
-  if (score >= 30) return '30-49  (weak)';
-  return '0-29   (cull)';
+  if (score >= THRESHOLD) return `${THRESHOLD}-100 (setter-qualifying)`;
+  if (score >= 40)        return `40-${THRESHOLD - 1}  (review)`;
+  if (score >= 25)        return `25-39  (weak)`;
+  return '0-24   (cull)';
 }
 
 console.log('\n=== Cleaning-client ICP test pass (law firms, Manchester NH area) ===');
@@ -133,7 +136,7 @@ for (const s of scored) {
 }
 console.log(`Leads scored: ${scored.length}`);
 console.log('Score distribution:');
-for (const b of ['70-100 (setter-qualifying)', '50-69  (review)', '30-49  (weak)', '0-29   (cull)']) {
+for (const b of [`${THRESHOLD}-100 (setter-qualifying)`, `40-${THRESHOLD - 1}  (review)`, '25-39  (weak)', '0-24   (cull)']) {
   console.log(`  ${b}: ${dist[b] || 0}`);
 }
 const avg = Math.round(scored.reduce((a, s) => a + s.r.total, 0) / scored.length);
@@ -146,9 +149,10 @@ for (const { lead, r } of scored) {
   const c = r.components;
   console.log(`${String(r.total).padStart(3)}  ${lead.company}`);
   console.log(`     ${lead.address || '(no address)'}`);
-  console.log(`     vertical:${c.vertical}/35  geo:${c.geography}/25  contact:${c.contact}/25  single_tenant:${c.single_tenant}/10  size:${c.size}/5`);
+  console.log(`     vertical:${c.vertical}/35  geo:${c.geography}/25  contact:${c.contact}/25  single_tenant:${c.single_tenant}/10  size:${c.size}/5  penalty:-${c.penalty}`);
   console.log(`     single-tenant basis: ${c.single_tenant_basis}`);
   console.log(`     size basis: ${c.size_basis}`);
+  console.log(`     penalty basis: ${c.penalty_basis}`);
   if (r.flags.length) console.log(`     flags: ${r.flags.join(' | ')}`);
   console.log('');
 }

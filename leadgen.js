@@ -263,6 +263,14 @@ const GOOGLE_API_KEY    = process.env.GOOGLE_API_KEY;
 const GOOGLE_CX         = process.env.GOOGLE_CX;
 const PROSPEO_API_KEY   = process.env.PROSPEO_API_KEY;
 const SETTER_ICP_THRESHOLD = 70;
+// Cleaning pilot (client_id=10) runs a moderate threshold, not 70+. The pilot
+// needs volume and Jacob is the human final-filter early on; live scores also
+// run lower than the synthetic harness (which assumed full enrichment). Tune
+// here as enrichment hit-rates come in.
+const CLEANING_SETTER_THRESHOLD = 60;
+function getSetterThreshold() {
+  return CONFIG.scoringProfile === 'cleaning_buyer' ? CLEANING_SETTER_THRESHOLD : SETTER_ICP_THRESHOLD;
+}
 
 // Per-vertical saturation caps. Once a client has accumulated this many
 // prospects in a vertical, Scout stops scraping it and rotates to the
@@ -310,13 +318,13 @@ const MSHI_PROBATE_ATTORNEY_GEO = [
   { city: 'Beckley', state: 'WV' },
 ];
 
-// Greater Manchester NH service ring (~20mi default — Jacob to confirm radius).
-// Mirrors clients.service_area for client_id=10; used by the cleaning ICP
-// rubric for geography scoring and by Scout's city rotation.
+// Manchester pilot cluster for client_id=10. Tightened from the wider ring for
+// the pilot — the held-back towns (Nashua, Concord, Derry, Merrimack,
+// Litchfield, Hudson, etc.) come back post-pilot. Must stay in sync with
+// clients.service_area, which drives Scout's out-of-area cull. Also used by the
+// cleaning ICP rubric for geography scoring and by Scout's city rotation.
 const CLEANING_AREA_CITIES = [
   'Manchester', 'Bedford', 'Goffstown', 'Hooksett', 'Londonderry', 'Auburn',
-  'Candia', 'Derry', 'Litchfield', 'Hudson', 'Merrimack', 'Bow', 'Pembroke',
-  'Allenstown', 'Dunbarton', 'New Boston', 'Weare', 'Amherst', 'Nashua', 'Concord',
 ];
 
 const CLIENT_SCOUT_PLANS = {
@@ -926,28 +934,52 @@ function scoreCleaningLead(lead) {
     'law office of', 'law offices of', 'solo', 'sole practitioner', 'pllc',
     'attorney at law', '& associates', 'and associates', ' p.c.', ' pc',
   ];
-  const BIG_FIRM = [
-    'offices nationwide', 'nationwide', 'national', 'multi-state', 'multistate',
-    'offices in', 'locations in', 'regional offices', 'am law', 'hundreds of',
-  ];
   let size = 3;
   let sizeBasis = 'thin data — neutral default';
-  if (BIG_FIRM.some(k => hay.includes(k)))        { size = 0; sizeBasis = 'large/multi-office signals'; }
-  else if (SMALL_FIRM.some(k => hay.includes(k))) { size = 5; sizeBasis = 'small/solo-firm signals'; }
+  if (SMALL_FIRM.some(k => hay.includes(k))) { size = 5; sizeBasis = 'small/solo-firm signals'; }
 
-  const total = Math.min(100, Math.max(0, vertical + geography + contact + singleTenant + size));
+  // 6. Disqualifier penalty (negative) — actively pushes the WRONG beachhead
+  //    below threshold instead of merely zero-awarding it. Two detectable
+  //    signals, both narrow on purpose so we don't cull good in-area firms:
+  //    (a) multi-office / national firm — they run their own facilities and
+  //        have incumbent vendors; not a walkthrough-to-close cleaning buyer.
+  //    (b) high-floor / large-suite address — a big managed multi-tenant tower
+  //        (property-manager sale). This is DISTINCT from a plain "Suite 3" in
+  //        a small building, which stays in the ambiguous middle and is handled
+  //        at walkthrough booking. We do NOT chase certainty the data can't give.
+  const MULTI_OFFICE = [
+    'nationwide', 'national law firm', 'multi-state', 'multistate',
+    'regional offices', 'am law', 'offices nationwide', 'offices across',
+  ];
+  const multiOfficeRe = /\b\d+\s+offices\b|offices\s+(in|across)\s+\d+\s+(states|cities|locations|offices)|\b\d+\s+locations\b|hundreds of (attorneys|lawyers|offices)/i;
+  const towerRe = /\bfloor\s+\d+\b|\bfl\.?\s*\d{1,2}\b|\b(suite|ste\.?)\s*\d{3,}\b/i;
+  let penalty = 0;
+  const penaltyBasis = [];
+  if (MULTI_OFFICE.some(k => hay.includes(k)) || multiOfficeRe.test(hay)) {
+    penalty += 25;
+    penaltyBasis.push('multi-office/national firm');
+    if (sizeBasis.startsWith('thin')) { size = 0; sizeBasis = 'large/multi-office signals'; }
+  }
+  if (lead.address && towerRe.test(lead.address)) {
+    penalty += 12;
+    penaltyBasis.push('high-floor/large-suite — multi-tenant tower');
+  }
+
+  const total = Math.min(100, Math.max(0, vertical + geography + contact + singleTenant + size - penalty));
 
   const flags = [];
   if (!lead.address)                         flags.push('no_address: geography + single-tenant precision limited');
   if (!lead.address || singleTenant === 5)   flags.push('single_tenant_undetectable');
   if (sizeBasis.startsWith('thin'))          flags.push('size_thin_data');
   if (!hasName)                              flags.push('no_named_contact');
+  if (penalty)                               flags.push('disqualifier_penalty: ' + penaltyBasis.join(', '));
 
   return {
     total,
     components: {
-      vertical, geography, contact, single_tenant: singleTenant, size,
+      vertical, geography, contact, single_tenant: singleTenant, size, penalty,
       single_tenant_basis: singleTenantBasis, size_basis: sizeBasis,
+      penalty_basis: penaltyBasis.join('; ') || 'none',
     },
     flags,
   };
@@ -963,7 +995,7 @@ function scoreLead(lead) {
     const r = scoreCleaningLead(lead);
     lead.scoreComponents = r.components;
     lead.scoreFlags = r.flags;
-    console.log(`  ICP[cleaning] ${r.total} (vertical:${r.components.vertical} geo:${r.components.geography} contact:${r.components.contact} single_tenant:${r.components.single_tenant} size:${r.components.size})${r.flags.length ? ' flags:' + r.flags.join(';') : ''} — ${lead.company}`);
+    console.log(`  ICP[cleaning] ${r.total} (vertical:${r.components.vertical} geo:${r.components.geography} contact:${r.components.contact} single_tenant:${r.components.single_tenant} size:${r.components.size} penalty:-${r.components.penalty})${r.flags.length ? ' flags:' + r.flags.join(';') : ''} — ${lead.company}`);
     return r.total;
   }
 
@@ -1936,8 +1968,8 @@ async function saveToDatabase(leads, {
             AND client_id = $2
             AND COALESCE(icp_score, 0) >= $3
             AND COALESCE(do_not_contact, false) = false
-        `, [prospectId, CONFIG.clientId, SETTER_ICP_THRESHOLD]);
-        if (CONFIG.clientId === 1 && (lead.score || 0) >= SETTER_ICP_THRESHOLD) {
+        `, [prospectId, CONFIG.clientId, getSetterThreshold()]);
+        if (CONFIG.clientId === 1 && (lead.score || 0) >= getSetterThreshold()) {
           const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
           if (handoff.appended) setterQueued++;
           else setterSkipped++;

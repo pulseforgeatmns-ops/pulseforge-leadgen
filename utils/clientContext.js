@@ -238,8 +238,11 @@ async function ensureClientArchitecture() {
   // with the serial-assigned McLeod row below. enabled_agents is scout-only
   // for now: no cold-email/social until the entity, domain, and sender are
   // set, which keeps it from ever sending under Pulseforge's identity.
-  // service_area drives Scout's out-of-area culling (leadgen.js); radius is a
-  // ~20mi Greater-Manchester default pending Jacob's confirmation.
+  // service_area drives Scout's out-of-area culling (leadgen.js). Tightened to
+  // the Manchester pilot cluster (Manchester/Bedford/Goffstown/Hooksett/
+  // Londonderry/Auburn); the wider ring (Nashua, Concord, Derry, Merrimack,
+  // Litchfield, Hudson) is held for post-pilot. Keep in sync with
+  // CLEANING_AREA_CITIES in leadgen.js.
   await pool.query(`
     INSERT INTO clients (
       id, name, slug, business_name, vertical, city, state,
@@ -252,9 +255,7 @@ async function ensureClientArchitecture() {
       'commercial_cleaning',
       'Manchester',
       'NH',
-      ARRAY['Manchester','Bedford','Goffstown','Hooksett','Londonderry','Auburn',
-            'Candia','Derry','Litchfield','Hudson','Merrimack','Bow','Pembroke',
-            'Allenstown','Dunbarton','New Boston','Weare','Amherst','Nashua','Concord'],
+      ARRAY['Manchester','Bedford','Goffstown','Hooksett','Londonderry','Auburn'],
       ARRAY['law_firm','accounting'],
       'Single-tenant professional-services offices (law firms, CPA/accounting practices) in the Greater Manchester NH area that buy recurring commercial cleaning',
       'cleaning_buyer',
