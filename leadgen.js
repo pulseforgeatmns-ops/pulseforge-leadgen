@@ -252,6 +252,10 @@ let CONFIG = {
   sheetId:     args.sheetid   || process.env.GOOGLE_SHEET_ID || '',
   clientId:    getRuntimeClientId(args),
   vertical:    normalizeVertical(args.industry || 'cleaning') || 'unknown',
+  // Set from CLIENT_CONFIG.scoring_profile once the client row loads in run().
+  // Selects which ICP rubric scoreLead() applies. 'cleaning_buyer' = the
+  // commercial-cleaning buyer rubric; null/other = default lead-gen rubric.
+  scoringProfile: null,
 };
 let CLIENT_CONFIG = null;
 
@@ -306,7 +310,35 @@ const MSHI_PROBATE_ATTORNEY_GEO = [
   { city: 'Beckley', state: 'WV' },
 ];
 
+// Greater Manchester NH service ring (~20mi default — Jacob to confirm radius).
+// Mirrors clients.service_area for client_id=10; used by the cleaning ICP
+// rubric for geography scoring and by Scout's city rotation.
+const CLEANING_AREA_CITIES = [
+  'Manchester', 'Bedford', 'Goffstown', 'Hooksett', 'Londonderry', 'Auburn',
+  'Candia', 'Derry', 'Litchfield', 'Hudson', 'Merrimack', 'Bow', 'Pembroke',
+  'Allenstown', 'Dunbarton', 'New Boston', 'Weare', 'Amherst', 'Nashua', 'Concord',
+];
+
 const CLIENT_SCOUT_PLANS = {
+  // Cleaning company (client_id=10). Professional-services offices that BUY
+  // commercial cleaning. Law firms and accounting practices run as SEPARATE
+  // passes (one vertical per run). Google Places is primary for this client
+  // (see getSourcePreference) — SerpAPI underperforms on professional offices.
+  10: {
+    cities: CLEANING_AREA_CITIES,
+    verticals: {
+      law_firm: [
+        'law firm {city} {state}',
+        'law office {city} {state}',
+        'attorney {city} {state}',
+      ],
+      accounting: [
+        'accounting firm {city} {state}',
+        'cpa firm {city} {state}',
+        'tax accountant {city} {state}',
+      ],
+    },
+  },
   2: {
     cities: MSHI_SCOUT_CITIES,
     geoByVertical: {
@@ -624,6 +656,17 @@ function isProspeoRateLimited(err) {
   return /rate\s*limit/i.test(text);
 }
 
+// Decision-maker titles to ask Prospeo for. The cleaning client wants the
+// person who can authorize a walkthrough: owner OR office manager (plus the
+// usual small-firm principal titles). Other clients keep the single
+// CONFIG.jobTitle behavior.
+function getProspeoTitleIncludes() {
+  if (CONFIG.scoringProfile === 'cleaning_buyer') {
+    return ['owner', 'office manager', 'managing partner', 'partner', 'principal', 'founder', 'president'];
+  }
+  return [CONFIG.jobTitle];
+}
+
 async function callProspeoSearchPerson(domain) {
   await awaitProspeoSlot();
 
@@ -635,7 +678,7 @@ async function callProspeoSearchPerson(domain) {
           websites: { include: [domain] }
         },
         person_job_title: {
-          include: [CONFIG.jobTitle]
+          include: getProspeoTitleIncludes()
         }
       }
     },
@@ -796,10 +839,134 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// CLEANING-COMPANY ICP (client_id=10, scoring_profile='cleaning_buyer')
+// The buyer is a commercial-cleaning customer, NOT a lead-gen target. This
+// rubric is fully independent of the Pulseforge rubric below — it drops every
+// Pulseforge-specific signal (probate weighting, MSHI boosts, tech/web-presence
+// scoring) and scores the things that make an office worth a cleaning pitch.
+//
+// Components (max 100):
+//   vertical        0–35  single-tenant professional-services office (law/CPA). Highest weight.
+//   geography       0–25  Manchester NH + ring; out-of-area culled separately by service_area gate.
+//   contact         0–25  reachable owner/office-manager (name + email/phone). No contact = low.
+//   single_tenant   0–10  own space vs. a suite in a managed multi-tenant building. Heuristic — flagged.
+//   size            0–5   prefer small offices (walkable site visit). Thin data — flagged.
+//
+// Returns { total, components, flags } so the test harness and Scout logs can
+// show a per-lead breakdown for rubric tuning.
+function scoreCleaningLead(lead) {
+  const hay = (
+    (lead.company || '') + ' ' +
+    (lead.url     || '') + ' ' +
+    (lead.snippet || '')
+  ).toLowerCase();
+  const addr = (lead.address || '').toLowerCase();
+  const locHay = addr || hay;
+
+  // 1. Vertical match (0–35) — law firms / accounting practices = target.
+  const TARGET_VERTICAL = [
+    'law firm', 'law office', 'law offices', 'attorney', 'attorneys', 'lawyer',
+    'lawyers', 'legal', ' esq', 'llp', 'counsel', 'litigation', 'paralegal',
+    'cpa', 'accounting', 'accountant', 'accountants', 'bookkeeping', 'bookkeeper',
+    'tax service', 'tax services', 'tax prep', 'tax preparation', 'enrolled agent',
+  ];
+  // Adjacent single-tenant professional offices — plausible but not the beachhead.
+  const ADJACENT_VERTICAL = [
+    'insurance agency', 'financial advisor', 'wealth management', 'financial planning',
+    'title company', 'real estate office', 'consulting', 'architect', 'engineering firm',
+    'dental', 'dentist', 'orthodont', 'medical office', 'physical therapy', 'chiropractic',
+  ];
+  let vertical = 0;
+  if (TARGET_VERTICAL.some(k => hay.includes(k)))        vertical = 35;
+  else if (ADJACENT_VERTICAL.some(k => hay.includes(k))) vertical = 18;
+
+  // 2. Geography (0–25) — in-area scores high, out-of-area is culled upstream
+  //    by the service_area gate in saveToDatabase.
+  let geography = 0;
+  if (locHay.includes('manchester')) {
+    geography = 25;
+  } else if (CLEANING_AREA_CITIES.some(c => c.toLowerCase() !== 'manchester' && locHay.includes(c.toLowerCase()))) {
+    geography = 20;
+  } else if (locHay.includes(' nh') || locHay.includes('new hampshire')) {
+    geography = 8;
+  }
+
+  // 3. Reachable decision-maker (0–25) — can we book a walkthrough?
+  const hasEmail = !!(lead.email && lead.email !== '—' && String(lead.email).includes('@'));
+  const hasPhone = !!(lead.phone && lead.phone !== '');
+  const contactName = (lead.contact && lead.contact !== '—') ? String(lead.contact).trim() : '';
+  const hasName = /[a-z]/i.test(contactName) && contactName.split(/\s+/).filter(Boolean).length >= 2;
+  let contact = 0;
+  if (hasName && hasEmail && hasPhone)       contact = 25;
+  else if (hasName && (hasEmail || hasPhone)) contact = 18;
+  else if (hasEmail && hasPhone)              contact = 12;
+  else if (hasEmail || hasPhone)              contact = 8;
+
+  // 4. Single-tenant signal (0–10) — HEURISTIC, address-derived only.
+  //    A suite/unit/floor token suggests a unit inside a larger managed
+  //    building (property-manager sale — wrong beachhead). A bare street
+  //    address suggests the firm occupies its own space. When no address is
+  //    available this is genuinely undetectable, so we stay neutral and flag it
+  //    rather than guess. This is a known limitation, not a confident signal.
+  const MULTI_TENANT = /\b(suite|ste\.?|unit|floor|fl\.?|#\s*\d|room|rm\.?)\b/i;
+  let singleTenant = 5;
+  let singleTenantBasis = 'undetectable (no address) — neutral';
+  if (lead.address) {
+    if (MULTI_TENANT.test(lead.address)) {
+      singleTenant = 0;
+      singleTenantBasis = 'suite/unit in address — likely multi-tenant';
+    } else {
+      singleTenant = 10;
+      singleTenantBasis = 'bare street address — likely single-tenant';
+    }
+  }
+
+  // 5. Size proxy (0–5) — prefer small offices; thin data defaults to neutral.
+  const SMALL_FIRM = [
+    'law office of', 'law offices of', 'solo', 'sole practitioner', 'pllc',
+    'attorney at law', '& associates', 'and associates', ' p.c.', ' pc',
+  ];
+  const BIG_FIRM = [
+    'offices nationwide', 'nationwide', 'national', 'multi-state', 'multistate',
+    'offices in', 'locations in', 'regional offices', 'am law', 'hundreds of',
+  ];
+  let size = 3;
+  let sizeBasis = 'thin data — neutral default';
+  if (BIG_FIRM.some(k => hay.includes(k)))        { size = 0; sizeBasis = 'large/multi-office signals'; }
+  else if (SMALL_FIRM.some(k => hay.includes(k))) { size = 5; sizeBasis = 'small/solo-firm signals'; }
+
+  const total = Math.min(100, Math.max(0, vertical + geography + contact + singleTenant + size));
+
+  const flags = [];
+  if (!lead.address)                         flags.push('no_address: geography + single-tenant precision limited');
+  if (!lead.address || singleTenant === 5)   flags.push('single_tenant_undetectable');
+  if (sizeBasis.startsWith('thin'))          flags.push('size_thin_data');
+  if (!hasName)                              flags.push('no_named_contact');
+
+  return {
+    total,
+    components: {
+      vertical, geography, contact, single_tenant: singleTenant, size,
+      single_tenant_basis: singleTenantBasis, size_basis: sizeBasis,
+    },
+    flags,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // STEP 3: Score each lead (0–100)
 // Factors: vertical (25) + location (20) + contact (20) + web (20) + size (15)
 // ─────────────────────────────────────────────────────────────────────
 function scoreLead(lead) {
+  // Cleaning company uses a fully separate buyer rubric (see scoreCleaningLead).
+  if (CONFIG.scoringProfile === 'cleaning_buyer') {
+    const r = scoreCleaningLead(lead);
+    lead.scoreComponents = r.components;
+    lead.scoreFlags = r.flags;
+    console.log(`  ICP[cleaning] ${r.total} (vertical:${r.components.vertical} geo:${r.components.geography} contact:${r.components.contact} single_tenant:${r.components.single_tenant} size:${r.components.size})${r.flags.length ? ' flags:' + r.flags.join(';') : ''} — ${lead.company}`);
+    return r.total;
+  }
+
   const hay = (
     (lead.company || '') + ' ' +
     (lead.url     || '') + ' ' +
@@ -1010,9 +1177,23 @@ async function main({ runId = null } = {}) {
   }
 
   const searchQueries = getSearchQueriesForTarget();
+  // Source strategy. Most clients run SerpAPI + Places additively. The cleaning
+  // client (cleaning_buyer) makes Google Places PRIMARY and skips SerpAPI:
+  // SerpAPI underperforms on professional offices and has been running dry.
+  const placesPrimary = CONFIG.scoringProfile === 'cleaning_buyer';
   let leads = [];
 
   for (const searchQuery of searchQueries) {
+    if (placesPrimary) {
+      // Places-primary: Google Places only.
+      console.log(`[Source] Places-primary (cleaning_buyer) — skipping SerpAPI for "${searchQuery}"`);
+      console.log(`[Places] Searching: "${searchQuery}"`);
+      const placesLeads = (await searchGooglePlaces(searchQuery, '', Math.min(CONFIG.maxResults, 20))).map(lead => ({ ...lead, search_query: searchQuery }));
+      console.log(`[Places] Found ${placesLeads.length} results for "${searchQuery}"`);
+      leads = [...leads, ...placesLeads];
+      continue;
+    }
+
     const googleQuery = `"${searchQuery}" -indeed -ziprecruiter -thumbtack -glassdoor -yelp -yellowpages -mapquest -bbb -patch -avvo`;
     console.log(`[Google] Searching: ${googleQuery}`);
 
@@ -2131,6 +2312,9 @@ async function run(params = {}) {
   process.env.ACTIVE_CLIENT_ID = String(CONFIG.clientId);
   CLIENT_CONFIG = await getClientConfig(CONFIG.clientId);
   if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CONFIG.clientId}`);
+  // Per-client ICP rubric selector (e.g. 'cleaning_buyer'). Drives scoreLead()
+  // dispatch and Scout source strategy. Defaults to the Pulseforge rubric.
+  CONFIG.scoringProfile = CLIENT_CONFIG.scoring_profile || null;
   if (params.industry) CONFIG.industry = params.industry;
   if (params.location) CONFIG.location = sanitizeQueueLocation(params.location);
   if (params.jobTitle) CONFIG.jobTitle = params.jobTitle;
@@ -2271,6 +2455,7 @@ module.exports = {
   resolveEmailVerification,
   runEnrichmentChain,
   normalizeVertical,
+  scoreCleaningLead,
 };
 
 if (require.main === module) {

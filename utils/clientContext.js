@@ -40,6 +40,11 @@ const CLIENT_COLUMNS = [
   ['paige_themes', 'text'],
   ['max_email', 'text'],
   ['max_time', 'text'],
+  // Selects which ICP rubric Scout applies for this client. NULL/absent =
+  // the default Pulseforge lead-gen rubric in leadgen.js scoreLead(). The
+  // cleaning company uses 'cleaning_buyer', a commercial-cleaning BUYER
+  // rubric (professional-services offices), NOT the lead-gen-target rubric.
+  ['scoring_profile', 'text'],
   ['active', 'boolean default true'],
   ['created_at', 'timestamptz default now()'],
 ];
@@ -222,6 +227,56 @@ async function ensureClientArchitecture() {
     UPDATE clients
     SET enabled_agents = ARRAY['scout','emmett','paige','faye','vera','max','rex','cal','link','ivy','sam','riley','sketch','penny']
     WHERE id = 1
+  `);
+
+  // ── Cleaning company (commercial-cleaning BUYER) ──────────────────────
+  // Separate LLC from Pulseforge (client_id=1). Fully partitioned: its own
+  // prospect pool, its own ICP rubric (scoring_profile='cleaning_buyer'),
+  // its own Scout plan (law firms + accounting practices in the Manchester NH
+  // area). Entity name is still TBD — placeholder until the LLC is registered.
+  // Explicit id=10 (well above the 1/2/5/McLeod range) so it never collides
+  // with the serial-assigned McLeod row below. enabled_agents is scout-only
+  // for now: no cold-email/social until the entity, domain, and sender are
+  // set, which keeps it from ever sending under Pulseforge's identity.
+  // service_area drives Scout's out-of-area culling (leadgen.js); radius is a
+  // ~20mi Greater-Manchester default pending Jacob's confirmation.
+  await pool.query(`
+    INSERT INTO clients (
+      id, name, slug, business_name, vertical, city, state,
+      service_area, verticals, target_clients, scoring_profile, active
+    ) VALUES (
+      10,
+      'Cleaning Co (name TBD)',
+      'cleaning-co',
+      'Cleaning Co (name TBD)',
+      'commercial_cleaning',
+      'Manchester',
+      'NH',
+      ARRAY['Manchester','Bedford','Goffstown','Hooksett','Londonderry','Auburn',
+            'Candia','Derry','Litchfield','Hudson','Merrimack','Bow','Pembroke',
+            'Allenstown','Dunbarton','New Boston','Weare','Amherst','Nashua','Concord'],
+      ARRAY['law_firm','accounting'],
+      'Single-tenant professional-services offices (law firms, CPA/accounting practices) in the Greater Manchester NH area that buy recurring commercial cleaning',
+      'cleaning_buyer',
+      true
+    )
+    ON CONFLICT (id) DO UPDATE SET
+      name = EXCLUDED.name,
+      slug = EXCLUDED.slug,
+      business_name = EXCLUDED.business_name,
+      vertical = EXCLUDED.vertical,
+      city = COALESCE(clients.city, EXCLUDED.city),
+      state = COALESCE(clients.state, EXCLUDED.state),
+      service_area = EXCLUDED.service_area,
+      verticals = EXCLUDED.verticals,
+      target_clients = EXCLUDED.target_clients,
+      scoring_profile = EXCLUDED.scoring_profile,
+      active = true
+  `);
+  await pool.query(`
+    UPDATE clients
+    SET enabled_agents = ARRAY['scout']
+    WHERE id = 10
   `);
 
   await pool.query(`SELECT setval(pg_get_serial_sequence('clients', 'id'), GREATEST((SELECT MAX(id) FROM clients), 1))`);
