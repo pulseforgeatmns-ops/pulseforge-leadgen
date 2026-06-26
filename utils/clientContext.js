@@ -233,7 +233,7 @@ async function ensureClientArchitecture() {
   // Separate LLC from Pulseforge (client_id=1). Fully partitioned: its own
   // prospect pool, its own ICP rubric (scoring_profile='cleaning_buyer'),
   // its own Scout plan (law firms + accounting practices in the Manchester NH
-  // area). Entity name is still TBD — placeholder until the LLC is registered.
+  // area). Entity name is Anchor Cleaning (set Jun 2026).
   // Explicit id=10 (well above the 1/2/5/McLeod range) so it never collides
   // with the serial-assigned McLeod row below. enabled_agents is scout-only
   // for now: no cold-email/social until the entity, domain, and sender are
@@ -249,9 +249,9 @@ async function ensureClientArchitecture() {
       service_area, verticals, target_clients, scoring_profile, active
     ) VALUES (
       10,
-      'Cleaning Co (name TBD)',
+      'Anchor Cleaning',
       'cleaning-co',
-      'Cleaning Co (name TBD)',
+      'Anchor Cleaning',
       'commercial_cleaning',
       'Manchester',
       'NH',
