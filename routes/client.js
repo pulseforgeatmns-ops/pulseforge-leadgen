@@ -12,6 +12,7 @@ const {
   publishToLinkedInPersonal,
   publishLinkComment,
 } = require('../utils/publishPipeline');
+const { getProspectCounts } = require('../utils/prospectCounts');
 
 const router = express.Router();
 
@@ -308,7 +309,7 @@ async function buildDashboardData(client) {
     emailResponses,
     warmSignals,
     warmProspects,
-    totalProspects,
+    prospectCounts,
     totalTouchpoints,
     pendingApprovals,
     recentTouchpoints,
@@ -361,7 +362,7 @@ async function buildDashboardData(client) {
       ) signals
     `, [clientId]),
     pool.query(`SELECT COUNT(*)::int AS count FROM prospects p WHERE p.client_id = $1 AND p.status = 'warm'`, [clientId]),
-    pool.query(`SELECT COUNT(*)::int AS count FROM prospects p WHERE p.client_id = $1`, [clientId]),
+    getProspectCounts(pool, { clientId, includeDead: false }),
     pool.query(`SELECT COUNT(*)::int AS count FROM touchpoints t WHERE t.client_id = $1`, [clientId]),
     pool.query(`
       SELECT COUNT(*)::int AS count
@@ -459,10 +460,17 @@ async function buildDashboardData(client) {
       replied_contacts: repliedCount,
       warm_signals: Number(warmSignals.rows[0]?.count || 0),
       warm_prospects: Number(warmProspects.rows[0]?.count || 0),
+      active_prospects: Number(prospectCounts.active || 0),
+      cold_prospects: Number(prospectCounts.cold || 0),
       pending_approvals: Number(pendingApprovals.rows[0]?.count || 0),
       content_published_week: Object.values(content).reduce((sum, count) => sum + count, 0),
       total_touchpoints: Number(totalTouchpoints.rows[0]?.count || 0),
-      total_prospects: Number(totalProspects.rows[0]?.count || 0),
+      total_prospects: Number(prospectCounts.active || 0),
+      prospect_breakdown: {
+        active: Number(prospectCounts.active || 0),
+        cold: Number(prospectCounts.cold || 0),
+        total: Number(prospectCounts.total || 0),
+      },
     },
     recent_touchpoints: recent,
     feed: recent.slice(0, 8).map(item => ({

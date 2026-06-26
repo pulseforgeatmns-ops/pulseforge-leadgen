@@ -274,7 +274,7 @@ body::before {
         </div>
       </div>
       <div class="client-stat-row" id="clientStatsRow">
-        <div class="client-stat-card"><div class="client-stat-label">Leads</div><div class="client-stat-val t" id="statLeads">0</div><div class="client-stat-sub" id="statLeadsSub">0 new this month</div></div>
+        <div class="client-stat-card"><div class="client-stat-label">Active</div><div class="client-stat-val t" id="statLeads">0</div><div class="client-stat-sub" id="statLeadsSub">0 queued</div></div>
         <div class="client-stat-card"><div class="client-stat-label">Emails Sent</div><div class="client-stat-val o" id="statEmails">0</div><div class="client-stat-sub" id="statEmailsSub">0 total</div></div>
         <div class="client-stat-card"><div class="client-stat-label">Open Rate</div><div class="client-stat-val p" id="statOpenRate">0%</div><div class="client-stat-sub" id="statOpenSub">0 of 0 opened</div></div>
         <div class="client-stat-card"><div class="client-stat-label">Response Rate</div><div class="client-stat-val g" id="statResponseRate">0%</div><div class="client-stat-sub" id="statResponseSub">0 replies</div></div>
@@ -384,7 +384,7 @@ body::before {
         <div class="metric-tile"><div class="metric-tile-label">Pending</div><div class="metric-tile-val p" id="metricPending">0</div><div class="metric-tile-change">Approval queue</div></div>
         <div class="metric-tile"><div class="metric-tile-label">Open Rate</div><div class="metric-tile-val t" id="metricOpenRate">0%</div><div class="metric-tile-change" id="metricOpenDetail">0 of 0 opened</div></div>
         <div class="metric-tile"><div class="metric-tile-label">Posted</div><div class="metric-tile-val g" id="metricPosted">0</div><div class="metric-tile-change">This week</div></div>
-        <div class="metric-tile"><div class="metric-tile-label">Prospects</div><div class="metric-tile-val o" id="metricProspects">0</div><div class="metric-tile-change" id="metricProspectsSub">This vertical</div></div>
+        <div class="metric-tile"><div class="metric-tile-label">Active</div><div class="metric-tile-val o" id="metricProspects">0</div><div class="metric-tile-change" id="metricProspectsSub">In active outreach</div></div>
       </div>
       <div class="activity-feed" id="activityFeed">
         <div class="feed-label">Live Activity</div>
@@ -486,14 +486,14 @@ function renderClientHeader() {
   document.getElementById('loginSub').textContent = `${business} · Client command center`;
   document.getElementById('agentTitle').textContent = business;
   document.getElementById('feedSub').textContent = `${titleCase(vertical)} activity · Read only`;
-  document.getElementById('metricProspectsSub').textContent = titleCase(vertical);
+  document.getElementById('metricProspectsSub').textContent = 'In active outreach';
 }
 
 function renderDashboard() {
   renderClientHeader();
   const stats = dashboard.stats || {};
   document.getElementById('statLeads').textContent = fmtNum(stats.total_prospects);
-  document.getElementById('statLeadsSub').textContent = `${fmtNum(stats.prospects_this_month)} new this month`;
+  document.getElementById('statLeadsSub').textContent = `${fmtNum(stats.cold_prospects)} queued`;
   document.getElementById('statEmails').textContent = fmtNum(stats.emails_sent_this_week);
   document.getElementById('statEmailsSub').textContent = `${fmtNum(stats.emails_sent_total)} total`;
   document.getElementById('statOpenRate').textContent = pct(stats.open_rate);

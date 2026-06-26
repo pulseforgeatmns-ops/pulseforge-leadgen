@@ -1011,6 +1011,29 @@ body.light-mode .agent-card:not(.not-configured) {
 .touch-form { display: none; width: 100%; gap: 6px; }
 .touch-form.visible { display: flex; }
 .pm-toast { color: var(--green); font-size: 0.65rem; align-self: center; min-width: 70px; }
+.metric-tile.clickable { cursor: pointer; }
+.metric-tile.clickable:focus-visible { outline: 2px solid var(--purple-bright); outline-offset: 2px; }
+.prospect-count-backdrop {
+  position: fixed; inset: 0; z-index: 3140; background: rgba(0,0,0,0.6);
+  display: none; align-items: center; justify-content: center; padding: 1.5rem;
+}
+.prospect-count-modal {
+  width: min(620px, 96vw); max-height: 86vh; overflow: hidden;
+  background: var(--bg1); border: 1px solid var(--border); border-radius: 10px;
+  color: var(--white); box-shadow: 0 18px 60px rgba(0,0,0,0.45);
+}
+.pcm-head { padding: 1rem 1.1rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
+.pcm-title { font-size: 1.05rem; font-weight: 700; }
+.pcm-sub { color: var(--gray-light); font-size: 0.72rem; margin-top: 4px; line-height: 1.45; }
+.pcm-body { padding: 1rem; overflow-y: auto; max-height: 68vh; }
+.pcm-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.7rem; margin-bottom: 1rem; }
+.pcm-stat { border: 1px solid var(--border); border-radius: 7px; padding: 0.75rem; background: rgba(255,255,255,0.025); }
+.pcm-stat strong { display: block; font-family: 'Bebas Neue', sans-serif; font-size: 1.55rem; line-height: 1; }
+.pcm-stat span { font-family: 'JetBrains Mono', monospace; color: var(--gray-light); font-size: 0.55rem; letter-spacing: 1px; text-transform: uppercase; }
+.pcm-table { width: 100%; border-collapse: collapse; }
+.pcm-table th, .pcm-table td { padding: 0.65rem 0.5rem; border-bottom: 1px solid var(--border); text-align: right; font-size: 0.72rem; }
+.pcm-table th:first-child, .pcm-table td:first-child { text-align: left; }
+.pcm-table th { font-family: 'JetBrains Mono', monospace; font-size: 0.52rem; color: var(--gray); letter-spacing: 1px; text-transform: uppercase; }
 .prospect-edit-backdrop {
   position: fixed; inset: 0; z-index: 3150; background: rgba(0,0,0,0.62);
   display: none; align-items: center; justify-content: center; padding: 1.5rem;
@@ -2541,10 +2564,10 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
         <div class="metric-tile-val g">9</div>
         <div class="metric-tile-change g">All channels</div>
       </div>
-      <div class="metric-tile">
+      <div class="metric-tile clickable" id="prospectHeadlineTile" role="button" tabindex="0" title="View prospect breakdown">
         <div class="metric-tile-label">Prospects</div>
-        <div class="metric-tile-val o">3</div>
-        <div class="metric-tile-change o">In pipeline</div>
+        <div class="metric-tile-val o" id="prospectHeadlineValue">3</div>
+        <div class="metric-tile-change o" id="prospectHeadlineSub">In active outreach</div>
       </div>
     </div>
   </div>
@@ -3579,6 +3602,9 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
 <div class="prospect-modal-backdrop" id="prospectModalBackdrop">
   <div class="prospect-modal" id="prospectModal"></div>
 </div>
+<div class="prospect-count-backdrop" id="prospectCountBackdrop">
+  <div class="prospect-count-modal" id="prospectCountModal"></div>
+</div>
 <div class="prospect-edit-backdrop" id="prospectEditBackdrop">
   <div class="prospect-edit-modal" id="prospectEditModal"></div>
 </div>
@@ -3643,6 +3669,7 @@ let _statsCache = null, _activityCache = null;
 let _statsCacheTime = 0, _activityCacheTime = 0;
 let _liveRings = {}, _currentDetailKey = null;
 let _currentUserRole = null;
+let _prospectCountData = null;
 let _pipelineProspects = [];
 let _pipelineDraggedProspectId = null;
 let _pipelineDroppedProspectId = null;
@@ -3657,6 +3684,10 @@ function isViewerRole() {
 
 function canTakeDashboardActions() {
   return ['admin', 'manager'].includes(_currentUserRole);
+}
+
+function isOperatorProspectScope(data = _prospectCountData) {
+  return data?.prospectScope === 'global';
 }
 
 function applyViewerPermissions() {
@@ -4891,6 +4922,16 @@ function closeProspectModal() {
 document.getElementById('prospectModalBackdrop').addEventListener('click', e => {
   if (e.target.id === 'prospectModalBackdrop') closeProspectModal();
 });
+document.getElementById('prospectCountBackdrop').addEventListener('click', e => {
+  if (e.target.id === 'prospectCountBackdrop') closeProspectCountModal();
+});
+document.getElementById('prospectHeadlineTile')?.addEventListener('click', openProspectCountModal);
+document.getElementById('prospectHeadlineTile')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    openProspectCountModal();
+  }
+});
 
 function openProspectsFor(id) {
   closeProspectModal();
@@ -4905,6 +4946,58 @@ function openProspectsFor(id) {
   _renderProspects();
 }
 
+function prospectCountRowsHtml(rows, includeDead) {
+  if (!Array.isArray(rows) || rows.length === 0) return '<div class="no-data-note">No prospect counts available</div>';
+  return `<table class="pcm-table">
+    <thead><tr><th>Client</th><th>Active</th><th>Cold</th>${includeDead ? '<th>Dead</th>' : ''}</tr></thead>
+    <tbody>${rows.map(row => `
+      <tr>
+        <td>${_esc(row.client_name || row.name || 'Client')}</td>
+        <td>${Number(row.active || 0).toLocaleString()}</td>
+        <td>${Number(row.cold || 0).toLocaleString()}</td>
+        ${includeDead ? `<td>${Number(row.dead || 0).toLocaleString()}</td>` : ''}
+      </tr>
+    `).join('')}</tbody>
+  </table>`;
+}
+
+function openProspectCountModal() {
+  const data = _prospectCountData || {};
+  const breakdown = data.prospectBreakdown || {};
+  const includeDead = isOperatorProspectScope(data);
+  const backdrop = document.getElementById('prospectCountBackdrop');
+  const modal = document.getElementById('prospectCountModal');
+  if (!backdrop || !modal) return;
+
+  const stats = [
+    ['Active', breakdown.active || 0, 'In active outreach'],
+    ['Cold', breakdown.cold || 0, 'Queued'],
+  ];
+  if (includeDead) stats.push(['Dead', breakdown.dead || 0, 'Not pursuing']);
+
+  modal.innerHTML = `
+    <div class="pcm-head">
+      <div>
+        <div class="pcm-title">${includeDead ? 'Global Prospect Breakdown' : 'Prospect Pipeline'}</div>
+        <div class="pcm-sub">${includeDead ? 'Operator view: active, queued, and terminal states across clients.' : 'Client view: current active outreach and queued prospects.'}</div>
+      </div>
+      <button class="pm-close" type="button" onclick="closeProspectCountModal()">x</button>
+    </div>
+    <div class="pcm-body">
+      <div class="pcm-grid" style="grid-template-columns: repeat(${includeDead ? 3 : 2}, minmax(0, 1fr));">
+        ${stats.map(([label, value, sub]) => `<div class="pcm-stat"><strong>${Number(value || 0).toLocaleString()}</strong><span>${_esc(label)}</span><div class="pcm-sub">${_esc(sub)}</div></div>`).join('')}
+      </div>
+      ${prospectCountRowsHtml(data.prospectClients || [], includeDead)}
+    </div>
+  `;
+  backdrop.style.display = 'flex';
+}
+
+function closeProspectCountModal() {
+  const backdrop = document.getElementById('prospectCountBackdrop');
+  if (backdrop) backdrop.style.display = 'none';
+}
+
 // Load live data from API
 async function loadLiveData() {
   try {
@@ -4912,12 +5005,15 @@ async function loadLiveData() {
     if (!res.ok) return;
     const data = await res.json();
     _liveRings = data.rings || {};
+    _prospectCountData = data;
 
     // Update metrics
     const metricVals = document.querySelectorAll('.metric-tile-val');
     if (metricVals[0]) metricVals[0].textContent = data.pending;
     if (metricVals[2]) metricVals[2].textContent = data.touchpoints;
     if (metricVals[3]) metricVals[3].textContent = data.prospects;
+    const prospectSub = document.getElementById('prospectHeadlineSub');
+    if (prospectSub) prospectSub.textContent = isOperatorProspectScope(data) ? 'Active globally' : 'In active outreach';
 
     // Update agent rings
     const circumference = 251.2;
@@ -6672,18 +6768,22 @@ function renderPipeline(data) {
   document.getElementById('mrrProgressFill').style.width = Math.min(100, (confirmed / target) * 100) + '%';
   document.getElementById('mrrBreakevenMarker').style.left = Math.min(100, (breakeven / target) * 100) + '%';
   document.getElementById('mrrProgressLabel').textContent = `${money0(confirmed)} of ${money0(target)} target · ${money0(breakeven)} overhead breakeven`;
+  const showDeadCounts = data.prospect_scope === 'global' || data.prospectScope === 'global';
   document.getElementById('clientPipelineGrid').innerHTML = (data.clients || []).map(client => {
     const status = pipelineStatusForClient(client);
+    const clientStats = [
+      [client.active_count ?? client.prospect_count ?? 0, 'Active'],
+      [client.cold_count ?? 0, 'Cold'],
+      showDeadCounts ? [client.dead_count ?? 0, 'Dead'] : [client.booked_count || 0, 'Booked'],
+      [daysSince(client.created_at), 'Days'],
+    ];
     return `<div class="pipeline-card">
       <div class="client-pipeline-head">
         <div><div class="client-pipeline-name">${_esc(client.name)}</div><div class="client-pipeline-city">${_esc([client.city, client.state].filter(Boolean).join(', ') || '-')}</div></div>
         <span class="pipeline-badge ${status.cls}">${status.label}</span>
       </div>
       <div class="client-pipeline-stats">
-        <div class="client-pipeline-stat"><strong>${client.prospect_count || 0}</strong><span>Prospects</span></div>
-        <div class="client-pipeline-stat"><strong>${client.booked_count || 0}</strong><span>Booked</span></div>
-        <div class="client-pipeline-stat"><strong>${client.closed_count || 0}</strong><span>Closed</span></div>
-        <div class="client-pipeline-stat"><strong>${daysSince(client.created_at)}</strong><span>Days</span></div>
+        ${clientStats.map(([value, label]) => `<div class="client-pipeline-stat"><strong>${Number(value || 0).toLocaleString()}</strong><span>${label}</span></div>`).join('')}
       </div>
     </div>`;
   }).join('') || '<div class="no-data-note">No clients found</div>';

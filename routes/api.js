@@ -15,6 +15,11 @@ const {
   publishLinkComment,
 } = require('../utils/publishPipeline');
 const { normalizeVertical } = require('../utils/normalize');
+const {
+  prospectStateCountColumns,
+  getProspectCounts,
+  getProspectCountsByClient,
+} = require('../utils/prospectCounts');
 
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
@@ -199,7 +204,7 @@ router.get('/api/pipeline', requireDashboardRead, async (req, res) => {
         SELECT
           c.id, c.name, c.slug, c.email, c.city, c.state,
           c.max_email, c.active, c.created_at,
-          COUNT(DISTINCT p.id)::int as prospect_count,
+          ${prospectStateCountColumns('p', { includeDead: !clientScoped })},
           COUNT(DISTINCT p.id) FILTER (
             WHERE p.setter_status = 'booked')::int as booked_count,
           COUNT(DISTINCT p.id) FILTER (
@@ -294,6 +299,7 @@ router.get('/api/pipeline', requireDashboardRead, async (req, res) => {
 
     res.json({
       refreshed_at: new Date().toISOString(),
+      prospect_scope: clientScoped ? 'client' : 'global',
       clients: clients.rows,
       revenue: {
         confirmed_mrr: Number(revenueMrr.rows[0]?.confirmed_mrr || 0),
@@ -323,83 +329,27 @@ router.get('/api/pipeline', requireDashboardRead, async (req, res) => {
 // Agent status for dashboard (deduplicated — was registered twice in server.js)
 router.get('/api/agent-status', requireDashboardRead, async (req, res) => {
   try {
-    const clientId = getRequestClientId(req);
+    const requestClientId = getRequestClientId(req);
+    const clientScoped = req.user?.role === 'client';
+    const prospectClientId = clientScoped ? requestClientId : null;
+    const includeDead = !clientScoped;
     const [prospectBreakdown, touchpoints, pending, agentRuns, channels, weeklyTouchpoints] = await Promise.all([
-      pool.query(`
-        WITH classified AS (
-          SELECT
-            p.id,
-            CASE
-              WHEN p.status IN ('dead', 'disqualified', 'closed', 'bounced', 'do_not_email')
-                OR COALESCE(p.do_not_contact, false) = true
-                OR LOWER(COALESCE(p.email_status, '')) IN ('bounced', 'invalid', 'invalid_legacy', 'opted_out', 'unsubscribed')
-                OR EXISTS (
-                  SELECT 1
-                  FROM email_events ee
-                  WHERE ee.prospect_id = p.id
-                    AND ee.client_id = p.client_id
-                    AND ee.event_type IN ('hard_bounce', 'blocked', 'spam', 'unsubscribed')
-                )
-                OR (
-                  EXISTS (
-                    SELECT 1
-                    FROM sequences s
-                    WHERE s.prospect_id = p.id
-                      AND s.status = 'completed'
-                  )
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM email_events ee
-                    WHERE ee.prospect_id = p.id
-                      AND ee.client_id = p.client_id
-                      AND ee.event_type IN ('opened', 'clicked', 'replied')
-                      AND ee.event_at >= NOW() - INTERVAL '14 days'
-                  )
-                )
-              THEN 'dead'
-              WHEN EXISTS (
-                SELECT 1
-                FROM sequences s
-                WHERE s.prospect_id = p.id
-                  AND s.status = 'active'
-                  AND s.next_send_at > NOW()
-              )
-                OR EXISTS (
-                  SELECT 1
-                  FROM email_events ee
-                  WHERE ee.prospect_id = p.id
-                    AND ee.client_id = p.client_id
-                    AND ee.event_type IN ('opened', 'clicked', 'replied')
-                    AND ee.event_at >= NOW() - INTERVAL '14 days'
-                )
-              THEN 'active'
-              ELSE 'cold'
-            END AS bucket
-          FROM prospects p
-          WHERE p.client_id = $1
-        )
-        SELECT
-          COUNT(*) FILTER (WHERE bucket = 'active')::int AS active,
-          COUNT(*) FILTER (WHERE bucket = 'cold')::int AS cold,
-          COUNT(*) FILTER (WHERE bucket = 'dead')::int AS dead,
-          COUNT(*)::int AS total
-        FROM classified
-      `, [clientId]),
-      pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1', [clientId]),
-      pool.query('SELECT COUNT(*) FROM pending_comments WHERE status = $1 AND client_id = $2', ['pending', clientId]),
-      pool.query('SELECT agent_name, COUNT(*) as runs, MAX(ran_at) as last_run FROM agent_log WHERE client_id = $1 GROUP BY agent_name', [clientId]),
-      pool.query('SELECT channel, COUNT(*) as count FROM pending_comments WHERE client_id = $1 GROUP BY channel', [clientId]),
-      pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1 AND created_at > NOW() - INTERVAL \'7 days\'', [clientId])
+      getProspectCounts(pool, { clientId: prospectClientId, includeDead }),
+      pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1', [requestClientId]),
+      pool.query('SELECT COUNT(*) FROM pending_comments WHERE status = $1 AND client_id = $2', ['pending', requestClientId]),
+      pool.query('SELECT agent_name, COUNT(*) as runs, MAX(ran_at) as last_run FROM agent_log WHERE client_id = $1 GROUP BY agent_name', [requestClientId]),
+      pool.query('SELECT channel, COUNT(*) as count FROM pending_comments WHERE client_id = $1 GROUP BY channel', [requestClientId]),
+      pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1 AND created_at > NOW() - INTERVAL \'7 days\'', [requestClientId])
     ]);
 
+    const prospectClients = await getProspectCountsByClient(pool, { clientId: prospectClientId, includeDead });
     const runMap = {};
     agentRuns.rows.forEach(r => { runMap[r.agent_name] = parseInt(r.runs); });
 
-    const prospectCounts = prospectBreakdown.rows[0] || {};
-    const activeProspects = Number(prospectCounts.active || 0);
-    const coldProspects = Number(prospectCounts.cold || 0);
-    const deadProspects = Number(prospectCounts.dead || 0);
-    const totalProspects = Number(prospectCounts.total || 0);
+    const activeProspects = Number(prospectBreakdown.active || 0);
+    const coldProspects = Number(prospectBreakdown.cold || 0);
+    const deadProspects = Number(prospectBreakdown.dead || 0);
+    const totalProspects = Number(prospectBreakdown.total || 0);
     const totalTouchpoints = parseInt(touchpoints.rows[0].count);
     const fbPending = channels.rows.find(c => c.channel === 'facebook')?.count || 0;
     const liPending = channels.rows.find(c => c.channel === 'linkedin')?.count || 0;
@@ -418,11 +368,13 @@ router.get('/api/agent-status', requireDashboardRead, async (req, res) => {
       prospectBreakdown: {
         active: activeProspects,
         cold: coldProspects,
-        dead: deadProspects,
+        ...(includeDead ? { dead: deadProspects } : {}),
         total: totalProspects,
       },
       touchpoints: totalTouchpoints,
       pending: parseInt(pending.rows[0].count),
+      prospectClients,
+      prospectScope: clientScoped ? 'client' : 'global',
       weeklyTouchpoints: parseInt(weeklyTouchpoints.rows[0].count),
       agentRuns: runMap,
       rings,
