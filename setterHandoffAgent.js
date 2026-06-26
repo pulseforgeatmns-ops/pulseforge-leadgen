@@ -8,6 +8,7 @@ const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext')
 
 const AGENT_NAME = 'handoff_utility';
 const SETTER_ICP_THRESHOLD = 70;
+const TERMINAL_PROSPECT_STATUSES = ['dead', 'disqualified', 'bounced', 'do_not_email'];
 
 async function ensureSetterQueueColumns() {
   await pool.query(`
@@ -56,9 +57,14 @@ async function run(params = {}) {
         setter_updated_at = NOW()
     WHERE client_id = $1
       AND COALESCE(setter_visible, false) = true
-      AND COALESCE(icp_score, 0) < $2
+      AND (
+        COALESCE(icp_score, 0) < $2
+        OR COALESCE(do_not_contact, false) = true
+        OR COALESCE(status, '') = ANY($3::text[])
+        OR NULLIF(BTRIM(COALESCE(service_area_match, '')), '') IS NULL
+      )
     RETURNING id
-  `, [clientId, SETTER_ICP_THRESHOLD]);
+  `, [clientId, SETTER_ICP_THRESHOLD, TERMINAL_PROSPECT_STATUSES]);
 
   const { rows } = await pool.query(`
     SELECT id, first_name, last_name, email, phone, job_title, notes, vertical, icp_score, created_at
@@ -66,10 +72,12 @@ async function run(params = {}) {
     WHERE source = 'scout'
       AND COALESCE(icp_score, 0) >= $3
       AND COALESCE(do_not_contact, false) = false
+      AND COALESCE(status, '') <> ALL($4::text[])
+      AND NULLIF(BTRIM(COALESCE(service_area_match, '')), '') IS NOT NULL
       AND client_id = $2
       AND created_at >= NOW() - ($1::int * INTERVAL '1 day')
     ORDER BY icp_score DESC NULLS LAST, created_at DESC
-  `, [lookbackDays, clientId, SETTER_ICP_THRESHOLD]);
+  `, [lookbackDays, clientId, SETTER_ICP_THRESHOLD, TERMINAL_PROSPECT_STATUSES]);
 
   if (rows.length) {
     await pool.query(`
@@ -78,7 +86,11 @@ async function run(params = {}) {
           setter_visible = true,
           setter_updated_at = NOW()
       WHERE id = ANY($1::uuid[]) AND client_id = $2
-    `, [rows.map(row => row.id), clientId]);
+        AND COALESCE(icp_score, 0) >= $3
+        AND COALESCE(do_not_contact, false) = false
+        AND COALESCE(status, '') <> ALL($4::text[])
+        AND NULLIF(BTRIM(COALESCE(service_area_match, '')), '') IS NOT NULL
+    `, [rows.map(row => row.id), clientId, SETTER_ICP_THRESHOLD, TERMINAL_PROSPECT_STATUSES]);
   }
 
   let appended = 0;

@@ -299,6 +299,14 @@ const MSHI_SCOUT_CITIES = [
   'Hurricane',
 ];
 
+const PROVIDENCE_SCOUT_CITIES = [
+  'Providence',
+  'Cranston',
+  'Warwick',
+  'Pawtucket',
+  'East Providence',
+];
+
 const MSHI_PROBATE_ATTORNEY_GEO = [
   { city: 'Charleston', state: 'WV' },
   { city: 'South Charleston', state: 'WV' },
@@ -328,11 +336,60 @@ const CLEANING_AREA_CITIES = [
 ];
 
 const CLIENT_SCOUT_PLANS = {
+  // Pulseforge primary market (client_id=1). Providence replaces the exhausted
+  // Manchester/NH queue; keep this metro tight so Scout does not sprawl.
+  1: {
+    state: 'RI',
+    cities: PROVIDENCE_SCOUT_CITIES,
+    verticals: {
+      cleaning: [
+        'cleaning company {city} {state}',
+        'commercial cleaning {city} {state}',
+        'janitorial service {city} {state}',
+      ],
+      restaurant: [
+        'restaurant {city} {state}',
+        'bar and grill {city} {state}',
+        'cafe {city} {state}',
+      ],
+      salon: [
+        'hair salon {city} {state}',
+        'beauty salon {city} {state}',
+        'barber shop {city} {state}',
+      ],
+      fitness: [
+        'gym {city} {state}',
+        'fitness studio {city} {state}',
+        'personal training {city} {state}',
+      ],
+      home_services: [
+        'home services {city} {state}',
+        'handyman {city} {state}',
+        'hvac contractor {city} {state}',
+      ],
+      auto: [
+        'auto repair {city} {state}',
+        'mechanic {city} {state}',
+        'auto service {city} {state}',
+      ],
+      landscaping: [
+        'landscaping company {city} {state}',
+        'lawn care {city} {state}',
+        'landscape contractor {city} {state}',
+      ],
+      med_spa: [
+        'med spa {city} {state}',
+        'medical spa {city} {state}',
+        'aesthetics clinic {city} {state}',
+      ],
+    },
+  },
   // Cleaning company (client_id=10). Professional-services offices that BUY
   // commercial cleaning. Law firms and accounting practices run as SEPARATE
   // passes (one vertical per run). Google Places is primary for this client
   // (see getSourcePreference) — SerpAPI underperforms on professional offices.
   10: {
+    state: 'NH',
     cities: CLEANING_AREA_CITIES,
     verticals: {
       law_firm: [
@@ -348,6 +405,7 @@ const CLIENT_SCOUT_PLANS = {
     },
   },
   2: {
+    state: 'WV',
     cities: MSHI_SCOUT_CITIES,
     geoByVertical: {
       probate_attorney: MSHI_PROBATE_ATTORNEY_GEO,
@@ -378,6 +436,8 @@ const CLIENT_SCOUT_PLANS = {
     },
   },
 };
+
+const PLACES_PRIMARY_CLIENT_IDS = new Set([1, 10]);
 
 function getSaturationThreshold(vertical) {
   const key = normalizeVertical(vertical) || 'unknown';
@@ -428,7 +488,8 @@ function getPlannedLocations(clientId, fallbackLocation, vertical = CONFIG.verti
   if (geoTargets?.length) return geoTargets.map(({ city, state }) => sanitizeQueueLocation(`${city} ${state}`));
   const cities = Array.isArray(plan?.cities) ? plan.cities : [];
   if (!cities.length) return [sanitizeQueueLocation(fallbackLocation)];
-  return cities.map(city => sanitizeQueueLocation(`${city} WV`));
+  const state = plan?.state || CLIENT_CONFIG?.state || sanitizeQueueLocation(fallbackLocation).split(/\s+/).pop() || '';
+  return cities.map(city => sanitizeQueueLocation(`${city} ${state}`));
 }
 
 function getSearchQueriesForTarget() {
@@ -448,11 +509,99 @@ function getSearchQueriesForTarget() {
 function locationToIlikePattern(location) {
   const cleaned = sanitizeQueueLocation(location);
   if (!cleaned) return '%';
-  return `%${cleaned.split(/\s+/).join('%')}%`;
+  const cityOnly = cleaned.replace(/\s+[A-Z]{2}$/i, '').trim();
+  const basis = cityOnly || cleaned;
+  return `%${basis.split(/\s+/).join('%')}%`;
+}
+
+function usesPlacesPrimary() {
+  return CONFIG.scoringProfile === 'cleaning_buyer' || PLACES_PRIMARY_CLIENT_IDS.has(Number(CONFIG.clientId));
 }
 
 const GENERIC_CONTACT_NAMES = new Set(['there', 'info', 'hello', 'contact', 'admin', 'support', 'sales']);
 const GENERIC_EMAIL_PREFIX_RE = /^(?:info|hello|contact|admin|support|sales|office|team|service|customerservice|customer\.?service|no-?reply|noreply|mail|inquir(?:y|ies))[\w.+-]*$/i;
+const CLEANING_JUNK_EMAIL_LOCALS = new Set([
+  'example',
+  'test',
+  'no-reply',
+  'noreply',
+  'donotreply',
+  'do-not-reply',
+]);
+const CLEANING_EXACT_JUNK_EMAILS = new Set([
+  'user@domain.com',
+  'email@domain.com',
+  'name@domain.com',
+]);
+const CLEANING_EMAIL_ASSET_RE = /\.(?:webp|png|jpe?g|gif|svg|css|js)(?:$|[?#])/i;
+const CLEANING_BASIC_EMAIL_RE = /^[^\s@<>()[\],;:"']+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i;
+
+function isCleaningBuyerProfile() {
+  return CONFIG.scoringProfile === 'cleaning_buyer';
+}
+
+function validCleaningEmailOrNull(email) {
+  const raw = typeof email === 'string' ? email.trim() : '';
+  if (!raw || raw === '—') return null;
+  if (cleaningEmailRejection(raw)) return null;
+  return raw;
+}
+
+function cleaningEmailRejection(email) {
+  if (typeof email !== 'string' || !email.trim()) return null;
+  const raw = email.trim();
+  const lower = raw.toLowerCase();
+  if (CLEANING_EMAIL_ASSET_RE.test(lower)) return 'asset extension';
+  if (!CLEANING_BASIC_EMAIL_RE.test(raw)) return 'invalid email';
+  if (emailRejection(raw)) return emailRejection(raw);
+  if (CLEANING_EXACT_JUNK_EMAILS.has(lower)) return 'junk placeholder email';
+  const [local] = lower.split('@');
+  if (CLEANING_JUNK_EMAIL_LOCALS.has(local)) return 'junk placeholder email';
+  return null;
+}
+
+function hasValidCleaningPhone(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length < 10) return false;
+  return !/^(\d)\1+$/.test(digits);
+}
+
+function normalizeScoringText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function scoringTextIncludes(haystack, needle) {
+  const normalizedNeedle = normalizeScoringText(needle);
+  if (!normalizedNeedle) return false;
+  return ` ${haystack} `.includes(` ${normalizedNeedle} `);
+}
+
+function stateMatchesLocation(locHay, state) {
+  const normalizedState = normalizeScoringText(state);
+  if (!normalizedState) return false;
+  return scoringTextIncludes(locHay, normalizedState);
+}
+
+function scoreConfiguredLocation(locHay) {
+  const normalizedLoc = normalizeScoringText(locHay);
+  if (!normalizedLoc) return 0;
+
+  if (scoringTextIncludes(normalizedLoc, CLIENT_CONFIG?.city)) return 20;
+
+  const serviceAreas = Array.isArray(CLIENT_CONFIG?.service_area) ? CLIENT_CONFIG.service_area : [];
+  if (serviceAreas.some(area => scoringTextIncludes(normalizedLoc, area))) return 15;
+
+  if (stateMatchesLocation(normalizedLoc, CLIENT_CONFIG?.state)) return 8;
+  return 0;
+}
+
+function getSearchVertical() {
+  return normalizeVertical(CONFIG.vertical || CONFIG.industry || '');
+}
 
 function sanitizeFirstName(value) {
   const raw = String(value || '').trim();
@@ -900,15 +1049,29 @@ function scoreCleaningLead(lead) {
   }
 
   // 3. Reachable decision-maker (0–25) — can we book a walkthrough?
-  const hasEmail = !!(lead.email && lead.email !== '—' && String(lead.email).includes('@'));
-  const hasPhone = !!(lead.phone && lead.phone !== '');
+  //    For this cleaning client, phone is a primary outreach channel. Junk
+  //    placeholder emails are treated as absent so they never outrank a clean
+  //    phone-reachable office.
+  const hasEmail = !!validCleaningEmailOrNull(lead.email);
+  const hasPhone = hasValidCleaningPhone(lead.phone);
   const contactName = (lead.contact && lead.contact !== '—') ? String(lead.contact).trim() : '';
   const hasName = /[a-z]/i.test(contactName) && contactName.split(/\s+/).filter(Boolean).length >= 2;
   let contact = 0;
-  if (hasName && hasEmail && hasPhone)       contact = 25;
-  else if (hasName && (hasEmail || hasPhone)) contact = 18;
-  else if (hasEmail && hasPhone)              contact = 12;
-  else if (hasEmail || hasPhone)              contact = 8;
+  let contactBasis = 'no valid phone or email';
+  if (hasEmail && hasPhone) {
+    contact = 25;
+    contactBasis = 'valid phone + valid email';
+  } else if (hasPhone) {
+    contact = 20;
+    contactBasis = 'valid phone only';
+  } else if (hasEmail) {
+    contact = 12;
+    contactBasis = 'valid email only';
+  }
+  if (hasName && contact < 25) {
+    contact = Math.min(25, contact + 5);
+    contactBasis += ' + named decision-maker';
+  }
 
   // 4. Single-tenant signal (0–10) — HEURISTIC, address-derived only.
   //    A suite/unit/floor token suggests a unit inside a larger managed
@@ -979,6 +1142,7 @@ function scoreCleaningLead(lead) {
     components: {
       vertical, geography, contact, single_tenant: singleTenant, size, penalty,
       single_tenant_basis: singleTenantBasis, size_basis: sizeBasis,
+      contact_basis: contactBasis,
       penalty_basis: penaltyBasis.join('; ') || 'none',
     },
     flags,
@@ -1018,10 +1182,11 @@ function scoreLead(lead) {
     'motel','gym','fitness'
   ];
   let vertical = 5;
-  if (TARGET_VERTICAL.some(k => hay.includes(k)))    vertical = 25;
-  else if (ADJACENT_VERTICAL.some(k => hay.includes(k))) vertical = 15;
 
   if (CONFIG.clientId === 2) {
+    if (TARGET_VERTICAL.some(k => hay.includes(k)))    vertical = 25;
+    else if (ADJACENT_VERTICAL.some(k => hay.includes(k))) vertical = 15;
+
     const MSHI_TARGET_VERTICAL = [
       'property management', 'property manager', 'probate', 'estate attorney',
       'estate planning', 'trust and estate', 'estate sale', 'executor',
@@ -1029,13 +1194,18 @@ function scoreLead(lead) {
       'home inspector', 'real estate agent', 'realtor',
     ];
     if (MSHI_TARGET_VERTICAL.some(k => hay.includes(k))) vertical = 25;
+  } else {
+    const searchVertical = getSearchVertical();
+    if (searchVertical && searchVertical !== 'unknown') {
+      vertical = 25;
+    } else if (TARGET_VERTICAL.some(k => hay.includes(k))) {
+      vertical = 25;
+    } else if (ADJACENT_VERTICAL.some(k => hay.includes(k))) {
+      vertical = 15;
+    }
   }
 
   // 2. Location (0–20) — addr preferred, falls back to hay for SerpAPI leads
-  const NH_SUBURBS = [
-    'bedford','goffstown','hooksett','londonderry','auburn','candia',
-    'derry','merrimack','nashua','concord'
-  ];
   const locHay = addr || hay;
   let location = 0;
   if (CONFIG.clientId === 2) {
@@ -1044,9 +1214,9 @@ function scoreLead(lead) {
     if (wvCore.some(c => locHay.includes(c) || hay.includes(c))) location = 20;
     else if (wvAdjacent.some(c => locHay.includes(c) || hay.includes(c))) location = 15;
     else if (locHay.includes(' wv') || locHay.includes('west virginia')) location = 8;
-  } else if (locHay.includes('manchester'))                      location = 20;
-  else if (NH_SUBURBS.some(c => locHay.includes(c)))     location = 15;
-  else if (locHay.includes(' nh') || locHay.includes('new hampshire')) location = 8;
+  } else {
+    location = scoreConfiguredLocation(locHay);
+  }
 
   // 3. Contact quality (0–20)
   const hasEmail = lead.email && lead.email !== '—' && lead.email.includes('@');
@@ -1212,13 +1382,13 @@ async function main({ runId = null } = {}) {
   // Source strategy. Most clients run SerpAPI + Places additively. The cleaning
   // client (cleaning_buyer) makes Google Places PRIMARY and skips SerpAPI:
   // SerpAPI underperforms on professional offices and has been running dry.
-  const placesPrimary = CONFIG.scoringProfile === 'cleaning_buyer';
+  const placesPrimary = usesPlacesPrimary();
   let leads = [];
 
   for (const searchQuery of searchQueries) {
     if (placesPrimary) {
       // Places-primary: Google Places only.
-      console.log(`[Source] Places-primary (cleaning_buyer) — skipping SerpAPI for "${searchQuery}"`);
+      console.log(`[Source] Places-primary — skipping SerpAPI for "${searchQuery}"`);
       console.log(`[Places] Searching: "${searchQuery}"`);
       const placesLeads = (await searchGooglePlaces(searchQuery, '', Math.min(CONFIG.maxResults, 20))).map(lead => ({ ...lead, search_query: searchQuery }));
       console.log(`[Places] Found ${placesLeads.length} results for "${searchQuery}"`);
@@ -1341,6 +1511,29 @@ async function main({ runId = null } = {}) {
     }
   }
 
+  if (isCleaningBuyerProfile()) {
+    let validEmailCount = 0;
+    let validPhoneCount = 0;
+    let reachableCount = 0;
+    let junkEmailIgnoredCount = 0;
+    leads = leads.map(l => {
+      const rawEmail = typeof l.email === 'string' ? l.email.trim() : '';
+      const emailRejectReason = rawEmail && rawEmail !== '—' ? cleaningEmailRejection(rawEmail) : null;
+      const email = emailRejectReason ? null : validCleaningEmailOrNull(rawEmail);
+      const validPhone = hasValidCleaningPhone(l.phone);
+      if (email) validEmailCount++;
+      if (validPhone) validPhoneCount++;
+      if (email || validPhone) reachableCount++;
+      if (emailRejectReason) junkEmailIgnoredCount++;
+      return {
+        ...l,
+        email: email || null,
+        cleaning_email_reject_reason: emailRejectReason,
+      };
+    });
+    console.log(`[Cleaning Contact] Reachable ${reachableCount}/${leads.length} (${validPhoneCount} valid phone, ${validEmailCount} valid email, ${junkEmailIgnoredCount} junk emails ignored)`);
+  }
+
   // 4. Fill missing fields
   leads = leads.map(l => ({
     company: l.company || 'Unknown',
@@ -1359,6 +1552,7 @@ async function main({ runId = null } = {}) {
     instagram_url:        l.instagram_url || null,
     websiteSignals:       l.websiteSignals || [],
     search_query:          l.search_query || null,
+    cleaning_email_reject_reason: l.cleaning_email_reject_reason || null,
   }));
 
   const postEnrichmentAccepted = [];
@@ -1490,6 +1684,9 @@ function detectType(lead) {
 }
 
 function getScoutPreferredChannel() {
+  if (isCleaningBuyerProfile()) {
+    return 'phone';
+  }
   if (CONFIG.clientId === 2 && ['property_management', 'probate_attorney'].includes(CONFIG.vertical)) {
     return 'phone';
   }
@@ -1681,6 +1878,34 @@ function resolveScoutEmailCandidate(lead) {
   };
 }
 
+function resolveCleaningScoutContactCandidate(lead) {
+  const rawEmail = typeof lead.email === 'string' ? lead.email.trim() : '';
+  const emailRejectReason = rawEmail && rawEmail !== '—' ? cleaningEmailRejection(rawEmail) : null;
+  const email = emailRejectReason ? null : validCleaningEmailOrNull(rawEmail);
+  const hasPhone = hasValidCleaningPhone(lead.phone);
+
+  if (!email && !hasPhone) {
+    return {
+      insertTarget: 'unenriched',
+      reason: emailRejectReason || 'no_valid_phone_or_email',
+      email: emailRejectReason ? rawEmail : null,
+      phone: null,
+    };
+  }
+
+  return {
+    insertTarget: 'prospect',
+    email,
+    phone: hasPhone ? lead.phone : null,
+    emailRejectReason,
+  };
+}
+
+function resolveScoutContactCandidate(lead) {
+  if (isCleaningBuyerProfile()) return resolveCleaningScoutContactCandidate(lead);
+  return resolveScoutEmailCandidate(lead);
+}
+
 async function resolveScoutEmail(lead, companyName) {
   const candidate = resolveScoutEmailCandidate(lead);
   if (candidate.insertTarget !== 'prospect') return candidate;
@@ -1844,62 +2069,67 @@ async function saveToDatabase(leads, {
         continue;
       }
 
-      const emailCandidate = resolveScoutEmailCandidate(lead);
-      if (emailCandidate.insertTarget === 'unenriched') {
+      const contactCandidate = resolveScoutContactCandidate(lead);
+      if (contactCandidate.insertTarget === 'unenriched') {
         await upsertScoutUnenriched({
           companyName,
           domain,
           websiteUrl,
           discoveryMethod,
-          reason: emailCandidate.reason,
-          email: emailCandidate.email,
+          reason: contactCandidate.reason,
+          email: contactCandidate.email,
         });
         await logScoutRun('skipped', {
           company: companyName,
           domain,
-          reason: emailCandidate.reason,
+          reason: contactCandidate.reason,
           discovery_method: discoveryMethod,
-        }, 'scout_skipped_no_email');
+        }, isCleaningBuyerProfile() ? 'scout_skipped_no_reachable_contact' : 'scout_skipped_no_email');
         incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.NO_EMAIL);
         skipped++;
-        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.NO_EMAIL, { reason: emailCandidate.reason, email: emailCandidate.email, unenriched_action: 'upserted' }, companyName);
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.NO_EMAIL, { reason: contactCandidate.reason, email: contactCandidate.email, unenriched_action: 'upserted' }, companyName);
         unenriched++;
         continue;
       }
 
-      const email = emailCandidate.email;
+      const email = contactCandidate.email || null;
 
-      const exclusion = await shouldExcludeProspect({
-        email,
-        websiteUrl,
-        source: discoveryMethod,
-      });
-      if (exclusion.excluded) {
-        await logExcludedProspect({ email, source: discoveryMethod, exclusion });
-        await logScoutRun('skipped', {
-          company: companyName,
+      if (email) {
+        const exclusion = await shouldExcludeProspect({
           email,
-          domain: extractEmailDomain(email),
-          website_url: websiteUrl,
-          discovery_method: discoveryMethod,
-          exclusion_reason: exclusion.reason,
-          exclusion_detail: exclusion.detail || {},
-        }, 'prospect_excluded');
-        console.log(`[Scout] Excluded prospect ${email}: ${exclusion.reason}`);
-        incrementBreakdown(skippedBreakdown, 'excluded_filter');
-        skipped++;
-        continue;
+          websiteUrl,
+          source: discoveryMethod,
+        });
+        if (exclusion.excluded) {
+          await logExcludedProspect({ email, source: discoveryMethod, exclusion });
+          await logScoutRun('skipped', {
+            company: companyName,
+            email,
+            domain: extractEmailDomain(email),
+            website_url: websiteUrl,
+            discovery_method: discoveryMethod,
+            exclusion_reason: exclusion.reason,
+            exclusion_detail: exclusion.detail || {},
+          }, 'prospect_excluded');
+          console.log(`[Scout] Excluded prospect ${email}: ${exclusion.reason}`);
+          incrementBreakdown(skippedBreakdown, 'excluded_filter');
+          skipped++;
+          continue;
+        }
       }
 
-      const verification = await resolveEmailVerification(email, lead);
-      const emailVerified = verification.emailVerified;
-      const emailVerificationMethod = verification.emailVerificationMethod;
-      const verifiedAt = verification.verifiedAt;
-      const doNotContact = verification.doNotContact;
-      const emailStatus = verification.emailStatus;
-      const verifierResponse = verification.verifierResponse;
-      const verifierCheckedAt = verification.verifierCheckedAt;
-      const prospectNote = verification.note;
+      const verification = email ? await resolveEmailVerification(email, lead) : null;
+      const emailVerified = verification?.emailVerified || false;
+      const emailVerificationMethod = verification?.emailVerificationMethod || null;
+      const verifiedAt = verification?.verifiedAt || null;
+      const doNotContact = verification?.doNotContact || false;
+      const emailStatus = verification?.emailStatus || null;
+      const verifierResponse = verification?.verifierResponse || null;
+      const verifierCheckedAt = verification?.verifierCheckedAt || null;
+      const prospectNote = [
+        verification?.note || null,
+        contactCandidate.emailRejectReason ? `Ignored scraped email: ${contactCandidate.emailRejectReason}` : null,
+      ].filter(Boolean).join(' ') || null;
 
       const nameParts = (lead.contact && lead.contact !== '—' ? lead.contact : '').trim().split(/\s+/).filter(Boolean);
 
@@ -1908,7 +2138,7 @@ async function saveToDatabase(leads, {
       const looksLikePerson = nameParts.length >= 2 || (nameParts.length === 1 && /^[A-Z][a-z]{2,}$/.test(nameParts[0]));
       const firstName = sanitizeFirstName(looksLikePerson ? nameParts[0] : null);
       const lastName  = firstName ? nameParts.slice(1).join(' ') || null : null;
-      const phone = lead.phone || null;
+      const phone = isCleaningBuyerProfile() ? contactCandidate.phone : lead.phone || null;
       const addressHay = normalizeGeoText(lead.address || '');
       const domainHay = normalizeGeoText(domain || '');
       const serviceArea = (CLIENT_CONFIG?.service_area || []).find(area => {
@@ -1959,7 +2189,7 @@ async function saveToDatabase(leads, {
       );
 
       try {
-        await pool.query(`
+        const setterUpdate = await pool.query(`
           UPDATE prospects
           SET setter_status = 'new',
               setter_visible = true,
@@ -1968,8 +2198,11 @@ async function saveToDatabase(leads, {
             AND client_id = $2
             AND COALESCE(icp_score, 0) >= $3
             AND COALESCE(do_not_contact, false) = false
+            AND COALESCE(status, '') NOT IN ('dead', 'disqualified', 'bounced', 'do_not_email')
+            AND NULLIF(BTRIM(COALESCE(service_area_match, '')), '') IS NOT NULL
+          RETURNING id
         `, [prospectId, CONFIG.clientId, getSetterThreshold()]);
-        if (CONFIG.clientId === 1 && (lead.score || 0) >= getSetterThreshold()) {
+        if (CONFIG.clientId === 1 && setterUpdate.rowCount > 0) {
           const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
           if (handoff.appended) setterQueued++;
           else setterSkipped++;
@@ -2154,7 +2387,7 @@ async function refreshQueueCounts(clientId) {
         SELECT sq3.id,
                COUNT(p.id) FILTER (
                  WHERE COALESCE(p.service_area_match, c.location, '') ILIKE (
-                   '%' || REGEXP_REPLACE(TRIM(sq3.location), '\\s+', '%', 'g') || '%'
+                   '%' || REGEXP_REPLACE(REGEXP_REPLACE(TRIM(sq3.location), '\\s+[A-Z]{2}$', ''), '\\s+', '%', 'g') || '%'
                  )
                )::int AS cnt
         FROM scout_queue sq3
@@ -2168,6 +2401,7 @@ async function refreshQueueCounts(clientId) {
         GROUP BY sq3.id
       ) p ON p.id = sq2.id
       WHERE sq2.client_id = $1
+        AND sq2.status <> 'parked'
     ) calc
     WHERE sq.id = calc.id
   `, [clientId]);
@@ -2262,7 +2496,7 @@ async function pickNextQueueItem(clientId, allowedVerticals = []) {
   const res = await pool.query(`
     SELECT industry, vertical, location, prospect_count
     FROM scout_queue
-    WHERE client_id = $1 AND saturated = false${allowedClause}
+    WHERE client_id = $1 AND saturated = false AND status = 'queued'${allowedClause}
     ORDER BY prospect_count ASC, id ASC
     LIMIT 1
   `, params);
@@ -2449,6 +2683,28 @@ async function run(params = {}) {
   }
 }
 
+async function configureScoringContext(params = {}) {
+  CONFIG.clientId = getRuntimeClientId(params);
+  process.env.ACTIVE_CLIENT_ID = String(CONFIG.clientId);
+  CLIENT_CONFIG = await getClientConfig(CONFIG.clientId);
+  if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CONFIG.clientId}`);
+
+  CONFIG.scoringProfile = CLIENT_CONFIG.scoring_profile || null;
+  if (params.industry) CONFIG.industry = params.industry;
+  if (params.location) CONFIG.location = sanitizeQueueLocation(params.location);
+  if (params.vertical) CONFIG.vertical = normalizeVertical(params.vertical) || 'unknown';
+  else if (params.industry) CONFIG.vertical = normalizeVertical(params.industry) || 'unknown';
+
+  return {
+    clientId: CONFIG.clientId,
+    vertical: CONFIG.vertical,
+    scoringProfile: CONFIG.scoringProfile,
+    city: CLIENT_CONFIG.city || null,
+    state: CLIENT_CONFIG.state || null,
+    serviceArea: CLIENT_CONFIG.service_area || [],
+  };
+}
+
 async function runEnrichmentChain(domain, jobTitle = 'owner') {
   const savedTitle = CONFIG.jobTitle;
   CONFIG.jobTitle = jobTitle;
@@ -2488,6 +2744,8 @@ module.exports = {
   runEnrichmentChain,
   normalizeVertical,
   scoreCleaningLead,
+  scoreLead,
+  configureScoringContext,
 };
 
 if (require.main === module) {
