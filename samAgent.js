@@ -12,7 +12,7 @@ const AUTH_TOKEN     = process.env.TWILIO_AUTH_TOKEN;
 const FROM_NUMBER    = process.env.TWILIO_FROM || process.env.TWILIO_PHONE_NUMBER;
 const NOTIFY_PHONE   = process.env.NOTIFY_PHONE || process.env.JACOB_PHONE;
 const MARKET_LABELS = {
-  1: 'Manchester NH',
+  1: 'Providence RI',
   2: 'Charleston WV',
   5: 'Nashville TN',
 };

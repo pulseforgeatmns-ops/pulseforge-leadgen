@@ -551,7 +551,7 @@ Jacob`
     },
     {
       day: 8,
-      subject: "what is actually working in Manchester right now",
+      subject: "what is actually working locally right now",
       body: `Hi {{first_name}},
 
 Are you currently bringing past guests back between visits, or is {{business_name}} still relying mostly on word of mouth and social posts?
@@ -957,7 +957,7 @@ Pulseforge`
     },
     {
       day: 4,
-      subject: "one thing I'm seeing in Manchester right now",
+      subject: "one thing I'm seeing locally right now",
       body: `Hi {{first_name}},
 
 Forms, calls, and DMs become expensive leaks when they depend on someone remembering to respond between jobs.

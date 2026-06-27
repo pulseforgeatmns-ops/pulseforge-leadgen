@@ -11,8 +11,32 @@ const BIZ_INFO_BASE  = 'https://mybusinessbusinessinformation.googleapis.com/v1'
 
 // ── SHARED HELPERS ────────────────────────────────────────────────────────────
 
+let pendingCommentPublishSchemaPromise;
+
+function ensurePendingCommentPublishSchema() {
+  if (!pendingCommentPublishSchemaPromise) {
+    pendingCommentPublishSchemaPromise = pool.query(`
+      ALTER TABLE pending_comments
+        ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ
+    `).catch(err => {
+      pendingCommentPublishSchemaPromise = null;
+      throw err;
+    });
+  }
+  return pendingCommentPublishSchemaPromise;
+}
+
 async function updateStatus(id, status) {
-  await pool.query('UPDATE pending_comments SET status = $1 WHERE id = $2', [status, id]);
+  await ensurePendingCommentPublishSchema();
+  await pool.query(`
+    UPDATE pending_comments
+    SET status = $1,
+        posted_at = CASE
+          WHEN $1 = 'posted' THEN COALESCE(posted_at, NOW())
+          ELSE posted_at
+        END
+    WHERE id = $2
+  `, [status, id]);
 }
 
 async function logResult(channel, action, item, status, details) {

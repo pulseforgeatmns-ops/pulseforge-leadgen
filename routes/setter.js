@@ -68,11 +68,9 @@ async function ensureSetterSchema() {
   await pool.query(`
     UPDATE prospects
     SET setter_status = COALESCE(setter_status, 'new'),
-        setter_visible = true,
         setter_updated_at = COALESCE(setter_updated_at, NOW())
     WHERE source = 'scout'
-      AND COALESCE(icp_score, 0) >= 40
-      AND COALESCE(do_not_contact, false) = false
+      AND (setter_status IS NULL OR setter_updated_at IS NULL)
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS activity_log (
@@ -105,8 +103,9 @@ function website(row) {
 }
 
 function cityFor(row) {
+  if (row.service_area_match) return row.service_area_match;
   if (row.city) return row.city;
-  return 'Manchester NH';
+  return 'Providence RI';
 }
 
 function mapLead(row) {
@@ -256,7 +255,7 @@ function searchWhere(search, params) {
       OR p.email ILIKE $${idx}
       OR p.phone ILIKE $${idx}
       OR p.vertical ILIKE $${idx}
-      OR 'Manchester NH' ILIKE $${idx}
+      OR 'Providence RI' ILIKE $${idx}
     )
   `;
 }

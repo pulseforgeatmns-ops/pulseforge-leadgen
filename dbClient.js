@@ -1,6 +1,21 @@
 const pool = require('./db');
 const { getRuntimeClientId } = require('./utils/clientContext');
 
+let pendingCommentPublishSchemaPromise;
+
+function ensurePendingCommentPublishSchema() {
+  if (!pendingCommentPublishSchemaPromise) {
+    pendingCommentPublishSchemaPromise = pool.query(`
+      ALTER TABLE pending_comments
+        ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ
+    `).catch(err => {
+      pendingCommentPublishSchemaPromise = null;
+      throw err;
+    });
+  }
+  return pendingCommentPublishSchemaPromise;
+}
+
 // Check do not contact before any agent acts
 async function checkDNC(prospectId) {
   const clientId = getRuntimeClientId();
@@ -148,8 +163,15 @@ async function getPendingComments() {
 
 async function updateCommentStatus(id, status) {
   const clientId = getRuntimeClientId();
+  await ensurePendingCommentPublishSchema();
   await pool.query(
-    `UPDATE pending_comments SET status = $1 WHERE id = $2 AND client_id = $3`,
+    `UPDATE pending_comments
+     SET status = $1,
+         posted_at = CASE
+           WHEN $1 = 'posted' THEN COALESCE(posted_at, NOW())
+           ELSE posted_at
+         END
+     WHERE id = $2 AND client_id = $3`,
     [status, id, clientId]
   );
 }
