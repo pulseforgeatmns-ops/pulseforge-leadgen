@@ -5,6 +5,7 @@ const fs = require('fs');
 const Anthropic = require('@anthropic-ai/sdk');
 const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { buildVoiceConstraintBlock } = require('./utils/voiceRules');
 
 puppeteer.use(StealthPlugin());
 
@@ -129,6 +130,7 @@ async function generateComment(postContent, authorName) {
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 150,
+    system: buildVoiceConstraintBlock(),
     messages: [{
       role: 'user',
       content: `You are ${agentPersona.name}, ${agentPersona.title}. You are commenting on a LinkedIn post as yourself, not as a marketer.

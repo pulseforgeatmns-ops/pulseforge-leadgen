@@ -917,6 +917,7 @@ const LINKEDIN_BRAND_BY_CHANNEL = {
 };
 const LINKEDIN_V2_MODULE = 'linkedin_content_v2';
 const LINKEDIN_FORMATS = ['punch', 'numbers', 'quote', 'stake', 'decision_log'];
+const LINKEDIN_PERSONAL_SLOT_CHANNEL = 'linkedin_personal';
 
 const LINKEDIN_FORMAT_SPECS = {
   punch: {
@@ -1140,6 +1141,45 @@ function chooseLinkedInFormat(recentFormats = []) {
   let eligible = LINKEDIN_FORMATS.filter(f => !blocked.has(f));
   if (!eligible.length) eligible = LINKEDIN_FORMATS.slice();
   return eligible[Math.floor(Math.random() * eligible.length)];
+}
+
+function pickLessUsedSlot(slot1, slot2) {
+  if (slot1 < slot2) return 1;
+  if (slot2 < slot1) return 2;
+  return null;
+}
+
+async function chooseLinkedInPersonalSlot(format) {
+  const [formatCounts, globalCounts] = await Promise.all([
+    pool.query(`
+      SELECT slot, COUNT(*)::int AS count
+      FROM pending_comments
+      WHERE client_id = $1
+        AND channel = $2
+        AND format = $3
+        AND slot IN (1, 2)
+      GROUP BY slot
+    `, [CLIENT_ID, LINKEDIN_PERSONAL_SLOT_CHANNEL, format]),
+    pool.query(`
+      SELECT slot, COUNT(*)::int AS count
+      FROM pending_comments
+      WHERE client_id = $1
+        AND channel = $2
+        AND slot IN (1, 2)
+      GROUP BY slot
+    `, [CLIENT_ID, LINKEDIN_PERSONAL_SLOT_CHANNEL]),
+  ]);
+
+  const countFor = rows => {
+    const counts = { 1: 0, 2: 0 };
+    for (const row of rows) counts[Number(row.slot)] = Number(row.count || 0);
+    return counts;
+  };
+  const byFormat = countFor(formatCounts.rows);
+  const byGlobal = countFor(globalCounts.rows);
+  return pickLessUsedSlot(byFormat[1], byFormat[2])
+    || pickLessUsedSlot(byGlobal[1], byGlobal[2])
+    || 1;
 }
 
 function buildLinkedInV2Prompt(company, brand, format) {
@@ -1877,6 +1917,9 @@ async function saveToPendingApprovals(company, content, contentType, channel, me
   // For LinkedIn v2 the "content type" slot is the rotation format (punch, numbers, …).
   const typeLabel = meta?.format || contentType;
   const label = `${channelLabel} · ${typeLabel.charAt(0).toUpperCase() + typeLabel.slice(1)}`;
+  const slot = channel === LINKEDIN_PERSONAL_SLOT_CHANNEL && meta?.format
+    ? await chooseLinkedInPersonalSlot(meta.format)
+    : null;
 
   // LinkedIn Page posts carry a first-comment URL posted via Buffer after approval
   const storedContent = channel === 'linkedin_page'
@@ -1917,8 +1960,8 @@ async function saveToPendingApprovals(company, content, contentType, channel, me
   const res = await pool.query(`
     INSERT INTO pending_comments
       (author_name, author_title, post_content, comment, post_url, channel, status, client_id,
-       brand, format, source_anchors)
-    VALUES ($1, $2, $3, $4, NULL, $5, 'pending', $6, $7, $8, $9)
+       brand, format, source_anchors, slot)
+    VALUES ($1, $2, $3, $4, NULL, $5, 'pending', $6, $7, $8, $9, $10)
     RETURNING id
   `, [
     company.name,
@@ -1930,8 +1973,10 @@ async function saveToPendingApprovals(company, content, contentType, channel, me
     meta?.brand || null,
     meta?.format || null,
     meta?.source_anchors ? JSON.stringify(meta.source_anchors) : null,
+    slot,
   ]);
 
+  if (slot) console.log(`  [slot-test] ${meta.format} assigned to Slot ${slot}`);
   return res.rows[0].id;
 }
 
@@ -1943,7 +1988,36 @@ async function ensurePendingCommentsLinkedInColumns() {
       ALTER TABLE pending_comments
         ADD COLUMN IF NOT EXISTS brand TEXT,
         ADD COLUMN IF NOT EXISTS format TEXT,
-        ADD COLUMN IF NOT EXISTS source_anchors JSONB
+        ADD COLUMN IF NOT EXISTS source_anchors JSONB,
+        ADD COLUMN IF NOT EXISTS slot INTEGER,
+        ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS stats JSONB
+    `);
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'pending_comments_slot_check'
+        ) THEN
+          ALTER TABLE pending_comments
+            ADD CONSTRAINT pending_comments_slot_check
+            CHECK (slot IS NULL OR slot IN (1, 2));
+        END IF;
+      END $$;
+    `);
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'pending_comments_linkedin_format_check'
+        ) THEN
+          ALTER TABLE pending_comments
+            ADD CONSTRAINT pending_comments_linkedin_format_check
+            CHECK (
+              format IS NULL OR format IN ('punch', 'numbers', 'quote', 'stake', 'decision_log')
+            ) NOT VALID;
+        END IF;
+      END $$;
     `);
   } catch (err) {
     console.error(`[Paige] pending_comments LinkedIn column migration failed: ${err.message}`);

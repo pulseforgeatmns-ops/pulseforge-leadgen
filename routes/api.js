@@ -25,6 +25,7 @@ const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
 let prospectSetterAssignmentSchemaPromise;
 let agentLogStatusSchemaPromise;
+let linkedinSlotTestSchemaPromise;
 const tableColumnCache = new Map();
 const EXCLUDE_COMMAND_FEED_ACTIONS_SQL = `
   NOT (
@@ -82,6 +83,47 @@ function ensureAgentLogStatusSchema() {
     });
   }
   return agentLogStatusSchemaPromise;
+}
+
+function ensureLinkedInSlotTestSchema() {
+  if (!linkedinSlotTestSchemaPromise) {
+    linkedinSlotTestSchemaPromise = (async () => {
+      await pool.query(`
+        ALTER TABLE pending_comments
+          ADD COLUMN IF NOT EXISTS slot INTEGER,
+          ADD COLUMN IF NOT EXISTS format TEXT,
+          ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ,
+          ADD COLUMN IF NOT EXISTS stats JSONB
+      `);
+      await pool.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'pending_comments_slot_check'
+          ) THEN
+            ALTER TABLE pending_comments
+              ADD CONSTRAINT pending_comments_slot_check
+              CHECK (slot IS NULL OR slot IN (1, 2));
+          END IF;
+        END $$;
+      `);
+    })().catch(err => {
+      linkedinSlotTestSchemaPromise = null;
+      throw err;
+    });
+  }
+  return linkedinSlotTestSchemaPromise;
+}
+
+function parseOptionalInt(value, field) {
+  if (value === undefined || value === null || value === '') return 0;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    const err = new Error(`${field} must be a non-negative integer`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return parsed;
 }
 
 router.get('/api/me', sessionAuth, (req, res) => {
@@ -341,8 +383,8 @@ router.get('/api/agent-status', requireDashboardRead, async (req, res) => {
       pool.query('SELECT channel, COUNT(*) as count FROM pending_comments WHERE client_id = $1 GROUP BY channel', [requestClientId]),
       pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1 AND created_at > NOW() - INTERVAL \'7 days\'', [requestClientId])
     ]);
-
     const prospectClients = await getProspectCountsByClient(pool, { clientId: prospectClientId, includeDead });
+
     const runMap = {};
     agentRuns.rows.forEach(r => { runMap[r.agent_name] = parseInt(r.runs); });
 
@@ -371,10 +413,10 @@ router.get('/api/agent-status', requireDashboardRead, async (req, res) => {
         ...(includeDead ? { dead: deadProspects } : {}),
         total: totalProspects,
       },
-      touchpoints: totalTouchpoints,
-      pending: parseInt(pending.rows[0].count),
       prospectClients,
       prospectScope: clientScoped ? 'client' : 'global',
+      touchpoints: totalTouchpoints,
+      pending: parseInt(pending.rows[0].count),
       weeklyTouchpoints: parseInt(weeklyTouchpoints.rows[0].count),
       agentRuns: runMap,
       rings,
@@ -438,6 +480,57 @@ router.post('/api/approvals/:id', requireOperator, async (req, res) => {
     }
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/linkedin-personal-posts/:id/stats', requireOperator, async (req, res) => {
+  const { id } = req.params;
+  try {
+    await ensureLinkedInSlotTestSchema();
+    const clientId = getRequestClientId(req);
+    const postRes = await pool.query(`
+      SELECT id, channel, posted_at, created_at
+      FROM pending_comments
+      WHERE id = $1 AND client_id = $2
+      LIMIT 1
+    `, [id, clientId]);
+
+    const post = postRes.rows[0];
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.channel !== 'linkedin_personal') {
+      return res.status(400).json({ error: 'Stats capture is only for linkedin_personal posts' });
+    }
+
+    const stats = {
+      impressions: parseOptionalInt(req.body.impressions, 'impressions'),
+      reactions: parseOptionalInt(req.body.reactions, 'reactions'),
+      comments: parseOptionalInt(req.body.comments, 'comments'),
+      outside_network_comments: parseOptionalInt(req.body.outside_network_comments, 'outside_network_comments'),
+      saves: parseOptionalInt(req.body.saves, 'saves'),
+      dms: parseOptionalInt(req.body.dms, 'dms'),
+      top_viewer_segment: req.body.top_viewer_segment == null
+        ? null
+        : String(req.body.top_viewer_segment).trim().slice(0, 200),
+      captured_at: new Date().toISOString(),
+    };
+
+    const warnings = [];
+    const maturityBase = post.posted_at || post.created_at;
+    if (!post.posted_at) warnings.push('Post has no posted_at timestamp yet; using created_at for the 48h maturity check.');
+    if (maturityBase && Date.now() - new Date(maturityBase).getTime() < 48 * 60 * 60 * 1000) {
+      warnings.push('Post is younger than 48h; stats may not be mature yet.');
+    }
+
+    const updated = await pool.query(`
+      UPDATE pending_comments
+      SET stats = $1
+      WHERE id = $2 AND client_id = $3
+      RETURNING id, slot, format, stats
+    `, [JSON.stringify(stats), id, clientId]);
+
+    res.json({ success: true, post: updated.rows[0], warnings });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
