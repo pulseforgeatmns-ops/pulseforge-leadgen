@@ -28,6 +28,7 @@ const {
   insertAnchor,
 } = require('../utils/miraAnchor');
 const { handleWarmTelegramCallback } = require('../warmRoutingAgent');
+const { setSetterVisibility } = require('../utils/setterVisibility');
 
 const miraSchemaReady = ensureMiraSchema().catch(err => {
   console.error('[mira] schema error:', err.message);
@@ -589,12 +590,15 @@ async function processBrevoEventSideEffects(result, payload) {
         await pool.query(
           `UPDATE prospects
            SET is_hot = true,
-               setter_visible = true,
                setter_updated_at = NOW(),
                updated_at = NOW()
            WHERE id = $1 AND client_id = $2`,
           [prospect.id, prospect.client_id]
         );
+        await setSetterVisibility(pool, prospect.id, {
+          reason: 'engagement',
+          clientId: prospect.client_id,
+        });
 
         await pool.query(`
           INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)

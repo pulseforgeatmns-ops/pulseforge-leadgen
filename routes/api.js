@@ -20,6 +20,7 @@ const {
   getProspectCounts,
   getProspectCountsByClient,
 } = require('../utils/prospectCounts');
+const { setSetterVisibility } = require('../utils/setterVisibility');
 
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
@@ -969,8 +970,7 @@ router.post('/api/prospects/:id/assign-setter', requireOperator, async (req, res
 
     const prospectRes = await client.query(`
       UPDATE prospects
-      SET setter_visible = true,
-          assigned_setter_id = $1,
+      SET assigned_setter_id = $1,
           setter_status = COALESCE(setter_status, 'new'),
           setter_updated_at = NOW(),
           updated_at = NOW()
@@ -982,6 +982,10 @@ router.post('/api/prospects/:id/assign-setter', requireOperator, async (req, res
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Prospect not found' });
     }
+    const assignedProspect = await setSetterVisibility(client, prospectRes.rows[0].id, {
+      reason: 'manual',
+      clientId,
+    });
 
     const setter = setterRes.rows[0];
     const subject = `Assigned to setter ${setter.name}`;
@@ -998,7 +1002,7 @@ router.post('/api/prospects/:id/assign-setter', requireOperator, async (req, res
     ]);
 
     await client.query('COMMIT');
-    res.json({ success: true, setter });
+    res.json({ success: true, setter, setter_visible: Boolean(assignedProspect?.setter_visible) });
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch (_rollbackErr) {}
     res.status(500).json({ error: err.message });
@@ -1756,26 +1760,6 @@ router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) =
     res.json(responseBody);
   } catch (err) {
     console.error('[activity-details] error', { id: req.params.id, error: err.message });
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Quick action: surface a prospect to the setter queue
-router.post('/api/prospects/:id/assign-setter', requireOperator, async (req, res) => {
-  try {
-    const clientId = getRequestClientId(req);
-    const result = await pool.query(`
-      UPDATE prospects
-      SET setter_visible = true,
-          setter_status = COALESCE(setter_status, 'new'),
-          setter_updated_at = NOW(),
-          updated_at = NOW()
-      WHERE id = $1 AND client_id = $2
-      RETURNING id
-    `, [req.params.id, clientId]);
-    if (!result.rows.length) return res.status(404).json({ error: 'Prospect not found' });
-    res.json({ success: true });
-  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

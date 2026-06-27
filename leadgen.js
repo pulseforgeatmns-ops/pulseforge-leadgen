@@ -30,6 +30,7 @@ const { shouldExcludeProspect, extractEmailDomain } = require('./utils/prospectF
 const { normalizeVertical } = require('./utils/normalize');
 const { SCOUT_SKIP_REASONS, ensureScoutSkipLogTable, logScoutSkip } = require('./utils/scoutSkipLog');
 const { reportAgentRun } = require('./utils/agentObservability');
+const { setSetterVisibility } = require('./utils/setterVisibility');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -262,16 +263,6 @@ let CLIENT_CONFIG = null;
 const GOOGLE_API_KEY    = process.env.GOOGLE_API_KEY;
 const GOOGLE_CX         = process.env.GOOGLE_CX;
 const PROSPEO_API_KEY   = process.env.PROSPEO_API_KEY;
-const SETTER_ICP_THRESHOLD = 70;
-// Cleaning pilot (client_id=10) runs a moderate threshold, not 70+. The pilot
-// needs volume and Jacob is the human final-filter early on; live scores also
-// run lower than the synthetic harness (which assumed full enrichment). Tune
-// here as enrichment hit-rates come in.
-const CLEANING_SETTER_THRESHOLD = 60;
-function getSetterThreshold() {
-  return CONFIG.scoringProfile === 'cleaning_buyer' ? CLEANING_SETTER_THRESHOLD : SETTER_ICP_THRESHOLD;
-}
-
 // Per-vertical saturation caps. Once a client has accumulated this many
 // prospects in a vertical, Scout stops scraping it and rotates to the
 // least-saturated queued vertical instead. Keys are normalized (snake_case).
@@ -2189,20 +2180,17 @@ async function saveToDatabase(leads, {
       );
 
       try {
-        const setterUpdate = await pool.query(`
+        await pool.query(`
           UPDATE prospects
-          SET setter_status = 'new',
-              setter_visible = true,
-              setter_updated_at = NOW()
-          WHERE id = $1
-            AND client_id = $2
-            AND COALESCE(icp_score, 0) >= $3
-            AND COALESCE(do_not_contact, false) = false
-            AND COALESCE(status, '') NOT IN ('dead', 'disqualified', 'bounced', 'do_not_email')
-            AND NULLIF(BTRIM(COALESCE(service_area_match, '')), '') IS NOT NULL
-          RETURNING id
-        `, [prospectId, CONFIG.clientId, getSetterThreshold()]);
-        if (CONFIG.clientId === 1 && setterUpdate.rowCount > 0) {
+          SET setter_status = 'new', setter_updated_at = NOW()
+          WHERE id = $1 AND client_id = $2
+        `, [prospectId, CONFIG.clientId]);
+        const setterUpdate = await setSetterVisibility(pool, prospectId, {
+          reason: 'scout',
+          clientId: CONFIG.clientId,
+          source: 'scout',
+        });
+        if (CONFIG.clientId === 1 && setterUpdate?.setter_visible) {
           const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
           if (handoff.appended) setterQueued++;
           else setterSkipped++;

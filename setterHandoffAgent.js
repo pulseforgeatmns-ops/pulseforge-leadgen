@@ -5,10 +5,12 @@ require('dotenv').config();
 const pool = require('./db');
 const { appendQualifiedScoutLead, hasSetterSheetAuth } = require('./utils/setterSheet');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const {
+  SETTER_ICP_THRESHOLD,
+  recomputeSetterVisibility,
+} = require('./utils/setterVisibility');
 
 const AGENT_NAME = 'handoff_utility';
-const SETTER_ICP_THRESHOLD = 70;
-const TERMINAL_PROSPECT_STATUSES = ['dead', 'disqualified', 'bounced', 'do_not_email'];
 
 async function ensureSetterQueueColumns() {
   await pool.query(`
@@ -44,54 +46,27 @@ async function run(params = {}) {
   console.log(`Lookback: ${lookbackDays} day(s)\n`);
   console.log(`Client: ${clientId}\n`);
 
-  if (clientId !== 1) {
-    console.log('Setter handoff is enabled only for Pulseforge client_id=1.');
-    return;
-  }
-
   await ensureSetterQueueColumns();
+  const visibility = await recomputeSetterVisibility(pool, {
+    clientId,
+    reason: 'handoff',
+    preserveOverrides: true,
+  });
 
-  const cleanup = await pool.query(`
-    UPDATE prospects
-    SET setter_visible = false,
-        setter_updated_at = NOW()
-    WHERE client_id = $1
-      AND COALESCE(setter_visible, false) = true
-      AND (
-        COALESCE(icp_score, 0) < $2
-        OR COALESCE(do_not_contact, false) = true
-        OR COALESCE(status, '') = ANY($3::text[])
-        OR NULLIF(BTRIM(COALESCE(service_area_match, '')), '') IS NULL
-      )
-    RETURNING id
-  `, [clientId, SETTER_ICP_THRESHOLD, TERMINAL_PROSPECT_STATUSES]);
+  if (clientId !== 1) {
+    console.log(`Setter visibility recomputed for client ${clientId}; Google Sheets handoff is enabled only for client_id=1.`);
+    return visibility;
+  }
 
   const { rows } = await pool.query(`
     SELECT id, first_name, last_name, email, phone, job_title, notes, vertical, icp_score, created_at
     FROM prospects
     WHERE source = 'scout'
-      AND COALESCE(icp_score, 0) >= $3
-      AND COALESCE(do_not_contact, false) = false
-      AND COALESCE(status, '') <> ALL($4::text[])
-      AND NULLIF(BTRIM(COALESCE(service_area_match, '')), '') IS NOT NULL
+      AND COALESCE(setter_visible, false) = true
       AND client_id = $2
       AND created_at >= NOW() - ($1::int * INTERVAL '1 day')
     ORDER BY icp_score DESC NULLS LAST, created_at DESC
-  `, [lookbackDays, clientId, SETTER_ICP_THRESHOLD, TERMINAL_PROSPECT_STATUSES]);
-
-  if (rows.length) {
-    await pool.query(`
-      UPDATE prospects
-      SET setter_status = COALESCE(setter_status, 'new'),
-          setter_visible = true,
-          setter_updated_at = NOW()
-      WHERE id = ANY($1::uuid[]) AND client_id = $2
-        AND COALESCE(icp_score, 0) >= $3
-        AND COALESCE(do_not_contact, false) = false
-        AND COALESCE(status, '') <> ALL($4::text[])
-        AND NULLIF(BTRIM(COALESCE(service_area_match, '')), '') IS NOT NULL
-    `, [rows.map(row => row.id), clientId, SETTER_ICP_THRESHOLD, TERMINAL_PROSPECT_STATUSES]);
-  }
+  `, [lookbackDays, clientId]);
 
   let appended = 0;
   let skipped = 0;
@@ -139,12 +114,12 @@ async function run(params = {}) {
     VALUES ($1, 'backfill_setter_queue', $2, $3, NOW(), $4)
   `, [
     AGENT_NAME,
-    JSON.stringify({ candidates: rows.length, hidden_below_threshold: cleanup.rowCount, appended, skipped, failed, lookbackDays, client_id: clientId, icp_threshold: SETTER_ICP_THRESHOLD }),
+    JSON.stringify({ candidates: rows.length, hidden_below_threshold: visibility.demoted, appended, skipped, failed, lookbackDays, client_id: clientId, icp_threshold: SETTER_ICP_THRESHOLD }),
     failed ? 'failed' : 'success',
     clientId,
   ]).catch(() => {});
 
-  console.log(`Hidden <${SETTER_ICP_THRESHOLD}: ${cleanup.rowCount}`);
+  console.log(`Hidden by gate: ${visibility.demoted}`);
   console.log(`Candidates: ${rows.length}`);
   console.log(`Appended:   ${appended}`);
   console.log(`Skipped:    ${skipped}`);

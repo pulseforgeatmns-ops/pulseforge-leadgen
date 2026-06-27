@@ -5,6 +5,7 @@ const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { enrichPhoneWaterfall } = require('../phoneEnrich');
 const { ensureCloserSchema } = require('../utils/closerSchema');
+const { ensureSetterVisibilitySchema, setSetterVisibility } = require('../utils/setterVisibility');
 
 const router = express.Router();
 
@@ -55,6 +56,7 @@ function requireSetterWrite(req, res, next) {
 
 async function ensureSetterSchema() {
   await ensureCloserSchema();
+  await ensureSetterVisibilitySchema(pool);
   await pool.query(`
     ALTER TABLE prospects
     ADD COLUMN IF NOT EXISTS notes TEXT,
@@ -410,7 +412,6 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
       const update = await pool.query(`
         UPDATE prospects
         SET setter_status = 'booked',
-            setter_visible = true,
             setter_updated_at = NOW(),
             booked_at = COALESCE(booked_at, NOW()),
             closer_id = COALESCE($1, closer_id),
@@ -419,7 +420,14 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
         WHERE id = $3 AND source = 'scout'
         RETURNING *
       `, [closer?.id || null, notes, req.params.id]);
-      rows = update.rows;
+      const visibleRow = update.rows.length
+        ? await setSetterVisibility(pool, req.params.id, {
+            reason: 'stage_change',
+            source: 'scout',
+            stageStatus: 'booked',
+          })
+        : null;
+      rows = visibleRow ? [visibleRow] : [];
 
       if (closer) {
         const description = handoffDescription(rows[0], setterNotes(rows[0].notes));
@@ -450,11 +458,20 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
     } else {
       const update = await pool.query(`
         UPDATE prospects
-        SET setter_status = $1, setter_visible = true, setter_updated_at = NOW()
+        SET setter_status = $1,
+            status = CASE WHEN $1 = 'dead' THEN 'dead' ELSE status END,
+            setter_updated_at = NOW()
         WHERE id = $2 AND source = 'scout'
         RETURNING *
       `, [status, req.params.id]);
-      rows = update.rows;
+      const visibleRow = update.rows.length
+        ? await setSetterVisibility(pool, req.params.id, {
+            reason: 'stage_change',
+            source: 'scout',
+            stageStatus: status,
+          })
+        : null;
+      rows = visibleRow ? [visibleRow] : [];
     }
     if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
     res.json({ success: true, lead: mapLead(rows[0]), handoff });
