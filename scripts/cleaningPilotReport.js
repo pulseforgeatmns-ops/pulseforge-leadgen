@@ -20,7 +20,7 @@
 const pool = require('../db');
 
 const CLIENT_ID = 10;
-const THRESHOLD = 60; // CLEANING_SETTER_THRESHOLD in leadgen.js
+const THRESHOLD = 70; // Global threshold in utils/setterVisibility.js
 
 function arg(name, fallback) {
   const i = process.argv.indexOf(`--${name}`);

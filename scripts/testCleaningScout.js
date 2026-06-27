@@ -111,9 +111,8 @@ const SAMPLE_LEADS = [
   },
 ];
 
-// client_id=10 setter-qualifying threshold is 60 (moderate pilot threshold —
-// CLEANING_SETTER_THRESHOLD in leadgen.js), NOT 70+.
-const THRESHOLD = 60;
+// Setter visibility now uses one global quality threshold for every client.
+const THRESHOLD = 70;
 function bucket(score) {
   if (score >= THRESHOLD) return `${THRESHOLD}-100 (setter-qualifying)`;
   if (score >= 40)        return `40-${THRESHOLD - 1}  (review)`;
