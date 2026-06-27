@@ -127,16 +127,35 @@ async function ensureClientArchitecture() {
   `);
 
   await pool.query(`
-    INSERT INTO clients (id, name, slug, business_name, vertical, email, city, state, active)
-    VALUES (1, 'Pulseforge', 'pulseforge', 'Pulseforge', 'marketing_automation', 'jacob@gopulseforge.com', 'Manchester', 'NH', true)
+    INSERT INTO clients (
+      id, name, slug, business_name, vertical, email, city, state,
+      service_area, verticals, target_clients, active
+    )
+    VALUES (
+      1,
+      'Pulseforge',
+      'pulseforge',
+      'Pulseforge',
+      'marketing_automation',
+      'jacob@gopulseforge.com',
+      'Providence',
+      'RI',
+      ARRAY['Providence','Cranston','Warwick','Pawtucket','East Providence'],
+      ARRAY['cleaning','restaurant','salon','fitness','home_services','auto','landscaping','med_spa'],
+      'Local service businesses in the Providence RI metro, with restaurant, salon, fitness, and cleaning prioritized while the broader vertical set proves itself',
+      true
+    )
     ON CONFLICT (id) DO UPDATE SET
       name = EXCLUDED.name,
       slug = EXCLUDED.slug,
       business_name = EXCLUDED.business_name,
       vertical = EXCLUDED.vertical,
       email = EXCLUDED.email,
-      city = COALESCE(clients.city, EXCLUDED.city),
-      state = COALESCE(clients.state, EXCLUDED.state),
+      city = EXCLUDED.city,
+      state = EXCLUDED.state,
+      service_area = EXCLUDED.service_area,
+      verticals = EXCLUDED.verticals,
+      target_clients = EXCLUDED.target_clients,
       active = true
   `);
 
