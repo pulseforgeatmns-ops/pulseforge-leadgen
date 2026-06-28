@@ -83,6 +83,14 @@ async function extractPosts(page) {
   return page.evaluate(() => {
     const posts = [];
     const seen = new Set();
+    let malformedCount = 0;
+
+    const AUTHOR_SELECTORS = [
+      '.update-components-actor__title span[aria-hidden="true"]',
+      '.update-components-actor__name span[aria-hidden="true"]',
+      '.update-components-actor__title',
+      '.feed-shared-actor__name span[aria-hidden]',
+    ];
 
     // Try multiple selector patterns across LinkedIn DOM versions
     const containers = document.querySelectorAll(
@@ -104,12 +112,14 @@ async function extractPosts(page) {
         seen.add(content.slice(0, 60));
 
         // Author name
-        const authorEl = el.querySelector(
-          '.update-components-actor__name span[aria-hidden], ' +
-          '.feed-shared-actor__name span[aria-hidden], ' +
-          '.update-components-actor__name'
-        );
-        const authorName = authorEl?.innerText?.trim() || 'Unknown';
+        let authorName = 'Unknown';
+        for (const sel of AUTHOR_SELECTORS) {
+          const text = el.querySelector(sel)?.innerText?.trim();
+          if (text) {
+            authorName = text.split('\n')[0].trim();
+            break;
+          }
+        }
 
         // Post URL — look for permalink anchor
         const linkEl = el.querySelector('a[href*="/posts/"], a[href*="/activity-"]');
@@ -119,10 +129,11 @@ async function extractPosts(page) {
         if (posts.length >= 15) break;
       } catch {
         // skip malformed post
+        malformedCount++;
       }
     }
 
-    return posts;
+    return { posts, malformedCount };
   });
 }
 
@@ -187,6 +198,9 @@ async function run() {
   }
   let browser;
   let drafted = 0;
+  let unknownCount = 0;
+  let totalPosts = 0;
+  let malformedPosts = 0;
   const limit = 10;
   try {
     browser = await puppeteer.launch({
@@ -252,11 +266,15 @@ async function run() {
         continue;
       }
 
-      const posts = await extractPosts(page);
+      const { posts, malformedCount } = await extractPosts(page);
+      malformedPosts += malformedCount;
       console.log(`Found ${posts.length} posts`);
 
       for (const post of posts) {
         if (drafted >= limit) break;
+        totalPosts++;
+        if (post.authorName === 'Unknown') unknownCount++;
+
         if (!isRelevant(post.content)) {
           console.log(`  Skipping (off-topic): ${post.authorName}`);
           continue;
@@ -298,8 +316,20 @@ async function run() {
       await randomDelay(10000, 20000);
     }
 
-    console.log(`\nLinkedIn agent complete — ${drafted} comment${drafted !== 1 ? 's' : ''} queued for approval.`);
-    return { drafted, limit, client_id: CLIENT_ID };
+    console.log(
+      `\nLinkedIn agent complete — ${drafted} comment${drafted !== 1 ? 's' : ''} queued for approval. ` +
+      `${malformedPosts} malformed post container${malformedPosts !== 1 ? 's' : ''} skipped.`
+    );
+
+    const failRate = totalPosts ? (unknownCount / totalPosts) : 0;
+    if (failRate > 0.3) {
+      console.error(
+        `⚠️ AUTHOR EXTRACTION DEGRADED: ${unknownCount}/${totalPosts} posts (${Math.round(failRate * 100)}%) resolved to Unknown. ` +
+        `LinkedIn likely changed the actor DOM — author selectors need updating in linkedinAgent.js.`
+      );
+    }
+
+    return { drafted, limit, unknownCount, totalPosts, malformedPosts, client_id: CLIENT_ID };
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
