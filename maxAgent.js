@@ -346,7 +346,7 @@ async function getSystemSnapshot() {
 
   // Recent posts published (last 2 days) with engagement data
   const recentPosts = await pool.query(`
-    SELECT channel, content_type, engagement_rate, likes, comments, shares, reach,
+    SELECT channel, content_type, engagement_rate, likes, comments, shares, reach, impressions,
            metrics_fetched_at
     FROM post_analytics
     WHERE client_id = $1 AND published_at > NOW() - INTERVAL '2 days'

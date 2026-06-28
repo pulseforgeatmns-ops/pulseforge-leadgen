@@ -59,6 +59,7 @@ async function ensureSchema() {
       comments           INT DEFAULT 0,
       shares             INT DEFAULT 0,
       reach              INT DEFAULT 0,
+      impressions        INT DEFAULT 0,
       clicks             INT DEFAULT 0,
       engagement_rate    NUMERIC(6,4) DEFAULT 0,
       metrics_fetched_at TIMESTAMPTZ,
@@ -69,6 +70,7 @@ async function ensureSchema() {
   `);
   await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id) DEFAULT 1`);
   await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS buffer_metrics_updated_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS impressions INT DEFAULT 0`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_performance_summary (
       id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -81,6 +83,7 @@ async function ensureSchema() {
       avg_comments        NUMERIC(8,2) DEFAULT 0,
       avg_shares          NUMERIC(8,2) DEFAULT 0,
       avg_reach           NUMERIC(8,2) DEFAULT 0,
+      avg_impressions     NUMERIC(8,2) DEFAULT 0,
       avg_engagement_rate NUMERIC(6,4) DEFAULT 0,
       best_day_of_week    SMALLINT,
       best_hour           SMALLINT,
@@ -89,13 +92,15 @@ async function ensureSchema() {
     )
   `);
   await pool.query(`ALTER TABLE content_performance_summary ADD COLUMN IF NOT EXISTS measured_count INT DEFAULT 0`);
+  await pool.query(`ALTER TABLE content_performance_summary ADD COLUMN IF NOT EXISTS avg_impressions NUMERIC(8,2) DEFAULT 0`);
 }
 
 function ensureBufferMetricsSchema() {
   if (!bufferMetricsSchemaPromise) {
     bufferMetricsSchemaPromise = pool.query(`
       ALTER TABLE post_analytics
-        ADD COLUMN IF NOT EXISTS buffer_metrics_updated_at TIMESTAMPTZ
+        ADD COLUMN IF NOT EXISTS buffer_metrics_updated_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS impressions INT DEFAULT 0
     `).catch(err => {
       bufferMetricsSchemaPromise = null;
       throw err;
@@ -258,7 +263,7 @@ function mapBufferPostMetrics(metrics) {
     likes,
     comments,
     shares: shareMetric.value,
-    reach: impressions,
+    impressions,
     clicks: null,
     engagement_rate,
     buffer_engagement_rate: metricValue(lookup, 'engagementRate'),
@@ -359,7 +364,7 @@ async function fetchBufferMetrics(options = {}) {
 
       await pool.query(`
         UPDATE post_analytics
-        SET likes = $1, comments = $2, shares = $3, reach = $4, clicks = $5,
+        SET likes = $1, comments = $2, shares = $3, impressions = $4, clicks = $5,
             engagement_rate = $6, metrics_fetched_at = NOW(),
             buffer_metrics_updated_at = $7
         WHERE id = $8
@@ -367,7 +372,7 @@ async function fetchBufferMetrics(options = {}) {
         mapped.likes,
         mapped.comments,
         mapped.shares,
-        mapped.reach,
+        mapped.impressions,
         mapped.clicks,
         mapped.engagement_rate,
         post?.metricsUpdatedAt || null,
@@ -412,6 +417,7 @@ async function rebuildSummary() {
       ROUND(AVG(comments), 2)           AS avg_comments,
       ROUND(AVG(shares), 2)             AS avg_shares,
       ROUND(AVG(reach), 2)              AS avg_reach,
+      ROUND(AVG(impressions), 2)        AS avg_impressions,
       ROUND(AVG(engagement_rate) FILTER (WHERE metrics_fetched_at IS NOT NULL), 4) AS avg_engagement_rate,
       MODE() WITHIN GROUP (ORDER BY post_day_of_week) AS best_day_of_week,
       MODE() WITHIN GROUP (ORDER BY post_hour)        AS best_hour
@@ -431,8 +437,8 @@ async function rebuildSummary() {
     await pool.query(`
       INSERT INTO content_performance_summary
         (company_id, channel, content_type, post_count, measured_count, avg_likes, avg_comments,
-         avg_shares, avg_reach, avg_engagement_rate, best_day_of_week, best_hour, updated_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
+         avg_shares, avg_reach, avg_impressions, avg_engagement_rate, best_day_of_week, best_hour, updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
       ON CONFLICT (company_id, channel, content_type)
       DO UPDATE SET
         post_count          = EXCLUDED.post_count,
@@ -441,6 +447,7 @@ async function rebuildSummary() {
         avg_comments        = EXCLUDED.avg_comments,
         avg_shares          = EXCLUDED.avg_shares,
         avg_reach           = EXCLUDED.avg_reach,
+        avg_impressions     = EXCLUDED.avg_impressions,
         avg_engagement_rate = EXCLUDED.avg_engagement_rate,
         best_day_of_week    = EXCLUDED.best_day_of_week,
         best_hour           = EXCLUDED.best_hour,
@@ -448,7 +455,7 @@ async function rebuildSummary() {
     `, [
       r.company_id, r.channel, r.content_type,
       r.post_count, r.measured_count, r.avg_likes, r.avg_comments,
-      r.avg_shares, r.avg_reach, r.avg_engagement_rate,
+      r.avg_shares, r.avg_reach, r.avg_impressions, r.avg_engagement_rate,
       r.best_day_of_week, r.best_hour,
     ]);
   }

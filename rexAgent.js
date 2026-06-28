@@ -150,7 +150,7 @@ async function getWeeklyData() {
   // Top post this week
   const topPost = await pool.query(`
     SELECT channel, content_type, post_text,
-           likes, comments, shares, reach, engagement_rate
+           likes, comments, shares, reach, impressions, engagement_rate
     FROM post_analytics
     WHERE published_at > ${weekAgo}
       AND engagement_rate > 0

@@ -3490,9 +3490,10 @@ body.viewer-role .prospect-pipeline-card { cursor: default; }
               <th style="text-align:right">Comments</th>
               <th style="text-align:right">Shares</th>
               <th style="text-align:right">Reach</th>
+              <th style="text-align:right">Impressions</th>
             </tr>
           </thead>
-          <tbody id="topPostsBody"><tr><td colspan="7" class="no-data-note">No data yet</td></tr></tbody>
+          <tbody id="topPostsBody"><tr><td colspan="8" class="no-data-note">No data yet</td></tr></tbody>
         </table>
       </div>
 
@@ -6618,7 +6619,7 @@ function renderBestTimesHeatmap(summary) {
 function renderTopPostsTable(posts) {
   const tbody = document.getElementById('topPostsBody');
   if (!posts.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="no-data-note">No posts with engagement data yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="no-data-note">No posts with engagement data yet</td></tr>';
     return;
   }
   tbody.innerHTML = posts.map(p => {
@@ -6637,6 +6638,7 @@ function renderTopPostsTable(posts) {
       <td class="top-posts-num">${p.comments || 0}</td>
       <td class="top-posts-num">${p.shares || 0}</td>
       <td class="top-posts-num">${p.reach ? p.reach.toLocaleString() : '—'}</td>
+      <td class="top-posts-num">${p.impressions ? p.impressions.toLocaleString() : '—'}</td>
     </tr>`;
   }).join('');
 }

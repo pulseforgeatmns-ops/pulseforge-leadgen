@@ -2109,7 +2109,7 @@ router.get('/api/analytics/posts', requireDashboardRead, async (req, res) => {
         pa.id, pa.channel, pa.content_type, pa.post_text,
         pa.platform_post_id, pa.published_at,
         pa.post_day_of_week, pa.post_hour,
-        pa.likes, pa.comments, pa.shares, pa.reach, pa.clicks,
+        pa.likes, pa.comments, pa.shares, pa.reach, pa.impressions, pa.clicks,
         pa.engagement_rate, pa.metrics_fetched_at,
         c.name AS company_name
       FROM post_analytics pa
@@ -2132,7 +2132,7 @@ router.get('/api/analytics/summary', requireDashboardRead, async (req, res) => {
       SELECT
         cps.channel, cps.content_type,
         cps.post_count, cps.avg_likes, cps.avg_comments,
-        cps.avg_shares, cps.avg_reach, cps.avg_engagement_rate,
+        cps.avg_shares, cps.avg_reach, cps.avg_impressions, cps.avg_engagement_rate,
         cps.best_day_of_week, cps.best_hour,
         c.name AS company_name
       FROM content_performance_summary cps
@@ -2156,7 +2156,7 @@ router.get('/api/analytics/top-posts', requireDashboardRead, async (req, res) =>
         pa.id, pa.channel, pa.content_type,
         LEFT(pa.post_text, 120) AS post_preview,
         pa.published_at, pa.likes, pa.comments, pa.shares,
-        pa.reach, pa.engagement_rate,
+        pa.reach, pa.impressions, pa.engagement_rate,
         c.name AS company_name
       FROM post_analytics pa
       LEFT JOIN companies c ON pa.company_id = c.id AND c.client_id = pa.client_id

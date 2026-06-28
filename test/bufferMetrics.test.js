@@ -17,7 +17,7 @@ assert.deepEqual(mapped, {
   likes: 17,
   comments: 3,
   shares: 1,
-  reach: 250,
+  impressions: 250,
   clicks: null,
   engagement_rate: '8.4000',
   buffer_engagement_rate: 9.2,
@@ -38,7 +38,7 @@ const withoutImpressions = mapBufferPostMetrics([
 ]);
 
 assert.equal(withoutImpressions.engagement_rate, null);
-assert.equal(withoutImpressions.reach, null);
+assert.equal(withoutImpressions.impressions, null);
 assert.equal(withoutImpressions.likes, 17);
 assert.equal(withoutImpressions.shares, null);
 
@@ -61,7 +61,7 @@ assert.deepEqual(mapBufferPostMetrics(zeroPost.metrics), {
   likes: 0,
   comments: 0,
   shares: 0,
-  reach: 0,
+  impressions: 0,
   clicks: null,
   engagement_rate: null,
   buffer_engagement_rate: null,
