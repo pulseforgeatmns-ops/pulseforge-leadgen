@@ -793,7 +793,7 @@ For suggested_reply: write a short, warm, human reply from Jacob if classificati
   }));
 
   const response = await anthropic.messages.create({
-    model: 'claude-opus-4-5',
+    model: 'claude-sonnet-4-6',
     max_tokens: 500,
     messages: [{ role: 'user', content: prompt }]
   });

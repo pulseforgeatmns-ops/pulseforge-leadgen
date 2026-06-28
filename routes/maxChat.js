@@ -154,7 +154,7 @@ router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
       ? await loadProspectContext(clientId, question)
       : [];
     const message = await anthropic.messages.create({
-      model: process.env.MAX_CHAT_MODEL || 'claude-sonnet-4-5',
+      model: process.env.MAX_CHAT_MODEL || 'claude-sonnet-4-6',
       max_tokens: 700,
       system: `You are Max, the manager agent for Pulseforge. You answer operator questions about the sales and marketing pipeline using only the provided database context. Be concise, direct, and practical. If the context does not contain enough evidence, say what is missing instead of inventing details. Prioritize warm signals, pipeline risk, next actions, and anomalies. When the user asks you to take an action like triggering Emmett or flagging prospects, respond with the specific prospect names and emails from the context provided, and confirm what action you would take. You have access to real prospect data - use it.`,
       messages: [{

@@ -958,7 +958,7 @@ async function generateInsightsViaLLM(snapshot, autoExec) {
   const dataString = JSON.stringify(digestSnapshotWithMarketLabels(snapshot), null, 2);
 
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-5',
+    model: 'claude-sonnet-4-6',
     max_tokens: 500,
     system: buildDigestAgentNamingRules(snapshot),
     messages: [{
