@@ -96,6 +96,7 @@ async function extractPosts(page) {
     const containers = document.querySelectorAll(
       '[data-urn*="activity"], .feed-shared-update-v2, .occludable-update'
     );
+    const containerCount = containers.length;
 
     for (const el of containers) {
       try {
@@ -133,7 +134,7 @@ async function extractPosts(page) {
       }
     }
 
-    return { posts, malformedCount };
+    return { posts, malformedCount, containerCount };
   });
 }
 
@@ -201,6 +202,7 @@ async function run() {
   let unknownCount = 0;
   let totalPosts = 0;
   let malformedPosts = 0;
+  let containersSeen = 0;
   const limit = 10;
   try {
     browser = await puppeteer.launch({
@@ -266,8 +268,9 @@ async function run() {
         continue;
       }
 
-      const { posts, malformedCount } = await extractPosts(page);
+      const { posts, malformedCount, containerCount } = await extractPosts(page);
       malformedPosts += malformedCount;
+      containersSeen += containerCount;
       console.log(`Found ${posts.length} posts`);
 
       for (const post of posts) {
@@ -321,6 +324,13 @@ async function run() {
       `${malformedPosts} malformed post container${malformedPosts !== 1 ? 's' : ''} skipped.`
     );
 
+    if (totalPosts === 0 && containersSeen > 0) {
+      console.error(
+        `⚠️ EXTRACTION FAILURE: ${containersSeen} post containers found but 0 posts extracted. ` +
+        `Body/content selector likely broke — check extractPosts selectors in linkedinAgent.js.`
+      );
+    }
+
     const failRate = totalPosts ? (unknownCount / totalPosts) : 0;
     if (failRate > 0.3) {
       console.error(
@@ -329,7 +339,7 @@ async function run() {
       );
     }
 
-    return { drafted, limit, unknownCount, totalPosts, malformedPosts, client_id: CLIENT_ID };
+    return { drafted, limit, unknownCount, totalPosts, malformedPosts, containersSeen, client_id: CLIENT_ID };
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
