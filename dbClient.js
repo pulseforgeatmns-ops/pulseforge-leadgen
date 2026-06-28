@@ -146,6 +146,7 @@ async function savePendingComment(data) {
     `INSERT INTO pending_comments 
       (author_name, author_title, post_content, comment, post_url, channel, client_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (client_id, post_url) WHERE post_url IS NOT NULL AND status = 'pending' DO NOTHING
      RETURNING id`,
     [data.authorName, data.authorTitle, data.postContent, data.comment, data.postUrl, data.channel || 'linkedin', clientId]
   );
