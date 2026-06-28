@@ -1,5 +1,9 @@
 const assert = require('node:assert/strict');
-const { mapBufferPostMetrics, buildBufferMetricsQuery } = require('../analyticsAgent');
+const {
+  mapBufferPostMetrics,
+  buildBufferMetricsQuery,
+  parseBufferPostResponse,
+} = require('../analyticsAgent');
 
 const mapped = mapBufferPostMetrics([
   { type: 'impressions', name: 'Impressions', value: 250, unit: 'number' },
@@ -44,6 +48,38 @@ const withoutReactions = mapBufferPostMetrics([
 ]);
 
 assert.equal(withoutReactions.likes, null);
+
+const zeroMetrics = [
+  { type: 'impressions', name: 'Impressions', value: 0, unit: 'count' },
+  { type: 'reactions', name: 'Reactions', value: 0, unit: 'count' },
+  { type: 'comments', name: 'Comments', value: 0, unit: 'count' },
+  { type: 'shares', name: 'Shares', value: 0, unit: 'count' },
+];
+const zeroPost = parseBufferPostResponse({ data: { post: { metrics: zeroMetrics } } });
+assert.equal(zeroPost.metrics, zeroMetrics);
+assert.deepEqual(mapBufferPostMetrics(zeroPost.metrics), {
+  likes: 0,
+  comments: 0,
+  shares: 0,
+  reach: 0,
+  clicks: null,
+  engagement_rate: null,
+  buffer_engagement_rate: null,
+  share_metric_type: 'shares',
+});
+
+assert.throws(
+  () => parseBufferPostResponse({ data: { post: null } }),
+  /missing data\.post/
+);
+assert.throws(
+  () => parseBufferPostResponse({ data: { post: {} } }),
+  /missing or is not an array/
+);
+assert.throws(
+  () => parseBufferPostResponse({ data: { post: { metrics: [] } } }),
+  /metrics is empty/
+);
 
 const query = buildBufferMetricsQuery('post_123');
 assert.match(query, /post\(input: \{ id: "post_123" \}\)/);

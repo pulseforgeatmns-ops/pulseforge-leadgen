@@ -126,17 +126,20 @@ async function fetchFBPageMetrics() {
   }
 
   const { rows } = await pool.query(`
-    SELECT id, platform_post_id
+    SELECT id, platform_post_id, channel
     FROM post_analytics
     WHERE channel = 'facebook_page'
       AND client_id = $1
       AND platform_post_id IS NOT NULL
-      AND metrics_fetched_at IS NULL
-    LIMIT 50
+      AND published_at > NOW() - INTERVAL '14 days'
+      AND (
+        metrics_fetched_at IS NULL
+        OR metrics_fetched_at < NOW() - INTERVAL '6 hours'
+      )
   `, [CLIENT_ID]);
 
   if (!rows.length) {
-    console.log('[Analytics] No unanalyzed Facebook posts');
+    console.log('[Analytics] No Facebook posts due for metrics refresh');
     return;
   }
 
@@ -263,6 +266,23 @@ function mapBufferPostMetrics(metrics) {
   };
 }
 
+function parseBufferPostResponse(data) {
+  const post = data?.data?.post;
+  if (!post) {
+    throw new Error('Buffer response missing data.post');
+  }
+
+  const metrics = post.metrics;
+  if (!Array.isArray(metrics)) {
+    throw new Error('Buffer response data.post.metrics is missing or is not an array');
+  }
+  if (metrics.length === 0) {
+    throw new Error('Buffer response data.post.metrics is empty');
+  }
+
+  return { post, metrics };
+}
+
 async function fetchBufferMetrics(options = {}) {
   const token = process.env.BUFFER_ACCESS_TOKEN;
   if (!token) {
@@ -271,10 +291,6 @@ async function fetchBufferMetrics(options = {}) {
   }
   await ensureBufferMetricsSchema();
 
-  const requestedLimit = Number(options.limit || 50);
-  const limit = Number.isFinite(requestedLimit)
-    ? Math.max(1, Math.min(requestedLimit, 50))
-    : 50;
   const params = [CLIENT_ID];
   let filter = '';
   if (options.postAnalyticsId) {
@@ -289,21 +305,22 @@ async function fetchBufferMetrics(options = {}) {
     params.push(options.channel);
     filter += ` AND channel = $${params.length}`;
   }
-  params.push(limit);
-
   const { rows } = await pool.query(`
-    SELECT id, platform_post_id
+    SELECT id, platform_post_id, channel
     FROM post_analytics
     WHERE channel IN ('linkedin_page', 'linkedin_personal')
       AND client_id = $1
       AND platform_post_id IS NOT NULL
-      AND metrics_fetched_at IS NULL
+      AND published_at > NOW() - INTERVAL '14 days'
+      AND (
+        metrics_fetched_at IS NULL
+        OR metrics_fetched_at < NOW() - INTERVAL '6 hours'
+      )
       ${filter}
-    LIMIT $${params.length}
   `, params);
 
   if (!rows.length) {
-    console.log('[Analytics] No unanalyzed LinkedIn posts');
+    console.log('[Analytics] No LinkedIn posts due for metrics refresh');
     return { attempts: 0, successes: 0, skipped: 0, errorSample: null };
   }
 
@@ -329,8 +346,8 @@ async function fetchBufferMetrics(options = {}) {
         throw new Error(JSON.stringify(gqlErrors));
       }
 
-      const post = res.data?.data?.post;
-      const metrics = post?.metrics;
+      const { post, metrics } = parseBufferPostResponse(res.data);
+
       if (options.logRawMetrics) {
         console.log('[Analytics] Raw Buffer metrics payload:', JSON.stringify({
           platform_post_id: row.platform_post_id,
@@ -339,14 +356,6 @@ async function fetchBufferMetrics(options = {}) {
         }, null, 2));
       }
       const mapped = mapBufferPostMetrics(metrics);
-      if (!mapped) {
-        await pool.query(
-          `UPDATE post_analytics SET metrics_fetched_at = NOW() WHERE id = $1`,
-          [row.id]
-        );
-        updated++;
-        continue;
-      }
 
       await pool.query(`
         UPDATE post_analytics
@@ -377,7 +386,10 @@ async function fetchBufferMetrics(options = {}) {
       updated++;
     } catch (err) {
       errorSample = errorSample || errorSampleFrom(err, row);
-      console.warn(`[Analytics] Buffer post ${row.platform_post_id} metrics failed:`, err.response?.data || err.message);
+      console.error(
+        `[Analytics] Buffer post ${row.platform_post_id} (${row.channel}) metrics failed:`,
+        err.response?.data || err.message
+      );
     }
     await new Promise(r => setTimeout(r, 300));
   }
@@ -509,6 +521,7 @@ module.exports = {
   fetchBufferMetrics,
   buildBufferMetricsQuery,
   mapBufferPostMetrics,
+  parseBufferPostResponse,
 };
 
 if (require.main === module) {
