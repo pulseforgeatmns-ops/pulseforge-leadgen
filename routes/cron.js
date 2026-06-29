@@ -15,6 +15,7 @@ const CRON_MODULES = {
   sketch:    '../sketchAgent',
   paige:     '../paigeAgent',
   enrich_prospects: '../enrichProspects',
+  tiered_enrichment: '../tieredEnrichmentAgent',
   faye:      '../facebookAgent',
   link:      '../linkedinAgent',
   sam:       '../samAgent',

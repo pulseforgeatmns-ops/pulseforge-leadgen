@@ -21,6 +21,7 @@ const {
   getProspectCountsByClient,
 } = require('../utils/prospectCounts');
 const { setSetterVisibility } = require('../utils/setterVisibility');
+const { ensureTieredEnrichmentSchema } = require('../utils/tieredEnrichmentSchema');
 
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
@@ -577,6 +578,51 @@ router.get('/api/prospect-pipeline', requireDashboardRead, async (req, res) => {
       ORDER BY p.icp_score DESC NULLS LAST
       LIMIT 200
     `, [clientId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/enrichment/manual-queue', requireDashboardRead, async (req, res) => {
+  try {
+    await ensureTieredEnrichmentSchema();
+    const clientId = getRequestClientId(req);
+    const status = String(req.query.status || 'open').trim().toLowerCase();
+    const result = await pool.query(`
+      SELECT
+        q.id,
+        q.client_id,
+        q.prospect_id,
+        q.company_name,
+        q.website,
+        q.missing_fields,
+        q.candidate_names,
+        q.candidate_emails,
+        q.partial_data,
+        q.status,
+        q.last_attempted_at,
+        q.created_at,
+        q.updated_at,
+        p.first_name,
+        p.last_name,
+        p.email,
+        p.email_status,
+        p.email_verified,
+        p.email_verification_method,
+        p.do_not_contact,
+        p.practice_area,
+        p.firm_size,
+        p.vertical,
+        p.icp_score
+      FROM enrichment_manual_queue q
+      LEFT JOIN prospects p
+        ON p.id = q.prospect_id
+        AND p.client_id = q.client_id
+      WHERE q.client_id = $1
+        AND q.status = $2
+      ORDER BY q.updated_at DESC, q.id DESC
+    `, [clientId, status]);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2473,6 +2519,7 @@ router.post('/api/run/:agent', requireOperator, async (req, res) => {
     sam: '../samAgent', vera: '../veraAgent', cal: '../calAgent', ivy: '../ivyAgent',
     penny: '../pennyAgent', analytics: '../analyticsAgent', riley: '../rileyAgent',
     warm_signal: '../warmSignalAgent',
+    tiered_enrichment: '../tieredEnrichmentAgent',
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   await ensureAgentLogStatusSchema();
