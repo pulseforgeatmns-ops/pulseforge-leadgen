@@ -265,7 +265,8 @@ async function ensureClientArchitecture() {
   await pool.query(`
     INSERT INTO clients (
       id, name, slug, business_name, vertical, city, state,
-      service_area, verticals, target_clients, scoring_profile, active
+      service_area, verticals, target_clients, scoring_profile,
+      sender_email, sender_name, sending_domain, active
     ) VALUES (
       10,
       'Anchor Cleaning',
@@ -278,6 +279,9 @@ async function ensureClientArchitecture() {
       ARRAY['law_firm','accounting'],
       'Single-tenant professional-services offices (law firms, CPA/accounting practices) in the Greater Manchester NH area that buy recurring commercial cleaning',
       'cleaning_buyer',
+      'jacob@goanchorcleaning.com',
+      'Jacob Maynard',
+      'goanchorcleaning.com',
       true
     )
     ON CONFLICT (id) DO UPDATE SET
@@ -291,6 +295,9 @@ async function ensureClientArchitecture() {
       verticals = EXCLUDED.verticals,
       target_clients = EXCLUDED.target_clients,
       scoring_profile = EXCLUDED.scoring_profile,
+      sender_email = EXCLUDED.sender_email,
+      sender_name = EXCLUDED.sender_name,
+      sending_domain = EXCLUDED.sending_domain,
       active = true
   `);
   await pool.query(`

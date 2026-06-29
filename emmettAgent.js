@@ -8,11 +8,18 @@ const { recalculateICP } = require('./utils/icpScoring');
 const { invalidOutreachEmailReason } = require('./utils/emailGuard');
 const { normalizeRootDomain, rootDomainFromEmail } = require('./utils/brevoEvents');
 const { AI_TELL_PHRASES } = require('./utils/voiceRules');
+const { renderTemplate } = require('./utils/templateMerge');
+const { ANCHOR_DRAFT_SEQUENCES } = require('./utils/anchorEmailTemplates');
 const { reportAgentRun } = require('./utils/agentObservability');
+const {
+  evaluateSendingReadiness,
+  exactSequenceName,
+  getBrevoState,
+} = require('./utils/sendingReadiness');
 
 const AGENT_NAME = 'emmett';
-let FROM_EMAIL = 'jacob@gopulseforge.com';
-let FROM_NAME = 'Jacob Maynard';
+let FROM_EMAIL = null;
+let FROM_NAME = null;
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
 let MAIL_TRANSPORTER = null;
@@ -184,6 +191,7 @@ async function checkSendingDomainHealth(sendingDomain) {
 
 // Email sequence definitions — reply-based CTAs only (no external or Calendly links in bodies)
 const SEQUENCES = {
+  ...ANCHOR_DRAFT_SEQUENCES,
   mshi_property_management: [
     {
       day: 0,
@@ -987,23 +995,7 @@ gopulseforge.com`
 const WARM_STEP = SEQUENCES.cleaning.find(step => step.day === 4);
 
 function fillTemplate(template, prospect) {
-  const rawName = prospect.first_name || prospect.name?.split(' ')[0] || '';
-  const firstName = (rawName && rawName !== '—') ? rawName : 'there';
-
-  let businessName = prospect.company || '';
-  if (!businessName) {
-    const fromNotes = prospect.notes?.split('—')[0]?.trim() || '';
-    // Clean domain-style names
-    businessName = fromNotes
-      .replace(/\.(com|net|org|io|us)$/i, '')
-      .replace(/^(www\.)/i, '')
-      .trim();
-  }
-  if (!businessName || businessName.length < 4) businessName = 'your business';
-
-  return template
-    .replace(/{{first_name}}/g, firstName)
-    .replace(/{{business_name}}/g, businessName);
+  return renderTemplate(template, prospect, prospect.company_fields);
 }
 
 function getDefaultSmtpConfig() {
@@ -1247,6 +1239,22 @@ async function completeEmailSendLog(logId, action, payload, status = 'completed'
   `, [action, status, JSON.stringify(payload), logId, CLIENT_ID]);
 }
 
+async function logSendingReadinessBlocked(readiness, stage) {
+  const failureCodes = readiness.failures.map(failure => failure.code);
+  console.error(
+    `[Emmett] SEND BLOCKED at ${stage} for prospect ${readiness.prospect_id}: ${failureCodes.join(', ')}`
+  );
+  await db.logAgentAction(
+    AGENT_NAME,
+    'sending_readiness_blocked',
+    readiness.prospect_id,
+    null,
+    { ...readiness, stage },
+    'failed',
+    readiness.failures.map(failure => failure.message).join(' | ')
+  );
+}
+
 async function getProspectsForEmail(options = {}) {
   const pool = require('./db');
   const targetVertical = options.targetVertical || options.target_vertical || null;
@@ -1262,6 +1270,7 @@ async function getProspectsForEmail(options = {}) {
     SELECT
       p.*,
       c.name as company,
+      row_to_json(c) AS company_fields,
       COALESCE(email_stats.outbound_email_count, 0)::int AS outbound_email_count,
       email_stats.last_touchpoint_at
     FROM prospects p
@@ -1286,7 +1295,7 @@ async function getProspectsForEmail(options = {}) {
     AND p.email NOT LIKE '%@example.com'
     AND p.do_not_contact IS NOT TRUE
     AND (
-      p.email_status IN ('valid', 'role')
+      p.email_status IN ('valid', 'verified', 'role')
       OR (p.email_status = 'unverified_legacy' AND p.status = 'contacted')
     )
     AND ($2::text IS NULL OR LOWER(COALESCE(p.vertical, '')) = LOWER($2::text))
@@ -1384,13 +1393,8 @@ async function recalcStalledNoResponseProspects() {
 }
 
 function getSequenceForProspect(prospect) {
-  const vertical = (prospect.vertical || '').toLowerCase();
-  if (Number(prospect.client_id) === 2) {
-    if (vertical === 'property_management') return 'mshi_property_management';
-    if (vertical === 'probate_attorney') return 'mshi_probate_attorney';
-    if (vertical === 'investor_flipper') return 'mshi_investor_flipper';
-    return 'mshi';
-  }
+  const exactSequence = exactSequenceName(CLIENT_CONFIG || { id: CLIENT_ID }, prospect, SEQUENCES);
+  if (!exactSequence) return null;
 
   const lastTouchpointAt = prospect.last_touchpoint_at ? new Date(prospect.last_touchpoint_at) : null;
   const daysSinceLastTouchpoint = lastTouchpointAt
@@ -1404,43 +1408,7 @@ function getSequenceForProspect(prospect) {
   ) {
     return 're_engagement';
   }
-
-  if (
-    vertical === 'home_renovation' ||
-    vertical === 'decks' ||
-    vertical === 'siding' ||
-    vertical === 'exterior_remodeling' ||
-    vertical === 'interior_renovation' ||
-    vertical === 'emergency_repair' ||
-    vertical === 'windows'
-  ) {
-    return 'home_renovation';
-  }
-  if (vertical.includes('med') || vertical.includes('aesthetic') || vertical.includes('botox') || vertical.includes('laser')) {
-    return 'med_spa';
-  }
-  if (vertical.includes('salon') || vertical.includes('hair') || vertical.includes('spa') || vertical.includes('barber')) {
-    return 'salon';
-  }
-  if (vertical.includes('restaurant') || vertical.includes('cafe') || vertical.includes('diner')) {
-    return 'restaurant';
-  }
-  if (vertical.includes('fitness') || vertical.includes('gym') || vertical.includes('yoga') || vertical.includes('pilates') || vertical.includes('studio') || vertical.includes('barre')) {
-    return 'fitness';
-  }
-  if (vertical.includes('property') || vertical.includes('management') || vertical.includes('millcity')) {
-    return 'property';
-  }
-  if (vertical.includes('landscap') || vertical.includes('lawn')) {
-    return 'landscaping';
-  }
-  if (vertical.includes('home') || vertical.includes('services') || vertical.includes('hvac') || vertical.includes('plumb') || vertical.includes('electric') || vertical.includes('handyman')) {
-    return 'home_services';
-  }
-  if (vertical.includes('auto') || vertical.includes('repair') || vertical.includes('mechanic') || vertical.includes('car')) {
-    return 'auto';
-  }
-  return 'cleaning';
+  return exactSequence;
 }
 
 async function getNextSequenceStep(prospect) {
@@ -1481,7 +1449,7 @@ async function getNextSequenceStep(prospect) {
 
   const emailsSent = res.rows.length;
   const sequence = SEQUENCES[sequenceName];
-
+  if (!sequence) return null;
 
   if (emailsSent >= sequence.length) {
     console.log('Sequence complete');
@@ -1591,12 +1559,13 @@ async function run(context = {}) {
   console.log('\nEmmett agent running...\n');
   CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
   if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
-  FROM_EMAIL = CLIENT_CONFIG.sender_email || 'jacob@gopulseforge.com';
-  FROM_NAME = CLIENT_CONFIG.sender_name || 'Jacob Maynard';
+  FROM_EMAIL = CLIENT_CONFIG.sender_email;
+  FROM_NAME = CLIENT_CONFIG.sender_name;
   MAIL_TRANSPORTER = createMailTransporter();
-  console.log(`Sending as: ${FROM_NAME} <${FROM_EMAIL}>`);
+  console.log(`Configured sender: ${FROM_NAME || '(missing)'} <${FROM_EMAIL || '(missing)'}>`);
 
-  const sendingDomain = normalizeSendingDomain(CLIENT_CONFIG.sending_domain || FROM_EMAIL);
+  const sendingDomain = normalizeSendingDomain(CLIENT_CONFIG.sending_domain);
+  const brevoState = await getBrevoState(CLIENT_CONFIG);
   const domainHealth = await checkSendingDomainHealth(sendingDomain);
   if (domainHealth.status === 'halted') {
     console.error(`[Emmett] Sends halted. Resolve the Emmett blocker before restarting sends.`);
@@ -1687,41 +1656,17 @@ async function run(context = {}) {
 
     console.log('Processing prospect:', prospect.first_name, prospect.email);
 
-    // Per-prospect DNC check (safety net in case status changed since query)
-    const pool2 = require('./db');
-    const dncCheck = await pool2.query(
-      'SELECT do_not_contact, email_status, status FROM prospects WHERE id = $1 AND client_id = $2', [prospect.id, CLIENT_ID]
-    );
-    if (dncCheck.rows[0]?.do_not_contact) {
-      console.log(`Skipping ${prospect.email} because do_not_contact is true`);
-      continue;
-    }
-
-    const safeEmailStatus = ['valid', 'role'].includes(dncCheck.rows[0]?.email_status)
-      || (dncCheck.rows[0]?.email_status === 'unverified_legacy' && dncCheck.rows[0]?.status === 'contacted');
-    if (!safeEmailStatus) {
-      console.log(`Skipping ${prospect.email} because email_status is not valid`);
-      await db.logAgentAction(
-        AGENT_NAME,
-        'email_skipped',
-        prospect.id,
-        null,
-        { reason: 'email_status_not_valid', email_status: dncCheck.rows[0]?.email_status || null, prospect_id: prospect.id, client_id: prospect.client_id },
-        'success'
-      );
-      continue;
-    }
-
-    if (prospect.verified_at != null && prospect.email_verified === false) {
-      console.log(`Skipping ${prospect.email} because email is not verified`);
-      await db.logAgentAction(
-        AGENT_NAME,
-        'email_skipped',
-        prospect.id,
-        null,
-        { reason: 'unverified', prospect_id: prospect.id, client_id: prospect.client_id },
-        'success'
-      );
+    const readiness = await evaluateSendingReadiness({
+      client: CLIENT_CONFIG,
+      prospect,
+      sequenceCatalog: SEQUENCES,
+      pool: require('./db'),
+      brevoState,
+      assignedSequenceName: getSequenceForProspect(prospect),
+    });
+    if (!readiness.sendable) {
+      skipped++;
+      await logSendingReadinessBlocked(readiness, 'prospect_evaluation');
       continue;
     }
 
@@ -1785,8 +1730,41 @@ async function run(context = {}) {
     }
 
     const activeStep = useWarm ? WARM_STEP : step;
-    const subject = fillTemplate(activeStep.subject, prospect);
-    let body      = fillTemplate(activeStep.body,    prospect);
+    const renderedSubject = fillTemplate(activeStep.subject, prospect);
+    const renderedBody = fillTemplate(activeStep.body, prospect);
+    if (!renderedSubject.ok || !renderedBody.ok) {
+      const unknownTokens = [...new Set([
+        ...renderedSubject.unknownTokens,
+        ...renderedBody.unknownTokens,
+      ])];
+      const missingTokens = [...new Set([
+        ...renderedSubject.missingRequiredTokens,
+        ...renderedBody.missingRequiredTokens,
+      ])];
+      await logSendingReadinessBlocked({
+        sendable: false,
+        client_id: CLIENT_ID,
+        prospect_id: prospect.id,
+        sequence: sequenceName,
+        checks: [],
+        failures: [
+          ...(unknownTokens.length ? [{
+            code: 'template_tokens_known',
+            message: `Template references unknown token(s): ${unknownTokens.join(', ')}.`,
+            details: { unknown_tokens: unknownTokens },
+          }] : []),
+          ...(missingTokens.length ? [{
+            code: 'template_required_tokens_present',
+            message: `Required template token(s) are empty: ${missingTokens.join(', ')}.`,
+            details: { missing_tokens: missingTokens },
+          }] : []),
+        ],
+      }, 'template_render');
+      skipped++;
+      continue;
+    }
+    const subject = renderedSubject.output;
+    let body = renderedBody.output;
     body = stripForbiddenMshiCopy(body, prospect);
     const aiTellPhrases = findAiTellPhrases(`${subject}\n${body}`);
     if (aiTellPhrases.length) {
@@ -1826,6 +1804,20 @@ async function run(context = {}) {
       from_email: FROM_EMAIL,
       from_name: FROM_NAME,
     };
+    // Re-check live database and Brevo state at the final boundary. Nothing
+    // capable of sending runs after a failed result.
+    const finalReadiness = await evaluateSendingReadiness({
+      client: CLIENT_CONFIG,
+      prospect,
+      sequenceCatalog: SEQUENCES,
+      pool: require('./db'),
+      assignedSequenceName: sequenceName,
+    });
+    if (!finalReadiness.sendable) {
+      skipped++;
+      await logSendingReadinessBlocked(finalReadiness, 'pre_send');
+      continue;
+    }
     const sendLogId = await createEmailSendLog(prospect, logPayload);
     attempts++;
     const result = await sendEmail(
