@@ -1,5 +1,6 @@
 require('dotenv').config();
 const pool = require('./db');
+const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('./utils/businessNameShort');
 
 function normalizeDomain(value) {
   const raw = String(value || '').trim();
@@ -32,6 +33,7 @@ function parseCompanyNotes(notes) {
 }
 
 async function ensureCompanyColumns() {
+  await ensureBusinessNameShortColumns(pool);
   await pool.query(`
     ALTER TABLE companies
     ADD COLUMN IF NOT EXISTS domain TEXT
@@ -48,23 +50,41 @@ async function findOrCreateCompany({ name, domain, clientId }) {
     [name, clientId]
   );
   if (existing.rows.length) {
+    const shortName = deriveBusinessNameShort(name);
     await pool.query(
       `UPDATE companies
           SET domain = COALESCE(domain, $1),
+              business_name_short = COALESCE(NULLIF(business_name_short, ''), $2),
+              business_name_short_confidence = COALESCE(NULLIF(business_name_short_confidence, ''), $3),
+              business_name_short_flags = CASE
+                WHEN COALESCE(array_length(business_name_short_flags, 1), 0) = 0 THEN $4::text[]
+                ELSE business_name_short_flags
+              END,
               updated_at = NOW()
-        WHERE id = $2
-          AND client_id = $3`,
-      [domain, existing.rows[0].id, clientId]
+        WHERE id = $5
+          AND client_id = $6`,
+      [
+        domain,
+        shortName.business_name_short,
+        shortName.confidence,
+        shortName.flags,
+        existing.rows[0].id,
+        clientId,
+      ]
     );
     return existing.rows[0].id;
   }
 
+  const shortName = deriveBusinessNameShort(name);
   const inserted = await pool.query(
-    `INSERT INTO companies (name, domain, client_id, created_at)
-     VALUES ($1, $2, $3, NOW())
+    `INSERT INTO companies (
+       name, business_name_short, business_name_short_confidence, business_name_short_flags,
+       domain, client_id, created_at
+     )
+     VALUES ($1, $2, $3, $4::text[], $5, $6, NOW())
      ON CONFLICT DO NOTHING
      RETURNING id`,
-    [name, domain, clientId]
+    [name, shortName.business_name_short, shortName.confidence, shortName.flags, domain, clientId]
   );
   if (inserted.rows.length) return inserted.rows[0].id;
 

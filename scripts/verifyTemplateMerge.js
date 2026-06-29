@@ -4,6 +4,7 @@ const pool = require('../db');
 const { ANCHOR_DRAFT_SEQUENCES } = require('../utils/anchorEmailTemplates');
 const { renderTemplate } = require('../utils/templateMerge');
 const { evaluateSendingReadiness } = require('../utils/sendingReadiness');
+const { deriveBusinessNameShort } = require('../utils/businessNameShort');
 
 const ANCHOR_CLIENT_ID = 10;
 const ANCHOR_SEQUENCE_MAP = {
@@ -24,8 +25,12 @@ function legacyFillTemplate(template, prospect) {
       .trim();
   }
   if (!businessName || businessName.length < 4) businessName = 'your business';
+  const businessNameShort = prospect.company_fields?.business_name_short
+    || deriveBusinessNameShort(businessName).business_name_short
+    || businessName;
   return template
     .replace(/{{first_name}}/g, firstName)
+    .replace(/{{business_name_short}}/g, businessNameShort)
     .replace(/{{business_name}}/g, businessName);
 }
 

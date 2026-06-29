@@ -1,5 +1,6 @@
 const pool = require('./db');
 const { getRuntimeClientId } = require('./utils/clientContext');
+const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('./utils/businessNameShort');
 
 let pendingCommentPublishSchemaPromise;
 
@@ -111,13 +112,18 @@ async function addProspect(data) {
 // Add a company
 async function addCompany(data) {
   const clientId = getRuntimeClientId(data);
+  await ensureBusinessNameShortColumns(pool);
+  const shortName = deriveBusinessNameShort(data.name);
   const res = await pool.query(
     `INSERT INTO companies 
-      (name, industry, size, location, website, icp_score, tech_stack, client_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      (name, business_name_short, business_name_short_confidence, business_name_short_flags, industry, size, location, website, icp_score, tech_stack, client_id)
+     VALUES ($1, $2, $3, $4::text[], $5, $6, $7, $8, $9, $10, $11)
      RETURNING id`,
     [
       data.name,
+      shortName.business_name_short,
+      shortName.confidence,
+      shortName.flags,
       data.industry || null,
       data.size || null,
       data.location || null,

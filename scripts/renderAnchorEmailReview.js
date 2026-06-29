@@ -6,13 +6,14 @@ const pool = require('../db');
 const { ANCHOR_DRAFT_SEQUENCES } = require('../utils/anchorEmailTemplates');
 const { renderTemplate } = require('../utils/templateMerge');
 const { CLIENT_SEQUENCE_MAP, getBrevoState } = require('../utils/sendingReadiness');
+const { ensureBusinessNameShortColumns } = require('../utils/businessNameShort');
 
 const CLIENT_ID = 10;
 const OUTPUT_PATH = path.join(__dirname, '..', 'docs', 'ANCHOR_EMAIL_TEMPLATE_REVIEW.md');
 const VERIFIED_EMAIL_STATUSES = new Set(['valid', 'verified']);
 
 function lineBreaks(text) {
-  return String(text || '').replace(/\n/g, '  \n');
+  return String(text || '');
 }
 
 function displayName(prospect) {
@@ -55,6 +56,23 @@ function renderStep(step, prospect) {
   };
 }
 
+function renderWithFullBusinessName(step, prospect) {
+  return renderTemplate(
+    step.body.replace(/{{business_name_short}}/g, '{{business_name}}'),
+    prospect,
+    prospect.company_fields
+  );
+}
+
+function renderedLinesContaining(text, needle) {
+  const target = String(needle || '').trim();
+  if (!target) return [];
+  return String(text || '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.includes(target));
+}
+
 function brevoSummary(brevoState) {
   const domainOk = brevoState.domain?.verified === true && brevoState.domain?.authenticated === true;
   const senderOk = brevoState.sender?.active === true;
@@ -69,6 +87,7 @@ function brevoSummary(brevoState) {
 }
 
 async function main() {
+  await ensureBusinessNameShortColumns(pool);
   const clientResult = await pool.query(`
     SELECT id, name, business_name, active, enabled_agents,
            sender_email, sender_name, sending_domain
@@ -78,6 +97,13 @@ async function main() {
   const client = clientResult.rows[0];
   if (!client) throw new Error(`Client ${CLIENT_ID} not found`);
   const brevoState = await getBrevoState(client);
+
+  const companyResult = await pool.query(`
+    SELECT id, name, business_name_short, business_name_short_confidence, business_name_short_flags
+    FROM companies
+    WHERE client_id = $1
+    ORDER BY name ASC, id ASC
+  `, [CLIENT_ID]);
 
   const prospectResult = await pool.query(`
     SELECT p.*, row_to_json(c) AS company_fields, c.name AS company
@@ -108,15 +134,57 @@ async function main() {
   out.push(`Rendered ${renderable.length} real prospects with real first names, verified email, mapped vertical, and non-DNC status. Evaluated ${prospects.length} setter-visible client 10 prospects with no LIMIT.`);
   out.push('');
 
+  out.push('## Client 10 business-name short values');
+  out.push('');
+  out.push('All client 10 companies were evaluated with no LIMIT.');
+  out.push('');
+  for (const company of companyResult.rows) {
+    const flags = company.business_name_short_flags?.length ? `; flags: ${company.business_name_short_flags.join(', ')}` : '';
+    out.push(`- ${company.name} -> ${company.business_name_short || company.name} (${company.business_name_short_confidence || 'fallback'}${flags})`);
+  }
+  out.push('');
+
+  out.push('## In-sentence before/after checks');
+  out.push('');
+  out.push('Before uses the prior full-name merge. After uses `business_name_short`.');
+  out.push('');
+  for (const prospect of renderable) {
+    const sequenceName = CLIENT_SEQUENCE_MAP[CLIENT_ID][prospect.vertical];
+    const sequence = ANCHOR_DRAFT_SEQUENCES[sequenceName];
+    const shortName = prospect.company_fields?.business_name_short || prospect.company;
+    const comparisons = [];
+    for (const step of sequence) {
+      if (!step.body.includes('{{business_name_short}}')) continue;
+      const before = renderWithFullBusinessName(step, prospect);
+      const after = renderStep(step, prospect);
+      comparisons.push({
+        day: step.day,
+        before: before.ok ? renderedLinesContaining(before.output, prospect.company) : [],
+        after: renderedLinesContaining(after.body.replace(/  \n/g, '\n'), shortName),
+      });
+    }
+    out.push(`### ${prospect.company}`);
+    out.push('');
+    out.push(`Short name: ${shortName}`);
+    out.push('');
+    for (const comparison of comparisons) {
+      out.push(`Day ${comparison.day}:`);
+      for (const line of comparison.before) out.push(`- Before: ${line}`);
+      for (const line of comparison.after) out.push(`- After: ${line}`);
+    }
+    out.push('');
+  }
+
   for (const prospect of renderable) {
     const sequenceName = CLIENT_SEQUENCE_MAP[CLIENT_ID][prospect.vertical];
     const sequence = ANCHOR_DRAFT_SEQUENCES[sequenceName];
     out.push(`## ${prospect.company}`);
     out.push('');
-    out.push(`Prospect: ${displayName(prospect)}  `);
-    out.push(`Email: ${prospect.email}  `);
-    out.push(`Vertical: ${prospect.vertical}  `);
-    out.push(`Sequence: ${sequenceName}  `);
+    out.push(`Prospect: ${displayName(prospect)}`);
+    out.push(`Email: ${prospect.email}`);
+    out.push(`Vertical: ${prospect.vertical}`);
+    out.push(`Business name short: ${prospect.company_fields?.business_name_short || prospect.company}`);
+    out.push(`Sequence: ${sequenceName}`);
     out.push('Readiness note: renderable, but not sendable while Brevo sender is inactive and Emmett is not enabled.');
     out.push('');
 

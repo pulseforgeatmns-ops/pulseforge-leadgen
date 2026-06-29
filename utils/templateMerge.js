@@ -1,5 +1,6 @@
 const TOKEN_PATTERN = /{{\s*([^{}]*?)\s*}}/g;
 const FIELD_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const { deriveBusinessNameShort } = require('./businessNameShort');
 
 function isEmptyTokenValue(value) {
   return value == null || (typeof value === 'string' && (!value.trim() || value.trim() === '—'));
@@ -45,6 +46,14 @@ function legacyBusinessName(prospect, company) {
   return !isEmptyTokenValue(fromNotes) && fromNotes.length >= 4 ? fromNotes : 'your business';
 }
 
+function legacyBusinessNameShort(prospect, company) {
+  if (!isEmptyTokenValue(company?.business_name_short)) return company.business_name_short;
+  if (!isEmptyTokenValue(prospect?.business_name_short)) return prospect.business_name_short;
+  const businessName = legacyBusinessName(prospect, company);
+  const derived = deriveBusinessNameShort(businessName);
+  return isEmptyTokenValue(derived.business_name_short) ? businessName : derived.business_name_short;
+}
+
 function resolveTokenField(field, prospect = {}, companyFields) {
   const company = companyFields || prospect.company_fields || {};
 
@@ -55,6 +64,9 @@ function resolveTokenField(field, prospect = {}, companyFields) {
   }
   if (field === 'business_name') {
     return { exists: true, value: legacyBusinessName(prospect, company) };
+  }
+  if (field === 'business_name_short') {
+    return { exists: true, value: legacyBusinessNameShort(prospect, company) };
   }
   if (Object.prototype.hasOwnProperty.call(prospect, field)) {
     return { exists: true, value: prospect[field] };

@@ -11,7 +11,7 @@ Clients form an opinion of a law office before anyone opens a file. Reception, c
 
 Legal offices have another concern too. Access instructions, document areas, and off-limits spaces can't be treated like an ordinary handoff. Anchor Cleaning works from a clear scope, with one person accountable when something needs attention.
 
-Would a short walkthrough of {{business_name}} be useful?
+Would a short walkthrough of {{business_name_short}} be useful?
 
 Jacob Maynard
 Anchor Cleaning
@@ -27,7 +27,7 @@ A missed wastebasket sounds minor. It feels different when a client is sitting b
 
 The point of a cleaning plan isn't a longer checklist. It's knowing who owns the result, what spaces need special handling, and how a miss gets corrected without three calls.
 
-Is that accountability already clear with the crew cleaning {{business_name}}?
+Is that accountability already clear with the crew cleaning {{business_name_short}}?
 
 Jacob Maynard
 Anchor Cleaning
@@ -43,7 +43,7 @@ When an office looks right, nobody discusses the cleaning. Good.
 
 When it doesn't, someone at the firm loses time finding the crew, repeating the standard, and checking the correction. Anchor keeps that responsibility in one place.
 
-Would you be open to comparing your current scope with what we'd recommend for {{business_name}}?
+Would you be open to comparing your current scope with what we'd recommend for {{business_name_short}}?
 
 Jacob Maynard
 Anchor Cleaning
@@ -75,7 +75,7 @@ During deadline weeks, nobody at an accounting firm should be checking whether t
 
 That work needs to happen predictably. Anchor Cleaning uses a clear scope and one accountable point of contact, so a cleaning issue doesn't become another item on the office manager's list.
 
-Would a walkthrough of {{business_name}} be worth 10 minutes?
+Would a walkthrough of {{business_name_short}} be worth 10 minutes?
 
 Jacob Maynard
 Anchor Cleaning
@@ -89,7 +89,7 @@ jacob@goanchorcleaning.com
 
 Busy season changes the building. Longer hours, more takeout, fuller bins, and more client traffic put extra pressure on a cleaning routine that looked fine in August.
 
-The standard shouldn't wobble when {{business_name}} gets busy. The scope should be clear before the deadline rush, with one person responsible for the result.
+The standard shouldn't wobble when {{business_name_short}} gets busy. The scope should be clear before the deadline rush, with one person responsible for the result.
 
 Does your current plan adjust when the office hours stretch?
 
@@ -107,7 +107,7 @@ Reliable cleaning is quiet. The team arrives to a reset office and gets back to 
 
 Unreliable cleaning creates inspections, reminder emails, and awkward Monday mornings. Anchor's accountability is simple: the standard is written down, and you know exactly who owns the correction.
 
-Would it help to compare that approach with the current setup at {{business_name}}?
+Would it help to compare that approach with the current setup at {{business_name_short}}?
 
 Jacob Maynard
 Anchor Cleaning
@@ -121,7 +121,7 @@ jacob@goanchorcleaning.com
 
 The easiest time to fix a shaky cleaning arrangement is before the office starts running late again.
 
-I can put together a straightforward scope for {{business_name}} now, so you have a dependable option ready before the next filing deadline.
+I can put together a straightforward scope for {{business_name_short}} now, so you have a dependable option ready before the next filing deadline.
 
 Would that be useful?
 

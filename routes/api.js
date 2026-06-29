@@ -22,6 +22,7 @@ const {
 } = require('../utils/prospectCounts');
 const { setSetterVisibility } = require('../utils/setterVisibility');
 const { ensureTieredEnrichmentSchema } = require('../utils/tieredEnrichmentSchema');
+const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('../utils/businessNameShort');
 
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
@@ -733,18 +734,39 @@ router.put('/api/prospects/:id', requireOperator, async (req, res) => {
     ) : undefined;
     const locationChanged = location !== undefined && location !== (current.company_location || null);
 
+    if (companyChanged || locationChanged) {
+      await ensureBusinessNameShortColumns(pool);
+    }
+
     await client.query('BEGIN');
 
     if (companyChanged || locationChanged) {
       const companyName = has('company') ? cleanNullable(req.body.company, 220) : current.company_name;
       const companyNameForWrite = companyName || 'Unknown Company';
       const companyLocation = location !== undefined ? location : current.company_location;
+      const shortName = deriveBusinessNameShort(companyNameForWrite);
       if (current.company_id) {
         const setParts = [];
         const companyValues = [];
         if (companyChanged) {
           companyValues.push(companyNameForWrite);
           setParts.push(`name = $${companyValues.length}`);
+          companyValues.push(shortName.business_name_short);
+          setParts.push(`business_name_short = $${companyValues.length}`);
+          companyValues.push(shortName.confidence);
+          setParts.push(`business_name_short_confidence = $${companyValues.length}`);
+          companyValues.push(shortName.flags);
+          setParts.push(`business_name_short_flags = $${companyValues.length}::text[]`);
+        } else {
+          companyValues.push(shortName.business_name_short);
+          setParts.push(`business_name_short = COALESCE(NULLIF(business_name_short, ''), $${companyValues.length})`);
+          companyValues.push(shortName.confidence);
+          setParts.push(`business_name_short_confidence = COALESCE(NULLIF(business_name_short_confidence, ''), $${companyValues.length})`);
+          companyValues.push(shortName.flags);
+          setParts.push(`business_name_short_flags = CASE
+            WHEN COALESCE(array_length(business_name_short_flags, 1), 0) = 0 THEN $${companyValues.length}::text[]
+            ELSE business_name_short_flags
+          END`);
         }
         if (locationChanged) {
           companyValues.push(companyLocation);
@@ -760,10 +782,21 @@ router.put('/api/prospects/:id', requireOperator, async (req, res) => {
         }
       } else if (companyName || companyLocation) {
         const companyRes = await client.query(`
-          INSERT INTO companies (name, industry, location, client_id)
-          VALUES ($1, $2, $3, $4)
+          INSERT INTO companies (
+            name, business_name_short, business_name_short_confidence, business_name_short_flags,
+            industry, location, client_id
+          )
+          VALUES ($1, $2, $3, $4::text[], $5, $6, $7)
           RETURNING id
-        `, [companyNameForWrite, req.body.vertical || current.vertical || null, companyLocation || null, clientId]);
+        `, [
+          companyNameForWrite,
+          shortName.business_name_short,
+          shortName.confidence,
+          shortName.flags,
+          req.body.vertical || current.vertical || null,
+          companyLocation || null,
+          clientId,
+        ]);
         addProspectField('company_id', companyRes.rows[0].id);
       }
     }

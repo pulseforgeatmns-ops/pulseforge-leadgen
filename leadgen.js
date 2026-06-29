@@ -31,6 +31,7 @@ const { normalizeVertical } = require('./utils/normalize');
 const { SCOUT_SKIP_REASONS, ensureScoutSkipLogTable, logScoutSkip } = require('./utils/scoutSkipLog');
 const { reportAgentRun } = require('./utils/agentObservability');
 const { setSetterVisibility } = require('./utils/setterVisibility');
+const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('./utils/businessNameShort');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -1627,6 +1628,8 @@ function normalizeDomain(value) {
 }
 
 async function findOrCreateCompany({ name, domain, lead }) {
+  await ensureBusinessNameShortColumns(pool);
+  const shortName = deriveBusinessNameShort(name);
   const existing = await pool.query(
     `SELECT id
        FROM companies
@@ -1640,20 +1643,47 @@ async function findOrCreateCompany({ name, domain, lead }) {
       `UPDATE companies
           SET domain = COALESCE(domain, $1),
               website = COALESCE(website, $2),
+              business_name_short = COALESCE(NULLIF(business_name_short, ''), $3),
+              business_name_short_confidence = COALESCE(NULLIF(business_name_short_confidence, ''), $4),
+              business_name_short_flags = CASE
+                WHEN COALESCE(array_length(business_name_short_flags, 1), 0) = 0 THEN $5::text[]
+                ELSE business_name_short_flags
+              END,
               updated_at = NOW()
-        WHERE id = $3
-          AND client_id = $4`,
-      [domain, lead.url || null, existing.rows[0].id, CONFIG.clientId]
+        WHERE id = $6
+          AND client_id = $7`,
+      [
+        domain,
+        lead.url || null,
+        shortName.business_name_short,
+        shortName.confidence,
+        shortName.flags,
+        existing.rows[0].id,
+        CONFIG.clientId,
+      ]
     );
     return existing.rows[0].id;
   }
 
   const inserted = await pool.query(
-    `INSERT INTO companies (name, domain, website, industry, location, client_id, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW())
+    `INSERT INTO companies (
+       name, business_name_short, business_name_short_confidence, business_name_short_flags,
+       domain, website, industry, location, client_id, created_at
+     )
+     VALUES ($1, $2, $3, $4::text[], $5, $6, $7, $8, $9, NOW())
      ON CONFLICT DO NOTHING
      RETURNING id`,
-    [name, domain, lead.url || null, CONFIG.industry || null, lead.address || CONFIG.location || null, CONFIG.clientId]
+    [
+      name,
+      shortName.business_name_short,
+      shortName.confidence,
+      shortName.flags,
+      domain,
+      lead.url || null,
+      CONFIG.industry || null,
+      lead.address || CONFIG.location || null,
+      CONFIG.clientId,
+    ]
   );
   if (inserted.rows.length) return inserted.rows[0].id;
 

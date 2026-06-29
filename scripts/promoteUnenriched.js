@@ -10,6 +10,7 @@ const { normalizeDomain, runEnrichmentChain, resolveEmailVerification } = requir
 const { ensureEmailVerificationColumns } = require('../utils/emailVerificationSchema');
 const { ensureScoutUnenrichedTable } = require('../utils/scoutUnenrichedSchema');
 const { normalizeVertical } = require('../utils/normalize');
+const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('../utils/businessNameShort');
 
 function parseArg(name) {
   const prefix = `--${name}=`;
@@ -40,19 +41,54 @@ async function findUnenrichedRecord({ domain, company }) {
 }
 
 async function findOrCreateCompanyForClient({ name, domain, websiteUrl, vertical, location, clientId }) {
+  await ensureBusinessNameShortColumns(pool);
+  const shortName = deriveBusinessNameShort(name);
   const existing = await pool.query(
     `SELECT id FROM companies
      WHERE client_id = $2 AND LOWER(TRIM(name)) = LOWER(TRIM($1))
      LIMIT 1`,
     [name, clientId]
   );
-  if (existing.rows.length) return existing.rows[0].id;
+  if (existing.rows.length) {
+    await pool.query(`
+      UPDATE companies
+      SET business_name_short = COALESCE(NULLIF(business_name_short, ''), $1),
+          business_name_short_confidence = COALESCE(NULLIF(business_name_short_confidence, ''), $2),
+          business_name_short_flags = CASE
+            WHEN COALESCE(array_length(business_name_short_flags, 1), 0) = 0 THEN $3::text[]
+            ELSE business_name_short_flags
+          END,
+          updated_at = NOW()
+      WHERE id = $4
+        AND client_id = $5
+    `, [
+      shortName.business_name_short,
+      shortName.confidence,
+      shortName.flags,
+      existing.rows[0].id,
+      clientId,
+    ]);
+    return existing.rows[0].id;
+  }
 
   const inserted = await pool.query(
-    `INSERT INTO companies (name, domain, website, industry, location, client_id, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW())
+    `INSERT INTO companies (
+       name, business_name_short, business_name_short_confidence, business_name_short_flags,
+       domain, website, industry, location, client_id, created_at
+     )
+     VALUES ($1, $2, $3, $4::text[], $5, $6, $7, $8, $9, NOW())
      RETURNING id`,
-    [name, domain, websiteUrl, vertical, location, clientId]
+    [
+      name,
+      shortName.business_name_short,
+      shortName.confidence,
+      shortName.flags,
+      domain,
+      websiteUrl,
+      vertical,
+      location,
+      clientId,
+    ]
   );
   return inserted.rows[0]?.id || null;
 }
