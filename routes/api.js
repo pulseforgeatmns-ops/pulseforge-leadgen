@@ -2575,7 +2575,18 @@ router.post('/api/run/:agent', requireOperator, async (req, res) => {
       }
 
       const result = agent === 'scout'
-        ? await mod.run({ client_id: clientId })
+        ? await mod.run({
+            client_id: clientId,
+            industry: req.body?.industry,
+            location: req.body?.location,
+            sourceMode: req.body?.sourceMode || req.body?.source_mode,
+            titleFilter: req.body?.titleFilter || req.body?.title_filter,
+            titleExclude: req.body?.titleExclude || req.body?.title_exclude,
+            sizeSignal: req.body?.sizeSignal || req.body?.size_signal,
+            dryRun: req.body?.dryRun ?? req.body?.dry_run,
+            maxRequests: req.body?.maxRequests || req.body?.max_requests,
+            pageDepth: req.body?.pageDepth || req.body?.page_depth,
+          })
         : agent === 'emmett'
           ? await mod.run({ client_id: clientId, triggered_by: 'dashboard' })
           : await mod.run({ client_id: clientId });

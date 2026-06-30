@@ -32,6 +32,9 @@ const { SCOUT_SKIP_REASONS, ensureScoutSkipLogTable, logScoutSkip } = require('.
 const { reportAgentRun } = require('./utils/agentObservability');
 const { setSetterVisibility } = require('./utils/setterVisibility');
 const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('./utils/businessNameShort');
+const { searchSerpApi } = require('./lib/serpapi');
+const { sourceLinkedInProspects } = require('./utils/linkedinSerpSource');
+const { ensureLinkedInScoutSchema } = require('./utils/linkedinScoutSchema');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -120,6 +123,21 @@ async function resolveScoutObservabilityStats(stats, runId, fallbackError = null
 
 function incrementBreakdown(breakdown, reason) {
   breakdown[reason] = (breakdown[reason] || 0) + 1;
+}
+
+function booleanValue(value, fallback = false) {
+  if (value == null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+}
+
+function positiveInteger(value, fallback, max = Number.MAX_SAFE_INTEGER) {
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, max) : fallback;
+}
+
+function normalizeSourceMode(value) {
+  return String(value || 'default').trim().toLowerCase() === 'linkedin' ? 'linkedin' : 'default';
 }
 
 function scoutDiscoveryMethod(lead) {
@@ -247,8 +265,16 @@ let CONFIG = {
   location:    sanitizeQueueLocation(args.location || 'Manchester NH'),
   jobTitle:    args.title     || 'owner',
   maxResults:  parseInt(args.max || '75'),
+  linkedinMaxResults: positiveInteger(args.max, 30, 100),
   minScore:    parseInt(args.minscore || '40'),
   mode:        args.mode      || 'both',     // smb | tech | both
+  sourceMode:  args['source-mode'] || args.sourceMode || 'default',
+  titleFilter: args['title-filter'] || args.titleFilter || args.title || 'owner|founder|ceo|president',
+  titleExclude: args['title-exclude'] || args.titleExclude || '',
+  sizeSignal:  args['size-signal'] || args.sizeSignal || '',
+  dryRun:      booleanValue(args['dry-run'] ?? args.dryRun, false),
+  maxRequests: positiveInteger(args['max-requests'] || args.maxRequests, 20, 100),
+  pageDepth:   positiveInteger(args['page-depth'] || args.pageDepth, 1, 10),
   outputCSV:   args.csv       !== 'false',
   outputSheet: args.sheet     !== 'false',
   sheetId:     args.sheetid   || process.env.GOOGLE_SHEET_ID || '',
@@ -727,43 +753,34 @@ async function searchGoogle(query, numResults = 10) {
 
   for (let page = 0; page < pages; page++) {
     if (results.length >= numResults) break;
-    try {
-      const res = await axios.get('https://serpapi.com/search', {
-        params: {
-          api_key: process.env.SERPAPI_KEY,
-          q: query,
-          num: 10,
-          start: page * 10,
-          engine: 'google',
-        }
-      });
-
-      const remaining = Math.max(numResults - results.length, 0);
-      const items = (res.data.organic_results || []).slice(0, remaining);
-      for (const item of items) {
-        const link = item.link || '';
-        const company = normalizeCompanyName(item.title);
-        // Capture facebook/instagram profile links so they can be attached to the
-        // matching business lead instead of being discarded as junk domains.
-        if (/facebook\.com/i.test(link)) {
-          socialLinks.push({ key: socialKey(company), facebook_url: link });
-          continue;
-        }
-        if (/instagram\.com/i.test(link)) {
-          socialLinks.push({ key: socialKey(company), instagram_url: link });
-          continue;
-        }
-        results.push({
-          company,
-          url:     extractDomain(item.link),
-          snippet: item.snippet,
-          source:  ['google'],
-        });
-        if (results.length >= numResults) break;
-      }
-    } catch (err) {
-      console.error('[SerpAPI] Error:', err.response?.data?.error || err.message);
+    const response = await searchSerpApi({ query, page, num: 10 });
+    if (response.error) {
+      console.error('[SerpAPI] Error:', response.error.message);
       break;
+    }
+
+    const remaining = Math.max(numResults - results.length, 0);
+    const items = response.organicResults.slice(0, remaining);
+    for (const item of items) {
+      const link = item.link || '';
+      const company = normalizeCompanyName(item.title);
+      // Capture facebook/instagram profile links so they can be attached to the
+      // matching business lead instead of being discarded as junk domains.
+      if (/facebook\.com/i.test(link)) {
+        socialLinks.push({ key: socialKey(company), facebook_url: link });
+        continue;
+      }
+      if (/instagram\.com/i.test(link)) {
+        socialLinks.push({ key: socialKey(company), instagram_url: link });
+        continue;
+      }
+      results.push({
+        company,
+        url:     extractDomain(item.link),
+        snippet: item.snippet,
+        source:  ['google'],
+      });
+      if (results.length >= numResults) break;
     }
   }
 
@@ -778,8 +795,8 @@ async function searchGoogle(query, numResults = 10) {
     }
   }
 
-      const skipDomains = ['facebook.com','instagram.com','yelp.com','twitter.com','linkedin.com','youtube.com'];
-      return results.filter(r => !skipDomains.some(s => r.url.includes(s)));
+  const skipDomains = ['facebook.com','instagram.com','yelp.com','twitter.com','linkedin.com','youtube.com'];
+  return results.filter(r => !skipDomains.some(s => r.url.includes(s)));
 }
 
 // Normalized key for fuzzy-matching company names across SerpAPI result types
@@ -1718,8 +1735,9 @@ function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
     if (argv[i].startsWith('--')) {
-      out[argv[i].slice(2)] = argv[i+1] || true;
-      i++;
+      const next = argv[i + 1];
+      out[argv[i].slice(2)] = next && !next.startsWith('--') ? next : true;
+      if (next && !next.startsWith('--')) i++;
     }
   }
   return out;
@@ -2015,6 +2033,190 @@ async function upsertScoutUnenriched({
     notes,
   ]);
   return 'inserted';
+}
+
+async function findOrCreateLinkedInCompany(record) {
+  const companyName = String(record.company || '').trim();
+  if (!companyName) return null;
+  const existing = await pool.query(`
+    SELECT id
+    FROM companies
+    WHERE client_id = $1 AND LOWER(BTRIM(name)) = LOWER(BTRIM($2))
+    ORDER BY created_at ASC
+    LIMIT 1
+  `, [CONFIG.clientId, companyName]);
+  if (existing.rows[0]) return existing.rows[0].id;
+
+  const shortName = deriveBusinessNameShort(companyName);
+  const inserted = await pool.query(`
+    INSERT INTO companies (
+      name, business_name_short, business_name_short_confidence, business_name_short_flags,
+      industry, location, client_id, created_at
+    ) VALUES ($1, $2, $3, $4::text[], $5, $6, $7, NOW())
+    RETURNING id
+  `, [
+    companyName,
+    shortName.business_name_short,
+    shortName.confidence,
+    shortName.flags,
+    CONFIG.industry || null,
+    record.linkedin_location || CONFIG.location || null,
+    CONFIG.clientId,
+  ]);
+  return inserted.rows[0]?.id || null;
+}
+
+async function findExistingLinkedInProspect(record) {
+  const byUrl = await pool.query(`
+    SELECT p.id, p.first_name, p.last_name, p.job_title, p.linkedin_url,
+           p.linkedin_headline, p.linkedin_location, p.employee_count_estimate
+    FROM prospects p
+    WHERE p.client_id = $1 AND p.linkedin_url = $2
+    LIMIT 1
+  `, [CONFIG.clientId, record.linkedin_url]);
+  if (byUrl.rows[0]) return { match: 'linkedin_url', row: byUrl.rows[0] };
+
+  if (!record.name || !record.company) return null;
+  const byComposite = await pool.query(`
+    SELECT p.id, p.first_name, p.last_name, p.job_title, p.linkedin_url,
+           p.linkedin_headline, p.linkedin_location, p.employee_count_estimate
+    FROM prospects p
+    JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+    WHERE p.client_id = $1
+      AND LOWER(BTRIM(CONCAT_WS(' ', p.first_name, p.last_name))) = LOWER(BTRIM($2))
+      AND LOWER(BTRIM(c.name)) = LOWER(BTRIM($3))
+    ORDER BY p.created_at ASC
+    LIMIT 1
+  `, [CONFIG.clientId, record.name, record.company]);
+  return byComposite.rows[0] ? { match: 'name_company', row: byComposite.rows[0] } : null;
+}
+
+function hasLinkedInEnrichment(existing, record) {
+  return [
+    ['first_name', record.first_name],
+    ['last_name', record.last_name],
+    ['job_title', record.job_title],
+    ['linkedin_url', record.linkedin_url],
+    ['linkedin_headline', record.linkedin_headline],
+    ['linkedin_location', record.linkedin_location],
+    ['employee_count_estimate', record.employee_count_estimate],
+  ].some(([field, value]) => value && !existing[field]);
+}
+
+async function saveLinkedInProspect(record, { dryRun = false } = {}) {
+  const existing = await findExistingLinkedInProspect(record);
+  if (existing) {
+    const enriched = hasLinkedInEnrichment(existing.row, record);
+    if (!dryRun && enriched) {
+      await pool.query(`
+        UPDATE prospects
+        SET first_name = COALESCE(NULLIF(first_name, ''), NULLIF($1, '')),
+            last_name = COALESCE(NULLIF(last_name, ''), NULLIF($2, '')),
+            job_title = COALESCE(NULLIF(job_title, ''), NULLIF($3, '')),
+            linkedin_url = COALESCE(NULLIF(linkedin_url, ''), NULLIF($4, '')),
+            linkedin_headline = COALESCE(NULLIF(linkedin_headline, ''), NULLIF($5, '')),
+            linkedin_location = COALESCE(NULLIF(linkedin_location, ''), NULLIF($6, '')),
+            employee_count_estimate = COALESCE(NULLIF(employee_count_estimate, ''), NULLIF($7, '')),
+            linkedin_source_query = $8::jsonb,
+            updated_at = NOW()
+        WHERE id = $9 AND client_id = $10
+      `, [
+        record.first_name, record.last_name, record.job_title, record.linkedin_url,
+        record.linkedin_headline, record.linkedin_location, record.employee_count_estimate,
+        JSON.stringify(record.linkedin_source_query), existing.row.id, CONFIG.clientId,
+      ]);
+    }
+    return { action: enriched ? 'enriched_existing' : 'deduped', match: existing.match, prospectId: existing.row.id };
+  }
+
+  if (dryRun) return { action: 'would_write', match: null, prospectId: null };
+  const companyId = await findOrCreateLinkedInCompany(record);
+  const inserted = await pool.query(`
+    INSERT INTO prospects (
+      company_id, first_name, last_name, job_title, linkedin_url, linkedin_headline,
+      linkedin_location, linkedin_source_query, employee_count_estimate, source, status,
+      vertical, client_id, discovery_method, preferred_channel, decision_maker
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, 'scout', 'cold', $10, $11, 'linkedin_serpapi', 'linkedin', true)
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  `, [
+    companyId, record.first_name, record.last_name, record.job_title, record.linkedin_url,
+    record.linkedin_headline, record.linkedin_location, JSON.stringify(record.linkedin_source_query),
+    record.employee_count_estimate, CONFIG.vertical, CONFIG.clientId,
+  ]);
+  if (inserted.rows[0]) return { action: 'written', match: null, prospectId: inserted.rows[0].id };
+  const raced = await findExistingLinkedInProspect(record);
+  return { action: 'deduped', match: raced?.match || 'insert_conflict', prospectId: raced?.row?.id || null };
+}
+
+async function runLinkedInSourcing({ runId = null } = {}) {
+  await ensureLinkedInScoutSchema();
+  await ensureBusinessNameShortColumns(pool);
+  const sourced = await sourceLinkedInProspects({
+    vertical: CONFIG.vertical,
+    geo: CONFIG.location,
+    titleFilter: CONFIG.titleFilter,
+    titleExclude: CONFIG.titleExclude,
+    sizeSignal: CONFIG.sizeSignal,
+    maxRequests: CONFIG.maxRequests,
+    pageDepth: CONFIG.pageDepth,
+    maxResults: CONFIG.linkedinMaxResults,
+  });
+
+  const persistence = {
+    written: 0,
+    deduped: sourced.withinRunDeduped,
+    enriched_existing: 0,
+    would_be_writes: 0,
+    would_be_dedupes: sourced.withinRunDeduped,
+    would_be_enrich_existing: 0,
+    errors: 0,
+  };
+  const outcomes = [];
+  for (const record of sourced.records) {
+    try {
+      const outcome = await saveLinkedInProspect(record, { dryRun: CONFIG.dryRun });
+      outcomes.push({ linkedin_url: record.linkedin_url, ...outcome });
+      if (outcome.action === 'written') persistence.written++;
+      if (outcome.action === 'deduped') persistence.deduped++;
+      if (outcome.action === 'enriched_existing') persistence.enriched_existing++;
+      if (CONFIG.dryRun && outcome.action === 'would_write') persistence.would_be_writes++;
+      if (CONFIG.dryRun && outcome.action === 'deduped') persistence.would_be_dedupes++;
+      if (CONFIG.dryRun && outcome.action === 'enriched_existing') persistence.would_be_enrich_existing++;
+      if (CONFIG.dryRun) console.log('[LinkedIn dry-run parse]', JSON.stringify({ record, outcome }));
+    } catch (err) {
+      persistence.errors++;
+      outcomes.push({ linkedin_url: record.linkedin_url, action: 'error', error: err.message });
+      console.error(`[LinkedIn] Persistence failed for ${record.linkedin_url}: ${err.message}`);
+    }
+  }
+  if (CONFIG.dryRun) {
+    for (const failure of sourced.parseFailures) console.log('[LinkedIn dry-run parse failure]', JSON.stringify(failure));
+  }
+
+  const parseSuccessRate = sourced.rawResultCount
+    ? Number((sourced.parsedCount / sourced.rawResultCount).toFixed(4))
+    : 0;
+  const summary = {
+    source_mode: 'linkedin',
+    dry_run: CONFIG.dryRun,
+    run_id: runId,
+    queries: sourced.queries,
+    total_serpapi_requests: sourced.requestCount,
+    request_cap: sourced.requestCap,
+    page_depth: sourced.pageDepth,
+    result_cap: sourced.resultCap,
+    results_omitted_by_cap: sourced.cappedCount,
+    raw_results: sourced.rawResultCount,
+    parsed_results: sourced.parsedCount,
+    unique_records: sourced.records.length,
+    unparseable_results: sourced.parseFailures.length,
+    parse_success_rate: parseSuccessRate,
+    ...persistence,
+  };
+  await logScoutRun(persistence.errors ? 'failed' : 'success', summary, 'linkedin_sourcing');
+  console.log('[LinkedIn] Run summary:', JSON.stringify(summary, null, 2));
+  return { ...summary, outcomes };
 }
 
 async function saveToDatabase(leads, {
@@ -2599,19 +2801,34 @@ async function run(params = {}) {
   // Per-client ICP rubric selector (e.g. 'cleaning_buyer'). Drives scoreLead()
   // dispatch and Scout source strategy. Defaults to the Pulseforge rubric.
   CONFIG.scoringProfile = CLIENT_CONFIG.scoring_profile || null;
+  CONFIG.sourceMode = normalizeSourceMode(params.sourceMode ?? params.source_mode ?? CONFIG.sourceMode);
   if (params.industry) CONFIG.industry = params.industry;
   if (params.location) CONFIG.location = sanitizeQueueLocation(params.location);
   if (params.jobTitle) CONFIG.jobTitle = params.jobTitle;
   if (params.maxResults) CONFIG.maxResults = parseInt(params.maxResults);
+  if (params.maxResults) CONFIG.linkedinMaxResults = positiveInteger(params.maxResults, 30, 100);
+  if (params.titleFilter != null) CONFIG.titleFilter = params.titleFilter;
+  if (params.titleExclude != null) CONFIG.titleExclude = params.titleExclude;
+  if (params.sizeSignal != null) CONFIG.sizeSignal = params.sizeSignal;
+  if (params.dryRun != null) CONFIG.dryRun = booleanValue(params.dryRun);
+  if (params.maxRequests != null) CONFIG.maxRequests = positiveInteger(params.maxRequests, 20, 100);
+  if (params.pageDepth != null) CONFIG.pageDepth = positiveInteger(params.pageDepth, 1, 10);
 
-  // Saturation gate + queue rotation. May redirect this run to a different
-  // vertical, or skip entirely when every queued vertical is saturated.
-  const target = await resolveScoutTarget({
-    clientId: CONFIG.clientId,
-    industry: CONFIG.industry,
-    location: CONFIG.location,
-    verticals: CLIENT_CONFIG.verticals,
-  });
+  // LinkedIn sourcing intentionally bypasses Scout's saturation queue so
+  // campaign-specific verticals are never silently rotated to the client plan.
+  const target = CONFIG.sourceMode === 'linkedin'
+    ? {
+        industry: CONFIG.industry,
+        location: CONFIG.location,
+        vertical: normalizeVertical(params.vertical || CONFIG.industry) || 'unknown',
+        saturated: false,
+      }
+    : await resolveScoutTarget({
+        clientId: CONFIG.clientId,
+        industry: CONFIG.industry,
+        location: CONFIG.location,
+        verticals: CLIENT_CONFIG.verticals,
+      });
   if (target.skip) {
     const result = { attempts: 0, successes: 0, skipped: 0, errorSample: null, skipped_run: true, reason: 'saturated', vertical: target.vertical };
     await reportScoutRun({ runId: observabilityRunId, ...result });
@@ -2623,11 +2840,20 @@ async function run(params = {}) {
 
   const startedAt = Date.now();
   const runContext = {
+    source_mode: CONFIG.sourceMode,
     industry: CONFIG.industry,
     location: CONFIG.location,
     vertical: CONFIG.vertical,
     job_title: CONFIG.jobTitle,
     max_results: CONFIG.maxResults,
+    ...(CONFIG.sourceMode === 'linkedin' ? {
+      title_filter: CONFIG.titleFilter,
+      title_exclude: CONFIG.titleExclude || null,
+      size_signal: CONFIG.sizeSignal || null,
+      dry_run: CONFIG.dryRun,
+      max_requests: CONFIG.maxRequests,
+      page_depth: CONFIG.pageDepth,
+    } : {}),
     ...(target.rotatedFrom ? { rotated_from: target.rotatedFrom } : {}),
   };
 
@@ -2660,14 +2886,25 @@ async function run(params = {}) {
 
   try {
     const runId = await logScoutRun('pending', runContext);
-    const stats = await main({ runId });
-    const observability = await resolveScoutObservabilityStats(stats, runId);
-    await pool.query(
-      `UPDATE scout_queue SET last_run_at = NOW(), updated_at = NOW()
-       WHERE client_id = $1 AND vertical = $2 AND location = $3`,
-      [CONFIG.clientId, CONFIG.vertical, CONFIG.location || '']
-    );
-    await refreshQueueCounts(CONFIG.clientId);
+    const stats = CONFIG.sourceMode === 'linkedin'
+      ? await runLinkedInSourcing({ runId })
+      : await main({ runId });
+    const observability = CONFIG.sourceMode === 'linkedin'
+      ? {
+          attempts: Number(stats.parsed_results || 0),
+          successes: Number(CONFIG.dryRun ? stats.would_be_writes + stats.would_be_enrich_existing : stats.written + stats.enriched_existing),
+          skipped: Number(stats.deduped || stats.would_be_dedupes || 0),
+          errorSample: stats.errors ? { persistence_errors: stats.errors } : null,
+        }
+      : await resolveScoutObservabilityStats(stats, runId);
+    if (CONFIG.sourceMode !== 'linkedin') {
+      await pool.query(
+        `UPDATE scout_queue SET last_run_at = NOW(), updated_at = NOW()
+         WHERE client_id = $1 AND vertical = $2 AND location = $3`,
+        [CONFIG.clientId, CONFIG.vertical, CONFIG.location || '']
+      );
+      await refreshQueueCounts(CONFIG.clientId);
+    }
     await logScoutRun('success', {
       ...runContext,
       duration_ms: Date.now() - startedAt,
@@ -2764,6 +3001,11 @@ module.exports = {
   scoreCleaningLead,
   scoreLead,
   configureScoringContext,
+  _test: {
+    searchGoogle,
+    normalizeSourceMode,
+    saveLinkedInProspect,
+  },
 };
 
 if (require.main === module) {

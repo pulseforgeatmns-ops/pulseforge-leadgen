@@ -49,6 +49,13 @@ function runCronAgent(agent, res, query = {}) {
         industry: query.industry,
         location: query.location,
         maxResults: query.maxResults || query.max || query.limit,
+        sourceMode: query.sourceMode || query.source_mode || query['source-mode'],
+        titleFilter: query.titleFilter || query.title_filter || query['title-filter'],
+        titleExclude: query.titleExclude || query.title_exclude || query['title-exclude'],
+        sizeSignal: query.sizeSignal || query.size_signal || query['size-signal'],
+        dryRun: query.dryRun ?? query.dry_run ?? query['dry-run'],
+        maxRequests: query.maxRequests || query.max_requests || query['max-requests'],
+        pageDepth: query.pageDepth || query.page_depth || query['page-depth'],
         client_id: clientId,
       }).catch(err => {
         console.error(`[cron] scout run error:`, err.message);
@@ -289,7 +296,7 @@ router.post('/cron/:agent', async (req, res) => {
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  runCronAgent(agent, res, req.query);
+  runCronAgent(agent, res, { ...req.query, ...(req.body || {}) });
 });
 
 router.get('/cron/:agent', async (req, res) => {
