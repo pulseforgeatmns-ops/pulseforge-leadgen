@@ -54,6 +54,10 @@ function telegramCallbackQuery(update = {}) {
   return update.callback_query || null;
 }
 
+function isTelegramControlCommand(message = {}) {
+  return /^\/[a-z][a-z0-9_]*(?:@[a-z0-9_]+)?(?:\s|$)/i.test(String(message.text || '').trim());
+}
+
 function extractTelegramUrl(message = {}) {
   const text = message.text || message.caption || '';
   const entities = message.entities || message.caption_entities || [];
@@ -315,6 +319,14 @@ router.post('/telegram/mira', async (req, res) => {
         sendMiraTelegramMessage(`Could not correct capture: ${err.message}`).catch(() => {});
       });
       return;
+    }
+
+    // Telegram slash commands control the bot; they are not Mira captures.
+    // /correct is handled above, while commands such as /start and /help are
+    // acknowledged here without entering the classifier/router pipeline.
+    if (isTelegramControlCommand(message)) {
+      console.log(`[mira] ignored telegram control command=${String(message.text || '').trim().split(/\s+/, 1)[0]}`);
+      return res.status(200).json({ ok: true });
     }
 
     // Morning Anchor interception: a plain-text reply in the 6am–noon ET window,

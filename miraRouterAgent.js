@@ -3,7 +3,6 @@ require('dotenv').config();
 const pool = require('./db');
 
 const AGENT_NAME = 'mira_router';
-const DEFAULT_LIMIT = 10;
 const WORKER_INTERVAL_MS = 15 * 60 * 1000;
 const ADVISORY_LOCK_KEY = 91720260604;
 const TODOIST_API_BASE = 'https://api.todoist.com/api/v1';
@@ -58,6 +57,16 @@ function getCaptureContent(row) {
   ];
 
   return candidates.find(value => typeof value === 'string' && value.trim())?.trim() || '';
+}
+
+function isTelegramControlCommand(content) {
+  return /^\/[a-z][a-z0-9_]*(?:@[a-z0-9_]+)?(?:\s|$)/i.test(String(content || '').trim());
+}
+
+function normalizeReminderTime(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 }
 
 async function logRouterEvent(row, action, status, payload = {}, errorMsg = null, durationMs = null) {
@@ -187,6 +196,32 @@ async function markRouted(db, row, routedToTable, routedToId) {
   `, [routedToTable, routedToId, row.id]);
 }
 
+async function markTerminal(db, row, status, routedToTable, reason) {
+  await db.query(`
+    UPDATE capture_inbox
+    SET status = $1,
+        processed_at = NOW(),
+        routed_to_table = $2,
+        routed_to_id = $3
+    WHERE id = $4
+  `, [status, routedToTable, reason, row.id]);
+}
+
+async function skipCapture(row, reason, options = {}) {
+  const startedAt = options.startedAt || Date.now();
+  const status = options.manualReview ? 'review_needed' : 'routed';
+  const destination = options.manualReview ? 'manual_review' : 'skipped';
+  await markTerminal(pool, row, status, destination, reason);
+  await logRouterEvent(row, 'skip_capture', 'success', {
+    reason,
+    routed_to_table: destination,
+  }, null, Date.now() - startedAt).catch(err => {
+    console.error('[mira_router] agent_log write failed:', err.message);
+  });
+  console.warn(`[mira_router] capture_id=${row.id} ${destination} reason=${reason}`);
+  return { id: row.id, status: 'skipped', reason, routed_to_table: destination };
+}
+
 async function routeDatabaseCapture(db, row, content, suggestedRouting) {
   const clientId = row.client_id || null;
 
@@ -236,11 +271,15 @@ async function routeDatabaseCapture(db, row, content, suggestedRouting) {
   }
 
   if (row.classification === 'reminder') {
+    const remindAt = normalizeReminderTime(suggestedRouting.remind_at);
+    if (!remindAt) {
+      throw new Error('Reminder is missing a valid remind_at');
+    }
     return {
       routedToTable: 'reminders',
       routedToId: await insertRoute(db, 'reminders',
         ['capture_id', 'content', 'remind_at'],
-        [row.id, content, suggestedRouting.remind_at || null]),
+        [row.id, content, remindAt]),
     };
   }
 
@@ -252,12 +291,20 @@ async function routeCapture(row) {
   const suggestedRouting = getSuggestedRoutingForRow(row);
   const content = getCaptureContent(row);
 
+  if (isTelegramControlCommand(content)) {
+    return skipCapture(row, 'telegram_control_command', { startedAt });
+  }
+
   if (!content) {
     throw new Error('Capture content is empty');
   }
 
   if (row.classification === 'decision_needed') {
-    return { id: row.id, status: 'skipped', reason: 'decision_needed' };
+    return skipCapture(row, 'decision_needed', { startedAt, manualReview: true });
+  }
+
+  if (row.classification === 'reminder' && !normalizeReminderTime(suggestedRouting.remind_at)) {
+    return skipCapture(row, 'reminder_missing_valid_remind_at', { startedAt, manualReview: true });
   }
 
   if (row.classification === 'task') {
@@ -295,7 +342,7 @@ async function routeCapture(row) {
   }
 }
 
-async function getRoutableCaptures(limit = DEFAULT_LIMIT) {
+async function getRoutableCaptures() {
   const { rows } = await pool.query(`
     SELECT id, raw_text, transcript, link_url, photo_url, classification, client_id, raw_metadata, classifier_notes
     FROM capture_inbox
@@ -304,8 +351,7 @@ async function getRoutableCaptures(limit = DEFAULT_LIMIT) {
       AND classification <> 'review_needed'
       AND classification <> 'decision_needed'
     ORDER BY received_at ASC
-    LIMIT $1
-  `, [limit]);
+  `);
 
   return rows;
 }
@@ -326,10 +372,8 @@ async function withWorkerLock(fn) {
 }
 
 async function run(params = {}) {
-  const limit = Math.max(1, Number(params.limit || DEFAULT_LIMIT));
-
   return withWorkerLock(async () => {
-    const rows = await getRoutableCaptures(limit);
+    const rows = await getRoutableCaptures();
     if (!rows.length) {
       return { scanned: 0, routed: 0, skipped: 0, failed: 0 };
     }
@@ -348,6 +392,9 @@ async function run(params = {}) {
       } catch (err) {
         failed++;
         console.error(`[mira_router] capture_id=${row.id} failed:`, err.message);
+        await markTerminal(pool, row, 'failed', 'failed', truncateError(err.message)).catch(markErr => {
+          console.error(`[mira_router] capture_id=${row.id} terminal failure update failed:`, markErr.message);
+        });
         await logRouterEvent(row, 'route_capture', 'failed', {}, err.message).catch(logErr => {
           console.error('[mira_router] agent_log write failed:', logErr.message);
         });
@@ -379,6 +426,9 @@ function startMiraRouterWorker(options = {}) {
 }
 
 module.exports = {
+  isTelegramControlCommand,
+  normalizeReminderTime,
+  routeCapture,
   run,
   startMiraRouterWorker,
 };
