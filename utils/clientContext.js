@@ -302,7 +302,11 @@ async function ensureClientArchitecture() {
   `);
   await pool.query(`
     UPDATE clients
-    SET enabled_agents = ARRAY['scout']
+    SET enabled_agents = CASE
+      WHEN enabled_agents IS NULL OR CARDINALITY(enabled_agents) = 0
+        THEN ARRAY['scout']
+      ELSE enabled_agents
+    END
     WHERE id = 10
   `);
 
