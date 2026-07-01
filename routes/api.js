@@ -2738,19 +2738,19 @@ router.get('/api/mira/context', requireMiraContextSecret, async (req, res) => {
       safeRows(pool.query(`
         SELECT *
         FROM daily_health_log
-        WHERE log_date = CURRENT_DATE - 1
+        WHERE log_date = (NOW() AT TIME ZONE 'America/New_York')::date - 1
       `)),
       safeRows(pool.query(`
         SELECT *
         FROM daily_health_log
-        WHERE log_date = CURRENT_DATE
+        WHERE log_date = (NOW() AT TIME ZONE 'America/New_York')::date
       `)),
       safeRows(pool.query(`
         SELECT log_date, send_count_today, bounce_count_today, reply_count_today,
                warm_signals_fired_today, health_flags
         FROM daily_health_log
-        WHERE log_date >= CURRENT_DATE - 6
-          AND log_date <= CURRENT_DATE
+        WHERE log_date >= (NOW() AT TIME ZONE 'America/New_York')::date - 6
+          AND log_date <= (NOW() AT TIME ZONE 'America/New_York')::date
         ORDER BY log_date DESC
       `)),
     ]);

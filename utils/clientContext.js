@@ -203,7 +203,7 @@ async function ensureClientArchitecture() {
       'Seasonal exterior tips for home safety and upkeep, landscaping, types of work performed through each season, project spotlights, before/after project features, technical tips (e.g. no concrete pours under certain temperatures in winter)',
       'mshomeinnovations@gmail.com',
       '8:00 AM EST',
-      true
+      false
     )
     ON CONFLICT (id) DO UPDATE SET
       name = EXCLUDED.name,
@@ -234,7 +234,7 @@ async function ensureClientArchitecture() {
       paige_themes = EXCLUDED.paige_themes,
       max_email = EXCLUDED.max_email,
       max_time = EXCLUDED.max_time,
-      active = true
+      active = false
   `);
 
   await pool.query(`

@@ -29,6 +29,7 @@ const pool     = require('./db');
 const { createObjectCsvWriter } = require('csv-writer');
 const { bcrypt, getUserCount, initAuth, requireAuth, requireRole } = require('./middleware/auth');
 const { ensureClientArchitecture } = require('./utils/clientContext');
+const { enforceMiraClientState } = require('./utils/miraClientState');
 const { ensureCloserSchema } = require('./utils/closerSchema');
 const { ensureScoutExpansionTables } = require('./scoutExpansion');
 const { ensureIcpScoreHistoryTable } = require('./utils/icpScoring');
@@ -48,7 +49,9 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 
 initAuth().catch(err => console.error('[auth] init error:', err.message));
-ensureClientArchitecture().catch(err => console.error('[clients] init error:', err.message));
+ensureClientArchitecture()
+  .then(enforceMiraClientState)
+  .catch(err => console.error('[clients] init error:', err.message));
 ensureCloserSchema().catch(err => console.error('[closer] init error:', err.message));
 ensureScoutExpansionTables().catch(err => console.error('[scoutExpansion] init error:', err.message));
 ensureIcpScoreHistoryTable().catch(err => console.error('[icpScoring] init error:', err.message));

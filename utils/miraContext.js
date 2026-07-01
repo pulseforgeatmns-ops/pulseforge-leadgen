@@ -126,7 +126,9 @@ async function getCurrentAnchor(pool) {
     return res.rows[0] || null;
   }
   const res = await pool.query(
-    `SELECT * FROM daily_anchors WHERE ${dateCol}::date = CURRENT_DATE ORDER BY id DESC LIMIT 1`
+    `SELECT * FROM daily_anchors
+     WHERE ${dateCol}::date = (NOW() AT TIME ZONE 'America/New_York')::date
+     ORDER BY id DESC LIMIT 1`
   );
   return res.rows[0] || null;
 }
