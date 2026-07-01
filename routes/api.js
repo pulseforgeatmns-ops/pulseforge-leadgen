@@ -5,6 +5,7 @@ const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { ensureClientArchitecture, getActiveClients, getRequestClientId, normalizeClientId } = require('../utils/clientContext');
 const { ensureCloserSchema } = require('../utils/closerSchema');
 const { getTodoistSnapshot, getCurrentAnchor } = require('../utils/miraContext');
+const { LIVE_WORKSTREAMS } = require('../utils/miraWorld');
 const { publishBlogPost } = require('../utils/blogPublisher');
 const {
   publishToGoogleBusiness,
@@ -2671,12 +2672,24 @@ router.get('/api/mira/context', requireMiraContextSecret, async (req, res) => {
     ] = await Promise.all([
       // Last 10 captures with a 150-char preview of transcript (preferred) or raw_text.
       safeRows(pool.query(`
-        SELECT id,
-               LEFT(COALESCE(NULLIF(transcript, ''), raw_text, ''), 150) AS content_preview,
-               classification, status, received_at,
-               capture_type, source, linked_entity_type, linked_entity_id, linked_capture_id, captured_at
-        FROM capture_inbox
-        ORDER BY received_at DESC
+        SELECT ci.id,
+               LEFT(COALESCE(NULLIF(ci.transcript, ''), ci.raw_text, ''), 150) AS content_preview,
+               ci.classification, ci.status, ci.received_at,
+               ci.capture_type, ci.source, ci.linked_entity_type, ci.linked_entity_id,
+               ci.linked_capture_id, ci.captured_at
+        FROM capture_inbox ci
+        LEFT JOIN clients direct_client ON direct_client.id = ci.client_id
+        LEFT JOIN prospects linked_prospect
+          ON ci.linked_entity_type = 'prospect'
+         AND linked_prospect.id::text = ci.linked_entity_id
+        LEFT JOIN clients linked_client ON linked_client.id = linked_prospect.client_id
+        WHERE COALESCE(ci.archived, false) = false
+          AND (ci.client_id IS NULL OR direct_client.active = true)
+          AND (
+            linked_prospect.id IS NULL
+            OR (linked_client.active = true AND COALESCE(linked_prospect.mira_archived, false) = false)
+          )
+        ORDER BY ci.received_at DESC
         LIMIT 10
       `)),
       // Open (unresolved) blockers, oldest first, with days_open computed at read time.
@@ -2698,15 +2711,20 @@ router.get('/api/mira/context', requireMiraContextSecret, async (req, res) => {
                c.name AS client_name,
                LEFT(COALESCE(cn.content, ''), 150) AS content_preview
         FROM client_notes cn
-        LEFT JOIN clients c ON c.id = cn.client_id
+        JOIN clients c ON c.id = cn.client_id AND c.active = true
+        WHERE COALESCE(cn.archived, false) = false
         ORDER BY cn.created_at DESC
         LIMIT 10
       `)),
       // Last 5 Mira misclassification corrections.
       safeRows(pool.query(`
-        SELECT original_class, corrected_class, created_at
-        FROM mira_corrections
-        ORDER BY created_at DESC
+        SELECT mc.original_class, mc.corrected_class, mc.created_at
+        FROM mira_corrections mc
+        JOIN capture_inbox ci ON ci.id = mc.capture_id
+        WHERE COALESCE(mc.archived, false) = false
+          AND COALESCE(ci.archived, false) = false
+          AND mc.original_class <> mc.corrected_class
+        ORDER BY mc.created_at DESC
         LIMIT 5
       `)),
       getCurrentAnchor(pool).catch(err => {
@@ -2739,9 +2757,11 @@ router.get('/api/mira/context', requireMiraContextSecret, async (req, res) => {
 
     res.json({
       now: new Date().toISOString(),
+      live_workstreams: LIVE_WORKSTREAMS,
       recent_captures: recentCaptures,
       current_anchor: currentAnchor,
       open_tasks_count: todoist.open_tasks_count,
+      active_tasks: todoist.active_tasks || [],
       stale_tasks: todoist.stale_tasks,
       open_blockers: openBlockers,
       active_clients: activeClients,

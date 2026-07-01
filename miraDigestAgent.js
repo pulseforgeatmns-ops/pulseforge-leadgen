@@ -7,6 +7,13 @@ const { buildAnchorAppendix } = require('./utils/miraAnchor');
 
 const AGENT_NAME = 'mira_digest';
 const DIGEST_TZ = process.env.MIRA_TIMEZONE || 'America/New_York';
+const DIGEST_HOUR_ET = 7;
+const DIGEST_WINDOW_MINUTES = 15;
+const DIGEST_SCHEDULER_INTERVAL_MS = 30_000;
+const DIGEST_ADVISORY_LOCK_KEY = 91720260700;
+
+let schedulerHandle = null;
+let scheduledRunInFlight = false;
 
 function formatDateForDigest(date = new Date()) {
   return new Intl.DateTimeFormat('en-US', {
@@ -138,10 +145,20 @@ async function fetchDigestRows() {
       r.remind_at
     FROM capture_inbox ci
     LEFT JOIN clients c ON c.id = ci.client_id
+    LEFT JOIN prospects linked_prospect
+      ON ci.linked_entity_type = 'prospect'
+     AND linked_prospect.id::text = ci.linked_entity_id
+    LEFT JOIN clients linked_client ON linked_client.id = linked_prospect.client_id
     LEFT JOIN blockers b ON b.capture_id = ci.id
     LEFT JOIN reminders r ON r.capture_id = ci.id
     WHERE ci.received_at >= NOW() - INTERVAL '24 hours'
       AND ci.received_at <= NOW()
+      AND COALESCE(ci.archived, false) = false
+      AND (ci.client_id IS NULL OR c.active = true)
+      AND (
+        linked_prospect.id IS NULL
+        OR (linked_client.active = true AND COALESCE(linked_prospect.mira_archived, false) = false)
+      )
     ORDER BY ci.received_at ASC
   `);
   return result.rows;
@@ -161,24 +178,104 @@ async function logDigest(status, payload = {}, errorMsg = null) {
   ]);
 }
 
-async function run() {
+function digestLocalParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: DIGEST_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return {
+    date: `${values.year}-${values.month}-${values.day}`,
+    hour: Number(values.hour) % 24,
+    minute: Number(values.minute),
+  };
+}
+
+function isDigestWindow(date = new Date()) {
+  const local = digestLocalParts(date);
+  return local.hour === DIGEST_HOUR_ET && local.minute < DIGEST_WINDOW_MINUTES;
+}
+
+async function digestAlreadySentToday(date = new Date()) {
+  const local = digestLocalParts(date);
+  const { rows } = await pool.query(`
+    SELECT EXISTS (
+      SELECT 1
+      FROM agent_log
+      WHERE agent_name = $1
+        AND action = 'daily_digest'
+        AND status = 'success'
+        AND (ran_at AT TIME ZONE $2)::date = $3::date
+    ) AS sent
+  `, [AGENT_NAME, DIGEST_TZ, local.date]);
+  return rows[0]?.sent === true;
+}
+
+async function withDigestLock(fn) {
+  const client = await pool.connect();
+  try {
+    const lock = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [DIGEST_ADVISORY_LOCK_KEY]);
+    if (!lock.rows[0]?.locked) return { skipped: true, reason: 'digest_already_running' };
+    return await fn();
+  } finally {
+    await client.query('SELECT pg_advisory_unlock($1)', [DIGEST_ADVISORY_LOCK_KEY]).catch(err => {
+      console.error('[mira_digest] advisory unlock failed:', err.message);
+    });
+    client.release();
+  }
+}
+
+async function run(options = {}) {
   await ensureMiraSchema();
-  const rows = await fetchDigestRows();
-  const digestText = buildDigestMessage(rows);
-  const anchorSection = await buildAnchorAppendix();
-  const text = anchorSection ? `${digestText}\n${anchorSection}` : digestText;
-  const reviewRows = rows.filter(row => row.status === 'review_needed' || row.classification === 'decision_needed');
-  const replyMarkup = buildInlineKeyboard(reviewRows);
+  if (options.scheduled && !isDigestWindow()) {
+    return { sent: false, skipped: true, reason: 'outside_7am_et_window' };
+  }
 
-  await sendMiraTelegramMessage(text, replyMarkup ? { reply_markup: replyMarkup } : {});
-  await logDigest('success', { captured: rows.length, review_needed: reviewRows.length });
+  return withDigestLock(async () => {
+    if (options.scheduled && await digestAlreadySentToday()) {
+      return { sent: false, skipped: true, reason: 'already_sent_today' };
+    }
 
-  return { sent: true, captured: rows.length, review_needed: reviewRows.length };
+    const rows = await fetchDigestRows();
+    const digestText = buildDigestMessage(rows);
+    const anchorSection = await buildAnchorAppendix();
+    const text = anchorSection ? `${digestText}\n${anchorSection}` : digestText;
+    const reviewRows = rows.filter(row => row.status === 'review_needed' || row.classification === 'decision_needed');
+    const replyMarkup = buildInlineKeyboard(reviewRows);
+
+    await sendMiraTelegramMessage(text, replyMarkup ? { reply_markup: replyMarkup } : {});
+    await logDigest('success', { captured: rows.length, review_needed: reviewRows.length, scheduled: Boolean(options.scheduled) });
+
+    return { sent: true, captured: rows.length, review_needed: reviewRows.length };
+  });
+}
+
+function startMiraDigestScheduler() {
+  if (schedulerHandle) return schedulerHandle;
+
+  const tick = () => {
+    if (scheduledRunInFlight || !isDigestWindow()) return;
+    scheduledRunInFlight = true;
+    run({ scheduled: true })
+      .catch(err => console.error('[mira_digest] scheduled run failed:', err.message))
+      .finally(() => { scheduledRunInFlight = false; });
+  };
+
+  schedulerHandle = setInterval(tick, DIGEST_SCHEDULER_INTERVAL_MS);
+  schedulerHandle.unref?.();
+  tick();
+  console.log(`[mira_digest] scheduler started for ${DIGEST_HOUR_ET}:00 ${DIGEST_TZ}`);
+  return schedulerHandle;
 }
 
 module.exports = {
   run,
   buildDigestMessage,
+  fetchDigestRows,
+  startMiraDigestScheduler,
+  digestLocalParts,
+  isDigestWindow,
 };
 
 if (require.main === module) {

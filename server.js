@@ -41,6 +41,7 @@ const { ensureMiraSchema } = require('./utils/miraSchema');
 const { startMiraTranscriptionWorker } = require('./miraTranscriptionAgent');
 const { startMiraClassifierWorker } = require('./miraClassifierAgent');
 const { startMiraRouterWorker } = require('./miraRouterAgent');
+const { startMiraDigestScheduler } = require('./miraDigestAgent');
 const { ensureWarmRoutingSchema, startWarmRoutingScheduler } = require('./warmRoutingAgent');
 
 const app  = express();
@@ -61,6 +62,7 @@ ensureWarmRoutingSchema().catch(err => console.error('[warmRouting] init error:'
 startMiraTranscriptionWorker();
 startMiraClassifierWorker();
 startMiraRouterWorker();
+startMiraDigestScheduler();
 startWarmRoutingScheduler();
 
 app.use(session({

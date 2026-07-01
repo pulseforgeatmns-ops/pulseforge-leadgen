@@ -421,6 +421,7 @@ async function getWarmProspects(clientId) {
       LIMIT 1
     ) last_email ON TRUE
     WHERE p.client_id = $1
+      AND COALESCE(p.mira_archived, false) = false
       AND COALESCE(p.do_not_contact, false) = false
       AND COALESCE(p.status, '') NOT IN ('dead', 'bounced', 'disqualified', 'closed', 'do_not_email', 'auto_responder')
       AND p.email IS NOT NULL

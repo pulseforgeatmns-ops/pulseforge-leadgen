@@ -1,19 +1,12 @@
 require('dotenv').config();
 
 const pool = require('../db');
+const { JACOB_CONTEXT, isActiveTodoistContextItem } = require('./miraWorld');
 
 const AGENT_NAME = 'mira_anchor';
 const MODEL = 'claude-haiku-4-5-20251001';
 const ANCHOR_TZ = process.env.MIRA_TIMEZONE || 'America/New_York';
 const TODOIST_API_BASE = 'https://api.todoist.com/api/v1';
-
-// Jacob's standing context, passed to Haiku so it can weigh candidates the way
-// he would. Solo founder, fragmented attention, three live workstreams.
-const JACOB_CONTEXT =
-  'Jacob is a solo founder with fragmented attention. His active workstreams are ' +
-  'Pulseforge (his lead-gen agency), MSHI (a client he runs outreach for), and ' +
-  'Upwork (freelance income). He has limited focused hours per day and needs the ' +
-  'one or two highest-leverage moves surfaced, not a to-do list.';
 
 let _anthropic = null;
 function getAnthropic() {
@@ -84,17 +77,15 @@ async function getAnchorForToday() {
 // Candidate gathering (used by the morning digest)
 // ---------------------------------------------------------------------------
 
-async function fetchStaleTodoistTasks(maxAgeDays = 3) {
+async function fetchTodoistCollection(path) {
   const token = process.env.TODOIST_API_TOKEN || process.env.TODOIST_TOKEN;
   if (!token) return [];
 
-  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
-  const stale = [];
+  const rows = [];
   let cursor = null;
-  let pages = 0;
 
   do {
-    const url = new URL(`${TODOIST_API_BASE}/tasks`);
+    const url = new URL(`${TODOIST_API_BASE}${path}`);
     url.searchParams.set('limit', '200');
     if (cursor) url.searchParams.set('cursor', cursor);
 
@@ -104,30 +95,79 @@ async function fetchStaleTodoistTasks(maxAgeDays = 3) {
     if (!response.ok) break;
 
     const body = await response.json();
-    const results = Array.isArray(body) ? body : (body.results || []);
-    for (const task of results) {
-      const created = task.added_at || task.created_at;
-      if (!created) continue;
-      const ts = new Date(created).getTime();
-      if (Number.isFinite(ts) && ts < cutoff) {
-        stale.push({ id: String(task.id), content: task.content || '', created_at: created });
-      }
-    }
-
+    rows.push(...(Array.isArray(body) ? body : (body.results || [])));
     cursor = (Array.isArray(body) ? null : body.next_cursor) || null;
-    pages += 1;
-  } while (cursor && pages < 10);
+  } while (cursor);
 
-  return stale;
+  return rows;
+}
+
+function taskDateValue(task) {
+  const raw = task?.due?.datetime || task?.due?.date || null;
+  const ts = raw ? new Date(raw).getTime() : NaN;
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function rankTodoistTasks(tasks, projectMap, now = new Date()) {
+  const nowMs = now.getTime();
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: ANCHOR_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(now);
+
+  return tasks
+    .map(task => {
+      const project = projectMap.get(String(task.project_id)) || null;
+      const createdAt = task.added_at || task.created_at || null;
+      const createdMs = createdAt ? new Date(createdAt).getTime() : NaN;
+      const ageDays = Number.isFinite(createdMs) ? Math.max(0, Math.floor((nowMs - createdMs) / 86400000)) : 999;
+      const dueValue = taskDateValue(task);
+      const dueText = task?.due?.datetime || task?.due?.date || null;
+      const dueTodayOrEarlier = dueText ? String(dueText).slice(0, 10) <= today : false;
+      let relevance = project === 'Anchor Outreach' ? 500 : project === 'Inbox' ? 180 : 140;
+      if (dueTodayOrEarlier) relevance += 350;
+      if (ageDays <= 3) relevance += 250;
+      relevance -= Math.min(ageDays, 90);
+      return {
+        id: String(task.id),
+        content: task.content || '',
+        project,
+        created_at: createdAt,
+        age_days: ageDays,
+        due: dueText,
+        due_value: dueValue,
+        relevance,
+      };
+    })
+    .filter(task => isActiveTodoistContextItem(task.project, task.content))
+    .sort((a, b) =>
+      b.relevance - a.relevance
+      || (a.due_value ?? Number.MAX_SAFE_INTEGER) - (b.due_value ?? Number.MAX_SAFE_INTEGER)
+      || String(b.created_at || '').localeCompare(String(a.created_at || ''))
+      || a.id.localeCompare(b.id)
+    );
+}
+
+async function fetchRelevantTodoistTasks() {
+  const [projects, tasks] = await Promise.all([
+    fetchTodoistCollection('/projects'),
+    fetchTodoistCollection('/tasks'),
+  ]);
+  const projectMap = new Map(projects.map(project => [String(project.id), project.name || null]));
+
+  return rankTodoistTasks(tasks, projectMap);
 }
 
 async function fetchUnresolvedBlockers() {
   const { rows } = await pool.query(`
-    SELECT id, content, blocking, created_at
-    FROM blockers
-    WHERE resolved = false
-    ORDER BY created_at ASC
-    LIMIT 20
+    SELECT b.id, b.content, b.blocking, b.created_at
+    FROM blockers b
+    LEFT JOIN clients cl ON cl.id = b.client_id
+    LEFT JOIN capture_inbox ci ON ci.id = b.capture_id
+    WHERE b.resolved = false
+      AND (b.client_id IS NULL OR cl.active = true)
+      AND COALESCE(ci.archived, false) = false
+    ORDER BY b.created_at ASC
   `);
   return rows;
 }
@@ -138,29 +178,32 @@ async function fetchUnactionedClientNotes() {
     SELECT cn.id, cn.content, cn.client_id, cn.created_at,
            cl.name AS client_name, cl.business_name
     FROM client_notes cn
-    LEFT JOIN clients cl ON cl.id = cn.client_id
+    JOIN clients cl ON cl.id = cn.client_id AND cl.active = true
     WHERE cn.created_at >= NOW() - INTERVAL '7 days'
+      AND COALESCE(cn.archived, false) = false
       AND NOT EXISTS (
         SELECT 1
         FROM capture_inbox ci
         WHERE ci.classification = 'task'
+          AND COALESCE(ci.archived, false) = false
           AND ci.client_id IS NOT DISTINCT FROM cn.client_id
           AND ci.received_at BETWEEN cn.created_at AND cn.created_at + INTERVAL '48 hours'
       )
     ORDER BY cn.created_at DESC
-    LIMIT 10
   `);
   return rows;
 }
 
-function buildCandidateBlock(staleTasks, blockers, notes) {
+function buildCandidateBlock(tasks, blockers, notes) {
   const sections = [];
 
-  if (staleTasks.length) {
-    const lines = staleTasks
-      .slice(0, 15)
-      .map(t => `- [stale task] ${t.content} (open since ${String(t.created_at).slice(0, 10)})`);
-    sections.push(`STALE TODOIST TASKS (open > 3 days):\n${lines.join('\n')}`);
+  if (tasks.length) {
+    const lines = tasks.map(t => {
+      const age = Number.isFinite(t.age_days) ? `${t.age_days}d old` : 'age unknown';
+      const due = t.due ? `, due ${String(t.due).slice(0, 10)}` : '';
+      return `- [active task, ${t.project}, ${age}${due}] ${t.content}`;
+    });
+    sections.push(`RELEVANT ACTIVE TODOIST TASKS (ranked deterministically):\n${lines.join('\n')}`);
   }
 
   if (blockers.length) {
@@ -185,7 +228,7 @@ function buildCandidateBlock(staleTasks, blockers, notes) {
 async function selectTopAnchors(candidateBlock) {
   const systemPrompt = `You are Mira, an accountability layer for Jacob. ${JACOB_CONTEXT}
 
-You will be given a list of candidate items pulled from Jacob's stale Todoist tasks, unresolved blockers, and client notes that never got a follow-up. Select the THREE candidates most worth anchoring his day around — the moves with the highest leverage given his fragmented attention and three workstreams. If fewer than three candidates exist, return only what is available.
+You will be given relevant active Todoist tasks, unresolved blockers, and client notes that never got a follow-up. Select the THREE candidates most worth anchoring his day around. Prefer fresh or due Anchor Outreach work when it is actionable, while balancing Pulseforge Providence and Upwork. Never revive a parked project, setup-only alert, or retired client. If fewer than three candidates exist, return only what is available.
 
 For each pick, write a short, concrete anchor phrased as something he could commit to doing today (an action, not a restatement of the raw item), plus one brief clause of reasoning.
 
@@ -244,8 +287,8 @@ function formatAnchorSection(picks) {
 // failure returns '' so the core digest still sends.
 async function buildAnchorAppendix() {
   try {
-    const [staleTasks, blockers, notes] = await Promise.all([
-      fetchStaleTodoistTasks().catch(err => {
+    const [tasks, blockers, notes] = await Promise.all([
+      fetchRelevantTodoistTasks().catch(err => {
         console.error('[mira_anchor] Todoist fetch failed:', err.message);
         return [];
       }),
@@ -253,11 +296,11 @@ async function buildAnchorAppendix() {
       fetchUnactionedClientNotes(),
     ]);
 
-    if (!staleTasks.length && !blockers.length && !notes.length) {
+    if (!tasks.length && !blockers.length && !notes.length) {
       return '';
     }
 
-    const candidateBlock = buildCandidateBlock(staleTasks, blockers, notes);
+    const candidateBlock = buildCandidateBlock(tasks, blockers, notes);
     const picks = await selectTopAnchors(candidateBlock);
     if (!picks.length) return '';
 
@@ -368,4 +411,8 @@ module.exports = {
   buildAnchorAppendix,
   parseAnchorReply,
   insertAnchor,
+  rankTodoistTasks,
+  fetchRelevantTodoistTasks,
+  buildCandidateBlock,
+  JACOB_CONTEXT,
 };

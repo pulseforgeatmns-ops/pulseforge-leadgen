@@ -64,6 +64,12 @@ function runCronAgent(agent, res, query = {}) {
       mod.run({ lookbackDays: query.lookbackDays, client_id: clientId }).catch(err => {
         console.error(`[cron] ${agent} run error:`, err.message);
       });
+    } else if (agent === 'mira_digest' && typeof mod.run === 'function') {
+      // The legacy external trigger still arrives around 06:30 ET. The digest
+      // agent guards that call and the in-process scheduler sends at 07:00 ET.
+      mod.run({ client_id: clientId, scheduled: true }).catch(err => {
+        console.error(`[cron] ${agent} run error:`, err.message);
+      });
     } else if (typeof mod.run === 'function') {
       mod.run({ client_id: clientId }).catch(err => {
         console.error(`[cron] ${agent} run error:`, err.message);

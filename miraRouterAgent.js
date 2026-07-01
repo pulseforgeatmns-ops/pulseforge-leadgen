@@ -348,8 +348,7 @@ async function getRoutableCaptures() {
     FROM capture_inbox
     WHERE status = 'classified'
       AND routed_to_table IS NULL
-      AND classification <> 'review_needed'
-      AND classification <> 'decision_needed'
+      AND COALESCE(archived, false) = false
     ORDER BY received_at ASC
   `);
 

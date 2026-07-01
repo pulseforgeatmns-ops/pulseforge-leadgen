@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const Anthropic = require('@anthropic-ai/sdk');
 const pool = require('./db');
+const { PROJECTS, ROUTING_CONTEXT } = require('./utils/miraWorld');
 
 const anthropic = new Anthropic();
 
@@ -12,19 +13,6 @@ const DEFAULT_LIMIT = 10;
 const CONFIDENCE_THRESHOLD = 0.7;
 const WORKER_INTERVAL_MS = 15 * 60 * 1000; // every 15 minutes
 const ADVISORY_LOCK_KEY = 91720260603;
-
-// Jacob's active long-term projects / life-areas. These are intentionally
-// STATIC — there is no projects table in Postgres. Edit this list by hand as
-// life-areas evolve. Clients and prospects are still pulled dynamically from
-// Postgres at runtime (see buildContext).
-const PROJECTS = [
-  'Pulseforge agent system',
-  'The school (ADHD/gifted learner profile, currently parked)',
-  'Jacob Unbound',
-  'The Remnant Builder',
-  'FES frontend coursework',
-  'Mira',
-];
 
 const VALID_CLASSIFICATIONS = [
   'task',
@@ -75,24 +63,37 @@ async function buildContext() {
     `),
     pool.query(`
       SELECT p.id, p.first_name, p.last_name, p.email, p.vertical, p.status, p.client_id,
-             c.name AS company_name
+             co.name AS company_name
       FROM prospects p
-      LEFT JOIN companies c ON c.id = p.company_id
+      JOIN clients cl ON cl.id = p.client_id AND cl.active = true
+      LEFT JOIN companies co ON co.id = p.company_id AND co.client_id = p.client_id
       WHERE COALESCE(p.do_not_contact, false) = false
+        AND COALESCE(p.mira_archived, false) = false
         AND COALESCE(p.status, 'cold') IN ('cold', 'warm', 'hot')
+        AND (
+          p.client_id <> 1
+          OR CONCAT_WS(' ', p.service_area_match, p.linkedin_location, co.location)
+             ~* '(Providence|Rhode Island|Pawtucket|Cranston|Warwick|[ ,]RI[ ,0-9])'
+        )
       ORDER BY p.icp_score DESC NULLS LAST, p.created_at DESC
       LIMIT 60
     `),
     pool.query(`
-      SELECT name, role, client_id
-      FROM users
-      WHERE active = true
-      ORDER BY name
+      SELECT u.name, u.role, u.client_id
+      FROM users u
+      LEFT JOIN clients cl ON cl.id = u.client_id
+      WHERE u.active = true
+        AND (u.client_id IS NULL OR cl.active = true)
+      ORDER BY u.name
     `),
     pool.query(`
-      SELECT capture_id, original_class, corrected_class, note, created_at
-      FROM mira_corrections
-      ORDER BY created_at DESC
+      SELECT mc.capture_id, mc.original_class, mc.corrected_class, mc.note, mc.created_at
+      FROM mira_corrections mc
+      JOIN capture_inbox ci ON ci.id = mc.capture_id
+      WHERE COALESCE(mc.archived, false) = false
+        AND COALESCE(ci.archived, false) = false
+        AND mc.original_class <> mc.corrected_class
+      ORDER BY mc.created_at DESC
       LIMIT 20
     `),
   ]);
@@ -178,11 +179,14 @@ ${formatPeople(context.people)}
 Active long-term projects:
 ${formatProjects(PROJECTS)}
 
+CLIENT ROUTING DISTINCTION:
+${ROUTING_CONTEXT}
+
 CLASSIFICATION CATEGORIES:
 
-1. task - Something Jacob needs to do. Has an action verb. Has him as the owner. Examples: "Email Brad about the trial extension," "Update the agency outreach tracker for today's sends."
+1. task - Something Jacob needs to do. Has an action verb. Has him as the owner. Examples: "Review the Providence service-business send queue," "Call the next Anchor law firm prospect."
 
-2. client_note - Information about a specific client or prospect. Not an action, just intel. Examples: "Brad seemed hesitant about the trial extension," "Dustin mentioned they're considering hiring a salesperson."
+2. client_note - Information about a specific client or prospect. Not an action, just intel. Examples: "The Providence salon owner prefers a Thursday callback," "The Manchester CPA already has a cleaner but wants a backup quote."
 
 3. blocker - Something preventing progress on something else. Examples: "Can't restart Vera until GBP API reapplication window opens June 25," "Waiting on signed LOA from new prospect."
 
@@ -190,11 +194,11 @@ CLASSIFICATION CATEGORIES:
 
 5. content_seed - Something Jacob could write or post about. Often a thought, observation, or framing. Examples: "Insight about why ADHD founders abandon their own systems," "Story about the bartending shift that became a sales lesson."
 
-6. decision_needed - Requires Jacob's judgment. Cannot be auto-routed. Examples: "Should I extend MSHI trial or move them to per-appointment pricing?" "Do I take this Upwork job at $30/hr?"
+6. decision_needed - Requires Jacob's judgment. Cannot be auto-routed. Examples: "Should Anchor prioritize CPA firms or law firms this week?" "Do I take this Upwork job at $30/hr?"
 
-7. reference - Info Jacob needs to find later. Contact info, rates, snippets, URLs, addresses. Examples: "Brad's direct cell is XXX-XXX-XXXX," "Bill's company uses Brevo, opens 41% last campaign."
+7. reference - Info Jacob needs to find later. Contact info, rates, snippets, URLs, addresses. Examples: "The Anchor prospect's main office number is XXX-XXX-XXXX," "Providence campaign opens were 41% last week."
 
-8. reminder - Time-bound surface. Has a specific date or time when it needs to come back. Examples: "Remind me June 25 to reapply for GBP API," "Ping me Friday at 4pm to call Dustin."
+8. reminder - Time-bound surface. Has a specific date or time when it needs to come back. Examples: "Remind me June 25 to reapply for GBP API," "Ping me Friday at 4pm to call the Anchor CPA lead."
 
 OUTPUT FORMAT (JSON, no other text):
 
@@ -242,11 +246,11 @@ function normalizeConfidence(value) {
 
 async function getPendingCaptures(limit = DEFAULT_LIMIT) {
   const { rows } = await pool.query(`
-    SELECT id, content_type, raw_text, transcript
+    SELECT id, content_type, raw_text, transcript, voice_url, photo_url, link_url
     FROM capture_inbox
     WHERE status IN ('new', 'transcribed')
-      AND content_type IN ('text', 'voice')
       AND classification IS NULL
+      AND COALESCE(archived, false) = false
     ORDER BY received_at ASC
     LIMIT $1
   `, [limit]);
@@ -254,13 +258,33 @@ async function getPendingCaptures(limit = DEFAULT_LIMIT) {
   return rows;
 }
 
+async function markManualReview(row, reason) {
+  await pool.query(`
+    UPDATE capture_inbox
+    SET status = 'review_needed',
+        routed_to_table = 'manual_review',
+        routed_to_id = $1,
+        classifier_notes = COALESCE(classifier_notes, $2),
+        processed_at = NOW()
+    WHERE id = $3
+  `, [reason, reason.replaceAll('_', ' '), row.id]);
+  return { id: row.id, status: 'review_needed', reason };
+}
+
 async function classifyCapture(row, systemPrompt) {
+  if (row.content_type === 'photo' || row.content_type === 'document') {
+    return markManualReview(row, `unsupported_${row.content_type}_capture`);
+  }
+
+  if (row.content_type === 'voice' && !String(row.transcript || '').trim()) {
+    if (row.voice_url) return { id: row.id, status: 'pending_transcription' };
+    return markManualReview(row, 'voice_capture_missing_audio_or_transcript');
+  }
+
   const content = getContentToClassify(row);
 
-  // Voice rows that are still 'new' have no transcript yet — skip until Phase 2
-  // has populated the transcript. Empty text captures have nothing to classify.
   if (!content) {
-    return { id: row.id, status: 'skipped', reason: 'no_content' };
+    return markManualReview(row, 'empty_capture');
   }
 
   const message = await anthropic.messages.create({
@@ -349,6 +373,7 @@ async function run(params = {}) {
         results.push(result);
         if (result.status === 'classified') classified++;
         else if (result.status === 'review_needed') reviewNeeded++;
+        else if (result.status === 'pending_transcription') skipped++;
         else if (result.status === 'skipped') skipped++;
       } catch (err) {
         failed++;
@@ -388,6 +413,8 @@ function startMiraClassifierWorker(options = {}) {
 module.exports = {
   run,
   startMiraClassifierWorker,
+  buildContext,
+  buildSystemPrompt,
 };
 
 if (require.main === module) {

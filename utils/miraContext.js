@@ -9,6 +9,7 @@
 // table, and never alters schema. Intended for Claude.ai consumption only.
 
 const TODOIST_API_BASE = 'https://api.todoist.com/api/v1';
+const { isActiveTodoistContextItem } = require('./miraWorld');
 
 function todoistToken() {
   // Matches the env var names used by miraRouterAgent.js.
@@ -78,6 +79,7 @@ async function getTodoistSnapshot(staleDays = 5) {
 
   const now = Date.now();
   const staleMs = staleDays * 86400000;
+  const active_tasks = [];
   const stale_tasks = [];
   for (const task of tasks) {
     // v1 unified API uses added_at; REST v2 used created_at — accept either.
@@ -85,18 +87,22 @@ async function getTodoistSnapshot(staleDays = 5) {
     const created = createdRaw ? new Date(createdRaw).getTime() : NaN;
     if (!Number.isFinite(created)) continue;
     const ageMs = now - created;
-    if (ageMs > staleMs) {
-      stale_tasks.push({
-        id: String(task.id),
-        content: task.content || '',
-        days_open: Math.floor(ageMs / 86400000),
-        project: task.project_id ? (projectMap.get(String(task.project_id)) || null) : null,
-      });
-    }
+    const project = task.project_id ? (projectMap.get(String(task.project_id)) || null) : null;
+    if (!isActiveTodoistContextItem(project, task.content)) continue;
+    const row = {
+      id: String(task.id),
+      content: task.content || '',
+      days_open: Math.floor(ageMs / 86400000),
+      project,
+      due: task?.due?.datetime || task?.due?.date || null,
+    };
+    active_tasks.push(row);
+    if (ageMs > staleMs) stale_tasks.push(row);
   }
+  active_tasks.sort((a, b) => a.days_open - b.days_open || a.project.localeCompare(b.project) || a.id.localeCompare(b.id));
   stale_tasks.sort((a, b) => b.days_open - a.days_open);
 
-  return { configured: true, open_tasks_count: tasks.length, stale_tasks };
+  return { configured: true, open_tasks_count: active_tasks.length, active_tasks, stale_tasks };
 }
 
 // Returns today's daily_anchors row, or null if none is set. The daily_anchors

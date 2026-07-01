@@ -56,6 +56,9 @@ async function ensureMiraSchema() {
   await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS linked_entity_id TEXT`);
   await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS linked_capture_id BIGINT`);
   await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS captured_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS archive_reason TEXT`);
   await pool.query(`
     DO $$
     BEGIN
@@ -90,6 +93,9 @@ async function ensureMiraSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_client_notes_created_at ON client_notes(created_at DESC)
   `);
+  await pool.query(`ALTER TABLE client_notes ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE client_notes ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE client_notes ADD COLUMN IF NOT EXISTS archive_reason TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ideas (
@@ -174,6 +180,9 @@ async function ensureMiraSchema() {
       created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE mira_corrections ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE mira_corrections ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE mira_corrections ADD COLUMN IF NOT EXISTS archive_reason TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS mira_warm_capture_log (
@@ -190,6 +199,15 @@ async function ensureMiraSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE mira_warm_capture_log ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE mira_warm_capture_log ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE mira_warm_capture_log ADD COLUMN IF NOT EXISTS archive_reason TEXT`);
+
+  // Prospect history remains available to the CRM, but Mira can exclude rows
+  // that belong to a retired market from active context and warm routing.
+  await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS mira_archived BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS mira_archived_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS mira_archive_reason TEXT`);
 }
 
 module.exports = { ensureMiraSchema };

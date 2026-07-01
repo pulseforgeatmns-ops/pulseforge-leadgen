@@ -50,50 +50,61 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
             AND event_at < $1::timestamptz
             AND LOWER(COALESCE(raw_payload->>'classification', '')) <> 'out_of_office'
         )::int AS reply_count_today
-      FROM email_events
-      WHERE event_at >= $1::timestamptz - INTERVAL '8 days'
-        AND event_at < $1::timestamptz
+      FROM email_events ee
+      JOIN clients c ON c.id = ee.client_id AND c.active = true
+      WHERE ee.event_at >= $1::timestamptz - INTERVAL '8 days'
+        AND ee.event_at < $1::timestamptz
     `),
     safeRows(`
       /* daily_health:scout */
       SELECT
         COUNT(*) FILTER (
-          WHERE created_at >= $1::timestamptz - INTERVAL '24 hours'
-            AND created_at < $1::timestamptz
+          WHERE p.created_at >= $1::timestamptz - INTERVAL '24 hours'
+            AND p.created_at < $1::timestamptz
         )::int AS scout_prospects_added_today,
         COUNT(*) FILTER (
-          WHERE created_at >= $1::timestamptz - INTERVAL '8 days'
-            AND created_at < $1::timestamptz - INTERVAL '24 hours'
+          WHERE p.created_at >= $1::timestamptz - INTERVAL '8 days'
+            AND p.created_at < $1::timestamptz - INTERVAL '24 hours'
         )::numeric / 7 AS scout_baseline_7d
-      FROM prospects
-      WHERE created_at >= $1::timestamptz - INTERVAL '8 days'
-        AND created_at < $1::timestamptz
+      FROM prospects p
+      JOIN clients c ON c.id = p.client_id AND c.active = true
+      WHERE p.created_at >= $1::timestamptz - INTERVAL '8 days'
+        AND p.created_at < $1::timestamptz
+        AND COALESCE(p.mira_archived, false) = false
     `),
     safeRows(`
       /* daily_health:warm_signals */
       SELECT COUNT(*)::int AS warm_signals_fired_today
-      FROM capture_inbox
-      WHERE capture_type IN ('warm_signal', 'warm_signal_resolved')
-        AND COALESCE(captured_at, received_at) >= $1::timestamptz - INTERVAL '24 hours'
-        AND COALESCE(captured_at, received_at) < $1::timestamptz
+      FROM capture_inbox ci
+      JOIN prospects p ON p.id::text = ci.linked_entity_id
+      JOIN clients c ON c.id = p.client_id AND c.active = true
+      WHERE ci.capture_type IN ('warm_signal', 'warm_signal_resolved')
+        AND COALESCE(ci.archived, false) = false
+        AND COALESCE(p.mira_archived, false) = false
+        AND COALESCE(ci.captured_at, ci.received_at) >= $1::timestamptz - INTERVAL '24 hours'
+        AND COALESCE(ci.captured_at, ci.received_at) < $1::timestamptz
     `),
     safeRows(`
       /* daily_health:agent_errors */
       SELECT agent_name, COUNT(*)::int AS error_count
-      FROM agent_log
-      WHERE status = 'error'
-        AND ran_at >= $1::timestamptz - INTERVAL '24 hours'
-        AND ran_at < $1::timestamptz
-      GROUP BY agent_name
-      ORDER BY agent_name
+      FROM agent_log al
+      LEFT JOIN clients c ON c.id = al.client_id
+      WHERE al.status = 'error'
+        AND (al.client_id IS NULL OR c.active = true)
+        AND al.ran_at >= $1::timestamptz - INTERVAL '24 hours'
+        AND al.ran_at < $1::timestamptz
+      GROUP BY al.agent_name
+      ORDER BY al.agent_name
     `),
     safeRows(`
       /* daily_health:clients */
       WITH active_prospects AS (
         SELECT client_id, COUNT(*)::int AS active_prospect_count
-        FROM prospects
-        WHERE status IN ('cold', 'contacted')
-        GROUP BY client_id
+        FROM prospects p
+        JOIN clients c ON c.id = p.client_id AND c.active = true
+        WHERE p.status IN ('cold', 'contacted')
+          AND COALESCE(p.mira_archived, false) = false
+        GROUP BY p.client_id
       ), sends AS (
         SELECT
           client_id,
@@ -105,11 +116,12 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
             WHERE event_at >= $1::timestamptz - INTERVAL '8 days'
               AND event_at < $1::timestamptz - INTERVAL '24 hours'
           )::int AS send_count_baseline_7d_total
-        FROM email_events
-        WHERE event_type IN ${SEND_EVENTS}
-          AND event_at >= $1::timestamptz - INTERVAL '8 days'
-          AND event_at < $1::timestamptz
-        GROUP BY client_id
+        FROM email_events ee
+        JOIN clients c ON c.id = ee.client_id AND c.active = true
+        WHERE ee.event_type IN ${SEND_EVENTS}
+          AND ee.event_at >= $1::timestamptz - INTERVAL '8 days'
+          AND ee.event_at < $1::timestamptz
+        GROUP BY ee.client_id
       )
       SELECT
         ap.client_id,
@@ -118,7 +130,7 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
         COALESCE(s.send_count_today, 0)::int AS send_count_today,
         COALESCE(s.send_count_baseline_7d_total, 0)::int AS send_count_baseline_7d_total
       FROM active_prospects ap
-      LEFT JOIN clients c ON c.id = ap.client_id
+      JOIN clients c ON c.id = ap.client_id AND c.active = true
       LEFT JOIN sends s ON s.client_id = ap.client_id
       ORDER BY ap.client_id
     `),
