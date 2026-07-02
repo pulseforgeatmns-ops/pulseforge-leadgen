@@ -24,6 +24,8 @@ const CLIENT_SEQUENCE_MAP = {
     landscaping: 'landscaping',
     home_services: 'home_services',
     auto: 'auto',
+    auto_repair: 'auto',
+    property_management: 'property',
     med_spa: 'med_spa',
     home_renovation: 'home_renovation',
   },
@@ -51,6 +53,15 @@ const CLIENT_SEQUENCE_MAP = {
   },
 };
 
+// These are intentional migrations, not general cross-sequence sharing.
+// A client_1 med-spa prospect may continue from the legacy salon sequence
+// without being treated as concurrently enrolled in two sequences.
+const CLIENT_SEQUENCE_COMPATIBILITY = {
+  1: {
+    med_spa: new Set(['salon']),
+  },
+};
+
 function clean(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -61,6 +72,11 @@ function normalized(value) {
 
 function condition(code, passed, message, details = {}) {
   return { code, passed: Boolean(passed), message, details };
+}
+
+function isCompatiblePriorSequence(clientId, requestedSequence, priorSequence) {
+  if (!priorSequence || priorSequence === requestedSequence) return true;
+  return CLIENT_SEQUENCE_COMPATIBILITY[Number(clientId)]?.[requestedSequence]?.has(priorSequence) || false;
 }
 
 function exactSequenceName(client, prospect, sequenceCatalog = {}, clientSequenceMap = CLIENT_SEQUENCE_MAP) {
@@ -167,7 +183,7 @@ async function getProspectSendState(pool, client, prospect, sequenceName, sequen
     }
   }
   const conflictingSequence = [...sendsBySequence.entries()].find(([sentSequence, count]) => {
-    if (sentSequence === sequenceName) return false;
+    if (isCompatiblePriorSequence(client.id, sequenceName, sentSequence)) return false;
     const steps = sequenceCatalog?.[sentSequence];
     return !Array.isArray(steps) || count < steps.length;
   })?.[0] || null;
@@ -297,6 +313,11 @@ async function evaluateSendingReadiness({
   const templateInspection = templateSequenceName
     ? inspectSequenceTemplates(sequenceCatalog?.[templateSequenceName], evaluatedProspect, evaluatedProspect?.company_fields)
     : { unknownTokens: [], missingRequiredTokens: [] };
+  const fallbackCoveredTokens = [...new Set(
+    (templateInspection.tokens || [])
+      .filter(token => token.hasFallback)
+      .map(token => token.field)
+  )];
   checks.push(condition(
     'template_tokens_known',
     !current.error && templateInspection.unknownTokens.length === 0,
@@ -311,7 +332,11 @@ async function evaluateSendingReadiness({
     templateInspection.missingRequiredTokens.length
       ? `Required template token(s) are empty: ${templateInspection.missingRequiredTokens.join(', ')}.`
       : 'Every required template token must have data.',
-    { missing_tokens: templateInspection.missingRequiredTokens, error: current.error }
+    {
+      missing_tokens: templateInspection.missingRequiredTokens,
+      fallback_covered_tokens: fallbackCoveredTokens,
+      error: current.error,
+    }
   ));
 
   const sendState = await getProspectSendState(pool, client, evaluatedProspect, sequenceName, sequenceCatalog);

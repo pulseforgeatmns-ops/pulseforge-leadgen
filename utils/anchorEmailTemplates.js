@@ -5,7 +5,7 @@ const ANCHOR_DRAFT_SEQUENCES = {
     {
       day: 0,
       subject: 'the office clients see first',
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Clients size up a firm in the lobby, before anyone opens a file. Smudged glass and a tired restroom say plenty.
 
@@ -24,7 +24,7 @@ jacob@goanchorcleaning.com
       protectedSegments: [
         "I've run service businesses for over a decade",
       ],
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 A missed wastebasket sounds like nothing. It stops being nothing when a client is sitting next to it during a sensitive meeting.
 
@@ -40,7 +40,7 @@ jacob@goanchorcleaning.com
     {
       day: 8,
       subject: 'who owns the miss?',
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 When the office looks right, nobody mentions the cleaning. That's how it should be.
 
@@ -56,7 +56,7 @@ jacob@goanchorcleaning.com
     {
       day: 13,
       subject: 'a backup on file',
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Maybe your current setup is fine. Plenty are, right up until a skipped night lands before a client morning.
 
@@ -72,7 +72,7 @@ jacob@goanchorcleaning.com
     {
       day: 0,
       subject: 'Cleaning that survives busy season',
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Come March, {{business_name_short}} can't afford a cleaning routine that needs chasing. That's the month a shaky setup shows itself, and the month nobody has a minute to fix one.
 
@@ -88,7 +88,7 @@ jacob@goanchorcleaning.com
     {
       day: 4,
       subject: "March isn't August",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 An accounting office in March isn't the same building it was in August. Hours run long and the bins fill twice as fast. Takeout shows up at desks that never used to see it.
 
@@ -107,7 +107,7 @@ jacob@goanchorcleaning.com
       protectedSegments: [
         "I spent years running restaurant crews before I ever ran cleaning crews, and the standard only held when a specific person answered for it.",
       ],
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Good cleaning is invisible. The office resets overnight and nobody thinks about it again.
 
@@ -123,7 +123,7 @@ jacob@goanchorcleaning.com
     {
       day: 13,
       subject: "fix it while it's quiet",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Last one from me. Shaky cleaning arrangements get fixed in the quiet months or not at all. Once the office starts running late again, this drops to the bottom of the list and stays there.
 

@@ -20,6 +20,7 @@ function parseTemplateTokens(template) {
       expression,
       field,
       fallback,
+      hasFallback,
       required: !hasFallback,
       valid: FIELD_NAME_PATTERN.test(field),
       index: match.index,
@@ -105,6 +106,18 @@ function inspectTemplate(template, prospect = {}, companyFields) {
   };
 }
 
+function withHouseGreetingFallback(sequence = []) {
+  return sequence.map(step => ({
+    ...step,
+    subject: typeof step?.subject === 'string'
+      ? step.subject.replaceAll('{{first_name}}', '{{first_name|}}')
+      : step?.subject,
+    body: typeof step?.body === 'string'
+      ? step.body.replaceAll('{{first_name}}', '{{first_name|}}')
+      : step?.body,
+  }));
+}
+
 function renderTemplate(template, prospect = {}, companyFields) {
   const source = String(template ?? '');
   const inspection = inspectTemplate(source, prospect, companyFields);
@@ -112,13 +125,21 @@ function renderTemplate(template, prospect = {}, companyFields) {
     return { ok: false, output: null, ...inspection };
   }
 
-  const output = source.replace(TOKEN_PATTERN, (raw, expression) => {
+  let cursor = 0;
+  let output = '';
+  for (const match of source.matchAll(TOKEN_PATTERN)) {
+    const [raw, expression] = match;
+    let prefix = source.slice(cursor, match.index);
     const separator = expression.indexOf('|');
     const field = (separator === -1 ? expression : expression.slice(0, separator)).trim();
     const fallback = separator === -1 ? null : expression.slice(separator + 1).trim();
     const resolved = resolveTokenField(field, prospect, companyFields);
-    return isEmptyTokenValue(resolved.value) ? fallback : String(resolved.value);
-  });
+    const usesEmptyFallback = isEmptyTokenValue(resolved.value) && fallback === '';
+    if (usesEmptyFallback) prefix = prefix.replace(/[ \t]+$/, '');
+    output += prefix + (isEmptyTokenValue(resolved.value) ? fallback : String(resolved.value));
+    cursor = match.index + raw.length;
+  }
+  output += source.slice(cursor);
 
   return { ok: true, output, ...inspection };
 }
@@ -149,4 +170,5 @@ module.exports = {
   parseTemplateTokens,
   renderTemplate,
   resolveTokenField,
+  withHouseGreetingFallback,
 };

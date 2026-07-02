@@ -8,8 +8,9 @@ const { recalculateICP } = require('./utils/icpScoring');
 const { invalidOutreachEmailReason } = require('./utils/emailGuard');
 const { normalizeRootDomain, rootDomainFromEmail } = require('./utils/brevoEvents');
 const { AI_TELL_PHRASES } = require('./utils/voiceRules');
-const { renderTemplate } = require('./utils/templateMerge');
+const { renderTemplate, withHouseGreetingFallback } = require('./utils/templateMerge');
 const { ANCHOR_DRAFT_SEQUENCES } = require('./utils/anchorEmailTemplates');
+const { getWarmupProgress, resolveWarmupDailyCap } = require('./utils/sendWarmup');
 const { reportAgentRun } = require('./utils/agentObservability');
 const {
   evaluateSendingReadiness,
@@ -55,9 +56,40 @@ async function reportEmmettRun({ runId, attempts, successes, skipped = 0, errorS
 }
 
 const clientConfig = {
-  1: { dailyCap: 100, verticalCap: 15 },
+  1: {
+    dailyCap: 100,
+    verticalCap: 15,
+    warmup: {
+      resetAfterDays: 7,
+      stages: [
+        { afterSendDays: 0, dailyCap: 10 },
+        { afterSendDays: 2, dailyCap: 15 },
+        { afterSendDays: 4, dailyCap: 25 },
+        { afterSendDays: 7, dailyCap: 40 },
+        { afterSendDays: 11, dailyCap: 60 },
+        { afterSendDays: 16, dailyCap: 80 },
+        { afterSendDays: 22, dailyCap: 100 },
+      ],
+    },
+  },
   2: { dailyCap: 40, verticalCap: 10 },
   5: { dailyCap: 30, verticalCap: 8, ramp: { afterDays: 14, bounceCeiling: 0.03, newDailyCap: 50 } },
+  10: {
+    dailyCap: 50,
+    verticalCap: 10,
+    warmup: {
+      resetAfterDays: 7,
+      stages: [
+        { afterSendDays: 0, dailyCap: 5 },
+        { afterSendDays: 3, dailyCap: 8 },
+        { afterSendDays: 6, dailyCap: 12 },
+        { afterSendDays: 10, dailyCap: 18 },
+        { afterSendDays: 15, dailyCap: 25 },
+        { afterSendDays: 21, dailyCap: 35 },
+        { afterSendDays: 28, dailyCap: 50 },
+      ],
+    },
+  },
 };
 
 function getEmmettClientConfig(clientId = CLIENT_ID) {
@@ -425,7 +457,7 @@ Mountain State Home Innovations`
     {
       day: 0,
       subject: "Quick question about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 We handle exterior and interior renovations for property managers, HOAs, landlords, and banks across the Charleston area.
 
@@ -441,7 +473,7 @@ Mountain State Home Innovations`
     {
       day: 4,
       subject: "Re: Quick question about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Most contractors go quiet after the estimate. We do not.
 
@@ -454,7 +486,7 @@ Brad & Dustin`
     {
       day: 8,
       subject: "What we've done for other property teams",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Before Mountain State Home Innovations, we subcontracted for larger WV firms including Tri-State Exterior Solutions, St Albans Windows, and Secure Construction. That gave us a lot of experience doing quality work at scale while still caring about the details.
 
@@ -467,7 +499,7 @@ Brad & Dustin`
     {
       day: 13,
       subject: "Closing the loop",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Last note from us. We know you are busy, so we will keep it simple.
 
@@ -483,7 +515,7 @@ Mountain State Home Innovations`
     {
       day: 0,
       subject: "{{business_name}} — honest question",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 A cleaning quote that waits until the end of the workday is usually calling the next company by then.
 
@@ -496,7 +528,7 @@ Pulseforge
     {
       day: 4,
       subject: "still thinking about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Missed calls and web forms cool off fastest while the crew is still on-site.
 
@@ -509,7 +541,7 @@ Jacob`
     {
       day: 8,
       subject: "quick question about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Are you currently following up with new cleaning leads automatically, or is it still mostly manual when someone gets a chance?
 
@@ -520,7 +552,7 @@ Jacob`
     {
       day: 13,
       subject: "before the next cleaning rush",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Unanswered cleaning quotes at {{business_name}} will keep cooling off while the crew is busy.
 
@@ -535,7 +567,7 @@ gopulseforge.com`
     {
       day: 0,
       subject: "{{business_name}} — honest question",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 A guest who visits {{business_name}} once and never hears from you again has little reason to choose you over the next new spot.
 
@@ -547,7 +579,7 @@ Pulseforge`
     {
       day: 4,
       subject: "still thinking about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 A slow Tuesday stays slow when last month's guests are not given a reason to return.
 
@@ -560,7 +592,7 @@ Jacob`
     {
       day: 8,
       subject: "what is actually working locally right now",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Are you currently bringing past guests back between visits, or is {{business_name}} still relying mostly on word of mouth and social posts?
 
@@ -571,7 +603,7 @@ Jacob`
     {
       day: 13,
       subject: "before the next busy season",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Uneven weekday covers at {{business_name}} will stay dependent on chance until past guests have a reason to return.
 
@@ -586,7 +618,7 @@ gopulseforge.com`
     {
       day: 0,
       subject: "{{business_name}} — honest question",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Every client who leaves {{business_name}} without a future appointment is a chair you have to refill later.
 
@@ -599,7 +631,7 @@ Pulseforge
     {
       day: 4,
       subject: "still thinking about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Gaps in next month's calendar start with clients who leave this month without rebooking.
 
@@ -612,7 +644,7 @@ Jacob`
     {
       day: 8,
       subject: "quick question about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Are you currently bringing in new clients outside referrals and social media, or are those still the main sources?
 
@@ -623,7 +655,7 @@ Jacob`
     {
       day: 13,
       subject: "before peak booking season",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 A client overdue for a cut, color, or treatment is a booking opportunity sitting untouched in {{business_name}}'s list.
 
@@ -639,7 +671,7 @@ gopulseforge.com`
     {
       day: 0,
       subject: "{{business_name}} — honest question",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Every trial guest who leaves {{business_name}} without a same-day response is more likely to join the studio that texts first.
 
@@ -651,7 +683,7 @@ Pulseforge`
     {
       day: 4,
       subject: "still thinking about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Empty spots in next week's classes often trace back to trial leads that never got a second touch.
 
@@ -662,7 +694,7 @@ Jacob`
     {
       day: 8,
       subject: "what is actually working for fitness studios in Southern NH",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Are trial leads at {{business_name}} getting a same-day text and a second invitation, or is follow-up still handled between classes?
 
@@ -673,7 +705,7 @@ Jacob`
     {
       day: 13,
       subject: "before the January rush",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Unconverted trial leads leave empty spots in classes that could be full at {{business_name}}.
 
@@ -689,7 +721,7 @@ gopulseforge.com`
     {
       day: 0,
       subject: "{{business_name}} — honest question",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Each extra day a unit sits vacant costs rent while its listing competes beside dozens of similar units.
 
@@ -701,7 +733,7 @@ Pulseforge`
     {
       day: 4,
       subject: "still thinking about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Leasing inquiries that wait until tenant issues settle are often touring another unit first.
 
@@ -712,7 +744,7 @@ Jacob`
     {
       day: 8,
       subject: "what is actually working for property managers in Southern NH",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Are leasing inquiries at {{business_name}} getting an immediate response and scheduled follow-up, or is the process still manual between tenant issues?
 
@@ -723,7 +755,7 @@ Jacob`
     {
       day: 13,
       subject: "before the next turn season",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Unanswered leasing inquiries at {{business_name}} turn into vacancy days while prospects tour other units.
 
@@ -739,7 +771,7 @@ gopulseforge.com`
     {
       day: 0,
       subject: "{{business_name}} — honest question",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 When spring quote requests pile up faster than the crew can answer them, summer maintenance slots go to the company that replies first.
 
@@ -751,7 +783,7 @@ Pulseforge`
     {
       day: 4,
       subject: "still thinking about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 A landscaping estimate that waits until the crew gets off-site is often booked elsewhere before dinner.
 
@@ -762,7 +794,7 @@ Jacob`
     {
       day: 8,
       subject: "what is actually working for landscapers in Southern NH",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Are new quote requests at {{business_name}} getting a same-day response and a second touch, or is follow-up still handled after the crew gets back?
 
@@ -773,7 +805,7 @@ Jacob`
     {
       day: 13,
       subject: "before spring quote season",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Estimates that never get a second touch leave summer work sitting in {{business_name}}'s lead list.
 
@@ -789,7 +821,7 @@ gopulseforge.com`
     {
       day: 0,
       subject: "{{business_name}} — honest question",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 A homeowner who calls {{business_name}} during a job and reaches voicemail usually calls the next contractor before the crew is free.
 
@@ -801,7 +833,7 @@ Pulseforge`
     {
       day: 4,
       subject: "still thinking about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 The highest-intent home service leads often arrive while every tech is busy.
 
@@ -812,7 +844,7 @@ Jacob`
     {
       day: 8,
       subject: "what is actually working for home services in Southern NH",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Are missed calls and web forms at {{business_name}} getting an immediate response, or is someone calling back after the crew finishes the job?
 
@@ -823,7 +855,7 @@ Jacob`
     {
       day: 13,
       subject: "before the next project cycle",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Missed calls that never get a second touch are jobs another contractor can win from {{business_name}}.
 
@@ -839,7 +871,7 @@ gopulseforge.com`
     {
       day: 0,
       subject: "{{business_name}} — honest question",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Every first-time customer who leaves {{business_name}} without a service reminder is one oil change away from becoming another shop's regular.
 
@@ -852,7 +884,7 @@ Pulseforge
     {
       day: 4,
       subject: "still thinking about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 An estimate that leaves without follow-up usually means the customer found a price comparison somewhere else.
 
@@ -865,7 +897,7 @@ Jacob`
     {
       day: 8,
       subject: "quick question about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Are you currently following up with customers after a job, or is repeat service still mostly left to memory and referrals?
 
@@ -876,7 +908,7 @@ Jacob`
     {
       day: 13,
       subject: "{{business_name}} — keeping it brief",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Customers due for service who have not heard from {{business_name}} are revenue sitting in the repair history.
 
@@ -892,7 +924,7 @@ gopulseforge.com`
     {
       day: 0,
       subject: "{{business_name}} — honest question",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 I work with local med spas and aesthetic practices in Southern NH on one specific problem: consistent new client acquisition without depending entirely on word of mouth and Instagram.
 
@@ -908,7 +940,7 @@ Pulseforge`
     {
       day: 4,
       subject: "still thinking about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Sent you a note a few days ago. Wanted to follow up once before moving on.
 
@@ -921,7 +953,7 @@ Jacob`
     {
       day: 8,
       subject: "what is actually working for med spas in Southern NH",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 One thing I am seeing across local aesthetic practices right now. The ones growing consistently are not just posting more on Instagram. They are staying in front of local prospects who are actively looking but have not booked yet.
 
@@ -936,7 +968,7 @@ Jacob`
     {
       day: 13,
       subject: "closing the loop",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Last note from me. I do not want to clutter your inbox.
 
@@ -954,7 +986,7 @@ gopulseforge.com`
     {
       day: 0,
       subject: "still thinking about {{business_name}}",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 New inquiries that wait hours for a reply are usually contacting another local business before anyone calls back.
 
@@ -966,7 +998,7 @@ Pulseforge`
     {
       day: 4,
       subject: "one thing I'm seeing locally right now",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Forms, calls, and DMs become expensive leaks when they depend on someone remembering to respond between jobs.
 
@@ -977,7 +1009,7 @@ Jacob`
     {
       day: 8,
       subject: "another look at {{business_name}} in 90 days",
-      body: `Hi {{first_name}},
+      body: `Hi {{first_name|}},
 
 Unanswered inquiries at {{business_name}} will keep getting colder until the response process changes.
 
@@ -989,6 +1021,30 @@ gopulseforge.com`
     }
   ]
 };
+
+// Pulseforge and Anchor both use the house greeting: a named contact gets
+// "Hi Avery," while a business inbox with no contact name gets "Hi,".
+// Keep this list explicit so MSHI's separately approved copy is unchanged.
+const HOUSE_GREETING_SEQUENCE_NAMES = [
+  'anchor_law_firm_draft',
+  'anchor_accounting_draft',
+  'home_renovation',
+  'cleaning',
+  'restaurant',
+  'salon',
+  'fitness',
+  'property',
+  'landscaping',
+  'home_services',
+  'auto',
+  'med_spa',
+  're_engagement',
+];
+for (const sequenceName of HOUSE_GREETING_SEQUENCE_NAMES) {
+  if (SEQUENCES[sequenceName]) {
+    SEQUENCES[sequenceName] = withHouseGreetingFallback(SEQUENCES[sequenceName]);
+  }
+}
 
 // Fallback step used when a clicked/warm prospect is selected. Defaults to the
 // cleaning Day 4 step until a dedicated warm sequence is defined.
@@ -1119,9 +1175,28 @@ async function getEmailsSentToday() {
 }
 
 async function getEffectiveSendConfig(baseConfig) {
+  const pool = require('./db');
+  if (baseConfig.warmup) {
+    const progress = await getWarmupProgress(
+      pool,
+      CLIENT_ID,
+      baseConfig.warmup.resetAfterDays
+    );
+    const warmupCap = resolveWarmupDailyCap(
+      baseConfig.warmup.stages,
+      progress.activeSendDays
+    );
+    const dailyCap = Math.min(baseConfig.dailyCap, warmupCap || baseConfig.dailyCap);
+    return {
+      ...baseConfig,
+      dailyCap,
+      ramped: dailyCap < baseConfig.dailyCap,
+      warmupProgress: progress,
+    };
+  }
+
   if (!baseConfig.ramp || CLIENT_ID !== 5) return { ...baseConfig, ramped: false };
 
-  const pool = require('./db');
   const stats = await pool.query(`
     SELECT
       MIN(ran_at) AS first_sent_at,
@@ -1346,7 +1421,6 @@ async function getProspectsForEmail(options = {}) {
       -- calls), so highest-scoring prospects get contacted first within each tier.
       p.icp_score DESC NULLS LAST,
       p.last_contacted_at ASC NULLS FIRST
-    LIMIT 100
   `, [CLIENT_ID, targetVertical, firstTouchOnly, AGENT_NAME, FROM_EMAIL, excludeActionTypes, targetEmails]);
 
   return res.rows;
@@ -1609,7 +1683,10 @@ async function run(context = {}) {
   const sendConfig = await getEffectiveSendConfig(getEmmettClientConfig(CLIENT_ID));
   const alreadySentToday = await getEmailsSentToday();
   const remainingCapacity = Math.max(0, sendConfig.dailyCap - alreadySentToday);
-  console.log(`Daily cap: ${sendConfig.dailyCap}${sendConfig.ramped ? ' (ramped)' : ''}; already sent today: ${alreadySentToday}; remaining capacity: ${remainingCapacity}`);
+  const warmupLabel = sendConfig.warmupProgress
+    ? ` (warmup send-day ${sendConfig.warmupProgress.activeSendDays},${sendConfig.warmupProgress.reset ? ' reset,' : ''} ceiling ${getEmmettClientConfig(CLIENT_ID).dailyCap})`
+    : sendConfig.ramped ? ' (ramped)' : '';
+  console.log(`Daily cap: ${sendConfig.dailyCap}${warmupLabel}; already sent today: ${alreadySentToday}; remaining capacity: ${remainingCapacity}`);
 
   if (remainingCapacity <= 0) {
     console.log('Daily send limit already reached from database count.');
@@ -1626,8 +1703,6 @@ async function run(context = {}) {
 
   const prospects = await getProspectsForEmail(context);
   console.log(`Found ${prospects.length} prospects to contact\n`);
-
-  console.log('Prospects found:', JSON.stringify(prospects, null, 2));
 
   let sent = 0;
   const requestedMaxSends = Number(context.max_sends || context.maxSends || 0);
@@ -1882,6 +1957,8 @@ async function run(context = {}) {
       daily_cap: sendConfig.dailyCap,
       already_sent_today: alreadySentToday,
       remaining_capacity: remainingCapacity,
+      warmup_active_send_days: sendConfig.warmupProgress?.activeSendDays ?? null,
+      warmup_reset: sendConfig.warmupProgress?.reset ?? null,
       vertical_cap: verticalCap,
       client_id: CLIENT_ID,
       attempts,

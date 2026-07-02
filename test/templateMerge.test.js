@@ -2,6 +2,7 @@ const assert = require('assert');
 const {
   inspectSequenceTemplates,
   renderTemplate,
+  withHouseGreetingFallback,
 } = require('../utils/templateMerge');
 
 const fullProspect = {
@@ -31,6 +32,14 @@ result = renderTemplate('{{phone|the team}}', fullProspect);
 assert.strictEqual(result.ok, true);
 assert.strictEqual(result.output, 'the team');
 
+result = renderTemplate('Hi {{first_name|}},', { ...fullProspect, first_name: '' });
+assert.strictEqual(result.ok, true);
+assert.strictEqual(result.output, 'Hi,');
+
+result = renderTemplate('Hi {{first_name|}},', fullProspect);
+assert.strictEqual(result.ok, true);
+assert.strictEqual(result.output, 'Hi Avery,');
+
 result = renderTemplate('{{pratice_area}}', fullProspect);
 assert.strictEqual(result.ok, false);
 assert.deepStrictEqual(result.unknownTokens, ['pratice_area']);
@@ -52,5 +61,11 @@ const sequenceInspection = inspectSequenceTemplates([
 ], { ...fullProspect, first_name: '' });
 assert.deepStrictEqual(sequenceInspection.unknownTokens, []);
 assert.deepStrictEqual(sequenceInspection.missingRequiredTokens, ['first_name']);
+
+const houseSequence = withHouseGreetingFallback([
+  { day: 0, subject: 'Hello', body: 'Hi {{first_name}},' },
+]);
+assert.strictEqual(houseSequence[0].body, 'Hi {{first_name|}},');
+assert.strictEqual(renderTemplate(houseSequence[0].body, { ...fullProspect, first_name: '' }).output, 'Hi,');
 
 console.log('templateMerge tests passed');

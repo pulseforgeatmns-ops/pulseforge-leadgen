@@ -93,6 +93,55 @@ async function run() {
   assert(tokenFailure, 'Expected required template token failure');
   assert.deepStrictEqual(tokenFailure.details.missing_tokens, ['first_name']);
 
+  const fallbackCoveredName = await evaluateSendingReadiness({
+    client,
+    prospect: { ...prospect, first_name: '' },
+    sequenceCatalog: { law_firm: [{ day: 0, subject: 'Hello', body: 'Hi {{first_name|}},' }] },
+    clientSequenceMap,
+    brevoState,
+    pool: poolWith({ currentProspect: { ...prospect, first_name: '' } }),
+  });
+  assert.strictEqual(fallbackCoveredName.sendable, true);
+  assert.deepStrictEqual(fallbackCoveredName.failures, []);
+  const fallbackCheck = fallbackCoveredName.checks.find(
+    check => check.code === 'template_required_tokens_present'
+  );
+  assert.deepStrictEqual(fallbackCheck.details.fallback_covered_tokens, ['first_name']);
+
+  const pulseforgeClient = {
+    id: 1,
+    sender_email: 'jacob@gopulseforge.com',
+    sender_name: 'Jacob Maynard',
+    sending_domain: 'gopulseforge.com',
+  };
+  assert.strictEqual(
+    exactSequenceName(pulseforgeClient, { vertical: 'auto_repair' }, { auto: [{}] }),
+    'auto'
+  );
+  assert.strictEqual(
+    exactSequenceName(pulseforgeClient, { vertical: 'property_management' }, { property: [{}] }),
+    'property'
+  );
+
+  const compatibleMedSpa = await evaluateSendingReadiness({
+    client: pulseforgeClient,
+    prospect: { ...prospect, client_id: 1, vertical: 'med_spa' },
+    sequenceCatalog: {
+      med_spa: [{ day: 0, subject: 'Hello', body: 'Hi {{first_name|}},' }],
+      salon: [{ day: 0 }, { day: 4 }],
+    },
+    brevoState: {
+      domain: { verified: true, authenticated: true },
+      sender: { email: pulseforgeClient.sender_email, active: true },
+      errors: [],
+    },
+    pool: poolWith({
+      currentProspect: { ...prospect, client_id: 1, vertical: 'med_spa' },
+      logs: [{ action: 'email_sent', status: 'completed', payload: { sequence: 'salon' } }],
+    }),
+  });
+  assert.strictEqual(compatibleMedSpa.sendable, true);
+
   const unknownToken = await evaluateSendingReadiness({
     client,
     prospect,
