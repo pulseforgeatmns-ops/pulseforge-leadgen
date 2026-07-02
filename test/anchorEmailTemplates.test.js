@@ -37,4 +37,9 @@ assert.deepStrictEqual(lawFirmDay4.protectedSegments, [
 assert(/service businesses/i.test(lawFirmDay4.body), 'protected claim must say the owner ran service businesses');
 assert(/over a decade/i.test(lawFirmDay4.body), 'protected claim must preserve roughly a decade of ownership experience');
 
+const accountingDay8 = ANCHOR_DRAFT_SEQUENCES.anchor_accounting_draft.find(step => step.day === 8);
+assert.deepStrictEqual(accountingDay8.protectedSegments, [
+  "I spent years running restaurant crews before I ever ran cleaning crews, and the standard only held when a specific person answered for it.",
+], 'Anchor accounting day 8 must protect the owner-operator credibility claim');
+
 console.log('Anchor email template tests passed');

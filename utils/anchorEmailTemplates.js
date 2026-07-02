@@ -71,14 +71,14 @@ jacob@goanchorcleaning.com
   anchor_accounting_draft: [
     {
       day: 0,
-      subject: 'cleaning should not become a busy-season task',
+      subject: 'Cleaning that survives busy season',
       body: `Hi {{first_name}},
 
-During deadline weeks, nobody at an accounting firm should be checking whether the trash was handled or the client restroom was reset.
+Come March, {{business_name_short}} can't afford a cleaning routine that needs chasing. That's the month a shaky setup shows itself, and the month nobody has a minute to fix one.
 
-That work needs to happen predictably. Anchor Cleaning uses a clear scope and one accountable point of contact, so a cleaning issue doesn't become another item on the office manager's list.
+I've run service businesses for over a decade, restaurants then cleaning. Same lesson both times: the work either happens on its own, or it becomes someone's job to chase. Anchor runs on a written scope and one accountable owner. Me.
 
-Would a walkthrough of {{business_name_short}} be worth 10 minutes?
+Want me to walk the office? Ten minutes, no pitch.
 
 Jacob Maynard
 Anchor Cleaning
@@ -87,14 +87,14 @@ jacob@goanchorcleaning.com
     },
     {
       day: 4,
-      subject: 'reliable when the office stays late',
+      subject: "March isn't August",
       body: `Hi {{first_name}},
 
-Busy season changes the building. Longer hours, more takeout, fuller bins, and more client traffic put extra pressure on a cleaning routine that looked fine in August.
+An accounting office in March isn't the same building it was in August. Hours run long and the bins fill twice as fast. Takeout shows up at desks that never used to see it.
 
-The standard shouldn't wobble when {{business_name_short}} gets busy. The scope should be clear before the deadline rush, with one person responsible for the result.
+That's exactly when a cleaning routine starts to wobble, and exactly when nobody has a spare minute to manage it. Anchor sets the scope before the crush so it doesn't move during one.
 
-Does your current plan adjust when the office hours stretch?
+Does your current arrangement hold in busy season, or does someone end up babysitting it?
 
 Jacob Maynard
 Anchor Cleaning
@@ -103,14 +103,17 @@ jacob@goanchorcleaning.com
     },
     {
       day: 8,
-      subject: 'one less thing to check',
+      subject: "partners shouldn't inspect the cleaning",
+      protectedSegments: [
+        "I spent years running restaurant crews before I ever ran cleaning crews, and the standard only held when a specific person answered for it.",
+      ],
       body: `Hi {{first_name}},
 
-Reliable cleaning is quiet. The team arrives to a reset office and gets back to client work.
+Good cleaning is invisible. The office resets overnight and nobody thinks about it again.
 
-Unreliable cleaning creates inspections, reminder emails, and awkward Monday mornings. Anchor's accountability is simple: the standard is written down, and you know exactly who owns the correction.
+Bad cleaning turns partners into inspectors. I spent years running restaurant crews before I ever ran cleaning crews, and the standard only held when a specific person answered for it. Anchor still works that way. The scope is written down and every correction has an owner.
 
-Would it help to compare that approach with the current setup at {{business_name_short}}?
+If anyone at {{business_name_short}} has been playing inspector, reply "send it" and I'll share what our scope looks like.
 
 Jacob Maynard
 Anchor Cleaning
@@ -119,14 +122,12 @@ jacob@goanchorcleaning.com
     },
     {
       day: 13,
-      subject: 'before the next deadline crush',
+      subject: "fix it while it's quiet",
       body: `Hi {{first_name}},
 
-The easiest time to fix a shaky cleaning arrangement is before the office starts running late again.
+Last one from me. Shaky cleaning arrangements get fixed in the quiet months or not at all. Once the office starts running late again, this drops to the bottom of the list and stays there.
 
-I can put together a straightforward scope for {{business_name_short}} now, so you have a dependable option ready before the next filing deadline.
-
-Would that be useful?
+I can have a scope ready for {{business_name_short}} this week. If the timing's wrong, tell me when your busy season ends and I'll come back then.
 
 Jacob Maynard
 Anchor Cleaning
