@@ -4,14 +4,14 @@ const ANCHOR_DRAFT_SEQUENCES = {
   anchor_law_firm_draft: [
     {
       day: 0,
-      subject: 'the office clients see before the meeting',
+      subject: 'the office clients see first',
       body: `Hi {{first_name}},
 
-Clients form an opinion of a law office before anyone opens a file. Reception, conference rooms, glass, and restrooms all speak first.
+Clients size up a firm in the lobby, before anyone opens a file. Smudged glass and a tired restroom say plenty.
 
-Legal offices have another concern too. Access instructions, document areas, and off-limits spaces can't be treated like an ordinary handoff. Anchor Cleaning works from a clear scope, with one person accountable when something needs attention.
+A law office isn't a normal cleaning job either. There are alarm codes, and there are rooms a crew has no business wandering into. I've spent years running restaurants and a cleaning company, so Anchor works from a written scope. When something's off, you call one person. Me.
 
-Would a short walkthrough of {{business_name_short}} be useful?
+Worth a short walkthrough of {{business_name_short}}?
 
 Jacob Maynard
 Anchor Cleaning
@@ -20,14 +20,17 @@ jacob@goanchorcleaning.com
     },
     {
       day: 4,
-      subject: 'when the conference room is not reset',
+      subject: "when the conference room isn't reset",
+      protectedSegments: [
+        "I've run service businesses for over a decade",
+      ],
       body: `Hi {{first_name}},
 
-A missed wastebasket sounds minor. It feels different when a client is sitting beside it for a sensitive meeting.
+A missed wastebasket sounds like nothing. It stops being nothing when a client is sitting next to it during a sensitive meeting.
 
-The point of a cleaning plan isn't a longer checklist. It's knowing who owns the result, what spaces need special handling, and how a miss gets corrected without three calls.
+I've run service businesses for over a decade, and most cleaning failures trace back to the same gap: nobody clearly owns the correction. So when the crew cleaning {{business_name_short}} misses something, who fixes it, and how many calls does that take?
 
-Is that accountability already clear with the crew cleaning {{business_name_short}}?
+At Anchor it's one call.
 
 Jacob Maynard
 Anchor Cleaning
@@ -39,11 +42,11 @@ jacob@goanchorcleaning.com
       subject: 'who owns the miss?',
       body: `Hi {{first_name}},
 
-When an office looks right, nobody discusses the cleaning. Good.
+When the office looks right, nobody mentions the cleaning. That's how it should be.
 
-When it doesn't, someone at the firm loses time finding the crew, repeating the standard, and checking the correction. Anchor keeps that responsibility in one place.
+When it doesn't, someone at the firm loses an afternoon chasing the crew and re-explaining the standard. Usually someone whose billable rate makes that an expensive afternoon.
 
-Would you be open to comparing your current scope with what we'd recommend for {{business_name_short}}?
+Happy to put our recommended scope next to whatever you're running at {{business_name_short}}. Ten minutes.
 
 Jacob Maynard
 Anchor Cleaning
@@ -52,12 +55,12 @@ jacob@goanchorcleaning.com
     },
     {
       day: 13,
-      subject: 'a reliable backup, on file',
+      subject: 'a backup on file',
       body: `Hi {{first_name}},
 
-Even if your current arrangement is working, having a local backup matters when coverage slips or the office needs a deeper reset before clients arrive.
+Maybe your current setup is fine. Plenty are, right up until a skipped night lands before a client morning.
 
-If you'd like, I can walk the space and give you a clear scope to keep on file. No pressure to change what is already working.
+I can walk {{business_name_short}}, write a clear scope, and you keep it on file. If you never use it, it cost you fifteen minutes.
 
 Jacob Maynard
 Anchor Cleaning

@@ -7,7 +7,7 @@ assert.deepStrictEqual(CLIENT_SEQUENCE_MAP[10], {
   accounting: 'anchor_accounting_draft',
 }, 'Anchor sequences must be explicitly mapped for client 10 only');
 
-const allowedTokens = new Set(['first_name', 'business_name']);
+const allowedTokens = new Set(['first_name', 'business_name_short']);
 for (const [name, steps] of Object.entries(ANCHOR_DRAFT_SEQUENCES)) {
   assert.deepStrictEqual(steps.map(step => step.day), [0, 4, 8, 13], `${name} cadence`);
   for (const step of steps) {
@@ -19,12 +19,22 @@ for (const [name, steps] of Object.entries(ANCHOR_DRAFT_SEQUENCES)) {
     assert(/\(603\) 420-2430/.test(step.body), `${name} step ${step.day} lacks phone`);
     const tokens = [...`${step.subject}\n${step.body}`.matchAll(/{{([^}]+)}}/g)].map(match => match[1]);
     tokens.forEach(token => assert(allowedTokens.has(token), `${name} has unsupported token ${token}`));
-    const businessNameMentions = tokens.filter(token => token === 'business_name').length;
+    const businessNameMentions = tokens.filter(token => token === 'business_name_short').length;
     assert(
       businessNameMentions <= 1,
-      `${name} step ${step.day} mentions business_name ${businessNameMentions} times`
+      `${name} step ${step.day} mentions business_name_short ${businessNameMentions} times`
     );
+    for (const segment of step.protectedSegments || []) {
+      assert(step.body.includes(segment), `${name} step ${step.day} drops protected segment: ${segment}`);
+    }
   }
 }
+
+const lawFirmDay4 = ANCHOR_DRAFT_SEQUENCES.anchor_law_firm_draft.find(step => step.day === 4);
+assert.deepStrictEqual(lawFirmDay4.protectedSegments, [
+  "I've run service businesses for over a decade",
+], 'Anchor law-firm day 4 must protect the owner-operator credibility claim');
+assert(/service businesses/i.test(lawFirmDay4.body), 'protected claim must say the owner ran service businesses');
+assert(/over a decade/i.test(lawFirmDay4.body), 'protected claim must preserve roughly a decade of ownership experience');
 
 console.log('Anchor email template tests passed');

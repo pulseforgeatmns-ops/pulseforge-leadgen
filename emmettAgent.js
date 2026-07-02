@@ -1716,7 +1716,8 @@ async function run(context = {}) {
       'mshi_probate_attorney',
       'mshi_investor_flipper',
     ].includes(sequenceName);
-    if (!usesMshiVerticalFollowups && sequenceName !== 're_engagement' && step.day > 0) {
+    const hasProtectedSegments = Array.isArray(step.protectedSegments) && step.protectedSegments.length > 0;
+    if (!usesMshiVerticalFollowups && sequenceName !== 're_engagement' && step.day > 0 && !hasProtectedSegments) {
       const clicked  = await hasClickedEmail(prospect.id);
       const warmSent = await hasSentWarmEmail(prospect.id);
       if (clicked && warmSent) {
