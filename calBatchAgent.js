@@ -3,6 +3,12 @@ const axios = require('axios');
 const pool = require('./db');
 const db = require('./dbClient');
 const { recalculateICP } = require('./utils/icpScoring');
+const {
+  DISPOSITION_SET,
+  applyProspectDisposition: applyStructuredDisposition,
+  ensureCallDispositionSchema: ensureStructuredDispositionSchema,
+  resolveCallbackAt,
+} = require('./utils/callDispositions');
 
 // Cal Batch Agent
 // Schedule this in cron-jobs.org to run daily at 10am Eastern:
@@ -12,15 +18,6 @@ const AGENT_NAME = 'cal';
 const MAX_BATCH_SIZE = 25;
 const BLAND_BATCH_URL = 'https://api.bland.ai/v2/batches/create';
 const BLAND_CALLS_URL = 'https://api.bland.ai/v1/calls';
-const DISPOSITION_VALUES = new Set([
-  'voicemail',
-  'answered_interested',
-  'answered_not_interested',
-  'answered_callback',
-  'no_answer',
-  'wrong_number',
-  'disconnected',
-]);
 const POLL_INTERVAL_MS = Number(process.env.CAL_BATCH_POLL_INTERVAL_MS || 15000);
 const POLL_TIMEOUT_MS = Number(process.env.CAL_BATCH_POLL_TIMEOUT_MS || 8 * 60 * 1000);
 
@@ -221,26 +218,7 @@ async function ensureCallDispositionSchema() {
     ALTER TABLE cal_queue ADD COLUMN IF NOT EXISTS disposition_notes TEXT;
     ALTER TABLE cal_queue ADD COLUMN IF NOT EXISTS called_at TIMESTAMP;
   `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS call_dispositions (
-      id SERIAL PRIMARY KEY,
-      prospect_id UUID REFERENCES prospects(id),
-      client_id INTEGER,
-      call_duration_seconds INTEGER,
-      disposition TEXT,
-      notes TEXT,
-      cal_queue_id INTEGER,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS call_dispositions_client_created_idx
-      ON call_dispositions (client_id, created_at DESC)
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS call_dispositions_prospect_idx
-      ON call_dispositions (prospect_id, created_at DESC)
-  `);
+  await ensureStructuredDispositionSchema(pool);
 }
 
 async function logBatchTouchpoints(formattedProspects, batchResponse) {
@@ -381,31 +359,13 @@ function extractCallbackAt(details) {
 }
 
 async function applyProspectDisposition(prospectId, clientId, disposition, details) {
-  if (disposition === 'answered_interested') {
-    await pool.query(
-      `UPDATE prospects SET status = 'warm', is_hot = true, updated_at = NOW()
-       WHERE id = $1 AND client_id = $2`,
-      [prospectId, clientId]
-    );
-  } else if (disposition === 'answered_callback') {
-    await pool.query(
-      `UPDATE prospects SET callback_at = $1, setter_status = 'follow_up', updated_at = NOW()
-       WHERE id = $2 AND client_id = $3`,
-      [extractCallbackAt(details), prospectId, clientId]
-    );
-  } else if (disposition === 'answered_not_interested') {
-    await pool.query(
-      `UPDATE prospects SET status = 'cold', updated_at = NOW()
-       WHERE id = $1 AND client_id = $2`,
-      [prospectId, clientId]
-    );
-  } else if (disposition === 'wrong_number') {
-    await pool.query(
-      `UPDATE prospects SET status = 'dead', do_not_contact = true, updated_at = NOW()
-       WHERE id = $1 AND client_id = $2`,
-      [prospectId, clientId]
-    );
-  }
+  const requestedCallback = disposition === 'answered_callback' ? extractCallbackAt(details) : null;
+  await applyStructuredDisposition(pool, {
+    prospectId,
+    clientId,
+    disposition,
+    callbackAt: resolveCallbackAt(disposition, requestedCallback),
+  });
 
   if (['answered_interested', 'answered_callback', 'answered_not_interested', 'voicemail'].includes(disposition)) {
     await recalculateICP(prospectId, {
@@ -418,7 +378,7 @@ async function applyProspectDisposition(prospectId, clientId, disposition, detai
 async function recordCallDisposition(item, details) {
   const clientId = Number(item.prospect.client_id || details?.metadata?.client_id || 1);
   const disposition = mapBlandDisposition(details);
-  if (!DISPOSITION_VALUES.has(disposition)) return null;
+  if (!DISPOSITION_SET.has(disposition)) return null;
 
   const durationSeconds = callDurationSeconds(details);
   const notes = extractNotes(details);
@@ -426,8 +386,8 @@ async function recordCallDisposition(item, details) {
 
   await pool.query(
     `INSERT INTO call_dispositions
-      (prospect_id, client_id, call_duration_seconds, disposition, notes, cal_queue_id)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+      (prospect_id, client_id, call_duration_seconds, disposition, notes, cal_queue_id, source)
+     VALUES ($1, $2, $3, $4, $5, $6, 'cal')`,
     [item.prospect.id, clientId, durationSeconds, disposition, notes, queueId]
   );
 

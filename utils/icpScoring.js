@@ -238,14 +238,15 @@ async function gatherEngagement(prospectId, clientId) {
     }],
   }));
 
-  // Setter contact — a logged activity_log row. lead_id is a globally-unique
-  // prospect UUID, so no client_id filter is needed (and the column is not
-  // guaranteed to exist on activity_log across environments).
+  // Legacy setter contact. New manual calls use call_dispositions/touchpoints,
+  // while this preserves the pre-structured history without crossing clients.
   const setter = await sharedPool.query(`
     SELECT EXISTS (
-      SELECT 1 FROM activity_log al WHERE al.lead_id = $1
+      SELECT 1
+      FROM activity_log al
+      WHERE al.lead_id = $1 AND al.client_id = $2
     ) AS has_activity
-  `, [prospectId]).catch(() => ({ rows: [{ has_activity: false }] }));
+  `, [prospectId, clientId]).catch(() => ({ rows: [{ has_activity: false }] }));
 
   const row = touch.rows[0] || {};
   const dispositionRow = dispositions.rows[0] || {};

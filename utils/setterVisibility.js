@@ -100,8 +100,9 @@ async function setSetterVisibility(db, prospectId, {
           ELSE setter_updated_at
         END
     WHERE id = $1
+      AND client_id = $4
     RETURNING *
-  `, [prospectId, visible, storedReason]);
+  `, [prospectId, visible, storedReason, row.client_id]);
   return updated.rows[0] || null;
 }
 

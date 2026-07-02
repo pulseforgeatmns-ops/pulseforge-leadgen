@@ -1011,15 +1011,17 @@ router.get('/api/prospects/:id/detail', requireDashboardRead, async (req, res) =
   }
 });
 
-router.get('/api/setters/assignable', requireOperator, async (_req, res) => {
+router.get('/api/setters/assignable', requireOperator, async (req, res) => {
   try {
+    const clientId = normalizeClientId(req.session?.active_client_id || req.user?.client_id);
     const result = await pool.query(`
       SELECT id, name, email, role
       FROM users
       WHERE role IN ('setter', 'sales')
         AND active = true
+        AND client_id = $1
       ORDER BY name ASC, email ASC
-    `);
+    `, [clientId]);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1030,7 +1032,7 @@ router.post('/api/prospects/:id/assign-setter', requireOperator, async (req, res
   const client = await pool.connect();
   try {
     await ensureProspectSetterAssignmentSchema();
-    const clientId = getRequestClientId(req);
+    const clientId = normalizeClientId(req.session?.active_client_id || req.user?.client_id);
     const setterId = Number.parseInt(req.body.setter_id, 10);
     const note = String(req.body.note || '').slice(0, 2000).trim();
     if (!Number.isInteger(setterId)) return res.status(400).json({ error: 'Setter is required' });
@@ -1042,8 +1044,9 @@ router.post('/api/prospects/:id/assign-setter', requireOperator, async (req, res
       WHERE id = $1
         AND role IN ('setter', 'sales')
         AND active = true
+        AND client_id = $2
       LIMIT 1
-    `, [setterId]);
+    `, [setterId, clientId]);
     if (!setterRes.rows.length) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Setter not found' });

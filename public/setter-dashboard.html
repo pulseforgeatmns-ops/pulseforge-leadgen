@@ -206,6 +206,9 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
 .handoff-title { font-family:'Bebas Neue',sans-serif; font-size:1.25rem; letter-spacing:3px; margin-bottom:0.35rem; }
 .handoff-sub { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--gray-light); letter-spacing:1px; text-transform:uppercase; margin-bottom:0.8rem; }
 .handoff-actions { display:flex; justify-content:flex-end; gap:0.6rem; margin-top:0.8rem; }
+.call-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:0.75rem; }
+.call-form-grid .field.full { grid-column:1 / -1; }
+.call-form-grid input { width:100%; padding:0.58rem 0.65rem; }
 .right-panel { background:var(--bg1); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
 .panel-header { padding:1.25rem; border-bottom:1px solid var(--border); flex-shrink:0; }
 .panel-title { font-family:'Bebas Neue',sans-serif; font-size:1rem; letter-spacing:2px; }
@@ -330,6 +333,8 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   .activity-text { font-size:0.88rem; }
   .form-card .btn { min-height:44px; width:100%; font-size:0.9rem; }
   .field select, .field textarea { min-height:44px; font-size:16px; }
+  .call-form-grid { grid-template-columns:1fr; }
+  .call-form-grid .field.full { grid-column:auto; }
 
   /* Resources */
   .resources-grid { grid-template-columns:1fr; }
@@ -465,9 +470,9 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
     <section class="panel" id="activityPanel">
       <div class="activity-layout">
         <form class="form-card" id="activityForm">
-          <div class="form-title">LOG TOUCHPOINT</div>
+          <div class="form-title">LOG OTHER TOUCHPOINT</div>
           <div class="field"><label for="leadSelect">Lead</label><select id="leadSelect" required></select></div>
-          <div class="field"><label for="actionType">Action</label><select id="actionType" required><option value="call">Call</option><option value="email">Email</option><option value="text">Text</option></select></div>
+          <div class="field"><label for="actionType">Action</label><select id="actionType" required><option value="email">Email</option><option value="text">Text</option></select></div>
           <div class="field"><label for="notes">Notes</label><textarea id="notes" placeholder="Outcome, next step, objections"></textarea></div>
           <button class="btn primary" type="submit">Save Activity</button>
         </form>
@@ -637,7 +642,7 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
           <div class="faq-list">
             <div class="faq-item">
               <div class="faq-q">How do I log a call?</div>
-              <div class="faq-a">Use the Quick Log button on each lead in your queue. Select the outcome and it saves automatically.</div>
+              <div class="faq-a">Use Log Call on any lead, choose the disposition, add notes and an optional callback or duration, then save.</div>
             </div>
             <div class="faq-item">
               <div class="faq-q">What if a lead has no phone number?</div>
@@ -690,6 +695,7 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   <div style="height:1rem"></div>
   <div class="detail-top-actions">
     <button class="btn icon-btn" id="detailHotBtn" title="Toggle hot lead">⚡</button>
+    <button class="btn primary" id="detailLogCallBtn" type="button">Log call</button>
     <span class="attempt-badge" id="detailAttempts">0 attempts</span>
   </div>
   <div class="detail-title" id="detailName">Lead</div>
@@ -732,9 +738,50 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   </div>
 </div>
 
+<div class="handoff-modal" id="callDispositionModal">
+  <form class="handoff-box" id="callDispositionForm">
+    <div class="handoff-title">LOG CALL</div>
+    <div class="handoff-sub" id="callDispositionLead">Select the call outcome</div>
+    <div class="call-form-grid">
+      <div class="field full">
+        <label for="callDisposition">Disposition</label>
+        <select id="callDisposition" required></select>
+      </div>
+      <div class="field full">
+        <label for="callNotes">Notes</label>
+        <textarea id="callNotes" placeholder="What happened, objections, and next step"></textarea>
+      </div>
+      <div class="field">
+        <label for="callCallback">Callback (optional)</label>
+        <input id="callCallback" type="datetime-local">
+      </div>
+      <div class="field">
+        <label for="callDuration">Duration in seconds (optional)</label>
+        <input id="callDuration" type="number" min="0" max="86400" step="1" inputmode="numeric">
+      </div>
+    </div>
+    <div class="handoff-actions">
+      <button class="btn" id="cancelCallDispositionBtn" type="button">Cancel</button>
+      <button class="btn primary" id="saveCallDispositionBtn" type="submit">Save call</button>
+    </div>
+  </form>
+</div>
+
 <script>
 const stages = ['new','contacted','follow_up','booked','dead'];
 const stageLabels = { new:'New', contacted:'Contacted', follow_up:'Follow-up', booked:'Booked', dead:'Dead' };
+const callDispositionLabels = {
+  voicemail:'Voicemail',
+  answered_interested:'Answered — interested',
+  answered_not_interested:'Answered — not interested',
+  answered_callback:'Answered — callback',
+  no_answer:'No answer',
+  wrong_number:'Wrong number',
+  disconnected:'Disconnected',
+  gatekeeper_relayed:'Gatekeeper — relayed message',
+  gatekeeper_blocked:'Gatekeeper — blocked',
+  incumbent_all_set:'Incumbent — all set'
+};
 const agents = [
   ['SCOUT','Prospecting'], ['EMMETT','Email'], ['RILEY','Follow-up'],
   ['PAIGE','Content'], ['VERA','Verifier'], ['MAX','Observer']
@@ -749,8 +796,8 @@ let selectedLead = null;
 let queueSearch = '';
 let pipelineSearch = '';
 let searchTimer = null;
-const loggedTimers = {};
 let handoffResolve = null;
+let callDispositionLeadId = null;
 let draggedLeadId = null;
 let lastDroppedLeadId = null;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -809,9 +856,8 @@ function rowTools(lead) {
   const attempts = Number(lead.attempt_count || 0);
   return `<div class="row-actions">
     <button class="btn icon-btn ${lead.is_hot ? 'hot' : ''}" data-hot="${lead.id}" title="Toggle hot lead">⚡</button>
-    <button class="btn" data-quick-call="${lead.id}" type="button">☎ Logged</button>
+    <button class="btn primary" data-log-call="${lead.id}" type="button">☎ Log call</button>
     <span class="attempt-badge" id="attempts-${lead.id}">${attempts} attempt${attempts === 1 ? '' : 's'}</span>
-    <span class="logged-status" id="logged-${lead.id}">Logged ✓</span>
   </div>`;
 }
 
@@ -909,6 +955,7 @@ function renderPipeline() {
             <div class="lead-card-title" data-open="${lead.id}">${lead.is_hot ? '⚡ ' : ''}${lead.business_name}</div>
             <div class="lead-card-meta"><span class="mono">${lead.vertical} · ${ageInfo(lead.date_added).label}</span><span class="score ${lead.score_band}">${lead.score}</span></div>
             <div class="lead-card-meta"><span class="attempt-badge">${lead.attempt_count || 0} attempts</span><button class="btn icon-btn ${lead.is_hot ? 'hot' : ''}" data-hot="${lead.id}" type="button">⚡</button></div>
+            <button class="btn primary" data-log-call="${lead.id}" type="button">☎ Log call</button>
             <select data-select-status="${lead.id}">
               ${stages.map(s => `<option value="${s}" ${s === lead.status ? 'selected' : ''}>${stageLabels[s]}</option>`).join('')}
             </select>
@@ -1009,8 +1056,8 @@ async function loadActivity() {
   }
   list.innerHTML = activity.map(item => `
     <div class="activity-item">
-      <div class="activity-icon">${item.action_type.slice(0,1)}</div>
-      <div class="activity-text"><strong>${item.business_name}</strong> · ${item.action_type}<br>${item.notes || 'No notes'}</div>
+      <div class="activity-icon">${(item.channel || item.action_type).slice(0,1)}</div>
+      <div class="activity-text"><strong>${item.business_name}</strong> · ${item.channel || item.action_type}<br>${item.notes || 'No notes'}</div>
       <div class="activity-time">${fmtDate(item.created_at)} ${fmtTime(item.created_at)}</div>
     </div>
   `).join('');
@@ -1262,31 +1309,72 @@ async function toggleHot(id) {
   }
 }
 
-async function quickLogCall(id) {
+function callDefaultDate(days, hour = 10) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  date.setHours(hour, 0, 0, 0);
+  return callbackLocalValue(date);
+}
+
+function updateCallCallbackSuggestion() {
+  const callback = document.getElementById('callCallback');
+  const disposition = document.getElementById('callDisposition').value;
+  if (disposition === 'incumbent_all_set') callback.value = callDefaultDate(90);
+  else if (['answered_callback', 'gatekeeper_relayed'].includes(disposition)) callback.value = callDefaultDate(1);
+  else callback.value = '';
+}
+
+function openCallDisposition(id) {
   const lead = findLead(id);
   if (!lead) return;
+  callDispositionLeadId = id;
+  document.getElementById('callDispositionLead').textContent = lead.business_name;
+  document.getElementById('callDisposition').value = 'no_answer';
+  document.getElementById('callNotes').value = '';
+  document.getElementById('callDuration').value = '';
+  updateCallCallbackSuggestion();
+  document.getElementById('callDispositionModal').classList.add('open');
+  document.getElementById('callDisposition').focus();
+}
+
+function closeCallDisposition() {
+  callDispositionLeadId = null;
+  document.getElementById('callDispositionModal').classList.remove('open');
+}
+
+async function saveCallDisposition(event) {
+  event.preventDefault();
+  const id = callDispositionLeadId;
+  if (!id) return;
+  const saveBtn = document.getElementById('saveCallDispositionBtn');
+  saveBtn.disabled = true;
+  saveBtn.classList.add('loading');
   try {
-    const data = await api(`/setter/api/leads/${id}/quick-log-call`, { method:'POST', body:JSON.stringify({}) });
-    const count = Number(data.attempt_count || 0);
-    lead.attempt_count = count;
-    if (lead.status === 'new') lead.status = 'contacted';
-    replaceLead(lead);
-    renderQueue();
-    renderDue();
-    renderPipeline();
+    const callbackValue = document.getElementById('callCallback').value;
+    const data = await api(`/setter/api/leads/${id}/call-disposition`, {
+      method:'POST',
+      body:JSON.stringify({
+        disposition: document.getElementById('callDisposition').value,
+        notes: document.getElementById('callNotes').value,
+        callback_at: callbackValue ? new Date(callbackValue).toISOString() : null,
+        duration_seconds: document.getElementById('callDuration').value
+      })
+    });
+    if (selectedLead?.id === id) selectedLead = data.lead;
+    replaceLead(data.lead);
+    closeCallDisposition();
+    await Promise.all([loadMetrics(), loadTodayStats(), loadQueue(), loadDue(), loadPipeline(), loadActivity()]);
     if (selectedLead?.id === id) {
-      selectedLead.attempt_count = count;
-      renderDetailHot();
+      selectedLead = findLead(id) || data.lead;
+      openDetail(id);
     }
-    const status = document.getElementById(`logged-${id}`);
-    if (status) {
-      status.classList.add('visible');
-      clearTimeout(loggedTimers[id]);
-      loggedTimers[id] = setTimeout(() => status.classList.remove('visible'), 1500);
-    }
-    await Promise.all([loadMetrics(), loadTodayStats(), loadActivity()]);
   } catch (err) {
-    alert('Call log failed');
+    let message = 'Call log failed';
+    try { message = JSON.parse(err.message).error || message; } catch (_parseErr) {}
+    alert(message);
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.classList.remove('loading');
   }
 }
 
@@ -1368,10 +1456,10 @@ document.addEventListener('click', event => {
     toggleHot(hotBtn.dataset.hot);
     return;
   }
-  const quickBtn = event.target.closest('[data-quick-call]');
-  if (quickBtn) {
+  const callBtn = event.target.closest('[data-log-call]');
+  if (callBtn) {
     event.stopPropagation();
-    quickLogCall(quickBtn.dataset.quickCall);
+    openCallDisposition(callBtn.dataset.logCall);
     return;
   }
   const statusBtn = event.target.closest('[data-status]');
@@ -1439,6 +1527,15 @@ document.getElementById('enrichPhoneBtn').addEventListener('click', enrichPhone)
 document.getElementById('bulkEnrichPhonesBtn').addEventListener('click', bulkEnrichMissingPhones);
 document.getElementById('detailHotBtn').addEventListener('click', () => {
   if (selectedLead) toggleHot(selectedLead.id);
+});
+document.getElementById('detailLogCallBtn').addEventListener('click', () => {
+  if (selectedLead) openCallDisposition(selectedLead.id);
+});
+document.getElementById('callDispositionForm').addEventListener('submit', saveCallDisposition);
+document.getElementById('callDisposition').addEventListener('change', updateCallCallbackSuggestion);
+document.getElementById('cancelCallDispositionBtn').addEventListener('click', closeCallDisposition);
+document.getElementById('callDispositionModal').addEventListener('click', event => {
+  if (event.target.id === 'callDispositionModal') closeCallDisposition();
 });
 document.getElementById('saveCallbackBtn').addEventListener('click', () => saveCallback());
 document.getElementById('closeDetail').addEventListener('click', () => document.getElementById('detailDrawer').classList.remove('open'));
@@ -1527,6 +1624,9 @@ document.getElementById('activityForm').addEventListener('submit', async event =
   });
 })();
 
+document.getElementById('callDisposition').innerHTML = Object.entries(callDispositionLabels)
+  .map(([value, label]) => `<option value="${value}">${label}</option>`)
+  .join('');
 renderAgents();
 setClock();
 setInterval(setClock, 10000);

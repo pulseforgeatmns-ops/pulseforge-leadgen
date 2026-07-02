@@ -6,19 +6,26 @@ const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { enrichPhoneWaterfall } = require('../phoneEnrich');
 const { ensureCloserSchema } = require('../utils/closerSchema');
 const { ensureSetterVisibilitySchema, setSetterVisibility } = require('../utils/setterVisibility');
+const { normalizeClientId } = require('../utils/clientContext');
+const {
+  DISPOSITION_SET,
+  applyProspectDisposition,
+  ensureCallDispositionSchema,
+  resolveCallbackAt,
+} = require('../utils/callDispositions');
 
 const router = express.Router();
 
 const STAGES = ['new', 'contacted', 'follow_up', 'booked', 'dead'];
 const SETTER_NOTES_MARKER = '\n\n--- setter notes ---\n';
 
-// Returns ` AND <alias>client_id = $N` (and pushes the value into params) when
-// the logged-in user has a client_id assigned. Returns '' otherwise so admin,
-// manager, cron, and legacy-session callers (no user.client_id) see all clients.
+function setterClientId(req) {
+  if (hasMaxSecret(req)) return normalizeClientId(req.query.client_id);
+  return normalizeClientId(req?.session?.active_client_id || req?.user?.client_id);
+}
+
 function clientFilter(req, params, alias = 'p.') {
-  const cid = req?.session?.user?.client_id;
-  if (!cid && cid !== 0) return '';
-  params.push(cid);
+  params.push(setterClientId(req));
   return ` AND ${alias}client_id = $${params.length}`;
 }
 
@@ -57,6 +64,7 @@ function requireSetterWrite(req, res, next) {
 async function ensureSetterSchema() {
   await ensureCloserSchema();
   await ensureSetterVisibilitySchema(pool);
+  await ensureCallDispositionSchema(pool);
   await pool.query(`
     ALTER TABLE prospects
     ADD COLUMN IF NOT EXISTS notes TEXT,
@@ -81,8 +89,17 @@ async function ensureSetterSchema() {
       action_type TEXT NOT NULL,
       notes TEXT,
       setter_id TEXT,
+      client_id INTEGER NOT NULL,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
+  `);
+  await pool.query(`
+    ALTER TABLE activity_log
+    ADD COLUMN IF NOT EXISTS client_id INTEGER
+  `);
+  await pool.query(`
+    ALTER TABLE activity_log
+    ALTER COLUMN client_id DROP DEFAULT
   `);
 }
 
@@ -94,7 +111,8 @@ function scoreBand(score) {
 }
 
 function businessName(row) {
-  return baseNotes(row.notes).split('—')[0].trim() ||
+  return row.company_name ||
+    baseNotes(row.notes).split('—')[0].trim() ||
     `${row.first_name || ''} ${row.last_name || ''}`.trim() ||
     row.email ||
     'Unknown Lead';
@@ -137,13 +155,21 @@ async function getLeads(where = '', params = [], limit = 250, orderBy = 'COALESC
   const clientScope = clientFilter(req, params);
   const { rows } = await pool.query(`
     SELECT p.*,
-      (
+      c.name AS company_name,
+      ((
         SELECT COUNT(*)::int
         FROM activity_log al
         WHERE al.lead_id = p.id
+          AND al.client_id = p.client_id
           AND al.action_type = 'call'
-      ) AS attempt_count
+      ) + (
+        SELECT COUNT(*)::int
+        FROM call_dispositions cd
+        WHERE cd.prospect_id = p.id
+          AND cd.client_id = p.client_id
+      )) AS attempt_count
     FROM prospects p
+    LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     WHERE p.source = 'scout'
       AND COALESCE(p.setter_visible, false) = true
       AND COALESCE(p.do_not_contact, false) = false
@@ -156,23 +182,34 @@ async function getLeads(where = '', params = [], limit = 250, orderBy = 'COALESC
   return rows.map(mapLead);
 }
 
-async function getMissingPhoneProspects(limit = 2000) {
+async function getMissingPhoneProspects(req, limit = 2000) {
+  const params = [];
+  const clientScope = clientFilter(req, params);
   const { rows } = await pool.query(`
     SELECT p.*,
-      (
+      c.name AS company_name,
+      ((
         SELECT COUNT(*)::int
         FROM activity_log al
         WHERE al.lead_id = p.id
+          AND al.client_id = p.client_id
           AND al.action_type = 'call'
-      ) AS attempt_count
+      ) + (
+        SELECT COUNT(*)::int
+        FROM call_dispositions cd
+        WHERE cd.prospect_id = p.id
+          AND cd.client_id = p.client_id
+      )) AS attempt_count
     FROM prospects p
+    LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     WHERE NULLIF(BTRIM(COALESCE(p.phone, '')), '') IS NULL
       AND COALESCE(p.enrichment_attempted, false) = false
+      ${clientScope}
     ORDER BY COALESCE(p.setter_visible, false) DESC,
       COALESCE(p.icp_score, 0) DESC,
       p.created_at DESC
-    LIMIT $1
-  `, [limit]);
+    LIMIT $${params.length + 1}
+  `, [...params, limit]);
   return rows.map(mapLead);
 }
 
@@ -200,10 +237,10 @@ function appendHandoffNote(existing, handoffNote) {
   return composeNotes(existing, next);
 }
 
-async function getLeviCloser() {
+async function getLeviCloser(clientId) {
   const configuredId = Number(process.env.LEVI_CLOSER_ID || 0);
-  const params = [];
-  let filter = "role = 'closer' AND active = true";
+  const params = [clientId];
+  let filter = "role = 'closer' AND active = true AND client_id = $1";
   if (configuredId) {
     params.push(configuredId);
     filter += ` AND id = $${params.length}`;
@@ -330,7 +367,7 @@ router.get(['/api/leads', '/leads'], requireSetterRead, async (req, res) => {
   try {
     await ensureSetterSchema();
     if (req.query.missing_phone === 'true') {
-      return res.json(await getMissingPhoneProspects(2000));
+      return res.json(await getMissingPhoneProspects(req, 2000));
     }
     const status = req.query.status;
     const params = [];
@@ -358,14 +395,26 @@ router.get(['/api/stats/today', '/stats/today'], requireSetterRead, async (req, 
   try {
     await ensureSetterSchema();
     const setterId = req.user?.id || null;
+    const clientId = setterClientId(req);
     const { rows } = await pool.query(`
-      SELECT COUNT(*)::int AS calls_today
-      FROM activity_log
-      WHERE action_type = 'call'
-        AND setter_id = $1
-        AND created_at >= CURRENT_DATE
-        AND created_at < CURRENT_DATE + INTERVAL '1 day'
-    `, [setterId]);
+      SELECT (
+        SELECT COUNT(*)::int
+        FROM activity_log
+        WHERE action_type = 'call'
+          AND setter_id = $1::text
+          AND client_id = $2
+          AND created_at >= CURRENT_DATE
+          AND created_at < CURRENT_DATE + INTERVAL '1 day'
+      ) + (
+        SELECT COUNT(*)::int
+        FROM call_dispositions
+        WHERE setter_id = $1
+          AND client_id = $2
+          AND source = 'manual_setter'
+          AND created_at >= CURRENT_DATE
+          AND created_at < CURRENT_DATE + INTERVAL '1 day'
+      ) AS calls_today
+    `, [setterId, clientId]);
     res.json({ calls_today: Number(rows[0]?.calls_today || 0), goal: 20 });
   } catch (err) {
     console.error('[setter] today stats error:', err.message);
@@ -395,6 +444,7 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
   if (!STAGES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
   try {
     await ensureSetterSchema();
+    const clientId = setterClientId(req);
     const handoffNote = String(req.body.handoff_note || '').slice(0, 5000);
     let rows;
     let handoff = null;
@@ -403,11 +453,11 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
       const current = await pool.query(`
         SELECT *
         FROM prospects
-        WHERE id = $1 AND source = 'scout'
-      `, [req.params.id]);
+        WHERE id = $1 AND source = 'scout' AND client_id = $2
+      `, [req.params.id, clientId]);
       if (!current.rows.length) return res.status(404).json({ error: 'Lead not found' });
 
-      const closer = await getLeviCloser();
+      const closer = await getLeviCloser(clientId);
       const notes = appendHandoffNote(current.rows[0].notes, handoffNote);
       const update = await pool.query(`
         UPDATE prospects
@@ -417,14 +467,15 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
             closer_id = COALESCE($1, closer_id),
             closer_status = 'booked',
             notes = $2
-        WHERE id = $3 AND source = 'scout'
+        WHERE id = $3 AND source = 'scout' AND client_id = $4
         RETURNING *
-      `, [closer?.id || null, notes, req.params.id]);
+      `, [closer?.id || null, notes, req.params.id, clientId]);
       const visibleRow = update.rows.length
         ? await setSetterVisibility(pool, req.params.id, {
             reason: 'stage_change',
             source: 'scout',
             stageStatus: 'booked',
+            clientId,
           })
         : null;
       rows = visibleRow ? [visibleRow] : [];
@@ -442,7 +493,7 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
             setter_id: req.user?.id || null,
             closer_id: closer.id,
           }),
-          rows[0].client_id || 1,
+          rows[0].client_id,
         ]);
 
         let emailed = false;
@@ -461,14 +512,15 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
         SET setter_status = $1,
             status = CASE WHEN $1 = 'dead' THEN 'dead' ELSE status END,
             setter_updated_at = NOW()
-        WHERE id = $2 AND source = 'scout'
+        WHERE id = $2 AND source = 'scout' AND client_id = $3
         RETURNING *
-      `, [status, req.params.id]);
+      `, [status, req.params.id, clientId]);
       const visibleRow = update.rows.length
         ? await setSetterVisibility(pool, req.params.id, {
             reason: 'stage_change',
             source: 'scout',
             stageStatus: status,
+            clientId,
           })
         : null;
       rows = visibleRow ? [visibleRow] : [];
@@ -484,20 +536,21 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
 router.patch(['/api/leads/:id/notes', '/leads/:id/notes'], requireSetterWrite, async (req, res) => {
   try {
     await ensureSetterSchema();
+    const clientId = setterClientId(req);
     const incoming = String(req.body.notes || '').slice(0, 5000);
     const current = await pool.query(`
       SELECT *
       FROM prospects
-      WHERE id = $1 AND source = 'scout'
-    `, [req.params.id]);
+      WHERE id = $1 AND source = 'scout' AND client_id = $2
+    `, [req.params.id, clientId]);
     if (!current.rows.length) return res.status(404).json({ error: 'Lead not found' });
     const notes = composeNotes(current.rows[0].notes, incoming);
     const { rows } = await pool.query(`
       UPDATE prospects
       SET notes = $1, updated_at = NOW()
-      WHERE id = $2 AND source = 'scout'
+      WHERE id = $2 AND source = 'scout' AND client_id = $3
       RETURNING *
-    `, [notes, req.params.id]);
+    `, [notes, req.params.id, clientId]);
     res.json({ success: true, lead: mapLead(rows[0]) });
   } catch (err) {
     console.error('[setter] notes error:', err.message);
@@ -508,6 +561,7 @@ router.patch(['/api/leads/:id/notes', '/leads/:id/notes'], requireSetterWrite, a
 router.patch(['/api/leads/:id/callback', '/leads/:id/callback'], requireSetterWrite, async (req, res) => {
   try {
     await ensureSetterSchema();
+    const clientId = setterClientId(req);
     const callbackAt = req.body.callback_at ? new Date(req.body.callback_at) : null;
     if (callbackAt && Number.isNaN(callbackAt.getTime())) {
       return res.status(400).json({ error: 'Invalid callback time' });
@@ -515,9 +569,9 @@ router.patch(['/api/leads/:id/callback', '/leads/:id/callback'], requireSetterWr
     const { rows } = await pool.query(`
       UPDATE prospects
       SET callback_at = $1, updated_at = NOW()
-      WHERE id = $2 AND source = 'scout'
+      WHERE id = $2 AND source = 'scout' AND client_id = $3
       RETURNING *
-    `, [callbackAt ? callbackAt.toISOString() : null, req.params.id]);
+    `, [callbackAt ? callbackAt.toISOString() : null, req.params.id, clientId]);
     if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
     res.json({ success: true, lead: mapLead(rows[0]) });
   } catch (err) {
@@ -529,13 +583,14 @@ router.patch(['/api/leads/:id/callback', '/leads/:id/callback'], requireSetterWr
 router.patch(['/api/leads/:id/hot', '/leads/:id/hot'], requireSetterWrite, async (req, res) => {
   try {
     await ensureSetterSchema();
+    const clientId = setterClientId(req);
     const isHot = Boolean(req.body.is_hot);
     const { rows } = await pool.query(`
       UPDATE prospects
       SET is_hot = $1, updated_at = NOW()
-      WHERE id = $2 AND source = 'scout'
+      WHERE id = $2 AND source = 'scout' AND client_id = $3
       RETURNING *
-    `, [isHot, req.params.id]);
+    `, [isHot, req.params.id, clientId]);
     if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
     res.json({ success: true, lead: mapLead(rows[0]) });
   } catch (err) {
@@ -549,11 +604,12 @@ router.post(['/api/leads/:id/enrich-phone', '/leads/:id/enrich-phone'], requireS
   let payload = {};
   try {
     await ensureSetterSchema();
+    const clientId = setterClientId(req);
     const { rows } = await pool.query(`
       SELECT *
       FROM prospects
-      WHERE id = $1 AND source = 'scout'
-    `, [req.params.id]);
+      WHERE id = $1 AND source = 'scout' AND client_id = $2
+    `, [req.params.id, clientId]);
     if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
 
     const enrichment = await enrichPhoneWaterfall({
@@ -566,90 +622,203 @@ router.post(['/api/leads/:id/enrich-phone', '/leads/:id/enrich-phone'], requireS
     if (phone) {
       status = 'success';
       payload = { phone, source_hit: enrichment.source, source: enrichment.source, chain: enrichment.chain };
-      await pool.query('UPDATE prospects SET phone = $1, enrichment_attempted = true, updated_at = NOW() WHERE id = $2', [phone, req.params.id]);
+      await pool.query('UPDATE prospects SET phone = $1, enrichment_attempted = true, updated_at = NOW() WHERE id = $2 AND client_id = $3', [phone, req.params.id, clientId]);
       await pool.query(`
-        INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)
-        VALUES ('setter', 'phone_enrich', $1, $2, $3, NOW())
-      `, [req.params.id, JSON.stringify(payload), status]);
+        INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+        VALUES ('setter', 'phone_enrich', $1, $2, $3, NOW(), $4)
+      `, [req.params.id, JSON.stringify(payload), status, rows[0].client_id]);
       return res.json({ phone });
     }
 
-    await pool.query('UPDATE prospects SET enrichment_attempted = true, updated_at = NOW() WHERE id = $1', [req.params.id]);
+    await pool.query('UPDATE prospects SET enrichment_attempted = true, updated_at = NOW() WHERE id = $1 AND client_id = $2', [req.params.id, clientId]);
     await pool.query(`
-      INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)
-      VALUES ('setter', 'phone_enrich', $1, $2, $3, NOW())
-    `, [req.params.id, JSON.stringify({ reason: 'No phone found', source_hit: null, chain: enrichment.chain }), status]);
+      INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+      VALUES ('setter', 'phone_enrich', $1, $2, $3, NOW(), $4)
+    `, [req.params.id, JSON.stringify({ reason: 'No phone found', source_hit: null, chain: enrichment.chain }), status, rows[0].client_id]);
     res.json({ phone: null });
   } catch (err) {
     console.error('[setter] phone enrich error:', err.response?.data || err.message);
-    await pool.query('UPDATE prospects SET enrichment_attempted = true, updated_at = NOW() WHERE id = $1', [req.params.id]).catch(() => {});
+    const clientId = setterClientId(req);
+    await pool.query('UPDATE prospects SET enrichment_attempted = true, updated_at = NOW() WHERE id = $1 AND client_id = $2', [req.params.id, clientId]).catch(() => {});
     await pool.query(`
-      INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, error_msg, ran_at)
-      VALUES ('setter', 'phone_enrich', $1, $2, 'failed', $3, NOW())
-    `, [req.params.id, JSON.stringify(payload), err.message]).catch(() => {});
+      INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, error_msg, ran_at, client_id)
+      SELECT 'setter', 'phone_enrich', p.id, $2, 'failed', $3, NOW(), p.client_id
+      FROM prospects p
+      WHERE p.id = $1 AND p.client_id = $4
+    `, [req.params.id, JSON.stringify(payload), err.message, clientId]).catch(() => {});
     res.status(500).json({ error: 'Unable to enrich phone', phone: null });
   }
 });
 
-router.post(['/api/leads/:id/quick-log-call', '/leads/:id/quick-log-call'], requireSetterWrite, async (req, res) => {
+router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], requireSetterWrite, async (req, res) => {
+  const client = await pool.connect();
   try {
     await ensureSetterSchema();
-    const setterId = req.user?.id || null;
-    const exists = await pool.query(`
-      SELECT id
-      FROM prospects
-      WHERE id = $1 AND source = 'scout'
-    `, [req.params.id]);
-    if (!exists.rows.length) return res.status(404).json({ error: 'Lead not found' });
+    const clientId = setterClientId(req);
+    const setterId = Number(req.user?.id);
+    const disposition = String(req.body.disposition || '').trim();
+    const notes = String(req.body.notes || '').trim().slice(0, 5000);
+    const duration = req.body.duration_seconds === '' || req.body.duration_seconds == null
+      ? null
+      : Number(req.body.duration_seconds);
+    const requestedCallback = req.body.callback_at ? new Date(req.body.callback_at) : null;
 
-    await pool.query(`
-      INSERT INTO activity_log (lead_id, action_type, notes, setter_id)
-      VALUES ($1, 'call', 'No answer', $2)
-    `, [req.params.id, setterId]);
-    await pool.query(`
-      UPDATE prospects
-      SET setter_status = CASE WHEN setter_status = 'new' THEN 'contacted' ELSE setter_status END,
-          setter_updated_at = NOW()
-      WHERE id = $1
-    `, [req.params.id]);
-    const count = await pool.query(`
-      SELECT COUNT(*)::int AS attempt_count
-      FROM activity_log
-      WHERE lead_id = $1 AND action_type = 'call'
-    `, [req.params.id]);
-    res.json({ success: true, attempt_count: Number(count.rows[0]?.attempt_count || 0) });
+    if (!DISPOSITION_SET.has(disposition)) return res.status(400).json({ error: 'Invalid disposition' });
+    if (!Number.isInteger(setterId)) return res.status(400).json({ error: 'Setter identity is required' });
+    if (duration != null && (!Number.isInteger(duration) || duration < 0 || duration > 86400)) {
+      return res.status(400).json({ error: 'Duration must be whole seconds between 0 and 86400' });
+    }
+    if (requestedCallback && Number.isNaN(requestedCallback.getTime())) {
+      return res.status(400).json({ error: 'Invalid callback time' });
+    }
+    if (disposition === 'incumbent_all_set' && requestedCallback) {
+      const days = (requestedCallback.getTime() - Date.now()) / 86400000;
+      if (days < 60 || days > 120) {
+        return res.status(400).json({ error: 'All-set nurture callback must be 60 to 120 days out' });
+      }
+    }
+
+    const callbackAt = resolveCallbackAt(disposition, requestedCallback);
+    await client.query('BEGIN');
+    const prospectResult = await client.query(`
+      SELECT p.*, c.name AS company_name
+      FROM prospects p
+      LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+      WHERE p.id = $1 AND p.source = 'scout' AND p.client_id = $2
+      FOR UPDATE OF p
+    `, [req.params.id, clientId]);
+    if (!prospectResult.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+    const prospect = prospectResult.rows[0];
+
+    const dispositionResult = await client.query(`
+      INSERT INTO call_dispositions
+        (prospect_id, client_id, call_duration_seconds, disposition, notes, setter_id, source, callback_at)
+      VALUES ($1, $2, $3, $4, $5, $6, 'manual_setter', $7)
+      RETURNING *
+    `, [prospect.id, prospect.client_id, duration, disposition, notes || null, setterId, callbackAt]);
+
+    const sentiment = disposition === 'answered_interested'
+      ? 'positive'
+      : ['answered_not_interested', 'wrong_number', 'disconnected', 'gatekeeper_blocked'].includes(disposition)
+        ? 'negative'
+        : 'neutral';
+    const outcome = JSON.stringify({
+      disposition,
+      duration_seconds: duration,
+      callback_at: callbackAt ? callbackAt.toISOString() : null,
+      source: 'manual_setter',
+    });
+    await client.query(`
+      INSERT INTO touchpoints
+        (prospect_id, channel, action_type, content_summary, outcome, sentiment, agent_id, external_ref, client_id)
+      VALUES ($1, 'call', 'call_disposition', $2, $3, $4, $5, $6, $7)
+    `, [
+      prospect.id,
+      `Manual call: ${disposition.replaceAll('_', ' ')}${notes ? ` — ${notes}` : ''}`,
+      outcome,
+      sentiment,
+      String(setterId),
+      `call_disposition:${dispositionResult.rows[0].id}`,
+      prospect.client_id,
+    ]);
+
+    const updated = await applyProspectDisposition(client, {
+      prospectId: prospect.id,
+      clientId: prospect.client_id,
+      disposition,
+      callbackAt,
+    });
+    const countResult = await client.query(`
+      SELECT (
+        SELECT COUNT(*)::int FROM activity_log
+        WHERE lead_id = $1 AND client_id = $2 AND action_type = 'call'
+      ) + (
+        SELECT COUNT(*)::int FROM call_dispositions
+        WHERE prospect_id = $1 AND client_id = $2
+      ) AS attempt_count
+    `, [prospect.id, prospect.client_id]);
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      disposition: dispositionResult.rows[0],
+      lead: mapLead({
+        ...updated,
+        company_name: prospect.company_name,
+        attempt_count: countResult.rows[0]?.attempt_count,
+      }),
+    });
   } catch (err) {
-    console.error('[setter] quick call log error:', err.message);
-    res.status(500).json({ error: 'Unable to log call' });
+    try { await client.query('ROLLBACK'); } catch (_rollbackErr) {}
+    console.error('[setter] call disposition error:', err.message);
+    res.status(500).json({ error: 'Unable to log call disposition' });
+  } finally {
+    client.release();
   }
 });
 
 router.get(['/api/activity', '/activity'], requireSetterRead, async (req, res) => {
   try {
     await ensureSetterSchema();
+    const params = [];
+    const clientScope = clientFilter(req, params, 'history.');
     const { rows } = await pool.query(`
-      SELECT
-        al.id,
-        al.lead_id,
-        al.action_type,
-        al.notes AS activity_notes,
-        al.setter_id,
-        al.created_at,
-        p.first_name,
-        p.last_name,
-        p.email,
-        p.notes AS prospect_notes,
-        p.vertical,
-        p.icp_score
-      FROM activity_log al
-      JOIN prospects p ON p.id = al.lead_id
-      ORDER BY al.created_at DESC
+      SELECT history.*
+      FROM (
+        SELECT
+          t.id::text AS id,
+          t.prospect_id AS lead_id,
+          t.channel,
+          t.action_type,
+          t.content_summary AS activity_notes,
+          t.agent_id AS setter_id,
+          t.created_at,
+          t.client_id,
+          p.first_name,
+          p.last_name,
+          p.email,
+          p.notes AS prospect_notes,
+          c.name AS company_name,
+          p.vertical,
+          p.icp_score
+        FROM touchpoints t
+        JOIN prospects p ON p.id = t.prospect_id AND p.client_id = t.client_id
+        LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+
+        UNION ALL
+
+        SELECT
+          al.id::text AS id,
+          al.lead_id,
+          CASE al.action_type WHEN 'text' THEN 'sms' ELSE al.action_type END AS channel,
+          al.action_type,
+          al.notes AS activity_notes,
+          al.setter_id,
+          al.created_at,
+          al.client_id,
+          p.first_name,
+          p.last_name,
+          p.email,
+          p.notes AS prospect_notes,
+          c.name AS company_name,
+          p.vertical,
+          p.icp_score
+        FROM activity_log al
+        JOIN prospects p ON p.id = al.lead_id AND p.client_id = al.client_id
+        LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+      ) history
+      WHERE true ${clientScope}
+      ORDER BY history.created_at DESC
       LIMIT 100
-    `);
+    `, params);
     res.json(rows.map(row => ({
       id: row.id,
       lead_id: row.lead_id,
       business_name: businessName({ ...row, notes: row.prospect_notes }),
+      channel: row.channel,
       action_type: row.action_type,
       notes: row.activity_notes,
       setter_id: row.setter_id,
@@ -663,23 +832,29 @@ router.get(['/api/activity', '/activity'], requireSetterRead, async (req, res) =
 
 router.post(['/api/activity', '/activity'], requireSetterWrite, async (req, res) => {
   const { lead_id, action_type, notes } = req.body;
-  if (!lead_id || !['call', 'email', 'text'].includes(action_type)) {
+  if (!lead_id || !['email', 'text'].includes(action_type)) {
     return res.status(400).json({ error: 'Invalid activity' });
   }
   try {
     await ensureSetterSchema();
     const setterId = req.user?.id || null;
+    const clientId = setterClientId(req);
+    const channel = action_type === 'text' ? 'sms' : action_type;
     const { rows } = await pool.query(`
-      INSERT INTO activity_log (lead_id, action_type, notes, setter_id)
-      VALUES ($1, $2, $3, $4)
-      RETURNING *
-    `, [lead_id, action_type, notes || '', setterId]);
+      INSERT INTO touchpoints
+        (prospect_id, channel, action_type, content_summary, outcome, sentiment, agent_id, client_id)
+      SELECT p.id, $2, 'manual_touch', $3, 'manual', 'neutral', $4, p.client_id
+      FROM prospects p
+      WHERE p.id = $1 AND p.source = 'scout' AND p.client_id = $5
+      RETURNING touchpoints.*
+    `, [lead_id, channel, notes || '', String(setterId || ''), clientId]);
+    if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
     await pool.query(`
       UPDATE prospects
       SET setter_status = CASE WHEN setter_status = 'new' THEN 'contacted' ELSE setter_status END,
           setter_updated_at = NOW()
-      WHERE id = $1
-    `, [lead_id]);
+      WHERE id = $1 AND client_id = $2
+    `, [lead_id, clientId]);
     res.json({ success: true, activity: rows[0] });
   } catch (err) {
     console.error('[setter] activity create error:', err.message);
