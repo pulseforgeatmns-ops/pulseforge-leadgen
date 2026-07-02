@@ -74,7 +74,7 @@ jacob@goanchorcleaning.com
       subject: 'Cleaning that survives busy season',
       body: `Hi {{first_name|}},
 
-Come March, {{business_name_short}} can't afford a cleaning routine that needs chasing. That's the month a shaky setup shows itself, and the month nobody has a minute to fix one.
+Come March, {{business_name_short|your office}} can't afford a cleaning routine that needs chasing. That's the month a shaky setup shows itself, and the month nobody has a minute to fix one.
 
 I've run service businesses for over a decade, restaurants then cleaning. Same lesson both times: the work either happens on its own, or it becomes someone's job to chase. Anchor runs on a written scope and one accountable owner. Me.
 
@@ -113,7 +113,7 @@ Good cleaning is invisible. The office resets overnight and nobody thinks about 
 
 Bad cleaning turns partners into inspectors. I spent years running restaurant crews before I ever ran cleaning crews, and the standard only held when a specific person answered for it. Anchor still works that way. The scope is written down and every correction has an owner.
 
-If anyone at {{business_name_short}} has been playing inspector, reply "send it" and I'll share what our scope looks like.
+If anyone at {{business_name_short|your office}} has been playing inspector, reply "send it" and I'll share what our scope looks like.
 
 Jacob Maynard
 Anchor Cleaning
@@ -127,7 +127,7 @@ jacob@goanchorcleaning.com
 
 Last one from me. Shaky cleaning arrangements get fixed in the quiet months or not at all. Once the office starts running late again, this drops to the bottom of the list and stays there.
 
-I can have a scope ready for {{business_name_short}} this week. If the timing's wrong, tell me when your busy season ends and I'll come back then.
+I can have a scope ready for {{business_name_short|your office}} this week. If the timing's wrong, tell me when your busy season ends and I'll come back then.
 
 Jacob Maynard
 Anchor Cleaning

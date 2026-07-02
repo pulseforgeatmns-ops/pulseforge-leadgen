@@ -7,7 +7,7 @@ assert.deepStrictEqual(CLIENT_SEQUENCE_MAP[10], {
   accounting: 'anchor_accounting_draft',
 }, 'Anchor sequences must be explicitly mapped for client 10 only');
 
-const allowedTokens = new Set(['first_name|', 'business_name_short']);
+const allowedTokens = new Set(['first_name|', 'business_name_short', 'business_name_short|your office']);
 for (const [name, steps] of Object.entries(ANCHOR_DRAFT_SEQUENCES)) {
   assert.deepStrictEqual(steps.map(step => step.day), [0, 4, 8, 13], `${name} cadence`);
   for (const step of steps) {
@@ -20,7 +20,7 @@ for (const [name, steps] of Object.entries(ANCHOR_DRAFT_SEQUENCES)) {
     assert(!step.body.includes('{{first_name}}'), `${name} step ${step.day} has a required first_name greeting`);
     const tokens = [...`${step.subject}\n${step.body}`.matchAll(/{{([^}]+)}}/g)].map(match => match[1]);
     tokens.forEach(token => assert(allowedTokens.has(token), `${name} has unsupported token ${token}`));
-    const businessNameMentions = tokens.filter(token => token === 'business_name_short').length;
+    const businessNameMentions = tokens.filter(token => token.startsWith('business_name_short')).length;
     assert(
       businessNameMentions <= 1,
       `${name} step ${step.day} mentions business_name_short ${businessNameMentions} times`
