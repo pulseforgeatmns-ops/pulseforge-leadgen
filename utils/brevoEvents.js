@@ -394,13 +394,21 @@ async function insertBrevoEvent(rawPayload = {}) {
     )
     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12
     WHERE NOT (
-      $13::boolean
-      AND $10::text IS NOT NULL
-      AND EXISTS (
+      (
+        $13::boolean
+        AND $10::text IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM email_events existing
+          WHERE existing.brevo_message_id = $10
+            AND existing.event_type = $6
+        )
+      )
+      OR EXISTS (
         SELECT 1
         FROM email_events existing
-        WHERE existing.brevo_message_id = $10
-          AND existing.event_type = $6
+        WHERE existing.event_type = $6
+          AND existing.raw_payload = $11::jsonb
       )
     )
     ON CONFLICT (event_id) DO UPDATE

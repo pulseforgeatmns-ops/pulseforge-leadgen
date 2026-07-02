@@ -5,6 +5,16 @@ const { insertBrevoEvent } = require('../utils/brevoEvents');
 
 const LIMIT = 500;
 const DAYS = 90;
+const PROXY_EVENT_NAMES = [
+  'loadedByProxy',
+  'loaded_by_proxy',
+  'proxyOpen',
+  'proxy_open',
+  'uniqueLoadedByProxy',
+  'unique_loaded_by_proxy',
+  'uniqueProxyOpen',
+  'unique_proxy_open',
+];
 
 function isoDate(date) {
   return date.toISOString().slice(0, 10);
@@ -20,6 +30,31 @@ async function reclassifyLegacyProxyTouchpoints() {
     RETURNING id
   `);
   return result.rowCount;
+}
+
+async function reconcileLegacyProxyEvents() {
+  const removed = await pool.query(`
+    DELETE FROM email_events legacy
+    USING email_events canonical
+    WHERE legacy.event_type = 'opened'
+      AND legacy.raw_payload->>'event' = ANY($1::text[])
+      AND canonical.event_type = 'opened_proxy'
+      AND canonical.raw_payload = legacy.raw_payload
+    RETURNING legacy.id
+  `, [PROXY_EVENT_NAMES]);
+
+  const reclassified = await pool.query(`
+    UPDATE email_events
+    SET event_type = 'opened_proxy'
+    WHERE event_type = 'opened'
+      AND raw_payload->>'event' = ANY($1::text[])
+    RETURNING id
+  `, [PROXY_EVENT_NAMES]);
+
+  return {
+    removedDuplicates: removed.rowCount,
+    reclassified: reclassified.rowCount,
+  };
 }
 
 async function fetchEvents(offset) {
@@ -49,6 +84,8 @@ async function main() {
 
   const reclassifiedTouchpoints = await reclassifyLegacyProxyTouchpoints();
   console.log(`Reclassified ${reclassifiedTouchpoints} legacy proxy-open touchpoint(s).`);
+  const proxyEvents = await reconcileLegacyProxyEvents();
+  console.log(`Reconciled legacy proxy events: ${proxyEvents.removedDuplicates} duplicate(s) removed, ${proxyEvents.reclassified} row(s) reclassified.`);
 
   let offset = 0;
   let totalFetched = 0;
@@ -106,11 +143,19 @@ async function main() {
   if (skipped) console.log('Skipped reasons:', skippedByReason);
 }
 
-main()
-  .catch(err => {
-    console.error('Brevo backfill failed:', err.response?.data || err.message);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await pool.end();
-  });
+if (require.main === module) {
+  main()
+    .catch(err => {
+      console.error('Brevo backfill failed:', err.response?.data || err.message);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await pool.end();
+    });
+}
+
+module.exports = {
+  main,
+  reconcileLegacyProxyEvents,
+  reclassifyLegacyProxyTouchpoints,
+};
