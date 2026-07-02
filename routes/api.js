@@ -2627,14 +2627,14 @@ router.post('/api/run/:agent', requireOperator, async (req, res) => {
 // ---------------------------------------------------------------------------
 // Mira context endpoint (READ-ONLY — for Claude.ai consumption)
 //
-// GET /api/mira/context returns a JSON snapshot of Jacob's current Mira state so
-// an external Claude.ai conversation can read live context when Jacob talks to
-// it. This endpoint is strictly read-only: it issues SELECT-only DB reads and
-// outbound Todoist GET requests, and never mutates any Mira table, agent, or
-// schema. It does NOT use session auth — instead it is guarded by the
-// MIRA_CONTEXT_SECRET env var (passed as ?secret=... or an
-// `Authorization: Bearer <secret>` header), mirroring the CRON_SECRET guard
-// pattern used by the /cron routes.
+// GET /api/mira/context and GET /api/mira/context/:secret return a JSON snapshot
+// of Jacob's current Mira state so an external Claude.ai conversation can read
+// live context when Jacob talks to it. This endpoint is strictly read-only: it
+// issues SELECT-only DB reads and outbound Todoist GET requests, and never
+// mutates any Mira table, agent, or schema. It does NOT use session auth —
+// instead it is guarded by the MIRA_CONTEXT_SECRET env var (passed as
+// ?secret=..., an `Authorization: Bearer <secret>` header, or the :secret path
+// parameter), mirroring the CRON_SECRET guard pattern used by the /cron routes.
 // ---------------------------------------------------------------------------
 function requireMiraContextSecret(req, res, next) {
   const expected = process.env.MIRA_CONTEXT_SECRET;
@@ -2643,6 +2643,8 @@ function requireMiraContextSecret(req, res, next) {
   const bearer = hasBearer ? header.slice(7).trim() : null;
   const hasQuery = Object.prototype.hasOwnProperty.call(req.query, 'secret');
   const query = typeof req.query.secret === 'string' ? req.query.secret : null;
+  const hasPath = Object.prototype.hasOwnProperty.call(req.params, 'secret');
+  const path = typeof req.params.secret === 'string' ? req.params.secret : null;
 
   const matchesExpected = provided => {
     if (typeof provided !== 'string' || typeof expected !== 'string') return false;
@@ -2652,14 +2654,15 @@ function requireMiraContextSecret(req, res, next) {
       && crypto.timingSafeEqual(providedBuffer, expectedBuffer);
   };
 
-  // Query and Bearer credentials are independent; either valid value grants access.
-  if (expected && (matchesExpected(query) || matchesExpected(bearer))) {
+  // All credential sources are independent; any valid value grants access.
+  if (expected && (matchesExpected(query) || matchesExpected(bearer) || matchesExpected(path))) {
     return next();
   }
 
   const sources = [];
   if (hasQuery) sources.push({ source: 'query', length: query === null ? null : Buffer.byteLength(query, 'utf8') });
   if (hasBearer) sources.push({ source: 'bearer', length: Buffer.byteLength(bearer, 'utf8') });
+  if (hasPath) sources.push({ source: 'path', length: path === null ? null : Buffer.byteLength(path, 'utf8') });
   console.warn(`[mira_context] auth rejected ${JSON.stringify({
     secret_provided: sources.some(source => Number(source.length) > 0),
     sources,
@@ -2668,7 +2671,7 @@ function requireMiraContextSecret(req, res, next) {
   return res.status(401).json({ error: 'Unauthorized' });
 }
 
-router.get('/api/mira/context', requireMiraContextSecret, async (req, res) => {
+router.get(['/api/mira/context', '/api/mira/context/:secret'], requireMiraContextSecret, async (req, res) => {
   try {
     // Every table read below is SELECT-only and individually fault-isolated: a
     // missing or empty table yields [] / null instead of failing the snapshot.
