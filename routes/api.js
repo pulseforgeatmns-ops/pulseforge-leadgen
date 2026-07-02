@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
@@ -2637,16 +2638,34 @@ router.post('/api/run/:agent', requireOperator, async (req, res) => {
 // ---------------------------------------------------------------------------
 function requireMiraContextSecret(req, res, next) {
   const expected = process.env.MIRA_CONTEXT_SECRET;
-  // Fail closed: if the secret is not configured the endpoint stays locked.
-  if (!expected) return res.status(401).json({ error: 'Unauthorized' });
-
   const header = String(req.get('authorization') || '');
-  const bearer = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : null;
-  const provided = req.query.secret || bearer;
-  if (!provided || provided !== expected) {
-    return res.status(401).json({ error: 'Unauthorized' });
+  const hasBearer = header.toLowerCase().startsWith('bearer ');
+  const bearer = hasBearer ? header.slice(7).trim() : null;
+  const hasQuery = Object.prototype.hasOwnProperty.call(req.query, 'secret');
+  const query = typeof req.query.secret === 'string' ? req.query.secret : null;
+
+  const matchesExpected = provided => {
+    if (typeof provided !== 'string' || typeof expected !== 'string') return false;
+    const providedBuffer = Buffer.from(provided, 'utf8');
+    const expectedBuffer = Buffer.from(expected, 'utf8');
+    return providedBuffer.length === expectedBuffer.length
+      && crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+  };
+
+  // Query and Bearer credentials are independent; either valid value grants access.
+  if (expected && (matchesExpected(query) || matchesExpected(bearer))) {
+    return next();
   }
-  next();
+
+  const sources = [];
+  if (hasQuery) sources.push({ source: 'query', length: query === null ? null : Buffer.byteLength(query, 'utf8') });
+  if (hasBearer) sources.push({ source: 'bearer', length: Buffer.byteLength(bearer, 'utf8') });
+  console.warn(`[mira_context] auth rejected ${JSON.stringify({
+    secret_provided: sources.some(source => Number(source.length) > 0),
+    sources,
+  })}`);
+
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
 router.get('/api/mira/context', requireMiraContextSecret, async (req, res) => {
