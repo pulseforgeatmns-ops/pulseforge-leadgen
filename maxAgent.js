@@ -583,11 +583,9 @@ async function getSystemSnapshot() {
   const topSubjects = await pool.query(`
     SELECT
       subject_line,
-      GREATEST(
-        COUNT(*) FILTER (WHERE event_type = 'sent'),
-        COUNT(*) FILTER (WHERE event_type = 'delivered')
-      )::int AS sends,
+      COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sends,
       COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opens,
+      COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS proxy_opens,
       ROUND(
         COUNT(*) FILTER (WHERE event_type = 'opened')::numeric
           / NULLIF(COUNT(*) FILTER (WHERE event_type = 'delivered'), 0) * 100,
@@ -598,10 +596,7 @@ async function getSystemSnapshot() {
       AND COALESCE(subject_line, '') <> ''
       AND event_at >= NOW() - INTERVAL '90 days'
     GROUP BY subject_line
-    HAVING GREATEST(
-      COUNT(*) FILTER (WHERE event_type = 'sent'),
-      COUNT(*) FILTER (WHERE event_type = 'delivered')
-    ) >= 10
+    HAVING COUNT(*) FILTER (WHERE event_type = 'sent') >= 10
     ORDER BY open_rate DESC NULLS LAST, sends DESC
     LIMIT 3
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
@@ -612,10 +607,8 @@ async function getSystemSnapshot() {
         COALESCE(NULLIF(p.vertical, ''), 'unknown') AS vertical,
         ee.sequence,
         ee.step,
-        GREATEST(
-          COUNT(*) FILTER (WHERE ee.event_type = 'sent'),
-          COUNT(*) FILTER (WHERE ee.event_type = 'delivered')
-        )::int AS sends,
+        COUNT(*) FILTER (WHERE ee.event_type = 'sent')::int AS sends,
+        COUNT(*) FILTER (WHERE ee.event_type = 'opened_proxy')::int AS proxy_opens,
         ROUND(
           COUNT(*) FILTER (WHERE ee.event_type = 'opened')::numeric
             / NULLIF(COUNT(*) FILTER (WHERE ee.event_type = 'delivered'), 0) * 100,
@@ -635,7 +628,7 @@ async function getSystemSnapshot() {
       GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown'), ee.sequence, ee.step
     )
     SELECT DISTINCT ON (vertical)
-      vertical, sequence, step, sends, open_rate
+      vertical, sequence, step, sends, proxy_opens, open_rate
     FROM rollup
     WHERE sends > 0 AND vertical <> 'unknown'
     ORDER BY vertical, open_rate ASC NULLS FIRST, sends DESC
@@ -645,10 +638,7 @@ async function getSystemSnapshot() {
     WITH rollup AS (
       SELECT
         COALESCE(NULLIF(p.vertical, ''), 'unknown') AS vertical,
-        GREATEST(
-          COUNT(*) FILTER (WHERE ee.event_type = 'sent'),
-          COUNT(*) FILTER (WHERE ee.event_type = 'delivered')
-        )::int AS sends,
+        COUNT(*) FILTER (WHERE ee.event_type = 'sent')::int AS sends,
         COUNT(*) FILTER (WHERE ee.event_type = 'replied')::int AS replies
       FROM email_events ee
       LEFT JOIN LATERAL (
@@ -1534,27 +1524,23 @@ async function analyzePatterns({ expansionReport = null } = {}) {
   const subjectRows = await queryPattern(`
     SELECT
       subject_line,
-      GREATEST(
-        COUNT(*) FILTER (WHERE event_type = 'sent'),
-        COUNT(*) FILTER (WHERE event_type = 'delivered')
-      )::int AS sends,
-      COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opens
+      COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sends,
+      COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opens,
+      COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS proxy_opens
     FROM email_events
     WHERE client_id = $1
       AND COALESCE(subject_line, '') <> ''
       AND event_at >= NOW() - INTERVAL '90 days'
     GROUP BY subject_line
-    HAVING GREATEST(
-      COUNT(*) FILTER (WHERE event_type = 'sent'),
-      COUNT(*) FILTER (WHERE event_type = 'delivered')
-    ) >= 10
+    HAVING COUNT(*) FILTER (WHERE event_type = 'sent') >= 10
   `, [CLIENT_ID]);
   const subjectFormats = new Map();
   for (const row of subjectRows) {
     const format = classifySubjectFormat(row.subject_line);
-    const current = subjectFormats.get(format) || { format, sends: 0, opens: 0 };
+    const current = subjectFormats.get(format) || { format, sends: 0, opens: 0, proxy_opens: 0 };
     current.sends += Number(row.sends || 0);
     current.opens += Number(row.opens || 0);
+    current.proxy_opens += Number(row.proxy_opens || 0);
     subjectFormats.set(format, current);
   }
   const subjectFormatRows = [...subjectFormats.values()]
@@ -1578,11 +1564,9 @@ async function analyzePatterns({ expansionReport = null } = {}) {
         COALESCE(NULLIF(p.vertical, ''), 'unknown') AS vertical,
         ee.sequence,
         ee.step,
-        GREATEST(
-          COUNT(*) FILTER (WHERE ee.event_type = 'sent'),
-          COUNT(*) FILTER (WHERE ee.event_type = 'delivered')
-        )::int AS sends,
+        COUNT(*) FILTER (WHERE ee.event_type = 'sent')::int AS sends,
         COUNT(*) FILTER (WHERE ee.event_type = 'opened')::int AS opens,
+        COUNT(*) FILTER (WHERE ee.event_type = 'opened_proxy')::int AS proxy_opens,
         ROUND(
           COUNT(*) FILTER (WHERE ee.event_type = 'opened')::numeric
             / NULLIF(COUNT(*) FILTER (WHERE ee.event_type = 'delivered'), 0) * 100,
@@ -1602,7 +1586,7 @@ async function analyzePatterns({ expansionReport = null } = {}) {
       GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown'), ee.sequence, ee.step
     )
     SELECT DISTINCT ON (vertical)
-      vertical, sequence, step, sends, opens, open_rate
+      vertical, sequence, step, sends, opens, proxy_opens, open_rate
     FROM rollup
     WHERE vertical <> 'unknown'
       AND sends >= 10
@@ -1626,10 +1610,7 @@ async function analyzePatterns({ expansionReport = null } = {}) {
     WITH rollup AS (
       SELECT
         COALESCE(NULLIF(p.vertical, ''), 'unknown') AS vertical,
-        GREATEST(
-          COUNT(*) FILTER (WHERE ee.event_type = 'sent'),
-          COUNT(*) FILTER (WHERE ee.event_type = 'delivered')
-        )::int AS sends,
+        COUNT(*) FILTER (WHERE ee.event_type = 'sent')::int AS sends,
         COUNT(*) FILTER (WHERE ee.event_type = 'replied')::int AS replies
       FROM email_events ee
       LEFT JOIN LATERAL (
@@ -1923,11 +1904,9 @@ async function buildWeeklyPatternTrends() {
   const trends = {};
   const weeklyEmail = await queryPattern(`
     SELECT bucket,
-      GREATEST(
-        COUNT(*) FILTER (WHERE event_type = 'sent'),
-        COUNT(*) FILTER (WHERE event_type = 'delivered')
-      )::int AS sends,
+      COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sends,
       COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opens,
+      COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS proxy_opens,
       COUNT(*) FILTER (WHERE event_type = 'replied')::int AS replies,
       ROUND(
         COUNT(*) FILTER (WHERE event_type = 'opened')::numeric
@@ -1936,10 +1915,7 @@ async function buildWeeklyPatternTrends() {
       ) AS open_rate,
       ROUND(
         COUNT(*) FILTER (WHERE event_type = 'replied')::numeric
-          / NULLIF(GREATEST(
-            COUNT(*) FILTER (WHERE event_type = 'sent'),
-            COUNT(*) FILTER (WHERE event_type = 'delivered')
-          ), 0) * 100,
+          / NULLIF(COUNT(*) FILTER (WHERE event_type = 'sent'), 0) * 100,
         2
       ) AS reply_rate
     FROM (

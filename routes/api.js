@@ -2313,6 +2313,7 @@ router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
           COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent_total,
           COUNT(*) FILTER (WHERE event_type = 'delivered')::int AS delivered_total,
           COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opened_total,
+          COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS opened_proxy_total,
           COUNT(*) FILTER (WHERE event_type = 'clicked')::int AS clicked_total,
           COUNT(*) FILTER (WHERE event_type = 'replied')::int AS replied_total,
           COUNT(*) FILTER (WHERE event_type IN ('hard_bounce', 'blocked'))::int AS bounced_total,
@@ -2326,6 +2327,7 @@ router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
           COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent_week,
           COUNT(*) FILTER (WHERE event_type = 'delivered')::int AS delivered_week,
           COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opened_week,
+          COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS opened_proxy_week,
           COUNT(*) FILTER (WHERE event_type = 'clicked')::int AS clicked_week,
           COUNT(*) FILTER (WHERE event_type IN ('hard_bounce', 'blocked'))::int AS bounced_week
         FROM email_events
@@ -2338,6 +2340,7 @@ router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
           COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent,
           COUNT(*) FILTER (WHERE event_type = 'delivered')::int AS delivered,
           COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opened,
+          COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS opened_proxy,
           COUNT(*) FILTER (WHERE event_type = 'clicked')::int AS clicked,
           COUNT(*) FILTER (WHERE event_type = 'replied')::int AS replied,
           COUNT(*) FILTER (WHERE event_type IN ('hard_bounce', 'blocked'))::int AS bounced
@@ -2353,6 +2356,7 @@ router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
           COUNT(*) FILTER (WHERE ee.event_type = 'sent')::int AS sent,
           COUNT(*) FILTER (WHERE ee.event_type = 'delivered')::int AS delivered,
           COUNT(*) FILTER (WHERE ee.event_type = 'opened')::int AS opened,
+          COUNT(*) FILTER (WHERE ee.event_type = 'opened_proxy')::int AS opened_proxy,
           COUNT(*) FILTER (WHERE ee.event_type = 'clicked')::int AS clicked,
           COUNT(*) FILTER (WHERE ee.event_type = 'replied')::int AS replied,
           COUNT(*) FILTER (WHERE ee.event_type IN ('hard_bounce', 'blocked'))::int AS bounced
@@ -2398,18 +2402,12 @@ router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
 
     const t = totals.rows[0];
     const w = weekTotals.rows[0];
-    const denominator = Number(t.sent_total || 0) >= Number(t.delivered_total || 0)
-      ? Number(t.sent_total || 0)
-      : Number(t.delivered_total || 0);
-    const denominatorLabel = Number(t.sent_total || 0) >= Number(t.delivered_total || 0) ? 'sent' : 'delivered fallback';
-    const weekDenominator = Number(w.sent_week || 0) >= Number(w.delivered_week || 0)
-      ? Number(w.sent_week || 0)
-      : Number(w.delivered_week || 0);
+    const denominator = Number(t.sent_total || 0);
+    const denominatorLabel = 'sent';
+    const weekDenominator = Number(w.sent_week || 0);
     const decorateBreakdown = row => {
-      const den = Number(row.sent || 0) >= Number(row.delivered || 0)
-        ? Number(row.sent || 0)
-        : Number(row.delivered || 0);
-      const denLabel = Number(row.sent || 0) >= Number(row.delivered || 0) ? 'sent' : 'delivered fallback';
+      const den = Number(row.sent || 0);
+      const denLabel = 'sent';
       return {
         ...row,
         denominator: den,
@@ -2427,9 +2425,13 @@ router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
       sent_total:         denominator,
       raw_sent_total:     t.sent_total,
       delivered_total:    t.delivered_total,
+      opened_total:       t.opened_total,
+      opened_proxy_total: t.opened_proxy_total,
       sent_week:          weekDenominator,
       raw_sent_week:      w.sent_week,
       delivered_week:     w.delivered_week,
+      opened_week:        w.opened_week,
+      opened_proxy_week:  w.opened_proxy_week,
       open_rate:          pct(t.opened_total, t.delivered_total),
       click_rate:         pct(t.clicked_total, denominator),
       reply_rate:         pct(t.replied_total, denominator),

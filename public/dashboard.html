@@ -6379,6 +6379,7 @@ async function loadEmailAnalytics() {
     const tiles = [
       { label: d.denominator_label === 'sent' ? 'Sent Total' : 'Delivered Total', val: (d.sent_total  || 0).toLocaleString(), sub: `${d.sent_week || 0} last 7 days` },
       { label: 'Open Rate',    val: `${d.open_rate  || 0}%`, sub: `${d.open_rate_week || 0}% last 7 days` },
+      { label: 'Proxy Opens',  val: (d.opened_proxy_total || 0).toLocaleString(), sub: `${d.opened_proxy_week || 0} last 7 days · excluded from open rate` },
       { label: 'Click Rate',   val: `${d.click_rate || 0}%`, sub: 'any link click' },
       { label: 'Reply Rate',   val: `${d.reply_rate || 0}%`, sub: 'replied events' },
       { label: 'Bounce Rate',  val: `${d.bounce_rate || 0}%`, sub: 'hard bounce or blocked', cls: Number(d.bounce_rate || 0) >= 4 ? 'danger' : Number(d.bounce_rate || 0) >= 2 ? 'warn' : '' },
@@ -6397,7 +6398,7 @@ async function loadEmailAnalytics() {
     const note = document.getElementById('emailDenomNote');
     if (note) {
       note.textContent = d.denominator_label === 'sent'
-        ? `Window: last ${d.days || _emailAnalyticsWindow} days. Rates use sent events.`
+        ? `Window: last ${d.days || _emailAnalyticsWindow} days. Send-based rates use sent events; open rate uses delivered mail and human opens only.`
         : `Window: last ${d.days || _emailAnalyticsWindow} days. Rates use delivered fallback because sent events are sparse in backfill.`;
     }
 

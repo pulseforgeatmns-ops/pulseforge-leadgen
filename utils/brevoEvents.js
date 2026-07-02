@@ -3,30 +3,74 @@ const pool = require('../db');
 
 const BREVO_EVENT_MAP = {
   request: 'sent',
+  requests: 'sent',
   sent: 'sent',
   delivered: 'delivered',
   open: 'opened',
   opens: 'opened',
   opened: 'opened',
-  loaded_by_proxy: 'opened',
-  loadedByProxy: 'opened',
-  loadedbyproxy: 'opened',
+  loaded_by_proxy: 'opened_proxy',
+  loadedByProxy: 'opened_proxy',
+  loadedbyproxy: 'opened_proxy',
+  proxyOpen: 'opened_proxy',
+  proxyopen: 'opened_proxy',
+  proxy_open: 'opened_proxy',
+  unique_opened: 'opened',
+  uniqueOpened: 'opened',
+  uniqueopened: 'opened',
+  unique_loaded_by_proxy: 'opened_proxy',
+  uniqueLoadedByProxy: 'opened_proxy',
+  uniqueloadedbyproxy: 'opened_proxy',
+  uniqueProxyOpen: 'opened_proxy',
+  uniqueproxyopen: 'opened_proxy',
+  unique_proxy_open: 'opened_proxy',
   clicks: 'clicked',
   click: 'clicked',
   clicked: 'clicked',
   soft_bounce: 'soft_bounce',
+  softBounce: 'soft_bounce',
+  softbounce: 'soft_bounce',
   softBounces: 'soft_bounce',
   softbounces: 'soft_bounce',
   bounce: 'hard_bounce',
   hard_bounce: 'hard_bounce',
+  hardBounce: 'hard_bounce',
+  hardbounce: 'hard_bounce',
   hardBounces: 'hard_bounce',
   hardbounces: 'hard_bounce',
   blocked: 'blocked',
+  deferred: 'deferred',
+  invalid: 'invalid',
+  invalid_email: 'invalid',
+  invalidEmail: 'invalid',
+  invalidemail: 'invalid',
+  error: 'error',
   spam: 'spam',
+  complaint: 'spam',
+  complaints: 'spam',
+  spamReport: 'spam',
+  spamreport: 'spam',
+  spamReports: 'spam',
+  spamreports: 'spam',
+  unsubscribe: 'unsubscribed',
   unsubscribed: 'unsubscribed',
   replied: 'replied',
   reply: 'replied',
 };
+
+// These lifecycle states can occur at most once for a Brevo message. The live
+// webhook and the history API use different raw names (for example `request`
+// versus `requests`) and can timestamp the same event one second apart, so the
+// message id + canonical type is the stable cross-source identity.
+const SINGLETON_MESSAGE_EVENT_TYPES = new Set([
+  'sent',
+  'delivered',
+  'hard_bounce',
+  'blocked',
+  'invalid',
+  'spam',
+  'unsubscribed',
+]);
 
 const TWO_PART_SUFFIXES = new Set([
   'co.uk',
@@ -172,7 +216,8 @@ function eventName(payload = {}) {
 }
 
 function internalEventType(payload = {}) {
-  return BREVO_EVENT_MAP[eventName(payload)] || BREVO_EVENT_MAP[eventName(payload).toLowerCase()] || null;
+  const name = eventName(payload);
+  return BREVO_EVENT_MAP[name] || BREVO_EVENT_MAP[name.toLowerCase()] || null;
 }
 
 function metadataValue(payload, key) {
@@ -347,9 +392,21 @@ async function insertBrevoEvent(rawPayload = {}) {
       raw_payload,
       event_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
-    ON CONFLICT (event_id) DO NOTHING
-    RETURNING id
+    SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12
+    WHERE NOT (
+      $13::boolean
+      AND $10::text IS NOT NULL
+      AND EXISTS (
+        SELECT 1
+        FROM email_events existing
+        WHERE existing.brevo_message_id = $10
+          AND existing.event_type = $6
+      )
+    )
+    ON CONFLICT (event_id) DO UPDATE
+      SET event_type = EXCLUDED.event_type
+      WHERE email_events.event_type IS DISTINCT FROM EXCLUDED.event_type
+    RETURNING id, (xmax = 0) AS inserted
   `, [
     id,
     prospect?.id || null,
@@ -363,9 +420,11 @@ async function insertBrevoEvent(rawPayload = {}) {
     messageId,
     JSON.stringify(payload),
     eventAt(payload),
+    SINGLETON_MESSAGE_EVENT_TYPES.has(type),
   ]);
 
-  const inserted = insert.rowCount > 0;
+  const inserted = insert.rows[0]?.inserted === true;
+  const updated = insert.rowCount > 0 && !inserted;
   await logBrevoEvent({
     eventId: id,
     eventType: type,
@@ -377,7 +436,8 @@ async function insertBrevoEvent(rawPayload = {}) {
 
   return {
     inserted,
-    duplicate: !inserted,
+    updated,
+    duplicate: insert.rowCount === 0,
     event_id: id,
     event_type: type,
     recipient_email: recipient,
@@ -391,6 +451,7 @@ module.exports = {
   BREVO_EVENT_MAP,
   brevoMessageId,
   eventAt,
+  eventId,
   insertBrevoEvent,
   internalEventType,
   normalizeRootDomain,

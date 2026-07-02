@@ -8,6 +8,8 @@ function mockQuery(overrides = {}) {
       send_count_baseline_7d: 100,
       bounce_count_today: 1,
       reply_count_today: 3,
+      opened_count_today: 20,
+      opened_proxy_count_today: 7,
     }],
     scout: [{ scout_prospects_added_today: 10, scout_baseline_7d: 9 }],
     warm_signals: [{ warm_signals_fired_today: 2 }],
@@ -52,6 +54,26 @@ async function run() {
 
   const healthy = await computeDailyHealth({ now, query: mockQuery() });
   assert.deepEqual(healthy.health_flags, [{ severity: 'green', code: 'HEALTHY', msg: 'All systems normal' }]);
+  assert.equal(healthy.opened_count_today, 20);
+  assert.equal(healthy.opened_proxy_count_today, 7);
+
+  const zeroSendsWithCollapsedBaseline = await computeDailyHealth({
+    now,
+    query: mockQuery({
+      email: [{ send_count_today: 0, send_count_baseline_7d: 0 }],
+      clients: [{
+        client_id: 1,
+        client_name: 'Pulseforge Manchester',
+        active_prospect_count: 80,
+        send_count_today: 0,
+        send_count_baseline_7d_total: 0,
+      }],
+    }),
+  });
+  assert.ok(zeroSendsWithCollapsedBaseline.health_flags.some(flag =>
+    flag.code === 'CLIENT_DARK' && flag.severity === 'red'
+  ));
+  assert.ok(!zeroSendsWithCollapsedBaseline.health_flags.some(flag => flag.code === 'HEALTHY'));
 
   const missing = await computeDailyHealth({
     now,

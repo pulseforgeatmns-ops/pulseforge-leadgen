@@ -1,6 +1,9 @@
 const pool = require('../db');
 
-const SEND_EVENTS = "('delivered', 'request')";
+// Brevo's live `request` and history API `requests` events are normalized to
+// the canonical `sent` event_type before they reach email_events.
+const SEND_EVENTS = "('sent')";
+const ACTIVE_PROSPECT_ZERO_SEND_THRESHOLD = 50;
 
 function number(value) {
   const parsed = Number(value || 0);
@@ -40,7 +43,7 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
             AND event_at < $1::timestamptz - INTERVAL '24 hours'
         )::numeric / 7 AS send_count_baseline_7d,
         COUNT(*) FILTER (
-          WHERE event_type = 'bounce'
+          WHERE event_type IN ('hard_bounce', 'soft_bounce', 'blocked')
             AND event_at >= $1::timestamptz - INTERVAL '24 hours'
             AND event_at < $1::timestamptz
         )::int AS bounce_count_today,
@@ -49,7 +52,17 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
             AND event_at >= $1::timestamptz - INTERVAL '24 hours'
             AND event_at < $1::timestamptz
             AND LOWER(COALESCE(raw_payload->>'classification', '')) <> 'out_of_office'
-        )::int AS reply_count_today
+        )::int AS reply_count_today,
+        COUNT(*) FILTER (
+          WHERE event_type = 'opened'
+            AND event_at >= $1::timestamptz - INTERVAL '24 hours'
+            AND event_at < $1::timestamptz
+        )::int AS opened_count_today,
+        COUNT(*) FILTER (
+          WHERE event_type = 'opened_proxy'
+            AND event_at >= $1::timestamptz - INTERVAL '24 hours'
+            AND event_at < $1::timestamptz
+        )::int AS opened_proxy_count_today
       FROM email_events ee
       JOIN clients c ON c.id = ee.client_id AND c.active = true
       WHERE ee.event_at >= $1::timestamptz - INTERVAL '8 days'
@@ -182,11 +195,11 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
     if (count >= 5) flags.push({ severity: 'red', code: 'AGENT_ERRORS', msg: `AGENT ERRORS: ${agentName} logged ${count} errors`, agent_name: agentName });
   }
   for (const detail of clientDetails) {
-    if (detail.active_prospect_count > 50 && detail.send_count_today === 0 && detail.send_count_baseline_7d_total > 0) {
+    if (detail.active_prospect_count > ACTIVE_PROSPECT_ZERO_SEND_THRESHOLD && detail.send_count_today === 0) {
       flags.push({
-        severity: 'yellow',
+        severity: 'red',
         code: 'CLIENT_DARK',
-        msg: `CLIENT DARK: ${detail.client_name} (${detail.client_id}) had 0 sends today`,
+        msg: `CLIENT DARK: ${detail.client_name} (${detail.client_id}) had 0 sends with ${detail.active_prospect_count} active prospects`,
         client_id: detail.client_id,
       });
     }
@@ -201,6 +214,8 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
     bounce_count_today: bounceCount,
     bounce_rate_today: bounceRate,
     reply_count_today: number(email.reply_count_today),
+    opened_count_today: number(email.opened_count_today),
+    opened_proxy_count_today: number(email.opened_proxy_count_today),
     scout_prospects_added_today: scoutToday,
     scout_baseline_7d: scoutBaseline,
     warm_signals_fired_today: number(warm.warm_signals_fired_today),
@@ -236,6 +251,8 @@ function formatDailyHealthMessage(health) {
   lines.push(`Sends: ${number(health.send_count_today)} (7d avg ${formatNumber(health.send_count_baseline_7d)}, ${deltaText})`);
   lines.push(`Bounces: ${number(health.bounce_count_today)} (${(number(health.bounce_rate_today) * 100).toFixed(1)}%)`);
   lines.push(`Replies: ${number(health.reply_count_today)}`);
+  lines.push(`Human opens: ${number(health.opened_count_today)}`);
+  lines.push(`Proxy opens: ${number(health.opened_proxy_count_today)} (excluded from open rate)`);
   lines.push(`Scout: ${number(health.scout_prospects_added_today)} new prospects (7d avg ${formatNumber(health.scout_baseline_7d)})`);
   lines.push(`Warm signals: ${number(health.warm_signals_fired_today)}`);
   lines.push(`Agent errors: ${errorTotal}${errorLabel}`);
@@ -253,4 +270,8 @@ function formatDailyHealthMessage(health) {
   return lines.join('\n');
 }
 
-module.exports = { computeDailyHealth, formatDailyHealthMessage };
+module.exports = {
+  ACTIVE_PROSPECT_ZERO_SEND_THRESHOLD,
+  computeDailyHealth,
+  formatDailyHealthMessage,
+};
