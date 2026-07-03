@@ -497,14 +497,14 @@ function renderDashboard() {
   document.getElementById('statEmails').textContent = fmtNum(stats.emails_sent_this_week);
   document.getElementById('statEmailsSub').textContent = `${fmtNum(stats.emails_sent_total)} total`;
   document.getElementById('statOpenRate').textContent = pct(stats.open_rate);
-  document.getElementById('statOpenSub').textContent = `${fmtNum(stats.opened_contacts)} of ${fmtNum(stats.emailed_contacts)} opened`;
+  document.getElementById('statOpenSub').textContent = `${fmtNum(stats.opened_contacts)} of ${fmtNum(stats.delivered_contacts)} delivered recipients opened`;
   document.getElementById('statResponseRate').textContent = pct(stats.response_rate);
   document.getElementById('statResponseSub').textContent = `${fmtNum(stats.replied_contacts)} replies`;
   document.getElementById('statWarmSignals').textContent = fmtNum(stats.warm_signals);
   document.getElementById('statWarmSub').textContent = `${fmtNum(stats.warm_prospects)} warm prospects`;
   document.getElementById('metricPending').textContent = fmtNum(stats.pending_approvals);
   document.getElementById('metricOpenRate').textContent = pct(stats.open_rate);
-  document.getElementById('metricOpenDetail').textContent = `${fmtNum(stats.opened_contacts)} of ${fmtNum(stats.emailed_contacts)} opened`;
+  document.getElementById('metricOpenDetail').textContent = `${fmtNum(stats.opened_contacts)} of ${fmtNum(stats.delivered_contacts)} delivered recipients opened`;
   document.getElementById('metricPosted').textContent = fmtNum(stats.content_published_week);
   document.getElementById('metricProspects').textContent = fmtNum(stats.total_prospects);
   const live = (dashboard.agents || []).filter(a => a.active).length;

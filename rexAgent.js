@@ -172,7 +172,20 @@ async function getWeeklyData() {
   const emailFunnel = await pool.query(`
     SELECT
       COUNT(CASE WHEN action_type = 'outbound'           THEN 1 END)::int AS sent,
-      COUNT(CASE WHEN action_type = 'email_opened'       THEN 1 END)::int AS opened,
+      (
+        SELECT COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))::int
+        FROM email_events
+        WHERE client_id = $1
+          AND event_type = 'delivered'
+          AND event_at > ${weekAgo}
+      ) AS delivered,
+      (
+        SELECT COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))::int
+        FROM email_events
+        WHERE client_id = $1
+          AND event_type = 'opened'
+          AND event_at > ${weekAgo}
+      ) AS opened,
       COUNT(CASE WHEN action_type = 'email_clicked'      THEN 1 END)::int AS clicked,
       COUNT(CASE WHEN action_type = 'email_bounced'      THEN 1 END)::int AS bounced,
       COUNT(CASE WHEN action_type = 'email_soft_bounce'  THEN 1 END)::int AS soft_bounced,
@@ -260,16 +273,40 @@ async function getWeeklyData() {
 
   // Email performance by vertical
   const emailByVertical = await pool.query(`
+    WITH touchpoint_rollup AS (
+      SELECT
+        co.industry,
+        COUNT(CASE WHEN t.action_type = 'outbound'      THEN 1 END)::int AS sent,
+        COUNT(CASE WHEN t.action_type = 'email_clicked' THEN 1 END)::int AS clicked
+      FROM touchpoints t
+      JOIN prospects p ON t.prospect_id = p.id
+      JOIN companies co ON p.company_id = co.id
+      WHERE t.channel = 'email' AND t.created_at > ${weekAgo}
+      GROUP BY co.industry
+    ), event_rollup AS (
+      SELECT
+        co.industry,
+        COUNT(DISTINCT NULLIF(LOWER(TRIM(ee.recipient_email)), ''))
+          FILTER (WHERE ee.event_type = 'delivered')::int AS delivered,
+        COUNT(DISTINCT NULLIF(LOWER(TRIM(ee.recipient_email)), ''))
+          FILTER (WHERE ee.event_type = 'opened')::int AS opened
+      FROM email_events ee
+      JOIN prospects p
+        ON p.client_id = ee.client_id
+       AND LOWER(p.email) = LOWER(ee.recipient_email)
+      JOIN companies co ON p.company_id = co.id AND co.client_id = p.client_id
+      WHERE ee.event_at > ${weekAgo}
+      GROUP BY co.industry
+    )
     SELECT
-      co.industry,
-      COUNT(CASE WHEN t.action_type = 'outbound'      THEN 1 END)::int AS sent,
-      COUNT(CASE WHEN t.action_type = 'email_opened'  THEN 1 END)::int AS opened,
-      COUNT(CASE WHEN t.action_type = 'email_clicked' THEN 1 END)::int AS clicked
-    FROM touchpoints t
-    JOIN prospects p ON t.prospect_id = p.id
-    JOIN companies co ON p.company_id = co.id
-    WHERE t.channel = 'email' AND t.created_at > ${weekAgo}
-    GROUP BY co.industry
+      COALESCE(t.industry, e.industry, 'unknown') AS industry,
+      COALESCE(t.sent, 0)::int AS sent,
+      COALESCE(e.delivered, 0)::int AS delivered,
+      COALESCE(e.opened, 0)::int AS opened,
+      COALESCE(t.clicked, 0)::int AS clicked,
+      ROUND(e.opened::numeric / NULLIF(e.delivered, 0) * 100, 1) AS open_rate
+    FROM touchpoint_rollup t
+    FULL JOIN event_rollup e ON e.industry IS NOT DISTINCT FROM t.industry
     ORDER BY opened DESC
     LIMIT 8
   `).catch(() => ({ rows: [] }));
@@ -320,7 +357,7 @@ Generate a weekly performance report with these sections:
 
 1. WEEK IN REVIEW — 2-3 sentences summarizing overall system activity and health
 2. CHANNEL PERFORMANCE — how each channel (LinkedIn, Facebook, email) performed this week, what's working and what's lagging
-3. EMAIL PERFORMANCE — use emailFunnel, emailReplyMetrics, emailByVertical, emailByDay data. Treat reply rate (emailReplyMetrics.replies / emailReplyMetrics.sent) as the primary engagement metric — do NOT emphasize click rate (sequences are reply-driven; click rate is N/A). Report open rate, reply rate, bounce rate, warmSignalsSent, discoveryCallsBooked, and emailRejections breakdown; which vertical has highest open rate; which subject lines drove the most sends; DNC additions this week; note if tracking data is still accumulating if tables are empty
+3. EMAIL PERFORMANCE — use emailFunnel, emailReplyMetrics, emailByVertical, emailByDay data. Open rate is always emailFunnel.opened / emailFunnel.delivered (distinct recipients; proxy opens excluded), never opened / sent. Treat reply rate (emailReplyMetrics.replies / emailReplyMetrics.sent) as the primary engagement metric — do NOT emphasize click rate (sequences are reply-driven; click rate is N/A). Report open rate, reply rate, bounce rate, warmSignalsSent, discoveryCallsBooked, and emailRejections breakdown; which vertical has highest open rate; which subject lines drove the most sends; DNC additions this week; note if tracking data is still accumulating if tables are empty
 4. CONTENT PERFORMANCE — which content types and channels are getting the most engagement; call out top and worst posts if data is available
 5. PIPELINE HEALTH — state of the prospect pipeline, who's moving and who's stalled
 6. APPROVAL RATE — comment and content approval patterns, anything worth noting
@@ -509,13 +546,14 @@ function formatRejectionBreakdown(rejections = []) {
 function formatFunnelMetrics(data) {
   const f = data.emailFunnel || {};
   const sent = Number(f.sent || 0);
+  const delivered = Number(f.delivered || 0);
   const opened = Number(f.opened || 0);
   const bounced = Number(f.bounced || 0) + Number(f.soft_bounced || 0);
   const replySent = Number(data.emailReplyMetrics?.sent || 0);
   const replies = Number(data.emailReplyMetrics?.replies || 0);
 
   return `FUNNEL METRICS
-Open rate: ${pct(opened, sent)}% (${opened}/${sent})
+Open rate: ${pct(opened, delivered)}% (${opened}/${delivered} delivered recipients)
 Click rate: N/A (reply-driven sequences)
 Reply rate: ${pct(replies, replySent)}% (${replies}/${replySent}) — primary engagement metric
 Bounce rate: ${pct(bounced, sent)}% (${bounced}/${sent})
@@ -554,11 +592,20 @@ async function getCrossMarketExecutiveData() {
         SELECT
           client_id,
           COUNT(*) FILTER (WHERE channel = 'email' AND action_type = 'outbound' AND created_at > ${weekAgo})::int AS emails_sent_week,
-          COUNT(*) FILTER (WHERE channel = 'email' AND action_type = 'email_opened' AND created_at > ${weekAgo})::int AS emails_opened_week,
           COUNT(*) FILTER (WHERE channel = 'email' AND action_type IN ('email_clicked', 'click') AND created_at > ${weekAgo})::int AS email_clicks_week,
           COUNT(*) FILTER (WHERE channel = 'email' AND action_type IN ('email_bounced', 'email_soft_bounce') AND created_at > ${weekAgo})::int AS email_bounces_week,
           COUNT(*) FILTER (WHERE channel = 'phone' AND created_at > ${weekAgo})::int AS setter_calls_week
         FROM touchpoints
+        GROUP BY client_id
+      ),
+      email_event_stats AS (
+        SELECT
+          client_id,
+          COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+            FILTER (WHERE event_type = 'delivered' AND event_at > ${weekAgo})::int AS emails_delivered_week,
+          COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+            FILTER (WHERE event_type = 'opened' AND event_at > ${weekAgo})::int AS emails_opened_week
+        FROM email_events
         GROUP BY client_id
       ),
       post_stats AS (
@@ -579,7 +626,8 @@ async function getCrossMarketExecutiveData() {
         COALESCE(ps.booked_calls, 0)::int AS booked_calls,
         COALESCE(ps.mrr, 0)::numeric AS mrr,
         COALESCE(ts.emails_sent_week, 0)::int AS emails_sent_week,
-        COALESCE(ts.emails_opened_week, 0)::int AS emails_opened_week,
+        COALESCE(es.emails_delivered_week, 0)::int AS emails_delivered_week,
+        COALESCE(es.emails_opened_week, 0)::int AS emails_opened_week,
         COALESCE(ts.email_clicks_week, 0)::int AS email_clicks_week,
         COALESCE(ts.email_bounces_week, 0)::int AS email_bounces_week,
         COALESCE(ts.setter_calls_week, 0)::int AS setter_calls_week,
@@ -587,6 +635,7 @@ async function getCrossMarketExecutiveData() {
       FROM clients c
       LEFT JOIN prospect_stats ps ON ps.client_id = c.id
       LEFT JOIN touchpoint_stats ts ON ts.client_id = c.id
+      LEFT JOIN email_event_stats es ON es.client_id = c.id
       LEFT JOIN post_stats pos ON pos.client_id = c.id
       WHERE COALESCE(c.active, true) = true
       ORDER BY c.name ASC
@@ -614,7 +663,7 @@ async function getCrossMarketExecutiveData() {
   return {
     markets: marketOverview.rows.map(row => ({
       ...row,
-      open_rate: pct(row.emails_opened_week, row.emails_sent_week),
+      open_rate: pct(row.emails_opened_week, row.emails_delivered_week),
       bounce_rate: pct(row.email_bounces_week, row.emails_sent_week),
       warm_signals_week: Number(row.emails_opened_week || 0) + Number(row.email_clicks_week || 0),
     })),

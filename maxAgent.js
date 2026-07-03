@@ -404,7 +404,20 @@ async function getSystemSnapshot() {
   const emailStats = await pool.query(`
     SELECT
       COUNT(CASE WHEN action_type = 'outbound'      THEN 1 END)::int AS sent,
-      COUNT(CASE WHEN action_type = 'email_opened'  THEN 1 END)::int AS opened,
+      (
+        SELECT COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))::int
+        FROM email_events
+        WHERE client_id = $1
+          AND event_type = 'delivered'
+          AND event_at > NOW() - INTERVAL '7 days'
+      ) AS delivered,
+      (
+        SELECT COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))::int
+        FROM email_events
+        WHERE client_id = $1
+          AND event_type = 'opened'
+          AND event_at > NOW() - INTERVAL '7 days'
+      ) AS opened,
       COUNT(CASE WHEN action_type = 'email_clicked' THEN 1 END)::int AS clicked
     FROM touchpoints
     WHERE channel = 'email' AND client_id = $1 AND created_at > NOW() - INTERVAL '7 days'
@@ -500,39 +513,28 @@ async function getSystemSnapshot() {
     LIMIT 10
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
-  // Copy performance — Emmett email_sent logs (last 7 days) grouped by sequence/step,
-  // joined to touchpoints to compute open rate per sequence/step combo.
+  // Copy performance — canonical recipient/delivered open rate by sequence/step.
   const copyPerformance = await pool.query(`
     SELECT
-      s.sequence,
-      s.step,
-      COUNT(*)::int AS sent,
-      COUNT(*) FILTER (WHERE o.opened)::int AS opens
-    FROM (
-      SELECT
-        al.prospect_id,
-        al.client_id,
-        al.ran_at,
-        al.payload->>'sequence' AS sequence,
-        al.payload->>'step'     AS step
-      FROM agent_log al
-      WHERE al.agent_name = 'emmett'
-        AND al.action = 'email_sent'
-        AND al.client_id = $1
-        AND al.ran_at >= NOW() - INTERVAL '7 days'
-    ) s
-    LEFT JOIN LATERAL (
-      SELECT TRUE AS opened
-      FROM touchpoints t
-      WHERE t.prospect_id = s.prospect_id
-        AND t.client_id = s.client_id
-        AND t.channel = 'email'
-        AND t.action_type IN ('open', 'email_opened')
-        AND t.created_at >= s.ran_at
-      LIMIT 1
-    ) o ON TRUE
-    GROUP BY s.sequence, s.step
-    ORDER BY s.sequence, s.step
+      sequence,
+      step,
+      COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent,
+      COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+        FILTER (WHERE event_type = 'delivered')::int AS delivered,
+      COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+        FILTER (WHERE event_type = 'opened')::int AS opens,
+      ROUND(
+        COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+          FILTER (WHERE event_type = 'opened')::numeric
+          / NULLIF(COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+            FILTER (WHERE event_type = 'delivered'), 0) * 100,
+        1
+      ) AS open_rate
+    FROM email_events
+    WHERE client_id = $1
+      AND event_at >= NOW() - INTERVAL '7 days'
+    GROUP BY sequence, step
+    ORDER BY sequence, step
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
   // Top 5 prospects by current ICP score (engagement-weighted via dynamic recalc)
@@ -584,11 +586,14 @@ async function getSystemSnapshot() {
     SELECT
       subject_line,
       COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sends,
-      COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opens,
+      COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+        FILTER (WHERE event_type = 'opened')::int AS opens,
       COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS proxy_opens,
       ROUND(
-        COUNT(*) FILTER (WHERE event_type = 'opened')::numeric
-          / NULLIF(COUNT(*) FILTER (WHERE event_type = 'delivered'), 0) * 100,
+        COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+          FILTER (WHERE event_type = 'opened')::numeric
+          / NULLIF(COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+            FILTER (WHERE event_type = 'delivered'), 0) * 100,
         1
       ) AS open_rate
     FROM email_events
@@ -608,10 +613,16 @@ async function getSystemSnapshot() {
         ee.sequence,
         ee.step,
         COUNT(*) FILTER (WHERE ee.event_type = 'sent')::int AS sends,
+        COUNT(DISTINCT NULLIF(LOWER(TRIM(ee.recipient_email)), ''))
+          FILTER (WHERE ee.event_type = 'delivered')::int AS delivered,
+        COUNT(DISTINCT NULLIF(LOWER(TRIM(ee.recipient_email)), ''))
+          FILTER (WHERE ee.event_type = 'opened')::int AS opens,
         COUNT(*) FILTER (WHERE ee.event_type = 'opened_proxy')::int AS proxy_opens,
         ROUND(
-          COUNT(*) FILTER (WHERE ee.event_type = 'opened')::numeric
-            / NULLIF(COUNT(*) FILTER (WHERE ee.event_type = 'delivered'), 0) * 100,
+          COUNT(DISTINCT NULLIF(LOWER(TRIM(ee.recipient_email)), ''))
+            FILTER (WHERE ee.event_type = 'opened')::numeric
+            / NULLIF(COUNT(DISTINCT NULLIF(LOWER(TRIM(ee.recipient_email)), ''))
+              FILTER (WHERE ee.event_type = 'delivered'), 0) * 100,
           1
         ) AS open_rate
       FROM email_events ee
@@ -628,7 +639,7 @@ async function getSystemSnapshot() {
       GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown'), ee.sequence, ee.step
     )
     SELECT DISTINCT ON (vertical)
-      vertical, sequence, step, sends, proxy_opens, open_rate
+      vertical, sequence, step, sends, delivered, opens, proxy_opens, open_rate
     FROM rollup
     WHERE sends > 0 AND vertical <> 'unknown'
     ORDER BY vertical, open_rate ASC NULLS FIRST, sends DESC
@@ -812,7 +823,11 @@ async function getSystemSnapshot() {
     postFreq: postFreq.rows,
     clickedToday:  clickedToday.rows,
     warmToday:     warmToday.rows[0]?.count || 0,
-    emailStats:    emailStats.rows[0],
+    emailStats: {
+      ...emailStats.rows[0],
+      open_rate: pct(emailStats.rows[0]?.opened, emailStats.rows[0]?.delivered),
+      open_rate_definition: 'unique_recipient_per_delivered',
+    },
     unmatchedStatusUpdates: unmatchedStatusUpdates.rows,
     postsNeedingStats: postsNeedingStats.rows,
     contentQuality: contentQuality.rows[0],
@@ -1525,8 +1540,11 @@ async function analyzePatterns({ expansionReport = null } = {}) {
     SELECT
       subject_line,
       COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sends,
-      COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opens,
-      COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS proxy_opens
+      COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS proxy_opens,
+      ARRAY_AGG(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+        FILTER (WHERE event_type = 'delivered') AS delivered_recipients,
+      ARRAY_AGG(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+        FILTER (WHERE event_type = 'opened') AS opened_recipients
     FROM email_events
     WHERE client_id = $1
       AND COALESCE(subject_line, '') <> ''
@@ -1537,15 +1555,33 @@ async function analyzePatterns({ expansionReport = null } = {}) {
   const subjectFormats = new Map();
   for (const row of subjectRows) {
     const format = classifySubjectFormat(row.subject_line);
-    const current = subjectFormats.get(format) || { format, sends: 0, opens: 0, proxy_opens: 0 };
+    const current = subjectFormats.get(format) || {
+      format,
+      sends: 0,
+      proxy_opens: 0,
+      deliveredRecipients: new Set(),
+      openedRecipients: new Set(),
+    };
     current.sends += Number(row.sends || 0);
-    current.opens += Number(row.opens || 0);
     current.proxy_opens += Number(row.proxy_opens || 0);
+    for (const recipient of row.delivered_recipients || []) {
+      if (recipient) current.deliveredRecipients.add(recipient);
+    }
+    for (const recipient of row.opened_recipients || []) {
+      if (recipient) current.openedRecipients.add(recipient);
+    }
     subjectFormats.set(format, current);
   }
   const subjectFormatRows = [...subjectFormats.values()]
     .filter(r => r.sends >= 10)
-    .map(r => ({ ...r, open_rate: pct(r.opens, r.sends) }));
+    .map(r => ({
+      format: r.format,
+      sends: r.sends,
+      delivered: r.deliveredRecipients.size,
+      opens: r.openedRecipients.size,
+      proxy_opens: r.proxy_opens,
+      open_rate: pct(r.openedRecipients.size, r.deliveredRecipients.size),
+    }));
   weekly.email_performance.subject_formats = subjectFormatRows;
   const subjectCompare = topVsOthers(subjectFormatRows, 'open_rate');
   if (subjectCompare.top && subjectCompare.othersAvg > 0 && subjectCompare.top.open_rate >= subjectCompare.othersAvg * 1.2) {
@@ -1565,11 +1601,16 @@ async function analyzePatterns({ expansionReport = null } = {}) {
         ee.sequence,
         ee.step,
         COUNT(*) FILTER (WHERE ee.event_type = 'sent')::int AS sends,
-        COUNT(*) FILTER (WHERE ee.event_type = 'opened')::int AS opens,
+        COUNT(DISTINCT NULLIF(LOWER(TRIM(ee.recipient_email)), ''))
+          FILTER (WHERE ee.event_type = 'delivered')::int AS delivered,
+        COUNT(DISTINCT NULLIF(LOWER(TRIM(ee.recipient_email)), ''))
+          FILTER (WHERE ee.event_type = 'opened')::int AS opens,
         COUNT(*) FILTER (WHERE ee.event_type = 'opened_proxy')::int AS proxy_opens,
         ROUND(
-          COUNT(*) FILTER (WHERE ee.event_type = 'opened')::numeric
-            / NULLIF(COUNT(*) FILTER (WHERE ee.event_type = 'delivered'), 0) * 100,
+          COUNT(DISTINCT NULLIF(LOWER(TRIM(ee.recipient_email)), ''))
+            FILTER (WHERE ee.event_type = 'opened')::numeric
+            / NULLIF(COUNT(DISTINCT NULLIF(LOWER(TRIM(ee.recipient_email)), ''))
+              FILTER (WHERE ee.event_type = 'delivered'), 0) * 100,
           1
         ) AS open_rate
       FROM email_events ee
@@ -1586,7 +1627,7 @@ async function analyzePatterns({ expansionReport = null } = {}) {
       GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown'), ee.sequence, ee.step
     )
     SELECT DISTINCT ON (vertical)
-      vertical, sequence, step, sends, opens, proxy_opens, open_rate
+      vertical, sequence, step, sends, delivered, opens, proxy_opens, open_rate
     FROM rollup
     WHERE vertical <> 'unknown'
       AND sends >= 10
@@ -1679,10 +1720,11 @@ async function analyzePatterns({ expansionReport = null } = {}) {
     ORDER BY open_rate DESC
   `, [CLIENT_ID]);
   weekly.email_performance.open_rate_by_send_day = openDayRows;
+  weekly.email_performance.open_rate_by_send_day_definition = 'per_send_attribution';
   if (openDayRows.length >= 2 && Number(openDayRows[0].open_rate || 0) >= Number(openDayRows[1].open_rate || 0) + 10) {
     addPattern(patterns, {
       pattern_type: 'best_open_day',
-      insight: `${openDayRows[0].day_name} sends have the highest open rate at ${Number(openDayRows[0].open_rate || 0).toFixed(1)}%.`,
+      insight: `${openDayRows[0].day_name} sends have the highest per-send open rate at ${Number(openDayRows[0].open_rate || 0).toFixed(1)}%.`,
       why_it_matters: 'Send timing may be giving email outreach an easy lift without changing copy.',
       suggested_action: `Bias new cold sends toward ${openDayRows[0].day_name} and compare again after another week of data.`,
       evidence: openDayRows[0],
@@ -1905,12 +1947,17 @@ async function buildWeeklyPatternTrends() {
   const weeklyEmail = await queryPattern(`
     SELECT bucket,
       COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sends,
-      COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opens,
+      COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+        FILTER (WHERE event_type = 'delivered')::int AS delivered,
+      COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+        FILTER (WHERE event_type = 'opened')::int AS opens,
       COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS proxy_opens,
       COUNT(*) FILTER (WHERE event_type = 'replied')::int AS replies,
       ROUND(
-        COUNT(*) FILTER (WHERE event_type = 'opened')::numeric
-          / NULLIF(COUNT(*) FILTER (WHERE event_type = 'delivered'), 0) * 100,
+        COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+          FILTER (WHERE event_type = 'opened')::numeric
+          / NULLIF(COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+            FILTER (WHERE event_type = 'delivered'), 0) * 100,
         1
       ) AS open_rate,
       ROUND(
@@ -1924,7 +1971,8 @@ async function buildWeeklyPatternTrends() {
           WHEN event_at >= date_trunc('week', NOW()) - INTERVAL '7 days'
             AND event_at < date_trunc('week', NOW()) THEN 'last_week'
         END AS bucket,
-        event_type
+        event_type,
+        recipient_email
       FROM email_events
       WHERE client_id = $1
         AND event_at >= date_trunc('week', NOW()) - INTERVAL '7 days'
@@ -2177,38 +2225,24 @@ async function runPaigeQualityGateTrigger() {
 async function runCopyReviewTrigger() {
   const res = await pool.query(`
     SELECT
-      s.sequence,
-      s.step,
-      COUNT(*)::int AS sent,
-      COUNT(*) FILTER (WHERE o.opened)::int AS opens,
-      (ARRAY_AGG(DISTINCT s.subject) FILTER (WHERE s.subject IS NOT NULL AND s.subject <> ''))[1:3] AS sample_subjects
-    FROM (
-      SELECT
-        al.prospect_id,
-        al.client_id,
-        al.ran_at,
-        al.payload->>'sequence' AS sequence,
-        al.payload->>'step'     AS step,
-        al.payload->>'subject'  AS subject
-      FROM agent_log al
-      WHERE al.agent_name = 'emmett'
-        AND al.action = 'email_sent'
-        AND al.client_id = $1
-        AND al.ran_at >= NOW() - INTERVAL '7 days'
-    ) s
-    LEFT JOIN LATERAL (
-      SELECT TRUE AS opened
-      FROM touchpoints t
-      WHERE t.prospect_id = s.prospect_id
-        AND t.client_id = s.client_id
-        AND t.channel = 'email'
-        AND t.action_type IN ('open', 'email_opened')
-        AND t.created_at >= s.ran_at
-      LIMIT 1
-    ) o ON TRUE
-    GROUP BY s.sequence, s.step
-    HAVING COUNT(*) >= 30
-      AND (COUNT(*) FILTER (WHERE o.opened))::numeric / NULLIF(COUNT(*), 0) < 0.08
+      sequence,
+      step,
+      COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent,
+      COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+        FILTER (WHERE event_type = 'delivered')::int AS delivered,
+      COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+        FILTER (WHERE event_type = 'opened')::int AS opens,
+      (ARRAY_AGG(DISTINCT subject_line)
+        FILTER (WHERE subject_line IS NOT NULL AND subject_line <> ''))[1:3] AS sample_subjects
+    FROM email_events
+    WHERE client_id = $1
+      AND event_at >= NOW() - INTERVAL '7 days'
+    GROUP BY sequence, step
+    HAVING COUNT(*) FILTER (WHERE event_type = 'sent') >= 30
+      AND COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+        FILTER (WHERE event_type = 'opened')::numeric
+        / NULLIF(COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+          FILTER (WHERE event_type = 'delivered'), 0) < 0.08
   `, [CLIENT_ID]);
 
   let count = 0;
@@ -2220,8 +2254,9 @@ async function runCopyReviewTrigger() {
 
     const row = res.rows[i];
     const sent = Number(row.sent || 0);
+    const delivered = Number(row.delivered || 0);
     const opens = Number(row.opens || 0);
-    const openRate = sent ? Number(((opens / sent) * 100).toFixed(1)) : 0;
+    const openRate = delivered ? Number(((opens / delivered) * 100).toFixed(1)) : 0;
 
     // De-dup: skip if a pending copy_review_needed already exists for this combo in the last 7 days
     const existing = await pool.query(`
@@ -2241,6 +2276,7 @@ async function runCopyReviewTrigger() {
       sequence: row.sequence,
       step: row.step,
       sent,
+      delivered,
       opens,
       open_rate: openRate,
       sample_subjects: row.sample_subjects || [],

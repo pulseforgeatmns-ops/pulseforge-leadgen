@@ -212,6 +212,7 @@ function previewPayload() {
       emails_sent_total: 324,
       open_rate: 38.6,
       opened_contacts: 27,
+      delivered_contacts: 70,
       emailed_contacts: 70,
       response_rate: 7.1,
       replied_contacts: 5,
@@ -334,12 +335,15 @@ async function buildDashboardData(client) {
       WITH emailed AS (
         SELECT DISTINCT t.prospect_id FROM touchpoints t
         WHERE t.client_id = $1 AND t.channel = 'email' AND t.action_type IN ('outbound', 'email_warm')
-      ),
-      opened AS (
-        SELECT DISTINCT t.prospect_id FROM touchpoints t
-        WHERE t.client_id = $1 AND t.channel = 'email' AND t.action_type IN ('open', 'email_opened')
       )
-      SELECT (SELECT COUNT(*)::int FROM emailed) AS emailed_count, (SELECT COUNT(*)::int FROM opened) AS opened_count
+      SELECT
+        (SELECT COUNT(*)::int FROM emailed) AS emailed_count,
+        (SELECT COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))::int
+           FROM email_events
+          WHERE client_id = $1 AND event_type = 'delivered') AS delivered_count,
+        (SELECT COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))::int
+           FROM email_events
+          WHERE client_id = $1 AND event_type = 'opened') AS opened_count
     `, [clientId]),
     pool.query(`
       SELECT COUNT(DISTINCT prospect_id)::int AS count
@@ -409,9 +413,10 @@ async function buildDashboardData(client) {
 
   const engagement = emailEngagement.rows[0] || {};
   const emailedCount = Number(engagement.emailed_count || 0);
+  const deliveredCount = Number(engagement.delivered_count || 0);
   const openedCount = Number(engagement.opened_count || 0);
   const repliedCount = Number(emailResponses.rows[0]?.count || 0);
-  const openRate = emailedCount > 0 ? +((openedCount / emailedCount) * 100).toFixed(1) : 0;
+  const openRate = deliveredCount > 0 ? +((openedCount / deliveredCount) * 100).toFixed(1) : 0;
   const responseRate = emailedCount > 0 ? +((repliedCount / emailedCount) * 100).toFixed(1) : 0;
   const runRows = new Map();
   for (const row of agents.rows) {
@@ -455,6 +460,7 @@ async function buildDashboardData(client) {
       emails_sent_total: Number(emailsTotal.rows[0]?.count || 0),
       open_rate: openRate,
       opened_contacts: openedCount,
+      delivered_contacts: deliveredCount,
       emailed_contacts: emailedCount,
       response_rate: responseRate,
       replied_contacts: repliedCount,
@@ -587,7 +593,20 @@ async function getAnalytics(clientId) {
     pool.query(`
       SELECT
         COUNT(CASE WHEN t.action_type IN ('outbound', 'email_warm') THEN 1 END)::int AS sent_week,
-        COUNT(CASE WHEN t.action_type = 'email_opened' THEN 1 END)::int AS opened_week,
+        (
+          SELECT COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))::int
+          FROM email_events
+          WHERE client_id = $1
+            AND event_type = 'delivered'
+            AND event_at >= NOW() - INTERVAL '7 days'
+        ) AS delivered_week,
+        (
+          SELECT COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))::int
+          FROM email_events
+          WHERE client_id = $1
+            AND event_type = 'opened'
+            AND event_at >= NOW() - INTERVAL '7 days'
+        ) AS opened_week,
         COUNT(CASE WHEN t.action_type = 'email_clicked' THEN 1 END)::int AS clicked_week
       FROM touchpoints t
       WHERE t.client_id = $1 AND t.channel = 'email' AND t.created_at >= NOW() - INTERVAL '7 days'
@@ -606,6 +625,7 @@ async function getAnalytics(clientId) {
   }));
   const e = email.rows[0] || {};
   const sent = Number(e.sent_week || 0);
+  const delivered = Number(e.delivered_week || 0);
   const opened = Number(e.opened_week || 0);
   const clicked = Number(e.clicked_week || 0);
 
@@ -618,9 +638,10 @@ async function getAnalytics(clientId) {
     channel_performance: content.rows,
     email: {
       sent_week: sent,
+      delivered_week: delivered,
       opened_week: opened,
       clicked_week: clicked,
-      open_rate_week: sent > 0 ? +((opened / sent) * 100).toFixed(1) : 0,
+      open_rate_week: delivered > 0 ? +((opened / delivered) * 100).toFixed(1) : 0,
       click_rate_week: sent > 0 ? +((clicked / sent) * 100).toFixed(1) : 0,
     },
   };
