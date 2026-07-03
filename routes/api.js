@@ -2315,8 +2315,8 @@ router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
       pool.query(`
         SELECT
           COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent_total,
-          COUNT(*) FILTER (WHERE event_type = 'delivered')::int AS delivered_total,
-          COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opened_total,
+          COUNT(DISTINCT LOWER(TRIM(recipient_email))) FILTER (WHERE event_type = 'delivered')::int AS delivered_total,
+          COUNT(DISTINCT LOWER(TRIM(recipient_email))) FILTER (WHERE event_type = 'opened')::int AS opened_total,
           COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS opened_proxy_total,
           COUNT(*) FILTER (WHERE event_type = 'clicked')::int AS clicked_total,
           COUNT(*) FILTER (WHERE event_type = 'replied')::int AS replied_total,
@@ -2329,8 +2329,8 @@ router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
       pool.query(`
         SELECT
           COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent_week,
-          COUNT(*) FILTER (WHERE event_type = 'delivered')::int AS delivered_week,
-          COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opened_week,
+          COUNT(DISTINCT LOWER(TRIM(recipient_email))) FILTER (WHERE event_type = 'delivered')::int AS delivered_week,
+          COUNT(DISTINCT LOWER(TRIM(recipient_email))) FILTER (WHERE event_type = 'opened')::int AS opened_week,
           COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS opened_proxy_week,
           COUNT(*) FILTER (WHERE event_type = 'clicked')::int AS clicked_week,
           COUNT(*) FILTER (WHERE event_type IN ('hard_bounce', 'blocked'))::int AS bounced_week
@@ -2342,8 +2342,8 @@ router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
         SELECT
           COALESCE(NULLIF(sending_domain, ''), 'unknown') AS sending_domain,
           COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent,
-          COUNT(*) FILTER (WHERE event_type = 'delivered')::int AS delivered,
-          COUNT(*) FILTER (WHERE event_type = 'opened')::int AS opened,
+          COUNT(DISTINCT LOWER(TRIM(recipient_email))) FILTER (WHERE event_type = 'delivered')::int AS delivered,
+          COUNT(DISTINCT LOWER(TRIM(recipient_email))) FILTER (WHERE event_type = 'opened')::int AS opened,
           COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS opened_proxy,
           COUNT(*) FILTER (WHERE event_type = 'clicked')::int AS clicked,
           COUNT(*) FILTER (WHERE event_type = 'replied')::int AS replied,
@@ -2358,8 +2358,8 @@ router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
         SELECT
           COALESCE(NULLIF(p.vertical, ''), 'unknown') AS vertical,
           COUNT(*) FILTER (WHERE ee.event_type = 'sent')::int AS sent,
-          COUNT(*) FILTER (WHERE ee.event_type = 'delivered')::int AS delivered,
-          COUNT(*) FILTER (WHERE ee.event_type = 'opened')::int AS opened,
+          COUNT(DISTINCT LOWER(TRIM(ee.recipient_email))) FILTER (WHERE ee.event_type = 'delivered')::int AS delivered,
+          COUNT(DISTINCT LOWER(TRIM(ee.recipient_email))) FILTER (WHERE ee.event_type = 'opened')::int AS opened,
           COUNT(*) FILTER (WHERE ee.event_type = 'opened_proxy')::int AS opened_proxy,
           COUNT(*) FILTER (WHERE ee.event_type = 'clicked')::int AS clicked,
           COUNT(*) FILTER (WHERE ee.event_type = 'replied')::int AS replied,
