@@ -2291,16 +2291,17 @@ router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
       WHERE client_id = $1
     `;
     const verifierSql = hasEmailStatus ? `
-      SELECT
-        CASE
+      SELECT email_bucket AS status, COUNT(*)::int AS count
+      FROM (
+        SELECT CASE
           WHEN COALESCE(NULLIF(email_status, ''), 'unverified_legacy') IN ('valid', 'invalid', 'catchall', 'risky', 'unknown', 'unverified_legacy')
             THEN COALESCE(NULLIF(email_status, ''), 'unverified_legacy')
           ELSE 'unknown'
-        END AS status,
-        COUNT(*)::int AS count
-      FROM prospects
-      WHERE client_id = $1
-      GROUP BY status
+        END AS email_bucket
+        FROM prospects
+        WHERE client_id = $1
+      ) scoped_email_statuses
+      GROUP BY email_bucket
     ` : `
       SELECT 'unverified_legacy' AS status, COUNT(*)::int AS count
       FROM prospects

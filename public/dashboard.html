@@ -1933,6 +1933,7 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
   font-family: 'JetBrains Mono', monospace; font-size: 0.62rem;
   color: var(--gray); padding: 1.5rem 0; text-align: center; letter-spacing: 0.5px;
 }
+.no-data-note.analytics-error { color: var(--red); }
 
 /* ── Activity panel ──────────────────────────────────────────────────── */
 .activity-area {
@@ -6318,6 +6319,22 @@ function openProspectFromAnalytics(id) {
 
 let _analyticsLoaded = false;
 let _emailAnalyticsWindow = 7;
+const EMAIL_ANALYTICS_PANEL_IDS = [
+  'emailPerfStrip',
+  'pipelineHealthCards',
+  'track1ReasonCards',
+  'track4StatusCards',
+  'sendingDomainCards',
+  'verticalEmailCards',
+];
+
+function renderEmailAnalyticsError(message) {
+  const text = message || 'Email analytics unavailable';
+  EMAIL_ANALYTICS_PANEL_IDS.forEach(id => {
+    const panel = document.getElementById(id);
+    if (panel) panel.innerHTML = `<div class="no-data-note analytics-error">${_esc(text)}</div>`;
+  });
+}
 
 async function loadAnalytics() {
   if (_analyticsLoaded) return;
@@ -6370,7 +6387,7 @@ async function loadRexExecutiveSummary() {
 async function loadEmailAnalytics() {
   try {
     const res = await fetch(`/api/analytics/email?days=${_emailAnalyticsWindow}`, { credentials: 'include' });
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`Email analytics unavailable (${res.status})`);
     const d = await res.json();
 
     const strip = document.getElementById('emailPerfStrip');
@@ -6427,6 +6444,7 @@ async function loadEmailAnalytics() {
     renderDomainCards('verticalEmailCards', d.vertical_breakdown || [], 'vertical', 'No vertical email data yet.');
   } catch(e) {
     console.error('loadEmailAnalytics:', e);
+    renderEmailAnalyticsError(e.message);
   }
 }
 
