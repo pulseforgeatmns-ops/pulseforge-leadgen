@@ -4,7 +4,6 @@ const axios = require('axios');
 const { randomUUID } = require('crypto');
 const pool = require('./db');
 const { getRuntimeClientId } = require('./utils/clientContext');
-const { ensureMiraSchema } = require('./utils/miraSchema');
 const { reportAgentRun } = require('./utils/agentObservability');
 
 const AGENT_NAME = 'warm_routing';
@@ -16,8 +15,16 @@ const TODOIST_PROJECT_ID = '6ggVcJrgX9QgWwFW';
 const TODOIST_SECTION_ID = '6ggVcMrcVVCqvFv4';
 const DAILY_PING_CAP = 10;
 const LOCAL_TIME_ZONE = 'America/New_York';
+const WARM_ROUTING_SEED_VERSION = '2026-07-04-edge-v1';
+const SIGNAL_TYPES = {
+  ICP_ELIGIBILITY: 'ICP_ELIGIBILITY',
+  ICP_SCORE: 'ICP_SCORE',
+  ENGAGEMENT_CLUSTER: 'ENGAGEMENT_CLUSTER',
+  REPLY: 'REPLY',
+};
 const TRIGGER_REASONS = [
   'ICP_JUMP_15',
+  'ICP_CROSS_90',
   'REPLY_RECEIVED',
   'ENGAGEMENT_CLUSTER',
   'ICP_CROSS_80_RECENT',
@@ -118,10 +125,13 @@ function companyLabel(prospect = {}) {
 }
 
 function triggerLabel(reason, prospect = {}) {
+  const storedLabel = prospect.trigger_label || prospect.trigger_payload?.trigger_label;
+  if (storedLabel) return String(storedLabel);
   if (reason === 'ICP_JUMP_15') {
     const delta = Number(prospect.icp_delta_7d || 0);
     return `ICP jumped +${delta}, now ${Number(prospect.icp_score || 0)}`;
   }
+  if (reason === 'ICP_CROSS_90') return `ICP crossed 90, now ${Number(prospect.icp_score || 0)}`;
   if (reason === 'REPLY_RECEIVED') return 'Inbound reply received';
   if (reason === 'ENGAGEMENT_CLUSTER') {
     const opens = Number(prospect.opens_24h || 0);
@@ -222,122 +232,25 @@ async function insertMiraPrimaryCapture({
   return rows[0]?.id || null;
 }
 
-async function ensureWarmRoutingSchema() {
-  await ensureMiraSchema();
-  await pool.query(`
-    ALTER TABLE prospects ADD COLUMN IF NOT EXISTS email_touched_at TIMESTAMPTZ
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS warm_trigger_fires (
-      id BIGSERIAL PRIMARY KEY,
-      prospect_id UUID REFERENCES prospects(id),
-      client_id INTEGER,
-      trigger_reason TEXT NOT NULL CHECK (trigger_reason IN ('ICP_JUMP_15','REPLY_RECEIVED','ENGAGEMENT_CLUSTER','ICP_CROSS_80_RECENT')),
-      fired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      resolved_action TEXT CHECK (resolved_action IS NULL OR resolved_action IN ('working_now','today','tomorrow','auto_escalated')),
-      resolved_at TIMESTAMPTZ,
-      todoist_task_id TEXT
-    )
-  `);
-  await pool.query(`ALTER TABLE warm_trigger_fires ADD COLUMN IF NOT EXISTS client_id INTEGER`);
-  await pool.query(`ALTER TABLE warm_trigger_fires ADD COLUMN IF NOT EXISTS trigger_payload JSONB`);
-  await pool.query(`ALTER TABLE warm_trigger_fires ADD COLUMN IF NOT EXISTS ping_sent BOOLEAN NOT NULL DEFAULT false`);
-  await pool.query(`ALTER TABLE warm_trigger_fires ADD COLUMN IF NOT EXISTS digest_sent BOOLEAN NOT NULL DEFAULT false`);
-  await pool.query(`ALTER TABLE warm_trigger_fires ADD COLUMN IF NOT EXISTS digest_date DATE`);
-  await pool.query(`ALTER TABLE warm_trigger_fires ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT`);
-  await pool.query(`ALTER TABLE warm_trigger_fires ADD COLUMN IF NOT EXISTS telegram_message_id TEXT`);
-  await pool.query(`ALTER TABLE warm_trigger_fires ADD COLUMN IF NOT EXISTS mira_capture_id BIGINT`);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS warm_trigger_fires_recent_idx
-      ON warm_trigger_fires (prospect_id, trigger_reason, fired_at DESC)
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS warm_trigger_fires_unresolved_idx
-      ON warm_trigger_fires (client_id, resolved_action, fired_at DESC)
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS icp_score_snapshots (
-      id BIGSERIAL PRIMARY KEY,
-      prospect_id UUID REFERENCES prospects(id),
-      client_id INTEGER,
-      icp_score INTEGER,
-      snapshot_date DATE NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (prospect_id, snapshot_date)
-    )
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS icp_score_snapshots_lookup_idx
-      ON icp_score_snapshots (prospect_id, snapshot_date DESC)
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS mira_warm_capture_log (
-      id BIGSERIAL PRIMARY KEY,
-      warm_trigger_fire_id BIGINT UNIQUE REFERENCES warm_trigger_fires(id),
-      prospect_id UUID,
-      company TEXT,
-      trigger_reason TEXT,
-      icp_score INTEGER,
-      fired_at TIMESTAMPTZ,
-      resolved_action TEXT,
-      resolved_at TIMESTAMPTZ,
-      time_to_resolution_minutes INTEGER,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS capture_type TEXT`);
-  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS source TEXT`);
-  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS linked_entity_type TEXT`);
-  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS linked_entity_id TEXT`);
-  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS linked_capture_id BIGINT`);
-  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS captured_at TIMESTAMPTZ`);
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'capture_inbox_linked_capture_id_fkey'
-          AND conrelid = 'capture_inbox'::regclass
-      ) THEN
-        ALTER TABLE capture_inbox
-          ADD CONSTRAINT capture_inbox_linked_capture_id_fkey
-          FOREIGN KEY (linked_capture_id) REFERENCES capture_inbox(id);
-      END IF;
-    END $$;
-  `);
+function isWarmRoutingEnabled(env = process.env) {
+  return String(env.WARM_ROUTING_ENABLED || '').toLowerCase() === 'true';
 }
 
-async function backfillEmailTouchedAt(clientId) {
-  await pool.query(`
-    UPDATE prospects p
-    SET email_touched_at = latest.last_touch
-    FROM (
-      SELECT p2.id, MAX(t.created_at) AS last_touch
-      FROM prospects p2
-      JOIN touchpoints t ON t.prospect_id = p2.id AND t.client_id = p2.client_id
-      WHERE p2.client_id = $1
-        AND p2.email_touched_at IS NULL
-        AND t.channel = 'email'
-      GROUP BY p2.id
-    ) latest
-    WHERE p.id = latest.id
-      AND p.client_id = $1
-      AND p.email_touched_at IS NULL
-  `, [clientId]);
-}
-
-async function snapshotIcpScores(clientId) {
-  await pool.query(`
-    INSERT INTO icp_score_snapshots (prospect_id, client_id, icp_score, snapshot_date)
-    SELECT id, client_id, icp_score, CURRENT_DATE
-    FROM prospects
-    WHERE client_id = $1
-    ON CONFLICT (prospect_id, snapshot_date) DO NOTHING
-  `, [clientId]);
+async function isWarmRoutingSeeded(clientId) {
+  try {
+    const { rows } = await pool.query(`
+      SELECT 1
+      FROM warm_routing_control
+      WHERE client_id = $1
+        AND seed_version = $2
+        AND seeded_at IS NOT NULL
+      LIMIT 1
+    `, [clientId, WARM_ROUTING_SEED_VERSION]);
+    return rows.length > 0;
+  } catch (err) {
+    console.warn(`[warm_routing] seed gate unavailable: ${err.message}`);
+    return false;
+  }
 }
 
 async function getWarmProspects(clientId) {
@@ -352,15 +265,15 @@ async function getWarmProspects(clientId) {
       p.vertical,
       p.status,
       p.icp_score,
-      p.email_touched_at,
+      GREATEST(p.email_touched_at, email_touch.latest_touch_at) AS email_touched_at,
       p.last_contacted_at,
       p.service_area_match,
       COALESCE(c.name, NULLIF(SPLIT_PART(COALESCE(p.notes, ''), ' - ', 1), ''), p.email) AS company_name,
-      COALESCE(snap.icp_score, hist.old_score, p.icp_score) AS icp_score_7d_ago,
-      (p.icp_score - COALESCE(snap.icp_score, hist.old_score, p.icp_score))::int AS icp_delta_7d,
-      COALESCE(evt.opens_24h, 0)::int + COALESCE(tp.opens_24h, 0)::int AS opens_24h,
-      COALESCE(evt.clicks_24h, 0)::int + COALESCE(tp.clicks_24h, 0)::int AS clicks_24h,
-      COALESCE(evt.reply_count, 0)::int + COALESCE(tp.reply_count, 0)::int AS reply_count,
+      p.icp_score AS icp_score_7d_ago,
+      0::int AS icp_delta_7d,
+      COALESCE(eng.opens_24h, 0)::int AS opens_24h,
+      COALESCE(eng.clicks_24h, 0)::int AS clicks_24h,
+      eng.latest_event_key AS engagement_event_key,
       last_tp.created_at AS last_touch_at,
       last_tp.channel AS last_touch_channel,
       last_tp.action_type AS last_touch_action,
@@ -369,39 +282,64 @@ async function getWarmProspects(clientId) {
     FROM prospects p
     LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     LEFT JOIN LATERAL (
-      SELECT icp_score
-      FROM icp_score_snapshots s
-      WHERE s.prospect_id = p.id
-        AND s.snapshot_date <= CURRENT_DATE - INTERVAL '7 days'
-      ORDER BY s.snapshot_date DESC
-      LIMIT 1
-    ) snap ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT old_score
-      FROM icp_score_history h
-      WHERE h.prospect_id = p.id
-        AND h.created_at >= NOW() - INTERVAL '7 days'
-      ORDER BY h.created_at ASC
-      LIMIT 1
-    ) hist ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT
-        COUNT(*) FILTER (WHERE event_type IN ('opened', 'open') AND event_at >= NOW() - INTERVAL '24 hours') AS opens_24h,
-        COUNT(*) FILTER (WHERE event_type IN ('clicked', 'click') AND event_at >= NOW() - INTERVAL '24 hours') AS clicks_24h,
-        COUNT(*) FILTER (WHERE event_type IN ('replied', 'reply')) AS reply_count
-      FROM email_events ee
-      WHERE ee.client_id = p.client_id
-        AND LOWER(ee.recipient_email) = LOWER(p.email)
-    ) evt ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT
-        COUNT(*) FILTER (WHERE action_type IN ('open', 'email_opened') AND created_at >= NOW() - INTERVAL '24 hours') AS opens_24h,
-        COUNT(*) FILTER (WHERE action_type IN ('click', 'email_clicked') AND created_at >= NOW() - INTERVAL '24 hours') AS clicks_24h,
-        COUNT(*) FILTER (WHERE action_type IN ('inbound', 'reply', 'email_reply', 'inbound_reply')) AS reply_count
+      SELECT MAX(t.created_at) AS latest_touch_at
       FROM touchpoints t
       WHERE t.client_id = p.client_id
         AND t.prospect_id = p.id
-    ) tp ON TRUE
+        AND t.channel = 'email'
+    ) email_touch ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*) FILTER (WHERE kind = 'open') AS opens_24h,
+        COUNT(*) FILTER (WHERE kind = 'click') AS clicks_24h,
+        (ARRAY_AGG(event_key ORDER BY occurred_at DESC, event_key DESC))[1] AS latest_event_key
+      FROM (
+        SELECT DISTINCT ON (kind, message_key, DATE_TRUNC('second', occurred_at))
+          kind, event_key, message_key, occurred_at
+        FROM (
+          SELECT
+            CASE
+              WHEN ee.event_type IN ('opened', 'open') THEN 'open'
+              WHEN ee.event_type IN ('clicked', 'click') THEN 'click'
+            END AS kind,
+            'email_event:' || ee.id::text AS event_key,
+            COALESCE(NULLIF(ee.brevo_message_id, ''), LOWER(ee.recipient_email)) AS message_key,
+            ee.event_at AS occurred_at
+          FROM email_events ee
+          WHERE ee.client_id = p.client_id
+            AND LOWER(ee.recipient_email) = LOWER(p.email)
+            AND ee.event_type IN ('opened', 'open', 'clicked', 'click')
+            AND ee.event_at >= NOW() - INTERVAL '24 hours'
+
+          UNION ALL
+
+          SELECT
+            CASE
+              WHEN t.action_type IN ('open', 'email_opened') THEN 'open'
+              WHEN t.action_type IN ('click', 'email_clicked') THEN 'click'
+            END AS kind,
+            'touchpoint:' || t.id::text AS event_key,
+            COALESCE(NULLIF(t.external_ref, ''), t.id::text) AS message_key,
+            t.created_at AS occurred_at
+          FROM touchpoints t
+          WHERE t.client_id = p.client_id
+            AND t.prospect_id = p.id
+            AND t.action_type IN ('open', 'email_opened', 'click', 'email_clicked')
+            AND t.created_at >= NOW() - INTERVAL '24 hours'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM email_events mirrored
+              WHERE mirrored.client_id = t.client_id
+                AND mirrored.prospect_id = t.prospect_id
+                AND COALESCE(mirrored.brevo_message_id, '') = COALESCE(t.external_ref, '')
+                AND mirrored.event_type IN ('opened', 'open', 'clicked', 'click')
+                AND mirrored.event_at >= NOW() - INTERVAL '24 hours'
+            )
+        ) raw_events
+        WHERE kind IS NOT NULL
+        ORDER BY kind, message_key, DATE_TRUNC('second', occurred_at), occurred_at, event_key
+      ) canonical_events
+    ) eng ON TRUE
     LEFT JOIN LATERAL (
       SELECT channel, action_type, content_summary, created_at
       FROM touchpoints t
@@ -440,8 +378,6 @@ async function getWarmProspects(clientId) {
 
 function evaluateWarmTriggers(prospect) {
   const reasons = [];
-  if (Number(prospect.icp_delta_7d || 0) >= 15) reasons.push('ICP_JUMP_15');
-  if (Number(prospect.reply_count || 0) > 0) reasons.push('REPLY_RECEIVED');
   if (Number(prospect.opens_24h || 0) >= 3 || Number(prospect.clicks_24h || 0) > 0) reasons.push('ENGAGEMENT_CLUSTER');
   const touchedAt = prospect.email_touched_at ? new Date(prospect.email_touched_at).getTime() : 0;
   if (Number(prospect.icp_score || 0) >= 80 && touchedAt && touchedAt >= Date.now() - 14 * 24 * 60 * 60 * 1000) {
@@ -450,16 +386,220 @@ function evaluateWarmTriggers(prospect) {
   return reasons;
 }
 
-async function hasRecentFire(prospectId, reason) {
+function classifyIcpScoreChange(row) {
+  if (row.old_score === null || row.old_score === undefined) return null;
+  const oldScore = Number(row.old_score);
+  const newScore = Number(row.new_score);
+  const delta = newScore - oldScore;
+  const crossed80 = oldScore < 80 && newScore >= 80;
+  const crossed90 = oldScore >= 80 && oldScore < 90 && newScore >= 90;
+  const jumped15 = delta >= 15;
+  if (!crossed80 && !crossed90 && !jumped15) return null;
+
+  let reason = 'ICP_JUMP_15';
+  let label = `ICP jumped +${delta}, now ${newScore}`;
+  if (crossed80) {
+    reason = 'ICP_CROSS_80_RECENT';
+    label = `ICP crossed 80, now ${newScore}`;
+  } else if (crossed90) {
+    reason = 'ICP_CROSS_90';
+    label = `ICP crossed 90, now ${newScore}`;
+  }
+
+  return {
+    signal_type: SIGNAL_TYPES.ICP_SCORE,
+    reason,
+    event_key: `icp_history:${row.id}`,
+    observed_at: row.created_at,
+    trigger_label: label,
+    evidence: {
+      history_id: Number(row.id),
+      old_score: oldScore,
+      new_score: newScore,
+      delta,
+      crossed_80: crossed80,
+      crossed_90: crossed90,
+      jumped_15: jumped15,
+      source_reason: row.reason || null,
+    },
+  };
+}
+
+function groupSignalEventsByProspect(events) {
+  const grouped = new Map();
+  for (const event of events) {
+    const key = String(event.prospect_id);
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(event);
+  }
+  for (const rows of grouped.values()) {
+    rows.sort((a, b) => new Date(a.observed_at || 0) - new Date(b.observed_at || 0));
+  }
+  return grouped;
+}
+
+async function getWarmSignalStates(clientId) {
   const { rows } = await pool.query(`
-    SELECT 1
-    FROM warm_trigger_fires
-    WHERE prospect_id = $1
-      AND trigger_reason = $2
-      AND fired_at >= NOW() - INTERVAL '72 hours'
-    LIMIT 1
-  `, [prospectId, reason]);
-  return rows.length > 0;
+    SELECT *
+    FROM warm_signal_state
+    WHERE client_id = $1
+  `, [clientId]);
+  return new Map(rows.map(row => [`${row.prospect_id}:${row.signal_type}`, row]));
+}
+
+async function upsertWarmSignalState(update) {
+  await pool.query(`
+    INSERT INTO warm_signal_state (
+      client_id, prospect_id, signal_type, is_active, last_observed_value,
+      last_source_event_key, last_fired_value, last_fired_at, updated_at
+    )
+    VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8, NOW())
+    ON CONFLICT (client_id, prospect_id, signal_type) DO UPDATE SET
+      is_active = EXCLUDED.is_active,
+      last_observed_value = EXCLUDED.last_observed_value,
+      last_source_event_key = COALESCE(EXCLUDED.last_source_event_key, warm_signal_state.last_source_event_key),
+      last_fired_value = COALESCE(EXCLUDED.last_fired_value, warm_signal_state.last_fired_value),
+      last_fired_at = COALESCE(EXCLUDED.last_fired_at, warm_signal_state.last_fired_at),
+      updated_at = NOW()
+  `, [
+    update.client_id,
+    update.prospect_id,
+    update.signal_type,
+    Boolean(update.is_active),
+    JSON.stringify(update.last_observed_value || {}),
+    update.last_source_event_key || null,
+    update.last_fired_value ? JSON.stringify(update.last_fired_value) : null,
+    update.last_fired_at || null,
+  ]);
+}
+
+function buildCurrentEdgeEvents(prospect, states) {
+  const events = [];
+  const stateUpdates = [];
+  const touchedAt = prospect.email_touched_at ? new Date(prospect.email_touched_at) : null;
+  const eligibilityActive = Number(prospect.icp_score || 0) >= 80
+    && touchedAt
+    && touchedAt.getTime() >= Date.now() - 14 * 24 * 60 * 60 * 1000;
+  const eligibilityState = states.get(`${prospect.id}:${SIGNAL_TYPES.ICP_ELIGIBILITY}`);
+  if (eligibilityActive && !eligibilityState?.is_active) {
+    events.push({
+      prospect_id: prospect.id,
+      signal_type: SIGNAL_TYPES.ICP_ELIGIBILITY,
+      reason: 'ICP_CROSS_80_RECENT',
+      event_key: `icp_eligibility:${prospect.id}:${touchedAt.toISOString()}`,
+      observed_at: touchedAt,
+      trigger_label: `ICP crossed 80, now ${Number(prospect.icp_score || 0)}`,
+      evidence: { icp_score: Number(prospect.icp_score || 0), email_touched_at: touchedAt.toISOString() },
+    });
+  }
+  stateUpdates.push({
+    client_id: prospect.client_id,
+    prospect_id: prospect.id,
+    signal_type: SIGNAL_TYPES.ICP_ELIGIBILITY,
+    is_active: Boolean(eligibilityActive),
+    last_observed_value: {
+      icp_score: Number(prospect.icp_score || 0),
+      email_touched_at: touchedAt?.toISOString() || null,
+    },
+    last_source_event_key: touchedAt ? `email_touch:${touchedAt.toISOString()}` : null,
+  });
+
+  const engagementActive = Number(prospect.opens_24h || 0) >= 3 || Number(prospect.clicks_24h || 0) > 0;
+  const engagementState = states.get(`${prospect.id}:${SIGNAL_TYPES.ENGAGEMENT_CLUSTER}`);
+  if (engagementActive && !engagementState?.is_active && prospect.engagement_event_key) {
+    const trigger = Number(prospect.clicks_24h || 0) > 0
+      ? `${Number(prospect.clicks_24h)} click${Number(prospect.clicks_24h) === 1 ? '' : 's'} in 24h`
+      : `${Number(prospect.opens_24h)} opens in 24h`;
+    events.push({
+      prospect_id: prospect.id,
+      signal_type: SIGNAL_TYPES.ENGAGEMENT_CLUSTER,
+      reason: 'ENGAGEMENT_CLUSTER',
+      event_key: `engagement_edge:${prospect.id}:${prospect.engagement_event_key}`,
+      observed_at: new Date(),
+      trigger_label: trigger,
+      evidence: {
+        opens_24h: Number(prospect.opens_24h || 0),
+        clicks_24h: Number(prospect.clicks_24h || 0),
+        source_event_key: prospect.engagement_event_key,
+      },
+    });
+  }
+  stateUpdates.push({
+    client_id: prospect.client_id,
+    prospect_id: prospect.id,
+    signal_type: SIGNAL_TYPES.ENGAGEMENT_CLUSTER,
+    is_active: engagementActive,
+    last_observed_value: {
+      opens_24h: Number(prospect.opens_24h || 0),
+      clicks_24h: Number(prospect.clicks_24h || 0),
+    },
+    last_source_event_key: prospect.engagement_event_key || null,
+  });
+
+  return { events, stateUpdates };
+}
+
+async function getPendingIcpScoreChanges(clientId, prospectIds) {
+  if (!prospectIds.length) return [];
+  const { rows } = await pool.query(`
+    SELECT h.*
+    FROM icp_score_history h
+    JOIN prospects p ON p.id = h.prospect_id AND p.client_id = $1
+    LEFT JOIN warm_signal_state state
+      ON state.client_id = p.client_id
+     AND state.prospect_id = p.id
+     AND state.signal_type = $2
+    WHERE h.prospect_id = ANY($3::uuid[])
+      AND h.id > COALESCE(NULLIF(state.last_source_event_key, '')::bigint, 0)
+    ORDER BY h.prospect_id, h.id
+  `, [clientId, SIGNAL_TYPES.ICP_SCORE, prospectIds]);
+  return rows;
+}
+
+async function getPendingReplyEvents(clientId, prospectIds) {
+  if (!prospectIds.length) return [];
+  const { rows } = await pool.query(`
+    WITH reply_sources AS (
+      SELECT ee.prospect_id,
+        'email_event:' || ee.id::text AS event_key,
+        ee.event_at AS observed_at,
+        jsonb_build_object('source', 'email_events', 'source_id', ee.id, 'event_type', ee.event_type) AS evidence
+      FROM email_events ee
+      WHERE ee.client_id = $1
+        AND ee.prospect_id = ANY($2::uuid[])
+        AND ee.event_type IN ('replied', 'reply')
+
+      UNION ALL
+
+      SELECT t.prospect_id,
+        'touchpoint:' || t.id::text AS event_key,
+        t.created_at AS observed_at,
+        jsonb_build_object('source', 'touchpoints', 'source_id', t.id, 'action_type', t.action_type) AS evidence
+      FROM touchpoints t
+      WHERE t.client_id = $1
+        AND t.prospect_id = ANY($2::uuid[])
+        AND t.action_type IN ('inbound', 'reply', 'email_reply', 'inbound_reply')
+        AND NOT EXISTS (
+          SELECT 1 FROM email_events ee
+          WHERE ee.client_id = t.client_id
+            AND ee.prospect_id = t.prospect_id
+            AND ee.event_type IN ('replied', 'reply')
+            AND ABS(EXTRACT(EPOCH FROM (ee.event_at - t.created_at))) <= 10
+        )
+    )
+    SELECT source.*
+    FROM reply_sources source
+    LEFT JOIN warm_signal_state state
+      ON state.client_id = $1
+     AND state.prospect_id = source.prospect_id
+     AND state.signal_type = $3
+    WHERE source.observed_at >= COALESCE(
+      NULLIF(state.last_observed_value->>'cursor_at', '')::timestamptz,
+      'epoch'::timestamptz
+    )
+    ORDER BY source.prospect_id, source.observed_at, source.event_key
+  `, [clientId, prospectIds, SIGNAL_TYPES.REPLY]);
+  return rows;
 }
 
 async function pingsSentToday(clientId) {
@@ -619,26 +759,37 @@ async function logAgent(action, payload, status = 'success', errorMsg = null, cl
   ]).catch(err => console.error('[warm_routing] agent_log write failed:', err.message));
 }
 
-async function recordFire(prospect, reason, pingResult) {
+async function recordFire(prospect, event, pingResult, evidenceEvents = [event]) {
+  const reason = event.reason;
   const payload = {
     prospect_id: prospect.id,
     company: companyLabel(prospect),
     contact: prospect.email || prospect.phone || null,
     trigger_reason: reason,
-    trigger_label: triggerLabel(reason, prospect),
+    trigger_label: event.trigger_label || triggerLabel(reason, prospect),
     icp_score: Number(prospect.icp_score || 0),
     icp_delta_7d: Number(prospect.icp_delta_7d || 0),
     last_touch: lastTouchSummary(prospect),
     vertical: prospect.vertical || null,
     city: prospect.service_area_match || prospect.location || prospect.company_location || null,
+    opens_24h: Number(prospect.opens_24h || event.evidence?.opens_24h || 0),
+    clicks_24h: Number(prospect.clicks_24h || event.evidence?.clicks_24h || 0),
+    evidence: evidenceEvents.map(item => ({
+      event_key: item.event_key,
+      signal_type: item.signal_type,
+      trigger_reason: item.reason,
+      trigger_label: item.trigger_label,
+      observed_at: item.observed_at,
+      details: item.evidence || {},
+    })),
   };
 
   const { rows } = await pool.query(`
     INSERT INTO warm_trigger_fires (
       prospect_id, client_id, trigger_reason, trigger_payload, ping_sent,
-      telegram_chat_id, telegram_message_id, digest_date
+      telegram_chat_id, telegram_message_id, digest_date, event_key
     )
-    VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, CURRENT_DATE)
+    VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, CURRENT_DATE, $8)
     RETURNING id, fired_at
   `, [
     prospect.id,
@@ -648,6 +799,7 @@ async function recordFire(prospect, reason, pingResult) {
     Boolean(pingResult),
     pingResult?.chatId || null,
     pingResult?.messageId || null,
+    event.event_key,
   ]);
   const fire = rows[0];
   await insertMiraWarmCaptureLog(fire.id, prospect, reason);
@@ -656,18 +808,115 @@ async function recordFire(prospect, reason, pingResult) {
   return { ...fire, mira_capture_id: miraCaptureId };
 }
 
-async function processProspectTrigger(prospect, reason) {
-  if (await hasRecentFire(prospect.id, reason)) {
-    return { fired: false, reason: 'recent_fire' };
+async function claimSignalEvent(prospect, event) {
+  const { rows } = await pool.query(`
+    INSERT INTO warm_signal_events (
+      client_id, prospect_id, signal_type, event_key, observed_at, evidence, status
+    )
+    VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'pending')
+    ON CONFLICT (client_id, event_key) DO NOTHING
+    RETURNING *
+  `, [
+    prospect.client_id,
+    prospect.id,
+    event.signal_type,
+    event.event_key,
+    event.observed_at || new Date(),
+    JSON.stringify({
+      trigger_reason: event.reason,
+      trigger_label: event.trigger_label,
+      ...(event.evidence || {}),
+    }),
+  ]);
+  if (rows[0]) return { claimed: true, row: rows[0] };
+
+  const existing = await pool.query(`
+    SELECT * FROM warm_signal_events
+    WHERE client_id = $1 AND event_key = $2
+  `, [prospect.client_id, event.event_key]);
+  const row = existing.rows[0];
+  return { claimed: Boolean(row && row.status !== 'consumed'), row, duplicate: row?.status === 'consumed' };
+}
+
+async function getOpenWarmIncident(prospect) {
+  const { rows } = await pool.query(`
+    SELECT *
+    FROM warm_trigger_fires
+    WHERE client_id = $1
+      AND prospect_id = $2
+      AND resolved_action IS NULL
+    ORDER BY fired_at DESC
+    LIMIT 1
+  `, [prospect.client_id, prospect.id]);
+  return rows[0] || null;
+}
+
+async function appendIncidentEvidence(fireId, events) {
+  const evidence = events.map(event => ({
+    event_key: event.event_key,
+    signal_type: event.signal_type,
+    trigger_reason: event.reason,
+    trigger_label: event.trigger_label,
+    observed_at: event.observed_at,
+    details: event.evidence || {},
+  }));
+  await pool.query(`
+    UPDATE warm_trigger_fires
+    SET trigger_payload = jsonb_set(
+      COALESCE(trigger_payload, '{}'::jsonb),
+      '{evidence}',
+      COALESCE(trigger_payload->'evidence', '[]'::jsonb) || $2::jsonb,
+      true
+    )
+    WHERE id = $1
+  `, [fireId, JSON.stringify(evidence)]);
+}
+
+async function markSignalEventsConsumed(clientId, events, fireId) {
+  await pool.query(`
+    UPDATE warm_signal_events
+    SET status = 'consumed', routed_fire_id = $3, consumed_at = NOW()
+    WHERE client_id = $1
+      AND event_key = ANY($2::text[])
+  `, [clientId, events.map(event => event.event_key), fireId]);
+}
+
+async function processProspectEvents(prospect, events) {
+  const claimedEvents = [];
+  for (const event of events) {
+    const claim = await claimSignalEvent(prospect, event);
+    if (claim.claimed) claimedEvents.push(event);
+  }
+  if (!claimedEvents.length) return { fired: false, reason: 'events_already_consumed', consumed: 0 };
+
+  const openIncident = await getOpenWarmIncident(prospect);
+  if (openIncident) {
+    await appendIncidentEvidence(openIncident.id, claimedEvents);
+    await markSignalEventsConsumed(prospect.client_id, claimedEvents, openIncident.id);
+    return { fired: false, reason: 'evidence_appended', fire_id: openIncident.id, consumed: claimedEvents.length };
   }
 
+  const primary = claimedEvents[0];
+  const displayProspect = {
+    ...prospect,
+    trigger_label: primary.trigger_label,
+    icp_delta_7d: primary.evidence?.delta || 0,
+    opens_24h: primary.evidence?.opens_24h ?? prospect.opens_24h,
+    clicks_24h: primary.evidence?.clicks_24h ?? prospect.clicks_24h,
+  };
   let pingResult = null;
   if ((await pingsSentToday(prospect.client_id)) < DAILY_PING_CAP) {
-    pingResult = await sendWarmTelegramMessage(prospect, reason);
+    pingResult = await sendWarmTelegramMessage(displayProspect, primary.reason);
   }
 
-  const fire = await recordFire(prospect, reason, pingResult);
-  return { fired: true, fire_id: fire.id, ping_sent: Boolean(pingResult) };
+  const fire = await recordFire(displayProspect, primary, pingResult, claimedEvents);
+  await markSignalEventsConsumed(prospect.client_id, claimedEvents, fire.id);
+  return {
+    fired: true,
+    fire_id: fire.id,
+    ping_sent: Boolean(pingResult),
+    consumed: claimedEvents.length,
+  };
 }
 
 async function autoEscalateStaleFires(clientId) {
@@ -812,31 +1061,132 @@ async function withWorkerLock(fn) {
 async function run(params = {}) {
   const clientId = getRuntimeClientId(params);
   const runId = makeRunId(clientId);
+  if (!isWarmRoutingEnabled()) {
+    return { disabled: true, reason: 'WARM_ROUTING_ENABLED_not_true', fires: 0 };
+  }
+  if (!(await isWarmRoutingSeeded(clientId))) {
+    return { disabled: true, reason: 'warm_routing_seed_incomplete', fires: 0 };
+  }
   let result;
   try {
     result = await withWorkerLock(async () => {
-    await ensureWarmRoutingSchema();
-    await backfillEmailTouchedAt(clientId);
-    await snapshotIcpScores(clientId);
-
     const prospects = await getWarmProspects(clientId);
+    const prospectMap = new Map(prospects.map(prospect => [String(prospect.id), prospect]));
+    const states = await getWarmSignalStates(clientId);
+    const events = [];
+    const stateUpdates = new Map();
+    const queueStateUpdate = update => {
+      stateUpdates.set(`${update.prospect_id}:${update.signal_type}`, update);
+    };
+
+    for (const prospect of prospects) {
+      const current = buildCurrentEdgeEvents(prospect, states);
+      events.push(...current.events);
+      current.stateUpdates.forEach(queueStateUpdate);
+    }
+
+    const icpRows = await getPendingIcpScoreChanges(clientId, prospects.map(row => row.id));
+    const latestIcpByProspect = new Map();
+    for (const row of icpRows) {
+      const prospect = prospectMap.get(String(row.prospect_id));
+      if (!prospect) continue;
+      const event = classifyIcpScoreChange(row);
+      if (event) events.push({ ...event, prospect_id: row.prospect_id });
+      const prior = latestIcpByProspect.get(String(row.prospect_id));
+      latestIcpByProspect.set(String(row.prospect_id), {
+        ...row,
+        observed_high_water: Math.max(
+          Number(prior?.observed_high_water || 0),
+          Number(row.old_score || 0),
+          Number(row.new_score || 0)
+        ),
+      });
+    }
+    for (const [prospectId, row] of latestIcpByProspect) {
+      const existing = states.get(`${prospectId}:${SIGNAL_TYPES.ICP_SCORE}`);
+      const previousHigh = Number(existing?.last_observed_value?.high_water_score || 0);
+      queueStateUpdate({
+        client_id: clientId,
+        prospect_id: prospectId,
+        signal_type: SIGNAL_TYPES.ICP_SCORE,
+        is_active: Number(row.new_score || 0) >= 80,
+        last_observed_value: {
+          old_score: row.old_score,
+          current_score: Number(row.new_score || 0),
+          high_water_score: Math.max(previousHigh, Number(row.observed_high_water || 0)),
+        },
+        last_source_event_key: String(row.id),
+      });
+    }
+
+    const replyRows = await getPendingReplyEvents(clientId, prospects.map(row => row.id));
+    const latestReplyByProspect = new Map();
+    for (const row of replyRows) {
+      events.push({
+        prospect_id: row.prospect_id,
+        signal_type: SIGNAL_TYPES.REPLY,
+        reason: 'REPLY_RECEIVED',
+        event_key: row.event_key,
+        observed_at: row.observed_at,
+        trigger_label: 'Inbound reply received',
+        evidence: row.evidence || {},
+      });
+      latestReplyByProspect.set(String(row.prospect_id), row);
+    }
+    for (const [prospectId, row] of latestReplyByProspect) {
+      queueStateUpdate({
+        client_id: clientId,
+        prospect_id: prospectId,
+        signal_type: SIGNAL_TYPES.REPLY,
+        is_active: false,
+        last_observed_value: { cursor_at: row.observed_at },
+        last_source_event_key: row.event_key,
+      });
+    }
+
+    const groupedEvents = groupSignalEventsByProspect(events);
     let fires = 0;
     let skipped = 0;
     const results = [];
 
     for (const prospect of prospects) {
-      const reasons = evaluateWarmTriggers(prospect);
-      for (const reason of reasons) {
-        try {
-          const result = await processProspectTrigger(prospect, reason);
-          if (result.fired) fires++;
+      const prospectEvents = groupedEvents.get(String(prospect.id)) || [];
+      try {
+        let routeResult = { fired: false, reason: 'no_new_edge', consumed: 0 };
+        if (prospectEvents.length) {
+          routeResult = await processProspectEvents(prospect, prospectEvents);
+          if (routeResult.fired) fires++;
           else skipped++;
-          results.push({ prospect_id: prospect.id, reason, ...result });
-        } catch (err) {
-          skipped++;
-          results.push({ prospect_id: prospect.id, reason, fired: false, error: err.message });
-          await logAgent('warm_trigger_failed', { prospect_id: prospect.id, reason }, 'failed', err.message, clientId, prospect.id);
         }
+        for (const update of stateUpdates.values()) {
+          if (String(update.prospect_id) !== String(prospect.id)) continue;
+          const firedEvent = prospectEvents.find(event => event.signal_type === update.signal_type);
+          await upsertWarmSignalState({
+            ...update,
+            ...(firedEvent ? {
+              last_fired_value: firedEvent.evidence || {},
+              last_fired_at: new Date(),
+            } : {}),
+          });
+        }
+        if (prospectEvents.length) {
+          results.push({
+            prospect_id: prospect.id,
+            event_keys: prospectEvents.map(event => event.event_key),
+            ...routeResult,
+          });
+        }
+      } catch (err) {
+        skipped++;
+        results.push({ prospect_id: prospect.id, fired: false, error: err.message });
+        await logAgent(
+          'warm_trigger_failed',
+          { prospect_id: prospect.id, event_keys: prospectEvents.map(event => event.event_key) },
+          'failed',
+          err.message,
+          clientId,
+          prospect.id
+        );
       }
     }
 
@@ -873,6 +1223,10 @@ async function run(params = {}) {
 }
 
 function startWarmRoutingScheduler(options = {}) {
+  if (!isWarmRoutingEnabled()) {
+    console.log('[warm_routing] scheduler disabled; set WARM_ROUTING_ENABLED=true only after migration + seed verification');
+    return null;
+  }
   const intervalMs = Number(options.intervalMs || WORKER_INTERVAL_MS);
   if (intervalHandle) return intervalHandle;
   intervalHandle = setInterval(() => {
@@ -912,8 +1266,6 @@ async function handleWarmTelegramCallback(callbackQuery) {
   const action = match[1].toLowerCase();
   const prospectId = match[2];
   await answerWarmCallback(callbackQuery.id);
-  await ensureWarmRoutingSchema();
-
   const fire = await getLatestUnresolvedFire(prospectId);
   if (!fire) {
     await editWarmTelegramMessage(callbackQuery, `→ already resolved at ${localClock()}`);
@@ -954,8 +1306,13 @@ async function handleWarmTelegramCallback(callbackQuery) {
 }
 
 module.exports = {
-  ensureWarmRoutingSchema,
   evaluateWarmTriggers,
+  triggerLabel,
+  classifyIcpScoreChange,
+  buildCurrentEdgeEvents,
+  groupSignalEventsByProspect,
+  processProspectEvents,
+  isWarmRoutingEnabled,
   run,
   startWarmRoutingScheduler,
   handleWarmTelegramCallback,

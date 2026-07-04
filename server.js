@@ -43,7 +43,7 @@ const { startMiraTranscriptionWorker } = require('./miraTranscriptionAgent');
 const { startMiraClassifierWorker } = require('./miraClassifierAgent');
 const { startMiraRouterWorker } = require('./miraRouterAgent');
 const { startMiraDigestScheduler } = require('./miraDigestAgent');
-const { ensureWarmRoutingSchema, startWarmRoutingScheduler } = require('./warmRoutingAgent');
+const { startWarmRoutingScheduler } = require('./warmRoutingAgent');
 const { ensureEmmettAutosendSchema } = require('./utils/emmettAutosend');
 
 const app  = express();
@@ -63,7 +63,6 @@ ensureScoutUnenrichedTable().catch(err => console.error('[scoutUnenriched] init 
 ensureScoutLockTable().catch(err => console.error('[scoutLock] init error:', err.message));
 ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init error:', err.message));
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
-ensureWarmRoutingSchema().catch(err => console.error('[warmRouting] init error:', err.message));
 startMiraTranscriptionWorker();
 startMiraClassifierWorker();
 startMiraRouterWorker();
