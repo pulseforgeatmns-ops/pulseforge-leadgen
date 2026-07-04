@@ -1258,11 +1258,11 @@ async function getEffectiveSendConfig(baseConfig) {
 }
 
 function sendingWindowEndHour(clientId = CLIENT_ID) {
-  return Number(clientId) === 5 ? 16 : 14;
+  return 16.5;
 }
 
 function sendingWindowLabel(clientId = CLIENT_ID) {
-  return `Tuesday-Thursday 9am-${Number(clientId) === 5 ? '4pm' : '2pm'} ET`;
+  return 'Monday-Friday 9am-4:30pm ET';
 }
 
 function isWithinSendingWindow(date = new Date(), clientId = CLIENT_ID) {
@@ -1270,11 +1270,14 @@ function isWithinSendingWindow(date = new Date(), clientId = CLIENT_ID) {
     timeZone: 'America/New_York',
     weekday: 'short',
     hour: 'numeric',
+    minute: 'numeric',
     hour12: false,
   }).formatToParts(date);
   const weekday = parts.find(p => p.type === 'weekday')?.value;
   const hour = Number(parts.find(p => p.type === 'hour')?.value);
-  return ['Tue', 'Wed', 'Thu'].includes(weekday) && hour >= 9 && hour < sendingWindowEndHour(clientId);
+  const minute = Number(parts.find(p => p.type === 'minute')?.value);
+  const time = hour + (minute / 60);
+  return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].includes(weekday) && time >= 9 && time < sendingWindowEndHour(clientId);
 }
 
 async function logSkippedOutsideWindow() {
