@@ -1,8 +1,5 @@
 const pool = require('../db');
 
-// Brevo's live `request` and history API `requests` events are normalized to
-// the canonical `sent` event_type before they reach email_events.
-const SEND_EVENTS = "('sent')";
 const ACTIVE_PROSPECT_ZERO_SEND_THRESHOLD = 50;
 
 function number(value) {
@@ -28,45 +25,53 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
     }
   };
 
-  const [emailRows, scoutRows, warmRows, errorRows, clientRows] = await Promise.all([
+  const [emailRows, scoutRows, warmRows, errorRows, clientRows, autosendRows] = await Promise.all([
     safeRows(`
       /* daily_health:email */
+      WITH managed_sends AS (
+        SELECT al.ran_at
+        FROM agent_log al
+        JOIN clients c ON c.id = al.client_id AND c.active = true
+        WHERE al.agent_name = 'emmett'
+          AND al.action = 'email_sent'
+          AND al.status = 'completed'
+          AND al.ran_at >= $1::timestamptz - INTERVAL '8 days'
+          AND al.ran_at < $1::timestamptz
+      ), event_counts AS (
+        SELECT
+          COUNT(*) FILTER (
+            WHERE event_type IN ('hard_bounce', 'soft_bounce', 'blocked')
+              AND event_at >= $1::timestamptz - INTERVAL '24 hours'
+              AND event_at < $1::timestamptz
+          )::int AS bounce_count_today,
+          COUNT(*) FILTER (
+            WHERE event_type IN ('replied', 'reply')
+              AND event_at >= $1::timestamptz - INTERVAL '24 hours'
+              AND event_at < $1::timestamptz
+              AND LOWER(COALESCE(raw_payload->>'classification', '')) <> 'out_of_office'
+          )::int AS reply_count_today,
+          COUNT(*) FILTER (
+            WHERE event_type = 'opened'
+              AND event_at >= $1::timestamptz - INTERVAL '24 hours'
+              AND event_at < $1::timestamptz
+          )::int AS opened_count_today,
+          COUNT(*) FILTER (
+            WHERE event_type = 'opened_proxy'
+              AND event_at >= $1::timestamptz - INTERVAL '24 hours'
+              AND event_at < $1::timestamptz
+          )::int AS opened_proxy_count_today
+        FROM email_events ee
+        JOIN clients c ON c.id = ee.client_id AND c.active = true
+        WHERE ee.event_at >= $1::timestamptz - INTERVAL '8 days'
+          AND ee.event_at < $1::timestamptz
+      )
       SELECT
-        COUNT(*) FILTER (
-          WHERE event_type IN ${SEND_EVENTS}
-            AND event_at >= $1::timestamptz - INTERVAL '24 hours'
-            AND event_at < $1::timestamptz
-        )::int AS send_count_today,
-        COUNT(*) FILTER (
-          WHERE event_type IN ${SEND_EVENTS}
-            AND event_at >= $1::timestamptz - INTERVAL '8 days'
-            AND event_at < $1::timestamptz - INTERVAL '24 hours'
-        )::numeric / 7 AS send_count_baseline_7d,
-        COUNT(*) FILTER (
-          WHERE event_type IN ('hard_bounce', 'soft_bounce', 'blocked')
-            AND event_at >= $1::timestamptz - INTERVAL '24 hours'
-            AND event_at < $1::timestamptz
-        )::int AS bounce_count_today,
-        COUNT(*) FILTER (
-          WHERE event_type IN ('replied', 'reply')
-            AND event_at >= $1::timestamptz - INTERVAL '24 hours'
-            AND event_at < $1::timestamptz
-            AND LOWER(COALESCE(raw_payload->>'classification', '')) <> 'out_of_office'
-        )::int AS reply_count_today,
-        COUNT(*) FILTER (
-          WHERE event_type = 'opened'
-            AND event_at >= $1::timestamptz - INTERVAL '24 hours'
-            AND event_at < $1::timestamptz
-        )::int AS opened_count_today,
-        COUNT(*) FILTER (
-          WHERE event_type = 'opened_proxy'
-            AND event_at >= $1::timestamptz - INTERVAL '24 hours'
-            AND event_at < $1::timestamptz
-        )::int AS opened_proxy_count_today
-      FROM email_events ee
-      JOIN clients c ON c.id = ee.client_id AND c.active = true
-      WHERE ee.event_at >= $1::timestamptz - INTERVAL '8 days'
-        AND ee.event_at < $1::timestamptz
+        (SELECT COUNT(*) FROM managed_sends
+         WHERE ran_at >= $1::timestamptz - INTERVAL '24 hours')::int AS send_count_today,
+        (SELECT COUNT(*) FROM managed_sends
+         WHERE ran_at < $1::timestamptz - INTERVAL '24 hours')::numeric / 7 AS send_count_baseline_7d,
+        event_counts.*
+      FROM event_counts
     `),
     safeRows(`
       /* daily_health:scout */
@@ -120,21 +125,23 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
         GROUP BY p.client_id
       ), sends AS (
         SELECT
-          client_id,
+          al.client_id,
           COUNT(*) FILTER (
-            WHERE event_at >= $1::timestamptz - INTERVAL '24 hours'
-              AND event_at < $1::timestamptz
+            WHERE al.ran_at >= $1::timestamptz - INTERVAL '24 hours'
+              AND al.ran_at < $1::timestamptz
           )::int AS send_count_today,
           COUNT(*) FILTER (
-            WHERE event_at >= $1::timestamptz - INTERVAL '8 days'
-              AND event_at < $1::timestamptz - INTERVAL '24 hours'
+            WHERE al.ran_at >= $1::timestamptz - INTERVAL '8 days'
+              AND al.ran_at < $1::timestamptz - INTERVAL '24 hours'
           )::int AS send_count_baseline_7d_total
-        FROM email_events ee
-        JOIN clients c ON c.id = ee.client_id AND c.active = true
-        WHERE ee.event_type IN ${SEND_EVENTS}
-          AND ee.event_at >= $1::timestamptz - INTERVAL '8 days'
-          AND ee.event_at < $1::timestamptz
-        GROUP BY ee.client_id
+        FROM agent_log al
+        JOIN clients c ON c.id = al.client_id AND c.active = true
+        WHERE al.agent_name = 'emmett'
+          AND al.action = 'email_sent'
+          AND al.status = 'completed'
+          AND al.ran_at >= $1::timestamptz - INTERVAL '8 days'
+          AND al.ran_at < $1::timestamptz
+        GROUP BY al.client_id
       )
       SELECT
         ap.client_id,
@@ -146,6 +153,21 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
       JOIN clients c ON c.id = ap.client_id AND c.active = true
       LEFT JOIN sends s ON s.client_id = ap.client_id
       ORDER BY ap.client_id
+    `),
+    safeRows(`
+      /* daily_health:autosend */
+      SELECT DISTINCT ON (al.client_id)
+        al.client_id,
+        COALESCE(c.name, c.business_name, 'Client ' || al.client_id::text) AS client_name,
+        al.payload
+      FROM agent_log al
+      JOIN clients c ON c.id = al.client_id AND c.active = true
+      WHERE al.agent_name = 'emmett'
+        AND al.action = 'autorun'
+        AND al.payload->>'halted_reason' = 'bounce_breaker'
+        AND al.ran_at >= $1::timestamptz - INTERVAL '24 hours'
+        AND al.ran_at < $1::timestamptz
+      ORDER BY al.client_id, al.ran_at DESC
     `),
   ]);
 
@@ -193,6 +215,14 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
   }
   for (const [agentName, count] of Object.entries(agentErrors)) {
     if (count >= 5) flags.push({ severity: 'red', code: 'AGENT_ERRORS', msg: `AGENT ERRORS: ${agentName} logged ${count} errors`, agent_name: agentName });
+  }
+  for (const row of autosendRows) {
+    flags.push({
+      severity: 'red',
+      code: 'EMMETT_BOUNCE_BREAKER',
+      msg: `EMMETT HALTED: ${row.client_name || `Client ${row.client_id}`} crossed today's bounce threshold`,
+      client_id: number(row.client_id),
+    });
   }
   for (const detail of clientDetails) {
     if (detail.active_prospect_count > ACTIVE_PROSPECT_ZERO_SEND_THRESHOLD && detail.send_count_today === 0) {

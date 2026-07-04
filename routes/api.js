@@ -25,6 +25,7 @@ const {
 const { setSetterVisibility } = require('../utils/setterVisibility');
 const { ensureTieredEnrichmentSchema } = require('../utils/tieredEnrichmentSchema');
 const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('../utils/businessNameShort');
+const { autorun: autorunEmmett } = require('../utils/emmettAutosend');
 
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
@@ -131,6 +132,26 @@ function parseOptionalInt(value, field) {
   return parsed;
 }
 
+router.get('/api/emmett/autorun', async (req, res) => {
+  const configuredSecret = String(process.env.CRON_SECRET || '');
+  const suppliedSecret = String(req.get('x-cron-secret') || '');
+  const configured = Buffer.from(configuredSecret);
+  const supplied = Buffer.from(suppliedSecret);
+  const authenticated = configured.length > 0 &&
+    configured.length === supplied.length &&
+    crypto.timingSafeEqual(configured, supplied);
+  if (!authenticated) return res.status(401).json({ error: 'Unauthorized' });
+
+  try {
+    const clientId = Number(req.query.client_id);
+    const result = await autorunEmmett(clientId);
+    return res.json(result);
+  } catch (err) {
+    console.error('[emmett_autorun] failed:', err.message);
+    return res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 router.get('/api/me', sessionAuth, (req, res) => {
   res.json({ user: req.user, active_client_id: getRequestClientId(req) || req.session?.active_client_id || 1 });
 });
@@ -201,175 +222,210 @@ router.get('/api/agent-visibility', requireDashboardRead, async (req, res) => {
   }
 });
 
-router.get('/api/pipeline', requireDashboardRead, async (req, res) => {
+router.get('/api/pipeline/client', requireDashboardRead, async (req, res) => {
   try {
-    await ensureClientArchitecture();
-    await ensureCloserSchema();
-    await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS assigned_city TEXT');
-    await pool.query(`
-      INSERT INTO clients (name, slug, email, city, state, active)
-      VALUES ('McLeod Legal Services', 'mcleod', 'ashley@mcleodlegal.com',
-              'Manchester', 'NH', false)
-      ON CONFLICT (slug) DO NOTHING
-    `);
-
-    const agentNames = [
-      'Scout', 'Emmett', 'Riley', 'Paige', 'Max', 'Rex', 'Vera', 'Faye',
-      'Link', 'Sam', 'Cal', 'CalBatch', 'WarmSignal', 'Analytics',
-      'Sketch', 'SetterHandoff',
-    ];
-    const agentKeys = {
-      scout_agent: 'Scout', scout: 'Scout',
-      emmett_agent: 'Emmett', email_agent: 'Emmett', emmett: 'Emmett',
-      riley_agent: 'Riley', riley: 'Riley',
-      paige_agent: 'Paige', paige: 'Paige',
-      max_agent: 'Max', max: 'Max',
-      rex_agent: 'Rex', rex: 'Rex',
-      vera_agent: 'Vera', vera: 'Vera',
-      facebook_agent: 'Faye', faye: 'Faye',
-      linkedin_agent: 'Link', link: 'Link',
-      sam_agent: 'Sam', sam: 'Sam',
-      cal_agent: 'Cal', cal: 'Cal',
-      cal_batch_agent: 'CalBatch', calbatch: 'CalBatch', cal_batch: 'CalBatch',
-      warm_signal_agent: 'WarmSignal', warm_signal: 'WarmSignal', warmsignal: 'WarmSignal',
-      analytics_agent: 'Analytics', analytics: 'Analytics',
-      sketch_agent: 'Sketch', sketch: 'Sketch',
-      setter_handoff_agent: 'SetterHandoff', setterhandoff: 'SetterHandoff', handoff_utility: 'SetterHandoff',
-    };
-
     const clientId = getRequestClientId(req);
-    const clientScoped = req.user?.role === 'client';
-    const clientParams = clientScoped ? [clientId] : [];
-    const clientsFilter = clientScoped ? 'AND c.id = $1' : '';
-    const scopedAnd = clientScoped ? 'AND client_id = $1' : '';
-    const scopedWhere = clientScoped ? 'WHERE client_id = $1' : '';
-    const prospectClientAnd = clientScoped ? 'AND p.client_id = $1' : '';
-    const activityClientJoin = clientScoped ? 'AND al.client_id = p.client_id' : '';
-
-    const [clients, revenueMrr, revenueBooked, revenuePayouts, setters, closers, logs] = await Promise.all([
+    const [clientResult, revenueResult] = await Promise.all([
       pool.query(`
+        WITH prospect_rollup AS (
+          SELECT COUNT(*) FILTER (
+            WHERE COALESCE(do_not_contact, false) = false
+              AND COALESCE(status, 'cold') NOT IN ('dead', 'disqualified')
+          )::int AS active_prospects
+          FROM prospects
+          WHERE client_id = $1
+        ), touchpoint_rollup AS (
+          SELECT
+            COUNT(*)::int AS touchpoints,
+            COUNT(*) FILTER (
+              WHERE action_type IN ('send', 'outbound', 'email_warm')
+            )::int AS sends
+          FROM touchpoints
+          WHERE client_id = $1
+        )
         SELECT
-          c.id, c.name, c.slug, c.email, c.city, c.state,
-          c.max_email, c.active, c.created_at,
-          ${prospectStateCountColumns('p', { includeDead: !clientScoped })},
-          COUNT(DISTINCT p.id) FILTER (
-            WHERE p.setter_status = 'booked')::int as booked_count,
-          COUNT(DISTINCT p.id) FILTER (
-            WHERE p.setter_status = 'closed')::int as closed_count
+          c.id, c.name, c.slug, c.city, c.state, c.max_email, c.active, c.created_at,
+          prospect_rollup.active_prospects,
+          touchpoint_rollup.touchpoints,
+          touchpoint_rollup.sends
         FROM clients c
-        LEFT JOIN prospects p ON p.client_id = c.id
-        WHERE c.slug != 'pulseforge'
-          ${clientsFilter}
-        GROUP BY c.id
-        ORDER BY c.created_at ASC
-      `, clientParams),
-      pool.query(`SELECT COALESCE(SUM(mrr_amount), 0)::numeric as confirmed_mrr FROM commissions WHERE status != 'void' ${scopedAnd}`, clientParams),
-      pool.query(`SELECT COUNT(*)::int as booked_pending FROM prospects WHERE setter_status = 'booked' AND closed_at IS NULL ${scopedAnd}`, clientParams),
+        CROSS JOIN prospect_rollup
+        CROSS JOIN touchpoint_rollup
+        WHERE c.id = $1
+      `, [clientId]),
       pool.query(`
         SELECT
-          COALESCE(SUM(commission_amt) FILTER (
-            WHERE status = 'pending'), 0)::numeric as pending_payout,
-          COALESCE(SUM(commission_amt) FILTER (
-            WHERE status = 'paid'), 0)::numeric as paid_out
-        FROM commissions
-        ${scopedWhere}
-      `, clientParams),
-      pool.query(`
-        SELECT
-          u.id, u.name, u.assigned_city,
-          COUNT(DISTINCT p.id) FILTER (
-            WHERE p.setter_visible = true
-            AND p.setter_status = 'new')::int as queue_size,
-          COUNT(DISTINCT al.id) FILTER (
-            WHERE al.action_type = 'call'
-            AND DATE(al.created_at) = CURRENT_DATE)::int as calls_today,
-          COUNT(DISTINCT p.id) FILTER (
-            WHERE p.setter_status = 'booked'
-            AND p.booked_at >= DATE_TRUNC('week', CURRENT_DATE)
-            )::int as booked_this_week
-        FROM users u
-        LEFT JOIN prospects p ON p.setter_visible = true
-        LEFT JOIN activity_log al ON al.setter_id::text = u.id::text ${activityClientJoin}
-        WHERE u.role = 'setter' AND u.active = true
-          ${prospectClientAnd}
-        GROUP BY u.id, u.name, u.assigned_city
-        ORDER BY u.name ASC
-      `, clientParams),
-      pool.query(`
-        SELECT
-          u.id, u.name,
-          COUNT(p.id) FILTER (
-            WHERE p.closer_id = u.id
-            AND p.setter_status = 'booked'
-            AND p.closed_at IS NULL)::int as pending_calls,
-          COUNT(p.id) FILTER (
-            WHERE p.closer_id = u.id
-            AND p.closer_status = 'showed'
-            AND p.booked_at >= DATE_TRUNC('week', CURRENT_DATE)
-            )::int as showed_this_week,
-          COUNT(p.id) FILTER (
-            WHERE p.closer_id = u.id
-            AND p.setter_status = 'closed'
-            AND p.closed_at >= DATE_TRUNC('month', CURRENT_DATE)
-            )::int as closed_this_month,
-          COALESCE(SUM(p.mrr_value) FILTER (
-            WHERE p.setter_status = 'closed'
-            AND p.closed_at >= DATE_TRUNC('month', CURRENT_DATE)
-            ), 0)::numeric as mrr_this_month,
-          COUNT(p.id) FILTER (
-            WHERE p.closer_id = u.id
-            AND p.setter_status = 'booked')::int as total_booked,
-          COUNT(p.id) FILTER (
-            WHERE p.closer_id = u.id
-            AND p.closer_status = 'showed')::int as total_showed
-        FROM users u
-        LEFT JOIN prospects p ON p.closer_id = u.id
-        WHERE u.role = 'closer' AND u.active = true
-          ${prospectClientAnd}
-        GROUP BY u.id, u.name
-        ORDER BY u.name ASC
-      `, clientParams),
-      pool.query(`
-        SELECT DISTINCT ON (agent_name)
-          agent_name, status, ran_at, error_msg, duration_ms
-        FROM agent_log
-        ${scopedWhere}
-        ORDER BY agent_name, ran_at DESC
-      `, clientParams),
+          COALESCE(SUM(c.mrr_amount) FILTER (WHERE c.status <> 'void'), 0)::numeric AS confirmed_mrr,
+          COALESCE(SUM(c.commission_amt) FILTER (WHERE c.status = 'pending'), 0)::numeric AS pending_payout,
+          COALESCE(SUM(c.commission_amt) FILTER (WHERE c.status = 'paid'), 0)::numeric AS paid_out,
+          (SELECT COUNT(*)::int
+             FROM prospects p
+            WHERE p.client_id = $1
+              AND p.setter_status = 'booked'
+              AND p.closed_at IS NULL) AS booked_pending
+        FROM commissions c
+        WHERE c.client_id = $1
+      `, [clientId]),
     ]);
-
-    const latestByAgent = {};
-    logs.rows.forEach(row => {
-      const normalized = agentKeys[String(row.agent_name || '').toLowerCase()];
-      if (normalized && !latestByAgent[normalized]) latestByAgent[normalized] = row;
-    });
 
     res.json({
       refreshed_at: new Date().toISOString(),
-      prospect_scope: clientScoped ? 'client' : 'global',
-      clients: clients.rows,
+      client: clientResult.rows[0] || null,
       revenue: {
-        confirmed_mrr: Number(revenueMrr.rows[0]?.confirmed_mrr || 0),
-        booked_pending: Number(revenueBooked.rows[0]?.booked_pending || 0),
-        pending_payout: Number(revenuePayouts.rows[0]?.pending_payout || 0),
-        paid_out: Number(revenuePayouts.rows[0]?.paid_out || 0),
+        confirmed_mrr: Number(revenueResult.rows[0]?.confirmed_mrr || 0),
+        booked_pending: Number(revenueResult.rows[0]?.booked_pending || 0),
+        pending_payout: Number(revenueResult.rows[0]?.pending_payout || 0),
+        paid_out: Number(revenueResult.rows[0]?.paid_out || 0),
         mrr_target: 5000,
         breakeven: 250,
       },
-      setters: setters.rows,
-      closers: closers.rows.map(row => ({
+    });
+  } catch (err) {
+    console.error('[pipeline/client] error:', err.message);
+    res.status(500).json({ error: 'Unable to load client pipeline' });
+  }
+});
+
+router.get('/api/pipeline/setters', requireDashboardRead, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const result = await pool.query(`
+      WITH queue AS (
+        SELECT COUNT(*)::int AS queue_size
+        FROM prospects
+        WHERE client_id = $1
+          AND source = 'scout'
+          AND COALESCE(setter_visible, false) = true
+          AND COALESCE(do_not_contact, false) = false
+          AND COALESCE(icp_score, 0) >= 40
+      ), calls AS (
+        SELECT setter_id::text AS setter_id, COUNT(*)::int AS calls_today
+        FROM activity_log
+        WHERE client_id = $1
+          AND action_type = 'call'
+          AND created_at >= CURRENT_DATE
+          AND created_at < CURRENT_DATE + INTERVAL '1 day'
+        GROUP BY setter_id::text
+      ), dispositions AS (
+        SELECT setter_id::text AS setter_id, COUNT(*)::int AS calls_today
+        FROM call_dispositions
+        WHERE client_id = $1
+          AND source = 'manual_setter'
+          AND created_at >= CURRENT_DATE
+          AND created_at < CURRENT_DATE + INTERVAL '1 day'
+        GROUP BY setter_id::text
+      ), bookings AS (
+        SELECT assigned_setter_id, COUNT(*)::int AS booked_this_week
+        FROM prospects
+        WHERE client_id = $1
+          AND setter_status = 'booked'
+          AND booked_at >= DATE_TRUNC('week', CURRENT_DATE)
+        GROUP BY assigned_setter_id
+      )
+      SELECT
+        u.id, u.name, c.city,
+        queue.queue_size,
+        (COALESCE(calls.calls_today, 0) + COALESCE(dispositions.calls_today, 0))::int AS calls_today,
+        COALESCE(bookings.booked_this_week, 0)::int AS booked_this_week
+      FROM users u
+      JOIN clients c ON c.id = $1
+      CROSS JOIN queue
+      LEFT JOIN calls ON calls.setter_id = u.id::text
+      LEFT JOIN dispositions ON dispositions.setter_id = u.id::text
+      LEFT JOIN bookings ON bookings.assigned_setter_id = u.id
+      WHERE u.role = 'setter'
+        AND u.active = true
+      ORDER BY u.name ASC
+    `, [clientId]);
+    res.json({ refreshed_at: new Date().toISOString(), setters: result.rows });
+  } catch (err) {
+    console.error('[pipeline/setters] error:', err.message);
+    res.status(500).json({ error: 'Unable to load setter pipeline' });
+  }
+});
+
+router.get('/api/pipeline/closers', requireDashboardRead, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const result = await pool.query(`
+      SELECT
+        u.id, u.name,
+        COUNT(DISTINCT p.id) FILTER (
+          WHERE p.setter_status = 'booked' AND p.closed_at IS NULL
+        )::int AS pending_calls,
+        COUNT(DISTINCT p.id) FILTER (
+          WHERE p.closer_status IN ('showed', 'closed')
+            AND p.booked_at >= DATE_TRUNC('week', CURRENT_DATE)
+        )::int AS showed_this_week,
+        COUNT(DISTINCT p.id) FILTER (
+          WHERE p.setter_status = 'closed'
+            AND p.closed_at >= DATE_TRUNC('month', CURRENT_DATE)
+        )::int AS closed_this_month,
+        COALESCE(SUM(p.mrr_value) FILTER (
+          WHERE p.setter_status = 'closed'
+            AND p.closed_at >= DATE_TRUNC('month', CURRENT_DATE)
+        ), 0)::numeric AS mrr_this_month,
+        COUNT(DISTINCT p.id) FILTER (WHERE p.booked_at IS NOT NULL)::int AS total_booked,
+        COUNT(DISTINCT p.id) FILTER (
+          WHERE p.closer_status IN ('showed', 'closed') OR p.setter_status = 'closed'
+        )::int AS total_showed,
+        COALESCE((
+          SELECT SUM(cm.commission_amt)
+          FROM commissions cm
+          WHERE cm.client_id = $1
+            AND cm.closer_id = u.id
+            AND cm.status <> 'void'
+            AND cm.created_at >= DATE_TRUNC('month', CURRENT_DATE)
+        ), 0)::numeric AS commission_earned
+      FROM users u
+      LEFT JOIN prospects p ON p.closer_id = u.id AND p.client_id = $1
+      WHERE u.role = 'closer'
+        AND u.active = true
+        AND u.client_id = $1
+      GROUP BY u.id, u.name
+      ORDER BY u.name ASC
+    `, [clientId]);
+    res.json({
+      refreshed_at: new Date().toISOString(),
+      closers: result.rows.map(row => ({
         ...row,
-        show_rate: Number(row.total_booked || 0) ? +((Number(row.total_showed || 0) / Number(row.total_booked || 0)) * 100).toFixed(1) : 0,
-        commission_earned: +(Number(row.mrr_this_month || 0) * 0.15).toFixed(2),
-      })),
-      agents: agentNames.map(name => ({
-        name,
-        ...(latestByAgent[name] || { status: 'never_run', ran_at: null, error_msg: null, duration_ms: null }),
+        show_rate: pct(row.total_showed, row.total_booked),
       })),
     });
   } catch (err) {
-    console.error('[pipeline] error:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('[pipeline/closers] error:', err.message);
+    res.status(500).json({ error: 'Unable to load closer pipeline' });
+  }
+});
+
+router.get('/api/pipeline/prospects', requireDashboardRead, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const result = await pool.query(`
+      SELECT stage, COUNT(*)::int AS count
+      FROM (
+        SELECT CASE
+          WHEN p.setter_status = 'closed' OR p.status = 'closed' THEN 'closed'
+          WHEN p.setter_status = 'booked' THEN 'booked'
+          WHEN p.status IN ('warm', 'hot') THEN 'warm'
+          WHEN p.status = 'contacted' OR p.setter_status IN ('contacted', 'follow_up') THEN 'contacted'
+          ELSE 'cold'
+        END AS stage
+        FROM prospects p
+        WHERE p.client_id = $1
+          AND COALESCE(p.do_not_contact, false) = false
+          AND COALESCE(p.status, 'cold') NOT IN ('dead', 'disqualified')
+      ) scoped
+      GROUP BY stage
+    `, [clientId]);
+    const counts = Object.fromEntries(result.rows.map(row => [row.stage, Number(row.count || 0)]));
+    res.json({
+      refreshed_at: new Date().toISOString(),
+      stages: ['cold', 'contacted', 'warm', 'booked', 'closed'].map(stage => ({ stage, count: counts[stage] || 0 })),
+    });
+  } catch (err) {
+    console.error('[pipeline/prospects] error:', err.message);
+    res.status(500).json({ error: 'Unable to load prospect pipeline' });
   }
 });
 

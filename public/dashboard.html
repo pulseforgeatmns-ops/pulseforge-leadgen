@@ -3672,11 +3672,10 @@ let _statsCacheTime = 0, _activityCacheTime = 0;
 let _liveRings = {}, _currentDetailKey = null;
 let _currentUserRole = null;
 let _prospectCountData = null;
-let _pipelineProspects = [];
-let _pipelineDraggedProspectId = null;
-let _pipelineDroppedProspectId = null;
-const PROSPECT_PIPELINE_STAGES = ['cold', 'contacted', 'warm', 'closed'];
-const PROSPECT_PIPELINE_LABELS = { cold: 'Cold', contacted: 'Contacted', warm: 'Warm', closed: 'Closed' };
+let _pipelineProspectStages = [];
+const PROSPECT_PIPELINE_STAGES = ['cold', 'contacted', 'warm', 'booked', 'closed'];
+const PROSPECT_PIPELINE_LABELS = { cold: 'Cold', contacted: 'Contacted', warm: 'Warm', booked: 'Booked', closed: 'Closed' };
+const PIPELINE_AGENT_KEYS = new Set(['scout', 'emmett', 'riley', 'paige', 'max', 'rex', 'vera', 'faye', 'link', 'sam', 'cal', 'analytics', 'sketch', 'ivy', 'penny']);
 const DETAIL_CACHE_TTL = 30000;
 const THEME_KEY = 'pulseforge-theme';
 
@@ -6687,46 +6686,24 @@ function agentHealth(agent) {
   return { label: status || 'Unknown', cls: 'gray' };
 }
 
-function normalizeProspectPipelineStatus(status) {
-  const raw = String(status || 'cold').toLowerCase();
-  if (PROSPECT_PIPELINE_STAGES.includes(raw)) return raw;
-  if (raw === 'hot') return 'warm';
-  if (raw === 'booked') return 'closed';
-  if (raw === 'dead' || raw === 'disqualified') return 'cold';
-  return 'cold';
-}
-
 function renderProspectPipeline() {
   const grid = document.getElementById('prospectPipelineGrid');
   if (!grid) return;
-  const grouped = Object.fromEntries(PROSPECT_PIPELINE_STAGES.map(stage => [stage, []]));
-  _pipelineProspects.forEach(p => grouped[normalizeProspectPipelineStatus(p.status)].push(p));
+  const counts = Object.fromEntries(_pipelineProspectStages.map(item => [item.stage, Number(item.count || 0)]));
+  const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+  if (!total) {
+    grid.innerHTML = '<div class="no-data-note">No prospect pipeline data yet</div>';
+    return;
+  }
   grid.innerHTML = PROSPECT_PIPELINE_STAGES.map(stage => {
-    const items = grouped[stage] || [];
-    return `<div class="prospect-pipeline-column" data-prospect-drop-status="${stage}">
-      <div class="prospect-pipeline-head"><div class="prospect-pipeline-title">${PROSPECT_PIPELINE_LABELS[stage]}</div><div class="prospect-pipeline-count">${items.length}</div></div>
+    const count = counts[stage] || 0;
+    return `<div class="prospect-pipeline-column">
+      <div class="prospect-pipeline-head"><div class="prospect-pipeline-title">${PROSPECT_PIPELINE_LABELS[stage]}</div><div class="prospect-pipeline-count">${count}</div></div>
       <div class="prospect-pipeline-body">
-        ${items.length ? items.map(p => `
-          <div class="prospect-pipeline-card ${String(p.id) === String(_pipelineDroppedProspectId) ? 'dropped' : ''}" draggable="${isViewerRole() ? 'false' : 'true'}" data-pipeline-prospect-id="${_esc(p.id)}" data-current-status="${_esc(normalizeProspectPipelineStatus(p.status))}">
-            <div class="prospect-pipeline-name">${_esc(_parseBusiness(p))}</div>
-            <div class="prospect-pipeline-meta"><span>${_esc(p.vertical || 'unknown')}</span><span class="${_icpClass(p.icp_score ?? 0)}">ICP ${p.icp_score ?? '—'}</span></div>
-            <div class="prospect-pipeline-meta"><span>Last: ${_relTimeP(p.last_contacted_at)}</span></div>
-            <div class="prospect-pipeline-email">${_esc(p.email || 'No email')}</div>
-          </div>`).join('') : '<div class="no-data-note">No prospects</div>'}
+        <div class="no-data-note">${count ? `${count.toLocaleString()} prospect${count === 1 ? '' : 's'}` : 'No prospects'}</div>
       </div>
     </div>`;
   }).join('');
-  if (_pipelineDroppedProspectId) {
-    const id = _pipelineDroppedProspectId;
-    setTimeout(() => {
-      if (String(_pipelineDroppedProspectId) === String(id)) {
-        document.querySelectorAll('[data-pipeline-prospect-id]').forEach(card => {
-          if (String(card.dataset.pipelineProspectId) === String(id)) card.classList.remove('dropped');
-        });
-        _pipelineDroppedProspectId = null;
-      }
-    }, 380);
-  }
 }
 
 async function loadProspectPipeline() {
@@ -6734,52 +6711,22 @@ async function loadProspectPipeline() {
   if (!grid) return;
   try {
     grid.innerHTML = '<div class="no-data-note">Loading prospect pipeline...</div>';
-    const res = await fetch(isViewerRole() ? '/api/prospect-pipeline' : '/api/prospects', { credentials: 'include' });
-    if (!res.ok) throw new Error('prospects unavailable');
-    _pipelineProspects = await res.json();
+    const data = await fetchPipelineJson('/api/pipeline/prospects');
+    _pipelineProspectStages = data.stages || [];
     renderProspectPipeline();
   } catch (e) {
     console.error('loadProspectPipeline:', e);
-    _pipelineProspects = [];
-    grid.innerHTML = '<div class="no-data-note">Prospect pipeline failed to load</div>';
+    _pipelineProspectStages = [];
+    grid.innerHTML = `<div class="no-data-note">Prospect pipeline unavailable: ${_esc(e.message)}</div>`;
+    throw e;
   }
 }
 
-async function updateProspectPipelineStatus(id, status) {
-  if (!canTakeDashboardActions()) return;
-  const prospect = _pipelineProspects.find(p => String(p.id) === String(id));
-  if (!prospect || normalizeProspectPipelineStatus(prospect.status) === status) return;
-  const previous = prospect.status || 'cold';
-  prospect.status = status;
-  _pipelineDroppedProspectId = id;
-  renderProspectPipeline();
-  try {
-    const res = await fetch(`/api/prospects/${encodeURIComponent(id)}/status`, {
-      method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Status update failed');
-    const updated = data.prospect || { id, status };
-    _pipelineProspects = _pipelineProspects.map(p => String(p.id) === String(id) ? { ...p, ...updated } : p);
-    _mergeUpdatedProspect(updated);
-    renderProspectPipeline();
-    if (document.getElementById('prospectsArea')?.style.display !== 'none') _renderProspects();
-  } catch (e) {
-    console.error('updateProspectPipelineStatus:', e);
-    prospect.status = previous;
-    _pipelineDroppedProspectId = null;
-    renderProspectPipeline();
-    alert('Prospect status update failed');
-  }
-}
-
-function renderPipeline(data) {
+function renderClientPipeline(data) {
   const revenue = data.revenue || {};
   const confirmed = Number(revenue.confirmed_mrr || 0);
   const target = Number(revenue.mrr_target || 5000);
   const breakeven = Number(revenue.breakeven || 250);
-  document.getElementById('pipelineSub').textContent = 'Updated ' + new Date(data.refreshed_at || Date.now()).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   document.getElementById('revenuePipelineCards').innerHTML = [
     ['Confirmed MRR', money0(confirmed), 'Non-void commissions'],
     ['Booked Pending Close', Number(revenue.booked_pending || 0), 'Booked calls without close'],
@@ -6789,16 +6736,19 @@ function renderPipeline(data) {
   document.getElementById('mrrProgressFill').style.width = Math.min(100, (confirmed / target) * 100) + '%';
   document.getElementById('mrrBreakevenMarker').style.left = Math.min(100, (breakeven / target) * 100) + '%';
   document.getElementById('mrrProgressLabel').textContent = `${money0(confirmed)} of ${money0(target)} target · ${money0(breakeven)} overhead breakeven`;
-  const showDeadCounts = data.prospect_scope === 'global' || data.prospectScope === 'global';
-  document.getElementById('clientPipelineGrid').innerHTML = (data.clients || []).map(client => {
-    const status = pipelineStatusForClient(client);
-    const clientStats = [
-      [client.active_count ?? client.prospect_count ?? 0, 'Active'],
-      [client.cold_count ?? 0, 'Cold'],
-      showDeadCounts ? [client.dead_count ?? 0, 'Dead'] : [client.booked_count || 0, 'Booked'],
-      [daysSince(client.created_at), 'Days'],
-    ];
-    return `<div class="pipeline-card">
+  const client = data.client;
+  if (!client) {
+    document.getElementById('clientPipelineGrid').innerHTML = '<div class="no-data-note">No client data yet</div>';
+    return;
+  }
+  const status = pipelineStatusForClient(client);
+  const clientStats = [
+    [client.active_prospects, 'Active prospects'],
+    [client.touchpoints, 'Touchpoints'],
+    [client.sends, 'Sends'],
+    [daysSince(client.created_at), 'Days'],
+  ];
+  document.getElementById('clientPipelineGrid').innerHTML = `<div class="pipeline-card">
       <div class="client-pipeline-head">
         <div><div class="client-pipeline-name">${_esc(client.name)}</div><div class="client-pipeline-city">${_esc([client.city, client.state].filter(Boolean).join(', ') || '-')}</div></div>
         <span class="pipeline-badge ${status.cls}">${status.label}</span>
@@ -6807,84 +6757,145 @@ function renderPipeline(data) {
         ${clientStats.map(([value, label]) => `<div class="client-pipeline-stat"><strong>${Number(value || 0).toLocaleString()}</strong><span>${label}</span></div>`).join('')}
       </div>
     </div>`;
-  }).join('') || '<div class="no-data-note">No clients found</div>';
+}
+
+function renderSetterPipeline(data) {
   document.getElementById('setterPipelineRows').innerHTML = (data.setters || []).map(setter => {
     const calls = Number(setter.calls_today || 0);
     const active = calls > 0;
     return `<tr>
-      <td>${_esc(setter.name)}</td><td>${_esc(setter.assigned_city || '-')}</td><td>${setter.queue_size || 0}</td>
+      <td>${_esc(setter.name)}</td><td>${_esc(setter.city || '-')}</td><td>${setter.queue_size || 0}</td>
       <td>${calls}<div class="mini-progress"><div style="width:${Math.min(100, calls / 20 * 100)}%"></div></div></td>
       <td>${setter.booked_this_week || 0}</td><td><span class="pipeline-badge ${active ? 'green' : 'amber'}">${active ? 'Active today' : 'No activity'}</span></td>
     </tr>`;
-  }).join('') || '<tr><td colspan="6" class="no-data-note">No active setters</td></tr>';
-  document.getElementById('closerPipelineRows').innerHTML = (data.closers || []).map(closer => `
+  }).join('') || '<tr><td colspan="6" class="no-data-note">No active setter assigned to this client</td></tr>';
+}
+
+function renderCloserPipeline(data) {
+  const closers = data.closers || [];
+  const hasActivity = closers.some(closer => [
+    closer.pending_calls, closer.showed_this_week, closer.closed_this_month,
+    closer.mrr_this_month, closer.commission_earned,
+  ].some(value => Number(value || 0) > 0));
+  if (!hasActivity) {
+    document.getElementById('closerPipelineRows').innerHTML = '<tr><td colspan="7" class="no-data-note">No closer activity yet</td></tr>';
+    return;
+  }
+  document.getElementById('closerPipelineRows').innerHTML = closers.map(closer => `
     <tr><td>${_esc(closer.name)}</td><td>${closer.pending_calls || 0}</td><td>${closer.showed_this_week || 0}</td><td>${closer.show_rate || 0}%</td><td>${closer.closed_this_month || 0}</td><td>${money0(closer.mrr_this_month)}</td><td>${money0(closer.commission_earned)}</td></tr>
-  `).join('') || '<tr><td colspan="7" class="no-data-note">No active closers</td></tr>';
-  document.getElementById('agentHealthGrid').innerHTML = (data.agents || []).map(agent => {
+  `).join('');
+}
+
+function pipelineAgentName(key) {
+  const names = { cal_batch: 'Cal Batch', warm_signal: 'Warm Signal', setter_handoff: 'Setter Handoff' };
+  return names[key] || key.split('_').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+}
+
+function renderPipelineAgentHealth(data) {
+  const agents = Object.entries(data.agents || {})
+    .filter(([key]) => PIPELINE_AGENT_KEYS.has(key))
+    .map(([key, agent]) => ({
+      name: pipelineAgentName(key),
+      status: agent.last_status,
+      ran_at: agent.last_run,
+      ...agent,
+    }));
+  if (!agents.length) {
+    document.getElementById('agentHealthGrid').innerHTML = '<div class="no-data-note">No agent health data yet</div>';
+    return;
+  }
+  document.getElementById('agentHealthGrid').innerHTML = agents.map(agent => {
     const health = agentHealth(agent);
     const error = agent.error_msg ? `<div class="agent-health-error">${_esc(String(agent.error_msg).slice(0, 80))}</div>` : '';
-    return `<div class="agent-health-card"><div class="agent-health-name">${_esc(agent.name)}</div><span class="pipeline-badge ${health.cls}">${_esc(health.label)}</span><div class="agent-health-meta">${agent.ran_at ? _relTime(agent.ran_at) : 'No run recorded'}</div>${error}</div>`;
+    const runMeta = agent.ran_at ? _relTime(agent.ran_at) : 'No run recorded';
+    const errors = Number(agent.errors_24h || 0) ? ` · ${agent.errors_24h} error${Number(agent.errors_24h) === 1 ? '' : 's'} / 24h` : '';
+    return `<div class="agent-health-card"><div class="agent-health-name">${_esc(agent.name)}</div><span class="pipeline-badge ${health.cls}">${_esc(health.label)}</span><div class="agent-health-meta">${runMeta}${errors}</div>${error}</div>`;
   }).join('');
+}
+
+async function fetchPipelineJson(url, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { credentials: 'include', signal: controller.signal });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('request timed out');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function loadClientPipeline() {
+  document.getElementById('clientPipelineGrid').innerHTML = '<div class="no-data-note">Loading client pipeline...</div>';
+  document.getElementById('revenuePipelineCards').innerHTML = '<div class="no-data-note">Loading revenue pipeline...</div>';
+  document.getElementById('mrrProgressLabel').textContent = 'Loading...';
+  try {
+    renderClientPipeline(await fetchPipelineJson('/api/pipeline/client'));
+  } catch (error) {
+    document.getElementById('clientPipelineGrid').innerHTML = `<div class="no-data-note">Client pipeline unavailable: ${_esc(error.message)}</div>`;
+    document.getElementById('revenuePipelineCards').innerHTML = `<div class="no-data-note">Revenue pipeline unavailable: ${_esc(error.message)}</div>`;
+    document.getElementById('mrrProgressLabel').textContent = 'Revenue data unavailable';
+    throw error;
+  }
+}
+
+async function loadSetterPipeline() {
+  const rows = document.getElementById('setterPipelineRows');
+  rows.innerHTML = '<tr><td colspan="6" class="no-data-note">Loading setter pipeline...</td></tr>';
+  try {
+    renderSetterPipeline(await fetchPipelineJson('/api/pipeline/setters'));
+  } catch (error) {
+    rows.innerHTML = `<tr><td colspan="6" class="no-data-note">Setter pipeline unavailable: ${_esc(error.message)}</td></tr>`;
+    throw error;
+  }
+}
+
+async function loadCloserPipeline() {
+  const rows = document.getElementById('closerPipelineRows');
+  rows.innerHTML = '<tr><td colspan="7" class="no-data-note">Loading closer pipeline...</td></tr>';
+  try {
+    renderCloserPipeline(await fetchPipelineJson('/api/pipeline/closers'));
+  } catch (error) {
+    rows.innerHTML = `<tr><td colspan="7" class="no-data-note">Closer pipeline unavailable: ${_esc(error.message)}</td></tr>`;
+    throw error;
+  }
+}
+
+async function loadPipelineAgentHealth() {
+  const grid = document.getElementById('agentHealthGrid');
+  grid.innerHTML = '<div class="no-data-note">Loading agent health...</div>';
+  try {
+    renderPipelineAgentHealth(await fetchPipelineJson('/api/agent-health'));
+  } catch (error) {
+    grid.innerHTML = `<div class="no-data-note">Agent health unavailable: ${_esc(error.message)}</div>`;
+    throw error;
+  }
 }
 
 async function loadPipeline() {
   const btn = document.getElementById('pipelineRefreshBtn');
-  try {
-    if (btn) btn.textContent = 'Syncing...';
-    const res = await fetch('/api/pipeline', { credentials: 'include' });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Pipeline request failed');
-    renderPipeline(data);
-    await loadProspectPipeline();
-  } catch(e) {
-    console.error('loadPipeline:', e);
-    document.getElementById('pipelineSub').textContent = 'Pipeline failed to load';
-  } finally {
-    if (btn) btn.textContent = 'Refresh';
-  }
+  if (btn) btn.textContent = 'Syncing...';
+  document.getElementById('pipelineSub').textContent = 'Syncing selected client...';
+  const results = await Promise.allSettled([
+    loadClientPipeline(),
+    loadSetterPipeline(),
+    loadCloserPipeline(),
+    loadPipelineAgentHealth(),
+    loadProspectPipeline(),
+  ]);
+  const failed = results.filter(result => result.status === 'rejected').length;
+  const timestamp = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  document.getElementById('pipelineSub').textContent = failed
+    ? `Updated ${timestamp} · ${failed} panel${failed === 1 ? '' : 's'} unavailable`
+    : `Updated ${timestamp}`;
+  if (btn) btn.textContent = 'Refresh';
 }
 
 document.getElementById('pipelineRefreshBtn')?.addEventListener('click', loadPipeline);
-
-document.addEventListener('dragstart', event => {
-  if (!canTakeDashboardActions()) return;
-  const card = event.target.closest('.prospect-pipeline-card[draggable="true"]');
-  if (!card) return;
-  _pipelineDraggedProspectId = card.dataset.pipelineProspectId;
-  event.dataTransfer.effectAllowed = 'move';
-  event.dataTransfer.setData('text/plain', _pipelineDraggedProspectId);
-  card.classList.add('dragging');
-});
-
-document.addEventListener('dragend', event => {
-  event.target.closest('.prospect-pipeline-card')?.classList.remove('dragging');
-  document.querySelectorAll('.prospect-pipeline-column.drag-over').forEach(col => col.classList.remove('drag-over'));
-  _pipelineDraggedProspectId = null;
-});
-
-document.addEventListener('dragover', event => {
-  if (!canTakeDashboardActions()) return;
-  const col = event.target.closest('.prospect-pipeline-column[data-prospect-drop-status]');
-  if (!col || !_pipelineDraggedProspectId) return;
-  event.preventDefault();
-  event.dataTransfer.dropEffect = 'move';
-  col.classList.add('drag-over');
-});
-
-document.addEventListener('dragleave', event => {
-  const col = event.target.closest('.prospect-pipeline-column[data-prospect-drop-status]');
-  if (col && !col.contains(event.relatedTarget)) col.classList.remove('drag-over');
-});
-
-document.addEventListener('drop', event => {
-  if (!canTakeDashboardActions()) return;
-  const col = event.target.closest('.prospect-pipeline-column[data-prospect-drop-status]');
-  if (!col || !_pipelineDraggedProspectId) return;
-  event.preventDefault();
-  col.classList.remove('drag-over');
-  const id = event.dataTransfer.getData('text/plain') || _pipelineDraggedProspectId;
-  updateProspectPipelineStatus(id, col.dataset.prospectDropStatus);
-});
 
 
 loadClientSelector();
