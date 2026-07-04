@@ -14,6 +14,7 @@ function mockQuery(overrides = {}) {
     scout: [{ scout_prospects_added_today: 10, scout_baseline_7d: 9 }],
     warm_signals: [{ warm_signals_fired_today: 2 }],
     agent_errors: [],
+    autosend: [],
     clients: [{
       client_id: 1,
       client_name: 'Pulseforge Manchester',

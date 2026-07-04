@@ -1169,7 +1169,8 @@ async function getEmailsSentToday() {
     FROM agent_log
     WHERE action = 'email_sent'
       AND client_id = $1
-      AND DATE(ran_at) = CURRENT_DATE
+      AND DATE(ran_at AT TIME ZONE 'America/New_York') =
+          DATE(NOW() AT TIME ZONE 'America/New_York')
   `, [CLIENT_ID]);
   return res.rows[0]?.count || 0;
 }
@@ -1364,7 +1365,10 @@ async function getProspectsForEmail(options = {}) {
     WHERE (p.status IN ('cold', 'contacted') OR (
       p.status = 'warm'
       AND COALESCE(email_stats.outbound_email_count, 0) > 0
-      AND email_stats.last_touchpoint_at <= NOW() - INTERVAL '14 days'
+      AND (
+        email_stats.last_touchpoint_at <= NOW() - INTERVAL '14 days'
+        OR ($8::boolean IS TRUE AND p.next_touch_at <= NOW())
+      )
     ))
     AND p.client_id = $1
     AND p.email IS NOT NULL
@@ -1424,7 +1428,7 @@ async function getProspectsForEmail(options = {}) {
       -- calls), so highest-scoring prospects get contacted first within each tier.
       p.icp_score DESC NULLS LAST,
       p.last_contacted_at ASC NULLS FIRST
-  `, [CLIENT_ID, targetVertical, firstTouchOnly, AGENT_NAME, FROM_EMAIL, excludeActionTypes, targetEmails]);
+  `, [CLIENT_ID, targetVertical, firstTouchOnly, AGENT_NAME, FROM_EMAIL, excludeActionTypes, targetEmails, options.autorunPrechecked === true]);
 
   return res.rows;
 }
@@ -1530,6 +1534,13 @@ async function getNextSequenceStep(prospect) {
 
   if (emailsSent >= sequence.length) {
     console.log('Sequence complete');
+    await pool.query(`
+      UPDATE prospects
+      SET next_touch_at = NULL,
+          email_sequence_completed_at = COALESCE(email_sequence_completed_at, NOW()),
+          updated_at = NOW()
+      WHERE id = $1 AND client_id = $2
+    `, [prospect.id, CLIENT_ID]);
     return null;
   }
 
@@ -1594,6 +1605,26 @@ function humanDelay() {
   return new Promise(r => setTimeout(r, ms));
 }
 
+async function advanceEmailSequenceState(prospect, sequenceName, completedStep) {
+  const pool = require('./db');
+  const sequence = SEQUENCES[sequenceName];
+  if (!Array.isArray(sequence) || !completedStep) return;
+
+  const index = sequence.findIndex(step => Number(step.day) === Number(completedStep.day));
+  const nextStep = index >= 0 ? sequence[index + 1] : null;
+  const nextTouchAt = nextStep
+    ? new Date(Date.now() + Math.max(0, Number(nextStep.day) - Number(completedStep.day)) * 86400000)
+    : null;
+
+  await pool.query(`
+    UPDATE prospects
+    SET next_touch_at = $3,
+        email_sequence_completed_at = CASE WHEN $3::timestamptz IS NULL THEN NOW() ELSE NULL END,
+        updated_at = NOW()
+    WHERE id = $1 AND client_id = $2
+  `, [prospect.id, CLIENT_ID, nextTouchAt]);
+}
+
 function isDashboardTrigger(context = {}) {
   return context?.triggered_by === 'dashboard' ||
     context?.triggeredBy === 'dashboard' ||
@@ -1614,7 +1645,7 @@ async function run(context = {}) {
 
   try {
   const dashboardOverride = isDashboardTrigger(context);
-  if (!dashboardOverride && !isWithinSendingWindow()) {
+  if (!dashboardOverride && !context.autorunPrechecked && !isWithinSendingWindow()) {
     console.log(`Outside Emmett sending window (${sendingWindowLabel(CLIENT_ID)}) — skipping run`);
     await logSkippedOutsideWindow();
     return finish({ idle: true, reason: 'outside_sending_window' });
@@ -1683,7 +1714,11 @@ async function run(context = {}) {
     return finish({ idle: true, reason: 'domain_paused' });
   }
 
-  const sendConfig = await getEffectiveSendConfig(getEmmettClientConfig(CLIENT_ID));
+  let sendConfig = await getEffectiveSendConfig(getEmmettClientConfig(CLIENT_ID));
+  const capOverride = Number(context.dailyCapOverride || 0);
+  if (capOverride > 0) {
+    sendConfig = { ...sendConfig, dailyCap: Math.min(getEmmettClientConfig(CLIENT_ID).dailyCap, capOverride) };
+  }
   const alreadySentToday = await getEmailsSentToday();
   const remainingCapacity = Math.max(0, sendConfig.dailyCap - alreadySentToday);
   const warmupLabel = sendConfig.warmupProgress
@@ -1756,7 +1791,10 @@ async function run(context = {}) {
       console.error('getNextSequenceStep error:', err.message);
       continue;
     }
-    if (!step) continue;
+    if (!step) {
+      skipped++;
+      continue;
+    }
 
     const sequenceName = getSequenceForProspect(prospect);
 
@@ -1921,6 +1959,7 @@ async function run(context = {}) {
         useWarm ? { sequence: 'warm_outreach' } : { step: step.day, sequence: sequenceName === 're_engagement' ? 're_engagement' : 'cold_outreach' },
         'neutral'
       );
+      await advanceEmailSequenceState(prospect, sequenceName, step);
       if (step.day === 0 && !useWarm) {
         const pool = require('./db');
         await pool.query(
@@ -1941,7 +1980,7 @@ async function run(context = {}) {
       }
     }
 
-    if (sent < dailyLimit) await humanDelay();
+    if (sent < dailyLimit && !context.autorun) await humanDelay();
   }
 
   // After outreach, demote stalled no-response prospects via the dynamic ICP

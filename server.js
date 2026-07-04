@@ -44,12 +44,14 @@ const { startMiraClassifierWorker } = require('./miraClassifierAgent');
 const { startMiraRouterWorker } = require('./miraRouterAgent');
 const { startMiraDigestScheduler } = require('./miraDigestAgent');
 const { ensureWarmRoutingSchema, startWarmRoutingScheduler } = require('./warmRoutingAgent');
+const { ensureEmmettAutosendSchema } = require('./utils/emmettAutosend');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
 initAuth().catch(err => console.error('[auth] init error:', err.message));
 ensureClientArchitecture()
+  .then(() => ensureEmmettAutosendSchema())
   .then(enforceMiraClientState)
   .catch(err => console.error('[clients] init error:', err.message));
 ensureCloserSchema().catch(err => console.error('[closer] init error:', err.message));

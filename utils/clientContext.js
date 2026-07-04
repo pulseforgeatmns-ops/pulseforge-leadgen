@@ -45,6 +45,8 @@ const CLIENT_COLUMNS = [
   // cleaning company uses 'cleaning_buyer', a commercial-cleaning BUYER
   // rubric (professional-services offices), NOT the lead-gen-target rubric.
   ['scoring_profile', 'text'],
+  ['warmup_start_date', 'date'],
+  ['autosend_enabled', 'boolean default false'],
   ['active', 'boolean default true'],
   ['created_at', 'timestamptz default now()'],
 ];
