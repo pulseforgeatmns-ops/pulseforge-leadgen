@@ -402,26 +402,50 @@ router.get('/api/pipeline/prospects', requireDashboardRead, async (req, res) => 
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
-      SELECT stage, COUNT(*)::int AS count
-      FROM (
-        SELECT CASE
-          WHEN p.setter_status = 'closed' OR p.status = 'closed' THEN 'closed'
-          WHEN p.setter_status = 'booked' THEN 'booked'
-          WHEN p.status IN ('warm', 'hot') THEN 'warm'
-          WHEN p.status = 'contacted' OR p.setter_status IN ('contacted', 'follow_up') THEN 'contacted'
-          ELSE 'cold'
-        END AS stage
+      WITH scoped AS (
+        SELECT
+          p.id,
+          p.first_name,
+          p.last_name,
+          p.last_contacted_at,
+          c.name AS company_name,
+          CASE
+            WHEN p.setter_status = 'closed' OR p.status = 'closed' THEN 'closed'
+            WHEN p.setter_status = 'booked' THEN 'booked'
+            WHEN p.status IN ('warm', 'hot') THEN 'warm'
+            WHEN p.status = 'contacted' OR p.setter_status IN ('contacted', 'follow_up') THEN 'contacted'
+            ELSE 'cold'
+          END AS stage
         FROM prospects p
+        LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
         WHERE p.client_id = $1
           AND COALESCE(p.do_not_contact, false) = false
           AND COALESCE(p.status, 'cold') NOT IN ('dead', 'disqualified')
-      ) scoped
-      GROUP BY stage
+      )
+      SELECT id, first_name, last_name, company_name, last_contacted_at, stage
+      FROM scoped
+      ORDER BY
+        CASE stage
+          WHEN 'cold' THEN 1
+          WHEN 'contacted' THEN 2
+          WHEN 'warm' THEN 3
+          WHEN 'booked' THEN 4
+          WHEN 'closed' THEN 5
+        END,
+        last_contacted_at DESC NULLS LAST,
+        id
     `, [clientId]);
-    const counts = Object.fromEntries(result.rows.map(row => [row.stage, Number(row.count || 0)]));
+    const stageRows = Object.fromEntries(
+      ['cold', 'contacted', 'warm', 'booked', 'closed'].map(stage => [stage, []])
+    );
+    result.rows.forEach(row => stageRows[row.stage].push(row));
     res.json({
       refreshed_at: new Date().toISOString(),
-      stages: ['cold', 'contacted', 'warm', 'booked', 'closed'].map(stage => ({ stage, count: counts[stage] || 0 })),
+      stages: Object.entries(stageRows).map(([stage, prospects]) => ({
+        stage,
+        count: prospects.length,
+        prospects,
+      })),
     });
   } catch (err) {
     console.error('[pipeline/prospects] error:', err.message);

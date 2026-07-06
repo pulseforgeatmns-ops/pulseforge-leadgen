@@ -2286,12 +2286,16 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
 .prospect-pipeline-title { font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; letter-spacing: 1.6px; text-transform: uppercase; color: var(--gray-light); }
 .prospect-pipeline-count { font-family: 'Bebas Neue', sans-serif; font-size: 1.25rem; color: var(--purple-bright); }
 .prospect-pipeline-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.6rem; }
-.prospect-pipeline-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 0.75rem; cursor: grab; transition: opacity 0.2s ease, transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease; }
+.prospect-pipeline-card { width: 100%; appearance: none; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 0.75rem; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: opacity 0.2s ease, transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease; }
+.prospect-pipeline-card:hover { border-color: rgba(139,92,246,0.4); background: rgba(255,255,255,0.05); }
 .prospect-pipeline-card.dragging { opacity: 0.45; transform: scale(0.98); cursor: grabbing; }
-body.viewer-role .prospect-pipeline-card { cursor: default; }
+body.viewer-role .prospect-pipeline-card { cursor: pointer; }
 .prospect-pipeline-card.dropped { animation: pipelineCardDrop 0.32s ease; border-color: var(--teal); box-shadow: 0 0 22px rgba(0,212,180,0.18); }
 .prospect-pipeline-name { color: var(--white); font-weight: 600; font-size: 0.82rem; line-height: 1.35; margin-bottom: 0.5rem; }
-.prospect-pipeline-meta { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.45rem; font-family: 'JetBrains Mono', monospace; font-size: 0.56rem; color: var(--gray-light); }
+.prospect-pipeline-meta { font-family: 'JetBrains Mono', monospace; font-size: 0.56rem; color: var(--gray-light); line-height: 1.5; }
+.prospect-pipeline-company { color: var(--gray-light); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prospect-pipeline-touch { color: var(--gray); margin-top: 0.35rem; }
+.prospect-pipeline-empty { color: var(--gray); font-size: 0.72rem; padding: 1rem 0.25rem; text-align: center; }
 .prospect-pipeline-email { font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; color: var(--gray); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @keyframes pipelineCardDrop { 0%{transform:scale(0.96);opacity:0.75} 55%{transform:scale(1.02)} 100%{transform:scale(1);opacity:1} }
 .mini-progress { height: 6px; width: 92px; background: rgba(255,255,255,0.06); border-radius: 99px; overflow: hidden; margin-top: 0.35rem; }
@@ -6689,18 +6693,28 @@ function agentHealth(agent) {
 function renderProspectPipeline() {
   const grid = document.getElementById('prospectPipelineGrid');
   if (!grid) return;
-  const counts = Object.fromEntries(_pipelineProspectStages.map(item => [item.stage, Number(item.count || 0)]));
-  const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
-  if (!total) {
-    grid.innerHTML = '<div class="no-data-note">No prospect pipeline data yet</div>';
-    return;
-  }
+  const stages = Object.fromEntries(_pipelineProspectStages.map(item => [item.stage, item]));
   grid.innerHTML = PROSPECT_PIPELINE_STAGES.map(stage => {
-    const count = counts[stage] || 0;
+    const prospects = [...(stages[stage]?.prospects || [])].sort((a, b) => {
+      const aTime = a.last_contacted_at ? new Date(a.last_contacted_at).getTime() : 0;
+      const bTime = b.last_contacted_at ? new Date(b.last_contacted_at).getTime() : 0;
+      return bTime - aTime;
+    });
+    const count = prospects.length;
+    const cards = prospects.map(prospect => {
+      const prospectName = [prospect.first_name, prospect.last_name].filter(Boolean).join(' ').trim() || 'Unnamed prospect';
+      return `<button class="prospect-pipeline-card" type="button" onclick="openProspectModal('${_esc(prospect.id)}')">
+        <div class="prospect-pipeline-name">${_esc(prospectName)}</div>
+        <div class="prospect-pipeline-meta">
+          <div class="prospect-pipeline-company">${_esc(prospect.company_name || 'No company')}</div>
+          <div class="prospect-pipeline-touch">Last touch: ${_esc(_fmtDateShort(prospect.last_contacted_at))}</div>
+        </div>
+      </button>`;
+    }).join('');
     return `<div class="prospect-pipeline-column">
       <div class="prospect-pipeline-head"><div class="prospect-pipeline-title">${PROSPECT_PIPELINE_LABELS[stage]}</div><div class="prospect-pipeline-count">${count}</div></div>
       <div class="prospect-pipeline-body">
-        <div class="no-data-note">${count ? `${count.toLocaleString()} prospect${count === 1 ? '' : 's'}` : 'No prospects'}</div>
+        ${cards || '<div class="prospect-pipeline-empty">No prospects</div>'}
       </div>
     </div>`;
   }).join('');
