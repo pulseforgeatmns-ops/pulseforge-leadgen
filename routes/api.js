@@ -17,11 +17,6 @@ const {
   publishLinkComment,
 } = require('../utils/publishPipeline');
 const { normalizeVertical } = require('../utils/normalize');
-const {
-  prospectStateCountColumns,
-  getProspectCounts,
-  getProspectCountsByClient,
-} = require('../utils/prospectCounts');
 const { setSetterVisibility } = require('../utils/setterVisibility');
 const { ensureTieredEnrichmentSchema } = require('../utils/tieredEnrichmentSchema');
 const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('../utils/businessNameShort');
@@ -38,6 +33,10 @@ const EXCLUDE_COMMAND_FEED_ACTIONS_SQL = `
     LOWER(REPLACE(COALESCE(al.agent_name, ''), '_agent', '')) = 'max'
     AND COALESCE(al.action, '') IN ('daily_brief', 'daily_digest')
   )
+`;
+const PROSPECT_ROSTER_ACTIVE_WHERE_SQL = `
+  p.do_not_contact = false
+  AND p.client_id = $1
 `;
 
 function pct(num, den) {
@@ -457,26 +456,42 @@ router.get('/api/pipeline/prospects', requireDashboardRead, async (req, res) => 
 router.get('/api/agent-status', requireDashboardRead, async (req, res) => {
   try {
     const requestClientId = getRequestClientId(req);
-    const clientScoped = req.user?.role === 'client';
-    const prospectClientId = clientScoped ? requestClientId : null;
-    const includeDead = !clientScoped;
-    const [prospectBreakdown, touchpoints, pending, agentRuns, channels, weeklyTouchpoints] = await Promise.all([
-      getProspectCounts(pool, { clientId: prospectClientId, includeDead }),
+    const [prospectCount, touchpoints, pending, agentRuns, channels, weeklyTouchpoints, prospectClient] = await Promise.all([
+      pool.query(`
+        SELECT
+          COUNT(*)::int AS count,
+          COUNT(*) FILTER (WHERE COALESCE(p.status, 'cold') = 'cold')::int AS cold
+        FROM prospects p
+        WHERE ${PROSPECT_ROSTER_ACTIVE_WHERE_SQL}
+      `, [requestClientId]),
       pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1', [requestClientId]),
       pool.query('SELECT COUNT(*) FROM pending_comments WHERE status = $1 AND client_id = $2', ['pending', requestClientId]),
       pool.query('SELECT agent_name, COUNT(*) as runs, MAX(ran_at) as last_run FROM agent_log WHERE client_id = $1 GROUP BY agent_name', [requestClientId]),
       pool.query('SELECT channel, COUNT(*) as count FROM pending_comments WHERE client_id = $1 GROUP BY channel', [requestClientId]),
-      pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1 AND created_at > NOW() - INTERVAL \'7 days\'', [requestClientId])
+      pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1 AND created_at > NOW() - INTERVAL \'7 days\'', [requestClientId]),
+      pool.query(`
+        SELECT
+          c.id AS client_id,
+          c.name AS client_name,
+          c.slug,
+          COUNT(p.id) FILTER (WHERE p.do_not_contact = false)::int AS active,
+          COUNT(p.id) FILTER (
+            WHERE p.do_not_contact = false
+              AND COALESCE(p.status, 'cold') = 'cold'
+          )::int AS cold
+        FROM clients c
+        LEFT JOIN prospects p ON p.client_id = c.id
+        WHERE c.id = $1
+        GROUP BY c.id, c.name, c.slug
+      `, [requestClientId])
     ]);
-    const prospectClients = await getProspectCountsByClient(pool, { clientId: prospectClientId, includeDead });
 
     const runMap = {};
     agentRuns.rows.forEach(r => { runMap[r.agent_name] = parseInt(r.runs); });
 
-    const activeProspects = Number(prospectBreakdown.active || 0);
-    const coldProspects = Number(prospectBreakdown.cold || 0);
-    const deadProspects = Number(prospectBreakdown.dead || 0);
-    const totalProspects = Number(prospectBreakdown.total || 0);
+    const activeProspects = Number(prospectCount.rows[0]?.count || 0);
+    const coldProspects = Number(prospectCount.rows[0]?.cold || 0);
+    const totalProspects = activeProspects;
     const totalTouchpoints = parseInt(touchpoints.rows[0].count);
     const fbPending = channels.rows.find(c => c.channel === 'facebook')?.count || 0;
     const liPending = channels.rows.find(c => c.channel === 'linkedin')?.count || 0;
@@ -495,11 +510,10 @@ router.get('/api/agent-status', requireDashboardRead, async (req, res) => {
       prospectBreakdown: {
         active: activeProspects,
         cold: coldProspects,
-        ...(includeDead ? { dead: deadProspects } : {}),
         total: totalProspects,
       },
-      prospectClients,
-      prospectScope: clientScoped ? 'client' : 'global',
+      prospectClients: prospectClient.rows,
+      prospectScope: 'client',
       touchpoints: totalTouchpoints,
       pending: parseInt(pending.rows[0].count),
       weeklyTouchpoints: parseInt(weeklyTouchpoints.rows[0].count),
@@ -639,7 +653,6 @@ router.get('/api/prospects', requireDashboardRead, async (req, res) => {
         AND p.client_id = $1
       GROUP BY p.id, c.name, c.location, su.name
       ORDER BY p.icp_score DESC NULLS LAST
-      LIMIT 200
     `, [clientId]);
     res.json(result.rows);
   } catch (err) {
@@ -659,7 +672,6 @@ router.get('/api/prospect-pipeline', requireDashboardRead, async (req, res) => {
       WHERE p.do_not_contact = false
         AND p.client_id = $1
       ORDER BY p.icp_score DESC NULLS LAST
-      LIMIT 200
     `, [clientId]);
     res.json(result.rows);
   } catch (err) {
