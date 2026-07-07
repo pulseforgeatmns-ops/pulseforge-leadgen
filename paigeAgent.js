@@ -1192,11 +1192,9 @@ const JACOB_PERSONAL_BACKGROUND = `JACOB PERSONAL BACKGROUND (jacob_personal bra
 const LINKEDIN_CANONICAL_SOURCE_MATERIAL = `VERIFIED SOURCE MATERIAL - ACTIVE CLIENTS AND WINS
 Named-client claims in this block are verified-source-only. They may be used only when the post's source_anchors cite canonical or Mira source material. Never free-generate adjacent MSHI, Brad, Dustin, Bill, delivery-time, revenue, or result claims.
 
-- Mountain State Home Innovations (Brad Hudson, Dustin Allison, Charleston WV): regional contractor, hand-built five-name list model, first call closed recurring revenue, model validated in 28 days against 60-90 quoted.
 - Bill Moylan (Upwork, CFO recruiter list, Brevo setup): 41% open rate proof point on a 110-contact verified list.
 - McLeod Legal (client_id=3): active.
 - Pulseforge Nashville (client_id=5): active.
-- MSHI strategic pivot: away from volume cold email toward B2B relationship channels (property management, investors and flippers, banks and REO, listing agents, probate attorneys).
 
 AGENT SYSTEM (15+ agents, Railway, Node.js, Postgres)
 - Scout: lead scraping, Google Places API for retail and wellness verticals.
