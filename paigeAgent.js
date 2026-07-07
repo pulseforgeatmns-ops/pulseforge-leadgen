@@ -2,6 +2,7 @@ require('dotenv').config();
 const pool = require('./db');
 const Anthropic = require('@anthropic-ai/sdk');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { buildMiraContext } = require('./utils/miraContext');
 
 const client = new Anthropic();
 const AGENT_NAME = 'paige';
@@ -24,12 +25,37 @@ const CHANNEL_MIN_SCORES = {
 const MIN_DIMENSION_SCORE = 7;
 const MIN_HOOK_SCORE = 7;
 const MAX_REGENERATION_ATTEMPTS = 4;
-const CLIENT_ID = getRuntimeClientId();
+
+function parsePaigeCliOptions(argv = process.argv.slice(2)) {
+  const options = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--simulate-mira-unavailable') options.simulateMiraUnavailable = true;
+    else if (arg === '--client_id' || arg === '--client-id') options.client_id = argv[++i];
+    else if (arg === '--channel') options.channel = argv[++i];
+    else if (arg === '--format') options.format = argv[++i];
+    else if (arg === '--count') options.count = argv[++i];
+  }
+  return options;
+}
+
+function isTruthyOption(value) {
+  return value === true || ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
+}
+
+const CLI_OPTIONS = require.main === module ? parsePaigeCliOptions() : {};
+const CLIENT_ID = getRuntimeClientId(CLI_OPTIONS);
 const CLEAR_PENDING_PULSEFORGE_APPROVALS = process.env.PAIGE_CLEAR_PENDING_PULSEFORGE !== '0';
 let CLIENT_CONFIG = null;
+let RUN_CONTEXT = { dryRun: false, forcedFormat: null, simulateMiraUnavailable: false, sessionFormats: new Set() };
+
+function maxRegenerationAttempts() {
+  return RUN_CONTEXT.dryRun ? 7 : MAX_REGENERATION_ATTEMPTS;
+}
 
 const PULSEFORGE_POV_RULE = `PULSEFORGE POV — NON-NEGOTIABLE:
-You are writing content FOR Pulseforge, an AI marketing and automation agency. Write from Pulseforge's point of view. Reference client verticals as examples of businesses we help — never write as if Pulseforge IS a lawn care company, auto shop, or any other business. Wrong: 'A client called us about her yard...' written as a lawn care company. Correct: 'A lawn care company in Southern NH came to us because...' written as Pulseforge telling the story.`;
+You are writing content FOR Pulseforge, an AI marketing and automation agency. Write from Pulseforge's point of view. Do not invent unnamed client stories, named-trade customers, quotes, results, or delivery timelines. Reference small-business workflows only as aggregate patterns, Jacob's real operator lessons, Mira-grounded market observations, verified source material, or explicitly hypothetical illustrations. If a scenario is hypothetical, label it clearly with language like "imagine" or "a shop might".`;
 
 const PROFESSIONAL_COPYWRITER_QUALITY_RULE = `PROFESSIONAL COPYWRITER QUALITY BAR — NON-NEGOTIABLE:
 Write at a professional copywriter level. Every post must have:
@@ -44,11 +70,11 @@ Scoring targets: hook_strength 8+, specificity 8+, originality 8+. A score below
 const PULSEFORGE_TOPIC_BANK = [
   {
     label: 'Behind the scenes',
-    guidance: "what actually runs when a client's phone is quiet",
+    guidance: "what actually runs when an owner's phone is quiet, grounded in system behavior or Jacob's operator experience",
   },
   {
-    label: 'Client result story',
-    guidance: 'a specific, local, anonymized client result story',
+    label: 'Sourceable proof angle',
+    guidance: 'aggregate system data, a real Jacob operator lesson, a Mira-grounded market pattern, verified source material, or an explicitly hypothetical illustration',
   },
   {
     label: 'Common follow-up mistake',
@@ -71,8 +97,8 @@ const PULSEFORGE_TOPIC_BANK = [
     guidance: 'a workflow transformation from manual chaos to automatic follow-through',
   },
   {
-    label: 'Industry-specific pain point',
-    guidance: 'one pain point for a restaurant, cleaner, contractor, salon, gym, or local service owner',
+    label: 'Operator pain point',
+    guidance: 'one general operating pain point for a local service owner, described as a pattern or hypothetical, never as a real unnamed client',
   },
   {
     label: 'AI agent FAQ',
@@ -154,8 +180,8 @@ const CHANNEL_TOPIC_LENSES = {
     guidance: 'Use the topic to prove Pulseforge is legitimate, local to Manchester NH, and useful to someone who just found the business on Google.',
   },
   facebook_page: {
-    label: 'client story angle',
-    guidance: 'Use the topic as a relatable client scenario or human moment. Warm, conversational, story-first.',
+    label: 'operator lesson angle',
+    guidance: 'Use the topic as an operator lesson, aggregate data insight, Mira-grounded market pattern, verified-source proof point, or explicitly hypothetical illustration. Never frame it as a real unnamed client story.',
   },
   blog: {
     label: 'full breakdown angle',
@@ -288,7 +314,7 @@ function buildChannelStrategyBlock(channel, topicAngle = null) {
 
   if (!lens) return '';
   const exampleLine = topicAngle?.label === 'Behind the scenes'
-    ? 'Example: if the bucket is behind the scenes about what runs while the owner sleeps, LinkedIn gets the POV angle, Google Business gets the local proof angle, Facebook gets the client story angle, and the blog gets the full breakdown.'
+    ? 'Example: if the bucket is behind the scenes about what runs while the owner sleeps, LinkedIn gets the POV angle, Google Business gets the local proof angle, Facebook gets the operator lesson or hypothetical illustration angle, and the blog gets the full breakdown.'
     : '';
   return `CHANNEL STRATEGY — DO NOT BLEND FORMATS:
 ${topicLine}
@@ -301,7 +327,7 @@ ${exampleLine}`;
 function buildMshiChannelStrategyBlock(channel, topicAngle) {
   const strategies = {
     facebook_page: { format: 'Project stories, before/after, community presence', tone: 'Warm, personal, local', length: '100-150 words', guidance: 'Use the topic as a homeowner-facing story from Brad and Dustin. It should feel like a real update from a local contractor, not an ad.' },
-    google_business: { format: 'Search-intent, local proof', tone: 'Short, specific to Charleston WV', length: '75-100 words', guidance: 'Use the topic to help someone searching for a local WV contractor understand what MSHI does and why they can trust Brad and Dustin.' },
+    google_business: { format: 'Search-intent, local proof', tone: 'Short, specific to Charleston WV', length: '150-300 characters', guidance: 'Use the topic to help someone searching for a local WV contractor understand what MSHI does and why they can trust Brad and Dustin.' },
     blog: { format: 'Project breakdowns, homeowner tips, seasonal advice', tone: 'Educational, practical', length: '400-600 words', guidance: 'Use the topic as a useful article for homeowners, property managers, or HOAs deciding how to handle exterior work.' },
   };
   const strategy = strategies[channel];
@@ -405,7 +431,75 @@ function formatThemeList(values) {
   return values?.length ? values.join('; ') : 'none found';
 }
 
-function buildContentRules(recentThemes, recentPublishedAngles = [], topicAngle = null, isPulseforge = false) {
+function buildUniversalWritingRules(channel, { allowIOpener = false } = {}) {
+  const isGbp = channel === 'google_business';
+  const isLinkedIn = channel === 'linkedin_page' || channel === 'linkedin_personal';
+  const openerRule = allowIOpener
+    ? '- A concrete personal LinkedIn opener may start with "I". Do it only when the next words name a real action, decision, mistake, or observation.'
+    : '- Do not start with "I". Lead with an observation, specific data, a real moment, or third-person framing.';
+  const screenshotRule = isGbp
+    ? '- GBP exception: the post needs one unmistakably clear point; a separate pulled-quote line is optional.'
+    : '- Include at least one screenshot line: a standalone sentence or fragment strong enough to work as a pulled quote.';
+  const linkedinRules = isLinkedIn ? `
+LINKEDIN ENGAGEMENT RULES — HARD CONSTRAINTS:
+- Optimize for comments and reactions over empty impressions. Prefer a clear, defensible thesis with personal or operational stakes over neutral education.
+- Contrarian content must earn the disagreement with real evidence. Do not manufacture outrage.
+- Close on an assertion or consequence that some readers will want to defend or challenge. A specific disagreement question is acceptable when it earns its place. Never end with "What do you think?" or a close variant.
+- Use real stakes such as a count, timestamp, place, or role when the supplied source context supports them. Never invent specificity.` : '';
+
+  return `UNIVERSAL WRITING RULES — HARD CONSTRAINTS:
+- Never use an em dash or en dash in body copy. Hyphenated words such as "long-form" are allowed. An em dash is allowed only in a title or subject line.
+- Use contractions naturally throughout. Prefer "don't", "we're", and "you'd" when that is how a person would say the line.
+- Vary sentence length aggressively. Put short sentences beside longer ones. Use deliberate fragments. Skip a smooth transition when a clean jump lands harder.
+- Never use anaphoric negation such as "Not X. Not Y. Not Z." or "It isn't X. It isn't Y. It isn't Z." Do not use "not this, not that" enumeration.
+- Never default to three parallel sentences or clauses with the same opening. Two-part parallels are acceptable when the doubling earns it. Three data points in one setup are allowed; three parade-rhythm sentences are not.
+- Never open with "here's the thing", "here's the deal", "the thing is", "so here's what I've learned", or a close variant.
+- Never say a word, metric, or idea "is doing a lot of work", "is doing the heavy lifting", "is carrying a lot of weight", or a close variant.
+- The post must have one thesis that can be stated in a single sentence. If the point cannot be named cleanly, rewrite before returning it.
+${screenshotRule}
+- Use only real specificity from supplied source material. Stable timeframes such as "yesterday", "this week", and "over the past 30 days" are safer than claims of real-time precision.
+- If grounded context is unavailable, do not invent a number, timestamp, place, result, quote, or named business. Honest generality is better than fabricated specificity.
+- Specific per-deal, per-client, or per-prospect dollar figures require an explicit public-safe source flag. Otherwise omit them.
+- The opener must sound natural when spoken to a friend at a coffee shop. Rewrite debate-club and thought-leader openings such as "The biggest mistake most operators make is...".
+${openerRule}${linkedinRules}`;
+}
+
+function buildMiraGroundingBlock(context) {
+  if (!context?.available || !context?.client) {
+    throw new Error('Mira content-safe context is unavailable; aborting generation rather than fabricating specifics');
+  }
+  const safePayload = {
+    client: context.client,
+    current_anchor: context.current_anchor,
+    metrics: context.metrics,
+    recent_activity_summaries: context.recent_activity_summaries,
+    client_health: context.client_health,
+  };
+  return `CURRENT CONTENT-SAFE MIRA CONTEXT — CLIENT-SCOPED:
+${JSON.stringify(safePayload, null, 2)}
+
+GROUNDING RULES — HARD CONSTRAINTS:
+- Use only facts in this client-scoped block or the explicitly supplied canonical material.
+- Every draft must use at least one concrete detail from this Mira block: a nonzero metric, stable timeframe, market, current anchor, or health state. LinkedIn must label that source anchor with a "Mira:" prefix.
+- Treat zero as a real zero, not as permission to invent a more interesting number.
+- Use stable timeframes exactly as supplied. Never turn "over the past 24 hours" into "five minutes ago" or another real-time claim.
+- Do not infer prospect identities, deal values, task details, or named client results from aggregate metrics.
+- If this context does not support a specific claim, omit the claim.`;
+}
+
+async function getPaigeMiraGrounding(channel) {
+  if (RUN_CONTEXT.simulateMiraUnavailable) {
+    throw new Error('Mira content-safe context is unavailable; aborting generation rather than fabricating specifics');
+  }
+  const context = await buildMiraContext(CLIENT_ID, {
+    contentSafe: true,
+    channel,
+    includeCrossClient: false,
+  });
+  return { context, block: buildMiraGroundingBlock(context) };
+}
+
+function buildContentRules(recentThemes, recentPublishedAngles = [], topicAngle = null, isPulseforge = false, options = {}) {
   const topicBlock = topicAngle ? `
 TODAY'S PULSEFORGE TOPIC BUCKET:
 - ${topicAngle.label}: ${topicAngle.guidance}
@@ -416,7 +510,9 @@ ${PULSEFORGE_POV_RULE}
 ${PROFESSIONAL_COPYWRITER_QUALITY_RULE}
 ` : '';
 
-  return `CONTENT RULES — YOU MUST FOLLOW THESE:
+  return `${buildUniversalWritingRules(options.channel, { allowIOpener: options.allowIOpener })}
+
+CONTENT RULES — YOU MUST FOLLOW THESE:
 - Do NOT use any seasonal reference (summer, winter, spring, fall, holidays) as the hook or opening angle
 - Do NOT open with a location name (Manchester, NH, New Hampshire, local)
 - Do NOT reuse any of these recent opening phrases: ${formatThemeList(recentThemes.openings)}
@@ -435,7 +531,7 @@ ${formatUsedAngles(recentPublishedAngles)}
 If any of these ideas appear above, do not use competitor comparison hooks, do not open with statistics about lead response rates, and do not use "your competitor just", "40% of leads", or "follow-up speed" angles. Even if they are not listed, avoid those angles for Pulseforge unless a human explicitly asks for them.
 
 HOOK WRITING — NON-NEGOTIABLE:
-Every post must open with a strong hook in the first line. Strong hooks include: a counterintuitive statement, a specific operational detail, a direct question that creates curiosity, or a bold claim. Never start a post with "I", "We", "At [company]", or a generic greeting. The first line must stop the scroll. Examples of weak hooks: "We help local businesses grow." Examples of strong hooks: "The quietest part of a local business is usually where the leak is." or "A booking request should not depend on whether the owner checked their inbox at the right minute."
+Every post must open with a strong hook in the first line. Strong hooks include a counterintuitive statement, a specific operational detail, a direct question that creates curiosity, or a bold claim. ${options.allowIOpener ? 'A concrete personal opener may start with "I".' : 'Never start with "I", "We", "At [company]", or a generic greeting.'} The first line must stop the scroll. Examples of weak hooks: "We help local businesses grow." Examples of strong hooks: "The quietest part of a local business is usually where the leak is." or "A booking request should not depend on whether the owner checked their inbox at the right minute."
 
 ORIGINALITY — NON-NEGOTIABLE:
 Every piece of content must feel like it was written for the first time. Never reuse the same opening premise, stat, or scenario you've used before. If you catch yourself writing something that sounds like something Pulseforge has said before, stop and pick a different angle from today's topic bucket.
@@ -451,13 +547,15 @@ Without a concrete anchor the post will score below 24. Generic claims like 'bus
 }
 
 
-function buildMshiContentRules(recentThemes, recentPublishedAngles = [], topicAngle = null) {
+function buildMshiContentRules(recentThemes, recentPublishedAngles = [], topicAngle = null, options = {}) {
   const topicBlock = topicAngle ? `
 TODAY'S MSHI TOPIC BUCKET:
 - ${topicAngle.label}: ${topicAngle.guidance}
 - Make this the core angle for today's content. Keep the same topic bucket but change the channel lens.` : '';
 
-  return `CONTENT RULES — YOU MUST FOLLOW THESE:
+  return `${buildUniversalWritingRules(options.channel)}
+
+CONTENT RULES — YOU MUST FOLLOW THESE:
 - Write as Brad and Dustin from Mountain State Home Innovations, not as a marketing agency and not as a polished brand voice
 - Voice: local, personal, West Virginia proud, and plain spoken. These are tradespeople, not marketers
 - Audience: homeowners, property managers, and HOAs in ${MSHI_SERVICE_AREAS}
@@ -485,6 +583,25 @@ Every post must open with a strong hook in the first line. Strong hooks include 
 
 ORIGINALITY — NON-NEGOTIABLE:
 Every piece of content must feel specific to Brad, Dustin, the homeowner, and the job. If the draft sounds like any contractor in any state could have written it, rewrite it with a real WV service area, service, or job detail.`;
+}
+
+function buildAnchorContentRules(recentThemes, recentPublishedAngles = [], options = {}) {
+  return `${buildUniversalWritingRules(options.channel)}
+
+ANCHOR CLEANING CONTENT RULES — HARD CONSTRAINTS:
+- Write for Anchor Cleaning, Jacob Maynard's owner-operated commercial-cleaning business in Greater Manchester, New Hampshire.
+- Audience: partners, practice managers, and office managers at single-tenant law firms and CPA/accounting practices.
+- Anchor's public-safe operating points are a written scope, secure and explicit access instructions, consistent follow-through, and one accountable owner.
+- Public-safe local facts: the pilot area is Manchester, Bedford, Goffstown, Hooksett, Londonderry, and Auburn; Jacob's perspective comes from more than a decade operating restaurants and cleaning crews.
+- Use "we" or "Anchor". Sound like an experienced service-business operator, not a marketer.
+- Never mention Pulseforge, AI, automation, marketing services, agents, lead generation, or another client's work.
+- Do not broaden Anchor's customer set to medical, retail, residential, restaurants, gyms, salons, or generic "all commercial spaces" claims.
+- Never invent customers, testimonials, results, crew size, pricing, schedules, certifications, or service guarantees.
+- Do NOT reuse any of these recent opening phrases: ${formatThemeList(recentThemes.openings)}
+- Do NOT use these structural patterns: ${formatThemeList(recentThemes.patterns)}
+
+USED-ANGLES MEMORY — DO NOT REUSE:
+${formatUsedAngles(recentPublishedAngles)}`;
 }
 
 async function getActiveClients() {
@@ -516,7 +633,24 @@ function getPulseforgeCompanyFromConfig() {
   };
 }
 
+function getAnchorCompanyFromConfig() {
+  if (CLIENT_ID !== ANCHOR_CLIENT_ID || !CLIENT_CONFIG) return null;
+  const cityState = [CLIENT_CONFIG.city, CLIENT_CONFIG.state].filter(Boolean).join(', ');
+  return {
+    id: null,
+    name: CLIENT_CONFIG.business_name || CLIENT_CONFIG.name || 'Anchor Cleaning',
+    industry: CLIENT_CONFIG.vertical || 'commercial cleaning',
+    location: cityState || 'Manchester, NH',
+    website: CLIENT_CONFIG.website || null,
+    notes: CLIENT_CONFIG.differentiators || CLIENT_CONFIG.brand_voice || null,
+  };
+}
+
 function getGenerationClients(companies) {
+  if (CLIENT_ID === ANCHOR_CLIENT_ID) {
+    const anchorCompany = getAnchorCompanyFromConfig();
+    return anchorCompany ? [anchorCompany] : [];
+  }
   if (CLIENT_ID !== 1) return companies;
   const pulseforgeCompanies = companies.filter(isPulseforgeCompany);
   if (pulseforgeCompanies.length) return pulseforgeCompanies.slice(0, 1);
@@ -634,7 +768,7 @@ function buildFacebookPrompt(company, contentType, verticalCtx, location, lastCo
 
   const audienceNote = isPulseforge
     ? `IMPORTANT: Pulseforge's audience is small business owners considering marketing automation — not end customers of another business. Write directly to an owner who is tired of doing repetitive marketing tasks themselves and wants a system that runs in the background.`
-    : `Write as the actual owner of ${company.name} talking to their local community in ${location}.`;
+    : `Write as the actual owner of ${company.name} talking to their local community in ${location}. Use only facts provided for this business. If you need an example customer situation, make it explicitly hypothetical; do not invent a real customer, testimonial, project, quote, result, or timeline.`;
 
   return `You are writing a Facebook post for ${company.name}'s business page.
 ${company.name} is a local ${company.industry || 'business'} in ${location}${isPulseforge ? ' that automates marketing and outreach for small business owners using AI' : ` that uses Pulseforge — an AI system that automates their marketing so the owner can focus on the actual work`}.
@@ -648,9 +782,12 @@ ${channelStrategy}
 FACEBOOK STRATEGY:
 - Purpose: story-first, conversational, human content that makes the business feel real
 - Format: 100-175 words, warm tone, short paragraphs
-- Lead with a relatable moment, specific client scenario, or small business owner situation
-- Make it feel like a human story, not a thought leadership post and not a search listing
-- If today's topic appears on other channels, Facebook must use the client story angle only
+- Lead with an operator lesson, aggregate workflow observation, verified source fact, Mira-grounded market pattern, or clearly hypothetical small business situation
+- Make it feel human and specific without asserting an unnamed real client, customer, quote, delivery timeline, or result
+- If today's topic appears on other channels, Facebook must use the operator lesson, data insight, market pattern, verified-source proof, or hypothetical illustration lens only
+- Never write "a client we work with", "a roofing contractor we work with", "a gym owner came to us", "we started working with a plumber", or any close variant unless the exact client/result is supplied by verified source material in this run
+- If illustrating with a scenario, mark it as hypothetical in the copy: "Imagine a shop that...", "A contractor might...", or "For example, suppose..."
+- Do not name real clients, client operators, delivery timelines, revenue, booked jobs, recovered leads, close rates, or other results unless those facts appear in supplied verified source material
 - End with this CTA or a natural close variation: "${facebookCta}"
 - Sounds like a real person talking, not a brand account — no "excited to announce," no "we pride ourselves"
 - Is specific to ${location} — reference the area naturally
@@ -660,7 +797,7 @@ FACEBOOK STRATEGY:
 - For "behind-the-scenes": gives a glimpse of the people or process behind the business
 - For "community": mentions something local — a neighborhood, event, or shared experience
 - May end with 1-2 hashtags only if they feel natural — skip if they don't
-- Never use dashes or hyphens in any content you write — not as punctuation, not as separators, not in any context.
+- Never use an em dash or en dash in body copy. Ordinary hyphens are allowed.
 
 No buzzwords. No corporate tone. Write like a person.
 
@@ -694,7 +831,7 @@ ${channelStrategy}
 
 GOOGLE BUSINESS STRATEGY:
 - Purpose: short, local, search-intent proof for someone who just found Pulseforge on Google and wants to know if we're legit
-- Format: 75-100 words max, no hashtags, no emojis, no long story arc
+- Format: 150-300 characters total, no hashtags, no emojis, no long story arc
 - Tone: practical, clear, credible, locally grounded in Manchester NH
 - Mention Manchester NH or the surrounding area naturally
 - If today's topic appears on other channels, Google Business must use the local proof angle only
@@ -706,7 +843,7 @@ GOOGLE BUSINESS STRATEGY:
 - For "behind-the-scenes": builds trust by describing the team, process, or standards
 - For "community": connects the business to the local area in a credible way
 - NO hashtags, NO emojis — professional but human, not corporate
-- Never use dashes or hyphens in any content you write — not as punctuation, not as separators, not in any context.
+- Never use an em dash or en dash in body copy. Ordinary hyphens are allowed.
 
 VARIETY RULES — enforce these on every post:
 - Never start a post with "Most small business owners" or any variation of that phrase
@@ -770,7 +907,7 @@ Requirements:
 - Never open with "In today's digital world" or any generic throat-clearing — start specific
 - No keyword stuffing — mention the business and location where they fit naturally
 - No corporate tone, no "we pride ourselves," no "cutting-edge solutions"
-- Never use dashes or hyphens in any content you write — not as punctuation, not as separators, not in any context.
+- Never use an em dash or en dash in body copy. Ordinary hyphens are allowed. An em dash may appear in the markdown title only.
 - End the post with this exact closer, adjusted only if needed for grammar: "${blogCloser}"
 - Never use engagement-bait questions as blog closers. Do not end with "drop a comment", "what do you think", "let us know below", or any request for comments.
 
@@ -798,7 +935,7 @@ Business context: ${verticalCtx}
 ${channelStrategy}
 
 MSHI FACEBOOK STRATEGY:
-- Channel purpose: primary local contractor channel for project stories, before/after photos, and community presence
+- Channel purpose: local contractor channel for service tips, local proof, verified project material, or clearly hypothetical homeowner scenarios
 - Audience: homeowners, property managers, and HOAs in ${MSHI_SERVICE_AREAS}
 - Format: 100-150 words, short paragraphs, no corporate polish
 - Tone: warm, personal, local, West Virginia proud, and plain spoken
@@ -806,6 +943,7 @@ MSHI FACEBOOK STRATEGY:
 - Feature real services when relevant: ${MSHI_CORE_SERVICES}
 - Reference Charleston WV, Kanawha County, Putnam County, or Cabell County naturally when it fits
 - Highlight locally owned, licensed WV065578, owner-done work, and direct access during the project when relevant
+- Do not invent homeowners, projects, quotes, before/after details, timelines, outcomes, or customer reactions. If a project/homeowner story is not supplied by verified source material, frame the example as hypothetical.
 - End with this CTA or a close variation that keeps the meaning: "${cta}"
 - Never mention Pulseforge, AI, automation, marketing, pricing, or competitors
 
@@ -831,7 +969,7 @@ ${channelStrategy}
 MSHI GOOGLE BUSINESS STRATEGY:
 - Channel purpose: search-intent, local proof for someone deciding whether to call a Charleston WV contractor
 - Audience: homeowners, property managers, and HOAs in ${MSHI_SERVICE_AREAS}
-- Format: 75-100 words, short and specific
+- Format: 150-300 characters total, short and specific
 - Tone: clear, practical, credible, and locally grounded
 - Mention Charleston WV or the surrounding WV service area naturally
 - Feature one concrete service or trust point: ${MSHI_CORE_SERVICES}, licensed WV065578, Brad and Dustin do the work themselves, or direct access throughout the project
@@ -904,6 +1042,66 @@ ${lastContentType ? `\nThe last post for this channel was: ${lastContentType}. T
 Return only the blog post text with markdown formatting.`;
 }
 
+function buildAnchorGooglePrompt(company, contentType, lastContentType) {
+  return `Write one Google Business Profile update for Anchor Cleaning in Manchester, New Hampshire.
+
+Content type: ${contentType}
+Audience: law-firm and CPA/accounting-office decision-makers in Greater Manchester.
+
+Requirements:
+- 150-300 characters total
+- Make one clear point grounded in the supplied client-safe Mira context
+- Use one Anchor operating point when relevant: written scope, explicit access instructions, consistent follow-through, or one accountable owner
+- Practical and conversational, with no hashtags and no emojis
+- Do not mention any other industry, company, technology, price, or invented customer result
+- End naturally. A CTA is optional
+${lastContentType ? `- The previous type was ${lastContentType}; use a different opening and structure` : ''}
+
+Return only the post text.`;
+}
+
+function buildAnchorFacebookPrompt(company, contentType, lastContentType) {
+  return `Write one Facebook post for Anchor Cleaning in Manchester, New Hampshire.
+
+Content type: ${contentType}
+Audience: local law-firm and CPA/accounting-office owners, partners, practice managers, and office managers.
+
+Requirements:
+- 100-175 words, warm and community-minded without sounding promotional
+- Start with an observable office-management truth. Never invent a scene, customer, text, call, quote, or anecdote
+- Make one clear point grounded in the supplied client-safe Mira context
+- Use Anchor's real operating model: written scope, explicit access instructions, consistent follow-through, and one accountable owner
+- Sound like Jacob speaking as an experienced local service-business operator
+- Do not mention another industry, company, technology, price, or invented customer result
+- End with an assertion or natural local invitation, never engagement bait
+${lastContentType ? `- The previous type was ${lastContentType}; use a different opening and structure` : ''}
+
+FINAL CHECK BEFORE RETURNING:
+- The only facts you may use are: Anchor Cleaning; Manchester, Bedford, Goffstown, Hooksett, Londonderry, and Auburn; law firms and CPA/accounting offices; a written scope; explicit access instructions; consistent follow-through; one accountable owner; Jacob's decade-plus service-business background; and the supplied content-safe Mira facts
+- Include "Manchester" or "Greater Manchester" in the body
+- Silently rewrite if the draft contains an em dash, en dash, three-item list, repeated "No" or "Not" construction, fictional scene, quote, customer result, clock time, unsupported duration, "Mira:" label, "every", "always", "call center", or service guarantee
+
+Return only the post text.`;
+}
+
+function buildAnchorBlogPrompt(company, contentType, lastContentType) {
+  return `Write one blog post for Anchor Cleaning in Manchester, New Hampshire.
+
+Content type: ${contentType}
+Audience: law-firm and CPA/accounting-office owners, partners, practice managers, and office managers.
+
+Requirements:
+- 400-600 words with one # title and useful ## subheadings
+- Make one clear thesis grounded in the supplied client-safe Mira context
+- Teach through professional-office details: written scope, access instructions, document areas, off-limits rooms, consistent follow-through, and one accountable owner
+- Sound like Jacob writing as an experienced service-business operator
+- Do not mention another industry, company, technology, price, or invented customer result
+- End with a practical assertion or invitation to discuss an office walkthrough, never engagement bait
+${lastContentType ? `- The previous type was ${lastContentType}; use a different opening and structure` : ''}
+
+Return only the markdown blog post.`;
+}
+
 // ── LINKEDIN BRAND-AWARE CONTENT (v2) ─────────────────────────────────────────
 // Brand voice is derived directly from the LinkedIn destination channel. The two
 // LinkedIn destinations already exist as distinct channels that route to separate
@@ -915,8 +1113,9 @@ const LINKEDIN_BRAND_BY_CHANNEL = {
   linkedin_page: 'pulseforge',
   linkedin_personal: 'jacob_personal',
 };
+const ANCHOR_CLIENT_ID = 10;
 const LINKEDIN_V2_MODULE = 'linkedin_content_v2';
-const LINKEDIN_FORMATS = ['punch', 'numbers', 'quote', 'stake', 'decision_log'];
+const LINKEDIN_FORMATS = ['punch', 'numbers', 'quote', 'stake', 'decision_log', 'dialogue'];
 const LINKEDIN_PERSONAL_SLOT_CHANNEL = 'linkedin_personal';
 
 const LINKEDIN_FORMAT_SPECS = {
@@ -927,12 +1126,12 @@ const LINKEDIN_FORMAT_SPECS = {
   },
   numbers: {
     when: 'there are real results to report or a recent client win',
-    structure: 'three numbers as the opening line, one paragraph of context, then the implication (not the lesson)',
+    structure: 'open with three specific numbers that establish stakes or context. Use one comma-separated sentence, or three short setup lines that lead into a fourth line delivering the insight. Never use three parallel anaphoric sentences',
     maxWords: 120,
   },
   quote: {
     when: "a client, peer, or Jacob's past self said something real and quotable",
-    structure: 'a direct quote (attributed), a brief setup of when and why, what it reframed, then an open question to the reader',
+    structure: 'a direct quote (attributed), a brief setup of when and why, what it reframed, then either an assertive consequence or a question that specifically invites disagreement. Prefer the assertive closer; never use a generic comment prompt',
     maxWords: 140,
   },
   stake: {
@@ -944,6 +1143,11 @@ const LINKEDIN_FORMAT_SPECS = {
     when: 'Jacob just made a real call with a tradeoff worth naming',
     structure: 'the decision in present tense, the tradeoff accepted, the metric being watched, then a dated prediction',
     maxWords: 140,
+  },
+  dialogue: {
+    when: 'a common owner belief has a sharp contradiction and a real gotcha reveal',
+    structure: 'two-character spoken dialogue. Use Owner as the default strawman for SMB content, or a more specific role such as Practice Manager, Managing Partner, PM Owner, Broker, or Cleaning Operator when the vertical supports it. Me delivers the correction. Give each turn its own paragraph. Use bracketed stage directions, selective CAPS, and an ellipsis only when they improve spoken rhythm. Arc: common belief, contradiction, real insight, obvious objection, final knockdown. Plainspoken and fragment-heavy, never Socratic',
+    maxWords: 180,
   },
 };
 
@@ -970,6 +1174,14 @@ const JACOB_PERSONAL_BRAND_VOICE = `BRAND VOICE — JACOB PERSONAL (jacob-maynar
 - When drawing on the orchestrator theme, show it through a concrete operating moment (a real decision, a real tradeoff, a thing that was killed or kept) rather than stating the philosophy abstractly. Earn the point with specifics. Never use the phrase "human in the loop" as a label; demonstrate it instead.
 - Audience: other founders, operators, peers building in public, and his network.`;
 
+const ANCHOR_BRAND_VOICE = `BRAND VOICE — ANCHOR CLEANING (company page):
+- Plainspoken owner-operator voice. Anchor provides recurring commercial cleaning for law firms and CPA/accounting offices in Greater Manchester, New Hampshire.
+- Lead with the operational stakes of a clean professional office: consistent scope, secure access, reliable follow-through, and one accountable owner.
+- Sound like a service-business operator who has managed real crews for more than a decade, not a marketer and never a technology company.
+- Use "we" or "Anchor". Do not borrow another company's identity, agent names, client stories, or agency positioning.
+- Every Anchor LinkedIn post must include "Manchester" or "Greater Manchester" in the public body as its stable client-scoped grounding detail.
+- Audience: law-firm partners, practice managers, office managers, CPA firm owners, and accounting-office administrators in the Manchester pilot area.`;
+
 const JACOB_PERSONAL_BACKGROUND = `JACOB PERSONAL BACKGROUND (jacob_personal brand only):
 - Over a decade as an operator: restaurants and a cleaning company.
 - Currently bartending alongside Pulseforge for runway.
@@ -977,7 +1189,9 @@ const JACOB_PERSONAL_BACKGROUND = `JACOB PERSONAL BACKGROUND (jacob_personal bra
 - Enrolled in FES (Frontend Engineering Skills), working through JavaScript toward React.
 - Built a personal OS layer (Mira) on Telegram, live and capturing.`;
 
-const LINKEDIN_CANONICAL_SOURCE_MATERIAL = `ACTIVE CLIENTS AND WINS
+const LINKEDIN_CANONICAL_SOURCE_MATERIAL = `VERIFIED SOURCE MATERIAL - ACTIVE CLIENTS AND WINS
+Named-client claims in this block are verified-source-only. They may be used only when the post's source_anchors cite canonical or Mira source material. Never free-generate adjacent MSHI, Brad, Dustin, Bill, delivery-time, revenue, or result claims.
+
 - Mountain State Home Innovations (Brad Hudson, Dustin Allison, Charleston WV): regional contractor, hand-built five-name list model, first call closed recurring revenue, model validated in 28 days against 60-90 quoted.
 - Bill Moylan (Upwork, CFO recruiter list, Brevo setup): 41% open rate proof point on a 110-contact verified list.
 - McLeod Legal (client_id=3): active.
@@ -1011,10 +1225,20 @@ ORCHESTRATOR THEME (recurring positioning, express through any format):
 
 Do not force the orchestrator theme into posts where the source material does not naturally support it. It is one theme among several, used when relevant, not in every post.`;
 
+const ANCHOR_CANONICAL_SOURCE_MATERIAL = `ANCHOR CLEANING PUBLIC-SAFE FACTS
+- Anchor Cleaning is Jacob Maynard's commercial-cleaning business in Greater Manchester, New Hampshire.
+- The initial service area is Manchester, Bedford, Goffstown, Hooksett, Londonderry, and Auburn.
+- Anchor focuses on single-tenant law firms and CPA/accounting practices that buy recurring cleaning.
+- The operating promise is a written scope, consistent follow-through, and one accountable owner when something needs attention.
+- Jacob's service-business perspective comes from more than a decade operating restaurants and cleaning crews.
+- Professional offices have practical cleaning stakes around access instructions, document areas, off-limits rooms, and avoiding staff time spent supervising vendors.
+
+Do not invent customers, results, quotes, employee counts, prices, or performance metrics. If current Mira context does not supply a real number, write without one.`;
+
 const LINKEDIN_HARD_RULES = `HARD RULES — NEVER VIOLATE:
-1. No em-dashes, ever. Use periods, commas, parens, semicolons, or colons. This overrides any default punctuation pattern from training. En-dashes for numeric ranges (e.g. 60-90) are acceptable; em-dashes are not.
+1. No em dashes or en dashes in body copy. Use periods, commas, parens, semicolons, colons, or ordinary hyphens. An em dash is allowed only in a title, and LinkedIn posts normally have no title.
 2. No "HUGE WIN" energy. No all-caps hooks, no double exclamation marks, no "excited to announce".
-3. No aphorism kickers. Never end on a written-for-LinkedIn wisdom line. End on a stake, a question, a metric, or a date.
+3. No aphorism kickers. Never end on a written-for-LinkedIn wisdom line. End on an assertion, a consequence, a stake, a metric, a date, or a question that specifically invites disagreement. Never use "What do you think?" or a close variant.
 4. No generic hashtags. Banned: #FounderLessons, #AIAutomation, #SmallBusiness, #Entrepreneurship, #Hustle. Use niche tags (#ManchesterNH, #CharlestonWV, #ContractorMarketing) or none.
 5. No banned vocabulary: leverage, synergize, unlock, elevate, empower, transform, ecosystem, journey, hustle, grind, blessed, humbled, "excited to announce", "thrilled".
 6. The first line works standalone. Assume the reader sees only the first two lines before "see more".
@@ -1055,9 +1279,9 @@ Killed Cal yesterday. What's the metric you've been tracking that you should hav
     pulseforge: `Cold email volume doesn't work in markets under 50,000 people.
 We've watched it across two client deployments now. The math breaks when one bad send hits the inbox of everyone the recipient drinks with on Saturday. Reputation poisons faster than you can warm new domains.
 Our model for those markets: hand-built lists in the single digits. Sounds wasteful. Closes faster. Every time.
-Different math. Different pricing. Different agency.`,
+The market is smaller, so the model has to respect the reputation at stake.`,
     jacob_personal: `Cold email is dead in sub-50K population markets.
-Not "underperforming." Not "needs a better hook." Dead. The math doesn't work when one bad send hits the inbox of everyone the recipient drinks with on Saturday.
+That approach dies at the first real objection. The math doesn't work when one bad send hits the inbox of everyone the recipient drinks with on Saturday.
 I learned this watching a perfectly good DKIM-aligned campaign in West Virginia get burned in seven sends because two recipients knew each other.
 If you're running outbound in a tight regional market and getting real results from volume, tell me where I'm wrong.`,
   },
@@ -1069,6 +1293,48 @@ Metric we're watching: show-rate on the next five hires. Above 80% by July 15 me
 Means slower MSHI growth for two to three weeks. Means I stop hiring people whose math depends on desperation.
 Metric I'm watching: show-rate on the next five hires. If it's not above 80% by July 15, the gate isn't tight enough yet.`,
   },
+  dialogue: {
+    pulseforge: `Owner: "More leads fixes a quiet calendar."
+
+Me: [pause] "How many old leads are still waiting on a second follow-up?"
+
+Owner: "That's different. They already went cold."
+
+Me: "Exactly. The leak isn't always demand. Sometimes nobody owns the NEXT step."`,
+    jacob_personal: `Owner: "You built agents so you wouldn't have to touch the work."
+
+Me: [shakes head] "I built them so I could spend my time on the calls that need judgment."
+
+Owner: "So it isn't fully automated..."
+
+Me: "Correct. FULLY automated was never the product. Better decisions were."`,
+  },
+};
+
+const STAKE_LANGUAGE_ALTERNATIVES = `SHARP STAKE LANGUAGE — REFERENCE OPTIONS, NOT A REQUIRED SEQUENCE:
+- "That approach dies at the first real objection. Everyone I've watched try it hit the same wall by month three."
+- "The first hard no exposes the whole model. Easy conversations were hiding the weakness."
+- "A strategy that survives only easy conversations isn't a strategy. The bill arrives when the stakes become real."
+Use at most one of these emotional moves in a post. Never stack them into a three-part parallel rhythm.`;
+
+const ANCHOR_LINKEDIN_FEW_SHOT = {
+  punch: `A cleaning miss becomes an office manager's job in about ten seconds.
+Anchor is built to keep it from becoming their job at all. Written scope. One accountable owner. The correction stays with us.`,
+  numbers: `6 pilot towns, 2 office types, 1 accountable owner.
+Anchor is staying narrow on purpose: law firms and accounting offices around Manchester, with a written scope that doesn't move every time the calendar gets busy.`,
+  quote: `"Who owns the correction?" is the question every cleaning proposal should answer.
+At Anchor, the answer doesn't move between a dispatcher, a crew lead, and an inbox. It stays with one owner. That accountability is the service.`,
+  stake: `Cheap cleaning gets expensive the moment a partner starts inspecting conference rooms.
+The real cost isn't a missed edge or an empty dispenser. It's professional staff spending billable time managing a vendor that was hired to remove work.`,
+  decision_log: `Decision: Anchor's pilot stays limited to law firms and accounting offices around Manchester.
+The tradeoff is a smaller prospect pool. The metric that matters is whether a narrow written scope produces more consistent walkthroughs than a broad "we clean everything" offer.`,
+  dialogue: `Practice Manager: "If the cleaning gets missed, I'll tell the crew tomorrow."
+
+Me: [pause] "Why did the correction become your job?"
+
+Practice Manager: "Someone has to make sure it gets fixed."
+
+Me: "Right. Anchor is built so that someone is the OWNER, not the office manager."`,
 };
 
 // Fail fast at module load: hard rule #1 forbids em-dashes, so no reference
@@ -1081,7 +1347,10 @@ for (const [fmt, brands] of Object.entries(LINKEDIN_FEW_SHOT)) {
   }
 }
 
-function getBrandForChannel(channel) {
+function getBrandForChannel(channel, clientId = CLIENT_ID) {
+  if (Number(clientId) === ANCHOR_CLIENT_ID) {
+    return channel === 'linkedin_page' ? 'anchor' : null;
+  }
   return LINKEDIN_BRAND_BY_CHANNEL[channel] || null;
 }
 
@@ -1100,9 +1369,34 @@ function jacobPersonalEnabled() {
 }
 
 function buildLinkedInRules(brand, format) {
-  const voice = brand === 'jacob_personal' ? JACOB_PERSONAL_BRAND_VOICE : PULSEFORGE_BRAND_VOICE;
+  const voice = brand === 'jacob_personal'
+    ? JACOB_PERSONAL_BRAND_VOICE
+    : brand === 'anchor'
+      ? ANCHOR_BRAND_VOICE
+      : PULSEFORGE_BRAND_VOICE;
   const spec = LINKEDIN_FORMAT_SPECS[format];
   const personalBackground = brand === 'jacob_personal' ? `\n\n${JACOB_PERSONAL_BACKGROUND}` : '';
+  const sourceMaterial = brand === 'anchor'
+    ? ANCHOR_CANONICAL_SOURCE_MATERIAL
+    : LINKEDIN_CANONICAL_SOURCE_MATERIAL;
+  const example = brand === 'anchor'
+    ? ANCHOR_LINKEDIN_FEW_SHOT[format]
+    : LINKEDIN_FEW_SHOT[format][brand];
+  const stakeLanguage = format === 'stake' ? `\n\n${STAKE_LANGUAGE_ALTERNATIVES}` : '';
+  const anchorFinalCheck = brand === 'anchor' ? `
+
+ANCHOR FINAL CHECK BEFORE RETURNING:
+- Include "Manchester" or "Greater Manchester" in the public body
+- Use only the listed Anchor canonical facts and supplied client-safe Mira facts
+- Silently rewrite if the draft contains an em dash, en dash, repeated negation, three-part rhetorical list, invented customer or result, unsupported duration, competitor generalization, "Mira:" in the body, "always", "entirely", "nothing to manage", "call center", "rotating crew", or another unsupported operating promise` : '';
+  const anchorNumbersExecution = brand === 'anchor' && format === 'numbers' ? `
+
+ANCHOR NUMBERS EXECUTION:
+- Use these two canonical opening values: 6 pilot towns and 2 office types
+- Use the exact send count as the third value and call its source "the 7-day activity trend". Do not say "so far", "since launch", or imply a lifetime total
+- After the opener, discuss only the narrow Greater Manchester pilot, law firms and CPA offices, written scope, and one accountable owner
+- After the opener, use no more than three sentences. Keep the body to two ideas: the narrow Greater Manchester focus, then written-scope accountability. Do not stack those facts into another three-part list
+- Do not compare Anchor with other cleaning vendors or add claims about phones, crews, customers, guarantees, results, or future timelines` : '';
 
   return `${voice}
 
@@ -1114,33 +1408,60 @@ Hard length cap: ${spec.maxWords} words. Do not exceed it.
 ${LINKEDIN_HARD_RULES}
 
 CANONICAL SOURCE MATERIAL — anchor every specific claim to something on this list. Never invent:
-${LINKEDIN_CANONICAL_SOURCE_MATERIAL}${personalBackground}
+${sourceMaterial}${personalBackground}
 
 Reference example for ${format} in the ${brand} voice (do not copy verbatim, match the discipline):
 
-${LINKEDIN_FEW_SHOT[format][brand]}`;
+${example}${stakeLanguage}${anchorFinalCheck}${anchorNumbersExecution}`;
 }
 
-// Format rotation: exclude the brand's last 3 LinkedIn formats from this run.
-async function getRecentLinkedInFormats(brand) {
+// Format rotation: track the last use of every format per client, brand, and
+// channel. Avoid repeats for seven days and reduce their weight through day 14.
+async function getLinkedInFormatHistory(brand, channel) {
   const res = await pool.query(`
-    SELECT format
+    SELECT format, MAX(created_at) AS last_used_at
     FROM pending_comments
     WHERE client_id = $1
       AND brand = $2
-      AND channel = ANY($3)
+      AND channel = $3
       AND format IS NOT NULL
-    ORDER BY created_at DESC
-    LIMIT 3
-  `, [CLIENT_ID, brand, Object.keys(LINKEDIN_BRAND_BY_CHANNEL)]);
-  return res.rows.map(r => r.format).filter(Boolean);
+    GROUP BY format
+  `, [CLIENT_ID, brand, channel]);
+  return res.rows.filter(row => row.format);
 }
 
-function chooseLinkedInFormat(recentFormats = []) {
-  const blocked = new Set(recentFormats);
-  let eligible = LINKEDIN_FORMATS.filter(f => !blocked.has(f));
-  if (!eligible.length) eligible = LINKEDIN_FORMATS.slice();
-  return eligible[Math.floor(Math.random() * eligible.length)];
+function linkedInFormatWeight(lastUsedAt, now = new Date()) {
+  if (!lastUsedAt) return 1;
+  const ageDays = (now.getTime() - new Date(lastUsedAt).getTime()) / 86400000;
+  if (!Number.isFinite(ageDays)) return 1;
+  if (ageDays < 7) return 0;
+  if (ageDays < 14) return 0.2;
+  return 1;
+}
+
+function chooseLinkedInFormat(history = [], now = new Date(), random = Math.random) {
+  const lastUsed = new Map(history.map(row => [row.format, row.last_used_at]));
+  let weighted = LINKEDIN_FORMATS.map(format => ({
+    format,
+    weight: linkedInFormatWeight(lastUsed.get(format), now),
+    lastUsedAt: lastUsed.get(format) || null,
+  }));
+
+  if (!weighted.some(row => row.weight > 0)) {
+    const oldest = Math.min(...weighted.map(row => row.lastUsedAt ? new Date(row.lastUsedAt).getTime() : 0));
+    weighted = weighted.map(row => ({
+      ...row,
+      weight: (row.lastUsedAt ? new Date(row.lastUsedAt).getTime() : 0) === oldest ? 1 : 0,
+    }));
+  }
+
+  const total = weighted.reduce((sum, row) => sum + row.weight, 0);
+  let cursor = random() * total;
+  for (const row of weighted) {
+    cursor -= row.weight;
+    if (cursor < 0 && row.weight > 0) return row.format;
+  }
+  return weighted.find(row => row.weight > 0)?.format || LINKEDIN_FORMATS[0];
 }
 
 function pickLessUsedSlot(slot1, slot2) {
@@ -1186,26 +1507,34 @@ function buildLinkedInV2Prompt(company, brand, format) {
   const spec = LINKEDIN_FORMAT_SPECS[format];
   const persona = brand === 'jacob_personal'
     ? "Jacob Maynard posting as himself on his personal LinkedIn profile"
-    : "the Pulseforge company LinkedIn page";
+    : brand === 'anchor'
+      ? 'the Anchor Cleaning company LinkedIn page'
+      : 'the Pulseforge company LinkedIn page';
   const audience = brand === 'jacob_personal'
     ? "other founders, operators, peers building in public, and Jacob's network"
-    : 'SMB owners, B2B service founders, agency operators, and prospective clients';
+    : brand === 'anchor'
+      ? 'law-firm partners, practice managers, office managers, CPA firm owners, and accounting-office administrators around Manchester, New Hampshire'
+      : 'SMB owners, B2B service founders, agency operators, and prospective clients';
 
   return `You are writing ONE LinkedIn post for ${persona}.
 Brand: ${brand}
 Format: ${format} (use when ${spec.when})
 Audience: ${audience}
 
-Write the post in the ${format} structure, in the brand voice, and following every hard rule in the system prompt. Keep it under ${spec.maxWords} words. Ground every specific claim in the canonical source material. If that material is too thin to anchor this post in real, specific facts, return an empty source_anchors array and do not fabricate anything to fill the slot.
+Write the post in the ${format} structure, in the brand voice, and following every hard rule in the system prompt. Keep it under ${spec.maxWords} words. Ground every specific claim in the canonical source material or the client-scoped Mira block. The post must use at least one concrete Mira detail. Prefix every Mira-derived source label with "Mira:" and every canonical source label with "Canonical:". If the available material is too thin to anchor this post in real, specific facts, return an empty source_anchors array and do not fabricate anything to fill the slot.
 
 Return ONLY a strict JSON object with double-quoted keys. No code fences, no prose before or after:
 {
   "format": "${format}",
   "post_body": "<full post text, ready to publish, with no hashtags inside the body>",
   "hashtags": ["#ManchesterNH"],
-  "source_anchors": ["<short label for each real canonical fact you anchored to>"]
+  "source_anchors": ["Mira: <short label for a real client-scoped context fact>", "Canonical: <short label for another real fact if used>"]
 }
-"hashtags" may be an empty array. "source_anchors" MUST list the real canonical facts you used. If you cannot anchor the post in real facts, return "source_anchors" as an empty array and a best-effort post_body, and the slot will be skipped.`;
+"hashtags" may be an empty array. "source_anchors" MUST list the real Mira and canonical facts you used, including at least one "Mira:" entry. If you cannot anchor the post in real facts, return "source_anchors" as an empty array and a best-effort post_body, and the slot will be skipped.`;
+}
+
+function hasMiraSourceAnchor(sourceAnchors = []) {
+  return sourceAnchors.some(anchor => /^Mira\s*:/i.test(anchor));
 }
 
 function parseLinkedInJson(text) {
@@ -1236,12 +1565,196 @@ function parseLinkedInJson(text) {
   };
 }
 
-// Enforces the cheap, deterministic hard rules (em-dash, banned vocab, HUGE WIN
-// energy). Quality/specificity/hook are handled by the shared scoreDraft gate.
-function validateLinkedInDraft(postBody) {
+function bodyCopyForValidation(text, channel) {
+  const value = String(text || '');
+  if (channel !== 'blog') return value;
+  const lines = value.split('\n');
+  if (/^#\s+/.test(lines[0] || '')) lines.shift();
+  return lines.join('\n');
+}
+
+function validateUniversalDraft(text, channel) {
+  const body = bodyCopyForValidation(text, channel);
+  const issues = [];
+  if (channel === 'google_business' && (body.trim().length < 150 || body.trim().length > 300)) {
+    issues.push('GBP copy must be 150-300 characters');
+  }
+  if (/[—–]/.test(body)) issues.push('contains an em dash or en dash in body copy');
+  if (/\b(?:here's the thing|here's the deal|the thing is|so here's what (?:i've|i have) learned)\b/i.test(body)) {
+    issues.push('uses a banned canned opener');
+  }
+  if (/\b(?:doing (?:a lot of work|the heavy lifting)|carrying a lot of weight)\b/i.test(body)) {
+    issues.push('uses a banned heavy-lifting phrase');
+  }
+  if (/(?:^|\n)\s*(?:not\b|no\b|it (?:isn't|is not)\b)[^.!?\n]*[.!?]\s*(?:not\b|no\b|it (?:isn't|is not)\b)/im.test(body)) {
+    issues.push('uses anaphoric negation');
+  }
+  if (/\b(?:not|no)\b[^.!?\n,]{1,50}[,;.]\s*(?:not|no)\b/i.test(body)) {
+    issues.push('uses not-this-not-that enumeration');
+  }
+  if (/\b([a-z][a-z'-]*)\s+[^,.;!?\n]{1,40},\s*\1\s+[^,.;!?\n]{1,40},\s*(?:and\s+)?\1\s+/i.test(body)) {
+    issues.push('uses a three-part parallel clause');
+  }
+  if (/\b([a-z][a-z'-]*)\s+[^,.;!?\n]{1,30},\s*\1\s+[^,.;!?\n]{1,30},\s*(?:and\s+|no\s+)[^,.;!?\n]{1,30}[.!?]?/i.test(body)) {
+    issues.push('uses a three-beat slogan');
+  }
+  if (/(?:^|[.!?]\s+|\n)\s*([a-z][a-z'-]*)\b[^.!?\n]{1,80}[.!?]\s+\1\b[^.!?\n]{1,80}[.!?]\s+\1\b/im.test(body)) {
+    issues.push('uses three parallel sentences');
+  }
+  if (/\b[a-z-]+ing\b[^,.;!?\n]{0,50},\s*[a-z-]+ing\b[^,.;!?\n]{0,50},\s*(?:and\s+)?[a-z-]+ing\b/i.test(body)) {
+    issues.push('uses a three-part parallel gerund list');
+  }
+  return issues;
+}
+
+// Enforces cheap, deterministic hard rules. Quality, thesis, specificity, and
+// hook strength are handled by the shared scoreDraft gate and generation prompt.
+function validateGroundedTimeClaims(postBody, context, brand) {
+  if (!context) return [];
+  const canonical = brand === 'anchor' ? ANCHOR_CANONICAL_SOURCE_MATERIAL : LINKEDIN_CANONICAL_SOURCE_MATERIAL;
+  const contextWindow = context?.metrics && Object.keys(context.metrics).some(key => key.endsWith('_24h'))
+    ? '24 hours past 24 hours over the past 24 hours'
+    : '';
+  const trendWindow = Array.isArray(context?.client_health?.daily_send_trend_7d)
+    ? '7 days seven days 7-day activity trend'
+    : '';
+  const sourceText = `${JSON.stringify(context)}\n${contextWindow}\n${trendWindow}\n${canonical}`.toLowerCase();
   const text = String(postBody || '');
   const issues = [];
-  if (text.includes('—')) issues.push('contains an em-dash');
+  const numberWords = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
+
+  if (/\bMira\s*:/i.test(text)) {
+    issues.push('leaks the internal Mira source label into public copy');
+  }
+
+  for (const match of text.matchAll(/\b(\d+)[\s-]+(minutes?|hours?|days?|weeks?|months?|years?)\b/gi)) {
+    const numberValue = match[1];
+    const unit = match[2].toLowerCase().replace(/s$/, '');
+    if (!new RegExp(`\\b${numberValue}[\\s-]+${unit}s?\\b`, 'i').test(sourceText)) {
+      issues.push(`uses unsupported timeframe "${match[0]}"`);
+    }
+  }
+  const wordDurationPattern = new RegExp(`\\b(${numberWords.join('|')})[\\s-]+(minutes?|hours?|days?|weeks?|months?|years?)\\b`, 'gi');
+  for (const match of text.matchAll(wordDurationPattern)) {
+    const value = numberWords.indexOf(match[1].toLowerCase());
+    const unit = match[2].toLowerCase().replace(/s$/, '');
+    const allowed = new RegExp(`\\b(?:${value}|${numberWords[value]})[\\s-]+${unit}s?\\b`, 'i');
+    if (!allowed.test(sourceText)) issues.push(`uses unsupported timeframe "${match[0]}"`);
+  }
+  for (const match of text.matchAll(/\b(?:a\s+)?(?:few|several|couple of)\s+(minutes?|hours?|days?|weeks?|months?|years?)\b/gi)) {
+    if (!sourceText.includes(match[0].toLowerCase())) issues.push(`uses unsupported vague timeframe "${match[0]}"`);
+  }
+  if (/\bday one\b/i.test(text) && !/\bday one\b/i.test(sourceText)) {
+    issues.push('uses unsupported day-one timeframe');
+  }
+  if (/\b(?:for|over|within|after)\s+(?:a|one)\s+week\b/i.test(text) && !/\b(?:a|one|1)\s+week\b/i.test(sourceText)) {
+    issues.push('uses unsupported one-week timeframe');
+  }
+  for (const match of text.matchAll(/\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b/gi)) {
+    if (!sourceText.includes(match[0].toLowerCase())) issues.push(`uses unsupported clock time "${match[0]}"`);
+  }
+  if (/\bovernight\b/i.test(text) && !/\bovernight\b/i.test(sourceText)) {
+    issues.push('uses unsupported overnight timeframe');
+  }
+  for (const phrase of ['this week', 'last week', 'this quarter', 'last quarter', 'yesterday', 'today', 'recently']) {
+    if (new RegExp(`\\b${phrase}\\b`, 'i').test(text) && !sourceText.includes(phrase)) {
+      issues.push(`uses unsupported relative timeframe "${phrase}"`);
+    }
+  }
+  if (/\bsince launch\b/i.test(text) && !/\bsince launch\b/i.test(sourceText)) {
+    issues.push('uses unsupported since-launch timeframe');
+  }
+  if (/\bso far\b/i.test(text) && !/\bso far\b/i.test(sourceText)) {
+    issues.push('uses unsupported so-far timeframe');
+  }
+  if (/\b(?:a\s+)?couple\b/i.test(text) && !/\b(?:a\s+)?couple\b/i.test(sourceText)) {
+    issues.push('uses unsupported vague count "a couple"');
+  }
+  return [...new Set(issues)];
+}
+
+function validateAnchorClaims(text) {
+  const checks = [
+    { label: 'mentions Pulseforge', pattern: /\bpulseforge\b/i },
+    { label: 'mentions AI or automation', pattern: /\bAI\b|\bautomation\b|\bautomated\b|\bautomate\b/i },
+    { label: 'mentions marketing or lead generation', pattern: /\bmarketing\b|\blead generation\b/i },
+    { label: 'broadens Anchor beyond its approved office verticals', pattern: /\bmedical suites?\b|\bretail spaces?\b|\bresidential\b|\brestaurants?\b|\bgyms?\b|\bsalons?\b|\ball commercial spaces?\b/i },
+    { label: 'invents a customer anecdote or testimonial', pattern: /\b(?:a|one)\s+(?:practice manager|office manager|partner|client|customer)\s+(?:once\s+)?(?:told|said|asked)\b/i },
+    { label: 'makes an unsupported universal customer claim', pattern: /\bevery (?:new )?(?:client|customer|engagement)\b|\b(?:our clients|the (?:firms|clients|customers) we work with)\b/i },
+    { label: 'invents a customer scene', pattern: /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:morning|afternoon|evening)\s+at\b|\b(?:partner|manager|client|customer)\s+(?:just\s+)?(?:texted|called|emailed)\b/i },
+    { label: 'makes an unsupported absolute service guarantee', pattern: /\b(?:always|entirely|every single time|never misses|same person shows up|no surprises|nothing to manage)\b/i },
+    { label: 'invents an unsupported Anchor operating detail', pattern: /\b(?:picks? up(?: the phone)?|call center|customer[ -]service number|rotating crews?|different crew supervisors?|new face shows up|who show(?:s|ed) up|gets? handed off)\b/i },
+    { label: 'uses unsupported competitor generalization', pattern: /\b(?:most cleaning (?:vendors|companies)|every cleaning (?:vendor|company)|other cleaning (?:vendors|companies)|most of them|competitors?)\b/i },
+  ];
+  return checks.filter(check => check.pattern.test(text)).map(check => check.label);
+}
+
+function validatePulseforgeClaims(text, context = null, channel = null) {
+  const sourceText = JSON.stringify(context || {}).toLowerCase();
+  const body = String(text || '');
+  const relationshipPattern = /\b(?:one of our clients|our first clients|a client we|client came to us|we started working with|we work with|we worked with)\b/i;
+  const specificTradeAnecdotePattern = /\b(?:a|an|one|the)\s+(?:roofing|flooring|plumbing|landscaping|pressure washing|home services|auto|mechanic|shop|salon|gym|restaurant|contractor|cleaning|service)\s+(?:company|contractor|owner|shop|business|client|customer|plumber|mechanic)?\s*(?:we\s+(?:work|worked|started working)\s+with|came to us|asked us|told us|had|was|didn't|wasn't)\b/i;
+  const resultPattern = /\b(?:booked|closed|recovered|filled|converted|came back|got back|saved|increased|went up|dropped)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|[a-z-]+\s+percent|%)\b/i;
+  const namedRealClientPattern = /\b(?:Mountain State Home Innovations|MSHI|Brad Hudson|Dustin Allison|Brad\s*&\s*Dustin|Bill Moylan|McLeod Legal|Pulseforge Nashville)\b/i;
+  const hypothetical = /\b(?:imagine|hypothetical|suppose|for example,?\s+(?:a|an|one)|might|could)\b/i.test(body);
+  const issues = [];
+
+  if (specificTradeAnecdotePattern.test(body) && !hypothetical) {
+    issues.push('asserts an unnamed real client anecdote');
+  }
+  if (relationshipPattern.test(body)) {
+    issues.push('asserts a Pulseforge client relationship without a verified source');
+  }
+  if (relationshipPattern.test(body) && resultPattern.test(body)) {
+    issues.push('asserts an unsupported specific client result');
+  }
+  const namedMatch = body.match(namedRealClientPattern);
+  if (namedMatch && !sourceText.includes(namedMatch[0].toLowerCase())) {
+    issues.push('names a real client or operator without a verified source');
+  }
+
+  return [...new Set(issues)];
+}
+
+function usesMiraGrounding(postBody, context) {
+  if (!context) return false;
+  const text = String(postBody || '').toLowerCase();
+  const clientTerms = [context.client?.name, context.client?.city, context.client?.state]
+    .filter(term => String(term || '').length > 2)
+    .map(term => String(term).toLowerCase());
+  if (clientTerms.some(term => text.includes(term))) return true;
+
+  const metrics = context.metrics || {};
+  const numberWords = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
+  const metricNouns = [
+    ['sends_24h', '(?:email\\s+)?sends?'],
+    ['opens_24h', '(?:email\\s+)?opens?'],
+    ['replies_24h', 'repl(?:y|ies)'],
+    ['warm_signals_24h', 'warm signals?'],
+  ];
+  for (const [key, noun] of metricNouns) {
+    if (!Object.prototype.hasOwnProperty.call(metrics, key)) continue;
+    const value = Number(metrics[key]);
+    const word = Number.isInteger(value) && value >= 0 && value < numberWords.length ? numberWords[value] : null;
+    const amount = word ? `(?:${value}|${word})` : String(value);
+    if (new RegExp(`\\b${amount}\\s+${noun}\\b`, 'i').test(postBody)) return true;
+  }
+  const health = context.client_health || {};
+  return [health.send_volume_status, health.deliverability_status]
+    .filter(Boolean)
+    .some(value => new RegExp(`\\b${String(value)}\\b`, 'i').test(postBody));
+}
+
+function validateLinkedInDraft(postBody, grounding = {}) {
+  const text = String(postBody || '');
+  const issues = [
+    ...validateUniversalDraft(text, 'linkedin_page'),
+    ...validateGroundedTimeClaims(text, grounding.context, grounding.brand),
+    ...(grounding.brand === 'anchor' ? validateAnchorClaims(text) : []),
+  ];
+  if (grounding.context && !usesMiraGrounding(text, grounding.context)) {
+    issues.push('does not use a concrete client-scoped Mira detail in the public copy');
+  }
   if (/!!/.test(text)) issues.push('uses double exclamation marks');
   for (const term of LINKEDIN_BANNED_VOCAB) {
     const re = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
@@ -1261,6 +1774,7 @@ async function createLinkedInDraft(prompt, systemPrompt) {
 }
 
 async function logLinkedInSkip(company, channel, brand, format, reason) {
+  if (RUN_CONTEXT.dryRun) return;
   // agent_log_status_check forbids a custom 'insufficient_material' status, so the
   // reason lives in the payload and action while status stays 'skipped'.
   try {
@@ -1290,7 +1804,7 @@ async function logLinkedInSkip(company, channel, brand, format, reason) {
 // WRITING NON-NEGOTIABLE block included) AND buildLinkedInRules() concatenated on
 // top, enforces format rotation, and requires a non-empty source_anchors array.
 async function generateLinkedInPost(company, channel) {
-  const brand = getBrandForChannel(channel);
+  const brand = getBrandForChannel(channel, CLIENT_ID);
   if (!brand) throw new Error(`generateLinkedInPost called for non-LinkedIn channel: ${channel}`);
 
   if (brand === 'jacob_personal' && !jacobPersonalEnabled()) {
@@ -1299,27 +1813,41 @@ async function generateLinkedInPost(company, channel) {
     return { content: null, failed: true, skipped: true };
   }
 
-  const recentFormats = await getRecentLinkedInFormats(brand);
-  const format = chooseLinkedInFormat(recentFormats);
+  const { context: miraContext, block: miraGrounding } = await getPaigeMiraGrounding(channel);
+  const formatHistory = await getLinkedInFormatHistory(brand, channel);
+  for (const sessionFormat of RUN_CONTEXT.sessionFormats) {
+    formatHistory.push({ format: sessionFormat, last_used_at: new Date().toISOString() });
+  }
+  const format = RUN_CONTEXT.forcedFormat && LINKEDIN_FORMATS.includes(RUN_CONTEXT.forcedFormat)
+    ? RUN_CONTEXT.forcedFormat
+    : chooseLinkedInFormat(formatHistory);
   const recentThemes = await getRecentThemes(channel);
   const recentPublishedAngles = await getRecentPublishedAngles();
   // buildContentRules keeps the HOOK WRITING / ORIGINALITY / CONCRETE ANCHOR
   // blocks. isPulseforge=true adds the company-POV rule for the company page;
   // jacob_personal passes false so the first-person founder voice is not boxed
   // into company POV. buildLinkedInRules is appended, never substituted.
-  const systemPrompt = `${buildContentRules(recentThemes, recentPublishedAngles, null, brand === 'pulseforge')}
+  const systemPrompt = `${buildContentRules(recentThemes, recentPublishedAngles, null, brand === 'pulseforge', {
+    channel,
+    allowIOpener: brand === 'jacob_personal',
+  })}
 
 ${buildLinkedInRules(brand, format)}`;
+  const groundedSystemPrompt = `${systemPrompt}\n\n${miraGrounding}`;
   const basePrompt = buildLinkedInV2Prompt(company, brand, format);
 
-  console.log(`  [linkedin] brand=${brand} format=${format} (recent formats: ${recentFormats.join(', ') || 'none'})`);
+  const recentFormats = formatHistory
+    .filter(row => linkedInFormatWeight(row.last_used_at) < 1)
+    .map(row => row.format);
+  console.log(`  [linkedin] brand=${brand} format=${format} (used within 14d: ${recentFormats.join(', ') || 'none'})`);
 
   let prompt = basePrompt;
   let best = null; // { parsed, score }
   let attempts = 0;
+  const maxAttempts = maxRegenerationAttempts();
 
-  for (; attempts <= MAX_REGENERATION_ATTEMPTS; attempts++) {
-    const raw = await createLinkedInDraft(prompt, systemPrompt);
+  for (; attempts <= maxAttempts; attempts++) {
+    const raw = await createLinkedInDraft(prompt, groundedSystemPrompt);
     const parsed = parseLinkedInJson(raw);
 
     if (!parsed.source_anchors.length) {
@@ -1329,8 +1857,19 @@ ${buildLinkedInRules(brand, format)}`;
       return { content: null, failed: true, insufficientMaterial: true };
     }
 
+    if (!hasMiraSourceAnchor(parsed.source_anchors)) {
+      if (attempts === maxAttempts) break;
+      prompt = [
+        basePrompt,
+        '',
+        'Your previous draft did not cite or use the required client-scoped Mira context.',
+        'Rewrite it around at least one real Mira metric, stable timeframe, market, current anchor, or health state. Add a source_anchors entry beginning with "Mira:". Do not invent a number.',
+      ].join('\n');
+      continue;
+    }
+
     const score = await scoreDraft(parsed.post_body, recentPublishedAngles);
-    const issues = validateLinkedInDraft(parsed.post_body);
+    const issues = validateLinkedInDraft(parsed.post_body, { context: miraContext, brand });
     logQualityGateComparison(`linkedin_${brand}_${attempts === 0 ? 'initial' : 'attempt_' + attempts}`, score);
 
     if (!best || score.total > best.score.total) best = { parsed, score };
@@ -1339,7 +1878,7 @@ ${buildLinkedInRules(brand, format)}`;
       best = { parsed, score };
       break;
     }
-    if (attempts === MAX_REGENERATION_ATTEMPTS) break;
+    if (attempts === maxAttempts) break;
 
     prompt = [
       basePrompt,
@@ -1352,10 +1891,11 @@ ${buildLinkedInRules(brand, format)}`;
 
   if (!best) return { content: null, failed: true };
 
-  const finalIssues = validateLinkedInDraft(best.parsed.post_body);
-  if (finalIssues.length || !passesQualityGate(best.score, channel)) {
+  const finalIssues = validateLinkedInDraft(best.parsed.post_body, { context: miraContext, brand });
+  if (!hasMiraSourceAnchor(best.parsed.source_anchors) || finalIssues.length || !passesQualityGate(best.score, channel)) {
     await logContentFailed(company, channel, format, best.score, attempts, best.parsed.post_body);
     console.log(`  [linkedin] failed gate after ${attempts} attempt(s): ${finalIssues.join(', ') || 'best score ' + best.score.total + '/30'}; skipping ${channel}`);
+    if (RUN_CONTEXT.dryRun) console.log(`  [linkedin] rejected draft:\n${best.parsed.post_body}`);
     return { content: null, failed: true, quality: best.score };
   }
 
@@ -1420,7 +1960,7 @@ Voice and tone:
 - For "behind-the-scenes": a genuine look at how ${isPulseforge ? 'the automation system works or how we build it' : `${company.name} operates day to day`}
 - For "results": a concrete outcome — time saved, leads generated, or a client win (keep clients anonymous)
 - For "community": connect to the local small business ecosystem in New Hampshire
-- Never use dashes or hyphens in any content you write — not as punctuation, not as separators, not in any context.
+- Never use an em dash or en dash in body copy. Ordinary hyphens are allowed.
 
 No buzzwords. No "we're excited to announce." Write like a knowledgeable local operator who has been in the trenches.
 
@@ -1473,7 +2013,7 @@ Voice and tone:
 - For "results": describe a specific anonymized client win from Jacob's perspective
 - For "educational": teach through a personal story, not generic advice
 - For "community": connect to Manchester NH, bartending, or local small business owners
-- Never use dashes or hyphens in any content you write — not as punctuation, not as separators, not in any context.
+- Never use an em dash or en dash in body copy. Ordinary hyphens are allowed.
 
 VARIETY RULES — enforce these on every post:
 - Never start a post with "Most small business owners" or any variation of that phrase
@@ -1582,10 +2122,25 @@ ${draft}`
   return parseScoreJson(message.content[0].text);
 }
 
-function validateDraftForClient(draft, channel) {
-  if (CLIENT_ID !== 2) return [];
-
+function validateDraftForClient(draft, channel, miraContext = null) {
   const text = String(draft || '');
+  const brand = CLIENT_ID === ANCHOR_CLIENT_ID ? 'anchor' : 'pulseforge';
+  const issues = [
+    ...validateUniversalDraft(text, channel),
+    ...validateGroundedTimeClaims(text, miraContext, brand),
+  ];
+  if (miraContext && !usesMiraGrounding(text, miraContext)) {
+    issues.push('does not use a concrete client-scoped Mira detail in the public copy');
+  }
+  if (CLIENT_ID === ANCHOR_CLIENT_ID) {
+    issues.push(...validateAnchorClaims(text));
+    return issues;
+  }
+  if (CLIENT_ID === 1 && ['facebook_page', 'google_business', 'blog'].includes(channel)) {
+    issues.push(...validatePulseforgeClaims(text, miraContext, channel));
+  }
+  if (CLIENT_ID !== 2) return issues;
+
   const checks = [
     { label: 'mentions Pulseforge', pattern: /\bpulseforge\b/i },
     { label: 'mentions AI', pattern: /\bAI\b/i },
@@ -1595,9 +2150,9 @@ function validateDraftForClient(draft, channel) {
     { label: 'uses negative competitor framing', pattern: /\bcompetitors?\b|\bcut corners\b|\brip(?:s|ped)? off\b|\bbad contractors?\b|\bcheap contractors?\b/i },
   ];
 
-  const issues = checks
+  issues.push(...checks
     .filter(check => check.pattern.test(text))
-    .map(check => check.label);
+    .map(check => check.label));
 
   if (channel === 'linkedin_page' || channel === 'linkedin_personal') {
     issues.push('LinkedIn content is disabled for MSHI');
@@ -1661,8 +2216,10 @@ function logQualityGateComparison(contextLabel, score) {
 }
 
 async function generatePost(company, contentType, channel) {
+  const { context: miraContext, block: miraGrounding } = await getPaigeMiraGrounding(channel);
   const verticalCtx = getVerticalContext(company.industry);
   const isMshi = CLIENT_ID === 2;
+  const isAnchor = CLIENT_ID === ANCHOR_CLIENT_ID;
   const location = company.location || (isMshi ? 'Charleston WV' : 'Manchester, NH');
   const lastContentType = await getLastContentType(company.name, channel);
   const recentThemes = await getRecentThemes(channel);
@@ -1683,9 +2240,12 @@ async function generatePost(company, contentType, channel) {
   const channelStrategy = isMshi
     ? buildMshiChannelStrategyBlock(channel, topicAngle)
     : buildChannelStrategyBlock(channel, topicAngle);
-  const systemPrompt = isMshi
-    ? buildMshiContentRules(recentThemes, recentPublishedAngles, topicAngle)
-    : buildContentRules(recentThemes, recentPublishedAngles, topicAngle, isPulseforge);
+  const baseSystemPrompt = isMshi
+    ? buildMshiContentRules(recentThemes, recentPublishedAngles, topicAngle, { channel })
+    : isAnchor
+      ? buildAnchorContentRules(recentThemes, recentPublishedAngles, { channel })
+      : buildContentRules(recentThemes, recentPublishedAngles, topicAngle, isPulseforge, { channel });
+  const systemPrompt = `${baseSystemPrompt}\n\n${miraGrounding}`;
 
   if (lastContentType) {
     console.log(`  [variety] Last ${channel} post type: ${lastContentType} → generating: ${contentType}`);
@@ -1712,6 +2272,14 @@ async function generatePost(company, contentType, channel) {
       : channel === 'blog'
         ? buildMshiBlogPrompt(company, contentType, verticalCtx, lastContentType, blogCloser, channelStrategy)
         : buildMshiFacebookPrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy, facebookCta)
+    : isAnchor
+      ? channel === 'google_business'
+        ? buildAnchorGooglePrompt(company, contentType, lastContentType)
+        : channel === 'facebook_page'
+          ? buildAnchorFacebookPrompt(company, contentType, lastContentType)
+          : channel === 'blog'
+            ? buildAnchorBlogPrompt(company, contentType, lastContentType)
+            : buildLinkedInPrompt(company, contentType, verticalCtx, lastContentType, channelStrategy)
     : channel === 'google_business'
       ? buildGooglePrompt(company, contentType, verticalCtx, location, lastContentType, channelStrategy)
       : channel === 'blog'
@@ -1730,24 +2298,25 @@ async function generatePost(company, contentType, channel) {
   let finalValidationIssues = [];
   let regenerated = false;
   let regenerationAttempts = 0;
+  const maxAttempts = maxRegenerationAttempts();
 
   try {
     draft = await createDraft(prompt, systemPrompt, channel);
     score = await scoreDraft(draft, recentPublishedAngles);
-    validationIssues = validateDraftForClient(draft, channel);
+    validationIssues = validateDraftForClient(draft, channel, miraContext);
     finalDraft = draft;
     finalScore = score;
     finalValidationIssues = validationIssues;
 
     logQualityGateComparison('initial', score);
 
-    while ((validationIssues.length || !passesQualityGate(score, channel)) && regenerationAttempts < MAX_REGENERATION_ATTEMPTS) {
+    while ((validationIssues.length || !passesQualityGate(score, channel)) && regenerationAttempts < maxAttempts) {
       regenerated = true;
       regenerationAttempts++;
       if (validationIssues.length) {
-        console.log(`  [validation] Regenerating attempt ${regenerationAttempts}/${MAX_REGENERATION_ATTEMPTS} for client rules: ${validationIssues.join(', ')}`);
+        console.log(`  [validation] Regenerating attempt ${regenerationAttempts}/${maxAttempts} for client rules: ${validationIssues.join(', ')}`);
       } else {
-        console.log(`  [quality] Score ${score.total}/30, regenerating attempt ${regenerationAttempts}/${MAX_REGENERATION_ATTEMPTS} for ${score.weak_dimension}`);
+        console.log(`  [quality] Score ${score.total}/30, regenerating attempt ${regenerationAttempts}/${maxAttempts} for ${score.weak_dimension}`);
       }
 
       const regenPrompt = isMshi
@@ -1768,6 +2337,7 @@ async function generatePost(company, contentType, channel) {
         : [
             prompt,
             '',
+            validationIssues.length ? `Your previous draft broke these hard validation rules: ${validationIssues.join('; ')}. Fix every one.` : '',
             `Your previous draft scored ${score.total}/30 total, with specificity ${score.specificity}/10, originality ${score.originality}/10, and hook strength ${score.hook_strength}/10. Reason: ${score.reason}.`,
             '',
             'A strong hook is the ONLY thing that matters in the first line. Here are examples of strong vs weak:',
@@ -1783,15 +2353,17 @@ async function generatePost(company, contentType, channel) {
             'The first line must create a reason to keep reading. It should be specific, surprising, or create a gap the reader wants to close.',
             'No generic observations. No "most business owners." No "running a small business."',
             'Do not use competitor comparison hooks, lead response rate statistics, "your competitor just", "40% of leads", or "follow-up speed" angles.',
+            isAnchor ? 'Keep every claim specific to Anchor Cleaning, Manchester, and law-firm or CPA/accounting offices. Use a real detail from the supplied client-scoped Mira block. Do not invent a clock time, duration, customer, schedule, scene, quote, text message, testimonial, guarantee, or adjacent service vertical.' : '',
+            isAnchor ? 'A safe Anchor hook pattern is: "A cleaning vendor should remove work from a practice manager, not create a supervision job." Build from an observable operating truth like that, but do not copy this line verbatim.' : '',
             `Use today's topic bucket instead: ${topicAngle ? topicAngle.label + ': ' + topicAngle.guidance : 'the most distinct available angle'}.`,
             `The final score must be ${MIN_QUALITY_SCORE}/30 or higher, and specificity, originality, and hook_strength must each be at least ${MIN_DIMENSION_SCORE}/10. Do not pass along a merely acceptable post.`,
             '',
             'Return only the rewritten post text.',
-          ].join('\n');
+          ].filter(Boolean).join('\n');
 
       draft = await createDraft(regenPrompt, systemPrompt, channel);
       score = await scoreDraft(draft, recentPublishedAngles);
-      validationIssues = validateDraftForClient(draft, channel);
+      validationIssues = validateDraftForClient(draft, channel, miraContext);
 
       logQualityGateComparison(`attempt_${regenerationAttempts}`, score);
 
@@ -1840,6 +2412,7 @@ async function producePost(company, contentType, channel) {
 }
 
 async function logQualityScore(channel, quality, regenerated, post, attemptCount = 0) {
+  if (RUN_CONTEXT.dryRun) return;
   console.log(`  [logQualityScore] ${channel} attempt_count being passed: ${attemptCount}`);
   const payload = {
     channel,
@@ -1871,6 +2444,7 @@ async function logQualityScore(channel, quality, regenerated, post, attemptCount
 }
 
 async function logContentFailed(company, channel, contentType, quality, regenerationAttempts, post) {
+  if (RUN_CONTEXT.dryRun) return;
   const payload = {
     company: company?.name || null,
     channel,
@@ -2007,14 +2581,19 @@ async function ensurePendingCommentsLinkedInColumns() {
     `);
     await pool.query(`
       DO $$
+      DECLARE current_definition TEXT;
       BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_constraint WHERE conname = 'pending_comments_linkedin_format_check'
-        ) THEN
+        SELECT pg_get_constraintdef(oid)
+          INTO current_definition
+          FROM pg_constraint
+         WHERE conname = 'pending_comments_linkedin_format_check';
+
+        IF current_definition IS NULL OR POSITION('dialogue' IN current_definition) = 0 THEN
+          ALTER TABLE pending_comments DROP CONSTRAINT IF EXISTS pending_comments_linkedin_format_check;
           ALTER TABLE pending_comments
             ADD CONSTRAINT pending_comments_linkedin_format_check
             CHECK (
-              format IS NULL OR format IN ('punch', 'numbers', 'quote', 'stake', 'decision_log')
+              format IS NULL OR format IN ('punch', 'numbers', 'quote', 'stake', 'decision_log', 'dialogue')
             ) NOT VALID;
         END IF;
       END $$;
@@ -2026,6 +2605,7 @@ async function ensurePendingCommentsLinkedInColumns() {
 }
 
 async function logRun(status, payload) {
+  if (RUN_CONTEXT.dryRun) return;
   await pool.query(`
     INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
     VALUES ($1, $2, $3, $4, NOW(), $5)
@@ -2127,6 +2707,7 @@ async function logChannelError(company, channel, err) {
     error: err?.message || String(err),
     stack_preview: String(err?.stack || '').split('\n').slice(0, 4).join('\n'),
   };
+  if (RUN_CONTEXT.dryRun) return;
   try {
     await pool.query(`
       INSERT INTO agent_log (agent_name, action, payload, status, error_msg, ran_at, client_id)
@@ -2137,16 +2718,37 @@ async function logChannelError(company, channel, err) {
   }
 }
 
-async function run() {
-  console.log('\nPaige agent running...\n');
-  CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
-  if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
-  await ensurePendingCommentsLinkedInColumns();
-  if (CLIENT_ID === 2 && !CLIENT_CONFIG.facebook_url) {
-    console.log('MSHI Facebook page is not connected yet; Paige will still queue Facebook, Google Business, and blog drafts for approval.');
+async function run(options = {}) {
+  const requestedClientId = Number(options.client_id || options.clientId || CLI_OPTIONS.client_id || CLIENT_ID);
+  if (requestedClientId !== CLIENT_ID) {
+    throw new Error(`Paige was loaded for client ${CLIENT_ID}, but run() received client ${requestedClientId}. Set ACTIVE_CLIENT_ID before requiring paigeAgent.`);
   }
-  console.log('-- CLEANUP QUERY (run manually in psql to remove existing duplicates) --');
-  console.log(`DELETE FROM pending_comments
+  const dryRun = isTruthyOption(options.dryRun ?? options.dry_run ?? CLI_OPTIONS.dryRun);
+  const requestedChannel = options.channel || CLI_OPTIONS.channel || null;
+  const forcedFormat = options.format || CLI_OPTIONS.format || null;
+  const simulateMiraUnavailable = isTruthyOption(options.simulateMiraUnavailable ?? CLI_OPTIONS.simulateMiraUnavailable);
+  const count = Math.max(1, Math.min(10, Number(options.count || CLI_OPTIONS.count || 1)));
+  if (!dryRun && count !== 1) throw new Error('Paige --count is available only in dry-run mode');
+  if (forcedFormat && !LINKEDIN_FORMATS.includes(forcedFormat)) {
+    throw new Error(`Unknown LinkedIn format: ${forcedFormat}`);
+  }
+  RUN_CONTEXT = { dryRun, forcedFormat, simulateMiraUnavailable, sessionFormats: new Set() };
+
+  console.log(`\nPaige agent running${dryRun ? ' in DRY-RUN mode' : ''}...\n`);
+  try {
+    CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
+    if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
+    if (CLIENT_ID === ANCHOR_CLIENT_ID && !dryRun) {
+      console.log('[Paige] Anchor remains Scout-only; production content generation is disabled.');
+      return { success: false, skipped: true, reason: 'anchor_dry_run_only', client_id: CLIENT_ID };
+    }
+    if (!dryRun) await ensurePendingCommentsLinkedInColumns();
+    if (CLIENT_ID === 2 && !CLIENT_CONFIG.facebook_url) {
+      console.log('MSHI Facebook page is not connected yet; Paige will still queue Facebook, Google Business, and blog drafts for approval.');
+    }
+    if (!dryRun) {
+      console.log('-- CLEANUP QUERY (run manually in psql to remove existing duplicates) --');
+      console.log(`DELETE FROM pending_comments
 WHERE id NOT IN (
   SELECT DISTINCT ON (channel, post_content, author_name) id
   FROM pending_comments
@@ -2154,11 +2756,11 @@ WHERE id NOT IN (
   ORDER BY channel, post_content, author_name, created_at DESC
 )
 AND status = 'pending';`);
-  console.log('------------------------------------------------------------------------\n');
+      console.log('------------------------------------------------------------------------\n');
+    }
 
-  try {
     const allClients = await getActiveClients();
-    const rejectedPulseforgePending = await rejectPendingPulseforgeApprovals(allClients);
+    const rejectedPulseforgePending = dryRun ? 0 : await rejectPendingPulseforgeApprovals(allClients);
     if (rejectedPulseforgePending) {
       console.log(`[Paige] Rejected ${rejectedPulseforgePending} pending Pulseforge approval(s) before regenerating.`);
     }
@@ -2166,7 +2768,7 @@ AND status = 'pending';`);
     const clients = getGenerationClients(allClients);
     console.log(`Found ${clients.length} client${clients.length !== 1 ? 's' : ''}.\n`);
 
-    const regenerateResult = await processRegenerateTriggers();
+    const regenerateResult = dryRun ? { triggers: 0, regenerated: 0 } : await processRegenerateTriggers();
     if (regenerateResult.triggers) {
       console.log(`[Paige] Regenerate pass: ${regenerateResult.regenerated} post(s) from ${regenerateResult.triggers} trigger(s)\n`);
     }
@@ -2180,12 +2782,13 @@ AND status = 'pending';`);
         max_regenerate_triggers: regenerateResult.triggers,
         max_regenerated: regenerateResult.regenerated,
       });
-      return;
+      return { success: true, dry_run: dryRun, client_id: CLIENT_ID, outputs: [] };
     }
 
     let generated = 0;
     const channelsFailed = [];
     const channelsQueued = [];
+    const outputs = [];
 
     for (const company of clients) {
       const stillActive = await getClientConfig(CLIENT_ID);
@@ -2193,7 +2796,15 @@ AND status = 'pending';`);
         throw new Error(`[Paige] Client ${CLIENT_ID} deactivated mid-run — aborting`);
       }
 
-      for (const channel of getChannelsForCompany(company)) {
+      const allowedChannels = getChannelsForCompany(company);
+      if (requestedChannel && !allowedChannels.includes(requestedChannel)) {
+        throw new Error(`Channel ${requestedChannel} is not available for client ${CLIENT_ID}`);
+      }
+      const channels = requestedChannel
+        ? Array.from({ length: count }, () => requestedChannel)
+        : allowedChannels;
+
+      for (const channel of channels) {
         const contentType = await pickContentType(company.name, channel, company.id);
         console.log(`${company.name} — ${channel} — ${contentType}`);
 
@@ -2204,8 +2815,22 @@ AND status = 'pending';`);
             continue;
           }
           const content = postResult.content;
-          const id = await saveToPendingApprovals(company, content, contentType, channel, postResult.meta);
-          if (id) {
+          if (postResult.meta?.format) RUN_CONTEXT.sessionFormats.add(postResult.meta.format);
+          if (dryRun) {
+            outputs.push({
+              client_id: CLIENT_ID,
+              company: company.name,
+              channel,
+              content_type: contentType,
+              content,
+              quality: postResult.quality,
+              meta: postResult.meta || null,
+            });
+            generated++;
+            console.log(`\n--- DRY RUN: ${company.name} / ${channel} ---\n${content}\n--- END DRY RUN ---\n`);
+          } else {
+            const id = await saveToPendingApprovals(company, content, contentType, channel, postResult.meta);
+            if (!id) continue;
             await logQualityScore(channel, postResult.quality, postResult.regenerated, content, postResult.regenerationAttempts);
             console.log(`  ✓ queued (${id.slice(0, 8)})\n`);
             generated++;
@@ -2217,7 +2842,7 @@ AND status = 'pending';`);
           await logChannelError(company, channel, err);
         }
 
-        await new Promise(r => setTimeout(r, 1500));
+        if (!dryRun) await new Promise(r => setTimeout(r, 1500));
       }
     }
 
@@ -2230,18 +2855,47 @@ AND status = 'pending';`);
       max_regenerate_triggers: regenerateResult.triggers,
       max_regenerated: regenerateResult.regenerated,
     });
-    console.log(`\nPaige complete — ${generated} post${generated !== 1 ? 's' : ''} queued, ${channelsFailed.length} channel${channelsFailed.length !== 1 ? 's' : ''} failed.`);
+    console.log(`\nPaige complete — ${generated} post${generated !== 1 ? 's' : ''} ${dryRun ? 'generated without saving' : 'queued'}, ${channelsFailed.length} channel${channelsFailed.length !== 1 ? 's' : ''} failed.`);
     if (channelsFailed.length) console.log(`  Failed: ${channelsFailed.join(', ')}`);
+    return {
+      success: channelsFailed.length === 0,
+      dry_run: dryRun,
+      client_id: CLIENT_ID,
+      posts_generated: generated,
+      channels_failed: channelsFailed,
+      outputs,
+    };
   } catch (err) {
     console.error('Paige error:', err.message);
     await logRun('failed', { error: err.message }).catch(() => {});
+    return { success: false, dry_run: dryRun, client_id: CLIENT_ID, error: err.message, outputs: [] };
   }
 }
 
-module.exports = { run };
+module.exports = {
+  run,
+  _test: {
+    getBrandForChannel,
+    buildLinkedInRules,
+    buildUniversalWritingRules,
+    validateUniversalDraft,
+    validateLinkedInDraft,
+    validateGroundedTimeClaims,
+    validateAnchorClaims,
+    validatePulseforgeClaims,
+    usesMiraGrounding,
+    buildMiraGroundingBlock,
+    linkedInFormatWeight,
+    chooseLinkedInFormat,
+    hasMiraSourceAnchor,
+    LINKEDIN_FORMATS,
+  },
+};
 
 if (require.main === module) {
-  run().catch(err => {
+  run(CLI_OPTIONS).then(result => {
+    if (!result?.success) process.exitCode = 1;
+  }).catch(err => {
     console.error('[Paige] Fatal error:', err.message);
     process.exit(1);
   });
