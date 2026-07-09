@@ -5,6 +5,7 @@ const { randomUUID } = require('crypto');
 const pool = require('./db');
 const { getRuntimeClientId } = require('./utils/clientContext');
 const { reportAgentRun } = require('./utils/agentObservability');
+const { OPEN_SOURCE, ensureOpenSignalSchema } = require('./utils/openSignalGate');
 
 const AGENT_NAME = 'warm_routing';
 const CLIENT_ID = getRuntimeClientId();
@@ -254,6 +255,7 @@ async function isWarmRoutingSeeded(clientId) {
 }
 
 async function getWarmProspects(clientId) {
+  await ensureOpenSignalSchema(pool);
   const { rows } = await pool.query(`
     SELECT
       p.id,
@@ -299,7 +301,7 @@ async function getWarmProspects(clientId) {
         FROM (
           SELECT
             CASE
-              WHEN ee.event_type IN ('opened', 'open') THEN 'open'
+              WHEN ee.event_type IN ('opened', 'open') AND ee.open_source = $2::open_source THEN 'open'
               WHEN ee.event_type IN ('clicked', 'click') THEN 'click'
             END AS kind,
             'email_event:' || ee.id::text AS event_key,
@@ -310,30 +312,50 @@ async function getWarmProspects(clientId) {
             AND LOWER(ee.recipient_email) = LOWER(p.email)
             AND ee.event_type IN ('opened', 'open', 'clicked', 'click')
             AND ee.event_at >= NOW() - INTERVAL '24 hours'
-
-          UNION ALL
-
-          SELECT
-            CASE
-              WHEN t.action_type IN ('open', 'email_opened') THEN 'open'
-              WHEN t.action_type IN ('click', 'email_clicked') THEN 'click'
-            END AS kind,
-            'touchpoint:' || t.id::text AS event_key,
-            COALESCE(NULLIF(t.external_ref, ''), t.id::text) AS message_key,
-            t.created_at AS occurred_at
-          FROM touchpoints t
-          WHERE t.client_id = p.client_id
-            AND t.prospect_id = p.id
-            AND t.action_type IN ('open', 'email_opened', 'click', 'email_clicked')
-            AND t.created_at >= NOW() - INTERVAL '24 hours'
+            AND (
+              EXISTS (
+                SELECT 1
+                FROM email_events sent
+                WHERE sent.client_id = ee.client_id
+                  AND sent.prospect_id = ee.prospect_id
+                  AND sent.event_type IN ('sent', 'delivered')
+                  AND (
+                    (ee.brevo_message_id IS NOT NULL AND sent.brevo_message_id = ee.brevo_message_id)
+                    OR (
+                      ee.brevo_message_id IS NULL
+                      AND LOWER(sent.recipient_email) = LOWER(ee.recipient_email)
+                      AND sent.subject_line IS NOT DISTINCT FROM ee.subject_line
+                      AND sent.event_at <= ee.event_at
+                    )
+                  )
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM agent_log al
+                WHERE al.client_id = ee.client_id
+                  AND al.prospect_id = ee.prospect_id
+                  AND al.agent_name = 'emmett'
+                  AND al.action = 'email_sent'
+                  AND (
+                    (ee.brevo_message_id IS NOT NULL AND al.payload->>'message_id' = ee.brevo_message_id)
+                    OR (
+                      ee.brevo_message_id IS NULL
+                      AND al.payload->>'subject' IS NOT DISTINCT FROM ee.subject_line
+                      AND al.ran_at <= ee.event_at
+                    )
+                  )
+              )
+            )
+            AND (
+              ee.event_type IN ('clicked', 'click')
+              OR ee.open_source = $2::open_source
+            )
             AND NOT EXISTS (
               SELECT 1
-              FROM email_events mirrored
-              WHERE mirrored.client_id = t.client_id
-                AND mirrored.prospect_id = t.prospect_id
-                AND COALESCE(mirrored.brevo_message_id, '') = COALESCE(t.external_ref, '')
-                AND mirrored.event_type IN ('opened', 'open', 'clicked', 'click')
-                AND mirrored.event_at >= NOW() - INTERVAL '24 hours'
+              FROM email_events suppressed
+              WHERE suppressed.id = ee.id
+                AND suppressed.event_type IN ('opened', 'open')
+                AND suppressed.open_source <> $2::open_source
             )
         ) raw_events
         WHERE kind IS NOT NULL
@@ -372,7 +394,7 @@ async function getWarmProspects(clientId) {
       )
     ORDER BY p.icp_score DESC NULLS LAST, p.created_at DESC
     LIMIT 500
-  `, [clientId]);
+  `, [clientId, OPEN_SOURCE.HUMAN]);
   return rows;
 }
 

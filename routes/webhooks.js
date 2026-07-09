@@ -15,6 +15,7 @@ const {
   internalEventType,
   recipientEmail,
 } = require('../utils/brevoEvents');
+const { OPEN_SOURCE, isOpenOrClickEventType } = require('../utils/openSignalGate');
 const { ensureMiraSchema } = require('../utils/miraSchema');
 const {
   VALID_MIRA_CATEGORIES,
@@ -426,9 +427,44 @@ async function checkAndUpdateWarmStatus(prospectId, email, clientId) {
 
     const clickRes = await pool.query(`
       SELECT COUNT(*)::int AS clicks_all
-      FROM touchpoints
-      WHERE prospect_id = $1 AND client_id = $2 AND channel = 'email'
-        AND action_type = 'email_clicked'
+      FROM email_events ee
+      WHERE ee.prospect_id = $1
+        AND ee.client_id = $2
+        AND ee.event_type IN ('clicked', 'click')
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM email_events sent
+            WHERE sent.client_id = ee.client_id
+              AND sent.prospect_id = ee.prospect_id
+              AND sent.event_type IN ('sent', 'delivered')
+              AND (
+                (ee.brevo_message_id IS NOT NULL AND sent.brevo_message_id = ee.brevo_message_id)
+                OR (
+                  ee.brevo_message_id IS NULL
+                  AND LOWER(sent.recipient_email) = LOWER(ee.recipient_email)
+                  AND sent.subject_line IS NOT DISTINCT FROM ee.subject_line
+                  AND sent.event_at <= ee.event_at
+                )
+              )
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM agent_log al
+            WHERE al.client_id = ee.client_id
+              AND al.prospect_id = ee.prospect_id
+              AND al.agent_name = 'emmett'
+              AND al.action = 'email_sent'
+              AND (
+                (ee.brevo_message_id IS NOT NULL AND al.payload->>'message_id' = ee.brevo_message_id)
+                OR (
+                  ee.brevo_message_id IS NULL
+                  AND al.payload->>'subject' IS NOT DISTINCT FROM ee.subject_line
+                  AND al.ran_at <= ee.event_at
+                )
+              )
+          )
+        )
     `, [prospectId, clientId]);
     const clicks = Number(clickRes.rows[0]?.clicks_all || 0);
     const gate = await qualifyingOpenSignal(prospectId, clientId);
@@ -517,6 +553,10 @@ async function processBrevoEventSideEffects(result, payload) {
   if (!result.inserted || !result.prospect_id || !result.client_id) return;
   const actionType = actionTypeForEmailEvent(result.event_type);
   if (!actionType) return;
+  if (isOpenOrClickEventType(result.event_type) && result.has_corresponding_send === false) {
+    console.warn(`[Brevo] Suppressed ${result.event_type} side effects for zero-send prospect_id=${result.prospect_id} client_id=${result.client_id}`);
+    return;
+  }
 
   const prospect = await loadProspectForBrevoSideEffects(result.prospect_id, result.client_id);
   if (!prospect) return;
@@ -530,7 +570,12 @@ async function processBrevoEventSideEffects(result, payload) {
     brevo_id: payload.id || null,
     message_id: messageId,
     date: payload.date || null,
+    open_source: result.open_source || null,
+    open_source_reason: result.open_source_reason || null,
   });
+  const effectiveActionType = actionType === 'email_opened' && result.open_source !== OPEN_SOURCE.HUMAN
+    ? `email_opened_${result.open_source || OPEN_SOURCE.UNKNOWN}`
+    : actionType;
 
   await pool.query(`
     INSERT INTO touchpoints
@@ -538,14 +583,14 @@ async function processBrevoEventSideEffects(result, payload) {
     VALUES ($1, 'email', $2, $3, $4, 'neutral', $5, $6)
   `, [
     prospect.id,
-    actionType,
+    effectiveActionType,
     payload.subject || null,
     outcomeJson,
     messageId,
     prospect.client_id,
   ]);
 
-  if (actionType === 'email_opened') {
+  if (effectiveActionType === 'email_opened') {
     const gate = await qualifyingOpenSignal(prospect.id, prospect.client_id);
 
     if (gate.qualifies) {
@@ -624,7 +669,7 @@ async function processBrevoEventSideEffects(result, payload) {
     }
   }
 
-  if (['email_bounced', 'email_spam', 'email_unsubscribed'].includes(actionType)) {
+  if (['email_bounced', 'email_spam', 'email_unsubscribed'].includes(effectiveActionType)) {
     await pool.query(
       `UPDATE prospects
        SET do_not_contact = true,
@@ -636,11 +681,11 @@ async function processBrevoEventSideEffects(result, payload) {
     console.log(`[Brevo] ${email} marked do_not_contact and dead (${result.event_type})`);
   }
 
-  if (['email_opened', 'email_clicked'].includes(actionType)) {
+  if (['email_opened', 'email_clicked'].includes(effectiveActionType)) {
     await checkAndUpdateWarmStatus(prospect.id, email, prospect.client_id);
   }
 
-  if (actionType === 'email_clicked') {
+  if (effectiveActionType === 'email_clicked') {
     await depositWarmSignalAction({
       prospect_id: prospect.id,
       client_id: prospect.client_id,
@@ -652,8 +697,8 @@ async function processBrevoEventSideEffects(result, payload) {
     });
   }
 
-  if (['email_opened', 'email_clicked', 'email_bounced', 'email_unsubscribed', 'email_spam'].includes(actionType)) {
-    await recalcICPAfterEmailEvent(prospect.id, prospect.client_id, actionType);
+  if (['email_opened', 'email_clicked', 'email_bounced', 'email_unsubscribed', 'email_spam'].includes(effectiveActionType)) {
+    await recalcICPAfterEmailEvent(prospect.id, prospect.client_id, effectiveActionType);
   }
 }
 

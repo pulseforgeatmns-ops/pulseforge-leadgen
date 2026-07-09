@@ -8,6 +8,7 @@ const path = require('path');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { recalculateICP } = require('./utils/icpScoring');
 const { reportAgentRun } = require('./utils/agentObservability');
+const { OPEN_SOURCE, ensureOpenSignalSchema } = require('./utils/openSignalGate');
 
 const AGENT_NAME = 'riley';
 const CLIENT_ID = getRuntimeClientId();
@@ -864,14 +865,49 @@ async function hasOutboundEmail(prospectId) {
 
 async function getTotalEmailOpens(prospectId) {
   const pool = require('./db');
+  await ensureOpenSignalSchema(pool);
   const res = await pool.query(`
     SELECT COUNT(*)::int AS total_opens
-    FROM touchpoints
-    WHERE prospect_id = $1
-      AND client_id = $2
-      AND channel = 'email'
-      AND action_type IN ('open', 'email_opened')
-  `, [prospectId, CLIENT_ID]);
+    FROM email_events ee
+    WHERE ee.prospect_id = $1
+      AND ee.client_id = $2
+      AND ee.event_type IN ('opened', 'open')
+      AND ee.open_source = $3::open_source
+      AND (
+        EXISTS (
+          SELECT 1
+          FROM email_events sent
+          WHERE sent.client_id = ee.client_id
+            AND sent.prospect_id = ee.prospect_id
+            AND sent.event_type IN ('sent', 'delivered')
+            AND (
+              (ee.brevo_message_id IS NOT NULL AND sent.brevo_message_id = ee.brevo_message_id)
+              OR (
+                ee.brevo_message_id IS NULL
+                AND LOWER(sent.recipient_email) = LOWER(ee.recipient_email)
+                AND sent.subject_line IS NOT DISTINCT FROM ee.subject_line
+                AND sent.event_at <= ee.event_at
+              )
+            )
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM agent_log al
+          WHERE al.client_id = ee.client_id
+            AND al.prospect_id = ee.prospect_id
+            AND al.agent_name = 'emmett'
+            AND al.action = 'email_sent'
+            AND (
+              (ee.brevo_message_id IS NOT NULL AND al.payload->>'message_id' = ee.brevo_message_id)
+              OR (
+                ee.brevo_message_id IS NULL
+                AND al.payload->>'subject' IS NOT DISTINCT FROM ee.subject_line
+                AND al.ran_at <= ee.event_at
+              )
+            )
+        )
+      )
+  `, [prospectId, CLIENT_ID, OPEN_SOURCE.HUMAN]);
   return res.rows[0]?.total_opens || 0;
 }
 
@@ -1203,6 +1239,7 @@ function hasPricingIntent(body) {
 
 async function getWarmSignalActionContext(prospectId, clientId = CLIENT_ID, fallback = {}) {
   const pool = require('./db');
+  await ensureOpenSignalSchema(pool);
   const res = await pool.query(`
     SELECT
       p.id,
@@ -1220,11 +1257,45 @@ async function getWarmSignalActionContext(prospectId, clientId = CLIENT_ID, fall
     LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     LEFT JOIN LATERAL (
       SELECT COUNT(*)::int AS total_opens
-      FROM touchpoints t
-      WHERE t.prospect_id = p.id
-        AND t.client_id = p.client_id
-        AND t.channel = 'email'
-        AND t.action_type IN ('open', 'email_opened')
+      FROM email_events ee
+      WHERE ee.prospect_id = p.id
+        AND ee.client_id = p.client_id
+        AND ee.event_type IN ('opened', 'open')
+        AND ee.open_source = $3::open_source
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM email_events sent
+            WHERE sent.client_id = ee.client_id
+              AND sent.prospect_id = ee.prospect_id
+              AND sent.event_type IN ('sent', 'delivered')
+              AND (
+                (ee.brevo_message_id IS NOT NULL AND sent.brevo_message_id = ee.brevo_message_id)
+                OR (
+                  ee.brevo_message_id IS NULL
+                  AND LOWER(sent.recipient_email) = LOWER(ee.recipient_email)
+                  AND sent.subject_line IS NOT DISTINCT FROM ee.subject_line
+                  AND sent.event_at <= ee.event_at
+                )
+              )
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM agent_log al
+            WHERE al.client_id = ee.client_id
+              AND al.prospect_id = ee.prospect_id
+              AND al.agent_name = 'emmett'
+              AND al.action = 'email_sent'
+              AND (
+                (ee.brevo_message_id IS NOT NULL AND al.payload->>'message_id' = ee.brevo_message_id)
+                OR (
+                  ee.brevo_message_id IS NULL
+                  AND al.payload->>'subject' IS NOT DISTINCT FROM ee.subject_line
+                  AND al.ran_at <= ee.event_at
+                )
+              )
+          )
+        )
     ) eng ON TRUE
     LEFT JOIN LATERAL (
       SELECT content_summary
@@ -1239,7 +1310,7 @@ async function getWarmSignalActionContext(prospectId, clientId = CLIENT_ID, fall
     WHERE p.id = $1
       AND p.client_id = $2
     LIMIT 1
-  `, [prospectId, clientId]);
+  `, [prospectId, clientId, OPEN_SOURCE.HUMAN]);
 
   const row = res.rows[0];
   if (!row) return null;
@@ -1779,18 +1850,53 @@ const QUALIFYING_OPEN_MIN_SPREAD_MINUTES = 5;
 async function qualifyingOpenSignal(prospectId, clientId = CLIENT_ID) {
   if (!prospectId) return { qualifies: false, total_opens: 0, spread_minutes: 0 };
   const pool = require('./db');
+  await ensureOpenSignalSchema(pool);
   const res = await pool.query(`
     SELECT
       COUNT(*)::int AS total_opens,
-      MIN(created_at) AS first_open,
-      MAX(created_at) AS last_open,
-      EXTRACT(EPOCH FROM (MAX(created_at) - MIN(created_at))) / 60 AS spread_minutes
-    FROM touchpoints
-    WHERE prospect_id = $1
-      AND client_id = $2
-      AND channel = 'email'
-      AND action_type IN ('open', 'email_opened')
-  `, [prospectId, clientId]);
+      MIN(event_at) AS first_open,
+      MAX(event_at) AS last_open,
+      EXTRACT(EPOCH FROM (MAX(event_at) - MIN(event_at))) / 60 AS spread_minutes
+    FROM email_events ee
+    WHERE ee.prospect_id = $1
+      AND ee.client_id = $2
+      AND ee.event_type IN ('opened', 'open')
+      AND ee.open_source = $3::open_source
+      AND (
+        EXISTS (
+          SELECT 1
+          FROM email_events sent
+          WHERE sent.client_id = ee.client_id
+            AND sent.prospect_id = ee.prospect_id
+            AND sent.event_type IN ('sent', 'delivered')
+            AND (
+              (ee.brevo_message_id IS NOT NULL AND sent.brevo_message_id = ee.brevo_message_id)
+              OR (
+                ee.brevo_message_id IS NULL
+                AND LOWER(sent.recipient_email) = LOWER(ee.recipient_email)
+                AND sent.subject_line IS NOT DISTINCT FROM ee.subject_line
+                AND sent.event_at <= ee.event_at
+              )
+            )
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM agent_log al
+          WHERE al.client_id = ee.client_id
+            AND al.prospect_id = ee.prospect_id
+            AND al.agent_name = 'emmett'
+            AND al.action = 'email_sent'
+            AND (
+              (ee.brevo_message_id IS NOT NULL AND al.payload->>'message_id' = ee.brevo_message_id)
+              OR (
+                ee.brevo_message_id IS NULL
+                AND al.payload->>'subject' IS NOT DISTINCT FROM ee.subject_line
+                AND al.ran_at <= ee.event_at
+              )
+            )
+        )
+      )
+  `, [prospectId, clientId, OPEN_SOURCE.HUMAN]);
   const row = res.rows[0] || {};
   const total = Number(row.total_opens || 0);
   const spread = Number(row.spread_minutes || 0);

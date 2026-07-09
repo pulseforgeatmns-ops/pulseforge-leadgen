@@ -1,5 +1,12 @@
 const crypto = require('crypto');
 const pool = require('../db');
+const {
+  classifyOpenSource,
+  ensureOpenSignalSchema,
+  isOpenOrClickEventType,
+  logZeroSendSuppression,
+  markBatchProxyEvents,
+} = require('./openSignalGate');
 
 const BREVO_EVENT_MAP = {
   request: 'sent',
@@ -260,7 +267,7 @@ function parseJsonMaybe(value) {
 async function findMatchingSend({ email, clientId, messageId, subject }) {
   if (messageId) {
     const byMessage = await pool.query(`
-      SELECT payload, client_id, prospect_id
+      SELECT payload, client_id, prospect_id, ran_at
       FROM agent_log
       WHERE agent_name = 'emmett'
         AND action = 'email_sent'
@@ -274,7 +281,7 @@ async function findMatchingSend({ email, clientId, messageId, subject }) {
   const params = [email, subject || null];
   if (clientId) params.push(clientId);
   const byEmail = await pool.query(`
-    SELECT al.payload, al.client_id, al.prospect_id
+    SELECT al.payload, al.client_id, al.prospect_id, al.ran_at
     FROM agent_log al
     JOIN prospects p ON p.id = al.prospect_id AND p.client_id = al.client_id
     WHERE al.agent_name = 'emmett'
@@ -347,6 +354,7 @@ async function logBrevoEvent({ eventId, eventType, email, prospectId, clientId, 
 }
 
 async function insertBrevoEvent(rawPayload = {}) {
+  await ensureOpenSignalSchema(pool);
   const payload = rawPayload || {};
   const recipient = recipientEmail(payload);
   const type = internalEventType(payload);
@@ -376,6 +384,18 @@ async function insertBrevoEvent(rawPayload = {}) {
   const tags = Array.isArray(payload.tags) ? payload.tags : [];
   const sequence = textValue(metadataValue(payload, 'sequence') || sendPayload.sequence || tags[0]);
   const step = parseStep(metadataValue(payload, 'step') || sendPayload.step || tags.find(tag => /^step_/i.test(String(tag))));
+  const occurredAt = eventAt(payload);
+  const openClassification = await classifyOpenSource(pool, {
+    eventType: type,
+    eventAt: occurredAt,
+    payload,
+    prospectId: prospect?.id || null,
+    clientId: finalClientId,
+    recipientEmail: recipient,
+    messageId,
+    subject,
+    sendMatch,
+  });
 
   const insert = await pool.query(`
     INSERT INTO email_events (
@@ -390,12 +410,18 @@ async function insertBrevoEvent(rawPayload = {}) {
       step,
       brevo_message_id,
       raw_payload,
-      event_at
+      event_at,
+      open_source,
+      open_source_reason,
+      open_source_classified_at,
+      user_agent,
+      ip_address
     )
-    SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12
+    SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12,
+      $13::open_source, $14, CASE WHEN $14::text IS NULL THEN NULL ELSE NOW() END, $15, $16
     WHERE NOT (
       (
-        $13::boolean
+        $17::boolean
         AND $10::text IS NOT NULL
         AND EXISTS (
           SELECT 1
@@ -412,9 +438,20 @@ async function insertBrevoEvent(rawPayload = {}) {
       )
     )
     ON CONFLICT (event_id) DO UPDATE
-      SET event_type = EXCLUDED.event_type
+      SET event_type = EXCLUDED.event_type,
+          open_source = CASE
+            WHEN EXCLUDED.open_source = 'unknown'::open_source THEN email_events.open_source
+            ELSE EXCLUDED.open_source
+          END,
+          open_source_reason = COALESCE(EXCLUDED.open_source_reason, email_events.open_source_reason),
+          open_source_classified_at = COALESCE(EXCLUDED.open_source_classified_at, email_events.open_source_classified_at),
+          user_agent = COALESCE(EXCLUDED.user_agent, email_events.user_agent),
+          ip_address = COALESCE(EXCLUDED.ip_address, email_events.ip_address)
       WHERE email_events.event_type IS DISTINCT FROM EXCLUDED.event_type
-    RETURNING id, (xmax = 0) AS inserted
+        OR email_events.open_source IS DISTINCT FROM EXCLUDED.open_source
+        OR email_events.user_agent IS DISTINCT FROM EXCLUDED.user_agent
+        OR email_events.ip_address IS DISTINCT FROM EXCLUDED.ip_address
+    RETURNING id, open_source::text AS open_source, open_source_reason, (xmax = 0) AS inserted
   `, [
     id,
     prospect?.id || null,
@@ -427,12 +464,48 @@ async function insertBrevoEvent(rawPayload = {}) {
     step,
     messageId,
     JSON.stringify(payload),
-    eventAt(payload),
+    occurredAt,
+    openClassification.openSource,
+    openClassification.reason,
+    openClassification.userAgent,
+    openClassification.ipAddress,
     SINGLETON_MESSAGE_EVENT_TYPES.has(type),
   ]);
 
   const inserted = insert.rows[0]?.inserted === true;
   const updated = insert.rowCount > 0 && !inserted;
+  let openSource = insert.rows[0]?.open_source || openClassification.openSource;
+  let openSourceReason = insert.rows[0]?.open_source_reason || openClassification.reason || null;
+  if (insert.rows[0]?.id && inserted && openClassification.source) {
+    const batchUpdated = await markBatchProxyEvents(pool, {
+      clientId: finalClientId,
+      eventAt: occurredAt,
+      source: openClassification.source,
+      insertedEventId: insert.rows[0].id,
+    });
+    if (batchUpdated) {
+      const current = await pool.query(
+        'SELECT open_source::text AS open_source, open_source_reason FROM email_events WHERE id = $1',
+        [insert.rows[0].id]
+      );
+      openSource = current.rows[0]?.open_source || openSource;
+      openSourceReason = current.rows[0]?.open_source_reason || openSourceReason;
+    }
+  }
+
+  if (inserted && isOpenOrClickEventType(type) && !sendMatch && !openClassification.hasSend) {
+    await logZeroSendSuppression(pool, {
+      source: 'riley',
+      eventId: id,
+      eventType: type,
+      prospectId: prospect?.id || null,
+      clientId: finalClientId,
+      recipientEmail: recipient,
+      messageId,
+      subject,
+    });
+  }
+
   await logBrevoEvent({
     eventId: id,
     eventType: type,
@@ -452,6 +525,9 @@ async function insertBrevoEvent(rawPayload = {}) {
     prospect_id: prospect?.id || null,
     client_id: finalClientId,
     sending_domain: domain,
+    open_source: openSource,
+    open_source_reason: openSourceReason,
+    has_corresponding_send: Boolean(sendMatch || openClassification.hasSend),
   };
 }
 

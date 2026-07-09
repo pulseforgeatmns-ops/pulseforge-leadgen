@@ -37,6 +37,7 @@
 
 const sharedPool = require('../db');
 const { getClientConfig, getRuntimeClientId } = require('./clientContext');
+const { OPEN_SOURCE, ensureOpenSignalSchema } = require('./openSignalGate');
 
 // ── TABLE MIGRATION ──────────────────────────────────────────────────────────
 // Idempotent. Wired into server.js startup alongside the other ensure* helpers,
@@ -193,10 +194,91 @@ function computeBaseScore(prospect, clientConfig) {
 
 // ── ENGAGEMENT + PENALTIES ─────────────────────────────────────────────────
 async function gatherEngagement(prospectId, clientId) {
+  await ensureOpenSignalSchema(sharedPool);
+  const email = await sharedPool.query(`
+    SELECT
+      COUNT(*) FILTER (
+        WHERE ee.event_type IN ('opened', 'open')
+          AND ee.open_source = $3::open_source
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM email_events sent
+              WHERE sent.client_id = ee.client_id
+                AND sent.prospect_id = ee.prospect_id
+                AND sent.event_type IN ('sent', 'delivered')
+                AND (
+                  (ee.brevo_message_id IS NOT NULL AND sent.brevo_message_id = ee.brevo_message_id)
+                  OR (
+                    ee.brevo_message_id IS NULL
+                    AND LOWER(sent.recipient_email) = LOWER(ee.recipient_email)
+                    AND sent.subject_line IS NOT DISTINCT FROM ee.subject_line
+                    AND sent.event_at <= ee.event_at
+                  )
+                )
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM agent_log al
+              WHERE al.client_id = ee.client_id
+                AND al.prospect_id = ee.prospect_id
+                AND al.agent_name = 'emmett'
+                AND al.action = 'email_sent'
+                AND (
+                  (ee.brevo_message_id IS NOT NULL AND al.payload->>'message_id' = ee.brevo_message_id)
+                  OR (
+                    ee.brevo_message_id IS NULL
+                    AND al.payload->>'subject' IS NOT DISTINCT FROM ee.subject_line
+                    AND al.ran_at <= ee.event_at
+                  )
+                )
+            )
+          )
+      )::int AS opens,
+      COUNT(*) FILTER (
+        WHERE ee.event_type IN ('clicked', 'click')
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM email_events sent
+              WHERE sent.client_id = ee.client_id
+                AND sent.prospect_id = ee.prospect_id
+                AND sent.event_type IN ('sent', 'delivered')
+                AND (
+                  (ee.brevo_message_id IS NOT NULL AND sent.brevo_message_id = ee.brevo_message_id)
+                  OR (
+                    ee.brevo_message_id IS NULL
+                    AND LOWER(sent.recipient_email) = LOWER(ee.recipient_email)
+                    AND sent.subject_line IS NOT DISTINCT FROM ee.subject_line
+                    AND sent.event_at <= ee.event_at
+                  )
+                )
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM agent_log al
+              WHERE al.client_id = ee.client_id
+                AND al.prospect_id = ee.prospect_id
+                AND al.agent_name = 'emmett'
+                AND al.action = 'email_sent'
+                AND (
+                  (ee.brevo_message_id IS NOT NULL AND al.payload->>'message_id' = ee.brevo_message_id)
+                  OR (
+                    ee.brevo_message_id IS NULL
+                    AND al.payload->>'subject' IS NOT DISTINCT FROM ee.subject_line
+                    AND al.ran_at <= ee.event_at
+                  )
+                )
+            )
+          )
+      )::int AS clicks
+    FROM email_events ee
+    WHERE ee.prospect_id = $1
+      AND ee.client_id = $2
+  `, [prospectId, clientId, OPEN_SOURCE.HUMAN]);
+
   const touch = await sharedPool.query(`
     SELECT
-      COUNT(*) FILTER (WHERE channel = 'email' AND action_type IN ('open', 'email_opened'))::int                              AS opens,
-      COUNT(*) FILTER (WHERE channel = 'email' AND action_type = 'email_clicked')::int                                        AS clicks,
       COUNT(*) FILTER (WHERE action_type IN ('inbound_reply', 'inbound', 'reply', 'email_reply'))::int                        AS replies,
       COUNT(*) FILTER (WHERE action_type = 'email_bounced')::int                                                              AS hard_bounces,
       COUNT(*) FILTER (WHERE action_type IN ('email_unsubscribed', 'unsubscribed', 'email_spam'))::int                        AS unsubscribes,
@@ -249,10 +331,11 @@ async function gatherEngagement(prospectId, clientId) {
   `, [prospectId, clientId]).catch(() => ({ rows: [{ has_activity: false }] }));
 
   const row = touch.rows[0] || {};
+  const emailRow = email.rows[0] || {};
   const dispositionRow = dispositions.rows[0] || {};
   return {
-    opens: Number(row.opens || 0),
-    clicks: Number(row.clicks || 0),
+    opens: Number(emailRow.opens || 0),
+    clicks: Number(emailRow.clicks || 0),
     replies: Number(row.replies || 0),
     hard_bounces: Number(row.hard_bounces || 0),
     unsubscribes: Number(row.unsubscribes || 0),
