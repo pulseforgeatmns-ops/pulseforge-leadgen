@@ -18,6 +18,8 @@ let CLIENT_CONFIG = null;
 let lastDigestSendError = null;
 const CALL_AGENT_KEY = 'c' + 'al';
 const MAX_ACTION_CHANNELS = ['call', 'sms', 'email', 'gbp', 'content'];
+const DIGEST_PATTERN_WINDOW_DAYS = 14;
+const DIGEST_PATTERN_MIN_SENDS = 15;
 const AGENT_DISPLAY_NAMES = {
   [CALL_AGENT_KEY]: 'calling agent',
   sam: 'Sam',
@@ -599,12 +601,12 @@ async function getSystemSnapshot() {
     FROM email_events
     WHERE client_id = $1
       AND COALESCE(subject_line, '') <> ''
-      AND event_at >= NOW() - INTERVAL '90 days'
+      AND event_at >= NOW() - ($2::int * INTERVAL '1 day')
     GROUP BY subject_line
-    HAVING COUNT(*) FILTER (WHERE event_type = 'sent') >= 10
+    HAVING COUNT(*) FILTER (WHERE event_type = 'sent') >= $3::int
     ORDER BY open_rate DESC NULLS LAST, sends DESC
     LIMIT 3
-  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+  `, [CLIENT_ID, DIGEST_PATTERN_WINDOW_DAYS, DIGEST_PATTERN_MIN_SENDS]).catch(() => ({ rows: [] }));
 
   const worstStepsByVertical = await pool.query(`
     WITH rollup AS (
@@ -635,15 +637,15 @@ async function getSystemSnapshot() {
         LIMIT 1
       ) p ON true
       WHERE ee.client_id = $1
-        AND ee.event_at >= NOW() - INTERVAL '90 days'
+        AND ee.event_at >= NOW() - ($2::int * INTERVAL '1 day')
       GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown'), ee.sequence, ee.step
     )
     SELECT DISTINCT ON (vertical)
       vertical, sequence, step, sends, delivered, opens, proxy_opens, open_rate
     FROM rollup
-    WHERE sends > 0 AND vertical <> 'unknown'
+    WHERE sends >= $3::int AND vertical <> 'unknown'
     ORDER BY vertical, open_rate ASC NULLS FIRST, sends DESC
-  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+  `, [CLIENT_ID, DIGEST_PATTERN_WINDOW_DAYS, DIGEST_PATTERN_MIN_SENDS]).catch(() => ({ rows: [] }));
 
   const highPerformingVerticals = await pool.query(`
     WITH rollup AS (
@@ -661,7 +663,7 @@ async function getSystemSnapshot() {
         LIMIT 1
       ) p ON true
       WHERE ee.client_id = $1
-        AND ee.event_at >= NOW() - INTERVAL '90 days'
+        AND ee.event_at >= NOW() - ($2::int * INTERVAL '1 day')
       GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown')
     )
     SELECT
@@ -671,10 +673,10 @@ async function getSystemSnapshot() {
       ROUND(replies::numeric / NULLIF(sends, 0) * 100, 2) AS reply_rate
     FROM rollup
     WHERE vertical <> 'unknown'
-      AND sends > 0
+      AND sends >= $3::int
       AND (replies::numeric / NULLIF(sends, 0)) * 100 > 2
     ORDER BY reply_rate DESC
-  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
+  `, [CLIENT_ID, DIGEST_PATTERN_WINDOW_DAYS, DIGEST_PATTERN_MIN_SENDS]).catch(() => ({ rows: [] }));
 
   const emailVerificationStats = await pool.query(`
     SELECT
@@ -764,8 +766,9 @@ async function getSystemSnapshot() {
     ORDER BY count DESC
   `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
-  const postsNeedingStats = await pool.query(`
+  const bufferPostsNeedingStats = await pool.query(`
     SELECT
+      'buffer' AS stats_source,
       pc.id,
       pc.post_content,
       pc.comment,
@@ -785,7 +788,26 @@ async function getSystemSnapshot() {
     ORDER BY COALESCE(pc.posted_at, pc.created_at) ASC
     LIMIT 10
   `, [CLIENT_ID]).catch(err => {
-    console.warn('[Max] LinkedIn stats-due query skipped:', err.message);
+    console.warn('[Max] LinkedIn Buffer stats-due query skipped:', err.message);
+    return { rows: [] };
+  });
+
+  const nativePostsNeedingStats = await pool.query(`
+    SELECT
+      'native' AS stats_source,
+      id,
+      content_snippet,
+      posted_at,
+      post_url,
+      buffer_post_id AS platform_post_id
+    FROM linkedin_post_stats
+    WHERE client_id = $1
+      AND stats_captured_at IS NULL
+      AND posted_at <= NOW() - INTERVAL '48 hours'
+    ORDER BY posted_at ASC
+    LIMIT 10
+  `, [CLIENT_ID]).catch(err => {
+    console.warn('[Max] LinkedIn native stats-due query skipped:', err.message);
     return { rows: [] };
   });
 
@@ -829,7 +851,10 @@ async function getSystemSnapshot() {
       open_rate_definition: 'unique_recipient_per_delivered',
     },
     unmatchedStatusUpdates: unmatchedStatusUpdates.rows,
-    postsNeedingStats: postsNeedingStats.rows,
+    postsNeedingStats: [
+      ...bufferPostsNeedingStats.rows,
+      ...nativePostsNeedingStats.rows,
+    ],
     contentQuality: contentQuality.rows[0],
     closerMetrics: closerMetrics.rows[0],
     callDispositionStats: callDispositionStats.rows[0],
@@ -1086,7 +1111,7 @@ function formatScoutExpansionSection(report) {
 }
 
 // Weekly email performance section appended to the digest. Surfaces the three
-// asks: top subject lines by open rate (min 10 sends), the worst-performing
+// asks: top subject lines by open rate (minimum sends), the worst-performing
 // sequence step per vertical, and any vertical replying above 2%.
 function formatEmailPerformanceSection(perf) {
   if (!perf) return '';
@@ -1103,7 +1128,7 @@ function formatEmailPerformanceSection(perf) {
   const lines = ['EMAIL PERFORMANCE'];
 
   if (topSubjects.length) {
-    lines.push('Top subject lines by open rate (min 10 sends):');
+    lines.push(`Top subject lines by open rate (min ${DIGEST_PATTERN_MIN_SENDS} sends):`);
     topSubjects.forEach((s, i) => {
       lines.push(`  ${i + 1}. "${s.subject_line}" — ${Number(s.open_rate || 0).toFixed(1)}% open (${s.sends} sends)`);
     });
@@ -1193,11 +1218,23 @@ function linkedinPostUrl(row) {
   return row.post_url || (row.platform_post_id ? `Buffer post ${row.platform_post_id}` : 'no permalink stored');
 }
 
+function linkedinPostedAtLabel(value) {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return 'posted_at unknown';
+  return date.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+}
+
 function formatLinkedInStatsDueSection(posts = []) {
   if (!posts.length) return '';
   const lines = ['Posts needing stats (48h+):'];
   for (const row of posts) {
-    lines.push(`${linkedinPostHook(row)} — ${linkedinPostUrl(row)}`);
+    if (row.stats_source === 'native') {
+      const snippet = row.content_snippet || 'Native LinkedIn post';
+      const url = row.post_url ? ` — ${row.post_url}` : '';
+      lines.push(`${snippet} — ${linkedinPostedAtLabel(row.posted_at)}${url}`);
+    } else {
+      lines.push(`${linkedinPostHook(row)} — ${linkedinPostUrl(row)}`);
+    }
   }
   return lines.join('\n');
 }
@@ -1548,10 +1585,10 @@ async function analyzePatterns({ expansionReport = null } = {}) {
     FROM email_events
     WHERE client_id = $1
       AND COALESCE(subject_line, '') <> ''
-      AND event_at >= NOW() - INTERVAL '90 days'
+      AND event_at >= NOW() - ($2::int * INTERVAL '1 day')
     GROUP BY subject_line
-    HAVING COUNT(*) FILTER (WHERE event_type = 'sent') >= 10
-  `, [CLIENT_ID]);
+    HAVING COUNT(*) FILTER (WHERE event_type = 'sent') > 0
+  `, [CLIENT_ID, DIGEST_PATTERN_WINDOW_DAYS]);
   const subjectFormats = new Map();
   for (const row of subjectRows) {
     const format = classifySubjectFormat(row.subject_line);
@@ -1573,7 +1610,7 @@ async function analyzePatterns({ expansionReport = null } = {}) {
     subjectFormats.set(format, current);
   }
   const subjectFormatRows = [...subjectFormats.values()]
-    .filter(r => r.sends >= 10)
+    .filter(r => r.sends >= DIGEST_PATTERN_MIN_SENDS)
     .map(r => ({
       format: r.format,
       sends: r.sends,
@@ -1623,16 +1660,16 @@ async function analyzePatterns({ expansionReport = null } = {}) {
         LIMIT 1
       ) p ON true
       WHERE ee.client_id = $1
-        AND ee.event_at >= NOW() - INTERVAL '90 days'
+        AND ee.event_at >= NOW() - ($2::int * INTERVAL '1 day')
       GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown'), ee.sequence, ee.step
     )
     SELECT DISTINCT ON (vertical)
       vertical, sequence, step, sends, delivered, opens, proxy_opens, open_rate
     FROM rollup
     WHERE vertical <> 'unknown'
-      AND sends >= 10
+      AND sends >= $3::int
     ORDER BY vertical, open_rate ASC NULLS FIRST
-  `, [CLIENT_ID]);
+  `, [CLIENT_ID, DIGEST_PATTERN_WINDOW_DAYS, DIGEST_PATTERN_MIN_SENDS]);
   weekly.email_performance.worst_steps_by_vertical = worstStepRows;
   const weakStep = worstStepRows
     .filter(r => Number(r.open_rate || 0) < 10)
@@ -1663,16 +1700,16 @@ async function analyzePatterns({ expansionReport = null } = {}) {
         LIMIT 1
       ) p ON true
       WHERE ee.client_id = $1
-        AND ee.event_at >= NOW() - INTERVAL '90 days'
+        AND ee.event_at >= NOW() - ($2::int * INTERVAL '1 day')
       GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown')
     )
     SELECT vertical, sends, replies,
       ROUND(replies::numeric / NULLIF(sends, 0) * 100, 2) AS reply_rate
     FROM rollup
     WHERE vertical <> 'unknown'
-      AND sends >= 10
+      AND sends >= $3::int
     ORDER BY reply_rate DESC
-  `, [CLIENT_ID]);
+  `, [CLIENT_ID, DIGEST_PATTERN_WINDOW_DAYS, DIGEST_PATTERN_MIN_SENDS]);
   weekly.email_performance.vertical_reply_rates = verticalReplyRows;
   const verticalCompare = topVsOthers(verticalReplyRows, 'reply_rate');
   if (verticalCompare.top && verticalCompare.othersAvg > 0 && Number(verticalCompare.top.reply_rate || 0) >= verticalCompare.othersAvg * 2) {
@@ -1696,7 +1733,7 @@ async function analyzePatterns({ expansionReport = null } = {}) {
       WHERE agent_name = 'emmett'
         AND action = 'email_sent'
         AND client_id = $1
-        AND ran_at >= NOW() - INTERVAL '60 days'
+        AND ran_at >= NOW() - ($2::int * INTERVAL '1 day')
     )
     SELECT
       TO_CHAR(s.ran_at, 'FMDay') AS day_name,
@@ -1712,13 +1749,13 @@ async function analyzePatterns({ expansionReport = null } = {}) {
         AND al.prospect_id = s.prospect_id
         AND al.action = 'email_opened'
         AND al.ran_at >= s.ran_at
-        AND al.ran_at < s.ran_at + INTERVAL '14 days'
+        AND al.ran_at < s.ran_at + ($2::int * INTERVAL '1 day')
       LIMIT 1
     ) o ON TRUE
     GROUP BY day_name, dow
-    HAVING COUNT(*) >= 10
+    HAVING COUNT(*) >= $3::int
     ORDER BY open_rate DESC
-  `, [CLIENT_ID]);
+  `, [CLIENT_ID, DIGEST_PATTERN_WINDOW_DAYS, DIGEST_PATTERN_MIN_SENDS]);
   weekly.email_performance.open_rate_by_send_day = openDayRows;
   weekly.email_performance.open_rate_by_send_day_definition = 'per_send_attribution';
   if (openDayRows.length >= 2 && Number(openDayRows[0].open_rate || 0) >= Number(openDayRows[1].open_rate || 0) + 10) {
