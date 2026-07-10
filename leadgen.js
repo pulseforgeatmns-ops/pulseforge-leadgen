@@ -140,6 +140,27 @@ function normalizeSourceMode(value) {
   return String(value || 'default').trim().toLowerCase() === 'linkedin' ? 'linkedin' : 'default';
 }
 
+function formatQueueLocation(location) {
+  const cleaned = sanitizeQueueLocation(location);
+  const match = cleaned.match(/^(.+)\s+([A-Z]{2})$/i);
+  if (!match) return cleaned.replace(/\s+/g, ' ');
+  return `${match[1].replace(/\s+/g, ' ')},${match[2].toUpperCase()}`;
+}
+
+function logScoutCompletionSummary(stats = {}) {
+  const breakdown = stats.skipped_breakdown || {};
+  console.log(
+    `[Scout] client=${CONFIG.clientId} queue_item=${CONFIG.vertical}/${formatQueueLocation(CONFIG.location)} ` +
+    `places_found=${Number(stats.places_found || 0)} ` +
+    `serpapi_found=${Number(stats.serpapi_found || 0)} ` +
+    `deduped=${Number(stats.deduped || breakdown[SCOUT_SKIP_REASONS.DUPLICATE] || 0)} ` +
+    `out_of_area=${Number(breakdown[SCOUT_SKIP_REASONS.OUT_OF_AREA] || 0)} ` +
+    `excluded=${Number(breakdown.excluded_filter || 0)} ` +
+    `saved=${Number(stats.saved || 0)} ` +
+    `parked_rows_skipped=${Number(CONFIG.parkedRowsSkipped || 0)}`
+  );
+}
+
 function scoutDiscoveryMethod(lead) {
   return Array.isArray(lead?.source) && lead.source.includes('google_places') ? 'google_places' : 'serpapi';
 }
@@ -275,6 +296,7 @@ let CONFIG = {
   dryRun:      booleanValue(args['dry-run'] ?? args.dryRun, false),
   maxRequests: positiveInteger(args['max-requests'] || args.maxRequests, 20, 100),
   pageDepth:   positiveInteger(args['page-depth'] || args.pageDepth, 1, 10),
+  parkedRowsSkipped: 0,
   outputCSV:   args.csv       !== 'false',
   outputSheet: args.sheet     !== 'false',
   sheetId:     args.sheetid   || process.env.GOOGLE_SHEET_ID || '',
@@ -508,6 +530,19 @@ function getPlannedLocations(clientId, fallbackLocation, vertical = CONFIG.verti
   if (!cities.length) return [sanitizeQueueLocation(fallbackLocation)];
   const state = plan?.state || CLIENT_CONFIG?.state || sanitizeQueueLocation(fallbackLocation).split(/\s+/).pop() || '';
   return cities.map(city => sanitizeQueueLocation(`${city} ${state}`));
+}
+
+function hasClientScoutPlan(clientId) {
+  return !!getClientScoutPlan(clientId);
+}
+
+function plannedLocationSet(clientId, fallbackLocation, vertical) {
+  return new Set(getPlannedLocations(clientId, fallbackLocation, vertical).map(sanitizeQueueLocation));
+}
+
+function isQueueLocationValidForPlan(clientId, vertical, location) {
+  if (!hasClientScoutPlan(clientId)) return true;
+  return plannedLocationSet(clientId, location, vertical).has(sanitizeQueueLocation(location));
 }
 
 function getSearchQueriesForTarget() {
@@ -1392,6 +1427,7 @@ async function main({ runId = null } = {}) {
   // client (cleaning_buyer) makes Google Places PRIMARY and skips SerpAPI:
   // SerpAPI underperforms on professional offices and has been running dry.
   const placesPrimary = usesPlacesPrimary();
+  const sourceStats = { places_found: 0, serpapi_found: 0 };
   let leads = [];
 
   for (const searchQuery of searchQueries) {
@@ -1401,6 +1437,7 @@ async function main({ runId = null } = {}) {
       console.log(`[Places] Searching: "${searchQuery}"`);
       const placesLeads = (await searchGooglePlaces(searchQuery, '', Math.min(CONFIG.maxResults, 20))).map(lead => ({ ...lead, search_query: searchQuery }));
       console.log(`[Places] Found ${placesLeads.length} results for "${searchQuery}"`);
+      sourceStats.places_found += placesLeads.length;
       leads = [...leads, ...placesLeads];
       continue;
     }
@@ -1411,11 +1448,13 @@ async function main({ runId = null } = {}) {
     // 1. SerpAPI search
     const serpLeads = (await searchGoogle(googleQuery, CONFIG.maxResults)).map(lead => ({ ...lead, search_query: searchQuery }));
     console.log(`[SerpAPI] Found ${serpLeads.length} raw results for "${searchQuery}"`);
+    sourceStats.serpapi_found += serpLeads.length;
     leads = [...leads, ...serpLeads];
 
     // 1b. Google Places search (additive — secondary local discovery)
     console.log(`[Places] Searching: "${searchQuery}"`);
     const placesLeads = (await searchGooglePlaces(searchQuery, '', Math.min(CONFIG.maxResults, 20))).map(lead => ({ ...lead, search_query: searchQuery }));
+    sourceStats.places_found += placesLeads.length;
     if (placesLeads.length) {
       leads = [...leads, ...placesLeads];
     }
@@ -1611,7 +1650,8 @@ async function main({ runId = null } = {}) {
 
   const dbStats = await saveToDatabase(leads, { runId, ...preSaveStats });
   console.log('\n✓ Done.\n');
-  return { leads_scored: leads.length, ...dbStats };
+  const deduped = Number(dbStats.skipped_breakdown?.[SCOUT_SKIP_REASONS.DUPLICATE] || 0);
+  return { leads_scored: leads.length, ...sourceStats, deduped, ...dbStats };
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2495,6 +2535,10 @@ async function ensureScoutQueue(pool) {
     )
   `);
   await pool.query(`
+    ALTER TABLE scout_queue
+    ADD COLUMN IF NOT EXISTS parked_at TIMESTAMPTZ
+  `);
+  await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS scout_queue_client_vertical_location_idx
     ON scout_queue (client_id, vertical, location)
   `);
@@ -2665,6 +2709,44 @@ async function seedExpansionQueueMarkets(clientId) {
   `, [clientId]);
 }
 
+async function setScoutQueueParked(row, reason, parked = true) {
+  if (!row?.id) return false;
+  const parkedAtSql = parked ? 'NOW()' : 'NULL';
+  await pool.query(`
+    UPDATE scout_queue
+    SET parked_at = ${parkedAtSql}, updated_at = NOW()
+    WHERE id = $1
+  `, [row.id]);
+  console.log(
+    `[Scout] ${parked ? 'Parked' : 'Unparked'} queue row client_id=${row.client_id} vertical=${row.vertical} location="${row.location}" reason=${reason}`
+  );
+  return true;
+}
+
+async function reconcileScoutQueueForClient(clientId) {
+  if (!hasClientScoutPlan(clientId)) return { parked: 0, unparked: 0, checked: 0 };
+
+  const { rows } = await pool.query(`
+    SELECT id, client_id, vertical, location, parked_at
+    FROM scout_queue
+    WHERE client_id = $1
+    ORDER BY vertical ASC, location ASC, id ASC
+  `, [clientId]);
+
+  const stats = { parked: 0, unparked: 0, checked: rows.length };
+  for (const row of rows) {
+    const valid = isQueueLocationValidForPlan(clientId, row.vertical, row.location);
+    if (!valid && !row.parked_at) {
+      await setScoutQueueParked(row, 'location_not_in_current_client_plan', true);
+      stats.parked++;
+    } else if (valid && row.parked_at) {
+      await setScoutQueueParked(row, 'location_now_matches_current_client_plan', false);
+      stats.unparked++;
+    }
+  }
+  return stats;
+}
+
 // Seed a row for every active vertical declared on the client so the queue is
 // complete before selection/rotation. Existing rows are left untouched.
 async function seedClientVerticals(clientId, verticals, location) {
@@ -2714,13 +2796,36 @@ async function pickNextQueueItem(clientId, allowedVerticals = []) {
     allowedClause = ` AND vertical = ANY($${params.length})`;
   }
   const res = await pool.query(`
-    SELECT industry, vertical, location, prospect_count
+    SELECT id, client_id, industry, vertical, location, prospect_count, parked_at
     FROM scout_queue
     WHERE client_id = $1 AND saturated = false AND status = 'queued'${allowedClause}
     ORDER BY prospect_count ASC, id ASC
-    LIMIT 1
   `, params);
-  return res.rows[0] || null;
+  let parkedRowsSkipped = 0;
+  let invalidRowsSkipped = 0;
+  for (const row of res.rows) {
+    if (row.parked_at) {
+      parkedRowsSkipped++;
+      continue;
+    }
+    if (!isQueueLocationValidForPlan(clientId, row.vertical, row.location)) {
+      await setScoutQueueParked(row, 'invalid_queue_location_selection_guard', true);
+      invalidRowsSkipped++;
+      parkedRowsSkipped++;
+      continue;
+    }
+    return {
+      ...row,
+      parked_rows_skipped: parkedRowsSkipped,
+      invalid_rows_skipped: invalidRowsSkipped,
+      newly_parked_rows: invalidRowsSkipped,
+    };
+  }
+
+  console.warn(
+    `[Scout] No valid queue items for client ${clientId}; skipped ${invalidRowsSkipped} invalid rows and ${parkedRowsSkipped} parked rows`
+  );
+  return null;
 }
 
 // Decide what Scout should actually scrape this run. Records the requested
@@ -2733,6 +2838,11 @@ async function resolveScoutTarget({ clientId, industry, location, verticals }) {
   const cleanLocation = sanitizeQueueLocation(location);
   const plannedVerticals = getPlannedVerticals(clientId);
   const activeVerticals = plannedVerticals.length ? plannedVerticals : verticals;
+  const reconciliation = await reconcileScoutQueueForClient(clientId);
+  if (reconciliation.parked || reconciliation.unparked) {
+    console.log(`[Scout] Queue reconciliation client=${clientId} parked=${reconciliation.parked} unparked=${reconciliation.unparked} checked=${reconciliation.checked}`);
+  }
+  CONFIG.parkedRowsSkipped = reconciliation.parked || 0;
   // Ensure every active vertical for this client exists in the queue before we
   // select/rotate. Client-specific plans are authoritative; other clients keep
   // the requested industry as a fallback.
@@ -2754,6 +2864,25 @@ async function resolveScoutTarget({ clientId, industry, location, verticals }) {
       console.log('[Scout] No planned queue items remain — skipping run');
       return { skip: true, vertical, saturated: true };
     }
+    CONFIG.parkedRowsSkipped += Number(next.newly_parked_rows || 0);
+    return {
+      industry: next.industry || next.vertical,
+      location: next.location || cleanLocation,
+      vertical: next.vertical,
+      saturated: false,
+      rotatedFrom: vertical,
+    };
+  }
+
+  if (plannedVerticals.length && !isQueueLocationValidForPlan(clientId, vertical, cleanLocation)) {
+    console.warn(`[Scout] Requested queue location is not valid for client ${clientId}: ${vertical}/${cleanLocation} — rotating to planned queue`);
+    await logScoutRun('skipped', { vertical, industry, location: cleanLocation }, 'invalid_requested_queue_location');
+    const next = await pickNextQueueItem(clientId, plannedVerticals);
+    if (!next) {
+      console.log('[Scout] No valid planned queue items remain — skipping run');
+      return { skip: true, vertical, saturated: true };
+    }
+    CONFIG.parkedRowsSkipped += Number(next.newly_parked_rows || 0);
     return {
       industry: next.industry || next.vertical,
       location: next.location || cleanLocation,
@@ -2783,6 +2912,7 @@ async function resolveScoutTarget({ clientId, industry, location, verticals }) {
   }
 
   console.log(`[Scout] Rotated to "${next.vertical}" (${next.prospect_count} prospects, lowest in queue)`);
+  CONFIG.parkedRowsSkipped += Number(next.newly_parked_rows || 0);
   return {
     industry: next.industry || next.vertical,
     location: next.location || cleanLocation,
@@ -2794,6 +2924,7 @@ async function resolveScoutTarget({ clientId, industry, location, verticals }) {
 
 async function run(params = {}) {
   CONFIG.clientId = getRuntimeClientId(params);
+  CONFIG.parkedRowsSkipped = 0;
   const observabilityRunId = makeScoutObservabilityRunId();
   process.env.ACTIVE_CLIENT_ID = String(CONFIG.clientId);
   CLIENT_CONFIG = await getClientConfig(CONFIG.clientId);
@@ -2831,6 +2962,7 @@ async function run(params = {}) {
       });
   if (target.skip) {
     const result = { attempts: 0, successes: 0, skipped: 0, errorSample: null, skipped_run: true, reason: 'saturated', vertical: target.vertical };
+    logScoutCompletionSummary({ saved: 0, skipped_breakdown: {} });
     await reportScoutRun({ runId: observabilityRunId, ...result });
     return result;
   }
@@ -2889,6 +3021,7 @@ async function run(params = {}) {
     const stats = CONFIG.sourceMode === 'linkedin'
       ? await runLinkedInSourcing({ runId })
       : await main({ runId });
+    logScoutCompletionSummary(CONFIG.sourceMode === 'linkedin' ? { saved: 0, skipped_breakdown: {} } : stats);
     const observability = CONFIG.sourceMode === 'linkedin'
       ? {
           attempts: Number(stats.parsed_results || 0),
@@ -3005,6 +3138,11 @@ module.exports = {
     searchGoogle,
     normalizeSourceMode,
     saveLinkedInProspect,
+    pickNextQueueItem,
+    reconcileScoutQueueForClient,
+    getPlannedLocations,
+    isQueueLocationValidForPlan,
+    CLIENT_SCOUT_PLANS,
   },
 };
 
