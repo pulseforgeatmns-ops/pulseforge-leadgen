@@ -17,6 +17,7 @@ assert.deepEqual(mapped, {
   likes: 17,
   comments: 3,
   shares: 1,
+  reach: null,
   impressions: 250,
   clicks: null,
   engagement_rate: '8.4000',
@@ -31,6 +32,17 @@ const withSharesOnly = mapBufferPostMetrics([
 
 assert.equal(withSharesOnly.shares, 4);
 assert.equal(withSharesOnly.share_metric_type, 'shares');
+assert.equal(withSharesOnly.reach, null);
+
+const withReachOnly = mapBufferPostMetrics([
+  { type: 'impressions', name: 'Impressions', value: 194, unit: 'number' },
+  { type: 'reach', name: 'Reach', value: 13, unit: 'number' },
+  { type: 'reactions', name: 'Reactions', value: 3, unit: 'number' },
+]);
+
+assert.equal(withReachOnly.reach, 13);
+assert.equal(withReachOnly.shares, null);
+assert.equal(withReachOnly.share_metric_type, null);
 
 const withoutImpressions = mapBufferPostMetrics([
   { type: 'comments', name: 'Comments', value: 3, unit: 'number' },
@@ -41,6 +53,7 @@ assert.equal(withoutImpressions.engagement_rate, null);
 assert.equal(withoutImpressions.impressions, null);
 assert.equal(withoutImpressions.likes, 17);
 assert.equal(withoutImpressions.shares, null);
+assert.equal(withoutImpressions.reach, null);
 
 const withoutReactions = mapBufferPostMetrics([
   { type: 'impressions', name: 'Impressions', value: 250, unit: 'number' },
@@ -61,6 +74,7 @@ assert.deepEqual(mapBufferPostMetrics(zeroPost.metrics), {
   likes: 0,
   comments: 0,
   shares: 0,
+  reach: null,
   impressions: 0,
   clicks: null,
   engagement_rate: null,
