@@ -112,7 +112,7 @@ async function getTodoistSnapshot(staleDays = 5) {
 // absent we return null instead of throwing. We discover a date-ish column at
 // query time so this works regardless of whether the table scopes "today" via
 // anchor_date / date / for_date / day / created_at.
-async function getCurrentAnchor(pool) {
+async function getCurrentAnchor(pool, clientId = null) {
   const reg = await pool.query("SELECT to_regclass('public.daily_anchors') AS tbl");
   if (!reg.rows[0]?.tbl) return null;
 
@@ -122,6 +122,18 @@ async function getCurrentAnchor(pool) {
   `);
   const names = cols.rows.map(r => r.column_name);
   const dateCol = ['anchor_date', 'date', 'for_date', 'day', 'created_at'].find(c => names.includes(c));
+  const hasClientId = names.includes('client_id');
+
+  if (dateCol && hasClientId && clientId != null) {
+    const res = await pool.query(
+      `SELECT * FROM daily_anchors
+       WHERE client_id = $1
+         AND ${dateCol}::date = (NOW() AT TIME ZONE 'America/New_York')::date
+       ORDER BY id DESC LIMIT 1`,
+      [clientId]
+    );
+    return res.rows[0] || null;
+  }
 
   if (!dateCol) {
     const res = await pool.query('SELECT * FROM daily_anchors ORDER BY id DESC LIMIT 1');
@@ -147,7 +159,7 @@ function shortText(value, maxLength = 120) {
 
 function contentSafeAnchor(anchor, clientId) {
   if (!anchor) return null;
-  const primary = shortText(anchor.primary_anchor || anchor.anchor || anchor.content);
+  const primary = String(anchor.primary_anchor || anchor.anchor || anchor.content || '').replace(/\s+/g, ' ').trim();
   if (!primary) return null;
   const foreignContext = LIVE_WORKSTREAMS
     .filter(workstream => workstream.client_id != null && Number(workstream.client_id) !== Number(clientId))
@@ -209,8 +221,17 @@ async function buildContentSafeClientContext(clientId, { query, channel, errors 
       return [];
     }
   };
+  const optionalRows = async (sql, params = []) => {
+    try {
+      const result = await query(sql, params);
+      return result.rows || [];
+    } catch (err) {
+      console.error('[mira_context] optional content-safe query skipped:', err.message);
+      return [];
+    }
+  };
 
-  const [clientRows, metricRows, trendRows, anchor] = await Promise.all([
+  const [clientRows, metricRows, trendRows, linkedinPostStats, anchor] = await Promise.all([
     safeRows(`
       SELECT id, COALESCE(NULLIF(business_name, ''), name) AS name, city, state
       FROM clients
@@ -271,7 +292,15 @@ async function buildContentSafeClientContext(clientId, { query, channel, errors 
       GROUP BY (ran_at AT TIME ZONE 'America/New_York')::date
       ORDER BY activity_date DESC
     `, [clientId]),
-    getCurrentAnchor({ query }).catch(err => {
+    optionalRows(`
+      SELECT posted_at, format, hook_type, impressions, members_reached,
+             engagement_rate, first_hour_active
+      FROM linkedin_post_stats
+      WHERE client_id = $1
+      ORDER BY posted_at DESC
+      LIMIT 20
+    `, [clientId]),
+    getCurrentAnchor({ query }, clientId).catch(err => {
       errors.push(err.message);
       console.error('[mira_context] anchor failed:', err.message);
       return null;
@@ -295,6 +324,15 @@ async function buildContentSafeClientContext(clientId, { query, channel, errors 
     },
     recent_activity_summaries: buildActivitySummaries(metrics, client),
     client_health: contentSafeHealth(metrics, trendRows),
+    linkedin_post_stats: linkedinPostStats.map(row => ({
+      posted_at: row.posted_at,
+      format: row.format,
+      hook_type: row.hook_type,
+      impressions: row.impressions == null ? null : number(row.impressions),
+      members_reached: row.members_reached == null ? null : number(row.members_reached),
+      engagement_rate: row.engagement_rate == null ? null : Number(row.engagement_rate),
+      first_hour_active: Boolean(row.first_hour_active),
+    })),
     available: Boolean(client && metricRows.length && errors.length === 0),
   };
 }

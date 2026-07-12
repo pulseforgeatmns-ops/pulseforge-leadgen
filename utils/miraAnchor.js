@@ -1,12 +1,13 @@
 require('dotenv').config();
 
 const pool = require('../db');
-const { JACOB_CONTEXT, isActiveTodoistContextItem } = require('./miraWorld');
+const { JACOB_CONTEXT, LIVE_WORKSTREAMS, isActiveTodoistContextItem } = require('./miraWorld');
 
 const AGENT_NAME = 'mira_anchor';
 const MODEL = 'claude-haiku-4-5-20251001';
 const ANCHOR_TZ = process.env.MIRA_TIMEZONE || 'America/New_York';
 const TODOIST_API_BASE = 'https://api.todoist.com/api/v1';
+const DEFAULT_ANCHOR_CLIENT_ID = 1;
 
 let _anthropic = null;
 function getAnthropic() {
@@ -63,12 +64,66 @@ function isWithinAnchorWindow() {
   return hour >= 6 && hour < 12;
 }
 
-async function getAnchorForToday() {
+function clientNameForAnchor(clientId) {
+  const match = LIVE_WORKSTREAMS.find(workstream => Number(workstream.client_id) === Number(clientId));
+  return match?.name || `client ${clientId}`;
+}
+
+function formatAnchorClientConfirmation(clientId, assumed = false) {
+  const assumption = assumed ? ', defaulted because no active Telegram client context was found' : '';
+  return `${clientNameForAnchor(clientId)} (client ${clientId}${assumption})`;
+}
+
+function buildAnchorSetConfirmation({ clientId, assumed = false, anchorText }) {
+  return `Anchor set for ${formatAnchorClientConfirmation(clientId, assumed)}: "${anchorText}"`;
+}
+
+function buildAnchorClearConfirmation({ clientId, assumed = false }) {
+  return `Anchor cleared for ${formatAnchorClientConfirmation(clientId, assumed)}.`;
+}
+
+function parseAnchorSetIntent(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return null;
+
+  const slash = trimmed.match(/^\/anchor(?:@[a-z0-9_]+)?(?:\s+([\s\S]*))?$/i);
+  if (slash) {
+    const anchorText = String(slash[1] || '').trim();
+    return {
+      matched: true,
+      action: /^clear$/i.test(anchorText) ? 'clear' : 'set',
+      anchorText,
+    };
+  }
+
+  if (/^clear\s+anchor\s*$/i.test(trimmed)) {
+    return { matched: true, action: 'clear', anchorText: '' };
+  }
+
+  const phrasePatterns = [
+    /^set\s+today['’]?s\s+anchor(?:\s+(?:to|as|is))?\s*[:\-]?\s*([\s\S]+)$/i,
+    /^set\s+anchor(?:\s+(?:to|as|is))?\s*[:\-]?\s*([\s\S]+)$/i,
+    /^today['’]?s\s+anchor\s+is\s*[:\-]?\s*([\s\S]+)$/i,
+    /^anchor\s*:\s*([\s\S]+)$/i,
+  ];
+
+  for (const pattern of phrasePatterns) {
+    const match = trimmed.match(pattern);
+    if (match) {
+      return { matched: true, action: 'set', anchorText: String(match[1] || '').trim() };
+    }
+  }
+
+  return null;
+}
+
+async function getAnchorForToday(clientId = DEFAULT_ANCHOR_CLIENT_ID) {
   const { rows } = await pool.query(
-    `SELECT id, anchor_date, primary_anchor, secondary_anchors, completion_notes
+    `SELECT id, client_id, anchor_date, primary_anchor, secondary_anchors, completion_notes
      FROM daily_anchors
-     WHERE anchor_date = $1`,
-    [todayEtDate()]
+     WHERE client_id = $1
+       AND anchor_date = $2`,
+    [clientId, todayEtDate()]
   );
   return rows[0] || null;
 }
@@ -387,14 +442,59 @@ Respond with JSON only, no other text:
 
 // Insert today's anchor. ON CONFLICT guards against a double submit racing the
 // pre-check. Returns the inserted row, or null if one already existed.
-async function insertAnchor({ primary_anchor, secondary_anchors, completion_notes, source_capture_id = null }) {
+async function setCurrentAnchor({
+  client_id = DEFAULT_ANCHOR_CLIENT_ID,
+  primary_anchor,
+  secondary_anchors = [],
+  completion_notes = null,
+  source_capture_id = null,
+}) {
   const { rows } = await pool.query(`
     INSERT INTO daily_anchors
-      (anchor_date, primary_anchor, secondary_anchors, set_at, completion_notes, source_capture_id)
-    VALUES ($1, $2, $3, NOW(), $4, $5)
-    ON CONFLICT (anchor_date) DO NOTHING
-    RETURNING id, anchor_date, primary_anchor, secondary_anchors, completion_notes
+      (client_id, anchor_date, primary_anchor, secondary_anchors, set_at, completion_notes, source_capture_id)
+    VALUES ($1, $2, $3, $4, NOW(), $5, $6)
+    ON CONFLICT (client_id, anchor_date) DO UPDATE
+      SET primary_anchor = EXCLUDED.primary_anchor,
+          secondary_anchors = EXCLUDED.secondary_anchors,
+          set_at = NOW(),
+          completion_notes = EXCLUDED.completion_notes,
+          source_capture_id = EXCLUDED.source_capture_id
+    RETURNING id, client_id, anchor_date, primary_anchor, secondary_anchors, completion_notes
   `, [
+    client_id,
+    todayEtDate(),
+    primary_anchor || null,
+    secondary_anchors && secondary_anchors.length ? secondary_anchors : null,
+    completion_notes || null,
+    source_capture_id,
+  ]);
+  return rows[0] || null;
+}
+
+async function clearCurrentAnchor(clientId = DEFAULT_ANCHOR_CLIENT_ID) {
+  return setCurrentAnchor({
+    client_id: clientId,
+    primary_anchor: null,
+    secondary_anchors: [],
+    completion_notes: null,
+  });
+}
+
+async function insertAnchor({
+  client_id = DEFAULT_ANCHOR_CLIENT_ID,
+  primary_anchor,
+  secondary_anchors,
+  completion_notes,
+  source_capture_id = null,
+}) {
+  const { rows } = await pool.query(`
+    INSERT INTO daily_anchors
+      (client_id, anchor_date, primary_anchor, secondary_anchors, set_at, completion_notes, source_capture_id)
+    VALUES ($1, $2, $3, $4, NOW(), $5, $6)
+    ON CONFLICT (client_id, anchor_date) DO NOTHING
+    RETURNING id, client_id, anchor_date, primary_anchor, secondary_anchors, completion_notes
+  `, [
+    client_id,
     todayEtDate(),
     primary_anchor || null,
     secondary_anchors && secondary_anchors.length ? secondary_anchors : null,
@@ -405,10 +505,18 @@ async function insertAnchor({ primary_anchor, secondary_anchors, completion_note
 }
 
 module.exports = {
+  DEFAULT_ANCHOR_CLIENT_ID,
   todayEtDate,
   isWithinAnchorWindow,
   getAnchorForToday,
   buildAnchorAppendix,
+  parseAnchorSetIntent,
+  setCurrentAnchor,
+  clearCurrentAnchor,
+  clientNameForAnchor,
+  formatAnchorClientConfirmation,
+  buildAnchorSetConfirmation,
+  buildAnchorClearConfirmation,
   parseAnchorReply,
   insertAnchor,
   rankTodoistTasks,

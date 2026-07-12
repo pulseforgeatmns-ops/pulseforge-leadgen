@@ -70,6 +70,7 @@ async function ensureSchema() {
   `);
   await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id) DEFAULT 1`);
   await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS buffer_metrics_updated_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS reach INT DEFAULT 0`);
   await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS impressions INT DEFAULT 0`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_performance_summary (
@@ -100,6 +101,7 @@ function ensureBufferMetricsSchema() {
     bufferMetricsSchemaPromise = pool.query(`
       ALTER TABLE post_analytics
         ADD COLUMN IF NOT EXISTS buffer_metrics_updated_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS reach INT DEFAULT 0,
         ADD COLUMN IF NOT EXISTS impressions INT DEFAULT 0
     `).catch(err => {
       bufferMetricsSchemaPromise = null;
@@ -251,6 +253,7 @@ function mapBufferPostMetrics(metrics) {
   if (!lookup) return null;
 
   const impressions = metricValue(lookup, 'impressions');
+  const reach = metricValue(lookup, 'reach');
   const likes = metricValue(lookup, 'reactions');
   const comments = metricValue(lookup, 'comments');
   const shareMetric = chooseShareMetric(lookup);
@@ -263,6 +266,7 @@ function mapBufferPostMetrics(metrics) {
     likes,
     comments,
     shares: shareMetric.value,
+    reach,
     impressions,
     clicks: null,
     engagement_rate,
@@ -306,17 +310,26 @@ async function fetchBufferMetrics(options = {}) {
     params.push(options.platformPostId);
     filter += ` AND platform_post_id = $${params.length}`;
   }
+  if (Array.isArray(options.postAnalyticsIds) && options.postAnalyticsIds.length) {
+    params.push(options.postAnalyticsIds);
+    filter += ` AND id = ANY($${params.length}::uuid[])`;
+  }
   if (options.channel) {
     params.push(options.channel);
     filter += ` AND channel = $${params.length}`;
   }
+  const bufferChannels = options.includeFacebookPage
+    ? `('linkedin_page', 'linkedin_personal', 'facebook_page')`
+    : `('linkedin_page', 'linkedin_personal')`;
+  params.push(Number(options.lookbackDays || 14));
+  const lookbackParam = params.length;
   const { rows } = await pool.query(`
     SELECT id, platform_post_id, channel
     FROM post_analytics
-    WHERE channel IN ('linkedin_page', 'linkedin_personal')
+    WHERE channel IN ${bufferChannels}
       AND client_id = $1
       AND platform_post_id IS NOT NULL
-      AND published_at > NOW() - INTERVAL '14 days'
+      AND published_at > NOW() - ($${lookbackParam}::int * INTERVAL '1 day')
       AND (
         metrics_fetched_at IS NULL
         OR metrics_fetched_at < NOW() - INTERVAL '6 hours'
@@ -364,14 +377,15 @@ async function fetchBufferMetrics(options = {}) {
 
       await pool.query(`
         UPDATE post_analytics
-        SET likes = $1, comments = $2, shares = $3, impressions = $4, clicks = $5,
-            engagement_rate = $6, metrics_fetched_at = NOW(),
-            buffer_metrics_updated_at = $7
-        WHERE id = $8
+        SET likes = $1, comments = $2, shares = $3, reach = $4, impressions = $5, clicks = $6,
+            engagement_rate = $7, metrics_fetched_at = NOW(),
+            buffer_metrics_updated_at = $8
+        WHERE id = $9
       `, [
         mapped.likes,
         mapped.comments,
         mapped.shares,
+        mapped.reach,
         mapped.impressions,
         mapped.clicks,
         mapped.engagement_rate,
@@ -384,6 +398,7 @@ async function fetchBufferMetrics(options = {}) {
           mapped_reactions_to_likes: mapped.likes,
           mapped_share_metric_type: mapped.share_metric_type,
           mapped_share_metric_value: mapped.shares,
+          mapped_reach: mapped.reach,
           computed_engagement_rate: mapped.engagement_rate,
           buffer_engagement_rate: mapped.buffer_engagement_rate,
         }, null, 2));
@@ -398,7 +413,7 @@ async function fetchBufferMetrics(options = {}) {
     }
     await new Promise(r => setTimeout(r, 300));
   }
-  console.log(`[Analytics] Buffer/LinkedIn metrics updated: ${updated}/${rows.length}`);
+  console.log(`[Analytics] Buffer metrics updated: ${updated}/${rows.length}`);
   return { attempts: rows.length, successes: updated, skipped: 0, errorSample };
 }
 
