@@ -21,6 +21,10 @@ const CLIENT_COLUMNS = [
   ['avg_job_value', 'text'],
   ['service_area', 'text[]'],
   ['verticals', 'text[]'],
+  // Canonical ICP configuration. target_verticals is a JSON array of search
+  // definitions; vertical_tiers is the per-client vertical -> A/B/C/W map.
+  ['target_verticals', "jsonb default '[]'::jsonb"],
+  ['vertical_tiers', "jsonb default '{}'::jsonb"],
   ['enabled_agents', 'text[]'],
   ['target_clients', 'text'],
   ['brand_voice', 'text'],
@@ -147,18 +151,7 @@ async function ensureClientArchitecture() {
       'Local service businesses in the Providence RI metro, with restaurant, salon, fitness, and cleaning prioritized while the broader vertical set proves itself',
       true
     )
-    ON CONFLICT (id) DO UPDATE SET
-      name = EXCLUDED.name,
-      slug = EXCLUDED.slug,
-      business_name = EXCLUDED.business_name,
-      vertical = EXCLUDED.vertical,
-      email = EXCLUDED.email,
-      city = EXCLUDED.city,
-      state = EXCLUDED.state,
-      service_area = EXCLUDED.service_area,
-      verticals = EXCLUDED.verticals,
-      target_clients = EXCLUDED.target_clients,
-      active = true
+    ON CONFLICT (id) DO NOTHING
   `);
 
   await pool.query(`
@@ -207,46 +200,25 @@ async function ensureClientArchitecture() {
       '8:00 AM EST',
       false
     )
-    ON CONFLICT (id) DO UPDATE SET
-      name = EXCLUDED.name,
-      slug = EXCLUDED.slug,
-      business_name = EXCLUDED.business_name,
-      vertical = EXCLUDED.vertical,
-      email = EXCLUDED.email,
-      phone = EXCLUDED.phone,
-      address = EXCLUDED.address,
-      city = EXCLUDED.city,
-      state = EXCLUDED.state,
-      zip = EXCLUDED.zip,
-      website = EXCLUDED.website,
-      gbp_url = EXCLUDED.gbp_url,
-      license_number = EXCLUDED.license_number,
-      avg_job_value = EXCLUDED.avg_job_value,
-      service_area = EXCLUDED.service_area,
-      verticals = EXCLUDED.verticals,
-      target_clients = EXCLUDED.target_clients,
-      brand_voice = EXCLUDED.brand_voice,
-      differentiators = EXCLUDED.differentiators,
-      lead_with = EXCLUDED.lead_with,
-      never_say = EXCLUDED.never_say,
-      sender_name = EXCLUDED.sender_name,
-      email_sequence = EXCLUDED.email_sequence,
-      vera_signoff = EXCLUDED.vera_signoff,
-      vera_negative = EXCLUDED.vera_negative,
-      paige_themes = EXCLUDED.paige_themes,
-      max_email = EXCLUDED.max_email,
-      max_time = EXCLUDED.max_time,
-      active = false
+    ON CONFLICT (id) DO NOTHING
   `);
 
   await pool.query(`
     UPDATE clients
-    SET enabled_agents = ARRAY['scout','emmett','paige','faye','vera','max','rex']
+    SET enabled_agents = CASE
+      WHEN enabled_agents IS NULL OR CARDINALITY(enabled_agents) = 0
+        THEN ARRAY['scout','emmett','paige','faye','vera','max','rex']
+      ELSE enabled_agents
+    END
     WHERE id = 2
   `);
   await pool.query(`
     UPDATE clients
-    SET enabled_agents = ARRAY['scout','emmett','paige','faye','vera','max','rex','cal','link','ivy','sam','riley','sketch','penny']
+    SET enabled_agents = CASE
+      WHEN enabled_agents IS NULL OR CARDINALITY(enabled_agents) = 0
+        THEN ARRAY['scout','emmett','paige','faye','vera','max','rex','cal','link','ivy','sam','riley','sketch','penny']
+      ELSE enabled_agents
+    END
     WHERE id = 1
   `);
 
@@ -286,21 +258,7 @@ async function ensureClientArchitecture() {
       'goanchorcleaning.com',
       true
     )
-    ON CONFLICT (id) DO UPDATE SET
-      name = EXCLUDED.name,
-      slug = EXCLUDED.slug,
-      business_name = EXCLUDED.business_name,
-      vertical = EXCLUDED.vertical,
-      city = COALESCE(clients.city, EXCLUDED.city),
-      state = COALESCE(clients.state, EXCLUDED.state),
-      service_area = EXCLUDED.service_area,
-      verticals = EXCLUDED.verticals,
-      target_clients = EXCLUDED.target_clients,
-      scoring_profile = EXCLUDED.scoring_profile,
-      sender_email = EXCLUDED.sender_email,
-      sender_name = EXCLUDED.sender_name,
-      sending_domain = EXCLUDED.sending_domain,
-      active = true
+    ON CONFLICT (id) DO NOTHING
   `);
   await pool.query(`
     UPDATE clients
@@ -321,27 +279,8 @@ async function ensureClientArchitecture() {
     ON CONFLICT (slug) DO NOTHING
   `);
 
-  await pool.query(`
-    UPDATE clients SET
-      sender_email = 'jacob@gopulseforge.com',
-      sender_name = 'Jacob Maynard',
-      sending_domain = 'gopulseforge.com'
-    WHERE id = 1
-  `);
-  await pool.query(`
-    UPDATE clients SET
-      sender_email = 'brad@mshomeinnovations.com',
-      sender_name = 'Brad Hudson',
-      sending_domain = 'mshomeinnovations.com'
-    WHERE id = 2
-  `);
-  await pool.query(`
-    UPDATE clients SET
-      sender_email = 'outreach@gopulseforge.com',
-      sender_name = 'Jacob Maynard',
-      sending_domain = 'gopulseforge.com'
-    WHERE id = 5
-  `);
+  // This module seeds missing rows only. It must never become a deploy-time
+  // config-management surface; sender settings are managed in the database.
 
   for (const table of CLIENT_SCOPED_TABLES) {
     await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS client_id integer REFERENCES clients(id) DEFAULT 1`);

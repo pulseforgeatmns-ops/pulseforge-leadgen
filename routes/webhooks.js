@@ -36,6 +36,7 @@ const {
 } = require('../utils/miraAnchor');
 const { handleWarmTelegramCallback } = require('../warmRoutingAgent');
 const { setSetterVisibility } = require('../utils/setterVisibility');
+const { resolveVerticalTier } = require('../utils/verticalTiers');
 
 const miraSchemaReady = ensureMiraSchema().catch(err => {
   console.error('[mira] schema error:', err.message);
@@ -589,8 +590,10 @@ async function loadProspectForBrevoSideEffects(prospectId, clientId) {
     SELECT
       p.id, p.status, p.client_id, p.first_name, p.last_name, p.email,
       p.vertical, p.icp_score, p.notes,
+      client.vertical_tiers,
       c.name AS company_name
     FROM prospects p
+    JOIN clients client ON client.id = p.client_id
     LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
     WHERE p.id = $1
       AND p.client_id = $2
@@ -610,6 +613,8 @@ async function processBrevoEventSideEffects(result, payload) {
 
   const prospect = await loadProspectForBrevoSideEffects(result.prospect_id, result.client_id);
   if (!prospect) return;
+  const tier = resolveVerticalTier(prospect.vertical, { vertical_tiers: prospect.vertical_tiers });
+  const warmTierEligible = tier.warm_eligible;
 
   const email = result.recipient_email;
   const messageId = brevoMessageId(payload);
@@ -640,7 +645,7 @@ async function processBrevoEventSideEffects(result, payload) {
     prospect.client_id,
   ]);
 
-  if (effectiveActionType === 'email_opened') {
+  if (effectiveActionType === 'email_opened' && warmTierEligible) {
     const gate = await qualifyingOpenSignal(prospect.id, prospect.client_id);
 
     if (gate.qualifies) {
@@ -731,11 +736,11 @@ async function processBrevoEventSideEffects(result, payload) {
     console.log(`[Brevo] ${email} marked do_not_contact and dead (${result.event_type})`);
   }
 
-  if (['email_opened', 'email_clicked'].includes(effectiveActionType)) {
+  if (['email_opened', 'email_clicked'].includes(effectiveActionType) && warmTierEligible) {
     await checkAndUpdateWarmStatus(prospect.id, email, prospect.client_id);
   }
 
-  if (effectiveActionType === 'email_clicked') {
+  if (effectiveActionType === 'email_clicked' && warmTierEligible) {
     await depositWarmSignalAction({
       prospect_id: prospect.id,
       client_id: prospect.client_id,
@@ -745,6 +750,14 @@ async function processBrevoEventSideEffects(result, payload) {
       email,
       company: prospect.company_name,
     });
+  }
+
+  if (['email_opened', 'email_clicked'].includes(effectiveActionType) && !warmTierEligible) {
+    await pool.query(
+      `INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+       VALUES ('riley', 'warm_signal_tier_blocked', $1, $2::jsonb, 'skipped', NOW(), $3)`,
+      [prospect.id, JSON.stringify({ trigger: effectiveActionType, raw_vertical: prospect.vertical || null, normalized_vertical: tier.vertical, tier: tier.tier }), prospect.client_id]
+    );
   }
 
   if (['email_opened', 'email_clicked', 'email_bounced', 'email_unsubscribed', 'email_spam'].includes(effectiveActionType)) {

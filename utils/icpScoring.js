@@ -38,6 +38,7 @@
 const sharedPool = require('../db');
 const { getClientConfig, getRuntimeClientId } = require('./clientContext');
 const { OPEN_SOURCE, ensureOpenSignalSchema } = require('./openSignalGate');
+const { resolveVerticalTier } = require('./verticalTiers');
 
 // ── TABLE MIGRATION ──────────────────────────────────────────────────────────
 // Idempotent. Wired into server.js startup alongside the other ensure* helpers,
@@ -79,33 +80,9 @@ function clampScore(value) {
 }
 
 // ── BASE SCORE ───────────────────────────────────────────────────────────────
-const TARGET_VERTICALS = new Set([
-  'cleaning', 'restaurant', 'hvac', 'salon', 'spa', 'beauty', 'retail',
-  'auto', 'auto_repair', 'automotive', 'roofing', 'dental', 'home_renovation',
-  'decks', 'siding', 'windows', 'exterior_remodeling', 'interior_renovation',
-  'probate_attorney',
-]);
-const ADJACENT_VERTICALS = new Set([
-  'landscaping', 'lawn', 'property_management', 'hotel', 'hospitality',
-  'fitness', 'gym', 'med_spa', 'home_services', 'emergency_repair',
-]);
-
-function scoreVertical(prospect) {
-  const vertical = String(prospect.vertical || '').toLowerCase().trim();
-  if (TARGET_VERTICALS.has(vertical)) return 25;
-  if (ADJACENT_VERTICALS.has(vertical)) return 15;
-
-  // Fall back to a keyword sweep across vertical + company name for free-form values.
-  const hay = `${vertical} ${prospect.company_name || ''} ${prospect.industry || ''}`.toLowerCase();
-  if ([...TARGET_VERTICALS].some(k => hay.includes(k.replace(/_/g, ' ')) || hay.includes(k))) return 25;
-  if ([...ADJACENT_VERTICALS].some(k => hay.includes(k.replace(/_/g, ' ')) || hay.includes(k))) return 15;
-  return 5;
+function scoreVertical(prospect, clientConfig) {
+  return resolveVerticalTier(prospect.vertical, clientConfig).vertical_points;
 }
-
-const NH_SUBURBS = [
-  'bedford', 'goffstown', 'hooksett', 'londonderry', 'auburn', 'candia',
-  'derry', 'merrimack', 'nashua', 'concord',
-];
 
 function scoreLocation(prospect, clientConfig) {
   const locHay = `${prospect.service_area_match || ''} ${prospect.company_location || ''}`.toLowerCase();
@@ -114,14 +91,6 @@ function scoreLocation(prospect, clientConfig) {
   const city = String(clientConfig?.city || '').toLowerCase().trim();
   const state = String(clientConfig?.state || '').toLowerCase().trim();
   const serviceArea = Array.isArray(clientConfig?.service_area) ? clientConfig.service_area : [];
-
-  // Manchester NH (client 1) keeps Scout's original suburb-aware ladder.
-  if (Number(prospect.client_id) === 1) {
-    if (locHay.includes('manchester')) return 20;
-    if (NH_SUBURBS.some(c => locHay.includes(c))) return 15;
-    if (locHay.includes(' nh') || locHay.includes('new hampshire')) return 8;
-    return 0;
-  }
 
   if (city && locHay.includes(city)) return 20;
   if (serviceArea.some(area => area && locHay.includes(String(area).toLowerCase()))) return 15;
@@ -157,7 +126,7 @@ function scoreSize(prospect) {
   return 0;
 }
 
-function scoreClientFit(prospect, clientConfig) {
+function scoreClientFit(prospect, clientConfig, tierResolution) {
   const hay = `${prospect.company_name || ''} ${prospect.service_area_match || ''} ${prospect.company_location || ''}`.toLowerCase();
 
   // MSHI (client 2): reward HOA/property/county signals like Scout does.
@@ -173,23 +142,33 @@ function scoreClientFit(prospect, clientConfig) {
     return 2;
   }
 
-  const targetClients = Array.isArray(clientConfig?.target_clients) ? clientConfig.target_clients : [];
-  if (targetClients.length && targetClients.some(t => t && hay.includes(String(t).toLowerCase()))) return 8;
+  // target_clients is legacy free text. Tier config is the structured,
+  // reachable client-fit signal for all migrated clients.
+  if (tierResolution?.tier === 'A') return 8;
+  if (tierResolution?.tier === 'B') return 4;
   if (prospect.service_area_match) return 4;
   return 0;
 }
 
 function computeBaseScore(prospect, clientConfig) {
+  const tierResolution = resolveVerticalTier(prospect.vertical, clientConfig);
   const components = {
-    vertical: scoreVertical(prospect),
+    vertical: scoreVertical(prospect, clientConfig),
     location: scoreLocation(prospect, clientConfig),
     contact: scoreContact(prospect),
     web: scoreWeb(prospect),
     size: scoreSize(prospect),
-    client_fit: scoreClientFit(prospect, clientConfig),
+    client_fit: scoreClientFit(prospect, clientConfig, tierResolution),
   };
-  const total = Object.values(components).reduce((sum, n) => sum + n, 0);
-  return { total, components };
+  const rawTotal = Object.values(components).reduce((sum, n) => sum + n, 0);
+  return {
+    total: Math.min(rawTotal, tierResolution.score_ceiling),
+    raw_total: rawTotal,
+    components,
+    tier: tierResolution.tier,
+    normalized_vertical: tierResolution.vertical,
+    score_ceiling: tierResolution.score_ceiling,
+  };
 }
 
 // ── ENGAGEMENT + PENALTIES ─────────────────────────────────────────────────
@@ -429,15 +408,23 @@ async function recalculateICP(prospectId, options = {}) {
   }
 
   const base = computeBaseScore(prospect, clientConfig);
+  if (base.tier === 'unknown') {
+    console.warn(`[icpScoring] Unknown vertical tier: client=${clientId} prospect=${prospectId} vertical=${prospect.vertical || '(blank)'}`);
+    await sharedPool.query(
+      `INSERT INTO agent_log (agent_name, action, client_id, prospect_id, payload, status, ran_at)
+       VALUES ('icp_scoring', 'unknown_vertical_tier', $1, $2, $3::jsonb, 'completed', NOW())`,
+      [clientId, prospectId, JSON.stringify({ raw_vertical: prospect.vertical || null, normalized_vertical: base.normalized_vertical })]
+    ).catch(err => console.error('[icpScoring] unknown vertical audit failed:', err.message));
+  }
   const eng = await gatherEngagement(prospectId, clientId);
   const bonus = computeEngagementBonus(eng, prospect);
   const penalty = computePenalties(eng, prospect);
 
   const oldScore = prospect.icp_score == null ? null : Number(prospect.icp_score);
-  const newScore = clampScore(base.total + bonus - penalty);
+  const newScore = clampScore(Math.min(base.score_ceiling, base.total + bonus - penalty));
 
   if (oldScore === newScore) {
-    return { found: true, changed: false, old_score: oldScore, new_score: newScore, base: base.total, engagement: bonus, penalties: penalty };
+    return { found: true, changed: false, old_score: oldScore, new_score: newScore, base: base.total, base_components: base.components, tier: base.tier, engagement: bonus, penalties: penalty };
   }
 
   await sharedPool.query(
@@ -454,8 +441,37 @@ async function recalculateICP(prospectId, options = {}) {
     new_score: newScore,
     base: base.total,
     base_components: base.components,
+    tier: base.tier,
+    score_ceiling: base.score_ceiling,
     engagement: bonus,
     penalties: penalty,
+  };
+}
+
+// Read-only counterpart for approval-gated migrations. It intentionally does
+// not ensure tables, update prospects, or append score history.
+async function previewRecalculateICP(prospectId, options = {}) {
+  if (!prospectId) return { found: false };
+  const clientId = options.clientId != null ? Number(options.clientId) : getRuntimeClientId();
+  const prospect = await loadProspect(prospectId, clientId);
+  if (!prospect) return { found: false };
+  const clientConfig = options.clientConfig || await getClientConfig(clientId);
+  const base = computeBaseScore(prospect, clientConfig);
+  const engagement = await gatherEngagement(prospectId, clientId);
+  const bonus = computeEngagementBonus(engagement, prospect);
+  const penalties = computePenalties(engagement, prospect);
+  return {
+    found: true,
+    prospect_id: prospectId,
+    old_score: prospect.icp_score == null ? null : Number(prospect.icp_score),
+    new_score: clampScore(Math.min(base.score_ceiling, base.total + bonus - penalties)),
+    normalized_vertical: base.normalized_vertical,
+    tier: base.tier,
+    score_ceiling: base.score_ceiling,
+    base: base.total,
+    base_components: base.components,
+    engagement: bonus,
+    penalties,
   };
 }
 
@@ -485,4 +501,5 @@ module.exports = {
   logScoreChange,
   ensureIcpScoreHistoryTable,
   computeBaseScore,
+  previewRecalculateICP,
 };

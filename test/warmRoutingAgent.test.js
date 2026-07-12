@@ -43,6 +43,8 @@ test('a prospect satisfying multiple labels plans one incident fire', () => {
   const prospect = {
     id: '1000c166-c9c3-4bab-adef-d4cbdf14ab18',
     client_id: 1,
+    vertical: 'commercial_electrical',
+    vertical_tiers: { commercial_electrical: 'A' },
     icp_score: 92,
     email_touched_at: new Date(Date.now() - 60_000).toISOString(),
     opens_24h: 3,
@@ -65,6 +67,8 @@ test('multiple claimed labels create one warm_trigger_fires row', async () => {
   const prospect = {
     id: '1000c166-c9c3-4bab-adef-d4cbdf14ab18',
     client_id: 1,
+    vertical: 'commercial_electrical',
+    vertical_tiers: { commercial_electrical: 'A' },
     email: 'owner@example.com',
     company_name: 'Example Company',
     icp_score: 92,
@@ -102,6 +106,8 @@ test('seeded active thresholds project zero first-run fires', () => {
   const prospect = {
     id: '1000c166-c9c3-4bab-adef-d4cbdf14ab18',
     client_id: 1,
+    vertical: 'commercial_electrical',
+    vertical_tiers: { commercial_electrical: 'A' },
     icp_score: 92,
     email_touched_at: new Date(Date.now() - 60_000).toISOString(),
     opens_24h: 3,
@@ -141,4 +147,18 @@ test('warm routing is default-off and requires an explicit true value', () => {
   assert.equal(isWarmRoutingEnabled({}), false);
   assert.equal(isWarmRoutingEnabled({ WARM_ROUTING_ENABLED: 'false' }), false);
   assert.equal(isWarmRoutingEnabled({ WARM_ROUTING_ENABLED: 'true' }), true);
+});
+
+test('Tier C engagement clusters do not create warm events', () => {
+  const prospect = {
+    id: '1000c166-c9c3-4bab-adef-d4cbdf14ab18',
+    client_id: 1,
+    vertical: 'restaurant',
+    vertical_tiers: { restaurant: 'C' },
+    icp_score: 99,
+    email_touched_at: new Date().toISOString(),
+    opens_24h: 5,
+    engagement_event_key: 'email_event:9000',
+  };
+  assert.equal(buildCurrentEdgeEvents(prospect, new Map()).events.length, 0);
 });

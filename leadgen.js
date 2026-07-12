@@ -35,6 +35,11 @@ const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('./u
 const { searchSerpApi } = require('./lib/serpapi');
 const { sourceLinkedInProspects } = require('./utils/linkedinSerpSource');
 const { ensureLinkedInScoutSchema } = require('./utils/linkedinScoutSchema');
+const {
+  resolveVerticalTier,
+  targetVerticalEntries,
+  autonomousTargetVerticals,
+} = require('./utils/verticalTiers');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -376,54 +381,6 @@ const CLEANING_AREA_CITIES = [
 ];
 
 const CLIENT_SCOUT_PLANS = {
-  // Pulseforge primary market (client_id=1). Providence replaces the exhausted
-  // Manchester/NH queue; keep this metro tight so Scout does not sprawl.
-  1: {
-    state: 'RI',
-    cities: PROVIDENCE_SCOUT_CITIES,
-    verticals: {
-      cleaning: [
-        'cleaning company {city} {state}',
-        'commercial cleaning {city} {state}',
-        'janitorial service {city} {state}',
-      ],
-      restaurant: [
-        'restaurant {city} {state}',
-        'bar and grill {city} {state}',
-        'cafe {city} {state}',
-      ],
-      salon: [
-        'hair salon {city} {state}',
-        'beauty salon {city} {state}',
-        'barber shop {city} {state}',
-      ],
-      fitness: [
-        'gym {city} {state}',
-        'fitness studio {city} {state}',
-        'personal training {city} {state}',
-      ],
-      home_services: [
-        'home services {city} {state}',
-        'handyman {city} {state}',
-        'hvac contractor {city} {state}',
-      ],
-      auto: [
-        'auto repair {city} {state}',
-        'mechanic {city} {state}',
-        'auto service {city} {state}',
-      ],
-      landscaping: [
-        'landscaping company {city} {state}',
-        'lawn care {city} {state}',
-        'landscape contractor {city} {state}',
-      ],
-      med_spa: [
-        'med spa {city} {state}',
-        'medical spa {city} {state}',
-        'aesthetics clinic {city} {state}',
-      ],
-    },
-  },
   // Cleaning company (client_id=10). Professional-services offices that BUY
   // commercial cleaning. Law firms and accounting practices run as SEPARATE
   // passes (one vertical per run). Google Places is primary for this client
@@ -514,12 +471,22 @@ function getClientScoutPlan(clientId) {
   return CLIENT_SCOUT_PLANS[Number(clientId)] || null;
 }
 
+function hasConfiguredScoutDefinition(clientId) {
+  return Number(CLIENT_CONFIG?.id) === Number(clientId) && targetVerticalEntries(CLIENT_CONFIG).length > 0;
+}
+
 function getPlannedVerticals(clientId) {
+  if (hasConfiguredScoutDefinition(clientId)) return autonomousTargetVerticals(CLIENT_CONFIG);
   const plan = getClientScoutPlan(clientId);
   return plan ? Object.keys(plan.verticals || {}) : [];
 }
 
 function getPlannedLocations(clientId, fallbackLocation, vertical = CONFIG.vertical) {
+  if (hasConfiguredScoutDefinition(clientId)) {
+    const state = CLIENT_CONFIG?.state || sanitizeQueueLocation(fallbackLocation).split(/\s+/).pop() || '';
+    const cities = Array.isArray(CLIENT_CONFIG?.service_area) ? CLIENT_CONFIG.service_area : [];
+    if (cities.length) return cities.map(city => sanitizeQueueLocation(`${city} ${state}`));
+  }
   const plan = getClientScoutPlan(clientId);
   const normalizedVertical = normalizeVertical(vertical);
   const geoTargets = Array.isArray(plan?.geoByVertical?.[normalizedVertical])
@@ -533,7 +500,7 @@ function getPlannedLocations(clientId, fallbackLocation, vertical = CONFIG.verti
 }
 
 function hasClientScoutPlan(clientId) {
-  return !!getClientScoutPlan(clientId);
+  return hasConfiguredScoutDefinition(clientId) || !!getClientScoutPlan(clientId);
 }
 
 function plannedLocationSet(clientId, fallbackLocation, vertical) {
@@ -546,6 +513,17 @@ function isQueueLocationValidForPlan(clientId, vertical, location) {
 }
 
 function getSearchQueriesForTarget() {
+  const configured = targetVerticalEntries(CLIENT_CONFIG)
+    .find(entry => entry.vertical === normalizeVertical(CONFIG.vertical));
+  if (configured) {
+    if (!configured.autonomous_sourcing || configured.tier !== 'A') return [];
+    const city = cityFromLocation(CONFIG.location);
+    const state = sanitizeQueueLocation(CONFIG.location).split(/\s+/).pop() || CLIENT_CONFIG?.state || '';
+    return configured.seed_terms.map(seed => seed
+      .replace(/\{city\}/g, city)
+      .replace(/\{state\}/g, state)
+      .trim());
+  }
   const plan = getClientScoutPlan(CONFIG.clientId);
   const seeds = plan?.verticals?.[CONFIG.vertical];
   if (!Array.isArray(seeds) || seeds.length === 0) {
@@ -974,12 +952,30 @@ async function fetchPlaceDetails(placeId, apiKey) {
   const res = await axios.get(PLACES_DETAILS, {
     params: {
       place_id: placeId,
-      fields: 'name,formatted_address,formatted_phone_number,website,place_id,rating,user_ratings_total',
+      fields: 'name,formatted_address,formatted_phone_number,website,place_id,rating,user_ratings_total,types',
       key: apiKey,
     },
   });
   if (res.data.status !== 'OK') return null;
   return res.data.result;
+}
+
+const B2B_SIGNAL_RE = /\b(commercial|industrial|business|facility|facilit(?:y|ies)|corporate|office|property management|hoa|association management|janitorial|staffing|recruiting|freight|logistics|insurance|managed (?:it|service)|msp|fire protection|fire sprinkler|access control|low voltage|mechanical contractor)\b/i;
+const B2C_SIGNAL_RE = /\b(residential|homeowner|homeowners|home service|household|house call|house calls|electrical repair|home repair|our homes|your home)\b/i;
+
+function classifyPlacesB2B(lead) {
+  const evidence = [lead.company, lead.url, lead.snippet, ...(lead.place_types || [])]
+    .filter(Boolean)
+    .join(' ');
+  const b2b = B2B_SIGNAL_RE.test(evidence);
+  const b2c = B2C_SIGNAL_RE.test(evidence);
+  if (b2c && !b2b) return { classification: 'b2c', evidence };
+  if (b2b && !b2c) return { classification: 'b2b', evidence };
+  return { classification: 'ambiguous', evidence };
+}
+
+function requiresB2BPlacesGate() {
+  return resolveVerticalTier(CONFIG.vertical, CLIENT_CONFIG).tier === 'A';
 }
 
 async function searchGooglePlaces(industry, location, numResults = 20) {
@@ -1021,6 +1017,7 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
           place_id: details.place_id || hit.place_id,
           google_rating: details.rating ?? hit.rating ?? null,
           google_review_count: details.user_ratings_total ?? hit.user_ratings_total ?? null,
+          place_types: details.types || hit.types || [],
           source: ['google_places'],
           snippet: '',
         });
@@ -1198,9 +1195,12 @@ function scoreCleaningLead(lead) {
 // Factors: vertical (25) + location (20) + contact (20) + web (20) + size (15)
 // ─────────────────────────────────────────────────────────────────────
 function scoreLead(lead) {
+  const tier = resolveVerticalTier(CONFIG.vertical, CLIENT_CONFIG);
   // Cleaning company uses a fully separate buyer rubric (see scoreCleaningLead).
   if (CONFIG.scoringProfile === 'cleaning_buyer') {
     const r = scoreCleaningLead(lead);
+    r.total = Math.min(r.total, tier.score_ceiling);
+    r.components.tier = tier.tier;
     lead.scoreComponents = r.components;
     lead.scoreFlags = r.flags;
     console.log(`  ICP[cleaning] ${r.total} (vertical:${r.components.vertical} geo:${r.components.geography} contact:${r.components.contact} single_tenant:${r.components.single_tenant} size:${r.components.size} penalty:-${r.components.penalty})${r.flags.length ? ' flags:' + r.flags.join(';') : ''} — ${lead.company}`);
@@ -1214,40 +1214,8 @@ function scoreLead(lead) {
   ).toLowerCase();
   const addr = (lead.address || '').toLowerCase();
 
-  // 1. Vertical (0–25)
-  const TARGET_VERTICAL = [
-    'clean','cleaning','cleaner','restaurant','cafe','diner','eatery',
-    'hvac','heating','cooling','air conditioning','salon','hair','spa',
-    'beauty','retail','shop','store','boutique','auto','automotive',
-    'mechanic','repair'
-  ];
-  const ADJACENT_VERTICAL = [
-    'landscap','lawn','property management','hotel','hospitality',
-    'motel','gym','fitness'
-  ];
-  let vertical = 5;
-
-  if (CONFIG.clientId === 2) {
-    if (TARGET_VERTICAL.some(k => hay.includes(k)))    vertical = 25;
-    else if (ADJACENT_VERTICAL.some(k => hay.includes(k))) vertical = 15;
-
-    const MSHI_TARGET_VERTICAL = [
-      'property management', 'property manager', 'probate', 'estate attorney',
-      'estate planning', 'trust and estate', 'estate sale', 'executor',
-      'mortgage broker', 'insurance agency', 'public adjuster',
-      'home inspector', 'real estate agent', 'realtor',
-    ];
-    if (MSHI_TARGET_VERTICAL.some(k => hay.includes(k))) vertical = 25;
-  } else {
-    const searchVertical = getSearchVertical();
-    if (searchVertical && searchVertical !== 'unknown') {
-      vertical = 25;
-    } else if (TARGET_VERTICAL.some(k => hay.includes(k))) {
-      vertical = 25;
-    } else if (ADJACENT_VERTICAL.some(k => hay.includes(k))) {
-      vertical = 15;
-    }
-  }
+  // 1. Vertical — only the client's persisted tier map can award points.
+  let vertical = tier.vertical_points;
 
   // 2. Location (0–20) — addr preferred, falls back to hay for SerpAPI leads
   const locHay = addr || hay;
@@ -1324,8 +1292,10 @@ function scoreLead(lead) {
     if (/\b(offices|locations)\s+(in|across)\s+\d+\s+states\b/i.test(hay)) probateAdjustment -= 20;
   }
 
-  const total = Math.max(0, vertical + location + contact + web + size + clientBoost + probateAdjustment);
-  console.log(`  ICP Score: ${total} (vertical:${vertical} location:${location} contact:${contact} web:${web} size:${size} client:${clientBoost} probate:${probateAdjustment}) — ${lead.company}`);
+  const rawTotal = Math.max(0, vertical + location + contact + web + size + clientBoost + probateAdjustment);
+  const total = Math.min(rawTotal, tier.score_ceiling);
+  if (tier.tier === 'unknown') console.warn(`[Scout] Unknown vertical tier resolved: ${CONFIG.vertical || '(blank)'} -> unknown (ceiling 60)`);
+  console.log(`  ICP Score: ${total} (tier:${tier.tier} vertical:${vertical} location:${location} contact:${contact} web:${web} size:${size} client:${clientBoost} probate:${probateAdjustment}) — ${lead.company}`);
   return Math.min(total, 100);
 }
 
@@ -1475,6 +1445,36 @@ async function main({ runId = null } = {}) {
   }
   leads = uniqueLeads;
   console.log(`[Combined] ${leads.length} unique domains after SerpAPI + Places`);
+
+  if (requiresB2BPlacesGate()) {
+    const b2bAccepted = [];
+    for (const lead of leads) {
+      if (!Array.isArray(lead.source) || !lead.source.includes('google_places')) {
+        b2bAccepted.push(lead);
+        continue;
+      }
+      const result = classifyPlacesB2B(lead);
+      lead.b2b_classification = result.classification;
+      if (result.classification === 'b2b') {
+        b2bAccepted.push(lead);
+        continue;
+      }
+      const skipReason = result.classification === 'b2c'
+        ? SCOUT_SKIP_REASONS.B2C_CLASSIFICATION
+        : SCOUT_SKIP_REASONS.LOW_CONFIDENCE_B2B;
+      incrementBreakdown(preSaveStats.skipped_breakdown, skipReason);
+      preSaveStats.skipped++;
+      preSaveStats.rejected++;
+      await persistScoutSkip(runId, lead, skipReason, {
+        stage: 'places_b2b_classification',
+        classification: result.classification,
+        vertical: CONFIG.vertical,
+        evidence: result.evidence.slice(0, 500),
+      });
+    }
+    leads = b2bAccepted;
+    console.log(`[Places B2B gate] ${leads.length} leads remain; low-confidence and B2C Places matches bucketed before enrichment`);
+  }
 
   // Pre-enrichment blacklist — strip junk domains/names before spending Prospeo/Hunter credits
   const beforePreEnrichment = leads.length;
@@ -3142,6 +3142,8 @@ module.exports = {
     reconcileScoutQueueForClient,
     getPlannedLocations,
     isQueueLocationValidForPlan,
+    classifyPlacesB2B,
+    requiresB2BPlacesGate,
     CLIENT_SCOUT_PLANS,
   },
 };

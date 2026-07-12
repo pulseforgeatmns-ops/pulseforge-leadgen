@@ -45,12 +45,6 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
               AND event_at < $1::timestamptz
           )::int AS bounce_count_today,
           COUNT(*) FILTER (
-            WHERE event_type IN ('replied', 'reply')
-              AND event_at >= $1::timestamptz - INTERVAL '24 hours'
-              AND event_at < $1::timestamptz
-              AND LOWER(COALESCE(raw_payload->>'classification', '')) <> 'out_of_office'
-          )::int AS reply_count_today,
-          COUNT(*) FILTER (
             WHERE event_type = 'opened'
               AND event_at >= $1::timestamptz - INTERVAL '24 hours'
               AND event_at < $1::timestamptz
@@ -64,14 +58,22 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
         JOIN clients c ON c.id = ee.client_id AND c.active = true
         WHERE ee.event_at >= $1::timestamptz - INTERVAL '8 days'
           AND ee.event_at < $1::timestamptz
+      ), touchpoint_counts AS (
+        SELECT COUNT(*)::int AS reply_count_today
+        FROM touchpoints t
+        JOIN clients c ON c.id = t.client_id AND c.active = true
+        WHERE t.action_type = 'inbound_reply'
+          AND t.created_at >= $1::timestamptz - INTERVAL '24 hours'
+          AND t.created_at < $1::timestamptz
       )
       SELECT
         (SELECT COUNT(*) FROM managed_sends
          WHERE ran_at >= $1::timestamptz - INTERVAL '24 hours')::int AS send_count_today,
         (SELECT COUNT(*) FROM managed_sends
          WHERE ran_at < $1::timestamptz - INTERVAL '24 hours')::numeric / 7 AS send_count_baseline_7d,
-        event_counts.*
+        event_counts.*, touchpoint_counts.reply_count_today
       FROM event_counts
+      CROSS JOIN touchpoint_counts
     `),
     safeRows(`
       /* daily_health:scout */
@@ -96,7 +98,7 @@ async function computeDailyHealth({ now = new Date(), query = pool.query.bind(po
       FROM capture_inbox ci
       JOIN prospects p ON p.id::text = ci.linked_entity_id
       JOIN clients c ON c.id = p.client_id AND c.active = true
-      WHERE ci.capture_type IN ('warm_signal', 'warm_signal_resolved')
+      WHERE ci.capture_type = 'warm_signal'
         AND COALESCE(ci.archived, false) = false
         AND COALESCE(p.mira_archived, false) = false
         AND COALESCE(ci.captured_at, ci.received_at) >= $1::timestamptz - INTERVAL '24 hours'

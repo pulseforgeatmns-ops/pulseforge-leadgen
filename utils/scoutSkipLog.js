@@ -5,6 +5,8 @@ const SCOUT_SKIP_REASONS = Object.freeze({
   DB_ERROR: 'db_error', NO_EMAIL: 'no_email', LOW_SCORE: 'low_score',
   MISSING_REQUIRED_FIELD: 'missing_required_field', INVALID_PROSPECT: 'invalid_prospect',
   PRE_ENRICHMENT_REJECT: 'pre_enrichment_reject',
+  B2C_CLASSIFICATION: 'b2c_classification',
+  LOW_CONFIDENCE_B2B: 'low_confidence_b2b',
 });
 
 async function ensureScoutSkipLogTable() {

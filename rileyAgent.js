@@ -9,6 +9,7 @@ const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext')
 const { recalculateICP } = require('./utils/icpScoring');
 const { reportAgentRun } = require('./utils/agentObservability');
 const { OPEN_SOURCE, ensureOpenSignalSchema } = require('./utils/openSignalGate');
+const { resolveVerticalTier } = require('./utils/verticalTiers');
 
 const AGENT_NAME = 'riley';
 const CLIENT_ID = getRuntimeClientId();
@@ -1350,6 +1351,17 @@ async function depositWarmSignalAction({ prospect_id, client_id = CLIENT_ID, tri
       payload: { email, company, subject, total_opens },
     });
     console.warn(`  [Riley] Dropped warm signal for missing prospect_id=${prospect_id}`);
+    return false;
+  }
+  const clientConfig = await getClientConfig(ctx.client_id);
+  const tier = resolveVerticalTier(ctx.vertical, clientConfig);
+  if (!tier.warm_eligible) {
+    await pool.query(
+      `INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+       VALUES ($1, 'warm_signal_tier_blocked', $2, $3::jsonb, 'skipped', NOW(), $4)`,
+      [AGENT_NAME, ctx.prospect_id, JSON.stringify({ trigger, raw_vertical: ctx.vertical || null, normalized_vertical: tier.vertical, tier: tier.tier }), ctx.client_id]
+    );
+    console.log(`  [Riley] Warm signal blocked by tier ${tier.tier}: ${ctx.email || ctx.prospect_id}`);
     return false;
   }
   const payload = {

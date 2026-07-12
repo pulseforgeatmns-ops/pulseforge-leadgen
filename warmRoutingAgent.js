@@ -6,6 +6,7 @@ const pool = require('./db');
 const { getRuntimeClientId } = require('./utils/clientContext');
 const { reportAgentRun } = require('./utils/agentObservability');
 const { OPEN_SOURCE, ensureOpenSignalSchema } = require('./utils/openSignalGate');
+const { resolveVerticalTier } = require('./utils/verticalTiers');
 
 const AGENT_NAME = 'warm_routing';
 const CLIENT_ID = getRuntimeClientId();
@@ -265,6 +266,7 @@ async function getWarmProspects(clientId) {
       p.email,
       p.phone,
       p.vertical,
+      client.vertical_tiers,
       p.status,
       p.icp_score,
       GREATEST(p.email_touched_at, email_touch.latest_touch_at) AS email_touched_at,
@@ -282,6 +284,7 @@ async function getWarmProspects(clientId) {
       last_tp.content_summary AS last_touch_summary,
       last_email.payload->>'step' AS last_email_step
     FROM prospects p
+    JOIN clients client ON client.id = p.client_id
     LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     LEFT JOIN LATERAL (
       SELECT MAX(t.created_at) AS latest_touch_at
@@ -399,6 +402,8 @@ async function getWarmProspects(clientId) {
 }
 
 function evaluateWarmTriggers(prospect) {
+  const tier = resolveVerticalTier(prospect.vertical, { vertical_tiers: prospect.vertical_tiers });
+  if (!tier.warm_eligible) return [];
   const reasons = [];
   if (Number(prospect.opens_24h || 0) >= 3 || Number(prospect.clicks_24h || 0) > 0) reasons.push('ENGAGEMENT_CLUSTER');
   const touchedAt = prospect.email_touched_at ? new Date(prospect.email_touched_at).getTime() : 0;
@@ -498,6 +503,20 @@ async function upsertWarmSignalState(update) {
 function buildCurrentEdgeEvents(prospect, states) {
   const events = [];
   const stateUpdates = [];
+  const tier = resolveVerticalTier(prospect.vertical, { vertical_tiers: prospect.vertical_tiers });
+  if (!tier.warm_eligible) {
+    for (const signalType of [SIGNAL_TYPES.ICP_ELIGIBILITY, SIGNAL_TYPES.ENGAGEMENT_CLUSTER]) {
+      stateUpdates.push({
+        client_id: prospect.client_id,
+        prospect_id: prospect.id,
+        signal_type: signalType,
+        is_active: false,
+        last_observed_value: { tier: tier.tier, vertical: tier.vertical, tier_blocked: true },
+        last_source_event_key: null,
+      });
+    }
+    return { events, stateUpdates };
+  }
   const touchedAt = prospect.email_touched_at ? new Date(prospect.email_touched_at) : null;
   const eligibilityActive = Number(prospect.icp_score || 0) >= 80
     && touchedAt
@@ -1092,7 +1111,12 @@ async function run(params = {}) {
   let result;
   try {
     result = await withWorkerLock(async () => {
-    const prospects = await getWarmProspects(clientId);
+    const prospects = (await getWarmProspects(clientId)).filter(prospect => {
+      const tier = resolveVerticalTier(prospect.vertical, { vertical_tiers: prospect.vertical_tiers });
+      if (tier.warm_eligible) return true;
+      console.log(`[warm_routing] Tier-blocked prospect ${prospect.id}: ${tier.vertical || '(blank)'} -> ${tier.tier}`);
+      return false;
+    });
     const prospectMap = new Map(prospects.map(prospect => [String(prospect.id), prospect]));
     const states = await getWarmSignalStates(clientId);
     const events = [];
