@@ -22,6 +22,17 @@ function contentSafeQuery(sql, params) {
     assert.match(sql, /client_id = \$1/);
     return Promise.resolve({ rows: [{ activity_date: '2026-07-05', send_count: 10 }] });
   }
+  if (/FROM linkedin_post_stats/i.test(sql)) {
+    return Promise.resolve({ rows: [{
+      posted_at: '2026-07-07T14:00:00.000Z',
+      format: 'text',
+      hook_type: 'claim',
+      impressions: 1200,
+      members_reached: 900,
+      engagement_rate: '4.25',
+      first_hour_active: true,
+    }] });
+  }
   throw new Error(`Unexpected content-safe query: ${sql.slice(0, 80)}`);
 }
 
@@ -40,6 +51,15 @@ test('content-safe Mira context is client-scoped and omits sensitive collections
   assert.equal(context.available, true);
   assert.deepEqual(context.client, { id: 10, name: 'Anchor Cleaning', city: 'Manchester', state: 'NH' });
   assert.deepEqual(context.metrics, { sends_24h: 10, opens_24h: 7, replies_24h: 2, warm_signals_24h: 3 });
+  assert.deepEqual(context.linkedin_post_stats, [{
+    posted_at: '2026-07-07T14:00:00.000Z',
+    format: 'text',
+    hook_type: 'claim',
+    impressions: 1200,
+    members_reached: 900,
+    engagement_rate: 4.25,
+    first_hour_active: true,
+  }]);
   assert.match(context.recent_activity_summaries.join('\n'), /Manchester/);
 
   const serialized = JSON.stringify(context);

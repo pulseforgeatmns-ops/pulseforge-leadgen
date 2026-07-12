@@ -37,6 +37,8 @@ const PROSPECT_ROSTER_ACTIVE_WHERE_SQL = `
   p.do_not_contact = false
   AND p.client_id = $1
 `;
+const LINKEDIN_POST_FORMATS = new Set(['text', 'carousel', 'video', 'image', 'poll']);
+const LINKEDIN_HOOK_TYPES = new Set(['dialogue', 'claim', 'numbers', 'story', 'question', 'other']);
 
 function pct(num, den) {
   const n = Number(num || 0);
@@ -128,6 +130,55 @@ function parseOptionalInt(value, field) {
     throw err;
   }
   return parsed;
+}
+
+function requireEnumValue(value, allowed, field) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!allowed.has(normalized)) {
+    const err = new Error(`${field} must be one of: ${[...allowed].join(', ')}`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return normalized;
+}
+
+function requirePostedAt(value) {
+  const parsed = new Date(value);
+  if (!value || Number.isNaN(parsed.getTime())) {
+    const err = new Error('posted_at must be a valid timestamp');
+    err.statusCode = 400;
+    throw err;
+  }
+  return parsed.toISOString();
+}
+
+function nullableText(value, maxLength = null) {
+  if (value === undefined || value === null) return null;
+  const text = String(value).replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  return maxLength ? text.slice(0, maxLength) : text;
+}
+
+function optionalNonNegativeInteger(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    const err = new Error(`${field} must be a non-negative integer`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return parsed;
+}
+
+function optionalEngagementRate(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 999.99) {
+    const err = new Error('engagement_rate must be a non-negative percent that fits numeric(5,2)');
+    err.statusCode = 400;
+    throw err;
+  }
+  return Math.round(parsed * 100) / 100;
 }
 
 router.get('/api/emmett/autorun', async (req, res) => {
@@ -2299,6 +2350,76 @@ router.get('/api/analytics/posts', requireDashboardRead, async (req, res) => {
   }
 });
 
+// Manual LinkedIn native-post stats tracker.
+router.post('/api/linkedin-post-stats', requireOperator, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const clientId = getRequestClientId(req);
+    const postedAt = requirePostedAt(body.posted_at);
+    const format = requireEnumValue(body.format, LINKEDIN_POST_FORMATS, 'format');
+    const hookType = requireEnumValue(body.hook_type, LINKEDIN_HOOK_TYPES, 'hook_type');
+    const firstHourActive = body.first_hour_active === true ||
+      ['1', 'true', 'yes', 'on'].includes(String(body.first_hour_active || '').toLowerCase());
+    const warmedBeforePublish = body.warmed_before_publish === true ||
+      ['1', 'true', 'yes', 'on'].includes(String(body.warmed_before_publish || '').toLowerCase());
+
+    const result = await pool.query(`
+      INSERT INTO linkedin_post_stats (
+        client_id, posted_at, post_url, buffer_post_id, format, hook_type,
+        content_snippet, first_hour_active, warmed_before_publish, notes
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING id, client_id, posted_at, post_url, buffer_post_id, format, hook_type,
+                content_snippet, impressions, members_reached, engagement_rate,
+                first_hour_active, warmed_before_publish, stats_captured_at, notes, created_at, updated_at
+    `, [
+      clientId,
+      postedAt,
+      nullableText(body.post_url),
+      nullableText(body.buffer_post_id),
+      format,
+      hookType,
+      nullableText(body.content_snippet, 120),
+      firstHourActive,
+      warmedBeforePublish,
+      nullableText(body.notes),
+    ]);
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.patch('/api/linkedin-post-stats/:id/stats', requireOperator, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const clientId = getRequestClientId(req);
+    const impressions = optionalNonNegativeInteger(body.impressions, 'impressions');
+    const membersReached = optionalNonNegativeInteger(body.members_reached, 'members_reached');
+    const engagementRate = optionalEngagementRate(body.engagement_rate);
+
+    const result = await pool.query(`
+      UPDATE linkedin_post_stats
+      SET impressions = $1,
+          members_reached = $2,
+          engagement_rate = $3,
+          stats_captured_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $4
+        AND client_id = $5
+      RETURNING id, client_id, posted_at, post_url, buffer_post_id, format, hook_type,
+                content_snippet, impressions, members_reached, engagement_rate,
+                first_hour_active, stats_captured_at, notes, created_at, updated_at
+    `, [impressions, membersReached, engagementRate, req.params.id, clientId]);
+
+    if (!result.rows.length) return res.status(404).json({ error: 'LinkedIn post stats row not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 // Content performance summary by channel/type
 router.get('/api/analytics/summary', requireDashboardRead, async (req, res) => {
   try {
@@ -2652,6 +2773,7 @@ router.post('/api/run/:agent', requireOperator, async (req, res) => {
     penny: '../pennyAgent', analytics: '../analyticsAgent', riley: '../rileyAgent',
     warm_signal: '../warmSignalAgent',
     tiered_enrichment: '../tieredEnrichmentAgent',
+    paige_reflection: '../agents/reflection/run',
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
   await ensureAgentLogStatusSchema();
@@ -2688,6 +2810,22 @@ router.post('/api/run/:agent', requireOperator, async (req, res) => {
           })
         : agent === 'emmett'
           ? await mod.run({ client_id: clientId, triggered_by: 'dashboard' })
+          : agent === 'paige'
+            ? await mod.run({
+                client_id: clientId,
+                dryRun: req.body?.dryRun ?? req.body?.dry_run,
+                channel: req.body?.channel,
+                format: req.body?.format,
+                count: req.body?.count,
+                simulateMiraUnavailable: req.body?.simulateMiraUnavailable,
+              })
+          : agent === 'paige_reflection'
+            ? await mod.run({
+                client_id: clientId,
+                windowStart: req.body?.windowStart || req.body?.window_start,
+                windowEnd: req.body?.windowEnd || req.body?.window_end,
+                dryRun: req.body?.dryRun ?? req.body?.dry_run,
+              })
           : await mod.run({ client_id: clientId });
 
       if (triggerLogId) {

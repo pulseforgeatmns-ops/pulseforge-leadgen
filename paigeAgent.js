@@ -3,6 +3,7 @@ const pool = require('./db');
 const Anthropic = require('@anthropic-ai/sdk');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { buildMiraContext } = require('./utils/miraContext');
+const { getActiveGuardrails } = require('./utils/agentLessons');
 
 const client = new Anthropic();
 const AGENT_NAME = 'paige';
@@ -474,6 +475,7 @@ function buildMiraGroundingBlock(context) {
     metrics: context.metrics,
     recent_activity_summaries: context.recent_activity_summaries,
     client_health: context.client_health,
+    linkedin_post_stats: context.linkedin_post_stats || [],
   };
   return `CURRENT CONTENT-SAFE MIRA CONTEXT — CLIENT-SCOPED:
 ${JSON.stringify(safePayload, null, 2)}
@@ -497,6 +499,15 @@ async function getPaigeMiraGrounding(channel) {
     includeCrossClient: false,
   });
   return { context, block: buildMiraGroundingBlock(context) };
+}
+
+async function getLearnedGuardrailsBlock() {
+  const guardrails = await getActiveGuardrails(AGENT_NAME, CLIENT_ID);
+  if (!guardrails.length) return '';
+  return [
+    'LEARNED GUARDRAILS — HUMAN-APPROVED:',
+    ...guardrails.map((row, index) => `${index + 1}. ${row.guardrail_text}`),
+  ].join('\n');
 }
 
 function buildContentRules(recentThemes, recentPublishedAngles = [], topicAngle = null, isPulseforge = false, options = {}) {
@@ -1831,7 +1842,8 @@ async function generateLinkedInPost(company, channel) {
   })}
 
 ${buildLinkedInRules(brand, format)}`;
-  const groundedSystemPrompt = `${systemPrompt}\n\n${miraGrounding}`;
+  const learnedGuardrails = await getLearnedGuardrailsBlock();
+  const groundedSystemPrompt = [systemPrompt, learnedGuardrails, miraGrounding].filter(Boolean).join('\n\n');
   const basePrompt = buildLinkedInV2Prompt(company, brand, format);
 
   const recentFormats = formatHistory
@@ -2243,7 +2255,8 @@ async function generatePost(company, contentType, channel) {
     : isAnchor
       ? buildAnchorContentRules(recentThemes, recentPublishedAngles, { channel })
       : buildContentRules(recentThemes, recentPublishedAngles, topicAngle, isPulseforge, { channel });
-  const systemPrompt = `${baseSystemPrompt}\n\n${miraGrounding}`;
+  const learnedGuardrails = await getLearnedGuardrailsBlock();
+  const systemPrompt = [baseSystemPrompt, learnedGuardrails, miraGrounding].filter(Boolean).join('\n\n');
 
   if (lastContentType) {
     console.log(`  [variety] Last ${channel} post type: ${lastContentType} → generating: ${contentType}`);

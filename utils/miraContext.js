@@ -221,8 +221,17 @@ async function buildContentSafeClientContext(clientId, { query, channel, errors 
       return [];
     }
   };
+  const optionalRows = async (sql, params = []) => {
+    try {
+      const result = await query(sql, params);
+      return result.rows || [];
+    } catch (err) {
+      console.error('[mira_context] optional content-safe query skipped:', err.message);
+      return [];
+    }
+  };
 
-  const [clientRows, metricRows, trendRows, anchor] = await Promise.all([
+  const [clientRows, metricRows, trendRows, linkedinPostStats, anchor] = await Promise.all([
     safeRows(`
       SELECT id, COALESCE(NULLIF(business_name, ''), name) AS name, city, state
       FROM clients
@@ -283,6 +292,14 @@ async function buildContentSafeClientContext(clientId, { query, channel, errors 
       GROUP BY (ran_at AT TIME ZONE 'America/New_York')::date
       ORDER BY activity_date DESC
     `, [clientId]),
+    optionalRows(`
+      SELECT posted_at, format, hook_type, impressions, members_reached,
+             engagement_rate, first_hour_active
+      FROM linkedin_post_stats
+      WHERE client_id = $1
+      ORDER BY posted_at DESC
+      LIMIT 20
+    `, [clientId]),
     getCurrentAnchor({ query }, clientId).catch(err => {
       errors.push(err.message);
       console.error('[mira_context] anchor failed:', err.message);
@@ -307,6 +324,15 @@ async function buildContentSafeClientContext(clientId, { query, channel, errors 
     },
     recent_activity_summaries: buildActivitySummaries(metrics, client),
     client_health: contentSafeHealth(metrics, trendRows),
+    linkedin_post_stats: linkedinPostStats.map(row => ({
+      posted_at: row.posted_at,
+      format: row.format,
+      hook_type: row.hook_type,
+      impressions: row.impressions == null ? null : number(row.impressions),
+      members_reached: row.members_reached == null ? null : number(row.members_reached),
+      engagement_rate: row.engagement_rate == null ? null : Number(row.engagement_rate),
+      first_hour_active: Boolean(row.first_hour_active),
+    })),
     available: Boolean(client && metricRows.length && errors.length === 0),
   };
 }

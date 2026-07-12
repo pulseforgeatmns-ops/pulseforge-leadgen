@@ -34,6 +34,7 @@ const CRON_MODULES = {
   mira_router: '../miraRouterAgent',
   mira_digest: '../miraDigestAgent',
   warm_routing: '../warmRoutingAgent',
+  paige_reflection: '../agents/reflection/run',
 };
 
 function runCronAgent(agent, res, query = {}) {
@@ -68,6 +69,26 @@ function runCronAgent(agent, res, query = {}) {
       // The legacy external trigger still arrives around 06:30 ET. The digest
       // agent guards that call and the in-process scheduler sends at 07:00 ET.
       mod.run({ client_id: clientId, scheduled: true }).catch(err => {
+        console.error(`[cron] ${agent} run error:`, err.message);
+      });
+    } else if (agent === 'paige' && typeof mod.run === 'function') {
+      mod.run({
+        client_id: clientId,
+        dryRun: query.dryRun ?? query.dry_run ?? query['dry-run'],
+        channel: query.channel,
+        format: query.format,
+        count: query.count,
+        simulateMiraUnavailable: query.simulateMiraUnavailable ?? query.simulate_mira_unavailable,
+      }).catch(err => {
+        console.error(`[cron] ${agent} run error:`, err.message);
+      });
+    } else if (agent === 'paige_reflection' && typeof mod.run === 'function') {
+      mod.run({
+        client_id: clientId,
+        windowStart: query.windowStart || query.window_start,
+        windowEnd: query.windowEnd || query.window_end,
+        dryRun: query.dryRun ?? query.dry_run ?? query['dry-run'],
+      }).catch(err => {
         console.error(`[cron] ${agent} run error:`, err.message);
       });
     } else if (typeof mod.run === 'function') {
