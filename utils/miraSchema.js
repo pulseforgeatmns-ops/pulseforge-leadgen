@@ -158,7 +158,8 @@ async function ensureMiraSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS daily_anchors (
       id                BIGSERIAL PRIMARY KEY,
-      anchor_date       DATE UNIQUE NOT NULL,
+      client_id         INT NOT NULL DEFAULT 1,
+      anchor_date       DATE NOT NULL,
       primary_anchor    TEXT,
       secondary_anchors TEXT[],
       set_at            TIMESTAMPTZ,
@@ -166,6 +167,25 @@ async function ensureMiraSchema() {
       completion_notes  TEXT,
       source_capture_id BIGINT REFERENCES capture_inbox(id)
     )
+  `);
+  await pool.query(`ALTER TABLE daily_anchors ADD COLUMN IF NOT EXISTS client_id INT`);
+  await pool.query(`UPDATE daily_anchors SET client_id = 1 WHERE client_id IS NULL`);
+  await pool.query(`ALTER TABLE daily_anchors ALTER COLUMN client_id SET DEFAULT 1`);
+  await pool.query(`ALTER TABLE daily_anchors ALTER COLUMN client_id SET NOT NULL`);
+  await pool.query(`ALTER TABLE daily_anchors DROP CONSTRAINT IF EXISTS daily_anchors_anchor_date_key`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'daily_anchors_client_date_key'
+          AND conrelid = 'daily_anchors'::regclass
+      ) THEN
+        ALTER TABLE daily_anchors
+          ADD CONSTRAINT daily_anchors_client_date_key UNIQUE (client_id, anchor_date);
+      END IF;
+    END $$;
   `);
 
   await pool.query(`

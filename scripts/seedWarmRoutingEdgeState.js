@@ -85,7 +85,11 @@ async function seedWarmRoutingEdgeState() {
         last_source_event_key, last_fired_value, last_fired_at
       )
       SELECT p.client_id, p.id, 'ICP_ELIGIBILITY',
-        COALESCE(p.icp_score, 0) >= 80 AND touch.latest_touch >= NOW() - INTERVAL '14 days',
+        COALESCE(
+          COALESCE(p.icp_score, 0) >= 80
+            AND touch.latest_touch >= NOW() - INTERVAL '14 days',
+          FALSE
+        ),
         jsonb_build_object('icp_score', COALESCE(p.icp_score, 0), 'email_touched_at', touch.latest_touch),
         CASE WHEN touch.latest_touch IS NULL THEN NULL ELSE 'email_touch:' || touch.latest_touch::text END,
         CASE WHEN fire.id IS NULL THEN NULL ELSE jsonb_build_object('seeded_from_fire_id', fire.id) END,

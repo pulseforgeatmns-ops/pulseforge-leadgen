@@ -25,6 +25,12 @@ const {
 const {
   isWithinAnchorWindow,
   getAnchorForToday,
+  parseAnchorSetIntent,
+  setCurrentAnchor,
+  clearCurrentAnchor,
+  buildAnchorSetConfirmation,
+  buildAnchorClearConfirmation,
+  DEFAULT_ANCHOR_CLIENT_ID,
   parseAnchorReply,
   insertAnchor,
 } = require('../utils/miraAnchor');
@@ -214,6 +220,40 @@ async function handleMiraAnchorReply(message) {
   await sendMiraTelegramMessage(reply);
 }
 
+function resolveMiraAnchorClient() {
+  return {
+    clientId: DEFAULT_ANCHOR_CLIENT_ID,
+    assumed: true,
+  };
+}
+
+async function handleMiraAnchorSetIntent(message, intent) {
+  const { clientId, assumed } = resolveMiraAnchorClient(message);
+
+  if (intent.action === 'clear') {
+    await clearCurrentAnchor(clientId);
+    await sendMiraTelegramMessage(buildAnchorClearConfirmation({ clientId, assumed }));
+    return;
+  }
+
+  if (!intent.anchorText) {
+    await sendMiraTelegramMessage('Use /anchor <text> or /anchor clear.');
+    return;
+  }
+
+  const row = await setCurrentAnchor({
+    client_id: clientId,
+    primary_anchor: intent.anchorText,
+    secondary_anchors: [],
+    completion_notes: null,
+  });
+  await sendMiraTelegramMessage(buildAnchorSetConfirmation({
+    clientId,
+    assumed,
+    anchorText: row.primary_anchor,
+  }));
+}
+
 async function handleMiraCallback(callbackQuery) {
   const data = String(callbackQuery.data || '');
 
@@ -318,6 +358,16 @@ router.post('/telegram/mira', async (req, res) => {
       handleMiraCorrectCommand(message).catch(err => {
         console.error('[mira] correct command error:', err.response?.data?.description || err.message);
         sendMiraTelegramMessage(`Could not correct capture: ${err.message}`).catch(() => {});
+      });
+      return;
+    }
+
+    const anchorSetIntent = parseAnchorSetIntent(message.text || '');
+    if (anchorSetIntent?.matched) {
+      res.status(200).json({ ok: true });
+      handleMiraAnchorSetIntent(message, anchorSetIntent).catch(err => {
+        console.error('[mira] anchor set error:', err.response?.data?.description || err.message);
+        sendMiraTelegramMessage(`Could not set anchor: ${err.message}`).catch(() => {});
       });
       return;
     }

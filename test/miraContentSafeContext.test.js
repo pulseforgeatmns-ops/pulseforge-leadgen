@@ -66,6 +66,44 @@ test('content-safe Mira context reports unavailable instead of inventing metrics
   assert.deepEqual(context.recent_activity_summaries, []);
 });
 
+test('content-safe Mira context reads exact client-scoped anchor text', async () => {
+  const anchorText = 'Warm signals climbing four days straight in Providence, 10 to 41 in the last 24h. Opens up, replies still at 0. Engagement leads response, and the gap is where follow-up lives.';
+  const query = async (sql, params = []) => {
+    if (/to_regclass\('public\.daily_anchors'\)/i.test(sql)) return { rows: [{ tbl: 'daily_anchors' }] };
+    if (/information_schema\.columns/i.test(sql)) {
+      return { rows: ['id', 'client_id', 'anchor_date', 'primary_anchor'].map(column_name => ({ column_name })) };
+    }
+    if (/FROM daily_anchors/i.test(sql)) {
+      assert.deepEqual(params, [1]);
+      return { rows: [{ client_id: 1, anchor_date: '2026-07-10', primary_anchor: anchorText }] };
+    }
+    if (/FROM clients\s+WHERE id = \$1/i.test(sql)) {
+      return { rows: [{ id: 1, name: 'Pulseforge', city: 'Providence', state: 'RI' }] };
+    }
+    if (/AS send_count_24h/i.test(sql)) {
+      return { rows: [{
+        send_count_24h: 0,
+        open_count_24h: 0,
+        reply_count_24h: 0,
+        bounce_count_24h: 0,
+        warm_signal_count_24h: 0,
+        send_daily_average_previous_7d: 0,
+      }] };
+    }
+    if (/GROUP BY \(ran_at AT TIME ZONE/i.test(sql)) return { rows: [] };
+    if (/FROM linkedin_post_stats/i.test(sql)) return { rows: [] };
+    throw new Error(`Unexpected anchor query: ${sql.slice(0, 80)}`);
+  };
+
+  const context = await buildMiraContext(1, {
+    contentSafe: true,
+    channel: 'linkedin_page',
+    query,
+  });
+
+  assert.equal(context.current_anchor.primary_anchor, anchorText);
+});
+
 test('full Mira builder preserves the HTTP endpoint response shape', async () => {
   const context = await buildMiraContext(null, {
     contentSafe: false,

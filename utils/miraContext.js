@@ -112,7 +112,7 @@ async function getTodoistSnapshot(staleDays = 5) {
 // absent we return null instead of throwing. We discover a date-ish column at
 // query time so this works regardless of whether the table scopes "today" via
 // anchor_date / date / for_date / day / created_at.
-async function getCurrentAnchor(pool) {
+async function getCurrentAnchor(pool, clientId = null) {
   const reg = await pool.query("SELECT to_regclass('public.daily_anchors') AS tbl");
   if (!reg.rows[0]?.tbl) return null;
 
@@ -122,6 +122,18 @@ async function getCurrentAnchor(pool) {
   `);
   const names = cols.rows.map(r => r.column_name);
   const dateCol = ['anchor_date', 'date', 'for_date', 'day', 'created_at'].find(c => names.includes(c));
+  const hasClientId = names.includes('client_id');
+
+  if (dateCol && hasClientId && clientId != null) {
+    const res = await pool.query(
+      `SELECT * FROM daily_anchors
+       WHERE client_id = $1
+         AND ${dateCol}::date = (NOW() AT TIME ZONE 'America/New_York')::date
+       ORDER BY id DESC LIMIT 1`,
+      [clientId]
+    );
+    return res.rows[0] || null;
+  }
 
   if (!dateCol) {
     const res = await pool.query('SELECT * FROM daily_anchors ORDER BY id DESC LIMIT 1');
@@ -147,7 +159,7 @@ function shortText(value, maxLength = 120) {
 
 function contentSafeAnchor(anchor, clientId) {
   if (!anchor) return null;
-  const primary = shortText(anchor.primary_anchor || anchor.anchor || anchor.content);
+  const primary = String(anchor.primary_anchor || anchor.anchor || anchor.content || '').replace(/\s+/g, ' ').trim();
   if (!primary) return null;
   const foreignContext = LIVE_WORKSTREAMS
     .filter(workstream => workstream.client_id != null && Number(workstream.client_id) !== Number(clientId))
@@ -271,7 +283,7 @@ async function buildContentSafeClientContext(clientId, { query, channel, errors 
       GROUP BY (ran_at AT TIME ZONE 'America/New_York')::date
       ORDER BY activity_date DESC
     `, [clientId]),
-    getCurrentAnchor({ query }).catch(err => {
+    getCurrentAnchor({ query }, clientId).catch(err => {
       errors.push(err.message);
       console.error('[mira_context] anchor failed:', err.message);
       return null;

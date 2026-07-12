@@ -5,8 +5,7 @@ const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { ensureClientArchitecture, getActiveClients, getRequestClientId, normalizeClientId } = require('../utils/clientContext');
 const { ensureCloserSchema } = require('../utils/closerSchema');
-const { getTodoistSnapshot, getCurrentAnchor } = require('../utils/miraContext');
-const { LIVE_WORKSTREAMS } = require('../utils/miraWorld');
+const { buildMiraContext } = require('../utils/miraContext');
 const { publishBlogPost } = require('../utils/blogPublisher');
 const {
   publishToGoogleBusiness,
@@ -2771,126 +2770,7 @@ function requireMiraContextSecret(req, res, next) {
 
 router.get(['/api/mira/context', '/api/mira/context/:secret'], requireMiraContextSecret, async (req, res) => {
   try {
-    // Every table read below is SELECT-only and individually fault-isolated: a
-    // missing or empty table yields [] / null instead of failing the snapshot.
-    const safeRows = (promise, fallback = []) => promise.then(r => r.rows).catch(err => {
-      console.error('[mira_context] query failed:', err.message);
-      return fallback;
-    });
-
-    const [
-      recentCaptures,
-      openBlockers,
-      activeClients,
-      recentClientNotes,
-      recentCorrections,
-      currentAnchor,
-      todoist,
-      dailyHealthYesterday,
-      dailyHealthToday,
-      dailyHealthTrend,
-    ] = await Promise.all([
-      // Last 10 captures with a 150-char preview of transcript (preferred) or raw_text.
-      safeRows(pool.query(`
-        SELECT ci.id,
-               LEFT(COALESCE(NULLIF(ci.transcript, ''), ci.raw_text, ''), 150) AS content_preview,
-               ci.classification, ci.status, ci.received_at,
-               ci.capture_type, ci.source, ci.linked_entity_type, ci.linked_entity_id,
-               ci.linked_capture_id, ci.captured_at
-        FROM capture_inbox ci
-        LEFT JOIN clients direct_client ON direct_client.id = ci.client_id
-        LEFT JOIN prospects linked_prospect
-          ON ci.linked_entity_type = 'prospect'
-         AND linked_prospect.id::text = ci.linked_entity_id
-        LEFT JOIN clients linked_client ON linked_client.id = linked_prospect.client_id
-        WHERE COALESCE(ci.archived, false) = false
-          AND (ci.client_id IS NULL OR direct_client.active = true)
-          AND (
-            linked_prospect.id IS NULL
-            OR (linked_client.active = true AND COALESCE(linked_prospect.mira_archived, false) = false)
-          )
-        ORDER BY ci.received_at DESC
-        LIMIT 10
-      `)),
-      // Open (unresolved) blockers, oldest first, with days_open computed at read time.
-      safeRows(pool.query(`
-        SELECT id, content, blocking,
-               GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400))::int AS days_open
-        FROM blockers
-        WHERE resolved = false
-        ORDER BY created_at ASC
-      `)),
-      // Active clients. The clients table uses an `active` boolean (there is no
-      // `status` column), so "status='active'" maps to active = true here.
-      safeRows(pool.query(`
-        SELECT id, name FROM clients WHERE active = true ORDER BY name ASC
-      `)),
-      // Last 10 client notes joined to the client name, 150-char content preview.
-      safeRows(pool.query(`
-        SELECT cn.created_at,
-               c.name AS client_name,
-               LEFT(COALESCE(cn.content, ''), 150) AS content_preview
-        FROM client_notes cn
-        JOIN clients c ON c.id = cn.client_id AND c.active = true
-        WHERE COALESCE(cn.archived, false) = false
-        ORDER BY cn.created_at DESC
-        LIMIT 10
-      `)),
-      // Last 5 Mira misclassification corrections.
-      safeRows(pool.query(`
-        SELECT mc.original_class, mc.corrected_class, mc.created_at
-        FROM mira_corrections mc
-        JOIN capture_inbox ci ON ci.id = mc.capture_id
-        WHERE COALESCE(mc.archived, false) = false
-          AND COALESCE(ci.archived, false) = false
-          AND mc.original_class <> mc.corrected_class
-        ORDER BY mc.created_at DESC
-        LIMIT 5
-      `)),
-      getCurrentAnchor(pool).catch(err => {
-        console.error('[mira_context] anchor failed:', err.message);
-        return null;
-      }),
-      getTodoistSnapshot().catch(err => {
-        console.error('[mira_context] todoist failed:', err.message);
-        return { configured: false, open_tasks_count: 0, stale_tasks: [], error: err.message };
-      }),
-      safeRows(pool.query(`
-        SELECT *
-        FROM daily_health_log
-        WHERE log_date = (NOW() AT TIME ZONE 'America/New_York')::date - 1
-      `)),
-      safeRows(pool.query(`
-        SELECT *
-        FROM daily_health_log
-        WHERE log_date = (NOW() AT TIME ZONE 'America/New_York')::date
-      `)),
-      safeRows(pool.query(`
-        SELECT log_date, send_count_today, bounce_count_today, reply_count_today,
-               warm_signals_fired_today, health_flags
-        FROM daily_health_log
-        WHERE log_date >= (NOW() AT TIME ZONE 'America/New_York')::date - 6
-          AND log_date <= (NOW() AT TIME ZONE 'America/New_York')::date
-        ORDER BY log_date DESC
-      `)),
-    ]);
-
-    res.json({
-      now: new Date().toISOString(),
-      live_workstreams: LIVE_WORKSTREAMS,
-      recent_captures: recentCaptures,
-      current_anchor: currentAnchor,
-      open_tasks_count: todoist.open_tasks_count,
-      active_tasks: todoist.active_tasks || [],
-      stale_tasks: todoist.stale_tasks,
-      open_blockers: openBlockers,
-      active_clients: activeClients,
-      recent_client_notes: recentClientNotes,
-      recent_corrections: recentCorrections,
-      daily_health_yesterday: dailyHealthYesterday[0] || null,
-      daily_health_today: dailyHealthToday[0] || null,
-      daily_health_trend_7d: dailyHealthTrend,
-    });
+    res.json(await buildMiraContext(null, { contentSafe: false }));
   } catch (err) {
     console.error('[mira_context] error:', err.message);
     res.status(500).json({ error: err.message });
