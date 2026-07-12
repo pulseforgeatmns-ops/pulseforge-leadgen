@@ -16,7 +16,7 @@ const CITIES = [
 const VERTICALS = [
   'commercial_electrical', 'janitorial', 'property_management', 'staffing_recruiting', 'msp_it_services',
 ];
-const MAX_RESULTS_PER_PAIR = 5;
+const DEFAULT_MAX_RESULTS_PER_PAIR = 5;
 const PLACES_TEXTSEARCH = 'https://maps.googleapis.com/maps/api/place/textsearch/json';
 const PLACES_DETAILS = 'https://maps.googleapis.com/maps/api/place/details/json';
 
@@ -24,6 +24,22 @@ function arg(name) {
   const prefix = `--${name}=`;
   const value = process.argv.find(item => item.startsWith(prefix));
   return value ? value.slice(prefix.length).trim().toLowerCase() : '';
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function mapWithConcurrency(values, limit, mapper) {
+  const results = new Array(values.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, async () => {
+    while (next < values.length) {
+      const index = next++;
+      results[index] = await mapper(values[index]);
+    }
+  }));
+  return results;
 }
 
 function domainFromUrl(value) {
@@ -41,6 +57,7 @@ function buildPairs(client) {
       city,
       state,
       vertical,
+      queries: entry.seed_terms.map(seed => seed.replace(/\{city\}/g, city).replace(/\{state\}/g, state)),
       query: entry.seed_terms[0].replace(/\{city\}/g, city).replace(/\{state\}/g, state),
     };
   }));
@@ -62,27 +79,50 @@ async function isFresh(clientId, name, website) {
   return rows.length === 0;
 }
 
-async function validatePair(pair, clientId, apiKey) {
-  const search = await axios.get(PLACES_TEXTSEARCH, {
-    params: { query: pair.query, key: apiKey }, timeout: 10_000,
-  });
-  const hits = (search.data.results || []).slice(0, MAX_RESULTS_PER_PAIR);
-  const result = { ...pair, searches: 1, returned: hits.length, b2b: 0, b2c: 0, ambiguous: 0, fresh: 0 };
-  for (const hit of hits) {
+async function searchPlaces(query, apiKey, maxResults) {
+  const hits = [];
+  let pageToken = null;
+  do {
+    if (pageToken) await delay(2_000); // Google activates the next token asynchronously.
+    const search = await axios.get(PLACES_TEXTSEARCH, {
+      params: pageToken ? { pagetoken: pageToken, key: apiKey } : { query, key: apiKey }, timeout: 10_000,
+    });
+    hits.push(...(search.data.results || []));
+    pageToken = search.data.next_page_token || null;
+  } while (pageToken && hits.length < maxResults);
+  return hits.slice(0, maxResults);
+}
+
+async function validatePair(pair, clientId, apiKey, maxResults) {
+  const seenPlaceIds = new Set();
+  const hits = [];
+  let searches = 0;
+  for (const query of pair.queries || [pair.query]) {
+    const remaining = maxResults - hits.length;
+    if (remaining <= 0) break;
+    searches++;
+    for (const hit of await searchPlaces(query, apiKey, remaining)) {
+      if (seenPlaceIds.has(hit.place_id)) continue;
+      seenPlaceIds.add(hit.place_id);
+      hits.push(hit);
+    }
+  }
+  const result = { ...pair, searches, returned: hits.length, b2b: 0, b2c: 0, ambiguous: 0, fresh: 0 };
+  await mapWithConcurrency(hits, 5, async hit => {
     const detailsResponse = await axios.get(PLACES_DETAILS, {
       params: { place_id: hit.place_id, fields: 'name,website,types', key: apiKey }, timeout: 10_000,
     }).catch(() => null);
     const details = detailsResponse?.data?.result;
     if (!details?.website) {
       result.ambiguous++;
-      continue;
+      return;
     }
     const classification = scoutTest.classifyPlacesB2B({
       company: details.name || hit.name || '', url: details.website, place_types: details.types || hit.types || [], snippet: '',
     }).classification;
     result[classification]++;
     if (classification === 'b2b' && await isFresh(clientId, details.name || hit.name || '', details.website)) result.fresh++;
-  }
+  });
   result.fresh_yield_per_search = result.fresh / result.searches;
   return result;
 }
@@ -101,18 +141,19 @@ async function main() {
   if (!apiKey) throw new Error('GOOGLE_PLACES_KEY is required for the market bake-off');
   const client = await getClientConfig(1);
   if (!client) throw new Error('Client 1 is not active');
+  const maxResults = Math.max(1, Math.min(Number(arg('max') || DEFAULT_MAX_RESULTS_PER_PAIR), 50));
   const cityFilter = arg('city');
   const pairs = buildPairs(client).filter(pair => !cityFilter || pair.city.toLowerCase() === cityFilter);
   if (!pairs.length) throw new Error(`No bake-off pairs match --city=${cityFilter}`);
   const results = [];
   for (const pair of pairs) {
     process.stderr.write(`[bake-off] ${pair.city} / ${pair.vertical}\n`);
-    results.push(await validatePair(pair, 1, apiKey));
+    results.push(await validatePair(pair, 1, apiKey, maxResults));
   }
   process.stdout.write(`${JSON.stringify({
     dry_run: true,
     source: 'google_places',
-    max_results_per_city_vertical: MAX_RESULTS_PER_PAIR,
+    max_results_per_city_vertical: maxResults,
     pairs: results,
     market_ranking: cityRanking(results),
   }, null, 2)}\n`);
