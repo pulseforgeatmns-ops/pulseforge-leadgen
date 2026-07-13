@@ -68,7 +68,7 @@ async function ensureScoutExpansionTables() {
       vertical TEXT NOT NULL,
       location TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'completed', 'failed')),
+        CHECK (status IN ('pending', 'completed', 'failed', 'retired')),
       triggered_by TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )

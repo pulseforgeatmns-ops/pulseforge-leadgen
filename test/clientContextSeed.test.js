@@ -64,5 +64,6 @@ test('simulated boot preserves an existing client configuration', async () => {
   assert.deepEqual(preserved.enabled_agents, ['scout']);
   assert.equal(preserved.active, false);
   assert.equal(queries.filter(sql => /INSERT INTO clients/i.test(sql) && /ON CONFLICT \(id\) DO NOTHING/i.test(sql)).length, 3);
+  assert.equal(queries.some(sql => /ARRAY\['Providence','Cranston','Warwick','Pawtucket','East Providence','Boston'\]/i.test(sql)), true);
   assert.equal(queries.some(sql => /sender_email = 'jacob@gopulseforge\.com'/i.test(sql)), false);
 });

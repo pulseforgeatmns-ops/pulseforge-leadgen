@@ -36,6 +36,12 @@ const { searchSerpApi } = require('./lib/serpapi');
 const { sourceLinkedInProspects } = require('./utils/linkedinSerpSource');
 const { ensureLinkedInScoutSchema } = require('./utils/linkedinScoutSchema');
 const {
+  configuredServiceAreas,
+  matchServiceAreaFromLocation,
+  matchServiceAreaLocality,
+  parsePlacesAddressComponents,
+} = require('./utils/serviceArea');
+const {
   resolveVerticalTier,
   targetVerticalEntries,
   autonomousTargetVerticals,
@@ -352,6 +358,13 @@ const PROVIDENCE_SCOUT_CITIES = [
   'East Providence',
 ];
 
+// clients.service_area stores configured city names, while clients.state is a
+// single home state. Cross-state service cities need an explicit search-state
+// override so Boston never becomes the invalid query "Boston RI".
+const CLIENT_SCOUT_CITY_STATE_OVERRIDES = {
+  1: { boston: 'MA' },
+};
+
 const MSHI_PROBATE_ATTORNEY_GEO = [
   { city: 'Charleston', state: 'WV' },
   { city: 'South Charleston', state: 'WV' },
@@ -483,9 +496,18 @@ function getPlannedVerticals(clientId) {
 
 function getPlannedLocations(clientId, fallbackLocation, vertical = CONFIG.vertical) {
   if (hasConfiguredScoutDefinition(clientId)) {
+    const target = targetVerticalEntries(CLIENT_CONFIG)
+      .find(entry => entry.vertical === normalizeVertical(vertical));
+    if (!target?.autonomous_sourcing || target.tier !== 'A') return [];
     const state = CLIENT_CONFIG?.state || sanitizeQueueLocation(fallbackLocation).split(/\s+/).pop() || '';
     const cities = Array.isArray(CLIENT_CONFIG?.service_area) ? CLIENT_CONFIG.service_area : [];
-    if (cities.length) return cities.map(city => sanitizeQueueLocation(`${city} ${state}`));
+    const overrides = CLIENT_SCOUT_CITY_STATE_OVERRIDES[Number(clientId)] || {};
+    if (cities.length) {
+      return cities.map(city => {
+        const cityState = overrides[normalizeGeoText(city)] || state;
+        return sanitizeQueueLocation(`${city} ${cityState}`);
+      });
+    }
   }
   const plan = getClientScoutPlan(clientId);
   const normalizedVertical = normalizeVertical(vertical);
@@ -952,7 +974,7 @@ async function fetchPlaceDetails(placeId, apiKey) {
   const res = await axios.get(PLACES_DETAILS, {
     params: {
       place_id: placeId,
-      fields: 'name,formatted_address,formatted_phone_number,website,place_id,rating,user_ratings_total,types',
+      fields: 'name,formatted_address,address_components,formatted_phone_number,website,place_id,rating,user_ratings_total,types',
       key: apiKey,
     },
   });
@@ -1009,11 +1031,15 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
         const domain = extractDomain(details.website);
         if (!domain || isBlacklistedDomain(domain)) continue;
 
+        const placeAddress = parsePlacesAddressComponents(details.address_components);
         leads.push({
           company: normalizeCompanyName(details.name || hit.name || 'Unknown'),
           url: domain,
           phone: details.formatted_phone_number || null,
           address: details.formatted_address || hit.formatted_address || '',
+          places_locality: placeAddress.locality,
+          places_administrative_area_level_1: placeAddress.administrativeAreaLevel1,
+          places_postal_code: placeAddress.postalCode,
           place_id: details.place_id || hit.place_id,
           google_rating: details.rating ?? hit.rating ?? null,
           google_review_count: details.user_ratings_total ?? hit.user_ratings_total ?? null,
@@ -1700,18 +1726,24 @@ async function findOrCreateCompany({ name, domain, lead }) {
       `UPDATE companies
           SET domain = COALESCE(domain, $1),
               website = COALESCE(website, $2),
-              business_name_short = COALESCE(NULLIF(business_name_short, ''), $3),
-              business_name_short_confidence = COALESCE(NULLIF(business_name_short_confidence, ''), $4),
+              places_locality = COALESCE(places_locality, $3),
+              places_administrative_area_level_1 = COALESCE(places_administrative_area_level_1, $4),
+              places_postal_code = COALESCE(places_postal_code, $5),
+              business_name_short = COALESCE(NULLIF(business_name_short, ''), $6),
+              business_name_short_confidence = COALESCE(NULLIF(business_name_short_confidence, ''), $7),
               business_name_short_flags = CASE
-                WHEN COALESCE(array_length(business_name_short_flags, 1), 0) = 0 THEN $5::text[]
+                WHEN COALESCE(array_length(business_name_short_flags, 1), 0) = 0 THEN $8::text[]
                 ELSE business_name_short_flags
               END,
               updated_at = NOW()
-        WHERE id = $6
-          AND client_id = $7`,
+        WHERE id = $9
+          AND client_id = $10`,
       [
         domain,
         lead.url || null,
+        lead.places_locality || null,
+        lead.places_administrative_area_level_1 || null,
+        lead.places_postal_code || null,
         shortName.business_name_short,
         shortName.confidence,
         shortName.flags,
@@ -1725,9 +1757,10 @@ async function findOrCreateCompany({ name, domain, lead }) {
   const inserted = await pool.query(
     `INSERT INTO companies (
        name, business_name_short, business_name_short_confidence, business_name_short_flags,
-       domain, website, industry, location, client_id, created_at
+       domain, website, industry, location, places_locality,
+       places_administrative_area_level_1, places_postal_code, client_id, created_at
      )
-     VALUES ($1, $2, $3, $4::text[], $5, $6, $7, $8, $9, NOW())
+     VALUES ($1, $2, $3, $4::text[], $5, $6, $7, $8, $9, $10, $11, $12, NOW())
      ON CONFLICT DO NOTHING
      RETURNING id`,
     [
@@ -1739,6 +1772,9 @@ async function findOrCreateCompany({ name, domain, lead }) {
       lead.url || null,
       CONFIG.industry || null,
       lead.address || CONFIG.location || null,
+      lead.places_locality || null,
+      lead.places_administrative_area_level_1 || null,
+      lead.places_postal_code || null,
       CONFIG.clientId,
     ]
   );
@@ -2144,6 +2180,10 @@ function hasLinkedInEnrichment(existing, record) {
 }
 
 async function saveLinkedInProspect(record, { dryRun = false } = {}) {
+  const serviceAreaMatch = matchServiceAreaFromLocation(
+    record.linkedin_location,
+    configuredServiceAreas(CLIENT_CONFIG)
+  );
   const existing = await findExistingLinkedInProspect(record);
   if (existing) {
     const enriched = hasLinkedInEnrichment(existing.row, record);
@@ -2156,13 +2196,14 @@ async function saveLinkedInProspect(record, { dryRun = false } = {}) {
             linkedin_url = COALESCE(NULLIF(linkedin_url, ''), NULLIF($4, '')),
             linkedin_headline = COALESCE(NULLIF(linkedin_headline, ''), NULLIF($5, '')),
             linkedin_location = COALESCE(NULLIF(linkedin_location, ''), NULLIF($6, '')),
-            employee_count_estimate = COALESCE(NULLIF(employee_count_estimate, ''), NULLIF($7, '')),
-            linkedin_source_query = $8::jsonb,
+            service_area_match = COALESCE(service_area_match, $7),
+            employee_count_estimate = COALESCE(NULLIF(employee_count_estimate, ''), NULLIF($8, '')),
+            linkedin_source_query = $9::jsonb,
             updated_at = NOW()
-        WHERE id = $9 AND client_id = $10
+        WHERE id = $10 AND client_id = $11
       `, [
         record.first_name, record.last_name, record.job_title, record.linkedin_url,
-        record.linkedin_headline, record.linkedin_location, record.employee_count_estimate,
+        record.linkedin_headline, record.linkedin_location, serviceAreaMatch, record.employee_count_estimate,
         JSON.stringify(record.linkedin_source_query), existing.row.id, CONFIG.clientId,
       ]);
     }
@@ -2175,14 +2216,14 @@ async function saveLinkedInProspect(record, { dryRun = false } = {}) {
     INSERT INTO prospects (
       company_id, first_name, last_name, job_title, linkedin_url, linkedin_headline,
       linkedin_location, linkedin_source_query, employee_count_estimate, source, status,
-      vertical, client_id, discovery_method, preferred_channel, decision_maker
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, 'scout', 'cold', $10, $11, 'linkedin_serpapi', 'linkedin', true)
+      vertical, client_id, service_area_match, discovery_method, preferred_channel, decision_maker
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, 'scout', 'cold', $10, $11, $12, 'linkedin_serpapi', 'linkedin', true)
     ON CONFLICT DO NOTHING
     RETURNING id
   `, [
     companyId, record.first_name, record.last_name, record.job_title, record.linkedin_url,
     record.linkedin_headline, record.linkedin_location, JSON.stringify(record.linkedin_source_query),
-    record.employee_count_estimate, CONFIG.vertical, CONFIG.clientId,
+    record.employee_count_estimate, CONFIG.vertical, CONFIG.clientId, serviceAreaMatch,
   ]);
   if (inserted.rows[0]) return { action: 'written', match: null, prospectId: inserted.rows[0].id };
   const raced = await findExistingLinkedInProspect(record);
@@ -2303,6 +2344,18 @@ async function saveToDatabase(leads, {
         continue;
       }
 
+      const allowedServiceAreas = configuredServiceAreas(CLIENT_CONFIG);
+      const isPlacesLead = Array.isArray(lead.source) && lead.source.includes('google_places');
+      const rejectedLocality = isPlacesLead ? lead.places_locality || null : null;
+      const serviceArea = isPlacesLead
+        ? matchServiceAreaLocality(lead.places_locality, allowedServiceAreas)
+        : matchServiceAreaFromLocation(lead.address, allowedServiceAreas);
+      // Persist structured Places geography before any dedupe or location
+      // guard can discard this candidate.
+      let companyId = isPlacesLead
+        ? await findOrCreateCompany({ name: companyName, domain, lead })
+        : null;
+
     // Dedup: skip if a prospect with the same business name already exists in the same city.
     // City is taken from the first token of CONFIG.location (e.g., "Manchester NH" -> "Manchester").
     // If the existing prospect has no city info recorded, fall back to a name-only match within the client.
@@ -2329,6 +2382,19 @@ async function saveToDatabase(leads, {
         incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.DUPLICATE);
         skipped++;
         await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.DUPLICATE, { match: 'company_name_and_city', city_scope: cityScope || null, existing_prospect_id: dupCheck.rows[0].id }, companyName);
+        continue;
+      }
+
+      if (serviceArea === null && allowedServiceAreas.length > 0) {
+        console.log(`[Scout] Out-of-area prospect skipped: ${companyName} (${lead.address || 'no address'})`);
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.OUT_OF_AREA);
+        skipped++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.OUT_OF_AREA, {
+          address: lead.address || null,
+          rejected_locality: rejectedLocality,
+          rejected_state: isPlacesLead ? lead.places_administrative_area_level_1 || null : null,
+          allowed_service_area: allowedServiceAreas,
+        }, companyName);
         continue;
       }
 
@@ -2402,19 +2468,6 @@ async function saveToDatabase(leads, {
       const firstName = sanitizeFirstName(looksLikePerson ? nameParts[0] : null);
       const lastName  = firstName ? nameParts.slice(1).join(' ') || null : null;
       const phone = isCleaningBuyerProfile() ? contactCandidate.phone : lead.phone || null;
-      const addressHay = normalizeGeoText(lead.address || '');
-      const domainHay = normalizeGeoText(domain || '');
-      const serviceArea = (CLIENT_CONFIG?.service_area || []).find(area => {
-        const needle = normalizeGeoText(area);
-        return needle && (addressHay.includes(needle) || domainHay.includes(needle));
-      }) || null;
-      if (serviceArea === null && Array.isArray(CLIENT_CONFIG?.service_area) && CLIENT_CONFIG.service_area.length > 0) {
-        console.log(`[Scout] Out-of-area prospect skipped: ${companyName} (${lead.address || 'no address'})`);
-        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.OUT_OF_AREA);
-        skipped++;
-        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.OUT_OF_AREA, { address: lead.address || null, candidate_domain: domain, allowed_service_area: CLIENT_CONFIG.service_area }, companyName);
-        continue;
-      }
       const hasWebsite = !!(domain || websiteUrl);
       const facebookUrl = lead.facebook_url || null;
       const instagramUrl = lead.instagram_url || null;
@@ -2423,7 +2476,7 @@ async function saveToDatabase(leads, {
       const googleRating = lead.google_rating ?? null;
       const googleReviewCount = lead.google_review_count ?? null;
       const preferredChannel = getScoutPreferredChannel();
-      const companyId = await findOrCreateCompany({ name: companyName, domain, lead });
+      companyId = companyId || await findOrCreateCompany({ name: companyName, domain, lead });
       if (!companyId) throw new Error(`Unable to link company for ${companyName}`);
       const insert = await pool.query(
       `INSERT INTO prospects (
@@ -2509,7 +2562,10 @@ async function ensureSetterQueueColumns(pool) {
 async function ensureCompanyColumns(pool) {
   await pool.query(`
     ALTER TABLE companies
-    ADD COLUMN IF NOT EXISTS domain TEXT
+    ADD COLUMN IF NOT EXISTS domain TEXT,
+    ADD COLUMN IF NOT EXISTS places_locality TEXT,
+    ADD COLUMN IF NOT EXISTS places_administrative_area_level_1 TEXT,
+    ADD COLUMN IF NOT EXISTS places_postal_code TEXT
   `);
 }
 
@@ -3144,7 +3200,10 @@ module.exports = {
     isQueueLocationValidForPlan,
     classifyPlacesB2B,
     requiresB2BPlacesGate,
+    searchGooglePlaces,
+    saveToDatabase,
     CLIENT_SCOUT_PLANS,
+    CLIENT_SCOUT_CITY_STATE_OVERRIDES,
   },
 };
 

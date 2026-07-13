@@ -147,18 +147,24 @@ async function run() {
   assert.equal(queryCalls, 1);
 
   let prospectSelects = 0;
-  pool.query = async sql => {
+  let prospectInsert = null;
+  pool.query = async (sql, params) => {
     if (/FROM prospects p/.test(sql)) {
       prospectSelects++;
       return { rows: [] };
     }
-    if (/INSERT INTO prospects/.test(sql)) return { rows: [{ id: 'new-id' }] };
+    if (/INSERT INTO prospects/.test(sql)) {
+      prospectInsert = { sql, params };
+      return { rows: [{ id: 'new-id' }] };
+    }
     throw new Error(`unexpected persistence query: ${sql}`);
   };
   const writeOutcome = await _test.saveLinkedInProspect(record, { dryRun: false });
   assert.equal(writeOutcome.action, 'written');
   assert.equal(writeOutcome.prospectId, 'new-id');
   assert.equal(prospectSelects, 1);
+  assert.match(prospectInsert.sql, /client_id, service_area_match, discovery_method/);
+  assert.equal(prospectInsert.params[11], null);
   pool.query = originalQuery;
 
   console.log('LinkedIn Scout source tests passed');

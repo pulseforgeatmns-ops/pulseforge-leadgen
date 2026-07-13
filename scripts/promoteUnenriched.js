@@ -11,6 +11,8 @@ const { ensureEmailVerificationColumns } = require('../utils/emailVerificationSc
 const { ensureScoutUnenrichedTable } = require('../utils/scoutUnenrichedSchema');
 const { normalizeVertical } = require('../utils/normalize');
 const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('../utils/businessNameShort');
+const { getClientConfig } = require('../utils/clientContext');
+const { configuredServiceAreas, matchServiceAreaFromLocation } = require('../utils/serviceArea');
 
 function parseArg(name) {
   const prefix = `--${name}=`;
@@ -40,17 +42,17 @@ async function findUnenrichedRecord({ domain, company }) {
   return null;
 }
 
-async function findOrCreateCompanyForClient({ name, domain, websiteUrl, vertical, location, clientId }) {
-  await ensureBusinessNameShortColumns(pool);
+async function findOrCreateCompanyForClient({ name, domain, websiteUrl, vertical, location, clientId }, db = pool) {
+  await ensureBusinessNameShortColumns(db);
   const shortName = deriveBusinessNameShort(name);
-  const existing = await pool.query(
+  const existing = await db.query(
     `SELECT id FROM companies
      WHERE client_id = $2 AND LOWER(TRIM(name)) = LOWER(TRIM($1))
      LIMIT 1`,
     [name, clientId]
   );
   if (existing.rows.length) {
-    await pool.query(`
+    await db.query(`
       UPDATE companies
       SET business_name_short = COALESCE(NULLIF(business_name_short, ''), $1),
           business_name_short_confidence = COALESCE(NULLIF(business_name_short_confidence, ''), $2),
@@ -71,7 +73,7 @@ async function findOrCreateCompanyForClient({ name, domain, websiteUrl, vertical
     return existing.rows[0].id;
   }
 
-  const inserted = await pool.query(
+  const inserted = await db.query(
     `INSERT INTO companies (
        name, business_name_short, business_name_short_confidence, business_name_short_flags,
        domain, website, industry, location, client_id, created_at
@@ -93,14 +95,32 @@ async function findOrCreateCompanyForClient({ name, domain, websiteUrl, vertical
   return inserted.rows[0]?.id || null;
 }
 
-async function promoteRecord(record) {
+function promotionServiceAreaMatch(record, clientConfig) {
+  return matchServiceAreaFromLocation(record?.location, configuredServiceAreas(clientConfig));
+}
+
+async function promoteRecord(record, {
+  db = pool,
+  enrich = runEnrichmentChain,
+  verify = resolveEmailVerification,
+  loadClientConfig = getClientConfig,
+} = {}) {
   const domain = record.domain || normalizeDomain(record.website_url);
   if (!domain) throw new Error('Record has no domain or website_url');
 
+  const clientConfig = await loadClientConfig(record.client_id);
+  if (!clientConfig) throw new Error(`Active client not found: ${record.client_id}`);
+  const allowedServiceAreas = configuredServiceAreas(clientConfig);
+  const serviceAreaMatch = promotionServiceAreaMatch(record, clientConfig);
+  if (allowedServiceAreas.length > 0 && serviceAreaMatch === null) {
+    console.log(`[promoteUnenriched] Out-of-area location rejected: ${record.location || 'no location'}`);
+    return false;
+  }
+
   console.log(`[promoteUnenriched] Re-enriching ${record.company || domain} (${domain})...`);
-  const enriched = await runEnrichmentChain(domain, 'owner');
+  const enriched = await enrich(domain, 'owner');
   if (!enriched?.email) {
-    await pool.query(`
+    await db.query(`
       UPDATE scout_unenriched
       SET enrichment_attempts = enrichment_attempts + 1,
           last_attempt_at = NOW(),
@@ -117,7 +137,7 @@ async function promoteRecord(record) {
     source: enriched.source || ['manual_promote'],
     url: record.website_url,
   };
-  const verification = await resolveEmailVerification(enriched.email, lead);
+  const verification = await verify(enriched.email, lead);
   if (verification.reject) {
     console.log(`[promoteUnenriched] Email rejected (${verification.rejectReason}) — not promoted.`);
     return false;
@@ -130,12 +150,12 @@ async function promoteRecord(record) {
     vertical: record.vertical,
     location: record.location,
     clientId: record.client_id,
-  });
+  }, db);
   if (!companyId) throw new Error('Unable to create company row');
 
   const discoveryMethod = record.source || 'manual_promote';
   const vertical = normalizeVertical(record.vertical) || 'unknown';
-  const insert = await pool.query(`
+  const insert = await db.query(`
     INSERT INTO prospects (
       company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical,
       client_id, service_area_match, discovery_method, website_url,
@@ -150,7 +170,7 @@ async function promoteRecord(record) {
     verification.note || `Promoted from scout_unenriched (${record.id})`,
     vertical,
     record.client_id,
-    record.location,
+    serviceAreaMatch,
     discoveryMethod,
     record.website_url,
     verification.emailVerified,
@@ -167,7 +187,7 @@ async function promoteRecord(record) {
     return false;
   }
 
-  await pool.query('DELETE FROM scout_unenriched WHERE id = $1', [record.id]);
+  await db.query('DELETE FROM scout_unenriched WHERE id = $1', [record.id]);
   console.log(`[promoteUnenriched] Promoted prospect ${insert.rows[0].id} (${enriched.email})`);
   return true;
 }
@@ -193,7 +213,11 @@ async function run() {
   process.exit(ok ? 0 : 2);
 }
 
-run().catch(err => {
-  console.error('[promoteUnenriched] Fatal:', err.message);
-  process.exit(1);
-});
+module.exports = { promoteRecord, promotionServiceAreaMatch };
+
+if (require.main === module) {
+  run().catch(err => {
+    console.error('[promoteUnenriched] Fatal:', err.message);
+    process.exit(1);
+  });
+}

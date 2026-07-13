@@ -87,8 +87,8 @@ async function addProspect(data) {
   const clientId = getRuntimeClientId(data);
   const res = await pool.query(
     `INSERT INTO prospects 
-      (company_id, first_name, last_name, email, phone, job_title, decision_maker, linkedin_url, facebook_url, source, icp_score, client_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      (company_id, first_name, last_name, email, phone, job_title, decision_maker, linkedin_url, facebook_url, source, icp_score, client_id, service_area_match)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      ON CONFLICT (email) DO NOTHING
      RETURNING id`,
     [
@@ -103,7 +103,8 @@ async function addProspect(data) {
       data.facebook_url || null,
       data.source || 'manual',
       data.icp_score || 0,
-      clientId
+      clientId,
+      data.service_area_match || null
     ]
   );
   return res.rows[0]?.id;

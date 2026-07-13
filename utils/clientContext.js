@@ -146,7 +146,7 @@ async function ensureClientArchitecture() {
       'jacob@gopulseforge.com',
       'Providence',
       'RI',
-      ARRAY['Providence','Cranston','Warwick','Pawtucket','East Providence'],
+      ARRAY['Providence','Cranston','Warwick','Pawtucket','East Providence','Boston'],
       ARRAY['cleaning','restaurant','salon','fitness','home_services','auto','landscaping','med_spa'],
       'Local service businesses in the Providence RI metro, with restaurant, salon, fitness, and cleaning prioritized while the broader vertical set proves itself',
       true
