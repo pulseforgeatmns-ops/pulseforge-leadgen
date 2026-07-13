@@ -45,6 +45,7 @@ const { startMiraRouterWorker } = require('./miraRouterAgent');
 const { startMiraDigestScheduler } = require('./miraDigestAgent');
 const { startWarmRoutingScheduler } = require('./warmRoutingAgent');
 const { ensureEmmettAutosendSchema } = require('./utils/emmettAutosend');
+const stripeWebhookRouter = require('./routes/stripeWebhook');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -76,6 +77,10 @@ app.use(session({
   saveUninitialized: false,
   cookie: { maxAge: 24 * 60 * 60 * 1000 }
 }));
+
+// Stripe signature verification needs the untouched request Buffer. This is
+// deliberately mounted before express.json() (raw-body Pattern A).
+app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookRouter);
 
 function captureBrevoRawBody(req, _res, buf) {
   const requestPath = String(req.originalUrl || '').split('?')[0];
