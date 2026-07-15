@@ -4,6 +4,7 @@ const pool = require('../db');
 const { calculateProspectShadow, evaluateProspectShadow } = require('../utils/maxOrchestration');
 const { loadClientOrchestrationConfig } = require('../utils/maxSignalIngestion');
 const { assertAllowed, boundedInteger, optionalPositiveInteger, optionalTimestamp, optionalUuid, tokenizeArgs } = require('../utils/maxCli');
+const { recordMaxMetric } = require('../utils/maxOrchestrationObservability');
 
 function parseArgs(argv = process.argv.slice(2)) {
   const parsed = tokenizeArgs(argv);
@@ -44,6 +45,7 @@ async function run(options = parseArgs(), db = pool) {
   };
   const configs = new Map();
   for (const row of rows.rows) {
+    const evaluationStarted = Date.now();
     report.scanned++;
     report.last_prospect_id = row.id;
     try {
@@ -54,6 +56,13 @@ async function run(options = parseArgs(), db = pool) {
       report.evaluated++;
       if (options.apply && result.duplicate) report.duplicates++;
       if (options.apply && !result.duplicate) report.decisions_created++;
+      if (options.apply && !result.duplicate) {
+        await recordMaxMetric('manual_recalculation_processing_latency', {
+          db, clientId: row.client_id, prospectId: row.id, decisionId: result.decision?.id || null,
+          value: Date.now() - evaluationStarted,
+          dimensions: { provenance: 'manual_recalculation' },
+        }).catch(() => {});
+      }
       const decision = result.decision;
       report.results.push({
         prospect_id: row.id,

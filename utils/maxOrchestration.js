@@ -298,7 +298,7 @@ async function recordShadowDecision(
       `, [prospect.client_id, metricName, metricValue, prospect.id, triggerEvent?.id || null, decisionId]);
     }
     if (ownsClient) await client.query('COMMIT');
-    return { duplicate: false, decision: { id: decisionId, ...decision, is_shadow: true }, score: scoreResult };
+    return { duplicate: false, decision: { id: decisionId, ...decision, is_shadow: true, created_at: now }, score: scoreResult };
   } catch (error) {
     if (ownsClient) await client.query('ROLLBACK').catch(() => {});
     throw error;

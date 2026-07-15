@@ -11,6 +11,11 @@ const METRICS = new Set([
   'signal_to_decision_duration',
   'decision_processing_duration',
   'decay_batch_duration',
+  'live_signal_to_decision_latency',
+  'historical_backfill_event_age',
+  'historical_backfill_processing_latency',
+  'manual_recalculation_processing_latency',
+  'decay_processing_latency',
 ]);
 
 async function recordMaxMetric(metricName, {

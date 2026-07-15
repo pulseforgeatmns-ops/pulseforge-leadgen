@@ -63,7 +63,7 @@ async function applyManualLifecycleOverride({
     `, [
       signalId, clientId, prospectId, prospect.company_id || null, eventType, now,
       'operator_manual', overrideId,
-      JSON.stringify({ requested_state: target, from_state: fromState, reason: cleanReason, operator_user_id: operator.id || null }),
+      JSON.stringify({ provenance: 'manual_override', requested_state: target, from_state: fromState, reason: cleanReason, operator_user_id: operator.id || null }),
     ]);
     await client.query(`
       INSERT INTO manual_lifecycle_overrides (

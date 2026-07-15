@@ -49,7 +49,7 @@ function normalizeEmailRow(row) {
   return {
     client_id: row.client_id, prospect_id: row.prospect_id, event_type: eventType,
     event_timestamp: row.event_timestamp, source: 'brevo', source_record_id: String(row.source_record_id),
-    metadata: { open_source: row.open_source || null, open_source_reason: row.open_source_reason || null, historical_backfill: true },
+    metadata: { open_source: row.open_source || null, open_source_reason: row.open_source_reason || null, historical_backfill: true, provenance: 'historical_backfill' },
   };
 }
 
@@ -74,7 +74,7 @@ function normalizeTouchpointRow(row) {
   return {
     client_id: row.client_id, prospect_id: row.prospect_id, event_type: eventType,
     event_timestamp: row.event_timestamp, source: 'touchpoints', source_record_id: String(row.source_record_id),
-    metadata: { classification: classification || null, historical_backfill: true },
+    metadata: { classification: classification || null, historical_backfill: true, provenance: 'historical_backfill' },
   };
 }
 
@@ -121,7 +121,7 @@ async function sourceRows(db, options) {
   `, row => ({
     client_id: row.client_id, prospect_id: row.prospect_id, event_type: row.event_type,
     event_timestamp: row.event_timestamp, source: 'icp_score_history', source_record_id: row.source_record_id,
-    metadata: { old_score: row.old_score, new_score: row.new_score, delta: Number(row.new_score || 0)-Number(row.old_score || 0), reason: row.reason, historical_backfill: true },
+    metadata: { old_score: row.old_score, new_score: row.new_score, delta: Number(row.new_score || 0)-Number(row.old_score || 0), reason: row.reason, historical_backfill: true, provenance: 'historical_backfill' },
   }));
   await query('enrichment_agent_log', `
     SELECT id::text AS source_record_id, prospect_id, client_id, action AS raw_type,
@@ -138,7 +138,7 @@ async function sourceRows(db, options) {
       client_id: row.client_id, prospect_id: row.prospect_id,
       event_type: successful ? 'enrichment_succeeded' : 'enrichment_failed',
       event_timestamp: row.event_timestamp, source: 'enrichment', source_record_id: row.source_record_id,
-      metadata: { provider: payload.provider || 'historical_agent_log', status: row.status, historical_backfill: true },
+      metadata: { provider: payload.provider || 'historical_agent_log', status: row.status, historical_backfill: true, provenance: 'historical_backfill' },
     };
   });
   await query('prospects.booked_at', `
@@ -151,7 +151,7 @@ async function sourceRows(db, options) {
   `, row => ({
     client_id: row.client_id, prospect_id: row.prospect_id, event_type: 'meeting_booked',
     event_timestamp: row.event_timestamp, source: 'prospects_booked_at', source_record_id: row.source_record_id,
-    metadata: { historical_backfill: true, canonical_field: 'prospects.booked_at' },
+    metadata: { historical_backfill: true, provenance: 'historical_backfill', canonical_field: 'prospects.booked_at' },
   }));
   return sources;
 }

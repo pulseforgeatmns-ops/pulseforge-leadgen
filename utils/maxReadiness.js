@@ -3,6 +3,7 @@
 const pool = require('../db');
 const { loadMaxOrchestrationConfig } = require('../config/maxOrchestration');
 const { validateSchema } = require('../scripts/validateMaxOrchestrationSchema');
+const { buildEventCoverageReport } = require('./maxEventCoverage');
 
 const available = value => ({ status: 'available', value });
 const unavailable = reason => ({ status: 'unavailable', value: null, reason });
@@ -21,10 +22,25 @@ function rate(numerator, denominator) {
   return denominator > 0 ? Number((100 * numerator / denominator).toFixed(2)) : null;
 }
 
+async function latencyPercentiles(db, metricName, params, unavailableReason) {
+  const result = await safeQuery(db, `
+    SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY metric_value)::numeric median_ms,
+           percentile_cont(0.95) WITHIN GROUP (ORDER BY metric_value)::numeric p95_ms,
+           COUNT(*)::int samples
+    FROM max_orchestration_metrics
+    WHERE ($1::int IS NULL OR client_id=$1) AND metric_name=$3
+      AND recorded_at>=NOW()-($2::int*INTERVAL '1 day')
+  `, [...params, metricName], row => row.median_ms == null ? null : ({
+    median_ms: Number(row.median_ms), p95_ms: Number(row.p95_ms), samples: Number(row.samples || 0),
+  }));
+  return result.status === 'available' && result.value == null ? unavailable(unavailableReason) : result;
+}
+
 async function buildReadinessReport({ clientId, sinceDays = 30 } = {}, db = pool) {
   const params = [clientId, sinceDays];
-  const [signals, failures, evaluationFailures, duplicates, proxyViolations, decisions, transitions, actions, latency,
-    oscillation, reviews, warmNoChannel, terminalAccuracy, outcomes, reviewedByClient, sourcePresence] = await Promise.all([
+  const [signals, failures, evaluationFailures, duplicates, proxyViolations, decisions, transitions, actions,
+    liveLatency, historicalAge, historicalProcessing, manualProcessing, decayProcessing,
+    oscillation, reviews, warmNoChannel, terminalAccuracy, terminalCoverage, outcomes, reviewedByClient, sourcePresence, coverage] = await Promise.all([
     safeQuery(db, `SELECT COUNT(*)::int count FROM prospect_signal_events WHERE ($1::int IS NULL OR client_id=$1) AND created_at>=NOW()-($2::int*INTERVAL '1 day')`, params, row => Number(row.count||0)),
     safeQuery(db, `SELECT COUNT(*)::int count FROM agent_log WHERE ($1::int IS NULL OR client_id=$1) AND agent_name='max_orchestration' AND action='signal_ingestion_failed' AND ran_at>=NOW()-($2::int*INTERVAL '1 day')`, params, row => Number(row.count||0)),
     safeQuery(db, `SELECT COALESCE(SUM(metric_value),0)::int count FROM max_orchestration_metrics WHERE ($1::int IS NULL OR client_id=$1) AND metric_name='max_evaluation_failures_total' AND recorded_at>=NOW()-($2::int*INTERVAL '1 day')`, params, row => Number(row.count||0)),
@@ -33,14 +49,27 @@ async function buildReadinessReport({ clientId, sinceDays = 30 } = {}, db = pool
     safeQuery(db, `SELECT COUNT(*)::int count FROM max_decisions WHERE ($1::int IS NULL OR client_id=$1) AND created_at>=NOW()-($2::int*INTERVAL '1 day')`, params, row => Number(row.count||0)),
     safeQuery(db, `SELECT current_state||' -> '||recommended_state transition,COUNT(*)::int count FROM max_decisions WHERE ($1::int IS NULL OR client_id=$1) AND created_at>=NOW()-($2::int*INTERVAL '1 day') GROUP BY 1 ORDER BY count DESC`, params, (_row, rows) => rows),
     safeQuery(db, `SELECT COUNT(*) FILTER (WHERE action_status<>'skipped')::int executed,COUNT(*) FILTER (WHERE action_status='skipped' AND error_code='SHADOW_MODE')::int shadow_skipped FROM max_actions WHERE ($1::int IS NULL OR client_id=$1) AND created_at>=NOW()-($2::int*INTERVAL '1 day')`, params, row => ({ executed:Number(row.executed||0), shadow_skipped:Number(row.shadow_skipped||0) })),
-    safeQuery(db, `SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY metric_value)::numeric median_ms,percentile_cont(0.95) WITHIN GROUP (ORDER BY metric_value)::numeric p95_ms FROM max_orchestration_metrics WHERE ($1::int IS NULL OR client_id=$1) AND metric_name='signal_to_decision_duration' AND recorded_at>=NOW()-($2::int*INTERVAL '1 day')`, params, row => row.median_ms == null ? null : ({ median_ms:Number(row.median_ms), p95_ms:Number(row.p95_ms) })),
+    latencyPercentiles(db, 'live_signal_to_decision_latency', params, 'no qualifying live decisions in the reporting window'),
+    safeQuery(db, `
+      SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY GREATEST(0,EXTRACT(EPOCH FROM (created_at-event_timestamp))*1000))::numeric median_ms,
+             percentile_cont(0.95) WITHIN GROUP (ORDER BY GREATEST(0,EXTRACT(EPOCH FROM (created_at-event_timestamp))*1000))::numeric p95_ms,
+             COUNT(*)::int samples
+      FROM prospect_signal_events
+      WHERE ($1::int IS NULL OR client_id=$1) AND created_at>=NOW()-($2::int*INTERVAL '1 day')
+        AND (metadata->>'provenance'='historical_backfill' OR metadata->>'historical_backfill'='true')
+    `, params, row => row.median_ms == null ? null : ({ median_ms:Number(row.median_ms), p95_ms:Number(row.p95_ms), samples:Number(row.samples||0) })),
+    latencyPercentiles(db, 'historical_backfill_processing_latency', params, 'no instrumented historical backfill decisions in the reporting window'),
+    latencyPercentiles(db, 'manual_recalculation_processing_latency', params, 'no manual recalculation decisions in the reporting window'),
+    latencyPercentiles(db, 'decay_processing_latency', params, 'no applied decay decisions in the reporting window'),
     safeQuery(db, `WITH ordered AS (SELECT prospect_id,from_state,to_state,created_at,LAG(from_state) OVER(PARTITION BY prospect_id ORDER BY created_at) prev_from,LAG(to_state) OVER(PARTITION BY prospect_id ORDER BY created_at) prev_to FROM prospect_state_transitions WHERE ($1::int IS NULL OR client_id=$1) AND is_shadow=true AND created_at>=NOW()-($2::int*INTERVAL '1 day')) SELECT COUNT(*) FILTER(WHERE from_state=prev_to AND to_state=prev_from)::int reversals,COUNT(*)::int transitions FROM ordered`, params, row => ({ reversals:Number(row.reversals||0), transitions:Number(row.transitions||0), rate_pct:rate(Number(row.reversals||0),Number(row.transitions||0)) })),
     safeQuery(db, `SELECT COUNT(*)::int reviewed,COUNT(*) FILTER(WHERE review_outcome='agree')::int agree,COUNT(*) FILTER(WHERE review_outcome='disagree')::int disagree FROM max_recommendation_reviews WHERE ($1::int IS NULL OR client_id=$1) AND reviewed_at>=NOW()-($2::int*INTERVAL '1 day')`, params, row => ({ reviewed:Number(row.reviewed||0), agree:Number(row.agree||0), disagree:Number(row.disagree||0), agreement_rate_pct:rate(Number(row.agree||0),Number(row.reviewed||0)) })),
     safeQuery(db, `SELECT COUNT(*)::int count FROM prospects WHERE ($1::int IS NULL OR client_id=$1) AND lifecycle_state IN ('warm','hot','engaged') AND COALESCE(do_not_contact,false)=false AND NULLIF(email,'') IS NULL AND NULLIF(phone,'') IS NULL`, [clientId], row => Number(row.count||0)),
     safeQuery(db, `SELECT COUNT(*)::int reviewed,COUNT(*) FILTER(WHERE r.review_outcome='agree')::int accurate FROM max_recommendation_reviews r JOIN max_decisions d ON d.id=r.decision_id WHERE ($1::int IS NULL OR r.client_id=$1) AND r.reviewed_at>=NOW()-($2::int*INTERVAL '1 day') AND d.recommended_state IN ('disqualified','null')`, params, row => ({ reviewed:Number(row.reviewed||0), accurate:Number(row.accurate||0), accuracy_rate_pct:rate(Number(row.accurate||0),Number(row.reviewed||0)) })),
+    safeQuery(db, `SELECT COUNT(*)::int terminal_decisions,COUNT(*) FILTER(WHERE EXISTS(SELECT 1 FROM max_recommendation_reviews r WHERE r.decision_id=d.id))::int terminal_reviewed FROM max_decisions d WHERE ($1::int IS NULL OR d.client_id=$1) AND d.created_at>=NOW()-($2::int*INTERVAL '1 day') AND d.recommended_state IN ('disqualified','null')`, params, row => ({ terminal_decisions:Number(row.terminal_decisions||0), terminal_reviewed:Number(row.terminal_reviewed||0) })),
     safeQuery(db, `SELECT COUNT(*)::int warm_recommendations,COUNT(*) FILTER(WHERE EXISTS(SELECT 1 FROM prospect_signal_events s WHERE s.client_id=d.client_id AND s.prospect_id=d.prospect_id AND s.event_timestamp>d.created_at AND s.event_type IN ('email_positive_reply','meeting_booked','meeting_showed')))::int positive_outcomes FROM max_decisions d WHERE ($1::int IS NULL OR d.client_id=$1) AND d.recommended_state IN ('warm','hot') AND d.created_at>=NOW()-($2::int*INTERVAL '1 day')`, params, row => ({ warm_recommendations:Number(row.warm_recommendations||0), positive_outcomes:Number(row.positive_outcomes||0), outcome_rate_pct:rate(Number(row.positive_outcomes||0),Number(row.warm_recommendations||0)) })),
     safeQuery(db, `SELECT client_id,COUNT(*)::int reviewed FROM max_recommendation_reviews WHERE ($1::int IS NULL OR client_id=$1) AND reviewed_at>=NOW()-($2::int*INTERVAL '1 day') GROUP BY client_id ORDER BY client_id`, params, (_row, rows) => rows),
     safeQuery(db, `SELECT to_regclass('public.email_events') IS NOT NULL email_events,to_regclass('public.icp_score_history') IS NOT NULL icp_history,to_regclass('public.touchpoints') IS NOT NULL replies,EXISTS(SELECT 1 FROM prospect_signal_events WHERE event_type='prospect_discovered') scout_discovery,EXISTS(SELECT 1 FROM prospect_signal_events WHERE event_type='prospect_qualified') scout_qualification,EXISTS(SELECT 1 FROM prospect_signal_events WHERE event_type='meeting_booked') meeting_booked,EXISTS(SELECT 1 FROM prospect_signal_events WHERE event_type='meeting_cancelled') meeting_cancelled,EXISTS(SELECT 1 FROM prospect_signal_events WHERE event_type='meeting_showed') meeting_showed,EXISTS(SELECT 1 FROM prospect_signal_events WHERE event_type='meeting_no_showed') meeting_no_showed`, [], row => row),
+    buildEventCoverageReport({ clientId }, db),
   ]);
   const signalCount = signals.value || 0;
   const failureCount = failures.value || 0;
@@ -61,15 +90,22 @@ async function buildReadinessReport({ clientId, sinceDays = 30 } = {}, db = pool
     decisions_by_transition: transitions,
     prospect_facing_actions: actions,
     decision_processing_failures: evaluationFailures,
-    signal_to_decision_latency: latency,
+    live_signal_to_decision_latency: liveLatency,
+    historical_backfill_event_age: historicalAge.status === 'available' && historicalAge.value == null
+      ? unavailable('no historical backfill signals in the reporting window') : historicalAge,
+    historical_backfill_processing_latency: historicalProcessing,
+    manual_recalculation_processing_latency: manualProcessing,
+    decay_processing_latency: decayProcessing,
     oscillation: oscillation,
     manual_review: reviews,
     agreement_by_transition: await safeQuery(db, `SELECT d.current_state||' -> '||d.recommended_state transition,COUNT(*)::int reviewed,COUNT(*) FILTER(WHERE r.review_outcome='agree')::int agree FROM max_recommendation_reviews r JOIN max_decisions d ON d.id=r.decision_id WHERE ($1::int IS NULL OR r.client_id=$1) AND r.reviewed_at>=NOW()-($2::int*INTERVAL '1 day') GROUP BY 1 ORDER BY reviewed DESC`, params, (_row,rows)=>rows.map(row=>({...row,agreement_rate_pct:rate(Number(row.agree),Number(row.reviewed))}))),
     warm_without_reachable_channels: warmNoChannel,
     terminal_recommendation_accuracy: terminalAccuracy,
+    terminal_review_coverage: terminalCoverage,
     historical_warm_outcomes: outcomes,
     missing_canonical_sources: sourcePresence.status==='available' ? available(missingSources) : sourcePresence,
     reviewed_recommendations_by_client: reviewedByClient,
+    event_coverage: available(coverage.rows),
   };
 }
 
@@ -97,6 +133,8 @@ async function checkPhase3Readiness({ clientId, sinceDays = 30, env = process.en
     max_prospect_actions_enabled: config.flags.max_prospect_actions_enabled,
   } : {};
   const reviews = report.manual_review.value?.reviewed ?? 0;
+  const requiredReviews = rollout?.minimum_total_reviews ?? rollout?.minimum_reviewed_samples ?? null;
+  const terminal = report.terminal_review_coverage.value || {};
   const criteria = {
     schema_validation_passes: schema.valid,
     active_client_exists: Boolean(client),
@@ -105,11 +143,23 @@ async function checkPhase3Readiness({ clientId, sinceDays = 30, env = process.en
     prospect_facing_flags_disabled: config ? Object.values(actionFlags).every(value=>value===false) : false,
     no_proxy_open_scoring_violations: report.proxy_open_scoring_violations.status==='available' && report.proxy_open_scoring_violations.value===0,
     no_prospect_facing_actions_executed: report.prospect_facing_actions.status==='available' && report.prospect_facing_actions.value.executed===0,
-    minimum_reviewed_samples_met: Boolean(rollout && reviews>=Number(rollout.minimum_reviewed_samples)),
-    rollback_configuration_exists: Boolean(rollout?.rollback_documented && rollout?.rollback_reference),
+    shadow_observation_configured: rollout?.shadow_observation_enabled === true,
+    minimum_reviewed_samples_met: Boolean(rollout && requiredReviews && reviews>=Number(requiredReviews)),
+    terminal_review_requirement_met: Boolean(rollout && (
+      rollout.terminal_review_requirement !== 'every'
+      || Number(terminal.terminal_reviewed || 0) === Number(terminal.terminal_decisions || 0)
+    )),
+    rollback_reference_recorded: Boolean(rollout?.rollback_documented && rollout?.rollback_reference),
+    rollback_reference_verified: rollout?.rollback_reference_verified === true,
+    database_recovery_reference_recorded: Boolean(rollout?.recovery_snapshot_reference),
+    database_recovery_reference_verified: rollout?.recovery_snapshot_verified === true,
     target_client_allowlisted: rollout?.phase3_allowlisted===true,
   };
-  return { ready: Object.values(criteria).every(Boolean), client_id: clientId, criteria, action_flags: actionFlags, review_count: reviews, required_review_count: rollout?.minimum_reviewed_samples ?? null, report };
+  return {
+    ready: Object.values(criteria).every(Boolean), client_id: clientId, criteria, action_flags: actionFlags,
+    review_count: reviews, required_review_count: requiredReviews,
+    readiness_config: rollout || null, report,
+  };
 }
 
-module.exports = { available, buildReadinessReport, checkPhase3Readiness, rate, safeQuery, unavailable };
+module.exports = { available, buildReadinessReport, checkPhase3Readiness, latencyPercentiles, rate, safeQuery, unavailable };

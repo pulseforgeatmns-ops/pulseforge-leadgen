@@ -154,7 +154,37 @@ test('meaningful signal invokes one shadow evaluator and records metrics', async
   });
   assert.equal(evaluations, 1);
   assert.equal(result.evaluated, true);
-  assert.ok(db.calls.some(call => call.params?.includes('signal_to_decision_duration')));
+  assert.ok(db.calls.some(call => call.params?.includes('live_signal_to_decision_latency')));
+});
+
+test('historical backfill records event age separately and never records live latency', async () => {
+  const db = memoryDb();
+  await ingestNormalizedSignal({
+    client_id: 1,
+    prospect_id: '1000c166-c9c3-4bab-adef-d4cbdf14ab18',
+    event_type: 'email_positive_reply',
+    event_timestamp: new Date(Date.now() - 86400000),
+    source: 'touchpoints',
+    source_record_id: 'historical-1',
+    metadata: { historical_backfill: true, provenance: 'historical_backfill' },
+  }, {
+    db,
+    evaluateProspectFn: async () => ({ decision: { id: 'historical-decision', created_at: new Date() }, score: { score: 1 } }),
+  });
+  const metricNames = db.calls.flatMap(call => call.params || []).filter(value => typeof value === 'string');
+  assert.ok(metricNames.includes('historical_backfill_event_age'));
+  assert.ok(metricNames.includes('historical_backfill_processing_latency'));
+  assert.equal(metricNames.includes('live_signal_to_decision_latency'), false);
+});
+
+test('equivalent live timestamps retain explicit live provenance', async () => {
+  const db = memoryDb();
+  await safeIngestBrevoSignal(brevoResult({ event_type: 'unsubscribed' }), { ts: '1784131374' }, {
+    db,
+    evaluateProspectFn: async () => ({ decision: { id: 'live-provenance', created_at: new Date() }, score: { score: 1 } }),
+  });
+  const insert = db.calls.find(call => /INSERT INTO prospect_signal_events/.test(call.sql));
+  assert.equal(JSON.parse(insert.params[8]).provenance, 'live');
 });
 
 test('signal ingestion fails closed when transaction context does not match db', async () => {

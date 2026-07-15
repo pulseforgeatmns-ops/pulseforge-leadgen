@@ -12,9 +12,12 @@
     "max:signals:backfill": "node scripts/backfillMaxSignals.js",
     "max:recalculate": "node scripts/recalculateMaxOrchestration.js",
     "max:decay": "node maxDecayAgent.js",
+    "max:decay:history": "node scripts/maxDecayRunHistory.js",
+    "max:coverage": "node scripts/maxEventCoverageReport.js",
     "max:sequence:resolve": "node scripts/resolveMaxSequenceState.js",
     "max:review": "node scripts/reviewMaxRecommendations.js",
     "max:readiness": "node scripts/maxReadinessReport.js",
+    "max:readiness:configure": "node scripts/configureMaxReadiness.js",
     "max:readiness:check": "node scripts/maxReadinessReport.js --check",
     "start": "node server.js"
   },

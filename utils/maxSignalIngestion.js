@@ -3,6 +3,7 @@ const pool = require('../db');
 const { evaluateProspectShadow } = require('./maxOrchestration');
 const { recordMaxMetric, logMaxOrchestrationFailure } = require('./maxOrchestrationObservability');
 const { normalizeEventTimestamp, rawTimestampForMetadata } = require('./maxTimestamp');
+const { signalProvenance, withSignalProvenance } = require('./maxEventProvenance');
 
 const MEANINGFUL_EVALUATION_SIGNALS = new Set([
   'company_signal_detected', 'icp_score_changed', 'email_human_opened', 'email_clicked',
@@ -43,16 +44,17 @@ async function loadClientOrchestrationConfig(db, clientId) {
 
 function canonicalizeNormalizedSignal(signal) {
   validateSignal(signal);
+  const attributedSignal = withSignalProvenance(signal);
   const rawTimestamp = signal.event_timestamp;
   const eventTimestamp = normalizeEventTimestamp(rawTimestamp, {
     source: String(signal.source || 'unknown'),
     field: 'event_timestamp',
   });
   return {
-    ...signal,
+    ...attributedSignal,
     event_timestamp: eventTimestamp,
     metadata: {
-      ...(signal.metadata || {}),
+      ...(attributedSignal.metadata || {}),
       raw_source_timestamp: Object.hasOwn(signal.metadata || {}, 'raw_source_timestamp')
         ? signal.metadata.raw_source_timestamp
         : rawTimestampForMetadata(rawTimestamp),
@@ -110,7 +112,11 @@ async function ingestNormalizedSignal(signal, {
     if (!meaningful || existingDecision.rows.length || !evaluate) {
       await recordMaxMetric('max_duplicate_events_suppressed_total', {
         db, clientId: normalizedSignal.client_id, prospectId: normalizedSignal.prospect_id,
-        signalEventId: persisted.id, dimensions: { source: normalizedSignal.source, event_type: normalizedSignal.event_type },
+        signalEventId: persisted.id, dimensions: {
+          source: normalizedSignal.source,
+          event_type: normalizedSignal.event_type,
+          provenance: signalProvenance(normalizedSignal),
+        },
       }).catch(() => {});
       return { inserted: false, duplicate: true, evaluated: false, signal_id: persisted.id };
     }
@@ -140,13 +146,29 @@ async function ingestNormalizedSignal(signal, {
   });
   if (!result.skipped && !result.duplicate) {
     const decisionId = result.decision?.id || null;
-    await Promise.allSettled([
-      recordMaxMetric('signal_to_decision_duration', {
+    const provenance = signalProvenance(normalizedSignal);
+    const receivedAt = new Date(persisted.created_at || Date.now());
+    const decisionAt = new Date(result.decision?.created_at || Date.now());
+    const processingLatency = Math.max(0, decisionAt.getTime() - receivedAt.getTime());
+    const metric = provenance === 'live'
+      ? ['live_signal_to_decision_latency', processingLatency]
+      : provenance === 'historical_backfill'
+        ? ['historical_backfill_processing_latency', processingLatency]
+        : null;
+    const metrics = metric ? [recordMaxMetric(metric[0], {
+      db, clientId: normalizedSignal.client_id, value: metric[1],
+      prospectId: normalizedSignal.prospect_id, signalEventId: persisted.id, decisionId,
+      dimensions: { provenance, source: normalizedSignal.source, event_type: normalizedSignal.event_type },
+    })] : [];
+    if (provenance === 'historical_backfill') {
+      metrics.push(recordMaxMetric('historical_backfill_event_age', {
         db, clientId: normalizedSignal.client_id,
-        value: Math.max(0, Date.now() - normalizedSignal.event_timestamp.getTime()),
+        value: Math.max(0, receivedAt.getTime() - normalizedSignal.event_timestamp.getTime()),
         prospectId: normalizedSignal.prospect_id, signalEventId: persisted.id, decisionId,
-      }),
-    ]);
+        dimensions: { provenance, source: normalizedSignal.source, event_type: normalizedSignal.event_type },
+      }));
+    }
+    await Promise.allSettled(metrics);
   }
   return { ...result, inserted: persisted.inserted, signal_id: persisted.id, evaluated: !result.skipped };
 }
@@ -169,6 +191,7 @@ async function safeIngestNormalizedSignal(signal, options = {}) {
         normalization_error_code: error.normalization_error_code || null,
         normalization_error_message: error.code === 'MAX_TIMESTAMP_INVALID' ? error.message : null,
         original_handler_status: options.originalHandlerStatus || 'isolated_caller_continues',
+        provenance: (() => { try { return signalProvenance(signal); } catch (_) { return null; } })(),
         occurred_at: new Date().toISOString(),
       },
     }).catch(() => {});

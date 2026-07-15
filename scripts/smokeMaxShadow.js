@@ -275,7 +275,7 @@ async function run(options = parseArgs(), db = pool, env = process.env, dependen
       event_timestamp: new Date(),
       source: 'max_shadow_smoke',
       source_record_id: smokeId,
-      metadata: { synthetic: true, contact_prohibited: true, smoke_test_id: smokeId },
+      metadata: { synthetic: true, provenance: 'synthetic_smoke', contact_prohibited: true, smoke_test_id: smokeId },
     }, {
       db: client,
       env,

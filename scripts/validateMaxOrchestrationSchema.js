@@ -13,13 +13,26 @@ const REQUIRED_COLUMNS = Object.freeze({
   ],
   clients: ['max_orchestration_config'],
   max_recommendation_reviews: ['client_id','decision_id','prospect_id','reviewer_identity','review_outcome','reviewed_at'],
-  max_rollout_readiness_config: ['client_id','phase3_allowlisted','minimum_reviewed_samples','rollback_documented','rollback_reference'],
+  max_rollout_readiness_config: [
+    'client_id','phase3_allowlisted','minimum_reviewed_samples','minimum_total_reviews',
+    'shadow_observation_enabled','minimum_reviews_by_transition','terminal_review_requirement',
+    'minimum_agreement_rate','maximum_failure_rate','maximum_oscillation_rate',
+    'rollback_documented','rollback_reference','rollback_reference_verified',
+    'recovery_snapshot_reference','recovery_snapshot_verified','created_at','updated_at',
+  ],
+  max_decay_run_events: [
+    'run_id','mode','status','started_at','completed_at','lock_acquired','client_scope',
+    'batch_limit','start_cursor','end_cursor','candidates_found','prospects_evaluated',
+    'scores_changed','downgrade_candidates','recommendations_created','decisions_created',
+    'errors','error_stage','error_code','error_summary','retryable','operational_effects',
+    'deployment_commit','details',
+  ],
 });
 
 const REQUIRED_TABLES = Object.freeze([
   'prospect_signal_events','max_decisions','prospect_state_transitions','max_actions',
   'manual_lifecycle_overrides','max_orchestration_metrics',
-  'max_recommendation_reviews','max_rollout_readiness_config',
+  'max_recommendation_reviews','max_rollout_readiness_config','max_decay_run_events',
 ]);
 
 const REQUIRED_INDEXES = Object.freeze([
@@ -28,6 +41,7 @@ const REQUIRED_INDEXES = Object.freeze([
   'max_decisions_prospect_created_idx','max_decisions_recommended_state_idx',
   'prospect_state_transitions_funnel_idx','max_actions_status_idx',
   'max_recommendation_reviews_client_time_idx','max_recommendation_reviews_outcome_idx',
+  'max_decay_run_events_run_time_idx','max_decay_run_events_recent_idx',
 ]);
 
 const REQUIRED_CONSTRAINTS = Object.freeze([
@@ -43,6 +57,7 @@ const REQUIRED_TRIGGERS = Object.freeze([
   'prospect_state_transitions_append_only','max_actions_append_only',
   'manual_lifecycle_overrides_append_only','max_orchestration_metrics_append_only',
   'max_recommendation_reviews_append_only',
+  'max_decay_run_events_append_only',
 ]);
 
 const REQUIRED_COLUMN_TYPES = Object.freeze({
@@ -55,6 +70,8 @@ const REQUIRED_COLUMN_TYPES = Object.freeze({
   'max_decisions.config_snapshot': 'jsonb',
   'max_recommendation_reviews.id': 'uuid',
   'max_rollout_readiness_config.client_id': 'integer',
+  'max_decay_run_events.id': 'uuid',
+  'max_decay_run_events.run_id': 'uuid',
 });
 
 const REQUIRED_JSON_DEFAULTS = Object.freeze([
@@ -62,6 +79,8 @@ const REQUIRED_JSON_DEFAULTS = Object.freeze([
   'max_decisions.score_components','max_decisions.reason_codes','max_decisions.actions',
   'max_decisions.config_snapshot','max_actions.input_payload','max_actions.output_payload',
   'max_orchestration_metrics.dimensions',
+  'max_rollout_readiness_config.minimum_reviews_by_transition',
+  'max_decay_run_events.operational_effects','max_decay_run_events.details',
 ]);
 
 async function validateSchema(db = pool) {
