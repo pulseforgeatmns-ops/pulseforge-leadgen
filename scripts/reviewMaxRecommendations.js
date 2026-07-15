@@ -10,6 +10,7 @@ function parseArgs(argv = process.argv.slice(2)) {
   assertAllowed(parsed, {
     values: ['--client-id','--limit','--max-age-days','--decision-id','--reviewer','--outcome','--notes',
       '--score-explanation','--source-trustworthy','--source-notes'],
+    flags: ['--underrepresented'],
   });
   const options = {
     clientId: optionalPositiveInteger(parsed.values.get('--client-id'), '--client-id'),
@@ -24,6 +25,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     sourceDataTrustworthy: parsed.values.has('--source-trustworthy')
       ? ({ true:true, false:false })[parsed.values.get('--source-trustworthy')] : null,
     sourceDataNotes: parsed.values.get('--source-notes') || null,
+    underrepresented: true,
   };
   if (parsed.values.has('--source-trustworthy') && options.sourceDataTrustworthy == null) {
     throw new Error('--source-trustworthy must be true or false');
@@ -35,7 +37,15 @@ function parseArgs(argv = process.argv.slice(2)) {
 
 async function run(options = parseArgs(), db = pool) {
   if (options.decisionId) return { mode: 'review_recorded', review: await recordRecommendationReview(options, db) };
-  return { mode: 'review_sample', rows: await sampleRecommendations(options, db) };
+  const rows = await sampleRecommendations(options, db);
+  return {
+    mode: 'review_sample',
+    selection_strategy: 'underrepresented_unreviewed_decisions',
+    requested_limit: options.limit,
+    returned: rows.length,
+    insufficient_evidence: rows.length < options.limit,
+    rows,
+  };
 }
 
 module.exports = { parseArgs, run };

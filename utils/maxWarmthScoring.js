@@ -51,9 +51,14 @@ function isProxyOpen(event) {
     (['opened', 'open'].includes(type) && String(event.metadata?.open_source || '').toLowerCase() === 'proxy');
 }
 
-function addComponent(components, code, points, description) {
+function addComponent(components, code, points, description, evidence = null) {
   if (!points) return;
-  components.push({ code, points: Number(points), description });
+  components.push({
+    code,
+    points: Number(points),
+    description,
+    ...(evidence && typeof evidence === 'object' ? evidence : {}),
+  });
 }
 
 function latestDirectStateEvent(signals) {
@@ -82,9 +87,9 @@ function calculateWarmthScore({ prospect = {}, signals = [], config, now = new D
   const windows = config.signal_windows;
   const icp = Number(prospect.icp_score || 0);
 
-  if (icp >= 80) addComponent(components, 'ICP_SCORE_80_PLUS', weights.icp_80_plus, `ICP score is ${icp}`);
-  else if (icp >= 65) addComponent(components, 'ICP_SCORE_65_TO_79', weights.icp_65_79, `ICP score is ${icp}`);
-  else if (icp >= 50) addComponent(components, 'ICP_SCORE_50_TO_64', weights.icp_50_64, `ICP score is ${icp}`);
+  if (icp >= 80) addComponent(components, 'ICP_SCORE_80_PLUS', weights.icp_80_plus, `ICP score is ${icp}`, { source_value: icp });
+  else if (icp >= 65) addComponent(components, 'ICP_SCORE_65_TO_79', weights.icp_65_79, `ICP score is ${icp}`, { source_value: icp });
+  else if (icp >= 50) addComponent(components, 'ICP_SCORE_50_TO_64', weights.icp_50_64, `ICP score is ${icp}`, { source_value: icp });
 
   if (String(prospect.vertical_tier || '').toUpperCase() === 'A') {
     addComponent(components, 'TIER_A_VERTICAL', weights.tier_a_vertical, 'Prospect belongs to a Tier A vertical');

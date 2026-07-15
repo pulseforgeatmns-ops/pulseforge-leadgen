@@ -12,7 +12,9 @@ const signal = (event_type, hoursAgo, metadata = {}) => ({
 });
 
 test('scores ICP ranges without overlap', () => {
-  assert.equal(calculateWarmthScore({ prospect: { icp_score: 85 }, signals: [], config, now }).score, 30);
+  const highIcp = calculateWarmthScore({ prospect: { icp_score: 85 }, signals: [], config, now });
+  assert.equal(highIcp.score, 30);
+  assert.equal(highIcp.components.find(component => component.code === 'ICP_SCORE_80_PLUS').source_value, 85);
   assert.equal(calculateWarmthScore({ prospect: { icp_score: 70 }, signals: [], config, now }).score, 20);
   assert.equal(calculateWarmthScore({ prospect: { icp_score: 55 }, signals: [], config, now }).score, 10);
 });

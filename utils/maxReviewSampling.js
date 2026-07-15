@@ -14,9 +14,26 @@ async function sampleRecommendations({ clientId = null, limit = 25, maxAgeDays =
       WHERE ($1::int IS NULL OR r.client_id=$1)
       GROUP BY d.client_id,d.current_state,d.recommended_state
     ), candidates AS (
-      SELECT d.id AS decision_id, d.client_id, d.prospect_id, d.created_at,
+      SELECT d.id AS decision_id, d.client_id, d.prospect_id, d.created_at AS decision_timestamp,
              d.current_state, d.recommended_state, d.warmth_score, d.trigger_event_type,
-             d.reason_codes, d.reason_summary, d.actions, d.operator_required,
+             d.trigger_event_id, d.score_components, d.reason_codes, d.reason_summary,
+             d.actions, d.operator_required,
+             signal.event_timestamp AS icp_source_timestamp,
+             signal.metadata AS trigger_metadata,
+             CASE WHEN signal.metadata->>'new_score' ~ '^-?[0-9]+([.][0-9]+)?$'
+               THEN (signal.metadata->>'new_score')::numeric END AS trigger_icp,
+             decision_icp.value AS decision_time_icp,
+             p.icp_score AS current_prospect_icp,
+             CASE
+               WHEN d.trigger_event_type='icp_score_changed'
+                 AND signal.metadata->>'new_score' ~ '^-?[0-9]+([.][0-9]+)?$'
+                 AND decision_icp.value IS NOT NULL
+                 AND (signal.metadata->>'new_score')::numeric <> decision_icp.value
+                 THEN 'historical_trigger_vs_decision_snapshot_mismatch'
+               WHEN d.trigger_event_type='icp_score_changed' AND decision_icp.value IS NULL
+                 THEN 'decision_time_icp_unavailable'
+               ELSE 'no_icp_mismatch_detected'
+             END AS data_quality_assessment,
              CASE WHEN d.recommended_state IN ('disqualified','null') THEN true ELSE false END AS terminal_recommendation,
              CASE WHEN p.email_verified AND p.email IS NOT NULL THEN 'verified_email'
                   WHEN p.phone IS NOT NULL THEN 'phone'
@@ -33,8 +50,25 @@ async function sampleRecommendations({ clientId = null, limit = 25, maxAgeDays =
                                  WHEN p.phone IS NOT NULL THEN 'phone'
                                  WHEN p.email IS NOT NULL THEN 'unverified_email' ELSE 'none' END
                ORDER BY d.created_at DESC
-             ) AS stratum_rank
+             ) AS stratum_rank,
+             ROW_NUMBER() OVER (
+               PARTITION BY d.client_id,d.prospect_id
+               ORDER BY d.created_at DESC
+             ) AS prospect_rank
       FROM max_decisions d JOIN prospects p ON p.id=d.prospect_id AND p.client_id=d.client_id
+      LEFT JOIN prospect_signal_events signal
+        ON signal.id=d.trigger_event_id AND signal.client_id=d.client_id
+      LEFT JOIN LATERAL (
+        SELECT CASE
+          WHEN component->>'source_value' ~ '^-?[0-9]+([.][0-9]+)?$'
+            THEN (component->>'source_value')::numeric
+          WHEN component->>'description' ~ '^ICP score is -?[0-9]+([.][0-9]+)?$'
+            THEN regexp_replace(component->>'description', '^ICP score is ', '')::numeric
+        END AS value
+        FROM jsonb_array_elements(COALESCE(d.score_components,'[]'::jsonb)) component
+        WHERE component->>'code' LIKE 'ICP_SCORE_%'
+        LIMIT 1
+      ) decision_icp ON TRUE
       LEFT JOIN reviewed_transitions rt ON rt.client_id=d.client_id
         AND rt.current_state=d.current_state AND rt.recommended_state=d.recommended_state
       WHERE d.is_shadow=true AND ($1::int IS NULL OR d.client_id=$1)
@@ -43,6 +77,7 @@ async function sampleRecommendations({ clientId = null, limit = 25, maxAgeDays =
     )
     SELECT * FROM candidates WHERE stratum_rank=1
     ORDER BY terminal_recommendation DESC,
+      prospect_rank,
       CASE
         WHEN current_state='cold' AND recommended_state='warm' THEN 1
         WHEN current_state='heating' AND recommended_state='warm' THEN 2
@@ -52,7 +87,7 @@ async function sampleRecommendations({ clientId = null, limit = 25, maxAgeDays =
         WHEN recommended_state='null' THEN 6
         ELSE 20
       END,
-      reviewed_transition_count,client_id,created_at DESC LIMIT $2
+      reviewed_transition_count,client_id,decision_timestamp DESC LIMIT $2
   `, [clientId, limit, maxAgeDays]);
   return result.rows;
 }
