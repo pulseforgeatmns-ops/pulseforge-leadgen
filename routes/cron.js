@@ -4,6 +4,7 @@ const router = express.Router();
 const pool = require('../db');
 const { normalizeClientId } = require('../utils/clientContext');
 const { runScoutExpansionCron } = require('../scoutExpansion');
+const { createMaxDecayCronHandler } = require('../utils/maxDecayCron');
 
 const anthropic = new Anthropic();
 
@@ -326,6 +327,7 @@ router.post('/cron/scoutExpansion', handleScoutExpansionCron);
 router.get('/cron/scoutExpansion', handleScoutExpansionCron);
 router.post('/cron/pulse-health', handlePulseHealthCron);
 router.get('/cron/pulse-health', handlePulseHealthCron);
+router.post('/internal/cron/max-decay', createMaxDecayCronHandler());
 
 router.post('/cron/:agent', async (req, res) => {
   const { agent } = req.params;

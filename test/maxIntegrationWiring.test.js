@@ -23,8 +23,10 @@ test('new orchestration services never mutate legacy operational status', () => 
   }
 });
 
-test('decay is registered behind the existing cron dispatcher', () => {
+test('decay has a dedicated authenticated POST endpoint and the legacy dispatcher remains registered', () => {
   const cron = read('routes/cron.js');
   assert.match(cron, /max_decay:\s*'\.\.\/maxDecayAgent'/);
   assert.match(cron, /agent === 'max_decay'/);
+  assert.match(cron, /router\.post\('\/internal\/cron\/max-decay', createMaxDecayCronHandler\(\)\)/);
+  assert.doesNotMatch(cron, /router\.get\('\/internal\/cron\/max-decay'/);
 });
