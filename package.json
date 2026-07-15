@@ -14,6 +14,8 @@
     "max:decay": "node maxDecayAgent.js",
     "max:decay:history": "node scripts/maxDecayRunHistory.js",
     "max:coverage": "node scripts/maxEventCoverageReport.js",
+    "max:outcomes": "node scripts/maxOutcomeValidationReport.js",
+    "max:recovery:verify": "node scripts/verifyMaxRecoveryArtifact.js",
     "max:sequence:resolve": "node scripts/resolveMaxSequenceState.js",
     "max:review": "node scripts/reviewMaxRecommendations.js",
     "max:readiness": "node scripts/maxReadinessReport.js",

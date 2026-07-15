@@ -8,7 +8,8 @@ const { assertAllowed, boundedInteger, optionalPositiveInteger, tokenizeArgs } =
 function parseArgs(argv = process.argv.slice(2)) {
   const parsed = tokenizeArgs(argv);
   assertAllowed(parsed, {
-    values: ['--client-id','--limit','--max-age-days','--decision-id','--reviewer','--outcome','--notes'],
+    values: ['--client-id','--limit','--max-age-days','--decision-id','--reviewer','--outcome','--notes',
+      '--score-explanation','--source-trustworthy','--source-notes'],
   });
   const options = {
     clientId: optionalPositiveInteger(parsed.values.get('--client-id'), '--client-id'),
@@ -18,7 +19,15 @@ function parseArgs(argv = process.argv.slice(2)) {
     reviewerIdentity: parsed.values.get('--reviewer') || null,
     outcome: parsed.values.get('--outcome') || null,
     notes: parsed.values.get('--notes') || null,
+    scoreComponentExplanation: parsed.values.get('--score-explanation')
+      ? JSON.parse(parsed.values.get('--score-explanation')) : null,
+    sourceDataTrustworthy: parsed.values.has('--source-trustworthy')
+      ? ({ true:true, false:false })[parsed.values.get('--source-trustworthy')] : null,
+    sourceDataNotes: parsed.values.get('--source-notes') || null,
   };
+  if (parsed.values.has('--source-trustworthy') && options.sourceDataTrustworthy == null) {
+    throw new Error('--source-trustworthy must be true or false');
+  }
   const recordValues = [options.decisionId, options.reviewerIdentity, options.outcome].filter(Boolean).length;
   if (recordValues > 0 && recordValues < 3) throw new Error('--decision-id, --reviewer, and --outcome are required together');
   return options;

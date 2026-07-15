@@ -6,12 +6,13 @@ const path = require('node:path');
 const test = require('node:test');
 const { MIGRATIONS, inspectMigrationSafety, migrationSql } = require('../scripts/validateMaxMigrations');
 
-test('migration order preserves Phase 1, Phase 2, Phase 2.5, then shadow hardening', () => {
+test('migration order preserves all Max phases and shadow evidence hardening', () => {
   assert.deepEqual(MIGRATIONS, [
     '2026-07-15-max-prospect-orchestration-v1.sql',
     '2026-07-15-max-prospect-orchestration-phase2.sql',
     '2026-07-15-max-prospect-orchestration-phase2_5.sql',
     '2026-07-15-max-shadow-operations-hardening.sql',
+    '2026-07-15-max-shadow-evidence-scheduling.sql',
   ]);
 });
 

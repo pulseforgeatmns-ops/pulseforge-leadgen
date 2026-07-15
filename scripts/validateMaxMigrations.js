@@ -10,6 +10,7 @@ const MIGRATIONS = Object.freeze([
   '2026-07-15-max-prospect-orchestration-phase2.sql',
   '2026-07-15-max-prospect-orchestration-phase2_5.sql',
   '2026-07-15-max-shadow-operations-hardening.sql',
+  '2026-07-15-max-shadow-evidence-scheduling.sql',
 ]);
 
 function migrationSql(filename) {
@@ -61,6 +62,7 @@ async function validateMigrations(db = pool) {
         to_regclass('max_recommendation_reviews') IS NOT NULL AS reviews,
         to_regclass('max_rollout_readiness_config') IS NOT NULL AS rollout_config,
         to_regclass('max_decay_run_events') IS NOT NULL AS decay_run_events
+        ,to_regclass('max_meeting_outcome_events') IS NOT NULL AS meeting_outcome_events
     `);
     const invalidFks = await client.query(`
       SELECT conname FROM pg_constraint

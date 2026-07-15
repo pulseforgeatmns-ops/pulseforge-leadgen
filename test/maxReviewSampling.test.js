@@ -11,6 +11,7 @@ test('review outcomes are fixed and review writes do not alter decisions',async(
   const row=await recordRecommendationReview({decisionId:'d1',reviewerIdentity:'operator@example.com',outcome:'agree'},db);
   assert.equal(row.review_outcome,'agree');
   assert.match(sql,/INSERT INTO max_recommendation_reviews/);
+  assert.match(sql,/source_data_trustworthy/);
   assert.doesNotMatch(sql,/UPDATE/);
 });
 

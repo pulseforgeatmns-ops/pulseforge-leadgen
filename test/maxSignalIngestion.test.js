@@ -155,6 +155,7 @@ test('meaningful signal invokes one shadow evaluator and records metrics', async
   assert.equal(evaluations, 1);
   assert.equal(result.evaluated, true);
   assert.ok(db.calls.some(call => call.params?.includes('live_signal_to_decision_latency')));
+  assert.ok(db.calls.some(call => call.params?.includes('live_processing_latency')));
 });
 
 test('historical backfill records event age separately and never records live latency', async () => {

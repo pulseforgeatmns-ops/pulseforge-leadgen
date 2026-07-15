@@ -57,17 +57,25 @@ async function sampleRecommendations({ clientId = null, limit = 25, maxAgeDays =
   return result.rows;
 }
 
-async function recordRecommendationReview({ decisionId, reviewerIdentity, outcome, notes = null }, db = pool) {
+async function recordRecommendationReview({
+  decisionId, reviewerIdentity, outcome, notes = null,
+  scoreComponentExplanation = null, sourceDataTrustworthy = null, sourceDataNotes = null,
+}, db = pool) {
   if (!decisionId) throw new Error('decisionId is required');
   if (!reviewerIdentity || !String(reviewerIdentity).trim()) throw new Error('reviewerIdentity is required');
   if (!REVIEW_OUTCOMES.has(outcome)) throw new Error(`Invalid review outcome: ${outcome}`);
   const result = await db.query(`
     INSERT INTO max_recommendation_reviews
-      (client_id,decision_id,prospect_id,reviewer_identity,review_outcome,notes)
-    SELECT d.client_id,d.id,d.prospect_id,$2,$3,$4
+      (client_id,decision_id,prospect_id,reviewer_identity,review_outcome,notes,
+       score_component_explanation,source_data_trustworthy,source_data_notes)
+    SELECT d.client_id,d.id,d.prospect_id,$2,$3,$4,$5::jsonb,$6,$7
     FROM max_decisions d WHERE d.id=$1 AND d.is_shadow=true
-    RETURNING id,client_id,decision_id,prospect_id,reviewer_identity,review_outcome,notes,reviewed_at
-  `, [decisionId, String(reviewerIdentity).trim(), outcome, notes ? String(notes).slice(0, 4000) : null]);
+    RETURNING id,client_id,decision_id,prospect_id,reviewer_identity,review_outcome,notes,
+      score_component_explanation,source_data_trustworthy,source_data_notes,reviewed_at
+  `, [decisionId, String(reviewerIdentity).trim(), outcome,
+    notes ? String(notes).slice(0, 4000) : null,
+    scoreComponentExplanation == null ? null : JSON.stringify(scoreComponentExplanation),
+    sourceDataTrustworthy, sourceDataNotes ? String(sourceDataNotes).slice(0, 4000) : null]);
   if (!result.rows[0]) throw new Error(`Shadow decision not found: ${decisionId}`);
   return result.rows[0];
 }

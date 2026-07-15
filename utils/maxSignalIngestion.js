@@ -55,6 +55,7 @@ function canonicalizeNormalizedSignal(signal) {
     event_timestamp: eventTimestamp,
     metadata: {
       ...(attributedSignal.metadata || {}),
+      received_at: attributedSignal.metadata?.received_at || new Date().toISOString(),
       raw_source_timestamp: Object.hasOwn(signal.metadata || {}, 'raw_source_timestamp')
         ? signal.metadata.raw_source_timestamp
         : rawTimestampForMetadata(rawTimestamp),
@@ -147,11 +148,14 @@ async function ingestNormalizedSignal(signal, {
   if (!result.skipped && !result.duplicate) {
     const decisionId = result.decision?.id || null;
     const provenance = signalProvenance(normalizedSignal);
-    const receivedAt = new Date(persisted.created_at || Date.now());
+    const persistedAt = new Date(persisted.created_at || Date.now());
+    const receivedAt = provenance === 'live' && normalizedSignal.metadata?.received_at
+      ? new Date(normalizedSignal.metadata.received_at) : persistedAt;
     const decisionAt = new Date(result.decision?.created_at || Date.now());
-    const processingLatency = Math.max(0, decisionAt.getTime() - receivedAt.getTime());
+    const signalToDecisionLatency = Math.max(0, decisionAt.getTime() - receivedAt.getTime());
+    const processingLatency = Math.max(0, decisionAt.getTime() - persistedAt.getTime());
     const metric = provenance === 'live'
-      ? ['live_signal_to_decision_latency', processingLatency]
+      ? ['live_signal_to_decision_latency', signalToDecisionLatency]
       : provenance === 'historical_backfill'
         ? ['historical_backfill_processing_latency', processingLatency]
         : null;
@@ -160,6 +164,13 @@ async function ingestNormalizedSignal(signal, {
       prospectId: normalizedSignal.prospect_id, signalEventId: persisted.id, decisionId,
       dimensions: { provenance, source: normalizedSignal.source, event_type: normalizedSignal.event_type },
     })] : [];
+    if (provenance === 'live') {
+      metrics.push(recordMaxMetric('live_processing_latency', {
+        db, clientId: normalizedSignal.client_id, value: processingLatency,
+        prospectId: normalizedSignal.prospect_id, signalEventId: persisted.id, decisionId,
+        dimensions: { provenance, source: normalizedSignal.source, event_type: normalizedSignal.event_type },
+      }));
+    }
     if (provenance === 'historical_backfill') {
       metrics.push(recordMaxMetric('historical_backfill_event_age', {
         db, clientId: normalizedSignal.client_id,

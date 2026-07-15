@@ -12,13 +12,22 @@ const REQUIRED_COLUMNS = Object.freeze({
     'active_sequence_type','active_sequence_id','downgrade_candidate_since',
   ],
   clients: ['max_orchestration_config'],
-  max_recommendation_reviews: ['client_id','decision_id','prospect_id','reviewer_identity','review_outcome','reviewed_at'],
+  max_recommendation_reviews: ['client_id','decision_id','prospect_id','reviewer_identity','review_outcome','reviewed_at',
+    'score_component_explanation','source_data_trustworthy','source_data_notes'],
   max_rollout_readiness_config: [
     'client_id','phase3_allowlisted','minimum_reviewed_samples','minimum_total_reviews',
     'shadow_observation_enabled','minimum_reviews_by_transition','terminal_review_requirement',
     'minimum_agreement_rate','maximum_failure_rate','maximum_oscillation_rate',
     'rollback_documented','rollback_reference','rollback_reference_verified',
     'recovery_snapshot_reference','recovery_snapshot_verified','created_at','updated_at',
+    'recovery_artifact_found','recovery_hash_verified','recovery_archive_readable',
+    'recovery_restore_procedure_documented','recovery_durable_storage_verified',
+    'decay_schedule_configured','decay_schedule_verified','decay_schedule_reference',
+    'decay_schedule_command','decay_schedule_frequency','decay_schedule_timezone',
+  ],
+  max_meeting_outcome_events: [
+    'client_id','prospect_id','company_id','event_type','source','source_record_id',
+    'event_timestamp','original_event_timestamp','confidence','correction_of_event_id','metadata','created_at',
   ],
   max_decay_run_events: [
     'run_id','mode','status','started_at','completed_at','lock_acquired','client_scope',
@@ -33,6 +42,7 @@ const REQUIRED_TABLES = Object.freeze([
   'prospect_signal_events','max_decisions','prospect_state_transitions','max_actions',
   'manual_lifecycle_overrides','max_orchestration_metrics',
   'max_recommendation_reviews','max_rollout_readiness_config','max_decay_run_events',
+  'max_meeting_outcome_events',
 ]);
 
 const REQUIRED_INDEXES = Object.freeze([
@@ -42,6 +52,7 @@ const REQUIRED_INDEXES = Object.freeze([
   'prospect_state_transitions_funnel_idx','max_actions_status_idx',
   'max_recommendation_reviews_client_time_idx','max_recommendation_reviews_outcome_idx',
   'max_decay_run_events_run_time_idx','max_decay_run_events_recent_idx',
+  'max_meeting_outcome_events_prospect_time_idx',
 ]);
 
 const REQUIRED_CONSTRAINTS = Object.freeze([
@@ -58,6 +69,7 @@ const REQUIRED_TRIGGERS = Object.freeze([
   'manual_lifecycle_overrides_append_only','max_orchestration_metrics_append_only',
   'max_recommendation_reviews_append_only',
   'max_decay_run_events_append_only',
+  'max_meeting_outcome_events_append_only',
 ]);
 
 const REQUIRED_COLUMN_TYPES = Object.freeze({
@@ -72,6 +84,8 @@ const REQUIRED_COLUMN_TYPES = Object.freeze({
   'max_rollout_readiness_config.client_id': 'integer',
   'max_decay_run_events.id': 'uuid',
   'max_decay_run_events.run_id': 'uuid',
+  'max_meeting_outcome_events.id': 'uuid',
+  'max_meeting_outcome_events.metadata': 'jsonb',
 });
 
 const REQUIRED_JSON_DEFAULTS = Object.freeze([
@@ -81,6 +95,7 @@ const REQUIRED_JSON_DEFAULTS = Object.freeze([
   'max_orchestration_metrics.dimensions',
   'max_rollout_readiness_config.minimum_reviews_by_transition',
   'max_decay_run_events.operational_effects','max_decay_run_events.details',
+  'max_meeting_outcome_events.metadata',
 ]);
 
 async function validateSchema(db = pool) {

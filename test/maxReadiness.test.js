@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { buildReadinessReport, latencyPercentiles } = require('../utils/maxReadiness');
+const { buildReadinessReport, latencyPercentiles, uniqueReviewCount } = require('../utils/maxReadiness');
 
 test('readiness queries supply exactly the parameters referenced by SQL', async () => {
   const calls = [];
@@ -30,4 +30,16 @@ test('live latency is unavailable when no qualifying live decisions exist', asyn
   const result = await latencyPercentiles(db, 'live_signal_to_decision_latency', [10, 30], 'no live decisions');
   assert.equal(result.status, 'unavailable');
   assert.equal(result.reason, 'no live decisions');
+});
+
+test('live latency percentiles remain unavailable below the documented five-sample minimum',async()=>{
+  const db={query:async()=>({rows:[{median_ms:8,p95_ms:12,samples:4}]})};
+  const result=await latencyPercentiles(db,'live_signal_to_decision_latency',[10,30],'insufficient',{minimumSamples:5});
+  assert.equal(result.status,'unavailable');
+  assert.equal(result.samples,4);
+  assert.equal(result.minimum_samples,5);
+});
+
+test('the review gate counts unique decisions rather than raw review rows',()=>{
+  assert.equal(uniqueReviewCount({review_consistency:{value:{total_review_rows:100,unique_decisions_reviewed:20}}}),20);
 });

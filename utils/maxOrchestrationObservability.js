@@ -12,6 +12,7 @@ const METRICS = new Set([
   'decision_processing_duration',
   'decay_batch_duration',
   'live_signal_to_decision_latency',
+  'live_processing_latency',
   'historical_backfill_event_age',
   'historical_backfill_processing_latency',
   'manual_recalculation_processing_latency',
