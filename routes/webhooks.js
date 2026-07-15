@@ -16,6 +16,7 @@ const {
   recipientEmail,
 } = require('../utils/brevoEvents');
 const { OPEN_SOURCE, isOpenOrClickEventType } = require('../utils/openSignalGate');
+const { safeIngestBrevoSignal } = require('../utils/maxSignalIngestion');
 const { ensureMiraSchema } = require('../utils/miraSchema');
 const {
   VALID_MIRA_CATEGORIES,
@@ -778,6 +779,7 @@ function acceptBrevoWebhook(req, res) {
         console.warn(`[Brevo] Skipped webhook event: ${result.reason || 'unknown'}`);
         return;
       }
+      await safeIngestBrevoSignal(result, payload);
       await processBrevoEventSideEffects(result, payload);
       console.log(`[Brevo] Received ${eventType || result.event_type} for ${email || result.recipient_email}`);
     } catch (err) {
@@ -896,13 +898,28 @@ Respond with JSON only — no explanation:
 
     await notify(lines.filter(l => l !== null).join('\n'));
 
-    await pool.query(
-      `INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())`,
+    const calLog = await pool.query(
+      `INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+       SELECT $1, $2, p.id, $4, $5, NOW(), p.client_id
+       FROM prospects p WHERE p.id = $3
+       RETURNING id, ran_at, client_id`,
       ['cal_agent', 'call_completed', prospectId,
        JSON.stringify({ call_id, booked: parsed.booked, calendar_created: calendarCreated }),
        'success']
     );
+
+    if (parsed.booked && calendarCreated && calLog.rows[0]) {
+      const { safeIngestMeetingSignal } = require('../utils/maxLifecycleSignals');
+      await safeIngestMeetingSignal({
+        prospectId,
+        clientId: calLog.rows[0].client_id,
+        eventType: 'meeting_booked',
+        source: 'cal_google_calendar',
+        sourceRecordId: call_id,
+        eventTimestamp: parsed.agreed_iso || calLog.rows[0].ran_at,
+        metadata: { calendar_created: true, agent_log_id: calLog.rows[0].id },
+      });
+    }
 
   } catch (err) {
     console.error('[bland webhook] Error processing callback:', err.message);

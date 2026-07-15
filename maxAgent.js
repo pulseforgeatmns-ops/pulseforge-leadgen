@@ -10,6 +10,7 @@ const { computeDailyHealth, formatDailyHealthMessage } = require('./utils/dailyH
 const { ensureHealthSchema, upsertDailyHealth } = require('./utils/healthSchema');
 const { sendMiraTelegramMessage } = require('./utils/miraCorrections');
 const { reportAgentRun } = require('./utils/agentObservability');
+const { formatShadowDigest, getShadowDigestData } = require('./utils/maxOrchestrationAnalytics');
 
 const client = new Anthropic();
 const AGENT_NAME = 'max';
@@ -2726,6 +2727,7 @@ async function run(args = {}) {
     auto_exec: null,
     patterns: { detected: 0, included: 0, weekly_report_logged: false },
     digest: { generated: false, sent: false, length: 0, error: null },
+    shadow_orchestration: { included: false, error: null },
     daily_health: { computed: false, persisted: false, flags: [], error: null },
     errors: [],
   };
@@ -2802,7 +2804,19 @@ async function run(args = {}) {
       const rawInsights = await generateInsights(snapshot, result.auto_exec);
       console.log(`[Max] generateInsights returned (type=${typeof rawInsights}, length=${typeof rawInsights === 'string' ? rawInsights.length : 'n/a'})`);
       const verifiedInsights = await verifyDigestProspects(rawInsights, snapshot);
-      const insights = injectPatternsSection(verifiedInsights, patternAnalysis.dailyInsights);
+      let insights = injectPatternsSection(verifiedInsights, patternAnalysis.dailyInsights);
+      try {
+        const shadowData = await getShadowDigestData({ db: pool, clientId: CLIENT_ID, hours: 24 });
+        const shadowBlock = formatShadowDigest(shadowData);
+        if (shadowBlock) {
+          insights = `${insights.trimEnd()}\n\n${'─'.repeat(50)}\n${shadowBlock}`;
+          result.shadow_orchestration.included = true;
+        }
+      } catch (shadowErr) {
+        result.shadow_orchestration.error = shadowErr.message;
+        console.warn('[Max] Shadow orchestration digest unavailable:', shadowErr.message);
+        await insertAgentLog('shadow_digest_unavailable', { error: shadowErr.message }, 'failed').catch(() => {});
+      }
       console.log(`[Max] verifyDigestProspects returned (type=${typeof insights}, length=${typeof insights === 'string' ? insights.length : 'n/a'})`);
 
       if (typeof insights !== 'string' || !insights.trim()) {

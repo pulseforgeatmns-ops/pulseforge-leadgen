@@ -31,6 +31,7 @@ const { normalizeVertical } = require('./utils/normalize');
 const { SCOUT_SKIP_REASONS, ensureScoutSkipLogTable, logScoutSkip } = require('./utils/scoutSkipLog');
 const { reportAgentRun } = require('./utils/agentObservability');
 const { setSetterVisibility } = require('./utils/setterVisibility');
+const { safeIngestScoutLifecycleSignal } = require('./utils/maxLifecycleSignals');
 const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('./utils/businessNameShort');
 const { searchSerpApi } = require('./lib/serpapi');
 const { sourceLinkedInProspects } = require('./utils/linkedinSerpSource');
@@ -2225,7 +2226,16 @@ async function saveLinkedInProspect(record, { dryRun = false } = {}) {
     record.linkedin_headline, record.linkedin_location, JSON.stringify(record.linkedin_source_query),
     record.employee_count_estimate, CONFIG.vertical, CONFIG.clientId, serviceAreaMatch,
   ]);
-  if (inserted.rows[0]) return { action: 'written', match: null, prospectId: inserted.rows[0].id };
+  if (inserted.rows[0]) {
+    await safeIngestScoutLifecycleSignal({
+      prospectId: inserted.rows[0].id,
+      clientId: CONFIG.clientId,
+      eventType: 'prospect_discovered',
+      sourceRecordId: `prospect:${inserted.rows[0].id}`,
+      metadata: { discovery_method: 'linkedin_serpapi', vertical: CONFIG.vertical },
+    });
+    return { action: 'written', match: null, prospectId: inserted.rows[0].id };
+  }
   const raced = await findExistingLinkedInProspect(record);
   return { action: 'deduped', match: raced?.match || 'insert_conflict', prospectId: raced?.row?.id || null };
 }
@@ -2498,6 +2508,14 @@ async function saveToDatabase(leads, {
       saved++;
       const prospectId = insert.rows[0].id;
 
+      await safeIngestScoutLifecycleSignal({
+        prospectId,
+        clientId: CONFIG.clientId,
+        eventType: 'prospect_discovered',
+        sourceRecordId: `prospect:${prospectId}`,
+        metadata: { discovery_method: discoveryMethod, vertical: CONFIG.vertical },
+      });
+
       // Seed icp_score_history with Scout's initial score so dynamic ICP
       // recalculation has a baseline to diff future engagement changes against.
       await recordScoutBaseline(prospectId, lead.score, 'scout_initial').catch(err =>
@@ -2515,6 +2533,15 @@ async function saveToDatabase(leads, {
           clientId: CONFIG.clientId,
           source: 'scout',
         });
+        if (setterUpdate?.setter_visible) {
+          await safeIngestScoutLifecycleSignal({
+            prospectId,
+            clientId: CONFIG.clientId,
+            eventType: 'prospect_qualified',
+            sourceRecordId: `setter-visibility:${prospectId}`,
+            metadata: { icp_score: lead.score, qualification_source: 'scout_setter_gate' },
+          });
+        }
         if (CONFIG.clientId === 1 && setterUpdate?.setter_visible) {
           const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
           if (handoff.appended) setterQueued++;

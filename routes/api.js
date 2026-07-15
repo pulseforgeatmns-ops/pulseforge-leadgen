@@ -20,6 +20,7 @@ const { setSetterVisibility } = require('../utils/setterVisibility');
 const { ensureTieredEnrichmentSchema } = require('../utils/tieredEnrichmentSchema');
 const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('../utils/businessNameShort');
 const { autorun: autorunEmmett } = require('../utils/emmettAutosend');
+const { applyManualLifecycleOverride } = require('../utils/maxManualOverride');
 
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
@@ -1272,6 +1273,24 @@ router.patch('/api/prospects/:id/status', requireOperator, async (req, res) => {
     res.json({ success: true, prospect: await selectUpdatedProspect(req.params.id, clientId) });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/api/prospects/:id/lifecycle-override', requireOperator, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const override = await applyManualLifecycleOverride({
+      prospectId: req.params.id,
+      clientId,
+      requestedState: req.body?.lifecycle_state,
+      reason: req.body?.reason,
+      source: req.body?.source || 'dashboard',
+      confirmTerminalRestore: req.body?.confirm_terminal_restore === true,
+      operator: req.user || {},
+    });
+    res.json({ success: true, override });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 

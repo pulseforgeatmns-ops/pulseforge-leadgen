@@ -5,6 +5,7 @@ const { normalizeClientId } = require('./utils/clientContext');
 const { verifyEmail } = require('./utils/emailVerifier');
 const { invalidOutreachEmailReason } = require('./utils/emailGuard');
 const { ensureTieredEnrichmentSchema } = require('./utils/tieredEnrichmentSchema');
+const { safeIngestEnrichmentOutcome } = require('./utils/maxSignalIngestion');
 
 const AGENT_NAME = 'tiered_enrichment';
 const DEFAULT_FETCH_DELAY_MS = 750;
@@ -681,6 +682,26 @@ async function persistOutcome(row, outcome, dryRun = false) {
     WHERE id = $${values.length - 1}
       AND client_id = $${values.length}
   `, values);
+
+  const sourceRecordId = [
+    row.prospect_id,
+    outcome.resolvedTier ?? 'manual',
+    outcome.selectedEmail?.email || 'no-email',
+    new Date().toISOString().slice(0, 10),
+  ].join(':');
+  await safeIngestEnrichmentOutcome({
+    prospectId: row.prospect_id,
+    clientId: row.client_id,
+    sourceRecordId,
+    eventTimestamp: new Date(),
+    status: outcome.resolved ? 'success' : 'failed',
+    payload: {
+      provider: 'tiered_enrichment',
+      resolved: outcome.resolved,
+      verified_email: Boolean(outcome.selectedEmail?.verified),
+      email_verified: Boolean(outcome.selectedEmail?.verified),
+    },
+  });
 
   if ((outcome.practice_area || outcome.firm_size) && row.company_id) {
     await pool.query(`

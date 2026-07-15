@@ -431,7 +431,18 @@ async function recalculateICP(prospectId, options = {}) {
     `UPDATE prospects SET icp_score = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3`,
     [newScore, prospectId, clientId]
   );
-  await logScoreChange(prospectId, oldScore, newScore, reason);
+  const history = await logScoreChange(prospectId, oldScore, newScore, reason);
+  if (history?.id) {
+    const { safeIngestIcpScoreChange } = require('./maxSignalIngestion');
+    await safeIngestIcpScoreChange({
+      prospectId,
+      clientId,
+      historyId: history.id,
+      oldScore,
+      newScore,
+      createdAt: history.created_at,
+    });
+  }
 
   console.log(`[icpScoring] ${prospectId} ICP ${oldScore ?? 'null'} → ${newScore} (base ${base.total} + eng ${bonus} - pen ${penalty}) [${reason}]`);
   return {
@@ -479,13 +490,16 @@ async function previewRecalculateICP(prospectId, options = {}) {
 async function logScoreChange(prospectId, oldScore, newScore, reason) {
   try {
     await ensureHistoryReady();
-    await sharedPool.query(
+    const result = await sharedPool.query(
       `INSERT INTO icp_score_history (prospect_id, old_score, new_score, reason)
-       VALUES ($1, $2, $3, $4)`,
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, created_at`,
       [prospectId, oldScore, newScore, String(reason || 'recalculation').slice(0, 200)]
     );
+    return result.rows[0] || null;
   } catch (err) {
     console.error('[icpScoring] logScoreChange failed:', err.message);
+    return null;
   }
 }
 

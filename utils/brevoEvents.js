@@ -476,6 +476,7 @@ async function insertBrevoEvent(rawPayload = {}) {
   const updated = insert.rowCount > 0 && !inserted;
   let openSource = insert.rows[0]?.open_source || openClassification.openSource;
   let openSourceReason = insert.rows[0]?.open_source_reason || openClassification.reason || null;
+  let reclassifiedProxyEvents = [];
   if (insert.rows[0]?.id && inserted && openClassification.source) {
     const batchUpdated = await markBatchProxyEvents(pool, {
       clientId: finalClientId,
@@ -490,6 +491,18 @@ async function insertBrevoEvent(rawPayload = {}) {
       );
       openSource = current.rows[0]?.open_source || openSource;
       openSourceReason = current.rows[0]?.open_source_reason || openSourceReason;
+      const reclassified = await pool.query(`
+        SELECT event_id, prospect_id, client_id, event_at
+        FROM email_events
+        WHERE client_id = $1
+          AND event_type IN ('opened','open')
+          AND open_source = 'proxy'::open_source
+          AND open_source_reason = 'batch_fire'
+          AND event_at >= $2::timestamptz - ($3::int * INTERVAL '1 second')
+          AND event_at <= $2::timestamptz
+          AND prospect_id IS NOT NULL
+      `, [finalClientId, occurredAt, 10]);
+      reclassifiedProxyEvents = reclassified.rows;
     }
   }
 
@@ -528,6 +541,7 @@ async function insertBrevoEvent(rawPayload = {}) {
     open_source: openSource,
     open_source_reason: openSourceReason,
     has_corresponding_send: Boolean(sendMatch || openClassification.hasSend),
+    reclassified_proxy_events: reclassifiedProxyEvents,
   };
 }
 

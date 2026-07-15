@@ -10,6 +10,7 @@ const { recalculateICP } = require('./utils/icpScoring');
 const { reportAgentRun } = require('./utils/agentObservability');
 const { OPEN_SOURCE, ensureOpenSignalSchema } = require('./utils/openSignalGate');
 const { resolveVerticalTier } = require('./utils/verticalTiers');
+const { safeIngestNormalizedSignal, safeIngestRileyReplySignal } = require('./utils/maxSignalIngestion');
 
 const AGENT_NAME = 'riley';
 const CLIENT_ID = getRuntimeClientId();
@@ -1782,6 +1783,24 @@ async function run() {
           continue;
         }
         await updateProspectStatus(inbound.prospectId, inbound.newStatus, inbound.autoResponderUntil || null);
+        const statusSignalType = inbound.newStatus === 'auto_responder'
+          ? 'email_out_of_office'
+          : inbound.newStatus === 'bounced'
+            ? 'email_hard_bounced'
+            : inbound.newStatus === 'do_not_email'
+              ? 'email_negative_reply'
+              : null;
+        if (statusSignalType) {
+          await safeIngestNormalizedSignal({
+            client_id: CLIENT_ID,
+            prospect_id: inbound.prospectId,
+            event_type: statusSignalType,
+            event_timestamp: email.date || new Date(),
+            source: 'riley_gmail_status',
+            source_record_id: email.id,
+            metadata: { classification: inbound.reason, operational_status: inbound.newStatus },
+          });
+        }
         await safeApplyRileyLabels(auth, email.id, inbound.tier);
         successes++;
         continue;
@@ -1807,6 +1826,12 @@ async function run() {
 
       await updateProspectFromReply(prospect, result.classification);
       await logInboundTouchpoint(prospect, email, result.classification);
+      await safeIngestRileyReplySignal({
+        prospect,
+        email,
+        classification: result.classification,
+        clientId: CLIENT_ID,
+      });
       if (result.classification === 'interested') {
         await depositInterestedAction(prospect, email, result.suggested_reply);
         await notifyWarmReply(prospect, email, result.classification);

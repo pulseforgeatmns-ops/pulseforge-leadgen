@@ -6,6 +6,16 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "test:email-verifier": "node scripts/smokeEmailVerifier.js",
+    "max:schema": "node scripts/validateMaxOrchestrationSchema.js",
+    "max:migrations:validate": "node scripts/validateMaxMigrations.js",
+    "max:smoke": "node scripts/smokeMaxShadow.js",
+    "max:signals:backfill": "node scripts/backfillMaxSignals.js",
+    "max:recalculate": "node scripts/recalculateMaxOrchestration.js",
+    "max:decay": "node maxDecayAgent.js",
+    "max:sequence:resolve": "node scripts/resolveMaxSequenceState.js",
+    "max:review": "node scripts/reviewMaxRecommendations.js",
+    "max:readiness": "node scripts/maxReadinessReport.js",
+    "max:readiness:check": "node scripts/maxReadinessReport.js --check",
     "start": "node server.js"
   },
   "repository": {

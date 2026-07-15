@@ -34,6 +34,7 @@ const CRON_MODULES = {
   mira_router: '../miraRouterAgent',
   mira_digest: '../miraDigestAgent',
   warm_routing: '../warmRoutingAgent',
+  max_decay: '../maxDecayAgent',
   paige_reflection: '../agents/reflection/run',
 };
 
@@ -88,6 +89,15 @@ function runCronAgent(agent, res, query = {}) {
         windowStart: query.windowStart || query.window_start,
         windowEnd: query.windowEnd || query.window_end,
         dryRun: query.dryRun ?? query.dry_run ?? query['dry-run'],
+      }).catch(err => {
+        console.error(`[cron] ${agent} run error:`, err.message);
+      });
+    } else if (agent === 'max_decay' && typeof mod.run === 'function') {
+      mod.run({
+        client_id: query.client_id || query.clientId || clientId,
+        dry_run: query.dry_run ?? query.dryRun,
+        limit: query.limit,
+        after_id: query.after_id || query.afterId,
       }).catch(err => {
         console.error(`[cron] ${agent} run error:`, err.message);
       });

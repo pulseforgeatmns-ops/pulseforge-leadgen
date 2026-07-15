@@ -4,6 +4,7 @@ const axios = require('axios');
 const pool = require('./db');
 const { normalizeClientId } = require('./utils/clientContext');
 const { invalidOutreachEmailReason } = require('./utils/emailGuard');
+const { safeIngestEnrichmentOutcome } = require('./utils/maxSignalIngestion');
 
 const AGENT_NAME = 'enrich_prospects';
 
@@ -89,12 +90,26 @@ function pickBestHunterPhone(emails = []) {
 
 async function logEnrichmentAttempt(clientId, payload, status = 'success') {
   try {
-    await pool.query(`
-      INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
-      VALUES ($1, $2, $3, $4, NOW(), $5)
-    `, [AGENT_NAME, 'enrichment_attempt', JSON.stringify(payload), status, clientId]);
+    const result = await pool.query(`
+      INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+      VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+      RETURNING id, ran_at
+    `, [AGENT_NAME, 'enrichment_attempt', payload.prospect_id || null, JSON.stringify(payload), status, clientId]);
+    const row = result.rows[0];
+    if (row && payload.prospect_id) {
+      await safeIngestEnrichmentOutcome({
+        prospectId: payload.prospect_id,
+        clientId,
+        sourceRecordId: row.id,
+        eventTimestamp: row.ran_at,
+        status,
+        payload: { ...payload, provider: 'hunter' },
+      });
+    }
+    return row || null;
   } catch (err) {
     console.error('[enrich] agent_log write failed:', err.message);
+    return null;
   }
 }
 
