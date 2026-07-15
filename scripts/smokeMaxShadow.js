@@ -11,6 +11,7 @@ const {
 const { validateSchema } = require('./validateMaxOrchestrationSchema');
 const { loadMaxOrchestrationConfig } = require('../config/maxOrchestration');
 const { assertAllowed, optionalPositiveInteger, optionalUuid, tokenizeArgs } = require('../utils/maxCli');
+const { classifyOperationalMutations, diffOperationalSnapshots } = require('../utils/maxMutationAttribution');
 
 const UUID_PATTERN = '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
 
@@ -317,13 +318,24 @@ async function run(options = parseArgs(), db = pool, env = process.env, dependen
     inTransaction = await captureInvariantSnapshot(client, options.prospectId, options.clientId);
     const immutableBefore = selectedSnapshot(before.prospect, IN_TRANSACTION_IMMUTABLE_FIELDS);
     const immutableAfter = selectedSnapshot(inTransaction.prospect, IN_TRANSACTION_IMMUTABLE_FIELDS);
-    if (!sameSnapshot(immutableBefore, immutableAfter)) {
-      failAssertion('operational prospect state changed inside smoke transaction', { before: immutableBefore, after: immutableAfter });
-    }
     const deltas = countDeltas(before.counts, inTransaction.counts);
     const sideEffectDeltas = Object.fromEntries(OPERATIONAL_COUNT_KEYS.map(key => [key, deltas[key]]));
-    if (Object.values(sideEffectDeltas).some(value => value !== 0)) {
-      failAssertion('operational side effect detected inside smoke transaction', sideEffectDeltas);
+    const fieldMutations = diffOperationalSnapshots(immutableBefore, immutableAfter, {
+      entity: 'prospect', entityId: options.prospectId, clientId: options.clientId,
+      correlationId: smokeId, transactionOwner: 'max', maxDecisionId: result.decision.id,
+    });
+    const countMutations = Object.entries(sideEffectDeltas)
+      .filter(([, delta]) => Number(delta) !== 0)
+      .map(([field, delta]) => ({
+        entity: 'operational_count', entity_id: options.prospectId, client_id: options.clientId,
+        field, before: before.counts[field], after: inTransaction.counts[field], delta,
+        correlation_id: smokeId, transaction_owner: 'max', max_decision_id: result.decision.id,
+      }));
+    const mutationAttribution = classifyOperationalMutations([...fieldMutations, ...countMutations], {
+      maxDecisionIds: [result.decision.id], maxCorrelationIds: [smokeId],
+    });
+    if (mutationAttribution.stop_required) {
+      failAssertion('Max-attributable operational mutation detected inside smoke transaction', mutationAttribution);
     }
     if (deltas.max_signals !== 1 || deltas.max_decisions !== 1 || deltas.max_transitions < 1 || deltas.max_actions < 1) {
       failAssertion('expected shadow audit records were not created exactly once', deltas);
@@ -359,6 +371,7 @@ async function run(options = parseArgs(), db = pool, env = process.env, dependen
       post_rollback: afterRollback,
       in_transaction_deltas: deltas,
       side_effect_deltas: sideEffectDeltas,
+      mutation_attribution: mutationAttribution,
       rolled_back: true,
       synthetic_records_remaining: totalResiduals(residuals),
       residuals,

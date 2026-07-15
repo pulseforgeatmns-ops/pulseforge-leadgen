@@ -23,8 +23,7 @@ function normalizeLifecycleState(value) {
 
 function hoursSince(value, now) {
   if (!value) return 0;
-  const at = new Date(value);
-  if (Number.isNaN(at.getTime())) return 0;
+  const at = normalizeEventTimestamp(value, { source: 'max_state_decision', field: 'downgrade_candidate_since' });
   return Math.max(0, (now.getTime() - at.getTime()) / 3600000);
 }
 
@@ -135,3 +134,4 @@ module.exports = {
   normalizeLifecycleState,
   upwardState,
 };
+const { normalizeEventTimestamp } = require('./maxTimestamp');

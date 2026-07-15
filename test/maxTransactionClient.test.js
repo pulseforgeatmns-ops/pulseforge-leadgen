@@ -9,7 +9,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { Pool } = require('pg');
 const { evaluateProspectShadow } = require('../utils/maxOrchestration');
-const { persistNormalizedSignal } = require('../utils/maxSignalIngestion');
+const { persistNormalizedSignal, safeIngestBrevoSignal } = require('../utils/maxSignalIngestion');
 
 const PROSPECT_ID = '5128ba03-dc0b-44fe-aeb1-f9419142d3e3';
 const SIGNAL_ID = 'maxsig_transaction_client_integration';
@@ -61,6 +61,10 @@ test('complete shadow decision flow uses one caller-owned transaction and rolls 
   });
 
   await db.query(`
+    CREATE TABLE clients (
+      id integer primary key, vertical_tiers jsonb default '{}'::jsonb,
+      max_orchestration_config jsonb default '{}'::jsonb
+    );
     CREATE TABLE companies (id uuid primary key, client_id integer, name text, industry text);
     CREATE TABLE prospects (
       id uuid primary key, client_id integer not null, company_id uuid, status text,
@@ -108,6 +112,7 @@ test('complete shadow decision flow uses one caller-owned transaction and rolls 
     CREATE TABLE cal_queue (id bigserial primary key, prospect_id uuid, client_id integer);
     CREATE TABLE touchpoints (id uuid primary key, prospect_id uuid, client_id integer, action_type text);
   `);
+  await db.query("INSERT INTO clients (id) VALUES (10)");
   await db.query("INSERT INTO prospects (id,client_id,status,icp_score) VALUES ($1,10,'cold',85)", [PROSPECT_ID]);
 
   const client = await db.connect();
@@ -119,6 +124,27 @@ test('complete shadow decision flow uses one caller-owned transaction and rolls 
   };
   try {
     await client.query('BEGIN');
+    const transactionContext = { client, transactionManagedByCaller: true };
+    const brevoResult = {
+      prospect_id: PROSPECT_ID, client_id: 10, event_id: 'brevo-epoch-unsubscribe',
+      event_type: 'unsubscribed', open_source: 'unknown', has_corresponding_send: true,
+    };
+    const firstResult = await safeIngestBrevoSignal(brevoResult, { ts: '1784131374' }, {
+      db: client, env: shadowEnv, transactionContext,
+    });
+    const first = firstResult.primary;
+    assert.equal(first.failed, undefined);
+    assert.equal(first.duplicate, false);
+    assert.ok(Number.isFinite(Number(first.score.score)));
+    assert.equal(first.decision.recommended_state, 'disqualified');
+    const duplicateResult = await safeIngestBrevoSignal(brevoResult, { ts: 1784131374000 }, {
+      db: client, env: shadowEnv, transactionContext,
+    });
+    assert.equal(duplicateResult.primary.duplicate, true);
+    const storedSignal = await client.query('SELECT event_timestamp,metadata FROM prospect_signal_events WHERE id=$1', [first.signal_id]);
+    assert.equal(storedSignal.rows[0].event_timestamp.toISOString(), '2026-07-15T16:02:54.000Z');
+    assert.equal(storedSignal.rows[0].metadata.raw_source_timestamp, '1784131374');
+
     const signal = {
       id: SIGNAL_ID,
       client_id: 10,
@@ -129,9 +155,6 @@ test('complete shadow decision flow uses one caller-owned transaction and rolls 
       source_record_id: 'transaction-client-integration',
       metadata: { synthetic: true },
     };
-    const persisted = await persistNormalizedSignal(signal, client);
-    assert.equal(persisted.inserted, true);
-    const transactionContext = { client, transactionManagedByCaller: true };
     const args = {
       db: client,
       prospectId: PROSPECT_ID,
@@ -149,11 +172,6 @@ test('complete shadow decision flow uses one caller-owned transaction and rolls 
       now: new Date(),
       transactionContext,
     };
-    const first = await evaluateProspectShadow(args);
-    assert.equal(first.duplicate, false);
-    assert.ok(Number.isFinite(Number(first.score.score)));
-    const duplicate = await evaluateProspectShadow(args);
-    assert.equal(duplicate.duplicate, true);
 
     const audit = await client.query(`
       SELECT COUNT(DISTINCT d.id)::int decisions,
@@ -165,7 +183,7 @@ test('complete shadow decision flow uses one caller-owned transaction and rolls 
       LEFT JOIN max_actions a ON a.decision_id=d.id
       WHERE d.prospect_id=$1
     `, [PROSPECT_ID]);
-    assert.deepEqual(audit.rows[0], { decisions: 1, transitions: 1, actions: 2, all_skipped: true });
+    assert.deepEqual(audit.rows[0], { decisions: 1, transitions: 1, actions: 1, all_skipped: true });
     assert.equal(calls.filter(sql => /^\s*BEGIN\s*$/i.test(sql)).length, 1, 'only the caller begins');
     assert.equal(calls.some(sql => /^\s*COMMIT\s*$/i.test(sql)), false);
     assert.equal(calls.some(sql => /pg_advisory_xact_lock/.test(sql)), true);

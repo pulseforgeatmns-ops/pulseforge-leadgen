@@ -3,6 +3,7 @@
 require('dotenv').config();
 const pool = require('../db');
 const { persistNormalizedSignal, ingestNormalizedSignal } = require('../utils/maxSignalIngestion');
+const { normalizeEventTimestamp } = require('../utils/maxTimestamp');
 const { assertAllowed, boundedInteger, optionalPositiveInteger, optionalTimestamp, tokenizeArgs } = require('../utils/maxCli');
 
 const DURABLE_TYPES = new Set([
@@ -30,7 +31,11 @@ function parseArgs(argv = process.argv.slice(2), now = new Date()) {
 }
 
 function cursorFor(row) {
-  return `${new Date(row.event_timestamp).toISOString()}|${row.source}|${row.source_record_id}|${row.event_type}`;
+  const timestamp = normalizeEventTimestamp(row.event_timestamp, {
+    source: row.source || 'historical_backfill',
+    field: 'event_timestamp',
+  });
+  return `${timestamp.toISOString()}|${row.source}|${row.source_record_id}|${row.event_type}`;
 }
 
 function normalizeEmailRow(row) {

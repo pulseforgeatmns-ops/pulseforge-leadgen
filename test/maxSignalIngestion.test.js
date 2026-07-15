@@ -5,8 +5,10 @@ const {
   normalizeBrevoSignal,
   rileyReplyEventType,
   safeIngestEnrichmentOutcome,
+  safeIngestBrevoSignal,
   safeIngestIcpScoreChange,
   safeIngestNormalizedSignal,
+  safeIngestRileyReplySignal,
 } = require('../utils/maxSignalIngestion');
 
 function memoryDb() {
@@ -53,6 +55,62 @@ test('Riley classifications preserve meaningful and OOO distinctions', () => {
   assert.equal(rileyReplyEventType('negative'), 'email_negative_reply');
   assert.equal(rileyReplyEventType('unsubscribe'), 'email_unsubscribed');
   assert.equal(rileyReplyEventType('out_of_office'), 'email_out_of_office');
+});
+
+test('live Brevo unsubscribe canonicalizes epoch seconds once before persistence and evaluation', async () => {
+  const db = memoryDb();
+  let triggerTimestamp = null;
+  const result = await safeIngestBrevoSignal(brevoResult({ event_type: 'unsubscribed' }), { ts: '1784131374' }, {
+    db,
+    evaluateProspectFn: async args => {
+      triggerTimestamp = args.triggerEvent.event_timestamp;
+      return { decision: { id: 'decision-unsubscribe' }, score: { score: 10 } };
+    },
+  });
+  assert.equal(result.primary.failed, undefined);
+  assert.ok(triggerTimestamp instanceof Date);
+  assert.equal(triggerTimestamp.toISOString(), '2026-07-15T16:02:54.000Z');
+  const insert = db.calls.find(call => /INSERT INTO prospect_signal_events/.test(call.sql));
+  assert.ok(insert.params[5] instanceof Date);
+  assert.notEqual(insert.params[5], '1784131374');
+  assert.equal(JSON.parse(insert.params[8]).raw_source_timestamp, '1784131374');
+});
+
+test('Brevo epoch milliseconds and Riley ISO timestamps reach evaluators as canonical Dates', async () => {
+  const db = memoryDb();
+  const seen = [];
+  const evaluateProspectFn = async args => {
+    seen.push(args.triggerEvent.event_timestamp);
+    return { decision: { id: `decision-${seen.length}` }, score: { score: 1 } };
+  };
+  await safeIngestBrevoSignal(brevoResult({ event_type: 'opened', open_source: 'human' }), { ts: 1784131374000 }, { db, evaluateProspectFn });
+  await safeIngestRileyReplySignal({
+    prospect: { id: brevoResult({}).prospect_id },
+    email: { id: 'gmail-iso', date: '2026-07-15T12:02:54-04:00' },
+    classification: 'interested', clientId: 1,
+  }, { db, evaluateProspectFn });
+  assert.deepEqual(seen.map(value => value.toISOString()), [
+    '2026-07-15T16:02:54.000Z', '2026-07-15T16:02:54.000Z',
+  ]);
+});
+
+test('invalid required timestamp is isolated, structured, and original caller can continue', async () => {
+  const db = memoryDb();
+  let originalHandlerCompleted = false;
+  const result = await safeIngestBrevoSignal(brevoResult({ event_type: 'unsubscribed' }), { ts: 'not-a-date' }, { db });
+  originalHandlerCompleted = true;
+  assert.equal(result.primary.failed, true);
+  assert.equal(result.primary.code, 'MAX_TIMESTAMP_INVALID');
+  assert.equal(originalHandlerCompleted, true);
+  assert.equal(db.calls.some(call => /INSERT INTO prospect_signal_events/.test(call.sql)), false);
+  assert.equal(db.calls.some(call => /INSERT INTO max_decisions/.test(call.sql)), false);
+  const failure = db.calls.find(call => /INSERT INTO agent_log/.test(call.sql));
+  const payload = JSON.parse(failure.params[2]);
+  assert.equal(payload.source, 'brevo');
+  assert.equal(payload.raw_timestamp, 'not-a-date');
+  assert.equal(payload.normalization_error_code, 'MALFORMED_TIMESTAMP');
+  assert.equal(payload.original_handler_status, 'continues_after_isolated_max');
+  assert.ok(payload.occurred_at);
 });
 
 test('duplicate normalized delivery is suppressed idempotently', async () => {
@@ -127,6 +185,7 @@ test('ICP and enrichment adapters emit traceable normalized records', async () =
   }, { db, evaluate: false });
   const eventTypes = db.calls.filter(call => /INSERT INTO prospect_signal_events/.test(call.sql)).map(call => call.params[4]);
   assert.deepEqual(eventTypes, ['icp_score_changed', 'enrichment_succeeded', 'phone_found', 'email_verified']);
+  assert.ok(db.calls.filter(call => /INSERT INTO prospect_signal_events/.test(call.sql)).every(call => call.params[5] instanceof Date));
 });
 
 test('safe ingestion failure never throws into the operational caller', async () => {

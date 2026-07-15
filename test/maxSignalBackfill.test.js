@@ -24,4 +24,8 @@ test('historical backfill is dry-run, bounded, dated, and resumable by default',
   const options=parseArgs(['--client-id=10','--limit','25','--cursor','cursor'],new Date('2026-07-15T12:00:00Z'));
   assert.equal(options.apply,false); assert.equal(options.limit,25); assert.equal(options.cursor,'cursor');
   assert.match(cursorFor({...base,source:'brevo',event_type:'email_human_opened'}),/^2026-07-15T12:00:00\.000Z\|brevo\|event-1/);
+  assert.equal(
+    cursorFor({...base,event_timestamp:'1784116800',source:'brevo',event_type:'email_human_opened'}),
+    cursorFor({...base,event_timestamp:'2026-07-15T12:00:00.000Z',source:'brevo',event_type:'email_human_opened'}),
+  );
 });

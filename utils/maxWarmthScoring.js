@@ -17,10 +17,11 @@ const DIRECT_STATE_EVENT_PRIORITY = Object.freeze({
   operator_marked_warm: 60,
 });
 
+const { normalizeEventTimestamp } = require('./maxTimestamp');
+
 function asDate(value) {
-  if (!value) return null;
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
+  if (value === null || value === undefined) return null;
+  return normalizeEventTimestamp(value, { source: 'max_warmth_scoring', field: 'event_timestamp' });
 }
 
 function eventDate(event) {

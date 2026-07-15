@@ -217,7 +217,7 @@ async function recordShadowDecision(
         ON CONFLICT DO NOTHING
       `, [
         String(triggerEvent.id), prospect.client_id, prospect.id, prospect.company_id || null,
-        triggerEvent.event_type, triggerEvent.event_timestamp || now, triggerEvent.source || 'max_orchestration',
+        triggerEvent.event_type, triggerEvent.event_timestamp, triggerEvent.source || 'max_orchestration',
         triggerEvent.source_record_id || String(triggerEvent.id), JSON.stringify(triggerEvent.metadata || {}),
       ]);
     }

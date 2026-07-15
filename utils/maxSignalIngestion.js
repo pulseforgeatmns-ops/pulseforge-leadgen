@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const pool = require('../db');
 const { evaluateProspectShadow } = require('./maxOrchestration');
 const { recordMaxMetric, logMaxOrchestrationFailure } = require('./maxOrchestrationObservability');
+const { normalizeEventTimestamp, rawTimestampForMetadata } = require('./maxTimestamp');
 
 const MEANINGFUL_EVALUATION_SIGNALS = new Set([
   'company_signal_detected', 'icp_score_changed', 'email_human_opened', 'email_clicked',
@@ -21,14 +22,7 @@ function stableSignalId({ source, sourceRecordId, eventType, prospectId }) {
 }
 
 function signalTimestamp(value) {
-  if (value === undefined || value === null || value === '') return new Date();
-  if (typeof value === 'number' || /^\d+$/.test(String(value))) {
-    const number = Number(value);
-    const date = new Date(number < 1e12 ? number * 1000 : number);
-    if (!Number.isNaN(date.getTime())) return date;
-  }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? new Date() : date;
+  return normalizeEventTimestamp(value, { source: 'max_signal', field: 'event_timestamp' });
 }
 
 function validateSignal(signal) {
@@ -47,13 +41,33 @@ async function loadClientOrchestrationConfig(db, clientId) {
   return result.rows[0] || { id: clientId, vertical_tiers: {}, max_orchestration_config: {} };
 }
 
-async function persistNormalizedSignal(signal, db = pool) {
+function canonicalizeNormalizedSignal(signal) {
   validateSignal(signal);
+  const rawTimestamp = signal.event_timestamp;
+  const eventTimestamp = normalizeEventTimestamp(rawTimestamp, {
+    source: String(signal.source || 'unknown'),
+    field: 'event_timestamp',
+  });
+  return {
+    ...signal,
+    event_timestamp: eventTimestamp,
+    metadata: {
+      ...(signal.metadata || {}),
+      raw_source_timestamp: Object.hasOwn(signal.metadata || {}, 'raw_source_timestamp')
+        ? signal.metadata.raw_source_timestamp
+        : rawTimestampForMetadata(rawTimestamp),
+    },
+  };
+}
+
+async function persistNormalizedSignal(signal, db = pool, { canonical = false } = {}) {
+  const normalizedSignal = canonical ? signal : canonicalizeNormalizedSignal(signal);
+  validateSignal(normalizedSignal);
   const id = signal.id || stableSignalId({
-    source: signal.source,
-    sourceRecordId: signal.source_record_id,
-    eventType: signal.event_type,
-    prospectId: signal.prospect_id,
+    source: normalizedSignal.source,
+    sourceRecordId: normalizedSignal.source_record_id,
+    eventType: normalizedSignal.event_type,
+    prospectId: normalizedSignal.prospect_id,
   });
   const result = await db.query(`
     INSERT INTO prospect_signal_events
@@ -62,11 +76,11 @@ async function persistNormalizedSignal(signal, db = pool) {
     ON CONFLICT DO NOTHING
     RETURNING id, created_at
   `, [
-    id, signal.client_id, signal.prospect_id, signal.company_id || null, signal.event_type,
-    signalTimestamp(signal.event_timestamp), signal.source, String(signal.source_record_id),
-    JSON.stringify(signal.metadata || {}),
+    id, normalizedSignal.client_id, normalizedSignal.prospect_id, normalizedSignal.company_id || null, normalizedSignal.event_type,
+    normalizedSignal.event_timestamp, normalizedSignal.source, String(normalizedSignal.source_record_id),
+    JSON.stringify(normalizedSignal.metadata || {}),
   ]);
-  return { id, inserted: result.rows.length > 0, created_at: result.rows[0]?.created_at || null };
+  return { id, inserted: result.rows.length > 0, created_at: result.rows[0]?.created_at || null, signal: normalizedSignal };
 }
 
 async function ingestNormalizedSignal(signal, {
@@ -84,18 +98,19 @@ async function ingestNormalizedSignal(signal, {
       throw new Error('Signal ingestion transaction context must use the same client as db');
     }
   }
-  const persisted = await persistNormalizedSignal(signal, db);
-  const meaningful = MEANINGFUL_EVALUATION_SIGNALS.has(signal.event_type);
+  const normalizedSignal = canonicalizeNormalizedSignal(signal);
+  const persisted = await persistNormalizedSignal(normalizedSignal, db, { canonical: true });
+  const meaningful = MEANINGFUL_EVALUATION_SIGNALS.has(normalizedSignal.event_type);
   if (!persisted.inserted) {
     const existingDecision = await db.query(`
       SELECT id FROM max_decisions
       WHERE client_id = $1 AND trigger_event_id = $2
       ORDER BY created_at DESC LIMIT 1
-    `, [signal.client_id, persisted.id]).catch(() => ({ rows: [] }));
+    `, [normalizedSignal.client_id, persisted.id]).catch(() => ({ rows: [] }));
     if (!meaningful || existingDecision.rows.length || !evaluate) {
       await recordMaxMetric('max_duplicate_events_suppressed_total', {
-        db, clientId: signal.client_id, prospectId: signal.prospect_id,
-        signalEventId: persisted.id, dimensions: { source: signal.source, event_type: signal.event_type },
+        db, clientId: normalizedSignal.client_id, prospectId: normalizedSignal.prospect_id,
+        signalEventId: persisted.id, dimensions: { source: normalizedSignal.source, event_type: normalizedSignal.event_type },
       }).catch(() => {});
       return { inserted: false, duplicate: true, evaluated: false, signal_id: persisted.id };
     }
@@ -104,19 +119,19 @@ async function ingestNormalizedSignal(signal, {
     return { inserted: persisted.inserted, duplicate: !persisted.inserted, evaluated: false, signal_id: persisted.id };
   }
 
-  const clientConfig = await loadClientOrchestrationConfig(db, signal.client_id);
+  const clientConfig = await loadClientOrchestrationConfig(db, normalizedSignal.client_id);
   const triggerEvent = {
     id: persisted.id,
-    event_type: signal.event_type,
-    event_timestamp: signal.event_timestamp || new Date(),
-    source: signal.source,
-    source_record_id: String(signal.source_record_id),
-    metadata: signal.metadata || {},
+    event_type: normalizedSignal.event_type,
+    event_timestamp: normalizedSignal.event_timestamp,
+    source: normalizedSignal.source,
+    source_record_id: String(normalizedSignal.source_record_id),
+    metadata: normalizedSignal.metadata || {},
   };
   const result = await evaluateProspectFn({
     db,
-    prospectId: signal.prospect_id,
-    clientId: signal.client_id,
+    prospectId: normalizedSignal.prospect_id,
+    clientId: normalizedSignal.client_id,
     triggerEvent,
     clientConfig,
     env,
@@ -127,9 +142,9 @@ async function ingestNormalizedSignal(signal, {
     const decisionId = result.decision?.id || null;
     await Promise.allSettled([
       recordMaxMetric('signal_to_decision_duration', {
-        db, clientId: signal.client_id,
-        value: Math.max(0, Date.now() - signalTimestamp(signal.event_timestamp).getTime()),
-        prospectId: signal.prospect_id, signalEventId: persisted.id, decisionId,
+        db, clientId: normalizedSignal.client_id,
+        value: Math.max(0, Date.now() - normalizedSignal.event_timestamp.getTime()),
+        prospectId: normalizedSignal.prospect_id, signalEventId: persisted.id, decisionId,
       }),
     ]);
   }
@@ -146,10 +161,19 @@ async function safeIngestNormalizedSignal(signal, options = {}) {
       prospectId: signal?.prospect_id || null,
       action: 'signal_ingestion_failed',
       error,
-      payload: { source: signal?.source, source_record_id: signal?.source_record_id, event_type: signal?.event_type },
+      payload: {
+        source: signal?.source,
+        source_record_id: signal?.source_record_id,
+        event_type: signal?.event_type,
+        raw_timestamp: rawTimestampForMetadata(signal?.event_timestamp),
+        normalization_error_code: error.normalization_error_code || null,
+        normalization_error_message: error.code === 'MAX_TIMESTAMP_INVALID' ? error.message : null,
+        original_handler_status: options.originalHandlerStatus || 'isolated_caller_continues',
+        occurred_at: new Date().toISOString(),
+      },
     }).catch(() => {});
     console.error('[max_orchestration] signal ingestion failed:', error.message);
-    return { failed: true, error: error.message };
+    return { failed: true, error: error.message, code: error.code || null };
   }
 }
 
@@ -170,7 +194,7 @@ function normalizeBrevoSignal(result, payload = {}) {
     client_id: result.client_id,
     prospect_id: result.prospect_id,
     event_type: eventType,
-    event_timestamp: payload.ts || payload.date || payload.timestamp || new Date(),
+    event_timestamp: payload.ts ?? payload.date ?? payload.timestamp ?? new Date(),
     source: 'brevo',
     source_record_id: result.event_id,
     metadata: {
@@ -185,7 +209,8 @@ function normalizeBrevoSignal(result, payload = {}) {
 
 async function safeIngestBrevoSignal(result, payload, options = {}) {
   const signal = normalizeBrevoSignal(result, payload);
-  const primary = signal ? await safeIngestNormalizedSignal(signal, options) : { skipped: true, reason: 'unmapped_brevo_event' };
+  const ingestionOptions = { originalHandlerStatus: 'continues_after_isolated_max', ...options };
+  const primary = signal ? await safeIngestNormalizedSignal(signal, ingestionOptions) : { skipped: true, reason: 'unmapped_brevo_event' };
   const corrections = [];
   for (const row of result?.reclassified_proxy_events || []) {
     corrections.push(await safeIngestNormalizedSignal({
@@ -196,7 +221,7 @@ async function safeIngestBrevoSignal(result, payload, options = {}) {
       source: 'brevo_open_gate',
       source_record_id: `${row.event_id}:batch_proxy`,
       metadata: { original_event_id: row.event_id, open_source: 'proxy', reason: 'batch_fire' },
-    }, options));
+    }, ingestionOptions));
   }
   return { primary, corrections };
 }
@@ -220,11 +245,11 @@ async function safeIngestRileyReplySignal({ prospect, email, classification, cli
     prospect_id: prospect.id,
     company_id: prospect.company_id || null,
     event_type: rileyReplyEventType(classification),
-    event_timestamp: email.date || new Date(),
+    event_timestamp: email.date ?? new Date(),
     source: 'riley_gmail',
     source_record_id: email.id,
     metadata: { classification, gmail_thread_id: email.threadId || null },
-  }, options);
+  }, { originalHandlerStatus: 'succeeded_before_max', ...options });
 }
 
 async function safeIngestIcpScoreChange({ prospectId, clientId, historyId, oldScore, newScore, createdAt }, options = {}) {
@@ -233,11 +258,11 @@ async function safeIngestIcpScoreChange({ prospectId, clientId, historyId, oldSc
     client_id: clientId,
     prospect_id: prospectId,
     event_type: 'icp_score_changed',
-    event_timestamp: createdAt || new Date(),
+    event_timestamp: createdAt ?? new Date(),
     source: 'icp_score_history',
     source_record_id: historyId,
     metadata: { old_score: oldScore, new_score: newScore, delta: Number(newScore || 0) - Number(oldScore || 0) },
-  }, options);
+  }, { originalHandlerStatus: 'succeeded_before_max', ...options });
 }
 
 async function safeIngestEnrichmentOutcome({ prospectId, clientId, sourceRecordId, eventTimestamp, status, payload = {} }, options = {}) {
@@ -257,17 +282,18 @@ async function safeIngestEnrichmentOutcome({ prospectId, clientId, sourceRecordI
       client_id: clientId,
       prospect_id: prospectId,
       event_type: item.event_type,
-      event_timestamp: eventTimestamp || new Date(),
+      event_timestamp: eventTimestamp ?? new Date(),
       source: 'enrichment',
       source_record_id: String(sourceRecordId),
       metadata: item.metadata,
-    }, options));
+    }, { originalHandlerStatus: 'succeeded_before_max', ...options }));
   }
   return results;
 }
 
 module.exports = {
   MEANINGFUL_EVALUATION_SIGNALS,
+  canonicalizeNormalizedSignal,
   ingestNormalizedSignal,
   loadClientOrchestrationConfig,
   normalizeBrevoSignal,

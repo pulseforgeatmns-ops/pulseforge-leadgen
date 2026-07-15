@@ -180,7 +180,7 @@ test('smoke test detects an unexpected operational mutation and still rolls back
   await assert.rejects(
     () => run({ clientId: 10, prospectId: PROSPECT_ID }, db, {}, dependencies(db)),
     error => {
-      assert.match(error.message, /operational prospect state changed/);
+    assert.match(error.message, /Max-attributable operational mutation detected/);
       assert.equal(error.smoke_failure.state_restored, true);
       assert.equal(error.smoke_failure.synthetic_records_remaining, 0);
       return true;
