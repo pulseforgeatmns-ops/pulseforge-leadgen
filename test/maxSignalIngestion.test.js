@@ -76,6 +76,7 @@ test('duplicate normalized delivery is suppressed idempotently', async () => {
 test('meaningful signal invokes one shadow evaluator and records metrics', async () => {
   const db = memoryDb();
   let evaluations = 0;
+  const transactionContext = { client: db, transactionManagedByCaller: true };
   const result = await ingestNormalizedSignal({
     client_id: 1,
     prospect_id: '1000c166-c9c3-4bab-adef-d4cbdf14ab18',
@@ -85,14 +86,32 @@ test('meaningful signal invokes one shadow evaluator and records metrics', async
     source_record_id: 'gmail-1',
   }, {
     db,
-    evaluateProspectFn: async () => {
+    transactionContext,
+    evaluateProspectFn: async args => {
       evaluations++;
+      assert.equal(args.db, db);
+      assert.equal(args.transactionContext, transactionContext);
       return { decision: { id: 'decision-1', transition_recommended: true, actions: ['stop_automated_sequences'] } };
     },
   });
   assert.equal(evaluations, 1);
   assert.equal(result.evaluated, true);
   assert.ok(db.calls.some(call => call.params?.includes('signal_to_decision_duration')));
+});
+
+test('signal ingestion fails closed when transaction context does not match db', async () => {
+  const db = memoryDb();
+  await assert.rejects(ingestNormalizedSignal({
+    client_id: 1,
+    prospect_id: '1000c166-c9c3-4bab-adef-d4cbdf14ab18',
+    event_type: 'email_positive_reply',
+    source: 'test',
+    source_record_id: 'mismatch',
+  }, {
+    db,
+    transactionContext: { client: memoryDb(), transactionManagedByCaller: true },
+  }), /same client as db/);
+  assert.equal(db.calls.length, 0);
 });
 
 test('ICP and enrichment adapters emit traceable normalized records', async () => {

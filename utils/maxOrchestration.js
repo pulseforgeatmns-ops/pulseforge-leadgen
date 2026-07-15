@@ -172,19 +172,40 @@ function autonomyLevel(action) {
   return 'autonomous';
 }
 
-async function recordShadowDecision({ db, prospect, scoreResult, decision, config, triggerEvent, key, startedAt, now, manageTransaction = true }) {
-  const client = typeof db.connect === 'function' ? await db.connect() : db;
-  const ownsClient = client !== db;
+function callerTransactionClient(db, transactionContext) {
+  if (!transactionContext) return null;
+  if (transactionContext.transactionManagedByCaller !== true) {
+    throw new Error('Caller transaction context requires transactionManagedByCaller=true');
+  }
+  if (!transactionContext.client || typeof transactionContext.client.query !== 'function') {
+    throw new Error('Caller transaction context requires a query-capable client');
+  }
+  if (db !== transactionContext.client) {
+    throw new Error('Caller transaction context client must be the same client used for orchestration reads');
+  }
+  return transactionContext.client;
+}
+
+async function recordShadowDecision(
+  { db = pool, prospect, scoreResult, decision, config, triggerEvent, key, startedAt, now },
+  transactionContext = null
+) {
+  const suppliedClient = callerTransactionClient(db, transactionContext);
+  if (!suppliedClient && (!db || typeof db.connect !== 'function')) {
+    throw new Error('Internally managed shadow decisions require a database pool with connect()');
+  }
+  const client = suppliedClient || await db.connect();
+  const ownsClient = !suppliedClient;
   const decisionId = crypto.randomUUID();
   try {
-    if (manageTransaction) await client.query('BEGIN');
+    if (ownsClient) await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [String(prospect.id)]);
     const existing = await client.query(
       'SELECT * FROM max_decisions WHERE client_id = $1 AND idempotency_key = $2',
       [prospect.client_id, key]
     );
     if (existing.rows[0]) {
-      if (manageTransaction) await client.query('COMMIT');
+      if (ownsClient) await client.query('COMMIT');
       return { duplicate: true, decision: existing.rows[0], score: scoreResult };
     }
 
@@ -276,10 +297,10 @@ async function recordShadowDecision({ db, prospect, scoreResult, decision, confi
         VALUES ($1,$2,$3,$4,$5,$6,'{}'::jsonb)
       `, [prospect.client_id, metricName, metricValue, prospect.id, triggerEvent?.id || null, decisionId]);
     }
-    if (manageTransaction) await client.query('COMMIT');
+    if (ownsClient) await client.query('COMMIT');
     return { duplicate: false, decision: { id: decisionId, ...decision, is_shadow: true }, score: scoreResult };
   } catch (error) {
-    if (manageTransaction) await client.query('ROLLBACK').catch(() => {});
+    if (ownsClient) await client.query('ROLLBACK').catch(() => {});
     throw error;
   } finally {
     if (ownsClient) client.release();
@@ -311,12 +332,16 @@ async function evaluateProspectShadow(args) {
   const { db = pool, triggerEvent = null, now = new Date() } = args;
   const { config, prospect, scoreResult, decision } = calculated;
   const key = idempotencyKey(prospect.id, triggerEvent?.id, decision.decision_version, now);
-  return recordShadowDecision({ db, prospect, scoreResult, decision, config, triggerEvent, key, startedAt, now, manageTransaction: args.manageTransaction !== false });
+  return recordShadowDecision(
+    { db, prospect, scoreResult, decision, config, triggerEvent, key, startedAt, now },
+    args.transactionContext || null
+  );
 }
 
 module.exports = {
   EMAIL_EVENT_MAP,
   autonomyLevel,
+  callerTransactionClient,
   calculateProspectShadow,
   evaluateProspectShadow,
   idempotencyKey,

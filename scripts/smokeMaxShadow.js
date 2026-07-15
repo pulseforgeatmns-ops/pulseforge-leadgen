@@ -279,7 +279,8 @@ async function run(options = parseArgs(), db = pool, env = process.env, dependen
       db: client,
       env,
       evaluate: true,
-      evaluateProspectFn: args => evaluateFn({ ...args, manageTransaction: false }),
+      transactionContext: { client, transactionManagedByCaller: true },
+      evaluateProspectFn: evaluateFn,
     });
 
     if (!result.signal_id) failAssertion('synthetic normalized signal was not created');

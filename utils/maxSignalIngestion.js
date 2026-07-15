@@ -69,7 +69,21 @@ async function persistNormalizedSignal(signal, db = pool) {
   return { id, inserted: result.rows.length > 0, created_at: result.rows[0]?.created_at || null };
 }
 
-async function ingestNormalizedSignal(signal, { db = pool, env = process.env, evaluate = true, evaluateProspectFn = evaluateProspectShadow } = {}) {
+async function ingestNormalizedSignal(signal, {
+  db = pool,
+  env = process.env,
+  evaluate = true,
+  evaluateProspectFn = evaluateProspectShadow,
+  transactionContext = null,
+} = {}) {
+  if (transactionContext) {
+    if (transactionContext.transactionManagedByCaller !== true) {
+      throw new Error('Signal ingestion transaction context requires transactionManagedByCaller=true');
+    }
+    if (!transactionContext.client || transactionContext.client !== db) {
+      throw new Error('Signal ingestion transaction context must use the same client as db');
+    }
+  }
   const persisted = await persistNormalizedSignal(signal, db);
   const meaningful = MEANINGFUL_EVALUATION_SIGNALS.has(signal.event_type);
   if (!persisted.inserted) {
@@ -107,6 +121,7 @@ async function ingestNormalizedSignal(signal, { db = pool, env = process.env, ev
     clientConfig,
     env,
     now: new Date(),
+    transactionContext,
   });
   if (!result.skipped && !result.duplicate) {
     const decisionId = result.decision?.id || null;
