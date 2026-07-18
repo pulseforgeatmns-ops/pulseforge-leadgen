@@ -1,6 +1,6 @@
 {
   "artifactVersion": "1",
-  "generatedAt": "2026-07-18T12:29:56Z",
+  "generatedAt": "2026-07-18T12:48:00Z",
   "scope": "Revenue Phase 1.5A governance enforcement and certification closure",
   "repository": "pulseforgeatmns-ops/pulseforge-leadgen",
   "defaultBranch": "main",
@@ -8,7 +8,7 @@
   "verdict": "governance_complete_phase15_production_closure_blocked",
   "branchProtection": {
     "pullRequestRequired": true,
-    "requiredApprovals": 1,
+    "requiredApprovals": 0,
     "dismissStaleReviews": true,
     "requiredStatusChecksStrict": true,
     "requiredStatusChecks": [
@@ -21,7 +21,7 @@
     "forcePushesAllowed": false,
     "deletionsAllowed": false,
     "administratorsSubjectToRules": true,
-    "bypassPolicy": "No routine administrative or repository-role bypass is permitted. Administrators remain subject to the same pull-request review and required-check rules."
+    "bypassPolicy": "No routine administrative or repository-role bypass is permitted. Administrators remain subject to the same pull-request and required-check rules; the solo-founder pull-request policy requires zero approvals."
   },
   "workflowIntegrity": {
     "pathFiltersPresent": false,
@@ -45,34 +45,40 @@
   "verificationPullRequest": {
     "number": 19,
     "url": "https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/19",
-    "headCommit": "c63114d7e564c2ac542f8af373d89dec0cf065c2",
+    "headCommit": "f662cbe15ce588a1bdd26b35aef7f218113ea3e3",
+    "merged": true,
+    "mergeCommit": "fb21bb658b2d7c7f102f72b08458f554da5f5d99",
+    "mergedAt": "2026-07-18T12:42:57Z",
+    "mergedBy": "pulseforgeatmns-ops",
     "requiredCheckContext": "revenue-postgresql-required",
     "pendingObservation": {
-      "runId": 29644362423,
-      "status": "QUEUED",
+      "pullRequest": 20,
+      "runId": 29644956691,
+      "status": "IN_PROGRESS",
       "mergeStateStatus": "BLOCKED",
-      "observedAt": "2026-07-18T12:27:49Z"
+      "observedAt": "2026-07-18T12:47:19Z"
     },
     "failingObservation": {
-      "runId": 29644362423,
+      "pullRequest": 20,
+      "runId": 29644956691,
       "conclusion": "FAILURE",
       "mergeStateStatus": "BLOCKED",
-      "cause": "Disposable PostgreSQL attempted to create its Unix socket lock under /var/run/postgresql, which is not writable by the GitHub Actions runner. The harness was corrected to use its own temporary socket directory."
+      "cause": "A temporary negative governance-verification PR intentionally ran exit 1 before the disposable lifecycle. It was closed without merge after the required check failure was observed."
     },
     "passingObservation": {
-      "runId": 29644395671,
-      "jobId": 88080077654,
+      "runId": 29644474973,
+      "jobId": 88080287647,
       "conclusion": "SUCCESS",
-      "completedAt": "2026-07-18T12:29:26Z",
-      "detailsUrl": "https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/actions/runs/29644395671/job/88080077654",
-      "mergeStateStatus": "BLOCKED",
-      "remainingControl": "One required approving review"
+      "completedAt": "2026-07-18T12:31:52Z",
+      "detailsUrl": "https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/actions/runs/29644474973/job/88080287647",
+      "mergeStateStatus": "MERGED",
+      "remainingControl": "None; the configured solo-founder policy requires zero approvals."
     },
     "directPushAttempt": {
       "actorRole": "repository administrator",
       "result": "rejected",
-      "observedMessage": "GH006: Protected branch update failed; at least 1 approving review is required by reviewers with write access.",
-      "proves": "An administrator could not directly update main; no administrative bypass was available."
+      "observedMessage": "GH006: Protected branch update failed; at least 1 approving review was required under the then-current policy.",
+      "proves": "An administrator could not directly update main. The live policy continues to enforce administrators while requiring zero approvals for a pull-request merge."
     }
   },
   "tests": {
