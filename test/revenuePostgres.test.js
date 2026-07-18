@@ -51,7 +51,7 @@ test('revenue lifecycle, replay, rollback, isolation, protection, rebuild, and r
     execFileSync(pgCtl, [
       '-D', directory,
       '-l', logFile,
-      '-o', `-p ${port} -h 127.0.0.1`,
+      '-o', `-p ${port} -h 127.0.0.1 -k ${directory}`,
       '-w',
       'start',
     ], commandOptions);
