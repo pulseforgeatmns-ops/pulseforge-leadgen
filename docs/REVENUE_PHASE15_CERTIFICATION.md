@@ -8,7 +8,7 @@
 
 ## Enforced protection
 
-`main` now requires a pull request, one current approval, and the exact GitHub check context `revenue-postgresql-required`. Required checks are strict (the PR branch must be current with `main`). Force pushes and branch deletion are disabled. Administrators are included in enforcement; there is no routine administrative or repository-role bypass.
+`main` now requires a pull request and the exact GitHub check context `revenue-postgresql-required`; the solo-founder policy requires zero approvals. Required checks are strict (the PR branch must be current with `main`). Force pushes and branch deletion are disabled. Administrators are included in enforcement; there is no routine administrative or repository-role bypass.
 
 The exact requirement was identified from the real PR check run:
 
@@ -19,13 +19,12 @@ Job / check context: revenue-postgresql-required
 
 ## PR gate evidence
 
-Verification PR [#19](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/19) established the gate behavior:
+Verification PR [#19](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/19) passed the required check and merged through protected `main` at `2026-07-18T12:42:57Z` (`fb21bb658b2d7c7f102f72b08458f554da5f5d99`). Temporary negative verification PR [#20](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/20), closed without merge, established the gate behavior under the live zero-approval policy:
 
-- While the required check was queued, the PR was `BLOCKED`.
-- The first execution failed and the PR remained `BLOCKED`; the failure was diagnosed as a GitHub runner Unix-socket permission issue, then corrected within the disposable harness.
-- The corrected execution passed: [run 29644395671](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/actions/runs/29644395671), job `revenue-postgresql-required`.
-- After the check passed, the only remaining merge control was the required review; the PR is eligible once that independent control is satisfied.
-- A direct push to `main` by a repository administrator was rejected with `GH006` because the required review was absent. This observes that administrators cannot bypass the policy.
+- While the required check was in progress, PR #20 was `BLOCKED`.
+- Its intentionally failing required check was `BLOCKED`; the temporary PR was closed without merge.
+- The production workflow then passed on PR #19: [run 29644474973](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/actions/runs/29644474973), job `revenue-postgresql-required`, and PR #19 merged through the protected path.
+- A direct push to `main` by a repository administrator was rejected with `GH006` under the former one-approval setting. The active rule now has zero approvals but keeps administrator enforcement and the required check.
 
 ## Workflow integrity
 

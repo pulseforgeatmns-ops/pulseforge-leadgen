@@ -26,7 +26,7 @@ The disposable production-shaped rehearsal passed with 14 ledger events, one pro
 
 ## Governance certification
 
-`main` is protected by a strict required check, `revenue-postgresql-required`, from the `Revenue PostgreSQL Integration` workflow. Pull requests require an approval; force pushes and deletion are disabled; administrators are subject to these controls. The required workflow has no path filters and passed on verification PR #19. See `docs/REVENUE_PHASE15_CERTIFICATION.md` and `artifacts/revenue/phase15-branch-protection-certification.json`.
+`main` is protected by a strict required check, `revenue-postgresql-required`, from the `Revenue PostgreSQL Integration` workflow. Pull requests are required with zero approvals under the solo-founder policy; force pushes and deletion are disabled; administrators are subject to these controls. The required workflow has no path filters, passed on PR #19, and a temporary PR #20 proved both pending and failing checks block merging. See `docs/REVENUE_PHASE15_CERTIFICATION.md` and `artifacts/revenue/phase15-branch-protection-certification.json`.
 
 ## Remaining production gate
 

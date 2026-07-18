@@ -4,7 +4,7 @@
 
 This artifact is intentionally incomplete. No production migration, flag change, canary, external send, Max mutation, refund, or retention action has occurred under Phase 1.6.
 
-GitHub governance verification on 2026-07-18 configured `main` to require the strict `revenue-postgresql-required` check and a pull-request approval, with force pushes, deletion, and administrative bypass disabled. Verification PR #19 demonstrated queued and failed checks block merging, the corrected disposable PostgreSQL check passes, and an administrator's direct push is rejected. See `docs/REVENUE_PHASE15_CERTIFICATION.md`.
+GitHub governance verification on 2026-07-18 confirmed that `main` requires the strict `revenue-postgresql-required` check through a pull request, with zero approvals under the solo-founder policy. Force pushes and deletion are disabled, and administrators remain enforced. PR #19 passed and merged through the protected path; temporary PR #20 proved pending and failing checks block merging. See `docs/REVENUE_PHASE15_CERTIFICATION.md`.
 
 ## Required evidence before certification
 
