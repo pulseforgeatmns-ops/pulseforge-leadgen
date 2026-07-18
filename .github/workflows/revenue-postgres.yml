@@ -22,3 +22,5 @@ jobs:
       - run: npm ci
       - name: Disposable PostgreSQL revenue lifecycle
         run: npm run test:revenue:postgres
+      - name: Disposable PostgreSQL Anchor Phone Setter rehearsal
+        run: npm run test:anchor-phone-setter:postgres

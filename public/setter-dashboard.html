@@ -700,6 +700,7 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   </div>
   <div class="detail-title" id="detailName">Lead</div>
   <div class="detail-meta" id="detailMeta">Scout qualified</div>
+  <div class="muted-status" id="detailPriority"></div>
   <div class="detail-block"><div class="detail-label">Contact</div><div class="detail-val" id="detailContact"></div></div>
   <div class="detail-block">
     <div class="detail-label">Phone</div>
@@ -720,6 +721,14 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
     <div class="muted-status" id="notesStatus"></div>
   </div>
   <div class="detail-block"><div class="detail-label">Website</div><div class="detail-val" id="detailWebsite"></div></div>
+  <div class="detail-block" id="anchorFollowUpBlock" style="display:none">
+    <div class="detail-label">Anchor follow-up drafts · review required</div>
+    <div class="callback-row"><select id="anchorDraftChannel"><option value="email">Email draft</option><option value="sms">SMS draft</option></select></div>
+    <textarea class="detail-notes" id="anchorDraftBody" placeholder="Draft only. Pulseforge will not send it."></textarea>
+    <div class="callback-row"><button class="btn primary" id="createAnchorDraftBtn" type="button">Create draft</button></div>
+    <div class="muted-status">Copy is available after review. “Log as sent” records a manual action only; it never sends.</div>
+    <div id="anchorDraftList"></div>
+  </div>
   <div class="detail-block"><div class="detail-label">Move Stage</div><select id="detailStatus"></select></div>
 </aside>
 
@@ -758,6 +767,16 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
       <div class="field">
         <label for="callDuration">Duration in seconds (optional)</label>
         <input id="callDuration" type="number" min="0" max="86400" step="1" inputmode="numeric">
+      </div>
+      <div class="field full" id="anchorStructuredCallFields" style="display:none">
+        <label>Anchor structured details</label>
+        <div class="call-form-grid">
+          <div class="field"><input id="anchorContactRole" placeholder="Contact role"></div>
+          <div class="field"><select id="anchorDecisionMaker"><option value="false">Decision maker not reached</option><option value="true">Decision maker reached</option></select></div>
+          <div class="field"><input id="anchorInterestLevel" placeholder="Interest level"></div>
+          <div class="field"><input id="anchorNextStep" placeholder="Next step"></div>
+          <div class="field"><select id="anchorFollowUpChannel"><option value="phone">Phone follow-up</option><option value="email">Email follow-up</option><option value="sms">SMS follow-up</option><option value="none">No follow-up</option></select></div>
+        </div>
       </div>
     </div>
     <div class="handoff-actions">
@@ -907,7 +926,7 @@ function renderQueue() {
   body.innerHTML = leads.map(lead => `
     <tr class="${lead.is_hot ? 'hot-row' : ''}">
       <td data-label="Business"><div class="lead-line"><span class="lead-name" data-open="${lead.id}">${lead.business_name}</span><span class="age ${ageInfo(lead.date_added).klass}">${ageInfo(lead.date_added).label}</span></div><div class="mono">${lead.contact_name || 'No contact name'}</div></td>
-      <td data-label="Vertical">${lead.vertical}</td>
+      <td data-label="Vertical">${lead.vertical}${lead.priority_reason ? `<div class="mono">${lead.priority_reason}</div>` : ''}</td>
       <td data-label="City">${lead.city}</td>
       <td data-label="Score"><span class="score ${lead.score_band}">${lead.score}</span></td>
       <td data-label="Date Added">${fmtDate(lead.date_added)}</td>
@@ -953,7 +972,7 @@ function renderPipeline() {
         ${items.length ? items.map(lead => `
           <div class="lead-card ${lead.is_hot ? 'hot' : ''} ${String(lead.id) === String(lastDroppedLeadId) ? 'dropped' : ''}" draggable="true" data-lead-id="${lead.id}" data-current-status="${lead.status}">
             <div class="lead-card-title" data-open="${lead.id}">${lead.is_hot ? '⚡ ' : ''}${lead.business_name}</div>
-            <div class="lead-card-meta"><span class="mono">${lead.vertical} · ${ageInfo(lead.date_added).label}</span><span class="score ${lead.score_band}">${lead.score}</span></div>
+            <div class="lead-card-meta"><span class="mono">${lead.vertical} · ${ageInfo(lead.date_added).label}${lead.priority_reason ? ` · ${lead.priority_reason}` : ''}</span><span class="score ${lead.score_band}">${lead.score}</span></div>
             <div class="lead-card-meta"><span class="attempt-badge">${lead.attempt_count || 0} attempts</span><button class="btn icon-btn ${lead.is_hot ? 'hot' : ''}" data-hot="${lead.id}" type="button">⚡</button></div>
             <button class="btn primary" data-log-call="${lead.id}" type="button">☎ Log call</button>
             <select data-select-status="${lead.id}">
@@ -1195,13 +1214,13 @@ function replaceLead(lead) {
 function renderPhoneTools(lead) {
   document.getElementById('detailPhone').textContent = lead.phone || '-';
   document.getElementById('phoneStatus').textContent = '';
-  document.getElementById('enrichPhoneBtn').style.display = lead.phone ? 'none' : 'inline-block';
+  document.getElementById('enrichPhoneBtn').style.display = lead.phone || lead.phone_setter_v1 ? 'none' : 'inline-block';
   document.getElementById('enrichPhoneBtn').disabled = false;
   document.getElementById('enrichPhoneBtn').classList.remove('loading');
   document.getElementById('enrichPhoneBtn').textContent = 'Enrich phone';
   document.getElementById('contactLaunch').innerHTML = lead.phone ? `
     <a class="btn primary launch-btn" href="tel:${lead.phone}">Call</a>
-    <a class="btn launch-btn" href="sms:${lead.phone}">Text</a>
+    ${lead.phone_setter_v1 ? '' : `<a class="btn launch-btn" href="sms:${lead.phone}">Text</a>`}
   ` : '';
 }
 
@@ -1332,6 +1351,15 @@ function openCallDisposition(id) {
   document.getElementById('callDisposition').value = 'no_answer';
   document.getElementById('callNotes').value = '';
   document.getElementById('callDuration').value = '';
+  const structured = Boolean(lead.phone_setter_v1);
+  document.getElementById('anchorStructuredCallFields').style.display = structured ? 'block' : 'none';
+  if (structured) {
+    document.getElementById('anchorContactRole').value = '';
+    document.getElementById('anchorDecisionMaker').value = 'false';
+    document.getElementById('anchorInterestLevel').value = '';
+    document.getElementById('anchorNextStep').value = '';
+    document.getElementById('anchorFollowUpChannel').value = 'phone';
+  }
   updateCallCallbackSuggestion();
   document.getElementById('callDispositionModal').classList.add('open');
   document.getElementById('callDisposition').focus();
@@ -1346,6 +1374,7 @@ async function saveCallDisposition(event) {
   event.preventDefault();
   const id = callDispositionLeadId;
   if (!id) return;
+  const callLead = findLead(id);
   const saveBtn = document.getElementById('saveCallDispositionBtn');
   saveBtn.disabled = true;
   saveBtn.classList.add('loading');
@@ -1357,7 +1386,15 @@ async function saveCallDisposition(event) {
         disposition: document.getElementById('callDisposition').value,
         notes: document.getElementById('callNotes').value,
         callback_at: callbackValue ? new Date(callbackValue).toISOString() : null,
-        duration_seconds: document.getElementById('callDuration').value
+        duration_seconds: document.getElementById('callDuration').value,
+        details: callLead?.phone_setter_v1 ? {
+          category: callLead.vertical,
+          contact_role: document.getElementById('anchorContactRole').value,
+          decision_maker_reached: document.getElementById('anchorDecisionMaker').value === 'true',
+          interest_level: document.getElementById('anchorInterestLevel').value,
+          next_step: document.getElementById('anchorNextStep').value,
+          follow_up_channel: document.getElementById('anchorFollowUpChannel').value
+        } : undefined
       })
     });
     if (selectedLead?.id === id) selectedLead = data.lead;
@@ -1376,6 +1413,71 @@ async function saveCallDisposition(event) {
     saveBtn.disabled = false;
     saveBtn.classList.remove('loading');
   }
+}
+
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>'"]/g, ch => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[ch]));
+}
+
+function renderAnchorDrafts(drafts) {
+  const box = document.getElementById('anchorDraftList');
+  if (!drafts.length) { box.innerHTML = '<div class="muted-status">No drafts yet.</div>'; return; }
+  box.innerHTML = drafts.map(draft => `<div class="detail-block">
+    <div class="detail-label">${escapeHtml(draft.channel)} · ${escapeHtml(draft.status)}</div>
+    <div class="detail-val">${escapeHtml(draft.body)}</div>
+    <div class="callback-row">
+      ${draft.status === 'reviewed' || draft.status === 'manual_sent' ? `<button class="btn" data-copy-draft="${draft.id}" type="button">Copy</button>` : ''}
+      ${draft.status === 'draft' ? `<button class="btn" data-edit-draft="${draft.id}" data-draft-channel="${draft.channel}" data-draft-body="${encodeURIComponent(draft.body)}" type="button">Edit</button><button class="btn" data-review-draft="${draft.id}" type="button">Review</button><button class="btn dead" data-dismiss-draft="${draft.id}" type="button">Dismiss</button>` : ''}
+      ${draft.status === 'reviewed' ? `<button class="btn primary" data-log-sent-draft="${draft.id}" type="button">Log as sent</button><button class="btn dead" data-dismiss-draft="${draft.id}" type="button">Dismiss</button>` : ''}
+    </div>
+  </div>`).join('');
+}
+
+async function loadAnchorDrafts(lead = selectedLead) {
+  if (!lead?.phone_setter_v1) return;
+  try {
+    const data = await api(`/setter/api/leads/${lead.id}/follow-up-drafts`);
+    if (selectedLead?.id === lead.id) renderAnchorDrafts(data?.drafts || []);
+  } catch (err) {
+    document.getElementById('anchorDraftList').innerHTML = '<div class="muted-status">Drafts unavailable.</div>';
+  }
+}
+
+async function createAnchorDraft() {
+  if (!selectedLead?.phone_setter_v1) return;
+  try {
+    await api(`/setter/api/leads/${selectedLead.id}/follow-up-drafts`, { method:'POST', body:JSON.stringify({
+      channel: document.getElementById('anchorDraftChannel').value,
+      body: document.getElementById('anchorDraftBody').value
+    }) });
+    document.getElementById('anchorDraftBody').value = '';
+    await loadAnchorDrafts();
+  } catch (err) { alert('Draft creation failed'); }
+}
+
+async function anchorDraftAction(draftId, action) {
+  try {
+    if (action === 'copy') {
+      const data = await api(`/setter/api/leads/${selectedLead.id}/follow-up-drafts`);
+      const draft = (data?.drafts || []).find(item => item.id === draftId);
+      if (draft?.body) await navigator.clipboard.writeText(draft.body);
+      return;
+    }
+    const suffix = action === 'review' ? '/review' : action === 'dismiss' ? '/dismiss' : '/log-sent';
+    await api(`/setter/api/follow-up-drafts/${draftId}${suffix}`, { method:'POST', body:JSON.stringify({}) });
+    await loadAnchorDrafts();
+  } catch (err) { alert(action === 'review' ? 'Review failed (manager or admin review is required)' : 'Draft action failed'); }
+}
+
+async function editAnchorDraft(button) {
+  const body = prompt('Edit draft', decodeURIComponent(button.dataset.draftBody || ''));
+  if (body === null) return;
+  try {
+    await api(`/setter/api/follow-up-drafts/${button.dataset.editDraft}`, { method:'PATCH', body:JSON.stringify({
+      channel: button.dataset.draftChannel, body
+    }) });
+    await loadAnchorDrafts();
+  } catch (err) { alert('Draft edit failed'); }
 }
 
 function renderDetailHot() {
@@ -1422,6 +1524,9 @@ function openDetail(id) {
   renderDetailHot();
   document.getElementById('detailName').textContent = lead.business_name;
   document.getElementById('detailMeta').textContent = `${lead.is_hot ? 'Hot · ' : ''}${lead.vertical} · ${lead.city} · score ${lead.score}`;
+  document.getElementById('detailPriority').textContent = lead.priority_reason || '';
+  document.getElementById('anchorFollowUpBlock').style.display = lead.phone_setter_v1 ? 'block' : 'none';
+  if (lead.phone_setter_v1) loadAnchorDrafts(lead);
   document.getElementById('detailContact').innerHTML = `${lead.contact_name || 'No contact'}<br>${lead.email || '-'}`;
   renderPhoneTools(lead);
   renderCallback(lead);
@@ -1462,6 +1567,16 @@ document.addEventListener('click', event => {
     openCallDisposition(callBtn.dataset.logCall);
     return;
   }
+  const copyDraft = event.target.closest('[data-copy-draft]');
+  if (copyDraft) { anchorDraftAction(copyDraft.dataset.copyDraft, 'copy'); return; }
+  const editDraft = event.target.closest('[data-edit-draft]');
+  if (editDraft) { editAnchorDraft(editDraft); return; }
+  const reviewDraft = event.target.closest('[data-review-draft]');
+  if (reviewDraft) { anchorDraftAction(reviewDraft.dataset.reviewDraft, 'review'); return; }
+  const dismissDraft = event.target.closest('[data-dismiss-draft]');
+  if (dismissDraft) { anchorDraftAction(dismissDraft.dataset.dismissDraft, 'dismiss'); return; }
+  const logSentDraft = event.target.closest('[data-log-sent-draft]');
+  if (logSentDraft) { anchorDraftAction(logSentDraft.dataset.logSentDraft, 'log-sent'); return; }
   const statusBtn = event.target.closest('[data-status]');
   if (statusBtn) updateStatus(statusBtn.dataset.id, statusBtn.dataset.status);
   const open = event.target.closest('[data-open]');
@@ -1531,6 +1646,7 @@ document.getElementById('detailHotBtn').addEventListener('click', () => {
 document.getElementById('detailLogCallBtn').addEventListener('click', () => {
   if (selectedLead) openCallDisposition(selectedLead.id);
 });
+document.getElementById('createAnchorDraftBtn').addEventListener('click', createAnchorDraft);
 document.getElementById('callDispositionForm').addEventListener('submit', saveCallDisposition);
 document.getElementById('callDisposition').addEventListener('change', updateCallCallbackSuggestion);
 document.getElementById('cancelCallDispositionBtn').addEventListener('click', closeCallDisposition);

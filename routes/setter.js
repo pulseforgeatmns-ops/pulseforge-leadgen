@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const axios = require('axios');
+const { randomUUID } = require('crypto');
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { enrichPhoneWaterfall } = require('../phoneEnrich');
@@ -13,6 +14,14 @@ const {
   ensureCallDispositionSchema,
   resolveCallbackAt,
 } = require('../utils/callDispositions');
+const { assertRevenueFlag, loadRevenueFlags } = require('../utils/revenueFlags');
+const revenue = require('../services/revenueService');
+const {
+  isAnchorPhoneSetter,
+  phoneSetterError,
+  validateDraftInput,
+  validateStructuredDetails,
+} = require('../utils/anchorPhoneSetter');
 
 const router = express.Router();
 
@@ -147,15 +156,35 @@ function mapLead(row) {
     callback_at: row.callback_at,
     is_hot: Boolean(row.is_hot),
     attempt_count: Number(row.attempt_count || 0),
+    client_id: Number(row.client_id),
+    category_priority: Number(row.category_priority || 99),
+    priority_reason: row.priority_reason || null,
+    phone_setter_v1: isAnchorPhoneSetter(row.client_id),
   };
 }
 
-async function getLeads(where = '', params = [], limit = 250, orderBy = 'COALESCE(p.is_hot, false) DESC, p.icp_score DESC NULLS LAST, p.created_at DESC', req = null) {
-  const sort = orderBy || 'COALESCE(p.is_hot, false) DESC, p.icp_score DESC NULLS LAST, p.created_at DESC';
+const DEFAULT_LEAD_ORDER = `
+  CASE WHEN p.client_id = 10 THEN CASE p.vertical
+    WHEN 'cleaning_company_overflow' THEN 1 WHEN 'str_manager' THEN 2 WHEN 'property_manager' THEN 3
+    WHEN 'realtor' THEN 4 WHEN 'restoration_remodeling_partner' THEN 5 WHEN 'commercial_office' THEN 6
+    ELSE 99 END ELSE 99 END ASC,
+  COALESCE(p.is_hot, false) DESC, p.icp_score DESC NULLS LAST, p.created_at DESC`;
+
+async function getLeads(where = '', params = [], limit = 250, orderBy = DEFAULT_LEAD_ORDER, req = null) {
+  const sort = orderBy || DEFAULT_LEAD_ORDER;
   const clientScope = clientFilter(req, params);
   const { rows } = await pool.query(`
     SELECT p.*,
       c.name AS company_name,
+      CASE WHEN p.client_id = 10 THEN CASE p.vertical
+        WHEN 'cleaning_company_overflow' THEN 1 WHEN 'str_manager' THEN 2 WHEN 'property_manager' THEN 3
+        WHEN 'realtor' THEN 4 WHEN 'restoration_remodeling_partner' THEN 5 WHEN 'commercial_office' THEN 6
+        ELSE 99 END ELSE 99 END AS category_priority,
+      CASE WHEN p.client_id = 10 THEN 'Anchor priority ' || CASE p.vertical
+        WHEN 'cleaning_company_overflow' THEN '1: cleaning company overflow' WHEN 'str_manager' THEN '2: STR manager'
+        WHEN 'property_manager' THEN '3: property manager' WHEN 'realtor' THEN '4: realtor'
+        WHEN 'restoration_remodeling_partner' THEN '5: restoration/remodeling partner' WHEN 'commercial_office' THEN '6: commercial office'
+        ELSE '99: unprioritized category' END ELSE NULL END AS priority_reason,
       ((
         SELECT COUNT(*)::int
         FROM activity_log al
@@ -454,22 +483,25 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
         SELECT *
         FROM prospects
         WHERE id = $1 AND source = 'scout' AND client_id = $2
+          AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
       `, [req.params.id, clientId]);
       if (!current.rows.length) return res.status(404).json({ error: 'Lead not found' });
 
-      const closer = await getLeviCloser(clientId);
+      const anchorPhoneSetter = isAnchorPhoneSetter(clientId);
+      const closer = anchorPhoneSetter ? null : await getLeviCloser(clientId);
       const notes = appendHandoffNote(current.rows[0].notes, handoffNote);
       const update = await pool.query(`
         UPDATE prospects
         SET setter_status = 'booked',
             setter_updated_at = NOW(),
             booked_at = COALESCE(booked_at, NOW()),
-            closer_id = COALESCE($1, closer_id),
-            closer_status = 'booked',
-            notes = $2
-        WHERE id = $3 AND source = 'scout' AND client_id = $4
+            closer_id = CASE WHEN $1 THEN closer_id ELSE COALESCE($2, closer_id) END,
+            closer_status = CASE WHEN $1 THEN closer_status ELSE 'booked' END,
+            notes = $3
+        WHERE id = $4 AND source = 'scout' AND client_id = $5
+          AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
         RETURNING *
-      `, [closer?.id || null, notes, req.params.id, clientId]);
+      `, [anchorPhoneSetter, closer?.id || null, notes, req.params.id, clientId]);
       const visibleRow = update.rows.length
         ? await setSetterVisibility(pool, req.params.id, {
             reason: 'stage_change',
@@ -480,7 +512,7 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
         : null;
       rows = visibleRow ? [visibleRow] : [];
 
-      if (closer) {
+      if (closer && !anchorPhoneSetter) {
         const description = handoffDescription(rows[0], setterNotes(rows[0].notes));
         await pool.query(`
           INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, client_id)
@@ -503,6 +535,8 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
           console.error('[setter] closer handoff email error:', emailErr.response?.data || emailErr.message);
         }
         handoff = { assigned: true, closer_id: closer.id, closer_name: closer.name, emailed };
+      } else if (anchorPhoneSetter) {
+        handoff = { assigned: false, reason: 'Anchor walkthrough recorded; no closer email or agent handoff is permitted' };
       } else {
         handoff = { assigned: false, reason: 'No active closer user found' };
       }
@@ -513,6 +547,7 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
             status = CASE WHEN $1 = 'dead' THEN 'dead' ELSE status END,
             setter_updated_at = NOW()
         WHERE id = $2 AND source = 'scout' AND client_id = $3
+          AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
         RETURNING *
       `, [status, req.params.id, clientId]);
       const visibleRow = update.rows.length
@@ -542,6 +577,7 @@ router.patch(['/api/leads/:id/notes', '/leads/:id/notes'], requireSetterWrite, a
       SELECT *
       FROM prospects
       WHERE id = $1 AND source = 'scout' AND client_id = $2
+        AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
     `, [req.params.id, clientId]);
     if (!current.rows.length) return res.status(404).json({ error: 'Lead not found' });
     const notes = composeNotes(current.rows[0].notes, incoming);
@@ -549,6 +585,7 @@ router.patch(['/api/leads/:id/notes', '/leads/:id/notes'], requireSetterWrite, a
       UPDATE prospects
       SET notes = $1, updated_at = NOW()
       WHERE id = $2 AND source = 'scout' AND client_id = $3
+        AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
       RETURNING *
     `, [notes, req.params.id, clientId]);
     res.json({ success: true, lead: mapLead(rows[0]) });
@@ -570,6 +607,7 @@ router.patch(['/api/leads/:id/callback', '/leads/:id/callback'], requireSetterWr
       UPDATE prospects
       SET callback_at = $1, updated_at = NOW()
       WHERE id = $2 AND source = 'scout' AND client_id = $3
+        AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
       RETURNING *
     `, [callbackAt ? callbackAt.toISOString() : null, req.params.id, clientId]);
     if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
@@ -589,6 +627,7 @@ router.patch(['/api/leads/:id/hot', '/leads/:id/hot'], requireSetterWrite, async
       UPDATE prospects
       SET is_hot = $1, updated_at = NOW()
       WHERE id = $2 AND source = 'scout' AND client_id = $3
+        AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
       RETURNING *
     `, [isHot, req.params.id, clientId]);
     if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
@@ -609,9 +648,13 @@ router.post(['/api/leads/:id/enrich-phone', '/leads/:id/enrich-phone'], requireS
       SELECT *
       FROM prospects
       WHERE id = $1 AND source = 'scout' AND client_id = $2
+        AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
     `, [req.params.id, clientId]);
     if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
 
+    if (isAnchorPhoneSetter(clientId)) {
+      return res.status(404).json({ error: 'Anchor phone enrichment is disabled for this manual rollout' });
+    }
     const enrichment = await enrichPhoneWaterfall({
       ...rows[0],
       business_name: businessName(rows[0]),
@@ -658,6 +701,7 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
     const setterId = Number(req.user?.id);
     const disposition = String(req.body.disposition || '').trim();
     const notes = String(req.body.notes || '').trim().slice(0, 5000);
+    const rawDetails = req.body.details;
     const duration = req.body.duration_seconds === '' || req.body.duration_seconds == null
       ? null
       : Number(req.body.duration_seconds);
@@ -685,6 +729,7 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
       FROM prospects p
       LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
       WHERE p.id = $1 AND p.source = 'scout' AND p.client_id = $2
+        AND COALESCE(p.setter_visible, false) = true AND COALESCE(p.do_not_contact, false) = false
       FOR UPDATE OF p
     `, [req.params.id, clientId]);
     if (!prospectResult.rows.length) {
@@ -692,13 +737,22 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
       return res.status(404).json({ error: 'Lead not found' });
     }
     const prospect = prospectResult.rows[0];
+    let details = {};
+    if (isAnchorPhoneSetter(clientId)) {
+      try {
+        details = validateStructuredDetails(rawDetails, prospect.vertical);
+      } catch (error) {
+        await client.query('ROLLBACK');
+        return res.status(error.status || 400).json({ error: error.message, code: error.code });
+      }
+    }
 
     const dispositionResult = await client.query(`
       INSERT INTO call_dispositions
-        (prospect_id, client_id, call_duration_seconds, disposition, notes, setter_id, source, callback_at)
-      VALUES ($1, $2, $3, $4, $5, $6, 'manual_setter', $7)
+        (prospect_id, client_id, call_duration_seconds, disposition, notes, setter_id, source, callback_at, details)
+      VALUES ($1, $2, $3, $4, $5, $6, 'manual_setter', $7, $8::jsonb)
       RETURNING *
-    `, [prospect.id, prospect.client_id, duration, disposition, notes || null, setterId, callbackAt]);
+    `, [prospect.id, prospect.client_id, duration, disposition, notes || null, setterId, callbackAt, JSON.stringify(details)]);
 
     const sentiment = disposition === 'answered_interested'
       ? 'positive'
@@ -710,6 +764,7 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
       duration_seconds: duration,
       callback_at: callbackAt ? callbackAt.toISOString() : null,
       source: 'manual_setter',
+      details,
     });
     await client.query(`
       INSERT INTO touchpoints
@@ -757,6 +812,186 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
     res.status(500).json({ error: 'Unable to log call disposition' });
   } finally {
     client.release();
+  }
+});
+
+async function anchorActionableProspect(prospectId, clientId) {
+  const { rows } = await pool.query(`
+    SELECT p.*, c.name AS company_name
+    FROM prospects p
+    LEFT JOIN companies c ON c.id=p.company_id AND c.client_id=p.client_id
+    WHERE p.id=$1 AND p.client_id=$2 AND p.source='scout'
+      AND COALESCE(p.setter_visible,false)=true AND COALESCE(p.do_not_contact,false)=false
+    LIMIT 1
+  `, [prospectId, clientId]);
+  return rows[0] || null;
+}
+
+function requireAnchorPhoneSetter(req, res, next) {
+  if (!isAnchorPhoneSetter(setterClientId(req))) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  return next();
+}
+
+function setterIdentity(req) {
+  const id = Number(req.user?.id);
+  if (!Number.isInteger(id)) throw phoneSetterError('Setter identity is required', 'SETTER_IDENTITY_REQUIRED');
+  return id;
+}
+
+router.get(['/api/leads/:id/follow-up-drafts', '/leads/:id/follow-up-drafts'], requireSetterRead, requireAnchorPhoneSetter, async (req, res) => {
+  try {
+    const clientId = setterClientId(req);
+    if (!await anchorActionableProspect(req.params.id, clientId)) return res.status(404).json({ error: 'Lead not found' });
+    const { rows } = await pool.query(`
+      SELECT id,client_id,prospect_id,channel,body,status,reviewer_id,reviewed_at,
+        dismissed_by,dismissed_at,manual_sent_by,manual_sent_at,manual_send_reference,
+        created_by,created_at,updated_at
+      FROM setter_follow_up_drafts WHERE client_id=$1 AND prospect_id=$2 ORDER BY created_at DESC
+    `, [clientId, req.params.id]);
+    res.json({ drafts: rows });
+  } catch (error) {
+    console.error('[setter] follow-up draft list error:', error.message);
+    res.status(500).json({ error: 'Unable to load follow-up drafts' });
+  }
+});
+
+router.post(['/api/leads/:id/follow-up-drafts', '/leads/:id/follow-up-drafts'], requireSetterWrite, requireAnchorPhoneSetter, async (req, res) => {
+  try {
+    const clientId = setterClientId(req);
+    const setterId = setterIdentity(req);
+    if (!await anchorActionableProspect(req.params.id, clientId)) return res.status(404).json({ error: 'Lead not found' });
+    const { channel, body } = validateDraftInput(req.body || {});
+    const { rows } = await pool.query(`
+      INSERT INTO setter_follow_up_drafts (client_id,prospect_id,channel,body,status,created_by)
+      VALUES ($1,$2,$3,$4,'draft',$5) RETURNING *
+    `, [clientId, req.params.id, channel, body, setterId]);
+    res.status(201).json({ draft: rows[0] });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to create follow-up draft', code: error.code });
+  }
+});
+
+router.patch(['/api/follow-up-drafts/:draftId', '/follow-up-drafts/:draftId'], requireSetterWrite, requireAnchorPhoneSetter, async (req, res) => {
+  try {
+    const clientId = setterClientId(req);
+    const { channel, body } = validateDraftInput(req.body || {});
+    const { rows } = await pool.query(`
+      UPDATE setter_follow_up_drafts d SET channel=$3,body=$4,updated_at=NOW()
+      WHERE d.id=$1 AND d.client_id=$2 AND d.status='draft'
+        AND EXISTS (SELECT 1 FROM prospects p WHERE p.id=d.prospect_id AND p.client_id=d.client_id
+          AND COALESCE(p.setter_visible,false)=true AND COALESCE(p.do_not_contact,false)=false)
+      RETURNING d.*
+    `, [req.params.draftId, clientId, channel, body]);
+    if (!rows[0]) return res.status(404).json({ error: 'Editable draft not found' });
+    res.json({ draft: rows[0] });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to edit follow-up draft', code: error.code });
+  }
+});
+
+router.post(['/api/follow-up-drafts/:draftId/review', '/follow-up-drafts/:draftId/review'], requireSetterWrite, requireAnchorPhoneSetter, async (req, res) => {
+  try {
+    if (!['admin', 'manager'].includes(req.user?.role)) return res.status(403).json({ error: 'Reviewer role is required' });
+    const clientId = setterClientId(req);
+    const reviewerId = setterIdentity(req);
+    const { rows } = await pool.query(`
+      UPDATE setter_follow_up_drafts d SET status='reviewed',reviewer_id=$3,reviewed_at=NOW(),updated_at=NOW()
+      WHERE d.id=$1 AND d.client_id=$2 AND d.status='draft'
+        AND EXISTS (SELECT 1 FROM prospects p WHERE p.id=d.prospect_id AND p.client_id=d.client_id
+          AND COALESCE(p.setter_visible,false)=true AND COALESCE(p.do_not_contact,false)=false)
+      RETURNING d.*
+    `, [req.params.draftId, clientId, reviewerId]);
+    if (!rows[0]) return res.status(404).json({ error: 'Reviewable draft not found' });
+    res.json({ draft: rows[0] });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to review follow-up draft', code: error.code });
+  }
+});
+
+router.post(['/api/follow-up-drafts/:draftId/dismiss', '/follow-up-drafts/:draftId/dismiss'], requireSetterWrite, requireAnchorPhoneSetter, async (req, res) => {
+  try {
+    const clientId = setterClientId(req);
+    const setterId = setterIdentity(req);
+    const { rows } = await pool.query(`
+      UPDATE setter_follow_up_drafts d SET status='dismissed',dismissed_by=$3,dismissed_at=NOW(),updated_at=NOW()
+      WHERE d.id=$1 AND d.client_id=$2 AND d.status IN ('draft','reviewed')
+        AND EXISTS (SELECT 1 FROM prospects p WHERE p.id=d.prospect_id AND p.client_id=d.client_id
+          AND COALESCE(p.setter_visible,false)=true AND COALESCE(p.do_not_contact,false)=false)
+      RETURNING d.*
+    `, [req.params.draftId, clientId, setterId]);
+    if (!rows[0]) return res.status(404).json({ error: 'Dismissible draft not found' });
+    res.json({ draft: rows[0] });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to dismiss follow-up draft', code: error.code });
+  }
+});
+
+router.post(['/api/follow-up-drafts/:draftId/log-sent', '/follow-up-drafts/:draftId/log-sent'], requireSetterWrite, requireAnchorPhoneSetter, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const clientId = setterClientId(req);
+    const setterId = setterIdentity(req);
+    const reference = String(req.body?.manual_send_reference || '').trim().slice(0, 250) || null;
+    await client.query('BEGIN');
+    const draftResult = await client.query(`
+      SELECT d.* FROM setter_follow_up_drafts d
+      JOIN prospects p ON p.id=d.prospect_id AND p.client_id=d.client_id
+      WHERE d.id=$1 AND d.client_id=$2 AND d.status='reviewed'
+        AND COALESCE(p.setter_visible,false)=true AND COALESCE(p.do_not_contact,false)=false
+      FOR UPDATE OF d
+    `, [req.params.draftId, clientId]);
+    const draft = draftResult.rows[0];
+    if (!draft) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Only a reviewed, actionable draft can be logged as sent' });
+    }
+    const updated = await client.query(`
+      UPDATE setter_follow_up_drafts SET status='manual_sent',manual_sent_by=$3,manual_sent_at=NOW(),
+        manual_send_reference=$4,updated_at=NOW() WHERE id=$1 AND client_id=$2 RETURNING *
+    `, [draft.id, clientId, setterId, reference]);
+    await client.query(`
+      INSERT INTO touchpoints (prospect_id,channel,action_type,content_summary,outcome,sentiment,agent_id,external_ref,client_id)
+      VALUES ($1,$2,'manual_follow_up_logged',$3,$4::jsonb,'neutral',$5,$6,$7)
+    `, [draft.prospect_id, draft.channel, 'Operator confirmed manual send; no provider action was performed by Pulseforge.',
+      JSON.stringify({ draft_id: draft.id, reviewed_at: draft.reviewed_at, manual_send_reference: reference }), String(setterId),
+      `manual_follow_up:${draft.id}`, clientId]);
+    await client.query('COMMIT');
+    res.json({ draft: updated.rows[0], provider_action: false });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(error.status || 500).json({ error: error.status ? error.message : 'Unable to log manual send', code: error.code });
+  } finally {
+    client.release();
+  }
+});
+
+router.post(['/api/leads/:id/opportunity', '/leads/:id/opportunity'], requireSetterWrite, requireAnchorPhoneSetter, async (req, res) => {
+  try {
+    const clientId = setterClientId(req);
+    const flags = await loadRevenueFlags(pool, clientId);
+    assertRevenueFlag(flags, 'revenue_schema_enabled');
+    assertRevenueFlag(flags, 'revenue_operator_writes_enabled');
+    if (!await anchorActionableProspect(req.params.id, clientId)) return res.status(404).json({ error: 'Lead not found' });
+    const result = await revenue.createOpportunity(clientId, {
+      prospectId: req.params.id,
+      serviceType: req.body?.serviceType,
+      estimatedValueCents: req.body?.estimatedValueCents,
+      estimatedCostCents: req.body?.estimatedCostCents,
+      expectedCloseDate: req.body?.expectedCloseDate,
+      source: 'manual',
+      leadSourceDetail: 'anchor_phone_setter_v1',
+      attributionStatus: 'deterministic',
+      humanOwner: req.user?.name || req.user?.email || String(req.user?.id || ''),
+    }, {
+      idempotencyKey: req.get('Idempotency-Key'), correlationId: req.get('X-Correlation-ID') || randomUUID(),
+      sourceSystem: 'anchor_phone_setter_v1', actorType: 'user', actorId: req.user?.id,
+      followupRecommendationsEnabled: false,
+    });
+    res.status(result.idempotentReplay ? 200 : 201).json(result);
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.status ? error.message : 'Opportunity creation failed', code: error.code || 'INTERNAL_ERROR' });
   }
 });
 
