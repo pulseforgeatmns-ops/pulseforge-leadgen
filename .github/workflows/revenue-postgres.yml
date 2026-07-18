@@ -20,5 +20,7 @@ jobs:
       - name: Add PostgreSQL binaries to PATH
         run: echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
       - run: npm ci
+      - name: Intentional protected-branch negative gate verification
+        run: exit 1
       - name: Disposable PostgreSQL revenue lifecycle
         run: npm run test:revenue:postgres
