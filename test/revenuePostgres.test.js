@@ -44,9 +44,23 @@ test('revenue lifecycle, replay, rollback, isolation, protection, rebuild, and r
 
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'revenue-phase15-pg-'));
   const port = await freePort();
+  const logFile = path.join(directory, 'postgres.log');
   const commandOptions = { stdio: 'ignore', env: { ...process.env, LANG: 'C', LC_ALL: 'C' } };
   execFileSync(initdb, ['-A', 'trust', '-U', 'postgres', '-D', directory], commandOptions);
-  execFileSync(pgCtl, ['-D', directory, '-o', `-p ${port} -h 127.0.0.1`, '-w', 'start'], commandOptions);
+  try {
+    execFileSync(pgCtl, [
+      '-D', directory,
+      '-l', logFile,
+      '-o', `-p ${port} -h 127.0.0.1`,
+      '-w',
+      'start',
+    ], commandOptions);
+  } catch (error) {
+    const diagnostics = fs.existsSync(logFile)
+      ? fs.readFileSync(logFile, 'utf8')
+      : 'PostgreSQL did not create a server log.';
+    throw new Error(`Temporary PostgreSQL failed to start:\n${diagnostics}`, { cause: error });
+  }
   const connectionString = `postgresql://postgres@127.0.0.1:${port}/postgres`;
   const admin = new Pool({ connectionString });
   let servicePool;
