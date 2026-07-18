@@ -1,0 +1,25 @@
+{
+  "phase": "revenue-phase-1.6",
+  "client_id": 10,
+  "authorized_operator": null,
+  "authorized_actions": [
+    "apply_revenue_migrations",
+    "enable_operator_reads",
+    "enable_operator_writes_for_canary",
+    "execute_single_canary",
+    "run_reconciliation"
+  ],
+  "maximum_canary_outcomes": 1,
+  "external_sends_allowed": false,
+  "refunds_allowed": false,
+  "max_mutations_allowed": false,
+  "window_start": null,
+  "window_end": null,
+  "stop_conditions": [],
+  "rollback_owner": null,
+  "approved_by": null,
+  "approved_at": null,
+  "authorization_hash": null,
+  "approved": false,
+  "production_execution_permitted": false
+}

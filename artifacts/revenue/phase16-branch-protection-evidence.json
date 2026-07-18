@@ -1,0 +1,12 @@
+{
+  "status": "blocked_main_branch_not_protected",
+  "repository": "pulseforgeatmns-ops/pulseforge-leadgen",
+  "protected_branch": "main",
+  "required_check_name": "Revenue PostgreSQL Integration / revenue-postgresql-required",
+  "direct_merge_bypass_allowed": "unknown_branch_not_protected",
+  "administrative_bypass_allowed": "unknown_branch_not_protected",
+  "enforcement_timestamp": "2026-07-18T12:14:00Z",
+  "operator": "Codex read-only verification",
+  "settings_export_or_screenshot_reference": "gh api repos/pulseforgeatmns-ops/pulseforge-leadgen/branches/main/protection returned HTTP 404: Branch not protected",
+  "verified": false
+}
