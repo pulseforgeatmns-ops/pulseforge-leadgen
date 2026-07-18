@@ -21,6 +21,9 @@
     "max:readiness": "node scripts/maxReadinessReport.js",
     "max:readiness:configure": "node scripts/configureMaxReadiness.js",
     "max:readiness:check": "node scripts/maxReadinessReport.js --check",
+    "revenue:rebuild": "node scripts/rebuildRevenueProjections.js",
+    "revenue:phase16:preflight": "node scripts/preflightRevenuePhase16.js",
+    "test:revenue:postgres": "REVENUE_TEST_POSTGRES=true node --test test/revenuePostgres.test.js",
     "start": "node server.js"
   },
   "repository": {

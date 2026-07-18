@@ -1,0 +1,24 @@
+name: Revenue PostgreSQL Integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  revenue-postgresql-required:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install PostgreSQL binaries
+        run: sudo apt-get update && sudo apt-get install -y postgresql
+      - name: Add PostgreSQL binaries to PATH
+        run: echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
+      - run: npm ci
+      - name: Disposable PostgreSQL revenue lifecycle
+        run: npm run test:revenue:postgres

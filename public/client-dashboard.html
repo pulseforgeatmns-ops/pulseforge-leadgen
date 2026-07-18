@@ -84,8 +84,8 @@ body::before {
 .clock { font-family:'JetBrains Mono',monospace; font-size:0.72rem; color:var(--gray-light); letter-spacing:2px; }
 .user-avatar { width:32px; height:32px; border-radius:50%; background:var(--purple-glow); border:1.5px solid var(--purple-bright); display:flex; align-items:center; justify-content:center; font-size:0.65rem; font-weight:700; color:var(--purple-bright); box-shadow:0 0 12px rgba(139,92,246,0.3); }
 .main { flex:1; display:grid; grid-template-columns:1fr 340px; overflow:hidden; gap:0; }
-.agents-area, .approvals-area, .prospects-area, .activity-area, .analytics-area { overflow-y:auto; overflow-x:hidden; padding:2rem; height:100%; min-width:0; }
-.approvals-area, .prospects-area, .activity-area, .analytics-area { display:none; }
+.agents-area, .approvals-area, .prospects-area, .activity-area, .analytics-area, .revenue-area { overflow-y:auto; overflow-x:hidden; padding:2rem; height:100%; min-width:0; }
+.approvals-area, .prospects-area, .activity-area, .analytics-area, .revenue-area { display:none; }
 .agents-area::-webkit-scrollbar, .approvals-area::-webkit-scrollbar, .prospects-area::-webkit-scrollbar, .activity-area::-webkit-scrollbar, .analytics-area::-webkit-scrollbar { width:3px; }
 .agents-area::-webkit-scrollbar-thumb, .approvals-area::-webkit-scrollbar-thumb, .prospects-area::-webkit-scrollbar-thumb, .activity-area::-webkit-scrollbar-thumb, .analytics-area::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
 .area-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:2rem; }
@@ -153,6 +153,21 @@ body::before {
 .max-label { font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:2px; text-transform:uppercase; color:var(--purple-bright); display:flex; align-items:center; gap:6px; margin-bottom:0.5rem; }
 .max-dot { width:5px; height:5px; border-radius:50%; background:var(--purple-bright); box-shadow:0 0 6px var(--purple-bright); }
 .max-text { font-size:0.75rem; color:rgba(255,255,255,0.65); line-height:1.6; max-height:8rem; overflow:auto; }
+.revenue-layout { display:grid; grid-template-columns:minmax(360px, .8fr) minmax(500px, 1.2fr); gap:1rem; }
+.revenue-card { background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:1rem; }
+.revenue-form { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+.revenue-form .full { grid-column:1/-1; }
+.revenue-form label { display:block; font-family:'JetBrains Mono',monospace; font-size:.55rem; color:var(--gray-light); letter-spacing:1px; text-transform:uppercase; margin-bottom:.35rem; }
+.revenue-form input,.revenue-form select,.revenue-form textarea { width:100%; background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.09); color:var(--white); border-radius:5px; padding:.65rem; }
+.revenue-checks { display:grid; grid-template-columns:1fr 1fr; gap:.45rem; padding:.6rem; background:rgba(255,255,255,.025); border-radius:6px; }
+.revenue-checks label { text-transform:none; letter-spacing:0; }
+.revenue-checks input { width:auto; margin-right:.35rem; }
+.revenue-submit { grid-column:1/-1; border:0; border-radius:5px; padding:.75rem; color:#04100d; background:var(--teal); font-family:'JetBrains Mono',monospace; font-weight:700; cursor:pointer; }
+.revenue-message { grid-column:1/-1; min-height:1.2rem; font-size:.72rem; color:var(--gray-light); }
+.revenue-summary { display:grid; grid-template-columns:repeat(4,1fr); gap:.6rem; margin-bottom:1rem; }
+.revenue-table { width:100%; border-collapse:collapse; font-size:.72rem; }
+.revenue-table th,.revenue-table td { text-align:left; padding:.65rem .45rem; border-bottom:1px solid rgba(255,255,255,.05); }
+.revenue-table th { color:var(--gray-light); font-family:'JetBrains Mono',monospace; font-size:.54rem; text-transform:uppercase; }
 .approvals-filters { display:flex; gap:6px; margin-bottom:1.5rem; flex-wrap:wrap; }
 .filter-btn { font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:1px; text-transform:uppercase; padding:5px 12px; border-radius:4px; border:1px solid var(--border); background:transparent; color:var(--gray-light); cursor:pointer; transition:all 0.15s; }
 .filter-btn:hover { color:var(--white); border-color:var(--gray); }
@@ -257,6 +272,7 @@ body::before {
       <div class="nav-tab" data-tab="prospects">Prospects</div>
       <div class="nav-tab" data-tab="activity">Activity</div>
       <div class="nav-tab" data-tab="analytics">Analytics</div>
+      <div class="nav-tab" data-tab="revenue">Revenue</div>
     </div>
     <div class="topbar-right">
       <div class="sys-status"><div class="sys-dot"></div><span id="agentLiveCount">0 LIVE</span></div>
@@ -375,6 +391,47 @@ body::before {
       </div>
     </div>
 
+    <div class="revenue-area" id="revenuePanel">
+      <div class="area-header"><div><div class="area-title">CLOSED-LOOP REVENUE</div><div class="area-sub">Manual entry · tenant scoped · no automatic sends</div></div></div>
+      <div class="revenue-layout">
+        <div class="revenue-card">
+          <div class="section-divider"><div class="section-divider-label">Complete a job</div><div class="section-divider-line"></div></div>
+          <form class="revenue-form" id="revenueForm">
+            <div class="full"><label>Existing prospect</label><select id="revProspect" required></select></div>
+            <div><label>Customer type</label><select id="revCustomerType"><option value="residential">Residential</option><option value="commercial">Commercial</option><option value="short_term_rental">Short-term rental</option><option value="property_manager">Property manager</option><option value="partner">Partner</option><option value="other">Other</option></select></div>
+            <div><label>Lead source</label><select id="revSource"><option value="yelp">Yelp</option><option value="referral">Referral</option><option value="outbound_email">Outbound email</option><option value="outbound_phone">Outbound phone</option><option value="cleaning_company_overflow">Cleaning company overflow</option><option value="property_manager">Property manager</option><option value="str_partner">STR partner</option><option value="manual">Manual</option><option value="unknown">Unknown</option></select></div>
+            <div class="full"><label>Service type</label><input id="revService" required placeholder="One-time residential cleaning"></div>
+            <div><label>Scheduled start</label><input id="revScheduled" type="datetime-local" required></div>
+            <div><label>Completion date</label><input id="revCompleted" type="datetime-local" required></div>
+            <div><label>Final charge ($)</label><input id="revAmount" type="number" min="0" step="0.01" required></div>
+            <div><label>Actual labor + supply cost ($)</label><input id="revCost" type="number" min="0" step="0.01" placeholder="Optional"></div>
+            <div><label>Payment method</label><select id="revPaymentMethod"><option value="card">Card</option><option value="cash">Cash</option><option value="check">Check</option><option value="ach">ACH</option><option value="other">Other</option></select></div>
+            <div><label>Reactivate on</label><input id="revReactivate" type="date"></div>
+            <div class="full"><label>Completion notes</label><textarea id="revNotes" rows="2"></textarea></div>
+            <div class="revenue-checks full">
+              <label><input id="revFully" type="checkbox" checked>Fully completed</label>
+              <label><input id="revPaid" type="checkbox">Payment received</label>
+              <label><input id="revReview" type="checkbox" checked>Review eligible</label>
+              <label><input id="revRecurring" type="checkbox">Recurring eligible</label>
+            </div>
+            <button class="revenue-submit" type="submit">Record completed job</button>
+            <div class="revenue-message" id="revenueMessage"></div>
+          </form>
+        </div>
+        <div class="revenue-card">
+          <div class="revenue-summary" id="revenueSummary"></div>
+          <div class="section-divider"><div class="section-divider-label">Revenue outcomes</div><div class="section-divider-line"></div></div>
+          <div style="overflow:auto"><table class="revenue-table"><thead><tr><th>Customer</th><th>Source</th><th>Status</th><th>Booked</th><th>Delivered</th><th>Collected</th><th>Profit</th></tr></thead><tbody id="revenueRows"></tbody></table></div>
+        </div>
+      </div>
+      <div class="revenue-card" style="margin-top:1rem">
+        <div class="section-divider"><div class="section-divider-label">Revenue health</div><div class="section-divider-line"></div></div>
+        <div class="revenue-summary" id="revenueHealth"></div>
+        <div class="section-divider"><div class="section-divider-label">Operator audit</div><div class="section-divider-line"></div></div>
+        <div style="overflow:auto"><table class="revenue-table"><thead><tr><th>Actor</th><th>Action</th><th>Time</th><th>Source</th><th>Events</th><th>Correlation</th><th>Financial delta</th><th>Confidence</th></tr></thead><tbody id="revenueAuditRows"></tbody></table></div>
+      </div>
+    </div>
+
     <div class="right-panel">
       <div class="panel-header">
         <div class="panel-title">COMMAND FEED</div>
@@ -444,6 +501,7 @@ function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
 function fmtNum(n) { return new Intl.NumberFormat().format(Number(n || 0)); }
+function fmtMoney(cents) { return new Intl.NumberFormat('en-US', { style:'currency', currency:'USD' }).format(Number(cents || 0) / 100); }
 function fmtDate(d) {
   if (!d) return '—';
   return new Date(d).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
@@ -764,6 +822,118 @@ async function loadAnalytics() {
   renderAnalytics(await api('/api/analytics'));
 }
 
+async function revenueApi(path, method = 'GET', body) {
+  const headers = { 'Content-Type':'application/json', 'X-Correlation-ID':crypto.randomUUID() };
+  if (method !== 'GET') headers['Idempotency-Key'] = crypto.randomUUID();
+  const res = await fetch(`/clients/${clientId}${path}`, {
+    method, credentials:'include', headers, body:body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Revenue operation failed');
+  return data;
+}
+
+function cents(value) { return Math.round(Number(value || 0) * 100); }
+
+function setRevenueDefaults() {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0,16);
+  if (!document.getElementById('revScheduled').value) document.getElementById('revScheduled').value = local;
+  if (!document.getElementById('revCompleted').value) document.getElementById('revCompleted').value = local;
+}
+
+function renderRevenue(context, outcomes) {
+  const summary = context.summary || {};
+  document.getElementById('revenueSummary').innerHTML = [
+    ['Booked', summary.booked_revenue_cents, 'p'], ['Delivered', summary.delivered_revenue_cents, 't'],
+    ['Collected', summary.collected_revenue_cents, 'g'], ['Gross Profit', summary.gross_profit_cents, 'o'],
+  ].map(([label, value, color]) => `<div class="client-stat-card"><div class="client-stat-label">${label}</div><div class="client-stat-val ${color}" style="font-size:1.25rem">${fmtMoney(value)}</div></div>`).join('');
+  document.getElementById('revenueRows').innerHTML = outcomes.map(row => `<tr>
+    <td>${esc(row.display_name)}</td><td>${esc(titleCase(row.lead_source))}</td><td>${esc(titleCase(row.outcome_status))}</td>
+    <td>${fmtMoney(row.booked_revenue_cents)}</td><td>${fmtMoney(row.delivered_revenue_cents)}</td>
+    <td>${fmtMoney(row.collected_revenue_cents)}</td><td>${row.gross_profit_cents === null ? 'Cost missing' : fmtMoney(row.gross_profit_cents)}</td>
+  </tr>`).join('') || '<tr><td colspan="7" class="no-data-note">No revenue outcomes yet.</td></tr>';
+}
+
+function renderRevenueOperations(health, audit) {
+  document.getElementById('revenueHealth').innerHTML = [
+    ['Reconciliation', health.reconciliation_status || 'not run'],
+    ['Unprojected', health.unprojected_event_count || 0],
+    ['Projection lag', `${health.projection_lag_seconds || 0}s`],
+    ['Last rebuild', health.last_successful_rebuild ? fmtDate(health.last_successful_rebuild) : 'never'],
+  ].map(([label, value]) => `<div class="client-stat-card"><div class="client-stat-label">${esc(label)}</div><div class="client-stat-val" style="font-size:.9rem">${esc(value)}</div></div>`).join('');
+  document.getElementById('revenueAuditRows').innerHTML = audit.map(row => `<tr>
+    <td>${esc(row.actor_id || row.actor_type)}</td><td>${esc(titleCase(row.action))}</td><td>${fmtDate(row.occurred_at)}</td>
+    <td>${esc(`${row.source_entity_type || 'n/a'}:${row.source_entity_id || 'n/a'}`)}</td><td>${fmtNum((row.resulting_events || []).length)}</td>
+    <td><code>${esc(row.correlation_id)}</code></td><td><code>${esc(JSON.stringify(row.financial_delta || {}))}</code></td><td>${esc(row.attribution_confidence)}</td>
+  </tr>`).join('') || '<tr><td colspan="8" class="no-data-note">No operator revenue actions yet.</td></tr>';
+}
+
+async function loadRevenue() {
+  if (!prospects.length) await loadProspects();
+  document.getElementById('revProspect').innerHTML = prospects.map(p => `<option value="${esc(p.id)}">${esc(p.business)}${p.email ? ` · ${esc(p.email)}` : ''}</option>`).join('');
+  setRevenueDefaults();
+  const [context, outcomes, health, audit] = await Promise.all([
+    revenueApi('/operator/revenue-context'), revenueApi('/revenue-outcomes'), revenueApi('/revenue-health'), revenueApi('/revenue-audit'),
+  ]);
+  renderRevenue(context, outcomes);
+  renderRevenueOperations(health, audit);
+}
+
+document.getElementById('revenueForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const message = document.getElementById('revenueMessage');
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  button.disabled = true;
+  message.style.color = 'var(--gray-light)';
+  message.textContent = 'Recording customer, opportunity, job, outcome, and payment evidence…';
+  try {
+    const prospectId = document.getElementById('revProspect').value;
+    const serviceType = document.getElementById('revService').value.trim();
+    const amountCents = cents(document.getElementById('revAmount').value);
+    const costValue = document.getElementById('revCost').value;
+    const customerResult = await revenueApi('/customers', 'POST', {
+      prospectId, customerType:document.getElementById('revCustomerType').value,
+    });
+    const opportunityResult = await revenueApi('/opportunities', 'POST', {
+      customerId:customerResult.customer.id, prospectId, serviceType,
+      estimatedValueCents:amountCents, estimatedCostCents:costValue === '' ? null : cents(costValue),
+      source:document.getElementById('revSource').value,
+    });
+    let opportunity = opportunityResult.opportunity;
+    for (const stage of ['contacted','qualified','quoted']) {
+      opportunity = (await revenueApi(`/opportunities/${opportunity.id}`, 'PATCH', { stage })).opportunity;
+    }
+    const job = (await revenueApi('/jobs', 'POST', {
+      opportunityId:opportunity.id, customerId:customerResult.customer.id, serviceType,
+      scheduledStart:new Date(document.getElementById('revScheduled').value).toISOString(), quotedAmountCents:amountCents,
+      estimatedDirectCostCents:costValue === '' ? null : cents(costValue),
+    })).job;
+    const completion = await revenueApi(`/jobs/${job.id}/complete`, 'POST', {
+      completionDate:new Date(document.getElementById('revCompleted').value).toISOString(),
+      completionConfirmed:true, fullyCompleted:document.getElementById('revFully').checked,
+      finalAmountCents:amountCents, actualDirectCostCents:costValue === '' ? null : cents(costValue),
+      completionNotes:document.getElementById('revNotes').value,
+      requestReview:document.getElementById('revReview').checked,
+      recurringEligible:document.getElementById('revRecurring').checked,
+      reactivationDate:document.getElementById('revReactivate').value || null,
+    });
+    if (document.getElementById('revPaid').checked) {
+      await revenueApi('/payments', 'POST', {
+        jobId:job.id, amountCents, status:'succeeded',
+        paymentMethod:document.getElementById('revPaymentMethod').value,
+        receivedAt:new Date(document.getElementById('revCompleted').value).toISOString(),
+      });
+    }
+    message.style.color = 'var(--green)';
+    message.textContent = `Recorded ${titleCase(completion.revenueOutcome.outcome_status)} outcome. Follow-ups remain approval-gated.`;
+    await loadRevenue();
+  } catch (error) {
+    message.style.color = 'var(--red)';
+    message.textContent = error.message;
+  } finally { button.disabled = false; }
+});
+
 document.getElementById('loginForm').addEventListener('submit', async e => {
   e.preventDefault();
   document.getElementById('loginError').style.display = 'none';
@@ -789,13 +959,14 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
     document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
     const name = tab.dataset.tab;
-    ['agents','approvals','prospects','activity','analytics'].forEach(panel => {
+    ['agents','approvals','prospects','activity','analytics','revenue'].forEach(panel => {
       document.getElementById(`${panel}Panel`).style.display = panel === name ? 'block' : 'none';
     });
     if (name === 'approvals') await loadApprovals();
     if (name === 'prospects') await loadProspects();
     if (name === 'activity') await loadActivity();
     if (name === 'analytics') await loadAnalytics();
+    if (name === 'revenue') await loadRevenue();
   });
 });
 
