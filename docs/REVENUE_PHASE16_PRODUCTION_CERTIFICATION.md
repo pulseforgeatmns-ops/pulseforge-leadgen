@@ -4,7 +4,7 @@
 
 This artifact is intentionally incomplete. No production migration, flag change, canary, external send, Max mutation, refund, or retention action has occurred under Phase 1.6.
 
-Read-only verification on 2026-07-18 found that `main` is not protected (`GET /repos/pulseforgeatmns-ops/pulseforge-leadgen/branches/main/protection` returned HTTP 404). The required CI workflow exists in the working tree, but it is not yet merge-enforced.
+GitHub governance verification on 2026-07-18 configured `main` to require the strict `revenue-postgresql-required` check and a pull-request approval, with force pushes, deletion, and administrative bypass disabled. Verification PR #19 demonstrated queued and failed checks block merging, the corrected disposable PostgreSQL check passes, and an administrator's direct push is rejected. See `docs/REVENUE_PHASE15_CERTIFICATION.md`.
 
 ## Required evidence before certification
 

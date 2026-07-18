@@ -1,0 +1,111 @@
+{
+  "artifactVersion": "1",
+  "generatedAt": "2026-07-18T12:29:56Z",
+  "scope": "Revenue Phase 1.5A governance enforcement and certification closure",
+  "repository": "pulseforgeatmns-ops/pulseforge-leadgen",
+  "defaultBranch": "main",
+  "productionWrites": false,
+  "verdict": "governance_complete_phase15_production_closure_blocked",
+  "branchProtection": {
+    "pullRequestRequired": true,
+    "requiredApprovals": 1,
+    "dismissStaleReviews": true,
+    "requiredStatusChecksStrict": true,
+    "requiredStatusChecks": [
+      {
+        "context": "revenue-postgresql-required",
+        "appId": 15368,
+        "workflow": "Revenue PostgreSQL Integration"
+      }
+    ],
+    "forcePushesAllowed": false,
+    "deletionsAllowed": false,
+    "administratorsSubjectToRules": true,
+    "bypassPolicy": "No routine administrative or repository-role bypass is permitted. Administrators remain subject to the same pull-request review and required-check rules."
+  },
+  "workflowIntegrity": {
+    "pathFiltersPresent": false,
+    "requiredJob": "revenue-postgresql-required",
+    "workflowFile": ".github/workflows/revenue-postgres.yml",
+    "workflowSteps": [
+      "fresh PostgreSQL installation",
+      "disposable cluster creation",
+      "full revenue migration chain",
+      "lifecycle transitions",
+      "concurrent idempotent replay",
+      "transaction rollback",
+      "tenant isolation",
+      "database append-only protection",
+      "projection rebuild and determinism",
+      "three-way reconciliation",
+      "cluster teardown"
+    ],
+    "skipBehavior": "The generic suite may skip this integration file when REVENUE_TEST_POSTGRES is absent; the required workflow explicitly sets REVENUE_TEST_POSTGRES=true, and its only lifecycle test passed with zero skips."
+  },
+  "verificationPullRequest": {
+    "number": 19,
+    "url": "https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/19",
+    "headCommit": "c63114d7e564c2ac542f8af373d89dec0cf065c2",
+    "requiredCheckContext": "revenue-postgresql-required",
+    "pendingObservation": {
+      "runId": 29644362423,
+      "status": "QUEUED",
+      "mergeStateStatus": "BLOCKED",
+      "observedAt": "2026-07-18T12:27:49Z"
+    },
+    "failingObservation": {
+      "runId": 29644362423,
+      "conclusion": "FAILURE",
+      "mergeStateStatus": "BLOCKED",
+      "cause": "Disposable PostgreSQL attempted to create its Unix socket lock under /var/run/postgresql, which is not writable by the GitHub Actions runner. The harness was corrected to use its own temporary socket directory."
+    },
+    "passingObservation": {
+      "runId": 29644395671,
+      "jobId": 88080077654,
+      "conclusion": "SUCCESS",
+      "completedAt": "2026-07-18T12:29:26Z",
+      "detailsUrl": "https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/actions/runs/29644395671/job/88080077654",
+      "mergeStateStatus": "BLOCKED",
+      "remainingControl": "One required approving review"
+    },
+    "directPushAttempt": {
+      "actorRole": "repository administrator",
+      "result": "rejected",
+      "observedMessage": "GH006: Protected branch update failed; at least 1 approving review is required by reviewers with write access.",
+      "proves": "An administrator could not directly update main; no administrative bypass was available."
+    }
+  },
+  "tests": {
+    "disposablePostgresql": {
+      "command": "npm run test:revenue:postgres",
+      "result": "passed",
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    },
+    "fullRepositorySuite": {
+      "command": "npm test",
+      "result": "passed",
+      "tests": 261,
+      "passed": 257,
+      "failed": 0,
+      "skipped": 4,
+      "executedAt": "2026-07-18T12:30:56Z",
+      "note": "The four skips are outside the required disposable PostgreSQL workflow; that workflow ran its revenue test with zero skips."
+    }
+  },
+  "reconciliation": {
+    "environment": "disposable_postgresql",
+    "status": "passed",
+    "ledgerEventCount": 14,
+    "projectedOutcomeCount": 1,
+    "mismatchedRecords": 0,
+    "unexplainedEvents": 0,
+    "ledgerProjectionExact": true,
+    "ledgerSourceExact": true,
+    "sourceArtifact": "artifacts/revenue/phase15-disposable-postgres-rehearsal.json"
+  },
+  "remainingBlocker": "Revenue Phase 1.5 production closure remains blocked because the separately authorized production backup/restore rehearsal and one controlled Anchor canary with exact reconciliation have not occurred. Phase 1.6 remains a separate approval and is not authorized by this artifact.",
+  "prohibitedActionsPerformed": []
+}
