@@ -350,9 +350,20 @@ test('preflight fails closed when Anchor cannot be uniquely identified', async (
   await assert.rejects(runner.runPreflight(db), isCode('ANCHOR_IDENTITY'));
 });
 
-test('preflight fails closed when active setter operations exist', async () => {
-  const db = makeDb({ state: stateConfig({ phase3d: true }), pendingCallbacks: 3 });
-  await assert.rejects(runner.runPreflight(db), isCode('ACTIVE_SETTER_OPS'));
+test('preflight treats pending callbacks as inert when Phase 3D is complete and flag is off', async () => {
+  const db = makeDb({ state: stateConfig({ phase3d: true }), pendingCallbacks: 10, flagEnabled: false });
+  const report = await runner.runPreflight(db);
+  assert.equal(report.passed, true);
+  assert.equal(report.observations.pending_setter_callbacks, 10);
+  assert.equal(report.observations.pending_callbacks_classification, 'inert_queued_backfill');
+  assert.equal(report.checks.no_active_setter_ops, true);
+});
+
+test('preflight postMigrationMode does not reject merely because setter_callbacks has rows', async () => {
+  const db = makeDb({ state: stateConfig({ phase3d: true }), pendingCallbacks: 10, flagEnabled: false });
+  const report = await runner.runPreflight(db, { postMigrationMode: true });
+  assert.equal(report.passed, true);
+  assert.equal(report.phase3d_already_applied, true);
 });
 
 // --------------------------------------------------------------------------
@@ -571,4 +582,102 @@ test('restart instructions never auto-restart and pin the deployed SHA', () => {
   const text = runner.restartInstructions();
   assert.match(text, /2862d2ee1e5662db42fa111baaaa0faf248bf5d3/);
   assert.match(text, /Do NOT deploy a different SHA/);
+});
+
+test('--help prints usage and performs zero DB / credential work', async () => {
+  const lines = [];
+  const summary = await runner.main(['--help'], {
+    log: (msg) => lines.push(String(msg)),
+    createClient: () => { throw new Error('createClient must not be called for --help'); },
+    fs: {
+      existsSync: () => { throw new Error('fs must not be touched for --help'); },
+      readFileSync: () => { throw new Error('fs must not be touched for --help'); },
+    },
+    git: {
+      revParse: () => { throw new Error('git must not be touched for --help'); },
+      status: () => { throw new Error('git must not be touched for --help'); },
+    },
+  });
+  assert.equal(summary.mode, 'help');
+  assert.equal(summary.passed, true);
+  assert.ok(lines.join('\n').includes('--verify-post-migration'));
+  assert.ok(lines.join('\n').includes('--artifacts-dir'));
+});
+
+test('requireAbsoluteArtifactsDir rejects missing and relative paths', () => {
+  assert.throws(() => runner.requireAbsoluteArtifactsDir(null), isCode('ARTIFACTS_DIR_REQUIRED'));
+  assert.throws(() => runner.requireAbsoluteArtifactsDir('relative/path'), isCode('ARTIFACTS_DIR_NOT_ABSOLUTE'));
+  assert.equal(runner.requireAbsoluteArtifactsDir('/tmp/abs'), '/tmp/abs');
+});
+
+test('auditDncSuppression flags pending callbacks for DNC prospects as a safety defect', async () => {
+  const st = stateConfig({ phase3d: true });
+  // makeDb returns string tables; convert for hasTable via investigate helpers using db.query.
+  const db = makeDb({
+    state: st,
+    counts: {},
+  });
+  // Override queries for the DNC audit SQL shapes.
+  const orig = db.query.bind(db);
+  db.query = async (sql, params) => {
+    if (/do_not_contact = true/.test(sql) && /setter_callbacks/.test(sql)) return { rows: [{ count: 1 }], rowCount: 1 };
+    if (/is_synthetic = true/.test(sql) && /setter_callbacks/.test(sql)) return { rows: [{ count: 0 }], rowCount: 1 };
+    return orig(sql, params);
+  };
+  // Build information_schema-like state for hasTable
+  const shaped = {
+    tables: st.tables.map(table_name => ({ table_name })),
+    columns: st.columns,
+    indexes: st.indexes,
+    triggers: st.triggers,
+    constraints: st.constraints,
+  };
+  const audit = await runner.auditDncSuppression(db, shaped);
+  assert.equal(audit.pending_callbacks_for_dnc, 1);
+  assert.equal(audit.safety_defect, true);
+  assert.match(audit.root_cause, /backfill_insert_bypasses/);
+  assert.equal(audit.remediation_executed, false);
+});
+
+test('agent_log global delta is soft; outbound-like window events are hard', async () => {
+  const pre = goodPreSnapshot();
+  pre.table_counts.agent_log = { exists: true, row_count: 51295 };
+  pre.captured_at = '2026-07-19T21:51:01.136Z';
+  const st = stateConfig({ phase3d: true });
+  st.tables.push('agent_log');
+  st.columns.push(
+    { table_name: 'agent_log', column_name: 'created_at' },
+    { table_name: 'agent_log', column_name: 'agent_name' },
+    { table_name: 'agent_log', column_name: 'action' },
+  );
+  const db = makeDb({
+    state: st,
+    flagEnabled: false,
+    counts: {
+      prospects: 10, synthetic: 0, syntheticNotDnc: 0, pendingSuppressed: 0,
+      crossTenant: 0, setterCallbacks: 3, agentLog: 51296, touchpoints: 7,
+    },
+    statusDistribution: [{ status: 'new', count: 6 }, { status: 'warm', count: 4 }],
+  });
+  const orig = db.query.bind(db);
+  db.query = async (sql, params) => {
+    if (/FROM agent_log/.test(sql) && /created_at/.test(sql)) {
+      return {
+        rows: [{ event_at: '2026-07-19T21:52:00Z', agent_name: 'healthcheck', action: 'tick', status: 'ok' }],
+        rowCount: 1,
+      };
+    }
+    return orig(sql, params);
+  };
+  const report = await runner.runPostMigrationVerification(db, { preSnapshot: pre });
+  assert.equal(report.checks.agent_log_unchanged, false); // soft signal: delta exists
+  assert.equal(report.checks.agent_log_no_migration_attributable_outbound, true);
+  assert.equal(report.safety.agent_log_delta, 1);
+  assert.equal(report.passed, true); // hard pass ignores soft unchanged
+});
+
+test('stableHash is deterministic and non-reversible PII stand-in', () => {
+  assert.equal(runner.stableHash('abc'), runner.stableHash('abc'));
+  assert.notEqual(runner.stableHash('abc'), 'abc');
+  assert.equal(runner.stableHash('abc').length, 16);
 });

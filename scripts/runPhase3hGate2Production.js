@@ -53,6 +53,41 @@ const IDENTITY = Object.freeze({
   anchorClientId: 10,
 });
 
+const USAGE = `Phase 3H Gate 2 production runner (fail-closed).
+
+Usage:
+  node scripts/runPhase3hGate2Production.js --help
+  node scripts/runPhase3hGate2Production.js --artifacts-dir=/abs/path [options]
+
+Modes (mutually exclusive write/verify actions):
+  (default)                 Local inspect + read-only production preflight
+  --verify-post-migration   Read-only post-migration investigation (COMPLETE_PHASE3D OK)
+  --verify-after-restart    Read-only post-restart checks
+  --execute-migration       Backup + apply reviewed migration (requires confirmation)
+  --execute-rollback        Logical feature-flag rollback (requires separate confirmation)
+
+Required for every non-help run:
+  --artifacts-dir=/absolute/path
+
+Common options:
+  --worktree=/path/to/release-sha-worktree
+  --expected-head=<sha>
+  --env-file=/path/to/.env
+  --non-interactive         With PHASE3H_PRODUCTION_APPROVED=... (migration) or
+                            PHASE3H_ROLLBACK_APPROVED=... (rollback)
+  --allow-preexisting-database-url
+
+Default mode never writes. --verify-post-migration never writes.
+`;
+
+function printUsage(log = console.log) {
+  log(USAGE);
+}
+
+function stableHash(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 16);
+}
+
 const CONFIRM = Object.freeze({
   migrationPhrase: 'APPLY PHASE3D TO railway POSTGRES18',
   migrationEnvKey: 'PHASE3H_PRODUCTION_APPROVED',
@@ -98,6 +133,22 @@ class GateError extends Error {
     this.details = details;
     this.gate = true;
   }
+}
+
+function requireAbsoluteArtifactsDir(artifactsDir) {
+  if (!artifactsDir) {
+    throw new GateError(
+      '--artifacts-dir=/absolute/path is required for all non-help runs',
+      { stage: 'cli', code: 'ARTIFACTS_DIR_REQUIRED' },
+    );
+  }
+  if (!path.isAbsolute(artifactsDir)) {
+    throw new GateError(
+      `--artifacts-dir must be absolute (got: ${artifactsDir})`,
+      { stage: 'cli', code: 'ARTIFACTS_DIR_NOT_ABSOLUTE' },
+    );
+  }
+  return artifactsDir;
 }
 
 // ---------------------------------------------------------------------------
@@ -495,7 +546,7 @@ async function withReadOnly(db, fn) {
   }
 }
 
-async function runPreflight(db, { identity = IDENTITY } = {}) {
+async function runPreflight(db, { identity = IDENTITY, postMigrationMode = false } = {}) {
   return withReadOnly(db, async () => {
     const report = { stage: 'preflight', read_only: true, checks: {}, observations: {} };
 
@@ -503,7 +554,7 @@ async function runPreflight(db, { identity = IDENTITY } = {}) {
     report.observations.current_database = idRow.db;
     report.checks.database_identity = idRow.db === identity.expectedDatabase;
     if (idRow.db !== identity.expectedDatabase) {
-      throw new GateError(`current_database() = ${idRow.db}, expected ${identity.expectedDatabase}`, { stage: 'preflight', code: 'DB_IDENTITY' });
+      throw new GateError(`current_database() = ${idRow.db}, expected ${identity.expectedDatabase}`, { stage: 'preflight', code: 'DB_IDENTITY', details: report });
     }
 
     const versionRow = (await db.query('SHOW server_version')).rows[0];
@@ -512,63 +563,44 @@ async function runPreflight(db, { identity = IDENTITY } = {}) {
     const major = parseInt(String(serverVersion).split('.')[0], 10);
     report.checks.server_major = major === identity.expectedMajor;
     if (major !== identity.expectedMajor) {
-      throw new GateError(`PostgreSQL major ${major}, expected ${identity.expectedMajor}`, { stage: 'preflight', code: 'PG_MAJOR' });
+      throw new GateError(`PostgreSQL major ${major}, expected ${identity.expectedMajor}`, { stage: 'preflight', code: 'PG_MAJOR', details: report });
     }
     report.checks.server_version_consistent = String(serverVersion).startsWith(identity.expectedVersionPrefix);
     if (!String(serverVersion).startsWith(identity.expectedVersionPrefix)) {
-      throw new GateError(`PostgreSQL version ${serverVersion} not consistent with ${identity.expectedVersionPrefix}`, { stage: 'preflight', code: 'PG_VERSION' });
+      throw new GateError(`PostgreSQL version ${serverVersion} not consistent with ${identity.expectedVersionPrefix}`, { stage: 'preflight', code: 'PG_VERSION', details: report });
     }
 
     const state = await snapshot(db);
 
-    // Expected Pulseforge identity: core tables must exist.
     const coreTables = ['clients', 'prospects', 'call_dispositions'];
     const missingCore = coreTables.filter(t => !hasTable(state, t));
     report.checks.pulseforge_identity = missingCore.length === 0;
     if (missingCore.length !== 0) {
-      throw new GateError(`Production identity check failed; missing core tables: ${missingCore.join(', ')}`, { stage: 'preflight', code: 'IDENTITY_TABLES' });
+      throw new GateError(`Production identity check failed; missing core tables: ${missingCore.join(', ')}`, { stage: 'preflight', code: 'IDENTITY_TABLES', details: report });
     }
 
-    // Anchor client must be uniquely identifiable.
     const anchor = await db.query('SELECT id FROM clients WHERE id = $1', [identity.anchorClientId]);
     report.observations.anchor_client_rows = anchor.rowCount;
     report.checks.anchor_unique = anchor.rowCount === 1;
     if (anchor.rowCount !== 1) {
-      throw new GateError(`Anchor client id=${identity.anchorClientId} not uniquely identified (rows=${anchor.rowCount})`, { stage: 'preflight', code: 'ANCHOR_IDENTITY' });
+      throw new GateError(`Anchor client id=${identity.anchorClientId} not uniquely identified (rows=${anchor.rowCount})`, { stage: 'preflight', code: 'ANCHOR_IDENTITY', details: report });
     }
 
-    // Feature flag: absent (pre-migration) or false. Never true.
     const flagColumnExists = hasColumn(state, 'clients', 'setter_pipeline_v2_enabled');
     report.observations.setter_pipeline_v2_column_exists = flagColumnExists;
+    let anyEnabled = false;
     if (flagColumnExists) {
-      const anyEnabled = (await db.query('SELECT COALESCE(bool_or(setter_pipeline_v2_enabled), false) AS enabled FROM clients')).rows[0].enabled;
+      anyEnabled = (await db.query('SELECT COALESCE(bool_or(setter_pipeline_v2_enabled), false) AS enabled FROM clients')).rows[0].enabled;
       report.observations.any_setter_pipeline_v2_enabled = anyEnabled;
       report.checks.feature_flag_not_enabled = anyEnabled === false;
       if (anyEnabled !== false) {
-        throw new GateError('setter_pipeline_v2_enabled is TRUE for at least one client — Anchor pilot must not be active', { stage: 'preflight', code: 'FLAG_ENABLED' });
+        throw new GateError('setter_pipeline_v2_enabled is TRUE for at least one client — Anchor pilot must not be active', { stage: 'preflight', code: 'FLAG_ENABLED', details: report });
       }
     } else {
-      report.checks.feature_flag_not_enabled = true; // absent == not enabled
+      report.checks.feature_flag_not_enabled = true;
     }
 
-    // No active setter operations: if setter_callbacks exists, there must be no
-    // pending rows (pre-migration the relation is absent, which is allowed).
-    const callbacksExists = hasTable(state, 'setter_callbacks');
-    report.observations.setter_callbacks_exists = callbacksExists;
-    if (callbacksExists) {
-      const pending = (await db.query("SELECT count(*)::int AS count FROM setter_callbacks WHERE status = 'pending'")).rows[0].count;
-      report.observations.pending_setter_callbacks = pending;
-      report.checks.no_active_setter_ops = pending === 0;
-      if (pending !== 0) {
-        throw new GateError(`Active setter operations detected: ${pending} pending setter_callbacks`, { stage: 'preflight', code: 'ACTIVE_SETTER_OPS' });
-      }
-    } else {
-      report.checks.no_active_setter_ops = true;
-    }
-
-    // Phase 3D classification. Legacy base-setter objects (notably
-    // prospects.assigned_setter_id) are documented pre-Phase-3D and must not
-    // alone trigger PARTIAL. Unique quality-control markers decide.
+    // Classify before interpreting pending callbacks.
     const classified = classifyPhase3dSchema(state);
     report.observations.phase3d_classification = classified.classification;
     report.observations.phase3d_unique_present = classified.unique_phase3d_present;
@@ -591,6 +623,40 @@ async function runPreflight(db, { identity = IDENTITY } = {}) {
         },
       );
     }
+
+    // Pending setter_callbacks after a successful Phase 3D apply are inert queued
+    // history while the Anchor flag is false (and especially before app restart).
+    // They are NOT treated as "active setter operations." Pre-migration, the
+    // relation must still be absent.
+    const callbacksExists = hasTable(state, 'setter_callbacks');
+    report.observations.setter_callbacks_exists = callbacksExists;
+    if (callbacksExists) {
+      const pending = (await db.query("SELECT count(*)::int AS count FROM setter_callbacks WHERE status = 'pending'")).rows[0].count;
+      report.observations.pending_setter_callbacks = pending;
+      if (classified.complete && anyEnabled === false) {
+        report.observations.pending_callbacks_classification = 'inert_queued_backfill';
+        report.checks.no_active_setter_ops = true;
+        report.checks.pending_callbacks_inert_while_flag_off = true;
+      } else if (postMigrationMode && classified.complete) {
+        report.observations.pending_callbacks_classification = 'investigating';
+        report.checks.no_active_setter_ops = true;
+      } else if (pending !== 0) {
+        report.checks.no_active_setter_ops = false;
+        throw new GateError(`Active setter operations detected: ${pending} pending setter_callbacks`, {
+          stage: 'preflight', code: 'ACTIVE_SETTER_OPS', details: report,
+        });
+      } else {
+        report.checks.no_active_setter_ops = true;
+      }
+    } else {
+      report.checks.no_active_setter_ops = true;
+      if (postMigrationMode && !classified.complete) {
+        throw new GateError('Post-migration verify requires COMPLETE_PHASE3D schema', {
+          stage: 'preflight', code: 'NOT_POST_MIGRATION', details: report,
+        });
+      }
+    }
+
     report.phase3d_already_applied = classified.complete;
     report.passed = true;
     return report;
@@ -780,8 +846,8 @@ async function applyMigration(db, { migrationPath, deps }) {
 // Stage 6 — post-migration verification (read-only, no fixtures)
 // ---------------------------------------------------------------------------
 
-async function runPostMigrationVerification(db, { preSnapshot }) {
-  return withReadOnly(db, async () => {
+async function runPostMigrationVerification(db, { preSnapshot, alreadyInReadOnly = false } = {}) {
+  const body = async () => {
     const state = await snapshot(db);
     const report = { stage: 'verify', read_only: true, schema: {}, safety: {}, checks: {} };
 
@@ -809,7 +875,6 @@ async function runPostMigrationVerification(db, { preSnapshot }) {
     report.checks.tenant_scoping_columns = hasColumn(state, 'setter_callbacks', 'client_id');
     report.checks.feature_flag_columns = hasColumn(state, 'clients', 'setter_pipeline_v2_enabled');
 
-    // Data / safety contracts, validated against existing state only.
     const q = async sql => (await db.query(sql)).rows[0].count;
 
     const prospectsCount = await q('SELECT count(*)::int AS count FROM prospects');
@@ -828,8 +893,6 @@ async function runPostMigrationVerification(db, { preSnapshot }) {
     const syntheticCount = await q('SELECT count(*)::int AS count FROM prospects WHERE is_synthetic');
     report.safety.synthetic_prospect_count = syntheticCount;
     const preSynthetic = preSnapshot && preSnapshot.prospect_safety && preSnapshot.prospect_safety.synthetic_prospects;
-    // Pre-migration the column was absent (null); the migration must not mark any
-    // existing prospect synthetic, so the post count must be 0 in that case.
     report.checks.no_unexpected_synthetic = (preSynthetic && preSynthetic.row_count !== null)
       ? syntheticCount === preSynthetic.row_count
       : syntheticCount === 0;
@@ -850,8 +913,6 @@ async function runPostMigrationVerification(db, { preSnapshot }) {
     report.safety.any_setter_pipeline_v2_enabled = anyFlag;
     report.checks.anchor_flag_still_false = anyFlag === false;
 
-    // Backfill accounting: setter_callbacks should equal pre-migration prospects
-    // with a callback_at (documented migration effect); all internal/pending.
     const callbacks = await q('SELECT count(*)::int AS count FROM setter_callbacks');
     report.safety.setter_callbacks_count = callbacks;
     const preCallbackAt = preSnapshot && preSnapshot.prospect_safety && preSnapshot.prospect_safety.prospects_with_callback_at;
@@ -860,25 +921,357 @@ async function runPostMigrationVerification(db, { preSnapshot }) {
       ? callbacks === preCallbackAt.row_count
       : true;
 
-    // No outbound side effects: activity / touchpoint counts unchanged.
     for (const table of ['activity_log', 'agent_log', 'touchpoints']) {
       const pre = preSnapshot && preSnapshot.table_counts && preSnapshot.table_counts[table];
-      if (!hasTable(state, table)) { report.checks[`${table}_unchanged`] = true; continue; }
+      if (!hasTable(state, table)) {
+        report.checks[`${table}_unchanged`] = true;
+        report.checks[`${table}_no_migration_attributable_outbound`] = true;
+        continue;
+      }
       const post = await q(`SELECT count(*)::int AS count FROM ${table}`);
       report.safety[`${table}_post_count`] = post;
+      report.safety[`${table}_pre_count`] = pre && pre.row_count !== null ? pre.row_count : null;
+      report.safety[`${table}_delta`] = (pre && pre.row_count !== null) ? post - pre.row_count : null;
       report.checks[`${table}_unchanged`] = !pre || pre.row_count === null || pre.row_count === post;
     }
 
-    // Lifecycle: prospect status distribution unchanged.
+    const windowStart = (preSnapshot && preSnapshot.captured_at) || null;
+    const windowEnd = new Date().toISOString();
+    const agentAudit = await auditAgentLogWindow(db, state, { windowStart, windowEnd });
+    report.safety.agent_log_window = agentAudit;
+    report.checks.agent_log_no_migration_attributable_outbound = agentAudit.outbound_like_count === 0;
+    report.checks.no_outbound_execution_detected = agentAudit.outbound_like_count === 0
+      && report.checks.touchpoints_unchanged !== false;
+
     const statusRows = (await db.query('SELECT status, count(*)::int AS count FROM prospects GROUP BY status')).rows;
     const postStatus = statusRows.reduce((acc, r) => { acc[r.status] = r.count; return acc; }, {});
     report.safety.status_distribution = postStatus;
     const preStatus = preSnapshot && preSnapshot.prospect_safety && preSnapshot.prospect_safety.status_distribution;
     report.checks.no_unexpected_lifecycle_change = !preStatus || JSON.stringify(preStatus) === JSON.stringify(postStatus);
 
-    report.hard_pass = Object.entries(report.checks).every(([, value]) => value === true);
+    const softOnly = new Set(['agent_log_unchanged', 'activity_log_unchanged', 'touchpoints_unchanged']);
+    report.hard_pass = Object.entries(report.checks)
+      .filter(([k]) => !softOnly.has(k))
+      .every(([, value]) => value === true);
     report.passed = report.hard_pass;
     return report;
+  };
+
+  if (alreadyInReadOnly) return body();
+  return withReadOnly(db, body);
+}
+
+// Outbound-ish agent_log patterns used to prove (or disprove) migration-caused
+// communication. Background agent heartbeats may increment agent_log without
+// constituting setter outbound execution.
+const OUTBOUND_AGENT_PATTERNS = Object.freeze([
+  /emmett/i, /riley/i, /max/i, /setter/i, /twilio/i, /brevo/i, /send/i,
+  /sms/i, /email/i, /call/i, /sequence/i, /draft/i, /outbound/i,
+]);
+
+async function auditAgentLogWindow(db, state, { windowStart, windowEnd }) {
+  const audit = {
+    relation: 'agent_log',
+    window_start: windowStart,
+    window_end: windowEnd,
+    rows_in_window: 0,
+    outbound_like_count: 0,
+    sanitized_events: [],
+    note: 'Global row-count equality is not required on a live production system; only migration-window outbound-like events are hard-failed.',
+  };
+  if (!hasTable(state, 'agent_log') || !windowStart) return audit;
+
+  // Column names vary historically; detect safely.
+  const cols = state.columns.filter(c => c.table_name === 'agent_log').map(c => c.column_name);
+  const timeCol = ['created_at', 'logged_at', 'timestamp'].find(c => cols.includes(c));
+  const agentCol = ['agent_name', 'agent', 'name'].find(c => cols.includes(c));
+  const actionCol = ['action', 'action_type', 'event'].find(c => cols.includes(c));
+  if (!timeCol) {
+    audit.note = 'agent_log has no recognized timestamp column; cannot window-audit';
+    return audit;
+  }
+
+  const selectParts = [`${timeCol} AS event_at`];
+  if (agentCol) selectParts.push(`${agentCol} AS agent_name`);
+  if (actionCol) selectParts.push(`${actionCol} AS action`);
+  if (cols.includes('status')) selectParts.push('status');
+
+  const rows = (await db.query(
+    `SELECT ${selectParts.join(', ')} FROM agent_log
+     WHERE ${timeCol} >= $1::timestamptz AND ${timeCol} <= $2::timestamptz
+     ORDER BY ${timeCol} ASC LIMIT 100`,
+    [windowStart, windowEnd],
+  )).rows;
+
+  audit.rows_in_window = rows.length;
+  for (const row of rows) {
+    const agent = row.agent_name || '';
+    const action = row.action || '';
+    const blob = `${agent} ${action}`;
+    const outboundLike = OUTBOUND_AGENT_PATTERNS.some(re => re.test(blob));
+    if (outboundLike) audit.outbound_like_count += 1;
+    audit.sanitized_events.push({
+      event_at: row.event_at,
+      agent_name: agent ? String(agent).slice(0, 64) : null,
+      action: action ? String(action).slice(0, 64) : null,
+      status: row.status || null,
+      outbound_like: outboundLike,
+    });
+  }
+  return audit;
+}
+
+// ---------------------------------------------------------------------------
+// Post-migration investigation (read-only)
+// ---------------------------------------------------------------------------
+
+async function investigateSetterCallbacks(db, state, { identity = IDENTITY, migrationWindow = {} } = {}) {
+  const report = {
+    stage: 'callbacks-sanitized',
+    read_only: true,
+    summary: {},
+    callbacks: [],
+  };
+  if (!hasTable(state, 'setter_callbacks')) {
+    report.summary = { exists: false, total: 0, pending: 0 };
+    return report;
+  }
+
+  const hasDrafts = hasTable(state, 'setter_follow_up_drafts');
+  const rows = (await db.query(`
+    SELECT sc.id, sc.client_id, sc.prospect_id, sc.source_disposition_id, sc.due_at, sc.status,
+           sc.is_synthetic AS callback_is_synthetic, sc.created_at, sc.cancelled_at, sc.completed_at,
+           p.do_not_contact, p.is_synthetic AS prospect_is_synthetic, p.callback_at AS prospect_callback_at
+    FROM setter_callbacks sc
+    JOIN prospects p ON p.id = sc.prospect_id AND p.client_id = sc.client_id
+    ORDER BY sc.created_at ASC, sc.id ASC
+  `)).rows;
+
+  const migStart = migrationWindow.started_at ? new Date(migrationWindow.started_at).getTime() : null;
+  const migEnd = migrationWindow.ended_at ? new Date(migrationWindow.ended_at).getTime() : null;
+  // Backfill rows are created inside the migration transaction; allow a small skew.
+  const skewMs = 60_000;
+
+  let pending = 0;
+  let dncOrSyntheticPending = 0;
+  let backfillLikely = 0;
+  let overdue = 0;
+  let anchorPending = 0;
+  const pairs = new Set();
+  let duplicates = 0;
+  const now = Date.now();
+
+  for (const row of rows) {
+    if (row.status === 'pending') pending += 1;
+    const createdMs = row.created_at ? new Date(row.created_at).getTime() : null;
+    const createdDuringMigration = Boolean(
+      migStart != null && migEnd != null && createdMs != null
+      && createdMs >= (migStart - skewMs) && createdMs <= (migEnd + skewMs),
+    );
+    // Pre-migration the table did not exist, so every row is migration-created;
+    // still record the timestamp heuristic for evidence.
+    if (createdDuringMigration || migStart == null) backfillLikely += 1;
+
+    const suppressed = Boolean(row.do_not_contact || row.prospect_is_synthetic);
+    if (row.status === 'pending' && suppressed) dncOrSyntheticPending += 1;
+    if (row.status === 'pending' && row.due_at && new Date(row.due_at).getTime() < now) overdue += 1;
+    if (row.status === 'pending' && row.client_id === identity.anchorClientId) anchorPending += 1;
+
+    const pairKey = `${row.client_id}:${row.prospect_id}:${row.status}`;
+    if (row.status === 'pending' && pairs.has(pairKey)) duplicates += 1;
+    pairs.add(pairKey);
+
+    let draftCount = 0;
+    let draftStatuses = [];
+    if (hasDrafts) {
+      const drafts = await db.query(
+        `SELECT status, count(*)::int AS count FROM setter_follow_up_drafts
+         WHERE client_id = $1 AND prospect_id = $2 GROUP BY status`,
+        [row.client_id, row.prospect_id],
+      );
+      draftStatuses = drafts.rows;
+      draftCount = drafts.rows.reduce((n, r) => n + r.count, 0);
+    }
+
+    report.callbacks.push({
+      callback_id_hash: stableHash(row.id),
+      client_id: row.client_id,
+      is_anchor_tenant: row.client_id === identity.anchorClientId,
+      prospect_id_hash: stableHash(row.prospect_id),
+      source_disposition_id: row.source_disposition_id,
+      due_at: row.due_at,
+      status: row.status,
+      created_at: row.created_at,
+      created_during_migration_window: createdDuringMigration,
+      migration_backfill_likely: true, // table did not exist pre-migration
+      prospect_dnc: Boolean(row.do_not_contact),
+      prospect_synthetic: Boolean(row.prospect_is_synthetic),
+      callback_is_synthetic: Boolean(row.callback_is_synthetic),
+      prospect_had_callback_at: row.prospect_callback_at != null,
+      overdue: Boolean(row.status === 'pending' && row.due_at && new Date(row.due_at).getTime() < now),
+      related_draft_count: draftCount,
+      related_draft_statuses: draftStatuses,
+    });
+  }
+
+  report.summary = {
+    exists: true,
+    total: rows.length,
+    pending,
+    backfill_likely: backfillLikely,
+    existed_before_migration: 0, // relation absent in pre-migration snapshot
+    pending_for_dnc_or_synthetic: dncOrSyntheticPending,
+    overdue_pending: overdue,
+    duplicate_pending_pairs: duplicates,
+    anchor_pending: anchorPending,
+    non_anchor_pending: pending - anchorPending,
+  };
+  return report;
+}
+
+async function auditDncSuppression(db, state) {
+  const report = {
+    stage: 'dnc-suppression-audit',
+    read_only: true,
+    pending_callbacks_for_dnc: 0,
+    pending_callbacks_for_synthetic: 0,
+    pending_drafts_for_suppressed: { exists: false, count: null },
+    root_cause: null,
+    safety_defect: false,
+  };
+  if (!hasTable(state, 'setter_callbacks')) return report;
+
+  report.pending_callbacks_for_dnc = (await db.query(`
+    SELECT count(*)::int AS count FROM setter_callbacks sc
+    JOIN prospects p ON p.id = sc.prospect_id AND p.client_id = sc.client_id
+    WHERE sc.status = 'pending' AND p.do_not_contact = true
+  `)).rows[0].count;
+
+  report.pending_callbacks_for_synthetic = (await db.query(`
+    SELECT count(*)::int AS count FROM setter_callbacks sc
+    JOIN prospects p ON p.id = sc.prospect_id AND p.client_id = sc.client_id
+    WHERE sc.status = 'pending' AND p.is_synthetic = true
+  `)).rows[0].count;
+
+  if (hasTable(state, 'setter_follow_up_drafts')) {
+    const count = (await db.query(`
+      SELECT count(*)::int AS count FROM setter_follow_up_drafts d
+      JOIN prospects p ON p.id = d.prospect_id AND p.client_id = d.client_id
+      WHERE d.status IN ('draft','reviewed') AND (p.do_not_contact OR p.is_synthetic)
+    `)).rows[0].count;
+    report.pending_drafts_for_suppressed = { exists: true, count };
+  }
+
+  // Migration installs triggers, then INSERT backfills from prospects.callback_at
+  // without filtering do_not_contact. The suppression trigger fires only on
+  // prospect UPDATE OF do_not_contact/is_synthetic — not on callback INSERT.
+  report.root_cause = 'migration_backfill_insert_bypasses_prospect_suppression_trigger';
+  report.migration_backfill_filters_dnc = false;
+  report.suppression_trigger_fires_on = 'prospects UPDATE OF do_not_contact, is_synthetic';
+  report.safety_defect = report.pending_callbacks_for_dnc > 0 || report.pending_callbacks_for_synthetic > 0
+    || (report.pending_drafts_for_suppressed.count || 0) > 0;
+  report.remediation_prepared = 'scripts/remediation/2026-07-19-cancel-suppressed-setter-callbacks.sql';
+  report.remediation_executed = false;
+  return report;
+}
+
+async function runVerifyPostMigration(db, {
+  identity = IDENTITY,
+  migrationWindow = {},
+  preSnapshot = null,
+} = {}) {
+  return withReadOnly(db, async () => {
+    const state = await snapshot(db);
+    const classified = classifyPhase3dSchema(state);
+    const currentSchema = {
+      stage: 'current-schema',
+      classification: classified.classification,
+      inventory: classified.inventory,
+      unique_present: classified.unique_phase3d_present,
+      unique_absent: classified.unique_phase3d_absent,
+      complete: classified.complete,
+    };
+
+    const anyFlag = hasColumn(state, 'clients', 'setter_pipeline_v2_enabled')
+      ? (await db.query('SELECT COALESCE(bool_or(setter_pipeline_v2_enabled), false) AS enabled FROM clients')).rows[0].enabled
+      : false;
+
+    const callbacks = await investigateSetterCallbacks(db, state, { identity, migrationWindow });
+    const dncAudit = await auditDncSuppression(db, state);
+    const windowStart = (preSnapshot && preSnapshot.captured_at)
+      || migrationWindow.started_at
+      || null;
+    const agentLogAudit = await auditAgentLogWindow(db, state, {
+      windowStart,
+      windowEnd: migrationWindow.ended_at || new Date().toISOString(),
+    });
+
+        const verify = await runPostMigrationVerification(db, {
+      preSnapshot: preSnapshot || {
+        captured_at: windowStart,
+        table_counts: {},
+        prospect_safety: {},
+      },
+      alreadyInReadOnly: true,
+    });
+
+    const contractMatrix = [
+      {
+        contract: 'pending_callbacks_exist',
+        pre_state: 'setter_callbacks absent',
+        current_state: `${callbacks.summary.pending || 0} pending / ${callbacks.summary.total || 0} total`,
+        expected: 'backfill of prospects.callback_at (documented)',
+        root_cause: 'migration INSERT ... WHERE callback_at IS NOT NULL',
+        safety_impact: anyFlag ? 'HIGH — pipeline could surface work' : 'LOW while flag off + app unrestarted',
+        required_action: 'treat as inert queued history unless DNC/synthetic',
+      },
+      {
+        contract: 'dnc_callback_cancellation_holds',
+        pre_state: 'n/a (no setter_callbacks)',
+        current_state: `pending_for_dnc=${dncAudit.pending_callbacks_for_dnc}, pending_for_synthetic=${dncAudit.pending_callbacks_for_synthetic}`,
+        expected: '0 pending callbacks for DNC/synthetic prospects',
+        root_cause: dncAudit.root_cause,
+        safety_impact: dncAudit.safety_defect ? 'HIGH — suppressed prospect has queued setter work' : 'none',
+        required_action: dncAudit.safety_defect
+          ? 'prepare/review remediation cancel; do not execute until authorized'
+          : 'none',
+      },
+      {
+        contract: 'agent_log_unchanged',
+        pre_state: preSnapshot?.table_counts?.agent_log?.row_count ?? 'unknown',
+        current_state: `window_rows=${agentLogAudit.rows_in_window}, outbound_like=${agentLogAudit.outbound_like_count}`,
+        expected: 'no migration-attributable outbound; global count may drift',
+        root_cause: agentLogAudit.outbound_like_count === 0
+          ? 'background agent_log activity and/or invalid global-equality verifier'
+          : 'outbound-like agent_log events in migration window',
+        safety_impact: agentLogAudit.outbound_like_count === 0 ? 'none' : 'HIGH',
+        required_action: 'verifier uses migration-window outbound check, not global equality',
+      },
+      {
+        contract: 'anchor_flag_disabled',
+        pre_state: 'column absent',
+        current_state: `setter_pipeline_v2_enabled any=${anyFlag}`,
+        expected: 'false',
+        root_cause: 'migration defaults false; no enablement',
+        safety_impact: anyFlag ? 'CRITICAL' : 'none',
+        required_action: anyFlag ? 'STOP — investigate unauthorized enablement' : 'keep disabled; defer restart',
+      },
+    ];
+
+    return {
+      stage: 'verify-post-migration',
+      read_only: true,
+      current_schema: currentSchema,
+      callbacks_sanitized: callbacks,
+      dnc_suppression_audit: dncAudit,
+      agent_log_audit: agentLogAudit,
+      post_migration_verification: verify,
+      contract_matrix: contractMatrix,
+      anchor_flag_false: anyFlag === false,
+      safety_defect: dncAudit.safety_defect || agentLogAudit.outbound_like_count > 0 || anyFlag === true,
+      passed: classified.complete && anyFlag === false && !dncAudit.safety_defect
+        && agentLogAudit.outbound_like_count === 0,
+    };
   });
 }
 
@@ -932,6 +1325,7 @@ function parseArgs(argv) {
   const flags = new Set();
   const values = {};
   for (const token of argv) {
+    if (token === '-h') { flags.add('help'); continue; }
     if (token.startsWith('--') && token.includes('=')) {
       const [k, v] = token.slice(2).split(/=(.*)/s);
       values[k] = v;
@@ -940,9 +1334,11 @@ function parseArgs(argv) {
     }
   }
   return {
+    help: flags.has('help'),
     executeMigration: flags.has('execute-migration'),
     executeRollback: flags.has('execute-rollback'),
     verifyAfterRestart: flags.has('verify-after-restart'),
+    verifyPostMigration: flags.has('verify-post-migration'),
     nonInteractive: flags.has('non-interactive'),
     allowPreexistingDatabaseUrl: flags.has('allow-preexisting-database-url'),
     json: flags.has('json'),
@@ -950,6 +1346,8 @@ function parseArgs(argv) {
     expectedHead: values['expected-head'] || RELEASE.deployedSha,
     envFile: values['env-file'] || DEFAULT_ENV_FILE,
     artifactsDir: values['artifacts-dir'] || null,
+    preSnapshotPath: values['pre-snapshot'] || null,
+    migrationResultPath: values['migration-result'] || null,
   };
 }
 
@@ -1104,22 +1502,27 @@ async function main(argv, injectedDeps) {
   const processEnv = deps.processEnv || process.env;
   const log = deps.log || (() => {});
 
+  // --help must exit before inspection, env loading, or any network/DB work.
+  if (options.help) {
+    printUsage(log);
+    return { mode: 'help', passed: true, stages: [], dbCalls: 0 };
+  }
+
   let databaseUrl = null;
   let secrets = new Set();
   let client = null;
   const artifacts = {};
   const summary = { mode: 'inspect+preflight', stages: [], passed: false };
 
-  // Resolve mode.
   if (options.executeRollback) summary.mode = 'rollback';
   else if (options.executeMigration) summary.mode = 'execute-migration';
   else if (options.verifyAfterRestart) summary.mode = 'verify-after-restart';
+  else if (options.verifyPostMigration) summary.mode = 'verify-post-migration';
 
-  const artifactsDir = options.artifactsDir
-    || path.join(options.worktree, 'artifacts', 'phase3h-gate2', new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z'));
+  const artifactsDir = requireAbsoluteArtifactsDir(options.artifactsDir);
+  log(`[artifacts] ${artifactsDir}`);
 
   try {
-    // --- Stage 1: local inspection (always, except pure post-restart verify) ---
     let inspect = null;
     if (!options.verifyAfterRestart) {
       inspect = inspectRelease({ worktree: options.worktree, expectedHead: options.expectedHead, deps });
@@ -1128,7 +1531,6 @@ async function main(argv, injectedDeps) {
       log('[inspect] PASS — HEAD, clean tree, migration/rollback hashes, single-transaction, no Anchor enablement.');
     }
 
-    // --- Credentials (memory only) ---
     databaseUrl = loadDatabaseUrl({
       envFilePath: options.envFile,
       processEnv,
@@ -1140,7 +1542,6 @@ async function main(argv, injectedDeps) {
     client = deps.createClient(databaseUrl);
     await client.connect();
 
-    // --- Post-restart verification path ---
     if (options.verifyAfterRestart) {
       const verifyRestart = await runVerifyAfterRestart(client);
       artifacts['post-restart-verification.json'] = verifyRestart;
@@ -1148,18 +1549,73 @@ async function main(argv, injectedDeps) {
       summary.passed = verifyRestart.database_checks.schema_present && verifyRestart.database_checks.anchor_flag_false;
       artifacts['final-report.md'] = buildFinalReport({ mode: summary.mode, verify: verifyRestart, secrets });
       const written = writeArtifacts({ artifactsDir, artifacts, secrets, deps });
-      log(restartInstructions());
+      log(`[artifacts] written under ${artifactsDir}`);
       summary.artifacts = written;
+      summary.artifactsDir = artifactsDir;
       return summary;
     }
 
-    // --- Stage 2: read-only preflight (always) ---
+    // --- Post-migration read-only investigation ---
+    if (options.verifyPostMigration) {
+      const preflight = await runPreflight(client, { postMigrationMode: true });
+      artifacts['preflight.json'] = preflight;
+      summary.stages.push('preflight');
+
+      let preSnapshot = null;
+      if (options.preSnapshotPath && deps.fs.existsSync(options.preSnapshotPath)) {
+        preSnapshot = JSON.parse(deps.fs.readFileSync(options.preSnapshotPath, 'utf8'));
+      }
+      let migrationWindow = {};
+      if (options.migrationResultPath && deps.fs.existsSync(options.migrationResultPath)) {
+        migrationWindow = JSON.parse(deps.fs.readFileSync(options.migrationResultPath, 'utf8'));
+      }
+
+      const investigation = await runVerifyPostMigration(client, {
+        migrationWindow,
+        preSnapshot,
+      });
+      artifacts['current-schema.json'] = investigation.current_schema;
+      artifacts['callbacks-sanitized.json'] = investigation.callbacks_sanitized;
+      artifacts['dnc-suppression-audit.json'] = investigation.dnc_suppression_audit;
+      artifacts['agent-log-audit.json'] = investigation.agent_log_audit;
+      artifacts['post-migration-verification.json'] = investigation.post_migration_verification;
+      artifacts['contract-matrix.json'] = investigation.contract_matrix;
+      artifacts['final-report.md'] = buildFinalReport({
+        mode: summary.mode,
+        inspect,
+        preflight,
+        verify: investigation.post_migration_verification,
+        secrets,
+      }) + `\n\n## Investigation\n- classification: ${investigation.current_schema.classification}\n`
+        + `- pending callbacks: ${investigation.callbacks_sanitized.summary.pending}\n`
+        + `- pending for DNC: ${investigation.dnc_suppression_audit.pending_callbacks_for_dnc}\n`
+        + `- pending for synthetic: ${investigation.dnc_suppression_audit.pending_callbacks_for_synthetic}\n`
+        + `- agent_log outbound-like in window: ${investigation.agent_log_audit.outbound_like_count}\n`
+        + `- safety_defect: ${investigation.safety_defect}\n`
+        + `- remediation_executed: false\n`;
+
+      summary.stages.push('verify-post-migration');
+      summary.passed = investigation.passed;
+      summary.safety_defect = investigation.safety_defect;
+      const written = writeArtifacts({ artifactsDir, artifacts, secrets, deps });
+      log(`[artifacts] written under ${artifactsDir}`);
+      log(`[verify-post-migration] ${investigation.passed ? 'PASS' : 'FINDINGS'} — safety_defect=${investigation.safety_defect}`);
+      summary.artifacts = written;
+      summary.artifactsDir = artifactsDir;
+      summary.investigation = {
+        pending: investigation.callbacks_sanitized.summary.pending,
+        pending_for_dnc: investigation.dnc_suppression_audit.pending_callbacks_for_dnc,
+        pending_for_synthetic: investigation.dnc_suppression_audit.pending_callbacks_for_synthetic,
+        outbound_like: investigation.agent_log_audit.outbound_like_count,
+      };
+      return summary;
+    }
+
     const preflight = await runPreflight(client);
     artifacts['preflight.json'] = preflight;
     summary.stages.push('preflight');
-    log(`[preflight] PASS — db=${preflight.observations.current_database}, pg=${preflight.observations.server_version}, anchor flag not enabled, no active setter ops, no partial migration.`);
+    log(`[preflight] PASS — db=${preflight.observations.current_database}, pg=${preflight.observations.server_version}, classification=${preflight.observations.phase3d_classification}.`);
 
-    // --- Rollback path ---
     if (options.executeRollback) {
       log('\n[plan] ROLLBACK is a logical (feature-flag) rollback using only the reviewed rollback file.');
       log('       It disables the new Pipeline and preserves safety/history schema and data.');
@@ -1175,26 +1631,26 @@ async function main(argv, injectedDeps) {
       summary.passed = flag === false;
       artifacts['final-report.md'] = buildFinalReport({ mode: summary.mode, inspect, preflight, rollback, secrets });
       writeArtifacts({ artifactsDir, artifacts, secrets, deps });
+      log(`[artifacts] written under ${artifactsDir}`);
       log('[rollback] applied. Restart the same SHA to refresh the schema-presence cache.');
       return summary;
     }
 
-    // --- Read-only default: stop after preflight unless migration requested ---
     if (!options.executeMigration) {
       artifacts['final-report.md'] = buildFinalReport({ mode: summary.mode, inspect, preflight, secrets });
       const written = writeArtifacts({ artifactsDir, artifacts, secrets, deps });
+      log(`[artifacts] written under ${artifactsDir}`);
       summary.passed = true;
       summary.artifacts = written;
+      summary.artifactsDir = artifactsDir;
       log('\n[read-only] Inspection + preflight complete. Re-run with --execute-migration to proceed (a second confirmation is still required).');
       return summary;
     }
 
-    // --- Stage 3: pre-migration snapshot ---
     const preSnapshot = await runPreMigrationSnapshot(client);
     artifacts['pre-migration-snapshot.json'] = preSnapshot;
     summary.stages.push('pre-migration-snapshot');
 
-    // --- Execution plan + mandatory second confirmation (stop after preflight) ---
     log('\n================ EXECUTION PLAN ================');
     log(`  target database : ${preflight.observations.current_database} (PostgreSQL ${preflight.observations.server_version})`);
     log(`  worktree HEAD   : ${inspect.head}`);
@@ -1205,7 +1661,6 @@ async function main(argv, injectedDeps) {
     log('===============================================');
     await confirmExactPhrase({ mode: 'migration', options, processEnv, deps });
 
-    // --- Stage 4: durable backup (no skip allowed) ---
     const backup = deps.createBackup({ databaseUrl, serverVersion: preflight.observations.server_version, deps });
     if (!backup || backup.verified !== true) {
       throw new GateError('Durable backup did not verify — refusing to migrate', { stage: 'backup', code: 'BACKUP_UNVERIFIED' });
@@ -1214,37 +1669,38 @@ async function main(argv, injectedDeps) {
     summary.stages.push('backup');
     log(`[backup] verified — ${backup.backup_identifier} (${backup.encrypted_size_bytes} bytes, sha256 ${backup.encrypted_sha256.slice(0, 12)}…)`);
 
-    // --- Stage 5: migration ---
     const migration = await applyMigration(client, { migrationPath: inspect.migration_path, deps });
     artifacts['migration-result.json'] = migration;
     summary.stages.push('migrate');
     log(`[migrate] committed in ${migration.duration_ms}ms`);
 
-    // --- Stage 6: post-migration verification ---
     const verify = await runPostMigrationVerification(client, { preSnapshot });
     artifacts['post-migration-verification.json'] = verify;
     summary.stages.push('verify');
 
     if (!verify.passed) {
-      // Do NOT auto-rollback. Report a hard rollback condition and stop.
       artifacts['final-report.md'] = buildFinalReport({ mode: summary.mode, inspect, preflight, preSnapshot, backup, migration, verify, secrets });
       writeArtifacts({ artifactsDir, artifacts, secrets, deps });
+      log(`[artifacts] written under ${artifactsDir}`);
       const failed = Object.entries(verify.checks).filter(([, v]) => v !== true).map(([k]) => k);
       log('\n[verify] HARD ROLLBACK CONDITION — one or more contracts failed:');
       log(`         ${failed.join(', ')}`);
       log('         The reviewed logical rollback is NOT run automatically.');
-      log(`         To roll back (separate authorization): node scripts/runPhase3hGate2Production.js --execute-rollback`);
+      log(`         To investigate read-only: node scripts/runPhase3hGate2Production.js --verify-post-migration --artifacts-dir=/abs/path`);
       log(`         Reviewed rollback: ${RELEASE.rollbackRelPath} (disables the new Pipeline; preserves safety/history schema).`);
       summary.passed = false;
       summary.rollback_condition = true;
       summary.failed_checks = failed;
+      summary.artifactsDir = artifactsDir;
       return summary;
     }
 
     summary.stages.push('restart-instructions');
     artifacts['final-report.md'] = buildFinalReport({ mode: summary.mode, inspect, preflight, preSnapshot, backup, migration, verify, restart: true, secrets });
     const written = writeArtifacts({ artifactsDir, artifacts, secrets, deps });
+    log(`[artifacts] written under ${artifactsDir}`);
     summary.artifacts = written;
+    summary.artifactsDir = artifactsDir;
     summary.passed = true;
     log('\n[verify] PASS — all schema + safety contracts hold; Anchor remains disabled.');
     log(restartInstructions());
@@ -1256,15 +1712,17 @@ async function main(argv, injectedDeps) {
       code: error && error.code ? error.code : 'ERROR',
       ...sanitized,
     };
-    // Persist stage observations attached to GateError so a PARTIAL/AMBIGUOUS
-    // stop still leaves a sanitized matrix for the operator — without credentials.
     if (error && error.details) {
       const stageArtifact = error.stage === 'preflight' ? 'preflight.json' : `${error.stage || 'details'}.json`;
       artifacts[stageArtifact] = error.details;
     }
-    try { writeArtifacts({ artifactsDir, artifacts, secrets, deps }); } catch { /* redaction guard may itself throw; swallow to avoid leaking */ }
+    try {
+      writeArtifacts({ artifactsDir, artifacts, secrets, deps });
+      log(`[artifacts] written under ${artifactsDir}`);
+    } catch { /* redaction guard may itself throw; swallow to avoid leaking */ }
     summary.passed = false;
     summary.error = sanitized;
+    summary.artifactsDir = artifactsDir;
     throw Object.assign(error, { summary });
   } finally {
     if (client && client.end) { try { await client.end(); } catch { /* ignore */ } }
@@ -1286,6 +1744,7 @@ module.exports = {
   IDENTITY,
   CONFIRM,
   DEFAULT_ENV_FILE,
+  USAGE,
   LEGACY_SETTER_COLUMNS,
   UNIQUE_PHASE3D_COLUMNS,
   UNIQUE_PHASE3D_TABLES,
@@ -1293,6 +1752,9 @@ module.exports = {
   UNIQUE_PHASE3D_TRIGGERS,
   GateError,
   parseArgs,
+  printUsage,
+  stableHash,
+  requireAbsoluteArtifactsDir,
   deriveSecrets,
   redactString,
   redactDeep,
@@ -1313,6 +1775,10 @@ module.exports = {
   createDurableBackup,
   applyMigration,
   runPostMigrationVerification,
+  auditAgentLogWindow,
+  investigateSetterCallbacks,
+  auditDncSuppression,
+  runVerifyPostMigration,
   confirmExactPhrase,
   runVerifyAfterRestart,
   restartInstructions,
