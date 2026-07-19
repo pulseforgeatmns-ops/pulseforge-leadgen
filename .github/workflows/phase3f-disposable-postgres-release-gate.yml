@@ -1,0 +1,96 @@
+name: Phase 3F Disposable PostgreSQL Release Gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setter-release-rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: phase3f-local-only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # Intentionally only a loopback CI service. Do not add DATABASE_URL,
+      # Railway variables, credentials, or deployment tokens to this workflow.
+      PHASE3F_ADMIN_DATABASE_URL: postgresql://postgres:phase3f-local-only@127.0.0.1:5432/postgres
+      PHASE3F_REHEARSAL_DATABASE: phase3f_rehearsal_${{ github.run_id }}_${{ github.run_attempt }}
+      PHASE3F_REPORT_PATH: artifacts/phase3f/rehearsal-report.json
+      DATABASE_SSL: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install PostgreSQL binaries for gated disposable tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql
+          bindir="$(pg_config --bindir)"
+          sudo ln -sf "$bindir/initdb" /usr/local/bin/initdb
+          sudo ln -sf "$bindir/pg_ctl" /usr/local/bin/pg_ctl
+      - name: Install dependencies
+        run: npm ci
+      - name: Prove disposable CI database boundary
+        run: |
+          test -z "${DATABASE_URL:-}"
+          test -z "${RAILWAY_ENVIRONMENT:-}"
+          test -z "${RAILWAY_PUBLIC_DOMAIN:-}"
+          test -z "${RAILWAY_STATIC_URL:-}"
+          test "${PHASE3F_REHEARSAL_DATABASE#phase3f_rehearsal_}" != "$PHASE3F_REHEARSAL_DATABASE"
+          case "$PHASE3F_ADMIN_DATABASE_URL" in *127.0.0.1* ) ;; *) exit 1;; esac
+          echo "CI PostgreSQL host: 127.0.0.1"
+          echo "Rehearsal database: $PHASE3F_REHEARSAL_DATABASE"
+          echo "DATABASE_URL: absent; Railway production variables: absent"
+      - name: Run Phase 3D forward rollback rehearsal
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/phase3f
+          node scripts/runSetterReleaseRehearsal.js | tee artifacts/phase3f/rehearsal.log
+      - name: Run all PostgreSQL-gated tests
+        env:
+          ANCHOR_PHONE_SETTER_TEST_POSTGRES: "true"
+          REVENUE_TEST_POSTGRES: "true"
+          MAX_SMOKE_DISPOSABLE_PG: "true"
+        run: |
+          set -o pipefail
+          node --test test/anchorPhoneSetterPostgres.test.js test/revenuePostgres.test.js \
+            test/maxSmokeProductionSchema.test.js test/maxTransactionClient.test.js \
+            test/maxDecayCronPostgres.test.js | tee artifacts/phase3f/postgres-gated-tests.log
+      - name: Run full suite with no PostgreSQL skips
+        env:
+          ANCHOR_PHONE_SETTER_TEST_POSTGRES: "true"
+          REVENUE_TEST_POSTGRES: "true"
+          MAX_SMOKE_DISPOSABLE_PG: "true"
+        run: |
+          set -o pipefail
+          npm test | tee artifacts/phase3f/full-suite.log
+      - name: Record commits tested
+        if: always()
+        run: |
+          {
+            echo "commit=$(git rev-parse HEAD)"
+            echo "base=$(git rev-parse HEAD^)"
+          } > artifacts/phase3f/commits-tested.txt
+      - name: Upload Phase 3F rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase3f-disposable-postgres-rehearsal-${{ github.run_id }}
+          path: artifacts/phase3f/
+          if-no-files-found: error
