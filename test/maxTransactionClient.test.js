@@ -50,9 +50,25 @@ test('complete shadow decision flow uses one caller-owned transaction and rolls 
   }
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'max-transaction-client-pg-'));
   const port = await freePort();
+  const logFile = path.join(directory, 'postgres.log');
   const commandOptions = { stdio: 'ignore', env: { ...process.env, LANG: 'C', LC_ALL: 'C' } };
   execFileSync('/usr/local/bin/initdb', ['-A', 'trust', '-U', 'postgres', '-D', directory], commandOptions);
-  execFileSync('/usr/local/bin/pg_ctl', ['-D', directory, '-o', `-p ${port} -h 127.0.0.1`, '-w', 'start'], commandOptions);
+  try {
+    // Pin unix_socket_directories to the disposable data dir. Default socket
+    // paths are not writable in GitHub Actions runners for PostgreSQL 18.
+    execFileSync('/usr/local/bin/pg_ctl', [
+      '-D', directory,
+      '-l', logFile,
+      '-o', `-p ${port} -h 127.0.0.1 -k ${directory}`,
+      '-w',
+      'start',
+    ], commandOptions);
+  } catch (error) {
+    const diagnostics = fs.existsSync(logFile)
+      ? fs.readFileSync(logFile, 'utf8')
+      : 'PostgreSQL did not create a server log.';
+    throw new Error(`Temporary PostgreSQL failed to start:\n${diagnostics}`, { cause: error });
+  }
   const db = new Pool({ connectionString: `postgres://postgres@127.0.0.1:${port}/postgres`, ssl: false });
   t.after(async () => {
     await db.end().catch(() => {});

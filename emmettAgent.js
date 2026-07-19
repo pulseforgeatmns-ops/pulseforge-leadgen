@@ -17,6 +17,7 @@ const {
   exactSequenceName,
   getBrevoState,
 } = require('./utils/sendingReadiness');
+const { notSyntheticSql } = require('./utils/callDispositions');
 
 const AGENT_NAME = 'emmett';
 let FROM_EMAIL = null;
@@ -1344,6 +1345,7 @@ async function getProspectsForEmail(options = {}) {
   const targetEmails = Array.isArray(options.targetEmails)
     ? options.targetEmails.filter(Boolean).map(email => String(email).toLowerCase())
     : [];
+  const syntheticGuard = await notSyntheticSql(pool, 'p.is_synthetic');
 
   const res = await pool.query(`
     SELECT
@@ -1376,6 +1378,7 @@ async function getProspectsForEmail(options = {}) {
     AND p.email NOT LIKE '%@domain.com'
     AND p.email NOT LIKE '%@example.com'
     AND p.do_not_contact IS NOT TRUE
+    AND ${syntheticGuard}
     AND (
       p.email_status IN ('valid', 'verified', 'role')
       OR (p.email_status = 'unverified_legacy' AND p.status = 'contacted')

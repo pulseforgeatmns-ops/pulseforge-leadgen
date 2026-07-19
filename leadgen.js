@@ -395,23 +395,42 @@ const CLEANING_AREA_CITIES = [
 ];
 
 const CLIENT_SCOUT_PLANS = {
-  // Cleaning company (client_id=10). Professional-services offices that BUY
-  // commercial cleaning. Law firms and accounting practices run as SEPARATE
-  // passes (one vertical per run). Google Places is primary for this client
-  // (see getSourcePreference) — SerpAPI underperforms on professional offices.
+  // Cleaning company (client_id=10). Immediate-cash partner and buyer targets.
+  // Each category runs as a separate, manual Scout pass.
+  // Google Places is primary for this client (see getSourcePreference) —
+  // SerpAPI underperforms on professional offices.
   10: {
     state: 'NH',
     cities: CLEANING_AREA_CITIES,
     verticals: {
-      law_firm: [
-        'law firm {city} {state}',
-        'law office {city} {state}',
-        'attorney {city} {state}',
+      cleaning_company_overflow: [
+        'commercial cleaning company {city} {state}',
+        'janitorial service {city} {state}',
+        'office cleaning company {city} {state}',
       ],
-      accounting: [
-        'accounting firm {city} {state}',
-        'cpa firm {city} {state}',
-        'tax accountant {city} {state}',
+      str_manager: [
+        'short term rental management {city} {state}',
+        'Airbnb property management {city} {state}',
+        'vacation rental management {city} {state}',
+      ],
+      property_manager: [
+        'property management company {city} {state}',
+        'commercial property management {city} {state}',
+      ],
+      realtor: [
+        'real estate agency {city} {state}',
+        'realtor office {city} {state}',
+        'real estate broker {city} {state}',
+      ],
+      restoration_remodeling_partner: [
+        'water damage restoration {city} {state}',
+        'restoration company {city} {state}',
+        'remodeling contractor {city} {state}',
+      ],
+      commercial_office: [
+        'commercial office {city} {state}',
+        'office park {city} {state}',
+        'business center {city} {state}',
       ],
     },
   },
@@ -1071,7 +1090,7 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
 // scoring) and scores the things that make an office worth a cleaning pitch.
 //
 // Components (max 100):
-//   vertical        0–35  single-tenant professional-services office (law/CPA). Highest weight.
+//   vertical        0–35  approved immediate-cash buyer or partner. Highest weight.
 //   geography       0–25  Manchester NH + ring; out-of-area culled separately by service_area gate.
 //   contact         0–25  reachable owner/office-manager (name + email/phone). No contact = low.
 //   single_tenant   0–10  own space vs. a suite in a managed multi-tenant building. Heuristic — flagged.
@@ -1088,18 +1107,23 @@ function scoreCleaningLead(lead) {
   const addr = (lead.address || '').toLowerCase();
   const locHay = addr || hay;
 
-  // 1. Vertical match (0–35) — law firms / accounting practices = target.
+  // 1. Vertical match (0–35) — Anchor Phone Setter v1's six approved
+  // immediate-cash categories are the target.
   const TARGET_VERTICAL = [
-    'law firm', 'law office', 'law offices', 'attorney', 'attorneys', 'lawyer',
-    'lawyers', 'legal', ' esq', 'llp', 'counsel', 'litigation', 'paralegal',
-    'cpa', 'accounting', 'accountant', 'accountants', 'bookkeeping', 'bookkeeper',
-    'tax service', 'tax services', 'tax prep', 'tax preparation', 'enrolled agent',
+    'commercial cleaning', 'janitorial', 'office cleaning',
+    'short term rental', 'short-term rental', 'airbnb management', 'vacation rental',
+    'property management', 'property manager',
+    'real estate agency', 'real estate broker', 'realtor', 'realty',
+    'water damage restoration', 'fire damage restoration', 'restoration company',
+    'remodeling contractor', 'remodeler',
+    'commercial office', 'office park', 'business center',
   ];
-  // Adjacent single-tenant professional offices — plausible but not the beachhead.
+  // Future commercial-office subsegments are plausible, but not this contract.
   const ADJACENT_VERTICAL = [
     'insurance agency', 'financial advisor', 'wealth management', 'financial planning',
-    'title company', 'real estate office', 'consulting', 'architect', 'engineering firm',
-    'dental', 'dentist', 'orthodont', 'medical office', 'physical therapy', 'chiropractic',
+    'title company', 'consulting', 'architect', 'engineering firm',
+    'law firm', 'law office', 'attorney', 'accounting', 'cpa', 'dental', 'dentist',
+    'medical office', 'physical therapy', 'chiropractic',
   ];
   let vertical = 0;
   if (TARGET_VERTICAL.some(k => hay.includes(k)))        vertical = 35;

@@ -225,8 +225,7 @@ async function ensureClientArchitecture() {
   // ── Cleaning company (commercial-cleaning BUYER) ──────────────────────
   // Separate LLC from Pulseforge (client_id=1). Fully partitioned: its own
   // prospect pool, its own ICP rubric (scoring_profile='cleaning_buyer'),
-  // its own Scout plan (law firms + accounting practices in the Manchester NH
-  // area). Entity name is Anchor Cleaning (set Jun 2026).
+  // and its approved immediate-cash Scout plan in the Manchester NH area.
   // Explicit id=10 (well above the 1/2/5/McLeod range) so it never collides
   // with the serial-assigned McLeod row below. enabled_agents is scout-only
   // for now: no cold-email/social until the entity, domain, and sender are
@@ -250,8 +249,8 @@ async function ensureClientArchitecture() {
       'Manchester',
       'NH',
       ARRAY['Manchester','Bedford','Goffstown','Hooksett','Londonderry','Auburn'],
-      ARRAY['law_firm','accounting'],
-      'Single-tenant professional-services offices (law firms, CPA/accounting practices) in the Greater Manchester NH area that buy recurring commercial cleaning',
+      ARRAY['cleaning_company_overflow','str_manager','property_manager','realtor','restoration_remodeling_partner','commercial_office'],
+      'Immediate-cash cleaning buyers and referral partners in the Greater Manchester NH area',
       'cleaning_buyer',
       'jacob@goanchorcleaning.com',
       'Jacob Maynard',

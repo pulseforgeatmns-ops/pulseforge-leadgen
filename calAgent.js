@@ -3,6 +3,7 @@ const axios = require('axios');
 const pool = require('./db');
 const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { notSyntheticSql } = require('./utils/callDispositions');
 
 const AGENT_NAME = 'cal';
 const CLIENT_ID = getRuntimeClientId();
@@ -14,6 +15,7 @@ const CALENDAR_REFRESH_TOKEN = process.env.GOOGLE_CALENDAR_REFRESH_TOKEN;
 // Max's auto-execute pipeline pushes prospects into cal_queue. Pull those first
 // so Cal works the prioritized list before falling back to its normal selection.
 async function getQueuedCandidates(limit) {
+  const syntheticGuard = await notSyntheticSql(pool, 'p.is_synthetic');
   const res = await pool.query(`
     SELECT
       p.id, p.first_name, p.last_name, p.email, p.phone,
@@ -30,6 +32,7 @@ async function getQueuedCandidates(limit) {
     WHERE q.client_id = $1
       AND q.status = 'pending'
       AND COALESCE(p.do_not_contact, false) = false
+      AND ${syntheticGuard}
       AND p.phone IS NOT NULL AND p.phone != ''
     ORDER BY q.priority ASC, q.created_at ASC
     LIMIT $2
@@ -45,6 +48,7 @@ async function getQueuedCandidates(limit) {
 async function getCallCandidates(excludeIds = []) {
   const remaining = MAX_CALLS_PER_RUN - excludeIds.length;
   if (remaining <= 0) return [];
+  const syntheticGuard = await notSyntheticSql(pool, 'p.is_synthetic');
   const res = await pool.query(`
     SELECT
       p.id, p.first_name, p.last_name, p.email, p.phone,
@@ -56,6 +60,7 @@ async function getCallCandidates(excludeIds = []) {
     LEFT JOIN companies c ON p.company_id = c.id
     WHERE p.status = 'warm'
       AND p.do_not_contact = false
+      AND ${syntheticGuard}
       AND p.phone IS NOT NULL AND p.phone != ''
       AND p.icp_score >= 60
       AND ($2::int[] IS NULL OR NOT (p.id = ANY($2::int[])))

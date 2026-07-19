@@ -209,6 +209,11 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
 .call-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:0.75rem; }
 .call-form-grid .field.full { grid-column:1 / -1; }
 .call-form-grid input { width:100%; padding:0.58rem 0.65rem; }
+.test-badge, .sla-badge { display:inline-flex; align-items:center; border-radius:999px; padding:3px 7px; font-family:'JetBrains Mono',monospace; font-size:0.5rem; letter-spacing:0.7px; text-transform:uppercase; }
+.test-badge { color:#fbbf24; border:1px solid rgba(251,191,36,0.4); background:rgba(251,191,36,0.1); }
+.sla-badge.due_soon { color:#60a5fa; border:1px solid rgba(96,165,250,0.35); background:rgba(96,165,250,0.1); }
+.sla-badge.due_now { color:#fbbf24; border:1px solid rgba(251,191,36,0.4); background:rgba(251,191,36,0.1); }
+.sla-badge.overdue { color:#fb7185; border:1px solid rgba(251,113,133,0.4); background:rgba(251,113,133,0.1); }
 .right-panel { background:var(--bg1); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
 .panel-header { padding:1.25rem; border-bottom:1px solid var(--border); flex-shrink:0; }
 .panel-title { font-family:'Bebas Neue',sans-serif; font-size:1rem; letter-spacing:2px; }
@@ -419,6 +424,19 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
       <div class="goal-label" id="goalLabel">Calls today: 0 / 20</div>
       <div class="goal-bar"><div class="goal-fill" id="goalFill"></div></div>
     </div>
+    <div class="metrics-strip" id="qualityMetricsStrip">
+      <div class="metric-card"><div class="metric-label">Attempts</div><div class="metric-value" id="qualityAttempts">0</div><div class="metric-note">Last 30 days</div></div>
+      <div class="metric-card"><div class="metric-label">Connect rate</div><div class="metric-value" id="qualityConnectRate">0%</div><div class="metric-note">Human connections</div></div>
+      <div class="metric-card"><div class="metric-label">Decision makers</div><div class="metric-value" id="qualityDm">0</div><div class="metric-note">Genuine conversations</div></div>
+      <div class="metric-card"><div class="metric-label">Callbacks done</div><div class="metric-value" id="qualityCallbacks">0%</div><div class="metric-note">Completion rate</div></div>
+      <div class="metric-card"><div class="metric-label">Qualified meetings</div><div class="metric-value" id="qualityQualified">0%</div><div class="metric-note">From decision makers</div></div>
+      <div class="metric-card"><div class="metric-label">Incomplete</div><div class="metric-value" id="qualityIncomplete">0</div><div class="metric-note">Disposition notes</div></div>
+      <div class="metric-card"><div class="metric-label">Overdue</div><div class="metric-value" id="qualityOverdue">0</div><div class="metric-note">Callbacks</div></div>
+    </div>
+    <div class="panel-card" id="managerReviewPanel" style="display:none;margin-bottom:1rem">
+      <div class="section-head"><div class="section-title">Manager call review sample</div><div class="mono" id="managerReviewCount">0 pending</div></div>
+      <div id="managerReviewRows" class="activity-list"></div>
+    </div>
 
     <section class="panel active" id="queuePanel">
       <div class="queue-tools">
@@ -427,6 +445,7 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
           <button class="btn search-clear" id="clearSearch" type="button">x</button>
         </div>
         <button class="btn" id="bulkEnrichPhonesBtn" type="button">Enrich missing phones</button>
+        <label class="btn" title="Synthetic prospects are locally logged and can never be contacted"><input id="showTestProspects" type="checkbox"> Show test prospects</label>
         <span class="bulk-status" id="bulkEnrichStatus"></span>
       </div>
       <div class="section-head"><div class="section-title">Due Today</div><div class="mono" id="dueCount">0 callbacks</div></div>
@@ -700,6 +719,7 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   </div>
   <div class="detail-title" id="detailName">Lead</div>
   <div class="detail-meta" id="detailMeta">Scout qualified</div>
+  <div class="muted-status" id="detailPriority"></div>
   <div class="detail-block"><div class="detail-label">Contact</div><div class="detail-val" id="detailContact"></div></div>
   <div class="detail-block">
     <div class="detail-label">Phone</div>
@@ -714,12 +734,25 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
     </div>
     <div class="callback-set" id="callbackSet"></div>
   </div>
+  <div class="detail-block" id="setterPlaybookBlock">
+    <div class="detail-label" id="setterPlaybookTitle">Human call guide</div>
+    <div class="detail-val" id="setterPlaybookObjective">Loading playbook…</div>
+    <div class="script-block" id="setterPlaybookContent"></div>
+  </div>
   <div class="detail-block">
     <div class="detail-note-head"><div class="detail-label">Notes</div><div class="note-count" id="noteCount">0 characters</div></div>
     <textarea class="detail-notes" id="detailNotesInput" placeholder="Add notes about this lead..."></textarea>
     <div class="muted-status" id="notesStatus"></div>
   </div>
   <div class="detail-block"><div class="detail-label">Website</div><div class="detail-val" id="detailWebsite"></div></div>
+  <div class="detail-block" id="anchorFollowUpBlock" style="display:none">
+    <div class="detail-label">Anchor follow-up drafts · review required</div>
+    <div class="callback-row"><select id="anchorDraftChannel"><option value="email">Email draft</option><option value="sms">SMS draft</option></select></div>
+    <textarea class="detail-notes" id="anchorDraftBody" placeholder="Draft only. Pulseforge will not send it."></textarea>
+    <div class="callback-row"><button class="btn primary" id="createAnchorDraftBtn" type="button">Create draft</button></div>
+    <div class="muted-status">Copy is available after review. “Log as sent” records a manual action only; it never sends.</div>
+    <div id="anchorDraftList"></div>
+  </div>
   <div class="detail-block"><div class="detail-label">Move Stage</div><select id="detailStatus"></select></div>
 </aside>
 
@@ -751,6 +784,14 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
         <label for="callNotes">Notes</label>
         <textarea id="callNotes" placeholder="What happened, objections, and next step"></textarea>
       </div>
+      <div class="field full" id="structuredCallFields" style="display:none">
+        <label>Required structured notes</label>
+        <div class="call-form-grid">
+          <div class="field full"><textarea id="structuredSummary" placeholder="Outcome summary"></textarea></div>
+          <div class="field"><input id="structuredNextStep" placeholder="Next step"></div>
+          <div class="field"><input id="structuredReason" placeholder="Disqualification reason"></div>
+        </div>
+      </div>
       <div class="field">
         <label for="callCallback">Callback (optional)</label>
         <input id="callCallback" type="datetime-local">
@@ -758,6 +799,16 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
       <div class="field">
         <label for="callDuration">Duration in seconds (optional)</label>
         <input id="callDuration" type="number" min="0" max="86400" step="1" inputmode="numeric">
+      </div>
+      <div class="field full" id="anchorStructuredCallFields" style="display:none">
+        <label>Anchor structured details</label>
+        <div class="call-form-grid">
+          <div class="field"><input id="anchorContactRole" placeholder="Contact role"></div>
+          <div class="field"><select id="anchorDecisionMaker"><option value="false">Decision maker not reached</option><option value="true">Decision maker reached</option></select></div>
+          <div class="field"><input id="anchorInterestLevel" placeholder="Interest level"></div>
+          <div class="field"><input id="anchorNextStep" placeholder="Next step"></div>
+          <div class="field"><select id="anchorFollowUpChannel"><option value="phone">Phone follow-up</option><option value="email">Email follow-up</option><option value="sms">SMS follow-up</option><option value="none">No follow-up</option></select></div>
+        </div>
       </div>
     </div>
     <div class="handoff-actions">
@@ -780,7 +831,9 @@ const callDispositionLabels = {
   disconnected:'Disconnected',
   gatekeeper_relayed:'Gatekeeper — relayed message',
   gatekeeper_blocked:'Gatekeeper — blocked',
-  incumbent_all_set:'Incumbent — all set'
+  incumbent_all_set:'Incumbent — all set',
+  qualified:'Qualified',
+  disqualified:'Disqualified'
 };
 const agents = [
   ['SCOUT','Prospecting'], ['EMMETT','Email'], ['RILEY','Follow-up'],
@@ -800,6 +853,7 @@ let handoffResolve = null;
 let callDispositionLeadId = null;
 let draggedLeadId = null;
 let lastDroppedLeadId = null;
+let showTestProspects = false;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function applyTheme(theme) {
@@ -856,6 +910,7 @@ function rowTools(lead) {
   const attempts = Number(lead.attempt_count || 0);
   return `<div class="row-actions">
     <button class="btn icon-btn ${lead.is_hot ? 'hot' : ''}" data-hot="${lead.id}" title="Toggle hot lead">⚡</button>
+    ${lead.is_synthetic ? '<span class="test-badge">Test · no contact</span>' : ''}
     <button class="btn primary" data-log-call="${lead.id}" type="button">☎ Log call</button>
     <span class="attempt-badge" id="attempts-${lead.id}">${attempts} attempt${attempts === 1 ? '' : 's'}</span>
   </div>`;
@@ -906,8 +961,8 @@ function renderQueue() {
   }
   body.innerHTML = leads.map(lead => `
     <tr class="${lead.is_hot ? 'hot-row' : ''}">
-      <td data-label="Business"><div class="lead-line"><span class="lead-name" data-open="${lead.id}">${lead.business_name}</span><span class="age ${ageInfo(lead.date_added).klass}">${ageInfo(lead.date_added).label}</span></div><div class="mono">${lead.contact_name || 'No contact name'}</div></td>
-      <td data-label="Vertical">${lead.vertical}</td>
+      <td data-label="Business"><div class="lead-line"><span class="lead-name" data-open="${lead.id}">${lead.business_name}</span>${lead.is_synthetic ? '<span class="test-badge">Synthetic</span>' : ''}<span class="age ${ageInfo(lead.date_added).klass}">${ageInfo(lead.date_added).label}</span></div><div class="mono">${lead.contact_name || 'No contact name'}</div></td>
+      <td data-label="Vertical">${lead.vertical}${lead.priority_reason ? `<div class="mono">${lead.priority_reason}</div>` : ''}</td>
       <td data-label="City">${lead.city}</td>
       <td data-label="Score"><span class="score ${lead.score_band}">${lead.score}</span></td>
       <td data-label="Date Added">${fmtDate(lead.date_added)}</td>
@@ -928,7 +983,7 @@ function renderDue() {
   body.innerHTML = dueLeads.map(lead => `
     <tr class="${isOverdue(lead.callback_at) ? 'overdue-row' : 'due-row'} ${lead.is_hot ? 'hot-row' : ''}">
       <td data-label="Business"><div class="lead-line"><span class="lead-name" data-open="${lead.id}">${lead.business_name}</span><span class="age ${ageInfo(lead.date_added).klass}">${ageInfo(lead.date_added).label}</span></div><div class="mono">${lead.contact_name || 'No contact name'} · ${stageLabels[lead.status] || lead.status}</div></td>
-      <td data-label="Callback"><div>${fmtDateTime(lead.callback_at)}</div><div class="mono">${isOverdue(lead.callback_at) ? 'Overdue' : 'Today'}</div></td>
+      <td data-label="Callback"><div>${fmtDateTime(lead.callback_at)}</div><span class="sla-badge ${lead.callback_sla || ''}">${String(lead.callback_sla || 'scheduled').replace('_',' ')}</span></td>
       <td data-label="Score"><span class="score ${lead.score_band}">${lead.score}</span></td>
       <td data-label="Phone / Email"><div>${lead.phone || '-'}</div><div class="mono">${lead.email || '-'}</div></td>
       <td data-label="Actions">${rowTools(lead)}</td>
@@ -953,7 +1008,7 @@ function renderPipeline() {
         ${items.length ? items.map(lead => `
           <div class="lead-card ${lead.is_hot ? 'hot' : ''} ${String(lead.id) === String(lastDroppedLeadId) ? 'dropped' : ''}" draggable="true" data-lead-id="${lead.id}" data-current-status="${lead.status}">
             <div class="lead-card-title" data-open="${lead.id}">${lead.is_hot ? '⚡ ' : ''}${lead.business_name}</div>
-            <div class="lead-card-meta"><span class="mono">${lead.vertical} · ${ageInfo(lead.date_added).label}</span><span class="score ${lead.score_band}">${lead.score}</span></div>
+            <div class="lead-card-meta"><span class="mono">${lead.vertical} · ${ageInfo(lead.date_added).label}${lead.priority_reason ? ` · ${lead.priority_reason}` : ''}</span><span class="score ${lead.score_band}">${lead.score}</span></div>
             <div class="lead-card-meta"><span class="attempt-badge">${lead.attempt_count || 0} attempts</span><button class="btn icon-btn ${lead.is_hot ? 'hot' : ''}" data-hot="${lead.id}" type="button">⚡</button></div>
             <button class="btn primary" data-log-call="${lead.id}" type="button">☎ Log call</button>
             <select data-select-status="${lead.id}">
@@ -1022,26 +1077,64 @@ async function loadTodayStats() {
   if (stats) renderTodayStats(stats);
 }
 
+async function loadQualityMetrics() {
+  const m = await api('/setter/api/quality/metrics?days=30');
+  document.getElementById('qualityAttempts').textContent = m.attempts || 0;
+  document.getElementById('qualityConnectRate').textContent = `${m.connect_rate || 0}%`;
+  document.getElementById('qualityDm').textContent = m.decision_maker_conversations || 0;
+  document.getElementById('qualityCallbacks').textContent = `${m.callback_completion || 0}%`;
+  document.getElementById('qualityQualified').textContent = `${m.qualified_meeting_rate || 0}%`;
+  document.getElementById('qualityIncomplete').textContent = m.incomplete_dispositions || 0;
+  document.getElementById('qualityOverdue').textContent = m.overdue_callbacks || 0;
+}
+
+async function loadManagerReviews() {
+  const panel = document.getElementById('managerReviewPanel');
+  try {
+    const data = await api('/setter/api/quality/reviews?status=pending');
+    const reviews = data?.reviews || [];
+    panel.style.display = 'block';
+    document.getElementById('managerReviewCount').textContent = `${reviews.length} pending`;
+    document.getElementById('managerReviewRows').innerHTML = reviews.length ? reviews.map(review => `
+      <div class="activity-item">
+        <div class="activity-icon">Q</div>
+        <div class="activity-text"><strong>${escapeHtml(review.company_name || `${review.first_name || ''} ${review.last_name || ''}`)}</strong> · ${escapeHtml(callDispositionLabels[review.disposition] || review.disposition)}<br>${escapeHtml(review.notes || review.structured_notes?.summary || 'No notes')}</div>
+        <button class="btn primary" type="button" data-review-call="${review.id}">Review</button>
+      </div>`).join('') : '<div class="empty">No sampled calls are awaiting review.</div>';
+  } catch (_error) {
+    panel.style.display = 'none';
+  }
+}
+
 async function loadFeed() {
   feed = await api('/setter/api/scout-feed') || [];
   renderFeed();
 }
 
 async function loadQueue() {
-  const qs = queueSearch ? `?search=${encodeURIComponent(queueSearch)}` : '';
+  const params = new URLSearchParams();
+  if (queueSearch) params.set('search', queueSearch);
+  if (showTestProspects) params.set('include_test', 'true');
+  const qs = params.toString() ? `?${params}` : '';
   leads = await api(`/setter/api/leads${qs}`) || [];
   renderQueue();
   renderLeadSelect();
 }
 
 async function loadDue() {
-  const qs = `?due=today${queueSearch ? `&search=${encodeURIComponent(queueSearch)}` : ''}`;
+  const params = new URLSearchParams({ due:'today' });
+  if (queueSearch) params.set('search', queueSearch);
+  if (showTestProspects) params.set('include_test', 'true');
+  const qs = `?${params}`;
   dueLeads = await api(`/setter/api/leads${qs}`) || [];
   renderDue();
 }
 
 async function loadPipeline() {
-  const qs = pipelineSearch ? `?search=${encodeURIComponent(pipelineSearch)}` : '';
+  const params = new URLSearchParams();
+  if (pipelineSearch) params.set('search', pipelineSearch);
+  if (showTestProspects) params.set('include_test', 'true');
+  const qs = params.toString() ? `?${params}` : '';
   const data = await api(`/setter/api/pipeline${qs}`);
   pipeline = data?.grouped || {};
   renderPipeline();
@@ -1097,7 +1190,7 @@ async function refreshAll() {
   // Critical = core setter data; a failure here surfaces a red ERROR + auto-retry.
   // Background = supplementary panels; their failures are logged but never flip the header.
   const critical = [loadMetrics, loadQueue, loadDue, loadPipeline];
-  const background = [loadTodayStats, loadFeed, loadActivity];
+  const background = [loadTodayStats, loadQualityMetrics, loadManagerReviews, loadFeed, loadActivity];
   if (document.getElementById('liveState')?.textContent !== 'RECONNECTING') setLiveState('sync');
   const [criticalErrors, backgroundErrors] = await Promise.all([runLoaders(critical), runLoaders(background)]);
   backgroundErrors.forEach(e => console.error('[setter] non-critical fetch failed:', e?.message || e));
@@ -1108,6 +1201,24 @@ async function refreshAll() {
   } else {
     if (_setterRetryTimer) { clearTimeout(_setterRetryTimer); _setterRetryTimer = null; }
     setLiveState('live');
+    openRequestedSetterContext();
+  }
+}
+
+let requestedSetterContextOpened = false;
+function openRequestedSetterContext() {
+  if (requestedSetterContextOpened) return;
+  const params = new URLSearchParams(window.location.search);
+  const leadId = params.get('lead');
+  if (leadId && findLead(leadId)) {
+    requestedSetterContextOpened = true;
+    openDetail(leadId);
+    return;
+  }
+  if (params.get('view') === 'callbacks') {
+    requestedSetterContextOpened = true;
+    setTab('queue');
+    document.getElementById('dueRows')?.closest('.due-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 }
 
@@ -1136,6 +1247,10 @@ async function updateStatus(id, status, options = {}) {
     const note = await requestHandoffNote(findLead(id));
     if (note === null) return;
     handoff_note = note;
+  } else if (status === 'dead') {
+    const reason = prompt('Disqualification reason (required)', '');
+    if (!reason?.trim()) return;
+    handoff_note = reason.trim();
   }
   leads = leads.filter(l => l.id !== id);
   renderQueue();
@@ -1195,13 +1310,15 @@ function replaceLead(lead) {
 function renderPhoneTools(lead) {
   document.getElementById('detailPhone').textContent = lead.phone || '-';
   document.getElementById('phoneStatus').textContent = '';
-  document.getElementById('enrichPhoneBtn').style.display = lead.phone ? 'none' : 'inline-block';
+  document.getElementById('enrichPhoneBtn').style.display = lead.phone || lead.phone_setter_v1 || lead.is_synthetic ? 'none' : 'inline-block';
   document.getElementById('enrichPhoneBtn').disabled = false;
   document.getElementById('enrichPhoneBtn').classList.remove('loading');
   document.getElementById('enrichPhoneBtn').textContent = 'Enrich phone';
-  document.getElementById('contactLaunch').innerHTML = lead.phone ? `
+  document.getElementById('contactLaunch').innerHTML = lead.is_synthetic
+    ? '<span class="test-badge">Contact disabled for synthetic prospect</span>'
+    : lead.phone ? `
     <a class="btn primary launch-btn" href="tel:${lead.phone}">Call</a>
-    <a class="btn launch-btn" href="sms:${lead.phone}">Text</a>
+    ${lead.phone_setter_v1 ? '' : `<a class="btn launch-btn" href="sms:${lead.phone}">Text</a>`}
   ` : '';
 }
 
@@ -1322,6 +1439,10 @@ function updateCallCallbackSuggestion() {
   if (disposition === 'incumbent_all_set') callback.value = callDefaultDate(90);
   else if (['answered_callback', 'gatekeeper_relayed'].includes(disposition)) callback.value = callDefaultDate(1);
   else callback.value = '';
+  const needsStructured = ['answered_interested','answered_not_interested','answered_callback','qualified','disqualified'].includes(disposition);
+  document.getElementById('structuredCallFields').style.display = needsStructured ? 'block' : 'none';
+  document.getElementById('structuredReason').closest('.field').style.display = ['answered_not_interested','disqualified'].includes(disposition) ? 'block' : 'none';
+  document.getElementById('structuredNextStep').closest('.field').style.display = ['answered_interested','answered_callback','qualified'].includes(disposition) ? 'block' : 'none';
 }
 
 function openCallDisposition(id) {
@@ -1332,6 +1453,18 @@ function openCallDisposition(id) {
   document.getElementById('callDisposition').value = 'no_answer';
   document.getElementById('callNotes').value = '';
   document.getElementById('callDuration').value = '';
+  document.getElementById('structuredSummary').value = '';
+  document.getElementById('structuredNextStep').value = '';
+  document.getElementById('structuredReason').value = '';
+  const structured = Boolean(lead.phone_setter_v1);
+  document.getElementById('anchorStructuredCallFields').style.display = structured ? 'block' : 'none';
+  if (structured) {
+    document.getElementById('anchorContactRole').value = '';
+    document.getElementById('anchorDecisionMaker').value = 'false';
+    document.getElementById('anchorInterestLevel').value = '';
+    document.getElementById('anchorNextStep').value = '';
+    document.getElementById('anchorFollowUpChannel').value = 'phone';
+  }
   updateCallCallbackSuggestion();
   document.getElementById('callDispositionModal').classList.add('open');
   document.getElementById('callDisposition').focus();
@@ -1346,6 +1479,7 @@ async function saveCallDisposition(event) {
   event.preventDefault();
   const id = callDispositionLeadId;
   if (!id) return;
+  const callLead = findLead(id);
   const saveBtn = document.getElementById('saveCallDispositionBtn');
   saveBtn.disabled = true;
   saveBtn.classList.add('loading');
@@ -1355,9 +1489,23 @@ async function saveCallDisposition(event) {
       method:'POST',
       body:JSON.stringify({
         disposition: document.getElementById('callDisposition').value,
+        idempotency_key: crypto.randomUUID(),
         notes: document.getElementById('callNotes').value,
+        structured_notes: ['answered_interested','answered_not_interested','answered_callback','qualified','disqualified'].includes(document.getElementById('callDisposition').value) ? {
+          summary: document.getElementById('structuredSummary').value,
+          next_step: document.getElementById('structuredNextStep').value,
+          reason: document.getElementById('structuredReason').value
+        } : undefined,
         callback_at: callbackValue ? new Date(callbackValue).toISOString() : null,
-        duration_seconds: document.getElementById('callDuration').value
+        duration_seconds: document.getElementById('callDuration').value,
+        details: callLead?.phone_setter_v1 ? {
+          category: callLead.vertical,
+          contact_role: document.getElementById('anchorContactRole').value,
+          decision_maker_reached: document.getElementById('anchorDecisionMaker').value === 'true',
+          interest_level: document.getElementById('anchorInterestLevel').value,
+          next_step: document.getElementById('anchorNextStep').value,
+          follow_up_channel: document.getElementById('anchorFollowUpChannel').value
+        } : undefined
       })
     });
     if (selectedLead?.id === id) selectedLead = data.lead;
@@ -1376,6 +1524,90 @@ async function saveCallDisposition(event) {
     saveBtn.disabled = false;
     saveBtn.classList.remove('loading');
   }
+}
+
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>'"]/g, ch => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[ch]));
+}
+
+function renderAnchorDrafts(drafts) {
+  const box = document.getElementById('anchorDraftList');
+  if (!drafts.length) { box.innerHTML = '<div class="muted-status">No drafts yet.</div>'; return; }
+  box.innerHTML = drafts.map(draft => `<div class="detail-block">
+    <div class="detail-label">${escapeHtml(draft.channel)} · ${escapeHtml(draft.status)}</div>
+    <div class="detail-val">${escapeHtml(draft.body)}</div>
+    <div class="callback-row">
+      ${draft.status === 'reviewed' || draft.status === 'manual_sent' ? `<button class="btn" data-copy-draft="${draft.id}" type="button">Copy</button>` : ''}
+      ${draft.status === 'draft' ? `<button class="btn" data-edit-draft="${draft.id}" data-draft-channel="${draft.channel}" data-draft-body="${encodeURIComponent(draft.body)}" type="button">Edit</button><button class="btn" data-review-draft="${draft.id}" type="button">Review</button><button class="btn dead" data-dismiss-draft="${draft.id}" type="button">Dismiss</button>` : ''}
+      ${draft.status === 'reviewed' ? `<button class="btn primary" data-log-sent-draft="${draft.id}" type="button">Log as sent</button><button class="btn dead" data-dismiss-draft="${draft.id}" type="button">Dismiss</button>` : ''}
+    </div>
+  </div>`).join('');
+}
+
+async function loadAnchorDrafts(lead = selectedLead) {
+  if (!lead?.phone_setter_v1) return;
+  try {
+    const data = await api(`/setter/api/leads/${lead.id}/follow-up-drafts`);
+    if (selectedLead?.id === lead.id) renderAnchorDrafts(data?.drafts || []);
+  } catch (err) {
+    document.getElementById('anchorDraftList').innerHTML = '<div class="muted-status">Drafts unavailable.</div>';
+  }
+}
+
+async function loadSetterPlaybook(lead = selectedLead) {
+  const content = document.getElementById('setterPlaybookContent');
+  if (!lead || !content) return;
+  content.innerHTML = '<div class="muted-status">Loading call guide…</div>';
+  try {
+    const playbook = await api(`/setter/api/playbook?vertical=${encodeURIComponent(lead.vertical || 'general')}`);
+    if (selectedLead?.id !== lead.id) return;
+    document.getElementById('setterPlaybookTitle').textContent = playbook.title || 'Human call guide';
+    document.getElementById('setterPlaybookObjective').textContent = playbook.objective || '';
+    content.innerHTML = `
+      <div class="script-step"><div class="script-heading">Opener</div><div class="script-line">${escapeHtml(playbook.opener)}</div></div>
+      <div class="script-step"><div class="script-heading">Qualification</div>${(playbook.qualification_questions || []).map(question => `<div class="script-line">• ${escapeHtml(question)}</div>`).join('')}</div>
+      <div class="script-step"><div class="script-heading">Objections</div>${(playbook.objection_prompts || []).map(item => `<div class="script-line"><strong>${escapeHtml(item.objection)}</strong><br>${escapeHtml(item.response)}</div>`).join('')}</div>
+      <div class="script-step"><div class="script-heading">Required close</div><div class="script-line">${escapeHtml(playbook.required_close)}</div><div class="muted-status">${escapeHtml(playbook.safety)}</div></div>`;
+  } catch (_err) {
+    content.innerHTML = '<div class="muted-status">Call guide unavailable. Use the approved campaign script and record a disposition.</div>';
+  }
+}
+
+async function createAnchorDraft() {
+  if (!selectedLead?.phone_setter_v1) return;
+  try {
+    await api(`/setter/api/leads/${selectedLead.id}/follow-up-drafts`, { method:'POST', body:JSON.stringify({
+      channel: document.getElementById('anchorDraftChannel').value,
+      body: document.getElementById('anchorDraftBody').value
+    }) });
+    document.getElementById('anchorDraftBody').value = '';
+    await loadAnchorDrafts();
+  } catch (err) { alert('Draft creation failed'); }
+}
+
+async function anchorDraftAction(draftId, action) {
+  try {
+    if (action === 'copy') {
+      const data = await api(`/setter/api/leads/${selectedLead.id}/follow-up-drafts`);
+      const draft = (data?.drafts || []).find(item => item.id === draftId);
+      if (draft?.body) await navigator.clipboard.writeText(draft.body);
+      return;
+    }
+    const suffix = action === 'review' ? '/review' : action === 'dismiss' ? '/dismiss' : '/log-sent';
+    await api(`/setter/api/follow-up-drafts/${draftId}${suffix}`, { method:'POST', body:JSON.stringify({}) });
+    await loadAnchorDrafts();
+  } catch (err) { alert(action === 'review' ? 'Review failed (manager or admin review is required)' : 'Draft action failed'); }
+}
+
+async function editAnchorDraft(button) {
+  const body = prompt('Edit draft', decodeURIComponent(button.dataset.draftBody || ''));
+  if (body === null) return;
+  try {
+    await api(`/setter/api/follow-up-drafts/${button.dataset.editDraft}`, { method:'PATCH', body:JSON.stringify({
+      channel: button.dataset.draftChannel, body
+    }) });
+    await loadAnchorDrafts();
+  } catch (err) { alert('Draft edit failed'); }
 }
 
 function renderDetailHot() {
@@ -1421,7 +1653,11 @@ function openDetail(id) {
   selectedLead = lead;
   renderDetailHot();
   document.getElementById('detailName').textContent = lead.business_name;
-  document.getElementById('detailMeta').textContent = `${lead.is_hot ? 'Hot · ' : ''}${lead.vertical} · ${lead.city} · score ${lead.score}`;
+  document.getElementById('detailMeta').textContent = `${lead.is_synthetic ? 'SYNTHETIC TEST · CONTACT PROHIBITED · ' : ''}${lead.is_hot ? 'Hot · ' : ''}${lead.vertical} · ${lead.city} · score ${lead.score}`;
+  document.getElementById('detailPriority').textContent = lead.priority_reason || '';
+  loadSetterPlaybook(lead);
+  document.getElementById('anchorFollowUpBlock').style.display = lead.phone_setter_v1 ? 'block' : 'none';
+  if (lead.phone_setter_v1) loadAnchorDrafts(lead);
   document.getElementById('detailContact').innerHTML = `${lead.contact_name || 'No contact'}<br>${lead.email || '-'}`;
   renderPhoneTools(lead);
   renderCallback(lead);
@@ -1447,6 +1683,22 @@ function setTab(tab) {
   document.getElementById('panelSub').textContent = titles[tab][1];
 }
 
+async function reviewSampledCall(id) {
+  const score = Number(prompt('Quality score (1-5)', '4'));
+  if (!Number.isInteger(score) || score < 1 || score > 5) return;
+  const outcomeAccurate = confirm('Is the recorded outcome accurate?');
+  const notesComplete = confirm('Are the structured notes complete?');
+  const notes = prompt('Coaching note (optional)', '') || '';
+  try {
+    await api(`/setter/api/quality/reviews/${id}`, { method:'POST', body:JSON.stringify({
+      score, outcome_accurate: outcomeAccurate, notes_complete: notesComplete, notes
+    }) });
+    await loadManagerReviews();
+  } catch (_error) {
+    alert('Manager review could not be saved');
+  }
+}
+
 document.addEventListener('click', event => {
   const tab = event.target.closest('.nav-tab');
   if (tab) setTab(tab.dataset.tab);
@@ -1462,6 +1714,18 @@ document.addEventListener('click', event => {
     openCallDisposition(callBtn.dataset.logCall);
     return;
   }
+  const reviewBtn = event.target.closest('[data-review-call]');
+  if (reviewBtn) { reviewSampledCall(reviewBtn.dataset.reviewCall); return; }
+  const copyDraft = event.target.closest('[data-copy-draft]');
+  if (copyDraft) { anchorDraftAction(copyDraft.dataset.copyDraft, 'copy'); return; }
+  const editDraft = event.target.closest('[data-edit-draft]');
+  if (editDraft) { editAnchorDraft(editDraft); return; }
+  const reviewDraft = event.target.closest('[data-review-draft]');
+  if (reviewDraft) { anchorDraftAction(reviewDraft.dataset.reviewDraft, 'review'); return; }
+  const dismissDraft = event.target.closest('[data-dismiss-draft]');
+  if (dismissDraft) { anchorDraftAction(dismissDraft.dataset.dismissDraft, 'dismiss'); return; }
+  const logSentDraft = event.target.closest('[data-log-sent-draft]');
+  if (logSentDraft) { anchorDraftAction(logSentDraft.dataset.logSentDraft, 'log-sent'); return; }
   const statusBtn = event.target.closest('[data-status]');
   if (statusBtn) updateStatus(statusBtn.dataset.id, statusBtn.dataset.status);
   const open = event.target.closest('[data-open]');
@@ -1525,12 +1789,17 @@ document.getElementById('detailNotesInput').addEventListener('input', updateNote
 document.getElementById('detailNotesInput').addEventListener('blur', saveLeadNotes);
 document.getElementById('enrichPhoneBtn').addEventListener('click', enrichPhone);
 document.getElementById('bulkEnrichPhonesBtn').addEventListener('click', bulkEnrichMissingPhones);
+document.getElementById('showTestProspects').addEventListener('change', event => {
+  showTestProspects = event.target.checked;
+  Promise.all([loadQueue(), loadDue(), loadPipeline()]);
+});
 document.getElementById('detailHotBtn').addEventListener('click', () => {
   if (selectedLead) toggleHot(selectedLead.id);
 });
 document.getElementById('detailLogCallBtn').addEventListener('click', () => {
   if (selectedLead) openCallDisposition(selectedLead.id);
 });
+document.getElementById('createAnchorDraftBtn').addEventListener('click', createAnchorDraft);
 document.getElementById('callDispositionForm').addEventListener('submit', saveCallDisposition);
 document.getElementById('callDisposition').addEventListener('change', updateCallCallbackSuggestion);
 document.getElementById('cancelCallDispositionBtn').addEventListener('click', closeCallDisposition);
