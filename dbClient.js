@@ -1,6 +1,7 @@
 const pool = require('./db');
 const { getRuntimeClientId } = require('./utils/clientContext');
 const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('./utils/businessNameShort');
+const { isPhase3dSetterSchemaPresent, notSyntheticSql } = require('./utils/callDispositions');
 
 let pendingCommentPublishSchemaPromise;
 
@@ -20,11 +21,18 @@ function ensurePendingCommentPublishSchema() {
 // Check do not contact before any agent acts
 async function checkDNC(prospectId) {
   const clientId = getRuntimeClientId();
+  if (await isPhase3dSetterSchemaPresent(pool)) {
+    const res = await pool.query(
+      'SELECT do_not_contact, is_synthetic FROM prospects WHERE id = $1 AND client_id = $2',
+      [prospectId, clientId]
+    );
+    return res.rows[0] ? Boolean(res.rows[0].do_not_contact || res.rows[0].is_synthetic) : true;
+  }
   const res = await pool.query(
-    'SELECT do_not_contact, is_synthetic FROM prospects WHERE id = $1 AND client_id = $2',
+    'SELECT do_not_contact FROM prospects WHERE id = $1 AND client_id = $2',
     [prospectId, clientId]
   );
-  return res.rows[0] ? Boolean(res.rows[0].do_not_contact || res.rows[0].is_synthetic) : true;
+  return res.rows[0] ? Boolean(res.rows[0].do_not_contact) : true;
 }
 
 // Get full prospect record
@@ -85,30 +93,47 @@ async function logAgentAction(agentName, action, prospectId, targetUrl, payload,
 // Add a new prospect
 async function addProspect(data) {
   const clientId = getRuntimeClientId(data);
+  const doNotContact = Boolean(data.do_not_contact || data.is_synthetic);
+  const baseValues = [
+    data.company_id || null,
+    data.first_name,
+    data.last_name,
+    data.email,
+    data.phone || null,
+    data.job_title || null,
+    data.decision_maker || false,
+    data.linkedin_url || null,
+    data.facebook_url || null,
+    data.source || 'manual',
+    data.icp_score || 0,
+    clientId,
+    data.service_area_match || null,
+  ];
+  // Only reference the Phase 3D suppression columns once the controlled
+  // migration has created them. A genuine pre-Phase-3D production schema has
+  // neither is_synthetic nor synthetic_label, so the legacy insert is used.
+  if (await isPhase3dSetterSchemaPresent(pool)) {
+    const res = await pool.query(
+      `INSERT INTO prospects
+        (company_id, first_name, last_name, email, phone, job_title, decision_maker,
+         linkedin_url, facebook_url, source, icp_score, client_id, service_area_match,
+         is_synthetic, synthetic_label, do_not_contact)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       ON CONFLICT (email) DO NOTHING
+       RETURNING id`,
+      [...baseValues, Boolean(data.is_synthetic), data.synthetic_label || null, doNotContact]
+    );
+    return res.rows[0]?.id;
+  }
   const res = await pool.query(
-    `INSERT INTO prospects 
-      (company_id, first_name, last_name, email, phone, job_title, decision_maker, linkedin_url, facebook_url, source, icp_score, client_id, service_area_match, is_synthetic, synthetic_label, do_not_contact)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+    `INSERT INTO prospects
+      (company_id, first_name, last_name, email, phone, job_title, decision_maker,
+       linkedin_url, facebook_url, source, icp_score, client_id, service_area_match,
+       do_not_contact)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      ON CONFLICT (email) DO NOTHING
      RETURNING id`,
-    [
-      data.company_id || null,
-      data.first_name,
-      data.last_name,
-      data.email,
-      data.phone || null,
-      data.job_title || null,
-      data.decision_maker || false,
-      data.linkedin_url || null,
-      data.facebook_url || null,
-      data.source || 'manual',
-      data.icp_score || 0,
-      clientId,
-      data.service_area_match || null,
-      Boolean(data.is_synthetic),
-      data.synthetic_label || null,
-      Boolean(data.do_not_contact || data.is_synthetic)
-    ]
+    [...baseValues, doNotContact]
   );
   return res.rows[0]?.id;
 }
@@ -143,8 +168,9 @@ async function addCompany(data) {
 // Get all active prospects for a given status
 async function getProspectsByStatus(status) {
   const clientId = getRuntimeClientId();
+  const syntheticGuard = await notSyntheticSql(pool, 'is_synthetic');
   const res = await pool.query(
-    'SELECT * FROM prospects WHERE status = $1 AND do_not_contact = false AND COALESCE(is_synthetic, false) = false AND client_id = $2 ORDER BY icp_score DESC',
+    `SELECT * FROM prospects WHERE status = $1 AND do_not_contact = false AND ${syntheticGuard} AND client_id = $2 ORDER BY icp_score DESC`,
     [status, clientId]
   );
   return res.rows;

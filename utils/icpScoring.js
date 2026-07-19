@@ -39,6 +39,7 @@ const sharedPool = require('../db');
 const { getClientConfig, getRuntimeClientId } = require('./clientContext');
 const { OPEN_SOURCE, ensureOpenSignalSchema } = require('./openSignalGate');
 const { resolveVerticalTier } = require('./verticalTiers');
+const { isPhase3dSetterSchemaPresent } = require('./callDispositions');
 
 // ── TABLE MIGRATION ──────────────────────────────────────────────────────────
 // Idempotent. Wired into server.js startup alongside the other ensure* helpers,
@@ -367,12 +368,14 @@ function computePenalties(eng, prospect) {
 
 // ── PROSPECT LOADER ──────────────────────────────────────────────────────────
 async function loadProspect(prospectId, clientId) {
+  const phase3d = await isPhase3dSetterSchemaPresent(sharedPool);
+  const syntheticSelect = phase3d ? ', p.is_synthetic' : ', false AS is_synthetic';
   const res = await sharedPool.query(`
     SELECT
       p.id, p.client_id, p.email, p.phone, p.vertical, p.icp_score,
       p.service_area_match, p.has_website, p.website_url,
       p.has_facebook, p.has_instagram, p.facebook_url, p.instagram_url,
-      p.employee_count_estimate, p.setter_status, p.booked_at, p.do_not_contact, p.is_synthetic,
+      p.employee_count_estimate, p.setter_status, p.booked_at, p.do_not_contact${syntheticSelect},
       c.name AS company_name, c.location AS company_location,
       c.website AS company_website, c.domain AS company_domain,
       c.industry AS industry, c.size AS company_size

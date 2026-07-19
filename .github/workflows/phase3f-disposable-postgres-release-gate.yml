@@ -14,8 +14,10 @@ on:
       - test/maxSmokeProductionSchema.test.js
       - test/maxTransactionClient.test.js
       - test/maxDecayCronPostgres.test.js
+      - test/setterPreMigrationCompat.test.js
       - test/setterQuality.test.js
       - test/callDispositions.test.js
+      - dbClient.js
       - routes/setter.js
       - routes/api.js
       - utils/callDispositions.js
@@ -98,7 +100,7 @@ jobs:
           set -o pipefail
           node --test test/anchorPhoneSetterPostgres.test.js test/revenuePostgres.test.js \
             test/maxSmokeProductionSchema.test.js test/maxTransactionClient.test.js \
-            test/maxDecayCronPostgres.test.js | tee artifacts/phase3f/postgres-gated-tests.log
+            test/maxDecayCronPostgres.test.js test/setterPreMigrationCompat.test.js | tee artifacts/phase3f/postgres-gated-tests.log
       - name: Run full suite with no PostgreSQL skips
         env:
           ANCHOR_PHONE_SETTER_TEST_POSTGRES: "true"

@@ -1,6 +1,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const pool = require('../db');
+const { notSyntheticSql } = require('./callDispositions');
 
 const LOCK_NAMESPACE = 701102;
 const DEFAULT_TIME_ZONE = 'America/New_York';
@@ -271,13 +272,14 @@ async function autorun(clientId, options = {}) {
       return result;
     }
 
+    const syntheticGuard = await notSyntheticSql({ query }, 'p.is_synthetic');
     const candidates = await query(`
       SELECT p.email
       FROM prospects p
       WHERE p.client_id = $1
         AND p.status IN ('cold', 'contacted', 'warm')
         AND COALESCE(p.do_not_contact, FALSE) = FALSE
-        AND COALESCE(p.is_synthetic, FALSE) = FALSE
+        AND ${syntheticGuard}
         AND p.email IS NOT NULL
         AND p.email <> ''
         AND p.email_sequence_completed_at IS NULL

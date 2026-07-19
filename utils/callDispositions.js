@@ -17,7 +17,77 @@ const DISPOSITION_VALUES = Object.freeze([
 
 const DISPOSITION_SET = new Set(DISPOSITION_VALUES);
 
-async function ensureCallDispositionSchema(db) {
+let phase3dPresentCache = null;
+
+function resetPhase3dSchemaCache() {
+  phase3dPresentCache = null;
+}
+
+async function isPhase3dSetterSchemaPresent(db) {
+  if (phase3dPresentCache !== null) return phase3dPresentCache;
+  const result = await db.query(`
+    SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'prospects'
+        AND column_name = 'is_synthetic'
+    ) AS present
+  `);
+  phase3dPresentCache = Boolean(result.rows[0]?.present);
+  return phase3dPresentCache;
+}
+
+async function notSyntheticSql(db, columnRef = 'is_synthetic') {
+  if (!(await isPhase3dSetterSchemaPresent(db))) return 'TRUE';
+  return `COALESCE(${columnRef}, false) = false`;
+}
+
+async function ensureLegacyCallDispositionSchema(db) {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS call_dispositions (
+      id SERIAL PRIMARY KEY,
+      prospect_id UUID REFERENCES prospects(id),
+      client_id INTEGER,
+      call_duration_seconds INTEGER,
+      disposition TEXT,
+      notes TEXT,
+      cal_queue_id INTEGER,
+      setter_id INTEGER,
+      source TEXT NOT NULL DEFAULT 'cal',
+      callback_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await db.query(`
+    ALTER TABLE call_dispositions
+      ADD COLUMN IF NOT EXISTS setter_id INTEGER,
+      ADD COLUMN IF NOT EXISTS source TEXT,
+      ADD COLUMN IF NOT EXISTS callback_at TIMESTAMPTZ
+  `);
+  await db.query(`
+    UPDATE call_dispositions
+    SET source = 'cal'
+    WHERE source IS NULL
+  `);
+  await db.query(`
+    ALTER TABLE call_dispositions
+      ALTER COLUMN source SET DEFAULT 'cal',
+      ALTER COLUMN source SET NOT NULL
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS call_dispositions_client_created_idx
+      ON call_dispositions (client_id, created_at DESC)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS call_dispositions_prospect_idx
+      ON call_dispositions (prospect_id, created_at DESC)
+  `);
+}
+
+async function reconcilePhase3dSetterSchema(db) {
+  // Idempotent only. Never creates Phase 3D objects from a blank production schema.
+  // Controlled migration migrations/2026-07-19-setter-pilot-quality-control.sql owns forward apply.
   await db.query(`
     ALTER TABLE prospects
       ADD COLUMN IF NOT EXISTS is_synthetic BOOLEAN NOT NULL DEFAULT false,
@@ -47,41 +117,7 @@ async function ensureCallDispositionSchema(db) {
       ADD COLUMN IF NOT EXISTS setter_review_sample_percent INTEGER NOT NULL DEFAULT 20
   `);
   await db.query(`
-    CREATE TABLE IF NOT EXISTS call_dispositions (
-      id SERIAL PRIMARY KEY,
-      prospect_id UUID REFERENCES prospects(id),
-      client_id INTEGER,
-      call_duration_seconds INTEGER,
-      disposition TEXT,
-      notes TEXT,
-      cal_queue_id INTEGER,
-      setter_id INTEGER,
-      source TEXT NOT NULL DEFAULT 'cal',
-      callback_at TIMESTAMPTZ,
-      structured_notes JSONB,
-      details JSONB NOT NULL DEFAULT '{}'::jsonb,
-      activity_result TEXT,
-      next_action TEXT,
-      suppression_state TEXT,
-      lifecycle_result TEXT,
-      is_synthetic BOOLEAN NOT NULL DEFAULT false,
-      review_required BOOLEAN NOT NULL DEFAULT false,
-      review_status TEXT NOT NULL DEFAULT 'not_sampled',
-      reviewed_by INTEGER,
-      reviewed_at TIMESTAMPTZ,
-      review_score INTEGER,
-      review_notes TEXT,
-      review_outcome_accurate BOOLEAN,
-      review_notes_complete BOOLEAN,
-      idempotency_key TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-  await db.query(`
     ALTER TABLE call_dispositions
-      ADD COLUMN IF NOT EXISTS setter_id INTEGER,
-      ADD COLUMN IF NOT EXISTS source TEXT,
-      ADD COLUMN IF NOT EXISTS callback_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS structured_notes JSONB,
       ADD COLUMN IF NOT EXISTS details JSONB NOT NULL DEFAULT '{}'::jsonb,
       ADD COLUMN IF NOT EXISTS activity_result TEXT,
@@ -98,24 +134,6 @@ async function ensureCallDispositionSchema(db) {
       ADD COLUMN IF NOT EXISTS review_outcome_accurate BOOLEAN,
       ADD COLUMN IF NOT EXISTS review_notes_complete BOOLEAN,
       ADD COLUMN IF NOT EXISTS idempotency_key TEXT
-  `);
-  await db.query(`
-    UPDATE call_dispositions
-    SET source = 'cal'
-    WHERE source IS NULL
-  `);
-  await db.query(`
-    ALTER TABLE call_dispositions
-      ALTER COLUMN source SET DEFAULT 'cal',
-      ALTER COLUMN source SET NOT NULL
-  `);
-  await db.query(`
-    CREATE INDEX IF NOT EXISTS call_dispositions_client_created_idx
-      ON call_dispositions (client_id, created_at DESC)
-  `);
-  await db.query(`
-    CREATE INDEX IF NOT EXISTS call_dispositions_prospect_idx
-      ON call_dispositions (prospect_id, created_at DESC)
   `);
   await db.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS call_dispositions_idempotency_idx
@@ -183,6 +201,15 @@ async function ensureCallDispositionSchema(db) {
       )
     ON CONFLICT DO NOTHING
   `);
+}
+
+async function ensureCallDispositionSchema(db) {
+  await ensureLegacyCallDispositionSchema(db);
+  // Gate 1 / controlled migration: never soft-create Phase 3D from an absent schema.
+  // After the approved migration lands, reconcile remaining IF NOT EXISTS objects only.
+  if (!(await isPhase3dSetterSchemaPresent(db))) return { phase3d: false };
+  await reconcilePhase3dSetterSchema(db);
+  return { phase3d: true };
 }
 
 function nextBusinessDayTen(now = new Date()) {
@@ -256,7 +283,11 @@ module.exports = {
   DISPOSITION_VALUES,
   applyProspectDisposition,
   ensureCallDispositionSchema,
+  ensureLegacyCallDispositionSchema,
+  isPhase3dSetterSchemaPresent,
+  notSyntheticSql,
   nextBusinessDayTen,
   nurtureCallback,
+  resetPhase3dSchemaCache,
   resolveCallbackAt,
 };

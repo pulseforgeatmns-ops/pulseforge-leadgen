@@ -21,6 +21,7 @@ const { ensureTieredEnrichmentSchema } = require('../utils/tieredEnrichmentSchem
 const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('../utils/businessNameShort');
 const { autorun: autorunEmmett } = require('../utils/emmettAutosend');
 const { applyManualLifecycleOverride } = require('../utils/maxManualOverride');
+const { notSyntheticSql } = require('../utils/callDispositions');
 
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
@@ -275,6 +276,7 @@ router.get('/api/agent-visibility', requireDashboardRead, async (req, res) => {
 router.get('/api/pipeline/client', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
+    const syntheticGuard = await notSyntheticSql(pool, 'p.is_synthetic');
     const [clientResult, revenueResult] = await Promise.all([
       pool.query(`
         WITH prospect_rollup AS (
@@ -292,7 +294,7 @@ router.get('/api/pipeline/client', requireDashboardRead, async (req, res) => {
             )::int AS sends
           FROM touchpoints t
           JOIN prospects p ON p.id = t.prospect_id AND p.client_id = t.client_id
-          WHERE t.client_id = $1 AND COALESCE(p.is_synthetic, false) = false
+          WHERE t.client_id = $1 AND ${syntheticGuard}
         )
         SELECT
           c.id, c.name, c.slug, c.city, c.state, c.max_email, c.active, c.created_at,
@@ -313,7 +315,7 @@ router.get('/api/pipeline/client', requireDashboardRead, async (req, res) => {
              FROM prospects p
             WHERE p.client_id = $1
               AND p.setter_status = 'booked'
-              AND COALESCE(p.is_synthetic, false) = false
+              AND ${syntheticGuard}
               AND p.closed_at IS NULL) AS booked_pending
         FROM commissions c
         WHERE c.client_id = $1
