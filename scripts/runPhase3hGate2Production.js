@@ -44,6 +44,7 @@ const RELEASE = Object.freeze({
   migrationSha256: '2dd54555bf14e71305ca28edc7041b0771a5a2421e5632ad1a96dc51523d937d',
   rollbackSha256: '79c2e3973d71f7d416124fa7389ae61ec952369df464c0e7770ac96a223ca275',
   backupProcedureRelPath: 'scripts/stagePhase16bDurableBackup.js',
+  remediationRelPath: 'scripts/remediation/2026-07-19-cancel-suppressed-setter-callbacks.sql',
 });
 
 const IDENTITY = Object.freeze({
@@ -51,6 +52,14 @@ const IDENTITY = Object.freeze({
   expectedMajor: 18,
   expectedVersionPrefix: '18.4',
   anchorClientId: 10,
+});
+
+const EXPECTED_REMEDIATION = Object.freeze({
+  suppressedPending: 1,
+  syntheticPending: 0,
+  totalPending: 10,
+  nonSuppressedPending: 9,
+  affectedRows: 1,
 });
 
 const USAGE = `Phase 3H Gate 2 production runner (fail-closed).
@@ -65,6 +74,8 @@ Modes (mutually exclusive write/verify actions):
   --verify-after-restart    Read-only post-restart checks
   --execute-migration       Backup + apply reviewed migration (requires confirmation)
   --execute-rollback        Logical feature-flag rollback (requires separate confirmation)
+  --execute-remediation-suppressed-callbacks
+                            Cancel the one pending DNC/synthetic callback (requires confirmation)
 
 Required for every non-help run:
   --artifacts-dir=/absolute/path
@@ -73,8 +84,8 @@ Common options:
   --worktree=/path/to/release-sha-worktree
   --expected-head=<sha>
   --env-file=/path/to/.env
-  --non-interactive         With PHASE3H_PRODUCTION_APPROVED=... (migration) or
-                            PHASE3H_ROLLBACK_APPROVED=... (rollback)
+  --non-interactive         With PHASE3H_PRODUCTION_APPROVED=... / PHASE3H_ROLLBACK_APPROVED=...
+                            / PHASE3H_REMEDIATION_APPROVED=CANCEL_SUPPRESSED_SETTER_CALLBACKS_ON_RAILWAY
   --allow-preexisting-database-url
 
 Default mode never writes. --verify-post-migration never writes.
@@ -95,6 +106,9 @@ const CONFIRM = Object.freeze({
   rollbackPhrase: 'ROLLBACK PHASE3D ON railway POSTGRES18',
   rollbackEnvKey: 'PHASE3H_ROLLBACK_APPROVED',
   rollbackEnvValue: 'ROLLBACK_PHASE3D_ON_RAILWAY_POSTGRES18',
+  remediationPhrase: 'CANCEL SUPPRESSED SETTER CALLBACKS ON railway',
+  remediationEnvKey: 'PHASE3H_REMEDIATION_APPROVED',
+  remediationEnvValue: 'CANCEL_SUPPRESSED_SETTER_CALLBACKS_ON_RAILWAY',
 });
 
 const DEFAULT_ENV_FILE = path.join(os.homedir(), 'Desktop', 'Pulseforge', 'Lead Gen', 'Lead Gen App', '.env');
@@ -1275,6 +1289,223 @@ async function runVerifyPostMigration(db, {
   });
 }
 
+function assertRemediationStaticSafety(sql) {
+  const findings = {};
+  const withoutLineComments = sql.replace(/^[ \t]*--.*$/gm, '');
+  const trimmed = withoutLineComments.trim();
+  findings.single_transaction = /^BEGIN\s*;/i.test(trimmed) && /COMMIT\s*;?\s*$/i.test(trimmed)
+    && (withoutLineComments.match(/^\s*BEGIN\s*;/gim) || []).length === 1
+    && (withoutLineComments.match(/^\s*COMMIT\s*;/gim) || []).length === 1;
+  if (!findings.single_transaction) {
+    throw new GateError('Remediation is not wrapped in exactly one BEGIN/COMMIT', { stage: 'remediation-inspect', code: 'NOT_SINGLE_TXN' });
+  }
+  findings.only_updates_setter_callbacks = /UPDATE\s+setter_callbacks\b/i.test(sql)
+    && !/UPDATE\s+prospects\b/i.test(sql)
+    && !/UPDATE\s+clients\b/i.test(sql)
+    && !/UPDATE\s+call_dispositions\b/i.test(sql)
+    && !/UPDATE\s+setter_follow_up_drafts\b/i.test(sql)
+    && !/UPDATE\s+activity_log\b/i.test(sql)
+    && !/UPDATE\s+agent_log\b/i.test(sql)
+    && !/UPDATE\s+touchpoints\b/i.test(sql);
+  if (!findings.only_updates_setter_callbacks) {
+    throw new GateError('Remediation must UPDATE only setter_callbacks', { stage: 'remediation-inspect', code: 'SCOPE_VIOLATION' });
+  }
+  findings.no_delete = !/\bDELETE\b/i.test(sql);
+  findings.targets_pending_suppressed = /status\s*=\s*'pending'/i.test(sql)
+    && /do_not_contact\s*=\s*true/i.test(sql)
+    && /is_synthetic\s*=\s*true/i.test(sql);
+  findings.sets_cancelled = /status\s*=\s*'cancelled'/i.test(sql);
+  findings.fail_closed_rowcount = /ROW_COUNT/i.test(sql) && /n\s*<>\s*1|n\s*!=\s*1/i.test(sql);
+  findings.no_anchor_enablement = !/setter_pipeline_v2_enabled\s*=\s*true/i.test(sql);
+  findings.no_insert = !/\bINSERT\b/i.test(sql);
+  if (!findings.no_delete || !findings.targets_pending_suppressed || !findings.sets_cancelled
+    || !findings.fail_closed_rowcount || !findings.no_anchor_enablement || !findings.no_insert) {
+    throw new GateError('Remediation failed static safety review', {
+      stage: 'remediation-inspect', code: 'REMEDIATION_UNSAFE', details: findings,
+    });
+  }
+  return findings;
+}
+
+async function previewSuppressedCallbackRemediation(db, { identity = IDENTITY, expected = EXPECTED_REMEDIATION } = {}) {
+  return withReadOnly(db, async () => {
+    const preview = {
+      stage: 'pre-remediation-preview',
+      read_only: true,
+      expected,
+      counts: {},
+      affected_callback: null,
+      checks: {},
+    };
+
+    const q = async (sql, params = []) => (await db.query(sql, params)).rows[0];
+
+    preview.counts.suppressed_pending = (await q(`
+      SELECT count(*)::int AS count FROM setter_callbacks sc
+      JOIN prospects p ON p.id = sc.prospect_id AND p.client_id = sc.client_id
+      WHERE sc.status = 'pending' AND (p.do_not_contact = true OR p.is_synthetic = true)
+    `)).count;
+
+    preview.counts.synthetic_pending = (await q(`
+      SELECT count(*)::int AS count FROM setter_callbacks sc
+      JOIN prospects p ON p.id = sc.prospect_id AND p.client_id = sc.client_id
+      WHERE sc.status = 'pending' AND p.is_synthetic = true
+    `)).count;
+
+    preview.counts.dnc_pending = (await q(`
+      SELECT count(*)::int AS count FROM setter_callbacks sc
+      JOIN prospects p ON p.id = sc.prospect_id AND p.client_id = sc.client_id
+      WHERE sc.status = 'pending' AND p.do_not_contact = true
+    `)).count;
+
+    preview.counts.total_pending = (await q(`
+      SELECT count(*)::int AS count FROM setter_callbacks WHERE status = 'pending'
+    `)).count;
+
+    preview.counts.non_suppressed_pending = preview.counts.total_pending - preview.counts.suppressed_pending;
+
+    const draftsExist = (await q(`SELECT to_regclass('public.setter_follow_up_drafts') IS NOT NULL AS present`)).present;
+    if (draftsExist) {
+      preview.counts.related_pending_drafts = (await q(`
+        SELECT count(*)::int AS count FROM setter_follow_up_drafts d
+        JOIN prospects p ON p.id = d.prospect_id AND p.client_id = d.client_id
+        WHERE d.status IN ('draft','reviewed') AND (p.do_not_contact OR p.is_synthetic)
+      `)).count;
+    } else {
+      preview.counts.related_pending_drafts = 0;
+      preview.observations = { ...(preview.observations || {}), setter_follow_up_drafts_exists: false };
+    }
+
+    const row = (await db.query(`
+      SELECT sc.id, sc.client_id, sc.prospect_id, sc.status, sc.due_at, sc.created_at,
+             p.do_not_contact, p.is_synthetic
+      FROM setter_callbacks sc
+      JOIN prospects p ON p.id = sc.prospect_id AND p.client_id = sc.client_id
+      WHERE sc.status = 'pending' AND (p.do_not_contact = true OR p.is_synthetic = true)
+      ORDER BY sc.created_at ASC
+      LIMIT 5
+    `)).rows;
+
+    if (row.length === 1) {
+      const r = row[0];
+      preview.affected_callback = {
+        callback_id_hash: stableHash(r.id),
+        client_id: r.client_id,
+        is_anchor_tenant: r.client_id === identity.anchorClientId,
+        prospect_id_hash: stableHash(r.prospect_id),
+        status: r.status,
+        due_at: r.due_at,
+        created_at: r.created_at,
+        prospect_dnc: Boolean(r.do_not_contact),
+        prospect_synthetic: Boolean(r.is_synthetic),
+      };
+    } else {
+      preview.affected_callback = { match_count: row.length };
+    }
+
+    const anyFlag = (await q('SELECT COALESCE(bool_or(setter_pipeline_v2_enabled), false) AS enabled FROM clients')).enabled;
+    preview.anchor_flag_false = anyFlag === false;
+
+    preview.checks.suppressed_pending_is_1 = preview.counts.suppressed_pending === expected.suppressedPending;
+    preview.checks.synthetic_pending_is_0 = preview.counts.synthetic_pending === expected.syntheticPending;
+    preview.checks.total_pending_is_10 = preview.counts.total_pending === expected.totalPending;
+    preview.checks.non_suppressed_pending_is_9 = preview.counts.non_suppressed_pending === expected.nonSuppressedPending;
+    preview.checks.no_related_pending_drafts = preview.counts.related_pending_drafts === 0;
+    preview.checks.anchor_flag_false = preview.anchor_flag_false;
+
+    preview.passed = Object.values(preview.checks).every(Boolean);
+    if (!preview.passed) {
+      throw new GateError('Remediation preview counts do not match authorized expectations — refusing to proceed', {
+        stage: 'remediation-preview', code: 'PREVIEW_COUNT_MISMATCH', details: preview,
+      });
+    }
+    return preview;
+  });
+}
+
+async function applySuppressedCallbackRemediation(db, { remediationPath, deps, secrets = new Set() }) {
+  const sql = deps.fs.readFileSync(remediationPath, 'utf8');
+  assertRemediationStaticSafety(sql);
+  const sha = sha256File(deps.fs, remediationPath);
+  const started = Date.now();
+  const startedIso = new Date(started).toISOString();
+  try {
+    await db.query(sql);
+  } catch (error) {
+    try { await db.query('ROLLBACK'); } catch { /* already aborted */ }
+    return {
+      stage: 'remediation-result',
+      remediation_path: remediationPath,
+      remediation_sha256: sha,
+      started_at: startedIso,
+      ended_at: new Date().toISOString(),
+      duration_ms: Date.now() - started,
+      transaction_result: 'rolled_back',
+      affected_row_count: null,
+      error: sanitizeError(error, secrets),
+      passed: false,
+    };
+  }
+  return {
+    stage: 'remediation-result',
+    remediation_path: remediationPath,
+    remediation_sha256: sha,
+    started_at: startedIso,
+    ended_at: new Date().toISOString(),
+    duration_ms: Date.now() - started,
+    transaction_result: 'committed',
+    affected_row_count: EXPECTED_REMEDIATION.affectedRows,
+    passed: true,
+  };
+}
+
+async function verifyAfterSuppressedCallbackRemediation(db, { identity = IDENTITY, preview } = {}) {
+  return withReadOnly(db, async () => {
+    const report = { stage: 'post-remediation-verification', read_only: true, checks: {}, safety: {} };
+    const q = async sql => (await db.query(sql)).rows[0].count;
+
+    report.safety.pending_for_dnc = await q(`
+      SELECT count(*)::int AS count FROM setter_callbacks sc
+      JOIN prospects p ON p.id = sc.prospect_id AND p.client_id = sc.client_id
+      WHERE sc.status = 'pending' AND p.do_not_contact = true`);
+    report.safety.pending_for_synthetic = await q(`
+      SELECT count(*)::int AS count FROM setter_callbacks sc
+      JOIN prospects p ON p.id = sc.prospect_id AND p.client_id = sc.client_id
+      WHERE sc.status = 'pending' AND p.is_synthetic = true`);
+    report.safety.total_pending = await q(`SELECT count(*)::int AS count FROM setter_callbacks WHERE status = 'pending'`);
+    report.safety.total_cancelled = await q(`SELECT count(*)::int AS count FROM setter_callbacks WHERE status = 'cancelled'`);
+    report.safety.cross_tenant = await q(`
+      SELECT count(*)::int AS count FROM setter_callbacks sc
+      JOIN prospects p ON p.id = sc.prospect_id WHERE sc.client_id <> p.client_id`);
+
+    const anyFlag = (await db.query('SELECT COALESCE(bool_or(setter_pipeline_v2_enabled), false) AS enabled FROM clients')).rows[0].enabled;
+    report.safety.anchor_flag_false = anyFlag === false;
+
+    // Affected callback remains as cancelled history (by hash from preview).
+    if (preview && preview.affected_callback && preview.affected_callback.callback_id_hash) {
+      const cancelled = (await db.query(`
+        SELECT sc.id, sc.status, sc.client_id, p.do_not_contact, p.is_synthetic
+        FROM setter_callbacks sc
+        JOIN prospects p ON p.id = sc.prospect_id AND p.client_id = sc.client_id
+        WHERE sc.status = 'cancelled' AND (p.do_not_contact = true OR p.is_synthetic = true)
+      `)).rows;
+      const match = cancelled.find(r => stableHash(r.id) === preview.affected_callback.callback_id_hash);
+      report.safety.affected_callback_present_as_cancelled = Boolean(match);
+      report.safety.affected_callback_hash = preview.affected_callback.callback_id_hash;
+    }
+
+    report.checks.pending_dnc_zero = report.safety.pending_for_dnc === 0;
+    report.checks.pending_synthetic_zero = report.safety.pending_for_synthetic === 0;
+    report.checks.total_pending_is_9 = report.safety.total_pending === 9;
+    report.checks.affected_preserved_as_cancelled = report.safety.affected_callback_present_as_cancelled === true;
+    report.checks.anchor_flag_false = report.safety.anchor_flag_false;
+    report.checks.no_cross_tenant = report.safety.cross_tenant === 0;
+
+    report.passed = Object.values(report.checks).every(Boolean);
+    return report;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Confirmation gate
 // ---------------------------------------------------------------------------
@@ -1291,7 +1522,9 @@ function askPhrase(question, deps) {
 async function confirmExactPhrase({ mode, options, processEnv, deps }) {
   const cfg = mode === 'rollback'
     ? { phrase: CONFIRM.rollbackPhrase, envKey: CONFIRM.rollbackEnvKey, envValue: CONFIRM.rollbackEnvValue }
-    : { phrase: CONFIRM.migrationPhrase, envKey: CONFIRM.migrationEnvKey, envValue: CONFIRM.migrationEnvValue };
+    : mode === 'remediation'
+      ? { phrase: CONFIRM.remediationPhrase, envKey: CONFIRM.remediationEnvKey, envValue: CONFIRM.remediationEnvValue }
+      : { phrase: CONFIRM.migrationPhrase, envKey: CONFIRM.migrationEnvKey, envValue: CONFIRM.migrationEnvValue };
 
   if (options.nonInteractive) {
     const provided = processEnv[cfg.envKey];
@@ -1337,6 +1570,7 @@ function parseArgs(argv) {
     help: flags.has('help'),
     executeMigration: flags.has('execute-migration'),
     executeRollback: flags.has('execute-rollback'),
+    executeRemediationSuppressedCallbacks: flags.has('execute-remediation-suppressed-callbacks'),
     verifyAfterRestart: flags.has('verify-after-restart'),
     verifyPostMigration: flags.has('verify-post-migration'),
     nonInteractive: flags.has('non-interactive'),
@@ -1516,6 +1750,7 @@ async function main(argv, injectedDeps) {
 
   if (options.executeRollback) summary.mode = 'rollback';
   else if (options.executeMigration) summary.mode = 'execute-migration';
+  else if (options.executeRemediationSuppressedCallbacks) summary.mode = 'remediation-suppressed-callbacks';
   else if (options.verifyAfterRestart) summary.mode = 'verify-after-restart';
   else if (options.verifyPostMigration) summary.mode = 'verify-post-migration';
 
@@ -1551,6 +1786,86 @@ async function main(argv, injectedDeps) {
       const written = writeArtifacts({ artifactsDir, artifacts, secrets, deps });
       log(`[artifacts] written under ${artifactsDir}`);
       summary.artifacts = written;
+      summary.artifactsDir = artifactsDir;
+      return summary;
+    }
+
+    // --- Remediation: cancel the one suppressed pending callback ---
+    if (options.executeRemediationSuppressedCallbacks) {
+      // Remediation lives on the runner branch, not the frozen release worktree.
+      const remediationPath = path.join(__dirname, 'remediation', '2026-07-19-cancel-suppressed-setter-callbacks.sql');
+      if (!deps.fs.existsSync(remediationPath)) {
+        throw new GateError(`Remediation file missing: ${remediationPath}`, { stage: 'remediation-inspect', code: 'REMEDIATION_MISSING' });
+      }
+      const remSql = deps.fs.readFileSync(remediationPath, 'utf8');
+      const remSafety = assertRemediationStaticSafety(remSql);
+      const remSha = sha256File(deps.fs, remediationPath);
+      artifacts['remediation-inspect.json'] = {
+        path: remediationPath,
+        sha256: remSha,
+        static_safety: remSafety,
+      };
+
+      const preflight = await runPreflight(client, { postMigrationMode: true });
+      artifacts['preflight.json'] = preflight;
+      summary.stages.push('preflight');
+
+      const preview = await previewSuppressedCallbackRemediation(client);
+      artifacts['pre-remediation-preview.json'] = preview;
+      summary.stages.push('remediation-preview');
+      log(`[remediation-preview] PASS — suppressed_pending=${preview.counts.suppressed_pending}, total_pending=${preview.counts.total_pending}`);
+
+      log('\n================ REMEDIATION PLAN ================');
+      log('  target          : cancel exactly 1 pending setter_callbacks row for DNC/synthetic prospect');
+      log(`  remediation     : ${RELEASE.remediationRelPath}`);
+      log(`  sha256          : ${remSha}`);
+      log('  leave untouched : 9 non-suppressed pending callbacks');
+      log('  no restart / no Anchor enablement / no outbound');
+      log('=================================================');
+      await confirmExactPhrase({ mode: 'remediation', options, processEnv, deps });
+
+      const result = await applySuppressedCallbackRemediation(client, { remediationPath, deps, secrets });
+      artifacts['remediation-result.json'] = result;
+      summary.stages.push('remediation');
+      if (!result.passed || result.transaction_result !== 'committed') {
+        summary.passed = false;
+        summary.verdict = 'REMEDIATION FAILED — TRANSACTION ROLLED BACK';
+        artifacts['final-report.md'] = `# ${summary.verdict}\n\n${JSON.stringify(redactDeep(result, secrets), null, 2)}\n`;
+        writeArtifacts({ artifactsDir, artifacts, secrets, deps });
+        log(`[artifacts] written under ${artifactsDir}`);
+        log(`[remediation] ${summary.verdict}`);
+        summary.artifactsDir = artifactsDir;
+        return summary;
+      }
+      log(`[remediation] committed — affected_row_count=${result.affected_row_count}`);
+
+      const post = await verifyAfterSuppressedCallbackRemediation(client, { preview });
+      artifacts['post-remediation-verification.json'] = post;
+      summary.stages.push('post-remediation-verification');
+      summary.passed = post.passed;
+      summary.verdict = post.passed
+        ? 'REMEDIATION PASS — GATE 2 READY FOR RESTART REVIEW'
+        : 'REMEDIATION BLOCKED';
+
+      artifacts['final-report.md'] = [
+        `# ${summary.verdict}`,
+        '',
+        `- remediation_sha256: ${remSha}`,
+        `- started_at: ${result.started_at}`,
+        `- ended_at: ${result.ended_at}`,
+        `- duration_ms: ${result.duration_ms}`,
+        `- transaction_result: ${result.transaction_result}`,
+        `- affected_row_count: ${result.affected_row_count}`,
+        `- pending_for_dnc_after: ${post.safety.pending_for_dnc}`,
+        `- pending_for_synthetic_after: ${post.safety.pending_for_synthetic}`,
+        `- total_pending_after: ${post.safety.total_pending}`,
+        `- anchor_flag_false: ${post.safety.anchor_flag_false}`,
+        '',
+        'No restart, Anchor enablement, or outbound activity was performed.',
+      ].join('\n');
+      writeArtifacts({ artifactsDir, artifacts, secrets, deps });
+      log(`[artifacts] written under ${artifactsDir}`);
+      log(`[remediation] ${summary.verdict}`);
       summary.artifactsDir = artifactsDir;
       return summary;
     }
@@ -1755,6 +2070,11 @@ module.exports = {
   printUsage,
   stableHash,
   requireAbsoluteArtifactsDir,
+  EXPECTED_REMEDIATION,
+  assertRemediationStaticSafety,
+  previewSuppressedCallbackRemediation,
+  applySuppressedCallbackRemediation,
+  verifyAfterSuppressedCallbackRemediation,
   deriveSecrets,
   redactString,
   redactDeep,

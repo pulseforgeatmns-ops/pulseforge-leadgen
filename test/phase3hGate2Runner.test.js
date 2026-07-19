@@ -681,3 +681,59 @@ test('stableHash is deterministic and non-reversible PII stand-in', () => {
   assert.notEqual(runner.stableHash('abc'), 'abc');
   assert.equal(runner.stableHash('abc').length, 16);
 });
+
+test('remediation SQL passes static safety and is single-transaction', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const sql = fs.readFileSync(path.join(__dirname, '../scripts/remediation/2026-07-19-cancel-suppressed-setter-callbacks.sql'), 'utf8');
+  const findings = runner.assertRemediationStaticSafety(sql);
+  assert.equal(findings.single_transaction, true);
+  assert.equal(findings.only_updates_setter_callbacks, true);
+  assert.equal(findings.no_delete, true);
+  assert.equal(findings.fail_closed_rowcount, true);
+});
+
+test('remediation confirmation rejects migration phrase', async () => {
+  await assert.rejects(runner.confirmExactPhrase({
+    mode: 'remediation',
+    options: { nonInteractive: false },
+    processEnv: {},
+    deps: { promptLine: async () => runner.CONFIRM.migrationPhrase },
+  }), isCode('PHRASE_MISMATCH'));
+});
+
+test('remediation non-interactive requires dedicated env approval', async () => {
+  await assert.rejects(runner.confirmExactPhrase({
+    mode: 'remediation',
+    options: { nonInteractive: true },
+    processEnv: {},
+    deps: {},
+  }), isCode('NONINTERACTIVE_NOT_APPROVED'));
+  const ok = await runner.confirmExactPhrase({
+    mode: 'remediation',
+    options: { nonInteractive: true },
+    processEnv: { [runner.CONFIRM.remediationEnvKey]: runner.CONFIRM.remediationEnvValue },
+    deps: {},
+  });
+  assert.equal(ok.confirmed, true);
+});
+
+test('remediation preview fails closed on count mismatch', async () => {
+  const st = stateConfig({ phase3d: true });
+  const db = makeDb({ state: st, flagEnabled: false });
+  const orig = db.query.bind(db);
+  db.query = async (sql, params) => {
+    if (/^\s*(BEGIN|SET TRANSACTION READ ONLY|ROLLBACK|COMMIT)/i.test(sql)) return { rows: [], rowCount: 0 };
+    if (/pending' AND \(p\.do_not_contact = true OR p\.is_synthetic = true\)/.test(sql) && /count/.test(sql)) {
+      return { rows: [{ count: 2 }], rowCount: 1 }; // wrong — expect 1
+    }
+    if (/is_synthetic = true/.test(sql) && /count/.test(sql)) return { rows: [{ count: 0 }], rowCount: 1 };
+    if (/do_not_contact = true/.test(sql) && /count/.test(sql) && !/is_synthetic/.test(sql)) return { rows: [{ count: 2 }], rowCount: 1 };
+    if (/FROM setter_callbacks WHERE status = 'pending'/.test(sql)) return { rows: [{ count: 10 }], rowCount: 1 };
+    if (/to_regclass\('public\.setter_follow_up_drafts'\)/.test(sql)) return { rows: [{ present: false }], rowCount: 1 };
+    if (/bool_or\(setter_pipeline_v2_enabled\)/.test(sql)) return { rows: [{ enabled: false }], rowCount: 1 };
+    if (/LIMIT 5/.test(sql)) return { rows: [{ id: 'x', client_id: 10, prospect_id: 'y', status: 'pending', do_not_contact: true, is_synthetic: false }], rowCount: 1 };
+    return orig(sql, params);
+  };
+  await assert.rejects(runner.previewSuppressedCallbackRemediation(db), isCode('PREVIEW_COUNT_MISMATCH'));
+});
