@@ -2,6 +2,33 @@ name: Phase 3F Disposable PostgreSQL Release Gate
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - phase3f-disposable-postgres-release-gate
+    paths:
+      - .github/workflows/phase3f-disposable-postgres-release-gate.yml
+      - scripts/runSetterReleaseRehearsal.js
+      - migrations/**
+      - test/anchorPhoneSetterPostgres.test.js
+      - test/revenuePostgres.test.js
+      - test/maxSmokeProductionSchema.test.js
+      - test/maxTransactionClient.test.js
+      - test/maxDecayCronPostgres.test.js
+      - test/setterQuality.test.js
+      - test/callDispositions.test.js
+      - routes/setter.js
+      - routes/api.js
+      - utils/callDispositions.js
+      - utils/setterQuality.js
+      - utils/emmettAutosend.js
+      - utils/icpScoring.js
+      - utils/maxOrchestration.js
+      - utils/sendingReadiness.js
+      - calAgent.js
+      - emmettAgent.js
+      - samAgent.js
+      - public/setter-dashboard.html
+      - public/dashboard.html
 
 permissions:
   contents: read
