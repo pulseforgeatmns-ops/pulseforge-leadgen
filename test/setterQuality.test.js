@@ -88,3 +88,15 @@ test('schema and routes enforce one pending callback, synthetic DNC, tenant scop
   assert.match(setterRoute, /setter_pipeline_v2_configured_at = NOW\(\)/);
   assert.match(setterRoute, /requireRole\('admin', 'manager'\)/);
 });
+
+test('today stats query casts setter_id for both TEXT and INTEGER columns', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const source = fs.readFileSync(path.join(__dirname, '../routes/setter.js'), 'utf8');
+  const start = source.indexOf("'/api/stats/today'");
+  assert.ok(start > 0);
+  const block = source.slice(start, start + 1200);
+  assert.match(block, /al\.setter_id = \$1::text/);
+  assert.match(block, /setter_id = \$1::integer/);
+  assert.doesNotMatch(block, /WHERE setter_id = \$1\s/);
+});
