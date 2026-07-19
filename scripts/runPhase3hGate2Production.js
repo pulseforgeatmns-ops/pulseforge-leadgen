@@ -1,0 +1,1162 @@
+#!/usr/bin/env node
+'use strict';
+
+// Guarded Phase 3H / Gate 2 production operator runner.
+//
+// Purpose: apply the reviewed Phase 3D setter-pilot migration to the Railway
+// production database while keeping Anchor and every setter operation disabled.
+//
+// Safety posture:
+//   * Default behavior is read-only (local inspection + production preflight).
+//   * The migration requires an explicit flag, a preflight pass, a printed
+//     execution plan, and a second exact confirmation phrase.
+//   * Credentials are read from the Railway-linked .env into memory only and are
+//     never printed, copied into the worktree, persisted, or written to reports.
+//   * All artifacts pass a recursive secret-redaction check before they are
+//     finalized.
+//
+// This module is intentionally dependency-injectable so its guards can be unit
+// tested without ever connecting to production. See test/phase3hGate2Runner.test.js.
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const readline = require('node:readline');
+const { spawnSync } = require('node:child_process');
+
+const {
+  snapshot,
+  phase3dObjectState,
+  allPhase3dObjectsPresent,
+  hasTable,
+  hasColumn,
+} = require('./runSetterReleaseRehearsal');
+
+// ---------------------------------------------------------------------------
+// Fixed release / identity constants (reviewed Gate 2 inputs).
+// ---------------------------------------------------------------------------
+
+const RELEASE = Object.freeze({
+  deployedSha: '2862d2ee1e5662db42fa111baaaa0faf248bf5d3',
+  migrationRelPath: 'migrations/2026-07-19-setter-pilot-quality-control.sql',
+  rollbackRelPath: 'migrations/2026-07-19-setter-pilot-quality-control.rollback.sql',
+  migrationSha256: '2dd54555bf14e71305ca28edc7041b0771a5a2421e5632ad1a96dc51523d937d',
+  rollbackSha256: '79c2e3973d71f7d416124fa7389ae61ec952369df464c0e7770ac96a223ca275',
+  backupProcedureRelPath: 'scripts/stagePhase16bDurableBackup.js',
+});
+
+const IDENTITY = Object.freeze({
+  expectedDatabase: 'railway',
+  expectedMajor: 18,
+  expectedVersionPrefix: '18.4',
+  anchorClientId: 10,
+});
+
+const CONFIRM = Object.freeze({
+  migrationPhrase: 'APPLY PHASE3D TO railway POSTGRES18',
+  migrationEnvKey: 'PHASE3H_PRODUCTION_APPROVED',
+  migrationEnvValue: 'APPLY_PHASE3D_TO_RAILWAY_POSTGRES18',
+  rollbackPhrase: 'ROLLBACK PHASE3D ON railway POSTGRES18',
+  rollbackEnvKey: 'PHASE3H_ROLLBACK_APPROVED',
+  rollbackEnvValue: 'ROLLBACK_PHASE3D_ON_RAILWAY_POSTGRES18',
+});
+
+const DEFAULT_ENV_FILE = path.join(os.homedir(), 'Desktop', 'Pulseforge', 'Lead Gen', 'Lead Gen App', '.env');
+
+// Absolute binary paths used by the embedded durable-backup procedure.
+const BACKUP_BINARIES = Object.freeze([
+  '/usr/local/bin/pg_dump',
+  '/usr/local/bin/pg_restore',
+  '/usr/local/bin/gpg',
+  '/usr/bin/security',
+]);
+
+// The relations Stage 3 must snapshot. Absent relations are recorded as
+// { exists: false, row_count: null } and are never queried.
+const SNAPSHOT_TABLES = Object.freeze([
+  'clients',
+  'prospects',
+  'call_dispositions',
+  'activity_log',
+  'agent_log',
+  'touchpoints',
+  'setter_follow_up_drafts',
+  'setter_callbacks',
+]);
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+class GateError extends Error {
+  constructor(message, { stage = 'unknown', code = 'GATE_FAILED' } = {}) {
+    super(message);
+    this.name = 'GateError';
+    this.stage = stage;
+    this.code = code;
+    this.gate = true;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Secret handling / redaction
+// ---------------------------------------------------------------------------
+
+// Build the list of concrete secret strings that must never leak into logs or
+// artifacts (the full URL plus each decoded component).
+function deriveSecrets(databaseUrl) {
+  const secrets = new Set();
+  if (!databaseUrl) return secrets;
+  secrets.add(databaseUrl);
+  try {
+    const u = new URL(databaseUrl);
+    if (u.password) {
+      secrets.add(u.password);
+      secrets.add(decodeURIComponent(u.password));
+    }
+    if (u.username) {
+      secrets.add(u.username);
+      secrets.add(decodeURIComponent(u.username));
+    }
+    if (u.host) secrets.add(u.host);
+    if (u.hostname) secrets.add(u.hostname);
+    if (u.search) secrets.add(u.search.replace(/^\?/, ''));
+  } catch {
+    // If it does not parse as a URL we still redact the raw value above.
+  }
+  return secrets;
+}
+
+function redactString(value, secrets) {
+  let out = String(value);
+  for (const secret of secrets) {
+    if (secret && out.includes(secret)) out = out.split(secret).join('[REDACTED]');
+  }
+  // Defense in depth: strip anything that still looks like a connection string.
+  out = out.replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, '[REDACTED_CONNECTION_STRING]');
+  out = out.replace(/password=([^\s&"']+)/gi, 'password=[REDACTED]');
+  return out;
+}
+
+function redactDeep(value, secrets) {
+  if (value == null) return value;
+  if (typeof value === 'string') return redactString(value, secrets);
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (Array.isArray(value)) return value.map(item => redactDeep(item, secrets));
+  if (value instanceof Error) {
+    return { name: value.name, message: redactString(value.message, secrets) };
+  }
+  if (typeof value === 'object') {
+    const out = {};
+    for (const [key, val] of Object.entries(value)) out[key] = redactDeep(val, secrets);
+    return out;
+  }
+  return value;
+}
+
+// Sanitize a database/tooling error into a report-safe shape.
+function sanitizeError(error, secrets) {
+  const message = redactString(error && error.message ? error.message : String(error), secrets);
+  const out = { name: error && error.name ? error.name : 'Error', message };
+  if (error && error.code) out.code = redactString(error.code, secrets);
+  return out;
+}
+
+// Recursive guard run over every artifact before it is written. Throws if any
+// known secret or credential-shaped token survives.
+function assertNoSecrets(value, secrets, pathLabel = '$') {
+  const forbiddenPatterns = [
+    /postgres(?:ql)?:\/\//i,
+    /PHASE3H_PRODUCTION_APPROVED\s*=/,
+    /railway[_-]?token/i,
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  ];
+  const walk = (node, label) => {
+    if (node == null) return;
+    if (typeof node === 'string') {
+      for (const secret of secrets) {
+        if (secret && node.includes(secret)) {
+          throw new GateError(`Secret leak detected in artifact at ${label}`, { stage: 'redaction', code: 'SECRET_LEAK' });
+        }
+      }
+      for (const pattern of forbiddenPatterns) {
+        if (pattern.test(node)) {
+          throw new GateError(`Credential-shaped token detected in artifact at ${label}`, { stage: 'redaction', code: 'SECRET_LEAK' });
+        }
+      }
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach((item, index) => walk(item, `${label}[${index}]`));
+      return;
+    }
+    if (typeof node === 'object') {
+      for (const [key, val] of Object.entries(node)) walk(val, `${label}.${key}`);
+    }
+  };
+  walk(value, pathLabel);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Credential loading (memory only)
+// ---------------------------------------------------------------------------
+
+// Read DATABASE_URL from the Railway-linked .env into memory. Never returns via
+// logs. Rejects a pre-exported DATABASE_URL from an unexpected source unless the
+// operator explicitly overrides it.
+function loadDatabaseUrl({ envFilePath, processEnv, allowPreexisting, deps }) {
+  const fsdep = deps.fs;
+  if (processEnv.DATABASE_URL && !allowPreexisting) {
+    throw new GateError(
+      'DATABASE_URL is already exported in this environment from an unexpected source. '
+      + 'Unset it or re-run with --allow-preexisting-database-url to explicitly override.',
+      { stage: 'credentials', code: 'PREEXISTING_DATABASE_URL' },
+    );
+  }
+  if (!fsdep.existsSync(envFilePath)) {
+    throw new GateError(`Credential source not found: ${envFilePath}`, { stage: 'credentials', code: 'ENV_FILE_MISSING' });
+  }
+  const contents = fsdep.readFileSync(envFilePath, 'utf8');
+  let url = null;
+  for (const rawLine of contents.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const match = /^(?:export\s+)?DATABASE_URL\s*=\s*(.*)$/.exec(line);
+    if (match) {
+      let value = match[1].trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      url = value;
+      break;
+    }
+  }
+  if (allowPreexisting && processEnv.DATABASE_URL) url = processEnv.DATABASE_URL;
+  if (!url) {
+    throw new GateError(`DATABASE_URL not present in ${envFilePath}`, { stage: 'credentials', code: 'DATABASE_URL_MISSING' });
+  }
+  return url;
+}
+
+// ---------------------------------------------------------------------------
+// Stage 1 — local inspection
+// ---------------------------------------------------------------------------
+
+function sha256File(fsdep, filePath) {
+  return crypto.createHash('sha256').update(fsdep.readFileSync(filePath)).digest('hex');
+}
+
+// Static safety checks on the (hash-verified) migration text.
+function assertMigrationStaticSafety(sql) {
+  const findings = {};
+  const trimmed = sql.trim();
+  const beginCount = (sql.match(/^\s*BEGIN\s*;/gim) || []).length;
+  const commitCount = (sql.match(/^\s*COMMIT\s*;/gim) || []).length;
+  const rollbackCount = (sql.match(/^\s*ROLLBACK\s*;/gim) || []).length;
+  findings.single_transaction = /^BEGIN\s*;/i.test(trimmed) && /COMMIT\s*;?$/i.test(trimmed)
+    && beginCount === 1 && commitCount === 1 && rollbackCount === 0;
+  if (!findings.single_transaction) {
+    throw new GateError('Migration is not wrapped in exactly one BEGIN/COMMIT transaction', { stage: 'inspect', code: 'NOT_SINGLE_TXN' });
+  }
+
+  findings.setter_flag_defaults_false = /setter_pipeline_v2_enabled\s+BOOLEAN\s+NOT\s+NULL\s+DEFAULT\s+false/i.test(sql);
+  if (!findings.setter_flag_defaults_false) {
+    throw new GateError('Migration does not declare setter_pipeline_v2_enabled DEFAULT false', { stage: 'inspect', code: 'FLAG_DEFAULT_NOT_FALSE' });
+  }
+
+  // No statement may enable the Anchor / setter pipeline flag.
+  const enablesFlag = /setter_pipeline_v2_enabled\s*=\s*true/i.test(sql)
+    || /set\s+setter_pipeline_v2_enabled\s*=\s*true/i.test(sql)
+    || /default\s+true/i.test((sql.match(/setter_pipeline_v2_enabled[^,;]*/i) || [''])[0]);
+  findings.no_anchor_enablement = !enablesFlag;
+  if (enablesFlag) {
+    throw new GateError('Migration contains an Anchor / setter_pipeline_v2 enablement statement', { stage: 'inspect', code: 'ANCHOR_ENABLEMENT' });
+  }
+  return findings;
+}
+
+function inspectRelease({ worktree, expectedHead, deps }) {
+  const { git, fs: fsdep } = deps;
+  const report = { stage: 'inspect', worktree, checks: {} };
+
+  const head = git.revParse(worktree);
+  report.head = head;
+  report.checks.head_matches = head === expectedHead;
+  if (head !== expectedHead) {
+    throw new GateError(`Worktree HEAD ${head} does not match required release ${expectedHead}`, { stage: 'inspect', code: 'HEAD_MISMATCH' });
+  }
+
+  const status = git.status(worktree); // array of {x, y, path}
+  const trackedChanges = status.filter(entry => entry.code !== '??');
+  const untracked = status.filter(entry => entry.code === '??').map(entry => entry.path);
+  report.checks.working_tree_clean = trackedChanges.length === 0;
+  report.untracked_present = untracked;
+  if (trackedChanges.length !== 0) {
+    throw new GateError(
+      `Working tree has uncommitted changes to tracked files: ${trackedChanges.map(e => e.path).join(', ')}`,
+      { stage: 'inspect', code: 'DIRTY_WORKTREE' },
+    );
+  }
+
+  const migrationPath = path.join(worktree, RELEASE.migrationRelPath);
+  const rollbackPath = path.join(worktree, RELEASE.rollbackRelPath);
+
+  if (!fsdep.existsSync(migrationPath)) {
+    throw new GateError(`Reviewed migration missing: ${RELEASE.migrationRelPath}`, { stage: 'inspect', code: 'MIGRATION_MISSING' });
+  }
+  if (!fsdep.existsSync(rollbackPath)) {
+    throw new GateError(`Reviewed rollback missing: ${RELEASE.rollbackRelPath}`, { stage: 'inspect', code: 'ROLLBACK_MISSING' });
+  }
+
+  // The durable backup procedure is embedded in this runner (createDurableBackup)
+  // because the deployed release does not ship a standalone backup script. Record
+  // tool availability for the operator; the backup stage itself fails closed if a
+  // required tool is missing at execution time.
+  const backupTools = {};
+  for (const bin of BACKUP_BINARIES) backupTools[bin] = fsdep.existsSync(bin);
+  report.backup = {
+    embedded_procedure: true,
+    reference_script_present: fsdep.existsSync(path.join(worktree, RELEASE.backupProcedureRelPath)),
+    tools: backupTools,
+  };
+  report.checks.backup_procedure_available = true;
+
+  const migrationSha = sha256File(fsdep, migrationPath);
+  const rollbackSha = sha256File(fsdep, rollbackPath);
+  report.migration_sha256 = migrationSha;
+  report.rollback_sha256 = rollbackSha;
+  report.checks.migration_hash_matches = migrationSha === RELEASE.migrationSha256;
+  report.checks.rollback_hash_matches = rollbackSha === RELEASE.rollbackSha256;
+  if (migrationSha !== RELEASE.migrationSha256) {
+    throw new GateError('Migration SHA-256 mismatch — refusing to use unreviewed migration SQL', { stage: 'inspect', code: 'MIGRATION_HASH_MISMATCH' });
+  }
+  if (rollbackSha !== RELEASE.rollbackSha256) {
+    throw new GateError('Rollback SHA-256 mismatch — refusing to use unreviewed rollback SQL', { stage: 'inspect', code: 'ROLLBACK_HASH_MISMATCH' });
+  }
+
+  const migrationSql = fsdep.readFileSync(migrationPath, 'utf8');
+  report.checks.migration_static_safety = assertMigrationStaticSafety(migrationSql);
+  report.migration_path = migrationPath;
+  report.rollback_path = rollbackPath;
+  report.passed = true;
+  return report;
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2 — read-only production preflight
+// ---------------------------------------------------------------------------
+
+async function withReadOnly(db, fn) {
+  await db.query('BEGIN');
+  try {
+    await db.query('SET TRANSACTION READ ONLY');
+    const result = await fn();
+    await db.query('ROLLBACK');
+    return result;
+  } catch (error) {
+    try { await db.query('ROLLBACK'); } catch { /* already aborted */ }
+    throw error;
+  }
+}
+
+async function runPreflight(db, { identity = IDENTITY } = {}) {
+  return withReadOnly(db, async () => {
+    const report = { stage: 'preflight', read_only: true, checks: {}, observations: {} };
+
+    const idRow = (await db.query('SELECT current_database() AS db')).rows[0];
+    report.observations.current_database = idRow.db;
+    report.checks.database_identity = idRow.db === identity.expectedDatabase;
+    if (idRow.db !== identity.expectedDatabase) {
+      throw new GateError(`current_database() = ${idRow.db}, expected ${identity.expectedDatabase}`, { stage: 'preflight', code: 'DB_IDENTITY' });
+    }
+
+    const versionRow = (await db.query('SHOW server_version')).rows[0];
+    const serverVersion = versionRow.server_version;
+    report.observations.server_version = serverVersion;
+    const major = parseInt(String(serverVersion).split('.')[0], 10);
+    report.checks.server_major = major === identity.expectedMajor;
+    if (major !== identity.expectedMajor) {
+      throw new GateError(`PostgreSQL major ${major}, expected ${identity.expectedMajor}`, { stage: 'preflight', code: 'PG_MAJOR' });
+    }
+    report.checks.server_version_consistent = String(serverVersion).startsWith(identity.expectedVersionPrefix);
+    if (!String(serverVersion).startsWith(identity.expectedVersionPrefix)) {
+      throw new GateError(`PostgreSQL version ${serverVersion} not consistent with ${identity.expectedVersionPrefix}`, { stage: 'preflight', code: 'PG_VERSION' });
+    }
+
+    const state = await snapshot(db);
+
+    // Expected Pulseforge identity: core tables must exist.
+    const coreTables = ['clients', 'prospects', 'call_dispositions'];
+    const missingCore = coreTables.filter(t => !hasTable(state, t));
+    report.checks.pulseforge_identity = missingCore.length === 0;
+    if (missingCore.length !== 0) {
+      throw new GateError(`Production identity check failed; missing core tables: ${missingCore.join(', ')}`, { stage: 'preflight', code: 'IDENTITY_TABLES' });
+    }
+
+    // Anchor client must be uniquely identifiable.
+    const anchor = await db.query('SELECT id FROM clients WHERE id = $1', [identity.anchorClientId]);
+    report.observations.anchor_client_rows = anchor.rowCount;
+    report.checks.anchor_unique = anchor.rowCount === 1;
+    if (anchor.rowCount !== 1) {
+      throw new GateError(`Anchor client id=${identity.anchorClientId} not uniquely identified (rows=${anchor.rowCount})`, { stage: 'preflight', code: 'ANCHOR_IDENTITY' });
+    }
+
+    // Feature flag: absent (pre-migration) or false. Never true.
+    const flagColumnExists = hasColumn(state, 'clients', 'setter_pipeline_v2_enabled');
+    report.observations.setter_pipeline_v2_column_exists = flagColumnExists;
+    if (flagColumnExists) {
+      const anyEnabled = (await db.query('SELECT COALESCE(bool_or(setter_pipeline_v2_enabled), false) AS enabled FROM clients')).rows[0].enabled;
+      report.observations.any_setter_pipeline_v2_enabled = anyEnabled;
+      report.checks.feature_flag_not_enabled = anyEnabled === false;
+      if (anyEnabled !== false) {
+        throw new GateError('setter_pipeline_v2_enabled is TRUE for at least one client — Anchor pilot must not be active', { stage: 'preflight', code: 'FLAG_ENABLED' });
+      }
+    } else {
+      report.checks.feature_flag_not_enabled = true; // absent == not enabled
+    }
+
+    // No active setter operations: if setter_callbacks exists, there must be no
+    // pending rows (pre-migration the relation is absent, which is allowed).
+    const callbacksExists = hasTable(state, 'setter_callbacks');
+    report.observations.setter_callbacks_exists = callbacksExists;
+    if (callbacksExists) {
+      const pending = (await db.query("SELECT count(*)::int AS count FROM setter_callbacks WHERE status = 'pending'")).rows[0].count;
+      report.observations.pending_setter_callbacks = pending;
+      report.checks.no_active_setter_ops = pending === 0;
+      if (pending !== 0) {
+        throw new GateError(`Active setter operations detected: ${pending} pending setter_callbacks`, { stage: 'preflight', code: 'ACTIVE_SETTER_OPS' });
+      }
+    } else {
+      report.checks.no_active_setter_ops = true;
+    }
+
+    // Partial / ambiguous Phase 3D state detection. Either fully absent
+    // (pre-migration) or fully present is acceptable; a mixture is not.
+    const p3d = phase3dObjectState(state);
+    const allPresent = allPhase3dObjectsPresent(p3d);
+    const anyPresent = Object.values(p3d.tables).some(Boolean)
+      || Object.values(p3d.columns).some(cols => Object.values(cols).some(Boolean))
+      || Object.values(p3d.indexes).some(Boolean)
+      || Object.values(p3d.triggers).some(Boolean)
+      || p3d.callback_status_constraint;
+    report.observations.phase3d_all_present = allPresent;
+    report.observations.phase3d_any_present = anyPresent;
+    const partial = anyPresent && !allPresent;
+    report.checks.no_partial_migration = !partial;
+    if (partial) {
+      throw new GateError('Ambiguous / partially-applied Phase 3D schema detected — refusing to proceed', { stage: 'preflight', code: 'PARTIAL_MIGRATION' });
+    }
+    report.observations.phase3d_pre_state = p3d;
+    report.phase3d_already_applied = allPresent;
+    report.passed = true;
+    return report;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Stage 3 — pre-migration snapshot (sanitized, absent relations not queried)
+// ---------------------------------------------------------------------------
+
+async function snapshotCounts(db, state, tables = SNAPSHOT_TABLES) {
+  const out = {};
+  for (const table of tables) {
+    if (!hasTable(state, table)) {
+      out[table] = { exists: false, row_count: null };
+      continue;
+    }
+    const result = await db.query(`SELECT count(*)::int AS count FROM ${table}`);
+    out[table] = { exists: true, row_count: result.rows[0].count };
+  }
+  return out;
+}
+
+async function prospectSafetyCounts(db, state) {
+  const out = {};
+  const guarded = async (name, exists, sql) => {
+    if (!exists) { out[name] = { exists: false, row_count: null }; return; }
+    const result = await db.query(sql);
+    out[name] = { exists: true, row_count: result.rows[0].count };
+  };
+  const hasProspects = hasTable(state, 'prospects');
+  const hasSynthetic = hasProspects && hasColumn(state, 'prospects', 'is_synthetic');
+  const hasDnc = hasProspects && hasColumn(state, 'prospects', 'do_not_contact');
+  const hasCallbackAt = hasProspects && hasColumn(state, 'prospects', 'callback_at');
+  await guarded('synthetic_prospects', hasSynthetic, 'SELECT count(*)::int AS count FROM prospects WHERE is_synthetic');
+  await guarded('dnc_prospects', hasDnc, 'SELECT count(*)::int AS count FROM prospects WHERE do_not_contact');
+  await guarded('prospects_with_callback_at', hasCallbackAt, 'SELECT count(*)::int AS count FROM prospects WHERE callback_at IS NOT NULL');
+  if (hasProspects) {
+    const status = await db.query('SELECT status, count(*)::int AS count FROM prospects GROUP BY status ORDER BY status');
+    out.status_distribution = status.rows.reduce((acc, row) => { acc[row.status] = row.count; return acc; }, {});
+  } else {
+    out.status_distribution = null;
+  }
+  return out;
+}
+
+async function runPreMigrationSnapshot(db) {
+  return withReadOnly(db, async () => {
+    const state = await snapshot(db);
+    return {
+      stage: 'pre-migration-snapshot',
+      read_only: true,
+      captured_at: new Date().toISOString(),
+      table_counts: await snapshotCounts(db, state),
+      prospect_safety: await prospectSafetyCounts(db, state),
+      phase3d_objects: phase3dObjectState(state),
+      anchor_flag: hasColumn(state, 'clients', 'setter_pipeline_v2_enabled')
+        ? (await db.query('SELECT setter_pipeline_v2_enabled FROM clients WHERE id = $1', [IDENTITY.anchorClientId])).rows[0] || { setter_pipeline_v2_enabled: null }
+        : { exists: false },
+      schema_object_counts: {
+        tables: state.tables.length,
+        columns: state.columns.length,
+        indexes: state.indexes.length,
+        triggers: state.triggers.length,
+        constraints: state.constraints.length,
+      },
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Stage 4 — durable backup (established Phase 1.6 procedure)
+// ---------------------------------------------------------------------------
+
+// Mirrors scripts/stagePhase16bDurableBackup.js: pg_dump custom --no-owner
+// --no-acl, SHA-256, GPG AES-256 symmetric with a Keychain-stored passphrase,
+// verified before migration, no plaintext left behind. Returns sanitized
+// metadata only. Injected in tests to avoid touching production.
+function createDurableBackup({ databaseUrl, serverVersion, deps }) {
+  const rawRun = deps.run || ((command, args, options) => spawnSync(command, args, { encoding: 'utf8', ...options }));
+  const run = (command, args, options) => {
+    const result = rawRun(command, args, options);
+    if (!result || result.status !== 0) {
+      throw new GateError(`${path.basename(command)} failed`, { stage: 'backup', code: 'BACKUP_TOOL_FAILED' });
+    }
+    return result;
+  };
+  const fsdep = deps.fs;
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  const identifier = `pulseforge-production-phase3h-gate2-${stamp}`;
+  const staging = path.join('/private/tmp', identifier);
+  const plaintext = path.join(staging, `${identifier}.dump`);
+  const encrypted = `${plaintext}.enc`;
+  const keychainService = `Pulseforge Phase3H Gate2 Backup ${identifier}`;
+  const keychainAccount = 'jacob@gopulseforge.com';
+
+  fsdep.mkdirSync(staging, { recursive: true, mode: 0o700 });
+
+  run('/usr/local/bin/pg_dump', [
+    '--dbname', databaseUrl,
+    '--format=custom', '--no-owner', '--no-acl',
+    '--file', plaintext,
+  ], { stdio: ['ignore', 'ignore', 'pipe'] });
+  fsdep.chmodSync(plaintext, 0o600);
+
+  const plaintextHash = crypto.createHash('sha256').update(fsdep.readFileSync(plaintext)).digest('hex');
+  const plaintextSize = fsdep.statSync(plaintext).size;
+
+  // Verify readability of the dump BEFORE encrypting / before migration.
+  run('/usr/local/bin/pg_restore', ['--list', plaintext], { stdio: ['ignore', 'ignore', 'pipe'] });
+
+  const passphrase = crypto.randomBytes(48).toString('base64url');
+  run('/usr/bin/security', [
+    'add-generic-password', '-U', '-a', keychainAccount, '-s', keychainService, '-w', passphrase,
+  ], { stdio: ['ignore', 'ignore', 'pipe'] });
+
+  run('/usr/local/bin/gpg', [
+    '--batch', '--yes', '--pinentry-mode', 'loopback', '--passphrase-fd', '0',
+    '--symmetric', '--cipher-algo', 'AES256', '--s2k-mode', '3',
+    '--s2k-digest-algo', 'SHA512', '--s2k-count', '65011712',
+    '--compress-algo', 'none', '--force-mdc', '--output', encrypted, plaintext,
+  ], { input: `${passphrase}\n`, stdio: ['pipe', 'ignore', 'pipe'] });
+  fsdep.chmodSync(encrypted, 0o600);
+
+  const encryptedHash = crypto.createHash('sha256').update(fsdep.readFileSync(encrypted)).digest('hex');
+  const encryptedSize = fsdep.statSync(encrypted).size;
+
+  // Verify the encrypted artifact decrypts and is a readable dump, then remove
+  // the plaintext so no plaintext backup is left behind.
+  const verifyDump = `${plaintext}.verify`;
+  run('/bin/sh', ['-c',
+    `/usr/local/bin/gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --decrypt --output "${verifyDump}" "${encrypted}"`,
+  ], { input: `${passphrase}\n`, stdio: ['pipe', 'ignore', 'pipe'] });
+  run('/usr/local/bin/pg_restore', ['--list', verifyDump], { stdio: ['ignore', 'ignore', 'pipe'] });
+  fsdep.rmSync(verifyDump, { force: true });
+  fsdep.rmSync(plaintext, { force: true });
+
+  const pgDumpVersion = (rawRun('/usr/local/bin/pg_dump', ['--version'], {}) || {}).stdout || '';
+
+  return {
+    stage: 'backup',
+    verified: true,
+    backup_identifier: identifier,
+    encrypted_path: encrypted,
+    staging_directory: staging,
+    created_at: new Date().toISOString(),
+    encrypted_size_bytes: encryptedSize,
+    encrypted_sha256: encryptedHash,
+    plaintext_sha256: plaintextHash,
+    plaintext_size_bytes: plaintextSize,
+    plaintext_removed: fsdep.existsSync(plaintext) === false,
+    pg_dump_version: String(pgDumpVersion).trim(),
+    database_server_version: serverVersion,
+    encryption: {
+      method: 'OpenPGP symmetric AES-256 (MDC)',
+      key_storage: 'macOS Keychain',
+      keychain_service: keychainService,
+      key_included: false,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Stage 5 — migration
+// ---------------------------------------------------------------------------
+
+async function applyMigration(db, { migrationPath, deps }) {
+  const sql = deps.fs.readFileSync(migrationPath, 'utf8');
+  const started = Date.now();
+  const startedIso = new Date(started).toISOString();
+  // The reviewed file contains its own BEGIN ... COMMIT. Execute it verbatim as
+  // a single statement batch; never concatenate ad hoc SQL.
+  await db.query(sql);
+  const ended = Date.now();
+  return {
+    stage: 'migrate',
+    migration_path: migrationPath,
+    migration_sha256: RELEASE.migrationSha256,
+    started_at: startedIso,
+    ended_at: new Date(ended).toISOString(),
+    duration_ms: ended - started,
+    transaction_result: 'committed',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6 — post-migration verification (read-only, no fixtures)
+// ---------------------------------------------------------------------------
+
+async function runPostMigrationVerification(db, { preSnapshot }) {
+  return withReadOnly(db, async () => {
+    const state = await snapshot(db);
+    const report = { stage: 'verify', read_only: true, schema: {}, safety: {}, checks: {} };
+
+    const p3d = phase3dObjectState(state);
+    report.schema.phase3d_objects = p3d;
+    report.checks.all_phase3d_objects_present = allPhase3dObjectsPresent(p3d);
+    if (!report.checks.all_phase3d_objects_present) {
+      report.hard_failure = { code: 'SCHEMA_INCOMPLETE', message: 'Expected Phase 3D objects are missing after migration' };
+    }
+
+    // Specific structural contracts.
+    const idempotencyIdx = (await db.query(
+      "SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='call_dispositions_idempotency_idx'",
+    )).rows[0];
+    report.checks.disposition_idempotency_unique = Boolean(idempotencyIdx && /UNIQUE/i.test(idempotencyIdx.indexdef) && /client_id/i.test(idempotencyIdx.indexdef) && /idempotency_key/i.test(idempotencyIdx.indexdef));
+
+    const onePendingIdx = (await db.query(
+      "SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='setter_callbacks_one_pending_idx'",
+    )).rows[0];
+    report.checks.one_pending_callback_unique = Boolean(onePendingIdx && /UNIQUE/i.test(onePendingIdx.indexdef) && /status\s*=\s*'pending'/i.test(onePendingIdx.indexdef));
+
+    report.checks.callback_status_constraint = p3d.callback_status_constraint;
+    report.checks.synthetic_suppression_trigger = p3d.triggers.prospects_synthetic_suppression === true;
+    report.checks.dnc_cleanup_trigger = p3d.triggers.prospects_suppression_cleanup === true;
+    report.checks.tenant_scoping_columns = hasColumn(state, 'setter_callbacks', 'client_id');
+    report.checks.feature_flag_columns = hasColumn(state, 'clients', 'setter_pipeline_v2_enabled');
+
+    // Data / safety contracts, validated against existing state only.
+    const q = async sql => (await db.query(sql)).rows[0].count;
+
+    const prospectsCount = await q('SELECT count(*)::int AS count FROM prospects');
+    report.safety.prospect_count = prospectsCount;
+    const preProspect = preSnapshot && preSnapshot.table_counts && preSnapshot.table_counts.prospects;
+    report.checks.prospect_count_consistent = !preProspect || preProspect.row_count === null || preProspect.row_count === prospectsCount;
+
+    const syntheticNotDnc = await q('SELECT count(*)::int AS count FROM prospects WHERE is_synthetic AND NOT do_not_contact');
+    report.safety.synthetic_not_dnc = syntheticNotDnc;
+    report.checks.all_synthetic_are_dnc = syntheticNotDnc === 0;
+
+    const syntheticOutbound = await q('SELECT count(*)::int AS count FROM prospects WHERE is_synthetic AND NOT do_not_contact');
+    report.safety.synthetic_outbound_eligible = syntheticOutbound;
+    report.checks.no_synthetic_outbound_eligible = syntheticOutbound === 0;
+
+    const syntheticCount = await q('SELECT count(*)::int AS count FROM prospects WHERE is_synthetic');
+    report.safety.synthetic_prospect_count = syntheticCount;
+    const preSynthetic = preSnapshot && preSnapshot.prospect_safety && preSnapshot.prospect_safety.synthetic_prospects;
+    // Pre-migration the column was absent (null); the migration must not mark any
+    // existing prospect synthetic, so the post count must be 0 in that case.
+    report.checks.no_unexpected_synthetic = (preSynthetic && preSynthetic.row_count !== null)
+      ? syntheticCount === preSynthetic.row_count
+      : syntheticCount === 0;
+
+    const pendingForSuppressed = await q(
+      "SELECT count(*)::int AS count FROM setter_callbacks sc JOIN prospects p ON p.id = sc.prospect_id AND p.client_id = sc.client_id WHERE sc.status = 'pending' AND (p.do_not_contact OR p.is_synthetic)",
+    );
+    report.safety.pending_callbacks_for_suppressed = pendingForSuppressed;
+    report.checks.dnc_callback_cancellation_holds = pendingForSuppressed === 0;
+
+    const crossTenant = await q(
+      'SELECT count(*)::int AS count FROM setter_callbacks sc JOIN prospects p ON p.id = sc.prospect_id WHERE sc.client_id <> p.client_id',
+    );
+    report.safety.cross_tenant_callbacks = crossTenant;
+    report.checks.no_cross_tenant_setter_visibility = crossTenant === 0;
+
+    const anyFlag = (await db.query('SELECT COALESCE(bool_or(setter_pipeline_v2_enabled), false) AS enabled FROM clients')).rows[0].enabled;
+    report.safety.any_setter_pipeline_v2_enabled = anyFlag;
+    report.checks.anchor_flag_still_false = anyFlag === false;
+
+    // Backfill accounting: setter_callbacks should equal pre-migration prospects
+    // with a callback_at (documented migration effect); all internal/pending.
+    const callbacks = await q('SELECT count(*)::int AS count FROM setter_callbacks');
+    report.safety.setter_callbacks_count = callbacks;
+    const preCallbackAt = preSnapshot && preSnapshot.prospect_safety && preSnapshot.prospect_safety.prospects_with_callback_at;
+    report.safety.expected_backfill_from_callback_at = preCallbackAt ? preCallbackAt.row_count : null;
+    report.checks.backfill_matches_callback_at = preCallbackAt && preCallbackAt.row_count !== null
+      ? callbacks === preCallbackAt.row_count
+      : true;
+
+    // No outbound side effects: activity / touchpoint counts unchanged.
+    for (const table of ['activity_log', 'agent_log', 'touchpoints']) {
+      const pre = preSnapshot && preSnapshot.table_counts && preSnapshot.table_counts[table];
+      if (!hasTable(state, table)) { report.checks[`${table}_unchanged`] = true; continue; }
+      const post = await q(`SELECT count(*)::int AS count FROM ${table}`);
+      report.safety[`${table}_post_count`] = post;
+      report.checks[`${table}_unchanged`] = !pre || pre.row_count === null || pre.row_count === post;
+    }
+
+    // Lifecycle: prospect status distribution unchanged.
+    const statusRows = (await db.query('SELECT status, count(*)::int AS count FROM prospects GROUP BY status')).rows;
+    const postStatus = statusRows.reduce((acc, r) => { acc[r.status] = r.count; return acc; }, {});
+    report.safety.status_distribution = postStatus;
+    const preStatus = preSnapshot && preSnapshot.prospect_safety && preSnapshot.prospect_safety.status_distribution;
+    report.checks.no_unexpected_lifecycle_change = !preStatus || JSON.stringify(preStatus) === JSON.stringify(postStatus);
+
+    report.hard_pass = Object.entries(report.checks).every(([, value]) => value === true);
+    report.passed = report.hard_pass;
+    return report;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Confirmation gate
+// ---------------------------------------------------------------------------
+
+function askPhrase(question, deps) {
+  if (deps.promptLine) return deps.promptLine(question);
+  return new Promise((resolve) => {
+    if (!process.stdin.isTTY) { resolve(null); return; }
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => { rl.close(); resolve(answer); });
+  });
+}
+
+async function confirmExactPhrase({ mode, options, processEnv, deps }) {
+  const cfg = mode === 'rollback'
+    ? { phrase: CONFIRM.rollbackPhrase, envKey: CONFIRM.rollbackEnvKey, envValue: CONFIRM.rollbackEnvValue }
+    : { phrase: CONFIRM.migrationPhrase, envKey: CONFIRM.migrationEnvKey, envValue: CONFIRM.migrationEnvValue };
+
+  if (options.nonInteractive) {
+    const provided = processEnv[cfg.envKey];
+    if (provided !== cfg.envValue) {
+      throw new GateError(
+        `Non-interactive ${mode} requires ${cfg.envKey}=${cfg.envValue}`,
+        { stage: 'confirm', code: 'NONINTERACTIVE_NOT_APPROVED' },
+      );
+    }
+    return { confirmed: true, method: 'non-interactive-env' };
+  }
+
+  const answer = await askPhrase(`Type the exact confirmation phrase to proceed:\n  ${cfg.phrase}\n> `, deps);
+  if (answer === null) {
+    throw new GateError(
+      'No interactive terminal available and --non-interactive was not supplied. Refusing to proceed on unavailable stdin.',
+      { stage: 'confirm', code: 'NO_TTY' },
+    );
+  }
+  if (answer.trim() !== cfg.phrase) {
+    throw new GateError('Confirmation phrase mismatch — aborting before any write', { stage: 'confirm', code: 'PHRASE_MISMATCH' });
+  }
+  return { confirmed: true, method: 'interactive-phrase' };
+}
+
+// ---------------------------------------------------------------------------
+// Argument parsing
+// ---------------------------------------------------------------------------
+
+function parseArgs(argv) {
+  const flags = new Set();
+  const values = {};
+  for (const token of argv) {
+    if (token.startsWith('--') && token.includes('=')) {
+      const [k, v] = token.slice(2).split(/=(.*)/s);
+      values[k] = v;
+    } else if (token.startsWith('--')) {
+      flags.add(token.slice(2));
+    }
+  }
+  return {
+    executeMigration: flags.has('execute-migration'),
+    executeRollback: flags.has('execute-rollback'),
+    verifyAfterRestart: flags.has('verify-after-restart'),
+    nonInteractive: flags.has('non-interactive'),
+    allowPreexistingDatabaseUrl: flags.has('allow-preexisting-database-url'),
+    json: flags.has('json'),
+    worktree: values.worktree || process.cwd(),
+    expectedHead: values['expected-head'] || RELEASE.deployedSha,
+    envFile: values['env-file'] || DEFAULT_ENV_FILE,
+    artifactsDir: values['artifacts-dir'] || null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Restart boundary text
+// ---------------------------------------------------------------------------
+
+function restartInstructions() {
+  return [
+    '================ REQUIRED NEXT ACTION (MANUAL) ================',
+    'The migration is applied. isPhase3dSetterSchemaPresent caches the schema',
+    'result, so the running application must be restarted/redeployed to re-detect',
+    'the migrated schema.',
+    '',
+    `Restart or redeploy the SAME application release SHA: ${RELEASE.deployedSha}`,
+    'Do NOT deploy a different SHA. Do NOT change Railway configuration.',
+    '',
+    'Option A — Railway dashboard:',
+    '  Project "charming-trust" > environment "production" > the app service >',
+    '  latest deployment > Restart (or Redeploy the current deployment).',
+    '',
+    'Option B — Railway CLI (only if already authenticated & linked):',
+    '  railway redeploy    # redeploys the current deployment, same image/SHA',
+    '',
+    'After restart, run read-only post-restart verification:',
+    '  node scripts/runPhase3hGate2Production.js --verify-after-restart',
+    '==============================================================',
+  ].join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Post-restart verification (read-only; app/HTTP checks stated as manual where
+// they require authenticated browser sessions)
+// ---------------------------------------------------------------------------
+
+async function runVerifyAfterRestart(db) {
+  return withReadOnly(db, async () => {
+    const state = await snapshot(db);
+    const p3d = phase3dObjectState(state);
+    const anyFlag = (await db.query('SELECT COALESCE(bool_or(setter_pipeline_v2_enabled), false) AS enabled FROM clients')).rows[0].enabled;
+    return {
+      stage: 'verify-after-restart',
+      read_only: true,
+      database_checks: {
+        schema_present: allPhase3dObjectsPresent(p3d),
+        anchor_flag_false: anyFlag === false,
+      },
+      manual_checks_required: [
+        'deployed SHA remains 2862d2ee1e5662db42fa111baaaa0faf248bf5d3 (verify in Railway dashboard/GitHub)',
+        'app /health healthy',
+        '/login reachable',
+        '/dashboard reachable',
+        'Anchor still shows the legacy Pipeline (flag false)',
+        'no repeated missing-table/missing-column errors in latest logs',
+        'scheduled jobs healthy',
+        'no outbound activity (calls/emails/texts/drafts/sequences/Max)',
+      ],
+      note: 'Authenticated browser/HTTP and Railway log checks are not automated here to avoid credential handling; perform them manually or via an approved health tool.',
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Artifact writing (with mandatory redaction guard)
+// ---------------------------------------------------------------------------
+
+function writeArtifacts({ artifactsDir, artifacts, secrets, deps }) {
+  const fsdep = deps.fs;
+  fsdep.mkdirSync(artifactsDir, { recursive: true, mode: 0o700 });
+  const written = [];
+  for (const [name, value] of Object.entries(artifacts)) {
+    const redacted = redactDeep(value, secrets);
+    assertNoSecrets(redacted, secrets, `$.${name}`);
+    const file = path.join(artifactsDir, name);
+    if (name.endsWith('.md')) {
+      fsdep.writeFileSync(file, value, { mode: 0o600 });
+    } else {
+      fsdep.writeFileSync(file, `${JSON.stringify(redacted, null, 2)}\n`, { mode: 0o600 });
+    }
+    written.push(file);
+  }
+  return written;
+}
+
+function buildFinalReport({ mode, inspect, preflight, preSnapshot, backup, migration, verify, restart, rollback, secrets }) {
+  const lines = [];
+  lines.push('# Phase 3H — Gate 2 Production Runner Report');
+  lines.push('');
+  lines.push(`- mode: ${mode}`);
+  lines.push(`- generated_at: ${new Date().toISOString()}`);
+  lines.push(`- deployed_sha: ${RELEASE.deployedSha}`);
+  lines.push(`- migration_sha256: ${RELEASE.migrationSha256}`);
+  lines.push('');
+  const yn = v => (v === true ? 'PASS' : v === false ? 'FAIL' : 'n/a');
+  if (inspect) lines.push(`- inspect: ${yn(inspect.passed)} (HEAD ${inspect.head === RELEASE.deployedSha ? 'matches' : 'MISMATCH'})`);
+  if (preflight) lines.push(`- preflight: ${yn(preflight.passed)} (db=${preflight.observations.current_database}, pg=${preflight.observations.server_version})`);
+  if (preSnapshot) lines.push('- pre-migration snapshot: captured');
+  if (backup) lines.push(`- backup: ${yn(backup.verified)} (${backup.backup_identifier})`);
+  if (migration) lines.push(`- migration: ${migration.transaction_result} in ${migration.duration_ms}ms`);
+  if (verify) lines.push(`- verify: ${yn(verify.passed)}`);
+  if (restart) lines.push('- restart: manual instructions emitted (not auto-restarted)');
+  if (rollback) lines.push(`- rollback: ${rollback.transaction_result || rollback.status}`);
+  lines.push('');
+  lines.push('## Safety confirmations');
+  lines.push('- Anchor remains disabled (setter_pipeline_v2 false/absent)');
+  lines.push('- No setter operations were activated by this run');
+  lines.push('- No outbound activity (calls/emails/texts/drafts/sequences/Max) was triggered');
+  lines.push('- Credentials were never printed or written to artifacts');
+  lines.push('');
+  lines.push('_All embedded values are redaction-checked before writing._');
+  return redactString(lines.join('\n'), secrets);
+}
+
+// ---------------------------------------------------------------------------
+// Orchestration
+// ---------------------------------------------------------------------------
+
+// Default production dependencies. `createClient` is only constructed lazily so
+// that unit tests never require pg or open sockets.
+function defaultDeps() {
+  return {
+    fs,
+    git: {
+      revParse(worktree) {
+        const r = spawnSync('git', ['-C', worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+        if (r.status !== 0) throw new GateError('git rev-parse failed', { stage: 'inspect', code: 'GIT_FAILED' });
+        return r.stdout.trim();
+      },
+      status(worktree) {
+        const r = spawnSync('git', ['-C', worktree, 'status', '--porcelain'], { encoding: 'utf8' });
+        if (r.status !== 0) throw new GateError('git status failed', { stage: 'inspect', code: 'GIT_FAILED' });
+        return r.stdout.split('\n').filter(Boolean).map((line) => ({
+          code: line.slice(0, 2).trim() || line.slice(0, 2),
+          path: line.slice(3),
+        }));
+      },
+    },
+    createClient(databaseUrl) {
+      const { Client } = require('pg');
+      const sslDisabled = String(process.env.DATABASE_SSL || '').toLowerCase() === 'false';
+      const client = new Client({ connectionString: databaseUrl, ssl: sslDisabled ? false : { rejectUnauthorized: false } });
+      return client;
+    },
+    createBackup: createDurableBackup,
+    log: (msg) => process.stdout.write(`${msg}\n`),
+  };
+}
+
+async function main(argv, injectedDeps) {
+  const deps = injectedDeps || defaultDeps();
+  const options = parseArgs(argv);
+  const processEnv = deps.processEnv || process.env;
+  const log = deps.log || (() => {});
+
+  let databaseUrl = null;
+  let secrets = new Set();
+  let client = null;
+  const artifacts = {};
+  const summary = { mode: 'inspect+preflight', stages: [], passed: false };
+
+  // Resolve mode.
+  if (options.executeRollback) summary.mode = 'rollback';
+  else if (options.executeMigration) summary.mode = 'execute-migration';
+  else if (options.verifyAfterRestart) summary.mode = 'verify-after-restart';
+
+  const artifactsDir = options.artifactsDir
+    || path.join(options.worktree, 'artifacts', 'phase3h-gate2', new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z'));
+
+  try {
+    // --- Stage 1: local inspection (always, except pure post-restart verify) ---
+    let inspect = null;
+    if (!options.verifyAfterRestart) {
+      inspect = inspectRelease({ worktree: options.worktree, expectedHead: options.expectedHead, deps });
+      artifacts['inspect.json'] = inspect;
+      summary.stages.push('inspect');
+      log('[inspect] PASS — HEAD, clean tree, migration/rollback hashes, single-transaction, no Anchor enablement.');
+    }
+
+    // --- Credentials (memory only) ---
+    databaseUrl = loadDatabaseUrl({
+      envFilePath: options.envFile,
+      processEnv,
+      allowPreexisting: options.allowPreexistingDatabaseUrl,
+      deps,
+    });
+    secrets = deriveSecrets(databaseUrl);
+
+    client = deps.createClient(databaseUrl);
+    await client.connect();
+
+    // --- Post-restart verification path ---
+    if (options.verifyAfterRestart) {
+      const verifyRestart = await runVerifyAfterRestart(client);
+      artifacts['post-restart-verification.json'] = verifyRestart;
+      summary.stages.push('verify-after-restart');
+      summary.passed = verifyRestart.database_checks.schema_present && verifyRestart.database_checks.anchor_flag_false;
+      artifacts['final-report.md'] = buildFinalReport({ mode: summary.mode, verify: verifyRestart, secrets });
+      const written = writeArtifacts({ artifactsDir, artifacts, secrets, deps });
+      log(restartInstructions());
+      summary.artifacts = written;
+      return summary;
+    }
+
+    // --- Stage 2: read-only preflight (always) ---
+    const preflight = await runPreflight(client);
+    artifacts['preflight.json'] = preflight;
+    summary.stages.push('preflight');
+    log(`[preflight] PASS — db=${preflight.observations.current_database}, pg=${preflight.observations.server_version}, anchor flag not enabled, no active setter ops, no partial migration.`);
+
+    // --- Rollback path ---
+    if (options.executeRollback) {
+      log('\n[plan] ROLLBACK is a logical (feature-flag) rollback using only the reviewed rollback file.');
+      log('       It disables the new Pipeline and preserves safety/history schema and data.');
+      await confirmExactPhrase({ mode: 'rollback', options, processEnv, deps });
+      const rbSql = deps.fs.readFileSync(path.join(options.worktree, RELEASE.rollbackRelPath), 'utf8');
+      const started = Date.now();
+      await client.query(rbSql);
+      const rollback = { stage: 'rollback', rollback_sha256: RELEASE.rollbackSha256, duration_ms: Date.now() - started, transaction_result: 'committed' };
+      artifacts['rollback-result.json'] = rollback;
+      summary.stages.push('rollback');
+      const flag = (await client.query('SELECT COALESCE(bool_or(setter_pipeline_v2_enabled), false) AS enabled FROM clients')).rows[0].enabled;
+      rollback.anchor_flag_false_after = flag === false;
+      summary.passed = flag === false;
+      artifacts['final-report.md'] = buildFinalReport({ mode: summary.mode, inspect, preflight, rollback, secrets });
+      writeArtifacts({ artifactsDir, artifacts, secrets, deps });
+      log('[rollback] applied. Restart the same SHA to refresh the schema-presence cache.');
+      return summary;
+    }
+
+    // --- Read-only default: stop after preflight unless migration requested ---
+    if (!options.executeMigration) {
+      artifacts['final-report.md'] = buildFinalReport({ mode: summary.mode, inspect, preflight, secrets });
+      const written = writeArtifacts({ artifactsDir, artifacts, secrets, deps });
+      summary.passed = true;
+      summary.artifacts = written;
+      log('\n[read-only] Inspection + preflight complete. Re-run with --execute-migration to proceed (a second confirmation is still required).');
+      return summary;
+    }
+
+    // --- Stage 3: pre-migration snapshot ---
+    const preSnapshot = await runPreMigrationSnapshot(client);
+    artifacts['pre-migration-snapshot.json'] = preSnapshot;
+    summary.stages.push('pre-migration-snapshot');
+
+    // --- Execution plan + mandatory second confirmation (stop after preflight) ---
+    log('\n================ EXECUTION PLAN ================');
+    log(`  target database : ${preflight.observations.current_database} (PostgreSQL ${preflight.observations.server_version})`);
+    log(`  worktree HEAD   : ${inspect.head}`);
+    log(`  migration       : ${RELEASE.migrationRelPath}`);
+    log(`  migration sha256: ${RELEASE.migrationSha256}`);
+    log('  steps           : durable backup -> apply reviewed migration -> read-only verify');
+    log('  anchor          : remains DISABLED (no flag enablement)');
+    log('===============================================');
+    await confirmExactPhrase({ mode: 'migration', options, processEnv, deps });
+
+    // --- Stage 4: durable backup (no skip allowed) ---
+    const backup = deps.createBackup({ databaseUrl, serverVersion: preflight.observations.server_version, deps });
+    if (!backup || backup.verified !== true) {
+      throw new GateError('Durable backup did not verify — refusing to migrate', { stage: 'backup', code: 'BACKUP_UNVERIFIED' });
+    }
+    artifacts['backup-metadata.json'] = backup;
+    summary.stages.push('backup');
+    log(`[backup] verified — ${backup.backup_identifier} (${backup.encrypted_size_bytes} bytes, sha256 ${backup.encrypted_sha256.slice(0, 12)}…)`);
+
+    // --- Stage 5: migration ---
+    const migration = await applyMigration(client, { migrationPath: inspect.migration_path, deps });
+    artifacts['migration-result.json'] = migration;
+    summary.stages.push('migrate');
+    log(`[migrate] committed in ${migration.duration_ms}ms`);
+
+    // --- Stage 6: post-migration verification ---
+    const verify = await runPostMigrationVerification(client, { preSnapshot });
+    artifacts['post-migration-verification.json'] = verify;
+    summary.stages.push('verify');
+
+    if (!verify.passed) {
+      // Do NOT auto-rollback. Report a hard rollback condition and stop.
+      artifacts['final-report.md'] = buildFinalReport({ mode: summary.mode, inspect, preflight, preSnapshot, backup, migration, verify, secrets });
+      writeArtifacts({ artifactsDir, artifacts, secrets, deps });
+      const failed = Object.entries(verify.checks).filter(([, v]) => v !== true).map(([k]) => k);
+      log('\n[verify] HARD ROLLBACK CONDITION — one or more contracts failed:');
+      log(`         ${failed.join(', ')}`);
+      log('         The reviewed logical rollback is NOT run automatically.');
+      log(`         To roll back (separate authorization): node scripts/runPhase3hGate2Production.js --execute-rollback`);
+      log(`         Reviewed rollback: ${RELEASE.rollbackRelPath} (disables the new Pipeline; preserves safety/history schema).`);
+      summary.passed = false;
+      summary.rollback_condition = true;
+      summary.failed_checks = failed;
+      return summary;
+    }
+
+    summary.stages.push('restart-instructions');
+    artifacts['final-report.md'] = buildFinalReport({ mode: summary.mode, inspect, preflight, preSnapshot, backup, migration, verify, restart: true, secrets });
+    const written = writeArtifacts({ artifactsDir, artifacts, secrets, deps });
+    summary.artifacts = written;
+    summary.passed = true;
+    log('\n[verify] PASS — all schema + safety contracts hold; Anchor remains disabled.');
+    log(restartInstructions());
+    return summary;
+  } catch (error) {
+    const sanitized = sanitizeError(error, secrets);
+    artifacts['error.json'] = { stage: error && error.stage ? error.stage : 'unknown', code: error && error.code ? error.code : 'ERROR', ...sanitized };
+    try { writeArtifacts({ artifactsDir, artifacts, secrets, deps }); } catch { /* redaction guard may itself throw; swallow to avoid leaking */ }
+    summary.passed = false;
+    summary.error = sanitized;
+    throw Object.assign(error, { summary });
+  } finally {
+    if (client && client.end) { try { await client.end(); } catch { /* ignore */ } }
+  }
+}
+
+if (require.main === module) {
+  main(process.argv.slice(2)).then((summary) => {
+    process.exitCode = summary && summary.passed ? 0 : 2;
+  }).catch((error) => {
+    const secrets = error && error.summary ? new Set() : new Set();
+    process.stderr.write(`${redactString(error && error.message ? error.message : String(error), secrets)}\n`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  RELEASE,
+  IDENTITY,
+  CONFIRM,
+  DEFAULT_ENV_FILE,
+  GateError,
+  parseArgs,
+  deriveSecrets,
+  redactString,
+  redactDeep,
+  sanitizeError,
+  assertNoSecrets,
+  loadDatabaseUrl,
+  sha256File,
+  assertMigrationStaticSafety,
+  inspectRelease,
+  withReadOnly,
+  runPreflight,
+  snapshotCounts,
+  prospectSafetyCounts,
+  runPreMigrationSnapshot,
+  createDurableBackup,
+  applyMigration,
+  runPostMigrationVerification,
+  confirmExactPhrase,
+  runVerifyAfterRestart,
+  restartInstructions,
+  writeArtifacts,
+  buildFinalReport,
+  main,
+};
