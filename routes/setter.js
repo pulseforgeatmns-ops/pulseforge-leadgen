@@ -455,8 +455,16 @@ router.get(['/api/leads', '/leads'], requireSetterRead, async (req, res) => {
 router.get(['/api/stats/today', '/stats/today'], requireSetterRead, async (req, res) => {
   try {
     await ensureSetterSchema();
-    const setterId = req.user?.id || null;
+    // Coerce to a finite integer (or null). Non-numeric identifiers must not
+    // broaden results — they resolve to zero matches via NULL comparisons.
+    const rawSetterId = req.user?.id;
+    const setterId = rawSetterId == null || rawSetterId === ''
+      ? null
+      : (Number.isFinite(Number(rawSetterId)) ? Number(rawSetterId) : null);
     const clientId = setterClientId(req);
+    // activity_log.setter_id is TEXT; call_dispositions.setter_id is INTEGER.
+    // Cast $1 explicitly on each side so a shared parameter does not infer as
+    // text and then fail with "operator does not exist: integer = text".
     const { rows } = await pool.query(`
       SELECT (
         SELECT COUNT(*)::int
@@ -471,7 +479,7 @@ router.get(['/api/stats/today', '/stats/today'], requireSetterRead, async (req, 
       ) + (
         SELECT COUNT(*)::int
         FROM call_dispositions
-        WHERE setter_id = $1
+        WHERE setter_id = $1::integer
           AND client_id = $2
           AND source = 'manual_setter'
           AND COALESCE(is_synthetic, false) = false
