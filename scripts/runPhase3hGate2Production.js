@@ -1310,7 +1310,7 @@ function assertRemediationStaticSafety(sql) {
   if (!findings.only_updates_setter_callbacks) {
     throw new GateError('Remediation must UPDATE only setter_callbacks', { stage: 'remediation-inspect', code: 'SCOPE_VIOLATION' });
   }
-  findings.no_delete = !/\bDELETE\b/i.test(sql);
+  findings.no_delete = !/\bDELETE\b/i.test(withoutLineComments);
   findings.targets_pending_suppressed = /status\s*=\s*'pending'/i.test(sql)
     && /do_not_contact\s*=\s*true/i.test(sql)
     && /is_synthetic\s*=\s*true/i.test(sql);
