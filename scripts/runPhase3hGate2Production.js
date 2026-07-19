@@ -90,13 +90,147 @@ const SNAPSHOT_TABLES = Object.freeze([
 // ---------------------------------------------------------------------------
 
 class GateError extends Error {
-  constructor(message, { stage = 'unknown', code = 'GATE_FAILED' } = {}) {
+  constructor(message, { stage = 'unknown', code = 'GATE_FAILED', details = null } = {}) {
     super(message);
     this.name = 'GateError';
     this.stage = stage;
     this.code = code;
+    this.details = details;
     this.gate = true;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3D schema classification
+// ---------------------------------------------------------------------------
+//
+// Gate 1 documented the genuine pre-Phase-3D production shape: the base human
+// setter pipeline already includes prospects.assigned_setter_id (and related
+// setter_status / setter_visible columns). The Phase 3D migration re-declares
+// assigned_setter_id with IF NOT EXISTS for idempotency, but that column is
+// NOT a unique Phase 3D quality-control marker.
+//
+// Treating assigned_setter_id as a Phase 3D marker false-positives clean
+// production as PARTIAL. Unique Phase 3D markers are the quality-control
+// objects introduced only by 2026-07-19-setter-pilot-quality-control.sql.
+
+const LEGACY_SETTER_COLUMNS = Object.freeze({
+  prospects: Object.freeze(['assigned_setter_id', 'setter_status', 'setter_visible', 'callback_at', 'do_not_contact']),
+});
+
+// Uniquely Phase 3D — presence of ANY of these on an otherwise incomplete set
+// means PARTIAL_PHASE3D. assigned_setter_id is intentionally excluded.
+const UNIQUE_PHASE3D_COLUMNS = Object.freeze({
+  clients: Object.freeze(['setter_pipeline_v2_enabled', 'setter_pipeline_v2_configured_at', 'setter_review_sample_percent']),
+  prospects: Object.freeze(['is_synthetic', 'synthetic_label', 'callback_completed_at']),
+  call_dispositions: Object.freeze([
+    'structured_notes', 'activity_result', 'next_action', 'suppression_state', 'lifecycle_result',
+    'is_synthetic', 'review_required', 'review_status', 'idempotency_key',
+  ]),
+});
+const UNIQUE_PHASE3D_TABLES = Object.freeze(['setter_callbacks']);
+const UNIQUE_PHASE3D_INDEXES = Object.freeze([
+  'call_dispositions_idempotency_idx',
+  'setter_callbacks_one_pending_idx',
+  'setter_callbacks_due_idx',
+]);
+const UNIQUE_PHASE3D_TRIGGERS = Object.freeze([
+  'prospects_synthetic_suppression',
+  'prospects_suppression_cleanup',
+]);
+
+function uniquePhase3dObjectState(state) {
+  return {
+    tables: Object.fromEntries(UNIQUE_PHASE3D_TABLES.map(name => [name, hasTable(state, name)])),
+    columns: Object.fromEntries(Object.entries(UNIQUE_PHASE3D_COLUMNS).map(([table, columns]) => [table,
+      Object.fromEntries(columns.map(column => [column, hasColumn(state, table, column)])),
+    ])),
+    indexes: Object.fromEntries(UNIQUE_PHASE3D_INDEXES.map(name => [name, state.indexes.some(index => index.indexname === name)])),
+    triggers: Object.fromEntries(UNIQUE_PHASE3D_TRIGGERS.map(name => [name, state.triggers.some(trigger => trigger.trigger_name === name)])),
+    callback_status_constraint: state.constraints.some(constraint =>
+      constraint.constraint_name === 'setter_callbacks_status_check' && constraint.constraint_type === 'CHECK'),
+  };
+}
+
+function listPresentMarkers(uniqueState) {
+  const present = [];
+  for (const [name, exists] of Object.entries(uniqueState.tables)) {
+    if (exists) present.push(`table:${name}`);
+  }
+  for (const [table, cols] of Object.entries(uniqueState.columns)) {
+    for (const [column, exists] of Object.entries(cols)) {
+      if (exists) present.push(`column:${table}.${column}`);
+    }
+  }
+  for (const [name, exists] of Object.entries(uniqueState.indexes)) {
+    if (exists) present.push(`index:${name}`);
+  }
+  for (const [name, exists] of Object.entries(uniqueState.triggers)) {
+    if (exists) present.push(`trigger:${name}`);
+  }
+  if (uniqueState.callback_status_constraint) present.push('constraint:setter_callbacks_status_check');
+  return present;
+}
+
+function listAbsentMarkers(uniqueState) {
+  const absent = [];
+  for (const [name, exists] of Object.entries(uniqueState.tables)) {
+    if (!exists) absent.push(`table:${name}`);
+  }
+  for (const [table, cols] of Object.entries(uniqueState.columns)) {
+    for (const [column, exists] of Object.entries(cols)) {
+      if (!exists) absent.push(`column:${table}.${column}`);
+    }
+  }
+  for (const [name, exists] of Object.entries(uniqueState.indexes)) {
+    if (!exists) absent.push(`index:${name}`);
+  }
+  for (const [name, exists] of Object.entries(uniqueState.triggers)) {
+    if (!exists) absent.push(`trigger:${name}`);
+  }
+  if (!uniqueState.callback_status_constraint) absent.push('constraint:setter_callbacks_status_check');
+  return absent;
+}
+
+function legacySetterObjectState(state) {
+  return {
+    columns: Object.fromEntries(Object.entries(LEGACY_SETTER_COLUMNS).map(([table, columns]) => [table,
+      Object.fromEntries(columns.map(column => [column, hasColumn(state, table, column)])),
+    ])),
+    tables: {
+      setter_follow_up_drafts: hasTable(state, 'setter_follow_up_drafts'),
+    },
+    call_dispositions_details: hasColumn(state, 'call_dispositions', 'details'),
+  };
+}
+
+// Classify production schema for Gate 2. Does not weaken the gate: any unique
+// Phase 3D marker without the full contract is PARTIAL_PHASE3D.
+function classifyPhase3dSchema(state) {
+  const unique = uniquePhase3dObjectState(state);
+  const legacy = legacySetterObjectState(state);
+  // Post-migration completeness still uses the rehearsal inventory (includes
+  // assigned_setter_id, which production already has and the migration keeps).
+  const inventory = phase3dObjectState(state);
+  const complete = allPhase3dObjectsPresent(inventory);
+  const presentUnique = listPresentMarkers(unique);
+  const absentUnique = listAbsentMarkers(unique);
+  const anyUnique = presentUnique.length > 0;
+
+  let classification;
+  if (complete) classification = 'COMPLETE_PHASE3D';
+  else if (!anyUnique) classification = 'CLEAN_PRE_MIGRATION';
+  else if (anyUnique) classification = 'PARTIAL_PHASE3D';
+  else classification = 'AMBIGUOUS';
+
+  return {
+    classification,
+    unique_phase3d_present: presentUnique,
+    unique_phase3d_absent: absentUnique,
+    legacy_setter: legacy,
+    inventory,
+    complete,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -432,24 +566,32 @@ async function runPreflight(db, { identity = IDENTITY } = {}) {
       report.checks.no_active_setter_ops = true;
     }
 
-    // Partial / ambiguous Phase 3D state detection. Either fully absent
-    // (pre-migration) or fully present is acceptable; a mixture is not.
-    const p3d = phase3dObjectState(state);
-    const allPresent = allPhase3dObjectsPresent(p3d);
-    const anyPresent = Object.values(p3d.tables).some(Boolean)
-      || Object.values(p3d.columns).some(cols => Object.values(cols).some(Boolean))
-      || Object.values(p3d.indexes).some(Boolean)
-      || Object.values(p3d.triggers).some(Boolean)
-      || p3d.callback_status_constraint;
-    report.observations.phase3d_all_present = allPresent;
-    report.observations.phase3d_any_present = anyPresent;
-    const partial = anyPresent && !allPresent;
-    report.checks.no_partial_migration = !partial;
-    if (partial) {
-      throw new GateError('Ambiguous / partially-applied Phase 3D schema detected — refusing to proceed', { stage: 'preflight', code: 'PARTIAL_MIGRATION' });
+    // Phase 3D classification. Legacy base-setter objects (notably
+    // prospects.assigned_setter_id) are documented pre-Phase-3D and must not
+    // alone trigger PARTIAL. Unique quality-control markers decide.
+    const classified = classifyPhase3dSchema(state);
+    report.observations.phase3d_classification = classified.classification;
+    report.observations.phase3d_unique_present = classified.unique_phase3d_present;
+    report.observations.phase3d_unique_absent = classified.unique_phase3d_absent;
+    report.observations.legacy_setter = classified.legacy_setter;
+    report.observations.phase3d_pre_state = classified.inventory;
+    report.observations.phase3d_all_present = classified.complete;
+    report.checks.schema_classification_clean_or_complete =
+      classified.classification === 'CLEAN_PRE_MIGRATION'
+      || classified.classification === 'COMPLETE_PHASE3D';
+    report.checks.no_partial_migration = classified.classification !== 'PARTIAL_PHASE3D'
+      && classified.classification !== 'AMBIGUOUS';
+    if (classified.classification === 'PARTIAL_PHASE3D' || classified.classification === 'AMBIGUOUS') {
+      throw new GateError(
+        `Phase 3D schema classification ${classified.classification} — refusing to proceed`,
+        {
+          stage: 'preflight',
+          code: classified.classification === 'PARTIAL_PHASE3D' ? 'PARTIAL_MIGRATION' : 'AMBIGUOUS_SCHEMA',
+          details: report,
+        },
+      );
     }
-    report.observations.phase3d_pre_state = p3d;
-    report.phase3d_already_applied = allPresent;
+    report.phase3d_already_applied = classified.complete;
     report.passed = true;
     return report;
   });
@@ -1109,7 +1251,17 @@ async function main(argv, injectedDeps) {
     return summary;
   } catch (error) {
     const sanitized = sanitizeError(error, secrets);
-    artifacts['error.json'] = { stage: error && error.stage ? error.stage : 'unknown', code: error && error.code ? error.code : 'ERROR', ...sanitized };
+    artifacts['error.json'] = {
+      stage: error && error.stage ? error.stage : 'unknown',
+      code: error && error.code ? error.code : 'ERROR',
+      ...sanitized,
+    };
+    // Persist stage observations attached to GateError so a PARTIAL/AMBIGUOUS
+    // stop still leaves a sanitized matrix for the operator — without credentials.
+    if (error && error.details) {
+      const stageArtifact = error.stage === 'preflight' ? 'preflight.json' : `${error.stage || 'details'}.json`;
+      artifacts[stageArtifact] = error.details;
+    }
     try { writeArtifacts({ artifactsDir, artifacts, secrets, deps }); } catch { /* redaction guard may itself throw; swallow to avoid leaking */ }
     summary.passed = false;
     summary.error = sanitized;
@@ -1134,6 +1286,11 @@ module.exports = {
   IDENTITY,
   CONFIRM,
   DEFAULT_ENV_FILE,
+  LEGACY_SETTER_COLUMNS,
+  UNIQUE_PHASE3D_COLUMNS,
+  UNIQUE_PHASE3D_TABLES,
+  UNIQUE_PHASE3D_INDEXES,
+  UNIQUE_PHASE3D_TRIGGERS,
   GateError,
   parseArgs,
   deriveSecrets,
@@ -1147,6 +1304,9 @@ module.exports = {
   inspectRelease,
   withReadOnly,
   runPreflight,
+  classifyPhase3dSchema,
+  uniquePhase3dObjectState,
+  legacySetterObjectState,
   snapshotCounts,
   prospectSafetyCounts,
   runPreMigrationSnapshot,

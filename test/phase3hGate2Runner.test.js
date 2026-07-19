@@ -251,6 +251,100 @@ test('preflight fails closed on ambiguous / partial migration state', async () =
   await assert.rejects(runner.runPreflight(db), isCode('PARTIAL_MIGRATION'));
 });
 
+test('production pre-Phase-3D shape with legacy assigned_setter_id is CLEAN_PRE_MIGRATION', async () => {
+  // Exact Gate 1 documented production shape: base human-setter columns exist,
+  // including assigned_setter_id, but NO unique Phase 3D quality-control objects.
+  // Shape for classifyPhase3dSchema (information_schema-like rows):
+  const productionPreRows = {
+    tables: ['clients', 'prospects', 'call_dispositions', 'touchpoints', 'activity_log', 'setter_follow_up_drafts']
+      .map(table_name => ({ table_name })),
+    columns: [
+      { table_name: 'prospects', column_name: 'do_not_contact' },
+      { table_name: 'prospects', column_name: 'callback_at' },
+      { table_name: 'prospects', column_name: 'status' },
+      { table_name: 'prospects', column_name: 'setter_status' },
+      { table_name: 'prospects', column_name: 'setter_visible' },
+      { table_name: 'prospects', column_name: 'assigned_setter_id' },
+      { table_name: 'call_dispositions', column_name: 'details' },
+    ],
+    indexes: [],
+    triggers: [],
+    constraints: [],
+  };
+  const classified = runner.classifyPhase3dSchema(productionPreRows);
+  assert.equal(classified.classification, 'CLEAN_PRE_MIGRATION');
+  assert.deepEqual(classified.unique_phase3d_present, []);
+  assert.equal(classified.legacy_setter.columns.prospects.assigned_setter_id, true);
+  assert.equal(classified.legacy_setter.call_dispositions_details, true);
+
+  // makeDb stateConfig shape uses string table names (wrapper maps them).
+  const productionPreDb = {
+    tables: ['clients', 'prospects', 'call_dispositions', 'touchpoints', 'activity_log', 'setter_follow_up_drafts'],
+    columns: productionPreRows.columns,
+    indexes: [],
+    triggers: [],
+    constraints: [],
+  };
+  const db = makeDb({ state: productionPreDb, database: 'railway', serverVersion: '18.4' });
+  const report = await runner.runPreflight(db);
+  assert.equal(report.passed, true);
+  assert.equal(report.observations.phase3d_classification, 'CLEAN_PRE_MIGRATION');
+  assert.equal(report.phase3d_already_applied, false);
+});
+
+test('classifyPhase3dSchema marks complete inventory as COMPLETE_PHASE3D', () => {
+  // Convert stateConfig strings into information_schema-like row objects.
+  const raw = stateConfig({ phase3d: true });
+  const shaped = {
+    tables: raw.tables.map(table_name => ({ table_name })),
+    columns: raw.columns,
+    indexes: raw.indexes,
+    triggers: raw.triggers,
+    constraints: raw.constraints,
+  };
+  const classified = runner.classifyPhase3dSchema(shaped);
+  assert.equal(classified.classification, 'COMPLETE_PHASE3D');
+});
+
+test('classifyPhase3dSchema marks a single unique Phase 3D column as PARTIAL_PHASE3D', () => {
+  const partial = {
+    tables: ['clients', 'prospects', 'call_dispositions'].map(table_name => ({ table_name })),
+    columns: [
+      { table_name: 'prospects', column_name: 'assigned_setter_id' },
+      { table_name: 'prospects', column_name: 'is_synthetic' }, // unique Phase 3D marker alone
+    ],
+    indexes: [],
+    triggers: [],
+    constraints: [],
+  };
+  const classified = runner.classifyPhase3dSchema(partial);
+  assert.equal(classified.classification, 'PARTIAL_PHASE3D');
+  assert.ok(classified.unique_phase3d_present.includes('column:prospects.is_synthetic'));
+});
+
+test('snapshot helper never overlaps queries on a single client', async () => {
+  const { snapshot } = require('../scripts/runSetterReleaseRehearsal');
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const db = {
+    async query(sql) {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      if (inFlight > 1) throw new Error(`overlapping client.query detected (inFlight=${inFlight}) for: ${sql.slice(0, 60)}`);
+      await new Promise(resolve => setImmediate(resolve));
+      inFlight -= 1;
+      if (/information_schema\.tables/.test(sql)) return { rows: [] };
+      if (/information_schema\.columns/.test(sql)) return { rows: [] };
+      if (/pg_indexes/.test(sql)) return { rows: [] };
+      if (/table_constraints/.test(sql)) return { rows: [] };
+      if (/pg_trigger/.test(sql)) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+  await snapshot(db);
+  assert.equal(maxInFlight, 1, 'snapshot must never run concurrent queries on one client');
+});
+
 test('preflight fails closed when Anchor cannot be uniquely identified', async () => {
   const db = makeDb({ anchorRows: 0 });
   await assert.rejects(runner.runPreflight(db), isCode('ANCHOR_IDENTITY'));

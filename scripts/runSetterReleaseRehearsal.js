@@ -43,13 +43,14 @@ function safeUrl(value, label) {
 }
 
 async function snapshot(db) {
-  const [tables, columns, indexes, constraints, triggers] = await Promise.all([
-    db.query(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`),
-    db.query(`SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = 'public' ORDER BY table_name, ordinal_position`),
-    db.query(`SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY tablename, indexname`),
-    db.query(`SELECT table_name, constraint_name, constraint_type FROM information_schema.table_constraints WHERE table_schema = 'public' ORDER BY table_name, constraint_name`),
-    db.query(`SELECT c.relname AS table_name, t.tgname AS trigger_name FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND NOT t.tgisinternal ORDER BY c.relname, t.tgname`),
-  ]);
+  // Sequential awaits only. A single pg Client (production Gate 2 and the
+  // Phase 3F rehearsal Client) cannot safely run concurrent queries; Promise.all
+  // on one client triggers the pg@8 overlapping-query deprecation.
+  const tables = await db.query(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`);
+  const columns = await db.query(`SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = 'public' ORDER BY table_name, ordinal_position`);
+  const indexes = await db.query(`SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY tablename, indexname`);
+  const constraints = await db.query(`SELECT table_name, constraint_name, constraint_type FROM information_schema.table_constraints WHERE table_schema = 'public' ORDER BY table_name, constraint_name`);
+  const triggers = await db.query(`SELECT c.relname AS table_name, t.tgname AS trigger_name FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND NOT t.tgisinternal ORDER BY c.relname, t.tgname`);
   return { tables: tables.rows, columns: columns.rows, indexes: indexes.rows, constraints: constraints.rows, triggers: triggers.rows };
 }
 
