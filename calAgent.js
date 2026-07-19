@@ -30,6 +30,7 @@ async function getQueuedCandidates(limit) {
     WHERE q.client_id = $1
       AND q.status = 'pending'
       AND COALESCE(p.do_not_contact, false) = false
+      AND COALESCE(p.is_synthetic, false) = false
       AND p.phone IS NOT NULL AND p.phone != ''
     ORDER BY q.priority ASC, q.created_at ASC
     LIMIT $2
@@ -56,6 +57,7 @@ async function getCallCandidates(excludeIds = []) {
     LEFT JOIN companies c ON p.company_id = c.id
     WHERE p.status = 'warm'
       AND p.do_not_contact = false
+      AND COALESCE(p.is_synthetic, false) = false
       AND p.phone IS NOT NULL AND p.phone != ''
       AND p.icp_score >= 60
       AND ($2::int[] IS NULL OR NOT (p.id = ANY($2::int[])))

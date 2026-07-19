@@ -77,7 +77,7 @@ async function sendSMS(prospectId, messageOverride = null) {
 
   if (!prospect) return { sent: false, reason: 'prospect_not_found' };
   if (!prospect.phone) return { sent: false, reason: 'no_phone' };
-  if (prospect.do_not_contact) return { sent: false, reason: 'do_not_contact' };
+  if (prospect.do_not_contact || prospect.is_synthetic) return { sent: false, reason: prospect.is_synthetic ? 'synthetic_prospect' : 'do_not_contact' };
 
   const alreadySent = await alreadyContactedBySMS(prospectId);
   if (alreadySent) {

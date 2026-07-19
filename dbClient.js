@@ -21,10 +21,10 @@ function ensurePendingCommentPublishSchema() {
 async function checkDNC(prospectId) {
   const clientId = getRuntimeClientId();
   const res = await pool.query(
-    'SELECT do_not_contact FROM prospects WHERE id = $1 AND client_id = $2',
+    'SELECT do_not_contact, is_synthetic FROM prospects WHERE id = $1 AND client_id = $2',
     [prospectId, clientId]
   );
-  return res.rows[0]?.do_not_contact ?? true;
+  return res.rows[0] ? Boolean(res.rows[0].do_not_contact || res.rows[0].is_synthetic) : true;
 }
 
 // Get full prospect record
@@ -87,8 +87,8 @@ async function addProspect(data) {
   const clientId = getRuntimeClientId(data);
   const res = await pool.query(
     `INSERT INTO prospects 
-      (company_id, first_name, last_name, email, phone, job_title, decision_maker, linkedin_url, facebook_url, source, icp_score, client_id, service_area_match)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      (company_id, first_name, last_name, email, phone, job_title, decision_maker, linkedin_url, facebook_url, source, icp_score, client_id, service_area_match, is_synthetic, synthetic_label, do_not_contact)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
      ON CONFLICT (email) DO NOTHING
      RETURNING id`,
     [
@@ -104,7 +104,10 @@ async function addProspect(data) {
       data.source || 'manual',
       data.icp_score || 0,
       clientId,
-      data.service_area_match || null
+      data.service_area_match || null,
+      Boolean(data.is_synthetic),
+      data.synthetic_label || null,
+      Boolean(data.do_not_contact || data.is_synthetic)
     ]
   );
   return res.rows[0]?.id;
@@ -141,7 +144,7 @@ async function addCompany(data) {
 async function getProspectsByStatus(status) {
   const clientId = getRuntimeClientId();
   const res = await pool.query(
-    'SELECT * FROM prospects WHERE status = $1 AND do_not_contact = false AND client_id = $2 ORDER BY icp_score DESC',
+    'SELECT * FROM prospects WHERE status = $1 AND do_not_contact = false AND COALESCE(is_synthetic, false) = false AND client_id = $2 ORDER BY icp_score DESC',
     [status, clientId]
   );
   return res.rows;

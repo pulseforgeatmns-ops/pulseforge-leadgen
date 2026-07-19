@@ -277,6 +277,7 @@ async function autorun(clientId, options = {}) {
       WHERE p.client_id = $1
         AND p.status IN ('cold', 'contacted', 'warm')
         AND COALESCE(p.do_not_contact, FALSE) = FALSE
+        AND COALESCE(p.is_synthetic, FALSE) = FALSE
         AND p.email IS NOT NULL
         AND p.email <> ''
         AND p.email_sequence_completed_at IS NULL

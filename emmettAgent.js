@@ -1376,6 +1376,7 @@ async function getProspectsForEmail(options = {}) {
     AND p.email NOT LIKE '%@domain.com'
     AND p.email NOT LIKE '%@example.com'
     AND p.do_not_contact IS NOT TRUE
+    AND COALESCE(p.is_synthetic, false) = false
     AND (
       p.email_status IN ('valid', 'verified', 'role')
       OR (p.email_status = 'unverified_legacy' AND p.status = 'contacted')

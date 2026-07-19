@@ -372,7 +372,7 @@ async function loadProspect(prospectId, clientId) {
       p.id, p.client_id, p.email, p.phone, p.vertical, p.icp_score,
       p.service_area_match, p.has_website, p.website_url,
       p.has_facebook, p.has_instagram, p.facebook_url, p.instagram_url,
-      p.employee_count_estimate, p.setter_status, p.booked_at, p.do_not_contact,
+      p.employee_count_estimate, p.setter_status, p.booked_at, p.do_not_contact, p.is_synthetic,
       c.name AS company_name, c.location AS company_location,
       c.website AS company_website, c.domain AS company_domain,
       c.industry AS industry, c.size AS company_size
@@ -398,6 +398,9 @@ async function recalculateICP(prospectId, options = {}) {
   if (!prospect) {
     console.warn(`[icpScoring] recalculateICP: prospect ${prospectId} not found for client ${clientId}`);
     return { found: false };
+  }
+  if (prospect.is_synthetic) {
+    return { found: true, skipped: true, reason: 'synthetic_prospect', prospect_id: prospectId, client_id: clientId };
   }
 
   let clientConfig = null;

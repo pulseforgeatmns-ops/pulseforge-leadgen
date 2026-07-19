@@ -93,6 +93,17 @@ async function run() {
   assert(tokenFailure, 'Expected required template token failure');
   assert.deepStrictEqual(tokenFailure.details.missing_tokens, ['first_name']);
 
+  const synthetic = await evaluateSendingReadiness({
+    client,
+    prospect: { ...prospect, is_synthetic: true },
+    sequenceCatalog,
+    clientSequenceMap,
+    brevoState,
+    pool: poolWith({ currentProspect: { ...prospect, is_synthetic: true } }),
+  });
+  assert.equal(synthetic.sendable, false);
+  assert(synthetic.failures.some(failure => failure.code === 'prospect_not_synthetic'));
+
   const fallbackCoveredName = await evaluateSendingReadiness({
     client,
     prospect: { ...prospect, first_name: '' },

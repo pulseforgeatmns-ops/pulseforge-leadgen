@@ -81,6 +81,11 @@ async function loadProspectContext(db, prospectId, clientId, { includeLegacySign
   `, [prospectId, clientId]);
   const prospect = prospectResult.rows[0];
   if (!prospect) throw new Error(`Prospect ${prospectId} not found for client ${clientId}`);
+  if (prospect.is_synthetic) {
+    const error = new Error('Synthetic prospects are excluded from Max orchestration');
+    error.code = 'SYNTHETIC_PROSPECT_EXCLUDED';
+    throw error;
+  }
 
   const normalized = await db.query(`
     SELECT signal.id, signal.event_type, signal.event_timestamp, signal.source, signal.source_record_id, signal.metadata

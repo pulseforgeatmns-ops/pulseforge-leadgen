@@ -2220,6 +2220,62 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
 }
 .pipeline-area::-webkit-scrollbar { width: 3px; }
 .pipeline-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.legacy-pipeline-only { display:none; }
+body.pipeline-legacy .new-pipeline-only { display:none !important; }
+body.pipeline-legacy .legacy-pipeline-only { display:block; }
+.setter-ops-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(260px, 0.8fr);
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.setter-ops-intro {
+  background: linear-gradient(135deg, rgba(96,48,177,0.18), rgba(0,212,180,0.06));
+  border: 1px solid rgba(139,92,246,0.32);
+  border-radius: 12px;
+  padding: 1.25rem;
+}
+.setter-ops-kicker, .setter-ops-capability-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.56rem;
+  letter-spacing: 1.8px;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+.setter-ops-intro h2 { font-size: 1.35rem; margin: 0.45rem 0 0.4rem; }
+.setter-ops-intro p { color: var(--gray-light); font-size: 0.78rem; line-height: 1.6; max-width: 720px; }
+.setter-ops-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1rem; }
+.setter-ops-primary, .setter-ops-secondary {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 38px;
+  padding: 0 1rem; border-radius: 7px; text-decoration: none;
+  font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; letter-spacing: 1px;
+  text-transform: uppercase; cursor: pointer;
+}
+.setter-ops-primary { background: var(--purple-bright); color: white; border: 1px solid var(--purple-bright); }
+.setter-ops-secondary { background: transparent; color: var(--gray-light); border: 1px solid var(--border); }
+.setter-ops-capabilities { background: var(--bg1); border: 1px solid var(--border); border-radius: 12px; padding: 1.1rem; }
+.setter-ops-capability-list { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.8rem; }
+.setter-ops-chip { border: 1px solid rgba(0,212,180,0.18); background: rgba(0,212,180,0.06); color: var(--gray-light); border-radius: 99px; padding: 5px 8px; font-size: 0.63rem; }
+.setter-ops-note { color: var(--gray); font-size: 0.65rem; line-height: 1.5; margin-top: 0.8rem; }
+.setter-ops-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.75fr); gap: 1rem; }
+.setter-ops-card { background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.setter-ops-card-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0.9rem 1rem; border-bottom: 1px solid var(--border); }
+.setter-ops-card-title { font-size: 0.82rem; font-weight: 600; }
+.setter-ops-card-sub { font-family: 'JetBrains Mono', monospace; font-size: 0.54rem; color: var(--gray); margin-top: 0.2rem; }
+.setter-ops-list { display: flex; flex-direction: column; }
+.setter-ops-row { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(100px, .7fr) minmax(92px, .5fr) auto; gap: 0.7rem; align-items: center; padding: 0.8rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.035); }
+.setter-ops-row:last-child { border-bottom: 0; }
+.setter-ops-name { font-weight: 600; font-size: 0.78rem; }
+.setter-ops-meta { font-family: 'JetBrains Mono', monospace; font-size: 0.54rem; color: var(--gray-light); margin-top: 0.25rem; }
+.setter-ops-time { font-size: 0.7rem; color: var(--gray-light); }
+.setter-ops-empty { color: var(--gray); font-size: 0.7rem; padding: 1.25rem; text-align: center; }
+.setter-ops-activity { padding: 0.25rem 1rem; }
+.setter-ops-activity-item { padding: 0.75rem 0; border-bottom: 1px solid rgba(255,255,255,0.035); }
+.setter-ops-activity-item:last-child { border-bottom: 0; }
+.setter-ops-activity-copy { font-size: 0.72rem; line-height: 1.45; color: var(--gray-light); }
+.setter-ops-activity-copy strong { color: var(--white); }
+.setter-ops-activity-time { font-family: 'JetBrains Mono', monospace; font-size: 0.52rem; color: var(--gray); margin-top: 0.3rem; }
+.pipeline-context-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(280px, .7fr); gap: 1rem; }
 .pipeline-section { margin-bottom: 1.5rem; }
 .pipeline-grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
 .pipeline-grid-clients { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
@@ -2309,10 +2365,13 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
   .pipeline-grid-4, .agent-health-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .pipeline-grid-clients { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .prospect-pipeline-grid { grid-template-columns: repeat(5, 240px); }
+  .setter-ops-hero, .setter-ops-grid, .pipeline-context-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 720px) {
   .pipeline-area { padding: 1rem; }
   .pipeline-grid-4, .pipeline-grid-clients, .agent-health-grid { grid-template-columns: 1fr; }
+  .setter-ops-row { grid-template-columns: 1fr auto; }
+  .setter-ops-row .setter-ops-time { display: none; }
 }
 
 /* ============================================================
@@ -3509,41 +3568,81 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
   <div class="pipeline-area" id="pipelineArea">
     <div class="area-header">
       <div>
-        <div class="area-title">PIPELINE</div>
-        <div class="area-sub" id="pipelineSub">Full business snapshot</div>
+        <div class="area-title">HUMAN SETTER OPERATIONS</div>
+        <div class="area-sub" id="pipelineSub">Queue, callbacks, assignments, and outcomes</div>
       </div>
       <button class="btn-outline" id="pipelineRefreshBtn" type="button">Refresh</button>
     </div>
 
-    <div class="pipeline-section">
-      <div class="section-divider"><div class="section-divider-label">Revenue Pipeline</div><div class="section-divider-line"></div></div>
-      <div class="pipeline-grid-4" id="revenuePipelineCards"></div>
-      <div class="pipeline-card" style="margin-top:1rem;">
-        <div class="pipeline-card-title">MRR Target Progress</div>
-        <div class="pipeline-progress">
-          <div class="pipeline-progress-fill" id="mrrProgressFill"></div>
-          <div class="pipeline-progress-marker" id="mrrBreakevenMarker" title="$250 overhead breakeven"></div>
+    <div class="setter-ops-hero new-pipeline-only">
+      <div class="setter-ops-intro">
+        <div class="setter-ops-kicker">Human-operated · fail-closed</div>
+        <h2>Turn verified prospects into accountable conversations.</h2>
+        <p>The call desk keeps the operator in control from assignment through disposition. Calls, texts, and follow-ups are never placed automatically.</p>
+        <div class="setter-ops-actions">
+          <a class="setter-ops-primary" href="/setter">Open call desk</a>
+          <button class="setter-ops-secondary" type="button" id="pipelineReviewCallbacksBtn">Review callbacks</button>
         </div>
-        <div class="pipeline-progress-label" id="mrrProgressLabel">Loading...</div>
+      </div>
+      <div class="setter-ops-capabilities">
+        <div class="setter-ops-capability-title">Managed setter workflow</div>
+        <div class="setter-ops-capability-list">
+          <span class="setter-ops-chip">Tenant-scoped queues</span><span class="setter-ops-chip">Operator assignment</span>
+          <span class="setter-ops-chip">Call scripts</span><span class="setter-ops-chip">Qualification</span>
+          <span class="setter-ops-chip">Dispositions</span><span class="setter-ops-chip">Callbacks</span>
+          <span class="setter-ops-chip">Activity history</span><span class="setter-ops-chip">Performance reporting</span>
+        </div>
+        <div class="setter-ops-note">Built for Anchor first, with client isolation and role-based access so the same operating model can support future managed-service clients.</div>
+      </div>
+    </div>
+
+    <div class="pipeline-section new-pipeline-only">
+      <div class="pipeline-grid-4" id="setterOpsMetricCards">
+        <div class="pipeline-card"><div class="pipeline-card-title">Due callbacks</div><div class="pipeline-card-value" id="setterDueCount">—</div><div class="pipeline-card-note">Due now or today</div></div>
+        <div class="pipeline-card"><div class="pipeline-card-title">Ready queue</div><div class="pipeline-card-value" id="setterReadyCount">—</div><div class="pipeline-card-note">Verified and callable</div></div>
+        <div class="pipeline-card"><div class="pipeline-card-title">My attempts today</div><div class="pipeline-card-value" id="setterAttemptsToday">—</div><div class="pipeline-card-note" id="setterAttemptGoal">Operator goal: 20</div></div>
+        <div class="pipeline-card"><div class="pipeline-card-title">Booked</div><div class="pipeline-card-value" id="setterBookedCount">—</div><div class="pipeline-card-note" id="setterBookedRate">From contacted prospects</div></div>
+      </div>
+    </div>
+
+    <div class="pipeline-section setter-ops-grid new-pipeline-only">
+      <div class="setter-ops-card" id="setterQueueCard">
+        <div class="setter-ops-card-head"><div><div class="setter-ops-card-title">Priority call queue</div><div class="setter-ops-card-sub">Callbacks first, then highest-priority new prospects</div></div><a class="setter-ops-secondary" href="/setter">Work queue</a></div>
+        <div class="setter-ops-list" id="setterOpsQueue"><div class="setter-ops-empty">Loading the call queue…</div></div>
+      </div>
+      <div class="setter-ops-card">
+        <div class="setter-ops-card-head"><div><div class="setter-ops-card-title">Recent setter activity</div><div class="setter-ops-card-sub">Canonical human touchpoints</div></div></div>
+        <div class="setter-ops-activity" id="setterOpsActivity"><div class="setter-ops-empty">Loading activity…</div></div>
       </div>
     </div>
 
     <div class="pipeline-section">
-      <div class="section-divider"><div class="section-divider-label">Client Pipeline</div><div class="section-divider-line"></div></div>
-      <div class="pipeline-grid-clients" id="clientPipelineGrid"></div>
-    </div>
-
-    <div class="pipeline-section">
-      <div class="section-divider"><div class="section-divider-label">Setter Pipeline</div><div class="section-divider-line"></div></div>
+      <div class="section-divider"><div class="section-divider-label">Operator Coverage</div><div class="section-divider-line"></div></div>
       <div class="pipeline-table-card">
         <table class="pipeline-table">
-          <thead><tr><th>Name</th><th>City</th><th>Queue</th><th>Calls Today</th><th>Booked Week</th><th>Status</th></tr></thead>
+          <thead><tr><th>Operator</th><th>Market</th><th>Visible Queue</th><th>Attempts Today</th><th>Booked Week</th><th>Status</th></tr></thead>
           <tbody id="setterPipelineRows"><tr><td colspan="6" class="no-data-note">Loading...</td></tr></tbody>
         </table>
       </div>
     </div>
 
     <div class="pipeline-section">
+      <div class="section-divider"><div class="section-divider-label">Business Context</div><div class="section-divider-line"></div></div>
+      <div class="pipeline-context-grid">
+        <div class="pipeline-card">
+          <div class="pipeline-card-title">Revenue snapshot</div>
+          <div class="pipeline-grid-4" id="revenuePipelineCards"></div>
+          <div class="pipeline-progress">
+            <div class="pipeline-progress-fill" id="mrrProgressFill"></div>
+            <div class="pipeline-progress-marker" id="mrrBreakevenMarker" title="$250 overhead breakeven"></div>
+          </div>
+          <div class="pipeline-progress-label" id="mrrProgressLabel">Loading...</div>
+        </div>
+        <div class="pipeline-grid-clients" id="clientPipelineGrid"></div>
+      </div>
+    </div>
+
+    <div class="pipeline-section legacy-pipeline-only">
       <div class="section-divider"><div class="section-divider-label">Closer Pipeline</div><div class="section-divider-line"></div></div>
       <div class="pipeline-table-card">
         <table class="pipeline-table">
@@ -3553,13 +3652,13 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
       </div>
     </div>
 
-    <div class="pipeline-section">
+    <div class="pipeline-section legacy-pipeline-only">
       <div class="section-divider"><div class="section-divider-label">Agent Health</div><div class="section-divider-line"></div></div>
       <div class="agent-health-grid" id="agentHealthGrid"></div>
     </div>
 
     <div class="pipeline-section">
-      <div class="section-divider"><div class="section-divider-label">PROSPECT PIPELINE</div><div class="section-divider-line"></div></div>
+      <div class="section-divider"><div class="section-divider-label">Lifecycle Visibility</div><div class="section-divider-line"></div></div>
       <div class="prospect-pipeline-grid" id="prospectPipelineGrid"></div>
     </div>
   </div>
@@ -6843,6 +6942,80 @@ async function fetchPipelineJson(url, timeoutMs = 15000) {
   }
 }
 
+function setterOpsLeadRow(lead, callback = false) {
+  const when = callback && lead.callback_at
+    ? new Date(lead.callback_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : `${Number(lead.attempt_count || 0)} attempt${Number(lead.attempt_count || 0) === 1 ? '' : 's'}`;
+  const phone = lead.phone || 'Phone missing';
+  const priority = lead.priority_reason || lead.vertical || 'General queue';
+  return `<div class="setter-ops-row">
+    <div><div class="setter-ops-name">${_esc(lead.business_name || lead.contact_name || 'Unnamed prospect')}</div><div class="setter-ops-meta">${_esc(priority)}</div></div>
+    <div class="setter-ops-time">${_esc(phone)}</div>
+    <div class="setter-ops-time">${_esc(when)}</div>
+    <a class="setter-ops-secondary" href="/setter?lead=${encodeURIComponent(lead.id)}">Open</a>
+  </div>`;
+}
+
+function renderSetterOpsActivity(items) {
+  const box = document.getElementById('setterOpsActivity');
+  if (!box) return;
+  if (!items.length) {
+    box.innerHTML = '<div class="setter-ops-empty">No human setter activity has been logged yet.</div>';
+    return;
+  }
+  box.innerHTML = items.slice(0, 6).map(item => `<div class="setter-ops-activity-item">
+    <div class="setter-ops-activity-copy"><strong>${_esc(item.business_name || 'Prospect')}</strong> · ${_esc(String(item.channel || item.action_type || 'activity').replaceAll('_', ' '))}<br>${_esc(item.notes || 'Outcome recorded')}</div>
+    <div class="setter-ops-activity-time">${_relTime(item.created_at)}</div>
+  </div>`).join('');
+}
+
+async function loadSetterOperations() {
+  const queue = document.getElementById('setterOpsQueue');
+  if (queue) queue.innerHTML = '<div class="setter-ops-empty">Loading the call queue…</div>';
+  try {
+    const [metrics, today, due, ready, activity] = await Promise.all([
+      fetchPipelineJson('/setter/api/metrics'),
+      fetchPipelineJson('/setter/api/stats/today'),
+      fetchPipelineJson('/setter/api/leads?due=today'),
+      fetchPipelineJson('/setter/api/leads'),
+      fetchPipelineJson('/setter/api/activity'),
+    ]);
+    document.getElementById('setterDueCount').textContent = Number(due.length || 0).toLocaleString();
+    document.getElementById('setterReadyCount').textContent = Number(ready.length || 0).toLocaleString();
+    document.getElementById('setterAttemptsToday').textContent = Number(today.calls_today || 0).toLocaleString();
+    document.getElementById('setterAttemptGoal').textContent = `Operator goal: ${Number(today.goal || 20)}`;
+    document.getElementById('setterBookedCount').textContent = Number(metrics.booked || 0).toLocaleString();
+    document.getElementById('setterBookedRate').textContent = `${Number(metrics.booked_rate || 0)}% of contacted prospects`;
+    const seen = new Set();
+    const prioritized = [...due.map(lead => ({ ...lead, _callback: true })), ...ready]
+      .filter(lead => !seen.has(String(lead.id)) && seen.add(String(lead.id)))
+      .slice(0, 8);
+    queue.innerHTML = prioritized.length
+      ? prioritized.map(lead => setterOpsLeadRow(lead, lead._callback)).join('')
+      : '<div class="setter-ops-empty">No callable prospects are waiting. New verified leads will appear here.</div>';
+    renderSetterOpsActivity(activity);
+  } catch (error) {
+    if (queue) queue.innerHTML = `<div class="setter-ops-empty">Setter workflow unavailable: ${_esc(error.message)}</div>`;
+    throw error;
+  }
+}
+
+let setterPipelinePilotEnabled = false;
+async function loadPipelineExperience() {
+  try {
+    const flags = await fetchPipelineJson('/setter/api/features');
+    setterPipelinePilotEnabled = flags?.setter_pipeline_v2_enabled === true;
+  } catch (_error) {
+    setterPipelinePilotEnabled = false;
+  }
+  document.body.classList.toggle('pipeline-legacy', !setterPipelinePilotEnabled);
+  const title = document.querySelector('#pipelineArea .area-title');
+  if (title) title.textContent = setterPipelinePilotEnabled ? 'HUMAN SETTER OPERATIONS' : 'PIPELINE';
+  document.getElementById('pipelineSub').textContent = setterPipelinePilotEnabled
+    ? 'Queue, callbacks, assignments, and outcomes'
+    : 'Legacy business snapshot · rollback mode';
+}
+
 async function loadClientPipeline() {
   document.getElementById('clientPipelineGrid').innerHTML = '<div class="no-data-note">Loading client pipeline...</div>';
   document.getElementById('revenuePipelineCards').innerHTML = '<div class="no-data-note">Loading revenue pipeline...</div>';
@@ -6894,11 +7067,13 @@ async function loadPipeline() {
   const btn = document.getElementById('pipelineRefreshBtn');
   if (btn) btn.textContent = 'Syncing...';
   document.getElementById('pipelineSub').textContent = 'Syncing selected client...';
+  await loadPipelineExperience();
   const results = await Promise.allSettled([
+    setterPipelinePilotEnabled ? loadSetterOperations() : Promise.resolve(),
     loadClientPipeline(),
     loadSetterPipeline(),
-    loadCloserPipeline(),
-    loadPipelineAgentHealth(),
+    setterPipelinePilotEnabled ? Promise.resolve() : loadCloserPipeline(),
+    setterPipelinePilotEnabled ? Promise.resolve() : loadPipelineAgentHealth(),
     loadProspectPipeline(),
   ]);
   const failed = results.filter(result => result.status === 'rejected').length;
@@ -6910,6 +7085,9 @@ async function loadPipeline() {
 }
 
 document.getElementById('pipelineRefreshBtn')?.addEventListener('click', loadPipeline);
+document.getElementById('pipelineReviewCallbacksBtn')?.addEventListener('click', () => {
+  window.location.href = '/setter?view=callbacks';
+});
 
 
 loadClientSelector();

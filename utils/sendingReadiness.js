@@ -309,6 +309,12 @@ async function evaluateSendingReadiness({
     'Prospect must not be marked do-not-contact.',
     { do_not_contact: evaluatedProspect?.do_not_contact ?? null, error: current.error }
   ));
+  checks.push(condition(
+    'prospect_not_synthetic',
+    !current.error && evaluatedProspect?.is_synthetic !== true,
+    'Synthetic prospects can never enter an outbound sequence.',
+    { is_synthetic: evaluatedProspect?.is_synthetic ?? null, error: current.error }
+  ));
   const templateSequenceName = assignedSequenceName || sequenceName;
   const templateInspection = templateSequenceName
     ? inspectSequenceTemplates(sequenceCatalog?.[templateSequenceName], evaluatedProspect, evaluatedProspect?.company_fields)

@@ -16,6 +16,13 @@ const {
 } = require('../utils/callDispositions');
 const { assertRevenueFlag, loadRevenueFlags } = require('../utils/revenueFlags');
 const revenue = require('../services/revenueService');
+const { humanSetterPlaybook } = require('../utils/setterPlaybooks');
+const {
+  callbackSla,
+  dispositionContract,
+  shouldSampleCall,
+  validateStructuredNotes,
+} = require('../utils/setterQuality');
 const {
   isAnchorPhoneSetter,
   phoneSetterError,
@@ -30,7 +37,12 @@ const SETTER_NOTES_MARKER = '\n\n--- setter notes ---\n';
 
 function setterClientId(req) {
   if (hasMaxSecret(req)) return normalizeClientId(req.query.client_id);
-  return normalizeClientId(req?.session?.active_client_id || req?.user?.client_id);
+  if (['setter', 'sales'].includes(req?.user?.role)) {
+    const assigned = Number(req?.user?.client_id);
+    return Number.isInteger(assigned) && assigned > 0 ? assigned : null;
+  }
+  const selected = Number(req?.session?.active_client_id || req?.user?.client_id);
+  return Number.isInteger(selected) && selected > 0 ? selected : null;
 }
 
 function clientFilter(req, params, alias = 'p.') {
@@ -70,6 +82,13 @@ function requireSetterWrite(req, res, next) {
   });
 }
 
+function requireManagerWrite(req, res, next) {
+  return sessionAuth(req, res, err => {
+    if (err) return next(err);
+    return requireRole('admin', 'manager')(req, res, next);
+  });
+}
+
 async function ensureSetterSchema() {
   await ensureCloserSchema();
   await ensureSetterVisibilitySchema(pool);
@@ -80,6 +99,7 @@ async function ensureSetterSchema() {
     ADD COLUMN IF NOT EXISTS callback_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS is_hot BOOLEAN DEFAULT false,
     ADD COLUMN IF NOT EXISTS enrichment_attempted BOOLEAN DEFAULT false,
+    ADD COLUMN IF NOT EXISTS assigned_setter_id INTEGER REFERENCES users(id),
     ADD COLUMN IF NOT EXISTS setter_status TEXT DEFAULT 'new',
     ADD COLUMN IF NOT EXISTS setter_visible BOOLEAN DEFAULT false,
     ADD COLUMN IF NOT EXISTS setter_updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -154,6 +174,10 @@ function mapLead(row) {
     notes: setterNotes(row.notes),
     raw_notes: row.notes,
     callback_at: row.callback_at,
+    callback_sla: callbackSla(row.callback_at),
+    is_synthetic: Boolean(row.is_synthetic),
+    synthetic_label: row.synthetic_label || null,
+    contact_prohibited: Boolean(row.is_synthetic || row.do_not_contact),
     is_hot: Boolean(row.is_hot),
     attempt_count: Number(row.attempt_count || 0),
     client_id: Number(row.client_id),
@@ -173,6 +197,9 @@ const DEFAULT_LEAD_ORDER = `
 async function getLeads(where = '', params = [], limit = 250, orderBy = DEFAULT_LEAD_ORDER, req = null) {
   const sort = orderBy || DEFAULT_LEAD_ORDER;
   const clientScope = clientFilter(req, params);
+  const includeTest = req?.query?.include_test === 'true';
+  params.push(includeTest);
+  const testParam = params.length;
   const { rows } = await pool.query(`
     SELECT p.*,
       c.name AS company_name,
@@ -201,7 +228,10 @@ async function getLeads(where = '', params = [], limit = 250, orderBy = DEFAULT_
     LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     WHERE p.source = 'scout'
       AND COALESCE(p.setter_visible, false) = true
-      AND COALESCE(p.do_not_contact, false) = false
+      AND (
+        (COALESCE(p.is_synthetic, false) = false AND COALESCE(p.do_not_contact, false) = false)
+        OR ($${testParam}::boolean = true AND COALESCE(p.is_synthetic, false) = true)
+      )
       AND COALESCE(p.icp_score, 0) >= 40
       ${clientScope}
       ${where}
@@ -233,6 +263,7 @@ async function getMissingPhoneProspects(req, limit = 2000) {
     LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     WHERE NULLIF(BTRIM(COALESCE(p.phone, '')), '') IS NULL
       AND COALESCE(p.enrichment_attempted, false) = false
+      AND COALESCE(p.is_synthetic, false) = false
       ${clientScope}
     ORDER BY COALESCE(p.setter_visible, false) DESC,
       COALESCE(p.icp_score, 0) DESC,
@@ -351,6 +382,7 @@ async function metricsHandler(req, res) {
       WHERE source = 'scout'
         AND COALESCE(setter_visible, false) = true
         AND COALESCE(do_not_contact, false) = false
+        AND COALESCE(is_synthetic, false) = false
         AND COALESCE(icp_score, 0) >= 40
         ${clientScope}
     `, params);
@@ -428,18 +460,21 @@ router.get(['/api/stats/today', '/stats/today'], requireSetterRead, async (req, 
     const { rows } = await pool.query(`
       SELECT (
         SELECT COUNT(*)::int
-        FROM activity_log
-        WHERE action_type = 'call'
-          AND setter_id = $1::text
-          AND client_id = $2
-          AND created_at >= CURRENT_DATE
-          AND created_at < CURRENT_DATE + INTERVAL '1 day'
+        FROM activity_log al
+        JOIN prospects p ON p.id = al.lead_id AND p.client_id = al.client_id
+        WHERE al.action_type = 'call'
+          AND al.setter_id = $1::text
+          AND al.client_id = $2
+          AND COALESCE(p.is_synthetic, false) = false
+          AND al.created_at >= CURRENT_DATE
+          AND al.created_at < CURRENT_DATE + INTERVAL '1 day'
       ) + (
         SELECT COUNT(*)::int
         FROM call_dispositions
         WHERE setter_id = $1
           AND client_id = $2
           AND source = 'manual_setter'
+          AND COALESCE(is_synthetic, false) = false
           AND created_at >= CURRENT_DATE
           AND created_at < CURRENT_DATE + INTERVAL '1 day'
       ) AS calls_today
@@ -468,6 +503,251 @@ router.get(['/api/pipeline', '/pipeline'], requireSetterRead, async (req, res) =
   }
 });
 
+router.get(['/api/playbook', '/playbook'], requireSetterRead, async (req, res) => {
+  try {
+    const clientId = setterClientId(req);
+    const vertical = String(req.query.vertical || 'general').trim().slice(0, 120);
+    const clientResult = await pool.query('SELECT name FROM clients WHERE id = $1 LIMIT 1', [clientId]);
+    res.json(humanSetterPlaybook({
+      clientId,
+      clientName: clientResult.rows[0]?.name || 'the client',
+      vertical,
+    }));
+  } catch (err) {
+    console.error('[setter] playbook error:', err.message);
+    res.status(500).json({ error: 'Unable to load call playbook' });
+  }
+});
+
+router.get(['/api/features', '/features'], requireSetterRead, async (req, res) => {
+  try {
+    await ensureSetterSchema();
+    const clientId = setterClientId(req);
+    const { rows } = await pool.query(`
+      SELECT setter_pipeline_v2_enabled, setter_review_sample_percent
+      FROM clients WHERE id = $1 LIMIT 1
+    `, [clientId]);
+    if (!rows[0]) return res.status(404).json({ error: 'Client not found' });
+    res.json({
+      client_id: clientId,
+      pipeline_experience: rows[0].setter_pipeline_v2_enabled ? 'pilot_v2' : 'legacy',
+      setter_pipeline_v2_enabled: rows[0].setter_pipeline_v2_enabled,
+      review_sample_percent: Number(rows[0].setter_review_sample_percent || 0),
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Unable to load setter features' });
+  }
+});
+
+router.patch(['/api/features/pipeline', '/features/pipeline'], requireManagerWrite, async (req, res) => {
+  try {
+    await ensureSetterSchema();
+    if (typeof req.body.enabled !== 'boolean') return res.status(400).json({ error: 'enabled must be boolean' });
+    const clientId = setterClientId(req);
+    const { rows } = await pool.query(`
+      UPDATE clients
+      SET setter_pipeline_v2_enabled = $1, setter_pipeline_v2_configured_at = NOW()
+      WHERE id = $2
+      RETURNING id, setter_pipeline_v2_enabled
+    `, [req.body.enabled, clientId]);
+    if (!rows[0]) return res.status(404).json({ error: 'Client not found' });
+    res.json({
+      client_id: rows[0].id,
+      setter_pipeline_v2_enabled: rows[0].setter_pipeline_v2_enabled,
+      pipeline_experience: rows[0].setter_pipeline_v2_enabled ? 'pilot_v2' : 'legacy',
+      rollback_requires_database_change: false,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Unable to update Pipeline release flag' });
+  }
+});
+
+router.post(['/api/test-prospects', '/test-prospects'], requireManagerWrite, async (req, res) => {
+  try {
+    await ensureSetterSchema();
+    const clientId = setterClientId(req);
+    const label = String(req.body.label || 'Setter rehearsal').trim().slice(0, 120);
+    const business = String(req.body.business_name || 'Synthetic Pilot Prospect').trim().slice(0, 160);
+    const vertical = String(req.body.vertical || 'commercial_office').trim().slice(0, 120);
+    const token = randomUUID();
+    const { rows } = await pool.query(`
+      INSERT INTO prospects
+        (first_name, last_name, email, phone, source, icp_score, status, setter_status,
+         setter_visible, do_not_contact, is_synthetic, synthetic_label, vertical, notes, client_id)
+      VALUES ('Test', 'Prospect', $1, NULL, 'scout', 100, 'cold', 'new', true, true, true, $2, $3, $4, $5)
+      RETURNING *
+    `, [`setter-test-${token}@example.invalid`, label, vertical, `${business} — synthetic.invalid`, clientId]);
+    res.status(201).json({
+      lead: mapLead(rows[0]),
+      safeguards: {
+        do_not_contact: true,
+        outbound_prohibited: true,
+        reporting_excluded: true,
+        revenue_excluded: true,
+        max_scoring_excluded: true,
+      },
+    });
+  } catch (err) {
+    console.error('[setter] synthetic prospect error:', err.message);
+    res.status(500).json({ error: 'Unable to create synthetic prospect' });
+  }
+});
+
+router.get(['/api/quality/metrics', '/quality/metrics'], requireSetterRead, async (req, res) => {
+  try {
+    await ensureSetterSchema();
+    const clientId = setterClientId(req);
+    const days = [7, 30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : 30;
+    const requestedSetter = Number(req.query.setter_id);
+    const setterId = req.user?.role === 'setter'
+      ? Number(req.user.id)
+      : (Number.isInteger(requestedSetter) && requestedSetter > 0 ? requestedSetter : null);
+    const { rows } = await pool.query(`
+      WITH calls AS (
+        SELECT * FROM call_dispositions
+        WHERE client_id = $1
+          AND source = 'manual_setter'
+          AND COALESCE(is_synthetic, false) = false
+          AND created_at >= NOW() - ($2::int * INTERVAL '1 day')
+          AND ($3::int IS NULL OR setter_id = $3)
+      ), callbacks AS (
+        SELECT * FROM setter_callbacks
+        WHERE client_id = $1
+          AND COALESCE(is_synthetic, false) = false
+          AND created_at >= NOW() - ($2::int * INTERVAL '1 day')
+          AND ($3::int IS NULL OR created_by = $3 OR EXISTS (
+            SELECT 1 FROM call_dispositions source_call
+            WHERE source_call.id = setter_callbacks.source_disposition_id
+              AND source_call.client_id = setter_callbacks.client_id
+              AND source_call.setter_id = $3
+          ))
+      ), booked AS (
+        SELECT COUNT(*)::int AS count
+        FROM prospects
+        WHERE client_id = $1
+          AND COALESCE(is_synthetic, false) = false
+          AND setter_status = 'booked'
+          AND booked_at >= NOW() - ($2::int * INTERVAL '1 day')
+          AND ($3::int IS NULL OR assigned_setter_id = $3)
+      )
+      SELECT
+        (SELECT COUNT(*)::int FROM calls) AS attempts,
+        (SELECT COUNT(*)::int FROM calls WHERE activity_result IN ('connection', 'conversation')) AS connections,
+        (SELECT COUNT(*)::int FROM calls WHERE activity_result = 'conversation'
+          AND (COALESCE((details->>'decision_maker_reached')::boolean, false)
+            OR disposition IN ('answered_interested','answered_not_interested','answered_callback','incumbent_all_set','qualified','disqualified'))) AS decision_maker_conversations,
+        (SELECT COUNT(*)::int FROM calls WHERE lifecycle_result = 'qualified') AS qualified_calls,
+        (SELECT COUNT(*)::int FROM calls WHERE disposition IN ('answered_interested','answered_not_interested','answered_callback','qualified','disqualified')
+          AND structured_notes IS NULL) AS incomplete_dispositions,
+        (SELECT COUNT(*)::int FROM callbacks WHERE status = 'completed') AS callbacks_completed,
+        (SELECT COUNT(*)::int FROM callbacks WHERE status IN ('pending','completed')) AS callbacks_due_total,
+        (SELECT COUNT(*)::int FROM callbacks WHERE status = 'pending' AND due_at < NOW() - INTERVAL '15 minutes') AS overdue_callbacks,
+        (SELECT count FROM booked) AS booked_opportunities
+    `, [clientId, days, setterId]);
+    const m = rows[0] || {};
+    const pct = (num, den) => Number(den) ? +((Number(num) / Number(den)) * 100).toFixed(1) : 0;
+    res.json({
+      client_id: clientId,
+      setter_id: setterId,
+      window_days: days,
+      attempts: Number(m.attempts || 0),
+      connections: Number(m.connections || 0),
+      connect_rate: pct(m.connections, m.attempts),
+      decision_maker_conversations: Number(m.decision_maker_conversations || 0),
+      callback_completion: pct(m.callbacks_completed, m.callbacks_due_total),
+      callbacks_completed: Number(m.callbacks_completed || 0),
+      qualified_meeting_rate: pct(m.booked_opportunities, m.decision_maker_conversations),
+      qualified_calls: Number(m.qualified_calls || 0),
+      booked_opportunities: Number(m.booked_opportunities || 0),
+      incomplete_dispositions: Number(m.incomplete_dispositions || 0),
+      overdue_callbacks: Number(m.overdue_callbacks || 0),
+    });
+  } catch (err) {
+    console.error('[setter] quality metrics error:', err.message);
+    res.status(500).json({ error: 'Unable to load setter quality metrics' });
+  }
+});
+
+router.get(['/api/quality/reviews', '/quality/reviews'], requireManagerWrite, async (req, res) => {
+  try {
+    await ensureSetterSchema();
+    const clientId = setterClientId(req);
+    const status = req.query.status === 'completed' ? 'completed' : 'pending';
+    const { rows } = await pool.query(`
+      SELECT cd.*, p.first_name, p.last_name, p.vertical, c.name AS company_name, u.name AS setter_name
+      FROM call_dispositions cd
+      JOIN prospects p ON p.id = cd.prospect_id AND p.client_id = cd.client_id
+      LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+      LEFT JOIN users u ON u.id = cd.setter_id AND u.client_id = cd.client_id
+      WHERE cd.client_id = $1 AND cd.review_required = true AND cd.review_status = $2
+        AND COALESCE(cd.is_synthetic, false) = false
+      ORDER BY cd.created_at ASC
+      LIMIT 200
+    `, [clientId, status]);
+    res.json({ reviews: rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Unable to load manager review sample' });
+  }
+});
+
+router.post(['/api/quality/reviews/:id', '/quality/reviews/:id'], requireManagerWrite, async (req, res) => {
+  try {
+    await ensureSetterSchema();
+    const clientId = setterClientId(req);
+    const score = Number(req.body.score);
+    if (!Number.isInteger(score) || score < 1 || score > 5) return res.status(400).json({ error: 'score must be 1 through 5' });
+    if (typeof req.body.outcome_accurate !== 'boolean' || typeof req.body.notes_complete !== 'boolean') {
+      return res.status(400).json({ error: 'outcome_accurate and notes_complete are required' });
+    }
+    const { rows } = await pool.query(`
+      UPDATE call_dispositions
+      SET review_status = 'completed', reviewed_by = $1, reviewed_at = NOW(), review_score = $2,
+          review_outcome_accurate = $3, review_notes_complete = $4, review_notes = $5
+      WHERE id = $6 AND client_id = $7 AND review_required = true AND review_status = 'pending'
+        AND COALESCE(is_synthetic, false) = false
+      RETURNING *
+    `, [req.user?.id || null, score, req.body.outcome_accurate, req.body.notes_complete,
+      String(req.body.notes || '').trim().slice(0, 2000) || null, req.params.id, clientId]);
+    if (!rows[0]) return res.status(404).json({ error: 'Pending review not found' });
+    res.json({ review: rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: 'Unable to save manager review' });
+  }
+});
+
+router.get(['/api/quality/suppression-verification', '/quality/suppression-verification'], requireManagerWrite, async (req, res) => {
+  try {
+    await ensureSetterSchema();
+    const clientId = setterClientId(req);
+    const { rows } = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE COALESCE(p.do_not_contact, false) = true)::int AS suppressed_prospects,
+        COUNT(*) FILTER (WHERE COALESCE(p.is_synthetic, false) = true AND COALESCE(p.do_not_contact, false) = false)::int AS unsafe_synthetic,
+        COUNT(DISTINCT p.id) FILTER (WHERE COALESCE(p.do_not_contact, false) = true AND sc.status = 'pending' AND COALESCE(sc.is_synthetic, false) = false)::int AS suppressed_live_callbacks,
+        COUNT(DISTINCT p.id) FILTER (WHERE COALESCE(p.do_not_contact, false) = true AND d.status IN ('draft','reviewed'))::int AS suppressed_follow_up_drafts
+      FROM prospects p
+      LEFT JOIN setter_callbacks sc ON sc.prospect_id = p.id AND sc.client_id = p.client_id
+      LEFT JOIN setter_follow_up_drafts d ON d.prospect_id = p.id AND d.client_id = p.client_id
+      WHERE p.client_id = $1
+    `, [clientId]);
+    const result = rows[0] || {};
+    const violations = Number(result.unsafe_synthetic || 0) + Number(result.suppressed_live_callbacks || 0)
+      + Number(result.suppressed_follow_up_drafts || 0);
+    res.json({
+      client_id: clientId,
+      verified: violations === 0,
+      suppressed_prospects: Number(result.suppressed_prospects || 0),
+      violations: {
+        unsafe_synthetic: Number(result.unsafe_synthetic || 0),
+        live_callbacks: Number(result.suppressed_live_callbacks || 0),
+        follow_up_drafts: Number(result.suppressed_follow_up_drafts || 0),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Unable to verify tenant suppression' });
+  }
+});
+
 router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite, async (req, res) => {
   const { status } = req.body;
   if (!STAGES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
@@ -475,6 +755,12 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
     await ensureSetterSchema();
     const clientId = setterClientId(req);
     const handoffNote = String(req.body.handoff_note || '').slice(0, 5000);
+    if (status === 'booked' && !handoffNote.trim()) {
+      return res.status(400).json({ error: 'Qualified/booked prospects require a structured handoff note' });
+    }
+    if (status === 'dead' && !handoffNote.trim()) {
+      return res.status(400).json({ error: 'Disqualified prospects require a reason' });
+    }
     let rows;
     let handoff = null;
 
@@ -497,11 +783,12 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
             booked_at = COALESCE(booked_at, NOW()),
             closer_id = CASE WHEN $1 THEN closer_id ELSE COALESCE($2, closer_id) END,
             closer_status = CASE WHEN $1 THEN closer_status ELSE 'booked' END,
-            notes = $3
-        WHERE id = $4 AND source = 'scout' AND client_id = $5
+            assigned_setter_id = COALESCE(assigned_setter_id, $3),
+            notes = $4
+        WHERE id = $5 AND source = 'scout' AND client_id = $6
           AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
         RETURNING *
-      `, [anchorPhoneSetter, closer?.id || null, notes, req.params.id, clientId]);
+      `, [anchorPhoneSetter, closer?.id || null, req.user?.role === 'setter' ? req.user.id : null, notes, req.params.id, clientId]);
       const visibleRow = update.rows.length
         ? await setSetterVisibility(pool, req.params.id, {
             reason: 'stage_change',
@@ -545,11 +832,12 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
         UPDATE prospects
         SET setter_status = $1,
             status = CASE WHEN $1 = 'dead' THEN 'dead' ELSE status END,
+            notes = CASE WHEN $1 = 'dead' THEN CONCAT(COALESCE(notes, ''), E'\n\nDisqualification reason: ', $4) ELSE notes END,
             setter_updated_at = NOW()
         WHERE id = $2 AND source = 'scout' AND client_id = $3
           AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
         RETURNING *
-      `, [status, req.params.id, clientId]);
+      `, [status, req.params.id, clientId, handoffNote.trim()]);
       const visibleRow = update.rows.length
         ? await setSetterVisibility(pool, req.params.id, {
             reason: 'stage_change',
@@ -577,7 +865,8 @@ router.patch(['/api/leads/:id/notes', '/leads/:id/notes'], requireSetterWrite, a
       SELECT *
       FROM prospects
       WHERE id = $1 AND source = 'scout' AND client_id = $2
-        AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
+        AND COALESCE(setter_visible, false) = true
+        AND (COALESCE(do_not_contact, false) = false OR COALESCE(is_synthetic, false) = true)
     `, [req.params.id, clientId]);
     if (!current.rows.length) return res.status(404).json({ error: 'Lead not found' });
     const notes = composeNotes(current.rows[0].notes, incoming);
@@ -585,7 +874,8 @@ router.patch(['/api/leads/:id/notes', '/leads/:id/notes'], requireSetterWrite, a
       UPDATE prospects
       SET notes = $1, updated_at = NOW()
       WHERE id = $2 AND source = 'scout' AND client_id = $3
-        AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
+        AND COALESCE(setter_visible, false) = true
+        AND (COALESCE(do_not_contact, false) = false OR COALESCE(is_synthetic, false) = true)
       RETURNING *
     `, [notes, req.params.id, clientId]);
     res.json({ success: true, lead: mapLead(rows[0]) });
@@ -596,6 +886,7 @@ router.patch(['/api/leads/:id/notes', '/leads/:id/notes'], requireSetterWrite, a
 });
 
 router.patch(['/api/leads/:id/callback', '/leads/:id/callback'], requireSetterWrite, async (req, res) => {
+  const client = await pool.connect();
   try {
     await ensureSetterSchema();
     const clientId = setterClientId(req);
@@ -603,18 +894,38 @@ router.patch(['/api/leads/:id/callback', '/leads/:id/callback'], requireSetterWr
     if (callbackAt && Number.isNaN(callbackAt.getTime())) {
       return res.status(400).json({ error: 'Invalid callback time' });
     }
-    const { rows } = await pool.query(`
+    await client.query('BEGIN');
+    const { rows } = await client.query(`
       UPDATE prospects
       SET callback_at = $1, updated_at = NOW()
       WHERE id = $2 AND source = 'scout' AND client_id = $3
-        AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
+        AND COALESCE(setter_visible, false) = true
+        AND (COALESCE(do_not_contact, false) = false OR COALESCE(is_synthetic, false) = true)
       RETURNING *
     `, [callbackAt ? callbackAt.toISOString() : null, req.params.id, clientId]);
-    if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+    await client.query(`
+      UPDATE setter_callbacks
+      SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
+      WHERE client_id = $1 AND prospect_id = $2 AND status = 'pending'
+    `, [clientId, req.params.id]);
+    if (callbackAt) {
+      await client.query(`
+        INSERT INTO setter_callbacks (client_id, prospect_id, due_at, created_by, is_synthetic)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [clientId, req.params.id, callbackAt.toISOString(), req.user?.id || null, Boolean(rows[0].is_synthetic)]);
+    }
+    await client.query('COMMIT');
     res.json({ success: true, lead: mapLead(rows[0]) });
   } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_rollbackErr) {}
     console.error('[setter] callback error:', err.message);
     res.status(500).json({ error: 'Unable to update callback' });
+  } finally {
+    client.release();
   }
 });
 
@@ -701,6 +1012,7 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
     const setterId = Number(req.user?.id);
     const disposition = String(req.body.disposition || '').trim();
     const notes = String(req.body.notes || '').trim().slice(0, 5000);
+    const idempotencyKey = String(req.body.idempotency_key || req.get('Idempotency-Key') || '').trim().slice(0, 200);
     const rawDetails = req.body.details;
     const duration = req.body.duration_seconds === '' || req.body.duration_seconds == null
       ? null
@@ -708,6 +1020,7 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
     const requestedCallback = req.body.callback_at ? new Date(req.body.callback_at) : null;
 
     if (!DISPOSITION_SET.has(disposition)) return res.status(400).json({ error: 'Invalid disposition' });
+    if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency key is required' });
     if (!Number.isInteger(setterId)) return res.status(400).json({ error: 'Setter identity is required' });
     if (duration != null && (!Number.isInteger(duration) || duration < 0 || duration > 86400)) {
       return res.status(400).json({ error: 'Duration must be whole seconds between 0 and 86400' });
@@ -722,14 +1035,23 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
       }
     }
 
+    let structuredNotes;
+    try {
+      structuredNotes = validateStructuredNotes(disposition, req.body.structured_notes);
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message, code: error.code });
+    }
+    const contract = dispositionContract(disposition);
     const callbackAt = resolveCallbackAt(disposition, requestedCallback);
     await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`${clientId}:${idempotencyKey}`]);
     const prospectResult = await client.query(`
       SELECT p.*, c.name AS company_name
       FROM prospects p
       LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
       WHERE p.id = $1 AND p.source = 'scout' AND p.client_id = $2
-        AND COALESCE(p.setter_visible, false) = true AND COALESCE(p.do_not_contact, false) = false
+        AND COALESCE(p.setter_visible, false) = true
+        AND (COALESCE(p.do_not_contact, false) = false OR COALESCE(p.is_synthetic, false) = true)
       FOR UPDATE OF p
     `, [req.params.id, clientId]);
     if (!prospectResult.rows.length) {
@@ -737,6 +1059,23 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
       return res.status(404).json({ error: 'Lead not found' });
     }
     const prospect = prospectResult.rows[0];
+    const replay = await client.query(`
+      SELECT cd.*, p.*, c.name AS company_name, cd.id AS disposition_record_id
+      FROM call_dispositions cd
+      JOIN prospects p ON p.id = cd.prospect_id AND p.client_id = cd.client_id
+      LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+      WHERE cd.client_id = $1 AND cd.idempotency_key = $2
+      LIMIT 1
+    `, [clientId, idempotencyKey]);
+    if (replay.rows[0]) {
+      await client.query('COMMIT');
+      return res.json({
+        success: true,
+        idempotent: true,
+        disposition: { ...replay.rows[0], id: replay.rows[0].disposition_record_id },
+        lead: mapLead(replay.rows[0]),
+      });
+    }
     let details = {};
     if (isAnchorPhoneSetter(clientId)) {
       try {
@@ -749,10 +1088,50 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
 
     const dispositionResult = await client.query(`
       INSERT INTO call_dispositions
-        (prospect_id, client_id, call_duration_seconds, disposition, notes, setter_id, source, callback_at, details)
-      VALUES ($1, $2, $3, $4, $5, $6, 'manual_setter', $7, $8::jsonb)
+        (prospect_id, client_id, call_duration_seconds, disposition, notes, setter_id, source,
+         callback_at, details, structured_notes, activity_result, next_action, suppression_state,
+         lifecycle_result, is_synthetic, idempotency_key)
+      VALUES ($1, $2, $3, $4, $5, $6, 'manual_setter', $7, $8::jsonb, $9::jsonb,
+        $10, $11, $12, $13, $14, $15)
       RETURNING *
-    `, [prospect.id, prospect.client_id, duration, disposition, notes || null, setterId, callbackAt, JSON.stringify(details)]);
+    `, [
+      prospect.id, prospect.client_id, duration, disposition, notes || null, setterId, callbackAt,
+      JSON.stringify(details), structuredNotes ? JSON.stringify(structuredNotes) : null,
+      contract.activity, contract.next_action, contract.suppression_state, contract.lifecycle_result,
+      Boolean(prospect.is_synthetic), idempotencyKey,
+    ]);
+    const insertedDisposition = dispositionResult.rows[0];
+    const sampleConfig = await client.query(
+      'SELECT setter_review_sample_percent FROM clients WHERE id = $1',
+      [prospect.client_id]
+    );
+    const reviewRequired = !prospect.is_synthetic && shouldSampleCall({
+      clientId: prospect.client_id,
+      dispositionId: insertedDisposition.id,
+      samplePercent: sampleConfig.rows[0]?.setter_review_sample_percent,
+    });
+    if (reviewRequired) {
+      await client.query(`
+        UPDATE call_dispositions
+        SET review_required = true, review_status = 'pending'
+        WHERE id = $1 AND client_id = $2
+      `, [insertedDisposition.id, prospect.client_id]);
+      insertedDisposition.review_required = true;
+      insertedDisposition.review_status = 'pending';
+    }
+
+    await client.query(`
+      UPDATE setter_callbacks
+      SET status = 'completed', completed_at = NOW(), completed_by_disposition_id = $1, updated_at = NOW()
+      WHERE client_id = $2 AND prospect_id = $3 AND status = 'pending'
+    `, [insertedDisposition.id, prospect.client_id, prospect.id]);
+    if (callbackAt) {
+      await client.query(`
+        INSERT INTO setter_callbacks
+          (client_id, prospect_id, source_disposition_id, due_at, created_by, is_synthetic)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [prospect.client_id, prospect.id, insertedDisposition.id, callbackAt, setterId, Boolean(prospect.is_synthetic)]);
+    }
 
     const sentiment = disposition === 'answered_interested'
       ? 'positive'
@@ -764,6 +1143,9 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
       duration_seconds: duration,
       callback_at: callbackAt ? callbackAt.toISOString() : null,
       source: 'manual_setter',
+      synthetic: Boolean(prospect.is_synthetic),
+      contract,
+      structured_notes: structuredNotes,
       details,
     });
     await client.query(`
@@ -1019,6 +1401,7 @@ router.get(['/api/activity', '/activity'], requireSetterRead, async (req, res) =
           c.name AS company_name,
           p.vertical,
           p.icp_score
+          ,COALESCE(p.is_synthetic, false) AS is_synthetic
         FROM touchpoints t
         JOIN prospects p ON p.id = t.prospect_id AND p.client_id = t.client_id
         LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
@@ -1041,11 +1424,12 @@ router.get(['/api/activity', '/activity'], requireSetterRead, async (req, res) =
           c.name AS company_name,
           p.vertical,
           p.icp_score
+          ,COALESCE(p.is_synthetic, false) AS is_synthetic
         FROM activity_log al
         JOIN prospects p ON p.id = al.lead_id AND p.client_id = al.client_id
         LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
       ) history
-      WHERE true ${clientScope}
+      WHERE COALESCE(history.is_synthetic, false) = false ${clientScope}
       ORDER BY history.created_at DESC
       LIMIT 100
     `, params);

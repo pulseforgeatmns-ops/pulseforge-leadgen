@@ -290,8 +290,9 @@ router.get('/api/pipeline/client', requireDashboardRead, async (req, res) => {
             COUNT(*) FILTER (
               WHERE action_type IN ('send', 'outbound', 'email_warm')
             )::int AS sends
-          FROM touchpoints
-          WHERE client_id = $1
+          FROM touchpoints t
+          JOIN prospects p ON p.id = t.prospect_id AND p.client_id = t.client_id
+          WHERE t.client_id = $1 AND COALESCE(p.is_synthetic, false) = false
         )
         SELECT
           c.id, c.name, c.slug, c.city, c.state, c.max_email, c.active, c.created_at,
@@ -312,6 +313,7 @@ router.get('/api/pipeline/client', requireDashboardRead, async (req, res) => {
              FROM prospects p
             WHERE p.client_id = $1
               AND p.setter_status = 'booked'
+              AND COALESCE(p.is_synthetic, false) = false
               AND p.closed_at IS NULL) AS booked_pending
         FROM commissions c
         WHERE c.client_id = $1
@@ -347,20 +349,24 @@ router.get('/api/pipeline/setters', requireDashboardRead, async (req, res) => {
           AND source = 'scout'
           AND COALESCE(setter_visible, false) = true
           AND COALESCE(do_not_contact, false) = false
+          AND COALESCE(is_synthetic, false) = false
           AND COALESCE(icp_score, 0) >= 40
       ), calls AS (
         SELECT setter_id::text AS setter_id, COUNT(*)::int AS calls_today
-        FROM activity_log
-        WHERE client_id = $1
-          AND action_type = 'call'
-          AND created_at >= CURRENT_DATE
-          AND created_at < CURRENT_DATE + INTERVAL '1 day'
-        GROUP BY setter_id::text
+        FROM activity_log al
+        JOIN prospects p ON p.id = al.lead_id AND p.client_id = al.client_id
+        WHERE al.client_id = $1
+          AND al.action_type = 'call'
+          AND COALESCE(p.is_synthetic, false) = false
+          AND al.created_at >= CURRENT_DATE
+          AND al.created_at < CURRENT_DATE + INTERVAL '1 day'
+        GROUP BY al.setter_id::text
       ), dispositions AS (
         SELECT setter_id::text AS setter_id, COUNT(*)::int AS calls_today
         FROM call_dispositions
         WHERE client_id = $1
           AND source = 'manual_setter'
+          AND COALESCE(is_synthetic, false) = false
           AND created_at >= CURRENT_DATE
           AND created_at < CURRENT_DATE + INTERVAL '1 day'
         GROUP BY setter_id::text
@@ -369,6 +375,7 @@ router.get('/api/pipeline/setters', requireDashboardRead, async (req, res) => {
         FROM prospects
         WHERE client_id = $1
           AND setter_status = 'booked'
+          AND COALESCE(is_synthetic, false) = false
           AND booked_at >= DATE_TRUNC('week', CURRENT_DATE)
         GROUP BY assigned_setter_id
       )
@@ -385,6 +392,7 @@ router.get('/api/pipeline/setters', requireDashboardRead, async (req, res) => {
       LEFT JOIN bookings ON bookings.assigned_setter_id = u.id
       WHERE u.role = 'setter'
         AND u.active = true
+        AND u.client_id = $1
       ORDER BY u.name ASC
     `, [clientId]);
     res.json({ refreshed_at: new Date().toISOString(), setters: result.rows });
