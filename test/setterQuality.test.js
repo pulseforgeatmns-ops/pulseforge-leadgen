@@ -95,8 +95,11 @@ test('today stats query casts setter_id for both TEXT and INTEGER columns', () =
   const source = fs.readFileSync(path.join(__dirname, '../routes/setter.js'), 'utf8');
   const start = source.indexOf("'/api/stats/today'");
   assert.ok(start > 0);
-  const block = source.slice(start, start + 1200);
+  const block = source.slice(start, start + 1800);
   assert.match(block, /al\.setter_id = \$1::text/);
   assert.match(block, /setter_id = \$1::integer/);
+  assert.match(block, /al\.client_id = \$2/);
+  assert.match(block, /AND client_id = \$2/);
+  assert.match(block, /Number\.isFinite\(Number\(rawSetterId\)\)/);
   assert.doesNotMatch(block, /WHERE setter_id = \$1\s/);
 });
