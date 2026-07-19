@@ -46,9 +46,25 @@ async function startPostgres(t) {
   }
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'max-decay-cron-pg-'));
   const port = await freePort();
+  const logFile = path.join(directory, 'postgres.log');
   const options = { stdio: 'ignore', env: { ...process.env, LANG: 'C', LC_ALL: 'C' } };
   execFileSync('/usr/local/bin/initdb', ['-A', 'trust', '-U', 'postgres', '-D', directory], options);
-  execFileSync('/usr/local/bin/pg_ctl', ['-D', directory, '-o', `-p ${port} -h 127.0.0.1`, '-w', 'start'], options);
+  try {
+    // Pin unix_socket_directories to the disposable data dir. Default socket
+    // paths are not writable in GitHub Actions runners for PostgreSQL 18.
+    execFileSync('/usr/local/bin/pg_ctl', [
+      '-D', directory,
+      '-l', logFile,
+      '-o', `-p ${port} -h 127.0.0.1 -k ${directory}`,
+      '-w',
+      'start',
+    ], options);
+  } catch (error) {
+    const diagnostics = fs.existsSync(logFile)
+      ? fs.readFileSync(logFile, 'utf8')
+      : 'PostgreSQL did not create a server log.';
+    throw new Error(`Temporary PostgreSQL failed to start:\n${diagnostics}`, { cause: error });
+  }
   const pool = new Pool({ connectionString: `postgresql://postgres@127.0.0.1:${port}/postgres` });
   t.after(async () => {
     await pool.end();
