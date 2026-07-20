@@ -4,6 +4,7 @@ const router = express.Router();
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { ensureClientArchitecture, getActiveClients, getRequestClientId, normalizeClientId } = require('../utils/clientContext');
+const { featuresFromFlag } = require('../utils/pipelineExperience');
 const { ensureCloserSchema } = require('../utils/closerSchema');
 const { buildMiraContext } = require('../utils/miraContext');
 const { publishBlogPost } = require('../utils/blogPublisher');
@@ -209,9 +210,16 @@ router.get('/api/me', sessionAuth, (req, res) => {
 
 router.get('/api/clients', requireOperator, async (req, res) => {
   try {
+    const clients = await getActiveClients();
+    const activeClientId = normalizeClientId(req.session.active_client_id || 1);
+    const active = clients.find(c => Number(c.id) === Number(activeClientId)) || null;
     res.json({
-      active_client_id: req.session.active_client_id || 1,
-      clients: await getActiveClients(),
+      active_client_id: activeClientId,
+      clients,
+      // Canonical tenant-feature snapshot for the active client. Dashboard
+      // Pipeline hydration must use this (or /setter/api/features) — never a
+      // hardcoded default that briefly shows pilot_v2 before resolve.
+      features: featuresFromFlag(activeClientId, active?.setter_pipeline_v2_enabled === true),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -222,11 +230,16 @@ router.post('/api/clients/active', requireOperator, async (req, res) => {
   const clientId = normalizeClientId(req.body.client_id || req.query.client_id);
   try {
     const clients = await getActiveClients();
-    if (!clients.find(c => c.id === clientId)) {
+    const active = clients.find(c => Number(c.id) === Number(clientId));
+    if (!active) {
       return res.status(404).json({ error: 'Client not found' });
     }
     req.session.active_client_id = clientId;
-    res.json({ ok: true, active_client_id: clientId });
+    res.json({
+      ok: true,
+      active_client_id: clientId,
+      features: featuresFromFlag(clientId, active.setter_pipeline_v2_enabled === true),
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

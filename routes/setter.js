@@ -29,6 +29,7 @@ const {
   validateDraftInput,
   validateStructuredDetails,
 } = require('../utils/anchorPhoneSetter');
+const { featuresFromFlag } = require('../utils/pipelineExperience');
 
 const router = express.Router();
 
@@ -537,9 +538,7 @@ router.get(['/api/features', '/features'], requireSetterRead, async (req, res) =
     `, [clientId]);
     if (!rows[0]) return res.status(404).json({ error: 'Client not found' });
     res.json({
-      client_id: clientId,
-      pipeline_experience: rows[0].setter_pipeline_v2_enabled ? 'pilot_v2' : 'legacy',
-      setter_pipeline_v2_enabled: rows[0].setter_pipeline_v2_enabled,
+      ...featuresFromFlag(clientId, rows[0].setter_pipeline_v2_enabled === true),
       review_sample_percent: Number(rows[0].setter_review_sample_percent || 0),
     });
   } catch (err) {
@@ -560,9 +559,7 @@ router.patch(['/api/features/pipeline', '/features/pipeline'], requireManagerWri
     `, [req.body.enabled, clientId]);
     if (!rows[0]) return res.status(404).json({ error: 'Client not found' });
     res.json({
-      client_id: rows[0].id,
-      setter_pipeline_v2_enabled: rows[0].setter_pipeline_v2_enabled,
-      pipeline_experience: rows[0].setter_pipeline_v2_enabled ? 'pilot_v2' : 'legacy',
+      ...featuresFromFlag(rows[0].id, rows[0].setter_pipeline_v2_enabled === true),
       rollback_requires_database_change: false,
     });
   } catch (err) {
