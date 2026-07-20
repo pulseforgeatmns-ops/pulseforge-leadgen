@@ -2220,9 +2220,24 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
 }
 .pipeline-area::-webkit-scrollbar { width: 3px; }
 .pipeline-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-.legacy-pipeline-only { display:none; }
-body.pipeline-legacy .new-pipeline-only { display:none !important; }
-body.pipeline-legacy .legacy-pipeline-only { display:block; }
+/* Pending = unresolved tenant feature flag. Never flash pilot_v2 then revert. */
+.legacy-pipeline-only,
+.new-pipeline-only,
+.pipeline-pending-only { display: none; }
+body.pipeline-experience-pending .pipeline-pending-only { display: block; }
+body.pipeline-legacy .legacy-pipeline-only { display: block; }
+body.pipeline-pilot-v2 .pipeline-section.new-pipeline-only { display: block; }
+body.pipeline-pilot-v2 .setter-ops-hero.new-pipeline-only,
+body.pipeline-pilot-v2 .pipeline-section.setter-ops-grid.new-pipeline-only { display: grid; }
+.pipeline-pending-only {
+  margin-bottom: 1rem;
+  padding: 1.25rem 1.35rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.02);
+  color: var(--gray);
+  font-size: 0.92rem;
+}
 .setter-ops-hero {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) minmax(260px, 0.8fr);
@@ -2546,7 +2561,7 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
 }
 </style>
 </head>
-<body>
+<body class="pipeline-experience-pending">
 
 <!-- MOBILE NAV BACKDROP -->
 <div class="mobile-backdrop" id="mobileBackdrop"></div>
@@ -3568,10 +3583,14 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
   <div class="pipeline-area" id="pipelineArea">
     <div class="area-header">
       <div>
-        <div class="area-title">HUMAN SETTER OPERATIONS</div>
-        <div class="area-sub" id="pipelineSub">Queue, callbacks, assignments, and outcomes</div>
+        <div class="area-title">PIPELINE</div>
+        <div class="area-sub" id="pipelineSub">Resolving client Pipeline experience…</div>
       </div>
       <button class="btn-outline" id="pipelineRefreshBtn" type="button">Refresh</button>
+    </div>
+
+    <div class="pipeline-pending-only" id="pipelineExperiencePending">
+      Loading Pipeline for the selected client. The human-setter or legacy view appears only after the tenant feature flag resolves.
     </div>
 
     <div class="setter-ops-hero new-pipeline-only">
@@ -4058,6 +4077,11 @@ const _tabPanels = {
   analytics: document.getElementById('analyticsArea'),
   pipeline:  document.getElementById('pipelineArea')
 };
+let _activeDashboardTab = 'agents';
+function isPipelineTabActive() {
+  return _activeDashboardTab === 'pipeline'
+    && document.getElementById('pipelineArea')?.style.display === 'block';
+}
 document.querySelectorAll('.nav-tab').forEach((tab, i) => {
   if (tab.id === 'usersTab') {
     tab.addEventListener('click', () => { location.href = '/admin/users'; });
@@ -4069,6 +4093,7 @@ document.querySelectorAll('.nav-tab').forEach((tab, i) => {
     if (isViewerRole() && !['agents', 'activity', 'analytics', 'pipeline'].includes(name)) return;
     document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
+    _activeDashboardTab = name;
     Object.entries(_tabPanels).forEach(([k, el]) => {
       if (el) el.style.display = (k === name) ? 'block' : 'none';
     });
@@ -4186,21 +4211,42 @@ async function loadClientSelector() {
     const res = await fetch('/api/clients', { credentials: 'include' });
     if (!res.ok) return;
     const data = await res.json();
+    _clientFeatureMap = Object.fromEntries(
+      (data.clients || []).map(c => [String(c.id), c.setter_pipeline_v2_enabled === true])
+    );
+    _activeClientId = Number(data.active_client_id) || null;
+    if (data.features) applyPipelineFeatures(data.features, { source: 'clients' });
     selector.innerHTML = (data.clients || []).map(c =>
       `<option value="${c.id}" ${Number(c.id) === Number(data.active_client_id) ? 'selected' : ''}>${_esc(c.name)}</option>`
     ).join('');
     selector.onchange = async () => {
-      await fetch('/api/clients/active', {
+      const selectedId = Number(selector.value);
+      _activeClientId = selectedId;
+      // Apply cached tenant flag immediately so Pipeline never flashes the
+      // wrong experience while /api/clients/active + /features hydrate.
+      if (Object.prototype.hasOwnProperty.call(_clientFeatureMap, String(selectedId))) {
+        applyPipelineFeatures({
+          client_id: selectedId,
+          setter_pipeline_v2_enabled: _clientFeatureMap[String(selectedId)] === true,
+        }, { source: 'client_cache' });
+      } else {
+        setPipelineExperiencePending('Resolving Pipeline for selected client…');
+      }
+      const switchRes = await fetch('/api/clients/active', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ client_id: selector.value })
       });
+      if (switchRes.ok) {
+        const switched = await switchRes.json();
+        if (switched.features) applyPipelineFeatures(switched.features, { source: 'clients_active' });
+      }
       _statsCacheTime = 0;
       _activityCacheTime = 0;
       await Promise.all([loadLiveData(), loadActivityFeed(), loadApprovals(), loadProspects(), loadActions()]);
       if (document.getElementById('analyticsArea')?.style.display !== 'none') loadAnalytics();
-      if (document.getElementById('pipelineArea')?.style.display !== 'none') loadPipeline();
+      if (isPipelineTabActive()) loadPipeline();
       loadAgentVisibility();
     };
   } catch(e) {
@@ -7001,19 +7047,81 @@ async function loadSetterOperations() {
 }
 
 let setterPipelinePilotEnabled = false;
+let _pipelineExperience = 'pending';
+let _pipelineExperienceRequestId = 0;
+let _activeClientId = null;
+let _clientFeatureMap = {};
+
+function setPipelineExperiencePending(message) {
+  _pipelineExperience = 'pending';
+  setterPipelinePilotEnabled = false;
+  document.body.classList.remove('pipeline-legacy', 'pipeline-pilot-v2');
+  document.body.classList.add('pipeline-experience-pending');
+  const title = document.querySelector('#pipelineArea .area-title');
+  if (title) title.textContent = 'PIPELINE';
+  const sub = document.getElementById('pipelineSub');
+  if (sub) sub.textContent = message || 'Resolving client Pipeline experience…';
+}
+
+function applyPipelineFeatures(features, { requestId = null, source = 'features' } = {}) {
+  if (requestId != null && requestId !== _pipelineExperienceRequestId) return false;
+  if (
+    features
+    && features.client_id != null
+    && _activeClientId != null
+    && Number(features.client_id) !== Number(_activeClientId)
+  ) {
+    return false; // stale tenant response — ignore
+  }
+  const enabled = features?.setter_pipeline_v2_enabled === true;
+  if (features?.client_id != null) {
+    _clientFeatureMap[String(features.client_id)] = enabled;
+  }
+  _pipelineExperience = enabled ? 'pilot_v2' : 'legacy';
+  setterPipelinePilotEnabled = enabled;
+  document.body.classList.remove('pipeline-experience-pending', 'pipeline-legacy', 'pipeline-pilot-v2');
+  document.body.classList.add(enabled ? 'pipeline-pilot-v2' : 'pipeline-legacy');
+  const title = document.querySelector('#pipelineArea .area-title');
+  if (title) title.textContent = enabled ? 'HUMAN SETTER OPERATIONS' : 'PIPELINE';
+  const sub = document.getElementById('pipelineSub');
+  if (sub && _pipelineExperience !== 'pending') {
+    sub.textContent = enabled
+      ? 'Queue, callbacks, assignments, and outcomes'
+      : 'Legacy business snapshot · rollback mode';
+  }
+  return true;
+}
+
 async function loadPipelineExperience() {
+  const requestId = ++_pipelineExperienceRequestId;
+  const expectedClientId = _activeClientId;
+  // Prefer the canonical per-tenant map from /api/clients when available so a
+  // slow /setter/api/features response cannot flash the wrong experience.
+  if (
+    expectedClientId != null
+    && Object.prototype.hasOwnProperty.call(_clientFeatureMap, String(expectedClientId))
+  ) {
+    applyPipelineFeatures({
+      client_id: expectedClientId,
+      setter_pipeline_v2_enabled: _clientFeatureMap[String(expectedClientId)] === true,
+    }, { requestId, source: 'client_cache' });
+  } else {
+    setPipelineExperiencePending('Resolving client Pipeline experience…');
+  }
   try {
     const flags = await fetchPipelineJson('/setter/api/features');
-    setterPipelinePilotEnabled = flags?.setter_pipeline_v2_enabled === true;
+    applyPipelineFeatures(flags, { requestId, source: 'setter_features' });
   } catch (_error) {
-    setterPipelinePilotEnabled = false;
+    // Keep the last resolved tenant experience when refresh fails. Only fall
+    // back to legacy when we still have no resolved state for this client.
+    if (requestId !== _pipelineExperienceRequestId) return;
+    if (_pipelineExperience === 'pending') {
+      applyPipelineFeatures({
+        client_id: expectedClientId,
+        setter_pipeline_v2_enabled: false,
+      }, { requestId, source: 'features_error' });
+    }
   }
-  document.body.classList.toggle('pipeline-legacy', !setterPipelinePilotEnabled);
-  const title = document.querySelector('#pipelineArea .area-title');
-  if (title) title.textContent = setterPipelinePilotEnabled ? 'HUMAN SETTER OPERATIONS' : 'PIPELINE';
-  document.getElementById('pipelineSub').textContent = setterPipelinePilotEnabled
-    ? 'Queue, callbacks, assignments, and outcomes'
-    : 'Legacy business snapshot · rollback mode';
 }
 
 async function loadClientPipeline() {
@@ -7078,9 +7186,11 @@ async function loadPipeline() {
   ]);
   const failed = results.filter(result => result.status === 'rejected').length;
   const timestamp = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-  document.getElementById('pipelineSub').textContent = failed
-    ? `Updated ${timestamp} · ${failed} panel${failed === 1 ? '' : 's'} unavailable`
-    : `Updated ${timestamp}`;
+  if (_pipelineExperience !== 'pending') {
+    document.getElementById('pipelineSub').textContent = failed
+      ? `Updated ${timestamp} · ${failed} panel${failed === 1 ? '' : 's'} unavailable`
+      : `Updated ${timestamp}`;
+  }
   if (btn) btn.textContent = 'Refresh';
 }
 
@@ -7100,8 +7210,21 @@ setInterval(loadAgentHealth, 30000);
 setInterval(loadActivityFeed, 30000);
 setInterval(loadAgentSparklines, 300000);
 setInterval(() => {
-  if (document.getElementById('pipelineArea')?.style.display !== 'none') loadPipeline();
+  if (isPipelineTabActive()) loadPipeline();
 }, 300000);
+
+// Deep-link: /dashboard?tab=pipeline opens Pipeline after client features hydrate.
+(async function openPipelineDeepLink() {
+  try {
+    const tab = new URLSearchParams(window.location.search).get('tab');
+    if (tab !== 'pipeline') return;
+    const started = Date.now();
+    while (_activeClientId == null && Date.now() - started < 5000) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    document.querySelector('.nav-tab[data-tab="pipeline"]')?.click();
+  } catch (_err) { /* ignore */ }
+})();
 
 // ── AGENT WEEKLY STATS TOOLTIP ────────────────────────────────────
 let _weeklyStats = {};

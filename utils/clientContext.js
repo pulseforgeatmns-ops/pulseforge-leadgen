@@ -337,10 +337,26 @@ async function getClientConfig(clientId = DEFAULT_CLIENT_ID) {
 }
 
 async function getActiveClients() {
-  const result = await pool.query(
-    'SELECT id, name, slug, email, city, state FROM clients WHERE active = true ORDER BY id'
-  );
-  return result.rows;
+  try {
+    const result = await pool.query(`
+      SELECT id, name, slug, email, city, state,
+        COALESCE(setter_pipeline_v2_enabled, false) AS setter_pipeline_v2_enabled
+      FROM clients
+      WHERE active = true
+      ORDER BY id
+    `);
+    return result.rows.map(row => ({
+      ...row,
+      setter_pipeline_v2_enabled: row.setter_pipeline_v2_enabled === true,
+    }));
+  } catch (err) {
+    // Pre-Phase-3D schemas lack the pilot column; fail closed to legacy.
+    if (!/setter_pipeline_v2_enabled/i.test(err.message || '')) throw err;
+    const result = await pool.query(
+      'SELECT id, name, slug, email, city, state FROM clients WHERE active = true ORDER BY id'
+    );
+    return result.rows.map(row => ({ ...row, setter_pipeline_v2_enabled: false }));
+  }
 }
 
 module.exports = {
