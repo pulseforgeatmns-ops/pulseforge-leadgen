@@ -23,6 +23,9 @@ function asDate(value, field, required = false) {
 
 function mutationContext(input = {}) {
   if (!input.idempotencyKey) throw domainError('IDEMPOTENCY_REQUIRED', 'Idempotency-Key header is required');
+  if (String(input.actorType || '').toLowerCase() === 'max') {
+    throw domainError('MAX_REVENUE_MUTATION_FORBIDDEN', 'Max revenue access is read-only', 403);
+  }
   return {
     sourceSystem: input.sourceSystem || 'pulseforge_manual',
     idempotencyKey: String(input.idempotencyKey),
@@ -242,12 +245,25 @@ async function createJob(clientId, input, rawContext) {
     if (opportunity.stage === 'quoted') {
       await db.query(`UPDATE opportunities SET stage = 'booked', updated_at = NOW() WHERE client_id = $1 AND id = $2`, [clientId, opportunity.id]);
     }
-    await projectOutcome(db, clientId, job.id, context, `${context.idempotencyKey}:projection`);
+    await projectOutcome(
+      db,
+      clientId,
+      job.id,
+      context,
+      `${context.idempotencyKey}:projection`,
+      null,
+      input.scheduledStartPrecision || null
+    );
     const result = { job };
     await appendEvent(db, {
       clientId, eventType: 'job_created', entityType: 'job', entityId: job.id,
-      occurredAt: job.created_at, payload: { transition_from: null, transition_to: 'scheduled', result },
-      context, idempotencyKey: context.idempotencyKey,
+      occurredAt: job.created_at, context, idempotencyKey: context.idempotencyKey,
+      payload: {
+        transition_from: null,
+        transition_to: 'scheduled',
+        temporal_precision: input.scheduledStartPrecision || null,
+        result,
+      },
     });
     return result;
   });
@@ -285,7 +301,12 @@ async function completeJob(clientId, jobId, input, rawContext) {
       await db.query(`UPDATE revenue_jobs SET status = 'in_progress', actual_start = COALESCE(actual_start, $3), updated_at = NOW() WHERE client_id = $1 AND id = $2`, [clientId, jobId, actualEnd]);
       await appendEvent(db, {
         clientId, eventType: 'job_started', entityType: 'job', entityId: jobId, occurredAt: actualEnd,
-        payload: { transition_from: validStartFrom, transition_to: 'in_progress', validated_completion_workflow: true },
+        payload: {
+          transition_from: validStartFrom,
+          transition_to: 'in_progress',
+          validated_completion_workflow: true,
+          temporal_precision: input.completionDatePrecision || null,
+        },
         context, idempotencyKey: `${context.idempotencyKey}:start`,
       });
       current.status = 'in_progress';
@@ -305,13 +326,26 @@ async function completeJob(clientId, jobId, input, rawContext) {
       input.completionNotes || null,
     ]);
     const job = rows[0];
-    const outcome = await projectOutcome(db, clientId, jobId, context, `${context.idempotencyKey}:projection`);
+    const outcome = await projectOutcome(
+      db,
+      clientId,
+      jobId,
+      context,
+      `${context.idempotencyKey}:projection`,
+      null,
+      input.completionDatePrecision || null
+    );
     if (context.followupRecommendationsEnabled) await upsertFollowUps(db, clientId, job, input, outcome);
     const result = { job, revenueOutcome: outcome };
     await appendEvent(db, {
       clientId, eventType: nextStatus === 'completed' ? 'job_completed' : 'job_partially_completed',
       entityType: 'job', entityId: jobId, occurredAt: actualEnd,
-      payload: { transition_from: 'in_progress', transition_to: nextStatus, result }, context,
+      payload: {
+        transition_from: 'in_progress',
+        transition_to: nextStatus,
+        temporal_precision: input.completionDatePrecision || null,
+        result,
+      }, context,
       idempotencyKey: context.idempotencyKey,
     });
     return result;
@@ -346,12 +380,24 @@ async function recordPayment(clientId, input, rawContext) {
       status === 'succeeded' ? occurredAt : null, status === 'failed' ? occurredAt : null,
     ]);
     const payment = rows[0];
-    const outcome = await projectOutcome(db, clientId, job.id, context, `${context.idempotencyKey}:projection`, payment.id);
+    const outcome = await projectOutcome(
+      db,
+      clientId,
+      job.id,
+      context,
+      `${context.idempotencyKey}:projection`,
+      payment.id,
+      input.receivedAtPrecision || null
+    );
     const result = { payment, revenueOutcome: outcome };
     await appendEvent(db, {
       clientId, eventType: status === 'succeeded' ? 'payment_succeeded' : status === 'failed' ? 'payment_failed' : 'payment_pending',
       entityType: 'payment', entityId: payment.id, occurredAt,
-      payload: { invoice_model: 'phase1_job_embedded', result }, context, idempotencyKey: context.idempotencyKey,
+      payload: {
+        invoice_model: 'phase1_job_embedded',
+        temporal_precision: input.receivedAtPrecision || null,
+        result,
+      }, context, idempotencyKey: context.idempotencyKey,
     });
     return result;
   });
@@ -401,7 +447,15 @@ async function touchAttribution(db, clientId, prospectId) {
   };
 }
 
-async function projectOutcome(db, clientId, jobId, context, idempotencyKey, paymentId = null) {
+async function projectOutcome(
+  db,
+  clientId,
+  jobId,
+  context,
+  idempotencyKey,
+  paymentId = null,
+  temporalPrecision = null
+) {
   const { rows } = await db.query(`
     SELECT j.*, o.prospect_id, o.company_id, o.source, o.lead_source_detail,
            o.campaign_id, o.sequence_id, o.attribution_status, o.human_owner,
@@ -477,7 +531,13 @@ async function projectOutcome(db, clientId, jobId, context, idempotencyKey, paym
   const outcome = projected[0];
   await appendEvent(db, {
     clientId, eventType: 'revenue_outcome_updated', entityType: 'revenue_outcome', entityId: outcome.id,
-    occurredAt: outcome.updated_at, payload: { outcome_id: outcome.id, outcome_status: outcome.outcome_status, outcome },
+    occurredAt: outcome.updated_at,
+    payload: {
+      outcome_id: outcome.id,
+      outcome_status: outcome.outcome_status,
+      temporal_precision: temporalPrecision,
+      outcome,
+    },
     context, idempotencyKey,
   });
   return outcome;

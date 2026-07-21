@@ -1,6 +1,11 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE TABLE clients (id INTEGER PRIMARY KEY, name TEXT);
+CREATE TABLE clients (
+  id INTEGER PRIMARY KEY,
+  name TEXT,
+  enabled_agents JSONB NOT NULL DEFAULT '["scout"]'::jsonb,
+  autosend_enabled BOOLEAN NOT NULL DEFAULT FALSE
+);
 CREATE TABLE companies (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(), client_id INTEGER NOT NULL REFERENCES clients(id), name TEXT,
   UNIQUE (client_id,id)

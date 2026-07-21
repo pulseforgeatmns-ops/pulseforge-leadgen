@@ -2,32 +2,13 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const net = require('node:net');
-const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const test = require('node:test');
 const { Pool } = require('pg');
+const { startDisposablePostgres } = require('./helpers/disposablePostgres');
 
 const root = path.join(__dirname, '..');
 
-function binary(name) {
-  try { return execFileSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim(); } catch {
-    try {
-      const bindir = execFileSync('pg_config', ['--bindir'], { encoding: 'utf8' }).trim();
-      const candidate = path.join(bindir, name);
-      return fs.existsSync(candidate) ? candidate : null;
-    } catch { return null; }
-  }
-}
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.on('error', reject);
-    server.listen(0, '127.0.0.1', () => { const port = server.address().port; server.close(() => resolve(port)); });
-  });
-}
 async function fingerprint(db) {
   const { rows } = await db.query(`SELECT md5(COALESCE(jsonb_agg(to_jsonb(x) ORDER BY x.client_id,x.job_id)::text,'[]')) AS hash FROM (SELECT * FROM revenue_outcomes) x`);
   return rows[0].hash;
@@ -38,37 +19,15 @@ test('revenue lifecycle, replay, rollback, isolation, protection, rebuild, and r
     t.skip('set REVENUE_TEST_POSTGRES=true to run the required disposable PostgreSQL test');
     return;
   }
-  const initdb = binary('initdb');
-  const pgCtl = binary('pg_ctl');
-  if (!initdb || !pgCtl) assert.fail('PostgreSQL initdb and pg_ctl are required for the revenue integration check');
 
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'revenue-phase15-pg-'));
-  const port = await freePort();
-  const logFile = path.join(directory, 'postgres.log');
-  const commandOptions = { stdio: 'ignore', env: { ...process.env, LANG: 'C', LC_ALL: 'C' } };
-  execFileSync(initdb, ['-A', 'trust', '-U', 'postgres', '-D', directory], commandOptions);
-  try {
-    execFileSync(pgCtl, [
-      '-D', directory,
-      '-l', logFile,
-      '-o', `-p ${port} -h 127.0.0.1 -k ${directory}`,
-      '-w',
-      'start',
-    ], commandOptions);
-  } catch (error) {
-    const diagnostics = fs.existsSync(logFile)
-      ? fs.readFileSync(logFile, 'utf8')
-      : 'PostgreSQL did not create a server log.';
-    throw new Error(`Temporary PostgreSQL failed to start:\n${diagnostics}`, { cause: error });
-  }
-  const connectionString = `postgresql://postgres@127.0.0.1:${port}/postgres`;
+  const postgres = await startDisposablePostgres('revenue-phase15-pg-');
+  const connectionString = postgres.connectionString;
   const admin = new Pool({ connectionString });
   let servicePool;
   t.after(async () => {
     if (servicePool) await servicePool.end();
     await admin.end();
-    execFileSync(pgCtl, ['-D', directory, '-m', 'fast', '-w', 'stop'], commandOptions);
-    fs.rmSync(directory, { recursive: true, force: true });
+    await postgres.stop();
   });
 
   await admin.query(fs.readFileSync(path.join(__dirname, 'fixtures/revenueBaseSchema.sql'), 'utf8'));
@@ -186,7 +145,7 @@ test('revenue lifecycle, replay, rollback, isolation, protection, rebuild, and r
   assert.equal(ranged.tenants[0].source_totals.job_count, 1);
 
   await admin.query(`CREATE ROLE revenue_application LOGIN; GRANT USAGE ON SCHEMA public TO revenue_application; GRANT SELECT,INSERT ON revenue_events TO revenue_application`);
-  const ordinary = new Pool({ connectionString: `postgresql://revenue_application@127.0.0.1:${port}/postgres` });
+  const ordinary = new Pool({ connectionString: `postgresql://revenue_application@127.0.0.1:${postgres.port}/postgres` });
   await assert.rejects(ordinary.query('UPDATE revenue_events SET event_type=event_type'), error => error.code === '42501');
   await assert.rejects(ordinary.query('DELETE FROM revenue_events'), error => error.code === '42501');
   await ordinary.end();
