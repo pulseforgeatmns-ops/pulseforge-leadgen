@@ -1,10 +1,38 @@
-# Revenue Phase 1.6B — Implementation Report (Release Candidate)
+# Revenue Phase 1.6B — Implementation Report
 
-**Status:** offline implementation complete; authorization remains unsigned and non-executable.
-**Production access during this work:** none. No Railway access, no production PostgreSQL connection, no migration application, no feature-flag change, no Eliza canary, no authorization signature.
-**Protected-main base:** `cd6ed74abde896eb504db1fd70709d0bc67229b3`
+**Status:** blocked production attempt investigated; root cause fixed offline; new authorization prepared unsigned and non-executable.
 **Unsigned draft:** `artifacts/revenue/phase16b-production-authorization-draft.json`
-**Unsigned-draft canonical hash:** `add3646e275aeba07969b8e21b32d52e9b7831085efc10cad1f9da5a63ac447f`
+**Unsigned-draft canonical hash:** `d41a233b9a8c91d292404ffac4e23a9b6e69f959abd4c60d03008a66612e90c2`
+**Current authorization ID:** `3808a9f7-b8e4-467f-917f-5021dfb7d485`
+**Retired authorization ID (consumed, permanently non-reusable):** `ce9005f1-6d6f-46fd-a52d-4081a79ed02f`
+
+## Blocked production attempt (2026-07-21T04:02Z) — root cause and fixes
+
+The first production execution under authorization `ce9005f1…` was **BLOCKED SAFELY**: production was contacted, but no migration checkpoint completed, no revenue or feature-flag tables exist, no flags changed, and no Eliza/ledger/financial records were created. Failed-attempt evidence is preserved at `artifacts/revenue/phase16b-production-execution-blocked-20260721T0402Z.json`; the retired signed authorization at `artifacts/revenue/phase16b-production-authorization-signed-retired-ce9005f1.json`.
+
+### Root cause (initiating first error)
+
+- **Error:** `there is no unique constraint matching given keys for referenced table "companies"` — SQLSTATE **42830** (`invalid_foreign_key`).
+- **Location:** `migrations/2026-07-18-anchor-closed-loop-revenue-phase1.sql`, first `CREATE TABLE customers` statement, composite tenant FK `FOREIGN KEY (client_id, company_id) REFERENCES companies(client_id, id)`.
+- **Why:** production `companies` has only `PRIMARY KEY (id)` and production `prospects` has only `PRIMARY KEY (id)` + `UNIQUE (email)` — neither carries `UNIQUE (client_id, id)` — and production has **no `campaigns` table at all**. The old test fixture (`test/fixtures/revenueBaseSchema.sql`) invented those composite keys and a campaigns table, so every disposable rehearsal passed while production could not.
+- **Transaction boundary:** the migration file opens an explicit `BEGIN`; the 42830 error aborted that transaction, PostgreSQL rolled the work back (no partial schema), and the session remained in the aborted-transaction state.
+- **Rollback:** effective — no revenue object survived in production.
+- **Query parameters:** none (pure DDL; no parameter values involved).
+- **Reproduced offline:** byte-exact, against a clone of the Phase 1.6A production restore (`phase16a_revenue_restore_validation`, PostgreSQL 18.4 — the same version the production backup restore was validated on) and now permanently pinned by a regression test on a production-faithful disposable schema.
+
+### Why the evidence surfaced 25P02 instead of 42830
+
+The runner's `catch` did capture the initiating 42830, but the `finally` block then ran the write-shutdown prover on the **same aborted connection**. Its first probe raised **25P02** (`current transaction is aborted`), and that handler **overwrote** `evidence.failure` with the 25P02 shutdown message and reported `writes_disabled: false` — misleading, because `revenue_feature_flags` never existed, so writes could never have been enabled. 25P02 was a secondary symptom, not the root cause.
+
+### Fixes (all offline; reproduced first, then fixed)
+
+1. **Migration production-compatibility** (`migrations/…-phase1.sql`): idempotent `DO` blocks provision `UNIQUE (client_id, id)` on `companies` and `prospects` before any dependent table (both columns NOT NULL; `id` already unique, so this cannot fail on data), and the `opportunities → campaigns` composite FK is now attached only when a campaigns table with a `(client_id, id)` unique key exists (production: skipped; `campaign_id` stays a plain nullable UUID; the canary never sets it). New certified phase1 SHA-256: `c11740daa17a4d8495daa428134effdffaa0d64d8b343e044739a23d28fa6495`. The consumed migration bytes are preserved for regression at `test/fixtures/consumedPhase16bMigrationPhase1.sql`.
+2. **First-error preservation** (`services/revenuePhase16bRunner.js`): the first database error — full SQLSTATE, detail, hint, position, table, constraint, routine, migration file, checksum, and best-effort statement location — is the primary failure and is never overwritten by cleanup or shutdown-proof errors (`failure_is_first_database_error: true`).
+3. **Immediate rollback:** the runner issues `ROLLBACK` immediately after any failed statement; the rollback outcome (success or its own error) is reported separately in `evidence.rollback`. No verification query ever runs on an aborted transaction.
+4. **Fresh-connection write-shutdown proof:** `verifyWritesDisabledOnFreshConnection` opens a new connection; if `revenue_feature_flags` is absent it reports `writes_disabled: true` with reason `feature_flag_table_absent_pre_migration`; if present it forces the client-10 flag off, re-verifies it, and reports any non-Anchor tenant with writes enabled (never mutating other tenants). The legacy same-connection prover is retained only as the pinned defective behavior for the regression test.
+5. **Structured migration diagnostics:** checkpoints for production identity verification, pre-migration baseline, each migration transaction open/commit (or failure), and post-migration structural verification — each with UTC timestamp, correlation ID, migration checksum, transaction state, database role, and search path. Ambiguous migration state fails closed with `PHASE16B_AMBIGUOUS_MIGRATION_STATE`.
+6. **Production-faithful fixture:** `test/fixtures/revenueBaseSchema.sql` now mirrors the actual production key shapes (no composite tenant keys, no campaigns table), so every disposable rehearsal exercises the real production precondition.
+7. **Authorization retirement:** `ce9005f1…` is in `RETIRED_AUTHORIZATION_IDS` and is rejected by the validator even if perfectly re-signed; its correlation ID and all eight idempotency keys are likewise non-reusable. The new authorization uses fresh values throughout.
 
 ## Authoritative component status
 
@@ -53,7 +81,8 @@ The three historical dates and payment method above are confirmed and ready to p
 3. Selection of a future two-hour UTC execution window (not chosen yet; do not reuse a past window).
 4. Fresh protected-main / Railway deployment identity observation immediately before execution.
 5. Explicit environment gate `REVENUE_PHASE16B_PRODUCTION_ENABLED=true` only after the signed authorization has passed final validation inside the active window.
-6. Runner invocation only via `scripts/executeRevenuePhase16b.js --production --confirm=ce9005f1-6d6f-46fd-a52d-4081a79ed02f`.
+6. Runner invocation only via `scripts/executeRevenuePhase16b.js --production --confirm=3808a9f7-b8e4-467f-917f-5021dfb7d485`.
+7. Release identity and window in the unsigned draft must be re-bound (and the hash recomputed) to the fresh protected-main commit and Railway deployment after the root-cause-fix PR merges.
 
 ## Offline finalizer interface
 
@@ -106,17 +135,19 @@ The six repository-wide failures observed in the dirty original worktree are **u
 
 **Phase 1.6B introduced failures: zero.** Clean release-branch repository suite must be zero-fail.
 
-## Clean test counts (release-candidate verification)
+## Clean test counts (post-root-cause-fix verification)
 
 | Suite | Pass | Fail | Skip |
 | --- | --- | --- | --- |
-| Phase 1.6B unit + disposable PostgreSQL (`test/revenuePhase16b.test.js`) | 19 | 0 | 0 |
+| Phase 1.6B unit + disposable PostgreSQL + regression + failure modes (`test/revenuePhase16b.test.js`) | 26 | 0 | 0 |
 | Offline finalizer (`test/revenuePhase16bFinalizer.test.js`) | 7 | 0 | 0 |
 | Concurrent harness stress (`test/disposablePostgresHarness.test.js`) | 5 | 0 | 0 |
-| Combined revenue PostgreSQL suites | 20 | 0 | 0 |
+| Combined revenue PostgreSQL suites (`test:revenue:postgres` + `test:revenue:phase16b`) | 34 | 0 | 0 |
+| Repository-wide suite (all PostgreSQL gates enabled) | 322 | **0** | 0 |
 | Syntax (`node --check` on Phase 1.6B surfaces) | all ok | — | — |
 | `git diff --check` | clean | — | — |
-| Clean release-branch repository-wide suite | 303 | **0** | 12 |
+
+New failure-mode coverage: production 42830 reproduction on the consumed migration bytes; legacy same-connection prover defeated by 25P02 (pinned old defect); first-statement and mid-migration failures with the initiating error primary; rollback success and simulated rollback failure reported separately; transactional migration leaving no partial schema; fresh-connection shutdown proof with the flag table absent, present-off, present-unexpectedly-on (forced off), and enabled-for-another-tenant (reported, never mutated); ambiguous migration state failing closed; retired-authorization rejection at validation before any database connection.
 
 Phase 1.6B integration tests: **zero skips**.
 

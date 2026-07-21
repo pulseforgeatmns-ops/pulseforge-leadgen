@@ -3,41 +3,6 @@ BEGIN;
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- Production compatibility. Root cause of the blocked 2026-07-21T04:02Z
--- production attempt (SQLSTATE 42830): production companies and prospects
--- predate the tenant-scoped composite keys this schema references
--- (companies has only PRIMARY KEY (id); prospects has PRIMARY KEY (id) and
--- UNIQUE (email)), so the composite foreign keys below could not be created.
--- Add UNIQUE (client_id, id) idempotently before any dependent table. Both
--- columns are NOT NULL in production and id alone is already unique, so this
--- constraint cannot fail on existing data.
-DO $compat$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint c
-    WHERE c.conrelid = 'public.companies'::regclass
-      AND c.contype IN ('p','u')
-      AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
-           FROM unnest(c.conkey) AS k(attnum)
-           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum)
-          = ARRAY['client_id','id']
-  ) THEN
-    ALTER TABLE companies ADD CONSTRAINT companies_client_id_id_key UNIQUE (client_id, id);
-  END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint c
-    WHERE c.conrelid = 'public.prospects'::regclass
-      AND c.contype IN ('p','u')
-      AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
-           FROM unnest(c.conkey) AS k(attnum)
-           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum)
-          = ARRAY['client_id','id']
-  ) THEN
-    ALTER TABLE prospects ADD CONSTRAINT prospects_client_id_id_key UNIQUE (client_id, id);
-  END IF;
-END
-$compat$;
-
 CREATE TABLE customers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
@@ -83,34 +48,9 @@ CREATE TABLE opportunities (
   FOREIGN KEY (client_id, customer_id) REFERENCES customers(client_id, id) ON DELETE RESTRICT,
   FOREIGN KEY (client_id, prospect_id) REFERENCES prospects(client_id, id) ON DELETE RESTRICT,
   FOREIGN KEY (client_id, company_id) REFERENCES companies(client_id, id) ON DELETE RESTRICT,
+  FOREIGN KEY (client_id, campaign_id) REFERENCES campaigns(client_id, id) ON DELETE RESTRICT,
   CHECK (customer_id IS NOT NULL OR prospect_id IS NOT NULL)
 );
-
--- Production has no campaigns table yet (second latent incompatibility behind
--- the 42830 failure above). Attach the tenant-scoped campaign foreign key only
--- when a campaigns table with a (client_id, id) unique key exists; otherwise
--- campaign_id remains a plain nullable UUID until a campaigns migration lands.
--- The authorized Eliza canary never sets campaign_id.
-DO $campaigns_fk$
-BEGIN
-  -- to_regclass is checked first in a separate IF because a ::regclass cast
-  -- against a missing relation raises at parse time even behind AND.
-  IF to_regclass('public.campaigns') IS NOT NULL THEN
-    IF EXISTS (
-      SELECT 1 FROM pg_constraint c
-      WHERE c.conrelid = to_regclass('public.campaigns')
-        AND c.contype IN ('p','u')
-        AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
-             FROM unnest(c.conkey) AS k(attnum)
-             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum)
-            = ARRAY['client_id','id']
-    ) THEN
-      ALTER TABLE opportunities ADD CONSTRAINT opportunities_client_id_campaign_id_fkey
-        FOREIGN KEY (client_id, campaign_id) REFERENCES campaigns(client_id, id) ON DELETE RESTRICT;
-    END IF;
-  END IF;
-END
-$campaigns_fk$;
 
 CREATE TABLE revenue_jobs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
