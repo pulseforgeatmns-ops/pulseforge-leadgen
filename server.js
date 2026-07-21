@@ -130,6 +130,10 @@ app.use((req, res, next) => {
 // Phase A2 shared frontend foundation (tokens, shell, workspace modules)
 // loaded by both dashboard.html and setter-dashboard.html.
 app.use('/shared', express.static(path.join(__dirname, 'public', 'shared')));
+// Browser tab icon — served unauthenticated so login/redirect pages get it too.
+app.get('/favicon.ico', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'favicon.ico'), { maxAge: '7d' });
+});
 app.use(express.static(__dirname));
 
 // Recover from malformed JSON bodies so cron routes can still read req.query.secret
@@ -244,6 +248,7 @@ app.get('/login', (req, res) => {
 <head>
 <meta charset="UTF-8">
 <title>Pulseforge — Login</title>
+<link rel="icon" href="/favicon.ico">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
