@@ -6,8 +6,7 @@ DO $$
 BEGIN
   IF to_regclass('public.clients') IS NULL
     OR to_regclass('public.prospects') IS NULL
-    OR to_regclass('public.call_dispositions') IS NULL
-    OR to_regclass('public.campaigns') IS NULL THEN
+    OR to_regclass('public.call_dispositions') IS NULL THEN
     RAISE EXCEPTION 'Anchor Phone Setter v1 prerequisites are missing';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM clients WHERE id = 10 AND active = TRUE) THEN
@@ -16,6 +15,14 @@ BEGIN
 END $$;
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Production intentionally has no generic campaigns table yet. Create only
+-- the minimal foundation this paused, no-send Anchor campaign requires. If a
+-- broader campaign foundation already exists, leave its shape untouched.
+CREATE TABLE IF NOT EXISTS campaigns (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE RESTRICT
+);
 
 -- Preserve the exact tenant targeting state once, so approved rollback can
 -- restore it without guessing or touching any other client.
@@ -59,9 +66,8 @@ CREATE TABLE IF NOT EXISTS setter_follow_up_drafts (
 CREATE INDEX IF NOT EXISTS setter_follow_up_drafts_tenant_prospect_idx
   ON setter_follow_up_drafts (client_id, prospect_id, created_at DESC);
 
--- The foundation schema intentionally leaves campaign shape generic. These
--- additive fields make the paused Anchor campaign durable without assuming a
--- pre-existing campaign application.
+-- Keep the generic foundation minimal; these additive fields make the paused
+-- Anchor campaign durable without enabling any campaign execution.
 ALTER TABLE campaigns
   ADD COLUMN IF NOT EXISTS campaign_key TEXT,
   ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'paused',
