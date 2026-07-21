@@ -23,11 +23,11 @@
   "approved_at": null,
   "approved_at_policy": "Intentionally unset. Must be set to the actual UTC finalization time by Jacob Maynard at signing; never pre-filled.",
   "window": {
-    "start": "2026-07-21T18:00:00Z",
-    "end": "2026-07-21T20:00:00Z",
+    "start": "2026-07-22T18:00:00Z",
+    "end": "2026-07-22T20:00:00Z",
     "duration_minutes_required": 120,
     "timezone_display": "America/New_York",
-    "local_display": "Tuesday, July 21, 2026, 2:00 PM–4:00 PM America/New_York",
+    "local_display": "Wednesday, July 22, 2026, 2:00 PM–4:00 PM America/New_York",
     "freeze_owner": "Jacob Maynard",
     "freeze_scope": [
       "no deployment",
@@ -39,22 +39,22 @@
     "rebinding_policy": "This window and the release identity below must be re-bound to fresh observed values after the root-cause-fix PR merges to protected main; any rebinding recomputes authorization_hash."
   },
   "release": {
-    "protected_main_commit": "bf65bb8f4492147b7343240c0d005e58d9ed1acf",
-    "protected_main_commit_source": "git ls-remote origin main after PR #27 merge",
+    "protected_main_commit": "fcb88c610d428459ea5f3a72134d355c8ab641cb",
+    "protected_main_commit_source": "git ls-remote origin main after PR #29 merge",
     "prior_phase16a_deployed_commit_reference": "cd6ed74abde896eb504db1fd70709d0bc67229b3",
-    "deployed_commit": "bf65bb8f4492147b7343240c0d005e58d9ed1acf",
+    "deployed_commit": "fcb88c610d428459ea5f3a72134d355c8ab641cb",
     "deployed_commit_verification": {
-      "observed_at": "2026-07-21T03:56:46.114Z",
+      "observed_at": "2026-07-21T22:29:44.000Z",
       "verification_source": "railway deployment list --service pulseforge-leadgen --environment production --json (read-only)",
       "deployment_status": "SUCCESS",
-      "deployment_created_at": "2026-07-21T03:53:07.594Z",
+      "deployment_created_at": "2026-07-21T19:18:51.710Z",
       "git_branch": "main",
-      "image_digest": "sha256:08eb41436e34e071ea4e501580065ea345e35a840b6b8af6bc6eba271e9c31d9",
+      "image_digest": "sha256:350d10e5c12f237d5585c7fe14f842d6d916cd3bd1126816dab6014caad92ea6",
       "protected_main_reconfirmed": true,
       "matches_protected_main": true,
-      "note": "Fresh post-merge identity: protected main equals active SUCCESS deployment commit bf65bb8 after PR #27."
+      "note": "Fresh post-merge identity: protected main equals active SUCCESS deployment commit fcb88c6 after PR #29."
     },
-    "railway_deployment_id": "adb2db69-7888-4fe2-bedb-53b6aca5d647",
+    "railway_deployment_id": "fe8aa747-b279-4722-85a6-d5a5b9d745ca",
     "railway_service": "pulseforge-leadgen",
     "railway_service_id": "5c662f94-ef90-42fc-8497-75b9c6d3cca1",
     "railway_environment": "production",
@@ -375,7 +375,7 @@
     "execution-time re-observation of release.deployed_commit and release.railway_deployment_id per release.identity_policy"
   ],
   "authorization_hash_policy": "authorization_hash below is the canonical SHA-256 of this exact unsigned draft with authorization_hash excluded and every object key recursively sorted. It binds the generated IDs, window, window owners, deployment identity, historical-date precision policy, and canary facts against tampering. It is NOT the final signing hash: it must be recomputed after signatures, approved_at, and the remaining runtime values are fixed, and the final hash supersedes it.",
-  "authorization_hash": "d41a233b9a8c91d292404ffac4e23a9b6e69f959abd4c60d03008a66612e90c2",
+  "authorization_hash": "b5dbad660844c1c2444928dd63e2de69c94c338f514231481b1922c74da12375",
   "approved": false,
   "production_execution_permitted": false,
   "executable": false,
