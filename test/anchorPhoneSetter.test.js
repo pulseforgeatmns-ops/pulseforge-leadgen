@@ -6,6 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { _test } = require('../leadgen');
 const phoneSetter = require('../utils/anchorPhoneSetter');
+const { preflight } = require('../scripts/preflightAnchorPhoneSetter');
 
 const root = path.join(__dirname, '..');
 const forward = fs.readFileSync(path.join(root, 'migrations', '2026-07-18-anchor-phone-setter-immediate-cash-v1.sql'), 'utf8');
@@ -38,6 +39,8 @@ test('Anchor structured call details are strict and category-bound', () => {
 });
 
 test('forward and rollback migrations preserve no-send and structured-history safety', () => {
+  assert.match(forward, /CREATE TABLE IF NOT EXISTS campaigns/);
+  assert.match(forward, /id UUID PRIMARY KEY DEFAULT gen_random_uuid\(\)/);
   assert.match(forward, /ADD COLUMN IF NOT EXISTS details JSONB NOT NULL DEFAULT '\{\}'::jsonb/);
   assert.match(forward, /CREATE TABLE IF NOT EXISTS setter_follow_up_drafts/);
   assert.match(forward, /'anchor_phone_setter_immediate_cash_v1', 'paused'/);
@@ -56,4 +59,29 @@ test('Anchor route explicitly blocks provider-adjacent actions and revenue write
   assert.match(setterRoute, /assertRevenueFlag\(flags, 'revenue_operator_writes_enabled'\)/);
   assert.match(setterRoute, /status='manual_sent'/);
   assert.match(setterRoute, /provider_action: false/);
+});
+
+test('Anchor preflight reports a missing campaign table as not ready', async () => {
+  const db = {
+    async query(sql) {
+      if (sql.includes('FROM clients')) {
+        return { rows: [{ id: 10, active: true, enabled_agents: ['scout'], autosend_enabled: false }] };
+      }
+      if (sql.includes('FROM revenue_feature_flags')) {
+        return { rows: [{ revenue_schema_enabled: false, revenue_operator_reads_enabled: false, revenue_operator_writes_enabled: false, revenue_max_reads_enabled: false, revenue_followup_recommendations_enabled: false }] };
+      }
+      if (sql.includes('FROM campaigns')) {
+        const error = new Error('relation "campaigns" does not exist');
+        error.code = '42P01';
+        throw error;
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    },
+  };
+
+  const report = await preflight(db);
+  assert.equal(report.ok, false);
+  assert.equal(report.checks.anchor_campaign_paused, false);
+  assert.equal(report.checks.campaign_external_sends_disabled, false);
+  assert.equal(report.checks.campaign_revenue_writes_disabled, false);
 });

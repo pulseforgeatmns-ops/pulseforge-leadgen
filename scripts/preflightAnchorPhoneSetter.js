@@ -30,10 +30,13 @@ async function preflight(db = pool) {
       revenue_max_reads_enabled,revenue_followup_recommendations_enabled
     FROM revenue_feature_flags WHERE client_id=10
   `).catch(error => error.code === '42P01' ? { rows: [] } : Promise.reject(error));
+  // Before the forward migration, `campaigns` deliberately does not exist on
+  // some production schemas. That is a failed readiness check, not a broken
+  // preflight: callers need the JSON report to attach to an authorization.
   const campaign = await db.query(`
     SELECT campaign_key,status,metadata FROM campaigns
     WHERE client_id=10 AND campaign_key='anchor_phone_setter_immediate_cash_v1'
-  `).catch(error => error.code === '42703' ? { rows: [] } : Promise.reject(error));
+  `).catch(error => ['42P01', '42703'].includes(error.code) ? { rows: [] } : Promise.reject(error));
   const anchor = client.rows[0] || null;
   const revenue = flags.rows[0] || {};
   const report = {
