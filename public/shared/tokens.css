@@ -1,0 +1,112 @@
+/* Pulseforge shared design tokens.
+   Phase B visual system — one source of truth for both HTML shells.
+
+   Default theme: warm command-center.
+     - warm cream application background
+     - deep navy navigation and primary text
+     - off-white cards
+     - muted gold operator actions
+     - restrained violet for generated/AI guidance
+     - green = verified/success, amber = hypothesis/warning, red = blocked/error
+
+   body.theme-dark preserves the pre-Phase-B dark palette as an operator
+   preference. Pages resolve their local variables through these tokens. */
+:root {
+  /* Surfaces */
+  --pf-bg: #f3efe4;            /* warm cream */
+  --pf-bg-raised: #ece7d8;     /* raised cream */
+  --pf-bg-card: #fbf9f2;       /* off-white card */
+  --pf-nav-bg: #10203c;        /* deep navy navigation */
+  --pf-nav-text: #e9e4d4;
+  --pf-nav-muted: #93a0ba;
+  --pf-border: rgba(16, 32, 60, 0.16);
+  --pf-border-strong: rgba(16, 32, 60, 0.34);
+  --pf-shadow: 0 10px 34px rgba(16, 32, 60, 0.14);
+
+  /* Brand / roles */
+  --pf-navy: #10203c;          /* primary text + chrome */
+  --pf-gold: #9a7b2d;          /* muted gold — operator actions */
+  --pf-gold-strong: #7c611e;
+  --pf-gold-glow: rgba(154, 123, 45, 0.14);
+  --pf-violet: #6d5bd0;        /* restrained violet — generated/AI guidance */
+  --pf-violet-glow: rgba(109, 91, 208, 0.12);
+  --pf-teal: #0f766e;
+
+  /* Compatibility aliases (pre-Phase-B names used across both shells) */
+  --pf-purple: #6d5bd0;
+  --pf-purple-bright: #6d5bd0;
+  --pf-purple-glow: rgba(109, 91, 208, 0.12);
+
+  /* Signal colors */
+  --pf-green: #1e7a45;         /* verified / success */
+  --pf-red: #b3261e;           /* blocked / error */
+  --pf-amber: #a05e03;         /* hypothesis / warning */
+  --pf-orange: #b4530a;
+
+  /* Text */
+  --pf-text: #182743;          /* deep navy primary text */
+  --pf-text-dim: #40527a;
+  --pf-text-muted: #6b7794;
+
+  /* Type */
+  --pf-font-display: 'Bebas Neue', sans-serif;
+  --pf-font-mono: 'JetBrains Mono', monospace;
+  --pf-font-body: 'DM Sans', sans-serif;
+
+  /* Canonical lifecycle stage colors */
+  --pf-stage-new: #6d5bd0;
+  --pf-stage-contacted: #0f766e;
+  --pf-stage-follow_up: #a05e03;
+  --pf-stage-booked: #1e7a45;
+  --pf-stage-dead: #6b7794;
+
+  /* Layout */
+  --pf-radius: 8px;
+  --pf-radius-lg: 14px;
+  --pf-touch-target: 44px;
+  --pf-z-workspace: 1400;
+  --pf-z-banner: 1500;
+}
+
+/* Pre-Phase-B dark command palette, preserved as an explicit preference. */
+body.theme-dark {
+  --pf-bg: #040810;
+  --pf-bg-raised: #070d1a;
+  --pf-bg-card: #0b1322;
+  --pf-nav-bg: #070d1a;
+  --pf-nav-text: #e8f0fe;
+  --pf-nav-muted: #6b7fa0;
+  --pf-border: rgba(139, 92, 246, 0.16);
+  --pf-border-strong: rgba(139, 92, 246, 0.35);
+  --pf-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+
+  --pf-navy: #e8f0fe;
+  --pf-gold: #d4af5a;
+  --pf-gold-strong: #e8c97a;
+  --pf-gold-glow: rgba(212, 175, 90, 0.12);
+  --pf-violet: #8b5cf6;
+  --pf-violet-glow: rgba(139, 92, 246, 0.14);
+  --pf-teal: #00d4b4;
+
+  --pf-purple: #6030b1;
+  --pf-purple-bright: #8b5cf6;
+  --pf-purple-glow: rgba(139, 92, 246, 0.14);
+
+  --pf-green: #00e676;
+  --pf-red: #ff3b5c;
+  --pf-amber: #ffb020;
+  --pf-orange: #ff8a3d;
+
+  --pf-text: #e8f0fe;
+  --pf-text-dim: #9fb0cc;
+  --pf-text-muted: #6b7fa0;
+
+  --pf-stage-new: #8b5cf6;
+  --pf-stage-contacted: #00d4b4;
+  --pf-stage-follow_up: #ffb020;
+  --pf-stage-booked: #00e676;
+  --pf-stage-dead: #6b7fa0;
+}
+
+/* Legacy alias: pages that still toggle `light-mode` get the default
+   (warm) palette either way — the class is a no-op under Phase B tokens. */

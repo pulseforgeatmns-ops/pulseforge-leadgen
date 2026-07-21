@@ -7,37 +7,44 @@
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <style>
-:root {
-  --bg: #0a0a0f;
-  --bg1: #12121a;
-  --bg2: #15151f;
-  --bg3: #1b1b26;
-  --bg-primary: #0a0a0f;
-  --bg-secondary: #0d0d14;
-  --bg-card: #12121a;
-  --sidebar: #0d0d14;
-  --accent: #7c4ddb;
-  --accent-light: #a67df5;
-  --purple: #7c4ddb;
-  --purple-bright: #a67df5;
-  --purple-glow: rgba(124,77,219,0.16);
-  --teal: #00d4b4;
-  --teal-dim: rgba(0,212,180,0.12);
-  --orange: #ffaa33;
-  --amber: #ffaa33;
-  --green: #00e676;
-  --green-dim: rgba(0,230,118,0.1);
-  --red: #ff4d6a;
-  --yellow: #ffd600;
-  --white: #f0f0f5;
-  --gray: #5a5a6a;
-  --gray-light: #8a8a9a;
-  --text-primary: #f0f0f5;
-  --text-secondary: #9a9aac;
-  --text-muted: #6a6a7a;
-  --border: rgba(255,255,255,0.06);
-  --border-color: rgba(255,255,255,0.06);
-  --hairline: 0.5px solid rgba(255,255,255,0.06);
+/* Phase B: the Command Center resolves its palette through the shared
+   tokens (tokens.css) so it renders the same warm cream / deep navy / gold
+   shell as Calls. Local variable names are kept so the existing component
+   rules continue to work. body.theme-dark restores the legacy palette. */
+:root, body {
+  --bg: var(--pf-bg);
+  --bg1: var(--pf-bg-card);
+  --bg2: var(--pf-bg-raised);
+  --bg3: var(--pf-bg-card);
+  --bg-primary: var(--pf-bg);
+  --bg-secondary: var(--pf-bg-raised);
+  --bg-card: var(--pf-bg-card);
+  --sidebar: var(--pf-bg-raised);
+  --accent: var(--pf-gold);
+  --accent-light: var(--pf-gold-strong);
+  --purple: var(--pf-violet);
+  --purple-bright: var(--pf-violet);
+  --purple-glow: var(--pf-violet-glow);
+  --gold: var(--pf-gold);
+  --gold-strong: var(--pf-gold-strong);
+  --gold-glow: var(--pf-gold-glow);
+  --teal: var(--pf-teal);
+  --teal-dim: rgba(15,118,110,0.1);
+  --orange: var(--pf-orange);
+  --amber: var(--pf-amber);
+  --green: var(--pf-green);
+  --green-dim: rgba(30,122,69,0.1);
+  --red: var(--pf-red);
+  --yellow: var(--pf-amber);
+  --white: var(--pf-text);
+  --gray: var(--pf-text-muted);
+  --gray-light: var(--pf-text-dim);
+  --text-primary: var(--pf-text);
+  --text-secondary: var(--pf-text-dim);
+  --text-muted: var(--pf-text-muted);
+  --border: var(--pf-border);
+  --border-color: var(--pf-border);
+  --hairline: 0.5px solid var(--pf-border);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -47,41 +54,30 @@ body {
   font-family: 'Inter', 'DM Sans', sans-serif;
   color: var(--white);
   display: grid;
-  grid-template-columns: 200px 1fr;
-  grid-template-rows: 1fr;
+  grid-template-columns: 168px 1fr;
+  grid-template-rows: auto 1fr;
   height: 100vh;
 }
-.sidebar { grid-row: 1; grid-column: 1; }
+/* The shared Pulseforge shell nav (prepended by /shared/shell.js) is the
+   single primary navigation — it spans the full width of row 1. */
+body > .pf-shell-nav { grid-row: 1; grid-column: 1 / -1; }
+.sidebar { grid-row: 2; grid-column: 1; }
 .content-col {
-  grid-row: 1; grid-column: 2;
+  grid-row: 2; grid-column: 2;
   display: flex; flex-direction: column;
   min-width: 0; overflow: hidden;
 }
-body.light-mode {
-  --bg: #f5f5f0;
-  --bg1: #ffffff;
-  --bg2: #eaeae4;
-  --bg3: #ffffff;
-  --bg-primary: #f5f5f0;
-  --bg-secondary: #eaeae4;
-  --bg-card: #ffffff;
-  --white: #1a1a18;
-  --gray-light: #4a4a45;
-  --gray: #8a8a85;
-  --text-primary: #1a1a18;
-  --text-secondary: #4a4a45;
-  --text-muted: #8a8a85;
-  --border: rgba(0,0,0,0.1);
-  --border-color: rgba(0,0,0,0.1);
-  background: var(--bg);
-}
-body, .topbar, .right-panel, .statusbar, .agent-card, .metric-tile,
+/* Phase B: theme variables resolve through tokens.css (warm default,
+   body.theme-dark for the legacy palette). light-mode remains only as a
+   contrast-helper class — it no longer redefines the palette. */
+body.light-mode { background: var(--bg); }
+body, .topbar, .right-panel, .agent-card, .metric-tile,
 .approval-card, .action-card, .an-card, .panel-header, .client-switcher,
 input, select, textarea, table, th, td, .nav-tabs, .btn-outline,
 .btn-run-all, .top-table tr, .prospects-table tr {
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
-body.light-mode .topbar { background: rgba(255,255,255,0.94); }
+body.light-mode .topbar { background: var(--bg); }
 body.light-mode .nav-tabs,
 body.light-mode .client-switcher,
 body.light-mode input,
@@ -89,8 +85,8 @@ body.light-mode select,
 body.light-mode textarea {
   background: rgba(0,0,0,0.035);
 }
-body.light-mode td { color: rgba(26,26,24,0.76); border-bottom-color: rgba(0,0,0,0.06); }
-body.light-mode tr:hover td { background: rgba(139,92,246,0.08); }
+body.light-mode td { color: var(--pf-text-dim); border-bottom-color: rgba(16,32,60,0.07); }
+body.light-mode tr:hover td { background: var(--pf-gold-glow); }
 body.light-mode .ring-track { stroke: rgba(0,0,0,0.08); }
 body.light-mode .approvals-area,
 body.light-mode .approvals-area .area-title,
@@ -127,49 +123,27 @@ body::before {
   z-index: 1000;
 }
 
-/* SIDEBAR */
+/* WORKSPACE TOOL PANEL (Phase B: compact tertiary panel — the shared
+   shell nav above it is the only primary navigation) */
 .sidebar {
-  width: 200px;
+  width: 168px;
   background: var(--sidebar);
   border-right: var(--hairline);
   display: flex;
   flex-direction: column;
-  padding: 1.1rem 0.85rem;
+  padding: 0.9rem 0.7rem;
   overflow: hidden;
   z-index: 100;
 }
-.logo {
-  font-family: 'Inter', sans-serif;
-  font-size: 0.95rem;
-  font-weight: 700;
+.sidebar-caption {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.52rem;
   letter-spacing: 2px;
-  color: var(--white);
-  display: flex; align-items: center; gap: 10px;
+  text-transform: uppercase;
+  color: var(--text-muted);
   padding: 0 0.5rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.75rem;
   flex-shrink: 0;
-}
-.logo-mark {
-  width: 26px; height: 26px;
-  border: 1.5px solid var(--accent-light);
-  border-radius: 7px;
-  display: flex; align-items: center; justify-content: center;
-  position: relative;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-.logo-mark::before {
-  content: '';
-  position: absolute;
-  width: 11px; height: 11px;
-  background: var(--accent-light);
-  border-radius: 50%;
-  box-shadow: 0 0 12px var(--accent-light);
-  animation: logoPulse 3s ease infinite;
-}
-@keyframes logoPulse {
-  0%, 100% { transform: scale(0.8); opacity: 0.8; }
-  50% { transform: scale(1.1); opacity: 1; }
 }
 .sidebar-nav {
   display: flex; flex-direction: column; gap: 2px;
@@ -219,11 +193,11 @@ body::before {
 }
 .nav-tab svg { width: 16px; height: 16px; flex-shrink: 0; stroke-width: 1.75; }
 .nav-tab.active {
-  background: var(--purple-glow);
-  color: var(--accent-light);
-  border-color: rgba(124,77,219,0.3);
+  background: var(--gold-glow);
+  color: var(--gold-strong);
+  border-color: rgba(154,123,45,0.35);
 }
-.nav-tab:hover:not(.active) { color: var(--white); background: rgba(255,255,255,0.03); }
+.nav-tab:hover:not(.active) { color: var(--white); background: rgba(16,32,60,0.05); }
 .nav-tab .tab-badge { margin-left: auto; }
 
 .topbar-right {
@@ -466,15 +440,15 @@ body.light-mode .agent-card:not(.not-configured) {
   text-transform: uppercase;
   padding: 6px 16px;
   border-radius: 5px;
-  border: 1px solid rgba(139,92,246,0.4);
-  background: var(--purple-glow);
-  color: var(--purple-bright);
+  border: 1px solid rgba(154,123,45,0.45);
+  background: var(--gold-glow);
+  color: var(--gold-strong);
   cursor: pointer;
   transition: all 0.2s;
 }
 .btn-run-all:hover {
-  background: rgba(139,92,246,0.25);
-  box-shadow: 0 0 20px rgba(139,92,246,0.3);
+  background: rgba(154,123,45,0.24);
+  box-shadow: 0 0 20px rgba(154,123,45,0.25);
 }
 
 /* Section labels */
@@ -1396,39 +1370,15 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
   padding: 1px 5px; margin-left: 5px; vertical-align: middle; line-height: 1.4;
 }
 
-/* STATUS BAR */
-.statusbar {
-  height: 28px;
-  background: var(--bg-secondary);
-  border-top: var(--hairline);
-  display: flex; align-items: center;
-  padding: 0 1.5rem; gap: 1.5rem;
-  flex-shrink: 0;
-}
-.sb-item {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.56rem; color: var(--text-muted);
-  display: flex; align-items: center; gap: 6px;
-  letter-spacing: 0.5px;
-}
-.sb-item::before {
-  content: '';
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--green); box-shadow: 0 0 6px var(--green);
-}
-.sb-item.warn::before { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
-.sb-item.right::before { display: none; }
-.sb-item span { color: var(--teal); }
-.sb-item.warn span { color: var(--yellow); }
-.sb-item.right { margin-left: auto; color: var(--text-secondary); }
-.sb-item.right { margin-left: auto; }
+/* Phase B: the bottom status bar was removed — one primary navigation
+   system (the shared shell nav) and no duplicate status chrome. */
 
 /* Selected agent detail overlay */
 .agent-detail {
   display: none;
   position: fixed;
-  top: 60px; left: 200px; right: 0; bottom: 28px;
-  background: rgba(10,10,15,0.96);
+  top: 104px; left: 168px; right: 0; bottom: 0;
+  background: var(--bg);
   backdrop-filter: blur(20px);
   z-index: 50;
   padding: 3rem;
@@ -1775,8 +1725,8 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
 .an-chart-wrap { position: relative; height: 180px; }
 .an-chart-wrap canvas { width: 100% !important; }
 .rex-report-card {
-  background: linear-gradient(180deg, rgba(0,230,118,0.06), rgba(18,18,26,0.96));
-  border-color: rgba(0,230,118,0.18);
+  background: linear-gradient(180deg, var(--green-dim), var(--bg1));
+  border-color: rgba(30,122,69,0.22);
 }
 .rex-report-head {
   display: flex;
@@ -2048,8 +1998,8 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
   gap: 0.75rem;
   margin-bottom: 1.25rem;
   padding: 1rem;
-  background: #12121a;
-  border: 1px solid rgba(139,92,246,0.16);
+  background: var(--bg1);
+  border: 1px solid var(--border);
   border-radius: 8px;
 }
 .tl-filter-field {
@@ -2063,14 +2013,14 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
   font-size: 0.56rem;
   letter-spacing: 1.4px;
   text-transform: uppercase;
-  color: rgba(255,255,255,0.42);
+  color: var(--text-muted);
 }
 .tl-select {
   width: 100%;
   height: 34px;
-  background: #0a0a0f;
-  color: rgba(255,255,255,0.86);
-  border: 1px solid rgba(255,255,255,0.08);
+  background: var(--bg2);
+  color: var(--white);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0 0.7rem;
   font-size: 0.74rem;
@@ -2109,11 +2059,11 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
   margin: 1.1rem auto 0;
   border-radius: 50%;
   background: var(--purple);
-  box-shadow: 0 0 0 4px #0a0a0f, 0 0 14px rgba(139,92,246,0.35);
+  box-shadow: 0 0 0 4px var(--bg), 0 0 14px rgba(139,92,246,0.35);
 }
 .tl-card {
-  background: #12121a;
-  border: 1px solid rgba(255,255,255,0.06);
+  background: var(--bg1);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.9rem 1rem;
 }
@@ -2158,7 +2108,7 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
   flex-shrink: 0;
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.63rem;
-  color: rgba(255,255,255,0.44);
+  color: var(--text-muted);
   line-height: 1.5;
   text-align: right;
 }
@@ -2170,8 +2120,8 @@ body.light-mode .actions-empty-text { color: var(--text-secondary); }
 .tl-detail {
   min-width: 0;
   padding: 0.55rem 0.65rem;
-  background: rgba(10,10,15,0.72);
-  border: 1px solid rgba(255,255,255,0.045);
+  background: var(--bg2);
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
 .tl-detail-label {
@@ -2550,9 +2500,6 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
   .activity-feed { touch-action: pan-y; }
   .feed-filter-btn { min-height: 40px; }
 
-  /* ---------- STATUS BAR (hidden on phones) ---------- */
-  .statusbar { display: none; }
-
   /* ---------- AGENT DETAIL OVERLAY ---------- */
   .agent-detail { top: 56px; left: 0; right: 0; bottom: 0; padding: 1.25rem; }
   .agent-detail.open { flex-direction: column; gap: 1.5rem; }
@@ -2560,6 +2507,8 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
   .detail-run-btn { min-height: 48px; }
 }
 </style>
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/shell.css">
 </head>
 <body class="pipeline-experience-pending">
 
@@ -2569,10 +2518,7 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
 <!-- SIDEBAR -->
 <div class="sidebar" id="sidebar">
   <button class="sidebar-close" id="sidebarClose" type="button" aria-label="Close menu">&times;</button>
-  <div class="logo">
-    <div class="logo-mark"></div>
-    PULSEFORGE
-  </div>
+  <div class="sidebar-caption">Workspace views</div>
   <div class="sidebar-nav">
     <div class="nav-tab active" data-tab="agents"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M3 10h2M3 14h2M19 10h2M19 14h2M10 3v2M14 3v2M10 19v2M14 19v2"/></svg>Agents</div>
     <div class="nav-tab" data-tab="approvals"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>Approvals</div>
@@ -2609,13 +2555,8 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
       <span id="agentLivePlannedCount">14 LIVE · 0 PLANNED</span>
     </div>
     <div class="clock" id="clock">--:--:--</div>
-    <button class="theme-toggle" id="themeToggle" type="button" title="Toggle theme">🌙</button>
-    <div class="user-menu" id="userMenu">
-      <div class="user-avatar" id="userAvatar" title="Account">--</div>
-      <div class="user-dropdown" id="userDropdown">
-        <a href="/logout">Logout</a>
-      </div>
-    </div>
+    <!-- Theme toggle, identity, and logout moved to the shared Pulseforge
+         shell nav (Phase B §1) — see /shared/shell.js. -->
   </div>
 </div>
 
@@ -3599,7 +3540,7 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
         <h2>Turn verified prospects into accountable conversations.</h2>
         <p>The call desk keeps the operator in control from assignment through disposition. Calls, texts, and follow-ups are never placed automatically.</p>
         <div class="setter-ops-actions">
-          <a class="setter-ops-primary" href="/setter">Open call desk</a>
+          <a class="setter-ops-primary" href="/setter">Open Calls</a>
           <button class="setter-ops-secondary" type="button" id="pipelineReviewCallbacksBtn">Review callbacks</button>
         </div>
       </div>
@@ -3626,7 +3567,7 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
 
     <div class="pipeline-section setter-ops-grid new-pipeline-only">
       <div class="setter-ops-card" id="setterQueueCard">
-        <div class="setter-ops-card-head"><div><div class="setter-ops-card-title">Priority call queue</div><div class="setter-ops-card-sub">Callbacks first, then highest-priority new prospects</div></div><a class="setter-ops-secondary" href="/setter">Work queue</a></div>
+        <div class="setter-ops-card-head"><div><div class="setter-ops-card-title">Priority call queue</div><div class="setter-ops-card-sub">Callbacks first, then highest-priority new prospects</div></div><a class="setter-ops-secondary" href="/setter">Open Calls</a></div>
         <div class="setter-ops-list" id="setterOpsQueue"><div class="setter-ops-empty">Loading the call queue…</div></div>
       </div>
       <div class="setter-ops-card">
@@ -3688,15 +3629,20 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
   <div class="right-panel" id="rightPanel">
     <div class="sheet-handle" id="sheetHandle"><span></span></div>
     <div class="panel-header" id="panelHeader">
-      <div class="panel-title">COMMAND FEED</div>
-      <div class="panel-sub">Live system activity · Updates in real time</div>
+      <div class="panel-title">ACTIVITY</div>
+      <div class="panel-sub">Consolidated activity · Updates in real time</div>
     </div>
 
     <div class="activity-feed" id="activityFeed">
       <div class="feed-label">Live Activity</div>
-      <div class="feed-filter">
-        <button class="feed-filter-btn active" type="button" data-feed-filter="all">All</button>
-        <button class="feed-filter-btn" type="button" data-feed-filter="warm">Warm signals only</button>
+      <!-- Consolidated activity filters (Phase B §7) — shared taxonomy with
+           the Calls activity panel. Toggles are multi-select. -->
+      <div class="feed-filter" role="group" aria-label="Activity filters">
+        <button class="feed-filter-btn active" type="button" data-feed-filter="prospect" aria-pressed="true">Prospect</button>
+        <button class="feed-filter-btn active" type="button" data-feed-filter="operator" aria-pressed="true">Operator</button>
+        <button class="feed-filter-btn active" type="button" data-feed-filter="agent" aria-pressed="true">Agents</button>
+        <button class="feed-filter-btn active" type="button" data-feed-filter="system" aria-pressed="true">System</button>
+        <button class="feed-filter-btn active" type="button" data-feed-filter="error" aria-pressed="true">Errors</button>
       </div>
       <div id="feedItems">
         <div class="feed-item" style="opacity:0.4;font-size:11px;padding:8px 0;">Loading activity...</div>
@@ -3705,16 +3651,6 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
 
   </div>
 
-</div>
-
-<!-- STATUS BAR -->
-<div class="statusbar">
-  <div class="sb-item">DB <span>CONNECTED</span></div>
-  <div class="sb-item">Railway <span>HEALTHY</span></div>
-  <div class="sb-item">Brevo <span>ACTIVE</span></div>
-  <div class="sb-item warn">Puppeteer <span>LOCAL ONLY</span></div>
-  <div class="sb-item">API <span>OK</span></div>
-  <div class="sb-item right">Pulseforge v0.6.0 · Phase 6 Complete</div>
 </div>
 
 </div><!-- /content-col -->
@@ -3828,22 +3764,8 @@ function applyViewerPermissions() {
   if (rosterSub) rosterSub.textContent = 'Read-only roster · click any agent to view details';
 }
 
-function applyTheme(theme) {
-  const light = theme === 'light';
-  document.body.classList.toggle('light-mode', light);
-  const btn = document.getElementById('themeToggle');
-  if (btn) {
-    btn.textContent = light ? '☀️' : '🌙';
-    btn.title = light ? 'Switch to dark mode' : 'Switch to light mode';
-  }
-}
-
-applyTheme(localStorage.getItem(THEME_KEY) || 'dark');
-document.getElementById('themeToggle')?.addEventListener('click', () => {
-  const next = document.body.classList.contains('light-mode') ? 'dark' : 'light';
-  localStorage.setItem(THEME_KEY, next);
-  applyTheme(next);
-});
+// Theme handling moved to the shared shell (/shared/shell.js), which applies
+// body.light-mode / body.theme-dark for the whole app.
 
 const agentData = {
   scout: { face:'🔍', name:'SCOUT', role:'Lead Scraper', title:'Scout — Lead Scraper', metric:'leads found', desc:'Scout is your prospector. He searches Google and Hunter.io to find local businesses, grabs their contact info, scores each lead 0–100, and loads them into the second brain ready for outreach.', tasks:['Searches Google for businesses by niche and location','Finds owner emails via Hunter.io','Scores each lead 0–100 based on data quality','Exports to CSV or saves direct to the database','Live at pulseforge-leadgen-production.up.railway.app'], ringOffset: 25 },
@@ -4134,27 +4056,9 @@ fetch('/api/me', { credentials: 'include' })
     const switcher = document.querySelector('.client-switcher');
     if (switcher && !isOperator) switcher.remove();
     applyViewerPermissions();
-    const avatar = document.getElementById('userAvatar');
-    if (avatar) {
-      avatar.textContent = computeInitials(user);
-      if (user?.name || user?.email) avatar.title = user.name || user.email;
-    }
     loadAgentVisibility();
   })
   .catch(() => {});
-
-(function setupUserMenu() {
-  const avatar = document.getElementById('userAvatar');
-  const dropdown = document.getElementById('userDropdown');
-  if (!avatar || !dropdown) return;
-  avatar.addEventListener('click', (e) => {
-    e.stopPropagation();
-    dropdown.classList.toggle('open');
-  });
-  document.addEventListener('click', (e) => {
-    if (!dropdown.contains(e.target) && e.target !== avatar) dropdown.classList.remove('open');
-  });
-})();
 
 (function setupMobileNav() {
   const sidebar = document.getElementById('sidebar');
@@ -4472,7 +4376,20 @@ async function runAllLive(btn) {
 }
 
 let _feedItemsCache = [];
-let _feedFilterMode = 'all';
+// Consolidated activity filter set (Phase B §7) — same taxonomy as the Calls
+// activity panel: prospect / operator / agent / system / error.
+const _feedActiveKinds = new Set(['prospect', 'operator', 'agent', 'system', 'error']);
+const _feedAgentNames = new Set(['scout','emmett','riley','paige','vera','max','rex','sam','ivy','link','faye','cal','analytics','sketch','penny','warm signal','handoff_utility']);
+
+function _feedKindOf(item) {
+  const agent = String(item.agent || '').toLowerCase();
+  const action = String(item.raw_action || item.action || '').toLowerCase();
+  if (item.color === 'fi-r' || /\b(error|fail|failed|blocked)\b/.test(action)) return 'error';
+  if (/setter|closer|operator|manual|dashboard user/.test(agent)) return 'operator';
+  if (item.is_warm_signal || item.prospect_id) return 'prospect';
+  if (_feedAgentNames.has(agent)) return 'agent';
+  return 'system';
+}
 let _previewHideTimer = null;
 let _activePreviewProspectId = null;
 let _activeModalProspectId = null;
@@ -4502,9 +4419,7 @@ function renderActivityFeedItems() {
   const container = document.getElementById('feedItems');
   if (!container) return;
   bindActivityFeedDelegation();
-  const visible = _feedFilterMode === 'warm'
-    ? _feedItemsCache.filter(item => item.is_warm_signal)
-    : _feedItemsCache;
+  const visible = _feedItemsCache.filter(item => _feedActiveKinds.has(_feedKindOf(item)));
   if (!visible.length) {
     container.innerHTML = '<div class="feed-item" style="opacity:0.4;font-size:11px;padding:8px 0;">No activity yet.</div>';
     return;
@@ -4739,9 +4654,12 @@ async function loadActivityFeed() {
 
 document.querySelectorAll('[data-feed-filter]').forEach(btn => {
   btn.addEventListener('click', () => {
-    _feedFilterMode = btn.dataset.feedFilter;
-    document.querySelectorAll('[data-feed-filter]').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
+    const kind = btn.dataset.feedFilter;
+    if (_feedActiveKinds.has(kind)) _feedActiveKinds.delete(kind);
+    else _feedActiveKinds.add(kind);
+    const active = _feedActiveKinds.has(kind);
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     renderActivityFeedItems();
   });
 });
@@ -4867,6 +4785,7 @@ function prospectModalHtml(p) {
         <button class="pm-action-btn" type="button" id="pmDnc">Mark do not contact</button>
       ` : ''}
       <button class="pm-action-btn" type="button" onclick="openProspectsFor('${_esc(p.id)}')">View in prospects tab →</button>
+      <button class="pm-action-btn" type="button" onclick="window.PulseforgeWorkspace && (closeProspectModal(), PulseforgeWorkspace.open('${_esc(p.id)}'))">Open workspace ⧉</button>
       <span class="pm-toast" id="pmToast"></span>
       <div class="touch-form" id="pmTouchForm">
         <select class="pm-select" id="pmTouchChannel" title="Channel">
@@ -4908,10 +4827,20 @@ function prospectModalHtml(p) {
     </div>`;
 }
 
+function _pfPhoneHtml(p) {
+  if (!p.phone) return 'No phone';
+  const pf = window.PulseforgePhone;
+  const display = pf ? (pf.formatPhoneDisplay(p.phone) || p.phone) : p.phone;
+  const href = pf ? pf.telHref(p.phone) : `tel:${p.phone}`;
+  return href
+    ? `<a href="${_esc(href)}" data-pf-dial-prospect="${_esc(p.id)}" data-pf-dial-phone="${_esc(p.phone)}" data-pf-dial-name="${_esc(p.name || p.contact_name || '')}">${_esc(display)}</a>`
+    : _esc(display);
+}
+
 function overviewHtml(p) {
   const days = p.created_at ? Math.max(0, Math.floor((Date.now() - new Date(p.created_at)) / 86400000)) : '—';
   return `<div class="pm-grid">
-    <div class="pm-box"><div class="pm-label">Contact</div><div class="pm-value">${_esc(p.email || 'No email')}<br>${_esc(p.phone || 'No phone')}</div></div>
+    <div class="pm-box"><div class="pm-label">Contact</div><div class="pm-value">${_esc(p.email || 'No email')}<br>${_pfPhoneHtml(p)}</div></div>
     <div class="pm-box"><div class="pm-label">Business</div><div class="pm-value">${_esc(p.vertical || 'unknown')} · ${_esc(p.city || '—')}<br>${p.website ? `<a href="${_esc(p.website)}" target="_blank">${_esc(p.website)}</a>` : 'No website'}</div></div>
     <div class="pm-box"><div class="pm-label">Pipeline</div><div class="pm-value">Status: ${_esc(p.status || 'cold')}<br>Setter: ${_esc(p.assigned_setter_name || 'Unassigned')}${p.assigned_setter_email ? `<br>${_esc(p.assigned_setter_email)}` : ''}<br>Closer: ${_esc(p.closer_name || p.closer_id || '—')}</div></div>
     <div class="pm-box"><div class="pm-label">Stats</div><div class="pm-value">${p.open_count || 0} opens · ${p.send_count || 0} sends<br>${days} days in pipeline</div></div>
@@ -6041,7 +5970,7 @@ function _renderTimeline() {
     const color = _timelineMarkerColor(item);
     const agentLabel = item.agent || 'System';
     return `<div class="tl-item">
-      <div class="tl-marker" style="background:${color};box-shadow:0 0 0 4px #0a0a0f,0 0 14px ${color}66"></div>
+        <div class="tl-marker" style="background:${color};box-shadow:0 0 0 4px var(--bg),0 0 14px ${color}66"></div>
       <div class="tl-card">
         <div class="tl-head">
           <div class="tl-title-row">
@@ -6992,12 +6921,16 @@ function setterOpsLeadRow(lead, callback = false) {
   const when = callback && lead.callback_at
     ? new Date(lead.callback_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
     : `${Number(lead.attempt_count || 0)} attempt${Number(lead.attempt_count || 0) === 1 ? '' : 's'}`;
-  const phone = lead.phone || 'Phone missing';
+  const pf = window.PulseforgePhone;
+  const phoneHtml = lead.phone
+    ? `<a href="${_esc(pf ? pf.telHref(lead.phone) : `tel:${lead.phone}`)}" data-pf-dial-prospect="${_esc(lead.id)}" data-pf-dial-phone="${_esc(lead.phone)}" data-pf-dial-name="${_esc(lead.business_name || '')}">${_esc(pf ? (pf.formatPhoneDisplay(lead.phone) || lead.phone) : lead.phone)}</a>`
+    : 'Phone missing';
   const priority = lead.priority_reason || lead.vertical || 'General queue';
   return `<div class="setter-ops-row">
     <div><div class="setter-ops-name">${_esc(lead.business_name || lead.contact_name || 'Unnamed prospect')}</div><div class="setter-ops-meta">${_esc(priority)}</div></div>
-    <div class="setter-ops-time">${_esc(phone)}</div>
+    <div class="setter-ops-time">${phoneHtml}</div>
     <div class="setter-ops-time">${_esc(when)}</div>
+    <button class="setter-ops-secondary" type="button" onclick="window.PulseforgeWorkspace && PulseforgeWorkspace.open('${_esc(lead.id)}')">Workspace</button>
     <a class="setter-ops-secondary" href="/setter?lead=${encodeURIComponent(lead.id)}">Open</a>
   </div>`;
 }
@@ -7583,6 +7516,39 @@ function updateAgentCounts() {
 }
 updateAgentCounts();
 
+</script>
+
+<!-- Pulseforge shared foundation (Phase A2): unified shell, canonical
+     prospect workspace, dial handoff continuity, accessibility helpers. -->
+<script src="/shared/accessibility.js"></script>
+<script src="/shared/api-client.js"></script>
+<script src="/shared/phone.js"></script>
+<script src="/shared/lifecycle.js"></script>
+<script src="/shared/prospect-workspace.js"></script>
+<script src="/shared/shell.js"></script>
+<script>
+// Phase A2 wiring: dial handoff for tel: links rendered by this page, and
+// canonical-lifecycle refresh so Pipeline reflects workspace writes.
+(function () {
+  document.addEventListener('click', event => {
+    const dialLink = event.target.closest('a[data-pf-dial-prospect]');
+    if (!dialLink || !window.PulseforgePhone) return;
+    event.preventDefault();
+    event.stopPropagation();
+    window.PulseforgePhone.beginDialHandoff({
+      prospectId: dialLink.dataset.pfDialProspect,
+      phone: dialLink.dataset.pfDialPhone,
+      companyName: dialLink.dataset.pfDialName || null,
+      workspaceRoute: window.location.pathname,
+    });
+  }, true);
+
+  document.addEventListener('pulseforge:lifecycle-changed', () => {
+    if (typeof loadProspectPipeline === 'function') loadProspectPipeline().catch(() => {});
+    if (typeof loadSetterOperations === 'function') loadSetterOperations();
+    if (typeof loadProspects === 'function') loadProspects();
+  });
+})();
 </script>
 </body>
 </html>

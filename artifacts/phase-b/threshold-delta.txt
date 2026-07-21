@@ -1,0 +1,39 @@
+◇ injected env (24) from .env // tip: ◈ secrets for agents [www.dotenvx.com]
+Threshold delta report — generated 2026-07-21T17:28:47.591Z
+Current queue display threshold: 40
+Visibility promotion threshold:  70
+TOTALS  at>=40: 82  at>=70: 71  delta: 11  reduction: 13.4%
+
+Client 1 (Pulseforge)
+  Queue at >= 40: 5
+  Queue at >= 70: 4
+  Would be excluded: 1 (20%)
+  Vertical distribution (scores 40–69):
+    auto_repair: 1
+  Historical outcomes (scores 40–69, latest disposition):
+    (no disposition logged): 1
+  Affected prospect ids (1): cf4adec6-147d-44ce-9156-7b66ee713925
+
+Client 2 (Mountain State Home Innovations)
+  Queue at >= 40: 8
+  Queue at >= 70: 8
+  Would be excluded: 0 (0%)
+
+Client 5 (Pulseforge Nashville)
+  Queue at >= 40: 3
+  Queue at >= 70: 3
+  Would be excluded: 0 (0%)
+
+Client 10 (Anchor Cleaning)
+  Queue at >= 40: 66
+  Queue at >= 70: 56
+  Would be excluded: 10 (15.2%)
+  Vertical distribution (scores 40–69):
+    law_firm: 8
+    accounting: 2
+  Historical outcomes (scores 40–69, latest disposition):
+    (no disposition logged): 8
+    gatekeeper_relayed: 2
+  Affected prospect ids (10): e848bd05-9ed6-4441-ab8f-6a599d00cba2, 53a10c4d-0e22-4c3e-bae1-6ea609536aa8, 45327522-2524-4419-a835-5f023c97b330, 93e7dcef-29b9-44ed-be2f-d1e2fa8b2efa, 2562943d-ded3-4901-b9bd-813aae5253d1, 969e4688-f57d-4854-ba5c-4ebe82c04cc3, 734c97c7-6f2a-4e5b-a7db-52684209e817, b9025611-0885-4506-aa81-34d00ff5db97, 6a0db065-9d45-43ce-bada-a1e100fa60eb, 19272976-8e44-4c1c-ad62-e3a5248f0a4a
+
+No production change is made by this report. Queue membership stays at the current threshold until explicitly approved.
