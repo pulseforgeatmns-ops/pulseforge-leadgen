@@ -212,12 +212,16 @@ function finalizeAuthorization(options) {
     throw new Error(`Refusing to overwrite existing signed authorization: ${options.output}`);
   }
 
-  const approvedAt = options.approvedAt || new Date().toISOString();
+  // Capture one finalization instant. When approved_at is omitted, default to
+  // that exact UTC stamp so the value cannot drift past the post-finalization
+  // observation used by callers/tests. Supplied approved_at is preserved as-is.
+  const finalizedMs = Date.now();
+  const approvedAt = options.approvedAt || new Date(finalizedMs).toISOString();
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(approvedAt)
     || Number.isNaN(Date.parse(approvedAt))) {
     throw new Error('approved_at must be a UTC ISO-8601 timestamp');
   }
-  if (Date.parse(approvedAt) > Date.now() + 60000) {
+  if (Date.parse(approvedAt) > finalizedMs + 60000) {
     throw new Error('approved_at must not be in the future');
   }
 
@@ -253,7 +257,7 @@ function finalizeAuthorization(options) {
   signed.execution_readiness.ready_to_sign_blockers = 'none';
   signed.execution_readiness.repository_gaps_requiring_offline_implementation_and_review_before_signing = [];
   signed.finalization = {
-    finalized_at: new Date().toISOString(),
+    finalized_at: new Date(finalizedMs).toISOString(),
     finalized_from_draft_hash: EXPECTED_DRAFT_HASH,
     finalizer: 'scripts/finalizeRevenuePhase16bAuthorization.js',
     validation_mode: 'offline_structural_no_database',
@@ -263,8 +267,17 @@ function finalizeAuthorization(options) {
   // Structural validation without database connectivity, evaluated at a
   // simulated instant inside the authorization window. This proves the
   // signed document itself is complete and internally consistent.
+  // Prefer one minute after window start; if approved_at is later (common when
+  // defaulting to the finalization clock after the window has opened), evaluate
+  // at the approval instant so approved_at is never treated as "in the future"
+  // relative to the simulated now. Never leave the authorization window.
   const windowStart = Date.parse(signed.window.start);
-  const inWindowInstant = new Date(windowStart + 60000);
+  const windowEnd = Date.parse(signed.window.end);
+  const approvedMs = Date.parse(approvedAt);
+  let structuralNowMs = windowStart + 60000;
+  if (approvedMs > structuralNowMs) structuralNowMs = approvedMs;
+  if (structuralNowMs > windowEnd) structuralNowMs = windowEnd;
+  const inWindowInstant = new Date(structuralNowMs);
   const structural = validatePhase16bAuthorization(signed, {
     now: inWindowInstant,
     observed: offlineObservedEvidence(signed, inWindowInstant.toISOString()),
