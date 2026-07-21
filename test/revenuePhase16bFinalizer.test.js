@@ -121,9 +121,12 @@ test('finalizer defaults approved_at to the current UTC time when not supplied',
   const options = baseOptions({ approvedAt: undefined });
   delete options.approvedAt;
   const result = finalizeAuthorization(options);
+  const after = Date.now();
   const approvedAt = Date.parse(result.approved_at);
-  assert.ok(approvedAt >= before && approvedAt <= Date.now(),
+  assert.ok(approvedAt >= before && approvedAt <= after,
     'default approved_at must be the finalization instant in UTC');
+  assert.match(result.approved_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    'default approved_at must be a millisecond UTC ISO-8601 timestamp');
 });
 
 test('finalizer rejects every altered immutable draft value', () => {
