@@ -23,6 +23,8 @@ const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('../
 const { autorun: autorunEmmett } = require('../utils/emmettAutosend');
 const { applyManualLifecycleOverride } = require('../utils/maxManualOverride');
 const { notSyntheticSql } = require('../utils/callDispositions');
+const { transitionProspectLifecycle } = require('../services/lifecycleService');
+const { SETTER_QUEUE_DISPLAY_THRESHOLD } = require('../utils/qualificationThreshold');
 
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
@@ -365,7 +367,10 @@ router.get('/api/pipeline/setters', requireDashboardRead, async (req, res) => {
           AND COALESCE(setter_visible, false) = true
           AND COALESCE(do_not_contact, false) = false
           AND COALESCE(is_synthetic, false) = false
-          AND COALESCE(icp_score, 0) >= 40
+          AND COALESCE(icp_score, 0) >= COALESCE(
+            (SELECT setter_qualification_threshold FROM clients WHERE id = $1),
+            ${SETTER_QUEUE_DISPLAY_THRESHOLD}
+          )
       ), calls AS (
         SELECT setter_id::text AS setter_id, COUNT(*)::int AS calls_today
         FROM activity_log al
@@ -1288,6 +1293,28 @@ router.patch('/api/prospects/:id/status', requireOperator, async (req, res) => {
     const clientId = getRequestClientId(req);
     const status = String(req.body.status || '').toLowerCase();
     if (!['cold', 'contacted', 'warm', 'dead', 'disqualified', 'closed'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    // Phase A2 convergence: terminal statuses are canonical stage changes and
+    // must flow through the one lifecycle writer so setter_status stays
+    // consistent and a transition event is recorded. Non-terminal statuses
+    // remain on the legacy email-lifecycle axis and do not move the canonical
+    // stage.
+    if (['dead', 'disqualified'].includes(status)) {
+      try {
+        await transitionProspectLifecycle({
+          clientId,
+          prospectId: req.params.id,
+          targetStage: 'dead',
+          statusOverride: status,
+          reason: String(req.body.reason || `Marked ${status} from dashboard`).slice(0, 2000),
+          actor: { type: 'user', id: req.user?.id, name: req.user?.name, role: req.user?.role },
+          source: 'dashboard_status_endpoint',
+        });
+      } catch (transitionErr) {
+        if (transitionErr.code === 'PROSPECT_NOT_FOUND') return res.status(404).json({ error: 'Prospect not found' });
+        throw transitionErr;
+      }
+      return res.json({ success: true, prospect: await selectUpdatedProspect(req.params.id, clientId) });
+    }
     const result = await pool.query(
       'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3 RETURNING id',
       [status, req.params.id, clientId]

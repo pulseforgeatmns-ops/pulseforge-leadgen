@@ -39,6 +39,7 @@ const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { ensureScoutLockTable } = require('./utils/scoutLock');
 const { ensureCallDispositionSchema } = require('./calBatchAgent');
 const { ensureMiraSchema } = require('./utils/miraSchema');
+const { ensureLifecycleSchema } = require('./utils/lifecycleSchema');
 const { startMiraTranscriptionWorker } = require('./miraTranscriptionAgent');
 const { startMiraClassifierWorker } = require('./miraClassifierAgent');
 const { startMiraRouterWorker } = require('./miraRouterAgent');
@@ -64,6 +65,7 @@ ensureScoutUnenrichedTable().catch(err => console.error('[scoutUnenriched] init 
 ensureScoutLockTable().catch(err => console.error('[scoutLock] init error:', err.message));
 ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init error:', err.message));
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
+ensureLifecycleSchema(pool).catch(err => console.error('[lifecycle] init error:', err.message));
 startMiraTranscriptionWorker();
 startMiraClassifierWorker();
 startMiraRouterWorker();
@@ -125,6 +127,9 @@ app.use((req, res, next) => {
   }
   return next();
 });
+// Phase A2 shared frontend foundation (tokens, shell, workspace modules)
+// loaded by both dashboard.html and setter-dashboard.html.
+app.use('/shared', express.static(path.join(__dirname, 'public', 'shared')));
 app.use(express.static(__dirname));
 
 // Recover from malformed JSON bodies so cron routes can still read req.query.secret
@@ -170,6 +175,7 @@ const SKIP_DOMAINS = [
 app.use('/', require('./routes/webhooks'));
 app.use('/', require('./routes/cron'));
 app.use('/', require('./routes/api'));
+app.use('/', require('./routes/workspace'));
 app.use('/', require('./routes/maxChat'));
 app.use('/', require('./routes/approvals'));
 app.use('/', require('./routes/users'));

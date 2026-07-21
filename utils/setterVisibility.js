@@ -1,6 +1,10 @@
 'use strict';
 
-const SETTER_ICP_THRESHOLD = 70;
+// Threshold authority moved to utils/qualificationThreshold.js (Phase A2 §11).
+// The re-export below keeps every existing consumer working unchanged.
+const { SETTER_VISIBILITY_THRESHOLD } = require('./qualificationThreshold');
+
+const SETTER_ICP_THRESHOLD = SETTER_VISIBILITY_THRESHOLD;
 const TERMINAL_PROSPECT_STATUSES = new Set(['dead', 'disqualified', 'bounced', 'do_not_email']);
 const AUTOMATED_REASONS = new Set(['scout', 'handoff', 'recompute']);
 const OVERRIDE_REASONS = new Set(['manual', 'engagement']);

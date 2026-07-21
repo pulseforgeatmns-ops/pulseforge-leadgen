@@ -10,7 +10,6 @@ const { ensureSetterVisibilitySchema, setSetterVisibility } = require('../utils/
 const { normalizeClientId } = require('../utils/clientContext');
 const {
   DISPOSITION_SET,
-  applyProspectDisposition,
   ensureCallDispositionSchema,
   resolveCallbackAt,
 } = require('../utils/callDispositions');
@@ -30,6 +29,13 @@ const {
   validateStructuredDetails,
 } = require('../utils/anchorPhoneSetter');
 const { featuresFromFlag } = require('../utils/pipelineExperience');
+const { SETTER_QUEUE_DISPLAY_THRESHOLD, SETTER_VISIBILITY_THRESHOLD } = require('../utils/qualificationThreshold');
+const { ensureLifecycleSchema } = require('../utils/lifecycleSchema');
+const {
+  dispositionStageEffects,
+  scheduleProspectCallback,
+  transitionProspectLifecycle,
+} = require('../services/lifecycleService');
 
 const router = express.Router();
 
@@ -94,6 +100,7 @@ async function ensureSetterSchema() {
   await ensureCloserSchema();
   await ensureSetterVisibilitySchema(pool);
   await ensureCallDispositionSchema(pool);
+  await ensureLifecycleSchema(pool);
   await pool.query(`
     ALTER TABLE prospects
     ADD COLUMN IF NOT EXISTS notes TEXT,
@@ -135,8 +142,8 @@ async function ensureSetterSchema() {
 
 function scoreBand(score) {
   const n = Number(score || 0);
-  if (n >= 70) return 'high';
-  if (n >= 40) return 'mid';
+  if (n >= SETTER_VISIBILITY_THRESHOLD) return 'high';
+  if (n >= SETTER_QUEUE_DISPLAY_THRESHOLD) return 'mid';
   return 'low';
 }
 
@@ -184,6 +191,10 @@ function mapLead(row) {
     client_id: Number(row.client_id),
     category_priority: Number(row.category_priority || 99),
     priority_reason: row.priority_reason || null,
+    last_disposition: row.last_disposition || null,
+    last_disposition_at: row.last_disposition_at || null,
+    lifecycle_reason: row.lifecycle_reason || null,
+    mrr_value: row.mrr_value != null ? Number(row.mrr_value) : null,
     phone_setter_v1: isAnchorPhoneSetter(row.client_id),
   };
 }
@@ -224,7 +235,25 @@ async function getLeads(where = '', params = [], limit = 250, orderBy = DEFAULT_
         FROM call_dispositions cd
         WHERE cd.prospect_id = p.id
           AND cd.client_id = p.client_id
-      )) AS attempt_count
+      )) AS attempt_count,
+      (
+        SELECT cd.disposition
+        FROM call_dispositions cd
+        WHERE cd.prospect_id = p.id AND cd.client_id = p.client_id
+        ORDER BY cd.created_at DESC LIMIT 1
+      ) AS last_disposition,
+      (
+        SELECT cd.created_at
+        FROM call_dispositions cd
+        WHERE cd.prospect_id = p.id AND cd.client_id = p.client_id
+        ORDER BY cd.created_at DESC LIMIT 1
+      ) AS last_disposition_at,
+      (
+        SELECT ple.lifecycle_reason
+        FROM prospect_lifecycle_events ple
+        WHERE ple.prospect_id = p.id AND ple.client_id = p.client_id
+        ORDER BY ple.created_at DESC LIMIT 1
+      ) AS lifecycle_reason
     FROM prospects p
     LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     WHERE p.source = 'scout'
@@ -233,7 +262,10 @@ async function getLeads(where = '', params = [], limit = 250, orderBy = DEFAULT_
         (COALESCE(p.is_synthetic, false) = false AND COALESCE(p.do_not_contact, false) = false)
         OR ($${testParam}::boolean = true AND COALESCE(p.is_synthetic, false) = true)
       )
-      AND COALESCE(p.icp_score, 0) >= 40
+      AND COALESCE(p.icp_score, 0) >= COALESCE(
+        (SELECT setter_qualification_threshold FROM clients WHERE id = p.client_id),
+        ${SETTER_QUEUE_DISPLAY_THRESHOLD}
+      )
       ${clientScope}
       ${where}
     ORDER BY ${sort}
@@ -384,7 +416,10 @@ async function metricsHandler(req, res) {
         AND COALESCE(setter_visible, false) = true
         AND COALESCE(do_not_contact, false) = false
         AND COALESCE(is_synthetic, false) = false
-        AND COALESCE(icp_score, 0) >= 40
+        AND COALESCE(icp_score, 0) >= COALESCE(
+          (SELECT setter_qualification_threshold FROM clients c2 WHERE c2.id = prospects.client_id),
+          ${SETTER_QUEUE_DISPLAY_THRESHOLD}
+        )
         ${clientScope}
     `, params);
     const m = rows[0] || {};
@@ -753,9 +788,76 @@ router.get(['/api/quality/suppression-verification', '/quality/suppression-verif
   }
 });
 
+// Booked handoff side effects, shared by the Pipeline stage move (PATCH
+// status) and the meeting_booked call disposition so both paths produce the
+// same canonical result. Runs inside the caller's transaction. Idempotent:
+// closer assignment uses COALESCE and the agent_actions handoff card is only
+// inserted when no pending card exists for this prospect. Email is returned
+// as a thunk for the caller to fire AFTER commit.
+async function applyBookedHandoff(client, {
+  req,
+  clientId,
+  prospectRow,
+  handoffNote,
+  existingHandoffActionId = null,
+}) {
+  const anchorPhoneSetter = isAnchorPhoneSetter(clientId);
+  const closer = anchorPhoneSetter ? null : await getLeviCloser(clientId);
+  const notes = appendHandoffNote(prospectRow.notes, handoffNote);
+  const updated = await client.query(`
+    UPDATE prospects
+    SET closer_id = CASE WHEN $1 THEN closer_id ELSE COALESCE($2, closer_id) END,
+        closer_status = CASE WHEN $1 THEN closer_status ELSE 'booked' END,
+        assigned_setter_id = COALESCE(assigned_setter_id, $3),
+        notes = $4
+    WHERE id = $5 AND client_id = $6
+    RETURNING *
+  `, [
+    anchorPhoneSetter, closer?.id || null,
+    req.user?.role === 'setter' ? req.user.id : null,
+    notes, prospectRow.id, clientId,
+  ]);
+  const row = { ...updated.rows[0], company_name: prospectRow.company_name };
+
+  let handoff;
+  let sendEmail = null;
+  if (closer && !anchorPhoneSetter) {
+    const description = handoffDescription(row, setterNotes(row.notes));
+    if (!existingHandoffActionId) {
+      await client.query(`
+        INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, client_id)
+        VALUES ('setter', 'closer_handoff', $1, $2, $3, 'pending', $4)
+      `, [
+        `New booked call — ${businessName(row)}`,
+        description,
+        JSON.stringify({
+          prospect_id: row.id,
+          setter_id: req.user?.id || null,
+          closer_id: closer.id,
+        }),
+        row.client_id,
+      ]);
+      sendEmail = async () => sendCloserHandoffEmail(closer, row, description);
+    }
+    handoff = {
+      assigned: true,
+      closer_id: closer.id,
+      closer_name: closer.name,
+      emailed: false,
+      duplicate_handoff_prevented: Boolean(existingHandoffActionId),
+    };
+  } else if (anchorPhoneSetter) {
+    handoff = { assigned: false, reason: 'Anchor walkthrough recorded; no closer email or agent handoff is permitted' };
+  } else {
+    handoff = { assigned: false, reason: 'No active closer user found' };
+  }
+  return { row, handoff, sendEmail };
+}
+
 router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite, async (req, res) => {
   const { status } = req.body;
   if (!STAGES.includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  const client = await pool.connect();
   try {
     await ensureSetterSchema();
     const clientId = setterClientId(req);
@@ -766,98 +868,70 @@ router.patch(['/api/leads/:id/status', '/leads/:id/status'], requireSetterWrite,
     if (status === 'dead' && !handoffNote.trim()) {
       return res.status(400).json({ error: 'Disqualified prospects require a reason' });
     }
-    let rows;
-    let handoff = null;
 
-    if (status === 'booked') {
-      const current = await pool.query(`
-        SELECT *
-        FROM prospects
-        WHERE id = $1 AND source = 'scout' AND client_id = $2
-          AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
-      `, [req.params.id, clientId]);
-      if (!current.rows.length) return res.status(404).json({ error: 'Lead not found' });
-
-      const anchorPhoneSetter = isAnchorPhoneSetter(clientId);
-      const closer = anchorPhoneSetter ? null : await getLeviCloser(clientId);
-      const notes = appendHandoffNote(current.rows[0].notes, handoffNote);
-      const update = await pool.query(`
-        UPDATE prospects
-        SET setter_status = 'booked',
-            setter_updated_at = NOW(),
-            booked_at = COALESCE(booked_at, NOW()),
-            closer_id = CASE WHEN $1 THEN closer_id ELSE COALESCE($2, closer_id) END,
-            closer_status = CASE WHEN $1 THEN closer_status ELSE 'booked' END,
-            assigned_setter_id = COALESCE(assigned_setter_id, $3),
-            notes = $4
-        WHERE id = $5 AND source = 'scout' AND client_id = $6
-          AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
-        RETURNING *
-      `, [anchorPhoneSetter, closer?.id || null, req.user?.role === 'setter' ? req.user.id : null, notes, req.params.id, clientId]);
-      const visibleRow = update.rows.length
-        ? await setSetterVisibility(pool, req.params.id, {
-            reason: 'stage_change',
-            source: 'scout',
-            stageStatus: 'booked',
-            clientId,
-          })
-        : null;
-      rows = visibleRow ? [visibleRow] : [];
-
-      if (closer && !anchorPhoneSetter) {
-        const description = handoffDescription(rows[0], setterNotes(rows[0].notes));
-        await pool.query(`
-          INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, client_id)
-          VALUES ('setter', 'closer_handoff', $1, $2, $3, 'pending', $4)
-        `, [
-          `New booked call — ${businessName(rows[0])}`,
-          description,
-          JSON.stringify({
-            prospect_id: rows[0].id,
-            setter_id: req.user?.id || null,
-            closer_id: closer.id,
-          }),
-          rows[0].client_id,
-        ]);
-
-        let emailed = false;
-        try {
-          emailed = await sendCloserHandoffEmail(closer, rows[0], description);
-        } catch (emailErr) {
-          console.error('[setter] closer handoff email error:', emailErr.response?.data || emailErr.message);
-        }
-        handoff = { assigned: true, closer_id: closer.id, closer_name: closer.name, emailed };
-      } else if (anchorPhoneSetter) {
-        handoff = { assigned: false, reason: 'Anchor walkthrough recorded; no closer email or agent handoff is permitted' };
-      } else {
-        handoff = { assigned: false, reason: 'No active closer user found' };
-      }
-    } else {
-      const update = await pool.query(`
-        UPDATE prospects
-        SET setter_status = $1,
-            status = CASE WHEN $1 = 'dead' THEN 'dead' ELSE status END,
-            notes = CASE WHEN $1 = 'dead' THEN CONCAT(COALESCE(notes, ''), E'\n\nDisqualification reason: ', $4) ELSE notes END,
-            setter_updated_at = NOW()
-        WHERE id = $2 AND source = 'scout' AND client_id = $3
-          AND COALESCE(setter_visible, false) = true AND COALESCE(do_not_contact, false) = false
-        RETURNING *
-      `, [status, req.params.id, clientId, handoffNote.trim()]);
-      const visibleRow = update.rows.length
-        ? await setSetterVisibility(pool, req.params.id, {
-            reason: 'stage_change',
-            source: 'scout',
-            stageStatus: status,
-            clientId,
-          })
-        : null;
-      rows = visibleRow ? [visibleRow] : [];
+    // Canonical path: the Pipeline stage move and the setter call disposition
+    // both flow through transitionProspectLifecycle — one lifecycle writer.
+    await client.query('BEGIN');
+    let transition;
+    try {
+      transition = await transitionProspectLifecycle({
+        db: client,
+        clientId,
+        prospectId: req.params.id,
+        targetStage: status,
+        reason: status === 'dead' ? handoffNote.trim() : null,
+        handoffNote: status === 'booked' ? handoffNote.trim() : null,
+        requireVisible: true,
+        requireSource: 'scout',
+        actor: { type: 'user', id: req.user?.id, name: req.user?.name, role: req.user?.role },
+        source: 'setter_status_endpoint',
+      });
+    } catch (transitionErr) {
+      await client.query('ROLLBACK');
+      if (transitionErr.code === 'PROSPECT_NOT_FOUND') return res.status(404).json({ error: 'Lead not found' });
+      if (transitionErr.status) return res.status(transitionErr.status).json({ error: transitionErr.message });
+      throw transitionErr;
     }
-    if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
-    res.json({ success: true, lead: mapLead(rows[0]), handoff });
+
+    let handoff = null;
+    let sendEmail = null;
+    let row = transition.prospect;
+    if (status === 'booked') {
+      const applied = await applyBookedHandoff(client, {
+        req,
+        clientId,
+        prospectRow: row,
+        handoffNote,
+        existingHandoffActionId: transition.handoff?.existingHandoffActionId || null,
+      });
+      row = applied.row;
+      handoff = applied.handoff;
+      sendEmail = applied.sendEmail;
+    }
+    await client.query('COMMIT');
+
+    const visibleRow = await setSetterVisibility(pool, req.params.id, {
+      reason: 'stage_change',
+      source: 'scout',
+      stageStatus: status,
+      clientId,
+    });
+    if (visibleRow) row = { ...visibleRow, company_name: row.company_name };
+
+    if (sendEmail && handoff) {
+      try {
+        handoff.emailed = await sendEmail();
+      } catch (emailErr) {
+        console.error('[setter] closer handoff email error:', emailErr.response?.data || emailErr.message);
+      }
+    }
+    res.json({ success: true, lead: mapLead(row), handoff });
   } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_rollbackErr) {}
     console.error('[setter] status error:', err.message);
     res.status(500).json({ error: 'Unable to update status' });
+  } finally {
+    client.release();
   }
 });
 
@@ -891,7 +965,6 @@ router.patch(['/api/leads/:id/notes', '/leads/:id/notes'], requireSetterWrite, a
 });
 
 router.patch(['/api/leads/:id/callback', '/leads/:id/callback'], requireSetterWrite, async (req, res) => {
-  const client = await pool.connect();
   try {
     await ensureSetterSchema();
     const clientId = setterClientId(req);
@@ -899,38 +972,22 @@ router.patch(['/api/leads/:id/callback', '/leads/:id/callback'], requireSetterWr
     if (callbackAt && Number.isNaN(callbackAt.getTime())) {
       return res.status(400).json({ error: 'Invalid callback time' });
     }
-    await client.query('BEGIN');
-    const { rows } = await client.query(`
-      UPDATE prospects
-      SET callback_at = $1, updated_at = NOW()
-      WHERE id = $2 AND source = 'scout' AND client_id = $3
-        AND COALESCE(setter_visible, false) = true
-        AND (COALESCE(do_not_contact, false) = false OR COALESCE(is_synthetic, false) = true)
-      RETURNING *
-    `, [callbackAt ? callbackAt.toISOString() : null, req.params.id, clientId]);
-    if (!rows.length) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Lead not found' });
-    }
-    await client.query(`
-      UPDATE setter_callbacks
-      SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
-      WHERE client_id = $1 AND prospect_id = $2 AND status = 'pending'
-    `, [clientId, req.params.id]);
-    if (callbackAt) {
-      await client.query(`
-        INSERT INTO setter_callbacks (client_id, prospect_id, due_at, created_by, is_synthetic)
-        VALUES ($1, $2, $3, $4, $5)
-      `, [clientId, req.params.id, callbackAt.toISOString(), req.user?.id || null, Boolean(rows[0].is_synthetic)]);
-    }
-    await client.query('COMMIT');
-    res.json({ success: true, lead: mapLead(rows[0]) });
+    // Canonical callback write path — atomically updates both callback stores
+    // (prospects.callback_at + setter_callbacks) and records the audit event.
+    const result = await scheduleProspectCallback({
+      clientId,
+      prospectId: req.params.id,
+      callbackAt,
+      requireVisible: true,
+      requireSource: 'scout',
+      actor: { type: 'user', id: req.user?.id, name: req.user?.name },
+      source: 'setter_callback_endpoint',
+    });
+    res.json({ success: true, lead: mapLead(result.prospect) });
   } catch (err) {
-    try { await client.query('ROLLBACK'); } catch (_rollbackErr) {}
+    if (err.code === 'PROSPECT_NOT_FOUND') return res.status(404).json({ error: 'Lead not found' });
     console.error('[setter] callback error:', err.message);
     res.status(500).json({ error: 'Unable to update callback' });
-  } finally {
-    client.release();
   }
 });
 
@@ -1039,6 +1096,9 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
         return res.status(400).json({ error: 'All-set nurture callback must be 60 to 120 days out' });
       }
     }
+    if (disposition === 'do_not_call' && requestedCallback) {
+      return res.status(400).json({ error: 'Do-not-call is terminal — a callback cannot be scheduled' });
+    }
 
     let structuredNotes;
     try {
@@ -1125,22 +1185,9 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
       insertedDisposition.review_status = 'pending';
     }
 
-    await client.query(`
-      UPDATE setter_callbacks
-      SET status = 'completed', completed_at = NOW(), completed_by_disposition_id = $1, updated_at = NOW()
-      WHERE client_id = $2 AND prospect_id = $3 AND status = 'pending'
-    `, [insertedDisposition.id, prospect.client_id, prospect.id]);
-    if (callbackAt) {
-      await client.query(`
-        INSERT INTO setter_callbacks
-          (client_id, prospect_id, source_disposition_id, due_at, created_by, is_synthetic)
-        VALUES ($1, $2, $3, $4, $5, $6)
-      `, [prospect.client_id, prospect.id, insertedDisposition.id, callbackAt, setterId, Boolean(prospect.is_synthetic)]);
-    }
-
     const sentiment = disposition === 'answered_interested'
       ? 'positive'
-      : ['answered_not_interested', 'wrong_number', 'disconnected', 'gatekeeper_blocked'].includes(disposition)
+      : ['answered_not_interested', 'wrong_number', 'disconnected', 'gatekeeper_blocked', 'do_not_call'].includes(disposition)
         ? 'negative'
         : 'neutral';
     const outcome = JSON.stringify({
@@ -1167,12 +1214,49 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
       prospect.client_id,
     ]);
 
-    const updated = await applyProspectDisposition(client, {
-      prospectId: prospect.id,
+    // Canonical lifecycle path (Phase A2). Same transactional service as the
+    // Pipeline stage move: maps the disposition to a canonical stage, locks
+    // the row, updates status/setter_status through the mapping layer,
+    // reconciles both callback stores, and writes one transition event.
+    const effects = dispositionStageEffects(disposition);
+    const transition = await transitionProspectLifecycle({
+      db: client,
       clientId: prospect.client_id,
+      prospectId: prospect.id,
+      targetStage: effects.stage,
       disposition,
-      callbackAt,
+      dispositionId: insertedDisposition.id,
+      callback: { at: callbackAt, mode: 'complete', completedByDispositionId: insertedDisposition.id },
+      statusOverride: effects.statusOverride || null,
+      preserveStatus: Boolean(effects.preserveStatus),
+      clearPhone: Boolean(effects.clearPhone),
+      suppress: Boolean(effects.suppress),
+      lifecycleReason: effects.lifecycleReason || null,
+      isHot: effects.isHot,
+      handoffNote: disposition === 'meeting_booked' ? (structuredNotes?.next_step || notes || null) : null,
+      requireVisible: true,
+      requireSource: 'scout',
+      actor: { type: 'user', id: setterId, name: req.user?.name, role: req.user?.role },
+      source: 'call_disposition',
     });
+    let updated = transition.prospect;
+
+    // meeting_booked converges on the same booked handoff as a Pipeline move
+    // to Booked — same closer assignment, same idempotent agent_actions card.
+    let handoff = null;
+    let sendHandoffEmail = null;
+    if (effects.stage === 'booked') {
+      const applied = await applyBookedHandoff(client, {
+        req,
+        clientId: prospect.client_id,
+        prospectRow: { ...updated, company_name: prospect.company_name },
+        handoffNote: structuredNotes?.next_step || notes || 'Booked via call disposition',
+        existingHandoffActionId: transition.handoff?.existingHandoffActionId || null,
+      });
+      updated = applied.row;
+      handoff = applied.handoff;
+      sendHandoffEmail = applied.sendEmail;
+    }
     const countResult = await client.query(`
       SELECT (
         SELECT COUNT(*)::int FROM activity_log
@@ -1184,9 +1268,30 @@ router.post(['/api/leads/:id/call-disposition', '/leads/:id/call-disposition'], 
     `, [prospect.id, prospect.client_id]);
     await client.query('COMMIT');
 
+    if (effects.stage === 'booked') {
+      const visibleRow = await setSetterVisibility(pool, prospect.id, {
+        reason: 'stage_change',
+        source: 'scout',
+        stageStatus: 'booked',
+        clientId: prospect.client_id,
+      }).catch(err => {
+        console.error('[setter] booked visibility error:', err.message);
+        return null;
+      });
+      if (visibleRow) updated = { ...visibleRow, company_name: prospect.company_name };
+      if (sendHandoffEmail && handoff) {
+        try {
+          handoff.emailed = await sendHandoffEmail();
+        } catch (emailErr) {
+          console.error('[setter] closer handoff email error:', emailErr.response?.data || emailErr.message);
+        }
+      }
+    }
+
     res.json({
       success: true,
       disposition: dispositionResult.rows[0],
+      handoff,
       lead: mapLead({
         ...updated,
         company_name: prospect.company_name,

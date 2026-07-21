@@ -8,21 +8,25 @@ const STRUCTURED_NOTE_DISPOSITIONS = new Set([
   'answered_callback',
   'qualified',
   'disqualified',
+  'meeting_booked',
+  'do_not_call',
 ]);
 
 const DISPOSITION_CONTRACTS = Object.freeze({
   voicemail: contract('attempt', false, false, 'retry_call', 'unchanged', 'contacted'),
   no_answer: contract('attempt', false, false, 'retry_call', 'unchanged', 'contacted'),
-  wrong_number: contract('attempt', false, false, 'find_phone', 'phone_only', 'phone_unreachable'),
-  disconnected: contract('attempt', false, false, 'find_phone', 'phone_only', 'phone_unreachable'),
+  wrong_number: contract('attempt', false, false, 'find_phone', 'phone_only', 'data_remediation'),
+  disconnected: contract('attempt', false, false, 'find_phone', 'phone_only', 'data_remediation'),
   gatekeeper_relayed: contract('connection', true, false, 'callback', 'unchanged', 'follow_up'),
   gatekeeper_blocked: contract('connection', true, false, 'retry_or_disqualify', 'unchanged', 'follow_up'),
   answered_interested: contract('conversation', true, true, 'qualify', 'unchanged', 'interested'),
-  answered_not_interested: contract('conversation', true, true, 'none', 'unchanged', 'disqualified'),
+  answered_not_interested: contract('conversation', true, true, 'nurture_callback', 'unchanged', 'nurture'),
   answered_callback: contract('conversation', true, true, 'callback', 'unchanged', 'callback_requested'),
   incumbent_all_set: contract('conversation', true, true, 'nurture_callback', 'unchanged', 'nurture'),
   qualified: contract('conversation', true, true, 'book_meeting', 'unchanged', 'qualified'),
   disqualified: contract('conversation', true, true, 'none', 'unchanged', 'disqualified'),
+  do_not_call: contract('conversation', true, false, 'none', 'global', 'do_not_call'),
+  meeting_booked: contract('conversation', true, true, 'closer_handoff', 'unchanged', 'booked'),
 });
 
 function contract(activity, connected, decisionMakerConversation, nextAction, suppressionState, lifecycleResult) {
@@ -72,8 +76,14 @@ function validateStructuredNotes(disposition, value) {
   if (disposition === 'qualified' && !nextStep) {
     throw qualityError('Qualified outcomes require a documented meeting or next step', 'STRUCTURED_NOTES_REQUIRED');
   }
+  if (disposition === 'meeting_booked' && !nextStep) {
+    throw qualityError('Booked meetings require the meeting details as the next step', 'STRUCTURED_NOTES_REQUIRED');
+  }
   if (['answered_not_interested', 'disqualified'].includes(disposition) && !reason) {
     throw qualityError('Disqualified outcomes require a reason', 'STRUCTURED_NOTES_REQUIRED');
+  }
+  if (disposition === 'do_not_call' && !reason) {
+    throw qualityError('Do-not-call outcomes require the verbatim request as the reason', 'STRUCTURED_NOTES_REQUIRED');
   }
   return {
     summary,

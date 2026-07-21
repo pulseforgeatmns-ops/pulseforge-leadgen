@@ -13,6 +13,12 @@ const DISPOSITION_VALUES = Object.freeze([
   'incumbent_all_set',
   'qualified',
   'disqualified',
+  // Phase A2: the explicit booked outcome. A meeting_booked disposition and a
+  // Pipeline move to Booked converge on the same canonical transition.
+  'meeting_booked',
+  // Phase B: explicit terminal suppression. Distinct from disqualified — the
+  // prospect asked not to be contacted; do_not_contact is set globally.
+  'do_not_call',
 ]);
 
 const DISPOSITION_SET = new Set(DISPOSITION_VALUES);
@@ -232,7 +238,11 @@ function resolveCallbackAt(disposition, requestedCallback, now = new Date()) {
   if (disposition === 'answered_callback' || disposition === 'gatekeeper_relayed') {
     return nextBusinessDayTen(now);
   }
-  if (disposition === 'incumbent_all_set') return nurtureCallback(now);
+  // Phase B: both nurture outcomes re-surface on a long-dated callback rather
+  // than dying — "not interested" today is a nurture, not a permanent Dead.
+  if (disposition === 'incumbent_all_set' || disposition === 'answered_not_interested') {
+    return nurtureCallback(now);
+  }
   return null;
 }
 
@@ -255,12 +265,22 @@ async function applyProspectDisposition(db, {
     changes = `status = 'hot', setter_status = 'follow_up', is_hot = true, callback_at = $3`;
   } else if (disposition === 'incumbent_all_set') {
     changes = `status = 'cold', setter_status = 'follow_up', is_hot = false, callback_at = $3`;
-  } else if (disposition === 'answered_not_interested' || disposition === 'disqualified') {
+  } else if (disposition === 'meeting_booked') {
+    changes = `setter_status = 'booked', booked_at = COALESCE(booked_at, NOW()), callback_at = $3`;
+  } else if (disposition === 'answered_not_interested') {
+    // Phase B nurture rule: alive on follow_up with a long-dated callback —
+    // no longer collapsed into permanent Dead.
+    changes = `status = 'cold', setter_status = 'follow_up', is_hot = false, callback_at = $3`;
+  } else if (disposition === 'disqualified') {
     changes = `status = 'dead', setter_status = 'dead', callback_at = NULL`;
+  } else if (disposition === 'do_not_call') {
+    // Phase B terminal suppression: dead AND globally suppressed.
+    changes = `status = 'dead', setter_status = 'dead', do_not_contact = true, callback_at = NULL`;
   } else {
-    // A wrong or disconnected number closes only the phone path. Other channels
-    // remain eligible because global status and DNC are intentionally unchanged.
-    changes = `phone = NULL, setter_status = 'dead', callback_at = NULL`;
+    // Phase B data-remediation rule: a wrong or disconnected number closes only
+    // the phone path. The prospect stays alive on follow_up awaiting phone
+    // repair; global status and DNC are intentionally unchanged.
+    changes = `phone = NULL, setter_status = 'follow_up', callback_at = NULL`;
   }
   const params = changes.includes('$3')
     ? [prospectId, clientId, callbackAt]

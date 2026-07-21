@@ -3,48 +3,50 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pulseforge — Setter Dashboard</title>
+<title>Pulseforge — Calls</title>
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/shell.css">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
-:root {
-  --bg: #040810;
-  --bg1: #070d1a;
-  --bg2: #0b1526;
-  --bg3: #101e33;
-  --purple: #6030b1;
-  --purple-bright: #8b5cf6;
-  --purple-glow: rgba(96,48,177,0.2);
-  --teal: #00d4b4;
-  --teal-dim: rgba(0,212,180,0.12);
-  --orange: #ff6b35;
-  --green: #00e676;
-  --green-dim: rgba(0,230,118,0.1);
-  --red: #ff3b5c;
-  --yellow: #ffd600;
-  --white: #e8f0fe;
-  --gray: #3a4a6a;
-  --gray-light: #6b7fa0;
-  --border: rgba(96,48,177,0.18);
+/* Phase B: the page palette resolves through the shared tokens
+   (tokens.css). Warm command-center by default; body.theme-dark restores
+   the legacy dark palette. Local variable names are kept so the existing
+   component rules keep working. */
+:root, body {
+  --bg: var(--pf-bg);
+  --bg1: var(--pf-bg-card);
+  --bg2: var(--pf-bg-raised);
+  --bg3: var(--pf-bg-card);
+  --purple: var(--pf-violet);
+  --purple-bright: var(--pf-violet);
+  --purple-glow: var(--pf-violet-glow);
+  --gold: var(--pf-gold);
+  --gold-strong: var(--pf-gold-strong);
+  --gold-glow: var(--pf-gold-glow);
+  --teal: var(--pf-teal);
+  --teal-dim: rgba(15,118,110,0.1);
+  --orange: var(--pf-orange);
+  --green: var(--pf-green);
+  --green-dim: rgba(30,122,69,0.1);
+  --red: var(--pf-red);
+  --yellow: var(--pf-amber);
+  --white: var(--pf-text);
+  --gray: var(--pf-text-muted);
+  --gray-light: var(--pf-text-dim);
+  --border: var(--pf-border);
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 html, body { height:100%; overflow:hidden; background:var(--bg); }
 body { font-family:'DM Sans',sans-serif; color:var(--white); display:flex; flex-direction:column; }
-body.light-mode { --bg:#f5f5f0; --bg1:#ffffff; --bg2:#eaeae4; --bg3:#ffffff; --white:#1a1a18; --gray-light:#4a4a45; --gray:#8a8a85; --border:rgba(0,0,0,0.1); background:var(--bg); }
 body, .topbar, .right-panel, .metric-card, .panel-card, .stage, .lead-card, .form-card, .activity-list, .agent-tile, input, select, textarea, table, th, td, .btn { transition:background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease; }
-body.light-mode .topbar { background:rgba(255,255,255,0.94); }
-body.light-mode input, body.light-mode select, body.light-mode textarea, body.light-mode .nav-tabs { background:rgba(0,0,0,0.035); }
-body.light-mode td { color:rgba(26,26,24,0.76); border-bottom-color:rgba(0,0,0,0.06); }
-body.light-mode tr:hover td { background:rgba(139,92,246,0.08); }
-body::before { content:''; position:fixed; inset:0; background:repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.015) 3px, rgba(0,0,0,0.015) 4px); pointer-events:none; z-index:1000; }
-.topbar { height:52px; background:rgba(7,13,26,0.97); border-bottom:1px solid var(--border); display:flex; align-items:center; padding:0 2rem; gap:2rem; flex-shrink:0; backdrop-filter:blur(20px); position:relative; z-index:100; min-width:0; }
-.topbar::after { content:''; position:absolute; bottom:0; left:0; right:0; height:1px; background:linear-gradient(90deg, transparent 0%, var(--purple-bright) 30%, var(--teal) 70%, transparent 100%); opacity:0.4; }
-.logo { font-family:'Bebas Neue',sans-serif; font-size:1.4rem; letter-spacing:4px; color:var(--white); display:flex; align-items:center; gap:10px; flex-shrink:0; }
-.logo-mark { width:28px; height:28px; border:1.5px solid var(--purple-bright); border-radius:6px; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; flex-shrink:0; }
-.logo-mark::before { content:''; position:absolute; width:12px; height:12px; background:var(--purple-bright); border-radius:50%; box-shadow:0 0 12px var(--purple-bright); animation:logoPulse 3s ease infinite; }
-@keyframes logoPulse { 0%,100%{transform:scale(0.8);opacity:0.8} 50%{transform:scale(1.1);opacity:1} }
+body.light-mode input, body.light-mode select, body.light-mode textarea, body.light-mode .nav-tabs { background:rgba(16,32,60,0.04); }
+body.light-mode td { color:var(--pf-text-dim); border-bottom-color:rgba(16,32,60,0.07); }
+body.light-mode tr:hover td { background:var(--pf-gold-glow); }
+body.theme-dark td { color:rgba(255,255,255,0.75); }
+.topbar { min-height:48px; background:var(--bg2); border-bottom:1px solid var(--border); display:flex; align-items:center; padding:0 1.5rem; gap:1.5rem; flex-shrink:0; position:relative; z-index:100; min-width:0; }
 .nav-tabs { display:flex; gap:0; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:6px; padding:3px; margin-left:1rem; }
 .nav-tab { font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1.5px; text-transform:uppercase; padding:5px 14px; border-radius:4px; cursor:pointer; color:var(--gray-light); transition:all 0.2s; }
-.nav-tab.active { background:var(--purple-glow); color:var(--purple-bright); border:1px solid rgba(139,92,246,0.3); }
+.nav-tab.active { background:var(--gold-glow); color:var(--gold-strong); border:1px solid rgba(154,123,45,0.35); }
 .nav-tab:hover:not(.active) { color:var(--white); }
 .topbar-right { margin-left:auto; display:flex; align-items:center; gap:1.25rem; }
 .sys-status { display:flex; align-items:center; gap:6px; font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--green); background:var(--green-dim); border:1px solid rgba(0,230,118,0.15); padding:4px 12px; border-radius:99px; white-space:nowrap; }
@@ -120,12 +122,63 @@ tr:hover td { background:rgba(139,92,246,0.04); }
 .score.low { color:var(--red); background:rgba(255,59,92,0.08); border:1px solid rgba(255,59,92,0.18); }
 .status-actions { display:flex; gap:5px; align-items:center; }
 .btn { font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:1px; text-transform:uppercase; padding:5px 9px; border-radius:4px; border:1px solid var(--border); background:transparent; color:var(--gray-light); cursor:pointer; transition:all 0.15s; }
-.btn:hover { border-color:var(--teal); color:var(--teal); }
-.btn.primary { color:var(--purple-bright); border-color:rgba(139,92,246,0.3); background:var(--purple-glow); }
+.btn:hover { border-color:var(--gold); color:var(--gold-strong); }
+/* Operator actions: muted gold (Phase B visual system) */
+.btn.primary { color:#fffdf5; border-color:var(--gold-strong); background:var(--gold); font-weight:600; }
+body.theme-dark .btn.primary { color:#1a1406; }
+.btn.primary:hover { background:var(--gold-strong); color:#fffdf5; border-color:var(--gold-strong); }
 .btn.dead:hover { border-color:var(--red); color:var(--red); }
 .btn.loading::before { content:''; width:8px; height:8px; border:1px solid currentColor; border-top-color:transparent; border-radius:50%; display:inline-block; margin-right:6px; animation:spin 0.8s linear infinite; vertical-align:-1px; }
 @keyframes spin { to { transform:rotate(360deg); } }
 .empty { padding:2rem; text-align:center; font-family:'JetBrains Mono',monospace; color:var(--gray); font-size:0.68rem; letter-spacing:1.5px; text-transform:uppercase; }
+
+/* ── Calls landing (Phase B) ─────────────────────────────────────────── */
+.home-grid { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:1rem; align-items:start; }
+.home-col { display:grid; gap:1rem; min-width:0; }
+.next-call-card { background:var(--bg1); border:1px solid var(--gold-strong); border-radius:10px; padding:1.15rem; position:relative; overflow:hidden; }
+.next-call-card::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; background:var(--gold); }
+.next-call-label { font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:2px; text-transform:uppercase; color:var(--gold-strong); margin-bottom:0.5rem; }
+.next-call-company { font-family:'Bebas Neue',sans-serif; font-size:1.7rem; letter-spacing:1.5px; color:var(--white); line-height:1.1; }
+.next-call-contact { color:var(--gray-light); font-size:0.88rem; margin-top:2px; }
+.next-call-phone { font-family:'JetBrains Mono',monospace; font-size:1.05rem; font-weight:600; color:var(--white); margin-top:0.55rem; letter-spacing:0.5px; }
+.next-call-phone a { color:inherit; text-decoration:none; }
+.next-call-why { margin-top:0.6rem; font-size:0.84rem; color:var(--gray-light); border-left:3px solid var(--gold); padding:4px 10px; }
+.next-call-actions { display:flex; gap:0.6rem; margin-top:0.9rem; flex-wrap:wrap; }
+.start-call-btn { min-height:44px; padding:0.7rem 1.4rem; font-size:0.72rem; border-radius:7px; display:inline-flex; align-items:center; gap:8px; }
+.home-card { background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:1rem; }
+.home-card-title { font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1.5px; text-transform:uppercase; color:var(--gray-light); margin-bottom:0.65rem; display:flex; justify-content:space-between; align-items:center; gap:0.5rem; }
+.home-list { display:grid; gap:0.5rem; }
+.home-list-item { display:flex; align-items:center; justify-content:space-between; gap:0.75rem; border:1px solid var(--border); border-radius:8px; padding:0.6rem 0.75rem; background:var(--bg3); }
+.home-list-main { min-width:0; }
+.home-list-name { font-weight:600; color:var(--white); font-size:0.85rem; cursor:pointer; }
+.home-list-sub { font-family:'JetBrains Mono',monospace; font-size:0.6rem; color:var(--gray); margin-top:2px; }
+.home-progress-row { display:flex; align-items:center; justify-content:space-between; gap:0.75rem; padding:0.35rem 0; font-size:0.84rem; color:var(--gray-light); }
+.home-progress-row strong { color:var(--white); font-family:'Bebas Neue',sans-serif; font-size:1.4rem; letter-spacing:1px; }
+
+/* Queue item vocabulary (Phase B) */
+.due-chip { font-family:'JetBrains Mono',monospace; font-size:0.55rem; letter-spacing:0.8px; text-transform:uppercase; padding:3px 8px; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
+.due-chip.overdue { color:var(--red); background:rgba(179,38,30,0.07); }
+.due-chip.due { color:var(--yellow); background:rgba(160,94,3,0.08); }
+.due-chip.scheduled { color:var(--teal); }
+.due-chip.none { color:var(--gray); border-style:dashed; }
+.priority-chip { font-family:'JetBrains Mono',monospace; font-size:0.55rem; letter-spacing:0.8px; text-transform:uppercase; padding:3px 8px; border-radius:4px; white-space:nowrap; }
+.priority-chip.p-high { color:var(--red); background:rgba(179,38,30,0.08); }
+.priority-chip.p-hot { color:var(--yellow); background:rgba(160,94,3,0.1); }
+.priority-chip.p-normal { color:var(--gray-light); }
+.queue-filters { display:flex; flex-wrap:wrap; gap:0.4rem; align-items:center; }
+.queue-filters .filter-chip {
+  min-height:44px; border-radius:7px; font-size:0.62rem; letter-spacing:0.8px;
+  text-transform:uppercase; padding:0.45rem 0.7rem;
+}
+.queue-filters .filter-chip.active {
+  background:var(--gold); border-color:var(--gold-strong); color:#fffdf5; font-weight:600;
+}
+.why-now { font-size:0.78rem; color:var(--gray-light); max-width:220px; white-space:normal; line-height:1.35; }
+.next-action-cell { font-size:0.78rem; color:var(--white); white-space:normal; max-width:180px; line-height:1.35; }
+.reason-chip { font-family:'JetBrains Mono',monospace; font-size:0.52rem; letter-spacing:0.8px; text-transform:uppercase; padding:2px 7px; border-radius:999px; border:1px dashed currentColor; white-space:nowrap; }
+.reason-chip.nurture { color:var(--teal); }
+.reason-chip.data_remediation { color:var(--yellow); }
+.reason-chip.terminal_suppression { color:var(--red); }
 .pipeline-grid { display:grid; grid-template-columns:repeat(5, minmax(180px, 1fr)); gap:1rem; overflow-x:auto; padding-bottom:0.5rem; }
 .stage { background:var(--bg1); border:1px solid var(--border); border-radius:10px; min-height:420px; overflow:hidden; }
 .stage-head { padding:0.85rem; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
@@ -252,9 +305,9 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   .detail-drawer { right:0; width:min(380px,100vw); }
 }
 @media (max-width: 720px) {
-  .topbar { height:auto; min-height:52px; padding:0.75rem 1rem; gap:0.75rem; flex-wrap:wrap; }
+  .topbar { height:auto; min-height:48px; padding:0.6rem 1rem; gap:0.6rem; flex-wrap:wrap; }
   .nav-tabs { order:3; width:100%; margin-left:0; overflow-x:auto; }
-  .topbar-right { margin-left:0; }
+  .topbar-right { margin-left:auto; }
   .clock { display:none; }
   .metrics-strip { grid-template-columns:1fr; }
   th, td { padding:0.65rem; }
@@ -263,26 +316,17 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   html, body { overflow-x:hidden; }
   input, select, textarea { font-size:16px; }
 
-  /* Topbar / hamburger */
-  /* Drop the stacking context (backdrop-filter + positioned z-index) so the
-     fixed nav drawer is not trapped behind the body-level backdrop. */
-  .topbar { height:52px; min-height:52px; flex-wrap:nowrap; padding:0 0.75rem; gap:0.6rem; position:static; z-index:auto; backdrop-filter:none; -webkit-backdrop-filter:none; }
-  .mobile-hamburger { display:flex; align-items:center; justify-content:center; width:44px; height:44px; background:transparent; border:none; color:var(--white); cursor:pointer; flex-shrink:0; padding:0; }
-  .mobile-hamburger svg { width:24px; height:24px; }
-  .logo { font-size:1.1rem; letter-spacing:2px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* Slim contextual toolbar: view tabs scroll horizontally (primary
+     navigation lives in the shared shell). */
+  .topbar { min-height:48px; flex-wrap:wrap; padding:0.5rem 0.75rem; gap:0.5rem; position:static; z-index:auto; }
   .topbar-right { margin-left:auto; gap:0.6rem; }
   .clock { display:none; }
   .sys-status { padding:4px 9px; }
+  .nav-tabs { order:3; width:100%; margin-left:0; overflow-x:auto; flex-wrap:nowrap; -webkit-overflow-scrolling:touch; }
+  .nav-tab { min-height:44px; display:flex; align-items:center; white-space:nowrap; font-size:0.72rem; padding:8px 14px; }
 
-  /* Slide-in left nav drawer */
-  .nav-tabs { position:fixed; top:0; left:0; bottom:0; width:82%; max-width:300px; transform:translateX(-100%); transition:transform .28s ease; z-index:1200; background:var(--bg1); box-shadow:0 0 44px rgba(0,0,0,.6); padding:3.25rem 1rem 1rem; flex-direction:column; gap:.35rem; align-items:stretch; margin-left:0; overflow-y:auto; border-radius:0; order:0; }
-  .nav-tabs.open { transform:translateX(0); }
-  .nav-tab { width:100%; text-align:left; min-height:48px; font-size:0.95rem; padding:14px; display:flex; align-items:center; }
-  .drawer-logout { display:flex; align-items:center; width:100%; min-height:48px; padding:14px; margin-top:0.5rem; border-top:1px solid var(--border); border-radius:0; font-size:0.95rem; letter-spacing:1px; }
-  .topbar-right .logout-link { display:none; }
-  .mobile-backdrop { display:block; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:1100; opacity:0; visibility:hidden; transition:opacity .28s,visibility .28s; }
-  .mobile-backdrop.open { opacity:1; visibility:visible; }
-  .nav-close { display:flex; align-items:center; justify-content:center; position:absolute; top:.5rem; right:.5rem; width:44px; height:44px; background:transparent; border:none; color:var(--white); font-size:2rem; line-height:1; cursor:pointer; }
+  /* Calls landing stacks */
+  .home-grid { grid-template-columns:1fr; }
 
   /* Layout */
   .main { display:flex; flex-direction:column; }
@@ -384,23 +428,20 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
 </style>
 </head>
 <body>
-<div class="mobile-backdrop" id="mobileBackdrop"></div>
+<!-- Contextual toolbar for the Calls surface. Primary navigation, tenant,
+     identity, theme, and logout live in the shared Pulseforge shell. -->
 <div class="topbar">
-  <button class="mobile-hamburger" id="mobileHamburger" type="button" aria-label="Open menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
-  <div class="logo"><div class="logo-mark"></div>SETTER DASHBOARD</div>
-  <div class="nav-tabs">
-    <button class="nav-close" id="navClose" type="button" aria-label="Close menu">&times;</button>
-    <div class="nav-tab active" data-tab="queue">Queue</div>
-    <div class="nav-tab" data-tab="pipeline">Pipeline</div>
-    <div class="nav-tab" data-tab="activity">Activity</div>
-    <div class="nav-tab" data-tab="resources">Resources</div>
-    <a class="drawer-logout logout-link" href="/logout">Logout</a>
+  <div class="nav-tabs" role="tablist" aria-label="Calls views">
+    <div class="nav-tab active" data-tab="home" role="tab" aria-selected="true" tabindex="0">Calls</div>
+    <div class="nav-tab" data-tab="queue" role="tab" aria-selected="false" tabindex="-1">Queue</div>
+    <div class="nav-tab" data-tab="pipeline" role="tab" aria-selected="false" tabindex="-1">Pipeline</div>
+    <div class="nav-tab" data-tab="activity" role="tab" aria-selected="false" tabindex="-1">Log touchpoint</div>
+    <div class="nav-tab" data-tab="performance" role="tab" aria-selected="false" tabindex="-1">Performance</div>
+    <div class="nav-tab" data-tab="resources" role="tab" aria-selected="false" tabindex="-1">Resources</div>
   </div>
   <div class="topbar-right">
     <div class="sys-status"><div class="sys-dot"></div><span id="liveState">LIVE</span></div>
     <div class="clock" id="clock">--:--</div>
-    <button class="theme-toggle" id="themeToggle" type="button" title="Toggle theme">🌙</button>
-    <a class="logout-link" href="/logout">Log out</a>
   </div>
 </div>
 
@@ -408,41 +449,86 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   <section class="work-area">
     <div class="area-header">
       <div>
-        <div class="area-title" id="panelTitle">LEADS QUEUE</div>
-        <div class="area-sub" id="panelSub">Uncontacted Scout-qualified leads</div>
+        <div class="area-title" id="panelTitle">CALLS</div>
+        <div class="area-sub" id="panelSub">Next best call and today's work</div>
       </div>
       <button class="btn" id="refreshBtn">Refresh</button>
     </div>
 
-    <div class="metrics-strip">
-      <div class="metric-card"><div class="metric-label">Leads Today</div><div class="metric-value t" id="leadsToday">0</div><div class="metric-note">Scout qualified</div></div>
-      <div class="metric-card"><div class="metric-label">Leads This Week</div><div class="metric-value p" id="leadsWeek">0</div><div class="metric-note">Rolling 7 days</div></div>
-      <div class="metric-card"><div class="metric-label">Contacted Rate</div><div class="metric-value g" id="contactedRate">0%</div><div class="metric-note" id="contactedNote">0 contacted</div></div>
-      <div class="metric-card"><div class="metric-label">Dead / Unresponsive</div><div class="metric-value o" id="deadCount">0</div><div class="metric-note" id="bookedNote">0% booked</div></div>
-    </div>
-    <div class="goal-strip">
-      <div class="goal-label" id="goalLabel">Calls today: 0 / 20</div>
-      <div class="goal-bar"><div class="goal-fill" id="goalFill"></div></div>
-    </div>
-    <div class="metrics-strip" id="qualityMetricsStrip">
-      <div class="metric-card"><div class="metric-label">Attempts</div><div class="metric-value" id="qualityAttempts">0</div><div class="metric-note">Last 30 days</div></div>
-      <div class="metric-card"><div class="metric-label">Connect rate</div><div class="metric-value" id="qualityConnectRate">0%</div><div class="metric-note">Human connections</div></div>
-      <div class="metric-card"><div class="metric-label">Decision makers</div><div class="metric-value" id="qualityDm">0</div><div class="metric-note">Genuine conversations</div></div>
-      <div class="metric-card"><div class="metric-label">Callbacks done</div><div class="metric-value" id="qualityCallbacks">0%</div><div class="metric-note">Completion rate</div></div>
-      <div class="metric-card"><div class="metric-label">Qualified meetings</div><div class="metric-value" id="qualityQualified">0%</div><div class="metric-note">From decision makers</div></div>
-      <div class="metric-card"><div class="metric-label">Incomplete</div><div class="metric-value" id="qualityIncomplete">0</div><div class="metric-note">Disposition notes</div></div>
-      <div class="metric-card"><div class="metric-label">Overdue</div><div class="metric-value" id="qualityOverdue">0</div><div class="metric-note">Callbacks</div></div>
-    </div>
     <div class="panel-card" id="managerReviewPanel" style="display:none;margin-bottom:1rem">
       <div class="section-head"><div class="section-title">Manager call review sample</div><div class="mono" id="managerReviewCount">0 pending</div></div>
       <div id="managerReviewRows" class="activity-list"></div>
     </div>
 
-    <section class="panel active" id="queuePanel">
+    <!-- Calls landing (Phase B §2): next best call, due callbacks, ready
+         queue, today's progress, recent outcomes. -->
+    <section class="panel active" id="homePanel">
+      <div class="home-grid">
+        <div class="home-col">
+          <div class="next-call-card" id="nextCallCard">
+            <div class="next-call-label">Next best call</div>
+            <div class="empty">Loading…</div>
+          </div>
+          <div class="home-card">
+            <div class="home-card-title">Due callbacks <span class="mono" id="homeDueCount">0</span></div>
+            <div class="home-list" id="homeDueList"><div class="empty">Loading…</div></div>
+          </div>
+          <div class="home-card">
+            <div class="home-card-title">Ready queue <span class="mono" id="homeQueueCount">0</span></div>
+            <div class="home-list" id="homeQueueList"><div class="empty">Loading…</div></div>
+          </div>
+        </div>
+        <div class="home-col">
+          <div class="home-card">
+            <div class="home-card-title">Today's progress</div>
+            <div class="goal-strip" style="margin:0 0 0.6rem; padding:0.6rem 0.2rem; border:none; background:transparent;">
+              <div class="goal-label" id="goalLabel">Calls today: 0 / 20</div>
+              <div class="goal-bar"><div class="goal-fill" id="goalFill"></div></div>
+            </div>
+            <div id="homeProgressRows"></div>
+          </div>
+          <div class="home-card">
+            <div class="home-card-title">Recent outcomes</div>
+            <div class="home-list" id="homeOutcomesList"><div class="empty">Loading…</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Calls performance (Phase B §2): detailed setter metrics moved out of
+         the landing page into this secondary view. -->
+    <section class="panel" id="performancePanel">
+      <div class="metrics-strip">
+        <div class="metric-card"><div class="metric-label">Leads Today</div><div class="metric-value t" id="leadsToday">0</div><div class="metric-note">Scout qualified</div></div>
+        <div class="metric-card"><div class="metric-label">Leads This Week</div><div class="metric-value p" id="leadsWeek">0</div><div class="metric-note">Rolling 7 days</div></div>
+        <div class="metric-card"><div class="metric-label">Contacted Rate</div><div class="metric-value g" id="contactedRate">0%</div><div class="metric-note" id="contactedNote">0 contacted</div></div>
+        <div class="metric-card"><div class="metric-label">Dead / Unresponsive</div><div class="metric-value o" id="deadCount">0</div><div class="metric-note" id="bookedNote">0% booked</div></div>
+      </div>
+      <div class="metrics-strip" id="qualityMetricsStrip">
+        <div class="metric-card"><div class="metric-label">Attempts</div><div class="metric-value" id="qualityAttempts">0</div><div class="metric-note">Last 30 days</div></div>
+        <div class="metric-card"><div class="metric-label">Connect rate</div><div class="metric-value" id="qualityConnectRate">0%</div><div class="metric-note">Human connections</div></div>
+        <div class="metric-card"><div class="metric-label">Decision makers</div><div class="metric-value" id="qualityDm">0</div><div class="metric-note">Genuine conversations</div></div>
+        <div class="metric-card"><div class="metric-label">Callbacks done</div><div class="metric-value" id="qualityCallbacks">0%</div><div class="metric-note">Completion rate</div></div>
+        <div class="metric-card"><div class="metric-label">Qualified meetings</div><div class="metric-value" id="qualityQualified">0%</div><div class="metric-note">From decision makers</div></div>
+        <div class="metric-card"><div class="metric-label">Incomplete</div><div class="metric-value" id="qualityIncomplete">0</div><div class="metric-note">Disposition notes</div></div>
+        <div class="metric-card"><div class="metric-label">Overdue</div><div class="metric-value" id="qualityOverdue">0</div><div class="metric-note">Callbacks</div></div>
+      </div>
+    </section>
+
+    <section class="panel" id="queuePanel">
       <div class="queue-tools">
         <div class="search-wrap">
           <input class="search-input" id="leadSearch" placeholder="Search leads..." autocomplete="off">
           <button class="btn search-clear" id="clearSearch" type="button">x</button>
+        </div>
+        <div class="queue-filters" role="group" aria-label="Queue filters">
+          <button type="button" class="btn filter-chip active" data-queue-filter="all" aria-pressed="true">All</button>
+          <button type="button" class="btn filter-chip" data-queue-filter="due_now" aria-pressed="false">Due now</button>
+          <button type="button" class="btn filter-chip" data-queue-filter="overdue" aria-pressed="false">Overdue</button>
+          <button type="button" class="btn filter-chip" data-queue-filter="callbacks" aria-pressed="false">Callbacks</button>
+          <button type="button" class="btn filter-chip" data-queue-filter="warm" aria-pressed="false">Warm</button>
+          <button type="button" class="btn filter-chip" data-queue-filter="data_remediation" aria-pressed="false">Data remediation</button>
+          <button type="button" class="btn filter-chip" data-queue-filter="nurture" aria-pressed="false">Nurture</button>
         </div>
         <button class="btn" id="bulkEnrichPhonesBtn" type="button">Enrich missing phones</button>
         <label class="btn" title="Synthetic prospects are locally logged and can never be contacted"><input id="showTestProspects" type="checkbox"> Show test prospects</label>
@@ -454,23 +540,23 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
           <table>
             <thead>
               <tr>
-                <th>Business</th><th>Callback</th><th>Score</th><th>Phone / Email</th><th>Actions</th>
+                <th>Business</th><th>Phone</th><th>Why now</th><th>Next action</th><th>Urgency</th><th>Score</th><th>Actions</th>
               </tr>
             </thead>
-            <tbody id="dueRows"><tr><td colspan="5" class="empty">Loading callbacks</td></tr></tbody>
+            <tbody id="dueRows"><tr><td colspan="7" class="empty">Loading callbacks</td></tr></tbody>
           </table>
         </div>
       </div>
-      <div class="section-head"><div class="section-title">New Leads</div><div class="mono" id="newCount">0 leads</div></div>
+      <div class="section-head"><div class="section-title">Ready Queue</div><div class="mono" id="newCount">0 leads</div></div>
       <div class="panel-card">
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Business</th><th>Vertical</th><th>City</th><th>Score</th><th>Date Added</th><th>Phone / Email</th><th>Status</th><th>Actions</th>
+                <th>Business</th><th>Phone</th><th>Why now</th><th>Next action</th><th>Urgency</th><th>Score</th><th>Actions</th>
               </tr>
             </thead>
-            <tbody id="queueRows"><tr><td colspan="8" class="empty">Loading leads</td></tr></tbody>
+            <tbody id="queueRows"><tr><td colspan="7" class="empty">Loading leads</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -697,15 +783,9 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
 
   <aside class="right-panel">
     <div class="sheet-handle"><span></span></div>
-    <div class="panel-header">
-      <div class="panel-title">SCOUT FEED</div>
-      <div class="panel-sub" id="feedSub">Auto-refreshing every 60s</div>
-    </div>
-    <div class="agent-strip" id="agentStrip"></div>
-    <div class="activity-feed">
-      <div class="feed-label">Incoming Leads</div>
-      <div id="scoutFeed"><div class="empty">Loading feed</div></div>
-    </div>
+    <!-- Consolidated contextual activity (Phase B §7). Replaces the Scout
+         Feed; defaults to Prospect + Operator events on Calls. -->
+    <div id="activityPanelRoot" style="flex:1;display:flex;flex-direction:column;min-height:0;border-left:none;"></div>
   </aside>
 </main>
 
@@ -818,13 +898,23 @@ textarea { padding:0.75rem; width:100%; min-height:90px; resize:vertical; }
   </form>
 </div>
 
+<!-- Pulseforge shared foundation — loaded before the page script
+     so renderers can use the shared phone/lifecycle/workspace modules. -->
+<script src="/shared/accessibility.js"></script>
+<script src="/shared/api-client.js"></script>
+<script src="/shared/phone.js"></script>
+<script src="/shared/lifecycle.js"></script>
+<script src="/shared/prospect-workspace.js"></script>
+<script src="/shared/activity-panel.js"></script>
+<script src="/shared/shell.js"></script>
+
 <script>
 const stages = ['new','contacted','follow_up','booked','dead'];
 const stageLabels = { new:'New', contacted:'Contacted', follow_up:'Follow-up', booked:'Booked', dead:'Dead' };
 const callDispositionLabels = {
   voicemail:'Voicemail',
   answered_interested:'Answered — interested',
-  answered_not_interested:'Answered — not interested',
+  answered_not_interested:'Not interested (nurture)',
   answered_callback:'Answered — callback',
   no_answer:'No answer',
   wrong_number:'Wrong number',
@@ -833,18 +923,21 @@ const callDispositionLabels = {
   gatekeeper_blocked:'Gatekeeper — blocked',
   incumbent_all_set:'Incumbent — all set',
   qualified:'Qualified',
-  disqualified:'Disqualified'
+  disqualified:'Disqualified',
+  meeting_booked:'Meeting booked',
+  do_not_call:'Do not call'
 };
-const agents = [
-  ['SCOUT','Prospecting'], ['EMMETT','Email'], ['RILEY','Follow-up'],
-  ['PAIGE','Content'], ['VERA','Verifier'], ['MAX','Observer']
-];
-const THEME_KEY = 'pulseforge-theme';
+const lifecycleReasonLabels = {
+  nurture:'Nurture',
+  data_remediation:'Needs new contact info',
+  terminal_suppression:'Do not call'
+};
 let leads = [];
 let dueLeads = [];
 let feed = [];
 let pipeline = {};
-let activeTab = 'queue';
+let activityItems = [];
+let activeTab = 'home';
 let selectedLead = null;
 let queueSearch = '';
 let pipelineSearch = '';
@@ -854,23 +947,8 @@ let callDispositionLeadId = null;
 let draggedLeadId = null;
 let lastDroppedLeadId = null;
 let showTestProspects = false;
+let queueFilter = 'all';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-function applyTheme(theme) {
-  const light = theme === 'light';
-  document.body.classList.toggle('light-mode', light);
-  const btn = document.getElementById('themeToggle');
-  if (btn) {
-    btn.textContent = light ? '☀️' : '🌙';
-    btn.title = light ? 'Switch to dark mode' : 'Switch to light mode';
-  }
-}
-applyTheme(localStorage.getItem(THEME_KEY) || 'dark');
-document.getElementById('themeToggle')?.addEventListener('click', () => {
-  const next = document.body.classList.contains('light-mode') ? 'dark' : 'light';
-  localStorage.setItem(THEME_KEY, next);
-  applyTheme(next);
-});
 
 function fmtDate(value) {
   if (!value) return '-';
@@ -907,13 +985,134 @@ function callbackLocalValue(value) {
 }
 
 function rowTools(lead) {
-  const attempts = Number(lead.attempt_count || 0);
   return `<div class="row-actions">
-    <button class="btn icon-btn ${lead.is_hot ? 'hot' : ''}" data-hot="${lead.id}" title="Toggle hot lead">⚡</button>
+    <button class="btn primary" data-workspace="${lead.id}" type="button" aria-label="Call ${escapeHtml(lead.business_name)}">☎ Call</button>
+    <button class="btn" data-open="${lead.id}" type="button" title="Lead details" aria-label="Details for ${escapeHtml(lead.business_name)}">Details</button>
+    <button class="btn icon-btn ${lead.is_hot ? 'hot' : ''}" data-hot="${lead.id}" title="Toggle hot lead" aria-label="Toggle hot lead">⚡</button>
     ${lead.is_synthetic ? '<span class="test-badge">Test · no contact</span>' : ''}
-    <button class="btn primary" data-log-call="${lead.id}" type="button">☎ Log call</button>
-    <span class="attempt-badge" id="attempts-${lead.id}">${attempts} attempt${attempts === 1 ? '' : 's'}</span>
   </div>`;
+}
+
+// ── Phase B queue vocabulary ─────────────────────────────────────────────
+function verticalLabelFor(lead) {
+  return String(lead.vertical || 'unknown').replaceAll('_', ' ');
+}
+
+function whyNow(lead) {
+  if (lead.callback_at && isOverdue(lead.callback_at)) return 'Callback overdue — they expected to hear from you';
+  if (lead.callback_at) return `Callback promised for ${fmtDateTime(lead.callback_at)}`;
+  if (lead.lifecycle_reason === 'data_remediation') return 'Needs a new phone number before the next attempt';
+  if (lead.lifecycle_reason === 'nurture') return 'Nurture window — check if timing changed';
+  if (lead.is_hot) return 'Flagged hot — warm signal on record';
+  if (lead.priority_reason) return lead.priority_reason;
+  const days = Math.floor((Date.now() - new Date(lead.date_added).getTime()) / 86400000);
+  if (Number(lead.attempt_count || 0) === 0) return days <= 3 ? 'Fresh lead — first touch while it\u2019s new' : 'Never called — overdue for a first touch';
+  return 'Ready for the next attempt';
+}
+
+function lastInteractionCell(lead) {
+  if (!lead.last_disposition) {
+    return `<div class="mono">No calls yet</div>`;
+  }
+  const label = callDispositionLabels[lead.last_disposition] || lead.last_disposition.replaceAll('_', ' ');
+  return `<div>${escapeHtml(label)}</div><div class="mono">${fmtDateTime(lead.last_disposition_at)}</div>`;
+}
+
+function nextActionCell(lead) {
+  if (lead.lifecycle_reason === 'terminal_suppression') return '<span class="reason-chip terminal_suppression">Do not call</span>';
+  if (lead.lifecycle_reason === 'data_remediation' && !lead.phone) {
+    return '<span class="reason-chip data_remediation">Find new phone</span>';
+  }
+  if (lead.callback_at) {
+    return `${isOverdue(lead.callback_at) ? 'Call back now' : 'Call back'}${lead.lifecycle_reason === 'nurture' ? ' <span class="reason-chip nurture">Nurture</span>' : ''}`;
+  }
+  if (!lead.phone) return 'Find phone number';
+  if (Number(lead.attempt_count || 0) === 0) return 'Make first call';
+  return 'Call again';
+}
+
+function dueStateChip(lead) {
+  if (!lead.callback_at) return '<span class="due-chip none">No due date</span>';
+  if (isOverdue(lead.callback_at)) return `<span class="due-chip overdue">Overdue · ${fmtDateTime(lead.callback_at)}</span>`;
+  const sla = String(lead.callback_sla || '').toLowerCase();
+  if (sla === 'due_now' || sla === 'due_soon') return `<span class="due-chip due">Due · ${fmtDateTime(lead.callback_at)}</span>`;
+  return `<span class="due-chip scheduled">${fmtDateTime(lead.callback_at)}</span>`;
+}
+
+function priorityChip(lead) {
+  if (lead.callback_at && isOverdue(lead.callback_at)) return '<span class="priority-chip p-high">High</span>';
+  if (lead.is_hot) return '<span class="priority-chip p-hot">Hot</span>';
+  if (Number(lead.category_priority || 99) < 99) return `<span class="priority-chip p-hot">P${lead.category_priority}</span>`;
+  return '<span class="priority-chip p-normal">Normal</span>';
+}
+
+function matchesQueueFilter(lead) {
+  if (queueFilter === 'all') return true;
+  if (queueFilter === 'overdue') return Boolean(lead.callback_at && isOverdue(lead.callback_at));
+  if (queueFilter === 'due_now') {
+    const sla = String(lead.callback_sla || '').toLowerCase();
+    return Boolean(lead.callback_at && (isOverdue(lead.callback_at) || sla === 'due_now' || sla === 'due_soon'));
+  }
+  if (queueFilter === 'callbacks') return Boolean(lead.callback_at);
+  if (queueFilter === 'warm') {
+    return Boolean(lead.is_hot)
+      || ['answered_interested', 'qualified', 'meeting_booked'].includes(lead.last_disposition);
+  }
+  if (queueFilter === 'data_remediation') return lead.lifecycle_reason === 'data_remediation';
+  if (queueFilter === 'nurture') return lead.lifecycle_reason === 'nurture';
+  return true;
+}
+
+function urgencyChip(lead) {
+  if (lead.callback_at && isOverdue(lead.callback_at)) {
+    return `<span class="due-chip overdue">Overdue</span>${priorityChip(lead)}`;
+  }
+  if (lead.callback_at) {
+    const sla = String(lead.callback_sla || '').toLowerCase();
+    if (sla === 'due_now' || sla === 'due_soon') return `<span class="due-chip due">Due now</span>${priorityChip(lead)}`;
+    return `<span class="due-chip scheduled">${fmtDateTime(lead.callback_at)}</span>${priorityChip(lead)}`;
+  }
+  return priorityChip(lead);
+}
+
+function scoreCell(lead) {
+  const score = Number(lead.score || 0);
+  const band = lead.score_band || (score >= 80 ? 'high' : score >= 70 ? 'mid' : 'low');
+  return `<span class="score ${band}" title="Qualification score">${score || '—'}</span>`;
+}
+
+function leadRow(lead, { dueTable = false } = {}) {
+  const rowClass = [
+    lead.is_hot ? 'hot-row' : '',
+    dueTable ? (isOverdue(lead.callback_at) ? 'overdue-row' : 'due-row') : '',
+  ].filter(Boolean).join(' ');
+  return `
+    <tr class="${rowClass}" data-workspace-row="${lead.id}">
+      <td data-label="Business">
+        <div class="lead-line"><span class="lead-name" data-workspace="${lead.id}" role="button" tabindex="0">${escapeHtml(lead.business_name)}</span>${lead.is_synthetic ? '<span class="test-badge">Synthetic</span>' : ''}</div>
+        <div class="mono">${escapeHtml(lead.contact_name || 'No contact name')}</div>
+        <div class="mono">${escapeHtml(verticalLabelFor(lead))} · ${escapeHtml(lead.city || '')}</div>
+      </td>
+      <td data-label="Phone">${phoneCell(lead)}</td>
+      <td data-label="Why now"><div class="why-now">${escapeHtml(whyNow(lead))}</div></td>
+      <td data-label="Next action"><div class="next-action-cell">${nextActionCell(lead)}</div></td>
+      <td data-label="Urgency"><div class="next-action-cell" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">${urgencyChip(lead)}</div></td>
+      <td data-label="Score">${scoreCell(lead)}</td>
+      <td data-label="Actions">${rowTools(lead)}</td>
+    </tr>
+  `;
+}
+
+// Shared phone rendering: normalized display + tel: link routed through the
+// dial handoff controller so workspace state survives the OS call handoff.
+function phoneCell(lead) {
+  if (!lead.phone) return '<div class="mono">No phone</div>';
+  const pf = window.PulseforgePhone;
+  const display = pf ? (pf.formatPhoneDisplay(lead.phone) || lead.phone) : lead.phone;
+  const href = pf ? pf.telHref(lead.phone) : `tel:${lead.phone}`;
+  return href
+    ? `<div><a href="${href}" data-dial="${lead.id}" aria-label="Call ${display}">${display}</a></div>`
+    : `<div>${display}</div>`;
 }
 
 async function api(path, options = {}) {
@@ -934,61 +1133,26 @@ function setClock() {
   document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
 }
 
-function renderAgents() {
-  document.getElementById('agentStrip').innerHTML = agents.map(([name, role]) => `
-    <div class="agent-tile">
-      <div><div class="agent-name">${name}</div><div class="agent-role">${role}</div></div>
-      <div class="agent-dot"></div>
-    </div>
-  `).join('');
-}
-
-function statusButtons(lead) {
-  return `<div class="status-actions">
-    <button class="btn" data-status="contacted" data-id="${lead.id}">Contacted</button>
-    <button class="btn" data-status="follow_up" data-id="${lead.id}">Follow-up</button>
-    <button class="btn primary" data-status="booked" data-id="${lead.id}">Booked</button>
-    <button class="btn dead" data-status="dead" data-id="${lead.id}">Dead</button>
-  </div>`;
-}
-
 function renderQueue() {
   const body = document.getElementById('queueRows');
-  document.getElementById('newCount').textContent = `${leads.length} lead${leads.length === 1 ? '' : 's'}`;
-  if (!leads.length) {
-    body.innerHTML = `<tr><td colspan="8" class="empty">${queueSearch ? 'No matching leads' : 'No new Scout-qualified leads waiting'}</td></tr>`;
+  const visible = leads.filter(matchesQueueFilter);
+  document.getElementById('newCount').textContent = `${visible.length}${queueFilter !== 'all' ? ` / ${leads.length}` : ''} lead${visible.length === 1 ? '' : 's'}`;
+  if (!visible.length) {
+    body.innerHTML = `<tr><td colspan="7" class="empty">${queueSearch || queueFilter !== 'all' ? 'No matching leads' : 'No Scout-qualified leads waiting'}</td></tr>`;
     return;
   }
-  body.innerHTML = leads.map(lead => `
-    <tr class="${lead.is_hot ? 'hot-row' : ''}">
-      <td data-label="Business"><div class="lead-line"><span class="lead-name" data-open="${lead.id}">${lead.business_name}</span>${lead.is_synthetic ? '<span class="test-badge">Synthetic</span>' : ''}<span class="age ${ageInfo(lead.date_added).klass}">${ageInfo(lead.date_added).label}</span></div><div class="mono">${lead.contact_name || 'No contact name'}</div></td>
-      <td data-label="Vertical">${lead.vertical}${lead.priority_reason ? `<div class="mono">${lead.priority_reason}</div>` : ''}</td>
-      <td data-label="City">${lead.city}</td>
-      <td data-label="Score"><span class="score ${lead.score_band}">${lead.score}</span></td>
-      <td data-label="Date Added">${fmtDate(lead.date_added)}</td>
-      <td data-label="Phone / Email"><div>${lead.phone || '-'}</div><div class="mono">${lead.email || '-'}</div></td>
-      <td data-label="Status">${statusButtons(lead)}</td>
-      <td data-label="Actions">${rowTools(lead)}</td>
-    </tr>
-  `).join('');
+  body.innerHTML = visible.map(lead => leadRow(lead)).join('');
 }
 
 function renderDue() {
   const body = document.getElementById('dueRows');
-  document.getElementById('dueCount').textContent = `${dueLeads.length} callback${dueLeads.length === 1 ? '' : 's'}`;
-  if (!dueLeads.length) {
-    body.innerHTML = `<tr><td colspan="5" class="empty">${queueSearch ? 'No matching callbacks' : 'No callbacks due today'}</td></tr>`;
+  const visible = dueLeads.filter(matchesQueueFilter);
+  document.getElementById('dueCount').textContent = `${visible.length} callback${visible.length === 1 ? '' : 's'}`;
+  if (!visible.length) {
+    body.innerHTML = `<tr><td colspan="7" class="empty">${queueSearch || queueFilter !== 'all' ? 'No matching callbacks' : 'No callbacks due today'}</td></tr>`;
     return;
   }
-  body.innerHTML = dueLeads.map(lead => `
-    <tr class="${isOverdue(lead.callback_at) ? 'overdue-row' : 'due-row'} ${lead.is_hot ? 'hot-row' : ''}">
-      <td data-label="Business"><div class="lead-line"><span class="lead-name" data-open="${lead.id}">${lead.business_name}</span><span class="age ${ageInfo(lead.date_added).klass}">${ageInfo(lead.date_added).label}</span></div><div class="mono">${lead.contact_name || 'No contact name'} · ${stageLabels[lead.status] || lead.status}</div></td>
-      <td data-label="Callback"><div>${fmtDateTime(lead.callback_at)}</div><span class="sla-badge ${lead.callback_sla || ''}">${String(lead.callback_sla || 'scheduled').replace('_',' ')}</span></td>
-      <td data-label="Score"><span class="score ${lead.score_band}">${lead.score}</span></td>
-      <td data-label="Phone / Email"><div>${lead.phone || '-'}</div><div class="mono">${lead.email || '-'}</div></td>
-      <td data-label="Actions">${rowTools(lead)}</td>
-    </tr>
-  `).join('');
+  body.innerHTML = visible.map(lead => leadRow(lead, { dueTable: true })).join('');
 }
 
 function renderLeadSelect() {
@@ -998,6 +1162,31 @@ function renderLeadSelect() {
   select.innerHTML = source.map(lead => `<option value="${lead.id}">${lead.business_name} · ${stageLabels[lead.status] || lead.status}</option>`).join('');
 }
 
+// Phase B pipeline card: company/contact, phone, last outcome, next action,
+// due date, priority, estimated value. Stage changes happen through the
+// keyboard-accessible move button (canonical lifecycle transition) or
+// drag-and-drop — no always-visible native dropdown.
+function pipelineCard(lead) {
+  const mrr = lead.mrr_value != null ? `$${Number(lead.mrr_value).toLocaleString()}/mo` : null;
+  const lastOutcome = lead.last_disposition
+    ? `${callDispositionLabels[lead.last_disposition] || lead.last_disposition.replaceAll('_', ' ')} · ${fmtDate(lead.last_disposition_at)}`
+    : 'No calls yet';
+  return `
+    <div class="lead-card ${lead.is_hot ? 'hot' : ''} ${String(lead.id) === String(lastDroppedLeadId) ? 'dropped' : ''}" draggable="true" data-lead-id="${lead.id}" data-current-status="${lead.status}">
+      <div class="lead-card-title" data-workspace="${lead.id}" role="button" tabindex="0">${lead.is_hot ? '⚡ ' : ''}${escapeHtml(lead.business_name)}</div>
+      <div class="lead-card-meta"><span class="mono">${escapeHtml(lead.contact_name || 'No contact name')}</span>${priorityChip(lead)}</div>
+      <div class="lead-card-meta">${phoneCell(lead)}${mrr ? `<span class="mono">${mrr}</span>` : ''}</div>
+      <div class="lead-card-meta"><span class="mono" title="Last outcome">${escapeHtml(lastOutcome)}</span></div>
+      <div class="lead-card-meta"><span class="next-action-cell">${nextActionCell(lead)}</span>${lead.callback_at ? dueStateChip(lead) : ''}</div>
+      <div class="lead-card-meta">
+        <button class="btn primary" data-workspace="${lead.id}" type="button" aria-label="Open call workspace for ${escapeHtml(lead.business_name)}">☎ Call</button>
+        <button class="btn" data-move-stage="${lead.id}" type="button" aria-label="Move ${escapeHtml(lead.business_name)} to another stage">Move</button>
+        <button class="btn" data-open="${lead.id}" type="button" aria-label="Details for ${escapeHtml(lead.business_name)}">Details</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderPipeline() {
   const grid = document.getElementById('pipelineGrid');
   grid.innerHTML = stages.map(stage => {
@@ -1005,17 +1194,7 @@ function renderPipeline() {
     return `<div class="stage" data-drop-status="${stage}">
       <div class="stage-head"><div class="stage-title">${stageLabels[stage]}</div><div class="stage-count">${items.length}</div></div>
       <div class="stage-body">
-        ${items.length ? items.map(lead => `
-          <div class="lead-card ${lead.is_hot ? 'hot' : ''} ${String(lead.id) === String(lastDroppedLeadId) ? 'dropped' : ''}" draggable="true" data-lead-id="${lead.id}" data-current-status="${lead.status}">
-            <div class="lead-card-title" data-open="${lead.id}">${lead.is_hot ? '⚡ ' : ''}${lead.business_name}</div>
-            <div class="lead-card-meta"><span class="mono">${lead.vertical} · ${ageInfo(lead.date_added).label}${lead.priority_reason ? ` · ${lead.priority_reason}` : ''}</span><span class="score ${lead.score_band}">${lead.score}</span></div>
-            <div class="lead-card-meta"><span class="attempt-badge">${lead.attempt_count || 0} attempts</span><button class="btn icon-btn ${lead.is_hot ? 'hot' : ''}" data-hot="${lead.id}" type="button">⚡</button></div>
-            <button class="btn primary" data-log-call="${lead.id}" type="button">☎ Log call</button>
-            <select data-select-status="${lead.id}">
-              ${stages.map(s => `<option value="${s}" ${s === lead.status ? 'selected' : ''}>${stageLabels[s]}</option>`).join('')}
-            </select>
-          </div>
-        `).join('') : `<div class="empty">${pipelineSearch ? 'No matches' : 'No leads'}</div>`}
+        ${items.length ? items.map(pipelineCard).join('') : `<div class="empty">${pipelineSearch ? 'No matches' : 'No leads'}</div>`}
       </div>
     </div>`;
   }).join('');
@@ -1031,20 +1210,74 @@ function renderPipeline() {
   }
 }
 
-function renderFeed() {
-  const box = document.getElementById('scoutFeed');
-  document.getElementById('feedSub').textContent = `${feed.length} recent leads · Auto-refreshing`;
-  if (!feed.length) {
-    box.innerHTML = '<div class="empty">No recent Scout leads</div>';
-    return;
+// ── Calls landing page (Phase B §2) ──────────────────────────────────────
+function nextBestCall() {
+  const overdue = dueLeads.filter(l => isOverdue(l.callback_at));
+  if (overdue.length) return { lead: overdue[0], why: 'Overdue callback — they expected to hear from you' };
+  if (dueLeads.length) return { lead: dueLeads[0], why: `Callback promised for ${fmtDateTime(dueLeads[0].callback_at)}` };
+  const callable = leads.filter(l => l.phone && !l.contact_prohibited && l.lifecycle_reason !== 'terminal_suppression');
+  if (callable.length) return { lead: callable[0], why: whyNow(callable[0]) };
+  return null;
+}
+
+function renderHome() {
+  const next = nextBestCall();
+  const card = document.getElementById('nextCallCard');
+  if (card) {
+    if (next) {
+      const lead = next.lead;
+      card.innerHTML = `
+        <div class="next-call-label">Next best call</div>
+        <div class="next-call-company">${escapeHtml(lead.business_name)}</div>
+        <div class="next-call-contact">${escapeHtml(lead.contact_name || 'No contact name')} · ${escapeHtml(verticalLabelFor(lead))} · ${escapeHtml(lead.city || '')}</div>
+        <div class="next-call-phone">${phoneCell(lead)}</div>
+        <div class="next-call-why">${escapeHtml(next.why)}</div>
+        <div class="next-call-actions">
+          <button class="btn primary start-call-btn" data-workspace="${lead.id}" type="button">☎ Start next call</button>
+          <button class="btn" data-open="${lead.id}" type="button">Details</button>
+        </div>
+      `;
+    } else {
+      card.innerHTML = `
+        <div class="next-call-label">Next best call</div>
+        <div class="next-call-company">Queue is clear</div>
+        <div class="next-call-contact">No callable leads right now. Check the Ready Queue for leads that need new phone numbers.</div>
+      `;
+    }
   }
-  box.innerHTML = feed.map(lead => `
-    <div class="feed-item" data-open="${lead.id}">
-      <div class="feed-icon">${lead.score}</div>
-      <div class="feed-text"><strong>${lead.business_name}</strong><br>${lead.vertical} · ${lead.city}</div>
-      <div class="feed-time">${fmtTime(lead.date_added)}</div>
-    </div>
-  `).join('');
+
+  const dueList = document.getElementById('homeDueList');
+  if (dueList) {
+    document.getElementById('homeDueCount').textContent = `${dueLeads.length}`;
+    dueList.innerHTML = dueLeads.length ? dueLeads.slice(0, 6).map(lead => `
+      <div class="home-list-item" data-workspace="${lead.id}" role="button" tabindex="0" aria-label="Open call workspace for ${escapeHtml(lead.business_name)}">
+        <div class="home-list-main"><div class="home-list-name">${escapeHtml(lead.business_name)}</div><div class="home-list-sub">${escapeHtml(whyNow(lead))}</div></div>
+        ${dueStateChip(lead)}
+      </div>
+    `).join('') : '<div class="empty">No callbacks due today</div>';
+  }
+
+  const queueList = document.getElementById('homeQueueList');
+  if (queueList) {
+    document.getElementById('homeQueueCount').textContent = `${leads.length}`;
+    queueList.innerHTML = leads.length ? leads.slice(0, 6).map(lead => `
+      <div class="home-list-item" data-workspace="${lead.id}" role="button" tabindex="0" aria-label="Open call workspace for ${escapeHtml(lead.business_name)}">
+        <div class="home-list-main"><div class="home-list-name">${escapeHtml(lead.business_name)}</div><div class="home-list-sub">${escapeHtml(verticalLabelFor(lead))} · ${escapeHtml(lead.city || '')}</div></div>
+        ${priorityChip(lead)}
+      </div>
+    `).join('') : '<div class="empty">Queue is empty</div>';
+  }
+
+  const outcomes = document.getElementById('homeOutcomesList');
+  if (outcomes) {
+    const calls = activityItems.filter(item => (item.action_type || item.channel) === 'call').slice(0, 6);
+    outcomes.innerHTML = calls.length ? calls.map(item => `
+      <div class="home-list-item">
+        <div class="home-list-main"><div class="home-list-name">${escapeHtml(item.business_name || 'Unknown')}</div><div class="home-list-sub">${escapeHtml((item.notes || 'No notes').slice(0, 90))}</div></div>
+        <span class="mono">${fmtTime(item.created_at)}</span>
+      </div>
+    `).join('') : '<div class="empty">No calls logged yet</div>';
+  }
 }
 
 function renderMetrics(m) {
@@ -1065,6 +1298,17 @@ function renderTodayStats(stats) {
   fill.style.width = `${pct}%`;
   fill.classList.toggle('low', calls < goal / 2);
   fill.classList.toggle('met', calls >= goal);
+  const rows = document.getElementById('homeProgressRows');
+  if (rows) {
+    const overdue = dueLeads.filter(l => isOverdue(l.callback_at)).length;
+    const remaining = Math.max(0, goal - calls);
+    rows.innerHTML = `
+      <div class="home-progress-row"><span>Calls made</span><strong>${calls}</strong></div>
+      <div class="home-progress-row"><span>Calls to goal</span><strong>${remaining}</strong></div>
+      <div class="home-progress-row"><span>Callbacks still due</span><strong>${dueLeads.length}${overdue ? ` (${overdue} overdue)` : ''}</strong></div>
+      <div class="home-progress-row"><span>Leads ready to call</span><strong>${leads.length}</strong></div>
+    `;
+  }
 }
 
 async function loadMetrics() {
@@ -1106,9 +1350,52 @@ async function loadManagerReviews() {
   }
 }
 
+// Consolidated activity panel (Phase B §7): Scout feed + operator activity
+// share one filterable component. Calls defaults to Prospect + Operator.
+let activityPanel = null;
+function setupActivityPanel() {
+  const root = document.getElementById('activityPanelRoot');
+  if (!root || !window.PulseforgeActivityPanel) return;
+  activityPanel = window.PulseforgeActivityPanel.create({
+    container: root,
+    title: 'Activity',
+    defaultFilters: ['prospect', 'operator'],
+    refreshMs: 60000,
+    onOpenProspect: id => openDetail(id),
+    sources: [
+      async () => {
+        feed = await api('/setter/api/scout-feed') || [];
+        return feed.map(lead => ({
+          id: `scout-${lead.id}`,
+          kind: 'prospect',
+          icon: String(lead.score ?? '•'),
+          strong: lead.business_name,
+          text: `${lead.vertical} · ${lead.city} — new Scout lead`,
+          occurredAt: lead.date_added,
+          prospectId: lead.id,
+        }));
+      },
+      async () => {
+        const activity = await api('/setter/api/activity') || [];
+        activityItems = activity;
+        renderActivityList();
+        renderHome();
+        return activity.map(item => ({
+          id: `act-${item.id}`,
+          kind: 'operator',
+          icon: (item.channel || item.action_type || '?').slice(0, 1).toUpperCase(),
+          strong: item.business_name,
+          text: `${item.channel || item.action_type} — ${item.notes || 'No notes'}`,
+          occurredAt: item.created_at,
+          prospectId: item.lead_id || null,
+        }));
+      },
+    ],
+  });
+}
+
 async function loadFeed() {
-  feed = await api('/setter/api/scout-feed') || [];
-  renderFeed();
+  if (activityPanel) await activityPanel.refresh();
 }
 
 async function loadQueue() {
@@ -1119,6 +1406,7 @@ async function loadQueue() {
   leads = await api(`/setter/api/leads${qs}`) || [];
   renderQueue();
   renderLeadSelect();
+  renderHome();
 }
 
 async function loadDue() {
@@ -1128,6 +1416,7 @@ async function loadDue() {
   const qs = `?${params}`;
   dueLeads = await api(`/setter/api/leads${qs}`) || [];
   renderDue();
+  renderHome();
 }
 
 async function loadPipeline() {
@@ -1140,23 +1429,30 @@ async function loadPipeline() {
   renderPipeline();
 }
 
-async function loadActivity() {
-  const activity = await api('/setter/api/activity') || [];
+function renderActivityList() {
   const list = document.getElementById('activityList');
-  if (!activity.length) {
+  if (!list) return;
+  if (!activityItems.length) {
     list.innerHTML = '<div class="empty">No logged touchpoints yet</div>';
     return;
   }
-  list.innerHTML = activity.map(item => `
+  list.innerHTML = activityItems.map(item => `
     <div class="activity-item">
       <div class="activity-icon">${(item.channel || item.action_type).slice(0,1)}</div>
-      <div class="activity-text"><strong>${item.business_name}</strong> · ${item.channel || item.action_type}<br>${item.notes || 'No notes'}</div>
+      <div class="activity-text"><strong>${escapeHtml(item.business_name)}</strong> · ${escapeHtml(item.channel || item.action_type)}<br>${escapeHtml(item.notes || 'No notes')}</div>
       <div class="activity-time">${fmtDate(item.created_at)} ${fmtTime(item.created_at)}</div>
     </div>
   `).join('');
 }
 
+async function loadActivity() {
+  activityItems = await api('/setter/api/activity') || [];
+  renderActivityList();
+  renderHome();
+}
+
 let _setterRetryTimer = null;
+let _setterCriticalFailures = 0;
 
 function setLiveState(state) {
   const el = document.getElementById('liveState');
@@ -1177,17 +1473,20 @@ async function runLoaders(loaders) {
   return results.filter(r => r.status === 'rejected').map(r => r.reason);
 }
 
-function scheduleSetterRetry() {
+function scheduleSetterRetry(delayMs) {
   if (_setterRetryTimer) return;
   _setterRetryTimer = setTimeout(() => {
     _setterRetryTimer = null;
     setLiveState('reconnecting');
     refreshAll();
-  }, 30000);
+  }, delayMs || 30000);
 }
 
 async function refreshAll() {
-  // Critical = core setter data; a failure here surfaces a red ERROR + auto-retry.
+  // Critical = core setter data. A single transient failure never flips the
+  // red ERROR badge — it shows a subtle RECONNECTING state with a fast retry.
+  // Red ERROR is reserved for a persistent, operator-blocking failure
+  // (two consecutive failed critical refreshes).
   // Background = supplementary panels; their failures are logged but never flip the header.
   const critical = [loadMetrics, loadQueue, loadDue, loadPipeline];
   const background = [loadTodayStats, loadQualityMetrics, loadManagerReviews, loadFeed, loadActivity];
@@ -1196,9 +1495,16 @@ async function refreshAll() {
   backgroundErrors.forEach(e => console.error('[setter] non-critical fetch failed:', e?.message || e));
   if (criticalErrors.length) {
     criticalErrors.forEach(e => console.error('[setter] critical fetch failed:', e?.message || e));
-    setLiveState('error');
-    scheduleSetterRetry();
+    _setterCriticalFailures += 1;
+    if (_setterCriticalFailures >= 2) {
+      setLiveState('error');
+      scheduleSetterRetry(30000);
+    } else {
+      setLiveState('reconnecting');
+      scheduleSetterRetry(5000);
+    }
   } else {
+    _setterCriticalFailures = 0;
     if (_setterRetryTimer) { clearTimeout(_setterRetryTimer); _setterRetryTimer = null; }
     setLiveState('live');
     openRequestedSetterContext();
@@ -1308,7 +1614,10 @@ function replaceLead(lead) {
 }
 
 function renderPhoneTools(lead) {
-  document.getElementById('detailPhone').textContent = lead.phone || '-';
+  const pf = window.PulseforgePhone;
+  const phoneDisplay = lead.phone ? (pf ? (pf.formatPhoneDisplay(lead.phone) || lead.phone) : lead.phone) : '-';
+  const telLink = lead.phone ? (pf ? pf.telHref(lead.phone) : `tel:${lead.phone}`) : null;
+  document.getElementById('detailPhone').textContent = phoneDisplay;
   document.getElementById('phoneStatus').textContent = '';
   document.getElementById('enrichPhoneBtn').style.display = lead.phone || lead.phone_setter_v1 || lead.is_synthetic ? 'none' : 'inline-block';
   document.getElementById('enrichPhoneBtn').disabled = false;
@@ -1317,9 +1626,11 @@ function renderPhoneTools(lead) {
   document.getElementById('contactLaunch').innerHTML = lead.is_synthetic
     ? '<span class="test-badge">Contact disabled for synthetic prospect</span>'
     : lead.phone ? `
-    <a class="btn primary launch-btn" href="tel:${lead.phone}">Call</a>
+    <a class="btn primary launch-btn" href="${telLink}" data-dial="${lead.id}">Call</a>
+    <button class="btn launch-btn" data-copy-phone="${lead.id}" type="button">Copy phone</button>
     ${lead.phone_setter_v1 ? '' : `<a class="btn launch-btn" href="sms:${lead.phone}">Text</a>`}
-  ` : '';
+    <button class="btn launch-btn" data-workspace="${lead.id}" type="button">⧉ Workspace</button>
+  ` : `<button class="btn launch-btn" data-workspace="${lead.id}" type="button">⧉ Workspace</button>`;
 }
 
 async function enrichPhone() {
@@ -1669,19 +1980,38 @@ function openDetail(id) {
 }
 
 function setTab(tab) {
-  activeTab = tab;
-  document.querySelectorAll('.nav-tab').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
-  document.querySelectorAll('.panel').forEach(panel => panel.classList.remove('active'));
-  document.getElementById(`${tab}Panel`).classList.add('active');
   const titles = {
-    queue:['LEADS QUEUE','Uncontacted Scout-qualified leads'],
+    home:['CALLS','Next best call, due callbacks, and today\u2019s progress'],
+    queue:['CALL QUEUE','Due callbacks and Scout-qualified leads ready to call'],
     pipeline:['PIPELINE BOARD','Stage counts and movement'],
     activity:['ACTIVITY LOG','Manual setter touchpoints'],
+    performance:['CALLS PERFORMANCE','Detailed setter metrics and quality'],
     resources:['RESOURCES','Scripts, commissions, FAQ, and support']
   };
+  if (!titles[tab] || !document.getElementById(`${tab}Panel`)) tab = 'home';
+  activeTab = tab;
+  document.querySelectorAll('.nav-tab').forEach(btn => {
+    const active = btn.dataset.tab === tab;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  document.querySelectorAll('.panel').forEach(panel => panel.classList.remove('active'));
+  document.getElementById(`${tab}Panel`).classList.add('active');
   document.getElementById('panelTitle').textContent = titles[tab][0];
   document.getElementById('panelSub').textContent = titles[tab][1];
+  // Keep the URL hash in sync so shell links like /setter#view=pipeline work.
+  const hash = `#view=${tab}`;
+  if (window.location.hash !== hash) history.replaceState(null, '', hash);
 }
+
+function tabFromHash() {
+  const match = /view=([a-z_]+)/.exec(window.location.hash || '');
+  return match ? match[1] : null;
+}
+window.addEventListener('hashchange', () => {
+  const tab = tabFromHash();
+  if (tab && tab !== activeTab) setTab(tab);
+});
 
 async function reviewSampledCall(id) {
   const score = Number(prompt('Quality score (1-5)', '4'));
@@ -1702,6 +2032,18 @@ async function reviewSampledCall(id) {
 document.addEventListener('click', event => {
   const tab = event.target.closest('.nav-tab');
   if (tab) setTab(tab.dataset.tab);
+  const filterBtn = event.target.closest('[data-queue-filter]');
+  if (filterBtn) {
+    queueFilter = filterBtn.dataset.queueFilter || 'all';
+    document.querySelectorAll('[data-queue-filter]').forEach(btn => {
+      const active = btn.dataset.queueFilter === queueFilter;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    renderDue();
+    renderQueue();
+    return;
+  }
   const hotBtn = event.target.closest('[data-hot]');
   if (hotBtn) {
     event.stopPropagation();
@@ -1728,8 +2070,33 @@ document.addEventListener('click', event => {
   if (logSentDraft) { anchorDraftAction(logSentDraft.dataset.logSentDraft, 'log-sent'); return; }
   const statusBtn = event.target.closest('[data-status]');
   if (statusBtn) updateStatus(statusBtn.dataset.id, statusBtn.dataset.status);
+  // Keyboard-accessible stage move: opens the details drawer and focuses the
+  // stage control, which routes through the canonical lifecycle endpoint.
+  const moveBtn = event.target.closest('[data-move-stage]');
+  if (moveBtn) {
+    event.stopPropagation();
+    openDetail(moveBtn.dataset.moveStage);
+    setTimeout(() => document.getElementById('detailStatus')?.focus(), 50);
+    return;
+  }
+  // Row select (not on an explicit control) opens the prospect workspace —
+  // Calls must not require navigating to Pipeline.
+  const row = event.target.closest('[data-workspace-row]');
+  if (row && !event.target.closest('button, a, input, select, textarea, [data-open], [data-workspace], [data-hot], [data-dial], [data-copy-phone]')) {
+    if (window.PulseforgeWorkspace) window.PulseforgeWorkspace.open(row.dataset.workspaceRow);
+    return;
+  }
   const open = event.target.closest('[data-open]');
   if (open) openDetail(open.dataset.open);
+});
+// Enter/Space activate elements promoted to role="button".
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  const target = event.target.closest('[role="button"][data-open], [role="button"][data-workspace]');
+  if (!target) return;
+  event.preventDefault();
+  if (target.dataset.workspace && window.PulseforgeWorkspace) window.PulseforgeWorkspace.open(target.dataset.workspace);
+  else if (target.dataset.open) openDetail(target.dataset.open);
 });
 
 document.addEventListener('change', event => {
@@ -1847,20 +2214,6 @@ document.getElementById('activityForm').addEventListener('submit', async event =
   await Promise.all([loadMetrics(), loadTodayStats(), loadQueue(), loadDue(), loadPipeline(), loadActivity()]);
 });
 
-(function setupMobileNav(){
-  const nav=document.querySelector('.nav-tabs');
-  const backdrop=document.getElementById('mobileBackdrop');
-  const hamburger=document.getElementById('mobileHamburger');
-  const closeBtn=document.getElementById('navClose');
-  if(!nav||!backdrop)return;
-  const open=()=>{nav.classList.add('open');backdrop.classList.add('open');};
-  const close=()=>{nav.classList.remove('open');backdrop.classList.remove('open');};
-  hamburger&&hamburger.addEventListener('click',open);
-  closeBtn&&closeBtn.addEventListener('click',close);
-  backdrop.addEventListener('click',close);
-  nav.querySelectorAll('.nav-tab').forEach(t=>t.addEventListener('click',close));
-})();
-
 (function setupScoutSheet(){
   const panel=document.querySelector('.right-panel');
   if(!panel)return;
@@ -1896,11 +2249,62 @@ document.getElementById('activityForm').addEventListener('submit', async event =
 document.getElementById('callDisposition').innerHTML = Object.entries(callDispositionLabels)
   .map(([value, label]) => `<option value="${value}">${label}</option>`)
   .join('');
-renderAgents();
 setClock();
 setInterval(setClock, 10000);
+setTab(tabFromHash() || 'home');
+setupActivityPanel();
 refreshAll();
 setInterval(refreshAll, 60000);
+</script>
+
+<script>
+// Phase A2 wiring: shared prospect workspace + dial handoff continuity.
+(function () {
+  function findLead(id) {
+    const all = [
+      ...(Array.isArray(leads) ? leads : []),
+      ...(Array.isArray(dueLeads) ? dueLeads : []),
+      ...Object.values(pipeline || {}).flat(),
+    ];
+    return all.find(lead => String(lead.id) === String(id)) || null;
+  }
+
+  document.addEventListener('click', event => {
+    const workspaceBtn = event.target.closest('[data-workspace]');
+    if (workspaceBtn && window.PulseforgeWorkspace) {
+      event.preventDefault();
+      event.stopPropagation();
+      window.PulseforgeWorkspace.open(workspaceBtn.dataset.workspace);
+      return;
+    }
+    const copyBtn = event.target.closest('[data-copy-phone]');
+    if (copyBtn && window.PulseforgePhone) {
+      event.preventDefault();
+      event.stopPropagation();
+      const lead = findLead(copyBtn.dataset.copyPhone);
+      if (lead?.phone) window.PulseforgePhone.copyPhone(lead.phone);
+      return;
+    }
+    const dialLink = event.target.closest('a[data-dial]');
+    if (dialLink && window.PulseforgePhone) {
+      event.preventDefault();
+      event.stopPropagation();
+      const lead = findLead(dialLink.dataset.dial);
+      window.PulseforgePhone.beginDialHandoff({
+        prospectId: dialLink.dataset.dial,
+        phone: lead?.phone || (dialLink.getAttribute('href') || '').replace('tel:', ''),
+        companyName: lead?.business_name || null,
+        clientId: lead?.client_id || null,
+        workspaceRoute: window.location.pathname,
+      });
+    }
+  }, true);
+
+  // Canonical lifecycle writes from the shared workspace refresh page data.
+  document.addEventListener('pulseforge:lifecycle-changed', () => {
+    if (typeof refreshAll === 'function') refreshAll();
+  });
+})();
 </script>
 </body>
 </html>
