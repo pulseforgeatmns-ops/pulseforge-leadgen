@@ -20,7 +20,11 @@ jobs:
       - name: Add PostgreSQL binaries to PATH
         run: echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
       - run: npm ci
+      - name: Disposable PostgreSQL harness concurrency stress
+        run: npm run test:postgres:harness
       - name: Disposable PostgreSQL revenue lifecycle
         run: npm run test:revenue:postgres
+      - name: Revenue Phase 1.6B controls, failure injection, and offline finalizer
+        run: npm run test:revenue:phase16b
       - name: Disposable PostgreSQL Anchor Phone Setter rehearsal
         run: npm run test:anchor-phone-setter:postgres

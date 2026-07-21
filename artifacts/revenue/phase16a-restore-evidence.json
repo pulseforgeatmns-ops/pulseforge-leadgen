@@ -1,0 +1,17 @@
+{
+  "restore_target_id": "127.0.0.1:5432/phase16a_revenue_restore_validation",
+  "restore_database": "phase16a_revenue_restore_validation",
+  "restore_timestamp": "2026-07-20T22:43:33.638Z",
+  "restore_result": "passed",
+  "schema_table_count": 73,
+  "schema_fingerprint": "649abe16ed956345e595485c219b51f3f02888c6c37b698fce8afafcbcce407b",
+  "anchor_safety": {
+    "id": 10,
+    "enabled_agents": [
+      "scout"
+    ],
+    "autosend_enabled": false
+  },
+  "isolation_confirmed": true,
+  "restore_operator": "Jacob Maynard <jacob@gopulseforge.com>"
+}

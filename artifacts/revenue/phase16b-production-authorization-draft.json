@@ -1,0 +1,382 @@
+{
+  "draft_status": "finalized_unsigned_non_executable_awaiting_operator_signatures_and_remaining_runtime_facts",
+  "draft_id": "0fdb8202-fce6-4127-896b-609f133e24bc",
+  "generated_at": "2026-07-20T23:51:29Z",
+  "revised_at": "2026-07-21T03:50:00Z",
+  "phase": "revenue-phase-1.6b-production-migration-controlled-anchor-canary",
+  "environment": "production",
+  "client_id": 10,
+  "client_name": "Anchor Cleaning",
+  "purpose": "Apply the certified Revenue Phase 1 and Phase 1.5 migrations, activate Anchor-only read capabilities, execute exactly one controlled Eliza Bulger lifecycle, disable operator writes immediately afterward, reconcile, prove deterministic reconstruction, and produce certification evidence.",
+  "authorization_id": "ce9005f1-6d6f-46fd-a52d-4081a79ed02f",
+  "authorized_operator": {
+    "name": "Jacob Maynard",
+    "identity": "jacob@gopulseforge.com",
+    "signature": null
+  },
+  "approving_authority": {
+    "name": "Jacob Maynard",
+    "title": "Founder",
+    "identity": "jacob@gopulseforge.com",
+    "signature": null
+  },
+  "approved_at": null,
+  "approved_at_policy": "Intentionally unset. Must be set to the actual UTC finalization time by Jacob Maynard at signing; never pre-filled.",
+  "window": {
+    "start": "2026-07-21T17:00:00Z",
+    "end": "2026-07-21T19:00:00Z",
+    "duration_minutes_required": 120,
+    "timezone_display": "America/New_York",
+    "local_display": "Tuesday, July 21, 2026, 1:00 PM–3:00 PM America/New_York",
+    "freeze_owner": "Jacob Maynard",
+    "freeze_scope": [
+      "no deployment",
+      "no unrelated migration",
+      "no manual Anchor runtime configuration change outside the authorized revenue flag sequence",
+      "no campaign, sender, provider, follow-up, or retention activation",
+      "no automatic continuation beyond Revenue Phase 1.6B"
+    ]
+  },
+  "release": {
+    "protected_main_commit": "cd6ed74abde896eb504db1fd70709d0bc67229b3",
+    "protected_main_commit_source": "local refs main and origin/main, verified 2026-07-20T23:51:29Z",
+    "prior_phase16a_deployed_commit_reference": "cd6ed74abde896eb504db1fd70709d0bc67229b3",
+    "deployed_commit": "cd6ed74abde896eb504db1fd70709d0bc67229b3",
+    "deployed_commit_verification": {
+      "observed_at": "2026-07-21T02:35:00Z",
+      "verification_source": "railway deployment list --service pulseforge-leadgen --environment production --json",
+      "deployment_status": "SUCCESS",
+      "deployment_created_at": "2026-07-20T01:43:28.431Z",
+      "git_branch": "main",
+      "image_digest": "sha256:1c244c7fb745b3fad5f33a96013fcbeb5a361363178a8f8fda8357f90f992ab4",
+      "protected_main_reconfirmed": "git ls-remote origin main returned cd6ed74abde896eb504db1fd70709d0bc67229b3 at 2026-07-21T02:33:10Z",
+      "matches_protected_main": true,
+      "note": "Read-only Railway control-plane and GitHub ref reads only; no production database access. Must be re-observed immediately before execution per identity_policy."
+    },
+    "railway_deployment_id": "22b3acf8-1bde-4ed9-89e0-906121f528a7",
+    "railway_service": "pulseforge-leadgen",
+    "railway_service_id": "5c662f94-ef90-42fc-8497-75b9c6d3cca1",
+    "railway_environment": "production",
+    "railway_environment_id": "7046b237-d3a6-4884-8a1e-bd75d809fa3b",
+    "railway_project": "charming-trust",
+    "railway_project_id": "5f6c50eb-6a61-4649-885e-dc3f3b80a2e5",
+    "identity_policy": "At finalization and immediately before execution, re-read the active Railway production deployment. deployed_commit must equal protected_main_commit and railway_deployment_id must identify the active successful pulseforge-leadgen production deployment. Phase 1.6A identity is reference evidence only and cannot substitute for a fresh check."
+  },
+  "branch_protection": {
+    "repository": "pulseforgeatmns-ops/pulseforge-leadgen",
+    "branch": "main",
+    "required_pull_request": true,
+    "required_approvals": 0,
+    "solo_founder_policy": true,
+    "dismiss_stale_reviews": true,
+    "required_status_checks_strict": true,
+    "required_check": "revenue-postgresql-required",
+    "required_check_app_id": 15368,
+    "administrators_enforced": true,
+    "force_pushes_allowed": false,
+    "deletions_allowed": false,
+    "observed_at": "2026-07-20T23:51:29Z",
+    "verification_source": "GitHub branch protection API read"
+  },
+  "migration_checksums": {
+    "phase1": {
+      "path": "migrations/2026-07-18-anchor-closed-loop-revenue-phase1.sql",
+      "sha256": "c703c88095df81098c8405b18f008a4b88a65c267622ffbb7eb48457012a4203"
+    },
+    "phase15": {
+      "path": "migrations/2026-07-18-anchor-closed-loop-revenue-phase15.sql",
+      "sha256": "9c8e1ed7b44e5fd4be9944193b1cfd1a9c1d54113795b7accd2d7d8d36fe23ed"
+    },
+    "phase15_operational_rollback": {
+      "path": "migrations/2026-07-18-anchor-closed-loop-revenue-phase15.rollback.sql",
+      "sha256": "2ae6e4a87638722bbb2ad40d6c218a7593cfd369920b2c67dbafa233955c3045"
+    },
+    "verification": "All three paths and hashes were verified from origin/main at cd6ed74abde896eb504db1fd70709d0bc67229b3."
+  },
+  "phase16a_prerequisite": {
+    "status": "durable_backup_verified",
+    "verdict": "COMPLETE",
+    "backup_identifier": "pulseforge-production-revenue-phase16a-20260720T224210Z",
+    "backup_created_at": "2026-07-20T22:43:25.318Z",
+    "postgres_version": "PostgreSQL 18.4",
+    "backup_sha256": "b307a2ecc4d1cc1132f3d82a60de6c3e51431fa9488beeecf1797b83fdddc1a6",
+    "backup_size_bytes": 7615481,
+    "backup_readable": true,
+    "drive_folder_id": "1pHiHFHQjTNVijXilJyrhLX-MAYxyGnXS",
+    "drive_file_id": "16AEDdxs1wYoxDBhMbM6u4i5yLThOJbVu",
+    "drive_path": "Pulseforge Production Backups/Revenue Phase 1.6A/pulseforge-production-revenue-phase16a-20260720T224210Z.dump.enc",
+    "independent_verification": "passed",
+    "restore_target": "127.0.0.1:5432/phase16a_revenue_restore_validation",
+    "restore_verified_at": "2026-07-20T22:43:33.638Z",
+    "restore_result": "passed",
+    "restore_schema_table_count": 73,
+    "restore_schema_fingerprint": "649abe16ed956345e595485c219b51f3f02888c6c37b698fce8afafcbcce407b",
+    "retention": "90 days after Phase 1.6 completion or explicit operator disposition; no early deletion",
+    "keychain_passphrase_present": true,
+    "keychain_passphrase_exposed": false,
+    "evidence_references": [
+      "artifacts/revenue/phase16a-durable-backup-closure.json",
+      "artifacts/revenue/phase16a-backup-evidence.json",
+      "artifacts/revenue/phase16a-restore-evidence.json",
+      "artifacts/revenue/phase16a-readonly-preflight.json",
+      "artifacts/revenue/phase16a-backup-readonly-execution.json"
+    ]
+  },
+  "canary": {
+    "maximum_canary_outcomes": 1,
+    "expected_outcome_count": 1,
+    "customer_name": "Eliza Bulger",
+    "customer_type": "residential",
+    "prospect_id": null,
+    "prospect_id_policy": "Intentionally null. Eliza Bulger is created as a new customer; no historical prospect ID may be fabricated, inferred, or substituted.",
+    "customer_linkage": "create_new_customer",
+    "customer_reference": "create_new_customer: Eliza Bulger",
+    "lead_source": "yelp",
+    "attribution_status": "confirmed",
+    "service_type": "main-bedroom pet-spray inspection/treatment",
+    "booked_revenue_cents": 15000,
+    "delivered_revenue_cents": 15000,
+    "collected_revenue_cents": 15000,
+    "refunded_revenue_cents": 0,
+    "net_collected_revenue_cents": 15000,
+    "payment_status": "succeeded",
+    "payment_provider": "manual",
+    "external_payment_id": null,
+    "expected_ledger_event_count": 12,
+    "expected_ledger_event_count_basis": [
+      "customer_created",
+      "opportunity_created",
+      "opportunity_contacted",
+      "opportunity_qualified",
+      "opportunity_quoted",
+      "revenue_outcome_updated after job creation",
+      "job_created",
+      "implicit job_started during completion",
+      "revenue_outcome_updated after completion",
+      "job_completed",
+      "revenue_outcome_updated after succeeded payment",
+      "payment_succeeded"
+    ],
+    "job_note": "Inspected the main bedroom for evidence of pet spray using a UV light. No evidence was found. The landlord requested the service proceed regardless. Job completed and Eliza Bulger paid $150 in full.",
+    "operator_only_runtime_values": {
+      "customer_primary_email": null,
+      "customer_primary_email_status": "APPROVED_NULL: Jacob Maynard explicitly approved null; contact information is unknown and must not be fabricated (2026-07-21).",
+      "customer_primary_phone": null,
+      "customer_primary_phone_status": "APPROVED_NULL: Jacob Maynard explicitly approved null; contact information is unknown and must not be fabricated (2026-07-21).",
+      "human_owner": "Jacob Maynard",
+      "human_owner_status": "OPERATOR_APPROVED: Jacob Maynard (2026-07-21).",
+      "service_address": null,
+      "service_address_status": "APPROVED_NULL: Jacob Maynard explicitly approved null; service address is unknown and must not be fabricated (2026-07-21).",
+      "scheduled_start": null,
+      "scheduled_start_status": "UNRESOLVED_NON_EXECUTABLE: supply {local_date, timezone:\"America/New_York\", precision:\"day\", operator_confirmed:true}. Exact clock time is not required and must not be fabricated.",
+      "completion_date": null,
+      "completion_date_status": "UNRESOLVED_NON_EXECUTABLE: supply {local_date, timezone:\"America/New_York\", precision:\"day\", operator_confirmed:true}. Exact clock time is not required and must not be fabricated.",
+      "payment_received_at": null,
+      "payment_received_at_status": "UNRESOLVED_NON_EXECUTABLE: supply {local_date, timezone:\"America/New_York\", precision:\"day\", operator_confirmed:true}. Exact clock time is not required and must not be fabricated.",
+      "payment_method": null,
+      "payment_method_status": "UNRESOLVED_NON_EXECUTABLE: job note evidences payment in full but not the method; must be supplied by Jacob Maynard.",
+      "estimated_direct_cost_cents": null,
+      "estimated_direct_cost_cents_status": "APPROVED_NULL: direct cost is unknown; operator directed null rather than a fabricated figure (2026-07-21).",
+      "actual_direct_cost_cents": null,
+      "actual_direct_cost_cents_status": "APPROVED_NULL: direct cost is unknown; operator directed null rather than a fabricated figure (2026-07-21).",
+      "correlation_id": "fd528a1a-091b-4f7b-9210-9a613ffcb9c5",
+      "idempotency_keys": {
+        "customer_create": "phase16b-eliza-customer-create-f6cc1c57-b4ce-4023-a0a3-5dbb98d17be8",
+        "opportunity_create": "phase16b-eliza-opportunity-create-dc88d132-9b59-4f44-a668-caf77d874244",
+        "opportunity_contacted": "phase16b-eliza-opportunity-contacted-a6e94426-33e4-4955-8c3a-f78a0158ba38",
+        "opportunity_qualified": "phase16b-eliza-opportunity-qualified-f34f98d0-a600-40a5-b6eb-37f8a8cff78f",
+        "opportunity_quoted": "phase16b-eliza-opportunity-quoted-e9da161a-bd5d-4404-b344-5d740c3d990d",
+        "job_create": "phase16b-eliza-job-create-283e4506-6d7d-43a2-a467-738eb777d408",
+        "job_complete": "phase16b-eliza-job-complete-c8d6f93f-16b1-4175-9d19-5b5655e807d0",
+        "payment_succeeded": "phase16b-eliza-payment-succeeded-81d9e480-1bbe-4304-9325-84f822c0bcfd"
+      },
+      "idempotency_key_policy": "Immutable once written here. Bound to authorization ce9005f1-6d6f-46fd-a52d-4081a79ed02f and correlation fd528a1a-091b-4f7b-9210-9a613ffcb9c5. Any regeneration invalidates the authorization hash and requires re-approval."
+    }
+  },
+  "initial_required_state": {
+    "anchor_enabled_agents": [
+      "scout"
+    ],
+    "anchor_autosend_enabled": false,
+    "revenue_environment_flags": {
+      "REVENUE_SCHEMA_ENABLED": false,
+      "REVENUE_OPERATOR_READS_ENABLED": false,
+      "REVENUE_OPERATOR_WRITES_ENABLED": false,
+      "REVENUE_MAX_READS_ENABLED": false,
+      "REVENUE_FOLLOWUP_RECOMMENDATIONS_ENABLED": false
+    },
+    "post_migration_database_flags": {
+      "revenue_schema_enabled": false,
+      "revenue_operator_reads_enabled": false,
+      "revenue_operator_writes_enabled": false,
+      "revenue_max_reads_enabled": false,
+      "revenue_followup_recommendations_enabled": false
+    },
+    "unexpected_revenue_events": 0,
+    "unexpected_revenue_outcomes": 0,
+    "health_required": "healthy"
+  },
+  "authorized_actions": [
+    "validate_exact_protected_main_deployment_commit_and_migration_checksums",
+    "apply_certified_phase1_revenue_migration",
+    "apply_certified_phase15_revenue_migration",
+    "verify_schema_constraints_permissions_triggers_and_health_with_all_flags_off",
+    "enable_revenue_schema_for_client_10_only",
+    "enable_revenue_operator_reads_for_client_10_only",
+    "enable_revenue_max_reads_for_client_10_only",
+    "temporarily_enable_revenue_operator_writes_for_client_10_for_one_named_canary_only",
+    "execute_exactly_one_eliza_bulger_canary_outcome",
+    "disable_revenue_operator_writes_immediately_after_canary",
+    "run_recorded_compare_only_reconciliation_for_client_10",
+    "run_non_destructive_deterministic_projection_reconstruction_comparison",
+    "produce_phase16b_certification_evidence"
+  ],
+  "flag_sequence": [
+    {
+      "step": 1,
+      "state": "all revenue environment and database flags off",
+      "required_before": "migration and post-migration structural verification"
+    },
+    {
+      "step": 2,
+      "state": "Anchor-only revenue schema, operator reads, and Max reads enabled; operator writes and follow-up recommendations off",
+      "required_before": "read-only verification and baseline compare-only reconciliation"
+    },
+    {
+      "step": 3,
+      "state": "Anchor-only operator writes enabled temporarily; follow-up recommendations remain off",
+      "required_before": "exactly one Eliza Bulger lifecycle"
+    },
+    {
+      "step": 4,
+      "state": "Anchor-only operator writes disabled immediately",
+      "required_before": "recorded reconciliation, deterministic reconstruction proof, certification, and window close"
+    }
+  ],
+  "reconciliation": {
+    "command": "npm run revenue:rebuild -- --client-id=10 --compare-only --record",
+    "expected_status": "passed",
+    "expected_ledger_event_count": 12,
+    "expected_projected_outcome_count": 1,
+    "expected_source_outcome_count": 1,
+    "expected_mismatched_records": 0,
+    "expected_unexplained_events": 0,
+    "expected_totals": {
+      "booked_revenue_cents": 15000,
+      "delivered_revenue_cents": 15000,
+      "collected_revenue_cents": 15000,
+      "refunded_revenue_cents": 0,
+      "net_collected_revenue_cents": 15000,
+      "job_count": 1,
+      "payment_count": 1,
+      "refund_count": 0,
+      "unattributed_outcome_count": 0,
+      "disputed_outcome_count": 0
+    }
+  },
+  "deterministic_reconstruction": {
+    "method": "Run the non-destructive projection reconstruction comparison twice against the same fixed client-10 event boundary after writes are disabled. Canonicalize away run identifiers and timestamps. Require identical reconstructed projection hashes, exact equality with the persisted projection, zero mismatches, and zero unexplained events.",
+    "fixed_event_boundary": null,
+    "first_reconstruction_hash": null,
+    "second_reconstruction_hash": null,
+    "persisted_projection_hash": null,
+    "required_equal": true
+  },
+  "required_false": {
+    "refunds_allowed": false,
+    "second_canary_allowed": false,
+    "other_client_writes_allowed": false,
+    "max_mutations_allowed": false,
+    "external_communications_allowed": false,
+    "provider_activity_allowed": false,
+    "followup_sends_allowed": false,
+    "followup_recommendations_enabled": false,
+    "retention_automation_allowed": false,
+    "historical_bulk_backfill_allowed": false,
+    "automatic_continuation_beyond_phase16b_allowed": false
+  },
+  "stop_conditions": [
+    "authorization validation fails or authorization is unsigned, unhashed, not yet active, or expired",
+    "protected-main commit, deployed commit, Railway deployment identity, migration path, or migration checksum differs",
+    "Phase 1.6A durable backup, readability, retention, Keychain, restore, or independent-verification evidence is unavailable or differs",
+    "production environment, database, client 10, or authorized actor cannot be conclusively identified",
+    "any revenue flag is enabled before its authorized sequence step or any non-client-10 revenue flag changes",
+    "schema, constraint, permission, trigger, append-only, route, application, database, or connection health verification fails",
+    "any one-cent discrepancy appears in booked, delivered, collected, refunded, or net-collected revenue",
+    "ledger event count is not exactly 12 or projected/source outcome count is not exactly 1",
+    "tenant mismatch, duplicate financial effect, duplicate outcome attempt, idempotency mismatch, or unauthorized record appears",
+    "append-only violation, unexplained event, source/ledger/projection mismatch, or reconciliation failure occurs",
+    "deterministic reconstruction hashes differ from each other or from the persisted projection",
+    "refund, external communication, provider activity, follow-up creation or send, retention activity, or Max mutation occurs",
+    "operator writes are not disabled immediately after the one canary attempt, including on failure",
+    "application or database health degrades or migration result is ambiguous",
+    "any request is made to continue automatically beyond Revenue Phase 1.6B"
+  ],
+  "rollback_owner": {
+    "name": "Jacob Maynard",
+    "identity": "jacob@gopulseforge.com"
+  },
+  "rollback_policy": {
+    "migration_failure": "Stop immediately. Do not retry or infer success. Preserve output and follow the certified operational rollback only under the named rollback owner.",
+    "post_migration_failure": "Keep all flags off. Preserve evidence. Do not run the canary.",
+    "canary_failure": "Disable operator writes immediately. Do not delete or mutate append-only revenue events. Use only separately reviewed compensating-event procedures if later authorized.",
+    "no_automatic_rollback_or_continuation": true
+  },
+  "certification_evidence_required": [
+    "final signed authorization and canonical authorization hash",
+    "fresh protected-main, Railway deployment, migration checksum, and production environment identity evidence",
+    "migration output and post-migration schema, constraint, permission, trigger, append-only, and health evidence",
+    "initial, transient, and final feature-flag state evidence scoped to client 10",
+    "all Eliza customer, opportunity, job, payment, outcome, ledger, audit, idempotency, and correlation identifiers",
+    "operator-write disablement timestamp and evidence",
+    "recorded compare-only reconciliation evidence",
+    "two deterministic reconstruction hashes and persisted projection hash",
+    "no external communication, provider activity, follow-up, retention, other-client write, refund, second canary, or Max mutation evidence",
+    "final COMPLETE or BLOCKED verdict with any stop condition"
+  ],
+  "execution_readiness": {
+    "ready_to_sign": false,
+    "ready_to_sign_blockers": "Operator and Founder attestations, actual UTC approved_at, and finalization via the offline finalizer remain outstanding. Confirmed operator facts (scheduled/completion/payment dates 2026-07-14 America/New_York day precision; payment method stripe_card) are recorded offline and must be supplied to the finalizer at signing; they are not written into this unsigned draft. Protected PR merge with mandatory revenue-postgresql-required on the exact release commit is the repository gate under the solo-founder zero-approval policy; independent human review is not a required gate.",
+    "ready_to_execute": false,
+    "implemented_components": {
+      "validator": "utils/revenuePhase16b.js",
+      "historical_date_handling": "utils/historicalTimestamp.js",
+      "runner": "services/revenuePhase16bRunner.js",
+      "reconstruction_verifier": "services/revenueReconstruction.js",
+      "execution_cli": "scripts/executeRevenuePhase16b.js",
+      "offline_finalizer_cli": "scripts/finalizeRevenuePhase16bAuthorization.js",
+      "disposable_postgres_harness": "test/helpers/disposablePostgres.js",
+      "tests": [
+        "test/revenuePhase16b.test.js",
+        "test/revenuePhase16bFinalizer.test.js",
+        "test/disposablePostgresHarness.test.js"
+      ]
+    },
+    "repository_gaps_requiring_offline_implementation_and_review_before_signing": [
+      "SUPERSEDED: earlier exploration concluded the Phase 1.6B validator, runner, historical-date derivation, and reconstruction verifier were missing. Those components are now implemented; see implemented_components and docs/REVENUE_PHASE16B_IMPLEMENTATION_REPORT.md.",
+      "SUPERSEDED: independent human review is not a required gate under the certified solo-founder policy (zero approvals). The repository gate is protected PR merge with mandatory revenue-postgresql-required passing on the exact release commit.",
+      "The current authorization intentionally remains unsigned, unapproved, and non-executable until Jacob supplies attestations and finalizes via the offline finalizer after the release commit is on protected main."
+    ],
+    "rule": "Implemented components do not themselves authorize execution. Protected-main merge with revenue-postgresql-required, signatures, approved_at, finalization, active window, fresh identity observation, and REVENUE_PHASE16B_PRODUCTION_ENABLED=true remain required. Independent human review is not required."
+  },
+  "remaining_operator_only_values": [
+    "authorized_operator.signature (Jacob Maynard's personal attestation; cannot be generated)",
+    "approving_authority.signature (Jacob Maynard's personal attestation as Founder; cannot be generated)",
+    "approved_at using the actual UTC time at signing",
+    "canary.operator_only_runtime_values.scheduled_start as an operator-confirmed America/New_York local_date with day precision",
+    "canary.operator_only_runtime_values.completion_date as an operator-confirmed America/New_York local_date with day precision",
+    "canary.operator_only_runtime_values.payment_received_at as an operator-confirmed America/New_York local_date with day precision",
+    "canary.operator_only_runtime_values.payment_method",
+    "final authorization_hash recomputed after signatures, approved_at, and all runtime values are fixed"
+  ],
+  "values_deferred_to_the_active_window_not_operator_provided": [
+    "deterministic_reconstruction.fixed_event_boundary (bound only after the post-migration baseline is observed inside the window)",
+    "execution-time re-observation of release.deployed_commit and release.railway_deployment_id per release.identity_policy"
+  ],
+  "authorization_hash_policy": "authorization_hash below is the canonical SHA-256 of this exact unsigned draft with authorization_hash excluded and every object key recursively sorted. It binds the generated IDs, window, window owners, deployment identity, historical-date precision policy, and canary facts against tampering. It is NOT the final signing hash: it must be recomputed after signatures, approved_at, and the remaining runtime values are fixed, and the final hash supersedes it.",
+  "authorization_hash": "add3646e275aeba07969b8e21b32d52e9b7831085efc10cad1f9da5a63ac447f",
+  "approved": false,
+  "production_execution_permitted": false,
+  "executable": false,
+  "automatic_continuation": false
+}
