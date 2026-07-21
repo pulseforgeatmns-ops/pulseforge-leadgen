@@ -36,6 +36,49 @@ function checkpoint(options, name, evidence) {
   }
 }
 
+// Full PostgreSQL error context. The 2026-07-21 production attempt lost its
+// initiating error (SQLSTATE 42830) because only code and message were kept
+// and were later overwritten by a secondary 25P02; preserve everything the
+// driver exposes, with no query parameter values.
+function pgErrorDetails(error) {
+  if (!error) return null;
+  return {
+    code: error.code || null,
+    message: error.message,
+    severity: error.severity || null,
+    detail: error.detail || null,
+    hint: error.hint || null,
+    position: error.position || null,
+    schema: error.schema || null,
+    table: error.table || null,
+    column: error.column || null,
+    constraint: error.constraint || null,
+    routine: error.routine || null,
+  };
+}
+
+// Best-effort statement location inside a migration file: the byte position
+// PostgreSQL reports for parse-time errors, else the first line mentioning
+// the object the error names.
+function locateStatement(sql, error) {
+  const position = Number(error?.position);
+  if (Number.isInteger(position) && position > 0 && position <= sql.length) {
+    return {
+      line: sql.slice(0, position - 1).split('\n').length,
+      statement_preview: sql.slice(position - 1).split('\n', 1)[0].trim().slice(0, 200),
+    };
+  }
+  const needle = error?.constraint || error?.table;
+  if (needle) {
+    const lines = sql.split('\n');
+    const index = lines.findIndex(line => line.includes(needle));
+    if (index !== -1) {
+      return { line: index + 1, statement_preview: lines[index].trim().slice(0, 200) };
+    }
+  }
+  return null;
+}
+
 function operationContext(runtime, key, authorization) {
   return {
     idempotencyKey: runtime.idempotency_keys[key],
@@ -66,6 +109,12 @@ async function disableWrites(db, actor) {
   if (result.rowCount !== 1) throw new Error('Anchor write-flag shutdown did not affect exactly one row');
 }
 
+// LEGACY shutdown prover retained only as the documented defective behavior:
+// it runs on the caller's connection, so after a failed migration it inherits
+// the aborted transaction, raises 25P02, and can neither prove nor disprove
+// anything. The production runner must use
+// verifyWritesDisabledOnFreshConnection instead. Exported for the regression
+// test that pins the 2026-07-21 failure mode.
 async function forceAndProveWritesDisabled(db, actor) {
   const table = await db.query(
     `SELECT to_regclass('public.revenue_feature_flags') IS NOT NULL AS present`
@@ -81,6 +130,89 @@ async function forceAndProveWritesDisabled(db, actor) {
     [CLIENT_ID]
   );
   return rows.length === 0 || rows[0].revenue_operator_writes_enabled === false;
+}
+
+async function releaseConnection(db) {
+  if (!db) return;
+  if (typeof db.release === 'function') db.release();
+  else if (typeof db.end === 'function') await db.end().catch(() => {});
+}
+
+// Write-shutdown proof on a FRESH connection, never the (possibly aborted)
+// execution connection.
+// - revenue_feature_flags absent  -> writes were never enable-able:
+//   { writes_disabled: true, reason: 'feature_flag_table_absent_pre_migration' }
+// - present, Anchor flag on       -> force it off, re-verify, report forced_off
+// - present, another client on    -> report false; other tenants are never
+//   mutated by this runner (other_client_writes_allowed is a prohibition)
+async function verifyWritesDisabledOnFreshConnection(openDatabase, actor) {
+  const db = await openDatabase();
+  try {
+    const probe = await db.query(`
+      SELECT to_regclass('public.revenue_feature_flags') IS NOT NULL AS flags_present,
+             to_regclass('public.revenue_events') IS NOT NULL AS phase1_present
+    `);
+    const result = {
+      verified_on_fresh_connection: true,
+      verified_at: new Date().toISOString(),
+      post_check_schema: {
+        phase1_tables_present: probe.rows[0].phase1_present === true,
+        feature_flag_table_present: probe.rows[0].flags_present === true,
+      },
+    };
+    if (probe.rows[0].flags_present !== true) {
+      return {
+        ...result,
+        writes_disabled: true,
+        reason: 'feature_flag_table_absent_pre_migration',
+      };
+    }
+    const forced = await db.query(`
+      UPDATE revenue_feature_flags
+      SET revenue_operator_writes_enabled=FALSE, updated_at=NOW(), updated_by=$2
+      WHERE client_id=$1 AND revenue_operator_writes_enabled=TRUE
+    `, [CLIENT_ID, actor]);
+    const anchor = await db.query(
+      'SELECT revenue_operator_writes_enabled FROM revenue_feature_flags WHERE client_id=$1',
+      [CLIENT_ID]
+    );
+    const others = await db.query(
+      'SELECT client_id FROM revenue_feature_flags WHERE client_id<>$1 AND revenue_operator_writes_enabled=TRUE ORDER BY client_id',
+      [CLIENT_ID]
+    );
+    const anchorOff = anchor.rows.length === 0
+      || anchor.rows[0].revenue_operator_writes_enabled === false;
+    const otherClients = others.rows.map(row => Number(row.client_id));
+    let reason;
+    if (!anchorOff) reason = 'anchor_write_flag_still_enabled';
+    else if (otherClients.length) reason = 'non_anchor_client_writes_enabled';
+    else if (forced.rowCount > 0) reason = 'anchor_write_flag_forced_off';
+    else reason = 'verified_off';
+    return {
+      ...result,
+      writes_disabled: anchorOff && otherClients.length === 0,
+      reason,
+      anchor_flag_forced_off: forced.rowCount > 0,
+      other_clients_with_writes_enabled: otherClients,
+    };
+  } finally {
+    await releaseConnection(db);
+  }
+}
+
+// Immediate rollback after any failed statement. ROLLBACK outside a
+// transaction only emits a warning, so this is always safe to issue, and its
+// outcome is reported separately from the initiating failure.
+async function rollbackAfterFailure(db) {
+  const result = { attempted: true, at: new Date().toISOString() };
+  try {
+    await db.query('ROLLBACK');
+    result.succeeded = true;
+  } catch (error) {
+    result.succeeded = false;
+    result.error = pgErrorDetails(error);
+  }
+  return result;
 }
 
 async function flagState(db) {
@@ -128,6 +260,19 @@ async function assertInitialSchemaState(db) {
   if (constraints.rows[0].foreign_keys < 10 || constraints.rows[0].checks < 10) {
     throw new Error('Revenue foreign-key or check-constraint verification failed');
   }
+  const tenantKeys = await db.query(`
+    SELECT COUNT(*)::int AS count
+    FROM pg_constraint c
+    WHERE c.contype IN ('p','u')
+      AND c.conrelid IN ('public.companies'::regclass, 'public.prospects'::regclass)
+      AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
+           FROM unnest(c.conkey) AS k(attnum)
+           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum)
+          = ARRAY['client_id','id']
+  `);
+  if (tenantKeys.rows[0].count !== 2) {
+    throw new Error('Tenant-scoped composite keys on companies and prospects are missing');
+  }
   const indexes = await db.query(`
     SELECT indexname,indexdef
     FROM pg_indexes
@@ -170,6 +315,7 @@ async function assertInitialSchemaState(db) {
   return {
     tables: tables.rows.map(row => row.table_name),
     constraints: constraints.rows[0],
+    tenant_composite_keys: tenantKeys.rows[0].count,
     indexes: indexes.rows.map(row => row.indexname),
     public_ledger_mutation_privileges: publicWrites.rows[0].count,
     health: 'healthy',
@@ -312,6 +458,7 @@ async function executePhase16b(authorization, dependencies, options = {}) {
     };
   }
 
+  const runtimeValues = authorization.canary.operator_only_runtime_values;
   const evidence = {
     phase: authorization.phase,
     authorization_id: authorization.authorization_id,
@@ -322,9 +469,32 @@ async function executePhase16b(authorization, dependencies, options = {}) {
     identity: observed,
     validation,
     checkpoints: [],
+    migration_checkpoints: [],
     writes_disabled: null,
     automatic_continuation: false,
   };
+
+  // Every migration checkpoint carries UTC timestamp, correlation ID,
+  // migration checksum, runner-tracked transaction state, database role,
+  // and effective search path.
+  const diagnostics = {
+    correlationId: runtimeValues.correlation_id,
+    role: null,
+    searchPath: null,
+  };
+  function migrationCheckpoint(stage, entry = {}) {
+    evidence.migration_checkpoints.push({
+      stage,
+      at: new Date().toISOString(),
+      correlation_id: diagnostics.correlationId,
+      database_role: diagnostics.role,
+      search_path: diagnostics.searchPath,
+      migration: entry.migration || null,
+      migration_sha256: entry.migration_sha256 || null,
+      transaction_state: entry.transaction_state || 'none',
+      result: entry.result === undefined ? 'passed' : entry.result,
+    });
+  }
 
   let db;
   try {
@@ -337,8 +507,19 @@ async function executePhase16b(authorization, dependencies, options = {}) {
   }
   evidence.production_access_opened = true;
   let lockAcquired = false;
-  let writesWereEnabled = false;
   try {
+    const session = await db.query(
+      "SELECT current_user AS role, current_setting('search_path') AS search_path"
+    );
+    diagnostics.role = session.rows[0].role;
+    diagnostics.searchPath = session.rows[0].search_path;
+    migrationCheckpoint('production_identity_verified', {
+      result: {
+        protected_main_commit: observed.protected_main_commit,
+        railway_deployment_id: observed.railway_deployment?.id || null,
+      },
+    });
+
     if (options.mode === 'rehearsal') {
       if (!dependencies.assertDisposableDatabase
         || await dependencies.assertDisposableDatabase(db) !== true) {
@@ -359,8 +540,13 @@ async function executePhase16b(authorization, dependencies, options = {}) {
     `);
     const phase1Exists = existingSchema.rows[0].phase1;
     const phase15Exists = existingSchema.rows[0].phase15;
+    migrationCheckpoint('pre_migration_baseline_captured', {
+      result: { phase1_exists: phase1Exists, phase15_exists: phase15Exists },
+    });
     if (phase1Exists !== phase15Exists) {
-      throw new Error('Partial or ambiguous revenue migration state');
+      const error = new Error('Partial or ambiguous revenue migration state');
+      error.code = 'PHASE16B_AMBIGUOUS_MIGRATION_STATE';
+      throw error;
     }
     if (!phase1Exists) {
       for (const migration of ['phase1', 'phase15']) {
@@ -372,7 +558,36 @@ async function executePhase16b(authorization, dependencies, options = {}) {
         if (actualHash !== descriptor.sha256) {
           throw new Error(`Migration content checksum drift: ${migration}`);
         }
-        await db.query(sql);
+        // The certified migration files each manage exactly one explicit
+        // BEGIN…COMMIT transaction; the runner records the boundary on both
+        // sides and rolls back immediately on any failed statement.
+        migrationCheckpoint(`${migration}_transaction_opened`, {
+          migration: descriptor.path,
+          migration_sha256: descriptor.sha256,
+          transaction_state: 'opened_by_migration_file',
+        });
+        try {
+          await db.query(sql);
+        } catch (error) {
+          migrationCheckpoint(`${migration}_failed`, {
+            migration: descriptor.path,
+            migration_sha256: descriptor.sha256,
+            transaction_state: 'aborted',
+            result: pgErrorDetails(error),
+          });
+          error.phase16bMigration = {
+            migration,
+            path: descriptor.path,
+            sha256: descriptor.sha256,
+            statement_location: locateStatement(sql, error),
+          };
+          throw error;
+        }
+        migrationCheckpoint(`${migration}_committed`, {
+          migration: descriptor.path,
+          migration_sha256: descriptor.sha256,
+          transaction_state: 'committed',
+        });
       }
     }
     await db.query(`
@@ -386,6 +601,7 @@ async function executePhase16b(authorization, dependencies, options = {}) {
     checkpoint(options, 'after_migration_application', evidence);
 
     evidence.initial_schema = await assertInitialSchemaState(db);
+    migrationCheckpoint('post_migration_structural_verification_completed');
     checkpoint(options, 'after_schema_verification', evidence);
 
     await setFlags(db, {
@@ -417,10 +633,9 @@ async function executePhase16b(authorization, dependencies, options = {}) {
 
     await setFlags(db, { revenue_operator_writes_enabled: true },
       authorization.authorized_operator.identity);
-    writesWereEnabled = true;
     checkpoint(options, 'after_write_flag_enablement', evidence);
 
-    const runtime = authorization.canary.operator_only_runtime_values;
+    const runtime = runtimeValues;
     const scheduled = deriveTimestampFromHistoricalDate(runtime.scheduled_start);
     const completed = deriveTimestampFromHistoricalDate(runtime.completion_date);
     const paid = deriveTimestampFromHistoricalDate(runtime.payment_received_at);
@@ -514,7 +729,6 @@ async function executePhase16b(authorization, dependencies, options = {}) {
     };
 
     await disableWrites(db, authorization.authorized_operator.identity);
-    writesWereEnabled = false;
     checkpoint(options, 'after_write_disablement', evidence);
 
     const reconciliation = await dependencies.operations.reconcileTenant(db, CLIENT_ID);
@@ -558,28 +772,50 @@ async function executePhase16b(authorization, dependencies, options = {}) {
     evidence.verdict = 'COMPLETE';
     evidence.completed_at = new Date().toISOString();
   } catch (error) {
-    evidence.failure = { code: error.code || 'PHASE16B_BLOCKED', message: error.message };
+    // The first database error is the primary failure; it is never
+    // overwritten by anything that happens during cleanup or shutdown proof.
+    evidence.failure = {
+      ...pgErrorDetails(error),
+      code: error.code || 'PHASE16B_BLOCKED',
+    };
+    if (error.phase16bMigration) evidence.failure.migration = error.phase16bMigration;
+    evidence.failure_is_first_database_error = true;
     evidence.failed_at = new Date().toISOString();
+    // Roll back immediately so no later statement can run on an aborted
+    // transaction; the rollback outcome is reported separately.
+    evidence.rollback = await rollbackAfterFailure(db);
   } finally {
-    if (writesWereEnabled || lockAcquired) {
-      try {
-        evidence.writes_disabled = await forceAndProveWritesDisabled(
-          db,
-          authorization.authorized_operator.identity
-        );
-        if (!evidence.writes_disabled) throw new Error('Anchor write flag remains enabled');
-      } catch (error) {
-        evidence.writes_disabled = false;
-        evidence.write_disable_error = error.message;
-        evidence.verdict = 'BLOCKED';
+    // Shutdown proof always runs on a FRESH connection so an aborted
+    // execution transaction can never poison it (the 2026-07-21 defect).
+    try {
+      const shutdown = await verifyWritesDisabledOnFreshConnection(
+        dependencies.openDatabase,
+        authorization.authorized_operator.identity
+      );
+      evidence.write_shutdown = shutdown;
+      evidence.writes_disabled = shutdown.writes_disabled;
+    } catch (error) {
+      evidence.write_shutdown = {
+        verified_on_fresh_connection: false,
+        writes_disabled: false,
+        error: pgErrorDetails(error),
+      };
+      evidence.writes_disabled = false;
+    }
+    if (evidence.writes_disabled !== true) {
+      evidence.verdict = 'BLOCKED';
+      evidence.write_disable_error = evidence.write_shutdown.error?.message
+        || `write shutdown not proven: ${evidence.write_shutdown.reason}`;
+      if (!evidence.failure) {
         evidence.failure = {
-          code: error.code || 'WRITE_FLAG_SHUTDOWN_FAILED',
-          message: `Write-flag shutdown could not be proven: ${error.message}`,
+          code: 'WRITE_FLAG_SHUTDOWN_FAILED',
+          message: `Write-flag shutdown could not be proven: ${evidence.write_disable_error}`,
         };
+        evidence.failed_at = evidence.failed_at || new Date().toISOString();
       }
     }
     if (lockAcquired) await db.query('SELECT pg_advisory_unlock($1)', [RUNNER_LOCK_ID]).catch(() => {});
-    if (typeof db.release === 'function') db.release();
+    await releaseConnection(db);
   }
   return redactEvidence(evidence);
 }
@@ -596,6 +832,10 @@ module.exports = {
   disableWrites,
   executePhase16b,
   forceAndProveWritesDisabled,
+  locateStatement,
+  pgErrorDetails,
+  rollbackAfterFailure,
   setFlags,
   verifyLifecycleLedger,
+  verifyWritesDisabledOnFreshConnection,
 };

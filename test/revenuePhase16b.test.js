@@ -7,11 +7,16 @@ const path = require('path');
 const test = require('node:test');
 const { Pool } = require('pg');
 const {
+  RETIRED_AUTHORIZATION_IDS,
   canonicalAuthorizationHash,
   validatePhase16bAuthorization,
 } = require('../utils/revenuePhase16b');
 const { deriveTimestampFromHistoricalDate } = require('../utils/historicalTimestamp');
-const { executePhase16b } = require('../services/revenuePhase16bRunner');
+const {
+  executePhase16b,
+  forceAndProveWritesDisabled,
+  verifyWritesDisabledOnFreshConnection,
+} = require('../services/revenuePhase16bRunner');
 const { verifyDeterministicReconstruction } = require('../services/revenueReconstruction');
 const operations = require('../services/revenueOperations');
 const {
@@ -52,6 +57,10 @@ function evidenceFor(authorization, overrides = {}) {
 function signedAuthorization() {
   const authorization = structuredClone(baseDraft);
   authorization.draft_status = 'finalized_signed_executable';
+  // Tests pin their own two-hour window around fixedNow so they stay
+  // independent of the operational window recorded in the committed draft.
+  authorization.window.start = '2026-07-21T17:00:00Z';
+  authorization.window.end = '2026-07-21T19:00:00Z';
   authorization.authorized_operator.signature = 'I, Jacob Maynard, attest to this exact authorization.';
   authorization.approving_authority.signature = 'I, Jacob Maynard, Founder, approve this exact authorization.';
   authorization.approved_at = '2026-07-21T17:05:00Z';
@@ -142,6 +151,40 @@ test('historical day precision derives stable local noon without claiming an obs
   assert.equal(first.provenance.precision, 'day');
 });
 
+test('a consumed authorization is permanently retired; a new authorization is required after a failed production attempt', async () => {
+  // Rebuilding the consumed authorization perfectly — correct window, correct
+  // signatures, self-consistent hash — must still fail closed forever.
+  const retired = signedAuthorization();
+  retired.authorization_id = RETIRED_AUTHORIZATION_IDS[0];
+  rehash(retired);
+  const result = validatePhase16bAuthorization(retired, {
+    now: fixedNow,
+    observed: evidenceFor(retired),
+  });
+  assert.equal(result.valid, false);
+  assert.ok(result.failures.some(failure => /permanently retired/.test(failure)),
+    JSON.stringify(result.failures));
+
+  let opened = false;
+  const blocked = await executePhase16b(retired, {
+    observeIdentity: async () => evidenceFor(retired),
+    openDatabase: async () => { opened = true; throw new Error('must not open'); },
+  }, { mode: 'production', productionEnabled: true, now: fixedNow });
+  assert.equal(blocked.verdict, 'BLOCKED');
+  assert.equal(blocked.stage, 'authorization_validation');
+  assert.equal(opened, false, 'a retired authorization must never reach production');
+
+  // The current authorization uses entirely fresh idempotency keys and a
+  // fresh correlation ID; nothing from the consumed attempt is reusable.
+  const current = signedAuthorization();
+  const runtime = current.canary.operator_only_runtime_values;
+  assert.notEqual(runtime.correlation_id, 'fd528a1a-091b-4f7b-9210-9a613ffcb9c5');
+  for (const key of Object.values(runtime.idempotency_keys)) {
+    assert.ok(!/f6cc1c57|dc88d132|a6e94426|f34f98d0|e9da161a|283e4506|c8d6f93f|81d9e480/.test(key),
+      `idempotency key reuses consumed material: ${key}`);
+  }
+});
+
 test('runner rejects invalid or production-disabled authorization before database connectivity', async () => {
   let opened = false;
   const unsigned = structuredClone(baseDraft);
@@ -207,6 +250,238 @@ test('Phase 1.6B runner and all failure injections pass on disposable PostgreSQL
     await state.servicePool.end();
   }
 
+  // Wraps the runner's primary connection so its explicit ROLLBACK fails,
+  // simulating a rollback failure after a failed migration statement. The
+  // underlying client is still rolled back on release so the pool stays sane.
+  function breakRollbackClient(client) {
+    const originalQuery = client.query.bind(client);
+    const originalRelease = client.release.bind(client);
+    return new Proxy(client, {
+      get(target, property) {
+        if (property === 'query') {
+          return (text, ...args) => {
+            if (typeof text === 'string' && text.trim() === 'ROLLBACK') {
+              const error = new Error('simulated rollback failure');
+              error.code = 'XX000';
+              return Promise.reject(error);
+            }
+            return originalQuery(text, ...args);
+          };
+        }
+        if (property === 'release') {
+          return async (...args) => {
+            await originalQuery('ROLLBACK').catch(() => {});
+            return originalRelease(...args);
+          };
+        }
+        const value = target[property];
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  }
+
+  async function migrationFailureScenario(preSql, extra = {}) {
+    const runnerPool = await resetDatabase();
+    await runnerPool.query(preSql);
+    const service = resetRevenueService(postgres.connectionString);
+    const authorization = signedAuthorization();
+    let firstConnection = true;
+    const dependencies = {
+      observeIdentity: async () => evidenceFor(authorization),
+      openDatabase: async () => {
+        const client = await runnerPool.connect();
+        if (extra.breakRollback && firstConnection) {
+          firstConnection = false;
+          return breakRollbackClient(client);
+        }
+        return client;
+      },
+      assertDisposableDatabase: async () => true,
+      readMigration: async relative => fs.readFileSync(path.join(root, relative), 'utf8'),
+      revenue: service.revenue,
+      operations,
+    };
+    const result = await executePhase16b(authorization, dependencies, {
+      mode: 'rehearsal',
+      now: fixedNow,
+    });
+    return { result, runnerPool, servicePool: service.pool, authorization, dependencies };
+  }
+
+  await t.test('production failure reproduction: consumed migration raises 42830 on production-faithful schema, aborts the session, defeats the legacy prover, and is fixed by the corrected migration', async () => {
+    const pool = await resetDatabase();
+    const client = await pool.connect();
+    const consumedSql = fs.readFileSync(
+      path.join(root, 'test', 'fixtures', 'consumedPhase16bMigrationPhase1.sql'), 'utf8');
+
+    // Exact initiating production failure: composite tenant FK against
+    // companies, which lacks UNIQUE (client_id, id) in production.
+    let initiating;
+    try { await client.query(consumedSql); } catch (error) { initiating = error; }
+    assert.ok(initiating, 'the consumed migration must fail on production-faithful schema');
+    assert.equal(initiating.code, '42830');
+    assert.match(initiating.message,
+      /no unique constraint matching given keys for referenced table "companies"/);
+
+    // The migration file's explicit BEGIN leaves the session in an aborted
+    // transaction: every later statement on the SAME connection raises 25P02,
+    // which is exactly how the production evidence lost the initiating error.
+    let secondary;
+    try { await client.query('SELECT 1'); } catch (error) { secondary = error; }
+    assert.equal(secondary.code, '25P02');
+
+    // Old defect: the legacy same-connection prover cannot prove anything.
+    await assert.rejects(
+      forceAndProveWritesDisabled(client, 'regression-test'),
+      error => error.code === '25P02'
+    );
+
+    // Corrected behavior: a fresh connection proves writes were never
+    // enable-able because the feature-flag table does not exist.
+    const proof = await verifyWritesDisabledOnFreshConnection(() => pool.connect(), 'regression-test');
+    assert.equal(proof.writes_disabled, true);
+    assert.equal(proof.reason, 'feature_flag_table_absent_pre_migration');
+    assert.equal(proof.verified_on_fresh_connection, true);
+
+    await client.query('ROLLBACK');
+    const partial = await client.query(`
+      SELECT to_regclass('public.customers') IS NOT NULL AS customers,
+             to_regclass('public.revenue_events') IS NOT NULL AS events
+    `);
+    assert.deepEqual(partial.rows[0], { customers: false, events: false },
+      'the transactional migration must leave no partial schema');
+    client.release();
+
+    // The corrected certified migrations apply cleanly on the same schema and
+    // provision the tenant composite keys themselves.
+    for (const name of [
+      '2026-07-18-anchor-closed-loop-revenue-phase1.sql',
+      '2026-07-18-anchor-closed-loop-revenue-phase15.sql',
+    ]) {
+      await pool.query(fs.readFileSync(path.join(root, 'migrations', name), 'utf8'));
+    }
+    const keys = await pool.query(`
+      SELECT COUNT(*)::int AS count
+      FROM pg_constraint c
+      WHERE c.contype IN ('p','u')
+        AND c.conrelid IN ('public.companies'::regclass, 'public.prospects'::regclass)
+        AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
+             FROM unnest(c.conkey) AS k(attnum)
+             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum)
+            = ARRAY['client_id','id']
+    `);
+    assert.equal(keys.rows[0].count, 2);
+    assert.equal((await pool.query(
+      `SELECT to_regclass('public.revenue_feature_flags') IS NOT NULL AS present`
+    )).rows[0].present, true);
+    await pool.end();
+  });
+
+  await t.test('first-statement migration failure: initiating error stays primary, immediate rollback, fresh-connection shutdown proof, no partial schema', async () => {
+    const state = await migrationFailureScenario('CREATE TABLE customers (existing INTEGER)');
+    const result = state.result;
+    assert.equal(result.verdict, 'BLOCKED');
+    assert.equal(result.failure.code, '42P07', JSON.stringify(result.failure));
+    assert.equal(result.failure_is_first_database_error, true);
+    assert.equal(result.failure.migration.migration, 'phase1');
+    assert.ok(result.failure.migration.sha256);
+    assert.equal(result.rollback.attempted, true);
+    assert.equal(result.rollback.succeeded, true);
+    assert.equal(result.writes_disabled, true);
+    assert.equal(result.write_shutdown.verified_on_fresh_connection, true);
+    assert.equal(result.write_shutdown.reason, 'feature_flag_table_absent_pre_migration');
+    const failed = result.migration_checkpoints.find(entry => entry.stage === 'phase1_failed');
+    assert.ok(failed, 'a failed-migration checkpoint must be recorded');
+    assert.equal(failed.transaction_state, 'aborted');
+    assert.equal(failed.result.code, '42P07');
+    await close(state);
+  });
+
+  await t.test('mid-migration failure aborts transactionally: first error primary, rollback succeeds, no partial schema survives', async () => {
+    const state = await migrationFailureScenario('CREATE TABLE revenue_payments (existing INTEGER)');
+    const result = state.result;
+    assert.equal(result.verdict, 'BLOCKED');
+    assert.equal(result.failure.code, '42P07');
+    assert.equal(result.failure_is_first_database_error, true);
+    assert.notEqual(result.failure.code, '25P02',
+      'the aborted-transaction symptom must never replace the initiating error');
+    assert.equal(result.rollback.succeeded, true);
+    assert.equal(result.writes_disabled, true);
+    assert.equal(result.write_shutdown.reason, 'feature_flag_table_absent_pre_migration');
+    const partial = await state.runnerPool.query(`
+      SELECT to_regclass('public.customers') IS NOT NULL AS customers,
+             to_regclass('public.opportunities') IS NOT NULL AS opportunities,
+             to_regclass('public.revenue_events') IS NOT NULL AS events
+    `);
+    assert.deepEqual(partial.rows[0], { customers: false, opportunities: false, events: false },
+      'tables created before the failing statement must be rolled back');
+    await close(state);
+  });
+
+  await t.test('rollback failure is reported separately and never displaces the initiating error', async () => {
+    const state = await migrationFailureScenario(
+      'CREATE TABLE revenue_payments (existing INTEGER)', { breakRollback: true });
+    const result = state.result;
+    assert.equal(result.verdict, 'BLOCKED');
+    assert.equal(result.failure.code, '42P07', 'initiating error must remain primary');
+    assert.equal(result.rollback.attempted, true);
+    assert.equal(result.rollback.succeeded, false);
+    assert.match(result.rollback.error.message, /simulated rollback failure/);
+    assert.equal(result.writes_disabled, true,
+      'shutdown proof must succeed on a fresh connection even when rollback fails');
+    assert.equal(result.write_shutdown.verified_on_fresh_connection, true);
+    await close(state);
+  });
+
+  await t.test('ambiguous migration state fails closed before applying anything', async () => {
+    const state = await migrationFailureScenario('CREATE TABLE revenue_events (event_id UUID)');
+    const result = state.result;
+    assert.equal(result.verdict, 'BLOCKED');
+    assert.equal(result.failure.code, 'PHASE16B_AMBIGUOUS_MIGRATION_STATE');
+    const baseline = result.migration_checkpoints.find(
+      entry => entry.stage === 'pre_migration_baseline_captured');
+    assert.deepEqual(baseline.result, { phase1_exists: true, phase15_exists: false });
+    assert.equal(result.writes_disabled, true);
+    await close(state);
+  });
+
+  await t.test('fresh-connection shutdown verifier: flag table present with writes off, unexpectedly on, and enabled for another tenant', async () => {
+    const state = await scenario();
+    assert.equal(state.result.verdict, 'COMPLETE');
+    const open = () => state.runnerPool.connect();
+
+    let proof = await verifyWritesDisabledOnFreshConnection(open, 'verifier-test');
+    assert.equal(proof.writes_disabled, true);
+    assert.equal(proof.reason, 'verified_off');
+
+    await state.runnerPool.query(
+      'UPDATE revenue_feature_flags SET revenue_operator_writes_enabled=TRUE WHERE client_id=10');
+    proof = await verifyWritesDisabledOnFreshConnection(open, 'verifier-test');
+    assert.equal(proof.writes_disabled, true);
+    assert.equal(proof.reason, 'anchor_write_flag_forced_off');
+    assert.equal(proof.anchor_flag_forced_off, true);
+    assert.equal((await state.runnerPool.query(
+      'SELECT revenue_operator_writes_enabled FROM revenue_feature_flags WHERE client_id=10'
+    )).rows[0].revenue_operator_writes_enabled, false);
+
+    await state.runnerPool.query(`
+      INSERT INTO revenue_feature_flags (client_id,revenue_schema_enabled,revenue_operator_writes_enabled,updated_by)
+      VALUES (11,TRUE,TRUE,'verifier-test')
+      ON CONFLICT (client_id) DO UPDATE
+        SET revenue_schema_enabled=TRUE, revenue_operator_writes_enabled=TRUE
+    `);
+    proof = await verifyWritesDisabledOnFreshConnection(open, 'verifier-test');
+    assert.equal(proof.writes_disabled, false,
+      'a non-Anchor tenant with writes enabled must be reported, never silently mutated');
+    assert.equal(proof.reason, 'non_anchor_client_writes_enabled');
+    assert.deepEqual(proof.other_clients_with_writes_enabled, [11]);
+    assert.equal((await state.runnerPool.query(
+      'SELECT revenue_operator_writes_enabled FROM revenue_feature_flags WHERE client_id=11'
+    )).rows[0].revenue_operator_writes_enabled, true,
+      'the verifier must not write to other tenants');
+    await close(state);
+  });
+
   await t.test('exact 12-event lifecycle, one outcome, reconstruction, date provenance, and Max rejection', async () => {
     const state = await scenario();
     assert.equal(state.result.verdict, 'COMPLETE', JSON.stringify({
@@ -214,6 +489,34 @@ test('Phase 1.6B runner and all failure injections pass on disposable PostgreSQL
       reconstruction: state.result.reconstruction,
     }));
     assert.equal(state.result.writes_disabled, true);
+    assert.equal(state.result.write_shutdown.verified_on_fresh_connection, true);
+    assert.equal(state.result.write_shutdown.reason, 'verified_off');
+    const stages = state.result.migration_checkpoints.map(entry => entry.stage);
+    for (const stage of [
+      'production_identity_verified',
+      'pre_migration_baseline_captured',
+      'phase1_transaction_opened',
+      'phase1_committed',
+      'phase15_transaction_opened',
+      'phase15_committed',
+      'post_migration_structural_verification_completed',
+    ]) {
+      assert.ok(stages.includes(stage), `missing migration checkpoint: ${stage}`);
+    }
+    const runtimeValues = state.authorization.canary.operator_only_runtime_values;
+    for (const entry of state.result.migration_checkpoints) {
+      assert.ok(entry.at, 'checkpoint timestamp required');
+      assert.equal(entry.correlation_id, runtimeValues.correlation_id);
+      assert.ok(entry.database_role, 'checkpoint database role required');
+      assert.ok(entry.search_path, 'checkpoint search path required');
+    }
+    for (const phase of ['phase1', 'phase15']) {
+      const committed = state.result.migration_checkpoints.find(
+        entry => entry.stage === `${phase}_committed`);
+      assert.equal(committed.transaction_state, 'committed');
+      assert.equal(committed.migration_sha256,
+        state.authorization.migration_checksums[phase].sha256);
+    }
     assert.equal(state.result.reconciliation.ledger_event_count, 12);
     assert.equal(state.result.reconciliation.projected_outcome_count, 1);
     assert.equal(state.result.reconstruction.status, 'passed');
@@ -355,6 +658,7 @@ test('Phase 1.6B runner and all failure injections pass on disposable PostgreSQL
       assert.equal(state.result.verdict, 'BLOCKED');
       assert.equal(state.result.failure.code, 'PHASE16B_INJECTED_FAILURE');
       assert.equal(state.result.writes_disabled, true);
+      assert.equal(state.result.write_shutdown.verified_on_fresh_connection, true);
       const replay = await executePhase16b(state.authorization, state.dependencies, {
         mode: 'rehearsal',
         now: fixedNow,

@@ -3,15 +3,23 @@
 const crypto = require('crypto');
 
 const PHASE = 'revenue-phase-1.6b-production-migration-controlled-anchor-canary';
-const AUTHORIZATION_ID = 'ce9005f1-6d6f-46fd-a52d-4081a79ed02f';
+const AUTHORIZATION_ID = '3808a9f7-b8e4-467f-917f-5021dfb7d485';
 const CLIENT_ID = 10;
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 const MAX_IDENTITY_AGE_MS = 15 * 60 * 1000;
 
+// Authorizations consumed by a production attempt (successful or failed) are
+// permanently non-reusable. ce9005f1… was consumed by the blocked
+// 2026-07-21T04:02Z attempt (initiating SQLSTATE 42830; see
+// docs/REVENUE_PHASE16B_IMPLEMENTATION_REPORT.md).
+const RETIRED_AUTHORIZATION_IDS = Object.freeze([
+  'ce9005f1-6d6f-46fd-a52d-4081a79ed02f',
+]);
+
 const CERTIFIED_MIGRATIONS = Object.freeze({
   phase1: Object.freeze({
     path: 'migrations/2026-07-18-anchor-closed-loop-revenue-phase1.sql',
-    sha256: 'c703c88095df81098c8405b18f008a4b88a65c267622ffbb7eb48457012a4203',
+    sha256: 'c11740daa17a4d8495daa428134effdffaa0d64d8b343e044739a23d28fa6495',
   }),
   phase15: Object.freeze({
     path: 'migrations/2026-07-18-anchor-closed-loop-revenue-phase15.sql',
@@ -24,14 +32,14 @@ const CERTIFIED_MIGRATIONS = Object.freeze({
 });
 
 const IDEMPOTENCY_KEYS = Object.freeze({
-  customer_create: 'phase16b-eliza-customer-create-f6cc1c57-b4ce-4023-a0a3-5dbb98d17be8',
-  opportunity_create: 'phase16b-eliza-opportunity-create-dc88d132-9b59-4f44-a668-caf77d874244',
-  opportunity_contacted: 'phase16b-eliza-opportunity-contacted-a6e94426-33e4-4955-8c3a-f78a0158ba38',
-  opportunity_qualified: 'phase16b-eliza-opportunity-qualified-f34f98d0-a600-40a5-b6eb-37f8a8cff78f',
-  opportunity_quoted: 'phase16b-eliza-opportunity-quoted-e9da161a-bd5d-4404-b344-5d740c3d990d',
-  job_create: 'phase16b-eliza-job-create-283e4506-6d7d-43a2-a467-738eb777d408',
-  job_complete: 'phase16b-eliza-job-complete-c8d6f93f-16b1-4175-9d19-5b5655e807d0',
-  payment_succeeded: 'phase16b-eliza-payment-succeeded-81d9e480-1bbe-4304-9325-84f822c0bcfd',
+  customer_create: 'phase16b-eliza-customer-create-75948e35-53b2-4f91-afdd-58b3475f34e9',
+  opportunity_create: 'phase16b-eliza-opportunity-create-536fc409-2ca0-4b74-8009-9ceb9ee33451',
+  opportunity_contacted: 'phase16b-eliza-opportunity-contacted-dafd1487-c57a-4306-a03a-23afbe8084c2',
+  opportunity_qualified: 'phase16b-eliza-opportunity-qualified-5cdc5160-b9e5-40e0-94e4-56a02422ab70',
+  opportunity_quoted: 'phase16b-eliza-opportunity-quoted-bd54bca4-39ac-4b7f-98f8-0654cb00a45a',
+  job_create: 'phase16b-eliza-job-create-81de3325-c294-46b7-acc3-aa1a5b5cff11',
+  job_complete: 'phase16b-eliza-job-complete-9712d4b9-0eb1-410d-b430-2ec02ab16f2b',
+  payment_succeeded: 'phase16b-eliza-payment-succeeded-9aca5b37-85b2-41dd-823c-6b1d0dacf8c9',
 });
 
 const REQUIRED_ACTIONS = Object.freeze([
@@ -208,7 +216,9 @@ function validatePhase16bAuthorization(input, options = {}) {
   const failures = [];
   const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   if (!input || input.phase !== PHASE) failures.push(`phase must be ${PHASE}`);
-  if (input?.authorization_id !== (options.expectedAuthorizationId || AUTHORIZATION_ID)) {
+  if (RETIRED_AUTHORIZATION_IDS.includes(input?.authorization_id)) {
+    failures.push('authorization was consumed by a prior production attempt and is permanently retired; a new authorization is required');
+  } else if (input?.authorization_id !== (options.expectedAuthorizationId || AUTHORIZATION_ID)) {
     failures.push('authorization_id differs from the immutable authorization ID');
   }
   if (Number(input?.client_id) !== CLIENT_ID) failures.push('client_id must be 10');
@@ -332,6 +342,7 @@ module.exports = {
   CLIENT_ID,
   IDEMPOTENCY_KEYS,
   PHASE,
+  RETIRED_AUTHORIZATION_IDS,
   REQUIRED_ACTIONS,
   REQUIRED_FALSE,
   REQUIRED_STOP_CONDITIONS,

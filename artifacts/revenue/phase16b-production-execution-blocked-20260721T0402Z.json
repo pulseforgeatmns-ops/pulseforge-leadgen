@@ -1,0 +1,165 @@
+{
+  "phase": "revenue-phase-1.6b-production-migration-controlled-anchor-canary",
+  "authorization_id": "ce9005f1-6d6f-46fd-a52d-4081a79ed02f",
+  "authorization_hash": "fe4751ca64e963597968e660569ebe6e0ff9ed08e9de2365c20ba1a1a0e0b002",
+  "mode": "production",
+  "started_at": "2026-07-21T04:02:56.653Z",
+  "verdict": "BLOCKED",
+  "identity": {
+    "observed_at": "2026-07-21T04:02:56.637Z",
+    "protected_main_commit": "bf65bb8f4492147b7343240c0d005e58d9ed1acf",
+    "railway_deployment": {
+      "id": "adb2db69-7888-4fe2-bedb-53b6aca5d647",
+      "status": "SUCCESS",
+      "commit": "bf65bb8f4492147b7343240c0d005e58d9ed1acf",
+      "service": "pulseforge-leadgen",
+      "environment": "production",
+      "image_digest": "sha256:08eb41436e34e071ea4e501580065ea345e35a840b6b8af6bc6eba271e9c31d9"
+    },
+    "migration_checksums": {
+      "phase1": {
+        "path": "migrations/2026-07-18-anchor-closed-loop-revenue-phase1.sql",
+        "sha256": "c703c88095df81098c8405b18f008a4b88a65c267622ffbb7eb48457012a4203"
+      },
+      "phase15": {
+        "path": "migrations/2026-07-18-anchor-closed-loop-revenue-phase15.sql",
+        "sha256": "9c8e1ed7b44e5fd4be9944193b1cfd1a9c1d54113795b7accd2d7d8d36fe23ed"
+      },
+      "phase15_operational_rollback": {
+        "path": "migrations/2026-07-18-anchor-closed-loop-revenue-phase15.rollback.sql",
+        "sha256": "2ae6e4a87638722bbb2ad40d6c218a7593cfd369920b2c67dbafa233955c3045"
+      }
+    },
+    "phase16a": {
+      "closure": {
+        "phase": "revenue-phase-1.6a-backup-readonly",
+        "action": "durable_backup_closure",
+        "status": "durable_backup_verified",
+        "verdict": "COMPLETE",
+        "verifiedAt": "2026-07-20T23:46:46Z",
+        "backup_identifier": "pulseforge-production-revenue-phase16a-20260720T224210Z",
+        "persistent_local_copy": {
+          "path": "/Users/jake/Documents/Pulseforge Production Backups/Revenue Phase 1.6A/pulseforge-production-revenue-phase16a-20260720T224210Z.dump.enc",
+          "size_bytes": 7615481,
+          "sha256": "b307a2ecc4d1cc1132f3d82a60de6c3e51431fa9488beeecf1797b83fdddc1a6",
+          "verified": true
+        },
+        "drive": {
+          "account": "jacob@gopulseforge.com",
+          "folder": "Pulseforge Production Backups/Revenue Phase 1.6A",
+          "final_path": "Pulseforge Production Backups/Revenue Phase 1.6A/pulseforge-production-revenue-phase16a-20260720T224210Z.dump.enc",
+          "cloud_path": "/Users/jake/Library/CloudStorage/GoogleDrive-jacob@gopulseforge.com/My Drive/Pulseforge Production Backups/Revenue Phase 1.6A/pulseforge-production-revenue-phase16a-20260720T224210Z.dump.enc",
+          "folderId": "1pHiHFHQjTNVijXilJyrhLX-MAYxyGnXS",
+          "backupFileId": "16AEDdxs1wYoxDBhMbM6u4i5yLThOJbVu",
+          "metadataFileId": "1bVLUDkZAJPzYc084aTtBsYrOuKB1HopI",
+          "hashFileId": "1NpP03YWrBNJDnjyoeH_1YiOG0P_EJri7",
+          "uploaded_at": "2026-07-20T23:44:10Z",
+          "file_size_bytes": 7615481,
+          "uploadStatus": "durable_backup_verified",
+          "sharingState": "private_non_shared",
+          "retention": "90 days after Phase 1.6 completion or explicit operator disposition; no early deletion",
+          "immutability": "encrypted artifact + independent SHA-256; passphrase never written to disk artifacts"
+        },
+        "independent_download": {
+          "performed": true,
+          "method": "fileproviderctl evict + materialize + copy re-downloaded encrypted object",
+          "downloadDirectory": "/private/tmp/pulseforge-phase16a-durable-download-20260720T234410Z",
+          "encryptedSha256": "b307a2ecc4d1cc1132f3d82a60de6c3e51431fa9488beeecf1797b83fdddc1a6",
+          "encryptedSizeBytes": 7615481,
+          "encryptedHashMatchesUpload": true
+        },
+        "keychain": {
+          "service": "Pulseforge Revenue Phase16A Backup pulseforge-production-revenue-phase16a-20260720T224210Z",
+          "account": "jacob@gopulseforge.com",
+          "passphrase_present": true,
+          "passphrase_exposed": false
+        },
+        "productionExecutionPermitted": false,
+        "continues_to_phase16b": false
+      },
+      "backup": {
+        "backup_identifier": "pulseforge-production-revenue-phase16a-20260720T224210Z",
+        "backup_storage_reference": "/private/tmp/pulseforge-production-revenue-phase16a-20260720T224210Z/pulseforge-production-revenue-phase16a-20260720T224210Z.dump.enc",
+        "backup_sha256": "b307a2ecc4d1cc1132f3d82a60de6c3e51431fa9488beeecf1797b83fdddc1a6",
+        "plaintext_sha256": "839a003667d3835aacd706e68d0326ca72e4f4681d5bb1ffa695bf2906dcd1f9",
+        "backup_readability_result": "passed",
+        "backup_created_at": "2026-07-20T22:43:25.318Z",
+        "encrypted_size_bytes": 7615481,
+        "durable_location": {
+          "localEncryptedStaging": "/private/tmp/pulseforge-production-revenue-phase16a-20260720T224210Z/pulseforge-production-revenue-phase16a-20260720T224210Z.dump.enc",
+          "plannedProvider": "google_drive",
+          "plannedFolder": "Pulseforge Production Backups/Revenue Phase 1.6A",
+          "retention": "90 days after Phase 1.6 completion or explicit operator disposition; no early deletion",
+          "immutability": "encrypted artifact + independent SHA-256; passphrase never written to disk artifacts",
+          "uploadStatus": "durable_backup_verified",
+          "durable_closure_verdict": "COMPLETE",
+          "stop_condition": "Google Drive upload failed with QUOTA_EXCEEDED; durable uploaded object could not be verified",
+          "drive_folder_id_attempted": "1pHiHFHQjTNVijXilJyrhLX-MAYxyGnXS",
+          "backup_file_id": null,
+          "uploaded_at": "2026-07-20T23:44:10Z",
+          "verified_at": "2026-07-20T23:46:46Z",
+          "independent_verification": true,
+          "keychain_passphrase_present": true,
+          "local_staging_preserved": true,
+          "local_sha256": "b307a2ecc4d1cc1132f3d82a60de6c3e51431fa9488beeecf1797b83fdddc1a6",
+          "file_size_bytes": 7615481,
+          "drive_folder_id": "1pHiHFHQjTNVijXilJyrhLX-MAYxyGnXS",
+          "persistent_local_path": "/Users/jake/Documents/Pulseforge Production Backups/Revenue Phase 1.6A/pulseforge-production-revenue-phase16a-20260720T224210Z.dump.enc",
+          "persistent_local_sha256": "b307a2ecc4d1cc1132f3d82a60de6c3e51431fa9488beeecf1797b83fdddc1a6",
+          "persistent_local_size_bytes": 7615481,
+          "provider": "google_drive",
+          "account": "jacob@gopulseforge.com",
+          "folder": "Pulseforge Production Backups/Revenue Phase 1.6A",
+          "final_path": "Pulseforge Production Backups/Revenue Phase 1.6A/pulseforge-production-revenue-phase16a-20260720T224210Z.dump.enc",
+          "folderId": "1pHiHFHQjTNVijXilJyrhLX-MAYxyGnXS",
+          "backupFileId": "16AEDdxs1wYoxDBhMbM6u4i5yLThOJbVu",
+          "metadataFileId": "1bVLUDkZAJPzYc084aTtBsYrOuKB1HopI",
+          "hashFileId": "1NpP03YWrBNJDnjyoeH_1YiOG0P_EJri7",
+          "sha256": "b307a2ecc4d1cc1132f3d82a60de6c3e51431fa9488beeecf1797b83fdddc1a6"
+        },
+        "operator": "Jacob Maynard <jacob@gopulseforge.com>",
+        "independent_download": {
+          "performed": true,
+          "method": "fileproviderctl evict + materialize + copy re-downloaded encrypted object",
+          "downloadDirectory": "/private/tmp/pulseforge-phase16a-durable-download-20260720T234410Z",
+          "encryptedSha256": "b307a2ecc4d1cc1132f3d82a60de6c3e51431fa9488beeecf1797b83fdddc1a6",
+          "encryptedSizeBytes": 7615481,
+          "encryptedHashMatchesUpload": true
+        }
+      },
+      "restore": {
+        "restore_target_id": "127.0.0.1:5432/phase16a_revenue_restore_validation",
+        "restore_database": "phase16a_revenue_restore_validation",
+        "restore_timestamp": "2026-07-20T22:43:33.638Z",
+        "restore_result": "passed",
+        "schema_table_count": 73,
+        "schema_fingerprint": "649abe16ed956345e595485c219b51f3f02888c6c37b698fce8afafcbcce407b",
+        "anchor_safety": {
+          "id": 10,
+          "enabled_agents": [
+            "scout"
+          ],
+          "autosend_enabled": false
+        },
+        "isolation_confirmed": true,
+        "restore_operator": "Jacob Maynard <jacob@gopulseforge.com>"
+      }
+    }
+  },
+  "validation": {
+    "valid": true,
+    "failures": [],
+    "authorizationHash": "fe4751ca64e963597968e660569ebe6e0ff9ed08e9de2365c20ba1a1a0e0b002",
+    "clientId": 10
+  },
+  "checkpoints": [],
+  "writes_disabled": false,
+  "automatic_continuation": false,
+  "production_access_opened": true,
+  "failure": {
+    "code": "25P02",
+    "message": "Write-flag shutdown could not be proven: current transaction is aborted, commands ignored until end of transaction block"
+  },
+  "failed_at": "2026-07-21T04:02:58.611Z",
+  "write_disable_error": "current transaction is aborted, commands ignored until end of transaction block"
+}

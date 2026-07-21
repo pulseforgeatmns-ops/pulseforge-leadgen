@@ -1,24 +1,28 @@
 # Revenue Phase 1.6B — Production Migration and Controlled Anchor Canary
 
-**Status:** finalized, unsigned, non-executable. Window owners, IDs, keys, and deployment identity are recorded; signatures, approval timestamp, and finalization remain outstanding. Confirmed historical dates and payment method are operator-confirmed for finalization but are not written into this unsigned draft.
+**Status:** new authorization after the blocked 2026-07-21T04:02Z production attempt. Finalized, unsigned, non-executable. Window owners, IDs, keys, and deployment identity are recorded; signatures, approval timestamp, finalization, and post-merge identity/window rebinding remain outstanding.
 **Machine-readable draft:** `artifacts/revenue/phase16b-production-authorization-draft.json`
-**Implementation report:** `docs/REVENUE_PHASE16B_IMPLEMENTATION_REPORT.md`
+**Implementation report (root cause and fixes):** `docs/REVENUE_PHASE16B_IMPLEMENTATION_REPORT.md`
 **Production access or mutation performed while preparing this draft:** none.
+
+## Retired predecessor
+
+Authorization `ce9005f1-6d6f-46fd-a52d-4081a79ed02f` was consumed by the blocked production attempt at 2026-07-21T04:02:56Z (initiating error SQLSTATE 42830 in the phase1 migration; production unchanged) and is **permanently non-reusable**: the validator rejects it outright, and its correlation ID, idempotency keys, window, and signed document must never be reused. Evidence: `artifacts/revenue/phase16b-production-execution-blocked-20260721T0402Z.json`, `artifacts/revenue/phase16b-production-authorization-signed-retired-ce9005f1.json`.
 
 ## Finalized values
 
-- Authorization ID: `ce9005f1-6d6f-46fd-a52d-4081a79ed02f`
-- Window (recorded in draft; **do not reuse for execution** — choose a fresh future window before signing): `2026-07-21T17:00:00Z` → `2026-07-21T19:00:00Z`
+- Authorization ID: `3808a9f7-b8e4-467f-917f-5021dfb7d485`
+- Window (recorded in draft; **re-bind to a fresh future window after the fix PR merges**): `2026-07-21T18:00:00Z` → `2026-07-21T20:00:00Z` (2:00–4:00 PM America/New_York)
 - Operator: Jacob Maynard (`jacob@gopulseforge.com`)
 - Approving authority: Jacob Maynard, Founder (`jacob@gopulseforge.com`)
 - Freeze owner: Jacob Maynard; Rollback owner: Jacob Maynard (`jacob@gopulseforge.com`)
-- Deployed commit (fresh, read-only observation 2026-07-21T02:35Z): `cd6ed74abde896eb504db1fd70709d0bc67229b3` — equals protected main
-- Railway deployment ID (active, SUCCESS): `22b3acf8-1bde-4ed9-89e0-906121f528a7` (`pulseforge-leadgen` / production) — must be re-observed immediately before execution
-- Correlation UUID: `fd528a1a-091b-4f7b-9210-9a613ffcb9c5`
-- Eight immutable idempotency keys: recorded in the draft under `canary.operator_only_runtime_values.idempotency_keys`
+- Release identity recorded in draft: `bf65bb8f4492147b7343240c0d005e58d9ed1acf` / Railway deployment `adb2db69-7888-4fe2-bedb-53b6aca5d647` — **must be re-bound to the fresh post-merge deployment** and the hash recomputed before signing
+- Correlation UUID: `bc286f24-f816-41bc-bdd0-a874da7b11eb`
+- Eight immutable idempotency keys (all newly generated): recorded in the draft under `canary.operator_only_runtime_values.idempotency_keys`
+- Certified phase1 migration checksum (post-fix): `c11740daa17a4d8495daa428134effdffaa0d64d8b343e044739a23d28fa6495`
 - Human owner: Jacob Maynard
 - Customer email, customer phone, service address, estimated direct cost, and actual direct cost: explicitly approved `null` (unknown; not fabricated)
-- Draft canonical hash (recursively key-sorted unsigned-draft binding; final signing hash will supersede it): `add3646e275aeba07969b8e21b32d52e9b7831085efc10cad1f9da5a63ac447f`
+- Draft canonical hash (recursively key-sorted unsigned-draft binding; final signing hash will supersede it): `d41a233b9a8c91d292404ffac4e23a9b6e69f959abd4c60d03008a66612e90c2`
 
 ## Authoritative implementation status
 
@@ -70,12 +74,12 @@ It never authorizes a refund, second canary, other-client write, autonomous Max 
 
 ## Remaining production gates
 
-1. Protected pull-request merge to `main` with mandatory `revenue-postgresql-required` passing on the exact release commit. Under the certified solo-founder policy, **zero approvals** are required; independent human review is **not** a required gate.
-2. Offline finalization producing a separate signed authorization file.
-3. Fresh future two-hour UTC execution window.
+1. Root-cause-fix PR merged through protected `main` with mandatory `revenue-postgresql-required` passing on the exact release commit. Under the certified solo-founder policy, **zero approvals** are required; independent human review is **not** a required gate.
+2. Fresh Railway deployment observation after the merge; re-bind the draft's release identity and window and recompute the unsigned hash.
+3. Offline finalization producing a separate signed authorization file.
 4. Fresh protected-main / Railway identity observation immediately before execution.
 5. `REVENUE_PHASE16B_PRODUCTION_ENABLED=true` only after signed validation inside the active window.
-6. Runner only via `scripts/executeRevenuePhase16b.js --production --confirm=ce9005f1-6d6f-46fd-a52d-4081a79ed02f`.
+6. Runner only via `scripts/executeRevenuePhase16b.js --production --confirm=3808a9f7-b8e4-467f-917f-5021dfb7d485`.
 
 ## Offline finalizer
 
@@ -100,8 +104,9 @@ Finalize (offline), then validate and execute only Revenue Phase 1.6B — Produc
 
 Unsigned draft (immutable; do not edit in place):
 artifacts/revenue/phase16b-production-authorization-draft.json
-Authorization ID (fixed): ce9005f1-6d6f-46fd-a52d-4081a79ed02f
-Unsigned-draft canonical hash: add3646e275aeba07969b8e21b32d52e9b7831085efc10cad1f9da5a63ac447f
+Authorization ID (fixed): 3808a9f7-b8e4-467f-917f-5021dfb7d485
+Unsigned-draft canonical hash: d41a233b9a8c91d292404ffac4e23a9b6e69f959abd4c60d03008a66612e90c2
+Retired authorization (never reuse): ce9005f1-6d6f-46fd-a52d-4081a79ed02f
 
 Offline finalization first:
 npm run revenue:phase16b:finalize -- \
@@ -112,9 +117,9 @@ npm run revenue:phase16b:finalize -- \
   --payment-date 2026-07-14 \
   --payment-method stripe_card
 
-Then replace the draft window with a freshly chosen future two-hour UTC window before treating the signed file as executable. Do not reuse 2026-07-21T17:00:00Z–19:00:00Z for live production execution without re-binding and re-hashing.
+The draft window and release identity must already have been re-bound to the fresh post-merge deployment and a fresh future two-hour UTC window (recomputing the unsigned hash) before finalization. Never reuse the retired ce9005f1 authorization, its window, correlation ID, or idempotency keys.
 
-Use only `scripts/executeRevenuePhase16b.js --production --confirm=ce9005f1-6d6f-46fd-a52d-4081a79ed02f`. Do not use the tenant-remediation Phase 16B scripts. The production runner must remain gated by `REVENUE_PHASE16B_PRODUCTION_ENABLED=true`; never set that gate before the signed authorization has passed final validation inside the active window.
+Use only `scripts/executeRevenuePhase16b.js --production --confirm=3808a9f7-b8e4-467f-917f-5021dfb7d485`. Do not use the tenant-remediation Phase 16B scripts. The production runner must remain gated by `REVENUE_PHASE16B_PRODUCTION_ENABLED=true`; never set that gate before the signed authorization has passed final validation inside the active window.
 
 Before any production connection or mutation:
 1. Re-read and validate every signed-authorization field. Fail on null, placeholder, signature, hash, or two-hour-window errors.

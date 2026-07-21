@@ -31,8 +31,8 @@ const DEFAULT_OUTPUT = path.join(ROOT, 'artifacts', 'revenue', 'phase16b-product
 
 // Immutable unsigned-draft canonical hash. Any draft whose recomputed
 // canonical hash differs from this value has been altered and is rejected.
-const EXPECTED_DRAFT_HASH = 'add3646e275aeba07969b8e21b32d52e9b7831085efc10cad1f9da5a63ac447f';
-const EXPECTED_CORRELATION_ID = 'fd528a1a-091b-4f7b-9210-9a613ffcb9c5';
+const EXPECTED_DRAFT_HASH = 'd41a233b9a8c91d292404ffac4e23a9b6e69f959abd4c60d03008a66612e90c2';
+const EXPECTED_CORRELATION_ID = 'bc286f24-f816-41bc-bdd0-a874da7b11eb';
 const EXPECTED_FINANCIALS = Object.freeze({
   booked_revenue_cents: 15000,
   delivered_revenue_cents: 15000,

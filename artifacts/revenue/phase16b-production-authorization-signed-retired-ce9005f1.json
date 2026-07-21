@@ -1,33 +1,33 @@
 {
-  "draft_status": "finalized_unsigned_non_executable_awaiting_operator_signatures_and_remaining_runtime_facts",
-  "draft_id": "3c4fd6fd-e0f7-4a89-b807-0eaccded1ea4",
-  "generated_at": "2026-07-21T04:55:00Z",
-  "revised_at": "2026-07-21T04:55:00Z",
+  "draft_status": "finalized_signed_executable",
+  "draft_id": "0fdb8202-fce6-4127-896b-609f133e24bc",
+  "generated_at": "2026-07-20T23:51:29Z",
+  "revised_at": "2026-07-21T03:56:46.114Z",
   "phase": "revenue-phase-1.6b-production-migration-controlled-anchor-canary",
   "environment": "production",
   "client_id": 10,
   "client_name": "Anchor Cleaning",
   "purpose": "Apply the certified Revenue Phase 1 and Phase 1.5 migrations, activate Anchor-only read capabilities, execute exactly one controlled Eliza Bulger lifecycle, disable operator writes immediately afterward, reconcile, prove deterministic reconstruction, and produce certification evidence.",
-  "authorization_id": "3808a9f7-b8e4-467f-917f-5021dfb7d485",
+  "authorization_id": "ce9005f1-6d6f-46fd-a52d-4081a79ed02f",
   "authorized_operator": {
     "name": "Jacob Maynard",
     "identity": "jacob@gopulseforge.com",
-    "signature": null
+    "signature": "I, Jacob Maynard, authorize only the Phase 1.6B production migration and single Anchor canary expressly defined in authorization ce9005f1-6d6f-46fd-a52d-4081a79ed02f, during its active UTC window. I authorize no second outcome, refund, external communication, provider activity, retention automation, other-client write, or autonomous Max mutation. Execution must fail closed on every documented stop condition."
   },
   "approving_authority": {
     "name": "Jacob Maynard",
     "title": "Founder",
     "identity": "jacob@gopulseforge.com",
-    "signature": null
+    "signature": "I, Jacob Maynard, acting as Founder and approving authority, approve the narrowly scoped Phase 1.6B production migration and single Eliza Bulger canary under the certified backup, reconciliation, tenant-isolation, idempotency, and write-shutdown controls. Any identity drift, checksum mismatch, financial discrepancy, unexpected event, health degradation, or failure to disable writes terminates this authorization."
   },
-  "approved_at": null,
+  "approved_at": "2026-07-21T03:56:58.188Z",
   "approved_at_policy": "Intentionally unset. Must be set to the actual UTC finalization time by Jacob Maynard at signing; never pre-filled.",
   "window": {
-    "start": "2026-07-21T18:00:00Z",
-    "end": "2026-07-21T20:00:00Z",
+    "start": "2026-07-21T04:00:00Z",
+    "end": "2026-07-21T06:00:00Z",
     "duration_minutes_required": 120,
     "timezone_display": "America/New_York",
-    "local_display": "Tuesday, July 21, 2026, 2:00 PM–4:00 PM America/New_York",
+    "local_display": "Tuesday, July 21, 2026, 12:00 AM–2:00 AM America/New_York",
     "freeze_owner": "Jacob Maynard",
     "freeze_scope": [
       "no deployment",
@@ -35,8 +35,7 @@
       "no manual Anchor runtime configuration change outside the authorized revenue flag sequence",
       "no campaign, sender, provider, follow-up, or retention activation",
       "no automatic continuation beyond Revenue Phase 1.6B"
-    ],
-    "rebinding_policy": "This window and the release identity below must be re-bound to fresh observed values after the root-cause-fix PR merges to protected main; any rebinding recomputes authorization_hash."
+    ]
   },
   "release": {
     "protected_main_commit": "bf65bb8f4492147b7343240c0d005e58d9ed1acf",
@@ -82,7 +81,7 @@
   "migration_checksums": {
     "phase1": {
       "path": "migrations/2026-07-18-anchor-closed-loop-revenue-phase1.sql",
-      "sha256": "c11740daa17a4d8495daa428134effdffaa0d64d8b343e044739a23d28fa6495"
+      "sha256": "c703c88095df81098c8405b18f008a4b88a65c267622ffbb7eb48457012a4203"
     },
     "phase15": {
       "path": "migrations/2026-07-18-anchor-closed-loop-revenue-phase15.sql",
@@ -92,7 +91,7 @@
       "path": "migrations/2026-07-18-anchor-closed-loop-revenue-phase15.rollback.sql",
       "sha256": "2ae6e4a87638722bbb2ad40d6c218a7593cfd369920b2c67dbafa233955c3045"
     },
-    "verification": "phase1 checksum re-certified after the production-compatibility fix (tenant composite keys provisioned idempotently; campaigns FK conditional). phase15 and rollback unchanged. All three verified against the release branch; re-verify against protected main after merge."
+    "verification": "All three paths and hashes were verified from origin/main at cd6ed74abde896eb504db1fd70709d0bc67229b3."
   },
   "phase16a_prerequisite": {
     "status": "durable_backup_verified",
@@ -168,30 +167,45 @@
       "human_owner_status": "OPERATOR_APPROVED: Jacob Maynard (2026-07-21).",
       "service_address": null,
       "service_address_status": "APPROVED_NULL: Jacob Maynard explicitly approved null; service address is unknown and must not be fabricated (2026-07-21).",
-      "scheduled_start": null,
+      "scheduled_start": {
+        "local_date": "2026-07-14",
+        "timezone": "America/New_York",
+        "precision": "day",
+        "operator_confirmed": true
+      },
       "scheduled_start_status": "UNRESOLVED_NON_EXECUTABLE: supply {local_date, timezone:\"America/New_York\", precision:\"day\", operator_confirmed:true}. Exact clock time is not required and must not be fabricated.",
-      "completion_date": null,
+      "completion_date": {
+        "local_date": "2026-07-14",
+        "timezone": "America/New_York",
+        "precision": "day",
+        "operator_confirmed": true
+      },
       "completion_date_status": "UNRESOLVED_NON_EXECUTABLE: supply {local_date, timezone:\"America/New_York\", precision:\"day\", operator_confirmed:true}. Exact clock time is not required and must not be fabricated.",
-      "payment_received_at": null,
+      "payment_received_at": {
+        "local_date": "2026-07-14",
+        "timezone": "America/New_York",
+        "precision": "day",
+        "operator_confirmed": true
+      },
       "payment_received_at_status": "UNRESOLVED_NON_EXECUTABLE: supply {local_date, timezone:\"America/New_York\", precision:\"day\", operator_confirmed:true}. Exact clock time is not required and must not be fabricated.",
-      "payment_method": null,
+      "payment_method": "stripe_card",
       "payment_method_status": "UNRESOLVED_NON_EXECUTABLE: job note evidences payment in full but not the method; must be supplied by Jacob Maynard.",
       "estimated_direct_cost_cents": null,
       "estimated_direct_cost_cents_status": "APPROVED_NULL: direct cost is unknown; operator directed null rather than a fabricated figure (2026-07-21).",
       "actual_direct_cost_cents": null,
       "actual_direct_cost_cents_status": "APPROVED_NULL: direct cost is unknown; operator directed null rather than a fabricated figure (2026-07-21).",
-      "correlation_id": "bc286f24-f816-41bc-bdd0-a874da7b11eb",
+      "correlation_id": "fd528a1a-091b-4f7b-9210-9a613ffcb9c5",
       "idempotency_keys": {
-        "customer_create": "phase16b-eliza-customer-create-75948e35-53b2-4f91-afdd-58b3475f34e9",
-        "opportunity_create": "phase16b-eliza-opportunity-create-536fc409-2ca0-4b74-8009-9ceb9ee33451",
-        "opportunity_contacted": "phase16b-eliza-opportunity-contacted-dafd1487-c57a-4306-a03a-23afbe8084c2",
-        "opportunity_qualified": "phase16b-eliza-opportunity-qualified-5cdc5160-b9e5-40e0-94e4-56a02422ab70",
-        "opportunity_quoted": "phase16b-eliza-opportunity-quoted-bd54bca4-39ac-4b7f-98f8-0654cb00a45a",
-        "job_create": "phase16b-eliza-job-create-81de3325-c294-46b7-acc3-aa1a5b5cff11",
-        "job_complete": "phase16b-eliza-job-complete-9712d4b9-0eb1-410d-b430-2ec02ab16f2b",
-        "payment_succeeded": "phase16b-eliza-payment-succeeded-9aca5b37-85b2-41dd-823c-6b1d0dacf8c9"
+        "customer_create": "phase16b-eliza-customer-create-f6cc1c57-b4ce-4023-a0a3-5dbb98d17be8",
+        "opportunity_create": "phase16b-eliza-opportunity-create-dc88d132-9b59-4f44-a668-caf77d874244",
+        "opportunity_contacted": "phase16b-eliza-opportunity-contacted-a6e94426-33e4-4955-8c3a-f78a0158ba38",
+        "opportunity_qualified": "phase16b-eliza-opportunity-qualified-f34f98d0-a600-40a5-b6eb-37f8a8cff78f",
+        "opportunity_quoted": "phase16b-eliza-opportunity-quoted-e9da161a-bd5d-4404-b344-5d740c3d990d",
+        "job_create": "phase16b-eliza-job-create-283e4506-6d7d-43a2-a467-738eb777d408",
+        "job_complete": "phase16b-eliza-job-complete-c8d6f93f-16b1-4175-9d19-5b5655e807d0",
+        "payment_succeeded": "phase16b-eliza-payment-succeeded-81d9e480-1bbe-4304-9325-84f822c0bcfd"
       },
-      "idempotency_key_policy": "Immutable once written here. Bound to authorization 3808a9f7-b8e4-467f-917f-5021dfb7d485 and correlation bc286f24-f816-41bc-bdd0-a874da7b11eb. Any regeneration invalidates the authorization hash and requires re-approval. The eight keys of retired authorization ce9005f1 are permanently non-reusable."
+      "idempotency_key_policy": "Immutable once written here. Bound to authorization ce9005f1-6d6f-46fd-a52d-4081a79ed02f and correlation fd528a1a-091b-4f7b-9210-9a613ffcb9c5. Any regeneration invalidates the authorization hash and requires re-approval."
     }
   },
   "initial_required_state": {
@@ -336,9 +350,9 @@
     "final COMPLETE or BLOCKED verdict with any stop condition"
   ],
   "execution_readiness": {
-    "ready_to_sign": false,
-    "ready_to_sign_blockers": "Root-cause-fix PR must merge through protected main with revenue-postgresql-required passing on the exact release commit; release identity and window must then be re-bound to the fresh deployment. Operator and Founder attestations, actual UTC approved_at, and finalization via the offline finalizer remain outstanding. Confirmed operator facts (scheduled/completion/payment dates 2026-07-14 America/New_York day precision; payment method stripe_card) are supplied to the finalizer at signing, not written into this unsigned draft. Independent human review is not a required gate under the certified solo-founder zero-approval policy.",
-    "ready_to_execute": false,
+    "ready_to_sign": true,
+    "ready_to_sign_blockers": "none",
+    "ready_to_execute": true,
     "implemented_components": {
       "validator": "utils/revenuePhase16b.js",
       "historical_date_handling": "utils/historicalTimestamp.js",
@@ -353,40 +367,24 @@
         "test/disposablePostgresHarness.test.js"
       ]
     },
-    "repository_gaps_requiring_offline_implementation_and_review_before_signing": [
-      "SUPERSEDED: earlier exploration concluded the Phase 1.6B validator, runner, historical-date derivation, and reconstruction verifier were missing. Those components are now implemented; see implemented_components and docs/REVENUE_PHASE16B_IMPLEMENTATION_REPORT.md.",
-      "SUPERSEDED: independent human review is not a required gate under the certified solo-founder policy (zero approvals). The repository gate is protected PR merge with mandatory revenue-postgresql-required passing on the exact release commit.",
-      "The current authorization intentionally remains unsigned, unapproved, and non-executable until Jacob supplies attestations and finalizes via the offline finalizer after the release commit is on protected main."
-    ],
+    "repository_gaps_requiring_offline_implementation_and_review_before_signing": [],
     "rule": "Implemented components do not themselves authorize execution. Protected-main merge with revenue-postgresql-required, signatures, approved_at, finalization, active window, fresh identity observation, and REVENUE_PHASE16B_PRODUCTION_ENABLED=true remain required. Independent human review is not required."
   },
-  "remaining_operator_only_values": [
-    "authorized_operator.signature (Jacob Maynard's personal attestation; cannot be generated)",
-    "approving_authority.signature (Jacob Maynard's personal attestation as Founder; cannot be generated)",
-    "approved_at using the actual UTC time at signing",
-    "canary.operator_only_runtime_values.scheduled_start as an operator-confirmed America/New_York local_date with day precision",
-    "canary.operator_only_runtime_values.completion_date as an operator-confirmed America/New_York local_date with day precision",
-    "canary.operator_only_runtime_values.payment_received_at as an operator-confirmed America/New_York local_date with day precision",
-    "canary.operator_only_runtime_values.payment_method",
-    "final authorization_hash recomputed after signatures, approved_at, and all runtime values are fixed"
-  ],
+  "remaining_operator_only_values": [],
   "values_deferred_to_the_active_window_not_operator_provided": [
     "deterministic_reconstruction.fixed_event_boundary (bound only after the post-migration baseline is observed inside the window)",
     "execution-time re-observation of release.deployed_commit and release.railway_deployment_id per release.identity_policy"
   ],
   "authorization_hash_policy": "authorization_hash below is the canonical SHA-256 of this exact unsigned draft with authorization_hash excluded and every object key recursively sorted. It binds the generated IDs, window, window owners, deployment identity, historical-date precision policy, and canary facts against tampering. It is NOT the final signing hash: it must be recomputed after signatures, approved_at, and the remaining runtime values are fixed, and the final hash supersedes it.",
-  "authorization_hash": "d41a233b9a8c91d292404ffac4e23a9b6e69f959abd4c60d03008a66612e90c2",
-  "approved": false,
-  "production_execution_permitted": false,
-  "executable": false,
+  "authorization_hash": "fe4751ca64e963597968e660569ebe6e0ff9ed08e9de2365c20ba1a1a0e0b002",
+  "approved": true,
+  "production_execution_permitted": true,
+  "executable": true,
   "automatic_continuation": false,
-  "superseded_authorization": {
-    "authorization_id": "ce9005f1-6d6f-46fd-a52d-4081a79ed02f",
-    "status": "consumed_and_permanently_retired",
-    "consumed_by": "blocked production attempt at 2026-07-21T04:02:56Z",
-    "outcome": "BLOCKED SAFELY; production unchanged; no migration, flag change, or Eliza record",
-    "initiating_error": "SQLSTATE 42830: there is no unique constraint matching given keys for referenced table \"companies\" (phase1 migration, CREATE TABLE customers composite tenant FK); obscured in evidence by secondary 25P02 from a shutdown probe on the same aborted connection",
-    "evidence": "artifacts/revenue/phase16b-production-execution-blocked-20260721T0402Z.json",
-    "reuse_policy": "The retired authorization ID, correlation ID, idempotency keys, window, and signed document are permanently non-reusable and are rejected by the validator."
+  "finalization": {
+    "finalized_at": "2026-07-21T03:56:58.264Z",
+    "finalized_from_draft_hash": "be74fad25735442b7d3e983d7fe0d1fbfaf1074f0aa1f7ba6c517e7be8843a02",
+    "finalizer": "scripts/finalizeRevenuePhase16bAuthorization.js",
+    "validation_mode": "offline_structural_no_database"
   }
 }
