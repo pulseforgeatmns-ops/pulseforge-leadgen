@@ -192,6 +192,8 @@ app.use('/api/setter', require('./routes/setter'));
 app.use('/closer', require('./routes/closer'));
 app.use('/api/closer', require('./routes/closer'));
 app.use('/sales', require('./routes/sales'));
+// Public marketing funnel — no session auth (see routes/scorecard.js)
+app.use('/', require('./routes/scorecard'));
 
 // TEMP: one-shot GBP account/location lookup. CRON_SECRET-gated so it can be
 // curled without a session cookie. REMOVE AFTER MSHI IDs ARE CAPTURED.

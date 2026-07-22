@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Your Scorecard Result | PulseForge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/shared/tokens.css">
+  <link rel="stylesheet" href="/scorecard/scorecard.css">
+</head>
+<body class="scorecard">
+  <main class="sc-wrap">
+    <a class="sc-brand" href="/scorecard" aria-label="PulseForge home">
+      <span class="sc-brand-mark">PULSEFORGE</span>
+      <span class="sc-brand-tag">Your result</span>
+    </a>
+
+    <div id="sc-result-ready" hidden>
+      <p class="sc-badge">Primary leak</p>
+      <h1 class="sc-result-title" id="sc-result-title">Call Recovery Gap</h1>
+      <p class="sc-result-summary" id="sc-result-summary"></p>
+
+      <!-- High-intent: assessment primary -->
+      <div class="sc-cta-stack" id="sc-cta-high" hidden>
+        <a class="sc-btn sc-btn-primary" id="sc-book-primary" href="https://calendly.com/jacob-gopulseforge/new-meeting" target="_blank" rel="noopener">
+          Book a 20-minute Revenue Recovery Assessment
+        </a>
+      </div>
+
+      <!-- Standard: kit offer + assessment secondary -->
+      <div id="sc-cta-standard" hidden>
+        <div class="sc-panel sc-kit" id="kit">
+          <h2>Follow-Up Recovery Kit — $29</h2>
+          <p>
+            A practical starter pack for owners who need clearer call-back, quote, and review follow-up
+            before a full assessment. Checkout is not live in this MVP — choose the kit path and we’ll
+            follow up, or book the assessment if you’d rather talk it through.
+          </p>
+          <div class="sc-cta-stack">
+            <a class="sc-btn sc-btn-gold" id="sc-kit-cta" href="#kit">
+              Get the $29 Follow-Up Recovery Kit
+            </a>
+            <a class="sc-btn sc-btn-secondary" id="sc-book-secondary" href="https://calendly.com/jacob-gopulseforge/new-meeting" target="_blank" rel="noopener">
+              Book a 20-minute Revenue Recovery Assessment
+            </a>
+          </div>
+          <p class="sc-note" id="sc-kit-note" hidden>Thanks — we’ve noted your interest in the kit. We’ll follow up by email.</p>
+        </div>
+      </div>
+
+      <p class="sc-note" style="margin-top:1.5rem">
+        This scorecard highlights where process gaps usually cost booked work. It does not estimate
+        lost revenue or guarantee results.
+      </p>
+    </div>
+
+    <div id="sc-result-empty" class="sc-panel" hidden>
+      <h2>No score yet</h2>
+      <p>Complete the scorecard to see your primary revenue-leak category.</p>
+      <div class="sc-cta-row" style="margin-top:1rem;margin-bottom:0">
+        <a class="sc-btn sc-btn-primary" href="/scorecard/form">Get my score</a>
+      </div>
+    </div>
+  </main>
+  <script>
+    (function () {
+      const STORAGE_KEY = 'pf_scorecard_result';
+      let data = null;
+      try {
+        data = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || 'null');
+      } catch (_) {
+        data = null;
+      }
+
+      const ready = document.getElementById('sc-result-ready');
+      const empty = document.getElementById('sc-result-empty');
+
+      if (!data || !data.result) {
+        empty.hidden = false;
+        return;
+      }
+
+      ready.hidden = false;
+      document.getElementById('sc-result-title').textContent = data.result.title;
+      document.getElementById('sc-result-summary').textContent = data.result.summary;
+
+      const assessmentUrl = (data.ctas && data.ctas.assessment_url) ||
+        'https://calendly.com/jacob-gopulseforge/new-meeting';
+      document.getElementById('sc-book-primary').href = assessmentUrl;
+      document.getElementById('sc-book-secondary').href = assessmentUrl;
+
+      if (data.result.high_intent || data.result.primary_cta === 'assessment') {
+        document.getElementById('sc-cta-high').hidden = false;
+      } else {
+        document.getElementById('sc-cta-standard').hidden = false;
+      }
+
+      const kitCta = document.getElementById('sc-kit-cta');
+      const kitNote = document.getElementById('sc-kit-note');
+      kitCta.addEventListener('click', function (e) {
+        e.preventDefault();
+        kitNote.hidden = false;
+        kitCta.setAttribute('aria-disabled', 'true');
+        kitCta.style.pointerEvents = 'none';
+        kitCta.textContent = 'Kit interest noted';
+      });
+    })();
+  </script>
+</body>
+</html>

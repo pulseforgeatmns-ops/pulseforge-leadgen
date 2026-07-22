@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scorecard | PulseForge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/shared/tokens.css">
+  <link rel="stylesheet" href="/scorecard/scorecard.css">
+</head>
+<body class="scorecard">
+  <main class="sc-wrap">
+    <a class="sc-brand" href="/scorecard" aria-label="PulseForge home">
+      <span class="sc-brand-mark">PULSEFORGE</span>
+      <span class="sc-brand-tag">Revenue Leak Scorecard</span>
+    </a>
+
+    <div class="sc-progress" aria-hidden="false">
+      <div class="sc-progress-label">
+        <span id="sc-step-label">Question 1 of 11</span>
+        <span id="sc-pct-label">9%</span>
+      </div>
+      <div class="sc-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="9" id="sc-progressbar">
+        <div class="sc-progress-fill" id="sc-progress-fill"></div>
+      </div>
+    </div>
+
+    <form id="scorecard-form" novalidate>
+      <!-- Honeypot -->
+      <div class="sc-hp" aria-hidden="true">
+        <label for="company_website">Company website</label>
+        <input type="text" id="company_website" name="company_website" tabindex="-1" autocomplete="off">
+      </div>
+
+      <!-- 1 -->
+      <section class="sc-step is-active" data-step="0" data-field="business_type" aria-labelledby="q-business_type">
+        <h1 class="sc-question" id="q-business_type">What type of cleaning work do you primarily do?</h1>
+        <p class="sc-help">Pick the closest fit.</p>
+        <div class="sc-options" role="radiogroup" aria-labelledby="q-business_type">
+          <div class="sc-option">
+            <input type="radio" name="business_type" id="bt-res" value="residential" required>
+            <label for="bt-res">Residential</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="business_type" id="bt-com" value="commercial">
+            <label for="bt-com">Commercial</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="business_type" id="bt-both" value="both">
+            <label for="bt-both">Both</label>
+          </div>
+        </div>
+        <p class="sc-error" id="err-business_type" role="alert" hidden></p>
+      </section>
+
+      <!-- 2 -->
+      <section class="sc-step" data-step="1" data-field="monthly_inquiries" aria-labelledby="q-monthly">
+        <h1 class="sc-question" id="q-monthly">About how many new inquiries do you get per month?</h1>
+        <p class="sc-help">Calls, forms, texts, and DMs that ask about new work.</p>
+        <div class="sc-options" role="radiogroup" aria-labelledby="q-monthly">
+          <div class="sc-option">
+            <input type="radio" name="monthly_inquiries" id="mi-0" value="0-10" required>
+            <label for="mi-0">0–10</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="monthly_inquiries" id="mi-11" value="11-30">
+            <label for="mi-11">11–30</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="monthly_inquiries" id="mi-31" value="31-75">
+            <label for="mi-31">31–75</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="monthly_inquiries" id="mi-76" value="76+">
+            <label for="mi-76">76+</label>
+          </div>
+        </div>
+        <p class="sc-error" id="err-monthly_inquiries" role="alert" hidden></p>
+      </section>
+
+      <!-- 3 -->
+      <section class="sc-step" data-step="2" data-field="after_hours_process" aria-labelledby="q-after">
+        <h1 class="sc-question" id="q-after">What happens to calls after hours or when you’re busy on a job?</h1>
+        <p class="sc-help">Be honest — most cleaning owners are still figuring this out.</p>
+        <div class="sc-options" role="radiogroup" aria-labelledby="q-after">
+          <div class="sc-option">
+            <input type="radio" name="after_hours_process" id="ah-owner" value="owner_answers" required>
+            <label for="ah-owner">I (or a partner) usually answer</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="after_hours_process" id="ah-cov" value="dedicated_coverage">
+            <label for="ah-cov">Someone dedicated covers the phone</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="after_hours_process" id="ah-vm" value="voicemail_only">
+            <label for="ah-vm">Voicemail / callback when we can</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="after_hours_process" id="ah-inc" value="inconsistent">
+            <label for="ah-inc">It depends — no consistent process</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="after_hours_process" id="ah-none" value="none">
+            <label for="ah-none">Often nothing until the next day or later</label>
+          </div>
+        </div>
+        <p class="sc-error" id="err-after_hours_process" role="alert" hidden></p>
+      </section>
+
+      <!-- 4 -->
+      <section class="sc-step" data-step="3" data-field="missed_call_text" aria-labelledby="q-missed">
+        <h1 class="sc-question" id="q-missed">Do missed calls get an automatic text back?</h1>
+        <p class="sc-help">Within a few minutes — not a manual reply hours later.</p>
+        <div class="sc-options" role="radiogroup" aria-labelledby="q-missed">
+          <div class="sc-option">
+            <input type="radio" name="missed_call_text" id="mc-yes" value="yes" required>
+            <label for="mc-yes">Yes</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="missed_call_text" id="mc-no" value="no">
+            <label for="mc-no">No</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="missed_call_text" id="mc-some" value="sometimes">
+            <label for="mc-some">Sometimes</label>
+          </div>
+        </div>
+        <p class="sc-error" id="err-missed_call_text" role="alert" hidden></p>
+      </section>
+
+      <!-- 5 -->
+      <section class="sc-step" data-step="4" data-field="quote_follow_up_speed" aria-labelledby="q-qspeed">
+        <h1 class="sc-question" id="q-qspeed">How quickly do you usually follow up after sending a quote?</h1>
+        <p class="sc-help">First intentional follow-up after the estimate goes out.</p>
+        <div class="sc-options" role="radiogroup" aria-labelledby="q-qspeed">
+          <div class="sc-option">
+            <input type="radio" name="quote_follow_up_speed" id="qs-same" value="same_day" required>
+            <label for="qs-same">Same day</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="quote_follow_up_speed" id="qs-2" value="within_2_days">
+            <label for="qs-2">Within 2 days</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="quote_follow_up_speed" id="qs-3" value="3_plus_days">
+            <label for="qs-3">3+ days</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="quote_follow_up_speed" id="qs-rare" value="rarely">
+            <label for="qs-rare">Rarely / only if they reply first</label>
+          </div>
+        </div>
+        <p class="sc-error" id="err-quote_follow_up_speed" role="alert" hidden></p>
+      </section>
+
+      <!-- 6 -->
+      <section class="sc-step" data-step="5" data-field="quote_follow_up_count" aria-labelledby="q-qcount">
+        <h1 class="sc-question" id="q-qcount">How many follow-ups do you typically send on an open quote?</h1>
+        <p class="sc-help">Before you let it go cold.</p>
+        <div class="sc-options" role="radiogroup" aria-labelledby="q-qcount">
+          <div class="sc-option">
+            <input type="radio" name="quote_follow_up_count" id="qc-0" value="0" required>
+            <label for="qc-0">None — quote goes out and we wait</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="quote_follow_up_count" id="qc-1" value="1">
+            <label for="qc-1">One follow-up</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="quote_follow_up_count" id="qc-2" value="2">
+            <label for="qc-2">Two follow-ups</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="quote_follow_up_count" id="qc-until" value="until_no">
+            <label for="qc-until">Keep going until they say no or book</label>
+          </div>
+        </div>
+        <p class="sc-error" id="err-quote_follow_up_count" role="alert" hidden></p>
+      </section>
+
+      <!-- 7 -->
+      <section class="sc-step" data-step="6" data-field="automatic_review_request" aria-labelledby="q-review">
+        <h1 class="sc-question" id="q-review">Do finished jobs get an automatic review request?</h1>
+        <p class="sc-help">Email or text after the job is complete.</p>
+        <div class="sc-options" role="radiogroup" aria-labelledby="q-review">
+          <div class="sc-option">
+            <input type="radio" name="automatic_review_request" id="ar-yes" value="yes" required>
+            <label for="ar-yes">Yes</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="automatic_review_request" id="ar-no" value="no">
+            <label for="ar-no">No</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="automatic_review_request" id="ar-some" value="sometimes">
+            <label for="ar-some">Sometimes</label>
+          </div>
+        </div>
+        <p class="sc-error" id="err-automatic_review_request" role="alert" hidden></p>
+      </section>
+
+      <!-- 8 -->
+      <section class="sc-step" data-step="7" data-field="current_system" aria-labelledby="q-system">
+        <h1 class="sc-question" id="q-system">What do you use to run the business day to day?</h1>
+        <p class="sc-help">Your main system of record for jobs and follow-up.</p>
+        <div class="sc-options" role="radiogroup" aria-labelledby="q-system">
+          <div class="sc-option">
+            <input type="radio" name="current_system" id="sys-job" value="jobber_servicem8" required>
+            <label for="sys-job">Jobber, ServiceM8, or similar job software</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="current_system" id="sys-crm" value="crm">
+            <label for="sys-crm">A CRM</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="current_system" id="sys-sheet" value="spreadsheet">
+            <label for="sys-sheet">Spreadsheet / notes / texts</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="current_system" id="sys-none" value="nothing">
+            <label for="sys-none">Nothing consistent</label>
+          </div>
+        </div>
+        <p class="sc-error" id="err-current_system" role="alert" hidden></p>
+      </section>
+
+      <!-- 9 -->
+      <section class="sc-step" data-step="8" data-field="typical_job_value" aria-labelledby="q-value">
+        <h1 class="sc-question" id="q-value">What’s a typical new client or job worth?</h1>
+        <p class="sc-help">Rough average — not a precise forecast.</p>
+        <div class="sc-options" role="radiogroup" aria-labelledby="q-value">
+          <div class="sc-option">
+            <input type="radio" name="typical_job_value" id="jv-250" value="under_250" required>
+            <label for="jv-250">Under $250</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="typical_job_value" id="jv-500" value="250-500">
+            <label for="jv-500">$250–$500</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="typical_job_value" id="jv-1000" value="500-1000">
+            <label for="jv-1000">$500–$1,000</label>
+          </div>
+          <div class="sc-option">
+            <input type="radio" name="typical_job_value" id="jv-plus" value="1000-plus">
+            <label for="jv-plus">$1,000+</label>
+          </div>
+        </div>
+        <p class="sc-error" id="err-typical_job_value" role="alert" hidden></p>
+      </section>
+
+      <!-- 10 contact -->
+      <section class="sc-step" data-step="9" data-field="contact" aria-labelledby="q-contact">
+        <h1 class="sc-question" id="q-contact">Where should we send your score?</h1>
+        <p class="sc-help">We’ll use this to deliver your result and next step.</p>
+        <div class="sc-fields">
+          <div class="sc-field">
+            <label for="name">Your name</label>
+            <input type="text" id="name" name="name" autocomplete="name" required maxlength="120">
+          </div>
+          <div class="sc-field">
+            <label for="business_name">Business name</label>
+            <input type="text" id="business_name" name="business_name" autocomplete="organization" required maxlength="160">
+          </div>
+          <div class="sc-field">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" autocomplete="email" required maxlength="160">
+          </div>
+          <div class="sc-field">
+            <label for="mobile">Mobile</label>
+            <input type="tel" id="mobile" name="mobile" autocomplete="tel" required maxlength="40" inputmode="tel">
+          </div>
+        </div>
+        <p class="sc-error" id="err-contact" role="alert" hidden></p>
+      </section>
+
+      <!-- 11 consent -->
+      <section class="sc-step" data-step="10" data-field="marketing_consent" aria-labelledby="q-consent">
+        <h1 class="sc-question" id="q-consent">Almost done</h1>
+        <p class="sc-help">Optional — leave unchecked if you only want your score and next step.</p>
+        <div class="sc-consent">
+          <input type="checkbox" id="marketing_consent" name="marketing_consent" value="1">
+          <label for="marketing_consent">
+            It’s okay to send me occasional PulseForge tips and offers about recovering missed revenue.
+            You can unsubscribe anytime. Leaving this unchecked still gets you your scorecard result.
+          </label>
+        </div>
+        <p class="sc-error" id="err-submit" role="alert" hidden></p>
+      </section>
+
+      <div class="sc-nav">
+        <button type="button" class="sc-btn sc-btn-secondary" id="sc-back" hidden>Back</button>
+        <button type="button" class="sc-btn sc-btn-primary" id="sc-next">Continue</button>
+      </div>
+    </form>
+  </main>
+  <script src="/scorecard/scorecard.js" defer></script>
+</body>
+</html>

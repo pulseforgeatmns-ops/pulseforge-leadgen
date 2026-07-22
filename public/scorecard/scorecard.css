@@ -1,0 +1,399 @@
+/* Revenue Leak Scorecard — PulseForge marketing funnel
+   Uses shared tokens; no operator shell chrome. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body.scorecard {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--pf-font-body);
+  color: var(--pf-text);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(154, 123, 45, 0.12), transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, rgba(109, 91, 208, 0.08), transparent 50%),
+    linear-gradient(180deg, #f7f3e8 0%, var(--pf-bg) 40%, #ebe6d6 100%);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.sc-wrap {
+  width: min(640px, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: 1.5rem 0 3.5rem;
+}
+
+.sc-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 2rem;
+  text-decoration: none;
+  color: var(--pf-navy);
+}
+
+.sc-brand-mark {
+  font-family: var(--pf-font-display);
+  font-size: 1.65rem;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+.sc-brand-tag {
+  font-size: 0.75rem;
+  color: var(--pf-text-muted);
+  letter-spacing: 0.02em;
+}
+
+.sc-hero h1 {
+  font-family: var(--pf-font-display);
+  font-size: clamp(2.4rem, 8vw, 3.4rem);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  line-height: 1.05;
+  margin: 0 0 1rem;
+  color: var(--pf-navy);
+}
+
+.sc-hero .lede {
+  font-size: 1.05rem;
+  color: var(--pf-text-dim);
+  margin: 0 0 1.75rem;
+  max-width: 36rem;
+}
+
+.sc-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 2.25rem;
+}
+
+.sc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--pf-touch-target);
+  padding: 0.75rem 1.35rem;
+  border-radius: var(--pf-radius);
+  border: 1px solid transparent;
+  font-family: var(--pf-font-body);
+  font-size: 1rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+}
+
+.sc-btn:focus-visible {
+  outline: 3px solid var(--pf-violet);
+  outline-offset: 2px;
+}
+
+.sc-btn-primary {
+  background: var(--pf-navy);
+  color: #f7f3e8;
+}
+
+.sc-btn-primary:hover {
+  background: #0c1830;
+}
+
+.sc-btn-secondary {
+  background: transparent;
+  color: var(--pf-navy);
+  border-color: var(--pf-border-strong);
+}
+
+.sc-btn-secondary:hover {
+  background: rgba(16, 32, 60, 0.04);
+}
+
+.sc-btn-gold {
+  background: var(--pf-gold);
+  color: #fff;
+}
+
+.sc-btn-gold:hover {
+  background: var(--pf-gold-strong);
+}
+
+.sc-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sc-panel {
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-lg);
+  padding: 1.35rem 1.4rem;
+  box-shadow: var(--pf-shadow);
+}
+
+.sc-panel h2 {
+  font-family: var(--pf-font-display);
+  font-size: 1.55rem;
+  letter-spacing: 0.03em;
+  margin: 0 0 0.65rem;
+  font-weight: 400;
+}
+
+.sc-panel p {
+  margin: 0 0 0.65rem;
+  color: var(--pf-text-dim);
+  font-size: 0.95rem;
+}
+
+.sc-panel ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.15rem;
+  color: var(--pf-text-dim);
+  font-size: 0.95rem;
+}
+
+.sc-panel li + li {
+  margin-top: 0.35rem;
+}
+
+/* Form wizard */
+.sc-progress {
+  margin-bottom: 1.25rem;
+}
+
+.sc-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--pf-text-muted);
+  margin-bottom: 0.4rem;
+}
+
+.sc-progress-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(16, 32, 60, 0.1);
+  overflow: hidden;
+}
+
+.sc-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--pf-gold);
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.sc-step {
+  display: none;
+}
+
+.sc-step.is-active {
+  display: block;
+  animation: sc-fade 0.22s ease;
+}
+
+@keyframes sc-fade {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.sc-question {
+  font-family: var(--pf-font-display);
+  font-size: clamp(1.6rem, 5vw, 2rem);
+  letter-spacing: 0.02em;
+  line-height: 1.15;
+  margin: 0 0 0.5rem;
+  font-weight: 400;
+}
+
+.sc-help {
+  color: var(--pf-text-muted);
+  font-size: 0.9rem;
+  margin: 0 0 1.25rem;
+}
+
+.sc-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.sc-option {
+  position: relative;
+}
+
+.sc-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sc-option label {
+  display: block;
+  min-height: var(--pf-touch-target);
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius);
+  background: #fff;
+  cursor: pointer;
+  font-size: 0.98rem;
+  transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.sc-option input:focus-visible + label {
+  outline: 3px solid var(--pf-violet);
+  outline-offset: 2px;
+}
+
+.sc-option input:checked + label {
+  border-color: var(--pf-navy);
+  background: rgba(16, 32, 60, 0.04);
+  box-shadow: inset 0 0 0 1px var(--pf-navy);
+}
+
+.sc-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.sc-field label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  color: var(--pf-text);
+}
+
+.sc-field input[type="text"],
+.sc-field input[type="email"],
+.sc-field input[type="tel"] {
+  width: 100%;
+  min-height: var(--pf-touch-target);
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--pf-border-strong);
+  border-radius: var(--pf-radius);
+  font: inherit;
+  background: #fff;
+  color: var(--pf-text);
+}
+
+.sc-field input:focus-visible {
+  outline: 3px solid var(--pf-violet);
+  outline-offset: 1px;
+}
+
+.sc-field input[aria-invalid="true"] {
+  border-color: var(--pf-red);
+}
+
+.sc-error {
+  color: var(--pf-red);
+  font-size: 0.85rem;
+  margin: 0.85rem 0 0;
+  min-height: 1.2em;
+}
+
+.sc-consent {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  margin-top: 0.35rem;
+}
+
+.sc-consent input {
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-top: 0.15rem;
+  flex-shrink: 0;
+}
+
+.sc-consent label {
+  font-size: 0.88rem;
+  color: var(--pf-text-dim);
+  font-weight: 400;
+}
+
+.sc-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.sc-hp {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+/* Results */
+.sc-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pf-gold-strong);
+  margin-bottom: 0.5rem;
+}
+
+.sc-result-title {
+  font-family: var(--pf-font-display);
+  font-size: clamp(2rem, 6vw, 2.75rem);
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+  margin: 0 0 0.85rem;
+  font-weight: 400;
+}
+
+.sc-result-summary {
+  font-size: 1.05rem;
+  color: var(--pf-text-dim);
+  margin: 0 0 1.5rem;
+}
+
+.sc-cta-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.sc-note {
+  font-size: 0.85rem;
+  color: var(--pf-text-muted);
+  margin: 0;
+}
+
+.sc-kit {
+  margin-top: 1.5rem;
+}
+
+.sc-footer {
+  margin-top: 2.5rem;
+  font-size: 0.8rem;
+  color: var(--pf-text-muted);
+  text-align: center;
+}
+
+@media (min-width: 640px) {
+  .sc-wrap {
+    padding-top: 2.5rem;
+  }
+
+  .sc-cta-stack {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
