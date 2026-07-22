@@ -154,6 +154,8 @@ describe('scorecard public routes', () => {
     assert.match(results.text, /calendly\.com\/jacob-gopulseforge\/pulsforge-revenue-recovery-assessment/);
     assert.match(results.text, /Book a 20-minute Revenue Recovery Assessment/);
     assert.match(results.text, /Follow-Up Recovery Kit — \$29/);
+    assert.match(results.text, /What this means for your business/);
+    assert.match(results.text, /Want this running automatically/);
 
     const css = await request(harness.base, 'GET', '/scorecard/scorecard.css');
     assert.equal(css.status, 200);
@@ -179,6 +181,16 @@ describe('scorecard public routes', () => {
       res.json.ctas.assessment_url,
       'https://calendly.com/jacob-gopulseforge/pulsforge-revenue-recovery-assessment'
     );
+    assert.ok(res.json.result.payoff);
+    assert.match(res.json.result.payoff.meaning, /live buying opportunity/i);
+    assert.match(res.json.result.payoff.first_move, /missed-call text-back/i);
+    assert.match(res.json.result.payoff.job_value_illustration, /\$250–\$500/);
+    assert.equal(res.json.result.payoff.job_value_key, '250-500');
+    assert.deepEqual(res.json.result.payoff.recovery_plan, [
+      'Respond quickly',
+      'Follow up consistently',
+      'Track the outcome',
+    ]);
     assert.equal(res.json.result.gaps, undefined);
     assert.equal(res.json.stack, undefined);
     assert.equal(res.json.message, undefined);
@@ -307,6 +319,11 @@ describe('scorecard UI wiring', () => {
     assert.match(resultsHtml, /calendly\.com\/jacob-gopulseforge\/pulsforge-revenue-recovery-assessment/);
     assert.match(resultsHtml, /sc-cta-high/);
     assert.match(resultsHtml, /sc-cta-standard/);
+    assert.match(resultsHtml, /What this means for your business/);
+    assert.match(resultsHtml, /Your first move today/);
+    assert.match(resultsHtml, /What one recovered job could be worth/);
+    assert.match(resultsHtml, /Your 3-step recovery plan/);
+    assert.match(resultsHtml, /Want this running automatically instead of relying on someone to remember the next step\?/);
 
     assert.match(tokens, /--pf-touch-target:\s*44px/);
     assert.match(css, /min-height:\s*var\(--pf-touch-target\)/);

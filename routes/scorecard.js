@@ -58,6 +58,7 @@ router.post('/api/public/scorecard', async (req, res) => {
         summary: result.summary,
         high_intent: result.high_intent,
         primary_cta: result.primary_cta,
+        payoff: result.payoff,
       },
       ctas: {
         assessment_url: BOOKING_URL,

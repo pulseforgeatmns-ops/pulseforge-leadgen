@@ -363,6 +363,86 @@ body.scorecard {
   margin: 0 0 1.5rem;
 }
 
+.sc-payoff {
+  margin: 0 0 1.25rem;
+  padding: 1rem 1.1rem;
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius);
+}
+
+.sc-payoff-heading {
+  font-family: var(--pf-font-display);
+  font-size: 1.35rem;
+  letter-spacing: 0.03em;
+  font-weight: 400;
+  margin: 0 0 0.45rem;
+  color: var(--pf-navy);
+}
+
+.sc-payoff-body {
+  margin: 0;
+  font-size: 0.98rem;
+  color: var(--pf-text-dim);
+  line-height: 1.55;
+}
+
+.sc-payoff-value {
+  border-color: rgba(154, 123, 45, 0.35);
+  background: rgba(154, 123, 45, 0.06);
+}
+
+.sc-plan-list {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.sc-plan-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  min-height: 2.5rem;
+  padding: 0.55rem 0.7rem;
+  background: #fff;
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--pf-text);
+  counter-increment: sc-plan;
+}
+
+.sc-plan-list {
+  counter-reset: sc-plan;
+}
+
+.sc-plan-list li::before {
+  content: counter(sc-plan);
+  flex-shrink: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  background: var(--pf-navy);
+  color: #f7f3e8;
+  font-size: 0.8rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.05rem;
+}
+
+.sc-cta-support {
+  margin: 0.25rem 0 1rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--pf-navy);
+  line-height: 1.4;
+}
+
 .sc-cta-stack {
   display: flex;
   flex-direction: column;
