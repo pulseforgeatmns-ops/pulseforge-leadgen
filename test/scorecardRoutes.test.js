@@ -151,7 +151,7 @@ describe('scorecard public routes', () => {
 
     const results = await request(harness.base, 'GET', '/scorecard/results');
     assert.equal(results.status, 200);
-    assert.match(results.text, /calendly\.com\/jacob-gopulseforge\/new-meeting/);
+    assert.match(results.text, /calendly\.com\/jacob-gopulseforge\/pulsforge-revenue-recovery-assessment/);
     assert.match(results.text, /Book a 20-minute Revenue Recovery Assessment/);
     assert.match(results.text, /Follow-Up Recovery Kit — \$29/);
 
@@ -177,7 +177,7 @@ describe('scorecard public routes', () => {
     assert.equal(res.json.result.primary_cta, 'kit');
     assert.equal(
       res.json.ctas.assessment_url,
-      'https://calendly.com/jacob-gopulseforge/new-meeting'
+      'https://calendly.com/jacob-gopulseforge/pulsforge-revenue-recovery-assessment'
     );
     assert.equal(res.json.result.gaps, undefined);
     assert.equal(res.json.stack, undefined);
@@ -304,7 +304,7 @@ describe('scorecard UI wiring', () => {
     assert.match(formHtml, /id="marketing_consent"/);
     assert.doesNotMatch(formHtml, /id="marketing_consent"[^>]*checked/);
 
-    assert.match(resultsHtml, /calendly\.com\/jacob-gopulseforge\/new-meeting/);
+    assert.match(resultsHtml, /calendly\.com\/jacob-gopulseforge\/pulsforge-revenue-recovery-assessment/);
     assert.match(resultsHtml, /sc-cta-high/);
     assert.match(resultsHtml, /sc-cta-standard/);
 
