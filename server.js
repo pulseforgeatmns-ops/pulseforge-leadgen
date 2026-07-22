@@ -45,6 +45,7 @@ const { startMiraClassifierWorker } = require('./miraClassifierAgent');
 const { startMiraRouterWorker } = require('./miraRouterAgent');
 const { startMiraDigestScheduler } = require('./miraDigestAgent');
 const { startWarmRoutingScheduler } = require('./warmRoutingAgent');
+const { startAnchorUnenrichedEnrichmentScheduler } = require('./scoutUnenrichedEnrichmentAgent');
 const { ensureEmmettAutosendSchema } = require('./utils/emmettAutosend');
 const stripeWebhookRouter = require('./routes/stripeWebhook');
 
@@ -71,6 +72,7 @@ startMiraClassifierWorker();
 startMiraRouterWorker();
 startMiraDigestScheduler();
 startWarmRoutingScheduler();
+startAnchorUnenrichedEnrichmentScheduler();
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),
