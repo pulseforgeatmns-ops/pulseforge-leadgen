@@ -109,6 +109,66 @@ describe('scorecard routing', () => {
   });
 });
 
+describe('scorecard result payoff', () => {
+  const {
+    formatJobValueIllustration,
+    RECOVERY_PLAN_STEPS,
+  } = require('../lib/scorecardScoring');
+
+  it('includes category meaning and first-move copy for each gap', () => {
+    const call = resolveResult(baseAnswers({ missed_call_text: 'no' }));
+    assert.equal(call.category, 'call_recovery_gap');
+    assert.match(call.payoff.meaning, /live buying opportunity/i);
+    assert.match(call.payoff.first_move, /missed-call text-back/i);
+
+    const quote = resolveResult(baseAnswers({ quote_follow_up_count: '0' }));
+    assert.equal(quote.category, 'quote_follow_up_gap');
+    assert.match(quote.payoff.meaning, /sending a quote is not the same/i);
+    assert.match(quote.payoff.first_move, /last 14 days/i);
+
+    const review = resolveResult(baseAnswers({ automatic_review_request: 'no' }));
+    assert.equal(review.category, 'review_growth_gap');
+    assert.match(review.payoff.meaning, /visible proof/i);
+    assert.match(review.payoff.first_move, /last five satisfied/i);
+  });
+
+  it('illustrates job value with range language, never a precise invented amount', () => {
+    assert.match(
+      formatJobValueIllustration('under_250'),
+      /approximately under \$250 in booked work/
+    );
+    assert.match(
+      formatJobValueIllustration('250-500'),
+      /approximately \$250–\$500 in booked work/
+    );
+    assert.match(
+      formatJobValueIllustration('500-1000'),
+      /approximately \$500–\$1,000 in booked work/
+    );
+    assert.match(
+      formatJobValueIllustration('1000-plus'),
+      /approximately \$1,000 or more in booked work/
+    );
+
+    for (const key of ['under_250', '250-500', '500-1000', '1000-plus']) {
+      const line = formatJobValueIllustration(key);
+      assert.match(line, /illustration, not a promise/i);
+      assert.doesNotMatch(line, /guarantee|will generate|conversion rate/i);
+    }
+
+    const result = resolveResult(baseAnswers({
+      missed_call_text: 'no',
+      typical_job_value: '500-1000',
+    }));
+    assert.equal(result.payoff.job_value_key, '500-1000');
+    assert.equal(
+      result.payoff.job_value_illustration,
+      formatJobValueIllustration('500-1000')
+    );
+    assert.deepEqual(result.payoff.recovery_plan, [...RECOVERY_PLAN_STEPS]);
+  });
+});
+
 describe('scorecard validation', () => {
   it('requires contact fields and valid email/mobile', () => {
     const bad = validateScorecardPayload(baseAnswers({ email: 'not-an-email', mobile: '123' }));

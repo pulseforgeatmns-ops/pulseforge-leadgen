@@ -22,6 +22,34 @@
       <h1 class="sc-result-title" id="sc-result-title">Call Recovery Gap</h1>
       <p class="sc-result-summary" id="sc-result-summary"></p>
 
+      <section class="sc-payoff" aria-labelledby="sc-meaning-heading">
+        <h2 class="sc-payoff-heading" id="sc-meaning-heading">What this means for your business</h2>
+        <p class="sc-payoff-body" id="sc-meaning"></p>
+      </section>
+
+      <section class="sc-payoff" aria-labelledby="sc-first-move-heading">
+        <h2 class="sc-payoff-heading" id="sc-first-move-heading">Your first move today</h2>
+        <p class="sc-payoff-body" id="sc-first-move"></p>
+      </section>
+
+      <section class="sc-payoff sc-payoff-value" aria-labelledby="sc-value-heading">
+        <h2 class="sc-payoff-heading" id="sc-value-heading">What one recovered job could be worth</h2>
+        <p class="sc-payoff-body" id="sc-job-value"></p>
+      </section>
+
+      <section class="sc-payoff" aria-labelledby="sc-plan-heading">
+        <h2 class="sc-payoff-heading" id="sc-plan-heading">Your 3-step recovery plan</h2>
+        <ol class="sc-plan-list" id="sc-recovery-plan">
+          <li>Respond quickly</li>
+          <li>Follow up consistently</li>
+          <li>Track the outcome</li>
+        </ol>
+      </section>
+
+      <p class="sc-cta-support" id="sc-cta-support">
+        Want this running automatically instead of relying on someone to remember the next step?
+      </p>
+
       <!-- High-intent: assessment primary -->
       <div class="sc-cta-stack" id="sc-cta-high" hidden>
         <a class="sc-btn sc-btn-primary" id="sc-book-primary" href="https://calendly.com/jacob-gopulseforge/pulsforge-revenue-recovery-assessment" target="_blank" rel="noopener">
@@ -85,6 +113,22 @@
       ready.hidden = false;
       document.getElementById('sc-result-title').textContent = data.result.title;
       document.getElementById('sc-result-summary').textContent = data.result.summary;
+
+      const payoff = data.result.payoff || {};
+      document.getElementById('sc-meaning').textContent = payoff.meaning || '';
+      document.getElementById('sc-first-move').textContent = payoff.first_move || '';
+      document.getElementById('sc-job-value').textContent = payoff.job_value_illustration || '';
+
+      const planEl = document.getElementById('sc-recovery-plan');
+      const steps = Array.isArray(payoff.recovery_plan) && payoff.recovery_plan.length
+        ? payoff.recovery_plan
+        : ['Respond quickly', 'Follow up consistently', 'Track the outcome'];
+      planEl.innerHTML = '';
+      steps.forEach(function (step) {
+        const li = document.createElement('li');
+        li.textContent = step;
+        planEl.appendChild(li);
+      });
 
       const assessmentUrl = (data.ctas && data.ctas.assessment_url) ||
         'https://calendly.com/jacob-gopulseforge/pulsforge-revenue-recovery-assessment';
