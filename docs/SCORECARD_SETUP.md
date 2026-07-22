@@ -16,7 +16,7 @@ Lean public funnel for qualifying cleaning-business owners for a PulseForge Reve
 - Express + `public/` HTML (same pattern as `/login` / `/mockups`)
 - Brand tokens: `/shared/tokens.css` (Bebas Neue + DM Sans)
 - Lead surface: `agent_actions` with `action_type = 'scorecard_lead'`, `client_id = 1` (PulseForge)
-- Booking CTA: `https://calendly.com/jacob-gopulseforge/new-meeting` (override with `SCORECARD_BOOKING_URL`)
+- Booking CTA: `https://calendly.com/jacob-gopulseforge/pulsforge-revenue-recovery-assessment` (override with `SCORECARD_BOOKING_URL`)
 
 ## What was not built
 
@@ -61,7 +61,7 @@ node --test test/scorecardScoring.test.js test/scorecardRoutes.test.js
 - [ ] Submit Quote path (strong call answers, `quote_follow_up_count=0`) → Quote Follow-Up Gap
 - [ ] Submit Review path (strong call+quote, `automatic_review_request=no`) → Review Growth Gap
 - [ ] High intent (`monthly_inquiries=31-75` or Jobber/CRM) → assessment Calendly is primary CTA
-- [ ] Standard intent → $29 kit block + secondary assessment CTA; Calendly opens `jacob-gopulseforge/new-meeting`
+- [ ] Standard intent → $29 kit block + secondary assessment CTA; Calendly opens `jacob-gopulseforge/pulsforge-revenue-recovery-assessment`
 - [ ] Operator DB: latest `agent_actions` row `action_type=scorecard_lead`, `client_id=1`, payload has full `answers`, `result_category`, `high_intent`
 - [ ] Honeypot: POST with `company_website` filled returns empty 204 and no new row
 - [ ] Forced capture failure (optional) returns generic 500 copy with no stack/DB text

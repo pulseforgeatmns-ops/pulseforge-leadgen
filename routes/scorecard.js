@@ -13,7 +13,7 @@ const SCORECARD_DIR = path.join(__dirname, '..', 'public', 'scorecard');
 
 const BOOKING_URL =
   process.env.SCORECARD_BOOKING_URL ||
-  'https://calendly.com/jacob-gopulseforge/new-meeting';
+  'https://calendly.com/jacob-gopulseforge/pulsforge-revenue-recovery-assessment';
 
 // Kit checkout is intentionally not wired yet — CTA surfaces intent only.
 const KIT_URL = process.env.SCORECARD_KIT_URL || '/scorecard/results#kit';
