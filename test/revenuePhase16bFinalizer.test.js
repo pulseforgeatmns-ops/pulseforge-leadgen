@@ -116,7 +116,10 @@ test('finalizer signs a separate file, leaves the draft untouched, and validates
   }
 });
 
-test('finalizer defaults approved_at to the current UTC time when not supplied', () => {
+test('finalizer defaults approved_at to the current UTC time when not supplied', t => {
+  // Keep the default-time assertion inside this historical authorization's
+  // declared window so it remains deterministic after that window expires.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-07-20T23:00:00.000Z') });
   const before = Date.now();
   const options = baseOptions({ approvedAt: undefined });
   delete options.approvedAt;
