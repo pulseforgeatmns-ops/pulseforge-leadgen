@@ -18,7 +18,10 @@ const result = { category: 'call_recovery_gap', high_intent: true };
 describe('scorecard Brevo handoff', () => {
   it('does not add contacts without explicit marketing consent', async () => {
     const response = await syncScorecardContact({ ...answers, marketing_consent: false }, result, {
-      http: { put: async () => assert.fail('should not call Brevo') },
+      http: {
+        put: async () => assert.fail('should not update in Brevo'),
+        post: async () => assert.fail('should not create in Brevo'),
+      },
     });
     assert.deepEqual(response, { synced: false, reason: 'no_marketing_consent' });
   });
@@ -52,16 +55,16 @@ describe('scorecard Brevo handoff', () => {
     }
   });
 
-  it('creates a contact and applies only valid configured list IDs', async () => {
+  it('creates a contact on list 10 with update enabled and mapped attributes', async () => {
     const priorKey = process.env.BREVO_API_KEY;
     const priorList = process.env.SCORECARD_BREVO_LIST_ID;
     const priorEnabled = process.env.SCORECARD_BREVO_SYNC_ENABLED;
     process.env.BREVO_API_KEY = 'test-key';
-    process.env.SCORECARD_BREVO_LIST_ID = '12, nope, 24';
+    process.env.SCORECARD_BREVO_LIST_ID = '10';
     process.env.SCORECARD_BREVO_SYNC_ENABLED = 'true';
     let post;
     try {
-      assert.deepEqual(configuredListIds(), [12, 24]);
+      assert.deepEqual(configuredListIds(), [10]);
       const response = await syncScorecardContact(answers, result, {
         http: {
           put: async () => { const err = new Error('not found'); err.response = { status: 404 }; throw err; },
@@ -69,8 +72,19 @@ describe('scorecard Brevo handoff', () => {
         },
       });
       assert.deepEqual(response, { synced: true, action: 'created' });
-      assert.equal(post[1].email, 'alex@example.com');
-      assert.deepEqual(post[1].listIds, [12, 24]);
+      assert.deepEqual(post[1], {
+        email: 'alex@example.com',
+        attributes: {
+          FIRSTNAME: 'Alex Owner',
+          BUSINESS_NAME: 'Sparkle Clean Co',
+          PHONE: '6035550100',
+          SCORECARD_RESULT: 'call_recovery_gap',
+          SCORECARD_INTENT: 'high',
+          SCORECARD_SOURCE: 'revenue_leak_scorecard',
+        },
+        listIds: [10],
+        updateEnabled: true,
+      });
     } finally {
       if (priorKey === undefined) delete process.env.BREVO_API_KEY;
       else process.env.BREVO_API_KEY = priorKey;

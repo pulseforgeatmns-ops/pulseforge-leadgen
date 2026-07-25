@@ -21,7 +21,6 @@ Lean public funnel for qualifying cleaning-business owners for a PulseForge Reve
 ## What remains to configure
 
 - Checkout for the $29 kit (CTA notes interest only)
-- Brevo automation sequence (contact sync is now opt-in-only and controlled by this module)
 - Analytics dashboard or admin portal
 - New database, CMS, or design system
 
@@ -66,9 +65,15 @@ node --test test/scorecardScoring.test.js test/scorecardRoutes.test.js
 - [ ] Honeypot: POST with `company_website` filled returns empty 204 and no new row
 - [ ] Forced capture failure (optional) returns generic 500 copy with no stack/DB text
 
-## Env (optional)
+## Environment
 
 - `SCORECARD_BOOKING_URL` — assessment Calendly (or other) URL
 - `SCORECARD_KIT_URL` — future kit checkout / waitlist URL
-- `SCORECARD_BREVO_SYNC_ENABLED` — set to `true` only after the Brevo list and automation are reviewed; disabled by default.
-- `SCORECARD_BREVO_LIST_ID` — optional comma-separated Brevo list ID(s) for opted-in scorecard contacts. Create the list and automation in Brevo; the app adds the contact attributes `SCORECARD_RESULT`, `SCORECARD_INTENT`, and `SCORECARD_SOURCE`.
+- `BREVO_API_KEY` — Brevo API key used only for opted-in Scorecard contacts.
+- `SCORECARD_BREVO_SYNC_ENABLED=true` — enables the sync; every other value leaves it disabled.
+- `SCORECARD_BREVO_LIST_ID=10` — adds new opted-in contacts to `Scorecard — Cleaning Leads`.
+
+The sync creates or updates contacts by email and sends `FIRSTNAME`, `BUSINESS_NAME`,
+`PHONE`, `SCORECARD_RESULT`, `SCORECARD_INTENT`, and `SCORECARD_SOURCE`. The
+`Cleaning Scorecard — Welcome` automation remains managed in Brevo and must not
+be changed by the application.
