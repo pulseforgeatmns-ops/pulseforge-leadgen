@@ -18,10 +18,10 @@ Lean public funnel for qualifying cleaning-business owners for a PulseForge Reve
 - Lead surface: `agent_actions` with `action_type = 'scorecard_lead'`, `client_id = 1` (PulseForge)
 - Booking CTA: `https://calendly.com/jacob-gopulseforge/pulsforge-revenue-recovery-assessment` (override with `SCORECARD_BOOKING_URL`)
 
-## What was not built
+## What remains to configure
 
 - Checkout for the $29 kit (CTA notes interest only)
-- Email automation / Brevo contact sync
+- Brevo automation sequence (contact sync is now opt-in-only and controlled by this module)
 - Analytics dashboard or admin portal
 - New database, CMS, or design system
 
@@ -70,3 +70,5 @@ node --test test/scorecardScoring.test.js test/scorecardRoutes.test.js
 
 - `SCORECARD_BOOKING_URL` — assessment Calendly (or other) URL
 - `SCORECARD_KIT_URL` — future kit checkout / waitlist URL
+- `SCORECARD_BREVO_SYNC_ENABLED` — set to `true` only after the Brevo list and automation are reviewed; disabled by default.
+- `SCORECARD_BREVO_LIST_ID` — optional comma-separated Brevo list ID(s) for opted-in scorecard contacts. Create the list and automation in Brevo; the app adds the contact attributes `SCORECARD_RESULT`, `SCORECARD_INTENT`, and `SCORECARD_SOURCE`.
