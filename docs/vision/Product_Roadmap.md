@@ -1,0 +1,43 @@
+# Product Roadmap
+
+High-level capability roadmap. Release detail: `docs/releases/`. Live status: `CURRENT_STATE.md`.
+
+## v0.7.0 — Foundation (now)
+
+- Repository as source of truth
+- Vision / architecture / specs / ADR / release hierarchy
+- Contributor onboarding for humans and AI
+
+## v0.8.0 — Business Knowledge Graph
+
+- SPEC-001: entity/relationship model, provenance, migration from existing tables
+- ADR-004 implementation
+- Read APIs / projection suitable for Max and operators
+
+## v0.9.0 — Max Reasoning Engine
+
+- SPEC-002: reasoning over KG + evidence
+- Explainable recommendations (ADR-002)
+- Still shadow-first for mutating actions
+
+## v1.0 — Conversation-first operating partner
+
+- Conversation surfaces over KG + Max
+- Mature approval and outbox paths for authorized tenants
+- Production-ready inquiry + outreach loops where clients are configured
+
+## Parallel operational tracks (not version-gated alone)
+
+These continue alongside the product version line and must not silently redefine roadmap:
+
+- Inquiry Foundation production authorization
+- Max orchestration flag graduation (shadow → limited write)
+- Anchor Cleaning Scout / setter revenue loops
+- Revenue projection certification and rebuild tooling
+- Multi-client Scout markets (NH, WV, Nashville)
+
+## Explicitly later
+
+- Fully autonomous multi-channel campaigns
+- Client-facing white-label chat without operator oversight
+- Replacing setter/closer human roles
