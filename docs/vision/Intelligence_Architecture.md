@@ -28,12 +28,21 @@ The Knowledge Graph stores entities (client, company, prospect, inquiry, opportu
 
 ## Reasoning (SPEC-002)
 
-Max consumes graph + evidence to produce:
+Max consumes graph + evidence via `packages/max` to produce:
 
-- Situation summaries
-- Ranked recommendations
-- Explanations (ADR-002)
-- Optional draft actions routed to approval (ADR-003)
+- Ranked structured recommendations (score + independent confidence)
+- Supporting and contradicting evidence
+- Explanation chains (ADR-002)
+- Optional draft actions routed to approval (ADR-003) — not wired in v0.8.0
+
+## Memory (SPEC-003)
+
+Max remembers **transitions**, not facts:
+
+- Append-only reasoning snapshots
+- Deterministic diffs and change events
+- Trends, history, and watch detection (no notifications yet)
+- Temporal explanations: Why → Evidence → History → Change → Reason
 
 ## Execution
 

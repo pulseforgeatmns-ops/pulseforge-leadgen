@@ -48,7 +48,8 @@ Evidence in  →  Agent decides  →  Log + optional mutate  →  Human approval
 |---|---|
 | Briefing | Snapshot + AI summary email/digest |
 | Orchestration (shadow) | Scores, decisions, skipped actions |
-| Reasoning engine (planned SPEC-002) | Graph-aware recommendations with explanations |
+| Reasoning engine (SPEC-002 / v0.8.0) | Graph-aware recommendations with explanations (`packages/max`) |
+| Temporal memory (SPEC-003 / v0.8.1) | Snapshot diffs, trends, watches — transition tracking (`packages/max/memory`) |
 
 Max must not bypass approval constitution or DNC.
 

@@ -8,7 +8,7 @@
 | **Owner** | TBD |
 | **Created** | 2026-07-26 |
 
-> Numbered **SPEC-001C** (knowledge-layer slice) to avoid colliding with draft [SPEC-002 Max Reasoning Engine](SPEC-002_Max_Reasoning_Engine.md) (v0.9.0). Product intent matches the approved “Knowledge Query Engine” brief for v0.7.4.
+> Numbered **SPEC-001C** (knowledge-layer slice) to avoid colliding with [SPEC-002 Max Reasoning Engine](SPEC-002_Max_Reasoning_Engine.md) (v0.8.0). Product intent matches the approved “Knowledge Query Engine” brief for v0.7.4.
 
 ## Objective
 

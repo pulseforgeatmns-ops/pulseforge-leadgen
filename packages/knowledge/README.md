@@ -66,6 +66,8 @@ knowledge.getLastQueryMetrics(); // structured instrumentation
 
 Results are domain objects only — no formatting, summaries, or AI text.
 
+Max Reasoning Engine (SPEC-002) consumes this query API via `packages/max` — it never touches repositories directly.
+
 ## Sync (SPEC-001B)
 
 ```js

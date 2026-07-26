@@ -24,17 +24,26 @@ High-level capability roadmap. Release detail: `docs/releases/`. Live status: `C
 - `KnowledgeService` unchanged
 - Still no agent/server dual-write
 
-## v0.8.0 — Business Knowledge Graph (production ingest)
+## v0.8.0 — Max Reasoning Engine
 
-- Shadow event ingest from Scout/CRM
-- Read APIs / projection suitable for Max and operators
+- SPEC-002: deterministic strategies, weighted score, independent confidence, contradictions, explanations
+- Library only (`packages/max`); agents unwired
+
+## v0.8.1 — Temporal Intelligence & Memory
+
+- SPEC-003: append-only reasoning snapshots, diffs, change detection, trends, watches (detection only)
+- Memory queries (`whatChanged`, `whyChanged`, `history`, …); agents still unwired
+
+## v0.9.0 — Operator / conversation surfaces
+
+- Review of structured recommendations; optional Max→ReasoningEngine shadow wiring
+- Conversation-first stubs over KG + reasoning outputs
+
+## Remaining — Business Knowledge Graph (production ingest)
+
+- Shadow dual-write Scout/CRM → GraphSyncEngine
+- Production rebuild ops
 - Operational rebuild runbooks
-
-## v0.9.0 — Max Reasoning Engine
-
-- SPEC-002: reasoning over KG + evidence
-- Explainable recommendations (ADR-002)
-- Still shadow-first for mutating actions
 
 ## v1.0 — Conversation-first operating partner
 

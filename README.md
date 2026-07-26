@@ -6,10 +6,10 @@ Pulseforge scrapes and scores leads, runs multi-channel outreach through a roste
 
 | | |
 |---|---|
-| **Version** | v0.7.4 |
-| **Current milestone** | Knowledge query engine |
-| **Current spec** | [SPEC-001](docs/specs/SPEC-001_Persistent_Knowledge_Store.md) (Done) |
-| **Next spec** | Shadow CRM → GraphSyncEngine wiring |
+| **Version** | v0.8.1 |
+| **Current milestone** | Temporal Intelligence & Memory |
+| **Current spec** | [SPEC-003](docs/specs/SPEC-003_Temporal_Intelligence_Memory.md) (Done) |
+| **Next spec** | Shadow CRM → GraphSyncEngine wiring / operator surfaces |
 | **Deploy** | Railway · `node server.js` |
 
 ---

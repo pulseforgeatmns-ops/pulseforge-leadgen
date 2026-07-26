@@ -43,7 +43,8 @@ Local operators drown in fragmented signals (opens, calls, inquiries, bookings).
 ```text
 ├── README.md, CURRENT_STATE.md, PROJECT_CONTEXT.md, CONTRIBUTING.md, …
 ├── packages/
-│   └── knowledge/        # Knowledge layer (KnowledgeService + QueryEngine)
+│   ├── knowledge/        # Knowledge layer (KnowledgeService + QueryEngine)
+│   └── max/              # Max Reasoning Engine (SPEC-002)
 ├── docs/
 │   ├── 00_START_HERE.md
 │   ├── vision/           # product philosophy
@@ -58,7 +59,7 @@ Local operators drown in fragmented signals (opens, calls, inquiries, bookings).
 └── test/, scripts/, public/
 ```
 
-Knowledge graph operations must go through `packages/knowledge` (`KnowledgeService` / events). Do not write a storage-specific graph client from agents.
+Knowledge graph operations must go through `packages/knowledge` (`KnowledgeService` / events). Reasoning must go through `packages/max` (which only reads via the Knowledge Query Engine). Do not write a storage-specific graph client from agents.
 ---
 
 ## Naming conventions
@@ -92,7 +93,11 @@ Operational failure modes: `AGENT_RULES.md`. Architecture detail: `docs/architec
 
 **Today:** daily briefing; shadow orchestration (lifecycle signals, warmth scores, skipped recommendations under `SHADOW_MODE`).
 
-**Direction (SPEC-002):** reasoning over the Business Knowledge Graph — explainable recommendations, never silent irreversible outbound without approval gates defined in ADRs.
+**Library (SPEC-002 / v0.8.0):** `packages/max` Reasoning Engine produces structured, evidence-backed recommendations (score + independent confidence + contradictions + explanation chain). Not wired into the Max agent yet.
+
+**Library (SPEC-003 / v0.8.1):** `packages/max/memory` stores reasoning transitions (snapshots, diffs, trends, watches). Enables future briefings/alerts without putting insight computation in the UI.
+
+**Direction:** wire Max agent to consume ReasoningEngine + MemoryEngine (shadow-first); conversation surfaces; never silent irreversible outbound without approval gates defined in ADRs.
 
 Max does **not** own public posting or bypass DNC / client scope.
 

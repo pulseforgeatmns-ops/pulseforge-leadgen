@@ -1,0 +1,17 @@
+{
+  "name": "@pulseforge/max",
+  "version": "0.8.1",
+  "description": "Max Reasoning Engine + Temporal Memory — deterministic, evidence-backed recommendations over the Knowledge Graph",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js memory/tests/*.test.js"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@pulseforge/knowledge": "file:../knowledge"
+  }
+}

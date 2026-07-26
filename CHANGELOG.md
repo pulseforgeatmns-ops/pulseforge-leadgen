@@ -7,7 +7,40 @@ All notable changes to this project are documented here. Format inspired by [Kee
 ### Planned
 
 - Shadow CRM/Scout → GraphSyncEngine dual-write
-- SPEC-002 Max Reasoning Engine
+- Operator review / conversation surfaces over ReasoningEngine (v0.9.0)
+- Morning briefings / alerts consuming MemoryEngine transitions
+
+## [0.8.1] — 2026-07-26
+
+### Added
+
+- Temporal Intelligence & Memory ([SPEC-003](docs/specs/SPEC-003_Temporal_Intelligence_Memory.md))
+  - `packages/max/memory/` — append-only snapshots, deterministic diffs, change detection
+  - Timeline history, recommendation evolution (trend + linear forecast), temporal explanations
+  - Memory queries: `whatChanged`, `whyChanged`, `history`, `trend`, `scoreHistory`, `confidenceHistory`
+  - Watch registration (detection only — no notifications)
+  - Repository parity: InMemory + Serializing snapshot stores
+
+### Notes
+
+- Reasoning core (SPEC-002) unchanged; runtime agents remain unwired
+- Snapshots are structured state only — no LLM output
+
+## [0.8.0] — 2026-07-26
+
+### Added
+
+- Max Reasoning Engine ([SPEC-002](docs/specs/SPEC-002_Max_Reasoning_Engine.md))
+  - Package `packages/max/` — ReasoningContextBuilder, Strategy Registry, seven strategies
+  - Weighted ScoreAggregator with independent confidence (never mixed into score)
+  - RecommendationBuilder, ExplanationEngine, ReasoningReport (no LLM)
+  - Deterministic tests via `npm run test:max`
+
+### Notes
+
+- Graph access only through KnowledgeService query API — no repository access from reasoning
+- Runtime agents/server remain unwired; existing Max briefing behavior unchanged
+- Score and confidence are separate; contradictions are first-class on every strategy
 
 ## [0.7.4] — 2026-07-26
 
