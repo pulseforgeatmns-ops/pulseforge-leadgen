@@ -79,9 +79,19 @@ const {
   canAutonomousExecute,
   approvalRequired,
 } = require('./policy');
+const {
+  CommandDeckComposer,
+  createCommandDeckComposer,
+  CARD_TYPES,
+  ACTION_TYPES,
+  COMMAND_DECK_PERFORMANCE_TARGET_MS,
+  buildIntelligenceCard,
+  buildBriefingId,
+  EMPTY_CATALOG,
+} = require('./commandDeck');
 
 /**
- * Create a Max reasoning + memory + briefing + policy runtime.
+ * Create a Max reasoning + memory + briefing + policy + command-deck runtime.
  * Runtime agents remain unwired — library entrypoint only.
  *
  * @param {object} [options]
@@ -112,17 +122,20 @@ function createMaxReasoningRuntime(options = {}) {
       policy.configureTenant(tenantId, options.tenantPolicies[tenantId]);
     }
   }
+  const commandDeck = createCommandDeckComposer({ briefing, policy });
   return {
     knowledge,
     engine,
     memory,
     briefing,
     policy,
+    commandDeck,
     runtime,
     evaluate: (input) => engine.evaluate(input),
     remember: (input) => memory.remember(input),
     brief: (input) => briefing.brief(input),
     decide: (input) => policy.evaluate(input),
+    compose: (input) => commandDeck.compose(input),
   };
 }
 
@@ -132,6 +145,7 @@ module.exports = {
   createMemoryEngine,
   createBriefingEngine,
   createPolicyEngine,
+  createCommandDeckComposer,
   ReasoningEngine,
   ReasoningContextBuilder,
   StrategyRegistry,
@@ -168,6 +182,7 @@ module.exports = {
   PolicyEngine,
   TenantPolicyStore,
   PolicyAuditLog,
+  CommandDeckComposer,
   createDefaultRuleRegistry,
   ConfidenceRule,
   ContradictionRule,
@@ -195,4 +210,10 @@ module.exports = {
   POLICY_SEVERITIES,
   RULE_IDS,
   DEFAULT_TENANT_POLICY,
+  CARD_TYPES,
+  ACTION_TYPES,
+  COMMAND_DECK_PERFORMANCE_TARGET_MS,
+  buildIntelligenceCard,
+  buildBriefingId,
+  EMPTY_CATALOG,
 };

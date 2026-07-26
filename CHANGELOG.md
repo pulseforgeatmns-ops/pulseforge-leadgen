@@ -6,15 +6,31 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Planned
 
-- Pulseforge Command Deck ([SPEC-006](docs/specs/SPEC-006_Command_Deck.md)) — v1.0.0
+- Pulseforge Command Deck UI ([SPEC-006](docs/specs/SPEC-006_Command_Deck.md)) — v1.0.0
 - Shadow CRM/Scout → GraphSyncEngine dual-write
-- Wire Max agent (shadow) to `brief()` + `decide()` before side effects
+- Wire Max agent (shadow) to `brief()` + `decide()` + `compose()` before side effects
 
 ### Docs
 
 - SPEC-006 Command Deck approved; Visual Direction mockup checked in under `docs/specs/assets/`
 - Product Constitution §11 Cognitive load
 - Roadmap / CURRENT_STATE / Product Experience / v1.0 release plan aligned to Command Deck
+
+## [0.9.2] — 2026-07-26
+
+### Added
+
+- Command Deck Composition Engine ([SPEC-007](docs/specs/SPEC-007_Command_Deck_Composition_Engine.md))
+  - `packages/max/commandDeck/` — CommandDeckComposer, IntelligenceCard contract, empty states
+  - `max.compose({ tenantId, asOf, period })` → immutable `CommandDeckModel`
+  - Assembles Morning Brief, Highest Leverage Action, Watch Alerts, Market Trends, Priority Queue
+  - Explainability metadata on every card; composer-owned empty states
+  - `GET /api/v1/command-deck` — one API, one payload, render-only UI contract
+
+### Notes
+
+- Reasoning / Memory / Briefing / Policy cores unchanged
+- Enables SPEC-006 Command Deck UI without dashboard-side intelligence orchestration
 
 ## [0.9.1] — 2026-07-26
 

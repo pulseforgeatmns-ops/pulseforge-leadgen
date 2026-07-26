@@ -62,6 +62,16 @@ Max evaluates every recommendation against explicit tenant policy before operato
 - Immutable audit trail + explainability chain
 - Never executes — evaluation only
 
+## Command Deck Composer (SPEC-007)
+
+Max presents the stack as one immutable view model for the operator surface:
+
+- `compose({ tenantId, asOf, period })` — Morning Brief, Highest Leverage Action, Watch Alerts, Market Trends, Priority Queue
+- Common `IntelligenceCard` contract + composer-owned empty states
+- Explainability metadata on every card (`sources`, `reasoningId`, `policyId`, `briefingId`)
+- May sort / merge / rank / summarize / group — never reason / score / infer / invent
+- HTTP: `GET /api/v1/command-deck`
+
 ## Execution
 
 Specialist agents and outbox adapters perform channel work. Shadow mode records intent without side effects until flags and approvals permit.

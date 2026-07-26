@@ -181,6 +181,7 @@ const SKIP_DOMAINS = [
 app.use('/', require('./routes/webhooks'));
 app.use('/', require('./routes/cron'));
 app.use('/', require('./routes/api'));
+app.use('/', require('./routes/commandDeck'));
 app.use('/', require('./routes/workspace'));
 app.use('/', require('./routes/maxChat'));
 app.use('/', require('./routes/approvals'));

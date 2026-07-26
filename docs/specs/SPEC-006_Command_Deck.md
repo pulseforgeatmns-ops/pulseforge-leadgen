@@ -99,7 +99,8 @@ The intelligence stack (Knowledge → Reasoning → Memory → Briefing → Poli
 - ✅ SPEC-003 Temporal Intelligence & Memory (v0.8.1)
 - ✅ SPEC-004 Max Briefing Engine (v0.9.0)
 - ✅ SPEC-005 Policy & Decision Engine (v0.9.1)
-- Shadow or live wiring of `max.brief()` / `max.decide()` into the operator surface (implementation slice)
+- ✅ SPEC-007 Command Deck Composition Engine (v0.9.2) — `max.compose()` / `GET /api/v1/command-deck`
+- Shadow or live wiring of knowledge dual-write so the composer returns live market data
 
 ## Architecture
 
@@ -114,14 +115,16 @@ Briefing
       │
 Policy
       │
+CommandDeckComposer  (SPEC-007)
+      │
 ────────────────────
-Command Deck
+Command Deck UI
 ────────────────────
       │
 Ask Max Modal
 ```
 
-**Notice:** The dashboard consumes the stack. It never recreates it.
+**Notice:** The dashboard consumes `CommandDeckModel` from the composer. It never recreates intelligence.
 
 ## Visual Direction (Reference)
 

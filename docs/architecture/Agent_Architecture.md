@@ -52,6 +52,7 @@ Evidence in  →  Agent decides  →  Log + optional mutate  →  Human approval
 | Temporal memory (SPEC-003 / v0.8.1) | Snapshot diffs, trends, watches — transition tracking (`packages/max/memory`) |
 | Briefing engine (SPEC-004 / v0.9.0) | Assembles Knowledge + Reasoning + Memory into structured briefings (`packages/max/briefing`) |
 | Policy engine (SPEC-005 / v0.9.1) | Evaluates recommendations against tenant rules — allow/warn/requireApproval/block (`packages/max/policy`) |
+| Command Deck composer (SPEC-007 / v0.9.2) | Assembles Briefing + Policy into one immutable CommandDeckModel (`packages/max/commandDeck`); `GET /api/v1/command-deck` |
 
 Max must not bypass approval constitution or DNC.
 

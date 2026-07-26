@@ -4,16 +4,16 @@
 
 | Field | Value |
 |---|---|
-| **Version** | v0.9.1 |
-| **Current Milestone** | Intelligence stack complete — Command Deck is the v1.0 operator surface |
-| **Current Sprint** | SPEC-006 Command Deck approved; implement Morning Brief consuming `max.brief()` |
+| **Version** | v0.9.2 |
+| **Current Milestone** | Intelligence stack + composer complete — Command Deck UI is the v1.0 operator surface |
+| **Current Sprint** | SPEC-006 Command Deck UI consuming `GET /api/v1/command-deck` / `max.compose()` |
 | **Current Spec** | [SPEC-006 Pulseforge Command Deck](docs/specs/SPEC-006_Command_Deck.md) — Approved |
-| **Next Spec** | Implement SPEC-006; parallel: shadow dual-write (Scout/CRM → GraphSyncEngine) |
-| **Current Priority** | Highest — intelligence-first Command Deck (consume stack; do not recreate) |
-| **Last Completed** | SPEC-005 Policy; SPEC-004 Briefing; SPEC-003 Memory; SPEC-002 Reasoning; SPEC-001C Query; SPEC-001 Postgres; SPEC-001B sync; SPEC-001A foundation; SPEC-000 docs |
-| **In Progress** | SPEC-006 docs + Visual Direction locked |
-| **Known Blockers** | Inquiry Foundation production deploy blocked; Max orchestration shadow-default; knowledge/reasoning/memory/briefing/policy not wired into server/agents |
-| **Upcoming Decisions** | Command Deck feature-flag / route strategy; when to wire Max agent to `brief()` + `decide()` (shadow-first) |
+| **Next Spec** | Implement SPEC-006 UI; parallel: shadow dual-write (Scout/CRM → GraphSyncEngine) |
+| **Current Priority** | Highest — intelligence-first Command Deck (consume stack via composer; do not recreate) |
+| **Last Completed** | SPEC-007 CommandDeckComposer; SPEC-005 Policy; SPEC-004 Briefing; SPEC-003 Memory; SPEC-002 Reasoning; SPEC-001C Query; SPEC-001 Postgres; SPEC-001B sync; SPEC-001A foundation; SPEC-000 docs |
+| **In Progress** | SPEC-006 UI (Morning Brief + HLA + Priority Queue + Ask Max) |
+| **Known Blockers** | Inquiry Foundation production deploy blocked; Max orchestration shadow-default; knowledge dual-write not live (composer API returns empty-state-rich model until sync) |
+| **Upcoming Decisions** | Command Deck feature-flag / route strategy; when to wire Max agent to `compose()` (shadow-first) |
 
 ---
 
@@ -31,6 +31,7 @@
 | v0.8.1 | Temporal Memory — snapshots, diffs, change detection, trends, watches (detection only) |
 | v0.9.0 | Briefing Engine — assembles Knowledge + Reasoning + Memory into deterministic operator briefings |
 | v0.9.1 | Policy & Decision Engine — allow / warn / requireApproval / block with immutable audit |
+| v0.9.2 | Command Deck Composer — single immutable view model for the operator surface |
 
 ```bash
 npm run test:knowledge
@@ -42,7 +43,7 @@ npm run test:max
 
 - Server/agent dual-write into the knowledge graph
 - Default boot using persistent repository
-- Max agent consuming ReasoningEngine / MemoryEngine / BriefingEngine / PolicyEngine
+- Max agent consuming ReasoningEngine / MemoryEngine / BriefingEngine / PolicyEngine / CommandDeckComposer with live knowledge
 
 ---
 

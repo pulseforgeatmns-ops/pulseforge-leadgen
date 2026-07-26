@@ -12,6 +12,7 @@
 - [SPEC-003](../specs/SPEC-003_Temporal_Intelligence_Memory.md) (v0.8.1) — **Done**: Temporal memory over reasoning snapshots (diffs, trends, watches).
 - [SPEC-004](../specs/SPEC-004_Max_Briefing_Engine.md) (v0.9.0) — **Done**: Briefing Engine assembles Knowledge + Reasoning + Memory into deterministic operator briefings.
 - [SPEC-005](../specs/SPEC-005_Policy_Decision_Engine.md) (v0.9.1) — **Done**: Policy Engine evaluates recommendations against explicit tenant rules (audit + explainability).
+- [SPEC-007](../specs/SPEC-007_Command_Deck_Composition_Engine.md) (v0.9.2) — **Done**: Command Deck Composer presents Briefing + Policy as one immutable view model (`GET /api/v1/command-deck`).
 - Remaining production ingest / shadow dual-write — see [SPEC-001_Business_Knowledge_Graph.md](../specs/SPEC-001_Business_Knowledge_Graph.md) (draft).
 
 ## Purpose

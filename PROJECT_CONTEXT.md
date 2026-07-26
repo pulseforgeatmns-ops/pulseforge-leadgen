@@ -101,9 +101,11 @@ Operational failure modes: `AGENT_RULES.md`. Architecture detail: `docs/architec
 
 **Library (SPEC-005 / v0.9.1):** `packages/max/policy` evaluates recommendations against explicit tenant rules (`max.decide()`). Outcomes: allow / warn / requireApproval / block — with immutable audit. Evaluation only; no execution.
 
-**Surface (SPEC-006 / v1.0.0):** Command Deck — intelligence-first operator workspace. Consumes Briefing + Reasoning + Memory + Policy; never recreates them. Ask Max is contextual investigation, not navigation.
+**Library (SPEC-007 / v0.9.2):** `packages/max/commandDeck` assembles Briefing + Policy into one immutable `CommandDeckModel` (`max.compose()`). `GET /api/v1/command-deck` is the single API for the operator surface. Composer may sort/merge/rank/summarize/group — never reason/score/infer/invent.
 
-**Direction:** implement Command Deck (SPEC-006); wire Max agent to consume `brief()` + `decide()` (shadow-first); never silent irreversible outbound without approval gates defined in ADRs.
+**Surface (SPEC-006 / v1.0.0):** Command Deck UI — intelligence-first operator workspace. Consumes `CommandDeckModel` from the composer; never recreates intelligence. Ask Max is contextual investigation, not navigation.
+
+**Direction:** implement Command Deck UI (SPEC-006) on `compose()`; wire Max agent to consume `compose()` (shadow-first); never silent irreversible outbound without approval gates defined in ADRs.
 
 Max does **not** own public posting or bypass DNC / client scope.
 

@@ -6,10 +6,11 @@ Pulseforge scrapes and scores leads, runs multi-channel outreach through a roste
 
 | | |
 |---|---|
-| **Version** | v0.9.1 |
-| **Current milestone** | Command Deck (v1.0) — intelligence-first operator surface |
+| **Version** | v0.9.2 |
+| **Current milestone** | Command Deck UI (v1.0) — consume `GET /api/v1/command-deck` |
 | **Current spec** | [SPEC-006](docs/specs/SPEC-006_Command_Deck.md) (Approved) |
-| **Next** | Implement Command Deck; parallel shadow CRM → GraphSyncEngine |
+| **Last shipped** | [SPEC-007](docs/specs/SPEC-007_Command_Deck_Composition_Engine.md) Composition Engine |
+| **Next** | Implement Command Deck UI; parallel shadow CRM → GraphSyncEngine |
 | **Deploy** | Railway · `node server.js` |
 
 ---

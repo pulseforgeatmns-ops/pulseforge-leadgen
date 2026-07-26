@@ -15,6 +15,7 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-003](SPEC-003_Temporal_Intelligence_Memory.md) | Temporal Intelligence & Memory | Done | v0.8.1 |
 | [SPEC-004](SPEC-004_Max_Briefing_Engine.md) | Max Briefing Engine | Done | v0.9.0 |
 | [SPEC-005](SPEC-005_Policy_Decision_Engine.md) | Policy & Decision Engine | Done | v0.9.1 |
+| [SPEC-007](SPEC-007_Command_Deck_Composition_Engine.md) | Command Deck Composition Engine | Done | v0.9.2 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

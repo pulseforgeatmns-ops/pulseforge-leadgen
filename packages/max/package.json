@@ -1,11 +1,11 @@
 {
   "name": "@pulseforge/max",
-  "version": "0.9.1",
-  "description": "Max Reasoning + Memory + Briefing + Policy — deterministic recommendations with an explicit safety layer",
+  "version": "0.9.2",
+  "description": "Max Reasoning + Memory + Briefing + Policy + Command Deck — deterministic recommendations with an explicit safety and presentation layer",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
-    "test": "node --test tests/*.test.js memory/tests/*.test.js briefing/tests/*.test.js policy/tests/*.test.js"
+    "test": "node --test tests/*.test.js memory/tests/*.test.js briefing/tests/*.test.js policy/tests/*.test.js commandDeck/tests/*.test.js"
   },
   "license": "ISC",
   "engines": {
