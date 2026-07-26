@@ -7,7 +7,8 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | Spec | Title | Status | Release |
 |---|---|---|---|
 | [SPEC-000](SPEC-000_Repository_Foundation.md) | Repository Foundation & Source of Truth | Done | v0.7.0 |
-| [SPEC-001](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph | Draft — next | v0.8.0 |
+| [SPEC-001A](SPEC-001A_Knowledge_Layer_Foundation.md) | Knowledge Layer Foundation | Done | v0.7.1 |
+| [SPEC-001](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (persistent) | Draft — next | v0.8.0 |
 | [SPEC-002](SPEC-002_Max_Reasoning_Engine.md) | Max Reasoning Engine | Draft — queued | v0.9.0 |
 
 ## Process

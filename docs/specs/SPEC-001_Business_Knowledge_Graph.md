@@ -45,12 +45,13 @@ Business context is fragmented across `prospects`, `companies`, `touchpoints`, `
 ## Dependencies
 
 - SPEC-000 complete
+- [SPEC-001A](SPEC-001A_Knowledge_Layer_Foundation.md) complete (`KnowledgeService` + in-memory repository)
 - ADR-004 accepted
 - Existing event sources documented in `docs/max-canonical-source-assessment.md`
 
 ## Architecture
 
-Follow `docs/architecture/Knowledge_Graph_Architecture.md`. Prefer boring Postgres. CRM tables remain system of record for mutations during v0.8 unless this spec explicitly promotes KG writes for a narrow path.
+Follow `docs/architecture/Knowledge_Graph_Architecture.md`. **Implement a persistent `GraphRepository`** behind the existing SPEC-001A `KnowledgeService` API — do not introduce a parallel graph client. Prefer boring Postgres. CRM tables remain system of record for mutations during v0.8 unless this spec explicitly promotes KG writes for a narrow path.
 
 ## Data Model
 

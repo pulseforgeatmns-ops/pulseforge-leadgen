@@ -4,16 +4,16 @@
 
 | Field | Value |
 |---|---|
-| **Version** | v0.7.0 |
-| **Current Milestone** | Repository Foundation & Source of Truth |
-| **Current Sprint** | Close SPEC-000; begin SPEC-001 planning spike |
-| **Current Spec** | [SPEC-000 Repository Foundation](docs/specs/SPEC-000_Repository_Foundation.md) — Done |
-| **Next Spec** | [SPEC-001 Business Knowledge Graph](docs/specs/SPEC-001_Business_Knowledge_Graph.md) |
-| **Current Priority** | Critical — start Business Knowledge Graph (v0.8.0) |
-| **Last Completed** | SPEC-000 Repository Foundation (v0.7.0 docs hierarchy); prior: lead-gen CRM, Max shadow orchestration Phases 1–2.5, Inquiry Foundation (shadow/local), Anchor verified queue / phone setter, revenue Phase 16B tooling |
-| **In Progress** | Ready for SPEC-001 (no KG implementation started) |
-| **Known Blockers** | Inquiry Foundation production deploy blocked pending real tenant + approved sender; Max orchestration remains shadow-default; Knowledge Graph not yet implemented |
-| **Upcoming Decisions** | KG storage shape (SPEC-001 / ADR-004); Max reasoning authority boundaries (SPEC-002); conversation UI sequencing for v1.0 |
+| **Version** | v0.7.1 |
+| **Current Milestone** | Knowledge Layer Foundation |
+| **Current Sprint** | SPEC-001A complete; next persistent repository / SPEC-001 |
+| **Current Spec** | [SPEC-001A Knowledge Layer Foundation](docs/specs/SPEC-001A_Knowledge_Layer_Foundation.md) — Done |
+| **Next Spec** | [SPEC-001 Business Knowledge Graph](docs/specs/SPEC-001_Business_Knowledge_Graph.md) (persistent store + shadow ingest) |
+| **Current Priority** | High — choose and implement durable `GraphRepository` without changing KnowledgeService API |
+| **Last Completed** | SPEC-001A `packages/knowledge/` (in-memory KnowledgeService, evidence/claims, events, explain); SPEC-000 docs foundation (v0.7.0) |
+| **In Progress** | None on knowledge persistence yet |
+| **Known Blockers** | Inquiry Foundation production deploy blocked pending real tenant + approved sender; Max orchestration remains shadow-default; no persistent KG repository yet; Scout/CRM not wired to knowledge events |
+| **Upcoming Decisions** | Persistent GraphRepository backend (Postgres vs other) under SPEC-001 / ADR-004; shadow ingest wiring for Scout |
 
 ---
 
@@ -30,19 +30,19 @@
 
 ### What is intentionally not live
 
-- Inquiry Foundation / Operator Command Center / outbound outbox — local & shadow-only; production deploy not authorized
+- `packages/knowledge` — library only; not wired into `server.js` / agents
+- Inquiry Foundation / Operator Command Center / outbound outbox — local & shadow-only
 - Max non-shadow state transitions and automated outreach actions — flags default off
-- Business Knowledge Graph (SPEC-001) — not started
-- Max Reasoning Engine as product surface (SPEC-002) — not started
+- Persistent Business Knowledge Graph — not started (SPEC-001)
 
-### Active clients (reference)
+### Knowledge layer (v0.7.1)
 
-| ID | Client | Notes |
-|---|---|---|
-| 1 | Pulseforge (NH) | Primary lead-gen pipeline |
-| 2 | MSHI (WV) | Renovation customer/referral Scout plan |
-| 5 | Pulseforge Nashville | Multi-vertical Scout |
-| 10 | Anchor Cleaning | Separate LLC; `scoring_profile=cleaning_buyer`; Scout-focused |
+| Piece | Location |
+|---|---|
+| Public API | `KnowledgeService` via `packages/knowledge` |
+| Storage (001A) | `InMemoryGraphRepository` only |
+| Ingest | `KnowledgeEventBus` + `KnowledgeIngestor` |
+| Explain | `knowledge.explain(tenantId, nodeId)` |
 
 ---
 

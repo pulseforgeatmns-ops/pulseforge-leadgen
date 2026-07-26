@@ -42,6 +42,8 @@ Local operators drown in fragmented signals (opens, calls, inquiries, bookings).
 
 ```text
 ├── README.md, CURRENT_STATE.md, PROJECT_CONTEXT.md, CONTRIBUTING.md, …
+├── packages/
+│   └── knowledge/        # SPEC-001A knowledge layer (KnowledgeService)
 ├── docs/
 │   ├── 00_START_HERE.md
 │   ├── vision/           # product philosophy
@@ -56,6 +58,7 @@ Local operators drown in fragmented signals (opens, calls, inquiries, bookings).
 └── test/, scripts/, public/
 ```
 
+Knowledge graph operations must go through `packages/knowledge` (`KnowledgeService` / events). Do not write a storage-specific graph client from agents.
 ---
 
 ## Naming conventions

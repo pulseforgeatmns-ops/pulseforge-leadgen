@@ -6,9 +6,9 @@ Pulseforge scrapes and scores leads, runs multi-channel outreach through a roste
 
 | | |
 |---|---|
-| **Version** | v0.7.0 |
-| **Current milestone** | Repository Foundation & Source of Truth |
-| **Current spec** | [SPEC-000](docs/specs/SPEC-000_Repository_Foundation.md) (Done) |
+| **Version** | v0.7.1 |
+| **Current milestone** | Knowledge Layer Foundation |
+| **Current spec** | [SPEC-001A](docs/specs/SPEC-001A_Knowledge_Layer_Foundation.md) (Done) |
 | **Next spec** | [SPEC-001 Business Knowledge Graph](docs/specs/SPEC-001_Business_Knowledge_Graph.md) |
 | **Deploy** | Railway · `node server.js` |
 

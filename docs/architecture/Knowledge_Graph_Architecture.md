@@ -1,6 +1,11 @@
 # Knowledge Graph Architecture
 
-**Status:** Accepted direction ([ADR-004](../adr/ADR-004_Knowledge_Graph.md)). Implementation: [SPEC-001](../specs/SPEC-001_Business_Knowledge_Graph.md) (not started as of v0.7.0).
+**Status:** Accepted direction ([ADR-004](../adr/ADR-004_Knowledge_Graph.md)).
+
+**Implementation status:**
+
+- [SPEC-001A](../specs/SPEC-001A_Knowledge_Layer_Foundation.md) (v0.7.1) — **Done**: storage-agnostic `packages/knowledge` with in-memory repository, evidence/claims, events, `explain()`.
+- [SPEC-001](../specs/SPEC-001_Business_Knowledge_Graph.md) (v0.8.0) — persistent repository + production-oriented ingest (not started).
 
 ## Purpose
 
@@ -31,13 +36,13 @@ Provide a single, queryable memory of business reality: who entities are, how th
 
 ## Storage options (to decide in SPEC-001)
 
-Candidates (non-final):
+Candidates (non-final). **Application code must keep using `KnowledgeService` / `GraphRepository` only** — see SPEC-001A.
 
-1. Postgres relational graph tables (`kg_nodes`, `kg_edges`, `kg_claims`)
+1. Postgres relational graph tables (`kg_nodes`, `kg_edges`, `kg_claims`) implementing `GraphRepository`
 2. JSONB document projections beside relational CRM
 3. Hybrid: CRM remains SoR for mutations; KG is a derived projection rebuilt from events
 
-SPEC-001 must pick one with migration and rollback strategy. Prefer boring Postgres unless a measured need appears.
+SPEC-001 must pick one with migration and rollback strategy. Prefer boring Postgres unless a measured need appears. Swapping `InMemoryGraphRepository` for a persistent implementation must not change callers.
 
 ## Non-goals (v0.8)
 

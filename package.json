@@ -1,10 +1,11 @@
 {
   "name": "lead-gen-app",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "",
   "main": "leadgen.js",
   "scripts": {
     "test": "node --test test/*.test.js",
+    "test:knowledge": "node --test packages/knowledge/tests/*.test.js",
     "test:email-verifier": "node scripts/smokeEmailVerifier.js",
     "max:schema": "node scripts/validateMaxOrchestrationSchema.js",
     "max:migrations:validate": "node scripts/validateMaxMigrations.js",

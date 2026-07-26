@@ -2,16 +2,22 @@
 
 High-level capability roadmap. Release detail: `docs/releases/`. Live status: `CURRENT_STATE.md`.
 
-## v0.7.0 — Foundation (now)
+## v0.7.0 — Foundation
 
 - Repository as source of truth
 - Vision / architecture / specs / ADR / release hierarchy
 - Contributor onboarding for humans and AI
 
+## v0.7.1 — Knowledge Layer Foundation
+
+- `packages/knowledge` — `KnowledgeService`, evidence/claims, events, `explain()`
+- In-memory repository only; no runtime wiring
+
 ## v0.8.0 — Business Knowledge Graph
 
-- SPEC-001: entity/relationship model, provenance, migration from existing tables
+- SPEC-001: persistent `GraphRepository`, provenance, migration from existing tables
 - ADR-004 implementation
+- Shadow event ingest from Scout/CRM
 - Read APIs / projection suitable for Max and operators
 
 ## v0.9.0 — Max Reasoning Engine

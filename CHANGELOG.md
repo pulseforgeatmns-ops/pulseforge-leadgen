@@ -6,8 +6,25 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Planned
 
-- SPEC-001 Business Knowledge Graph
+- SPEC-001 Business Knowledge Graph (persistent repository + shadow ingest)
 - SPEC-002 Max Reasoning Engine
+
+## [0.7.1] — 2026-07-26
+
+### Added
+
+- Knowledge layer foundation ([SPEC-001A](docs/specs/SPEC-001A_Knowledge_Layer_Foundation.md))
+  - Package `packages/knowledge/` with `KnowledgeService` as the only public graph API
+  - `GraphRepository` contract + `InMemoryGraphRepository`
+  - `EvidenceEngine`, `ClaimEngine`, confidence helpers
+  - Event bus + ingestor (`KnowledgeEventBus`, `KnowledgeIngestor`)
+  - `explain()` chain: Claim → Evidence → Original Source → Confidence → Reason
+  - Unit tests via `npm run test:knowledge`
+
+### Notes
+
+- No runtime wiring — existing agents/server behavior unchanged
+- No persistent graph store yet (deferred to SPEC-001)
 
 ## [0.7.0] — 2026-07-26
 
