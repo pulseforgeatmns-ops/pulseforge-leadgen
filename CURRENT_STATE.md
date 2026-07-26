@@ -4,45 +4,38 @@
 
 | Field | Value |
 |---|---|
-| **Version** | v0.7.0 |
-| **Current Milestone** | Repository Foundation & Source of Truth |
-| **Current Sprint** | Close SPEC-000; begin SPEC-001 planning spike |
-| **Current Spec** | [SPEC-000 Repository Foundation](docs/specs/SPEC-000_Repository_Foundation.md) — Done |
-| **Next Spec** | [SPEC-001 Business Knowledge Graph](docs/specs/SPEC-001_Business_Knowledge_Graph.md) |
-| **Current Priority** | Critical — start Business Knowledge Graph (v0.8.0) |
-| **Last Completed** | SPEC-000 Repository Foundation (v0.7.0 docs hierarchy); prior: lead-gen CRM, Max shadow orchestration Phases 1–2.5, Inquiry Foundation (shadow/local), Anchor verified queue / phone setter, revenue Phase 16B tooling |
-| **In Progress** | Ready for SPEC-001 (no KG implementation started) |
-| **Known Blockers** | Inquiry Foundation production deploy blocked pending real tenant + approved sender; Max orchestration remains shadow-default; Knowledge Graph not yet implemented |
-| **Upcoming Decisions** | KG storage shape (SPEC-001 / ADR-004); Max reasoning authority boundaries (SPEC-002); conversation UI sequencing for v1.0 |
+| **Version** | v0.7.3 |
+| **Current Milestone** | Persistent knowledge store |
+| **Current Sprint** | SPEC-001 complete; next shadow CRM→sync wiring |
+| **Current Spec** | [SPEC-001 Persistent Knowledge Store](docs/specs/SPEC-001_Persistent_Knowledge_Store.md) — Done |
+| **Next Spec** | Shadow dual-write (Scout/CRM → GraphSyncEngine) and/or broader Business KG production ingest |
+| **Current Priority** | High — controlled shadow emit into persistent graph |
+| **Last Completed** | SPEC-001 Postgres `PersistentGraphRepository`; SPEC-001B sync; SPEC-001A foundation; SPEC-000 docs |
+| **In Progress** | None |
+| **Known Blockers** | Inquiry Foundation production deploy blocked; Max orchestration shadow-default; knowledge not wired into server/agents |
+| **Upcoming Decisions** | When to enable shadow dual-write; whether default runtime should prefer Postgres when `DATABASE_URL` is present |
 
 ---
 
 ## Snapshot (2026-07-26)
 
-### What works in production today
+### Knowledge layer
 
-- Multi-client Postgres CRM (`clients`, `companies`, `prospects`, touchpoints, agent_log)
-- Scout lead scraping + ICP scoring (including Anchor `cleaning_buyer` profile)
-- Setter / closer dashboards and handoff flows
-- Emmett email sequences (Brevo), Riley inbound triage, social agents with human approval
-- Max daily briefing + Max prospect orchestration **shadow** path
-- Scorecard → Brevo sync paths; Anchor verified queue tooling
+| Version | Capability |
+|---|---|
+| v0.7.1 | `KnowledgeService`, in-memory repo, evidence/claims, events, `explain()` |
+| v0.7.2 | `GraphSyncEngine` — CRM/import/rebuild → KnowledgeService |
+| v0.7.3 | `PersistentGraphRepository` (Postgres) — same interface; KnowledgeService unchanged |
 
-### What is intentionally not live
+```bash
+npm run test:knowledge
+npm run test:knowledge:postgres
+```
 
-- Inquiry Foundation / Operator Command Center / outbound outbox — local & shadow-only; production deploy not authorized
-- Max non-shadow state transitions and automated outreach actions — flags default off
-- Business Knowledge Graph (SPEC-001) — not started
-- Max Reasoning Engine as product surface (SPEC-002) — not started
+### Still not live
 
-### Active clients (reference)
-
-| ID | Client | Notes |
-|---|---|---|
-| 1 | Pulseforge (NH) | Primary lead-gen pipeline |
-| 2 | MSHI (WV) | Renovation customer/referral Scout plan |
-| 5 | Pulseforge Nashville | Multi-vertical Scout |
-| 10 | Anchor Cleaning | Separate LLC; `scoring_profile=cleaning_buyer`; Scout-focused |
+- Server/agent dual-write into the knowledge graph
+- Default boot using persistent repository
 
 ---
 

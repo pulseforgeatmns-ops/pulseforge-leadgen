@@ -2,17 +2,33 @@
 
 High-level capability roadmap. Release detail: `docs/releases/`. Live status: `CURRENT_STATE.md`.
 
-## v0.7.0 — Foundation (now)
+## v0.7.0 — Foundation
 
 - Repository as source of truth
 - Vision / architecture / specs / ADR / release hierarchy
 - Contributor onboarding for humans and AI
 
-## v0.8.0 — Business Knowledge Graph
+## v0.7.1 — Knowledge Layer Foundation
 
-- SPEC-001: entity/relationship model, provenance, migration from existing tables
-- ADR-004 implementation
+- `packages/knowledge` — `KnowledgeService`, evidence/claims, events, `explain()`
+- In-memory repository only; no runtime wiring
+
+## v0.7.2 — Graph Synchronization Engine
+
+- `GraphSyncEngine` — idempotent CRM/import/rebuild → KnowledgeService
+- Still library-only (no production dual-write)
+
+## v0.7.3 — Persistent Knowledge Store
+
+- Postgres `PersistentGraphRepository` behind the same `GraphRepository` interface
+- `KnowledgeService` unchanged
+- Still no agent/server dual-write
+
+## v0.8.0 — Business Knowledge Graph (production ingest)
+
+- Shadow event ingest from Scout/CRM
 - Read APIs / projection suitable for Max and operators
+- Operational rebuild runbooks
 
 ## v0.9.0 — Max Reasoning Engine
 

@@ -1,6 +1,13 @@
 # Knowledge Graph Architecture
 
-**Status:** Accepted direction ([ADR-004](../adr/ADR-004_Knowledge_Graph.md)). Implementation: [SPEC-001](../specs/SPEC-001_Business_Knowledge_Graph.md) (not started as of v0.7.0).
+**Status:** Accepted direction ([ADR-004](../adr/ADR-004_Knowledge_Graph.md)).
+
+**Implementation status:**
+
+- [SPEC-001A](../specs/SPEC-001A_Knowledge_Layer_Foundation.md) (v0.7.1) — **Done**: storage-agnostic `packages/knowledge` with in-memory repository, evidence/claims, events, `explain()`.
+- [SPEC-001B](../specs/SPEC-001B_Graph_Synchronization_Engine.md) (v0.7.2) — **Done**: idempotent CRM→`KnowledgeService` sync + relational rebuild (no direct repository access).
+- [SPEC-001](../specs/SPEC-001_Persistent_Knowledge_Store.md) (v0.7.3) — **Done**: Postgres `PersistentGraphRepository` behind the same interface; `KnowledgeService` unchanged.
+- Remaining production ingest / shadow dual-write — see [SPEC-001_Business_Knowledge_Graph.md](../specs/SPEC-001_Business_Knowledge_Graph.md) (draft).
 
 ## Purpose
 
@@ -29,15 +36,16 @@ Provide a single, queryable memory of business reality: who entities are, how th
 | Explainability | Max can walk evidence for a recommendation |
 | Compatibility | Existing CRM tables remain readable during migration |
 
-## Storage options (to decide in SPEC-001)
+## Storage
 
-Candidates (non-final):
+**Implemented (v0.7.3):** Postgres `PersistentGraphRepository` with graph-owned tables. Application code continues to use `KnowledgeService` / `GraphRepository` only.
 
-1. Postgres relational graph tables (`kg_nodes`, `kg_edges`, `kg_claims`)
-2. JSONB document projections beside relational CRM
-3. Hybrid: CRM remains SoR for mutations; KG is a derived projection rebuilt from events
+Future options if Postgres proves insufficient:
 
-SPEC-001 must pick one with migration and rollback strategy. Prefer boring Postgres unless a measured need appears.
+1. Dedicated graph database implementing the same `GraphRepository` interface
+2. Hybrid projection models
+
+Swapping storage must not change `KnowledgeService`.
 
 ## Non-goals (v0.8)
 

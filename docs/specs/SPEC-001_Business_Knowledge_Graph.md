@@ -1,16 +1,18 @@
-# SPEC-001 — Business Knowledge Graph
+## Status
 
 | Field | Value |
 |---|---|
-| **Status** | Draft — next after SPEC-000 |
-| **Target Version** | v0.8.0 |
-| **Priority** | Critical |
-| **Owner** | TBD |
-| **Created** | 2026-07-26 |
+| **Status** | Partially superseded — persistent store delivered as [SPEC-001 Persistent Knowledge Store](SPEC-001_Persistent_Knowledge_Store.md) (v0.7.3) |
+| **Remaining** | Shadow dual-write / production ingest wiring (target v0.8.0) |
+| **Target Version** | v0.8.0 (remaining work) |
 
 ## Objective
 
 Introduce a client-scoped Business Knowledge Graph that stores entities, relationships, and provenance so Max and operators can query durable business memory—not just mutable CRM rows and chat context.
+
+**Completed in v0.7.1–v0.7.3:** KnowledgeService abstraction, sync engine, Postgres persistent repository.
+
+**Still open:** wiring Scout/CRM producers to emit sync events in shadow mode; production rebuild ops.
 
 ## Vision References
 
@@ -45,12 +47,14 @@ Business context is fragmented across `prospects`, `companies`, `touchpoints`, `
 ## Dependencies
 
 - SPEC-000 complete
+- [SPEC-001A](SPEC-001A_Knowledge_Layer_Foundation.md) complete (`KnowledgeService` + in-memory repository)
+- [SPEC-001B](SPEC-001B_Graph_Synchronization_Engine.md) complete (CRM→knowledge sync + rebuild)
 - ADR-004 accepted
 - Existing event sources documented in `docs/max-canonical-source-assessment.md`
 
 ## Architecture
 
-Follow `docs/architecture/Knowledge_Graph_Architecture.md`. Prefer boring Postgres. CRM tables remain system of record for mutations during v0.8 unless this spec explicitly promotes KG writes for a narrow path.
+Follow `docs/architecture/Knowledge_Graph_Architecture.md`. **Implement a persistent `GraphRepository`** behind the existing SPEC-001A `KnowledgeService` API — do not introduce a parallel graph client. Prefer boring Postgres. CRM tables remain system of record for mutations during v0.8 unless this spec explicitly promotes KG writes for a narrow path.
 
 ## Data Model
 
