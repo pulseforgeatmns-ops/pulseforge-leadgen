@@ -41,3 +41,7 @@ Agents have bounded responsibilities. Max reasons and recommends; specialist age
 ## 10. Truthful status
 
 UI and docs must not claim delivery, booking, or coverage that the system cannot prove from durable records.
+
+## 11. Cognitive load
+
+Pulseforge exists to reduce cognitive load. Every feature must help the operator understand what matters, why it matters, and what to do next. If a feature increases cognitive load without delivering proportional decision-making value, it should be redesigned or rejected.

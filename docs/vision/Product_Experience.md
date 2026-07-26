@@ -26,9 +26,11 @@ Pulseforge should feel like a **trusted operating partner**: you ask what matter
 
 ## Near-term experience bets
 
+- **Command Deck (SPEC-006)** as the intelligence-first landing experience — Morning Brief before chat
+- Highest Leverage Action + Priority Queue powered by Briefing / Reasoning / Memory
+- Ask Max as contextual investigation (not navigation)
 - Operator Command Center as the inquiry attention model (local → later prod when authorized)
 - Max recommendations visible with explanations before any non-shadow action
-- Conversation UI over KG queries (post SPEC-001/002)
 
 ## Anti-patterns
 

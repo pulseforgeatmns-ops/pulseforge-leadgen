@@ -1,52 +1,53 @@
 # @pulseforge/max
 
-Max Reasoning Engine + Temporal Memory — deterministic, evidence-backed recommendations over the Knowledge Graph, with transition tracking over time.
+Max Reasoning Engine + Temporal Memory + Briefing Engine + Policy Engine — deterministic recommendations, operator briefings, and an explicit safety layer over the Knowledge Graph.
 
-**SPEC-002** · v0.8.0 · **SPEC-003** · v0.8.1
+**SPEC-002** · v0.8.0 · **SPEC-003** · v0.8.1 · **SPEC-004** · v0.9.0 · **SPEC-005** · v0.9.1
 
 ## Philosophy
 
-Max does not make decisions. Max constructs arguments — and remembers how those arguments change.
+Max does not make decisions. Max constructs arguments — remembers how those arguments change — assembles them into operational briefings — and evaluates whether actions are **allowed**.
 
-Every recommendation answers: why this, why now, why not, how confident, what supports, what contradicts — using only facts present in the Knowledge Graph. Memory adds: what changed, why it changed, and which way the trend is moving. No LLM. No invented prose.
+- Reasoning: what should happen?
+- Policy: what is allowed to happen?
+
+No LLM. No invented prose. No silent execution.
 
 ## Architecture
 
 ```text
 Operator → Max → ReasoningEngine → KnowledgeService (Query Engine) → Graph
                  MemoryEngine   → SnapshotStore (append-only)
+                 BriefingEngine → assembles Knowledge + Reasoning + Memory
+                 PolicyEngine   → evaluates recommendations against rules
+                        ↓
+              Presentation Adapter (optional) / Operator / Future Automation
 ```
-
-Strategies never query the graph and never mutate context. Memory never mutates snapshots.
 
 ## Use (in-repo)
 
 ```js
 const { createMaxReasoningRuntime } = require('@pulseforge/max');
-// or: require('../../packages/max')
 
 const max = createMaxReasoningRuntime();
 
 const { recommendation } = await max.evaluate({ tenantId: '10', companyId, asOf });
+await max.remember({ tenantId: '10', companyId, asOf, timestamp });
+const briefing = await max.brief({ tenantId: '10', period: 'daily', asOf });
 
-const { snapshot, diff, changes, evolution, temporalExplanation } = await max.remember({
-  tenantId: '10',
-  companyId,
-  asOf,
-  timestamp: '2026-07-22T12:00:00.000Z',
+max.policy.configureTenant('10', {
+  minimumConfidence: 0.75,
+  maximumRisk: 0.4,
+  approvalRequired: ['email', 'linkedin'],
+  blockedDays: ['Sunday'],
 });
 
-await max.memory.whatChanged({ tenantId: '10', companyId });
-await max.memory.whyChanged({ tenantId: '10', companyId });
-await max.memory.scoreHistory('10', companyId);
-await max.memory.trend('10', companyId);
-
-max.memory.watch({
+const decision = await max.decide({
   tenantId: '10',
-  targetType: 'company',
-  targetId: companyId,
-  condition: { op: 'delta_abs_gt', field: 'score', value: 10 },
+  recommendation,
+  context: { channel: 'email', evidenceAgeDays: 12 },
 });
+// decision.allowed | requiresApproval | blocked | matchedRules | audit
 ```
 
 ## Layers
@@ -56,6 +57,8 @@ max.memory.watch({
 | Knowledge | `@pulseforge/knowledge` | What we know |
 | Reasoning | `packages/max` strategies + engine | What it means |
 | Memory | `packages/max/memory` | How it changed |
+| Briefing | `packages/max/briefing` | How to communicate |
+| Policy | `packages/max/policy` | What is allowed |
 
 ## Tests
 
@@ -66,4 +69,4 @@ npm run test:max
 
 ## Out of scope (this package)
 
-Runtime agent wiring, dashboards, LLM summaries, autonomous outbound, push notifications.
+Runtime agent wiring, dashboards, LLM summaries, autonomous outbound, push notifications, adaptive policies.

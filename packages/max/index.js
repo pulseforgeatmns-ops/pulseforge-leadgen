@@ -44,15 +44,51 @@ const {
   WATCH_OPS,
   TREND_DIRECTIONS,
 } = require('./memory');
+const {
+  BriefingEngine,
+  createBriefingEngine,
+  BriefingBuilder,
+  DigestBuilder,
+  Prioritizer,
+  PresentationAdapter,
+  StructuredPresentationAdapter,
+  MarkdownPresentationAdapter,
+  createPresentationAdapter,
+  BRIEFING_PERIODS,
+  BRIEFING_SECTIONS,
+  BRIEFING_PERFORMANCE_TARGET_MS,
+  RISK_KIND,
+} = require('./briefing');
+const {
+  PolicyEngine,
+  createPolicyEngine,
+  TenantPolicyStore,
+  PolicyAuditLog,
+  createDefaultRuleRegistry,
+  ConfidenceRule,
+  ContradictionRule,
+  TenantPolicyRule,
+  RiskRule,
+  CooldownRule,
+  ContactRule,
+  EvidenceFreshnessRule,
+  POLICY_ACTIONS,
+  POLICY_SEVERITIES,
+  RULE_IDS,
+  DEFAULT_TENANT_POLICY,
+  canAutonomousExecute,
+  approvalRequired,
+} = require('./policy');
 
 /**
- * Create a Max reasoning + memory runtime.
+ * Create a Max reasoning + memory + briefing + policy runtime.
  * Runtime agents remain unwired — library entrypoint only.
  *
  * @param {object} [options]
  * @param {import('../knowledge/services/KnowledgeService').KnowledgeService} [options.knowledge]
  * @param {boolean} [options.withSync=false]
  * @param {import('./memory/snapshots/SnapshotRepository').SnapshotRepository} [options.snapshotRepository]
+ * @param {object} [options.tenantPolicies] - map of tenantId → policy config
  */
 function createMaxReasoningRuntime(options = {}) {
   let knowledge = options.knowledge;
@@ -69,13 +105,24 @@ function createMaxReasoningRuntime(options = {}) {
     reasoningEngine: engine,
     repository: options.snapshotRepository,
   });
+  const briefing = createBriefingEngine({ knowledge, memory });
+  const policy = createPolicyEngine();
+  if (options.tenantPolicies && typeof options.tenantPolicies === 'object') {
+    for (const tenantId of Object.keys(options.tenantPolicies).sort()) {
+      policy.configureTenant(tenantId, options.tenantPolicies[tenantId]);
+    }
+  }
   return {
     knowledge,
     engine,
     memory,
+    briefing,
+    policy,
     runtime,
     evaluate: (input) => engine.evaluate(input),
     remember: (input) => memory.remember(input),
+    brief: (input) => briefing.brief(input),
+    decide: (input) => policy.evaluate(input),
   };
 }
 
@@ -83,6 +130,8 @@ module.exports = {
   createMaxReasoningRuntime,
   createReasoningEngine,
   createMemoryEngine,
+  createBriefingEngine,
+  createPolicyEngine,
   ReasoningEngine,
   ReasoningContextBuilder,
   StrategyRegistry,
@@ -108,6 +157,27 @@ module.exports = {
   TemporalExplanationEngine,
   InMemorySnapshotRepository,
   SerializingSnapshotRepository,
+  BriefingEngine,
+  BriefingBuilder,
+  DigestBuilder,
+  Prioritizer,
+  PresentationAdapter,
+  StructuredPresentationAdapter,
+  MarkdownPresentationAdapter,
+  createPresentationAdapter,
+  PolicyEngine,
+  TenantPolicyStore,
+  PolicyAuditLog,
+  createDefaultRuleRegistry,
+  ConfidenceRule,
+  ContradictionRule,
+  TenantPolicyRule,
+  RiskRule,
+  CooldownRule,
+  ContactRule,
+  EvidenceFreshnessRule,
+  canAutonomousExecute,
+  approvalRequired,
   STRATEGY_IDS,
   DEFAULT_STRATEGY_WEIGHTS,
   RECOMMENDATION_TYPES,
@@ -117,4 +187,12 @@ module.exports = {
   CHANGE_TYPES,
   WATCH_OPS,
   TREND_DIRECTIONS,
+  BRIEFING_PERIODS,
+  BRIEFING_SECTIONS,
+  BRIEFING_PERFORMANCE_TARGET_MS,
+  RISK_KIND,
+  POLICY_ACTIONS,
+  POLICY_SEVERITIES,
+  RULE_IDS,
+  DEFAULT_TENANT_POLICY,
 };

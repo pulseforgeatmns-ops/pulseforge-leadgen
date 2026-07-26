@@ -95,9 +95,15 @@ Operational failure modes: `AGENT_RULES.md`. Architecture detail: `docs/architec
 
 **Library (SPEC-002 / v0.8.0):** `packages/max` Reasoning Engine produces structured, evidence-backed recommendations (score + independent confidence + contradictions + explanation chain). Not wired into the Max agent yet.
 
-**Library (SPEC-003 / v0.8.1):** `packages/max/memory` stores reasoning transitions (snapshots, diffs, trends, watches). Enables future briefings/alerts without putting insight computation in the UI.
+**Library (SPEC-003 / v0.8.1):** `packages/max/memory` stores reasoning transitions (snapshots, diffs, trends, watches). Enables briefings/alerts without putting insight computation in the UI.
 
-**Direction:** wire Max agent to consume ReasoningEngine + MemoryEngine (shadow-first); conversation surfaces; never silent irreversible outbound without approval gates defined in ADRs.
+**Library (SPEC-004 / v0.9.0):** `packages/max/briefing` assembles Knowledge + Reasoning + Memory into deterministic operator briefings (`max.brief()`). Presentation Adapter is the UI extension point; default output is structured domain objects only.
+
+**Library (SPEC-005 / v0.9.1):** `packages/max/policy` evaluates recommendations against explicit tenant rules (`max.decide()`). Outcomes: allow / warn / requireApproval / block — with immutable audit. Evaluation only; no execution.
+
+**Surface (SPEC-006 / v1.0.0):** Command Deck — intelligence-first operator workspace. Consumes Briefing + Reasoning + Memory + Policy; never recreates them. Ask Max is contextual investigation, not navigation.
+
+**Direction:** implement Command Deck (SPEC-006); wire Max agent to consume `brief()` + `decide()` (shadow-first); never silent irreversible outbound without approval gates defined in ADRs.
 
 Max does **not** own public posting or bypass DNC / client scope.
 

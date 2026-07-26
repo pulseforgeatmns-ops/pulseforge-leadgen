@@ -10,6 +10,8 @@
 - [SPEC-001C](../specs/SPEC-001C_Knowledge_Query_Engine.md) (v0.7.4) — **Done**: typed Query Engine on `KnowledgeService` (filters, traversal, timeline, path, metrics).
 - [SPEC-002](../specs/SPEC-002_Max_Reasoning_Engine.md) (v0.8.0) — **Done**: Max Reasoning Engine over the Query Engine (strategies, aggregation, recommendations, explanations).
 - [SPEC-003](../specs/SPEC-003_Temporal_Intelligence_Memory.md) (v0.8.1) — **Done**: Temporal memory over reasoning snapshots (diffs, trends, watches).
+- [SPEC-004](../specs/SPEC-004_Max_Briefing_Engine.md) (v0.9.0) — **Done**: Briefing Engine assembles Knowledge + Reasoning + Memory into deterministic operator briefings.
+- [SPEC-005](../specs/SPEC-005_Policy_Decision_Engine.md) (v0.9.1) — **Done**: Policy Engine evaluates recommendations against explicit tenant rules (audit + explainability).
 - Remaining production ingest / shadow dual-write — see [SPEC-001_Business_Knowledge_Graph.md](../specs/SPEC-001_Business_Knowledge_Graph.md) (draft).
 
 ## Purpose

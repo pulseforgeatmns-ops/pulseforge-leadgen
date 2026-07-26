@@ -46,10 +46,12 @@ Evidence in  →  Agent decides  →  Log + optional mutate  →  Human approval
 
 | Mode | Behavior |
 |---|---|
-| Briefing | Snapshot + AI summary email/digest |
+| Briefing | Snapshot + AI summary email/digest (legacy agent) |
 | Orchestration (shadow) | Scores, decisions, skipped actions |
 | Reasoning engine (SPEC-002 / v0.8.0) | Graph-aware recommendations with explanations (`packages/max`) |
 | Temporal memory (SPEC-003 / v0.8.1) | Snapshot diffs, trends, watches — transition tracking (`packages/max/memory`) |
+| Briefing engine (SPEC-004 / v0.9.0) | Assembles Knowledge + Reasoning + Memory into structured briefings (`packages/max/briefing`) |
+| Policy engine (SPEC-005 / v0.9.1) | Evaluates recommendations against tenant rules — allow/warn/requireApproval/block (`packages/max/policy`) |
 
 Max must not bypass approval constitution or DNC.
 

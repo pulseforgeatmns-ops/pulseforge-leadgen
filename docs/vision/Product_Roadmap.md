@@ -34,10 +34,29 @@ High-level capability roadmap. Release detail: `docs/releases/`. Live status: `C
 - SPEC-003: append-only reasoning snapshots, diffs, change detection, trends, watches (detection only)
 - Memory queries (`whatChanged`, `whyChanged`, `history`, …); agents still unwired
 
-## v0.9.0 — Operator / conversation surfaces
+## v0.9.0 — Max Briefing Engine
 
-- Review of structured recommendations; optional Max→ReasoningEngine shadow wiring
-- Conversation-first stubs over KG + reasoning outputs
+- SPEC-004: assembles Knowledge + Reasoning + Memory into deterministic operator briefings
+- `max.brief({ tenantId, asOf, period })`; Presentation Adapter extension point
+- Library only; agents unwired
+
+## v0.9.1 — Policy & Decision Engine
+
+- SPEC-005: deterministic policy evaluation (allow / warn / requireApproval / block)
+- Seven initial rules; per-tenant data-driven config; immutable audit
+- Library only; no automatic execution; agents unwired
+
+## v1.0.0 — Pulseforge Command Deck
+
+- SPEC-006: intelligence-first operator surface (Morning Brief, HLA, Priority Queue, Ask Max)
+- Consumes Briefing + Reasoning + Memory + Policy — never recreates them
+- Constitution §11 Cognitive load
+
+## Parallel — Operator wiring / graph ingest
+
+- Optional Max agent→`brief()` + `decide()` shadow wiring
+- Shadow dual-write Scout/CRM → GraphSyncEngine
+- Production rebuild ops / runbooks
 
 ## Remaining — Business Knowledge Graph (production ingest)
 
@@ -45,9 +64,10 @@ High-level capability roadmap. Release detail: `docs/releases/`. Live status: `C
 - Production rebuild ops
 - Operational rebuild runbooks
 
-## v1.0 — Conversation-first operating partner
+## v1.0 — Intelligence-first operating partner
 
-- Conversation surfaces over KG + Max
+- Command Deck as primary landing experience
+- Contextual Ask Max over KG + Max
 - Mature approval and outbox paths for authorized tenants
 - Production-ready inquiry + outreach loops where clients are configured
 

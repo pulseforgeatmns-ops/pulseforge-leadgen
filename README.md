@@ -6,10 +6,10 @@ Pulseforge scrapes and scores leads, runs multi-channel outreach through a roste
 
 | | |
 |---|---|
-| **Version** | v0.8.1 |
-| **Current milestone** | Temporal Intelligence & Memory |
-| **Current spec** | [SPEC-003](docs/specs/SPEC-003_Temporal_Intelligence_Memory.md) (Done) |
-| **Next spec** | Shadow CRM → GraphSyncEngine wiring / operator surfaces |
+| **Version** | v0.9.1 |
+| **Current milestone** | Command Deck (v1.0) — intelligence-first operator surface |
+| **Current spec** | [SPEC-006](docs/specs/SPEC-006_Command_Deck.md) (Approved) |
+| **Next** | Implement Command Deck; parallel shadow CRM → GraphSyncEngine |
 | **Deploy** | Railway · `node server.js` |
 
 ---

@@ -4,16 +4,16 @@
 
 | Field | Value |
 |---|---|
-| **Version** | v0.8.1 |
-| **Current Milestone** | Temporal Intelligence & Memory |
-| **Current Sprint** | SPEC-003 complete; next shadow CRM→sync and/or briefing/operator surfaces |
-| **Current Spec** | [SPEC-003 Temporal Intelligence & Memory](docs/specs/SPEC-003_Temporal_Intelligence_Memory.md) — Done |
-| **Next Spec** | Shadow dual-write (Scout/CRM → GraphSyncEngine) and/or v0.9.0 operator/conversation surfaces |
-| **Current Priority** | High — controlled shadow emit into persistent graph; optional Max→Reasoning/Memory wiring (shadow) |
-| **Last Completed** | SPEC-003 Memory; SPEC-002 Reasoning Engine; SPEC-001C Query Engine; SPEC-001 Postgres store; SPEC-001B sync; SPEC-001A foundation; SPEC-000 docs |
-| **In Progress** | None |
-| **Known Blockers** | Inquiry Foundation production deploy blocked; Max orchestration shadow-default; knowledge/reasoning/memory not wired into server/agents |
-| **Upcoming Decisions** | When to enable shadow dual-write; when to wire Max agent to ReasoningEngine + MemoryEngine (shadow-first) |
+| **Version** | v0.9.1 |
+| **Current Milestone** | Intelligence stack complete — Command Deck is the v1.0 operator surface |
+| **Current Sprint** | SPEC-006 Command Deck approved; implement Morning Brief consuming `max.brief()` |
+| **Current Spec** | [SPEC-006 Pulseforge Command Deck](docs/specs/SPEC-006_Command_Deck.md) — Approved |
+| **Next Spec** | Implement SPEC-006; parallel: shadow dual-write (Scout/CRM → GraphSyncEngine) |
+| **Current Priority** | Highest — intelligence-first Command Deck (consume stack; do not recreate) |
+| **Last Completed** | SPEC-005 Policy; SPEC-004 Briefing; SPEC-003 Memory; SPEC-002 Reasoning; SPEC-001C Query; SPEC-001 Postgres; SPEC-001B sync; SPEC-001A foundation; SPEC-000 docs |
+| **In Progress** | SPEC-006 docs + Visual Direction locked |
+| **Known Blockers** | Inquiry Foundation production deploy blocked; Max orchestration shadow-default; knowledge/reasoning/memory/briefing/policy not wired into server/agents |
+| **Upcoming Decisions** | Command Deck feature-flag / route strategy; when to wire Max agent to `brief()` + `decide()` (shadow-first) |
 
 ---
 
@@ -29,6 +29,8 @@
 | v0.7.4 | Query Engine — typed filters, traversal, timeline, path, metrics; enhanced `explain()` |
 | v0.8.0 | Max Reasoning Engine — strategies, weighted score, independent confidence, explanations |
 | v0.8.1 | Temporal Memory — snapshots, diffs, change detection, trends, watches (detection only) |
+| v0.9.0 | Briefing Engine — assembles Knowledge + Reasoning + Memory into deterministic operator briefings |
+| v0.9.1 | Policy & Decision Engine — allow / warn / requireApproval / block with immutable audit |
 
 ```bash
 npm run test:knowledge
@@ -40,7 +42,7 @@ npm run test:max
 
 - Server/agent dual-write into the knowledge graph
 - Default boot using persistent repository
-- Max agent consuming ReasoningEngine / MemoryEngine
+- Max agent consuming ReasoningEngine / MemoryEngine / BriefingEngine / PolicyEngine
 
 ---
 

@@ -6,9 +6,45 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Planned
 
+- Pulseforge Command Deck ([SPEC-006](docs/specs/SPEC-006_Command_Deck.md)) — v1.0.0
 - Shadow CRM/Scout → GraphSyncEngine dual-write
-- Operator review / conversation surfaces over ReasoningEngine (v0.9.0)
-- Morning briefings / alerts consuming MemoryEngine transitions
+- Wire Max agent (shadow) to `brief()` + `decide()` before side effects
+
+### Docs
+
+- SPEC-006 Command Deck approved; Visual Direction mockup checked in under `docs/specs/assets/`
+- Product Constitution §11 Cognitive load
+- Roadmap / CURRENT_STATE / Product Experience / v1.0 release plan aligned to Command Deck
+
+## [0.9.1] — 2026-07-26
+
+### Added
+
+- Policy & Decision Engine ([SPEC-005](docs/specs/SPEC-005_Policy_Decision_Engine.md))
+  - `packages/max/policy/` — PolicyEngine, RuleRegistry, seven initial rules
+  - `policy.evaluate({ tenantId, recommendation, context })` / `max.decide(...)`
+  - Data-driven per-tenant policy; immutable audit trail; explainability chain
+  - Outcomes: allow, warn, requireApproval, block — evaluation only (no execution)
+
+### Notes
+
+- Reasoning / Memory / Briefing cores unchanged; runtime agents remain unwired
+
+## [0.9.0] — 2026-07-26
+
+### Added
+
+- Max Briefing Engine ([SPEC-004](docs/specs/SPEC-004_Max_Briefing_Engine.md))
+  - `packages/max/briefing/` — assembles Knowledge + Reasoning + Memory into structured briefings
+  - `max.brief({ tenantId, asOf, period })` — daily / weekly / monthly digests
+  - Sections: summary, priorities, changes, watchAlerts, risks, recommendations, metrics
+  - Deterministic prioritization; Presentation Adapter extension point (structured + markdown)
+  - Briefing never calls `evaluate()` — assembles existing intelligence only
+
+### Notes
+
+- Reasoning + Memory cores unchanged; runtime agents remain unwired
+- Default output is domain objects only (no UI formatting)
 
 ## [0.8.1] — 2026-07-26
 

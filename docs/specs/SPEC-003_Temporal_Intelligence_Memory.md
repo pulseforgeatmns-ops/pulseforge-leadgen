@@ -142,8 +142,8 @@ Covers: snapshot generation, replay, diff correctness, trend detection, change d
 
 ## Future Work
 
-- Morning briefings consuming `whatChanged()` aggregates
-- Operator alerts from triggered watches
+- ~~Morning briefings consuming `whatChanged()` aggregates~~ → SPEC-004 / v0.9.0
+- Operator alerts from triggered watches (push/email)
 - Persistent Postgres snapshot store
 - Autonomous prioritization (still approval-gated)
 
