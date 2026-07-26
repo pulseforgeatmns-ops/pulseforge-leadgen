@@ -5,15 +5,15 @@
 | Field | Value |
 |---|---|
 | **Version** | v0.9.2 |
-| **Current Milestone** | Command Deck UI (SPEC-008) — intelligence-first operator surface on `/command-deck` |
-| **Current Sprint** | SPEC-008 render-only UI consuming `GET /api/v1/command-deck` |
-| **Current Spec** | [SPEC-008 Command Deck UI](docs/specs/SPEC-008_Command_Deck_UI.md) — Implemented |
-| **Next Spec** | SPEC-006 remaining: Ask Max workspace, Recommendation Detail, Company Intelligence; parallel shadow dual-write |
-| **Current Priority** | Highest — calm briefing surface shipped; complete SPEC-006 investigation surfaces |
-| **Last Completed** | SPEC-008 Command Deck UI; SPEC-007 CommandDeckComposer; SPEC-005 Policy; SPEC-004 Briefing; SPEC-003 Memory; SPEC-002 Reasoning; SPEC-001C Query; SPEC-001 Postgres; SPEC-001B sync; SPEC-001A foundation; SPEC-000 docs |
-| **In Progress** | SPEC-006 remaining product surface (Ask Max workspace, explainability pages) |
-| **Known Blockers** | Inquiry Foundation production deploy blocked; Max orchestration shadow-default; knowledge dual-write not live (composer API returns empty-state-rich model until sync) |
-| **Upcoming Decisions** | When `/command-deck` becomes default landing vs `/dashboard`; wire Max agent to `compose()` (shadow-first) |
+| **Current Milestone** | Command Deck product surface (SPEC-006) |
+| **Current Sprint** | Outcome Intelligence shipped; shadow dual-write next |
+| **Current Spec** | [SPEC-013 Outcome Intelligence](docs/specs/SPEC-013_Outcome_Intelligence.md) — Implemented |
+| **Next Spec** | Shadow CRM/Scout → GraphSyncEngine dual-write; wire Max agent to `compose()` |
+| **Current Priority** | Highest — live knowledge dual-write so composers / workspace / live loop return live market data |
+| **Last Completed** | SPEC-013 Outcome Intelligence; SPEC-012 Operator Intelligence; SPEC-011 Live Intelligence Loop; SPEC-010 Intelligence Navigation; SPEC-009 Max Workspace; SPEC-008 Command Deck UI; SPEC-007 Composer; SPEC-005 Policy; SPEC-004 Briefing; SPEC-003 Memory; SPEC-002 Reasoning; SPEC-001C Query; SPEC-001 Postgres; SPEC-001B sync; SPEC-001A foundation; SPEC-000 docs |
+| **In Progress** | Knowledge dual-write / production ingest |
+| **Known Blockers** | Inquiry Foundation production deploy blocked; Max orchestration shadow-default; knowledge dual-write not live (composer / workspace / investigation / live loop fail closed until sync) |
+| **Upcoming Decisions** | When `/command-deck` becomes default landing vs `/dashboard`; wire Max agent to `compose()` (shadow-first); durable event log when dual-write ships |
 
 ---
 
@@ -32,6 +32,7 @@
 | v0.9.0 | Briefing Engine — assembles Knowledge + Reasoning + Memory into deterministic operator briefings |
 | v0.9.1 | Policy & Decision Engine — allow / warn / requireApproval / block with immutable audit |
 | v0.9.2 | Command Deck Composer — single immutable view model for the operator surface |
+| v1.0.0 line | Workspace · Navigation · Live Loop · Operator Intelligence · Outcome Intelligence |
 
 ```bash
 npm run test:knowledge
@@ -41,15 +42,22 @@ npm run test:max
 
 ### Operator surface
 
-- `GET /api/v1/command-deck` → `CommandDeckModel` (SPEC-007)
-- `GET /command-deck` → render-only UI (SPEC-008); `/dashboard` remains available
+- `GET /api/v1/command-deck` → `CommandDeckModel` (SPEC-007) + `live` envelope from LiveLoop (SPEC-011)
+- `GET /command-deck` → render-only UI (SPEC-008); soft-poll evolution (SPEC-011); `/dashboard` remains available
+- `POST /api/v1/max/workspace/open|ask` → Max Intelligence Workspace (SPEC-009 / ADR-005) + awareness (SPEC-011)
+- `GET /api/v1/recommendations/:id` → Recommendation Detail (SPEC-010)
+- `GET /api/v1/companies/:id/intelligence` → Company Intelligence (SPEC-010)
+- Investigation trail + Related Intelligence on `/command-deck` (SPEC-010); continuity banner (SPEC-011)
+- `GET /api/v1/intelligence/live|notifications|timeline/:id` → Live Intelligence Loop (SPEC-011 / ADR-006)
+- `POST /api/v1/operator/events|outcomes` · `GET /api/v1/operator/learning/:id|quality|preferences` → Operator Intelligence (SPEC-012 / ADR-007)
+- `POST /api/v1/outcome/records|lifecycle` · `GET /api/v1/outcome/calibration|strategies|drift|review` → Outcome Intelligence (SPEC-013 / ADR-008)
 
 ### Still not live
 
 - Server/agent dual-write into the knowledge graph
 - Default boot using persistent repository
 - Max agent consuming ReasoningEngine / MemoryEngine / BriefingEngine / PolicyEngine / CommandDeckComposer with live knowledge
-- Ask Max conversation workspace (SPEC-006)
+- Durable cross-process IntelligenceEvent / Operator InteractionEvent / Outcome log (process-scoped today)
 
 ---
 

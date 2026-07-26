@@ -20,6 +20,7 @@
     </header>
 
     <div id="cdStatus" class="cd-status" role="status" aria-live="polite"></div>
+    <div id="cdLiveNotify" class="cd-live-notify" hidden role="status" aria-live="polite"></div>
     <div id="cdError" class="cd-error" hidden></div>
 
     <section id="cdMorningBrief" class="cd-section cd-morning" aria-labelledby="cdMorningHeading" data-stage="morning" hidden></section>
@@ -27,6 +28,21 @@
     <section id="cdSecondary" class="cd-section cd-secondary" aria-label="Supporting intelligence" data-stage="cards" hidden></section>
     <section id="cdPriorityQueue" class="cd-section cd-queue" aria-labelledby="cdQueueHeading" data-stage="queue" hidden></section>
   </main>
+
+  <!-- Intelligence Navigation investigation surface (SPEC-010) -->
+  <div id="cdInvestigation" class="cd-investigation" hidden>
+    <div class="cd-investigation-panel" role="region" aria-label="Intelligence investigation">
+      <header class="cd-investigation-header">
+        <nav id="cdTrail" class="cd-trail" aria-label="Intelligence trail"></nav>
+        <button type="button" class="cd-inv-close" data-cd-inv-close aria-label="Close investigation">Close</button>
+      </header>
+      <div id="cdInvLiveBanner" class="cd-inv-live-banner" hidden role="status">
+        <span class="cd-inv-live-text">New intelligence available</span>
+        <button type="button" class="cd-inv-live-review" data-cd-inv-review>Review</button>
+      </div>
+      <div id="cdInvestigationBody" class="cd-investigation-body"></div>
+    </div>
+  </div>
 
   <div class="cd-ask-bar" role="region" aria-label="Ask Max">
     <form id="cdAskForm" class="cd-ask-form" autocomplete="off">
@@ -42,12 +58,52 @@
       >
       <button type="submit" class="cd-ask-submit" aria-label="Open Ask Max">Ask</button>
     </form>
-    <p id="cdAskNote" class="cd-ask-note" hidden>Ask Max conversation opens in a later release. Your question is held for context.</p>
+  </div>
+
+  <!-- Max Intelligence Workspace (SPEC-009) -->
+  <div
+    id="maxWorkspace"
+    class="mx-workspace"
+    hidden
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="mxTitle"
+  >
+    <div class="mx-backdrop" data-mx-close></div>
+    <div class="mx-panel">
+      <header class="mx-header">
+        <div>
+          <p class="mx-eyebrow">Intelligence Workspace</p>
+          <h2 id="mxTitle" class="mx-title">Max</h2>
+          <p id="mxContextLabel" class="mx-context-label"></p>
+        </div>
+        <button type="button" class="mx-close" data-mx-close aria-label="Close Max">Close</button>
+      </header>
+
+      <div id="mxSwitch" class="mx-switch" hidden role="status"></div>
+
+      <div id="mxThread" class="mx-thread" aria-live="polite"></div>
+
+      <div id="mxSuggestions" class="mx-suggestions" aria-label="Suggested investigations"></div>
+
+      <form id="mxAskForm" class="mx-ask-form" autocomplete="off">
+        <label class="pf-sr-only" for="mxAskInput">Ask Max</label>
+        <input
+          id="mxAskInput"
+          class="mx-ask-input"
+          type="text"
+          maxlength="2000"
+          placeholder="Investigate…"
+        >
+        <button type="submit" class="mx-ask-submit" id="mxAskSend">Ask</button>
+      </form>
+    </div>
   </div>
 
   <script src="/shared/accessibility.js"></script>
   <script src="/shared/api-client.js"></script>
   <script src="/shared/shell.js"></script>
+  <script src="/command-deck/investigation.js"></script>
   <script src="/command-deck/command-deck.js"></script>
 </body>
 </html>

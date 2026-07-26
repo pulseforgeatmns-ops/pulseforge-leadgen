@@ -73,6 +73,60 @@ Max presents the stack as one immutable view model for the operator surface:
 - HTTP: `GET /api/v1/command-deck`
 - UI: `GET /command-deck` (SPEC-008) — render-only from `CommandDeckModel`
 
+## Max Intelligence Workspace (SPEC-009)
+
+Max presents verified stack output as a contextual conversation (ADR-005):
+
+- Explicit `MaxContext` envelope from Command Deck (and future pages)
+- Deterministic `StructuredResponseObject` from envelope + stack facts
+- Claude PresentationEngine translates only — never scores, ranks, or invents
+- HTTP: `POST /api/v1/max/workspace/open`, `POST /api/v1/max/workspace/ask`
+- UI: full-height Intelligence Workspace modal on `/command-deck`
+
+## Intelligence Navigation (SPEC-010)
+
+Operators explore a continuous graph without dead ends:
+
+- Intelligence trail (investigation breadcrumbs) on `/command-deck`
+- Related Intelligence on every node (company / recommendation / evidence)
+- Progressive evidence depth; MaxContext synced to trail focus
+- Composers: `composeRecommendation` / `composeCompany` (assemble only — never re-score)
+- HTTP: `GET /api/v1/recommendations/:id`, `GET /api/v1/companies/:id/intelligence`
+
+## Live Intelligence Loop (SPEC-011)
+
+Intelligence evolves in place ([ADR-006](../adr/ADR-006_Live_Intelligence_Evolution.md)):
+
+- Common `IntelligenceEvent` + lifecycle (Detected → Verified → Strengthened → Contradicted → Resolved → Archived)
+- `LiveLoopEngine` observes Command Deck compose + memory changes
+- Soft-poll: `GET /api/v1/intelligence/live?since=` — gentle UI evolution, not hard refresh
+- Morning Brief accumulates evolution entries
+- Max awareness during workspace sessions; investigation continuity banner
+- Notifications only for material events
+
+## Operator Intelligence (SPEC-012)
+
+Pulseforge learns how operators engage — without changing facts ([ADR-007](../adr/ADR-007_Operator_Intelligence.md)):
+
+- `InteractionEvent` model + `RecommendationLearning` aggregates
+- Explicit outcome lifecycle (Recommended → … → Successful / Dismissed / Expired / Contradicted)
+- Adaptive presentation (order / visual dominance only — never hide)
+- Max suggestion personalization from tenant conversational preferences
+- Internal trust/usefulness signal (never replaces confidence)
+- Internal quality dashboard for Pulseforge improvement
+- Hard boundary: may personalize presentation; may never alter evidence, confidence, reasoning, or policy
+
+## Outcome Intelligence (SPEC-013)
+
+Pulseforge measures whether intelligence was right — without changing reasoning ([ADR-008](../adr/ADR-008_Outcome_Intelligence.md)):
+
+- `RecommendationOutcome` + lifecycle (Generated → Reviewed → Approved → Executed → Observed → Successful | Unsuccessful | Inconclusive)
+- Strategy-level performance metrics (internal only)
+- Confidence calibration reports (empirical success by confidence band)
+- Drift detection (alerts engineers, not customers)
+- Internal Intelligence Review dashboard
+- Hard boundary: may evaluate / measure / calibrate / report; may never rewrite history, alter reasoning, manipulate confidence, or change recommendations
+
 ## Execution
 
 Specialist agents and outbox adapters perform channel work. Shadow mode records intent without side effects until flags and approvals permit.

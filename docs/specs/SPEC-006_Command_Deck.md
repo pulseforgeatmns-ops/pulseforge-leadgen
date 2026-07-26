@@ -361,10 +361,11 @@ UI may persist only presentation preferences (theme, collapsed sections, last As
 2. **Command Deck shell** — intelligence-first nav; Morning Brief layout; empty states
 3. **Briefing wiring** — power Morning Brief, HLA card, secondary cards from `max.brief()`
 4. **Priority Queue** — Reasoning + Memory movement; fail-closed when stack unavailable
-5. **Recommendation Detail** — full explainability chain including Policy
-6. **Company Intelligence page** — sections listed above; no CRM field dump
-7. **Ask Max modal** — context injection from page; suggested actions; LLM as translator only
-8. **Performance pass** — meet load / expansion / modal targets; preload conversation context
+5. **Recommendation Detail** — full explainability chain including Policy → delivered under [SPEC-010](SPEC-010_Intelligence_Navigation.md)
+6. **Company Intelligence page** — sections listed above; no CRM field dump → delivered under [SPEC-010](SPEC-010_Intelligence_Navigation.md)
+7. **Ask Max modal** — context injection from page; suggested actions; LLM as translator only → [SPEC-009](SPEC-009_Max_Intelligence_Workspace.md)
+8. **Intelligence Navigation** — trail, Related Intelligence, progressive depth → [SPEC-010](SPEC-010_Intelligence_Navigation.md)
+9. **Performance pass** — meet load / expansion / modal targets; preload conversation context
 
 ## Migration Strategy
 

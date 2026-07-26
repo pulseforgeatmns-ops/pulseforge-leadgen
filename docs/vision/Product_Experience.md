@@ -17,7 +17,7 @@ Pulseforge should feel like a **trusted operating partner**: you ask what matter
 
 | Surface | Audience | Notes |
 |---|---|---|
-| `/command-deck` | Admin/manager/viewer/client | Intelligence briefing (SPEC-008); consumes `CommandDeckModel` |
+| `/command-deck` | Admin/manager/viewer/client | Intelligence briefing + investigation graph + live evolution + adaptive presentation (SPEC-008 / SPEC-010 / SPEC-011 / SPEC-012) |
 | `/dashboard` | Admin/manager/viewer | Agents, activity, analytics (still available) |
 | `/setter` | Setter | Queue, callbacks, hot flags |
 | `/closer` | Closer | Booked pipeline, commissions |
@@ -28,9 +28,13 @@ Pulseforge should feel like a **trusted operating partner**: you ask what matter
 ## Near-term experience bets
 
 - **Command Deck UI (SPEC-008)** as the render-only briefing surface — already on `/command-deck`
-- **Command Deck product (SPEC-006)** — Ask Max workspace, Recommendation Detail, Company Intelligence
+- **Max Intelligence Workspace (SPEC-009)** — contextual Ask Max modal; LLM as presentation only (ADR-005)
+- **Intelligence Navigation (SPEC-010)** — trail, Related Intelligence, Company + Recommendation destinations; continuous investigation on `/command-deck`
+- **Live Intelligence Loop (SPEC-011)** — soft evolution, Max awareness, material-only notifications (ADR-006)
+- **Operator Intelligence (SPEC-012)** — learn what operators act on; adapt presentation and Max chips only (ADR-007)
+- **Outcome Intelligence (SPEC-013)** — measure whether recommendations were right; calibrate confidence empirically; never change reasoning (ADR-008)
 - Highest Leverage Action + Priority Queue powered via composer (no UI-side ranking)
-- Ask Max as contextual investigation (not navigation)
+- Ask Max as contextual investigation (not navigation); graph clicks navigate; Max keeps trail focus
 - Operator Command Center as the inquiry attention model (local → later prod when authorized)
 - Max recommendations visible with explanations before any non-shadow action
 

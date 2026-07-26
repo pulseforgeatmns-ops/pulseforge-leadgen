@@ -17,6 +17,11 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-005](SPEC-005_Policy_Decision_Engine.md) | Policy & Decision Engine | Done | v0.9.1 |
 | [SPEC-007](SPEC-007_Command_Deck_Composition_Engine.md) | Command Deck Composition Engine | Done | v0.9.2 |
 | [SPEC-008](SPEC-008_Command_Deck_UI.md) | Command Deck UI | Implemented | v1.0.0 |
+| [SPEC-009](SPEC-009_Max_Intelligence_Workspace.md) | Max Intelligence Workspace | Implemented | v1.0.0 |
+| [SPEC-010](SPEC-010_Intelligence_Navigation.md) | Intelligence Navigation | Implemented | v1.0.0 |
+| [SPEC-011](SPEC-011_Live_Intelligence_Loop.md) | Live Intelligence Loop | Implemented | v1.0.0 |
+| [SPEC-012](SPEC-012_Operator_Intelligence.md) | Operator Intelligence | Implemented | v1.0.0 |
+| [SPEC-013](SPEC-013_Outcome_Intelligence.md) | Outcome Intelligence | Implemented | v1.0.0 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

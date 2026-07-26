@@ -305,7 +305,7 @@ Consumer of `CommandDeckModel` from SPEC-007:
 
 ## Future Work
 
-- Full Ask Max Intelligence Workspace (SPEC-006)
+- Full Ask Max Intelligence Workspace ([SPEC-009](SPEC-009_Max_Intelligence_Workspace.md))
 - Recommendation Detail + Company Intelligence pages (SPEC-006)
 - Default landing cutover from `/dashboard` when acceptance passes
 - Risks column when composer surfaces risk cards

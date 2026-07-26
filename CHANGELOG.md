@@ -6,20 +6,60 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Outcome Intelligence ([SPEC-013](docs/specs/SPEC-013_Outcome_Intelligence.md) / [ADR-008](docs/adr/ADR-008_Outcome_Intelligence.md))
+  - `RecommendationOutcome` model + lifecycle (Generated → … → Successful / Unsuccessful / Inconclusive)
+  - Strategy-level performance metrics (precision, recall, promotion, success, lead time)
+  - Confidence calibration reports (empirical success by band — never mutates confidence)
+  - Drift detection (strategy underperformance, false positives, acceptance, evidence quality)
+  - Internal Intelligence Review dashboard (`GET /api/v1/outcome/review`, admin/manager)
+  - `packages/max/outcome/` — OutcomeEngine; `POST /api/v1/outcome/records|lifecycle`
+- Operator Intelligence ([SPEC-012](docs/specs/SPEC-012_Operator_Intelligence.md) / [ADR-007](docs/adr/ADR-007_Operator_Intelligence.md))
+  - Interaction event model + RecommendationLearning aggregates
+  - Explicit recommendation outcome lifecycle + internal trust/usefulness signal (never replaces confidence)
+  - Adaptive Command Deck presentation (section order / visual dominance — never hide)
+  - Max suggestion personalization from tenant conversational preferences
+  - Internal Intelligence Quality Dashboard (`GET /api/v1/operator/quality`, admin/manager)
+  - `packages/max/operator/` — OperatorEngine; `POST /api/v1/operator/events|outcomes`
+- Live Intelligence Loop ([SPEC-011](docs/specs/SPEC-011_Live_Intelligence_Loop.md) / [ADR-006](docs/adr/ADR-006_Live_Intelligence_Evolution.md))
+  - Common `IntelligenceEvent` model + lifecycle (Detected → Archived)
+  - `packages/max/live/` — LiveLoopEngine, deck diff, material filter, awareness
+  - Soft-poll evolution on Command Deck (gentle fade / one-shot movement; briefing accumulates)
+  - Max awareness during active workspace sessions
+  - Investigation continuity banner (“New intelligence available / Review”)
+  - Per-entity live timeline; notifications limited to material events
+  - `GET /api/v1/intelligence/live`, `/notifications`, `/timeline/:entityId`
+- Intelligence Navigation ([SPEC-010](docs/specs/SPEC-010_Intelligence_Navigation.md))
+  - Investigation trail + Related Intelligence on every node
+  - Company Intelligence + Recommendation Detail composers (closes SPEC-006 remaining pages)
+  - `GET /api/v1/recommendations/:id`, `GET /api/v1/companies/:id/intelligence`
+  - Progressive evidence depth; Max evidence/related entities navigable; MaxContext synced to trail
+  - Deep links `#/recommendation/:id`, `#/company/:id`, `#/evidence/:id` on `/command-deck`
 - Command Deck UI ([SPEC-008](docs/specs/SPEC-008_Command_Deck_UI.md)) — render-only surface
   - `GET /command-deck` — Morning Brief, Highest Leverage Action, Intelligence Cards, Priority Queue, Ask Max launcher
   - Consumes only `CommandDeckModel` from `GET /api/v1/command-deck`
   - Staged reveal, composer empty states, calm error + last-successful recovery
   - Shell nav link for admin / manager / viewer / client; `/dashboard` unchanged
+- Max Intelligence Workspace ([SPEC-009](docs/specs/SPEC-009_Max_Intelligence_Workspace.md))
+  - Contextual full-height Ask Max modal from Command Deck entry points (Morning Brief, HLA, Priority Queue, Watch Alerts, launcher)
+  - `packages/max/workspace/` — WorkspaceEngine, OpeningState, Suggestions, ResponseComposer, PresentationEngine
+  - Deterministic Structured Response Object → Claude presentation only ([ADR-005](docs/adr/ADR-005_LLM_Presentation_Engine.md))
+  - `POST /api/v1/max/workspace/open`, `POST /api/v1/max/workspace/ask`
+  - Evidence panel + collapsed “Generated from” metadata; session context + switch acknowledgement
+  - Legacy dashboard `/api/max/ask` unchanged
 
 ### Planned
 
-- Pulseforge Command Deck remaining experience ([SPEC-006](docs/specs/SPEC-006_Command_Deck.md)) — Ask Max workspace, Recommendation Detail, Company Intelligence
 - Shadow CRM/Scout → GraphSyncEngine dual-write
 - Wire Max agent (shadow) to `brief()` + `decide()` + `compose()` before side effects
+- Durable IntelligenceEvent / Operator InteractionEvent / Outcome log / SSE transport
 
 ### Docs
 
+- SPEC-013 Outcome Intelligence + ADR-008 Outcome Intelligence
+- SPEC-012 Operator Intelligence + ADR-007 Operator Intelligence
+- SPEC-011 Live Intelligence Loop + ADR-006 Live Intelligence Evolution
+- SPEC-010 Intelligence Navigation
+- SPEC-009 Max Intelligence Workspace + ADR-005 LLM Presentation Engine
 - SPEC-008 Command Deck UI approved and indexed
 - SPEC-006 Command Deck product surface remains the parent v1.0 experience spec
 - Product Constitution §11 Cognitive load
