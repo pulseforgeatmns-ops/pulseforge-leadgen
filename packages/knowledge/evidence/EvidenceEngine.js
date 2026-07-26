@@ -26,6 +26,37 @@ class EvidenceEngine {
   }
 
   /**
+   * Idempotent evidence upsert by stable id.
+   *
+   * @param {object} input
+   * @returns {Promise<{ node: object, created: boolean }>}
+   */
+  async ensureEvidence(input) {
+    if (!input.id) {
+      throw new Error('ensureEvidence requires a stable id');
+    }
+    const existingRows = await this.repository.find(input.tenantId, { id: input.id });
+    const existing = existingRows[0];
+    if (!existing) {
+      const created = await this.createEvidence(input);
+      return { node: created, created: true };
+    }
+    if (existing.type !== NODE_TYPES.EVIDENCE) {
+      throw new Error(`ensureEvidence id conflict: ${input.id} is not evidence`);
+    }
+    const updated = updateEvidenceNode(existing, {
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      summary: input.summary,
+      confidence: input.confidence,
+      payload: input.payload,
+      metadata: input.metadata,
+    });
+    const saved = await this.repository.updateNode(input.tenantId, input.id, updated);
+    return { node: saved, created: false };
+  }
+
+  /**
    * Attach evidence to a subject via GENERATED (subject ← evidence) or ABOUT (evidence → subject).
    * Default: Evidence -ABOUT-> subject, and optional subject -GENERATED-> evidence for provenance walk.
    *

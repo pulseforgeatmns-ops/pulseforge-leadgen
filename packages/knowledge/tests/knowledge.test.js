@@ -220,6 +220,7 @@ describe('SPEC-001A Knowledge Layer Foundation', () => {
         type: KNOWLEDGE_EVENTS.COMPANY_OBSERVED,
         tenantId: '10',
         payload: {
+          nodeId: 'company:10:evertrust',
           name: 'EverTrust PM',
           sourceType: 'scout_insert',
           sourceId: 'prospect-abc',
@@ -233,10 +234,12 @@ describe('SPEC-001A Knowledge Layer Foundation', () => {
         type: KNOWLEDGE_EVENTS.PERSON_OBSERVED,
         tenantId: '10',
         payload: {
+          nodeId: 'person:10:jordan',
           name: 'Jordan',
           email: 'jordan@evertrustpm.com',
           companyId: company.id,
           sourceType: 'scout_insert',
+          sourceId: 'person-jordan',
           confidence: 0.7,
         },
       });
@@ -276,7 +279,9 @@ describe('SPEC-001A Knowledge Layer Foundation', () => {
       for (const method of [
         'createNode',
         'updateNode',
+        'ensureNode',
         'createEdge',
+        'ensureEdge',
         'findNode',
         'findNeighbors',
         'findEvidence',

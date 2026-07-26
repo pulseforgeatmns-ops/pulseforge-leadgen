@@ -42,6 +42,36 @@ class KnowledgeService {
   }
 
   /**
+   * Idempotent create-or-update by stable node id.
+   * Used by the sync engine and event replay — never touches storage directly outside this service.
+   *
+   * @param {object} input
+   * @returns {Promise<{ node: object, created: boolean }>}
+   */
+  async ensureNode(input) {
+    requireTenant(input.tenantId);
+    if (!isNodeType(input.type)) {
+      throw new Error(`Unknown node type: ${input.type}`);
+    }
+    if (!input.id) {
+      throw new Error('ensureNode requires a stable id');
+    }
+    const existing = await this.findNode(input.tenantId, input.id);
+    if (!existing) {
+      const created = await this.createNode(input);
+      return { node: created, created: true };
+    }
+    if (existing.type !== input.type) {
+      throw new Error(
+        `ensureNode type conflict for ${input.id}: existing=${existing.type} requested=${input.type}`
+      );
+    }
+    const { id: _id, tenantId: _tenantId, type: _type, ...patch } = input;
+    const updated = await this.updateNode(input.tenantId, input.id, patch);
+    return { node: updated, created: false };
+  }
+
+  /**
    * @param {string} tenantId
    * @param {string} nodeId
    * @param {object} patch
@@ -68,6 +98,29 @@ class KnowledgeService {
       throw new Error(`Unknown edge type: ${input.type}`);
     }
     return this._repository.createEdge(input);
+  }
+
+  /**
+   * Idempotent edge ensure: returns existing same-type edge between endpoints if present.
+   *
+   * @param {object} input
+   * @returns {Promise<{ edge: object, created: boolean }>}
+   */
+  async ensureEdge(input) {
+    requireTenant(input.tenantId);
+    if (!isEdgeType(input.type)) {
+      throw new Error(`Unknown edge type: ${input.type}`);
+    }
+    const outbound = await this.findNeighbors(input.tenantId, input.fromId, {
+      direction: 'out',
+      edgeType: input.type,
+    });
+    const existing = outbound.find((n) => n.node.id === input.toId);
+    if (existing) {
+      return { edge: existing.edge, created: false };
+    }
+    const edge = await this.createEdge(input);
+    return { edge, created: true };
   }
 
   /**

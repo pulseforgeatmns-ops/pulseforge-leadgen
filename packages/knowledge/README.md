@@ -41,13 +41,37 @@ await bus.publish({
 const explanation = await knowledge.explain(tenantId, nodeId);
 ```
 
+## Sync (SPEC-001B)
+
+```js
+const {
+  createKnowledgeRuntime,
+  mapCompanyRow,
+  MemoryRelationalSource,
+  PersistentGraphRepository,
+  ensureKnowledgeSchema,
+} = require('@pulseforge/knowledge');
+
+// Default: in-memory
+const { knowledge, sync } = createKnowledgeRuntime();
+
+// Opt-in Postgres (SPEC-001) — same KnowledgeService API
+// await ensureKnowledgeSchema(pool);
+// const { knowledge, sync } = createKnowledgeRuntime({
+//   repository: new PersistentGraphRepository(pool),
+// });
+```
+
+All sync writes go through `KnowledgeService` (via the event bus). Callers never touch `GraphRepository` directly for business logic.
+
 ## Public API
 
 | Surface | Role |
 |---|---|
-| `KnowledgeService` | create/update nodes & edges, find, neighbors, evidence, claims, explain, search |
-| `GraphRepository` | storage contract only (`InMemoryGraphRepository` ships in this spec) |
-| `EvidenceEngine` | create / attach / merge evidence, confidence |
+| `KnowledgeService` | create/update/ensure nodes & edges, find, neighbors, evidence, claims, explain, search |
+| `GraphSyncEngine` | CRM/import/rebuild → knowledge events (idempotent, tenant-aware) |
+| `GraphRepository` | storage contract — `InMemoryGraphRepository` or `PersistentGraphRepository` |
+| `EvidenceEngine` | create / ensure / attach / merge evidence, confidence |
 | `ClaimEngine` | create / evaluate / invalidate / merge claims |
 | `KnowledgeEventBus` | ingest path — producers emit events, never touch the repository |
 

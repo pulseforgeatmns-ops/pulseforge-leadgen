@@ -6,8 +6,39 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Planned
 
-- SPEC-001 Business Knowledge Graph (persistent repository + shadow ingest)
+- Shadow CRM/Scout → GraphSyncEngine dual-write
 - SPEC-002 Max Reasoning Engine
+
+## [0.7.3] — 2026-07-26
+
+### Added
+
+- Persistent knowledge store ([SPEC-001](docs/specs/SPEC-001_Persistent_Knowledge_Store.md))
+  - Postgres tables `knowledge_nodes`, `knowledge_edges`, `knowledge_evidence`, `knowledge_claims`
+  - `PersistentGraphRepository` implementing the existing `GraphRepository` contract
+  - Migration `2026-07-26-knowledge-graph-persistent.sql`
+  - Postgres tests via `npm run test:knowledge:postgres`
+
+### Notes
+
+- `KnowledgeService` public API unchanged (hash-guarded in tests)
+- Default runtime remains in-memory unless a persistent repository is injected
+- Agents/server remain unwired
+
+## [0.7.2] — 2026-07-26
+
+### Added
+
+- Graph synchronization engine ([SPEC-001B](docs/specs/SPEC-001B_Graph_Synchronization_Engine.md))
+  - `GraphSyncEngine` with idempotent `apply` / `applyMany` / `rebuildFromRelational`
+  - CRM mappers for companies, prospects, touchpoints, import batch items
+  - `InMemorySyncLedger` + `MemoryRelationalSource` + read-only `PostgresRelationalSource`
+  - `KnowledgeService.ensureNode` / `ensureEdge` and `EvidenceEngine.ensureEvidence`
+  - Idempotent `KnowledgeIngestor` (stable evidence IDs)
+
+### Notes
+
+- No server/agent wiring — production runtime unchanged
 
 ## [0.7.1] — 2026-07-26
 

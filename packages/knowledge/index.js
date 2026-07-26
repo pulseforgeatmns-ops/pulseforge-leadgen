@@ -2,6 +2,8 @@
 
 const { KnowledgeService } = require('./services/KnowledgeService');
 const { InMemoryGraphRepository } = require('./repositories/InMemoryGraphRepository');
+const { PersistentGraphRepository } = require('./repositories/PersistentGraphRepository');
+const { ensureKnowledgeSchema } = require('./repositories/ensureKnowledgeSchema');
 const {
   assertGraphRepository,
   isGraphRepository,
@@ -17,6 +19,25 @@ const {
   combineConfidences,
   calculateConfidenceFromEvidence,
 } = require('./confidence/calculateConfidence');
+const {
+  GraphSyncEngine,
+  InMemorySyncLedger,
+  MemoryRelationalSource,
+  PostgresRelationalSource,
+  createGraphSyncEngine,
+  SYNC_EVENTS,
+  SYNC_ENTITY_KINDS,
+  mapCompanyRow,
+  mapProspectRow,
+  mapTouchpointRow,
+  mapImportBatchItem,
+  mapEntityMutation,
+  companyNodeId,
+  personNodeId,
+  interactionNodeId,
+  stableEvidenceId,
+  syncIdempotencyKey,
+} = require('./sync');
 
 /**
  * Create a ready-to-use knowledge runtime (in-memory by default).
@@ -24,6 +45,7 @@ const {
  * @param {object} [options]
  * @param {import('./repositories/GraphRepository').GraphRepository} [options.repository]
  * @param {boolean} [options.startIngestor=true]
+ * @param {boolean} [options.withSync=true] - attach GraphSyncEngine + ledger
  */
 function createKnowledgeRuntime(options = {}) {
   const repository = options.repository || new InMemoryGraphRepository();
@@ -34,13 +56,24 @@ function createKnowledgeRuntime(options = {}) {
   if (options.startIngestor !== false) {
     ingestor.start();
   }
-  return { knowledge, repository, bus, ingestor };
+
+  const runtime = { knowledge, repository, bus, ingestor };
+
+  if (options.withSync !== false) {
+    const { sync, ledger } = createGraphSyncEngine(runtime);
+    runtime.sync = sync;
+    runtime.ledger = ledger;
+  }
+
+  return runtime;
 }
 
 module.exports = {
   createKnowledgeRuntime,
   KnowledgeService,
   InMemoryGraphRepository,
+  PersistentGraphRepository,
+  ensureKnowledgeSchema,
   EvidenceEngine,
   ClaimEngine,
   KnowledgeEventBus,
@@ -53,4 +86,22 @@ module.exports = {
   isGraphRepository,
   combineConfidences,
   calculateConfidenceFromEvidence,
+  // SPEC-001B sync
+  GraphSyncEngine,
+  InMemorySyncLedger,
+  MemoryRelationalSource,
+  PostgresRelationalSource,
+  createGraphSyncEngine,
+  SYNC_EVENTS,
+  SYNC_ENTITY_KINDS,
+  mapCompanyRow,
+  mapProspectRow,
+  mapTouchpointRow,
+  mapImportBatchItem,
+  mapEntityMutation,
+  companyNodeId,
+  personNodeId,
+  interactionNodeId,
+  stableEvidenceId,
+  syncIdempotencyKey,
 };

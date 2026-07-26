@@ -4,45 +4,38 @@
 
 | Field | Value |
 |---|---|
-| **Version** | v0.7.1 |
-| **Current Milestone** | Knowledge Layer Foundation |
-| **Current Sprint** | SPEC-001A complete; next persistent repository / SPEC-001 |
-| **Current Spec** | [SPEC-001A Knowledge Layer Foundation](docs/specs/SPEC-001A_Knowledge_Layer_Foundation.md) — Done |
-| **Next Spec** | [SPEC-001 Business Knowledge Graph](docs/specs/SPEC-001_Business_Knowledge_Graph.md) (persistent store + shadow ingest) |
-| **Current Priority** | High — choose and implement durable `GraphRepository` without changing KnowledgeService API |
-| **Last Completed** | SPEC-001A `packages/knowledge/` (in-memory KnowledgeService, evidence/claims, events, explain); SPEC-000 docs foundation (v0.7.0) |
-| **In Progress** | None on knowledge persistence yet |
-| **Known Blockers** | Inquiry Foundation production deploy blocked pending real tenant + approved sender; Max orchestration remains shadow-default; no persistent KG repository yet; Scout/CRM not wired to knowledge events |
-| **Upcoming Decisions** | Persistent GraphRepository backend (Postgres vs other) under SPEC-001 / ADR-004; shadow ingest wiring for Scout |
+| **Version** | v0.7.3 |
+| **Current Milestone** | Persistent knowledge store |
+| **Current Sprint** | SPEC-001 complete; next shadow CRM→sync wiring |
+| **Current Spec** | [SPEC-001 Persistent Knowledge Store](docs/specs/SPEC-001_Persistent_Knowledge_Store.md) — Done |
+| **Next Spec** | Shadow dual-write (Scout/CRM → GraphSyncEngine) and/or broader Business KG production ingest |
+| **Current Priority** | High — controlled shadow emit into persistent graph |
+| **Last Completed** | SPEC-001 Postgres `PersistentGraphRepository`; SPEC-001B sync; SPEC-001A foundation; SPEC-000 docs |
+| **In Progress** | None |
+| **Known Blockers** | Inquiry Foundation production deploy blocked; Max orchestration shadow-default; knowledge not wired into server/agents |
+| **Upcoming Decisions** | When to enable shadow dual-write; whether default runtime should prefer Postgres when `DATABASE_URL` is present |
 
 ---
 
 ## Snapshot (2026-07-26)
 
-### What works in production today
+### Knowledge layer
 
-- Multi-client Postgres CRM (`clients`, `companies`, `prospects`, touchpoints, agent_log)
-- Scout lead scraping + ICP scoring (including Anchor `cleaning_buyer` profile)
-- Setter / closer dashboards and handoff flows
-- Emmett email sequences (Brevo), Riley inbound triage, social agents with human approval
-- Max daily briefing + Max prospect orchestration **shadow** path
-- Scorecard → Brevo sync paths; Anchor verified queue tooling
-
-### What is intentionally not live
-
-- `packages/knowledge` — library only; not wired into `server.js` / agents
-- Inquiry Foundation / Operator Command Center / outbound outbox — local & shadow-only
-- Max non-shadow state transitions and automated outreach actions — flags default off
-- Persistent Business Knowledge Graph — not started (SPEC-001)
-
-### Knowledge layer (v0.7.1)
-
-| Piece | Location |
+| Version | Capability |
 |---|---|
-| Public API | `KnowledgeService` via `packages/knowledge` |
-| Storage (001A) | `InMemoryGraphRepository` only |
-| Ingest | `KnowledgeEventBus` + `KnowledgeIngestor` |
-| Explain | `knowledge.explain(tenantId, nodeId)` |
+| v0.7.1 | `KnowledgeService`, in-memory repo, evidence/claims, events, `explain()` |
+| v0.7.2 | `GraphSyncEngine` — CRM/import/rebuild → KnowledgeService |
+| v0.7.3 | `PersistentGraphRepository` (Postgres) — same interface; KnowledgeService unchanged |
+
+```bash
+npm run test:knowledge
+npm run test:knowledge:postgres
+```
+
+### Still not live
+
+- Server/agent dual-write into the knowledge graph
+- Default boot using persistent repository
 
 ---
 
