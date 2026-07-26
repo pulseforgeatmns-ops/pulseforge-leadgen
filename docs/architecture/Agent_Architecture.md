@@ -53,6 +53,7 @@ Evidence in  →  Agent decides  →  Log + optional mutate  →  Human approval
 | Briefing engine (SPEC-004 / v0.9.0) | Assembles Knowledge + Reasoning + Memory into structured briefings (`packages/max/briefing`) |
 | Policy engine (SPEC-005 / v0.9.1) | Evaluates recommendations against tenant rules — allow/warn/requireApproval/block (`packages/max/policy`) |
 | Command Deck composer (SPEC-007 / v0.9.2) | Assembles Briefing + Policy into one immutable CommandDeckModel (`packages/max/commandDeck`); `GET /api/v1/command-deck` |
+| Command Deck UI (SPEC-008) | Render-only `/command-deck` surface; presentation consumes `CommandDeckModel` only |
 
 Max must not bypass approval constitution or DNC.
 

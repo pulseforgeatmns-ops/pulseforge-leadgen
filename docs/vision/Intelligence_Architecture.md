@@ -71,6 +71,7 @@ Max presents the stack as one immutable view model for the operator surface:
 - Explainability metadata on every card (`sources`, `reasoningId`, `policyId`, `briefingId`)
 - May sort / merge / rank / summarize / group — never reason / score / infer / invent
 - HTTP: `GET /api/v1/command-deck`
+- UI: `GET /command-deck` (SPEC-008) — render-only from `CommandDeckModel`
 
 ## Execution
 

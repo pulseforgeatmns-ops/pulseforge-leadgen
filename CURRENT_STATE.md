@@ -5,15 +5,15 @@
 | Field | Value |
 |---|---|
 | **Version** | v0.9.2 |
-| **Current Milestone** | Intelligence stack + composer complete — Command Deck UI is the v1.0 operator surface |
-| **Current Sprint** | SPEC-006 Command Deck UI consuming `GET /api/v1/command-deck` / `max.compose()` |
-| **Current Spec** | [SPEC-006 Pulseforge Command Deck](docs/specs/SPEC-006_Command_Deck.md) — Approved |
-| **Next Spec** | Implement SPEC-006 UI; parallel: shadow dual-write (Scout/CRM → GraphSyncEngine) |
-| **Current Priority** | Highest — intelligence-first Command Deck (consume stack via composer; do not recreate) |
-| **Last Completed** | SPEC-007 CommandDeckComposer; SPEC-005 Policy; SPEC-004 Briefing; SPEC-003 Memory; SPEC-002 Reasoning; SPEC-001C Query; SPEC-001 Postgres; SPEC-001B sync; SPEC-001A foundation; SPEC-000 docs |
-| **In Progress** | SPEC-006 UI (Morning Brief + HLA + Priority Queue + Ask Max) |
+| **Current Milestone** | Command Deck UI (SPEC-008) — intelligence-first operator surface on `/command-deck` |
+| **Current Sprint** | SPEC-008 render-only UI consuming `GET /api/v1/command-deck` |
+| **Current Spec** | [SPEC-008 Command Deck UI](docs/specs/SPEC-008_Command_Deck_UI.md) — Implemented |
+| **Next Spec** | SPEC-006 remaining: Ask Max workspace, Recommendation Detail, Company Intelligence; parallel shadow dual-write |
+| **Current Priority** | Highest — calm briefing surface shipped; complete SPEC-006 investigation surfaces |
+| **Last Completed** | SPEC-008 Command Deck UI; SPEC-007 CommandDeckComposer; SPEC-005 Policy; SPEC-004 Briefing; SPEC-003 Memory; SPEC-002 Reasoning; SPEC-001C Query; SPEC-001 Postgres; SPEC-001B sync; SPEC-001A foundation; SPEC-000 docs |
+| **In Progress** | SPEC-006 remaining product surface (Ask Max workspace, explainability pages) |
 | **Known Blockers** | Inquiry Foundation production deploy blocked; Max orchestration shadow-default; knowledge dual-write not live (composer API returns empty-state-rich model until sync) |
-| **Upcoming Decisions** | Command Deck feature-flag / route strategy; when to wire Max agent to `compose()` (shadow-first) |
+| **Upcoming Decisions** | When `/command-deck` becomes default landing vs `/dashboard`; wire Max agent to `compose()` (shadow-first) |
 
 ---
 
@@ -39,11 +39,17 @@ npm run test:knowledge:postgres
 npm run test:max
 ```
 
+### Operator surface
+
+- `GET /api/v1/command-deck` → `CommandDeckModel` (SPEC-007)
+- `GET /command-deck` → render-only UI (SPEC-008); `/dashboard` remains available
+
 ### Still not live
 
 - Server/agent dual-write into the knowledge graph
 - Default boot using persistent repository
 - Max agent consuming ReasoningEngine / MemoryEngine / BriefingEngine / PolicyEngine / CommandDeckComposer with live knowledge
+- Ask Max conversation workspace (SPEC-006)
 
 ---
 

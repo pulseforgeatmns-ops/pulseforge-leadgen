@@ -100,6 +100,7 @@ The intelligence stack (Knowledge → Reasoning → Memory → Briefing → Poli
 - ✅ SPEC-004 Max Briefing Engine (v0.9.0)
 - ✅ SPEC-005 Policy & Decision Engine (v0.9.1)
 - ✅ SPEC-007 Command Deck Composition Engine (v0.9.2) — `max.compose()` / `GET /api/v1/command-deck`
+- → [SPEC-008](SPEC-008_Command_Deck_UI.md) — render-only `/command-deck` UI
 - Shadow or live wiring of knowledge dual-write so the composer returns live market data
 
 ## Architecture

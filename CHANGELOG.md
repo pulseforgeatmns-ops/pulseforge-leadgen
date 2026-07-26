@@ -4,15 +4,24 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Command Deck UI ([SPEC-008](docs/specs/SPEC-008_Command_Deck_UI.md)) — render-only surface
+  - `GET /command-deck` — Morning Brief, Highest Leverage Action, Intelligence Cards, Priority Queue, Ask Max launcher
+  - Consumes only `CommandDeckModel` from `GET /api/v1/command-deck`
+  - Staged reveal, composer empty states, calm error + last-successful recovery
+  - Shell nav link for admin / manager / viewer / client; `/dashboard` unchanged
+
 ### Planned
 
-- Pulseforge Command Deck UI ([SPEC-006](docs/specs/SPEC-006_Command_Deck.md)) — v1.0.0
+- Pulseforge Command Deck remaining experience ([SPEC-006](docs/specs/SPEC-006_Command_Deck.md)) — Ask Max workspace, Recommendation Detail, Company Intelligence
 - Shadow CRM/Scout → GraphSyncEngine dual-write
 - Wire Max agent (shadow) to `brief()` + `decide()` + `compose()` before side effects
 
 ### Docs
 
-- SPEC-006 Command Deck approved; Visual Direction mockup checked in under `docs/specs/assets/`
+- SPEC-008 Command Deck UI approved and indexed
+- SPEC-006 Command Deck product surface remains the parent v1.0 experience spec
 - Product Constitution §11 Cognitive load
 - Roadmap / CURRENT_STATE / Product Experience / v1.0 release plan aligned to Command Deck
 

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pulseforge — Command Deck</title>
+  <link rel="icon" href="/favicon.ico">
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@300;400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/shared/tokens.css">
+  <link rel="stylesheet" href="/shared/shell.css">
+  <link rel="stylesheet" href="/command-deck/command-deck.css">
+</head>
+<body class="cd-page">
+  <a class="cd-skip" href="#command-deck-main">Skip to briefing</a>
+
+  <main id="command-deck-main" class="cd-main" aria-label="Command Deck">
+    <header class="cd-masthead" aria-label="Briefing masthead">
+      <p class="cd-eyebrow">Command Deck</p>
+      <p class="cd-timestamp" id="cdTimestamp" aria-live="polite"></p>
+    </header>
+
+    <div id="cdStatus" class="cd-status" role="status" aria-live="polite"></div>
+    <div id="cdError" class="cd-error" hidden></div>
+
+    <section id="cdMorningBrief" class="cd-section cd-morning" aria-labelledby="cdMorningHeading" data-stage="morning" hidden></section>
+    <section id="cdHighestLeverage" class="cd-section cd-hla" aria-labelledby="cdHlaHeading" data-stage="hla" hidden></section>
+    <section id="cdSecondary" class="cd-section cd-secondary" aria-label="Supporting intelligence" data-stage="cards" hidden></section>
+    <section id="cdPriorityQueue" class="cd-section cd-queue" aria-labelledby="cdQueueHeading" data-stage="queue" hidden></section>
+  </main>
+
+  <div class="cd-ask-bar" role="region" aria-label="Ask Max">
+    <form id="cdAskForm" class="cd-ask-form" autocomplete="off">
+      <label class="pf-sr-only" for="cdAskInput">Ask Max about today's briefing</label>
+      <span class="cd-ask-mark" aria-hidden="true"></span>
+      <input
+        id="cdAskInput"
+        class="cd-ask-input"
+        type="text"
+        name="ask"
+        placeholder="Ask Max about today's brief…"
+        maxlength="500"
+      >
+      <button type="submit" class="cd-ask-submit" aria-label="Open Ask Max">Ask</button>
+    </form>
+    <p id="cdAskNote" class="cd-ask-note" hidden>Ask Max conversation opens in a later release. Your question is held for context.</p>
+  </div>
+
+  <script src="/shared/accessibility.js"></script>
+  <script src="/shared/api-client.js"></script>
+  <script src="/shared/shell.js"></script>
+  <script src="/command-deck/command-deck.js"></script>
+</body>
+</html>

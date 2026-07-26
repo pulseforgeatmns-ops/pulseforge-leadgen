@@ -23,7 +23,7 @@ Operator → Max → ReasoningEngine → KnowledgeService (Query Engine) → Gra
                  PolicyEngine   → evaluates recommendations against rules
                  CommandDeckComposer → Briefing + Policy → CommandDeckModel
                         ↓
-              GET /api/v1/command-deck → UI (render-only)
+              GET /api/v1/command-deck → UI (SPEC-008 render-only)
 ```
 
 ## Use (in-repo)

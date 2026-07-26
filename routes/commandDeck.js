@@ -1,14 +1,16 @@
 'use strict';
 
 /**
- * Command Deck API — SPEC-007.
+ * Command Deck — SPEC-007 API + SPEC-008 UI.
  *
  * GET /api/v1/command-deck → CommandDeckModel
+ * GET /command-deck        → render-only HTML surface
  *
  * One API. One payload. One render.
  * The browser never orchestrates intelligence.
  */
 
+const path = require('path');
 const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
@@ -22,6 +24,22 @@ const requireDashboardRead = [
   requireAuth,
   requireRole('admin', 'manager', 'viewer', 'client'),
 ];
+
+/**
+ * GET /command-deck — Command Deck UI (SPEC-008)
+ */
+router.get('/command-deck', requireDashboardRead, (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'command-deck.html'));
+});
+
+/** Static assets for the Command Deck page (CSS / JS). */
+router.use(
+  '/command-deck',
+  express.static(path.join(__dirname, '..', 'public', 'command-deck'), {
+    index: false,
+    fallthrough: true,
+  })
+);
 
 /**
  * GET /api/v1/command-deck
