@@ -43,7 +43,7 @@ Local operators drown in fragmented signals (opens, calls, inquiries, bookings).
 ```text
 ├── README.md, CURRENT_STATE.md, PROJECT_CONTEXT.md, CONTRIBUTING.md, …
 ├── packages/
-│   └── knowledge/        # SPEC-001A knowledge layer (KnowledgeService)
+│   └── knowledge/        # Knowledge layer (KnowledgeService + QueryEngine)
 ├── docs/
 │   ├── 00_START_HERE.md
 │   ├── vision/           # product philosophy

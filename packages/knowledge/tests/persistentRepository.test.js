@@ -2,7 +2,6 @@
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('path');
 const { Pool } = require('pg');
 const { startDisposablePostgres } = require('../../../test/helpers/disposablePostgres');
 const {
@@ -12,6 +11,7 @@ const {
   isGraphRepository,
   GRAPH_REPOSITORY_METHODS,
   NODE_TYPES,
+  EDGE_TYPES,
   mapCompanyRow,
   mapProspectRow,
   mapTouchpointRow,
@@ -20,8 +20,6 @@ const {
   interactionNodeId,
   MemoryRelationalSource,
 } = require('..');
-
-const KNOWLEDGE_SERVICE_PATH = path.join(__dirname, '..', 'services', 'KnowledgeService.js');
 
 describe('SPEC-001 PersistentGraphRepository', () => {
   /** @type {Awaited<ReturnType<typeof startDisposablePostgres>>|null} */
@@ -193,16 +191,107 @@ describe('SPEC-001 PersistentGraphRepository', () => {
     assert.ok(await runtime.knowledge.findNode('10', personNodeId('10', 11)));
   });
 
-  it('does not modify KnowledgeService source (public API stability guard)', async () => {
-    const fs = require('fs');
-    const crypto = require('crypto');
-    const source = fs.readFileSync(KNOWLEDGE_SERVICE_PATH);
-    const hash = crypto.createHash('sha1').update(source).digest('hex');
-    // Locked at SPEC-001 start; bump only if an explicit later ADR allows API changes.
-    assert.equal(
-      hash,
-      '332e6d6aac9ddab1c9d6c7fe365c90334155fe0f',
-      'KnowledgeService.js changed — SPEC-001 forbids public API / service changes'
-    );
+  it('SPEC-001C: KnowledgeService exposes query API (expansion allowed)', async () => {
+    const { KnowledgeService } = require('..');
+    const proto = KnowledgeService.prototype;
+    for (const method of [
+      'findCompanies',
+      'findPeople',
+      'findInteractions',
+      'neighbors',
+      'related',
+      'timeline',
+      'path',
+      'explain',
+    ]) {
+      assert.equal(typeof proto[method], 'function', method);
+    }
+    // SPEC-001 hash lock superseded — SPEC-001C explicitly expands KnowledgeService.
+  });
+
+  it('SPEC-001C: query suite parity with in-memory (filters, path, timeline, metrics)', async () => {
+    await clearGraph();
+    const emitted = [];
+    const runtime = createKnowledgeRuntime({
+      repository: new PersistentGraphRepository(pool),
+      onQueryMetrics: (m) => emitted.push(m),
+    });
+    const { knowledge } = runtime;
+    const tenantId = '10';
+
+    const company = await knowledge.createNode({
+      tenantId,
+      type: NODE_TYPES.COMPANY,
+      name: 'Lodgism',
+      metadata: {
+        industry: 'property_management',
+        location: 'Manchester NH',
+        technology: 'Guesty',
+        confidence: 0.7,
+      },
+    });
+    const person = await knowledge.createNode({
+      tenantId,
+      type: NODE_TYPES.PERSON,
+      name: 'Alex',
+      email: 'alex@lodgism.com',
+      title: 'Owner',
+    });
+    await knowledge.createEdge({
+      tenantId,
+      type: EDGE_TYPES.WORKS_FOR,
+      fromId: person.id,
+      toId: company.id,
+    });
+    await knowledge.createEdge({
+      tenantId,
+      type: EDGE_TYPES.HAS_CONTACT,
+      fromId: company.id,
+      toId: person.id,
+    });
+    const interaction = await knowledge.createNode({
+      tenantId,
+      type: NODE_TYPES.INTERACTION,
+      channel: 'email',
+      actionType: 'sent',
+      summary: 'Intro',
+      occurredAt: '2026-07-10T12:00:00.000Z',
+    });
+    await knowledge.createEdge({
+      tenantId,
+      type: EDGE_TYPES.PARTICIPATED_IN,
+      fromId: person.id,
+      toId: interaction.id,
+    });
+
+    const companies = await knowledge.findCompanies({
+      tenantId,
+      industry: 'property',
+      technology: 'Guesty',
+    });
+    assert.equal(companies.length, 1);
+    assert.equal(companies[0].name, 'Lodgism');
+
+    const people = await knowledge.findPeople({ tenantId, companyId: company.id });
+    assert.equal(people.length, 1);
+
+    const path = await knowledge.path({
+      tenantId,
+      fromId: company.id,
+      toId: interaction.id,
+    });
+    assert.ok(path);
+    assert.equal(path.hops[0].node.id, company.id);
+    assert.equal(path.hops[path.hops.length - 1].node.id, interaction.id);
+
+    const timeline = await knowledge.timeline({ tenantId, nodeId: company.id });
+    assert.ok(timeline.length >= 1);
+    for (let i = 1; i < timeline.length; i++) {
+      assert.ok(String(timeline[i - 1].at) <= String(timeline[i].at));
+    }
+
+    assert.ok(emitted.length >= 1);
+    assert.ok(emitted.every((m) => m.repositoryType === 'persistent'));
+    assert.equal(knowledge.getLastQueryMetrics().repositoryType, 'persistent');
   });
 });

@@ -46,11 +46,15 @@ const {
  * @param {import('./repositories/GraphRepository').GraphRepository} [options.repository]
  * @param {boolean} [options.startIngestor=true]
  * @param {boolean} [options.withSync=true] - attach GraphSyncEngine + ledger
+ * @param {(m: object) => void} [options.onQueryMetrics] - SPEC-001C metrics hook
  */
 function createKnowledgeRuntime(options = {}) {
   const repository = options.repository || new InMemoryGraphRepository();
   assertGraphRepository(repository);
-  const knowledge = new KnowledgeService({ repository });
+  const knowledge = new KnowledgeService({
+    repository,
+    onQueryMetrics: options.onQueryMetrics,
+  });
   const bus = new KnowledgeEventBus();
   const ingestor = new KnowledgeIngestor({ knowledge, bus });
   if (options.startIngestor !== false) {
@@ -67,6 +71,17 @@ function createKnowledgeRuntime(options = {}) {
 
   return runtime;
 }
+
+const {
+  QueryEngine,
+  detectRepositoryType,
+  MetricsCollector,
+  MetricsSink,
+  DEFAULT_RELATED_DEPTH,
+  MAX_RELATED_DEPTH,
+  DEFAULT_PATH_DEPTH,
+  MAX_PATH_DEPTH,
+} = require('./query');
 
 module.exports = {
   createKnowledgeRuntime,
@@ -104,4 +119,13 @@ module.exports = {
   interactionNodeId,
   stableEvidenceId,
   syncIdempotencyKey,
+  // SPEC-001C query engine
+  QueryEngine,
+  detectRepositoryType,
+  MetricsCollector,
+  MetricsSink,
+  DEFAULT_RELATED_DEPTH,
+  MAX_RELATED_DEPTH,
+  DEFAULT_PATH_DEPTH,
+  MAX_PATH_DEPTH,
 };

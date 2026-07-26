@@ -9,6 +9,23 @@ All notable changes to this project are documented here. Format inspired by [Kee
 - Shadow CRM/Scout → GraphSyncEngine dual-write
 - SPEC-002 Max Reasoning Engine
 
+## [0.7.4] — 2026-07-26
+
+### Added
+
+- Knowledge Query Engine ([SPEC-001C](docs/specs/SPEC-001C_Knowledge_Query_Engine.md))
+  - `packages/knowledge/query/` — QueryEngine, Filters, Traversal, Timeline, Metrics
+  - KnowledgeService query API: `findCompanies`, `findPeople`, `findInteractions`, `neighbors`, `related`, `timeline`, `path`
+  - Enhanced `explain()` with timeline position (Claim → Evidence → Source → Confidence → Timeline → Reason)
+  - Structured per-query metrics (`queryName`, timing, nodes/edges, repository type)
+  - In-memory + Postgres repository parity tests
+
+### Notes
+
+- Legacy `(tenantId, …)` signatures for `findEvidence` / `findClaims` / `explain` preserved
+- No GraphRepository contract changes; agents/server remain unwired
+- Numbered SPEC-001C to avoid colliding with draft SPEC-002 (Max Reasoning Engine)
+
 ## [0.7.3] — 2026-07-26
 
 ### Added

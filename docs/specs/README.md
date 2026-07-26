@@ -10,6 +10,7 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-001A](SPEC-001A_Knowledge_Layer_Foundation.md) | Knowledge Layer Foundation | Done | v0.7.1 |
 | [SPEC-001B](SPEC-001B_Graph_Synchronization_Engine.md) | Graph Synchronization Engine | Done | v0.7.2 |
 | [SPEC-001](SPEC-001_Persistent_Knowledge_Store.md) | Persistent Knowledge Store | Done | v0.7.3 |
+| [SPEC-001C](SPEC-001C_Knowledge_Query_Engine.md) | Knowledge Query Engine | Done | v0.7.4 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft — next | v0.8.0 |
 | [SPEC-002](SPEC-002_Max_Reasoning_Engine.md) | Max Reasoning Engine | Draft — queued | v0.9.0 |
 

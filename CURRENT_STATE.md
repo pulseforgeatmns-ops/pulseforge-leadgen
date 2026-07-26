@@ -4,13 +4,13 @@
 
 | Field | Value |
 |---|---|
-| **Version** | v0.7.3 |
-| **Current Milestone** | Persistent knowledge store |
-| **Current Sprint** | SPEC-001 complete; next shadow CRM→sync wiring |
-| **Current Spec** | [SPEC-001 Persistent Knowledge Store](docs/specs/SPEC-001_Persistent_Knowledge_Store.md) — Done |
+| **Version** | v0.7.4 |
+| **Current Milestone** | Knowledge query engine |
+| **Current Sprint** | SPEC-001C complete; next shadow CRM→sync wiring |
+| **Current Spec** | [SPEC-001C Knowledge Query Engine](docs/specs/SPEC-001C_Knowledge_Query_Engine.md) — Done |
 | **Next Spec** | Shadow dual-write (Scout/CRM → GraphSyncEngine) and/or broader Business KG production ingest |
 | **Current Priority** | High — controlled shadow emit into persistent graph |
-| **Last Completed** | SPEC-001 Postgres `PersistentGraphRepository`; SPEC-001B sync; SPEC-001A foundation; SPEC-000 docs |
+| **Last Completed** | SPEC-001C Query Engine; SPEC-001 Postgres store; SPEC-001B sync; SPEC-001A foundation; SPEC-000 docs |
 | **In Progress** | None |
 | **Known Blockers** | Inquiry Foundation production deploy blocked; Max orchestration shadow-default; knowledge not wired into server/agents |
 | **Upcoming Decisions** | When to enable shadow dual-write; whether default runtime should prefer Postgres when `DATABASE_URL` is present |
@@ -26,6 +26,7 @@
 | v0.7.1 | `KnowledgeService`, in-memory repo, evidence/claims, events, `explain()` |
 | v0.7.2 | `GraphSyncEngine` — CRM/import/rebuild → KnowledgeService |
 | v0.7.3 | `PersistentGraphRepository` (Postgres) — same interface; KnowledgeService unchanged |
+| v0.7.4 | Query Engine — typed filters, traversal, timeline, path, metrics; enhanced `explain()` |
 
 ```bash
 npm run test:knowledge

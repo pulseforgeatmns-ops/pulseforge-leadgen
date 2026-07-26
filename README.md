@@ -6,8 +6,8 @@ Pulseforge scrapes and scores leads, runs multi-channel outreach through a roste
 
 | | |
 |---|---|
-| **Version** | v0.7.3 |
-| **Current milestone** | Persistent knowledge store |
+| **Version** | v0.7.4 |
+| **Current milestone** | Knowledge query engine |
 | **Current spec** | [SPEC-001](docs/specs/SPEC-001_Persistent_Knowledge_Store.md) (Done) |
 | **Next spec** | Shadow CRM → GraphSyncEngine wiring |
 | **Deploy** | Railway · `node server.js` |

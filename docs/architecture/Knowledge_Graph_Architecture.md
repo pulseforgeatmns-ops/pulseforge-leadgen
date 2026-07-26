@@ -7,6 +7,7 @@
 - [SPEC-001A](../specs/SPEC-001A_Knowledge_Layer_Foundation.md) (v0.7.1) — **Done**: storage-agnostic `packages/knowledge` with in-memory repository, evidence/claims, events, `explain()`.
 - [SPEC-001B](../specs/SPEC-001B_Graph_Synchronization_Engine.md) (v0.7.2) — **Done**: idempotent CRM→`KnowledgeService` sync + relational rebuild (no direct repository access).
 - [SPEC-001](../specs/SPEC-001_Persistent_Knowledge_Store.md) (v0.7.3) — **Done**: Postgres `PersistentGraphRepository` behind the same interface; `KnowledgeService` unchanged.
+- [SPEC-001C](../specs/SPEC-001C_Knowledge_Query_Engine.md) (v0.7.4) — **Done**: typed Query Engine on `KnowledgeService` (filters, traversal, timeline, path, metrics).
 - Remaining production ingest / shadow dual-write — see [SPEC-001_Business_Knowledge_Graph.md](../specs/SPEC-001_Business_Knowledge_Graph.md) (draft).
 
 ## Purpose
