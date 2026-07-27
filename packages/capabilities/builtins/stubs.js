@@ -263,21 +263,45 @@ function createCampaignBuilderStub() {
       const applied = applyPlaybookConstraints(list, playbook);
       const kept = applied.prospects;
 
-      const mailMerge = kept.map((p) => ({
-        companyName: p.companyName,
-        personalizationSentence:
-          p.personalizationSentence ||
-          (playbook
-            ? null
-            : `Noticed ${p.companyName} may need support (no playbook).`),
-        openingHook:
-          p.openingHook ||
-          (playbook ? null : 'Confirm outreach language after playbook is set.'),
-        recommendedOffer: p.recommendedOffer || null,
-        recommendedChannel: p.recommendedChannel || null,
-        playbookId: playbook ? playbook.id : null,
-        playbookVersion: playbook ? playbook.version : null,
-      }));
+      const mailMerge = kept.map((p) => {
+        let messagingPosture = p.messagingPosture || null;
+        let messagingDescription = p.messagingDescription || null;
+        let activeSignals = Array.isArray(p.activeSignals) ? p.activeSignals : null;
+        if (!messagingPosture || !activeSignals) {
+          try {
+            const {
+              buildBusinessSignalsForProspect,
+            } = require('../signals');
+            const pkg = buildBusinessSignalsForProspect(p, {
+              playbook,
+              profile: context.inputs && context.inputs.discoveryProfile,
+            });
+            activeSignals = pkg.activeSignals;
+            messagingPosture = pkg.messagingPosture;
+            messagingDescription = pkg.messagingDescription;
+          } catch {
+            // signals optional — campaign stub remains review-gated without them
+          }
+        }
+        return {
+          companyName: p.companyName,
+          personalizationSentence:
+            p.personalizationSentence ||
+            (playbook
+              ? null
+              : `Noticed ${p.companyName} may need support (no playbook).`),
+          openingHook:
+            p.openingHook ||
+            (playbook ? null : 'Confirm outreach language after playbook is set.'),
+          recommendedOffer: p.recommendedOffer || null,
+          recommendedChannel: p.recommendedChannel || null,
+          messagingPosture,
+          messagingDescription,
+          activeSignalTitles: (activeSignals || []).map((s) => s.title),
+          playbookId: playbook ? playbook.id : null,
+          playbookVersion: playbook ? playbook.version : null,
+        };
+      });
 
       const warnings = [...(applied.warnings || [])];
       if (!playbook) {

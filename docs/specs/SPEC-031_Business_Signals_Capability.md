@@ -2,12 +2,12 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Proposed |
+| **Status** | Implemented (v1 thin slice) |
 | **Target Version** | v1.2.2 |
 | **Priority** | Critical |
 | **Owner** | Pulseforge engineering |
 | **Created** | 2026-07-27 |
-| **Version** | v0.1.0 |
+| **Version** | v1.0.0 |
 | **Depends on** | SPEC-030 (Company Intelligence), SPEC-023, SPEC-014, SPEC-001A/C (Knowledge), SPEC-003 (Temporal Memory — decay alignment), ADR-002, ADR-005, ADR-011, ADR-017, ADR-018 |
 | **Consumed by** | Opportunity Ranking (SPEC-026), Opportunity Briefs, Campaign Builder, Proposal Generator (SPEC-027B), Knowledge Update, Command Deck / prospect workspace |
 
@@ -387,16 +387,16 @@ TTL overrides allowed per signal when the source states an explicit end date. De
 
 ## Acceptance Criteria
 
-- [ ] Signals are evidence-backed (every Active signal has evidence / evidenceRefs)
-- [ ] Signals decay over time (TTL + influenceWeight; Archived excluded from Active)
-- [ ] No fabricated observations
-- [ ] Opportunity Ranking consumes Active signals (Buying Signals / timing / angle)
-- [ ] Campaign Builder references Active signal types for messaging posture (contract + adapter hook)
-- [ ] Opportunity Briefs include Active signals when present
-- [ ] Signals remain explainable and traceable (source, evidence, confidence, lifecycle)
-- [ ] Knowledge receives verified signals as evidence; uncertain items stay inferences
-- [ ] Operator surface can list Active Business Signals with confidence
-- [ ] ADR-018 accepted and linked
+- [x] Signals are evidence-backed (every Active signal has evidence / evidenceRefs)
+- [x] Signals decay over time (TTL + influenceWeight; Archived excluded from Active)
+- [x] No fabricated observations
+- [x] Opportunity Ranking consumes Active signals (Buying Signals / timing / angle)
+- [x] Campaign Builder references Active signal types for messaging posture (contract + adapter hook)
+- [x] Opportunity Briefs include Active signals when present
+- [x] Signals remain explainable and traceable (source, evidence, confidence, lifecycle)
+- [x] Knowledge receives verified signals as evidence; uncertain items stay inferences
+- [ ] Operator surface can list Active Business Signals with confidence (operatorSignals view model ready; Command Deck UI bind later)
+- [x] ADR-018 accepted and linked
 
 ## Future Work
 

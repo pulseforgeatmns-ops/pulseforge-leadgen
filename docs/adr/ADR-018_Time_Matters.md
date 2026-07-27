@@ -44,8 +44,8 @@ Fabricating “urgency” without evidence violates [ADR-017](ADR-017_Intelligen
 
 ### Follow-ups
 
-- [ ] Implement [SPEC-031](../specs/SPEC-031_Business_Signals_Capability.md) (collect → verify → lifecycle → consumers)
-- [ ] Wire Active signals into SPEC-030 packages and SPEC-026 Ranking / Brief paths
-- [ ] Document Campaign Builder + Proposal Generator signal contracts; land adapters
+- [ ] Implement [SPEC-031](../specs/SPEC-031_Business_Signals_Capability.md) (collect → verify → lifecycle → consumers) — **v1 library + Ranking/Brief/Campaign hooks done**; Command Deck operator UI + live collectors remaining
+- [x] Wire Active signals into SPEC-026 Ranking / Brief paths (SPEC-030 package wiring when CI ships)
+- [x] Document Campaign Builder + Proposal Generator signal contracts; land adapters (Campaign stub messaging posture)
 - [ ] Operator Active Business Signals UI on prospect / Company Intelligence surfaces
 - [ ] Calibrate TTLs and confidence from outcomes (SPEC-021) after live signal volume exists

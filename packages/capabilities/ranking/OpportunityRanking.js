@@ -22,6 +22,9 @@ const {
 } = require('./types');
 const { scoreOpportunity } = require('./factors');
 const { buildBrief, recommendNextAction } = require('./brief');
+const {
+  buildBusinessSignalsForProspect,
+} = require('../signals');
 
 /**
  * Resolve Discovery Profile from context inputs / constraints / knowledge.
@@ -169,7 +172,16 @@ function createOpportunityRankingCapability(deps = {}) {
         const { prospect: p, scored } = row;
         const priority = priorityFromScore(scored.overallScore);
         const withPriority = { ...scored, priority };
-        const brief = buildBrief(p, withPriority, { profile });
+        const signalPkg = buildBusinessSignalsForProspect(p, {
+          knowledge,
+          profile,
+          asOf: context.asOf,
+        });
+        const brief = buildBrief(p, withPriority, {
+          profile,
+          knowledge,
+          activeSignals: signalPkg.activeSignals,
+        });
         const recommendedNextAction = recommendNextAction(withPriority, p);
         return buildRankedOpportunity({
           id: p.id || `ranked_${context.missionId || 'local'}_${index + 1}`,
@@ -193,6 +205,12 @@ function createOpportunityRankingCapability(deps = {}) {
           rankingSignals: p.rankingSignals || [],
           source: p.source || null,
           enriched: p.enriched === true,
+          businessSignals: signalPkg.signals,
+          activeSignals: signalPkg.activeSignals,
+          buyingSignals: signalPkg.buyingSignals,
+          operatorSignals: signalPkg.operatorSignals,
+          messagingPosture: signalPkg.messagingPosture,
+          messagingDescription: signalPkg.messagingDescription,
         });
       });
 

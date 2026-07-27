@@ -60,6 +60,7 @@ module.exports = {
   ranking: require('./ranking'),
   proposal: require('./proposal'),
   playbook: require('./playbook'),
+  signals: require('./signals'),
 };
 
 // Re-export production capabilities at top level for convenience
@@ -69,3 +70,8 @@ module.exports.createOpportunityRankingCapability =
   require('./ranking').createOpportunityRankingCapability;
 module.exports.createProposalGeneratorCapability =
   require('./proposal').createProposalGeneratorCapability;
+module.exports.buildBusinessSignalsForProspect =
+  require('./signals').buildBusinessSignalsForProspect;
+module.exports.buildBusinessSignalsStage =
+  require('./signals').buildBusinessSignalsStage;
+module.exports.resolveActiveSignals = require('./signals').resolveActiveSignals;
