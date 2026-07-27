@@ -1002,11 +1002,12 @@
       ['knowledge', 'Knowledge'],
     ];
     const evidenceCount = metadata.evidenceCount != null ? metadata.evidenceCount : 0;
+    const sourceCount = labels.filter(([key]) => Boolean(sources[key])).length;
     const asOf = metadata.asOf ? formatRelativeTime(metadata.asOf) : null;
 
     return `
       <details class="mx-meta">
-        <summary>Generated from · ${evidenceCount} evidence sources</summary>
+        <summary>Generated from · ${sourceCount} context source${sourceCount === 1 ? '' : 's'}</summary>
         <div class="mx-meta-body">
           <div class="mx-meta-sources">
             ${labels
@@ -1018,7 +1019,7 @@
               })
               .join('')}
           </div>
-          <div>${evidenceCount} evidence sources</div>
+          <div>${evidenceCount} evidence item${evidenceCount === 1 ? '' : 's'}</div>
           ${asOf ? `<div>Updated ${escapeHtml(asOf)}</div>` : ''}
         </div>
       </details>

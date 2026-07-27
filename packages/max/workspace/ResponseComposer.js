@@ -33,8 +33,13 @@ function composeResponse(input) {
     question,
   });
 
+  // A missing opposing signal is only relevant when the operator asked about
+  // risk or contradiction. Showing it on every answer makes a normal lack of
+  // counter-evidence look like a data failure.
   const unavailable = [
-    ...evidence.unavailable,
+    ...evidence.unavailable.filter(
+      (item) => item !== 'contradicting_evidence' || intent === 'contradictions'
+    ),
     ...(unavailableExtra || []),
   ].filter((v, i, a) => a.indexOf(v) === i);
 
@@ -66,6 +71,11 @@ function composeResponse(input) {
 
 function classifyIntent(question, context) {
   const q = question.toLowerCase();
+  if (
+    /(?:highest|top|biggest|largest).*(?:call|calls|move|moves|movement)|(?:call|calls|move|moves).*(?:highest|top|biggest|largest)/.test(
+      q
+    )
+  ) return 'activity';
   if (/contradict|oppos|against|why not|risk/.test(q)) return 'contradictions';
   if (/policy|approval|block|allow|wait/.test(q)) return 'policy';
   if (/compar/.test(q)) return 'compare';
@@ -91,6 +101,9 @@ function answerForIntent({ intent, context, evidence, focus, question }) {
   }
   if (intent === 'changes') {
     return changesAnswer({ brief, evidence, context });
+  }
+  if (intent === 'activity') {
+    return activityAnswer({ context, question });
   }
   if (intent === 'watches') {
     return watchesAnswer({ brief, context, evidence });
@@ -129,7 +142,8 @@ function answerForIntent({ intent, context, evidence, focus, question }) {
   const reasoning = [];
   if (brief.summary) reasoning.push(String(brief.summary));
   if (evidence.supportingEvidence[0]) {
-    reasoning.push(evidence.supportingEvidence[0].summary);
+    const summary = evidence.supportingEvidence[0].summary;
+    if (!reasoning.includes(summary)) reasoning.push(summary);
   }
   if (!reasoning.length) {
     reasoning.push(
@@ -204,11 +218,7 @@ function changesAnswer({ brief, evidence, context }) {
     reasoning.push(ref.summary);
   }
 
-  const queue =
-    (context.deck &&
-      context.deck.priorityQueue &&
-      context.deck.priorityQueue.items) ||
-    [];
+  const queue = priorityQueueItems(context);
   for (const item of queue.slice(0, 3)) {
     if (item.movement || item.trend) {
       reasoning.push(
@@ -223,6 +233,51 @@ function changesAnswer({ brief, evidence, context }) {
       ? reasoning
       : ['No movement indicators were present on visible priority items.'],
     unavailableExtra: Number.isFinite(marketChanges) ? [] : ['market_changes'],
+  };
+}
+
+function activityAnswer({ context, question }) {
+  const queue = priorityQueueItems(context);
+  const moves = queue.filter(
+    (item) =>
+      (item.movement && item.movement !== '—') ||
+      (item.scoreDelta != null && Number(item.scoreDelta) !== 0)
+  );
+  const asksForCalls = /\bcalls?\b/i.test(question);
+  const asksForMoves = /\b(?:moves?|movement)\b/i.test(question);
+  const reasoning = [];
+
+  if (moves.length) {
+    const ranked = moves.slice(0, 3);
+    const answer = `The largest recorded moves in this briefing are ${ranked
+      .map((item) => `${item.companyName || item.company || item.title || 'Unnamed priority'} (${item.movement || formatScoreDelta(item.scoreDelta)})`)
+      .join(', ')}.`;
+    if (asksForCalls) {
+      reasoning.push('Call activity metrics are not included in the current context.');
+    }
+    reasoning.push(
+      ...ranked.map(
+        (item) =>
+          `${item.companyName || item.company || item.title || 'Unnamed priority'}: ${item.summary || item.movement || formatScoreDelta(item.scoreDelta)}`
+      )
+    );
+    return {
+      answer,
+      reasoning,
+      unavailableExtra: asksForCalls ? ['call_activity'] : [],
+    };
+  }
+
+  const gaps = [];
+  if (asksForCalls) gaps.push('call_activity');
+  if (asksForMoves || !asksForCalls) gaps.push('market_movement');
+  return {
+    answer:
+      "I can’t rank today’s calls or moves from this briefing because it contains neither call activity metrics nor recorded movement in the current window.",
+    reasoning: [
+      'Historical comparison data is not attached to the current Max context.',
+    ],
+    unavailableExtra: gaps,
   };
 }
 
@@ -313,11 +368,7 @@ function policyAnswer({ hla, context, evidence }) {
 }
 
 function compareAnswer({ context, evidence }) {
-  const queue =
-    (context.deck &&
-      context.deck.priorityQueue &&
-      context.deck.priorityQueue.items) ||
-    [];
+  const queue = priorityQueueItems(context);
   const items = queue.slice(0, 3);
   if (items.length < 2) {
     const names = evidence.relatedEntities.slice(0, 3).map((e) => e.name);
@@ -355,6 +406,16 @@ function compareAnswer({ context, evidence }) {
     }),
     unavailableExtra: [],
   };
+}
+
+function priorityQueueItems(context) {
+  const queue = context.deck && context.deck.priorityQueue;
+  return Array.isArray(queue) ? queue : (queue && queue.items) || [];
+}
+
+function formatScoreDelta(value) {
+  const delta = Number(value) || 0;
+  return delta > 0 ? `↑${delta}` : delta < 0 ? `↓${Math.abs(delta)}` : '—';
 }
 
 function historyAnswer({ evidence, focus }) {

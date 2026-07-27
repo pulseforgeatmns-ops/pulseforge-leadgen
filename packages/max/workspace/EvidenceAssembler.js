@@ -218,18 +218,23 @@ function collectFromDeck(deck, bag) {
     );
   }
 
-  const queue = (deck.priorityQueue && deck.priorityQueue.items) || [];
+  // CommandDeckModel exposes priorityQueue as an array. Accept the former
+  // `{ items }` shape as well so a workspace never silently loses movement
+  // history when reading an older snapshot.
+  const queue = Array.isArray(deck.priorityQueue)
+    ? deck.priorityQueue
+    : (deck.priorityQueue && deck.priorityQueue.items) || [];
   for (const item of queue.slice(0, 5)) {
     bag.relatedEntities.push({
       id: item.companyId || item.id || item.title,
       type: 'company',
-      name: item.companyName || item.title || item.id,
+      name: item.companyName || item.company || item.title || item.id,
     });
     if (item.movement || item.trend) {
       bag.sourcesUsed.memory = true;
       bag.timelineReferences.push({
         id: `movement:${item.id || item.companyId}`,
-        summary: `${item.companyName || item.title}: ${item.movement || item.trend}`,
+        summary: `${item.companyName || item.company || item.title}: ${item.movement || item.trend}`,
         at: item.updatedAt || null,
       });
     }

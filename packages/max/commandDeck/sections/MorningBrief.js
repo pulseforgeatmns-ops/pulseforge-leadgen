@@ -23,6 +23,8 @@ function buildMorningBrief(input) {
   const marketChanges = Number(changes.total) || 0;
   const watchAlertCount = watchAlerts.length;
   const priorityCount = priorities.length;
+  const companiesMonitored = Number(summary.companiesMonitored) || 0;
+  const companiesWithMemory = Number(summary.companiesWithMemory) || 0;
   const generatedAt = input.generatedAt || summary.asOf || null;
 
   const headline = deriveHeadline({
@@ -31,10 +33,13 @@ function buildMorningBrief(input) {
     priorityCount,
     priorityOpportunities: Number(summary.priorityOpportunities) || 0,
     newDecisionMakers: Number(summary.newDecisionMakers) || 0,
+    companiesMonitored,
+    companiesWithMemory,
   });
 
   const summaryText = deriveSummaryText({
-    companiesMonitored: Number(summary.companiesMonitored) || 0,
+    companiesMonitored,
+    companiesWithMemory,
     marketChanges,
     watchAlertCount,
     priorityCount,
@@ -50,6 +55,7 @@ function buildMorningBrief(input) {
     watchAlertCount,
     priorityCount,
     generatedAt,
+    marketContext: marketContextStatus({ companiesMonitored, companiesWithMemory }),
   };
 
   const card = buildIntelligenceCard({
@@ -96,13 +102,22 @@ function deriveHeadline(stats) {
   if (stats.newDecisionMakers > 0) {
     return 'New decision-makers entered the window.';
   }
-  return 'Market is quiet this morning.';
+  if (stats.companiesMonitored === 0) {
+    return 'Market intelligence is not available yet.';
+  }
+  if (stats.companiesWithMemory === 0) {
+    return 'Market context is still building.';
+  }
+  return 'No material market movement was recorded this morning.';
 }
 
 function deriveSummaryText(stats) {
   const parts = [];
   if (stats.companiesMonitored > 0) {
     parts.push(`${stats.companiesMonitored} companies monitored.`);
+  }
+  if (stats.companiesMonitored > 0 && stats.companiesWithMemory === 0) {
+    parts.push('No historical snapshots are available yet.');
   }
   if (stats.marketChanges > 0) {
     parts.push(`${stats.marketChanges} market changes in period.`);
@@ -122,9 +137,15 @@ function deriveSummaryText(stats) {
     parts.push(`${stats.newHiringSignals} hiring signals.`);
   }
   if (parts.length === 0) {
-    return 'No material market movement in this window.';
+    return 'No monitored companies or historical market snapshots are available in this window.';
   }
   return parts.join(' ');
+}
+
+function marketContextStatus({ companiesMonitored, companiesWithMemory }) {
+  if (companiesMonitored === 0) return 'unavailable';
+  if (companiesWithMemory === 0) return 'building';
+  return 'ready';
 }
 
 module.exports = {

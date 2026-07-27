@@ -263,6 +263,37 @@ describe('ResponseComposer', () => {
     assert.match(structured.answer, /contradict/i);
   });
 
+  it('answers highest-moves questions from the CommandDeck array queue', () => {
+    const structured = composeResponse({
+      context: sampleDeckContext(),
+      question: 'What are the highest calls or moves to make today?',
+    });
+    assert.match(structured.answer, /Marlowe Properties/);
+    assert.match(structured.answer, /↑4/);
+    assert.ok(structured.timelineReferences.some((ref) => /Marlowe Properties/.test(ref.summary)));
+    assert.ok(structured.metadata.unavailable.includes('call_activity'));
+    assert.ok(!structured.metadata.unavailable.includes('contradicting_evidence'));
+  });
+
+  it('states the missing historical context when activity data is absent', () => {
+    const context = normalizeContext({
+      tenantId: '1',
+      page: PAGE_TYPES.COMMAND_DECK,
+      briefing: {
+        headline: 'Market context is still building.',
+        summary: 'No historical snapshots are available yet.',
+      },
+      deck: { priorityQueue: [] },
+    });
+    const structured = composeResponse({
+      context,
+      question: 'What are the highest calls or moves to make today?',
+    });
+    assert.match(structured.answer, /can’t rank today’s calls or moves/i);
+    assert.ok(structured.metadata.unavailable.includes('call_activity'));
+    assert.ok(structured.metadata.unavailable.includes('market_movement'));
+  });
+
   it('reports policy from envelope', () => {
     const structured = composeResponse({
       context: sampleDeckContext({

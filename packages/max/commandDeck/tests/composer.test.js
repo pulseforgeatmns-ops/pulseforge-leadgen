@@ -54,6 +54,7 @@ describe('CommandDeckComposer — single view model', () => {
     assert.ok(Number.isFinite(deck.morningBrief.marketChanges));
     assert.ok(Number.isFinite(deck.morningBrief.watchAlertCount));
     assert.ok(Number.isFinite(deck.morningBrief.priorityCount));
+    assert.equal(deck.morningBrief.marketContext, 'ready');
     assert.equal(deck.morningBrief.generatedAt != null, true);
 
     assert.ok(deck.highestLeverageAction);
@@ -75,6 +76,23 @@ describe('CommandDeckComposer — single view model', () => {
     assert.equal(deck.meta.tenantId, TENANT);
     assert.ok(deck.meta.briefingId);
     assert.ok(deck.meta.buildTimeMs >= 0);
+  });
+
+  it('does not call an empty tenant quiet', async () => {
+    const knowledge = createKnowledgeRuntime({
+      withSync: false,
+      startIngestor: false,
+    }).knowledge;
+    const max = createMaxReasoningRuntime({ knowledge });
+    const deck = await max.compose({
+      tenantId: 'empty-tenant',
+      asOf: AS_OF,
+      period: 'daily',
+    });
+
+    assert.equal(deck.morningBrief.marketContext, 'unavailable');
+    assert.match(deck.morningBrief.headline, /not available yet/i);
+    assert.doesNotMatch(deck.morningBrief.headline, /quiet/i);
   });
 
   it('exposes compose() on createMaxReasoningRuntime', async () => {
