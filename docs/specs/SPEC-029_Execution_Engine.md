@@ -133,7 +133,7 @@ Each touch becomes an executable task. Supported channels (v1):
 
 | Channel | Typical backing |
 |---|---|
-| Direct Mail | Manual packet assembly + ship confirmation |
+| Direct Mail | Manual packet assembly + ship confirmation — consumes Ready-to-Print packages from [SPEC-033](SPEC-033_Mail_Package_Generator.md) |
 | Email | Emmett / Brevo adapter (post-approval) |
 | Phone | Operator call task or Cal/Bland when configured |
 | LinkedIn | Draft → approval queue (Link / publish pipeline) |

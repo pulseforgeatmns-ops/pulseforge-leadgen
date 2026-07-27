@@ -68,6 +68,20 @@ function routeIntent(objective) {
  * @returns {string|null}
  */
 function matchMissionType(lower, original) {
+  // Mail Package Generation (SPEC-033) — before campaign (objectives often cite Campaign N)
+  if (
+    /\b(generate|create|build|prepare|print)\s+(a\s+)?(mail|direct\s*mail)\s+packages?\b/.test(
+      lower
+    ) ||
+    /\bmail\s+packages?\b/.test(lower) ||
+    /\bdirect\s+mail\s+packages?\b/.test(lower) ||
+    /\bmail\s+merge\b/.test(lower) ||
+    /\baddress\s+labels?\b/.test(lower) ||
+    /\bprint[- ]ready\s+(mail|letters?)\b/.test(lower)
+  ) {
+    return MISSION_TYPES.MAIL_PACKAGE_GENERATION;
+  }
+
   // Campaign Creation — primary acceptance path
   if (
     /\bbuild\s+campaign\b/.test(lower) ||
