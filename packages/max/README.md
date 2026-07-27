@@ -2,11 +2,13 @@
 
 Max Reasoning Engine + Temporal Memory + Briefing Engine + Policy Engine + Command Deck Composer + Intelligence Workspace + Intelligence Navigation + Live Intelligence Loop + Operator Intelligence + Outcome Intelligence — deterministic recommendations, operator briefings, an explicit safety layer, a single view model for the operator surface, contextual conversation over verified Structured Response Objects, continuous investigation, in-place evolution via IntelligenceEvents, presentation learning from operator behavior, and empirical evaluation of whether intelligence was right.
 
-**SPEC-002** · v0.8.0 · **SPEC-003** · v0.8.1 · **SPEC-004** · v0.9.0 · **SPEC-005** · v0.9.1 · **SPEC-007** · v0.9.2 · **SPEC-009** · v1.0.0 · **SPEC-010** · v1.0.0 · **SPEC-011** · v1.0.0 · **SPEC-012** · v1.0.0 · **SPEC-013** · v1.0.0 · **ADR-005** · **ADR-006** · **ADR-007** · **ADR-008**
+**SPEC-002** · v0.8.0 · **SPEC-003** · v0.8.1 · **SPEC-004** · v0.9.0 · **SPEC-005** · v0.9.1 · **SPEC-007** · v0.9.2 · **SPEC-009** · v1.0.0 · **SPEC-010** · v1.0.0 · **SPEC-011** · v1.0.0 · **SPEC-012** · v1.0.0 · **SPEC-013** · v1.0.0 · **SPEC-015A** · Reasoning Runtime · **ADR-005** · **ADR-006** · **ADR-007** · **ADR-008**
 
 ## Philosophy
 
 Max does not make decisions. Max constructs arguments — remembers how those arguments change — assembles them into operational briefings — evaluates whether actions are **allowed** — presents today's Command Deck as one immutable model — and, when asked, **presents** verified intelligence conversationally. The deck does not “refresh”; it **evolves**. Operator Intelligence then learns how humans engage — and adjusts **presentation only**. Outcome Intelligence measures whether recommendations were right — and never changes reasoning.
+
+SPEC-015A: orchestration is domain-neutral (`@pulseforge/reasoning-runtime`). CRM meaning lives in `CRMStrategyPack`. Future domains attach packs without modifying the runtime.
 
 - Reasoning: what should happen?
 - Policy: what is allowed to happen?
@@ -22,7 +24,8 @@ No invented business intelligence. No silent execution. Claude never scores, ran
 ## Architecture
 
 ```text
-Operator → Max → ReasoningEngine → KnowledgeService (Query Engine) → Graph
+Operator → Max → ReasoningEngine → ReasoningRuntime → StrategyPack (CRM default)
+                 → KnowledgeService (Query Engine) → Graph
                  MemoryEngine   → SnapshotStore (append-only)
                  BriefingEngine → assembles Knowledge + Reasoning + Memory
                  PolicyEngine   → evaluates recommendations against rules

@@ -1,0 +1,17 @@
+{
+  "name": "@pulseforge/market-strategy",
+  "version": "1.0.0",
+  "description": "Market Strategy Pack — research-only reasoning for financial observations (SPEC-016)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@pulseforge/reasoning-runtime": "file:../reasoning-runtime"
+  }
+}

@@ -12,6 +12,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@pulseforge/knowledge": "file:../knowledge"
+    "@pulseforge/knowledge": "file:../knowledge",
+    "@pulseforge/reasoning-runtime": "file:../reasoning-runtime"
   }
 }

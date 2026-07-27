@@ -1,6 +1,10 @@
 'use strict';
 
-const { StrategyRegistry, createDefaultStrategyRegistry } = require('./StrategyRegistry');
+const {
+  StrategyRegistry,
+  createDefaultStrategyRegistry,
+  createCRMStrategyRegistry,
+} = require('./StrategyRegistry');
 const { OpportunityStrategy } = require('./OpportunityStrategy');
 const { EngagementStrategy } = require('./EngagementStrategy');
 const { RelationshipStrategy } = require('./RelationshipStrategy');
@@ -17,6 +21,7 @@ const {
 module.exports = {
   StrategyRegistry,
   createDefaultStrategyRegistry,
+  createCRMStrategyRegistry,
   OpportunityStrategy,
   EngagementStrategy,
   RelationshipStrategy,

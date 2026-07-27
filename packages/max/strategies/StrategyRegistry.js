@@ -81,10 +81,19 @@ class StrategyRegistry {
 }
 
 /**
- * Create a registry with the seven initial strategies.
+ * Create a registry with the seven initial CRM strategies.
  * @returns {StrategyRegistry}
  */
 function createDefaultStrategyRegistry() {
+  return createCRMStrategyRegistry();
+}
+
+/**
+ * Named CRM strategy pack registry (SPEC-015A / audit R3).
+ * Alias of the historical default registry — identical strategies and behavior.
+ * @returns {StrategyRegistry}
+ */
+function createCRMStrategyRegistry() {
   const { OpportunityStrategy } = require('./OpportunityStrategy');
   const { EngagementStrategy } = require('./EngagementStrategy');
   const { RelationshipStrategy } = require('./RelationshipStrategy');
@@ -108,4 +117,5 @@ function createDefaultStrategyRegistry() {
 module.exports = {
   StrategyRegistry,
   createDefaultStrategyRegistry,
+  createCRMStrategyRegistry,
 };

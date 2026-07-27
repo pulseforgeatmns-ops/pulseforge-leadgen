@@ -1,11 +1,28 @@
 'use strict';
 
 const { createKnowledgeRuntime } = require('../knowledge');
-const { ReasoningEngine, createReasoningEngine } = require('./reasoning/ReasoningEngine');
+const {
+  ReasoningEngine,
+  createReasoningEngine,
+  createCrmReasoningRuntime,
+} = require('./reasoning/ReasoningEngine');
 const { ReasoningContextBuilder } = require('./context/ReasoningContextBuilder');
+const {
+  createReasoningRuntime,
+  CRMStrategyPack,
+  createCRMStrategyPack,
+  CRMContextProvider,
+  createCRMContextProvider,
+  NextBestActionProvider,
+  createNextBestActionProvider,
+  assertStrategyPack,
+  assertContextProvider,
+  assertRecommendationProvider,
+} = require('../reasoning-runtime');
 const {
   StrategyRegistry,
   createDefaultStrategyRegistry,
+  createCRMStrategyRegistry,
 } = require('./strategies/StrategyRegistry');
 const {
   OpportunityStrategy,
@@ -361,6 +378,17 @@ function createMaxReasoningRuntime(options = {}) {
 module.exports = {
   createMaxReasoningRuntime,
   createReasoningEngine,
+  createCrmReasoningRuntime,
+  createReasoningRuntime,
+  CRMStrategyPack,
+  createCRMStrategyPack,
+  CRMContextProvider,
+  createCRMContextProvider,
+  NextBestActionProvider,
+  createNextBestActionProvider,
+  assertStrategyPack,
+  assertContextProvider,
+  assertRecommendationProvider,
   createMemoryEngine,
   createBriefingEngine,
   createPolicyEngine,
@@ -382,6 +410,7 @@ module.exports = {
   ReasoningContextBuilder,
   StrategyRegistry,
   createDefaultStrategyRegistry,
+  createCRMStrategyRegistry,
   OpportunityStrategy,
   EngagementStrategy,
   RelationshipStrategy,
