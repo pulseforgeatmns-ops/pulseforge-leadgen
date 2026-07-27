@@ -10,6 +10,10 @@ const {
   FACTOR_LABELS,
   buildFactorScore,
 } = require('./types');
+const {
+  resolveActiveSignals,
+  buyingSignalsForRanking,
+} = require('../signals');
 
 const DECISION_MAKER_TITLES =
   /\b(owner|founder|principal|partner|president|ceo|coo|office\s*manager|managing\s*partner|director)\b/i;
@@ -129,7 +133,41 @@ function scoreBuyingSignals(prospect, knowledge) {
   const refs = [];
   let score = 0;
 
+  // SPEC-031 / ADR-018: prefer structured Active Business Signals when present
+  const active = resolveActiveSignals(prospect, knowledge);
+  const structuredBuying = buyingSignalsForRanking(active);
+  if (structuredBuying.length) {
+    let weighted = 0;
+    for (const s of structuredBuying) {
+      const w = Number(s.influenceWeight) || 0;
+      weighted += w;
+      refs.push(s.type || s.title || s.id);
+      if (Array.isArray(s.evidenceRefs)) {
+        refs.push(...s.evidenceRefs.slice(0, 2));
+      }
+    }
+    // Up to max from influence-weighted Active buying/growth signals
+    score = Math.min(max, Math.round(max * Math.min(1, weighted / 1.5)));
+    score = Math.min(max, Math.max(score, Math.min(max, structuredBuying.length * 5)));
+    return buildFactorScore({
+      factor: 'buying_signals',
+      label: FACTOR_LABELS.buying_signals,
+      score,
+      max,
+      matched: score > 0,
+      detail:
+        score > 0
+          ? `Active Business Signals: ${structuredBuying
+              .slice(0, 3)
+              .map((s) => s.title || s.type)
+              .join(', ')}`
+          : 'No buying-signal evidence — scored 0',
+      evidenceRefs: [...new Set(refs)].slice(0, 8),
+    });
+  }
+
   for (const key of BUYING_SIGNAL_KEYS) {
+    if (key === 'buyingSignals') continue; // handled as arrays below
     if (truthy(prospect[key]) || truthy(knowledge[key])) {
       score += 5;
       refs.push(key);
@@ -141,9 +179,23 @@ function scoreBuyingSignals(prospect, knowledge) {
     : Array.isArray(knowledge.buyingSignals)
       ? knowledge.buyingSignals
       : [];
-  if (signals.length) {
-    score += Math.min(10, signals.length * 4);
-    refs.push(...signals.slice(0, 3).map(String));
+  // Legacy string/object list without lifecycle — only count items with evidence or string labels
+  const legacyUsable = signals.filter((s) => {
+    if (typeof s === 'string' && s.trim()) return true;
+    if (s && typeof s === 'object') {
+      if (Array.isArray(s.evidence) && s.evidence.length) return true;
+      if (Array.isArray(s.evidenceRefs) && s.evidenceRefs.length) return true;
+      if (s.type || s.title || s.summary) return true;
+    }
+    return false;
+  });
+  if (legacyUsable.length) {
+    score += Math.min(10, legacyUsable.length * 4);
+    refs.push(
+      ...legacyUsable.slice(0, 3).map((s) =>
+        typeof s === 'string' ? s : s.type || s.title || s.summary || String(s)
+      )
+    );
   }
 
   // Soft website presence is NOT a buying signal — only enrichment-flagged activity

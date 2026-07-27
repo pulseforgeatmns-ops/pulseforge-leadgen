@@ -10,11 +10,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
   - Missions are persistent collaborative workspaces; follow-ups refine in place
   - Append-only revision history; capabilities consume current revision; execution uses latest approved revision
   - Smart corrections + clarification; Mission Workspace as canonical conversation
-- Business Signals Capability proposed ([SPEC-031](docs/specs/SPEC-031_Business_Signals_Capability.md) / [ADR-018](docs/adr/ADR-018_Time_Matters.md))
-  - Evidence-backed, time-aware signals (growth / operational / marketing / organizational / buying)
-  - Lifecycle Detected → Verified → Active → Decays → Archived; confidence High/Medium/Low/Unknown
-  - Deepens SPEC-030 Signals stage; Ranking / Brief / Campaign / Proposal consume one Active set
-  - Observations only — never speculative purchase intent
+- Business Signals Capability ([SPEC-031](docs/specs/SPEC-031_Business_Signals_Capability.md) / [ADR-018](docs/adr/ADR-018_Time_Matters.md))
+  - `packages/capabilities/signals/` — collect → verify → lifecycle → decay; evidence-only observations
+  - Categories: growth / operational / marketing / organizational / buying
+  - Ranking Buying Signals factor + Opportunity Briefs prefer Active signals; Campaign stub attaches messaging posture
+  - Company Intelligence hook: `buildBusinessSignalsStage`; Knowledge writes separate evidence vs inference
+  - Tests: `npm run test:capabilities` (signals.test.js)
 - Company Intelligence Capability proposed ([SPEC-030](docs/specs/SPEC-030_Company_Intelligence_Capability.md) / [ADR-017](docs/adr/ADR-017_Intelligence_Before_Execution.md))
   - Expands unfinished SPEC-025 enrichment into evidence-only intelligence packages (company, decision makers, signals, personalization, Opportunity Brief, Knowledge handoff)
   - Never fabricate; verified → evidence, uncertain → inference

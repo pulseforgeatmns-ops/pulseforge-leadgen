@@ -130,6 +130,20 @@ function buildRankedOpportunity(partial = {}) {
       : [],
     source: partial.source || null,
     enriched: partial.enriched === true,
+    businessSignals: Array.isArray(partial.businessSignals)
+      ? partial.businessSignals
+      : [],
+    activeSignals: Array.isArray(partial.activeSignals)
+      ? partial.activeSignals
+      : [],
+    buyingSignals: Array.isArray(partial.buyingSignals)
+      ? partial.buyingSignals
+      : [],
+    operatorSignals: Array.isArray(partial.operatorSignals)
+      ? partial.operatorSignals
+      : [],
+    messagingPosture: partial.messagingPosture || null,
+    messagingDescription: partial.messagingDescription || null,
   };
 }
 
