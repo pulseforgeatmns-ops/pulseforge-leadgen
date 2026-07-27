@@ -68,6 +68,18 @@ function routeIntent(objective) {
  * @returns {string|null}
  */
 function matchMissionType(lower, original) {
+  // Campaign Review (SPEC-034) — before mail packages / campaign build
+  if (
+    /\bcampaign\s+review\b/.test(lower) ||
+    /\breview\s+(the\s+)?campaign\b/.test(lower) ||
+    /\breview\s+campaign\s+\d+\b/.test(lower) ||
+    /\bapprove\s+(the\s+)?campaign\b/.test(lower) ||
+    /\bcampaign\s+approval\b/.test(lower) ||
+    /\bready\s+to\s+print\b/.test(lower)
+  ) {
+    return MISSION_TYPES.CAMPAIGN_REVIEW;
+  }
+
   // Mail Package Generation (SPEC-033) — before campaign (objectives often cite Campaign N)
   if (
     /\b(generate|create|build|prepare|print)\s+(a\s+)?(mail|direct\s*mail)\s+packages?\b/.test(

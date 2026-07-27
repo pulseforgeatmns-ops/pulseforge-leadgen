@@ -239,7 +239,7 @@ interface Envelope {
 - Puppeteer individual + combined PDF binaries
 - Full OOXML `.docx` via library
 - Playbook-authored insert kits and return-address blocks
-- Command Deck print-queue UI
+- Command Deck print-queue UI / [SPEC-034](SPEC-034_Campaign_Review_Workspace.md) Campaign Review Workspace
 - Mission Memory integration (SPEC-032)
 - Execution Engine Direct Mail waiting tasks (SPEC-029)
 - Company Intelligence decision-maker enrichment (SPEC-030)

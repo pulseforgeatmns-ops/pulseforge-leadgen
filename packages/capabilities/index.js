@@ -32,6 +32,7 @@ const {
   createCampaignBuilderStub,
   createProposalGeneratorCapability,
   createMailPackageGeneratorCapability,
+  createCampaignReviewCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
 } = require('./builtins/stubs');
@@ -56,6 +57,7 @@ module.exports = {
   createCampaignBuilderStub,
   createProposalGeneratorCapability,
   createMailPackageGeneratorCapability,
+  createCampaignReviewCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
   discovery: require('./discovery'),
@@ -64,6 +66,7 @@ module.exports = {
   playbook: require('./playbook'),
   signals: require('./signals'),
   mail: require('./mail'),
+  campaignReview: require('./campaignReview'),
 };
 
 // Re-export production capabilities at top level for convenience
@@ -75,6 +78,8 @@ module.exports.createProposalGeneratorCapability =
   require('./proposal').createProposalGeneratorCapability;
 module.exports.createMailPackageGeneratorCapability =
   require('./mail').createMailPackageGeneratorCapability;
+module.exports.createCampaignReviewCapability =
+  require('./campaignReview').createCampaignReviewCapability;
 module.exports.buildBusinessSignalsForProspect =
   require('./signals').buildBusinessSignalsForProspect;
 module.exports.buildBusinessSignalsStage =

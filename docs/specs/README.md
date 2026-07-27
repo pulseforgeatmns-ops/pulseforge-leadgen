@@ -41,6 +41,7 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-031](SPEC-031_Business_Signals_Capability.md) | Business Signals Capability | Implemented (v1) | v1.2.2 |
 | [SPEC-032](SPEC-032_Mission_Memory.md) | Mission Memory | Proposed | v1.3.0 |
 | [SPEC-033](SPEC-033_Mail_Package_Generator.md) | Mail Package Generator | Implemented (v1 thin slice) | v1.3.0 |
+| [SPEC-034](SPEC-034_Campaign_Review_Workspace.md) | Campaign Review Workspace | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

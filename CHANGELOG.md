@@ -6,6 +6,16 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Campaign Review Workspace ([SPEC-034](docs/specs/SPEC-034_Campaign_Review_Workspace.md) / [ADR-021](docs/adr/ADR-021_Human_Approval_Before_Execution.md))
+  - `packages/capabilities/campaignReview/` — single operator checkpoint before execution
+  - Per-prospect + bulk approve / reject / skip / edit / regenerate; validation blocks approval
+  - Campaign Ready to Print only after gates pass; execution package (print / mail merge / labels)
+  - Revision history (compare / restore / duplicate); Mission Decision + Mission Revision shapes
+  - Mission type `campaign_review`; IntentRouter patterns (“Review Campaign 001”)
+  - Tests: `npm run test:capabilities` · `npm run test:mission`
+- Mail Package Generator ([SPEC-033](docs/specs/SPEC-033_Mail_Package_Generator.md))
+  - `packages/capabilities/mail/` — personalized letters, envelopes, insert checklists, CSV / HTML exports
+  - Ready-to-Print vs Needs Review validation; revision store; mission type `mail_package_generation`
 - Mission Memory proposed ([SPEC-032](docs/specs/SPEC-032_Mission_Memory.md) / [ADR-019](docs/adr/ADR-019_Missions_Are_Conversations.md))
   - Missions are persistent collaborative workspaces; follow-ups refine in place
   - Append-only revision history; capabilities consume current revision; execution uses latest approved revision
