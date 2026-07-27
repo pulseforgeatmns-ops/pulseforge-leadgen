@@ -22,6 +22,7 @@ const {
 const {
   GraphSyncEngine,
   InMemorySyncLedger,
+  PostgresSyncLedger,
   MemoryRelationalSource,
   PostgresRelationalSource,
   createGraphSyncEngine,
@@ -46,6 +47,7 @@ const {
  * @param {import('./repositories/GraphRepository').GraphRepository} [options.repository]
  * @param {boolean} [options.startIngestor=true]
  * @param {boolean} [options.withSync=true] - attach GraphSyncEngine + ledger
+ * @param {object} [options.ledger] - sync ledger (default InMemorySyncLedger)
  * @param {(m: object) => void} [options.onQueryMetrics] - SPEC-001C metrics hook
  */
 function createKnowledgeRuntime(options = {}) {
@@ -64,7 +66,9 @@ function createKnowledgeRuntime(options = {}) {
   const runtime = { knowledge, repository, bus, ingestor };
 
   if (options.withSync !== false) {
-    const { sync, ledger } = createGraphSyncEngine(runtime);
+    const { sync, ledger } = createGraphSyncEngine(runtime, {
+      ledger: options.ledger,
+    });
     runtime.sync = sync;
     runtime.ledger = ledger;
   }
@@ -82,6 +86,9 @@ const {
   DEFAULT_PATH_DEPTH,
   MAX_PATH_DEPTH,
 } = require('./query');
+
+const dualWrite = require('./dualWrite');
+const ontology = require('./ontology');
 
 module.exports = {
   createKnowledgeRuntime,
@@ -104,6 +111,7 @@ module.exports = {
   // SPEC-001B sync
   GraphSyncEngine,
   InMemorySyncLedger,
+  PostgresSyncLedger,
   MemoryRelationalSource,
   PostgresRelationalSource,
   createGraphSyncEngine,
@@ -128,4 +136,19 @@ module.exports = {
   MAX_RELATED_DEPTH,
   DEFAULT_PATH_DEPTH,
   MAX_PATH_DEPTH,
+  // SPEC-014
+  dualWrite,
+  KnowledgeWriter: dualWrite.KnowledgeWriter,
+  OPERATIONAL_EVENTS: dualWrite.OPERATIONAL_EVENTS,
+  FLIGHT_STAGES: dualWrite.FLIGHT_STAGES,
+  ensureDualWriteSchema: dualWrite.ensureDualWriteSchema,
+  // SPEC-017
+  ontology,
+  getOntologyRegistry: ontology.getOntologyRegistry,
+  registerDomainOntology: ontology.registerDomainOntology,
+  createDomainOntology: ontology.createDomainOntology,
+  CORE_NODE_CATEGORIES: ontology.CORE_NODE_CATEGORIES,
+  CORE_EDGE_TYPES: ontology.CORE_EDGE_TYPES,
+  buildProvenance: ontology.buildProvenance,
+  deterministicId: ontology.deterministicId,
 };

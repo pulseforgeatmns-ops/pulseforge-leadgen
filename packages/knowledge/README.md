@@ -2,11 +2,11 @@
 
 Storage-agnostic knowledge layer for Pulseforge intelligence features.
 
-**SPEC-001A** · v0.7.1 · **SPEC-001B** · v0.7.2 · **SPEC-001** · v0.7.3 · **SPEC-001C** · v0.7.4
+**SPEC-001A** · v0.7.1 · **SPEC-001B** · v0.7.2 · **SPEC-001** · v0.7.3 · **SPEC-001C** · v0.7.4 · **SPEC-014** dual-write
 
 ## Rule
 
-Nothing outside this package should know whether knowledge lives in memory, Postgres, Neo4j, Memgraph, or anything else. All graph operations go through `KnowledgeService`.
+Nothing outside this package should know whether knowledge lives in memory, Postgres, Neo4j, Memgraph, or anything else. All graph operations go through `KnowledgeService`. Production CRM/Scout writers use `dualWrite.KnowledgeWriter` (outbox → `GraphSyncEngine` → bus → KnowledgeService) — never the repository.
 
 ```text
 Scout / CRM / Max

@@ -72,6 +72,31 @@ router.post(
       }));
 
       const result = max.trackOperator(payload);
+
+      // SPEC-014 Flight Recorder — operator viewed / interacted
+      try {
+        const { safeRecordFlightStage, FLIGHT_STAGES } = require('../utils/knowledgeDualWrite');
+        for (const item of payload) {
+          const entityId = item.recommendationId || item.companyId || item.prospectId;
+          if (!entityId) continue;
+          const entityType = item.recommendationId
+            ? 'recommendation'
+            : item.companyId
+              ? 'company'
+              : 'prospect';
+          safeRecordFlightStage({
+            flightId: `flight:${clientId}:${entityType}:${entityId}`,
+            tenantId: String(clientId),
+            entityId: String(entityId),
+            entityType,
+            stage: FLIGHT_STAGES.VIEWED_BY_OPERATOR,
+            metadata: { interactionType: item.type || null },
+          });
+        }
+      } catch {
+        // never block operator path
+      }
+
       res.set('Cache-Control', 'no-store');
       return res.status(201).json({
         recorded: result.events.length,

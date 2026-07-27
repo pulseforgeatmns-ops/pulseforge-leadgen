@@ -2,6 +2,7 @@
 
 const { GraphSyncEngine } = require('./GraphSyncEngine');
 const { InMemorySyncLedger } = require('./InMemorySyncLedger');
+const { PostgresSyncLedger } = require('./PostgresSyncLedger');
 const { MemoryRelationalSource } = require('./RelationalSource');
 const { PostgresRelationalSource } = require('./adapters/PostgresRelationalSource');
 const { SYNC_EVENTS, SYNC_ENTITY_KINDS } = require('./syncEvents');
@@ -41,6 +42,7 @@ function createGraphSyncEngine(runtime, options = {}) {
 module.exports = {
   GraphSyncEngine,
   InMemorySyncLedger,
+  PostgresSyncLedger,
   MemoryRelationalSource,
   PostgresRelationalSource,
   createGraphSyncEngine,

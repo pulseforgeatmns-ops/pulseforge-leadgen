@@ -186,6 +186,7 @@ app.use('/', require('./routes/intelligence'));
 app.use('/', require('./routes/liveIntelligence'));
 app.use('/', require('./routes/operatorIntelligence'));
 app.use('/', require('./routes/outcomeIntelligence'));
+app.use('/', require('./routes/knowledgeAdmin'));
 app.use('/', require('./routes/workspace'));
 app.use('/', require('./routes/maxChat'));
 app.use('/', require('./routes/maxWorkspace'));

@@ -32,6 +32,11 @@ const { SCOUT_SKIP_REASONS, ensureScoutSkipLogTable, logScoutSkip } = require('.
 const { reportAgentRun } = require('./utils/agentObservability');
 const { setSetterVisibility } = require('./utils/setterVisibility');
 const { safeIngestScoutLifecycleSignal } = require('./utils/maxLifecycleSignals');
+const {
+  safeWriteProspect,
+  safeWriteCompany,
+  OPERATIONAL_EVENTS,
+} = require('./utils/knowledgeDualWrite');
 const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('./utils/businessNameShort');
 const { searchSerpApi } = require('./lib/serpapi');
 const { sourceLinkedInProspects } = require('./utils/linkedinSerpSource');
@@ -1803,7 +1808,22 @@ async function findOrCreateCompany({ name, domain, lead }) {
       CONFIG.clientId,
     ]
   );
-  if (inserted.rows.length) return inserted.rows[0].id;
+  if (inserted.rows.length) {
+    const companyId = inserted.rows[0].id;
+    safeWriteCompany(
+      {
+        id: companyId,
+        client_id: CONFIG.clientId,
+        name,
+        industry: CONFIG.industry || null,
+        location: lead.address || CONFIG.location || null,
+        website: lead.url || null,
+        icp_score: lead.score || 0,
+      },
+      { source: 'scout', operationalEventType: OPERATIONAL_EVENTS.COMPANY_DISCOVERED }
+    );
+    return companyId;
+  }
 
   const fallback = await pool.query(
     `SELECT id
@@ -2258,6 +2278,20 @@ async function saveLinkedInProspect(record, { dryRun = false } = {}) {
       sourceRecordId: `prospect:${inserted.rows[0].id}`,
       metadata: { discovery_method: 'linkedin_serpapi', vertical: CONFIG.vertical },
     });
+    // SPEC-014: Knowledge dual-write (fan-out; does not replace Max signals)
+    safeWriteProspect(
+      {
+        id: inserted.rows[0].id,
+        client_id: CONFIG.clientId,
+        company_id: companyId,
+        first_name: record.first_name,
+        last_name: record.last_name,
+        job_title: record.job_title,
+        source: 'scout',
+        vertical: CONFIG.vertical,
+      },
+      { source: 'scout', operationalEventType: OPERATIONAL_EVENTS.CONTACT_DISCOVERED }
+    );
     return { action: 'written', match: null, prospectId: inserted.rows[0].id };
   }
   const raced = await findExistingLinkedInProspect(record);
@@ -2539,6 +2573,23 @@ async function saveToDatabase(leads, {
         sourceRecordId: `prospect:${prospectId}`,
         metadata: { discovery_method: discoveryMethod, vertical: CONFIG.vertical },
       });
+
+      // SPEC-014: Knowledge dual-write (fan-out alongside Max orchestration signals)
+      safeWriteProspect(
+        {
+          id: prospectId,
+          client_id: CONFIG.clientId,
+          company_id: companyId,
+          first_name: firstName,
+          last_name: lastName,
+          email,
+          phone,
+          source: 'scout',
+          icp_score: lead.score,
+          vertical: CONFIG.vertical,
+        },
+        { source: 'scout', operationalEventType: OPERATIONAL_EVENTS.CONTACT_DISCOVERED }
+      );
 
       // Seed icp_score_history with Scout's initial score so dynamic ICP
       // recalculation has a baseline to diff future engagement changes against.

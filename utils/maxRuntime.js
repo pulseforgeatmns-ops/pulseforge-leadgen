@@ -2,12 +2,10 @@
 
 /**
  * Shared Max runtime for HTTP surfaces (Command Deck + Max Workspace).
- * Library-only wiring — starts without knowledge dual-write.
- * Singleton keeps in-memory snapshot/policy/workspace session state stable
- * across requests within a process (empty until Scout/CRM sync is live).
+ * SPEC-014: boots persistent Knowledge + dual-write when enabled.
  */
 
-const { createMaxReasoningRuntime } = require('../packages/max');
+const { getKnowledgeBoot } = require('./knowledgeRuntime');
 
 let runtimePromise = null;
 
@@ -15,22 +13,20 @@ let runtimePromise = null;
  * @param {object} [options]
  * @param {boolean} [options.reset=false] - force a fresh runtime (tests)
  * @param {boolean} [options.disableLlm] - force deterministic presentation
+ * @param {boolean} [options.inMemory] - force in-memory knowledge (tests)
  */
 function getMaxRuntime(options = {}) {
   if (options.reset) {
     runtimePromise = null;
   }
   if (!runtimePromise) {
-    runtimePromise = Promise.resolve(
-      createMaxReasoningRuntime({
-        withSync: false,
-        startIngestor: false,
-        tenantPolicies: options.tenantPolicies,
-        // Workspace PresentationEngine attaches Anthropic at request time when keyed;
-        // disableLlm forces deterministic prose for tests / locked environments.
-        disableLlm: options.disableLlm === true,
-      })
-    );
+    runtimePromise = getKnowledgeBoot({
+      reset: options.reset,
+      disableLlm: options.disableLlm,
+      inMemory: options.inMemory,
+      tenantPolicies: options.tenantPolicies,
+      pool: options.pool,
+    }).then((boot) => boot.max);
   }
   return runtimePromise;
 }

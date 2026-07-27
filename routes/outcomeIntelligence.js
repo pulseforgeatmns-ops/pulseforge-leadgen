@@ -62,6 +62,53 @@ router.post(
           tenantId: String(clientId),
         })
       );
+
+      // SPEC-014 Flight Recorder + Knowledge evidence for outcomes
+      try {
+        const {
+          safeRecordFlightStage,
+          safeWriteOperational,
+          FLIGHT_STAGES,
+          OPERATIONAL_EVENTS,
+        } = require('../utils/knowledgeDualWrite');
+        for (const item of recorded) {
+          const recId = item.recommendationId || item.id;
+          if (!recId) continue;
+          const outcomeType =
+            item.outcome === 'successful'
+              ? OPERATIONAL_EVENTS.OUTCOME_SUCCESS
+              : item.outcome === 'unsuccessful'
+                ? OPERATIONAL_EVENTS.OUTCOME_FAILURE
+                : OPERATIONAL_EVENTS.OUTCOME_INCONCLUSIVE;
+          safeWriteOperational({
+            id: `outcome:${clientId}:${recId}`,
+            tenantId: String(clientId),
+            entityId: String(recId),
+            entityType: 'recommendation',
+            eventType: outcomeType,
+            source: 'outcome_intelligence',
+            payload: {
+              recommendationId: recId,
+              outcome: item.outcome,
+              lifecycle: item.lifecycle,
+            },
+            evidence: {
+              summary: `Outcome ${item.outcome || item.lifecycle} for ${recId}`,
+            },
+          });
+          safeRecordFlightStage({
+            flightId: `flight:${clientId}:recommendation:${recId}`,
+            tenantId: String(clientId),
+            entityId: String(recId),
+            entityType: 'recommendation',
+            stage: FLIGHT_STAGES.OUTCOME_RECORDED,
+            metadata: { outcome: item.outcome || null, lifecycle: item.lifecycle },
+          });
+        }
+      } catch {
+        // never block outcome path
+      }
+
       res.set('Cache-Control', 'no-store');
       return res.status(201).json({
         recorded: recorded.length,
