@@ -33,6 +33,7 @@ const {
   createProposalGeneratorCapability,
   createMailPackageGeneratorCapability,
   createCampaignReviewCapability,
+  createDirectMailExecutionCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
 } = require('./builtins/stubs');
@@ -58,6 +59,7 @@ module.exports = {
   createProposalGeneratorCapability,
   createMailPackageGeneratorCapability,
   createCampaignReviewCapability,
+  createDirectMailExecutionCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
   discovery: require('./discovery'),
@@ -67,6 +69,7 @@ module.exports = {
   signals: require('./signals'),
   mail: require('./mail'),
   campaignReview: require('./campaignReview'),
+  directMailExecution: require('./directMailExecution'),
 };
 
 // Re-export production capabilities at top level for convenience
@@ -80,6 +83,8 @@ module.exports.createMailPackageGeneratorCapability =
   require('./mail').createMailPackageGeneratorCapability;
 module.exports.createCampaignReviewCapability =
   require('./campaignReview').createCampaignReviewCapability;
+module.exports.createDirectMailExecutionCapability =
+  require('./directMailExecution').createDirectMailExecutionCapability;
 module.exports.buildBusinessSignalsForProspect =
   require('./signals').buildBusinessSignalsForProspect;
 module.exports.buildBusinessSignalsStage =

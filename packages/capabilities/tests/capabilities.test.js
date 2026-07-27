@@ -23,12 +23,13 @@ describe('SPEC-023 CapabilityRegistry', () => {
   it('registers and lists built-ins', () => {
     const registry = testRegistry();
     const list = registry.list();
-    assert.equal(list.length, 8);
+    assert.equal(list.length, 9);
     assert.ok(registry.get(BUILTIN_IDS.PROSPECT_DISCOVERY));
     assert.ok(registry.get(BUILTIN_IDS.CAMPAIGN_BUILDER));
     assert.ok(registry.get(BUILTIN_IDS.PROPOSAL_GENERATOR));
     assert.ok(registry.get(BUILTIN_IDS.MAIL_PACKAGE_GENERATOR));
     assert.ok(registry.get(BUILTIN_IDS.CAMPAIGN_REVIEW));
+    assert.ok(registry.get(BUILTIN_IDS.DIRECT_MAIL_EXECUTION));
   });
 
   it('discovers by outcome tags', () => {
@@ -1300,6 +1301,296 @@ describe('SPEC-034 Campaign Review Workspace', () => {
       out.result.outputs.exportArtifacts.some(
         (e) => e.type === 'print_selected' && e.printableHtml
       )
+    );
+  });
+});
+
+describe('SPEC-035 Direct Mail Execution', () => {
+  const dmx = require('../directMailExecution');
+
+  const readyPkg = {
+    id: 'pkg_p1',
+    prospectId: 'p1',
+    status: 'ready_to_print',
+    letter: {
+      recipientName: 'Jordan Hale',
+      companyName: 'Bedford Law',
+      body: 'Dear Jordan Hale,\n\nBedford Law looks like a strong fit.\n',
+    },
+    envelope: {
+      recipientName: 'Jordan Hale',
+      companyName: 'Bedford Law',
+      mailingAddress: '5 Commerce Park N, Bedford, NH 03110',
+      returnAddress: 'Anchor Cleaning, Manchester NH',
+    },
+    insertChecklist: [
+      { id: 'letter', label: 'Letter', required: true, included: true },
+      { id: 'business_card', label: 'Business Card', required: true, included: true },
+    ],
+  };
+
+  const approvedInputs = {
+    campaignId: 'camp_exec_001',
+    campaign: {
+      id: 'camp_exec_001',
+      name: 'Campaign 001',
+      status: 'ready_to_print',
+      revision: 2,
+      prospects: [
+        {
+          id: 'p1',
+          companyName: 'Bedford Law',
+          contactName: 'Jordan Hale',
+          address: '5 Commerce Park N, Bedford, NH 03110',
+        },
+      ],
+    },
+    campaignApproved: true,
+    approvedRevision: 2,
+    campaignStatus: 'ready_to_print',
+    packages: [readyPkg],
+    mailBatch: { id: 'mail_batch_1', packages: [readyPkg] },
+    executionPackage: {
+      id: 'ep_1',
+      printPackage: { html: '<html>Bedford Law</html>' },
+      mailMerge: { csv: 'name,company\nJordan Hale,Bedford Law' },
+      addressLabels: { csv: 'Bedford Law,5 Commerce Park N' },
+    },
+  };
+
+  it('rejects execution without approved revision (ADR-021/022)', async () => {
+    const registry = testRegistry();
+    const runner = createCapabilityRunner({ registry });
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.DIRECT_MAIL_EXECUTION,
+      context: {
+        missionId: 'm_dmx_block',
+        tenantId: '10',
+        clientId: 10,
+        inputs: {
+          packages: [readyPkg],
+          mailBatch: { id: 'm', packages: [readyPkg] },
+          campaignApproved: false,
+        },
+      },
+    });
+    assert.equal(out.result.status, CAPABILITY_RESULT_STATUS.FAILED);
+    assert.ok(
+      out.result.errors.some((e) => e.code === 'approved_revision_required')
+    );
+  });
+
+  it('enforces deterministic transitions and locks on Printing', async () => {
+    const store = dmx.createInMemoryDirectMailExecutionStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      directMailExecution: { directMailExecutionStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.DIRECT_MAIL_EXECUTION,
+      context: {
+        missionId: 'm_dmx_lock',
+        tenantId: '10',
+        clientId: 10,
+        inputs: {
+          ...approvedInputs,
+          executionActions: [
+            { type: 'start_execution', operator: 'jacob' },
+            { type: 'start_print_session', operator: 'jacob' },
+          ],
+        },
+      },
+    });
+
+    assert.equal(out.result.status, CAPABILITY_RESULT_STATUS.COMPLETED);
+    assert.equal(
+      out.result.outputs.summary.status,
+      dmx.EXECUTION_STATUS.PRINTING
+    );
+    assert.equal(out.result.outputs.lock.locked, true);
+    assert.equal(out.result.outputs.lock.campaignRevision, 2);
+    assert.ok(out.result.outputs.printSessions.length >= 1);
+    assert.ok(
+      out.result.outputs.auditLog.some(
+        (a) =>
+          a.previousState === dmx.EXECUTION_STATUS.READY_TO_PRINT &&
+          a.newState === dmx.EXECUTION_STATUS.PRINTING
+      )
+    );
+
+    // Illegal transition blocked
+    assert.equal(
+      dmx.canTransition(dmx.EXECUTION_STATUS.DRAFT, dmx.EXECUTION_STATUS.MAILED),
+      false
+    );
+    assert.equal(
+      dmx.canTransition(
+        dmx.EXECUTION_STATUS.READY_TO_PRINT,
+        dmx.EXECUTION_STATUS.PRINTING
+      ),
+      true
+    );
+
+    // Locked mutation rejected
+    const locked = out.result.outputs.execution;
+    const gate = dmx.validateArtifactMutation(locked, {
+      replaceRevision: true,
+      generateContent: true,
+    });
+    assert.equal(gate.ok, false);
+    assert.ok(gate.errors.includes('campaign_revision_locked'));
+    assert.ok(gate.errors.includes('execution_must_not_generate_content'));
+  });
+
+  it('tracks assembly, mailing, responses, metrics, and immutable audit', async () => {
+    const store = dmx.createInMemoryDirectMailExecutionStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      directMailExecution: { directMailExecutionStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.DIRECT_MAIL_EXECUTION,
+      context: {
+        missionId: 'm_dmx_flow',
+        tenantId: '10',
+        clientId: 10,
+        inputs: {
+          ...approvedInputs,
+          campaignId: 'camp_exec_flow',
+          executionActions: [
+            { type: 'start_execution', operator: 'jacob' },
+            { type: 'start_print_session', operator: 'jacob' },
+            { type: 'complete_print_session', operator: 'jacob' },
+            {
+              type: 'assembly_complete',
+              prospectId: 'p1',
+              operator: 'jacob',
+            },
+            {
+              type: 'mark_all_mailed',
+              operator: 'jacob',
+              uspsBatchId: 'USPS-991',
+              notes: 'Dropped at post office',
+              date: '2026-07-27T15:00:00.000Z',
+            },
+            {
+              type: 'set_response',
+              prospectId: 'p1',
+              responseStatus: 'walkthrough_scheduled',
+              operator: 'jacob',
+            },
+            { type: 'complete_campaign', operator: 'jacob' },
+          ],
+        },
+      },
+    });
+
+    assert.equal(
+      out.result.outputs.summary.status,
+      dmx.EXECUTION_STATUS.COMPLETED
+    );
+    const metrics = out.result.outputs.metrics;
+    assert.equal(metrics.mailed, 1);
+    assert.equal(metrics.assembled, 1);
+    assert.equal(metrics.responses, 1);
+    assert.equal(metrics.meetings, 1);
+    assert.equal(metrics.responseRate, 1);
+
+    const p1 = out.result.outputs.prospects.find((p) => p.prospectId === 'p1');
+    assert.equal(p1.mailed, true);
+    assert.equal(p1.uspsBatchId, 'USPS-991');
+    assert.equal(
+      p1.responseStatus,
+      dmx.RESPONSE_STATUS.WALKTHROUGH_SCHEDULED
+    );
+    assert.equal(p1.assemblyComplete, true);
+
+    // Immutable audit: entries frozen / append-only history present
+    const audit = out.result.outputs.auditLog;
+    assert.ok(audit.length >= 4);
+    const first = audit[0];
+    assert.ok(first.previousState != null || first.newState);
+    assert.ok(first.timestamp);
+    assert.ok(first.operator);
+
+    // Mission timeline / events updated
+    assert.ok(out.result.outputs.missionEvents.length >= 1);
+    assert.ok(out.result.outputs.timeline.length >= 1);
+    assert.ok(
+      out.result.outputs.timeline.some(
+        (t) => t.kind === 'mission_timeline' && t.stage === 'direct_mail_execution'
+      )
+    );
+    assert.ok(
+      out.result.artifacts.some((a) => a.type === 'direct_mail_execution')
+    );
+  });
+
+  it('supports assembly skip / reopen and mark selected mailed', async () => {
+    const pkg2 = {
+      ...readyPkg,
+      id: 'pkg_p2',
+      prospectId: 'p2',
+      letter: { ...readyPkg.letter, companyName: 'Thin Co', recipientName: 'Sam Lee' },
+      envelope: {
+        ...readyPkg.envelope,
+        companyName: 'Thin Co',
+        recipientName: 'Sam Lee',
+      },
+    };
+    const store = dmx.createInMemoryDirectMailExecutionStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      directMailExecution: { directMailExecutionStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.DIRECT_MAIL_EXECUTION,
+      context: {
+        missionId: 'm_dmx_skip',
+        tenantId: '10',
+        clientId: 10,
+        inputs: {
+          ...approvedInputs,
+          campaignId: 'camp_skip',
+          packages: [readyPkg, pkg2],
+          mailBatch: { id: 'mail_skip', packages: [readyPkg, pkg2] },
+          campaign: {
+            ...approvedInputs.campaign,
+            id: 'camp_skip',
+            prospects: [
+              ...approvedInputs.campaign.prospects,
+              { id: 'p2', companyName: 'Thin Co', contactName: 'Sam Lee' },
+            ],
+          },
+          executionActions: [
+            { type: 'start_print_session', operator: 'jacob' },
+            { type: 'complete_print_session', operator: 'jacob' },
+            { type: 'assembly_skip', prospectId: 'p2', operator: 'jacob' },
+            { type: 'assembly_complete', prospectId: 'p1', operator: 'jacob' },
+            {
+              type: 'mark_selected_mailed',
+              prospectIds: ['p1'],
+              operator: 'jacob',
+            },
+          ],
+        },
+      },
+    });
+
+    const p2 = out.result.outputs.prospects.find((p) => p.prospectId === 'p2');
+    const p1 = out.result.outputs.prospects.find((p) => p.prospectId === 'p1');
+    assert.equal(p2.skipped, true);
+    assert.equal(p1.mailed, true);
+    assert.equal(out.result.outputs.metrics.mailed, 1);
+    assert.equal(
+      out.result.outputs.summary.status,
+      dmx.EXECUTION_STATUS.MAILED
     );
   });
 });

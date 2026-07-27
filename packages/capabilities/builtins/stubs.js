@@ -433,6 +433,12 @@ function registerBuiltinCapabilities(registry, options = {}) {
   registry.register(
     createCampaignReviewCapability(options.campaignReview || {})
   );
+  const {
+    createDirectMailExecutionCapability,
+  } = require('../directMailExecution');
+  registry.register(
+    createDirectMailExecutionCapability(options.directMailExecution || {})
+  );
   return registry;
 }
 
@@ -460,6 +466,8 @@ module.exports = {
     .createMailPackageGeneratorCapability,
   createCampaignReviewCapability: require('../campaignReview')
     .createCampaignReviewCapability,
+  createDirectMailExecutionCapability: require('../directMailExecution')
+    .createDirectMailExecutionCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
   resolveDiscoveryDeps,

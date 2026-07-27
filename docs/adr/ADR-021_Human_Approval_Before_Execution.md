@@ -41,6 +41,7 @@ Without a hard gate between **artifact generation** and **execution**, operators
 
 - [x] File [SPEC-034](../specs/SPEC-034_Campaign_Review_Workspace.md) thin slice
 - [ ] Command Deck Campaign Review UI
-- [ ] Wire Execution Engine ([SPEC-029](../specs/SPEC-029_Execution_Engine.md)) to latest approved revision only
+- [x] Direct Mail Execution consumes latest approved revision ([SPEC-035](../specs/SPEC-035_Direct_Mail_Execution.md) / [ADR-022](ADR-022_Execution_Consumes_Approved_Artifacts.md))
+- [ ] Wire multi-channel Execution Engine ([SPEC-029](../specs/SPEC-029_Execution_Engine.md)) to latest approved revision only
 - [ ] Mission Memory ([SPEC-032](../specs/SPEC-032_Mission_Memory.md)) pin of decisions / revisions
 - Update CURRENT_STATE when Campaign Review ships

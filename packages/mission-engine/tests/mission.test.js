@@ -74,6 +74,12 @@ describe('SPEC-022 IntentRouter', () => {
     assert.equal(d.kind, ROUTE_KINDS.MISSION);
     assert.equal(d.missionType, MISSION_TYPES.CAMPAIGN_REVIEW);
   });
+
+  it('routes direct mail execution to mission (SPEC-035)', () => {
+    const d = routeIntent('Execute direct mail for Campaign 001');
+    assert.equal(d.kind, ROUTE_KINDS.MISSION);
+    assert.equal(d.missionType, MISSION_TYPES.DIRECT_MAIL_EXECUTION);
+  });
 });
 
 describe('SPEC-022 MissionPlanner + Executor', () => {
@@ -231,6 +237,23 @@ describe('SPEC-022 MissionPlanner + Executor', () => {
     assert.deepEqual(
       draft.plan.steps.map((s) => s.capabilityId),
       [BUILTIN_IDS.CAMPAIGN_REVIEW]
+    );
+    assert.ok(draft.clientPlaybook);
+    assert.equal(draft.clientPlaybook.id, 'pb_anchor_cleaning');
+  });
+
+  it('plans Direct Mail Execution (SPEC-035)', () => {
+    const engine = testEngine();
+    const draft = engine.planner.plan({
+      objective: 'Execute direct mail for Campaign 001',
+      tenantId: '10',
+      clientId: 10,
+    });
+    assert.equal(draft.type, MISSION_TYPES.DIRECT_MAIL_EXECUTION);
+    assert.equal(draft.title, 'Direct Mail Execution — Campaign 001');
+    assert.deepEqual(
+      draft.plan.steps.map((s) => s.capabilityId),
+      [BUILTIN_IDS.DIRECT_MAIL_EXECUTION]
     );
     assert.ok(draft.clientPlaybook);
     assert.equal(draft.clientPlaybook.id, 'pb_anchor_cleaning');

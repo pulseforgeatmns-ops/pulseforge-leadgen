@@ -65,6 +65,7 @@ const TYPE_CAPABILITY_CHAINS = Object.freeze({
   [MISSION_TYPES.PROPOSAL_GENERATION]: [BUILTIN_IDS.PROPOSAL_GENERATOR],
   [MISSION_TYPES.MAIL_PACKAGE_GENERATION]: [BUILTIN_IDS.MAIL_PACKAGE_GENERATOR],
   [MISSION_TYPES.CAMPAIGN_REVIEW]: [BUILTIN_IDS.CAMPAIGN_REVIEW],
+  [MISSION_TYPES.DIRECT_MAIL_EXECUTION]: [BUILTIN_IDS.DIRECT_MAIL_EXECUTION],
 });
 
 class MissionPlanner {
@@ -159,7 +160,8 @@ class MissionPlanner {
       chain.includes(BUILTIN_IDS.CAMPAIGN_BUILDER) ||
       chain.includes(BUILTIN_IDS.PROPOSAL_GENERATOR) ||
       chain.includes(BUILTIN_IDS.MAIL_PACKAGE_GENERATOR) ||
-      chain.includes(BUILTIN_IDS.CAMPAIGN_REVIEW);
+      chain.includes(BUILTIN_IDS.CAMPAIGN_REVIEW) ||
+      chain.includes(BUILTIN_IDS.DIRECT_MAIL_EXECUTION);
     if (needsPlaybook) {
       playbookSelection = this._playbookSelector.select({
         objective: objectiveText,
@@ -300,6 +302,11 @@ class MissionPlanner {
  * @param {string} type
  */
 function deriveTitle(objective, type) {
+  if (type === MISSION_TYPES.DIRECT_MAIL_EXECUTION) {
+    const campaign = /campaign\s+(\d+|[\w-]+)/i.exec(objective);
+    if (campaign) return `Direct Mail Execution — Campaign ${campaign[1]}`;
+    return 'Direct Mail Execution';
+  }
   if (type === MISSION_TYPES.CAMPAIGN_REVIEW) {
     const campaign = /campaign\s+(\d+|[\w-]+)/i.exec(objective);
     if (campaign) return `Campaign Review — Campaign ${campaign[1]}`;

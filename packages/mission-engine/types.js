@@ -28,6 +28,7 @@ const MISSION_TYPES = Object.freeze({
   PROPOSAL_GENERATION: 'proposal_generation',
   MAIL_PACKAGE_GENERATION: 'mail_package_generation',
   CAMPAIGN_REVIEW: 'campaign_review',
+  DIRECT_MAIL_EXECUTION: 'direct_mail_execution',
 });
 
 const AUDIT_KINDS = Object.freeze({
@@ -66,6 +67,7 @@ const STAGE_LABELS = Object.freeze({
   proposal_generator: 'Generating Proposal',
   mail_package_generator: 'Generating Mail Packages',
   campaign_review: 'Campaign Review',
+  direct_mail_execution: 'Direct Mail Execution',
   review_required: 'Ready for Review',
 });
 

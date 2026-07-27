@@ -21,6 +21,8 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-017](docs/adr/ADR-017_Intelligence_Before_Execution.md) | Intelligence Before Execution | Accepted | Company Intelligence packages before Ranking/Campaign/Proposal/Execution; never fabricate |
 | [ADR-018](docs/adr/ADR-018_Time_Matters.md) | Time Matters | Accepted | Business intelligence is time-aware; recent verified signals increase relevance; expired signals decay |
 | [ADR-019](docs/adr/ADR-019_Missions_Are_Conversations.md) | Missions Are Conversations | Accepted | A Mission is a persistent collaborative workspace; follow-ups refine in place; capabilities consume the current revision; execution uses the latest approved revision |
+| [ADR-021](docs/adr/ADR-021_Human_Approval_Before_Execution.md) | Human Approval Before Execution | Accepted | Generation produces artifacts; review validates; approval authorizes; Execution consumes only the latest approved campaign revision |
+| [ADR-022](docs/adr/ADR-022_Execution_Consumes_Approved_Artifacts.md) | Execution Consumes Approved Artifacts | Accepted | Execution never generates content; once Printing begins, campaign artifacts are immutable; changes require a new approved revision |
 
 ## How to add a decision
 
