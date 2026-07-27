@@ -25,6 +25,7 @@
 
     <section id="cdMorningBrief" class="cd-section cd-morning" aria-labelledby="cdMorningHeading" data-stage="morning" hidden></section>
     <section id="cdHighestLeverage" class="cd-section cd-hla" aria-labelledby="cdHlaHeading" data-stage="hla" hidden></section>
+    <section id="cdOperations" class="cd-section cd-operations" aria-labelledby="cdOpsHeading" data-stage="operations" hidden></section>
     <section id="cdSecondary" class="cd-section cd-secondary" aria-label="Supporting intelligence" data-stage="cards" hidden></section>
     <section id="cdPriorityQueue" class="cd-section cd-queue" aria-labelledby="cdQueueHeading" data-stage="queue" hidden></section>
   </main>
@@ -97,6 +98,30 @@
         >
         <button type="submit" class="mx-ask-submit" id="mxAskSend">Ask</button>
       </form>
+    </div>
+  </div>
+
+  <!-- Mission Workspace (SPEC-022) -->
+  <div
+    id="missionWorkspace"
+    class="mx-workspace msn-workspace"
+    hidden
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="msnTitle"
+  >
+    <div class="mx-backdrop" data-msn-close></div>
+    <div class="mx-panel">
+      <header class="mx-header">
+        <div>
+          <p class="mx-eyebrow">Mission Workspace</p>
+          <h2 id="msnTitle" class="mx-title">Mission</h2>
+          <p id="msnStatus" class="mx-context-label"></p>
+        </div>
+        <button type="button" class="mx-close" data-msn-close aria-label="Close mission">Close</button>
+      </header>
+      <div id="msnBody" class="msn-body"></div>
+      <div id="msnActions" class="msn-actions"></div>
     </div>
   </div>
 

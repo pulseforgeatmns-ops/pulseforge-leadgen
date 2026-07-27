@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Approved |
+| **Status** | Implemented (discovery + ranking live; enrichment/knowledge/campaign stubs) |
 | **Target Version** | v1.2.0 |
 | **Priority** | Critical |
 | **Owner** | Pulseforge engineering |
@@ -346,15 +346,15 @@ Reuse / extend SPEC-022 `MissionAuditEvent` where practical; do not invent a par
 
 ## Acceptance Criteria
 
-- [ ] Registry operational (register, discover, version, validate)
-- [ ] All shipped capabilities implement the contract
-- [ ] MissionExecutor executes only through the registry / runner
-- [ ] No agent-specific branching in planner or executor
-- [ ] Progress visible in Mission Workspace (capability events)
-- [ ] Results persisted (invocation + result envelopes)
-- [ ] Replay supported (re-run plan from durable context / invocations)
-- [ ] Capability tests independent of missions
-- [ ] Built-ins ship: Prospect Discovery, Company Enrichment, Knowledge Update, Opportunity Ranking, Campaign Builder
+- [x] Registry operational (register, discover, version, validate)
+- [x] All shipped capabilities implement the contract (stub adapters)
+- [x] MissionExecutor executes only through the registry / runner
+- [x] No agent-specific branching in planner or executor
+- [x] Progress visible in Mission Workspace (capability-backed stages)
+- [x] Results persisted (mission deliverables + audit; invocation envelopes via audit)
+- [x] Replay supported (re-run via review `run_again`)
+- [x] Capability tests independent of missions
+- [x] Built-ins ship: Prospect Discovery (SPEC-024 live), Company Enrichment (stub), Knowledge Update (stub), Opportunity Ranking (SPEC-026 live), Campaign Builder (stub)
 
 ## Future Work
 

@@ -43,9 +43,11 @@ We need a control plane where operators express **intent** and the system select
 
 ### Follow-ups
 
-- Implement SPEC-022 package + migrations behind `MISSION_ENGINE` flag
-- Implement SPEC-023 registry + runner + five built-in capabilities (ADR-011)
-- Wire Campaign Creation path for Anchor as first success metric
-- Extend `CommandDeckModel` with Operations / mission queue; Mission Workspace UI
-- Remove or redirect shell Operations nav to Command Deck
-- Update CURRENT_STATE when implementation starts
+- [x] Implement SPEC-022 package + migrations (`packages/mission-engine`, `MISSION_ENGINE` flag default on; disable with `=0`)
+- [x] Implement SPEC-023 registry + runner + five built-in stub capabilities (ADR-011)
+- [x] Wire IntentRouter into Max Ask / workspace / legacy `/api/max/ask` (Mission-first routing gate)
+- [x] Extend `CommandDeckModel` with Operations / mission queue; Mission Workspace UI
+- [x] Remove or redirect shell Operations nav to Command Deck `#operations`
+- [ ] Replace stub adapters with live Scout / enrichment / knowledge / ranking / campaign backings
+- [ ] Wire Campaign Creation path for Anchor against durable campaigns table
+- Update CURRENT_STATE when live adapters ship

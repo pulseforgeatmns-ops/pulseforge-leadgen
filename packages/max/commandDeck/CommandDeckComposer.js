@@ -14,6 +14,7 @@ const {
 const { composeWatchAlerts } = require('./sections/WatchAlerts');
 const { composeMarketTrends } = require('./sections/MarketTrends');
 const { composePriorityQueue } = require('./sections/PriorityQueue');
+const { composeOperations } = require('./sections/Operations');
 
 /**
  * Command Deck Composer — presenter for the intelligence stack.
@@ -65,6 +66,7 @@ class CommandDeckComposer {
    * @param {number} [input.priorityLimit]
    * @param {number} [input.watchAlertLimit]
    * @param {number} [input.marketTrendLimit]
+   * @param {object[]} [input.missions] - mission cards for Operations (SPEC-022)
    * @param {string} [input.operator]
    * @returns {Promise<object>} CommandDeckModel
    */
@@ -133,6 +135,12 @@ class CommandDeckComposer {
         generatedAt,
       });
 
+    const { operations } = composeOperations({
+      missions: input.missions || [],
+      briefingId,
+      generatedAt,
+    });
+
     const { watchAlerts } = composeWatchAlerts({
       briefing,
       briefingId,
@@ -191,6 +199,7 @@ class CommandDeckComposer {
     const model = {
       morningBrief,
       highestLeverageAction,
+      operations,
       watchAlerts,
       marketTrends,
       priorityQueue,
@@ -209,6 +218,7 @@ class CommandDeckComposer {
         performanceTargetMs: COMMAND_DECK_PERFORMANCE_TARGET_MS,
         cardCount: cards.length,
         policyDecisionCount: policyByRecId.size,
+        missionCount: (operations.missions || []).length,
       },
     };
 

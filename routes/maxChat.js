@@ -3,6 +3,8 @@ const Anthropic = require('@anthropic-ai/sdk');
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { getRequestClientId } = require('../utils/clientContext');
+const { routeIntent, ROUTE_KINDS } = require('../packages/mission-engine');
+const { getMissionEngine, missionEnabled } = require('../utils/missionRuntime');
 
 const router = express.Router();
 const requireDashboardAuth = [sessionAuth, requireRole('admin', 'manager')];
@@ -146,9 +148,43 @@ router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
   try {
     const question = String(req.body?.question || '').trim().slice(0, 2000);
     if (!question) return res.status(400).json({ error: 'Question is required' });
-    if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not configured' });
 
     const clientId = getRequestClientId(req);
+
+    // SPEC-022: Mission Engine is the first routing layer for business objectives.
+    if (missionEnabled()) {
+      const route = routeIntent(question);
+      if (route.kind === ROUTE_KINDS.MISSION) {
+        const engine = await getMissionEngine();
+        const mission = await engine.createFromObjective({
+          objective: question,
+          tenantId: String(clientId),
+          clientId,
+          createdBy:
+            (req.session && req.session.user && req.session.user.email) || null,
+          missionType: route.missionType,
+        });
+        const card = engine.toCard(mission);
+        const answer = [
+          `Mission created: ${mission.title || mission.objectiveText}.`,
+          `Status: ${mission.status}.`,
+          `Stage: ${(mission.progress && mission.progress.currentStage) || 'n/a'}.`,
+          mission.status === 'review_required'
+            ? 'Ready for review — no outbound actions were taken. Open Operations on the Command Deck.'
+            : 'Track progress in Operations on the Command Deck.',
+        ].join(' ');
+        return res.json({
+          answer,
+          route: 'mission',
+          mission,
+          card,
+          context_generated_at: new Date().toISOString(),
+        });
+      }
+    }
+
+    if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not configured' });
+
     const context = await loadPipelineContext(clientId);
     const actionableProspects = shouldLoadProspectContext(question)
       ? await loadProspectContext(clientId, question)
@@ -176,7 +212,11 @@ ${question}`,
       .join('\n')
       .trim();
 
-    res.json({ answer, context_generated_at: context.generated_at });
+    res.json({
+      answer,
+      route: 'intelligence',
+      context_generated_at: context.generated_at,
+    });
   } catch (err) {
     console.error('[max_chat] ask error:', err.response?.data || err.message);
     res.status(500).json({ error: err.message });

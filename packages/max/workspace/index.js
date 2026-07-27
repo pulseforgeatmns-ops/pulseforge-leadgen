@@ -18,6 +18,7 @@ const { buildSuggestions, topCompanyName } = require('./SuggestionEngine');
 const { SessionStore } = require('./SessionStore');
 const { assembleEvidence } = require('./EvidenceAssembler');
 const { composeResponse, classifyIntent } = require('./ResponseComposer');
+const { composeMissionResponse } = require('./MissionResponse');
 const {
   PresentationEngine,
   formatDeterministicProse,
@@ -44,6 +45,7 @@ module.exports = {
   assembleEvidence,
   composeResponse,
   classifyIntent,
+  composeMissionResponse,
   PresentationEngine,
   formatDeterministicProse,
   WorkspaceEngine,

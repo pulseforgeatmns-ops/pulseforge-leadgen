@@ -18,6 +18,7 @@ const ACTION_TYPES = Object.freeze({
   REVIEW_RECOMMENDATION: 'review_recommendation',
   ASK_MAX: 'ask_max',
   OPEN_COMPANY: 'open_company',
+  OPEN_MISSION: 'open_mission',
   DISMISS: 'dismiss',
   SNOOZE: 'snooze',
 });

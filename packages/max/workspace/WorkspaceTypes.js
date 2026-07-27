@@ -47,7 +47,7 @@ function buildResponseMetadata(partial = {}) {
       ? partial.sourcesUsed
       : {}),
   };
-  return {
+  const meta = {
     sourcesUsed,
     evidenceCount: Number.isFinite(Number(partial.evidenceCount))
       ? Number(partial.evidenceCount)
@@ -57,6 +57,14 @@ function buildResponseMetadata(partial = {}) {
       ? partial.unavailable.map(String)
       : [],
   };
+  // SPEC-022: preserve mission routing metadata when present
+  if (partial.route != null) meta.route = String(partial.route);
+  if (partial.missionId != null) meta.missionId = String(partial.missionId);
+  if (partial.missionStatus != null) {
+    meta.missionStatus = String(partial.missionStatus);
+  }
+  if (partial.missionCard != null) meta.missionCard = partial.missionCard;
+  return meta;
 }
 
 /**
