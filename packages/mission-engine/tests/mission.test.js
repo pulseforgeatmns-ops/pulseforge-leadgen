@@ -62,6 +62,12 @@ describe('SPEC-022 IntentRouter', () => {
     assert.equal(d.kind, ROUTE_KINDS.MISSION);
     assert.equal(d.missionType, MISSION_TYPES.PROPOSAL_GENERATION);
   });
+
+  it('routes mail package generation to mission (SPEC-033)', () => {
+    const d = routeIntent('Generate mail packages for Campaign 001');
+    assert.equal(d.kind, ROUTE_KINDS.MISSION);
+    assert.equal(d.missionType, MISSION_TYPES.MAIL_PACKAGE_GENERATION);
+  });
 });
 
 describe('SPEC-022 MissionPlanner + Executor', () => {
@@ -188,6 +194,23 @@ describe('SPEC-022 MissionPlanner + Executor', () => {
         (mission.constraints &&
           mission.constraints.clientPlaybookId === 'pb_as_cleaning_co')
     );
+  });
+
+  it('plans Mail Package Generation (SPEC-033)', () => {
+    const engine = testEngine();
+    const draft = engine.planner.plan({
+      objective: 'Generate mail packages for Campaign 001',
+      tenantId: '10',
+      clientId: 10,
+    });
+    assert.equal(draft.type, MISSION_TYPES.MAIL_PACKAGE_GENERATION);
+    assert.equal(draft.title, 'Mail Packages — Campaign 001');
+    assert.deepEqual(
+      draft.plan.steps.map((s) => s.capabilityId),
+      [BUILTIN_IDS.MAIL_PACKAGE_GENERATOR]
+    );
+    assert.ok(draft.clientPlaybook);
+    assert.equal(draft.clientPlaybook.id, 'pb_anchor_cleaning');
   });
 });
 

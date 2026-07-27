@@ -39,6 +39,7 @@ const BUILTIN_IDS = Object.freeze({
   OPPORTUNITY_RANKING: 'opportunity_ranking',
   CAMPAIGN_BUILDER: 'campaign_builder',
   PROPOSAL_GENERATOR: 'proposal_generator',
+  MAIL_PACKAGE_GENERATOR: 'mail_package_generator',
 });
 
 /**

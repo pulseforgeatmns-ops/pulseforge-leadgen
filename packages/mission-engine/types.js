@@ -26,6 +26,7 @@ const MISSION_TYPES = Object.freeze({
   WEEKLY_BRIEF: 'weekly_brief',
   KNOWLEDGE_REFRESH: 'knowledge_refresh',
   PROPOSAL_GENERATION: 'proposal_generation',
+  MAIL_PACKAGE_GENERATION: 'mail_package_generation',
 });
 
 const AUDIT_KINDS = Object.freeze({
@@ -62,6 +63,7 @@ const STAGE_LABELS = Object.freeze({
   opportunity_ranking: 'Ranking Opportunities',
   campaign_builder: 'Building Campaign',
   proposal_generator: 'Generating Proposal',
+  mail_package_generator: 'Generating Mail Packages',
   review_required: 'Ready for Review',
 });
 

@@ -23,10 +23,11 @@ describe('SPEC-023 CapabilityRegistry', () => {
   it('registers and lists built-ins', () => {
     const registry = testRegistry();
     const list = registry.list();
-    assert.equal(list.length, 6);
+    assert.equal(list.length, 7);
     assert.ok(registry.get(BUILTIN_IDS.PROSPECT_DISCOVERY));
     assert.ok(registry.get(BUILTIN_IDS.CAMPAIGN_BUILDER));
     assert.ok(registry.get(BUILTIN_IDS.PROPOSAL_GENERATOR));
+    assert.ok(registry.get(BUILTIN_IDS.MAIL_PACKAGE_GENERATOR));
   });
 
   it('discovers by outcome tags', () => {
@@ -750,5 +751,205 @@ describe('SPEC-028 Client Playbooks', () => {
       clientId: 1,
     });
     assert.equal(byHint.playbook.id, 'pb_as_cleaning_co');
+  });
+});
+
+describe('SPEC-033 Mail Package Generator', () => {
+  const mail = require('../mail');
+
+  const readyProspect = {
+    id: 'p1',
+    companyName: 'Bedford Law',
+    industry: 'Law Firms',
+    address: '5 Commerce Park N, Bedford, NH 03110',
+    contactName: 'Jordan Hale',
+    confidence: 0.9,
+    overallScore: 0.86,
+    opportunityBrief: {
+      whyFit: 'Single-tenant law office in Manchester beachhead',
+      bestOutreachAngle: 'Owner-attentive recurring service',
+      talkingPoints: ['Local owner accountability', 'Consistent standards'],
+    },
+  };
+
+  const thinProspect = {
+    id: 'p2',
+    companyName: 'No Address LLC',
+    industry: 'Accounting Practices',
+    confidence: 0.4,
+  };
+
+  it('generates complete packages, CSVs, and campaign HTML for approved prospects', async () => {
+    const registry = testRegistry();
+    const runner = createCapabilityRunner({ registry });
+    const pb = playbook.createClientPlaybookStore().get('pb_anchor_cleaning');
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.MAIL_PACKAGE_GENERATOR,
+      context: {
+        missionId: 'm_mail',
+        tenantId: '10',
+        clientId: 10,
+        objective: 'Generate mail packages for Campaign 001',
+        constraints: { clientPlaybook: pb },
+        inputs: {
+          campaign: {
+            name: 'Campaign 001',
+            status: 'approved',
+            prospects: [readyProspect, thinProspect],
+            mailMerge: [
+              {
+                companyName: 'Bedford Law',
+                personalizationSentence:
+                  'Reached out because Bedford Law looks like a strong fit for local owner accountability in Law Firms.',
+                openingHook: 'Would a free walkthrough be useful?',
+                recommendedOffer: 'Free walkthrough',
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    assert.equal(out.result.status, CAPABILITY_RESULT_STATUS.COMPLETED);
+    const packages = out.result.outputs.packages;
+    assert.equal(packages.length, 2);
+
+    const ready = packages.find((p) => p.prospectId === 'p1');
+    const needs = packages.find((p) => p.prospectId === 'p2');
+    assert.equal(ready.status, mail.PACKAGE_STATUS.READY_TO_PRINT);
+    assert.equal(needs.status, mail.PACKAGE_STATUS.NEEDS_REVIEW);
+    assert.match(ready.letter.body, /Bedford Law/);
+    assert.match(ready.letter.body, /Jordan Hale/);
+    assert.ok(ready.envelope.mailingAddress.includes('Bedford'));
+    assert.ok(ready.insertChecklist.some((i) => i.label === 'Letter'));
+    assert.ok(ready.insertChecklist.some((i) => i.label === 'Microfiber Cloth'));
+
+    const summary = out.result.outputs.campaignSummary;
+    assert.equal(summary.prospects, 2);
+    assert.equal(summary.readyToPrint, 1);
+    assert.equal(summary.needsReview, 1);
+    assert.equal(summary.missingAddresses, 1);
+    assert.ok(summary.estimatedPrintTimeSec > 0);
+    assert.ok(summary.estimatedAssemblyTimeSec > 0);
+
+    assert.ok(out.result.outputs.campaignHtml.includes('Campaign 001'));
+    assert.ok(out.result.outputs.mailMergeCsv.includes('recipient_name'));
+    assert.ok(out.result.outputs.mailMergeCsv.includes('Bedford Law'));
+    assert.ok(out.result.outputs.addressLabelCsv.includes('print_ready'));
+    assert.ok(out.result.outputs.campaignDocxHtml.includes('Bedford Law'));
+    assert.ok(
+      out.result.outputs.reviewPackage.operatorActions.includes('approve_package')
+    );
+    assert.ok(
+      out.result.artifacts.some((a) => a.type === 'mail_merge_csv')
+    );
+    assert.ok(
+      out.result.artifacts.some((a) => a.type === 'address_label_csv')
+    );
+    assert.ok(out.result.artifacts.some((a) => a.type === 'campaign_pdf'));
+    assert.equal(out.result.outputs.printBlocked, true);
+  });
+
+  it('blocks Ready to Print when mailing address is missing', () => {
+    const result = mail.validateProspectForMail({
+      companyName: 'Thin Co',
+      contactName: 'Alex',
+      confidence: 0.95,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, mail.PACKAGE_STATUS.NEEDS_REVIEW);
+    assert.ok(result.reasons.includes('missing_mailing_address'));
+  });
+
+  it('allows company fallback for recipient', () => {
+    const result = mail.validateProspectForMail({
+      companyName: 'Solo Office LLC',
+      address: '1 Main St, Manchester, NH 03101',
+      confidence: 0.9,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.recipientName, 'Solo Office LLC');
+    assert.equal(result.usedCompanyFallback, true);
+  });
+
+  it('preserves revision history on regenerate', async () => {
+    const store = mail.createInMemoryMailPackageStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      mail: { mailPackageStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+    const pb = playbook.createClientPlaybookStore().get('pb_anchor_cleaning');
+    const ctx = {
+      missionId: 'm_mail_rev',
+      tenantId: '10',
+      clientId: 10,
+      objective: 'Generate mail packages for Campaign 001',
+      constraints: { clientPlaybook: pb },
+      inputs: {
+        campaignId: 'camp_001',
+        campaign: {
+          name: 'Campaign 001',
+          prospects: [readyProspect],
+        },
+      },
+    };
+
+    const first = await runner.run({
+      capabilityId: BUILTIN_IDS.MAIL_PACKAGE_GENERATOR,
+      context: ctx,
+    });
+    const second = await runner.run({
+      capabilityId: BUILTIN_IDS.MAIL_PACKAGE_GENERATOR,
+      context: ctx,
+    });
+
+    assert.equal(first.result.outputs.mailBatchRevision, 1);
+    assert.equal(second.result.outputs.mailBatchRevision, 2);
+    const history = store.listForCampaign('camp_001');
+    assert.equal(history.length, 2);
+    assert.ok(store.get(first.result.outputs.mailBatchId));
+    assert.ok(store.getLatest('camp_001').revision === 2);
+  });
+
+  it('skips prospect and marks address invalid via overrides', async () => {
+    const registry = testRegistry();
+    const runner = createCapabilityRunner({ registry });
+    const pb = playbook.createClientPlaybookStore().get('pb_anchor_cleaning');
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.MAIL_PACKAGE_GENERATOR,
+      context: {
+        missionId: 'm_mail_skip',
+        tenantId: '10',
+        constraints: { clientPlaybook: pb },
+        inputs: {
+          prospects: [
+            readyProspect,
+            {
+              id: 'p3',
+              companyName: 'Hooksett Dental',
+              address: '20 Alice Ave, Hooksett, NH 03106',
+              contactName: 'Sam',
+              confidence: 0.88,
+            },
+          ],
+          packageOverrides: {
+            p1: { skipped: true },
+            p3: { addressInvalid: true },
+          },
+        },
+      },
+    });
+    const packages = out.result.outputs.packages;
+    assert.equal(
+      packages.find((p) => p.prospectId === 'p1').status,
+      mail.PACKAGE_STATUS.SKIPPED
+    );
+    assert.equal(
+      packages.find((p) => p.prospectId === 'p3').status,
+      mail.PACKAGE_STATUS.NEEDS_REVIEW
+    );
+    assert.equal(out.result.outputs.campaignSummary.prospects, 1);
+    assert.equal(out.result.outputs.campaignSummary.readyToPrint, 0);
   });
 });
