@@ -1,0 +1,14 @@
+{
+  "name": "@pulseforge/eql",
+  "version": "1.0.0",
+  "description": "Evidence Query Language — domain-neutral queries over the Evidence Graph (SPEC-020)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  }
+}
