@@ -125,6 +125,18 @@ function matchMissionType(lower, original) {
     return MISSION_TYPES.WEEKLY_BRIEF;
   }
 
+  // Proposal Generation (SPEC-027B) — before generic campaign patterns
+  if (
+    /\b(generate|create|draft|write|build)\s+(a\s+)?(sales\s+)?proposal\b/.test(
+      lower
+    ) ||
+    /\bproposal\s+for\b/.test(lower) ||
+    /\bcommercial\s+growth\s+proposal\b/.test(lower) ||
+    /\bproposal\s+generator\b/.test(lower)
+  ) {
+    return MISSION_TYPES.PROPOSAL_GENERATION;
+  }
+
   // Market Research (as business objective — not "summarize Nvidia")
   if (
     /\bmarket\s+research\b/.test(lower) ||

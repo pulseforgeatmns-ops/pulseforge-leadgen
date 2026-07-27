@@ -30,6 +30,7 @@ const {
   createKnowledgeUpdateStub,
   createOpportunityRankingStub,
   createCampaignBuilderStub,
+  createProposalGeneratorCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
 } = require('./builtins/stubs');
@@ -52,10 +53,13 @@ module.exports = {
   createKnowledgeUpdateStub,
   createOpportunityRankingStub,
   createCampaignBuilderStub,
+  createProposalGeneratorCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
   discovery: require('./discovery'),
   ranking: require('./ranking'),
+  proposal: require('./proposal'),
+  playbook: require('./playbook'),
 };
 
 // Re-export production capabilities at top level for convenience
@@ -63,3 +67,5 @@ module.exports.createProspectDiscoveryCapability =
   require('./discovery').createProspectDiscoveryCapability;
 module.exports.createOpportunityRankingCapability =
   require('./ranking').createOpportunityRankingCapability;
+module.exports.createProposalGeneratorCapability =
+  require('./proposal').createProposalGeneratorCapability;

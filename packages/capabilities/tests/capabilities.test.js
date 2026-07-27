@@ -12,6 +12,7 @@ const {
   buildCapabilityContext,
   discovery,
   ranking,
+  playbook,
 } = require('..');
 
 function testRegistry() {
@@ -22,9 +23,10 @@ describe('SPEC-023 CapabilityRegistry', () => {
   it('registers and lists built-ins', () => {
     const registry = testRegistry();
     const list = registry.list();
-    assert.equal(list.length, 5);
+    assert.equal(list.length, 6);
     assert.ok(registry.get(BUILTIN_IDS.PROSPECT_DISCOVERY));
     assert.ok(registry.get(BUILTIN_IDS.CAMPAIGN_BUILDER));
+    assert.ok(registry.get(BUILTIN_IDS.PROPOSAL_GENERATOR));
   });
 
   it('discovers by outcome tags', () => {
@@ -506,5 +508,247 @@ describe('SPEC-026 Opportunity Ranking', () => {
     assert.equal(campaign.result.outputs.campaign.status, 'review_required');
     assert.equal(campaign.result.outputs.campaign.prospectCount, 1);
     assert.ok(campaign.result.outputs.campaign.prospects[0].overallScore != null);
+  });
+});
+
+describe('SPEC-027B Proposal Generator', () => {
+  const asCleaningSummary = {
+    companyName: 'AS Cleaning Co.',
+    contactName: 'Alex',
+    industry: 'Commercial Cleaning',
+    geography: 'Greater Toronto Area',
+    companyStage: 'Four months in business with a first commercial client',
+    currentClients: ['First commercial client'],
+    currentProcess: 'Manual follow-up today',
+    icp: ['Medical Offices', 'Dental Practices', 'Property Managers'],
+    challenges: ['No predictable pipeline', 'Manual follow-up'],
+    goals: ['Commercial growth focus', 'Desire to hire subcontractors'],
+    growthVision: 'Hire subcontractors against a growing commercial book',
+  };
+
+  it('generates a complete personalized proposal from discovery', async () => {
+    const registry = testRegistry();
+    const runner = createCapabilityRunner({ registry });
+    const stages = [];
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.PROPOSAL_GENERATOR,
+      context: {
+        missionId: 'm_prop',
+        tenantId: '1',
+        objective: 'Generate proposal for AS Cleaning Co.',
+        inputs: {
+          discoverySummary: asCleaningSummary,
+          discoveryProfile: {
+            id: 'dp_gta',
+            name: 'Commercial Cleaning — Greater Toronto Area',
+            industryTargets: [
+              'Medical Offices',
+              'Dental Practices',
+              'Property Managers',
+            ],
+            geography: { label: 'Greater Toronto Area' },
+          },
+          pricingPackageId: 'founding_partner',
+        },
+      },
+      onProgress: (e) => {
+        if (e.stage) stages.push(e.stage);
+      },
+    });
+
+    assert.equal(out.result.status, CAPABILITY_RESULT_STATUS.COMPLETED);
+    assert.equal(out.result.outputs.document.sections.length, 11);
+    assert.equal(out.result.outputs.document.preparedFor, 'AS Cleaning Co.');
+    assert.ok(out.result.outputs.html.includes('AS Cleaning Co.'));
+    assert.ok(!/\[insert|TODO|TBD|lorem ipsum/i.test(out.result.outputs.html));
+    assert.ok(out.result.outputs.reviewPackage.operatorActions.includes('approve'));
+    assert.ok(out.result.outputs.proposal.version >= 1);
+    assert.equal(out.result.outputs.document.pricing.id, 'founding_partner');
+    assert.ok(out.result.outputs.reviewPackage.personalization.ok);
+    assert.ok(
+      out.result.outputs.document.sections.every(
+        (s) => Array.isArray(s.evidenceRefs) && s.evidenceRefs.length > 0
+      )
+    );
+  });
+
+  it('fails interchangeability: name-swap alone is not enough (ADR-014)', () => {
+    const { composeProposal, buildDiscoverySummary, assertPersonalized } =
+      require('../proposal');
+    const rich = buildDiscoverySummary(asCleaningSummary);
+    const doc = composeProposal(rich, {
+      profile: {
+        name: 'Commercial Cleaning — Greater Toronto Area',
+        industryTargets: rich.icp,
+      },
+    });
+    const swapped = buildDiscoverySummary({
+      companyName: 'Other Cleaning LLC',
+    });
+    const check = assertPersonalized(doc, swapped);
+    assert.equal(check.ok, false);
+    assert.ok(check.reasons.includes('company_name_not_referenced'));
+  });
+
+  it('states uncertainty instead of inventing markets', async () => {
+    const registry = testRegistry();
+    const runner = createCapabilityRunner({ registry });
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.PROPOSAL_GENERATOR,
+      context: {
+        missionId: 'm_thin',
+        tenantId: '1',
+        objective: 'Generate proposal for Thin Co.',
+        inputs: {
+          discoverySummary: {
+            companyName: 'Thin Co.',
+            companyStage: 'Early stage',
+            geography: 'Manchester NH',
+          },
+        },
+      },
+    });
+    const strategy = out.result.outputs.document.sections.find(
+      (s) => s.id === 'recommended_strategy'
+    );
+    assert.ok(strategy.uncertain);
+    assert.match(strategy.body, /will not invent|not confirmed/i);
+  });
+});
+
+describe('SPEC-028 Client Playbooks', () => {
+  it('seeds AS Cleaning Co and Anchor playbooks', () => {
+    const store = playbook.createClientPlaybookStore();
+    const as = store.get('pb_as_cleaning_co');
+    assert.ok(as);
+    assert.equal(as.version, '1.0');
+    assert.equal(as.brandVoice, 'relationship_first');
+    assert.ok(as.valuePropositions.includes('Owner-operated quality'));
+    assert.ok(as.preferredChannels[0] === 'direct_mail');
+    assert.equal(as.outreachSequence.length, 5);
+    assert.equal(as.outreachSequence[0].day, 1);
+
+    const anchor = store.getForClient(10);
+    assert.ok(anchor);
+    assert.equal(anchor.id, 'pb_anchor_cleaning');
+    assert.match(anchor.idealCustomer.geographicCoverage, /Manchester/);
+  });
+
+  it('versions immutably and requires approval', () => {
+    const store = playbook.createClientPlaybookStore();
+    const v11 = store.createVersion(
+      'pb_as_cleaning_co',
+      { notes: 'Updated Tuesday morning call preference' },
+      { autoActivate: false }
+    );
+    assert.equal(v11.version, '1.1');
+    assert.equal(v11.status, 'pending_review');
+    assert.equal(store.get('pb_as_cleaning_co').version, '1.0');
+    const approved = store.approveVersion('pb_as_cleaning_co', '1.1');
+    assert.equal(approved.status, 'active');
+    assert.equal(store.get('pb_as_cleaning_co').version, '1.1');
+    assert.equal(store.get('pb_as_cleaning_co', '1.0').status, 'superseded');
+  });
+
+  it('Campaign Builder uses playbook channels, sequence, and offers', async () => {
+    const registry = testRegistry();
+    const runner = createCapabilityRunner({ registry });
+    const pb = playbook.createClientPlaybookStore().get('pb_anchor_cleaning');
+    const campaign = await runner.run({
+      capabilityId: BUILTIN_IDS.CAMPAIGN_BUILDER,
+      context: {
+        missionId: 'm_pb',
+        tenantId: '10',
+        clientId: 10,
+        objective: 'Build Campaign 001 for Anchor Cleaning',
+        constraints: { clientPlaybook: pb },
+        inputs: {
+          prospects: [
+            {
+              id: 'p1',
+              companyName: 'Bedford Law',
+              industry: 'Law Firms',
+              confidence: 0.9,
+            },
+            {
+              id: 'p2',
+              companyName: 'Downtown Diner',
+              industry: 'Restaurants',
+              confidence: 0.8,
+            },
+          ],
+        },
+      },
+    });
+    const out = campaign.result.outputs.campaign;
+    assert.ok(out.playbook);
+    assert.equal(out.playbook.playbookId, 'pb_anchor_cleaning');
+    assert.deepEqual(out.preferredChannels.slice(0, 2), ['Direct Mail', 'Phone']);
+    assert.equal(out.outreachSequence[0].day, 1);
+    assert.ok(out.offers.includes('Free walkthrough'));
+    assert.equal(out.prospectCount, 1);
+    assert.equal(out.excludedProspects.length, 1);
+    assert.match(out.excludedProspects[0].exclusionReason, /restaurant/i);
+    assert.ok(out.mailMerge[0].personalizationSentence);
+    assert.doesNotMatch(
+      out.mailMerge[0].openingHook || '',
+      /Quick question about your current vendor setup/
+    );
+    assert.equal(campaign.result.outputs.clientPlaybookId, 'pb_anchor_cleaning');
+  });
+
+  it('Proposal Generator consumes playbook voice, value props, and offers', async () => {
+    const registry = testRegistry();
+    const runner = createCapabilityRunner({ registry });
+    const pb = playbook.createClientPlaybookStore().get('pb_as_cleaning_co');
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.PROPOSAL_GENERATOR,
+      context: {
+        missionId: 'm_prop_pb',
+        tenantId: '1',
+        objective: 'Generate proposal for AS Cleaning Co.',
+        constraints: { clientPlaybook: pb },
+        inputs: {
+          discoverySummary: {
+            companyName: 'AS Cleaning Co.',
+            contactName: 'Alex',
+            industry: 'Commercial Cleaning',
+            geography: 'Greater Toronto Area',
+            companyStage: 'Four months in business with a first commercial client',
+            goals: ['Commercial growth focus'],
+            challenges: ['No predictable pipeline'],
+            icp: ['Medical Offices', 'Dental Practices'],
+          },
+        },
+      },
+    });
+    assert.equal(out.result.outputs.clientPlaybookId, 'pb_as_cleaning_co');
+    const doc = out.result.outputs.document;
+    assert.equal(doc.playbookId, 'pb_as_cleaning_co');
+    const why = doc.sections.find((s) => s.id === 'why_pulseforge');
+    assert.match(why.body, /Owner-operated quality|Reliable recurring service/i);
+    assert.ok(why.bullets.some((b) => /Relationship-first/i.test(b)));
+    const strategy = doc.sections.find((s) => s.id === 'recommended_strategy');
+    assert.match(strategy.body, /Client Playbook/i);
+    assert.ok(strategy.bullets.some((b) => /Free walkthrough/i.test(b)));
+    assert.ok(strategy.bullets.some((b) => /Walkthroughs booked/i.test(b)));
+    const handle = doc.sections.find((s) => s.id === 'what_we_handle');
+    assert.ok(handle.bullets.some((b) => /Day 1/i.test(b)));
+  });
+
+  it('PlaybookSelector pins by client and objective hint', () => {
+    const selector = playbook.createPlaybookSelector();
+    const byClient = selector.select({
+      objective: 'Build Campaign 001',
+      clientId: 10,
+    });
+    assert.equal(byClient.playbook.id, 'pb_anchor_cleaning');
+    assert.equal(byClient.selection, 'client');
+
+    const byHint = selector.select({
+      objective: 'Generate proposal for AS Cleaning Co.',
+      clientId: 1,
+    });
+    assert.equal(byHint.playbook.id, 'pb_as_cleaning_co');
   });
 });

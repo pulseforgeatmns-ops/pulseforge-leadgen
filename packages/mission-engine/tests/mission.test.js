@@ -56,6 +56,12 @@ describe('SPEC-022 IntentRouter', () => {
     assert.equal(d.kind, ROUTE_KINDS.MISSION);
     assert.equal(d.missionType, MISSION_TYPES.OVERFLOW_PARTNER_SEARCH);
   });
+
+  it('routes proposal generation to mission (SPEC-027B)', () => {
+    const d = routeIntent('Generate proposal for AS Cleaning Co.');
+    assert.equal(d.kind, ROUTE_KINDS.MISSION);
+    assert.equal(d.missionType, MISSION_TYPES.PROPOSAL_GENERATION);
+  });
 });
 
 describe('SPEC-022 MissionPlanner + Executor', () => {
@@ -88,6 +94,20 @@ describe('SPEC-022 MissionPlanner + Executor', () => {
     assert.match(draft.discoveryProfile.message, /Commercial Cleaning/);
   });
 
+  it('pins Anchor Client Playbook on campaign missions', () => {
+    const engine = testEngine();
+    const draft = engine.planner.plan({
+      objective: 'Build Campaign 001 for Anchor Cleaning.',
+      tenantId: '10',
+      clientId: 10,
+    });
+    assert.ok(draft.clientPlaybook);
+    assert.equal(draft.clientPlaybook.id, 'pb_anchor_cleaning');
+    assert.equal(draft.constraints.clientPlaybookId, 'pb_anchor_cleaning');
+    assert.equal(draft.constraints.clientPlaybookVersion, '1.0');
+    assert.ok(draft.constraints.clientPlaybook.outreachSequence.length >= 1);
+  });
+
   it('executes to review_required with verified prospects and no outbound', async () => {
     const engine = testEngine();
     const mission = await engine.createFromObjective({
@@ -104,6 +124,9 @@ describe('SPEC-022 MissionPlanner + Executor', () => {
     assert.ok(mission.deliverables.prospects.length >= 1);
     assert.ok(mission.deliverables.reviewPackage);
     assert.ok(mission.deliverables.discoveryProfile);
+    assert.ok(mission.deliverables.clientPlaybook || mission.constraints.clientPlaybook);
+    assert.ok(mission.deliverables.campaign.playbook);
+    assert.equal(mission.deliverables.campaign.playbook.playbookId, 'pb_anchor_cleaning');
     assert.equal(mission.progress.percent, 100);
     assert.match(mission.progress.currentStage, /review/i);
   });
@@ -122,6 +145,49 @@ describe('SPEC-022 MissionPlanner + Executor', () => {
     });
     assert.equal(reviewed.status, MISSION_STATUS.REVIEWED);
     assert.equal(reviewed.review.outboundSent, false);
+  });
+
+  it('plans and executes Proposal Generation (SPEC-027B)', async () => {
+    const engine = testEngine();
+    const draft = engine.planner.plan({
+      objective: 'Generate proposal for AS Cleaning Co.',
+      tenantId: '1',
+      clientId: 1,
+      constraints: {
+        discoverySummary: {
+          companyName: 'AS Cleaning Co.',
+          geography: 'Greater Toronto Area',
+          companyStage: 'Four months in business',
+          icp: ['Medical Offices', 'Dental Practices'],
+          goals: ['Commercial growth'],
+          challenges: ['Manual follow-up'],
+          growthVision: 'Hire subcontractors',
+          currentProcess: 'Manual follow-up today',
+        },
+        pricingPackageId: 'pilot',
+      },
+    });
+    assert.equal(draft.type, MISSION_TYPES.PROPOSAL_GENERATION);
+    assert.equal(draft.title, 'Proposal — AS Cleaning Co');
+    assert.deepEqual(
+      draft.plan.steps.map((s) => s.capabilityId),
+      [BUILTIN_IDS.PROPOSAL_GENERATOR]
+    );
+
+    const mission = await engine.createFromObjective({
+      objective: 'Generate proposal for AS Cleaning Co.',
+      tenantId: '1',
+      clientId: 1,
+      constraints: draft.constraints,
+    });
+    assert.equal(mission.status, MISSION_STATUS.REVIEW_REQUIRED);
+    assert.ok(mission.deliverables.proposal || mission.deliverables.document);
+    assert.ok(mission.deliverables.reviewPackage);
+    assert.ok(
+      mission.deliverables.clientPlaybookId === 'pb_as_cleaning_co' ||
+        (mission.constraints &&
+          mission.constraints.clientPlaybookId === 'pb_as_cleaning_co')
+    );
   });
 });
 

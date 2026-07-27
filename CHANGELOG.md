@@ -6,6 +6,20 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Execution Engine proposed ([SPEC-029](docs/specs/SPEC-029_Execution_Engine.md) / [ADR-016](docs/adr/ADR-016_Execution_Does_Not_Decide.md))
+  - Approved campaigns → execution plan → durable touch tasks (do, don’t decide)
+  - Human-in-the-loop Waiting, Playbook-owned retry/schedule, fail-closed safety, outcome → next Mission
+- Client Playbook Capability ([SPEC-028](docs/specs/SPEC-028_Client_Playbook_Capability.md) / [ADR-015](docs/adr/ADR-015_Strategy_Lives_in_the_Playbook.md))
+  - `packages/capabilities/playbook/` — versioned strategy assets (who vs how: Profiles target, Playbooks sell)
+  - MissionPlanner pins immutable playbook versions into campaign + proposal constraints
+  - Campaign Builder stub consumes channels, sequence, offers, constraints (no hardcoded outreach when playbook present)
+  - Proposal Generator consumes brand voice, value props, offers, ideal customer, success metrics
+  - Seeds: AS Cleaning Co. + Anchor Cleaning; migration `migrations/2026-07-27-client-playbooks.sql`
+- Proposal Generator Capability ([SPEC-027B](docs/specs/SPEC-027B_Proposal_Generator_Capability.md) / [ADR-014](docs/adr/ADR-014_Personalized_by_Default.md))
+  - `packages/capabilities/proposal/` — personalization engine (not a template engine), 11-section commercial growth proposal, pricing packages, web/printable HTML, version store
+  - Mission type `proposal_generation` — “Generate proposal for …” → review-gated deliverable
+  - Evidence-backed sections; uncertainty when discovery is thin; interchangeability tests (ADR-014)
+  - Migration: `migrations/2026-07-27-proposal-generator.sql`
 - Opportunity Ranking Capability ([SPEC-026](docs/specs/SPEC-026_Opportunity_Ranking_Capability.md))
   - `packages/capabilities/ranking/` — explainable 8-factor scoring, Opportunity Briefs, review package
   - Replaces Opportunity Ranking stub; answers “Who should we contact first?”

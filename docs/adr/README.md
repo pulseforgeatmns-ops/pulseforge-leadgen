@@ -17,6 +17,9 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-009](ADR-009_Evidence_Platform_Architecture.md) | Evidence Platform Architecture | Accepted |
 | [ADR-010](ADR-010_Mission_Engine.md) | Mission Engine | Accepted |
 | [ADR-011](ADR-011_Capability_Framework.md) | Capability Framework | Accepted |
+| [ADR-014](ADR-014_Personalized_by_Default.md) | Personalized by Default | Accepted |
+| [ADR-015](ADR-015_Strategy_Lives_in_the_Playbook.md) | Strategy Lives in the Playbook | Accepted |
+| [ADR-016](ADR-016_Execution_Does_Not_Decide.md) | Execution Does Not Decide | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

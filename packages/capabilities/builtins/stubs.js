@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * Built-in capabilities (SPEC-023 + SPEC-024 + SPEC-026).
- * Prospect Discovery + Opportunity Ranking are production.
+ * Built-in capabilities (SPEC-023 + SPEC-024 + SPEC-026 + SPEC-027B).
+ * Prospect Discovery + Opportunity Ranking + Proposal Generator are production.
  * Enrichment / Knowledge / Campaign Builder stay stubs until their SPECs land.
  */
 
@@ -21,6 +21,7 @@ const {
   createPlacesProvider,
 } = require('../discovery');
 const { createOpportunityRankingCapability } = require('../ranking');
+const { createProposalGeneratorCapability } = require('../proposal');
 
 function stubMeta(partial) {
   return {
@@ -219,10 +220,17 @@ function createOpportunityRankingStub() {
 }
 
 function createCampaignBuilderStub() {
+  const {
+    resolvePlaybookFromContext,
+    campaignStrategyFromPlaybook,
+    applyPlaybookConstraints,
+  } = require('../playbook');
+
   return {
     id: BUILTIN_IDS.CAMPAIGN_BUILDER,
     name: 'Building Campaign',
-    description: 'Assemble a review-gated campaign draft from ranked prospects',
+    description:
+      'Assemble a review-gated campaign draft from ranked prospects using the Client Playbook',
     category: CAPABILITY_CATEGORIES.CAMPAIGN,
     outcomeTags: ['campaign_drafted', 'campaign_built'],
     ...stubMeta(),
@@ -248,39 +256,83 @@ function createCampaignBuilderStub() {
           context.inputs.priorOutputs.prospects) ||
         [];
       const list = Array.isArray(prospects) ? prospects : [];
+
+      // SPEC-028 / ADR-015: strategy from Client Playbook — no hardcoded outreach
+      const playbook = resolvePlaybookFromContext(context);
+      const strategy = campaignStrategyFromPlaybook(playbook);
+      const applied = applyPlaybookConstraints(list, playbook);
+      const kept = applied.prospects;
+
+      const mailMerge = kept.map((p) => ({
+        companyName: p.companyName,
+        personalizationSentence:
+          p.personalizationSentence ||
+          (playbook
+            ? null
+            : `Noticed ${p.companyName} may need support (no playbook).`),
+        openingHook:
+          p.openingHook ||
+          (playbook ? null : 'Confirm outreach language after playbook is set.'),
+        recommendedOffer: p.recommendedOffer || null,
+        recommendedChannel: p.recommendedChannel || null,
+        playbookId: playbook ? playbook.id : null,
+        playbookVersion: playbook ? playbook.version : null,
+      }));
+
+      const warnings = [...(applied.warnings || [])];
+      if (!playbook) {
+        warnings.push(
+          'No Client Playbook pinned — campaign draft lacks channel/sequence strategy (ADR-015).'
+        );
+      }
+
       return buildCapabilityResult({
         status: CAPABILITY_RESULT_STATUS.COMPLETED,
         outputs: {
           campaign: {
             name: campaignName,
             status: 'review_required',
-            prospectCount: list.length,
-            prospects: list,
-            mailMerge: list.map((p) => ({
-              companyName: p.companyName,
-              personalizationSentence: `Noticed ${p.companyName} may need support (stub).`,
-              openingHook: 'Quick question about your current vendor setup.',
-            })),
+            prospectCount: kept.length,
+            prospects: kept,
+            excludedProspects: applied.excluded,
+            mailMerge,
+            playbook: strategy,
+            preferredChannels: strategy ? strategy.preferredChannels : [],
+            outreachSequence: strategy ? strategy.outreachSequence : [],
+            offers: strategy ? strategy.offers : [],
+            constraints: strategy ? strategy.constraints : [],
           },
+          clientPlaybook: playbook,
+          clientPlaybookId: playbook ? playbook.id : null,
+          clientPlaybookVersion: playbook ? playbook.version : null,
           outboundBlocked: true,
         },
         evidence: [
           {
             kind: 'campaign',
-            summary: `${campaignName} draft ready for operator review — no outbound actions`,
+            summary: playbook
+              ? `${campaignName} draft from playbook ${playbook.name} v${playbook.version} — no outbound actions`
+              : `${campaignName} draft ready for operator review — no outbound actions`,
+            playbookId: playbook ? playbook.id : null,
+            playbookVersion: playbook ? playbook.version : null,
           },
         ],
         artifacts: [
           {
             type: 'campaign_draft',
             name: campaignName,
-            prospectCount: list.length,
+            prospectCount: kept.length,
+            playbookId: playbook ? playbook.id : null,
+            playbookVersion: playbook ? playbook.version : null,
           },
         ],
+        warnings,
         nextRecommendations: [
           {
             action: 'review',
-            summary: 'Review ranked prospects and approve before any outreach',
+            summary: playbook
+              ? 'Review playbook-driven sequence, constraints, and prospects before any outreach'
+              : 'Attach a Client Playbook, then review ranked prospects before outreach',
           },
         ],
       });
@@ -342,6 +394,9 @@ function registerBuiltinCapabilities(registry, options = {}) {
   registry.register(createKnowledgeUpdateStub());
   registry.register(createOpportunityRankingCapability(options.ranking || {}));
   registry.register(createCampaignBuilderStub());
+  registry.register(
+    createProposalGeneratorCapability(options.proposal || {})
+  );
   return registry;
 }
 
@@ -364,6 +419,7 @@ module.exports = {
   createOpportunityRankingStub,
   createOpportunityRankingCapability,
   createCampaignBuilderStub,
+  createProposalGeneratorCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
   resolveDiscoveryDeps,
