@@ -6,6 +6,10 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Company Intelligence Capability proposed ([SPEC-030](docs/specs/SPEC-030_Company_Intelligence_Capability.md) / [ADR-017](docs/adr/ADR-017_Intelligence_Before_Execution.md))
+  - Expands unfinished SPEC-025 enrichment into evidence-only intelligence packages (company, decision makers, signals, personalization, Opportunity Brief, Knowledge handoff)
+  - Never fabricate; verified → evidence, uncertain → inference
+  - Ships before Execution so Ranking / Campaign / Proposal / Execution consume packages without modification
 - Execution Engine proposed ([SPEC-029](docs/specs/SPEC-029_Execution_Engine.md) / [ADR-016](docs/adr/ADR-016_Execution_Does_Not_Decide.md))
   - Approved campaigns → execution plan → durable touch tasks (do, don’t decide)
   - Human-in-the-loop Waiting, Playbook-owned retry/schedule, fail-closed safety, outcome → next Mission

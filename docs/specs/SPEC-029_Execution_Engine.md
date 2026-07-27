@@ -8,7 +8,7 @@
 | **Owner** | Pulseforge engineering |
 | **Created** | 2026-07-27 |
 | **Version** | v0.1.0 |
-| **Depends on** | SPEC-022, SPEC-023, SPEC-024, SPEC-025 (optional enrichment), SPEC-026, SPEC-027B, SPEC-028, Campaign Builder (approved campaign artifact), ADR-003, ADR-010, ADR-011, ADR-015, ADR-016 |
+| **Depends on** | SPEC-022, SPEC-023, SPEC-024, SPEC-030 (Company Intelligence packages; ADR-017 — ship intelligence before execution), SPEC-026, SPEC-027B, SPEC-028, Campaign Builder (approved campaign artifact), ADR-003, ADR-010, ADR-011, ADR-015, ADR-016, ADR-017 |
 | **Consumed by** | Mission Engine (outcome follow-ups), Knowledge dual-write, Learning Loop (SPEC-021), Command Deck Operator Dashboard |
 
 ## Objective
@@ -74,7 +74,7 @@ Without an Execution Engine, approved strategy dies in review mode, or legacy ag
 
 - Creating strategy (channels, sequence, offers, ICP, ranking) — owned upstream ([ADR-016](../adr/ADR-016_Execution_Does_Not_Decide.md))
 - Live Campaign Builder rewrite (consumes approved campaign outputs; live builder may land in parallel)
-- Autonomously inventing contact data when enrichment is missing
+- Autonomously inventing contact data when Company Intelligence (SPEC-030) is missing contacts
 - Replacing legacy `/api/run/:agent` endpoints in v1 (agents remain channel adapters behind capabilities)
 - Full Learning Loop auto-mutation of Playbooks (advisory only; operator approval required)
 - Cross-tenant execution sharing
@@ -86,7 +86,7 @@ Without an Execution Engine, approved strategy dies in review mode, or legacy ag
 |---|---|
 | SPEC-022 Mission Engine | Approval gate; follow-up mission spawn; durable mission lifecycle |
 | SPEC-023 Capability Framework | `execution_engine` capability contract |
-| SPEC-024–026 | Provenance of who/why targets were chosen (pinned on campaign) |
+| SPEC-024–026 · SPEC-030 | Provenance of who/why targets were chosen; intelligence packages for contacts/context (pinned on campaign) |
 | SPEC-027B | Proposal approval as a manual / review gate when required |
 | SPEC-028 Client Playbook | Channels, sequence timing, constraints, retry rules |
 | ADR-003 | No unapproved outreach |

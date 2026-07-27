@@ -18,6 +18,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-014](docs/adr/ADR-014_Personalized_by_Default.md) | Personalized by Default | Accepted | Proposal generation optimizes for relevance, not speed; interchangeable name-swap decks fail |
 | [ADR-015](docs/adr/ADR-015_Strategy_Lives_in_the_Playbook.md) | Strategy Lives in the Playbook | Accepted | Client strategy lives in versioned Client Playbooks; capabilities execute strategy |
 | [ADR-016](docs/adr/ADR-016_Execution_Does_Not_Decide.md) | Execution Does Not Decide | Accepted | Execution Engine carries out approved strategy only — never creates it |
+| [ADR-017](docs/adr/ADR-017_Intelligence_Before_Execution.md) | Intelligence Before Execution | Accepted | Company Intelligence packages before Ranking/Campaign/Proposal/Execution; never fabricate |
 
 ## How to add a decision
 

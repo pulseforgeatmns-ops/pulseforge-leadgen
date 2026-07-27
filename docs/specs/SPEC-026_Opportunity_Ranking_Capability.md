@@ -8,7 +8,7 @@
 | **Owner** | Pulseforge engineering |
 | **Created** | 2026-07-27 |
 | **Version** | v1.0.0 |
-| **Depends on** | SPEC-022, SPEC-023, SPEC-024, SPEC-025 (enrichment stub until live), ADR-010, ADR-011 |
+| **Depends on** | SPEC-022, SPEC-023, SPEC-024, SPEC-030 (Company Intelligence; enrichment stub until live), ADR-010, ADR-011 |
 | **Consumed by** | Mission Engine, Campaign Builder, Command Deck Operations |
 
 ## Objective
@@ -49,7 +49,7 @@ Discovery and enrichment produce candidates, but operators still need a transpar
 
 ## Out of Scope
 
-- Live Company Enrichment (SPEC-025) — ranking accepts enrichment stub or live outputs
+- Live Company Intelligence (SPEC-030) — ranking accepts enrichment stub or live intelligence packages
 - Campaign Builder implementation (still stub; consumes ranked outputs)
 - Autonomous outreach / send
 - Mutating Reasoning Runtime confidence (ranking is a capability adapter; SPEC-015A remains optional backing later)
@@ -58,7 +58,7 @@ Discovery and enrichment produce candidates, but operators still need a transpar
 ## Dependencies
 
 - SPEC-024 Discovery Profiles + prospect evidence / rankingSignals
-- SPEC-025 enrichment outputs when available (`email`, `phone`, `contacts`, `enriched`, firmographics)
+- SPEC-030 intelligence package fields when available (`email`, `phone`, `contacts`, `buyingSignals`, `enriched`, firmographics) — consumed without modification
 - Capability Framework contract (SPEC-023)
 - Mission flow: Discovery → Enrichment → **Opportunity Ranking** → Campaign Builder
 
@@ -184,7 +184,7 @@ interface RankedOpportunity {
 
 ## Future Work
 
-- Wire live SPEC-025 enrichment signals (hiring, tech stack, decision-maker graph)
+- Wire live SPEC-030 Company Intelligence packages (hiring, commercial footprint, decision-maker graph)
 - Optional SPEC-015A Reasoning Runtime strategy pack for ranking
 - SPEC-021 calibration of factor weights from outcome history
 - Persist ranked queues as first-class mission artifacts in Postgres

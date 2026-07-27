@@ -8,7 +8,7 @@
 | **Owner** | Pulseforge engineering |
 | **Created** | 2026-07-27 |
 | **Version** | v1.0.0 |
-| **Depends on** | SPEC-022, SPEC-023, SPEC-024, SPEC-025 (optional enrichment), SPEC-026, SPEC-028 (Client Playbook), Campaign Builder (optional), ADR-010, ADR-011, ADR-014, ADR-015 |
+| **Depends on** | SPEC-022, SPEC-023, SPEC-024, SPEC-030 (optional Company Intelligence), SPEC-026, SPEC-028 (Client Playbook), Campaign Builder (optional), ADR-010, ADR-011, ADR-014, ADR-015 |
 | **Consumed by** | Mission Engine, Command Deck Operations, Max Workspace |
 
 ## Objective
