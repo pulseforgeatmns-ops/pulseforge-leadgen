@@ -1,11 +1,15 @@
 {
   "name": "@pulseforge/knowledge",
-  "version": "0.7.3",
-  "description": "Knowledge layer foundation — storage-agnostic graph service for Pulseforge intelligence",
+  "version": "0.7.4",
+  "description": "Knowledge layer — storage-agnostic graph service and query engine for Pulseforge intelligence",
   "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./ontology": "./ontology/index.js"
+  },
   "type": "commonjs",
   "scripts": {
-    "test": "node --test tests/knowledge.test.js tests/sync.test.js",
+    "test": "node --test tests/knowledge.test.js tests/sync.test.js tests/query.test.js tests/ontology.test.js",
     "test:postgres": "node --test tests/persistentRepository.test.js"
   },
   "license": "ISC",

@@ -1,12 +1,12 @@
 'use strict';
 
 const { createNodeByType, updateNodeByType } = require('../nodes');
-const { NODE_TYPES, isNodeType } = require('../types/nodeTypes');
+const { isNodeType } = require('../types/nodeTypes');
 const { isEdgeType } = require('../edges/edgeTypes');
-const { EDGE_TYPES } = require('../edges/edgeTypes');
 const { assertGraphRepository } = require('../repositories/GraphRepository');
 const { EvidenceEngine } = require('../evidence/EvidenceEngine');
 const { ClaimEngine } = require('../claims/ClaimEngine');
+const { QueryEngine } = require('../query/QueryEngine');
 
 /**
  * KnowledgeService — the only public API for graph operations.
@@ -18,12 +18,30 @@ class KnowledgeService {
    * @param {import('../repositories/GraphRepository').GraphRepository} deps.repository
    * @param {EvidenceEngine} [deps.evidenceEngine]
    * @param {ClaimEngine} [deps.claimEngine]
+   * @param {QueryEngine} [deps.queryEngine]
+   * @param {(m: object) => void} [deps.onQueryMetrics]
    */
   constructor(deps) {
     assertGraphRepository(deps.repository);
     this._repository = deps.repository;
     this.evidence = deps.evidenceEngine || new EvidenceEngine(deps.repository);
     this.claims = deps.claimEngine || new ClaimEngine(deps.repository);
+    this._query =
+      deps.queryEngine ||
+      new QueryEngine({
+        repository: deps.repository,
+        onMetrics: deps.onQueryMetrics,
+      });
+  }
+
+  /** @returns {import('../query/QueryTypes').QueryMetrics|null} */
+  getLastQueryMetrics() {
+    return this._query.getLastMetrics();
+  }
+
+  /** @returns {import('../query/QueryTypes').QueryMetrics[]} */
+  getQueryMetricsHistory() {
+    return this._query.getMetricsHistory();
   }
 
   /**
@@ -143,81 +161,92 @@ class KnowledgeService {
     return this._repository.neighbors(tenantId, nodeId, options);
   }
 
-  /**
-   * @param {string} tenantId
-   * @param {object} [query]
-   */
-  async findEvidence(tenantId, query = {}) {
-    requireTenant(tenantId);
-    return this._repository.find(tenantId, { ...query, type: NODE_TYPES.EVIDENCE });
+  // ─── Query Engine API (SPEC-001C) ───────────────────────────────────────────
+
+  /** @param {import('../query/QueryTypes').CompanyQuery} filter */
+  async findCompanies(filter) {
+    return this._query.findCompanies(filter);
+  }
+
+  /** @param {import('../query/QueryTypes').PersonQuery} filter */
+  async findPeople(filter) {
+    return this._query.findPeople(filter);
+  }
+
+  /** @param {import('../query/QueryTypes').InteractionQuery} filter */
+  async findInteractions(filter) {
+    return this._query.findInteractions(filter);
   }
 
   /**
-   * @param {string} tenantId
-   * @param {object} [query]
+   * Evidence query. Accepts EvidenceQuery object, or legacy (tenantId, query).
+   * @param {import('../query/QueryTypes').EvidenceQuery|string} filterOrTenantId
+   * @param {object} [maybeQuery]
    */
-  async findClaims(tenantId, query = {}) {
-    requireTenant(tenantId);
-    return this._repository.find(tenantId, { ...query, type: NODE_TYPES.CLAIM });
+  async findEvidence(filterOrTenantId, maybeQuery) {
+    const filter = normalizeTenantQuery(filterOrTenantId, maybeQuery, 'EvidenceQuery');
+    return this._query.findEvidence(filter);
+  }
+
+  /**
+   * Claim query. Accepts ClaimQuery object, or legacy (tenantId, query).
+   * @param {import('../query/QueryTypes').ClaimQuery|string} filterOrTenantId
+   * @param {object} [maybeQuery]
+   */
+  async findClaims(filterOrTenantId, maybeQuery) {
+    const filter = normalizeTenantQuery(filterOrTenantId, maybeQuery, 'ClaimQuery');
+    return this._query.findClaims(filter);
+  }
+
+  /**
+   * Neighbor traversal via query object.
+   * @param {import('../query/QueryTypes').NeighborQuery} query
+   */
+  async neighbors(query) {
+    return this._query.neighbors(query);
+  }
+
+  /**
+   * Multi-hop related nodes (depth-limited, deterministic).
+   * @param {import('../query/QueryTypes').RelatedQuery} query
+   */
+  async related(query) {
+    return this._query.related(query);
+  }
+
+  /**
+   * Chronological history for a node.
+   * @param {import('../query/QueryTypes').TimelineQuery} query
+   */
+  async timeline(query) {
+    return this._query.timeline(query);
+  }
+
+  /**
+   * Shortest path between two nodes.
+   * @param {import('../query/QueryTypes').PathQuery} query
+   */
+  async path(query) {
+    return this._query.path(query);
   }
 
   /**
    * Explainability chain for Max:
-   * Claim → Evidence → Original Source → Confidence → Reason
+   * Claim → Evidence → Original Source → Confidence → Timeline Position → Reason
    *
-   * @param {string} tenantId
-   * @param {string} nodeId
+   * Accepts ExplainQuery `{ tenantId, nodeId }` or legacy `(tenantId, nodeId)`.
+   *
+   * @param {import('../query/QueryTypes').ExplainQuery|string} queryOrTenantId
+   * @param {string} [maybeNodeId]
    */
-  async explain(tenantId, nodeId) {
-    requireTenant(tenantId);
-    const node = await this.findNode(tenantId, nodeId);
-    if (!node) {
-      return null;
-    }
-
-    if (node.type === NODE_TYPES.CLAIM) {
-      return this._explainClaim(tenantId, node);
-    }
-    if (node.type === NODE_TYPES.EVIDENCE) {
-      return this._explainEvidence(node);
-    }
-
-    // Subject node: gather claims ABOUT it, else evidence ABOUT it.
-    const claimLinks = await this.findNeighbors(tenantId, nodeId, {
-      direction: 'in',
-      edgeType: EDGE_TYPES.ABOUT,
-    });
-    const claims = claimLinks
-      .map((l) => l.node)
-      .filter((n) => n.type === NODE_TYPES.CLAIM && n.status === 'active');
-
-    if (claims.length > 0) {
-      const claimExplanations = [];
-      for (const claim of claims) {
-        claimExplanations.push(await this._explainClaim(tenantId, claim));
-      }
-      return {
-        subject: summarizeNode(node),
-        claims: claimExplanations,
-        confidence: maxConfidence(claimExplanations.map((c) => c.confidence)),
-        reason: `Subject has ${claims.length} active claim(s)`,
-      };
-    }
-
-    const evidence = claimLinks
-      .map((l) => l.node)
-      .filter((n) => n.type === NODE_TYPES.EVIDENCE);
-
-    return {
-      subject: summarizeNode(node),
-      claims: [],
-      evidence: evidence.map((e) => this._explainEvidence(e)),
-      confidence: maxConfidence(evidence.map((e) => e.confidence)),
-      reason:
-        evidence.length > 0
-          ? `Subject has ${evidence.length} attached evidence node(s) and no claims`
-          : 'No claims or evidence attached',
-    };
+  async explain(queryOrTenantId, maybeNodeId) {
+    const query =
+      typeof queryOrTenantId === 'string'
+        ? { tenantId: queryOrTenantId, nodeId: maybeNodeId }
+        : queryOrTenantId;
+    requireTenant(query.tenantId);
+    if (!query.nodeId) throw new Error('explain requires nodeId');
+    return this._query.explain(query);
   }
 
   /**
@@ -241,45 +270,6 @@ class KnowledgeService {
     });
     return all.slice(0, limit);
   }
-
-  async _explainClaim(tenantId, claim) {
-    const supporting = await this.findNeighbors(tenantId, claim.id, {
-      direction: 'in',
-      edgeType: EDGE_TYPES.SUPPORTS,
-    });
-    const evidence = supporting
-      .map((l) => l.node)
-      .filter((n) => n.type === NODE_TYPES.EVIDENCE)
-      .map((e) => this._explainEvidence(e));
-
-    return {
-      claim: {
-        id: claim.id,
-        statement: claim.statement,
-        status: claim.status,
-      },
-      evidence,
-      originalSources: evidence.map((e) => e.originalSource),
-      confidence: claim.confidence,
-      reason: claim.reason,
-    };
-  }
-
-  _explainEvidence(evidence) {
-    return {
-      evidence: {
-        id: evidence.id,
-        summary: evidence.summary,
-        confidence: evidence.confidence,
-      },
-      originalSource: {
-        sourceType: evidence.sourceType,
-        sourceId: evidence.sourceId,
-      },
-      confidence: evidence.confidence,
-      reason: evidence.summary || `Evidence from ${evidence.sourceType}`,
-    };
-  }
 }
 
 function requireTenant(tenantId) {
@@ -288,18 +278,21 @@ function requireTenant(tenantId) {
   }
 }
 
-function summarizeNode(node) {
-  return {
-    id: node.id,
-    type: node.type,
-    name: node.name || null,
-    statement: node.statement || null,
-  };
-}
-
-function maxConfidence(values) {
-  if (!values || values.length === 0) return 0;
-  return Math.max(...values.map((v) => Number(v) || 0));
+/**
+ * @param {object|string} filterOrTenantId
+ * @param {object} [maybeQuery]
+ * @param {string} label
+ */
+function normalizeTenantQuery(filterOrTenantId, maybeQuery, label) {
+  if (typeof filterOrTenantId === 'string') {
+    requireTenant(filterOrTenantId);
+    return { ...(maybeQuery || {}), tenantId: filterOrTenantId };
+  }
+  if (!filterOrTenantId || typeof filterOrTenantId !== 'object') {
+    throw new Error(`${label} requires a query object with tenantId`);
+  }
+  requireTenant(filterOrTenantId.tenantId);
+  return filterOrTenantId;
 }
 
 function nodeMatchesQuery(node, q) {

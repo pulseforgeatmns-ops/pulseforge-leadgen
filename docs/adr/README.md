@@ -10,6 +10,11 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-002](ADR-002_Explainable_AI.md) | Explainable AI | Accepted |
 | [ADR-003](ADR-003_Human_Approval.md) | Human Approval | Accepted |
 | [ADR-004](ADR-004_Knowledge_Graph.md) | Knowledge Graph | Accepted |
+| [ADR-005](ADR-005_LLM_Presentation_Engine.md) | LLM Presentation Engine | Accepted |
+| [ADR-006](ADR-006_Live_Intelligence_Evolution.md) | Live Intelligence Evolution | Accepted |
+| [ADR-007](ADR-007_Operator_Intelligence.md) | Operator Intelligence | Accepted |
+| [ADR-008](ADR-008_Outcome_Intelligence.md) | Outcome Intelligence | Accepted |
+| [ADR-009](ADR-009_Evidence_Platform_Architecture.md) | Evidence Platform Architecture | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

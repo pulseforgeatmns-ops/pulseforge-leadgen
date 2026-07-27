@@ -20,6 +20,11 @@
       href: { default: '/dashboard', setter: '/setter#view=home', sales: '/setter#view=home', closer: '/closer' },
     },
     {
+      id: 'command-deck', label: 'Command Deck',
+      roles: ['admin', 'manager', 'viewer', 'client'],
+      href: { default: '/command-deck' },
+    },
+    {
       id: 'pipeline', label: 'Pipeline',
       roles: ['admin', 'manager', 'viewer', 'client', 'setter', 'sales'],
       href: { default: '/dashboard#pf-tab=pipeline', setter: '/setter#view=pipeline', sales: '/setter#view=pipeline' },
@@ -67,6 +72,7 @@
 
   function currentSurface() {
     const path = window.location.pathname;
+    if (path.startsWith('/command-deck')) return 'command-deck';
     if (path.startsWith('/setter')) return 'calls';
     if (path.startsWith('/closer')) return 'customers';
     if (path.startsWith('/dashboard')) {

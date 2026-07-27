@@ -3,8 +3,8 @@
 | Field | Value |
 |---|---|
 | **Status** | Partially superseded — persistent store delivered as [SPEC-001 Persistent Knowledge Store](SPEC-001_Persistent_Knowledge_Store.md) (v0.7.3) |
-| **Remaining** | Shadow dual-write / production ingest wiring (target v0.8.0) |
-| **Target Version** | v0.8.0 (remaining work) |
+| **Remaining** | Shadow dual-write / production ingest wiring (unversioned; follows v0.8.0 reasoning library) |
+| **Target Version** | TBD (remaining work; v0.8.0 reassigned to SPEC-002) |
 
 ## Objective
 
@@ -93,7 +93,7 @@ TBD in implementation spike — must include:
 - [ ] At least three live event types ingest idempotently
 - [ ] Query helper returns neighborhood for a prospect with evidence refs
 - [ ] Backfill can run safely without outbound side effects
-- [ ] CURRENT_STATE / CHANGELOG / release v0.8.0 updated
+- [ ] CURRENT_STATE / CHANGELOG updated when remaining ingest ships
 
 ## Future Work
 

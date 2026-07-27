@@ -1,0 +1,14 @@
+{
+  "name": "@pulseforge/learning",
+  "version": "1.0.0",
+  "description": "Learning & Belief Evolution Engine — outcomes calibrate trust (SPEC-021)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  }
+}

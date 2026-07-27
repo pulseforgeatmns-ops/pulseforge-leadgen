@@ -46,9 +46,19 @@ Evidence in  →  Agent decides  →  Log + optional mutate  →  Human approval
 
 | Mode | Behavior |
 |---|---|
-| Briefing | Snapshot + AI summary email/digest |
+| Briefing | Snapshot + AI summary email/digest (legacy agent) |
 | Orchestration (shadow) | Scores, decisions, skipped actions |
-| Reasoning engine (planned SPEC-002) | Graph-aware recommendations with explanations |
+| Reasoning engine (SPEC-002 / v0.8.0) | Graph-aware recommendations with explanations (`packages/max`) |
+| Temporal memory (SPEC-003 / v0.8.1) | Snapshot diffs, trends, watches — transition tracking (`packages/max/memory`) |
+| Briefing engine (SPEC-004 / v0.9.0) | Assembles Knowledge + Reasoning + Memory into structured briefings (`packages/max/briefing`) |
+| Policy engine (SPEC-005 / v0.9.1) | Evaluates recommendations against tenant rules — allow/warn/requireApproval/block (`packages/max/policy`) |
+| Command Deck composer (SPEC-007 / v0.9.2) | Assembles Briefing + Policy into one immutable CommandDeckModel (`packages/max/commandDeck`); `GET /api/v1/command-deck` |
+| Command Deck UI (SPEC-008) | Render-only `/command-deck` surface; presentation consumes `CommandDeckModel` only |
+| Intelligence Navigation (SPEC-010) | Trail, Related Intelligence, Company + Recommendation destinations on `/command-deck` |
+| Live Intelligence Loop (SPEC-011 / ADR-006) | `IntelligenceEvent` + LiveLoopEngine; soft-poll evolution; Max awareness; material notifications |
+| Operator Intelligence (SPEC-012 / ADR-007) | Interaction events + learning; adaptive presentation / Max chips; never alters deterministic intelligence |
+| Outcome Intelligence (SPEC-013 / ADR-008) | RecommendationOutcome + calibration + strategy metrics + drift; evaluates reasoning only — never changes it |
+| Max Intelligence Workspace (SPEC-009) | Contextual Ask Max modal; deterministic StructuredResponseObject → Claude presentation only (ADR-005) |
 
 Max must not bypass approval constitution or DNC.
 
