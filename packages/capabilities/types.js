@@ -10,6 +10,7 @@ const CAPABILITY_CATEGORIES = Object.freeze({
   ENRICHMENT: 'enrichment',
   INTELLIGENCE: 'intelligence',
   CAMPAIGN: 'campaign',
+  EXECUTION: 'execution',
   MONITORING: 'monitoring',
   REPORTING: 'reporting',
 });
@@ -41,6 +42,7 @@ const BUILTIN_IDS = Object.freeze({
   PROPOSAL_GENERATOR: 'proposal_generator',
   MAIL_PACKAGE_GENERATOR: 'mail_package_generator',
   CAMPAIGN_REVIEW: 'campaign_review',
+  DIRECT_MAIL_EXECUTION: 'direct_mail_execution',
 });
 
 /**

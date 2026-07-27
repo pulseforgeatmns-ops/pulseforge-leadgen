@@ -68,6 +68,20 @@ function routeIntent(objective) {
  * @returns {string|null}
  */
 function matchMissionType(lower, original) {
+  // Direct Mail Execution (SPEC-035) — before campaign review / mail packages
+  if (
+    /\bdirect\s+mail\s+execution\b/.test(lower) ||
+    /\bexecute\s+(the\s+)?(direct\s+)?mail\b/.test(lower) ||
+    /\bexecute\s+(the\s+)?campaign\b/.test(lower) ||
+    /\bprint\s+(and\s+)?mail\b/.test(lower) ||
+    /\bmail\s+(the\s+)?campaign\b/.test(lower) ||
+    /\bmark\s+(all\s+)?mailed\b/.test(lower) ||
+    /\bprint\s+session\b/.test(lower) ||
+    /\bassemble\s+(mail\s+)?packages?\b/.test(lower)
+  ) {
+    return MISSION_TYPES.DIRECT_MAIL_EXECUTION;
+  }
+
   // Campaign Review (SPEC-034) — before mail packages / campaign build
   if (
     /\bcampaign\s+review\b/.test(lower) ||
