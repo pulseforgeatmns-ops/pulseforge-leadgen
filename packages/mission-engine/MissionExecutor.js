@@ -275,10 +275,25 @@ class MissionExecutor {
         prospects: priorOutputs.prospects || null,
         rankedCount: priorOutputs.rankedCount || null,
         discoveryProfile: priorOutputs.discoveryProfile || null,
+        clientPlaybook: priorOutputs.clientPlaybook ||
+          (mission.constraints && mission.constraints.clientPlaybook) ||
+          null,
+        clientPlaybookId:
+          priorOutputs.clientPlaybookId ||
+          (mission.constraints && mission.constraints.clientPlaybookId) ||
+          null,
+        clientPlaybookVersion:
+          priorOutputs.clientPlaybookVersion ||
+          (mission.constraints && mission.constraints.clientPlaybookVersion) ||
+          null,
         reviewPackage: priorOutputs.reviewPackage || null,
         summary: priorOutputs.summary || null,
         rejected: priorOutputs.rejected || null,
         suggestedNextActions: priorOutputs.suggestedNextActions || null,
+        proposal: priorOutputs.proposal || null,
+        document: priorOutputs.document || null,
+        html: priorOutputs.html || null,
+        proposalId: priorOutputs.proposalId || null,
         outboundBlocked: true,
         stepResults: stepResults.map((s) => ({
           capabilityId: s.capabilityId,

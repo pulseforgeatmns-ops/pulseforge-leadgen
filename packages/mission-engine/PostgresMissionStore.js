@@ -239,6 +239,7 @@ function fromRow(r) {
   const constraints = r.constraints || {};
   const plan = r.plan || {};
   const profileSnap = constraints.discoveryProfile || null;
+  const playbookSnap = constraints.clientPlaybook || null;
   return {
     id: r.id,
     tenantId: r.tenant_id,
@@ -257,6 +258,17 @@ function fromRow(r) {
           message:
             plan.discoveryProfileMessage ||
             `Using Discovery Profile: ${profileSnap.name}.`,
+        }
+      : null,
+    clientPlaybook: playbookSnap
+      ? {
+          id: playbookSnap.id,
+          name: playbookSnap.name,
+          version: playbookSnap.version,
+          selection: 'pinned',
+          message:
+            plan.clientPlaybookMessage ||
+            `Using Client Playbook: ${playbookSnap.name} (v${playbookSnap.version}).`,
         }
       : null,
     createdBy: r.created_by,

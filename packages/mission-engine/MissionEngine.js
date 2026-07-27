@@ -118,6 +118,13 @@ class MissionEngine {
               version: mission.discoveryProfile.version,
             }
           : null,
+        clientPlaybook: mission.clientPlaybook
+          ? {
+              id: mission.clientPlaybook.id,
+              name: mission.clientPlaybook.name,
+              version: mission.clientPlaybook.version,
+            }
+          : null,
       },
     });
 

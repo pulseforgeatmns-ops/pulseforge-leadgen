@@ -15,6 +15,9 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-009](docs/adr/ADR-009_Evidence_Platform_Architecture.md) | Evidence Platform Architecture | Accepted | Domain-neutral Evidence Core + injectable Strategy Packs; core must not contain domain business logic |
 | [ADR-010](docs/adr/ADR-010_Mission_Engine.md) | Mission Engine | Accepted | Intent → Capability Registry; durable missions; review before outreach; Mission-First UX on Command Deck |
 | [ADR-011](docs/adr/ADR-011_Capability_Framework.md) | Capability Framework | Accepted | Capabilities are the stable API of Pulseforge; agents are implementation details |
+| [ADR-014](docs/adr/ADR-014_Personalized_by_Default.md) | Personalized by Default | Accepted | Proposal generation optimizes for relevance, not speed; interchangeable name-swap decks fail |
+| [ADR-015](docs/adr/ADR-015_Strategy_Lives_in_the_Playbook.md) | Strategy Lives in the Playbook | Accepted | Client strategy lives in versioned Client Playbooks; capabilities execute strategy |
+| [ADR-016](docs/adr/ADR-016_Execution_Does_Not_Decide.md) | Execution Does Not Decide | Accepted | Execution Engine carries out approved strategy only — never creates it |
 
 ## How to add a decision
 

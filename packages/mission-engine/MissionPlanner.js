@@ -12,6 +12,10 @@ const {
   createDiscoveryProfileStore,
 } = require('../capabilities/discovery');
 const {
+  createPlaybookSelector,
+  createClientPlaybookStore,
+} = require('../capabilities/playbook');
+const {
   MISSION_TYPES,
   MISSION_STATUS,
   STAGE_LABELS,
@@ -58,6 +62,7 @@ const TYPE_CAPABILITY_CHAINS = Object.freeze({
   ],
   [MISSION_TYPES.WEEKLY_BRIEF]: [BUILTIN_IDS.KNOWLEDGE_UPDATE],
   [MISSION_TYPES.KNOWLEDGE_REFRESH]: [BUILTIN_IDS.KNOWLEDGE_UPDATE],
+  [MISSION_TYPES.PROPOSAL_GENERATION]: [BUILTIN_IDS.PROPOSAL_GENERATOR],
 });
 
 class MissionPlanner {
@@ -66,6 +71,8 @@ class MissionPlanner {
    * @param {import('@pulseforge/capabilities').CapabilityRegistry} deps.registry
    * @param {object} [deps.profileSelector]
    * @param {object} [deps.profileStore]
+   * @param {object} [deps.playbookSelector]
+   * @param {object} [deps.playbookStore]
    */
   constructor(deps) {
     if (!deps || !deps.registry) {
@@ -77,6 +84,11 @@ class MissionPlanner {
     this._profileSelector =
       deps.profileSelector ||
       createProfileSelector({ store: this._profileStore });
+    this._playbookStore =
+      deps.playbookStore || createClientPlaybookStore();
+    this._playbookSelector =
+      deps.playbookSelector ||
+      createPlaybookSelector({ store: this._playbookStore });
   }
 
   get registry() {
@@ -85,6 +97,10 @@ class MissionPlanner {
 
   get profileSelector() {
     return this._profileSelector;
+  }
+
+  get playbookSelector() {
+    return this._playbookSelector;
   }
 
   /**
@@ -132,6 +148,40 @@ class MissionPlanner {
       baseConstraints.discoveryProfileVersion = profileSelection.profile.version;
       if (!baseConstraints.targetCount && profileSelection.profile.targetCount) {
         baseConstraints.targetCount = profileSelection.profile.targetCount;
+      }
+    }
+
+    // SPEC-028 / ADR-015: pin Client Playbook for campaign + proposal missions
+    let playbookSelection = null;
+    const needsPlaybook =
+      chain.includes(BUILTIN_IDS.CAMPAIGN_BUILDER) ||
+      chain.includes(BUILTIN_IDS.PROPOSAL_GENERATOR);
+    if (needsPlaybook) {
+      playbookSelection = this._playbookSelector.select({
+        objective: objectiveText,
+        clientId: input.clientId != null ? input.clientId : input.tenantId,
+        tenantId: input.tenantId,
+        constraints: baseConstraints,
+      });
+      if (playbookSelection.playbook) {
+        baseConstraints.clientPlaybook = playbookSelection.playbook;
+        baseConstraints.clientPlaybookId = playbookSelection.playbook.id;
+        baseConstraints.clientPlaybookVersion =
+          playbookSelection.playbook.version;
+      }
+    }
+
+    // SPEC-027B: seed Discovery Summary from objective when generating a proposal
+    if (
+      chain.includes(BUILTIN_IDS.PROPOSAL_GENERATOR) &&
+      !baseConstraints.discoverySummary &&
+      !(input.inputs && input.inputs.discoverySummary)
+    ) {
+      const forMatch = /(?:proposal|quote|deck)\s+for\s+(.+)$/i.exec(objectiveText);
+      if (forMatch) {
+        baseConstraints.discoverySummary = {
+          companyName: forMatch[1].replace(/[."]+$/, '').trim(),
+        };
       }
     }
 
@@ -195,6 +245,20 @@ class MissionPlanner {
             })),
           }
         : null,
+      clientPlaybook: playbookSelection && playbookSelection.playbook
+        ? {
+            id: playbookSelection.playbook.id,
+            name: playbookSelection.playbook.name,
+            version: playbookSelection.playbook.version,
+            selection: playbookSelection.selection,
+            message: playbookSelection.message,
+            alternatives: (playbookSelection.alternatives || []).map((p) => ({
+              id: p.id,
+              name: p.name,
+              version: p.version,
+            })),
+          }
+        : null,
       createdBy: input.createdBy || null,
       priority: input.priority || 'normal',
       plan: {
@@ -202,6 +266,9 @@ class MissionPlanner {
         missingPrerequisites: missing,
         discoveryProfileMessage: profileSelection
           ? profileSelection.message
+          : null,
+        clientPlaybookMessage: playbookSelection
+          ? playbookSelection.message
           : null,
       },
       confidence: steps.length ? confidenceSum / steps.length : 0,
@@ -238,6 +305,11 @@ function deriveTitle(objective, type) {
   if (type === MISSION_TYPES.MARKET_RESEARCH) return 'Market Research';
   if (type === MISSION_TYPES.WEEKLY_BRIEF) return 'Weekly Brief';
   if (type === MISSION_TYPES.KNOWLEDGE_REFRESH) return 'Knowledge Refresh';
+  if (type === MISSION_TYPES.PROPOSAL_GENERATION) {
+    const forMatch = /(?:proposal|quote|deck)\s+for\s+(.+)$/i.exec(objective);
+    if (forMatch) return `Proposal — ${forMatch[1].replace(/[."]+$/, '').trim()}`;
+    return 'Commercial Growth Proposal';
+  }
   const trimmed = objective.length > 60 ? `${objective.slice(0, 57)}…` : objective;
   return trimmed;
 }

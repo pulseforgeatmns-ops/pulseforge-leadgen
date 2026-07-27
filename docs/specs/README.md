@@ -34,6 +34,9 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-023](SPEC-023_Capability_Framework.md) | Capability Framework | Implemented (discovery + ranking live) | v1.2.0 |
 | [SPEC-024](SPEC-024_Prospect_Discovery_Capability.md) | Prospect Discovery Capability | Implemented | v1.0.0 |
 | [SPEC-026](SPEC-026_Opportunity_Ranking_Capability.md) | Opportunity Ranking Capability | Implemented | v1.0.0 |
+| [SPEC-027B](SPEC-027B_Proposal_Generator_Capability.md) | Proposal Generator Capability | Implemented (v1 thin slice) | v1.2.0 |
+| [SPEC-028](SPEC-028_Client_Playbook_Capability.md) | Client Playbook Capability | Implemented (v1) | v1.2.0 |
+| [SPEC-029](SPEC-029_Execution_Engine.md) | Execution Engine | Proposed | v1.3.0 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 
