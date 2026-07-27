@@ -6,7 +6,7 @@
 | **Date** | 2026-07-27 |
 | **Spec** | [SPEC-029](../specs/SPEC-029_Execution_Engine.md) |
 | **Supersedes** | — |
-| **Related** | [ADR-003](ADR-003_Human_Approval.md), [ADR-010](ADR-010_Mission_Engine.md), [ADR-011](ADR-011_Capability_Framework.md), [ADR-015](ADR-015_Strategy_Lives_in_the_Playbook.md), [ADR-002](ADR-002_Explainable_AI.md), [ADR-008](ADR-008_Outcome_Intelligence.md) |
+| **Related** | [ADR-003](ADR-003_Human_Approval.md), [ADR-010](ADR-010_Mission_Engine.md), [ADR-011](ADR-011_Capability_Framework.md), [ADR-015](ADR-015_Strategy_Lives_in_the_Playbook.md), [ADR-002](ADR-002_Explainable_AI.md), [ADR-008](ADR-008_Outcome_Intelligence.md), [ADR-017](ADR-017_Intelligence_Before_Execution.md) |
 
 ## Context
 
@@ -49,6 +49,7 @@ Mission Engine already separates planning from capability invocation ([ADR-010](
 
 ### Follow-ups
 
+- [ ] Prefer [SPEC-030](../specs/SPEC-030_Company_Intelligence_Capability.md) live packages on the mission path before Execution thin slice
 - [ ] Implement [SPEC-029](../specs/SPEC-029_Execution_Engine.md) (plan builder → runner → evidence → outcomes)
 - [ ] Additive Playbook schedule/retry fields as needed (still Playbook-owned)
 - [ ] Wire post-Approve Mission hook to `execution_engine` capability

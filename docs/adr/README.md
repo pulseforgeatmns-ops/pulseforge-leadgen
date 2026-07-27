@@ -20,6 +20,7 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-014](ADR-014_Personalized_by_Default.md) | Personalized by Default | Accepted |
 | [ADR-015](ADR-015_Strategy_Lives_in_the_Playbook.md) | Strategy Lives in the Playbook | Accepted |
 | [ADR-016](ADR-016_Execution_Does_Not_Decide.md) | Execution Does Not Decide | Accepted |
+| [ADR-017](ADR-017_Intelligence_Before_Execution.md) | Intelligence Before Execution | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

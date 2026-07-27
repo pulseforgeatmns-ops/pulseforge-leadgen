@@ -8,10 +8,10 @@
 | **Current Milestone** | Mission Engine product integration (SPEC-022 thin slice) |
 | **Current Sprint** | SPEC-024 Discovery + SPEC-026 Ranking + SPEC-014 Knowledge Dual-Write |
 | **Current Spec** | [SPEC-028 Client Playbook](docs/specs/SPEC-028_Client_Playbook_Capability.md) — Implemented (v1); [SPEC-027B](docs/specs/SPEC-027B_Proposal_Generator_Capability.md) Implemented; [SPEC-026](docs/specs/SPEC-026_Opportunity_Ranking_Capability.md) Implemented; [SPEC-024](docs/specs/SPEC-024_Prospect_Discovery_Capability.md) Implemented |
-| **Next Spec** | [SPEC-029 Execution Engine](docs/specs/SPEC-029_Execution_Engine.md) (Proposed / ADR-016); SPEC-025 Company Enrichment (live); Campaign Builder live adapter; [SPEC-015 Market Intelligence Domain](docs/specs/SPEC-015_Market_Intelligence_Domain.md) |
+| **Next Spec** | [SPEC-030 Company Intelligence](docs/specs/SPEC-030_Company_Intelligence_Capability.md) (Proposed / ADR-017) — before Execution; then [SPEC-029 Execution Engine](docs/specs/SPEC-029_Execution_Engine.md); Campaign Builder live adapter; [SPEC-015 Market Intelligence Domain](docs/specs/SPEC-015_Market_Intelligence_Domain.md) |
 | **Current Priority** | Highest — MissionPlanner is the default router for business objectives; dual-write remains for live knowledge |
 | **Last Completed** | SPEC-028 Client Playbook (ADR-015); SPEC-027B Proposal Generator; SPEC-026 Opportunity Ranking; SPEC-024 Prospect Discovery; SPEC-022/023 thin slice; SPEC-021 Learning; SPEC-020 EQL; SPEC-019 Laboratory; SPEC-018 Replay; SPEC-017 Ontology; SPEC-015A Runtime; SPEC-013–009; SPEC-008–000 |
-| **In Progress** | SPEC-014 dual-write operational readiness; SPEC-025 enrichment + Campaign Builder live adapters |
+| **In Progress** | SPEC-014 dual-write operational readiness; SPEC-030 Company Intelligence (proposed; supersedes unfinished SPEC-025 enrichment); Campaign Builder live adapters |
 | **Known Blockers** | Inquiry Foundation production deploy blocked; Max orchestration shadow-default; migration must be applied on Railway before dual-write fills the graph in prod; apply `migrations/2026-07-27-mission-engine.sql` (+ discovery profiles + proposal_versions + client_playbooks) for durable missions |
 | **Upcoming Decisions** | When `/command-deck` becomes default landing vs `/dashboard`; one business week Anchor-only operation (SPEC-014 success metric) |
 

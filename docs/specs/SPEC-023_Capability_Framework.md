@@ -271,7 +271,7 @@ Ship with:
 | Capability | Category | Example backing (implementation detail) |
 |---|---|---|
 | Prospect Discovery | Discovery | Scout (`leadgen.js`) adapter |
-| Company Enrichment | Enrichment | Enrichment / Prospeo / Hunter adapters |
+| Company Enrichment / Company Intelligence | Enrichment | SPEC-030 live adapter (stub until then); Prospeo / Hunter / website |
 | Knowledge Update | Intelligence | Dual-write / GraphSync (SPEC-014) |
 | Opportunity Ranking | Campaign / Intelligence | Reasoning Runtime ranking (SPEC-015A) |
 | Campaign Builder | Campaign | Campaign service / draft campaign record |
@@ -354,10 +354,11 @@ Reuse / extend SPEC-022 `MissionAuditEvent` where practical; do not invent a par
 - [x] Results persisted (mission deliverables + audit; invocation envelopes via audit)
 - [x] Replay supported (re-run via review `run_again`)
 - [x] Capability tests independent of missions
-- [x] Built-ins ship: Prospect Discovery (SPEC-024 live), Company Enrichment (stub), Knowledge Update (stub), Opportunity Ranking (SPEC-026 live), Campaign Builder (stub)
+- [x] Built-ins ship: Prospect Discovery (SPEC-024 live), Company Enrichment (stub → SPEC-030), Knowledge Update (stub), Opportunity Ranking (SPEC-026 live), Campaign Builder (stub)
 
 ## Future Work
 
+- Company Intelligence live adapter ([SPEC-030](SPEC-030_Company_Intelligence_Capability.md) / ADR-017)
 - Remaining category catalog entries (Competitor Discovery, Monitoring watches, Reporting, etc.)
 - Contact Enrichment / Technology Detection as separate capabilities
 - Third-party / tenant-scoped capability packs
