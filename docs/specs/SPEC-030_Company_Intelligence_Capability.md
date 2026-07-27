@@ -9,6 +9,7 @@
 | **Created** | 2026-07-27 |
 | **Version** | v0.1.0 |
 | **Depends on** | SPEC-022, SPEC-023, SPEC-024, SPEC-028 (Client Playbook), SPEC-014 (Knowledge dual-write), ADR-002, ADR-005, ADR-010, ADR-011, ADR-017 |
+| **Deepened by** | [SPEC-031](SPEC-031_Business_Signals_Capability.md) Business Signals (lifecycle, decay, Active set) / [ADR-018](../adr/ADR-018_Time_Matters.md) |
 | **Supersedes (scope)** | Unfinished Company Enrichment work formerly tracked as SPEC-025 |
 | **Consumed by** | Opportunity Ranking (SPEC-026), Campaign Builder, Proposal Generator (SPEC-027B), Execution Engine (SPEC-029), Knowledge Update, Command Deck Company Intelligence |
 
@@ -115,6 +116,8 @@ Capture evidence for:
 - Recent changes
 
 Each signal: `{ type, summary, confidence, evidenceRefs[], observedAt? }`. No signal without a ref.
+
+**Deepening:** [SPEC-031](SPEC-031_Business_Signals_Capability.md) expands this category into a first-class time-aware subsystem (categories, lifecycle Detected→Archived, decay, Active set for Ranking/Brief/Campaign/Proposal, Knowledge objects). Company Intelligence’s Signals stage should call the SPEC-031 builders rather than inventing a parallel signal model. See [ADR-018](../adr/ADR-018_Time_Matters.md).
 
 #### 4. Personalization
 
@@ -360,7 +363,7 @@ Capability `outputs`:
 
 ## Future Work
 
-- Richer website / GBP / hiring-board signal providers
+- Richer website / GBP / hiring-board signal providers via [SPEC-031](SPEC-031_Business_Signals_Capability.md)
 - Optional LLM polish that rephrases verified observations only (must not invent claims)
 - Persist intelligence packages as first-class mission artifacts
 - Align Command Deck Company Intelligence page exclusively on package + Knowledge (retire any dual invent path)

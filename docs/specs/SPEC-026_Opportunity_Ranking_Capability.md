@@ -8,7 +8,7 @@
 | **Owner** | Pulseforge engineering |
 | **Created** | 2026-07-27 |
 | **Version** | v1.0.0 |
-| **Depends on** | SPEC-022, SPEC-023, SPEC-024, SPEC-030 (Company Intelligence; enrichment stub until live), ADR-010, ADR-011 |
+| **Depends on** | SPEC-022, SPEC-023, SPEC-024, SPEC-030 (Company Intelligence; enrichment stub until live), SPEC-031 (Business Signals / Active set when live), ADR-010, ADR-011, ADR-018 |
 | **Consumed by** | Mission Engine, Campaign Builder, Command Deck Operations |
 
 ## Objective
@@ -185,6 +185,7 @@ interface RankedOpportunity {
 ## Future Work
 
 - Wire live SPEC-030 Company Intelligence packages (hiring, commercial footprint, decision-maker graph)
+- Prefer structured Active Business Signals from [SPEC-031](SPEC-031_Business_Signals_Capability.md) / [ADR-018](../adr/ADR-018_Time_Matters.md) over boolean enrichment flags for Buying Signals / timing / outreach angle
 - Optional SPEC-015A Reasoning Runtime strategy pack for ranking
 - SPEC-021 calibration of factor weights from outcome history
 - Persist ranked queues as first-class mission artifacts in Postgres

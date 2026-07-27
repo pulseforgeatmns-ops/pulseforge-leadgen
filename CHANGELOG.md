@@ -6,6 +6,15 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Mission Memory proposed ([SPEC-032](docs/specs/SPEC-032_Mission_Memory.md) / [ADR-019](docs/adr/ADR-019_Missions_Are_Conversations.md))
+  - Missions are persistent collaborative workspaces; follow-ups refine in place
+  - Append-only revision history; capabilities consume current revision; execution uses latest approved revision
+  - Smart corrections + clarification; Mission Workspace as canonical conversation
+- Business Signals Capability proposed ([SPEC-031](docs/specs/SPEC-031_Business_Signals_Capability.md) / [ADR-018](docs/adr/ADR-018_Time_Matters.md))
+  - Evidence-backed, time-aware signals (growth / operational / marketing / organizational / buying)
+  - Lifecycle Detected → Verified → Active → Decays → Archived; confidence High/Medium/Low/Unknown
+  - Deepens SPEC-030 Signals stage; Ranking / Brief / Campaign / Proposal consume one Active set
+  - Observations only — never speculative purchase intent
 - Company Intelligence Capability proposed ([SPEC-030](docs/specs/SPEC-030_Company_Intelligence_Capability.md) / [ADR-017](docs/adr/ADR-017_Intelligence_Before_Execution.md))
   - Expands unfinished SPEC-025 enrichment into evidence-only intelligence packages (company, decision makers, signals, personalization, Opportunity Brief, Knowledge handoff)
   - Never fabricate; verified → evidence, uncertain → inference
