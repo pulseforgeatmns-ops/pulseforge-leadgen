@@ -3,12 +3,12 @@
 | Field | Value |
 |---|---|
 | **Status** | Approved |
-| **Target Version** | v1.1.0 |
+| **Target Version** | v1.1.1 |
 | **Priority** | Critical |
 | **Owner** | Pulseforge engineering |
 | **Created** | 2026-07-27 |
 | **Version** | v1.1.1 |
-| **Depends on** | SPEC-002, SPEC-005, SPEC-006–009, SPEC-014, SPEC-015A, ADR-003, ADR-010 |
+| **Depends on** | SPEC-002, SPEC-005, SPEC-006–009, SPEC-014, SPEC-015A, SPEC-023, ADR-003, ADR-010, ADR-011 |
 | **Note** | Product draft was labeled “SPEC-015”; renumbered to SPEC-022 because SPEC-015 is Market Intelligence Domain. v1.1.1 adds Mission-First UX addendum. |
 
 ## Objective
@@ -26,10 +26,12 @@ The Mission Engine is not only an orchestration service; it is the **primary way
 - [ADR-002](../adr/ADR-002_Explainable_AI.md) — explainable plans and rankings
 - [ADR-003](../adr/ADR-003_Human_Approval.md) — no automatic outreach
 - [ADR-010](../adr/ADR-010_Mission_Engine.md) — capability-driven orchestration
+- [ADR-011](../adr/ADR-011_Capability_Framework.md) — capabilities as the stable API
 - [SPEC-002](SPEC-002_Max_Reasoning_Engine.md) · [SPEC-005](SPEC-005_Policy_Decision_Engine.md)
 - [SPEC-006](SPEC-006_Command_Deck.md) · [SPEC-007](SPEC-007_Command_Deck_Composition_Engine.md) · [SPEC-008](SPEC-008_Command_Deck_UI.md)
 - [SPEC-009](SPEC-009_Max_Intelligence_Workspace.md) · [SPEC-014](SPEC-014_Knowledge_Dual_Write.md)
 - [SPEC-015A](SPEC-015A_Reasoning_Runtime_Decoupling.md)
+- [SPEC-023](SPEC-023_Capability_Framework.md) — Capability contract & registry
 
 ## Problem
 
@@ -81,7 +83,8 @@ Max is still primarily a conversational / intelligence surface (SPEC-009). It ca
 - Command Deck composer + UI (SPEC-006 / 007 / 008) — Operations section consumer
 - Max Workspace presentation (SPEC-009) — Mission Workspace / Ask Max
 - Existing producers: Scout (`leadgen.js`), enrichment, campaigns table foundation
-- ADR-010 Mission Engine (capability registry + durable missions + Mission-First UX)
+- ADR-010 Mission Engine (durable missions + Mission-First UX)
+- SPEC-023 / ADR-011 Capability Framework (registry contract; MissionExecutor runs only through capabilities)
 
 ## Architecture
 
@@ -130,15 +133,18 @@ Responsibilities:
 
 ### Capability Registry
 
-Max must never hardcode agent names. Capabilities are plug-ins:
+Max must never hardcode agent names. Capabilities are plug-ins defined by [SPEC-023](SPEC-023_Capability_Framework.md) / [ADR-011](../adr/ADR-011_Capability_Framework.md):
 
 | Capability | Example backing |
 |---|---|
 | Prospect Discovery | Scout |
+| Company Enrichment | Enrichment adapters |
 | Knowledge Update | Dual-write / GraphSync |
-| Reasoning | Reasoning Runtime |
+| Opportunity Ranking | Reasoning Runtime |
 | Campaign Builder | Campaign service |
 | Market Research | SPEC-015 adapters (when ready) |
+
+`MissionPlanner` discovers capabilities from the registry. `MissionExecutor` runs only through the Capability Runner. No agent-specific branching.
 
 ### Mission context
 
@@ -220,6 +226,100 @@ If a capability fails (e.g. Scout):
 
 Every mission stores: request, execution plan, capabilities invoked, evidence generated, duration, operator actions, outcome. Replayable.
 
+---
+
+## Addendum — Mission-First UX (v1.1.1)
+
+**Supersedes** the current standalone Operations experience (shell nav `Operations` → `/dashboard#pf-tab=agents` and module-centric agent run UI as the primary operator control surface).
+
+### Design goal
+
+The Command Deck should feel **active even when the operator is idle**. At any moment the operator should immediately understand:
+
+1. What Pulseforge is doing
+2. What finished while they were away
+3. What requires attention
+4. What is currently blocked
+
+### Navigation philosophy
+
+Users navigate to **work**, not modules.
+
+- Avoid dedicated pages for functionality that naturally belongs to an active mission
+- Where practical: recommendations surface through missions; companies are reached through search, missions, recommendations, or Max
+- Operations becomes a **Command Deck section**, not a navigation destination
+
+### Navigation changes
+
+| Remove | Replace with |
+|---|---|
+| Standalone Operations nav item / page | Command Deck **Operations** section (Mission Queue) |
+
+Command Deck composition (top → bottom):
+
+1. Morning Brief
+2. Highest Leverage Action
+3. **Operations (Mission Queue)** — fills the whitespace beneath HLA
+4. Supporting Intelligence (secondary cards, priority queue, watches — existing SPEC-008 sections)
+5. Ask Max
+
+### Operations section
+
+Live panel of **persistent mission cards**. Example:
+
+```text
+OPERATIONS
+
+▶ Campaign 001
+  Discovering prospects...
+  41 / 50 completed
+
+✓ Morning Brief
+  Generated 8:01 AM
+
+⏳ Competitor Watch
+  Monitoring
+
+✓ Knowledge Sync
+  Healthy
+
+▶ Overflow Partner Search
+  Running
+```
+
+### Mission cards
+
+Each card displays:
+
+| Field | Notes |
+|---|---|
+| Title | Operator-facing mission name |
+| Status | Running / completed / monitoring / waiting / blocked / review required |
+| Progress | Capability-backed (e.g. `41 / 50`); never fake loaders |
+| Started | Timestamp |
+| Estimated completion | From planner estimate + elapsed |
+| Expand | Opens Mission Workspace |
+
+Status glyphs in the example (`▶` `✓` `⏳`) are illustrative; implement with accessible text + CSS, not emoji-dependent UI.
+
+### Mission Workspace
+
+Expanding a card opens the Mission Workspace (modal or full-height panel; reuse Max Workspace patterns from SPEC-009 where practical):
+
+- Objective
+- Execution plan
+- Live progress
+- Evidence generated
+- Results
+- Operator actions (Approve / Edit / Reject / Run Again / Retry)
+- Audit trail
+
+### Composer / API surface
+
+Extend `CommandDeckModel` (SPEC-007) with an `operations` (or `missionQueue`) section fed by durable missions + system health missions (e.g. Knowledge Sync). Soft-poll with Live Loop (SPEC-011) so the deck stays current without a full reload.
+
+Shell: remove or redirect the primary **Operations** nav item to Command Deck (anchor `#operations` optional). Legacy agent tabs on `/dashboard` may remain for admin escape hatches but are not the product Operations experience.
+
 ## Data Model
 
 ### Mission
@@ -276,21 +376,23 @@ Reuse / extend existing `campaigns` foundation where present; do not invent a pa
 
 ## Implementation Plan
 
-1. **ADR-010 + package skeleton** — `@pulseforge/mission-engine` (or `packages/mission`): types, lifecycle state machine, Capability Registry interface
-2. **Durable store** — Postgres missions + audit tables; interruption-safe status
-3. **MissionPlanner** — objective → mission type + capability plan for the six v1 types
-4. **Capability adapters (v1)** — Scout, Enrichment, Knowledge dual-write, Reasoning/Ranking, Campaign Builder
-5. **MissionExecutor** — step runner, pause/retry, progress events
-6. **API + Max Workspace** — create mission from objective; stream/poll progress; review actions
-7. **Campaign Creation path** — end-to-end for Anchor “Build Campaign 001”
-8. **Tests + docs** — unit lifecycle, capability registry, failure/resume, acceptance harness
+1. **ADR-010 + package skeleton** — `@pulseforge/mission-engine` (or `packages/mission`): types, lifecycle state machine
+2. **SPEC-023 Capability Framework** — registry, runner, contract types, five built-in adapters (ADR-011)
+3. **Durable store** — Postgres missions + audit tables; interruption-safe status
+4. **MissionPlanner** — objective → mission type + capability plan via registry discovery (six v1 types)
+5. **MissionExecutor** — step runner via CapabilityRunner only; pause/retry; progress events
+6. **API** — create / list / get mission; progress poll; review actions
+7. **Mission-First UX** — Command Deck `operations` section + mission cards; Mission Workspace; remove standalone Operations nav
+8. **Campaign Creation path** — end-to-end for Anchor “Build Campaign 001”
+9. **Tests + docs** — unit lifecycle, capability registry, failure/resume, deck Operations render, acceptance harness
 
 ## Migration Strategy
 
 - Additive tables only (`missions`, `mission_audit_events`; campaign attachment columns if needed)
 - Feature flag `MISSION_ENGINE` (default off) until dual-write is healthy in the target client
 - Legacy `POST /api/run/:agent` and cron remain; Mission Engine is an additional control plane
-- Rollback: disable flag; leave mission rows intact for forensic read
+- Shell: retire Operations as a top-level nav destination when Mission-First UX ships (redirect to `/command-deck` Operations section)
+- Rollback: disable flag; leave mission rows intact for forensic read; restore Operations nav if needed
 
 ## Testing
 
@@ -298,7 +400,8 @@ Reuse / extend existing `campaigns` foundation where present; do not invent a pa
 - Integration: Scout capability → knowledge update → reasoning rank → campaign draft (harness / fixtures)
 - Failure: kill mid-Scout → resume → no duplicate completed steps
 - Policy: completed mission never triggers send without Approve
-- Manual smoke: “Build Campaign 001 for Anchor Cleaning” → review UI with deliverables
+- UI: Command Deck Operations section shows live cards; expand opens Mission Workspace; no standalone Operations nav in primary shell
+- Manual smoke: “Build Campaign 001 for Anchor Cleaning” → card progress → review deliverables
 
 ## Acceptance Criteria
 
@@ -313,6 +416,11 @@ Reuse / extend existing `campaigns` foundation where present; do not invent a pa
 - [ ] Mission survives interruption (durable state + retry)
 - [ ] Complete audit trail recorded and replayable
 - [ ] Success metric: first-time user path for “Build Campaign 001 for Anchor Cleaning” works without agent vocabulary
+- [ ] Standalone Operations nav is removed / redirected; Operations lives on Command Deck
+- [ ] Mission Queue fills the space beneath Highest Leverage Action with persistent mission cards
+- [ ] Mission cards show title, status, progress, started, ETA, expand
+- [ ] Mission Workspace shows objective, plan, live progress, evidence, results, operator actions, audit trail
+- [ ] Idle Command Deck still communicates: active work, finished while away, needs attention, blocked
 
 ## Future Work
 
@@ -329,4 +437,5 @@ Deferred:
 - Auto-approve narrow internal-only missions (would need ADR amendment)
 - Multi-mission portfolios / scheduled recurring missions
 - Customer-facing mission templates marketplace
-- Merging Command Deck HLA into Mission create shortcuts
+- Fully collapsing Company / Recommendation dedicated pages into mission-only entry (gradual; keep deep links)
+- Merging HLA create shortcuts into one-click mission templates
