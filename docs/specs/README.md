@@ -22,6 +22,14 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-011](SPEC-011_Live_Intelligence_Loop.md) | Live Intelligence Loop | Implemented | v1.0.0 |
 | [SPEC-012](SPEC-012_Operator_Intelligence.md) | Operator Intelligence | Implemented | v1.0.0 |
 | [SPEC-013](SPEC-013_Outcome_Intelligence.md) | Outcome Intelligence | Implemented | v1.0.0 |
+| [SPEC-014](SPEC-014_Knowledge_Dual_Write.md) | Knowledge Dual-Write & Operational Readiness | In Progress | v1.0.0 |
+| [SPEC-015A](SPEC-015A_Reasoning_Runtime_Decoupling.md) | Reasoning Runtime Decoupling | Done | v1.0.0 |
+| [SPEC-015](SPEC-015_Market_Intelligence_Domain.md) | Market Intelligence Domain (MID) | Draft | TBD |
+| [SPEC-017](SPEC-017_Domain_Ontology_Framework_and_Market_Ontology.md) | Domain Ontology Framework & Market Ontology | Done | v1.0.1 |
+| [SPEC-018](SPEC-018_Deterministic_Replay_and_Temporal_Reasoning_Engine.md) | Deterministic Replay & Temporal Reasoning Engine | Done | v1.0.1 |
+| [SPEC-019](SPEC-019_Evidence_Laboratory.md) | Evidence Laboratory | Done | v1.0.1 |
+| [SPEC-020](SPEC-020_Evidence_Query_Language.md) | Evidence Query Language (EQL) | Done | v1.0.1 |
+| [SPEC-021](SPEC-021_Learning_and_Belief_Evolution_Engine.md) | Learning & Belief Evolution Engine | Done | v1.0.1 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

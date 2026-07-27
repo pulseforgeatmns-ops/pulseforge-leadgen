@@ -6,6 +6,42 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Learning & Belief Evolution Engine ([SPEC-021](docs/specs/SPEC-021_Learning_and_Belief_Evolution_Engine.md))
+  - `packages/learning/` — LearningEngine, BeliefTracker, CalibrationEngine, OutcomeEvaluator, LearningSession
+  - Outcomes calibrate trust after reality is known (no ML / no history·replay·runtime mutation)
+  - EQL: `SHOW Calibration FOR Claim("…")`, `SHOW Accuracy FOR StrategyPack("…")`
+  - Laboratory: `lab.compareCalibration(...)`, `lab.replayWithCalibration(...)`
+- Evidence Query Language ([SPEC-020](docs/specs/SPEC-020_Evidence_Query_Language.md))
+  - `packages/eql/` — Parser, QueryPlanner, Executor, EvidenceCatalog
+  - Declarative FIND / SHOW / REPLAY / COMPARE / EXPLAIN (read-only)
+  - Domain-neutral subject matching (`subject` / `subjectId` / `companyId`)
+  - `lab.query(\`…\`)` on Evidence Laboratory
+- Evidence Laboratory ([SPEC-019](docs/specs/SPEC-019_Evidence_Laboratory.md))
+  - `packages/laboratory/` — EvidenceLab, ScenarioRunner, EvidenceQuery, ComparisonWorkspace, Experiment
+  - Isolated experiments for ablations, injections, strategy/ontology comparison, analogs
+  - Asks questions of the Evidence Platform via Replay; nothing mutates production (not paper trading)
+- Deterministic Replay & Temporal Reasoning Engine ([SPEC-018](docs/specs/SPEC-018_Deterministic_Replay_and_Temporal_Reasoning_Engine.md))
+  - `packages/replay/` — ReplayEngine, ReplaySession, ReplayTimeline, ReplayComparator
+  - Regenerates reasoning from immutable observations (no snapshots / cached conclusions)
+  - Temporal queries: belief at T, confidence rises, recommendation changes, claim appearance
+  - Version-aware comparison across ontology / strategy pack / runtime
+  - Determinism hardening: market recommendation ids, context `builtAt`, fixed analog timestamps; runtime injectable clock
+- Evidence Platform Architecture ([ADR-009](docs/adr/ADR-009_Evidence_Platform_Architecture.md))
+  - Formalizes domain-neutral Evidence Core vs Strategy Pack boundary
+  - Stable primitives: Evidence Store, KG, Claim/Confidence engines, Memory, Reasoning Runtime
+  - Audit: [EVIDENCE_CORE_DOMAIN_AUDIT.md](docs/architecture/EVIDENCE_CORE_DOMAIN_AUDIT.md)
+- Reasoning Runtime Decoupling ([SPEC-015A](docs/specs/SPEC-015A_Reasoning_Runtime_Decoupling.md))
+  - `packages/reasoning-runtime/` — domain-neutral `ReasoningRuntime` + StrategyPack / ContextProvider / RecommendationProvider contracts
+  - `CRMStrategyPack` + `CRMContextProvider` + `NextBestActionProvider` (DI wrappers; identical CRM evaluate path)
+  - Max `ReasoningEngine` orchestrates via runtime; `subjectId` alias for `companyId`; `createCRMStrategyRegistry` alias
+  - Architecture: [Reasoning_Runtime_Architecture.md](docs/architecture/Reasoning_Runtime_Architecture.md)
+- Knowledge Dual-Write & Operational Readiness ([SPEC-014](docs/specs/SPEC-014_Knowledge_Dual_Write.md))
+  - Outbox-first Knowledge writer (`packages/knowledge/dualWrite/`) with idempotent sync ledger
+  - Durable tables: `knowledge_outbox`, `knowledge_sync_ledger`, `knowledge_flight_stages`
+  - Producer hooks: `dbClient` company/prospect/touchpoint + Scout fan-out (alongside Max signals)
+  - Persistent Knowledge boot for Command Deck / Max (`utils/knowledgeRuntime.js`)
+  - Admin Validation Dashboard (`/admin/knowledge-health`) + Flight Recorder (`/admin/flight-recorder`)
+  - Outbox drain cron (`/cron/knowledge-outbox`) + `npm run knowledge:e2e`
 - Outcome Intelligence ([SPEC-013](docs/specs/SPEC-013_Outcome_Intelligence.md) / [ADR-008](docs/adr/ADR-008_Outcome_Intelligence.md))
   - `RecommendationOutcome` model + lifecycle (Generated → … → Successful / Unsuccessful / Inconclusive)
   - Strategy-level performance metrics (precision, recall, promotion, success, lead time)
@@ -49,12 +85,14 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Planned
 
-- Shadow CRM/Scout → GraphSyncEngine dual-write
 - Wire Max agent (shadow) to `brief()` + `decide()` + `compose()` before side effects
 - Durable IntelligenceEvent / Operator InteractionEvent / Outcome log / SSE transport
+- Full Brevo/call/meeting dual-write coverage beyond touchpoint hooks
+- One business week of Anchor operated entirely through Pulseforge (SPEC-014 success metric)
 
 ### Docs
 
+- SPEC-018 Deterministic Replay & Temporal Reasoning Engine
 - SPEC-013 Outcome Intelligence + ADR-008 Outcome Intelligence
 - SPEC-012 Operator Intelligence + ADR-007 Operator Intelligence
 - SPEC-011 Live Intelligence Loop + ADR-006 Live Intelligence Evolution
