@@ -427,6 +427,12 @@ function registerBuiltinCapabilities(registry, options = {}) {
   registry.register(
     createMailPackageGeneratorCapability(options.mail || {})
   );
+  const {
+    createCampaignReviewCapability,
+  } = require('../campaignReview');
+  registry.register(
+    createCampaignReviewCapability(options.campaignReview || {})
+  );
   return registry;
 }
 
@@ -452,6 +458,8 @@ module.exports = {
   createProposalGeneratorCapability,
   createMailPackageGeneratorCapability: require('../mail')
     .createMailPackageGeneratorCapability,
+  createCampaignReviewCapability: require('../campaignReview')
+    .createCampaignReviewCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
   resolveDiscoveryDeps,

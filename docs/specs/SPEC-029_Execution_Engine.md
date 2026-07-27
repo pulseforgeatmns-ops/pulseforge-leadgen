@@ -8,7 +8,7 @@
 | **Owner** | Pulseforge engineering |
 | **Created** | 2026-07-27 |
 | **Version** | v0.1.0 |
-| **Depends on** | SPEC-022, SPEC-023, SPEC-024, SPEC-030 (Company Intelligence packages; ADR-017 — ship intelligence before execution), SPEC-026, SPEC-027B, SPEC-028, Campaign Builder (approved campaign artifact), ADR-003, ADR-010, ADR-011, ADR-015, ADR-016, ADR-017 |
+| **Depends on** | SPEC-022, SPEC-023, SPEC-024, SPEC-030 (Company Intelligence packages; ADR-017 — ship intelligence before execution), SPEC-026, SPEC-027B, SPEC-028, SPEC-033, SPEC-034 (Campaign Review / ADR-021 — approved revision required), Campaign Builder (approved campaign artifact), ADR-003, ADR-010, ADR-011, ADR-015, ADR-016, ADR-017, ADR-021 |
 | **Consumed by** | Mission Engine (outcome follow-ups), Knowledge dual-write, Learning Loop (SPEC-021), Command Deck Operator Dashboard |
 
 ## Objective

@@ -23,11 +23,12 @@ describe('SPEC-023 CapabilityRegistry', () => {
   it('registers and lists built-ins', () => {
     const registry = testRegistry();
     const list = registry.list();
-    assert.equal(list.length, 7);
+    assert.equal(list.length, 8);
     assert.ok(registry.get(BUILTIN_IDS.PROSPECT_DISCOVERY));
     assert.ok(registry.get(BUILTIN_IDS.CAMPAIGN_BUILDER));
     assert.ok(registry.get(BUILTIN_IDS.PROPOSAL_GENERATOR));
     assert.ok(registry.get(BUILTIN_IDS.MAIL_PACKAGE_GENERATOR));
+    assert.ok(registry.get(BUILTIN_IDS.CAMPAIGN_REVIEW));
   });
 
   it('discovers by outcome tags', () => {
@@ -951,5 +952,354 @@ describe('SPEC-033 Mail Package Generator', () => {
     );
     assert.equal(out.result.outputs.campaignSummary.prospects, 1);
     assert.equal(out.result.outputs.campaignSummary.readyToPrint, 0);
+  });
+});
+
+describe('SPEC-034 Campaign Review Workspace', () => {
+  const campaignReview = require('../campaignReview');
+
+  const readyPkg = {
+    id: 'pkg_p1',
+    prospectId: 'p1',
+    status: 'ready_to_print',
+    confidence: 0.9,
+    letter: {
+      recipientName: 'Jordan Hale',
+      companyName: 'Bedford Law',
+      personalizedOpening: 'Noticed Bedford Law expanding.',
+      valueProposition: 'Local owner accountability',
+      cta: 'Free walkthrough',
+      signature: 'Anchor Cleaning',
+      body: 'Dear Jordan Hale,\n\nBedford Law looks like a strong fit.\n',
+    },
+    envelope: {
+      recipientName: 'Jordan Hale',
+      companyName: 'Bedford Law',
+      mailingAddress: '5 Commerce Park N, Bedford, NH 03110',
+      returnAddress: 'Anchor Cleaning, Manchester NH',
+    },
+    personalizationSummary: {
+      whySelected: 'Single-tenant law office',
+      personalizationFacts: ['Expanded office', 'Medical practice nearby', 'Recently hiring'],
+      letterConfidence: 0.9,
+      missingDataWarnings: [],
+    },
+    insertChecklist: [
+      { id: 'letter', label: 'Letter', required: true, included: true },
+      { id: 'business_card', label: 'Business Card', required: true, included: true },
+    ],
+    warnings: [],
+  };
+
+  const blockedPkg = {
+    id: 'pkg_p2',
+    prospectId: 'p2',
+    status: 'needs_review',
+    confidence: 0.4,
+    letter: {
+      recipientName: '',
+      companyName: 'Thin Co',
+      body: 'Hello',
+    },
+    envelope: {
+      recipientName: '',
+      companyName: 'Thin Co',
+      mailingAddress: '',
+      returnAddress: '',
+    },
+    personalizationSummary: {
+      personalizationFacts: [],
+      letterConfidence: 0.4,
+      missingDataWarnings: ['missing address'],
+    },
+    insertChecklist: [],
+    warnings: ['Missing mailing address'],
+  };
+
+  const campaign = {
+    id: 'camp_001',
+    name: 'Campaign 001',
+    status: 'approved',
+    prospects: [
+      {
+        id: 'p1',
+        companyName: 'Bedford Law',
+        contactName: 'Jordan Hale',
+        address: '5 Commerce Park N, Bedford, NH 03110',
+        overallScore: 0.86,
+        confidence: 0.9,
+        opportunityBrief: {
+          whyFit: 'Single-tenant law office in Manchester beachhead',
+          talkingPoints: ['Local owner accountability'],
+        },
+      },
+      {
+        id: 'p2',
+        companyName: 'Thin Co',
+        overallScore: 0.4,
+        confidence: 0.4,
+      },
+    ],
+  };
+
+  it('assembles a single review workspace with queue and summary', async () => {
+    const registry = testRegistry();
+    const runner = createCapabilityRunner({ registry });
+    const pb = playbook.createClientPlaybookStore().get('pb_anchor_cleaning');
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.CAMPAIGN_REVIEW,
+      context: {
+        missionId: 'm_review',
+        tenantId: '10',
+        clientId: 10,
+        objective: 'Review Campaign 001',
+        constraints: { clientPlaybook: pb },
+        inputs: {
+          campaign,
+          mailBatch: { id: 'mail_1', packages: [readyPkg, blockedPkg] },
+          packages: [readyPkg, blockedPkg],
+        },
+      },
+    });
+
+    assert.equal(out.result.status, CAPABILITY_RESULT_STATUS.COMPLETED);
+    const summary = out.result.outputs.summary;
+    assert.equal(summary.campaignName, 'Campaign 001');
+    assert.equal(summary.prospectCount, 2);
+    assert.ok(summary.blockedCount >= 1);
+    assert.ok(
+      summary.status === campaignReview.CAMPAIGN_REVIEW_STATUS.IN_REVIEW ||
+        summary.status === campaignReview.CAMPAIGN_REVIEW_STATUS.BLOCKED
+    );
+    assert.equal(out.result.outputs.outboundBlocked, true);
+    assert.ok(out.result.outputs.workspace.queue.length === 2);
+    assert.ok(
+      out.result.outputs.reviewPackage.operatorActions.includes('approve_campaign')
+    );
+    assert.ok(
+      out.result.artifacts.some((a) => a.type === 'campaign_review_workspace')
+    );
+  });
+
+  it('blocks prospect approval when address/company/recipient/confidence fail', () => {
+    const result = campaignReview.validateProspectForApproval({
+      company: '',
+      recipient: '',
+      address: '',
+      confidence: 0.2,
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.includes('missing_address'));
+    assert.ok(result.errors.includes('missing_company'));
+    assert.ok(result.errors.includes('missing_recipient'));
+    assert.ok(result.errors.includes('confidence_below_threshold'));
+  });
+
+  it('supports per-prospect approve and blocks campaign Ready to Print until gates pass', async () => {
+    const store = campaignReview.createInMemoryCampaignReviewStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      campaignReview: { campaignReviewStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+    const pb = playbook.createClientPlaybookStore().get('pb_anchor_cleaning');
+
+    const first = await runner.run({
+      capabilityId: BUILTIN_IDS.CAMPAIGN_REVIEW,
+      context: {
+        missionId: 'm_review_approve',
+        tenantId: '10',
+        clientId: 10,
+        constraints: { clientPlaybook: pb },
+        inputs: {
+          campaignId: 'camp_001',
+          campaign,
+          packages: [readyPkg, blockedPkg],
+          mailBatch: { id: 'mail_1', packages: [readyPkg, blockedPkg] },
+          reviewActions: [
+            { type: 'approve', prospectId: 'p1', operator: 'jacob' },
+            { type: 'approve_campaign', operator: 'jacob' },
+          ],
+        },
+      },
+    });
+
+    assert.equal(first.result.outputs.campaignApproved, false);
+    assert.ok(
+      first.result.outputs.reviewPackage.campaignApprovalErrors.includes(
+        'required_prospects_not_approved'
+      )
+    );
+    const p1 = first.result.outputs.queue.find((r) => r.prospectId === 'p1');
+    assert.equal(p1.status, campaignReview.PROSPECT_REVIEW_STATUS.APPROVED);
+    assert.ok(
+      first.result.outputs.missionDecisions.some((d) => d.action === 'approve')
+    );
+  });
+
+  it('transitions to Ready to Print after all required prospects approved', async () => {
+    const store = campaignReview.createInMemoryCampaignReviewStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      campaignReview: { campaignReviewStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+    const pb = playbook.createClientPlaybookStore().get('pb_anchor_cleaning');
+
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.CAMPAIGN_REVIEW,
+      context: {
+        missionId: 'm_review_ready',
+        tenantId: '10',
+        clientId: 10,
+        constraints: { clientPlaybook: pb },
+        inputs: {
+          campaignId: 'camp_ready',
+          campaign: {
+            ...campaign,
+            prospects: [campaign.prospects[0]],
+          },
+          packages: [readyPkg],
+          mailBatch: { id: 'mail_ready', packages: [readyPkg] },
+          reviewActions: [
+            { type: 'approve', prospectId: 'p1', operator: 'jacob' },
+            { type: 'skip', prospectId: 'p2', operator: 'jacob' },
+            { type: 'approve_campaign', operator: 'jacob' },
+          ],
+        },
+      },
+    });
+
+    // Only p1 in packages — approve + campaign approve
+    assert.equal(out.result.outputs.campaignApproved, true);
+    assert.equal(
+      out.result.outputs.summary.status,
+      campaignReview.CAMPAIGN_REVIEW_STATUS.READY_TO_PRINT
+    );
+    assert.ok(out.result.outputs.executionPackage);
+    assert.ok(out.result.outputs.executionPackage.printPackage.html.includes('Bedford Law'));
+    assert.ok(out.result.outputs.executionPackage.mailMerge.csv.includes('Jordan Hale'));
+    assert.ok(out.result.outputs.executionPackage.addressLabels.csv.includes('Bedford'));
+    assert.ok(
+      out.result.outputs.missionDecisions.some((d) => d.action === 'approve_campaign')
+    );
+    assert.ok(
+      out.result.artifacts.some((a) => a.type === 'execution_package')
+    );
+  });
+
+  it('supports bulk approve, inline edit, and revision history', async () => {
+    const store = campaignReview.createInMemoryCampaignReviewStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      campaignReview: { campaignReviewStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+    const pb = playbook.createClientPlaybookStore().get('pb_anchor_cleaning');
+    const ctxBase = {
+      missionId: 'm_review_rev',
+      tenantId: '10',
+      clientId: 10,
+      constraints: { clientPlaybook: pb },
+      inputs: {
+        campaignId: 'camp_rev',
+        campaign: {
+          ...campaign,
+          prospects: [campaign.prospects[0]],
+        },
+        packages: [readyPkg],
+        mailBatch: { id: 'mail_rev', packages: [readyPkg] },
+      },
+    };
+
+    const first = await runner.run({
+      capabilityId: BUILTIN_IDS.CAMPAIGN_REVIEW,
+      context: ctxBase,
+    });
+    assert.equal(first.result.outputs.reviewRevision, 1);
+
+    const second = await runner.run({
+      capabilityId: BUILTIN_IDS.CAMPAIGN_REVIEW,
+      context: {
+        ...ctxBase,
+        inputs: {
+          ...ctxBase.inputs,
+          reviewActions: [
+            {
+              type: 'edit_letter',
+              prospectId: 'p1',
+              body: 'Dear Jordan,\n\nUpdated letter body for Bedford Law.\n',
+              operator: 'jacob',
+            },
+            { type: 'approve_selected', prospectIds: ['p1'], operator: 'jacob' },
+            { type: 'approve_campaign', operator: 'jacob' },
+          ],
+        },
+      },
+    });
+
+    assert.equal(second.result.outputs.reviewRevision, 2);
+    const edited = second.result.outputs.queue.find((r) => r.prospectId === 'p1');
+    assert.match(edited.letter.body, /Updated letter body/);
+    assert.equal(edited.status, campaignReview.PROSPECT_REVIEW_STATUS.APPROVED);
+    assert.ok(
+      second.result.outputs.missionRevisions.some((r) => r.reason === 'letter_edit')
+    );
+    assert.ok(second.result.outputs.revisionHistory.length >= 2);
+    assert.equal(second.result.outputs.campaignApproved, true);
+
+    const compared = await runner.run({
+      capabilityId: BUILTIN_IDS.CAMPAIGN_REVIEW,
+      context: {
+        ...ctxBase,
+        inputs: {
+          ...ctxBase.inputs,
+          reviewActions: [
+            { type: 'compare_revisions', revisionA: 1, revisionB: 2 },
+          ],
+        },
+      },
+    });
+    assert.ok(compared.result.outputs.compareResult);
+    assert.equal(compared.result.outputs.compareResult.revisionA, 1);
+    assert.equal(compared.result.outputs.compareResult.revisionB, 2);
+  });
+
+  it('exports and prints selected prospects', async () => {
+    const registry = testRegistry();
+    const runner = createCapabilityRunner({ registry });
+    const pb = playbook.createClientPlaybookStore().get('pb_anchor_cleaning');
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.CAMPAIGN_REVIEW,
+      context: {
+        missionId: 'm_export',
+        tenantId: '10',
+        constraints: { clientPlaybook: pb },
+        inputs: {
+          campaign,
+          packages: [readyPkg],
+          mailBatch: { id: 'm', packages: [readyPkg] },
+          reviewActions: [
+            {
+              type: 'export_selected',
+              prospectIds: ['p1'],
+            },
+            {
+              type: 'print_selected',
+              prospectIds: ['p1'],
+            },
+          ],
+        },
+      },
+    });
+    assert.ok(out.result.outputs.exportArtifacts.length >= 2);
+    assert.ok(
+      out.result.outputs.exportArtifacts.some((e) => e.type === 'export_selected')
+    );
+    assert.ok(
+      out.result.outputs.exportArtifacts.some(
+        (e) => e.type === 'print_selected' && e.printableHtml
+      )
+    );
   });
 });
