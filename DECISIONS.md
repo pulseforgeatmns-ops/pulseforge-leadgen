@@ -13,6 +13,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-007](docs/adr/ADR-007_Operator_Intelligence.md) | Operator Intelligence | Accepted | Operator behavior learning personalizes presentation only — never evidence, confidence, reasoning, or policy |
 | [ADR-008](docs/adr/ADR-008_Outcome_Intelligence.md) | Outcome Intelligence | Accepted | Evaluates whether intelligence was right — measures, calibrates, reports; never alters reasoning or confidence |
 | [ADR-009](docs/adr/ADR-009_Evidence_Platform_Architecture.md) | Evidence Platform Architecture | Accepted | Domain-neutral Evidence Core + injectable Strategy Packs; core must not contain domain business logic |
+| [ADR-010](docs/adr/ADR-010_Mission_Engine.md) | Mission Engine | Accepted | Operators express intent; Max orchestrates via Capability Registry; durable missions; review before outreach |
 
 ## How to add a decision
 
