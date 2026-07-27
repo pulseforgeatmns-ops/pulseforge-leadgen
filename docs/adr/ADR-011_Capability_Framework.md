@@ -41,7 +41,10 @@ Without a locked capability API, MissionExecutor will accrete agent-specific bra
 
 ### Follow-ups
 
-- Implement SPEC-023 registry + runner + five built-in adapters
-- Wire SPEC-022 MissionPlanner / MissionExecutor exclusively through the registry
-- Architecture test: no agent filename imports in planner/executor
-- Update CURRENT_STATE when implementation starts
+- [x] Implement SPEC-023 registry + runner + five built-in stub adapters
+- [x] Wire SPEC-022 MissionPlanner / MissionExecutor exclusively through the registry
+- [x] Architecture test: no agent filename imports in planner/executor
+- [x] Replace Prospect Discovery stub with live capability ([SPEC-024](../specs/SPEC-024_Prospect_Discovery_Capability.md))
+- [x] Replace Opportunity Ranking stub with live capability ([SPEC-026](../specs/SPEC-026_Opportunity_Ranking_Capability.md))
+- [ ] Replace enrichment / knowledge / campaign stubs with live adapters
+- Update CURRENT_STATE when remaining live adapters ship

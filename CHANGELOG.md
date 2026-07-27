@@ -6,6 +6,23 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Opportunity Ranking Capability ([SPEC-026](docs/specs/SPEC-026_Opportunity_Ranking_Capability.md))
+  - `packages/capabilities/ranking/` — explainable 8-factor scoring, Opportunity Briefs, review package
+  - Replaces Opportunity Ranking stub; answers “Who should we contact first?”
+  - Operator actions: approve / re-rank / exclude / lock / continue to Campaign Builder
+  - Evidence-only (absent signals score 0 — no invented buying signals)
+  - Tests: `npm run test:capabilities`
+- Prospect Discovery Capability ([SPEC-024](docs/specs/SPEC-024_Prospect_Discovery_Capability.md))
+  - Profile-driven discovery (Places + fixture provider), transparent ranking signals, review package
+- Mission Engine thin slice ([SPEC-022](docs/specs/SPEC-022_Mission_Engine_and_Agent_Orchestration.md) / [ADR-010](docs/adr/ADR-010_Mission_Engine.md))
+  - `packages/mission-engine/` — IntentRouter, MissionPlanner, MissionExecutor, durable store
+  - `packages/capabilities/` — CapabilityRegistry, CapabilityRunner; Discovery + Ranking live, enrichment/knowledge/campaign stubs ([SPEC-023](docs/specs/SPEC-023_Capability_Framework.md) / [ADR-011](docs/adr/ADR-011_Capability_Framework.md))
+  - Mission-first Max routing: “Build Campaign 001” → MissionPlanner (not Market Intelligence)
+  - Command Deck Operations (Mission Queue) beneath Highest Leverage Action; Mission Workspace
+  - Shell Operations nav redirects to `/command-deck#operations`
+  - API: `POST/GET /api/v1/missions`, `GET /api/v1/missions/:id`, `POST /api/v1/missions/:id/review`
+  - Flag: `MISSION_ENGINE` default on; set `=0` to disable
+  - Tests: `npm run test:mission` · `npm run test:capabilities`
 - Learning & Belief Evolution Engine ([SPEC-021](docs/specs/SPEC-021_Learning_and_Belief_Evolution_Engine.md))
   - `packages/learning/` — LearningEngine, BeliefTracker, CalibrationEngine, OutcomeEvaluator, LearningSession
   - Outcomes calibrate trust after reality is known (no ML / no history·replay·runtime mutation)

@@ -14,6 +14,7 @@
     REVIEW_RECOMMENDATION: 'review_recommendation',
     ASK_MAX: 'ask_max',
     OPEN_COMPANY: 'open_company',
+    OPEN_MISSION: 'open_mission',
     DISMISS: 'dismiss',
     SNOOZE: 'snooze',
   });
@@ -55,11 +56,17 @@
     timestamp: document.getElementById('cdTimestamp'),
     morning: document.getElementById('cdMorningBrief'),
     hla: document.getElementById('cdHighestLeverage'),
+    operations: document.getElementById('cdOperations'),
     secondary: document.getElementById('cdSecondary'),
     queue: document.getElementById('cdPriorityQueue'),
     askForm: document.getElementById('cdAskForm'),
     askInput: document.getElementById('cdAskInput'),
     workspace: document.getElementById('maxWorkspace'),
+    missionWorkspace: document.getElementById('missionWorkspace'),
+    msnBody: document.getElementById('msnBody'),
+    msnActions: document.getElementById('msnActions'),
+    msnTitle: document.getElementById('msnTitle'),
+    msnStatus: document.getElementById('msnStatus'),
     mxThread: document.getElementById('mxThread'),
     mxSuggestions: document.getElementById('mxSuggestions'),
     mxAskForm: document.getElementById('mxAskForm'),
@@ -156,7 +163,7 @@
   }
 
   function clearSections() {
-    for (const key of ['morning', 'hla', 'secondary', 'queue']) {
+    for (const key of ['morning', 'hla', 'operations', 'secondary', 'queue']) {
       const el = els[key];
       if (!el) continue;
       el.hidden = true;
@@ -299,6 +306,88 @@
     `;
     els.hla.hidden = false;
     bindCardActions(els.hla);
+  }
+
+  function renderOperations(model) {
+    if (!els.operations) return;
+    const ops = model.operations;
+    if (!ops) {
+      els.operations.hidden = true;
+      return;
+    }
+
+    const missions = Array.isArray(ops.missions) ? ops.missions : [];
+    const summary = ops.summary || {};
+    const summaryBits = [];
+    if (summary.active) summaryBits.push(`${summary.active} active`);
+    if (summary.needsAttention) summaryBits.push(`${summary.needsAttention} need attention`);
+    if (summary.finished) summaryBits.push(`${summary.finished} finished`);
+    if (summary.blocked) summaryBits.push(`${summary.blocked} blocked`);
+
+    const cardsHtml = missions.length
+      ? missions
+          .map((m) => {
+            const stage = (m.progress && m.progress.currentStage) || m.statusLabel || '';
+            const progressLabel =
+              (m.progress && m.progress.label) ||
+              (m.progress
+                ? `${m.progress.completedSteps || 0} / ${m.progress.totalSteps || 0}`
+                : '');
+            const started = m.startedAt
+              ? formatDisplayTime(m.startedAt)
+              : m.createdAt
+                ? formatDisplayTime(m.createdAt)
+                : '';
+            const eta = m.estimatedCompletion
+              ? formatDisplayTime(m.estimatedCompletion)
+              : '';
+            return `
+          <article class="cd-ops-card" data-mission-id="${escapeHtml(m.id)}">
+            <div class="cd-ops-card-head">
+              <span class="cd-ops-status" data-status="${escapeHtml(m.status)}">${escapeHtml(
+                m.statusLabel || m.status
+              )}</span>
+              <h3 class="cd-ops-title">${escapeHtml(m.title || 'Mission')}</h3>
+            </div>
+            <p class="cd-ops-stage">${escapeHtml(stage)}</p>
+            ${
+              progressLabel
+                ? `<p class="cd-ops-progress">${escapeHtml(progressLabel)}</p>`
+                : ''
+            }
+            <div class="cd-ops-meta">
+              ${started ? `<span>Started ${escapeHtml(started)}</span>` : ''}
+              ${eta ? `<span>ETA ${escapeHtml(eta)}</span>` : ''}
+            </div>
+            <div class="cd-actions">
+              <button type="button" class="cd-btn cd-btn-ghost" data-cd-action-type="${
+                ACTION_TYPES.OPEN_MISSION
+              }" data-cd-action-payload="${escapeHtml(
+                JSON.stringify({ missionId: m.id })
+              )}">Expand</button>
+            </div>
+          </article>`;
+          })
+          .join('')
+      : `<p class="cd-ops-empty">${escapeHtml(
+          ops.emptyMessage || 'No active missions.'
+        )}</p>`;
+
+    els.operations.innerHTML = `
+      <p class="cd-kicker" id="cdOpsHeading">Operations</p>
+      ${
+        summaryBits.length
+          ? `<p class="cd-ops-summary">${escapeHtml(summaryBits.join(' · '))}</p>`
+          : ''
+      }
+      <div class="cd-ops-list">${cardsHtml}</div>
+    `;
+    els.operations.hidden = false;
+    bindCardActions(els.operations);
+
+    if ((window.location.hash || '') === '#operations') {
+      els.operations.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
 
   /**
@@ -595,6 +684,11 @@
       });
       return;
     }
+    if (type === ACTION_TYPES.OPEN_MISSION || type === 'review_mission') {
+      const missionId = payload && payload.missionId;
+      if (missionId) openMissionWorkspace(missionId);
+      return;
+    }
     // dismiss / snooze — presentation acknowledgement + operator learning
     trackOperator({
       type:
@@ -871,6 +965,117 @@
     }
   }
 
+  async function openMissionWorkspace(missionId) {
+    if (!els.missionWorkspace || !missionId) return;
+    try {
+      const data = await apiRequest(`/api/v1/missions/${encodeURIComponent(missionId)}`);
+      const mission = data.mission || {};
+      if (els.msnTitle) els.msnTitle.textContent = mission.title || 'Mission';
+      if (els.msnStatus) {
+        els.msnStatus.textContent = `${mission.status || ''} · ${
+          (mission.progress && mission.progress.currentStage) || ''
+        }`.trim();
+      }
+
+      const planSteps = ((mission.plan && mission.plan.steps) || [])
+        .map(
+          (s) =>
+            `<li><strong>${escapeHtml(s.name || s.capabilityId)}</strong> — ${escapeHtml(
+              s.status || 'queued'
+            )}</li>`
+        )
+        .join('');
+      const evidence = (data.evidence || [])
+        .map((e) => `<li>${escapeHtml(e.summary || '')}</li>`)
+        .join('');
+      const audit = (data.audit || [])
+        .slice(-12)
+        .map(
+          (a) =>
+            `<li><span class="cd-chip">${escapeHtml(a.kind)}</span> ${escapeHtml(
+              a.at || ''
+            )}</li>`
+        )
+        .join('');
+
+      els.msnBody.innerHTML = `
+        <section class="msn-block">
+          <h3>Objective</h3>
+          <p>${escapeHtml(mission.objectiveText || '')}</p>
+        </section>
+        <section class="msn-block">
+          <h3>Plan</h3>
+          <ol class="msn-plan">${planSteps || '<li>No steps</li>'}</ol>
+        </section>
+        <section class="msn-block">
+          <h3>Progress</h3>
+          <p>${escapeHtml(
+            (mission.progress && mission.progress.currentStage) || mission.status || ''
+          )} · ${escapeHtml(
+            String((mission.progress && mission.progress.percent) || 0)
+          )}%</p>
+        </section>
+        <section class="msn-block">
+          <h3>Evidence</h3>
+          <ul>${evidence || '<li>No evidence yet</li>'}</ul>
+        </section>
+        <section class="msn-block">
+          <h3>Results</h3>
+          <pre class="msn-pre">${escapeHtml(
+            JSON.stringify(mission.deliverables || {}, null, 2)
+          )}</pre>
+        </section>
+        <section class="msn-block">
+          <h3>Audit</h3>
+          <ul>${audit || '<li>No events</li>'}</ul>
+        </section>
+        <p class="msn-note">No outbound actions occur automatically. Approve records review only.</p>
+      `;
+
+      const actions = data.actions || ['approve', 'reject', 'edit', 'run_again'];
+      els.msnActions.innerHTML = actions
+        .map(
+          (action) =>
+            `<button type="button" class="cd-btn ${
+              action === 'approve' ? 'cd-btn-primary' : 'cd-btn-ghost'
+            }" data-msn-review="${escapeHtml(action)}">${escapeHtml(
+              action.replace(/_/g, ' ')
+            )}</button>`
+        )
+        .join('');
+
+      els.msnActions.querySelectorAll('[data-msn-review]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const action = btn.getAttribute('data-msn-review');
+          try {
+            await apiRequest(
+              `/api/v1/missions/${encodeURIComponent(missionId)}/review`,
+              { method: 'POST', body: { action } }
+            );
+            announce(`Mission ${action.replace(/_/g, ' ')} recorded.`);
+            await openMissionWorkspace(missionId);
+            loadDeck({ force: true });
+          } catch (err) {
+            announce(err.message || 'Review failed');
+          }
+        });
+      });
+
+      els.missionWorkspace.hidden = false;
+      document.body.style.overflow = 'hidden';
+      announce('Mission workspace opened.');
+    } catch (err) {
+      announce(err.message || 'Could not open mission');
+    }
+  }
+
+  function closeMissionWorkspace() {
+    if (!els.missionWorkspace || els.missionWorkspace.hidden) return;
+    els.missionWorkspace.hidden = true;
+    document.body.style.overflow = '';
+    announce('Mission workspace closed.');
+  }
+
   function appendSystemMessage(text) {
     if (!els.mxThread) return;
     const div = document.createElement('div');
@@ -1131,6 +1336,9 @@
       }
       appendMaxResponse(result);
       renderSuggestions(result.suggestions || []);
+      if (result.route === 'mission' || (result.mission && result.mission.id)) {
+        loadDeck({ force: true });
+      }
     } catch (err) {
       console.error('[max-workspace] ask', err);
       appendSystemMessage(
@@ -1151,6 +1359,7 @@
     const stages = [
       els.morning,
       els.hla,
+      els.operations,
       els.secondary,
       els.queue,
     ].filter((el) => el && !el.hidden);
@@ -1178,6 +1387,7 @@
     applyPresentationLayout(model);
     renderMorningBrief(model);
     renderHighestLeverage(model);
+    renderOperations(model);
     renderSecondary(model);
     renderPriorityQueue(model);
     stagedReveal();
@@ -1441,9 +1651,19 @@
     node.addEventListener('click', () => closeWorkspace());
   });
 
+  els.missionWorkspace?.querySelectorAll('[data-msn-close]').forEach((node) => {
+    node.addEventListener('click', () => closeMissionWorkspace());
+  });
+
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && els.workspace && !els.workspace.hidden) {
-      closeWorkspace();
+    if (event.key === 'Escape') {
+      if (els.missionWorkspace && !els.missionWorkspace.hidden) {
+        closeMissionWorkspace();
+        return;
+      }
+      if (els.workspace && !els.workspace.hidden) {
+        closeWorkspace();
+      }
     }
   });
 

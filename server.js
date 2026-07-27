@@ -190,6 +190,7 @@ app.use('/', require('./routes/knowledgeAdmin'));
 app.use('/', require('./routes/workspace'));
 app.use('/', require('./routes/maxChat'));
 app.use('/', require('./routes/maxWorkspace'));
+app.use('/', require('./routes/missions'));
 app.use('/', require('./routes/approvals'));
 app.use('/', require('./routes/users'));
 app.use('/clients', require('./routes/revenue'));

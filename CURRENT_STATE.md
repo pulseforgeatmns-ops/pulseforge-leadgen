@@ -5,14 +5,14 @@
 | Field | Value |
 |---|---|
 | **Version** | v0.9.2 |
-| **Current Milestone** | Command Deck product surface (SPEC-006) |
-| **Current Sprint** | SPEC-014 Knowledge Dual-Write & Operational Readiness |
-| **Current Spec** | [SPEC-014 Knowledge Dual-Write](docs/specs/SPEC-014_Knowledge_Dual_Write.md) — In Progress |
-| **Next Spec** | [SPEC-015 Market Intelligence Domain](docs/specs/SPEC-015_Market_Intelligence_Domain.md) (runtime unblocked by SPEC-015A); wire Max agent to `compose()` (shadow-first) |
-| **Current Priority** | Highest — live knowledge dual-write so composers / workspace / live loop return live data |
-| **Last Completed** | SPEC-021 Learning & Belief Evolution Engine; SPEC-020 Evidence Query Language (EQL); SPEC-019 Evidence Laboratory; SPEC-018 Deterministic Replay & Temporal Reasoning Engine; SPEC-017 Domain Ontology Framework & Market Ontology; SPEC-015A Reasoning Runtime Decoupling; SPEC-013 Outcome Intelligence; SPEC-012 Operator Intelligence; SPEC-011 Live Intelligence Loop; SPEC-010 Intelligence Navigation; SPEC-009 Max Workspace; SPEC-008 Command Deck UI; SPEC-007 Composer; SPEC-005 Policy; SPEC-004 Briefing; SPEC-003 Memory; SPEC-002 Reasoning; SPEC-001C Query; SPEC-001 Postgres; SPEC-001B sync; SPEC-001A foundation; SPEC-000 docs |
-| **In Progress** | SPEC-014 dual-write, outbox retry, admin Validation Dashboard + Flight Recorder |
-| **Known Blockers** | Inquiry Foundation production deploy blocked; Max orchestration shadow-default; migration must be applied on Railway before dual-write fills the graph in prod |
+| **Current Milestone** | Mission Engine product integration (SPEC-022 thin slice) |
+| **Current Sprint** | SPEC-024 Discovery + SPEC-026 Ranking + SPEC-014 Knowledge Dual-Write |
+| **Current Spec** | [SPEC-026 Opportunity Ranking](docs/specs/SPEC-026_Opportunity_Ranking_Capability.md) — Implemented; [SPEC-024](docs/specs/SPEC-024_Prospect_Discovery_Capability.md) Implemented |
+| **Next Spec** | SPEC-025 Company Enrichment (live); Campaign Builder adapter; [SPEC-015 Market Intelligence Domain](docs/specs/SPEC-015_Market_Intelligence_Domain.md) |
+| **Current Priority** | Highest — MissionPlanner is the default router for business objectives; dual-write remains for live knowledge |
+| **Last Completed** | SPEC-026 Opportunity Ranking (explainable priority queue + briefs); SPEC-024 Prospect Discovery; SPEC-022/023 thin slice; SPEC-021 Learning; SPEC-020 EQL; SPEC-019 Laboratory; SPEC-018 Replay; SPEC-017 Ontology; SPEC-015A Runtime; SPEC-013–009; SPEC-008–000 |
+| **In Progress** | SPEC-014 dual-write operational readiness; SPEC-025 enrichment + Campaign Builder live adapters |
+| **Known Blockers** | Inquiry Foundation production deploy blocked; Max orchestration shadow-default; migration must be applied on Railway before dual-write fills the graph in prod; apply `migrations/2026-07-27-mission-engine.sql` (+ discovery profiles) for durable missions |
 | **Upcoming Decisions** | When `/command-deck` becomes default landing vs `/dashboard`; one business week Anchor-only operation (SPEC-014 success metric) |
 
 ---
@@ -51,6 +51,8 @@ npm run test:replay
 npm run test:laboratory
 npm run test:eql
 npm run test:learning
+npm run test:capabilities
+npm run test:mission
 npm run knowledge:e2e
 npm run test:knowledge:postgres
 npm run test:max
@@ -58,9 +60,12 @@ npm run test:max
 
 ### Operator surface
 
-- `GET /api/v1/command-deck` → `CommandDeckModel` (SPEC-007) + `live` envelope from LiveLoop (SPEC-011)
-- `GET /command-deck` → render-only UI (SPEC-008); soft-poll evolution (SPEC-011); `/dashboard` remains available
-- `POST /api/v1/max/workspace/open|ask` → Max Intelligence Workspace (SPEC-009 / ADR-005) + awareness (SPEC-011)
+- `GET /api/v1/command-deck` → `CommandDeckModel` (SPEC-007) + `live` envelope from LiveLoop (SPEC-011) + **Operations** mission queue (SPEC-022)
+- `GET /command-deck` → render-only UI (SPEC-008); Operations section + Mission Workspace; soft-poll evolution (SPEC-011); `/dashboard` remains available
+- Shell **Operations** nav → `/command-deck#operations` (standalone agents tab is no longer the product Operations surface)
+- `POST /api/v1/max/workspace/open|ask` → Max Intelligence Workspace (SPEC-009 / ADR-005) + awareness (SPEC-011); **business objectives route to Mission Engine first**
+- `POST /api/max/ask` → legacy chat; same Mission IntentRouter gate
+- `POST/GET /api/v1/missions` · `GET /api/v1/missions/:id` · `POST /api/v1/missions/:id/review` → Mission Engine API (SPEC-022)
 - `GET /api/v1/recommendations/:id` → Recommendation Detail (SPEC-010)
 - `GET /api/v1/companies/:id/intelligence` → Company Intelligence (SPEC-010)
 - Investigation trail + Related Intelligence on `/command-deck` (SPEC-010); continuity banner (SPEC-011)

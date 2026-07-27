@@ -213,6 +213,8 @@ function createMaxReasoningRuntime(options = {}) {
     anthropic: options.anthropic,
     disableLlm: options.disableLlm,
     model: options.workspaceModel,
+    missionEngine: options.missionEngine || null,
+    missionsEnabled: options.missionsEnabled,
   });
   const intelligence = createIntelligenceComposer({
     knowledge,
@@ -346,6 +348,7 @@ function createMaxReasoningRuntime(options = {}) {
     operator,
     outcome,
     runtime,
+    missionEngine: options.missionEngine || null,
     evaluate: (input) => engine.evaluate(input),
     remember: (input) => memory.remember(input),
     brief: (input) => briefing.brief(input),

@@ -42,6 +42,7 @@ const {
   composePriorityQueue,
   formatMovement,
 } = require('./sections/PriorityQueue');
+const { composeOperations } = require('./sections/Operations');
 
 module.exports = {
   CommandDeckComposer,
@@ -70,4 +71,5 @@ module.exports = {
   deriveDirection,
   composePriorityQueue,
   formatMovement,
+  composeOperations,
 };

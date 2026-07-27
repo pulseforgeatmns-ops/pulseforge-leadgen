@@ -97,12 +97,15 @@ async function boot(options = {}) {
     startIngestor: false,
     tenantPolicies: options.tenantPolicies,
     disableLlm: options.disableLlm === true,
+    missionEngine: options.missionEngine || null,
+    missionsEnabled: options.missionsEnabled,
   });
   // Attach shared sync/writer onto the max handle for compose-side flight stages
   max.runtime = knowledgeRuntime;
   max.writer = writer;
   max.pool = pool;
   max.dualWriteEnabled = !useMemory && schemaReady;
+  max.missionEngine = options.missionEngine || null;
 
   const originalCompose = max.compose.bind(max);
   max.compose = async function composeWithFlight(input) {
@@ -179,10 +182,13 @@ function bootMemory(options, schemaError) {
     startIngestor: false,
     tenantPolicies: options.tenantPolicies,
     disableLlm: options.disableLlm === true,
+    missionEngine: options.missionEngine || null,
+    missionsEnabled: options.missionsEnabled,
   });
   max.runtime = knowledgeRuntime;
   max.writer = null;
   max.dualWriteEnabled = false;
+  max.missionEngine = options.missionEngine || null;
   return {
     knowledge: knowledgeRuntime.knowledge,
     sync: knowledgeRuntime.sync,

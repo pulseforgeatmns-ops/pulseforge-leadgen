@@ -1,0 +1,201 @@
+'use strict';
+
+/**
+ * IntentRouter — first routing layer for operator objectives (SPEC-022).
+ *
+ * Business objectives → Mission Engine.
+ * Intelligence-only requests → Market Intelligence / ResponseComposer.
+ */
+
+const { MISSION_TYPES, ROUTE_KINDS } = require('./types');
+
+/**
+ * @typedef {object} RouteDecision
+ * @property {'mission'|'intelligence'} kind
+ * @property {string|null} missionType
+ * @property {string} reason
+ */
+
+/**
+ * Route an operator prompt.
+ * @param {string} objective
+ * @returns {RouteDecision}
+ */
+function routeIntent(objective) {
+  const q = String(objective || '').trim();
+  if (!q) {
+    return {
+      kind: ROUTE_KINDS.INTELLIGENCE,
+      missionType: null,
+      reason: 'empty',
+    };
+  }
+
+  const lower = q.toLowerCase();
+
+  // Intelligence-specific patterns win when clearly intelligence-only
+  // AND not also a business-build objective.
+  const intelligenceOnly = isIntelligenceOnly(lower);
+  const missionType = matchMissionType(lower, q);
+
+  if (missionType) {
+    return {
+      kind: ROUTE_KINDS.MISSION,
+      missionType,
+      reason: `matched_${missionType}`,
+    };
+  }
+
+  if (intelligenceOnly) {
+    return {
+      kind: ROUTE_KINDS.INTELLIGENCE,
+      missionType: null,
+      reason: 'intelligence_specific',
+    };
+  }
+
+  // Default: questions / explain / investigate stay on intelligence surface
+  return {
+    kind: ROUTE_KINDS.INTELLIGENCE,
+    missionType: null,
+    reason: 'default_intelligence',
+  };
+}
+
+/**
+ * @param {string} lower
+ * @param {string} original
+ * @returns {string|null}
+ */
+function matchMissionType(lower, original) {
+  // Campaign Creation — primary acceptance path
+  if (
+    /\bbuild\s+campaign\b/.test(lower) ||
+    /\bcreate\s+campaign\b/.test(lower) ||
+    /\bcampaign\s+\d+\b/.test(lower) ||
+    /\bnew\s+campaign\b/.test(lower) ||
+    /\blaunch\s+campaign\b/.test(lower)
+  ) {
+    return MISSION_TYPES.CAMPAIGN_CREATION;
+  }
+
+  // Overflow Partner Search (before generic prospect discovery)
+  if (
+    /\boverflow\b/.test(lower) ||
+    /\bpartner\s+search\b/.test(lower) ||
+    /\boverflow\s+partner\b/.test(lower)
+  ) {
+    return MISSION_TYPES.OVERFLOW_PARTNER_SEARCH;
+  }
+
+  // Acquisition Search
+  if (
+    /\bacquisition\b/.test(lower) ||
+    /\bapproaching\s+retirement\b/.test(lower) ||
+    /\bowners?\s+retiring\b/.test(lower) ||
+    /\bbuy\s+(a\s+)?(business|company)\b/.test(lower)
+  ) {
+    return MISSION_TYPES.ACQUISITION_SEARCH;
+  }
+
+  // Competitor Research / Intelligence as mission (research work, not "monitor X")
+  if (
+    /\bcompetitor\s+research\b/.test(lower) ||
+    /\bresearch\s+(our\s+)?competitors?\b/.test(lower) ||
+    /\bcompetitor\s+intelligence\b/.test(lower)
+  ) {
+    return MISSION_TYPES.COMPETITOR_RESEARCH;
+  }
+
+  // Knowledge Refresh
+  if (
+    /\bknowledge\s+refresh\b/.test(lower) ||
+    /\brefresh\s+knowledge\b/.test(lower) ||
+    /\bsync\s+knowledge\b/.test(lower)
+  ) {
+    return MISSION_TYPES.KNOWLEDGE_REFRESH;
+  }
+
+  // Weekly Brief (mission to generate)
+  if (
+    /\bweekly\s+brief\b/.test(lower) ||
+    /\bgenerate\s+(a\s+)?weekly\s+brief\b/.test(lower) ||
+    /\bbuild\s+(a\s+)?weekly\s+brief\b/.test(lower)
+  ) {
+    return MISSION_TYPES.WEEKLY_BRIEF;
+  }
+
+  // Market Research (as business objective — not "summarize Nvidia")
+  if (
+    /\bmarket\s+research\b/.test(lower) ||
+    /\bresearch\s+the\s+.+\s+market\b/.test(lower)
+  ) {
+    return MISSION_TYPES.MARKET_RESEARCH;
+  }
+
+  // Prospect Discovery
+  if (
+    /\bfind\s+(the\s+)?(best\s+)?\d*\s*(commercial\s+)?(cleaning\s+)?prospects?\b/.test(
+      lower
+    ) ||
+    /\bdiscover\s+(prospects?|companies|leads)\b/.test(lower) ||
+    /\bprospect\s+discovery\b/.test(lower) ||
+    /\bfind\s+\d+\s+(prospects?|leads|companies)\b/.test(lower) ||
+    /\bfind\s+.+\s+prospects?\s+in\b/.test(lower)
+  ) {
+    return MISSION_TYPES.PROSPECT_DISCOVERY;
+  }
+
+  // Generic "build/run outreach campaign" style
+  if (
+    /\bbuild\s+(a\s+)?(q\d\s+)?outreach\s+campaign\b/.test(lower) ||
+    /\bprepare\s+(a\s+)?campaign\b/.test(lower)
+  ) {
+    return MISSION_TYPES.CAMPAIGN_CREATION;
+  }
+
+  void original;
+  return null;
+}
+
+/**
+ * True when the prompt is clearly market/intelligence Q&A, not a mission.
+ * @param {string} lower
+ */
+function isIntelligenceOnly(lower) {
+  if (
+    /^(monitor|summarize|show|explain|why|what|how|compare)\b/.test(lower)
+  ) {
+    // "Show me competitor changes" / "Monitor Microsoft" / "Summarize Nvidia"
+    if (
+      /\bmonitor\b/.test(lower) ||
+      /\bsummarize\b/.test(lower) ||
+      /\bcompetitor\s+changes\b/.test(lower) ||
+      /\bwhy\s+is\b/.test(lower) ||
+      /\branked\b/.test(lower) ||
+      /\bconfidence\b/.test(lower) ||
+      /\bevidence\b/.test(lower) ||
+      /\bovernight\b/.test(lower) ||
+      /\bchanged\b/.test(lower) ||
+      /\bwatch\b/.test(lower) ||
+      /\balert\b/.test(lower)
+    ) {
+      return true;
+    }
+  }
+
+  if (/\bmonitor\s+[a-z0-9][\w.-]*/i.test(lower)) return true;
+  if (/\bsummarize\s+[a-z0-9][\w.-]*/i.test(lower)) return true;
+  if (/\bshow\s+competitor\b/.test(lower)) return true;
+  if (/\bcompetitor\s+changes\b/.test(lower)) return true;
+
+  return false;
+}
+
+module.exports = {
+  routeIntent,
+  matchMissionType,
+  isIntelligenceOnly,
+  ROUTE_KINDS,
+  MISSION_TYPES,
+};

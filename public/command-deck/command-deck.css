@@ -1248,6 +1248,125 @@ body.theme-dark .mx-ask-submit {
   color: var(--pf-gold);
 }
 
+/* Operations / Mission Queue (SPEC-022) */
+.cd-operations {
+  margin-top: 2rem;
+}
+.cd-ops-summary {
+  margin: 0 0 1rem;
+  font-family: var(--pf-font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: var(--pf-text-muted);
+}
+.cd-ops-list {
+  display: grid;
+  gap: 0.85rem;
+}
+.cd-ops-card {
+  border-top: 1px solid var(--pf-border);
+  padding: 0.95rem 0 0.35rem;
+}
+.cd-ops-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.65rem 1rem;
+}
+.cd-ops-status {
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+}
+.cd-ops-status[data-status="executing"],
+.cd-ops-status[data-status="planning"],
+.cd-ops-status[data-status="requested"] {
+  color: var(--pf-gold);
+}
+.cd-ops-status[data-status="review_required"],
+.cd-ops-status[data-status="waiting"] {
+  color: #b45309;
+}
+.cd-ops-status[data-status="completed"],
+.cd-ops-status[data-status="reviewed"] {
+  color: var(--pf-text-dim);
+}
+.cd-ops-title {
+  margin: 0;
+  font-family: var(--cd-font-editorial);
+  font-size: 1.25rem;
+  font-weight: 500;
+  color: var(--pf-text);
+}
+.cd-ops-stage,
+.cd-ops-progress {
+  margin: 0.35rem 0 0;
+  color: var(--pf-text-muted);
+  font-size: 0.92rem;
+}
+.cd-ops-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-top: 0.45rem;
+  font-family: var(--pf-font-mono);
+  font-size: 0.68rem;
+  color: var(--pf-text-dim);
+}
+.cd-ops-empty {
+  margin: 0.5rem 0 0;
+  color: var(--pf-text-muted);
+  font-size: 0.95rem;
+}
+.msn-body {
+  padding: 0 1.5rem 1rem;
+  overflow: auto;
+  max-height: min(70vh, 640px);
+}
+.msn-block {
+  margin-bottom: 1.25rem;
+}
+.msn-block h3 {
+  margin: 0 0 0.4rem;
+  font-family: var(--pf-font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+}
+.msn-block p,
+.msn-block li {
+  color: var(--pf-text);
+  font-size: 0.95rem;
+}
+.msn-plan {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.msn-pre {
+  margin: 0;
+  padding: 0.75rem;
+  overflow: auto;
+  max-height: 220px;
+  background: var(--pf-surface, rgba(0, 0, 0, 0.04));
+  font-family: var(--pf-font-mono);
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+}
+.msn-note {
+  font-size: 0.85rem;
+  color: var(--pf-text-muted);
+}
+.msn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem 1.25rem;
+  border-top: 1px solid var(--pf-border);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .cd-live-notify.is-animating,
   .cd-section.cd-evolved,

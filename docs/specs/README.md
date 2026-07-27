@@ -30,8 +30,10 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-019](SPEC-019_Evidence_Laboratory.md) | Evidence Laboratory | Done | v1.0.1 |
 | [SPEC-020](SPEC-020_Evidence_Query_Language.md) | Evidence Query Language (EQL) | Done | v1.0.1 |
 | [SPEC-021](SPEC-021_Learning_and_Belief_Evolution_Engine.md) | Learning & Belief Evolution Engine | Done | v1.0.1 |
-| [SPEC-022](SPEC-022_Mission_Engine_and_Agent_Orchestration.md) | Mission Engine & Agent Orchestration | Approved | v1.1.1 |
-| [SPEC-023](SPEC-023_Capability_Framework.md) | Capability Framework | Approved | v1.2.0 |
+| [SPEC-022](SPEC-022_Mission_Engine_and_Agent_Orchestration.md) | Mission Engine & Agent Orchestration | Implemented (thin slice) | v1.1.1 |
+| [SPEC-023](SPEC-023_Capability_Framework.md) | Capability Framework | Implemented (discovery + ranking live) | v1.2.0 |
+| [SPEC-024](SPEC-024_Prospect_Discovery_Capability.md) | Prospect Discovery Capability | Implemented | v1.0.0 |
+| [SPEC-026](SPEC-026_Opportunity_Ranking_Capability.md) | Opportunity Ranking Capability | Implemented | v1.0.0 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

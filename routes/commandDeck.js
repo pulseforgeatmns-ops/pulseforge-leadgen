@@ -62,12 +62,27 @@ router.get('/api/v1/command-deck', requireDashboardRead, async (req, res) => {
         : undefined;
 
     const max = await getMaxRuntime();
+    let missions = [];
+    if (max.missionEngine) {
+      try {
+        const list = await max.missionEngine.list({
+          tenantId: String(clientId),
+          clientId,
+          limit: 20,
+        });
+        missions = list.map((m) => max.missionEngine.toCard(m));
+      } catch (err) {
+        console.warn('[command-deck] missions list failed:', err.message);
+      }
+    }
+
     const model = await max.compose({
       tenantId: String(clientId),
       period,
       asOf,
       operator:
         (req.session && req.session.user && req.session.user.email) || null,
+      missions,
     });
 
     res.set('Cache-Control', 'no-store');

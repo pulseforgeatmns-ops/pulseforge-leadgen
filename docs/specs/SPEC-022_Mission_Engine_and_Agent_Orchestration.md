@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Approved |
+| **Status** | Implemented (thin slice) |
 | **Target Version** | v1.1.1 |
 | **Priority** | Critical |
 | **Owner** | Pulseforge engineering |
@@ -405,22 +405,28 @@ Reuse / extend existing `campaigns` foundation where present; do not invent a pa
 
 ## Acceptance Criteria
 
-- [ ] Max accepts business objectives (NL or structured)
-- [ ] Mission planner creates execution plans
-- [ ] Mission executor invokes capabilities (not raw agent names in product API)
-- [ ] Scout runs without operator naming Scout
-- [ ] Knowledge updates automatically on discovery/enrichment
-- [ ] Reasoning ranks results
-- [ ] Campaigns generated automatically (draft / review-gated)
-- [ ] Operator reviews before execution / outreach
-- [ ] Mission survives interruption (durable state + retry)
-- [ ] Complete audit trail recorded and replayable
-- [ ] Success metric: first-time user path for “Build Campaign 001 for Anchor Cleaning” works without agent vocabulary
-- [ ] Standalone Operations nav is removed / redirected; Operations lives on Command Deck
-- [ ] Mission Queue fills the space beneath Highest Leverage Action with persistent mission cards
-- [ ] Mission cards show title, status, progress, started, ETA, expand
-- [ ] Mission Workspace shows objective, plan, live progress, evidence, results, operator actions, audit trail
-- [ ] Idle Command Deck still communicates: active work, finished while away, needs attention, blocked
+### Thin slice shipped (v1.1.1 routing integration)
+
+- [x] Max accepts business objectives (NL or structured) via IntentRouter → MissionPlanner
+- [x] Mission planner creates execution plans
+- [x] Mission executor invokes capabilities (not raw agent names in product API)
+- [x] Operator reviews before execution / outreach (`review_required`; Approve does not send)
+- [x] Mission survives interruption (durable Postgres `missions` + `mission_audit_events`; in-memory for tests)
+- [x] Complete audit trail recorded and replayable
+- [x] Success metric: first-time user path for “Build Campaign 001 for Anchor Cleaning” works without agent vocabulary (stub capabilities)
+- [x] Standalone Operations nav is removed / redirected; Operations lives on Command Deck
+- [x] Mission Queue fills the space beneath Highest Leverage Action with persistent mission cards
+- [x] Mission cards show title, status, progress, started, ETA, expand
+- [x] Mission Workspace shows objective, plan, live progress, evidence, results, operator actions, audit trail
+- [x] Idle Command Deck still communicates: active work, finished while away, needs attention, blocked
+- [x] **Mission routing gate:** “Build Campaign 001” never falls through to Market Intelligence
+
+### Remaining (real adapters)
+
+- [ ] Scout runs without operator naming Scout (live Scout capability adapter)
+- [ ] Knowledge updates automatically on discovery/enrichment (live Knowledge Update adapter)
+- [x] Reasoning ranks results (live Opportunity Ranking adapter — SPEC-026)
+- [ ] Campaigns generated automatically against durable `campaigns` table (live Campaign Builder)
 
 ## Future Work
 

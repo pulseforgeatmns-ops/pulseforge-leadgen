@@ -57,7 +57,7 @@
     {
       id: 'operations', label: 'Operations',
       roles: ['admin', 'manager'],
-      href: { default: '/dashboard#pf-tab=agents' },
+      href: { default: '/command-deck#operations' },
     },
     {
       id: 'settings', label: 'Settings',
@@ -72,7 +72,10 @@
 
   function currentSurface() {
     const path = window.location.pathname;
-    if (path.startsWith('/command-deck')) return 'command-deck';
+    if (path.startsWith('/command-deck')) {
+      if ((window.location.hash || '') === '#operations') return 'operations';
+      return 'command-deck';
+    }
     if (path.startsWith('/setter')) return 'calls';
     if (path.startsWith('/closer')) return 'customers';
     if (path.startsWith('/dashboard')) {
