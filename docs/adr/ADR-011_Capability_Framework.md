@@ -49,6 +49,7 @@ Without a locked capability API, MissionExecutor will accrete agent-specific bra
 - [x] Proposal Generator as Mission capability ([SPEC-027B](../specs/SPEC-027B_Proposal_Generator_Capability.md) / [ADR-014](ADR-014_Personalized_by_Default.md))
 - [x] Client Playbook strategy assets ([SPEC-028](../specs/SPEC-028_Client_Playbook_Capability.md) / [ADR-015](ADR-015_Strategy_Lives_in_the_Playbook.md))
 - [ ] Replace enrichment stub with Company Intelligence ([SPEC-030](../specs/SPEC-030_Company_Intelligence_Capability.md) / [ADR-017](ADR-017_Intelligence_Before_Execution.md))
+- [ ] Business Signals Active set ([SPEC-031](../specs/SPEC-031_Business_Signals_Capability.md) / [ADR-018](ADR-018_Time_Matters.md)) inside Company Intelligence Signals stage
 - [ ] Replace knowledge / campaign stubs with live adapters
 - [ ] Execution Engine capability ([SPEC-029](../specs/SPEC-029_Execution_Engine.md) / [ADR-016](ADR-016_Execution_Does_Not_Decide.md)) — after SPEC-030
 - Update CURRENT_STATE when remaining live adapters ship

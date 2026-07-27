@@ -45,6 +45,7 @@ Contact backfill alone is insufficient. Operators need a canonical **Company Int
 ### Follow-ups
 
 - [ ] Implement [SPEC-030](../specs/SPEC-030_Company_Intelligence_Capability.md) live capability
+- [ ] Implement [SPEC-031](../specs/SPEC-031_Business_Signals_Capability.md) Active Business Signals (lifecycle + decay) / [ADR-018](ADR-018_Time_Matters.md)
 - [ ] Remove fabricating stub from production registry (keep non-fabricating stub for tests)
 - [ ] Wire Knowledge Update to consume `knowledgeWrites`
 - [ ] Proceed with [SPEC-029](../specs/SPEC-029_Execution_Engine.md) only after packages (or explicit empty packages) exist on the mission path

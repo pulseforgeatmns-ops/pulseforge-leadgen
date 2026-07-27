@@ -19,6 +19,8 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-015](docs/adr/ADR-015_Strategy_Lives_in_the_Playbook.md) | Strategy Lives in the Playbook | Accepted | Client strategy lives in versioned Client Playbooks; capabilities execute strategy |
 | [ADR-016](docs/adr/ADR-016_Execution_Does_Not_Decide.md) | Execution Does Not Decide | Accepted | Execution Engine carries out approved strategy only — never creates it |
 | [ADR-017](docs/adr/ADR-017_Intelligence_Before_Execution.md) | Intelligence Before Execution | Accepted | Company Intelligence packages before Ranking/Campaign/Proposal/Execution; never fabricate |
+| [ADR-018](docs/adr/ADR-018_Time_Matters.md) | Time Matters | Accepted | Business intelligence is time-aware; recent verified signals increase relevance; expired signals decay |
+| [ADR-019](docs/adr/ADR-019_Missions_Are_Conversations.md) | Missions Are Conversations | Accepted | A Mission is a persistent collaborative workspace; follow-ups refine in place; capabilities consume the current revision; execution uses the latest approved revision |
 
 ## How to add a decision
 
