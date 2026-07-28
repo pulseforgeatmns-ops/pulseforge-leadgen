@@ -21,6 +21,7 @@ const {
   parseDelimitedProspects,
   validateOperatorProspectRows,
   publishOperatorProspectList,
+  detectOperatorProspectListInMessage,
   OPERATOR_PRODUCERS,
   OPERATOR_SOURCES,
 } = OperatorArtifactInjection;
@@ -240,5 +241,93 @@ describe('SPEC-043 MissionEngine injectProspectList', () => {
       history.some((a) => a.producer === BUILTIN_IDS.PROSPECT_DISCOVERY),
       'Discovery remains a ProspectList producer'
     );
+  });
+});
+
+describe('SPEC-043 chat prompt ProspectList detection', () => {
+  it('detects CSV pasted after Build Campaign objective', () => {
+    const detected = detectOperatorProspectListInMessage(
+      [
+        'Build Campaign 001 for Anchor Cleaning',
+        '',
+        'Company Name,Website,Address',
+        'Granite State Law,https://gslaw.example,100 Elm St',
+        'Queen City CPA,https://qcpa.example,200 Bridge St',
+      ].join('\n')
+    );
+    assert.equal(detected.detected, true);
+    assert.equal(detected.confidence, 'high');
+    assert.equal(detected.autoInject, true);
+    assert.equal(detected.prospectCount, 2);
+    assert.match(detected.objectiveText, /Build Campaign 001/i);
+  });
+
+  it('auto-injects on createFromObjective and skips Discovery producer', async () => {
+    const engine = testEngine();
+    const mission = await engine.createFromObjective({
+      objective: [
+        'Build Campaign 001 for Anchor Cleaning',
+        '',
+        'Company Name,Website,Address',
+        'Granite State Law,https://gslaw.example,100 Elm St Manchester NH',
+        'Queen City CPA,https://qcpa.example,200 Bridge St Manchester NH',
+      ].join('\n'),
+      tenantId: 10,
+      clientId: 10,
+    });
+
+    assert.ok(mission.operatorProspectList);
+    assert.equal(mission.operatorProspectList.injected, true);
+    assert.equal(mission.operatorProspectList.prospectCount, 2);
+
+    const discovery = mission.plan.steps.find(
+      (s) =>
+        s.stageId === 'prospect_discovery' ||
+        s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY
+    );
+    assert.ok(discovery);
+    assert.equal(discovery.status, 'completed');
+    assert.equal(
+      discovery.outcome,
+      STAGE_OUTCOMES.SATISFIED_OPERATOR_SUPPLIED
+    );
+
+    const bus = createArtifactBus({
+      snapshot: mission.deliverables.artifactBus,
+    });
+    const list = bus.getLatestArtifact(mission.id, 'ProspectList');
+    assert.ok(list);
+    assert.equal(list.producer, OPERATOR_PRODUCERS.IMPORT);
+    assert.equal(list.payload.prospectCount, 2);
+
+    const history = bus.getArtifactHistory(mission.id, 'ProspectList');
+    assert.ok(
+      !history.some((a) => a.producer === BUILTIN_IDS.PROSPECT_DISCOVERY),
+      'Discovery should not have published when operator list was injected'
+    );
+  });
+
+  it('prompts import when list-like content fails validation', async () => {
+    const engine = testEngine();
+    const mission = await engine.createFromObjective({
+      objective: [
+        'Build Campaign 001 for Anchor Cleaning',
+        '',
+        'Company Name,Website',
+        ',https://missing-name.example',
+        ',https://also-missing.example',
+      ].join('\n'),
+      tenantId: 10,
+      clientId: 10,
+      execute: false,
+    });
+
+    assert.ok(mission.operatorProspectList);
+    assert.equal(mission.operatorProspectList.promptImport, true);
+    assert.equal(mission.operatorProspectList.autoInject, false);
+    assert.ok(
+      mission.deliverables && mission.deliverables.pendingOperatorImport
+    );
+    assert.ok(mission.deliverables.pendingOperatorImport.paste);
   });
 });

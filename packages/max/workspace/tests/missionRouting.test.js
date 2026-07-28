@@ -74,6 +74,45 @@ describe('SPEC-022 Workspace Mission routing', () => {
     assert.notEqual(result.structured.metadata.route, 'mission');
   });
 
+  it('pasted ProspectList in Build Campaign prompt auto-injects via workspace', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const result = await workspace.ask({
+      question: [
+        'Build Campaign 001 for Anchor Cleaning.',
+        '',
+        'Company Name,Website,Address',
+        'Granite State Law,https://gslaw.example,100 Elm St',
+        'Queen City CPA,https://qcpa.example,200 Bridge St',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    assert.equal(result.route, 'mission');
+    assert.ok(result.mission);
+    assert.ok(result.mission.operatorProspectList);
+    assert.equal(result.mission.operatorProspectList.injected, true);
+    assert.match(
+      result.prose || result.structured.answer,
+      /Operator ProspectList imported|Satisfied \(Operator Supplied\)/i
+    );
+    const discovery = result.mission.plan.steps.find(
+      (s) =>
+        s.stageId === 'prospect_discovery' ||
+        s.capabilityId === 'prospect_discovery'
+    );
+    assert.ok(discovery);
+    assert.equal(discovery.outcome, 'satisfied_operator_supplied');
+  });
+
   it('disabled MISSION_ENGINE falls through to intelligence', async () => {
     const missionEngine = testMissionEngine();
     const workspace = createWorkspaceEngine({

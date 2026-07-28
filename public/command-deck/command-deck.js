@@ -1071,17 +1071,31 @@
       const recoveryActions = Array.isArray(data.recoveryActions)
         ? data.recoveryActions
         : [];
+      const pendingImport =
+        data.pendingOperatorImport ||
+        (mission.deliverables && mission.deliverables.pendingOperatorImport) ||
+        null;
+      const recoveryTitle = pendingImport && !isDiscoveryBlockedUi(mission)
+        ? 'Prospect list detected'
+        : 'Discovery failed';
+      const recoveryCopy =
+        pendingImport && !isDiscoveryBlockedUi(mission)
+          ? pendingImport.errors && pendingImport.errors.length
+            ? `A prospect list was detected in the Mission prompt but needs fixes before import: ${pendingImport.errors[0]}`
+            : 'A prospect list was detected in the Mission prompt. Import it to skip Discovery and continue at Company Intelligence.'
+          : (Array.isArray(mission.blockingIssues) &&
+              mission.blockingIssues[0]) ||
+            (mission.stageReview &&
+              Array.isArray(mission.stageReview.blockingIssues) &&
+              mission.stageReview.blockingIssues[0]) ||
+            'Discovery could not produce a ProspectList.';
+      const showImportOpen =
+        Boolean(pendingImport && pendingImport.paste) ||
+        recoveryActions.some((a) => a.prefill);
       const discoveryFailedHtml = recoveryActions.length
         ? `<section class="msn-block msn-recovery">
-            <h3>Discovery failed</h3>
-            <p>${escapeHtml(
-              (Array.isArray(mission.blockingIssues) &&
-                mission.blockingIssues[0]) ||
-                (mission.stageReview &&
-                  Array.isArray(mission.stageReview.blockingIssues) &&
-                  mission.stageReview.blockingIssues[0]) ||
-                'Discovery could not produce a ProspectList.'
-            )}</p>
+            <h3>${escapeHtml(recoveryTitle)}</h3>
+            <p>${escapeHtml(recoveryCopy)}</p>
             <div class="msn-recovery-actions">
               ${recoveryActions
                 .map(
@@ -1096,10 +1110,16 @@
                 )
                 .join('')}
             </div>
-            <div class="msn-import" id="msnImportPanel" hidden>
+            <div class="msn-import" id="msnImportPanel"${
+              showImportOpen ? '' : ' hidden'
+            }>
               <label class="msn-import-label" for="msnImportPaste">Import Prospect List</label>
               <p class="msn-import-hint">Paste CSV or rows with Company Name (required). Website and Address recommended.</p>
-              <textarea id="msnImportPaste" class="msn-import-input" rows="8" placeholder="Company Name, Website, Address&#10;Acme Law, https://acme.example, 1 Main St"></textarea>
+              <textarea id="msnImportPaste" class="msn-import-input" rows="8" placeholder="Company Name, Website, Address&#10;Acme Law, https://acme.example, 1 Main St">${
+                pendingImport && pendingImport.paste
+                  ? escapeHtml(pendingImport.paste)
+                  : ''
+              }</textarea>
               <div class="msn-import-actions">
                 <button type="button" class="cd-btn cd-btn-primary" data-msn-import-submit>Validate &amp; resume</button>
                 <button type="button" class="cd-btn cd-btn-ghost" data-msn-import-cancel>Cancel</button>
@@ -1189,6 +1209,34 @@
     } catch (err) {
       announce(err.message || 'Could not open mission');
     }
+  }
+
+  function isDiscoveryBlockedUi(mission) {
+    if (!mission || mission.status !== 'waiting') return false;
+    const steps = (mission.plan && mission.plan.steps) || [];
+    const discovery = steps.find(
+      (s) =>
+        s.stageId === 'prospect_discovery' ||
+        s.capabilityId === 'prospect_discovery'
+    );
+    if (
+      discovery &&
+      (discovery.status === 'blocked' || discovery.status === 'failed')
+    ) {
+      return true;
+    }
+    const stage = mission.stageReview;
+    if (
+      stage &&
+      (stage.capabilityId === 'prospect_discovery' ||
+        stage.capabilityId === 'prospect_discovery') &&
+      (stage.outcome === 'blocked' || stage.outcome === 'failed')
+    ) {
+      return true;
+    }
+    return Boolean(
+      Array.isArray(mission.blockingIssues) && mission.blockingIssues.length
+    );
   }
 
   function bindMissionRecovery(missionId) {

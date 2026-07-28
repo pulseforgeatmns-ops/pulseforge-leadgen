@@ -146,7 +146,7 @@ async function loadProspectContext(clientId, question) {
 
 router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
   try {
-    const question = String(req.body?.question || '').trim().slice(0, 2000);
+    const question = String(req.body?.question || '').trim().slice(0, 100000);
     if (!question) return res.status(400).json({ error: 'Question is required' });
 
     const clientId = getRequestClientId(req);

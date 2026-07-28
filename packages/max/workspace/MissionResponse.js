@@ -45,6 +45,14 @@ function composeMissionResponse(input) {
           .filter(Boolean)
           .join(' ')
       : null,
+    mission.operatorProspectList && mission.operatorProspectList.injected
+      ? `Operator ProspectList imported (${mission.operatorProspectList.prospectCount} prospects). Discovery marked Satisfied (Operator Supplied); continuing at Company Intelligence.`
+      : null,
+    mission.operatorProspectList &&
+    mission.operatorProspectList.promptImport &&
+    !mission.operatorProspectList.injected
+      ? `Detected a prospect list in your prompt (${mission.operatorProspectList.prospectCount || 'partial'} rows). Open Mission Workspace to Import Prospect List, or retry after fixing Company Name on each row.`
+      : null,
     `Status: ${formatStatus(mission.status)}.`,
     `Current stage: ${stage} (${percent}%, ${countLine}).`,
     Array.isArray(mission.blockingIssues) && mission.blockingIssues.length
@@ -56,7 +64,8 @@ function composeMissionResponse(input) {
     mission.status === 'waiting' &&
     ((mission.stageReview &&
       mission.stageReview.capabilityId === 'prospect_discovery') ||
-      (Array.isArray(mission.blockingIssues) && mission.blockingIssues.length))
+      (Array.isArray(mission.blockingIssues) && mission.blockingIssues.length) ||
+      (mission.deliverables && mission.deliverables.pendingOperatorImport))
       ? 'You can Retry Discovery, Import a Prospect List, or Cancel from Mission Workspace.'
       : null,
     mission.status === 'review_required'
@@ -68,6 +77,20 @@ function composeMissionResponse(input) {
     .filter(Boolean)
     .join(' ');
 
+  const recommendedExtras = [];
+  if (
+    mission.operatorProspectList &&
+    mission.operatorProspectList.promptImport &&
+    !mission.operatorProspectList.injected
+  ) {
+    recommendedExtras.push({
+      id: 'import_prospect_list',
+      type: 'import_prospect_list',
+      label: 'Import detected Prospect List',
+      payload: { missionId: mission.id },
+    });
+  }
+
   return buildMissionStructured({
     answer,
     mission,
@@ -77,6 +100,9 @@ function composeMissionResponse(input) {
       `Mission type: ${mission.type}.`,
       mission.discoveryProfile
         ? `Discovery Profile: ${mission.discoveryProfile.name} v${mission.discoveryProfile.version}.`
+        : null,
+      mission.operatorProspectList && mission.operatorProspectList.injected
+        ? `Operator Artifact Injection: ${mission.operatorProspectList.prospectCount} prospects via ${mission.operatorProspectList.source}.`
         : null,
       mission.plan && mission.plan.reasoning && mission.plan.reasoning.summary
         ? `Planner: ${mission.plan.reasoning.summary}.`
@@ -94,6 +120,7 @@ function composeMissionResponse(input) {
         ? `Review required: ${mission.plan.explanation.answers.whyReviewRequired.reason}.`
         : null,
     ].filter(Boolean),
+    recommendedExtras,
   });
 }
 
@@ -232,6 +259,7 @@ function buildMissionStructured(input) {
         label: 'Review results',
         payload: { missionId: mission.id },
       },
+      ...((input.recommendedExtras) || []),
     ],
     metadata: {
       sourcesUsed: {

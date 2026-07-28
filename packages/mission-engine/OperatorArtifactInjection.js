@@ -428,6 +428,202 @@ function splitDelimitedLine(line, delimiter) {
   return out;
 }
 
+const EXPLICIT_IMPORT_CUE =
+  /\b(import|use these|here(?:'s| are)|prospect\s+list|company\s+list|from\s+(?:this\s+|my\s+)?list|paste[sd]?|attached\s+list|operator[- ]supplied)\b/i;
+
+const OBJECTIVE_ONLY_LINE =
+  /\b(build|create|launch|prepare|new)\s+(a\s+)?(campaign|mission)\b|\bmonitor\b|\bsummarize\b|\breview\s+campaign\b/i;
+
+/**
+ * Extract a contiguous prospect-list block from a Mission chat prompt.
+ * Looks for CSV/TSV headers, delimited rows, or a blank-line-separated name list.
+ * @param {string} text
+ * @returns {{ block: string, startLine: number, endLine: number, hasHeader: boolean }|null}
+ */
+function extractProspectBlock(text) {
+  const raw = String(text || '').replace(/^\uFEFF/, '');
+  if (!raw.trim()) return null;
+
+  const lines = raw.split(/\r?\n/);
+  let start = -1;
+  let hasHeader = false;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = String(lines[i] || '').trim();
+    if (!line) continue;
+    if (OBJECTIVE_ONLY_LINE.test(line) && !looksLikeDelimitedRow(line)) {
+      continue;
+    }
+    const delimiter = detectDelimiter(line);
+    const cells = splitDelimitedLine(line, delimiter).map((c) =>
+      String(c).trim()
+    );
+    const headerish = cells.some((c) =>
+      FIELD_ALIASES.companyName.includes(normalizeHeaderKey(c))
+    );
+    if (headerish) {
+      start = i;
+      hasHeader = true;
+      break;
+    }
+    if (looksLikeDelimitedRow(line)) {
+      start = i;
+      break;
+    }
+  }
+
+  // Fallback: after first blank line, collect 2+ non-objective name lines
+  if (start < 0) {
+    const blankIdx = lines.findIndex((l, idx) => idx > 0 && !String(l).trim());
+    if (blankIdx >= 0) {
+      const candidates = [];
+      for (let i = blankIdx + 1; i < lines.length; i += 1) {
+        const line = String(lines[i] || '').trim();
+        if (!line) {
+          if (candidates.length) break;
+          continue;
+        }
+        if (OBJECTIVE_ONLY_LINE.test(line)) continue;
+        candidates.push(i);
+      }
+      if (candidates.length >= 2) {
+        start = candidates[0];
+      }
+    }
+  }
+
+  if (start < 0) return null;
+
+  let end = start;
+  for (let i = start; i < lines.length; i += 1) {
+    const line = String(lines[i] || '').trim();
+    if (!line) {
+      // allow a single blank inside the block; stop on trailing blanks
+      if (i > start && !String(lines[i + 1] || '').trim()) break;
+      continue;
+    }
+    if (i > start && OBJECTIVE_ONLY_LINE.test(line) && !looksLikeDelimitedRow(line)) {
+      break;
+    }
+    end = i;
+  }
+
+  const blockLines = lines.slice(start, end + 1).filter((l, idx, arr) => {
+    const t = String(l || '').trim();
+    if (!t) return idx > 0 && idx < arr.length - 1;
+    return true;
+  });
+  const block = blockLines.join('\n').trim();
+  if (!block) return null;
+
+  if (!hasHeader) {
+    const firstCells = splitDelimitedLine(
+      block.split(/\r?\n/)[0],
+      detectDelimiter(block.split(/\r?\n/)[0])
+    ).map((c) => String(c).trim());
+    hasHeader = firstCells.some((c) =>
+      FIELD_ALIASES.companyName.includes(normalizeHeaderKey(c))
+    );
+  }
+
+  return { block, startLine: start, endLine: end, hasHeader };
+}
+
+function looksLikeDelimitedRow(line) {
+  const text = String(line || '');
+  if (!text.trim()) return false;
+  const commas = (text.match(/,/g) || []).length;
+  const tabs = (text.match(/\t/g) || []).length;
+  return tabs >= 1 || commas >= 1;
+}
+
+/**
+ * Detect operator-supplied ProspectList data embedded in a Mission prompt.
+ * High confidence → autoInject; medium → prompt operator to import.
+ *
+ * @param {string} text
+ * @returns {object}
+ */
+function detectOperatorProspectListInMessage(text) {
+  const raw = String(text || '');
+  const empty = {
+    detected: false,
+    confidence: 'none',
+    autoInject: false,
+    promptImport: false,
+    paste: null,
+    prospects: [],
+    validation: null,
+    source: OPERATOR_SOURCES.SPREADSHEET_PASTE,
+    hasHeader: false,
+    explicitCue: false,
+    objectiveText: raw.trim(),
+    prospectCount: 0,
+  };
+
+  if (!raw.trim()) return empty;
+
+  const extracted = extractProspectBlock(raw);
+  if (!extracted) return empty;
+
+  const rows = parseDelimitedProspects(extracted.block);
+  const validation = validateOperatorProspectRows(rows);
+  const explicitCue = EXPLICIT_IMPORT_CUE.test(raw);
+  const prospectCount = validation.prospectCount || 0;
+
+  let confidence = 'none';
+  let autoInject = false;
+  let promptImport = false;
+
+  if (validation.ok && prospectCount >= 2) {
+    confidence = 'high';
+    autoInject = true;
+  } else if (
+    validation.ok &&
+    prospectCount >= 1 &&
+    (extracted.hasHeader || explicitCue)
+  ) {
+    confidence = 'high';
+    autoInject = true;
+  } else if (rows.length >= 2 || extracted.hasHeader || explicitCue) {
+    confidence = 'medium';
+    promptImport = true;
+  }
+
+  if (confidence === 'none') return empty;
+
+  const objectiveText = stripProspectBlock(raw, extracted).trim() || raw.trim();
+
+  return {
+    detected: true,
+    confidence,
+    autoInject,
+    promptImport,
+    paste: extracted.block,
+    prospects: validation.prospects || [],
+    validation,
+    source: OPERATOR_SOURCES.SPREADSHEET_PASTE,
+    hasHeader: extracted.hasHeader,
+    explicitCue,
+    objectiveText,
+    prospectCount,
+  };
+}
+
+/**
+ * Remove the prospect block from the prompt, leaving objective prose for the planner.
+ * @param {string} text
+ * @param {{ startLine: number, endLine: number }} extracted
+ */
+function stripProspectBlock(text, extracted) {
+  const lines = String(text || '').split(/\r?\n/);
+  if (!extracted || extracted.startLine == null) return String(text || '');
+  const kept = lines.filter(
+    (_line, i) => i < extracted.startLine || i > extracted.endLine
+  );
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 module.exports = {
   OPERATOR_PRODUCERS,
   OPERATOR_SOURCES,
@@ -437,4 +633,7 @@ module.exports = {
   buildOperatorProspectListPayload,
   producerForSource,
   publishOperatorProspectList,
+  extractProspectBlock,
+  detectOperatorProspectListInMessage,
+  stripProspectBlock,
 };

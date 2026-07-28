@@ -24,9 +24,15 @@ const {
   createInMemoryActiveMissionBindingStore,
 } = require('./ActiveMissionBindingStore');
 const { createArtifactBus } = require('./ArtifactBus');
-const { publishOperatorProspectList } = require('./OperatorArtifactInjection');
+const {
+  publishOperatorProspectList,
+  detectOperatorProspectListInMessage,
+} = require('./OperatorArtifactInjection');
 const { STAGE_OUTCOME_LABELS } = require('./PipelineGate');
 const { BUILTIN_IDS } = require('../capabilities/types');
+
+/** Max objective length when operator pastes a prospect list into Mission chat. */
+const OBJECTIVE_MAX_CHARS = 100000;
 
 class MissionEngine {
   /**
@@ -97,6 +103,8 @@ class MissionEngine {
   /**
    * Create, plan, and execute a mission from a business objective.
    * Ends in review_required — never auto-outreach.
+   * When the objective embeds a validated prospect list (SPEC-043), skips
+   * Discovery and injects the list onto the Artifact Bus before resume.
    *
    * @param {object} input
    * @param {string} input.objective
@@ -106,6 +114,8 @@ class MissionEngine {
    * @param {string} [input.createdBy]
    * @param {string} [input.missionType]
    * @param {boolean} [input.execute=true]
+   * @param {boolean} [input.detectOperatorList=true]
+   * @param {object} [input.operatorProspectList] - precomputed detection result
    */
   async createFromObjective(input) {
     if (!input || !String(input.objective || '').trim()) {
@@ -115,19 +125,49 @@ class MissionEngine {
       throw new Error('tenantId is required');
     }
 
-    const decision = routeIntent(input.objective);
+    const objectiveRaw = String(input.objective)
+      .trim()
+      .slice(0, OBJECTIVE_MAX_CHARS);
+    const detection =
+      input.operatorProspectList ||
+      (input.detectOperatorList === false
+        ? null
+        : detectOperatorProspectListInMessage(objectiveRaw));
+    const planningObjective =
+      (detection &&
+        detection.detected &&
+        detection.objectiveText &&
+        String(detection.objectiveText).trim()) ||
+      objectiveRaw;
+
+    const decision = routeIntent(planningObjective);
     const missionType =
       input.missionType ||
       (decision.kind === ROUTE_KINDS.MISSION ? decision.missionType : null);
 
+    const constraints = {
+      ...(input.constraints || { targetCount: 50 }),
+    };
+    if (
+      detection &&
+      detection.autoInject &&
+      detection.prospectCount > 0 &&
+      (input.constraints == null || input.constraints.targetCount == null)
+    ) {
+      constraints.targetCount = detection.prospectCount;
+    }
+
     const draft = this._planner.plan({
-      objective: input.objective,
+      objective: planningObjective,
       missionType: missionType || undefined,
       tenantId: input.tenantId,
       clientId: input.clientId != null ? input.clientId : input.tenantId,
-      constraints: input.constraints || { targetCount: 50 },
+      constraints,
       createdBy: input.createdBy,
     });
+
+    // Keep full operator prompt (including pasted list) on the Mission record.
+    draft.objectiveText = objectiveRaw;
 
     draft.status = MISSION_STATUS.REQUESTED;
     let mission = await this._store.create(draft);
@@ -170,14 +210,118 @@ class MissionEngine {
               version: mission.clientPlaybook.version,
             }
           : null,
+        operatorProspectList:
+          detection && detection.detected
+            ? {
+                confidence: detection.confidence,
+                autoInject: detection.autoInject,
+                promptImport: detection.promptImport,
+                prospectCount: detection.prospectCount,
+              }
+            : null,
       },
     });
 
+    const shouldAutoInject =
+      detection &&
+      detection.autoInject &&
+      detection.paste &&
+      this._missionHasDiscoveryStage(mission);
+
+    if (shouldAutoInject) {
+      if (input.execute === false) {
+        mission = await this._store.update({
+          id: mission.id,
+          deliverables: {
+            ...(mission.deliverables || {}),
+            pendingOperatorImport: {
+              paste: detection.paste,
+              source: detection.source,
+              prospectCount: detection.prospectCount,
+              confidence: detection.confidence,
+              autoInjectPending: true,
+              detectedAt: new Date().toISOString(),
+            },
+          },
+        });
+        mission.operatorProspectList = detection;
+        return mission;
+      }
+
+      const injected = await this.injectProspectList({
+        missionId: mission.id,
+        paste: detection.paste,
+        source: detection.source,
+        createdBy: input.createdBy || 'operator',
+        execute: true,
+      });
+      injected.mission.operatorProspectList = {
+        ...detection,
+        injected: true,
+        artifactId: injected.artifact && injected.artifact.id,
+      };
+      return injected.mission;
+    }
+
+    if (detection && detection.promptImport && detection.paste) {
+      mission = await this._store.update({
+        id: mission.id,
+        deliverables: {
+          ...(mission.deliverables || {}),
+          pendingOperatorImport: {
+            paste: detection.paste,
+            source: detection.source,
+            prospectCount: detection.prospectCount,
+            confidence: detection.confidence,
+            errors:
+              (detection.validation && detection.validation.errors) || [],
+            warnings:
+              (detection.validation && detection.validation.warnings) || [],
+            detectedAt: new Date().toISOString(),
+          },
+        },
+      });
+      mission.operatorProspectList = detection;
+    }
+
     if (input.execute === false) {
+      if (detection && detection.detected) {
+        mission.operatorProspectList = detection;
+      }
       return mission;
     }
 
-    return this._executor.execute(mission.id);
+    mission = await this._executor.execute(mission.id);
+    if (detection && detection.detected) {
+      mission.operatorProspectList = {
+        ...detection,
+        injected: Boolean(
+          mission.operatorProspectList && mission.operatorProspectList.injected
+        ),
+      };
+      // Preserve pending import from store after execute merge
+      const fresh = await this.get(mission.id);
+      if (
+        fresh &&
+        fresh.deliverables &&
+        fresh.deliverables.pendingOperatorImport
+      ) {
+        mission.deliverables = {
+          ...(mission.deliverables || {}),
+          pendingOperatorImport: fresh.deliverables.pendingOperatorImport,
+        };
+      }
+    }
+    return mission;
+  }
+
+  _missionHasDiscoveryStage(mission) {
+    const steps = (mission && mission.plan && mission.plan.steps) || [];
+    return steps.some(
+      (s) =>
+        s.stageId === 'prospect_discovery' ||
+        s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY
+    );
   }
 
   async get(id) {
@@ -349,6 +493,9 @@ class MissionEngine {
       audit,
       actions: workspaceActions(mission),
       recoveryActions: discoveryRecoveryActions(mission),
+      pendingOperatorImport:
+        (mission.deliverables && mission.deliverables.pendingOperatorImport) ||
+        null,
       outboundBlocked: true,
     };
   }
@@ -517,6 +664,22 @@ class MissionEngine {
         )
       : [];
 
+    const nextDeliverables = {
+      ...(mission.deliverables || {}),
+      stepResults: [...priorStepResults, stepResult],
+      artifactBus: bus.toJSON(),
+      artifactGraph: bus.getArtifactGraph(mission.id),
+      lastInjection: {
+        artifactId: published.artifact.id,
+        artifactType: published.artifact.artifactType,
+        revision: published.artifact.revision,
+        producer: published.producer,
+        source: published.source,
+        at: new Date().toISOString(),
+      },
+    };
+    delete nextDeliverables.pendingOperatorImport;
+
     mission = await this._store.update({
       id: mission.id,
       status: MISSION_STATUS.WAITING,
@@ -554,20 +717,7 @@ class MissionEngine {
             0,
         },
       },
-      deliverables: {
-        ...(mission.deliverables || {}),
-        stepResults: [...priorStepResults, stepResult],
-        artifactBus: bus.toJSON(),
-        artifactGraph: bus.getArtifactGraph(mission.id),
-        lastInjection: {
-          artifactId: published.artifact.id,
-          artifactType: published.artifact.artifactType,
-          revision: published.artifact.revision,
-          producer: published.producer,
-          source: published.source,
-          at: new Date().toISOString(),
-        },
-      },
+      deliverables: nextDeliverables,
     });
 
     await this._store.appendAudit({
@@ -656,29 +806,53 @@ function isDiscoveryBlocked(mission) {
 }
 
 function discoveryRecoveryActions(mission) {
-  if (!isDiscoveryBlocked(mission)) return [];
-  return [
-    {
-      id: 'retry_discovery',
-      label: 'Retry Discovery',
-      action: 'run_again',
-    },
-    {
-      id: 'import_prospect_list',
-      label: 'Import Prospect List',
-      action: 'inject_prospect_list',
-    },
-    {
-      id: 'cancel_mission',
-      label: 'Cancel Mission',
-      action: 'reject',
-    },
-  ];
+  if (isDiscoveryBlocked(mission)) {
+    return [
+      {
+        id: 'retry_discovery',
+        label: 'Retry Discovery',
+        action: 'run_again',
+      },
+      {
+        id: 'import_prospect_list',
+        label: 'Import Prospect List',
+        action: 'inject_prospect_list',
+      },
+      {
+        id: 'cancel_mission',
+        label: 'Cancel Mission',
+        action: 'reject',
+      },
+    ];
+  }
+
+  const pending =
+    mission &&
+    mission.deliverables &&
+    mission.deliverables.pendingOperatorImport;
+  if (pending && pending.paste && !pending.autoInjectPending) {
+    return [
+      {
+        id: 'import_prospect_list',
+        label: 'Import detected Prospect List',
+        action: 'inject_prospect_list',
+        prefill: true,
+      },
+    ];
+  }
+  return [];
 }
 
 function workspaceActions(mission) {
   const base = ['approve', 'reject', 'edit', 'run_again'];
   if (isDiscoveryBlocked(mission)) {
+    return [...base, 'import_prospect_list'];
+  }
+  const pending =
+    mission &&
+    mission.deliverables &&
+    mission.deliverables.pendingOperatorImport;
+  if (pending && pending.paste && !pending.autoInjectPending) {
     return [...base, 'import_prospect_list'];
   }
   return base;
