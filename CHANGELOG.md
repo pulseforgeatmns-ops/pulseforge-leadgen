@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Sales Intelligence Engine ([SPEC-048](docs/specs/SPEC-048_Sales_Intelligence_Engine.md) / [ADR-032](docs/adr/ADR-032_Strategy_Before_Language.md))
+  - Structured `SalesIntelligenceProfile` between Company Intelligence and channel generators
+  - Messaging strategy, evidence-linked personalization claims, quality gates, Human Test / Operator Confidence Score
+  - Mail Package + Campaign mailMerge consume the profile (prospect-first openings)
+  - Review Workspace shows Sales Intelligence → Messaging Strategy → Score → Letter
+  - Operator Approval Rate tracking stub
+  - Tests: `npm run test:capabilities` · `npm run test:mission`
 - Review Workspace Interaction Layer ([SPEC-047](docs/specs/SPEC-047_Review_Workspace_Interaction_Layer.md) / [ADR-031](docs/adr/ADR-031_Review_Must_Be_Evidence_First.md))
   - Expandable Campaign / MailPackage deliverables and stage cards
   - Campaign Summary metrics navigate to prospects, packages, warnings, ready queue

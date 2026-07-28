@@ -141,6 +141,18 @@ function buildProspectQueueRow(partial = {}) {
     evidence: Array.isArray(partial.evidence) ? partial.evidence : [],
     companySummary:
       partial.companySummary != null ? String(partial.companySummary) : null,
+    salesIntelligence:
+      partial.salesIntelligence && typeof partial.salesIntelligence === 'object'
+        ? partial.salesIntelligence
+        : null,
+    messagingStrategy:
+      partial.messagingStrategy && typeof partial.messagingStrategy === 'object'
+        ? partial.messagingStrategy
+        : null,
+    operatorConfidence:
+      partial.operatorConfidence && typeof partial.operatorConfidence === 'object'
+        ? partial.operatorConfidence
+        : null,
     mailPackageId:
       partial.mailPackageId != null ? String(partial.mailPackageId) : null,
     skipped: Boolean(partial.skipped),

@@ -1775,6 +1775,38 @@ body.theme-dark .mx-ask-submit {
   min-height: 12rem;
   font-family: "Newsreader", Georgia, "Times New Roman", serif;
 }
+.msn-si-block {
+  margin: 0.85rem 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--pf-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--pf-surface, rgba(0, 0, 0, 0.04)) 92%, transparent);
+}
+.msn-si-dl {
+  margin: 0.35rem 0 0;
+  display: grid;
+  gap: 0.35rem;
+}
+.msn-si-row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 9.5rem) 1fr;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+}
+.msn-si-row dt {
+  margin: 0;
+  color: var(--pf-text-dim);
+  font-weight: 500;
+}
+.msn-si-row dd {
+  margin: 0;
+}
+.msn-si-claims,
+.msn-si-score-list {
+  margin: 0.4rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.88rem;
+}
 .msn-recovery {
   border: 1px solid var(--pf-border);
   border-radius: 0.5rem;

@@ -254,6 +254,22 @@ function buildRowFromProspect(prospect, pkg, opts = {}) {
     signals,
     evidence,
     companySummary,
+    salesIntelligence:
+      (pkg && pkg.salesIntelligence) ||
+      prospect.salesIntelligenceProfile ||
+      null,
+    messagingStrategy:
+      (pkg && pkg.messagingStrategy) ||
+      (pkg &&
+        pkg.salesIntelligence &&
+        pkg.salesIntelligence.messaging_strategy) ||
+      null,
+    operatorConfidence:
+      (pkg && pkg.operatorConfidence) ||
+      (pkg &&
+        pkg.salesIntelligence &&
+        pkg.salesIntelligence.operatorConfidence) ||
+      null,
     mailPackageId: pkg && pkg.id ? String(pkg.id) : null,
     skipped: Boolean(pkg && pkg.skipped),
     required: !(pkg && pkg.skipped),

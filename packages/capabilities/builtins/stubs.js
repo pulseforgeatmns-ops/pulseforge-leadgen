@@ -263,6 +263,21 @@ function createCampaignBuilderStub() {
       const applied = applyPlaybookConstraints(list, playbook);
       const kept = applied.prospects;
 
+      const prior =
+        (context.inputs && context.inputs.priorOutputs) || {};
+      const profileMap =
+        (context.inputs && context.inputs.salesIntelligenceByProspectId) ||
+        prior.salesIntelligenceByProspectId ||
+        {};
+      const profiles =
+        (context.inputs && context.inputs.salesIntelligenceProfiles) ||
+        prior.salesIntelligenceProfiles ||
+        prior.profiles ||
+        [];
+      const {
+        openingFromProfile,
+      } = require('../salesIntelligence/derive');
+
       const mailMerge = kept.map((p) => {
         let messagingPosture = p.messagingPosture || null;
         let messagingDescription = p.messagingDescription || null;
@@ -283,23 +298,79 @@ function createCampaignBuilderStub() {
             // signals optional — campaign stub remains review-gated without them
           }
         }
+
+        const salesProfile =
+          p.salesIntelligenceProfile ||
+          (p.id != null && profileMap[String(p.id)]) ||
+          profileMap[`company:${String(p.companyName || '').toLowerCase()}`] ||
+          (Array.isArray(profiles)
+            ? profiles.find(
+                (pr) =>
+                  (p.id != null && String(pr.prospectId) === String(p.id)) ||
+                  String(pr.company || '').toLowerCase() ===
+                    String(p.companyName || '').toLowerCase()
+              )
+            : null) ||
+          null;
+
+        const fromProfile = salesProfile
+          ? {
+              personalizationSentence: openingFromProfile(salesProfile),
+              openingHook:
+                (salesProfile.messaging_strategy &&
+                  salesProfile.messaging_strategy.cta) ||
+                salesProfile.call_to_action ||
+                null,
+              recommendedOffer:
+                salesProfile.call_to_action || p.recommendedOffer || null,
+              messagingPosture:
+                messagingPosture ||
+                (salesProfile.messaging_strategy &&
+                  salesProfile.messaging_strategy.opening_focus) ||
+                null,
+              recommendedAngle: salesProfile.recommended_angle || null,
+              salesIntelligenceProfileId: salesProfile.prospectId || null,
+              operatorConfidence:
+                salesProfile.operatorConfidence &&
+                salesProfile.operatorConfidence.overall != null
+                  ? salesProfile.operatorConfidence.overall
+                  : null,
+              sendable: salesProfile.sendable !== false,
+            }
+          : null;
+
         return {
           companyName: p.companyName,
+          prospectId: p.id != null ? String(p.id) : null,
           personalizationSentence:
+            (fromProfile && fromProfile.personalizationSentence) ||
             p.personalizationSentence ||
             (playbook
               ? null
               : `Noticed ${p.companyName} may need support (no playbook).`),
           openingHook:
+            (fromProfile && fromProfile.openingHook) ||
             p.openingHook ||
             (playbook ? null : 'Confirm outreach language after playbook is set.'),
-          recommendedOffer: p.recommendedOffer || null,
+          recommendedOffer:
+            (fromProfile && fromProfile.recommendedOffer) ||
+            p.recommendedOffer ||
+            null,
           recommendedChannel: p.recommendedChannel || null,
-          messagingPosture,
+          recommendedAngle:
+            (fromProfile && fromProfile.recommendedAngle) || null,
+          messagingPosture:
+            (fromProfile && fromProfile.messagingPosture) || messagingPosture,
           messagingDescription,
           activeSignalTitles: (activeSignals || []).map((s) => s.title),
           playbookId: playbook ? playbook.id : null,
           playbookVersion: playbook ? playbook.version : null,
+          salesIntelligenceProfileId:
+            (fromProfile && fromProfile.salesIntelligenceProfileId) || null,
+          operatorConfidence:
+            (fromProfile && fromProfile.operatorConfidence) || null,
+          sendable: fromProfile ? fromProfile.sendable : true,
+          salesIntelligence: salesProfile || null,
         };
       });
 
@@ -417,6 +488,12 @@ function registerBuiltinCapabilities(registry, options = {}) {
   registry.register(createCompanyEnrichmentStub());
   registry.register(createKnowledgeUpdateStub());
   registry.register(createOpportunityRankingCapability(options.ranking || {}));
+  const {
+    createSalesIntelligenceCapability,
+  } = require('../salesIntelligence');
+  registry.register(
+    createSalesIntelligenceCapability(options.salesIntelligence || {})
+  );
   registry.register(createCampaignBuilderStub());
   registry.register(
     createProposalGeneratorCapability(options.proposal || {})
@@ -472,6 +549,8 @@ module.exports = {
   createKnowledgeUpdateStub,
   createOpportunityRankingStub,
   createOpportunityRankingCapability,
+  createSalesIntelligenceCapability: require('../salesIntelligence')
+    .createSalesIntelligenceCapability,
   createCampaignBuilderStub,
   createProposalGeneratorCapability,
   createMailPackageGeneratorCapability: require('../mail')
