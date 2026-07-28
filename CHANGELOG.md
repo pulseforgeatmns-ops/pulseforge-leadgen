@@ -6,12 +6,24 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Review Workspace Interaction Layer ([SPEC-047](docs/specs/SPEC-047_Review_Workspace_Interaction_Layer.md) / [ADR-031](docs/adr/ADR-031_Review_Must_Be_Evidence_First.md))
+  - Expandable Campaign / MailPackage deliverables and stage cards
+  - Campaign Summary metrics navigate to prospects, packages, warnings, ready queue
+  - Warning inspector + one-at-a-time mail package review queue (letter preview without Developer Details)
+  - Honest affordance; Developer Details remain optional / last
+  - Presentation only — no Mission Engine / Artifact Bus / Campaign Review capability changes
 - Command Deck UX Polish ([SPEC-045](docs/specs/SPEC-045_Command_Deck_UX_Polish.md) / [ADR-030](docs/adr/ADR-030_Command_Deck_Is_an_Operator_Workspace.md))
   - Persistent Max composer + sticky suggestions + auto-growing prompt
   - Prospect List pastes render as attachment cards (raw preserved under View)
   - Mission Workspace: expandable objective, business input/stage/artifact summaries, review dashboard
   - Pipeline metadata under Developer Details; stage loading bars from existing statuses
   - Presentation only — no Mission execution changes
+- Trade Intelligence Engine ([SPEC-046](docs/specs/SPEC-046_Trade_Intelligence_Engine.md))
+  - `@pulseforge/trade-intelligence` — daily/weekly reviews, pattern discovery, calibration, explainable recommendations
+  - Immutable Findings; Replay: `reviewTrade` · `compareWeek` · `generateDailyReview`
+  - Laboratory: `discoverTradePatterns` · `compareTradeStrategies` · `compareTimeWindows` · `compareConfidenceBands`
+  - EQL: `SHOW DailyReview FOR Today` · `SHOW WeeklyReview FOR LastWeek` · `SHOW BestHypotheses` · `SHOW TradeCalibration` · `SHOW SimilarTrades FOR Trade("…")` · `SHOW Recommendations`
+  - Tests: `npm run test:trade-intelligence` · `npm run test:eql` · `npm run test:laboratory`
 - Trade Capture Engine ([SPEC-044](docs/specs/SPEC-044_Trade_Capture_Engine.md))
   - `@pulseforge/trade-capture` — screenshot-first capture (&lt;15s operator path); OCR never blocks save
   - Immutable `chart_snapshot` observations; Trade → Evidence → Claim → Outcome graph

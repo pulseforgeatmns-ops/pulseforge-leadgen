@@ -39,5 +39,6 @@ Mission OS is an operating system for business execution, not a developer consol
 ### Follow-ups
 
 - [x] SPEC-045 v1 thin slice (composer shell, attachment cards, Mission Workspace summaries)
+- [x] SPEC-047 / [ADR-031](ADR-031_Review_Must_Be_Evidence_First.md) — evidence-first Review interaction layer
 - [ ] Optional server presentation DTOs if client derivation becomes brittle
 - [ ] Additional attachment types beyond Prospect List

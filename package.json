@@ -16,6 +16,8 @@
     "test:laboratory": "node --test packages/laboratory/tests/*.test.js",
     "test:eql": "node --test packages/eql/tests/*.test.js",
     "test:learning": "node --test packages/learning/tests/*.test.js",
+    "test:trade-capture": "node --test packages/trade-capture/tests/*.test.js",
+    "test:trade-intelligence": "node --test packages/trade-intelligence/tests/*.test.js",
     "test:capabilities": "node --test packages/capabilities/tests/*.test.js",
     "test:mission": "node --test packages/mission-engine/tests/*.test.js packages/max/workspace/tests/missionRouting.test.js",
     "test:discovery": "node --test packages/capabilities/tests/*.test.js packages/mission-engine/tests/*.test.js",

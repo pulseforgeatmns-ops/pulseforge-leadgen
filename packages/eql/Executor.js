@@ -246,6 +246,8 @@ class Executor {
  * @param {object[]} [seed.calibrations]
  * @param {object[]} [seed.accuracies]
  * @param {object[]} [seed.strategy_packs]
+ * @param {object[]} [seed.trades]
+ * @param {object[]} [seed.screenshots]
  * @param {object} [seed.links] - optional { supporting: {claimId: evidence[]}, contradicting: {...} }
  * @param {(args: object) => object|Promise<object>} [seed.replayFn]
  * @param {(args: object) => object|Promise<object>} [seed.compareFn]
@@ -265,6 +267,15 @@ function createEvidenceCatalog(seed = {}) {
     calibrations: cloneList(seed.calibrations),
     accuracies: cloneList(seed.accuracies),
     strategy_packs: cloneList(seed.strategy_packs),
+    trades: cloneList(seed.trades),
+    screenshots: cloneList(seed.screenshots),
+    daily_reviews: cloneList(seed.daily_reviews),
+    weekly_reviews: cloneList(seed.weekly_reviews),
+    best_hypotheses: cloneList(seed.best_hypotheses),
+    trade_calibrations: cloneList(seed.trade_calibrations),
+    findings: cloneList(seed.findings),
+    similar_trades: cloneList(seed.similar_trades),
+    periods: cloneList(seed.periods),
   };
   const links = {
     supporting: { ...(seed.links && seed.links.supporting) },
@@ -384,6 +395,13 @@ function catalogFromResult(result, extras = {}) {
     ? [{ id: subjectId, subject: subjectId, subjectId }]
     : [];
 
+  const trades = normalizeList(result.trades).map((trade) => ({
+    ...trade,
+    subjectId: trade.subjectId || subjectId,
+    subject: trade.subject || trade.subjectId || subjectId,
+  }));
+  const screenshots = normalizeList(result.screenshots || result.chartSnapshots);
+
   const replay_sessions = [
     {
       id: result.experimentId || result.replayFingerprint || `replay:${subjectId || 'unknown'}`,
@@ -413,6 +431,16 @@ function catalogFromResult(result, extras = {}) {
     outcomes: extras.outcomes || outcomes,
     recommendations: extras.recommendations || recommendations,
     replay_sessions: extras.replay_sessions || replay_sessions,
+    trades: extras.trades || trades,
+    screenshots: extras.screenshots || screenshots,
+    daily_reviews: extras.daily_reviews || normalizeList(result.daily_reviews),
+    weekly_reviews: extras.weekly_reviews || normalizeList(result.weekly_reviews),
+    best_hypotheses: extras.best_hypotheses || normalizeList(result.best_hypotheses),
+    trade_calibrations:
+      extras.trade_calibrations || normalizeList(result.trade_calibrations),
+    findings: extras.findings || normalizeList(result.findings),
+    similar_trades: extras.similar_trades || normalizeList(result.similar_trades),
+    periods: extras.periods || normalizeList(result.periods),
     links: { supporting, contradicting },
     replayFn: extras.replayFn,
     compareFn: extras.compareFn,
@@ -695,6 +723,19 @@ function relatesFor(row, related) {
       (row.scope === 'strategy_pack' && String(row.scopeId || '') === id)
     );
   }
+  if (relatedTarget === 'trades') {
+    return (
+      String(row.tradeId || '') === id ||
+      rowMatchesId(row, id) ||
+      String(row.screenshotId || '') === id
+    );
+  }
+  if (relatedTarget === 'periods') {
+    return (
+      String(row.period || row.id || '') === id ||
+      rowMatchesId(row, id)
+    );
+  }
   return rowMatchesId(row, id);
 }
 
@@ -706,11 +747,41 @@ function relatesFor(row, related) {
  */
 function relateFor(store, target, related, seed) {
   if (typeof seed.relateForFn === 'function') {
-    return seed.relateForFn({ target, related });
+    return seed.relateForFn({ target, related, store });
   }
   const candidates = store[target] || [];
   const filtered = candidates.filter((row) => relatesFor(row, related));
   if (filtered.length > 0) return filtered;
+
+  if (target === 'daily_reviews' && related.target === 'periods') {
+    const periodId = String(related.id);
+    const hit = candidates.find(
+      (row) =>
+        row.period === periodId ||
+        row.id === `daily:${periodId.toLowerCase()}` ||
+        String(row.id || '').includes(periodId.toLowerCase())
+    );
+    if (hit) return [hit];
+    const today = candidates.find((row) => row.kind === 'daily_review');
+    if (today && periodId.toLowerCase() === 'today') return [today];
+  }
+
+  if (target === 'weekly_reviews' && related.target === 'periods') {
+    const periodId = String(related.id);
+    const hit = candidates.find((row) => row.period === periodId);
+    if (hit) return [hit];
+    const week = candidates.find((row) => row.kind === 'weekly_review');
+    if (week && periodId.toLowerCase() === 'lastweek') return [week];
+  }
+
+  if (target === 'similar_trades' && related.target === 'trades') {
+    if (typeof seed.similarTradesFn === 'function') {
+      return seed.similarTradesFn(related.id);
+    }
+    return (store.similar_trades || []).filter(
+      (row) => String(row.sourceTradeId) === String(related.id)
+    );
+  }
 
   // Synthesize a projection row when the catalog has claims/strategy stats but
   // no dedicated calibrations/accuracies yet.
@@ -783,6 +854,22 @@ function resolveSubject(row) {
 async function resolveCompareSide(catalog, side) {
   if (side == null) return null;
   if (typeof side === 'string') {
+    const label = String(side);
+    const tradeCollection = resolveTradeCollectionLabel(label);
+    if (tradeCollection && typeof catalog.list === 'function') {
+      const trades = await catalog.list('trades');
+      const filtered =
+        tradeCollection === 'win'
+          ? trades.filter((t) => isWinningTrade(t))
+          : trades.filter((t) => isLosingTrade(t));
+      return Object.freeze({
+        id: label,
+        label,
+        kind: tradeCollection === 'win' ? 'WinningTrades' : 'LosingTrades',
+        trades: filtered,
+        count: filtered.length,
+      });
+    }
     // Try claims, then replay sessions, then any target
     for (const target of [
       'claims',
@@ -792,6 +879,8 @@ async function resolveCompareSide(catalog, side) {
       'observations',
       'outcomes',
       'subjects',
+      'trades',
+      'screenshots',
     ]) {
       if (typeof catalog.get === 'function') {
         const hit = await catalog.get(/** @type {any} */ (target), side);
@@ -806,6 +895,31 @@ async function resolveCompareSide(catalog, side) {
     }
   }
   return side;
+}
+
+/**
+ * @param {string} label
+ * @returns {'win'|'loss'|null}
+ */
+function resolveTradeCollectionLabel(label) {
+  const key = String(label).toLowerCase().replace(/[_\s-]/g, '');
+  if (key === 'winningtrades' || key === 'winningtrade' || key === 'wins') {
+    return 'win';
+  }
+  if (key === 'losingtrades' || key === 'losingtrade' || key === 'losses') {
+    return 'loss';
+  }
+  return null;
+}
+
+function isWinningTrade(trade) {
+  const r = String(trade.result || trade.outcome || '').toLowerCase();
+  return r === 'win' || r === 'won' || r === 'winning';
+}
+
+function isLosingTrade(trade) {
+  const r = String(trade.result || trade.outcome || '').toLowerCase();
+  return r === 'loss' || r === 'lost' || r === 'losing';
 }
 
 function sideId(side, resolved) {

@@ -14,9 +14,11 @@
   "dependencies": {
     "@pulseforge/eql": "file:../eql",
     "@pulseforge/learning": "file:../learning",
-    "@pulseforge/replay": "file:../replay",
-    "@pulseforge/reasoning-runtime": "file:../reasoning-runtime",
+    "@pulseforge/market-ontology": "file:../market-ontology",
     "@pulseforge/market-strategy": "file:../market-strategy",
-    "@pulseforge/market-ontology": "file:../market-ontology"
+    "@pulseforge/reasoning-runtime": "file:../reasoning-runtime",
+    "@pulseforge/replay": "file:../replay",
+    "@pulseforge/trade-capture": "file:../trade-capture",
+    "@pulseforge/trade-intelligence": "file:../trade-intelligence"
   }
 }

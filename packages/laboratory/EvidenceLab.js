@@ -74,6 +74,30 @@ class EvidenceLab {
           return null;
         }
       })();
+    this._tradeCapture =
+      deps.tradeCapture ||
+      (() => {
+        try {
+          const { createCaptureEngine } = require('@pulseforge/trade-capture');
+          return createCaptureEngine({
+            runExtractorsSync: deps.runTradeExtractorsSync === true,
+          });
+        } catch {
+          return null;
+        }
+      })();
+    this._tradeIntelligence =
+      deps.tradeIntelligence ||
+      (() => {
+        try {
+          const { createTradeIntelligenceEngine } = require('@pulseforge/trade-intelligence');
+          return createTradeIntelligenceEngine({
+            captureEngine: deps.tradeCapture || null,
+          });
+        } catch {
+          return null;
+        }
+      })();
 
     /** @type {Map<string, Experiment>} */
     this._experiments = new Map();
@@ -190,6 +214,15 @@ class EvidenceLab {
       'calibrations',
       'accuracies',
       'strategy_packs',
+      'trades',
+      'screenshots',
+      'daily_reviews',
+      'weekly_reviews',
+      'best_hypotheses',
+      'trade_calibrations',
+      'findings',
+      'similar_trades',
+      'periods',
     ]) {
       const rows = projected.store[target] || [];
       for (const row of rows) {
@@ -705,6 +738,242 @@ class EvidenceLab {
   }
 
   /**
+   * Find captured trades (SPEC-044 Trade Capture).
+   *
+   * @example
+   *   lab.findTrades({ hypothesis: 'Velocity' })
+   *
+   * @param {object} [filter]
+   * @returns {object[]}
+   */
+  findTrades(filter = {}) {
+    const capture = requireTradeCapture(this);
+    const trades = capture.findTrades(filter);
+    if (!this._catalog.store.trades) {
+      this._catalog.store.trades = [];
+    }
+    for (const trade of trades) {
+      const existing = this._catalog.store.trades || [];
+      if (existing.some((e) => e.id === trade.id)) continue;
+      this._catalog.add('trades', trade);
+    }
+    return trades;
+  }
+
+  /**
+   * Compare winning trades (optionally filtered) for Laboratory exploration.
+   * @param {object} [filter]
+   */
+  compareWinningTrades(filter = {}) {
+    const capture = requireTradeCapture(this);
+    const winning = capture.winningTrades(filter);
+    const losing = capture.losingTrades(filter);
+    return Object.freeze({
+      kind: 'compareWinningTrades',
+      trades: winning,
+      count: winning.length,
+      againstLosingCount: losing.length,
+      filter: Object.freeze({ ...filter }),
+      comparison: capture.compareWinningLosing(filter),
+      isolated: true,
+      mutatesProduction: false,
+    });
+  }
+
+  /**
+   * Compare losing trades (optionally filtered) for Laboratory exploration.
+   * @param {object} [filter]
+   */
+  compareLosingTrades(filter = {}) {
+    const capture = requireTradeCapture(this);
+    const losing = capture.losingTrades(filter);
+    const winning = capture.winningTrades(filter);
+    return Object.freeze({
+      kind: 'compareLosingTrades',
+      trades: losing,
+      count: losing.length,
+      againstWinningCount: winning.length,
+      filter: Object.freeze({ ...filter }),
+      comparison: capture.compareWinningLosing(filter),
+      isolated: true,
+      mutatesProduction: false,
+    });
+  }
+
+  /**
+   * Ingest a CaptureEngine (or its catalog seed) into the lab EQL catalog.
+   * @param {object} [captureEngine]
+   */
+  ingestTrades(captureEngine) {
+    const capture = captureEngine || requireTradeCapture(this);
+    const seed = typeof capture.toCatalogSeed === 'function'
+      ? capture.toCatalogSeed()
+      : capture;
+    for (const target of ['trades', 'screenshots', 'observations', 'evidence', 'claims', 'outcomes', 'subjects']) {
+      for (const row of seed[target] || []) {
+        const existing = this._catalog.store[target] || [];
+        const id = row.id || row.claimType || row.subjectId;
+        if (id && existing.some((e) => (e.id || e.claimType || e.subjectId) === id)) {
+          continue;
+        }
+        if (this._catalog.store[target]) {
+          this._catalog.add(target, row);
+        }
+      }
+    }
+    this._tradeCapture = capture;
+    return this;
+  }
+
+  /**
+   * Convenience: exposed capture engine (when available).
+   */
+  get tradeCapture() {
+    return this._tradeCapture;
+  }
+
+  /**
+   * Convenience: exposed trade intelligence engine (when available).
+   */
+  get tradeIntelligence() {
+    return this._tradeIntelligence;
+  }
+
+  /**
+   * Discover recurring trade patterns (SPEC-046).
+   * @param {object} [filter]
+   */
+  discoverTradePatterns(filter = {}) {
+    const intel = requireTradeIntelligence(this);
+    if (this._tradeCapture) {
+      intel._capture = this._tradeCapture;
+    }
+    const findings = intel.discoverPatterns({ trades: filteredTrades(this, filter) });
+    this.ingestTradeIntelligence(intel);
+    return Object.freeze({
+      kind: 'discoverTradePatterns',
+      findings,
+      count: findings.length,
+      isolated: true,
+      mutatesProduction: false,
+    });
+  }
+
+  /**
+   * Compare trading hypotheses / strategies (SPEC-046).
+   * Distinct from compareStrategies (strategy packs).
+   * @param {object} [filter]
+   */
+  compareTradeStrategies(filter = {}) {
+    const intel = requireTradeIntelligence(this);
+    if (this._tradeCapture) {
+      intel._capture = this._tradeCapture;
+    }
+    const comparison = intel.compareStrategies({ trades: filteredTrades(this, filter) });
+    this.ingestTradeIntelligence(intel);
+    return Object.freeze({
+      ...comparison,
+      isolated: true,
+      mutatesProduction: false,
+    });
+  }
+
+  /**
+   * Compare time-of-day windows (SPEC-046).
+   * @param {object} [filter]
+   */
+  compareTimeWindows(filter = {}) {
+    const intel = requireTradeIntelligence(this);
+    if (this._tradeCapture) {
+      intel._capture = this._tradeCapture;
+    }
+    const comparison = intel.compareTimeWindows({ trades: filteredTrades(this, filter) });
+    this.ingestTradeIntelligence(intel);
+    return Object.freeze({
+      ...comparison,
+      isolated: true,
+      mutatesProduction: false,
+    });
+  }
+
+  /**
+   * Compare confidence bands vs outcomes (SPEC-046).
+   * @param {object} [filter]
+   */
+  compareConfidenceBands(filter = {}) {
+    const intel = requireTradeIntelligence(this);
+    if (this._tradeCapture) {
+      intel._capture = this._tradeCapture;
+    }
+    const comparison = intel.compareConfidenceBands({
+      trades: filteredTrades(this, filter),
+    });
+    this.ingestTradeIntelligence(intel);
+    return Object.freeze({
+      ...comparison,
+      isolated: true,
+      mutatesProduction: false,
+    });
+  }
+
+  /**
+   * Ingest trade intelligence catalog into EQL.
+   * @param {object} [intelEngine]
+   */
+  ingestTradeIntelligence(intelEngine) {
+    const intel = intelEngine || requireTradeIntelligence(this);
+    if (this._tradeCapture) {
+      intel._capture = this._tradeCapture;
+    }
+    intel.analyze();
+    intel.generateDailyReview();
+    intel.generateWeeklyReview();
+
+    const seed = intel.toCatalogSeed();
+    const similarRows = [];
+    for (const trade of seed.trades || []) {
+      for (const similar of intel.similarTradesFor(trade.id)) {
+        similarRows.push(
+          Object.freeze({
+            id: `similar:${trade.id}:${similar.id}`,
+            sourceTradeId: trade.id,
+            tradeId: similar.id,
+            similarityScore: similar.similarityScore,
+            ...similar,
+          })
+        );
+      }
+    }
+    seed.similar_trades = similarRows;
+
+    for (const target of [
+      'trades',
+      'daily_reviews',
+      'weekly_reviews',
+      'best_hypotheses',
+      'trade_calibrations',
+      'findings',
+      'recommendations',
+      'similar_trades',
+      'periods',
+    ]) {
+      for (const row of seed[target] || []) {
+        const existing = this._catalog.store[target] || [];
+        const id = row.id || row.hypothesis || row.title;
+        if (id && existing.some((e) => (e.id || e.hypothesis) === id)) {
+          continue;
+        }
+        if (this._catalog.store[target]) {
+          this._catalog.add(target, row);
+        }
+      }
+    }
+
+    this._tradeIntelligence = intel;
+    return this;
+  }
+
+  /**
    * Dispose registered experiments and comparison workspace.
    * Does not touch production.
    */
@@ -829,6 +1098,55 @@ function requireLearning(lab) {
       `EvidenceLab calibration requires @pulseforge/learning (${err.message})`
     );
   }
+}
+
+/**
+ * @param {EvidenceLab} lab
+ */
+function requireTradeCapture(lab) {
+  if (lab._tradeCapture) return lab._tradeCapture;
+  try {
+    const { createCaptureEngine } = require('@pulseforge/trade-capture');
+    lab._tradeCapture = createCaptureEngine();
+    return lab._tradeCapture;
+  } catch (err) {
+    throw new Error(
+      `EvidenceLab trade helpers require @pulseforge/trade-capture (${err.message})`
+    );
+  }
+}
+
+/**
+ * @param {EvidenceLab} lab
+ */
+function requireTradeIntelligence(lab) {
+  if (lab._tradeIntelligence) return lab._tradeIntelligence;
+  try {
+    const { createTradeIntelligenceEngine } = require('@pulseforge/trade-intelligence');
+    lab._tradeIntelligence = createTradeIntelligenceEngine({
+      captureEngine: lab._tradeCapture || null,
+    });
+    return lab._tradeIntelligence;
+  } catch (err) {
+    throw new Error(
+      `EvidenceLab trade intelligence requires @pulseforge/trade-intelligence (${err.message})`
+    );
+  }
+}
+
+/**
+ * @param {EvidenceLab} lab
+ * @param {object} filter
+ */
+function filteredTrades(lab, filter) {
+  if (lab._tradeCapture && typeof lab._tradeCapture.findTrades === 'function') {
+    return lab._tradeCapture.findTrades(filter);
+  }
+  const intel = lab._tradeIntelligence;
+  if (intel && typeof intel.getTrades === 'function') {
+    return intel.getTrades();
+  }
+  return [];
 }
 
 /**

@@ -1,0 +1,17 @@
+{
+  "name": "@pulseforge/trade-capture",
+  "version": "1.0.0",
+  "description": "Trade Capture Engine — screenshot-first evidence capture under 15 seconds (SPEC-044)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@pulseforge/replay": "file:../replay"
+  }
+}

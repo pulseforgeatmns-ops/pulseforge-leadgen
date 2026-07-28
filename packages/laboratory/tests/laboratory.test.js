@@ -397,4 +397,98 @@ describe('SPEC-019 EvidenceLab capabilities', () => {
     );
     assert.equal(shown.kind, 'SHOW');
   });
+
+  it('lab.findTrades / compareWinningTrades / compareLosingTrades (SPEC-044)', async () => {
+    const { createCaptureEngine } = require('@pulseforge/trade-capture');
+    const capture = createCaptureEngine({ runExtractorsSync: true });
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64'
+    );
+    await capture.capture({
+      screenshot: png,
+      answers: {
+        result: 'Win',
+        direction: 'Long',
+        hypothesis: 'Velocity',
+        confidence: 4,
+      },
+    });
+    await capture.capture({
+      screenshot: Buffer.from('loss-shot'),
+      answers: {
+        result: 'Loss',
+        direction: 'Short',
+        hypothesis: 'Velocity',
+        confidence: 2,
+      },
+    });
+
+    const lab = createEvidenceLab({ tradeCapture: capture });
+    lab.ingestTrades(capture);
+
+    const velocity = lab.findTrades({ hypothesis: 'Velocity' });
+    assert.equal(velocity.length, 2);
+
+    const wins = lab.compareWinningTrades({ hypothesis: 'Velocity' });
+    assert.equal(wins.kind, 'compareWinningTrades');
+    assert.equal(wins.count, 1);
+
+    const losses = lab.compareLosingTrades({ hypothesis: 'Velocity' });
+    assert.equal(losses.kind, 'compareLosingTrades');
+    assert.equal(losses.count, 1);
+
+    const found = await lab.query(`FIND Trades WHERE hypothesis = "Velocity"`);
+    assert.equal(found.count, 2);
+
+    const compared = await lab.query(`COMPARE WinningTrades WITH LosingTrades`);
+    assert.equal(compared.rows[0].left.count, 1);
+    assert.equal(compared.rows[0].right.count, 1);
+  });
+
+  it('lab trade intelligence helpers (SPEC-046)', async () => {
+    const { createCaptureEngine } = require('@pulseforge/trade-capture');
+    const { createTradeIntelligenceEngine } = require('@pulseforge/trade-intelligence');
+    const capture = createCaptureEngine({ runExtractorsSync: true });
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64'
+    );
+
+    for (let i = 0; i < 6; i += 1) {
+      await capture.capture({
+        screenshot: i % 2 === 0 ? png : Buffer.from(`intel-${i}`),
+        answers: {
+          result: i < 4 ? 'Win' : 'Loss',
+          direction: 'Long',
+          hypothesis: i < 4 ? 'Velocity' : 'Breakout',
+          confidence: 2 + (i % 4),
+        },
+        opts: { entryTime: `2026-07-28T14:${String(30 + i).padStart(2, '0')}:00.000Z` },
+      });
+    }
+
+    const intel = createTradeIntelligenceEngine({ captureEngine: capture });
+    const lab = createEvidenceLab({ tradeCapture: capture, tradeIntelligence: intel });
+    lab.ingestTradeIntelligence(intel);
+
+    const patterns = lab.discoverTradePatterns();
+    assert.equal(patterns.kind, 'discoverTradePatterns');
+    assert.ok(patterns.count >= 1);
+
+    const strategies = lab.compareTradeStrategies();
+    assert.equal(strategies.kind, 'compareTradeStrategies');
+
+    const windows = lab.compareTimeWindows();
+    assert.equal(windows.kind, 'compareTimeWindows');
+
+    const bands = lab.compareConfidenceBands();
+    assert.equal(bands.kind, 'compareConfidenceBands');
+
+    const daily = await lab.query('SHOW DailyReview FOR Today');
+    assert.equal(daily.count, 1);
+
+    const recs = await lab.query('SHOW Recommendations');
+    assert.ok(recs.count >= 0);
+  });
 });

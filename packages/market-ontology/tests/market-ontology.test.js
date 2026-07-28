@@ -26,6 +26,7 @@ describe('SPEC-017 Market Ontology', () => {
     assert.equal(ontology.label, 'Market');
     assert.ok(registry.isNodeType(MARKET_ENTITY_TYPES.ASSET));
     assert.ok(registry.isObservationType(MARKET_OBSERVATION_TYPES.PRICE_TICK));
+    assert.ok(registry.isObservationType(MARKET_OBSERVATION_TYPES.CHART_SNAPSHOT));
     assert.ok(registry.isEdgeType('TRADES_ON'));
     assert.ok(registry.isSubjectType(MARKET_ENTITY_TYPES.ASSET));
     assert.ok(registry.isSubjectType(MARKET_ENTITY_TYPES.CONTRACT));
