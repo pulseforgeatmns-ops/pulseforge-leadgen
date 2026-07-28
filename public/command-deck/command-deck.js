@@ -998,6 +998,60 @@
         )
         .join('');
 
+      const artifacts = Array.isArray(data.artifacts) ? data.artifacts : [];
+      const artifactRows = artifacts
+        .map((art) => {
+          const status = art.validationStatus || 'unknown';
+          const rev = art.revision != null ? `v${art.revision}` : '';
+          const deps = (art.dependencies || [])
+            .map(
+              (d) =>
+                `${escapeHtml(d.artifactType || '')}${
+                  d.revision != null ? ` v${d.revision}` : ''
+                }`
+            )
+            .join(', ');
+          return `<li class="msn-artifact" data-artifact-id="${escapeHtml(
+            art.id || ''
+          )}">
+            <div class="msn-artifact-head">
+              <strong>${escapeHtml(art.artifactType || '')}</strong>
+              <span class="cd-chip">${escapeHtml(rev)}</span>
+              <span class="cd-chip">${escapeHtml(status)}</span>
+            </div>
+            <p class="msn-artifact-summary">${escapeHtml(art.summary || '')}</p>
+            <p class="msn-artifact-meta">Producer: ${escapeHtml(
+              art.producer || '—'
+            )} · Stage: ${escapeHtml(art.stageId || '—')}${
+              deps ? ` · Depends: ${deps}` : ''
+            }</p>
+            <details>
+              <summary>Payload & provenance</summary>
+              <pre class="msn-pre">${escapeHtml(
+                JSON.stringify(
+                  {
+                    id: art.id,
+                    schemaVersion: art.schemaVersion,
+                    createdAt: art.createdAt,
+                    metadata: art.metadata,
+                    dependencies: art.dependencies,
+                    payload: art.payload,
+                    history: (art.history || []).map((h) => ({
+                      id: h.id,
+                      revision: h.revision,
+                      validationStatus: h.validationStatus,
+                      createdAt: h.createdAt,
+                    })),
+                  },
+                  null,
+                  2
+                )
+              )}</pre>
+            </details>
+          </li>`;
+        })
+        .join('');
+
       els.msnBody.innerHTML = `
         <section class="msn-block">
           <h3>Objective</h3>
@@ -1014,6 +1068,12 @@
           )} · ${escapeHtml(
             String((mission.progress && mission.progress.percent) || 0)
           )}%</p>
+        </section>
+        <section class="msn-block">
+          <h3>Artifacts</h3>
+          <ul class="msn-artifacts">${
+            artifactRows || '<li>No artifacts published yet</li>'
+          }</ul>
         </section>
         <section class="msn-block">
           <h3>Evidence</h3>

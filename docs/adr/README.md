@@ -30,6 +30,7 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-025](ADR-025_Active_Missions_Take_Precedence.md) | Active Missions Take Precedence | Accepted |
 | [ADR-026](ADR-026_Business_Success_Determines_Pipeline_Progress.md) | Business Success Determines Pipeline Progress | Accepted |
 | [ADR-027](ADR-027_Mission_Planning_Is_Objective_Driven.md) | Mission Planning Is Objective-Driven | Accepted |
+| [ADR-028](ADR-028_Business_State_Flows_Through_Artifacts.md) | Business State Flows Through Artifacts | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

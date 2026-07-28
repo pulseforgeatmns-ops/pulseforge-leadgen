@@ -18,6 +18,7 @@ const {
   MESSAGE_CLASS,
   RESOLUTION_PATHS,
   MISSION_EVENTS,
+  ARTIFACT_BUS_EVENTS,
   TERMINAL_STATUSES,
   isTerminalStatus,
   isActiveMissionStatus,
@@ -25,6 +26,7 @@ const {
   missionEnabled,
   activeMissionResolverEnabled,
   artifactValidationEnabled,
+  artifactBusEnabled,
 } = require('./types');
 const {
   routeIntent,
@@ -90,6 +92,12 @@ const {
   STAGE_OUTCOME_LABELS,
   ARTIFACT_VALIDATION_STATUS,
 } = require('./PipelineGate');
+const {
+  ArtifactBus,
+  createArtifactBus,
+  ARTIFACT_EVENTS,
+} = require('./ArtifactBus');
+const ArtifactRegistry = require('./ArtifactRegistry');
 
 module.exports = {
   MISSION_STATUS,
@@ -104,6 +112,8 @@ module.exports = {
   MESSAGE_CLASS,
   RESOLUTION_PATHS,
   MISSION_EVENTS,
+  ARTIFACT_BUS_EVENTS,
+  ARTIFACT_EVENTS,
   TERMINAL_STATUSES,
   isTerminalStatus,
   isActiveMissionStatus,
@@ -111,6 +121,7 @@ module.exports = {
   missionEnabled,
   activeMissionResolverEnabled,
   artifactValidationEnabled,
+  artifactBusEnabled,
   evaluatePipelineGate,
   getStageContract,
   STAGE_CONTRACTS,
@@ -151,4 +162,7 @@ module.exports = {
   createActiveMissionResolver,
   InMemoryActiveMissionBindingStore,
   createInMemoryActiveMissionBindingStore,
+  ArtifactBus,
+  createArtifactBus,
+  ArtifactRegistry,
 };
