@@ -9,7 +9,8 @@
 const { BUILTIN_IDS } = require('../capabilities');
 const { MISSION_TYPES, STAGE_LABELS } = require('./types');
 
-const PLANNER_VERSION = '1.0.0';
+/** SPEC-051 bumps planner when artifact resolution prunes acquisition stages. */
+const PLANNER_VERSION = '1.1.0';
 
 /**
  * @typedef {object} StageDef

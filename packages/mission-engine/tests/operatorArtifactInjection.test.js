@@ -322,16 +322,22 @@ describe('SPEC-043 chat prompt ProspectList detection', () => {
     assert.equal(mission.operatorProspectList.injected, true);
     assert.equal(mission.operatorProspectList.prospectCount, 2);
 
+    // SPEC-051: Discovery is not on the plan when ProspectList was resolved
     const discovery = mission.plan.steps.find(
       (s) =>
         s.stageId === 'prospect_discovery' ||
         s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY
     );
-    assert.ok(discovery);
-    assert.equal(discovery.status, 'completed');
-    assert.equal(
-      discovery.outcome,
-      STAGE_OUTCOMES.SATISFIED_OPERATOR_SUPPLIED
+    assert.equal(discovery, undefined);
+    assert.ok(
+      mission.plan.artifactResolution &&
+        mission.plan.artifactResolution.resolved.some(
+          (r) => r.type === 'ProspectList'
+        )
+    );
+    assert.match(
+      mission.plan.skippedStages.prospect_discovery || '',
+      /Compatible ProspectList/i
     );
 
     const bus = createArtifactBus({

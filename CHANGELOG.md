@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Artifact Resolution & State-Aware Planning ([SPEC-051](docs/specs/SPEC-051_Artifact_Resolution_and_State_Aware_Planning.md) / [ADR-035](docs/adr/ADR-035_Plan_Around_State_Not_Sequence.md))
+  - Artifact Resolver sits between Mission Plan and execution graph
+  - Required artifacts resolved before capability selection (Current Mission → Operator → Previous → Workspace → Capability)
+  - Discovery skipped when a compatible ProspectList already exists (e.g. `prospectList: current`)
+  - Capabilities declare `requires` / `produces`; planner records source, confidence, freshness, compatibility
+  - Review Workspace shows Artifact Resolution decisions
+  - Tests: `npm run test:mission` (artifactResolution.test.js)
 - Deterministic Mission Planning ([SPEC-050](docs/specs/SPEC-050_Deterministic_Mission_Planning.md) / [ADR-034](docs/adr/ADR-034_Intent_Before_Execution.md))
   - Intent Parser classifies every sentence into Objective / Parameters / Execution / Options / Notes
   - Mission Plan IR is the only source of executable nodes; Notes never execute

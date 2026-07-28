@@ -34,6 +34,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-031](docs/adr/ADR-031_Review_Must_Be_Evidence_First.md) | Review Must Be Evidence-First | Accepted | Review Workspace presents business artifacts and evidence before implementation metadata |
 | [ADR-032](docs/adr/ADR-032_Strategy_Before_Language.md) | Strategy Before Language | Accepted | Separate business reasoning from language generation; Sales Intelligence Profile before channel copy; optimize for Operator Approval Rate |
 | [ADR-034](docs/adr/ADR-034_Intent_Before_Execution.md) | Intent Before Execution | Accepted | Mission Plan IR is the executable contract; capabilities never consume raw operator Notes; unknown text becomes Notes |
+| [ADR-035](docs/adr/ADR-035_Plan_Around_State_Not_Sequence.md) | Plan Around State, Not Sequence | Accepted | Mission Planning resolves artifact requirements before selecting capabilities; Discovery is an acquisition strategy |
 
 ## How to add a decision
 

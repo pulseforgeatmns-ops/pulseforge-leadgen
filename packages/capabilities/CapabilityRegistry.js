@@ -115,6 +115,13 @@ function assertCapability(capability) {
   if (typeof capability.execute !== 'function') {
     throw new Error(`Capability ${capability.id} missing execute`);
   }
+  // SPEC-051: optional artifact contracts (requires / produces)
+  if (capability.requires != null && !Array.isArray(capability.requires)) {
+    throw new Error(`Capability ${capability.id} requires must be an array`);
+  }
+  if (capability.produces != null && !Array.isArray(capability.produces)) {
+    throw new Error(`Capability ${capability.id} produces must be an array`);
+  }
 }
 
 function normalizeTags(query) {

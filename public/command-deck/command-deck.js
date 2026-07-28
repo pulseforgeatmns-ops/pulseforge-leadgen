@@ -692,6 +692,122 @@
     </section>`;
   }
 
+  /** SPEC-051 — resolved artifacts + acquisition decisions before execute */
+  function renderArtifactResolutionHtml(resolution) {
+    const res = resolution || null;
+    if (!res) return '';
+    const resolved = Array.isArray(res.resolved) ? res.resolved : [];
+    const acquisitions = Array.isArray(res.acquisitions)
+      ? res.acquisitions.filter((a) => a && a.strategy !== 'use_existing')
+      : [];
+    const skipped = res.skippedStages || {};
+    const missing = Array.isArray(res.missingWithOptions)
+      ? res.missingWithOptions
+      : (res.missing || []).map((t) => ({ artifactType: t, options: [] }));
+
+    if (
+      !resolved.length &&
+      !acquisitions.length &&
+      !Object.keys(skipped).length &&
+      !missing.length
+    ) {
+      return '';
+    }
+
+    const resolvedRows = resolved
+      .map((r) => {
+        const decision = skipped.prospect_discovery
+          ? 'Discovery skipped'
+          : 'Use existing';
+        return `<div class="msn-si-row"><dt>${escapeHtml(
+          r.type || 'Artifact'
+        )}</dt><dd>${escapeHtml(r.sourceLabel || r.source || '—')} · ${escapeHtml(
+          r.confidence || 'High'
+        )} · ${escapeHtml(r.freshness || '—')}${
+          r.pending ? ' · pending supply' : ''
+        }<br/><span class="msn-objective-meta">${escapeHtml(
+          decision
+        )}: compatible artifact already exists.</span></dd></div>`;
+      })
+      .join('');
+
+    const skipRows = Object.entries(skipped)
+      .map(
+        ([stageId, reason]) =>
+          `<li><span>${escapeHtml(formatStageLabel(stageId))}: ${escapeHtml(
+            String(reason)
+          )}</span></li>`
+      )
+      .join('');
+
+    const acquireRows = acquisitions
+      .map((a) => {
+        const opts =
+          (missing.find((m) => m.artifactType === a.artifactType) || {})
+            .options || [];
+        const optLabel = opts.length
+          ? opts.map((o) => o.label || o.id).join(' · ')
+          : a.stageName || a.strategy;
+        return `<div class="msn-si-row"><dt>${escapeHtml(
+          a.artifactType || 'Artifact'
+        )}</dt><dd>Acquire via ${escapeHtml(optLabel || '—')}<br/><span class="msn-objective-meta">${escapeHtml(
+          a.reason || ''
+        )}</span></dd></div>`;
+      })
+      .join('');
+
+    const missingRows = missing
+      .filter((m) => !(resolved || []).some((r) => r.type === m.artifactType))
+      .map((m) => {
+        const opts = (m.options || [])
+          .map((o) => o.label || o.id)
+          .filter(Boolean);
+        return `<div class="msn-si-row"><dt>${escapeHtml(
+          m.artifactType
+        )}</dt><dd>No compatible artifact found.${
+          opts.length
+            ? `<br/><span class="msn-objective-meta">Acquire via: ${escapeHtml(
+                opts.join(' · ')
+              )}</span>`
+            : ''
+        }</dd></div>`;
+      })
+      .join('');
+
+    return `<section class="msn-block msn-artifact-resolution" id="msnArtifactResolution">
+      <h3>Artifact Resolution</h3>
+      <p class="msn-objective-meta">Required state before capability selection (SPEC-051).</p>
+      ${
+        resolvedRows
+          ? `<h4 class="msn-subhead">Resolved Artifacts</h4><dl class="msn-si-dl">${resolvedRows}</dl>`
+          : ''
+      }
+      ${
+        acquireRows || missingRows
+          ? `<h4 class="msn-subhead">Acquisition Decisions</h4><dl class="msn-si-dl">${
+              acquireRows || missingRows
+            }</dl>`
+          : ''
+      }
+      ${
+        skipRows
+          ? `<h4 class="msn-subhead">Skipped Capabilities</h4><ul class="msn-bucket-list">${skipRows}</ul>`
+          : ''
+      }
+    </section>`;
+  }
+
+  function formatStageLabel(stageId) {
+    const labels = {
+      prospect_discovery: 'Discovery',
+      company_enrichment: 'Company Intelligence',
+      opportunity_ranking: 'Opportunity Ranking',
+      sales_intelligence: 'Sales Intelligence',
+      campaign_builder: 'Campaign Builder',
+    };
+    return labels[stageId] || String(stageId || '').replace(/_/g, ' ');
+  }
+
   function formatMissionPlanLabel(key) {
     const labels = {
       prospectList: 'ProspectList',
@@ -2192,6 +2308,13 @@
       const missionPlanSummary =
         (mission.plan && mission.plan.missionPlanSummary) || null;
       const missionPlanHtml = renderMissionPlanHtml(missionPlan, missionPlanSummary);
+      const artifactResolutionHtml = renderArtifactResolutionHtml(
+        (mission.plan && mission.plan.artifactResolution) ||
+          (mission.plan &&
+            mission.plan.executionGraph &&
+            mission.plan.executionGraph.artifactResolution) ||
+          null
+      );
       const objectiveHtml = `<section class="msn-block" id="msnObjectiveBlock">
           <h3>Objective</h3>
           <div data-msn-objective-collapsed>
@@ -2518,6 +2641,7 @@
         ${renderWarningInspectorHtml(warningItems)}
         ${renderReviewQueueHtml(msnReviewSession)}
         ${missionPlanHtml}
+        ${artifactResolutionHtml}
         ${objectiveHtml}
         ${inputsHtml}
         <section class="msn-block">

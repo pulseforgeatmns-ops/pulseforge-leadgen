@@ -101,6 +101,7 @@ const {
 } = require('./ArtifactBus');
 const ArtifactRegistry = require('./ArtifactRegistry');
 const OperatorArtifactInjection = require('./OperatorArtifactInjection');
+const ArtifactResolver = require('./ArtifactResolver');
 const {
   parseIntent,
   classifyUnit,
@@ -186,6 +187,11 @@ module.exports = {
   createArtifactBus,
   ArtifactRegistry,
   OperatorArtifactInjection,
+  ArtifactResolver,
+  resolveArtifacts: ArtifactResolver.resolveArtifacts,
+  deriveRequiredArtifacts: ArtifactResolver.deriveRequiredArtifacts,
+  acquisitionOptions: ArtifactResolver.acquisitionOptions,
+  ARTIFACT_SOURCES: ArtifactResolver.ARTIFACT_SOURCES,
   detectOperatorProspectListInMessage:
     OperatorArtifactInjection.detectOperatorProspectListInMessage,
   // SPEC-050 / ADR-034
