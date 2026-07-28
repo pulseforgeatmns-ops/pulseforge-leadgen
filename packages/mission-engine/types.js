@@ -51,6 +51,18 @@ const AUDIT_KINDS = Object.freeze({
   MODIFIED: 'mission_modified',
   DIAGNOSED: 'mission_diagnosed',
   CLOSED: 'mission_closed',
+  /** SPEC-040 Artifact Validation */
+  STAGE_BLOCKED: 'stage_blocked',
+  STAGE_WARNINGS: 'stage_warnings',
+  ARTIFACT_VALIDATION: 'artifact_validation',
+});
+
+/** SPEC-040 — stage business outcomes */
+const STAGE_OUTCOMES = Object.freeze({
+  COMPLETED: 'completed',
+  COMPLETED_WITH_WARNINGS: 'completed_with_warnings',
+  BLOCKED: 'blocked',
+  FAILED: 'failed',
 });
 
 /** SPEC-039 — message classification against an active Mission */
@@ -150,6 +162,17 @@ function activeMissionResolverEnabled() {
   return true;
 }
 
+/**
+ * SPEC-040 — Artifact validation gate. Default on when Mission Engine is on.
+ * Set MISSION_ARTIFACT_VALIDATION=0 to advance on technical complete only.
+ */
+function artifactValidationEnabled() {
+  if (!missionEnabled()) return false;
+  const flag = process.env.MISSION_ARTIFACT_VALIDATION;
+  if (flag === '0' || flag === 'false' || flag === 'off') return false;
+  return true;
+}
+
 module.exports = {
   MISSION_STATUS,
   MISSION_TYPES,
@@ -157,6 +180,7 @@ module.exports = {
   REVIEW_ACTIONS,
   ROUTE_KINDS,
   STAGE_LABELS,
+  STAGE_OUTCOMES,
   MESSAGE_CLASS,
   RESOLUTION_PATHS,
   MISSION_EVENTS,
@@ -166,4 +190,5 @@ module.exports = {
   newId,
   missionEnabled,
   activeMissionResolverEnabled,
+  artifactValidationEnabled,
 };

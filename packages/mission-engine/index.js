@@ -14,6 +14,7 @@ const {
   REVIEW_ACTIONS,
   ROUTE_KINDS,
   STAGE_LABELS,
+  STAGE_OUTCOMES,
   MESSAGE_CLASS,
   RESOLUTION_PATHS,
   MISSION_EVENTS,
@@ -23,6 +24,7 @@ const {
   newId,
   missionEnabled,
   activeMissionResolverEnabled,
+  artifactValidationEnabled,
 } = require('./types');
 const {
   routeIntent,
@@ -64,6 +66,13 @@ const {
   classifyMessage,
   looksLikeNewObjective,
 } = require('./classifyMessage');
+const {
+  evaluatePipelineGate,
+  getStageContract,
+  STAGE_CONTRACTS,
+  STAGE_OUTCOME_LABELS,
+  ARTIFACT_VALIDATION_STATUS,
+} = require('./PipelineGate');
 
 module.exports = {
   MISSION_STATUS,
@@ -72,6 +81,9 @@ module.exports = {
   REVIEW_ACTIONS,
   ROUTE_KINDS,
   STAGE_LABELS,
+  STAGE_OUTCOMES,
+  STAGE_OUTCOME_LABELS,
+  ARTIFACT_VALIDATION_STATUS,
   MESSAGE_CLASS,
   RESOLUTION_PATHS,
   MISSION_EVENTS,
@@ -81,6 +93,10 @@ module.exports = {
   newId,
   missionEnabled,
   activeMissionResolverEnabled,
+  artifactValidationEnabled,
+  evaluatePipelineGate,
+  getStageContract,
+  STAGE_CONTRACTS,
   routeIntent,
   matchMissionType,
   isIntelligenceOnly,

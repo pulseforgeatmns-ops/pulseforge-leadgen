@@ -32,14 +32,32 @@ function composeMissionResponse(input) {
   const answer = [
     `Mission created: ${title}.`,
     mission.discoveryProfile
-      ? mission.discoveryProfile.message ||
-        `Using Discovery Profile: ${mission.discoveryProfile.name}.`
+      ? [
+          mission.discoveryProfile.message ||
+            `Using Discovery Profile: ${mission.discoveryProfile.name}.`,
+          mission.discoveryProfile.reason
+            ? `Reason: ${mission.discoveryProfile.reason}.`
+            : null,
+          mission.discoveryProfile.confidence != null
+            ? `Confidence: ${Number(mission.discoveryProfile.confidence).toFixed(2)}.`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(' ')
       : null,
     `Status: ${formatStatus(mission.status)}.`,
     `Current stage: ${stage} (${percent}%, ${countLine}).`,
+    Array.isArray(mission.blockingIssues) && mission.blockingIssues.length
+      ? `Blocked: ${mission.blockingIssues.join(' ')}`
+      : null,
+    mission.stageReview && mission.stageReview.blockingIssues
+      ? `Blocked: ${mission.stageReview.blockingIssues.join(' ')}`
+      : null,
     mission.status === 'review_required'
       ? 'Results are ready for your review. No outbound actions were taken.'
-      : 'Progress will appear in Operations on the Command Deck.',
+      : mission.status === 'waiting'
+        ? 'Mission is paused for operator review.'
+        : 'Progress will appear in Operations on the Command Deck.',
   ]
     .filter(Boolean)
     .join(' ');
@@ -111,12 +129,22 @@ function composeActiveMissionResponse(input) {
       `Resumed Mission: ${title}.`,
       `Status: ${formatStatus(mission.status)}.`,
       `Current stage: ${stage}.`,
+      Array.isArray(mission.blockingIssues) && mission.blockingIssues.length
+        ? `Blocked: ${mission.blockingIssues.join(' ')}`
+        : null,
+      mission.stageReview &&
+      Array.isArray(mission.stageReview.blockingIssues) &&
+      mission.stageReview.blockingIssues.length
+        ? `Blocked: ${mission.stageReview.blockingIssues.join(' ')}`
+        : null,
       mission.status === 'review_required'
         ? 'Results are ready for your review. No outbound actions were taken.'
         : mission.status === 'waiting'
           ? 'Mission is paused — ask why it failed or run again.'
           : 'Continuing with the active Mission (no new Mission created).',
-    ].join(' ');
+    ]
+      .filter(Boolean)
+      .join(' ');
     reasoning = [
       'Active Mission Resolver — resume (IntentRouter not used).',
       `Mission: ${title} (${mission.id}).`,

@@ -26,6 +26,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-023](docs/adr/ADR-023_Experience_Becomes_Intelligence.md) | Experience Becomes Intelligence | Accepted | Operational experience becomes structured intelligence only after evidence + operator approval; distinct from SPEC-013 recommendation evaluation |
 | [ADR-024](docs/adr/ADR-024_Human_Work_Is_Coordinated_Through_the_Operator_Inbox.md) | Human Work Is Coordinated Through the Operator Inbox | Accepted | Capabilities generate work items; Operator Inbox organizes them; inbox never performs workflow processing |
 | [ADR-025](docs/adr/ADR-025_Active_Missions_Take_Precedence.md) | Active Missions Take Precedence | Accepted | Active Mission always outranks IntentRouter; IntentRouter creates new Missions only; conversational flow uses Active Mission Resolver until terminal |
+| [ADR-026](docs/adr/ADR-026_Business_Success_Determines_Pipeline_Progress.md) | Business Success Determines Pipeline Progress | Accepted | Pipeline advances only on validated business artifacts; technical execution alone is not enough; empty Discovery is Blocked not Completed |
 
 ## How to add a decision
 

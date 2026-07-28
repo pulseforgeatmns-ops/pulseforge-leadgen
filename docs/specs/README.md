@@ -46,6 +46,7 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-036](SPEC-036_Outcome_Intelligence.md) | Outcome Intelligence (campaign experience) | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-037](SPEC-037_Operator_Inbox.md) | Operator Inbox | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-039](SPEC-039_Active_Mission_Resolver.md) | Active Mission Resolver | Implemented (v1 thin slice) | v1.3.0 |
+| [SPEC-040](SPEC-040_Mission_Artifact_Validation.md) | Mission Artifact Validation & Discovery Resolution | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

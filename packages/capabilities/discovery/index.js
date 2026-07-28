@@ -50,6 +50,12 @@ module.exports = {
   inferClientId,
   scoreProfileMatch,
   synthesizeTemporaryProfile,
+  DiscoveryProfileResolver:
+    require('./DiscoveryProfileResolver').DiscoveryProfileResolver,
+  createDiscoveryProfileResolver:
+    require('./DiscoveryProfileResolver').createDiscoveryProfileResolver,
+  PROFILE_SELECTION_REASONS:
+    require('./DiscoveryProfileResolver').PROFILE_SELECTION_REASONS,
   rankAgainstProfile,
   verifyCandidate,
   dedupeCandidates,

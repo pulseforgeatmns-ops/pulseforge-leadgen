@@ -31,96 +31,74 @@ class ProfileSelector {
 
   /**
    * Select or synthesize a Discovery Profile for a mission objective.
+   * Delegates to SPEC-040 DiscoveryProfileResolver (deterministic precedence).
    *
    * @param {object} input
    * @param {string} input.objective
    * @param {string|number} [input.clientId]
    * @param {string|number} [input.tenantId]
    * @param {object} [input.constraints]
-   * @returns {{ profile: object, selection: string, alternatives: object[], message: string }}
+   * @returns {{ profile: object|null, selection: string, alternatives: object[], message: string, resolution: object }}
    */
   select(input = {}) {
-    const constraints =
-      input.constraints && typeof input.constraints === 'object'
-        ? input.constraints
-        : {};
-    const objective = String(input.objective || '');
+    // Lazy require avoids circular load with DiscoveryProfileResolver helpers.
+    const {
+      createDiscoveryProfileResolver,
+      PROFILE_SELECTION_REASONS,
+    } = require('./DiscoveryProfileResolver');
+    const resolver = createDiscoveryProfileResolver({ store: this._store });
+    const resolution = resolver.resolve(input);
 
-    // Explicit pin
-    if (constraints.discoveryProfile && typeof constraints.discoveryProfile === 'object') {
-      const profile = buildDiscoveryProfile(constraints.discoveryProfile);
+    if (resolution.blocked || !resolution.profile) {
       return {
-        profile,
-        selection: 'explicit',
-        alternatives: [],
-        message: `Using Discovery Profile: ${profile.name}.`,
+        profile: null,
+        selection: 'blocked',
+        alternatives: resolution.alternatives || [],
+        message: resolution.message || 'No Discovery Profile',
+        resolution,
+        blocked: true,
+        blockingIssues: resolution.blockingIssues || [],
       };
     }
-
-    if (constraints.discoveryProfileId) {
-      const profile = this._store.get(
-        constraints.discoveryProfileId,
-        constraints.discoveryProfileVersion
-      );
-      if (profile) {
-        return {
-          profile: this._store.snapshot(profile),
-          selection: 'pinned',
-          alternatives: [],
-          message: `Using Discovery Profile: ${profile.name}.`,
-        };
-      }
-    }
-
-    const clientId =
-      input.clientId != null
-        ? input.clientId
-        : inferClientId(objective) != null
-          ? inferClientId(objective)
-          : input.tenantId;
-
-    const candidates = this._store.list({
-      clientId,
-      tenantId: input.tenantId,
-      status: 'active',
-    });
-
-    const scored = candidates
-      .map((p) => ({
-        profile: p,
-        score: scoreProfileMatch(p, objective, clientId),
-      }))
-      .filter((x) => x.score > 0)
-      .sort((a, b) => b.score - a.score);
-
-    if (scored.length === 0) {
-      const temp = synthesizeTemporaryProfile({
-        objective,
-        clientId,
-        constraints,
-      });
-      return {
-        profile: temp,
-        selection: 'generated',
-        alternatives: [],
-        message: `Using Discovery Profile: ${temp.name} (temporary for this mission).`,
-      };
-    }
-
-    // Multiple strong matches → operator should choose; pick best for now + list alts
-    const best = scored[0];
-    const alternatives = scored.slice(1, 4).map((s) => s.profile);
-    const needsChoice =
-      scored.length > 1 && scored[1].score >= best.score * 0.9;
 
     return {
-      profile: this._store.snapshot(best.profile),
-      selection: needsChoice ? 'ambiguous' : 'matched',
-      alternatives,
-      message: needsChoice
-        ? `Using Discovery Profile: ${best.profile.name}. Other matches available — confirm if needed.`
-        : `Using Discovery Profile: ${best.profile.name}.`,
+      profile: resolution.profile,
+      selection: mapLegacySelection(
+        resolution,
+        PROFILE_SELECTION_REASONS
+      ),
+      alternatives: resolution.alternatives || [],
+      message: resolution.message,
+      resolution,
+      blocked: false,
+      blockingIssues: [],
     };
+  }
+}
+
+/**
+ * Map SPEC-040 selection reasons to legacy ProfileSelector selection strings.
+ */
+function mapLegacySelection(resolution, REASONS) {
+  const selection = resolution.selection;
+  switch (selection) {
+    case REASONS.MISSION_CONSTRAINTS:
+      return 'explicit';
+    case REASONS.EXPLICIT_OVERRIDE:
+      return 'pinned';
+    case REASONS.PINNED_CLIENT:
+      return (resolution.alternatives || []).length ? 'ambiguous' : 'matched';
+    case REASONS.CLIENT_DEFAULT_GEOGRAPHY:
+      return 'generated';
+    case REASONS.MISSION_TYPE_DEFAULT: {
+      const status =
+        resolution.profile && resolution.profile.status;
+      return status === 'temporary' ? 'generated' : 'matched';
+    }
+    case REASONS.BLOCKED:
+      return 'blocked';
+    default:
+      return selection || 'matched';
   }
 }
 
