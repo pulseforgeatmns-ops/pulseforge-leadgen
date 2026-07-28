@@ -99,6 +99,12 @@ router.post(
       if (!question) {
         return res.status(400).json({ error: 'Question is required' });
       }
+      console.info('[mission-objective-len]', {
+        stage: 'api',
+        chars: question.length,
+        newlines: (question.match(/\n/g) || []).length,
+        bodyKeys: req.body && typeof req.body === 'object' ? Object.keys(req.body) : [],
+      });
 
       let context = req.body?.context || null;
       if (context) {

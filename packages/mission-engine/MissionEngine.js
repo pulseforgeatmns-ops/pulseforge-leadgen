@@ -128,6 +128,14 @@ class MissionEngine {
     const objectiveRaw = String(input.objective)
       .trim()
       .slice(0, OBJECTIVE_MAX_CHARS);
+    console.info('[mission-objective-len]', {
+      stage: 'createFromObjective',
+      chars: objectiveRaw.length,
+      inputChars: String(input.objective || '').length,
+      trimmedChars: String(input.objective || '').trim().length,
+      sliced: String(input.objective || '').trim().length > OBJECTIVE_MAX_CHARS,
+      newlines: (objectiveRaw.match(/\n/g) || []).length,
+    });
     const detection =
       input.operatorProspectList ||
       (input.detectOperatorList === false

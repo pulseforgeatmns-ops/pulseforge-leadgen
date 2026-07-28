@@ -329,10 +329,21 @@ class Parser {
       );
       related = this.parseEntityRef();
     } else if (this.checkKeyword('FOR')) {
-      // SHOW Calibration FOR Claim("…") · SHOW Accuracy FOR StrategyPack("…")
+      // SHOW Calibration FOR Claim("…") · SHOW DailyReview FOR Today · SHOW SimilarTrades FOR Trade("…")
       relation = 'FOR';
       this.advance();
-      related = this.parseEntityRef();
+      if (this.check('(')) {
+        related = this.parseEntityRef();
+      } else if (
+        this.check('IDENT') &&
+        this.tokens[this.pos + 1] &&
+        this.tokens[this.pos + 1].type === '('
+      ) {
+        related = this.parseEntityRef();
+      } else {
+        const period = this.expectIdent('FOR target');
+        related = { target: 'periods', id: String(period) };
+      }
     }
 
     /** @type {import('./types').EqlCondition[]} */
@@ -397,12 +408,24 @@ class Parser {
     };
   }
 
-  /** @returns {import('./types').EqlEntityRef|string} */
+  /**
+   * Compare side: string id, Entity("id"), or bare collection label
+   * (e.g. WinningTrades / LosingTrades — SPEC-044).
+   * @returns {import('./types').EqlEntityRef|string}
+   */
   parseCompareSide() {
     if (this.check('STRING')) {
       return String(this.advance().value);
     }
-    return this.parseEntityRef();
+    const ident = this.expectIdent('compare side');
+    if (this.check('(')) {
+      const target = resolveTarget(ident);
+      this.advance();
+      const idTok = this.expectType('STRING', 'Entity ref requires a string id');
+      this.expect(')', 'Expected ) after entity id');
+      return { target, id: String(idTok.value) };
+    }
+    return String(ident);
   }
 
   /** @returns {import('./types').EqlExplainNode} */
@@ -569,7 +592,7 @@ function resolveTarget(raw) {
     }
   }
   throw new EqlParseError(
-    `Unknown query target "${raw}". Expected Subjects, Observations, Evidence, Claims, Outcomes, Recommendations, Replay Sessions, Calibrations, Accuracies, or Strategy Packs`
+    `Unknown query target "${raw}". Expected Subjects, Observations, Evidence, Claims, Outcomes, Recommendations, Replay Sessions, Calibrations, Accuracies, Strategy Packs, Trades, Screenshots, Daily Reviews, Weekly Reviews, Best Hypotheses, Trade Calibrations, Findings, Similar Trades, or Periods`
   );
 }
 

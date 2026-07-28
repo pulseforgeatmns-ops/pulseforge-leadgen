@@ -11,7 +11,7 @@
 
 /**
  * Canonical query targets (singular + plural normalize to these).
- * @typedef {'subjects'|'observations'|'evidence'|'claims'|'outcomes'|'recommendations'|'replay_sessions'|'calibrations'|'accuracies'|'strategy_packs'} EqlTarget
+ * @typedef {'subjects'|'observations'|'evidence'|'claims'|'outcomes'|'recommendations'|'replay_sessions'|'calibrations'|'accuracies'|'strategy_packs'|'trades'|'screenshots'|'daily_reviews'|'weekly_reviews'|'best_hypotheses'|'trade_calibrations'|'findings'|'similar_trades'|'periods'} EqlTarget
  */
 
 /**
@@ -163,6 +163,20 @@ const TARGET_ALIASES = Object.freeze({
     'pack',
     'packs',
   ],
+  trades: ['trade', 'trades'],
+  screenshots: ['screenshot', 'screenshots', 'chart_snapshot', 'chartsnapshot'],
+  daily_reviews: ['dailyreview', 'dailyreviews'],
+  weekly_reviews: ['weeklyreview', 'weeklyreviews'],
+  best_hypotheses: ['besthypotheses', 'besthypothesis'],
+  trade_calibrations: [
+    'tradecalibration',
+    'tradecalibrations',
+    'trade_calibration',
+    'trade_calibrations',
+  ],
+  findings: ['finding', 'findings'],
+  similar_trades: ['similartrades', 'similartrade'],
+  periods: ['period', 'periods'],
 });
 
 /** Fields treated as the logical "subject" identity (domain-neutral). */

@@ -1,7 +1,8 @@
 'use strict';
 
 /**
- * Command Deck UI — SPEC-008 + SPEC-011 Live Intelligence + SPEC-012 Operator Intelligence.
+ * Command Deck UI — SPEC-008 + SPEC-011 Live Intelligence + SPEC-012 Operator Intelligence
+ * + SPEC-045 operator workspace polish + SPEC-047 evidence-first Review interaction.
  * Render-only consumer of GET /api/v1/command-deck → CommandDeckModel.
  * Soft-poll evolves the deck gently — never calculate, rank, filter, sort, or invent.
  * Operator events personalize presentation only.
@@ -48,6 +49,9 @@
   let livePollTimer = null;
   /** @type {boolean} */
   let livePollInFlight = false;
+  /** SPEC-047 session-local review interaction state (presentation only). */
+  /** @type {object|null} */
+  let msnReviewSession = null;
 
   const els = {
     status: document.getElementById('cdStatus'),
@@ -306,7 +310,136 @@
     return 8;
   }
 
-  function reviewDashboardModel(mission, artifacts) {
+  function confidenceLabel(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 'Unknown';
+    if (n >= 0.8 || n >= 80) return 'High';
+    if (n >= 0.65 || n >= 65) return 'Medium';
+    if (n > 0) return 'Low';
+    return 'Unknown';
+  }
+
+  function warningText(w) {
+    if (w == null) return '';
+    if (typeof w === 'string') return w;
+    if (typeof w === 'object') {
+      return String(w.message || w.summary || w.reason || w.text || JSON.stringify(w));
+    }
+    return String(w);
+  }
+
+  function companyFromWarning(text) {
+    const t = String(text || '');
+    const m =
+      t.match(/^([^:—\-]+?)\s*[:—\-]\s*/) ||
+      t.match(/\bfor\s+([A-Z][^.,;]{2,60})/) ||
+      t.match(/^([A-Z][A-Za-z0-9&.'\-\s]{2,60})\s+(?:has|is|missing|needs)/i);
+    return m ? String(m[1]).trim() : '';
+  }
+
+  function normalizeMailPackage(raw, index) {
+    const pkg = raw || {};
+    const letter = pkg.letter || {};
+    const envelope = pkg.envelope || {};
+    const summary = pkg.personalizationSummary || {};
+    const company =
+      letter.companyName ||
+      envelope.companyName ||
+      pkg.companyName ||
+      `Package ${index + 1}`;
+    const recipient =
+      letter.recipientName ||
+      envelope.recipientName ||
+      pkg.recipientName ||
+      '';
+    const confidence =
+      pkg.confidence != null
+        ? Number(pkg.confidence)
+        : summary.letterConfidence != null
+          ? Number(summary.letterConfidence)
+          : null;
+    const personalization =
+      summary.whySelected ||
+      (Array.isArray(summary.personalizationFacts) &&
+        summary.personalizationFacts[0]) ||
+      pkg.personalizationSentence ||
+      letter.personalizedOpening ||
+      pkg.openingHook ||
+      '';
+    const letterBody =
+      letter.body ||
+      pkg.letterBody ||
+      pkg.letterPreview ||
+      [letter.personalizedOpening, letter.valueProposition, letter.cta, letter.signature]
+        .filter(Boolean)
+        .join('\n\n') ||
+      personalization ||
+      '';
+    const warnings = [
+      ...(Array.isArray(pkg.warnings) ? pkg.warnings : []),
+      ...(Array.isArray(summary.missingDataWarnings)
+        ? summary.missingDataWarnings
+        : []),
+    ].map(warningText).filter(Boolean);
+    const needsReview =
+      Boolean(pkg.needsReview) ||
+      pkg.status === 'needs_review' ||
+      pkg.approved !== true ||
+      warnings.length > 0 ||
+      !letterBody;
+    const ready =
+      Boolean(pkg.approved) ||
+      pkg.status === 'ready_to_print' ||
+      pkg.status === 'ready' ||
+      (!needsReview && Boolean(letterBody));
+    const id =
+      pkg.id ||
+      pkg.prospectId ||
+      `pkg-${index}-${String(company).toLowerCase().replace(/\s+/g, '-')}`;
+    return {
+      id: String(id),
+      companyName: String(company),
+      recipientName: String(recipient),
+      confidence,
+      confidenceLabel: confidenceLabel(confidence),
+      personalization: String(personalization),
+      letterBody: String(letterBody),
+      envelopeAddress: String(envelope.mailingAddress || pkg.mailingAddress || ''),
+      warnings,
+      needsReview,
+      ready,
+      approved: Boolean(pkg.approved),
+      source: pkg,
+    };
+  }
+
+  function mailPackagesFromWorkspace(mission, artifacts) {
+    const list = [];
+    const seen = new Set();
+    const pushPkg = (raw, i) => {
+      const n = normalizeMailPackage(raw, i);
+      const key = n.id || n.companyName;
+      if (seen.has(key)) return;
+      seen.add(key);
+      list.push(n);
+    };
+
+    (artifacts || []).forEach((art) => {
+      const type = art.artifactType || art.type;
+      const payload = art.payload || {};
+      if (type === 'MailPackage') {
+        if (Array.isArray(payload.packages)) {
+          payload.packages.forEach((p, i) => pushPkg(p, list.length + i));
+        } else if (payload.letter || payload.companyName || payload.id) {
+          pushPkg(payload, list.length);
+        } else if (Array.isArray(payload)) {
+          payload.forEach((p, i) => pushPkg(p, list.length + i));
+        }
+      }
+    });
+
+    if (list.length) return list;
+
     const campaignArt = (artifacts || []).find(
       (a) => a.artifactType === 'Campaign' || a.type === 'Campaign'
     );
@@ -314,33 +447,174 @@
       (campaignArt && campaignArt.payload && campaignArt.payload.campaign) ||
       (mission.deliverables && mission.deliverables.campaign) ||
       null;
+    const mailMerge =
+      (campaign && Array.isArray(campaign.mailMerge) && campaign.mailMerge) ||
+      [];
+    mailMerge.forEach((row, i) => {
+      pushPkg(
+        {
+          id: row.prospectId || `mail-merge-${i}`,
+          companyName: row.companyName,
+          recipientName: row.recipientName || row.contactName || '',
+          personalizationSentence: row.personalizationSentence,
+          openingHook: row.openingHook,
+          letter: {
+            companyName: row.companyName,
+            recipientName: row.recipientName || row.contactName || '',
+            personalizedOpening: row.personalizationSentence || row.openingHook || '',
+            body: [row.personalizationSentence, row.openingHook, row.recommendedOffer]
+              .filter(Boolean)
+              .join('\n\n'),
+          },
+          confidence: row.confidence,
+          warnings: row.warnings || [],
+        },
+        i
+      );
+    });
+
+    if (list.length) return list;
+
     const prospects =
-      (campaign && Array.isArray(campaign.prospects) && campaign.prospects.length) ||
-      (campaign && campaign.prospectCount) ||
+      (campaign && Array.isArray(campaign.prospects) && campaign.prospects) ||
       (mission.deliverables &&
         Array.isArray(mission.deliverables.prospects) &&
-        mission.deliverables.prospects.length) ||
-      0;
-    const personalized =
-      (campaign && Array.isArray(campaign.mailMerge) && campaign.mailMerge.length) ||
-      prospects;
-    const warnings = [];
-    (mission.plan && mission.plan.steps ? mission.plan.steps : []).forEach((s) => {
-      (s.warnings || []).forEach((w) => warnings.push(w));
+        mission.deliverables.prospects) ||
+      [];
+    prospects.forEach((p, i) => {
+      pushPkg(
+        {
+          id: p.id || `prospect-${i}`,
+          companyName: p.companyName || p.name,
+          recipientName: p.contactName || p.name || '',
+          personalizationSentence: p.personalizationSentence,
+          letter: {
+            companyName: p.companyName || p.name,
+            recipientName: p.contactName || '',
+            body: p.personalizationSentence || '',
+          },
+          confidence: p.icp_score != null ? Number(p.icp_score) / 100 : null,
+          warnings: p.warnings || [],
+        },
+        i
+      );
     });
-    if (mission.stageReview && Array.isArray(mission.stageReview.warnings)) {
-      mission.stageReview.warnings.forEach((w) => warnings.push(w));
+
+    return list;
+  }
+
+  function collectReviewWarnings(mission, packages, evidence) {
+    /** @type {Array<{id:string,company:string,message:string,packageId:string|null}>} */
+    const out = [];
+    const push = (message, company, packageId) => {
+      const msg = warningText(message);
+      if (!msg) return;
+      const co = company || companyFromWarning(msg) || '';
+      out.push({
+        id: `warn-${out.length}`,
+        company: co,
+        message: msg,
+        packageId: packageId || null,
+      });
+    };
+
+    (mission.plan && mission.plan.steps ? mission.plan.steps : []).forEach((s) => {
+      (s.warnings || []).forEach((w) => push(w, '', null));
+      (s.blockingIssues || []).forEach((w) => push(w, '', null));
+    });
+    if (mission.stageReview) {
+      (mission.stageReview.warnings || []).forEach((w) => push(w, '', null));
+      (mission.stageReview.blockingIssues || []).forEach((w) => push(w, '', null));
     }
-    const warningCount = warnings.length;
-    const needsReview = warningCount;
-    const ready = Math.max(0, Number(prospects) - needsReview);
+    (packages || []).forEach((pkg) => {
+      (pkg.warnings || []).forEach((w) => push(w, pkg.companyName, pkg.id));
+      if (!pkg.recipientName) {
+        push('Missing contact name', pkg.companyName, pkg.id);
+      }
+      if (!pkg.letterBody) {
+        push('Letter preview unavailable', pkg.companyName, pkg.id);
+      }
+    });
+    (evidence || []).forEach((e) => {
+      if (e && e.kind === 'warning') push(e.summary || e, '', null);
+    });
+
+    const dedup = [];
+    const seen = new Set();
+    out.forEach((w) => {
+      const key = `${w.company}|${w.message}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (!w.packageId && w.company) {
+        const match = (packages || []).find(
+          (p) =>
+            String(p.companyName).toLowerCase() === String(w.company).toLowerCase()
+        );
+        if (match) w.packageId = match.id;
+      }
+      dedup.push(w);
+    });
+    return dedup;
+  }
+
+  function reviewDashboardModel(mission, artifacts, packages, warnings) {
+    const pkgs = packages || mailPackagesFromWorkspace(mission, artifacts);
+    const warns = warnings || collectReviewWarnings(mission, pkgs, []);
+    const campaignArt = (artifacts || []).find(
+      (a) => a.artifactType === 'Campaign' || a.type === 'Campaign'
+    );
+    const campaign =
+      (campaignArt && campaignArt.payload && campaignArt.payload.campaign) ||
+      (mission.deliverables && mission.deliverables.campaign) ||
+      null;
+    const prospectListArt = (artifacts || []).find(
+      (a) => a.artifactType === 'ProspectList' || a.type === 'ProspectList'
+    );
+    const prospectCount =
+      (prospectListArt &&
+        prospectListArt.payload &&
+        (prospectListArt.payload.prospectCount != null
+          ? Number(prospectListArt.payload.prospectCount)
+          : Array.isArray(prospectListArt.payload.prospects)
+            ? prospectListArt.payload.prospects.length
+            : 0)) ||
+      (mission.operatorProspectList && mission.operatorProspectList.prospectCount) ||
+      (campaign && campaign.prospectCount) ||
+      (campaign && Array.isArray(campaign.prospects) && campaign.prospects.length) ||
+      pkgs.length ||
+      0;
+    const personalized = pkgs.length || 0;
+    const needsReview = pkgs.filter((p) => p.needsReview && !p.approved).length;
+    const ready = pkgs.filter((p) => p.ready || p.approved).length;
     return {
-      prospects: Number(prospects) || 0,
+      prospects: Number(prospectCount) || 0,
       personalized: Number(personalized) || 0,
-      warnings: warningCount,
+      warnings: warns.length,
       needsReview,
       ready,
+      packages: pkgs,
+      warningItems: warns,
     };
+  }
+
+  function filteredQueuePackages(session) {
+    if (!session) return [];
+    const all = session.packages || [];
+    const filter = session.queueFilter || 'all';
+    if (filter === 'warnings') {
+      return all.filter(
+        (p) =>
+          (p.warnings && p.warnings.length) ||
+          session.warningItems.some((w) => w.packageId === p.id)
+      );
+    }
+    if (filter === 'needs_review') {
+      return all.filter((p) => p.needsReview && !session.approvals[p.id]);
+    }
+    if (filter === 'ready') {
+      return all.filter((p) => p.ready || session.approvals[p.id]);
+    }
+    return all.slice();
   }
 
   function formatDisplayTime(iso) {
@@ -1207,6 +1481,346 @@
     }
   }
 
+  function renderPackagePreviewHtml(pkg, opts = {}) {
+    if (!pkg) {
+      return '<p class="msn-objective-meta">No package selected.</p>';
+    }
+    const editing = Boolean(opts.editing);
+    const letter = editing
+      ? `<label class="msn-import-label" for="msnPkgEditBody">Letter</label>
+         <textarea id="msnPkgEditBody" class="msn-import-input msn-letter-edit" rows="10">${escapeHtml(
+           pkg.letterBody || ''
+         )}</textarea>`
+      : `<pre class="msn-letter-preview">${escapeHtml(pkg.letterBody || 'No letter body available.')}</pre>`;
+    return `<article class="msn-pkg-preview" data-pkg-id="${escapeHtml(pkg.id)}">
+      <div class="msn-pkg-meta-grid">
+        <div><span class="msn-metric-label">Company</span><p class="msn-pkg-meta-value">${escapeHtml(
+          pkg.companyName
+        )}</p></div>
+        <div><span class="msn-metric-label">Recipient</span><p class="msn-pkg-meta-value">${escapeHtml(
+          pkg.recipientName || '—'
+        )}</p></div>
+        <div><span class="msn-metric-label">Confidence</span><p class="msn-pkg-meta-value">${escapeHtml(
+          pkg.confidenceLabel
+        )}</p></div>
+      </div>
+      ${
+        pkg.personalization
+          ? `<p class="msn-pkg-personalization">${escapeHtml(pkg.personalization)}</p>`
+          : ''
+      }
+      <h4 class="msn-subhead">Letter preview</h4>
+      ${letter}
+      ${
+        pkg.envelopeAddress
+          ? `<h4 class="msn-subhead">Envelope</h4><pre class="msn-letter-preview msn-envelope-preview">${escapeHtml(
+              pkg.envelopeAddress
+            )}</pre>`
+          : `<p class="msn-objective-meta">Envelope preview unavailable for this package.</p>`
+      }
+    </article>`;
+  }
+
+  function renderReviewQueueHtml(session) {
+    const queue = filteredQueuePackages(session);
+    if (!queue.length) {
+      return `<section class="msn-block" id="msnReviewQueue">
+        <h3>Review Queue</h3>
+        <p class="msn-objective-meta">No packages in this filter.</p>
+      </section>`;
+    }
+    let index = Number(session.queueIndex) || 0;
+    if (index < 0) index = 0;
+    if (index >= queue.length) index = queue.length - 1;
+    session.queueIndex = index;
+    const pkg = queue[index];
+    const approved = Boolean(session.approvals[pkg.id]);
+    return `<section class="msn-block msn-review-queue" id="msnReviewQueue">
+      <h3>Review Queue</h3>
+      <p class="msn-queue-progress">Package <strong>${escapeHtml(
+        String(index + 1)
+      )}</strong> / ${escapeHtml(String(queue.length))}${
+      session.queueFilter && session.queueFilter !== 'all'
+        ? ` · <span class="msn-queue-filter-label">${escapeHtml(
+            session.queueFilter.replace(/_/g, ' ')
+          )}</span>`
+        : ''
+    }</p>
+      ${renderPackagePreviewHtml(pkg, { editing: session.editingId === pkg.id })}
+      <div class="msn-queue-actions">
+        <button type="button" class="cd-btn cd-btn-primary" data-msn-queue="approve"${
+          approved ? ' disabled' : ''
+        }>${approved ? 'Approved' : 'Approve'}</button>
+        <button type="button" class="cd-btn cd-btn-ghost" data-msn-queue="edit">Edit</button>
+        <button type="button" class="cd-btn cd-btn-ghost" data-msn-queue="prev"${
+          index <= 0 ? ' disabled' : ''
+        }>Previous</button>
+        <button type="button" class="cd-btn cd-btn-ghost" data-msn-queue="next"${
+          index >= queue.length - 1 ? ' disabled' : ''
+        }>Next</button>
+      </div>
+    </section>`;
+  }
+
+  function renderWarningInspectorHtml(warningItems) {
+    const items = warningItems || [];
+    if (!items.length) {
+      return `<section class="msn-block" id="msnWarnings">
+        <h3>Warnings (0)</h3>
+        <p class="msn-objective-meta">No warnings.</p>
+      </section>`;
+    }
+    return `<section class="msn-block" id="msnWarnings">
+      <h3>Warnings (${escapeHtml(String(items.length))})</h3>
+      <ul class="msn-warning-list">
+        ${items
+          .map(
+            (w) => `<li>
+            <button type="button" class="msn-warning-item msn-interactive" data-msn-warning-pkg="${escapeHtml(
+              w.packageId || ''
+            )}" ${w.packageId ? '' : 'disabled'}>
+              <span class="msn-warning-mark" aria-hidden="true">⚠</span>
+              <span class="msn-warning-copy">
+                <strong>${escapeHtml(w.company || 'Mission')}</strong>
+                <span>${escapeHtml(w.message)}</span>
+              </span>
+            </button>
+          </li>`
+          )
+          .join('')}
+      </ul>
+    </section>`;
+  }
+
+  function renderPackageListHtml(packages) {
+    const pkgs = packages || [];
+    if (!pkgs.length) {
+      return '<p class="msn-objective-meta">No mail packages generated yet.</p>';
+    }
+    return `<ul class="msn-package-list">
+      ${pkgs
+        .map(
+          (pkg, i) => `<li class="msn-package-row">
+          <button type="button" class="msn-package-open msn-interactive" data-msn-open-pkg="${escapeHtml(
+            pkg.id
+          )}">
+            <span class="msn-package-name">${escapeHtml(pkg.companyName)}</span>
+            <span class="msn-package-conf">Confidence: ${escapeHtml(
+              pkg.confidenceLabel
+            )}</span>
+            <span class="msn-package-preview-label">Preview</span>
+          </button>
+          ${i < pkgs.length - 1 ? '<hr class="msn-package-rule" />' : ''}
+        </li>`
+        )
+        .join('')}
+    </ul>`;
+  }
+
+  function scrollMsnSection(id) {
+    const node = els.msnBody && els.msnBody.querySelector(`#${id}`);
+    if (node && typeof node.scrollIntoView === 'function') {
+      node.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' });
+    }
+  }
+
+  function refreshReviewQueueUi() {
+    if (!els.msnBody || !msnReviewSession) return;
+    const host = els.msnBody.querySelector('#msnReviewQueue');
+    if (!host) return;
+    const wrap = document.createElement('div');
+    wrap.innerHTML = renderReviewQueueHtml(msnReviewSession);
+    const next = wrap.firstElementChild;
+    if (next) host.replaceWith(next);
+    bindReviewQueueControls();
+  }
+
+  function openPackageInQueue(packageId, filter) {
+    if (!msnReviewSession) return;
+    if (filter) msnReviewSession.queueFilter = filter;
+    const queue = filteredQueuePackages(msnReviewSession);
+    const idx = queue.findIndex((p) => p.id === packageId);
+    msnReviewSession.queueIndex = idx >= 0 ? idx : 0;
+    msnReviewSession.editingId = null;
+    refreshReviewQueueUi();
+    scrollMsnSection('msnReviewQueue');
+  }
+
+  function bindReviewQueueControls() {
+    if (!els.msnBody || !msnReviewSession) return;
+    els.msnBody.querySelectorAll('[data-msn-queue]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const action = btn.getAttribute('data-msn-queue');
+        const queue = filteredQueuePackages(msnReviewSession);
+        const pkg = queue[msnReviewSession.queueIndex];
+        if (!pkg && action !== 'next' && action !== 'prev') return;
+        if (action === 'approve' && pkg) {
+          msnReviewSession.approvals[pkg.id] = true;
+          pkg.approved = true;
+          pkg.ready = true;
+          pkg.needsReview = false;
+          announce(`Approved ${pkg.companyName} (session).`);
+          if (msnReviewSession.queueIndex < queue.length - 1) {
+            msnReviewSession.queueIndex += 1;
+          }
+          msnReviewSession.editingId = null;
+          refreshReviewQueueUi();
+          return;
+        }
+        if (action === 'edit' && pkg) {
+          msnReviewSession.editingId =
+            msnReviewSession.editingId === pkg.id ? null : pkg.id;
+          refreshReviewQueueUi();
+          const ta = els.msnBody.querySelector('#msnPkgEditBody');
+          if (ta) {
+            ta.focus();
+            ta.addEventListener(
+              'change',
+              () => {
+                pkg.letterBody = ta.value;
+              },
+              { once: true }
+            );
+          }
+          return;
+        }
+        if (action === 'prev') {
+          msnReviewSession.queueIndex = Math.max(0, msnReviewSession.queueIndex - 1);
+          msnReviewSession.editingId = null;
+          refreshReviewQueueUi();
+          return;
+        }
+        if (action === 'next') {
+          msnReviewSession.queueIndex = Math.min(
+            queue.length - 1,
+            msnReviewSession.queueIndex + 1
+          );
+          msnReviewSession.editingId = null;
+          refreshReviewQueueUi();
+        }
+      });
+    });
+  }
+
+  function bindMissionReviewInteractions() {
+    if (!els.msnBody || !msnReviewSession) return;
+
+    els.msnBody.querySelectorAll('[data-msn-toggle]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-msn-toggle');
+        const panel = els.msnBody.querySelector(`[data-msn-panel="${id}"]`);
+        if (!panel) return;
+        const open = panel.hasAttribute('hidden');
+        if (open) panel.removeAttribute('hidden');
+        else panel.setAttribute('hidden', '');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        const label = btn.querySelector('[data-msn-toggle-label]');
+        if (label) {
+          const openLabel = btn.getAttribute('data-label-open') || 'Hide';
+          const closedLabel =
+            btn.getAttribute('data-label-closed') ||
+            (btn.hasAttribute('data-msn-toggle-details')
+              ? 'Details'
+              : 'View packages');
+          label.textContent = open ? openLabel : closedLabel;
+        }
+      });
+    });
+
+    els.msnBody.querySelectorAll('[data-msn-nav]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const nav = btn.getAttribute('data-msn-nav');
+        if (nav === 'prospects') {
+          const inputs = els.msnBody.querySelector('#msnInputs');
+          const list = els.msnBody.querySelector('[data-msn-panel="prospect-rows"]');
+          if (list) list.removeAttribute('hidden');
+          scrollMsnSection('msnInputs');
+          announce('Prospect list');
+          return;
+        }
+        if (nav === 'personalized') {
+          const panel =
+            els.msnBody.querySelector('#msnCampaignCard [data-msn-panel]') ||
+            els.msnBody.querySelector('.msn-artifact-expand[data-msn-panel]');
+          if (panel) panel.removeAttribute('hidden');
+          const toggle =
+            els.msnBody.querySelector('#msnCampaignCard [data-msn-toggle]') ||
+            els.msnBody.querySelector('.msn-artifact-expandable [data-msn-toggle]');
+          if (toggle) {
+            toggle.setAttribute('aria-expanded', 'true');
+            const label = toggle.querySelector('[data-msn-toggle-label]');
+            if (label) {
+              label.textContent =
+                toggle.getAttribute('data-label-open') || 'Hide packages';
+            }
+          }
+          scrollMsnSection('msnDeliverables');
+          msnReviewSession.queueFilter = 'all';
+          refreshReviewQueueUi();
+          scrollMsnSection('msnReviewQueue');
+          return;
+        }
+        if (nav === 'warnings') {
+          scrollMsnSection('msnWarnings');
+          return;
+        }
+        if (nav === 'needs_review') {
+          msnReviewSession.queueFilter = 'needs_review';
+          msnReviewSession.queueIndex = 0;
+          refreshReviewQueueUi();
+          scrollMsnSection('msnReviewQueue');
+          return;
+        }
+        if (nav === 'ready') {
+          msnReviewSession.queueFilter = 'ready';
+          msnReviewSession.queueIndex = 0;
+          refreshReviewQueueUi();
+          scrollMsnSection('msnReviewQueue');
+        }
+      });
+    });
+
+    els.msnBody.querySelectorAll('[data-msn-open-pkg]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        openPackageInQueue(btn.getAttribute('data-msn-open-pkg'), 'all');
+      });
+    });
+
+    els.msnBody.querySelectorAll('[data-msn-warning-pkg]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-msn-warning-pkg');
+        if (!id) {
+          announce('No related package for this warning.');
+          return;
+        }
+        openPackageInQueue(id, 'warnings');
+      });
+    });
+
+    els.msnBody
+      .querySelectorAll('[data-msn-objective-expand]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const root = els.msnBody.querySelector('#msnObjectiveBlock');
+          if (!root) return;
+          root.querySelector('[data-msn-objective-collapsed]')?.setAttribute('hidden', '');
+          root.querySelector('[data-msn-objective-expanded]')?.removeAttribute('hidden');
+        });
+      });
+    els.msnBody
+      .querySelectorAll('[data-msn-objective-collapse]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const root = els.msnBody.querySelector('#msnObjectiveBlock');
+          if (!root) return;
+          root.querySelector('[data-msn-objective-expanded]')?.setAttribute('hidden', '');
+          root.querySelector('[data-msn-objective-collapsed]')?.removeAttribute('hidden');
+        });
+      });
+
+    bindReviewQueueControls();
+  }
+
   async function openMissionWorkspace(missionId) {
     if (!els.missionWorkspace || !missionId) return;
     try {
@@ -1220,7 +1834,8 @@
       }
 
       const steps = (mission.plan && mission.plan.steps) || [];
-      const evidence = (data.evidence || [])
+      const evidenceList = Array.isArray(data.evidence) ? data.evidence : [];
+      const evidence = evidenceList
         .map((e) => `<li>${escapeHtml(e.summary || '')}</li>`)
         .join('');
       const audit = (data.audit || [])
@@ -1251,7 +1866,35 @@
         prospectCount ||
         0;
       const buckets = industryBuckets(prospectRows);
-      const reviewModel = reviewDashboardModel(mission, artifacts);
+      const packages = mailPackagesFromWorkspace(mission, artifacts);
+      const warningItems = collectReviewWarnings(mission, packages, evidenceList);
+      const reviewModel = reviewDashboardModel(
+        mission,
+        artifacts,
+        packages,
+        warningItems
+      );
+
+      const prevApprovals =
+        msnReviewSession && msnReviewSession.missionId === missionId
+          ? msnReviewSession.approvals
+          : {};
+      packages.forEach((p) => {
+        if (prevApprovals[p.id]) {
+          p.approved = true;
+          p.ready = true;
+          p.needsReview = false;
+        }
+      });
+      msnReviewSession = {
+        missionId,
+        packages,
+        warningItems,
+        approvals: { ...prevApprovals },
+        queueFilter: 'all',
+        queueIndex: 0,
+        editingId: null,
+      };
 
       const objectiveRaw = String(mission.objectiveText || '');
       const objectiveFirstLine =
@@ -1271,26 +1914,46 @@
                   )} prospects attached</p>`
                 : ''
             }
-            <button type="button" class="msn-link-btn" data-msn-objective-expand>Expand</button>
+            <button type="button" class="msn-link-btn msn-interactive" data-msn-objective-expand>Expand</button>
           </div>
           <div data-msn-objective-expanded hidden>
             <p class="msn-objective">${escapeHtml(objectiveRaw)}</p>
-            <button type="button" class="msn-link-btn" data-msn-objective-collapse>Collapse</button>
+            <button type="button" class="msn-link-btn msn-interactive" data-msn-objective-collapse>Collapse</button>
           </div>
         </section>`;
 
-      const inputsHtml = `<section class="msn-block">
+      const prospectRowsHtml = prospectRows.length
+        ? `<ul class="msn-prospect-rows" data-msn-panel="prospect-rows" hidden>
+            ${prospectRows
+              .slice(0, 200)
+              .map(
+                (p) =>
+                  `<li><strong>${escapeHtml(
+                    p.companyName || p.name || 'Company'
+                  )}</strong>${
+                    p.website
+                      ? ` · <span class="msn-objective-meta">${escapeHtml(
+                          p.website
+                        )}</span>`
+                      : ''
+                  }</li>`
+              )
+              .join('')}
+          </ul>`
+        : '';
+
+      const inputsHtml = `<section class="msn-block" id="msnInputs">
           <h3>Inputs</h3>
           ${
             attachedCount
               ? `<p class="msn-artifact-title">Prospect List</p>
             <div class="msn-metric-grid">
-              <div class="msn-metric"><span class="msn-metric-label">Companies</span><span class="msn-metric-value">${escapeHtml(
+              <div class="msn-metric msn-metric-static"><span class="msn-metric-label">Companies</span><span class="msn-metric-value">${escapeHtml(
                 String(attachedCount)
               )}</span></div>
               ${
                 prospectListArt && prospectListArt.metadata && prospectListArt.metadata.operatorSupplied
-                  ? `<div class="msn-metric"><span class="msn-metric-label">Source</span><span class="msn-metric-value" style="font-size:0.85rem">Operator</span></div>`
+                  ? `<div class="msn-metric msn-metric-static"><span class="msn-metric-label">Source</span><span class="msn-metric-value" style="font-size:0.85rem">Operator</span></div>`
                   : ''
               }
             </div>
@@ -1305,19 +1968,38 @@
                     )
                     .join('')}</ul>`
                 : `<p class="msn-objective-meta">Industry breakdown unavailable for these rows.</p>`
+            }
+            ${
+              prospectRows.length
+                ? `<button type="button" class="msn-link-btn msn-interactive" data-msn-toggle="prospect-rows" data-label-open="Hide companies" data-label-closed="View companies" aria-expanded="false"><span data-msn-toggle-label>View companies</span></button>${prospectRowsHtml}`
+                : ''
             }`
               : `<p class="msn-objective-meta">No prospect list attached yet.</p>`
           }
         </section>`;
 
       const stageRows = steps
-        .map((s) => {
+        .map((s, idx) => {
           const pct = stageProgressPct(s);
           const running = String(s.status) === 'running';
           const rs = s.reviewSummary || {};
+          const stageId = s.stageId || s.capabilityId || `stage-${idx}`;
+          const stageArts = artifacts.filter(
+            (a) =>
+              a.stageId === stageId ||
+              a.stageId === s.capabilityId ||
+              (a.producer &&
+                (a.producer === s.capabilityId || a.producer === stageId))
+          );
+          const stageEvidence = evidenceList.filter(
+            (e) =>
+              e.capabilityId === s.capabilityId ||
+              e.capabilityId === stageId ||
+              e.name === s.name
+          );
           const metrics = [];
           if (rs.publishedCount != null) {
-            metrics.push(`Accepted ${rs.publishedCount}`);
+            metrics.push(`${rs.publishedCount} processed`);
           }
           if (Array.isArray(s.warnings) && s.warnings.length) {
             metrics.push(`Warnings ${s.warnings.length}`);
@@ -1325,6 +2007,7 @@
           if (s.blockingIssues && s.blockingIssues.length) {
             metrics.push(`Blocked ${s.blockingIssues.length}`);
           }
+          const panelId = `stage-${idx}`;
           return `<li class="msn-stage">
             <div class="msn-stage-head">
               <p class="msn-stage-name">${escapeHtml(s.name || s.capabilityId || 'Stage')}</p>
@@ -1340,18 +2023,79 @@
                     .join('')}</div>`
                 : ''
             }
+            <button type="button" class="msn-link-btn msn-interactive" data-msn-toggle="${escapeHtml(
+              panelId
+            )}" data-msn-toggle-details data-label-open="Hide details" data-label-closed="Details" aria-expanded="false"><span data-msn-toggle-label>Details</span></button>
+            <div class="msn-stage-details" data-msn-panel="${escapeHtml(
+              panelId
+            )}" hidden>
+              <h4 class="msn-subhead">Artifacts</h4>
+              ${
+                stageArts.length
+                  ? `<ul class="msn-stage-art-list">${stageArts
+                      .map((a) => {
+                        const h = businessArtifactHeadline(a);
+                        return `<li><strong>${escapeHtml(
+                          h.title
+                        )}</strong> · ${escapeHtml(h.summary)} · ${escapeHtml(
+                          a.validationStatus || ''
+                        )}</li>`;
+                      })
+                      .join('')}</ul>`
+                  : `<p class="msn-objective-meta">No artifacts for this stage yet.</p>`
+              }
+              <h4 class="msn-subhead">Evidence</h4>
+              ${
+                stageEvidence.length
+                  ? `<ul>${stageEvidence
+                      .map((e) => `<li>${escapeHtml(e.summary || '')}</li>`)
+                      .join('')}</ul>`
+                  : `<p class="msn-objective-meta">No evidence summary.</p>`
+              }
+              <h4 class="msn-subhead">Warnings</h4>
+              ${
+                Array.isArray(s.warnings) && s.warnings.length
+                  ? `<ul>${s.warnings
+                      .map((w) => `<li>${escapeHtml(warningText(w))}</li>`)
+                      .join('')}</ul>`
+                  : `<p class="msn-objective-meta">None</p>`
+              }
+              <h4 class="msn-subhead">Blocking issues</h4>
+              ${
+                Array.isArray(s.blockingIssues) && s.blockingIssues.length
+                  ? `<ul>${s.blockingIssues
+                      .map((w) => `<li>${escapeHtml(warningText(w))}</li>`)
+                      .join('')}</ul>`
+                  : `<p class="msn-objective-meta">None</p>`
+              }
+            </div>
           </li>`;
         })
         .join('');
 
       const artifactRows = artifacts
-        .map((art) => {
+        .map((art, artIdx) => {
           const headline = businessArtifactHeadline(art);
           const status = art.validationStatus || 'unknown';
           const rev = art.revision != null ? `v${art.revision}` : '';
-          return `<li class="msn-artifact" data-artifact-id="${escapeHtml(
+          const type = art.artifactType || art.type;
+          const expandable =
+            type === 'Campaign' || type === 'MailPackage';
+          const panelId = `artifact-pkgs-${artIdx}`;
+          let packagePanel = '';
+          if (type === 'Campaign' || type === 'MailPackage') {
+            packagePanel = `<button type="button" class="msn-link-btn msn-interactive" data-msn-toggle="${escapeHtml(
+              panelId
+            )}" data-label-open="Hide packages" data-label-closed="View packages" aria-expanded="false"><span data-msn-toggle-label>View packages</span></button>
+              <div class="msn-artifact-expand" data-msn-panel="${escapeHtml(
+                panelId
+              )}" hidden>
+                ${renderPackageListHtml(packages)}
+              </div>`;
+          }
+          return `<li class="msn-artifact${expandable ? ' msn-artifact-expandable' : ''}" data-artifact-id="${escapeHtml(
             art.id || ''
-          )}">
+          )}"${type === 'Campaign' ? ' id="msnCampaignCard"' : ''}>
             <div class="msn-artifact-head">
               <p class="msn-artifact-title">${escapeHtml(headline.title)}</p>
               <span class="cd-chip">${escapeHtml(rev)}</span>
@@ -1363,47 +2107,27 @@
               }
             </div>
             <p class="msn-artifact-summary">${escapeHtml(headline.summary)}</p>
-            <details class="msn-dev-details">
-              <summary>Developer Details</summary>
-              <pre class="msn-pre">${escapeHtml(
-                JSON.stringify(
-                  {
-                    id: art.id,
-                    artifactType: art.artifactType,
-                    producer: art.producer,
-                    stageId: art.stageId,
-                    validationStatus: art.validationStatus,
-                    dependencies: art.dependencies,
-                    metadata: art.metadata,
-                    payload: art.payload,
-                  },
-                  null,
-                  2
-                )
-              )}</pre>
-            </details>
+            ${packagePanel}
           </li>`;
         })
         .join('');
 
-      const reviewHtml = `<section class="msn-block msn-review-dash">
+      const metricBtn = (nav, label, value) =>
+        `<button type="button" class="msn-metric msn-metric-nav msn-interactive" data-msn-nav="${escapeHtml(
+          nav
+        )}">
+          <span class="msn-metric-label">${escapeHtml(label)}</span>
+          <span class="msn-metric-value">${escapeHtml(String(value))}</span>
+        </button>`;
+
+      const reviewHtml = `<section class="msn-block msn-review-dash" id="msnCampaignSummary">
           <h3>Campaign Summary</h3>
           <div class="msn-metric-grid">
-            <div class="msn-metric"><span class="msn-metric-label">Prospects</span><span class="msn-metric-value">${escapeHtml(
-              String(reviewModel.prospects)
-            )}</span></div>
-            <div class="msn-metric"><span class="msn-metric-label">Personalized</span><span class="msn-metric-value">${escapeHtml(
-              String(reviewModel.personalized)
-            )}</span></div>
-            <div class="msn-metric"><span class="msn-metric-label">Warnings</span><span class="msn-metric-value">${escapeHtml(
-              String(reviewModel.warnings)
-            )}</span></div>
-            <div class="msn-metric"><span class="msn-metric-label">Needs Review</span><span class="msn-metric-value">${escapeHtml(
-              String(reviewModel.needsReview)
-            )}</span></div>
-            <div class="msn-metric"><span class="msn-metric-label">Ready</span><span class="msn-metric-value">${escapeHtml(
-              String(reviewModel.ready)
-            )}</span></div>
+            ${metricBtn('prospects', 'Prospects', reviewModel.prospects)}
+            ${metricBtn('personalized', 'Personalized', reviewModel.personalized)}
+            ${metricBtn('warnings', 'Warnings', reviewModel.warnings)}
+            ${metricBtn('needs_review', 'Needs Review', reviewModel.needsReview)}
+            ${metricBtn('ready', 'Ready', reviewModel.ready)}
           </div>
         </section>`;
 
@@ -1468,9 +2192,38 @@
           </section>`
         : '';
 
+      const artifactDevDetails = artifacts
+        .map(
+          (art) => `<details class="msn-dev-nested">
+            <summary>${escapeHtml(
+              (art.artifactType || art.type || 'Artifact') +
+                (art.revision != null ? ` v${art.revision}` : '')
+            )}</summary>
+            <pre class="msn-pre">${escapeHtml(
+              JSON.stringify(
+                {
+                  id: art.id,
+                  artifactType: art.artifactType,
+                  producer: art.producer,
+                  stageId: art.stageId,
+                  validationStatus: art.validationStatus,
+                  dependencies: art.dependencies,
+                  metadata: art.metadata,
+                  payload: art.payload,
+                },
+                null,
+                2
+              )
+            )}</pre>
+          </details>`
+        )
+        .join('');
+
       els.msnBody.innerHTML = `
         ${discoveryFailedHtml}
         ${reviewHtml}
+        ${renderWarningInspectorHtml(warningItems)}
+        ${renderReviewQueueHtml(msnReviewSession)}
         ${objectiveHtml}
         ${inputsHtml}
         <section class="msn-block">
@@ -1479,15 +2232,17 @@
             stageRows || '<li class="msn-objective-meta">No stages yet</li>'
           }</ul>
         </section>
-        <section class="msn-block">
+        <section class="msn-block" id="msnDeliverables">
           <h3>Deliverables</h3>
           <ul class="msn-artifacts">${
             artifactRows || '<li class="msn-objective-meta">No deliverables published yet</li>'
           }</ul>
         </section>
         <details class="msn-dev-details msn-block">
-          <summary>Developer Details</summary>
-          <h3 style="margin-top:0.75rem">Evidence</h3>
+          <summary class="msn-interactive">Developer Details</summary>
+          <h3 style="margin-top:0.75rem">Artifact revisions</h3>
+          ${artifactDevDetails || '<p class="msn-objective-meta">No artifacts</p>'}
+          <h3>Evidence</h3>
           <ul>${evidence || '<li>No evidence yet</li>'}</ul>
           <h3>Audit</h3>
           <ul>${audit || '<li>No events</li>'}</ul>
@@ -1496,29 +2251,8 @@
             JSON.stringify(mission.deliverables || {}, null, 2)
           )}</pre>
         </details>
-        <p class="msn-note">No outbound actions occur automatically. Approve records review only.</p>
+        <p class="msn-note">No outbound actions occur automatically. Package Approve is session-local; mission Approve records review only.</p>
       `;
-
-      els.msnBody
-        .querySelectorAll('[data-msn-objective-expand]')
-        .forEach((btn) => {
-          btn.addEventListener('click', () => {
-            const root = els.msnBody.querySelector('#msnObjectiveBlock');
-            if (!root) return;
-            root.querySelector('[data-msn-objective-collapsed]')?.setAttribute('hidden', '');
-            root.querySelector('[data-msn-objective-expanded]')?.removeAttribute('hidden');
-          });
-        });
-      els.msnBody
-        .querySelectorAll('[data-msn-objective-collapse]')
-        .forEach((btn) => {
-          btn.addEventListener('click', () => {
-            const root = els.msnBody.querySelector('#msnObjectiveBlock');
-            if (!root) return;
-            root.querySelector('[data-msn-objective-expanded]')?.setAttribute('hidden', '');
-            root.querySelector('[data-msn-objective-collapsed]')?.removeAttribute('hidden');
-          });
-        });
 
       const actionLabels = {
         approve: 'Approve',
@@ -1557,6 +2291,7 @@
         });
       });
 
+      bindMissionReviewInteractions();
       bindMissionRecovery(missionId);
 
       els.missionWorkspace.hidden = false;
@@ -1700,6 +2435,7 @@
     if (!els.missionWorkspace || els.missionWorkspace.hidden) return;
     els.missionWorkspace.hidden = true;
     document.body.style.overflow = '';
+    msnReviewSession = null;
     announce('Mission workspace closed.');
   }
 

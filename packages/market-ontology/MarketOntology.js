@@ -28,6 +28,8 @@ const MARKET_OBSERVATION_TYPES = Object.freeze({
   ECONOMIC_RELEASE: 'economic_release',
   SESSION_TRANSITION: 'session_transition',
   INDICATOR_SNAPSHOT: 'indicator_snapshot',
+  /** Immutable operator chart screenshot (SPEC-044 Trade Capture). */
+  CHART_SNAPSHOT: 'chart_snapshot',
 });
 
 const MARKET_CLAIM_VOCABULARY = Object.freeze([

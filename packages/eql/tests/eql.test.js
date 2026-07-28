@@ -434,3 +434,168 @@ describe('SPEC-020 catalogFromResult', () => {
     assert.equal(result.rows[0].claimType, 'momentum_continuation');
   });
 });
+
+describe('SPEC-044 Trade Capture EQL targets', () => {
+  function tradeCatalog() {
+    return createEvidenceCatalog({
+      trades: [
+        {
+          id: 't-win',
+          hypothesis: 'Velocity',
+          result: 'Win',
+          direction: 'Long',
+          confidence: 4,
+          screenshotId: 'shot-1',
+        },
+        {
+          id: 't-loss',
+          hypothesis: 'Velocity',
+          result: 'Loss',
+          direction: 'Short',
+          confidence: 2,
+          screenshotId: 'shot-2',
+        },
+        {
+          id: 't-other',
+          hypothesis: 'Breakout',
+          result: 'Win',
+          direction: 'Long',
+          confidence: 5,
+          screenshotId: 'shot-3',
+        },
+      ],
+      screenshots: [
+        { id: 'shot-1', tradeId: 't-win', imageHash: 'aaa', immutable: true },
+        { id: 'shot-2', tradeId: 't-loss', imageHash: 'bbb', immutable: true },
+        { id: 'shot-3', tradeId: 't-other', imageHash: 'ccc', immutable: true },
+      ],
+    });
+  }
+
+  it('FIND Trades WHERE hypothesis = Velocity', async () => {
+    const eql = createEqlEngine({ catalog: tradeCatalog() });
+    const result = await eql.query(`
+      FIND Trades
+      WHERE hypothesis = "Velocity"
+    `);
+    assert.equal(result.count, 2);
+  });
+
+  it('SHOW Screenshots FOR Trade', async () => {
+    const eql = createEqlEngine({ catalog: tradeCatalog() });
+    const result = await eql.query(`SHOW Screenshots FOR Trade("t-win")`);
+    assert.equal(result.count, 1);
+    assert.equal(result.rows[0].id, 'shot-1');
+  });
+
+  it('COMPARE WinningTrades WITH LosingTrades', async () => {
+    const ast = parseEql(`COMPARE WinningTrades WITH LosingTrades`);
+    assert.equal(ast.kind, 'COMPARE');
+    assert.equal(ast.left, 'WinningTrades');
+    assert.equal(ast.right, 'LosingTrades');
+
+    const eql = createEqlEngine({ catalog: tradeCatalog() });
+    const result = await eql.query(`COMPARE WinningTrades WITH LosingTrades`);
+    assert.equal(result.count, 1);
+    assert.equal(result.rows[0].leftId, 'WinningTrades');
+    assert.equal(result.rows[0].rightId, 'LosingTrades');
+    assert.equal(result.rows[0].left.kind, 'WinningTrades');
+    assert.equal(result.rows[0].left.count, 2);
+    assert.equal(result.rows[0].right.count, 1);
+  });
+});
+
+describe('SPEC-046 Trade Intelligence EQL targets', () => {
+  function intelligenceCatalog() {
+    return createEvidenceCatalog({
+      daily_reviews: [
+        {
+          id: 'daily:2026-07-28',
+          kind: 'daily_review',
+          period: 'Today',
+          title: "Today's Session",
+          trades: 12,
+          winRate: 0.667,
+        },
+      ],
+      weekly_reviews: [
+        {
+          id: 'weekly:2026-07-21:2026-07-28',
+          kind: 'weekly_review',
+          period: 'LastWeek',
+          title: 'This Week',
+          trades: 54,
+          winRate: 0.63,
+        },
+      ],
+      best_hypotheses: [
+        { hypothesis: 'Velocity', winRate: 0.61, trades: 143 },
+        { hypothesis: 'Breakout', winRate: 0.38, trades: 40 },
+      ],
+      trade_calibrations: [
+        { id: 'calibration:confidence:5', confidenceLevel: 5, winRate: 0.48 },
+        { id: 'calibration:confidence:2', confidenceLevel: 2, winRate: 0.81 },
+      ],
+      recommendations: [
+        {
+          id: 'rec-1',
+          title: 'Velocity trades above VWAP continue outperforming.',
+          confidence: 'High',
+          sampleSize: 237,
+        },
+      ],
+      similar_trades: [
+        { id: 'sim-1', sourceTradeId: 't-win', tradeId: 't-other', similarityScore: 0.75 },
+      ],
+      findings: [
+        { id: 'f-1', type: 'pattern', title: 'Winning Velocity trades', immutable: true },
+      ],
+      periods: [{ id: 'Today' }, { id: 'LastWeek' }],
+    });
+  }
+
+  it('SHOW DailyReview FOR Today', async () => {
+    const ast = parseEql('SHOW DailyReview FOR Today');
+    assert.equal(ast.target, 'daily_reviews');
+    assert.equal(ast.related.id, 'Today');
+
+    const eql = createEqlEngine({ catalog: intelligenceCatalog() });
+    const result = await eql.query('SHOW DailyReview FOR Today');
+    assert.equal(result.count, 1);
+    assert.equal(result.rows[0].title, "Today's Session");
+  });
+
+  it('SHOW WeeklyReview FOR LastWeek', async () => {
+    const eql = createEqlEngine({ catalog: intelligenceCatalog() });
+    const result = await eql.query('SHOW WeeklyReview FOR LastWeek');
+    assert.equal(result.count, 1);
+    assert.equal(result.rows[0].period, 'LastWeek');
+  });
+
+  it('SHOW BestHypotheses', async () => {
+    const eql = createEqlEngine({ catalog: intelligenceCatalog() });
+    const result = await eql.query('SHOW BestHypotheses');
+    assert.equal(result.count, 2);
+    assert.equal(result.rows[0].hypothesis, 'Velocity');
+  });
+
+  it('SHOW TradeCalibration', async () => {
+    const eql = createEqlEngine({ catalog: intelligenceCatalog() });
+    const result = await eql.query('SHOW TradeCalibration');
+    assert.equal(result.count, 2);
+  });
+
+  it('SHOW SimilarTrades FOR Trade', async () => {
+    const eql = createEqlEngine({ catalog: intelligenceCatalog() });
+    const result = await eql.query('SHOW SimilarTrades FOR Trade("t-win")');
+    assert.equal(result.count, 1);
+    assert.equal(result.rows[0].sourceTradeId, 't-win');
+  });
+
+  it('SHOW Recommendations', async () => {
+    const eql = createEqlEngine({ catalog: intelligenceCatalog() });
+    const result = await eql.query('SHOW Recommendations');
+    assert.equal(result.count, 1);
+    assert.equal(result.rows[0].confidence, 'High');
+  });
+});

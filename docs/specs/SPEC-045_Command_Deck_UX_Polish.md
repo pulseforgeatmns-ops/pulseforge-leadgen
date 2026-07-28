@@ -100,3 +100,4 @@ Developer Details (optional metadata)
 - Additional attachment types (Campaign Brief, CRM Export, PDF)
 - Previous-prompt recall (`↑`)
 - Server-side presentation DTOs if client derivation becomes thin
+- Evidence-first Review interaction — delivered in [SPEC-047](SPEC-047_Review_Workspace_Interaction_Layer.md) / [ADR-031](../adr/ADR-031_Review_Must_Be_Evidence_First.md)
