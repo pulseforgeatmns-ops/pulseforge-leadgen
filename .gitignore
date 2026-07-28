@@ -12,3 +12,13 @@ sheets_credentials.json
 client_secret_*.json
 .DS_Store
 *.bak
+
+# Python research package (packages/kalshi-research) — local only
+**/.venv/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+packages/kalshi-research/*.db
+packages/kalshi-research/.env
+packages/kalshi-research/*.key
+.pytest_cache/
