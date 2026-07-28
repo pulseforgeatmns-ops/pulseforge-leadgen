@@ -10,6 +10,7 @@ const ARTIFACT_TYPES = Object.freeze({
   PROSPECT_LIST: 'ProspectList',
   COMPANY_INTELLIGENCE: 'CompanyIntelligence',
   OPPORTUNITY_RANKING: 'OpportunityRanking',
+  BUSINESS_INTELLIGENCE_PROFILE: 'BusinessIntelligenceProfile',
   SALES_INTELLIGENCE_PROFILE: 'SalesIntelligenceProfile',
   CAMPAIGN: 'Campaign',
   MAIL_PACKAGE: 'MailPackage',
@@ -26,6 +27,8 @@ const ALIAS_TO_TYPE = Object.freeze({
   enriched_list: ARTIFACT_TYPES.COMPANY_INTELLIGENCE,
   company_intelligence: ARTIFACT_TYPES.COMPANY_INTELLIGENCE,
   ranked_prospects: ARTIFACT_TYPES.OPPORTUNITY_RANKING,
+  business_intelligence_profile: ARTIFACT_TYPES.BUSINESS_INTELLIGENCE_PROFILE,
+  business_intelligence: ARTIFACT_TYPES.BUSINESS_INTELLIGENCE_PROFILE,
   sales_intelligence_profile: ARTIFACT_TYPES.SALES_INTELLIGENCE_PROFILE,
   sales_intelligence: ARTIFACT_TYPES.SALES_INTELLIGENCE_PROFILE,
   campaign: ARTIFACT_TYPES.CAMPAIGN,
@@ -47,6 +50,7 @@ const TYPE_TO_ALIAS = Object.freeze({
   [ARTIFACT_TYPES.PROSPECT_LIST]: 'prospect_list',
   [ARTIFACT_TYPES.COMPANY_INTELLIGENCE]: 'company_intelligence',
   [ARTIFACT_TYPES.OPPORTUNITY_RANKING]: 'ranked_prospects',
+  [ARTIFACT_TYPES.BUSINESS_INTELLIGENCE_PROFILE]: 'business_intelligence_profile',
   [ARTIFACT_TYPES.SALES_INTELLIGENCE_PROFILE]: 'sales_intelligence_profile',
   [ARTIFACT_TYPES.CAMPAIGN]: 'campaign',
   [ARTIFACT_TYPES.MAIL_PACKAGE]: 'mail_package',
@@ -156,7 +160,7 @@ const REGISTRY = Object.freeze({
     alias: 'ranked_prospects',
     schemaVersion: SCHEMA_VERSION,
     producers: ['opportunity_ranking'],
-    consumers: ['sales_intelligence', 'campaign_builder'],
+    consumers: ['business_intelligence', 'sales_intelligence', 'campaign_builder'],
     validate: (payload) => {
       const errors = [];
       const warnings = [];
@@ -168,6 +172,45 @@ const REGISTRY = Object.freeze({
           ? Number(payload.rankedCount)
           : prospects.length;
       if (count <= 0) errors.push('OpportunityRanking requires rankedCount > 0');
+      return { ok: errors.length === 0, warnings, errors };
+    },
+  }),
+  [ARTIFACT_TYPES.BUSINESS_INTELLIGENCE_PROFILE]: Object.freeze({
+    name: ARTIFACT_TYPES.BUSINESS_INTELLIGENCE_PROFILE,
+    alias: 'business_intelligence_profile',
+    schemaVersion: SCHEMA_VERSION,
+    producers: ['business_intelligence'],
+    consumers: ['sales_intelligence', 'campaign_review'],
+    validate: (payload) => {
+      const errors = [];
+      const warnings = [];
+      const profiles = Array.isArray(payload && payload.profiles)
+        ? payload.profiles
+        : [];
+      const count =
+        payload && payload.profileCount != null
+          ? Number(payload.profileCount)
+          : profiles.length;
+      if (count <= 0) {
+        errors.push('BusinessIntelligenceProfile requires profileCount > 0');
+      }
+      profiles.forEach((p, i) => {
+        if (!p || !p.company) {
+          errors.push(`BI Profile ${i + 1}: company is required`);
+        }
+        if (!p || !p.business_model) {
+          warnings.push(`BI Profile ${i + 1}: business_model recommended`);
+        }
+        if (!p || !p.revenue_model) {
+          warnings.push(`BI Profile ${i + 1}: revenue_model recommended`);
+        }
+        const unc = Array.isArray(p && p.uncertainty) ? p.uncertainty : [];
+        if (unc.length >= 4) {
+          warnings.push(
+            `BI Profile ${i + 1}: high uncertainty (${unc.length} items)`
+          );
+        }
+      });
       return { ok: errors.length === 0, warnings, errors };
     },
   }),
@@ -434,6 +477,23 @@ function extractPayload(artifactType, outputs) {
               ? out.prospects.length
               : 0,
       };
+    case ARTIFACT_TYPES.BUSINESS_INTELLIGENCE_PROFILE:
+      return {
+        profiles: Array.isArray(out.profiles)
+          ? out.profiles
+          : Array.isArray(out.businessIntelligenceProfiles)
+            ? out.businessIntelligenceProfiles
+            : [],
+        profileCount:
+          out.profileCount != null
+            ? Number(out.profileCount)
+            : Array.isArray(out.profiles)
+              ? out.profiles.length
+              : Array.isArray(out.businessIntelligenceProfiles)
+                ? out.businessIntelligenceProfiles.length
+                : 0,
+        byProspectId: out.byProspectId || null,
+      };
     case ARTIFACT_TYPES.SALES_INTELLIGENCE_PROFILE:
       return {
         profiles: Array.isArray(out.profiles)
@@ -506,6 +566,13 @@ function flattenArtifactsToOutputs(artifacts) {
       case ARTIFACT_TYPES.OPPORTUNITY_RANKING:
         prior.prospects = p.prospects;
         prior.rankedCount = p.rankedCount;
+        break;
+      case ARTIFACT_TYPES.BUSINESS_INTELLIGENCE_PROFILE:
+        prior.businessIntelligenceProfiles = p.profiles;
+        prior.businessIntelligenceProfileCount = p.profileCount;
+        if (p.byProspectId) {
+          prior.businessIntelligenceByProspectId = p.byProspectId;
+        }
         break;
       case ARTIFACT_TYPES.SALES_INTELLIGENCE_PROFILE:
         prior.salesIntelligenceProfiles = p.profiles;
@@ -583,6 +650,8 @@ function summarizeArtifact(artifact) {
       return `${p.enrichedCount != null ? p.enrichedCount : (p.prospects || []).length} Enriched`;
     case ARTIFACT_TYPES.OPPORTUNITY_RANKING:
       return `${p.rankedCount != null ? p.rankedCount : (p.prospects || []).length} Ranked`;
+    case ARTIFACT_TYPES.BUSINESS_INTELLIGENCE_PROFILE:
+      return `${p.profileCount != null ? p.profileCount : (p.profiles || []).length} Business Profiles`;
     case ARTIFACT_TYPES.SALES_INTELLIGENCE_PROFILE:
       return `${p.profileCount != null ? p.profileCount : (p.profiles || []).length} Sales Profiles`;
     case ARTIFACT_TYPES.CAMPAIGN: {

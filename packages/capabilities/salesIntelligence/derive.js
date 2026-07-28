@@ -49,7 +49,13 @@ function deriveSalesIntelligence(prospect, ctx = {}) {
   const playbook = ctx.playbook
     ? buildClientPlaybook(ctx.playbook)
     : null;
+  const bi =
+    prospect.businessIntelligenceProfile ||
+    prospect.businessIntelligence ||
+    ctx.businessIntelligence ||
+    null;
   const intel =
+    bi ||
     prospect.companyIntelligence ||
     ctx.companyIntelligence ||
     null;
@@ -59,8 +65,12 @@ function deriveSalesIntelligence(prospect, ctx = {}) {
     null;
 
   const company = resolveCompany(prospect, intel);
-  const industry = resolveIndustry(prospect, intel, playbook);
+  const industry =
+    (bi && bi.industry) || resolveIndustry(prospect, intel, playbook);
   const evidenceRefs = [];
+  if (bi && bi.prospectId) {
+    evidenceRefs.push(`business_intelligence:${bi.prospectId}`);
+  }
 
   const signalPkg =
     ctx.signalPackage ||
@@ -91,18 +101,38 @@ function deriveSalesIntelligence(prospect, ctx = {}) {
     });
   });
 
-  const decision = inferDecisionMaker(prospect, intel, industry);
+  // Prefer BI buying triggers when signal list is thin
+  if (bi && Array.isArray(bi.buying_triggers)) {
+    for (const trigger of bi.buying_triggers.slice(0, 3)) {
+      if (!buyingSignals.some((s) => s.signal === trigger)) {
+        evidenceRefs.push(`bi.buying_trigger:${trigger}`);
+        buyingSignals.push(
+          buildBuyingSignal({
+            signal: trigger,
+            confidence: bi.confidence,
+            confidenceScore: bi.confidenceScore,
+            evidence: 'Business Intelligence buying trigger',
+            source: 'business_intelligence',
+            evidenceRefs: [`bi.buying_trigger:${trigger}`],
+          })
+        );
+      }
+    }
+  }
+
+  const decision = inferDecisionMaker(prospect, intel, industry, bi);
   if (decision.evidenceRef) evidenceRefs.push(decision.evidenceRef);
 
-  const buyerType = inferBuyerType(industry, activeSignals, playbook);
-  const pains = inferPains(industry, activeSignals, brief, playbook);
+  const buyerType = inferBuyerType(industry, activeSignals, playbook, bi);
+  const pains = inferPains(industry, activeSignals, brief, playbook, bi);
   const advantages = resolveAnchorAdvantages(playbook);
-  const angle = resolveAngle(brief, activeSignals, signalPkg, pains);
+  const angle = resolveAngle(brief, activeSignals, signalPkg, pains, bi);
   const cta = resolveCta(playbook, brief);
   const claims = buildClaims(prospect, {
     company,
     industry,
     intel,
+    bi,
     activeSignals,
     brief,
     playbook,
@@ -112,12 +142,18 @@ function deriveSalesIntelligence(prospect, ctx = {}) {
   }
 
   const messaging = buildMessagingStrategy({
-    opening_focus: pains.primary_pain || angle || industry || 'operations',
+    opening_focus:
+      (bi && bi.qualityAnswers && bi.qualityAnswers.operationalPressures) ||
+      pains.primary_pain ||
+      angle ||
+      industry ||
+      'operations',
     avoid: resolveAvoid(playbook),
     social_proof: advantages.slice(0, 3),
     cta,
     tone: resolveTone(playbook, buyerType),
     positioning:
+      (bi && bi.service_angle) ||
       angle ||
       (advantages[0]
         ? `Reduce management burden through ${String(advantages[0]).toLowerCase()}.`
@@ -131,6 +167,7 @@ function deriveSalesIntelligence(prospect, ctx = {}) {
     buyingSignals,
     brief,
     playbook,
+    bi,
   });
 
   return buildSalesIntelligenceProfile({
@@ -153,6 +190,7 @@ function deriveSalesIntelligence(prospect, ctx = {}) {
     confidence: normalizeConfidenceLabel(confidenceScore),
     confidenceScore,
     evidenceRefs: [...new Set(evidenceRefs.filter(Boolean))],
+    businessIntelligenceProfileId: bi && bi.prospectId ? bi.prospectId : null,
     derivedAt: new Date().toISOString(),
   });
 }
@@ -200,7 +238,7 @@ function resolveIndustry(prospect, intel, playbook) {
   return '';
 }
 
-function inferDecisionMaker(prospect, intel, industry) {
+function inferDecisionMaker(prospect, intel, industry, bi) {
   const title = String(
     prospect.jobTitle ||
       prospect.title ||
@@ -225,6 +263,14 @@ function inferDecisionMaker(prospect, intel, industry) {
     }
   }
 
+  if (bi && Array.isArray(bi.decision_makers) && bi.decision_makers[0]) {
+    return {
+      role: String(bi.decision_makers[0]),
+      confidence: bi.confidence || CONFIDENCE_LABEL.MEDIUM,
+      evidenceRef: 'business_intelligence.decision_makers',
+    };
+  }
+
   const key = String(industry || '').toLowerCase();
   for (const [ind, role] of Object.entries(INDUSTRY_DEFAULT_BUYER)) {
     if (key.includes(ind) || ind.includes(key)) {
@@ -245,9 +291,11 @@ function inferDecisionMaker(prospect, intel, industry) {
   };
 }
 
-function inferBuyerType(industry, activeSignals, playbook) {
+function inferBuyerType(industry, activeSignals, playbook, bi) {
   const posture =
-    (activeSignals[0] && String(activeSignals[0].type || '')) || '';
+    (activeSignals[0] && String(activeSignals[0].type || '')) ||
+    (bi && bi.buying_triggers && bi.buying_triggers[0]) ||
+    '';
   if (/hir|staff|headcount/i.test(posture)) return BUYER_TYPES.OPERATIONS_FOCUSED;
   if (/expans|growth|location/i.test(posture)) return BUYER_TYPES.GROWTH_ORIENTED;
   if (playbook && playbook.brandVoice === 'relationship_first') {
@@ -256,15 +304,46 @@ function inferBuyerType(industry, activeSignals, playbook) {
   if (/property|management|real\s*estate/i.test(String(industry || ''))) {
     return BUYER_TYPES.RELATIONSHIP_DRIVEN;
   }
+  if (bi && /professional services/i.test(String(bi.business_model || ''))) {
+    return BUYER_TYPES.OPERATIONS_FOCUSED;
+  }
   return BUYER_TYPES.OPERATIONS_FOCUSED;
 }
 
-function inferPains(industry, activeSignals, brief, playbook) {
+function inferPains(industry, activeSignals, brief, playbook, bi) {
   const driving = activeSignals[0];
   let primary_pain = 'Reliable vendor execution';
   let secondary_pain = 'Tenant or staff complaints';
   let business_goal = 'Consistent facility presentation';
   let risk_if_unchanged = 'Increased management overhead';
+
+  if (bi) {
+    if (bi.operational_constraints && bi.operational_constraints[0]) {
+      primary_pain = bi.operational_constraints[0];
+    }
+    if (bi.operational_constraints && bi.operational_constraints[1]) {
+      secondary_pain = bi.operational_constraints[1];
+    } else if (bi.risk_factors && bi.risk_factors[0]) {
+      secondary_pain = bi.risk_factors[0];
+    }
+    if (bi.likely_kpis && bi.likely_kpis[0]) {
+      business_goal = `Improve ${String(bi.likely_kpis[0]).toLowerCase()}`;
+    }
+    if (bi.risk_factors && bi.risk_factors[0]) {
+      risk_if_unchanged = bi.risk_factors[0];
+    }
+    if (bi.qualityAnswers) {
+      if (bi.qualityAnswers.operationalPressures) {
+        primary_pain =
+          bi.qualityAnswers.operationalPressures.split(';')[0].trim() ||
+          primary_pain;
+      }
+      if (bi.qualityAnswers.outcomesThatMatter) {
+        business_goal = bi.qualityAnswers.outcomesThatMatter.split(';')[0].trim() ||
+          business_goal;
+      }
+    }
+  }
 
   if (driving) {
     if (/hir|staff/i.test(driving.type || driving.title || '')) {
@@ -285,7 +364,7 @@ function inferPains(industry, activeSignals, brief, playbook) {
     }
   }
 
-  if (/property\s*management/i.test(String(industry || ''))) {
+  if (/property\s*management/i.test(String(industry || '')) && !bi) {
     primary_pain = 'Reliable vendor execution';
     secondary_pain = 'Tenant complaints';
     business_goal = 'Consistent building presentation';
@@ -313,7 +392,10 @@ function resolveAnchorAdvantages(playbook) {
   return ['Owner-operated', 'Responsive communication', 'Consistent quality'];
 }
 
-function resolveAngle(brief, activeSignals, signalPkg, pains) {
+function resolveAngle(brief, activeSignals, signalPkg, pains, bi) {
+  if (bi && bi.service_angle) {
+    return String(bi.service_angle);
+  }
   if (brief && brief.bestOutreachAngle) {
     // Strip long prose into a short angle when possible
     const raw = String(brief.bestOutreachAngle);
@@ -366,15 +448,41 @@ function resolveTone(playbook, buyerType) {
 
 function buildClaims(prospect, ctx) {
   const claims = [];
-  if (ctx.industry && (prospect.industry || (ctx.intel && ctx.intel.industry))) {
+  if (ctx.industry && (prospect.industry || (ctx.intel && ctx.intel.industry) || (ctx.bi && ctx.bi.industry))) {
     claims.push(
       buildPersonalizationClaim({
         claim: `Operates in ${ctx.industry}`,
         evidenceRef: prospect.industry
           ? `prospect.industry:${prospect.industry}`
-          : `company_intelligence.industry:${ctx.industry}`,
+          : ctx.bi
+            ? `business_intelligence.industry:${ctx.industry}`
+            : `company_intelligence.industry:${ctx.industry}`,
         verified: true,
-        source: prospect.industry ? 'prospect' : 'company_intelligence',
+        source: prospect.industry
+          ? 'prospect'
+          : ctx.bi
+            ? 'business_intelligence'
+            : 'company_intelligence',
+      })
+    );
+  }
+  if (ctx.bi && ctx.bi.revenue_model) {
+    claims.push(
+      buildPersonalizationClaim({
+        claim: `Revenue model: ${ctx.bi.revenue_model}`,
+        evidenceRef: 'business_intelligence.revenue_model',
+        verified: true,
+        source: 'business_intelligence',
+      })
+    );
+  }
+  if (ctx.bi && ctx.bi.service_angle) {
+    claims.push(
+      buildPersonalizationClaim({
+        claim: ctx.bi.service_angle,
+        evidenceRef: 'business_intelligence.service_angle',
+        verified: true,
+        source: 'business_intelligence',
       })
     );
   }
@@ -442,6 +550,11 @@ function scoreProfileConfidence(args) {
   if ((args.buyingSignals || []).length) score += 0.1;
   if (args.brief) score += 0.08;
   if (args.playbook) score += 0.07;
+  if (args.bi && args.bi.confidenceScore != null) {
+    score += Math.min(0.12, Number(args.bi.confidenceScore) * 0.12);
+  } else if (args.bi) {
+    score += 0.06;
+  }
   return Math.max(0, Math.min(1, Number(score.toFixed(3))));
 }
 

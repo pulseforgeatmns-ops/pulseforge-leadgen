@@ -142,12 +142,29 @@ function parseIntent(text, opts = {}) {
     }
   }
 
-  // Pipeline-through phrases add SI without treating guidance as nodes
+  // Pipeline-through phrases add BI + SI without treating guidance as nodes
   const lowerSource = sourceText.toLowerCase();
   if (
     /through\s+sales\s+intelligence/.test(lowerSource) ||
+    /through\s+business\s+intelligence/.test(lowerSource) ||
     /complete\s+pipeline/.test(lowerSource)
   ) {
+    const hasBi = execution.some(
+      (e) =>
+        e.stageId === 'business_intelligence' ||
+        e.capabilityId === 'business_intelligence'
+    );
+    if (!hasBi) {
+      pushExecution(
+        execution,
+        {
+          stageId: 'business_intelligence',
+          capabilityId: 'business_intelligence',
+          label: 'Business Intelligence',
+        },
+        notes
+      );
+    }
     const hasSi = execution.some(
       (e) => e.stageId === 'sales_intelligence' || e.capabilityId === 'sales_intelligence'
     );

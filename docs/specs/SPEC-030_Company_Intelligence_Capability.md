@@ -11,7 +11,8 @@
 | **Depends on** | SPEC-022, SPEC-023, SPEC-024, SPEC-028 (Client Playbook), SPEC-014 (Knowledge dual-write), ADR-002, ADR-005, ADR-010, ADR-011, ADR-017 |
 | **Deepened by** | [SPEC-031](SPEC-031_Business_Signals_Capability.md) Business Signals (lifecycle, decay, Active set) / [ADR-018](../adr/ADR-018_Time_Matters.md) |
 | **Supersedes (scope)** | Unfinished Company Enrichment work formerly tracked as SPEC-025 |
-| **Consumed by** | Opportunity Ranking (SPEC-026), Campaign Builder, Proposal Generator (SPEC-027B), Execution Engine (SPEC-029), Knowledge Update, Command Deck Company Intelligence |
+| **Reasoning superseded by** | [SPEC-053](SPEC-053_Business_Intelligence_Engine.md) Business Intelligence (analytical profiles) / [ADR-037](../adr/ADR-037_Reason_About_Businesses_Not_Companies.md) — SPEC-030 remains the contact/firmographic enrichment contract |
+| **Consumed by** | Opportunity Ranking (SPEC-026), Campaign Builder, Proposal Generator (SPEC-027B), Execution Engine (SPEC-029), Knowledge Update, Command Deck Company Enrichment |
 
 ## Objective
 

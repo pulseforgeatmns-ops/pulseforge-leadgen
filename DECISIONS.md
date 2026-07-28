@@ -37,6 +37,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-034](docs/adr/ADR-034_Intent_Before_Execution.md) | Intent Before Execution | Accepted | Mission Plan IR is the executable contract; capabilities never consume raw operator Notes; unknown text becomes Notes |
 | [ADR-035](docs/adr/ADR-035_Plan_Around_State_Not_Sequence.md) | Plan Around State, Not Sequence | Accepted | Mission Planning resolves artifact requirements before selecting capabilities; Discovery is an acquisition strategy |
 | [ADR-036](docs/adr/ADR-036_Trust_Through_Contracts.md) | Trust Through Contracts | Accepted | Artifacts validated at system boundaries before Artifact Bus; capabilities consume trusted contracts and do not re-verify |
+| [ADR-037](docs/adr/ADR-037_Reason_About_Businesses_Not_Companies.md) | Reason About Businesses, Not Companies | Accepted | Model business operations (Business Intelligence) rather than company directories; Sales Intelligence consumes BI; uncertainty explicit |
 
 ## How to add a decision
 

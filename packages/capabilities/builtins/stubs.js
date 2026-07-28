@@ -492,6 +492,12 @@ function registerBuiltinCapabilities(registry, options = {}) {
   register(createKnowledgeUpdateStub());
   register(createOpportunityRankingCapability(options.ranking || {}));
   const {
+    createBusinessIntelligenceCapability,
+  } = require('../businessIntelligence');
+  register(
+    createBusinessIntelligenceCapability(options.businessIntelligence || {})
+  );
+  const {
     createSalesIntelligenceCapability,
   } = require('../salesIntelligence');
   register(
@@ -552,6 +558,8 @@ module.exports = {
   createKnowledgeUpdateStub,
   createOpportunityRankingStub,
   createOpportunityRankingCapability,
+  createBusinessIntelligenceCapability: require('../businessIntelligence')
+    .createBusinessIntelligenceCapability,
   createSalesIntelligenceCapability: require('../salesIntelligence')
     .createSalesIntelligenceCapability,
   createCampaignBuilderStub,

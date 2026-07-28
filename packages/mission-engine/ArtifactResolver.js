@@ -62,6 +62,7 @@ const STAGE_ACQUISITION_COST = Object.freeze({
   company_enrichment: 80,
   knowledge_update: 40,
   opportunity_ranking: 70,
+  business_intelligence: 55,
   sales_intelligence: 60,
   campaign_builder: 90,
   mail_package_generator: 50,

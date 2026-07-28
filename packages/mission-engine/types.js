@@ -151,6 +151,7 @@ const STAGE_LABELS = Object.freeze({
   company_enrichment: 'Enriching Companies',
   knowledge_update: 'Updating Knowledge',
   opportunity_ranking: 'Ranking Opportunities',
+  business_intelligence: 'Building Business Intelligence',
   sales_intelligence: 'Building Sales Intelligence',
   campaign_builder: 'Building Campaign',
   proposal_generator: 'Generating Proposal',

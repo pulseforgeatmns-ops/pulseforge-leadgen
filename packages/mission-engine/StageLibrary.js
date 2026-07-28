@@ -44,7 +44,7 @@ const STAGE_LIBRARY = Object.freeze({
   }),
   company_enrichment: Object.freeze({
     id: 'company_enrichment',
-    name: 'Company Intelligence',
+    name: 'Company Enrichment',
     capabilityId: BUILTIN_IDS.COMPANY_ENRICHMENT,
     consumes: ['prospect_list'],
     produces: ['enriched_list', 'company_intelligence'],
@@ -52,10 +52,9 @@ const STAGE_LIBRARY = Object.freeze({
     reviewRequired: false,
     priority: 20,
     outcomePatterns: [
-      /\bcompany\s+intelligence\b/i,
+      /\bcompany\s+enrichment\b/i,
       /\benrich(ment|ing)?\b/i,
-      /\bgenerate\s+(company\s+)?intelligence\b/i,
-      /\banalyze\s+(the\s+)?compan(y|ies)\b/i,
+      /\benrich(ed)?\s+compan(y|ies)\b/i,
     ],
   }),
   knowledge_update: Object.freeze({
@@ -88,13 +87,31 @@ const STAGE_LIBRARY = Object.freeze({
       /\bwho\s+should\s+we\s+contact\b/i,
     ],
   }),
+  business_intelligence: Object.freeze({
+    id: 'business_intelligence',
+    name: 'Business Intelligence',
+    capabilityId: BUILTIN_IDS.BUSINESS_INTELLIGENCE,
+    consumes: ['ranked_prospects'],
+    produces: ['business_intelligence_profile'],
+    dependencies: ['opportunity_ranking'],
+    reviewRequired: false,
+    priority: 33,
+    outcomePatterns: [
+      /\bbusiness\s+intelligence\b/i,
+      /\bbusiness\s+profile\b/i,
+      /\breason\s+about\s+(the\s+)?business\b/i,
+      /\bcompany\s+intelligence\b/i,
+      /\banalyze\s+(the\s+)?compan(y|ies)\b/i,
+      /\bgenerate\s+(company\s+)?intelligence\b/i,
+    ],
+  }),
   sales_intelligence: Object.freeze({
     id: 'sales_intelligence',
     name: 'Sales Intelligence',
     capabilityId: BUILTIN_IDS.SALES_INTELLIGENCE,
-    consumes: ['ranked_prospects', 'company_intelligence'],
+    consumes: ['ranked_prospects', 'business_intelligence_profile'],
     produces: ['sales_intelligence_profile'],
-    dependencies: ['opportunity_ranking'],
+    dependencies: ['business_intelligence'],
     reviewRequired: false,
     priority: 35,
     outcomePatterns: [
@@ -249,6 +266,7 @@ const TYPE_SEED_STAGES = Object.freeze({
     'company_enrichment',
     'knowledge_update',
     'opportunity_ranking',
+    'business_intelligence',
     'sales_intelligence',
     'campaign_builder',
   ],
@@ -257,6 +275,7 @@ const TYPE_SEED_STAGES = Object.freeze({
     'company_enrichment',
     'knowledge_update',
     'opportunity_ranking',
+    'business_intelligence',
     'sales_intelligence',
   ],
   [MISSION_TYPES.OVERFLOW_PARTNER_SEARCH]: [
@@ -264,6 +283,7 @@ const TYPE_SEED_STAGES = Object.freeze({
     'company_enrichment',
     'knowledge_update',
     'opportunity_ranking',
+    'business_intelligence',
     'sales_intelligence',
   ],
   [MISSION_TYPES.ACQUISITION_SEARCH]: [
@@ -271,6 +291,7 @@ const TYPE_SEED_STAGES = Object.freeze({
     'company_enrichment',
     'knowledge_update',
     'opportunity_ranking',
+    'business_intelligence',
     'sales_intelligence',
   ],
   [MISSION_TYPES.COMPETITOR_RESEARCH]: [
@@ -311,7 +332,17 @@ const COMPOSITION_EDGES = Object.freeze([
   Object.freeze({
     from: 'company_enrichment',
     to: 'opportunity_ranking',
-    reason: 'Ranking prefers Company Intelligence when both are selected',
+    reason: 'Ranking prefers Company Enrichment when both are selected',
+  }),
+  Object.freeze({
+    from: 'opportunity_ranking',
+    to: 'business_intelligence',
+    reason: 'Business Intelligence consumes ranked prospects when both are selected',
+  }),
+  Object.freeze({
+    from: 'business_intelligence',
+    to: 'sales_intelligence',
+    reason: 'Sales Intelligence consumes Business Intelligence when both are selected',
   }),
   Object.freeze({
     from: 'opportunity_ranking',

@@ -264,8 +264,20 @@
             ? p.prospects.length
             : 0;
       return {
-        title: 'Company Intelligence',
+        title: 'Company Enrichment',
         summary: `${n} packages`,
+      };
+    }
+    if (type === 'BusinessIntelligenceProfile') {
+      const n =
+        p.profileCount != null
+          ? Number(p.profileCount)
+          : Array.isArray(p.profiles)
+            ? p.profiles.length
+            : 0;
+      return {
+        title: 'Business Intelligence',
+        summary: `${n} ${n === 1 ? 'profile' : 'profiles'}`,
       };
     }
     if (type === 'OpportunityRanking') {
@@ -397,6 +409,11 @@
       pkg.prospectId ||
       `pkg-${index}-${String(company).toLowerCase().replace(/\s+/g, '-')}`;
     const sales = pkg.salesIntelligence || pkg.salesIntelligenceProfile || null;
+    const bi =
+      pkg.businessIntelligence ||
+      pkg.businessIntelligenceProfile ||
+      (sales && sales.businessIntelligence) ||
+      null;
     const messaging =
       pkg.messagingStrategy ||
       (sales && sales.messaging_strategy) ||
@@ -418,6 +435,7 @@
       needsReview,
       ready,
       approved: Boolean(pkg.approved),
+      businessIntelligence: bi,
       salesIntelligence: sales,
       messagingStrategy: messaging,
       operatorConfidence,
@@ -480,6 +498,7 @@
           },
           confidence: row.confidence,
           warnings: row.warnings || [],
+          businessIntelligence: row.businessIntelligence || null,
           salesIntelligence: row.salesIntelligence || null,
           messagingStrategy:
             (row.salesIntelligence && row.salesIntelligence.messaging_strategy) ||
@@ -800,8 +819,9 @@
   function formatStageLabel(stageId) {
     const labels = {
       prospect_discovery: 'Discovery',
-      company_enrichment: 'Company Intelligence',
+      company_enrichment: 'Company Enrichment',
       opportunity_ranking: 'Opportunity Ranking',
+      business_intelligence: 'Business Intelligence',
       sales_intelligence: 'Sales Intelligence',
       campaign_builder: 'Campaign Builder',
     };
@@ -1705,6 +1725,97 @@
     }
   }
 
+  function renderBusinessIntelligenceHtml(pkg) {
+    const bi = pkg && pkg.businessIntelligence;
+    if (!bi) {
+      return `<section class="msn-si-block">
+        <h4 class="msn-subhead">Business Intelligence</h4>
+        <p class="msn-objective-meta">No Business Intelligence Profile attached to this package.</p>
+      </section>`;
+    }
+    const rows = [
+      ['Company', bi.company],
+      ['Industry', bi.industry],
+      ['Business model', bi.business_model],
+      ['Revenue model', bi.revenue_model],
+      ['Primary customers', bi.primary_customers],
+      ['Growth strategy', bi.growth_strategy],
+      ['Competitive position', bi.competitive_position],
+      ['Vendor landscape', bi.vendor_landscape],
+      ['Seasonality', bi.seasonality],
+      ['Service angle', bi.service_angle],
+      ['Confidence', bi.confidence],
+    ];
+    const answers = bi.qualityAnswers || {};
+    const answerRows = [
+      ['How they make money', answers.howTheyMakeMoney],
+      ['Growth constraints', answers.growthConstraints],
+      ['Operational pressures', answers.operationalPressures],
+      ['Problem owner', answers.problemOwner],
+      ['Why buy now', answers.whyBuyNow],
+    ];
+    const constraints = Array.isArray(bi.operational_constraints)
+      ? bi.operational_constraints
+      : [];
+    const kpis = Array.isArray(bi.likely_kpis) ? bi.likely_kpis : [];
+    const triggers = Array.isArray(bi.buying_triggers) ? bi.buying_triggers : [];
+    const uncertainty = Array.isArray(bi.uncertainty) ? bi.uncertainty : [];
+    return `<section class="msn-si-block">
+      <h4 class="msn-subhead">Business Intelligence</h4>
+      <dl class="msn-si-dl">
+        ${rows
+          .filter(([, v]) => v)
+          .map(
+            ([k, v]) =>
+              `<div class="msn-si-row"><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(
+                String(v)
+              )}</dd></div>`
+          )
+          .join('')}
+      </dl>
+      <h5 class="msn-subhead">Required reasoning</h5>
+      <dl class="msn-si-dl">
+        ${answerRows
+          .filter(([, v]) => v)
+          .map(
+            ([k, v]) =>
+              `<div class="msn-si-row"><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(
+                String(v)
+              )}</dd></div>`
+          )
+          .join('')}
+      </dl>
+      ${
+        constraints.length
+          ? `<p class="msn-objective-meta"><strong>Constraints:</strong> ${escapeHtml(
+              constraints.join(' · ')
+            )}</p>`
+          : ''
+      }
+      ${
+        kpis.length
+          ? `<p class="msn-objective-meta"><strong>Likely KPIs:</strong> ${escapeHtml(
+              kpis.join(' · ')
+            )}</p>`
+          : ''
+      }
+      ${
+        triggers.length
+          ? `<p class="msn-objective-meta"><strong>Buying triggers:</strong> ${escapeHtml(
+              triggers.join(' · ')
+            )}</p>`
+          : ''
+      }
+      ${
+        uncertainty.length
+          ? `<p class="msn-objective-meta"><strong>Uncertainty:</strong> ${escapeHtml(
+              uncertainty.slice(0, 5).join(' · ')
+            )}</p>`
+          : ''
+      }
+    </section>`;
+  }
+
   function renderSalesIntelligenceHtml(pkg) {
     const sales = pkg && pkg.salesIntelligence;
     if (!sales) {
@@ -1905,6 +2016,7 @@
           pkg.confidenceLabel
         )}</p></div>
       </div>
+      ${renderBusinessIntelligenceHtml(pkg)}
       ${renderSalesIntelligenceHtml(pkg)}
       ${renderMessagingStrategyHtml(pkg)}
       ${renderOperatorConfidenceHtml(pkg)}
@@ -2605,7 +2717,7 @@
         pendingImport && !isDiscoveryBlockedUi(mission)
           ? pendingImport.errors && pendingImport.errors.length
             ? `A prospect list was detected in the Mission prompt but needs fixes before import: ${pendingImport.errors[0]}`
-            : 'A prospect list was detected in the Mission prompt. Import it to skip Discovery and continue at Company Intelligence.'
+            : 'A prospect list was detected in the Mission prompt. Import it to skip Discovery and continue at Business Intelligence.'
           : (Array.isArray(mission.blockingIssues) &&
               mission.blockingIssues[0]) ||
             (mission.stageReview &&

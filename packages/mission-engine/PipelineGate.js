@@ -61,6 +61,13 @@ const STAGE_CONTRACTS = Object.freeze({
     expectedOutputs: ['ranked_prospects'],
     validate: validateRanking,
   },
+  [BUILTIN_IDS.BUSINESS_INTELLIGENCE]: {
+    id: BUILTIN_IDS.BUSINESS_INTELLIGENCE,
+    label: 'Business Intelligence',
+    requiredInputs: ['ranked_prospects'],
+    expectedOutputs: ['business_intelligence_profile'],
+    validate: validateBusinessIntelligence,
+  },
   [BUILTIN_IDS.SALES_INTELLIGENCE]: {
     id: BUILTIN_IDS.SALES_INTELLIGENCE,
     label: 'Sales Intelligence',
@@ -393,6 +400,62 @@ function validateRanking(result, context) {
     return warningPass(result, warnings, rankedCount, 'ranked_prospects');
   }
   return successPass(result, warnings, rankedCount);
+}
+
+function validateBusinessIntelligence(result, context) {
+  const outputs = result.outputs || {};
+  const warnings = [...(result.warnings || [])];
+  const prior =
+    (context.inputs && context.inputs.prospects) ||
+    (context.priorOutputs && context.priorOutputs.prospects) ||
+    [];
+  const priorCount = Array.isArray(prior) ? prior.length : 0;
+  const profiles = Array.isArray(outputs.profiles)
+    ? outputs.profiles
+    : Array.isArray(outputs.businessIntelligenceProfiles)
+      ? outputs.businessIntelligenceProfiles
+      : [];
+  const profileCount =
+    outputs.profileCount != null ? Number(outputs.profileCount) : profiles.length;
+
+  if (priorCount > 0 && profileCount === 0) {
+    return {
+      outcome: STAGE_OUTCOMES.BLOCKED,
+      blockingIssues: [
+        'Business Intelligence produced no profiles for available prospects.',
+      ],
+      warnings,
+      publishedArtifacts: [],
+      quarantinedArtifacts: stampArtifacts(result.artifacts || [], {
+        validationStatus: ARTIFACT_VALIDATION_STATUS.QUARANTINED,
+        reason: 'Empty business intelligence',
+      }),
+      reason: 'empty_business_intelligence',
+      reviewSummary: {
+        stageStatus: STAGE_OUTCOME_LABELS[STAGE_OUTCOMES.BLOCKED],
+        publishedCount: 0,
+      },
+    };
+  }
+
+  const uncertain = profiles.filter(
+    (p) => Array.isArray(p.uncertainty) && p.uncertainty.length > 0
+  );
+  if (uncertain.length) {
+    warnings.push(
+      `${uncertain.length} of ${profileCount} BI profiles expose explicit uncertainty`
+    );
+  }
+
+  if (warnings.length) {
+    return warningPass(
+      result,
+      warnings,
+      profileCount,
+      'business_intelligence_profile'
+    );
+  }
+  return successPass(result, warnings, profileCount);
 }
 
 function validateSalesIntelligence(result, context) {
