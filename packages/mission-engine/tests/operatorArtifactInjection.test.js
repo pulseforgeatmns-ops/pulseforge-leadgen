@@ -1,0 +1,244 @@
+'use strict';
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const {
+  createMissionEngine,
+  createArtifactBus,
+  OperatorArtifactInjection,
+  STAGE_OUTCOMES,
+  AUDIT_KINDS,
+  MISSION_STATUS,
+  ARTIFACT_VALIDATION_STATUS,
+  discoveryRecoveryActions,
+} = require('..');
+const {
+  createBuiltinRegistry,
+  BUILTIN_IDS,
+} = require('../../capabilities');
+
+const {
+  parseDelimitedProspects,
+  validateOperatorProspectRows,
+  publishOperatorProspectList,
+  OPERATOR_PRODUCERS,
+  OPERATOR_SOURCES,
+} = OperatorArtifactInjection;
+
+function testEngine() {
+  return createMissionEngine({
+    registry: createBuiltinRegistry({ discovery: { useFixture: true } }),
+  });
+}
+
+async function blockedDiscoveryMission(engine) {
+  let mission = await engine.createFromObjective({
+    objective: 'Build Campaign 001 for Anchor Cleaning',
+    tenantId: 10,
+    clientId: 10,
+    execute: false,
+    constraints: { targetCount: 5 },
+  });
+  const steps = ((mission.plan && mission.plan.steps) || []).map((s) =>
+    s.stageId === 'prospect_discovery' ||
+    s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY
+      ? {
+          ...s,
+          status: 'blocked',
+          outcome: STAGE_OUTCOMES.BLOCKED,
+          blockingIssues: [
+            'Discovery returned zero verified companies. Campaign generation cannot continue.',
+          ],
+        }
+      : s
+  );
+  mission = await engine.store.update({
+    id: mission.id,
+    status: MISSION_STATUS.WAITING,
+    plan: { ...mission.plan, steps },
+    blockingIssues: [
+      'Discovery returned zero verified companies. Campaign generation cannot continue.',
+    ],
+    stageReview: {
+      capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
+      outcome: STAGE_OUTCOMES.BLOCKED,
+      blockingIssues: [
+        'Discovery returned zero verified companies. Campaign generation cannot continue.',
+      ],
+    },
+    deliverables: {
+      artifactBus: { version: 1, artifacts: [], events: [] },
+      stepResults: [],
+    },
+    progress: {
+      ...(mission.progress || {}),
+      currentStage: 'Blocked — Discovery returned zero verified companies',
+      stageOutcome: STAGE_OUTCOMES.BLOCKED,
+    },
+  });
+  return mission;
+}
+
+describe('SPEC-043 OperatorArtifactInjection normalize/validate', () => {
+  it('parses CSV with headers into prospect rows', () => {
+    const rows = parseDelimitedProspects(
+      'Company Name,Website,Address\nAcme Law,https://acme.example,1 Main St\nBeta CPA,,2 Oak'
+    );
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].companyName, 'Acme Law');
+    assert.equal(rows[0].website, 'https://acme.example');
+    assert.equal(rows[1].companyName, 'Beta CPA');
+    assert.equal(rows[1].website, null);
+  });
+
+  it('requires company name and warns on missing recommended fields', () => {
+    const result = validateOperatorProspectRows([
+      { companyName: 'Acme' },
+      { website: 'https://x.example' },
+    ]);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => /Company Name is required/i.test(e)));
+    assert.equal(result.prospects.length, 1);
+    assert.ok(result.warnings.some((w) => /Website recommended/i.test(w)));
+  });
+
+  it('publishes consumable ProspectList with operator provenance', () => {
+    const bus = createArtifactBus();
+    const published = publishOperatorProspectList({
+      bus,
+      missionId: 'msn_op',
+      csv: 'Company Name,Website,Address\nAcme Law,https://acme.example,1 Main St',
+      createdBy: 'op@example.com',
+    });
+    assert.equal(published.ok, true);
+    assert.equal(published.producer, OPERATOR_PRODUCERS.IMPORT);
+    assert.equal(published.source, OPERATOR_SOURCES.CSV_IMPORT);
+    assert.ok(
+      [
+        ARTIFACT_VALIDATION_STATUS.VALID,
+        ARTIFACT_VALIDATION_STATUS.VALID_WITH_WARNINGS,
+      ].includes(published.artifact.validationStatus)
+    );
+    assert.equal(
+      published.artifact.metadata.provenance.createdBy,
+      'op@example.com'
+    );
+    const latest = bus.getLatestArtifact('msn_op', 'ProspectList');
+    assert.equal(latest.id, published.artifact.id);
+    assert.equal(latest.producer, OPERATOR_PRODUCERS.IMPORT);
+  });
+});
+
+describe('SPEC-043 MissionEngine injectProspectList', () => {
+  it('surfaces Import Prospect List recovery when Discovery is blocked', async () => {
+    const engine = testEngine();
+    const mission = await blockedDiscoveryMission(engine);
+    const workspace = await engine.getWorkspace(mission.id);
+    assert.ok(
+      workspace.recoveryActions.some((a) => a.id === 'import_prospect_list')
+    );
+    assert.ok(
+      discoveryRecoveryActions(mission).some((a) => a.id === 'retry_discovery')
+    );
+  });
+
+  it('marks Discovery Satisfied (Operator Supplied) and resumes Mission', async () => {
+    const engine = testEngine();
+    const blocked = await blockedDiscoveryMission(engine);
+    const result = await engine.injectProspectList({
+      missionId: blocked.id,
+      csv:
+        'Company Name,Website,Address\n' +
+        'Granite State Law,https://gslaw.example,100 Elm St Manchester NH\n' +
+        'Queen City CPA,https://qcpa.example,200 Bridge St Manchester NH',
+      createdBy: 'tester@gopulseforge.com',
+    });
+
+    assert.equal(result.executed, true);
+    assert.ok(result.artifact);
+    assert.equal(result.artifact.producer, OPERATOR_PRODUCERS.IMPORT);
+
+    const discovery = result.mission.plan.steps.find(
+      (s) =>
+        s.stageId === 'prospect_discovery' ||
+        s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY
+    );
+    assert.ok(discovery);
+    assert.equal(discovery.status, 'completed');
+    assert.equal(
+      discovery.outcome,
+      STAGE_OUTCOMES.SATISFIED_OPERATOR_SUPPLIED
+    );
+    assert.match(String(discovery.outcomeLabel || ''), /Operator Supplied/i);
+
+    const bus = createArtifactBus({
+      snapshot: result.mission.deliverables.artifactBus,
+    });
+    const list = bus.getLatestArtifact(blocked.id, 'ProspectList');
+    assert.ok(list);
+    assert.equal(list.producer, OPERATOR_PRODUCERS.IMPORT);
+    assert.equal(list.payload.prospectCount, 2);
+
+    // Company Intelligence consumes by type/status — origin is provenance only
+    const enrichment = result.mission.plan.steps.find(
+      (s) =>
+        s.stageId === 'company_enrichment' ||
+        s.capabilityId === BUILTIN_IDS.COMPANY_ENRICHMENT
+    );
+    assert.ok(enrichment);
+    assert.notEqual(enrichment.status, 'blocked');
+    assert.notEqual(enrichment.status, 'queued');
+
+    const audit = await engine.listAudit(blocked.id);
+    assert.ok(audit.some((a) => a.kind === AUDIT_KINDS.ARTIFACT_INJECTED));
+    assert.ok(audit.some((a) => a.kind === AUDIT_KINDS.STAGE_SATISFIED));
+
+    assert.ok(
+      [MISSION_STATUS.REVIEW_REQUIRED, MISSION_STATUS.WAITING].includes(
+        result.mission.status
+      ) || result.mission.status === MISSION_STATUS.COMPLETED
+    );
+  });
+
+  it('rejects invalid imports without publishing a consumable list', async () => {
+    const engine = testEngine();
+    const blocked = await blockedDiscoveryMission(engine);
+    await assert.rejects(
+      () =>
+        engine.injectProspectList({
+          missionId: blocked.id,
+          prospects: [{ website: 'https://no-name.example' }],
+          execute: false,
+        }),
+      /Company Name|validation failed/i
+    );
+    const mission = await engine.get(blocked.id);
+    const bus = createArtifactBus({
+      snapshot:
+        (mission.deliverables && mission.deliverables.artifactBus) || null,
+    });
+    assert.equal(bus.getLatestArtifact(blocked.id, 'ProspectList'), null);
+  });
+
+  it('keeps Discovery fixture path working (regression)', async () => {
+    const engine = testEngine();
+    const mission = await engine.createFromObjective({
+      objective: 'Build Campaign 001 for Anchor Cleaning',
+      tenantId: 10,
+      clientId: 10,
+      constraints: { targetCount: 5 },
+    });
+    assert.ok(mission.deliverables && mission.deliverables.artifactBus);
+    const bus = createArtifactBus({
+      snapshot: mission.deliverables.artifactBus,
+    });
+    const list = bus.getLatestArtifact(mission.id, 'ProspectList');
+    assert.ok(list, 'Discovery should still publish ProspectList');
+    assert.ok(list.payload.prospectCount > 0);
+    const history = bus.getArtifactHistory(mission.id, 'ProspectList');
+    assert.ok(
+      history.some((a) => a.producer === BUILTIN_IDS.PROSPECT_DISCOVERY),
+      'Discovery remains a ProspectList producer'
+    );
+  });
+});

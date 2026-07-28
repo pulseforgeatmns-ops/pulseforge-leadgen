@@ -13,6 +13,8 @@ const {
   MISSION_STATUS,
   AUDIT_KINDS,
   REVIEW_ACTIONS,
+  STAGE_OUTCOMES,
+  isTerminalStatus,
   missionEnabled,
 } = require('./types');
 const {
@@ -22,6 +24,9 @@ const {
   createInMemoryActiveMissionBindingStore,
 } = require('./ActiveMissionBindingStore');
 const { createArtifactBus } = require('./ArtifactBus');
+const { publishOperatorProspectList } = require('./OperatorArtifactInjection');
+const { STAGE_OUTCOME_LABELS } = require('./PipelineGate');
+const { BUILTIN_IDS } = require('../capabilities/types');
 
 class MissionEngine {
   /**
@@ -342,7 +347,8 @@ class MissionEngine {
       artifactEvents: bus.events(mission.id),
       review: mission.review,
       audit,
-      actions: ['approve', 'reject', 'edit', 'run_again'],
+      actions: workspaceActions(mission),
+      recoveryActions: discoveryRecoveryActions(mission),
       outboundBlocked: true,
     };
   }
@@ -380,6 +386,237 @@ class MissionEngine {
     );
     return bus.replayFromArtifact(missionId, artifactId, { planStageIds });
   }
+
+  /**
+   * SPEC-043 — operator injects a validated ProspectList onto the Artifact Bus.
+   * Marks Discovery Satisfied (Operator Supplied) and resumes at Company Intelligence.
+   *
+   * @param {object} input
+   * @param {string} input.missionId
+   * @param {object[]} [input.prospects]
+   * @param {string} [input.csv]
+   * @param {string} [input.paste]
+   * @param {string} [input.source]
+   * @param {string} [input.createdBy]
+   * @param {boolean} [input.execute=true]
+   */
+  async injectProspectList(input = {}) {
+    if (!input.missionId) throw new Error('missionId is required');
+    let mission = await this.get(input.missionId);
+    if (!mission) throw new Error(`Unknown mission: ${input.missionId}`);
+    if (isTerminalStatus(mission.status)) {
+      const err = new Error('Cannot inject artifacts into a terminal Mission');
+      err.code = 'mission_terminal';
+      throw err;
+    }
+
+    const steps = (mission.plan && mission.plan.steps) || [];
+    const discoveryIdx = steps.findIndex(
+      (s) =>
+        s.stageId === 'prospect_discovery' ||
+        s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY
+    );
+    if (discoveryIdx < 0) {
+      const err = new Error('Mission plan has no Discovery stage');
+      err.code = 'no_discovery_stage';
+      throw err;
+    }
+
+    const bus = createArtifactBus({
+      snapshot:
+        (mission.deliverables && mission.deliverables.artifactBus) || null,
+    });
+
+    const published = publishOperatorProspectList({
+      bus,
+      missionId: mission.id,
+      stageId: 'prospect_discovery',
+      prospects: input.prospects,
+      csv: input.csv,
+      paste: input.paste,
+      source: input.source,
+      createdBy: input.createdBy || 'operator',
+      targetCount:
+        (mission.constraints && mission.constraints.targetCount) || undefined,
+    });
+
+    if (!published.ok) {
+      const err = new Error(
+        (published.errors && published.errors[0]) ||
+          'ProspectList validation failed'
+      );
+      err.code = 'prospect_list_invalid';
+      err.errors = published.errors;
+      err.warnings = published.warnings;
+      throw err;
+    }
+
+    const outcome = STAGE_OUTCOMES.SATISFIED_OPERATOR_SUPPLIED;
+    const outcomeLabel =
+      STAGE_OUTCOME_LABELS[outcome] || 'Satisfied (Operator Supplied)';
+
+    // Preserve completed upstream/peer steps; satisfy Discovery; invalidate
+    // downstream that depended on a prior ProspectList when present.
+    const nextSteps = steps.map((s, idx) => {
+      if (idx === discoveryIdx) {
+        return {
+          ...s,
+          status: 'completed',
+          outcome,
+          outcomeLabel,
+          error: undefined,
+          blockingIssues: [],
+          warnings: published.warnings || [],
+          reviewSummary: {
+            stageStatus: outcomeLabel,
+            publishedCount:
+              (published.payload && published.payload.prospectCount) || 0,
+            operatorSupplied: true,
+          },
+        };
+      }
+      if (idx > discoveryIdx && s.status === 'completed') {
+        return { ...s, status: 'stale' };
+      }
+      if (
+        idx > discoveryIdx &&
+        (s.status === 'blocked' || s.status === 'failed' || s.status === 'running')
+      ) {
+        return { ...s, status: 'queued', error: undefined, blockingIssues: [] };
+      }
+      return s;
+    });
+
+    const payload = published.payload || {};
+    const stepResult = {
+      capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
+      name: 'Discovery',
+      stageId: 'prospect_discovery',
+      outcome,
+      outcomeLabel,
+      operatorSupplied: true,
+      outputs: {
+        prospects: payload.prospects,
+        prospectCount: payload.prospectCount,
+        targetCount: payload.targetCount,
+        summary: payload.summary,
+      },
+      evidence: [
+        {
+          kind: 'operator_artifact',
+          summary: `Operator supplied ProspectList (${payload.prospectCount} prospects) via ${published.source}`,
+        },
+      ],
+    };
+
+    const priorStepResults = Array.isArray(
+      mission.deliverables && mission.deliverables.stepResults
+    )
+      ? mission.deliverables.stepResults.filter(
+          (s) => s.capabilityId !== BUILTIN_IDS.PROSPECT_DISCOVERY
+        )
+      : [];
+
+    mission = await this._store.update({
+      id: mission.id,
+      status: MISSION_STATUS.WAITING,
+      plan: { ...mission.plan, steps: nextSteps },
+      blockingIssues: [],
+      stageReview: {
+        capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
+        outcome,
+        outcomeLabel,
+        blockingIssues: [],
+        warnings: published.warnings || [],
+        reviewSummary: stepResult.reviewSummary || null,
+        publishedArtifacts: [
+          {
+            type: 'prospect_list',
+            artifactId: published.artifact.id,
+            revision: published.artifact.revision,
+            validationStatus: published.artifact.validationStatus,
+          },
+        ],
+        quarantinedArtifacts: [],
+        operatorSupplied: true,
+      },
+      progress: {
+        ...(mission.progress || {}),
+        currentStage: `Discovery — ${outcomeLabel}`,
+        currentCapabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
+        stageOutcome: outcome,
+        stageOutcomeLabel: outcomeLabel,
+        counts: {
+          completed: payload.prospectCount || 0,
+          total:
+            (mission.constraints && mission.constraints.targetCount) ||
+            payload.prospectCount ||
+            0,
+        },
+      },
+      deliverables: {
+        ...(mission.deliverables || {}),
+        stepResults: [...priorStepResults, stepResult],
+        artifactBus: bus.toJSON(),
+        artifactGraph: bus.getArtifactGraph(mission.id),
+        lastInjection: {
+          artifactId: published.artifact.id,
+          artifactType: published.artifact.artifactType,
+          revision: published.artifact.revision,
+          producer: published.producer,
+          source: published.source,
+          at: new Date().toISOString(),
+        },
+      },
+    });
+
+    await this._store.appendAudit({
+      missionId: mission.id,
+      kind: AUDIT_KINDS.ARTIFACT_INJECTED,
+      capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
+      payload: {
+        artifactId: published.artifact.id,
+        artifactType: published.artifact.artifactType,
+        revision: published.artifact.revision,
+        producer: published.producer,
+        source: published.source,
+        validationStatus: published.artifact.validationStatus,
+        prospectCount: payload.prospectCount,
+        warnings: published.warnings || [],
+        createdBy: input.createdBy || 'operator',
+        provenance: published.artifact.metadata &&
+          published.artifact.metadata.provenance,
+      },
+    });
+    await this._store.appendAudit({
+      missionId: mission.id,
+      kind: AUDIT_KINDS.STAGE_SATISFIED,
+      capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
+      payload: {
+        outcome,
+        outcomeLabel,
+        stageId: 'prospect_discovery',
+        artifactId: published.artifact.id,
+      },
+    });
+
+    if (input.execute === false) {
+      return {
+        mission,
+        artifact: published.artifact,
+        warnings: published.warnings || [],
+        executed: false,
+      };
+    }
+
+    mission = await this._executor.execute(mission.id);
+    return {
+      mission,
+      artifact: published.artifact,
+      warnings: published.warnings || [],
+      executed: true,
+    };
+  }
 }
 
 function collectEvidence(mission) {
@@ -394,6 +631,59 @@ function collectEvidence(mission) {
   return evidence;
 }
 
+function isDiscoveryBlocked(mission) {
+  if (!mission || mission.status !== MISSION_STATUS.WAITING) return false;
+  const steps = (mission.plan && mission.plan.steps) || [];
+  const discovery = steps.find(
+    (s) =>
+      s.stageId === 'prospect_discovery' ||
+      s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY
+  );
+  if (discovery && (discovery.status === 'blocked' || discovery.status === 'failed')) {
+    return true;
+  }
+  const stage = mission.stageReview;
+  if (
+    stage &&
+    (stage.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY ||
+      stage.capabilityId === 'prospect_discovery') &&
+    (stage.outcome === STAGE_OUTCOMES.BLOCKED ||
+      stage.outcome === STAGE_OUTCOMES.FAILED)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function discoveryRecoveryActions(mission) {
+  if (!isDiscoveryBlocked(mission)) return [];
+  return [
+    {
+      id: 'retry_discovery',
+      label: 'Retry Discovery',
+      action: 'run_again',
+    },
+    {
+      id: 'import_prospect_list',
+      label: 'Import Prospect List',
+      action: 'inject_prospect_list',
+    },
+    {
+      id: 'cancel_mission',
+      label: 'Cancel Mission',
+      action: 'reject',
+    },
+  ];
+}
+
+function workspaceActions(mission) {
+  const base = ['approve', 'reject', 'edit', 'run_again'];
+  if (isDiscoveryBlocked(mission)) {
+    return [...base, 'import_prospect_list'];
+  }
+  return base;
+}
+
 /**
  * @param {object} [deps]
  */
@@ -405,4 +695,6 @@ module.exports = {
   MissionEngine,
   createMissionEngine,
   missionEnabled,
+  isDiscoveryBlocked,
+  discoveryRecoveryActions,
 };

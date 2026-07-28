@@ -1011,6 +1011,15 @@
                 }`
             )
             .join(', ');
+          const provenance =
+            (art.metadata && art.metadata.provenance) || null;
+          const provenanceLine = provenance
+            ? ` · Origin: ${escapeHtml(
+                [provenance.producer, provenance.source, provenance.createdBy]
+                  .filter(Boolean)
+                  .join(' / ')
+              )}`
+            : '';
           return `<li class="msn-artifact" data-artifact-id="${escapeHtml(
             art.id || ''
           )}">
@@ -1018,13 +1027,18 @@
               <strong>${escapeHtml(art.artifactType || '')}</strong>
               <span class="cd-chip">${escapeHtml(rev)}</span>
               <span class="cd-chip">${escapeHtml(status)}</span>
+              ${
+                art.metadata && art.metadata.operatorSupplied
+                  ? '<span class="cd-chip">Operator supplied</span>'
+                  : ''
+              }
             </div>
             <p class="msn-artifact-summary">${escapeHtml(art.summary || '')}</p>
             <p class="msn-artifact-meta">Producer: ${escapeHtml(
               art.producer || '—'
             )} · Stage: ${escapeHtml(art.stageId || '—')}${
               deps ? ` · Depends: ${deps}` : ''
-            }</p>
+            }${provenanceLine}</p>
             <details>
               <summary>Payload & provenance</summary>
               <pre class="msn-pre">${escapeHtml(
@@ -1033,6 +1047,7 @@
                     id: art.id,
                     schemaVersion: art.schemaVersion,
                     createdAt: art.createdAt,
+                    producer: art.producer,
                     metadata: art.metadata,
                     dependencies: art.dependencies,
                     payload: art.payload,
@@ -1040,6 +1055,7 @@
                       id: h.id,
                       revision: h.revision,
                       validationStatus: h.validationStatus,
+                      producer: h.producer,
                       createdAt: h.createdAt,
                     })),
                   },
@@ -1052,7 +1068,49 @@
         })
         .join('');
 
+      const recoveryActions = Array.isArray(data.recoveryActions)
+        ? data.recoveryActions
+        : [];
+      const discoveryFailedHtml = recoveryActions.length
+        ? `<section class="msn-block msn-recovery">
+            <h3>Discovery failed</h3>
+            <p>${escapeHtml(
+              (Array.isArray(mission.blockingIssues) &&
+                mission.blockingIssues[0]) ||
+                (mission.stageReview &&
+                  Array.isArray(mission.stageReview.blockingIssues) &&
+                  mission.stageReview.blockingIssues[0]) ||
+                'Discovery could not produce a ProspectList.'
+            )}</p>
+            <div class="msn-recovery-actions">
+              ${recoveryActions
+                .map(
+                  (a) =>
+                    `<button type="button" class="cd-btn ${
+                      a.id === 'import_prospect_list'
+                        ? 'cd-btn-primary'
+                        : 'cd-btn-ghost'
+                    }" data-msn-recovery="${escapeHtml(a.id)}">${escapeHtml(
+                      a.label || a.id
+                    )}</button>`
+                )
+                .join('')}
+            </div>
+            <div class="msn-import" id="msnImportPanel" hidden>
+              <label class="msn-import-label" for="msnImportPaste">Import Prospect List</label>
+              <p class="msn-import-hint">Paste CSV or rows with Company Name (required). Website and Address recommended.</p>
+              <textarea id="msnImportPaste" class="msn-import-input" rows="8" placeholder="Company Name, Website, Address&#10;Acme Law, https://acme.example, 1 Main St"></textarea>
+              <div class="msn-import-actions">
+                <button type="button" class="cd-btn cd-btn-primary" data-msn-import-submit>Validate &amp; resume</button>
+                <button type="button" class="cd-btn cd-btn-ghost" data-msn-import-cancel>Cancel</button>
+              </div>
+              <p class="msn-import-error" id="msnImportError" hidden></p>
+            </div>
+          </section>`
+        : '';
+
       els.msnBody.innerHTML = `
+        ${discoveryFailedHtml}
         <section class="msn-block">
           <h3>Objective</h3>
           <p>${escapeHtml(mission.objectiveText || '')}</p>
@@ -1092,7 +1150,9 @@
         <p class="msn-note">No outbound actions occur automatically. Approve records review only.</p>
       `;
 
-      const actions = data.actions || ['approve', 'reject', 'edit', 'run_again'];
+      const actions = (data.actions || ['approve', 'reject', 'edit', 'run_again']).filter(
+        (action) => action !== 'import_prospect_list'
+      );
       els.msnActions.innerHTML = actions
         .map(
           (action) =>
@@ -1121,12 +1181,115 @@
         });
       });
 
+      bindMissionRecovery(missionId);
+
       els.missionWorkspace.hidden = false;
       document.body.style.overflow = 'hidden';
       announce('Mission workspace opened.');
     } catch (err) {
       announce(err.message || 'Could not open mission');
     }
+  }
+
+  function bindMissionRecovery(missionId) {
+    if (!els.msnBody) return;
+    const importPanel = els.msnBody.querySelector('#msnImportPanel');
+    const importError = els.msnBody.querySelector('#msnImportError');
+    const pasteEl = els.msnBody.querySelector('#msnImportPaste');
+
+    els.msnBody.querySelectorAll('[data-msn-recovery]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-msn-recovery');
+        if (id === 'import_prospect_list') {
+          if (importPanel) importPanel.hidden = false;
+          if (pasteEl) pasteEl.focus();
+          return;
+        }
+        if (id === 'retry_discovery') {
+          try {
+            await apiRequest(
+              `/api/v1/missions/${encodeURIComponent(missionId)}/review`,
+              { method: 'POST', body: { action: 'run_again' } }
+            );
+            announce('Retrying Discovery.');
+            await openMissionWorkspace(missionId);
+            loadDeck({ force: true });
+          } catch (err) {
+            announce(err.message || 'Retry failed');
+          }
+          return;
+        }
+        if (id === 'cancel_mission') {
+          try {
+            await apiRequest(
+              `/api/v1/missions/${encodeURIComponent(missionId)}/review`,
+              { method: 'POST', body: { action: 'reject' } }
+            );
+            announce('Mission cancelled.');
+            await openMissionWorkspace(missionId);
+            loadDeck({ force: true });
+          } catch (err) {
+            announce(err.message || 'Cancel failed');
+          }
+        }
+      });
+    });
+
+    els.msnBody
+      .querySelectorAll('[data-msn-import-cancel]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (importPanel) importPanel.hidden = true;
+          if (importError) {
+            importError.hidden = true;
+            importError.textContent = '';
+          }
+        });
+      });
+
+    els.msnBody
+      .querySelectorAll('[data-msn-import-submit]')
+      .forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const paste = pasteEl ? pasteEl.value : '';
+          if (!String(paste || '').trim()) {
+            if (importError) {
+              importError.hidden = false;
+              importError.textContent = 'Paste at least one company name.';
+            }
+            return;
+          }
+          try {
+            btn.disabled = true;
+            await apiRequest(
+              `/api/v1/missions/${encodeURIComponent(missionId)}/artifacts/inject`,
+              {
+                method: 'POST',
+                body: { paste, source: 'spreadsheet_paste' },
+              }
+            );
+            announce('Prospect list imported. Mission resumed.');
+            await openMissionWorkspace(missionId);
+            loadDeck({ force: true });
+          } catch (err) {
+            if (importError) {
+              importError.hidden = false;
+              const details =
+                (err.payload &&
+                  Array.isArray(err.payload.errors) &&
+                  err.payload.errors.join('; ')) ||
+                '';
+              importError.textContent =
+                details ||
+                err.message ||
+                'Import failed';
+            }
+            announce(err.message || 'Import failed');
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      });
   }
 
   function closeMissionWorkspace() {

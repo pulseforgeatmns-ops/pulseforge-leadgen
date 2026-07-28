@@ -8,6 +8,7 @@
  * GET  /api/v1/missions/:id
  * POST /api/v1/missions/:id/artifacts/compare
  * POST /api/v1/missions/:id/artifacts/:artifactId/replay
+ * POST /api/v1/missions/:id/artifacts/inject
  * POST /api/v1/missions/:id/review
  */
 
@@ -201,6 +202,104 @@ router.post(
       return res.status(500).json({
         error: 'artifact_replay_failed',
         message: err && err.message ? String(err.message) : 'replay failed',
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/missions/:id/artifacts/inject
+ * Body: { prospects?[], csv?, paste?, source?, execute? }
+ * SPEC-043 — operator injects a validated ProspectList; resumes Mission.
+ */
+router.post(
+  '/api/v1/missions/:id/artifacts/inject',
+  requireDashboardWrite,
+  async (req, res) => {
+    try {
+      if (!missionEnabled()) {
+        return res.status(503).json({
+          error: 'mission_engine_disabled',
+          message: 'Set MISSION_ENGINE=1 (default) to enable',
+        });
+      }
+      const engine = await getMissionEngine();
+      const existing = await engine.get(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ error: 'mission_not_found' });
+      }
+      const tenantId = resolveTenantId(req);
+      if (
+        tenantId != null &&
+        String(existing.tenantId) !== String(tenantId) &&
+        String(existing.clientId) !== String(tenantId)
+      ) {
+        return res.status(403).json({ error: 'tenant_mismatch' });
+      }
+
+      const hasProspects =
+        Array.isArray(req.body?.prospects) && req.body.prospects.length > 0;
+      const hasCsv =
+        typeof req.body?.csv === 'string' && req.body.csv.trim();
+      const hasPaste =
+        typeof req.body?.paste === 'string' && req.body.paste.trim();
+      if (!hasProspects && !hasCsv && !hasPaste) {
+        return res.status(400).json({
+          error: 'prospects_required',
+          message: 'Provide prospects[], csv, or paste',
+        });
+      }
+
+      const result = await engine.injectProspectList({
+        missionId: req.params.id,
+        prospects: req.body?.prospects,
+        csv: req.body?.csv,
+        paste: req.body?.paste,
+        source: req.body?.source,
+        createdBy:
+          (req.session && req.session.user && req.session.user.email) ||
+          'operator',
+        execute: req.body?.execute !== false,
+      });
+
+      res.set('Cache-Control', 'no-store');
+      return res.status(200).json({
+        mission: result.mission,
+        card: engine.toCard(result.mission),
+        artifact: result.artifact
+          ? {
+              id: result.artifact.id,
+              artifactType: result.artifact.artifactType,
+              revision: result.artifact.revision,
+              producer: result.artifact.producer,
+              validationStatus: result.artifact.validationStatus,
+              summary: result.artifact.summary,
+              metadata: result.artifact.metadata,
+            }
+          : null,
+        warnings: result.warnings || [],
+        executed: result.executed !== false,
+      });
+    } catch (err) {
+      console.error('[missions] inject artifact:', err);
+      const code = err && err.code;
+      if (code === 'prospect_list_invalid') {
+        return res.status(400).json({
+          error: 'prospect_list_invalid',
+          message: err.message,
+          errors: err.errors || [],
+          warnings: err.warnings || [],
+        });
+      }
+      if (code === 'mission_terminal' || code === 'no_discovery_stage') {
+        return res.status(409).json({
+          error: code,
+          message: err.message,
+        });
+      }
+      return res.status(500).json({
+        error: 'artifact_inject_failed',
+        message: err && err.message ? String(err.message) : 'inject failed',
       });
     }
   }

@@ -53,6 +53,12 @@ function composeMissionResponse(input) {
     mission.stageReview && mission.stageReview.blockingIssues
       ? `Blocked: ${mission.stageReview.blockingIssues.join(' ')}`
       : null,
+    mission.status === 'waiting' &&
+    ((mission.stageReview &&
+      mission.stageReview.capabilityId === 'prospect_discovery') ||
+      (Array.isArray(mission.blockingIssues) && mission.blockingIssues.length))
+      ? 'You can Retry Discovery, Import a Prospect List, or Cancel from Mission Workspace.'
+      : null,
     mission.status === 'review_required'
       ? 'Results are ready for your review. No outbound actions were taken.'
       : mission.status === 'waiting'
