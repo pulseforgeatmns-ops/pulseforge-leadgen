@@ -6,6 +6,14 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Mission Artifact Bus ([SPEC-042](docs/specs/SPEC-042_Mission_Artifact_Bus.md) / [ADR-028](docs/adr/ADR-028_Business_State_Flows_Through_Artifacts.md))
+  - Typed, immutable, versioned business artifacts (`ProspectList`, `OpportunityRanking`, `Campaign`, …)
+  - Artifact Registry + Artifact Bus API: publish / get / getLatest / history / validate / compare / replay / consume
+  - MissionExecutor publishes after PipelineGate; stages consume validated latest revisions only
+  - Quarantined artifacts invisible to consumers; snapshot in `deliverables.artifactBus`
+  - Mission Workspace Artifacts section + compare/replay API routes
+  - Flag: `MISSION_ARTIFACT_BUS=0` restores flat `priorOutputs` merge only
+  - Tests: `npm run test:mission` (artifactBus.test.js)
 - Mission Planner — objective-driven execution graphs ([SPEC-041](docs/specs/SPEC-041_Mission_Planner.md) / [ADR-027](docs/adr/ADR-027_Mission_Planning_Is_Objective_Driven.md))
   - Replaces static `TYPE_CAPABILITY_CHAINS` as planning authority with Stage Library + dependency graph
   - Stage keywords (review, mail package, ready to print) **augment** the graph — never collapse Build Campaign into a single stage

@@ -1,11 +1,13 @@
 'use strict';
 
 /**
- * Mission API — SPEC-022.
+ * Mission API — SPEC-022 / SPEC-042.
  *
  * POST /api/v1/missions
  * GET  /api/v1/missions
  * GET  /api/v1/missions/:id
+ * POST /api/v1/missions/:id/artifacts/compare
+ * POST /api/v1/missions/:id/artifacts/:artifactId/replay
  * POST /api/v1/missions/:id/review
  */
 
@@ -140,6 +142,69 @@ router.get('/api/v1/missions/:id', requireDashboardRead, async (req, res) => {
     });
   }
 });
+
+/**
+ * POST /api/v1/missions/:id/artifacts/compare
+ * Body: { a: artifactId, b: artifactId }
+ * SPEC-042
+ */
+router.post(
+  '/api/v1/missions/:id/artifacts/compare',
+  requireDashboardRead,
+  async (req, res) => {
+    try {
+      const engine = await getMissionEngine();
+      const mission = await engine.get(req.params.id);
+      if (!mission) {
+        return res.status(404).json({ error: 'mission_not_found' });
+      }
+      const a = req.body?.a || req.body?.artifactIdA;
+      const b = req.body?.b || req.body?.artifactIdB;
+      if (!a || !b) {
+        return res.status(400).json({ error: 'a and b artifact ids required' });
+      }
+      const comparison = await engine.compareArtifacts(req.params.id, a, b);
+      res.set('Cache-Control', 'no-store');
+      return res.json(comparison);
+    } catch (err) {
+      console.error('[missions] compare artifacts:', err);
+      return res.status(500).json({
+        error: 'artifact_compare_failed',
+        message: err && err.message ? String(err.message) : 'compare failed',
+      });
+    }
+  }
+);
+
+/**
+ * POST /api/v1/missions/:id/artifacts/:artifactId/replay
+ * SPEC-042 — returns replay plan (does not auto-execute in v1)
+ */
+router.post(
+  '/api/v1/missions/:id/artifacts/:artifactId/replay',
+  requireDashboardWrite,
+  async (req, res) => {
+    try {
+      const engine = await getMissionEngine();
+      const mission = await engine.get(req.params.id);
+      if (!mission) {
+        return res.status(404).json({ error: 'mission_not_found' });
+      }
+      const plan = await engine.replayFromArtifact(
+        req.params.id,
+        req.params.artifactId
+      );
+      res.set('Cache-Control', 'no-store');
+      return res.json({ replay: plan, executed: false });
+    } catch (err) {
+      console.error('[missions] replay artifact:', err);
+      return res.status(500).json({
+        error: 'artifact_replay_failed',
+        message: err && err.message ? String(err.message) : 'replay failed',
+      });
+    }
+  }
+);
 
 /**
  * POST /api/v1/missions/:id/review

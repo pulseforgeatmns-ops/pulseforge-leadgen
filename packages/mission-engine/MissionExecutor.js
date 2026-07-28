@@ -13,6 +13,7 @@ const {
   MISSION_STATUS,
   AUDIT_KINDS,
   STAGE_LABELS,
+  artifactBusEnabled,
 } = require('./types');
 const {
   evaluatePipelineGate,
@@ -20,6 +21,8 @@ const {
   STAGE_OUTCOMES,
   STAGE_OUTCOME_LABELS,
 } = require('./PipelineGate');
+const { createArtifactBus, ARTIFACT_EVENTS } = require('./ArtifactBus');
+const { getStage } = require('./StageLibrary');
 
 class MissionExecutor {
   /**
@@ -137,10 +140,22 @@ class MissionExecutor {
     /** @type {object} */
     let priorOutputs = {};
     const stepResults = [];
+    const useBus = artifactBusEnabled();
+    const bus = useBus
+      ? createArtifactBus({
+          snapshot:
+            (mission.deliverables && mission.deliverables.artifactBus) || null,
+        })
+      : null;
+    /** @type {object[]} */
+    let consumedForStep = [];
 
     for (let i = 0; i < steps.length; i += 1) {
       const step = steps[i];
       const capabilityId = step.capabilityId;
+      const stageDef = getStage(step.stageId) || null;
+      const produces = (stageDef && stageDef.produces) || [];
+      const consumes = (stageDef && stageDef.consumes) || [];
 
       // SPEC-039: skip completed steps when resuming after a partial modify
       if (step.status === 'completed') {
@@ -165,11 +180,37 @@ class MissionExecutor {
         continue;
       }
 
+      // SPEC-042: resolve inputs from Artifact Bus (validated latest revisions)
+      if (bus) {
+        const eventCountBefore = bus.events(mission.id).length;
+        const resolved = bus.resolveInputs(mission.id, consumes, {
+          consumer: capabilityId,
+          stageId: step.stageId || null,
+        });
+        consumedForStep = resolved.artifacts;
+        priorOutputs = {
+          ...priorOutputs,
+          ...resolved.priorOutputs,
+        };
+        await this._appendArtifactEvents(mission.id, capabilityId, bus, {
+          since: eventCountBefore,
+        });
+      }
+
       await this._store.appendAudit({
         missionId: mission.id,
         kind: AUDIT_KINDS.STEP_START,
         capabilityId,
-        payload: { index: i, name: step.name },
+        payload: {
+          index: i,
+          name: step.name,
+          stageId: step.stageId || null,
+          consumedArtifacts: consumedForStep.map((a) => ({
+            id: a.id,
+            artifactType: a.artifactType,
+            revision: a.revision,
+          })),
+        },
       });
 
       mission = await this._store.update({
@@ -218,6 +259,7 @@ class MissionExecutor {
             ...priorOutputs,
             priorOutputs,
             prospects: priorOutputs.prospects,
+            artifacts: consumedForStep,
           },
           knowledge: {},
         },
@@ -266,6 +308,25 @@ class MissionExecutor {
           validation: { passed: true },
           reviewSummary: null,
         };
+      }
+
+      // SPEC-042: publish / quarantine typed artifacts on the bus
+      /** @type {object[]} */
+      let busPublished = [];
+      if (bus) {
+        const eventCountBefore = bus.events(mission.id).length;
+        busPublished = bus.publishFromGate({
+          missionId: mission.id,
+          stageId: step.stageId || null,
+          producer: capabilityId,
+          produces,
+          outputs: runResult.result.outputs || {},
+          gate,
+          priorArtifacts: consumedForStep,
+        });
+        await this._appendArtifactEvents(mission.id, capabilityId, bus, {
+          since: eventCountBefore,
+        });
       }
 
       if (!gate.advance) {
@@ -322,6 +383,7 @@ class MissionExecutor {
               blockingIssues: gate.blockingIssues,
               quarantinedArtifacts: gate.quarantinedArtifacts,
             },
+            artifactBus: bus ? bus.toJSON() : undefined,
           },
         });
         await this._store.appendAudit({
@@ -338,6 +400,12 @@ class MissionExecutor {
             warnings: gate.warnings,
             validation: gate.validation,
             quarantinedArtifacts: gate.quarantinedArtifacts,
+            busArtifacts: busPublished.map((a) => ({
+              id: a.id,
+              artifactType: a.artifactType,
+              revision: a.revision,
+              validationStatus: a.validationStatus,
+            })),
             errors:
               gate.outcome === STAGE_OUTCOMES.FAILED
                 ? runResult.result.errors
@@ -361,6 +429,7 @@ class MissionExecutor {
         outcomeLabel: gate.outcomeLabel,
         publishedArtifacts: gate.publishedArtifacts,
         quarantinedArtifacts: gate.quarantinedArtifacts,
+        busArtifacts: busPublished,
         validation: gate.validation,
         warnings: gate.warnings,
         reviewSummary: gate.reviewSummary,
@@ -403,6 +472,10 @@ class MissionExecutor {
               }
             : null,
         },
+        deliverables: {
+          ...(mission.deliverables || {}),
+          artifactBus: bus ? bus.toJSON() : undefined,
+        },
       });
       await this._store.appendAudit({
         missionId: mission.id,
@@ -418,6 +491,13 @@ class MissionExecutor {
           outcomeLabel: gate.outcomeLabel,
           warnings: gate.warnings,
           publishedArtifacts: gate.publishedArtifacts,
+          busArtifacts: busPublished.map((a) => ({
+            id: a.id,
+            artifactType: a.artifactType,
+            revision: a.revision,
+            validationStatus: a.validationStatus,
+            summary: a.summary,
+          })),
           validation: gate.validation,
         },
       });
@@ -453,6 +533,8 @@ class MissionExecutor {
         html: priorOutputs.html || null,
         proposalId: priorOutputs.proposalId || null,
         outboundBlocked: true,
+        artifactBus: bus ? bus.toJSON() : null,
+        artifactGraph: bus ? bus.getArtifactGraph(mission.id) : null,
         stepResults: stepResults.map((s) => ({
           capabilityId: s.capabilityId,
           name: s.name,
@@ -463,6 +545,13 @@ class MissionExecutor {
           artifacts: s.publishedArtifacts || s.result.artifacts,
           publishedArtifacts: s.publishedArtifacts || [],
           quarantinedArtifacts: s.quarantinedArtifacts || [],
+          busArtifacts: (s.busArtifacts || []).map((a) => ({
+            id: a.id,
+            artifactType: a.artifactType,
+            revision: a.revision,
+            validationStatus: a.validationStatus,
+            summary: a.summary,
+          })),
           validation: s.validation || null,
           warnings: s.warnings || s.result.warnings || [],
           reviewSummary: s.reviewSummary || null,
@@ -502,6 +591,49 @@ class MissionExecutor {
     });
 
     return mission;
+  }
+
+  /**
+   * Mirror Artifact Bus events into mission audit (SPEC-042).
+   * @param {string} missionId
+   * @param {string|null} capabilityId
+   * @param {import('./ArtifactBus').ArtifactBus} bus
+   * @param {object} [opts]
+   * @param {number} [opts.since]
+   * @param {string[]} [opts.onlyKinds]
+   */
+  async _appendArtifactEvents(missionId, capabilityId, bus, opts = {}) {
+    const since = opts.since != null ? opts.since : 0;
+    const events = bus.events(missionId).slice(since);
+    const only = opts.onlyKinds || null;
+    for (const ev of events) {
+      if (only && !only.includes(ev.type)) continue;
+      const kind = artifactEventToAuditKind(ev.type);
+      if (!kind) continue;
+      await this._store.appendAudit({
+        missionId,
+        kind,
+        capabilityId,
+        payload: ev,
+      });
+    }
+  }
+}
+
+function artifactEventToAuditKind(type) {
+  switch (type) {
+    case ARTIFACT_EVENTS.PUBLISHED:
+      return AUDIT_KINDS.ARTIFACT_PUBLISHED;
+    case ARTIFACT_EVENTS.VALIDATED:
+      return AUDIT_KINDS.ARTIFACT_VALIDATED;
+    case ARTIFACT_EVENTS.QUARANTINED:
+      return AUDIT_KINDS.ARTIFACT_QUARANTINED;
+    case ARTIFACT_EVENTS.SUPERSEDED:
+      return AUDIT_KINDS.ARTIFACT_SUPERSEDED;
+    case ARTIFACT_EVENTS.CONSUMED:
+      return AUDIT_KINDS.ARTIFACT_CONSUMED;
+    default:
+      return null;
   }
 }
 

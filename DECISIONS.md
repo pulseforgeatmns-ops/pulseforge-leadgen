@@ -28,6 +28,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-025](docs/adr/ADR-025_Active_Missions_Take_Precedence.md) | Active Missions Take Precedence | Accepted | Active Mission always outranks IntentRouter; IntentRouter creates new Missions only; conversational flow uses Active Mission Resolver until terminal |
 | [ADR-026](docs/adr/ADR-026_Business_Success_Determines_Pipeline_Progress.md) | Business Success Determines Pipeline Progress | Accepted | Pipeline advances only on validated business artifacts; technical execution alone is not enough; empty Discovery is Blocked not Completed |
 | [ADR-027](docs/adr/ADR-027_Mission_Planning_Is_Objective_Driven.md) | Mission Planning Is Objective-Driven | Accepted | IntentRouter decides Mission vs not; Mission Planner builds execution graphs from objectives; stage keywords augment, never replace |
+| [ADR-028](docs/adr/ADR-028_Business_State_Flows_Through_Artifacts.md) | Business State Flows Through Artifacts | Accepted | Mission Artifact Bus is the canonical business-state exchange; immutable typed artifacts replace flat priorOutputs as source of truth |
 
 ## How to add a decision
 

@@ -55,6 +55,12 @@ const AUDIT_KINDS = Object.freeze({
   STAGE_BLOCKED: 'stage_blocked',
   STAGE_WARNINGS: 'stage_warnings',
   ARTIFACT_VALIDATION: 'artifact_validation',
+  /** SPEC-042 Artifact Bus */
+  ARTIFACT_PUBLISHED: 'artifact_published',
+  ARTIFACT_VALIDATED: 'artifact_validated',
+  ARTIFACT_QUARANTINED: 'artifact_quarantined',
+  ARTIFACT_SUPERSEDED: 'artifact_superseded',
+  ARTIFACT_CONSUMED: 'artifact_consumed',
 });
 
 /** SPEC-040 — stage business outcomes */
@@ -92,6 +98,15 @@ const MISSION_EVENTS = Object.freeze({
   DIAGNOSED: 'MissionDiagnosed',
   COMPLETED: 'MissionCompleted',
   CLOSED: 'MissionClosed',
+});
+
+/** SPEC-042 — Artifact Bus events (also mirrored in audit kinds) */
+const ARTIFACT_BUS_EVENTS = Object.freeze({
+  PUBLISHED: 'ArtifactPublished',
+  VALIDATED: 'ArtifactValidated',
+  QUARANTINED: 'ArtifactQuarantined',
+  SUPERSEDED: 'ArtifactSuperseded',
+  CONSUMED: 'ArtifactConsumed',
 });
 
 /** Terminal / non-active statuses (SPEC-039) */
@@ -173,6 +188,17 @@ function artifactValidationEnabled() {
   return true;
 }
 
+/**
+ * SPEC-042 — Mission Artifact Bus. Default on when Mission Engine is on.
+ * Set MISSION_ARTIFACT_BUS=0 to use flat priorOutputs merge only.
+ */
+function artifactBusEnabled() {
+  if (!missionEnabled()) return false;
+  const flag = process.env.MISSION_ARTIFACT_BUS;
+  if (flag === '0' || flag === 'false' || flag === 'off') return false;
+  return true;
+}
+
 module.exports = {
   MISSION_STATUS,
   MISSION_TYPES,
@@ -184,6 +210,7 @@ module.exports = {
   MESSAGE_CLASS,
   RESOLUTION_PATHS,
   MISSION_EVENTS,
+  ARTIFACT_BUS_EVENTS,
   TERMINAL_STATUSES,
   isTerminalStatus,
   isActiveMissionStatus,
@@ -191,4 +218,5 @@ module.exports = {
   missionEnabled,
   activeMissionResolverEnabled,
   artifactValidationEnabled,
+  artifactBusEnabled,
 };

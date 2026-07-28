@@ -21,6 +21,7 @@ const {
 const {
   createInMemoryActiveMissionBindingStore,
 } = require('./ActiveMissionBindingStore');
+const { createArtifactBus } = require('./ArtifactBus');
 
 class MissionEngine {
   /**
@@ -303,6 +304,14 @@ class MissionEngine {
     const mission = await this.get(missionId);
     if (!mission) return null;
     const audit = await this.listAudit(missionId);
+    const bus = createArtifactBus({
+      snapshot:
+        (mission.deliverables && mission.deliverables.artifactBus) || null,
+    });
+    const artifacts = bus.listMissionArtifacts(mission.id);
+    const artifactGraph =
+      (mission.deliverables && mission.deliverables.artifactGraph) ||
+      bus.getArtifactGraph(mission.id);
     return {
       mission,
       card: this.toCard(mission),
@@ -328,11 +337,48 @@ class MissionEngine {
       progress: mission.progress,
       evidence: collectEvidence(mission),
       results: mission.deliverables,
+      artifacts,
+      artifactGraph,
+      artifactEvents: bus.events(mission.id),
       review: mission.review,
       audit,
       actions: ['approve', 'reject', 'edit', 'run_again'],
       outboundBlocked: true,
     };
+  }
+
+  /**
+   * SPEC-042 — compare two artifact revisions on a mission.
+   * @param {string} missionId
+   * @param {string} artifactIdA
+   * @param {string} artifactIdB
+   */
+  async compareArtifacts(missionId, artifactIdA, artifactIdB) {
+    const mission = await this.get(missionId);
+    if (!mission) throw new Error(`Unknown mission: ${missionId}`);
+    const bus = createArtifactBus({
+      snapshot:
+        (mission.deliverables && mission.deliverables.artifactBus) || null,
+    });
+    return bus.compareArtifacts(artifactIdA, artifactIdB);
+  }
+
+  /**
+   * SPEC-042 — replay plan from an artifact revision.
+   * @param {string} missionId
+   * @param {string} artifactId
+   */
+  async replayFromArtifact(missionId, artifactId) {
+    const mission = await this.get(missionId);
+    if (!mission) throw new Error(`Unknown mission: ${missionId}`);
+    const bus = createArtifactBus({
+      snapshot:
+        (mission.deliverables && mission.deliverables.artifactBus) || null,
+    });
+    const planStageIds = ((mission.plan && mission.plan.steps) || []).map(
+      (s) => s.stageId || s.capabilityId
+    );
+    return bus.replayFromArtifact(missionId, artifactId, { planStageIds });
   }
 }
 
