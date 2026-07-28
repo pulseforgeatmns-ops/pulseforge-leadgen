@@ -12,6 +12,7 @@ const {
   ensureMissionSchema,
   missionEnabled,
   routeIntent,
+  activeMissionResolverEnabled,
 } = require('../packages/mission-engine');
 const { createBuiltinRegistry } = require('../packages/capabilities');
 const {
@@ -150,5 +151,6 @@ module.exports = {
   getMissionEngine,
   missionEnabled,
   routeIntent,
+  activeMissionResolverEnabled,
   createCrmLookup,
 };

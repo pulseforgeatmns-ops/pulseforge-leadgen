@@ -46,8 +46,8 @@ Operators should never restart a Mission simply to refine geography, volume, exc
 
 ### Follow-ups
 
-- [ ] Implement [SPEC-032](../specs/SPEC-032_Mission_Memory.md) (memory model, routing, revision engine, workspace sections, smart corrections, clarification)
-- [ ] Extend IntentRouter / Max Ask to prefer active-Mission modification
-- [ ] Wire capability reruns against `currentRevision` Mission state
+- [ ] Implement [SPEC-032](../specs/SPEC-032_Mission_Memory.md) (memory model, revision engine, workspace sections, smart corrections, clarification)
+- [x] Implement [SPEC-039](../specs/SPEC-039_Active_Mission_Resolver.md) / [ADR-025](ADR-025_Active_Missions_Take_Precedence.md) — Active Mission Resolver before IntentRouter on Max Ask
+- [ ] Wire capability reruns against `currentRevision` Mission state (partial via SPEC-039 modify stale+rerun)
 - [ ] Record correction / approval patterns for future recommendations (post-v1 learning)
 - Update CURRENT_STATE when Mission Memory ships

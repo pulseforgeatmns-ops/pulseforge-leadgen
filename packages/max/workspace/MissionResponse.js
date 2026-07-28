@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Build a StructuredResponse for a Mission Engine outcome (SPEC-022).
+ * Build a StructuredResponse for a Mission Engine outcome (SPEC-022 / SPEC-039).
  * Never invents Market Intelligence — surfaces mission progress only.
  */
 
@@ -44,16 +44,103 @@ function composeMissionResponse(input) {
     .filter(Boolean)
     .join(' ');
 
-  const reasoning = [
-    'Routed as a business objective through the Mission Engine (not Market Intelligence).',
-    `Mission type: ${mission.type}.`,
-    mission.discoveryProfile
-      ? `Discovery Profile: ${mission.discoveryProfile.name} v${mission.discoveryProfile.version}.`
-      : null,
-    `Plan: ${((mission.plan && mission.plan.steps) || [])
-      .map((s) => s.name || s.capabilityId)
-      .join(' → ') || 'n/a'}.`,
-  ].filter(Boolean);
+  return buildMissionStructured({
+    answer,
+    mission,
+    card,
+    reasoning: [
+      'Routed as a business objective through the Mission Engine (not Market Intelligence).',
+      `Mission type: ${mission.type}.`,
+      mission.discoveryProfile
+        ? `Discovery Profile: ${mission.discoveryProfile.name} v${mission.discoveryProfile.version}.`
+        : null,
+      `Plan: ${((mission.plan && mission.plan.steps) || [])
+        .map((s) => s.name || s.capabilityId)
+        .join(' → ') || 'n/a'}.`,
+    ].filter(Boolean),
+  });
+}
+
+/**
+ * SPEC-039 — response for resume / modify / diagnose (no new Mission).
+ * @param {object} input
+ * @param {object} input.resolution - ActiveMissionResolver.resolve result
+ * @param {object} [input.card]
+ * @param {string} input.question
+ */
+function composeActiveMissionResponse(input) {
+  const resolution = input.resolution;
+  const mission = resolution.mission;
+  const card = input.card || null;
+  const title = mission.title || 'Mission';
+  const action = resolution.action;
+
+  let answer;
+  let reasoning;
+
+  if (action === 'diagnosed' && resolution.diagnosis) {
+    answer = resolution.diagnosis.summary;
+    reasoning = [
+      'Active Mission Resolver — diagnose (IntentRouter not used).',
+      `Mission: ${title} (${mission.id}).`,
+      `Classification: ${resolution.classification}.`,
+      resolution.diagnosis.lastFail
+        ? `Last step_fail: ${resolution.diagnosis.lastFail.capabilityId}.`
+        : 'No step_fail events.',
+    ];
+  } else if (action === 'modified' && resolution.modification) {
+    answer = [
+      `Mission updated: ${title}.`,
+      resolution.modification.summary,
+      `Status: ${formatStatus(mission.status)}.`,
+      mission.status === 'review_required'
+        ? 'Results are ready for your review. No outbound actions were taken.'
+        : null,
+    ]
+      .filter(Boolean)
+      .join(' ');
+    reasoning = [
+      'Active Mission Resolver — modify (same Mission, stale capabilities rerun).',
+      `Mission: ${title} (${mission.id}).`,
+      `Classification: ${resolution.classification}.`,
+    ];
+  } else {
+    const stage =
+      (mission.progress && mission.progress.currentStage) || mission.status;
+    answer = [
+      `Resumed Mission: ${title}.`,
+      `Status: ${formatStatus(mission.status)}.`,
+      `Current stage: ${stage}.`,
+      mission.status === 'review_required'
+        ? 'Results are ready for your review. No outbound actions were taken.'
+        : mission.status === 'waiting'
+          ? 'Mission is paused — ask why it failed or run again.'
+          : 'Continuing with the active Mission (no new Mission created).',
+    ].join(' ');
+    reasoning = [
+      'Active Mission Resolver — resume (IntentRouter not used).',
+      `Mission: ${title} (${mission.id}).`,
+      `Classification: ${resolution.classification}.`,
+      `Resolution path: ${resolution.resolutionPath}.`,
+    ];
+  }
+
+  return buildMissionStructured({
+    answer,
+    mission,
+    card,
+    reasoning,
+    metadataExtras: {
+      activeMissionAction: action,
+      classification: resolution.classification,
+      resolutionPath: resolution.resolutionPath,
+    },
+  });
+}
+
+function buildMissionStructured(input) {
+  const mission = input.mission;
+  const card = input.card || null;
 
   const supportingEvidence = (
     (mission.deliverables && mission.deliverables.stepResults) ||
@@ -69,16 +156,16 @@ function composeMissionResponse(input) {
 
   if (!supportingEvidence.length) {
     supportingEvidence.push({
-      id: `mission:${mission.id}:created`,
-      summary: `Mission ${mission.id} planned and tracked in Operations`,
+      id: `mission:${mission.id}:active`,
+      summary: `Mission ${mission.id} tracked in Operations`,
       sourceType: 'mission',
       kind: 'mission',
     });
   }
 
   return buildStructuredResponse({
-    answer,
-    reasoning,
+    answer: input.answer,
+    reasoning: input.reasoning,
     supportingEvidence,
     contradictingEvidence: [],
     confidence: mission.confidence != null ? mission.confidence : 0.8,
@@ -115,6 +202,7 @@ function composeMissionResponse(input) {
       missionId: mission.id,
       missionStatus: mission.status,
       missionCard: card,
+      ...(input.metadataExtras || {}),
     },
   });
 }
@@ -136,4 +224,5 @@ function formatStatus(status) {
 
 module.exports = {
   composeMissionResponse,
+  composeActiveMissionResponse,
 };
