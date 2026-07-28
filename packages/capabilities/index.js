@@ -39,6 +39,10 @@ const {
   registerBuiltinCapabilities,
   createBuiltinRegistry,
 } = require('./builtins/stubs');
+const {
+  CAPABILITY_ARTIFACT_CONTRACTS,
+  withArtifactContracts,
+} = require('./artifactContracts');
 
 module.exports = {
   CAPABILITY_CATEGORIES,
@@ -66,6 +70,8 @@ module.exports = {
   createOperatorInboxCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
+  CAPABILITY_ARTIFACT_CONTRACTS,
+  withArtifactContracts,
   discovery: require('./discovery'),
   ranking: require('./ranking'),
   proposal: require('./proposal'),

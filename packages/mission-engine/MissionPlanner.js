@@ -2,7 +2,8 @@
 
 /**
  * MissionPlanner — objective → Mission Plan IR → execution graph
- * (SPEC-041 / ADR-027 + SPEC-050 / ADR-034).
+ * (SPEC-041 / ADR-027 + SPEC-050 / ADR-034 + SPEC-051 / ADR-035).
+ * Resolves required artifacts before finalizing capabilities.
  * Selects Discovery Profiles for Prospect Discovery (SPEC-024).
  * Discovers capabilities from the registry. Never imports agent modules.
  * Never executes capabilities — only plans.
@@ -238,6 +239,18 @@ class MissionPlanner {
       constraints: input.constraints,
       extraStages: input.extraStages,
       removeStages: input.removeStages,
+      availableArtifacts:
+        input.availableArtifacts ||
+        (input.constraints && input.constraints.availableArtifacts) ||
+        null,
+      previousMissionArtifacts:
+        input.previousMissionArtifacts ||
+        (input.constraints && input.constraints.previousMissionArtifacts) ||
+        null,
+      workspaceArtifacts:
+        input.workspaceArtifacts ||
+        (input.constraints && input.constraints.workspaceArtifacts) ||
+        null,
     });
 
     if (!graph.validation.ok) {
@@ -542,6 +555,7 @@ class MissionPlanner {
         skippedStages: graph.skippedStages,
         reviewGates: graph.reviewGates,
         reasoning: graph.reasoning,
+        artifactResolution: graph.artifactResolution || null,
       },
       confidence: steps.length ? confidenceSum / steps.length : 0,
       durationEstimateMs: totalDuration,
@@ -690,6 +704,7 @@ class MissionPlanner {
         skippedStages: graph.skippedStages,
         reviewGates: graph.reviewGates,
         reasoning: graph.reasoning,
+        artifactResolution: graph.artifactResolution || null,
         replan: {
           preservedStageIds: finalPreserved,
           invalidatedStageIds,

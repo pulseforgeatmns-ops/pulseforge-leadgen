@@ -102,15 +102,21 @@ describe('SPEC-022 Workspace Mission routing', () => {
     assert.equal(result.mission.operatorProspectList.injected, true);
     assert.match(
       result.prose || result.structured.answer,
-      /Operator ProspectList imported|Satisfied \(Operator Supplied\)/i
+      /Operator ProspectList imported|Satisfied \(Operator Supplied\)|ProspectList/i
     );
+    // SPEC-051: Discovery omitted at plan time when operator ProspectList exists
     const discovery = result.mission.plan.steps.find(
       (s) =>
         s.stageId === 'prospect_discovery' ||
         s.capabilityId === 'prospect_discovery'
     );
-    assert.ok(discovery);
-    assert.equal(discovery.outcome, 'satisfied_operator_supplied');
+    assert.equal(discovery, undefined);
+    assert.ok(
+      result.mission.plan.artifactResolution &&
+        result.mission.plan.artifactResolution.resolved.some(
+          (r) => r.type === 'ProspectList'
+        )
+    );
   });
 
   it('disabled MISSION_ENGINE falls through to intelligence', async () => {

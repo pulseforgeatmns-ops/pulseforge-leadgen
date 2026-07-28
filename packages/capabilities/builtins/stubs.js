@@ -484,48 +484,51 @@ function resolveDiscoveryDeps(options = {}) {
  * @param {object} [options]
  */
 function registerBuiltinCapabilities(registry, options = {}) {
-  registry.register(createProspectDiscoveryCapability(resolveDiscoveryDeps(options)));
-  registry.register(createCompanyEnrichmentStub());
-  registry.register(createKnowledgeUpdateStub());
-  registry.register(createOpportunityRankingCapability(options.ranking || {}));
+  const { withArtifactContracts } = require('../artifactContracts');
+  const register = (cap) => registry.register(withArtifactContracts(cap));
+
+  register(createProspectDiscoveryCapability(resolveDiscoveryDeps(options)));
+  register(createCompanyEnrichmentStub());
+  register(createKnowledgeUpdateStub());
+  register(createOpportunityRankingCapability(options.ranking || {}));
   const {
     createSalesIntelligenceCapability,
   } = require('../salesIntelligence');
-  registry.register(
+  register(
     createSalesIntelligenceCapability(options.salesIntelligence || {})
   );
-  registry.register(createCampaignBuilderStub());
-  registry.register(
+  register(createCampaignBuilderStub());
+  register(
     createProposalGeneratorCapability(options.proposal || {})
   );
   const {
     createMailPackageGeneratorCapability,
   } = require('../mail');
-  registry.register(
+  register(
     createMailPackageGeneratorCapability(options.mail || {})
   );
   const {
     createCampaignReviewCapability,
   } = require('../campaignReview');
-  registry.register(
+  register(
     createCampaignReviewCapability(options.campaignReview || {})
   );
   const {
     createDirectMailExecutionCapability,
   } = require('../directMailExecution');
-  registry.register(
+  register(
     createDirectMailExecutionCapability(options.directMailExecution || {})
   );
   const {
     createOutcomeIntelligenceCapability,
   } = require('../outcomeIntelligence');
-  registry.register(
+  register(
     createOutcomeIntelligenceCapability(options.outcomeIntelligence || {})
   );
   const {
     createOperatorInboxCapability,
   } = require('../operatorInbox');
-  registry.register(
+  register(
     createOperatorInboxCapability(options.operatorInbox || {})
   );
   return registry;

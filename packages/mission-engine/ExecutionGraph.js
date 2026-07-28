@@ -3,6 +3,8 @@
 /**
  * Execution Graph — objective-driven plan construction (SPEC-041 / ADR-027).
  * SPEC-050 / ADR-034: only Mission Plan executable fields may create nodes.
+ * SPEC-051 / ADR-035: Artifact Resolver prunes acquisition stages when
+ * compatible artifacts already exist (plan around state, not sequence).
  * Planner composes stages; never executes capabilities.
  */
 
@@ -19,6 +21,11 @@ const {
   executableObjectiveText,
   normalizeExecution,
 } = require('./MissionPlan');
+const {
+  resolveArtifacts,
+  applyResolutionToSelection,
+  acquisitionOptions,
+} = require('./ArtifactResolver');
 
 /**
  * Build an execution graph from mission inputs.
@@ -36,6 +43,9 @@ const {
  * @param {object} [missionOrInput.missionPlan] - SPEC-050 IR
  * @param {string[]} [missionOrInput.extraStages]
  * @param {string[]} [missionOrInput.removeStages]
+ * @param {object|object[]} [missionOrInput.availableArtifacts] - SPEC-051
+ * @param {object|object[]} [missionOrInput.previousMissionArtifacts]
+ * @param {object|object[]} [missionOrInput.workspaceArtifacts]
  * @returns {object} execution graph
  */
 function createExecutionGraph(missionOrInput = {}) {
@@ -61,6 +71,11 @@ function createExecutionGraph(missionOrInput = {}) {
   /** @type {Map<string, string>} stageId → skip reason */
   const skipped = new Map();
 
+  // Stages explicitly named in Mission Plan execution — prefer keep unless
+  // their entire produce-set is already satisfied (Discovery still prunable).
+  /** @type {Set<string>} */
+  const explicitExecution = new Set();
+
   // 1. Seed from mission type (baseline pipeline)
   const seeds = missionType ? seedStagesForType(missionType) : [];
   for (const id of seeds) {
@@ -72,11 +87,14 @@ function createExecutionGraph(missionOrInput = {}) {
     for (const item of normalizeExecution(missionPlan.execution)) {
       const stageId =
         typeof item === 'string' ? item : item && item.stageId;
-      if (stageId && getStage(stageId) && !selected.has(stageId)) {
-        selected.set(
-          stageId,
-          `Selected from Mission Plan execution (${stageLabel(stageId)})`
-        );
+      if (stageId && getStage(stageId)) {
+        explicitExecution.add(stageId);
+        if (!selected.has(stageId)) {
+          selected.set(
+            stageId,
+            `Selected from Mission Plan execution (${stageLabel(stageId)})`
+          );
+        }
       }
     }
     if (missionPlan.options && missionPlan.options.readyToPrint) {
@@ -146,7 +164,32 @@ function createExecutionGraph(missionOrInput = {}) {
   // 7. Close transitive dependencies for selected stages
   closeDependencies(selected);
 
-  // 8. Record library stages not selected (for explainPlan)
+  // 8. SPEC-051 / ADR-035 — resolve artifacts, then prune acquisition stages
+  const artifactResolution = resolveArtifacts({
+    selectedStages: selected,
+    missionPlan,
+    availableArtifacts: missionOrInput.availableArtifacts,
+    previousMissionArtifacts: missionOrInput.previousMissionArtifacts,
+    workspaceArtifacts: missionOrInput.workspaceArtifacts,
+  });
+  // Discovery (and other pure producers) may be skipped even if seeded or
+  // named in execution — existing compatible artifacts win (ADR-035).
+  const protectedStages = new Set(
+    [...explicitExecution].filter((id) => id !== 'prospect_discovery')
+  );
+  applyResolutionToSelection(selected, skipped, artifactResolution, {
+    protectedStages,
+  });
+
+  // Attach acquisition options for missing artifacts (operator UX)
+  const missingWithOptions = (artifactResolution.missing || []).map(
+    (artifactType) => ({
+      artifactType,
+      options: acquisitionOptions(artifactType),
+    })
+  );
+
+  // 9. Record library stages not selected (for explainPlan)
   for (const stage of listStages()) {
     if (!selected.has(stage.id) && !skipped.has(stage.id)) {
       skipped.set(
@@ -164,6 +207,7 @@ function createExecutionGraph(missionOrInput = {}) {
       capabilityId: def.capabilityId,
       consumes: [...def.consumes],
       produces: [...def.produces],
+      requires: [...def.consumes],
       dependencies: resolveRuntimeDeps(id, selected),
       reviewRequired: def.reviewRequired,
       priority: def.priority,
@@ -195,6 +239,7 @@ function createExecutionGraph(missionOrInput = {}) {
     ordered,
     validation,
     missionPlan,
+    artifactResolution,
   });
 
   return {
@@ -220,6 +265,10 @@ function createExecutionGraph(missionOrInput = {}) {
       name: n.name,
       reason: n.reason,
     })),
+    artifactResolution: {
+      ...artifactResolution,
+      missingWithOptions,
+    },
     validation,
     reasoning,
     produceReadyToPrint: selected.has('ready_to_print'),
@@ -282,6 +331,18 @@ function replanGraph(mission, mods = {}) {
     constraints: { ...(mission.constraints || {}), ...(mods.constraints || {}) },
     extraStages,
     removeStages,
+    availableArtifacts:
+      mods.availableArtifacts ||
+      (mission.constraints && mission.constraints.availableArtifacts) ||
+      null,
+    previousMissionArtifacts:
+      mods.previousMissionArtifacts ||
+      (mission.constraints && mission.constraints.previousMissionArtifacts) ||
+      null,
+    workspaceArtifacts:
+      mods.workspaceArtifacts ||
+      (mission.constraints && mission.constraints.workspaceArtifacts) ||
+      null,
   });
 
   if (mods.replaceFrom && mods.replaceTo) {
@@ -713,20 +774,38 @@ function buildReasoning(ctx) {
       Array.isArray(ctx.missionPlan.notes) &&
       ctx.missionPlan.notes.length) ||
     0;
+  const resolution = ctx.artifactResolution || null;
+  const resolvedCount = (resolution && resolution.resolved
+    ? resolution.resolved.length
+    : 0);
+  const skippedByResolution = resolution
+    ? Object.keys(resolution.skippedStages || {}).filter((id) =>
+        ctx.skipped.has(id)
+      )
+    : [];
+  let summary = ctx.missionType
+    ? `Composed execution graph from ${ctx.missionType} seed` +
+      (augmented.length
+        ? ` augmented with: ${augmented.map(stageLabel).join(', ')}`
+        : '') +
+      (ctx.missionPlan ? ' via Mission Plan IR (SPEC-050)' : '')
+    : `Composed execution graph from objective keywords`;
+  if (resolvedCount) {
+    summary += `; resolved ${resolvedCount} artifact(s) before capability selection (SPEC-051)`;
+  }
+  if (skippedByResolution.length) {
+    summary += `; skipped ${skippedByResolution.map(stageLabel).join(', ')}`;
+  }
   return {
-    summary: ctx.missionType
-      ? `Composed execution graph from ${ctx.missionType} seed` +
-        (augmented.length
-          ? ` augmented with: ${augmented.map(stageLabel).join(', ')}`
-          : '') +
-        (ctx.missionPlan ? ' via Mission Plan IR (SPEC-050)' : '')
-      : `Composed execution graph from objective keywords`,
+    summary,
     pipeline,
     seedStages: ctx.seeds,
     keywordAugmentations: ctx.keywordHits,
     selectedCount: ctx.selected.size,
     validationOk: ctx.validation.ok,
     notesExcludedFromExecution: noteCount,
+    artifactsResolved: resolvedCount,
+    stagesSkippedByResolution: skippedByResolution,
   };
 }
 
