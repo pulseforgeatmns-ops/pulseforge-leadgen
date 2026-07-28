@@ -18,6 +18,9 @@ const {
   summarizeArtifact,
   TYPE_TO_ALIAS,
 } = require('./ArtifactRegistry');
+const {
+  validateArtifactCandidate,
+} = require('./ArtifactValidator');
 
 const ARTIFACT_EVENTS = Object.freeze({
   PUBLISHED: 'ArtifactPublished',
@@ -52,48 +55,28 @@ class ArtifactBus {
   }
 
   /**
-   * Validate a draft artifact (registry minimum schema).
+   * Validate a draft artifact (SPEC-052 typed boundary validation).
    * Does not publish.
    * @param {object} draft
-   * @returns {{ status: string, ok: boolean, warnings: string[], errors: string[], def: object|null }}
+   * @returns {{ status: string, ok: boolean, warnings: string[], errors: string[], def: object|null, review?: object|null, remainsPlainText?: boolean, stages?: object }}
    */
   validateArtifact(draft = {}) {
-    const artifactType = resolveArtifactType(draft.artifactType || draft.type);
-    const def = lookupArtifactType(artifactType);
-    if (!artifactType || !def) {
-      return {
-        status: ARTIFACT_VALIDATION_STATUS.INVALID,
-        ok: false,
-        warnings: [],
-        errors: [`Unknown artifact type: ${draft.artifactType || draft.type}`],
-        def: null,
-      };
-    }
-    const result = def.validate(draft.payload);
-    if (!result.ok) {
-      return {
-        status: ARTIFACT_VALIDATION_STATUS.INVALID,
-        ok: false,
-        warnings: result.warnings || [],
-        errors: result.errors || [],
-        def,
-      };
-    }
-    if ((result.warnings || []).length) {
-      return {
-        status: ARTIFACT_VALIDATION_STATUS.VALID_WITH_WARNINGS,
-        ok: true,
-        warnings: result.warnings,
-        errors: [],
-        def,
-      };
-    }
+    const result = validateArtifactCandidate({
+      artifactType: draft.artifactType || draft.type,
+      payload: draft.payload,
+      schemaVersion: draft.schemaVersion || draft.version,
+    });
     return {
-      status: ARTIFACT_VALIDATION_STATUS.VALID,
-      ok: true,
-      warnings: [],
-      errors: [],
-      def,
+      status: result.status,
+      ok: result.ok,
+      warnings: result.warnings || [],
+      errors: result.errors || [],
+      def: result.def || lookupArtifactType(result.artifactType),
+      review: result.review || null,
+      remainsPlainText: Boolean(result.remainsPlainText),
+      stages: result.stages || null,
+      artifactType: result.artifactType,
+      schemaVersion: result.schemaVersion,
     };
   }
 

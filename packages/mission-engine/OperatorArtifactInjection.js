@@ -15,6 +15,12 @@ const {
   ARTIFACT_TYPES,
   extractPayload,
 } = require('./ArtifactRegistry');
+const {
+  looksLikeNaturalLanguage,
+  isViableCompanyName,
+  validateArtifactCandidate,
+  toReviewFailure,
+} = require('./ArtifactValidator');
 
 const OPERATOR_PRODUCERS = Object.freeze({
   MANUAL: 'operator_manual',
@@ -188,6 +194,8 @@ function looksLikeCompanyNameOnly(value) {
   if (looksLikeWebsite(s) || looksLikePhone(s)) return false;
   // Street-like addresses usually start with a digit.
   if (/^\d+\s+\S/.test(s)) return false;
+  // SPEC-052: mission prose / instructions are not company names
+  if (looksLikeNaturalLanguage(s)) return false;
   return true;
 }
 
@@ -219,6 +227,7 @@ function normalizeNewlines(text) {
 /**
  * Field-level validation for an operator ProspectList.
  * Required: companyName. Recommended: website, address → warnings.
+ * SPEC-052: natural language / mission objectives never become companies.
  * @param {object[]} prospects
  */
 function validateOperatorProspectRows(prospects) {
@@ -226,12 +235,21 @@ function validateOperatorProspectRows(prospects) {
   const warnings = [];
   const list = Array.isArray(prospects) ? prospects : [];
   const valid = [];
+  let naturalLanguageRows = 0;
 
   list.forEach((p, i) => {
     const row = normalizeProspectRow(p, i);
     const label = `Row ${i + 1}`;
-    if (!String(row.companyName || '').trim()) {
+    const name = String(row.companyName || '').trim();
+    if (!name) {
       errors.push(`${label}: Company Name is required`);
+      return;
+    }
+    if (!isViableCompanyName(name)) {
+      naturalLanguageRows += 1;
+      errors.push(
+        `${label}: Input is natural language ("${name.slice(0, 60)}").`
+      );
       return;
     }
     if (!row.website) {
@@ -244,7 +262,12 @@ function validateOperatorProspectRows(prospects) {
   });
 
   if (!valid.length) {
-    errors.push('ProspectList requires at least one prospect with Company Name');
+    if (naturalLanguageRows > 0) {
+      errors.unshift('Input is natural language.');
+      errors.push('No valid prospect rows detected.');
+    } else {
+      errors.push('ProspectList requires at least one prospect with Company Name');
+    }
   }
 
   return {
@@ -253,6 +276,7 @@ function validateOperatorProspectRows(prospects) {
     errors,
     warnings,
     prospectCount: valid.length,
+    naturalLanguageRows,
   };
 }
 
@@ -337,6 +361,10 @@ function publishOperatorProspectList(input = {}) {
 
   const built = buildOperatorProspectListPayload(input);
   if (!built.fieldValidation.ok) {
+    const typed = validateArtifactCandidate({
+      artifactType: ARTIFACT_TYPES.PROSPECT_LIST,
+      payload: built.payload,
+    });
     return {
       ok: false,
       artifact: null,
@@ -344,6 +372,16 @@ function publishOperatorProspectList(input = {}) {
       warnings: built.fieldValidation.warnings,
       source: built.source,
       payload: built.payload,
+      validationFailure:
+        typed.review ||
+        toReviewFailure({
+          ok: false,
+          artifactType: ARTIFACT_TYPES.PROSPECT_LIST,
+          errors: built.fieldValidation.errors,
+          remainsPlainText: Boolean(
+            built.fieldValidation.naturalLanguageRows
+          ),
+        }),
     };
   }
 
@@ -365,6 +403,14 @@ function publishOperatorProspectList(input = {}) {
       ],
       source: built.source,
       payload: built.payload,
+      validationFailure:
+        registry.review ||
+        toReviewFailure({
+          ok: false,
+          artifactType: ARTIFACT_TYPES.PROSPECT_LIST,
+          errors: registry.errors || [],
+          remainsPlainText: false,
+        }),
     };
   }
 
@@ -633,26 +679,80 @@ function detectOperatorProspectListInMessage(text) {
   const explicitCue = EXPLICIT_IMPORT_CUE.test(raw);
   const prospectCount = validation.prospectCount || 0;
 
+  // SPEC-052: typed validation against raw candidate rows (not filtered empties)
+  const typed = validateArtifactCandidate({
+    artifactType: ARTIFACT_TYPES.PROSPECT_LIST,
+    payload: {
+      prospects: rows,
+      prospectCount: rows.length,
+    },
+  });
+
+  const allNaturalLanguage =
+    rows.length > 0 &&
+    (validation.naturalLanguageRows || 0) >= rows.length &&
+    prospectCount === 0;
+
+  if (allNaturalLanguage || (typed.remainsPlainText && prospectCount === 0)) {
+    const failure =
+      typed.remainsPlainText && typed.review
+        ? typed.review
+        : toReviewFailure({
+            ok: false,
+            artifactType: ARTIFACT_TYPES.PROSPECT_LIST,
+            errors: [
+              'Input is natural language.',
+              'No valid prospect rows detected.',
+            ],
+            remainsPlainText: true,
+          });
+    return {
+      ...empty,
+      detected: false,
+      rejectedAsNaturalLanguage: true,
+      remainsPlainText: true,
+      validationFailure: failure,
+      validation,
+      objectiveText: raw.trim(),
+    };
+  }
+
   let confidence = 'none';
   let autoInject = false;
   let promptImport = false;
 
-  if (validation.ok && prospectCount >= 2) {
+  if (validation.ok && typed.ok && prospectCount >= 2) {
     confidence = 'high';
     autoInject = true;
   } else if (
     validation.ok &&
+    typed.ok &&
     prospectCount >= 1 &&
     (extracted.hasHeader || explicitCue)
   ) {
     confidence = 'high';
     autoInject = true;
-  } else if (rows.length >= 2 || extracted.hasHeader || explicitCue) {
+  } else if (
+    (rows.length >= 2 || extracted.hasHeader || explicitCue) &&
+    !allNaturalLanguage
+  ) {
     confidence = 'medium';
     promptImport = true;
   }
 
-  if (confidence === 'none') return empty;
+  if (confidence === 'none') {
+    if (!typed.ok && rows.length > 0) {
+      return {
+        ...empty,
+        rejectedAsNaturalLanguage: Boolean(typed.remainsPlainText),
+        remainsPlainText: Boolean(typed.remainsPlainText),
+        validationFailure: typed.review,
+        validation,
+        objectiveText: raw.trim(),
+      };
+    }
+    return empty;
+  }
 
   const objectiveText = stripProspectBlock(raw, extracted).trim() || raw.trim();
 
@@ -664,6 +764,8 @@ function detectOperatorProspectListInMessage(text) {
     paste: extracted.block,
     prospects: validation.prospects || [],
     validation,
+    typedValidation: typed,
+    validationFailure: typed.ok ? null : typed.review,
     source: OPERATOR_SOURCES.SPREADSHEET_PASTE,
     hasHeader: extracted.hasHeader,
     explicitCue,
@@ -698,4 +800,6 @@ module.exports = {
   extractProspectBlock,
   detectOperatorProspectListInMessage,
   stripProspectBlock,
+  looksLikeNaturalLanguage,
+  isViableCompanyName,
 };

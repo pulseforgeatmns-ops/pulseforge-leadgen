@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Typed Artifact Validation ([SPEC-052](docs/specs/SPEC-052_Typed_Artifact_Validation.md) / [ADR-036](docs/adr/ADR-036_Trust_Through_Contracts.md))
+  - Artifact Validator pipeline: Identify Type → Schema → Semantic → Compatibility
+  - Natural language / mission prose never becomes ProspectList (or other structured artifacts)
+  - Artifact Bus publishes consumable revisions only after typed validation
+  - Review Workspace surfaces `Artifact Validation` failures (reviewable, non-executable)
+  - Tests: `npm run test:mission` (typedArtifactValidation.test.js)
 - Kalshi BTC research package migrated into the monorepo ([SPEC-049](docs/specs/SPEC-049_Kalshi_Research_Package.md) / [ADR-033](docs/adr/ADR-033_Kalshi_Research_Stays_Isolated.md))
   - `packages/kalshi-research` — deterministic paper/replay research only
   - Feature extraction + `feature-report` CLI; fee-aware replay/train-test tooling preserved

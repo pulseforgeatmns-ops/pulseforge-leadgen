@@ -38,6 +38,7 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-033](ADR-033_Kalshi_Research_Stays_Isolated.md) | Kalshi Research Stays Isolated From Production Execution | Accepted |
 | [ADR-034](ADR-034_Intent_Before_Execution.md) | Intent Before Execution | Accepted |
 | [ADR-035](ADR-035_Plan_Around_State_Not_Sequence.md) | Plan Around State, Not Sequence | Accepted |
+| [ADR-036](ADR-036_Trust_Through_Contracts.md) | Trust Through Contracts | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

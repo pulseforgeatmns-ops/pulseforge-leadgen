@@ -182,6 +182,12 @@ class MissionEngine {
       });
     }
 
+    // SPEC-052: natural-language rejection stays reviewable, never executable
+    const artifactValidationFailures = [];
+    if (detection && detection.validationFailure) {
+      artifactValidationFailures.push(detection.validationFailure);
+    }
+
     const draft = this._planner.plan({
       objective: planningObjective,
       missionType: missionType || undefined,
@@ -203,6 +209,14 @@ class MissionEngine {
     mission = await this._store.update({
       id: mission.id,
       status: MISSION_STATUS.PLANNING,
+      ...(artifactValidationFailures.length
+        ? {
+            deliverables: {
+              ...(mission.deliverables || {}),
+              artifactValidationFailures,
+            },
+          }
+        : {}),
     });
     await this._store.appendAudit({
       missionId: mission.id,
@@ -249,6 +263,9 @@ class MissionEngine {
             : null,
         artifactResolution:
           (mission.plan && mission.plan.artifactResolution) || null,
+        artifactValidationFailures: artifactValidationFailures.length
+          ? artifactValidationFailures
+          : null,
       },
     });
 
@@ -343,6 +360,19 @@ class MissionEngine {
         };
       }
     }
+
+    // SPEC-052: preserve reviewable validation failures across execute overwrite
+    if (artifactValidationFailures.length) {
+      const nextDeliverables = {
+        ...(mission.deliverables || {}),
+        artifactValidationFailures,
+      };
+      mission = await this._store.update({
+        id: mission.id,
+        deliverables: nextDeliverables,
+      });
+    }
+
     return mission;
   }
 
@@ -543,6 +573,10 @@ class MissionEngine {
       pendingOperatorImport:
         (mission.deliverables && mission.deliverables.pendingOperatorImport) ||
         null,
+      artifactValidationFailures:
+        (mission.deliverables &&
+          mission.deliverables.artifactValidationFailures) ||
+        [],
       outboundBlocked: true,
     };
   }
@@ -640,6 +674,28 @@ class MissionEngine {
     });
 
     if (!published.ok) {
+      const failure =
+        published.validationFailure ||
+        {
+          title: 'Artifact Validation',
+          artifactType: 'ProspectList',
+          status: 'FAILED',
+          reasons: published.errors || ['ProspectList validation failed'],
+          remainsPlainText: false,
+          createdAt: new Date().toISOString(),
+        };
+      const priorFailures = Array.isArray(
+        mission.deliverables && mission.deliverables.artifactValidationFailures
+      )
+        ? mission.deliverables.artifactValidationFailures
+        : [];
+      await this._store.update({
+        id: mission.id,
+        deliverables: {
+          ...(mission.deliverables || {}),
+          artifactValidationFailures: [...priorFailures, failure],
+        },
+      });
       const err = new Error(
         (published.errors && published.errors[0]) ||
           'ProspectList validation failed'
@@ -647,6 +703,7 @@ class MissionEngine {
       err.code = 'prospect_list_invalid';
       err.errors = published.errors;
       err.warnings = published.warnings;
+      err.validationFailure = failure;
       throw err;
     }
 
