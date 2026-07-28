@@ -6,6 +6,11 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Kalshi BTC research package migrated into the monorepo ([SPEC-049](docs/specs/SPEC-049_Kalshi_Research_Package.md) / [ADR-033](docs/adr/ADR-033_Kalshi_Research_Stays_Isolated.md))
+  - `packages/kalshi-research` — deterministic paper/replay research only
+  - Feature extraction + `feature-report` CLI; fee-aware replay/train-test tooling preserved
+  - Isolated from production: not imported by Node services, not deployed, no live order path
+  - Tests: `npm run test:kalshi-research` (pytest inside the package)
 - Sales Intelligence Engine ([SPEC-048](docs/specs/SPEC-048_Sales_Intelligence_Engine.md) / [ADR-032](docs/adr/ADR-032_Strategy_Before_Language.md))
   - Structured `SalesIntelligenceProfile` between Company Intelligence and channel generators
   - Messaging strategy, evidence-linked personalization claims, quality gates, Human Test / Operator Confidence Score

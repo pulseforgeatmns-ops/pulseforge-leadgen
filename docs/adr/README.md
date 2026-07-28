@@ -35,6 +35,7 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-030](ADR-030_Command_Deck_Is_an_Operator_Workspace.md) | Command Deck Is an Operator Workspace | Accepted |
 | [ADR-031](ADR-031_Review_Must_Be_Evidence_First.md) | Review Must Be Evidence-First | Accepted |
 | [ADR-032](ADR-032_Strategy_Before_Language.md) | Strategy Before Language | Accepted |
+| [ADR-033](ADR-033_Kalshi_Research_Stays_Isolated.md) | Kalshi Research Stays Isolated From Production Execution | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

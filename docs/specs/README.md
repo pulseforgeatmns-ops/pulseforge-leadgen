@@ -55,6 +55,7 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-046](SPEC-046_Trade_Intelligence_Engine.md) | Trade Intelligence Engine | Done | v1.0.1 |
 | [SPEC-047](SPEC-047_Review_Workspace_Interaction_Layer.md) | Review Workspace Interaction Layer | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-048](SPEC-048_Sales_Intelligence_Engine.md) | Sales Intelligence Engine | Implemented (v1 thin slice) | v1.3.0 |
+| [SPEC-049](SPEC-049_Kalshi_Research_Package.md) | Kalshi Research Package (monorepo isolation) | Implemented (v1 migration) | Unreleased |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

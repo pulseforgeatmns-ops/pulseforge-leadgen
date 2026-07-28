@@ -33,6 +33,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-030](docs/adr/ADR-030_Command_Deck_Is_an_Operator_Workspace.md) | Command Deck Is an Operator Workspace | Accepted | Command Deck is an operator workspace — presentation polish must not change Mission execution semantics |
 | [ADR-031](docs/adr/ADR-031_Review_Must_Be_Evidence_First.md) | Review Must Be Evidence-First | Accepted | Review Workspace presents business artifacts and evidence before implementation metadata |
 | [ADR-032](docs/adr/ADR-032_Strategy_Before_Language.md) | Strategy Before Language | Accepted | Separate business reasoning from language generation; Sales Intelligence Profile before channel copy; optimize for Operator Approval Rate |
+| [ADR-033](docs/adr/ADR-033_Kalshi_Research_Stays_Isolated.md) | Kalshi Research Stays Isolated | Accepted | Kalshi BTC research lives at `packages/kalshi-research`; paper/replay only; never deployed; never wired into production execution |
 
 ## How to add a decision
 
