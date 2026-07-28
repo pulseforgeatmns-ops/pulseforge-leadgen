@@ -761,6 +761,16 @@
 
     const acquireRows = acquisitions
       .map((a) => {
+        if (a.strategy === 'unavailable') {
+          return `<div class="msn-si-row"><dt>${escapeHtml(
+            a.artifactType || 'Artifact'
+          )}</dt><dd><strong>Blocked</strong> — no registered producer<br/><span class="msn-objective-meta">Expected: ${escapeHtml(
+            a.expectedProducer || '—'
+          )} · ${escapeHtml(
+            a.recommendedAction ||
+              `Register a capability that produces ${a.artifactType}`
+          )}</span></dd></div>`;
+        }
         const opts =
           (missing.find((m) => m.artifactType === a.artifactType) || {})
             .options || [];
@@ -777,6 +787,14 @@
 
     const missingRows = missing
       .filter((m) => !(resolved || []).some((r) => r.type === m.artifactType))
+      .filter(
+        (m) =>
+          !acquisitions.some(
+            (a) =>
+              a.artifactType === m.artifactType &&
+              a.strategy === 'unavailable'
+          )
+      )
       .map((m) => {
         const opts = (m.options || [])
           .map((o) => o.label || o.id)
@@ -788,7 +806,9 @@
             ? `<br/><span class="msn-objective-meta">Acquire via: ${escapeHtml(
                 opts.join(' · ')
               )}</span>`
-            : ''
+            : `<br/><span class="msn-objective-meta">Register a capability that produces ${escapeHtml(
+                m.artifactType
+              )}.</span>`
         }</dd></div>`;
       })
       .join('');
@@ -811,6 +831,95 @@
       ${
         skipRows
           ? `<h4 class="msn-subhead">Skipped Capabilities</h4><ul class="msn-bucket-list">${skipRows}</ul>`
+          : ''
+      }
+    </section>`;
+  }
+
+  /** SPEC-054 — why capabilities were selected, rejected, or unavailable */
+  function renderPlanningDiagnosticsHtml(diagnostics) {
+    const diag = diagnostics || null;
+    if (!diag) return '';
+    const decisions = Array.isArray(diag.decisions) ? diag.decisions : [];
+    const blocked = Array.isArray(diag.blocked) ? diag.blocked : [];
+    const segments = Array.isArray(diag.missionSegments)
+      ? diag.missionSegments
+      : [];
+    if (!decisions.length && !blocked.length && !segments.length) return '';
+
+    const decisionRows = decisions
+      .map((d) => {
+        const mark = d.selected ? '✓' : '✗';
+        return `<li><span>${mark} ${escapeHtml(
+          d.name || d.capabilityId || 'Capability'
+        )}${
+          d.reason
+            ? ` <span class="msn-objective-meta">— ${escapeHtml(d.reason)}</span>`
+            : ''
+        }</span></li>`;
+      })
+      .join('');
+
+    const blockedRows = blocked
+      .map((b) => {
+        if (b.kind === 'missing_producer' || b.artifact) {
+          return `<div class="msn-si-row"><dt>✗ ${escapeHtml(
+            b.expectedProducer || b.artifact || 'Producer'
+          )} missing</dt><dd>Reason: ${escapeHtml(
+            (b.possibleCauses && b.possibleCauses[0]) || b.reason || 'Blocked'
+          )}<br/><span class="msn-objective-meta">Suggested Fix: ${escapeHtml(
+            b.recommendedAction || 'Register a matching capability.'
+          )}</span></dd></div>`;
+        }
+        return `<div class="msn-si-row"><dt>✗ ${escapeHtml(
+          b.name || b.capabilityId || 'Capability'
+        )}</dt><dd>Reason: ${escapeHtml(
+          b.reason || 'Blocked'
+        )}<br/><span class="msn-objective-meta">Suggested Fix: ${escapeHtml(
+          b.recommendedAction || 'Inspect Capability Registry.'
+        )}</span></dd></div>`;
+      })
+      .join('');
+
+    const segmentRows = segments
+      .map((s) => {
+        const matches = (s.suggestedMatches || []).join(', ');
+        return `<div class="msn-si-row"><dt>Mission Segment</dt><dd>Input: ${escapeHtml(
+          s.input || '—'
+        )}<br/>Status: ${escapeHtml(
+          s.status || 'No matching mission alias'
+        )}${
+          matches
+            ? `<br/><span class="msn-objective-meta">Suggested Matches: ${escapeHtml(
+                matches
+              )}</span>`
+            : ''
+        }${
+          s.recommendedAction
+            ? `<br/><span class="msn-objective-meta">${escapeHtml(
+                s.recommendedAction
+              )}</span>`
+            : ''
+        }</dd></div>`;
+      })
+      .join('');
+
+    return `<section class="msn-block msn-planning-diagnostics" id="msnPlanningDiagnostics">
+      <h3>Planning Diagnostics</h3>
+      <p class="msn-objective-meta">Why the planner selected or blocked capabilities (SPEC-054 / ADR-038).</p>
+      ${
+        decisionRows
+          ? `<h4 class="msn-subhead">Capability Decisions</h4><ul class="msn-bucket-list">${decisionRows}</ul>`
+          : ''
+      }
+      ${
+        blockedRows
+          ? `<h4 class="msn-subhead">Blocked</h4><dl class="msn-si-dl">${blockedRows}</dl>`
+          : ''
+      }
+      ${
+        segmentRows
+          ? `<h4 class="msn-subhead">Unknown Mission Text</h4><dl class="msn-si-dl">${segmentRows}</dl>`
           : ''
       }
     </section>`;
@@ -2427,6 +2536,9 @@
             mission.plan.executionGraph.artifactResolution) ||
           null
       );
+      const planningDiagnosticsHtml = renderPlanningDiagnosticsHtml(
+        (mission.plan && mission.plan.planningDiagnostics) || null
+      );
       const objectiveHtml = `<section class="msn-block" id="msnObjectiveBlock">
           <h3>Objective</h3>
           <div data-msn-objective-collapsed>
@@ -2798,6 +2910,7 @@
         ${renderReviewQueueHtml(msnReviewSession)}
         ${missionPlanHtml}
         ${artifactResolutionHtml}
+        ${planningDiagnosticsHtml}
         ${validationFailureHtml}
         ${objectiveHtml}
         ${inputsHtml}

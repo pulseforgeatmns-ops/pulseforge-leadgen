@@ -85,7 +85,7 @@ describe('SPEC-023 CapabilityRunner', () => {
     });
     await assert.rejects(
       () => runner.run({ capabilityId: 'scout', context: {} }),
-      /Unknown capability/
+      /Capability not registered|Recommended Action/
     );
   });
 });

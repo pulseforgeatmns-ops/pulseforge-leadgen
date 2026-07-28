@@ -165,12 +165,14 @@ function createExecutionGraph(missionOrInput = {}) {
   closeDependencies(selected);
 
   // 8. SPEC-051 / ADR-035 — resolve artifacts, then prune acquisition stages
+  //    SPEC-054: pass Capability Registry for producer diagnostics
   const artifactResolution = resolveArtifacts({
     selectedStages: selected,
     missionPlan,
     availableArtifacts: missionOrInput.availableArtifacts,
     previousMissionArtifacts: missionOrInput.previousMissionArtifacts,
     workspaceArtifacts: missionOrInput.workspaceArtifacts,
+    registry: missionOrInput.registry || null,
   });
   // Discovery (and other pure producers) may be skipped even if seeded or
   // named in execution — existing compatible artifacts win (ADR-035).
@@ -185,7 +187,9 @@ function createExecutionGraph(missionOrInput = {}) {
   const missingWithOptions = (artifactResolution.missing || []).map(
     (artifactType) => ({
       artifactType,
-      options: acquisitionOptions(artifactType),
+      options: acquisitionOptions(artifactType, {
+        registry: missionOrInput.registry || null,
+      }),
     })
   );
 

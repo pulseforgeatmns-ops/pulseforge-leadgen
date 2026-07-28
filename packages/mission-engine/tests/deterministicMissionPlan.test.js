@@ -71,7 +71,12 @@ describe('SPEC-050 Intent Parser — Mission grammar', () => {
     const plan = parseIntent(
       'Build Campaign 001. Teleport the prospects into hyperspace.'
     );
-    assert.ok(plan.notes.some((n) => /unknown capability|hyperspace/i.test(n)));
+    assert.ok(
+      plan.notes.some(
+        (n) =>
+          /no matching mission alias|hyperspace|suggested|teleport/i.test(n)
+      )
+    );
     assert.ok(
       !plan.execution.some((e) => /hyperspace|teleport/i.test(String(e.stageId)))
     );

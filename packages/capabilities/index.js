@@ -19,6 +19,9 @@ const {
   CapabilityRegistry,
   createCapabilityRegistry,
   assertCapability,
+  formatMissingCapabilityError,
+  normalizeArtifactKey,
+  DEFAULT_ACQUISITION_COST,
 } = require('./CapabilityRegistry');
 const {
   CapabilityRunner,
@@ -41,6 +44,8 @@ const {
 } = require('./builtins/stubs');
 const {
   CAPABILITY_ARTIFACT_CONTRACTS,
+  CAPABILITY_MISSION_ALIASES,
+  DEFAULT_CAPABILITY_VERSION,
   withArtifactContracts,
 } = require('./artifactContracts');
 
@@ -55,6 +60,9 @@ module.exports = {
   CapabilityRegistry,
   createCapabilityRegistry,
   assertCapability,
+  formatMissingCapabilityError,
+  normalizeArtifactKey,
+  DEFAULT_ACQUISITION_COST,
   CapabilityRunner,
   createCapabilityRunner,
   createProspectDiscoveryStub,
@@ -71,6 +79,8 @@ module.exports = {
   registerBuiltinCapabilities,
   createBuiltinRegistry,
   CAPABILITY_ARTIFACT_CONTRACTS,
+  CAPABILITY_MISSION_ALIASES,
+  DEFAULT_CAPABILITY_VERSION,
   withArtifactContracts,
   discovery: require('./discovery'),
   ranking: require('./ranking'),

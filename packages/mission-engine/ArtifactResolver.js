@@ -13,6 +13,12 @@ const {
   TYPE_TO_ALIAS,
 } = require('./ArtifactRegistry');
 const { getStage, listStages, stageLabel } = require('./StageLibrary');
+const { resolveCompatibleProducer } = require('./CompatibilityResolver');
+const {
+  formatDiagnosticMessage,
+  buildMissingProducerDiagnostic,
+  EXPECTED_PRODUCER_HINTS,
+} = require('./PlanningDiagnostics');
 
 const ARTIFACT_SOURCES = Object.freeze({
   CURRENT_MISSION: 'current_mission',
@@ -295,11 +301,32 @@ function rankCandidates(candidates) {
 }
 
 /**
- * Find stages that produce a given artifact type.
+ * Find stages / registry capabilities that produce a given artifact type.
+ * Prefers Capability Registry when provided (SPEC-054).
  * @param {string} artifactType
- * @returns {object[]} stage defs sorted by acquisition cost
+ * @param {object} [opts]
+ * @param {object} [opts.registry]
+ * @returns {object[]} stage-like defs sorted by acquisition cost
  */
-function producersForArtifact(artifactType) {
+function producersForArtifact(artifactType, opts = {}) {
+  const registry = opts.registry || null;
+  if (registry) {
+    const resolved = resolveCompatibleProducer(artifactType, { registry });
+    if (resolved.ranked.length) {
+      return resolved.ranked.map((p) => {
+        const stage = getStage(p.capabilityId);
+        return {
+          id: (stage && stage.id) || p.capabilityId,
+          name: (stage && stage.name) || p.name,
+          capabilityId: p.capabilityId,
+          produces: p.produces,
+          acquisitionCost: p.cost,
+        };
+      });
+    }
+    // Fall through to Stage Library so seeds still work if contracts lag
+  }
+
   const alias = TYPE_TO_ALIAS[artifactType] || null;
   const stages = listStages().filter((s) => {
     if (!s.capabilityId) return false;
@@ -326,10 +353,12 @@ function producersForArtifact(artifactType) {
  * @param {object|object[]} [input.previousMissionArtifacts]
  * @param {object|object[]} [input.workspaceArtifacts]
  * @param {object} [input.missionPlan]
+ * @param {object} [input.registry] - Capability Registry (SPEC-054)
  * @returns {object} resolution result
  */
 function resolveArtifacts(input = {}) {
   const selected = input.selectedStages;
+  const registry = input.registry || null;
   const required = [
     ...(input.required && input.required.length
       ? input.required.map((t) => resolveArtifactType(t) || t).filter(Boolean)
@@ -364,6 +393,7 @@ function resolveArtifacts(input = {}) {
   /** @type {Record<string, string>} */
   const skippedStages = {};
   const acquireStageIds = [];
+  const diagnostics = [];
 
   for (const artifactType of requiredUnique) {
     const matches = rankCandidates(pool.filter((c) => c.type === artifactType));
@@ -383,7 +413,7 @@ function resolveArtifacts(input = {}) {
         producer: best.producer,
       });
 
-      for (const producer of producersForArtifact(artifactType)) {
+      for (const producer of producersForArtifact(artifactType, { registry })) {
         skippedStages[producer.id] =
           `Compatible ${artifactType} already exists (${SOURCE_LABELS[best.source] || best.source})`;
         acquisitions.push({
@@ -399,10 +429,14 @@ function resolveArtifacts(input = {}) {
     }
 
     missing.push(artifactType);
-    const producers = producersForArtifact(artifactType);
+    const producers = producersForArtifact(artifactType, { registry });
     const chosen = producers[0] || null;
     if (chosen) {
       acquireStageIds.push(chosen.id);
+      const compat =
+        registry
+          ? resolveCompatibleProducer(artifactType, { registry })
+          : null;
       acquisitions.push({
         artifactType,
         strategy: 'capability_acquisition',
@@ -410,19 +444,39 @@ function resolveArtifacts(input = {}) {
         stageName: chosen.name,
         capabilityId: chosen.capabilityId,
         reason: `No compatible ${artifactType}; acquire via ${chosen.name}`,
-        cost: STAGE_ACQUISITION_COST[chosen.id] ?? 500,
+        cost:
+          chosen.acquisitionCost ??
+          STAGE_ACQUISITION_COST[chosen.id] ??
+          500,
         alternatives: producers.slice(1).map((p) => ({
           stageId: p.id,
           name: p.name,
-          cost: STAGE_ACQUISITION_COST[p.id] ?? 500,
+          cost: p.acquisitionCost ?? STAGE_ACQUISITION_COST[p.id] ?? 500,
         })),
+        rankingLosses: (compat && compat.rankingLosses) || [],
       });
     } else {
+      const compat = resolveCompatibleProducer(artifactType, { registry });
+      const diagnostic =
+        compat.diagnostic ||
+        buildMissingProducerDiagnostic({
+          artifact: artifactType,
+          expectedProducer:
+            EXPECTED_PRODUCER_HINTS[artifactType] || null,
+        });
+      diagnostics.push(diagnostic);
       acquisitions.push({
         artifactType,
         strategy: 'unavailable',
         stageId: null,
-        reason: `No acquisition capability registered for ${artifactType}`,
+        stageName: null,
+        capabilityId: null,
+        reason: formatDiagnosticMessage(diagnostic),
+        diagnostic,
+        expectedProducer: diagnostic.expectedProducer,
+        registeredProducers: diagnostic.registeredProducers,
+        possibleCauses: diagnostic.possibleCauses,
+        recommendedAction: diagnostic.recommendedAction,
         cost: Infinity,
       });
     }
@@ -435,6 +489,7 @@ function resolveArtifacts(input = {}) {
     acquisitions,
     skippedStages,
     acquireStageIds: [...new Set(acquireStageIds)],
+    diagnostics,
     summary: buildResolutionSummary({
       required: requiredUnique,
       resolved,
@@ -496,7 +551,11 @@ function buildResolutionSummary(parts) {
     if (a.strategy === 'capability_acquisition') {
       lines.push(`${a.artifactType}: acquire via ${a.stageName || a.stageId}`);
     } else if (a.strategy === 'unavailable') {
-      lines.push(`${a.artifactType}: no acquisition path`);
+      lines.push(
+        a.recommendedAction
+          ? `${a.artifactType}: blocked — ${a.recommendedAction}`
+          : `${a.artifactType}: no registered producer — register a capability that produces ${a.artifactType}`
+      );
     }
   }
   for (const [stageId, reason] of Object.entries(parts.skippedStages || {})) {
@@ -508,9 +567,11 @@ function buildResolutionSummary(parts) {
 /**
  * Operator-facing acquisition options when an artifact is missing.
  * @param {string} artifactType
+ * @param {object} [opts]
+ * @param {object} [opts.registry]
  * @returns {object[]}
  */
-function acquisitionOptions(artifactType) {
+function acquisitionOptions(artifactType, opts = {}) {
   const type = resolveArtifactType(artifactType) || artifactType;
   const options = [];
   if (type === ARTIFACT_TYPES.PROSPECT_LIST) {
@@ -524,13 +585,13 @@ function acquisitionOptions(artifactType) {
       }
     );
   }
-  for (const p of producersForArtifact(type)) {
+  for (const p of producersForArtifact(type, opts)) {
     if (!options.some((o) => o.id === p.id)) {
       options.push({
         id: p.id,
         label: p.name,
         strategy: 'capability',
-        cost: STAGE_ACQUISITION_COST[p.id] ?? 500,
+        cost: p.acquisitionCost ?? STAGE_ACQUISITION_COST[p.id] ?? 500,
       });
     }
   }
