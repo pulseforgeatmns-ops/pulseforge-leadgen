@@ -1384,6 +1384,52 @@ body.theme-dark .mx-ask-submit {
   font-size: 0.75rem;
   color: var(--pf-text-muted);
 }
+.msn-recovery {
+  border: 1px solid var(--pf-border);
+  border-radius: 0.5rem;
+  padding: 0.85rem 1rem;
+  background: color-mix(in srgb, var(--pf-surface) 88%, #b45309 12%);
+}
+.msn-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+}
+.msn-import {
+  margin-top: 0.85rem;
+  display: grid;
+  gap: 0.45rem;
+}
+.msn-import-label {
+  font-weight: 600;
+}
+.msn-import-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--pf-text-muted);
+}
+.msn-import-input {
+  width: 100%;
+  min-height: 8rem;
+  font: inherit;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--pf-border);
+  border-radius: 0.4rem;
+  background: var(--pf-surface);
+  color: var(--pf-text);
+  resize: vertical;
+}
+.msn-import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.msn-import-error {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 0.85rem;
+}
 .msn-artifact details {
   margin-top: 0.4rem;
 }

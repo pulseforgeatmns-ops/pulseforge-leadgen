@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Operator Artifact Injection ([SPEC-043](docs/specs/SPEC-043_Operator_Artifact_Injection.md) / [ADR-029](docs/adr/ADR-029_Artifact_Provenance_Must_Not_Affect_Consumption.md))
+  - Operator ingress publishes validated `ProspectList` onto the Mission Artifact Bus (CSV / paste / manual)
+  - Discovery may be marked **Satisfied (Operator Supplied)**; Mission resumes at Company Intelligence
+  - Consumers resolve by type / validation status / revision only — producer is provenance
+  - Workspace recovery when Discovery blocks: Retry / Import Prospect List / Cancel
+  - API: `POST /api/v1/missions/:id/artifacts/inject`
+  - Tests: `npm run test:mission` (operatorArtifactInjection.test.js)
 - Mission Artifact Bus ([SPEC-042](docs/specs/SPEC-042_Mission_Artifact_Bus.md) / [ADR-028](docs/adr/ADR-028_Business_State_Flows_Through_Artifacts.md))
   - Typed, immutable, versioned business artifacts (`ProspectList`, `OpportunityRanking`, `Campaign`, …)
   - Artifact Registry + Artifact Bus API: publish / get / getLatest / history / validate / compare / replay / consume

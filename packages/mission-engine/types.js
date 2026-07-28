@@ -61,6 +61,9 @@ const AUDIT_KINDS = Object.freeze({
   ARTIFACT_QUARANTINED: 'artifact_quarantined',
   ARTIFACT_SUPERSEDED: 'artifact_superseded',
   ARTIFACT_CONSUMED: 'artifact_consumed',
+  /** SPEC-043 Operator Artifact Injection */
+  ARTIFACT_INJECTED: 'artifact_injected',
+  STAGE_SATISFIED: 'stage_satisfied',
 });
 
 /** SPEC-040 — stage business outcomes */
@@ -69,6 +72,8 @@ const STAGE_OUTCOMES = Object.freeze({
   COMPLETED_WITH_WARNINGS: 'completed_with_warnings',
   BLOCKED: 'blocked',
   FAILED: 'failed',
+  /** SPEC-043 — Discovery satisfied by operator-supplied ProspectList */
+  SATISFIED_OPERATOR_SUPPLIED: 'satisfied_operator_supplied',
 });
 
 /** SPEC-039 — message classification against an active Mission */

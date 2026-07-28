@@ -12,6 +12,8 @@ const STAGE_OUTCOMES = Object.freeze({
   COMPLETED_WITH_WARNINGS: 'completed_with_warnings',
   BLOCKED: 'blocked',
   FAILED: 'failed',
+  /** SPEC-043 — operator-supplied artifact satisfies the stage */
+  SATISFIED_OPERATOR_SUPPLIED: 'satisfied_operator_supplied',
 });
 
 const ARTIFACT_VALIDATION_STATUS = Object.freeze({
@@ -26,6 +28,7 @@ const STAGE_OUTCOME_LABELS = Object.freeze({
   [STAGE_OUTCOMES.COMPLETED_WITH_WARNINGS]: 'Completed With Warnings',
   [STAGE_OUTCOMES.BLOCKED]: 'Blocked',
   [STAGE_OUTCOMES.FAILED]: 'Failed',
+  [STAGE_OUTCOMES.SATISFIED_OPERATOR_SUPPLIED]: 'Satisfied (Operator Supplied)',
 });
 
 /** @type {Record<string, object>} */

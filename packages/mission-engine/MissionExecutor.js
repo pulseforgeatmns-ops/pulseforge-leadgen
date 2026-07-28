@@ -435,18 +435,23 @@ class MissionExecutor {
         reviewSummary: gate.reviewSummary,
       });
 
-      const completedSteps = steps.map((s, idx) =>
-        idx <= i
-          ? {
-              ...s,
-              status: 'completed',
-              outcome: gate.outcome,
-              outcomeLabel: gate.outcomeLabel,
-              warnings: gate.warnings,
-              reviewSummary: gate.reviewSummary,
-            }
-          : s
-      );
+      const completedSteps = steps.map((s, idx) => {
+        if (idx < i) {
+          // Preserve earlier stage outcomes (e.g. Satisfied Operator Supplied)
+          return { ...s, status: 'completed' };
+        }
+        if (idx === i) {
+          return {
+            ...s,
+            status: 'completed',
+            outcome: gate.outcome,
+            outcomeLabel: gate.outcomeLabel,
+            warnings: gate.warnings,
+            reviewSummary: gate.reviewSummary,
+          };
+        }
+        return s;
+      });
       const stageLabel =
         gate.outcome === STAGE_OUTCOMES.COMPLETED_WITH_WARNINGS
           ? `${step.stageLabel || step.name} — ${gate.outcomeLabel}`

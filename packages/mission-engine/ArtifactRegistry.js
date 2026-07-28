@@ -87,7 +87,12 @@ const REGISTRY = Object.freeze({
     name: ARTIFACT_TYPES.PROSPECT_LIST,
     alias: 'prospect_list',
     schemaVersion: SCHEMA_VERSION,
-    producers: ['prospect_discovery'],
+    // Discovery is one producer — operator ingress is first-class (SPEC-043 / ADR-029)
+    producers: [
+      'prospect_discovery',
+      'operator_manual',
+      'operator_import',
+    ],
     consumers: ['company_enrichment', 'opportunity_ranking'],
     validate: (payload) => {
       const errors = [];
@@ -105,6 +110,20 @@ const REGISTRY = Object.freeze({
           `Requested ${payload.targetCount} prospects; found ${count}`
         );
       }
+      // Shared business fields (Discovery + operator): Company Name required
+      prospects.forEach((p, i) => {
+        const name = prospectCompanyName(p);
+        if (!name) {
+          errors.push(`Prospect ${i + 1}: Company Name is required`);
+          return;
+        }
+        if (!prospectField(p, ['website', 'url', 'domain'])) {
+          warnings.push(`Prospect ${i + 1} (${name}): Website recommended`);
+        }
+        if (!prospectField(p, ['address', 'street', 'location'])) {
+          warnings.push(`Prospect ${i + 1} (${name}): Address recommended`);
+        }
+      });
       return { ok: errors.length === 0, warnings, errors };
     },
   }),
@@ -329,29 +348,6 @@ function draftsFromCapabilityOutputs(produces, outputs) {
     drafts.push({ artifactType, alias: TYPE_TO_ALIAS[artifactType] || alias, payload });
   }
 
-  // Always try ProspectList when prospects present even if produces omitted
-  if (!seen.has(ARTIFACT_TYPES.PROSPECT_LIST) && Array.isArray(out.prospects)) {
-    drafts.push({
-      artifactType: ARTIFACT_TYPES.PROSPECT_LIST,
-      alias: 'prospect_list',
-      payload: extractPayload(ARTIFACT_TYPES.PROSPECT_LIST, out),
-    });
-  }
-  if (!seen.has(ARTIFACT_TYPES.CAMPAIGN) && out.campaign) {
-    drafts.push({
-      artifactType: ARTIFACT_TYPES.CAMPAIGN,
-      alias: 'campaign',
-      payload: extractPayload(ARTIFACT_TYPES.CAMPAIGN, out),
-    });
-  }
-  if (!seen.has(ARTIFACT_TYPES.DISCOVERY_PROFILE) && out.discoveryProfile) {
-    drafts.push({
-      artifactType: ARTIFACT_TYPES.DISCOVERY_PROFILE,
-      alias: 'discovery_profile',
-      payload: extractPayload(ARTIFACT_TYPES.DISCOVERY_PROFILE, out),
-    });
-  }
-
   return drafts.filter((d) => d.payload != null);
 }
 
@@ -490,6 +486,21 @@ function cloneJson(value) {
   } catch {
     return value;
   }
+}
+
+function prospectCompanyName(p) {
+  if (!p || typeof p !== 'object') return '';
+  return String(
+    p.companyName || p.company || p.name || p.businessName || ''
+  ).trim();
+}
+
+function prospectField(p, keys) {
+  if (!p || typeof p !== 'object') return '';
+  for (const k of keys) {
+    if (p[k] != null && String(p[k]).trim()) return String(p[k]).trim();
+  }
+  return '';
 }
 
 /**

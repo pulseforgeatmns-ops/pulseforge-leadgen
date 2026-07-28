@@ -31,6 +31,7 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-026](ADR-026_Business_Success_Determines_Pipeline_Progress.md) | Business Success Determines Pipeline Progress | Accepted |
 | [ADR-027](ADR-027_Mission_Planning_Is_Objective_Driven.md) | Mission Planning Is Objective-Driven | Accepted |
 | [ADR-028](ADR-028_Business_State_Flows_Through_Artifacts.md) | Business State Flows Through Artifacts | Accepted |
+| [ADR-029](ADR-029_Artifact_Provenance_Must_Not_Affect_Consumption.md) | Artifact Provenance Must Not Affect Consumption | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

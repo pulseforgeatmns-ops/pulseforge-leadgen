@@ -72,6 +72,8 @@ const {
 const {
   MissionEngine,
   createMissionEngine,
+  isDiscoveryBlocked,
+  discoveryRecoveryActions,
 } = require('./MissionEngine');
 const {
   ActiveMissionResolver,
@@ -98,6 +100,7 @@ const {
   ARTIFACT_EVENTS,
 } = require('./ArtifactBus');
 const ArtifactRegistry = require('./ArtifactRegistry');
+const OperatorArtifactInjection = require('./OperatorArtifactInjection');
 
 module.exports = {
   MISSION_STATUS,
@@ -158,6 +161,8 @@ module.exports = {
   ensureMissionSchema,
   MissionEngine,
   createMissionEngine,
+  isDiscoveryBlocked,
+  discoveryRecoveryActions,
   ActiveMissionResolver,
   createActiveMissionResolver,
   InMemoryActiveMissionBindingStore,
@@ -165,4 +170,5 @@ module.exports = {
   ArtifactBus,
   createArtifactBus,
   ArtifactRegistry,
+  OperatorArtifactInjection,
 };
