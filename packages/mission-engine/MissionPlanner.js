@@ -1,13 +1,16 @@
 'use strict';
 
 /**
- * MissionPlanner — objective → Mission Plan IR → execution graph
- * (SPEC-041 / ADR-027 + SPEC-050 / ADR-034 + SPEC-051 / ADR-035).
+ * MissionPlanner — objective → Intent Understanding → MissionIntent →
+ * Capability Planning → Mission Plan IR → execution graph
+ * (SPEC-041 / ADR-027 + SPEC-050 / ADR-034 + SPEC-051 / ADR-035 +
+ * SPEC-055 / ADR-039).
  * Resolves required artifacts before finalizing capabilities.
  * Selects Discovery Profiles for Prospect Discovery (SPEC-024).
  * Discovers capabilities from the registry. Never imports agent modules.
  * Never executes capabilities — only plans.
  * Capabilities consume the Mission Plan — never raw operator text.
+ * Intent Understanding owns language; Capability Planning owns execution.
  */
 
 const { BUILTIN_IDS } = require('../capabilities');
@@ -28,6 +31,14 @@ const {
 } = require('./types');
 const { matchMissionType } = require('./IntentRouter');
 const { parseIntent } = require('./IntentParser');
+const { understandIntent } = require('./IntentUnderstanding');
+const {
+  planFromIntent,
+  resolveMissionTypeFromIntent,
+} = require('./CapabilityPlanner');
+const {
+  summarizeMissionIntent,
+} = require('./MissionIntent');
 const {
   validateMissionPlan,
   summarizeMissionPlan,
@@ -204,23 +215,67 @@ class MissionPlanner {
       throw new Error('objective is required');
     }
     const objectiveText = String(input.objective).trim();
+    const registryIds = this._registry
+      ? this._registry.list().map((c) => c.id)
+      : undefined;
 
-    // SPEC-050 / ADR-034: compile NL → Mission Plan IR before any graph work
-    // SPEC-054: pass registry for alias resolution + diagnostics
-    const missionPlan =
-      input.missionPlan ||
-      parseIntent(objectiveText, {
-        registeredCapabilityIds: this._registry
-          ? this._registry.list().map((c) => c.id)
-          : undefined,
+    // SPEC-055 / ADR-039: Intent Understanding → MissionIntent → Capability Planning
+    // Capabilities never parse language; Intent Understanding owns semantics.
+    let missionIntent =
+      input.missionIntent ||
+      understandIntent(objectiveText, { registry: this._registry });
+
+    let missionPlan = input.missionPlan || null;
+    let plannedFromIntent = null;
+
+    if (!missionPlan) {
+      plannedFromIntent = planFromIntent(missionIntent, {
+        registry: this._registry,
+        registeredCapabilityIds: registryIds,
+      });
+
+      if (plannedFromIntent.clarification) {
+        // Explicit missionType means the operator/API chose a path — continue
+        // into graph validation (may fail closed) instead of soft clarification.
+        if (input.missionType) {
+          missionPlan = parseIntent(objectiveText, {
+            registeredCapabilityIds: registryIds,
+            registry: this._registry,
+          });
+          missionIntent = plannedFromIntent.missionIntent || missionIntent;
+        } else {
+          return buildClarificationDraft({
+            input,
+            objectiveText,
+            missionIntent: plannedFromIntent.missionIntent || missionIntent,
+            suggestedInterpretations:
+              plannedFromIntent.suggestedInterpretations || [],
+          });
+        }
+      } else {
+        missionPlan = plannedFromIntent.missionPlan;
+        missionIntent = plannedFromIntent.missionIntent || missionIntent;
+      }
+    } else if (!input.missionIntent) {
+      // Legacy path: Mission Plan supplied without Intent — still attach understanding
+      missionIntent = understandIntent(
+        missionPlan.sourceText || objectiveText,
+        { registry: this._registry }
+      );
+    }
+
+    // Fallback: if capability planning produced no plan, use IntentParser (SPEC-050)
+    if (!missionPlan) {
+      missionPlan = parseIntent(objectiveText, {
+        registeredCapabilityIds: registryIds,
         registry: this._registry,
       });
+    }
+
     const planValidation =
       missionPlan.validation ||
       validateMissionPlan(missionPlan, {
-        registeredCapabilityIds: this._registry
-          ? this._registry.list().map((c) => c.id)
-          : undefined,
+        registeredCapabilityIds: registryIds,
       });
     if (!planValidation.ok) {
       const err = new Error(
@@ -229,6 +284,7 @@ class MissionPlanner {
       err.code = 'MISSION_PLAN_INVALID';
       err.validation = planValidation;
       err.missionPlan = missionPlan;
+      err.missionIntent = missionIntent;
       throw err;
     }
 
@@ -236,10 +292,11 @@ class MissionPlanner {
       executableObjectiveText(missionPlan) ||
       String(missionPlan.objective || objectiveText).trim();
 
-    // Prefer IntentRouter on the original operator text so focused objectives
-    // (mail package / review / outcome) are not rewritten by Mission Plan IR.
+    // Prefer Intent→missionType, then IntentRouter on original operator text
     const missionType =
       input.missionType ||
+      (plannedFromIntent && plannedFromIntent.missionType) ||
+      resolveMissionTypeFromIntent(missionIntent) ||
       matchMissionType(objectiveText.toLowerCase(), objectiveText) ||
       matchMissionType(planningObjective.toLowerCase(), planningObjective) ||
       MISSION_TYPES.CAMPAIGN_CREATION;
@@ -336,6 +393,8 @@ class MissionPlanner {
           objectiveText,
           title: deriveTitle(planningObjective, missionType),
           constraints: baseConstraints,
+          missionIntent,
+          missionIntentSummary: summarizeMissionIntent(missionIntent),
           missionPlan,
           discoveryProfile: null,
           discoveryProfileResolution: profileSelection.resolution || {
@@ -354,6 +413,8 @@ class MissionPlanner {
             ],
             missionPlan,
             missionPlanSummary: summarizeMissionPlan(missionPlan),
+            missionIntent,
+            missionIntentSummary: summarizeMissionIntent(missionIntent),
             executionGraph: graph,
             explanation: explainPlan(graph),
             plannerVersion: PLANNER_VERSION,
@@ -509,11 +570,20 @@ class MissionPlanner {
 
     const title = deriveTitle(
       String(missionPlan.objective || planningObjective).trim(),
-      missionType
+      missionType,
+      {
+        campaign:
+          (missionPlan.parameters && missionPlan.parameters.campaign) ||
+          (missionIntent &&
+            missionIntent.target &&
+            missionIntent.target.campaign) ||
+          null,
+      }
     );
     const now = new Date().toISOString();
     const explanation = explainPlan(graph);
     const missionPlanSummary = summarizeMissionPlan(missionPlan);
+    const missionIntentSummary = summarizeMissionIntent(missionIntent);
     const planningDiagnostics = buildPlannerDiagnosticsPayload({
       steps,
       missingDiagnostics,
@@ -534,6 +604,8 @@ class MissionPlanner {
       objectiveText,
       title,
       constraints: baseConstraints,
+      missionIntent,
+      missionIntentSummary,
       missionPlan,
       discoveryProfile: profileSelection
         ? {
@@ -598,6 +670,8 @@ class MissionPlanner {
           : null,
         missionPlan,
         missionPlanSummary,
+        missionIntent,
+        missionIntentSummary,
         executionGraph: graph,
         explanation,
         plannerVersion: PLANNER_VERSION,
@@ -609,6 +683,10 @@ class MissionPlanner {
         planningDiagnostics,
       },
       confidence: steps.length ? confidenceSum / steps.length : 0,
+      intentConfidence:
+        missionIntent && missionIntent.confidence != null
+          ? missionIntent.confidence
+          : null,
       durationEstimateMs: totalDuration,
       progress: {
         completedSteps: 0,
@@ -772,6 +850,130 @@ class MissionPlanner {
 }
 
 /**
+ * SPEC-055 — low-confidence intent: surface suggested interpretations,
+ * do not invent capability nodes from aliases.
+ * @param {object} args
+ */
+function buildClarificationDraft(args = {}) {
+  const input = args.input || {};
+  const objectiveText = args.objectiveText || '';
+  const missionIntent = args.missionIntent;
+  const suggested =
+    args.suggestedInterpretations ||
+    (missionIntent && missionIntent.alternateIntents) ||
+    [];
+  const now = new Date().toISOString();
+  const intentSummary = summarizeMissionIntent(missionIntent);
+
+  return {
+    id: input.id || newId('msn'),
+    tenantId: String(input.tenantId),
+    clientId:
+      input.clientId != null
+        ? Number(input.clientId) || input.clientId
+        : input.tenantId,
+    type: MISSION_TYPES.OPERATOR_INBOX,
+    status: MISSION_STATUS.WAITING,
+    objectiveText,
+    title: 'Clarify Intent',
+    constraints: {
+      ...(input.constraints && typeof input.constraints === 'object'
+        ? input.constraints
+        : {}),
+      intentClarificationRequired: true,
+    },
+    missionIntent,
+    missionIntentSummary: intentSummary,
+    missionPlan: null,
+    createdBy: input.createdBy || 'operator',
+    priority: input.priority || 'normal',
+    plan: {
+      steps: [],
+      missingPrerequisites: ['intent_clarification'],
+      blocked: true,
+      blockingIssues: [
+        missionIntent && missionIntent.clarificationPrompt
+          ? missionIntent.clarificationPrompt
+          : 'Ambiguous operator request — clarification required',
+      ],
+      missionPlan: null,
+      missionPlanSummary: null,
+      missionIntent,
+      missionIntentSummary: intentSummary,
+      clarification: {
+        required: true,
+        prompt:
+          (missionIntent && missionIntent.clarificationPrompt) ||
+          'What would you like to accomplish?',
+        suggestedInterpretations: suggested,
+        matchedIntent:
+          (missionIntent &&
+            (missionIntent.matchedIntent || missionIntent.intentCategory)) ||
+          null,
+        confidence:
+          missionIntent && missionIntent.confidence != null
+            ? missionIntent.confidence
+            : 0,
+      },
+      executionGraph: null,
+      explanation: {
+        summary: 'Waiting for operator clarification of intent',
+        intentUnderstanding: intentSummary,
+      },
+      plannerVersion: PLANNER_VERSION,
+      selectedStages: [],
+      skippedStages: [],
+      reviewGates: [],
+      reasoning: {
+        intentUnderstanding: true,
+        needsClarification: true,
+      },
+      planningDiagnostics: buildPlanningDiagnostics({
+        decisions: [],
+        blocked: [
+          {
+            status: 'Clarification required',
+            reason:
+              (missionIntent && missionIntent.clarificationPrompt) ||
+              'Ambiguous operator request',
+            suggestedMatches: suggested.map((s) => ({
+              id: s.intent,
+              name: s.label || s.intent,
+              confidence: s.confidence,
+            })),
+            recommendedAction:
+              'Choose one of the suggested interpretations or rephrase the request.',
+          },
+        ],
+        missionSegments: [],
+      }),
+    },
+    progress: {
+      completedSteps: 0,
+      totalSteps: 0,
+      currentStage: 'Waiting — Clarify Intent',
+      currentCapabilityId: null,
+      percent: 0,
+      counts: null,
+      stageOutcome: 'waiting',
+    },
+    confidence: 0,
+    intentConfidence:
+      missionIntent && missionIntent.confidence != null
+        ? missionIntent.confidence
+        : 0,
+    blockingIssues: [
+      (missionIntent && missionIntent.clarificationPrompt) ||
+        'Ambiguous operator request — clarification required',
+    ],
+    needsClarification: true,
+    suggestedInterpretations: suggested,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
  * SPEC-054 — assemble Planning Diagnostics for Review Workspace.
  * @param {object} input
  */
@@ -830,32 +1032,35 @@ function buildPlannerDiagnosticsPayload(input = {}) {
 /**
  * @param {string} objective
  * @param {string} type
+ * @param {object} [meta]
  */
-function deriveTitle(objective, type) {
+function deriveTitle(objective, type, meta = {}) {
+  const campaignFromMeta =
+    meta && meta.campaign != null ? String(meta.campaign) : null;
   if (type === MISSION_TYPES.OPERATOR_INBOX) {
     return 'Operator Inbox';
   }
   if (type === MISSION_TYPES.OUTCOME_INTELLIGENCE) {
-    const campaign = campaignLabel(objective);
+    const campaign = campaignFromMeta || campaignLabel(objective);
     if (campaign) return `Outcome Intelligence — Campaign ${campaign}`;
     return 'Outcome Intelligence';
   }
   if (type === MISSION_TYPES.DIRECT_MAIL_EXECUTION) {
-    const campaign = campaignLabel(objective);
+    const campaign = campaignFromMeta || campaignLabel(objective);
     if (campaign) return `Direct Mail Execution — Campaign ${campaign}`;
     return 'Direct Mail Execution';
   }
   if (type === MISSION_TYPES.CAMPAIGN_REVIEW) {
-    const campaign = campaignLabel(objective);
+    const campaign = campaignFromMeta || campaignLabel(objective);
     if (campaign) return `Campaign Review — Campaign ${campaign}`;
     return 'Campaign Review';
   }
   if (type === MISSION_TYPES.MAIL_PACKAGE_GENERATION) {
-    const campaign = campaignLabel(objective);
+    const campaign = campaignFromMeta || campaignLabel(objective);
     if (campaign) return `Mail Packages — Campaign ${campaign}`;
     return 'Mail Package Generation';
   }
-  const campaign = campaignLabel(objective);
+  const campaign = campaignFromMeta || campaignLabel(objective);
   if (campaign) return `Campaign ${campaign}`;
   if (type === MISSION_TYPES.OVERFLOW_PARTNER_SEARCH) return 'Overflow Partner Search';
   if (type === MISSION_TYPES.ACQUISITION_SEARCH) return 'Acquisition Search';
@@ -913,4 +1118,5 @@ module.exports = {
   insertStage,
   removeStage,
   replaceStage,
+  buildClarificationDraft,
 };

@@ -640,8 +640,111 @@
   }
 
   /**
+   * SPEC-055 — Operator Request → Understood Intent → Execution Plan.
+   * Surfaces how Max interpreted the request before execution.
+   */
+  function renderMissionIntentHtml(missionIntent, summary) {
+    const intent = missionIntent || null;
+    const sum = summary || null;
+    if (!intent && !sum) return '';
+
+    const operatorRequest =
+      (sum && sum.operatorRequest) ||
+      (intent && intent.sourceText) ||
+      (intent && intent.goal) ||
+      '';
+    const understood =
+      (sum && sum.understoodIntent) ||
+      (intent && intent.label) ||
+      (intent && intent.matchedIntent) ||
+      '—';
+    const confidencePct =
+      (sum && sum.confidencePercent != null
+        ? sum.confidencePercent
+        : intent && intent.confidence != null
+          ? Math.round(Number(intent.confidence) * 100)
+          : null);
+    const goal = (sum && sum.goal) || (intent && intent.goal) || '';
+    const alts =
+      (sum && sum.alternateIntents) ||
+      (intent && intent.alternateIntents) ||
+      [];
+    const needsClarification =
+      (sum && sum.needsClarification) ||
+      (intent && intent.needsClarification) ||
+      false;
+    const clarificationPrompt =
+      (sum && sum.clarificationPrompt) ||
+      (intent && intent.clarificationPrompt) ||
+      null;
+    const campaign =
+      (sum && sum.target && sum.target.campaign) ||
+      (intent && intent.target && intent.target.campaign) ||
+      null;
+
+    const altHtml =
+      Array.isArray(alts) && alts.length
+        ? `<div class="msn-si-row"><dt>Alternatives</dt><dd>${escapeHtml(
+            alts
+              .map((a) => {
+                const label = a.label || a.intent || '';
+                const c =
+                  a.confidence != null
+                    ? ` (${Math.round(Number(a.confidence) * 100)}%)`
+                    : '';
+                return `${label}${c}`;
+              })
+              .join(' · ')
+          )}</dd></div>`
+        : '';
+
+    return `<section class="msn-block msn-mission-intent" id="msnMissionIntent">
+      <h3>Understood Intent</h3>
+      <p class="msn-objective-meta">How Max interpreted the request before selecting capabilities.</p>
+      <dl class="msn-si-dl">
+        <div class="msn-si-row"><dt>Operator Request</dt><dd>${escapeHtml(
+          operatorRequest || '—'
+        )}</dd></div>
+        <div class="msn-si-row"><dt>Understood Intent</dt><dd><strong>${escapeHtml(
+          understood
+        )}</strong>${
+          confidencePct != null
+            ? ` <span class="msn-objective-meta">(Confidence: ${escapeHtml(
+                String(confidencePct)
+              )}%)</span>`
+            : ''
+        }</dd></div>
+        ${
+          goal && goal !== understood
+            ? `<div class="msn-si-row"><dt>Goal</dt><dd>${escapeHtml(
+                goal
+              )}</dd></div>`
+            : ''
+        }
+        ${
+          campaign
+            ? `<div class="msn-si-row"><dt>Target</dt><dd>Campaign ${escapeHtml(
+                String(campaign)
+              )}</dd></div>`
+            : ''
+        }
+        ${altHtml}
+      </dl>
+      ${
+        needsClarification
+          ? `<p class="msn-objective-meta" role="status">${escapeHtml(
+              clarificationPrompt ||
+                'Ambiguous request — choose a suggested interpretation.'
+            )}</p>`
+          : ''
+      }
+    </section>`;
+  }
+
+  /**
    * SPEC-050 — show parsed Mission Plan before / alongside execution artifacts.
    * Operators verify intent was interpreted correctly; Notes never look like stages.
+   * SPEC-055 — Execution Plan follows Understood Intent.
    */
   function renderMissionPlanHtml(missionPlan, summary) {
     const plan = missionPlan || null;
@@ -678,8 +781,8 @@
       : String(execution || '');
 
     return `<section class="msn-block msn-mission-plan" id="msnMissionPlan">
-      <h3>Mission Plan</h3>
-      <p class="msn-objective-meta">Parsed intent — approve or edit before treating Notes as work.</p>
+      <h3>Execution Plan</h3>
+      <p class="msn-objective-meta">Deterministic capabilities selected from Understood Intent.</p>
       <dl class="msn-si-dl">
         <div class="msn-si-row"><dt>Objective</dt><dd>${escapeHtml(
           objective || '—'
@@ -2528,6 +2631,18 @@
         (mission.plan && mission.plan.missionPlan) || mission.missionPlan || null;
       const missionPlanSummary =
         (mission.plan && mission.plan.missionPlanSummary) || null;
+      const missionIntent =
+        (mission.plan && mission.plan.missionIntent) ||
+        mission.missionIntent ||
+        null;
+      const missionIntentSummary =
+        (mission.plan && mission.plan.missionIntentSummary) ||
+        mission.missionIntentSummary ||
+        null;
+      const missionIntentHtml = renderMissionIntentHtml(
+        missionIntent,
+        missionIntentSummary
+      );
       const missionPlanHtml = renderMissionPlanHtml(missionPlan, missionPlanSummary);
       const artifactResolutionHtml = renderArtifactResolutionHtml(
         (mission.plan && mission.plan.artifactResolution) ||
@@ -2908,6 +3023,7 @@
         ${reviewHtml}
         ${renderWarningInspectorHtml(warningItems)}
         ${renderReviewQueueHtml(msnReviewSession)}
+        ${missionIntentHtml}
         ${missionPlanHtml}
         ${artifactResolutionHtml}
         ${planningDiagnosticsHtml}
