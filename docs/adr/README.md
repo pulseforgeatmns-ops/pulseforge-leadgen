@@ -29,6 +29,7 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-024](ADR-024_Human_Work_Is_Coordinated_Through_the_Operator_Inbox.md) | Human Work Is Coordinated Through the Operator Inbox | Accepted |
 | [ADR-025](ADR-025_Active_Missions_Take_Precedence.md) | Active Missions Take Precedence | Accepted |
 | [ADR-026](ADR-026_Business_Success_Determines_Pipeline_Progress.md) | Business Success Determines Pipeline Progress | Accepted |
+| [ADR-027](ADR-027_Mission_Planning_Is_Objective_Driven.md) | Mission Planning Is Objective-Driven | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

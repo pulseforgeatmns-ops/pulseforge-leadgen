@@ -72,9 +72,21 @@ function composeMissionResponse(input) {
       mission.discoveryProfile
         ? `Discovery Profile: ${mission.discoveryProfile.name} v${mission.discoveryProfile.version}.`
         : null,
-      `Plan: ${((mission.plan && mission.plan.steps) || [])
-        .map((s) => s.name || s.capabilityId)
-        .join(' → ') || 'n/a'}.`,
+      mission.plan && mission.plan.reasoning && mission.plan.reasoning.summary
+        ? `Planner: ${mission.plan.reasoning.summary}.`
+        : null,
+      mission.plan && mission.plan.explanation && mission.plan.explanation.pipeline
+        ? `Execution graph: ${mission.plan.explanation.pipeline}.`
+        : `Plan: ${((mission.plan && mission.plan.steps) || [])
+            .map((s) => s.name || s.capabilityId)
+            .join(' → ') || 'n/a'}.`,
+      mission.plan &&
+      mission.plan.explanation &&
+      mission.plan.explanation.answers &&
+      mission.plan.explanation.answers.whyReviewRequired &&
+      mission.plan.explanation.answers.whyReviewRequired.included
+        ? `Review required: ${mission.plan.explanation.answers.whyReviewRequired.reason}.`
+        : null,
     ].filter(Boolean),
   });
 }

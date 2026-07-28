@@ -135,7 +135,19 @@ class MissionEngine {
       kind: AUDIT_KINDS.PLAN,
       payload: {
         type: mission.type,
+        plannerVersion:
+          (mission.plan && mission.plan.plannerVersion) || null,
         steps: (mission.plan.steps || []).map((s) => s.capabilityId),
+        selectedStages:
+          (mission.plan && mission.plan.selectedStages) || null,
+        reviewGates: (mission.plan && mission.plan.reviewGates) || null,
+        reasoning: (mission.plan && mission.plan.reasoning) || null,
+        explanation: (mission.plan && mission.plan.explanation) || null,
+        validation:
+          (mission.plan &&
+            mission.plan.executionGraph &&
+            mission.plan.executionGraph.validation) ||
+          null,
         confidence: mission.confidence,
         durationEstimateMs: mission.durationEstimateMs,
         discoveryProfile: mission.discoveryProfile
@@ -296,6 +308,23 @@ class MissionEngine {
       card: this.toCard(mission),
       objective: mission.objectiveText,
       plan: mission.plan,
+      executionGraph:
+        (mission.plan && mission.plan.executionGraph) || null,
+      explanation: (mission.plan && mission.plan.explanation) || null,
+      currentStage:
+        (mission.progress && mission.progress.currentStage) || null,
+      completedStages: ((mission.plan && mission.plan.steps) || [])
+        .filter((s) => s.status === 'completed')
+        .map((s) => s.stageId || s.capabilityId),
+      upcomingStages: ((mission.plan && mission.plan.steps) || [])
+        .filter((s) => s.status === 'queued' || s.status === 'stale')
+        .map((s) => s.stageId || s.capabilityId),
+      reviewGates: (mission.plan && mission.plan.reviewGates) || [],
+      dependencies:
+        (mission.plan &&
+          mission.plan.executionGraph &&
+          mission.plan.executionGraph.edges) ||
+        [],
       progress: mission.progress,
       evidence: collectEvidence(mission),
       results: mission.deliverables,
