@@ -6,6 +6,19 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Command Deck UX Polish ([SPEC-045](docs/specs/SPEC-045_Command_Deck_UX_Polish.md) / [ADR-030](docs/adr/ADR-030_Command_Deck_Is_an_Operator_Workspace.md))
+  - Persistent Max composer + sticky suggestions + auto-growing prompt
+  - Prospect List pastes render as attachment cards (raw preserved under View)
+  - Mission Workspace: expandable objective, business input/stage/artifact summaries, review dashboard
+  - Pipeline metadata under Developer Details; stage loading bars from existing statuses
+  - Presentation only — no Mission execution changes
+- Trade Capture Engine ([SPEC-044](docs/specs/SPEC-044_Trade_Capture_Engine.md))
+  - `@pulseforge/trade-capture` — screenshot-first capture (&lt;15s operator path); OCR never blocks save
+  - Immutable `chart_snapshot` observations; Trade → Evidence → Claim → Outcome graph
+  - Pluggable extractors (OCR / Chart / Pattern / Indicator / CV)
+  - Laboratory: `lab.findTrades` · `compareWinningTrades` · `compareLosingTrades`
+  - EQL: `FIND Trades` · `SHOW Screenshots FOR Trade("…")` · `COMPARE WinningTrades WITH LosingTrades`
+  - Tests: `npm run test:trade-capture` · `npm run test:eql` · `npm run test:laboratory`
 - Operator Artifact Injection ([SPEC-043](docs/specs/SPEC-043_Operator_Artifact_Injection.md) / [ADR-029](docs/adr/ADR-029_Artifact_Provenance_Must_Not_Affect_Consumption.md))
   - Operator ingress publishes validated `ProspectList` onto the Mission Artifact Bus (CSV / paste / manual)
   - Discovery may be marked **Satisfied (Operator Supplied)**; Mission resumes at Company Intelligence

@@ -61,7 +61,7 @@
     </form>
   </div>
 
-  <!-- Max Intelligence Workspace (SPEC-009) -->
+  <!-- Max Intelligence Workspace (SPEC-009 / SPEC-045) -->
   <div
     id="maxWorkspace"
     class="mx-workspace"
@@ -85,23 +85,24 @@
 
       <div id="mxThread" class="mx-thread" aria-live="polite"></div>
 
-      <div id="mxSuggestions" class="mx-suggestions" aria-label="Suggested investigations"></div>
-
-      <form id="mxAskForm" class="mx-ask-form" autocomplete="off">
-        <label class="pf-sr-only" for="mxAskInput">Ask Max</label>
-        <textarea
-          id="mxAskInput"
-          class="mx-ask-input"
-          rows="3"
-          maxlength="100000"
-          placeholder="Investigate… Paste a prospect list on new lines to import."
-        ></textarea>
-        <button type="submit" class="mx-ask-submit" id="mxAskSend">Ask</button>
-      </form>
+      <div class="mx-composer-dock">
+        <div id="mxSuggestions" class="mx-suggestions" aria-label="Suggested investigations"></div>
+        <form id="mxAskForm" class="mx-ask-form" autocomplete="off">
+          <label class="pf-sr-only" for="mxAskInput">Ask Max</label>
+          <textarea
+            id="mxAskInput"
+            class="mx-ask-input"
+            rows="1"
+            maxlength="100000"
+            placeholder="Issue an objective… Paste a prospect list on new lines to attach."
+          ></textarea>
+          <button type="submit" class="mx-ask-submit" id="mxAskSend">Send</button>
+        </form>
+      </div>
     </div>
   </div>
 
-  <!-- Mission Workspace (SPEC-022) -->
+  <!-- Mission Workspace (SPEC-022 / SPEC-045) -->
   <div
     id="missionWorkspace"
     class="mx-workspace msn-workspace"
@@ -111,7 +112,7 @@
     aria-labelledby="msnTitle"
   >
     <div class="mx-backdrop" data-msn-close></div>
-    <div class="mx-panel">
+    <div class="mx-panel msn-panel">
       <header class="mx-header">
         <div>
           <p class="mx-eyebrow">Mission Workspace</p>
@@ -121,7 +122,7 @@
         <button type="button" class="mx-close" data-msn-close aria-label="Close mission">Close</button>
       </header>
       <div id="msnBody" class="msn-body"></div>
-      <div id="msnActions" class="msn-actions"></div>
+      <div id="msnActions" class="msn-actions msn-actions-dock"></div>
     </div>
   </div>
 
