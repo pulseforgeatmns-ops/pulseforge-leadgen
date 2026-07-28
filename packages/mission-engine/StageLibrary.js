@@ -51,9 +51,10 @@ const STAGE_LIBRARY = Object.freeze({
     reviewRequired: false,
     priority: 20,
     outcomePatterns: [
-      /\b(company\s+)?intelligence\b/i,
+      /\bcompany\s+intelligence\b/i,
       /\benrich(ment|ing)?\b/i,
-      /\bgenerate\s+intelligence\b/i,
+      /\bgenerate\s+(company\s+)?intelligence\b/i,
+      /\banalyze\s+(the\s+)?compan(y|ies)\b/i,
     ],
   }),
   knowledge_update: Object.freeze({
@@ -150,8 +151,9 @@ const STAGE_LIBRARY = Object.freeze({
       /\bpause\s+at\s+review\b/i,
       /\bapprove\s+(the\s+)?campaign\b/i,
       /\bcampaign\s+approval\b/i,
-      // Bare "Review" / "Review..." in multi-outcome objectives (SPEC-041)
-      /\breview(?!\s+recommendations)\b/i,
+      // SPEC-050: bare "Review" is an Options flag (via IntentParser), not a stage
+      // keyword on free-form guidance like "Review Human Test results".
+      /(?:^|[.]\s*)review(?:\s*[.]|$)/i,
     ],
   }),
   ready_to_print: Object.freeze({

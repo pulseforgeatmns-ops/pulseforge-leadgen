@@ -2,6 +2,7 @@
 
 /**
  * Execution Graph — objective-driven plan construction (SPEC-041 / ADR-027).
+ * SPEC-050 / ADR-034: only Mission Plan executable fields may create nodes.
  * Planner composes stages; never executes capabilities.
  */
 
@@ -14,10 +15,16 @@ const {
   COMPOSITION_EDGES,
   stageLabel,
 } = require('./StageLibrary');
+const {
+  executableObjectiveText,
+  normalizeExecution,
+} = require('./MissionPlan');
 
 /**
  * Build an execution graph from mission inputs.
  * Stage keywords augment the seed — they never replace it.
+ * When a Mission Plan is supplied, keyword matching uses only its
+ * objective / execution / options text — never Notes (SPEC-050).
  *
  * @param {object} missionOrInput
  * @param {string} [missionOrInput.objective]
@@ -26,16 +33,24 @@ const {
  * @param {string} [missionOrInput.missionType]
  * @param {object} [missionOrInput.constraints]
  * @param {object} [missionOrInput.plan] - existing plan (for replan)
+ * @param {object} [missionOrInput.missionPlan] - SPEC-050 IR
  * @param {string[]} [missionOrInput.extraStages]
  * @param {string[]} [missionOrInput.removeStages]
  * @returns {object} execution graph
  */
 function createExecutionGraph(missionOrInput = {}) {
-  const objective = String(
+  const missionPlan = missionOrInput.missionPlan || null;
+  const rawObjective = String(
     missionOrInput.objective ||
       missionOrInput.objectiveText ||
       ''
   ).trim();
+  // SPEC-050: never scan Notes / free-form guidance for stage keywords
+  const objective = missionPlan
+    ? executableObjectiveText(missionPlan) ||
+      String(missionPlan.objective || '').trim() ||
+      rawObjective
+    : rawObjective;
   const missionType =
     missionOrInput.missionType ||
     missionOrInput.type ||
@@ -52,7 +67,30 @@ function createExecutionGraph(missionOrInput = {}) {
     selected.set(id, `Seeded from mission type ${missionType}`);
   }
 
-  // 2. Augment from objective outcome keywords (compose — never replace)
+  // 2. Augment from Mission Plan execution entries (registry-resolved only)
+  if (missionPlan) {
+    for (const item of normalizeExecution(missionPlan.execution)) {
+      const stageId =
+        typeof item === 'string' ? item : item && item.stageId;
+      if (stageId && getStage(stageId) && !selected.has(stageId)) {
+        selected.set(
+          stageId,
+          `Selected from Mission Plan execution (${stageLabel(stageId)})`
+        );
+      }
+    }
+    if (missionPlan.options && missionPlan.options.readyToPrint) {
+      if (!selected.has('ready_to_print')) {
+        selected.set('ready_to_print', 'Mission Plan option: Ready To Print');
+      }
+    }
+    // options.review / approvalRequired are plan-level gates (ADR-034).
+    // They do not invent a Campaign Review stage — that requires explicit
+    // execution / Ready To Print / keyword on executable text only.
+  }
+
+  // 3. Augment from executable objective keywords (compose — never replace)
+  //    When missionPlan is present, `objective` already excludes Notes.
   const keywordHits = matchOutcomeStages(objective);
   for (const hit of keywordHits) {
     if (!selected.has(hit.stageId)) {
@@ -69,14 +107,14 @@ function createExecutionGraph(missionOrInput = {}) {
     }
   }
 
-  // 3. Explicit extras (operator / feature)
+  // 4. Explicit extras (operator / feature)
   for (const id of missionOrInput.extraStages || []) {
     if (getStage(id) && !selected.has(id)) {
       selected.set(id, 'Explicitly inserted by operator / feature flag');
     }
   }
 
-  // 4. Explicit removals
+  // 5. Explicit removals
   for (const id of missionOrInput.removeStages || []) {
     if (selected.has(id)) {
       selected.delete(id);
@@ -84,7 +122,7 @@ function createExecutionGraph(missionOrInput = {}) {
     }
   }
 
-  // 5. Auto-insert review gates when downstream stages need them
+  // 6. Auto-insert review gates when downstream stages need them
   if (
     selected.has('ready_to_print') &&
     !selected.has('campaign_review')
@@ -105,10 +143,10 @@ function createExecutionGraph(missionOrInput = {}) {
     );
   }
 
-  // 6. Close transitive dependencies for selected stages
+  // 7. Close transitive dependencies for selected stages
   closeDependencies(selected);
 
-  // 7. Record library stages not selected (for explainPlan)
+  // 8. Record library stages not selected (for explainPlan)
   for (const stage of listStages()) {
     if (!selected.has(stage.id) && !skipped.has(stage.id)) {
       skipped.set(
@@ -156,12 +194,17 @@ function createExecutionGraph(missionOrInput = {}) {
     seeds,
     ordered,
     validation,
+    missionPlan,
   });
 
   return {
     plannerVersion: PLANNER_VERSION,
-    objective,
+    objective: missionPlan
+      ? String(missionPlan.objective || objective)
+      : objective,
+    objectiveForMatching: objective,
     missionType,
+    missionPlan: missionPlan || null,
     nodes,
     edges,
     orderedStageIds: ordered.map((n) => n.id),
@@ -231,6 +274,11 @@ function replanGraph(mission, mods = {}) {
   const graph = createExecutionGraph({
     objective,
     missionType: mission.type || mission.missionType,
+    missionPlan:
+      mods.missionPlan ||
+      (mission.plan && mission.plan.missionPlan) ||
+      mission.missionPlan ||
+      null,
     constraints: { ...(mission.constraints || {}), ...(mods.constraints || {}) },
     extraStages,
     removeStages,
@@ -660,18 +708,25 @@ function buildReasoning(ctx) {
   const augmented = [...keywordStageIds].filter(
     (id) => !ctx.seeds.includes(id) && ctx.selected.has(id)
   );
+  const noteCount =
+    (ctx.missionPlan &&
+      Array.isArray(ctx.missionPlan.notes) &&
+      ctx.missionPlan.notes.length) ||
+    0;
   return {
     summary: ctx.missionType
       ? `Composed execution graph from ${ctx.missionType} seed` +
         (augmented.length
           ? ` augmented with: ${augmented.map(stageLabel).join(', ')}`
-          : '')
+          : '') +
+        (ctx.missionPlan ? ' via Mission Plan IR (SPEC-050)' : '')
       : `Composed execution graph from objective keywords`,
     pipeline,
     seedStages: ctx.seeds,
     keywordAugmentations: ctx.keywordHits,
     selectedCount: ctx.selected.size,
     validationOk: ctx.validation.ok,
+    notesExcludedFromExecution: noteCount,
   };
 }
 

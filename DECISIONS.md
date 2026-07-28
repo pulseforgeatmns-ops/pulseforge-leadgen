@@ -33,6 +33,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-030](docs/adr/ADR-030_Command_Deck_Is_an_Operator_Workspace.md) | Command Deck Is an Operator Workspace | Accepted | Command Deck is an operator workspace — presentation polish must not change Mission execution semantics |
 | [ADR-031](docs/adr/ADR-031_Review_Must_Be_Evidence_First.md) | Review Must Be Evidence-First | Accepted | Review Workspace presents business artifacts and evidence before implementation metadata |
 | [ADR-032](docs/adr/ADR-032_Strategy_Before_Language.md) | Strategy Before Language | Accepted | Separate business reasoning from language generation; Sales Intelligence Profile before channel copy; optimize for Operator Approval Rate |
+| [ADR-034](docs/adr/ADR-034_Intent_Before_Execution.md) | Intent Before Execution | Accepted | Mission Plan IR is the executable contract; capabilities never consume raw operator Notes; unknown text becomes Notes |
 
 ## How to add a decision
 

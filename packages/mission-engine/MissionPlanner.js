@@ -1,10 +1,12 @@
 'use strict';
 
 /**
- * MissionPlanner — objective → execution graph (SPEC-041 / ADR-027).
+ * MissionPlanner — objective → Mission Plan IR → execution graph
+ * (SPEC-041 / ADR-027 + SPEC-050 / ADR-034).
  * Selects Discovery Profiles for Prospect Discovery (SPEC-024).
  * Discovers capabilities from the registry. Never imports agent modules.
  * Never executes capabilities — only plans.
+ * Capabilities consume the Mission Plan — never raw operator text.
  */
 
 const { BUILTIN_IDS } = require('../capabilities');
@@ -24,6 +26,12 @@ const {
   newId,
 } = require('./types');
 const { matchMissionType } = require('./IntentRouter');
+const { parseIntent } = require('./IntentParser');
+const {
+  validateMissionPlan,
+  summarizeMissionPlan,
+  executableObjectiveText,
+} = require('./MissionPlan');
 const { PLANNER_VERSION, getStage } = require('./StageLibrary');
 const {
   createExecutionGraph,
@@ -185,14 +193,48 @@ class MissionPlanner {
       throw new Error('objective is required');
     }
     const objectiveText = String(input.objective).trim();
+
+    // SPEC-050 / ADR-034: compile NL → Mission Plan IR before any graph work
+    const missionPlan =
+      input.missionPlan ||
+      parseIntent(objectiveText, {
+        registeredCapabilityIds: this._registry
+          ? this._registry.list().map((c) => c.id)
+          : undefined,
+      });
+    const planValidation =
+      missionPlan.validation ||
+      validateMissionPlan(missionPlan, {
+        registeredCapabilityIds: this._registry
+          ? this._registry.list().map((c) => c.id)
+          : undefined,
+      });
+    if (!planValidation.ok) {
+      const err = new Error(
+        `Mission Plan validation failed: ${planValidation.errors.join('; ')}`
+      );
+      err.code = 'MISSION_PLAN_INVALID';
+      err.validation = planValidation;
+      err.missionPlan = missionPlan;
+      throw err;
+    }
+
+    const planningObjective =
+      executableObjectiveText(missionPlan) ||
+      String(missionPlan.objective || objectiveText).trim();
+
+    // Prefer IntentRouter on the original operator text so focused objectives
+    // (mail package / review / outcome) are not rewritten by Mission Plan IR.
     const missionType =
       input.missionType ||
       matchMissionType(objectiveText.toLowerCase(), objectiveText) ||
+      matchMissionType(planningObjective.toLowerCase(), planningObjective) ||
       MISSION_TYPES.CAMPAIGN_CREATION;
 
     const graph = createExecutionGraph({
-      objective: objectiveText,
+      objective: planningObjective,
       missionType,
+      missionPlan,
       constraints: input.constraints,
       extraStages: input.extraStages,
       removeStages: input.removeStages,
@@ -205,6 +247,7 @@ class MissionPlanner {
       err.code = 'MISSION_GRAPH_INVALID';
       err.validation = graph.validation;
       err.graph = graph;
+      err.missionPlan = missionPlan;
       throw err;
     }
 
@@ -214,15 +257,41 @@ class MissionPlanner {
         ? { ...input.constraints }
         : { targetCount: 50 };
 
+    // SPEC-050: structured parameters from Mission Plan (never Notes)
+    if (missionPlan.parameters && missionPlan.parameters.prospectList) {
+      baseConstraints.prospectList = missionPlan.parameters.prospectList;
+    }
+    if (missionPlan.parameters && missionPlan.parameters.campaign) {
+      baseConstraints.campaignId = missionPlan.parameters.campaign;
+    }
+    if (missionPlan.subject) {
+      baseConstraints.subject = missionPlan.subject;
+      if (!baseConstraints.clientName) {
+        baseConstraints.clientName = missionPlan.subject;
+      }
+    }
+    if (missionPlan.options) {
+      baseConstraints.missionPlanOptions = { ...missionPlan.options };
+      if (missionPlan.options.dryRun) baseConstraints.dryRun = true;
+      if (missionPlan.options.shadowMode) baseConstraints.shadowMode = true;
+      if (missionPlan.options.approvalRequired) {
+        baseConstraints.approvalRequired = true;
+      }
+    }
+    if (missionPlan.notes && missionPlan.notes.length) {
+      baseConstraints.operatorNotes = [...missionPlan.notes];
+    }
+
     if (graph.produceReadyToPrint) {
       baseConstraints.produceReadyToPrint = true;
     }
 
     // SPEC-024 / SPEC-040: bind Discovery Profile via deterministic resolver
+    // Use Mission Plan objective — never raw notes — for profile selection.
     let profileSelection = null;
     if (capabilityIds.includes(BUILTIN_IDS.PROSPECT_DISCOVERY)) {
       profileSelection = this._profileSelector.select({
-        objective: objectiveText,
+        objective: planningObjective,
         clientId: input.clientId != null ? input.clientId : input.tenantId,
         tenantId: input.tenantId,
         constraints: baseConstraints,
@@ -239,8 +308,9 @@ class MissionPlanner {
           type: missionType,
           status: MISSION_STATUS.WAITING,
           objectiveText,
-          title: deriveTitle(objectiveText, missionType),
+          title: deriveTitle(planningObjective, missionType),
           constraints: baseConstraints,
+          missionPlan,
           discoveryProfile: null,
           discoveryProfileResolution: profileSelection.resolution || {
             blocked: true,
@@ -256,6 +326,8 @@ class MissionPlanner {
             blockingIssues: profileSelection.blockingIssues || [
               'No Discovery Profile',
             ],
+            missionPlan,
+            missionPlanSummary: summarizeMissionPlan(missionPlan),
             executionGraph: graph,
             explanation: explainPlan(graph),
             plannerVersion: PLANNER_VERSION,
@@ -299,7 +371,7 @@ class MissionPlanner {
       capabilityIds.includes(BUILTIN_IDS.OUTCOME_INTELLIGENCE);
     if (needsPlaybook) {
       playbookSelection = this._playbookSelector.select({
-        objective: objectiveText,
+        objective: planningObjective,
         clientId: input.clientId != null ? input.clientId : input.tenantId,
         tenantId: input.tenantId,
         constraints: baseConstraints,
@@ -312,19 +384,25 @@ class MissionPlanner {
       }
     }
 
-    // SPEC-027B: seed Discovery Summary from objective when generating a proposal
+    // SPEC-027B: seed Discovery Summary from Mission Plan subject / objective
     if (
       capabilityIds.includes(BUILTIN_IDS.PROPOSAL_GENERATOR) &&
       !baseConstraints.discoverySummary &&
       !(input.inputs && input.inputs.discoverySummary)
     ) {
-      const forMatch = /(?:proposal|quote|deck)\s+for\s+(.+)$/i.exec(
-        objectiveText
-      );
-      if (forMatch) {
+      if (missionPlan.subject) {
         baseConstraints.discoverySummary = {
-          companyName: forMatch[1].replace(/[."]+$/, '').trim(),
+          companyName: missionPlan.subject,
         };
+      } else {
+        const forMatch = /(?:proposal|quote|deck)\s+for\s+(.+)$/i.exec(
+          planningObjective
+        );
+        if (forMatch) {
+          baseConstraints.discoverySummary = {
+            companyName: forMatch[1].replace(/[."]+$/, '').trim(),
+          };
+        }
       }
     }
 
@@ -345,7 +423,9 @@ class MissionPlanner {
         missionId: '',
         tenantId: String(input.tenantId),
         clientId: input.clientId != null ? input.clientId : input.tenantId,
-        objective: objectiveText,
+        // ADR-034: capabilities see Mission Plan objective, not raw NL
+        objective: planningObjective,
+        missionPlan,
         constraints: baseConstraints,
         inputs: {},
         knowledge: {},
@@ -371,9 +451,13 @@ class MissionPlanner {
       });
     }
 
-    const title = deriveTitle(objectiveText, missionType);
+    const title = deriveTitle(
+      String(missionPlan.objective || planningObjective).trim(),
+      missionType
+    );
     const now = new Date().toISOString();
     const explanation = explainPlan(graph);
+    const missionPlanSummary = summarizeMissionPlan(missionPlan);
 
     return {
       id: input.id || newId('msn'),
@@ -387,6 +471,7 @@ class MissionPlanner {
       objectiveText,
       title,
       constraints: baseConstraints,
+      missionPlan,
       discoveryProfile: profileSelection
         ? {
             id: profileSelection.profile.id,
@@ -448,6 +533,8 @@ class MissionPlanner {
         clientPlaybookMessage: playbookSelection
           ? playbookSelection.message
           : null,
+        missionPlan,
+        missionPlanSummary,
         executionGraph: graph,
         explanation,
         plannerVersion: PLANNER_VERSION,

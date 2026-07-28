@@ -101,6 +101,21 @@ const {
 } = require('./ArtifactBus');
 const ArtifactRegistry = require('./ArtifactRegistry');
 const OperatorArtifactInjection = require('./OperatorArtifactInjection');
+const {
+  parseIntent,
+  classifyUnit,
+  PLAN_CATEGORIES,
+} = require('./IntentParser');
+const {
+  MISSION_PLAN_VERSION,
+  RESERVED_RUNTIME_FIELDS,
+  buildMissionPlan,
+  validateMissionPlan,
+  summarizeMissionPlan,
+  executableObjectiveText,
+  containsOperatorInstructionLeak,
+  resolveExecutionRequest,
+} = require('./MissionPlan');
 
 module.exports = {
   MISSION_STATUS,
@@ -173,4 +188,16 @@ module.exports = {
   OperatorArtifactInjection,
   detectOperatorProspectListInMessage:
     OperatorArtifactInjection.detectOperatorProspectListInMessage,
+  // SPEC-050 / ADR-034
+  parseIntent,
+  classifyUnit,
+  PLAN_CATEGORIES,
+  MISSION_PLAN_VERSION,
+  RESERVED_RUNTIME_FIELDS,
+  buildMissionPlan,
+  validateMissionPlan,
+  summarizeMissionPlan,
+  executableObjectiveText,
+  containsOperatorInstructionLeak,
+  resolveExecutionRequest,
 };

@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Deterministic Mission Planning ([SPEC-050](docs/specs/SPEC-050_Deterministic_Mission_Planning.md) / [ADR-034](docs/adr/ADR-034_Intent_Before_Execution.md))
+  - Intent Parser classifies every sentence into Objective / Parameters / Execution / Options / Notes
+  - Mission Plan IR is the only source of executable nodes; Notes never execute
+  - Unknown capability text becomes Notes; reserved runtime fields protected
+  - MissionExecutor passes Mission Plan objective to capabilities (not raw operator NL)
+  - Review Workspace displays parsed Mission Plan before treating guidance as work
+  - Tests: `npm run test:mission` (deterministicMissionPlan.test.js)
 - Sales Intelligence Engine ([SPEC-048](docs/specs/SPEC-048_Sales_Intelligence_Engine.md) / [ADR-032](docs/adr/ADR-032_Strategy_Before_Language.md))
   - Structured `SalesIntelligenceProfile` between Company Intelligence and channel generators
   - Messaging strategy, evidence-linked personalization claims, quality gates, Human Test / Operator Confidence Score
