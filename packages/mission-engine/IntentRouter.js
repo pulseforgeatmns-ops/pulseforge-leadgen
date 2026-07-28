@@ -1,10 +1,14 @@
 'use strict';
 
 /**
- * IntentRouter — first routing layer for operator objectives (SPEC-022).
+ * IntentRouter — cold-start Mission vs Intelligence gate (SPEC-022 / ADR-027).
  *
- * Business objectives → Mission Engine.
- * Intelligence-only requests → Market Intelligence / ResponseComposer.
+ * Decides: Is this a Mission?
+ * MissionPlanner decides: How do we accomplish it? (execution graph)
+ *
+ * Stage keywords (review, mail package, ready to print) must not collapse a
+ * multi-outcome Build Campaign objective into a single-stage Mission type.
+ * Prefer broad campaign / discovery intents; let the planner augment stages.
  */
 
 const { MISSION_TYPES, ROUTE_KINDS } = require('./types');
@@ -68,6 +72,20 @@ function routeIntent(objective) {
  * @returns {string|null}
  */
 function matchMissionType(lower, original) {
+  // SPEC-041: broad build/create campaign wins over later-stage keywords
+  // (review / mail package / ready to print). Planner augments the graph.
+  const isCampaignBuild =
+    /\bbuild\s+campaign\b/.test(lower) ||
+    /\bcreate\s+campaign\b/.test(lower) ||
+    /\bnew\s+campaign\b/.test(lower) ||
+    /\blaunch\s+campaign\b/.test(lower) ||
+    /\bprepare\s+(a\s+)?campaign\b/.test(lower) ||
+    /\bbuild\s+(a\s+)?(q\d\s+)?outreach\s+campaign\b/.test(lower);
+
+  if (isCampaignBuild) {
+    return MISSION_TYPES.CAMPAIGN_CREATION;
+  }
+
   // Operator Inbox (SPEC-037) — coordination surface
   if (
     /\boperator\s+inbox\b/.test(lower) ||
@@ -93,7 +111,7 @@ function matchMissionType(lower, original) {
     return MISSION_TYPES.OUTCOME_INTELLIGENCE;
   }
 
-  // Direct Mail Execution (SPEC-035) — before campaign review / mail packages
+  // Direct Mail Execution (SPEC-035) — focused objective only
   if (
     /\bdirect\s+mail\s+execution\b/.test(lower) ||
     /\bexecute\s+(the\s+)?(direct\s+)?mail\b/.test(lower) ||
@@ -107,7 +125,7 @@ function matchMissionType(lower, original) {
     return MISSION_TYPES.DIRECT_MAIL_EXECUTION;
   }
 
-  // Campaign Review (SPEC-034) — before mail packages / campaign build
+  // Campaign Review (SPEC-034) — focused review-only objectives
   if (
     /\bcampaign\s+review\b/.test(lower) ||
     /\breview\s+(the\s+)?campaign\b/.test(lower) ||
@@ -119,7 +137,7 @@ function matchMissionType(lower, original) {
     return MISSION_TYPES.CAMPAIGN_REVIEW;
   }
 
-  // Mail Package Generation (SPEC-033) — before campaign (objectives often cite Campaign N)
+  // Mail Package Generation (SPEC-033) — focused mail-only objectives
   if (
     /\b(generate|create|build|prepare|print)\s+(a\s+)?(mail|direct\s*mail)\s+packages?\b/.test(
       lower
@@ -133,14 +151,8 @@ function matchMissionType(lower, original) {
     return MISSION_TYPES.MAIL_PACKAGE_GENERATION;
   }
 
-  // Campaign Creation — primary acceptance path
-  if (
-    /\bbuild\s+campaign\b/.test(lower) ||
-    /\bcreate\s+campaign\b/.test(lower) ||
-    /\bcampaign\s+\d+\b/.test(lower) ||
-    /\bnew\s+campaign\b/.test(lower) ||
-    /\blaunch\s+campaign\b/.test(lower)
-  ) {
+  // Campaign Creation — numeric campaign id still seeds a full pipeline
+  if (/\bcampaign\s+\d+\b/.test(lower)) {
     return MISSION_TYPES.CAMPAIGN_CREATION;
   }
 
@@ -221,14 +233,6 @@ function matchMissionType(lower, original) {
     /\bfind\s+.+\s+prospects?\s+in\b/.test(lower)
   ) {
     return MISSION_TYPES.PROSPECT_DISCOVERY;
-  }
-
-  // Generic "build/run outreach campaign" style
-  if (
-    /\bbuild\s+(a\s+)?(q\d\s+)?outreach\s+campaign\b/.test(lower) ||
-    /\bprepare\s+(a\s+)?campaign\b/.test(lower)
-  ) {
-    return MISSION_TYPES.CAMPAIGN_CREATION;
   }
 
   void original;

@@ -448,27 +448,51 @@ class ActiveMissionResolver {
       ...patch.constraints,
     };
 
-    const steps = ((mission.plan && mission.plan.steps) || []).map((s) => {
-      const stale = patch.staleCapabilityIds.includes(s.capabilityId);
-      if (!stale && !patch.staleAll) return s;
-      return { ...s, status: 'stale', error: undefined };
-    });
-
-    // Cascade: once a stale step appears, all following steps are stale
-    let seenStale = false;
-    const cascaded = steps.map((s) => {
-      if (s.status === 'stale') seenStale = true;
-      if (seenStale && s.status !== 'stale') {
-        return { ...s, status: 'stale', error: undefined };
-      }
-      return s;
-    });
-
-    let updated = await this._engine.store.update({
-      id: mission.id,
+    // SPEC-041: replan graph for objective / constraint modifications
+    let updated = mission;
+    const replanMods = {
       constraints,
-      plan: { ...mission.plan, steps: cascaded },
-    });
+      objective: mission.objectiveText,
+      insertStages: patch.insertStages || [],
+      removeStages: patch.removeStages || [],
+      staleCapabilityIds: patch.staleCapabilityIds || [],
+      staleAll: Boolean(patch.staleAll),
+    };
+
+    if (
+      this._engine.planner &&
+      typeof this._engine.planner.replan === 'function'
+    ) {
+      const replanned = this._engine.planner.replan(mission, replanMods);
+      updated = await this._engine.store.update({
+        id: mission.id,
+        constraints: replanned.constraints,
+        plan: replanned.plan,
+        durationEstimateMs: replanned.durationEstimateMs,
+        confidence: replanned.confidence,
+      });
+    } else {
+      const steps = ((mission.plan && mission.plan.steps) || []).map((s) => {
+        const stale = patch.staleCapabilityIds.includes(s.capabilityId);
+        if (!stale && !patch.staleAll) return s;
+        return { ...s, status: 'stale', error: undefined };
+      });
+
+      let seenStale = false;
+      const cascaded = steps.map((s) => {
+        if (s.status === 'stale') seenStale = true;
+        if (seenStale && s.status !== 'stale') {
+          return { ...s, status: 'stale', error: undefined };
+        }
+        return s;
+      });
+
+      updated = await this._engine.store.update({
+        id: mission.id,
+        constraints,
+        plan: { ...mission.plan, steps: cascaded },
+      });
+    }
 
     await this._engine.store.appendAudit({
       missionId: mission.id,
@@ -478,16 +502,23 @@ class ActiveMissionResolver {
         message,
         patch,
         actor: operatorId || null,
+        replan:
+          (updated.plan && updated.plan.replan) || null,
+        plannerVersion:
+          (updated.plan && updated.plan.plannerVersion) || null,
       },
     });
 
-    // Rerun from first stale step (reset queued from first stale)
-    const firstStale = cascaded.findIndex((s) => s.status === 'stale');
-    if (firstStale >= 0) {
-      const resetSteps = cascaded.map((s, idx) =>
-        idx >= firstStale
+    // Rerun from first non-completed step
+    const stepsNow = (updated.plan && updated.plan.steps) || [];
+    const firstQueued = stepsNow.findIndex(
+      (s) => s.status === 'queued' || s.status === 'stale'
+    );
+    if (firstQueued >= 0) {
+      const resetSteps = stepsNow.map((s, idx) =>
+        idx >= firstQueued
           ? { ...s, status: 'queued', error: undefined }
-          : { ...s, status: 'completed' }
+          : { ...s, status: s.status === 'completed' ? 'completed' : s.status }
       );
       updated = await this._engine.store.update({
         id: mission.id,
@@ -497,12 +528,12 @@ class ActiveMissionResolver {
         deliverables: null,
         completedAt: null,
         progress: {
-          completedSteps: firstStale,
+          completedSteps: firstQueued,
           totalSteps: resetSteps.length,
           currentStage: 'Planning Mission',
           currentCapabilityId: null,
           percent: Math.round(
-            (firstStale / Math.max(resetSteps.length, 1)) * 100
+            (firstQueued / Math.max(resetSteps.length, 1)) * 100
           ),
           counts: null,
         },

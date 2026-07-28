@@ -27,6 +27,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-024](docs/adr/ADR-024_Human_Work_Is_Coordinated_Through_the_Operator_Inbox.md) | Human Work Is Coordinated Through the Operator Inbox | Accepted | Capabilities generate work items; Operator Inbox organizes them; inbox never performs workflow processing |
 | [ADR-025](docs/adr/ADR-025_Active_Missions_Take_Precedence.md) | Active Missions Take Precedence | Accepted | Active Mission always outranks IntentRouter; IntentRouter creates new Missions only; conversational flow uses Active Mission Resolver until terminal |
 | [ADR-026](docs/adr/ADR-026_Business_Success_Determines_Pipeline_Progress.md) | Business Success Determines Pipeline Progress | Accepted | Pipeline advances only on validated business artifacts; technical execution alone is not enough; empty Discovery is Blocked not Completed |
+| [ADR-027](docs/adr/ADR-027_Mission_Planning_Is_Objective_Driven.md) | Mission Planning Is Objective-Driven | Accepted | IntentRouter decides Mission vs not; Mission Planner builds execution graphs from objectives; stage keywords augment, never replace |
 
 ## How to add a decision
 

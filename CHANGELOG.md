@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Mission Planner — objective-driven execution graphs ([SPEC-041](docs/specs/SPEC-041_Mission_Planner.md) / [ADR-027](docs/adr/ADR-027_Mission_Planning_Is_Objective_Driven.md))
+  - Replaces static `TYPE_CAPABILITY_CHAINS` as planning authority with Stage Library + dependency graph
+  - Stage keywords (review, mail package, ready to print) **augment** the graph — never collapse Build Campaign into a single stage
+  - Review gates planner-managed; `explainPlan` / validate / insert·remove·replace / incremental replan
+  - IntentRouter: Build Campaign preferred over later-stage keywords; focused Review/Mail objectives unchanged
+  - Mission Workspace + Max reasoning surface execution graph explanations
+  - Tests: `npm run test:mission` (missionPlanner.test.js)
 - Mission Artifact Validation & Discovery Resolution ([SPEC-040](docs/specs/SPEC-040_Mission_Artifact_Validation.md) / [ADR-026](docs/adr/ADR-026_Business_Success_Determines_Pipeline_Progress.md))
   - Deterministic Discovery Profile resolver (constraints → override → pinned client → client geography → mission default); never silent geography hop
   - Stage artifact contracts + PipelineGate: Completed / Completed With Warnings / Blocked / Failed
