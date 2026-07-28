@@ -131,6 +131,19 @@ const {
   resolveMissionTypeFromIntent,
 } = require('./CapabilityPlanner');
 const {
+  EVIDENCE_PLAN_VERSION,
+  EVIDENCE_TYPES,
+  buildEvidencePlan,
+  summarizeEvidencePlan,
+  isDiagnosticEvidenceType,
+} = require('./EvidencePlan');
+const {
+  INTENT_EVIDENCE_REQUIREMENTS,
+  planEvidence,
+  acquisitionStages,
+  requiredEvidenceForIntent,
+} = require('./EvidencePlanner');
+const {
   MISSION_PLAN_VERSION,
   RESERVED_RUNTIME_FIELDS,
   buildMissionPlan,
@@ -258,4 +271,14 @@ module.exports = {
   planFromIntent,
   planFromOperatorText,
   resolveMissionTypeFromIntent,
+  // SPEC-056 / ADR-040
+  EVIDENCE_PLAN_VERSION,
+  EVIDENCE_TYPES,
+  buildEvidencePlan,
+  summarizeEvidencePlan,
+  isDiagnosticEvidenceType,
+  INTENT_EVIDENCE_REQUIREMENTS,
+  planEvidence,
+  acquisitionStages,
+  requiredEvidenceForIntent,
 };

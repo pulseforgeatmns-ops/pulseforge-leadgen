@@ -140,10 +140,12 @@ function scoreIntentCandidates(lower, sourceText, extracted) {
   if (
     /\b(audit|diagnose|diagnostic|diagnostics)\b/.test(lower) ||
     /\bwhat('?s| is)\s+wrong\b/.test(lower) ||
-    /\bwhy\s+(isn'?t|is\s+not|didn'?t|doesn'?t|won'?t)\b/.test(lower) ||
+    /\bwhy\s+(isn'?t|is\s+not|didn'?t|doesn'?t|won'?t|did|does|would)\b/.test(
+      lower
+    ) ||
     /\bfigure\s+out\s+why\b/.test(lower) ||
     /\bwhat\s+happened\s+(to|with)\b/.test(lower) ||
-    /\b(failed|failing|broken|stuck)\b/.test(lower) ||
+    /\b(failed|failing|broken|stuck|fail)\b/.test(lower) ||
     /\bend[- ]to[- ]end\s+(execution\s+)?audit\b/.test(lower) ||
     /\bexecution\s+audit\b/.test(lower)
   ) {

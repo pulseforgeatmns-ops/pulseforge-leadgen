@@ -23,7 +23,7 @@ describe('SPEC-023 CapabilityRegistry', () => {
   it('registers and lists built-ins', () => {
     const registry = testRegistry();
     const list = registry.list();
-    assert.equal(list.length, 13);
+    assert.equal(list.length, 14);
     assert.ok(registry.get(BUILTIN_IDS.PROSPECT_DISCOVERY));
     assert.ok(registry.get(BUILTIN_IDS.BUSINESS_INTELLIGENCE));
     assert.ok(registry.get(BUILTIN_IDS.CAMPAIGN_BUILDER));
@@ -33,6 +33,7 @@ describe('SPEC-023 CapabilityRegistry', () => {
     assert.ok(registry.get(BUILTIN_IDS.DIRECT_MAIL_EXECUTION));
     assert.ok(registry.get(BUILTIN_IDS.OUTCOME_INTELLIGENCE));
     assert.ok(registry.get(BUILTIN_IDS.OPERATOR_INBOX));
+    assert.ok(registry.get(BUILTIN_IDS.DISCOVERY_DIAGNOSTICS));
   });
 
   it('discovers by outcome tags', () => {

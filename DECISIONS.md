@@ -40,6 +40,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-037](docs/adr/ADR-037_Reason_About_Businesses_Not_Companies.md) | Reason About Businesses, Not Companies | Accepted | Model business operations (Business Intelligence) rather than company directories; Sales Intelligence consumes BI; uncertainty explicit |
 | [ADR-038](docs/adr/ADR-038_Explain_Planning_Decisions.md) | Explain Planning Decisions | Accepted | Planner explains select/reject/unavailable via Capability Registry diagnostics; no bare Unknown capability / Acquire via unavailable |
 | [ADR-039](docs/adr/ADR-039_Separate_Understanding_from_Execution.md) | Separate Understanding from Execution | Accepted | Intent Understanding → MissionIntent → Capability Planning → MissionPlan; language probabilistic, execution deterministic |
+| [ADR-040](docs/adr/ADR-040_Separate_Evidence_Acquisition_from_Capability_Selection.md) | Separate Evidence Acquisition from Capability Selection | Accepted | Evidence Planning between Intent and Capability Planning; acquire missing evidence before review/outcome capabilities |
 
 ## How to add a decision
 

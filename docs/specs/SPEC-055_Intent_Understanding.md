@@ -42,7 +42,7 @@ The operator communicated valid intent. The planner failed because it searched f
 
 Humans express intent. The platform plans execution. Operators should never need to memorize internal capability names.
 
-## Two-Stage Planning
+## Two-Stage Planning (extended by SPEC-056)
 
 ```text
 Operator
@@ -50,6 +50,8 @@ Operator
 Intent Understanding
   ↓
 MissionIntent
+  ↓
+Evidence Planning   ← SPEC-056
   ↓
 Capability Planning
   ↓
@@ -60,7 +62,8 @@ Execution Graph
 
 | Artifact | Role |
 |---|---|
-| **MissionIntent** | Descriptive — what the operator wants |
+| **MissionIntent** | Descriptive — what the operator wants (+ required evidence) |
+| **EvidencePlan** | Descriptive — what must be known (SPEC-056) |
 | **MissionPlan** | Executable — which registered capabilities run |
 
 ## MissionIntent
@@ -171,7 +174,7 @@ Mission section surfaces:
 - LLM-based intent classification (v1 is deterministic semantic patterns)
 - Interactive clarification UI beyond suggested interpretations payload
 - Retiring IntentParser alias path entirely
-- New Diagnostics capability module (diagnostics mode reuses Review / Outcome / Discovery)
+- New Diagnostics capability module (diagnostics mode reuses Review / Outcome / Discovery) — **superseded by SPEC-056 Discovery Diagnostics**
 
 ## Acceptance Criteria
 

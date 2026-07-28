@@ -18,7 +18,36 @@ const ARTIFACT_TYPES = Object.freeze({
   EXECUTION_PACKAGE: 'ExecutionPackage',
   DELIVERY_RESULTS: 'DeliveryResults',
   OUTCOME_SUMMARY: 'OutcomeSummary',
+  // SPEC-056 — diagnostic (read-only) artifacts
+  DISCOVERY_EXECUTION: 'DiscoveryExecution',
+  DISCOVERY_TRACE: 'DiscoveryTrace',
+  DISCOVERY_DIAGNOSTICS: 'DiscoveryDiagnostics',
+  CAPABILITY_EXECUTION: 'CapabilityExecution',
+  CAPABILITY_FAILURE: 'CapabilityFailure',
+  MISSION_DIAGNOSTICS: 'MissionDiagnostics',
+  MISSION_STATE: 'MissionState',
+  PROVIDER_SELECTION: 'ProviderSelection',
+  CANDIDATE_COUNTS: 'CandidateCounts',
+  VERIFICATION_RESULTS: 'VerificationResults',
+  EXCEPTIONS: 'Exceptions',
 });
+
+/** Diagnostic artifact types — read-only; never mutate business state. */
+const DIAGNOSTIC_ARTIFACT_TYPES = Object.freeze(
+  new Set([
+    ARTIFACT_TYPES.DISCOVERY_EXECUTION,
+    ARTIFACT_TYPES.DISCOVERY_TRACE,
+    ARTIFACT_TYPES.DISCOVERY_DIAGNOSTICS,
+    ARTIFACT_TYPES.CAPABILITY_EXECUTION,
+    ARTIFACT_TYPES.CAPABILITY_FAILURE,
+    ARTIFACT_TYPES.MISSION_DIAGNOSTICS,
+    ARTIFACT_TYPES.MISSION_STATE,
+    ARTIFACT_TYPES.PROVIDER_SELECTION,
+    ARTIFACT_TYPES.CANDIDATE_COUNTS,
+    ARTIFACT_TYPES.VERIFICATION_RESULTS,
+    ARTIFACT_TYPES.EXCEPTIONS,
+  ])
+);
 
 /** Stage Library / PipelineGate snake_case → registry type */
 const ALIAS_TO_TYPE = Object.freeze({
@@ -344,7 +373,100 @@ const REGISTRY = Object.freeze({
       return { ok: errors.length === 0, warnings: [], errors };
     },
   }),
+  // SPEC-056 — diagnostic artifacts (read-only)
+  [ARTIFACT_TYPES.DISCOVERY_EXECUTION]: diagnosticTypeDef(
+    ARTIFACT_TYPES.DISCOVERY_EXECUTION,
+    'discovery_execution',
+    ['discovery_diagnostics'],
+    ['campaign_review']
+  ),
+  [ARTIFACT_TYPES.DISCOVERY_TRACE]: diagnosticTypeDef(
+    ARTIFACT_TYPES.DISCOVERY_TRACE,
+    'discovery_trace',
+    ['discovery_diagnostics'],
+    ['campaign_review']
+  ),
+  [ARTIFACT_TYPES.DISCOVERY_DIAGNOSTICS]: diagnosticTypeDef(
+    ARTIFACT_TYPES.DISCOVERY_DIAGNOSTICS,
+    'discovery_diagnostics',
+    ['discovery_diagnostics'],
+    ['campaign_review', 'outcome_intelligence']
+  ),
+  [ARTIFACT_TYPES.CAPABILITY_EXECUTION]: diagnosticTypeDef(
+    ARTIFACT_TYPES.CAPABILITY_EXECUTION,
+    'capability_execution',
+    ['discovery_diagnostics'],
+    []
+  ),
+  [ARTIFACT_TYPES.CAPABILITY_FAILURE]: diagnosticTypeDef(
+    ARTIFACT_TYPES.CAPABILITY_FAILURE,
+    'capability_failure',
+    ['discovery_diagnostics'],
+    []
+  ),
+  [ARTIFACT_TYPES.MISSION_DIAGNOSTICS]: diagnosticTypeDef(
+    ARTIFACT_TYPES.MISSION_DIAGNOSTICS,
+    'mission_diagnostics',
+    ['discovery_diagnostics'],
+    ['campaign_review']
+  ),
+  [ARTIFACT_TYPES.MISSION_STATE]: diagnosticTypeDef(
+    ARTIFACT_TYPES.MISSION_STATE,
+    'mission_state',
+    ['mission_planner'],
+    ['campaign_review', 'discovery_diagnostics']
+  ),
+  [ARTIFACT_TYPES.PROVIDER_SELECTION]: diagnosticTypeDef(
+    ARTIFACT_TYPES.PROVIDER_SELECTION,
+    'provider_selection',
+    ['discovery_diagnostics'],
+    []
+  ),
+  [ARTIFACT_TYPES.CANDIDATE_COUNTS]: diagnosticTypeDef(
+    ARTIFACT_TYPES.CANDIDATE_COUNTS,
+    'candidate_counts',
+    ['discovery_diagnostics'],
+    []
+  ),
+  [ARTIFACT_TYPES.VERIFICATION_RESULTS]: diagnosticTypeDef(
+    ARTIFACT_TYPES.VERIFICATION_RESULTS,
+    'verification_results',
+    ['discovery_diagnostics'],
+    []
+  ),
+  [ARTIFACT_TYPES.EXCEPTIONS]: diagnosticTypeDef(
+    ARTIFACT_TYPES.EXCEPTIONS,
+    'exceptions',
+    ['discovery_diagnostics'],
+    []
+  ),
 });
+
+/**
+ * @param {string} name
+ * @param {string} alias
+ * @param {string[]} producers
+ * @param {string[]} consumers
+ */
+function diagnosticTypeDef(name, alias, producers, consumers) {
+  return Object.freeze({
+    name,
+    alias,
+    schemaVersion: SCHEMA_VERSION,
+    producers,
+    consumers,
+    readOnly: true,
+    diagnostic: true,
+    mutatesBusinessState: false,
+    validate: (payload) => {
+      const errors = [];
+      if (!payload || typeof payload !== 'object') {
+        errors.push(`${name} payload required`);
+      }
+      return { ok: errors.length === 0, warnings: [], errors };
+    },
+  });
+}
 
 /**
  * Normalize Stage Library alias or registry name → ArtifactType or null.
@@ -673,6 +795,7 @@ function summarizeArtifact(artifact) {
 
 module.exports = {
   ARTIFACT_TYPES,
+  DIAGNOSTIC_ARTIFACT_TYPES,
   ALIAS_TO_TYPE,
   TYPE_TO_ALIAS,
   SCHEMA_VERSION,
@@ -686,4 +809,7 @@ module.exports = {
   extractPayload,
   flattenArtifactsToOutputs,
   summarizeArtifact,
+  isDiagnosticArtifactType(type) {
+    return DIAGNOSTIC_ARTIFACT_TYPES.has(String(type || ''));
+  },
 };

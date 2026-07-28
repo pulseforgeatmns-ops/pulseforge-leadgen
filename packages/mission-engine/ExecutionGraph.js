@@ -109,7 +109,13 @@ function createExecutionGraph(missionOrInput = {}) {
 
   // 3. Augment from executable objective keywords (compose — never replace)
   //    When missionPlan is present, `objective` already excludes Notes.
-  const keywordHits = matchOutcomeStages(objective);
+  //    SPEC-056: diagnostic missions use Evidence Planning for stage selection —
+  //    keyword hits must not re-introduce execution stages (e.g. Prospect Discovery)
+  //    that would mutate business state or skip evidence acquisition.
+  const keywordHits =
+    missionPlan && missionPlan.options && missionPlan.options.diagnostics
+      ? []
+      : matchOutcomeStages(objective);
   for (const hit of keywordHits) {
     if (!selected.has(hit.stageId)) {
       selected.set(hit.stageId, hit.reason);

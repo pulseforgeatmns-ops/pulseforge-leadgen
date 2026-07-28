@@ -742,9 +742,111 @@
   }
 
   /**
+   * SPEC-056 — Evidence Requirements: available / scheduled / blocked.
+   */
+  function renderEvidenceRequirementsHtml(evidencePlan, summary) {
+    const plan = evidencePlan || null;
+    const sum = summary || null;
+    if (!plan && !sum) return '';
+
+    const items =
+      (sum && Array.isArray(sum.items) && sum.items.length
+        ? sum.items
+        : null) ||
+      buildEvidenceItemsFromPlan(plan);
+    if (!items.length && !(plan && plan.required && plan.required.length)) {
+      return '';
+    }
+
+    const unable = (sum && sum.unableToAnswer) || (plan && plan.unableToAnswer);
+    const reason = (sum && sum.reason) || (plan && plan.reason) || null;
+    const satisfied =
+      (sum && sum.satisfiedCount != null
+        ? sum.satisfiedCount
+        : plan && plan.satisfiedCount) || 0;
+    const missing =
+      (sum && sum.missingCount != null
+        ? sum.missingCount
+        : plan && plan.missingCount) || 0;
+
+    const rows = items
+      .map((item) => {
+        const status = String(item.status || 'required').toLowerCase();
+        let mark = '·';
+        let statusLabel = status;
+        if (status === 'available') {
+          mark = '✓';
+          statusLabel = 'Available';
+        } else if (status === 'acquired') {
+          mark = '✓';
+          statusLabel = 'Acquired';
+        } else if (status === 'scheduled') {
+          mark = '→';
+          statusLabel = 'Scheduled';
+        } else if (status === 'blocked') {
+          mark = '✗';
+          statusLabel = 'Blocked';
+        }
+        const detail = item.reason
+          ? ` — ${escapeHtml(String(item.reason))}`
+          : '';
+        return `<div class="msn-si-row"><dt>${escapeHtml(
+          mark
+        )} ${escapeHtml(item.label || item.evidenceType || '')}</dt><dd>${escapeHtml(
+          statusLabel
+        )}${detail}</dd></div>`;
+      })
+      .join('');
+
+    return `<section class="msn-block msn-evidence-requirements" id="msnEvidenceRequirements">
+      <h3>Evidence Requirements</h3>
+      <p class="msn-objective-meta">Information required to answer the operator before capabilities run (${escapeHtml(
+        String(satisfied)
+      )} satisfied · ${escapeHtml(String(missing))} missing).</p>
+      <dl class="msn-si-dl">${rows}</dl>
+      ${
+        unable
+          ? `<p class="msn-objective-meta" role="alert">${escapeHtml(
+              reason || 'Unable to answer — missing evidence with no registered producer.'
+            )}</p>`
+          : ''
+      }
+    </section>`;
+  }
+
+  function buildEvidenceItemsFromPlan(plan) {
+    if (!plan || !Array.isArray(plan.required)) return [];
+    const available = new Set(plan.available || []);
+    const scheduled = new Set(
+      (plan.acquisitions || []).map((a) => a.evidenceType)
+    );
+    const blockedMap = new Map(
+      (plan.blocked || []).map((b) => [b.evidenceType, b.reason])
+    );
+    return plan.required.map((t) => {
+      if (blockedMap.has(t)) {
+        return {
+          evidenceType: t,
+          label: t,
+          status: 'blocked',
+          reason: blockedMap.get(t) || 'No producer registered',
+        };
+      }
+      if (available.has(t)) {
+        return { evidenceType: t, label: t, status: 'available', reason: null };
+      }
+      if (scheduled.has(t)) {
+        return { evidenceType: t, label: t, status: 'scheduled', reason: null };
+      }
+      return { evidenceType: t, label: t, status: 'required', reason: null };
+    });
+  }
+
+  /**
    * SPEC-050 — show parsed Mission Plan before / alongside execution artifacts.
    * Operators verify intent was interpreted correctly; Notes never look like stages.
    * SPEC-055 — Execution Plan follows Understood Intent.
+   * SPEC-056 — Evidence Requirements sit between Intent and Execution Plan.
    */
   function renderMissionPlanHtml(missionPlan, summary) {
     const plan = missionPlan || null;
@@ -2643,6 +2745,18 @@
         missionIntent,
         missionIntentSummary
       );
+      const evidencePlan =
+        (mission.plan && mission.plan.evidencePlan) ||
+        mission.evidencePlan ||
+        null;
+      const evidencePlanSummary =
+        (mission.plan && mission.plan.evidencePlanSummary) ||
+        mission.evidencePlanSummary ||
+        null;
+      const evidenceRequirementsHtml = renderEvidenceRequirementsHtml(
+        evidencePlan,
+        evidencePlanSummary
+      );
       const missionPlanHtml = renderMissionPlanHtml(missionPlan, missionPlanSummary);
       const artifactResolutionHtml = renderArtifactResolutionHtml(
         (mission.plan && mission.plan.artifactResolution) ||
@@ -3024,6 +3138,7 @@
         ${renderWarningInspectorHtml(warningItems)}
         ${renderReviewQueueHtml(msnReviewSession)}
         ${missionIntentHtml}
+        ${evidenceRequirementsHtml}
         ${missionPlanHtml}
         ${artifactResolutionHtml}
         ${planningDiagnosticsHtml}

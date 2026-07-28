@@ -39,6 +39,7 @@ const {
   createDirectMailExecutionCapability,
   createOutcomeIntelligenceCapability,
   createOperatorInboxCapability,
+  createDiscoveryDiagnosticsCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
 } = require('./builtins/stubs');
@@ -76,6 +77,7 @@ module.exports = {
   createDirectMailExecutionCapability,
   createOutcomeIntelligenceCapability,
   createOperatorInboxCapability,
+  createDiscoveryDiagnosticsCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
   CAPABILITY_ARTIFACT_CONTRACTS,

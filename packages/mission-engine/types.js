@@ -160,6 +160,7 @@ const STAGE_LABELS = Object.freeze({
   direct_mail_execution: 'Direct Mail Execution',
   outcome_intelligence: 'Outcome Intelligence',
   operator_inbox: 'Operator Inbox',
+  discovery_diagnostics: 'Discovery Diagnostics',
   review_required: 'Ready for Review',
 });
 

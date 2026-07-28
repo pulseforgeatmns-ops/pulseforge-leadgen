@@ -537,6 +537,12 @@ function registerBuiltinCapabilities(registry, options = {}) {
   register(
     createOperatorInboxCapability(options.operatorInbox || {})
   );
+  const {
+    createDiscoveryDiagnosticsCapability,
+  } = require('../discovery/DiscoveryDiagnostics');
+  register(
+    createDiscoveryDiagnosticsCapability(options.discoveryDiagnostics || {})
+  );
   return registry;
 }
 
@@ -574,6 +580,8 @@ module.exports = {
     .createOutcomeIntelligenceCapability,
   createOperatorInboxCapability: require('../operatorInbox')
     .createOperatorInboxCapability,
+  createDiscoveryDiagnosticsCapability: require('../discovery/DiscoveryDiagnostics')
+    .createDiscoveryDiagnosticsCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
   resolveDiscoveryDeps,

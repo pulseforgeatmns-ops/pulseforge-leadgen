@@ -13,6 +13,7 @@ const CAPABILITY_CATEGORIES = Object.freeze({
   EXECUTION: 'execution',
   MONITORING: 'monitoring',
   REPORTING: 'reporting',
+  DIAGNOSTICS: 'diagnostics',
 });
 
 const CAPABILITY_RESULT_STATUS = Object.freeze({
@@ -47,6 +48,8 @@ const BUILTIN_IDS = Object.freeze({
   DIRECT_MAIL_EXECUTION: 'direct_mail_execution',
   OUTCOME_INTELLIGENCE: 'outcome_intelligence',
   OPERATOR_INBOX: 'operator_inbox',
+  /** SPEC-056 — read-only diagnostic producer (never mutates business state) */
+  DISCOVERY_DIAGNOSTICS: 'discovery_diagnostics',
 });
 
 /**
