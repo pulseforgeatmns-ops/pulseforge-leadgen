@@ -50,6 +50,8 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-041](SPEC-041_Mission_Planner.md) | Mission Planner (objective-driven execution graphs) | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-042](SPEC-042_Mission_Artifact_Bus.md) | Mission Artifact Bus | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-043](SPEC-043_Operator_Artifact_Injection.md) | Operator Artifact Injection | Implemented (v1 thin slice) | v1.3.0 |
+| [SPEC-044](SPEC-044_Trade_Capture_Engine.md) | Trade Capture Engine | Done | v1.0.1 |
+| [SPEC-045](SPEC-045_Command_Deck_UX_Polish.md) | Command Deck UX Polish | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

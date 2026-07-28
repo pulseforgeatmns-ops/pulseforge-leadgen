@@ -101,6 +101,248 @@
       .replace(/'/g, '&#39;');
   }
 
+  /** SPEC-045 — auto-grow composer (~1–10 lines). */
+  const MX_ASK_LINE_PX = 22;
+  const MX_ASK_MAX_LINES = 10;
+
+  function autoGrowAskInput() {
+    const el = els.mxAskInput;
+    if (!el) return;
+    el.style.height = 'auto';
+    const max = MX_ASK_LINE_PX * MX_ASK_MAX_LINES + 24;
+    const next = Math.min(Math.max(el.scrollHeight, MX_ASK_LINE_PX + 20), max);
+    el.style.height = `${next}px`;
+  }
+
+  function resetAskInput() {
+    if (!els.mxAskInput) return;
+    els.mxAskInput.value = '';
+    els.mxAskInput.style.height = '';
+    autoGrowAskInput();
+  }
+
+  /**
+   * SPEC-045 — detect a ProspectList-shaped block for display cards only.
+   * @param {string} text
+   */
+  function detectProspectListDisplay(text) {
+    const raw = String(text || '').replace(/^\uFEFF/, '');
+    if (!raw.trim()) return null;
+    const lines = raw.split(/\r?\n/);
+    let start = -1;
+    let hasHeader = false;
+    const headerRe =
+      /^(company\s*name|company|business(\s*name)?|name)\b/i;
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = String(lines[i] || '').trim();
+      if (!line) continue;
+      if (/^(build|create|launch)\s+(a\s+)?campaign\b/i.test(line) && !/,|\t/.test(line)) {
+        continue;
+      }
+      const cells = line.split(/,|\t/).map((c) => c.trim());
+      if (cells.some((c) => headerRe.test(c) || /^company_?name$/i.test(c.replace(/\s+/g, '_')))) {
+        start = i;
+        hasHeader = true;
+        break;
+      }
+      if ((/,|\t/.test(line) && cells.length >= 2) || (!/,|\t/.test(line) && i > 0)) {
+        // fall through — may be name list after blank
+      }
+    }
+    if (start < 0) {
+      const blankIdx = lines.findIndex((l, idx) => idx > 0 && !String(l).trim());
+      if (blankIdx >= 0) {
+        const names = [];
+        for (let i = blankIdx + 1; i < lines.length; i += 1) {
+          const line = String(lines[i] || '').trim();
+          if (!line) break;
+          if (/^(build|create|launch)\s+(a\s+)?campaign\b/i.test(line)) continue;
+          names.push(i);
+        }
+        if (names.length >= 2) start = names[0];
+      }
+    }
+    if (start < 0) return null;
+    let end = start;
+    for (let i = start; i < lines.length; i += 1) {
+      if (!String(lines[i] || '').trim() && i > start) break;
+      end = i;
+    }
+    const blockLines = lines.slice(start, end + 1).filter((l) => String(l).trim());
+    if (blockLines.length < (hasHeader ? 2 : 2)) return null;
+    const dataLines = hasHeader ? blockLines.slice(1) : blockLines;
+    const count = dataLines.filter((l) => String(l).trim()).length;
+    if (count < 1) return null;
+    const objective = lines
+      .slice(0, start)
+      .join('\n')
+      .trim();
+    return {
+      block: blockLines.join('\n'),
+      count,
+      hasHeader,
+      objective,
+    };
+  }
+
+  /**
+   * SPEC-045 — reusable attachment card.
+   * @param {object} opts
+   */
+  function renderAttachmentCard(opts) {
+    const id = `attach_${Math.random().toString(36).slice(2, 9)}`;
+    const status = opts.status || 'Detected';
+    const meta = opts.meta || '';
+    const body = opts.body || '';
+    return `<div class="mx-attach-card" data-attach-type="${escapeHtml(
+      opts.type || 'attachment'
+    )}">
+      <div class="mx-attach-head">
+        <p class="mx-attach-title">${escapeHtml(opts.title || 'Attachment')}</p>
+        <span class="cd-chip">${escapeHtml(status)}</span>
+      </div>
+      ${meta ? `<p class="mx-attach-meta">${escapeHtml(meta)}</p>` : ''}
+      <div class="mx-attach-actions">
+        <button type="button" class="cd-btn cd-btn-ghost" data-attach-toggle="${id}">View</button>
+      </div>
+      <div class="mx-attach-body" id="${id}" hidden>
+        <pre class="mx-attach-raw">${escapeHtml(body)}</pre>
+      </div>
+    </div>`;
+  }
+
+  function bindAttachmentCards(root) {
+    if (!root) return;
+    root.querySelectorAll('[data-attach-toggle]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-attach-toggle');
+        const body = id ? document.getElementById(id) : null;
+        if (!body) return;
+        const open = body.hasAttribute('hidden');
+        if (open) body.removeAttribute('hidden');
+        else body.setAttribute('hidden', '');
+        btn.textContent = open ? 'Hide' : 'View';
+      });
+    });
+  }
+
+  function industryBuckets(prospects) {
+    const list = Array.isArray(prospects) ? prospects : [];
+    const map = Object.create(null);
+    list.forEach((p) => {
+      const key = String(p.industry || p.vertical || '').trim();
+      if (!key) return;
+      map[key] = (map[key] || 0) + 1;
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }
+
+  function businessArtifactHeadline(art) {
+    const type = String(art.artifactType || art.type || '');
+    const p = art.payload || {};
+    if (type === 'ProspectList') {
+      const n =
+        p.prospectCount != null
+          ? Number(p.prospectCount)
+          : Array.isArray(p.prospects)
+            ? p.prospects.length
+            : 0;
+      return {
+        title: 'Prospect List',
+        summary: `${n} ${n === 1 ? 'Company' : 'Companies'}`,
+      };
+    }
+    if (type === 'CompanyIntelligence') {
+      const n =
+        p.enrichedCount != null
+          ? Number(p.enrichedCount)
+          : Array.isArray(p.prospects)
+            ? p.prospects.length
+            : 0;
+      return {
+        title: 'Company Intelligence',
+        summary: `${n} packages`,
+      };
+    }
+    if (type === 'OpportunityRanking') {
+      const n =
+        p.rankedCount != null
+          ? Number(p.rankedCount)
+          : Array.isArray(p.prospects)
+            ? p.prospects.length
+            : 0;
+      return { title: 'Opportunity Ranking', summary: `${n} ranked` };
+    }
+    if (type === 'Campaign') {
+      const c = p.campaign || {};
+      const n =
+        c.prospectCount != null
+          ? Number(c.prospectCount)
+          : Array.isArray(c.prospects)
+            ? c.prospects.length
+            : Array.isArray(c.mailMerge)
+              ? c.mailMerge.length
+              : 0;
+      const mail = Array.isArray(c.mailMerge) ? c.mailMerge.length : n;
+      return {
+        title: 'Campaign',
+        summary: `${n} prospects · ${mail} personalized`,
+      };
+    }
+    if (type === 'MailPackage') {
+      return { title: 'Mail Package', summary: art.summary || 'Ready for review' };
+    }
+    return {
+      title: type || 'Artifact',
+      summary: art.summary || 'Published',
+    };
+  }
+
+  function stageProgressPct(step) {
+    const status = String(step.status || 'queued');
+    if (status === 'completed' || status === 'stale') return 100;
+    if (status === 'running') return 55;
+    if (status === 'blocked' || status === 'failed') return 100;
+    return 8;
+  }
+
+  function reviewDashboardModel(mission, artifacts) {
+    const campaignArt = (artifacts || []).find(
+      (a) => a.artifactType === 'Campaign' || a.type === 'Campaign'
+    );
+    const campaign =
+      (campaignArt && campaignArt.payload && campaignArt.payload.campaign) ||
+      (mission.deliverables && mission.deliverables.campaign) ||
+      null;
+    const prospects =
+      (campaign && Array.isArray(campaign.prospects) && campaign.prospects.length) ||
+      (campaign && campaign.prospectCount) ||
+      (mission.deliverables &&
+        Array.isArray(mission.deliverables.prospects) &&
+        mission.deliverables.prospects.length) ||
+      0;
+    const personalized =
+      (campaign && Array.isArray(campaign.mailMerge) && campaign.mailMerge.length) ||
+      prospects;
+    const warnings = [];
+    (mission.plan && mission.plan.steps ? mission.plan.steps : []).forEach((s) => {
+      (s.warnings || []).forEach((w) => warnings.push(w));
+    });
+    if (mission.stageReview && Array.isArray(mission.stageReview.warnings)) {
+      mission.stageReview.warnings.forEach((w) => warnings.push(w));
+    }
+    const warningCount = warnings.length;
+    const needsReview = warningCount;
+    const ready = Math.max(0, Number(prospects) - needsReview);
+    return {
+      prospects: Number(prospects) || 0,
+      personalized: Number(personalized) || 0,
+      warnings: warningCount,
+      needsReview,
+      ready,
+    };
+  }
+
   function formatDisplayTime(iso) {
     if (!iso) return '';
     const date = new Date(iso);
@@ -977,14 +1219,7 @@
         }`.trim();
       }
 
-      const planSteps = ((mission.plan && mission.plan.steps) || [])
-        .map(
-          (s) =>
-            `<li><strong>${escapeHtml(s.name || s.capabilityId)}</strong> — ${escapeHtml(
-              s.status || 'queued'
-            )}</li>`
-        )
-        .join('');
+      const steps = (mission.plan && mission.plan.steps) || [];
       const evidence = (data.evidence || [])
         .map((e) => `<li>${escapeHtml(e.summary || '')}</li>`)
         .join('');
@@ -999,32 +1234,126 @@
         .join('');
 
       const artifacts = Array.isArray(data.artifacts) ? data.artifacts : [];
+      const prospectListArt = artifacts.find(
+        (a) => a.artifactType === 'ProspectList' || a.type === 'ProspectList'
+      );
+      const prospectPayload = (prospectListArt && prospectListArt.payload) || {};
+      const prospectRows = Array.isArray(prospectPayload.prospects)
+        ? prospectPayload.prospects
+        : [];
+      const prospectCount =
+        prospectPayload.prospectCount != null
+          ? Number(prospectPayload.prospectCount)
+          : prospectRows.length;
+      const opMeta = mission.operatorProspectList || null;
+      const attachedCount =
+        (opMeta && opMeta.prospectCount) ||
+        prospectCount ||
+        0;
+      const buckets = industryBuckets(prospectRows);
+      const reviewModel = reviewDashboardModel(mission, artifacts);
+
+      const objectiveRaw = String(mission.objectiveText || '');
+      const objectiveFirstLine =
+        objectiveRaw.split(/\r?\n/).find((l) => String(l).trim()) || 'Mission objective';
+      const objectiveHtml = `<section class="msn-block" id="msnObjectiveBlock">
+          <h3>Objective</h3>
+          <div data-msn-objective-collapsed>
+            <p class="msn-objective-collapsed">${escapeHtml(
+              objectiveFirstLine.length > 90
+                ? `${objectiveFirstLine.slice(0, 87)}…`
+                : objectiveFirstLine
+            )}</p>
+            ${
+              attachedCount
+                ? `<p class="msn-objective-meta">${escapeHtml(
+                    String(attachedCount)
+                  )} prospects attached</p>`
+                : ''
+            }
+            <button type="button" class="msn-link-btn" data-msn-objective-expand>Expand</button>
+          </div>
+          <div data-msn-objective-expanded hidden>
+            <p class="msn-objective">${escapeHtml(objectiveRaw)}</p>
+            <button type="button" class="msn-link-btn" data-msn-objective-collapse>Collapse</button>
+          </div>
+        </section>`;
+
+      const inputsHtml = `<section class="msn-block">
+          <h3>Inputs</h3>
+          ${
+            attachedCount
+              ? `<p class="msn-artifact-title">Prospect List</p>
+            <div class="msn-metric-grid">
+              <div class="msn-metric"><span class="msn-metric-label">Companies</span><span class="msn-metric-value">${escapeHtml(
+                String(attachedCount)
+              )}</span></div>
+              ${
+                prospectListArt && prospectListArt.metadata && prospectListArt.metadata.operatorSupplied
+                  ? `<div class="msn-metric"><span class="msn-metric-label">Source</span><span class="msn-metric-value" style="font-size:0.85rem">Operator</span></div>`
+                  : ''
+              }
+            </div>
+            ${
+              buckets.length
+                ? `<ul class="msn-bucket-list">${buckets
+                    .map(
+                      ([name, n]) =>
+                        `<li><span>${escapeHtml(name)}</span><strong>${escapeHtml(
+                          String(n)
+                        )}</strong></li>`
+                    )
+                    .join('')}</ul>`
+                : `<p class="msn-objective-meta">Industry breakdown unavailable for these rows.</p>`
+            }`
+              : `<p class="msn-objective-meta">No prospect list attached yet.</p>`
+          }
+        </section>`;
+
+      const stageRows = steps
+        .map((s) => {
+          const pct = stageProgressPct(s);
+          const running = String(s.status) === 'running';
+          const rs = s.reviewSummary || {};
+          const metrics = [];
+          if (rs.publishedCount != null) {
+            metrics.push(`Accepted ${rs.publishedCount}`);
+          }
+          if (Array.isArray(s.warnings) && s.warnings.length) {
+            metrics.push(`Warnings ${s.warnings.length}`);
+          }
+          if (s.blockingIssues && s.blockingIssues.length) {
+            metrics.push(`Blocked ${s.blockingIssues.length}`);
+          }
+          return `<li class="msn-stage">
+            <div class="msn-stage-head">
+              <p class="msn-stage-name">${escapeHtml(s.name || s.capabilityId || 'Stage')}</p>
+              <span class="msn-stage-status">${escapeHtml(
+                s.outcomeLabel || s.status || 'queued'
+              )}</span>
+            </div>
+            <div class="msn-stage-bar${running ? ' is-running' : ''}" aria-hidden="true"><span style="width:${pct}%"></span></div>
+            ${
+              metrics.length
+                ? `<div class="msn-stage-metrics">${metrics
+                    .map((m) => `<span>${escapeHtml(m)}</span>`)
+                    .join('')}</div>`
+                : ''
+            }
+          </li>`;
+        })
+        .join('');
+
       const artifactRows = artifacts
         .map((art) => {
+          const headline = businessArtifactHeadline(art);
           const status = art.validationStatus || 'unknown';
           const rev = art.revision != null ? `v${art.revision}` : '';
-          const deps = (art.dependencies || [])
-            .map(
-              (d) =>
-                `${escapeHtml(d.artifactType || '')}${
-                  d.revision != null ? ` v${d.revision}` : ''
-                }`
-            )
-            .join(', ');
-          const provenance =
-            (art.metadata && art.metadata.provenance) || null;
-          const provenanceLine = provenance
-            ? ` · Origin: ${escapeHtml(
-                [provenance.producer, provenance.source, provenance.createdBy]
-                  .filter(Boolean)
-                  .join(' / ')
-              )}`
-            : '';
           return `<li class="msn-artifact" data-artifact-id="${escapeHtml(
             art.id || ''
           )}">
             <div class="msn-artifact-head">
-              <strong>${escapeHtml(art.artifactType || '')}</strong>
+              <p class="msn-artifact-title">${escapeHtml(headline.title)}</p>
               <span class="cd-chip">${escapeHtml(rev)}</span>
               <span class="cd-chip">${escapeHtml(status)}</span>
               ${
@@ -1033,31 +1362,20 @@
                   : ''
               }
             </div>
-            <p class="msn-artifact-summary">${escapeHtml(art.summary || '')}</p>
-            <p class="msn-artifact-meta">Producer: ${escapeHtml(
-              art.producer || '—'
-            )} · Stage: ${escapeHtml(art.stageId || '—')}${
-              deps ? ` · Depends: ${deps}` : ''
-            }${provenanceLine}</p>
-            <details>
-              <summary>Payload & provenance</summary>
+            <p class="msn-artifact-summary">${escapeHtml(headline.summary)}</p>
+            <details class="msn-dev-details">
+              <summary>Developer Details</summary>
               <pre class="msn-pre">${escapeHtml(
                 JSON.stringify(
                   {
                     id: art.id,
-                    schemaVersion: art.schemaVersion,
-                    createdAt: art.createdAt,
+                    artifactType: art.artifactType,
                     producer: art.producer,
-                    metadata: art.metadata,
+                    stageId: art.stageId,
+                    validationStatus: art.validationStatus,
                     dependencies: art.dependencies,
+                    metadata: art.metadata,
                     payload: art.payload,
-                    history: (art.history || []).map((h) => ({
-                      id: h.id,
-                      revision: h.revision,
-                      validationStatus: h.validationStatus,
-                      producer: h.producer,
-                      createdAt: h.createdAt,
-                    })),
                   },
                   null,
                   2
@@ -1067,6 +1385,27 @@
           </li>`;
         })
         .join('');
+
+      const reviewHtml = `<section class="msn-block msn-review-dash">
+          <h3>Campaign Summary</h3>
+          <div class="msn-metric-grid">
+            <div class="msn-metric"><span class="msn-metric-label">Prospects</span><span class="msn-metric-value">${escapeHtml(
+              String(reviewModel.prospects)
+            )}</span></div>
+            <div class="msn-metric"><span class="msn-metric-label">Personalized</span><span class="msn-metric-value">${escapeHtml(
+              String(reviewModel.personalized)
+            )}</span></div>
+            <div class="msn-metric"><span class="msn-metric-label">Warnings</span><span class="msn-metric-value">${escapeHtml(
+              String(reviewModel.warnings)
+            )}</span></div>
+            <div class="msn-metric"><span class="msn-metric-label">Needs Review</span><span class="msn-metric-value">${escapeHtml(
+              String(reviewModel.needsReview)
+            )}</span></div>
+            <div class="msn-metric"><span class="msn-metric-label">Ready</span><span class="msn-metric-value">${escapeHtml(
+              String(reviewModel.ready)
+            )}</span></div>
+          </div>
+        </section>`;
 
       const recoveryActions = Array.isArray(data.recoveryActions)
         ? data.recoveryActions
@@ -1131,45 +1470,62 @@
 
       els.msnBody.innerHTML = `
         ${discoveryFailedHtml}
-        <section class="msn-block">
-          <h3>Objective</h3>
-          <p>${escapeHtml(mission.objectiveText || '')}</p>
-        </section>
-        <section class="msn-block">
-          <h3>Plan</h3>
-          <ol class="msn-plan">${planSteps || '<li>No steps</li>'}</ol>
-        </section>
+        ${reviewHtml}
+        ${objectiveHtml}
+        ${inputsHtml}
         <section class="msn-block">
           <h3>Progress</h3>
-          <p>${escapeHtml(
-            (mission.progress && mission.progress.currentStage) || mission.status || ''
-          )} · ${escapeHtml(
-            String((mission.progress && mission.progress.percent) || 0)
-          )}%</p>
-        </section>
-        <section class="msn-block">
-          <h3>Artifacts</h3>
-          <ul class="msn-artifacts">${
-            artifactRows || '<li>No artifacts published yet</li>'
+          <ul class="msn-stage-list">${
+            stageRows || '<li class="msn-objective-meta">No stages yet</li>'
           }</ul>
         </section>
         <section class="msn-block">
-          <h3>Evidence</h3>
-          <ul>${evidence || '<li>No evidence yet</li>'}</ul>
+          <h3>Deliverables</h3>
+          <ul class="msn-artifacts">${
+            artifactRows || '<li class="msn-objective-meta">No deliverables published yet</li>'
+          }</ul>
         </section>
-        <section class="msn-block">
-          <h3>Results</h3>
+        <details class="msn-dev-details msn-block">
+          <summary>Developer Details</summary>
+          <h3 style="margin-top:0.75rem">Evidence</h3>
+          <ul>${evidence || '<li>No evidence yet</li>'}</ul>
+          <h3>Audit</h3>
+          <ul>${audit || '<li>No events</li>'}</ul>
+          <h3>Raw deliverables</h3>
           <pre class="msn-pre">${escapeHtml(
             JSON.stringify(mission.deliverables || {}, null, 2)
           )}</pre>
-        </section>
-        <section class="msn-block">
-          <h3>Audit</h3>
-          <ul>${audit || '<li>No events</li>'}</ul>
-        </section>
+        </details>
         <p class="msn-note">No outbound actions occur automatically. Approve records review only.</p>
       `;
 
+      els.msnBody
+        .querySelectorAll('[data-msn-objective-expand]')
+        .forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const root = els.msnBody.querySelector('#msnObjectiveBlock');
+            if (!root) return;
+            root.querySelector('[data-msn-objective-collapsed]')?.setAttribute('hidden', '');
+            root.querySelector('[data-msn-objective-expanded]')?.removeAttribute('hidden');
+          });
+        });
+      els.msnBody
+        .querySelectorAll('[data-msn-objective-collapse]')
+        .forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const root = els.msnBody.querySelector('#msnObjectiveBlock');
+            if (!root) return;
+            root.querySelector('[data-msn-objective-expanded]')?.setAttribute('hidden', '');
+            root.querySelector('[data-msn-objective-collapsed]')?.removeAttribute('hidden');
+          });
+        });
+
+      const actionLabels = {
+        approve: 'Approve',
+        reject: 'Reject',
+        edit: 'Edit',
+        run_again: 'Run again',
+      };
       const actions = (data.actions || ['approve', 'reject', 'edit', 'run_again']).filter(
         (action) => action !== 'import_prospect_list'
       );
@@ -1179,7 +1535,7 @@
             `<button type="button" class="cd-btn ${
               action === 'approve' ? 'cd-btn-primary' : 'cd-btn-ghost'
             }" data-msn-review="${escapeHtml(action)}">${escapeHtml(
-              action.replace(/_/g, ' ')
+              actionLabels[action] || action.replace(/_/g, ' ')
             )}</button>`
         )
         .join('');
@@ -1365,13 +1721,31 @@
 
   function appendOperatorMessage(text) {
     if (!els.mxThread) return;
+    const detected = detectProspectListDisplay(text);
+    let bodyHtml = '';
+    if (detected) {
+      const prose = detected.objective
+        ? `<p class="mx-msg-body">${escapeHtml(detected.objective)}</p>`
+        : '';
+      const card = renderAttachmentCard({
+        type: 'prospect_list',
+        title: 'Prospect List',
+        status: 'Detected',
+        meta: `${detected.count} ${detected.count === 1 ? 'Company' : 'Companies'}`,
+        body: detected.block,
+      });
+      bodyHtml = `${prose}${card}`;
+    } else {
+      bodyHtml = `<p class="mx-msg-body">${escapeHtml(text)}</p>`;
+    }
     const div = document.createElement('div');
     div.className = 'mx-msg is-operator';
     div.innerHTML = `
       <p class="mx-msg-role">You</p>
-      <p class="mx-msg-body">${escapeHtml(text)}</p>
+      ${bodyHtml}
     `;
     els.mxThread.appendChild(div);
+    bindAttachmentCards(div);
     els.mxThread.scrollTop = els.mxThread.scrollHeight;
   }
 
@@ -1565,6 +1939,11 @@
 
   function renderSuggestions(suggestions) {
     if (!els.mxSuggestions) return;
+    const thread = els.mxThread;
+    const prevScroll = thread ? thread.scrollTop : 0;
+    const nearBottom =
+      thread &&
+      thread.scrollHeight - thread.scrollTop - thread.clientHeight < 48;
     els.mxSuggestions.innerHTML = (suggestions || [])
       .map(
         (s) =>
@@ -1578,14 +1957,23 @@
         askWorkspace(chip.getAttribute('data-mx-suggestion') || '');
       });
     });
+    if (thread) {
+      if (nearBottom) thread.scrollTop = thread.scrollHeight;
+      else thread.scrollTop = prevScroll;
+    }
   }
 
   async function askWorkspace(question) {
     const q = String(question || '').trim();
     if (!q) return;
+    console.info('[mission-objective-len]', {
+      stage: 'frontend',
+      chars: q.length,
+      newlines: (q.match(/\n/g) || []).length,
+    });
     if (els.mxAskSend) els.mxAskSend.disabled = true;
     appendOperatorMessage(q);
-    if (els.mxAskInput) els.mxAskInput.value = '';
+    resetAskInput();
 
     try {
       const result = await apiRequest('/api/v1/max/workspace/ask', {
@@ -1595,6 +1983,11 @@
           question: q,
           context: workspaceContext,
         },
+      });
+      console.info('[mission-objective-len]', {
+        stage: 'frontend_request_payload',
+        chars: q.length,
+        payloadQuestionChars: String(q).length,
       });
       workspaceSessionId = result.sessionId || workspaceSessionId;
       if (result.context) {
@@ -1606,6 +1999,30 @@
         els.mxSwitch.textContent = result.contextSwitch;
       }
       appendMaxResponse(result);
+      if (
+        result.mission &&
+        result.mission.operatorProspectList &&
+        result.mission.operatorProspectList.injected
+      ) {
+        const count = result.mission.operatorProspectList.prospectCount || 0;
+        const note = document.createElement('div');
+        note.className = 'mx-msg';
+        note.innerHTML = `
+          <p class="mx-msg-role">Mission</p>
+          ${renderAttachmentCard({
+            type: 'prospect_list',
+            title: 'Prospect List',
+            status: 'Imported',
+            meta: `${count} ${count === 1 ? 'Company' : 'Companies'}`,
+            body:
+              (result.mission.operatorProspectList.paste) ||
+              'Prospect list imported onto the Mission Artifact Bus.',
+          })}
+        `;
+        els.mxThread?.appendChild(note);
+        bindAttachmentCards(note);
+        if (els.mxThread) els.mxThread.scrollTop = els.mxThread.scrollHeight;
+      }
       renderSuggestions(result.suggestions || []);
       if (result.route === 'mission' || (result.mission && result.mission.id)) {
         loadDeck({ force: true });
@@ -1924,6 +2341,8 @@
     event.preventDefault();
     els.mxAskForm?.requestSubmit();
   });
+  els.mxAskInput?.addEventListener('input', () => autoGrowAskInput());
+  autoGrowAskInput();
 
   els.workspace?.querySelectorAll('[data-mx-close]').forEach((node) => {
     node.addEventListener('click', () => closeWorkspace());
