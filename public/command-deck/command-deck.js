@@ -2528,6 +2528,50 @@
         })
         .join('');
 
+      const validationFailures = Array.isArray(data.artifactValidationFailures)
+        ? data.artifactValidationFailures
+        : Array.isArray(
+              mission.deliverables &&
+                mission.deliverables.artifactValidationFailures
+            )
+          ? mission.deliverables.artifactValidationFailures
+          : [];
+      const validationFailureHtml = validationFailures.length
+        ? `<section class="msn-block msn-artifact-validation" id="msnArtifactValidation">
+            <h3>Artifact Validation</h3>
+            <ul class="msn-validation-failures">
+              ${validationFailures
+                .map((f) => {
+                  const reasons = Array.isArray(f.reasons)
+                    ? f.reasons
+                    : f.reason
+                      ? [f.reason]
+                      : ['Validation failed.'];
+                  return `<li class="msn-validation-failure">
+                    <div class="msn-artifact-head">
+                      <p class="msn-artifact-title">${escapeHtml(
+                        f.artifactType || 'Unknown'
+                      )}</p>
+                      <span class="cd-chip">${escapeHtml(
+                        f.status || 'FAILED'
+                      )}</span>
+                      ${
+                        f.remainsPlainText
+                          ? '<span class="cd-chip">Plain text</span>'
+                          : ''
+                      }
+                    </div>
+                    <p class="msn-subhead">Reason</p>
+                    <ul>${reasons
+                      .map((r) => `<li>${escapeHtml(String(r))}</li>`)
+                      .join('')}</ul>
+                  </li>`;
+                })
+                .join('')}
+            </ul>
+          </section>`
+        : '';
+
       const metricBtn = (nav, label, value) =>
         `<button type="button" class="msn-metric msn-metric-nav msn-interactive" data-msn-nav="${escapeHtml(
           nav
@@ -2642,6 +2686,7 @@
         ${renderReviewQueueHtml(msnReviewSession)}
         ${missionPlanHtml}
         ${artifactResolutionHtml}
+        ${validationFailureHtml}
         ${objectiveHtml}
         ${inputsHtml}
         <section class="msn-block">

@@ -102,6 +102,7 @@ const {
 const ArtifactRegistry = require('./ArtifactRegistry');
 const OperatorArtifactInjection = require('./OperatorArtifactInjection');
 const ArtifactResolver = require('./ArtifactResolver');
+const ArtifactValidator = require('./ArtifactValidator');
 const {
   parseIntent,
   classifyUnit,
@@ -188,6 +189,10 @@ module.exports = {
   ArtifactRegistry,
   OperatorArtifactInjection,
   ArtifactResolver,
+  ArtifactValidator,
+  validateArtifactCandidate: ArtifactValidator.validateArtifactCandidate,
+  looksLikeNaturalLanguage: ArtifactValidator.looksLikeNaturalLanguage,
+  isViableCompanyName: ArtifactValidator.isViableCompanyName,
   resolveArtifacts: ArtifactResolver.resolveArtifacts,
   deriveRequiredArtifacts: ArtifactResolver.deriveRequiredArtifacts,
   acquisitionOptions: ArtifactResolver.acquisitionOptions,

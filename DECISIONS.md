@@ -36,6 +36,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-033](docs/adr/ADR-033_Kalshi_Research_Stays_Isolated.md) | Kalshi Research Stays Isolated | Accepted | Kalshi BTC research lives at `packages/kalshi-research`; paper/replay only; never deployed; never wired into production execution |
 | [ADR-034](docs/adr/ADR-034_Intent_Before_Execution.md) | Intent Before Execution | Accepted | Mission Plan IR is the executable contract; capabilities never consume raw operator Notes; unknown text becomes Notes |
 | [ADR-035](docs/adr/ADR-035_Plan_Around_State_Not_Sequence.md) | Plan Around State, Not Sequence | Accepted | Mission Planning resolves artifact requirements before selecting capabilities; Discovery is an acquisition strategy |
+| [ADR-036](docs/adr/ADR-036_Trust_Through_Contracts.md) | Trust Through Contracts | Accepted | Artifacts validated at system boundaries before Artifact Bus; capabilities consume trusted contracts and do not re-verify |
 
 ## How to add a decision
 
