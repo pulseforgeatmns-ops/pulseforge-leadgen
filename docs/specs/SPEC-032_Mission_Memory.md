@@ -8,7 +8,7 @@
 | **Owner** | Pulseforge engineering |
 | **Created** | 2026-07-27 |
 | **Version** | v0.1.0 |
-| **Depends on** | SPEC-022 (Mission Engine), SPEC-023 (Capability Framework), ADR-001, ADR-003, ADR-010, ADR-011, ADR-019 |
+| **Depends on** | SPEC-022 (Mission Engine), SPEC-023 (Capability Framework), SPEC-039 (Active Mission Resolver), ADR-001, ADR-003, ADR-010, ADR-011, ADR-019, ADR-025 |
 | **Note** | Product draft was labeled “SPEC-031”; renumbered to SPEC-032 because SPEC-031 is Business Signals Capability. Implementing ADR was labeled “ADR-018”; repository **ADR-019** is Missions Are Conversations (ADR-018 remains Time Matters). |
 
 ## Objective
@@ -206,22 +206,24 @@ v1 persists the signals; automated recommendations from them are Future Work.
 - SPEC-023 Capability Framework (registry, runner; capabilities must accept Mission revision context)
 - ADR-019 Missions Are Conversations
 - ADR-001 Conversation First · ADR-003 Human Approval · ADR-010 Mission Engine · ADR-011 Capability Framework
-- Max Ask / IntentRouter (SPEC-009 + SPEC-022) — active-Mission preference
+- Max Ask / IntentRouter (SPEC-009 + SPEC-022) — active-Mission preference via [SPEC-039](SPEC-039_Active_Mission_Resolver.md) / [ADR-025](../adr/ADR-025_Active_Missions_Take_Precedence.md)
 - Command Deck Mission Workspace UI (SPEC-008 / SPEC-022 addendum)
 - Downstream capabilities: Discovery (SPEC-024), Company Intelligence (SPEC-030), Ranking (SPEC-026), Campaign Builder, Proposal (SPEC-027B), Execution (SPEC-029)
 
 ## Architecture
 
+Routing gate is owned by [SPEC-039 Active Mission Resolver](SPEC-039_Active_Mission_Resolver.md). Mission Memory owns revision / conversation state after attach.
+
 ```text
 Operator message
        ↓
- Active Mission? ──no──→ MissionPlanner (new Mission)
-       │ yes
+ Active Mission Resolver (SPEC-039) ──no active / New Mission──→ IntentRouter → MissionPlanner
+       │ active (Resume / Modify / Diagnose)
        ↓
  Correction / refinement / clarify?
        │
        ├─ ambiguous → Clarification Engine → wait
-       ├─ new objective / explicit New Mission → MissionPlanner
+       ├─ Diagnose → attach + surface audit / evidence (no IntentRouter)
        └─ modify → Revision Engine (append revision)
                         ↓
                  Update MissionMemory
@@ -270,7 +272,7 @@ Tenancy: all rows scoped by existing mission `client_id` / tenant rules from SPE
 1. **ADR + indexes** — ADR-019 Accepted; this spec Proposed; README / DECISIONS / CURRENT_STATE linked.
 2. **Schema** — migrations for messages, revisions, decisions, approvals; backfill revision 1 from existing missions.
 3. **MissionMemory service** — load/update active mission; append revision; record decision; restore.
-4. **Routing** — IntentRouter / Max Ask: prefer active-Mission modify; New Mission only on explicit / objective-change / UI action.
+4. **Routing** — [SPEC-039](SPEC-039_Active_Mission_Resolver.md) / [ADR-025](../adr/ADR-025_Active_Missions_Take_Precedence.md): Active Mission Resolver before IntentRouter; New Mission only on explicit / objective-change / UI action.
 5. **Smart Corrections + Clarification** — corrective-language heuristics; ambiguity prompts before apply.
 6. **Capability rerun** — MissionExecutor re-invokes affected steps with current revision context; preserve prior revision artifacts.
 7. **Workspace UI** — Overview, Conversation, Decisions, Plan, Evidence, Revisions (compare / restore).

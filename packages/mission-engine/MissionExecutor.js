@@ -136,6 +136,29 @@ class MissionExecutor {
       const step = steps[i];
       const capabilityId = step.capabilityId;
 
+      // SPEC-039: skip completed steps when resuming after a partial modify
+      if (step.status === 'completed') {
+        const priorDeliverable =
+          (mission.deliverables &&
+            Array.isArray(mission.deliverables.stepResults) &&
+            mission.deliverables.stepResults.find(
+              (s) => s.capabilityId === capabilityId
+            )) ||
+          null;
+        const outputs =
+          (priorDeliverable &&
+            (priorDeliverable.outputs ||
+              (priorDeliverable.result && priorDeliverable.result.outputs))) ||
+          null;
+        if (outputs && typeof outputs === 'object') {
+          priorOutputs = {
+            ...priorOutputs,
+            ...outputs,
+          };
+        }
+        continue;
+      }
+
       await this._store.appendAudit({
         missionId: mission.id,
         kind: AUDIT_KINDS.STEP_START,
@@ -301,6 +324,8 @@ class MissionExecutor {
           status: s.result.status,
           evidence: s.result.evidence,
           artifacts: s.result.artifacts,
+          outputs: s.result.outputs || {},
+          result: { outputs: s.result.outputs || {} },
         })),
       },
       progress: {

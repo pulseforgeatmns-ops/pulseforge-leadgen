@@ -14,8 +14,15 @@ const {
   REVIEW_ACTIONS,
   ROUTE_KINDS,
   STAGE_LABELS,
+  MESSAGE_CLASS,
+  RESOLUTION_PATHS,
+  MISSION_EVENTS,
+  TERMINAL_STATUSES,
+  isTerminalStatus,
+  isActiveMissionStatus,
   newId,
   missionEnabled,
+  activeMissionResolverEnabled,
 } = require('./types');
 const {
   routeIntent,
@@ -45,6 +52,18 @@ const {
   MissionEngine,
   createMissionEngine,
 } = require('./MissionEngine');
+const {
+  ActiveMissionResolver,
+  createActiveMissionResolver,
+} = require('./ActiveMissionResolver');
+const {
+  InMemoryActiveMissionBindingStore,
+  createInMemoryActiveMissionBindingStore,
+} = require('./ActiveMissionBindingStore');
+const {
+  classifyMessage,
+  looksLikeNewObjective,
+} = require('./classifyMessage');
 
 module.exports = {
   MISSION_STATUS,
@@ -53,11 +72,20 @@ module.exports = {
   REVIEW_ACTIONS,
   ROUTE_KINDS,
   STAGE_LABELS,
+  MESSAGE_CLASS,
+  RESOLUTION_PATHS,
+  MISSION_EVENTS,
+  TERMINAL_STATUSES,
+  isTerminalStatus,
+  isActiveMissionStatus,
   newId,
   missionEnabled,
+  activeMissionResolverEnabled,
   routeIntent,
   matchMissionType,
   isIntelligenceOnly,
+  classifyMessage,
+  looksLikeNewObjective,
   MissionPlanner,
   createMissionPlanner,
   TYPE_CAPABILITY_CHAINS,
@@ -71,4 +99,8 @@ module.exports = {
   ensureMissionSchema,
   MissionEngine,
   createMissionEngine,
+  ActiveMissionResolver,
+  createActiveMissionResolver,
+  InMemoryActiveMissionBindingStore,
+  createInMemoryActiveMissionBindingStore,
 };

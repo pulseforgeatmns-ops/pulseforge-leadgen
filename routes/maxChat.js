@@ -3,7 +3,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { getRequestClientId } = require('../utils/clientContext');
-const { routeIntent, ROUTE_KINDS } = require('../packages/mission-engine');
+const { routeIntent, ROUTE_KINDS, activeMissionResolverEnabled } = require('../packages/mission-engine');
 const { getMissionEngine, missionEnabled } = require('../utils/missionRuntime');
 
 const router = express.Router();
@@ -151,35 +151,122 @@ router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
 
     const clientId = getRequestClientId(req);
 
-    // SPEC-022: Mission Engine is the first routing layer for business objectives.
+    // SPEC-039 / ADR-025: Active Mission Resolver before IntentRouter.
     if (missionEnabled()) {
-      const route = routeIntent(question);
-      if (route.kind === ROUTE_KINDS.MISSION) {
-        const engine = await getMissionEngine();
-        const mission = await engine.createFromObjective({
-          objective: question,
+      const engine = await getMissionEngine();
+      const sessionKey = [
+        'max-chat',
+        (req.session && req.session.id) || req.sessionID || 'anon',
+        (req.session && req.session.user && req.session.user.id) || 'user',
+        clientId,
+      ].join(':');
+
+      if (activeMissionResolverEnabled() && engine.activeMissionResolver) {
+        const resolution = await engine.activeMissionResolver.resolve({
+          sessionId: sessionKey,
+          message: question,
           tenantId: String(clientId),
           clientId,
-          createdBy:
+          operatorId:
             (req.session && req.session.user && req.session.user.email) || null,
-          missionType: route.missionType,
         });
-        const card = engine.toCard(mission);
-        const answer = [
-          `Mission created: ${mission.title || mission.objectiveText}.`,
-          `Status: ${mission.status}.`,
-          `Stage: ${(mission.progress && mission.progress.currentStage) || 'n/a'}.`,
-          mission.status === 'review_required'
-            ? 'Ready for review — no outbound actions were taken. Open Operations on the Command Deck.'
-            : 'Track progress in Operations on the Command Deck.',
-        ].join(' ');
-        return res.json({
-          answer,
-          route: 'mission',
-          mission,
-          card,
-          context_generated_at: new Date().toISOString(),
-        });
+
+        if (
+          resolution.action === 'created' &&
+          resolution.mission &&
+          resolution.route &&
+          resolution.route.kind === ROUTE_KINDS.MISSION
+        ) {
+          const mission = resolution.mission;
+          const card = engine.toCard(mission);
+          const answer = [
+            `Mission created: ${mission.title || mission.objectiveText}.`,
+            `Status: ${mission.status}.`,
+            `Stage: ${(mission.progress && mission.progress.currentStage) || 'n/a'}.`,
+            mission.status === 'review_required'
+              ? 'Ready for review — no outbound actions were taken. Open Operations on the Command Deck.'
+              : 'Track progress in Operations on the Command Deck.',
+          ].join(' ');
+          return res.json({
+            answer,
+            route: 'mission',
+            mission,
+            card,
+            resolution: {
+              action: resolution.action,
+              classification: resolution.classification,
+              resolutionPath: resolution.resolutionPath,
+            },
+            context_generated_at: new Date().toISOString(),
+          });
+        }
+
+        if (
+          resolution.mission &&
+          (resolution.action === 'resumed' ||
+            resolution.action === 'modified' ||
+            resolution.action === 'diagnosed')
+        ) {
+          const mission = resolution.mission;
+          const card = engine.toCard(mission);
+          let answer;
+          if (resolution.action === 'diagnosed' && resolution.diagnosis) {
+            answer = resolution.diagnosis.summary;
+          } else if (resolution.action === 'modified' && resolution.modification) {
+            answer = [
+              `Mission updated: ${mission.title || mission.objectiveText}.`,
+              resolution.modification.summary,
+              `Status: ${mission.status}.`,
+            ].join(' ');
+          } else {
+            answer = [
+              `Resumed Mission: ${mission.title || mission.objectiveText}.`,
+              `Status: ${mission.status}.`,
+              `Stage: ${(mission.progress && mission.progress.currentStage) || 'n/a'}.`,
+              'Continuing with the active Mission (no new Mission created).',
+            ].join(' ');
+          }
+          return res.json({
+            answer,
+            route: 'mission',
+            mission,
+            card,
+            resolution: {
+              action: resolution.action,
+              classification: resolution.classification,
+              resolutionPath: resolution.resolutionPath,
+            },
+            context_generated_at: new Date().toISOString(),
+          });
+        }
+      } else {
+        const route = routeIntent(question);
+        if (route.kind === ROUTE_KINDS.MISSION) {
+          const mission = await engine.createFromObjective({
+            objective: question,
+            tenantId: String(clientId),
+            clientId,
+            createdBy:
+              (req.session && req.session.user && req.session.user.email) || null,
+            missionType: route.missionType,
+          });
+          const card = engine.toCard(mission);
+          const answer = [
+            `Mission created: ${mission.title || mission.objectiveText}.`,
+            `Status: ${mission.status}.`,
+            `Stage: ${(mission.progress && mission.progress.currentStage) || 'n/a'}.`,
+            mission.status === 'review_required'
+              ? 'Ready for review — no outbound actions were taken. Open Operations on the Command Deck.'
+              : 'Track progress in Operations on the Command Deck.',
+          ].join(' ');
+          return res.json({
+            answer,
+            route: 'mission',
+            mission,
+            card,
+            context_generated_at: new Date().toISOString(),
+          });
+        }
       }
     }
 

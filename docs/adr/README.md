@@ -27,6 +27,7 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-022](ADR-022_Execution_Consumes_Approved_Artifacts.md) | Execution Consumes Approved Artifacts | Accepted |
 | [ADR-023](ADR-023_Experience_Becomes_Intelligence.md) | Experience Becomes Intelligence | Accepted |
 | [ADR-024](ADR-024_Human_Work_Is_Coordinated_Through_the_Operator_Inbox.md) | Human Work Is Coordinated Through the Operator Inbox | Accepted |
+| [ADR-025](ADR-025_Active_Missions_Take_Precedence.md) | Active Missions Take Precedence | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

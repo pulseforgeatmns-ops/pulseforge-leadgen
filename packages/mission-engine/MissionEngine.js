@@ -15,6 +15,12 @@ const {
   REVIEW_ACTIONS,
   missionEnabled,
 } = require('./types');
+const {
+  createActiveMissionResolver,
+} = require('./ActiveMissionResolver');
+const {
+  createInMemoryActiveMissionBindingStore,
+} = require('./ActiveMissionBindingStore');
 
 class MissionEngine {
   /**
@@ -23,6 +29,9 @@ class MissionEngine {
    * @param {object} [deps.store]
    * @param {object} [deps.planner]
    * @param {object} [deps.executor]
+   * @param {object} [deps.activeMissionResolver]
+   * @param {object} [deps.bindings]
+   * @param {boolean} [deps.resolverEnabled]
    */
   constructor(deps = {}) {
     this._registry = deps.registry || createBuiltinRegistry();
@@ -34,6 +43,15 @@ class MissionEngine {
       createMissionExecutor({
         registry: this._registry,
         store: this._store,
+      });
+    this._bindings =
+      deps.bindings || createInMemoryActiveMissionBindingStore();
+    this._resolver =
+      deps.activeMissionResolver ||
+      createActiveMissionResolver({
+        missionEngine: this,
+        bindings: this._bindings,
+        enabled: deps.resolverEnabled,
       });
   }
 
@@ -51,6 +69,15 @@ class MissionEngine {
 
   get executor() {
     return this._executor;
+  }
+
+  /** @returns {import('./ActiveMissionResolver').ActiveMissionResolver} */
+  get activeMissionResolver() {
+    return this._resolver;
+  }
+
+  get bindings() {
+    return this._bindings;
   }
 
   /**

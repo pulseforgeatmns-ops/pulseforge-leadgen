@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Active Mission Resolver ([SPEC-039](docs/specs/SPEC-039_Active_Mission_Resolver.md) / [ADR-025](docs/adr/ADR-025_Active_Missions_Take_Precedence.md))
+  - First routing layer before IntentRouter on Max Workspace Ask + `/api/max/ask`
+  - Session ↔ active Mission binding; Resume / Modify / Diagnose attach (never IntentRouter)
+  - Diagnostics like “Investigate why Campaign Review failed” stay on the bound Mission
+  - Flag: `ACTIVE_MISSION_RESOLVER=0` falls back to SPEC-022 create-on-intent
+  - Tests: `npm run test:mission` (activeMissionResolver + workspace precedence)
 - Operator Inbox ([SPEC-037](docs/specs/SPEC-037_Operator_Inbox.md) / [ADR-024](docs/adr/ADR-024_Human_Work_Is_Coordinated_Through_the_Operator_Inbox.md))
   - `packages/capabilities/operatorInbox/` — single coordination surface for human-required work
   - Deterministic priority · dedupe · deep links · auditable complete/approve/reject/snooze/assign/archive
