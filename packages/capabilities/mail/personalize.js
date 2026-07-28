@@ -1,7 +1,8 @@
 'use strict';
 
 /**
- * Letter personalization for mail packages (SPEC-033 / ADR-014 / ADR-015).
+ * Letter personalization for mail packages (SPEC-033 / ADR-014 / ADR-015 / SPEC-048).
+ * Prefer Sales Intelligence messaging strategy over playbook openers (ADR-032).
  */
 
 const { buildOpener } = require('../playbook/apply');
@@ -13,6 +14,7 @@ const {
   buildInsertItem,
   DEFAULT_INSERT_CHECKLIST,
   DEFAULT_CONFIDENCE_THRESHOLD,
+  PACKAGE_STATUS,
 } = require('./types');
 const {
   validateProspectForMail,
@@ -20,6 +22,11 @@ const {
   resolveRecipient,
   resolveCompanyName,
 } = require('./validate');
+const {
+  openingFromProfile,
+} = require('../salesIntelligence/derive');
+const { gateOutreachCopy } = require('../salesIntelligence/gates');
+const { evaluateHumanTest } = require('../salesIntelligence/humanTest');
 
 /**
  * @param {object} prospect
@@ -32,6 +39,7 @@ function composeMailPackage(prospect, ctx = {}) {
   const mailMerge = ctx.mailMergeRow || null;
   const brief = prospect.opportunityBrief || ctx.opportunityBrief || null;
   const intel = prospect.companyIntelligence || ctx.companyIntelligence || null;
+  const salesProfile = resolveSalesProfile(prospect, ctx, mailMerge);
 
   const companyName = resolveCompanyName(prospect);
   const recipient = resolveRecipient({
@@ -56,7 +64,20 @@ function composeMailPackage(prospect, ctx = {}) {
           'Would a brief walkthrough conversation be useful?',
       };
 
+  // SPEC-048: prefer Sales Intelligence for opening / CTA / positioning
+  const profileOpening = salesProfile
+    ? openingFromProfile(salesProfile)
+    : null;
+  const personalizedOpening =
+    profileOpening ||
+    (mailMerge && mailMerge.personalizationSentence) ||
+    opener.sentence;
+
   const valueProposition =
+    (salesProfile &&
+      salesProfile.messaging_strategy &&
+      salesProfile.messaging_strategy.positioning) ||
+    (salesProfile && salesProfile.recommended_angle) ||
     (mailMerge && mailMerge.recommendedOffer && playbook
       ? playbook.valuePropositions[0]
       : null) ||
@@ -67,15 +88,20 @@ function composeMailPackage(prospect, ctx = {}) {
     'Reliable, owner-attentive commercial service';
 
   const offer =
+    (salesProfile && salesProfile.call_to_action) ||
     (mailMerge && mailMerge.recommendedOffer) ||
     (playbook && playbook.offers[0]) ||
     (strategy && Array.isArray(strategy.offers) && strategy.offers[0]) ||
     'a brief conversation';
 
   const cta =
-    typeof offer === 'string'
-      ? `If helpful, we would be glad to schedule ${offer.toLowerCase()}.`
-      : 'If helpful, we would be glad to schedule a brief conversation.';
+    salesProfile && salesProfile.call_to_action
+      ? String(salesProfile.call_to_action)
+      : typeof offer === 'string'
+        ? /offer|walkthrough|schedule/i.test(offer)
+          ? offer
+          : `If helpful, we would be glad to schedule ${offer.toLowerCase()}.`
+        : 'If helpful, we would be glad to schedule a brief conversation.';
 
   const clientName =
     (playbook && playbook.name && playbook.name.split('—')[0].trim()) ||
@@ -84,23 +110,30 @@ function composeMailPackage(prospect, ctx = {}) {
 
   const signature =
     ctx.signature ||
-    `${clientName}\n${playbook && playbook.idealCustomer && playbook.idealCustomer.geographicCoverage
-      ? playbook.idealCustomer.geographicCoverage
-      : ''}`.trim();
+    `${clientName}\n${
+      playbook && playbook.idealCustomer && playbook.idealCustomer.geographicCoverage
+        ? playbook.idealCustomer.geographicCoverage
+        : ''
+    }`.trim();
 
-  const personalizedOpening =
-    (mailMerge && mailMerge.personalizationSentence) || opener.sentence;
+  const hook =
+    (salesProfile &&
+      salesProfile.messaging_strategy &&
+      salesProfile.messaging_strategy.cta) ||
+    (mailMerge && mailMerge.openingHook) ||
+    opener.hook;
 
+  // Prospect-first body: understanding before Anchor / client services
   const body = [
     `Dear ${recipient.name},`,
     '',
     personalizedOpening,
     '',
-    `We focus on ${String(valueProposition).toLowerCase()} for teams like ${companyName || 'yours'}.`,
+    buildMidParagraph(salesProfile, companyName, valueProposition, clientName),
     '',
     cta,
     '',
-    opener.hook,
+    hook,
     '',
     'Sincerely,',
     signature,
@@ -129,17 +162,19 @@ function composeMailPackage(prospect, ctx = {}) {
     mailMerge,
     brief,
     intel,
-    opener,
+    opener: { sentence: personalizedOpening, hook },
     valueProposition,
+    salesProfile,
   });
 
   const whySelected =
+    (salesProfile && salesProfile.recommended_angle) ||
     (brief && (brief.whyFit || brief.whySelected)) ||
     (prospect.whyFit != null ? String(prospect.whyFit) : null) ||
     (prospect.rankingReason != null ? String(prospect.rankingReason) : null) ||
     buildWhySelected(prospect, playbook, facts);
 
-  const confidence = scoreLetterConfidence({
+  let confidence = scoreLetterConfidence({
     prospect,
     letter,
     facts,
@@ -148,7 +183,41 @@ function composeMailPackage(prospect, ctx = {}) {
     recipient,
     mailMerge,
     brief,
+    salesProfile,
   });
+
+  const copyGates = gateOutreachCopy(letter.body, salesProfile || {
+    company: companyName,
+    industry: prospect.industry,
+    personalization_claims: [],
+    sendable: true,
+  }, {
+    clientNames: [clientName, 'Anchor', 'AS Cleaning'].filter(Boolean),
+  });
+
+  const operatorConfidence = evaluateHumanTest({
+    profile: salesProfile || {
+      company: companyName,
+      industry: prospect.industry || '',
+      decision_maker: recipient.name,
+      personalization_claims: (facts || []).map((f) => ({
+        claim: f,
+        evidenceRef: 'mail_fact',
+        verified: true,
+      })),
+      sendable: copyGates.length === 0,
+      recommended_angle: String(valueProposition),
+      call_to_action: cta,
+    },
+    letterBody: letter.body,
+  });
+
+  if (copyGates.length) {
+    confidence = Math.min(confidence, 0.4);
+  }
+  if (salesProfile && salesProfile.sendable === false) {
+    confidence = Math.min(confidence, 0.35);
+  }
 
   const validation = validateProspectForMail(prospect, {
     confidence,
@@ -161,7 +230,16 @@ function composeMailPackage(prospect, ctx = {}) {
   const missingDataWarnings = [
     ...validation.reasons.map(reasonToWarning),
     ...validation.warnings,
+    ...copyGates.map(
+      (g) => `Sales Intelligence gate: ${g.reason} — ${g.evidence}`
+    ),
   ];
+
+  if (salesProfile && salesProfile.sendable === false) {
+    missingDataWarnings.push(
+      'Sales Intelligence Profile is non-sendable — resolve reasoning gates before Ready to Print'
+    );
+  }
 
   const personalizationSummary = buildPersonalizationSummary({
     whySelected,
@@ -174,9 +252,18 @@ function composeMailPackage(prospect, ctx = {}) {
     buildInsertItem(item)
   );
 
+  let status = validation.status;
+  if (
+    copyGates.length ||
+    (salesProfile && salesProfile.sendable === false) ||
+    (operatorConfidence && operatorConfidence.editInstinct)
+  ) {
+    status = PACKAGE_STATUS.NEEDS_REVIEW;
+  }
+
   return {
     prospectId: prospect.id != null ? String(prospect.id) : null,
-    status: validation.status,
+    status,
     letter,
     envelope,
     personalizationSummary,
@@ -186,7 +273,64 @@ function composeMailPackage(prospect, ctx = {}) {
     skipped: Boolean(ctx.skipped || prospect.skipped),
     addressInvalid: Boolean(ctx.addressInvalid || prospect.addressInvalid),
     usedCompanyFallback: recipient.usedCompanyFallback,
+    salesIntelligence: salesProfile || null,
+    messagingStrategy:
+      (salesProfile && salesProfile.messaging_strategy) || null,
+    operatorConfidence,
+    qualityGateRejections: copyGates,
   };
+}
+
+/**
+ * Mid paragraph: establish relevance, then introduce client strengths.
+ * @param {object|null} salesProfile
+ * @param {string} companyName
+ * @param {string} valueProposition
+ * @param {string} clientName
+ */
+function buildMidParagraph(salesProfile, companyName, valueProposition, clientName) {
+  if (salesProfile && salesProfile.messaging_strategy) {
+    const ms = salesProfile.messaging_strategy;
+    const proof = (ms.social_proof || []).slice(0, 2).join(', ');
+    const positioning = ms.positioning || valueProposition;
+    if (proof) {
+      return `That is where ${clientName} helps — ${String(positioning).replace(/\.$/, '')}, grounded in ${proof.toLowerCase()}.`;
+    }
+    return `That is where ${clientName} helps — ${String(positioning).replace(/\.$/, '')}.`;
+  }
+  return `We focus on ${String(valueProposition).toLowerCase()} for teams like ${companyName || 'yours'}.`;
+}
+
+/**
+ * @param {object} prospect
+ * @param {object} ctx
+ * @param {object|null} mailMerge
+ * @returns {object|null}
+ */
+function resolveSalesProfile(prospect, ctx, mailMerge) {
+  if (prospect.salesIntelligenceProfile) return prospect.salesIntelligenceProfile;
+  if (ctx.salesIntelligenceProfile) return ctx.salesIntelligenceProfile;
+  if (mailMerge && mailMerge.salesIntelligence) return mailMerge.salesIntelligence;
+  const map = ctx.salesIntelligenceByProspectId || {};
+  if (prospect.id != null && map[String(prospect.id)]) {
+    return map[String(prospect.id)];
+  }
+  const company = String(prospect.companyName || '').toLowerCase();
+  if (company && map[`company:${company}`]) return map[`company:${company}`];
+  const list =
+    ctx.salesIntelligenceProfiles ||
+    (ctx.priorOutputs && ctx.priorOutputs.salesIntelligenceProfiles) ||
+    [];
+  if (Array.isArray(list) && list.length) {
+    return (
+      list.find(
+        (p) =>
+          (prospect.id != null && String(p.prospectId) === String(prospect.id)) ||
+          String(p.company || '').toLowerCase() === company
+      ) || null
+    );
+  }
+  return null;
 }
 
 /**
@@ -238,6 +382,13 @@ function collectPersonalizationFacts(prospect, ctx) {
   if (ctx.playbook) {
     facts.push(`Playbook voice: ${brandVoiceLabel(ctx.playbook.brandVoice)}`);
     if (ctx.valueProposition) facts.push(`Value prop: ${ctx.valueProposition}`);
+  }
+  if (ctx.salesProfile) {
+    facts.push(`Sales angle: ${ctx.salesProfile.recommended_angle || ''}`);
+    facts.push(`Buyer: ${ctx.salesProfile.decision_maker || ''}`);
+    for (const c of (ctx.salesProfile.personalization_claims || []).slice(0, 3)) {
+      if (c.verified) facts.push(`Claim: ${c.claim}`);
+    }
   }
   if (ctx.mailMerge) {
     if (ctx.mailMerge.messagingPosture) {
@@ -301,9 +452,13 @@ function scoreLetterConfidence(args) {
   if (args.mailingAddress) score += 0.15;
   if (args.recipient && args.recipient.name) score += 0.1;
   if (args.recipient && !args.recipient.usedCompanyFallback) score += 0.08;
-  if (args.playbook) score += 0.12;
-  if (args.mailMerge && args.mailMerge.personalizationSentence) score += 0.08;
-  if (args.brief && (args.brief.whyFit || args.brief.talkingPoints)) score += 0.08;
+  if (args.playbook) score += 0.1;
+  if (args.salesProfile && args.salesProfile.sendable) score += 0.12;
+  if (args.salesProfile && args.salesProfile.confidenceScore) {
+    score += Math.min(0.1, Number(args.salesProfile.confidenceScore) * 0.1);
+  }
+  if (args.mailMerge && args.mailMerge.personalizationSentence) score += 0.06;
+  if (args.brief && (args.brief.whyFit || args.brief.talkingPoints)) score += 0.06;
   if (args.facts && args.facts.length >= 3) score += 0.08;
   if (args.facts && args.facts.length >= 5) score += 0.04;
   if (args.letter && args.letter.companyName && args.letter.body.includes(args.letter.companyName)) {
@@ -348,4 +503,6 @@ module.exports = {
   resolveInsertChecklist,
   collectPersonalizationFacts,
   scoreLetterConfidence,
+  resolveSalesProfile,
+  buildMidParagraph,
 };

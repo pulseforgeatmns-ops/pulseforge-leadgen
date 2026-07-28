@@ -32,6 +32,9 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-027](ADR-027_Mission_Planning_Is_Objective_Driven.md) | Mission Planning Is Objective-Driven | Accepted |
 | [ADR-028](ADR-028_Business_State_Flows_Through_Artifacts.md) | Business State Flows Through Artifacts | Accepted |
 | [ADR-029](ADR-029_Artifact_Provenance_Must_Not_Affect_Consumption.md) | Artifact Provenance Must Not Affect Consumption | Accepted |
+| [ADR-030](ADR-030_Command_Deck_Is_an_Operator_Workspace.md) | Command Deck Is an Operator Workspace | Accepted |
+| [ADR-031](ADR-031_Review_Must_Be_Evidence_First.md) | Review Must Be Evidence-First | Accepted |
+| [ADR-032](ADR-032_Strategy_Before_Language.md) | Strategy Before Language | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

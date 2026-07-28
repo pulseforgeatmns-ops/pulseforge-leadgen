@@ -607,7 +607,11 @@ function extractConstraintPatch(message) {
     ) || /\b(\d{2,4})\s+prospects?\b/i.exec(message);
   if (count) {
     constraints.targetCount = Number(count[1]);
-    staleCapabilityIds.push('prospect_discovery', 'opportunity_ranking');
+    staleCapabilityIds.push(
+      'prospect_discovery',
+      'opportunity_ranking',
+      'sales_intelligence'
+    );
     notes.push(`targetCount=${constraints.targetCount}`);
   }
 
@@ -627,7 +631,11 @@ function extractConstraintPatch(message) {
         ...((constraints.exclusions) || []),
         rem[1].replace(/[."]+$/, '').trim(),
       ];
-      staleCapabilityIds.push('prospect_discovery', 'opportunity_ranking');
+      staleCapabilityIds.push(
+        'prospect_discovery',
+        'opportunity_ranking',
+        'sales_intelligence'
+      );
       notes.push(`exclude=${constraints.exclusions.join(',')}`);
     }
   }
@@ -637,6 +645,7 @@ function extractConstraintPatch(message) {
       'prospect_discovery',
       'company_enrichment',
       'opportunity_ranking',
+      'sales_intelligence',
       'campaign_builder'
     );
     notes.push('discovery profile change requested');

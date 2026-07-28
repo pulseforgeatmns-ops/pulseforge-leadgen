@@ -396,6 +396,15 @@
       pkg.id ||
       pkg.prospectId ||
       `pkg-${index}-${String(company).toLowerCase().replace(/\s+/g, '-')}`;
+    const sales = pkg.salesIntelligence || pkg.salesIntelligenceProfile || null;
+    const messaging =
+      pkg.messagingStrategy ||
+      (sales && sales.messaging_strategy) ||
+      null;
+    const operatorConfidence =
+      pkg.operatorConfidence ||
+      (sales && sales.operatorConfidence) ||
+      null;
     return {
       id: String(id),
       companyName: String(company),
@@ -409,6 +418,9 @@
       needsReview,
       ready,
       approved: Boolean(pkg.approved),
+      salesIntelligence: sales,
+      messagingStrategy: messaging,
+      operatorConfidence,
       source: pkg,
     };
   }
@@ -468,6 +480,18 @@
           },
           confidence: row.confidence,
           warnings: row.warnings || [],
+          salesIntelligence: row.salesIntelligence || null,
+          messagingStrategy:
+            (row.salesIntelligence && row.salesIntelligence.messaging_strategy) ||
+            null,
+          operatorConfidence:
+            row.operatorConfidence != null
+              ? typeof row.operatorConfidence === 'object'
+                ? row.operatorConfidence
+                : { overall: row.operatorConfidence }
+              : (row.salesIntelligence &&
+                  row.salesIntelligence.operatorConfidence) ||
+                null,
         },
         i
       );
@@ -1481,6 +1505,183 @@
     }
   }
 
+  function renderSalesIntelligenceHtml(pkg) {
+    const sales = pkg && pkg.salesIntelligence;
+    if (!sales) {
+      return `<section class="msn-si-block">
+        <h4 class="msn-subhead">Sales Intelligence</h4>
+        <p class="msn-objective-meta">No Sales Intelligence Profile attached to this package.</p>
+      </section>`;
+    }
+    const rows = [
+      ['Company', sales.company],
+      ['Industry', sales.industry],
+      ['Decision maker', sales.decision_maker],
+      ['Buyer type', sales.buyer_type],
+      ['Primary pain', sales.primary_pain],
+      ['Secondary pain', sales.secondary_pain],
+      ['Business goal', sales.business_goal],
+      ['Risk if unchanged', sales.risk_if_unchanged],
+      ['Recommended angle', sales.recommended_angle],
+      ['Call to action', sales.call_to_action],
+      ['Confidence', sales.confidence],
+    ];
+    const advantages = Array.isArray(sales.anchor_advantage)
+      ? sales.anchor_advantage
+      : [];
+    const claims = Array.isArray(sales.personalization_claims)
+      ? sales.personalization_claims.filter((c) => c && c.verified)
+      : [];
+    const signals = Array.isArray(sales.buying_signals)
+      ? sales.buying_signals
+      : [];
+    return `<section class="msn-si-block">
+      <h4 class="msn-subhead">Sales Intelligence</h4>
+      <dl class="msn-si-dl">
+        ${rows
+          .filter(([, v]) => v)
+          .map(
+            ([k, v]) =>
+              `<div class="msn-si-row"><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(
+                String(v)
+              )}</dd></div>`
+          )
+          .join('')}
+      </dl>
+      ${
+        advantages.length
+          ? `<p class="msn-objective-meta"><strong>Anchor advantages:</strong> ${escapeHtml(
+              advantages.join(' · ')
+            )}</p>`
+          : ''
+      }
+      ${
+        claims.length
+          ? `<ul class="msn-si-claims">${claims
+              .slice(0, 4)
+              .map(
+                (c) =>
+                  `<li>${escapeHtml(c.claim)}${
+                    c.evidenceRef
+                      ? ` <span class="msn-objective-meta">(${escapeHtml(
+                          c.evidenceRef
+                        )})</span>`
+                      : ''
+                  }</li>`
+              )
+              .join('')}</ul>`
+          : ''
+      }
+      ${
+        signals.length
+          ? `<p class="msn-objective-meta"><strong>Buying signals:</strong> ${escapeHtml(
+              signals
+                .slice(0, 3)
+                .map((s) => s.signal)
+                .join(' · ')
+            )}</p>`
+          : ''
+      }
+    </section>`;
+  }
+
+  function renderMessagingStrategyHtml(pkg) {
+    const ms =
+      (pkg && pkg.messagingStrategy) ||
+      (pkg && pkg.salesIntelligence && pkg.salesIntelligence.messaging_strategy);
+    if (!ms) {
+      return `<section class="msn-si-block">
+        <h4 class="msn-subhead">Messaging Strategy</h4>
+        <p class="msn-objective-meta">No messaging strategy on this package.</p>
+      </section>`;
+    }
+    return `<section class="msn-si-block">
+      <h4 class="msn-subhead">Messaging Strategy</h4>
+      <dl class="msn-si-dl">
+        ${
+          ms.opening_focus
+            ? `<div class="msn-si-row"><dt>Opening focus</dt><dd>${escapeHtml(
+                ms.opening_focus
+              )}</dd></div>`
+            : ''
+        }
+        ${
+          ms.positioning
+            ? `<div class="msn-si-row"><dt>Positioning</dt><dd>${escapeHtml(
+                ms.positioning
+              )}</dd></div>`
+            : ''
+        }
+        ${
+          ms.cta
+            ? `<div class="msn-si-row"><dt>CTA</dt><dd>${escapeHtml(
+                ms.cta
+              )}</dd></div>`
+            : ''
+        }
+        ${
+          Array.isArray(ms.tone) && ms.tone.length
+            ? `<div class="msn-si-row"><dt>Tone</dt><dd>${escapeHtml(
+                ms.tone.join(' · ')
+              )}</dd></div>`
+            : ''
+        }
+        ${
+          Array.isArray(ms.avoid) && ms.avoid.length
+            ? `<div class="msn-si-row"><dt>Avoid</dt><dd>${escapeHtml(
+                ms.avoid.join(' · ')
+              )}</dd></div>`
+            : ''
+        }
+        ${
+          Array.isArray(ms.social_proof) && ms.social_proof.length
+            ? `<div class="msn-si-row"><dt>Social proof</dt><dd>${escapeHtml(
+                ms.social_proof.join(' · ')
+              )}</dd></div>`
+            : ''
+        }
+      </dl>
+    </section>`;
+  }
+
+  function renderOperatorConfidenceHtml(pkg) {
+    const oc = pkg && pkg.operatorConfidence;
+    if (!oc) {
+      return `<section class="msn-si-block">
+        <h4 class="msn-subhead">Operator Confidence Score</h4>
+        <p class="msn-objective-meta">Advisory score unavailable.</p>
+      </section>`;
+    }
+    const dims = [
+      ['Industry Accuracy', oc.industryAccuracy],
+      ['Buyer Relevance', oc.buyerRelevance],
+      ['Evidence Use', oc.evidenceUse],
+      ['Specificity', oc.specificity],
+      ['Naturalness', oc.naturalness],
+      ['Sales Judgment', oc.salesJudgment],
+    ];
+    return `<section class="msn-si-block msn-si-confidence">
+      <h4 class="msn-subhead">Operator Confidence Score</h4>
+      <p class="msn-pkg-meta-value"><strong>${escapeHtml(
+        String(oc.overall != null ? oc.overall : '—')
+      )}</strong>${
+        oc.passed === false || oc.editInstinct
+          ? ' · <span class="msn-queue-filter-label">edit instinct</span>'
+          : ' · advisory'
+      }</p>
+      <ul class="msn-si-score-list">
+        ${dims
+          .map(
+            ([label, val]) =>
+              `<li>${escapeHtml(label)}: ${escapeHtml(
+                val != null ? `${val}/10` : '—'
+              )}</li>`
+          )
+          .join('')}
+      </ul>
+    </section>`;
+  }
+
   function renderPackagePreviewHtml(pkg, opts = {}) {
     if (!pkg) {
       return '<p class="msn-objective-meta">No package selected.</p>';
@@ -1504,12 +1705,15 @@
           pkg.confidenceLabel
         )}</p></div>
       </div>
+      ${renderSalesIntelligenceHtml(pkg)}
+      ${renderMessagingStrategyHtml(pkg)}
+      ${renderOperatorConfidenceHtml(pkg)}
       ${
         pkg.personalization
           ? `<p class="msn-pkg-personalization">${escapeHtml(pkg.personalization)}</p>`
           : ''
       }
-      <h4 class="msn-subhead">Letter preview</h4>
+      <h4 class="msn-subhead">Generated Letter</h4>
       ${letter}
       ${
         pkg.envelopeAddress

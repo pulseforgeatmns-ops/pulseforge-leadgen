@@ -23,7 +23,7 @@ describe('SPEC-023 CapabilityRegistry', () => {
   it('registers and lists built-ins', () => {
     const registry = testRegistry();
     const list = registry.list();
-    assert.equal(list.length, 11);
+    assert.equal(list.length, 12);
     assert.ok(registry.get(BUILTIN_IDS.PROSPECT_DISCOVERY));
     assert.ok(registry.get(BUILTIN_IDS.CAMPAIGN_BUILDER));
     assert.ok(registry.get(BUILTIN_IDS.PROPOSAL_GENERATOR));

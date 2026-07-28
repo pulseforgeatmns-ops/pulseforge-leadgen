@@ -187,6 +187,16 @@ function createMailPackageGeneratorCapability(deps = {}) {
         null;
 
       const inputs = context.inputs || {};
+      const prior = inputs.priorOutputs || {};
+      const salesIntelligenceByProspectId =
+        inputs.salesIntelligenceByProspectId ||
+        prior.salesIntelligenceByProspectId ||
+        {};
+      const salesIntelligenceProfiles =
+        inputs.salesIntelligenceProfiles ||
+        prior.salesIntelligenceProfiles ||
+        prior.profiles ||
+        [];
       const confidenceThreshold =
         Number.isFinite(Number(inputs.confidenceThreshold))
           ? Number(inputs.confidenceThreshold)
@@ -205,10 +215,11 @@ function createMailPackageGeneratorCapability(deps = {}) {
       const packages = prospects.map((prospect, index) => {
         const key = String(prospect.id != null ? prospect.id : index);
         const ov = overrides[key] || overrides[prospect.companyName] || {};
+        const mailMergeRow = matchMailMergeRow(prospect, mailMerge);
         const composed = composeMailPackage(prospect, {
           playbook,
           campaignStrategy: strategy,
-          mailMergeRow: matchMailMergeRow(prospect, mailMerge),
+          mailMergeRow,
           opportunityBrief:
             prospect.opportunityBrief ||
             (inputs.opportunityBriefs && inputs.opportunityBriefs[key]) ||
@@ -219,6 +230,13 @@ function createMailPackageGeneratorCapability(deps = {}) {
               inputs.companyIntelligencePackages[key]) ||
             inputs.companyIntelligence ||
             null,
+          salesIntelligenceProfile:
+            prospect.salesIntelligenceProfile ||
+            (mailMergeRow && mailMergeRow.salesIntelligence) ||
+            salesIntelligenceByProspectId[key] ||
+            null,
+          salesIntelligenceByProspectId,
+          salesIntelligenceProfiles,
           confidenceThreshold,
           returnAddress: inputs.returnAddress || ov.returnAddress,
           insertChecklist: inputs.insertChecklist || ov.insertChecklist,

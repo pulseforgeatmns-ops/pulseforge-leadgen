@@ -30,6 +30,9 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-027](docs/adr/ADR-027_Mission_Planning_Is_Objective_Driven.md) | Mission Planning Is Objective-Driven | Accepted | IntentRouter decides Mission vs not; Mission Planner builds execution graphs from objectives; stage keywords augment, never replace |
 | [ADR-028](docs/adr/ADR-028_Business_State_Flows_Through_Artifacts.md) | Business State Flows Through Artifacts | Accepted | Mission Artifact Bus is the canonical business-state exchange; immutable typed artifacts replace flat priorOutputs as source of truth |
 | [ADR-029](docs/adr/ADR-029_Artifact_Provenance_Must_Not_Affect_Consumption.md) | Artifact Provenance Must Not Affect Consumption | Accepted | Consumers resolve artifacts by type, validation status, and revision only; producer identity is provenance and must not alter execution |
+| [ADR-030](docs/adr/ADR-030_Command_Deck_Is_an_Operator_Workspace.md) | Command Deck Is an Operator Workspace | Accepted | Command Deck is an operator workspace — presentation polish must not change Mission execution semantics |
+| [ADR-031](docs/adr/ADR-031_Review_Must_Be_Evidence_First.md) | Review Must Be Evidence-First | Accepted | Review Workspace presents business artifacts and evidence before implementation metadata |
+| [ADR-032](docs/adr/ADR-032_Strategy_Before_Language.md) | Strategy Before Language | Accepted | Separate business reasoning from language generation; Sales Intelligence Profile before channel copy; optimize for Operator Approval Rate |
 
 ## How to add a decision
 

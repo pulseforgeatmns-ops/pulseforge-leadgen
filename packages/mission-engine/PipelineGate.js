@@ -61,6 +61,13 @@ const STAGE_CONTRACTS = Object.freeze({
     expectedOutputs: ['ranked_prospects'],
     validate: validateRanking,
   },
+  [BUILTIN_IDS.SALES_INTELLIGENCE]: {
+    id: BUILTIN_IDS.SALES_INTELLIGENCE,
+    label: 'Sales Intelligence',
+    requiredInputs: ['ranked_prospects'],
+    expectedOutputs: ['sales_intelligence_profile'],
+    validate: validateSalesIntelligence,
+  },
   [BUILTIN_IDS.CAMPAIGN_BUILDER]: {
     id: BUILTIN_IDS.CAMPAIGN_BUILDER,
     label: 'Campaign Builder',
@@ -386,6 +393,63 @@ function validateRanking(result, context) {
     return warningPass(result, warnings, rankedCount, 'ranked_prospects');
   }
   return successPass(result, warnings, rankedCount);
+}
+
+function validateSalesIntelligence(result, context) {
+  const outputs = result.outputs || {};
+  const warnings = [...(result.warnings || [])];
+  const prior =
+    (context.inputs && context.inputs.prospects) ||
+    (context.priorOutputs && context.priorOutputs.prospects) ||
+    [];
+  const priorCount = Array.isArray(prior) ? prior.length : 0;
+  const profiles = Array.isArray(outputs.profiles)
+    ? outputs.profiles
+    : Array.isArray(outputs.salesIntelligenceProfiles)
+      ? outputs.salesIntelligenceProfiles
+      : [];
+  const profileCount =
+    outputs.profileCount != null ? Number(outputs.profileCount) : profiles.length;
+  const sendableCount =
+    outputs.sendableCount != null
+      ? Number(outputs.sendableCount)
+      : profiles.filter((p) => p && p.sendable).length;
+
+  if (priorCount > 0 && profileCount === 0) {
+    return {
+      outcome: STAGE_OUTCOMES.BLOCKED,
+      blockingIssues: [
+        'Sales Intelligence produced no profiles for available prospects.',
+      ],
+      warnings,
+      publishedArtifacts: [],
+      quarantinedArtifacts: stampArtifacts(result.artifacts || [], {
+        validationStatus: ARTIFACT_VALIDATION_STATUS.QUARANTINED,
+        reason: 'Empty sales intelligence',
+      }),
+      reason: 'empty_sales_intelligence',
+      reviewSummary: {
+        stageStatus: STAGE_OUTCOME_LABELS[STAGE_OUTCOMES.BLOCKED],
+        publishedCount: 0,
+      },
+    };
+  }
+
+  if (sendableCount < profileCount) {
+    warnings.push(
+      `${profileCount - sendableCount} of ${profileCount} profiles non-sendable after quality gates`
+    );
+  }
+
+  if (warnings.length) {
+    return warningPass(
+      result,
+      warnings,
+      profileCount,
+      'sales_intelligence_profile'
+    );
+  }
+  return successPass(result, warnings, profileCount);
 }
 
 function validateCampaign(result) {

@@ -71,6 +71,7 @@ module.exports = {
   proposal: require('./proposal'),
   playbook: require('./playbook'),
   signals: require('./signals'),
+  salesIntelligence: require('./salesIntelligence'),
   mail: require('./mail'),
   campaignReview: require('./campaignReview'),
   directMailExecution: require('./directMailExecution'),
@@ -83,6 +84,8 @@ module.exports.createProspectDiscoveryCapability =
   require('./discovery').createProspectDiscoveryCapability;
 module.exports.createOpportunityRankingCapability =
   require('./ranking').createOpportunityRankingCapability;
+module.exports.createSalesIntelligenceCapability =
+  require('./salesIntelligence').createSalesIntelligenceCapability;
 module.exports.createProposalGeneratorCapability =
   require('./proposal').createProposalGeneratorCapability;
 module.exports.createMailPackageGeneratorCapability =
