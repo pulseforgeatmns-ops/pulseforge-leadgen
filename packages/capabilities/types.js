@@ -38,6 +38,7 @@ const BUILTIN_IDS = Object.freeze({
   COMPANY_ENRICHMENT: 'company_enrichment',
   KNOWLEDGE_UPDATE: 'knowledge_update',
   OPPORTUNITY_RANKING: 'opportunity_ranking',
+  BUSINESS_INTELLIGENCE: 'business_intelligence',
   SALES_INTELLIGENCE: 'sales_intelligence',
   CAMPAIGN_BUILDER: 'campaign_builder',
   PROPOSAL_GENERATOR: 'proposal_generator',

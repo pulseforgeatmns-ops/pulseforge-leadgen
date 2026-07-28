@@ -48,6 +48,7 @@ Most AI systems measure success by how much content they produce. Pulseforge mea
 ### Follow-ups
 
 - [x] SPEC-048 v1 capability + Mail Package consumer + Review Workspace surface
+- [x] SPEC-053 Business Intelligence as richer analytical input (ADR-037)
 - [ ] Email / LinkedIn / phone script generators consume the same profile
 - [ ] Durable Operator Approval Rate dashboard
-- [ ] Full SPEC-030 Company Intelligence as richer input
+- [ ] Full SPEC-030 Company Enrichment as richer Level-1 fact input

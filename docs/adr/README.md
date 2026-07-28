@@ -39,6 +39,7 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-034](ADR-034_Intent_Before_Execution.md) | Intent Before Execution | Accepted |
 | [ADR-035](ADR-035_Plan_Around_State_Not_Sequence.md) | Plan Around State, Not Sequence | Accepted |
 | [ADR-036](ADR-036_Trust_Through_Contracts.md) | Trust Through Contracts | Accepted |
+| [ADR-037](ADR-037_Reason_About_Businesses_Not_Companies.md) | Reason About Businesses, Not Companies | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

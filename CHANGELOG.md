@@ -6,6 +6,14 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Business Intelligence Engine ([SPEC-053](docs/specs/SPEC-053_Business_Intelligence_Engine.md) / [ADR-037](docs/adr/ADR-037_Reason_About_Businesses_Not_Companies.md))
+  - Analytical `BusinessIntelligenceProfile` replaces descriptive Company Intelligence as the first reasoning artifact
+  - Deterministic Level 1–5 reasoning (facts → model → operations → buying psychology → sales input)
+  - Quality gates for revenue, constraints, pressures, problem owner, buying urgency — uncertainty explicit when unanswered
+  - Sales Intelligence consumes BI; Mail packages carry BI for review provenance
+  - Review Workspace order: Business Intelligence → Sales Intelligence → Messaging Strategy → Letter
+  - Stage `business_intelligence` in Mission seeds / Artifact Bus / PipelineGate
+  - Tests: `npm run test:capabilities` (businessIntelligence.test.js)
 - Typed Artifact Validation ([SPEC-052](docs/specs/SPEC-052_Typed_Artifact_Validation.md) / [ADR-036](docs/adr/ADR-036_Trust_Through_Contracts.md))
   - Artifact Validator pipeline: Identify Type → Schema → Semantic → Compatibility
   - Natural language / mission prose never becomes ProspectList (or other structured artifacts)

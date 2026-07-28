@@ -191,6 +191,10 @@ function buildSalesIntelligenceProfile(partial = {}) {
     sendable,
     evidenceRefs: asStringList(partial.evidenceRefs),
     gateRejections: gates,
+    businessIntelligenceProfileId:
+      partial.businessIntelligenceProfileId != null
+        ? String(partial.businessIntelligenceProfileId)
+        : null,
     operatorConfidence:
       partial.operatorConfidence && typeof partial.operatorConfidence === 'object'
         ? buildOperatorConfidence(partial.operatorConfidence)

@@ -27,8 +27,12 @@ const CAPABILITY_ARTIFACT_CONTRACTS = Object.freeze({
     requires: ['prospect_list', 'company_intelligence'],
     produces: ['ranked_prospects'],
   }),
+  [BUILTIN_IDS.BUSINESS_INTELLIGENCE]: Object.freeze({
+    requires: ['ranked_prospects'],
+    produces: ['business_intelligence_profile'],
+  }),
   [BUILTIN_IDS.SALES_INTELLIGENCE]: Object.freeze({
-    requires: ['ranked_prospects', 'company_intelligence'],
+    requires: ['ranked_prospects', 'business_intelligence_profile'],
     produces: ['sales_intelligence_profile'],
   }),
   [BUILTIN_IDS.CAMPAIGN_BUILDER]: Object.freeze({

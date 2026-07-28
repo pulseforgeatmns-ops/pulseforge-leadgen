@@ -114,7 +114,38 @@ function createSalesIntelligenceCapability(deps = {}) {
       }
 
       emit('Deriving sales profiles', 45);
-      const { profiles: rawProfiles, byProspectId } = deriveFn(prospects, {
+      const biMap =
+        inputs.businessIntelligenceByProspectId ||
+        prior.businessIntelligenceByProspectId ||
+        {};
+      const biProfiles = Array.isArray(
+        inputs.businessIntelligenceProfiles || prior.businessIntelligenceProfiles
+      )
+        ? inputs.businessIntelligenceProfiles || prior.businessIntelligenceProfiles
+        : [];
+
+      const enrichedProspects = prospects.map((p) => {
+        if (p.businessIntelligenceProfile || p.businessIntelligence) return p;
+        const id = p.id != null ? String(p.id) : null;
+        const fromMap =
+          (id && biMap[id]) ||
+          biMap[`company:${String(p.companyName || '').toLowerCase()}`] ||
+          null;
+        if (fromMap) {
+          return { ...p, businessIntelligenceProfile: fromMap };
+        }
+        const fromList = biProfiles.find(
+          (b) =>
+            (id && String(b.prospectId) === id) ||
+            String(b.company || '').toLowerCase() ===
+              String(p.companyName || '').toLowerCase()
+        );
+        return fromList
+          ? { ...p, businessIntelligenceProfile: fromList }
+          : p;
+      });
+
+      const { profiles: rawProfiles } = deriveFn(enrichedProspects, {
         playbook,
         knowledge: context.knowledge || {},
         companyIntelligence: inputs.companyIntelligence || null,
@@ -124,7 +155,7 @@ function createSalesIntelligenceCapability(deps = {}) {
 
       emit('Applying quality gates', 75);
       const profiles = rawProfiles.map((raw) => {
-        const prospect = prospects.find(
+        const prospect = enrichedProspects.find(
           (p) =>
             (raw.prospectId && String(p.id) === String(raw.prospectId)) ||
             String(p.companyName || '') === raw.company
@@ -137,7 +168,6 @@ function createSalesIntelligenceCapability(deps = {}) {
         const gated = applyProfileGates(
           {
             ...raw,
-            // re-attach brief-derived fields already on raw
           },
           { playbook, opportunityBrief: brief }
         );
@@ -178,7 +208,7 @@ function createSalesIntelligenceCapability(deps = {}) {
           sendableCount,
           byProspectId: map,
           // Keep ranked prospects available for downstream stages
-          prospects: prospects.map((p) => {
+          prospects: enrichedProspects.map((p) => {
             const id = p.id != null ? String(p.id) : null;
             const profile =
               (id && map[id]) ||

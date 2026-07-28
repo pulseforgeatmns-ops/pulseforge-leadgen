@@ -46,7 +46,7 @@ function composeMissionResponse(input) {
           .join(' ')
       : null,
     mission.operatorProspectList && mission.operatorProspectList.injected
-      ? `Operator ProspectList imported (${mission.operatorProspectList.prospectCount} prospects). Discovery marked Satisfied (Operator Supplied); continuing at Company Intelligence.`
+      ? `Operator ProspectList imported (${mission.operatorProspectList.prospectCount} prospects). Discovery marked Satisfied (Operator Supplied); continuing at Business Intelligence.`
       : null,
     mission.operatorProspectList &&
     mission.operatorProspectList.promptImport &&

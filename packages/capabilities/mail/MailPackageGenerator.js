@@ -197,6 +197,14 @@ function createMailPackageGeneratorCapability(deps = {}) {
         prior.salesIntelligenceProfiles ||
         prior.profiles ||
         [];
+      const businessIntelligenceByProspectId =
+        inputs.businessIntelligenceByProspectId ||
+        prior.businessIntelligenceByProspectId ||
+        {};
+      const businessIntelligenceProfiles =
+        inputs.businessIntelligenceProfiles ||
+        prior.businessIntelligenceProfiles ||
+        [];
       const confidenceThreshold =
         Number.isFinite(Number(inputs.confidenceThreshold))
           ? Number(inputs.confidenceThreshold)
@@ -230,6 +238,13 @@ function createMailPackageGeneratorCapability(deps = {}) {
               inputs.companyIntelligencePackages[key]) ||
             inputs.companyIntelligence ||
             null,
+          businessIntelligence:
+            prospect.businessIntelligenceProfile ||
+            prospect.businessIntelligence ||
+            businessIntelligenceByProspectId[key] ||
+            null,
+          businessIntelligenceByProspectId,
+          businessIntelligenceProfiles,
           salesIntelligenceProfile:
             prospect.salesIntelligenceProfile ||
             (mailMergeRow && mailMergeRow.salesIntelligence) ||

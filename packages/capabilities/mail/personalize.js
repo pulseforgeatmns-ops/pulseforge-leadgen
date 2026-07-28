@@ -274,6 +274,11 @@ function composeMailPackage(prospect, ctx = {}) {
     addressInvalid: Boolean(ctx.addressInvalid || prospect.addressInvalid),
     usedCompanyFallback: recipient.usedCompanyFallback,
     salesIntelligence: salesProfile || null,
+    businessIntelligence:
+      prospect.businessIntelligenceProfile ||
+      prospect.businessIntelligence ||
+      ctx.businessIntelligence ||
+      null,
     messagingStrategy:
       (salesProfile && salesProfile.messaging_strategy) || null,
     operatorConfidence,

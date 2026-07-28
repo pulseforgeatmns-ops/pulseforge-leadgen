@@ -170,6 +170,46 @@ function validateCampaignSemantics(payload) {
 }
 
 /**
+ * Semantic validation for Business Intelligence profiles.
+ * @param {object} payload
+ */
+function validateBusinessIntelligenceSemantics(payload) {
+  const errors = [];
+  const warnings = [];
+  const profiles = Array.isArray(payload && payload.profiles)
+    ? payload.profiles
+    : [];
+  if (!profiles.length) {
+    errors.push('BusinessIntelligenceProfile requires at least one profile.');
+    return { ok: false, errors, warnings };
+  }
+  profiles.forEach((p, i) => {
+    if (!p || !p.company) {
+      errors.push(`BI Profile ${i + 1}: company is required`);
+    }
+    const answers = (p && p.qualityAnswers) || {};
+    const required = [
+      'howTheyMakeMoney',
+      'growthConstraints',
+      'operationalPressures',
+      'problemOwner',
+      'whyBuyNow',
+    ];
+    for (const key of required) {
+      if (!String(answers[key] || '').trim()) {
+        warnings.push(
+          `BI Profile ${i + 1}: qualityAnswers.${key} missing — uncertainty should be explicit`
+        );
+      }
+    }
+    if (!Array.isArray(p.uncertainty)) {
+      warnings.push(`BI Profile ${i + 1}: uncertainty list recommended`);
+    }
+  });
+  return { ok: errors.length === 0, errors, warnings };
+}
+
+/**
  * Semantic validation for Sales Intelligence profiles.
  * @param {object} payload
  */
@@ -270,6 +310,8 @@ function runSemanticValidation(artifactType, payload) {
       return validateProspectListSemantics(payload);
     case ARTIFACT_TYPES.CAMPAIGN:
       return validateCampaignSemantics(payload);
+    case ARTIFACT_TYPES.BUSINESS_INTELLIGENCE_PROFILE:
+      return validateBusinessIntelligenceSemantics(payload);
     case ARTIFACT_TYPES.SALES_INTELLIGENCE_PROFILE:
       return validateSalesIntelligenceSemantics(payload);
     case ARTIFACT_TYPES.MAIL_PACKAGE:
@@ -532,6 +574,7 @@ module.exports = {
   companyNameFromRow,
   validateProspectListSemantics,
   validateCampaignSemantics,
+  validateBusinessIntelligenceSemantics,
   validateSalesIntelligenceSemantics,
   validateMailPackageSemantics,
   runSemanticValidation,
