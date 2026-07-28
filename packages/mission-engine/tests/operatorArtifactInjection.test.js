@@ -92,6 +92,25 @@ describe('SPEC-043 OperatorArtifactInjection normalize/validate', () => {
     assert.equal(rows[1].website, null);
   });
 
+  it('preserves all rows for CR-only and headerless company-name lists', () => {
+    const crOnly = parseDelimitedProspects(
+      'Company Name,Website\rAcme Law,https://a.example\rBeta CPA,https://b.example\rGamma LLC,https://c.example'
+    );
+    assert.equal(crOnly.length, 3);
+    assert.deepEqual(
+      crOnly.map((r) => r.companyName),
+      ['Acme Law', 'Beta CPA', 'Gamma LLC']
+    );
+
+    const nameList = parseDelimitedProspects(
+      'Acme Law, Beta CPA, Gamma LLC, Delta Partners'
+    );
+    assert.equal(nameList.length, 4);
+    assert.equal(nameList[0].companyName, 'Acme Law');
+    assert.equal(nameList[3].companyName, 'Delta Partners');
+    assert.equal(nameList[0].website, null);
+  });
+
   it('requires company name and warns on missing recommended fields', () => {
     const result = validateOperatorProspectRows([
       { companyName: 'Acme' },
@@ -179,6 +198,11 @@ describe('SPEC-043 MissionEngine injectProspectList', () => {
     assert.ok(list);
     assert.equal(list.producer, OPERATOR_PRODUCERS.IMPORT);
     assert.equal(list.payload.prospectCount, 2);
+    assert.equal(list.payload.prospects.length, 2);
+    assert.deepEqual(
+      list.payload.prospects.map((p) => p.companyName),
+      ['Granite State Law', 'Queen City CPA']
+    );
 
     // Company Intelligence consumes by type/status — origin is provenance only
     const enrichment = result.mission.plan.steps.find(
@@ -189,6 +213,24 @@ describe('SPEC-043 MissionEngine injectProspectList', () => {
     assert.ok(enrichment);
     assert.notEqual(enrichment.status, 'blocked');
     assert.notEqual(enrichment.status, 'queued');
+
+    const intelligence = bus.getLatestArtifact(blocked.id, 'CompanyIntelligence');
+    assert.ok(intelligence, 'Company Intelligence should publish for every imported prospect');
+    assert.equal(intelligence.payload.enrichedCount, 2);
+    assert.equal(intelligence.payload.prospects.length, 2);
+    assert.deepEqual(
+      intelligence.payload.prospects.map((p) => p.companyName),
+      ['Granite State Law', 'Queen City CPA']
+    );
+
+    const discoveryStep = (result.mission.deliverables.stepResults || []).find(
+      (s) => s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY
+    );
+    assert.ok(discoveryStep, 'Operator Discovery stepResult must survive execute');
+    assert.equal(
+      discoveryStep.outputs && discoveryStep.outputs.prospectCount,
+      2
+    );
 
     const audit = await engine.listAudit(blocked.id);
     assert.ok(audit.some((a) => a.kind === AUDIT_KINDS.ARTIFACT_INJECTED));
