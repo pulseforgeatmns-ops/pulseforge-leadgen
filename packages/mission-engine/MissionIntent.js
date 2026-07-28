@@ -76,6 +76,38 @@ const INTENT_MODES = Object.freeze({
 const INTENT_CONFIDENCE_THRESHOLD = 0.75;
 
 /**
+ * Default evidence requirements by intent (SPEC-056).
+ * Descriptive only — does not choose capabilities.
+ * Kept here so MissionIntent can declare requiresEvidence without importing
+ * the Evidence Planner (avoids circular deps).
+ */
+const DEFAULT_INTENT_EVIDENCE = Object.freeze({
+  [INTENT_CATEGORIES.CAMPAIGN_DIAGNOSTICS]: Object.freeze([
+    'DiscoveryExecution',
+    'DiscoveryTrace',
+    'DiscoveryDiagnostics',
+    'MissionState',
+  ]),
+  [INTENT_CATEGORIES.DISCOVERY_INVESTIGATION]: Object.freeze([
+    'DiscoveryExecution',
+    'ProviderSelection',
+    'CandidateCounts',
+    'VerificationResults',
+    'Exceptions',
+    'DiscoveryTrace',
+    'DiscoveryDiagnostics',
+  ]),
+  [INTENT_CATEGORIES.DIAGNOSTICS]: Object.freeze([
+    'MissionState',
+    'MissionDiagnostics',
+    'CapabilityExecution',
+    'CapabilityFailure',
+  ]),
+  [INTENT_CATEGORIES.CAMPAIGN_REVIEW]: Object.freeze(['MissionState']),
+  [INTENT_CATEGORIES.OUTCOME_INTELLIGENCE]: Object.freeze(['MissionState']),
+});
+
+/**
  * @param {object} [partial]
  * @returns {object} mission_intent (frozen)
  */
@@ -110,6 +142,14 @@ function buildMissionIntent(partial = {}) {
       ? { ...partial.options }
       : {};
 
+  const requiresEvidence = normalizeEvidenceList(
+    partial.requiresEvidence != null
+      ? partial.requiresEvidence
+      : DEFAULT_INTENT_EVIDENCE[matchedIntent] ||
+          DEFAULT_INTENT_EVIDENCE[category] ||
+          []
+  );
+
   return Object.freeze({
     version: partial.version || MISSION_INTENT_VERSION,
     goal: String(partial.goal || '').trim(),
@@ -122,6 +162,7 @@ function buildMissionIntent(partial = {}) {
     parameters: Object.freeze(parameters),
     options: Object.freeze(options),
     diagnostics: Boolean(partial.diagnostics),
+    requiresEvidence: Object.freeze(requiresEvidence),
     confidence,
     alternateIntents: Object.freeze(alternateIntents),
     needsClarification,
@@ -171,6 +212,9 @@ function summarizeMissionIntent(intent) {
     domain: i.domain || null,
     mode: i.mode || null,
     diagnostics: Boolean(i.diagnostics),
+    requiresEvidence: Array.isArray(i.requiresEvidence)
+      ? [...i.requiresEvidence]
+      : [],
     target: {
       campaign: campaign || null,
       subject: subject || null,
@@ -224,6 +268,28 @@ function intentLabel(category) {
   return INTENT_LABELS[category] || category || 'Unknown';
 }
 
+function normalizeEvidenceList(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of list) {
+    const t = String(item || '').trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
+/**
+ * @param {string} category
+ * @returns {string[]}
+ */
+function defaultEvidenceForIntent(category) {
+  const mapped = DEFAULT_INTENT_EVIDENCE[category];
+  return mapped ? [...mapped] : [];
+}
+
 module.exports = {
   MISSION_INTENT_VERSION,
   INTENT_CATEGORIES,
@@ -231,7 +297,9 @@ module.exports = {
   INTENT_DOMAINS,
   INTENT_MODES,
   INTENT_CONFIDENCE_THRESHOLD,
+  DEFAULT_INTENT_EVIDENCE,
   buildMissionIntent,
   summarizeMissionIntent,
   intentLabel,
+  defaultEvidenceForIntent,
 };

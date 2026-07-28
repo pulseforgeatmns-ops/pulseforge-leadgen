@@ -42,6 +42,30 @@ const STAGE_LIBRARY = Object.freeze({
       /\bfind\s+.+\s+prospects?\b/i,
     ],
   }),
+  discovery_diagnostics: Object.freeze({
+    id: 'discovery_diagnostics',
+    name: 'Discovery Diagnostics',
+    capabilityId: BUILTIN_IDS.DISCOVERY_DIAGNOSTICS,
+    consumes: [],
+    produces: [
+      'DiscoveryExecution',
+      'DiscoveryTrace',
+      'DiscoveryDiagnostics',
+      'ProviderSelection',
+      'CandidateCounts',
+      'VerificationResults',
+      'Exceptions',
+    ],
+    dependencies: [],
+    reviewRequired: false,
+    priority: 8,
+    readOnly: true,
+    diagnostic: true,
+    outcomePatterns: [
+      /\bdiscovery\s+diagnostics?\b/i,
+      /\bdiagnose\s+discovery\b/i,
+    ],
+  }),
   company_enrichment: Object.freeze({
     id: 'company_enrichment',
     name: 'Company Enrichment',
@@ -319,6 +343,21 @@ const TYPE_SEED_STAGES = Object.freeze({
  * Used to insert optional mid-pipeline edges (e.g. mail before review when both present).
  */
 const COMPOSITION_EDGES = Object.freeze([
+  Object.freeze({
+    from: 'discovery_diagnostics',
+    to: 'campaign_review',
+    reason: 'Diagnostic evidence must exist before Campaign Review can explain outcomes',
+  }),
+  Object.freeze({
+    from: 'discovery_diagnostics',
+    to: 'outcome_intelligence',
+    reason: 'Diagnostic evidence should precede Outcome Intelligence for diagnostic missions',
+  }),
+  Object.freeze({
+    from: 'discovery_diagnostics',
+    to: 'prospect_discovery',
+    reason: 'Discovery Diagnostics inspects prior Discovery without replacing it',
+  }),
   Object.freeze({
     from: 'mail_package_generator',
     to: 'campaign_review',

@@ -2,15 +2,16 @@
 
 /**
  * MissionPlanner — objective → Intent Understanding → MissionIntent →
- * Capability Planning → Mission Plan IR → execution graph
+ * Evidence Planning → Capability Planning → Mission Plan IR → execution graph
  * (SPEC-041 / ADR-027 + SPEC-050 / ADR-034 + SPEC-051 / ADR-035 +
- * SPEC-055 / ADR-039).
+ * SPEC-055 / ADR-039 + SPEC-056 / ADR-040).
  * Resolves required artifacts before finalizing capabilities.
  * Selects Discovery Profiles for Prospect Discovery (SPEC-024).
  * Discovers capabilities from the registry. Never imports agent modules.
  * Never executes capabilities — only plans.
  * Capabilities consume the Mission Plan — never raw operator text.
- * Intent Understanding owns language; Capability Planning owns execution.
+ * Intent Understanding owns language; Evidence Planning owns questions;
+ * Capability Planning owns execution.
  */
 
 const { BUILTIN_IDS } = require('../capabilities');
@@ -39,6 +40,9 @@ const {
 const {
   summarizeMissionIntent,
 } = require('./MissionIntent');
+const {
+  summarizeEvidencePlan,
+} = require('./EvidencePlan');
 const {
   validateMissionPlan,
   summarizeMissionPlan,
@@ -219,7 +223,8 @@ class MissionPlanner {
       ? this._registry.list().map((c) => c.id)
       : undefined;
 
-    // SPEC-055 / ADR-039: Intent Understanding → MissionIntent → Capability Planning
+    // SPEC-055 / ADR-039 + SPEC-056 / ADR-040:
+    // Intent Understanding → Evidence Planning → Capability Planning
     // Capabilities never parse language; Intent Understanding owns semantics.
     let missionIntent =
       input.missionIntent ||
@@ -227,12 +232,33 @@ class MissionPlanner {
 
     let missionPlan = input.missionPlan || null;
     let plannedFromIntent = null;
+    let evidencePlan = input.evidencePlan || null;
 
     if (!missionPlan) {
+      const availableArtifacts =
+        input.availableArtifacts ||
+        (input.constraints && input.constraints.availableArtifacts) ||
+        null;
+
       plannedFromIntent = planFromIntent(missionIntent, {
         registry: this._registry,
         registeredCapabilityIds: registryIds,
+        availableArtifacts,
+        evidencePlan,
+        missionStateAvailable: input.missionStateAvailable,
       });
+
+      evidencePlan = plannedFromIntent.evidencePlan || evidencePlan;
+
+      if (plannedFromIntent.unableToAnswer) {
+        return buildUnableToAnswerDraft({
+          input,
+          objectiveText,
+          missionIntent: plannedFromIntent.missionIntent || missionIntent,
+          evidencePlan,
+          reason: plannedFromIntent.reason,
+        });
+      }
 
       if (plannedFromIntent.clarification) {
         // Explicit missionType means the operator/API chose a path — continue
@@ -250,6 +276,7 @@ class MissionPlanner {
             missionIntent: plannedFromIntent.missionIntent || missionIntent,
             suggestedInterpretations:
               plannedFromIntent.suggestedInterpretations || [],
+            evidencePlan,
           });
         }
       } else {
@@ -584,6 +611,14 @@ class MissionPlanner {
     const explanation = explainPlan(graph);
     const missionPlanSummary = summarizeMissionPlan(missionPlan);
     const missionIntentSummary = summarizeMissionIntent(missionIntent);
+    const evidencePlanSummary = evidencePlan
+      ? summarizeEvidencePlan(evidencePlan)
+      : plannedFromIntent && plannedFromIntent.evidencePlanSummary
+        ? plannedFromIntent.evidencePlanSummary
+        : null;
+    if (!evidencePlan && plannedFromIntent && plannedFromIntent.evidencePlan) {
+      evidencePlan = plannedFromIntent.evidencePlan;
+    }
     const planningDiagnostics = buildPlannerDiagnosticsPayload({
       steps,
       missingDiagnostics,
@@ -606,6 +641,8 @@ class MissionPlanner {
       constraints: baseConstraints,
       missionIntent,
       missionIntentSummary,
+      evidencePlan: evidencePlan || null,
+      evidencePlanSummary,
       missionPlan,
       discoveryProfile: profileSelection
         ? {
@@ -672,6 +709,8 @@ class MissionPlanner {
         missionPlanSummary,
         missionIntent,
         missionIntentSummary,
+        evidencePlan: evidencePlan || null,
+        evidencePlanSummary,
         executionGraph: graph,
         explanation,
         plannerVersion: PLANNER_VERSION,
@@ -850,6 +889,118 @@ class MissionPlanner {
 }
 
 /**
+ * SPEC-056 — required evidence cannot be acquired; do not invent an answer.
+ * @param {object} args
+ */
+function buildUnableToAnswerDraft(args = {}) {
+  const input = args.input || {};
+  const objectiveText = args.objectiveText || '';
+  const missionIntent = args.missionIntent;
+  const evidencePlan = args.evidencePlan;
+  const evidenceSummary = summarizeEvidencePlan(evidencePlan);
+  const intentSummary = summarizeMissionIntent(missionIntent);
+  const now = new Date().toISOString();
+  const missingTypes = (evidencePlan && evidencePlan.blocked
+    ? evidencePlan.blocked.map((b) => b.evidenceType)
+    : (evidencePlan && evidencePlan.missing) || []
+  ).filter(Boolean);
+  const reason =
+    args.reason ||
+    (evidencePlan && evidencePlan.reason) ||
+    'Unable to answer. Missing evidence with no registered producer.';
+
+  return {
+    id: input.id || newId('msn'),
+    tenantId: String(input.tenantId),
+    clientId:
+      input.clientId != null
+        ? Number(input.clientId) || input.clientId
+        : input.tenantId,
+    type: MISSION_TYPES.OPERATOR_INBOX,
+    status: MISSION_STATUS.WAITING,
+    objectiveText,
+    title: 'Unable to Answer',
+    constraints: {
+      ...(input.constraints && typeof input.constraints === 'object'
+        ? input.constraints
+        : {}),
+      evidenceBlocked: true,
+    },
+    missionIntent,
+    missionIntentSummary: intentSummary,
+    evidencePlan: evidencePlan || null,
+    evidencePlanSummary: evidenceSummary,
+    missionPlan: null,
+    createdBy: input.createdBy || 'operator',
+    priority: input.priority || 'normal',
+    plan: {
+      steps: [],
+      missingPrerequisites: ['required_evidence'],
+      blocked: true,
+      blockingIssues: [reason],
+      missionPlan: null,
+      missionPlanSummary: null,
+      missionIntent,
+      missionIntentSummary: intentSummary,
+      evidencePlan: evidencePlan || null,
+      evidencePlanSummary: evidenceSummary,
+      unableToAnswer: {
+        required: true,
+        reason,
+        missingEvidence: missingTypes,
+        blocked: (evidencePlan && evidencePlan.blocked) || [],
+      },
+      executionGraph: null,
+      explanation: {
+        summary: reason,
+        evidencePlanning: evidenceSummary,
+        intentUnderstanding: intentSummary,
+      },
+      plannerVersion: PLANNER_VERSION,
+      selectedStages: [],
+      skippedStages: [],
+      reviewGates: [],
+      reasoning: {
+        intentUnderstanding: true,
+        evidencePlanning: true,
+        unableToAnswer: true,
+      },
+      planningDiagnostics: buildPlanningDiagnostics({
+        decisions: [],
+        blocked: (evidencePlan && evidencePlan.blocked
+          ? evidencePlan.blocked
+          : []
+        ).map((b) => ({
+          status: 'Blocked',
+          reason: `${b.evidenceType}: ${b.reason || 'No registered producer'}`,
+          recommendedAction:
+            'Register a diagnostic producer for this evidence type, or supply the artifact in the workspace catalog.',
+        })),
+        missionSegments: [],
+      }),
+    },
+    progress: {
+      completedSteps: 0,
+      totalSteps: 0,
+      currentStage: 'Blocked — Unable to Answer',
+      currentCapabilityId: null,
+      percent: 0,
+      counts: null,
+      stageOutcome: 'blocked',
+    },
+    confidence: 0,
+    intentConfidence:
+      missionIntent && missionIntent.confidence != null
+        ? missionIntent.confidence
+        : 0,
+    blockingIssues: [reason],
+    unableToAnswer: true,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
  * SPEC-055 — low-confidence intent: surface suggested interpretations,
  * do not invent capability nodes from aliases.
  * @param {object} args
@@ -862,8 +1013,12 @@ function buildClarificationDraft(args = {}) {
     args.suggestedInterpretations ||
     (missionIntent && missionIntent.alternateIntents) ||
     [];
+  const evidencePlan = args.evidencePlan || null;
   const now = new Date().toISOString();
   const intentSummary = summarizeMissionIntent(missionIntent);
+  const evidenceSummary = evidencePlan
+    ? summarizeEvidencePlan(evidencePlan)
+    : null;
 
   return {
     id: input.id || newId('msn'),
@@ -884,6 +1039,8 @@ function buildClarificationDraft(args = {}) {
     },
     missionIntent,
     missionIntentSummary: intentSummary,
+    evidencePlan,
+    evidencePlanSummary: evidenceSummary,
     missionPlan: null,
     createdBy: input.createdBy || 'operator',
     priority: input.priority || 'normal',
@@ -900,6 +1057,8 @@ function buildClarificationDraft(args = {}) {
       missionPlanSummary: null,
       missionIntent,
       missionIntentSummary: intentSummary,
+      evidencePlan,
+      evidencePlanSummary: evidenceSummary,
       clarification: {
         required: true,
         prompt:
@@ -1119,4 +1278,5 @@ module.exports = {
   removeStage,
   replaceStage,
   buildClarificationDraft,
+  buildUnableToAnswerDraft,
 };

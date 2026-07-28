@@ -6,6 +6,14 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Evidence-Driven Capability Planning ([SPEC-056](docs/specs/SPEC-056_Evidence_Driven_Capability_Planning.md) / [ADR-040](docs/adr/ADR-040_Separate_Evidence_Acquisition_from_Capability_Selection.md))
+  - Three-stage planning: Intent Understanding → Evidence Planning → Capability Planning → MissionPlan
+  - MissionIntent declares `requiresEvidence`; EvidencePlan compares catalog vs requirements
+  - Missing evidence schedules read-only Discovery Diagnostics before Campaign Review / Outcome Intelligence
+  - Unable to answer when required evidence has no registered producer (never invents incomplete diagnostics)
+  - Diagnostic artifact types (DiscoveryTrace, DiscoveryDiagnostics, …) — read-only, no business-state mutation
+  - Review Workspace **Evidence Requirements** section
+  - Tests: `npm run test:mission` (evidencePlanning.test.js)
 - Intent Understanding ([SPEC-055](docs/specs/SPEC-055_Intent_Understanding.md) / [ADR-039](docs/adr/ADR-039_Separate_Understanding_from_Execution.md))
   - Two-stage planning: Intent Understanding → MissionIntent → Capability Planning → MissionPlan
   - Semantic intent categories (Campaign Execution, Diagnostics, Discovery Investigation, …) — not capability aliases

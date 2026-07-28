@@ -93,26 +93,29 @@ describe('SPEC-055 Capability Planning from MissionIntent', () => {
     assert.equal(result.missionPlan.parameters.campaign, '001');
   });
 
-  it('maps Campaign Diagnostics → Campaign Review + Outcome Intelligence', () => {
+  it('maps Campaign Diagnostics → Discovery Diagnostics + Campaign Review + Outcome Intelligence', () => {
     const result = planFromOperatorText(
-      'Run an end-to-end execution audit for Campaign 001.'
+      'Run an end-to-end execution audit for Campaign 001.',
+      { registry: createBuiltinRegistry({ discovery: { useFixture: true } }) }
     );
     assert.equal(result.clarification, false);
     const stages = result.missionPlan.execution.map((e) => e.stageId);
+    assert.ok(stages.includes('discovery_diagnostics'));
     assert.ok(stages.includes('campaign_review'));
     assert.ok(stages.includes('outcome_intelligence'));
     assert.equal(result.missionIntent.diagnostics, true);
   });
 
-  it('maps Discovery Investigation → Discovery + BI + Review', () => {
+  it('maps Discovery Investigation → Discovery Diagnostics + Campaign Review', () => {
     const result = planFromOperatorText(
-      "Why isn't Discovery finding anyone?"
+      "Why isn't Discovery finding anyone?",
+      { registry: createBuiltinRegistry({ discovery: { useFixture: true } }) }
     );
     assert.equal(result.clarification, false);
     const stages = result.missionPlan.execution.map((e) => e.stageId);
-    assert.ok(stages.includes('prospect_discovery'));
-    assert.ok(stages.includes('business_intelligence'));
+    assert.ok(stages.includes('discovery_diagnostics'));
     assert.ok(stages.includes('campaign_review'));
+    assert.ok(!stages.includes('prospect_discovery'));
   });
 
   it('does not invent capability nodes from unknown gibberish', () => {

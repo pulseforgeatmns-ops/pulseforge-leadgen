@@ -65,6 +65,21 @@ const CAPABILITY_ARTIFACT_CONTRACTS = Object.freeze({
     requires: [],
     produces: ['proposal'],
   }),
+  [BUILTIN_IDS.DISCOVERY_DIAGNOSTICS]: Object.freeze({
+    requires: [],
+    produces: [
+      'DiscoveryExecution',
+      'DiscoveryTrace',
+      'DiscoveryDiagnostics',
+      'ProviderSelection',
+      'CandidateCounts',
+      'VerificationResults',
+      'Exceptions',
+      'CapabilityExecution',
+      'CapabilityFailure',
+      'MissionDiagnostics',
+    ],
+  }),
 });
 
 /**
@@ -130,6 +145,11 @@ const CAPABILITY_MISSION_ALIASES = Object.freeze({
   [BUILTIN_IDS.PROPOSAL_GENERATOR]: Object.freeze([
     'Proposal Generator',
     'Generate Proposal',
+  ]),
+  [BUILTIN_IDS.DISCOVERY_DIAGNOSTICS]: Object.freeze([
+    'Discovery Diagnostics',
+    'Diagnose Discovery',
+    'Discovery Diagnostic',
   ]),
 });
 

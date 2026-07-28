@@ -1,13 +1,13 @@
 'use strict';
 
 /**
- * Capability Planning — MissionIntent → MissionPlan (SPEC-055 / ADR-039).
+ * Capability Planning — MissionIntent (+ EvidencePlan) → MissionPlan
+ * (SPEC-055 / ADR-039 + SPEC-056 / ADR-040).
  *
  * Deterministic translation of understood intent into executable capabilities.
  * Does not parse natural language — consumes MissionIntent only.
- * For rich multi-sentence campaign-creation requests, reuses IntentParser
- * classification for Notes / Options / Parameters (never for unknown aliases
- * as the primary path).
+ * Evidence Planning runs first for diagnostic intents; missing evidence
+ * schedules diagnostic producers before downstream review capabilities.
  */
 
 const { BUILTIN_IDS } = require('../capabilities');
@@ -18,10 +18,17 @@ const {
 } = require('./MissionIntent');
 const { buildMissionPlan, validateMissionPlan } = require('./MissionPlan');
 const { parseIntent } = require('./IntentParser');
+const {
+  planEvidence,
+  acquisitionStages,
+} = require('./EvidencePlanner');
+const { summarizeEvidencePlan } = require('./EvidencePlan');
 
 /**
  * Deterministic intent → capability / stage mapping.
  * Intents are goals; values are registered capability stage ids.
+ * Diagnostic intents list *downstream* capabilities; evidence acquisition
+ * stages are prepended by mergeEvidenceAcquisitions().
  */
 const INTENT_EXECUTION_MAP = Object.freeze({
   [INTENT_CATEGORIES.CAMPAIGN_EXECUTION]: Object.freeze({
@@ -74,18 +81,10 @@ const INTENT_EXECUTION_MAP = Object.freeze({
     diagnostics: true,
   }),
   [INTENT_CATEGORIES.DISCOVERY_INVESTIGATION]: Object.freeze({
-    missionType: MISSION_TYPES.PROSPECT_DISCOVERY,
+    missionType: MISSION_TYPES.CAMPAIGN_REVIEW,
+    // SPEC-056: evidence acquisition (Discovery Diagnostics) precedes review.
+    // Do not re-run Discovery as a substitute for missing diagnostic evidence.
     execution: Object.freeze([
-      {
-        stageId: 'prospect_discovery',
-        capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
-        label: 'Discovery',
-      },
-      {
-        stageId: 'business_intelligence',
-        capabilityId: BUILTIN_IDS.BUSINESS_INTELLIGENCE,
-        label: 'Business Intelligence',
-      },
       {
         stageId: 'campaign_review',
         capabilityId: BUILTIN_IDS.CAMPAIGN_REVIEW,
@@ -228,9 +227,10 @@ const INTENT_EXECUTION_MAP = Object.freeze({
 
 /**
  * Compile MissionIntent into an executable MissionPlan.
+ * Runs Evidence Planning before capability selection (SPEC-056).
  * @param {object} missionIntent
  * @param {object} [opts]
- * @returns {object} mission_plan (+ missionIntent, missionType, clarification)
+ * @returns {object} mission_plan (+ missionIntent, evidencePlan, …)
  */
 function planFromIntent(missionIntent, opts = {}) {
   if (!missionIntent || typeof missionIntent !== 'object') {
@@ -243,7 +243,34 @@ function planFromIntent(missionIntent, opts = {}) {
       missionIntent,
       missionPlan: null,
       missionType: null,
+      evidencePlan: null,
       suggestedInterpretations: buildSuggestedInterpretations(missionIntent),
+    };
+  }
+
+  // SPEC-056: Evidence Planning before Capability Planning
+  const evidencePlan =
+    opts.evidencePlan ||
+    planEvidence(missionIntent, {
+      availableArtifacts: opts.availableArtifacts,
+      registry: opts.registry || null,
+      missionStateAvailable: opts.missionStateAvailable,
+      now: opts.now,
+    });
+
+  if (evidencePlan.unableToAnswer) {
+    return {
+      clarification: false,
+      unableToAnswer: true,
+      missionIntent,
+      evidencePlan,
+      evidencePlanSummary: summarizeEvidencePlan(evidencePlan),
+      missionPlan: null,
+      missionType: null,
+      suggestedInterpretations: [],
+      reason:
+        evidencePlan.reason ||
+        'Unable to answer. Missing evidence with no registered producer.',
     };
   }
 
@@ -252,7 +279,6 @@ function planFromIntent(missionIntent, opts = {}) {
   const mapping = INTENT_EXECUTION_MAP[category];
 
   // Rich campaign-creation / multi-sentence: IntentParser fills Notes/Options
-  // while Intent Understanding already chose the category (SPEC-050 compat).
   if (
     category === INTENT_CATEGORIES.CAMPAIGN_CREATION &&
     missionIntent.sourceText &&
@@ -263,24 +289,31 @@ function planFromIntent(missionIntent, opts = {}) {
       now: opts.now,
       validate: opts.validate !== false,
     });
-    const plan = attachIntent(parsed, missionIntent);
+    const plan = attachPlanningArtifacts(parsed, missionIntent, evidencePlan);
     return {
       clarification: false,
+      unableToAnswer: false,
       missionIntent,
+      evidencePlan,
+      evidencePlanSummary: summarizeEvidencePlan(evidencePlan),
       missionPlan: plan,
-      missionType: mapping ? mapping.missionType : MISSION_TYPES.CAMPAIGN_CREATION,
+      missionType: mapping
+        ? mapping.missionType
+        : MISSION_TYPES.CAMPAIGN_CREATION,
       suggestedInterpretations: [],
     };
   }
 
   if (!mapping) {
-    // Unknown with high confidence shouldn't happen; treat as clarification
     return {
       clarification: true,
+      unableToAnswer: false,
       missionIntent: {
         ...missionIntent,
         needsClarification: true,
       },
+      evidencePlan,
+      evidencePlanSummary: summarizeEvidencePlan(evidencePlan),
       missionPlan: null,
       missionType: null,
       suggestedInterpretations: buildSuggestedInterpretations(missionIntent),
@@ -311,11 +344,16 @@ function planFromIntent(missionIntent, opts = {}) {
     parameters.subject ||
     null;
 
+  const execution = mergeEvidenceAcquisitions(
+    mapping.execution.map((e) => ({ ...e })),
+    evidencePlan
+  );
+
   let plan = buildMissionPlan({
     objective: missionIntent.goal || '',
     subject,
     parameters,
-    execution: mapping.execution.map((e) => ({ ...e })),
+    execution,
     options,
     notes: [...(missionIntent.notes || [])],
     classifications: [
@@ -327,6 +365,7 @@ function planFromIntent(missionIntent, opts = {}) {
           intentCategory: category,
           confidence: missionIntent.confidence,
           fromIntentUnderstanding: true,
+          evidencePlanning: true,
         },
       },
     ],
@@ -334,7 +373,7 @@ function planFromIntent(missionIntent, opts = {}) {
     createdAt: opts.now || new Date().toISOString(),
   });
 
-  plan = attachIntent(plan, missionIntent);
+  plan = attachPlanningArtifacts(plan, missionIntent, evidencePlan);
 
   if (opts.validate !== false) {
     const validation = validateMissionPlan(plan, opts);
@@ -342,6 +381,7 @@ function planFromIntent(missionIntent, opts = {}) {
       ...plan,
       validation,
       missionIntent,
+      evidencePlan,
     });
     if (!validation.ok && opts.failClosed) {
       const err = new Error(
@@ -351,13 +391,17 @@ function planFromIntent(missionIntent, opts = {}) {
       err.validation = validation;
       err.missionPlan = plan;
       err.missionIntent = missionIntent;
+      err.evidencePlan = evidencePlan;
       throw err;
     }
   }
 
   return {
     clarification: false,
+    unableToAnswer: false,
     missionIntent,
+    evidencePlan,
+    evidencePlanSummary: summarizeEvidencePlan(evidencePlan),
     missionPlan: plan,
     missionType: mapping.missionType,
     suggestedInterpretations: [],
@@ -365,7 +409,37 @@ function planFromIntent(missionIntent, opts = {}) {
 }
 
 /**
- * Two-stage entry: understand language then plan capabilities.
+ * Prepend diagnostic acquisition stages for missing evidence.
+ * @param {object[]} baseExecution
+ * @param {object} evidencePlan
+ * @returns {object[]}
+ */
+function mergeEvidenceAcquisitions(baseExecution, evidencePlan) {
+  const stages = acquisitionStages(evidencePlan);
+  if (!stages.length) return baseExecution;
+
+  const seen = new Set();
+  const out = [];
+  for (const s of stages) {
+    if (seen.has(s.stageId)) continue;
+    seen.add(s.stageId);
+    out.push({
+      stageId: s.stageId,
+      capabilityId: s.capabilityId,
+      label: s.label,
+      reason: 'Acquire missing evidence required by MissionIntent',
+    });
+  }
+  for (const e of baseExecution) {
+    if (seen.has(e.stageId)) continue;
+    seen.add(e.stageId);
+    out.push(e);
+  }
+  return out;
+}
+
+/**
+ * Two-stage/three-stage entry: understand language → evidence → capabilities.
  * @param {string} text
  * @param {object} [opts]
  * @returns {object}
@@ -377,16 +451,16 @@ function planFromOperatorText(text, opts = {}) {
   return planFromIntent(missionIntent, opts);
 }
 
-function attachIntent(plan, missionIntent) {
+function attachPlanningArtifacts(plan, missionIntent, evidencePlan) {
   return Object.freeze({
     ...plan,
     missionIntent,
+    evidencePlan: evidencePlan || null,
   });
 }
 
 function shouldUseLegacyParser(sourceText) {
   const text = String(sourceText || '');
-  // Multi-sentence campaign builds need Notes / pipeline-through classification
   const units = text
     .split(/(?<=[.!?])\s+|\n+/)
     .map((s) => s.trim())
@@ -438,4 +512,5 @@ module.exports = {
   planFromOperatorText,
   resolveMissionTypeFromIntent,
   buildSuggestedInterpretations,
+  mergeEvidenceAcquisitions,
 };

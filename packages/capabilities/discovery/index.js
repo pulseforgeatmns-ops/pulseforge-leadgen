@@ -66,6 +66,10 @@ module.exports = {
   createFixtureProvider,
   manchesterFixtureCandidates,
   createProspectDiscoveryCapability,
+  createDiscoveryDiagnosticsCapability:
+    require('./DiscoveryDiagnostics').createDiscoveryDiagnosticsCapability,
+  DIAGNOSTIC_ARTIFACT_TYPES:
+    require('./DiscoveryDiagnostics').DIAGNOSTIC_ARTIFACT_TYPES,
   PostgresDiscoveryProfileStore,
   createPostgresDiscoveryProfileStore,
   ensureDiscoveryProfileSchema,
