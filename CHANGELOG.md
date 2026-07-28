@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Intent Understanding ([SPEC-055](docs/specs/SPEC-055_Intent_Understanding.md) / [ADR-039](docs/adr/ADR-039_Separate_Understanding_from_Execution.md))
+  - Two-stage planning: Intent Understanding → MissionIntent → Capability Planning → MissionPlan
+  - Semantic intent categories (Campaign Execution, Diagnostics, Discovery Investigation, …) — not capability aliases
+  - Confidence + alternate intents; low confidence returns clarification with suggested interpretations
+  - Capabilities still consume MissionPlan only — never parse operator language
+  - Review Workspace: Operator Request → Understood Intent → Execution Plan
+  - Tests: `npm run test:mission` (intentUnderstanding.test.js)
 - Capability Registry & Planner Diagnostics ([SPEC-054](docs/specs/SPEC-054_Capability_Registry_and_Planner_Diagnostics.md) / [ADR-038](docs/adr/ADR-038_Explain_Planning_Decisions.md))
   - Capability contract: `version`, `enabled`, `missionAliases` on registry descriptors
   - Registry queries: `producersOf`, `consumersOf`, `resolveAlias`, `suggestMatches`, `explainSelection`

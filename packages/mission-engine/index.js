@@ -111,6 +111,26 @@ const {
   PLAN_CATEGORIES,
 } = require('./IntentParser');
 const {
+  understandIntent,
+} = require('./IntentUnderstanding');
+const {
+  MISSION_INTENT_VERSION,
+  INTENT_CATEGORIES,
+  INTENT_LABELS,
+  INTENT_DOMAINS,
+  INTENT_MODES,
+  INTENT_CONFIDENCE_THRESHOLD,
+  buildMissionIntent,
+  summarizeMissionIntent,
+  intentLabel,
+} = require('./MissionIntent');
+const {
+  INTENT_EXECUTION_MAP,
+  planFromIntent,
+  planFromOperatorText,
+  resolveMissionTypeFromIntent,
+} = require('./CapabilityPlanner');
+const {
   MISSION_PLAN_VERSION,
   RESERVED_RUNTIME_FIELDS,
   buildMissionPlan,
@@ -223,4 +243,19 @@ module.exports = {
   executableObjectiveText,
   containsOperatorInstructionLeak,
   resolveExecutionRequest,
+  // SPEC-055 / ADR-039
+  understandIntent,
+  MISSION_INTENT_VERSION,
+  INTENT_CATEGORIES,
+  INTENT_LABELS,
+  INTENT_DOMAINS,
+  INTENT_MODES,
+  INTENT_CONFIDENCE_THRESHOLD,
+  buildMissionIntent,
+  summarizeMissionIntent,
+  intentLabel,
+  INTENT_EXECUTION_MAP,
+  planFromIntent,
+  planFromOperatorText,
+  resolveMissionTypeFromIntent,
 };
