@@ -60,7 +60,20 @@ function toOperationsCard(mission, updatedAt) {
       currentStage: progress.currentStage || null,
       label: progressLabel,
       counts: counts || null,
+      stageOutcome: progress.stageOutcome || null,
+      stageOutcomeLabel: progress.stageOutcomeLabel || null,
     },
+    blockingIssues: mission.blockingIssues ||
+      (mission.stageReview && mission.stageReview.blockingIssues) ||
+      null,
+    discoveryProfile: mission.discoveryProfile
+      ? {
+          name: mission.discoveryProfile.name,
+          reason: mission.discoveryProfile.reason || null,
+          confidence: mission.discoveryProfile.confidence,
+          geography: mission.discoveryProfile.geography || null,
+        }
+      : null,
     startedAt: mission.startedAt || mission.createdAt || null,
     estimatedCompletion: mission.estimatedCompletion || null,
     createdAt: mission.createdAt || null,

@@ -14,6 +14,12 @@ const {
   AUDIT_KINDS,
   STAGE_LABELS,
 } = require('./types');
+const {
+  evaluatePipelineGate,
+  artifactValidationEnabled,
+  STAGE_OUTCOMES,
+  STAGE_OUTCOME_LABELS,
+} = require('./PipelineGate');
 
 class MissionExecutor {
   /**
@@ -217,55 +223,176 @@ class MissionExecutor {
         },
       });
 
-      if (runResult.result.status !== CAPABILITY_RESULT_STATUS.COMPLETED) {
+      // SPEC-040 / ADR-026: business artifact validation gate
+      let gate = null;
+      if (artifactValidationEnabled()) {
+        gate = evaluatePipelineGate({
+          capabilityId,
+          runResult,
+          context: {
+            constraints: mission.constraints || {},
+            inputs: {
+              prospects: priorOutputs.prospects,
+            },
+            priorOutputs,
+          },
+          mission,
+        });
+      } else if (runResult.result.status !== CAPABILITY_RESULT_STATUS.COMPLETED) {
+        gate = {
+          outcome: STAGE_OUTCOMES.FAILED,
+          outcomeLabel: STAGE_OUTCOME_LABELS[STAGE_OUTCOMES.FAILED],
+          advance: false,
+          publishOutputs: false,
+          blockingIssues: (runResult.result.errors || []).map((e) =>
+            typeof e === 'string' ? e : e.message || String(e)
+          ),
+          warnings: runResult.result.warnings || [],
+          publishedArtifacts: [],
+          quarantinedArtifacts: runResult.result.artifacts || [],
+          validation: { passed: false },
+          reviewSummary: null,
+        };
+      } else {
+        gate = {
+          outcome: STAGE_OUTCOMES.COMPLETED,
+          outcomeLabel: STAGE_OUTCOME_LABELS[STAGE_OUTCOMES.COMPLETED],
+          advance: true,
+          publishOutputs: true,
+          blockingIssues: [],
+          warnings: runResult.result.warnings || [],
+          publishedArtifacts: runResult.result.artifacts || [],
+          quarantinedArtifacts: [],
+          validation: { passed: true },
+          reviewSummary: null,
+        };
+      }
+
+      if (!gate.advance) {
+        const stepStatus =
+          gate.outcome === STAGE_OUTCOMES.FAILED ? 'failed' : 'blocked';
         const failedSteps = steps.map((s, idx) =>
           idx === i
-            ? { ...s, status: 'failed', error: runResult.result.errors }
+            ? {
+                ...s,
+                status: stepStatus,
+                outcome: gate.outcome,
+                outcomeLabel: gate.outcomeLabel,
+                error: gate.blockingIssues,
+                blockingIssues: gate.blockingIssues,
+                warnings: gate.warnings,
+                reviewSummary: gate.reviewSummary,
+              }
             : idx < i
               ? { ...s, status: 'completed' }
               : s
         );
+        const blockLabel =
+          gate.outcome === STAGE_OUTCOMES.BLOCKED
+            ? `Blocked — ${gate.blockingIssues[0] || step.name}`
+            : `Paused — ${step.name} failed`;
         mission = await this._store.update({
           id: mission.id,
           status: MISSION_STATUS.WAITING,
           plan: { ...mission.plan, steps: failedSteps },
           progress: {
             ...mission.progress,
-            currentStage: `Paused — ${step.name} failed`,
+            currentStage: blockLabel,
             currentCapabilityId: capabilityId,
+            stageOutcome: gate.outcome,
+            stageOutcomeLabel: gate.outcomeLabel,
+          },
+          blockingIssues: gate.blockingIssues,
+          stageReview: {
+            capabilityId,
+            outcome: gate.outcome,
+            outcomeLabel: gate.outcomeLabel,
+            blockingIssues: gate.blockingIssues,
+            warnings: gate.warnings,
+            reviewSummary: gate.reviewSummary,
+            quarantinedArtifacts: gate.quarantinedArtifacts,
+            publishedArtifacts: gate.publishedArtifacts,
+          },
+          deliverables: {
+            ...(mission.deliverables || {}),
+            stepResults,
+            lastGate: {
+              capabilityId,
+              outcome: gate.outcome,
+              blockingIssues: gate.blockingIssues,
+              quarantinedArtifacts: gate.quarantinedArtifacts,
+            },
           },
         });
         await this._store.appendAudit({
           missionId: mission.id,
-          kind: AUDIT_KINDS.STEP_FAIL,
+          kind:
+            gate.outcome === STAGE_OUTCOMES.BLOCKED
+              ? AUDIT_KINDS.STAGE_BLOCKED
+              : AUDIT_KINDS.STEP_FAIL,
           capabilityId,
-          payload: { errors: runResult.result.errors },
+          payload: {
+            outcome: gate.outcome,
+            outcomeLabel: gate.outcomeLabel,
+            blockingIssues: gate.blockingIssues,
+            warnings: gate.warnings,
+            validation: gate.validation,
+            quarantinedArtifacts: gate.quarantinedArtifacts,
+            errors:
+              gate.outcome === STAGE_OUTCOMES.FAILED
+                ? runResult.result.errors
+                : undefined,
+          },
         });
         return mission;
       }
 
-      priorOutputs = {
-        ...priorOutputs,
-        ...runResult.result.outputs,
-      };
+      if (gate.publishOutputs) {
+        priorOutputs = {
+          ...priorOutputs,
+          ...runResult.result.outputs,
+        };
+      }
       stepResults.push({
         capabilityId,
         name: runResult.name,
         result: runResult.result,
+        outcome: gate.outcome,
+        outcomeLabel: gate.outcomeLabel,
+        publishedArtifacts: gate.publishedArtifacts,
+        quarantinedArtifacts: gate.quarantinedArtifacts,
+        validation: gate.validation,
+        warnings: gate.warnings,
+        reviewSummary: gate.reviewSummary,
       });
 
       const completedSteps = steps.map((s, idx) =>
-        idx <= i ? { ...s, status: 'completed' } : s
+        idx <= i
+          ? {
+              ...s,
+              status: 'completed',
+              outcome: gate.outcome,
+              outcomeLabel: gate.outcomeLabel,
+              warnings: gate.warnings,
+              reviewSummary: gate.reviewSummary,
+            }
+          : s
       );
+      const stageLabel =
+        gate.outcome === STAGE_OUTCOMES.COMPLETED_WITH_WARNINGS
+          ? `${step.stageLabel || step.name} — ${gate.outcomeLabel}`
+          : step.stageLabel || step.name;
       mission = await this._store.update({
         id: mission.id,
         plan: { ...mission.plan, steps: completedSteps },
         progress: {
           completedSteps: i + 1,
           totalSteps: steps.length,
-          currentStage: step.stageLabel || step.name,
+          currentStage: stageLabel,
           currentCapabilityId: capabilityId,
           percent: Math.round(((i + 1) / Math.max(steps.length, 1)) * 100),
+          stageOutcome: gate.outcome,
+          stageOutcomeLabel: gate.outcomeLabel,
           counts: priorOutputs.prospectCount
             ? {
                 completed: priorOutputs.prospectCount,
@@ -279,11 +406,19 @@ class MissionExecutor {
       });
       await this._store.appendAudit({
         missionId: mission.id,
-        kind: AUDIT_KINDS.STEP_OK,
+        kind:
+          gate.outcome === STAGE_OUTCOMES.COMPLETED_WITH_WARNINGS
+            ? AUDIT_KINDS.STAGE_WARNINGS
+            : AUDIT_KINDS.STEP_OK,
         capabilityId,
         payload: {
           duration: runResult.result.duration,
           outputsKeys: Object.keys(runResult.result.outputs || {}),
+          outcome: gate.outcome,
+          outcomeLabel: gate.outcomeLabel,
+          warnings: gate.warnings,
+          publishedArtifacts: gate.publishedArtifacts,
+          validation: gate.validation,
         },
       });
     }
@@ -322,10 +457,23 @@ class MissionExecutor {
           capabilityId: s.capabilityId,
           name: s.name,
           status: s.result.status,
+          outcome: s.outcome || null,
+          outcomeLabel: s.outcomeLabel || null,
           evidence: s.result.evidence,
-          artifacts: s.result.artifacts,
+          artifacts: s.publishedArtifacts || s.result.artifacts,
+          publishedArtifacts: s.publishedArtifacts || [],
+          quarantinedArtifacts: s.quarantinedArtifacts || [],
+          validation: s.validation || null,
+          warnings: s.warnings || s.result.warnings || [],
+          reviewSummary: s.reviewSummary || null,
           outputs: s.result.outputs || {},
           result: { outputs: s.result.outputs || {} },
+        })),
+        stageOutcomes: stepResults.map((s) => ({
+          capabilityId: s.capabilityId,
+          outcome: s.outcome,
+          outcomeLabel: s.outcomeLabel,
+          reviewSummary: s.reviewSummary,
         })),
       },
       progress: {

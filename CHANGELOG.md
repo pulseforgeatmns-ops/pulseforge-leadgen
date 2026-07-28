@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Mission Artifact Validation & Discovery Resolution ([SPEC-040](docs/specs/SPEC-040_Mission_Artifact_Validation.md) / [ADR-026](docs/adr/ADR-026_Business_Success_Determines_Pipeline_Progress.md))
+  - Deterministic Discovery Profile resolver (constraints → override → pinned client → client geography → mission default); never silent geography hop
+  - Stage artifact contracts + PipelineGate: Completed / Completed With Warnings / Blocked / Failed
+  - Empty Discovery yields Blocked (pipeline pauses); shortfalls warn and may advance
+  - Downstream stages consume published validated artifacts only; quarantine on failure
+  - Flag: `MISSION_ARTIFACT_VALIDATION=0` restores advance-on-technical-complete
+  - Tests: `npm run test:mission` (artifactValidation)
 - Active Mission Resolver ([SPEC-039](docs/specs/SPEC-039_Active_Mission_Resolver.md) / [ADR-025](docs/adr/ADR-025_Active_Missions_Take_Precedence.md))
   - First routing layer before IntentRouter on Max Workspace Ask + `/api/max/ask`
   - Session ↔ active Mission binding; Resume / Modify / Diagnose attach (never IntentRouter)

@@ -91,6 +91,36 @@ function createProspectDiscoveryCapability(deps = {}) {
         tenantId: context.tenantId,
         constraints: context.constraints || {},
       });
+
+      if (selection.blocked || !selection.profile) {
+        const issues = selection.blockingIssues || ['No Discovery Profile'];
+        return buildCapabilityResult({
+          status: CAPABILITY_RESULT_STATUS.FAILED,
+          outputs: {
+            prospectCount: 0,
+            prospects: [],
+            summary: {
+              discovered: 0,
+              verified: 0,
+              rejected: 0,
+              targetCount: 0,
+            },
+            discoveryProfile: null,
+            discoveryProfileResolution: selection.resolution || null,
+            confidence: 0,
+          },
+          evidence: [
+            {
+              kind: 'discovery_profile',
+              summary: issues[0],
+            },
+          ],
+          warnings: [],
+          errors: issues.map((message) => ({ message, code: 'NO_DISCOVERY_PROFILE' })),
+          artifacts: [],
+        });
+      }
+
       const profile = selection.profile;
       const targetCount =
         (context.constraints && Number(context.constraints.targetCount)) ||
@@ -385,7 +415,21 @@ function createProspectDiscoveryCapability(deps = {}) {
           name: profile.name,
           version: profile.version,
           selection: selection.selection,
+          reason:
+            (selection.resolution && selection.resolution.reason) || null,
+          geography:
+            (selection.resolution && selection.resolution.geography) ||
+            profile.geography ||
+            null,
+          confidence:
+            selection.resolution && selection.resolution.confidence != null
+              ? selection.resolution.confidence
+              : null,
+          overridesApplied:
+            (selection.resolution && selection.resolution.overridesApplied) ||
+            [],
         },
+        discoveryProfileResolution: selection.resolution || null,
         reviewPackage,
         rejected,
         suggestedNextActions,

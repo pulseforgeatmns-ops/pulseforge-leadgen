@@ -139,7 +139,7 @@ class MissionPlanner {
         ? { ...input.constraints }
         : { targetCount: 50 };
 
-    // SPEC-024: bind an immutable Discovery Profile snapshot into constraints
+    // SPEC-024 / SPEC-040: bind Discovery Profile via deterministic resolver
     let profileSelection = null;
     if (chain.includes(BUILTIN_IDS.PROSPECT_DISCOVERY)) {
       profileSelection = this._profileSelector.select({
@@ -147,10 +147,60 @@ class MissionPlanner {
         clientId: input.clientId != null ? input.clientId : input.tenantId,
         tenantId: input.tenantId,
         constraints: baseConstraints,
+        missionType,
       });
+      if (profileSelection.blocked || !profileSelection.profile) {
+        return {
+          id: input.id || newId('msn'),
+          tenantId: String(input.tenantId),
+          clientId:
+            input.clientId != null
+              ? Number(input.clientId) || input.clientId
+              : input.tenantId,
+          type: missionType,
+          status: MISSION_STATUS.WAITING,
+          objectiveText,
+          title: deriveTitle(objectiveText, missionType),
+          constraints: baseConstraints,
+          discoveryProfile: null,
+          discoveryProfileResolution: profileSelection.resolution || {
+            blocked: true,
+            reason: 'No Discovery Profile',
+            blockingIssues: profileSelection.blockingIssues || [
+              'No Discovery Profile',
+            ],
+          },
+          plan: {
+            steps: [],
+            missingPrerequisites: ['discovery_profile'],
+            blocked: true,
+            blockingIssues: profileSelection.blockingIssues || [
+              'No Discovery Profile',
+            ],
+          },
+          progress: {
+            completedSteps: 0,
+            totalSteps: 0,
+            currentStage: 'Blocked — No Discovery Profile',
+            currentCapabilityId: null,
+            percent: 0,
+            counts: null,
+            stageOutcome: 'blocked',
+          },
+          confidence: 0,
+          createdBy: input.createdBy || 'operator',
+          priority: input.priority || 'normal',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          blockingIssues: profileSelection.blockingIssues || [
+            'No Discovery Profile',
+          ],
+        };
+      }
       baseConstraints.discoveryProfile = profileSelection.profile;
       baseConstraints.discoveryProfileId = profileSelection.profile.id;
       baseConstraints.discoveryProfileVersion = profileSelection.profile.version;
+      baseConstraints.discoveryProfileBound = true;
       if (!baseConstraints.targetCount && profileSelection.profile.targetCount) {
         baseConstraints.targetCount = profileSelection.profile.targetCount;
       }
@@ -252,7 +302,29 @@ class MissionPlanner {
               name: p.name,
               version: p.version,
             })),
+            // SPEC-040 Resolution Report
+            reason:
+              (profileSelection.resolution &&
+                profileSelection.resolution.reason) ||
+              null,
+            geography:
+              (profileSelection.resolution &&
+                profileSelection.resolution.geography) ||
+              profileSelection.profile.geography ||
+              null,
+            confidence:
+              profileSelection.resolution &&
+              profileSelection.resolution.confidence != null
+                ? profileSelection.resolution.confidence
+                : null,
+            overridesApplied:
+              (profileSelection.resolution &&
+                profileSelection.resolution.overridesApplied) ||
+              [],
           }
+        : null,
+      discoveryProfileResolution: profileSelection
+        ? profileSelection.resolution || null
         : null,
       clientPlaybook: playbookSelection && playbookSelection.playbook
         ? {
