@@ -6,6 +6,22 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Operator Inbox ([SPEC-037](docs/specs/SPEC-037_Operator_Inbox.md) / [ADR-024](docs/adr/ADR-024_Human_Work_Is_Coordinated_Through_the_Operator_Inbox.md))
+  - `packages/capabilities/operatorInbox/` — single coordination surface for human-required work
+  - Deterministic priority · dedupe · deep links · auditable complete/approve/reject/snooze/assign/archive
+  - Ingests Campaign Review, Direct Mail, Outcome Intelligence, validation events — never runs those workflows
+  - Mission type `operator_inbox`; IntentRouter patterns (“Open the operator inbox”)
+  - Tests: `npm run test:capabilities` · `npm run test:mission`
+- Outcome Intelligence ([SPEC-036](docs/specs/SPEC-036_Outcome_Intelligence.md) / [ADR-023](docs/adr/ADR-023_Experience_Becomes_Intelligence.md))
+  - `packages/capabilities/outcomeIntelligence/` — capture campaign outcomes → evidence-backed learnings → pending recommendations
+  - Ranking feedback + personalization effectiveness + campaign analytics + Mission Outcome Summary
+  - Recommendations require operator approval before playbook / ranking / discovery / template updates
+  - Distinct from SPEC-013 / ADR-008 (Max recommendation evaluation)
+  - Mission type `outcome_intelligence`; IntentRouter patterns (“Capture campaign outcomes”)
+  - Tests: `npm run test:capabilities` · `npm run test:mission`
+- Direct Mail Execution ([SPEC-035](docs/specs/SPEC-035_Direct_Mail_Execution.md) / [ADR-022](docs/adr/ADR-022_Execution_Consumes_Approved_Artifacts.md))
+  - `packages/capabilities/directMailExecution/` — deterministic print → assemble → mail → response state machine
+  - Campaign lock after Printing; immutable audit; consumes approved revision only
 - Campaign Review Workspace ([SPEC-034](docs/specs/SPEC-034_Campaign_Review_Workspace.md) / [ADR-021](docs/adr/ADR-021_Human_Approval_Before_Execution.md))
   - `packages/capabilities/campaignReview/` — single operator checkpoint before execution
   - Per-prospect + bulk approve / reject / skip / edit / regenerate; validation blocks approval

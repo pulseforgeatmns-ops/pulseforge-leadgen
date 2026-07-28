@@ -9,7 +9,7 @@
 | **Created** | 2026-07-27 |
 | **Version** | v1.0.0 |
 | **Depends on** | SPEC-022, SPEC-023, SPEC-029 (Execution Engine consumes this channel), SPEC-033 (Mail Package Batch), SPEC-034 (Approved Campaign Revision / Execution Package), SPEC-032 (Mission Memory — timeline shapes), ADR-003, ADR-010, ADR-011, ADR-016, ADR-021, ADR-022 |
-| **Consumed by** | Mission Engine, Command Deck Operations, Max Workspace, Execution Engine (Direct Mail channel), Outcome Intelligence (future) |
+| **Consumed by** | Mission Engine, Command Deck Operations, Max Workspace, Execution Engine (Direct Mail channel), Outcome Intelligence (SPEC-036) |
 
 ## Objective
 
@@ -66,7 +66,7 @@ Without Direct Mail Execution, approved packages stall after review, or operator
 - Full Command Deck HTML UI chrome (v1 returns execution view model; UI binds later)
 - Full Mission Memory Postgres tables (SPEC-032) — local event shapes mirror the contract
 - Multi-channel Execution Engine orchestration beyond Direct Mail ([SPEC-029](SPEC-029_Execution_Engine.md))
-- Live Outcome Intelligence / Business Signals publish (stub shapes only)
+- Live Outcome Intelligence publish beyond stub shapes (SPEC-036 consumes execution outputs)
 
 ## Dependencies
 
@@ -242,7 +242,8 @@ type ResponseStatus =
 2. Direct Mail Execution capability + register builtin
 3. Mission type `direct_mail_execution`; IntentRouter patterns; playbook pin optional
 4. Tests: approved-revision gate, lock on printing, assembly, mailing, responses, audit immutability, metrics
-5. Later: Command Deck UI, Mission Memory live attach, Outcome Intelligence publish
+5. Later: Command Deck UI, Mission Memory live attach
+6. Outcome Intelligence (SPEC-036) consumes execution responses / metrics
 
 ## Migration Strategy
 
@@ -271,6 +272,7 @@ type ResponseStatus =
 
 - Command Deck Direct Mail Execution UI
 - Mission Memory live attach (SPEC-032)
-- Publish execution events to Outcome Intelligence / Business Signals / Opportunity Ranking / Client Analytics
+- Auto-ingest response events into Outcome Intelligence ([SPEC-036](SPEC-036_Outcome_Intelligence.md))
+- Publish execution events to Business Signals / Client Analytics
 - Carrier / postage API integration
 - Multi-channel Execution Engine orchestration (SPEC-029)

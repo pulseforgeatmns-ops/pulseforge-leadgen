@@ -68,6 +68,31 @@ function routeIntent(objective) {
  * @returns {string|null}
  */
 function matchMissionType(lower, original) {
+  // Operator Inbox (SPEC-037) — coordination surface
+  if (
+    /\boperator\s+inbox\b/.test(lower) ||
+    /\bshow\s+(my\s+)?inbox\b/.test(lower) ||
+    /\bopen\s+(the\s+)?inbox\b/.test(lower) ||
+    /\binbox\s+items?\b/.test(lower) ||
+    /\boutstanding\s+work\b/.test(lower) ||
+    /\bwhat\s+needs\s+(my\s+)?attention\b/.test(lower)
+  ) {
+    return MISSION_TYPES.OPERATOR_INBOX;
+  }
+
+  // Outcome Intelligence (SPEC-036) — after execution / response capture
+  if (
+    /\boutcome\s+intelligence\b/.test(lower) ||
+    /\bcapture\s+(campaign\s+)?outcomes?\b/.test(lower) ||
+    /\bcampaign\s+outcomes?\b/.test(lower) ||
+    /\blearnings?\s+from\s+(the\s+)?campaign\b/.test(lower) ||
+    /\boutcome\s+summary\b/.test(lower) ||
+    /\breview\s+(campaign\s+)?recommendations\b/.test(lower) ||
+    /\bconclude\s+(the\s+)?mission\b/.test(lower)
+  ) {
+    return MISSION_TYPES.OUTCOME_INTELLIGENCE;
+  }
+
   // Direct Mail Execution (SPEC-035) — before campaign review / mail packages
   if (
     /\bdirect\s+mail\s+execution\b/.test(lower) ||

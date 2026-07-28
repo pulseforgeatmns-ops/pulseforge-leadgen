@@ -29,6 +29,8 @@ const MISSION_TYPES = Object.freeze({
   MAIL_PACKAGE_GENERATION: 'mail_package_generation',
   CAMPAIGN_REVIEW: 'campaign_review',
   DIRECT_MAIL_EXECUTION: 'direct_mail_execution',
+  OUTCOME_INTELLIGENCE: 'outcome_intelligence',
+  OPERATOR_INBOX: 'operator_inbox',
 });
 
 const AUDIT_KINDS = Object.freeze({
@@ -68,6 +70,8 @@ const STAGE_LABELS = Object.freeze({
   mail_package_generator: 'Generating Mail Packages',
   campaign_review: 'Campaign Review',
   direct_mail_execution: 'Direct Mail Execution',
+  outcome_intelligence: 'Outcome Intelligence',
+  operator_inbox: 'Operator Inbox',
   review_required: 'Ready for Review',
 });
 

@@ -23,13 +23,15 @@ describe('SPEC-023 CapabilityRegistry', () => {
   it('registers and lists built-ins', () => {
     const registry = testRegistry();
     const list = registry.list();
-    assert.equal(list.length, 9);
+    assert.equal(list.length, 11);
     assert.ok(registry.get(BUILTIN_IDS.PROSPECT_DISCOVERY));
     assert.ok(registry.get(BUILTIN_IDS.CAMPAIGN_BUILDER));
     assert.ok(registry.get(BUILTIN_IDS.PROPOSAL_GENERATOR));
     assert.ok(registry.get(BUILTIN_IDS.MAIL_PACKAGE_GENERATOR));
     assert.ok(registry.get(BUILTIN_IDS.CAMPAIGN_REVIEW));
     assert.ok(registry.get(BUILTIN_IDS.DIRECT_MAIL_EXECUTION));
+    assert.ok(registry.get(BUILTIN_IDS.OUTCOME_INTELLIGENCE));
+    assert.ok(registry.get(BUILTIN_IDS.OPERATOR_INBOX));
   });
 
   it('discovers by outcome tags', () => {
@@ -1591,6 +1593,491 @@ describe('SPEC-035 Direct Mail Execution', () => {
     assert.equal(
       out.result.outputs.summary.status,
       dmx.EXECUTION_STATUS.MAILED
+    );
+  });
+});
+
+describe('SPEC-036 Outcome Intelligence', () => {
+  const oi = require('../outcomeIntelligence');
+
+  function sampleProspects() {
+    return [
+      {
+        prospectId: 'p1',
+        company: 'PM Alpha',
+        responseStatus: 'called',
+        mailed: true,
+        delivered: true,
+        attributes: { vertical: 'property_management', handwritten: true },
+        vertical: 'property_management',
+        industry: 'property_management',
+        region: 'manchester',
+      },
+      {
+        prospectId: 'p2',
+        company: 'PM Beta',
+        responseStatus: 'walkthrough_scheduled',
+        mailed: true,
+        attributes: { handwritten: true },
+        vertical: 'property_management',
+        industry: 'property_management',
+        region: 'manchester',
+      },
+      {
+        prospectId: 'p3',
+        company: 'PM Gamma',
+        responseStatus: 'closed_won',
+        mailed: true,
+        attributes: { handwritten: true, offer: 'audit', cta: 'call' },
+        vertical: 'property_management',
+        industry: 'property_management',
+        region: 'manchester',
+      },
+      {
+        prospectId: 'p4',
+        company: 'Dental One',
+        responseStatus: 'no_response',
+        mailed: true,
+        vertical: 'dental',
+        industry: 'dental',
+        region: 'manchester',
+      },
+      {
+        prospectId: 'p5',
+        company: 'Dental Two',
+        responseStatus: 'returned_mail',
+        mailed: true,
+        vertical: 'dental',
+        industry: 'dental',
+        region: 'nashua',
+      },
+      {
+        prospectId: 'p6',
+        company: 'Dental Three',
+        responseStatus: 'not_interested',
+        mailed: true,
+        vertical: 'dental',
+        industry: 'dental',
+        region: 'nashua',
+      },
+    ];
+  }
+
+  it('captures every execution outcome', async () => {
+    const store = oi.createInMemoryOutcomeIntelligenceStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      outcomeIntelligence: { outcomeIntelligenceStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.OUTCOME_INTELLIGENCE,
+      context: {
+        missionId: 'm_oi_1',
+        tenantId: '10',
+        clientId: 10,
+        objective: 'Capture outcomes for Campaign 001',
+        inputs: {
+          campaignId: 'camp_oi_1',
+          campaignName: 'Campaign 001',
+          prospects: sampleProspects(),
+          metrics: { mailed: 6 },
+          cost: 600,
+          revenue: 2400,
+          operator: 'jacob',
+        },
+      },
+    });
+
+    assert.equal(out.result.status, CAPABILITY_RESULT_STATUS.COMPLETED);
+    assert.ok(out.result.outputs.outcomes.length >= 6);
+    assert.ok(out.result.outputs.analytics);
+    assert.equal(out.result.outputs.analytics.mailed, 6);
+    assert.ok(out.result.outputs.analytics.responseRate > 0);
+    assert.ok(out.result.outputs.outcomeSummary);
+    assert.equal(out.result.outputs.outcomeSummary.kind, 'mission_outcome_summary');
+    assert.ok(
+      out.result.outputs.timeline.some(
+        (t) => t.kind === 'mission_timeline' && t.stage === 'outcome_intelligence'
+      )
+    );
+    assert.ok(
+      out.result.artifacts.some((a) => a.type === 'outcome_intelligence')
+    );
+  });
+
+  it('generates learnings only from evidence', async () => {
+    const store = oi.createInMemoryOutcomeIntelligenceStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      outcomeIntelligence: { outcomeIntelligenceStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.OUTCOME_INTELLIGENCE,
+      context: {
+        missionId: 'm_oi_learn',
+        tenantId: '10',
+        clientId: 10,
+        inputs: {
+          campaignId: 'camp_oi_learn',
+          prospects: sampleProspects(),
+          metrics: { mailed: 6 },
+        },
+      },
+    });
+
+    const learnings = out.result.outputs.learnings;
+    assert.ok(learnings.length > 0);
+    const backed = learnings.filter(
+      (l) => l.status === oi.LEARNING_STATUS.EVIDENCE_BACKED
+    );
+    const candidates = learnings.filter(
+      (l) => l.status === oi.LEARNING_STATUS.CANDIDATE
+    );
+    assert.ok(backed.length >= 1);
+    // Thin segments stay candidates
+    assert.ok(
+      backed.every((l) => l.sampleSize >= oi.MIN_EVIDENCE_SAMPLES)
+    );
+    assert.ok(
+      backed.every((l) => Math.abs(l.lift) >= oi.MIN_EVIDENCE_LIFT)
+    );
+    void candidates;
+  });
+
+  it('keeps recommendations pending until approval; apply requires approve', async () => {
+    const store = oi.createInMemoryOutcomeIntelligenceStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      outcomeIntelligence: { outcomeIntelligenceStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+
+    const first = await runner.run({
+      capabilityId: BUILTIN_IDS.OUTCOME_INTELLIGENCE,
+      context: {
+        missionId: 'm_oi_rec',
+        tenantId: '10',
+        clientId: 10,
+        inputs: {
+          campaignId: 'camp_oi_rec',
+          prospects: sampleProspects(),
+          metrics: { mailed: 6 },
+        },
+      },
+    });
+
+    const pending = first.result.outputs.recommendations.filter(
+      (r) => r.status === oi.RECOMMENDATION_STATUS.PENDING
+    );
+    assert.ok(pending.length >= 1);
+    assert.ok(pending.every((r) => r.evidenceBacked === true));
+
+    const recId = pending[0].id;
+
+    // Apply without approve must fail closed
+    const blocked = await runner.run({
+      capabilityId: BUILTIN_IDS.OUTCOME_INTELLIGENCE,
+      context: {
+        missionId: 'm_oi_rec',
+        tenantId: '10',
+        clientId: 10,
+        inputs: {
+          campaignId: 'camp_oi_rec',
+          outcomeActions: [
+            { type: 'apply_recommendation', recommendationId: recId },
+          ],
+          operator: 'jacob',
+        },
+      },
+    });
+    assert.ok(
+      blocked.result.outputs.actionErrors.includes('recommendation_not_approved') ||
+        blocked.result.status === CAPABILITY_RESULT_STATUS.PARTIAL
+    );
+
+    const approved = await runner.run({
+      capabilityId: BUILTIN_IDS.OUTCOME_INTELLIGENCE,
+      context: {
+        missionId: 'm_oi_rec',
+        tenantId: '10',
+        clientId: 10,
+        inputs: {
+          campaignId: 'camp_oi_rec',
+          outcomeActions: [
+            { type: 'approve_recommendation', recommendationId: recId },
+            { type: 'apply_recommendation', recommendationId: recId },
+            { type: 'conclude_mission', objectiveAchieved: true },
+          ],
+          operator: 'jacob',
+        },
+      },
+    });
+
+    const rec = approved.result.outputs.recommendations.find((r) => r.id === recId);
+    assert.equal(rec.status, oi.RECOMMENDATION_STATUS.APPLIED);
+    assert.equal(
+      approved.result.outputs.outcomeSummary.kind,
+      'mission_outcome_summary'
+    );
+    assert.equal(approved.result.outputs.outcomeSummary.objectiveAchieved, true);
+  });
+
+  it('feeds structured ranking feedback', async () => {
+    const store = oi.createInMemoryOutcomeIntelligenceStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      outcomeIntelligence: { outcomeIntelligenceStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.OUTCOME_INTELLIGENCE,
+      context: {
+        missionId: 'm_oi_rank',
+        tenantId: '10',
+        clientId: 10,
+        inputs: {
+          campaignId: 'camp_oi_rank',
+          prospects: sampleProspects(),
+        },
+      },
+    });
+
+    assert.ok(out.result.outputs.rankingFeedback.length > 0);
+    assert.ok(
+      out.result.outputs.rankingFeedback.every(
+        (f) => f.kind === 'ranking_feedback' && typeof f.scoreDelta === 'number'
+      )
+    );
+    assert.ok(out.result.outputs.historicalOutcomes.length >= 6);
+    assert.ok(
+      out.result.outputs.historicalOutcomes.some((h) => h.successful === true)
+    );
+  });
+
+  it('tracks personalization feedback dimensions', () => {
+    const outcomes = sampleProspects().map((p) =>
+      oi.buildOutcomeRecord({
+        ...p,
+        id: `out_${p.prospectId}`,
+        outcomeType: oi.RESPONSE_STATUS_TO_OUTCOME[p.responseStatus],
+      })
+    );
+    const feedback = oi.trackPersonalization(outcomes);
+    assert.equal(feedback.kind, 'personalization_feedback');
+    assert.ok(feedback.dimensions.personalization_facts.exposures >= 1);
+    assert.ok(feedback.dimensions.offer.exposures >= 1);
+  });
+});
+
+describe('SPEC-037 Operator Inbox', () => {
+  const inbox = require('../operatorInbox');
+
+  it('assembles a single operational inbox from capability sources', async () => {
+    const store = inbox.createInMemoryOperatorInboxStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      operatorInbox: { operatorInboxStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.OPERATOR_INBOX,
+      context: {
+        missionId: 'm_inbox_1',
+        tenantId: '10',
+        clientId: 10,
+        inputs: {
+          campaignId: 'camp_001',
+          campaignName: 'Campaign 001',
+          reviewSummary: { status: 'in_review' },
+          execution: { summary: { status: 'ready_to_print', campaignName: 'Campaign 001' } },
+          recommendations: [
+            {
+              id: 'rec_1',
+              summary: 'Increase property manager targeting.',
+              status: 'pending',
+              target: 'discovery_strategy',
+              evidenceBacked: true,
+            },
+          ],
+          validationResults: [
+            {
+              code: 'missing_address',
+              prospectId: 'p9',
+              message: 'Missing address — Acme LLC',
+            },
+          ],
+          operator: 'jacob',
+        },
+      },
+    });
+
+    assert.equal(out.result.status, CAPABILITY_RESULT_STATUS.COMPLETED);
+    assert.equal(out.result.outputs.coordinationOnly, true);
+    assert.ok(out.result.outputs.activeItems.length >= 3);
+    assert.ok(
+      out.result.outputs.activeItems.every((i) => i.deepLink && i.deepLink.workspace)
+    );
+    assert.ok(
+      out.result.outputs.timeline.some(
+        (t) => t.kind === 'mission_timeline' && t.stage === 'operator_inbox'
+      )
+    );
+    assert.ok(out.result.artifacts.some((a) => a.type === 'operator_inbox'));
+  });
+
+  it('deduplicates identical work items', () => {
+    const a = inbox.buildCandidate(
+      {
+        kind: inbox.INBOX_KINDS.CAMPAIGN_APPROVAL,
+        title: 'Campaign approval — Campaign 001',
+        sourceCapability: 'campaign_review',
+      },
+      { clientId: 10, missionId: 'm1', campaignId: 'camp_001' }
+    );
+    const b = inbox.buildCandidate(
+      {
+        kind: inbox.INBOX_KINDS.CAMPAIGN_APPROVAL,
+        title: 'Campaign approval — Campaign 001',
+        sourceCapability: 'mission_memory',
+      },
+      { clientId: 10, missionId: 'm1', campaignId: 'camp_001' }
+    );
+    const { items, merged, created } = inbox.dedupeInboxItems([a], [b]);
+    assert.equal(items.length, 1);
+    assert.equal(merged, 1);
+    assert.equal(created, 0);
+    assert.ok(items[0].sources.length >= 2);
+  });
+
+  it('applies deterministic prioritization', () => {
+    const now = new Date('2026-07-27T12:00:00Z');
+    const approval = inbox.buildInboxItem({
+      id: '1',
+      kind: inbox.INBOX_KINDS.CAMPAIGN_APPROVAL,
+      category: inbox.INBOX_CATEGORIES.APPROVAL_REQUIRED,
+    });
+    const action = inbox.buildInboxItem({
+      id: '2',
+      kind: inbox.INBOX_KINDS.PRINT_CAMPAIGN,
+      category: inbox.INBOX_CATEGORIES.ACTION_REQUIRED,
+    });
+    const completed = inbox.buildInboxItem({
+      id: '3',
+      kind: inbox.INBOX_KINDS.OUTCOME_SUMMARY_AVAILABLE,
+      category: inbox.INBOX_CATEGORIES.COMPLETED,
+    });
+    const overdue = inbox.buildInboxItem({
+      id: '4',
+      kind: inbox.INBOX_KINDS.CAMPAIGN_APPROVAL,
+      category: inbox.INBOX_CATEGORIES.APPROVAL_REQUIRED,
+      dueDate: '2026-07-20T00:00:00Z',
+    });
+
+    assert.equal(inbox.computePriority(approval, now), inbox.INBOX_PRIORITY.HIGH);
+    assert.equal(inbox.computePriority(action, now), inbox.INBOX_PRIORITY.NORMAL);
+    assert.equal(inbox.computePriority(completed, now), inbox.INBOX_PRIORITY.LOW);
+    assert.equal(inbox.computePriority(overdue, now), inbox.INBOX_PRIORITY.CRITICAL);
+
+    const sorted = inbox.sortInboxItems(
+      inbox.prioritizeItems([action, completed, overdue, approval], now)
+    );
+    assert.equal(sorted[0].id, '4');
+    assert.equal(sorted[sorted.length - 1].id, '3');
+  });
+
+  it('completing an item updates Mission Memory shapes and removes from active', async () => {
+    const store = inbox.createInMemoryOperatorInboxStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      operatorInbox: { operatorInboxStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+
+    const first = await runner.run({
+      capabilityId: BUILTIN_IDS.OPERATOR_INBOX,
+      context: {
+        missionId: 'm_inbox_complete',
+        tenantId: '10',
+        clientId: 10,
+        inputs: {
+          campaignId: 'camp_c',
+          campaignName: 'Campaign C',
+          workItems: [
+            {
+              kind: inbox.INBOX_KINDS.PRINT_CAMPAIGN,
+              title: 'Print campaign — Campaign C',
+              sourceCapability: 'direct_mail_execution',
+            },
+          ],
+        },
+      },
+    });
+
+    const itemId = first.result.outputs.activeItems[0].id;
+    assert.ok(itemId);
+
+    const done = await runner.run({
+      capabilityId: BUILTIN_IDS.OPERATOR_INBOX,
+      context: {
+        missionId: 'm_inbox_complete',
+        tenantId: '10',
+        clientId: 10,
+        inputs: {
+          inboxActions: [
+            { type: 'complete', itemId, notes: 'Printed offline' },
+          ],
+          operator: 'jacob',
+        },
+      },
+    });
+
+    assert.ok(
+      !done.result.outputs.activeItems.some((i) => i.id === itemId)
+    );
+    const completed = done.result.outputs.items.find((i) => i.id === itemId);
+    assert.equal(completed.status, inbox.INBOX_STATUS.COMPLETED);
+    assert.ok(done.result.outputs.completionEvents.length >= 1);
+    assert.ok(done.result.outputs.auditLog.some((a) => a.action === 'complete'));
+    assert.ok(
+      done.result.outputs.missionEvents.some(
+        (e) => e.eventType === 'inbox_completed'
+      )
+    );
+    assert.ok(
+      done.result.outputs.timeline.some((t) => t.status === 'item_completed')
+    );
+  });
+
+  it('refuses to perform workflow processing (ADR-024)', async () => {
+    const store = inbox.createInMemoryOperatorInboxStore();
+    const registry = createBuiltinRegistry({
+      discovery: { useFixture: true },
+      operatorInbox: { operatorInboxStore: store },
+    });
+    const runner = createCapabilityRunner({ registry });
+
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.OPERATOR_INBOX,
+      context: {
+        missionId: 'm_inbox_block',
+        tenantId: '10',
+        clientId: 10,
+        inputs: {
+          executeWorkflow: true,
+          runCapability: 'direct_mail_execution',
+        },
+      },
+    });
+
+    assert.equal(out.result.status, CAPABILITY_RESULT_STATUS.FAILED);
+    assert.ok(
+      out.result.errors.some((e) => e.code === 'inbox_must_not_perform_workflow')
     );
   });
 });

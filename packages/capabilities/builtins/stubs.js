@@ -439,6 +439,18 @@ function registerBuiltinCapabilities(registry, options = {}) {
   registry.register(
     createDirectMailExecutionCapability(options.directMailExecution || {})
   );
+  const {
+    createOutcomeIntelligenceCapability,
+  } = require('../outcomeIntelligence');
+  registry.register(
+    createOutcomeIntelligenceCapability(options.outcomeIntelligence || {})
+  );
+  const {
+    createOperatorInboxCapability,
+  } = require('../operatorInbox');
+  registry.register(
+    createOperatorInboxCapability(options.operatorInbox || {})
+  );
   return registry;
 }
 
@@ -468,6 +480,10 @@ module.exports = {
     .createCampaignReviewCapability,
   createDirectMailExecutionCapability: require('../directMailExecution')
     .createDirectMailExecutionCapability,
+  createOutcomeIntelligenceCapability: require('../outcomeIntelligence')
+    .createOutcomeIntelligenceCapability,
+  createOperatorInboxCapability: require('../operatorInbox')
+    .createOperatorInboxCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
   resolveDiscoveryDeps,
