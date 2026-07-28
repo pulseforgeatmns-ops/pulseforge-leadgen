@@ -95,7 +95,7 @@ class WorkspaceEngine {
     if (!input || !String(input.question || '').trim()) {
       throw new Error('question is required');
     }
-    const question = String(input.question).trim().slice(0, 2000);
+    const question = String(input.question).trim().slice(0, 100000);
     const rawContext = input.context || input.rawContext || null;
 
     let session = input.sessionId

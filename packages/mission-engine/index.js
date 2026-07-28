@@ -171,4 +171,6 @@ module.exports = {
   createArtifactBus,
   ArtifactRegistry,
   OperatorArtifactInjection,
+  detectOperatorProspectListInMessage:
+    OperatorArtifactInjection.detectOperatorProspectListInMessage,
 };
