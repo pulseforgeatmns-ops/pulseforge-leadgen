@@ -43,6 +43,8 @@ const BUILTIN_IDS = Object.freeze({
   MAIL_PACKAGE_GENERATOR: 'mail_package_generator',
   CAMPAIGN_REVIEW: 'campaign_review',
   DIRECT_MAIL_EXECUTION: 'direct_mail_execution',
+  OUTCOME_INTELLIGENCE: 'outcome_intelligence',
+  OPERATOR_INBOX: 'operator_inbox',
 });
 
 /**

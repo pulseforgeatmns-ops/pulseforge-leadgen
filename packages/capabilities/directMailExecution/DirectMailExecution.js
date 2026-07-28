@@ -388,8 +388,9 @@ function nextRecs(execution) {
   if (status === EXECUTION_STATUS.COMPLETED) {
     return [
       {
-        action: 'report',
-        summary: 'Direct mail campaign completed — review response metrics',
+        action: 'outcome_intelligence',
+        summary:
+          'Direct mail campaign completed — capture outcomes and generate learnings (SPEC-036)',
       },
     ];
   }

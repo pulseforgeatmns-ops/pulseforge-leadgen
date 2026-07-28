@@ -66,6 +66,8 @@ const TYPE_CAPABILITY_CHAINS = Object.freeze({
   [MISSION_TYPES.MAIL_PACKAGE_GENERATION]: [BUILTIN_IDS.MAIL_PACKAGE_GENERATOR],
   [MISSION_TYPES.CAMPAIGN_REVIEW]: [BUILTIN_IDS.CAMPAIGN_REVIEW],
   [MISSION_TYPES.DIRECT_MAIL_EXECUTION]: [BUILTIN_IDS.DIRECT_MAIL_EXECUTION],
+  [MISSION_TYPES.OUTCOME_INTELLIGENCE]: [BUILTIN_IDS.OUTCOME_INTELLIGENCE],
+  [MISSION_TYPES.OPERATOR_INBOX]: [BUILTIN_IDS.OPERATOR_INBOX],
 });
 
 class MissionPlanner {
@@ -161,7 +163,8 @@ class MissionPlanner {
       chain.includes(BUILTIN_IDS.PROPOSAL_GENERATOR) ||
       chain.includes(BUILTIN_IDS.MAIL_PACKAGE_GENERATOR) ||
       chain.includes(BUILTIN_IDS.CAMPAIGN_REVIEW) ||
-      chain.includes(BUILTIN_IDS.DIRECT_MAIL_EXECUTION);
+      chain.includes(BUILTIN_IDS.DIRECT_MAIL_EXECUTION) ||
+      chain.includes(BUILTIN_IDS.OUTCOME_INTELLIGENCE);
     if (needsPlaybook) {
       playbookSelection = this._playbookSelector.select({
         objective: objectiveText,
@@ -302,23 +305,31 @@ class MissionPlanner {
  * @param {string} type
  */
 function deriveTitle(objective, type) {
+  if (type === MISSION_TYPES.OPERATOR_INBOX) {
+    return 'Operator Inbox';
+  }
+  if (type === MISSION_TYPES.OUTCOME_INTELLIGENCE) {
+    const campaign = campaignLabel(objective);
+    if (campaign) return `Outcome Intelligence — Campaign ${campaign}`;
+    return 'Outcome Intelligence';
+  }
   if (type === MISSION_TYPES.DIRECT_MAIL_EXECUTION) {
-    const campaign = /campaign\s+(\d+|[\w-]+)/i.exec(objective);
-    if (campaign) return `Direct Mail Execution — Campaign ${campaign[1]}`;
+    const campaign = campaignLabel(objective);
+    if (campaign) return `Direct Mail Execution — Campaign ${campaign}`;
     return 'Direct Mail Execution';
   }
   if (type === MISSION_TYPES.CAMPAIGN_REVIEW) {
-    const campaign = /campaign\s+(\d+|[\w-]+)/i.exec(objective);
-    if (campaign) return `Campaign Review — Campaign ${campaign[1]}`;
+    const campaign = campaignLabel(objective);
+    if (campaign) return `Campaign Review — Campaign ${campaign}`;
     return 'Campaign Review';
   }
   if (type === MISSION_TYPES.MAIL_PACKAGE_GENERATION) {
-    const campaign = /campaign\s+(\d+|[\w-]+)/i.exec(objective);
-    if (campaign) return `Mail Packages — Campaign ${campaign[1]}`;
+    const campaign = campaignLabel(objective);
+    if (campaign) return `Mail Packages — Campaign ${campaign}`;
     return 'Mail Package Generation';
   }
-  const campaign = /campaign\s+(\d+|[\w-]+)/i.exec(objective);
-  if (campaign) return `Campaign ${campaign[1]}`;
+  const campaign = campaignLabel(objective);
+  if (campaign) return `Campaign ${campaign}`;
   if (type === MISSION_TYPES.OVERFLOW_PARTNER_SEARCH) return 'Overflow Partner Search';
   if (type === MISSION_TYPES.ACQUISITION_SEARCH) return 'Acquisition Search';
   if (type === MISSION_TYPES.PROSPECT_DISCOVERY) return 'Prospect Discovery';
@@ -335,6 +346,29 @@ function deriveTitle(objective, type) {
   return trimmed;
 }
 
+/**
+ * Prefer numeric campaign ids ("Campaign 001") over incidental words
+ * ("campaign outcomes").
+ * @param {string} objective
+ * @returns {string|null}
+ */
+function campaignLabel(objective) {
+  const numeric = /campaign\s+(\d+)/i.exec(objective);
+  if (numeric) return numeric[1];
+  const named = /campaign\s+([a-z][\w-]*)/i.exec(objective);
+  if (!named) return null;
+  const token = named[1].toLowerCase();
+  // Skip common non-id words that follow "campaign"
+  if (
+    /^(outcomes?|recommendations?|review|execution|mail|packages?|builder|creation)$/.test(
+      token
+    )
+  ) {
+    return null;
+  }
+  return named[1];
+}
+
 function createMissionPlanner(deps) {
   return new MissionPlanner(deps);
 }
@@ -344,4 +378,5 @@ module.exports = {
   createMissionPlanner,
   TYPE_CAPABILITY_CHAINS,
   deriveTitle,
+  campaignLabel,
 };

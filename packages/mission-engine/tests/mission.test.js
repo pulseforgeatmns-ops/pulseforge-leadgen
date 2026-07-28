@@ -80,6 +80,18 @@ describe('SPEC-022 IntentRouter', () => {
     assert.equal(d.kind, ROUTE_KINDS.MISSION);
     assert.equal(d.missionType, MISSION_TYPES.DIRECT_MAIL_EXECUTION);
   });
+
+  it('routes outcome intelligence to mission (SPEC-036)', () => {
+    const d = routeIntent('Capture campaign outcomes for Campaign 001');
+    assert.equal(d.kind, ROUTE_KINDS.MISSION);
+    assert.equal(d.missionType, MISSION_TYPES.OUTCOME_INTELLIGENCE);
+  });
+
+  it('routes operator inbox to mission (SPEC-037)', () => {
+    const d = routeIntent('Open the operator inbox');
+    assert.equal(d.kind, ROUTE_KINDS.MISSION);
+    assert.equal(d.missionType, MISSION_TYPES.OPERATOR_INBOX);
+  });
 });
 
 describe('SPEC-022 MissionPlanner + Executor', () => {
@@ -257,6 +269,38 @@ describe('SPEC-022 MissionPlanner + Executor', () => {
     );
     assert.ok(draft.clientPlaybook);
     assert.equal(draft.clientPlaybook.id, 'pb_anchor_cleaning');
+  });
+
+  it('plans Outcome Intelligence (SPEC-036)', () => {
+    const engine = testEngine();
+    const draft = engine.planner.plan({
+      objective: 'Capture campaign outcomes for Campaign 001',
+      tenantId: '10',
+      clientId: 10,
+    });
+    assert.equal(draft.type, MISSION_TYPES.OUTCOME_INTELLIGENCE);
+    assert.equal(draft.title, 'Outcome Intelligence — Campaign 001');
+    assert.deepEqual(
+      draft.plan.steps.map((s) => s.capabilityId),
+      [BUILTIN_IDS.OUTCOME_INTELLIGENCE]
+    );
+    assert.ok(draft.clientPlaybook);
+    assert.equal(draft.clientPlaybook.id, 'pb_anchor_cleaning');
+  });
+
+  it('plans Operator Inbox (SPEC-037)', () => {
+    const engine = testEngine();
+    const draft = engine.planner.plan({
+      objective: 'Show my operator inbox',
+      tenantId: '10',
+      clientId: 10,
+    });
+    assert.equal(draft.type, MISSION_TYPES.OPERATOR_INBOX);
+    assert.equal(draft.title, 'Operator Inbox');
+    assert.deepEqual(
+      draft.plan.steps.map((s) => s.capabilityId),
+      [BUILTIN_IDS.OPERATOR_INBOX]
+    );
   });
 });
 

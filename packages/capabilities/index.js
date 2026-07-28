@@ -34,6 +34,8 @@ const {
   createMailPackageGeneratorCapability,
   createCampaignReviewCapability,
   createDirectMailExecutionCapability,
+  createOutcomeIntelligenceCapability,
+  createOperatorInboxCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
 } = require('./builtins/stubs');
@@ -60,6 +62,8 @@ module.exports = {
   createMailPackageGeneratorCapability,
   createCampaignReviewCapability,
   createDirectMailExecutionCapability,
+  createOutcomeIntelligenceCapability,
+  createOperatorInboxCapability,
   registerBuiltinCapabilities,
   createBuiltinRegistry,
   discovery: require('./discovery'),
@@ -70,6 +74,8 @@ module.exports = {
   mail: require('./mail'),
   campaignReview: require('./campaignReview'),
   directMailExecution: require('./directMailExecution'),
+  outcomeIntelligence: require('./outcomeIntelligence'),
+  operatorInbox: require('./operatorInbox'),
 };
 
 // Re-export production capabilities at top level for convenience
@@ -85,6 +91,10 @@ module.exports.createCampaignReviewCapability =
   require('./campaignReview').createCampaignReviewCapability;
 module.exports.createDirectMailExecutionCapability =
   require('./directMailExecution').createDirectMailExecutionCapability;
+module.exports.createOutcomeIntelligenceCapability =
+  require('./outcomeIntelligence').createOutcomeIntelligenceCapability;
+module.exports.createOperatorInboxCapability =
+  require('./operatorInbox').createOperatorInboxCapability;
 module.exports.buildBusinessSignalsForProspect =
   require('./signals').buildBusinessSignalsForProspect;
 module.exports.buildBusinessSignalsStage =
