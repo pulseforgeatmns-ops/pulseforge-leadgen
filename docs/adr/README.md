@@ -36,6 +36,8 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-031](ADR-031_Review_Must_Be_Evidence_First.md) | Review Must Be Evidence-First | Accepted |
 | [ADR-032](ADR-032_Strategy_Before_Language.md) | Strategy Before Language | Accepted |
 | [ADR-033](ADR-033_Kalshi_Research_Stays_Isolated.md) | Kalshi Research Stays Isolated From Production Execution | Accepted |
+| [ADR-034](ADR-034_Intent_Before_Execution.md) | Intent Before Execution | Accepted |
+| [ADR-035](ADR-035_Plan_Around_State_Not_Sequence.md) | Plan Around State, Not Sequence | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

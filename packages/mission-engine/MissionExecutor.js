@@ -258,7 +258,12 @@ class MissionExecutor {
           missionId: mission.id,
           tenantId: mission.tenantId,
           clientId: mission.clientId,
-          objective: mission.objectiveText,
+          // ADR-034: capabilities consume Mission Plan, never raw operator text
+          objective: planningObjectiveFromMission(mission),
+          missionPlan:
+            (mission.plan && mission.plan.missionPlan) ||
+            mission.missionPlan ||
+            null,
           constraints: mission.constraints || {},
           inputs: {
             ...priorOutputs,
@@ -684,6 +689,25 @@ function normalizePreservedStepResult(prior, step) {
   };
 }
 
+/**
+ * ADR-034 — capabilities receive Mission Plan objective, never raw operator NL.
+ * @param {object} mission
+ * @returns {string}
+ */
+function planningObjectiveFromMission(mission) {
+  const plan =
+    (mission && mission.plan && mission.plan.missionPlan) ||
+    (mission && mission.missionPlan) ||
+    null;
+  if (plan && plan.objective) {
+    const parts = [String(plan.objective).trim()];
+    if (plan.subject) parts.push(`for ${plan.subject}`);
+    return parts.join(' ');
+  }
+  // Legacy missions without Mission Plan IR — use stored objective as-is
+  return String((mission && mission.objectiveText) || '').trim();
+}
+
 function createMissionExecutor(deps) {
   return new MissionExecutor(deps);
 }
@@ -691,4 +715,5 @@ function createMissionExecutor(deps) {
 module.exports = {
   MissionExecutor,
   createMissionExecutor,
+  planningObjectiveFromMission,
 };

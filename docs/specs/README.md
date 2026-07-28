@@ -56,6 +56,8 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-047](SPEC-047_Review_Workspace_Interaction_Layer.md) | Review Workspace Interaction Layer | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-048](SPEC-048_Sales_Intelligence_Engine.md) | Sales Intelligence Engine | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-049](SPEC-049_Kalshi_Research_Package.md) | Kalshi Research Package (monorepo isolation) | Implemented (v1 migration) | Unreleased |
+| [SPEC-050](SPEC-050_Deterministic_Mission_Planning.md) | Deterministic Mission Planning | Implemented (v1 thin slice) | v1.3.0 |
+| [SPEC-051](SPEC-051_Artifact_Resolution_and_State_Aware_Planning.md) | Artifact Resolution & State-Aware Planning | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

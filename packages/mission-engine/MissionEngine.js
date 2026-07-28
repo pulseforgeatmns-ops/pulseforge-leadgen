@@ -165,6 +165,23 @@ class MissionEngine {
       constraints.targetCount = detection.prospectCount;
     }
 
+    // SPEC-051: surface operator / catalog ProspectList before capability selection
+    const availableArtifacts = Array.isArray(input.availableArtifacts)
+      ? [...input.availableArtifacts]
+      : [];
+    if (detection && detection.detected && detection.prospectCount > 0) {
+      availableArtifacts.push({
+        type: 'ProspectList',
+        source: 'operator_import',
+        confidence: detection.confidence || 'High',
+        freshness: 'Operator Supplied',
+        compatible: true,
+        pending: !detection.autoInject,
+        producer: 'operator_import',
+        prospectCount: detection.prospectCount,
+      });
+    }
+
     const draft = this._planner.plan({
       objective: planningObjective,
       missionType: missionType || undefined,
@@ -172,6 +189,9 @@ class MissionEngine {
       clientId: input.clientId != null ? input.clientId : input.tenantId,
       constraints,
       createdBy: input.createdBy,
+      availableArtifacts: availableArtifacts.length ? availableArtifacts : null,
+      previousMissionArtifacts: input.previousMissionArtifacts || null,
+      workspaceArtifacts: input.workspaceArtifacts || null,
     });
 
     // Keep full operator prompt (including pasted list) on the Mission record.
@@ -227,6 +247,8 @@ class MissionEngine {
                 prospectCount: detection.prospectCount,
               }
             : null,
+        artifactResolution:
+          (mission.plan && mission.plan.artifactResolution) || null,
       },
     });
 
@@ -234,7 +256,8 @@ class MissionEngine {
       detection &&
       detection.autoInject &&
       detection.paste &&
-      this._missionHasDiscoveryStage(mission);
+      (this._missionHasDiscoveryStage(mission) ||
+        this._missionResolvedProspectList(mission));
 
     if (shouldAutoInject) {
       if (input.execute === false) {
@@ -329,6 +352,22 @@ class MissionEngine {
       (s) =>
         s.stageId === 'prospect_discovery' ||
         s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY
+    );
+  }
+
+  /**
+   * SPEC-051 — ProspectList already resolved at plan time (Discovery skipped).
+   * @param {object} mission
+   */
+  _missionResolvedProspectList(mission) {
+    const resolution =
+      (mission && mission.plan && mission.plan.artifactResolution) || null;
+    if (!resolution || !Array.isArray(resolution.resolved)) return false;
+    return resolution.resolved.some(
+      (r) =>
+        r &&
+        (r.type === 'ProspectList' || r.type === 'prospect_list') &&
+        r.compatible !== false
     );
   }
 
@@ -544,7 +583,8 @@ class MissionEngine {
 
   /**
    * SPEC-043 — operator injects a validated ProspectList onto the Artifact Bus.
-   * Marks Discovery Satisfied (Operator Supplied) and resumes at Company Intelligence.
+   * Marks Discovery Satisfied (Operator Supplied) when Discovery is on the plan,
+   * or publishes onto a plan that already resolved ProspectList (SPEC-051).
    *
    * @param {object} input
    * @param {string} input.missionId
@@ -571,7 +611,9 @@ class MissionEngine {
         s.stageId === 'prospect_discovery' ||
         s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY
     );
-    if (discoveryIdx < 0) {
+    const discoverySkipped =
+      discoveryIdx < 0 && this._missionResolvedProspectList(mission);
+    if (discoveryIdx < 0 && !discoverySkipped) {
       const err = new Error('Mission plan has no Discovery stage');
       err.code = 'no_discovery_stage';
       throw err;
@@ -585,7 +627,9 @@ class MissionEngine {
     const published = publishOperatorProspectList({
       bus,
       missionId: mission.id,
-      stageId: 'prospect_discovery',
+      stageId: discoverySkipped
+        ? 'operator_injection'
+        : 'prospect_discovery',
       prospects: input.prospects,
       csv: input.csv,
       paste: input.paste,
@@ -610,10 +654,11 @@ class MissionEngine {
     const outcomeLabel =
       STAGE_OUTCOME_LABELS[outcome] || 'Satisfied (Operator Supplied)';
 
-    // Preserve completed upstream/peer steps; satisfy Discovery; invalidate
-    // downstream that depended on a prior ProspectList when present.
+    // Preserve completed upstream/peer steps; satisfy Discovery when present;
+    // invalidate downstream that depended on a prior ProspectList when present.
+    const pivotIdx = discoveryIdx >= 0 ? discoveryIdx : -1;
     const nextSteps = steps.map((s, idx) => {
-      if (idx === discoveryIdx) {
+      if (pivotIdx >= 0 && idx === pivotIdx) {
         return {
           ...s,
           status: 'completed',
@@ -630,13 +675,18 @@ class MissionEngine {
           },
         };
       }
-      if (idx > discoveryIdx && s.status === 'completed') {
+      if (pivotIdx >= 0 && idx > pivotIdx && s.status === 'completed') {
         return { ...s, status: 'stale' };
       }
       if (
-        idx > discoveryIdx &&
+        pivotIdx >= 0 &&
+        idx > pivotIdx &&
         (s.status === 'blocked' || s.status === 'failed' || s.status === 'running')
       ) {
+        return { ...s, status: 'queued', error: undefined, blockingIssues: [] };
+      }
+      // SPEC-051: Discovery already omitted — keep queued downstream ready
+      if (discoverySkipped && (s.status === 'blocked' || s.status === 'failed')) {
         return { ...s, status: 'queued', error: undefined, blockingIssues: [] };
       }
       return s;
@@ -645,8 +695,8 @@ class MissionEngine {
     const payload = published.payload || {};
     const stepResult = {
       capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
-      name: 'Discovery',
-      stageId: 'prospect_discovery',
+      name: discoverySkipped ? 'ProspectList (resolved)' : 'Discovery',
+      stageId: discoverySkipped ? 'artifact_resolution' : 'prospect_discovery',
       outcome,
       outcomeLabel,
       operatorSupplied: true,
@@ -688,10 +738,33 @@ class MissionEngine {
     };
     delete nextDeliverables.pendingOperatorImport;
 
+    const resolutionPatch =
+      discoverySkipped && mission.plan && mission.plan.artifactResolution
+        ? {
+            artifactResolution: {
+              ...mission.plan.artifactResolution,
+              resolved: (
+                mission.plan.artifactResolution.resolved || []
+              ).map((r) =>
+                r.type === 'ProspectList' || r.type === 'prospect_list'
+                  ? {
+                      ...r,
+                      pending: false,
+                      artifactId: published.artifact.id,
+                      revision: published.artifact.revision,
+                      source: 'operator_import',
+                      sourceLabel: 'Operator Import',
+                    }
+                  : r
+              ),
+            },
+          }
+        : {};
+
     mission = await this._store.update({
       id: mission.id,
       status: MISSION_STATUS.WAITING,
-      plan: { ...mission.plan, steps: nextSteps },
+      plan: { ...mission.plan, steps: nextSteps, ...resolutionPatch },
       blockingIssues: [],
       stageReview: {
         capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
@@ -710,11 +783,16 @@ class MissionEngine {
         ],
         quarantinedArtifacts: [],
         operatorSupplied: true,
+        discoverySkippedByResolution: discoverySkipped,
       },
       progress: {
         ...(mission.progress || {}),
-        currentStage: `Discovery — ${outcomeLabel}`,
-        currentCapabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
+        currentStage: discoverySkipped
+          ? `ProspectList — ${outcomeLabel}`
+          : `Discovery — ${outcomeLabel}`,
+        currentCapabilityId: discoverySkipped
+          ? null
+          : BUILTIN_IDS.PROSPECT_DISCOVERY,
         stageOutcome: outcome,
         stageOutcomeLabel: outcomeLabel,
         counts: {
@@ -744,6 +822,7 @@ class MissionEngine {
         createdBy: input.createdBy || 'operator',
         provenance: published.artifact.metadata &&
           published.artifact.metadata.provenance,
+        discoverySkippedByResolution: discoverySkipped,
       },
     });
     await this._store.appendAudit({
@@ -753,8 +832,11 @@ class MissionEngine {
       payload: {
         outcome,
         outcomeLabel,
-        stageId: 'prospect_discovery',
+        stageId: discoverySkipped
+          ? 'artifact_resolution'
+          : 'prospect_discovery',
         artifactId: published.artifact.id,
+        discoverySkippedByResolution: discoverySkipped,
       },
     });
 

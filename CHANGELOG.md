@@ -11,6 +11,20 @@ All notable changes to this project are documented here. Format inspired by [Kee
   - Feature extraction + `feature-report` CLI; fee-aware replay/train-test tooling preserved
   - Isolated from production: not imported by Node services, not deployed, no live order path
   - Tests: `npm run test:kalshi-research` (pytest inside the package)
+- Artifact Resolution & State-Aware Planning ([SPEC-051](docs/specs/SPEC-051_Artifact_Resolution_and_State_Aware_Planning.md) / [ADR-035](docs/adr/ADR-035_Plan_Around_State_Not_Sequence.md))
+  - Artifact Resolver sits between Mission Plan and execution graph
+  - Required artifacts resolved before capability selection (Current Mission → Operator → Previous → Workspace → Capability)
+  - Discovery skipped when a compatible ProspectList already exists (e.g. `prospectList: current`)
+  - Capabilities declare `requires` / `produces`; planner records source, confidence, freshness, compatibility
+  - Review Workspace shows Artifact Resolution decisions
+  - Tests: `npm run test:mission` (artifactResolution.test.js)
+- Deterministic Mission Planning ([SPEC-050](docs/specs/SPEC-050_Deterministic_Mission_Planning.md) / [ADR-034](docs/adr/ADR-034_Intent_Before_Execution.md))
+  - Intent Parser classifies every sentence into Objective / Parameters / Execution / Options / Notes
+  - Mission Plan IR is the only source of executable nodes; Notes never execute
+  - Unknown capability text becomes Notes; reserved runtime fields protected
+  - MissionExecutor passes Mission Plan objective to capabilities (not raw operator NL)
+  - Review Workspace displays parsed Mission Plan before treating guidance as work
+  - Tests: `npm run test:mission` (deterministicMissionPlan.test.js)
 - Sales Intelligence Engine ([SPEC-048](docs/specs/SPEC-048_Sales_Intelligence_Engine.md) / [ADR-032](docs/adr/ADR-032_Strategy_Before_Language.md))
   - Structured `SalesIntelligenceProfile` between Company Intelligence and channel generators
   - Messaging strategy, evidence-linked personalization claims, quality gates, Human Test / Operator Confidence Score
