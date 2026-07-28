@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Capability Registry & Planner Diagnostics ([SPEC-054](docs/specs/SPEC-054_Capability_Registry_and_Planner_Diagnostics.md) / [ADR-038](docs/adr/ADR-038_Explain_Planning_Decisions.md))
+  - Capability contract: `version`, `enabled`, `missionAliases` on registry descriptors
+  - Registry queries: `producersOf`, `consumersOf`, `resolveAlias`, `suggestMatches`, `explainSelection`
+  - Compatibility Resolver ranks registered producers; missing producers emit deterministic diagnostics
+  - Unknown mission text → Notes with suggested matches (never bare "Unknown capability")
+  - Review Workspace **Planning Diagnostics** section (selected ✓ / blocked ✗ / recommended actions)
+  - Tests: `npm run test:mission` (plannerDiagnostics.test.js) · `npm run test:capabilities`
 - Business Intelligence Engine ([SPEC-053](docs/specs/SPEC-053_Business_Intelligence_Engine.md) / [ADR-037](docs/adr/ADR-037_Reason_About_Businesses_Not_Companies.md))
   - Analytical `BusinessIntelligenceProfile` replaces descriptive Company Intelligence as the first reasoning artifact
   - Deterministic Level 1–5 reasoning (facts → model → operations → buying psychology → sales input)

@@ -6,9 +6,10 @@ const {
   buildCapabilityResult,
   buildCapabilityContext,
 } = require('./types');
+const { formatMissingCapabilityError } = require('./CapabilityRegistry');
 
 /**
- * CapabilityRunner — execute only through the registry (SPEC-023).
+ * CapabilityRunner — execute only through the registry (SPEC-023 / SPEC-054).
  * No agent-specific branching.
  */
 class CapabilityRunner {
@@ -43,7 +44,17 @@ class CapabilityRunner {
     const capabilityId = String(input.capabilityId);
     const cap = this._registry.get(capabilityId);
     if (!cap) {
-      throw new Error(`Unknown capability: ${capabilityId}`);
+      throw new Error(formatMissingCapabilityError(capabilityId, this._registry));
+    }
+    if (cap.enabled === false) {
+      throw new Error(
+        [
+          `Capability disabled: ${cap.name} (${capabilityId})`,
+          'Status: Blocked',
+          'Possible Causes: Capability disabled',
+          `Recommended Action: Enable capability "${cap.name}" (${capabilityId}).`,
+        ].join(' ')
+      );
     }
 
     const context = buildCapabilityContext(input.context || {});

@@ -2,8 +2,8 @@
 
 /**
  * Intent Parser — natural language → Mission Plan IR (SPEC-050 / ADR-034).
- * Classifies every sentence into exactly one category.
  * Unknown capability requests become Notes — never new runtime nodes.
+ * SPEC-054: Notes carry registry-backed diagnostics + suggested matches.
  */
 
 const {
@@ -18,11 +18,13 @@ const {
  * Parse operator natural language into a deterministic Mission Plan.
  * @param {string} text
  * @param {object} [opts]
+ * @param {object} [opts.registry]
  * @returns {object} mission_plan
  */
 function parseIntent(text, opts = {}) {
   const sourceText = String(text || '').trim();
   const units = splitUnits(sourceText);
+  const registry = opts.registry || null;
   /** @type {{ text: string, category: string, detail?: object }[]} */
   const classifications = [];
 
@@ -44,7 +46,7 @@ function parseIntent(text, opts = {}) {
   };
 
   for (const unit of units) {
-    const classified = classifyUnit(unit);
+    const classified = classifyUnit(unit, { registry });
     classifications.push(classified);
 
     switch (classified.category) {
@@ -241,9 +243,10 @@ function parseIntent(text, opts = {}) {
  * @param {string} unit
  * @returns {{ text: string, category: string, detail: object }}
  */
-function classifyUnit(unit) {
+function classifyUnit(unit, opts = {}) {
   const text = String(unit || '').trim();
   const lower = text.toLowerCase();
+  const registry = opts.registry || null;
 
   // --- Options (before Notes so "Review." alone is an option) ---
   const matchedOptions = matchOptions(lower, text);
@@ -281,8 +284,11 @@ function classifyUnit(unit) {
   }
 
   // --- Execution / capability requests ---
-  if (looksLikeExecution(lower) || resolveExecutionRequest(text).known) {
-    const resolved = resolveExecutionFromUnit(text, lower);
+  if (
+    looksLikeExecution(lower) ||
+    resolveExecutionRequest(text, { registry }).known
+  ) {
+    const resolved = resolveExecutionFromUnit(text, lower, { registry });
     if (resolved.known) {
       return {
         text,
@@ -290,12 +296,15 @@ function classifyUnit(unit) {
         detail: resolved,
       };
     }
-    // Unknown capability → Notes (never a new node)
+    // Unknown → Notes with diagnostic (never a new node) — SPEC-054
     return {
       text,
       category: PLAN_CATEGORIES.NOTES,
       detail: {
-        note: resolved.note || `Unknown capability. ${ensurePeriod(text)}`,
+        note:
+          resolved.note ||
+          `No matching mission alias for "${text}".`,
+        diagnostic: resolved.diagnostic || null,
       },
     };
   }
@@ -477,7 +486,8 @@ function looksLikeExecution(lower) {
   );
 }
 
-function resolveExecutionFromUnit(text, lower) {
+function resolveExecutionFromUnit(text, lower, opts = {}) {
+  const registry = opts.registry || null;
   // "Execute the complete pipeline through Sales Intelligence" → SI (+ builder via objective)
   if (/\bcomplete\s+pipeline\b/.test(lower) || /\bthrough\s+sales\s+intelligence\b/.test(lower)) {
     return {
@@ -522,18 +532,20 @@ function resolveExecutionFromUnit(text, lower) {
     };
   }
 
-  const resolved = resolveExecutionRequest(text);
+  const resolved = resolveExecutionRequest(text, { registry });
   if (resolved.known) {
     return {
       known: true,
       stageId: resolved.stageId,
       capabilityId: resolved.capabilityId,
       label: resolved.stageId,
+      confidence: resolved.confidence,
     };
   }
   return {
     known: false,
-    note: `Unknown capability. ${ensurePeriod(text)}`,
+    note: resolved.note || `No matching mission alias for "${ensurePeriod(text)}"`,
+    diagnostic: resolved.diagnostic || null,
   };
 }
 
@@ -624,7 +636,7 @@ function pushExecution(execution, detail, notes) {
   if (execution.some((e) => e.stageId === stageId)) return;
   const resolved = resolveExecutionRequest(stageId);
   if (!resolved.known && !getStageSafe(stageId)) {
-    notes.push(detail.note || `Unknown capability: ${stageId}`);
+    notes.push(detail.note || `No matching mission alias for "${stageId}"`);
     return;
   }
   execution.push({

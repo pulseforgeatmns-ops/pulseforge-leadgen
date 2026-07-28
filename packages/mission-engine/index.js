@@ -103,6 +103,8 @@ const ArtifactRegistry = require('./ArtifactRegistry');
 const OperatorArtifactInjection = require('./OperatorArtifactInjection');
 const ArtifactResolver = require('./ArtifactResolver');
 const ArtifactValidator = require('./ArtifactValidator');
+const CompatibilityResolver = require('./CompatibilityResolver');
+const PlanningDiagnostics = require('./PlanningDiagnostics');
 const {
   parseIntent,
   classifyUnit,
@@ -190,6 +192,8 @@ module.exports = {
   OperatorArtifactInjection,
   ArtifactResolver,
   ArtifactValidator,
+  CompatibilityResolver,
+  PlanningDiagnostics,
   validateArtifactCandidate: ArtifactValidator.validateArtifactCandidate,
   looksLikeNaturalLanguage: ArtifactValidator.looksLikeNaturalLanguage,
   isViableCompanyName: ArtifactValidator.isViableCompanyName,
@@ -197,6 +201,14 @@ module.exports = {
   deriveRequiredArtifacts: ArtifactResolver.deriveRequiredArtifacts,
   acquisitionOptions: ArtifactResolver.acquisitionOptions,
   ARTIFACT_SOURCES: ArtifactResolver.ARTIFACT_SOURCES,
+  resolveCompatibleProducer: CompatibilityResolver.resolveCompatibleProducer,
+  resolveCompatibleProducers: CompatibilityResolver.resolveCompatibleProducers,
+  buildPlanningDiagnostics: PlanningDiagnostics.buildPlanningDiagnostics,
+  buildMissingProducerDiagnostic:
+    PlanningDiagnostics.buildMissingProducerDiagnostic,
+  buildUnknownMissionDiagnostic:
+    PlanningDiagnostics.buildUnknownMissionDiagnostic,
+  formatDiagnosticMessage: PlanningDiagnostics.formatDiagnosticMessage,
   detectOperatorProspectListInMessage:
     OperatorArtifactInjection.detectOperatorProspectListInMessage,
   // SPEC-050 / ADR-034

@@ -7,6 +7,10 @@
 
 const { getStage, stageLabel } = require('./StageLibrary');
 const { BUILTIN_IDS } = require('../capabilities');
+const {
+  buildUnknownMissionDiagnostic,
+  formatDiagnosticNote,
+} = require('./PlanningDiagnostics');
 
 const MISSION_PLAN_VERSION = '1.0.0';
 
@@ -143,18 +147,53 @@ function buildMissionPlan(partial = {}) {
 }
 
 /**
- * Resolve an execution request string against the capability/stage registry.
+ * Resolve an execution request string against the Capability Registry
+ * (preferred) and Stage Library aliases (SPEC-050 / SPEC-054).
  * @param {string} text
- * @returns {{ capabilityId: string|null, stageId: string|null, known: boolean, note: string|null }}
+ * @param {object} [opts]
+ * @param {object} [opts.registry]
+ * @returns {{
+ *   capabilityId: string|null,
+ *   stageId: string|null,
+ *   known: boolean,
+ *   note: string|null,
+ *   confidence: number,
+ *   diagnostic: object|null
+ * }}
  */
-function resolveExecutionRequest(text) {
+function resolveExecutionRequest(text, opts = {}) {
   const raw = String(text || '').trim();
   if (!raw) {
-    return { capabilityId: null, stageId: null, known: false, note: null };
+    return {
+      capabilityId: null,
+      stageId: null,
+      known: false,
+      note: null,
+      confidence: 0,
+      diagnostic: null,
+    };
   }
   const lower = raw.toLowerCase().replace(/\s+/g, ' ').trim();
+  const registry = opts.registry || null;
 
-  // Direct id
+  // SPEC-054: Capability Registry is authoritative for aliases
+  if (registry && typeof registry.resolveAlias === 'function') {
+    const match = registry.resolveAlias(raw);
+    if (match.known && match.capabilityId) {
+      const stage = getStage(match.capabilityId);
+      return {
+        capabilityId: match.capabilityId,
+        stageId: (stage && stage.id) || match.capabilityId,
+        known: true,
+        note: null,
+        confidence: match.confidence,
+        diagnostic: null,
+        matchKind: match.matchKind,
+      };
+    }
+  }
+
+  // Direct stage id
   if (getStage(lower)) {
     const stage = getStage(lower);
     return {
@@ -162,10 +201,12 @@ function resolveExecutionRequest(text) {
       stageId: stage.id,
       known: true,
       note: null,
+      confidence: 1,
+      diagnostic: null,
     };
   }
 
-  // Alias table
+  // Legacy alias table (compat when registry absent)
   if (EXECUTION_ALIASES[lower]) {
     const id = EXECUTION_ALIASES[lower];
     const stage = getStage(id);
@@ -174,6 +215,8 @@ function resolveExecutionRequest(text) {
       stageId: (stage && stage.id) || id,
       known: true,
       note: null,
+      confidence: 0.95,
+      diagnostic: null,
     };
   }
 
@@ -187,16 +230,46 @@ function resolveExecutionRequest(text) {
         stageId: (stage && stage.id) || id,
         known: true,
         note: null,
+        confidence: 0.85,
+        diagnostic: null,
       };
     }
   }
+
+  const suggestions = registry
+    ? registry.suggestMatches(raw, { limit: 5 })
+    : defaultSuggestedMatches(raw);
+  const diagnostic = buildUnknownMissionDiagnostic({
+    input: raw,
+    suggestedMatches: suggestions,
+  });
 
   return {
     capabilityId: null,
     stageId: null,
     known: false,
-    note: `Unknown capability: ${raw}`,
+    note: formatDiagnosticNote(diagnostic),
+    confidence: 0,
+    diagnostic,
   };
+}
+
+function defaultSuggestedMatches(text) {
+  const lower = String(text || '').toLowerCase();
+  const pool = [
+    { id: BUILTIN_IDS.CAMPAIGN_BUILDER, name: 'Campaign Builder' },
+    { id: BUILTIN_IDS.MAIL_PACKAGE_GENERATOR, name: 'Direct Mail Campaign' },
+    { id: BUILTIN_IDS.CAMPAIGN_REVIEW, name: 'Review Campaign' },
+    {
+      id: BUILTIN_IDS.BUSINESS_INTELLIGENCE,
+      name: 'Business Intelligence',
+    },
+    { id: BUILTIN_IDS.PROSPECT_DISCOVERY, name: 'Prospect Discovery' },
+  ];
+  if (/\bcampaign\b/.test(lower) || /\bmail\b/.test(lower) || /\breview\b/.test(lower)) {
+    return pool.slice(0, 3);
+  }
+  return pool.slice(0, 3);
 }
 
 /**
@@ -234,7 +307,7 @@ function validateMissionPlan(plan, opts = {}) {
     if (!resolved.known) {
       errors.push(
         resolved.note ||
-          `Unknown capability in execution: ${JSON.stringify(item)}`
+          `Execution request has no matching mission alias: ${JSON.stringify(item)}`
       );
       continue;
     }

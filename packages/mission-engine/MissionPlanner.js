@@ -43,6 +43,12 @@ const {
   removeStage,
   replaceStage,
 } = require('./ExecutionGraph');
+const {
+  buildPlanningDiagnostics,
+  buildCapabilityDecision,
+  buildUnknownMissionDiagnostic,
+} = require('./PlanningDiagnostics');
+const { formatMissingCapabilityError } = require('../capabilities/CapabilityRegistry');
 
 /**
  * @deprecated SPEC-041 — retained as read-only seed mirror for tests/compat.
@@ -200,12 +206,14 @@ class MissionPlanner {
     const objectiveText = String(input.objective).trim();
 
     // SPEC-050 / ADR-034: compile NL → Mission Plan IR before any graph work
+    // SPEC-054: pass registry for alias resolution + diagnostics
     const missionPlan =
       input.missionPlan ||
       parseIntent(objectiveText, {
         registeredCapabilityIds: this._registry
           ? this._registry.list().map((c) => c.id)
           : undefined,
+        registry: this._registry,
       });
     const planValidation =
       missionPlan.validation ||
@@ -243,6 +251,7 @@ class MissionPlanner {
       constraints: input.constraints,
       extraStages: input.extraStages,
       removeStages: input.removeStages,
+      registry: this._registry,
       availableArtifacts:
         input.availableArtifacts ||
         (input.constraints && input.constraints.availableArtifacts) ||
@@ -424,6 +433,7 @@ class MissionPlanner {
     }
 
     const missing = [];
+    const missingDiagnostics = [];
     const steps = [];
     let totalDuration = 0;
     let confidenceSum = 0;
@@ -434,6 +444,35 @@ class MissionPlanner {
       const cap = this._registry.get(capabilityId);
       if (!cap) {
         missing.push(capabilityId);
+        missingDiagnostics.push(
+          buildCapabilityDecision({
+            capabilityId,
+            name: capabilityId,
+            selected: false,
+            status: 'Blocked',
+            reason: 'Capability not registered',
+            possibleCauses: ['Capability not registered'],
+            recommendedAction: formatMissingCapabilityError(
+              capabilityId,
+              this._registry
+            ),
+          })
+        );
+        continue;
+      }
+      if (cap.enabled === false) {
+        missing.push(capabilityId);
+        missingDiagnostics.push(
+          buildCapabilityDecision({
+            capabilityId,
+            name: cap.name,
+            selected: false,
+            status: 'Blocked',
+            reason: 'Capability disabled',
+            possibleCauses: ['Capability disabled'],
+            recommendedAction: `Enable capability "${cap.name}" (${capabilityId}).`,
+          })
+        );
         continue;
       }
       const estimate = cap.estimate({
@@ -475,6 +514,13 @@ class MissionPlanner {
     const now = new Date().toISOString();
     const explanation = explainPlan(graph);
     const missionPlanSummary = summarizeMissionPlan(missionPlan);
+    const planningDiagnostics = buildPlannerDiagnosticsPayload({
+      steps,
+      missingDiagnostics,
+      graph,
+      missionPlan,
+      registry: this._registry,
+    });
 
     return {
       id: input.id || newId('msn'),
@@ -560,6 +606,7 @@ class MissionPlanner {
         reviewGates: graph.reviewGates,
         reasoning: graph.reasoning,
         artifactResolution: graph.artifactResolution || null,
+        planningDiagnostics,
       },
       confidence: steps.length ? confidenceSum / steps.length : 0,
       durationEstimateMs: totalDuration,
@@ -722,6 +769,62 @@ class MissionPlanner {
       auditKind: AUDIT_KINDS.PLAN,
     };
   }
+}
+
+/**
+ * SPEC-054 — assemble Planning Diagnostics for Review Workspace.
+ * @param {object} input
+ */
+function buildPlannerDiagnosticsPayload(input = {}) {
+  const steps = Array.isArray(input.steps) ? input.steps : [];
+  const missingDiagnostics = Array.isArray(input.missingDiagnostics)
+    ? input.missingDiagnostics
+    : [];
+  const graph = input.graph || {};
+  const missionPlan = input.missionPlan || {};
+  const registry = input.registry || null;
+
+  const decisions = steps.map((s) =>
+    buildCapabilityDecision({
+      capabilityId: s.capabilityId,
+      name: s.name || s.stageLabel || s.capabilityId,
+      selected: true,
+      reason: s.reason || 'Selected by planner',
+    })
+  );
+
+  const blocked = [...missingDiagnostics];
+  const resolution = graph.artifactResolution || {};
+  for (const d of resolution.diagnostics || []) {
+    blocked.push(d);
+  }
+  for (const a of resolution.acquisitions || []) {
+    if (a.strategy === 'unavailable' && a.diagnostic) {
+      if (!blocked.includes(a.diagnostic)) blocked.push(a.diagnostic);
+    }
+  }
+
+  const missionSegments = [];
+  for (const note of missionPlan.notes || []) {
+    const text = String(note || '');
+    if (/no matching mission alias/i.test(text)) {
+      const suggestions = registry
+        ? registry.suggestMatches(text, { limit: 5 })
+        : [];
+      missionSegments.push(
+        buildUnknownMissionDiagnostic({
+          input: text,
+          suggestedMatches: suggestions,
+        })
+      );
+    }
+  }
+
+  return buildPlanningDiagnostics({
+    decisions,
+    blocked,
+    missionSegments,
+  });
 }
 
 /**
