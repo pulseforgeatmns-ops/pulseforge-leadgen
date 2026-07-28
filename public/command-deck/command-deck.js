@@ -617,8 +617,92 @@
       needsReview,
       ready,
       packages: pkgs,
-      warningItems: warns,
     };
+  }
+
+  /**
+   * SPEC-050 — show parsed Mission Plan before / alongside execution artifacts.
+   * Operators verify intent was interpreted correctly; Notes never look like stages.
+   */
+  function renderMissionPlanHtml(missionPlan, summary) {
+    const plan = missionPlan || null;
+    const sum = summary || null;
+    if (!plan && !sum) return '';
+
+    const objective =
+      (sum && sum.objective) || (plan && plan.objective) || '';
+    const subject = (sum && sum.subject) || (plan && plan.subject) || null;
+    const execution = (sum && sum.execution) || [];
+    const parameters =
+      (sum && sum.parameters) || (plan && plan.parameters) || {};
+    const notes =
+      (sum && sum.notes) ||
+      (plan && Array.isArray(plan.notes) ? plan.notes : []) ||
+      [];
+    const reviewEnabled =
+      (sum && sum.reviewEnabled) ||
+      (plan && plan.options && plan.options.review) ||
+      false;
+
+    const paramRows = Object.entries(parameters)
+      .filter(([, v]) => v != null && String(v).trim())
+      .map(
+        ([k, v]) =>
+          `<div class="msn-si-row"><dt>${escapeHtml(
+            formatMissionPlanLabel(k)
+          )}</dt><dd>${escapeHtml(String(v))}</dd></div>`
+      )
+      .join('');
+
+    const execLabel = Array.isArray(execution)
+      ? execution.filter(Boolean).join(' → ')
+      : String(execution || '');
+
+    return `<section class="msn-block msn-mission-plan" id="msnMissionPlan">
+      <h3>Mission Plan</h3>
+      <p class="msn-objective-meta">Parsed intent — approve or edit before treating Notes as work.</p>
+      <dl class="msn-si-dl">
+        <div class="msn-si-row"><dt>Objective</dt><dd>${escapeHtml(
+          objective || '—'
+        )}</dd></div>
+        ${
+          subject
+            ? `<div class="msn-si-row"><dt>Subject</dt><dd>${escapeHtml(
+                subject
+              )}</dd></div>`
+            : ''
+        }
+        <div class="msn-si-row"><dt>Execution</dt><dd>${escapeHtml(
+          execLabel || '—'
+        )}</dd></div>
+        ${paramRows}
+        <div class="msn-si-row"><dt>Review</dt><dd>${escapeHtml(
+          reviewEnabled ? 'Enabled' : 'Off'
+        )}</dd></div>
+      </dl>
+      ${
+        notes.length
+          ? `<h4 class="msn-subhead">Notes</h4>
+        <ul class="msn-bucket-list">${notes
+          .map((n) => `<li><span>${escapeHtml(String(n))}</span></li>`)
+          .join('')}</ul>
+        <p class="msn-objective-meta">Notes are operator guidance only — they never become executable stages.</p>`
+          : ''
+      }
+    </section>`;
+  }
+
+  function formatMissionPlanLabel(key) {
+    const labels = {
+      prospectList: 'ProspectList',
+      client: 'Client',
+      campaign: 'Campaign',
+      market: 'Market',
+      budget: 'Budget',
+      tenant: 'Tenant',
+      targetCount: 'Target count',
+    };
+    return labels[key] || String(key);
   }
 
   function filteredQueuePackages(session) {
@@ -2103,6 +2187,11 @@
       const objectiveRaw = String(mission.objectiveText || '');
       const objectiveFirstLine =
         objectiveRaw.split(/\r?\n/).find((l) => String(l).trim()) || 'Mission objective';
+      const missionPlan =
+        (mission.plan && mission.plan.missionPlan) || mission.missionPlan || null;
+      const missionPlanSummary =
+        (mission.plan && mission.plan.missionPlanSummary) || null;
+      const missionPlanHtml = renderMissionPlanHtml(missionPlan, missionPlanSummary);
       const objectiveHtml = `<section class="msn-block" id="msnObjectiveBlock">
           <h3>Objective</h3>
           <div data-msn-objective-collapsed>
@@ -2428,6 +2517,7 @@
         ${reviewHtml}
         ${renderWarningInspectorHtml(warningItems)}
         ${renderReviewQueueHtml(msnReviewSession)}
+        ${missionPlanHtml}
         ${objectiveHtml}
         ${inputsHtml}
         <section class="msn-block">
