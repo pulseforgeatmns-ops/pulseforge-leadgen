@@ -1918,6 +1918,13 @@
     askWorkspace(els.mxAskInput?.value || '');
   });
 
+  // Enter sends; Shift+Enter keeps a newline so multi-row ProspectList pastes survive.
+  els.mxAskInput?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+    event.preventDefault();
+    els.mxAskForm?.requestSubmit();
+  });
+
   els.workspace?.querySelectorAll('[data-mx-close]').forEach((node) => {
     node.addEventListener('click', () => closeWorkspace());
   });

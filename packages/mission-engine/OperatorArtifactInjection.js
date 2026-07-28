@@ -102,10 +102,10 @@ function normalizeProspectRow(raw, index = 0) {
  * @returns {object[]}
  */
 function parseDelimitedProspects(text) {
-  const raw = String(text || '').replace(/^\uFEFF/, '').trim();
+  const raw = normalizeNewlines(String(text || '').replace(/^\uFEFF/, '')).trim();
   if (!raw) return [];
 
-  const lines = raw.split(/\r?\n/).filter((line) => String(line).trim());
+  const lines = raw.split('\n').filter((line) => String(line).trim());
   if (!lines.length) return [];
 
   const delimiter = detectDelimiter(lines[0]);
@@ -135,23 +135,85 @@ function parseDelimitedProspects(text) {
     return rows;
   }
 
-  return lines.map((line, i) => {
+  // Headerless: one company per line, OR a single line of company names.
+  const expanded = [];
+  lines.forEach((line) => {
     const cells = splitDelimitedLine(line, delimiter).map((c) =>
       String(c).trim()
     );
-    if (cells.length === 1) return normalizeProspectRow(cells[0], i);
-    return normalizeProspectRow(
-      {
-        companyName: cells[0],
-        website: cells[1],
-        address: cells[2],
-        phone: cells[3],
-        contactName: cells[4],
-        notes: cells[5],
-      },
-      i
+    if (!cells.length || cells.every((c) => !c)) return;
+    if (cells.length === 1) {
+      expanded.push(normalizeProspectRow(cells[0], expanded.length));
+      return;
+    }
+    if (looksLikeCompanyNameList(cells)) {
+      cells.filter(Boolean).forEach((name) => {
+        expanded.push(normalizeProspectRow(name, expanded.length));
+      });
+      return;
+    }
+    expanded.push(
+      normalizeProspectRow(
+        {
+          companyName: cells[0],
+          website: cells[1],
+          address: cells[2],
+          phone: cells[3],
+          contactName: cells[4],
+          notes: cells[5],
+        },
+        expanded.length
+      )
     );
   });
+  return expanded;
+}
+
+/**
+ * True when every cell looks like a company name (not URL / phone / address).
+ * Handles "Acme Law, Beta CPA, Gamma LLC" pastes without a header row.
+ * @param {string[]} cells
+ */
+function looksLikeCompanyNameList(cells) {
+  const list = (Array.isArray(cells) ? cells : []).filter((c) =>
+    String(c || '').trim()
+  );
+  if (list.length < 2) return false;
+  return list.every((c) => looksLikeCompanyNameOnly(c));
+}
+
+function looksLikeCompanyNameOnly(value) {
+  const s = String(value || '').trim();
+  if (!s) return false;
+  if (looksLikeWebsite(s) || looksLikePhone(s)) return false;
+  // Street-like addresses usually start with a digit.
+  if (/^\d+\s+\S/.test(s)) return false;
+  return true;
+}
+
+function looksLikeWebsite(value) {
+  const s = String(value || '').trim();
+  if (!s) return false;
+  return /^(https?:\/\/|www\.)/i.test(s) || /\.[a-z]{2,}(\/|$)/i.test(s);
+}
+
+function looksLikePhone(value) {
+  const s = String(value || '').trim();
+  if (!s) return false;
+  const digits = s.replace(/\D/g, '');
+  return digits.length >= 7 && /^[\d\s()+./-]+$/.test(s);
+}
+
+/**
+ * Normalize CR/CRLF/Unicode line separators so Excel / Mac pastes keep one row
+ * per prospect instead of collapsing into a single line.
+ * @param {string} text
+ */
+function normalizeNewlines(text) {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\u2028|\u2029/g, '\n');
 }
 
 /**
@@ -441,10 +503,10 @@ const OBJECTIVE_ONLY_LINE =
  * @returns {{ block: string, startLine: number, endLine: number, hasHeader: boolean }|null}
  */
 function extractProspectBlock(text) {
-  const raw = String(text || '').replace(/^\uFEFF/, '');
+  const raw = normalizeNewlines(String(text || '').replace(/^\uFEFF/, ''));
   if (!raw.trim()) return null;
 
-  const lines = raw.split(/\r?\n/);
+  const lines = raw.split('\n');
   let start = -1;
   let hasHeader = false;
 
@@ -518,8 +580,8 @@ function extractProspectBlock(text) {
 
   if (!hasHeader) {
     const firstCells = splitDelimitedLine(
-      block.split(/\r?\n/)[0],
-      detectDelimiter(block.split(/\r?\n/)[0])
+      block.split('\n')[0],
+      detectDelimiter(block.split('\n')[0])
     ).map((c) => String(c).trim());
     hasHeader = firstCells.some((c) =>
       FIELD_ALIASES.companyName.includes(normalizeHeaderKey(c))
@@ -616,7 +678,7 @@ function detectOperatorProspectListInMessage(text) {
  * @param {{ startLine: number, endLine: number }} extracted
  */
 function stripProspectBlock(text, extracted) {
-  const lines = String(text || '').split(/\r?\n/);
+  const lines = normalizeNewlines(String(text || '')).split('\n');
   if (!extracted || extracted.startLine == null) return String(text || '');
   const kept = lines.filter(
     (_line, i) => i < extracted.startLine || i > extracted.endLine

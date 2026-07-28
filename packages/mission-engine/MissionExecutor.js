@@ -177,6 +177,11 @@ class MissionExecutor {
             ...outputs,
           };
         }
+        // Keep Satisfied (Operator Supplied) Discovery outputs in the final
+        // stepResults trail so resume / Workspace still show the full list.
+        if (priorDeliverable) {
+          stepResults.push(normalizePreservedStepResult(priorDeliverable, step));
+        }
         continue;
       }
 
@@ -640,6 +645,43 @@ function artifactEventToAuditKind(type) {
     default:
       return null;
   }
+}
+
+/**
+ * Normalize a previously completed stepResult (e.g. operator-injected Discovery)
+ * into the shape MissionExecutor pushes for newly run steps.
+ * @param {object} prior
+ * @param {object} step
+ */
+function normalizePreservedStepResult(prior, step) {
+  const outputs =
+    (prior && prior.outputs) ||
+    (prior && prior.result && prior.result.outputs) ||
+    {};
+  const evidence =
+    (prior && prior.evidence) ||
+    (prior && prior.result && prior.result.evidence) ||
+    [];
+  return {
+    capabilityId: prior.capabilityId || step.capabilityId,
+    name: prior.name || step.name || step.stageLabel,
+    result: {
+      status: CAPABILITY_RESULT_STATUS.COMPLETED,
+      outputs,
+      evidence,
+      warnings: prior.warnings || [],
+      errors: [],
+      artifacts: prior.artifacts || prior.publishedArtifacts || [],
+    },
+    outcome: prior.outcome || step.outcome || null,
+    outcomeLabel: prior.outcomeLabel || step.outcomeLabel || null,
+    publishedArtifacts: prior.publishedArtifacts || [],
+    quarantinedArtifacts: prior.quarantinedArtifacts || [],
+    busArtifacts: prior.busArtifacts || [],
+    validation: prior.validation || null,
+    warnings: prior.warnings || [],
+    reviewSummary: prior.reviewSummary || null,
+  };
 }
 
 function createMissionExecutor(deps) {

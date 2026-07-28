@@ -89,13 +89,13 @@
 
       <form id="mxAskForm" class="mx-ask-form" autocomplete="off">
         <label class="pf-sr-only" for="mxAskInput">Ask Max</label>
-        <input
+        <textarea
           id="mxAskInput"
           class="mx-ask-input"
-          type="text"
-          maxlength="2000"
-          placeholder="Investigate…"
-        >
+          rows="3"
+          maxlength="100000"
+          placeholder="Investigate… Paste a prospect list on new lines to import."
+        ></textarea>
         <button type="submit" class="mx-ask-submit" id="mxAskSend">Ask</button>
       </form>
     </div>
