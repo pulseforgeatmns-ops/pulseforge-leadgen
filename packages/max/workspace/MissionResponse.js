@@ -96,8 +96,13 @@ function composeMissionResponse(input) {
     mission,
     card,
     reasoning: [
-      'Routed as a business objective through the Mission Engine (not Market Intelligence).',
+      input.executionDomain === 'mission_diagnostics'
+        ? 'Routed as Mission Diagnostics through Intent Understanding → Mission Engine.'
+        : 'Routed as a business objective through the Mission Engine (not Market Intelligence).',
       `Mission type: ${mission.type}.`,
+      input.executionDomain
+        ? `Execution domain: ${input.executionDomain}.`
+        : null,
       mission.discoveryProfile
         ? `Discovery Profile: ${mission.discoveryProfile.name} v${mission.discoveryProfile.version}.`
         : null,
@@ -121,6 +126,9 @@ function composeMissionResponse(input) {
         : null,
     ].filter(Boolean),
     recommendedExtras,
+    metadataExtras: input.executionDomain
+      ? { executionDomain: input.executionDomain, surface: 'mission_workspace' }
+      : { surface: 'mission_workspace' },
   });
 }
 
@@ -207,6 +215,12 @@ function composeActiveMissionResponse(input) {
       activeMissionAction: action,
       classification: resolution.classification,
       resolutionPath: resolution.resolutionPath,
+      ...(input.executionDomain
+        ? {
+            executionDomain: input.executionDomain,
+            surface: 'mission_workspace',
+          }
+        : { surface: 'mission_workspace' }),
     },
   });
 }

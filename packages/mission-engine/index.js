@@ -32,6 +32,7 @@ const {
   routeIntent,
   matchMissionType,
   isIntelligenceOnly,
+  routeFromIntentUnderstanding,
 } = require('./IntentRouter');
 const {
   MissionPlanner,
@@ -183,6 +184,7 @@ module.exports = {
   routeIntent,
   matchMissionType,
   isIntelligenceOnly,
+  routeFromIntentUnderstanding,
   classifyMessage,
   looksLikeNewObjective,
   MissionPlanner,

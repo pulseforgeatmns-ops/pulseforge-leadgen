@@ -30,6 +30,14 @@ const {
   WorkspaceEngine,
   createWorkspaceEngine,
 } = require('./WorkspaceEngine');
+const {
+  EXECUTION_DOMAINS,
+  MISSION_DOMAINS,
+  selectExecutionDomain,
+  attachDomainContext,
+  isMissionDomain,
+  toRouteDecision,
+} = require('./ExecutionDomain');
 
 module.exports = {
   PAGE_TYPES,
@@ -54,4 +62,10 @@ module.exports = {
   formatDeterministicProse,
   WorkspaceEngine,
   createWorkspaceEngine,
+  EXECUTION_DOMAINS,
+  MISSION_DOMAINS,
+  selectExecutionDomain,
+  attachDomainContext,
+  isMissionDomain,
+  toRouteDecision,
 };

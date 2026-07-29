@@ -11,7 +11,13 @@ const {
 } = require('./MissionResponse');
 const { PresentationEngine } = require('./PresentationEngine');
 const {
-  routeIntent,
+  selectExecutionDomain,
+  attachDomainContext,
+  isMissionDomain,
+  toRouteDecision,
+  EXECUTION_DOMAINS,
+} = require('./ExecutionDomain');
+const {
   ROUTE_KINDS,
   missionEnabled,
   activeMissionResolverEnabled,
@@ -19,8 +25,16 @@ const {
 
 /**
  * WorkspaceEngine — SPEC-009 + SPEC-022 + SPEC-039 routing.
- * open() / ask() over explicit MaxContext. Never invents intelligence.
- * Active Mission Resolver runs before IntentRouter (ADR-025).
+ *
+ * Execution flow (operator intent owns the subsystem):
+ *   Operator Input
+ *   → Intent Understanding (via selectExecutionDomain)
+ *   → Select Execution Domain
+ *   → Select/Attach Context
+ *   → Execute (Mission Engine | domain-owned intelligence)
+ *
+ * Active conversation never selects the execution domain.
+ * Active Mission Resolver still runs inside the Mission domain (ADR-025).
  */
 class WorkspaceEngine {
   /**
@@ -61,11 +75,29 @@ class WorkspaceEngine {
   /**
    * Open a workspace session from an explicit context envelope.
    * @param {object} rawContext
-   * @param {{ hour?: number }} [options]
+   * @param {{ hour?: number, executionDomain?: string }} [options]
    */
   open(rawContext, options = {}) {
     const context = normalizeContext(rawContext);
     const session = this._sessions.create(context);
+    if (options.executionDomain) {
+      session.executionDomain = options.executionDomain;
+    } else if (rawContext && rawContext.context === 'morning_brief') {
+      session.executionDomain = EXECUTION_DOMAINS.MORNING_BRIEFING;
+    } else if (context.page === 'market') {
+      session.executionDomain = EXECUTION_DOMAINS.MARKET_INTELLIGENCE;
+    } else {
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+    }
+    context.executionDomain = session.executionDomain;
+    context._answerCorpus =
+      session.executionDomain === EXECUTION_DOMAINS.MORNING_BRIEFING
+        ? 'briefing'
+        : session.executionDomain === EXECUTION_DOMAINS.MARKET_INTELLIGENCE
+          ? 'market'
+          : 'workspace';
+    session.context = context;
+
     const opening = buildOpeningState(context, { hour: options.hour });
     const suggestions = buildSuggestions(context);
 
@@ -80,15 +112,18 @@ class WorkspaceEngine {
       suggestions,
       context,
       contextSwitch: null,
+      executionDomain: session.executionDomain,
     };
   }
 
   /**
    * Continue or start a turn. Pass context to switch focus mid-session.
+   * Operator intent (not the active conversation) selects the execution domain.
+   *
    * @param {object} input
    * @param {string} [input.sessionId]
    * @param {string} input.question
-   * @param {object} [input.context] - optional new MaxContext
+   * @param {object} [input.context] - optional new MaxContext (evidence only)
    * @param {object} [input.rawContext] - alias
    */
   async ask(input) {
@@ -101,7 +136,7 @@ class WorkspaceEngine {
     let session = input.sessionId
       ? this._sessions.get(input.sessionId)
       : null;
-    let contextSwitch = null;
+    let envelopeSwitch = null;
 
     if (!session) {
       if (!rawContext) {
@@ -110,39 +145,64 @@ class WorkspaceEngine {
       const opened = this.open(rawContext);
       session = this._sessions.get(opened.sessionId);
     } else if (rawContext) {
+      // Envelope updates supply evidence — they do not select the domain.
       const normalized = normalizeContext(rawContext);
       const switched = this._sessions.switchContext(session.id, normalized);
-      contextSwitch = switched.contextSwitch;
+      envelopeSwitch = switched.contextSwitch;
       session = switched.session;
     }
 
-    const context = session.context;
     this._sessions.appendMessage(session.id, {
       role: 'operator',
       text: question,
     });
 
+    // 1–2) Intent Understanding → Select Execution Domain (ignore active convo)
+    const domainDecision = selectExecutionDomain(question, {
+      previousDomain: session.executionDomain || null,
+    });
+
     let structured;
     let mission = null;
-    let route = { kind: ROUTE_KINDS.INTELLIGENCE, missionType: null, reason: 'default' };
+    let route = toRouteDecision(domainDecision);
     let resolution = null;
+    let domainAttach = null;
 
-    if (this._missionsEnabled && this._missionEngine) {
+    const missionsAvailable =
+      this._missionsEnabled && this._missionEngine && isMissionDomain(domainDecision.domain);
+
+    if (missionsAvailable) {
+      // 3–4) Attach mission domain context, then execute via Mission Engine
       if (this._resolverEnabled && this._missionEngine.activeMissionResolver) {
-        // SPEC-039 / ADR-025: Active Mission Resolver before IntentRouter
         const resolver = this._missionEngine.activeMissionResolver;
-        // Keep resolver flag in sync with workspace option (tests)
         resolver._enabled = this._resolverEnabled;
 
         resolution = await resolver.resolve({
           sessionId: session.id,
           message: question,
-          tenantId: context.tenantId,
-          clientId: context.tenantId,
+          tenantId: session.context.tenantId,
+          clientId: session.context.tenantId,
           operatorId: (session && session.operator) || null,
         });
         mission = resolution.mission || null;
-        route = resolution.route || route;
+        route = {
+          ...toRouteDecision(domainDecision),
+          ...(resolution.route || {}),
+          executionDomain: domainDecision.domain,
+          // Prefer Intent Understanding domain reason when resolver created
+          reason:
+            resolution.action === 'created'
+              ? domainDecision.reason
+              : (resolution.route && resolution.route.reason) ||
+                domainDecision.reason,
+        };
+
+        domainAttach = attachDomainContext({
+          session,
+          decision: domainDecision,
+          incomingContext: rawContext,
+          mission,
+        });
 
         if (
           resolution.action === 'created' &&
@@ -153,6 +213,7 @@ class WorkspaceEngine {
             mission,
             question,
             card: this._missionEngine.toCard(mission),
+            executionDomain: domainDecision.domain,
           });
         } else if (
           mission &&
@@ -164,53 +225,114 @@ class WorkspaceEngine {
             resolution,
             question,
             card: this._missionEngine.toCard(mission),
+            executionDomain: domainDecision.domain,
           });
           route = {
             kind: ROUTE_KINDS.MISSION,
             missionType: mission.type,
             reason: resolution.resolutionPath,
+            missionIntent: domainDecision.missionIntent,
+            executionDomain: domainDecision.domain,
           };
-        } else {
-          // intelligence fallthrough
-          structured = composeResponse({
-            context,
-            question,
-            session,
-          });
-          route = resolution.route || {
-            kind: ROUTE_KINDS.INTELLIGENCE,
-            missionType: null,
-            reason: 'resolver_intelligence',
-          };
-        }
-      } else {
-        // SPEC-022 fallback: IntentRouter → createFromObjective
-        route = routeIntent(question);
-        if (route.kind === ROUTE_KINDS.MISSION) {
+        } else if (domainDecision.routeKind === ROUTE_KINDS.MISSION) {
+          // Domain says Mission but resolver returned intelligence — force Mission Engine
           mission = await this._missionEngine.createFromObjective({
             objective: question,
-            tenantId: context.tenantId,
-            clientId: context.tenantId,
+            tenantId: session.context.tenantId,
+            clientId: session.context.tenantId,
             createdBy: (session && session.operator) || null,
-            missionType: route.missionType,
+            missionType: domainDecision.missionType,
+            missionIntent: domainDecision.missionIntent || null,
+          });
+          if (
+            this._missionEngine.activeMissionResolver &&
+            mission &&
+            typeof this._missionEngine.activeMissionResolver.bindSession ===
+              'function'
+          ) {
+            await this._missionEngine.activeMissionResolver.bindSession({
+              sessionId: session.id,
+              mission,
+              operatorId: (session && session.operator) || null,
+            });
+          }
+          domainAttach = attachDomainContext({
+            session,
+            decision: domainDecision,
+            incomingContext: rawContext,
+            mission,
           });
           structured = composeMissionResponse({
             mission,
             question,
             card: this._missionEngine.toCard(mission),
+            executionDomain: domainDecision.domain,
           });
+          route = toRouteDecision(domainDecision);
+          resolution = {
+            action: 'created',
+            classification: 'new_mission',
+            resolutionPath: 'domain_forced',
+            route,
+            mission,
+          };
         } else {
+          domainAttach = attachDomainContext({
+            session,
+            decision: domainDecision,
+            incomingContext: rawContext,
+            mission: null,
+          });
           structured = composeResponse({
-            context,
+            context: domainAttach.context,
             question,
             session,
           });
+          route = resolution.route || toRouteDecision(domainDecision);
         }
+      } else {
+        // SPEC-022 fallback without resolver
+        mission = await this._missionEngine.createFromObjective({
+          objective: question,
+          tenantId: session.context.tenantId,
+          clientId: session.context.tenantId,
+          createdBy: (session && session.operator) || null,
+          missionType: domainDecision.missionType,
+          missionIntent: domainDecision.missionIntent || null,
+        });
+        domainAttach = attachDomainContext({
+          session,
+          decision: domainDecision,
+          incomingContext: rawContext,
+          mission,
+        });
+        structured = composeMissionResponse({
+          mission,
+          question,
+          card: this._missionEngine.toCard(mission),
+          executionDomain: domainDecision.domain,
+        });
+        route = toRouteDecision(domainDecision);
       }
     } else {
-      route = routeIntent(question);
+      // Non-mission domain OR missions disabled — domain owns intelligence answer
+      domainAttach = attachDomainContext({
+        session,
+        decision: domainDecision,
+        incomingContext: rawContext,
+        mission: null,
+      });
+      // When missions disabled but domain is mission, still label the route
+      if (
+        isMissionDomain(domainDecision.domain) &&
+        !this._missionsEnabled
+      ) {
+        route = toRouteDecision(domainDecision);
+      } else {
+        route = toRouteDecision(domainDecision);
+      }
       structured = composeResponse({
-        context,
+        context: domainAttach.context,
         question,
         session,
       });
@@ -219,8 +341,12 @@ class WorkspaceEngine {
     const presented = await this._presentation.present(structured);
 
     let prose = presented.prose;
-    if (contextSwitch) {
-      prose = `${contextSwitch}\n\n${prose}`;
+    const switchLines = [
+      envelopeSwitch,
+      domainAttach && domainAttach.domainSwitch,
+    ].filter(Boolean);
+    if (switchLines.length) {
+      prose = `${switchLines.join('\n')}\n\n${prose}`;
     }
 
     this._sessions.appendMessage(session.id, {
@@ -229,6 +355,8 @@ class WorkspaceEngine {
       structured,
     });
 
+    const context = (domainAttach && domainAttach.context) || session.context;
+
     return {
       sessionId: session.id,
       prose,
@@ -236,12 +364,17 @@ class WorkspaceEngine {
       metadata: presented.metadata,
       suggestions: structured.nextInvestigations,
       recommendedActions: structured.recommendedActions,
-      contextSwitch,
+      contextSwitch: envelopeSwitch,
+      domainSwitch: (domainAttach && domainAttach.domainSwitch) || null,
       context,
       presentation: presented.presentation,
       route: route.kind,
       mission,
       resolution,
+      executionDomain: domainDecision.domain,
+      domainDecision,
+      executionContext:
+        (domainAttach && domainAttach.executionContext) || null,
     };
   }
 
@@ -270,6 +403,7 @@ class WorkspaceEngine {
       opening,
       suggestions,
       context,
+      executionDomain: session.executionDomain || null,
     };
   }
 }

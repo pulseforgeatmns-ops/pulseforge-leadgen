@@ -116,6 +116,9 @@ const {
   buildOpeningState,
   buildSuggestions,
   normalizeContext,
+  EXECUTION_DOMAINS,
+  selectExecutionDomain,
+  isMissionDomain,
 } = require('./workspace');
 const {
   IntelligenceComposer,
@@ -456,6 +459,9 @@ module.exports = {
   buildOpeningState,
   buildSuggestions,
   normalizeContext,
+  EXECUTION_DOMAINS,
+  selectExecutionDomain,
+  isMissionDomain,
   createDefaultRuleRegistry,
   ConfidenceRule,
   ContradictionRule,

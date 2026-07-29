@@ -64,6 +64,20 @@ function buildResponseMetadata(partial = {}) {
     meta.missionStatus = String(partial.missionStatus);
   }
   if (partial.missionCard != null) meta.missionCard = partial.missionCard;
+  // SPEC-057: execution domain / surface ownership
+  if (partial.executionDomain != null) {
+    meta.executionDomain = String(partial.executionDomain);
+  }
+  if (partial.surface != null) meta.surface = String(partial.surface);
+  if (partial.activeMissionAction != null) {
+    meta.activeMissionAction = String(partial.activeMissionAction);
+  }
+  if (partial.classification != null) {
+    meta.classification = String(partial.classification);
+  }
+  if (partial.resolutionPath != null) {
+    meta.resolutionPath = String(partial.resolutionPath);
+  }
   return meta;
 }
 

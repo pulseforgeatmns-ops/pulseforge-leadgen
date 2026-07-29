@@ -92,6 +92,32 @@ describe('SPEC-022 IntentRouter', () => {
     assert.equal(d.kind, ROUTE_KINDS.MISSION);
     assert.equal(d.missionType, MISSION_TYPES.OPERATOR_INBOX);
   });
+
+  it('routes Intent Understanding missions when keywords miss (SPEC-055)', () => {
+    const d = routeIntent(
+      'Run an end-to-end execution audit for Campaign 001.'
+    );
+    assert.equal(d.kind, ROUTE_KINDS.MISSION);
+    assert.equal(d.missionType, MISSION_TYPES.CAMPAIGN_REVIEW);
+    assert.ok(d.missionIntent);
+    assert.equal(d.missionIntent.intentCategory, 'campaign_diagnostics');
+    assert.match(d.reason, /^understood_/);
+  });
+
+  it('routes build business intelligence via Intent Understanding', () => {
+    const d = routeIntent('Build business intelligence for Anchor Cleaning.');
+    assert.equal(d.kind, ROUTE_KINDS.MISSION);
+    assert.ok(d.missionIntent);
+    assert.equal(
+      d.missionIntent.intentCategory,
+      'build_business_intelligence'
+    );
+  });
+
+  it('keeps operator help on intelligence surface', () => {
+    const d = routeIntent('How do I use the command deck?');
+    assert.equal(d.kind, ROUTE_KINDS.INTELLIGENCE);
+  });
 });
 
 describe('SPEC-022 MissionPlanner + Executor', () => {
