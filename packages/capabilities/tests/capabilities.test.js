@@ -1309,6 +1309,95 @@ describe('SPEC-034 Campaign Review Workspace', () => {
   });
 });
 
+describe('Campaign Review canRun diagnostics', () => {
+  const campaignReview = require('../campaignReview');
+
+  it('diagnoseCanRun explains missing Campaign precondition (SPEC-058)', () => {
+    const cap = campaignReview.createCampaignReviewCapability();
+    const diagnosis = cap.diagnoseCanRun({ inputs: {} });
+    assert.equal(diagnosis.runnable, false);
+    assert.equal(cap.canRun({ inputs: {} }), false);
+    assert.equal(diagnosis.failedPrecondition, 'Campaign artifact required');
+    assert.equal(diagnosis.expectedArtifact, 'Campaign');
+    assert.equal(diagnosis.producer, 'Campaign Builder');
+    assert.match(String(diagnosis.actualState), /Not Present/i);
+    assert.match(
+      String(diagnosis.recommendedNextAction),
+      /Campaign Builder/i
+    );
+  });
+
+  it('diagnostic mode returns blocked structured explanation', async () => {
+    const registry = createBuiltinRegistry({ discovery: { useFixture: true } });
+    const runner = createCapabilityRunner({ registry });
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.CAMPAIGN_REVIEW,
+      context: {
+        missionId: 'm_review_diag',
+        tenantId: '10',
+        clientId: 10,
+        executionMode: 'diagnostic',
+        missionIntent: {
+          matchedIntent: 'campaign_diagnostics',
+          diagnostics: true,
+          mode: 'diagnostics',
+        },
+        inputs: {
+          discoveryDiagnostics: {
+            artifactType: 'DiscoveryDiagnostics',
+            summary: 'Discovery blocked',
+            blocked: true,
+          },
+        },
+      },
+    });
+
+    assert.equal(out.result.status, CAPABILITY_RESULT_STATUS.BLOCKED);
+    assert.equal(out.executionMode, 'diagnostic');
+    const err = out.result.errors[0];
+    assert.ok(err);
+    assert.notEqual(err.message, 'canRun returned false');
+    assert.equal(err.failedPrecondition, 'Campaign artifact required');
+    assert.equal(
+      out.result.outputs.preconditionDiagnostics.expectedArtifact,
+      'Campaign'
+    );
+    assert.equal(
+      out.result.outputs.preconditionDiagnostics.producer,
+      'Campaign Builder'
+    );
+    assert.ok(out.result.outputs.preconditionDiagnostics.actualState);
+    assert.ok(
+      out.result.outputs.preconditionDiagnostics.recommendedNextAction
+    );
+    assert.equal(out.result.outputs.reviewPackage, null);
+    assert.equal(out.result.outputs.reviewDecision, null);
+    assert.equal(out.result.artifacts.length, 0);
+  });
+
+  it('execution mode preserves canRun gate with structured failure', async () => {
+    const registry = createBuiltinRegistry({ discovery: { useFixture: true } });
+    const runner = createCapabilityRunner({ registry });
+    const out = await runner.run({
+      capabilityId: BUILTIN_IDS.CAMPAIGN_REVIEW,
+      context: {
+        missionId: 'm_review_empty',
+        tenantId: '10',
+        executionMode: 'execution',
+        inputs: {},
+      },
+    });
+    assert.equal(out.result.status, CAPABILITY_RESULT_STATUS.FAILED);
+    assert.equal(out.executionMode, 'execution');
+    const err = out.result.errors[0];
+    assert.notEqual(err.message, 'canRun returned false');
+    assert.equal(err.expectedArtifact, 'Campaign');
+    assert.equal(err.producer, 'Campaign Builder');
+    assert.ok(out.result.outputs.preconditionDiagnostics);
+    assert.equal(out.result.outputs.reviewPackage, null);
+  });
+});
+
 describe('SPEC-035 Direct Mail Execution', () => {
   const dmx = require('../directMailExecution');
 

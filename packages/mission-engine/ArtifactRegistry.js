@@ -645,7 +645,9 @@ function extractPayload(artifactType, outputs) {
     case ARTIFACT_TYPES.MAIL_PACKAGE:
       return out.mailPackage || out.packages || out;
     case ARTIFACT_TYPES.REVIEW_DECISION:
-      return out.reviewDecision || out.reviewPackage || out;
+      // Never fall through to bare `out` — empty/diagnostic outputs would
+      // draft a fake ReviewDecision that the gate then quarantines.
+      return out.reviewDecision || out.reviewPackage || null;
     case ARTIFACT_TYPES.EXECUTION_PACKAGE:
       return out.executionPackage || out;
     case ARTIFACT_TYPES.DELIVERY_RESULTS:

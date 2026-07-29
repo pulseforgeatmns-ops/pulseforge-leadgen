@@ -40,6 +40,11 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-035](ADR-035_Plan_Around_State_Not_Sequence.md) | Plan Around State, Not Sequence | Accepted |
 | [ADR-036](ADR-036_Trust_Through_Contracts.md) | Trust Through Contracts | Accepted |
 | [ADR-037](ADR-037_Reason_About_Businesses_Not_Companies.md) | Reason About Businesses, Not Companies | Accepted |
+| [ADR-038](ADR-038_Explain_Planning_Decisions.md) | Explain Planning Decisions | Accepted |
+| [ADR-039](ADR-039_Separate_Understanding_from_Execution.md) | Separate Understanding from Execution | Accepted |
+| [ADR-040](ADR-040_Separate_Evidence_Acquisition_from_Capability_Selection.md) | Separate Evidence Acquisition from Capability Selection | Accepted |
+| [ADR-041](ADR-041_Operator_Intent_Selects_Execution_Domain.md) | Operator Intent Selects Execution Domain | Accepted |
+| [ADR-042](ADR-042_Diagnostic_Capabilities_Explain_Blocked_Execution.md) | Diagnostic Capabilities Explain Blocked Execution | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

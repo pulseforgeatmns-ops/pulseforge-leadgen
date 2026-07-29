@@ -32,6 +32,11 @@ const { createInMemoryCampaignReviewStore } = require('./CampaignReviewStore');
 const {
   resolvePlaybookFromContext,
 } = require('../playbook');
+const {
+  inspectCampaignReviewPreconditions,
+  diagnoseCampaignReviewCanRun,
+  toCanRunError,
+} = require('./preconditions');
 
 /**
  * @param {object} [deps]
@@ -79,30 +84,26 @@ function createCampaignReviewCapability(deps = {}) {
       missionDecisions: 'MissionDecision[]',
       missionRevisions: 'MissionRevision[]',
       reviewPackage: 'object',
+      preconditionDiagnostics: 'object?',
     },
 
+    /**
+     * Execution-mode gate (SPEC-058): boolean only — unchanged semantics.
+     */
     canRun(context) {
-      const inputs = (context && context.inputs) || {};
-      const prior = inputs.priorOutputs || {};
-      const campaign = inputs.campaign || prior.campaign;
-      const packages =
-        inputs.packages ||
-        (inputs.mailBatch && inputs.mailBatch.packages) ||
-        prior.packages ||
-        [];
-      const prospects =
-        inputs.prospects ||
-        (campaign && campaign.prospects) ||
-        prior.prospects ||
-        [];
-      return (
-        Boolean(campaign) ||
-        (Array.isArray(packages) && packages.length > 0) ||
-        (Array.isArray(prospects) && prospects.length > 0)
-      );
+      return inspectCampaignReviewPreconditions(context).runnable;
+    },
+
+    /**
+     * Diagnostic-mode explanation (SPEC-058 / ADR-042).
+     * @param {object} context
+     */
+    diagnoseCanRun(context) {
+      return diagnoseCampaignReviewCanRun(context);
     },
 
     estimate(context) {
+      const diagnosis = diagnoseCampaignReviewCanRun(context);
       const inputs = (context && context.inputs) || {};
       const prospects =
         (inputs.campaign && inputs.campaign.prospects) ||
@@ -111,11 +112,16 @@ function createCampaignReviewCapability(deps = {}) {
         [];
       const n = Array.isArray(prospects) ? prospects.length : 1;
       return buildCapabilityEstimate({
-        durationMs: 800 + n * 40,
-        confidence: n ? 0.9 : 0.4,
-        notes: n
-          ? [`Campaign review workspace for ${n} prospect(s)`]
-          : ['No campaign prospects provided'],
+        durationMs: diagnosis.runnable ? 800 + n * 40 : 400,
+        confidence: diagnosis.runnable ? (n ? 0.9 : 0.4) : 0.7,
+        notes: diagnosis.runnable
+          ? n
+            ? [`Campaign review workspace for ${n} prospect(s)`]
+            : ['No campaign prospects provided']
+          : [
+              diagnosis.failedPrecondition ||
+                'Campaign Review blocked — missing Campaign artifact',
+            ],
       });
     },
 
@@ -137,6 +143,12 @@ function createCampaignReviewCapability(deps = {}) {
       };
 
       emit(REVIEW_PROGRESS_STAGES.GATHERING, 10);
+
+      // Safety net: never assemble a review without inputs (runner should gate).
+      const diagnosis = diagnoseCampaignReviewCanRun(context);
+      if (!diagnosis.runnable) {
+        return buildBlockedPreconditionResult(diagnosis, Date.now() - started);
+      }
 
       const inputs = context.inputs || {};
       const operator = inputs.operator || context.createdBy || 'operator';
@@ -463,6 +475,71 @@ function createCampaignReviewCapability(deps = {}) {
   };
 }
 
+/**
+ * Safety-net blocked result if execute is invoked without inputs (SPEC-058).
+ * Prefer CapabilityRunner diagnoseCanRun path in diagnostic mode.
+ * @param {object} diagnosis
+ * @param {number} duration
+ */
+function buildBlockedPreconditionResult(diagnosis, duration) {
+  const error = toCanRunError(diagnosis);
+  const preconditionDiagnostics = {
+    artifactType: 'PreconditionDiagnostics',
+    readOnly: true,
+    diagnostic: true,
+    mutatesBusinessState: false,
+    failedPrecondition: diagnosis.failedPrecondition,
+    expectedArtifact: diagnosis.expectedArtifact,
+    expectedArtifacts: diagnosis.expectedArtifacts,
+    actualState: diagnosis.actualState,
+    producer: diagnosis.producer,
+    expectedProducer: diagnosis.expectedProducer || diagnosis.producer,
+    producerId: diagnosis.producerId,
+    recommendedNextAction: diagnosis.recommendedNextAction,
+    present: diagnosis.present,
+    missing: diagnosis.missing,
+    diagnosticEvidence: diagnosis.diagnosticEvidence,
+    status: 'Blocked',
+  };
+
+  return buildCapabilityResult({
+    status: CAPABILITY_RESULT_STATUS.BLOCKED,
+    duration,
+    outputs: {
+      readOnly: true,
+      mutatesBusinessState: false,
+      preconditionDiagnostics,
+      campaignReviewDiagnostics: preconditionDiagnostics,
+      // Never fabricate ReviewDecision from blocked preconditions
+      reviewDecision: null,
+      reviewPackage: null,
+    },
+    evidence: [
+      {
+        kind: 'diagnostics',
+        summary: diagnosis.failedPrecondition,
+        readOnly: true,
+        failedPrecondition: diagnosis.failedPrecondition,
+        expectedArtifact: diagnosis.expectedArtifact,
+        actualState: diagnosis.actualState,
+        producer: diagnosis.producer,
+        recommendedNextAction: diagnosis.recommendedNextAction,
+      },
+    ],
+    artifacts: [],
+    errors: [error],
+    warnings: [
+      `Blocked precondition: ${diagnosis.failedPrecondition}`,
+      `Expected artifact: ${diagnosis.expectedArtifact} (producer: ${diagnosis.producer})`,
+      `Actual state: ${diagnosis.actualState}`,
+      `Recommended next action: ${diagnosis.recommendedNextAction}`,
+    ],
+  });
+}
+
 module.exports = {
   createCampaignReviewCapability,
+  inspectCampaignReviewPreconditions,
+  diagnoseCampaignReviewCanRun,
+  buildBlockedPreconditionResult,
 };

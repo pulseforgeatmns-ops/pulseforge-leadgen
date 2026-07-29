@@ -7,9 +7,15 @@ const {
   buildCapabilityContext,
 } = require('./types');
 const { formatMissingCapabilityError } = require('./CapabilityRegistry');
+const {
+  CAPABILITY_EXECUTION_MODES,
+  resolveCapabilityExecutionMode,
+  normalizeDiagnoseCanRun,
+  buildPreconditionBlockedResult,
+} = require('./executionMode');
 
 /**
- * CapabilityRunner — execute only through the registry (SPEC-023 / SPEC-054).
+ * CapabilityRunner — execute only through the registry (SPEC-023 / SPEC-054 / SPEC-058).
  * No agent-specific branching.
  */
 class CapabilityRunner {
@@ -61,6 +67,8 @@ class CapabilityRunner {
     const invocationId =
       input.invocationId ||
       `inv_${capabilityId}_${Date.now().toString(36)}`;
+    const executionMode = resolveCapabilityExecutionMode(context, cap);
+    context.executionMode = executionMode;
 
     context.emitProgress = (payload = {}) => {
       this._emit({
@@ -82,20 +90,86 @@ class CapabilityRunner {
       capabilityId,
       invocationId,
       missionId: context.missionId,
-      payload: { name: cap.name },
+      payload: { name: cap.name, executionMode },
     });
 
-    if (!cap.canRun(context)) {
-      const failed = buildCapabilityResult({
-        status: CAPABILITY_RESULT_STATUS.FAILED,
-        errors: [{ message: 'canRun returned false', capabilityId }],
+    const canRun = Boolean(cap.canRun(context));
+    const diagnosisRaw =
+      typeof cap.diagnoseCanRun === 'function'
+        ? cap.diagnoseCanRun(context)
+        : null;
+    const diagnosis = diagnosisRaw
+      ? normalizeDiagnoseCanRun(diagnosisRaw, capabilityId)
+      : null;
+
+    // SPEC-058: Diagnostic mode explains blocked preconditions.
+    // Execution mode preserves boolean canRun gating.
+    if (executionMode === CAPABILITY_EXECUTION_MODES.DIAGNOSTIC) {
+      const runnable = diagnosis
+        ? diagnosis.runnable
+        : canRun;
+      if (!runnable) {
+        const blocked = buildPreconditionBlockedResult({
+          capabilityId,
+          diagnosis:
+            diagnosis ||
+            normalizeDiagnoseCanRun(
+              {
+                runnable: false,
+                failedPrecondition: 'canRun returned false',
+                actualState: 'canRun=false (no diagnoseCanRun on capability)',
+              },
+              capabilityId
+            ),
+          diagnosticMode: true,
+        });
+        this._emit({
+          kind: PROGRESS_KINDS.FAILED,
+          capabilityId,
+          invocationId,
+          missionId: context.missionId,
+          payload: {
+            status: CAPABILITY_RESULT_STATUS.BLOCKED,
+            errors: blocked.errors,
+            preconditionDiagnostics: blocked.outputs.preconditionDiagnostics,
+            executionMode,
+          },
+        });
+        return {
+          invocationId,
+          capabilityId,
+          name: cap.name,
+          estimate: cap.estimate(context),
+          result: blocked,
+          executionMode,
+        };
+      }
+    } else if (!canRun) {
+      // Execution mode — preserve gate; enrich with diagnoseCanRun when present
+      const failed = buildPreconditionBlockedResult({
+        capabilityId,
+        diagnosis:
+          diagnosis ||
+          normalizeDiagnoseCanRun(
+            {
+              runnable: false,
+              failedPrecondition: 'canRun returned false',
+              actualState: 'canRun=false (no diagnoseCanRun on capability)',
+            },
+            capabilityId
+          ),
+        diagnosticMode: false,
       });
       this._emit({
         kind: PROGRESS_KINDS.FAILED,
         capabilityId,
         invocationId,
         missionId: context.missionId,
-        payload: { errors: failed.errors },
+        payload: {
+          errors: failed.errors,
+          preconditionDiagnostics: failed.outputs.preconditionDiagnostics,
+          executionMode,
+        },
       });
       return {
         invocationId,
@@ -103,6 +177,7 @@ class CapabilityRunner {
         name: cap.name,
         estimate: cap.estimate(context),
         result: failed,
+        executionMode,
       };
     }
 
@@ -112,7 +187,7 @@ class CapabilityRunner {
       capabilityId,
       invocationId,
       missionId: context.missionId,
-      payload: { name: cap.name, estimate },
+      payload: { name: cap.name, estimate, executionMode },
     });
 
     const started = Date.now();
@@ -138,6 +213,7 @@ class CapabilityRunner {
           name: cap.name,
           status: result.status,
           duration: result.duration,
+          executionMode,
         },
       });
 
@@ -147,6 +223,7 @@ class CapabilityRunner {
         name: cap.name,
         estimate,
         result,
+        executionMode,
       };
     } catch (err) {
       const duration = Date.now() - started;
@@ -160,7 +237,7 @@ class CapabilityRunner {
         capabilityId,
         invocationId,
         missionId: context.missionId,
-        payload: { name: cap.name, errors: result.errors },
+        payload: { name: cap.name, errors: result.errors, executionMode },
       });
       return {
         invocationId,
@@ -168,6 +245,7 @@ class CapabilityRunner {
         name: cap.name,
         estimate,
         result,
+        executionMode,
       };
     }
   }

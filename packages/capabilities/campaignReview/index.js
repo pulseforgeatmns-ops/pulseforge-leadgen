@@ -25,3 +25,10 @@ module.exports = {
   createInMemoryCampaignReviewStore,
   createCampaignReviewCapability,
 };
+
+// Re-export precondition helpers for tests / diagnostics
+module.exports.inspectCampaignReviewPreconditions =
+  require('./preconditions').inspectCampaignReviewPreconditions;
+module.exports.diagnoseCampaignReviewCanRun =
+  require('./preconditions').diagnoseCampaignReviewCanRun;
+module.exports.toCanRunError = require('./preconditions').toCanRunError;

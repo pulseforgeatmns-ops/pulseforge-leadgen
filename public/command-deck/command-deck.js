@@ -1130,6 +1130,62 @@
     </section>`;
   }
 
+  /** SPEC-058 — Blocked Preconditions panel */
+  function renderPreconditionDiagnosticsHtml(diagnostics) {
+    const d = diagnostics || null;
+    if (!d || typeof d !== 'object') return '';
+    const failed =
+      d.failedPrecondition ||
+      d.message ||
+      (d.diagnosis && d.diagnosis.failedPrecondition) ||
+      null;
+    if (!failed && !d.expectedArtifact && !d.actualState) return '';
+    const expected =
+      d.expectedArtifact ||
+      (d.diagnosis && d.diagnosis.expectedArtifact) ||
+      '—';
+    const actual =
+      d.actualState || (d.diagnosis && d.diagnosis.actualState) || '—';
+    const producer =
+      d.expectedProducer ||
+      d.producer ||
+      (d.diagnosis &&
+        (d.diagnosis.expectedProducer || d.diagnosis.producer)) ||
+      '—';
+    const next =
+      d.recommendedNextAction ||
+      (d.diagnosis && d.diagnosis.recommendedNextAction) ||
+      '—';
+    const capabilityName =
+      d.capabilityName ||
+      (d.capabilityId === 'campaign_review' ? 'Campaign Review' : null) ||
+      d.capabilityId ||
+      'Capability';
+    return `<section class="msn-block msn-precondition-diagnostics" id="msnPreconditionDiagnostics">
+      <h3>Blocked Preconditions</h3>
+      <p class="msn-objective-meta">${escapeHtml(
+        String(capabilityName)
+      )} · Status: Blocked</p>
+      <dl class="msn-si-dl">
+        <div class="msn-si-row"><dt>Failed Precondition</dt><dd>${escapeHtml(
+          String(failed || 'Blocked')
+        )}</dd></div>
+        <div class="msn-si-row"><dt>Expected Artifact</dt><dd>${escapeHtml(
+          String(expected)
+        )}</dd></div>
+        <div class="msn-si-row"><dt>Actual State</dt><dd>${escapeHtml(
+          String(actual)
+        )}</dd></div>
+        <div class="msn-si-row"><dt>Producer</dt><dd>${escapeHtml(
+          String(producer)
+        )}</dd></div>
+        <div class="msn-si-row"><dt>Recommended Next Action</dt><dd>${escapeHtml(
+          String(next)
+        )}</dd></div>
+      </dl>
+    </section>`;
+  }
+
   function formatStageLabel(stageId) {
     const labels = {
       prospect_discovery: 'Discovery',
@@ -2768,6 +2824,14 @@
       const planningDiagnosticsHtml = renderPlanningDiagnosticsHtml(
         (mission.plan && mission.plan.planningDiagnostics) || null
       );
+      const preconditionDiagnosticsHtml = renderPreconditionDiagnosticsHtml(
+        data.preconditionDiagnostics ||
+          (mission.stageReview &&
+            mission.stageReview.preconditionDiagnostics) ||
+          (mission.deliverables &&
+            mission.deliverables.preconditionDiagnostics) ||
+          null
+      );
       const objectiveHtml = `<section class="msn-block" id="msnObjectiveBlock">
           <h3>Objective</h3>
           <div data-msn-objective-collapsed>
@@ -3134,6 +3198,7 @@
 
       els.msnBody.innerHTML = `
         ${discoveryFailedHtml}
+        ${preconditionDiagnosticsHtml}
         ${reviewHtml}
         ${renderWarningInspectorHtml(warningItems)}
         ${renderReviewQueueHtml(msnReviewSession)}
