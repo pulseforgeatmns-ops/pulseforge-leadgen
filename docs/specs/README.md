@@ -60,6 +60,11 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-051](SPEC-051_Artifact_Resolution_and_State_Aware_Planning.md) | Artifact Resolution & State-Aware Planning | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-052](SPEC-052_Typed_Artifact_Validation.md) | Typed Artifact Validation | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-053](SPEC-053_Business_Intelligence_Engine.md) | Business Intelligence Engine | Implemented (v1 thin slice) | v1.3.0 |
+| [SPEC-054](SPEC-054_Capability_Registry_and_Planner_Diagnostics.md) | Capability Registry & Planner Diagnostics | Implemented (v1 thin slice) | v1.3.0 |
+| [SPEC-055](SPEC-055_Intent_Understanding.md) | Intent Understanding | Implemented (v1 thin slice) | v1.3.0 |
+| [SPEC-056](SPEC-056_Evidence_Driven_Capability_Planning.md) | Evidence-Driven Capability Planning | Implemented (v1 thin slice) | v1.3.0 |
+| [SPEC-057](SPEC-057_Execution_Domain_Routing.md) | Execution Domain Routing | Implemented (v1 thin slice) | v1.3.0 |
+| [SPEC-058](SPEC-058_Diagnostic_Capability_Behavior.md) | Diagnostic Capability Behavior | In Progress | v1.3.0 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

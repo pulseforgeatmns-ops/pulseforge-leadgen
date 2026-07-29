@@ -19,8 +19,16 @@ const CAPABILITY_CATEGORIES = Object.freeze({
 const CAPABILITY_RESULT_STATUS = Object.freeze({
   COMPLETED: 'completed',
   FAILED: 'failed',
+  /** SPEC-058 — diagnostic mode blocked precondition (not opaque failure) */
+  BLOCKED: 'blocked',
   CANCELLED: 'cancelled',
   PARTIAL: 'partial',
+});
+
+/** SPEC-058 / ADR-042 — production vs diagnostic capability invocation */
+const CAPABILITY_EXECUTION_MODES = Object.freeze({
+  EXECUTION: 'execution',
+  DIAGNOSTIC: 'diagnostic',
 });
 
 const PROGRESS_KINDS = Object.freeze({
@@ -98,6 +106,23 @@ function buildCapabilityContext(partial = {}) {
     tenantId: String(partial.tenantId || ''),
     clientId: partial.clientId != null ? partial.clientId : null,
     objective: partial.objective != null ? partial.objective : '',
+    /** SPEC-058 — execution | diagnostic */
+    executionMode:
+      partial.executionMode === CAPABILITY_EXECUTION_MODES.DIAGNOSTIC ||
+      partial.executionMode === 'diagnostics'
+        ? CAPABILITY_EXECUTION_MODES.DIAGNOSTIC
+        : partial.executionMode === CAPABILITY_EXECUTION_MODES.EXECUTION
+          ? CAPABILITY_EXECUTION_MODES.EXECUTION
+          : partial.executionMode || null,
+    mode: partial.mode != null ? partial.mode : null,
+    missionIntent:
+      partial.missionIntent && typeof partial.missionIntent === 'object'
+        ? partial.missionIntent
+        : null,
+    missionPlan:
+      partial.missionPlan && typeof partial.missionPlan === 'object'
+        ? partial.missionPlan
+        : null,
     constraints:
       partial.constraints && typeof partial.constraints === 'object'
         ? partial.constraints
@@ -111,6 +136,7 @@ function buildCapabilityContext(partial = {}) {
 module.exports = {
   CAPABILITY_CATEGORIES,
   CAPABILITY_RESULT_STATUS,
+  CAPABILITY_EXECUTION_MODES,
   PROGRESS_KINDS,
   BUILTIN_IDS,
   buildCapabilityResult,

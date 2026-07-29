@@ -584,6 +584,12 @@ class MissionEngine {
         (mission.deliverables &&
           mission.deliverables.artifactValidationFailures) ||
         [],
+      preconditionDiagnostics:
+        (mission.stageReview &&
+          mission.stageReview.preconditionDiagnostics) ||
+        (mission.deliverables &&
+          mission.deliverables.preconditionDiagnostics) ||
+        null,
       outboundBlocked: true,
     };
   }

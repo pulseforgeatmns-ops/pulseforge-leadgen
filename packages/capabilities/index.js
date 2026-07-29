@@ -9,6 +9,7 @@
 const {
   CAPABILITY_CATEGORIES,
   CAPABILITY_RESULT_STATUS,
+  CAPABILITY_EXECUTION_MODES,
   PROGRESS_KINDS,
   BUILTIN_IDS,
   buildCapabilityResult,
@@ -27,6 +28,11 @@ const {
   CapabilityRunner,
   createCapabilityRunner,
 } = require('./CapabilityRunner');
+const {
+  resolveCapabilityExecutionMode,
+  normalizeDiagnoseCanRun,
+  buildPreconditionBlockedResult,
+} = require('./executionMode');
 const {
   createProspectDiscoveryStub,
   createCompanyEnrichmentStub,
@@ -53,11 +59,15 @@ const {
 module.exports = {
   CAPABILITY_CATEGORIES,
   CAPABILITY_RESULT_STATUS,
+  CAPABILITY_EXECUTION_MODES,
   PROGRESS_KINDS,
   BUILTIN_IDS,
   buildCapabilityResult,
   buildCapabilityEstimate,
   buildCapabilityContext,
+  resolveCapabilityExecutionMode,
+  normalizeDiagnoseCanRun,
+  buildPreconditionBlockedResult,
   CapabilityRegistry,
   createCapabilityRegistry,
   assertCapability,

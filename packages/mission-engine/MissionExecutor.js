@@ -8,6 +8,8 @@
 const {
   createCapabilityRunner,
   CAPABILITY_RESULT_STATUS,
+  CAPABILITY_EXECUTION_MODES,
+  resolveCapabilityExecutionMode,
 } = require('../capabilities');
 const {
   MISSION_STATUS,
@@ -264,6 +266,12 @@ class MissionExecutor {
             (mission.plan && mission.plan.missionPlan) ||
             mission.missionPlan ||
             null,
+          missionIntent:
+            (mission.plan && mission.plan.missionIntent) ||
+            mission.missionIntent ||
+            null,
+          // SPEC-058: diagnostic vs execution reporting (planning unchanged)
+          executionMode: resolveMissionExecutionMode(mission, stageDef),
           constraints: mission.constraints || {},
           inputs: {
             ...priorOutputs,
@@ -290,6 +298,31 @@ class MissionExecutor {
           },
           mission,
         });
+      } else if (
+        runResult.result.status === CAPABILITY_RESULT_STATUS.BLOCKED
+      ) {
+        const precondition =
+          (runResult.result.outputs &&
+            runResult.result.outputs.preconditionDiagnostics) ||
+          null;
+        gate = {
+          outcome: STAGE_OUTCOMES.BLOCKED,
+          outcomeLabel: STAGE_OUTCOME_LABELS[STAGE_OUTCOMES.BLOCKED],
+          advance: false,
+          publishOutputs: false,
+          blockingIssues: (runResult.result.errors || []).map((e) =>
+            typeof e === 'string'
+              ? e
+              : e.failedPrecondition || e.message || String(e)
+          ),
+          warnings: runResult.result.warnings || [],
+          publishedArtifacts: [],
+          quarantinedArtifacts: [],
+          validation: { passed: false, reason: 'capability_blocked' },
+          reviewSummary: precondition
+            ? { preconditionDiagnostics: precondition }
+            : null,
+        };
       } else if (runResult.result.status !== CAPABILITY_RESULT_STATUS.COMPLETED) {
         gate = {
           outcome: STAGE_OUTCOMES.FAILED,
@@ -362,6 +395,14 @@ class MissionExecutor {
           gate.outcome === STAGE_OUTCOMES.BLOCKED
             ? `Blocked — ${gate.blockingIssues[0] || step.name}`
             : `Paused — ${step.name} failed`;
+        const preconditionDiagnostics =
+          (runResult.result.outputs &&
+            runResult.result.outputs.preconditionDiagnostics) ||
+          (runResult.result.errors &&
+            runResult.result.errors[0] &&
+            runResult.result.errors[0].diagnosis) ||
+          (runResult.result.errors && runResult.result.errors[0]) ||
+          null;
         mission = await this._store.update({
           id: mission.id,
           status: MISSION_STATUS.WAITING,
@@ -383,6 +424,7 @@ class MissionExecutor {
             reviewSummary: gate.reviewSummary,
             quarantinedArtifacts: gate.quarantinedArtifacts,
             publishedArtifacts: gate.publishedArtifacts,
+            preconditionDiagnostics,
           },
           deliverables: {
             ...(mission.deliverables || {}),
@@ -392,7 +434,9 @@ class MissionExecutor {
               outcome: gate.outcome,
               blockingIssues: gate.blockingIssues,
               quarantinedArtifacts: gate.quarantinedArtifacts,
+              preconditionDiagnostics,
             },
+            preconditionDiagnostics,
             artifactBus: bus ? bus.toJSON() : undefined,
           },
         });
@@ -706,6 +750,34 @@ function planningObjectiveFromMission(mission) {
   }
   // Legacy missions without Mission Plan IR — use stored objective as-is
   return String((mission && mission.objectiveText) || '').trim();
+}
+
+/**
+ * SPEC-058 — derive capability execution mode from mission intent / stage.
+ * Does not alter Mission Planning.
+ * @param {object} mission
+ * @param {object|null} stageDef
+ * @returns {string}
+ */
+function resolveMissionExecutionMode(mission, stageDef) {
+  if (stageDef && stageDef.diagnostic === true) {
+    return CAPABILITY_EXECUTION_MODES.DIAGNOSTIC;
+  }
+  const intent =
+    (mission && mission.plan && mission.plan.missionIntent) ||
+    (mission && mission.missionIntent) ||
+    null;
+  return resolveCapabilityExecutionMode(
+    {
+      missionIntent: intent,
+      executionMode:
+        (mission &&
+          mission.constraints &&
+          mission.constraints.executionMode) ||
+        null,
+    },
+    stageDef && stageDef.diagnostic ? { diagnostic: true } : null
+  );
 }
 
 function createMissionExecutor(deps) {

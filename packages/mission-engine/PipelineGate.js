@@ -109,6 +109,38 @@ function evaluatePipelineGate(input = {}) {
   const context = input.context || {};
   const contract = getStageContract(capabilityId);
 
+  if (result.status === 'blocked') {
+    const precondition =
+      (result.outputs && result.outputs.preconditionDiagnostics) || null;
+    const blockingIssues = flattenErrors(result.errors).length
+      ? flattenErrors(result.errors)
+      : [
+          (precondition && precondition.failedPrecondition) ||
+            'Capability blocked',
+        ];
+    return buildGateDecision({
+      outcome: STAGE_OUTCOMES.BLOCKED,
+      capabilityId,
+      contract,
+      blockingIssues,
+      warnings: result.warnings || [],
+      publishedArtifacts: [],
+      // SPEC-058: blocked diagnostics never fabricate / quarantine empties
+      quarantinedArtifacts: [],
+      validation: {
+        passed: false,
+        reason: 'capability_blocked',
+      },
+      advance: false,
+      publishOutputs: false,
+      reviewSummary: precondition
+        ? {
+            preconditionDiagnostics: precondition,
+          }
+        : null,
+    });
+  }
+
   if (
     result.status === 'failed' ||
     result.status === 'cancelled'
