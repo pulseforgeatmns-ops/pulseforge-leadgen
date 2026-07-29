@@ -165,6 +165,8 @@ class ActiveMissionResolver {
     }
     await this.clearActiveMission(input.sessionId);
 
+    // Operator intent (IntentRouter + Intent Understanding) decides Mission
+    // vs Intelligence — never the currently displayed conversation context.
     const decision = routeIntent(input.objective);
     if (decision.kind !== ROUTE_KINDS.MISSION) {
       return {
@@ -182,6 +184,7 @@ class ActiveMissionResolver {
       clientId: input.clientId != null ? input.clientId : input.tenantId,
       createdBy: input.createdBy || null,
       missionType: input.missionType || decision.missionType,
+      missionIntent: input.missionIntent || decision.missionIntent || null,
       constraints: input.constraints,
       execute: input.execute,
     });
@@ -245,6 +248,7 @@ class ActiveMissionResolver {
         clientId: input.clientId != null ? input.clientId : input.tenantId,
         createdBy: input.operatorId || null,
         missionType: decision.missionType,
+        missionIntent: decision.missionIntent || null,
       });
       return {
         action: 'created',

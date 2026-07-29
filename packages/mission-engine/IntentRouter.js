@@ -1,10 +1,16 @@
 'use strict';
 
 /**
- * IntentRouter — cold-start Mission vs Intelligence gate (SPEC-022 / ADR-027).
+ * IntentRouter — cold-start Mission vs Intelligence gate
+ * (SPEC-022 / ADR-027 / SPEC-055 / ADR-039).
  *
  * Decides: Is this a Mission?
  * MissionPlanner decides: How do we accomplish it? (execution graph)
+ *
+ * Operator intent is the authority — never the currently displayed
+ * conversation (Morning Brief, Command Deck, etc.). Keyword matching is a
+ * fast path; Intent Understanding owns semantic mission detection so
+ * MissionIntent creation is not bypassed when keywords miss.
  *
  * Stage keywords (review, mail package, ready to print) must not collapse a
  * multi-outcome Build Campaign objective into a single-stage Mission type.
@@ -18,6 +24,7 @@ const { MISSION_TYPES, ROUTE_KINDS } = require('./types');
  * @property {'mission'|'intelligence'} kind
  * @property {string|null} missionType
  * @property {string} reason
+ * @property {object|null} [missionIntent] - MissionIntent when understood
  */
 
 /**
@@ -32,29 +39,36 @@ function routeIntent(objective) {
       kind: ROUTE_KINDS.INTELLIGENCE,
       missionType: null,
       reason: 'empty',
+      missionIntent: null,
     };
   }
 
   const lower = q.toLowerCase();
 
-  // Intelligence-specific patterns win when clearly intelligence-only
-  // AND not also a business-build objective.
-  const intelligenceOnly = isIntelligenceOnly(lower);
-  const missionType = matchMissionType(lower, q);
+  // 1) Intent Understanding first (SPEC-055) — operator intent owns routing
+  const understood = routeFromIntentUnderstanding(q);
+  if (understood) {
+    return understood;
+  }
 
+  // 2) Keyword mission seed for types Understanding does not yet cover
+  const missionType = matchMissionType(lower, q);
   if (missionType) {
     return {
       kind: ROUTE_KINDS.MISSION,
       missionType,
       reason: `matched_${missionType}`,
+      missionIntent: null,
     };
   }
 
-  if (intelligenceOnly) {
+  // 3) Intelligence-specific Q&A (monitor / summarize / explain) — not missions
+  if (isIntelligenceOnly(lower)) {
     return {
       kind: ROUTE_KINDS.INTELLIGENCE,
       missionType: null,
       reason: 'intelligence_specific',
+      missionIntent: null,
     };
   }
 
@@ -63,6 +77,54 @@ function routeIntent(objective) {
     kind: ROUTE_KINDS.INTELLIGENCE,
     missionType: null,
     reason: 'default_intelligence',
+    missionIntent: null,
+  };
+}
+
+/**
+ * Elevate confident MissionIntent categories to Mission routing.
+ * @param {string} objective
+ * @returns {RouteDecision|null}
+ */
+function routeFromIntentUnderstanding(objective) {
+  // Lazy requires avoid circular load with MissionPlanner ↔ IntentRouter.
+  const { understandIntent } = require('./IntentUnderstanding');
+  const { resolveMissionTypeFromIntent } = require('./CapabilityPlanner');
+  const {
+    INTENT_CATEGORIES,
+    INTENT_CONFIDENCE_THRESHOLD,
+  } = require('./MissionIntent');
+
+  const missionIntent = understandIntent(objective);
+  const category =
+    missionIntent.intentCategory || missionIntent.matchedIntent || null;
+
+  // Help / unknown stay on the intelligence surface (Q&A), not Mission Engine.
+  if (
+    !category ||
+    category === INTENT_CATEGORIES.UNKNOWN ||
+    category === INTENT_CATEGORIES.OPERATOR_HELP
+  ) {
+    return null;
+  }
+
+  if (
+    missionIntent.needsClarification ||
+    Number(missionIntent.confidence) < INTENT_CONFIDENCE_THRESHOLD
+  ) {
+    return null;
+  }
+
+  const missionType = resolveMissionTypeFromIntent(missionIntent);
+  if (!missionType) {
+    return null;
+  }
+
+  return {
+    kind: ROUTE_KINDS.MISSION,
+    missionType,
+    reason: `understood_${category}`,
+    missionIntent,
   };
 }
 
@@ -151,8 +213,21 @@ function matchMissionType(lower, original) {
     return MISSION_TYPES.MAIL_PACKAGE_GENERATION;
   }
 
-  // Campaign Creation — numeric campaign id still seeds a full pipeline
+  // Campaign Creation — numeric campaign id still seeds a full pipeline,
+  // unless the operator is asking for diagnostics / investigation (SPEC-055).
   if (/\bcampaign\s+\d+\b/.test(lower)) {
+    if (
+      /\b(audit|diagnose|diagnostic|diagnostics)\b/.test(lower) ||
+      /\bwhat('?s| is)\s+wrong\b/.test(lower) ||
+      /\bwhy\s+(isn'?t|is\s+not|didn'?t|doesn'?t|won'?t|did|does|would|failed)\b/.test(
+        lower
+      ) ||
+      /\bfigure\s+out\s+why\b/.test(lower) ||
+      /\b(failed|failing|broken|stuck)\b/.test(lower)
+    ) {
+      // Defer to Intent Understanding — do not collapse into creation.
+      return null;
+    }
     return MISSION_TYPES.CAMPAIGN_CREATION;
   }
 
@@ -275,6 +350,7 @@ function isIntelligenceOnly(lower) {
 
 module.exports = {
   routeIntent,
+  routeFromIntentUnderstanding,
   matchMissionType,
   isIntelligenceOnly,
   ROUTE_KINDS,

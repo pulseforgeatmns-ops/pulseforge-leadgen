@@ -140,6 +140,79 @@ describe('SPEC-022 Workspace Mission routing', () => {
     assert.equal(result.mission, null);
     assert.notEqual(result.structured.metadata.route, 'mission');
   });
+
+  it('Morning Brief context never blocks Mission Planning (operator intent wins)', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const briefingHeadline =
+      'Quiet morning — three watches need review before noon.';
+    const result = await workspace.ask({
+      question: 'Build Campaign 001 for Anchor Cleaning.',
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+        context: 'morning_brief',
+        briefing: {
+          headline: briefingHeadline,
+          summary: 'No major movement overnight.',
+        },
+      },
+    });
+
+    assert.equal(result.route, 'mission');
+    assert.ok(result.mission, 'Mission Engine must create a Mission');
+    assert.ok(
+      result.mission.plan && result.mission.plan.missionIntent,
+      'MissionIntent must be created'
+    );
+    assert.doesNotMatch(
+      result.prose || result.structured.answer || '',
+      /Quiet morning/i
+    );
+    assert.match(
+      result.prose || result.structured.answer || '',
+      /Mission created/i
+    );
+  });
+
+  it('semantic mission objectives route via Intent Understanding despite briefing', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const result = await workspace.ask({
+      question: 'Run an end-to-end execution audit for Campaign 001.',
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+        context: 'morning_brief',
+        briefing: {
+          headline: 'Morning Brief ready',
+          summary: 'Pipeline is quiet.',
+        },
+      },
+    });
+
+    assert.equal(result.route, 'mission');
+    assert.ok(result.mission);
+    assert.ok(result.mission.plan && result.mission.plan.missionIntent);
+    assert.equal(
+      result.mission.plan.missionIntent.intentCategory,
+      'campaign_diagnostics'
+    );
+    assert.doesNotMatch(
+      result.prose || result.structured.answer || '',
+      /Morning Brief ready|Pipeline is quiet/i
+    );
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {

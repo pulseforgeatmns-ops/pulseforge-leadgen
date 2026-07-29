@@ -113,6 +113,7 @@ class MissionEngine {
    * @param {object} [input.constraints]
    * @param {string} [input.createdBy]
    * @param {string} [input.missionType]
+   * @param {object} [input.missionIntent] - precomputed MissionIntent (SPEC-055)
    * @param {boolean} [input.execute=true]
    * @param {boolean} [input.detectOperatorList=true]
    * @param {object} [input.operatorProspectList] - precomputed detection result
@@ -152,6 +153,11 @@ class MissionEngine {
     const missionType =
       input.missionType ||
       (decision.kind === ROUTE_KINDS.MISSION ? decision.missionType : null);
+    const missionIntent =
+      input.missionIntent ||
+      (decision.kind === ROUTE_KINDS.MISSION
+        ? decision.missionIntent || null
+        : null);
 
     const constraints = {
       ...(input.constraints || { targetCount: 50 }),
@@ -191,6 +197,7 @@ class MissionEngine {
     const draft = this._planner.plan({
       objective: planningObjective,
       missionType: missionType || undefined,
+      missionIntent: missionIntent || undefined,
       tenantId: input.tenantId,
       clientId: input.clientId != null ? input.clientId : input.tenantId,
       constraints,

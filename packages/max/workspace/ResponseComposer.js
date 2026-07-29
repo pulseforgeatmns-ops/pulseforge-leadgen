@@ -90,7 +90,17 @@ function classifyIntent(question, context) {
 }
 
 function answerForIntent({ intent, context, evidence, focus, question }) {
-  const brief = context.briefing || (context.deck && context.deck.morningBrief) || {};
+  const corpus = context._answerCorpus || null;
+  const brief =
+    corpus === 'briefing' || corpus == null
+      ? context.briefing || (context.deck && context.deck.morningBrief) || {}
+      : {};
+  // Mission / market / general domains must not fall through to briefing copy.
+  const allowBriefingAnswer =
+    corpus === 'briefing' ||
+    (corpus == null &&
+      (!context.executionDomain ||
+        context.executionDomain === 'morning_briefing'));
   const hla =
     (context.deck && context.deck.highestLeverageAction) ||
     findHlaPayload(context);
@@ -126,12 +136,17 @@ function answerForIntent({ intent, context, evidence, focus, question }) {
 
   // general
   const parts = [];
-  if (brief.headline) parts.push(brief.headline);
-  else if (brief.summary) parts.push(brief.summary);
+  if (allowBriefingAnswer && brief.headline) parts.push(brief.headline);
+  else if (allowBriefingAnswer && brief.summary) parts.push(brief.summary);
   else if (hla && hla.recommendation) {
     parts.push(
       `Current focus: ${hla.recommendation.companyName || focus} (${hla.recommendation.recommendedAction || 'review'}).`
     );
+  } else if (corpus === 'market') {
+    parts.push(
+      `I can investigate ${focus} using Market Intelligence already in this context.`
+    );
+    unavailableExtra.push('detailed_answer');
   } else {
     parts.push(
       `I can investigate ${focus} using only the intelligence already in this context.`
@@ -140,7 +155,7 @@ function answerForIntent({ intent, context, evidence, focus, question }) {
   }
 
   const reasoning = [];
-  if (brief.summary) reasoning.push(String(brief.summary));
+  if (allowBriefingAnswer && brief.summary) reasoning.push(String(brief.summary));
   if (evidence.supportingEvidence[0]) {
     const summary = evidence.supportingEvidence[0].summary;
     if (!reasoning.includes(summary)) reasoning.push(summary);
