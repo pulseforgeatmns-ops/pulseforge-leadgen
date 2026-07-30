@@ -321,6 +321,141 @@ describe('SPEC-022 Workspace Mission routing', () => {
     );
     assert.equal(result.structured.metadata.canaryPreparationOnly, true);
   });
+
+  it('provisional review drafts generate while mail readiness stays Blocked', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const result = await workspace.ask({
+      question: [
+        'Continue the Campaign 001 preparation-only canary package.',
+        '',
+        'Use the same 3 prospects:',
+        '',
+        '1. PM-001 — Gamache Properties — Ben Gamache — Property Management',
+        '2. PM-002 — Elm Grove Companies — David Schleyer — Property Management',
+        '3. PM-003 — Mill City Property Management — Lauren DuPaul — Property Management',
+        '',
+        'Do not create a mission.',
+        'Do not launch, execute, approve, or mail anything.',
+        'Do not mark any prospect Ready.',
+        '',
+        'Create provisional review drafts using only known facts. It is okay if mailing readiness is Blocked.',
+        '',
+        'For each prospect, give me:',
+        '- Status: Blocked for mailing',
+        '- Draft confidence: Low / Medium / High',
+        '- provisional personalized letter',
+        '- handwritten note',
+        '- scorecard cover text',
+        '- first follow-up call notes',
+        '- exact missing fields still blocking mail readiness',
+        '- what I should verify before printing',
+        '- what PulseForge should track once mailed',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const missions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(missions.length, 0);
+    assert.match(answer, /Draft readiness:\s*Allowed/i);
+    assert.match(answer, /Provisional personalized letter:/i);
+    assert.match(answer, /I’m reaching out because Gamache Properties/i);
+    assert.match(answer, /Handwritten note:/i);
+    assert.match(answer, /Scorecard cover text:/i);
+    assert.match(answer, /Mail readiness:\s*Blocked/i);
+    assert.match(answer, /Execution readiness:\s*Blocked/i);
+    assert.match(answer, /This is preparation-only/i);
+    assert.doesNotMatch(answer, /draft held/i);
+    assert.doesNotMatch(answer, /Mission created/i);
+    assert.doesNotMatch(answer, /canRun\s*=\s*false/i);
+    assert.equal(result.structured.metadata.provisionalDrafts, true);
+  });
+
+  it('provisional drafts still list mail blockers and never mark Ready', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const result = await workspace.ask({
+      question: [
+        'Continue the Campaign 001 preparation-only canary package.',
+        '',
+        '1. PM-001 — Gamache Properties — Ben Gamache — Property Management',
+        '2. PM-002 — Elm Grove Companies — David Schleyer — Property Management',
+        '3. PM-003 — Mill City Property Management — Lauren DuPaul — Property Management',
+        '',
+        'Do not launch, execute, approve, or mail anything.',
+        'Create provisional review drafts using only known facts. It is okay if mailing readiness is Blocked.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.match(
+      answer,
+      /Missing fields blocking mail readiness:\s*mailing address, website, phone/i
+    );
+    assert.ok(
+      !/\bStatus:\s*Ready\b/i.test(answer) &&
+        !/\bMail readiness:\s*Ready\b/i.test(answer) &&
+        !/\breadiness status:\s*Ready\b/i.test(answer),
+      'no prospect may be marked Ready while address/website/phone are missing'
+    );
+  });
+
+  it('provisional drafts do not hallucinate unsupported specifics', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const result = await workspace.ask({
+      question: [
+        'Continue the Campaign 001 preparation-only canary package.',
+        '',
+        '1. PM-001 — Gamache Properties — Ben Gamache — Property Management',
+        '2. PM-002 — Elm Grove Companies — David Schleyer — Property Management',
+        '3. PM-003 — Mill City Property Management — Lauren DuPaul — Property Management',
+        '',
+        'Do not launch, execute, approve, or mail anything.',
+        'Create provisional review drafts using only known facts. It is okay if mailing readiness is Blocked.',
+        'Draft confidence should reflect known facts only.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.doesNotMatch(answer, /\bManchester\b/i);
+    assert.doesNotMatch(answer, /tenant complaints/i);
+    assert.doesNotMatch(answer, /portfolio size/i);
+    assert.doesNotMatch(answer, /current vendor/i);
+    assert.doesNotMatch(answer, /website claims/i);
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {

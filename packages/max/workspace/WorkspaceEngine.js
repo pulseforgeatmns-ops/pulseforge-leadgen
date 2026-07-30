@@ -466,6 +466,7 @@ async function maybeBuildCanaryPreparationResponse(input) {
       structured: buildCanaryReviewPackageResponse({
         prospects: detected.prospects,
         objectiveText: detected.objectiveText || question,
+        question,
         domainDecision: input.domainDecision,
       }),
     };
@@ -516,16 +517,80 @@ async function maybeBuildCanaryPreparationResponse(input) {
 
 function buildCanaryReviewPackageResponse(input) {
   const prospects = Array.isArray(input.prospects) ? input.prospects : [];
-  const reviews = prospects.map((p) => assessCanaryProspectReadiness(p));
+  const provisional = isProvisionalDraftRequest(
+    input.question || input.objectiveText || ''
+  );
+  const reviews = prospects.map((p) =>
+    assessCanaryProspectReadiness(p, { provisionalDrafts: provisional })
+  );
   const count = reviews.length;
-  const notReady = reviews.filter((r) => r.readiness !== 'Ready');
+  const mailBlocked = reviews.filter((r) => r.mailReadiness !== 'Ready');
   const missingKinds = collectMissingFieldKinds(reviews);
+  const safety = [
+    'This is preparation-only.',
+    'No launch, execution, approval, or mailing has occurred.',
+    'Do not print/mail until missing fields are verified.',
+  ].join(' ');
 
+  if (provisional) {
+    const intro = [
+      `I found the ${count} canary prospect${count === 1 ? '' : 's'}.`,
+      'We can draft now from known facts; we cannot mail yet.',
+      mailBlocked.length
+        ? `Mail readiness is Blocked until ${formatMissingKinds(missingKinds)} are verified.`
+        : 'Mailing fields look present; execution stays Blocked until you explicitly approve a launch.',
+      safety,
+    ].join(' ');
+
+    const perProspect = reviews.map(formatProvisionalProspectBlock).join('\n\n');
+
+    const closing =
+      'Send or verify website, mailing address, and phone before any print/mail step. I will not launch, execute, approve, or mail anything from this prep request.';
+
+    return buildStructuredResponse({
+      answer: [intro, '', perProspect, '', closing].join('\n'),
+      reasoning: [
+        'Operator supplied canary prospects with preparation-only / no-execution constraints.',
+        'Operator asked for provisional review drafts using only known facts, allowing drafts while mailing readiness is Blocked.',
+        'Draft readiness is independent of mail readiness; missing address/website/phone block mail only.',
+        'No campaign or mail execution mission was started.',
+        'Execution readiness stays Blocked absent an explicit launch/execute/approve/mail request.',
+      ],
+      supportingEvidence: reviews.map((r, i) => ({
+        id: `canary-prospect:${r.id || i}`,
+        summary: `${r.companyName}: mail ${r.mailReadiness}, draft ${r.draftReadiness}, execution ${r.executionReadiness}`,
+        sourceType: 'operator',
+        confidence: null,
+      })),
+      contradictingEvidence: [],
+      confidence: null,
+      nextInvestigations: mailBlocked.length
+        ? [
+            'Provide mailing address, website, and phone for each canary prospect.',
+          ]
+        : ['Confirm review package, then explicitly approve any later launch.'],
+      recommendedActions: [],
+      metadata: {
+        sourcesUsed: { operatorProspectList: true },
+        evidenceCount: reviews.length,
+        unavailable: missingKinds,
+        surface: 'workspace',
+        executionDomain: input.domainDecision && input.domainDecision.domain,
+        route: 'intelligence',
+        canaryPreparationOnly: true,
+        provisionalDrafts: true,
+        prospectCount: count,
+      },
+    });
+  }
+
+  const notReady = reviews.filter((r) => r.readiness !== 'Ready');
   const intro = [
     `I found the ${count} canary prospect${count === 1 ? '' : 's'}. I’m keeping this preparation-only.`,
     notReady.length
       ? `These are missing ${formatMissingKinds(missingKinds)}, so I can’t mark them ready to mail yet.`
       : 'Mailing fields look present; still no launch, execute, approve, or mail.',
+    safety,
   ].join(' ');
 
   const perProspect = reviews
@@ -537,6 +602,9 @@ function buildCanaryReviewPackageResponse(input) {
       return [
         `${r.companyName}${r.contactName ? ` (${r.contactName})` : ''}:`,
         `- readiness status: ${r.readiness}`,
+        `- Mail readiness: ${r.mailReadiness}`,
+        `- Draft readiness: ${r.draftReadiness}`,
+        `- Execution readiness: ${r.executionReadiness}`,
         `- missing or unverified fields: ${missing}`,
         `- packet checklist: letter, handwritten note, scorecard cover, business card`,
         `- personalized letter: draft held — needs a verified mailing address first`,
@@ -560,7 +628,7 @@ function buildCanaryReviewPackageResponse(input) {
       'Prospect rows were extracted; surrounding instruction lines stayed as constraints.',
       'No campaign or mail execution mission was started.',
       notReady.length
-        ? 'Missing mailing address, website, and/or phone — readiness stays Blocked / Needs verification.'
+        ? 'Missing mailing address, website, and/or phone — mail readiness stays Blocked / Needs verification.'
         : 'Mailing fields present; package stays review-only until operator approves launch.',
     ],
     supportingEvidence: reviews.map((r, i) => ({
@@ -587,12 +655,80 @@ function buildCanaryReviewPackageResponse(input) {
       executionDomain: input.domainDecision && input.domainDecision.domain,
       route: 'intelligence',
       canaryPreparationOnly: true,
+      provisionalDrafts: false,
       prospectCount: count,
     },
   });
 }
 
-function assessCanaryProspectReadiness(prospect = {}) {
+function isProvisionalDraftRequest(text) {
+  const lower = String(text || '').toLowerCase();
+  return (
+    /\bprovisional\s+review\s+drafts?\b/.test(lower) ||
+    /\bprovisional\s+drafts?\b/.test(lower) ||
+    /\busing\s+only\s+known\s+facts\b/.test(lower) ||
+    /\bit\s+is\s+okay\s+if\s+mailing\s+readiness\s+is\s+blocked\b/.test(
+      lower
+    ) ||
+    /\bdraft\s+confidence\b/.test(lower)
+  );
+}
+
+function formatProvisionalProspectBlock(r) {
+  const missing =
+    r.missingFields.length > 0
+      ? r.missingFields.join(', ')
+      : 'none flagged';
+  const drafts = r.drafts || {};
+  const statusLabel =
+    r.mailReadiness === 'Ready'
+      ? 'Ready for mailing review'
+      : 'Blocked for mailing';
+
+  return [
+    `${r.companyName}${r.contactName ? ` (${r.contactName})` : ''}:`,
+    `Status: ${statusLabel}`,
+    `Draft confidence: ${r.draftConfidence}`,
+    `Mail readiness: ${r.mailReadiness}`,
+    `Draft readiness: ${r.draftReadiness}`,
+    `Execution readiness: ${r.executionReadiness}`,
+    '',
+    'Provisional personalized letter:',
+    drafts.letter || '(draft held — company, contact, and industry required)',
+    '',
+    'Handwritten note:',
+    drafts.handwrittenNote ||
+      '(draft held — company, contact, and industry required)',
+    '',
+    'Scorecard cover text:',
+    drafts.scorecardCover ||
+      '(draft held — company, contact, and industry required)',
+    '',
+    'First follow-up call notes:',
+    drafts.followUpNotes ||
+      'Confirm decision maker and best reach number before dial.',
+    '',
+    `Missing fields blocking mail readiness: ${missing}`,
+    '',
+    'Verify before printing:',
+    r.verifyBeforePrinting,
+    '',
+    'Track once mailed:',
+    r.trackOnceMailed,
+  ].join('\n');
+}
+
+function assessCanaryProspectReadiness(prospect = {}, options = {}) {
+  const companyName = String(prospect.companyName || '').trim() || 'Unknown company';
+  const contactName = prospect.contactName
+    ? String(prospect.contactName).trim()
+    : null;
+  const industry = prospect.industry
+    ? String(prospect.industry).trim()
+    : prospect.vertical
+      ? String(prospect.vertical).trim()
+      : null;
+
   const missingFields = [];
   if (!String(prospect.address || prospect.mailingAddress || '').trim()) {
     missingFields.push('mailing address');
@@ -603,26 +739,137 @@ function assessCanaryProspectReadiness(prospect = {}) {
   if (!String(prospect.phone || '').trim()) {
     missingFields.push('phone');
   }
-  const readiness =
+
+  const mailReadiness =
     missingFields.length === 0
       ? 'Ready'
       : missingFields.includes('mailing address')
         ? 'Blocked'
         : 'Needs verification';
+
+  // Draft readiness is independent of mailing fields.
+  const draftReadiness =
+    companyName &&
+    companyName !== 'Unknown company' &&
+    contactName &&
+    industry
+      ? 'Allowed'
+      : 'Blocked';
+
+  // Execution always blocked unless the operator explicitly launches later.
+  const executionReadiness = 'Blocked';
+
+  const draftConfidence =
+    draftReadiness !== 'Allowed'
+      ? 'Low'
+      : mailReadiness === 'Ready'
+        ? 'High'
+        : 'Medium';
+
+  const readiness =
+    mailReadiness === 'Ready'
+      ? 'Ready'
+      : mailReadiness === 'Blocked'
+        ? 'Blocked'
+        : 'Needs verification';
+
+  const drafts =
+    options.provisionalDrafts && draftReadiness === 'Allowed'
+      ? buildConservativeCanaryDrafts({
+          companyName,
+          contactName,
+          industry,
+        })
+      : null;
+
   return {
     id: prospect.id || 'unknown',
-    companyName: String(prospect.companyName || '').trim() || 'Unknown company',
-    contactName: prospect.contactName
-      ? String(prospect.contactName).trim()
-      : null,
-    industry: prospect.industry ? String(prospect.industry).trim() : null,
+    companyName,
+    contactName,
+    industry,
     readiness,
+    mailReadiness,
+    draftReadiness,
+    executionReadiness,
+    draftConfidence,
     missingFields,
+    drafts,
+    verifyBeforePrinting:
+      missingFields.length > 0
+        ? `Verify ${missingFields.join(', ')} against a trusted source before any print or mail step.`
+        : 'Confirm mailing address, website, and phone still match the decision maker before printing.',
+    trackOnceMailed:
+      'Prospect id, company, contact, industry, mail date, packet contents (letter / note / scorecard), and first follow-up call outcome.',
     nextAction:
-      readiness === 'Ready'
+      mailReadiness === 'Ready'
         ? 'Operator review of letter / note / scorecard before any approve-to-mail'
         : `Supply ${missingFields.join(', ')} before marking ready to mail`,
   };
+}
+
+/**
+ * Conservative provisional drafts — known facts only (name, company, industry).
+ * No invented property counts, cities, vendors, pain points, or prior conversations.
+ */
+function buildConservativeCanaryDrafts(input) {
+  const company = input.companyName;
+  const contact = input.contactName;
+  const firstName = String(contact).split(/\s+/)[0] || contact;
+  const industry = input.industry;
+  const industryLower = industry.toLowerCase();
+
+  const framing = industryFraming(industryLower);
+
+  const letter = [
+    `${firstName},`,
+    '',
+    `I’m reaching out because ${company} appears to be in ${industryLower}, where ${framing} can directly affect owner confidence.`,
+    '',
+    `PulseForge is preparing a short operational scorecard for ${industryLower} teams to identify where follow-up, vendor coordination, and growth opportunities may be slipping through.`,
+    '',
+    'I’d like to send you the scorecard for review once we verify the correct mailing address.',
+    '',
+    'Best,',
+    '[Sender]',
+  ].join('\n');
+
+  const handwrittenNote = [
+    `${firstName} — preparing a short operational scorecard for ${industryLower} teams.`,
+    'Will send once we confirm the correct mailing address.',
+    '— [Sender]',
+  ].join(' ');
+
+  const scorecardCover = [
+    `Operational scorecard — ${company}`,
+    `Prepared for: ${contact}`,
+    `Context: ${industry}`,
+    'Status: Provisional review draft — mailing fields not yet verified',
+    'Evidence note: uses only company name, contact name, and industry from the operator list; no other claims.',
+  ].join('\n');
+
+  const followUpNotes = [
+    `Confirm decision-maker (${contact}) and best reach number before dialing.`,
+    'Do not reference an unverified mailing address, website, or phone.',
+    `Ask whether a short operational scorecard for ${industryLower} teams would be useful to review.`,
+    'Stay within known facts only — company, contact, and industry.',
+  ].join(' ');
+
+  return {
+    letter,
+    handwrittenNote,
+    scorecardCover,
+    followUpNotes,
+  };
+}
+
+function industryFraming(industryLower) {
+  if (/property\s*management|prop(?:erty)?\s*mgmt/.test(industryLower)) {
+    return 'tenant experience, vendor reliability, and response time';
+  }
+  if (/law|legal|attorney|accountant|accounting|cpa/.test(industryLower)) {
+    return 'client response time, vendor reliability, and office follow-through';
+  }
+  return 'follow-up reliability, vendor coordination, and response time';
 }
 
 function collectMissingFieldKinds(reviews) {
