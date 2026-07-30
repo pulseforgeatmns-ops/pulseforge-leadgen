@@ -261,6 +261,66 @@ describe('SPEC-022 Workspace Mission routing', () => {
     assert.doesNotMatch(answer, /Mission created|Mail Packages|canRun/i);
     assert.equal(result.domainSwitch, null);
   });
+
+  it('preparation-only canary with numbered prospects returns review package without mission', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const result = await workspace.ask({
+      question: [
+        'Use these 3 prospects for the Campaign 001 preparation-only canary package:',
+        '',
+        '1. PM-001 — Gamache Properties — Ben Gamache — Property Management',
+        '2. PM-002 — Elm Grove Companies — David Schleyer — Property Management',
+        '3. PM-003 — Mill City Property Management — Lauren DuPaul — Property Management',
+        '',
+        'Still do not launch, execute, approve, or mail anything.',
+        '',
+        'Prepare the review package only. For each prospect, return:',
+        '- readiness status',
+        '- missing or unverified fields',
+        '- packet checklist',
+        '- personalized letter',
+        '- handwritten note',
+        '- scorecard cover text',
+        '- first follow-up call notes',
+        '- next action',
+        '- tracking fields',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const missions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(missions.length, 0);
+    assert.match(answer, /I found the 3 canary prospects/i);
+    assert.match(answer, /preparation-only/i);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /Elm Grove Companies/);
+    assert.match(answer, /Mill City Property Management/);
+    assert.match(answer, /mailing addresses/i);
+    assert.match(answer, /readiness status: Blocked/i);
+    assert.doesNotMatch(
+      answer,
+      /canRun\s*=\s*false|Capability not registered|Campaign requires prospect count|Input is natural language/i
+    );
+    assert.doesNotMatch(answer, /Mission created/i);
+    assert.ok(
+      !/readiness status: Ready/i.test(answer),
+      'missing address/website/phone must not be Ready'
+    );
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {

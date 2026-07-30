@@ -149,6 +149,7 @@ describe('SPEC-043 OperatorArtifactInjection normalize/validate', () => {
   });
 });
 
+
 describe('SPEC-043 MissionEngine injectProspectList', () => {
   it('surfaces Import Prospect List recovery when Discovery is blocked', async () => {
     const engine = testEngine();
@@ -377,5 +378,81 @@ describe('SPEC-043 chat prompt ProspectList detection', () => {
       mission.deliverables && mission.deliverables.pendingOperatorImport
     );
     assert.ok(mission.deliverables.pendingOperatorImport.paste);
+  });
+});
+
+const CANARY_PROSPECT_PROMPT = [
+  'Use these 3 prospects for the Campaign 001 preparation-only canary package:',
+  '',
+  '1. PM-001 — Gamache Properties — Ben Gamache — Property Management',
+  '2. PM-002 — Elm Grove Companies — David Schleyer — Property Management',
+  '3. PM-003 — Mill City Property Management — Lauren DuPaul — Property Management',
+  '',
+  'Still do not launch, execute, approve, or mail anything.',
+  '',
+  'Prepare the review package only. For each prospect, return:',
+  '- readiness status',
+  '- missing or unverified fields',
+  '- packet checklist',
+  '- personalized letter',
+  '- handwritten note',
+  '- scorecard cover text',
+  '- first follow-up call notes',
+  '- next action',
+  '- tracking fields',
+].join('\n');
+
+describe('Campaign 001 canary prospect block extraction', () => {
+  it('extracts numbered canary prospect rows and keeps instructions as objective', () => {
+    const detected = detectOperatorProspectListInMessage(CANARY_PROSPECT_PROMPT);
+    assert.equal(detected.detected, true);
+    assert.equal(detected.prospectCount, 3);
+    assert.deepEqual(
+      detected.prospects.map((p) => p.companyName),
+      [
+        'Gamache Properties',
+        'Elm Grove Companies',
+        'Mill City Property Management',
+      ]
+    );
+    assert.deepEqual(
+      detected.prospects.map((p) => p.id),
+      ['PM-001', 'PM-002', 'PM-003']
+    );
+    assert.deepEqual(
+      detected.prospects.map((p) => p.contactName),
+      ['Ben Gamache', 'David Schleyer', 'Lauren DuPaul']
+    );
+    assert.ok(
+      detected.prospects.every(
+        (p) =>
+          !/Still do not launch/i.test(p.companyName) &&
+          !/Prepare the review package/i.test(p.companyName)
+      )
+    );
+    assert.match(detected.objectiveText, /Still do not launch/i);
+    assert.match(detected.objectiveText, /Prepare the review package only/i);
+  });
+
+  it('parses tab-separated canary rows without treating instruction lines as prospects', () => {
+    const detected = detectOperatorProspectListInMessage(
+      [
+        'Use these 3 prospects for the Campaign 001 preparation-only canary package:',
+        '',
+        'PM-001\tGamache Properties\tBen Gamache\tProperty Management',
+        'PM-002\tElm Grove Companies\tDavid Schleyer\tProperty Management',
+        'PM-003\tMill City Property Management\tLauren DuPaul\tProperty Management',
+        '',
+        'Still do not launch, execute, approve, or mail anything.',
+      ].join('\n')
+    );
+    assert.equal(detected.detected, true);
+    assert.equal(detected.prospectCount, 3);
+    assert.equal(detected.prospects[0].companyName, 'Gamache Properties');
+    assert.doesNotMatch(
+      detected.prospects.map((p) => p.companyName).join('|'),
+      /Still do not launch/
+    );
+    assert.match(detected.objectiveText, /Still do not launch/i);
   });
 });
