@@ -81,6 +81,9 @@ function buildResponseMetadata(partial = {}) {
   if (partial.canaryPreparationOnly === true) {
     meta.canaryPreparationOnly = true;
   }
+  if (partial.provisionalDrafts === true) {
+    meta.provisionalDrafts = true;
+  }
   if (partial.prospectCount != null && Number.isFinite(Number(partial.prospectCount))) {
     meta.prospectCount = Number(partial.prospectCount);
   }
