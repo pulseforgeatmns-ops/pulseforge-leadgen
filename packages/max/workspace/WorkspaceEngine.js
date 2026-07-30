@@ -22,7 +22,10 @@ const {
   ROUTE_KINDS,
   missionEnabled,
   activeMissionResolverEnabled,
+  OperatorArtifactInjection,
 } = require('../../mission-engine');
+
+const { detectOperatorProspectListInMessage } = OperatorArtifactInjection;
 
 /**
  * WorkspaceEngine — SPEC-009 + SPEC-022 + SPEC-039 routing.
@@ -172,8 +175,8 @@ class WorkspaceEngine {
     const missionsAvailable =
       this._missionsEnabled && this._missionEngine && isMissionDomain(domainDecision.domain);
 
-    const canaryClarification = missionsAvailable
-      ? await maybeBuildCanaryProspectClarification({
+    const canaryPrep = missionsAvailable
+      ? await maybeBuildCanaryPreparationResponse({
           question,
           tenantId: session.context.tenantId,
           missionEngine: this._missionEngine,
@@ -181,7 +184,7 @@ class WorkspaceEngine {
         })
       : null;
 
-    if (canaryClarification) {
+    if (canaryPrep) {
       domainAttach = {
         context: session.context,
         contextSwitch: null,
@@ -189,16 +192,16 @@ class WorkspaceEngine {
         executionContext: {
           domain: EXECUTION_DOMAINS.WORKSPACE,
           routeKind: ROUTE_KINDS.INTELLIGENCE,
-          reason: 'canary_missing_prospects_clarification',
+          reason: canaryPrep.reason,
           missionType: null,
           missionId: null,
         },
       };
-      structured = canaryClarification;
+      structured = canaryPrep.structured;
       route = {
         kind: ROUTE_KINDS.INTELLIGENCE,
         missionType: null,
-        reason: 'canary_missing_prospects_clarification',
+        reason: canaryPrep.reason,
         missionIntent: domainDecision.missionIntent || null,
         executionDomain: domainDecision.domain,
       };
@@ -447,9 +450,27 @@ function createWorkspaceEngine(options = {}) {
   return new WorkspaceEngine(options);
 }
 
-async function maybeBuildCanaryProspectClarification(input) {
+/**
+ * Preparation-only canary: either ask for prospects, or return a review
+ * package conversationally — never create/resume Campaign or Direct Mail Execution.
+ * @returns {Promise<{ structured: object, reason: string }|null>}
+ */
+async function maybeBuildCanaryPreparationResponse(input) {
   const question = String(input.question || '');
   if (!isPreparationOnlyCanary(question)) return null;
+
+  const detected = detectOperatorProspectListInMessage(question);
+  if (detected.detected && detected.prospectCount > 0) {
+    return {
+      reason: 'canary_preparation_review_package',
+      structured: buildCanaryReviewPackageResponse({
+        prospects: detected.prospects,
+        objectiveText: detected.objectiveText || question,
+        domainDecision: input.domainDecision,
+      }),
+    };
+  }
+
   if (hasInlineProspectList(question)) return null;
 
   const existing = await hasExistingCampaignProspects({
@@ -459,44 +480,204 @@ async function maybeBuildCanaryProspectClarification(input) {
   });
   if (existing) return null;
 
+  // Only ask for prospects when the operator invited that clarification path
+  // or clearly has no list yet.
+  if (!isCanaryAwaitingProspects(question)) return null;
+
+  return {
+    reason: 'canary_missing_prospects_clarification',
+    structured: buildStructuredResponse({
+      answer: [
+        'Got it. I will treat this as a preparation-only canary, not a launch or execution run.',
+        'I cannot see three usable Campaign 001 prospects in the current workspace context, so send me 3 prospect names before I create any package mission.',
+        'Send them as company name, decision maker if known, website, mailing address, and phone if you have it.',
+      ].join(' '),
+      reasoning: [
+        'The operator explicitly said not to launch or execute direct mail.',
+        'The operator asked Max to request 3 prospect names instead of creating a mission when existing Campaign 001 prospects are not accessible.',
+        'No usable Campaign 001 prospect artifact was found in the current mission workspace context.',
+      ],
+      supportingEvidence: [],
+      contradictingEvidence: [],
+      confidence: null,
+      nextInvestigations: ['Paste 3 prospects for the canary package.'],
+      recommendedActions: [],
+      metadata: {
+        sourcesUsed: {},
+        evidenceCount: 0,
+        unavailable: ['campaign_001_prospect_artifact'],
+        surface: 'workspace',
+        executionDomain: input.domainDecision && input.domainDecision.domain,
+        route: 'intelligence',
+      },
+    }),
+  };
+}
+
+function buildCanaryReviewPackageResponse(input) {
+  const prospects = Array.isArray(input.prospects) ? input.prospects : [];
+  const reviews = prospects.map((p) => assessCanaryProspectReadiness(p));
+  const count = reviews.length;
+  const notReady = reviews.filter((r) => r.readiness !== 'Ready');
+  const missingKinds = collectMissingFieldKinds(reviews);
+
+  const intro = [
+    `I found the ${count} canary prospect${count === 1 ? '' : 's'}. I’m keeping this preparation-only.`,
+    notReady.length
+      ? `These are missing ${formatMissingKinds(missingKinds)}, so I can’t mark them ready to mail yet.`
+      : 'Mailing fields look present; still no launch, execute, approve, or mail.',
+  ].join(' ');
+
+  const perProspect = reviews
+    .map((r) => {
+      const missing =
+        r.missingFields.length > 0
+          ? r.missingFields.join(', ')
+          : 'none flagged';
+      return [
+        `${r.companyName}${r.contactName ? ` (${r.contactName})` : ''}:`,
+        `- readiness status: ${r.readiness}`,
+        `- missing or unverified fields: ${missing}`,
+        `- packet checklist: letter, handwritten note, scorecard cover, business card`,
+        `- personalized letter: draft held — needs a verified mailing address first`,
+        `- handwritten note: draft held pending address/contact verification`,
+        `- scorecard cover text: held for review package once mailing fields are complete`,
+        `- first follow-up call notes: confirm decision maker + best reach number before dial`,
+        `- next action: ${r.nextAction}`,
+        `- tracking fields: prospect id ${r.id}, company, contact, industry, mail readiness`,
+      ].join('\n');
+    })
+    .join('\n\n');
+
+  const closing = notReady.length
+    ? 'Send website, mailing address, and phone for each prospect (or confirm which are already verified). I will not launch, execute, approve, or mail anything from this prep request.'
+    : 'Review the package above. Say when you want Ready-to-Print prep — I still will not mail or execute unless you explicitly approve a launch.';
+
   return buildStructuredResponse({
-    answer: [
-      'Got it. I will treat this as a preparation-only canary, not a launch or execution run.',
-      'I cannot see three usable Campaign 001 prospects in the current workspace context, so send me 3 prospect names before I create any package mission.',
-      'Send them as company name, decision maker if known, website, mailing address, and phone if you have it.',
-    ].join(' '),
+    answer: [intro, '', perProspect, '', closing].join('\n'),
     reasoning: [
-      'The operator explicitly said not to launch or execute direct mail.',
-      'The operator asked Max to request 3 prospect names instead of creating a mission when existing Campaign 001 prospects are not accessible.',
-      'No usable Campaign 001 prospect artifact was found in the current mission workspace context.',
+      'Operator supplied canary prospects with preparation-only / no-execution constraints.',
+      'Prospect rows were extracted; surrounding instruction lines stayed as constraints.',
+      'No campaign or mail execution mission was started.',
+      notReady.length
+        ? 'Missing mailing address, website, and/or phone — readiness stays Blocked / Needs verification.'
+        : 'Mailing fields present; package stays review-only until operator approves launch.',
     ],
-    supportingEvidence: [],
+    supportingEvidence: reviews.map((r, i) => ({
+      id: `canary-prospect:${r.id || i}`,
+      summary: `${r.companyName}: ${r.readiness} — missing ${
+        r.missingFields.length ? r.missingFields.join(', ') : 'none'
+      }`,
+      sourceType: 'operator',
+      confidence: null,
+    })),
     contradictingEvidence: [],
     confidence: null,
-    nextInvestigations: ['Paste 3 prospects for the canary package.'],
+    nextInvestigations: notReady.length
+      ? [
+          'Provide mailing address, website, and phone for each canary prospect.',
+        ]
+      : ['Confirm review package, then explicitly approve any later launch.'],
     recommendedActions: [],
     metadata: {
-      sourcesUsed: {},
-      evidenceCount: 0,
-      unavailable: ['campaign_001_prospect_artifact'],
+      sourcesUsed: { operatorProspectList: true },
+      evidenceCount: reviews.length,
+      unavailable: missingKinds,
       surface: 'workspace',
       executionDomain: input.domainDecision && input.domainDecision.domain,
       route: 'intelligence',
+      canaryPreparationOnly: true,
+      prospectCount: count,
     },
   });
 }
 
+function assessCanaryProspectReadiness(prospect = {}) {
+  const missingFields = [];
+  if (!String(prospect.address || prospect.mailingAddress || '').trim()) {
+    missingFields.push('mailing address');
+  }
+  if (!String(prospect.website || '').trim()) {
+    missingFields.push('website');
+  }
+  if (!String(prospect.phone || '').trim()) {
+    missingFields.push('phone');
+  }
+  const readiness =
+    missingFields.length === 0
+      ? 'Ready'
+      : missingFields.includes('mailing address')
+        ? 'Blocked'
+        : 'Needs verification';
+  return {
+    id: prospect.id || 'unknown',
+    companyName: String(prospect.companyName || '').trim() || 'Unknown company',
+    contactName: prospect.contactName
+      ? String(prospect.contactName).trim()
+      : null,
+    industry: prospect.industry ? String(prospect.industry).trim() : null,
+    readiness,
+    missingFields,
+    nextAction:
+      readiness === 'Ready'
+        ? 'Operator review of letter / note / scorecard before any approve-to-mail'
+        : `Supply ${missingFields.join(', ')} before marking ready to mail`,
+  };
+}
+
+function collectMissingFieldKinds(reviews) {
+  const set = new Set();
+  reviews.forEach((r) => {
+    (r.missingFields || []).forEach((f) => set.add(f));
+  });
+  return [...set];
+}
+
+function formatMissingKinds(kinds) {
+  if (!kinds.length) return 'required mailing fields';
+  const plural = (k) =>
+    k === 'mailing address'
+      ? 'mailing addresses'
+      : k === 'website'
+        ? 'websites'
+        : k === 'phone'
+          ? 'phones'
+          : `${k}s`;
+  const parts = kinds.map(plural);
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and/or ${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')}, and/or ${parts[parts.length - 1]}`;
+}
+
 function isPreparationOnlyCanary(question) {
   const lower = String(question || '').toLowerCase();
-  return (
+  const canaryCue =
     /\bcanary\b/.test(lower) &&
-    /\b(preparation|prep|review|draft)[-\s]*only\b/.test(lower) &&
-    /\bnot\s+(launching|executing|mailing)|\bdo\s+not\s+(run|execute|launch|mail|resume)/.test(lower) &&
-    /\bask\s+me\s+for\s+3\s+prospect|\bask\s+me\s+for\s+three\s+prospect|\binstead\s+of\s+creating\b/.test(lower)
+    (/\b(preparation|prep|review|draft)[-\s]*only\b/.test(lower) ||
+      /\bprepare\s+the\s+review\s+package\s+only\b/.test(lower) ||
+      /\breview\s+package\s+only\b/.test(lower));
+  const noExec =
+    /\bnot\s+(launching|executing|mailing)\b/.test(lower) ||
+    /\b(still\s+)?do\s+not\s+(run|execute|launch|mail|resume|approve)\b/.test(
+      lower
+    ) ||
+    /\bdo\s+not\s+launch,\s*execute/.test(lower);
+  return canaryCue && noExec;
+}
+
+function isCanaryAwaitingProspects(question) {
+  const lower = String(question || '').toLowerCase();
+  return (
+    /\bask\s+me\s+for\s+(3|three)\s+prospect/.test(lower) ||
+    /\binstead\s+of\s+creating\b/.test(lower) ||
+    /\bif\s+you\s+cannot\s+access\b/.test(lower)
   );
 }
 
 function hasInlineProspectList(question) {
+  const detected = detectOperatorProspectListInMessage(question);
+  if (detected.detected && detected.prospectCount > 0) return true;
+
   const lines = String(question || '')
     .split(/\r?\n/)
     .map((line) => line.trim())

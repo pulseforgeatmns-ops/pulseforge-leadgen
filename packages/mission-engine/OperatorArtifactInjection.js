@@ -104,6 +104,7 @@ function normalizeProspectRow(raw, index = 0) {
 
 /**
  * Parse CSV or TSV text into prospect rows.
+ * Also accepts numbered / em-dash prospect rows (canary paste format).
  * @param {string} text
  * @returns {object[]}
  */
@@ -113,6 +114,38 @@ function parseDelimitedProspects(text) {
 
   const lines = raw.split('\n').filter((line) => String(line).trim());
   if (!lines.length) return [];
+
+  // Prefer numbered / dash-separated prospect rows when present
+  const numbered = [];
+  let numberedHits = 0;
+  for (const line of lines) {
+    const parsed = parseNumberedProspectRow(line, numbered.length);
+    if (parsed) {
+      numberedHits += 1;
+      numbered.push(parsed);
+    } else if (isInstructionOrChecklistLine(line)) {
+      // Skip trailing instruction / bullet lines inside a mixed paste
+      continue;
+    } else if (numberedHits > 0) {
+      // Contiguous numbered block ended
+      break;
+    }
+  }
+  if (numberedHits >= 1 && numbered.length === numberedHits) {
+    // All non-instruction lines were numbered prospect rows
+    const nonInstruction = lines.filter((l) => !isInstructionOrChecklistLine(l));
+    if (
+      numberedHits >= 2 ||
+      (numberedHits === 1 && nonInstruction.length === 1)
+    ) {
+      if (numberedHits === nonInstruction.length) {
+        return numbered;
+      }
+    }
+  }
+  if (numberedHits >= 2 && numbered.length >= 2) {
+    return numbered;
+  }
 
   const delimiter = detectDelimiter(lines[0]);
   const firstCells = splitDelimitedLine(lines[0], delimiter).map((c) =>
@@ -128,6 +161,7 @@ function parseDelimitedProspects(text) {
     for (let i = 1; i < lines.length; i += 1) {
       const cells = splitDelimitedLine(lines[i], delimiter);
       if (cells.every((c) => !String(c || '').trim())) continue;
+      if (isInstructionOrChecklistLine(lines[i])) continue;
       const obj = {};
       headers.forEach((h, idx) => {
         obj[h] = cells[idx] != null ? String(cells[idx]).trim() : '';
@@ -144,6 +178,12 @@ function parseDelimitedProspects(text) {
   // Headerless: one company per line, OR a single line of company names.
   const expanded = [];
   lines.forEach((line) => {
+    if (isInstructionOrChecklistLine(line)) return;
+    const numberedRow = parseNumberedProspectRow(line, expanded.length);
+    if (numberedRow) {
+      expanded.push(numberedRow);
+      return;
+    }
     const cells = splitDelimitedLine(line, delimiter).map((c) =>
       String(c).trim()
     );
@@ -156,6 +196,25 @@ function parseDelimitedProspects(text) {
       cells.filter(Boolean).forEach((name) => {
         expanded.push(normalizeProspectRow(name, expanded.length));
       });
+      return;
+    }
+    // id + company + contact + industry (tab / comma) without header
+    if (
+      cells.length >= 3 &&
+      looksLikeProspectId(cells[0]) &&
+      isViableCompanyName(cells[1])
+    ) {
+      expanded.push(
+        normalizeProspectRow(
+          {
+            id: cells[0],
+            companyName: cells[1],
+            contactName: cells[2],
+            industry: cells[3] || null,
+          },
+          expanded.length
+        )
+      );
       return;
     }
     expanded.push(
@@ -542,9 +601,181 @@ const EXPLICIT_IMPORT_CUE =
 const OBJECTIVE_ONLY_LINE =
   /\b(build|create|launch|prepare|new)\s+(a\s+)?(campaign|mission)\b|\bmonitor\b|\bsummarize\b|\breview\s+campaign\b/i;
 
+/** Operator constraint / request prose that must not become ProspectList rows. */
+const INSTRUCTION_LINE =
+  /\b(still\s+do\s+not|do\s+not\s+(launch|execute|approve|mail|run|resume)|prepare\s+the\s+review|for\s+each\s+prospect|return:|readiness\s+status|missing\s+or\s+unverified|packet\s+checklist|personalized\s+letter|handwritten\s+note|scorecard|follow-?up\s+call|next\s+action|tracking\s+fields)\b/i;
+
+const CHECKLIST_BULLET = /^\s*[-*•]\s+\S/;
+
+/**
+ * Strip leading list markers: `1.`, `1)`, `- `, `* `
+ * @param {string} line
+ */
+function stripListPrefix(line) {
+  return String(line || '')
+    .trim()
+    .replace(/^\d+[\.)]\s+/, '')
+    .replace(/^[-*•]\s+/, '')
+    .trim();
+}
+
+function looksLikeProspectId(value) {
+  const s = String(value || '').trim();
+  if (!s) return false;
+  // PM-001, LEAD_12, A1, etc.
+  return /^[A-Za-z]{1,12}[-_]?\d{1,6}$/.test(s) || /^[A-Za-z]+\d+$/.test(s);
+}
+
+function hasProspectRowSeparators(text) {
+  const s = String(text || '');
+  return /[—–]/.test(s) || /\t/.test(s) || /\s+-\s+/.test(s);
+}
+
+/**
+ * True for operator instruction / checklist lines that must not be prospects.
+ * Does not call numbered-row parsers (avoids recursion).
+ * @param {string} line
+ */
+function isInstructionOrChecklistLine(line) {
+  const text = String(line || '').trim();
+  if (!text) return false;
+  if (INSTRUCTION_LINE.test(text)) return true;
+  if (OBJECTIVE_ONLY_LINE.test(text) && !hasProspectRowSeparators(text)) {
+    return true;
+  }
+  // Bullets that are field requests ("- readiness status"), not company rows
+  if (CHECKLIST_BULLET.test(text) && !hasProspectRowSeparators(text)) {
+    const body = stripListPrefix(text);
+    if (!body) return true;
+    if (looksLikeNaturalLanguage(body)) return true;
+    if (!isViableCompanyName(body)) return true;
+  }
+  return false;
+}
+
+/**
+ * Split a stripped prospect line into id/company/contact/industry parts.
+ * @param {string} stripped
+ * @returns {string[]}
+ */
+function splitProspectParts(stripped) {
+  let parts = String(stripped || '')
+    .split(/\s*[—–]\s*/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length < 3) {
+    const tabParts = String(stripped || '')
+      .split(/\t+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (tabParts.length >= 3) parts = tabParts;
+  }
+  if (parts.length < 3) {
+    parts = String(stripped || '')
+      .split(/\s+-\s+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+  }
+  return parts;
+}
+
+/**
+ * Parse `1. PM-001 — Company — Contact — Industry` (em dash / hyphen / tab).
+ * @param {string} line
+ * @param {number} index
+ * @returns {object|null}
+ */
+function parseNumberedProspectRow(line, index = 0) {
+  const text = String(line || '').trim();
+  if (!text) return null;
+  if (INSTRUCTION_LINE.test(text)) return null;
+  if (!hasProspectRowSeparators(text) && !/^\d+[\.)]\s+/.test(text)) {
+    // Require separators or a numeric list prefix
+    if (!/\t/.test(text)) return null;
+  }
+
+  const stripped = stripListPrefix(text);
+  if (!stripped || INSTRUCTION_LINE.test(stripped)) return null;
+
+  const parts = splitProspectParts(stripped);
+  if (parts.length < 3) return null;
+
+  let id = null;
+  let companyName;
+  let contactName;
+  let industry = null;
+
+  if (looksLikeProspectId(parts[0])) {
+    id = parts[0];
+    companyName = parts[1];
+    contactName = parts[2];
+    industry = parts[3] || null;
+  } else if (isViableCompanyName(parts[0])) {
+    companyName = parts[0];
+    contactName = parts[1];
+    industry = parts[2] || null;
+  } else {
+    return null;
+  }
+
+  if (!companyName || !isViableCompanyName(companyName)) return null;
+  if (looksLikeNaturalLanguage(companyName)) return null;
+
+  return normalizeProspectRow(
+    {
+      id: id || `op_${index + 1}`,
+      companyName,
+      contactName: contactName || null,
+      industry: industry || null,
+    },
+    index
+  );
+}
+
+function looksLikeNumberedProspectRow(line) {
+  const text = String(line || '').trim();
+  if (!text) return false;
+  if (INSTRUCTION_LINE.test(text)) return false;
+  const hasListPrefix = /^\d+[\.)]\s+/.test(text) || /^[-*•]\s+/.test(text);
+  if (!hasProspectRowSeparators(text) && !hasListPrefix) return false;
+  return parseNumberedProspectRow(text, 0) != null;
+}
+
+/**
+ * CSV/TSV data row (not instruction prose that happens to contain commas).
+ * @param {string} line
+ */
+function looksLikeDelimitedDataRow(line) {
+  const text = String(line || '').trim();
+  if (!text) return false;
+  if (INSTRUCTION_LINE.test(text)) return false;
+  if (isInstructionOrChecklistLine(text)) return false;
+  if (looksLikeNumberedProspectRow(text)) return true;
+
+  const tabs = (text.match(/\t/g) || []).length;
+  if (tabs >= 1) {
+    const cells = splitDelimitedLine(text, '\t').map((c) => String(c).trim());
+    if (cells.length >= 2 && cells.some((c) => isViableCompanyName(c))) {
+      return true;
+    }
+  }
+
+  const commas = (text.match(/,/g) || []).length;
+  if (commas >= 1) {
+    // Reject NL sentences that use commas as separators ("Still do not launch, execute…")
+    if (looksLikeNaturalLanguage(stripListPrefix(text))) return false;
+    const cells = splitDelimitedLine(text, ',').map((c) => String(c).trim());
+    if (cells.length >= 2 && cells.some((c) => isViableCompanyName(c))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Extract a contiguous prospect-list block from a Mission chat prompt.
- * Looks for CSV/TSV headers, delimited rows, or a blank-line-separated name list.
+ * Looks for numbered dash rows, CSV/TSV headers, delimited rows, or name lists.
+ * Stops before trailing operator instructions / checklist bullets.
  * @param {string} text
  * @returns {{ block: string, startLine: number, endLine: number, hasHeader: boolean }|null}
  */
@@ -559,7 +790,10 @@ function extractProspectBlock(text) {
   for (let i = 0; i < lines.length; i += 1) {
     const line = String(lines[i] || '').trim();
     if (!line) continue;
-    if (OBJECTIVE_ONLY_LINE.test(line) && !looksLikeDelimitedRow(line)) {
+    if (isInstructionOrChecklistLine(line) && !looksLikeNumberedProspectRow(line)) {
+      continue;
+    }
+    if (OBJECTIVE_ONLY_LINE.test(line) && !looksLikeDelimitedDataRow(line)) {
       continue;
     }
     const delimiter = detectDelimiter(line);
@@ -574,13 +808,13 @@ function extractProspectBlock(text) {
       hasHeader = true;
       break;
     }
-    if (looksLikeDelimitedRow(line)) {
+    if (looksLikeNumberedProspectRow(line) || looksLikeDelimitedDataRow(line)) {
       start = i;
       break;
     }
   }
 
-  // Fallback: after first blank line, collect 2+ non-objective name lines
+  // Fallback: after first blank line, collect 2+ non-instruction name lines
   if (start < 0) {
     const blankIdx = lines.findIndex((l, idx) => idx > 0 && !String(l).trim());
     if (blankIdx >= 0) {
@@ -588,6 +822,10 @@ function extractProspectBlock(text) {
       for (let i = blankIdx + 1; i < lines.length; i += 1) {
         const line = String(lines[i] || '').trim();
         if (!line) {
+          if (candidates.length) break;
+          continue;
+        }
+        if (isInstructionOrChecklistLine(line)) {
           if (candidates.length) break;
           continue;
         }
@@ -606,12 +844,37 @@ function extractProspectBlock(text) {
   for (let i = start; i < lines.length; i += 1) {
     const line = String(lines[i] || '').trim();
     if (!line) {
-      // allow a single blank inside the block; stop on trailing blanks
-      if (i > start && !String(lines[i + 1] || '').trim()) break;
+      // Stop at blank that precedes instructions / ends the contiguous block
+      const next = String(lines[i + 1] || '').trim();
+      if (
+        i > start &&
+        (!next ||
+          isInstructionOrChecklistLine(next) ||
+          (OBJECTIVE_ONLY_LINE.test(next) && !looksLikeDelimitedDataRow(next)))
+      ) {
+        break;
+      }
       continue;
     }
-    if (i > start && OBJECTIVE_ONLY_LINE.test(line) && !looksLikeDelimitedRow(line)) {
+    if (
+      i > start &&
+      (isInstructionOrChecklistLine(line) ||
+        (OBJECTIVE_ONLY_LINE.test(line) && !looksLikeDelimitedDataRow(line)))
+    ) {
       break;
+    }
+    // Contiguous numbered/data block only — stop when row shape breaks
+    if (
+      i > start &&
+      !looksLikeNumberedProspectRow(line) &&
+      !looksLikeDelimitedDataRow(line) &&
+      !hasHeader
+    ) {
+      // Allow headerless name-only continuations if first row was names
+      const first = String(lines[start] || '').trim();
+      if (looksLikeNumberedProspectRow(first) || looksLikeDelimitedDataRow(first)) {
+        break;
+      }
     }
     end = i;
   }
@@ -625,9 +888,10 @@ function extractProspectBlock(text) {
   if (!block) return null;
 
   if (!hasHeader) {
+    const firstLine = block.split('\n')[0];
     const firstCells = splitDelimitedLine(
-      block.split('\n')[0],
-      detectDelimiter(block.split('\n')[0])
+      firstLine,
+      detectDelimiter(firstLine)
     ).map((c) => String(c).trim());
     hasHeader = firstCells.some((c) =>
       FIELD_ALIASES.companyName.includes(normalizeHeaderKey(c))
@@ -638,11 +902,7 @@ function extractProspectBlock(text) {
 }
 
 function looksLikeDelimitedRow(line) {
-  const text = String(line || '');
-  if (!text.trim()) return false;
-  const commas = (text.match(/,/g) || []).length;
-  const tabs = (text.match(/\t/g) || []).length;
-  return tabs >= 1 || commas >= 1;
+  return looksLikeDelimitedDataRow(line) || looksLikeNumberedProspectRow(line);
 }
 
 /**
@@ -800,6 +1060,9 @@ module.exports = {
   extractProspectBlock,
   detectOperatorProspectListInMessage,
   stripProspectBlock,
+  parseNumberedProspectRow,
+  looksLikeNumberedProspectRow,
+  isInstructionOrChecklistLine,
   looksLikeNaturalLanguage,
   isViableCompanyName,
 };

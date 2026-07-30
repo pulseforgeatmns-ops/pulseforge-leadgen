@@ -78,6 +78,12 @@ function buildResponseMetadata(partial = {}) {
   if (partial.resolutionPath != null) {
     meta.resolutionPath = String(partial.resolutionPath);
   }
+  if (partial.canaryPreparationOnly === true) {
+    meta.canaryPreparationOnly = true;
+  }
+  if (partial.prospectCount != null && Number.isFinite(Number(partial.prospectCount))) {
+    meta.prospectCount = Number(partial.prospectCount);
+  }
   return meta;
 }
 
