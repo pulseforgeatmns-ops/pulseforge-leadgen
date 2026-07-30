@@ -6,6 +6,8 @@ const {
   classifyMessage,
   createMissionEngine,
   MESSAGE_CLASS,
+  routeIntent,
+  ROUTE_KINDS,
   RESOLUTION_PATHS,
   MISSION_TYPES,
   AUDIT_KINDS,
@@ -71,6 +73,33 @@ describe('SPEC-039 classifyMessage', () => {
     };
     const r = classifyMessage('Show progress', active);
     assert.equal(r.classification, MESSAGE_CLASS.RESUME);
+  });
+
+  it('classifies preparation-only canary correction as clarification, not resume', () => {
+    const active = {
+      id: 'msn_1',
+      objectiveText: 'Direct Mail Execution — Campaign 001',
+      title: 'Direct Mail Execution — Campaign 001',
+      type: MISSION_TYPES.DIRECT_MAIL_EXECUTION,
+      status: 'waiting',
+    };
+    const r = classifyMessage(
+      'Please retry the canary as preparation only, not execution.',
+      active
+    );
+    assert.equal(r.classification, MESSAGE_CLASS.CLARIFY);
+    assert.equal(r.reason, 'execution_negated');
+  });
+});
+
+describe('SPEC-055 canary routing constraints', () => {
+  it('routes review-only canary package preparation away from Direct Mail Execution', () => {
+    const routed = routeIntent(
+      'We are not launching the full direct mail campaign yet. I want to run a canary batch first. Prepare a small Campaign 001 canary package for review only.'
+    );
+    assert.equal(routed.kind, ROUTE_KINDS.MISSION);
+    assert.equal(routed.missionType, MISSION_TYPES.MAIL_PACKAGE_GENERATION);
+    assert.notEqual(routed.missionType, MISSION_TYPES.DIRECT_MAIL_EXECUTION);
   });
 });
 
@@ -186,6 +215,32 @@ describe('SPEC-039 ActiveMissionResolver', () => {
     const list = await engine.list({ tenantId: '10' });
     assert.equal(list.length, 1);
   });
+
+  it('does not resume a failed execution mission when operator says preparation only', async () => {
+    const engine = testEngine();
+    const resolver = engine.activeMissionResolver;
+    const sessionId = 'sess-clarify-1';
+
+    const created = await resolver.resolve({
+      sessionId,
+      message: 'Execute Campaign 001 direct mail.',
+      tenantId: '10',
+      clientId: 10,
+    });
+    assert.equal(created.action, 'created');
+    assert.equal(created.mission.type, MISSION_TYPES.DIRECT_MAIL_EXECUTION);
+
+    const clarified = await resolver.resolve({
+      sessionId,
+      message: 'Do not jump into Direct Mail Execution. Retry this as a canary package for preparation only, not execution.',
+      tenantId: '10',
+      clientId: 10,
+    });
+    assert.equal(clarified.action, 'clarified');
+    assert.equal(clarified.classification, MESSAGE_CLASS.CLARIFY);
+    assert.equal(clarified.resolutionPath, RESOLUTION_PATHS.CLARIFY);
+    assert.equal(clarified.mission.id, created.mission.id);
+  });
 });
 
 describe('SPEC-039 WorkspaceEngine Active Mission precedence', () => {
@@ -247,5 +302,34 @@ describe('SPEC-039 WorkspaceEngine Active Mission precedence', () => {
     assert.equal(second.mission.type, MISSION_TYPES.CAMPAIGN_REVIEW);
     const list = await missionEngine.list({ tenantId: '10' });
     assert.equal(list.length, 2);
+  });
+
+  it('answers execution-negated follow-up conversationally instead of exposing resolver internals first', async () => {
+    const missionEngine = testEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      resolverEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: 'Execute Campaign 001 direct mail.',
+      context: { tenantId: '10', page: 'command-deck' },
+    });
+    assert.equal(first.mission.type, MISSION_TYPES.DIRECT_MAIL_EXECUTION);
+
+    const second = await workspace.ask({
+      sessionId: first.sessionId,
+      question:
+        'Do not jump into Direct Mail Execution. Retry this as a canary package for preparation only, not execution.',
+    });
+
+    assert.equal(second.resolution.action, 'clarified');
+    const text = second.prose || second.structured.answer;
+    assert.match(text, /I will not resume Direct Mail Execution/i);
+    assert.match(text, /preparation\/review-only canary/i);
+    assert.doesNotMatch(text, /Active Mission Resolver/i);
+    assert.doesNotMatch(text, /IntentRouter not used/i);
   });
 });

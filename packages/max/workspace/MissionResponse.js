@@ -175,6 +175,17 @@ function composeActiveMissionResponse(input) {
       `Mission: ${title} (${mission.id}).`,
       `Classification: ${resolution.classification}.`,
     ];
+  } else if (action === 'clarified') {
+    answer = [
+      'Got it. I will not resume Direct Mail Execution from that correction.',
+      'You are asking for a preparation/review-only canary, not an execution run.',
+      'To continue, I need either an attached prospect list or permission to use the existing campaign prospects.',
+      'Once I have that, I should return ready/blocked status, missing fields, packet contents, letters, notes, scorecard covers, follow-up notes, next actions, and tracking fields before anything is approved or mailed.',
+    ].join(' ');
+    reasoning = [
+      'The operator explicitly constrained this as preparation/review only.',
+      'The active execution Mission was not resumed.',
+    ];
   } else {
     const stage =
       (mission.progress && mission.progress.currentStage) || mission.status;

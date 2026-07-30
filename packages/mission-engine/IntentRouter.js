@@ -134,6 +134,16 @@ function routeFromIntentUnderstanding(objective) {
  * @returns {string|null}
  */
 function matchMissionType(lower, original) {
+  const executionNegated = hasExecutionNegation(lower);
+
+  if (
+    executionNegated &&
+    /\bcanary\b/.test(lower) &&
+    /\b(package|packages|packet|packets|letter|letters|mail|direct\s*mail)\b/.test(lower)
+  ) {
+    return MISSION_TYPES.MAIL_PACKAGE_GENERATION;
+  }
+
   // SPEC-041: broad build/create campaign wins over later-stage keywords
   // (review / mail package / ready to print). Planner augments the graph.
   const isCampaignBuild =
@@ -175,14 +185,15 @@ function matchMissionType(lower, original) {
 
   // Direct Mail Execution (SPEC-035) — focused objective only
   if (
-    /\bdirect\s+mail\s+execution\b/.test(lower) ||
-    /\bexecute\s+(the\s+)?(direct\s+)?mail\b/.test(lower) ||
-    /\bexecute\s+(the\s+)?campaign\b/.test(lower) ||
-    /\bprint\s+(and\s+)?mail\b/.test(lower) ||
-    /\bmail\s+(the\s+)?campaign\b/.test(lower) ||
-    /\bmark\s+(all\s+)?mailed\b/.test(lower) ||
-    /\bprint\s+session\b/.test(lower) ||
-    /\bassemble\s+(mail\s+)?packages?\b/.test(lower)
+    !executionNegated &&
+    (/\bdirect\s+mail\s+execution\b/.test(lower) ||
+      /\bexecute\s+(the\s+)?(direct\s+)?mail\b/.test(lower) ||
+      /\bexecute\s+(the\s+)?campaign\b/.test(lower) ||
+      /\bprint\s+(and\s+)?mail\b/.test(lower) ||
+      /\bmail\s+(the\s+)?campaign\b/.test(lower) ||
+      /\bmark\s+(all\s+)?mailed\b/.test(lower) ||
+      /\bprint\s+session\b/.test(lower) ||
+      /\bassemble\s+(mail\s+)?packages?\b/.test(lower))
   ) {
     return MISSION_TYPES.DIRECT_MAIL_EXECUTION;
   }
@@ -312,6 +323,17 @@ function matchMissionType(lower, original) {
 
   void original;
   return null;
+}
+
+function hasExecutionNegation(lower) {
+  return (
+    /\bdo\s+not\s+(?:jump\s+into\s+|start\s+|run\s+|execute\s+|launch\s+|mail\s+|approve\s+)/.test(lower) ||
+    /\bdon't\s+(?:jump\s+into\s+|start\s+|run\s+|execute\s+|launch\s+|mail\s+|approve\s+)/.test(lower) ||
+    /\bnot\s+(?:executing|launching|mailing|approving)\b/.test(lower) ||
+    /\bnot\s+(?:an?\s+)?(?:execution|launch|send|mailing)\s+(?:task|request|yet)\b/.test(lower) ||
+    /\b(?:review|preparation|prep|draft)\s+only\b/.test(lower) ||
+    /\bprepare\s+.*\bnot\s+execution\b/.test(lower)
+  );
 }
 
 /**

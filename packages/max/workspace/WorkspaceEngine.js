@@ -219,7 +219,8 @@ class WorkspaceEngine {
           mission &&
           (resolution.action === 'resumed' ||
             resolution.action === 'modified' ||
-            resolution.action === 'diagnosed')
+            resolution.action === 'diagnosed' ||
+            resolution.action === 'clarified')
         ) {
           structured = composeActiveMissionResponse({
             resolution,
