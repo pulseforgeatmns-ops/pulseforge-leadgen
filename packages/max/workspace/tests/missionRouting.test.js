@@ -213,6 +213,54 @@ describe('SPEC-022 Workspace Mission routing', () => {
       /Morning Brief ready|Pipeline is quiet/i
     );
   });
+
+  it('preparation-only canary asks for prospects before creating package mission', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const result = await workspace.ask({
+      question: [
+        'Max, we are not launching or executing direct mail yet.',
+        '',
+        'I want a preparation-only canary package for review.',
+        '',
+        'Use 3 prospects from the existing Campaign 001 work if available. If you cannot access them, ask me for 3 prospect names instead of creating an execution mission.',
+        '',
+        'For each prospect, give me:',
+        '- readiness status: Ready / Blocked / Needs verification',
+        '- missing or unverified fields',
+        '- exact packet checklist',
+        '- personalized letter',
+        '- handwritten note',
+        '- scorecard cover text',
+        '- first follow-up call notes',
+        '- what I should do next',
+        '- what PulseForge should track after mailing',
+        '',
+        'Do not run Direct Mail Execution.',
+        'Do not resume any failed Direct Mail Execution mission.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const missions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(missions.length, 0);
+    assert.match(answer, /preparation-only canary/i);
+    assert.match(answer, /3 prospect names/i);
+    assert.doesNotMatch(answer, /Mission created|Mail Packages|canRun/i);
+    assert.equal(result.domainSwitch, null);
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {

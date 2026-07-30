@@ -5,6 +5,7 @@ const { buildOpeningState } = require('./OpeningStateBuilder');
 const { buildSuggestions } = require('./SuggestionEngine');
 const { SessionStore } = require('./SessionStore');
 const { composeResponse } = require('./ResponseComposer');
+const { buildStructuredResponse } = require('./WorkspaceTypes');
 const {
   composeMissionResponse,
   composeActiveMissionResponse,
@@ -171,7 +172,37 @@ class WorkspaceEngine {
     const missionsAvailable =
       this._missionsEnabled && this._missionEngine && isMissionDomain(domainDecision.domain);
 
-    if (missionsAvailable) {
+    const canaryClarification = missionsAvailable
+      ? await maybeBuildCanaryProspectClarification({
+          question,
+          tenantId: session.context.tenantId,
+          missionEngine: this._missionEngine,
+          domainDecision,
+        })
+      : null;
+
+    if (canaryClarification) {
+      domainAttach = {
+        context: session.context,
+        contextSwitch: null,
+        domainSwitch: null,
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: 'canary_missing_prospects_clarification',
+          missionType: null,
+          missionId: null,
+        },
+      };
+      structured = canaryClarification;
+      route = {
+        kind: ROUTE_KINDS.INTELLIGENCE,
+        missionType: null,
+        reason: 'canary_missing_prospects_clarification',
+        missionIntent: domainDecision.missionIntent || null,
+        executionDomain: domainDecision.domain,
+      };
+    } else if (missionsAvailable) {
       // 3–4) Attach mission domain context, then execute via Mission Engine
       if (this._resolverEnabled && this._missionEngine.activeMissionResolver) {
         const resolver = this._missionEngine.activeMissionResolver;
@@ -414,6 +445,103 @@ class WorkspaceEngine {
  */
 function createWorkspaceEngine(options = {}) {
   return new WorkspaceEngine(options);
+}
+
+async function maybeBuildCanaryProspectClarification(input) {
+  const question = String(input.question || '');
+  if (!isPreparationOnlyCanary(question)) return null;
+  if (hasInlineProspectList(question)) return null;
+
+  const existing = await hasExistingCampaignProspects({
+    missionEngine: input.missionEngine,
+    tenantId: input.tenantId,
+    question,
+  });
+  if (existing) return null;
+
+  return buildStructuredResponse({
+    answer: [
+      'Got it. I will treat this as a preparation-only canary, not a launch or execution run.',
+      'I cannot see three usable Campaign 001 prospects in the current workspace context, so send me 3 prospect names before I create any package mission.',
+      'Send them as company name, decision maker if known, website, mailing address, and phone if you have it.',
+    ].join(' '),
+    reasoning: [
+      'The operator explicitly said not to launch or execute direct mail.',
+      'The operator asked Max to request 3 prospect names instead of creating a mission when existing Campaign 001 prospects are not accessible.',
+      'No usable Campaign 001 prospect artifact was found in the current mission workspace context.',
+    ],
+    supportingEvidence: [],
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: ['Paste 3 prospects for the canary package.'],
+    recommendedActions: [],
+    metadata: {
+      sourcesUsed: {},
+      evidenceCount: 0,
+      unavailable: ['campaign_001_prospect_artifact'],
+      surface: 'workspace',
+      executionDomain: input.domainDecision && input.domainDecision.domain,
+      route: 'intelligence',
+    },
+  });
+}
+
+function isPreparationOnlyCanary(question) {
+  const lower = String(question || '').toLowerCase();
+  return (
+    /\bcanary\b/.test(lower) &&
+    /\b(preparation|prep|review|draft)[-\s]*only\b/.test(lower) &&
+    /\bnot\s+(launching|executing|mailing)|\bdo\s+not\s+(run|execute|launch|mail|resume)/.test(lower) &&
+    /\bask\s+me\s+for\s+3\s+prospect|\bask\s+me\s+for\s+three\s+prospect|\binstead\s+of\s+creating\b/.test(lower)
+  );
+}
+
+function hasInlineProspectList(question) {
+  const lines = String(question || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (
+    lines.some(
+      (line) => /company\s+name/i.test(line) && /website|address|phone/i.test(line)
+    )
+  ) {
+    return true;
+  }
+  return lines.filter(
+    (line) => /https?:\/\//i.test(line) || line.split(',').length >= 3
+  ).length >= 2;
+}
+
+async function hasExistingCampaignProspects(input) {
+  const engine = input.missionEngine;
+  if (!engine || typeof engine.list !== 'function') return false;
+  const campaign = extractCampaignId(input.question);
+  try {
+    const missions = await engine.list({ tenantId: input.tenantId });
+    return missions.some((mission) => {
+      const text = `${mission.title || ''} ${mission.objectiveText || ''}`;
+      if (campaign && !new RegExp(`campaign\\s*${campaign}\\b`, 'i').test(text)) {
+        return false;
+      }
+      const deliverables = mission.deliverables || {};
+      const campaignArtifact = deliverables.campaign || {};
+      return (
+        Array.isArray(deliverables.prospects) &&
+        deliverables.prospects.length > 0
+      ) || (
+        Array.isArray(campaignArtifact.prospects) &&
+        campaignArtifact.prospects.length > 0
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+function extractCampaignId(question) {
+  const match = /\bcampaign\s+(\d+)\b/i.exec(String(question || ''));
+  return match ? match[1] : null;
 }
 
 module.exports = {
