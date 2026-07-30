@@ -123,6 +123,7 @@ function understandIntent(text, opts = {}) {
 function scoreIntentCandidates(lower, sourceText, extracted) {
   /** @type {IntentCandidate[]} */
   const out = [];
+  const executionNegated = hasExecutionNegation(lower);
 
   const push = (intent, confidence, extra = {}) => {
     if (confidence <= 0) return;
@@ -135,6 +136,21 @@ function scoreIntentCandidates(lower, sourceText, extracted) {
       diagnostics: Boolean(extra.diagnostics),
     });
   };
+
+  if (
+    executionNegated &&
+    /\bcanary\b/.test(lower) &&
+    /\b(campaign|package|packages|packet|packets|letter|letters|mail|direct\s*mail)\b/.test(lower)
+  ) {
+    push(INTENT_CATEGORIES.MAIL_PACKAGE_GENERATION, 0.94, {
+      mode: INTENT_MODES.GENERATION,
+      domain: INTENT_DOMAINS.DIRECT_MAIL,
+      goal: extracted.campaign
+        ? `Prepare Canary Mail Packages for Campaign ${extracted.campaign}`
+        : 'Prepare Canary Mail Packages',
+    });
+    push(INTENT_CATEGORIES.CAMPAIGN_REVIEW, 0.5);
+  }
 
   // --- Diagnostics / investigation (before execution so "audit" wins) ---
   if (
@@ -214,13 +230,14 @@ function scoreIntentCandidates(lower, sourceText, extracted) {
 
   // --- Campaign execution (run / execute / mail) ---
   if (
-    /\brun\s+(the\s+)?campaign\b/.test(lower) ||
-    /\bexecute\s+(the\s+)?campaign\b/.test(lower) ||
-    /\bdirect\s+mail\s+execution\b/.test(lower) ||
-    /\bexecute\s+(the\s+)?(direct\s+)?mail\b/.test(lower) ||
-    /\bprint\s+(and\s+)?mail\b/.test(lower) ||
-    /\bmail\s+(the\s+)?campaign\b/.test(lower) ||
-    /\bmark\s+(all\s+)?mailed\b/.test(lower)
+    !executionNegated &&
+    (/\brun\s+(the\s+)?campaign\b/.test(lower) ||
+      /\bexecute\s+(the\s+)?campaign\b/.test(lower) ||
+      /\bdirect\s+mail\s+execution\b/.test(lower) ||
+      /\bexecute\s+(the\s+)?(direct\s+)?mail\b/.test(lower) ||
+      /\bprint\s+(and\s+)?mail\b/.test(lower) ||
+      /\bmail\s+(the\s+)?campaign\b/.test(lower) ||
+      /\bmark\s+(all\s+)?mailed\b/.test(lower))
   ) {
     // Prefer diagnostics when audit language is also present
     const auditBoost = /\b(audit|diagnos|wrong|failed)\b/.test(lower)
@@ -396,6 +413,7 @@ function scoreIntentCandidates(lower, sourceText, extracted) {
   // Soft signal: bare "run … Campaign NNN" without audit language
   if (
     !out.length &&
+    !executionNegated &&
     /\brun\b/.test(lower) &&
     (/\bcampaign\b/.test(lower) || extracted.campaign)
   ) {
@@ -554,6 +572,17 @@ function defaultDomain(intent) {
     default:
       return INTENT_DOMAINS.GENERAL;
   }
+}
+
+function hasExecutionNegation(lower) {
+  return (
+    /\bdo\s+not\s+(?:jump\s+into\s+|start\s+|run\s+|execute\s+|launch\s+|mail\s+|approve\s+)/.test(lower) ||
+    /\bdon't\s+(?:jump\s+into\s+|start\s+|run\s+|execute\s+|launch\s+|mail\s+|approve\s+)/.test(lower) ||
+    /\bnot\s+(?:executing|launching|mailing|approving)\b/.test(lower) ||
+    /\bnot\s+(?:an?\s+)?(?:execution|launch|send|mailing)\s+(?:task|request|yet)\b/.test(lower) ||
+    /\b(?:review|preparation|prep|draft)\s+only\b/.test(lower) ||
+    /\bprepare\s+.*\bnot\s+execution\b/.test(lower)
+  );
 }
 
 function defaultMode(intent) {

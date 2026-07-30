@@ -57,6 +57,16 @@ const MODIFY = [
   /\bswitch\s+(to|the)\b/i,
 ];
 
+const EXECUTION_NEGATION = [
+  /\bdo\s+not\s+(?:jump\s+into\s+|start\s+|run\s+|execute\s+|launch\s+|mail\s+|approve\s+)/i,
+  /\bdon't\s+(?:jump\s+into\s+|start\s+|run\s+|execute\s+|launch\s+|mail\s+|approve\s+)/i,
+  /\bnot\s+(?:executing|launching|mailing|approving)\b/i,
+  /\bnot\s+(?:an?\s+)?(?:execution|launch|send|mailing)\s+(?:task|request|yet)\b/i,
+  /\b(?:review|preparation|prep|draft)\s+only\b/i,
+  /\bprepare\s+.*\bnot\s+execution\b/i,
+  /\bcanary\s+(?:package|batch|draft|prep|preparation)\b/i,
+];
+
 /**
  * Heuristic: message looks like a brand-new business objective
  * (different campaign id, generate proposal, research X, etc.).
@@ -113,6 +123,12 @@ function classifyMessage(message, activeMission = null) {
   // still return NEW_MISSION so IntentRouter can create.
   if (!activeMission) {
     return { classification: MESSAGE_CLASS.NEW_MISSION, reason: 'no_active' };
+  }
+
+  for (const re of EXECUTION_NEGATION) {
+    if (re.test(lower)) {
+      return { classification: MESSAGE_CLASS.CLARIFY, reason: 'execution_negated' };
+    }
   }
 
   for (const re of DIAGNOSE) {

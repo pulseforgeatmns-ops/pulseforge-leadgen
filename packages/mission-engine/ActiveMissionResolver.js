@@ -318,6 +318,29 @@ class ActiveMissionResolver {
       classification,
     });
 
+    if (classification === MESSAGE_CLASS.CLARIFY) {
+      this._recordResolution({
+        sessionId: input.sessionId,
+        missionId: active.id,
+        message,
+        classification,
+        resolutionPath: RESOLUTION_PATHS.CLARIFY,
+        reason,
+      });
+      return {
+        action: 'clarified',
+        classification,
+        resolutionPath: RESOLUTION_PATHS.CLARIFY,
+        route: { kind: 'mission', missionType: active.type, reason: 'active_clarify' },
+        mission: active,
+        clarification: {
+          reason,
+          summary: 'The operator constrained this as preparation/review only, so the active execution Mission was not resumed.',
+        },
+        reason,
+      };
+    }
+
     if (classification === MESSAGE_CLASS.DIAGNOSE) {
       const diagnosis = await this._diagnose(active, message);
       this._recordResolution({
