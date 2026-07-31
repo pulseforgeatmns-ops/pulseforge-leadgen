@@ -532,6 +532,102 @@ describe('SPEC-022 Workspace Mission routing', () => {
     assert.equal(result.structured.metadata.prospectCount, 3);
     assert.equal(result.structured.metadata.canaryPreparationOnly, true);
   });
+
+  it('absolute hard stop: preparation-only canary with prospects never creates a mission', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const before = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question: [
+        'Continue the Campaign 001 preparation-only canary package.',
+        '',
+        'Use these 3 prospects:',
+        '',
+        '1. PM-001 — Gamache Properties — Ben Gamache — Property Management — website unknown — mailing address unknown — phone unknown',
+        '2. PM-002 — Elm Grove Companies — David Schleyer — Property Management — website unknown — mailing address unknown — phone unknown',
+        '3. PM-003 — Mill City Property Management — Lauren DuPaul — Property Management — website unknown — mailing address unknown — phone unknown',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const after = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(after.length, before.length);
+    assert.equal(result.domainSwitch, null);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(result.structured.metadata.prospectCount, 3);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /Elm Grove Companies/);
+    assert.match(answer, /Mill City Property Management/);
+    assert.doesNotMatch(answer, /Mission created/i);
+    assert.doesNotMatch(answer, /Campaign Builder|Campaign Creation/i);
+    assert.doesNotMatch(answer, /Mission Workspace|Status: Review Required/i);
+    assert.doesNotMatch(answer, /\bManchester\b|tenant complaints|portfolio size|current vendor/i);
+  });
+
+  it('absolute hard stop: preparation-only canary without prospects never creates a mission', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const before = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question: 'Continue the Campaign 001 preparation-only canary package.',
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const after = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(after.length, before.length);
+    assert.equal(result.domainSwitch, null);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.doesNotMatch(answer, /Mission created/i);
+    assert.match(answer, /preparation-only canary|3 prospect/i);
+  });
+
+  it('absolute hard stop: Build Campaign 001 control still creates a campaign mission', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const result = await workspace.ask({
+      question: 'Build Campaign 001 for Anchor Cleaning.',
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    assert.equal(result.route, 'mission');
+    assert.ok(result.mission);
+    assert.equal(result.mission.title, 'Campaign 001');
+    assert.match(result.prose || result.structured.answer || '', /Mission created/i);
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {
