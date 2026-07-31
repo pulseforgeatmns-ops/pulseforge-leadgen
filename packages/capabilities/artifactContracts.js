@@ -17,6 +17,10 @@ const CAPABILITY_ARTIFACT_CONTRACTS = Object.freeze({
     requires: ['discovery_profile'],
     produces: ['prospect_list'],
   }),
+  [BUILTIN_IDS.PROSPECT_ACQUISITION]: Object.freeze({
+    requires: [],
+    produces: ['candidate_set', 'prospect_list'],
+  }),
   [BUILTIN_IDS.COMPANY_ENRICHMENT]: Object.freeze({
     requires: ['prospect_list'],
     produces: ['enriched_list', 'company_intelligence'],
@@ -91,6 +95,13 @@ const CAPABILITY_MISSION_ALIASES = Object.freeze({
     'Prospect Discovery',
     'Discover Prospects',
     'Find Prospects',
+  ]),
+  [BUILTIN_IDS.PROSPECT_ACQUISITION]: Object.freeze([
+    'Prospect Acquisition',
+    'Acquire Prospects',
+    'Import Prospect List',
+    'CSV Import',
+    'Manual Prospect List',
   ]),
   [BUILTIN_IDS.COMPANY_ENRICHMENT]: Object.freeze([
     'Company Enrichment',

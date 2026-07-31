@@ -65,6 +65,7 @@ const SOURCE_PRIORITY = Object.freeze({
 /** Acquisition cost for capability producers (lower = cheaper). */
 const STAGE_ACQUISITION_COST = Object.freeze({
   prospect_discovery: 100,
+  prospect_acquisition: 40,
   company_enrichment: 80,
   knowledge_update: 40,
   opportunity_ranking: 70,
@@ -574,14 +575,46 @@ function buildResolutionSummary(parts) {
 function acquisitionOptions(artifactType, opts = {}) {
   const type = resolveArtifactType(artifactType) || artifactType;
   const options = [];
-  if (type === ARTIFACT_TYPES.PROSPECT_LIST) {
+    if (type === ARTIFACT_TYPES.PROSPECT_LIST) {
     options.push(
-      { id: 'prospect_discovery', label: 'Discovery', strategy: 'capability' },
-      { id: 'import_csv', label: 'Import CSV', strategy: 'operator_import' },
+      {
+        id: 'prospect_discovery',
+        label: 'Discovery',
+        strategy: 'capability',
+        acquisitionStrategy: 'discovery',
+      },
+      {
+        id: 'prospect_acquisition',
+        label: 'Prospect Acquisition',
+        strategy: 'capability',
+        acquisitionStrategy: 'manual',
+      },
+      {
+        id: 'import_csv',
+        label: 'Import CSV',
+        strategy: 'operator_import',
+        acquisitionStrategy: 'csv',
+        providerId: 'csv_import',
+      },
+      {
+        id: 'manual_prospect_list',
+        label: 'Manual Prospect List',
+        strategy: 'operator_import',
+        acquisitionStrategy: 'manual',
+        providerId: 'manual_prospect_list',
+      },
+      {
+        id: 'existing_prospect_repository',
+        label: 'Existing Prospect List',
+        strategy: 'operator_import',
+        acquisitionStrategy: 'existing',
+        providerId: 'existing_prospect_repository',
+      },
       {
         id: 'upload_spreadsheet',
         label: 'Upload Spreadsheet',
         strategy: 'operator_import',
+        acquisitionStrategy: 'csv',
       }
     );
   }

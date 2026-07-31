@@ -7,6 +7,7 @@
 
 const ARTIFACT_TYPES = Object.freeze({
   DISCOVERY_PROFILE: 'DiscoveryProfile',
+  CANDIDATE_SET: 'CandidateSet',
   PROSPECT_LIST: 'ProspectList',
   COMPANY_INTELLIGENCE: 'CompanyIntelligence',
   OPPORTUNITY_RANKING: 'OpportunityRanking',
@@ -52,6 +53,8 @@ const DIAGNOSTIC_ARTIFACT_TYPES = Object.freeze(
 /** Stage Library / PipelineGate snake_case → registry type */
 const ALIAS_TO_TYPE = Object.freeze({
   discovery_profile: ARTIFACT_TYPES.DISCOVERY_PROFILE,
+  candidate_set: ARTIFACT_TYPES.CANDIDATE_SET,
+  candidates: ARTIFACT_TYPES.CANDIDATE_SET,
   prospect_list: ARTIFACT_TYPES.PROSPECT_LIST,
   enriched_list: ARTIFACT_TYPES.COMPANY_INTELLIGENCE,
   company_intelligence: ARTIFACT_TYPES.COMPANY_INTELLIGENCE,
@@ -76,6 +79,7 @@ const ALIAS_TO_TYPE = Object.freeze({
 
 const TYPE_TO_ALIAS = Object.freeze({
   [ARTIFACT_TYPES.DISCOVERY_PROFILE]: 'discovery_profile',
+  [ARTIFACT_TYPES.CANDIDATE_SET]: 'candidate_set',
   [ARTIFACT_TYPES.PROSPECT_LIST]: 'prospect_list',
   [ARTIFACT_TYPES.COMPANY_INTELLIGENCE]: 'company_intelligence',
   [ARTIFACT_TYPES.OPPORTUNITY_RANKING]: 'ranked_prospects',
@@ -120,13 +124,60 @@ const REGISTRY = Object.freeze({
       return { ok: errors.length === 0, warnings, errors };
     },
   }),
+  [ARTIFACT_TYPES.CANDIDATE_SET]: Object.freeze({
+    name: ARTIFACT_TYPES.CANDIDATE_SET,
+    alias: 'candidate_set',
+    schemaVersion: SCHEMA_VERSION,
+    // SPEC-060 — acquisition providers publish Candidates only
+    producers: [
+      'google_places',
+      'manual_prospect_list',
+      'csv_import',
+      'existing_prospect_repository',
+      'prospect_acquisition',
+    ],
+    consumers: ['prospect_verification', 'prospect_discovery'],
+    validate: (payload) => {
+      const errors = [];
+      const warnings = [];
+      const candidates = Array.isArray(payload && payload.candidates)
+        ? payload.candidates
+        : [];
+      const count =
+        payload && payload.candidateCount != null
+          ? Number(payload.candidateCount)
+          : candidates.length;
+      if (count <= 0) {
+        errors.push('CandidateSet requires candidateCount > 0');
+      }
+      candidates.forEach((c, i) => {
+        const name = String(
+          (c && (c.companyName || c.company || c.name)) || ''
+        ).trim();
+        if (!name) {
+          errors.push(`Candidate ${i + 1}: Company Name is required`);
+        }
+      });
+      if (payload && payload.prospectList) {
+        errors.push(
+          'CandidateSet must not embed ProspectList (providers publish Candidates only)'
+        );
+      }
+      if (!payload || !payload.acquisitionSource) {
+        warnings.push('CandidateSet.acquisitionSource recommended for provenance');
+      }
+      return { ok: errors.length === 0, warnings, errors };
+    },
+  }),
   [ARTIFACT_TYPES.PROSPECT_LIST]: Object.freeze({
     name: ARTIFACT_TYPES.PROSPECT_LIST,
     alias: 'prospect_list',
     schemaVersion: SCHEMA_VERSION,
-    // Discovery is one producer — operator ingress is first-class (SPEC-043 / ADR-029)
+    // Discovery is one producer — operator ingress + verification (SPEC-043 / SPEC-060)
     producers: [
       'prospect_discovery',
+      'prospect_acquisition',
+      'prospect_verification',
       'operator_manual',
       'operator_import',
     ],
@@ -578,7 +629,25 @@ function extractPayload(artifactType, outputs) {
         summary: out.summary || null,
         rejected: out.rejected || null,
         discoveryProfile: out.discoveryProfile || null,
+        provenance: out.provenance || null,
       };
+    case ARTIFACT_TYPES.CANDIDATE_SET:
+      return (
+        out.candidateSet ||
+        (Array.isArray(out.candidates)
+          ? {
+              candidates: out.candidates,
+              candidateCount:
+                out.candidateCount != null
+                  ? Number(out.candidateCount)
+                  : out.candidates.length,
+              acquisitionSource: out.acquisitionSource || null,
+              provider: out.provider || null,
+              evidence: out.evidence || [],
+              warnings: out.warnings || [],
+            }
+          : null)
+      );
     case ARTIFACT_TYPES.COMPANY_INTELLIGENCE:
       return {
         prospects: Array.isArray(out.prospects) ? out.prospects : [],

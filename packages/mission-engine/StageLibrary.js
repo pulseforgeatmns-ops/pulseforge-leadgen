@@ -42,6 +42,22 @@ const STAGE_LIBRARY = Object.freeze({
       /\bfind\s+.+\s+prospects?\b/i,
     ],
   }),
+  prospect_acquisition: Object.freeze({
+    id: 'prospect_acquisition',
+    name: 'Prospect Acquisition',
+    capabilityId: BUILTIN_IDS.PROSPECT_ACQUISITION,
+    consumes: [],
+    produces: ['candidate_set', 'prospect_list'],
+    dependencies: [],
+    reviewRequired: false,
+    priority: 9,
+    outcomePatterns: [
+      /\bprospect\s+acquisition\b/i,
+      /\bimport\s+(this\s+)?csv\b/i,
+      /\bmanual\s+prospect\s+list\b/i,
+      /\bimport\s+prospect\s+list\b/i,
+    ],
+  }),
   discovery_diagnostics: Object.freeze({
     id: 'discovery_diagnostics',
     name: 'Discovery Diagnostics',
@@ -357,6 +373,16 @@ const COMPOSITION_EDGES = Object.freeze([
     from: 'discovery_diagnostics',
     to: 'prospect_discovery',
     reason: 'Discovery Diagnostics inspects prior Discovery without replacing it',
+  }),
+  Object.freeze({
+    from: 'prospect_acquisition',
+    to: 'company_enrichment',
+    reason: 'Enrichment consumes ProspectList from Acquisition when Discovery is not used',
+  }),
+  Object.freeze({
+    from: 'prospect_acquisition',
+    to: 'opportunity_ranking',
+    reason: 'Ranking consumes ProspectList from Acquisition when Discovery is not used',
   }),
   Object.freeze({
     from: 'mail_package_generator',

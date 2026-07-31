@@ -590,6 +590,7 @@ class MissionEngine {
         (mission.deliverables &&
           mission.deliverables.preconditionDiagnostics) ||
         null,
+      prospectAcquisition: buildWorkspaceAcquisitionPanel(mission),
       outboundBlocked: true,
     };
   }
@@ -629,8 +630,9 @@ class MissionEngine {
   }
 
   /**
-   * SPEC-043 — operator injects a validated ProspectList onto the Artifact Bus.
-   * Marks Discovery Satisfied (Operator Supplied) when Discovery is on the plan,
+   * SPEC-043 + SPEC-060 — operator injects prospects via Acquisition → Verification.
+   * Providers publish Candidates; Verification owns ProspectList creation.
+   * Marks Discovery/Acquisition Satisfied (Operator Supplied) when on the plan,
    * or publishes onto a plan that already resolved ProspectList (SPEC-051).
    *
    * @param {object} input
@@ -639,6 +641,7 @@ class MissionEngine {
    * @param {string} [input.csv]
    * @param {string} [input.paste]
    * @param {string} [input.source]
+   * @param {string} [input.acquisitionStrategy]
    * @param {string} [input.createdBy]
    * @param {boolean} [input.execute=true]
    */
@@ -653,15 +656,23 @@ class MissionEngine {
     }
 
     const steps = (mission.plan && mission.plan.steps) || [];
+    const acquisitionIdx = steps.findIndex(
+      (s) =>
+        s.stageId === 'prospect_acquisition' ||
+        s.capabilityId === BUILTIN_IDS.PROSPECT_ACQUISITION
+    );
     const discoveryIdx = steps.findIndex(
       (s) =>
         s.stageId === 'prospect_discovery' ||
         s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY
     );
+    const pivotIdx = acquisitionIdx >= 0 ? acquisitionIdx : discoveryIdx;
     const discoverySkipped =
-      discoveryIdx < 0 && this._missionResolvedProspectList(mission);
-    if (discoveryIdx < 0 && !discoverySkipped) {
-      const err = new Error('Mission plan has no Discovery stage');
+      pivotIdx < 0 && this._missionResolvedProspectList(mission);
+    if (pivotIdx < 0 && !discoverySkipped) {
+      const err = new Error(
+        'Mission plan has no Discovery or Acquisition stage'
+      );
       err.code = 'no_discovery_stage';
       throw err;
     }
@@ -671,16 +682,70 @@ class MissionEngine {
         (mission.deliverables && mission.deliverables.artifactBus) || null,
     });
 
+    let verifiedProspects = null;
+    let acquisitionMeta = null;
+    try {
+      const {
+        createProspectAcquisition,
+        selectAcquisitionStrategy,
+        ACQUISITION_STRATEGIES,
+      } = require('../capabilities/acquisition');
+      const strategy =
+        input.acquisitionStrategy ||
+        selectAcquisitionStrategy('', {
+          csv: input.csv,
+          paste: input.paste,
+          prospects: input.prospects,
+          acquisitionStrategy: input.csv
+            ? ACQUISITION_STRATEGIES.CSV
+            : input.prospects || input.paste
+              ? ACQUISITION_STRATEGIES.MANUAL
+              : undefined,
+        });
+      const acquisition = createProspectAcquisition();
+      const acquired = await acquisition.acquireAndVerify({
+        acquisitionStrategy: strategy,
+        prospects: input.prospects,
+        csv: input.csv,
+        paste: input.paste,
+        missionId: mission.id,
+        operator: input.createdBy || 'operator',
+        targetCount:
+          (mission.constraints && mission.constraints.targetCount) || undefined,
+        acceptSoftFailures: true,
+      });
+      if (acquired.ok && acquired.prospectList) {
+        verifiedProspects = acquired.prospectList.prospects;
+        acquisitionMeta = {
+          ok: true,
+          strategy: acquired.strategy,
+          providerId: acquired.providerId,
+          candidateSet: acquired.candidateSet,
+          verificationReport: acquired.verificationReport,
+          evidence: acquired.evidence,
+          warnings: acquired.warnings,
+          errors: acquired.errors,
+        };
+      }
+    } catch {
+      /* fall through to legacy SPEC-043 validation */
+    }
+
     const published = publishOperatorProspectList({
       bus,
       missionId: mission.id,
       stageId: discoverySkipped
         ? 'operator_injection'
-        : 'prospect_discovery',
-      prospects: input.prospects,
-      csv: input.csv,
-      paste: input.paste,
-      source: input.source,
+        : pivotIdx >= 0
+          ? steps[pivotIdx].stageId
+          : 'prospect_discovery',
+      prospects: verifiedProspects || input.prospects,
+      csv: verifiedProspects ? undefined : input.csv,
+      paste: verifiedProspects ? undefined : input.paste,
+      source:
+        input.source ||
+        (acquisitionMeta && acquisitionMeta.strategy) ||
+        undefined,
       createdBy: input.createdBy || 'operator',
       targetCount:
         (mission.constraints && mission.constraints.targetCount) || undefined,
@@ -724,9 +789,8 @@ class MissionEngine {
     const outcomeLabel =
       STAGE_OUTCOME_LABELS[outcome] || 'Satisfied (Operator Supplied)';
 
-    // Preserve completed upstream/peer steps; satisfy Discovery when present;
+    // Preserve completed upstream/peer steps; satisfy Discovery/Acquisition when present;
     // invalidate downstream that depended on a prior ProspectList when present.
-    const pivotIdx = discoveryIdx >= 0 ? discoveryIdx : -1;
     const nextSteps = steps.map((s, idx) => {
       if (pivotIdx >= 0 && idx === pivotIdx) {
         return {
@@ -736,12 +800,17 @@ class MissionEngine {
           outcomeLabel,
           error: undefined,
           blockingIssues: [],
-          warnings: published.warnings || [],
+          warnings: [
+            ...(published.warnings || []),
+            ...((acquisitionMeta && acquisitionMeta.warnings) || []),
+          ],
           reviewSummary: {
             stageStatus: outcomeLabel,
             publishedCount:
               (published.payload && published.payload.prospectCount) || 0,
             operatorSupplied: true,
+            acquisitionStrategy:
+              (acquisitionMeta && acquisitionMeta.strategy) || null,
           },
         };
       }
@@ -763,10 +832,27 @@ class MissionEngine {
     });
 
     const payload = published.payload || {};
+    const pivotCapId =
+      pivotIdx >= 0
+        ? steps[pivotIdx].capabilityId ||
+          (steps[pivotIdx].stageId === 'prospect_acquisition'
+            ? BUILTIN_IDS.PROSPECT_ACQUISITION
+            : BUILTIN_IDS.PROSPECT_DISCOVERY)
+        : BUILTIN_IDS.PROSPECT_DISCOVERY;
+    const pivotStageId =
+      discoverySkipped
+        ? 'artifact_resolution'
+        : pivotIdx >= 0
+          ? steps[pivotIdx].stageId
+          : 'prospect_discovery';
     const stepResult = {
-      capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
-      name: discoverySkipped ? 'ProspectList (resolved)' : 'Discovery',
-      stageId: discoverySkipped ? 'artifact_resolution' : 'prospect_discovery',
+      capabilityId: pivotCapId,
+      name: discoverySkipped
+        ? 'ProspectList (resolved)'
+        : pivotCapId === BUILTIN_IDS.PROSPECT_ACQUISITION
+          ? 'Prospect Acquisition'
+          : 'Discovery',
+      stageId: pivotStageId,
       outcome,
       outcomeLabel,
       operatorSupplied: true,
@@ -774,9 +860,23 @@ class MissionEngine {
         prospects: payload.prospects,
         prospectCount: payload.prospectCount,
         targetCount: payload.targetCount,
-        summary: payload.summary,
+        summary: {
+          ...(payload.summary || {}),
+          acquisitionStrategy:
+            (acquisitionMeta && acquisitionMeta.strategy) || null,
+          acquisitionSource:
+            (acquisitionMeta &&
+              acquisitionMeta.candidateSet &&
+              acquisitionMeta.candidateSet.acquisitionSource) ||
+            null,
+        },
+        candidateSet:
+          (acquisitionMeta && acquisitionMeta.candidateSet) || null,
+        verificationReport:
+          (acquisitionMeta && acquisitionMeta.verificationReport) || null,
       },
       evidence: [
+        ...((acquisitionMeta && acquisitionMeta.evidence) || []),
         {
           kind: 'operator_artifact',
           summary: `Operator supplied ProspectList (${payload.prospectCount} prospects) via ${published.source}`,
@@ -788,7 +888,9 @@ class MissionEngine {
       mission.deliverables && mission.deliverables.stepResults
     )
       ? mission.deliverables.stepResults.filter(
-          (s) => s.capabilityId !== BUILTIN_IDS.PROSPECT_DISCOVERY
+          (s) =>
+            s.capabilityId !== BUILTIN_IDS.PROSPECT_DISCOVERY &&
+            s.capabilityId !== BUILTIN_IDS.PROSPECT_ACQUISITION
         )
       : [];
 
@@ -797,6 +899,9 @@ class MissionEngine {
       stepResults: [...priorStepResults, stepResult],
       artifactBus: bus.toJSON(),
       artifactGraph: bus.getArtifactGraph(mission.id),
+      lastAcquisition: acquisitionMeta || null,
+      verificationReport:
+        (acquisitionMeta && acquisitionMeta.verificationReport) || null,
       lastInjection: {
         artifactId: published.artifact.id,
         artifactType: published.artifact.artifactType,
@@ -837,7 +942,7 @@ class MissionEngine {
       plan: { ...mission.plan, steps: nextSteps, ...resolutionPatch },
       blockingIssues: [],
       stageReview: {
-        capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
+        capabilityId: pivotCapId,
         outcome,
         outcomeLabel,
         blockingIssues: [],
@@ -854,15 +959,17 @@ class MissionEngine {
         quarantinedArtifacts: [],
         operatorSupplied: true,
         discoverySkippedByResolution: discoverySkipped,
+        acquisitionStrategy:
+          (acquisitionMeta && acquisitionMeta.strategy) || null,
       },
       progress: {
         ...(mission.progress || {}),
         currentStage: discoverySkipped
           ? `ProspectList — ${outcomeLabel}`
-          : `Discovery — ${outcomeLabel}`,
-        currentCapabilityId: discoverySkipped
-          ? null
-          : BUILTIN_IDS.PROSPECT_DISCOVERY,
+          : pivotCapId === BUILTIN_IDS.PROSPECT_ACQUISITION
+            ? `Prospect Acquisition — ${outcomeLabel}`
+            : `Discovery — ${outcomeLabel}`,
+        currentCapabilityId: discoverySkipped ? null : pivotCapId,
         stageOutcome: outcome,
         stageOutcomeLabel: outcomeLabel,
         counts: {
@@ -879,7 +986,7 @@ class MissionEngine {
     await this._store.appendAudit({
       missionId: mission.id,
       kind: AUDIT_KINDS.ARTIFACT_INJECTED,
-      capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
+      capabilityId: pivotCapId,
       payload: {
         artifactId: published.artifact.id,
         artifactType: published.artifact.artifactType,
@@ -893,20 +1000,22 @@ class MissionEngine {
         provenance: published.artifact.metadata &&
           published.artifact.metadata.provenance,
         discoverySkippedByResolution: discoverySkipped,
+        acquisitionStrategy:
+          (acquisitionMeta && acquisitionMeta.strategy) || null,
       },
     });
     await this._store.appendAudit({
       missionId: mission.id,
       kind: AUDIT_KINDS.STAGE_SATISFIED,
-      capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
+      capabilityId: pivotCapId,
       payload: {
         outcome,
         outcomeLabel,
-        stageId: discoverySkipped
-          ? 'artifact_resolution'
-          : 'prospect_discovery',
+        stageId: pivotStageId,
         artifactId: published.artifact.id,
         discoverySkippedByResolution: discoverySkipped,
+        acquisitionStrategy:
+          (acquisitionMeta && acquisitionMeta.strategy) || null,
       },
     });
 
@@ -947,16 +1056,23 @@ function isDiscoveryBlocked(mission) {
   const discovery = steps.find(
     (s) =>
       s.stageId === 'prospect_discovery' ||
-      s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY
+      s.stageId === 'prospect_acquisition' ||
+      s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY ||
+      s.capabilityId === BUILTIN_IDS.PROSPECT_ACQUISITION
   );
-  if (discovery && (discovery.status === 'blocked' || discovery.status === 'failed')) {
+  if (
+    discovery &&
+    (discovery.status === 'blocked' || discovery.status === 'failed')
+  ) {
     return true;
   }
   const stage = mission.stageReview;
   if (
     stage &&
     (stage.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY ||
-      stage.capabilityId === 'prospect_discovery') &&
+      stage.capabilityId === BUILTIN_IDS.PROSPECT_ACQUISITION ||
+      stage.capabilityId === 'prospect_discovery' ||
+      stage.capabilityId === 'prospect_acquisition') &&
     (stage.outcome === STAGE_OUTCOMES.BLOCKED ||
       stage.outcome === STAGE_OUTCOMES.FAILED)
   ) {
@@ -977,6 +1093,18 @@ function discoveryRecoveryActions(mission) {
         id: 'import_prospect_list',
         label: 'Import Prospect List',
         action: 'inject_prospect_list',
+      },
+      {
+        id: 'manual_prospect_list',
+        label: 'Manual Prospect List',
+        action: 'inject_prospect_list',
+        acquisitionStrategy: 'manual',
+      },
+      {
+        id: 'import_csv',
+        label: 'Import CSV',
+        action: 'inject_prospect_list',
+        acquisitionStrategy: 'csv',
       },
       {
         id: 'cancel_mission',
@@ -1001,6 +1129,53 @@ function discoveryRecoveryActions(mission) {
     ];
   }
   return [];
+}
+
+function buildWorkspaceAcquisitionPanel(mission) {
+  try {
+    const {
+      buildAcquisitionWorkspaceView,
+      createProspectAcquisition,
+    } = require('../capabilities/acquisition');
+    const deliverables = (mission && mission.deliverables) || {};
+    const lastAcquisition = deliverables.lastAcquisition || null;
+    const prospectList =
+      (deliverables.stepResults || [])
+        .map((s) => s.outputs)
+        .find((o) => o && Array.isArray(o.prospects) && o.prospects.length) ||
+      null;
+    const view = buildAcquisitionWorkspaceView({
+      acquisition: lastAcquisition,
+      verificationReport: deliverables.verificationReport || null,
+      prospectList: prospectList
+        ? {
+            prospectCount: (prospectList.prospects || []).length,
+            prospects: prospectList.prospects,
+          }
+        : null,
+      operator:
+        (mission.constraints && mission.constraints.operator) ||
+        mission.createdBy ||
+        null,
+    });
+    const acquisition = createProspectAcquisition();
+    return {
+      ...view,
+      providers: acquisition.listProviders(),
+      health: acquisition.health(),
+      acquisitionStrategy:
+        (mission.constraints && mission.constraints.acquisitionStrategy) ||
+        (lastAcquisition && lastAcquisition.strategy) ||
+        null,
+    };
+  } catch {
+    return {
+      section: 'Prospect Acquisition',
+      status: 'unavailable',
+      providers: [],
+      health: [],
+    };
+  }
 }
 
 function workspaceActions(mission) {

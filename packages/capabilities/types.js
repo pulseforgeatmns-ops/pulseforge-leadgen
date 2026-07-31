@@ -44,6 +44,8 @@ const PROGRESS_KINDS = Object.freeze({
 /** Built-in capability ids (operator-facing names live on the descriptor). */
 const BUILTIN_IDS = Object.freeze({
   PROSPECT_DISCOVERY: 'prospect_discovery',
+  /** SPEC-060 — provider-agnostic CandidateSet → ProspectList */
+  PROSPECT_ACQUISITION: 'prospect_acquisition',
   COMPANY_ENRICHMENT: 'company_enrichment',
   KNOWLEDGE_UPDATE: 'knowledge_update',
   OPPORTUNITY_RANKING: 'opportunity_ranking',

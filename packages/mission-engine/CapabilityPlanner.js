@@ -175,9 +175,9 @@ const INTENT_EXECUTION_MAP = Object.freeze({
     missionType: MISSION_TYPES.PROSPECT_DISCOVERY,
     execution: Object.freeze([
       {
-        stageId: 'prospect_discovery',
-        capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
-        label: 'Discovery',
+        stageId: 'prospect_acquisition',
+        capabilityId: BUILTIN_IDS.PROSPECT_ACQUISITION,
+        label: 'Prospect Acquisition',
       },
     ]),
   }),
