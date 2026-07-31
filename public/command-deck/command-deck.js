@@ -105,24 +105,114 @@
       .replace(/'/g, '&#39;');
   }
 
-  /** SPEC-045 — auto-grow composer (~1–10 lines). */
-  const MX_ASK_LINE_PX = 22;
-  const MX_ASK_MAX_LINES = 10;
+  /** Auto-grow Max composer (~1 line → ~220px, then internal scroll). */
+  const MX_ASK_MIN_PX = 42;
+  const MX_ASK_MAX_PX = 220;
 
   function autoGrowAskInput() {
     const el = els.mxAskInput;
     if (!el) return;
-    el.style.height = 'auto';
-    const max = MX_ASK_LINE_PX * MX_ASK_MAX_LINES + 24;
-    const next = Math.min(Math.max(el.scrollHeight, MX_ASK_LINE_PX + 20), max);
+    el.style.height = '0px';
+    const measured = el.scrollHeight;
+    const cssMax = (() => {
+      const raw = window.getComputedStyle(el).maxHeight;
+      const n = Number.parseFloat(raw);
+      return Number.isFinite(n) && n > 0 ? n : MX_ASK_MAX_PX;
+    })();
+    const max = Math.min(MX_ASK_MAX_PX, cssMax);
+    const next = Math.min(Math.max(measured, MX_ASK_MIN_PX), max);
     el.style.height = `${next}px`;
+    el.style.overflowY = measured > max ? 'auto' : 'hidden';
   }
 
   function resetAskInput() {
     if (!els.mxAskInput) return;
     els.mxAskInput.value = '';
     els.mxAskInput.style.height = '';
+    els.mxAskInput.style.overflowY = '';
     autoGrowAskInput();
+  }
+
+  /**
+   * Long operator prompts: several lines by default, Expand/Collapse for full text.
+   * @param {string} text
+   * @returns {string}
+   */
+  function renderExpandableOperatorBody(text) {
+    const full = String(text == null ? '' : text);
+    if (!full) return `<p class="mx-msg-body"></p>`;
+    const lines = full.split(/\r?\n/);
+    const needsExpand = lines.length > 6 || full.length > 480;
+    if (!needsExpand) {
+      return `<p class="mx-msg-body">${escapeHtml(full)}</p>`;
+    }
+    let preview;
+    if (lines.length > 6) {
+      preview = `${lines.slice(0, 6).join('\n')}\n…`;
+    } else {
+      preview = `${full.slice(0, 477)}…`;
+    }
+    return `<div class="mx-expandable" data-mx-expandable>
+      <p class="mx-msg-body" data-mx-expand-preview>${escapeHtml(preview)}</p>
+      <p class="mx-msg-body" data-mx-expand-full hidden>${escapeHtml(full)}</p>
+      <button type="button" class="mx-expand-btn" data-mx-expand-toggle aria-expanded="false">Expand</button>
+    </div>`;
+  }
+
+  /**
+   * @param {ParentNode | null | undefined} root
+   */
+  function bindExpandableOperatorBodies(root) {
+    if (!root) return;
+    root.querySelectorAll('[data-mx-expand-toggle]').forEach((btn) => {
+      if (btn.dataset.boundExpand === '1') return;
+      btn.dataset.boundExpand = '1';
+      btn.addEventListener('click', () => {
+        const wrap = btn.closest('[data-mx-expandable]');
+        if (!wrap) return;
+        const open = !wrap.classList.contains('is-expanded');
+        wrap.classList.toggle('is-expanded', open);
+        const preview = wrap.querySelector('[data-mx-expand-preview]');
+        const fullEl = wrap.querySelector('[data-mx-expand-full]');
+        if (open) {
+          preview?.setAttribute('hidden', '');
+          fullEl?.removeAttribute('hidden');
+        } else {
+          fullEl?.setAttribute('hidden', '');
+          preview?.removeAttribute('hidden');
+        }
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        btn.textContent = open ? 'Collapse' : 'Expand';
+      });
+    });
+  }
+
+  /**
+   * Mission Workspace Operator Request — summary by default, full raw on Expand.
+   * @param {string} text
+   * @returns {string}
+   */
+  function renderOperatorRequestDd(text) {
+    const raw = String(text == null ? '' : text).trim();
+    if (!raw) return `<dd>—</dd>`;
+    const firstLine =
+      raw.split(/\r?\n/).find((line) => String(line).trim()) || raw;
+    const summary =
+      firstLine.length > 120 ? `${firstLine.slice(0, 117)}…` : firstLine;
+    const needsExpand = raw.includes('\n') || raw.length > 120 || raw !== summary;
+    if (!needsExpand) {
+      return `<dd class="msn-operator-request">${escapeHtml(raw)}</dd>`;
+    }
+    return `<dd class="msn-operator-request" data-msn-opreq>
+      <div data-msn-opreq-collapsed>
+        <p class="msn-objective-collapsed">${escapeHtml(summary)}</p>
+        <button type="button" class="msn-link-btn msn-interactive" data-msn-opreq-expand>Expand</button>
+      </div>
+      <div data-msn-opreq-expanded hidden>
+        <p class="msn-objective">${escapeHtml(raw)}</p>
+        <button type="button" class="msn-link-btn msn-interactive" data-msn-opreq-collapse>Collapse</button>
+      </div>
+    </dd>`;
   }
 
   /**
@@ -702,9 +792,9 @@
       <h3>Understood Intent</h3>
       <p class="msn-objective-meta">How Max interpreted the request before selecting capabilities.</p>
       <dl class="msn-si-dl">
-        <div class="msn-si-row"><dt>Operator Request</dt><dd>${escapeHtml(
-          operatorRequest || '—'
-        )}</dd></div>
+        <div class="msn-si-row"><dt>Operator Request</dt>${renderOperatorRequestDd(
+          operatorRequest
+        )}</div>
         <div class="msn-si-row"><dt>Understood Intent</dt><dd><strong>${escapeHtml(
           understood
         )}</strong>${
@@ -2037,8 +2127,10 @@
       els.mxSwitch.hidden = true;
       els.mxSwitch.textContent = '';
     }
+    resetAskInput();
     setContextLabel(context);
     announce('Max intelligence workspace opened.');
+    window.requestAnimationFrame(() => autoGrowAskInput());
 
     try {
       const opened = await apiRequest('/api/v1/max/workspace/open', {
@@ -2703,6 +2795,23 @@
           root.querySelector('[data-msn-objective-collapsed]')?.removeAttribute('hidden');
         });
       });
+
+    els.msnBody.querySelectorAll('[data-msn-opreq-expand]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const root = btn.closest('[data-msn-opreq]');
+        if (!root) return;
+        root.querySelector('[data-msn-opreq-collapsed]')?.setAttribute('hidden', '');
+        root.querySelector('[data-msn-opreq-expanded]')?.removeAttribute('hidden');
+      });
+    });
+    els.msnBody.querySelectorAll('[data-msn-opreq-collapse]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const root = btn.closest('[data-msn-opreq]');
+        if (!root) return;
+        root.querySelector('[data-msn-opreq-expanded]')?.setAttribute('hidden', '');
+        root.querySelector('[data-msn-opreq-collapsed]')?.removeAttribute('hidden');
+      });
+    });
 
     bindReviewQueueControls();
   }
@@ -3442,11 +3551,9 @@
   function appendOperatorMessage(text) {
     if (!els.mxThread) return;
     const detected = detectProspectListDisplay(text);
-    let bodyHtml = '';
+    // Always keep the full operator prompt inspectable (Expand shows late instructions).
+    let bodyHtml = renderExpandableOperatorBody(text);
     if (detected) {
-      const prose = detected.objective
-        ? `<p class="mx-msg-body">${escapeHtml(detected.objective)}</p>`
-        : '';
       const card = renderAttachmentCard({
         type: 'prospect_list',
         title: 'Prospect List',
@@ -3454,9 +3561,7 @@
         meta: `${detected.count} ${detected.count === 1 ? 'Company' : 'Companies'}`,
         body: detected.block,
       });
-      bodyHtml = `${prose}${card}`;
-    } else {
-      bodyHtml = `<p class="mx-msg-body">${escapeHtml(text)}</p>`;
+      bodyHtml = `${bodyHtml}${card}`;
     }
     const div = document.createElement('div');
     div.className = 'mx-msg is-operator';
@@ -3466,6 +3571,7 @@
     `;
     els.mxThread.appendChild(div);
     bindAttachmentCards(div);
+    bindExpandableOperatorBodies(div);
     els.mxThread.scrollTop = els.mxThread.scrollHeight;
   }
 
@@ -4062,6 +4168,10 @@
     els.mxAskForm?.requestSubmit();
   });
   els.mxAskInput?.addEventListener('input', () => autoGrowAskInput());
+  els.mxAskInput?.addEventListener('paste', () => {
+    window.requestAnimationFrame(() => autoGrowAskInput());
+  });
+  window.addEventListener('resize', () => autoGrowAskInput());
   autoGrowAskInput();
 
   els.workspace?.querySelectorAll('[data-mx-close]').forEach((node) => {
