@@ -471,6 +471,7 @@ class CapabilityRegistry {
 
 const DEFAULT_ACQUISITION_COST = Object.freeze({
   prospect_discovery: 100,
+  prospect_acquisition: 40,
   company_enrichment: 80,
   knowledge_update: 40,
   opportunity_ranking: 70,

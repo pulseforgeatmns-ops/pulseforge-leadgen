@@ -488,6 +488,12 @@ function registerBuiltinCapabilities(registry, options = {}) {
   const register = (cap) => registry.register(withArtifactContracts(cap));
 
   register(createProspectDiscoveryCapability(resolveDiscoveryDeps(options)));
+  const {
+    createProspectAcquisitionCapability,
+  } = require('../acquisition');
+  register(
+    createProspectAcquisitionCapability(options.acquisition || {})
+  );
   register(createCompanyEnrichmentStub());
   register(createKnowledgeUpdateStub());
   register(createOpportunityRankingCapability(options.ranking || {}));
@@ -560,6 +566,8 @@ function createBuiltinRegistry(options = {}) {
 module.exports = {
   createProspectDiscoveryStub,
   createProspectDiscoveryCapability,
+  createProspectAcquisitionCapability: require('../acquisition')
+    .createProspectAcquisitionCapability,
   createCompanyEnrichmentStub,
   createKnowledgeUpdateStub,
   createOpportunityRankingStub,

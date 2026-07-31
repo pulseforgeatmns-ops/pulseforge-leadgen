@@ -27,6 +27,16 @@ const {
   acquisitionOptions,
 } = require('./ArtifactResolver');
 
+try {
+  var {
+    selectAcquisitionStrategy,
+    ACQUISITION_STRATEGIES,
+  } = require('../capabilities/acquisition');
+} catch {
+  selectAcquisitionStrategy = null;
+  ACQUISITION_STRATEGIES = { DISCOVERY: 'discovery' };
+}
+
 /**
  * Build an execution graph from mission inputs.
  * Stage keywords augment the seed — they never replace it.
@@ -131,6 +141,13 @@ function createExecutionGraph(missionOrInput = {}) {
     }
   }
 
+  // 3b. SPEC-060 — non-discovery acquisition replaces Discovery seed
+  applyAcquisitionStrategy(selected, skipped, {
+    objective,
+    constraints: missionOrInput.constraints || {},
+    missionPlan,
+  });
+
   // 4. Explicit extras (operator / feature)
   for (const id of missionOrInput.extraStages || []) {
     if (getStage(id) && !selected.has(id)) {
@@ -183,7 +200,9 @@ function createExecutionGraph(missionOrInput = {}) {
   // Discovery (and other pure producers) may be skipped even if seeded or
   // named in execution — existing compatible artifacts win (ADR-035).
   const protectedStages = new Set(
-    [...explicitExecution].filter((id) => id !== 'prospect_discovery')
+    [...explicitExecution].filter(
+      (id) => id !== 'prospect_discovery' && id !== 'prospect_acquisition'
+    )
   );
   applyResolutionToSelection(selected, skipped, artifactResolution, {
     protectedStages,
@@ -631,23 +650,31 @@ function shouldAutoCloseDependency(selected, stageId, depId) {
   if (stageId === 'direct_mail_execution' && selected.has('campaign_builder')) {
     return true;
   }
-  // Ranking needs discovery when both in a discovery-based pipeline
+  // Ranking needs a ProspectList producer when both in a discovery-based pipeline
   if (
     stageId === 'opportunity_ranking' &&
-    (selected.has('prospect_discovery') || selected.has('campaign_builder'))
+    (selected.has('prospect_discovery') ||
+      selected.has('prospect_acquisition') ||
+      selected.has('campaign_builder'))
   ) {
+    if (selected.has('prospect_acquisition')) {
+      return depId === 'prospect_acquisition' || depId === 'prospect_discovery';
+    }
     return depId === 'prospect_discovery';
   }
   if (
     stageId === 'campaign_builder' &&
-    selected.has('prospect_discovery')
+    (selected.has('prospect_discovery') || selected.has('prospect_acquisition'))
   ) {
     return true;
   }
   if (
     stageId === 'company_enrichment' &&
-    selected.has('prospect_discovery')
+    (selected.has('prospect_discovery') || selected.has('prospect_acquisition'))
   ) {
+    if (selected.has('prospect_acquisition')) {
+      return depId === 'prospect_acquisition' || depId === 'prospect_discovery';
+    }
     return depId === 'prospect_discovery';
   }
   return false;
@@ -829,6 +856,62 @@ function findWhy(reasons, skipped, stageId) {
   return { included: false, reason: 'Not evaluated' };
 }
 
+/**
+ * SPEC-060 — when Mission Planning selects a non-discovery acquisition
+ * strategy, replace the Discovery seed with Prospect Acquisition.
+ * @param {Map<string, string>} selected
+ * @param {Map<string, string>} skipped
+ * @param {object} input
+ */
+function applyAcquisitionStrategy(selected, skipped, input = {}) {
+  if (typeof selectAcquisitionStrategy !== 'function') return;
+  if (!selected.has('prospect_discovery') && !selected.has('prospect_acquisition')) {
+    return;
+  }
+
+  const constraints = input.constraints || {};
+  const hints = {
+    ...constraints,
+    acquisitionStrategy:
+      constraints.acquisitionStrategy ||
+      (input.missionPlan &&
+        input.missionPlan.parameters &&
+        input.missionPlan.parameters.acquisitionStrategy) ||
+      null,
+  };
+  const strategy = selectAcquisitionStrategy(input.objective || '', hints);
+  const discoveryOnly =
+    !ACQUISITION_STRATEGIES ||
+    strategy === ACQUISITION_STRATEGIES.DISCOVERY ||
+    strategy === 'discovery';
+
+  // Explicit Prospect Acquisition (import / Mission Plan) wins over seeded Discovery
+  if (selected.has('prospect_acquisition') && selected.has('prospect_discovery')) {
+    selected.delete('prospect_discovery');
+    skipped.set(
+      'prospect_discovery',
+      `Replaced by Prospect Acquisition (strategy=${strategy})`
+    );
+    return;
+  }
+
+  if (discoveryOnly) return;
+
+  if (selected.has('prospect_discovery')) {
+    selected.delete('prospect_discovery');
+    skipped.set(
+      'prospect_discovery',
+      `Replaced by Prospect Acquisition (strategy=${strategy})`
+    );
+  }
+  if (!selected.has('prospect_acquisition') && getStage('prospect_acquisition')) {
+    selected.set(
+      'prospect_acquisition',
+      `Acquisition strategy: ${strategy}`
+    );
+  }
+}
+
 module.exports = {
   createExecutionGraph,
   replanGraph,
@@ -837,4 +920,5 @@ module.exports = {
   insertStage,
   removeStage,
   replaceStage,
+  applyAcquisitionStrategy,
 };

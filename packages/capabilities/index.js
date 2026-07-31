@@ -95,6 +95,7 @@ module.exports = {
   DEFAULT_CAPABILITY_VERSION,
   withArtifactContracts,
   discovery: require('./discovery'),
+  acquisition: require('./acquisition'),
   ranking: require('./ranking'),
   proposal: require('./proposal'),
   playbook: require('./playbook'),
@@ -111,6 +112,8 @@ module.exports = {
 // Re-export production capabilities at top level for convenience
 module.exports.createProspectDiscoveryCapability =
   require('./discovery').createProspectDiscoveryCapability;
+module.exports.createProspectAcquisitionCapability =
+  require('./acquisition').createProspectAcquisitionCapability;
 module.exports.createOpportunityRankingCapability =
   require('./ranking').createOpportunityRankingCapability;
 module.exports.createBusinessIntelligenceCapability =

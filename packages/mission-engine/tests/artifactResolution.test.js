@@ -62,7 +62,8 @@ describe('SPEC-051 Artifact Resolver', () => {
       result.acquisitions.some(
         (a) =>
           a.strategy === 'capability_acquisition' &&
-          a.stageId === 'prospect_discovery'
+          (a.stageId === 'prospect_discovery' ||
+            a.stageId === 'prospect_acquisition')
       )
     );
   });

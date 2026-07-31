@@ -148,6 +148,7 @@ const ROUTE_KINDS = Object.freeze({
 const STAGE_LABELS = Object.freeze({
   planning: 'Planning Mission',
   prospect_discovery: 'Discovering Prospects',
+  prospect_acquisition: 'Acquiring Prospects',
   company_enrichment: 'Enriching Companies',
   knowledge_update: 'Updating Knowledge',
   opportunity_ranking: 'Ranking Opportunities',

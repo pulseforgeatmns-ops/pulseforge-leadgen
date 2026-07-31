@@ -328,11 +328,37 @@ class MissionPlanner {
       matchMissionType(planningObjective.toLowerCase(), planningObjective) ||
       MISSION_TYPES.CAMPAIGN_CREATION;
 
+    // SPEC-060 — select acquisition strategy before graph composition
+    const earlyConstraints =
+      input.constraints && typeof input.constraints === 'object'
+        ? { ...input.constraints }
+        : { targetCount: 50 };
+    try {
+      const {
+        selectAcquisitionStrategy,
+      } = require('../capabilities/acquisition');
+      if (!earlyConstraints.acquisitionStrategy) {
+        earlyConstraints.acquisitionStrategy = selectAcquisitionStrategy(
+          planningObjective || objectiveText,
+          {
+            ...earlyConstraints,
+            csv: earlyConstraints.csv || earlyConstraints.csvText,
+            paste: earlyConstraints.paste,
+            prospects: earlyConstraints.prospects,
+            prospectList: earlyConstraints.prospectList,
+            existingList: earlyConstraints.existingList,
+          }
+        );
+      }
+    } catch {
+      /* acquisition package optional at boot */
+    }
+
     const graph = createExecutionGraph({
       objective: planningObjective,
       missionType,
       missionPlan,
-      constraints: input.constraints,
+      constraints: earlyConstraints,
       extraStages: input.extraStages,
       removeStages: input.removeStages,
       registry: this._registry,
@@ -362,10 +388,7 @@ class MissionPlanner {
     }
 
     const capabilityIds = graph.executableStages.map((s) => s.capabilityId);
-    const baseConstraints =
-      input.constraints && typeof input.constraints === 'object'
-        ? { ...input.constraints }
-        : { targetCount: 50 };
+    const baseConstraints = { ...earlyConstraints };
 
     // SPEC-050: structured parameters from Mission Plan (never Notes)
     if (missionPlan.parameters && missionPlan.parameters.prospectList) {
