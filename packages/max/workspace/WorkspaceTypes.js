@@ -87,6 +87,12 @@ function buildResponseMetadata(partial = {}) {
   if (partial.verificationWorkOrder === true) {
     meta.verificationWorkOrder = true;
   }
+  if (partial.fillableTable === true) {
+    meta.fillableTable = true;
+  }
+  if (partial.activeWorkContextReused === true) {
+    meta.activeWorkContextReused = true;
+  }
   if (partial.prospectCount != null && Number.isFinite(Number(partial.prospectCount))) {
     meta.prospectCount = Number(partial.prospectCount);
   }
