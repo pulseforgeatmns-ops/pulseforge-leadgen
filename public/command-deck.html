@@ -49,14 +49,14 @@
     <form id="cdAskForm" class="cd-ask-form" autocomplete="off">
       <label class="pf-sr-only" for="cdAskInput">Ask Max about today's briefing</label>
       <span class="cd-ask-mark" aria-hidden="true"></span>
-      <input
+      <textarea
         id="cdAskInput"
         class="cd-ask-input"
-        type="text"
         name="ask"
+        rows="1"
+        maxlength="100000"
         placeholder="Ask Max about today's brief…"
-        maxlength="500"
-      >
+      ></textarea>
       <button type="submit" class="cd-ask-submit" aria-label="Open Ask Max">Ask</button>
     </form>
   </div>
