@@ -603,7 +603,11 @@ const OBJECTIVE_ONLY_LINE =
 
 /** Operator constraint / request prose that must not become ProspectList rows. */
 const INSTRUCTION_LINE =
-  /\b(still\s+do\s+not|do\s+not\s+(launch|execute|approve|mail|run|resume)|prepare\s+the\s+review|for\s+each\s+prospect|return:|readiness\s+status|missing\s+or\s+unverified|packet\s+checklist|personalized\s+letter|handwritten\s+note|scorecard|follow-?up\s+call|next\s+action|tracking\s+fields)\b/i;
+  /\b(still\s+do\s+not|do\s+not\s+(launch|execute|approve|mail|run|resume|print|create)|prepare\s+the\s+review|for\s+each\s+prospect|return:|readiness\s+status|missing\s+or\s+unverified|packet\s+checklist|personalized\s+letter|handwritten\s+note|scorecard|follow-?up\s+call|next\s+action|tracking\s+fields)\b/i;
+
+/** Mid-string instruction prose that ends a flattened prospect chunk. */
+const INLINE_INSTRUCTION_START =
+  /\s+(?=(?:still\s+)?do\s+not\b|\bprepare\s+the\s+review\b|\bfor\s+each\s+prospect\b|\bcreate\s+provisional\b)/i;
 
 const CHECKLIST_BULLET = /^\s*[-*•]\s+\S/;
 
@@ -628,7 +632,12 @@ function looksLikeProspectId(value) {
 
 function hasProspectRowSeparators(text) {
   const s = String(text || '');
-  return /[—–]/.test(s) || /\t/.test(s) || /\s+-\s+/.test(s);
+  return (
+    /[—–]/.test(s) ||
+    /\t/.test(s) ||
+    /\s+-\s+/.test(s) ||
+    /\s*\|\s*/.test(s)
+  );
 }
 
 /**
@@ -676,11 +685,69 @@ function splitProspectParts(stripped) {
       .map((p) => p.trim())
       .filter(Boolean);
   }
+  if (parts.length < 3) {
+    const pipeParts = String(stripped || '')
+      .split(/\s*\|\s*/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (pipeParts.length >= 3) parts = pipeParts;
+  }
   return parts;
 }
 
 /**
- * Parse `1. PM-001 — Company — Contact — Industry` (em dash / hyphen / tab).
+ * Map optional trailing field parts (website / address / phone), treating
+ * "unknown" placeholders as null.
+ * @param {string[]} parts
+ * @param {number} startIdx
+ */
+function mapOptionalProspectFields(parts, startIdx) {
+  let website = null;
+  let address = null;
+  let phone = null;
+  const list = Array.isArray(parts) ? parts : [];
+  for (let i = startIdx; i < list.length; i += 1) {
+    const raw = String(list[i] || '').trim();
+    if (!raw) continue;
+    const lower = raw.toLowerCase();
+    const value = fieldValueOrNull(raw);
+    if (/^website\b/i.test(lower) || looksLikeWebsite(raw)) {
+      website = value;
+    } else if (/^(mailing\s+)?address\b/i.test(lower)) {
+      address = value;
+    } else if (/^phone\b/i.test(lower) || looksLikePhone(raw)) {
+      phone = value;
+    }
+  }
+  return { website, address, phone };
+}
+
+function fieldValueOrNull(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  const lower = s.toLowerCase();
+  if (
+    /^(website|mailing\s+address|address|phone)\s+unknown$/i.test(lower) ||
+    lower === 'unknown' ||
+    lower === 'n/a' ||
+    lower === 'none'
+  ) {
+    return null;
+  }
+  // "website https://..." / "phone 555-..." → strip label
+  const labeled = /^(website|mailing\s+address|address|phone)\s*[:\-]?\s*(.+)$/i.exec(
+    s
+  );
+  if (labeled) {
+    const rest = String(labeled[2] || '').trim();
+    if (!rest || /^unknown$/i.test(rest)) return null;
+    return rest;
+  }
+  return s;
+}
+
+/**
+ * Parse `1. PM-001 — Company — Contact — Industry` (em dash / hyphen / tab / pipe).
  * @param {string} line
  * @param {number} index
  * @returns {object|null}
@@ -704,16 +771,19 @@ function parseNumberedProspectRow(line, index = 0) {
   let companyName;
   let contactName;
   let industry = null;
+  let fieldStart = 3;
 
   if (looksLikeProspectId(parts[0])) {
     id = parts[0];
     companyName = parts[1];
     contactName = parts[2];
     industry = parts[3] || null;
+    fieldStart = industry ? 4 : 3;
   } else if (isViableCompanyName(parts[0])) {
     companyName = parts[0];
     contactName = parts[1];
     industry = parts[2] || null;
+    fieldStart = industry ? 3 : 2;
   } else {
     return null;
   }
@@ -721,12 +791,23 @@ function parseNumberedProspectRow(line, index = 0) {
   if (!companyName || !isViableCompanyName(companyName)) return null;
   if (looksLikeNaturalLanguage(companyName)) return null;
 
+  // Industry slot may itself be a labeled optional field
+  if (industry && /^(website|mailing\s+address|address|phone)\b/i.test(industry)) {
+    fieldStart = looksLikeProspectId(parts[0]) ? 3 : 2;
+    industry = null;
+  }
+
+  const optional = mapOptionalProspectFields(parts, fieldStart);
+
   return normalizeProspectRow(
     {
       id: id || `op_${index + 1}`,
       companyName,
       contactName: contactName || null,
       industry: industry || null,
+      website: optional.website,
+      address: optional.address,
+      phone: optional.phone,
     },
     index
   );
@@ -773,6 +854,125 @@ function looksLikeDelimitedDataRow(line) {
 }
 
 /**
+ * Expand single-paragraph numbered prospect rows into one line per prospect.
+ * Stops before trailing instruction prose on the final chunk.
+ *
+ * Example:
+ *   "Use these 3 prospects: 1. PM-001 — A — B — C 2. PM-002 — D — E — F Do not launch..."
+ * → preamble + two prospect lines + trailing instructions
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function expandFlattenedNumberedProspectText(text) {
+  const raw = normalizeNewlines(String(text || ''));
+  if (!raw.trim()) return raw;
+
+  const lines = raw.split('\n');
+  const out = [];
+
+  for (const line of lines) {
+    const expanded = splitFlattenedNumberedProspectLine(line);
+    if (!expanded) {
+      out.push(line);
+      continue;
+    }
+    if (expanded.preamble) out.push(expanded.preamble);
+    expanded.rows.forEach((row) => out.push(row));
+    if (expanded.trailing) out.push(expanded.trailing);
+  }
+
+  return out.join('\n');
+}
+
+/**
+ * @param {string} line
+ * @returns {{ preamble: string|null, rows: string[], trailing: string|null }|null}
+ */
+function splitFlattenedNumberedProspectLine(line) {
+  const text = String(line || '');
+  if (!text.trim()) return null;
+  if (!hasProspectRowSeparators(text)) return null;
+
+  // Numbered markers: "1. " / "2) " ahead of an id or company-like token
+  const markerRe = /\d+[\.)]\s+(?=[A-Za-z0-9])/g;
+  const markers = [...text.matchAll(markerRe)];
+  if (markers.length < 2) return null;
+
+  const preamble = text.slice(0, markers[0].index).trim() || null;
+  const rows = [];
+  let trailing = null;
+
+  for (let i = 0; i < markers.length; i += 1) {
+    const start = markers[i].index;
+    const end = i + 1 < markers.length ? markers[i + 1].index : text.length;
+    let chunk = text.slice(start, end).trim();
+    if (!chunk) continue;
+
+    if (i === markers.length - 1) {
+      const trimmed = trimInstructionProseFromProspectChunk(chunk);
+      chunk = trimmed.row;
+      trailing = trimmed.trailing;
+    }
+
+    if (!chunk) continue;
+    if (parseNumberedProspectRow(chunk, rows.length)) {
+      rows.push(chunk);
+    } else if (i === markers.length - 1) {
+      trailing = [chunk, trailing].filter(Boolean).join(' ').trim() || trailing;
+    }
+  }
+
+  if (rows.length < 2) return null;
+  return { preamble, rows, trailing };
+}
+
+/**
+ * Peel trailing instruction prose off the last flattened prospect chunk.
+ * @param {string} chunk
+ * @returns {{ row: string, trailing: string|null }}
+ */
+function trimInstructionProseFromProspectChunk(chunk) {
+  const text = String(chunk || '').trim();
+  if (!text) return { row: '', trailing: null };
+
+  const instr = INLINE_INSTRUCTION_START.exec(text);
+  if (instr && instr.index > 0) {
+    const row = text.slice(0, instr.index).trim();
+    const trailing = text.slice(instr.index).trim();
+    if (parseNumberedProspectRow(row, 0)) {
+      return { row, trailing: trailing || null };
+    }
+  }
+
+  // Fallback: keep only id/company/contact/industry + optional labeled fields
+  const stripped = stripListPrefix(text);
+  const prefix = text.slice(0, text.length - stripped.length);
+  const parts = splitProspectParts(stripped);
+  if (parts.length >= 3 && looksLikeProspectId(parts[0])) {
+    let keep = 4; // id, company, contact, industry
+    for (let i = 4; i < parts.length; i += 1) {
+      if (/^(website|mailing\s+address|address|phone)\b/i.test(parts[i])) {
+        keep = i + 1;
+      } else {
+        break;
+      }
+    }
+    if (keep < parts.length) {
+      const rowParts = parts.slice(0, keep);
+      const sep = /[—–]/.test(text) ? ' — ' : /\s\|\s/.test(text) ? ' | ' : ' - ';
+      const row = `${prefix}${rowParts.join(sep)}`.trim();
+      const trailing = parts.slice(keep).join(' ').trim();
+      if (parseNumberedProspectRow(row, 0)) {
+        return { row, trailing: trailing || null };
+      }
+    }
+  }
+
+  return { row: text, trailing: null };
+}
+
+/**
  * Extract a contiguous prospect-list block from a Mission chat prompt.
  * Looks for numbered dash rows, CSV/TSV headers, delimited rows, or name lists.
  * Stops before trailing operator instructions / checklist bullets.
@@ -780,7 +980,9 @@ function looksLikeDelimitedDataRow(line) {
  * @returns {{ block: string, startLine: number, endLine: number, hasHeader: boolean }|null}
  */
 function extractProspectBlock(text) {
-  const raw = normalizeNewlines(String(text || '').replace(/^\uFEFF/, ''));
+  const raw = expandFlattenedNumberedProspectText(
+    normalizeNewlines(String(text || '').replace(/^\uFEFF/, ''))
+  );
   if (!raw.trim()) return null;
 
   const lines = raw.split('\n');
@@ -913,7 +1115,9 @@ function looksLikeDelimitedRow(line) {
  * @returns {object}
  */
 function detectOperatorProspectListInMessage(text) {
-  const raw = String(text || '');
+  const raw = expandFlattenedNumberedProspectText(
+    normalizeNewlines(String(text || ''))
+  );
   const empty = {
     detected: false,
     confidence: 'none',
@@ -1065,4 +1269,5 @@ module.exports = {
   isInstructionOrChecklistLine,
   looksLikeNaturalLanguage,
   isViableCompanyName,
+  expandFlattenedNumberedProspectText,
 };

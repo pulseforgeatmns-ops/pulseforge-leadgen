@@ -455,4 +455,42 @@ describe('Campaign 001 canary prospect block extraction', () => {
     );
     assert.match(detected.objectiveText, /Still do not launch/i);
   });
+
+  it('extracts exactly three prospects from a flattened numbered paragraph', () => {
+    const detected = detectOperatorProspectListInMessage(
+      [
+        'Continue the Campaign 001 preparation-only canary package.',
+        'Use these 3 prospects: 1. PM-001 — Gamache Properties — Ben Gamache — Property Management — website unknown — mailing address unknown — phone unknown 2. PM-002 — Elm Grove Companies — David Schleyer — Property Management — website unknown — mailing address unknown — phone unknown 3. PM-003 — Mill City Property Management — Lauren DuPaul — Property Management — website unknown — mailing address unknown — phone unknown Do not create a mission. Do not launch, execute, approve, print, or mail anything.',
+      ].join('\n')
+    );
+    assert.equal(detected.detected, true);
+    assert.equal(detected.prospectCount, 3);
+    assert.deepEqual(
+      detected.prospects.map((p) => p.id),
+      ['PM-001', 'PM-002', 'PM-003']
+    );
+    assert.deepEqual(
+      detected.prospects.map((p) => p.companyName),
+      [
+        'Gamache Properties',
+        'Elm Grove Companies',
+        'Mill City Property Management',
+      ]
+    );
+    assert.deepEqual(
+      detected.prospects.map((p) => p.contactName),
+      ['Ben Gamache', 'David Schleyer', 'Lauren DuPaul']
+    );
+    assert.ok(
+      detected.prospects.every((p) => p.industry === 'Property Management')
+    );
+    assert.ok(
+      detected.prospects.every(
+        (p) =>
+          !/Do not create/i.test(p.companyName) &&
+          !/Do not launch/i.test(p.companyName)
+      )
+    );
+    assert.match(detected.objectiveText, /Do not create a mission/i);
+  });
 });
