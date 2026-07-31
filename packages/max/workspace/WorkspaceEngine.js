@@ -24,6 +24,8 @@ const {
   buildCanaryActiveWorkContext,
   entitiesToProspects,
   isActiveWorkFollowUpCue,
+  isActiveWorkTransformCue,
+  isExplicitNewMissionRequest,
   isExplicitContextOverride,
   isExplicitExecutionRequest,
   isFillableTableRequest,
@@ -174,6 +176,73 @@ class WorkspaceEngine {
       role: 'operator',
       text: question,
     });
+
+    // Early desk-context continuation — before domain routing, General
+    // Conversation, policy fallback, mission resolver, or mission create/resume.
+    const activeContinuation = await maybeHandleActiveWorkContinuation({
+      question,
+      session,
+    });
+    if (activeContinuation) {
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'workspace';
+      }
+
+      const structuredEarly = activeContinuation.structured;
+      const routeEarly = {
+        kind: ROUTE_KINDS.INTELLIGENCE,
+        missionType: null,
+        reason: activeContinuation.reason,
+        missionIntent: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      };
+      const presentedEarly = await this._presentation.present(structuredEarly);
+      let proseEarly = presentedEarly.prose;
+      if (envelopeSwitch) {
+        proseEarly = `${envelopeSwitch}\n\n${proseEarly}`;
+      }
+
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseEarly,
+        structured: structuredEarly,
+      });
+
+      return {
+        sessionId: session.id,
+        prose: proseEarly,
+        structured: structuredEarly,
+        metadata: presentedEarly.metadata,
+        suggestions: structuredEarly.nextInvestigations,
+        recommendedActions: structuredEarly.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedEarly.presentation,
+        route: routeEarly.kind,
+        mission: null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: activeContinuation.reason,
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: activeContinuation.reason,
+          missionType: null,
+          missionId: null,
+        },
+      };
+    }
 
     // 1–2) Intent Understanding → Select Execution Domain (ignore active convo)
     const domainDecision = selectExecutionDomain(question, {
@@ -468,6 +537,133 @@ class WorkspaceEngine {
  */
 function createWorkspaceEngine(options = {}) {
   return new WorkspaceEngine(options);
+}
+
+/**
+ * Early guard: if desk context exists and the operator is continuing/transforming
+ * prior work, handle it before domain routing can send the turn to General
+ * Conversation / policy fallback / mission create.
+ * @returns {Promise<{ structured: object, reason: string }|null>}
+ */
+async function maybeHandleActiveWorkContinuation(input) {
+  const question = String(input.question || '');
+  const session = input.session || null;
+  if (!question.trim()) return null;
+
+  // Explicit new campaign/mission work always goes through normal routing.
+  if (isExplicitNewMissionRequest(question)) return null;
+
+  const prior = getActiveWorkContext(session);
+  const hasEntities = activeContextHasEntities(prior);
+  const isFollowUp = isActiveWorkFollowUpCue(question);
+  const isFillable = isFillableTableRequest(question);
+  const isTransform = isActiveWorkTransformCue(question);
+  const isExec = isExplicitExecutionRequest(question);
+
+  // Mail/launch while desk constraints forbid execution — still early, so we
+  // never infer launch from General Conversation routing.
+  if (
+    hasEntities &&
+    isExec &&
+    !isPreparationOnlyCanary(question) &&
+    activeContextBlocksExecution(prior)
+  ) {
+    return {
+      reason: 'active_work_context_execution_blocked',
+      structured: buildCanaryExecutionBlockedResponse({
+        activeWorkContext: prior,
+        question,
+      }),
+    };
+  }
+
+  if (hasEntities && (isFollowUp || isFillable)) {
+    // New paste overrides desk entities — fall through so canary/mission
+    // paths can parse and replace.
+    if (
+      operatorAttemptedCanaryProspectSupply(question) &&
+      !/\b(?:the\s+)?same\s+prospects\b/i.test(question)
+    ) {
+      const detected = detectOperatorProspectListInMessage(question);
+      const intendedCount = extractIntendedCanaryProspectCount(question);
+      const completeProspects =
+        detected.detected &&
+        detected.prospectCount > 0 &&
+        (!intendedCount || detected.prospectCount >= intendedCount);
+      if (!completeProspects) {
+        // Incomplete new paste — clarify, do not invent from old desk rows.
+        return {
+          reason: 'active_work_context_prospect_parse_clarification',
+          structured: buildCanaryParseFailureResponse({
+            intendedCount: intendedCount || 3,
+          }),
+        };
+      }
+      // Complete new paste: let normal canary path store/replace.
+      return null;
+    }
+
+    const prospects = entitiesToProspects(prior.entities);
+    const review = buildCanaryReviewPackageResponse({
+      prospects,
+      objectiveText: question,
+      question,
+      reusedFromActiveContext: true,
+    });
+    rememberCanaryActiveWorkContext({
+      session,
+      prospects,
+      question,
+      lastOutputType: resolveCanaryLastOutputType(question, review.reason),
+      prior,
+    });
+    return {
+      reason: review.reason || 'active_work_context_continuation',
+      structured: review.structured || review,
+    };
+  }
+
+  // Strong transform cue without desk context — ask for prospects instead of
+  // falling through to General Conversation / policy unavailable.
+  if (!hasEntities && isTransform) {
+    if (isFillable || /\bconvert\s+the\s+(?:verification\s+)?work\s+order\b/i.test(question)) {
+      return {
+        reason: 'active_work_context_missing_for_transform',
+        structured: buildStructuredResponse({
+          answer: [
+            'I do not have an active verification work order on the desk yet.',
+            'Paste the prospects (or continue from a session that already has them) and I will build the fillable table.',
+            'Send company name, decision maker if known, website, mailing address, and phone if you have it.',
+            'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+          ].join(' '),
+          reasoning: [
+            'Operator asked to transform a verification work order, but activeWorkContext has no entities.',
+            'Clarifying instead of falling through to generic routing or policy fallback.',
+            'No mission create/resume.',
+          ],
+          supportingEvidence: [],
+          contradictingEvidence: [],
+          confidence: null,
+          nextInvestigations: [
+            'Paste prospects for the fillable verification table.',
+          ],
+          recommendedActions: [],
+          metadata: {
+            sourcesUsed: {},
+            evidenceCount: 0,
+            unavailable: ['active_work_context_entities'],
+            surface: 'workspace',
+            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+            route: 'intelligence',
+            canaryPreparationOnly: true,
+            fillableTable: isFillable,
+          },
+        }),
+      };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -1090,18 +1286,29 @@ const CANARY_FILLABLE_TABLE_COLUMNS = [
   'prospect_id',
   'company_name',
   'contact_name',
-  'industry',
-  'website',
-  'mailing_address',
-  'phone',
+  'contact_role_status',
+  'website_status',
+  'website_value',
+  'mailing_address_status',
+  'mailing_address_value',
+  'phone_status',
+  'phone_value',
+  'source_to_check_first',
   'verification_status',
-  'verification_source',
-  'source_confidence',
-  'verified_by',
-  'verified_at',
   'mail_readiness',
+  'draft_readiness',
+  'execution_readiness',
+  'operator_next_action',
   'notes',
 ];
+
+function fieldStatusAndValue(value) {
+  const raw = value == null ? '' : String(value).trim();
+  if (!raw || /^unknown$/i.test(raw) || /^n\/?a$/i.test(raw)) {
+    return { status: 'blocked', value: 'unknown' };
+  }
+  return { status: 'needs verification', value: raw };
+}
 
 function buildCanaryFillableTableResponse(input) {
   const prospects = Array.isArray(input.prospects) ? input.prospects : [];
@@ -1113,22 +1320,47 @@ function buildCanaryFillableTableResponse(input) {
 
   const header = `| ${CANARY_FILLABLE_TABLE_COLUMNS.join(' | ')} |`;
   const separator = `| ${CANARY_FILLABLE_TABLE_COLUMNS.map(() => '---').join(' | ')} |`;
-  const rows = reviews.map((r) => {
+  const rows = reviews.map((r, i) => {
+    const source = prospects[i] || {};
+    const website = fieldStatusAndValue(source.website);
+    const mailing = fieldStatusAndValue(
+      source.mailingAddress || source.address
+    );
+    const phone = fieldStatusAndValue(source.phone);
+    const contactRoleStatus = r.contactName
+      ? 'needs verification'
+      : 'blocked';
+    const operatorNext =
+      mailing.status === 'blocked'
+        ? 'verify mailing address first'
+        : website.status === 'blocked'
+          ? 'verify website next'
+          : phone.status === 'blocked'
+            ? 'verify phone next'
+            : 'confirm all fields then request explicit approval before mail';
+
     const cells = [
-      r.id || '',
-      r.companyName || '',
-      r.contactName || '',
-      r.industry || '',
-      '', // website — fillable
-      '', // mailing_address — fillable
-      '', // phone — fillable
-      'Pending',
-      '', // verification_source
-      '', // source_confidence
-      '', // verified_by
-      '', // verified_at
-      r.mailReadiness || 'Blocked',
-      '', // notes
+      r.id || 'unknown',
+      r.companyName || 'unknown',
+      r.contactName || 'unknown',
+      contactRoleStatus,
+      website.status,
+      website.value,
+      mailing.status,
+      mailing.value,
+      phone.status,
+      phone.value,
+      'official company website / contact page, then business registry or trusted CRM',
+      'needs verification',
+      String(r.mailReadiness || 'Blocked').toLowerCase() === 'ready'
+        ? 'ready'
+        : String(r.mailReadiness || 'blocked').toLowerCase(),
+      String(r.draftReadiness || 'Blocked').toLowerCase() === 'allowed'
+        ? 'allowed'
+        : 'blocked',
+      'blocked',
+      operatorNext,
+      '',
     ];
     return `| ${cells.join(' | ')} |`;
   });
@@ -1139,21 +1371,22 @@ function buildCanaryFillableTableResponse(input) {
     reused
       ? `Converted the verification work order into a fillable table for the same ${count} prospect${count === 1 ? '' : 's'} already on the desk.`
       : `Fillable table for ${count} canary prospect${count === 1 ? '' : 's'}.`,
-    'Blank cells are for operator verification — I will not invent website, mailing address, phone, or evidence.',
+    'Known identity fields are filled from active work context. Missing mail-critical values stay unknown — I will not invent websites, phones, or addresses.',
     safety,
   ].join('\n');
 
   const closing =
-    'Fill website, mailing_address, and phone from trusted sources before any print/mail step. Constraints stay no-launch / no-mail until you explicitly approve after readiness is complete.';
+    'Fill website_value, mailing_address_value, and phone_value from trusted sources before any print/mail step. Constraints stay no-launch / no-mail until you explicitly approve after readiness is complete.';
 
   return buildStructuredResponse({
     answer: [intro, '', header, separator, ...rows, '', closing].join('\n'),
     reasoning: [
       reused
-        ? 'Reused activeWorkContext entities; operator asked to convert the work order into a fillable table.'
+        ? 'Early activeWorkContext continuation reused desk entities before domain routing.'
         : 'Operator requested a fillable verification table for canary prospects.',
-      'Table preserves known identity fields only; mail-critical fields left blank for verification.',
+      'Table preserves known identity fields only; mail-critical fields left unknown for verification.',
       'No mission create/resume. No launch, mail, print, or approval inferred from desk context.',
+      'Handled via early active-work continuation before domain routing.',
     ],
     supportingEvidence: reviews.map((r, i) => ({
       id: `canary-prospect:${r.id || i}`,
@@ -1164,7 +1397,7 @@ function buildCanaryFillableTableResponse(input) {
     contradictingEvidence: [],
     confidence: null,
     nextInvestigations: [
-      'Fill website, mailing_address, and phone for each row from a trusted source.',
+      'Fill website_value, mailing_address_value, and phone_value for each row from a trusted source.',
     ],
     recommendedActions: [
       'Verify mailing address first for every row, then website and phone.',

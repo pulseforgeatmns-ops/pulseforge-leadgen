@@ -74,5 +74,7 @@ module.exports = {
   setActiveWorkContext: ActiveWorkContext.setActiveWorkContext,
   buildCanaryActiveWorkContext: ActiveWorkContext.buildCanaryActiveWorkContext,
   isActiveWorkFollowUpCue: ActiveWorkContext.isActiveWorkFollowUpCue,
+  isActiveWorkTransformCue: ActiveWorkContext.isActiveWorkTransformCue,
   isFillableTableRequest: ActiveWorkContext.isFillableTableRequest,
+  isExplicitNewMissionRequest: ActiveWorkContext.isExplicitNewMissionRequest,
 };

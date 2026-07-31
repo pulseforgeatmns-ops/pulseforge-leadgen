@@ -189,17 +189,49 @@ function isActiveWorkFollowUpCue(text) {
     /\bconvert\s+this\b/,
     /\bconvert\s+the\s+(?:verification\s+)?work\s+order\b/,
     /\bmake\s+it\s+a\s+table\b/,
+    /\bfillable\s+table\b/,
+    /\buse\s+the\s+same\s+prospects\b/,
+    /\bsame\s+prospects\b/,
+    /\bkeep\s+the\s+same\s+(?:preparation[-\s]*only\s+)?constraints\b/,
+    /\bkeep\s+the\s+same\s+constraints\b/,
     /\bturn\s+this\s+into\b/,
     /\bturn\s+it\s+into\b/,
-    /\buse\s+the\s+same\s+prospects\b/,
     /\brevise\s+that\b/,
     /\bmake\s+it\s+more\s+concise\b/,
     /\bnext\s+step\b/,
     /\bwhat\s+should\s+i\s+do\s+first\b/,
-    /\bfillable\s+table\b/,
     /\bconvert\b.+\b(?:into|to)\s+a\s+(?:fillable\s+)?table\b/,
   ];
   return cues.some((re) => re.test(lower));
+}
+
+/**
+ * Strong transform cues that should clarify (ask for prospects) even when
+ * desk context is missing — instead of falling through to General Conversation.
+ * @param {string} text
+ */
+function isActiveWorkTransformCue(text) {
+  const lower = String(text || '').toLowerCase();
+  return (
+    isFillableTableRequest(lower) ||
+    /\bconvert\s+the\s+(?:verification\s+)?work\s+order\b/.test(lower) ||
+    /\bverification\s+work\s+order\b/.test(lower)
+  );
+}
+
+/**
+ * Explicit new mission / campaign work — must not be intercepted by desk context.
+ * @param {string} text
+ */
+function isExplicitNewMissionRequest(text) {
+  const lower = String(text || '').toLowerCase();
+  return (
+    /\bbuild\s+campaign\b/.test(lower) ||
+    /\bcreate\s+(?:a\s+)?(?:new\s+)?(?:campaign|mission)\b/.test(lower) ||
+    /\bstart\s+(?:a\s+)?(?:new\s+)?(?:campaign|mission|direct\s+mail)\b/.test(
+      lower
+    )
+  );
 }
 
 /**
@@ -245,6 +277,9 @@ function isFillableTableRequest(text) {
     /\bfillable\s+table\b/.test(lower) ||
     /\bmake\s+it\s+a\s+table\b/.test(lower) ||
     /\bconvert\b.+\b(?:into|to)\s+a\s+(?:fillable\s+)?table\b/.test(lower) ||
+    /\bconvert\s+the\s+(?:verification\s+)?work\s+order\s+into\s+a\s+(?:fillable\s+)?table\b/.test(
+      lower
+    ) ||
     /\bturn\s+(?:this|it|the\s+(?:verification\s+)?work\s+order)\s+into\s+a\s+(?:fillable\s+)?table\b/.test(
       lower
     )
@@ -307,6 +342,8 @@ module.exports = {
   entitiesToProspects,
   derivePendingFields,
   isActiveWorkFollowUpCue,
+  isActiveWorkTransformCue,
+  isExplicitNewMissionRequest,
   isExplicitContextOverride,
   isExplicitExecutionRequest,
   isFillableTableRequest,
