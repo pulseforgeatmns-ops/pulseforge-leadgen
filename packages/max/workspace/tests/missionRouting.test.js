@@ -924,6 +924,153 @@ describe('Max activeWorkContext (session desk memory)', () => {
     assert.doesNotMatch(answer, /(?<!No )Mission created/i);
     assert.equal(result.structured.metadata.canaryPreparationOnly, true);
   });
+
+  it('Test 5: fillable table field update mutates PM-001 only', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const tableTurn = await workspace.ask({
+      sessionId: first.sessionId,
+      question: 'Convert the verification work order into a fillable table.',
+    });
+
+    const beforeRows =
+      workspace._sessions.get(first.sessionId).activeWorkContext.tableRows || [];
+    assert.equal(beforeRows.length, 3);
+    const beforePm002 = { ...beforeRows.find((r) => r.prospect_id === 'PM-002') };
+    const beforePm003 = { ...beforeRows.find((r) => r.prospect_id === 'PM-003') };
+    assert.equal(beforePm002.draft_readiness, 'allowed');
+    assert.equal(beforePm003.draft_readiness, 'allowed');
+
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: [
+        'Update the fillable verification table.',
+        '',
+        'For PM-001 only, set:',
+        '- website_value: unknown',
+        '- website_status: needs verification',
+        '- mailing_address_value: unknown',
+        '- mailing_address_status: blocked',
+        '- phone_value: unknown',
+        '- phone_status: blocked',
+        '- notes: still waiting on verified company website, mailing address, and phone',
+        '',
+        'Leave PM-002 and PM-003 unchanged.',
+        '',
+        'Keep this preparation-only.',
+        'Do not create a mission.',
+        'Do not launch, execute, approve, print, or mail anything.',
+      ].join('\n'),
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const awc = workspace._sessions.get(result.sessionId).activeWorkContext;
+    const rows = awc.tableRows || [];
+    const pm001 = rows.find((r) => r.prospect_id === 'PM-001');
+    const pm002 = rows.find((r) => r.prospect_id === 'PM-002');
+    const pm003 = rows.find((r) => r.prospect_id === 'PM-003');
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.match(answer, /Fillable verification table|fillable table/i);
+    assert.match(answer, /Preparation-only/i);
+    assert.equal(result.structured.metadata.fillableTable, true);
+    assert.equal(result.structured.metadata.tableUpdate, true);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(awc.lastOutputType, 'fillable_table');
+    assert.equal(rows.length, 3);
+    assert.ok(pm001);
+    assert.ok(pm002);
+    assert.ok(pm003);
+    assert.equal(pm001.website_value, 'unknown');
+    assert.equal(pm001.website_status, 'needs verification');
+    assert.equal(pm001.mailing_address_value, 'unknown');
+    assert.equal(pm001.mailing_address_status, 'blocked');
+    assert.equal(pm001.phone_value, 'unknown');
+    assert.equal(pm001.phone_status, 'blocked');
+    assert.equal(
+      pm001.notes,
+      'still waiting on verified company website, mailing address, and phone'
+    );
+    assert.equal(pm001.draft_readiness, 'allowed');
+    assert.deepEqual(pm002, beforePm002);
+    assert.deepEqual(pm003, beforePm003);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /PM-002/);
+    assert.match(answer, /PM-003/);
+    assert.doesNotMatch(answer, /\bop_1\b/);
+    assert.doesNotMatch(answer, /\bop_2\b/);
+    assert.doesNotMatch(answer, /For PM-001 only:/);
+    assert.doesNotMatch(answer, /I found the 2 canary prospects/i);
+    void tableTurn;
+  });
+
+  it('Test 6: unknown prospect_id in table update asks for clarification', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    await workspace.ask({
+      sessionId: first.sessionId,
+      question: 'Convert the verification work order into a fillable table.',
+    });
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: [
+        'Update the fillable verification table.',
+        '',
+        'For PM-999 only, set:',
+        '- notes: bogus row',
+        '',
+        'Keep this preparation-only.',
+        'Do not create a mission.',
+      ].join('\n'),
+    });
+
+    const answer = result.prose || result.structured.answer || '';
+    const awc = workspace._sessions.get(result.sessionId).activeWorkContext;
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.match(answer, /Unknown prospect_id:\s*PM-999/i);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /PM-002/);
+    assert.match(answer, /PM-003/);
+    assert.match(answer, /Preparation-only/i);
+    assert.equal(awc.entities.length, 3);
+    assert.equal(awc.tableRows.length, 3);
+    assert.ok(!awc.entities.some((e) => e.id === 'op_1'));
+  });
 });
 
 describe('Active work context continuation before domain routing', () => {
