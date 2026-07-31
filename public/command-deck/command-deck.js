@@ -108,18 +108,30 @@
   /** Auto-grow Max composer (~1 line → ~220px, then internal scroll). */
   const MX_ASK_MIN_PX = 42;
   const MX_ASK_MAX_PX = 220;
+  const CD_ASK_MIN_PX = 40;
+  const CD_ASK_MAX_PX = 220;
+
+  function measureAskMaxHeight(el, fallbackMax) {
+    const raw = window.getComputedStyle(el).maxHeight;
+    const n = Number.parseFloat(raw);
+    return Number.isFinite(n) && n > 0 ? Math.min(fallbackMax, n) : fallbackMax;
+  }
+
+  function syncCdAskBarHeight() {
+    const bar = document.querySelector('.cd-ask-bar');
+    if (!bar) return;
+    const h = Math.ceil(bar.getBoundingClientRect().height);
+    if (h > 0) {
+      document.documentElement.style.setProperty('--cd-ask-height', `${h}px`);
+    }
+  }
 
   function autoGrowAskInput() {
     const el = els.mxAskInput;
     if (!el) return;
     el.style.height = '0px';
     const measured = el.scrollHeight;
-    const cssMax = (() => {
-      const raw = window.getComputedStyle(el).maxHeight;
-      const n = Number.parseFloat(raw);
-      return Number.isFinite(n) && n > 0 ? n : MX_ASK_MAX_PX;
-    })();
-    const max = Math.min(MX_ASK_MAX_PX, cssMax);
+    const max = measureAskMaxHeight(el, MX_ASK_MAX_PX);
     const next = Math.min(Math.max(measured, MX_ASK_MIN_PX), max);
     el.style.height = `${next}px`;
     el.style.overflowY = measured > max ? 'auto' : 'hidden';
@@ -131,6 +143,27 @@
     els.mxAskInput.style.height = '';
     els.mxAskInput.style.overflowY = '';
     autoGrowAskInput();
+  }
+
+  /** Page-level Command Deck Ask Max composer (bottom bar). */
+  function autoGrowCdAskInput() {
+    const el = els.askInput;
+    if (!el) return;
+    el.style.height = '0px';
+    const measured = el.scrollHeight;
+    const max = measureAskMaxHeight(el, CD_ASK_MAX_PX);
+    const next = Math.min(Math.max(measured, CD_ASK_MIN_PX), max);
+    el.style.height = `${next}px`;
+    el.style.overflowY = measured > max ? 'auto' : 'hidden';
+    syncCdAskBarHeight();
+  }
+
+  function resetCdAskInput() {
+    if (!els.askInput) return;
+    els.askInput.value = '';
+    els.askInput.style.height = '';
+    els.askInput.style.overflowY = '';
+    autoGrowCdAskInput();
   }
 
   /**
@@ -2097,7 +2130,6 @@
       (payload && (payload.context || payload.recommendationId || payload.companyId)) ||
       'command_deck';
     const prompt = (payload && payload.prompt) || '';
-    if (prompt && els.askInput) els.askInput.value = prompt;
 
     // Enrich watch alert opens from card type
     const enriched = { ...(payload || {}) };
@@ -4146,6 +4178,7 @@
     const focus =
       (investigation && investigation.isOpen() && investigation.focusPayload()) ||
       {};
+    resetCdAskInput();
     openWorkspaceFromAction({
       page: focus.page || 'command-deck',
       companyId: focus.companyId || null,
@@ -4171,8 +4204,23 @@
   els.mxAskInput?.addEventListener('paste', () => {
     window.requestAnimationFrame(() => autoGrowAskInput());
   });
-  window.addEventListener('resize', () => autoGrowAskInput());
+
+  // Page-level Ask Max bar: same Enter / Shift+Enter contract as the modal composer.
+  els.askInput?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+    event.preventDefault();
+    els.askForm?.requestSubmit();
+  });
+  els.askInput?.addEventListener('input', () => autoGrowCdAskInput());
+  els.askInput?.addEventListener('paste', () => {
+    window.requestAnimationFrame(() => autoGrowCdAskInput());
+  });
+  window.addEventListener('resize', () => {
+    autoGrowAskInput();
+    autoGrowCdAskInput();
+  });
   autoGrowAskInput();
+  autoGrowCdAskInput();
 
   els.workspace?.querySelectorAll('[data-mx-close]').forEach((node) => {
     node.addEventListener('click', () => closeWorkspace());

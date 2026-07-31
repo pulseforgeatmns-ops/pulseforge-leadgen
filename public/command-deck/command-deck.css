@@ -5,6 +5,7 @@
   --cd-font-editorial: 'Newsreader', Georgia, 'Times New Roman', serif;
   --cd-reveal-duration: 480ms;
   --cd-reveal-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Reserved bottom space; JS updates as the Ask Max composer grows. */
   --cd-ask-height: 72px;
   --cd-max: 920px;
 }
@@ -448,7 +449,7 @@ body.theme-dark .cd-queue-row:hover {
   margin-top: 0.4rem;
 }
 
-/* Ask Max — pinned invitation */
+/* Ask Max — pinned invitation (auto-expanding composer) */
 .cd-ask-bar {
   position: fixed;
   left: 0;
@@ -464,12 +465,12 @@ body.theme-dark .cd-queue-row:hover {
   width: min(100%, var(--cd-max));
   margin: 0 auto;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 0.55rem;
   min-height: 52px;
-  padding: 0.35rem 0.4rem 0.35rem 0.9rem;
+  padding: 0.45rem 0.4rem 0.45rem 0.9rem;
   border: 1px solid var(--pf-border-strong);
-  border-radius: 999px;
+  border-radius: 18px;
   background: color-mix(in srgb, var(--pf-bg-card) 92%, transparent);
   backdrop-filter: blur(10px);
   box-shadow: 0 -4px 24px rgba(16, 32, 60, 0.08);
@@ -485,6 +486,7 @@ body.theme-dark .cd-ask-form {
   background: var(--pf-gold);
   flex-shrink: 0;
   opacity: 0.85;
+  margin-bottom: 16px;
 }
 .cd-ask-input {
   flex: 1;
@@ -494,11 +496,22 @@ body.theme-dark .cd-ask-form {
   color: var(--pf-text);
   font-family: var(--pf-font-body);
   font-size: 0.95rem;
+  line-height: 1.4;
   outline: none;
-  min-height: 40px;
+  resize: none;
+  box-sizing: border-box;
+  min-height: 2.5rem;
+  max-height: min(13.75rem, 28vh); /* ~180–220px band */
+  height: 2.5rem;
+  padding: 0.55rem 0.15rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .cd-ask-input::placeholder {
   color: var(--pf-text-muted);
+  white-space: nowrap;
 }
 .cd-ask-submit {
   appearance: none;
@@ -507,6 +520,7 @@ body.theme-dark .cd-ask-form {
   min-width: 64px;
   min-height: 40px;
   padding: 0 1rem;
+  margin-bottom: 0.1rem;
   background: transparent;
   color: var(--pf-text-dim);
   font-family: var(--pf-font-mono);
@@ -514,6 +528,8 @@ body.theme-dark .cd-ask-form {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   cursor: pointer;
+  flex-shrink: 0;
+  align-self: flex-end;
 }
 .cd-ask-submit:hover {
   color: var(--pf-text);
