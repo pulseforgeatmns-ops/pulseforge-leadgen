@@ -826,10 +826,11 @@ describe('Max activeWorkContext (session desk memory)', () => {
     assert.match(answer, /Elm Grove Companies/);
     assert.match(answer, /Mill City Property Management/);
     assert.match(answer, /prospect_id/);
-    assert.match(answer, /mailing_address/);
-    assert.match(answer, /website/);
-    assert.match(answer, /phone/);
+    assert.match(answer, /mailing_address_value|mailing_address_status/);
+    assert.match(answer, /website_value|website_status/);
+    assert.match(answer, /phone_value|phone_status/);
     assert.match(answer, /verification_status/);
+    assert.match(answer, /operator_next_action/);
     assert.match(answer, /No launch|no-launch|no-mail|Preparation-only/i);
     assert.equal(result.structured.metadata.fillableTable, true);
     assert.equal(result.structured.metadata.activeWorkContextReused, true);
@@ -922,6 +923,144 @@ describe('Max activeWorkContext (session desk memory)', () => {
     assert.match(answer, /website|mailing|phone|mailingAddress|mailing address/i);
     assert.doesNotMatch(answer, /(?<!No )Mission created/i);
     assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+  });
+});
+
+describe('Active work context continuation before domain routing', () => {
+  const CANARY_WORK_ORDER_PROMPT = [
+    'Continue the Campaign 001 preparation-only canary package.',
+    '',
+    'Use these 3 prospects:',
+    '',
+    '1. PM-001 — Gamache Properties — Ben Gamache — Property Management',
+    '2. PM-002 — Elm Grove Companies — David Schleyer — Property Management',
+    '3. PM-003 — Mill City Property Management — Lauren DuPaul — Property Management',
+    '',
+    'Turn the 3-prospect canary into a verification work order.',
+    'For each prospect, give me exact fields to verify, suggested source type, Ready vs Blocked, what should be logged, and what I should do first.',
+    '',
+    'Do not create a mission.',
+    'Do not launch, execute, approve, print, or mail anything.',
+  ].join('\n');
+
+  const CONTINUATION_PROMPT = [
+    'Convert the verification work order into a fillable table.',
+    'Use the same prospects and keep the same preparation-only constraints.',
+  ].join('\n');
+
+  it('Test 1: continuation preempts General Conversation', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    // Force prior domain to Workspace so a regression would emit a
+    // "Switching from Workspace to General Conversation" domainSwitch.
+    const session = workspace._sessions.get(first.sessionId);
+    session.executionDomain = 'workspace';
+    assert.ok(session.activeWorkContext);
+    assert.equal(session.activeWorkContext.entities.length, 3);
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: CONTINUATION_PROMPT,
+    });
+
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(result.executionDomain, 'workspace');
+    assert.equal(result.domainSwitch, null);
+    assert.doesNotMatch(answer, /Switching from .* to General Conversation/i);
+    assert.doesNotMatch(answer, /Policy evaluation is not available/i);
+    assert.doesNotMatch(answer, /Switching from Workspace/i);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /PM-002/);
+    assert.match(answer, /PM-003/);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /prospect_id/);
+    assert.match(answer, /contact_role_status/);
+    assert.match(answer, /website_status/);
+    assert.match(answer, /website_value/);
+    assert.match(answer, /mailing_address_status/);
+    assert.match(answer, /mailing_address_value/);
+    assert.match(answer, /phone_status/);
+    assert.match(answer, /phone_value/);
+    assert.match(answer, /source_to_check_first/);
+    assert.match(answer, /operator_next_action/);
+    assert.match(answer, /mail_readiness/);
+    assert.match(answer, /draft_readiness/);
+    assert.match(answer, /execution_readiness/);
+    assert.equal(result.structured.metadata.fillableTable, true);
+    assert.equal(result.structured.metadata.activeWorkContextReused, true);
+  });
+
+  it('Test 2: no active context falls back to clarification', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const result = await workspace.ask({
+      question: CONTINUATION_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(result.executionDomain, 'workspace');
+    assert.equal(result.domainSwitch, null);
+    assert.match(answer, /prospect/i);
+    assert.doesNotMatch(answer, /Policy evaluation is not available/i);
+    assert.doesNotMatch(answer, /Switching from .* to General Conversation/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+  });
+
+  it('Test 3: explicit new work overrides active context and routes to mission', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    assert.ok(workspace._sessions.get(first.sessionId).activeWorkContext);
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: 'Build Campaign 001 for Anchor Cleaning.',
+    });
+
+    assert.equal(result.route, 'mission');
+    assert.ok(result.mission);
+    assert.equal(result.mission.title, 'Campaign 001');
+    assert.match(result.prose || result.structured.answer || '', /Mission created/i);
   });
 });
 
