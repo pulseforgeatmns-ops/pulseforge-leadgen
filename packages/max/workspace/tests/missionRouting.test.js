@@ -628,6 +628,103 @@ describe('SPEC-022 Workspace Mission routing', () => {
     assert.equal(result.mission.title, 'Campaign 001');
     assert.match(result.prose || result.structured.answer || '', /Mission created/i);
   });
+
+  it('verification work order returns field checklist without mission or drafts', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const result = await workspace.ask({
+      question: [
+        'Continue the Campaign 001 preparation-only canary package.',
+        '',
+        'Use these 3 prospects:',
+        '',
+        '1. PM-001 — Gamache Properties — Ben Gamache — Property Management',
+        '2. PM-002 — Elm Grove Companies — David Schleyer — Property Management',
+        '3. PM-003 — Mill City Property Management — Lauren DuPaul — Property Management',
+        '',
+        'Turn the 3-prospect canary into a verification work order.',
+        'For each prospect, give me:',
+        '- exact fields to verify',
+        '- suggested source type for each field',
+        '- why the field matters',
+        '- what value would make the prospect Ready vs still Blocked',
+        '- what should be logged in PulseForge',
+        '- what I should do first',
+        '',
+        'Do not create a mission.',
+        'Do not launch, execute, approve, print, or mail anything.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const missions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(missions.length, 0);
+    assert.match(answer, /Verification work order/i);
+    assert.match(answer, /Mailing address/);
+    assert.match(answer, /Suggested source type/i);
+    assert.match(answer, /Ready value/i);
+    assert.match(answer, /Still Blocked if/i);
+    assert.match(answer, /prospect_id/);
+    assert.match(answer, /verified_mailing_address/);
+    assert.match(answer, /mail_readiness/);
+    assert.match(answer, /First action/i);
+    assert.match(answer, /Preparation-only\. No mission created/i);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /Elm Grove Companies/);
+    assert.match(answer, /Mill City Property Management/);
+    assert.doesNotMatch(answer, /draft held/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /Provisional personalized letter/i);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(result.structured.metadata.verificationWorkOrder, true);
+  });
+
+  it('verification work order without prospects asks for 3 prospects and creates no mission', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const before = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question: [
+        'Continue the Campaign 001 preparation-only canary package.',
+        'Turn the 3-prospect canary into a verification work order.',
+        'For each prospect, give me exact fields to verify, suggested source type, Ready vs Blocked, what should be logged, and what I should do first.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const after = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(after.length, before.length);
+    assert.match(answer, /3 prospects/i);
+    assert.match(answer, /verification work order/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(result.structured.metadata.verificationWorkOrder, true);
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {

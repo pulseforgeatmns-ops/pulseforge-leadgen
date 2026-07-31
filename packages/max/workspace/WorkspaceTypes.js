@@ -84,6 +84,9 @@ function buildResponseMetadata(partial = {}) {
   if (partial.provisionalDrafts === true) {
     meta.provisionalDrafts = true;
   }
+  if (partial.verificationWorkOrder === true) {
+    meta.verificationWorkOrder = true;
+  }
   if (partial.prospectCount != null && Number.isFinite(Number(partial.prospectCount))) {
     meta.prospectCount = Number(partial.prospectCount);
   }
