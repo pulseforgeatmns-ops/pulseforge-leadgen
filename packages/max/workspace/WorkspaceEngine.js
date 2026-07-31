@@ -172,17 +172,20 @@ class WorkspaceEngine {
     let resolution = null;
     let domainAttach = null;
 
-    const missionsAvailable =
-      this._missionsEnabled && this._missionEngine && isMissionDomain(domainDecision.domain);
+    // Absolute canary hard stop — before resolver, mission create/resume,
+    // campaign_creation fallback, and operator ProspectList mission injection.
+    // Not gated on isMissionDomain / IntentUnderstanding.
+    const canaryPrep = await maybeBuildCanaryPreparationResponse({
+      question,
+      tenantId: session.context.tenantId,
+      missionEngine: this._missionEngine,
+      domainDecision,
+    });
 
-    const canaryPrep = missionsAvailable
-      ? await maybeBuildCanaryPreparationResponse({
-          question,
-          tenantId: session.context.tenantId,
-          missionEngine: this._missionEngine,
-          domainDecision,
-        })
-      : null;
+    const missionsAvailable =
+      this._missionsEnabled &&
+      this._missionEngine &&
+      isMissionDomain(domainDecision.domain);
 
     if (canaryPrep) {
       domainAttach = {
@@ -202,8 +205,8 @@ class WorkspaceEngine {
         kind: ROUTE_KINDS.INTELLIGENCE,
         missionType: null,
         reason: canaryPrep.reason,
-        missionIntent: domainDecision.missionIntent || null,
-        executionDomain: domainDecision.domain,
+        missionIntent: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
       };
     } else if (missionsAvailable) {
       // 3–4) Attach mission domain context, then execute via Mission Engine
@@ -406,7 +409,9 @@ class WorkspaceEngine {
       route: route.kind,
       mission,
       resolution,
-      executionDomain: domainDecision.domain,
+      executionDomain:
+        (route && route.executionDomain) ||
+        domainDecision.domain,
       domainDecision,
       executionContext:
         (domainAttach && domainAttach.executionContext) || null,
@@ -480,52 +485,46 @@ async function maybeBuildCanaryPreparationResponse(input) {
     };
   }
 
-  // Soft clarification when the operator invited "ask me for names" OR
-  // referenced existing campaign prospects without pasting an inline list.
-  if (
-    !operatorAttemptedCanaryProspectSupply(question) &&
-    (isCanaryAwaitingProspects(question) ||
-      referencesExistingCampaignProspects(question))
-  ) {
+  // Parser miss / incomplete paste — never create a Campaign mission.
+  if (operatorAttemptedCanaryProspectSupply(question)) {
+    const count = intendedCount || 3;
     return {
-      reason: 'canary_missing_prospects_clarification',
-      structured: buildStructuredResponse({
-        answer: [
-          'Got it. I will treat this as a preparation-only canary, not a launch or execution run.',
-          'I cannot see three usable Campaign 001 prospects in the current workspace context, so send me 3 prospect names before I create any package mission.',
-          'Send them as company name, decision maker if known, website, mailing address, and phone if you have it.',
-        ].join(' '),
-        reasoning: [
-          'The operator explicitly said not to launch or execute direct mail.',
-          'The operator asked Max to request 3 prospect names instead of creating a mission when existing Campaign 001 prospects are not accessible.',
-          'No usable Campaign 001 prospect artifact was found in the current mission workspace context.',
-          'Hard stop: no campaign_creation / mail_package_generation / direct_mail_execution mission was started.',
-        ],
-        supportingEvidence: [],
-        contradictingEvidence: [],
-        confidence: null,
-        nextInvestigations: ['Paste 3 prospects for the canary package.'],
-        recommendedActions: [],
-        metadata: {
-          sourcesUsed: {},
-          evidenceCount: 0,
-          unavailable: ['campaign_001_prospect_artifact'],
-          surface: 'workspace',
-          executionDomain: input.domainDecision && input.domainDecision.domain,
-          route: 'intelligence',
-          canaryPreparationOnly: true,
-        },
+      reason: 'canary_prospect_parse_clarification',
+      structured: buildCanaryParseFailureResponse({
+        domainDecision: input.domainDecision,
+        intendedCount: count,
       }),
     };
   }
 
-  // Hard stop on parser miss / incomplete supply — never create a Campaign mission.
-  const count = intendedCount || 3;
+  // No prospects supplied — ask for them. Never fall through to MissionEngine.
   return {
-    reason: 'canary_prospect_parse_clarification',
-    structured: buildCanaryParseFailureResponse({
-      domainDecision: input.domainDecision,
-      intendedCount: count,
+    reason: 'canary_missing_prospects_clarification',
+    structured: buildStructuredResponse({
+      answer: [
+        'Got it. I will treat this as a preparation-only canary, not a launch or execution run.',
+        'I cannot see three usable Campaign 001 prospects in the current workspace context, so send me 3 prospect names before I create any package mission.',
+        'Send them as company name, decision maker if known, website, mailing address, and phone if you have it.',
+      ].join(' '),
+      reasoning: [
+        'Absolute canary hard stop: preparation-only / prep-only / review-only canary never creates or resumes a mission.',
+        'No usable canary prospect rows were found in the operator message.',
+        'Hard stop: no campaign_creation / mail_package_generation / direct_mail_execution mission was started.',
+      ],
+      supportingEvidence: [],
+      contradictingEvidence: [],
+      confidence: null,
+      nextInvestigations: ['Paste 3 prospects for the canary package.'],
+      recommendedActions: [],
+      metadata: {
+        sourcesUsed: {},
+        evidenceCount: 0,
+        unavailable: ['campaign_001_prospect_artifact'],
+        surface: 'workspace',
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        route: 'intelligence',
+        canaryPreparationOnly: true,
+      },
     }),
   };
 }
@@ -575,7 +574,7 @@ function buildCanaryParseFailureResponse(input = {}) {
       evidenceCount: 0,
       unavailable: ['canary_prospect_rows'],
       surface: 'workspace',
-      executionDomain: input.domainDecision && input.domainDecision.domain,
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
       route: 'intelligence',
       canaryPreparationOnly: true,
     },
@@ -604,15 +603,6 @@ function operatorAttemptedCanaryProspectSupply(question) {
     return true;
   }
   return false;
-}
-
-function referencesExistingCampaignProspects(question) {
-  const lower = String(question || '').toLowerCase();
-  return (
-    /\bfrom\s+(?:the\s+)?existing\b/.test(lower) ||
-    /\bif\s+available\b/.test(lower) ||
-    /\bif\s+you\s+cannot\s+access\b/.test(lower)
-  );
 }
 
 function buildCanaryReviewPackageResponse(input) {
@@ -675,7 +665,7 @@ function buildCanaryReviewPackageResponse(input) {
         evidenceCount: reviews.length,
         unavailable: missingKinds,
         surface: 'workspace',
-        executionDomain: input.domainDecision && input.domainDecision.domain,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
         route: 'intelligence',
         canaryPreparationOnly: true,
         provisionalDrafts: true,
@@ -752,7 +742,7 @@ function buildCanaryReviewPackageResponse(input) {
       evidenceCount: reviews.length,
       unavailable: missingKinds,
       surface: 'workspace',
-      executionDomain: input.domainDecision && input.domainDecision.domain,
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
       route: 'intelligence',
       canaryPreparationOnly: true,
       provisionalDrafts: false,
@@ -996,31 +986,28 @@ function formatMissingKinds(kinds) {
   return `${parts.slice(0, -1).join(', ')}, and/or ${parts[parts.length - 1]}`;
 }
 
-function isPreparationOnlyCanary(question) {
-  const lower = String(question || '').toLowerCase();
-  const canaryCue =
+/**
+ * Absolute preparation-only canary matcher.
+ * No separate no-execution phrase is required — any of these cues hard-stops
+ * MissionEngine create/resume, including when IntentUnderstanding returns
+ * campaign_creation or Unknown.
+ * @param {string} text
+ */
+function isPreparationOnlyCanary(text) {
+  const lower = String(text || '').toLowerCase();
+
+  const canary =
     /\bcanary\b/.test(lower) &&
-    (/\b(preparation|prep|review|draft)[-\s]*only\b/.test(lower) ||
+    (/\bpreparation[-\s]*only\b/.test(lower) ||
+      /\bprep[-\s]*only\b/.test(lower) ||
+      /\breview[-\s]*only\b/.test(lower) ||
+      /\bcanary package\b/.test(lower) ||
+      /\bcanary package for review\b/.test(lower) ||
+      /\bdraft[-\s]*only\b/.test(lower) ||
       /\bprepare\s+the\s+review\s+package\s+only\b/.test(lower) ||
       /\breview\s+package\s+only\b/.test(lower));
-  const noExec =
-    /\bnot\s+(launching|executing|mailing)\b/.test(lower) ||
-    /\b(still\s+)?do\s+not\s+(run|execute|launch|mail|resume|approve|print|create)\b/.test(
-      lower
-    ) ||
-    /\bdo\s+not\s+launch,\s*execute/.test(lower) ||
-    /\bdo\s+not\s+create\s+a\s+mission\b/.test(lower) ||
-    /\bno[- ]?(launch|execute|mail|approve|print)\b/.test(lower);
-  return canaryCue && noExec;
-}
 
-function isCanaryAwaitingProspects(question) {
-  const lower = String(question || '').toLowerCase();
-  return (
-    /\bask\s+me\s+for\s+(3|three)\s+prospect/.test(lower) ||
-    /\binstead\s+of\s+creating\b/.test(lower) ||
-    /\bif\s+you\s+cannot\s+access\b/.test(lower)
-  );
+  return canary;
 }
 
 function hasInlineProspectList(question) {
