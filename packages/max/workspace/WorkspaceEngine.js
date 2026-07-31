@@ -29,6 +29,11 @@ const {
   isExplicitContextOverride,
   isExplicitExecutionRequest,
   isFillableTableRequest,
+  isFillableTableUpdateRequest,
+  activeContextHasFillableTable,
+  knownActiveWorkProspectIds,
+  parseFillableTableFieldUpdates,
+  applyFillableTableFieldUpdates,
   extractCampaignIdFromText,
   activeContextBlocksExecution,
   activeContextHasEntities,
@@ -559,6 +564,20 @@ async function maybeHandleActiveWorkContinuation(input) {
   const isFillable = isFillableTableRequest(question);
   const isTransform = isActiveWorkTransformCue(question);
   const isExec = isExplicitExecutionRequest(question);
+  const isTableUpdate =
+    hasEntities &&
+    activeContextHasFillableTable(prior) &&
+    isFillableTableUpdateRequest(question, prior);
+
+  // Fillable table field mutation — before prospect extraction, artifact
+  // injection, domain routing, or mission routing.
+  if (isTableUpdate) {
+    return handleFillableTableUpdateContinuation({
+      question,
+      session,
+      prior,
+    });
+  }
 
   // Mail/launch while desk constraints forbid execution — still early, so we
   // never infer launch from General Conversation routing.
@@ -582,7 +601,8 @@ async function maybeHandleActiveWorkContinuation(input) {
     // paths can parse and replace.
     if (
       operatorAttemptedCanaryProspectSupply(question) &&
-      !/\b(?:the\s+)?same\s+prospects\b/i.test(question)
+      !/\b(?:the\s+)?same\s+prospects\b/i.test(question) &&
+      !isFillableTableUpdateRequest(question, prior)
     ) {
       const detected = detectOperatorProspectListInMessage(question);
       const intendedCount = extractIntendedCanaryProspectCount(question);
@@ -609,6 +629,7 @@ async function maybeHandleActiveWorkContinuation(input) {
       objectiveText: question,
       question,
       reusedFromActiveContext: true,
+      tableRows: prior.tableRows,
     });
     rememberCanaryActiveWorkContext({
       session,
@@ -616,6 +637,11 @@ async function maybeHandleActiveWorkContinuation(input) {
       question,
       lastOutputType: resolveCanaryLastOutputType(question, review.reason),
       prior,
+      tableRows:
+        review.tableRows ||
+        (review.reason === 'canary_fillable_table'
+          ? buildFillableTableRows(prospects)
+          : prior.tableRows),
     });
     return {
       reason: review.reason || 'active_work_context_continuation',
@@ -667,6 +693,103 @@ async function maybeHandleActiveWorkContinuation(input) {
 }
 
 /**
+ * Mutate fields on the existing fillable verification table before any
+ * prospect-list parsing can invent op_* rows from instruction labels.
+ * @returns {{ reason: string, structured: object }}
+ */
+function handleFillableTableUpdateContinuation(input) {
+  const question = String(input.question || '');
+  const session = input.session || null;
+  const prior = input.prior;
+  const prospects = entitiesToProspects(prior.entities);
+  const knownIds = knownActiveWorkProspectIds(prior);
+  const baseRows =
+    Array.isArray(prior.tableRows) && prior.tableRows.length > 0
+      ? prior.tableRows.map((row) => ({ ...row }))
+      : buildFillableTableRows(prospects);
+
+  const parsed = parseFillableTableFieldUpdates(question);
+  const applied = applyFillableTableFieldUpdates(baseRows, parsed.updates);
+  const unknownIds = [
+    ...new Set([
+      ...applied.unknownIds,
+      ...parsed.referencedIds.filter((id) => {
+        const key = String(id).toUpperCase();
+        return !knownIds.some((known) => String(known).toUpperCase() === key);
+      }),
+    ]),
+  ];
+
+  // Unknown prospect ids → clarify; do not invent rows or drop known ones.
+  if (unknownIds.length > 0) {
+    const knownLabel = knownIds.length
+      ? knownIds.join(', ')
+      : '(none on desk)';
+    return {
+      reason: 'active_work_context_table_update_unknown_prospect',
+      structured: buildStructuredResponse({
+        answer: [
+          'I could not apply that fillable table update.',
+          `Unknown prospect_id: ${unknownIds.join(', ')}.`,
+          `Known prospect ids on the desk: ${knownLabel}.`,
+          'Tell me which known id to update, or paste a corrected field list.',
+          'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+        ].join(' '),
+        reasoning: [
+          'Fillable table mutation referenced a prospect_id not present in activeWorkContext.',
+          'Clarifying instead of inventing rows or parsing update instructions as new prospects.',
+          'No mission create/resume.',
+        ],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: null,
+        nextInvestigations: [
+          `Update fields using a known prospect_id (${knownLabel}).`,
+        ],
+        recommendedActions: [],
+        metadata: {
+          sourcesUsed: { activeWorkContext: true },
+          evidenceCount: baseRows.length,
+          unavailable: unknownIds.map((id) => `prospect:${id}`),
+          surface: 'workspace',
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          route: 'intelligence',
+          canaryPreparationOnly: true,
+          fillableTable: true,
+          activeWorkContextReused: true,
+          tableUpdate: true,
+        },
+      }),
+    };
+  }
+
+  const updatedRows = applied.rows;
+  const structured = buildCanaryFillableTableResponse({
+    prospects,
+    tableRows: updatedRows,
+    question,
+    reusedFromActiveContext: true,
+    tableUpdated: true,
+    updatedProspectIds: applied.matchedIds,
+  });
+
+  rememberCanaryActiveWorkContext({
+    session,
+    prospects: syncProspectsFromTableRows(prospects, updatedRows),
+    question,
+    lastOutputType: LAST_OUTPUT_TYPES.FILLABLE_TABLE,
+    prior,
+    tableRows: updatedRows,
+    nextAction: 'verify_mail_critical_fields',
+  });
+
+  return {
+    reason: 'active_work_context_fillable_table_update',
+    structured,
+  };
+}
+
+/**
  * Preparation-only canary: either ask for prospects, or return a review
  * package conversationally — never create/resume Campaign or Direct Mail Execution.
  * A parser miss must never fall through to campaign_creation /
@@ -680,6 +803,20 @@ async function maybeBuildCanaryPreparationResponse(input) {
   const question = String(input.question || '');
   const session = input.session || null;
   const prior = getActiveWorkContext(session);
+
+  // Table mutations are owned by early active-work continuation.
+  if (
+    activeContextHasEntities(prior) &&
+    activeContextHasFillableTable(prior) &&
+    isFillableTableUpdateRequest(question, prior)
+  ) {
+    return handleFillableTableUpdateContinuation({
+      question,
+      session,
+      prior,
+    });
+  }
+
   const isCanary = isPreparationOnlyCanary(question);
   const isFollowUp = isActiveWorkFollowUpCue(question);
   const isExec = isExplicitExecutionRequest(question);
@@ -690,7 +827,8 @@ async function maybeBuildCanaryPreparationResponse(input) {
   const overrideWithNewProspects =
     hasPriorCanary &&
     (isExplicitContextOverride(question) ||
-      operatorAttemptedCanaryProspectSupply(question));
+      operatorAttemptedCanaryProspectSupply(question)) &&
+    !isFillableTableUpdateRequest(question, prior);
 
   // Execution / mail while preparation-only canary context is active:
   // never infer launch from desk context — block and ask for readiness.
@@ -739,6 +877,7 @@ async function maybeBuildCanaryPreparationResponse(input) {
       question,
       lastOutputType: resolveCanaryLastOutputType(question, review.reason),
       prior,
+      tableRows: review.tableRows,
     });
     return {
       reason: review.reason || 'canary_preparation_review_package',
@@ -748,7 +887,10 @@ async function maybeBuildCanaryPreparationResponse(input) {
 
   // Parser miss / incomplete paste — never create a Campaign mission.
   // Do not silently fall back to prior entities when the operator attempted a new paste.
-  if (operatorAttemptedCanaryProspectSupply(question)) {
+  if (
+    operatorAttemptedCanaryProspectSupply(question) &&
+    !isFillableTableUpdateRequest(question, prior)
+  ) {
     const count = intendedCount || 3;
     return {
       reason: 'canary_prospect_parse_clarification',
@@ -768,6 +910,7 @@ async function maybeBuildCanaryPreparationResponse(input) {
       question,
       domainDecision: input.domainDecision,
       reusedFromActiveContext: true,
+      tableRows: prior.tableRows,
     });
     rememberCanaryActiveWorkContext({
       session,
@@ -775,6 +918,11 @@ async function maybeBuildCanaryPreparationResponse(input) {
       question,
       lastOutputType: resolveCanaryLastOutputType(question, review.reason),
       prior,
+      tableRows:
+        review.tableRows ||
+        (review.reason === 'canary_fillable_table'
+          ? buildFillableTableRows(prospects)
+          : prior.tableRows),
     });
     return {
       reason: review.reason || 'canary_active_work_context_reuse',
@@ -861,6 +1009,15 @@ function rememberCanaryActiveWorkContext(input = {}) {
           ? 'verify_mail_critical_fields'
           : 'await_operator_transform_or_verification';
 
+  const tableRows =
+    input.tableRows !== undefined
+      ? input.tableRows
+      : lastOutputType === LAST_OUTPUT_TYPES.FILLABLE_TABLE
+        ? buildFillableTableRows(input.prospects)
+        : input.prior && Array.isArray(input.prior.tableRows)
+          ? input.prior.tableRows
+          : [];
+
   return setActiveWorkContext(
     input.session,
     buildCanaryActiveWorkContext({
@@ -872,6 +1029,7 @@ function rememberCanaryActiveWorkContext(input = {}) {
       lastOutputType,
       nextAction,
       prior: input.prior,
+      tableRows,
     })
   );
 }
@@ -952,6 +1110,9 @@ function buildCanaryParseFailureResponse(input = {}) {
 function operatorAttemptedCanaryProspectSupply(question) {
   const text = String(question || '');
   const lower = text.toLowerCase();
+  // Field-mutation instructions on an existing fillable table are not a
+  // new prospect paste — even when they mention PM-001 / set: / leave unchanged.
+  if (isFillableTableUpdateRequest(text)) return false;
   if (/\buse\s+these\s+\d+\s+prospects?\b/i.test(text)) return true;
   if (/\buse\s+the\s+same\s+\d+\s+prospects?\b/i.test(text)) return true;
   if (/\b\d+\s+prospects?\s*:/i.test(text)) return true;
@@ -974,10 +1135,16 @@ function buildCanaryReviewPackageResponse(input) {
   const reused = input.reusedFromActiveContext === true;
 
   if (isFillableTableRequest(questionText)) {
+    const tableRows =
+      Array.isArray(input.tableRows) && input.tableRows.length > 0
+        ? input.tableRows
+        : buildFillableTableRows(prospects);
     return {
       reason: 'canary_fillable_table',
+      tableRows,
       structured: buildCanaryFillableTableResponse({
         prospects,
+        tableRows,
         question: questionText,
         reusedFromActiveContext: reused,
       }),
@@ -1310,18 +1477,17 @@ function fieldStatusAndValue(value) {
   return { status: 'needs verification', value: raw };
 }
 
-function buildCanaryFillableTableResponse(input) {
-  const prospects = Array.isArray(input.prospects) ? input.prospects : [];
-  const reviews = prospects.map((p) => assessCanaryProspectReadiness(p));
-  const count = reviews.length;
-  const reused = input.reusedFromActiveContext === true;
-  const safety =
-    'Preparation-only. No mission created. No launch, execution, approval, print, or mail.';
-
-  const header = `| ${CANARY_FILLABLE_TABLE_COLUMNS.join(' | ')} |`;
-  const separator = `| ${CANARY_FILLABLE_TABLE_COLUMNS.map(() => '---').join(' | ')} |`;
-  const rows = reviews.map((r, i) => {
-    const source = prospects[i] || {};
+/**
+ * Build fillable verification table rows from canary prospects.
+ * Does not invent websites, phones, addresses, or readiness beyond known facts.
+ * @param {object[]} prospects
+ * @returns {object[]}
+ */
+function buildFillableTableRows(prospects) {
+  const list = Array.isArray(prospects) ? prospects : [];
+  const reviews = list.map((p) => assessCanaryProspectReadiness(p));
+  return reviews.map((r, i) => {
+    const source = list[i] || {};
     const website = fieldStatusAndValue(source.website);
     const mailing = fieldStatusAndValue(
       source.mailingAddress || source.address
@@ -1339,39 +1505,121 @@ function buildCanaryFillableTableResponse(input) {
             ? 'verify phone next'
             : 'confirm all fields then request explicit approval before mail';
 
-    const cells = [
-      r.id || 'unknown',
-      r.companyName || 'unknown',
-      r.contactName || 'unknown',
-      contactRoleStatus,
-      website.status,
-      website.value,
-      mailing.status,
-      mailing.value,
-      phone.status,
-      phone.value,
-      'official company website / contact page, then business registry or trusted CRM',
-      'needs verification',
-      String(r.mailReadiness || 'Blocked').toLowerCase() === 'ready'
-        ? 'ready'
-        : String(r.mailReadiness || 'blocked').toLowerCase(),
-      String(r.draftReadiness || 'Blocked').toLowerCase() === 'allowed'
-        ? 'allowed'
-        : 'blocked',
-      'blocked',
-      operatorNext,
-      '',
-    ];
+    return {
+      prospect_id: r.id || 'unknown',
+      company_name: r.companyName || 'unknown',
+      contact_name: r.contactName || 'unknown',
+      contact_role_status: contactRoleStatus,
+      website_status: website.status,
+      website_value: website.value,
+      mailing_address_status: mailing.status,
+      mailing_address_value: mailing.value,
+      phone_status: phone.status,
+      phone_value: phone.value,
+      source_to_check_first:
+        'official company website / contact page, then business registry or trusted CRM',
+      verification_status: 'needs verification',
+      mail_readiness:
+        String(r.mailReadiness || 'Blocked').toLowerCase() === 'ready'
+          ? 'ready'
+          : String(r.mailReadiness || 'blocked').toLowerCase(),
+      draft_readiness:
+        String(r.draftReadiness || 'Blocked').toLowerCase() === 'allowed'
+          ? 'allowed'
+          : 'blocked',
+      execution_readiness: 'blocked',
+      operator_next_action: operatorNext,
+      notes: '',
+    };
+  });
+}
+
+/**
+ * Keep entity identity fields in sync with operator-updated table values
+ * without inventing evidence from "unknown" placeholders.
+ * @param {object[]} prospects
+ * @param {object[]} rows
+ */
+function syncProspectsFromTableRows(prospects, rows) {
+  const byId = new Map();
+  for (const row of rows || []) {
+    const id = String(row.prospect_id || '').trim();
+    if (id) byId.set(id.toUpperCase(), row);
+  }
+  return (Array.isArray(prospects) ? prospects : []).map((p) => {
+    const row = byId.get(String(p.id || '').toUpperCase());
+    if (!row) return { ...p };
+    const website = blankTableValue(row.website_value);
+    const mailing = blankTableValue(row.mailing_address_value);
+    const phone = blankTableValue(row.phone_value);
+    return {
+      ...p,
+      id: row.prospect_id || p.id,
+      companyName:
+        row.company_name && row.company_name !== 'unknown'
+          ? row.company_name
+          : p.companyName,
+      contactName:
+        row.contact_name && row.contact_name !== 'unknown'
+          ? row.contact_name
+          : p.contactName,
+      website: website != null ? website : p.website,
+      mailingAddress: mailing != null ? mailing : p.mailingAddress,
+      address: mailing != null ? mailing : p.address,
+      phone: phone != null ? phone : p.phone,
+    };
+  });
+}
+
+function blankTableValue(value) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  if (!s || /^unknown$/i.test(s) || /^n\/?a$/i.test(s)) return null;
+  return s;
+}
+
+function formatFillableTableMarkdown(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const header = `| ${CANARY_FILLABLE_TABLE_COLUMNS.join(' | ')} |`;
+  const separator = `| ${CANARY_FILLABLE_TABLE_COLUMNS.map(() => '---').join(' | ')} |`;
+  const body = list.map((row) => {
+    const cells = CANARY_FILLABLE_TABLE_COLUMNS.map((col) => {
+      const value = row[col];
+      return value == null || value === '' ? '' : String(value);
+    });
     return `| ${cells.join(' | ')} |`;
   });
+  return [header, separator, ...body].join('\n');
+}
+
+function buildCanaryFillableTableResponse(input) {
+  const prospects = Array.isArray(input.prospects) ? input.prospects : [];
+  const rows =
+    Array.isArray(input.tableRows) && input.tableRows.length > 0
+      ? input.tableRows
+      : buildFillableTableRows(prospects);
+  const count = rows.length;
+  const reused = input.reusedFromActiveContext === true;
+  const tableUpdated = input.tableUpdated === true;
+  const updatedIds = Array.isArray(input.updatedProspectIds)
+    ? input.updatedProspectIds
+    : [];
+  const safety =
+    'Preparation-only. No mission created. No launch, execution, approval, print, or mail.';
 
   const intro = [
     'Fillable verification table',
     '',
-    reused
-      ? `Converted the verification work order into a fillable table for the same ${count} prospect${count === 1 ? '' : 's'} already on the desk.`
-      : `Fillable table for ${count} canary prospect${count === 1 ? '' : 's'}.`,
-    'Known identity fields are filled from active work context. Missing mail-critical values stay unknown — I will not invent websites, phones, or addresses.',
+    tableUpdated
+      ? `Updated the fillable verification table${
+          updatedIds.length ? ` for ${updatedIds.join(', ')}` : ''
+        }. Other rows are unchanged.`
+      : reused
+        ? `Converted the verification work order into a fillable table for the same ${count} prospect${count === 1 ? '' : 's'} already on the desk.`
+        : `Fillable table for ${count} canary prospect${count === 1 ? '' : 's'}.`,
+    tableUpdated
+      ? 'Only operator-requested field changes were applied. No websites, phones, addresses, sources, or readiness values were invented.'
+      : 'Known identity fields are filled from active work context. Missing mail-critical values stay unknown — I will not invent websites, phones, or addresses.',
     safety,
   ].join('\n');
 
@@ -1379,18 +1627,26 @@ function buildCanaryFillableTableResponse(input) {
     'Fill website_value, mailing_address_value, and phone_value from trusted sources before any print/mail step. Constraints stay no-launch / no-mail until you explicitly approve after readiness is complete.';
 
   return buildStructuredResponse({
-    answer: [intro, '', header, separator, ...rows, '', closing].join('\n'),
+    answer: [intro, '', formatFillableTableMarkdown(rows), '', closing].join(
+      '\n'
+    ),
     reasoning: [
-      reused
-        ? 'Early activeWorkContext continuation reused desk entities before domain routing.'
-        : 'Operator requested a fillable verification table for canary prospects.',
-      'Table preserves known identity fields only; mail-critical fields left unknown for verification.',
+      tableUpdated
+        ? 'Applied fillable verification table field mutations from activeWorkContext before prospect extraction or mission routing.'
+        : reused
+          ? 'Early activeWorkContext continuation reused desk entities before domain routing.'
+          : 'Operator requested a fillable verification table for canary prospects.',
+      tableUpdated
+        ? 'Preserved existing table shape/columns and left non-targeted rows unchanged.'
+        : 'Table preserves known identity fields only; mail-critical fields left unknown for verification.',
       'No mission create/resume. No launch, mail, print, or approval inferred from desk context.',
-      'Handled via early active-work continuation before domain routing.',
+      tableUpdated
+        ? 'Handled as a table mutation before domain routing.'
+        : 'Handled via early active-work continuation before domain routing.',
     ],
-    supportingEvidence: reviews.map((r, i) => ({
-      id: `canary-prospect:${r.id || i}`,
-      summary: `${r.companyName}: fillable table row — mail ${r.mailReadiness}`,
+    supportingEvidence: rows.map((row, i) => ({
+      id: `canary-prospect:${row.prospect_id || i}`,
+      summary: `${row.company_name}: fillable table row — mail ${row.mail_readiness}`,
       sourceType: 'operator',
       confidence: null,
     })),
@@ -1404,11 +1660,13 @@ function buildCanaryFillableTableResponse(input) {
     ],
     metadata: {
       sourcesUsed: {
-        operatorProspectList: !reused,
-        activeWorkContext: reused,
+        operatorProspectList: !reused && !tableUpdated,
+        activeWorkContext: reused || tableUpdated,
       },
-      evidenceCount: reviews.length,
-      unavailable: collectMissingFieldKinds(reviews),
+      evidenceCount: rows.length,
+      unavailable: collectMissingFieldKinds(
+        prospects.map((p) => assessCanaryProspectReadiness(p))
+      ),
       surface: 'workspace',
       executionDomain: EXECUTION_DOMAINS.WORKSPACE,
       route: 'intelligence',
@@ -1417,7 +1675,9 @@ function buildCanaryFillableTableResponse(input) {
       verificationWorkOrder: false,
       provisionalDrafts: false,
       prospectCount: count,
-      activeWorkContextReused: reused,
+      activeWorkContextReused: reused || tableUpdated,
+      tableUpdate: tableUpdated || undefined,
+      updatedProspectIds: tableUpdated ? updatedIds : undefined,
     },
   });
 }

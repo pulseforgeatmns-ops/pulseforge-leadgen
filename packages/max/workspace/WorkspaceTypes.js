@@ -90,6 +90,12 @@ function buildResponseMetadata(partial = {}) {
   if (partial.fillableTable === true) {
     meta.fillableTable = true;
   }
+  if (partial.tableUpdate === true) {
+    meta.tableUpdate = true;
+  }
+  if (Array.isArray(partial.updatedProspectIds)) {
+    meta.updatedProspectIds = partial.updatedProspectIds.map(String);
+  }
   if (partial.activeWorkContextReused === true) {
     meta.activeWorkContextReused = true;
   }

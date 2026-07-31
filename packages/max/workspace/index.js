@@ -76,5 +76,6 @@ module.exports = {
   isActiveWorkFollowUpCue: ActiveWorkContext.isActiveWorkFollowUpCue,
   isActiveWorkTransformCue: ActiveWorkContext.isActiveWorkTransformCue,
   isFillableTableRequest: ActiveWorkContext.isFillableTableRequest,
+  isFillableTableUpdateRequest: ActiveWorkContext.isFillableTableUpdateRequest,
   isExplicitNewMissionRequest: ActiveWorkContext.isExplicitNewMissionRequest,
 };
