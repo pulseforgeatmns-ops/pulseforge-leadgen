@@ -474,14 +474,15 @@ async function maybeBuildCanaryPreparationResponse(input) {
     (!intendedCount || detected.prospectCount >= intendedCount);
 
   if (completeProspects) {
+    const review = buildCanaryReviewPackageResponse({
+      prospects: detected.prospects,
+      objectiveText: detected.objectiveText || question,
+      question,
+      domainDecision: input.domainDecision,
+    });
     return {
-      reason: 'canary_preparation_review_package',
-      structured: buildCanaryReviewPackageResponse({
-        prospects: detected.prospects,
-        objectiveText: detected.objectiveText || question,
-        question,
-        domainDecision: input.domainDecision,
-      }),
+      reason: review.reason || 'canary_preparation_review_package',
+      structured: review.structured || review,
     };
   }
 
@@ -498,6 +499,40 @@ async function maybeBuildCanaryPreparationResponse(input) {
   }
 
   // No prospects supplied — ask for them. Never fall through to MissionEngine.
+  if (isVerificationWorkOrderRequest(question)) {
+    return {
+      reason: 'canary_verification_work_order_missing_prospects',
+      structured: buildStructuredResponse({
+        answer: [
+          'Got it. I will treat this as a preparation-only canary verification work order, not a launch or execution run.',
+          'I need 3 prospects before I can build the verification work order.',
+          'Send them as company name, decision maker if known, website, mailing address, and phone if you have it.',
+          'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+        ].join(' '),
+        reasoning: [
+          'Absolute canary hard stop: verification work order stays preparation-only and never creates or resumes a mission.',
+          'No usable canary prospect rows were found in the operator message.',
+          'Hard stop: no campaign_creation / mail_package_generation / direct_mail_execution mission was started.',
+        ],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: null,
+        nextInvestigations: ['Paste 3 prospects for the verification work order.'],
+        recommendedActions: [],
+        metadata: {
+          sourcesUsed: {},
+          evidenceCount: 0,
+          unavailable: ['campaign_001_prospect_artifact'],
+          surface: 'workspace',
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          route: 'intelligence',
+          canaryPreparationOnly: true,
+          verificationWorkOrder: true,
+        },
+      }),
+    };
+  }
+
   return {
     reason: 'canary_missing_prospects_clarification',
     structured: buildStructuredResponse({
@@ -607,9 +642,19 @@ function operatorAttemptedCanaryProspectSupply(question) {
 
 function buildCanaryReviewPackageResponse(input) {
   const prospects = Array.isArray(input.prospects) ? input.prospects : [];
-  const provisional = isProvisionalDraftRequest(
-    input.question || input.objectiveText || ''
-  );
+  const questionText = input.question || input.objectiveText || '';
+  const verificationWorkOrder = isVerificationWorkOrderRequest(questionText);
+  if (verificationWorkOrder) {
+    return {
+      reason: 'canary_verification_work_order',
+      structured: buildCanaryVerificationWorkOrderResponse({
+        prospects,
+        question: questionText,
+      }),
+    };
+  }
+
+  const provisional = isProvisionalDraftRequest(questionText);
   const reviews = prospects.map((p) =>
     assessCanaryProspectReadiness(p, { provisionalDrafts: provisional })
   );
@@ -762,6 +807,149 @@ function isProvisionalDraftRequest(text) {
     ) ||
     /\bdraft\s+confidence\b/.test(lower)
   );
+}
+
+/**
+ * Operator wants a field-by-field verification work order instead of
+ * provisional drafts or the generic canary readiness package.
+ * @param {string} text
+ */
+function isVerificationWorkOrderRequest(text) {
+  const lower = String(text || '').toLowerCase();
+  if (/\bverification\s+work\s+order\b/.test(lower)) return true;
+
+  const cues = [
+    /\bfields?\s+to\s+verify\b/.test(lower),
+    /\bsource\s+type\b/.test(lower),
+    /\bready\s+vs\s+(?:still\s+)?blocked\b/.test(lower),
+    /\bwhat\s+should\s+be\s+logged\b/.test(lower),
+    /\bwhat\s+i\s+should\s+do\s+first\b/.test(lower),
+    /\bverify\b/.test(lower),
+  ];
+  // Require several of the listed work-order cues so generic "verify"
+  // language alone does not steal the provisional/readiness paths.
+  return cues.filter(Boolean).length >= 4;
+}
+
+const CANARY_VERIFICATION_LOGGING_FIELDS = [
+  'prospect_id',
+  'company_name',
+  'contact_name',
+  'industry',
+  'verification_status',
+  'verified_website',
+  'verified_mailing_address',
+  'verified_phone',
+  'verification_source',
+  'source_confidence',
+  'verified_by',
+  'verified_at',
+  'mail_readiness',
+  'draft_readiness',
+  'execution_readiness',
+  'follow_up_due_date',
+  'notes',
+];
+
+function buildCanaryVerificationWorkOrderResponse(input) {
+  const prospects = Array.isArray(input.prospects) ? input.prospects : [];
+  const reviews = prospects.map((p) => assessCanaryProspectReadiness(p));
+  const count = reviews.length;
+  const safety =
+    'Preparation-only. No mission created. No launch, execution, approval, print, or mail.';
+
+  const intro = [
+    'Verification work order',
+    '',
+    `I found the ${count} canary prospect${count === 1 ? '' : 's'}.`,
+    'Goal: verify mail-critical fields before print/mail.',
+    safety,
+  ].join('\n');
+
+  const perProspect = reviews
+    .map(formatVerificationWorkOrderProspectBlock)
+    .join('\n\n');
+
+  const firstAction =
+    count === 3
+      ? 'First action: verify mailing address for all 3 prospects, because address is the hard blocker for printing/mailing. Then verify website and phone before final packet review.'
+      : `First action: verify mailing address for all ${count} prospects, because address is the hard blocker for printing/mailing. Then verify website and phone before final packet review.`;
+
+  return buildStructuredResponse({
+    answer: [intro, '', perProspect, '', firstAction, '', safety].join('\n'),
+    reasoning: [
+      'Operator supplied canary prospects and requested a verification work order.',
+      'Response stays inside the preparation-only canary hard stop — no mission create/resume.',
+      'Field checklist uses known prospect identity only; no invented websites, phones, addresses, or evidence.',
+      'Mail readiness stays Blocked until operator-verified mailing fields are supplied.',
+    ],
+    supportingEvidence: reviews.map((r, i) => ({
+      id: `canary-prospect:${r.id || i}`,
+      summary: `${r.companyName}: verification work order — mail ${r.mailReadiness}`,
+      sourceType: 'operator',
+      confidence: null,
+    })),
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: [
+      'Verify mailing address for each canary prospect, then website and phone.',
+    ],
+    recommendedActions: [firstAction],
+    metadata: {
+      sourcesUsed: { operatorProspectList: true },
+      evidenceCount: reviews.length,
+      unavailable: collectMissingFieldKinds(reviews),
+      surface: 'workspace',
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      route: 'intelligence',
+      canaryPreparationOnly: true,
+      verificationWorkOrder: true,
+      provisionalDrafts: false,
+      prospectCount: count,
+    },
+  });
+}
+
+function formatVerificationWorkOrderProspectBlock(r) {
+  const contact = r.contactName || 'contact unknown';
+  const loggingLines = CANARY_VERIFICATION_LOGGING_FIELDS.map(
+    (field) => `- ${field}`
+  ).join('\n');
+
+  return [
+    `${r.id} — ${r.companyName} (${contact})`,
+    '',
+    'Status: Blocked for mailing',
+    'Goal: verify mail-critical fields before print/mail',
+    '',
+    'Fields to verify:',
+    '1. Mailing address',
+    '   - Suggested source type: official company website, property-management contact page, business registry, trusted CRM record, or direct confirmation',
+    '   - Why it matters: required for packet delivery and print approval',
+    '   - Ready value: complete deliverable mailing address tied to company/contact',
+    '   - Still Blocked if: missing, stale, residential-only, ambiguous office/location, or unverified',
+    '',
+    '2. Website',
+    '   - Suggested source type: official website, verified business profile, CRM, or direct confirmation',
+    '   - Why it matters: evidence anchor for company identity and personalization review',
+    '   - Ready value: official/verified website',
+    '   - Still Blocked if: unknown, placeholder, directory-only with low confidence, or conflicting sources',
+    '',
+    '3. Phone',
+    '   - Suggested source type: official website, business listing, CRM, or direct confirmation',
+    '   - Why it matters: required for follow-up call workflow',
+    '   - Ready value: working business/contact phone',
+    '   - Still Blocked if: unknown, disconnected, personal/unverified, or conflicting sources',
+    '',
+    '4. Contact name / role',
+    '   - Suggested source type: company site, LinkedIn, CRM, direct confirmation',
+    '   - Why it matters: avoids misaddressed package and call notes',
+    '   - Ready value: contact confirmed as relevant decision maker or influencer',
+    '   - Still Blocked if: role unverified or contact mismatch',
+    '',
+    'PulseForge logging fields:',
+    loggingLines,
+  ].join('\n');
 }
 
 function formatProvisionalProspectBlock(r) {
