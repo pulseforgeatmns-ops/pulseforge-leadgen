@@ -456,6 +456,82 @@ describe('SPEC-022 Workspace Mission routing', () => {
     assert.doesNotMatch(answer, /current vendor/i);
     assert.doesNotMatch(answer, /website claims/i);
   });
+
+  it('hard-stops Campaign Creation when canary prospect parsing misses', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const before = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question: [
+        'Continue the Campaign 001 preparation-only canary package.',
+        'Use these 3 prospects: 1. PM-001 — Gamache Properties ...',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail anything.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const after = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(after.length, before.length);
+    assert.doesNotMatch(answer, /Mission created/i);
+    assert.doesNotMatch(answer, /Campaign 001\. Status: Review Required/i);
+    assert.match(answer, /will not create a Campaign mission/i);
+    assert.match(answer, /could not parse them cleanly/i);
+    assert.match(
+      answer,
+      /PM-001\s*\|\s*Gamache Properties\s*\|\s*Ben Gamache/i
+    );
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+  });
+
+  it('parses flattened single-paragraph numbered canary prospects', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const result = await workspace.ask({
+      question: [
+        'Continue the Campaign 001 preparation-only canary package.',
+        'Use these 3 prospects: 1. PM-001 — Gamache Properties — Ben Gamache — Property Management — website unknown — mailing address unknown — phone unknown 2. PM-002 — Elm Grove Companies — David Schleyer — Property Management — website unknown — mailing address unknown — phone unknown 3. PM-003 — Mill City Property Management — Lauren DuPaul — Property Management — website unknown — mailing address unknown — phone unknown',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail anything.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const missions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(missions.length, 0);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /Elm Grove Companies/);
+    assert.match(answer, /Mill City Property Management/);
+    assert.match(answer, /Ben Gamache/);
+    assert.match(answer, /David Schleyer/);
+    assert.match(answer, /Lauren DuPaul/);
+    assert.doesNotMatch(answer, /Mission created/i);
+    assert.equal(result.structured.metadata.prospectCount, 3);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {

@@ -453,6 +453,8 @@ function createWorkspaceEngine(options = {}) {
 /**
  * Preparation-only canary: either ask for prospects, or return a review
  * package conversationally — never create/resume Campaign or Direct Mail Execution.
+ * A parser miss must never fall through to campaign_creation /
+ * mail_package_generation / direct_mail_execution.
  * @returns {Promise<{ structured: object, reason: string }|null>}
  */
 async function maybeBuildCanaryPreparationResponse(input) {
@@ -460,7 +462,13 @@ async function maybeBuildCanaryPreparationResponse(input) {
   if (!isPreparationOnlyCanary(question)) return null;
 
   const detected = detectOperatorProspectListInMessage(question);
-  if (detected.detected && detected.prospectCount > 0) {
+  const intendedCount = extractIntendedCanaryProspectCount(question);
+  const completeProspects =
+    detected.detected &&
+    detected.prospectCount > 0 &&
+    (!intendedCount || detected.prospectCount >= intendedCount);
+
+  if (completeProspects) {
     return {
       reason: 'canary_preparation_review_package',
       structured: buildCanaryReviewPackageResponse({
@@ -472,47 +480,139 @@ async function maybeBuildCanaryPreparationResponse(input) {
     };
   }
 
-  if (hasInlineProspectList(question)) return null;
+  // Soft clarification when the operator invited "ask me for names" OR
+  // referenced existing campaign prospects without pasting an inline list.
+  if (
+    !operatorAttemptedCanaryProspectSupply(question) &&
+    (isCanaryAwaitingProspects(question) ||
+      referencesExistingCampaignProspects(question))
+  ) {
+    return {
+      reason: 'canary_missing_prospects_clarification',
+      structured: buildStructuredResponse({
+        answer: [
+          'Got it. I will treat this as a preparation-only canary, not a launch or execution run.',
+          'I cannot see three usable Campaign 001 prospects in the current workspace context, so send me 3 prospect names before I create any package mission.',
+          'Send them as company name, decision maker if known, website, mailing address, and phone if you have it.',
+        ].join(' '),
+        reasoning: [
+          'The operator explicitly said not to launch or execute direct mail.',
+          'The operator asked Max to request 3 prospect names instead of creating a mission when existing Campaign 001 prospects are not accessible.',
+          'No usable Campaign 001 prospect artifact was found in the current mission workspace context.',
+          'Hard stop: no campaign_creation / mail_package_generation / direct_mail_execution mission was started.',
+        ],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: null,
+        nextInvestigations: ['Paste 3 prospects for the canary package.'],
+        recommendedActions: [],
+        metadata: {
+          sourcesUsed: {},
+          evidenceCount: 0,
+          unavailable: ['campaign_001_prospect_artifact'],
+          surface: 'workspace',
+          executionDomain: input.domainDecision && input.domainDecision.domain,
+          route: 'intelligence',
+          canaryPreparationOnly: true,
+        },
+      }),
+    };
+  }
 
-  const existing = await hasExistingCampaignProspects({
-    missionEngine: input.missionEngine,
-    tenantId: input.tenantId,
-    question,
-  });
-  if (existing) return null;
-
-  // Only ask for prospects when the operator invited that clarification path
-  // or clearly has no list yet.
-  if (!isCanaryAwaitingProspects(question)) return null;
-
+  // Hard stop on parser miss / incomplete supply — never create a Campaign mission.
+  const count = intendedCount || 3;
   return {
-    reason: 'canary_missing_prospects_clarification',
-    structured: buildStructuredResponse({
-      answer: [
-        'Got it. I will treat this as a preparation-only canary, not a launch or execution run.',
-        'I cannot see three usable Campaign 001 prospects in the current workspace context, so send me 3 prospect names before I create any package mission.',
-        'Send them as company name, decision maker if known, website, mailing address, and phone if you have it.',
-      ].join(' '),
-      reasoning: [
-        'The operator explicitly said not to launch or execute direct mail.',
-        'The operator asked Max to request 3 prospect names instead of creating a mission when existing Campaign 001 prospects are not accessible.',
-        'No usable Campaign 001 prospect artifact was found in the current mission workspace context.',
-      ],
-      supportingEvidence: [],
-      contradictingEvidence: [],
-      confidence: null,
-      nextInvestigations: ['Paste 3 prospects for the canary package.'],
-      recommendedActions: [],
-      metadata: {
-        sourcesUsed: {},
-        evidenceCount: 0,
-        unavailable: ['campaign_001_prospect_artifact'],
-        surface: 'workspace',
-        executionDomain: input.domainDecision && input.domainDecision.domain,
-        route: 'intelligence',
-      },
+    reason: 'canary_prospect_parse_clarification',
+    structured: buildCanaryParseFailureResponse({
+      domainDecision: input.domainDecision,
+      intendedCount: count,
     }),
   };
+}
+
+/**
+ * @param {string} question
+ * @returns {number|null}
+ */
+function extractIntendedCanaryProspectCount(question) {
+  const text = String(question || '');
+  const match =
+    /\buse\s+(?:these|the\s+same)\s+(\d+)\s+prospects?\b/i.exec(text) ||
+    /\b(\d+)\s+canary\s+prospects?\b/i.exec(text) ||
+    /\bthese\s+(\d+)\s+prospects?\b/i.exec(text);
+  if (!match) return null;
+  const n = Number(match[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function buildCanaryParseFailureResponse(input = {}) {
+  const count = Number(input.intendedCount) > 0 ? Number(input.intendedCount) : 3;
+  const example =
+    'PM-001 | Gamache Properties | Ben Gamache | Property Management | website unknown | mailing address unknown | phone unknown';
+  return buildStructuredResponse({
+    answer: [
+      'I’m keeping this preparation-only and will not create a Campaign mission.',
+      '',
+      `I see you intended to provide ${count} canary prospects, but I could not parse them cleanly.`,
+      'Please paste them one per line in this format:',
+      '',
+      example,
+    ].join('\n'),
+    reasoning: [
+      'Preparation-only canary with no-launch / no-execute constraints.',
+      'Prospect extraction failed or was incomplete — hard stop prevents Campaign Creation fallback.',
+      'No campaign_creation, mail_package_generation, or direct_mail_execution mission was started.',
+    ],
+    supportingEvidence: [],
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: [
+      `Paste ${count} canary prospects one per line in the pipe-delimited format.`,
+    ],
+    recommendedActions: [],
+    metadata: {
+      sourcesUsed: {},
+      evidenceCount: 0,
+      unavailable: ['canary_prospect_rows'],
+      surface: 'workspace',
+      executionDomain: input.domainDecision && input.domainDecision.domain,
+      route: 'intelligence',
+      canaryPreparationOnly: true,
+    },
+  });
+}
+
+/**
+ * True when the operator tried to supply canary prospects inline (even if
+ * parsing later fails).
+ * @param {string} question
+ */
+function operatorAttemptedCanaryProspectSupply(question) {
+  const text = String(question || '');
+  const lower = text.toLowerCase();
+  if (/\buse\s+these\s+\d+\s+prospects?\b/i.test(text)) return true;
+  if (/\buse\s+the\s+same\s+\d+\s+prospects?\b/i.test(text)) return true;
+  if (/\b\d+\s+prospects?\s*:/i.test(text)) return true;
+  if (/\bPM-\d{3}\b/i.test(text)) return true;
+  if (/\d+[\.)]\s+[A-Za-z]{1,12}[-_]?\d{1,6}\b/.test(text)) return true;
+  if (hasInlineProspectList(text)) return true;
+  if (
+    /\bprospects?\b/.test(lower) &&
+    (/[—–]/.test(text) || /\s\|\s/.test(text)) &&
+    /\d+[\.)]\s+/.test(text)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function referencesExistingCampaignProspects(question) {
+  const lower = String(question || '').toLowerCase();
+  return (
+    /\bfrom\s+(?:the\s+)?existing\b/.test(lower) ||
+    /\bif\s+available\b/.test(lower) ||
+    /\bif\s+you\s+cannot\s+access\b/.test(lower)
+  );
 }
 
 function buildCanaryReviewPackageResponse(input) {
@@ -905,10 +1005,12 @@ function isPreparationOnlyCanary(question) {
       /\breview\s+package\s+only\b/.test(lower));
   const noExec =
     /\bnot\s+(launching|executing|mailing)\b/.test(lower) ||
-    /\b(still\s+)?do\s+not\s+(run|execute|launch|mail|resume|approve)\b/.test(
+    /\b(still\s+)?do\s+not\s+(run|execute|launch|mail|resume|approve|print|create)\b/.test(
       lower
     ) ||
-    /\bdo\s+not\s+launch,\s*execute/.test(lower);
+    /\bdo\s+not\s+launch,\s*execute/.test(lower) ||
+    /\bdo\s+not\s+create\s+a\s+mission\b/.test(lower) ||
+    /\bno[- ]?(launch|execute|mail|approve|print)\b/.test(lower);
   return canaryCue && noExec;
 }
 
@@ -939,37 +1041,6 @@ function hasInlineProspectList(question) {
   return lines.filter(
     (line) => /https?:\/\//i.test(line) || line.split(',').length >= 3
   ).length >= 2;
-}
-
-async function hasExistingCampaignProspects(input) {
-  const engine = input.missionEngine;
-  if (!engine || typeof engine.list !== 'function') return false;
-  const campaign = extractCampaignId(input.question);
-  try {
-    const missions = await engine.list({ tenantId: input.tenantId });
-    return missions.some((mission) => {
-      const text = `${mission.title || ''} ${mission.objectiveText || ''}`;
-      if (campaign && !new RegExp(`campaign\\s*${campaign}\\b`, 'i').test(text)) {
-        return false;
-      }
-      const deliverables = mission.deliverables || {};
-      const campaignArtifact = deliverables.campaign || {};
-      return (
-        Array.isArray(deliverables.prospects) &&
-        deliverables.prospects.length > 0
-      ) || (
-        Array.isArray(campaignArtifact.prospects) &&
-        campaignArtifact.prospects.length > 0
-      );
-    });
-  } catch {
-    return false;
-  }
-}
-
-function extractCampaignId(question) {
-  const match = /\bcampaign\s+(\d+)\b/i.exec(String(question || ''));
-  return match ? match[1] : null;
 }
 
 module.exports = {
