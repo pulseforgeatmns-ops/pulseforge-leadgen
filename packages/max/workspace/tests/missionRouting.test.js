@@ -727,6 +727,204 @@ describe('SPEC-022 Workspace Mission routing', () => {
   });
 });
 
+describe('Max activeWorkContext (session desk memory)', () => {
+  const CANARY_WORK_ORDER_PROMPT = [
+    'Continue the Campaign 001 preparation-only canary package.',
+    '',
+    'Use these 3 prospects:',
+    '',
+    '1. PM-001 — Gamache Properties — Ben Gamache — Property Management',
+    '2. PM-002 — Elm Grove Companies — David Schleyer — Property Management',
+    '3. PM-003 — Mill City Property Management — Lauren DuPaul — Property Management',
+    '',
+    'Turn the 3-prospect canary into a verification work order.',
+    'For each prospect, give me:',
+    '- exact fields to verify',
+    '- suggested source type for each field',
+    '- why the field matters',
+    '- what value would make the prospect Ready vs still Blocked',
+    '- what should be logged in PulseForge',
+    '- what I should do first',
+    '',
+    'Do not create a mission.',
+    'Do not launch, execute, approve, print, or mail anything.',
+  ].join('\n');
+
+  it('Test 1: stores canary activeWorkContext after verification work order', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const result = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const awc =
+      result.context.activeWorkContext ||
+      workspace._sessions.get(result.sessionId).activeWorkContext;
+
+    assert.ok(awc, 'session context stores activeWorkContext');
+    assert.equal(awc.workflow, 'campaign_canary');
+    assert.equal(awc.target.campaignId, '001');
+    assert.equal(awc.entities.length, 3);
+    assert.equal(awc.entities[0].companyName, 'Gamache Properties');
+    assert.equal(awc.entities[1].companyName, 'Elm Grove Companies');
+    assert.equal(awc.entities[2].companyName, 'Mill City Property Management');
+    assert.equal(awc.constraints.preparationOnly, true);
+    assert.equal(awc.constraints.noMissionCreation, true);
+    assert.equal(awc.constraints.noLaunch, true);
+    assert.equal(awc.constraints.noExecution, true);
+    assert.equal(awc.constraints.noMail, true);
+    assert.equal(awc.constraints.noInventedEvidence, true);
+    assert.equal(awc.lastOutputType, 'verification_work_order');
+    assert.ok(awc.pendingFields.includes('website'));
+    assert.ok(awc.pendingFields.includes('mailingAddress'));
+    assert.ok(awc.pendingFields.includes('phone'));
+  });
+
+  it('Test 2: reuses activeWorkContext for fillable table follow-up', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: 'Convert the verification work order into a fillable table.',
+    });
+
+    const missions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const awc =
+      result.context.activeWorkContext ||
+      workspace._sessions.get(result.sessionId).activeWorkContext;
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(missions.length, 0);
+    assert.doesNotMatch(answer, /I need 3 prospects|send me 3 prospect/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.match(answer, /Fillable verification table|fillable table/i);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /Elm Grove Companies/);
+    assert.match(answer, /Mill City Property Management/);
+    assert.match(answer, /prospect_id/);
+    assert.match(answer, /mailing_address/);
+    assert.match(answer, /website/);
+    assert.match(answer, /phone/);
+    assert.match(answer, /verification_status/);
+    assert.match(answer, /No launch|no-launch|no-mail|Preparation-only/i);
+    assert.equal(result.structured.metadata.fillableTable, true);
+    assert.equal(result.structured.metadata.activeWorkContextReused, true);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(awc.lastOutputType, 'fillable_table');
+    assert.equal(awc.entities.length, 3);
+    assert.equal(awc.constraints.noMail, true);
+    assert.equal(awc.constraints.noLaunch, true);
+  });
+
+  it('Test 3: explicit new prospects override activeWorkContext', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: [
+        'Use these 2 prospects instead for the Campaign 001 preparation-only canary:',
+        '',
+        '1. PM-010 — North End Holdings — Alex Rivera — Property Management',
+        '2. PM-011 — Riverbend Realty — Sam Ortiz — Property Management',
+        '',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail anything.',
+      ].join('\n'),
+    });
+
+    const answer = result.prose || result.structured.answer || '';
+    const awc =
+      result.context.activeWorkContext ||
+      workspace._sessions.get(result.sessionId).activeWorkContext;
+
+    assert.equal(awc.entities.length, 2);
+    assert.equal(awc.entities[0].companyName, 'North End Holdings');
+    assert.equal(awc.entities[1].companyName, 'Riverbend Realty');
+    assert.ok(!awc.entities.some((e) => e.companyName === 'Gamache Properties'));
+    assert.ok(!awc.entities.some((e) => e.companyName === 'Elm Grove Companies'));
+    assert.ok(
+      !awc.entities.some((e) => e.companyName === 'Mill City Property Management')
+    );
+    assert.match(answer, /North End Holdings/);
+    assert.match(answer, /Riverbend Realty/);
+    assert.doesNotMatch(answer, /Gamache Properties/);
+    assert.doesNotMatch(answer, /Elm Grove Companies/);
+    assert.doesNotMatch(answer, /Mill City Property Management/);
+  });
+
+  it('Test 4: execution still blocked when mailing from active context', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const before = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: 'Great, mail these now.',
+    });
+
+    const after = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(after.length, before.length);
+    assert.match(answer, /not mailing|will not|not .*launch/i);
+    assert.match(answer, /explicit approval|verify|readiness|missing/i);
+    assert.match(answer, /website|mailing|phone|mailingAddress|mailing address/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+  });
+});
+
 describe('SPEC-022 Command Deck Operations section', () => {
   it('compose includes operations with mission cards', async () => {
     const { createMaxReasoningRuntime } = require('../../index');

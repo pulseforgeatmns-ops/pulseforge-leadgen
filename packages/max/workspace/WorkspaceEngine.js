@@ -19,6 +19,20 @@ const {
   EXECUTION_DOMAINS,
 } = require('./ExecutionDomain');
 const {
+  getActiveWorkContext,
+  setActiveWorkContext,
+  buildCanaryActiveWorkContext,
+  entitiesToProspects,
+  isActiveWorkFollowUpCue,
+  isExplicitContextOverride,
+  isExplicitExecutionRequest,
+  isFillableTableRequest,
+  extractCampaignIdFromText,
+  activeContextBlocksExecution,
+  activeContextHasEntities,
+  LAST_OUTPUT_TYPES,
+} = require('./ActiveWorkContext');
+const {
   ROUTE_KINDS,
   missionEnabled,
   activeMissionResolverEnabled,
@@ -180,6 +194,7 @@ class WorkspaceEngine {
       tenantId: session.context.tenantId,
       missionEngine: this._missionEngine,
       domainDecision,
+      session,
     });
 
     const missionsAvailable =
@@ -460,11 +475,52 @@ function createWorkspaceEngine(options = {}) {
  * package conversationally — never create/resume Campaign or Direct Mail Execution.
  * A parser miss must never fall through to campaign_creation /
  * mail_package_generation / direct_mail_execution.
+ *
+ * Also reuses session.context.activeWorkContext for follow-ups that transform
+ * prior canary work (fillable table, continue, revise) without re-pasting.
  * @returns {Promise<{ structured: object, reason: string }|null>}
  */
 async function maybeBuildCanaryPreparationResponse(input) {
   const question = String(input.question || '');
-  if (!isPreparationOnlyCanary(question)) return null;
+  const session = input.session || null;
+  const prior = getActiveWorkContext(session);
+  const isCanary = isPreparationOnlyCanary(question);
+  const isFollowUp = isActiveWorkFollowUpCue(question);
+  const isExec = isExplicitExecutionRequest(question);
+  const hasPriorCanary =
+    prior &&
+    prior.workflow === 'campaign_canary' &&
+    activeContextHasEntities(prior);
+  const overrideWithNewProspects =
+    hasPriorCanary &&
+    (isExplicitContextOverride(question) ||
+      operatorAttemptedCanaryProspectSupply(question));
+
+  // Execution / mail while preparation-only canary context is active:
+  // never infer launch from desk context — block and ask for readiness.
+  if (
+    !isCanary &&
+    isExec &&
+    activeContextBlocksExecution(prior) &&
+    hasPriorCanary
+  ) {
+    return {
+      reason: 'canary_active_context_execution_blocked',
+      structured: buildCanaryExecutionBlockedResponse({
+        activeWorkContext: prior,
+        question,
+        domainDecision: input.domainDecision,
+      }),
+    };
+  }
+
+  const shouldHandle =
+    isCanary ||
+    (hasPriorCanary && isFollowUp) ||
+    (hasPriorCanary && isFillableTableRequest(question)) ||
+    overrideWithNewProspects;
+
+  if (!shouldHandle) return null;
 
   const detected = detectOperatorProspectListInMessage(question);
   const intendedCount = extractIntendedCanaryProspectCount(question);
@@ -479,6 +535,14 @@ async function maybeBuildCanaryPreparationResponse(input) {
       objectiveText: detected.objectiveText || question,
       question,
       domainDecision: input.domainDecision,
+      reusedFromActiveContext: false,
+    });
+    rememberCanaryActiveWorkContext({
+      session,
+      prospects: detected.prospects,
+      question,
+      lastOutputType: resolveCanaryLastOutputType(question, review.reason),
+      prior,
     });
     return {
       reason: review.reason || 'canary_preparation_review_package',
@@ -487,6 +551,7 @@ async function maybeBuildCanaryPreparationResponse(input) {
   }
 
   // Parser miss / incomplete paste — never create a Campaign mission.
+  // Do not silently fall back to prior entities when the operator attempted a new paste.
   if (operatorAttemptedCanaryProspectSupply(question)) {
     const count = intendedCount || 3;
     return {
@@ -495,6 +560,29 @@ async function maybeBuildCanaryPreparationResponse(input) {
         domainDecision: input.domainDecision,
         intendedCount: count,
       }),
+    };
+  }
+
+  // Reuse desk context when follow-up/canary continue has no new paste.
+  if (hasPriorCanary && (isFollowUp || isCanary || isFillableTableRequest(question))) {
+    const prospects = entitiesToProspects(prior.entities);
+    const review = buildCanaryReviewPackageResponse({
+      prospects,
+      objectiveText: question,
+      question,
+      domainDecision: input.domainDecision,
+      reusedFromActiveContext: true,
+    });
+    rememberCanaryActiveWorkContext({
+      session,
+      prospects,
+      question,
+      lastOutputType: resolveCanaryLastOutputType(question, review.reason),
+      prior,
+    });
+    return {
+      reason: review.reason || 'canary_active_work_context_reuse',
+      structured: review.structured || review,
     };
   }
 
@@ -562,6 +650,50 @@ async function maybeBuildCanaryPreparationResponse(input) {
       },
     }),
   };
+}
+
+function rememberCanaryActiveWorkContext(input = {}) {
+  if (!input.session) return null;
+  const lastOutputType =
+    input.lastOutputType || LAST_OUTPUT_TYPES.CANARY_REVIEW_PACKAGE;
+  const nextAction =
+    input.nextAction !== undefined
+      ? input.nextAction
+      : lastOutputType === LAST_OUTPUT_TYPES.VERIFICATION_WORK_ORDER
+        ? 'convert_to_fillable_table'
+        : lastOutputType === LAST_OUTPUT_TYPES.FILLABLE_TABLE
+          ? 'verify_mail_critical_fields'
+          : 'await_operator_transform_or_verification';
+
+  return setActiveWorkContext(
+    input.session,
+    buildCanaryActiveWorkContext({
+      prospects: input.prospects,
+      campaignId:
+        extractCampaignIdFromText(input.question) ||
+        (input.prior && input.prior.target && input.prior.target.campaignId) ||
+        '001',
+      lastOutputType,
+      nextAction,
+      prior: input.prior,
+    })
+  );
+}
+
+function resolveCanaryLastOutputType(question, reason) {
+  if (isFillableTableRequest(question) || reason === 'canary_fillable_table') {
+    return LAST_OUTPUT_TYPES.FILLABLE_TABLE;
+  }
+  if (
+    isVerificationWorkOrderRequest(question) ||
+    reason === 'canary_verification_work_order'
+  ) {
+    return LAST_OUTPUT_TYPES.VERIFICATION_WORK_ORDER;
+  }
+  if (isProvisionalDraftRequest(question)) {
+    return LAST_OUTPUT_TYPES.PROVISIONAL_DRAFTS;
+  }
+  return LAST_OUTPUT_TYPES.CANARY_REVIEW_PACKAGE;
 }
 
 /**
@@ -643,6 +775,19 @@ function operatorAttemptedCanaryProspectSupply(question) {
 function buildCanaryReviewPackageResponse(input) {
   const prospects = Array.isArray(input.prospects) ? input.prospects : [];
   const questionText = input.question || input.objectiveText || '';
+  const reused = input.reusedFromActiveContext === true;
+
+  if (isFillableTableRequest(questionText)) {
+    return {
+      reason: 'canary_fillable_table',
+      structured: buildCanaryFillableTableResponse({
+        prospects,
+        question: questionText,
+        reusedFromActiveContext: reused,
+      }),
+    };
+  }
+
   const verificationWorkOrder = isVerificationWorkOrderRequest(questionText);
   if (verificationWorkOrder) {
     return {
@@ -650,6 +795,7 @@ function buildCanaryReviewPackageResponse(input) {
       structured: buildCanaryVerificationWorkOrderResponse({
         prospects,
         question: questionText,
+        reusedFromActiveContext: reused,
       }),
     };
   }
@@ -666,16 +812,22 @@ function buildCanaryReviewPackageResponse(input) {
     'No launch, execution, approval, or mailing has occurred.',
     'Do not print/mail until missing fields are verified.',
   ].join(' ');
+  const reuseNote = reused
+    ? 'Reusing the prospects already on the desk from active work context.'
+    : null;
 
   if (provisional) {
     const intro = [
       `I found the ${count} canary prospect${count === 1 ? '' : 's'}.`,
+      reuseNote,
       'We can draft now from known facts; we cannot mail yet.',
       mailBlocked.length
         ? `Mail readiness is Blocked until ${formatMissingKinds(missingKinds)} are verified.`
         : 'Mailing fields look present; execution stays Blocked until you explicitly approve a launch.',
       safety,
-    ].join(' ');
+    ]
+      .filter(Boolean)
+      .join(' ');
 
     const perProspect = reviews.map(formatProvisionalProspectBlock).join('\n\n');
 
@@ -685,7 +837,9 @@ function buildCanaryReviewPackageResponse(input) {
     return buildStructuredResponse({
       answer: [intro, '', perProspect, '', closing].join('\n'),
       reasoning: [
-        'Operator supplied canary prospects with preparation-only / no-execution constraints.',
+        reused
+          ? 'Reused activeWorkContext entities for this follow-up; no re-paste required.'
+          : 'Operator supplied canary prospects with preparation-only / no-execution constraints.',
         'Operator asked for provisional review drafts using only known facts, allowing drafts while mailing readiness is Blocked.',
         'Draft readiness is independent of mail readiness; missing address/website/phone block mail only.',
         'No campaign or mail execution mission was started.',
@@ -706,7 +860,10 @@ function buildCanaryReviewPackageResponse(input) {
         : ['Confirm review package, then explicitly approve any later launch.'],
       recommendedActions: [],
       metadata: {
-        sourcesUsed: { operatorProspectList: true },
+        sourcesUsed: {
+          operatorProspectList: !reused,
+          activeWorkContext: reused,
+        },
         evidenceCount: reviews.length,
         unavailable: missingKinds,
         surface: 'workspace',
@@ -715,6 +872,7 @@ function buildCanaryReviewPackageResponse(input) {
         canaryPreparationOnly: true,
         provisionalDrafts: true,
         prospectCount: count,
+        activeWorkContextReused: reused,
       },
     });
   }
@@ -722,11 +880,14 @@ function buildCanaryReviewPackageResponse(input) {
   const notReady = reviews.filter((r) => r.readiness !== 'Ready');
   const intro = [
     `I found the ${count} canary prospect${count === 1 ? '' : 's'}. I’m keeping this preparation-only.`,
+    reuseNote,
     notReady.length
       ? `These are missing ${formatMissingKinds(missingKinds)}, so I can’t mark them ready to mail yet.`
       : 'Mailing fields look present; still no launch, execute, approve, or mail.',
     safety,
-  ].join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   const perProspect = reviews
     .map((r) => {
@@ -759,7 +920,9 @@ function buildCanaryReviewPackageResponse(input) {
   return buildStructuredResponse({
     answer: [intro, '', perProspect, '', closing].join('\n'),
     reasoning: [
-      'Operator supplied canary prospects with preparation-only / no-execution constraints.',
+      reused
+        ? 'Reused activeWorkContext entities for this follow-up; no re-paste required.'
+        : 'Operator supplied canary prospects with preparation-only / no-execution constraints.',
       'Prospect rows were extracted; surrounding instruction lines stayed as constraints.',
       'No campaign or mail execution mission was started.',
       notReady.length
@@ -783,7 +946,10 @@ function buildCanaryReviewPackageResponse(input) {
       : ['Confirm review package, then explicitly approve any later launch.'],
     recommendedActions: [],
     metadata: {
-      sourcesUsed: { operatorProspectList: true },
+      sourcesUsed: {
+        operatorProspectList: !reused,
+        activeWorkContext: reused,
+      },
       evidenceCount: reviews.length,
       unavailable: missingKinds,
       surface: 'workspace',
@@ -792,6 +958,7 @@ function buildCanaryReviewPackageResponse(input) {
       canaryPreparationOnly: true,
       provisionalDrafts: false,
       prospectCount: count,
+      activeWorkContextReused: reused,
     },
   });
 }
@@ -855,13 +1022,16 @@ function buildCanaryVerificationWorkOrderResponse(input) {
   const prospects = Array.isArray(input.prospects) ? input.prospects : [];
   const reviews = prospects.map((p) => assessCanaryProspectReadiness(p));
   const count = reviews.length;
+  const reused = input.reusedFromActiveContext === true;
   const safety =
     'Preparation-only. No mission created. No launch, execution, approval, print, or mail.';
 
   const intro = [
     'Verification work order',
     '',
-    `I found the ${count} canary prospect${count === 1 ? '' : 's'}.`,
+    reused
+      ? `Reusing the ${count} canary prospect${count === 1 ? '' : 's'} already on the desk.`
+      : `I found the ${count} canary prospect${count === 1 ? '' : 's'}.`,
     'Goal: verify mail-critical fields before print/mail.',
     safety,
   ].join('\n');
@@ -878,7 +1048,9 @@ function buildCanaryVerificationWorkOrderResponse(input) {
   return buildStructuredResponse({
     answer: [intro, '', perProspect, '', firstAction, '', safety].join('\n'),
     reasoning: [
-      'Operator supplied canary prospects and requested a verification work order.',
+      reused
+        ? 'Reused activeWorkContext entities for verification work order transformation.'
+        : 'Operator supplied canary prospects and requested a verification work order.',
       'Response stays inside the preparation-only canary hard stop — no mission create/resume.',
       'Field checklist uses known prospect identity only; no invented websites, phones, addresses, or evidence.',
       'Mail readiness stays Blocked until operator-verified mailing fields are supplied.',
@@ -896,7 +1068,10 @@ function buildCanaryVerificationWorkOrderResponse(input) {
     ],
     recommendedActions: [firstAction],
     metadata: {
-      sourcesUsed: { operatorProspectList: true },
+      sourcesUsed: {
+        operatorProspectList: !reused,
+        activeWorkContext: reused,
+      },
       evidenceCount: reviews.length,
       unavailable: collectMissingFieldKinds(reviews),
       surface: 'workspace',
@@ -906,6 +1081,170 @@ function buildCanaryVerificationWorkOrderResponse(input) {
       verificationWorkOrder: true,
       provisionalDrafts: false,
       prospectCount: count,
+      activeWorkContextReused: reused,
+    },
+  });
+}
+
+const CANARY_FILLABLE_TABLE_COLUMNS = [
+  'prospect_id',
+  'company_name',
+  'contact_name',
+  'industry',
+  'website',
+  'mailing_address',
+  'phone',
+  'verification_status',
+  'verification_source',
+  'source_confidence',
+  'verified_by',
+  'verified_at',
+  'mail_readiness',
+  'notes',
+];
+
+function buildCanaryFillableTableResponse(input) {
+  const prospects = Array.isArray(input.prospects) ? input.prospects : [];
+  const reviews = prospects.map((p) => assessCanaryProspectReadiness(p));
+  const count = reviews.length;
+  const reused = input.reusedFromActiveContext === true;
+  const safety =
+    'Preparation-only. No mission created. No launch, execution, approval, print, or mail.';
+
+  const header = `| ${CANARY_FILLABLE_TABLE_COLUMNS.join(' | ')} |`;
+  const separator = `| ${CANARY_FILLABLE_TABLE_COLUMNS.map(() => '---').join(' | ')} |`;
+  const rows = reviews.map((r) => {
+    const cells = [
+      r.id || '',
+      r.companyName || '',
+      r.contactName || '',
+      r.industry || '',
+      '', // website — fillable
+      '', // mailing_address — fillable
+      '', // phone — fillable
+      'Pending',
+      '', // verification_source
+      '', // source_confidence
+      '', // verified_by
+      '', // verified_at
+      r.mailReadiness || 'Blocked',
+      '', // notes
+    ];
+    return `| ${cells.join(' | ')} |`;
+  });
+
+  const intro = [
+    'Fillable verification table',
+    '',
+    reused
+      ? `Converted the verification work order into a fillable table for the same ${count} prospect${count === 1 ? '' : 's'} already on the desk.`
+      : `Fillable table for ${count} canary prospect${count === 1 ? '' : 's'}.`,
+    'Blank cells are for operator verification — I will not invent website, mailing address, phone, or evidence.',
+    safety,
+  ].join('\n');
+
+  const closing =
+    'Fill website, mailing_address, and phone from trusted sources before any print/mail step. Constraints stay no-launch / no-mail until you explicitly approve after readiness is complete.';
+
+  return buildStructuredResponse({
+    answer: [intro, '', header, separator, ...rows, '', closing].join('\n'),
+    reasoning: [
+      reused
+        ? 'Reused activeWorkContext entities; operator asked to convert the work order into a fillable table.'
+        : 'Operator requested a fillable verification table for canary prospects.',
+      'Table preserves known identity fields only; mail-critical fields left blank for verification.',
+      'No mission create/resume. No launch, mail, print, or approval inferred from desk context.',
+    ],
+    supportingEvidence: reviews.map((r, i) => ({
+      id: `canary-prospect:${r.id || i}`,
+      summary: `${r.companyName}: fillable table row — mail ${r.mailReadiness}`,
+      sourceType: 'operator',
+      confidence: null,
+    })),
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: [
+      'Fill website, mailing_address, and phone for each row from a trusted source.',
+    ],
+    recommendedActions: [
+      'Verify mailing address first for every row, then website and phone.',
+    ],
+    metadata: {
+      sourcesUsed: {
+        operatorProspectList: !reused,
+        activeWorkContext: reused,
+      },
+      evidenceCount: reviews.length,
+      unavailable: collectMissingFieldKinds(reviews),
+      surface: 'workspace',
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      route: 'intelligence',
+      canaryPreparationOnly: true,
+      fillableTable: true,
+      verificationWorkOrder: false,
+      provisionalDrafts: false,
+      prospectCount: count,
+      activeWorkContextReused: reused,
+    },
+  });
+}
+
+function buildCanaryExecutionBlockedResponse(input = {}) {
+  const ctx = input.activeWorkContext || {};
+  const prospects = entitiesToProspects(ctx.entities);
+  const reviews = prospects.map((p) => assessCanaryProspectReadiness(p));
+  const missingKinds = collectMissingFieldKinds(reviews);
+  const names = reviews.map((r) => r.companyName).filter(Boolean);
+  const pending =
+    Array.isArray(ctx.pendingFields) && ctx.pendingFields.length
+      ? ctx.pendingFields.join(', ')
+      : formatMissingKinds(missingKinds);
+
+  const answer = [
+    'I am not mailing or launching anything from this request.',
+    'Active work context still has preparation-only / no-mail / no-execution constraints.',
+    names.length
+      ? `Prospects still on the desk: ${names.join('; ')}.`
+      : null,
+    pending
+      ? `Required readiness still missing or unverified: ${pending}.`
+      : 'Mail-critical fields still need explicit operator verification.',
+    'To proceed later, verify the missing fields first, then give an explicit approval to launch or mail after readiness is complete. I will not infer execution from prior desk context.',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return buildStructuredResponse({
+    answer,
+    reasoning: [
+      'Operator asked to mail/launch/execute while activeWorkContext constraints forbid execution.',
+      'Active work context never overrides missing-field readiness or invents approval.',
+      'No mission created. No print, mail, launch, or approval occurred.',
+    ],
+    supportingEvidence: reviews.map((r, i) => ({
+      id: `canary-prospect:${r.id || i}`,
+      summary: `${r.companyName}: mail ${r.mailReadiness}, execution Blocked`,
+      sourceType: 'operator',
+      confidence: null,
+    })),
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: [
+      'Verify mailing address, website, and phone, then explicitly approve any launch.',
+    ],
+    recommendedActions: [
+      'Do not mail yet — complete verification first, then request explicit approval.',
+    ],
+    metadata: {
+      sourcesUsed: { activeWorkContext: true },
+      evidenceCount: reviews.length,
+      unavailable: missingKinds,
+      surface: 'workspace',
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      route: 'intelligence',
+      canaryPreparationOnly: true,
+      activeWorkContextReused: true,
+      prospectCount: reviews.length,
     },
   });
 }

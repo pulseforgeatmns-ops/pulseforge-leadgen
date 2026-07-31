@@ -28,7 +28,7 @@ function normalizeContext(raw) {
     ? raw.visibleCards.filter((c) => c && typeof c === 'object')
     : [];
 
-  return {
+  const normalized = {
     page,
     tenantId: String(raw.tenantId),
     companyId:
@@ -67,6 +67,13 @@ function normalizeContext(raw) {
       (raw.deck && raw.deck.meta && raw.deck.meta.generatedAt) ||
       null,
   };
+
+  // Session-level short-lived task memory (not long-term). Preserve when present.
+  if (raw.activeWorkContext && typeof raw.activeWorkContext === 'object') {
+    normalized.activeWorkContext = raw.activeWorkContext;
+  }
+
+  return normalized;
 }
 
 /**

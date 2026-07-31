@@ -32,6 +32,10 @@ class SessionStore {
       fingerprint: contextFingerprint(context),
       messages: [],
       discussedEntities: new Set(),
+      activeWorkContext:
+        context && context.activeWorkContext
+          ? context.activeWorkContext
+          : null,
     };
     rememberEntity(session, context);
     this._sessions.set(sessionId, session);
@@ -64,7 +68,19 @@ class SessionStore {
       const label = contextFocusLabel(context);
       contextSwitch = `We're now looking at ${label}. I'll use that as the current context.`;
     }
+    const priorActive =
+      session.activeWorkContext ||
+      (session.context && session.context.activeWorkContext) ||
+      null;
+    const nextActive =
+      (context && context.activeWorkContext) || priorActive || null;
     session.context = context;
+    if (nextActive) {
+      session.activeWorkContext = nextActive;
+      session.context.activeWorkContext = nextActive;
+    } else {
+      session.activeWorkContext = null;
+    }
     session.fingerprint = nextFp;
     session.updatedAt = new Date().toISOString();
     rememberEntity(session, context);

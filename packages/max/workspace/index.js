@@ -38,6 +38,7 @@ const {
   isMissionDomain,
   toRouteDecision,
 } = require('./ExecutionDomain');
+const ActiveWorkContext = require('./ActiveWorkContext');
 
 module.exports = {
   PAGE_TYPES,
@@ -68,4 +69,10 @@ module.exports = {
   attachDomainContext,
   isMissionDomain,
   toRouteDecision,
+  ActiveWorkContext,
+  getActiveWorkContext: ActiveWorkContext.getActiveWorkContext,
+  setActiveWorkContext: ActiveWorkContext.setActiveWorkContext,
+  buildCanaryActiveWorkContext: ActiveWorkContext.buildCanaryActiveWorkContext,
+  isActiveWorkFollowUpCue: ActiveWorkContext.isActiveWorkFollowUpCue,
+  isFillableTableRequest: ActiveWorkContext.isFillableTableRequest,
 };
