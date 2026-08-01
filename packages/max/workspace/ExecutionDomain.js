@@ -432,7 +432,17 @@ function classifyWorkspace(q) {
     /\bopen\s+(the\s+)?workspace\b/.test(lower) ||
     /\bcommand\s+deck\b/.test(lower) ||
     /\bshow\s+(the\s+)?(priority\s+)?queue\b/.test(lower) ||
-    /\bhighest\s+leverage\b/.test(lower)
+    /\bhighest\s+leverage\b/.test(lower) ||
+    // Active desk / canary cues — prefer Workspace over General Conversation
+    // even when session activeWorkContext was not restored.
+    /\bfillable\s+(?:verification\s+)?table\b/.test(lower) ||
+    /\bupdate\s+(?:the\s+)?(?:fillable\s+)?(?:verification\s+)?table\b/.test(
+      lower
+    ) ||
+    /\bverification\s+work\s+order\b/.test(lower) ||
+    /\bpreparation[-\s]*only\s+canary\b/.test(lower) ||
+    /\bcampaign\s+\d+\s+preparation[-\s]*only\b/.test(lower) ||
+    /\bsame\s+(?:\d+\s+)?prospects?\b/.test(lower)
   ) {
     return { reason: 'workspace', confidence: 0.85 };
   }

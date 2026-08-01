@@ -174,7 +174,14 @@ class WorkspaceEngine {
       session = this._sessions.get(opened.sessionId);
     } else if (rawContext) {
       // Envelope updates supply evidence — they do not select the domain.
-      const normalized = normalizeContext(rawContext);
+      // When the operator is continuing active desk work, do not adopt stale
+      // recommendation / suggestion-chip focus from the envelope.
+      const envelopeForSwitch = preserveActiveWorkFocusOverStaleRecommendation({
+        question,
+        session,
+        rawContext,
+      });
+      const normalized = normalizeContext(envelopeForSwitch);
       const switched = this._sessions.switchContext(session.id, normalized);
       envelopeSwitch = switched.contextSwitch;
       session = switched.session;
@@ -207,10 +214,10 @@ class WorkspaceEngine {
         executionDomain: EXECUTION_DOMAINS.WORKSPACE,
       };
       const presentedEarly = await this._presentation.present(structuredEarly);
-      let proseEarly = presentedEarly.prose;
-      if (envelopeSwitch) {
-        proseEarly = `${envelopeSwitch}\n\n${proseEarly}`;
-      }
+      // Latest typed operator message owns the turn — never surface a stale
+      // recommendation/suggestion focus switch during active desk continuation.
+      const proseEarly = presentedEarly.prose;
+      envelopeSwitch = null;
 
       this._sessions.appendMessage(session.id, {
         role: 'max',
@@ -545,6 +552,54 @@ class WorkspaceEngine {
  */
 function createWorkspaceEngine(options = {}) {
   return new WorkspaceEngine(options);
+}
+
+/**
+ * When the latest operator message continues active canary/table desk work,
+ * keep the prior session focus instead of adopting a stale recommendation or
+ * suggestion-chip label from the context envelope (e.g. "What changed overnight?").
+ * @param {object} input
+ * @param {string} input.question
+ * @param {object} input.session
+ * @param {object} input.rawContext
+ * @returns {object}
+ */
+function preserveActiveWorkFocusOverStaleRecommendation(input) {
+  const question = String(input.question || '');
+  const session = input.session;
+  const rawContext = input.rawContext;
+  if (!rawContext || typeof rawContext !== 'object' || !session) {
+    return rawContext;
+  }
+  if (isExplicitNewMissionRequest(question)) return rawContext;
+
+  const prior = getActiveWorkContext(session);
+  if (!activeContextHasEntities(prior)) return rawContext;
+
+  const continuingDesk =
+    isFillableTableUpdateRequest(question, prior) ||
+    isActiveWorkFollowUpCue(question) ||
+    isActiveWorkTransformCue(question) ||
+    isActiveWorkReuseProspectCue(question);
+  if (!continuingDesk) return rawContext;
+
+  const priorCtx = session.context || {};
+  return {
+    ...rawContext,
+    // Preserve ambient briefing/deck evidence, but do not let stale
+    // recommendation / chip focus override the active desk turn.
+    page: priorCtx.page || rawContext.page,
+    recommendationId:
+      priorCtx.recommendationId != null
+        ? priorCtx.recommendationId
+        : null,
+    companyId: priorCtx.companyId != null ? priorCtx.companyId : null,
+    selectedEntity:
+      priorCtx.selectedEntity && typeof priorCtx.selectedEntity === 'object'
+        ? priorCtx.selectedEntity
+        : null,
+    activeWorkContext: prior,
+  };
 }
 
 /**

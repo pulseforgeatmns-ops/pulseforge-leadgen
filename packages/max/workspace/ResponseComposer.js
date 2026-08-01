@@ -79,7 +79,9 @@ function classifyIntent(question, context) {
   if (/contradict|oppos|against|why not|risk/.test(q)) return 'contradictions';
   if (/policy|approval|block|allow|wait/.test(q)) return 'policy';
   if (/compar/.test(q)) return 'compare';
-  if (/overnight|changed|change|movement|shift/.test(q)) return 'changes';
+  // Overnight / market-change intent must be explicit. Do not match the
+  // substring "change" inside "unchanged" (table-update instructions).
+  if (isExplicitOvernightChangesIntent(q)) return 'changes';
   if (/watch|alert/.test(q)) return 'watches';
   if (/#1|ranked|top|why is/.test(q)) return 'rank';
   if (/confidence|signal|evidence|explain|reason/.test(q)) return 'explain';
@@ -87,6 +89,35 @@ function classifyIntent(question, context) {
   if (context.page === PAGE_TYPES.RECOMMENDATION) return 'explain';
   if (context.page === PAGE_TYPES.COMPANY) return 'explain';
   return 'general';
+}
+
+/**
+ * True only when the operator explicitly asks about overnight / market changes.
+ * Stale suggestion chips ("What changed overnight?") must not win via substring
+ * matches on unrelated instructions such as "leave PM-002 unchanged".
+ * @param {string} q - lowercased question
+ */
+function isExplicitOvernightChangesIntent(q) {
+  const text = String(q || '');
+  if (!text.trim()) return false;
+  if (/\bwhat\s+changed\s+overnight\b/.test(text)) return true;
+  if (/\bovernight\s+(?:change|changes|summary|movement|movements)\b/.test(text)) {
+    return true;
+  }
+  if (/\bwhat\s+changed\b/.test(text) && !/\bunchanged\b/.test(text)) return true;
+  if (/\bchanged\s+overnight\b/.test(text)) return true;
+  if (/\bmarket\s+changes?\b/.test(text)) return true;
+  if (/\bwhat\s+shifted(?:\s+overnight)?\b/.test(text)) return true;
+  // Bare "movement(s)" / "shift(s)" only when not a table/canary desk update.
+  if (
+    (/\bmovements?\b/.test(text) || /\bshifts?\b/.test(text)) &&
+    !/\b(?:fillable|verification\s+table|canary|prospect_id|website_status)\b/.test(
+      text
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function answerForIntent({ intent, context, evidence, focus, question }) {
@@ -557,4 +588,5 @@ function buildRecommendedActions(context, intent) {
 module.exports = {
   composeResponse,
   classifyIntent,
+  isExplicitOvernightChangesIntent,
 };

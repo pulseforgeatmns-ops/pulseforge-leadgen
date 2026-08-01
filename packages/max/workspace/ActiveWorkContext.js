@@ -504,7 +504,18 @@ function isFillableTableUpdateRequest(text, activeWorkContext = null) {
  * @returns {{ updates: Array<{ prospectId: string, fields: Record<string, string> }>, referencedIds: string[] }}
  */
 function parseFillableTableFieldUpdates(text) {
-  const lines = String(text || '').split(/\r?\n/);
+  const raw = String(text || '');
+  // Split prose sentences so inline updates like
+  // "Update the table. For PM-001 only, set website_status: verified. Leave…"
+  // are parsed the same as multiline instructions.
+  const lines = raw.split(/\r?\n/).flatMap((line) =>
+    String(line || '')
+      .split(
+        /(?<=[.!?])\s+(?=(?:For|Leave|Return|Update|Keep|Do\s+not|Preparation)\b)/i
+      )
+      .map((part) => part.trim())
+      .filter(Boolean)
+  );
   const columnSet = new Set(FILLABLE_TABLE_MUTABLE_FIELDS);
   /** @type {Map<string, Record<string, string>>} */
   const updatesById = new Map();
@@ -520,9 +531,51 @@ function parseFillableTableFieldUpdates(text) {
     referencedIds.push(String(id));
   };
 
+  const applyFields = (prospectId, fieldText) => {
+    if (!prospectId || fieldText == null) return;
+    rememberRef(prospectId);
+    if (!updatesById.has(prospectId)) updatesById.set(prospectId, {});
+    const fields = updatesById.get(prospectId);
+    const chunk = String(fieldText).trim();
+    if (!chunk) return;
+
+    // "website_status: verified, notes: still waiting"
+    const pairRe = /\b([a-z][a-z0-9_]*)\s*:\s*([^,;]+?)(?=\s*,\s*[a-z][a-z0-9_]*\s*:|\s*$)/gi;
+    let matched = false;
+    let m;
+    while ((m = pairRe.exec(chunk)) !== null) {
+      const field = m[1].toLowerCase();
+      if (!columnSet.has(field)) continue;
+      fields[field] = String(m[2] || '').trim().replace(/[.\s]+$/, '');
+      matched = true;
+    }
+    if (!matched) {
+      const single = /^([a-z][a-z0-9_]*)\s*:\s*(.+)$/i.exec(chunk);
+      if (single && columnSet.has(single[1].toLowerCase())) {
+        fields[single[1].toLowerCase()] = String(single[2] || '')
+          .trim()
+          .replace(/[.\s]+$/, '');
+      }
+    }
+  };
+
   for (const line of lines) {
-    const trimmed = line.trim();
+    const trimmed = line.trim().replace(/[.\s]+$/, '');
     if (!trimmed) continue;
+
+    // Inline: "For PM-001 only, set website_status: verified"
+    // Require a real field name after set — do not treat header-only
+    // "For PM-001 only, set:" as an inline mutation (that clears currentId).
+    const forOnlyInline =
+      /^for\s+([A-Za-z0-9_-]+)\s+only\b[,:]?\s*set\s*:?\s*([a-z][a-z0-9_]*\s*:.*)$/i.exec(
+        trimmed
+      );
+    if (forOnlyInline) {
+      currentId = forOnlyInline[1];
+      applyFields(currentId, forOnlyInline[2]);
+      currentId = null;
+      continue;
+    }
 
     const forOnly =
       /^for\s+([A-Za-z0-9_-]+)\s+only\b[,:]?\s*(?:set\s*:?)?$/i.exec(trimmed) ||
@@ -562,9 +615,21 @@ function parseFillableTableFieldUpdates(text) {
       const field = fieldMatch[1].toLowerCase();
       if (columnSet.has(field)) {
         if (!updatesById.has(currentId)) updatesById.set(currentId, {});
-        updatesById.get(currentId)[field] = String(fieldMatch[2] || '').trim();
+        updatesById.get(currentId)[field] = String(fieldMatch[2] || '')
+          .trim()
+          .replace(/[.\s]+$/, '');
       }
       continue;
+    }
+  }
+
+  // Whole-text safety net for prose that did not split cleanly.
+  if (updatesById.size === 0) {
+    const inlineRe =
+      /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]?\s*set\s*:?\s*([a-z][a-z0-9_]*)\s*:\s*([^.;\n]+)/gi;
+    let inlineMatch;
+    while ((inlineMatch = inlineRe.exec(raw)) !== null) {
+      applyFields(inlineMatch[1], `${inlineMatch[2]}: ${inlineMatch[3]}`);
     }
   }
 

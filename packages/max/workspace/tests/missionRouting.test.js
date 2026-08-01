@@ -1416,6 +1416,111 @@ describe('Active work context continuation before domain routing', () => {
     assert.equal(result.mission.title, 'Campaign 001');
     assert.match(result.prose || result.structured.answer || '', /Mission created/i);
   });
+
+  it('stale overnight recommendation must not override active canary table update', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    await workspace.ask({
+      sessionId: first.sessionId,
+      question: CONTINUATION_PROMPT,
+    });
+
+    const session = workspace._sessions.get(first.sessionId);
+    session.executionDomain = 'workspace';
+    assert.ok(session.activeWorkContext);
+    assert.equal(session.activeWorkContext.lastOutputType, 'fillable_table');
+    assert.equal(session.activeWorkContext.entities.length, 3);
+
+    const beforeRows = (session.activeWorkContext.tableRows || []).map((r) => ({
+      ...r,
+    }));
+    const beforePm002 = { ...beforeRows.find((r) => r.prospect_id === 'PM-002') };
+    const beforePm003 = { ...beforeRows.find((r) => r.prospect_id === 'PM-003') };
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: [
+        'Update the fillable verification table.',
+        'For PM-001 only, set website_status: verified.',
+        'Leave PM-002 and PM-003 unchanged.',
+        'Return only the updated table plus one short preparation-only safety line.',
+      ].join(' '),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+        briefing: {
+          headline: 'Quiet morning',
+          summary: 'No major movement overnight.',
+          recommendations: [
+            {
+              id: 'rec:overnight',
+              title: 'What changed overnight?',
+            },
+          ],
+        },
+        recommendationId: 'rec:overnight',
+        selectedEntity: {
+          id: 'rec:overnight',
+          type: 'recommendation',
+          name: 'What changed overnight?',
+        },
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const awc = workspace._sessions.get(result.sessionId).activeWorkContext;
+    const rows = awc.tableRows || [];
+    const pm001 = rows.find((r) => r.prospect_id === 'PM-001');
+    const pm002 = rows.find((r) => r.prospect_id === 'PM-002');
+    const pm003 = rows.find((r) => r.prospect_id === 'PM-003');
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.executionDomain, 'workspace');
+    assert.equal(result.mission, null);
+    assert.equal(result.domainSwitch, null);
+    assert.equal(result.contextSwitch, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+
+    assert.doesNotMatch(answer, /Switching from .* to General Conversation/i);
+    assert.doesNotMatch(answer, /Overnight change counts are not available/i);
+    assert.doesNotMatch(answer, /We're now looking at What changed overnight/i);
+    assert.doesNotMatch(answer, /Market Intelligence/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /Policy evaluation is not available/i);
+
+    assert.equal(result.structured.metadata.tableUpdate, true);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(result.structured.metadata.fillableTable, true);
+    assert.equal(result.structured.metadata.activeWorkContextReused, true);
+    assert.ok(
+      (result.structured.metadata.updatedProspectIds || []).some(
+        (id) => String(id).toUpperCase() === 'PM-001'
+      )
+    );
+
+    assert.equal(pm001.website_status, 'verified');
+    assert.deepEqual(pm002, beforePm002);
+    assert.deepEqual(pm003, beforePm003);
+    assert.match(answer, /\| prospect_id \|/);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /PM-002/);
+    assert.match(answer, /PM-003/);
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {
