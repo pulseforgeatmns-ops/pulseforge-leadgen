@@ -99,6 +99,9 @@ function buildResponseMetadata(partial = {}) {
   if (partial.activeWorkContextReused === true) {
     meta.activeWorkContextReused = true;
   }
+  if (partial.strictOutputShape === true) {
+    meta.strictOutputShape = true;
+  }
   if (partial.prospectCount != null && Number.isFinite(Number(partial.prospectCount))) {
     meta.prospectCount = Number(partial.prospectCount);
   }
