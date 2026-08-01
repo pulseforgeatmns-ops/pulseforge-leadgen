@@ -187,6 +187,22 @@ function derivePendingFields(prospects) {
 }
 
 /**
+ * Operator is asking to reuse desk prospects ("same 3 prospects already listed"),
+ * not paste a new list.
+ * @param {string} text
+ */
+function isActiveWorkReuseProspectCue(text) {
+  const lower = String(text || '').toLowerCase();
+  if (!lower.trim()) return false;
+  return (
+    /\buse\s+the\s+same\s+(?:\d+\s+)?prospects?\b/.test(lower) ||
+    /\b(?:the\s+)?same\s+(?:\d+\s+)?prospects?\b/.test(lower) ||
+    /\bprospects?\s+already\s+listed\b/.test(lower) ||
+    /\balready\s+listed\b/.test(lower)
+  );
+}
+
+/**
  * Follow-up cues that should reuse activeWorkContext when no new paste is given.
  * @param {string} text
  */
@@ -194,15 +210,16 @@ function isActiveWorkFollowUpCue(text) {
   const lower = String(text || '').toLowerCase();
   if (!lower.trim()) return false;
 
+  if (isActiveWorkReuseProspectCue(lower)) return true;
+  if (isFillableTableRequest(lower)) return true;
+
   const cues = [
     /\bcontinue\b/,
     /\bconvert\s+this\b/,
+    /\bconvert\s+the\s+(?:current\s+)?(?:campaign\s+\d+\s+)?(?:preparation[-\s]*only\s+)?canary\b/,
     /\bconvert\s+the\s+(?:verification\s+)?work\s+order\b/,
     /\bmake\s+it\s+a\s+table\b/,
-    /\bfillable\s+table\b/,
     /\bupdate\s+(?:the\s+)?(?:fillable\s+)?(?:verification\s+)?table\b/,
-    /\buse\s+the\s+same\s+prospects\b/,
-    /\bsame\s+prospects\b/,
     /\bkeep\s+the\s+same\s+(?:preparation[-\s]*only\s+)?constraints\b/,
     /\bkeep\s+the\s+same\s+constraints\b/,
     /\bturn\s+this\s+into\b/,
@@ -211,7 +228,6 @@ function isActiveWorkFollowUpCue(text) {
     /\bmake\s+it\s+more\s+concise\b/,
     /\bnext\s+step\b/,
     /\bwhat\s+should\s+i\s+do\s+first\b/,
-    /\bconvert\b.+\b(?:into|to)\s+a\s+(?:fillable\s+)?table\b/,
   ];
   return cues.some((re) => re.test(lower));
 }
@@ -288,13 +304,15 @@ function isFillableTableRequest(text) {
   // fillable-table create/regenerate request.
   if (isFillableTableUpdateRequest(text)) return false;
   return (
-    /\bfillable\s+table\b/.test(lower) ||
-    /\bmake\s+it\s+a\s+table\b/.test(lower) ||
-    /\bconvert\b.+\b(?:into|to)\s+a\s+(?:fillable\s+)?table\b/.test(lower) ||
-    /\bconvert\s+the\s+(?:verification\s+)?work\s+order\s+into\s+a\s+(?:fillable\s+)?table\b/.test(
+    /\bfillable\s+(?:verification\s+)?table\b/.test(lower) ||
+    /\bmake\s+it\s+a\s+(?:fillable\s+)?(?:verification\s+)?table\b/.test(lower) ||
+    /\bconvert\b[\s\S]{0,160}\b(?:into|to)\s+a\s+(?:fillable\s+)?(?:verification\s+)?table\b/.test(
       lower
     ) ||
-    /\bturn\s+(?:this|it|the\s+(?:verification\s+)?work\s+order)\s+into\s+a\s+(?:fillable\s+)?table\b/.test(
+    /\bconvert\s+the\s+(?:verification\s+)?work\s+order\s+into\s+a\s+(?:fillable\s+)?(?:verification\s+)?table\b/.test(
+      lower
+    ) ||
+    /\bturn\s+(?:this|it|the\s+(?:current\s+)?(?:preparation[-\s]*only\s+)?canary|the\s+(?:verification\s+)?work\s+order)\s+into\s+a\s+(?:fillable\s+)?(?:verification\s+)?table\b/.test(
       lower
     )
   );
@@ -602,6 +620,7 @@ module.exports = {
   prospectToEntity,
   entitiesToProspects,
   derivePendingFields,
+  isActiveWorkReuseProspectCue,
   isActiveWorkFollowUpCue,
   isActiveWorkTransformCue,
   isExplicitNewMissionRequest,
