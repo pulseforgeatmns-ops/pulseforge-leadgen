@@ -99,6 +99,12 @@ function buildResponseMetadata(partial = {}) {
   if (partial.activeWorkContextReused === true) {
     meta.activeWorkContextReused = true;
   }
+  if (partial.missingActiveWorkContext === true) {
+    meta.missingActiveWorkContext = true;
+  }
+  if (partial.requestedProspectId != null) {
+    meta.requestedProspectId = String(partial.requestedProspectId);
+  }
   if (partial.strictOutputShape === true) {
     meta.strictOutputShape = true;
   }

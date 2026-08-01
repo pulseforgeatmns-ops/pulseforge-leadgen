@@ -622,10 +622,11 @@ async function maybeHandleActiveWorkContinuation(input) {
   const isFillable = isFillableTableRequest(question);
   const isTransform = isActiveWorkTransformCue(question);
   const isExec = isExplicitExecutionRequest(question);
+  const isTableUpdateRequest = isFillableTableUpdateRequest(question, prior);
   const isTableUpdate =
     hasEntities &&
     activeContextHasFillableTable(prior) &&
-    isFillableTableUpdateRequest(question, prior);
+    isTableUpdateRequest;
 
   // Fillable table field mutation — before prospect extraction, artifact
   // injection, domain routing, or mission routing.
@@ -635,6 +636,19 @@ async function maybeHandleActiveWorkContinuation(input) {
       session,
       prior,
     });
+  }
+
+  // Explicit table-update intent without desk table — ask for the current
+  // table / prospects. Never fall through to General Conversation, briefing,
+  // or market-intelligence fallback.
+  if (
+    isTableUpdateRequest &&
+    (!hasEntities || !activeContextHasFillableTable(prior))
+  ) {
+    return {
+      reason: 'active_work_context_missing_for_table_update',
+      structured: buildMissingFillableTableUpdateResponse({ question }),
+    };
   }
 
   // Mail/launch while desk constraints forbid execution — still early, so we
@@ -711,7 +725,10 @@ async function maybeHandleActiveWorkContinuation(input) {
   // Strong transform cue without desk context — ask for prospects instead of
   // falling through to General Conversation / policy unavailable.
   if (!hasEntities && isTransform) {
-    if (isFillable || /\bconvert\s+the\s+(?:verification\s+)?work\s+order\b/i.test(question)) {
+    if (
+      isFillable ||
+      /\bconvert\s+the\s+(?:verification\s+)?work\s+order\b/i.test(question)
+    ) {
       return {
         reason: 'active_work_context_missing_for_transform',
         structured: buildStructuredResponse({
@@ -846,6 +863,57 @@ function handleFillableTableUpdateContinuation(input) {
     reason: 'active_work_context_fillable_table_update',
     structured,
   };
+}
+
+/**
+ * Explicit fillable-table update when session desk context is missing
+ * (e.g. after refresh). Ask for the table or prospects — never brief /
+ * market-intelligence / General Conversation fallback.
+ * @param {{ question: string }} input
+ */
+function buildMissingFillableTableUpdateResponse(input) {
+  const question = String(input.question || '');
+  const parsed = parseFillableTableFieldUpdates(question);
+  const forOnly = /\bfor\s+([A-Za-z0-9_-]+)\s+only\b/i.exec(question);
+  const targetId =
+    (parsed.updates[0] && parsed.updates[0].prospectId) ||
+    (forOnly && forOnly[1]) ||
+    null;
+  const targetLabel = targetId ? ` the ${targetId} update` : ' that update';
+
+  return buildStructuredResponse({
+    answer: [
+      'I can update that, but I don’t have the current fillable table in this session.',
+      `Paste the table, or paste the 3 Campaign 001 prospects, and I’ll apply${targetLabel}.`,
+      'Preparation-only: no mission created; no launch, approval, print, or mail.',
+    ].join(' '),
+    reasoning: [
+      'Operator issued an explicit fillable verification table update, but activeWorkContext is missing.',
+      'Clarifying for the current table or prospects instead of falling through to briefing / General Conversation.',
+      'Preparation-only constraints preserved — no mission create/resume.',
+    ],
+    supportingEvidence: [],
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: [
+      'Paste the current fillable verification table (markdown rows with prospect_id).',
+      'Or paste the 3 Campaign 001 prospects (company, contact, website, mailing address, phone).',
+    ],
+    recommendedActions: [],
+    metadata: {
+      sourcesUsed: {},
+      evidenceCount: 0,
+      unavailable: ['active_work_context_fillable_table'],
+      surface: 'workspace',
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      route: 'intelligence',
+      canaryPreparationOnly: true,
+      fillableTable: true,
+      tableUpdate: true,
+      missingActiveWorkContext: true,
+      ...(targetId ? { requestedProspectId: targetId } : {}),
+    },
+  });
 }
 
 /**

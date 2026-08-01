@@ -1521,6 +1521,76 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /PM-002/);
     assert.match(answer, /PM-003/);
   });
+
+  it('missing activeWorkContext table update asks for table — not briefing fallback', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question: [
+        'Update the fillable verification table for PM-001 only:',
+        'website_status = verified, website_value = https://www.gamacheproperties.com.',
+        'Leave PM-002 and PM-003 unchanged.',
+        'Return only the updated table plus one short preparation-only safety line.',
+      ].join(' '),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+        briefing: {
+          headline: 'Quiet morning',
+          summary: 'No major movement overnight.',
+          marketChanges: 0,
+          watchAlertCount: 0,
+        },
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const session = workspace._sessions.get(result.sessionId);
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.executionDomain, 'workspace');
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(session.activeWorkContext, null);
+    assert.equal(result.structured.metadata.tableUpdate, true);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(result.structured.metadata.fillableTable, true);
+    assert.equal(result.structured.metadata.missingActiveWorkContext, true);
+    assert.equal(result.structured.metadata.route, 'intelligence');
+    assert.equal(
+      result.structured.metadata.executionDomain,
+      'workspace'
+    );
+
+    assert.match(
+      answer,
+      /I can update that, but I don.?t have the current fillable table in this session/i
+    );
+    assert.match(answer, /Paste the table|paste the 3 Campaign 001 prospects/i);
+    assert.match(answer, /PM-001/);
+    assert.match(
+      answer,
+      /Preparation-only:\s*no mission created;\s*no launch, approval, print, or mail/i
+    );
+
+    assert.doesNotMatch(answer, /Switching from .* to General Conversation/i);
+    assert.doesNotMatch(
+      answer,
+      /No monitored companies or historical market snapshots/i
+    );
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /Overnight change counts are not available/i);
+    assert.doesNotMatch(answer, /Market Intelligence/i);
+    assert.doesNotMatch(answer, /Policy evaluation is not available/i);
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {

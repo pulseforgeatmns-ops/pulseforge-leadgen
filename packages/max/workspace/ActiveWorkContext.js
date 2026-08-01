@@ -241,6 +241,7 @@ function isActiveWorkTransformCue(text) {
   const lower = String(text || '').toLowerCase();
   return (
     isFillableTableRequest(lower) ||
+    isFillableTableUpdateRequest(text) ||
     /\bconvert\s+the\s+(?:verification\s+)?work\s+order\b/.test(lower) ||
     /\bverification\s+work\s+order\b/.test(lower)
   );
@@ -466,8 +467,14 @@ function isFillableTableUpdateRequest(text, activeWorkContext = null) {
     /\bfor\s+\S+\s+only\b[,:]?\s*(?:set\b)?/i.test(raw);
   const leaveUnchanged = /\bleave\b[\s\S]{0,80}\bunchanged\b/i.test(raw);
   const fieldCue = FILLABLE_TABLE_MUTABLE_FIELDS.some((field) =>
-    new RegExp(`\\b${field}\\b`, 'i').test(raw)
+    new RegExp(`\\b${escapeRegExp(field)}\\b`, 'i').test(raw)
   );
+  // Explicit assignment syntax: website_status = verified OR website_status: verified
+  const fieldAssignmentCue = FILLABLE_TABLE_MUTABLE_FIELDS.some((field) =>
+    new RegExp(`\\b${escapeRegExp(field)}\\s*[=:]\\s*\\S`, 'i').test(raw)
+  );
+  const strictShapeCue = wantsStrictFillableTableOutputShape(raw);
+  const prospectOnlyCue = /\bfor\s+[A-Za-z0-9_-]+\s+only\b/i.test(raw);
 
   const knownIds = knownActiveWorkProspectIds(activeWorkContext);
   const knownIdCue =
@@ -476,9 +483,18 @@ function isFillableTableUpdateRequest(text, activeWorkContext = null) {
       new RegExp(`\\b${escapeRegExp(id)}\\b`, 'i').test(raw)
     );
 
-  // Strong explicit update phrasing — even before tableRows are required
-  // by the caller (caller still gates on active fillable table context).
-  if (updateCue && (setCue || leaveUnchanged || fieldCue || knownIdCue)) {
+  // Strong explicit update phrasing — even when desk context is missing
+  // (caller must clarify rather than fall through to briefing / General).
+  if (
+    updateCue &&
+    (setCue ||
+      leaveUnchanged ||
+      fieldCue ||
+      fieldAssignmentCue ||
+      knownIdCue ||
+      prospectOnlyCue ||
+      strictShapeCue)
+  ) {
     return true;
   }
   if (updateCue && /\bfillable\b/.test(lower)) return true;
@@ -488,13 +504,50 @@ function isFillableTableUpdateRequest(text, activeWorkContext = null) {
   if (
     activeContextHasFillableTable(activeWorkContext) &&
     knownIdCue &&
-    fieldCue &&
+    (fieldCue || fieldAssignmentCue) &&
     (setCue || leaveUnchanged || updateCue || /\bset\b/.test(lower))
   ) {
     return true;
   }
 
   return false;
+}
+
+/**
+ * Parse "For PM-001 only, set website_status: verified" or
+ * "For PM-001 only: website_status = verified" as an inline assignment.
+ * Returns null for header-only lines like "For PM-001 only, set:".
+ * @param {string} trimmed
+ * @returns {{ prospectId: string, fieldText: string }|null}
+ */
+function matchForOnlyInlineFieldAssignment(trimmed) {
+  const text = String(trimmed || '');
+  if (!text) return null;
+  const columnSet = new Set(FILLABLE_TABLE_MUTABLE_FIELDS);
+
+  const withSet =
+    /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]?\s*set\s*:?\s*([a-z][a-z0-9_]*)\s*[:=]\s*(.+)$/i.exec(
+      text
+    );
+  if (withSet && columnSet.has(withSet[2].toLowerCase())) {
+    return {
+      prospectId: withSet[1],
+      fieldText: `${withSet[2]}=${withSet[3]}`,
+    };
+  }
+
+  const withoutSet =
+    /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]\s*([a-z][a-z0-9_]*)\s*[:=]\s*(.+)$/i.exec(
+      text
+    );
+  if (withoutSet && columnSet.has(withoutSet[2].toLowerCase())) {
+    return {
+      prospectId: withoutSet[1],
+      fieldText: `${withoutSet[2]}=${withoutSet[3]}`,
+    };
+  }
+
+  return null;
 }
 
 /**
@@ -539,8 +592,9 @@ function parseFillableTableFieldUpdates(text) {
     const chunk = String(fieldText).trim();
     if (!chunk) return;
 
-    // "website_status: verified, notes: still waiting"
-    const pairRe = /\b([a-z][a-z0-9_]*)\s*:\s*([^,;]+?)(?=\s*,\s*[a-z][a-z0-9_]*\s*:|\s*$)/gi;
+    // "website_status: verified" or "website_status = verified"
+    const pairRe =
+      /\b([a-z][a-z0-9_]*)\s*[:=]\s*([^,;]+?)(?=\s*,\s*[a-z][a-z0-9_]*\s*[:=]|\s*$)/gi;
     let matched = false;
     let m;
     while ((m = pairRe.exec(chunk)) !== null) {
@@ -550,7 +604,7 @@ function parseFillableTableFieldUpdates(text) {
       matched = true;
     }
     if (!matched) {
-      const single = /^([a-z][a-z0-9_]*)\s*:\s*(.+)$/i.exec(chunk);
+      const single = /^([a-z][a-z0-9_]*)\s*[:=]\s*(.+)$/i.exec(chunk);
       if (single && columnSet.has(single[1].toLowerCase())) {
         fields[single[1].toLowerCase()] = String(single[2] || '')
           .trim()
@@ -564,15 +618,13 @@ function parseFillableTableFieldUpdates(text) {
     if (!trimmed) continue;
 
     // Inline: "For PM-001 only, set website_status: verified"
-    // Require a real field name after set — do not treat header-only
+    // Also: "For PM-001 only: website_status = verified"
+    // Require a known mutable field + value — never treat header-only
     // "For PM-001 only, set:" as an inline mutation (that clears currentId).
-    const forOnlyInline =
-      /^for\s+([A-Za-z0-9_-]+)\s+only\b[,:]?\s*set\s*:?\s*([a-z][a-z0-9_]*\s*:.*)$/i.exec(
-        trimmed
-      );
+    const forOnlyInline = matchForOnlyInlineFieldAssignment(trimmed);
     if (forOnlyInline) {
-      currentId = forOnlyInline[1];
-      applyFields(currentId, forOnlyInline[2]);
+      currentId = forOnlyInline.prospectId;
+      applyFields(currentId, forOnlyInline.fieldText);
       currentId = null;
       continue;
     }
@@ -602,6 +654,11 @@ function parseFillableTableFieldUpdates(text) {
       if (/^leave\b/i.test(trimmed)) {
         for (const id of leaveIds) rememberRef(id);
       }
+      // Embedded "… for PM-001 only: field = value" inside an Update line.
+      const embeddedFor = matchForOnlyInlineFieldAssignment(trimmed);
+      if (embeddedFor && /^update\s+the\b/i.test(trimmed)) {
+        applyFields(embeddedFor.prospectId, embeddedFor.fieldText);
+      }
       currentId = null;
       continue;
     }
@@ -610,7 +667,7 @@ function parseFillableTableFieldUpdates(text) {
       continue;
     }
 
-    const fieldMatch = /^-?\s*([a-z][a-z0-9_]*)\s*:\s*(.*)$/i.exec(trimmed);
+    const fieldMatch = /^-?\s*([a-z][a-z0-9_]*)\s*[:=]\s*(.*)$/i.exec(trimmed);
     if (fieldMatch && currentId) {
       const field = fieldMatch[1].toLowerCase();
       if (columnSet.has(field)) {
@@ -624,12 +681,26 @@ function parseFillableTableFieldUpdates(text) {
   }
 
   // Whole-text safety net for prose that did not split cleanly.
-  if (updatesById.size === 0) {
-    const inlineRe =
-      /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]?\s*set\s*:?\s*([a-z][a-z0-9_]*)\s*:\s*([^.;\n]+)/gi;
-    let inlineMatch;
-    while ((inlineMatch = inlineRe.exec(raw)) !== null) {
-      applyFields(inlineMatch[1], `${inlineMatch[2]}: ${inlineMatch[3]}`);
+  if (
+    updatesById.size === 0 ||
+    [...updatesById.values()].every((f) => Object.keys(f).length === 0)
+  ) {
+    const safetyPatterns = [
+      /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]?\s*set\s*:?\s*([a-z][a-z0-9_]*)\s*[:=]\s*([^.;\n]+)/gi,
+      /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]\s*([a-z][a-z0-9_]*)\s*[:=]\s*([^.;\n]+)/gi,
+    ];
+    for (const inlineRe of safetyPatterns) {
+      let inlineMatch;
+      while ((inlineMatch = inlineRe.exec(raw)) !== null) {
+        const field = String(inlineMatch[2] || '').toLowerCase();
+        if (!columnSet.has(field)) continue;
+        applyFields(inlineMatch[1], `${inlineMatch[2]}=${inlineMatch[3]}`);
+      }
+      if (
+        [...updatesById.values()].some((f) => Object.keys(f).length > 0)
+      ) {
+        break;
+      }
     }
   }
 
