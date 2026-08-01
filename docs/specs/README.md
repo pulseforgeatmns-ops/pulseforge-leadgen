@@ -65,6 +65,8 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-056](SPEC-056_Evidence_Driven_Capability_Planning.md) | Evidence-Driven Capability Planning | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-057](SPEC-057_Execution_Domain_Routing.md) | Execution Domain Routing | Implemented (v1 thin slice) | v1.3.0 |
 | [SPEC-058](SPEC-058_Diagnostic_Capability_Behavior.md) | Diagnostic Capability Behavior | In Progress | v1.3.0 |
+| [SPEC-060](SPEC-060_Prospect_Acquisition_Framework.md) | Prospect Acquisition Framework | Draft | — |
+| [SPEC-061](SPEC-061_Market_Intelligence_Ingestion.md) | Market Intelligence Ingestion | In Progress | v0.1 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 
