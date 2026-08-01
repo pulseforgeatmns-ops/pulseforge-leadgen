@@ -789,6 +789,122 @@ describe('Max activeWorkContext (session desk memory)', () => {
     assert.ok(awc.pendingFields.includes('phone'));
   });
 
+  it('stores activeWorkContext after generic preparation-only canary package', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const result = await workspace.ask({
+      question: [
+        'Continue Campaign 001 preparation-only canary package with:',
+        'PM-001 | Gamache Properties | Ben Gamache | Property Management | website unknown | mailing address unknown | phone unknown',
+        'PM-002 | Elm Grove Companies | David Schleyer | Property Management | website unknown | mailing address unknown | phone unknown',
+        'PM-003 | Mill City Property Management | Lauren DuPaul | Property Management | website unknown | mailing address unknown | phone unknown',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const awc = workspace._sessions.get(result.sessionId).activeWorkContext;
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.match(answer, /I found the 3 canary prospects/i);
+    assert.ok(awc, 'generic canary package must persist activeWorkContext');
+    assert.equal(awc.workflow, 'campaign_canary');
+    assert.equal(awc.target.campaignId, '001');
+    assert.equal(awc.lastOutputType, 'canary_review_package');
+    assert.equal(awc.entities.length, 3);
+    assert.equal(awc.entities[0].id, 'PM-001');
+    assert.equal(awc.entities[1].id, 'PM-002');
+    assert.equal(awc.entities[2].id, 'PM-003');
+    assert.equal(awc.entities[0].companyName, 'Gamache Properties');
+    assert.equal(awc.constraints.preparationOnly, true);
+    assert.equal(awc.constraints.noMissionCreation, true);
+    assert.equal(awc.constraints.noLaunch, true);
+    assert.equal(awc.constraints.noExecution, true);
+    assert.equal(awc.constraints.noMail, true);
+    assert.equal(awc.constraints.noPrint, true);
+    assert.ok(awc.pendingFields.includes('website'));
+    assert.ok(awc.pendingFields.includes('mailingAddress'));
+    assert.ok(awc.pendingFields.includes('phone'));
+  });
+
+  it('converts generic canary package into fillable table via same-prospects reuse', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: [
+        'Continue Campaign 001 preparation-only canary package with:',
+        'PM-001 | Gamache Properties | Ben Gamache | Property Management | website unknown | mailing address unknown | phone unknown',
+        'PM-002 | Elm Grove Companies | David Schleyer | Property Management | website unknown | mailing address unknown | phone unknown',
+        'PM-003 | Mill City Property Management | Lauren DuPaul | Property Management | website unknown | mailing address unknown | phone unknown',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    assert.ok(workspace._sessions.get(first.sessionId).activeWorkContext);
+    assert.equal(
+      workspace._sessions.get(first.sessionId).activeWorkContext.entities.length,
+      3
+    );
+
+    const before = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question:
+        'Convert the current Campaign 001 preparation-only canary into a fillable verification table. Use the same 3 prospects already listed.',
+    });
+
+    const after = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const awc = workspace._sessions.get(result.sessionId).activeWorkContext;
+    const rows = awc.tableRows || [];
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(after.length, before.length);
+    assert.doesNotMatch(answer, /could not parse them cleanly/i);
+    assert.doesNotMatch(answer, /I need 3 prospects|send me 3 prospect/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.match(answer, /Fillable verification table|fillable table/i);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /PM-002/);
+    assert.match(answer, /PM-003/);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /Elm Grove Companies/);
+    assert.match(answer, /Mill City Property Management/);
+    assert.equal(result.structured.metadata.fillableTable, true);
+    assert.equal(result.structured.metadata.activeWorkContextReused, true);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(awc.lastOutputType, 'fillable_table');
+    assert.equal(awc.entities.length, 3);
+    assert.equal(rows.length, 3);
+    assert.equal(rows[0].prospect_id, 'PM-001');
+    assert.equal(rows[1].prospect_id, 'PM-002');
+    assert.equal(rows[2].prospect_id, 'PM-003');
+    assert.equal(String(rows[0].mail_readiness).toLowerCase(), 'blocked');
+    assert.equal(String(rows[0].draft_readiness).toLowerCase(), 'allowed');
+    assert.equal(String(rows[0].execution_readiness).toLowerCase(), 'blocked');
+    assert.equal(awc.constraints.noMail, true);
+    assert.equal(awc.constraints.noLaunch, true);
+  });
+
   it('Test 2: reuses activeWorkContext for fillable table follow-up', async () => {
     const missionEngine = testMissionEngine();
     const workspace = createWorkspaceEngine({

@@ -24,6 +24,7 @@ const {
   buildCanaryActiveWorkContext,
   entitiesToProspects,
   isActiveWorkFollowUpCue,
+  isActiveWorkReuseProspectCue,
   isActiveWorkTransformCue,
   isExplicitNewMissionRequest,
   isExplicitContextOverride,
@@ -598,10 +599,11 @@ async function maybeHandleActiveWorkContinuation(input) {
 
   if (hasEntities && (isFollowUp || isFillable)) {
     // New paste overrides desk entities — fall through so canary/mission
-    // paths can parse and replace.
+    // paths can parse and replace. Reuse cues ("same 3 prospects already
+    // listed") keep desk entities even when they mention a count.
     if (
       operatorAttemptedCanaryProspectSupply(question) &&
-      !/\b(?:the\s+)?same\s+prospects\b/i.test(question) &&
+      !isActiveWorkReuseProspectCue(question) &&
       !isFillableTableUpdateRequest(question, prior)
     ) {
       const detected = detectOperatorProspectListInMessage(question);
@@ -887,9 +889,11 @@ async function maybeBuildCanaryPreparationResponse(input) {
 
   // Parser miss / incomplete paste — never create a Campaign mission.
   // Do not silently fall back to prior entities when the operator attempted a new paste.
+  // Reuse cues ("same 3 prospects already listed") with desk entities are not a paste miss.
   if (
     operatorAttemptedCanaryProspectSupply(question) &&
-    !isFillableTableUpdateRequest(question, prior)
+    !isFillableTableUpdateRequest(question, prior) &&
+    !(hasPriorCanary && isActiveWorkReuseProspectCue(question))
   ) {
     const count = intendedCount || 3;
     return {
@@ -902,7 +906,13 @@ async function maybeBuildCanaryPreparationResponse(input) {
   }
 
   // Reuse desk context when follow-up/canary continue has no new paste.
-  if (hasPriorCanary && (isFollowUp || isCanary || isFillableTableRequest(question))) {
+  if (
+    hasPriorCanary &&
+    (isFollowUp ||
+      isCanary ||
+      isFillableTableRequest(question) ||
+      isActiveWorkReuseProspectCue(question))
+  ) {
     const prospects = entitiesToProspects(prior.entities);
     const review = buildCanaryReviewPackageResponse({
       prospects,
@@ -1113,19 +1123,24 @@ function operatorAttemptedCanaryProspectSupply(question) {
   // Field-mutation instructions on an existing fillable table are not a
   // new prospect paste — even when they mention PM-001 / set: / leave unchanged.
   if (isFillableTableUpdateRequest(text)) return false;
-  if (/\buse\s+these\s+\d+\s+prospects?\b/i.test(text)) return true;
-  if (/\buse\s+the\s+same\s+\d+\s+prospects?\b/i.test(text)) return true;
-  if (/\b\d+\s+prospects?\s*:/i.test(text)) return true;
-  if (/\bPM-\d{3}\b/i.test(text)) return true;
-  if (/\d+[\.)]\s+[A-Za-z]{1,12}[-_]?\d{1,6}\b/.test(text)) return true;
-  if (hasInlineProspectList(text)) return true;
-  if (
-    /\bprospects?\b/.test(lower) &&
-    (/[—–]/.test(text) || /\s\|\s/.test(text)) &&
-    /\d+[\.)]\s+/.test(text)
-  ) {
-    return true;
+
+  const hasRowSignals =
+    hasInlineProspectList(text) ||
+    /\bPM-\d{3}\b/i.test(text) ||
+    /\d+[\.)]\s+[A-Za-z]{1,12}[-_]?\d{1,6}\b/.test(text) ||
+    (/\bprospects?\b/.test(lower) &&
+      (/[—–]/.test(text) || /\s\|\s/.test(text)) &&
+      /\d+[\.)]\s+/.test(text));
+
+  // "Use the same 3 prospects already listed" reuses desk context — only treat
+  // as a new supply attempt when actual prospect rows are also present.
+  if (isActiveWorkReuseProspectCue(text)) {
+    return hasRowSignals;
   }
+
+  if (/\buse\s+these\s+\d+\s+prospects?\b/i.test(text)) return true;
+  if (/\b\d+\s+prospects?\s*:/i.test(text)) return true;
+  if (hasRowSignals) return true;
   return false;
 }
 
