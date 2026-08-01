@@ -31,6 +31,8 @@ const {
   isExplicitExecutionRequest,
   isFillableTableRequest,
   isFillableTableUpdateRequest,
+  wantsStrictFillableTableOutputShape,
+  wantsFillableTableHeading,
   activeContextHasFillableTable,
   knownActiveWorkProspectIds,
   parseFillableTableFieldUpdates,
@@ -1619,69 +1621,95 @@ function buildCanaryFillableTableResponse(input) {
   const updatedIds = Array.isArray(input.updatedProspectIds)
     ? input.updatedProspectIds
     : [];
+  const question = String(input.question || '');
+  const strictShape = wantsStrictFillableTableOutputShape(question);
+  const includeHeading = !strictShape || wantsFillableTableHeading(question);
+  const tableMarkdown = formatFillableTableMarkdown(rows);
   const safety =
-    'Preparation-only. No mission created. No launch, execution, approval, print, or mail.';
+    strictShape
+      ? 'Preparation-only: no mission created; no launch, approval, print, or mail.'
+      : 'Preparation-only. No mission created. No launch, execution, approval, print, or mail.';
 
-  const intro = [
-    'Fillable verification table',
-    '',
-    tableUpdated
-      ? `Updated the fillable verification table${
-          updatedIds.length ? ` for ${updatedIds.join(', ')}` : ''
-        }. Other rows are unchanged.`
-      : reused
-        ? `Converted the verification work order into a fillable table for the same ${count} prospect${count === 1 ? '' : 's'} already on the desk.`
-        : `Fillable table for ${count} canary prospect${count === 1 ? '' : 's'}.`,
-    tableUpdated
-      ? 'Only operator-requested field changes were applied. No websites, phones, addresses, sources, or readiness values were invented.'
-      : 'Known identity fields are filled from active work context. Missing mail-critical values stay unknown — I will not invent websites, phones, or addresses.',
-    safety,
-  ].join('\n');
+  let answer;
+  if (strictShape) {
+    const parts = [];
+    if (includeHeading) {
+      parts.push('Fillable verification table', '');
+    }
+    parts.push(tableMarkdown, '', safety);
+    answer = parts.join('\n');
+  } else {
+    const intro = [
+      'Fillable verification table',
+      '',
+      tableUpdated
+        ? `Updated the fillable verification table${
+            updatedIds.length ? ` for ${updatedIds.join(', ')}` : ''
+          }. Other rows are unchanged.`
+        : reused
+          ? `Converted the verification work order into a fillable table for the same ${count} prospect${count === 1 ? '' : 's'} already on the desk.`
+          : `Fillable table for ${count} canary prospect${count === 1 ? '' : 's'}.`,
+      tableUpdated
+        ? 'Only operator-requested field changes were applied. No websites, phones, addresses, sources, or readiness values were invented.'
+        : 'Known identity fields are filled from active work context. Missing mail-critical values stay unknown — I will not invent websites, phones, or addresses.',
+      safety,
+    ].join('\n');
 
-  const closing =
-    'Fill website_value, mailing_address_value, and phone_value from trusted sources before any print/mail step. Constraints stay no-launch / no-mail until you explicitly approve after readiness is complete.';
+    const closing =
+      'Fill website_value, mailing_address_value, and phone_value from trusted sources before any print/mail step. Constraints stay no-launch / no-mail until you explicitly approve after readiness is complete.';
+
+    answer = [intro, '', tableMarkdown, '', closing].join('\n');
+  }
 
   return buildStructuredResponse({
-    answer: [intro, '', formatFillableTableMarkdown(rows), '', closing].join(
-      '\n'
-    ),
-    reasoning: [
-      tableUpdated
-        ? 'Applied fillable verification table field mutations from activeWorkContext before prospect extraction or mission routing.'
-        : reused
-          ? 'Early activeWorkContext continuation reused desk entities before domain routing.'
-          : 'Operator requested a fillable verification table for canary prospects.',
-      tableUpdated
-        ? 'Preserved existing table shape/columns and left non-targeted rows unchanged.'
-        : 'Table preserves known identity fields only; mail-critical fields left unknown for verification.',
-      'No mission create/resume. No launch, mail, print, or approval inferred from desk context.',
-      tableUpdated
-        ? 'Handled as a table mutation before domain routing.'
-        : 'Handled via early active-work continuation before domain routing.',
-    ],
-    supportingEvidence: rows.map((row, i) => ({
-      id: `canary-prospect:${row.prospect_id || i}`,
-      summary: `${row.company_name}: fillable table row — mail ${row.mail_readiness}`,
-      sourceType: 'operator',
-      confidence: null,
-    })),
+    answer,
+    reasoning: strictShape
+      ? []
+      : [
+          tableUpdated
+            ? 'Applied fillable verification table field mutations from activeWorkContext before prospect extraction or mission routing.'
+            : reused
+              ? 'Early activeWorkContext continuation reused desk entities before domain routing.'
+              : 'Operator requested a fillable verification table for canary prospects.',
+          tableUpdated
+            ? 'Preserved existing table shape/columns and left non-targeted rows unchanged.'
+            : 'Table preserves known identity fields only; mail-critical fields left unknown for verification.',
+          'No mission create/resume. No launch, mail, print, or approval inferred from desk context.',
+          tableUpdated
+            ? 'Handled as a table mutation before domain routing.'
+            : 'Handled via early active-work continuation before domain routing.',
+        ],
+    supportingEvidence: strictShape
+      ? []
+      : rows.map((row, i) => ({
+          id: `canary-prospect:${row.prospect_id || i}`,
+          summary: `${row.company_name}: fillable table row — mail ${row.mail_readiness}`,
+          sourceType: 'operator',
+          confidence: null,
+        })),
     contradictingEvidence: [],
     confidence: null,
-    nextInvestigations: [
-      'Fill website_value, mailing_address_value, and phone_value for each row from a trusted source.',
-    ],
-    recommendedActions: [
-      'Verify mailing address first for every row, then website and phone.',
-    ],
+    nextInvestigations: strictShape
+      ? []
+      : [
+          'Fill website_value, mailing_address_value, and phone_value for each row from a trusted source.',
+        ],
+    recommendedActions: strictShape
+      ? []
+      : [
+          'Verify mailing address first for every row, then website and phone.',
+        ],
     metadata: {
       sourcesUsed: {
         operatorProspectList: !reused && !tableUpdated,
         activeWorkContext: reused || tableUpdated,
       },
-      evidenceCount: rows.length,
-      unavailable: collectMissingFieldKinds(
-        prospects.map((p) => assessCanaryProspectReadiness(p))
-      ),
+      evidenceCount: strictShape ? 0 : rows.length,
+      unavailable: strictShape
+        ? []
+        : collectMissingFieldKinds(
+            prospects.map((p) => assessCanaryProspectReadiness(p))
+          ),
       surface: 'workspace',
       executionDomain: EXECUTION_DOMAINS.WORKSPACE,
       route: 'intelligence',
@@ -1693,6 +1721,7 @@ function buildCanaryFillableTableResponse(input) {
       activeWorkContextReused: reused || tableUpdated,
       tableUpdate: tableUpdated || undefined,
       updatedProspectIds: tableUpdated ? updatedIds : undefined,
+      strictOutputShape: strictShape || undefined,
     },
   });
 }

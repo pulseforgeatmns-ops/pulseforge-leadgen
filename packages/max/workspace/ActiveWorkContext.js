@@ -380,6 +380,68 @@ function knownActiveWorkProspectIds(ctx) {
 }
 
 /**
+ * Operator asked for a strict fillable-table output shape:
+ * table (+ optional short safety line), no heading/explanation/reasoning/next.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function wantsStrictFillableTableOutputShape(text) {
+  const lower = String(text || '').toLowerCase();
+  if (!lower.trim()) return false;
+
+  const onlyTable =
+    /\breturn\s+only\s+(?:the\s+)?(?:updated\s+)?table\b/.test(lower) ||
+    /\bonly\s+(?:the\s+)?(?:updated\s+)?table\b/.test(lower) ||
+    /\bjust\s+(?:the\s+)?(?:updated\s+)?table\b/.test(lower) ||
+    /\btable\s+only\b/.test(lower);
+
+  const tablePlusSafety =
+    /\b(?:updated\s+)?table\s+plus\s+(?:one\s+)?(?:short\s+)?(?:preparation[-\s]*only\s+)?safety\s+line\b/.test(
+      lower
+    ) ||
+    /\bonly\s+(?:the\s+)?(?:updated\s+)?table\s+plus\s+(?:one\s+)?(?:short\s+)?/.test(
+      lower
+    ) ||
+    /\breturn\s+only\s+(?:the\s+)?(?:updated\s+)?table\s+plus\b/.test(lower);
+
+  const noReasoning =
+    /\bno\s+reasoning\b/.test(lower) ||
+    /\bwithout\s+reasoning\b/.test(lower) ||
+    /\bdo\s+not\s+include\s+reasoning\b/.test(lower);
+
+  const noExplanation =
+    /\bno\s+explanation\b/.test(lower) ||
+    /\bwithout\s+explanation\b/.test(lower) ||
+    /\bno\s+explanatory\b/.test(lower) ||
+    /\bdo\s+not\s+explain\b/.test(lower);
+
+  const noNext =
+    /\bno\s+next\s+steps?\b/.test(lower) ||
+    /\bdo\s+not\s+include\s+next\s+steps?\b/.test(lower) ||
+    /\bno\s+next\s+action\b/.test(lower) ||
+    /\bwithout\s+next\s+steps?\b/.test(lower);
+
+  return (
+    onlyTable || tablePlusSafety || noReasoning || noExplanation || noNext
+  );
+}
+
+/**
+ * Operator explicitly asked for a heading on the fillable table response.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function wantsFillableTableHeading(text) {
+  const lower = String(text || '').toLowerCase();
+  return (
+    /\binclude\s+(?:a\s+)?heading\b/.test(lower) ||
+    /\bwith\s+(?:a\s+)?heading\b/.test(lower) ||
+    /\bkeep\s+(?:the\s+)?heading\b/.test(lower) ||
+    /\badd\s+(?:a\s+)?heading\b/.test(lower)
+  );
+}
+
+/**
  * Operator is mutating fields on an existing fillable verification table.
  * Must be detected before prospect extraction / artifact injection.
  * @param {string} text
@@ -478,6 +540,7 @@ function parseFillableTableFieldUpdates(text) {
       /^keep\s+this\b/i.test(trimmed) ||
       /^do\s+not\b/i.test(trimmed) ||
       /^update\s+the\b/i.test(trimmed) ||
+      /^return\b/i.test(trimmed) ||
       /^preparation[-\s]*only\b/i.test(trimmed)
     ) {
       // Capture ids in "Leave PM-002 and PM-003 unchanged" without treating
@@ -628,6 +691,8 @@ module.exports = {
   isExplicitExecutionRequest,
   isFillableTableRequest,
   isFillableTableUpdateRequest,
+  wantsStrictFillableTableOutputShape,
+  wantsFillableTableHeading,
   activeContextHasFillableTable,
   knownActiveWorkProspectIds,
   parseFillableTableFieldUpdates,

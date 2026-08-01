@@ -34,6 +34,21 @@ class PresentationEngine {
     let prose;
     let presentation = 'fallback';
 
+    // Strict output-shape: answer is already the operator artifact — do not
+    // append Reasoning / Unavailable / Next, and do not rephrase via Claude.
+    if (metadata.strictOutputShape === true) {
+      prose = formatDeterministicProse(structured);
+      return {
+        prose,
+        structured,
+        metadata: {
+          ...metadata,
+          presentation: 'strict_output_shape',
+        },
+        presentation: 'strict_output_shape',
+      };
+    }
+
     if (!this._disableLlm && this._anthropic && process.env.ANTHROPIC_API_KEY) {
       try {
         prose = await this._presentWithClaude(structured);
@@ -100,6 +115,13 @@ Rules:
  * @param {object} structured
  */
 function formatDeterministicProse(structured) {
+  const metadata = (structured && structured.metadata) || {};
+  const strictShape = metadata.strictOutputShape === true;
+
+  if (strictShape) {
+    return structured.answer ? String(structured.answer).trim() : '';
+  }
+
   const lines = [];
   if (structured.answer) {
     lines.push(String(structured.answer));
@@ -111,10 +133,9 @@ function formatDeterministicProse(structured) {
       lines.push(`• ${bullet}`);
     }
   }
-  const unavailable =
-    structured.metadata && Array.isArray(structured.metadata.unavailable)
-      ? structured.metadata.unavailable
-      : [];
+  const unavailable = Array.isArray(metadata.unavailable)
+    ? metadata.unavailable
+    : [];
   if (unavailable.length) {
     lines.push('');
     lines.push(

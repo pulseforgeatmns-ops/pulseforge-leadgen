@@ -334,6 +334,24 @@ describe('PresentationEngine', () => {
     assert.match(prose, /Unavailable/);
     assert.match(prose, /supporting_evidence/);
   });
+
+  it('formatDeterministicProse honors strictOutputShape', () => {
+    const prose = formatDeterministicProse({
+      answer: '| a | b |\n| --- | --- |\n| 1 | 2 |\n\nPreparation-only: no mission created; no launch, approval, print, or mail.',
+      reasoning: ['Should be suppressed.'],
+      metadata: {
+        strictOutputShape: true,
+        unavailable: ['mailing_address'],
+      },
+      nextInvestigations: ['Should not appear.'],
+    });
+    assert.match(prose, /\| a \| b \|/);
+    assert.match(prose, /Preparation-only/);
+    assert.doesNotMatch(prose, /Reasoning/);
+    assert.doesNotMatch(prose, /Unavailable/);
+    assert.doesNotMatch(prose, /Next:/);
+    assert.doesNotMatch(prose, /Should be suppressed/);
+  });
 });
 
 describe('WorkspaceEngine', () => {

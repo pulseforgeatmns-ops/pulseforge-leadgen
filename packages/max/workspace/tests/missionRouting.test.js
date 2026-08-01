@@ -1139,6 +1139,97 @@ describe('Max activeWorkContext (session desk memory)', () => {
     void tableTurn;
   });
 
+  it('Test 5b: strict output shape returns only table plus safety line', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    await workspace.ask({
+      sessionId: first.sessionId,
+      question: 'Convert the verification work order into a fillable table.',
+    });
+
+    const beforeRows =
+      workspace._sessions.get(first.sessionId).activeWorkContext.tableRows || [];
+    const beforePm002 = { ...beforeRows.find((r) => r.prospect_id === 'PM-002') };
+    const beforePm003 = { ...beforeRows.find((r) => r.prospect_id === 'PM-003') };
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: [
+        'Update the fillable verification table.',
+        'For PM-001 only, set:',
+        '- website_value: https://www.gamacheproperties.com',
+        '- website_status: needs verification',
+        '- notes: website candidate added, still needs source confirmation plus verified mailing address and phone',
+        '',
+        'Leave PM-002 and PM-003 unchanged.',
+        'Return only the updated table plus one short preparation-only safety line.',
+      ].join('\n'),
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const awc = workspace._sessions.get(result.sessionId).activeWorkContext;
+    const rows = awc.tableRows || [];
+    const pm001 = rows.find((r) => r.prospect_id === 'PM-001');
+    const pm002 = rows.find((r) => r.prospect_id === 'PM-002');
+    const pm003 = rows.find((r) => r.prospect_id === 'PM-003');
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(result.structured.metadata.strictOutputShape, true);
+    assert.equal(result.structured.metadata.tableUpdate, true);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(result.presentation, 'strict_output_shape');
+
+    assert.match(answer, /\| prospect_id \|/);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /PM-002/);
+    assert.match(answer, /PM-003/);
+    assert.match(
+      answer,
+      /Preparation-only:\s*no mission created;\s*no launch, approval, print, or mail\.?/i
+    );
+
+    assert.doesNotMatch(answer, /^Fillable verification table/m);
+    assert.doesNotMatch(answer, /Updated the fillable verification table/i);
+    assert.doesNotMatch(answer, /Other rows are unchanged/i);
+    assert.doesNotMatch(answer, /Only operator-requested field changes/i);
+    assert.doesNotMatch(answer, /Fill website_value, mailing_address_value/i);
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /^Next:/m);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /activeWorkContext/i);
+    assert.doesNotMatch(answer, /Handled as a table mutation/i);
+
+    assert.equal(pm001.website_value, 'https://www.gamacheproperties.com');
+    assert.equal(pm001.website_status, 'needs verification');
+    assert.equal(
+      pm001.notes,
+      'website candidate added, still needs source confirmation plus verified mailing address and phone'
+    );
+    assert.deepEqual(pm002, beforePm002);
+    assert.deepEqual(pm003, beforePm003);
+    assert.equal(result.structured.reasoning.length, 0);
+    assert.equal(result.structured.nextInvestigations.length, 0);
+    assert.deepEqual(result.structured.metadata.unavailable, []);
+  });
+
   it('Test 6: unknown prospect_id in table update asks for clarification', async () => {
     const missionEngine = testMissionEngine();
     const workspace = createWorkspaceEngine({

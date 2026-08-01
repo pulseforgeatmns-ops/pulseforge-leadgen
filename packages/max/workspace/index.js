@@ -78,5 +78,8 @@ module.exports = {
   isActiveWorkTransformCue: ActiveWorkContext.isActiveWorkTransformCue,
   isFillableTableRequest: ActiveWorkContext.isFillableTableRequest,
   isFillableTableUpdateRequest: ActiveWorkContext.isFillableTableUpdateRequest,
+  wantsStrictFillableTableOutputShape:
+    ActiveWorkContext.wantsStrictFillableTableOutputShape,
+  wantsFillableTableHeading: ActiveWorkContext.wantsFillableTableHeading,
   isExplicitNewMissionRequest: ActiveWorkContext.isExplicitNewMissionRequest,
 };
