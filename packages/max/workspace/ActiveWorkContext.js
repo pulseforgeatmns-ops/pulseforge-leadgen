@@ -319,8 +319,11 @@ function isFillableTableRequest(text) {
   );
 }
 
-/** Column names accepted in fillable verification table mutations. */
-const FILLABLE_TABLE_MUTABLE_FIELDS = Object.freeze([
+/**
+ * Operator-owned source columns. Reassessment must not rewrite these unless
+ * the operator explicitly assigns the field in the same turn.
+ */
+const FILLABLE_TABLE_SOURCE_FIELDS = Object.freeze([
   'prospect_id',
   'company_name',
   'contact_name',
@@ -332,12 +335,25 @@ const FILLABLE_TABLE_MUTABLE_FIELDS = Object.freeze([
   'phone_status',
   'phone_value',
   'source_to_check_first',
+  'notes',
+]);
+
+/**
+ * Readiness / next-action columns derived from source gate statuses.
+ * Reassessment may rewrite these; explicit launch/approval owns execution.
+ */
+const FILLABLE_TABLE_DERIVED_FIELDS = Object.freeze([
   'verification_status',
   'mail_readiness',
   'draft_readiness',
   'execution_readiness',
   'operator_next_action',
-  'notes',
+]);
+
+/** Column names accepted in fillable verification table mutations. */
+const FILLABLE_TABLE_MUTABLE_FIELDS = Object.freeze([
+  ...FILLABLE_TABLE_SOURCE_FIELDS,
+  ...FILLABLE_TABLE_DERIVED_FIELDS,
 ]);
 
 /** Gate status columns that drive derived readiness / next-action fields. */
@@ -347,6 +363,9 @@ const FILLABLE_TABLE_GATE_STATUS_FIELDS = Object.freeze([
   'phone_status',
   'contact_role_status',
 ]);
+
+/** Free-text source fields — nested `field = value` inside the value is content. */
+const FILLABLE_TABLE_FREE_TEXT_FIELDS = Object.freeze(['notes']);
 
 /**
  * True when activeWorkContext already has a fillable verification table.
@@ -685,12 +704,45 @@ function extractGateStatusUpdatedProspectIds(updates) {
 }
 
 /**
- * Recompute readiness columns from verified table gates.
+ * Snapshot operator-owned source columns so reassessment cannot rewrite them.
+ * @param {object} row
+ * @returns {Record<string, unknown>}
+ */
+function snapshotFillableTableSourceFields(row) {
+  /** @type {Record<string, unknown>} */
+  const snapshot = {};
+  const source = row && typeof row === 'object' ? row : {};
+  for (const field of FILLABLE_TABLE_SOURCE_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(source, field)) {
+      snapshot[field] = source[field];
+    }
+  }
+  return snapshot;
+}
+
+/**
+ * Restore source columns after derived-field recomputation.
+ * @param {object} row
+ * @param {Record<string, unknown>} snapshot
+ * @returns {object}
+ */
+function restoreFillableTableSourceFields(row, snapshot) {
+  const next = row && typeof row === 'object' ? { ...row } : {};
+  for (const [field, value] of Object.entries(snapshot || {})) {
+    next[field] = value;
+  }
+  return next;
+}
+
+/**
+ * Recompute derived readiness columns from verified table gates.
+ * Never mutates operator-owned source fields (gate statuses, values, notes).
  * Does not invent websites, phones, addresses, or launch/execution.
  * @param {object} row
  * @returns {object}
  */
 function reassessFillableTableRowFromGates(row) {
+  const sourceSnapshot = snapshotFillableTableSourceFields(row);
   const next = row && typeof row === 'object' ? { ...row } : {};
   const mailGatesVerified =
     isVerifiedGateStatus(next.mailing_address_status) &&
@@ -723,25 +775,8 @@ function reassessFillableTableRowFromGates(row) {
 
   next.operator_next_action = deriveOperatorNextActionFromGates(next);
 
-  // Surface contact-role as the remaining verification item when mail gates pass.
-  if (
-    mailGatesVerified &&
-    (isNeedsVerificationGateStatus(next.contact_role_status) ||
-      isBlockedGateStatus(next.contact_role_status)) &&
-    !String(next.notes || '').trim()
-  ) {
-    next.notes = 'contact role still needs verification';
-  } else if (
-    contactRoleVerified &&
-    /contact role still needs verification/i.test(String(next.notes || ''))
-  ) {
-    next.notes = String(next.notes || '')
-      .replace(/\s*;?\s*contact role still needs verification\.?/gi, '')
-      .replace(/^\s*;\s*|\s*;\s*$/g, '')
-      .trim();
-  }
-
-  return next;
+  // Source fields are operator truth — restore after derived writes.
+  return restoreFillableTableSourceFields(next, sourceSnapshot);
 }
 
 /**
@@ -812,6 +847,7 @@ function matchForOnlyInlineFieldAssignment(trimmed) {
 /**
  * Parse inline "field = value, field2 = value2" assignments.
  * Values run until the next known mutable column assignment (or end of chunk).
+ * Free-text fields (notes) consume the remainder — nested field names are content.
  * Semicolons/commas inside free-text notes are content, not separators.
  * @param {string} fieldText
  * @param {Set<string>} columnSet
@@ -821,6 +857,7 @@ function parseMutableFieldAssignments(fieldText, columnSet) {
   const chunk = String(fieldText || '').trim();
   if (!chunk || !columnSet || columnSet.size === 0) return {};
 
+  const freeTextFields = new Set(FILLABLE_TABLE_FREE_TEXT_FIELDS);
   const fieldAlt = [...columnSet]
     .map(escapeRegExp)
     .sort((a, b) => b.length - a.length)
@@ -831,6 +868,11 @@ function parseMutableFieldAssignments(fieldText, columnSet) {
   const starts = [];
   let m;
   while ((m = startRe.exec(chunk)) !== null) {
+    // Once a free-text field (notes) begins, later `field =` matches are content.
+    if (starts.length > 0) {
+      const prev = starts[starts.length - 1];
+      if (freeTextFields.has(prev.field)) break;
+    }
     starts.push({
       field: m[1].toLowerCase(),
       valueStart: m.index + m[0].length,
@@ -848,6 +890,17 @@ function parseMutableFieldAssignments(fieldText, columnSet) {
     value = value.replace(/[,;]\s*$/, '').trim();
     // Drop trailing sentence punctuation at an instruction boundary.
     value = value.replace(/[.\s]+$/, '').trim();
+    // Status / short values must not swallow a following reassess instruction.
+    if (!freeTextFields.has(starts[i].field)) {
+      value = value
+        .replace(
+          /\.\s*(?:Reassess|Leave|Return|Update|Keep|Do\s+not|Preparation)\b[\s\S]*$/i,
+          ''
+        )
+        .trim()
+        .replace(/[.\s]+$/, '')
+        .trim();
+    }
     fields[starts[i].field] = value;
   }
 
@@ -856,9 +909,20 @@ function parseMutableFieldAssignments(fieldText, columnSet) {
   if (Object.keys(fields).length === 0) {
     const single = /^([a-z][a-z0-9_]*)\s*[:=]\s*(.+)$/i.exec(chunk);
     if (single && columnSet.has(single[1].toLowerCase())) {
-      fields[single[1].toLowerCase()] = String(single[2] || '')
+      let value = String(single[2] || '')
         .trim()
         .replace(/[.\s]+$/, '');
+      if (!freeTextFields.has(single[1].toLowerCase())) {
+        value = value
+          .replace(
+            /\.\s*(?:Reassess|Leave|Return|Update|Keep|Do\s+not|Preparation)\b[\s\S]*$/i,
+            ''
+          )
+          .trim()
+          .replace(/[.\s]+$/, '')
+          .trim();
+      }
+      fields[single[1].toLowerCase()] = value;
     }
   }
 
@@ -879,7 +943,7 @@ function parseFillableTableFieldUpdates(text) {
   const lines = raw.split(/\r?\n/).flatMap((line) =>
     String(line || '')
       .split(
-        /(?<=[.!?])\s+(?=(?:For|Leave|Return|Update|Keep|Do\s+not|Preparation)\b)/i
+        /(?<=[.!?])\s+(?=(?:For|Leave|Return|Update|Keep|Do\s+not|Preparation|Reassess)\b)/i
       )
       .map((part) => part.trim())
       .filter(Boolean)
@@ -985,8 +1049,8 @@ function parseFillableTableFieldUpdates(text) {
     const safetyPatterns = [
       // Capture the full assignment region (including notes with semicolons);
       // applyFields splits on known column boundaries.
-      /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]?\s*set\s*:?\s*((?:[a-z][a-z0-9_]*)\s*[:=]\s*.+?)(?=\.\s+(?:Leave|Return|Update|Keep|Do\s+not|Preparation)\b|$)/gis,
-      /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]\s*((?:[a-z][a-z0-9_]*)\s*[:=]\s*.+?)(?=\.\s+(?:Leave|Return|Update|Keep|Do\s+not|Preparation)\b|$)/gis,
+      /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]?\s*set\s*:?\s*((?:[a-z][a-z0-9_]*)\s*[:=]\s*.+?)(?=\.\s+(?:Leave|Return|Update|Keep|Do\s+not|Preparation|Reassess)\b|$)/gis,
+      /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]\s*((?:[a-z][a-z0-9_]*)\s*[:=]\s*.+?)(?=\.\s+(?:Leave|Return|Update|Keep|Do\s+not|Preparation|Reassess)\b|$)/gis,
     ];
     for (const inlineRe of safetyPatterns) {
       let inlineMatch;
@@ -1013,8 +1077,9 @@ function parseFillableTableFieldUpdates(text) {
 /**
  * Apply parsed field updates onto existing fillable table rows.
  * Preserves row order, shape, and untouched rows.
- * When reassessIds is provided, recomputes readiness columns from table gates
- * for those rows after field mutations.
+ * When reassessIds is provided, recomputes derived readiness columns from
+ * table gates for those rows after field mutations — never rewrites source
+ * gate statuses / values / notes unless the operator assigned them above.
  * @param {object[]} rows
  * @param {Array<{ prospectId: string, fields: Record<string, string> }>} updates
  * @param {{ reassessIds?: string[] }} [options]
@@ -1031,6 +1096,9 @@ function applyFillableTableFieldUpdates(rows, updates, options = {}) {
   const matchedIds = [];
   const unknownIds = [];
   const columnSet = new Set(FILLABLE_TABLE_MUTABLE_FIELDS);
+  const sourceSet = new Set(FILLABLE_TABLE_SOURCE_FIELDS);
+  /** @type {Map<string, Set<string>>} */
+  const explicitSourceById = new Map();
 
   for (const update of updates || []) {
     const prospectId = String(update.prospectId || '').trim();
@@ -1043,17 +1111,20 @@ function applyFillableTableFieldUpdates(rows, updates, options = {}) {
     matchedIds.push(prospectId);
     const row = { ...next[idx] };
     const fields = update.fields && typeof update.fields === 'object' ? update.fields : {};
+    const explicitSource = new Set();
     for (const [key, value] of Object.entries(fields)) {
       const field = String(key).toLowerCase();
       if (!columnSet.has(field)) continue;
       // Never invent readiness — only apply explicit operator values.
       row[field] = value == null ? '' : String(value);
+      if (sourceSet.has(field)) explicitSource.add(field);
     }
     // Keep prospect_id stable unless operator explicitly changes it.
     if (!Object.prototype.hasOwnProperty.call(fields, 'prospect_id')) {
       row.prospect_id = next[idx].prospect_id || prospectId;
     }
     next[idx] = row;
+    explicitSourceById.set(prospectId.toUpperCase(), explicitSource);
   }
 
   const reassessIds = Array.isArray(options.reassessIds)
@@ -1070,7 +1141,20 @@ function applyFillableTableFieldUpdates(rows, updates, options = {}) {
       }
       continue;
     }
-    next[idx] = reassessFillableTableRowFromGates(next[idx]);
+    // Capture source fields before reassess; restore any that were not
+    // explicitly assigned this turn (defensive against derived-path drift).
+    const before = next[idx];
+    const sourceBefore = snapshotFillableTableSourceFields(before);
+    const explicit =
+      explicitSourceById.get(id.toUpperCase()) || new Set();
+    let reassessed = reassessFillableTableRowFromGates(before);
+    for (const field of FILLABLE_TABLE_SOURCE_FIELDS) {
+      if (explicit.has(field)) continue;
+      if (Object.prototype.hasOwnProperty.call(sourceBefore, field)) {
+        reassessed[field] = sourceBefore[field];
+      }
+    }
+    next[idx] = reassessed;
     reassessedIds.push(next[idx].prospect_id || id);
     if (
       !matchedIds.some((m) => String(m).toUpperCase() === id.toUpperCase())
@@ -1135,7 +1219,10 @@ module.exports = {
   DEFAULT_CANARY_CONSTRAINTS,
   LAST_OUTPUT_TYPES,
   FILLABLE_TABLE_MUTABLE_FIELDS,
+  FILLABLE_TABLE_SOURCE_FIELDS,
+  FILLABLE_TABLE_DERIVED_FIELDS,
   FILLABLE_TABLE_GATE_STATUS_FIELDS,
+  FILLABLE_TABLE_FREE_TEXT_FIELDS,
   getActiveWorkContext,
   setActiveWorkContext,
   cloneActiveWorkContext,
