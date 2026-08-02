@@ -1552,9 +1552,137 @@ const PACKET_REVIEW_INLINE_ALLOWLIST = Object.freeze([
 ]);
 
 /**
+ * Section headings that end an inline known-facts block.
+ * Instruction bullets under these must not be treated as field assignments.
+ * @param {string} line
+ * @returns {boolean}
+ */
+function isInlineKnownFactsSectionStopLine(line) {
+  const trimmed = String(line || '').trim();
+  if (!trimmed) return false;
+  if (/^return\s*:?\s*$/i.test(trimmed)) return true;
+  if (/^customer-facing(?:\s+copy)?(?:\s+rules?)?\s*:?\s*$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^operator-facing(?:\s+rules?)?\s*:?\s*$/i.test(trimmed)) return true;
+  if (/^do\s+not\b/i.test(trimmed)) return true;
+  if (/^required\s+behavior\s*:?\s*$/i.test(trimmed)) return true;
+  if (/^rules?\s*:?\s*$/i.test(trimmed)) return true;
+  return false;
+}
+
+/**
+ * Locate the inline known-facts section: after a known-facts heading when
+ * present, otherwise from the first allowlisted bullet, stopping at the next
+ * instruction section heading.
+ * @param {string} text
+ * @returns {string}
+ */
+function extractInlineKnownFactsSection(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return '';
+
+  const lines = raw.split(/\r?\n/);
+  const headingOnlyRe =
+    /\b(?:known\s+facts(?:\s+available)?|use\s+these\s+known\s+facts)\s*:?\s*$/i;
+  const headingPrefixRe =
+    /\b(?:known\s+facts(?:\s+available)?|use\s+these\s+known\s+facts)\s*:?\s+/i;
+
+  /** @type {string[]} */
+  let sectionLines = [];
+  let foundHeading = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = String(lines[i] || '');
+    const trimmed = line.trim();
+
+    if (!foundHeading) {
+      if (headingOnlyRe.test(trimmed)) {
+        foundHeading = true;
+        sectionLines = lines.slice(i + 1);
+        break;
+      }
+      const prefixMatch = headingPrefixRe.exec(line);
+      if (prefixMatch) {
+        foundHeading = true;
+        const after = line.slice(prefixMatch.index + prefixMatch[0].length).trim();
+        sectionLines = after
+          ? [after, ...lines.slice(i + 1)]
+          : lines.slice(i + 1);
+        break;
+      }
+    }
+  }
+
+  if (!foundHeading) {
+    // No explicit heading — start at the first allowlisted bullet / assignment.
+    let startIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (parseInlineKnownFactBulletLine(lines[i])) {
+        startIdx = i;
+        break;
+      }
+    }
+    if (startIdx < 0) return '';
+    sectionLines = lines.slice(startIdx);
+  }
+
+  return extractInlineKnownFactsSectionFromLines(sectionLines);
+}
+
+/**
+ * @param {string[]} lines
+ * @returns {string}
+ */
+function extractInlineKnownFactsSectionFromLines(lines) {
+  const out = [];
+  for (const line of lines) {
+    if (isInlineKnownFactsSectionStopLine(line)) break;
+    out.push(String(line || ''));
+  }
+  return out.join('\n');
+}
+
+/**
+ * Parse one known-facts bullet / assignment line.
+ * Supports leading hyphen, underscore keys, colon/equals separators, and
+ * values with URLs, commas, spaces, and semicolons. Notes keep free text to
+ * end of line.
+ * @param {string} line
+ * @returns {{ key: string, value: string }|null}
+ */
+function parseInlineKnownFactBulletLine(line) {
+  const raw = String(line || '').trim();
+  if (!raw) return null;
+
+  const withoutBullet = raw
+    .replace(/^[-*•–—]\s*/, '')
+    .replace(/^[.]+\s+/, '')
+    .trim();
+  if (!withoutBullet) return null;
+
+  const match = /^([a-z][a-z0-9_]*)\s*[:=]\s*(.+)$/i.exec(withoutBullet);
+  if (!match) return null;
+
+  const key = match[1].toLowerCase();
+  if (!PACKET_REVIEW_INLINE_ALLOWLIST.includes(key)) return null;
+
+  let value = String(match[2] || '').trim();
+  // Notes: free text through end of line (keep commas / semicolons).
+  if (key === 'notes') {
+    return value ? { key, value } : null;
+  }
+
+  // Drop trailing sentence punctuation only — do not truncate URLs / addresses.
+  value = value.replace(/[.\s]+$/, '').trim();
+  return value ? { key, value } : null;
+}
+
+/**
  * Parse a single-prospect inline known-facts block for preparation-only
  * packet review (field = value / field: value / bullet assignments).
- * Does not invent values. Does not require a markdown table.
+ * Only reads the known-facts section — ignores Return / copy-rule / Do not
+ * instruction bullets. Does not invent values. Does not require a markdown table.
  *
  * @param {string} text
  * @returns {{
@@ -1581,52 +1709,31 @@ function parseInlinePacketReviewKnownFacts(text) {
   /** @type {Set<string>} */
   const explicitlyAssigned = new Set();
 
-  const applyParsed = (parsed) => {
-    if (!parsed || typeof parsed !== 'object') return;
-    for (const [field, value] of Object.entries(parsed)) {
+  const section = extractInlineKnownFactsSection(raw);
+  const sectionLines = section ? section.split(/\r?\n/) : [];
+
+  for (const line of sectionLines) {
+    const parsed = parseInlineKnownFactBulletLine(line);
+    if (!parsed) continue;
+    fields[parsed.key] = parsed.value;
+    explicitlyAssigned.add(parsed.key);
+  }
+
+  // Same-line / prose assignments inside the known-facts section only
+  // (never the full operator prompt — that overwrites facts from Return/rules).
+  if (section.trim()) {
+    const proseParsed = parseMutableFieldAssignments(section, columnSet);
+    for (const [field, value] of Object.entries(proseParsed || {})) {
       const key = String(field || '')
         .trim()
         .toLowerCase();
       if (!columnSet.has(key)) continue;
       const cleaned = String(value == null ? '' : value).trim();
       if (!cleaned) continue;
+      // Prefer explicit bullet lines already captured.
+      if (explicitlyAssigned.has(key)) continue;
       fields[key] = cleaned;
       explicitlyAssigned.add(key);
-    }
-  };
-
-  // Whole-message scan (prose + comma-separated assignments).
-  applyParsed(parseMutableFieldAssignments(raw, columnSet));
-
-  // Line / bullet scan for structured known-facts blocks.
-  const lines = raw.split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = String(line || '')
-      .trim()
-      .replace(/^[-*•]\s+/, '')
-      .replace(/^[.]+\s+/, '');
-    if (!trimmed) continue;
-    applyParsed(parseMutableFieldAssignments(trimmed, columnSet));
-    const single = /^([a-z][a-z0-9_]*)\s*[:=]\s*(.+)$/i.exec(
-      trimmed.replace(/[.\s]+$/, '')
-    );
-    if (single && columnSet.has(single[1].toLowerCase())) {
-      const key = single[1].toLowerCase();
-      let value = String(single[2] || '').trim().replace(/[.\s]+$/, '');
-      if (key !== 'notes') {
-        value = value
-          .replace(
-            /\.\s*(?:Reassess|Leave|Return|Update|Keep|Do\s+not|Preparation|Create|Include|Use)\b[\s\S]*$/i,
-            ''
-          )
-          .trim()
-          .replace(/[.\s]+$/, '')
-          .trim();
-      }
-      if (value) {
-        fields[key] = value;
-        explicitlyAssigned.add(key);
-      }
     }
   }
 
@@ -1786,5 +1893,8 @@ module.exports = {
   looksLikeFillableVerificationTablePaste,
   parseFillableVerificationTableFromMessage,
   parseInlinePacketReviewKnownFacts,
+  parseInlineKnownFactBulletLine,
+  extractInlineKnownFactsSection,
+  isInlineKnownFactsSectionStopLine,
   ingestPastedFillableVerificationTable,
 };

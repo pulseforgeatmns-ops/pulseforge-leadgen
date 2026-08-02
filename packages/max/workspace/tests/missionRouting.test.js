@@ -2623,6 +2623,111 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(answer, /Personalized letter draft/i);
   });
 
+  it('Known facts available bullets parse through Return/copy-rule sections', async () => {
+    const {
+      parseInlinePacketReviewKnownFacts,
+    } = require('../ActiveWorkContext');
+
+    const question = [
+      'Create a preparation-only packet review checklist for PM-001.',
+      '',
+      'Known facts available:',
+      '- prospect_id: PM-001',
+      '- company_name: Gamache Properties',
+      '- contact_name: Ben Gamache',
+      '- website_status: verified',
+      '- website_value: https://www.gamacheproperties.com',
+      '- mailing_address_status: verified',
+      '- mailing_address_value: 123 Main Street, Manchester, NH 03101',
+      '- phone_status: verified',
+      '- phone_value: 603-555-0198',
+      '- contact_role_status: verified',
+      '- mail_readiness: ready_for_review',
+      '- draft_readiness: allowed',
+      '- execution_readiness: blocked',
+      '- notes: mailing address reconfirmed; website, phone, and contact role remain verified',
+      '',
+      'Return:',
+      '- Personalized letter draft',
+      '- Handwritten note draft',
+      '- Scorecard cover text draft',
+      '- First follow-up call notes',
+      '- company_name: use only known fact value',
+      '- contact_name: use only known fact value',
+      '- mail_readiness: do not put in customer letter',
+      '- execution_readiness: never authorize',
+      '',
+      'Customer-facing copy rules:',
+      '- Keep drafts generic when industry is missing',
+      '- Do not invent vendor coordination or pain claims',
+      '',
+      'Operator-facing rules:',
+      '- Industry/persona evidence: not provided',
+      '- Keep low-confidence caveat in operator section only',
+      '',
+      'Do not invent industry.',
+      'Do not create a mission. Do not launch, execute, approve, print, or mail.',
+    ].join('\n');
+
+    const parsed = parseInlinePacketReviewKnownFacts(question);
+    assert.equal(parsed.hasInlineFacts, true);
+    assert.deepEqual(parsed.missingRequired, []);
+    assert.equal(parsed.row.company_name, 'Gamache Properties');
+    assert.equal(parsed.row.contact_name, 'Ben Gamache');
+    assert.equal(parsed.row.mail_readiness, 'ready_for_review');
+    assert.equal(parsed.row.execution_readiness, 'blocked');
+    assert.equal(
+      parsed.row.mailing_address_value,
+      '123 Main Street, Manchester, NH 03101'
+    );
+    assert.equal(
+      parsed.row.website_value,
+      'https://www.gamacheproperties.com'
+    );
+    assert.equal(
+      parsed.row.notes,
+      'mailing address reconfirmed; website, phone, and contact role remain verified'
+    );
+    assert.equal(parsed.row.industry, undefined);
+    assert.doesNotMatch(String(parsed.row.company_name), /use only known fact/i);
+
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(result.structured.metadata.packetReview, true);
+    assert.equal(result.structured.metadata.inlineKnownFacts, true);
+    assert.equal(result.structured.metadata.missingRequiredFields, undefined);
+    assert.equal(result.structured.metadata.draftConfidence, 'low');
+    assert.doesNotMatch(answer, /Still need:/i);
+    assert.match(answer, /packet (?:contents )?checklist/i);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /Ben Gamache|Ben,/);
+    assert.match(answer, /Industry\/persona evidence:\s*not provided/i);
+    assert.doesNotMatch(answer, /appears to be in/i);
+    assert.doesNotMatch(answer, /Property Management/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /use only known fact value/i);
+    assert.doesNotMatch(answer, /never authorize/i);
+  });
+
   it('packet review preserves prior entity industry when table omits it', async () => {
     const missionEngine = testMissionEngine();
     const workspace = createWorkspaceEngine({
