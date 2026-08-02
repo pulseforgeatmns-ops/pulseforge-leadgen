@@ -95,4 +95,10 @@ module.exports = {
     ActiveWorkContext.wantsStrictFillableTableOutputShape,
   wantsFillableTableHeading: ActiveWorkContext.wantsFillableTableHeading,
   isExplicitNewMissionRequest: ActiveWorkContext.isExplicitNewMissionRequest,
+  looksLikeFillableVerificationTablePaste:
+    ActiveWorkContext.looksLikeFillableVerificationTablePaste,
+  parseFillableVerificationTableFromMessage:
+    ActiveWorkContext.parseFillableVerificationTableFromMessage,
+  ingestPastedFillableVerificationTable:
+    ActiveWorkContext.ingestPastedFillableVerificationTable,
 };

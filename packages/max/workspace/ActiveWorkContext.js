@@ -81,6 +81,8 @@ function cloneActiveWorkContext(ctx) {
         : {},
     lastOutputType:
       ctx.lastOutputType != null ? String(ctx.lastOutputType) : null,
+    lastOutputKind:
+      ctx.lastOutputKind != null ? String(ctx.lastOutputKind) : null,
     pendingFields: Array.isArray(ctx.pendingFields)
       ? ctx.pendingFields.map(String)
       : [],
@@ -110,8 +112,25 @@ function buildCanaryActiveWorkContext(input = {}) {
       ? prior.tableRows.map((row) => ({ ...row }))
       : [];
 
+  const lastOutputType =
+    input.lastOutputType ||
+    (prior && prior.lastOutputType) ||
+    LAST_OUTPUT_TYPES.CANARY_REVIEW_PACKAGE;
+  const lastOutputKind =
+    input.lastOutputKind != null
+      ? String(input.lastOutputKind)
+      : lastOutputType === LAST_OUTPUT_TYPES.FILLABLE_TABLE ||
+          lastOutputType === 'fillable_verification_table'
+        ? 'fillable_verification_table'
+        : prior && prior.lastOutputKind
+          ? String(prior.lastOutputKind)
+          : null;
+
   return {
-    workflow: 'campaign_canary',
+    workflow:
+      input.workflow ||
+      (prior && prior.workflow) ||
+      'campaign_canary',
     target: { campaignId: String(campaignId) },
     entities: prospects.map(prospectToEntity),
     tableRows,
@@ -122,10 +141,8 @@ function buildCanaryActiveWorkContext(input = {}) {
         : {}),
       ...DEFAULT_CANARY_CONSTRAINTS,
     },
-    lastOutputType:
-      input.lastOutputType ||
-      (prior && prior.lastOutputType) ||
-      LAST_OUTPUT_TYPES.CANARY_REVIEW_PACKAGE,
+    lastOutputType,
+    lastOutputKind,
     pendingFields: derivePendingFields(prospects),
     nextAction:
       input.nextAction != null
@@ -134,6 +151,45 @@ function buildCanaryActiveWorkContext(input = {}) {
           ? prior.nextAction
           : 'await_operator_transform_or_verification',
   };
+}
+
+/** Canonical workflow id for Campaign 001 preparation-only canary desk work. */
+const CAMPAIGN_001_PREPARATION_ONLY_CANARY =
+  'campaign_001_preparation_only_canary';
+
+/**
+ * True when workflow is any preparation-only canary desk workflow.
+ * @param {object|null|undefined} ctx
+ */
+function isCanaryDeskWorkflow(ctx) {
+  if (!ctx || typeof ctx !== 'object') return false;
+  const workflow = String(ctx.workflow || '').toLowerCase();
+  return (
+    workflow === 'campaign_canary' ||
+    workflow === CAMPAIGN_001_PREPARATION_ONLY_CANARY ||
+    (/canary/.test(workflow) && /preparation/.test(workflow))
+  );
+}
+
+/**
+ * Resolve desk workflow id from operator cues.
+ * @param {string} text
+ * @param {object|null} [prior]
+ */
+function resolveCanaryDeskWorkflow(text, prior = null) {
+  const lower = String(text || '').toLowerCase();
+  const campaignCue = /\bcampaign\s+0*1\b/.test(lower) || /\bcampaign\s+001\b/.test(lower);
+  const canaryCue = /\bcanary\b/.test(lower);
+  const prepCue =
+    /\bpreparation[-\s]*only\b/.test(lower) ||
+    /\bprep[-\s]*only\b/.test(lower);
+  if (campaignCue || canaryCue || prepCue) {
+    return CAMPAIGN_001_PREPARATION_ONLY_CANARY;
+  }
+  if (prior && isCanaryDeskWorkflow(prior)) {
+    return String(prior.workflow);
+  }
+  return 'campaign_canary';
 }
 
 /**
@@ -456,6 +512,9 @@ const FILLABLE_TABLE_FREE_TEXT_FIELDS = Object.freeze(['notes']);
 function activeContextHasFillableTable(ctx) {
   if (!ctx) return false;
   if (ctx.lastOutputType === LAST_OUTPUT_TYPES.FILLABLE_TABLE) return true;
+  if (ctx.lastOutputType === 'fillable_verification_table') return true;
+  if (ctx.lastOutputKind === 'fillable_verification_table') return true;
+  if (ctx.lastOutputKind === 'fillable_table') return true;
   return Array.isArray(ctx.tableRows) && ctx.tableRows.length > 0;
 }
 
@@ -1268,14 +1327,216 @@ function extractCampaignIdFromText(text) {
  * @param {object|null} ctx
  */
 function activeContextBlocksExecution(ctx) {
-  if (!ctx || ctx.workflow !== 'campaign_canary') return false;
-  const c = ctx.constraints || {};
+  if (!isCanaryDeskWorkflow(ctx)) return false;
+  const c = (ctx && ctx.constraints) || {};
   return (
     c.preparationOnly === true ||
     c.noExecution === true ||
     c.noMail === true ||
     c.noLaunch === true ||
     c.noPrint === true
+  );
+}
+
+/**
+ * Split a markdown table line into cells (preserves empty cells).
+ * @param {string} line
+ * @returns {string[]}
+ */
+function splitMarkdownTableCells(line) {
+  let text = String(line || '').trim();
+  if (!text.includes('|')) return [];
+  if (text.startsWith('|')) text = text.slice(1);
+  if (text.endsWith('|')) text = text.slice(0, -1);
+  return text.split('|').map((cell) => String(cell == null ? '' : cell).trim());
+}
+
+/**
+ * True when a markdown row is a separator (`|---|---|`).
+ * @param {string[]} cells
+ */
+function isMarkdownTableSeparatorRow(cells) {
+  if (!Array.isArray(cells) || cells.length === 0) return false;
+  return cells.every((cell) => {
+    const s = String(cell || '').trim();
+    return !s || /^:?-{3,}:?$/.test(s);
+  });
+}
+
+/**
+ * Normalize a header cell to a snake_case column key.
+ * @param {string} cell
+ */
+function normalizeFillableTableHeaderKey(cell) {
+  return String(cell || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+}
+
+/**
+ * Headers that identify a pasted fillable verification table.
+ */
+const FILLABLE_VERIFICATION_TABLE_DETECT_HEADERS = Object.freeze([
+  'prospect_id',
+  'company_name',
+  'contact_name',
+  'contact_role_status',
+  'website_status',
+  'website_value',
+  'mailing_address_status',
+  'mailing_address_value',
+  'phone_status',
+  'phone_value',
+  'verification_status',
+  'mail_readiness',
+  'draft_readiness',
+  'execution_readiness',
+  'operator_next_action',
+  'notes',
+]);
+
+/**
+ * True when header cells look like a fillable verification table.
+ * @param {string[]} headerCells
+ */
+function isFillableVerificationTableHeader(headerCells) {
+  const keys = (Array.isArray(headerCells) ? headerCells : [])
+    .map(normalizeFillableTableHeaderKey)
+    .filter(Boolean);
+  if (!keys.length) return false;
+  const set = new Set(keys);
+  if (!set.has('prospect_id') || !set.has('company_name')) return false;
+  const hits = FILLABLE_VERIFICATION_TABLE_DETECT_HEADERS.filter((h) =>
+    set.has(h)
+  ).length;
+  // prospect_id + company_name + enough verification/readiness columns
+  return hits >= 5;
+}
+
+/**
+ * Extract a markdown fillable verification table from operator text.
+ * Preserves source/derived fields and empty cells; does not invent values.
+ * @param {string} text
+ * @returns {{ headers: string[], rows: object[], startLine: number, endLine: number }|null}
+ */
+function parseFillableVerificationTableFromMessage(text) {
+  const raw = String(text || '').replace(/^\uFEFF/, '');
+  if (!raw.trim()) return null;
+  const lines = raw.split(/\r?\n/);
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const headerCells = splitMarkdownTableCells(lines[i]);
+    if (!isFillableVerificationTableHeader(headerCells)) continue;
+
+    const headers = headerCells.map(normalizeFillableTableHeaderKey);
+    let rowStart = i + 1;
+    if (
+      rowStart < lines.length &&
+      isMarkdownTableSeparatorRow(splitMarkdownTableCells(lines[rowStart]))
+    ) {
+      rowStart += 1;
+    }
+
+    /** @type {object[]} */
+    const rows = [];
+    let end = i;
+    for (let j = rowStart; j < lines.length; j += 1) {
+      const line = String(lines[j] || '');
+      if (!line.trim()) break;
+      if (!line.includes('|')) break;
+      const cells = splitMarkdownTableCells(line);
+      if (!cells.length || isMarkdownTableSeparatorRow(cells)) continue;
+      // Stop if this looks like another header rather than a data row.
+      if (isFillableVerificationTableHeader(cells) && rows.length > 0) break;
+
+      /** @type {Record<string, string>} */
+      const row = {};
+      headers.forEach((header, idx) => {
+        if (!header) return;
+        row[header] = cells[idx] != null ? String(cells[idx]) : '';
+      });
+      // Keep unknown trailing cells out; never invent missing columns.
+      if (!String(row.prospect_id || '').trim() && !String(row.company_name || '').trim()) {
+        continue;
+      }
+      rows.push(row);
+      end = j;
+    }
+
+    if (rows.length === 0) continue;
+    return { headers, rows, startLine: i, endLine: end };
+  }
+
+  return null;
+}
+
+/**
+ * True when the message embeds a fillable verification markdown table.
+ * @param {string} text
+ */
+function looksLikeFillableVerificationTablePaste(text) {
+  const parsed = parseFillableVerificationTableFromMessage(text);
+  return Boolean(parsed && Array.isArray(parsed.rows) && parsed.rows.length > 0);
+}
+
+/**
+ * Build desk entities from pasted fillable table rows (facts only).
+ * @param {object[]} rows
+ */
+function entitiesFromFillableTableRows(rows) {
+  return (Array.isArray(rows) ? rows : []).map((row) =>
+    prospectToEntity({
+      id: row && row.prospect_id != null ? String(row.prospect_id).trim() : null,
+      companyName: row && row.company_name,
+      contactName: row && row.contact_name,
+      website: blankToNull(row && row.website_value),
+      mailingAddress: blankToNull(row && row.mailing_address_value),
+      address: blankToNull(row && row.mailing_address_value),
+      phone: blankToNull(row && row.phone_value),
+    })
+  );
+}
+
+/**
+ * Ingest a pasted fillable verification table into session activeWorkContext.
+ * Does not mutate row values. Does not create a mission or imply execution.
+ * @param {{ question: string, session: object|null }} input
+ * @returns {object|null} updated activeWorkContext, or null when no table paste
+ */
+function ingestPastedFillableVerificationTable(input = {}) {
+  const question = String(input.question || '');
+  const session = input.session || null;
+  if (!session || !question.trim()) return null;
+
+  const parsed = parseFillableVerificationTableFromMessage(question);
+  if (!parsed || !parsed.rows.length) return null;
+
+  const prior = getActiveWorkContext(session);
+  const tableRows = parsed.rows.map((row) => ({ ...row }));
+
+  const entities = entitiesFromFillableTableRows(tableRows);
+  const prospects = entitiesToProspects(entities);
+  const campaignId =
+    extractCampaignIdFromText(question) ||
+    (prior && prior.target && prior.target.campaignId) ||
+    '001';
+  const workflow = resolveCanaryDeskWorkflow(question, prior);
+
+  return setActiveWorkContext(
+    session,
+    buildCanaryActiveWorkContext({
+      prospects,
+      campaignId,
+      workflow,
+      prior,
+      tableRows,
+      lastOutputType: LAST_OUTPUT_TYPES.FILLABLE_TABLE,
+      lastOutputKind: 'fillable_verification_table',
+      nextAction:
+        (prior && prior.nextAction) ||
+        'await_operator_transform_or_verification',
+    })
   );
 }
 
@@ -1300,17 +1561,20 @@ function blankToNull(value) {
 module.exports = {
   DEFAULT_CANARY_CONSTRAINTS,
   LAST_OUTPUT_TYPES,
+  CAMPAIGN_001_PREPARATION_ONLY_CANARY,
   FILLABLE_TABLE_MUTABLE_FIELDS,
   FILLABLE_TABLE_SOURCE_FIELDS,
   FILLABLE_TABLE_DERIVED_FIELDS,
   FILLABLE_TABLE_GATE_STATUS_FIELDS,
   FILLABLE_TABLE_FREE_TEXT_FIELDS,
+  FILLABLE_VERIFICATION_TABLE_DETECT_HEADERS,
   getActiveWorkContext,
   setActiveWorkContext,
   cloneActiveWorkContext,
   buildCanaryActiveWorkContext,
   prospectToEntity,
   entitiesToProspects,
+  entitiesFromFillableTableRows,
   derivePendingFields,
   isActiveWorkReuseProspectCue,
   isActiveWorkFollowUpCue,
@@ -1337,4 +1601,9 @@ module.exports = {
   extractCampaignIdFromText,
   activeContextBlocksExecution,
   activeContextHasEntities,
+  isCanaryDeskWorkflow,
+  resolveCanaryDeskWorkflow,
+  looksLikeFillableVerificationTablePaste,
+  parseFillableVerificationTableFromMessage,
+  ingestPastedFillableVerificationTable,
 };

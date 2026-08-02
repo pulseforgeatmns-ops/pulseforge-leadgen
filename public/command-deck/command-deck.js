@@ -257,8 +257,10 @@
     const raw = String(text || '').replace(/^\uFEFF/, '');
     if (!raw.trim()) return null;
 
-    // Suppress false positives from fillable-table updates / readiness reassessment.
+    // Suppress false positives from fillable verification table pastes,
+    // field mutations, and readiness reassessment.
     if (looksLikeFillableTableMutationDisplay(raw)) return null;
+    if (looksLikeFillableVerificationTablePasteDisplay(raw)) return null;
 
     const lines = raw.split(/\r?\n/);
     let start = -1;
@@ -377,6 +379,7 @@
   function looksLikeFillableTableMutationDisplay(text) {
     const raw = String(text || '');
     if (!raw.trim()) return false;
+    if (looksLikeFillableVerificationTablePasteDisplay(raw)) return true;
     const lower = raw.toLowerCase();
     const updateCue =
       /\bupdate\s+(?:the\s+)?(?:fillable\s+)?(?:verification\s+)?table\b/.test(
@@ -406,6 +409,32 @@
     if (fieldAssignment && forOnlySet) return true;
     if (reassess && (forOnlySet || fieldAssignment || updateCue)) return true;
     if (reassess) return true;
+    return false;
+  }
+
+  function looksLikeFillableVerificationTablePasteDisplay(text) {
+    const lines = String(text || '').split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = String(line || '').trim();
+      if (!trimmed.includes('|')) continue;
+      let body = trimmed;
+      if (body.startsWith('|')) body = body.slice(1);
+      if (body.endsWith('|')) body = body.slice(0, -1);
+      const keys = body
+        .split('|')
+        .map((c) =>
+          String(c || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[\s-]+/g, '_')
+        )
+        .filter(Boolean);
+      if (!keys.length) continue;
+      const set = new Set(keys);
+      if (!set.has('prospect_id') || !set.has('company_name')) continue;
+      const hits = FILLABLE_TABLE_DISPLAY_FIELDS.filter((f) => set.has(f)).length;
+      if (hits >= 5) return true;
+    }
     return false;
   }
 

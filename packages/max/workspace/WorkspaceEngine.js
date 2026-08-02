@@ -49,6 +49,9 @@ const {
   extractCampaignIdFromText,
   activeContextBlocksExecution,
   activeContextHasEntities,
+  isCanaryDeskWorkflow,
+  ingestPastedFillableVerificationTable,
+  looksLikeFillableVerificationTablePaste,
   LAST_OUTPUT_TYPES,
 } = require('./ActiveWorkContext');
 const {
@@ -626,6 +629,10 @@ async function maybeHandleActiveWorkContinuation(input) {
   // Explicit new campaign/mission work always goes through normal routing.
   if (isExplicitNewMissionRequest(question)) return null;
 
+  // Pasted fillable verification table → desk context before packet review,
+  // table mutation, prospect extraction, or mission routing.
+  ingestPastedFillableVerificationTable({ question, session });
+
   const prior = getActiveWorkContext(session);
   const hasEntities = activeContextHasEntities(prior);
   const isFollowUp = isActiveWorkFollowUpCue(question);
@@ -703,7 +710,8 @@ async function maybeHandleActiveWorkContinuation(input) {
       operatorAttemptedCanaryProspectSupply(question) &&
       !isActiveWorkReuseProspectCue(question) &&
       !isFillableTableUpdateRequest(question, prior) &&
-      !isPacketReviewRequest(question)
+      !isPacketReviewRequest(question) &&
+      !looksLikeFillableVerificationTablePaste(question)
     ) {
       const detected = detectOperatorProspectListInMessage(question);
       const intendedCount = extractIntendedCanaryProspectCount(question);
@@ -1478,6 +1486,11 @@ function blankToNull(value) {
 async function maybeBuildCanaryPreparationResponse(input) {
   const question = String(input.question || '');
   const session = input.session || null;
+
+  // Pasted fillable verification table before canary prospect sniffing /
+  // packet-review missing-table clarify / mission routing.
+  ingestPastedFillableVerificationTable({ question, session });
+
   const prior = getActiveWorkContext(session);
 
   // Table mutations are owned by early active-work continuation.
@@ -1513,15 +1526,14 @@ async function maybeBuildCanaryPreparationResponse(input) {
   const isFollowUp = isActiveWorkFollowUpCue(question);
   const isExec = isExplicitExecutionRequest(question);
   const hasPriorCanary =
-    prior &&
-    prior.workflow === 'campaign_canary' &&
-    activeContextHasEntities(prior);
+    isCanaryDeskWorkflow(prior) && activeContextHasEntities(prior);
   const overrideWithNewProspects =
     hasPriorCanary &&
     (isExplicitContextOverride(question) ||
       operatorAttemptedCanaryProspectSupply(question)) &&
     !isFillableTableUpdateRequest(question, prior) &&
-    !isPacketReviewRequest(question);
+    !isPacketReviewRequest(question) &&
+    !looksLikeFillableVerificationTablePaste(question);
 
   // Execution / mail while preparation-only canary context is active:
   // never infer launch from desk context — block and ask for readiness.
@@ -1585,6 +1597,7 @@ async function maybeBuildCanaryPreparationResponse(input) {
     operatorAttemptedCanaryProspectSupply(question) &&
     !isFillableTableUpdateRequest(question, prior) &&
     !isPacketReviewRequest(question) &&
+    !looksLikeFillableVerificationTablePaste(question) &&
     !(hasPriorCanary && isActiveWorkReuseProspectCue(question))
   ) {
     const count = intendedCount || 3;
@@ -1728,7 +1741,12 @@ function rememberCanaryActiveWorkContext(input = {}) {
         extractCampaignIdFromText(input.question) ||
         (input.prior && input.prior.target && input.prior.target.campaignId) ||
         '001',
+      workflow:
+        input.workflow ||
+        (input.prior && input.prior.workflow) ||
+        undefined,
       lastOutputType,
+      lastOutputKind: input.lastOutputKind,
       nextAction,
       prior: input.prior,
       tableRows,
@@ -2809,6 +2827,8 @@ function isPreparationOnlyCanary(text) {
 }
 
 function hasInlineProspectList(question) {
+  if (looksLikeFillableVerificationTablePaste(question)) return false;
+
   const detected = detectOperatorProspectListInMessage(question);
   if (detected.detected && detected.prospectCount > 0) return true;
 

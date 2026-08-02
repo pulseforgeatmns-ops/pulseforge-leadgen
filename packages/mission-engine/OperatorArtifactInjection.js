@@ -643,6 +643,45 @@ const FILLABLE_TABLE_FIELD_ASSIGNMENT = new RegExp(
 );
 
 /**
+ * True when a markdown table header looks like a fillable verification table.
+ * @param {string} line
+ */
+function looksLikeFillableVerificationTableHeaderLine(line) {
+  const text = String(line || '').trim();
+  if (!text.includes('|')) return false;
+  let body = text;
+  if (body.startsWith('|')) body = body.slice(1);
+  if (body.endsWith('|')) body = body.slice(0, -1);
+  const keys = body
+    .split('|')
+    .map((c) =>
+      String(c || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[\s-]+/g, '_')
+    )
+    .filter(Boolean);
+  if (!keys.length) return false;
+  const set = new Set(keys);
+  if (!set.has('prospect_id') || !set.has('company_name')) return false;
+  const hits = FILLABLE_TABLE_FIELD_NAMES.filter((f) => set.has(f)).length;
+  return hits >= 5;
+}
+
+/**
+ * True when the message embeds a fillable verification markdown table.
+ * These must not be sniffed as ProspectList pastes.
+ * @param {string} text
+ */
+function looksLikeFillableVerificationTablePaste(text) {
+  const lines = normalizeNewlines(String(text || '')).split('\n');
+  for (const line of lines) {
+    if (looksLikeFillableVerificationTableHeaderLine(line)) return true;
+  }
+  return false;
+}
+
+/**
  * True for fillable-table mutation / readiness reassessment messages that must
  * never be sniffed as ProspectList pastes.
  * @param {string} text
@@ -650,6 +689,7 @@ const FILLABLE_TABLE_FIELD_ASSIGNMENT = new RegExp(
 function looksLikeFillableTableMutationMessage(text) {
   const raw = String(text || '');
   if (!raw.trim()) return false;
+  if (looksLikeFillableVerificationTablePaste(raw)) return true;
   const lower = raw.toLowerCase();
   const updateCue =
     /\bupdate\s+(?:the\s+)?(?:fillable\s+)?(?:verification\s+)?table\b/.test(
@@ -1233,13 +1273,16 @@ function detectOperatorProspectListInMessage(text) {
 
   if (!raw.trim()) return empty;
 
-  // Fillable verification table mutations must never become ProspectList pastes.
+  // Fillable verification table pastes / mutations must never become ProspectList.
   if (looksLikeFillableTableMutationMessage(raw)) {
     return {
       ...empty,
       rejectedAsNaturalLanguage: true,
       remainsPlainText: true,
       suppressedFillableTableUpdate: true,
+      suppressedFillableVerificationTable: looksLikeFillableVerificationTablePaste(
+        raw
+      ),
       objectiveText: raw.trim(),
     };
   }
@@ -1380,5 +1423,6 @@ module.exports = {
   isViableCompanyName,
   expandFlattenedNumberedProspectText,
   looksLikeFillableTableMutationMessage,
+  looksLikeFillableVerificationTablePaste,
   isFillableTableFieldAssignmentLine,
 };

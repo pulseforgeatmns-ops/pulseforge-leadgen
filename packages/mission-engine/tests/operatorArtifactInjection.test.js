@@ -538,4 +538,28 @@ describe('Campaign 001 canary prospect block extraction', () => {
     assert.equal(detected.prospectCount, 0);
     assert.equal(detected.suppressedFillableTableUpdate, true);
   });
+
+  it('does not sniff pasted fillable verification markdown table as ProspectList', () => {
+    const prompt = [
+      'Campaign 001 preparation-only canary table:',
+      '',
+      '| prospect_id | company_name | contact_name | contact_role_status | website_status | website_value | mailing_address_status | mailing_address_value | phone_status | phone_value | verification_status | mail_readiness | draft_readiness | execution_readiness | operator_next_action | notes |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| PM-001 | Gamache Properties | Ben Gamache | verified | verified | https://www.gamacheproperties.com | verified | 100 Market St, Manchester NH | verified | 603-555-0198 | needs verification | ready_for_review | allowed | blocked | review packet | |',
+      '| PM-002 | Elm Grove Companies | David Schleyer | needs verification | needs verification | unknown | blocked | unknown | needs verification | unknown | needs verification | blocked | allowed | blocked | verify mailing address first | |',
+      '| PM-003 | Mill City Property Management | Lauren DuPaul | needs verification | needs verification | unknown | blocked | unknown | needs verification | unknown | needs verification | blocked | allowed | blocked | verify mailing address first | |',
+      '',
+      'Create a preparation-only packet review checklist for PM-001.',
+    ].join('\n');
+
+    const detected = detectOperatorProspectListInMessage(prompt);
+    assert.equal(detected.detected, false);
+    assert.equal(detected.autoInject, false);
+    assert.equal(detected.promptImport, false);
+    assert.equal(detected.prospectCount, 0);
+    assert.equal(detected.suppressedFillableTableUpdate, true);
+    assert.equal(detected.suppressedFillableVerificationTable, true);
+    assert.ok(!(detected.prospects || []).some((p) => /Gamache/i.test(p.companyName || '')));
+    assert.ok(!(detected.prospects || []).some((p) => /prospect_id/i.test(p.companyName || '')));
+  });
 });
