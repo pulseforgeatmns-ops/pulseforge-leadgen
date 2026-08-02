@@ -119,9 +119,11 @@ function resolveLastOutputKind(awc) {
   const kind = String(raw).toLowerCase().trim();
   if (kind === 'fillable_verification_table') return 'fillable_table';
   if (kind === 'fillable_table') return 'fillable_table';
+  if (kind === 'packet_review') return 'packet_review';
   if (kind === 'verification_work_order') return 'verification_work_order';
   if (kind === 'canary_review_package') return 'canary_review_package';
   if (kind === 'provisional_drafts') return 'provisional_drafts';
+  if (/packet/.test(kind)) return 'packet_review';
   if (/fillable/.test(kind) && /table/.test(kind)) return 'fillable_table';
   if (/verification/.test(kind) && /work/.test(kind)) return 'verification_work_order';
   if (/draft/.test(kind)) return 'provisional_drafts';
@@ -227,6 +229,15 @@ function buildActiveWorkSuggestions(awc, context = {}) {
       chips.push('Draft packet for review.');
     }
     chips.push('What still blocks mailing?');
+  } else if (kind === 'packet_review') {
+    chips.push('Update another verification field.');
+    chips.push('Show only blocked prospects.');
+    chips.push('What still blocks mailing?');
+    if (prospectId) {
+      chips.push(`Revise ${prospectId} letter draft.`);
+    }
+    chips.push('Create packet review checklist.');
+    chips.push('Summarize what changed in this table.');
   } else if (kind === 'verification_work_order') {
     chips.push('Convert this into a fillable verification table.');
     chips.push('Show only blocked prospects.');

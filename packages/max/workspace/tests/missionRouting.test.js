@@ -2119,6 +2119,126 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(answer, /Market Intelligence/i);
     assert.doesNotMatch(answer, /Policy evaluation is not available/i);
   });
+
+  it('packet review reuses canary table for PM-001 — no prospect parse fallback', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    await workspace.ask({
+      sessionId: first.sessionId,
+      question: CONTINUATION_PROMPT,
+    });
+
+    await workspace.ask({
+      sessionId: first.sessionId,
+      question: [
+        'Update the fillable verification table.',
+        'For PM-001 only, set:',
+        '- website_status = verified',
+        '- website_value = https://www.gamacheproperties.com',
+        '- phone_status = verified',
+        '- phone_value = 603-555-0198',
+        '- mailing_address_status = verified',
+        '- mailing_address_value = 100 Market St, Manchester NH',
+        '- contact_role_status = verified',
+        '',
+        'Leave PM-002 and PM-003 unchanged.',
+        'Reassess PM-001 readiness using the table gates.',
+        'Return only the updated table plus one short preparation-only safety line.',
+      ].join('\n'),
+    });
+
+    const beforeRows = (
+      workspace._sessions.get(first.sessionId).activeWorkContext.tableRows || []
+    ).map((r) => ({ ...r }));
+    const beforePm001 = { ...beforeRows.find((r) => r.prospect_id === 'PM-001') };
+    const beforePm002 = { ...beforeRows.find((r) => r.prospect_id === 'PM-002') };
+    const beforePm003 = { ...beforeRows.find((r) => r.prospect_id === 'PM-003') };
+    assert.equal(beforePm001.mail_readiness, 'ready_for_review');
+    assert.equal(beforePm001.execution_readiness, 'blocked');
+
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: [
+        'Create a preparation-only packet review checklist for PM-001.',
+        'Use the current Campaign 001 canary table.',
+        'PM-001 is ready_for_review for mail readiness, but execution_readiness is still blocked.',
+        'Include packet contents, print/sign/mail checklist, fields to confirm before printing,',
+        'personalized letter draft, handwritten note draft, scorecard cover text,',
+        'first follow-up call notes, tracking fields after mailing,',
+        'and the final operator decision needed before anything is mailed.',
+        'Use only known table facts. Do not invent evidence.',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail anything.',
+      ].join(' '),
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const awc = workspace._sessions.get(result.sessionId).activeWorkContext;
+    const rows = awc.tableRows || [];
+    const pm001 = rows.find((r) => r.prospect_id === 'PM-001');
+    const pm002 = rows.find((r) => r.prospect_id === 'PM-002');
+    const pm003 = rows.find((r) => r.prospect_id === 'PM-003');
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.executionDomain, 'workspace');
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(result.structured.metadata.packetReview, true);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(result.structured.metadata.activeWorkContextReused, true);
+    assert.equal(result.structured.metadata.tableUpdate, false);
+    assert.equal(result.structured.metadata.prospectId, 'PM-001');
+    assert.equal(result.structured.metadata.executionReadiness, 'blocked');
+    assert.equal(awc.lastOutputType, 'packet_review');
+
+    assert.doesNotMatch(
+      answer,
+      /I see you intended to provide \d+ canary prospects/i
+    );
+    assert.doesNotMatch(answer, /could not parse them cleanly/i);
+    assert.doesNotMatch(answer, /Paste \d+ canary prospects/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /Switching from .* to General Conversation/i);
+
+    assert.match(answer, /packet (?:contents )?checklist/i);
+    assert.match(answer, /print\s*\/\s*sign\s*\/\s*mail checklist/i);
+    assert.match(answer, /Fields to confirm before printing/i);
+    assert.match(answer, /Personalized letter draft/i);
+    assert.match(answer, /Handwritten note draft/i);
+    assert.match(answer, /Scorecard cover text draft/i);
+    assert.match(answer, /follow-up call notes/i);
+    assert.match(answer, /tracking fields to log after mailing/i);
+    assert.match(answer, /Final operator decision needed before anything is mailed/i);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /ready_for_review/);
+    assert.match(answer, /execution(?:_readiness)?(?: is| remains|:)?\s*blocked/i);
+    assert.match(answer, /Preparation-only/);
+    assert.match(answer, /100 Market St/);
+    assert.doesNotMatch(answer, /\b\d+\s+units?\b/i);
+    assert.doesNotMatch(answer, /portfolio of \d+/i);
+
+    assert.equal(pm001.mail_readiness, 'ready_for_review');
+    assert.equal(pm001.execution_readiness, 'blocked');
+    assert.deepEqual(pm001, beforePm001);
+    assert.deepEqual(pm002, beforePm002);
+    assert.deepEqual(pm003, beforePm003);
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {

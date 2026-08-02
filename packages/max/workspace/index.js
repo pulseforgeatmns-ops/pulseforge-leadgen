@@ -83,6 +83,8 @@ module.exports = {
   isActiveWorkFollowUpCue: ActiveWorkContext.isActiveWorkFollowUpCue,
   isActiveWorkReuseProspectCue: ActiveWorkContext.isActiveWorkReuseProspectCue,
   isActiveWorkTransformCue: ActiveWorkContext.isActiveWorkTransformCue,
+  isPacketReviewRequest: ActiveWorkContext.isPacketReviewRequest,
+  extractPacketReviewProspectId: ActiveWorkContext.extractPacketReviewProspectId,
   isFillableTableRequest: ActiveWorkContext.isFillableTableRequest,
   isFillableTableUpdateRequest: ActiveWorkContext.isFillableTableUpdateRequest,
   isFillableTableReadinessReassessRequest:

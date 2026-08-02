@@ -22,6 +22,7 @@ const LAST_OUTPUT_TYPES = Object.freeze({
   VERIFICATION_WORK_ORDER: 'verification_work_order',
   FILLABLE_TABLE: 'fillable_table',
   PROVISIONAL_DRAFTS: 'provisional_drafts',
+  PACKET_REVIEW: 'packet_review',
 });
 
 /**
@@ -212,6 +213,7 @@ function isActiveWorkFollowUpCue(text) {
 
   if (isActiveWorkReuseProspectCue(lower)) return true;
   if (isFillableTableRequest(lower)) return true;
+  if (isPacketReviewRequest(lower)) return true;
 
   const cues = [
     /\bcontinue\b/,
@@ -230,6 +232,86 @@ function isActiveWorkFollowUpCue(text) {
     /\bwhat\s+should\s+i\s+do\s+first\b/,
   ];
   return cues.some((re) => re.test(lower));
+}
+
+/**
+ * Operator wants a preparation-only packet review artifact from the desk table
+ * (checklist / drafts / tracking) — not a new prospect paste and not an initial
+ * multi-prospect canary package deliverable list.
+ * @param {string} text
+ */
+function isPacketReviewRequest(text) {
+  const lower = String(text || '').toLowerCase();
+  if (!lower.trim()) return false;
+
+  // Strong cues: explicit packet-review artifact generation.
+  if (
+    /\bpacket\s+review(?:\s+checklist)?\b/.test(lower) ||
+    /\boperator\s+packet\s+review\b/.test(lower) ||
+    /\bcreate\s+(?:a\s+)?(?:preparation[-\s]*only\s+)?packet(?:\s+review)?\b/.test(
+      lower
+    ) ||
+    /\bdraft\s+(?:a\s+)?(?:PM-\d{3}\s+)?packet(?:\s+for\s+review)?\b/i.test(
+      text
+    ) ||
+    /\bpacket\s+for\s+review\b/.test(lower) ||
+    /\bprint\s*[\/-]?\s*sign\s*[\/-]?\s*mail\s+checklist\b/.test(lower) ||
+    (/\buse\s+the\s+current\b/.test(lower) &&
+      /\b(?:canary\s+)?table\b/.test(lower) &&
+      /\bpacket\b/.test(lower))
+  ) {
+    return true;
+  }
+
+  // Secondary cues only when targeting a named desk prospect.
+  // Avoid matching initial canary package lists that mention letter/note/cover
+  // as deliverables without asking to generate a packet review for PM-00x.
+  const namedProspect = /\b(?:for|of)\s+PM-\d{3}\b/i.test(text);
+  if (!namedProspect) return false;
+
+  return (
+    /\bpersonalized\s+letter(?:\s+draft)?\b/.test(lower) ||
+    /\bhandwritten\s+note(?:\s+draft)?\b/.test(lower) ||
+    /\bscorecard\s+cover(?:\s+text)?(?:\s+draft)?\b/.test(lower) ||
+    /\bfirst\s+follow[-\s]?up\s+call\s+notes\b/.test(lower) ||
+    (/\btracking\s+fields?\b/.test(lower) &&
+      /\b(?:after\s+mailing|once\s+mailed|to\s+log)\b/.test(lower))
+  );
+}
+
+/**
+ * Resolve which desk prospect a packet-review request targets.
+ * @param {string} text
+ * @param {string[]} [knownIds]
+ * @returns {string|null}
+ */
+function extractPacketReviewProspectId(text, knownIds = []) {
+  const raw = String(text || '');
+  const known = (Array.isArray(knownIds) ? knownIds : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
+  const knownUpper = new Set(known.map((id) => id.toUpperCase()));
+
+  const patterns = [
+    /\b(?:for|of)\s+(PM-\d{3})\b/i,
+    /\b(PM-\d{3})\s+(?:only|packet|review)\b/i,
+    /\bpacket(?:\s+review)?(?:\s+checklist)?\s+for\s+(PM-\d{3})\b/i,
+    /\bdraft\s+(PM-\d{3})\s+packet\b/i,
+    /\b(PM-\d{3})\b/i,
+  ];
+  for (const re of patterns) {
+    const match = re.exec(raw);
+    if (!match) continue;
+    const id = String(match[1] || '').trim();
+    if (!id) continue;
+    if (knownUpper.size === 0 || knownUpper.has(id.toUpperCase())) return id;
+    // Named id not on desk — still return so caller can clarify unknown.
+    return id;
+  }
+
+  // Single-row desk: allow omitting the id.
+  if (known.length === 1) return known[0];
+  return null;
 }
 
 /**
@@ -1233,6 +1315,8 @@ module.exports = {
   isActiveWorkReuseProspectCue,
   isActiveWorkFollowUpCue,
   isActiveWorkTransformCue,
+  isPacketReviewRequest,
+  extractPacketReviewProspectId,
   isExplicitNewMissionRequest,
   isExplicitContextOverride,
   isExplicitExecutionRequest,
