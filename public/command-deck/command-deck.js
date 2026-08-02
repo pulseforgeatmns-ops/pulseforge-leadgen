@@ -362,6 +362,12 @@
       return true;
     }
     if (/^reassess\b/i.test(text) && /\breadiness\b/i.test(text)) return true;
+    if (
+      /^reassess\b/i.test(text) &&
+      /\b(?:canary\s+table|(?:fillable\s+)?(?:verification\s+)?table)\b/i.test(text)
+    ) {
+      return true;
+    }
     if (/^return\s+only\b/i.test(text)) return true;
     if (/^keep\s+this\s+preparation/i.test(text)) return true;
     if (/^do\s+not\b/i.test(text)) return true;
@@ -385,10 +391,21 @@
     const forOnlySet = /\bfor\s+[A-Za-z0-9_-]+\s+only\b/i.test(raw);
     const reassess =
       /\breassess\b[\s\S]{0,120}\breadiness\b/i.test(raw) ||
-      /\busing\s+(?:the\s+)?table\s+gates\b/i.test(raw);
+      /\busing\s+(?:the\s+)?table\s+gates\b/i.test(raw) ||
+      /\breassess\b[\s\S]{0,160}\b(?:the\s+)?(?:campaign\s+\d+\s+)?(?:preparation[-\s]*only\s+)?canary\s+table\b/i.test(
+        raw
+      ) ||
+      /\breassess\b[\s\S]{0,120}\b(?:the\s+)?(?:fillable\s+)?verification\s+table\b/i.test(
+        raw
+      ) ||
+      /\breassess\b[\s\S]{0,80}\b(?:the\s+)?fillable\s+table\b/i.test(raw) ||
+      (/\breassess\b[\s\S]{0,60}\bthe\s+table\b/i.test(raw) &&
+        !/\breadiness\b/i.test(raw) &&
+        !/\busing\s+(?:the\s+)?table\s+gates\b/i.test(raw));
     if (updateCue && (fieldAssignment || forOnlySet || reassess)) return true;
     if (fieldAssignment && forOnlySet) return true;
     if (reassess && (forOnlySet || fieldAssignment || updateCue)) return true;
+    if (reassess) return true;
     return false;
   }
 
