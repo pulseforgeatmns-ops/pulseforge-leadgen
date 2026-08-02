@@ -2728,6 +2728,72 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(answer, /never authorize/i);
   });
 
+  it('Do not include Reasoning/Unavailable/Next suppresses packet-review scaffolding', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question: [
+        'Create a preparation-only packet review checklist for PM-001.',
+        '',
+        'Known facts available:',
+        '- prospect_id: PM-001',
+        '- company_name: Gamache Properties',
+        '- contact_name: Ben Gamache',
+        '- website_status: verified',
+        '- website_value: https://www.gamacheproperties.com',
+        '- mailing_address_status: verified',
+        '- mailing_address_value: 123 Main Street, Manchester, NH 03101',
+        '- phone_status: verified',
+        '- phone_value: 603-555-0198',
+        '- contact_role_status: verified',
+        '- mail_readiness: ready_for_review',
+        '- draft_readiness: allowed',
+        '- execution_readiness: blocked',
+        '- notes: mailing address reconfirmed; website, phone, and contact role remain verified',
+        '',
+        'Return only the packet review artifact.',
+        'Do not include Reasoning, Unavailable context, or Next sections.',
+        'Do not invent industry.',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(result.structured.metadata.packetReview, true);
+    assert.equal(result.structured.metadata.inlineKnownFacts, true);
+    assert.equal(result.structured.metadata.strictOutputShape, true);
+    assert.equal(result.presentation, 'strict_output_shape');
+    assert.deepEqual(result.structured.reasoning, []);
+    assert.deepEqual(result.structured.nextInvestigations, []);
+    assert.deepEqual(result.structured.metadata.unavailable, []);
+
+    assert.match(answer, /packet (?:contents )?checklist/i);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(
+      answer,
+      /Preparation-only\.\s*No mission created\.\s*No launch, execution, approval, print, or mail/i
+    );
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /^Next:/m);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /Built packet review from inline known facts/i);
+  });
+
   it('packet review preserves prior entity industry when table omits it', async () => {
     const missionEngine = testMissionEngine();
     const workspace = createWorkspaceEngine({

@@ -141,6 +141,9 @@ function buildResponseMetadata(partial = {}) {
   if (partial.strictOutputShape === true) {
     meta.strictOutputShape = true;
   }
+  if (partial.strictOutputShape === false) {
+    meta.strictOutputShape = false;
+  }
   if (partial.prospectCount != null && Number.isFinite(Number(partial.prospectCount))) {
     meta.prospectCount = Number(partial.prospectCount);
   }

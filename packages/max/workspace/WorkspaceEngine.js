@@ -1415,7 +1415,9 @@ function buildPacketReviewArtifactResponse(input = {}) {
     .join('; ');
 
   const question = String(input.question || '');
-  const debugOutput = wantsPacketReviewDebugOutput(question);
+  const suppressScaffolding = wantsPacketReviewArtifactSuppression(question);
+  const debugOutput =
+    !suppressScaffolding && wantsPacketReviewDebugOutput(question);
 
   const answer = [
     `Preparation-only packet review — Campaign ${campaignId} / ${prospectId}`,
@@ -1582,26 +1584,73 @@ function buildPacketReviewArtifactResponse(input = {}) {
       mailReadiness,
       executionReadiness,
       // Artifact mode: suppress Reasoning / Unavailable / Next unless debug.
-      strictOutputShape: debugOutput ? undefined : true,
+      strictOutputShape: !debugOutput,
     },
   });
 }
 
 /**
+ * Operator asked to suppress packet-review debug scaffolding
+ * (Reasoning / Unavailable / Next) — artifact mode only.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function wantsPacketReviewArtifactSuppression(text) {
+  const lower = String(text || '').toLowerCase();
+  if (!lower.trim()) return false;
+
+  const noReasoning =
+    /\bdo\s+not\s+include\s+reasoning\b/.test(lower) ||
+    /\bdon'?t\s+include\s+reasoning\b/.test(lower) ||
+    /\bwithout\s+reasoning\b/.test(lower) ||
+    /\bno\s+reasoning\b/.test(lower);
+
+  const noUnavailable =
+    /\bdo\s+not\s+include\s+unavailable\b/.test(lower) ||
+    /\bdon'?t\s+include\s+unavailable\b/.test(lower) ||
+    /\bwithout\s+unavailable\b/.test(lower) ||
+    /\bno\s+unavailable\b/.test(lower);
+
+  const noNext =
+    /\bdo\s+not\s+include\s+next\b/.test(lower) ||
+    /\bdon'?t\s+include\s+next\b/.test(lower) ||
+    /\bwithout\s+next(?:\s+sections?)?\b/.test(lower) ||
+    /\bno\s+next(?:\s+sections?|\s+steps?|\s+investigations?)?\b/.test(lower);
+
+  const returnOnly =
+    /\breturn\s+only\b/.test(lower) ||
+    /\bartifact\s+only\b/.test(lower) ||
+    /\bonly\s+(?:the\s+)?(?:packet\s+review\s+)?artifact\b/.test(lower);
+
+  return noReasoning || noUnavailable || noNext || returnOnly;
+}
+
+/**
  * Operator asked for packet-review debug sections (Reasoning / Unavailable / Next).
+ * Negated phrasing ("do not include reasoning") is not treated as a debug ask.
  * @param {string} text
  * @returns {boolean}
  */
 function wantsPacketReviewDebugOutput(text) {
   const lower = String(text || '').toLowerCase();
   if (!lower.trim()) return false;
+  if (wantsPacketReviewArtifactSuppression(lower)) return false;
+
   return (
     /\bdebug\s+mode\b/.test(lower) ||
     /\bwith\s+debug\b/.test(lower) ||
-    /\binclude\s+reasoning\b/.test(lower) ||
-    /\bshow\s+reasoning\b/.test(lower) ||
-    /\binclude\s+unavailable\b/.test(lower) ||
-    /\binclude\s+next\s+(?:steps?|investigations?)\b/.test(lower)
+    /(?<!\bdo\s+not\s)(?<!\bdon'?t\s)(?<!\bwithout\s)\binclude\s+reasoning\b/.test(
+      lower
+    ) ||
+    /(?<!\bdo\s+not\s)(?<!\bdon'?t\s)(?<!\bwithout\s)\bshow\s+reasoning\b/.test(
+      lower
+    ) ||
+    /(?<!\bdo\s+not\s)(?<!\bdon'?t\s)(?<!\bwithout\s)\binclude\s+unavailable\b/.test(
+      lower
+    ) ||
+    /(?<!\bdo\s+not\s)(?<!\bdon'?t\s)(?<!\bwithout\s)\binclude\s+next\s+(?:steps?|investigations?|sections?)\b/.test(
+      lower
+    )
   );
 }
 

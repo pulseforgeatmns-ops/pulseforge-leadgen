@@ -34,8 +34,9 @@ class PresentationEngine {
     let prose;
     let presentation = 'fallback';
 
-    // Strict output-shape: answer is already the operator artifact — do not
-    // append Reasoning / Unavailable / Next, and do not rephrase via Claude.
+    // Strict output-shape / packet-review artifact mode: answer is already the
+    // operator artifact — do not append Reasoning / Unavailable / Next, and do
+    // not rephrase via Claude.
     if (metadata.strictOutputShape === true) {
       prose = formatDeterministicProse(structured);
       return {
@@ -43,6 +44,34 @@ class PresentationEngine {
         structured,
         metadata: {
           ...metadata,
+          presentation: 'strict_output_shape',
+        },
+        presentation: 'strict_output_shape',
+      };
+    }
+
+    // Packet-review artifacts default to answer-only unless debug explicitly
+    // disabled strict shaping (strictOutputShape === false).
+    if (
+      metadata.packetReview === true &&
+      metadata.strictOutputShape !== false
+    ) {
+      const answerOnly = {
+        ...structured,
+        reasoning: [],
+        nextInvestigations: [],
+        metadata: {
+          ...metadata,
+          unavailable: [],
+          strictOutputShape: true,
+        },
+      };
+      prose = formatDeterministicProse(answerOnly);
+      return {
+        prose,
+        structured: answerOnly,
+        metadata: {
+          ...answerOnly.metadata,
           presentation: 'strict_output_shape',
         },
         presentation: 'strict_output_shape',
