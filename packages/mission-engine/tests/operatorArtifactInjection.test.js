@@ -493,4 +493,31 @@ describe('Campaign 001 canary prospect block extraction', () => {
     );
     assert.match(detected.objectiveText, /Do not create a mission/i);
   });
+
+  it('does not sniff fillable table field assignments as a ProspectList', () => {
+    const prompt = [
+      'Update the fillable verification table.',
+      'For PM-001 only, set:',
+      '- website_status = verified',
+      '- website_value = https://www.gamacheproperties.com',
+      '- phone_status = verified',
+      '- phone_value = 603-555-0198',
+      '- mailing_address_status = verified',
+      '- mailing_address_value = 100 Market St, Manchester NH',
+      '- notes = mail gates verified; contact role still needs verification',
+      '',
+      'Leave PM-002 and PM-003 unchanged.',
+      'Reassess PM-001 readiness using the table gates.',
+      'Return only the updated table plus one short preparation-only safety line.',
+    ].join('\n');
+
+    const detected = detectOperatorProspectListInMessage(prompt);
+    assert.equal(detected.detected, false);
+    assert.equal(detected.autoInject, false);
+    assert.equal(detected.promptImport, false);
+    assert.equal(detected.prospectCount, 0);
+    assert.equal(detected.suppressedFillableTableUpdate, true);
+    assert.ok(!(detected.prospects || []).some((p) => /For PM-001 only/i.test(p.companyName || '')));
+    assert.ok(!(detected.prospects || []).some((p) => /^set:?$/i.test(p.companyName || '')));
+  });
 });

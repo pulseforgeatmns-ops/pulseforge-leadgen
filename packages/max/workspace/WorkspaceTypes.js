@@ -96,6 +96,9 @@ function buildResponseMetadata(partial = {}) {
   if (Array.isArray(partial.updatedProspectIds)) {
     meta.updatedProspectIds = partial.updatedProspectIds.map(String);
   }
+  if (Array.isArray(partial.reassessedProspectIds)) {
+    meta.reassessedProspectIds = partial.reassessedProspectIds.map(String);
+  }
   if (partial.activeWorkContextReused === true) {
     meta.activeWorkContextReused = true;
   }

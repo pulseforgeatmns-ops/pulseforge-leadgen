@@ -250,11 +250,16 @@
 
   /**
    * SPEC-045 — detect a ProspectList-shaped block for display cards only.
+   * Fillable verification table field mutations must not show as Prospect List Detected.
    * @param {string} text
    */
   function detectProspectListDisplay(text) {
     const raw = String(text || '').replace(/^\uFEFF/, '');
     if (!raw.trim()) return null;
+
+    // Suppress false positives from fillable-table updates / readiness reassessment.
+    if (looksLikeFillableTableMutationDisplay(raw)) return null;
+
     const lines = raw.split(/\r?\n/);
     let start = -1;
     let hasHeader = false;
@@ -266,6 +271,7 @@
       if (/^(build|create|launch)\s+(a\s+)?campaign\b/i.test(line) && !/,|\t/.test(line)) {
         continue;
       }
+      if (isFillableTableMutationDisplayLine(line)) continue;
       const cells = line.split(/,|\t/).map((c) => c.trim());
       if (cells.some((c) => headerRe.test(c) || /^company_?name$/i.test(c.replace(/\s+/g, '_')))) {
         start = i;
@@ -284,6 +290,7 @@
           const line = String(lines[i] || '').trim();
           if (!line) break;
           if (/^(build|create|launch)\s+(a\s+)?campaign\b/i.test(line)) continue;
+          if (isFillableTableMutationDisplayLine(line)) continue;
           names.push(i);
         }
         if (names.length >= 2) start = names[0];
@@ -295,7 +302,10 @@
       if (!String(lines[i] || '').trim() && i > start) break;
       end = i;
     }
-    const blockLines = lines.slice(start, end + 1).filter((l) => String(l).trim());
+    const blockLines = lines
+      .slice(start, end + 1)
+      .filter((l) => String(l).trim())
+      .filter((l) => !isFillableTableMutationDisplayLine(l));
     if (blockLines.length < (hasHeader ? 2 : 2)) return null;
     const dataLines = hasHeader ? blockLines.slice(1) : blockLines;
     const count = dataLines.filter((l) => String(l).trim()).length;
@@ -310,6 +320,76 @@
       hasHeader,
       objective,
     };
+  }
+
+  const FILLABLE_TABLE_DISPLAY_FIELDS = [
+    'prospect_id',
+    'company_name',
+    'contact_name',
+    'contact_role_status',
+    'website_status',
+    'website_value',
+    'mailing_address_status',
+    'mailing_address_value',
+    'phone_status',
+    'phone_value',
+    'source_to_check_first',
+    'verification_status',
+    'mail_readiness',
+    'draft_readiness',
+    'execution_readiness',
+    'operator_next_action',
+    'notes',
+  ];
+
+  function isFillableTableMutationDisplayLine(line) {
+    const text = String(line || '').trim();
+    if (!text) return false;
+    if (
+      FILLABLE_TABLE_DISPLAY_FIELDS.some((field) =>
+        new RegExp(`^(?:[-*•]\\s*)?${field}\\s*[=:]\\s*\\S`, 'i').test(text)
+      )
+    ) {
+      return true;
+    }
+    if (/^for\s+[A-Za-z0-9_-]+\s+only\b/i.test(text)) return true;
+    if (/^set\s*:?\s*$/i.test(text)) return true;
+    if (/^leave\b[\s\S]{0,80}\bunchanged\b/i.test(text)) return true;
+    if (/^update\s+(?:the\s+)?(?:fillable\s+)?(?:verification\s+)?table\b/i.test(text)) {
+      return true;
+    }
+    if (/^edit\s+(?:the\s+)?(?:fillable\s+)?(?:verification\s+)?table\b/i.test(text)) {
+      return true;
+    }
+    if (/^reassess\b/i.test(text) && /\breadiness\b/i.test(text)) return true;
+    if (/^return\s+only\b/i.test(text)) return true;
+    if (/^keep\s+this\s+preparation/i.test(text)) return true;
+    if (/^do\s+not\b/i.test(text)) return true;
+    return false;
+  }
+
+  function looksLikeFillableTableMutationDisplay(text) {
+    const raw = String(text || '');
+    if (!raw.trim()) return false;
+    const lower = raw.toLowerCase();
+    const updateCue =
+      /\bupdate\s+(?:the\s+)?(?:fillable\s+)?(?:verification\s+)?table\b/.test(
+        lower
+      ) ||
+      /\bedit\s+(?:the\s+)?(?:fillable\s+)?(?:verification\s+)?table\b/.test(
+        lower
+      );
+    const fieldAssignment = FILLABLE_TABLE_DISPLAY_FIELDS.some((field) =>
+      new RegExp(`\\b${field}\\s*[=:]\\s*\\S`, 'i').test(raw)
+    );
+    const forOnlySet = /\bfor\s+[A-Za-z0-9_-]+\s+only\b/i.test(raw);
+    const reassess =
+      /\breassess\b[\s\S]{0,120}\breadiness\b/i.test(raw) ||
+      /\busing\s+(?:the\s+)?table\s+gates\b/i.test(raw);
+    if (updateCue && (fieldAssignment || forOnlySet || reassess)) return true;
+    if (fieldAssignment && forOnlySet) return true;
+    if (reassess && (forOnlySet || fieldAssignment || updateCue)) return true;
+    return false;
   }
 
   /**
