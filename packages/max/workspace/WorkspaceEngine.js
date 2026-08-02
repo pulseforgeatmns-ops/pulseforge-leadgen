@@ -5,6 +5,7 @@ const { buildOpeningState } = require('./OpeningStateBuilder');
 const {
   buildSuggestions,
   buildActiveWorkSuggestions,
+  isActiveDeskWorkflow,
 } = require('./SuggestionEngine');
 const { SessionStore } = require('./SessionStore');
 const { composeResponse } = require('./ResponseComposer');
@@ -53,6 +54,7 @@ const {
   ingestPastedFillableVerificationTable,
   looksLikeFillableVerificationTablePaste,
   parseInlinePacketReviewKnownFacts,
+  CAMPAIGN_001_PREPARATION_ONLY_CANARY,
   LAST_OUTPUT_TYPES,
 } = require('./ActiveWorkContext');
 const {
@@ -243,7 +245,11 @@ class WorkspaceEngine {
         prose: proseEarly,
         structured: structuredEarly,
         metadata: presentedEarly.metadata,
-        suggestions: structuredEarly.nextInvestigations,
+        suggestions: resolveResultSuggestions({
+          structured: structuredEarly,
+          session,
+          question,
+        }),
         recommendedActions: structuredEarly.recommendedActions,
         contextSwitch: envelopeSwitch,
         domainSwitch: null,
@@ -512,7 +518,11 @@ class WorkspaceEngine {
       prose,
       structured,
       metadata: presented.metadata,
-      suggestions: structured.nextInvestigations,
+      suggestions: resolveResultSuggestions({
+        structured,
+        session,
+        question,
+      }),
       recommendedActions: structured.recommendedActions,
       contextSwitch: envelopeSwitch,
       domainSwitch: (domainAttach && domainAttach.domainSwitch) || null,
@@ -1656,6 +1666,23 @@ function buildPacketReviewArtifactResponse(input = {}) {
       campaignId,
       mailReadiness,
       executionReadiness,
+      // Response-level chip routing without requiring persisted activeWorkContext
+      // (inline known-facts path keeps a temporary packetReviewContext only).
+      outputKind: 'packet_review_artifact',
+      lastOutputKind: LAST_OUTPUT_TYPES.PACKET_REVIEW,
+      contextHints: {
+        workflow: CAMPAIGN_001_PREPARATION_ONLY_CANARY,
+        lastOutputKind: LAST_OUTPUT_TYPES.PACKET_REVIEW,
+        lastOutputType: LAST_OUTPUT_TYPES.PACKET_REVIEW,
+        outputKind: 'packet_review_artifact',
+        preparationOnly: true,
+        packetReview: true,
+        prospectId,
+        campaignId,
+        mailReadiness,
+        executionReadiness,
+        inlineKnownFacts: fromInlineFacts || undefined,
+      },
       // Artifact mode: suppress Reasoning / Unavailable / Next unless debug.
       strictOutputShape: !debugOutput,
     },
@@ -2249,6 +2276,56 @@ function canaryWorkflowSuggestions(input = {}) {
   return buildActiveWorkSuggestions(awc, {
     latestQuestion: input.question,
   }).slice(0, 5);
+}
+
+/**
+ * UI suggestion chips for an ask result. Prefer structured nextInvestigations
+ * when present; otherwise rebuild from activeWorkContext and/or response-level
+ * packet-review metadata (outputKind / contextHints) so artifact mode can
+ * suppress "Next:" prose without falling back to briefing chips.
+ * @param {{ structured?: object, session?: object, question?: string }} input
+ * @returns {string[]}
+ */
+function resolveResultSuggestions(input = {}) {
+  const structured = input.structured && typeof input.structured === 'object'
+    ? input.structured
+    : {};
+  const next = Array.isArray(structured.nextInvestigations)
+    ? structured.nextInvestigations.map(String).filter(Boolean)
+    : [];
+  if (next.length) return next;
+
+  const metadata =
+    structured.metadata && typeof structured.metadata === 'object'
+      ? structured.metadata
+      : {};
+  const session = input.session || null;
+  const awc = getActiveWorkContext(session);
+  const page =
+    (session && session.context && session.context.page) || 'command-deck';
+
+  const wantsWorkflowChips =
+    (awc && isActiveDeskWorkflow(awc)) ||
+    metadata.packetReview === true ||
+    metadata.canaryPreparationOnly === true ||
+    Boolean(metadata.contextHints) ||
+    /packet/.test(String(metadata.outputKind || metadata.lastOutputKind || ''));
+
+  if (!wantsWorkflowChips) return [];
+
+  return buildSuggestions({
+    page,
+    ...((session && session.context && typeof session.context === 'object'
+      ? session.context
+      : {})),
+    activeWorkContext: awc || undefined,
+    metadata,
+    outputKind: metadata.outputKind,
+    lastOutputKind: metadata.lastOutputKind || metadata.outputKind,
+    contextHints: metadata.contextHints,
+    packetReviewContext: metadata.packetReviewContext,
+    latestQuestion: input.question,
+  });
 }
 
 function resolveCanaryLastOutputType(question, reason) {

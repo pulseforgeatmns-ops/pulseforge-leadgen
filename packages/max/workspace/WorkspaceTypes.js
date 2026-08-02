@@ -138,6 +138,26 @@ function buildResponseMetadata(partial = {}) {
   if (partial.draftConfidence != null) {
     meta.draftConfidence = String(partial.draftConfidence);
   }
+  // Suggestion-engine routing for artifact responses (esp. inline packet review
+  // that does not mutate activeWorkContext).
+  if (partial.outputKind != null && String(partial.outputKind).trim() !== '') {
+    meta.outputKind = String(partial.outputKind);
+  }
+  if (
+    partial.lastOutputKind != null &&
+    String(partial.lastOutputKind).trim() !== ''
+  ) {
+    meta.lastOutputKind = String(partial.lastOutputKind);
+  }
+  if (partial.contextHints && typeof partial.contextHints === 'object') {
+    meta.contextHints = { ...partial.contextHints };
+  }
+  if (
+    partial.packetReviewContext &&
+    typeof partial.packetReviewContext === 'object'
+  ) {
+    meta.packetReviewContext = { ...partial.packetReviewContext };
+  }
   if (partial.strictOutputShape === true) {
     meta.strictOutputShape = true;
   }

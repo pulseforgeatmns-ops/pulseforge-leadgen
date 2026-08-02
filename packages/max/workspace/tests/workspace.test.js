@@ -256,6 +256,42 @@ describe('SuggestionEngine', () => {
     assert.ok(!chips.some((s) => /^(?:Mail|Launch|Execute|Approve)\b/i.test(s)));
   });
 
+  it('uses packet-review chips from response-level outputKind/contextHints without activeWorkContext', () => {
+    const chips = buildSuggestions({
+      ...sampleDeckContext(),
+      outputKind: 'packet_review_artifact',
+      contextHints: {
+        workflow: 'campaign_001_preparation_only_canary',
+        lastOutputKind: 'packet_review',
+        preparationOnly: true,
+        packetReview: true,
+        prospectId: 'PM-002',
+        mailReadiness: 'blocked',
+        executionReadiness: 'blocked',
+      },
+      metadata: {
+        packetReview: true,
+        canaryPreparationOnly: true,
+        outputKind: 'packet_review_artifact',
+        prospectId: 'PM-002',
+        mailReadiness: 'blocked',
+        executionReadiness: 'blocked',
+      },
+    });
+
+    assert.ok(chips.some((s) => /missing verification fields/i.test(s)));
+    assert.ok(chips.some((s) => /Create verification plan/i.test(s)));
+    assert.ok(chips.some((s) => /Update readiness fields/i.test(s)));
+    assert.ok(chips.some((s) => /packet checklist for another prospect/i.test(s)));
+    assert.ok(chips.some((s) => /final operator decision/i.test(s)));
+    assert.ok(chips.some((s) => /still blocks mailing/i.test(s)));
+    assert.ok(!chips.some((s) => /What changed overnight/i.test(s)));
+    assert.ok(!chips.some((s) => /top opportunity ranked first/i.test(s)));
+    assert.ok(!chips.some((s) => /Compare today's top opportunities/i.test(s)));
+    assert.ok(!chips.some((s) => /^Show risks\.?$/i.test(s)));
+    assert.ok(!chips.some((s) => /^(?:Mail|Launch|Execute|Approve|Print)\b/i.test(s)));
+  });
+
   it('falls back to briefing chips when no activeWorkContext', () => {
     const chips = buildSuggestions(sampleDeckContext());
     assert.ok(chips.some((s) => /overnight/i.test(s)));

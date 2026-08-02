@@ -2878,6 +2878,93 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(answer, /^Next:/m);
     assert.doesNotMatch(answer, /(?<!No )Mission created/i);
     assert.doesNotMatch(answer, /appears to be in/i);
+
+    const chips = result.suggestions || [];
+    assert.ok(chips.length >= 3, `expected packet-review chips, got ${JSON.stringify(chips)}`);
+    assert.ok(
+      chips.some((s) =>
+        /missing verification fields|verification plan|readiness fields|packet checklist for another prospect|final operator decision|still blocks mailing/i.test(
+          s
+        )
+      ),
+      `expected packet/canary chips, got: ${JSON.stringify(chips)}`
+    );
+    assert.ok(!chips.some((s) => /Why is the top opportunity ranked first/i.test(s)));
+    assert.ok(!chips.some((s) => /What changed overnight/i.test(s)));
+    assert.ok(!chips.some((s) => /Compare today's top opportunities/i.test(s)));
+    assert.ok(!chips.some((s) => /^Show risks\.?$/i.test(s)));
+    assert.ok(
+      !chips.some((s) =>
+        /^(?:Mail|Launch|Execute|Approve|Print)\b/i.test(String(s))
+      )
+    );
+    assert.equal(result.structured.metadata.outputKind, 'packet_review_artifact');
+    assert.ok(result.structured.metadata.contextHints);
+    assert.equal(
+      result.structured.metadata.contextHints.lastOutputKind,
+      'packet_review'
+    );
+  });
+
+  it('askWorkspace keeps packet-review chips after inline known-facts PM-002 review', async () => {
+    const { createMaxReasoningRuntime } = require('../../index');
+    const missionEngine = testMissionEngine();
+    const max = createMaxReasoningRuntime({
+      disableLlm: true,
+      missionEngine,
+      missionsEnabled: true,
+    });
+
+    const result = await max.askWorkspace({
+      question: [
+        'Create a preparation-only packet review checklist for PM-002.',
+        '',
+        'Known facts available:',
+        '- prospect_id: PM-002',
+        '- company_name: Elm Grove Companies',
+        '- contact_name: David Schleyer',
+        '- website_status: blocked',
+        '- website_value: unknown',
+        '- mailing_address_status: blocked',
+        '- mailing_address_value: unknown',
+        '- phone_status: blocked',
+        '- phone_value: unknown',
+        '- contact_role_status: needs verification',
+        '- mail_readiness: blocked',
+        '- draft_readiness: allowed',
+        '- execution_readiness: blocked',
+        '',
+        'Do not include Reasoning, Unavailable context, or Next sections.',
+        'Do not invent industry.',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+        briefing: {
+          headline: 'Quiet morning',
+          summary: 'No major movement overnight.',
+          watchAlertCount: 1,
+        },
+      },
+    });
+
+    const chips = result.suggestions || [];
+    assert.equal(result.structured.metadata.packetReview, true);
+    assert.equal(result.structured.metadata.inlineKnownFacts, true);
+    assert.ok(chips.length >= 3, `expected chips, got ${JSON.stringify(chips)}`);
+    assert.ok(
+      chips.some((s) =>
+        /missing verification fields|verification plan|readiness fields|packet checklist|operator decision|blocks mailing/i.test(
+          s
+        )
+      ),
+      `expected packet chips after askWorkspace personalization, got: ${JSON.stringify(chips)}`
+    );
+    assert.ok(!chips.some((s) => /What changed overnight/i.test(s)));
+    assert.ok(!chips.some((s) => /top opportunity ranked first/i.test(s)));
+    assert.ok(!chips.some((s) => /Compare today's top opportunities/i.test(s)));
+    assert.ok(!chips.some((s) => /^Show risks\.?$/i.test(s)));
   });
 
   it('packet review preserves prior entity industry when table omits it', async () => {

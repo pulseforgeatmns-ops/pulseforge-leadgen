@@ -18,6 +18,8 @@ const {
   buildSuggestions,
   buildActiveWorkSuggestions,
   isActiveDeskWorkflow,
+  resolveResponseWorkContext,
+  resolveSuggestionWorkContext,
   topCompanyName,
 } = require('./SuggestionEngine');
 const { SessionStore } = require('./SessionStore');
@@ -59,6 +61,8 @@ module.exports = {
   buildSuggestions,
   buildActiveWorkSuggestions,
   isActiveDeskWorkflow,
+  resolveResponseWorkContext,
+  resolveSuggestionWorkContext,
   topCompanyName,
   SessionStore,
   assembleEvidence,
