@@ -2794,6 +2794,92 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(answer, /Built packet review from inline known facts/i);
   });
 
+  it('blocked PM-002 packet review shows why-blocked and pre-mail verification plan', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question: [
+        'Create a preparation-only packet review checklist for PM-002.',
+        '',
+        'Known facts available:',
+        '- prospect_id: PM-002',
+        '- company_name: Elm Grove Companies',
+        '- contact_name: David Schleyer',
+        '- website_status: blocked',
+        '- website_value: unknown',
+        '- mailing_address_status: blocked',
+        '- mailing_address_value: unknown',
+        '- phone_status: blocked',
+        '- phone_value: unknown',
+        '- contact_role_status: needs verification',
+        '- mail_readiness: blocked',
+        '- draft_readiness: allowed',
+        '- execution_readiness: blocked',
+        '',
+        'Do not include Reasoning, Unavailable context, or Next sections.',
+        'Do not invent industry.',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(result.structured.metadata.packetReview, true);
+    assert.equal(result.structured.metadata.inlineKnownFacts, true);
+    assert.equal(result.structured.metadata.mailReadiness, 'blocked');
+    assert.equal(result.structured.metadata.executionReadiness, 'blocked');
+    assert.equal(result.structured.metadata.strictOutputShape, true);
+
+    assert.match(answer, /Why blocked for mailing:/i);
+    assert.match(answer, /mailing address unknown\/blocked/i);
+    assert.match(answer, /website unknown\/blocked/i);
+    assert.match(answer, /phone unknown\/blocked/i);
+    assert.match(answer, /contact role needs verification/i);
+
+    assert.match(
+      answer,
+      /Print\s*\/\s*sign\s*\/\s*mail checklist:\s*not available until verification is complete/i
+    );
+    assert.match(answer, /Future print\s*\/\s*sign\s*\/\s*mail checklist/i);
+    assert.match(answer, /Pre-mail verification plan/i);
+    assert.match(
+      answer,
+      /Verify (?:mailing address|phone).*trusted source or CRM/i
+    );
+    assert.match(answer, /do not call until a verified number exists/i);
+    assert.doesNotMatch(answer, /First follow-up call notes/i);
+    assert.doesNotMatch(answer, /Reference the packet only after it is actually mailed/i);
+
+    assert.match(answer, /current_mail_readiness:\s*blocked/i);
+    assert.match(answer, /mail_readiness_at_send:\s*\(set when mailed\)/i);
+    assert.doesNotMatch(answer, /mail_readiness_at_send:\s*blocked/i);
+
+    assert.match(answer, /do not print\/mail until fields are verified/i);
+    assert.match(answer, /Execution readiness:\s*blocked/i);
+    assert.match(
+      answer,
+      /Preparation-only\.\s*No mission created\.\s*No launch, execution, approval, print, or mail/i
+    );
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /^Next:/m);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /appears to be in/i);
+  });
+
   it('packet review preserves prior entity industry when table omits it', async () => {
     const missionEngine = testMissionEngine();
     const workspace = createWorkspaceEngine({
