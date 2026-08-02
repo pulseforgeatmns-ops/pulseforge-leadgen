@@ -93,6 +93,12 @@ function buildResponseMetadata(partial = {}) {
   if (partial.packetReview === true) {
     meta.packetReview = true;
   }
+  if (partial.inlineKnownFacts === true) {
+    meta.inlineKnownFacts = true;
+  }
+  if (Array.isArray(partial.missingRequiredFields)) {
+    meta.missingRequiredFields = partial.missingRequiredFields.map(String);
+  }
   if (partial.tableUpdate === true) {
     meta.tableUpdate = true;
   }
@@ -107,6 +113,9 @@ function buildResponseMetadata(partial = {}) {
   }
   if (partial.activeWorkContextReused === true) {
     meta.activeWorkContextReused = true;
+  }
+  if (partial.activeWorkContextReused === false) {
+    meta.activeWorkContextReused = false;
   }
   if (partial.missingActiveWorkContext === true) {
     meta.missingActiveWorkContext = true;
