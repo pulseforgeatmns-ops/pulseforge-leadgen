@@ -88,6 +88,8 @@ module.exports = {
   isActiveWorkReuseProspectCue: ActiveWorkContext.isActiveWorkReuseProspectCue,
   isActiveWorkTransformCue: ActiveWorkContext.isActiveWorkTransformCue,
   isPacketReviewRequest: ActiveWorkContext.isPacketReviewRequest,
+  isCanarySummaryJudgmentRequest:
+    ActiveWorkContext.isCanarySummaryJudgmentRequest,
   extractPacketReviewProspectId: ActiveWorkContext.extractPacketReviewProspectId,
   isFillableTableRequest: ActiveWorkContext.isFillableTableRequest,
   isFillableTableUpdateRequest: ActiveWorkContext.isFillableTableUpdateRequest,
@@ -103,6 +105,7 @@ module.exports = {
     ActiveWorkContext.looksLikeFillableVerificationTablePaste,
   parseFillableVerificationTableFromMessage:
     ActiveWorkContext.parseFillableVerificationTableFromMessage,
+  parseKnownCurrentStateBullets: ActiveWorkContext.parseKnownCurrentStateBullets,
   ingestPastedFillableVerificationTable:
     ActiveWorkContext.ingestPastedFillableVerificationTable,
 };
