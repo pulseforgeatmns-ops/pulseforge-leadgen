@@ -253,6 +253,11 @@ function looksLikeCompanyNameOnly(value) {
   if (looksLikeWebsite(s) || looksLikePhone(s)) return false;
   // Street-like addresses usually start with a digit.
   if (/^\d+\s+\S/.test(s)) return false;
+  // Fillable-table mutation fragments ("For PM-001 only", "set:") are not companies.
+  if (/^for\s+\S+\s+only\b/i.test(s)) return false;
+  if (/^set\s*:?\s*$/i.test(s)) return false;
+  if (FILLABLE_TABLE_FIELD_ASSIGNMENT.test(s)) return false;
+  if (/_(?:status|value|readiness)$/i.test(s)) return false;
   // SPEC-052: mission prose / instructions are not company names
   if (looksLikeNaturalLanguage(s)) return false;
   return true;
@@ -611,6 +616,81 @@ const INLINE_INSTRUCTION_START =
 
 const CHECKLIST_BULLET = /^\s*[-*•]\s+\S/;
 
+/** Fillable verification table columns — field assignment lines are not companies. */
+const FILLABLE_TABLE_FIELD_NAMES = Object.freeze([
+  'prospect_id',
+  'company_name',
+  'contact_name',
+  'contact_role_status',
+  'website_status',
+  'website_value',
+  'mailing_address_status',
+  'mailing_address_value',
+  'phone_status',
+  'phone_value',
+  'source_to_check_first',
+  'verification_status',
+  'mail_readiness',
+  'draft_readiness',
+  'execution_readiness',
+  'operator_next_action',
+  'notes',
+]);
+
+const FILLABLE_TABLE_FIELD_ASSIGNMENT = new RegExp(
+  `^(?:[-*•]\\s*)?(?:${FILLABLE_TABLE_FIELD_NAMES.join('|')})\\s*[=:]\\s*\\S`,
+  'i'
+);
+
+/**
+ * True for fillable-table mutation / readiness reassessment messages that must
+ * never be sniffed as ProspectList pastes.
+ * @param {string} text
+ */
+function looksLikeFillableTableMutationMessage(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return false;
+  const lower = raw.toLowerCase();
+  const updateCue =
+    /\bupdate\s+(?:the\s+)?(?:fillable\s+)?(?:verification\s+)?table\b/.test(
+      lower
+    ) ||
+    /\bedit\s+(?:the\s+)?(?:fillable\s+)?(?:verification\s+)?table\b/.test(
+      lower
+    );
+  const fieldAssignment = FILLABLE_TABLE_FIELD_NAMES.some((field) =>
+    new RegExp(`\\b${field}\\s*[=:]\\s*\\S`, 'i').test(raw)
+  );
+  const forOnlySet = /\bfor\s+[A-Za-z0-9_-]+\s+only\b/i.test(raw);
+  const reassess =
+    /\breassess\b[\s\S]{0,120}\breadiness\b/i.test(raw) ||
+    /\busing\s+(?:the\s+)?table\s+gates\b/i.test(raw);
+  if (updateCue && (fieldAssignment || forOnlySet || reassess)) return true;
+  if (fieldAssignment && forOnlySet) return true;
+  if (reassess && (forOnlySet || fieldAssignment || updateCue)) return true;
+  return false;
+}
+
+/**
+ * True when a line is a fillable-table field assignment / mutation header.
+ * @param {string} line
+ */
+function isFillableTableFieldAssignmentLine(line) {
+  const text = String(line || '').trim();
+  if (!text) return false;
+  if (FILLABLE_TABLE_FIELD_ASSIGNMENT.test(text)) return true;
+  if (/^for\s+[A-Za-z0-9_-]+\s+only\b/i.test(text)) return true;
+  if (/^set\s*:?\s*$/i.test(text)) return true;
+  if (/^leave\b[\s\S]{0,80}\bunchanged\b/i.test(text)) return true;
+  if (/^update\s+(?:the\s+)?(?:fillable\s+)?(?:verification\s+)?table\b/i.test(text)) {
+    return true;
+  }
+  if (/^reassess\b/i.test(text) && /\breadiness\b/i.test(text)) return true;
+  if (/^return\s+only\b/i.test(text)) return true;
+  if (/^keep\s+this\s+preparation/i.test(text)) return true;
+  return false;
+}
+
 /**
  * Strip leading list markers: `1.`, `1)`, `- `, `* `
  * @param {string} line
@@ -648,6 +728,7 @@ function hasProspectRowSeparators(text) {
 function isInstructionOrChecklistLine(line) {
   const text = String(line || '').trim();
   if (!text) return false;
+  if (isFillableTableFieldAssignmentLine(text)) return true;
   if (INSTRUCTION_LINE.test(text)) return true;
   if (OBJECTIVE_ONLY_LINE.test(text) && !hasProspectRowSeparators(text)) {
     return true;
@@ -1135,6 +1216,17 @@ function detectOperatorProspectListInMessage(text) {
 
   if (!raw.trim()) return empty;
 
+  // Fillable verification table mutations must never become ProspectList pastes.
+  if (looksLikeFillableTableMutationMessage(raw)) {
+    return {
+      ...empty,
+      rejectedAsNaturalLanguage: true,
+      remainsPlainText: true,
+      suppressedFillableTableUpdate: true,
+      objectiveText: raw.trim(),
+    };
+  }
+
   const extracted = extractProspectBlock(raw);
   if (!extracted) return empty;
 
@@ -1270,4 +1362,6 @@ module.exports = {
   looksLikeNaturalLanguage,
   isViableCompanyName,
   expandFlattenedNumberedProspectText,
+  looksLikeFillableTableMutationMessage,
+  isFillableTableFieldAssignmentLine,
 };

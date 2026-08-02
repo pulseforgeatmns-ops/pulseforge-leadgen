@@ -31,12 +31,14 @@ const {
   isExplicitExecutionRequest,
   isFillableTableRequest,
   isFillableTableUpdateRequest,
+  isFillableTableReadinessReassessRequest,
   wantsStrictFillableTableOutputShape,
   wantsFillableTableHeading,
   activeContextHasFillableTable,
   knownActiveWorkProspectIds,
   parseFillableTableFieldUpdates,
   applyFillableTableFieldUpdates,
+  extractReadinessReassessProspectIds,
   extractCampaignIdFromText,
   activeContextBlocksExecution,
   activeContextHasEntities,
@@ -785,7 +787,24 @@ function handleFillableTableUpdateContinuation(input) {
       : buildFillableTableRows(prospects);
 
   const parsed = parseFillableTableFieldUpdates(question);
-  const applied = applyFillableTableFieldUpdates(baseRows, parsed.updates);
+  const shouldReassess = isFillableTableReadinessReassessRequest(question);
+  const reassessIds = shouldReassess
+    ? (() => {
+        const named = extractReadinessReassessProspectIds(question);
+        if (named.length > 0) return named;
+        // Field updates in the same turn imply which rows to reassess.
+        const fromUpdates = (parsed.updates || [])
+          .map((u) => u.prospectId)
+          .filter(Boolean);
+        if (fromUpdates.length > 0) return fromUpdates;
+        // "reassess readiness" with no id → only if a single desk row exists.
+        return knownIds.length === 1 ? knownIds : [];
+      })()
+    : [];
+
+  const applied = applyFillableTableFieldUpdates(baseRows, parsed.updates, {
+    reassessIds,
+  });
   const unknownIds = [
     ...new Set([
       ...applied.unknownIds,
@@ -839,6 +858,48 @@ function handleFillableTableUpdateContinuation(input) {
     };
   }
 
+  // Reassess asked but no target resolved (multi-row desk, no id named).
+  if (shouldReassess && reassessIds.length === 0 && applied.matchedIds.length === 0) {
+    const knownLabel = knownIds.length
+      ? knownIds.join(', ')
+      : '(none on desk)';
+    return {
+      reason: 'active_work_context_table_reassess_needs_target',
+      structured: buildStructuredResponse({
+        answer: [
+          'I can reassess readiness from the table gates, but I need a prospect_id.',
+          `Known prospect ids on the desk: ${knownLabel}.`,
+          'Example: reassess PM-001 readiness using the table gates.',
+          'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+        ].join(' '),
+        reasoning: [
+          'Operator asked for table-gate readiness reassessment without a target prospect_id.',
+          'Clarifying instead of mutating every desk row.',
+          'No mission create/resume.',
+        ],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: null,
+        nextInvestigations: [
+          `Reassess readiness for a known prospect_id (${knownLabel}).`,
+        ],
+        recommendedActions: [],
+        metadata: {
+          sourcesUsed: { activeWorkContext: true },
+          evidenceCount: baseRows.length,
+          unavailable: ['readiness_reassess_target'],
+          surface: 'workspace',
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          route: 'intelligence',
+          canaryPreparationOnly: true,
+          fillableTable: true,
+          activeWorkContextReused: true,
+          tableUpdate: true,
+        },
+      }),
+    };
+  }
+
   const updatedRows = applied.rows;
   const structured = buildCanaryFillableTableResponse({
     prospects,
@@ -847,6 +908,7 @@ function handleFillableTableUpdateContinuation(input) {
     reusedFromActiveContext: true,
     tableUpdated: true,
     updatedProspectIds: applied.matchedIds,
+    reassessedProspectIds: applied.reassessedIds,
   });
 
   rememberCanaryActiveWorkContext({
@@ -1744,6 +1806,9 @@ function buildCanaryFillableTableResponse(input) {
   const updatedIds = Array.isArray(input.updatedProspectIds)
     ? input.updatedProspectIds
     : [];
+  const reassessedIds = Array.isArray(input.reassessedProspectIds)
+    ? input.reassessedProspectIds
+    : [];
   const question = String(input.question || '');
   const strictShape = wantsStrictFillableTableOutputShape(question);
   const includeHeading = !strictShape || wantsFillableTableHeading(question);
@@ -1773,7 +1838,9 @@ function buildCanaryFillableTableResponse(input) {
           ? `Converted the verification work order into a fillable table for the same ${count} prospect${count === 1 ? '' : 's'} already on the desk.`
           : `Fillable table for ${count} canary prospect${count === 1 ? '' : 's'}.`,
       tableUpdated
-        ? 'Only operator-requested field changes were applied. No websites, phones, addresses, sources, or readiness values were invented.'
+        ? reassessedIds.length
+          ? 'Only operator-requested field changes were applied, then readiness was reassessed from table gates. No websites, phones, addresses, sources, or readiness values were invented.'
+          : 'Only operator-requested field changes were applied. No websites, phones, addresses, sources, or readiness values were invented.'
         : 'Known identity fields are filled from active work context. Missing mail-critical values stay unknown — I will not invent websites, phones, or addresses.',
       safety,
     ].join('\n');
@@ -1797,11 +1864,14 @@ function buildCanaryFillableTableResponse(input) {
           tableUpdated
             ? 'Preserved existing table shape/columns and left non-targeted rows unchanged.'
             : 'Table preserves known identity fields only; mail-critical fields left unknown for verification.',
+          reassessedIds.length
+            ? 'Reassessed mail/draft/execution readiness from verified table gates without inferring launch.'
+            : null,
           'No mission create/resume. No launch, mail, print, or approval inferred from desk context.',
           tableUpdated
             ? 'Handled as a table mutation before domain routing.'
             : 'Handled via early active-work continuation before domain routing.',
-        ],
+        ].filter(Boolean),
     supportingEvidence: strictShape
       ? []
       : rows.map((row, i) => ({
@@ -1844,6 +1914,9 @@ function buildCanaryFillableTableResponse(input) {
       activeWorkContextReused: reused || tableUpdated,
       tableUpdate: tableUpdated || undefined,
       updatedProspectIds: tableUpdated ? updatedIds : undefined,
+      reassessedProspectIds: tableUpdated && reassessedIds.length
+        ? reassessedIds
+        : undefined,
       strictOutputShape: strictShape || undefined,
     },
   });

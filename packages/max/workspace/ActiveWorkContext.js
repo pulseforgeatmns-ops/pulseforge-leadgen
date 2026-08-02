@@ -443,6 +443,21 @@ function wantsFillableTableHeading(text) {
 }
 
 /**
+ * Operator asked to recompute readiness columns from fillable-table gate statuses.
+ * @param {string} text
+ */
+function isFillableTableReadinessReassessRequest(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return false;
+  return (
+    /\breassess\b[\s\S]{0,120}\breadiness\b/i.test(raw) ||
+    /\breadiness\b[\s\S]{0,120}\breassess\b/i.test(raw) ||
+    /\breassess\b[\s\S]{0,120}\btable\s+gates\b/i.test(raw) ||
+    /\busing\s+(?:the\s+)?table\s+gates\b/i.test(raw)
+  );
+}
+
+/**
  * Operator is mutating fields on an existing fillable verification table.
  * Must be detected before prospect extraction / artifact injection.
  * @param {string} text
@@ -475,6 +490,7 @@ function isFillableTableUpdateRequest(text, activeWorkContext = null) {
   );
   const strictShapeCue = wantsStrictFillableTableOutputShape(raw);
   const prospectOnlyCue = /\bfor\s+[A-Za-z0-9_-]+\s+only\b/i.test(raw);
+  const reassessCue = isFillableTableReadinessReassessRequest(raw);
 
   const knownIds = knownActiveWorkProspectIds(activeWorkContext);
   const knownIdCue =
@@ -493,7 +509,8 @@ function isFillableTableUpdateRequest(text, activeWorkContext = null) {
       fieldAssignmentCue ||
       knownIdCue ||
       prospectOnlyCue ||
-      strictShapeCue)
+      strictShapeCue ||
+      reassessCue)
   ) {
     return true;
   }
@@ -505,12 +522,161 @@ function isFillableTableUpdateRequest(text, activeWorkContext = null) {
     activeContextHasFillableTable(activeWorkContext) &&
     knownIdCue &&
     (fieldCue || fieldAssignmentCue) &&
-    (setCue || leaveUnchanged || updateCue || /\bset\b/.test(lower))
+    (setCue || leaveUnchanged || updateCue || /\bset\b/.test(lower) || reassessCue)
+  ) {
+    return true;
+  }
+
+  // Pure readiness reassessment against the desk table (no field paste required).
+  if (
+    activeContextHasFillableTable(activeWorkContext) &&
+    reassessCue &&
+    (knownIdCue || prospectOnlyCue || updateCue)
   ) {
     return true;
   }
 
   return false;
+}
+
+/**
+ * @param {unknown} value
+ */
+function isVerifiedGateStatus(value) {
+  return /^verified$/i.test(String(value || '').trim());
+}
+
+/**
+ * @param {unknown} value
+ */
+function isNeedsVerificationGateStatus(value) {
+  return /^needs\s+verification$/i.test(String(value || '').trim());
+}
+
+/**
+ * @param {unknown} value
+ */
+function isBlockedGateStatus(value) {
+  return /^blocked$/i.test(String(value || '').trim());
+}
+
+/**
+ * True when an explicit non-gate mail blocker is recorded on the row.
+ * Contact-role verification is intentionally not a mail blocker.
+ * @param {object} row
+ */
+function hasExplicitMailBlocker(row) {
+  if (!row || typeof row !== 'object') return false;
+  const mail = String(row.mail_readiness || '').trim().toLowerCase();
+  if (mail === 'blocked_by_operator' || mail === 'do_not_mail') return true;
+  const notes = String(row.notes || '');
+  return /\b(?:mail|mailing)\s+(?:explicitly\s+)?blocked\b/i.test(notes);
+}
+
+/**
+ * Derive operator_next_action from remaining table-gate blockers.
+ * @param {object} row
+ * @returns {string}
+ */
+function deriveOperatorNextActionFromGates(row) {
+  if (!isVerifiedGateStatus(row && row.mailing_address_status)) {
+    return 'verify mailing address first';
+  }
+  if (!isVerifiedGateStatus(row && row.website_status)) {
+    return 'verify website next';
+  }
+  if (!isVerifiedGateStatus(row && row.phone_status)) {
+    return 'verify phone next';
+  }
+  if (
+    isNeedsVerificationGateStatus(row && row.contact_role_status) ||
+    isBlockedGateStatus(row && row.contact_role_status)
+  ) {
+    return 'confirm contact role';
+  }
+  return 'review packet contents / prepare print checklist';
+}
+
+/**
+ * Recompute readiness columns from verified table gates.
+ * Does not invent websites, phones, addresses, or launch/execution.
+ * @param {object} row
+ * @returns {object}
+ */
+function reassessFillableTableRowFromGates(row) {
+  const next = row && typeof row === 'object' ? { ...row } : {};
+  const mailGatesVerified =
+    isVerifiedGateStatus(next.mailing_address_status) &&
+    isVerifiedGateStatus(next.website_status) &&
+    isVerifiedGateStatus(next.phone_status);
+
+  if (mailGatesVerified && !hasExplicitMailBlocker(next)) {
+    next.mail_readiness = 'ready_for_review';
+  } else if (!mailGatesVerified) {
+    next.mail_readiness = 'blocked';
+  }
+
+  // Draft readiness stays allowed unless the operator already changed it.
+  if (!String(next.draft_readiness || '').trim()) {
+    next.draft_readiness = 'allowed';
+  }
+
+  // Execution never advances from table-gate reassessment alone.
+  next.execution_readiness = 'blocked';
+
+  if (
+    isNeedsVerificationGateStatus(next.contact_role_status) ||
+    isBlockedGateStatus(next.contact_role_status)
+  ) {
+    next.verification_status = 'needs verification';
+  } else if (
+    mailGatesVerified &&
+    isVerifiedGateStatus(next.contact_role_status)
+  ) {
+    next.verification_status = 'verified';
+  }
+
+  next.operator_next_action = deriveOperatorNextActionFromGates(next);
+
+  // Surface contact-role as the remaining verification item when mail gates pass.
+  if (
+    mailGatesVerified &&
+    (isNeedsVerificationGateStatus(next.contact_role_status) ||
+      isBlockedGateStatus(next.contact_role_status)) &&
+    !String(next.notes || '').trim()
+  ) {
+    next.notes = 'contact role still needs verification';
+  }
+
+  return next;
+}
+
+/**
+ * Prospect ids named in a readiness reassessment instruction.
+ * @param {string} text
+ * @returns {string[]}
+ */
+function extractReadinessReassessProspectIds(text) {
+  const raw = String(text || '');
+  const ids = [];
+  const seen = new Set();
+  const patterns = [
+    /\breassess\s+([A-Za-z0-9_-]+)\s+readiness\b/gi,
+    /\breassess\s+readiness\s+for\s+([A-Za-z0-9_-]+)\b/gi,
+    /\bfor\s+([A-Za-z0-9_-]+)\s+only\b/gi,
+  ];
+  for (const re of patterns) {
+    let m;
+    while ((m = re.exec(raw)) !== null) {
+      const id = String(m[1] || '').trim();
+      if (!id) continue;
+      const key = id.toUpperCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ids.push(id);
+    }
+  }
+  return ids;
 }
 
 /**
@@ -754,11 +920,14 @@ function parseFillableTableFieldUpdates(text) {
 /**
  * Apply parsed field updates onto existing fillable table rows.
  * Preserves row order, shape, and untouched rows.
+ * When reassessIds is provided, recomputes readiness columns from table gates
+ * for those rows after field mutations.
  * @param {object[]} rows
  * @param {Array<{ prospectId: string, fields: Record<string, string> }>} updates
- * @returns {{ rows: object[], matchedIds: string[], unknownIds: string[] }}
+ * @param {{ reassessIds?: string[] }} [options]
+ * @returns {{ rows: object[], matchedIds: string[], unknownIds: string[], reassessedIds: string[] }}
  */
-function applyFillableTableFieldUpdates(rows, updates) {
+function applyFillableTableFieldUpdates(rows, updates, options = {}) {
   const next = (Array.isArray(rows) ? rows : []).map((row) => ({ ...row }));
   const indexById = new Map();
   next.forEach((row, i) => {
@@ -794,7 +963,30 @@ function applyFillableTableFieldUpdates(rows, updates) {
     next[idx] = row;
   }
 
-  return { rows: next, matchedIds, unknownIds };
+  const reassessIds = Array.isArray(options.reassessIds)
+    ? options.reassessIds
+    : [];
+  const reassessedIds = [];
+  for (const prospectId of reassessIds) {
+    const id = String(prospectId || '').trim();
+    if (!id) continue;
+    const idx = indexById.get(id.toUpperCase());
+    if (idx == null) {
+      if (!unknownIds.some((u) => String(u).toUpperCase() === id.toUpperCase())) {
+        unknownIds.push(id);
+      }
+      continue;
+    }
+    next[idx] = reassessFillableTableRowFromGates(next[idx]);
+    reassessedIds.push(next[idx].prospect_id || id);
+    if (
+      !matchedIds.some((m) => String(m).toUpperCase() === id.toUpperCase())
+    ) {
+      matchedIds.push(next[idx].prospect_id || id);
+    }
+  }
+
+  return { rows: next, matchedIds, unknownIds, reassessedIds };
 }
 
 function escapeRegExp(value) {
@@ -865,12 +1057,16 @@ module.exports = {
   isExplicitExecutionRequest,
   isFillableTableRequest,
   isFillableTableUpdateRequest,
+  isFillableTableReadinessReassessRequest,
   wantsStrictFillableTableOutputShape,
   wantsFillableTableHeading,
   activeContextHasFillableTable,
   knownActiveWorkProspectIds,
   parseFillableTableFieldUpdates,
   applyFillableTableFieldUpdates,
+  reassessFillableTableRowFromGates,
+  extractReadinessReassessProspectIds,
+  deriveOperatorNextActionFromGates,
   extractCampaignIdFromText,
   activeContextBlocksExecution,
   activeContextHasEntities,
