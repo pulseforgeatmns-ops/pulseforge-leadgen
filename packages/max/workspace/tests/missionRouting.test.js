@@ -2237,7 +2237,7 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /PM-001/);
     assert.match(answer, /Gamache Properties/);
     assert.match(answer, /ready_for_review/);
-    assert.match(answer, /execution(?:_readiness)?(?: is| remains|:)?\s*blocked/i);
+    assert.match(answer, /Execution readiness:\s*blocked/i);
     assert.match(answer, /Preparation-only/);
     assert.match(answer, /100 Market St/);
     assert.match(answer, /Ben,/);
@@ -2245,8 +2245,6 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(answer, /\b\d+\s+units?\b/i);
     assert.doesNotMatch(answer, /portfolio of \d+/i);
 
-    assert.equal(pm001.mail_readiness, 'ready_for_review');
-    assert.equal(pm001.execution_readiness, 'blocked');
     assert.deepEqual(pm001, beforePm001);
     assert.deepEqual(pm002, beforePm002);
     assert.deepEqual(pm003, beforePm003);
@@ -2342,7 +2340,7 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /ready_for_review/);
     assert.match(
       answer,
-      /execution(?:[_\s]?readiness)?(?:\s+is|\s+remains|\s+stays|:)?\s*blocked/i
+      /Execution readiness:\s*blocked/i
     );
     assert.match(answer, /Preparation-only/);
     assert.match(answer, /100 Market St/);
@@ -2368,9 +2366,12 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /Scorecard cover text draft \(provisional/i);
     assert.match(answer, /Operational scorecard — Gamache Properties/i);
     assert.match(answer, /603-555-0198/);
-    assert.match(answer, /Use verified table phone 603-555-0198/i);
-    assert.match(answer, /Confirm decision-maker\/context/i);
-    assert.match(answer, /execution remains blocked/i);
+    assert.match(answer, /Use verified phone 603-555-0198/i);
+    assert.match(answer, /Confirm Ben is the right contact/i);
+    assert.match(answer, /Reference the packet only after it is actually mailed/i);
+    assert.match(answer, /Do not claim industry-specific context/i);
+    assert.match(answer, /Log outcome/i);
+    assert.match(answer, /Execution readiness:\s*blocked \(remains blocked\)/i);
     assert.doesNotMatch(answer, /best reach number/i);
     assert.doesNotMatch(answer, /draft held/i);
     assert.doesNotMatch(
@@ -2378,12 +2379,18 @@ describe('Active work context continuation before domain routing', () => {
       /company, contact, and industry are required before personalizing/i
     );
     assert.match(answer, /industry \/ persona context \(missing from table/i);
-    assert.match(answer, /unknown \(not on table; not invented\)/i);
+    assert.match(answer, /Industry\/persona evidence:\s*not provided/i);
+    assert.doesNotMatch(answer, /^Industry:\s*unknown/m);
     assert.doesNotMatch(answer, /\b\d+\s+units?\b/i);
     assert.doesNotMatch(answer, /portfolio of \d+/i);
     assert.doesNotMatch(answer, /appears to be in (?:property|unknown)/i);
+    assert.equal(result.structured.metadata.strictOutputShape, true);
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /^Next:/m);
 
-    // Customer-facing letter / note / cover must not leak operator language.
+    // Customer-facing letter / note / cover must not leak operator language
+    // or invent unsupported pain/value claims.
     const customerSection = extractPacketReviewCustomerFacingSection(answer);
     assert.ok(customerSection.length > 0, 'expected customer-facing drafts section');
     assert.doesNotMatch(customerSection, /preparation-only/i);
@@ -2398,6 +2405,14 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(customerSection, /Status: Packet ready_for_review/i);
     assert.doesNotMatch(customerSection, /Evidence note:/i);
     assert.doesNotMatch(customerSection, /Operator note on file/i);
+    assert.doesNotMatch(customerSection, /vendor coordination/i);
+    assert.doesNotMatch(customerSection, /may need attention/i);
+    assert.doesNotMatch(customerSection, /slipping through/i);
+    assert.doesNotMatch(customerSection, /pain point/i);
+    assert.match(
+      customerSection,
+      /If useful, I(?:'|’)d be glad to walk through it after you(?:'|’)ve had a chance to review/i
+    );
 
     // Packet review must not mutate the ingested table rows.
     assert.equal(pm001.prospect_id, 'PM-001');
@@ -2507,7 +2522,7 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /ready_for_review/);
     assert.match(
       answer,
-      /execution(?:[_\s]?readiness)?(?:\s+is|\s+remains|\s+stays|:)?\s*blocked/i
+      /Execution readiness:\s*blocked/i
     );
     assert.match(answer, /Preparation-only/);
     assert.match(answer, /100 Market St/);
@@ -2516,6 +2531,23 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(answer, /\b\d+\s+units?\b/i);
     assert.doesNotMatch(answer, /portfolio of \d+/i);
 
+    assert.equal(result.structured.metadata.strictOutputShape, true);
+    assert.match(answer, /Industry\/persona evidence:\s*not provided/i);
+    assert.doesNotMatch(answer, /^Industry:\s*unknown/m);
+    assert.doesNotMatch(answer, /- industry:\s*unknown/i);
+    assert.match(answer, /Use verified phone 603-555-0198/i);
+    assert.match(answer, /Confirm Ben is the right contact/i);
+    assert.match(answer, /Reference the packet only after it is actually mailed/i);
+    assert.match(answer, /Do not claim industry-specific context/i);
+    assert.match(answer, /Log outcome/i);
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /^Next:/m);
+    assert.match(
+      answer,
+      /Preparation-only\.\s*No mission created\.\s*No launch, execution, approval, print, or mail/i
+    );
+
     const customerSection = extractPacketReviewCustomerFacingSection(answer);
     assert.ok(customerSection.length > 0, 'expected customer-facing drafts section');
     assert.doesNotMatch(customerSection, /preparation-only/i);
@@ -2523,6 +2555,19 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(customerSection, /ready_for_review/i);
     assert.doesNotMatch(customerSection, /Draft confidence/i);
     assert.doesNotMatch(customerSection, /operator-supplied known facts/i);
+    assert.doesNotMatch(customerSection, /vendor coordination/i);
+    assert.doesNotMatch(customerSection, /may need attention/i);
+    assert.doesNotMatch(customerSection, /slipping through/i);
+    assert.doesNotMatch(customerSection, /pain point/i);
+    assert.doesNotMatch(customerSection, /portfolio/i);
+    assert.match(
+      customerSection,
+      /I included a short scorecard packet for Gamache Properties as a quick review item/i
+    );
+    assert.match(
+      customerSection,
+      /If useful, I(?:'|’)d be glad to walk through it after you(?:'|’)ve had a chance to review/i
+    );
   });
 
   it('inline known facts packet review asks only for missing required fields', async () => {
@@ -2630,7 +2675,11 @@ describe('Active work context continuation before domain routing', () => {
     assert.equal(result.mission, null);
     assert.equal(entity.industry, 'Property Management');
     assert.equal(result.structured.metadata.draftConfidence, 'medium');
+    assert.equal(result.structured.metadata.strictOutputShape, true);
     assert.match(answer, /Draft confidence:\s*medium/i);
+    assert.match(answer, /Industry:\s*Property Management/i);
+    assert.doesNotMatch(answer, /Industry:\s*unknown/i);
+    assert.doesNotMatch(answer, /Industry\/persona evidence:\s*not provided/i);
     assert.match(answer, /appears to be in property management/i);
     assert.match(answer, /Ben,/);
     assert.match(
@@ -2639,6 +2688,9 @@ describe('Active work context continuation before domain routing', () => {
     );
     assert.doesNotMatch(answer, /draft held/i);
     assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /^Next:/m);
 
     const customerSection = extractPacketReviewCustomerFacingSection(answer);
     assert.doesNotMatch(customerSection, /Draft confidence/i);
@@ -2646,6 +2698,10 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(customerSection, /I(?:'|’)d like to send you/i);
     assert.doesNotMatch(customerSection, /ready_for_review/i);
     assert.doesNotMatch(customerSection, /execution remains blocked/i);
+    assert.doesNotMatch(customerSection, /vendor coordination/i);
+    assert.doesNotMatch(customerSection, /may need attention/i);
+    assert.doesNotMatch(customerSection, /owner confidence/i);
+    assert.doesNotMatch(customerSection, /slipping through/i);
   });
 });
 

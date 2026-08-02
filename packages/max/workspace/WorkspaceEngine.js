@@ -1414,12 +1414,17 @@ function buildPacketReviewArtifactResponse(input = {}) {
     .filter(Boolean)
     .join('; ');
 
+  const question = String(input.question || '');
+  const debugOutput = wantsPacketReviewDebugOutput(question);
+
   const answer = [
     `Preparation-only packet review — Campaign ${campaignId} / ${prospectId}`,
     '',
     `Company: ${company || 'unknown'}`,
     `Contact: ${contact || 'unknown'}`,
-    `Industry: ${industry || 'unknown (not on table; not invented)'}`,
+    industry
+      ? `Industry: ${industry}`
+      : 'Industry/persona evidence: not provided.',
     `Mail readiness: ${mailReadiness}${
       mailReadyForReview
         ? ' (packet may be reviewed — not authorization to mail)'
@@ -1427,13 +1432,7 @@ function buildPacketReviewArtifactResponse(input = {}) {
     }`,
     `Draft readiness: ${draftReadiness}`,
     `Execution readiness: ${executionReadiness} (remains blocked)`,
-    `Draft confidence: ${draftConfidence}${
-      draftConfidence === 'low'
-        ? ' (usable provisional drafts from known company/contact facts only)'
-        : draftConfidence === 'medium'
-          ? ' (industry known; still preparation-only / provisional)'
-          : ' (company and contact required before drafting)'
-    }`,
+    `Draft confidence: ${draftConfidence}`,
     notes ? `Notes (from table): ${notes}` : null,
     operatorNext ? `Operator next action (from table): ${operatorNext}` : null,
     '',
@@ -1489,7 +1488,7 @@ function buildPacketReviewArtifactResponse(input = {}) {
     `- prospect_id: ${prospectId}`,
     `- company: ${company || 'unknown'}`,
     `- contact: ${contact || 'unknown'}`,
-    `- industry: ${industry || 'unknown'}`,
+    `- industry: ${industry || 'not provided'}`,
     `- mail_date: (set when mailed)`,
     '- packet_contents: letter / handwritten note / scorecard / business card',
     `- mail_readiness_at_send: ${mailReadiness}`,
@@ -1505,58 +1504,68 @@ function buildPacketReviewArtifactResponse(input = {}) {
     .filter((line) => line != null)
     .join('\n');
 
+  const packetReasoning = [
+    fromInlineFacts
+      ? 'Built packet review from inline known facts; no active canary table or markdown table paste required.'
+      : 'Reused activeWorkContext.tableRows for packet review; no prospect re-paste required.',
+    fromInlineFacts
+      ? `Selected prospect_id ${prospectId} from operator-supplied known facts for Campaign ${campaignId}.`
+      : `Selected prospect_id ${prospectId} from the current Campaign ${campaignId} canary table.`,
+    'ready_for_review means packet review is allowed; execution_readiness stays blocked absent explicit launch.',
+    canDraft
+      ? 'Provisional drafts generated from known company/contact facts; missing industry does not block drafting.'
+      : 'Drafts held because company_name and contact_name are both required.',
+    fromInlineFacts
+      ? 'No mission create/resume. activeWorkContext not mutated (temporary packetReviewContext only).'
+      : 'No mission create/resume. Table not mutated.',
+  ];
+
   return buildStructuredResponse({
     answer,
-    reasoning: [
-      fromInlineFacts
-        ? 'Built packet review from inline known facts; no active canary table or markdown table paste required.'
-        : 'Reused activeWorkContext.tableRows for packet review; no prospect re-paste required.',
-      fromInlineFacts
-        ? `Selected prospect_id ${prospectId} from operator-supplied known facts for Campaign ${campaignId}.`
-        : `Selected prospect_id ${prospectId} from the current Campaign ${campaignId} canary table.`,
-      'ready_for_review means packet review is allowed; execution_readiness stays blocked absent explicit launch.',
-      canDraft
-        ? 'Provisional drafts generated from known company/contact facts; missing industry does not block drafting.'
-        : 'Drafts held because company_name and contact_name are both required.',
-      fromInlineFacts
-        ? 'No mission create/resume. activeWorkContext not mutated (temporary packetReviewContext only).'
-        : 'No mission create/resume. Table not mutated.',
-    ],
-    supportingEvidence: [
-      {
-        id: `canary-prospect:${prospectId}`,
-        summary: `${company || prospectId}: packet review — mail ${mailReadiness}, execution blocked`,
-        sourceType: 'operator',
-        confidence: null,
-      },
-    ],
+    reasoning: debugOutput ? packetReasoning : [],
+    supportingEvidence: debugOutput
+      ? [
+          {
+            id: `canary-prospect:${prospectId}`,
+            summary: `${company || prospectId}: packet review — mail ${mailReadiness}, execution blocked`,
+            sourceType: 'operator',
+            confidence: null,
+          },
+        ]
+      : [],
     contradictingEvidence: [],
     confidence: null,
-    nextInvestigations: canaryWorkflowSuggestions({
-      lastOutputType: LAST_OUTPUT_TYPES.PACKET_REVIEW,
-      prospects: [
-        {
-          id: prospectId,
-          companyName: company,
-          contactName: contact,
-          industry,
-          website,
-          mailingAddress: mailing,
-          phone,
-        },
-      ],
-      tableRows: [row],
-      question: input.question,
-    }),
-    recommendedActions: [
-      'Review the provisional packet drafts, confirm print fields, then explicitly request any later launch/mail approval.',
-    ],
+    nextInvestigations: debugOutput
+      ? canaryWorkflowSuggestions({
+          lastOutputType: LAST_OUTPUT_TYPES.PACKET_REVIEW,
+          prospects: [
+            {
+              id: prospectId,
+              companyName: company,
+              contactName: contact,
+              industry,
+              website,
+              mailingAddress: mailing,
+              phone,
+            },
+          ],
+          tableRows: [row],
+          question,
+        })
+      : [],
+    recommendedActions: debugOutput
+      ? [
+          'Review the provisional packet drafts, confirm print fields, then explicitly request any later launch/mail approval.',
+        ]
+      : [],
     metadata: {
       sourcesUsed: fromInlineFacts
         ? { inlineKnownFacts: true }
         : { activeWorkContext: true },
-      evidenceCount: 1,
-      unavailable: personalizationGaps.map((g) => `personalization:${g}`),
+      evidenceCount: debugOutput ? 1 : 0,
+      unavailable: debugOutput
+        ? personalizationGaps.map((g) => `personalization:${g}`)
+        : [],
       surface: 'workspace',
       executionDomain: EXECUTION_DOMAINS.WORKSPACE,
       route: 'intelligence',
@@ -1572,8 +1581,28 @@ function buildPacketReviewArtifactResponse(input = {}) {
       campaignId,
       mailReadiness,
       executionReadiness,
+      // Artifact mode: suppress Reasoning / Unavailable / Next unless debug.
+      strictOutputShape: debugOutput ? undefined : true,
     },
   });
+}
+
+/**
+ * Operator asked for packet-review debug sections (Reasoning / Unavailable / Next).
+ * @param {string} text
+ * @returns {boolean}
+ */
+function wantsPacketReviewDebugOutput(text) {
+  const lower = String(text || '').toLowerCase();
+  if (!lower.trim()) return false;
+  return (
+    /\bdebug\s+mode\b/.test(lower) ||
+    /\bwith\s+debug\b/.test(lower) ||
+    /\binclude\s+reasoning\b/.test(lower) ||
+    /\bshow\s+reasoning\b/.test(lower) ||
+    /\binclude\s+unavailable\b/.test(lower) ||
+    /\binclude\s+next\s+(?:steps?|investigations?)\b/.test(lower)
+  );
 }
 
 /**
@@ -1591,6 +1620,8 @@ function verifiedPacketFieldValue(status, value) {
  * Packet-review drafts from known desk facts only.
  * Customer-facing letter / note / scorecard stay sendable and omit operator
  * readiness, confidence, and evidence caveats (those live outside this copy).
+ * Never invents pain/value claims (vendor coordination, operational gaps,
+ * portfolio size, likely needs) unless those facts are present as evidence.
  * Generates conservative provisional copy when company + contact are present,
  * even if industry/persona evidence is missing (never invents industry).
  * @param {object} input
@@ -1601,23 +1632,23 @@ function buildPacketReviewDrafts(input = {}) {
   const firstName = String(contact).split(/\s+/)[0] || contact;
   const industry = blankToNull(input.industry);
   const industryLower = industry ? String(industry).toLowerCase() : null;
-  const framing = industryLower ? industryFraming(industryLower) : null;
   const mailing = input.mailingAddress || null;
   const website = input.website || null;
   const phone = input.phone || null;
-  const notes = String(input.notes || '').trim();
 
-  // Customer-facing letter: no readiness labels, confidence, or "I'd like to send".
+  // Customer-facing letter: known facts only — no implied pain/value claims.
   const letterBody = industryLower
     ? [
-        `I’m reaching out because ${company} appears to be in ${industryLower}, where ${framing} can directly affect owner confidence.`,
+        `I’m reaching out because ${company} appears to be in ${industryLower}.`,
         '',
-        `I included a short scorecard packet for ${company} as a quick review item. It helps identify where follow-up, vendor coordination, and growth opportunities may be slipping through.`,
+        `I included a short scorecard packet for ${company} as a quick review item.`,
+        '',
+        'If useful, I’d be glad to walk through it after you’ve had a chance to review.',
       ]
     : [
         `I included a short scorecard packet for ${company} as a quick review item.`,
         '',
-        'It highlights where follow-up and vendor coordination may need attention.',
+        'If useful, I’d be glad to walk through it after you’ve had a chance to review.',
       ];
 
   const letter = [`${firstName},`, '', ...letterBody, '', 'Best,', '[Sender]'].join(
@@ -1641,21 +1672,17 @@ function buildPacketReviewDrafts(input = {}) {
     .filter(Boolean)
     .join('\n');
 
-  // Operator-only call notes — caveats stay out of letter / note / cover.
+  // Operator-only call notes — concise; caveats stay out of letter / note / cover.
   const followUpNotes = [
-    `Confirm decision-maker/context for ${contact} at ${company} before dialing.`,
     phone
-      ? `Use verified table phone ${phone} as the reach number on file.`
-      : 'No verified phone on the table — do not invent a reach number.',
-    'Do not claim the packet was mailed; execution remains blocked.',
-    mailing
-      ? `Confirm mailing address still matches ${mailing} before any print step.`
-      : 'Do not reference an unverified mailing address.',
+      ? `Use verified phone ${phone}.`
+      : 'No verified phone on file — do not invent a reach number.',
+    `Confirm ${firstName} is the right contact.`,
+    'Reference the packet only after it is actually mailed.',
     industryLower
-      ? `Ask whether a short operational scorecard for ${industryLower} teams would be useful to review.`
-      : 'Ask whether a short operational scorecard packet would be useful to review; do not assert an unverified industry.',
-    notes ? `Table notes on file (operator only): ${notes}` : null,
-    'Stay within known facts only — company, contact, and verified table fields.',
+      ? null
+      : 'Do not claim industry-specific context.',
+    'Log outcome.',
   ]
     .filter(Boolean)
     .join(' ');
