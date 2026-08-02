@@ -3047,6 +3047,220 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(customerSection, /owner confidence/i);
     assert.doesNotMatch(customerSection, /slipping through/i);
   });
+
+  it('known current-state bullets parse into readiness rows', () => {
+    const {
+      parseKnownCurrentStateBullets,
+      isCanarySummaryJudgmentRequest,
+    } = require('../ActiveWorkContext');
+
+    const text = [
+      'Summarize the Campaign 001 preparation-only canary status across PM-001, PM-002, and PM-003.',
+      '',
+      'Known current state:',
+      '- PM-001: Gamache Properties, Ben Gamache, website/address/phone/contact role verified, mail_readiness ready_for_review, draft_readiness allowed, execution_readiness blocked',
+      '- PM-002: Elm Grove Companies, David Schleyer, website/address/phone unknown or blocked, contact role needs verification, mail_readiness blocked, draft_readiness allowed, execution_readiness blocked',
+      '- PM-003: Mill City Property Management, Lauren DuPaul, website/address/phone unknown or blocked, contact role needs verification, mail_readiness blocked, draft_readiness allowed, execution_readiness blocked',
+    ].join('\n');
+
+    assert.equal(isCanarySummaryJudgmentRequest(text), true);
+
+    const parsed = parseKnownCurrentStateBullets(text);
+    assert.equal(parsed.hasKnownState, true);
+    assert.equal(parsed.rows.length, 3);
+
+    const pm001 = parsed.rows.find((r) => r.prospect_id === 'PM-001');
+    const pm002 = parsed.rows.find((r) => r.prospect_id === 'PM-002');
+    const pm003 = parsed.rows.find((r) => r.prospect_id === 'PM-003');
+
+    assert.ok(pm001);
+    assert.equal(pm001.company_name, 'Gamache Properties');
+    assert.equal(pm001.contact_name, 'Ben Gamache');
+    assert.equal(pm001.website_status, 'verified');
+    assert.equal(pm001.mailing_address_status, 'verified');
+    assert.equal(pm001.phone_status, 'verified');
+    assert.equal(pm001.contact_role_status, 'verified');
+    assert.equal(pm001.mail_readiness, 'ready_for_review');
+    assert.equal(pm001.draft_readiness, 'allowed');
+    assert.equal(pm001.execution_readiness, 'blocked');
+
+    assert.ok(pm002);
+    assert.equal(pm002.company_name, 'Elm Grove Companies');
+    assert.equal(pm002.contact_name, 'David Schleyer');
+    assert.equal(pm002.website_status, 'unknown');
+    assert.equal(pm002.mailing_address_status, 'unknown');
+    assert.equal(pm002.phone_status, 'unknown');
+    assert.equal(pm002.contact_role_status, 'needs verification');
+    assert.equal(pm002.mail_readiness, 'blocked');
+    assert.equal(pm002.draft_readiness, 'allowed');
+    assert.equal(pm002.execution_readiness, 'blocked');
+
+    assert.ok(pm003);
+    assert.equal(pm003.company_name, 'Mill City Property Management');
+    assert.equal(pm003.contact_name, 'Lauren DuPaul');
+    assert.equal(pm003.mail_readiness, 'blocked');
+    assert.equal(pm003.draft_readiness, 'allowed');
+    assert.equal(pm003.execution_readiness, 'blocked');
+  });
+
+  it('preparation-only canary summary/judgment from known current state — no prospect parse fallback', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question: [
+        'Summarize the Campaign 001 preparation-only canary status across PM-001, PM-002, and PM-003.',
+        'Which prospect should be worked next and why?',
+        'Exact next operator action for each prospect.',
+        'What is safe to draft now?',
+        'What is blocked from printing/mailing?',
+        '',
+        'Known current state:',
+        '- PM-001: Gamache Properties, Ben Gamache, website/address/phone/contact role verified, mail_readiness ready_for_review, draft_readiness allowed, execution_readiness blocked',
+        '- PM-002: Elm Grove Companies, David Schleyer, website/address/phone unknown or blocked, contact role needs verification, mail_readiness blocked, draft_readiness allowed, execution_readiness blocked',
+        '- PM-003: Mill City Property Management, Lauren DuPaul, website/address/phone unknown or blocked, contact role needs verification, mail_readiness blocked, draft_readiness allowed, execution_readiness blocked',
+        '',
+        'Do not include Reasoning, Unavailable context, or Next sections.',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const meta = result.structured.metadata || {};
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(meta.canaryPreparationOnly, true);
+    assert.equal(meta.canarySummary, true);
+    assert.equal(meta.knownCurrentState, true);
+    assert.equal(meta.strictOutputShape, true);
+    assert.equal(meta.prioritizedProspectId, 'PM-001');
+    assert.equal(meta.prospectCount, 3);
+    assert.equal(meta.outputKind, 'canary_summary');
+    assert.equal(meta.lastOutputKind, 'canary_summary');
+
+    assert.doesNotMatch(answer, /could not parse them cleanly/i);
+    assert.doesNotMatch(answer, /paste\s+(?:the\s+)?(?:3\s+)?prospects?/i);
+    assert.doesNotMatch(answer, /pipe\s*[-\s]?format/i);
+    assert.doesNotMatch(answer, /I see you intended to provide/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /^Next:/m);
+
+    assert.match(answer, /preparation-only canary/i);
+    assert.match(answer, /Readiness table/i);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /PM-002/);
+    assert.match(answer, /PM-003/);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /Elm Grove Companies/);
+    assert.match(answer, /Mill City Property Management/);
+    assert.match(answer, /ready_for_review/);
+    assert.match(
+      answer,
+      /PM-001[\s\S]*packet review|packet review[\s\S]*PM-001|prioritize[\s\S]*PM-001|PM-001[\s\S]*priorit/i
+    );
+    assert.match(answer, /final human approval/i);
+    assert.match(answer, /verification/i);
+    assert.match(answer, /safe to draft now/i);
+    assert.match(answer, /PM-001[\s\S]*allowed|allowed[\s\S]*PM-001/i);
+    assert.match(answer, /blocked from printing\/mailing/i);
+    assert.match(answer, /execution_readiness remains blocked/i);
+    assert.match(answer, /PulseForge should track next/i);
+    assert.match(answer, /Final operator decision required/i);
+    assert.match(answer, /No mission created/i);
+    assert.match(answer, /No launch, execution, approval, print, or mail/i);
+    assert.doesNotMatch(answer, /\b(?:was|were|has been|have been)\s+(?:launched|printed|mailed|approved)\b/i);
+    assert.doesNotMatch(answer, /\b(?:successfully|already)\s+(?:launched|printed|mailed)\b/i);
+
+    const chips = Array.isArray(result.suggestions) ? result.suggestions : [];
+    assert.ok(
+      chips.some((s) =>
+        /packet review checklist for PM-001/i.test(String(s || ''))
+      ),
+      `expected packet-review chip, got: ${JSON.stringify(chips)}`
+    );
+    assert.ok(
+      !chips.some((s) =>
+        /^(?:mail|launch|execute|approve|print)\b/i.test(String(s || '').trim())
+      ),
+      `unsafe action chips: ${JSON.stringify(chips)}`
+    );
+  });
+
+  it('canary summary reuses desk tableRows without prospect parse fallback', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const setup = await workspace.ask({
+      question: [
+        'Preparation-only canary for Campaign 001. Use these 3 prospects:',
+        '1. PM-001 — Gamache Properties — Ben Gamache — Property Management',
+        '2. PM-002 — Elm Grove Companies — David Schleyer — Property Management',
+        '3. PM-003 — Mill City Property Management — Lauren DuPaul — Property Management',
+        'Convert this into a fillable verification table.',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const tableMarkdown = [
+      '| prospect_id | company_name | contact_name | contact_role_status | website_status | website_value | mailing_address_status | mailing_address_value | phone_status | phone_value | verification_status | mail_readiness | draft_readiness | execution_readiness | operator_next_action | notes |',
+      '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+      '| PM-001 | Gamache Properties | Ben Gamache | verified | verified | https://www.gamacheproperties.com | verified | 100 Market St, Manchester NH | verified | 603-555-0198 | needs verification | ready_for_review | allowed | blocked | review packet contents / prepare print checklist | |',
+      '| PM-002 | Elm Grove Companies | David Schleyer | needs verification | needs verification | unknown | blocked | unknown | needs verification | unknown | needs verification | blocked | allowed | blocked | verify mailing address first | |',
+      '| PM-003 | Mill City Property Management | Lauren DuPaul | needs verification | needs verification | unknown | blocked | unknown | needs verification | unknown | needs verification | blocked | allowed | blocked | verify mailing address first | |',
+    ].join('\n');
+
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+    const result = await workspace.ask({
+      sessionId: setup.sessionId,
+      question: [
+        tableMarkdown,
+        '',
+        'Summarize the Campaign 001 preparation-only canary status across PM-001, PM-002, and PM-003.',
+        'Which prospect should be worked next and why?',
+        'Do not include Reasoning, Unavailable context, or Next sections.',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail.',
+      ].join('\n'),
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const meta = result.structured.metadata || {};
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(meta.canarySummary, true);
+    assert.equal(meta.activeWorkContextReused, true);
+    assert.equal(meta.knownCurrentState, undefined);
+    assert.equal(meta.prioritizedProspectId, 'PM-001');
+    assert.doesNotMatch(answer, /could not parse them cleanly/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.match(answer, /PM-001[\s\S]*ready_for_review|ready_for_review[\s\S]*PM-001/i);
+    assert.match(answer, /packet review|final human approval/i);
+    assert.match(answer, /PM-002/);
+    assert.match(answer, /PM-003/);
+    assert.match(answer, /verification/i);
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {

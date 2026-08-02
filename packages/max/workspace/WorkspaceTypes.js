@@ -93,6 +93,12 @@ function buildResponseMetadata(partial = {}) {
   if (partial.packetReview === true) {
     meta.packetReview = true;
   }
+  if (partial.canarySummary === true) {
+    meta.canarySummary = true;
+  }
+  if (partial.knownCurrentState === true) {
+    meta.knownCurrentState = true;
+  }
   if (partial.inlineKnownFacts === true) {
     meta.inlineKnownFacts = true;
   }
@@ -125,6 +131,9 @@ function buildResponseMetadata(partial = {}) {
   }
   if (partial.prospectId != null) {
     meta.prospectId = String(partial.prospectId);
+  }
+  if (partial.prioritizedProspectId != null) {
+    meta.prioritizedProspectId = String(partial.prioritizedProspectId);
   }
   if (partial.campaignId != null) {
     meta.campaignId = String(partial.campaignId);

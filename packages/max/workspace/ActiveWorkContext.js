@@ -23,6 +23,7 @@ const LAST_OUTPUT_TYPES = Object.freeze({
   FILLABLE_TABLE: 'fillable_table',
   PROVISIONAL_DRAFTS: 'provisional_drafts',
   PACKET_REVIEW: 'packet_review',
+  CANARY_SUMMARY: 'canary_summary',
 });
 
 /**
@@ -333,6 +334,265 @@ function isPacketReviewRequest(text) {
     (/\btracking\s+fields?\b/.test(lower) &&
       /\b(?:after\s+mailing|once\s+mailed|to\s+log)\b/.test(lower))
   );
+}
+
+/**
+ * True when the operator asks for a cross-prospect preparation-only canary
+ * status summary / judgment — not a new prospect paste or single-prospect
+ * packet review.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isCanarySummaryJudgmentRequest(text) {
+  const lower = String(text || '').toLowerCase();
+  if (!lower.trim()) return false;
+
+  // Packet review and table mutation own their routes.
+  if (isPacketReviewRequest(text)) return false;
+  if (isFillableTableUpdateRequest(text)) return false;
+
+  // Strong judgment / status cues.
+  if (/\bknown\s+current\s+state\b/.test(lower)) return true;
+  if (/\bwhich\s+prospect\s+should\s+be\s+worked\s+next\b/.test(lower)) {
+    return true;
+  }
+  if (/\bexact\s+next\s+operator\s+action\s+for\s+each\b/.test(lower)) {
+    return true;
+  }
+  if (/\bwhat\s+is\s+safe\s+to\s+draft\s+now\b/.test(lower)) return true;
+  if (
+    /\bwhat\s+is\s+blocked\s+from\s+(?:printing|mailing)\b/.test(lower) ||
+    /\bblocked\s+from\s+printing\s*[\/,]?\s*mailing\b/.test(lower)
+  ) {
+    return true;
+  }
+
+  const hasSummarizeOrJudgment =
+    /\bsummariz(?:e|ing)\b/.test(lower) ||
+    /\bsummary\b/.test(lower) ||
+    /\bjudg(?:e)?ment\b/.test(lower);
+
+  if (
+    hasSummarizeOrJudgment &&
+    /\bacross\s+PM-\d{3}\b/i.test(text) &&
+    /\bPM-\d{3}\b/i.test(text)
+  ) {
+    return true;
+  }
+
+  const hasCanaryOrCampaign =
+    /\bcanary\b/.test(lower) ||
+    /\bcampaign\s+0*01\b/.test(lower) ||
+    /\bpreparation[-\s]*only\b/.test(lower) ||
+    /\bprep[-\s]*only\b/.test(lower);
+
+  const hasStatusCue =
+    /\bstatus\b/.test(lower) ||
+    /\breadiness\b/.test(lower) ||
+    /\bjudg(?:e)?ment\b/.test(lower);
+
+  if (hasSummarizeOrJudgment && hasCanaryOrCampaign && hasStatusCue) {
+    return true;
+  }
+
+  if (/\bpreparation[-\s]*only\s+canary\s+status\b/.test(lower)) return true;
+  if (/\bcanary\s+(?:status|summary|judgment|judgement)\b/.test(lower)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Normalize a gate status token from known-current-state prose.
+ * @param {string} raw
+ * @returns {string}
+ */
+function normalizeKnownStateGateStatus(raw) {
+  const s = String(raw || '')
+    .trim()
+    .toLowerCase();
+  if (!s) return 'unknown';
+  if (/^verified$/.test(s) || /^complete$/.test(s)) return 'verified';
+  if (/needs?\s*verif/.test(s) || /^unverified$/.test(s)) {
+    return 'needs verification';
+  }
+  if (/^blocked$/.test(s)) return 'blocked';
+  if (/^unknown$/.test(s) || /unknown\s+or\s+blocked/.test(s)) return 'unknown';
+  return s;
+}
+
+/**
+ * Parse gate summaries like:
+ * - "website/address/phone/contact role verified"
+ * - "website/address/phone unknown or blocked, contact role needs verification"
+ * @param {string} prose
+ * @returns {{ website_status: string, mailing_address_status: string, phone_status: string, contact_role_status: string, gate_summary: string }}
+ */
+function parseKnownStateGateSummary(prose) {
+  const text = String(prose || '').trim();
+  const lower = text.toLowerCase();
+
+  /** @type {Record<string, string>} */
+  const gates = {
+    website_status: 'unknown',
+    mailing_address_status: 'unknown',
+    phone_status: 'unknown',
+    contact_role_status: 'unknown',
+  };
+
+  if (!text) {
+    return { ...gates, gate_summary: '' };
+  }
+
+  // "website/address/phone/contact role verified"
+  const slashGroup = lower.match(
+    /\b(website)(?:\s*\/\s*(address|mailing\s*address))?(?:\s*\/\s*(phone))?(?:\s*\/\s*(contact\s*role))?\s+(verified|needs?\s+verification|unknown(?:\s+or\s+blocked)?|blocked)\b/
+  );
+  if (slashGroup) {
+    const status = normalizeKnownStateGateStatus(slashGroup[5]);
+    gates.website_status = status;
+    if (slashGroup[2]) gates.mailing_address_status = status;
+    if (slashGroup[3]) gates.phone_status = status;
+    if (slashGroup[4]) gates.contact_role_status = status;
+  }
+
+  // Separate contact-role clause: "contact role needs verification"
+  const contactRole = lower.match(
+    /\bcontact\s+role\s+(verified|needs?\s+verification|unknown(?:\s+or\s+blocked)?|blocked)\b/
+  );
+  if (contactRole) {
+    gates.contact_role_status = normalizeKnownStateGateStatus(contactRole[1]);
+  }
+
+  // Individual field mentions when not covered by slash group.
+  const fieldPatterns = [
+    ['website_status', /\bwebsite\s+(verified|needs?\s+verification|unknown(?:\s+or\s+blocked)?|blocked)\b/],
+    [
+      'mailing_address_status',
+      /\b(?:mailing\s+)?address\s+(verified|needs?\s+verification|unknown(?:\s+or\s+blocked)?|blocked)\b/,
+    ],
+    ['phone_status', /\bphone\s+(verified|needs?\s+verification|unknown(?:\s+or\s+blocked)?|blocked)\b/],
+  ];
+  for (const [key, re] of fieldPatterns) {
+    // Prefer slash-group values when already set above to verified/needs/blocked.
+    const m = lower.match(re);
+    if (!m) continue;
+    // Only fill if still default unknown OR slash group didn't set this field.
+    if (gates[key] === 'unknown' || !slashGroup) {
+      gates[key] = normalizeKnownStateGateStatus(m[1]);
+    }
+  }
+
+  // Compact "website/address/phone unknown or blocked" without trailing status on each.
+  if (
+    /\bwebsite\s*\/\s*address\s*\/\s*phone\b/.test(lower) &&
+    /\bunknown\s+or\s+blocked\b/.test(lower)
+  ) {
+    gates.website_status = 'unknown';
+    gates.mailing_address_status = 'unknown';
+    gates.phone_status = 'unknown';
+  }
+
+  return {
+    ...gates,
+    gate_summary: text,
+  };
+}
+
+/**
+ * Parse operator "known current state" bullets into readiness rows.
+ * Does not treat bullets as a new prospect list (no pipe/em-dash required).
+ *
+ * Example:
+ * - PM-001: Gamache Properties, Ben Gamache, website/address/phone/contact role verified, mail_readiness ready_for_review, draft_readiness allowed, execution_readiness blocked
+ *
+ * @param {string} text
+ * @returns {{ rows: object[], hasKnownState: boolean }}
+ */
+function parseKnownCurrentStateBullets(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return { rows: [], hasKnownState: false };
+
+  /** @type {object[]} */
+  const rows = [];
+  const lines = raw.split(/\r?\n/);
+
+  for (const line of lines) {
+    const cleaned = String(line || '')
+      .replace(/^[-*•]\s*/, '')
+      .trim();
+    if (!cleaned) continue;
+
+    const match = /^(PM-\d{3})\s*:\s*(.+)$/i.exec(cleaned);
+    if (!match) continue;
+
+    const prospectId = String(match[1] || '')
+      .trim()
+      .toUpperCase();
+    let rest = String(match[2] || '').trim();
+    if (!prospectId || !rest) continue;
+
+    let mail_readiness = null;
+    let draft_readiness = null;
+    let execution_readiness = null;
+
+    const mailM = /(?:^|,\s*)mail_readiness\s+([a-z0-9_]+)/i.exec(rest);
+    if (mailM) {
+      mail_readiness = String(mailM[1] || '')
+        .trim()
+        .toLowerCase();
+      rest = rest.replace(mailM[0], '').trim();
+    }
+    const draftM = /(?:^|,\s*)draft_readiness\s+([a-z0-9_]+)/i.exec(rest);
+    if (draftM) {
+      draft_readiness = String(draftM[1] || '')
+        .trim()
+        .toLowerCase();
+      rest = rest.replace(draftM[0], '').trim();
+    }
+    const execM = /(?:^|,\s*)execution_readiness\s+([a-z0-9_]+)/i.exec(rest);
+    if (execM) {
+      execution_readiness = String(execM[1] || '')
+        .trim()
+        .toLowerCase();
+      rest = rest.replace(execM[0], '').trim();
+    }
+
+    // Strip trailing commas left by readiness removals.
+    rest = rest.replace(/^,\s*|,\s*$/g, '').replace(/,\s*,/g, ',').trim();
+
+    // company, contact, gate prose…
+    const parts = rest.split(',').map((p) => p.trim()).filter(Boolean);
+    if (parts.length < 2) continue;
+
+    const company_name = parts[0];
+    const contact_name = parts[1];
+    const gateProse = parts.slice(2).join(', ').trim();
+    const gates = parseKnownStateGateSummary(gateProse);
+
+    rows.push({
+      prospect_id: prospectId,
+      company_name,
+      contact_name,
+      website_status: gates.website_status,
+      mailing_address_status: gates.mailing_address_status,
+      phone_status: gates.phone_status,
+      contact_role_status: gates.contact_role_status,
+      gate_summary: gates.gate_summary || gateProse,
+      mail_readiness: mail_readiness || 'blocked',
+      draft_readiness: draft_readiness || 'allowed',
+      // Preparation-only: never authorize execution from known-state bullets.
+      execution_readiness: 'blocked',
+      operator_next_action: '',
+      notes: '',
+    });
+  }
+
+  return {
+    rows,
+    hasKnownState: rows.length > 0,
+  };
 }
 
 /**
@@ -1867,6 +2127,7 @@ module.exports = {
   isActiveWorkFollowUpCue,
   isActiveWorkTransformCue,
   isPacketReviewRequest,
+  isCanarySummaryJudgmentRequest,
   extractPacketReviewProspectId,
   isExplicitNewMissionRequest,
   isExplicitContextOverride,
@@ -1896,5 +2157,6 @@ module.exports = {
   parseInlineKnownFactBulletLine,
   extractInlineKnownFactsSection,
   isInlineKnownFactsSectionStopLine,
+  parseKnownCurrentStateBullets,
   ingestPastedFillableVerificationTable,
 };
