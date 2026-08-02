@@ -14,7 +14,12 @@ const {
   contextFocusLabel,
 } = require('./ContextEnvelope');
 const { buildOpeningState } = require('./OpeningStateBuilder');
-const { buildSuggestions, topCompanyName } = require('./SuggestionEngine');
+const {
+  buildSuggestions,
+  buildActiveWorkSuggestions,
+  isActiveDeskWorkflow,
+  topCompanyName,
+} = require('./SuggestionEngine');
 const { SessionStore } = require('./SessionStore');
 const { assembleEvidence } = require('./EvidenceAssembler');
 const { composeResponse, classifyIntent } = require('./ResponseComposer');
@@ -52,6 +57,8 @@ module.exports = {
   contextFocusLabel,
   buildOpeningState,
   buildSuggestions,
+  buildActiveWorkSuggestions,
+  isActiveDeskWorkflow,
   topCompanyName,
   SessionStore,
   assembleEvidence,

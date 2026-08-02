@@ -2,7 +2,10 @@
 
 const { normalizeContext } = require('./ContextEnvelope');
 const { buildOpeningState } = require('./OpeningStateBuilder');
-const { buildSuggestions } = require('./SuggestionEngine');
+const {
+  buildSuggestions,
+  buildActiveWorkSuggestions,
+} = require('./SuggestionEngine');
 const { SessionStore } = require('./SessionStore');
 const { composeResponse } = require('./ResponseComposer');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
@@ -1263,6 +1266,24 @@ function rememberCanaryActiveWorkContext(input = {}) {
   );
 }
 
+/**
+ * Workflow-aware nextInvestigations for canary desk responses.
+ * @param {object} input
+ * @returns {string[]}
+ */
+function canaryWorkflowSuggestions(input = {}) {
+  const awc = buildCanaryActiveWorkContext({
+    prospects: input.prospects || [],
+    campaignId: input.campaignId || '001',
+    lastOutputType:
+      input.lastOutputType || LAST_OUTPUT_TYPES.CANARY_REVIEW_PACKAGE,
+    tableRows: input.tableRows || [],
+  });
+  return buildActiveWorkSuggestions(awc, {
+    latestQuestion: input.question,
+  }).slice(0, 5);
+}
+
 function resolveCanaryLastOutputType(question, reason) {
   if (isFillableTableRequest(question) || reason === 'canary_fillable_table') {
     return LAST_OUTPUT_TYPES.FILLABLE_TABLE;
@@ -1450,11 +1471,11 @@ function buildCanaryReviewPackageResponse(input) {
       })),
       contradictingEvidence: [],
       confidence: null,
-      nextInvestigations: mailBlocked.length
-        ? [
-            'Provide mailing address, website, and phone for each canary prospect.',
-          ]
-        : ['Confirm review package, then explicitly approve any later launch.'],
+      nextInvestigations: canaryWorkflowSuggestions({
+        lastOutputType: LAST_OUTPUT_TYPES.PROVISIONAL_DRAFTS,
+        prospects,
+        question: questionText,
+      }),
       recommendedActions: [],
       metadata: {
         sourcesUsed: {
@@ -1536,11 +1557,11 @@ function buildCanaryReviewPackageResponse(input) {
     })),
     contradictingEvidence: [],
     confidence: null,
-    nextInvestigations: notReady.length
-      ? [
-          'Provide mailing address, website, and phone for each canary prospect.',
-        ]
-      : ['Confirm review package, then explicitly approve any later launch.'],
+    nextInvestigations: canaryWorkflowSuggestions({
+      lastOutputType: LAST_OUTPUT_TYPES.CANARY_REVIEW_PACKAGE,
+      prospects,
+      question: questionText,
+    }),
     recommendedActions: [],
     metadata: {
       sourcesUsed: {
@@ -1660,9 +1681,11 @@ function buildCanaryVerificationWorkOrderResponse(input) {
     })),
     contradictingEvidence: [],
     confidence: null,
-    nextInvestigations: [
-      'Verify mailing address for each canary prospect, then website and phone.',
-    ],
+    nextInvestigations: canaryWorkflowSuggestions({
+      lastOutputType: LAST_OUTPUT_TYPES.VERIFICATION_WORK_ORDER,
+      prospects,
+      question: input.question || input.objectiveText || '',
+    }),
     recommendedActions: [firstAction],
     metadata: {
       sourcesUsed: {
@@ -1916,9 +1939,12 @@ function buildCanaryFillableTableResponse(input) {
     confidence: null,
     nextInvestigations: strictShape
       ? []
-      : [
-          'Fill website_value, mailing_address_value, and phone_value for each row from a trusted source.',
-        ],
+      : canaryWorkflowSuggestions({
+          lastOutputType: LAST_OUTPUT_TYPES.FILLABLE_TABLE,
+          prospects,
+          tableRows: rows,
+          question,
+        }),
     recommendedActions: strictShape
       ? []
       : [
@@ -1994,9 +2020,13 @@ function buildCanaryExecutionBlockedResponse(input = {}) {
     })),
     contradictingEvidence: [],
     confidence: null,
-    nextInvestigations: [
-      'Verify mailing address, website, and phone, then explicitly approve any launch.',
-    ],
+    nextInvestigations: canaryWorkflowSuggestions({
+      lastOutputType:
+        (ctx && ctx.lastOutputType) || LAST_OUTPUT_TYPES.FILLABLE_TABLE,
+      prospects,
+      tableRows: Array.isArray(ctx.tableRows) ? ctx.tableRows : [],
+      question: input.question,
+    }),
     recommendedActions: [
       'Do not mail yet — complete verification first, then request explicit approval.',
     ],
