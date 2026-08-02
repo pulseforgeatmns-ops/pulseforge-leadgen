@@ -2223,13 +2223,15 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /Scorecard cover text draft/i);
     assert.match(answer, /follow-up call notes/i);
     assert.match(answer, /tracking fields to log after mailing/i);
-    assert.match(answer, /Final operator decision needed before anything is mailed/i);
+    assert.match(answer, /Final operator decision/i);
     assert.match(answer, /PM-001/);
     assert.match(answer, /Gamache Properties/);
     assert.match(answer, /ready_for_review/);
     assert.match(answer, /execution(?:_readiness)?(?: is| remains|:)?\s*blocked/i);
     assert.match(answer, /Preparation-only/);
     assert.match(answer, /100 Market St/);
+    assert.match(answer, /Ben,/);
+    assert.doesNotMatch(answer, /draft held/i);
     assert.doesNotMatch(answer, /\b\d+\s+units?\b/i);
     assert.doesNotMatch(answer, /portfolio of \d+/i);
 
@@ -2335,6 +2337,37 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /Preparation-only/);
     assert.match(answer, /100 Market St/);
 
+    // Provisional drafts must be returned, not held, when company+contact exist.
+    assert.equal(result.structured.metadata.draftConfidence, 'low');
+    assert.match(answer, /Draft confidence:\s*low/i);
+    assert.match(answer, /Usable provisional drafts/i);
+    assert.match(answer, /Missing personalization evidence/i);
+    assert.match(answer, /Final operator decision required/i);
+    assert.match(answer, /Personalized letter draft \(provisional/i);
+    assert.match(answer, /Ben,/);
+    assert.match(
+      answer,
+      /I’m reaching out to Gamache Properties with a short operational scorecard packet/i
+    );
+    assert.match(answer, /Handwritten note draft \(provisional/i);
+    assert.match(answer, /provisional scorecard packet for Gamache Properties/i);
+    assert.match(answer, /Scorecard cover text draft \(provisional/i);
+    assert.match(answer, /provisional review cover/i);
+    assert.match(answer, /603-555-0198/);
+    assert.match(answer, /Use verified table phone 603-555-0198/i);
+    assert.match(answer, /Confirm decision-maker\/context/i);
+    assert.doesNotMatch(answer, /best reach number/i);
+    assert.doesNotMatch(answer, /draft held/i);
+    assert.doesNotMatch(
+      answer,
+      /company, contact, and industry are required before personalizing/i
+    );
+    assert.match(answer, /industry \/ persona context \(missing from table/i);
+    assert.match(answer, /unknown \(not on table; not invented\)/i);
+    assert.doesNotMatch(answer, /\b\d+\s+units?\b/i);
+    assert.doesNotMatch(answer, /portfolio of \d+/i);
+    assert.doesNotMatch(answer, /appears to be in (?:property|unknown)/i);
+
     // Packet review must not mutate the ingested table rows.
     assert.equal(pm001.prospect_id, 'PM-001');
     assert.equal(pm001.company_name, 'Gamache Properties');
@@ -2347,6 +2380,65 @@ describe('Active work context continuation before domain routing', () => {
     assert.equal(String(pm001.notes || ''), '');
     assert.equal(pm002.mail_readiness, 'blocked');
     assert.equal(pm003.execution_readiness, 'blocked');
+  });
+
+  it('packet review preserves prior entity industry when table omits it', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: [
+        'Continue the Campaign 001 preparation-only canary package.',
+        '',
+        'Use these 3 prospects:',
+        '',
+        '1. PM-001 — Gamache Properties — Ben Gamache — Property Management',
+        '2. PM-002 — Elm Grove Companies — David Schleyer — Property Management',
+        '3. PM-003 — Mill City Property Management — Lauren DuPaul — Property Management',
+        '',
+        'Turn the 3-prospect canary into a verification work order.',
+        'Do not create a mission.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const tableMarkdown = [
+      '| prospect_id | company_name | contact_name | contact_role_status | website_status | website_value | mailing_address_status | mailing_address_value | phone_status | phone_value | verification_status | mail_readiness | draft_readiness | execution_readiness | operator_next_action | notes |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| PM-001 | Gamache Properties | Ben Gamache | verified | verified | https://www.gamacheproperties.com | verified | 100 Market St, Manchester NH | verified | 603-555-0198 | needs verification | ready_for_review | allowed | blocked | review packet contents / prepare print checklist | |',
+      '| PM-002 | Elm Grove Companies | David Schleyer | needs verification | needs verification | unknown | blocked | unknown | needs verification | unknown | needs verification | blocked | allowed | blocked | verify mailing address first | |',
+      '| PM-003 | Mill City Property Management | Lauren DuPaul | needs verification | needs verification | unknown | blocked | unknown | needs verification | unknown | needs verification | blocked | allowed | blocked | verify mailing address first | |',
+    ].join('\n');
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: [
+        tableMarkdown,
+        '',
+        'Create a preparation-only packet review checklist for PM-001.',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail anything.',
+      ].join('\n'),
+    });
+
+    const answer = result.prose || result.structured.answer || '';
+    const awc = workspace._sessions.get(result.sessionId).activeWorkContext;
+    const entity = (awc.entities || []).find((e) => e.id === 'PM-001');
+
+    assert.equal(result.mission, null);
+    assert.equal(entity.industry, 'Property Management');
+    assert.equal(result.structured.metadata.draftConfidence, 'medium');
+    assert.match(answer, /Draft confidence:\s*medium/i);
+    assert.match(answer, /appears to be in property management/i);
+    assert.match(answer, /Ben,/);
+    assert.doesNotMatch(answer, /draft held/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
   });
 });
 
