@@ -1951,6 +1951,105 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /PM-003/);
   });
 
+  it('fillable table responses surface workflow chips — not briefing defaults', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: CONTINUATION_PROMPT,
+    });
+
+    const chips = result.suggestions || result.structured.nextInvestigations || [];
+    const awc = workspace._sessions.get(result.sessionId).activeWorkContext;
+
+    assert.equal(awc.workflow, 'campaign_canary');
+    assert.equal(awc.lastOutputType, 'fillable_table');
+    assert.ok(chips.length >= 3, 'expected workflow suggestion chips');
+    assert.ok(
+      chips.some((s) => /blocked prospects|verification field|packet review|changed in this table|blocks mailing|Draft PM-/i.test(s)),
+      `expected canary/table chips, got: ${JSON.stringify(chips)}`
+    );
+    assert.ok(!chips.some((s) => /What changed overnight/i.test(s)));
+    assert.ok(!chips.some((s) => /top opportunity ranked first/i.test(s)));
+    assert.ok(!chips.some((s) => /Why is .+ #1/i.test(s)));
+    assert.ok(
+      !chips.some((s) =>
+        /^(?:Mail|Launch|Execute|Approve|Print)\b/i.test(String(s))
+      )
+    );
+  });
+
+  it('askWorkspace personalization keeps workflow chips after fillable table', async () => {
+    const { createMaxReasoningRuntime } = require('../../index');
+    const missionEngine = testMissionEngine();
+    const max = createMaxReasoningRuntime({
+      disableLlm: true,
+      missionEngine,
+      missionsEnabled: true,
+    });
+
+    const first = await max.askWorkspace({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+        briefing: {
+          headline: 'Quiet morning',
+          summary: 'No major movement overnight.',
+          watchAlertCount: 1,
+        },
+      },
+    });
+
+    const result = await max.askWorkspace({
+      sessionId: first.sessionId,
+      question: CONTINUATION_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+        briefing: {
+          headline: 'Quiet morning',
+          summary: 'No major movement overnight.',
+        },
+        recommendationId: 'rec:overnight',
+        selectedEntity: {
+          id: 'rec:overnight',
+          type: 'recommendation',
+          name: 'What changed overnight?',
+        },
+      },
+    });
+
+    const chips = result.suggestions || [];
+    const session = max.workspace.sessions.get(result.sessionId);
+
+    assert.equal(session.activeWorkContext.lastOutputType, 'fillable_table');
+    assert.ok(chips.length >= 3, `expected chips, got ${JSON.stringify(chips)}`);
+    assert.ok(
+      chips.some((s) =>
+        /blocked prospects|verification field|packet review|changed in this table|blocks mailing|Draft PM-/i.test(
+          s
+        )
+      ),
+      `expected canary/table chips after askWorkspace personalization, got: ${JSON.stringify(chips)}`
+    );
+    assert.ok(!chips.some((s) => /What changed overnight/i.test(s)));
+    assert.ok(!chips.some((s) => /top opportunity ranked first/i.test(s)));
+  });
+
   it('missing activeWorkContext table update asks for table — not briefing fallback', async () => {
     const missionEngine = testMissionEngine();
     const workspace = createWorkspaceEngine({

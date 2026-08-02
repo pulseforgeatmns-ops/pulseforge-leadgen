@@ -220,6 +220,47 @@ describe('SuggestionEngine', () => {
     );
     assert.ok(rec.some((s) => /policy/i.test(s)));
   });
+
+  it('uses workflow-aware chips during canary fillable table desk work', () => {
+    const chips = buildSuggestions(
+      sampleDeckContext({
+        activeWorkContext: {
+          workflow: 'campaign_001_preparation_only_canary',
+          lastOutputKind: 'fillable_verification_table',
+          entities: [{ type: 'prospect', id: 'PM-001', companyName: 'Gamache' }],
+          tableRows: [
+            {
+              prospect_id: 'PM-001',
+              mail_readiness: 'blocked',
+            },
+          ],
+          constraints: {
+            preparationOnly: true,
+            noLaunch: true,
+            noExecution: true,
+            noMail: true,
+            noApproval: true,
+          },
+        },
+      })
+    );
+
+    assert.ok(chips.some((s) => /blocked prospects/i.test(s)));
+    assert.ok(chips.some((s) => /Update another verification field/i.test(s)));
+    assert.ok(chips.some((s) => /packet review checklist/i.test(s)));
+    assert.ok(chips.some((s) => /changed in this table/i.test(s)));
+    assert.ok(chips.some((s) => /Draft PM-001 packet for review/i.test(s)));
+    assert.ok(chips.some((s) => /still blocks mailing/i.test(s)));
+    assert.ok(!chips.some((s) => /What changed overnight/i.test(s)));
+    assert.ok(!chips.some((s) => /top opportunity ranked first/i.test(s)));
+    assert.ok(!chips.some((s) => /^(?:Mail|Launch|Execute|Approve)\b/i.test(s)));
+  });
+
+  it('falls back to briefing chips when no activeWorkContext', () => {
+    const chips = buildSuggestions(sampleDeckContext());
+    assert.ok(chips.some((s) => /overnight/i.test(s)));
+    assert.ok(chips.some((s) => /#1|ranked first/i.test(s)));
+  });
 });
 
 describe('ResponseComposer', () => {

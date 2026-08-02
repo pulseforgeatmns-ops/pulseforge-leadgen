@@ -1,7 +1,11 @@
 'use strict';
 
 const { INTENT_TAGS, INTERACTION_TYPES } = require('./OperatorTypes');
-const { buildSuggestions } = require('../workspace/SuggestionEngine');
+const {
+  buildSuggestions,
+  isActiveDeskWorkflow,
+  resolveActiveWorkContext,
+} = require('../workspace/SuggestionEngine');
 
 /**
  * Max conversational preference learning (SPEC-012).
@@ -122,6 +126,10 @@ class PreferenceLearner {
    */
   personalizedSuggestions(context, tenantId) {
     const base = buildSuggestions(context);
+    // Active desk workflows own chip selection — do not reorder toward
+    // briefing/market preference habits (e.g. overnight / top opportunity).
+    const awc = resolveActiveWorkContext(context);
+    if (awc && isActiveDeskWorkflow(awc)) return base;
     const prefs = this.snapshot(tenantId);
     if (!prefs.topIntents.length) return base;
     return rankSuggestions(base, prefs.topIntents);

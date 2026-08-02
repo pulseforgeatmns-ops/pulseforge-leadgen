@@ -320,7 +320,9 @@ function createMaxReasoningRuntime(options = {}) {
     }
     result.awareness = awareness;
 
-    // SPEC-012: learn from the question; refresh personalized chips
+    // SPEC-012: learn from the question; refresh personalized chips.
+    // Preserve activeWorkContext so desk workflows keep workflow-aware chips
+    // instead of falling back to briefing defaults after personalization.
     if (tenantId && input.question) {
       operator.track({
         type: INTERACTION_TYPES.ASKED_MAX,
@@ -330,10 +332,24 @@ function createMaxReasoningRuntime(options = {}) {
         companyId: (result.context && result.context.companyId) || null,
         payload: { question: String(input.question) },
       });
-      result.suggestions = operator.suggestions(
-        result.context || input.context,
-        tenantId
-      );
+      const suggestionContext = {
+        ...((result.context && typeof result.context === 'object'
+          ? result.context
+          : null) ||
+          (input.context && typeof input.context === 'object'
+            ? input.context
+            : {})),
+      };
+      const awc =
+        suggestionContext.activeWorkContext ||
+        (session && session.activeWorkContext) ||
+        (session &&
+          session.context &&
+          session.context.activeWorkContext) ||
+        null;
+      if (awc) suggestionContext.activeWorkContext = awc;
+      suggestionContext.latestQuestion = String(input.question);
+      result.suggestions = operator.suggestions(suggestionContext, tenantId);
     }
     return result;
   }

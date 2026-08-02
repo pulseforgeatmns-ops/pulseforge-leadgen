@@ -43,9 +43,10 @@ function composeResponse(input) {
     ...(unavailableExtra || []),
   ].filter((v, i, a) => a.indexOf(v) === i);
 
-  const nextInvestigations = buildSuggestions(context).filter(
-    (s) => s.toLowerCase() !== question.toLowerCase()
-  );
+  const nextInvestigations = buildSuggestions({
+    ...context,
+    latestQuestion: question,
+  }).filter((s) => s.toLowerCase() !== question.toLowerCase());
 
   return buildStructuredResponse({
     answer,
