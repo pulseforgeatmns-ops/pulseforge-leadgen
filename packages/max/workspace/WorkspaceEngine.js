@@ -52,6 +52,7 @@ const {
   isCanaryDeskWorkflow,
   ingestPastedFillableVerificationTable,
   looksLikeFillableVerificationTablePaste,
+  parseInlinePacketReviewKnownFacts,
   LAST_OUTPUT_TYPES,
 } = require('./ActiveWorkContext');
 const {
@@ -658,6 +659,8 @@ async function maybeHandleActiveWorkContinuation(input) {
 
   // Preparation-only packet review from the active canary table — before
   // prospect extraction / parse fallback / mission routing.
+  // Fallback order: activeWorkContext.tableRows → pasted markdown table
+  // (already ingested above) → inline known-facts block.
   if (isPacketReview) {
     if (hasEntities && activeContextHasFillableTable(prior)) {
       return handlePacketReviewContinuation({
@@ -666,6 +669,8 @@ async function maybeHandleActiveWorkContinuation(input) {
         prior,
       });
     }
+    const inlineResult = handleInlineKnownFactsPacketReview({ question });
+    if (inlineResult) return inlineResult;
     return {
       reason: 'active_work_context_missing_for_packet_review',
       structured: buildMissingPacketReviewResponse({ question }),
@@ -1179,11 +1184,11 @@ function buildMissingPacketReviewResponse(input) {
   return buildStructuredResponse({
     answer: [
       'I can build a preparation-only packet review checklist, but I don’t have an active Campaign canary table in this session.',
-      'Continue from a session with the fillable verification table, or paste the table / prospects first.',
+      'Continue from a session with the fillable verification table, paste the table, or provide the known facts for one prospect (prospect_id, company_name, contact_name, mail_readiness, execution_readiness).',
       'Preparation-only: no mission created; no launch, approval, print, or mail.',
     ].join(' '),
     reasoning: [
-      'Operator asked for a packet review artifact, but activeWorkContext has no fillable table.',
+      'Operator asked for a packet review artifact, but activeWorkContext has no fillable table and no sufficient inline known facts.',
       'Clarifying instead of falling through to prospect-parse fallback or mission routing.',
       'No mission create/resume.',
     ],
@@ -1191,7 +1196,7 @@ function buildMissingPacketReviewResponse(input) {
     contradictingEvidence: [],
     confidence: null,
     nextInvestigations: [
-      'Paste or reopen the Campaign 001 fillable verification table, then ask for a packet review checklist for a prospect_id.',
+      'Paste the Campaign 001 fillable verification table, or list known facts for one prospect_id, then ask for a packet review checklist.',
     ],
     recommendedActions: [],
     metadata: {
@@ -1209,14 +1214,113 @@ function buildMissingPacketReviewResponse(input) {
 }
 
 /**
+ * Preparation-only packet review from an inline known-facts block when the
+ * session has no active canary table and no pasted markdown table.
+ * Builds a temporary packetReviewContext only — does not mutate activeWorkContext.
+ * @param {{ question: string }} input
+ * @returns {{ reason: string, structured: object }|null}
+ */
+function handleInlineKnownFactsPacketReview(input = {}) {
+  const question = String(input.question || '');
+  const parsed = parseInlinePacketReviewKnownFacts(question);
+  if (!parsed || !parsed.hasInlineFacts) return null;
+
+  if (parsed.missingRequired.length > 0) {
+    return {
+      reason: 'inline_known_facts_packet_review_incomplete',
+      structured: buildMissingInlineKnownFactsPacketReviewResponse({
+        question,
+        missingRequired: parsed.missingRequired,
+        assignedFields: parsed.assignedFields,
+      }),
+    };
+  }
+
+  const row = { ...(parsed.row || {}) };
+  // Safety: packet review never authorizes execution from inline facts.
+  row.execution_readiness = 'blocked';
+
+  const structured = buildPacketReviewArtifactResponse({
+    row,
+    entity: null,
+    question,
+    campaignId: extractCampaignIdFromText(question) || '001',
+    source: 'inline_known_facts',
+  });
+
+  return {
+    reason: 'inline_known_facts_packet_review',
+    structured,
+  };
+}
+
+/**
+ * Ask only for missing required known-fact fields — never the full table.
+ * @param {{ question?: string, missingRequired: string[], assignedFields?: string[] }} input
+ */
+function buildMissingInlineKnownFactsPacketReviewResponse(input = {}) {
+  const missing = (Array.isArray(input.missingRequired)
+    ? input.missingRequired
+    : []
+  ).filter(Boolean);
+  const provided = (Array.isArray(input.assignedFields)
+    ? input.assignedFields
+    : []
+  ).filter(Boolean);
+  const missingLabel = missing.length ? missing.join(', ') : 'required fields';
+  const providedLabel = provided.length
+    ? `Received: ${provided.join(', ')}.`
+    : '';
+
+  return buildStructuredResponse({
+    answer: [
+      'I can build a preparation-only packet review from the known facts you provided.',
+      `Still need: ${missingLabel}.`,
+      providedLabel,
+      'You do not need to paste the full Campaign canary table — only the missing fields for this prospect.',
+      'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+    ]
+      .filter(Boolean)
+      .join(' '),
+    reasoning: [
+      'Operator supplied an inline known-facts block for packet review, but required fields are incomplete.',
+      `Missing required fields: ${missingLabel}.`,
+      'Asking only for missing fields — not reconstructing the full table.',
+      'No mission create/resume. activeWorkContext not mutated.',
+    ],
+    supportingEvidence: [],
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: [
+      `Provide the missing fields (${missingLabel}) and ask again for the preparation-only packet review.`,
+    ],
+    recommendedActions: [],
+    metadata: {
+      sourcesUsed: { inlineKnownFacts: true },
+      evidenceCount: provided.length,
+      unavailable: missing.map((f) => `inline_known_fact:${f}`),
+      surface: 'workspace',
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      route: 'intelligence',
+      canaryPreparationOnly: true,
+      packetReview: true,
+      inlineKnownFacts: true,
+      missingRequiredFields: missing,
+      tableUpdate: false,
+    },
+  });
+}
+
+/**
  * Packet review artifact from a single desk table row — known facts only.
  * ready_for_review means packet can be reviewed, not mailed.
- * @param {{ row: object, entity?: object|null, question?: string, campaignId?: string }} input
+ * @param {{ row: object, entity?: object|null, question?: string, campaignId?: string, source?: string }} input
  */
 function buildPacketReviewArtifactResponse(input = {}) {
   const row = input.row && typeof input.row === 'object' ? input.row : {};
   const entity = input.entity && typeof input.entity === 'object' ? input.entity : {};
   const campaignId = String(input.campaignId || '001');
+  const fromInlineFacts = input.source === 'inline_known_facts';
   const prospectId = String(row.prospect_id || entity.id || 'unknown').trim();
   const company =
     blankTableValue(row.company_name) || blankToNull(entity.companyName) || null;
@@ -1404,13 +1508,19 @@ function buildPacketReviewArtifactResponse(input = {}) {
   return buildStructuredResponse({
     answer,
     reasoning: [
-      'Reused activeWorkContext.tableRows for packet review; no prospect re-paste required.',
-      `Selected prospect_id ${prospectId} from the current Campaign ${campaignId} canary table.`,
+      fromInlineFacts
+        ? 'Built packet review from inline known facts; no active canary table or markdown table paste required.'
+        : 'Reused activeWorkContext.tableRows for packet review; no prospect re-paste required.',
+      fromInlineFacts
+        ? `Selected prospect_id ${prospectId} from operator-supplied known facts for Campaign ${campaignId}.`
+        : `Selected prospect_id ${prospectId} from the current Campaign ${campaignId} canary table.`,
       'ready_for_review means packet review is allowed; execution_readiness stays blocked absent explicit launch.',
       canDraft
         ? 'Provisional drafts generated from known company/contact facts; missing industry does not block drafting.'
         : 'Drafts held because company_name and contact_name are both required.',
-      'No mission create/resume. Table not mutated.',
+      fromInlineFacts
+        ? 'No mission create/resume. activeWorkContext not mutated (temporary packetReviewContext only).'
+        : 'No mission create/resume. Table not mutated.',
     ],
     supportingEvidence: [
       {
@@ -1442,7 +1552,9 @@ function buildPacketReviewArtifactResponse(input = {}) {
       'Review the provisional packet drafts, confirm print fields, then explicitly request any later launch/mail approval.',
     ],
     metadata: {
-      sourcesUsed: { activeWorkContext: true },
+      sourcesUsed: fromInlineFacts
+        ? { inlineKnownFacts: true }
+        : { activeWorkContext: true },
       evidenceCount: 1,
       unavailable: personalizationGaps.map((g) => `personalization:${g}`),
       surface: 'workspace',
@@ -1450,10 +1562,11 @@ function buildPacketReviewArtifactResponse(input = {}) {
       route: 'intelligence',
       canaryPreparationOnly: true,
       packetReview: true,
-      fillableTable: true,
+      fillableTable: !fromInlineFacts,
+      inlineKnownFacts: fromInlineFacts || undefined,
       provisionalDrafts: draftsProvisional || draftsHeld || undefined,
       draftConfidence,
-      activeWorkContextReused: true,
+      activeWorkContextReused: !fromInlineFacts,
       tableUpdate: false,
       prospectId,
       campaignId,
@@ -1597,6 +1710,7 @@ async function maybeBuildCanaryPreparationResponse(input) {
 
   // Packet review from desk table — also owned by early continuation, but
   // keep a secondary guard so canary routing never asks to re-paste prospects.
+  // Fallback: inline known-facts block when no desk table is present.
   if (isPacketReviewRequest(question)) {
     if (activeContextHasEntities(prior) && activeContextHasFillableTable(prior)) {
       return handlePacketReviewContinuation({
@@ -1605,6 +1719,8 @@ async function maybeBuildCanaryPreparationResponse(input) {
         prior,
       });
     }
+    const inlineResult = handleInlineKnownFactsPacketReview({ question });
+    if (inlineResult) return inlineResult;
     return {
       reason: 'canary_packet_review_missing_table',
       structured: buildMissingPacketReviewResponse({ question }),

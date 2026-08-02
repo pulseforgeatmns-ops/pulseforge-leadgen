@@ -1516,6 +1516,164 @@ function entitiesFromFillableTableRows(rows, priorEntities = []) {
 }
 
 /**
+ * Required fields for a preparation-only packet review built from inline
+ * known facts (no active desk table / no markdown table paste).
+ */
+const PACKET_REVIEW_INLINE_REQUIRED_FIELDS = Object.freeze([
+  'prospect_id',
+  'company_name',
+  'contact_name',
+  'mail_readiness',
+  'execution_readiness',
+]);
+
+/**
+ * Optional fields accepted when building packet review from inline known facts.
+ */
+const PACKET_REVIEW_INLINE_OPTIONAL_FIELDS = Object.freeze([
+  'website_status',
+  'website_value',
+  'mailing_address_status',
+  'mailing_address_value',
+  'phone_status',
+  'phone_value',
+  'contact_role_status',
+  'draft_readiness',
+  'notes',
+  'operator_next_action',
+  'verification_status',
+  'industry',
+  'vertical',
+]);
+
+const PACKET_REVIEW_INLINE_ALLOWLIST = Object.freeze([
+  ...PACKET_REVIEW_INLINE_REQUIRED_FIELDS,
+  ...PACKET_REVIEW_INLINE_OPTIONAL_FIELDS,
+]);
+
+/**
+ * Parse a single-prospect inline known-facts block for preparation-only
+ * packet review (field = value / field: value / bullet assignments).
+ * Does not invent values. Does not require a markdown table.
+ *
+ * @param {string} text
+ * @returns {{
+ *   hasInlineFacts: boolean,
+ *   row: object|null,
+ *   missingRequired: string[],
+ *   assignedFields: string[],
+ * }}
+ */
+function parseInlinePacketReviewKnownFacts(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) {
+    return {
+      hasInlineFacts: false,
+      row: null,
+      missingRequired: [...PACKET_REVIEW_INLINE_REQUIRED_FIELDS],
+      assignedFields: [],
+    };
+  }
+
+  const columnSet = new Set(PACKET_REVIEW_INLINE_ALLOWLIST);
+  /** @type {Record<string, string>} */
+  const fields = {};
+  /** @type {Set<string>} */
+  const explicitlyAssigned = new Set();
+
+  const applyParsed = (parsed) => {
+    if (!parsed || typeof parsed !== 'object') return;
+    for (const [field, value] of Object.entries(parsed)) {
+      const key = String(field || '')
+        .trim()
+        .toLowerCase();
+      if (!columnSet.has(key)) continue;
+      const cleaned = String(value == null ? '' : value).trim();
+      if (!cleaned) continue;
+      fields[key] = cleaned;
+      explicitlyAssigned.add(key);
+    }
+  };
+
+  // Whole-message scan (prose + comma-separated assignments).
+  applyParsed(parseMutableFieldAssignments(raw, columnSet));
+
+  // Line / bullet scan for structured known-facts blocks.
+  const lines = raw.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = String(line || '')
+      .trim()
+      .replace(/^[-*•]\s+/, '')
+      .replace(/^[.]+\s+/, '');
+    if (!trimmed) continue;
+    applyParsed(parseMutableFieldAssignments(trimmed, columnSet));
+    const single = /^([a-z][a-z0-9_]*)\s*[:=]\s*(.+)$/i.exec(
+      trimmed.replace(/[.\s]+$/, '')
+    );
+    if (single && columnSet.has(single[1].toLowerCase())) {
+      const key = single[1].toLowerCase();
+      let value = String(single[2] || '').trim().replace(/[.\s]+$/, '');
+      if (key !== 'notes') {
+        value = value
+          .replace(
+            /\.\s*(?:Reassess|Leave|Return|Update|Keep|Do\s+not|Preparation|Create|Include|Use)\b[\s\S]*$/i,
+            ''
+          )
+          .trim()
+          .replace(/[.\s]+$/, '')
+          .trim();
+      }
+      if (value) {
+        fields[key] = value;
+        explicitlyAssigned.add(key);
+      }
+    }
+  }
+
+  // Prospect id from "for PM-001" / "PM-001 packet" prose when not assigned.
+  if (!fields.prospect_id) {
+    const fromProse = extractPacketReviewProspectId(raw, []);
+    if (fromProse) fields.prospect_id = fromProse;
+  }
+
+  const nonProspectAssigned = [...explicitlyAssigned].filter(
+    (k) => k !== 'prospect_id'
+  );
+  // Require at least one non-id fact so "packet review for PM-001" alone
+  // does not count as an inline known-facts block.
+  const hasInlineFacts = nonProspectAssigned.length > 0;
+
+  const missingRequired = PACKET_REVIEW_INLINE_REQUIRED_FIELDS.filter((field) => {
+    const value = fields[field];
+    return value == null || !String(value).trim();
+  });
+
+  if (!hasInlineFacts) {
+    return {
+      hasInlineFacts: false,
+      row: null,
+      missingRequired: [...PACKET_REVIEW_INLINE_REQUIRED_FIELDS],
+      assignedFields: [...explicitlyAssigned],
+    };
+  }
+
+  /** @type {Record<string, string>} */
+  const row = {};
+  for (const key of PACKET_REVIEW_INLINE_ALLOWLIST) {
+    if (fields[key] != null && String(fields[key]).trim()) {
+      row[key] = String(fields[key]).trim();
+    }
+  }
+
+  return {
+    hasInlineFacts: true,
+    row,
+    missingRequired,
+    assignedFields: Object.keys(row),
+  };
+}
+
+/**
  * Ingest a pasted fillable verification table into session activeWorkContext.
  * Does not mutate row values. Does not create a mission or imply execution.
  * @param {{ question: string, session: object|null }} input
@@ -1588,6 +1746,8 @@ module.exports = {
   FILLABLE_TABLE_GATE_STATUS_FIELDS,
   FILLABLE_TABLE_FREE_TEXT_FIELDS,
   FILLABLE_VERIFICATION_TABLE_DETECT_HEADERS,
+  PACKET_REVIEW_INLINE_REQUIRED_FIELDS,
+  PACKET_REVIEW_INLINE_OPTIONAL_FIELDS,
   getActiveWorkContext,
   setActiveWorkContext,
   cloneActiveWorkContext,
@@ -1625,5 +1785,6 @@ module.exports = {
   resolveCanaryDeskWorkflow,
   looksLikeFillableVerificationTablePaste,
   parseFillableVerificationTableFromMessage,
+  parseInlinePacketReviewKnownFacts,
   ingestPastedFillableVerificationTable,
 };

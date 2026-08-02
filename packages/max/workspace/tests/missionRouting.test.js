@@ -2413,6 +2413,171 @@ describe('Active work context continuation before domain routing', () => {
     assert.equal(pm003.execution_readiness, 'blocked');
   });
 
+  it('inline known facts fallback builds PM-001 packet review without active table', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question: [
+        'Create a preparation-only packet review package for PM-001 using the current Campaign 001 canary table.',
+        'I do not have the full table pasted; use these known facts:',
+        '',
+        '- prospect_id: PM-001',
+        '- company_name: Gamache Properties',
+        '- contact_name: Ben Gamache',
+        '- website_status: verified',
+        '- website_value: https://www.gamacheproperties.com',
+        '- mailing_address_status: verified',
+        '- mailing_address_value: 100 Market St, Manchester NH',
+        '- phone_status: verified',
+        '- phone_value: 603-555-0198',
+        '- contact_role_status: verified',
+        '- mail_readiness: ready_for_review',
+        '- draft_readiness: allowed',
+        '- execution_readiness: blocked',
+        '- notes: operator-supplied known facts after refresh',
+        '',
+        'Use only the known facts above. Do not invent evidence.',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail anything.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const session = workspace._sessions.get(result.sessionId);
+    const awc = session && session.activeWorkContext;
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.executionDomain, 'workspace');
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(result.structured.metadata.packetReview, true);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(result.structured.metadata.inlineKnownFacts, true);
+    assert.equal(result.structured.metadata.activeWorkContextReused, false);
+    assert.equal(result.structured.metadata.tableUpdate, false);
+    assert.equal(result.structured.metadata.prospectId, 'PM-001');
+    assert.equal(result.structured.metadata.mailReadiness, 'ready_for_review');
+    assert.equal(result.structured.metadata.executionReadiness, 'blocked');
+    assert.equal(result.structured.metadata.draftConfidence, 'low');
+
+    // Temporary packetReviewContext only — do not invent a desk table.
+    assert.ok(
+      !awc ||
+        !Array.isArray(awc.tableRows) ||
+        awc.tableRows.length === 0 ||
+        awc.lastOutputType !== 'fillable_table'
+    );
+
+    assert.doesNotMatch(
+      answer,
+      /I don.?t have an active Campaign canary table/i
+    );
+    assert.doesNotMatch(answer, /paste the table\/prospects first/i);
+    assert.doesNotMatch(answer, /paste the table/i);
+    assert.doesNotMatch(
+      answer,
+      /I see you intended to provide \d+ canary prospects/i
+    );
+    assert.doesNotMatch(answer, /could not parse them cleanly/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /Switching from .* to General Conversation/i);
+
+    assert.match(answer, /packet (?:contents )?checklist/i);
+    assert.match(answer, /print\s*\/\s*sign\s*\/\s*mail checklist/i);
+    assert.match(answer, /Fields to confirm before printing/i);
+    assert.match(answer, /Personalized letter draft/i);
+    assert.match(answer, /Handwritten note draft/i);
+    assert.match(answer, /Scorecard cover text draft/i);
+    assert.match(answer, /follow-up call notes/i);
+    assert.match(answer, /tracking fields to log after mailing/i);
+    assert.match(answer, /Final operator decision/i);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /ready_for_review/);
+    assert.match(
+      answer,
+      /execution(?:[_\s]?readiness)?(?:\s+is|\s+remains|\s+stays|:)?\s*blocked/i
+    );
+    assert.match(answer, /Preparation-only/);
+    assert.match(answer, /100 Market St/);
+    assert.match(answer, /Ben,/);
+    assert.doesNotMatch(answer, /draft held/i);
+    assert.doesNotMatch(answer, /\b\d+\s+units?\b/i);
+    assert.doesNotMatch(answer, /portfolio of \d+/i);
+
+    const customerSection = extractPacketReviewCustomerFacingSection(answer);
+    assert.ok(customerSection.length > 0, 'expected customer-facing drafts section');
+    assert.doesNotMatch(customerSection, /preparation-only/i);
+    assert.doesNotMatch(customerSection, /execution remains blocked/i);
+    assert.doesNotMatch(customerSection, /ready_for_review/i);
+    assert.doesNotMatch(customerSection, /Draft confidence/i);
+    assert.doesNotMatch(customerSection, /operator-supplied known facts/i);
+  });
+
+  it('inline known facts packet review asks only for missing required fields', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question: [
+        'Create a preparation-only packet review checklist for PM-001.',
+        'Known facts:',
+        '- prospect_id: PM-001',
+        '- company_name: Gamache Properties',
+        '- mail_readiness: ready_for_review',
+        'Do not create a mission.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(result.structured.metadata.packetReview, true);
+    assert.equal(result.structured.metadata.inlineKnownFacts, true);
+    assert.deepEqual(
+      result.structured.metadata.missingRequiredFields.sort(),
+      ['contact_name', 'execution_readiness'].sort()
+    );
+
+    assert.match(answer, /Still need:/i);
+    assert.match(answer, /contact_name/i);
+    assert.match(answer, /execution_readiness/i);
+    assert.match(answer, /do not need to paste the full/i);
+    assert.doesNotMatch(
+      answer,
+      /I don.?t have an active Campaign canary table/i
+    );
+    assert.doesNotMatch(
+      answer,
+      /Continue from a session with the fillable verification table/i
+    );
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /Personalized letter draft/i);
+  });
+
   it('packet review preserves prior entity industry when table omits it', async () => {
     const missionEngine = testMissionEngine();
     const workspace = createWorkspaceEngine({
