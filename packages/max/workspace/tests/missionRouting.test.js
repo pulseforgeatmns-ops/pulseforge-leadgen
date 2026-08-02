@@ -12,6 +12,16 @@ function testMissionEngine() {
   });
 }
 
+/** Slice customer-facing drafts from a packet-review answer (excludes operator caveats). */
+function extractPacketReviewCustomerFacingSection(answer) {
+  const text = String(answer || '');
+  const start = text.search(/---\s*Customer-facing drafts\s*---/i);
+  if (start < 0) return '';
+  const after = text.slice(start);
+  const end = after.search(/\n---\s*Operator caveats\s*---/i);
+  return end >= 0 ? after.slice(0, end) : after;
+}
+
 describe('SPEC-022 Workspace Mission routing', () => {
   it('Build Campaign 001 creates a mission and skips Market Intelligence', async () => {
     const missionEngine = testMissionEngine();
@@ -2340,22 +2350,27 @@ describe('Active work context continuation before domain routing', () => {
     // Provisional drafts must be returned, not held, when company+contact exist.
     assert.equal(result.structured.metadata.draftConfidence, 'low');
     assert.match(answer, /Draft confidence:\s*low/i);
-    assert.match(answer, /Usable provisional drafts/i);
+    assert.match(answer, /Customer-facing drafts/i);
+    assert.match(answer, /Operator caveats/i);
     assert.match(answer, /Missing personalization evidence/i);
     assert.match(answer, /Final operator decision required/i);
     assert.match(answer, /Personalized letter draft \(provisional/i);
     assert.match(answer, /Ben,/);
     assert.match(
       answer,
-      /I’m reaching out to Gamache Properties with a short operational scorecard packet/i
+      /I included a short scorecard packet for Gamache Properties as a quick review item/i
     );
     assert.match(answer, /Handwritten note draft \(provisional/i);
-    assert.match(answer, /provisional scorecard packet for Gamache Properties/i);
+    assert.match(
+      answer,
+      /Ben — included a short scorecard for Gamache Properties\. Thought it may be useful as a quick review item/i
+    );
     assert.match(answer, /Scorecard cover text draft \(provisional/i);
-    assert.match(answer, /provisional review cover/i);
+    assert.match(answer, /Operational scorecard — Gamache Properties/i);
     assert.match(answer, /603-555-0198/);
     assert.match(answer, /Use verified table phone 603-555-0198/i);
     assert.match(answer, /Confirm decision-maker\/context/i);
+    assert.match(answer, /execution remains blocked/i);
     assert.doesNotMatch(answer, /best reach number/i);
     assert.doesNotMatch(answer, /draft held/i);
     assert.doesNotMatch(
@@ -2367,6 +2382,22 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(answer, /\b\d+\s+units?\b/i);
     assert.doesNotMatch(answer, /portfolio of \d+/i);
     assert.doesNotMatch(answer, /appears to be in (?:property|unknown)/i);
+
+    // Customer-facing letter / note / cover must not leak operator language.
+    const customerSection = extractPacketReviewCustomerFacingSection(answer);
+    assert.ok(customerSection.length > 0, 'expected customer-facing drafts section');
+    assert.doesNotMatch(customerSection, /preparation-only/i);
+    assert.doesNotMatch(customerSection, /execution remains blocked/i);
+    assert.doesNotMatch(customerSection, /ready_for_review/i);
+    assert.doesNotMatch(customerSection, /Industry not yet confirmed/i);
+    assert.doesNotMatch(customerSection, /industry(?:\/persona)? not on table/i);
+    assert.doesNotMatch(customerSection, /without assuming/i);
+    assert.doesNotMatch(customerSection, /Draft confidence/i);
+    assert.doesNotMatch(customerSection, /I(?:'|’)d like to send you/i);
+    assert.doesNotMatch(customerSection, /provisional review cover/i);
+    assert.doesNotMatch(customerSection, /Status: Packet ready_for_review/i);
+    assert.doesNotMatch(customerSection, /Evidence note:/i);
+    assert.doesNotMatch(customerSection, /Operator note on file/i);
 
     // Packet review must not mutate the ingested table rows.
     assert.equal(pm001.prospect_id, 'PM-001');
@@ -2437,8 +2468,19 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /Draft confidence:\s*medium/i);
     assert.match(answer, /appears to be in property management/i);
     assert.match(answer, /Ben,/);
+    assert.match(
+      answer,
+      /I included a short scorecard packet for Gamache Properties as a quick review item/i
+    );
     assert.doesNotMatch(answer, /draft held/i);
     assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+
+    const customerSection = extractPacketReviewCustomerFacingSection(answer);
+    assert.doesNotMatch(customerSection, /Draft confidence/i);
+    assert.doesNotMatch(customerSection, /preparation-only/i);
+    assert.doesNotMatch(customerSection, /I(?:'|’)d like to send you/i);
+    assert.doesNotMatch(customerSection, /ready_for_review/i);
+    assert.doesNotMatch(customerSection, /execution remains blocked/i);
   });
 });
 

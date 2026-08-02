@@ -1268,8 +1268,6 @@ function buildPacketReviewArtifactResponse(input = {}) {
         website,
         phone,
         notes,
-        mailReadyForReview,
-        draftConfidence,
       })
     : {
         letter:
@@ -1350,7 +1348,7 @@ function buildPacketReviewArtifactResponse(input = {}) {
     'Fields to confirm before printing:',
     confirmBeforePrinting,
     '',
-    '--- Usable provisional drafts ---',
+    '--- Customer-facing drafts ---',
     `Personalized letter draft (${
       draftsHeld ? 'held' : draftsProvisional ? 'provisional / low evidence' : 'provisional'
     }):`,
@@ -1366,13 +1364,22 @@ function buildPacketReviewArtifactResponse(input = {}) {
     }):`,
     drafts.scorecardCover,
     '',
-    'First follow-up call notes:',
-    drafts.followUpNotes,
+    '--- Operator caveats ---',
+    `Draft confidence: ${draftConfidence}${
+      draftConfidence === 'low'
+        ? ' — industry/persona evidence missing; drafts stay generic and sendable'
+        : draftConfidence === 'medium'
+          ? ' — industry known; still preparation-only / provisional'
+          : ' — company and contact required before drafting'
+    }`,
     '',
-    '--- Missing personalization evidence ---',
+    'Missing personalization evidence:',
     personalizationGaps.length
       ? `Missing: ${personalizationGaps.join(', ')}. Listed for confirmation — does not block provisional drafting when company and contact are present. No invented portfolio size, pain points, persona, or industry.`
       : 'No personalization gaps on company, contact, or industry. Drafts still use only verified table contact fields and known desk facts.',
+    '',
+    'First follow-up call notes (operator only):',
+    drafts.followUpNotes,
     '',
     'PulseForge tracking fields to log after mailing:',
     `- prospect_id: ${prospectId}`,
@@ -1469,6 +1476,8 @@ function verifiedPacketFieldValue(status, value) {
 
 /**
  * Packet-review drafts from known desk facts only.
+ * Customer-facing letter / note / scorecard stay sendable and omit operator
+ * readiness, confidence, and evidence caveats (those live outside this copy).
  * Generates conservative provisional copy when company + contact are present,
  * even if industry/persona evidence is missing (never invents industry).
  * @param {object} input
@@ -1484,93 +1493,42 @@ function buildPacketReviewDrafts(input = {}) {
   const website = input.website || null;
   const phone = input.phone || null;
   const notes = String(input.notes || '').trim();
-  const mailReady = input.mailReadyForReview === true;
-  const draftConfidence = input.draftConfidence || (industry ? 'medium' : 'low');
-  const thinEvidence = !industry;
 
+  // Customer-facing letter: no readiness labels, confidence, or "I'd like to send".
   const letterBody = industryLower
     ? [
         `I’m reaching out because ${company} appears to be in ${industryLower}, where ${framing} can directly affect owner confidence.`,
         '',
-        `PulseForge is preparing a short operational scorecard for ${industryLower} teams to identify where follow-up, vendor coordination, and growth opportunities may be slipping through.`,
+        `I included a short scorecard packet for ${company} as a quick review item. It helps identify where follow-up, vendor coordination, and growth opportunities may be slipping through.`,
       ]
     : [
-        `I’m reaching out to ${company} with a short operational scorecard packet for your review.`,
+        `I included a short scorecard packet for ${company} as a quick review item.`,
         '',
-        'PulseForge is preparing a preparation-only scorecard packet so you can review where follow-up and vendor coordination may need attention — without assuming industry-specific details we have not verified.',
+        'It highlights where follow-up and vendor coordination may need attention.',
       ];
 
-  const mailingLine = mailing
-    ? mailReady
-      ? `If ${mailing} is still the correct mailing address, I’d like to send you the scorecard packet for review once you explicitly approve a future mail step.`
-      : `I’d like to send you the scorecard once we confirm ${mailing} is the correct mailing address and mail readiness is complete.`
-    : 'I’d like to send you the scorecard for review once we verify the correct mailing address and you explicitly approve a future mail step.';
+  const letter = [`${firstName},`, '', ...letterBody, '', 'Best,', '[Sender]'].join(
+    '\n'
+  );
 
-  const letter = [
-    `${firstName},`,
-    '',
-    ...letterBody,
-    '',
-    mailingLine,
-    website ? `Reference on file (verified website): ${website}` : null,
-    notes ? `Operator note on file: ${notes}` : null,
-    '',
-    `[Draft confidence: ${draftConfidence}${
-      thinEvidence ? ' — industry/persona not on table; not invented' : ''
-    }]`,
-    '',
-    'Best,',
-    '[Sender]',
+  // Customer-facing handwritten note: generic, sendable, no industry-unknown talk.
+  const handwrittenNote = industryLower
+    ? `${firstName} — included a short scorecard for ${company}. Thought it may be useful as a quick review for ${industryLower} teams. — [Sender]`
+    : `${firstName} — included a short scorecard for ${company}. Thought it may be useful as a quick review item. — [Sender]`;
+
+  // Customer-facing scorecard cover: known contact facts only — no operator status.
+  const scorecardCover = [
+    `Operational scorecard — ${company}`,
+    `Prepared for: ${contact}`,
+    industry ? `Context: ${industry}` : null,
+    mailing ? `Mailing address: ${mailing}` : null,
+    website ? `Website: ${website}` : null,
+    phone ? `Phone: ${phone}` : null,
   ]
-    .filter((line) => line != null)
+    .filter(Boolean)
     .join('\n');
 
-  const handwrittenNote = industryLower
-    ? mailing
-      ? `${firstName} — short operational scorecard for ${industryLower} teams. Preparing packet for ${mailing}. — [Sender]`
-      : `${firstName} — preparing a short operational scorecard for ${industryLower} teams. Will send once we confirm the correct mailing address. — [Sender]`
-    : mailing
-      ? `${firstName} — provisional scorecard packet for ${company}. Preparing for ${mailing}. Industry not yet confirmed. — [Sender]`
-      : `${firstName} — provisional scorecard packet for ${company}. Will send once mailing address is confirmed. Industry not yet confirmed. — [Sender]`;
-
-  const scorecardCover = thinEvidence
-    ? [
-        `Operational scorecard — ${company} (provisional review cover)`,
-        `Prepared for: ${contact}`,
-        'Context: industry/persona not on table — not invented',
-        mailing
-          ? `Mailing address on file (verified): ${mailing}`
-          : 'Mailing address: unknown / unverified',
-        website ? `Website on file (verified): ${website}` : null,
-        phone ? `Phone on file (verified): ${phone}` : null,
-        notes ? `Notes on file: ${notes}` : null,
-        mailReady
-          ? 'Status: Packet ready_for_review — execution still blocked until explicit launch approval'
-          : 'Status: Provisional packet review draft — mailing readiness not ready_for_review',
-        `Draft confidence: ${draftConfidence}`,
-        'Evidence note: uses only company, contact, and verified table fields; no industry or persona claims.',
-      ]
-        .filter(Boolean)
-        .join('\n')
-    : [
-        `Operational scorecard — ${company}`,
-        `Prepared for: ${contact}`,
-        `Context: ${industry}`,
-        mailing
-          ? `Mailing address on file (verified): ${mailing}`
-          : 'Mailing address: unknown / unverified',
-        website ? `Website on file (verified): ${website}` : null,
-        phone ? `Phone on file (verified): ${phone}` : null,
-        notes ? `Notes on file: ${notes}` : null,
-        mailReady
-          ? 'Status: Packet ready_for_review — execution still blocked until explicit launch approval'
-          : 'Status: Provisional packet review draft — mailing readiness not ready_for_review',
-        `Draft confidence: ${draftConfidence}`,
-        'Evidence note: uses only company, contact, industry, and verified table contact fields; no other claims.',
-      ]
-        .filter(Boolean)
-        .join('\n');
-
+  // Operator-only call notes — caveats stay out of letter / note / cover.
   const followUpNotes = [
     `Confirm decision-maker/context for ${contact} at ${company} before dialing.`,
     phone
@@ -1583,8 +1541,11 @@ function buildPacketReviewDrafts(input = {}) {
     industryLower
       ? `Ask whether a short operational scorecard for ${industryLower} teams would be useful to review.`
       : 'Ask whether a short operational scorecard packet would be useful to review; do not assert an unverified industry.',
+    notes ? `Table notes on file (operator only): ${notes}` : null,
     'Stay within known facts only — company, contact, and verified table fields.',
-  ].join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return {
     letter,
