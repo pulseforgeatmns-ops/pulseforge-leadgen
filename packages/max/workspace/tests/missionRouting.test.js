@@ -2239,6 +2239,115 @@ describe('Active work context continuation before domain routing', () => {
     assert.deepEqual(pm002, beforePm002);
     assert.deepEqual(pm003, beforePm003);
   });
+
+  it('pasted fillable verification table + PM-001 packet review in same message', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const tableMarkdown = [
+      '| prospect_id | company_name | contact_name | contact_role_status | website_status | website_value | mailing_address_status | mailing_address_value | phone_status | phone_value | verification_status | mail_readiness | draft_readiness | execution_readiness | operator_next_action | notes |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| PM-001 | Gamache Properties | Ben Gamache | verified | verified | https://www.gamacheproperties.com | verified | 100 Market St, Manchester NH | verified | 603-555-0198 | needs verification | ready_for_review | allowed | blocked | review packet contents / prepare print checklist | |',
+      '| PM-002 | Elm Grove Companies | David Schleyer | needs verification | needs verification | unknown | blocked | unknown | needs verification | unknown | needs verification | blocked | allowed | blocked | verify mailing address first | |',
+      '| PM-003 | Mill City Property Management | Lauren DuPaul | needs verification | needs verification | unknown | blocked | unknown | needs verification | unknown | needs verification | blocked | allowed | blocked | verify mailing address first | |',
+    ].join('\n');
+
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question: [
+        'Campaign 001 preparation-only canary table:',
+        '',
+        tableMarkdown,
+        '',
+        'Create a preparation-only packet review checklist for PM-001.',
+        'Use only known table facts. Do not invent evidence.',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail anything.',
+      ].join('\n'),
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const awc = workspace._sessions.get(result.sessionId).activeWorkContext;
+    const rows = awc.tableRows || [];
+    const pm001 = rows.find((r) => r.prospect_id === 'PM-001');
+    const pm002 = rows.find((r) => r.prospect_id === 'PM-002');
+    const pm003 = rows.find((r) => r.prospect_id === 'PM-003');
+
+    assert.ok(awc, 'activeWorkContext populated from pasted table');
+    assert.equal(awc.workflow, 'campaign_001_preparation_only_canary');
+    assert.ok(
+      awc.lastOutputKind === 'fillable_verification_table' ||
+        awc.lastOutputType === 'packet_review' ||
+        awc.lastOutputType === 'fillable_table'
+    );
+    assert.equal(rows.length, 3);
+    assert.equal(pm001.company_name, 'Gamache Properties');
+    assert.equal(pm001.mail_readiness, 'ready_for_review');
+    assert.equal(pm001.execution_readiness, 'blocked');
+    assert.equal(pm001.website_value, 'https://www.gamacheproperties.com');
+    assert.equal(pm001.mailing_address_value, '100 Market St, Manchester NH');
+    assert.equal(pm001.phone_value, '603-555-0198');
+    assert.equal(pm002.company_name, 'Elm Grove Companies');
+    assert.equal(pm003.company_name, 'Mill City Property Management');
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.executionDomain, 'workspace');
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(result.structured.metadata.packetReview, true);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(result.structured.metadata.tableUpdate, false);
+    assert.equal(result.structured.metadata.prospectId, 'PM-001');
+    assert.equal(result.structured.metadata.executionReadiness, 'blocked');
+    assert.equal(awc.lastOutputType, 'packet_review');
+
+    assert.doesNotMatch(
+      answer,
+      /I don.?t have an active Campaign canary table/i
+    );
+    assert.doesNotMatch(answer, /paste the table\/prospects first/i);
+    assert.doesNotMatch(answer, /Prospect List Detected/i);
+    assert.doesNotMatch(
+      answer,
+      /I see you intended to provide \d+ canary prospects/i
+    );
+    assert.doesNotMatch(answer, /could not parse them cleanly/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+
+    assert.match(answer, /packet (?:contents )?checklist/i);
+    assert.match(answer, /print\s*\/\s*sign\s*\/\s*mail checklist/i);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /ready_for_review/);
+    assert.match(
+      answer,
+      /execution(?:[_\s]?readiness)?(?:\s+is|\s+remains|\s+stays|:)?\s*blocked/i
+    );
+    assert.match(answer, /Preparation-only/);
+    assert.match(answer, /100 Market St/);
+
+    // Packet review must not mutate the ingested table rows.
+    assert.equal(pm001.prospect_id, 'PM-001');
+    assert.equal(pm001.company_name, 'Gamache Properties');
+    assert.equal(pm001.contact_name, 'Ben Gamache');
+    assert.equal(pm001.mail_readiness, 'ready_for_review');
+    assert.equal(pm001.execution_readiness, 'blocked');
+    assert.equal(pm001.website_value, 'https://www.gamacheproperties.com');
+    assert.equal(pm001.mailing_address_value, '100 Market St, Manchester NH');
+    assert.equal(pm001.phone_value, '603-555-0198');
+    assert.equal(String(pm001.notes || ''), '');
+    assert.equal(pm002.mail_readiness, 'blocked');
+    assert.equal(pm003.execution_readiness, 'blocked');
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {
