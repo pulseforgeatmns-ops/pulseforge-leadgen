@@ -90,8 +90,14 @@ function buildResponseMetadata(partial = {}) {
   if (partial.fillableTable === true) {
     meta.fillableTable = true;
   }
+  if (partial.packetReview === true) {
+    meta.packetReview = true;
+  }
   if (partial.tableUpdate === true) {
     meta.tableUpdate = true;
+  }
+  if (partial.tableUpdate === false) {
+    meta.tableUpdate = false;
   }
   if (Array.isArray(partial.updatedProspectIds)) {
     meta.updatedProspectIds = partial.updatedProspectIds.map(String);
@@ -107,6 +113,18 @@ function buildResponseMetadata(partial = {}) {
   }
   if (partial.requestedProspectId != null) {
     meta.requestedProspectId = String(partial.requestedProspectId);
+  }
+  if (partial.prospectId != null) {
+    meta.prospectId = String(partial.prospectId);
+  }
+  if (partial.campaignId != null) {
+    meta.campaignId = String(partial.campaignId);
+  }
+  if (partial.mailReadiness != null) {
+    meta.mailReadiness = String(partial.mailReadiness);
+  }
+  if (partial.executionReadiness != null) {
+    meta.executionReadiness = String(partial.executionReadiness);
   }
   if (partial.strictOutputShape === true) {
     meta.strictOutputShape = true;

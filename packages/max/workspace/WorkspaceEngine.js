@@ -29,6 +29,8 @@ const {
   isActiveWorkFollowUpCue,
   isActiveWorkReuseProspectCue,
   isActiveWorkTransformCue,
+  isPacketReviewRequest,
+  extractPacketReviewProspectId,
   isExplicitNewMissionRequest,
   isExplicitContextOverride,
   isExplicitExecutionRequest,
@@ -585,6 +587,7 @@ function preserveActiveWorkFocusOverStaleRecommendation(input) {
 
   const continuingDesk =
     isFillableTableUpdateRequest(question, prior) ||
+    isPacketReviewRequest(question) ||
     isActiveWorkFollowUpCue(question) ||
     isActiveWorkTransformCue(question) ||
     isActiveWorkReuseProspectCue(question);
@@ -634,6 +637,7 @@ async function maybeHandleActiveWorkContinuation(input) {
     hasEntities &&
     activeContextHasFillableTable(prior) &&
     isTableUpdateRequest;
+  const isPacketReview = isPacketReviewRequest(question);
 
   // Fillable table field mutation — before prospect extraction, artifact
   // injection, domain routing, or mission routing.
@@ -643,6 +647,22 @@ async function maybeHandleActiveWorkContinuation(input) {
       session,
       prior,
     });
+  }
+
+  // Preparation-only packet review from the active canary table — before
+  // prospect extraction / parse fallback / mission routing.
+  if (isPacketReview) {
+    if (hasEntities && activeContextHasFillableTable(prior)) {
+      return handlePacketReviewContinuation({
+        question,
+        session,
+        prior,
+      });
+    }
+    return {
+      reason: 'active_work_context_missing_for_packet_review',
+      structured: buildMissingPacketReviewResponse({ question }),
+    };
   }
 
   // Explicit table-update intent without desk table — ask for the current
@@ -682,7 +702,8 @@ async function maybeHandleActiveWorkContinuation(input) {
     if (
       operatorAttemptedCanaryProspectSupply(question) &&
       !isActiveWorkReuseProspectCue(question) &&
-      !isFillableTableUpdateRequest(question, prior)
+      !isFillableTableUpdateRequest(question, prior) &&
+      !isPacketReviewRequest(question)
     ) {
       const detected = detectOperatorProspectListInMessage(question);
       const intendedCount = extractIntendedCanaryProspectCount(question);
@@ -1014,6 +1035,437 @@ function buildMissingFillableTableUpdateResponse(input) {
 }
 
 /**
+ * Build a preparation-only packet review artifact from the active canary table.
+ * Does not mutate tableRows. Never creates a mission or infers mail/launch.
+ * @param {{ question: string, session: object, prior: object }} input
+ */
+function handlePacketReviewContinuation(input) {
+  const question = String(input.question || '');
+  const session = input.session;
+  const prior = input.prior;
+  const knownIds = knownActiveWorkProspectIds(prior);
+  const knownLabel = knownIds.length ? knownIds.join(', ') : '(none on desk)';
+  const requestedId = extractPacketReviewProspectId(question, knownIds);
+
+  if (!requestedId) {
+    return {
+      reason: 'active_work_context_packet_review_needs_target',
+      structured: buildStructuredResponse({
+        answer: [
+          'I can build a preparation-only packet review checklist from the current canary table.',
+          `Which prospect_id should I use? Known ids on the desk: ${knownLabel}.`,
+          'Example: Create a preparation-only packet review checklist for PM-001.',
+          'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+        ].join(' '),
+        reasoning: [
+          'Operator asked for a packet review artifact without a target prospect_id.',
+          'Clarifying instead of inventing a target or requiring a prospect re-paste.',
+          'No mission create/resume.',
+        ],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: null,
+        nextInvestigations: [
+          `Create a preparation-only packet review checklist for a known prospect_id (${knownLabel}).`,
+        ],
+        recommendedActions: [],
+        metadata: {
+          sourcesUsed: { activeWorkContext: true },
+          evidenceCount: Array.isArray(prior.tableRows) ? prior.tableRows.length : 0,
+          unavailable: ['packet_review_target'],
+          surface: 'workspace',
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          route: 'intelligence',
+          canaryPreparationOnly: true,
+          packetReview: true,
+          activeWorkContextReused: true,
+          tableUpdate: false,
+        },
+      }),
+    };
+  }
+
+  const rows = Array.isArray(prior.tableRows) ? prior.tableRows : [];
+  const row = rows.find(
+    (r) =>
+      String((r && r.prospect_id) || '').trim().toUpperCase() ===
+      String(requestedId).trim().toUpperCase()
+  );
+
+  if (!row) {
+    return {
+      reason: 'active_work_context_packet_review_unknown_prospect',
+      structured: buildStructuredResponse({
+        answer: [
+          'I could not build that packet review checklist.',
+          `Unknown prospect_id: ${requestedId}.`,
+          `Known prospect ids on the desk: ${knownLabel}.`,
+          'Tell me which known id to use. I will not invent a row or ask you to re-paste the whole list.',
+          'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+        ].join(' '),
+        reasoning: [
+          'Packet review referenced a prospect_id not present in activeWorkContext.tableRows.',
+          'Clarifying instead of inventing rows or falling through to prospect-parse fallback.',
+          'No mission create/resume.',
+        ],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: null,
+        nextInvestigations: [
+          `Create a packet review checklist for a known prospect_id (${knownLabel}).`,
+        ],
+        recommendedActions: [],
+        metadata: {
+          sourcesUsed: { activeWorkContext: true },
+          evidenceCount: rows.length,
+          unavailable: [`prospect:${requestedId}`],
+          surface: 'workspace',
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          route: 'intelligence',
+          canaryPreparationOnly: true,
+          packetReview: true,
+          activeWorkContextReused: true,
+          tableUpdate: false,
+          requestedProspectId: requestedId,
+        },
+      }),
+    };
+  }
+
+  const entity = (Array.isArray(prior.entities) ? prior.entities : []).find(
+    (e) =>
+      String((e && e.id) || '').trim().toUpperCase() ===
+      String(requestedId).trim().toUpperCase()
+  );
+
+  const structured = buildPacketReviewArtifactResponse({
+    row,
+    entity,
+    question,
+    campaignId:
+      (prior.target && prior.target.campaignId) ||
+      extractCampaignIdFromText(question) ||
+      '001',
+  });
+
+  rememberCanaryActiveWorkContext({
+    session,
+    prospects: entitiesToProspects(prior.entities),
+    question,
+    lastOutputType: LAST_OUTPUT_TYPES.PACKET_REVIEW,
+    prior,
+    tableRows: prior.tableRows,
+    nextAction: 'operator_packet_review_before_mail',
+  });
+
+  return {
+    reason: 'active_work_context_packet_review',
+    structured,
+  };
+}
+
+/**
+ * @param {{ question: string }} input
+ */
+function buildMissingPacketReviewResponse(input) {
+  return buildStructuredResponse({
+    answer: [
+      'I can build a preparation-only packet review checklist, but I don’t have an active Campaign canary table in this session.',
+      'Continue from a session with the fillable verification table, or paste the table / prospects first.',
+      'Preparation-only: no mission created; no launch, approval, print, or mail.',
+    ].join(' '),
+    reasoning: [
+      'Operator asked for a packet review artifact, but activeWorkContext has no fillable table.',
+      'Clarifying instead of falling through to prospect-parse fallback or mission routing.',
+      'No mission create/resume.',
+    ],
+    supportingEvidence: [],
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: [
+      'Paste or reopen the Campaign 001 fillable verification table, then ask for a packet review checklist for a prospect_id.',
+    ],
+    recommendedActions: [],
+    metadata: {
+      sourcesUsed: {},
+      evidenceCount: 0,
+      unavailable: ['active_work_context_fillable_table'],
+      surface: 'workspace',
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      route: 'intelligence',
+      canaryPreparationOnly: true,
+      packetReview: true,
+      missingActiveWorkContext: true,
+    },
+  });
+}
+
+/**
+ * Packet review artifact from a single desk table row — known facts only.
+ * ready_for_review means packet can be reviewed, not mailed.
+ * @param {{ row: object, entity?: object|null, question?: string, campaignId?: string }} input
+ */
+function buildPacketReviewArtifactResponse(input = {}) {
+  const row = input.row && typeof input.row === 'object' ? input.row : {};
+  const entity = input.entity && typeof input.entity === 'object' ? input.entity : {};
+  const campaignId = String(input.campaignId || '001');
+  const prospectId = String(row.prospect_id || entity.id || 'unknown').trim();
+  const company = blankTableValue(row.company_name) || blankToNull(entity.companyName) || 'unknown';
+  const contact = blankTableValue(row.contact_name) || blankToNull(entity.contactName);
+  const industry =
+    blankToNull(entity.industry) ||
+    blankToNull(entity.vertical) ||
+    null;
+  const website = blankTableValue(row.website_value);
+  const mailing = blankTableValue(row.mailing_address_value);
+  const phone = blankTableValue(row.phone_value);
+  const websiteStatus = String(row.website_status || 'unknown');
+  const mailingStatus = String(row.mailing_address_status || 'unknown');
+  const phoneStatus = String(row.phone_status || 'unknown');
+  const contactRoleStatus = String(row.contact_role_status || 'unknown');
+  const mailReadiness = String(row.mail_readiness || 'blocked');
+  const draftReadiness = String(row.draft_readiness || 'blocked');
+  const executionReadiness = 'blocked';
+  const notes = String(row.notes || '').trim();
+  const operatorNext = String(row.operator_next_action || '').trim();
+
+  const mailReadyForReview = /^ready(?:_for_review)?$/i.test(mailReadiness);
+  const personalizationGaps = [];
+  if (!contact) personalizationGaps.push('contact name');
+  if (!industry) personalizationGaps.push('industry');
+  const draftsProvisional = personalizationGaps.length > 0;
+  const drafts =
+    contact && industry
+      ? buildPacketReviewDrafts({
+          companyName: company,
+          contactName: contact,
+          industry,
+          mailingAddress: mailing,
+          website,
+          phone,
+          mailReadyForReview,
+        })
+      : {
+          letter:
+            '(provisional draft held — company, contact, and industry are required before personalizing)',
+          handwrittenNote:
+            '(provisional draft held — company, contact, and industry are required before personalizing)',
+          scorecardCover:
+            '(provisional draft held — company, contact, and industry are required before personalizing)',
+          followUpNotes:
+            'Confirm decision maker and best reach number before dial. Stay within known table facts only.',
+        };
+
+  const confirmBeforePrinting = [
+    `mailing address (${mailingStatus}${mailing ? `: ${mailing}` : ': unknown'})`,
+    `website (${websiteStatus}${website ? `: ${website}` : ': unknown'})`,
+    `phone (${phoneStatus}${phone ? `: ${phone}` : ': unknown'})`,
+    `contact role (${contactRoleStatus})`,
+  ].join('; ');
+
+  const answer = [
+    `Preparation-only packet review — Campaign ${campaignId} / ${prospectId}`,
+    '',
+    `Company: ${company}`,
+    `Contact: ${contact || 'unknown'}`,
+    `Industry: ${industry || 'unknown (not on table; not invented)'}`,
+    `Mail readiness: ${mailReadiness}${
+      mailReadyForReview
+        ? ' (packet may be reviewed — not authorization to mail)'
+        : ''
+    }`,
+    `Draft readiness: ${draftReadiness}`,
+    `Execution readiness: ${executionReadiness} (remains blocked)`,
+    notes ? `Notes (from table): ${notes}` : null,
+    operatorNext ? `Operator next action (from table): ${operatorNext}` : null,
+    '',
+    'Packet contents checklist:',
+    '- Personalized letter',
+    '- Handwritten note',
+    '- Scorecard cover',
+    '- Business card (operator-supplied; not invented here)',
+    '',
+    'Print / sign / mail checklist:',
+    '- Confirm fields below against a trusted source',
+    '- Print packet only after operator sign-off',
+    '- Sign letter / note only after operator review',
+    '- Mail only after explicit future launch approval (not this turn)',
+    '',
+    'Fields to confirm before printing:',
+    confirmBeforePrinting,
+    '',
+    'Personalized letter draft (known facts only):',
+    drafts.letter,
+    '',
+    'Handwritten note draft (known facts only):',
+    drafts.handwrittenNote,
+    '',
+    'Scorecard cover text draft:',
+    drafts.scorecardCover,
+    '',
+    'First follow-up call notes:',
+    drafts.followUpNotes,
+    '',
+    'PulseForge tracking fields to log after mailing:',
+    `- prospect_id: ${prospectId}`,
+    `- company: ${company}`,
+    `- contact: ${contact || 'unknown'}`,
+    `- industry: ${industry || 'unknown'}`,
+    `- mail_date: (set when mailed)`,
+    '- packet_contents: letter / handwritten note / scorecard / business card',
+    `- mail_readiness_at_send: ${mailReadiness}`,
+    '- first_follow_up_call_outcome: (set after call)',
+    '',
+    'Final operator decision needed before anything is mailed:',
+    mailReadyForReview
+      ? 'Packet is ready_for_review only. Explicitly approve a future launch/mail step after readiness remains complete — I will not print, mail, launch, or execute from this checklist.'
+      : 'Mail readiness is not ready_for_review yet. Finish verification first; then request an explicit launch/mail approval. I will not print, mail, launch, or execute from this checklist.',
+    draftsProvisional
+      ? `Personalization evidence missing: ${personalizationGaps.join(', ')}. Drafts stay generic/provisional — no invented portfolio size, pain points, or evidence.`
+      : 'Drafts use only company, contact, industry, and verified table contact fields. No invented portfolio size, pain points, or source claims.',
+    '',
+    'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+  ]
+    .filter((line) => line != null)
+    .join('\n');
+
+  return buildStructuredResponse({
+    answer,
+    reasoning: [
+      'Reused activeWorkContext.tableRows for packet review; no prospect re-paste required.',
+      `Selected prospect_id ${prospectId} from the current Campaign ${campaignId} canary table.`,
+      'ready_for_review means packet review is allowed; execution_readiness stays blocked absent explicit launch.',
+      'Drafts use only known table/entity facts; no invented evidence.',
+      'No mission create/resume. Table not mutated.',
+    ],
+    supportingEvidence: [
+      {
+        id: `canary-prospect:${prospectId}`,
+        summary: `${company}: packet review — mail ${mailReadiness}, execution blocked`,
+        sourceType: 'operator',
+        confidence: null,
+      },
+    ],
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: canaryWorkflowSuggestions({
+      lastOutputType: LAST_OUTPUT_TYPES.PACKET_REVIEW,
+      prospects: [
+        {
+          id: prospectId,
+          companyName: company,
+          contactName: contact,
+          industry,
+          website,
+          mailingAddress: mailing,
+          phone,
+        },
+      ],
+      tableRows: [row],
+      question: input.question,
+    }),
+    recommendedActions: [
+      'Review the packet drafts, confirm print fields, then explicitly request any later launch/mail approval.',
+    ],
+    metadata: {
+      sourcesUsed: { activeWorkContext: true },
+      evidenceCount: 1,
+      unavailable: personalizationGaps.map((g) => `personalization:${g}`),
+      surface: 'workspace',
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      route: 'intelligence',
+      canaryPreparationOnly: true,
+      packetReview: true,
+      fillableTable: true,
+      provisionalDrafts: draftsProvisional || undefined,
+      activeWorkContextReused: true,
+      tableUpdate: false,
+      prospectId,
+      campaignId,
+      mailReadiness,
+      executionReadiness,
+    },
+  });
+}
+
+/**
+ * Packet-review drafts from known desk facts only.
+ * @param {object} input
+ */
+function buildPacketReviewDrafts(input = {}) {
+  const company = input.companyName;
+  const contact = input.contactName;
+  const firstName = String(contact).split(/\s+/)[0] || contact;
+  const industry = input.industry;
+  const industryLower = String(industry || '').toLowerCase();
+  const framing = industryFraming(industryLower);
+  const mailing = input.mailingAddress || null;
+  const website = input.website || null;
+  const phone = input.phone || null;
+  const mailReady = input.mailReadyForReview === true;
+
+  const letter = [
+    `${firstName},`,
+    '',
+    `I’m reaching out because ${company} appears to be in ${industryLower}, where ${framing} can directly affect owner confidence.`,
+    '',
+    `PulseForge is preparing a short operational scorecard for ${industryLower} teams to identify where follow-up, vendor coordination, and growth opportunities may be slipping through.`,
+    '',
+    mailing
+      ? mailReady
+        ? `If ${mailing} is still the correct mailing address, I’d like to send you the scorecard packet for review.`
+        : `I’d like to send you the scorecard once we confirm ${mailing} is the correct mailing address.`
+      : 'I’d like to send you the scorecard for review once we verify the correct mailing address.',
+    '',
+    'Best,',
+    '[Sender]',
+  ].join('\n');
+
+  const handwrittenNote = mailing
+    ? `${firstName} — short operational scorecard for ${industryLower} teams. Preparing packet for ${mailing}. — [Sender]`
+    : `${firstName} — preparing a short operational scorecard for ${industryLower} teams. Will send once we confirm the correct mailing address. — [Sender]`;
+
+  const scorecardCover = [
+    `Operational scorecard — ${company}`,
+    `Prepared for: ${contact}`,
+    `Context: ${industry}`,
+    mailing ? `Mailing address on file: ${mailing}` : 'Mailing address: unknown / unverified',
+    website ? `Website on file: ${website}` : null,
+    phone ? `Phone on file: ${phone}` : null,
+    mailReady
+      ? 'Status: Packet ready_for_review — execution still blocked until explicit launch approval'
+      : 'Status: Provisional packet review draft — mailing readiness not ready_for_review',
+    'Evidence note: uses only company, contact, industry, and table contact fields; no other claims.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const followUpNotes = [
+    `Confirm decision-maker (${contact}) and best reach number${phone ? ` (table phone: ${phone})` : ''} before dialing.`,
+    'Do not claim the packet was mailed; execution remains blocked.',
+    mailing
+      ? `Confirm mailing address still matches ${mailing} before any print step.`
+      : 'Do not reference an unverified mailing address.',
+    `Ask whether a short operational scorecard for ${industryLower} teams would be useful to review.`,
+    'Stay within known facts only — company, contact, industry, and verified table fields.',
+  ].join(' ');
+
+  return {
+    letter,
+    handwrittenNote,
+    scorecardCover,
+    followUpNotes,
+  };
+}
+
+function blankToNull(value) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  if (!s || /^unknown$/i.test(s) || /^n\/?a$/i.test(s)) return null;
+  return s;
+}
+
+/**
  * Preparation-only canary: either ask for prospects, or return a review
  * package conversationally — never create/resume Campaign or Direct Mail Execution.
  * A parser miss must never fall through to campaign_creation /
@@ -1041,6 +1493,22 @@ async function maybeBuildCanaryPreparationResponse(input) {
     });
   }
 
+  // Packet review from desk table — also owned by early continuation, but
+  // keep a secondary guard so canary routing never asks to re-paste prospects.
+  if (isPacketReviewRequest(question)) {
+    if (activeContextHasEntities(prior) && activeContextHasFillableTable(prior)) {
+      return handlePacketReviewContinuation({
+        question,
+        session,
+        prior,
+      });
+    }
+    return {
+      reason: 'canary_packet_review_missing_table',
+      structured: buildMissingPacketReviewResponse({ question }),
+    };
+  }
+
   const isCanary = isPreparationOnlyCanary(question);
   const isFollowUp = isActiveWorkFollowUpCue(question);
   const isExec = isExplicitExecutionRequest(question);
@@ -1052,7 +1520,8 @@ async function maybeBuildCanaryPreparationResponse(input) {
     hasPriorCanary &&
     (isExplicitContextOverride(question) ||
       operatorAttemptedCanaryProspectSupply(question)) &&
-    !isFillableTableUpdateRequest(question, prior);
+    !isFillableTableUpdateRequest(question, prior) &&
+    !isPacketReviewRequest(question);
 
   // Execution / mail while preparation-only canary context is active:
   // never infer launch from desk context — block and ask for readiness.
@@ -1115,6 +1584,7 @@ async function maybeBuildCanaryPreparationResponse(input) {
   if (
     operatorAttemptedCanaryProspectSupply(question) &&
     !isFillableTableUpdateRequest(question, prior) &&
+    !isPacketReviewRequest(question) &&
     !(hasPriorCanary && isActiveWorkReuseProspectCue(question))
   ) {
     const count = intendedCount || 3;
@@ -1285,6 +1755,9 @@ function canaryWorkflowSuggestions(input = {}) {
 }
 
 function resolveCanaryLastOutputType(question, reason) {
+  if (isPacketReviewRequest(question) || reason === 'active_work_context_packet_review') {
+    return LAST_OUTPUT_TYPES.PACKET_REVIEW;
+  }
   if (isFillableTableRequest(question) || reason === 'canary_fillable_table') {
     return LAST_OUTPUT_TYPES.FILLABLE_TABLE;
   }
@@ -1363,6 +1836,9 @@ function operatorAttemptedCanaryProspectSupply(question) {
   // Field-mutation instructions on an existing fillable table are not a
   // new prospect paste — even when they mention PM-001 / set: / leave unchanged.
   if (isFillableTableUpdateRequest(text)) return false;
+  // Packet-review artifact generation references a desk prospect_id; it is not
+  // a new prospect paste.
+  if (isPacketReviewRequest(text)) return false;
 
   const hasRowSignals =
     hasInlineProspectList(text) ||
