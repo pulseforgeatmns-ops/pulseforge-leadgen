@@ -8,14 +8,16 @@ const { contextFocusLabel } = require('./ContextEnvelope');
  * Templates keyed by page; filled from envelope — not a global hardcoded list.
  * When activeWorkContext is present for a desk workflow, chips follow that
  * workflow + last output kind instead of briefing defaults.
+ * Packet-review responses may also supply response-level outputKind /
+ * contextHints (e.g. inline known facts) without mutating activeWorkContext.
  *
  * @param {object} context - normalized MaxContext
  * @returns {string[]}
  */
 function buildSuggestions(context) {
-  const active = resolveActiveWorkContext(context);
-  if (active && isActiveDeskWorkflow(active)) {
-    return buildActiveWorkSuggestions(active, context);
+  const work = resolveSuggestionWorkContext(context);
+  if (work && isActiveDeskWorkflow(work)) {
+    return buildActiveWorkSuggestions(work, context);
   }
 
   const topName = topCompanyName(context);
@@ -75,6 +77,17 @@ function buildSuggestions(context) {
 }
 
 /**
+ * Prefer persisted desk memory; fall back to response-level packet/canary hints.
+ * @param {object|null|undefined} context
+ * @returns {object|null}
+ */
+function resolveSuggestionWorkContext(context) {
+  const active = resolveActiveWorkContext(context);
+  if (active && isActiveDeskWorkflow(active)) return active;
+  return resolveResponseWorkContext(context);
+}
+
+/**
  * @param {object|null|undefined} context
  * @returns {object|null}
  */
@@ -84,6 +97,200 @@ function resolveActiveWorkContext(context) {
     return context.activeWorkContext;
   }
   return null;
+}
+
+/**
+ * Synthesize a temporary desk-work context from response-level metadata /
+ * outputKind / contextHints when activeWorkContext was not mutated
+ * (inline known-facts packet review).
+ * @param {object|null|undefined} context
+ * @returns {object|null}
+ */
+function resolveResponseWorkContext(context) {
+  if (!context || typeof context !== 'object') return null;
+
+  if (
+    context.packetReviewContext &&
+    typeof context.packetReviewContext === 'object'
+  ) {
+    return normalizeHintWorkContext(context.packetReviewContext, context);
+  }
+
+  const metadata =
+    context.metadata && typeof context.metadata === 'object'
+      ? context.metadata
+      : {};
+  const hints =
+    context.contextHints && typeof context.contextHints === 'object'
+      ? context.contextHints
+      : metadata.contextHints && typeof metadata.contextHints === 'object'
+        ? metadata.contextHints
+        : null;
+
+  const outputKindRaw =
+    context.outputKind != null
+      ? context.outputKind
+      : context.lastOutputKind != null
+        ? context.lastOutputKind
+        : metadata.outputKind != null
+          ? metadata.outputKind
+          : metadata.lastOutputKind != null
+            ? metadata.lastOutputKind
+            : hints && (hints.outputKind || hints.lastOutputKind || hints.lastOutputType);
+
+  const isPacketReview =
+    metadata.packetReview === true ||
+    (hints && hints.packetReview === true) ||
+    /packet/.test(String(outputKindRaw || '').toLowerCase());
+
+  const isCanaryPrep =
+    metadata.canaryPreparationOnly === true ||
+    (hints &&
+      (hints.preparationOnly === true ||
+        /canary|preparation/.test(String(hints.workflow || ''))));
+
+  if (!isPacketReview && !isCanaryPrep && !outputKindRaw) return null;
+
+  if (!isPacketReview && !isCanaryPrep) {
+    const kind = resolveLastOutputKind({ lastOutputKind: outputKindRaw });
+    const deskKinds = new Set([
+      'packet_review',
+      'fillable_table',
+      'verification_work_order',
+      'provisional_drafts',
+      'canary_review_package',
+    ]);
+    if (!kind || !deskKinds.has(kind)) return null;
+  }
+
+  return normalizeHintWorkContext(
+    {
+      ...(hints || {}),
+      outputKind: outputKindRaw,
+      lastOutputKind:
+        (hints && (hints.lastOutputKind || hints.lastOutputType)) ||
+        outputKindRaw ||
+        (isPacketReview ? 'packet_review' : null),
+      packetReview: isPacketReview || (hints && hints.packetReview),
+      preparationOnly:
+        isCanaryPrep ||
+        isPacketReview ||
+        (hints && hints.preparationOnly === true),
+      prospectId:
+        (hints && hints.prospectId) ||
+        metadata.prospectId ||
+        null,
+      campaignId:
+        (hints && hints.campaignId) ||
+        metadata.campaignId ||
+        '001',
+      mailReadiness:
+        (hints && hints.mailReadiness) ||
+        metadata.mailReadiness ||
+        null,
+      executionReadiness:
+        (hints && hints.executionReadiness) ||
+        metadata.executionReadiness ||
+        'blocked',
+      workflow:
+        (hints && hints.workflow) ||
+        (isPacketReview || isCanaryPrep
+          ? 'campaign_001_preparation_only_canary'
+          : null),
+    },
+    context
+  );
+}
+
+/**
+ * @param {object} hints
+ * @param {object} [context]
+ * @returns {object|null}
+ */
+function normalizeHintWorkContext(hints, context = {}) {
+  if (!hints || typeof hints !== 'object') return null;
+
+  const workflow =
+    hints.workflow != null
+      ? String(hints.workflow)
+      : hints.preparationOnly || hints.packetReview
+        ? 'campaign_001_preparation_only_canary'
+        : null;
+  if (!workflow) return null;
+
+  const lastRaw =
+    hints.lastOutputKind != null
+      ? hints.lastOutputKind
+      : hints.lastOutputType != null
+        ? hints.lastOutputType
+        : hints.outputKind != null
+          ? hints.outputKind
+          : null;
+  const lastKind = resolveLastOutputKind({ lastOutputKind: lastRaw }) || lastRaw;
+
+  const metadata =
+    context.metadata && typeof context.metadata === 'object'
+      ? context.metadata
+      : {};
+  const prospectId =
+    hints.prospectId != null
+      ? String(hints.prospectId).trim()
+      : metadata.prospectId != null
+        ? String(metadata.prospectId).trim()
+        : null;
+  const mailReadiness =
+    hints.mailReadiness != null
+      ? String(hints.mailReadiness)
+      : metadata.mailReadiness != null
+        ? String(metadata.mailReadiness)
+        : 'blocked';
+  const executionReadiness =
+    hints.executionReadiness != null
+      ? String(hints.executionReadiness)
+      : metadata.executionReadiness != null
+        ? String(metadata.executionReadiness)
+        : 'blocked';
+
+  const constraints = {
+    preparationOnly: true,
+    noLaunch: true,
+    noExecution: true,
+    noMail: true,
+    noPrint: true,
+    noApproval: true,
+    ...(hints.constraints && typeof hints.constraints === 'object'
+      ? hints.constraints
+      : {}),
+  };
+
+  return {
+    workflow,
+    target: {
+      campaignId: String(
+        hints.campaignId || metadata.campaignId || '001'
+      ),
+    },
+    entities: Array.isArray(hints.entities)
+      ? hints.entities.map((e) => ({ ...e }))
+      : prospectId
+        ? [{ type: 'prospect', id: prospectId }]
+        : [],
+    tableRows: Array.isArray(hints.tableRows)
+      ? hints.tableRows.map((row) => ({ ...row }))
+      : prospectId
+        ? [
+            {
+              prospect_id: prospectId,
+              mail_readiness: mailReadiness,
+              execution_readiness: executionReadiness,
+            },
+          ]
+        : [],
+    constraints,
+    lastOutputType: lastKind,
+    lastOutputKind: lastKind,
+    nextAction: hints.nextAction != null ? String(hints.nextAction) : null,
+  };
 }
 
 /**
@@ -120,6 +327,7 @@ function resolveLastOutputKind(awc) {
   if (kind === 'fillable_verification_table') return 'fillable_table';
   if (kind === 'fillable_table') return 'fillable_table';
   if (kind === 'packet_review') return 'packet_review';
+  if (kind === 'packet_review_artifact') return 'packet_review';
   if (kind === 'verification_work_order') return 'verification_work_order';
   if (kind === 'canary_review_package') return 'canary_review_package';
   if (kind === 'provisional_drafts') return 'provisional_drafts';
@@ -156,14 +364,29 @@ function firstDeskProspectId(awc) {
  */
 function activeWorkBlocksExecution(awc) {
   const c = (awc && awc.constraints) || {};
-  return (
+  if (
     c.preparationOnly === true ||
     c.noLaunch === true ||
     c.noExecution === true ||
     c.noMail === true ||
     c.noPrint === true ||
     c.noApproval === true
-  );
+  ) {
+    return true;
+  }
+
+  const rows = Array.isArray(awc && awc.tableRows) ? awc.tableRows : [];
+  if (
+    rows.some(
+      (row) =>
+        String((row && row.execution_readiness) || '')
+          .toLowerCase()
+          .trim() === 'blocked'
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -230,14 +453,12 @@ function buildActiveWorkSuggestions(awc, context = {}) {
     }
     chips.push('What still blocks mailing?');
   } else if (kind === 'packet_review') {
-    chips.push('Update another verification field.');
-    chips.push('Show only blocked prospects.');
-    chips.push('What still blocks mailing?');
-    if (prospectId) {
-      chips.push(`Revise ${prospectId} letter draft.`);
-    }
-    chips.push('Create packet review checklist.');
-    chips.push('Summarize what changed in this table.');
+    chips.push('Show missing verification fields.');
+    chips.push('Create verification plan.');
+    chips.push('Update readiness fields.');
+    chips.push('Create packet checklist for another prospect.');
+    chips.push('Summarize final operator decision.');
+    chips.push('Show what still blocks mailing.');
   } else if (kind === 'verification_work_order') {
     chips.push('Convert this into a fillable verification table.');
     chips.push('Show only blocked prospects.');
@@ -319,6 +540,8 @@ module.exports = {
   isActiveDeskWorkflow,
   resolveLastOutputKind,
   resolveActiveWorkContext,
+  resolveResponseWorkContext,
+  resolveSuggestionWorkContext,
   isSafeActiveWorkChip,
   topCompanyName,
 };

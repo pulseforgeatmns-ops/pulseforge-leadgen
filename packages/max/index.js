@@ -321,8 +321,9 @@ function createMaxReasoningRuntime(options = {}) {
     result.awareness = awareness;
 
     // SPEC-012: learn from the question; refresh personalized chips.
-    // Preserve activeWorkContext so desk workflows keep workflow-aware chips
-    // instead of falling back to briefing defaults after personalization.
+    // Preserve activeWorkContext and response-level packet-review hints so
+    // desk / canary workflows keep workflow-aware chips instead of falling
+    // back to briefing defaults after personalization.
     if (tenantId && input.question) {
       operator.track({
         type: INTERACTION_TYPES.ASKED_MAX,
@@ -348,6 +349,29 @@ function createMaxReasoningRuntime(options = {}) {
           session.context.activeWorkContext) ||
         null;
       if (awc) suggestionContext.activeWorkContext = awc;
+
+      const meta =
+        (result.structured &&
+          result.structured.metadata &&
+          typeof result.structured.metadata === 'object'
+          ? result.structured.metadata
+          : null) ||
+        (result.metadata && typeof result.metadata === 'object'
+          ? result.metadata
+          : null) ||
+        {};
+      suggestionContext.metadata = meta;
+      if (meta.outputKind != null) suggestionContext.outputKind = meta.outputKind;
+      if (meta.lastOutputKind != null) {
+        suggestionContext.lastOutputKind = meta.lastOutputKind;
+      } else if (meta.outputKind != null) {
+        suggestionContext.lastOutputKind = meta.outputKind;
+      }
+      if (meta.contextHints) suggestionContext.contextHints = meta.contextHints;
+      if (meta.packetReviewContext) {
+        suggestionContext.packetReviewContext = meta.packetReviewContext;
+      }
+
       suggestionContext.latestQuestion = String(input.question);
       result.suggestions = operator.suggestions(suggestionContext, tenantId);
     }

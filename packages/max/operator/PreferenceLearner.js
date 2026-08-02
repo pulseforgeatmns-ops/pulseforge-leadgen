@@ -4,7 +4,7 @@ const { INTENT_TAGS, INTERACTION_TYPES } = require('./OperatorTypes');
 const {
   buildSuggestions,
   isActiveDeskWorkflow,
-  resolveActiveWorkContext,
+  resolveSuggestionWorkContext,
 } = require('../workspace/SuggestionEngine');
 
 /**
@@ -126,10 +126,10 @@ class PreferenceLearner {
    */
   personalizedSuggestions(context, tenantId) {
     const base = buildSuggestions(context);
-    // Active desk workflows own chip selection — do not reorder toward
-    // briefing/market preference habits (e.g. overnight / top opportunity).
-    const awc = resolveActiveWorkContext(context);
-    if (awc && isActiveDeskWorkflow(awc)) return base;
+    // Active desk workflows (including response-level packet-review hints)
+    // own chip selection — do not reorder toward briefing/market habits.
+    const work = resolveSuggestionWorkContext(context);
+    if (work && isActiveDeskWorkflow(work)) return base;
     const prefs = this.snapshot(tenantId);
     if (!prefs.topIntents.length) return base;
     return rankSuggestions(base, prefs.topIntents);
