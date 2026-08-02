@@ -1372,6 +1372,8 @@ function buildPacketReviewArtifactResponse(input = {}) {
         website,
         phone,
         notes,
+        mailReadyForReview,
+        contactRoleStatus,
       })
     : {
         letter:
@@ -1382,7 +1384,33 @@ function buildPacketReviewArtifactResponse(input = {}) {
           '(draft held — company_name and contact_name are required before drafting)',
         followUpNotes:
           'Confirm company and decision-maker contact before drafting a packet or placing a follow-up call. Stay within known table facts only.',
+        preMailVerificationPlan:
+          'Verify company and decision-maker contact from a trusted source or CRM before any print/mail step. Do not invent mailing address, website, or phone.',
       };
+
+  const whyBlockedForMailing = mailReadyForReview
+    ? []
+    : buildWhyBlockedForMailingLines({
+        mailingStatus,
+        websiteStatus,
+        phoneStatus,
+        contactRoleStatus,
+        mailing,
+        website,
+        phone,
+        row,
+      });
+
+  const needsPreMailVerification = !mailReadyForReview || !mailing || !phone;
+  const draftLabel = draftsHeld
+    ? 'held'
+    : mailReadyForReview
+      ? draftsProvisional
+        ? 'provisional / low evidence'
+        : 'provisional'
+      : draftsProvisional
+        ? 'provisional / operator-only — do not print/mail until fields are verified'
+        : 'provisional / operator-only — do not print/mail until fields are verified';
 
   const confirmBeforePrinting = [
     `mailing address (${mailingStatus}${
@@ -1419,6 +1447,50 @@ function buildPacketReviewArtifactResponse(input = {}) {
   const debugOutput =
     !suppressScaffolding && wantsPacketReviewDebugOutput(question);
 
+  const printMailChecklist = mailReadyForReview
+    ? [
+        'Print / sign / mail checklist:',
+        '- Confirm fields below against a trusted source',
+        '- Print packet only after operator sign-off',
+        '- Sign letter / note only after operator review',
+        '- Mail only after explicit future launch approval (not this turn)',
+        '',
+        'Fields to confirm before printing:',
+        confirmBeforePrinting,
+      ]
+    : [
+        'Print / sign / mail checklist: not available until verification is complete.',
+        'Future print / sign / mail checklist (after verification):',
+        '- Confirm fields below against a trusted source',
+        '- Print packet only after operator sign-off',
+        '- Sign letter / note only after operator review',
+        '- Mail only after explicit future launch approval (not this turn)',
+        '',
+        'Fields that must be verified before any future print/mail step:',
+        confirmBeforePrinting,
+      ];
+
+  const operatorActionSection = needsPreMailVerification
+    ? [
+        'Pre-mail verification plan (operator only):',
+        drafts.preMailVerificationPlan ||
+          buildPreMailVerificationPlan({
+            contactName: contact,
+            mailing,
+            website,
+            phone,
+            mailingStatus,
+            websiteStatus,
+            phoneStatus,
+            contactRoleStatus,
+            industry,
+          }),
+      ]
+    : [
+        'First follow-up call notes (operator only):',
+        drafts.followUpNotes,
+      ];
+
   const answer = [
     `Preparation-only packet review — Campaign ${campaignId} / ${prospectId}`,
     '',
@@ -1430,7 +1502,7 @@ function buildPacketReviewArtifactResponse(input = {}) {
     `Mail readiness: ${mailReadiness}${
       mailReadyForReview
         ? ' (packet may be reviewed — not authorization to mail)'
-        : ''
+        : ' (not ready to print or mail)'
     }`,
     `Draft readiness: ${draftReadiness}`,
     `Execution readiness: ${executionReadiness} (remains blocked)`,
@@ -1438,43 +1510,40 @@ function buildPacketReviewArtifactResponse(input = {}) {
     notes ? `Notes (from table): ${notes}` : null,
     operatorNext ? `Operator next action (from table): ${operatorNext}` : null,
     '',
+    whyBlockedForMailing.length
+      ? ['Why blocked for mailing:', ...whyBlockedForMailing, ''].join('\n')
+      : null,
     'Packet contents checklist:',
     '- Personalized letter',
     '- Handwritten note',
     '- Scorecard cover',
     '- Business card (operator-supplied; not invented here)',
     '',
-    'Print / sign / mail checklist:',
-    '- Confirm fields below against a trusted source',
-    '- Print packet only after operator sign-off',
-    '- Sign letter / note only after operator review',
-    '- Mail only after explicit future launch approval (not this turn)',
-    '',
-    'Fields to confirm before printing:',
-    confirmBeforePrinting,
+    ...printMailChecklist,
     '',
     '--- Customer-facing drafts ---',
-    `Personalized letter draft (${
-      draftsHeld ? 'held' : draftsProvisional ? 'provisional / low evidence' : 'provisional'
-    }):`,
+    mailReadyForReview
+      ? null
+      : 'Operator-only provisional drafts — do not print/mail until mailing fields are verified.',
+    `Personalized letter draft (${draftLabel}):`,
     drafts.letter,
     '',
-    `Handwritten note draft (${
-      draftsHeld ? 'held' : draftsProvisional ? 'provisional / low evidence' : 'provisional'
-    }):`,
+    `Handwritten note draft (${draftLabel}):`,
     drafts.handwrittenNote,
     '',
-    `Scorecard cover text draft (${
-      draftsHeld ? 'held' : draftsProvisional ? 'provisional / low evidence' : 'provisional'
-    }):`,
+    `Scorecard cover text draft (${draftLabel}):`,
     drafts.scorecardCover,
     '',
     '--- Operator caveats ---',
     `Draft confidence: ${draftConfidence}${
       draftConfidence === 'low'
-        ? ' — industry/persona evidence missing; drafts stay generic and sendable'
+        ? mailReadyForReview
+          ? ' — industry/persona evidence missing; drafts stay generic and provisional'
+          : ' — industry/persona evidence missing; drafts are operator-only provisional and must not be printed/mailed yet'
         : draftConfidence === 'medium'
-          ? ' — industry known; still preparation-only / provisional'
+          ? mailReadyForReview
+            ? ' — industry known; still preparation-only / provisional'
+            : ' — industry known; still preparation-only — do not print/mail while mail readiness is blocked'
           : ' — company and contact required before drafting'
     }`,
     '',
@@ -1483,23 +1552,27 @@ function buildPacketReviewArtifactResponse(input = {}) {
       ? `Missing: ${personalizationGaps.join(', ')}. Listed for confirmation — does not block provisional drafting when company and contact are present. No invented portfolio size, pain points, persona, or industry.`
       : 'No personalization gaps on company, contact, or industry. Drafts still use only verified table contact fields and known desk facts.',
     '',
-    'First follow-up call notes (operator only):',
-    drafts.followUpNotes,
+    ...operatorActionSection,
     '',
-    'PulseForge tracking fields to log after mailing:',
+    mailReadyForReview
+      ? 'PulseForge tracking fields to log after mailing:'
+      : 'PulseForge tracking fields (current state + future mail log):',
     `- prospect_id: ${prospectId}`,
     `- company: ${company || 'unknown'}`,
     `- contact: ${contact || 'unknown'}`,
     `- industry: ${industry || 'not provided'}`,
+    `- current_mail_readiness: ${mailReadiness}`,
     `- mail_date: (set when mailed)`,
     '- packet_contents: letter / handwritten note / scorecard / business card',
-    `- mail_readiness_at_send: ${mailReadiness}`,
-    '- first_follow_up_call_outcome: (set after call)',
+    '- mail_readiness_at_send: (set when mailed)',
+    needsPreMailVerification
+      ? '- first_follow_up_call_outcome: (set after call — only after a verified phone exists and packet is mailed)'
+      : '- first_follow_up_call_outcome: (set after call)',
     '',
     '--- Final operator decision required ---',
     mailReadyForReview
       ? 'Packet is ready_for_review only. Explicitly approve a future launch/mail step after readiness remains complete — I will not print, mail, launch, or execute from this checklist.'
-      : 'Mail readiness is not ready_for_review yet. Finish verification first; then request an explicit launch/mail approval. I will not print, mail, launch, or execute from this checklist.',
+      : 'Mail readiness is blocked. Complete pre-mail verification first; then request an explicit launch/mail approval. I will not print, mail, launch, or execute from this checklist.',
     '',
     'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
   ]
@@ -1666,6 +1739,120 @@ function verifiedPacketFieldValue(status, value) {
 }
 
 /**
+ * @param {unknown} status
+ * @returns {boolean}
+ */
+function isPacketFieldUnresolved(status) {
+  const s = String(status || '')
+    .trim()
+    .toLowerCase();
+  if (!s) return true;
+  if (/^verified$/i.test(s)) return false;
+  return /^(unknown|blocked)$/i.test(s) || /needs\s*verification/i.test(s);
+}
+
+/**
+ * Explicit blockers for a preparation-only packet when mail_readiness is blocked.
+ * @param {object} input
+ * @returns {string[]}
+ */
+function buildWhyBlockedForMailingLines(input = {}) {
+  const lines = [];
+  const mailingStatus = String(input.mailingStatus || 'unknown');
+  const websiteStatus = String(input.websiteStatus || 'unknown');
+  const phoneStatus = String(input.phoneStatus || 'unknown');
+  const contactRoleStatus = String(input.contactRoleStatus || 'unknown');
+  const row = input.row && typeof input.row === 'object' ? input.row : {};
+
+  if (!input.mailing || isPacketFieldUnresolved(mailingStatus)) {
+    const raw = blankTableValue(row.mailing_address_value);
+    const detail =
+      /^blocked$/i.test(mailingStatus) && (!raw || /^unknown$/i.test(raw))
+        ? 'unknown/blocked'
+        : /^blocked$/i.test(mailingStatus)
+          ? `blocked${raw ? ` (${raw})` : ''}`
+          : !raw || /^unknown$/i.test(String(raw))
+            ? 'unknown/blocked'
+            : `${mailingStatus}${raw ? ` (${raw})` : ''}`;
+    lines.push(`- mailing address ${detail}`);
+  }
+  if (!input.website || isPacketFieldUnresolved(websiteStatus)) {
+    const raw = blankTableValue(row.website_value);
+    const detail =
+      /^blocked$/i.test(websiteStatus) && (!raw || /^unknown$/i.test(raw))
+        ? 'unknown/blocked'
+        : /^blocked$/i.test(websiteStatus)
+          ? `blocked${raw ? ` (${raw})` : ''}`
+          : !raw || /^unknown$/i.test(String(raw))
+            ? 'unknown/blocked'
+            : `${websiteStatus}${raw ? ` (${raw})` : ''}`;
+    lines.push(`- website ${detail}`);
+  }
+  if (!input.phone || isPacketFieldUnresolved(phoneStatus)) {
+    const raw = blankTableValue(row.phone_value);
+    const detail =
+      /^blocked$/i.test(phoneStatus) && (!raw || /^unknown$/i.test(raw))
+        ? 'unknown/blocked'
+        : /^blocked$/i.test(phoneStatus)
+          ? `blocked${raw ? ` (${raw})` : ''}`
+          : !raw || /^unknown$/i.test(String(raw))
+            ? 'unknown/blocked'
+            : `${phoneStatus}${raw ? ` (${raw})` : ''}`;
+    lines.push(`- phone ${detail}`);
+  }
+  if (isPacketFieldUnresolved(contactRoleStatus)) {
+    lines.push(
+      `- contact role ${
+        /needs\s*verification/i.test(contactRoleStatus)
+          ? 'needs verification'
+          : contactRoleStatus || 'unknown'
+      }`
+    );
+  }
+  return lines;
+}
+
+/**
+ * Pre-mail verification plan when address/phone are not verified.
+ * First action is trusted-source / CRM verification — not calling.
+ * @param {object} input
+ * @returns {string}
+ */
+function buildPreMailVerificationPlan(input = {}) {
+  const firstName = input.contactName
+    ? String(input.contactName).split(/\s+/)[0]
+    : 'the contact';
+  const steps = [];
+  if (!input.mailing) {
+    steps.push(
+      'Verify mailing address from a trusted source or CRM before any print/mail step.'
+    );
+  }
+  if (!input.website) {
+    steps.push('Verify website from a trusted source or CRM.');
+  }
+  if (!input.phone) {
+    steps.push(
+      'Verify phone from a trusted source or CRM — do not call until a verified number exists.'
+    );
+  }
+  if (isPacketFieldUnresolved(input.contactRoleStatus)) {
+    steps.push(
+      `Confirm ${firstName} is the right contact / decision-maker before outreach.`
+    );
+  } else if (input.contactName) {
+    steps.push(`Confirm ${firstName} is the right contact.`);
+  }
+  steps.push(
+    'Do not print, mail, or reference a mailed packet until verification is complete.'
+  );
+  if (!blankToNull(input.industry)) {
+    steps.push('Do not claim industry-specific context.');
+  }
+  return steps.join(' ');
+}
+
+/**
  * Packet-review drafts from known desk facts only.
  * Customer-facing letter / note / scorecard stay sendable and omit operator
  * readiness, confidence, and evidence caveats (those live outside this copy).
@@ -1684,6 +1871,7 @@ function buildPacketReviewDrafts(input = {}) {
   const mailing = input.mailingAddress || null;
   const website = input.website || null;
   const phone = input.phone || null;
+  const mailReadyForReview = input.mailReadyForReview === true;
 
   // Customer-facing letter: known facts only — no implied pain/value claims.
   const letterBody = industryLower
@@ -1721,16 +1909,25 @@ function buildPacketReviewDrafts(input = {}) {
     .filter(Boolean)
     .join('\n');
 
-  // Operator-only call notes — concise; caveats stay out of letter / note / cover.
+  const preMailVerificationPlan = buildPreMailVerificationPlan({
+    contactName: contact,
+    mailing,
+    website,
+    phone,
+    contactRoleStatus: input.contactRoleStatus,
+    industry,
+  });
+
+  // Operator-only call notes — only when mail-ready with a verified reach path.
   const followUpNotes = [
     phone
       ? `Use verified phone ${phone}.`
       : 'No verified phone on file — do not invent a reach number.',
     `Confirm ${firstName} is the right contact.`,
-    'Reference the packet only after it is actually mailed.',
-    industryLower
-      ? null
-      : 'Do not claim industry-specific context.',
+    mailReadyForReview
+      ? 'Reference the packet only after it is actually mailed.'
+      : 'Do not reference a mailed packet — mail readiness is blocked.',
+    industryLower ? null : 'Do not claim industry-specific context.',
     'Log outcome.',
   ]
     .filter(Boolean)
@@ -1741,6 +1938,7 @@ function buildPacketReviewDrafts(input = {}) {
     handwrittenNote,
     scorecardCover,
     followUpNotes,
+    preMailVerificationPlan,
   };
 }
 
