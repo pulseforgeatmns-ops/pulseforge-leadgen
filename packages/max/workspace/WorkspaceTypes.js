@@ -126,6 +126,9 @@ function buildResponseMetadata(partial = {}) {
   if (partial.executionReadiness != null) {
     meta.executionReadiness = String(partial.executionReadiness);
   }
+  if (partial.draftConfidence != null) {
+    meta.draftConfidence = String(partial.draftConfidence);
+  }
   if (partial.strictOutputShape === true) {
     meta.strictOutputShape = true;
   }

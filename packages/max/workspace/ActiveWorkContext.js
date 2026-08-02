@@ -1482,20 +1482,37 @@ function looksLikeFillableVerificationTablePaste(text) {
 
 /**
  * Build desk entities from pasted fillable table rows (facts only).
+ * Preserves industry/vertical from prior desk entities when the table omits them.
  * @param {object[]} rows
+ * @param {object[]} [priorEntities]
  */
-function entitiesFromFillableTableRows(rows) {
-  return (Array.isArray(rows) ? rows : []).map((row) =>
-    prospectToEntity({
-      id: row && row.prospect_id != null ? String(row.prospect_id).trim() : null,
+function entitiesFromFillableTableRows(rows, priorEntities = []) {
+  /** @type {Map<string, object>} */
+  const priorById = new Map();
+  for (const entity of Array.isArray(priorEntities) ? priorEntities : []) {
+    if (!entity) continue;
+    const id = String(entity.id || '').trim().toUpperCase();
+    if (id) priorById.set(id, entity);
+  }
+
+  return (Array.isArray(rows) ? rows : []).map((row) => {
+    const id =
+      row && row.prospect_id != null ? String(row.prospect_id).trim() : null;
+    const prior = id ? priorById.get(id.toUpperCase()) : null;
+    return prospectToEntity({
+      id,
       companyName: row && row.company_name,
       contactName: row && row.contact_name,
+      industry:
+        (prior && (prior.industry || prior.vertical)) ||
+        blankToNull(row && (row.industry || row.vertical)) ||
+        null,
       website: blankToNull(row && row.website_value),
       mailingAddress: blankToNull(row && row.mailing_address_value),
       address: blankToNull(row && row.mailing_address_value),
       phone: blankToNull(row && row.phone_value),
-    })
-  );
+    });
+  });
 }
 
 /**
@@ -1515,7 +1532,10 @@ function ingestPastedFillableVerificationTable(input = {}) {
   const prior = getActiveWorkContext(session);
   const tableRows = parsed.rows.map((row) => ({ ...row }));
 
-  const entities = entitiesFromFillableTableRows(tableRows);
+  const entities = entitiesFromFillableTableRows(
+    tableRows,
+    prior && Array.isArray(prior.entities) ? prior.entities : []
+  );
   const prospects = entitiesToProspects(entities);
   const campaignId =
     extractCampaignIdFromText(question) ||
