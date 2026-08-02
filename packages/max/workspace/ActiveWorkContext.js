@@ -551,6 +551,62 @@ function matchForOnlyInlineFieldAssignment(trimmed) {
 }
 
 /**
+ * Parse inline "field = value, field2 = value2" assignments.
+ * Values run until the next known mutable column assignment (or end of chunk).
+ * Semicolons/commas inside free-text notes are content, not separators.
+ * @param {string} fieldText
+ * @param {Set<string>} columnSet
+ * @returns {Record<string, string>}
+ */
+function parseMutableFieldAssignments(fieldText, columnSet) {
+  const chunk = String(fieldText || '').trim();
+  if (!chunk || !columnSet || columnSet.size === 0) return {};
+
+  const fieldAlt = [...columnSet]
+    .map(escapeRegExp)
+    .sort((a, b) => b.length - a.length)
+    .join('|');
+  const startRe = new RegExp(`\\b(${fieldAlt})\\s*[:=]\\s*`, 'gi');
+
+  /** @type {Array<{ field: string, valueStart: number, matchStart: number }>} */
+  const starts = [];
+  let m;
+  while ((m = startRe.exec(chunk)) !== null) {
+    starts.push({
+      field: m[1].toLowerCase(),
+      valueStart: m.index + m[0].length,
+      matchStart: m.index,
+    });
+  }
+
+  /** @type {Record<string, string>} */
+  const fields = {};
+  for (let i = 0; i < starts.length; i++) {
+    const end =
+      i + 1 < starts.length ? starts[i + 1].matchStart : chunk.length;
+    let value = chunk.slice(starts[i].valueStart, end).trim();
+    // Drop the comma/semicolon that delimited this value from the next field.
+    value = value.replace(/[,;]\s*$/, '').trim();
+    // Drop trailing sentence punctuation at an instruction boundary.
+    value = value.replace(/[.\s]+$/, '').trim();
+    fields[starts[i].field] = value;
+  }
+
+  // Fallback: single assignment when the field name was unrecognized by the
+  // known-column scanner but still looks like field=value.
+  if (Object.keys(fields).length === 0) {
+    const single = /^([a-z][a-z0-9_]*)\s*[:=]\s*(.+)$/i.exec(chunk);
+    if (single && columnSet.has(single[1].toLowerCase())) {
+      fields[single[1].toLowerCase()] = String(single[2] || '')
+        .trim()
+        .replace(/[.\s]+$/, '');
+    }
+  }
+
+  return fields;
+}
+
+/**
  * Parse per-prospect field mutations from an update instruction.
  * Does not treat instruction labels as prospect rows.
  * @param {string} text
@@ -589,27 +645,9 @@ function parseFillableTableFieldUpdates(text) {
     rememberRef(prospectId);
     if (!updatesById.has(prospectId)) updatesById.set(prospectId, {});
     const fields = updatesById.get(prospectId);
-    const chunk = String(fieldText).trim();
-    if (!chunk) return;
-
-    // "website_status: verified" or "website_status = verified"
-    const pairRe =
-      /\b([a-z][a-z0-9_]*)\s*[:=]\s*([^,;]+?)(?=\s*,\s*[a-z][a-z0-9_]*\s*[:=]|\s*$)/gi;
-    let matched = false;
-    let m;
-    while ((m = pairRe.exec(chunk)) !== null) {
-      const field = m[1].toLowerCase();
-      if (!columnSet.has(field)) continue;
-      fields[field] = String(m[2] || '').trim().replace(/[.\s]+$/, '');
-      matched = true;
-    }
-    if (!matched) {
-      const single = /^([a-z][a-z0-9_]*)\s*[:=]\s*(.+)$/i.exec(chunk);
-      if (single && columnSet.has(single[1].toLowerCase())) {
-        fields[single[1].toLowerCase()] = String(single[2] || '')
-          .trim()
-          .replace(/[.\s]+$/, '');
-      }
+    const parsed = parseMutableFieldAssignments(fieldText, columnSet);
+    for (const [field, value] of Object.entries(parsed)) {
+      fields[field] = value;
     }
   };
 
@@ -686,15 +724,15 @@ function parseFillableTableFieldUpdates(text) {
     [...updatesById.values()].every((f) => Object.keys(f).length === 0)
   ) {
     const safetyPatterns = [
-      /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]?\s*set\s*:?\s*([a-z][a-z0-9_]*)\s*[:=]\s*([^.;\n]+)/gi,
-      /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]\s*([a-z][a-z0-9_]*)\s*[:=]\s*([^.;\n]+)/gi,
+      // Capture the full assignment region (including notes with semicolons);
+      // applyFields splits on known column boundaries.
+      /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]?\s*set\s*:?\s*((?:[a-z][a-z0-9_]*)\s*[:=]\s*.+?)(?=\.\s+(?:Leave|Return|Update|Keep|Do\s+not|Preparation)\b|$)/gis,
+      /\bfor\s+([A-Za-z0-9_-]+)\s+only\b[,:]\s*((?:[a-z][a-z0-9_]*)\s*[:=]\s*.+?)(?=\.\s+(?:Leave|Return|Update|Keep|Do\s+not|Preparation)\b|$)/gis,
     ];
     for (const inlineRe of safetyPatterns) {
       let inlineMatch;
       while ((inlineMatch = inlineRe.exec(raw)) !== null) {
-        const field = String(inlineMatch[2] || '').toLowerCase();
-        if (!columnSet.has(field)) continue;
-        applyFields(inlineMatch[1], `${inlineMatch[2]}=${inlineMatch[3]}`);
+        applyFields(inlineMatch[1], inlineMatch[2]);
       }
       if (
         [...updatesById.values()].some((f) => Object.keys(f).length > 0)

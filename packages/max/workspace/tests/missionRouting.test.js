@@ -1230,6 +1230,92 @@ describe('Max activeWorkContext (session desk memory)', () => {
     assert.deepEqual(result.structured.metadata.unavailable, []);
   });
 
+  it('Test 5c: inline notes mutation preserves semicolons and free text', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    await workspace.ask({
+      sessionId: first.sessionId,
+      question: 'Convert the verification work order into a fillable table.',
+    });
+
+    const beforeRows =
+      workspace._sessions.get(first.sessionId).activeWorkContext.tableRows || [];
+    const beforePm002 = { ...beforeRows.find((r) => r.prospect_id === 'PM-002') };
+    const beforePm003 = { ...beforeRows.find((r) => r.prospect_id === 'PM-003') };
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const notesValue =
+      'website verified by operator; phone candidate added but not confirmed; mailing address still missing';
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: [
+        'Update the fillable verification table for PM-001 only:',
+        'website_status = verified,',
+        'website_value = https://www.gamacheproperties.com,',
+        'phone_status = needs verification,',
+        'phone_value = 603-555-0198,',
+        `notes = ${notesValue}.`,
+        'Leave PM-002 and PM-003 unchanged.',
+        'Return only the updated table plus one short preparation-only safety line.',
+      ].join(' '),
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const awc = workspace._sessions.get(result.sessionId).activeWorkContext;
+    const rows = awc.tableRows || [];
+    const pm001 = rows.find((r) => r.prospect_id === 'PM-001');
+    const pm002 = rows.find((r) => r.prospect_id === 'PM-002');
+    const pm003 = rows.find((r) => r.prospect_id === 'PM-003');
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(result.structured.metadata.strictOutputShape, true);
+    assert.equal(result.structured.metadata.tableUpdate, true);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(result.presentation, 'strict_output_shape');
+
+    assert.match(answer, /\| prospect_id \|/);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /PM-002/);
+    assert.match(answer, /PM-003/);
+    assert.match(
+      answer,
+      /Preparation-only:\s*no mission created;\s*no launch, approval, print, or mail\.?/i
+    );
+
+    assert.doesNotMatch(answer, /^Fillable verification table/m);
+    assert.doesNotMatch(answer, /Updated the fillable verification table/i);
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /^Next:/m);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+
+    assert.equal(pm001.website_status, 'verified');
+    assert.equal(pm001.website_value, 'https://www.gamacheproperties.com');
+    assert.equal(pm001.phone_status, 'needs verification');
+    assert.equal(pm001.phone_value, '603-555-0198');
+    assert.equal(pm001.notes, notesValue);
+    assert.deepEqual(pm002, beforePm002);
+    assert.deepEqual(pm003, beforePm003);
+    assert.equal(result.structured.reasoning.length, 0);
+    assert.equal(result.structured.nextInvestigations.length, 0);
+  });
+
   it('Test 6: unknown prospect_id in table update asks for clarification', async () => {
     const missionEngine = testMissionEngine();
     const workspace = createWorkspaceEngine({
