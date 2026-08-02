@@ -520,4 +520,22 @@ describe('Campaign 001 canary prospect block extraction', () => {
     assert.ok(!(detected.prospects || []).some((p) => /For PM-001 only/i.test(p.companyName || '')));
     assert.ok(!(detected.prospects || []).some((p) => /^set:?$/i.test(p.companyName || '')));
   });
+
+  it('does not sniff canary table reassessment as a ProspectList', () => {
+    const prompt = [
+      'Update the fillable verification table.',
+      'For PM-001 only, set:',
+      '- contact_role_status = verified',
+      '',
+      'Leave PM-002 and PM-003 unchanged.',
+      'Reassess the Campaign 001 canary table.',
+    ].join('\n');
+
+    const detected = detectOperatorProspectListInMessage(prompt);
+    assert.equal(detected.detected, false);
+    assert.equal(detected.autoInject, false);
+    assert.equal(detected.promptImport, false);
+    assert.equal(detected.prospectCount, 0);
+    assert.equal(detected.suppressedFillableTableUpdate, true);
+  });
 });

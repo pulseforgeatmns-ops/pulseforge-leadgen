@@ -32,6 +32,7 @@ const {
   isFillableTableRequest,
   isFillableTableUpdateRequest,
   isFillableTableReadinessReassessRequest,
+  isFillableTableWholeTableReassessRequest,
   wantsStrictFillableTableOutputShape,
   wantsFillableTableHeading,
   activeContextHasFillableTable,
@@ -39,6 +40,7 @@ const {
   parseFillableTableFieldUpdates,
   applyFillableTableFieldUpdates,
   extractReadinessReassessProspectIds,
+  extractGateStatusUpdatedProspectIds,
   extractCampaignIdFromText,
   activeContextBlocksExecution,
   activeContextHasEntities,
@@ -788,19 +790,49 @@ function handleFillableTableUpdateContinuation(input) {
 
   const parsed = parseFillableTableFieldUpdates(question);
   const shouldReassess = isFillableTableReadinessReassessRequest(question);
-  const reassessIds = shouldReassess
-    ? (() => {
-        const named = extractReadinessReassessProspectIds(question);
-        if (named.length > 0) return named;
+  const wholeTableReassess = isFillableTableWholeTableReassessRequest(question);
+  const gateUpdatedIds = extractGateStatusUpdatedProspectIds(parsed.updates);
+  const reassessIds = (() => {
+    const ids = [];
+    const seen = new Set();
+    const pushAll = (list) => {
+      for (const id of list || []) {
+        const key = String(id || '')
+          .trim()
+          .toUpperCase();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        ids.push(String(id).trim());
+      }
+    };
+
+    if (shouldReassess) {
+      const named = extractReadinessReassessProspectIds(question);
+      if (named.length > 0) {
+        pushAll(named);
+      } else {
         // Field updates in the same turn imply which rows to reassess.
         const fromUpdates = (parsed.updates || [])
           .map((u) => u.prospectId)
           .filter(Boolean);
-        if (fromUpdates.length > 0) return fromUpdates;
-        // "reassess readiness" with no id → only if a single desk row exists.
-        return knownIds.length === 1 ? knownIds : [];
-      })()
-    : [];
+        if (fromUpdates.length > 0) {
+          pushAll(fromUpdates);
+        } else if (wholeTableReassess) {
+          // "Reassess the Campaign 001 canary table" → all desk rows.
+          pushAll(knownIds);
+        } else if (knownIds.length === 1) {
+          // "reassess readiness" with no id → only if a single desk row exists.
+          pushAll(knownIds);
+        }
+      }
+    }
+
+    // Gate status mutations always recompute derived readiness / next-action
+    // for the touched rows so contact_role_status=verified cannot leave
+    // verification_status / operator_next_action stale.
+    pushAll(gateUpdatedIds);
+    return ids;
+  })();
 
   const applied = applyFillableTableFieldUpdates(baseRows, parsed.updates, {
     reassessIds,

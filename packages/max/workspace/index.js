@@ -80,6 +80,8 @@ module.exports = {
   isFillableTableUpdateRequest: ActiveWorkContext.isFillableTableUpdateRequest,
   isFillableTableReadinessReassessRequest:
     ActiveWorkContext.isFillableTableReadinessReassessRequest,
+  isFillableTableWholeTableReassessRequest:
+    ActiveWorkContext.isFillableTableWholeTableReassessRequest,
   wantsStrictFillableTableOutputShape:
     ActiveWorkContext.wantsStrictFillableTableOutputShape,
   wantsFillableTableHeading: ActiveWorkContext.wantsFillableTableHeading,

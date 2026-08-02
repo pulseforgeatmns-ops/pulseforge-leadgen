@@ -1465,6 +1465,128 @@ describe('Max activeWorkContext (session desk memory)', () => {
     assert.equal(awc.entities.length, 3);
     assert.ok(!awc.entities.some((e) => String(e.id || '').startsWith('op_')));
   });
+
+  it('Test 8: verified contact_role reassess clears stale verification next-action', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: CANARY_WORK_ORDER_PROMPT,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    await workspace.ask({
+      sessionId: first.sessionId,
+      question: 'Convert the verification work order into a fillable table.',
+    });
+
+    await workspace.ask({
+      sessionId: first.sessionId,
+      question: [
+        'Update the fillable verification table.',
+        'For PM-001 only, set:',
+        '- website_status = verified',
+        '- website_value = https://www.gamacheproperties.com',
+        '- phone_status = verified',
+        '- phone_value = 603-555-0198',
+        '- mailing_address_status = verified',
+        '- mailing_address_value = 100 Market St, Manchester NH',
+        '- notes = mail gates verified; contact role still needs verification',
+        '',
+        'Leave PM-002 and PM-003 unchanged.',
+        'Reassess PM-001 readiness using the table gates.',
+        'Return only the updated table plus one short preparation-only safety line.',
+      ].join('\n'),
+    });
+
+    const beforeRows =
+      workspace._sessions.get(first.sessionId).activeWorkContext.tableRows || [];
+    const beforePm001 = { ...beforeRows.find((r) => r.prospect_id === 'PM-001') };
+    const beforePm002 = { ...beforeRows.find((r) => r.prospect_id === 'PM-002') };
+    const beforePm003 = { ...beforeRows.find((r) => r.prospect_id === 'PM-003') };
+    assert.equal(beforePm001.contact_role_status, 'needs verification');
+    assert.equal(beforePm001.verification_status, 'needs verification');
+    assert.match(String(beforePm001.operator_next_action || ''), /contact role/i);
+
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      sessionId: first.sessionId,
+      question: [
+        'Update the fillable verification table.',
+        'For PM-001 only, set:',
+        '- contact_role_status = verified',
+        '',
+        'Leave PM-002 and PM-003 unchanged.',
+        'Reassess the Campaign 001 canary table.',
+      ].join('\n'),
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const awc = workspace._sessions.get(result.sessionId).activeWorkContext;
+    const rows = awc.tableRows || [];
+    const pm001 = rows.find((r) => r.prospect_id === 'PM-001');
+    const pm002 = rows.find((r) => r.prospect_id === 'PM-002');
+    const pm003 = rows.find((r) => r.prospect_id === 'PM-003');
+
+    assert.equal(result.route, 'intelligence');
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(result.structured.metadata.tableUpdate, true);
+    assert.equal(result.structured.metadata.strictOutputShape, true);
+    assert.equal(result.structured.metadata.canaryPreparationOnly, true);
+    assert.equal(result.presentation, 'strict_output_shape');
+    assert.ok(
+      (result.structured.metadata.reassessedProspectIds || []).some(
+        (id) => String(id).toUpperCase() === 'PM-001'
+      )
+    );
+
+    assert.equal(pm001.website_status, 'verified');
+    assert.equal(pm001.mailing_address_status, 'verified');
+    assert.equal(pm001.phone_status, 'verified');
+    assert.equal(pm001.contact_role_status, 'verified');
+    assert.notEqual(
+      String(pm001.verification_status || '').toLowerCase(),
+      'needs verification'
+    );
+    assert.match(
+      String(pm001.verification_status || ''),
+      /^(verified|ready_for_review)$/i
+    );
+    assert.doesNotMatch(
+      String(pm001.operator_next_action || ''),
+      /confirm contact role/i
+    );
+    assert.match(
+      String(pm001.operator_next_action || ''),
+      /packet|print checklist|operator packet review/i
+    );
+    assert.equal(pm001.mail_readiness, 'ready_for_review');
+    assert.equal(pm001.execution_readiness, 'blocked');
+    assert.equal(pm001.draft_readiness, 'allowed');
+    assert.deepEqual(pm002, beforePm002);
+    assert.deepEqual(pm003, beforePm003);
+
+    assert.match(answer, /\| prospect_id \|/);
+    assert.match(
+      answer,
+      /Preparation-only:\s*no mission created;\s*no launch, approval, print, or mail\.?/i
+    );
+    assert.doesNotMatch(answer, /^Fillable verification table/m);
+    assert.doesNotMatch(answer, /Prospect List Detected/i);
+    assert.doesNotMatch(answer, /\bop_1\b/);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.equal(awc.entities.length, 3);
+  });
 });
 
 describe('Active work context continuation before domain routing', () => {

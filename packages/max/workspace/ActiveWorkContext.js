@@ -340,6 +340,14 @@ const FILLABLE_TABLE_MUTABLE_FIELDS = Object.freeze([
   'notes',
 ]);
 
+/** Gate status columns that drive derived readiness / next-action fields. */
+const FILLABLE_TABLE_GATE_STATUS_FIELDS = Object.freeze([
+  'website_status',
+  'mailing_address_status',
+  'phone_status',
+  'contact_role_status',
+]);
+
 /**
  * True when activeWorkContext already has a fillable verification table.
  * @param {object|null} ctx
@@ -422,8 +430,16 @@ function wantsStrictFillableTableOutputShape(text) {
     /\bno\s+next\s+action\b/.test(lower) ||
     /\bwithout\s+next\s+steps?\b/.test(lower);
 
+  // Whole-table reassessment should stay table + one safety line.
+  const wholeTableReassess = isFillableTableWholeTableReassessRequest(text);
+
   return (
-    onlyTable || tablePlusSafety || noReasoning || noExplanation || noNext
+    onlyTable ||
+    tablePlusSafety ||
+    noReasoning ||
+    noExplanation ||
+    noNext ||
+    wholeTableReassess
   );
 }
 
@@ -443,6 +459,44 @@ function wantsFillableTableHeading(text) {
 }
 
 /**
+ * Operator asked to reassess the whole fillable / canary verification table
+ * (not a single named prospect readiness line / table-gates cue).
+ * @param {string} text
+ */
+function isFillableTableWholeTableReassessRequest(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return false;
+  // Do not treat "reassess … using the table gates" as a whole-table cue.
+  if (/\busing\s+(?:the\s+)?table\s+gates\b/i.test(raw)) return false;
+
+  if (
+    /\breassess\b[\s\S]{0,160}\b(?:the\s+)?(?:campaign\s+\d+\s+)?(?:preparation[-\s]*only\s+)?canary\s+table\b/i.test(
+      raw
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\breassess\b[\s\S]{0,120}\b(?:the\s+)?(?:fillable\s+)?verification\s+table\b/i.test(
+      raw
+    )
+  ) {
+    return true;
+  }
+  if (/\breassess\b[\s\S]{0,80}\b(?:the\s+)?fillable\s+table\b/i.test(raw)) {
+    return true;
+  }
+  // Bare "reassess the table" without a readiness-for-id framing.
+  if (
+    /\breassess\b[\s\S]{0,60}\bthe\s+table\b/i.test(raw) &&
+    !/\breadiness\b/i.test(raw)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Operator asked to recompute readiness columns from fillable-table gate statuses.
  * @param {string} text
  */
@@ -453,7 +507,8 @@ function isFillableTableReadinessReassessRequest(text) {
     /\breassess\b[\s\S]{0,120}\breadiness\b/i.test(raw) ||
     /\breadiness\b[\s\S]{0,120}\breassess\b/i.test(raw) ||
     /\breassess\b[\s\S]{0,120}\btable\s+gates\b/i.test(raw) ||
-    /\busing\s+(?:the\s+)?table\s+gates\b/i.test(raw)
+    /\busing\s+(?:the\s+)?table\s+gates\b/i.test(raw) ||
+    isFillableTableWholeTableReassessRequest(raw)
   );
 }
 
@@ -527,13 +582,19 @@ function isFillableTableUpdateRequest(text, activeWorkContext = null) {
     return true;
   }
 
-  // Pure readiness reassessment against the desk table (no field paste required).
-  if (
-    activeContextHasFillableTable(activeWorkContext) &&
-    reassessCue &&
-    (knownIdCue || prospectOnlyCue || updateCue)
-  ) {
-    return true;
+  // Pure readiness / whole-table reassessment (desk preferred; missing desk
+  // clarifies instead of falling through to mission / General Conversation).
+  if (reassessCue) {
+    if (activeContextHasFillableTable(activeWorkContext)) return true;
+    if (
+      isFillableTableWholeTableReassessRequest(raw) ||
+      /\breassess\b[\s\S]{0,120}\breadiness\b/i.test(raw) ||
+      knownIdCue ||
+      prospectOnlyCue ||
+      updateCue
+    ) {
+      return true;
+    }
   }
 
   return false;
@@ -598,6 +659,32 @@ function deriveOperatorNextActionFromGates(row) {
 }
 
 /**
+ * Prospect ids whose gate status fields were mutated in this turn.
+ * @param {Array<{ prospectId: string, fields: Record<string, string> }>} updates
+ * @returns {string[]}
+ */
+function extractGateStatusUpdatedProspectIds(updates) {
+  const gateSet = new Set(FILLABLE_TABLE_GATE_STATUS_FIELDS);
+  const ids = [];
+  const seen = new Set();
+  for (const update of updates || []) {
+    const prospectId = String(update.prospectId || '').trim();
+    if (!prospectId) continue;
+    const fields =
+      update.fields && typeof update.fields === 'object' ? update.fields : {};
+    const touched = Object.keys(fields).some((key) =>
+      gateSet.has(String(key).toLowerCase())
+    );
+    if (!touched) continue;
+    const key = prospectId.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ids.push(prospectId);
+  }
+  return ids;
+}
+
+/**
  * Recompute readiness columns from verified table gates.
  * Does not invent websites, phones, addresses, or launch/execution.
  * @param {object} row
@@ -609,6 +696,8 @@ function reassessFillableTableRowFromGates(row) {
     isVerifiedGateStatus(next.mailing_address_status) &&
     isVerifiedGateStatus(next.website_status) &&
     isVerifiedGateStatus(next.phone_status);
+  const contactRoleVerified = isVerifiedGateStatus(next.contact_role_status);
+  const allVerificationGatesVerified = mailGatesVerified && contactRoleVerified;
 
   if (mailGatesVerified && !hasExplicitMailBlocker(next)) {
     next.mail_readiness = 'ready_for_review';
@@ -624,16 +713,12 @@ function reassessFillableTableRowFromGates(row) {
   // Execution never advances from table-gate reassessment alone.
   next.execution_readiness = 'blocked';
 
-  if (
-    isNeedsVerificationGateStatus(next.contact_role_status) ||
-    isBlockedGateStatus(next.contact_role_status)
-  ) {
-    next.verification_status = 'needs verification';
-  } else if (
-    mailGatesVerified &&
-    isVerifiedGateStatus(next.contact_role_status)
-  ) {
+  if (allVerificationGatesVerified) {
+    // All verification gates passed — advance past "needs verification".
+    // ready_for_review is reserved for mail_readiness / packet review stage.
     next.verification_status = 'verified';
+  } else {
+    next.verification_status = 'needs verification';
   }
 
   next.operator_next_action = deriveOperatorNextActionFromGates(next);
@@ -646,6 +731,14 @@ function reassessFillableTableRowFromGates(row) {
     !String(next.notes || '').trim()
   ) {
     next.notes = 'contact role still needs verification';
+  } else if (
+    contactRoleVerified &&
+    /contact role still needs verification/i.test(String(next.notes || ''))
+  ) {
+    next.notes = String(next.notes || '')
+      .replace(/\s*;?\s*contact role still needs verification\.?/gi, '')
+      .replace(/^\s*;\s*|\s*;\s*$/g, '')
+      .trim();
   }
 
   return next;
@@ -1042,6 +1135,7 @@ module.exports = {
   DEFAULT_CANARY_CONSTRAINTS,
   LAST_OUTPUT_TYPES,
   FILLABLE_TABLE_MUTABLE_FIELDS,
+  FILLABLE_TABLE_GATE_STATUS_FIELDS,
   getActiveWorkContext,
   setActiveWorkContext,
   cloneActiveWorkContext,
@@ -1058,6 +1152,7 @@ module.exports = {
   isFillableTableRequest,
   isFillableTableUpdateRequest,
   isFillableTableReadinessReassessRequest,
+  isFillableTableWholeTableReassessRequest,
   wantsStrictFillableTableOutputShape,
   wantsFillableTableHeading,
   activeContextHasFillableTable,
@@ -1066,6 +1161,7 @@ module.exports = {
   applyFillableTableFieldUpdates,
   reassessFillableTableRowFromGates,
   extractReadinessReassessProspectIds,
+  extractGateStatusUpdatedProspectIds,
   deriveOperatorNextActionFromGates,
   extractCampaignIdFromText,
   activeContextBlocksExecution,
