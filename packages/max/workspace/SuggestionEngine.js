@@ -2,6 +2,10 @@
 
 const { PAGE_TYPES } = require('./WorkspaceTypes');
 const { contextFocusLabel } = require('./ContextEnvelope');
+const {
+  CANARY_WORKFLOW_TYPES,
+  getCanaryWorkflowContract,
+} = require('./CanaryWorkflowContract');
 
 /**
  * Contextual suggested investigations from MaxContext.
@@ -460,8 +464,8 @@ function isSafeActiveWorkChip(chip, awc) {
   if (!text) return false;
 
   const asksToAct =
-    /^(?:mail|launch|execute|approve|print)\b/.test(text) ||
-    /\b(?:mail|launch|execute|approve|print)\s+(?:the|this|all|now|packets?|campaign)\b/.test(
+    /^(?:mail|launch|execute|approve|print|dial|call|text|email)\b/.test(text) ||
+    /\b(?:mail|launch|execute|approve|print|dial|call|text|email)\s+(?:the|this|all|now|packets?|campaign|prospects?)\b/.test(
       text
     ) ||
     /\b(?:send|ship)\s+(?:mail|packets?|the\s+campaign)\b/.test(text);
@@ -486,40 +490,47 @@ function buildActiveWorkSuggestions(awc, context = {}) {
   const kind = resolveLastOutputKind(awc);
   const prospectId = firstDeskProspectId(awc);
   const chips = [];
+  const workflowType =
+    (awc && awc.canaryWorkflowType) ||
+    (awc && awc.constraints && awc.constraints.canaryWorkflowType) ||
+    CANARY_WORKFLOW_TYPES.DIRECT_MAIL;
+  const contract = getCanaryWorkflowContract(workflowType);
+  const defaultProspectId =
+    prospectId || `${contract.prospectIdPrefix || 'PM'}-001`;
 
   if (kind === 'fillable_table') {
     chips.push('Show only blocked prospects.');
     chips.push('Update another verification field.');
-    chips.push('Create packet review checklist.');
+    chips.push(
+      contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+        ? 'Create call-script review checklist.'
+        : 'Create packet review checklist.'
+    );
     chips.push('Summarize what changed in this table.');
     if (prospectId) {
-      chips.push(`Draft ${prospectId} packet for review.`);
-    } else {
-      chips.push('Draft packet for review.');
-    }
-    chips.push('What still blocks mailing?');
-  } else if (kind === 'canary_summary') {
-    if (prospectId) {
       chips.push(
-        `Create a preparation-only packet review checklist for ${prospectId}.`
+        contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+          ? `Draft ${prospectId} call script for review.`
+          : `Draft ${prospectId} packet for review.`
       );
     } else {
-      chips.push('Create a preparation-only packet review checklist for PM-001.');
+      chips.push(
+        contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+          ? 'Draft call script for review.'
+          : 'Draft packet for review.'
+      );
     }
+    chips.push(contract.suggestionBlockedChip);
+  } else if (kind === 'canary_summary') {
+    chips.push(contract.suggestionReviewChip(defaultProspectId));
     chips.push('Summarize verification status for blocked prospects.');
-    chips.push('Show what still blocks mailing.');
+    chips.push(contract.suggestionBlockedChip);
     chips.push('Update readiness fields.');
     chips.push('Convert this into a fillable verification table.');
   } else if (kind === 'focused_work_order') {
-    if (prospectId) {
-      chips.push(
-        `Create a preparation-only packet review checklist for ${prospectId}.`
-      );
-    } else {
-      chips.push('Create a preparation-only packet review checklist for PM-001.');
-    }
-    chips.push('Summarize the Campaign 001 preparation-only canary status.');
-    chips.push('Show what still blocks mailing.');
+    chips.push(contract.suggestionReviewChip(defaultProspectId));
+    chips.push(contract.suggestionSummaryChip);
+    chips.push(contract.suggestionBlockedChip);
     chips.push('Update readiness fields.');
   } else if (kind === 'packet_review') {
     chips.push('Show missing verification fields.');
@@ -527,17 +538,25 @@ function buildActiveWorkSuggestions(awc, context = {}) {
     chips.push('Update readiness fields.');
     chips.push('Create packet checklist for another prospect.');
     chips.push('Summarize final operator decision.');
-    chips.push('Show what still blocks mailing.');
+    chips.push(contract.suggestionBlockedChip);
   } else if (kind === 'verification_work_order') {
     chips.push('Convert this into a fillable verification table.');
     chips.push('Show only blocked prospects.');
-    chips.push('Create packet review checklist.');
-    chips.push('What still blocks mailing?');
+    chips.push(
+      contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+        ? 'Create call-script review checklist.'
+        : 'Create packet review checklist.'
+    );
+    chips.push(contract.suggestionBlockedChip);
     chips.push('Summarize verification status.');
   } else if (kind === 'provisional_drafts') {
     chips.push('Show only blocked prospects.');
-    chips.push('What still blocks mailing?');
-    chips.push('Create packet review checklist.');
+    chips.push(contract.suggestionBlockedChip);
+    chips.push(
+      contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+        ? 'Create call-script review checklist.'
+        : 'Create packet review checklist.'
+    );
     if (prospectId) {
       chips.push(`Revise ${prospectId} draft for review.`);
     }
@@ -547,8 +566,12 @@ function buildActiveWorkSuggestions(awc, context = {}) {
     chips.push('Convert this into a verification work order.');
     chips.push('Convert this into a fillable verification table.');
     chips.push('Show only blocked prospects.');
-    chips.push('Create packet review checklist.');
-    chips.push('What still blocks mailing?');
+    chips.push(
+      contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+        ? 'Create call-script review checklist.'
+        : 'Create packet review checklist.'
+    );
+    chips.push(contract.suggestionBlockedChip);
   }
 
   const filtered = chips.filter((c) => isSafeActiveWorkChip(c, awc));

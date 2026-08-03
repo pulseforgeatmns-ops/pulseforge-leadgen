@@ -81,6 +81,12 @@ function buildResponseMetadata(partial = {}) {
   if (partial.canaryPreparationOnly === true) {
     meta.canaryPreparationOnly = true;
   }
+  if (
+    partial.canaryWorkflowType != null &&
+    String(partial.canaryWorkflowType).trim() !== ''
+  ) {
+    meta.canaryWorkflowType = String(partial.canaryWorkflowType);
+  }
   if (partial.provisionalDrafts === true) {
     meta.provisionalDrafts = true;
   }
@@ -163,6 +169,12 @@ function buildResponseMetadata(partial = {}) {
   }
   if (partial.mailReadiness != null) {
     meta.mailReadiness = String(partial.mailReadiness);
+  }
+  if (partial.callReadiness != null) {
+    meta.callReadiness = String(partial.callReadiness);
+  }
+  if (partial.primaryReadiness != null) {
+    meta.primaryReadiness = String(partial.primaryReadiness);
   }
   if (partial.executionReadiness != null) {
     meta.executionReadiness = String(partial.executionReadiness);
