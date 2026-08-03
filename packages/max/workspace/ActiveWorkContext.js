@@ -1748,6 +1748,7 @@ function activeContextBlocksExecution(ctx) {
 
 /**
  * Split a markdown table line into cells (preserves empty cells).
+ * Preserves semicolon text inside cells (verification_summary prose).
  * @param {string} line
  * @returns {string[]}
  */
@@ -1760,7 +1761,7 @@ function splitMarkdownTableCells(line) {
 }
 
 /**
- * True when a markdown row is a separator (`|---|---|`).
+ * True when a markdown row is a separator (`|---|---|` / `| --- | --- |`).
  * @param {string[]} cells
  */
 function isMarkdownTableSeparatorRow(cells) {
@@ -1772,12 +1773,33 @@ function isMarkdownTableSeparatorRow(cells) {
 }
 
 /**
+ * Strip emphasis / code wrappers from a table header cell so
+ * `**Prospect ID**` / `*Company*` / `` `contact` `` normalize cleanly.
+ * @param {string} cell
+ * @returns {string}
+ */
+function stripMarkdownCellDecorations(cell) {
+  let text = String(cell || '').trim();
+  if (!text) return '';
+  // Unwrap repeated emphasis/code markers from both ends.
+  for (let i = 0; i < 3; i += 1) {
+    const next = text
+      .replace(/^\*{1,3}(.+?)\*{1,3}$/s, '$1')
+      .replace(/^_{1,3}(.+?)_{1,3}$/s, '$1')
+      .replace(/^`+(.+?)`+$/s, '$1')
+      .trim();
+    if (next === text) break;
+    text = next;
+  }
+  return text;
+}
+
+/**
  * Normalize a header cell to a snake_case column key.
  * @param {string} cell
  */
 function normalizeFillableTableHeaderKey(cell) {
-  return String(cell || '')
-    .trim()
+  return stripMarkdownCellDecorations(cell)
     .toLowerCase()
     .replace(/[\s-]+/g, '_');
 }
@@ -1806,6 +1828,9 @@ const FILLABLE_VERIFICATION_TABLE_DETECT_HEADERS = Object.freeze([
 
 /**
  * True when header cells look like a fillable verification table.
+ * Compact readiness summary tables (no field-value / gate-status columns) are
+ * excluded — those belong to canary summary ingestion, not ProspectList /
+ * fillable desk-table ownership.
  * @param {string[]} headerCells
  */
 function isFillableVerificationTableHeader(headerCells) {
@@ -1814,7 +1839,27 @@ function isFillableVerificationTableHeader(headerCells) {
     .filter(Boolean);
   if (!keys.length) return false;
   const set = new Set(keys);
+
+  // Alias tolerance for detect only (stored headers keep their own keys).
+  if (set.has('id') || set.has('prospect')) set.add('prospect_id');
+  if (set.has('company')) set.add('company_name');
+  if (set.has('contact')) set.add('contact_name');
+
   if (!set.has('prospect_id') || !set.has('company_name')) return false;
+
+  // Compact readiness summary shape: readiness trio (+ optional verification
+  // summary) without website/phone/address values or gate-status columns.
+  const hasFieldDetail =
+    set.has('website_value') ||
+    set.has('mailing_address_value') ||
+    set.has('phone_value') ||
+    set.has('website_status') ||
+    set.has('mailing_address_status') ||
+    set.has('phone_status') ||
+    set.has('contact_role_status') ||
+    set.has('operator_next_action');
+  if (!hasFieldDetail) return false;
+
   const hits = FILLABLE_VERIFICATION_TABLE_DETECT_HEADERS.filter((h) =>
     set.has(h)
   ).length;
@@ -1904,19 +1949,30 @@ const READINESS_SUMMARY_TABLE_DETECT_HEADERS = Object.freeze([
 
 /**
  * Map common readiness-table header aliases to canonical keys.
+ * Supports: prospect_id / Prospect ID / id, company_name / company / Company,
+ * contact_name / contact / Contact, verification_summary / gate summary /
+ * verification / status summary, and spaced readiness headers.
  * @param {string} cell
  * @returns {string}
  */
 function normalizeReadinessSummaryHeaderKey(cell) {
   const key = normalizeFillableTableHeaderKey(cell);
   if (!key) return '';
-  if (key === 'prospect' || key === 'id' || key === 'prospectid') {
+  if (
+    key === 'prospect' ||
+    key === 'id' ||
+    key === 'prospectid' ||
+    key === 'prospect_id'
+  ) {
     return 'prospect_id';
   }
-  if (key === 'company' || key === 'companyname') return 'company_name';
+  if (key === 'company' || key === 'companyname' || key === 'company_name') {
+    return 'company_name';
+  }
   if (
     key === 'contact' ||
     key === 'contactname' ||
+    key === 'contact_name' ||
     key === 'decision_maker' ||
     key === 'decisionmaker'
   ) {
@@ -1924,11 +1980,38 @@ function normalizeReadinessSummaryHeaderKey(cell) {
   }
   if (
     key === 'verification' ||
+    key === 'verification_summary' ||
     key === 'gate_summary' ||
     key === 'gates' ||
-    key === 'verification_status'
+    key === 'verification_status' ||
+    key === 'status_summary' ||
+    key === 'statussummary'
   ) {
     return 'verification_summary';
+  }
+  if (
+    key === 'mail_readiness' ||
+    key === 'mail' ||
+    key === 'mail_ready' ||
+    key === 'mailready'
+  ) {
+    return 'mail_readiness';
+  }
+  if (
+    key === 'draft_readiness' ||
+    key === 'draft' ||
+    key === 'draft_ready' ||
+    key === 'draftready'
+  ) {
+    return 'draft_readiness';
+  }
+  if (
+    key === 'execution_readiness' ||
+    key === 'execution' ||
+    key === 'execution_ready' ||
+    key === 'executionready'
+  ) {
+    return 'execution_readiness';
   }
   return key;
 }
@@ -1982,7 +2065,10 @@ function isReadinessSummaryTableHeader(headerCells) {
 function normalizeReadinessSummaryRow(row) {
   const base = row && typeof row === 'object' ? { ...row } : {};
   const verificationSummary = String(
-    base.verification_summary || base.gate_summary || ''
+    base.verification_summary ||
+      base.gate_summary ||
+      base.status_summary ||
+      ''
   ).trim();
 
   if (verificationSummary) {
@@ -2091,8 +2177,9 @@ function looksLikeReadinessSummaryTablePaste(text) {
 
 /**
  * Ingest a pasted readiness summary table into session activeWorkContext.
- * Skips when a full fillable verification table is present (caller ingests that
- * first). Does not invent values. Does not create a mission or imply execution.
+ * Compact readiness tables are never treated as fillable / ProspectList.
+ * When both a full fillable table and a compact readiness table appear, the
+ * fillable ingest owns the desk table; readiness rows still parse for summary.
  * @param {{ question: string, session: object|null }} input
  * @returns {object|null}
  */
@@ -2101,8 +2188,14 @@ function ingestPastedReadinessSummaryTable(input = {}) {
   const session = input.session || null;
   if (!session || !question.trim()) return null;
 
-  // Full fillable verification tables are owned by fillable ingest.
-  if (looksLikeFillableVerificationTablePaste(question)) return null;
+  // Full fillable verification tables (with value/status columns) are owned by
+  // fillable ingest. Compact readiness-only tables are not fillable.
+  if (
+    looksLikeFillableVerificationTablePaste(question) &&
+    !looksLikeReadinessSummaryTablePaste(question)
+  ) {
+    return null;
+  }
 
   const parsed = parseReadinessSummaryTableFromMessage(question);
   if (!parsed || !parsed.rows.length) return null;
