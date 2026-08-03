@@ -1,6 +1,6 @@
 # Contributing to Pulseforge
 
-This repository is the authoritative source of truth. Chat history is not.
+This repository is the authoritative source of truth.
 
 ## Before you write code
 
