@@ -24,6 +24,7 @@ const LAST_OUTPUT_TYPES = Object.freeze({
   PROVISIONAL_DRAFTS: 'provisional_drafts',
   PACKET_REVIEW: 'packet_review',
   CALL_SCRIPT_REVIEW: 'call_script_review',
+  CALL_SCRIPT_DECISION_RECORD: 'call_script_decision_record',
   CANARY_SUMMARY: 'canary_summary',
   FOCUSED_WORK_ORDER: 'focused_work_order',
 });
@@ -283,6 +284,7 @@ function isActiveWorkFollowUpCue(text) {
   if (isFillableTableRequest(lower)) return true;
   if (isPacketReviewRequest(lower)) return true;
   if (isCallScriptReviewRequest(lower)) return true;
+  if (isCallScriptDecisionRecordRequest(lower)) return true;
 
   const cues = [
     /\bcontinue\b/,
@@ -405,6 +407,9 @@ function hasFocusedCanaryWorkOrderCues(text) {
   // artifact generation, not focused work-order selection.
   if (isProceedWithPacketContentReviewRequest(text)) return false;
   if (isProceedWithCallScriptReviewRequest(text)) return false;
+  // Recording a call-script review decision from inline facts is not
+  // focused work-order selection (Return sections often list gate / next WO).
+  if (isCallScriptDecisionRecordRequest(text)) return false;
 
   const prose = extractOperatorIntentProse(text);
   const proseLower = prose.toLowerCase();
@@ -588,6 +593,8 @@ function hasCanarySummaryJudgmentCues(text) {
   // artifact generation, not summary / focused selection.
   if (isProceedWithPacketContentReviewRequest(text)) return false;
   if (isProceedWithCallScriptReviewRequest(text)) return false;
+  // Recording a call-script review decision from inline facts is not summary.
+  if (isCallScriptDecisionRecordRequest(text)) return false;
 
   // Prefer operator prose so table headers/cells do not invent summary intent,
   // but still honor an embedded readiness summary paste as state for judgment.
@@ -746,6 +753,49 @@ function isProceedWithCallScriptReviewRequest(text) {
 }
 
 /**
+ * Operator wants a preparation-only call-script review decision record from
+ * inline known facts — not a canary summary, not a new call-script checklist.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isCallScriptDecisionRecordRequest(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return false;
+
+  const lower = raw.toLowerCase();
+
+  // Strong cues: explicit record of the preparation-only call-script decision.
+  if (
+    /\brecord\s+(?:the\s+)?(?:preparation[-\s]*only\s+)?call[-\s]*script\s+review\s+decision\b/.test(
+      lower
+    ) ||
+    /\brecord\s+call[-\s]*script\s+review\s+decision\b/.test(lower)
+  ) {
+    return true;
+  }
+
+  // Field-name cues imply decision-record follow-up when paired with
+  // record/decision language. Do not steal create/proceed checklist asks.
+  const hasFieldCue =
+    /\bcall_script_content_decision\b/i.test(raw) ||
+    /\bapproved_for_dial\b/i.test(raw) ||
+    /\bdial_call_approval_status\b/i.test(raw);
+  if (!hasFieldCue) return false;
+
+  if (isProceedWithCallScriptReviewRequest(raw)) return false;
+  if (
+    /\bcreate\s+(?:a\s+)?(?:preparation[-\s]*only\s+)?call[-\s]*script\s+review(?:\s+checklist|\s+package|\s+artifact)?\b/.test(
+      lower
+    ) ||
+    /\bcall[-\s]*script\s+review\s+checklist\b/.test(lower)
+  ) {
+    return false;
+  }
+
+  return /\bdecision\b/.test(lower) || /\brecord\b/.test(lower);
+}
+
+/**
  * Operator wants a preparation-only call-script review artifact — not a canary
  * status summary and not focused next-work-order selection.
  * @param {string} text
@@ -754,6 +804,9 @@ function isProceedWithCallScriptReviewRequest(text) {
 function isCallScriptReviewRequest(text) {
   const raw = String(text || '');
   if (!raw.trim()) return false;
+
+  // Decision-record follow-ups are a separate artifact path.
+  if (isCallScriptDecisionRecordRequest(raw)) return false;
 
   // Proceed-with a named call-script work order always wins over summary /
   // focused selection cues in the same message.
@@ -3216,6 +3269,10 @@ const CALL_SCRIPT_REVIEW_INLINE_OPTIONAL_FIELDS = Object.freeze([
   'verification_status',
   'verification_summary',
   'work_order',
+  'call_script_content_decision',
+  'call_script_review_status',
+  'approved_for_dial',
+  'dial_call_approval_status',
 ]);
 
 const CALL_SCRIPT_REVIEW_INLINE_ALLOWLIST = Object.freeze([
@@ -3653,6 +3710,7 @@ module.exports = {
   isActiveWorkTransformCue,
   isPacketReviewRequest,
   isCallScriptReviewRequest,
+  isCallScriptDecisionRecordRequest,
   isCanarySummaryJudgmentRequest,
   hasCanarySummaryJudgmentCues,
   hasFocusedCanaryWorkOrderCues,

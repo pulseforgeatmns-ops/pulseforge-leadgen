@@ -150,7 +150,15 @@ function resolveResponseWorkContext(context) {
   const isCallScriptReview =
     metadata.callScriptReview === true ||
     (hints && hints.callScriptReview === true) ||
-    /call[_\s-]*script/.test(String(outputKindRaw || '').toLowerCase());
+    (/call[_\s-]*script/.test(String(outputKindRaw || '').toLowerCase()) &&
+      !/decision/.test(String(outputKindRaw || '').toLowerCase()));
+
+  const isCallScriptDecisionRecord =
+    metadata.callScriptDecisionRecord === true ||
+    (hints && hints.callScriptDecisionRecord === true) ||
+    /call[_\s-]*script[_\s-]*decision/.test(
+      String(outputKindRaw || '').toLowerCase()
+    );
 
   const isCanarySummary =
     metadata.canarySummary === true ||
@@ -175,6 +183,7 @@ function resolveResponseWorkContext(context) {
   if (
     !isPacketReview &&
     !isCallScriptReview &&
+    !isCallScriptDecisionRecord &&
     !isCanarySummary &&
     !isFocusedWorkOrder &&
     !isCanaryPrep &&
@@ -186,6 +195,7 @@ function resolveResponseWorkContext(context) {
   if (
     !isPacketReview &&
     !isCallScriptReview &&
+    !isCallScriptDecisionRecord &&
     !isCanarySummary &&
     !isFocusedWorkOrder &&
     !isCanaryPrep
@@ -194,6 +204,7 @@ function resolveResponseWorkContext(context) {
     const deskKinds = new Set([
       'packet_review',
       'call_script_review',
+      'call_script_decision_record',
       'fillable_table',
       'verification_work_order',
       'provisional_drafts',
@@ -213,16 +224,21 @@ function resolveResponseWorkContext(context) {
         outputKindRaw ||
         (isPacketReview
           ? 'packet_review'
-          : isCallScriptReview
-            ? 'call_script_review'
-            : isFocusedWorkOrder
-              ? 'focused_work_order'
-              : isCanarySummary
-                ? 'canary_summary'
-                : null),
+          : isCallScriptDecisionRecord
+            ? 'call_script_decision_record'
+            : isCallScriptReview
+              ? 'call_script_review'
+              : isFocusedWorkOrder
+                ? 'focused_work_order'
+                : isCanarySummary
+                  ? 'canary_summary'
+                  : null),
       packetReview: isPacketReview || (hints && hints.packetReview),
       callScriptReview:
         isCallScriptReview || (hints && hints.callScriptReview),
+      callScriptDecisionRecord:
+        isCallScriptDecisionRecord ||
+        (hints && hints.callScriptDecisionRecord),
       canarySummary: isCanarySummary || (hints && hints.canarySummary),
       focusedWorkOrder:
         isFocusedWorkOrder || (hints && hints.focusedWorkOrder),
@@ -230,6 +246,7 @@ function resolveResponseWorkContext(context) {
         isCanaryPrep ||
         isPacketReview ||
         isCallScriptReview ||
+        isCallScriptDecisionRecord ||
         isCanarySummary ||
         isFocusedWorkOrder ||
         (hints && hints.preparationOnly === true),
@@ -262,6 +279,7 @@ function resolveResponseWorkContext(context) {
         (hints && hints.workflow) ||
         (isPacketReview ||
         isCallScriptReview ||
+        isCallScriptDecisionRecord ||
         isCanaryPrep ||
         isCanarySummary ||
         isFocusedWorkOrder
@@ -286,6 +304,7 @@ function normalizeHintWorkContext(hints, context = {}) {
       : hints.preparationOnly ||
           hints.packetReview ||
           hints.callScriptReview ||
+          hints.callScriptDecisionRecord ||
           hints.canarySummary ||
           hints.focusedWorkOrder
         ? 'campaign_001_preparation_only_canary'
@@ -404,6 +423,7 @@ function resolveLastOutputKind(awc) {
   if (kind === 'packet_review_artifact') return 'packet_review';
   if (kind === 'call_script_review') return 'call_script_review';
   if (kind === 'call_script_review_artifact') return 'call_script_review';
+  if (kind === 'call_script_decision_record') return 'call_script_decision_record';
   if (kind === 'verification_work_order') return 'verification_work_order';
   if (kind === 'canary_review_package') return 'canary_review_package';
   if (kind === 'provisional_drafts') return 'provisional_drafts';
@@ -411,6 +431,9 @@ function resolveLastOutputKind(awc) {
   if (/canary[_\s-]*summary/.test(kind)) return 'canary_summary';
   if (kind === 'focused_work_order') return 'focused_work_order';
   if (/focused[_\s-]*work[_\s-]*order/.test(kind)) return 'focused_work_order';
+  if (/call[_\s-]*script[_\s-]*decision/.test(kind)) {
+    return 'call_script_decision_record';
+  }
   if (/call[_\s-]*script/.test(kind)) return 'call_script_review';
   if (/packet/.test(kind)) return 'packet_review';
   if (/fillable/.test(kind) && /table/.test(kind)) return 'fillable_table';
@@ -576,6 +599,11 @@ function buildActiveWorkSuggestions(awc, context = {}) {
     chips.push('Create call-script review for another prospect.');
     chips.push(contract.suggestionSummaryChip);
     chips.push('Summarize final operator decision.');
+    chips.push(contract.suggestionBlockedChip);
+  } else if (kind === 'call_script_decision_record') {
+    chips.push(contract.suggestionSummaryChip);
+    chips.push('Update readiness fields.');
+    chips.push('Create call-script review for another prospect.');
     chips.push(contract.suggestionBlockedChip);
   } else if (kind === 'verification_work_order') {
     chips.push('Convert this into a fillable verification table.');

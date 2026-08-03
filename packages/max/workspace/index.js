@@ -89,6 +89,8 @@ module.exports = {
   isActiveWorkTransformCue: ActiveWorkContext.isActiveWorkTransformCue,
   isPacketReviewRequest: ActiveWorkContext.isPacketReviewRequest,
   isCallScriptReviewRequest: ActiveWorkContext.isCallScriptReviewRequest,
+  isCallScriptDecisionRecordRequest:
+    ActiveWorkContext.isCallScriptDecisionRecordRequest,
   isCanarySummaryJudgmentRequest:
     ActiveWorkContext.isCanarySummaryJudgmentRequest,
   hasCanarySummaryJudgmentCues: ActiveWorkContext.hasCanarySummaryJudgmentCues,
