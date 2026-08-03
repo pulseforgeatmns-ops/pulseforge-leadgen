@@ -93,6 +93,9 @@ function buildResponseMetadata(partial = {}) {
   if (partial.packetReview === true) {
     meta.packetReview = true;
   }
+  if (partial.packetContentReview === true) {
+    meta.packetContentReview = true;
+  }
   if (partial.canarySummary === true) {
     meta.canarySummary = true;
   }
