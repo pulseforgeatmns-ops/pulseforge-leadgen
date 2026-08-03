@@ -3795,10 +3795,21 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /CP-001 call-script review/i);
     assert.match(answer, /call_readiness=ready_for_review/i);
     assert.match(answer, /Deferred prospects:/i);
-    assert.match(answer, /CP-002/);
-    assert.match(answer, /CP-003/);
-    assert.match(answer, /verify phone|verify contact role|phone\/contact-role/i);
+    assert.match(answer, /CP-002:\s*verify phone and contact role/i);
+    assert.match(answer, /CP-003:\s*verify phone and contact role/i);
+    assert.match(
+      answer,
+      /nothing launched, approved, dialed, called, texted, or emailed/i
+    );
     assert.match(answer, /What remains blocked:/i);
+    assert.match(
+      answer,
+      /Outbound remains blocked until the prospect's call readiness is ready_for_review, readiness remains current, and the operator gives explicit future dial\/call approval/i
+    );
+    assert.doesNotMatch(
+      answer,
+      /Dialing, calling, texting, and emailing stay blocked until call_readiness is ready_for_review AND/i
+    );
     assert.match(answer, /Final approval gate before outbound action:/i);
     assert.match(answer, /Call-script review is not call approval/i);
     assert.match(
@@ -3808,6 +3819,7 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(answer, /print, or mail/i);
     assert.doesNotMatch(answer, /packet-content review/i);
     assert.doesNotMatch(answer, /mail_readiness/i);
+    assert.doesNotMatch(answer, /nothing launched or executed/i);
     assert.doesNotMatch(answer, /^Reasoning:/m);
     assert.doesNotMatch(answer, /Unavailable in current context/i);
     assert.doesNotMatch(answer, /(?<!No )Mission created/i);

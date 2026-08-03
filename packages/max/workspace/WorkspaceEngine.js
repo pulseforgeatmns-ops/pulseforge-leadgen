@@ -1635,13 +1635,17 @@ function resolveCanarySummaryNextAction(row, contract) {
   // Workflow-aware verification actions outrank any mail-oriented
   // operator_next_action that may have been prefilled from known-state ingest.
   if (contract && contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP) {
-    if (!isVerifiedGateStatus(row && row.phone_status)) {
+    const phoneOk = isVerifiedGateStatus(row && row.phone_status);
+    const roleOk =
+      isVerifiedGateStatus(row && row.contact_role_status) &&
+      !isNeedsVerificationGateStatus(row && row.contact_role_status);
+    if (!phoneOk && !roleOk) {
+      return 'verify phone and contact role';
+    }
+    if (!phoneOk) {
       return 'verify phone';
     }
-    if (
-      !isVerifiedGateStatus(row && row.contact_role_status) ||
-      isNeedsVerificationGateStatus(row && row.contact_role_status)
-    ) {
+    if (!roleOk) {
       return 'verify contact role';
     }
     return 'Complete phone/contact-role verification';
@@ -1911,15 +1915,16 @@ function buildFocusedCanaryWorkOrderResponse(input = {}) {
     contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP;
 
   const overallStatus = reviewReady.length
-    ? `Campaign ${campaignId} ${contract.statusLabel}: ${reviewReady.length} prospect(s) ready_for_review for ${contract.reviewWorkOrderLabel}; ${needsVerification.length} still need ${contract.verificationDeferredLabel}; nothing launched or executed.`
-    : `Campaign ${campaignId} ${contract.statusLabel}: all listed prospects still need ${contract.verificationDeferredLabel} before ${contract.reviewWorkOrderLabel}; nothing launched or executed.`;
+    ? `Campaign ${campaignId} ${contract.statusLabel}: ${reviewReady.length} prospect(s) ready_for_review for ${contract.reviewWorkOrderLabel}; ${needsVerification.length} still need ${contract.verificationDeferredLabel}; ${contract.overallSafetyClause || 'nothing launched or executed'}.`
+    : `Campaign ${campaignId} ${contract.statusLabel}: all listed prospects still need ${contract.verificationDeferredLabel} before ${contract.reviewWorkOrderLabel}; ${contract.overallSafetyClause || 'nothing launched or executed'}.`;
 
   const readinessTable = buildCanaryReadinessMarkdownTable(enriched, contract);
 
   const remainsBlocked = [
     'All prospects: execution_readiness remains blocked.',
     contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
-      ? `Dialing, calling, texting, and emailing stay blocked until ${primaryField} is ready_for_review AND the operator later gives explicit dial/call approval.`
+      ? contract.remainsBlockedOutboundLine ||
+        "Outbound remains blocked until the prospect's call readiness is ready_for_review, readiness remains current, and the operator gives explicit future dial/call approval."
       : `Printing and mailing stay blocked until ${primaryField} is ready_for_review AND the operator later gives explicit launch/mail approval.`,
     needsVerification.length
       ? `${needsVerification.map((r) => r.prospect_id).join(', ')} remain blocked pending ${contract.verificationDeferredLabel}.`
@@ -2175,7 +2180,8 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
   const blockedFromPrintMail = [
     'All prospects: execution_readiness remains blocked.',
     contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
-      ? `Dialing, calling, texting, and emailing stay blocked until ${primaryField} is ready_for_review AND the operator later gives explicit dial/call approval.`
+      ? contract.remainsBlockedOutboundLine ||
+        "Outbound remains blocked until the prospect's call readiness is ready_for_review, readiness remains current, and the operator gives explicit future dial/call approval."
       : `Printing and mailing stay blocked until ${primaryField} is ready_for_review AND the operator later gives explicit launch/mail approval.`,
     packetReviewedNowLine,
     needsVerification.length
@@ -2204,10 +2210,10 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
 
   const overallStatus = reviewReady.length
     ? contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
-      ? `Campaign ${campaignId} ${contract.statusLabel}: ${reviewReady.length} prospect(s) ready_for_review for ${contract.reviewWorkOrderLabel}; ${needsVerification.length} still need ${contract.verificationDeferredLabel}; nothing launched or executed.`
+      ? `Campaign ${campaignId} ${contract.statusLabel}: ${reviewReady.length} prospect(s) ready_for_review for ${contract.reviewWorkOrderLabel}; ${needsVerification.length} still need ${contract.verificationDeferredLabel}; ${contract.overallSafetyClause}.`
       : `Campaign ${campaignId} preparation-only canary: ${reviewReady.length} prospect(s) ready_for_review for packet review; ${needsVerification.length} still need verification; nothing launched, approved, printed, or mailed.`
     : contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
-      ? `Campaign ${campaignId} ${contract.statusLabel}: all listed prospects still need ${contract.verificationDeferredLabel} before ${contract.reviewWorkOrderLabel}; nothing launched or executed.`
+      ? `Campaign ${campaignId} ${contract.statusLabel}: all listed prospects still need ${contract.verificationDeferredLabel} before ${contract.reviewWorkOrderLabel}; ${contract.overallSafetyClause}.`
       : `Campaign ${campaignId} preparation-only canary: all listed prospects still need verification before packet review; nothing launched, approved, printed, or mailed.`;
 
   const answer = [

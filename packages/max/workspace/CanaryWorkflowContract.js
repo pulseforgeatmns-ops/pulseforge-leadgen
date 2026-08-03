@@ -102,6 +102,10 @@ const CANARY_WORKFLOW_CONTRACTS = Object.freeze({
       'email',
     ]),
     maxMustNotOutboundLine: 'launch, execute, approve, dial, call, text, or email',
+    overallSafetyClause:
+      'nothing launched, approved, dialed, called, texted, or emailed',
+    remainsBlockedOutboundLine:
+      "Outbound remains blocked until the prospect's call readiness is ready_for_review, readiness remains current, and the operator gives explicit future dial/call approval.",
     reviewArtifactName: 'call-script',
     reviewWorkOrderLabel: 'call-script review',
     reviewWorkOrderShort: 'call-script review',
