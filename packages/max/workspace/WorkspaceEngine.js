@@ -2240,13 +2240,101 @@ function buildMissingInlineKnownFactsPacketReviewResponse(input = {}) {
  * @returns {string}
  */
 function formatPacketReviewConfirmField(label, status, verifiedValue, rawValue) {
-  const statusText = String(status || 'unknown').trim() || 'unknown';
-  if (verifiedValue) return `${label} (${statusText}: ${verifiedValue})`;
+  const statusText = String(status || '').trim();
+  if (/^verified$/i.test(statusText)) {
+    if (verifiedValue) return `${label} (verified: ${verifiedValue})`;
+    // Gate verified, value absent — never say "verified: unknown" / "(unknown)".
+    return `${label} (verified; value not included in this prompt)`;
+  }
+  const displayStatus = statusText || 'unknown';
   if (rawValue) {
-    return `${label} (${statusText}: ${rawValue} — not verified — do not treat as confirmed)`;
+    return `${label} (${displayStatus}: ${rawValue} — not verified — do not treat as confirmed)`;
   }
   // Status-only: never append ": unknown" for a missing value.
-  return `${label} (${statusText})`;
+  return `${label} (${displayStatus})`;
+}
+
+/**
+ * Packet-content review confirm lines: gate status separate from value presence.
+ * @param {{
+ *   websiteStatus: string,
+ *   mailingStatus: string,
+ *   phoneStatus: string,
+ *   contactRoleStatus: string,
+ *   websiteValue?: string|null,
+ *   mailingValue?: string|null,
+ *   phoneValue?: string|null,
+ * }} input
+ * @returns {string[]}
+ */
+function buildPacketContentReviewConfirmLines(input = {}) {
+  const fields = [
+    {
+      label: 'Website',
+      status: input.websiteStatus,
+      value: input.websiteValue || null,
+    },
+    {
+      label: 'Mailing address',
+      status: input.mailingStatus,
+      value: input.mailingValue || null,
+    },
+    {
+      label: 'Phone',
+      status: input.phoneStatus,
+      value: input.phoneValue || null,
+    },
+    {
+      label: 'Contact role',
+      status: input.contactRoleStatus,
+      value: null,
+    },
+  ];
+
+  /** @type {string[]} */
+  const lines = ['Confirm before any future print step:'];
+  let anyVerifiedMissingValue = false;
+  let allCoreVerified = true;
+
+  for (const field of fields) {
+    const statusText = String(field.status || '').trim();
+    const verified = /^verified$/i.test(statusText);
+    if (!verified) allCoreVerified = false;
+    if (verified && !field.value) anyVerifiedMissingValue = true;
+
+    if (verified && field.value) {
+      lines.push(`- ${field.label} gate: verified; value: ${field.value}`);
+    } else if (verified) {
+      lines.push(
+        `- ${field.label} gate: verified; value not included in this prompt`
+      );
+    } else {
+      const display = statusText || 'unknown';
+      lines.push(
+        field.value
+          ? `- ${field.label} gate: ${display}; value: ${field.value}`
+          : `- ${field.label} gate: ${display}`
+      );
+    }
+  }
+
+  if (allCoreVerified && anyVerifiedMissingValue) {
+    lines.push(
+      'Gate statuses are verified, but the specific website/address/phone values were not included in this prompt. Confirm the values are present in the source system and packet metadata before any future print step.'
+    );
+  } else if (anyVerifiedMissingValue || allCoreVerified) {
+    lines.push(
+      '- Confirm actual values are present in the source system / packet metadata before future print/mail approval.'
+    );
+  } else {
+    lines.push(
+      '- Confirm fields against a trusted source before any future print step.'
+    );
+  }
+  lines.push(
+    '- Print / sign / mail only after a separate explicit launch/mail approval (not this turn).'
+  );
+  return lines;
 }
 
 /**
@@ -2264,38 +2352,6 @@ function isPacketContentReviewWorkOrder(row, question) {
     return true;
   }
   return false;
-}
-
-/**
- * True when verification_summary / gate statuses say core gates are verified.
- * @param {object} row
- * @returns {boolean}
- */
-function packetReviewGatesLookVerified(row) {
-  const summary = String(
-    (row && (row.verification_summary || row.gate_summary)) || ''
-  ).toLowerCase();
-  if (
-    /\bwebsite\b/.test(summary) &&
-    /\b(?:address|mailing)\b/.test(summary) &&
-    /\bphone\b/.test(summary) &&
-    /\bcontact\s+role\b/.test(summary) &&
-    /\bverified\b/.test(summary) &&
-    !/\bneeds?\s+verification\b/.test(summary) &&
-    !/\bunknown\s+or\s+blocked\b/.test(summary)
-  ) {
-    return true;
-  }
-  const website = String((row && row.website_status) || '').trim();
-  const mailing = String((row && row.mailing_address_status) || '').trim();
-  const phone = String((row && row.phone_status) || '').trim();
-  const contactRole = String((row && row.contact_role_status) || '').trim();
-  return (
-    /^verified$/i.test(website) &&
-    /^verified$/i.test(mailing) &&
-    /^verified$/i.test(phone) &&
-    /^verified$/i.test(contactRole)
-  );
 }
 
 /**
@@ -2333,7 +2389,10 @@ function buildFutureMailApprovalGateLines() {
  * @param {{ row: object, entity?: object|null, question?: string, campaignId?: string, source?: string }} input
  */
 function buildPacketReviewArtifactResponse(input = {}) {
-  const row = input.row && typeof input.row === 'object' ? input.row : {};
+  const rawRow = input.row && typeof input.row === 'object' ? input.row : {};
+  // Apply verification_summary → gate statuses when individual statuses are
+  // blank/unknown. Never invent field values; never downgrade explicit statuses.
+  const row = normalizeReadinessSummaryRow({ ...rawRow });
   const entity = input.entity && typeof input.entity === 'object' ? input.entity : {};
   const campaignId = String(input.campaignId || '001');
   const fromInlineFacts = input.source === 'inline_known_facts';
@@ -2359,15 +2418,20 @@ function buildPacketReviewArtifactResponse(input = {}) {
     row.mailing_address_value
   );
   const phone = verifiedPacketFieldValue(phoneStatus, row.phone_value);
-  const mailReadiness = String(row.mail_readiness || 'blocked');
-  const draftReadiness = String(row.draft_readiness || 'blocked');
+  // Prefer operator-supplied mail_readiness; normalizeReadinessSummaryRow may
+  // default blanks but must not downgrade ready_for_review.
+  const mailReadiness = String(
+    rawRow.mail_readiness || row.mail_readiness || 'blocked'
+  );
+  const draftReadiness = String(
+    rawRow.draft_readiness || row.draft_readiness || 'blocked'
+  );
   const executionReadiness = 'blocked';
   const notes = String(row.notes || '').trim();
   const operatorNext = String(row.operator_next_action || '').trim();
 
   const mailReadyForReview = /^ready(?:_for_review)?$/i.test(mailReadiness);
   const packetContentWorkOrder = isPacketContentReviewWorkOrder(row, question);
-  const gatesVerified = packetReviewGatesLookVerified(row);
   // Explicit packet-content review work order + ready_for_review centers the
   // artifact on content approval (not verification / post-mail tracking).
   const packetContentReviewMode =
@@ -2471,14 +2535,15 @@ function buildPacketReviewArtifactResponse(input = {}) {
     !suppressScaffolding && wantsPacketReviewDebugOutput(question);
 
   const printMailChecklist = packetContentReviewMode
-    ? [
-        'Confirm before any future print step:',
-        gatesVerified
-          ? 'Gates are already verified. Confirm verified website / mailing address / phone / contact role values are present in the source system and packet metadata before any future print step — do not re-verify those gates from scratch unless a value is missing or disputed.'
-          : 'Confirm fields below against a trusted source before any future print step.',
-        confirmBeforePrinting,
-        '- Print / sign / mail only after a separate explicit launch/mail approval (not this turn).',
-      ]
+    ? buildPacketContentReviewConfirmLines({
+        websiteStatus,
+        mailingStatus,
+        phoneStatus,
+        contactRoleStatus,
+        websiteValue: website || blankTableValue(row.website_value),
+        mailingValue: mailing || blankTableValue(row.mailing_address_value),
+        phoneValue: phone || blankTableValue(row.phone_value),
+      })
     : mailReadyForReview
       ? [
           'Print / sign / mail checklist:',
