@@ -31,11 +31,13 @@ const {
   isActiveWorkReuseProspectCue,
   isActiveWorkTransformCue,
   isPacketReviewRequest,
+  isCallScriptReviewRequest,
   isCanarySummaryJudgmentRequest,
   isFocusedCanaryWorkOrderRequest,
   wantsFocusedFutureMailingEligibilitySection,
   wantsFocusedFinalApprovalGateSection,
   extractPacketReviewProspectId,
+  extractCallScriptReviewProspectId,
   isExplicitNewMissionRequest,
   isExplicitContextOverride,
   isExplicitExecutionRequest,
@@ -68,8 +70,10 @@ const {
   emitCanaryReadinessIngestDiagnostics,
   shouldEmitCanaryReadinessDiagnostics,
   parseInlinePacketReviewKnownFacts,
+  parseInlineCallScriptReviewKnownFacts,
   parseKnownCurrentStateBullets,
   isProceedWithPacketContentReviewRequest,
+  isProceedWithCallScriptReviewRequest,
   entitiesFromFillableTableRows,
   CAMPAIGN_001_PREPARATION_ONLY_CANARY,
   LAST_OUTPUT_TYPES,
@@ -629,6 +633,7 @@ function preserveActiveWorkFocusOverStaleRecommendation(input) {
     isFillableTableUpdateRequest(question, prior) ||
     isCanarySummaryJudgmentRequest(question) ||
     isPacketReviewRequest(question) ||
+    isCallScriptReviewRequest(question) ||
     isActiveWorkFollowUpCue(question) ||
     isActiveWorkTransformCue(question) ||
     isActiveWorkReuseProspectCue(question);
@@ -685,6 +690,7 @@ async function maybeHandleActiveWorkContinuation(input) {
     activeContextHasFillableTable(prior) &&
     isTableUpdateRequest;
   const isPacketReview = isPacketReviewRequest(question);
+  const isCallScriptReview = isCallScriptReviewRequest(question);
 
   // Fillable table field mutation — before prospect extraction, artifact
   // injection, domain routing, or mission routing.
@@ -711,6 +717,26 @@ async function maybeHandleActiveWorkContinuation(input) {
     return {
       reason: 'active_work_context_missing_for_packet_review',
       structured: buildMissingPacketReviewResponse({ question }),
+    };
+  }
+
+  // Proceed-with a named call-script work order (or explicit call-script review)
+  // before focused work-order / canary summary selection.
+  if (isCallScriptReview) {
+    const inlineResult = handleInlineKnownFactsCallScriptReview({ question });
+    // Prefer complete inline known facts when present (proceed-with always
+    // carries them). Fall back to desk table when inline facts are absent.
+    if (inlineResult) return inlineResult;
+    if (hasEntities && activeContextHasFillableTable(prior)) {
+      return handleCallScriptReviewContinuation({
+        question,
+        session,
+        prior,
+      });
+    }
+    return {
+      reason: 'active_work_context_missing_for_call_script_review',
+      structured: buildMissingCallScriptReviewResponse({ question }),
     };
   }
 
@@ -2432,6 +2458,542 @@ function handleInlineKnownFactsPacketReview(input = {}) {
 }
 
 /**
+ * Preparation-only call-script review from an inline known-facts block when the
+ * session has no active canary table. Temporary context only — does not mutate
+ * activeWorkContext.
+ * @param {{ question: string }} input
+ * @returns {{ reason: string, structured: object }|null}
+ */
+function handleInlineKnownFactsCallScriptReview(input = {}) {
+  const question = String(input.question || '');
+  const parsed = parseInlineCallScriptReviewKnownFacts(question);
+  if (!parsed || !parsed.hasInlineFacts) return null;
+
+  if (parsed.missingRequired.length > 0) {
+    return {
+      reason: 'inline_known_facts_call_script_review_incomplete',
+      structured: buildMissingInlineKnownFactsCallScriptReviewResponse({
+        question,
+        missingRequired: parsed.missingRequired,
+        assignedFields: parsed.assignedFields,
+      }),
+    };
+  }
+
+  const row = { ...(parsed.row || {}) };
+  row.execution_readiness = 'blocked';
+  if (!row.work_order) row.work_order = 'call-script review';
+
+  const structured = buildCallScriptReviewArtifactResponse({
+    row,
+    entity: null,
+    question,
+    campaignId: extractCampaignIdFromText(question) || '001',
+    source: 'inline_known_facts',
+  });
+
+  return {
+    reason: 'inline_known_facts_call_script_review',
+    structured,
+  };
+}
+
+/**
+ * @param {{ question?: string, missingRequired: string[], assignedFields?: string[] }} input
+ */
+function buildMissingInlineKnownFactsCallScriptReviewResponse(input = {}) {
+  const missing = (Array.isArray(input.missingRequired)
+    ? input.missingRequired
+    : []
+  ).filter(Boolean);
+  const provided = (Array.isArray(input.assignedFields)
+    ? input.assignedFields
+    : []
+  ).filter(Boolean);
+  const missingLabel = missing.length ? missing.join(', ') : 'required fields';
+  const providedLabel = provided.length
+    ? `Received: ${provided.join(', ')}.`
+    : '';
+
+  return buildStructuredResponse({
+    answer: [
+      'I can build a preparation-only call-script review from the known facts you provided.',
+      `Still need: ${missingLabel}.`,
+      providedLabel,
+      'You do not need to paste the full Campaign canary table — only the missing fields for this prospect.',
+      'Preparation-only. No mission created. No launch, execution, approval, dial, call, text, or email.',
+    ]
+      .filter(Boolean)
+      .join(' '),
+    reasoning: [
+      'Operator supplied an inline known-facts block for call-script review, but required fields are incomplete.',
+      `Missing required fields: ${missingLabel}.`,
+      'Asking only for missing fields — not reconstructing the full table.',
+      'No mission create/resume. activeWorkContext not mutated.',
+    ],
+    supportingEvidence: [],
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: [
+      `Provide the missing fields (${missingLabel}) and ask again for the preparation-only call-script review.`,
+    ],
+    recommendedActions: [],
+    metadata: {
+      sourcesUsed: { inlineKnownFacts: true },
+      evidenceCount: provided.length,
+      unavailable: missing.map((f) => `inline_known_fact:${f}`),
+      surface: 'workspace',
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      route: 'intelligence',
+      canaryPreparationOnly: true,
+      callScriptReview: true,
+      inlineKnownFacts: true,
+      missingRequiredFields: missing,
+      tableUpdate: false,
+    },
+  });
+}
+
+/**
+ * Ask for desk table / known facts when call-script review has no context.
+ * @param {{ question?: string }} input
+ */
+function buildMissingCallScriptReviewResponse(input = {}) {
+  void input;
+  return buildStructuredResponse({
+    answer: [
+      'I can build a preparation-only call-script review checklist once a call-prep canary table or inline known facts are available.',
+      'Provide the current desk table, or include known facts for one CP prospect (prospect_id, company_name, contact_name, call_readiness, script_readiness, execution_readiness).',
+      'Preparation-only. No mission created. No launch, execution, approval, dial, call, text, or email.',
+    ].join(' '),
+    reasoning: [
+      'Call-script review requested without an active fillable table or sufficient inline known facts.',
+      'No mission create/resume.',
+    ],
+    supportingEvidence: [],
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: [
+      'Paste the call-prep canary table, or provide inline known facts for CP-001 call-script review.',
+    ],
+    recommendedActions: [],
+    metadata: {
+      sourcesUsed: {},
+      evidenceCount: 0,
+      unavailable: ['active_work_context_fillable_table'],
+      surface: 'workspace',
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      route: 'intelligence',
+      canaryPreparationOnly: true,
+      callScriptReview: true,
+      missingActiveWorkContext: true,
+    },
+  });
+}
+
+/**
+ * Build a preparation-only call-script review artifact from the active canary table.
+ * Does not mutate tableRows. Never creates a mission or dials.
+ * @param {{ question: string, session: object, prior: object }} input
+ */
+function handleCallScriptReviewContinuation(input) {
+  const question = String(input.question || '');
+  const session = input.session;
+  const prior = input.prior;
+  const knownIds = knownActiveWorkProspectIds(prior);
+  const knownLabel = knownIds.length ? knownIds.join(', ') : '(none on desk)';
+  const requestedId = extractCallScriptReviewProspectId(question, knownIds);
+
+  if (!requestedId) {
+    return {
+      reason: 'active_work_context_call_script_review_needs_target',
+      structured: buildStructuredResponse({
+        answer: [
+          'I can build a preparation-only call-script review checklist from the current canary table.',
+          `Which prospect_id should I use? Known ids on the desk: ${knownLabel}.`,
+          'Example: Create a preparation-only call-script review checklist for CP-001.',
+          'Preparation-only. No mission created. No launch, execution, approval, dial, call, text, or email.',
+        ].join(' '),
+        reasoning: [
+          'Operator asked for a call-script review artifact without a target prospect_id.',
+          'Clarifying instead of inventing a target or requiring a prospect re-paste.',
+          'No mission create/resume.',
+        ],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: null,
+        nextInvestigations: [
+          `Create a preparation-only call-script review checklist for a known prospect_id (${knownLabel}).`,
+        ],
+        recommendedActions: [],
+        metadata: {
+          sourcesUsed: { activeWorkContext: true },
+          evidenceCount: Array.isArray(prior.tableRows) ? prior.tableRows.length : 0,
+          unavailable: ['call_script_review_target'],
+          surface: 'workspace',
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          route: 'intelligence',
+          canaryPreparationOnly: true,
+          callScriptReview: true,
+          activeWorkContextReused: true,
+          tableUpdate: false,
+        },
+      }),
+    };
+  }
+
+  const rows = Array.isArray(prior.tableRows) ? prior.tableRows : [];
+  const row = rows.find(
+    (r) =>
+      String((r && r.prospect_id) || '').trim().toUpperCase() ===
+      String(requestedId).trim().toUpperCase()
+  );
+
+  if (!row) {
+    return {
+      reason: 'active_work_context_call_script_review_unknown_prospect',
+      structured: buildStructuredResponse({
+        answer: [
+          'I could not build that call-script review checklist.',
+          `Unknown prospect_id: ${requestedId}.`,
+          `Known prospect ids on the desk: ${knownLabel}.`,
+          'Tell me which known id to use. I will not invent a row or ask you to re-paste the whole list.',
+          'Preparation-only. No mission created. No launch, execution, approval, dial, call, text, or email.',
+        ].join(' '),
+        reasoning: [
+          'Call-script review referenced a prospect_id not present in activeWorkContext.tableRows.',
+          'Clarifying instead of inventing rows or falling through to prospect-parse fallback.',
+          'No mission create/resume.',
+        ],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: null,
+        nextInvestigations: [
+          `Create a call-script review checklist for a known prospect_id (${knownLabel}).`,
+        ],
+        recommendedActions: [],
+        metadata: {
+          sourcesUsed: { activeWorkContext: true },
+          evidenceCount: rows.length,
+          unavailable: [`prospect:${requestedId}`],
+          surface: 'workspace',
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          route: 'intelligence',
+          canaryPreparationOnly: true,
+          callScriptReview: true,
+          activeWorkContextReused: true,
+          tableUpdate: false,
+          requestedProspectId: requestedId,
+        },
+      }),
+    };
+  }
+
+  const entity = (Array.isArray(prior.entities) ? prior.entities : []).find(
+    (e) =>
+      String((e && e.id) || '').trim().toUpperCase() ===
+      String(requestedId).trim().toUpperCase()
+  );
+
+  const structured = buildCallScriptReviewArtifactResponse({
+    row,
+    entity,
+    question,
+    campaignId:
+      (prior.target && prior.target.campaignId) ||
+      extractCampaignIdFromText(question) ||
+      '001',
+  });
+
+  rememberCanaryActiveWorkContext({
+    session,
+    prospects: entitiesToProspects(prior.entities),
+    question,
+    lastOutputType: LAST_OUTPUT_TYPES.CALL_SCRIPT_REVIEW,
+    prior,
+  });
+
+  return {
+    reason: 'active_work_context_call_script_review',
+    structured,
+  };
+}
+
+/**
+ * True when the operator / row names this turn as call-script review.
+ * @param {object} row
+ * @param {string} question
+ * @returns {boolean}
+ */
+function isCallScriptReviewWorkOrder(row, question) {
+  const workOrder = String((row && row.work_order) || '').toLowerCase();
+  if (/\bcall[-\s]*script\s+review\b/.test(workOrder)) return true;
+  if (isProceedWithCallScriptReviewRequest(question)) return true;
+  const q = String(question || '').toLowerCase();
+  if (/\bcall[-\s]*script\s+review\b/.test(q) && /\bCP-\d{3}\b/i.test(question)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Exact call-script approval checklist — review only, not dial approval.
+ * @returns {string[]}
+ */
+function buildCallScriptApprovalChecklistLines() {
+  return [
+    'Call-script approval checklist:',
+    '- provisional call opener reviewed',
+    '- discovery questions reviewed',
+    '- objection-handling notes reviewed',
+    '- voicemail draft reviewed',
+    '- operator caveats accepted',
+    '- known-facts caveats accepted (no invented industry, pain points, sources, or portfolio size)',
+    '- call-script review checklist complete',
+    '- review decision recorded',
+    '- dial/call approval still pending',
+  ];
+}
+
+/**
+ * Future dial/call gate — call-script review is not call approval.
+ * @returns {string[]}
+ */
+function buildFutureCallApprovalGateLines() {
+  return [
+    'Final approval gate before outbound action:',
+    'No outbound action can happen until the operator explicitly approves dial/call in a future step. Call-script review is not call approval. Execution readiness remains blocked.',
+  ];
+}
+
+/**
+ * Call-script review artifact from a single desk / inline row — known facts only.
+ * ready_for_review means the script can be reviewed, not dialed.
+ * @param {{ row: object, entity?: object|null, question?: string, campaignId?: string, source?: string }} input
+ */
+function buildCallScriptReviewArtifactResponse(input = {}) {
+  const rawRow = input.row && typeof input.row === 'object' ? input.row : {};
+  const row = normalizeReadinessSummaryRow({ ...rawRow });
+  const entity = input.entity && typeof input.entity === 'object' ? input.entity : {};
+  const campaignId = String(input.campaignId || '001');
+  const fromInlineFacts = input.source === 'inline_known_facts';
+  const question = String(input.question || '');
+  const prospectId = String(row.prospect_id || entity.id || 'unknown').trim();
+  const company =
+    blankTableValue(row.company_name) || blankToNull(entity.companyName) || null;
+  const contact =
+    blankTableValue(row.contact_name) || blankToNull(entity.contactName);
+  const phoneStatus = String(row.phone_status || 'unknown');
+  const contactRoleStatus = String(row.contact_role_status || 'unknown');
+  const phone = verifiedPacketFieldValue(phoneStatus, row.phone_value);
+  const callReadiness = String(
+    rawRow.call_readiness || row.call_readiness || 'blocked'
+  );
+  const scriptReadiness = String(
+    rawRow.script_readiness || row.script_readiness || 'blocked'
+  );
+  const executionReadiness = 'blocked';
+  const notes = String(row.notes || '').trim();
+  const callReadyForReview = /^ready(?:_for_review)?$/i.test(callReadiness);
+  const scriptAllowed = /^allowed$/i.test(scriptReadiness);
+  const callScriptWorkOrder = isCallScriptReviewWorkOrder(row, question);
+
+  const canDraft = Boolean(company && contact);
+  const draftLabel =
+    canDraft && callReadyForReview && scriptAllowed
+      ? 'provisional'
+      : canDraft
+        ? 'provisional / held pending readiness'
+        : 'held';
+
+  const opener = canDraft
+    ? `Hi ${contact}, this is [operator] with PulseForge calling ${company}. Do you have a minute for a preparation-only check-in about whether a short operator-led walkthrough would be useful?`
+    : '(opener held — company_name and contact_name are required)';
+
+  const discoveryQuestions = canDraft
+    ? [
+        `1. Is ${contact} still the right person to speak with about day-to-day operations at ${company}?`,
+        '2. What does a typical week look like for your team right now? (use only their words — do not invent pain points)',
+        '3. Are you currently evaluating any tools or process changes, or is this a discovery-only conversation?',
+        '4. What would make a follow-up conversation worth your time?',
+      ]
+    : ['(discovery questions held — company_name and contact_name are required)'];
+
+  const objectionNotes = [
+    '- If not interested: thank them, confirm no further outreach this turn, leave the door open for operator-initiated follow-up only.',
+    '- If wrong person: ask who owns the relevant work; do not invent a role or contact.',
+    '- If asks for proof/portfolio: stay within verified desk facts only; do not invent sources, portfolio size, or evidence.',
+    '- If asks to be called back: capture preferred time in tracking fields; do not dial from this checklist.',
+  ];
+
+  const voicemail = canDraft
+    ? `Hi ${contact}, this is [operator] with PulseForge for ${company}. Calling with a short preparation-only note — no action needed from this message. Please call back at [operator number] when convenient.`
+    : '(voicemail held — company_name and contact_name are required)';
+
+  const phoneReviewField = formatPacketReviewConfirmField(
+    'phone (review field only — do not dial)',
+    phoneStatus,
+    phone,
+    blankTableValue(row.phone_value)
+  );
+
+  const suppressScaffolding = wantsPacketReviewArtifactSuppression(question);
+  const debugOutput =
+    !suppressScaffolding && wantsPacketReviewDebugOutput(question);
+
+  const answer = [
+    `Preparation-only call-script review — Campaign ${campaignId} / ${prospectId}`,
+    '',
+    `Company: ${company || 'unknown'}`,
+    `Contact: ${contact || 'unknown'}`,
+    `Call readiness: ${callReadiness}${
+      callReadyForReview
+        ? ' (script may be reviewed — not authorization to dial/call)'
+        : ' (not ready to dial or call)'
+    }`,
+    `Script readiness: ${scriptReadiness}`,
+    `Execution readiness: ${executionReadiness} (remains blocked)`,
+    `Contact role status: ${contactRoleStatus}`,
+    notes ? `Notes (from known facts): ${notes}` : null,
+    callScriptWorkOrder ? 'Work order: call-script review' : null,
+    '',
+    `${prospectId} call-script review checklist:`,
+    '- Confirm company and contact from known facts only',
+    '- Review provisional call opener',
+    '- Review discovery questions',
+    '- Review objection-handling notes',
+    '- Review voicemail draft',
+    '- Accept operator caveats',
+    '- Record call-script review decision',
+    '- Do not dial, call, text, or email from this checklist',
+    '',
+    `Provisional call opener (${draftLabel}):`,
+    opener,
+    '',
+    'Discovery questions:',
+    ...discoveryQuestions,
+    '',
+    'Objection-handling notes:',
+    ...objectionNotes,
+    '',
+    `Voicemail draft (${draftLabel}):`,
+    voicemail,
+    '',
+    '--- Operator caveats ---',
+    '- Preparation-only. Call-script review is not call approval.',
+    '- Use verified phone as a review field only; do not call it from this turn.',
+    '- Do not invent industry, pain points, sources, portfolio size, or evidence.',
+    '- Execution readiness remains blocked until a separate explicit dial/call approval.',
+    '',
+    'Fields to confirm before any future dial/call:',
+    phoneReviewField,
+    `contact role (${contactRoleStatus})`,
+    `call_readiness (${callReadiness})`,
+    `script_readiness (${scriptReadiness})`,
+    '',
+    ...buildCallScriptApprovalChecklistLines(),
+    '',
+    ...buildFutureCallApprovalGateLines(),
+    '',
+    'PulseForge call-review tracking fields:',
+    `- prospect_id: ${prospectId}`,
+    `- company: ${company || 'unknown'}`,
+    `- contact: ${contact || 'unknown'}`,
+    '- call_script_review_status: in_review',
+    '- call_script_reviewed_by: (operator)',
+    '- call_script_reviewed_at: (set when reviewed)',
+    '- call_script_content_decision: (pending)',
+    '- approved_for_dial: false',
+    '- dial_call_approval_status: pending',
+    `- execution_readiness: ${executionReadiness}`,
+    `- call_readiness_at_review: ${callReadiness}`,
+    `- script_readiness_at_review: ${scriptReadiness}`,
+    phone
+      ? `- phone_value_at_review: ${phone} (review only — do not dial)`
+      : `- phone_status_at_review: ${phoneStatus}`,
+    '',
+    'What remains blocked:',
+    '- Dial / call / text / email / launch / execute / approve',
+    '- Any outbound action without a separate explicit future dial/call approval',
+    '- Invented industry, pain points, sources, portfolio size, or evidence',
+    '',
+    '--- Final operator decision required ---',
+    'Complete call-script review only. Call-script review is not call approval. Explicit future dial/call approval is still required before any outbound action. I will not dial, call, text, email, launch, or execute from this checklist.',
+    '',
+    'Preparation-only. No mission created. No launch, execution, approval, dial, call, text, or email.',
+  ]
+    .filter((line) => line != null)
+    .join('\n');
+
+  return buildStructuredResponse({
+    answer,
+    reasoning: debugOutput
+      ? [
+          'Operator proceeded with a preparation-only call-script review work order.',
+          `Prospect ${prospectId} — known facts only; no invented evidence.`,
+          'Call-script review is not call approval; execution_readiness remains blocked.',
+          fromInlineFacts
+            ? 'Built from inline known facts (temporary context only).'
+            : 'Built from active canary desk row.',
+          'No mission create/resume.',
+        ]
+      : [],
+    supportingEvidence: [],
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: debugOutput
+      ? [
+          'Record the call-script review decision on the desk.',
+          'Do not dial or call until a separate explicit approval step.',
+        ]
+      : [],
+    recommendedActions: [],
+    metadata: {
+      sourcesUsed: fromInlineFacts
+        ? { inlineKnownFacts: true }
+        : { activeWorkContext: true },
+      evidenceCount: debugOutput ? 1 : 0,
+      unavailable: [],
+      surface: 'workspace',
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      route: 'intelligence',
+      canaryPreparationOnly: true,
+      callScriptReview: true,
+      callScriptContentReview: true,
+      focusedWorkOrder: undefined,
+      canarySummary: undefined,
+      executionReadiness: 'blocked',
+      callReadiness,
+      scriptReadiness,
+      prospectId,
+      campaignId,
+      inlineKnownFacts: fromInlineFacts || undefined,
+      tableUpdate: false,
+      lastOutputKind: LAST_OUTPUT_TYPES.CALL_SCRIPT_REVIEW,
+      lastOutputType: LAST_OUTPUT_TYPES.CALL_SCRIPT_REVIEW,
+      outputKind: LAST_OUTPUT_TYPES.CALL_SCRIPT_REVIEW,
+      contextHints: {
+        workflow: CAMPAIGN_001_PREPARATION_ONLY_CANARY,
+        lastOutputKind: LAST_OUTPUT_TYPES.CALL_SCRIPT_REVIEW,
+        lastOutputType: LAST_OUTPUT_TYPES.CALL_SCRIPT_REVIEW,
+        outputKind: LAST_OUTPUT_TYPES.CALL_SCRIPT_REVIEW,
+        preparationOnly: true,
+        callScriptReview: true,
+        callScriptContentReview: true,
+        prospectId,
+        campaignId,
+        callReadiness,
+        scriptReadiness,
+        executionReadiness: 'blocked',
+        inlineKnownFacts: fromInlineFacts || undefined,
+      },
+      // Artifact mode: suppress Reasoning / Unavailable / Next unless debug.
+      strictOutputShape: !debugOutput,
+    },
+  });
+}
+
+/**
  * Ask only for missing required known-fact fields — never the full table.
  * @param {{ question?: string, missingRequired: string[], assignedFields?: string[] }} input
  */
@@ -3417,6 +3979,23 @@ async function maybeBuildCanaryPreparationResponse(input) {
     };
   }
 
+  // Proceed-with / call-script review before canary summary.
+  if (isCallScriptReviewRequest(question)) {
+    const inlineResult = handleInlineKnownFactsCallScriptReview({ question });
+    if (inlineResult) return inlineResult;
+    if (activeContextHasEntities(prior) && activeContextHasFillableTable(prior)) {
+      return handleCallScriptReviewContinuation({
+        question,
+        session,
+        prior,
+      });
+    }
+    return {
+      reason: 'canary_call_script_review_missing_table',
+      structured: buildMissingCallScriptReviewResponse({ question }),
+    };
+  }
+
   // Cross-prospect canary summary / judgment. Secondary hard stop before
   // prospect sniff / parse clarification.
   if (isCanarySummaryJudgmentRequest(question)) {
@@ -3438,6 +4017,7 @@ async function maybeBuildCanaryPreparationResponse(input) {
       operatorAttemptedCanaryProspectSupply(question)) &&
     !isFillableTableUpdateRequest(question, prior) &&
     !isPacketReviewRequest(question) &&
+    !isCallScriptReviewRequest(question) &&
     !isCanarySummaryJudgmentRequest(question) &&
     !looksLikeFillableVerificationTablePaste(question) &&
     !looksLikeReadinessSummaryTablePaste(question);
@@ -3717,9 +4297,12 @@ function resolveResultSuggestions(input = {}) {
   const wantsWorkflowChips =
     (awc && isActiveDeskWorkflow(awc)) ||
     metadata.packetReview === true ||
+    metadata.callScriptReview === true ||
     metadata.canaryPreparationOnly === true ||
     Boolean(metadata.contextHints) ||
-    /packet/.test(String(metadata.outputKind || metadata.lastOutputKind || ''));
+    /packet|call.?script/.test(
+      String(metadata.outputKind || metadata.lastOutputKind || '')
+    );
 
   if (!wantsWorkflowChips) return [];
 
@@ -3741,6 +4324,13 @@ function resolveResultSuggestions(input = {}) {
 function resolveCanaryLastOutputType(question, reason) {
   if (isPacketReviewRequest(question) || reason === 'active_work_context_packet_review') {
     return LAST_OUTPUT_TYPES.PACKET_REVIEW;
+  }
+  if (
+    isCallScriptReviewRequest(question) ||
+    reason === 'active_work_context_call_script_review' ||
+    reason === 'inline_known_facts_call_script_review'
+  ) {
+    return LAST_OUTPUT_TYPES.CALL_SCRIPT_REVIEW;
   }
   if (isFillableTableRequest(question) || reason === 'canary_fillable_table') {
     return LAST_OUTPUT_TYPES.FILLABLE_TABLE;
@@ -3823,6 +4413,7 @@ function operatorAttemptedCanaryProspectSupply(question) {
   // Packet-review artifact generation references a desk prospect_id; it is not
   // a new prospect paste.
   if (isPacketReviewRequest(text)) return false;
+  if (isCallScriptReviewRequest(text)) return false;
   // Cross-prospect canary status summary / judgment mentions PM-00x ids and
   // known-state bullets / readiness tables — never treat as a prospect paste.
   if (isCanarySummaryJudgmentRequest(text)) return false;
