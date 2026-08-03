@@ -1,37 +1,42 @@
-# GitHub Profile README Draft
+Jacob Maynard
 
-Use this content in a dedicated profile repository named `pulseforgeatmns-ops/pulseforgeatmns-ops` with a root `README.md`.
+AI Systems Architect | Founder | Builder
 
----
+I build AI systems that help operators make better decisions.
+After spending more than a decade leading service businesses, I became fascinated by a simple question:
+How do we let people spend less time managing work and more time doing meaningful work?
 
-# Jacob Maynard
-
-**Founder | AI Systems Architect**
-
-I design software that reduces operational burden.
-
-My work focuses on modular AI platforms, workflow automation, multi-agent orchestration, knowledge systems, and human-governed decision support. I spent more than a decade leading service operations before moving into AI systems engineering, which shaped how I build: start with the operational problem, design the system around real constraints, and keep humans in control of high-impact decisions.
+That question led me to build Pulseforge, a modular AI platform designed around real operational problems instead of AI demos. My work focuses on agent orchestration, knowledge systems, workflow automation, and human-governed decision support.
+I care less about making AI appear autonomous and more about making it reliable, observable, and genuinely useful.
 
 ## Current Work
 
 ### Pulseforge
 
-Pulseforge is a modular AI platform for operational intelligence. It combines specialized agents, CRM automation, workflow orchestration, reporting, communications, knowledge management, and human-in-the-loop approvals.
+Pulseforge is a modular AI platform that combines:
+- Multi-agent orchestration
+- Knowledge management
+- Workflow automation
+- CRM intelligence
+- Human-in-the-loop approvals
+- Operational reporting
+- AI-assisted communications
+- The goal isn't to replace operators. It's to give them better information, better context, and more time to focus on high-value work.
 
-The main public repository is:
+Repository:
+github.com/pulseforgeatmns-ops/pulseforge-leadgen
 
-[pulseforge-leadgen](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen)
+## Areas of Interest
 
-## What I Build
-
-- Multi-agent AI systems
-- Workflow automation platforms
-- Knowledge and memory architectures
-- Human-in-the-loop decision systems
-- CRM and communications automation
-- Evidence-based recommendation engines
-- Operator dashboards and command surfaces
-- Production-ready systems for real business workflows
+- Agent systems
+- LLM applications
+- Knowledge graphs
+- RAG
+- Memory architectures
+- Workflow automation
+- System architecture
+- Product strategy
+- Human-AI collaboration
 
 ## Featured Links
 
@@ -45,4 +50,6 @@ AI systems architecture · LLM applications · multi-agent workflows · RAG · k
 
 ## Philosophy
 
-AI systems should reduce cognitive load without removing human agency. The most useful systems are explainable, observable, scoped, and governed. Autonomy should be earned through reliability, not assumed because a model can generate plausible text.
+I believe AI should increase human capability, not quietly replace it.
+
+The systems I enjoy building are explainable, observable, and governed. Autonomy should be earned through reliability. The best AI disappears into a workflow and helps people make better decisions without taking ownership away from them.
