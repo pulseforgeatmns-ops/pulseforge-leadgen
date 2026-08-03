@@ -150,17 +150,30 @@ function resolveResponseWorkContext(context) {
       String(outputKindRaw || '').toLowerCase()
     );
 
+  const isFocusedWorkOrder =
+    metadata.focusedWorkOrder === true ||
+    (hints && hints.focusedWorkOrder === true) ||
+    /focused_work_order|focused-work-order/.test(
+      String(outputKindRaw || '').toLowerCase()
+    );
+
   const isCanaryPrep =
     metadata.canaryPreparationOnly === true ||
     (hints &&
       (hints.preparationOnly === true ||
         /canary|preparation/.test(String(hints.workflow || ''))));
 
-  if (!isPacketReview && !isCanarySummary && !isCanaryPrep && !outputKindRaw) {
+  if (
+    !isPacketReview &&
+    !isCanarySummary &&
+    !isFocusedWorkOrder &&
+    !isCanaryPrep &&
+    !outputKindRaw
+  ) {
     return null;
   }
 
-  if (!isPacketReview && !isCanarySummary && !isCanaryPrep) {
+  if (!isPacketReview && !isCanarySummary && !isFocusedWorkOrder && !isCanaryPrep) {
     const kind = resolveLastOutputKind({ lastOutputKind: outputKindRaw });
     const deskKinds = new Set([
       'packet_review',
@@ -169,6 +182,7 @@ function resolveResponseWorkContext(context) {
       'provisional_drafts',
       'canary_review_package',
       'canary_summary',
+      'focused_work_order',
     ]);
     if (!kind || !deskKinds.has(kind)) return null;
   }
@@ -182,15 +196,20 @@ function resolveResponseWorkContext(context) {
         outputKindRaw ||
         (isPacketReview
           ? 'packet_review'
-          : isCanarySummary
-            ? 'canary_summary'
-            : null),
+          : isFocusedWorkOrder
+            ? 'focused_work_order'
+            : isCanarySummary
+              ? 'canary_summary'
+              : null),
       packetReview: isPacketReview || (hints && hints.packetReview),
       canarySummary: isCanarySummary || (hints && hints.canarySummary),
+      focusedWorkOrder:
+        isFocusedWorkOrder || (hints && hints.focusedWorkOrder),
       preparationOnly:
         isCanaryPrep ||
         isPacketReview ||
         isCanarySummary ||
+        isFocusedWorkOrder ||
         (hints && hints.preparationOnly === true),
       prospectId:
         (hints && hints.prospectId) ||
@@ -211,7 +230,10 @@ function resolveResponseWorkContext(context) {
         'blocked',
       workflow:
         (hints && hints.workflow) ||
-        (isPacketReview || isCanaryPrep || isCanarySummary
+        (isPacketReview ||
+        isCanaryPrep ||
+        isCanarySummary ||
+        isFocusedWorkOrder
           ? 'campaign_001_preparation_only_canary'
           : null),
     },
@@ -230,7 +252,10 @@ function normalizeHintWorkContext(hints, context = {}) {
   const workflow =
     hints.workflow != null
       ? String(hints.workflow)
-      : hints.preparationOnly || hints.packetReview || hints.canarySummary
+      : hints.preparationOnly ||
+          hints.packetReview ||
+          hints.canarySummary ||
+          hints.focusedWorkOrder
         ? 'campaign_001_preparation_only_canary'
         : null;
   if (!workflow) return null;
@@ -350,6 +375,8 @@ function resolveLastOutputKind(awc) {
   if (kind === 'provisional_drafts') return 'provisional_drafts';
   if (kind === 'canary_summary') return 'canary_summary';
   if (/canary[_\s-]*summary/.test(kind)) return 'canary_summary';
+  if (kind === 'focused_work_order') return 'focused_work_order';
+  if (/focused[_\s-]*work[_\s-]*order/.test(kind)) return 'focused_work_order';
   if (/packet/.test(kind)) return 'packet_review';
   if (/fillable/.test(kind) && /table/.test(kind)) return 'fillable_table';
   if (/verification/.test(kind) && /work/.test(kind)) return 'verification_work_order';
@@ -483,6 +510,17 @@ function buildActiveWorkSuggestions(awc, context = {}) {
     chips.push('Show what still blocks mailing.');
     chips.push('Update readiness fields.');
     chips.push('Convert this into a fillable verification table.');
+  } else if (kind === 'focused_work_order') {
+    if (prospectId) {
+      chips.push(
+        `Create a preparation-only packet review checklist for ${prospectId}.`
+      );
+    } else {
+      chips.push('Create a preparation-only packet review checklist for PM-001.');
+    }
+    chips.push('Summarize the Campaign 001 preparation-only canary status.');
+    chips.push('Show what still blocks mailing.');
+    chips.push('Update readiness fields.');
   } else if (kind === 'packet_review') {
     chips.push('Show missing verification fields.');
     chips.push('Create verification plan.');

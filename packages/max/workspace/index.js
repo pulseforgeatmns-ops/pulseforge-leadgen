@@ -91,6 +91,11 @@ module.exports = {
   isCanarySummaryJudgmentRequest:
     ActiveWorkContext.isCanarySummaryJudgmentRequest,
   hasCanarySummaryJudgmentCues: ActiveWorkContext.hasCanarySummaryJudgmentCues,
+  hasFocusedCanaryWorkOrderCues:
+    ActiveWorkContext.hasFocusedCanaryWorkOrderCues,
+  hasCanarySummaryOutputCues: ActiveWorkContext.hasCanarySummaryOutputCues,
+  isFocusedCanaryWorkOrderRequest:
+    ActiveWorkContext.isFocusedCanaryWorkOrderRequest,
   extractOperatorIntentProse: ActiveWorkContext.extractOperatorIntentProse,
   extractPacketReviewProspectId: ActiveWorkContext.extractPacketReviewProspectId,
   isFillableTableRequest: ActiveWorkContext.isFillableTableRequest,
