@@ -54,7 +54,11 @@ const {
   activeContextHasEntities,
   isCanaryDeskWorkflow,
   ingestPastedFillableVerificationTable,
+  ingestPastedReadinessSummaryTable,
   looksLikeFillableVerificationTablePaste,
+  looksLikeReadinessSummaryTablePaste,
+  parseReadinessSummaryTableFromMessage,
+  normalizeReadinessSummaryRow,
   parseInlinePacketReviewKnownFacts,
   parseKnownCurrentStateBullets,
   CAMPAIGN_001_PREPARATION_ONLY_CANARY,
@@ -643,9 +647,11 @@ async function maybeHandleActiveWorkContinuation(input) {
   // Explicit new campaign/mission work always goes through normal routing.
   if (isExplicitNewMissionRequest(question)) return null;
 
-  // Pasted fillable verification table → desk context before packet review,
-  // table mutation, prospect extraction, or mission routing.
+  // Pasted fillable verification table / readiness summary table → desk
+  // context before packet review, table mutation, prospect extraction, or
+  // mission routing.
   ingestPastedFillableVerificationTable({ question, session });
+  ingestPastedReadinessSummaryTable({ question, session });
 
   const prior = getActiveWorkContext(session);
   const hasEntities = activeContextHasEntities(prior);
@@ -741,7 +747,8 @@ async function maybeHandleActiveWorkContinuation(input) {
       !isFillableTableUpdateRequest(question, prior) &&
       !isPacketReviewRequest(question) &&
       !isCanarySummaryJudgmentRequest(question) &&
-      !looksLikeFillableVerificationTablePaste(question)
+      !looksLikeFillableVerificationTablePaste(question) &&
+      !looksLikeReadinessSummaryTablePaste(question)
     ) {
       const detected = detectOperatorProspectListInMessage(question);
       const intendedCount = extractIntendedCanaryProspectCount(question);
@@ -1204,7 +1211,7 @@ function handlePacketReviewContinuation(input) {
 
 /**
  * Resolve readiness rows for a canary summary / judgment request.
- * Order: activeWorkContext.tableRows → pasted table (already ingested) →
+ * Order: activeWorkContext.tableRows → pasted readiness/fillable table →
  * known current-state bullets → null (caller clarifies).
  * @param {{ question: string, prior: object|null }} input
  * @returns {{ rows: object[], source: string }|null}
@@ -1216,10 +1223,29 @@ function resolveCanarySummaryJudgmentRows(input = {}) {
   if (prior && activeContextHasFillableTable(prior)) {
     const rows = (Array.isArray(prior.tableRows) ? prior.tableRows : [])
       .filter(Boolean)
-      .map((row) => ({ ...row, execution_readiness: 'blocked' }));
+      .map((row) =>
+        normalizeReadinessSummaryRow({
+          ...row,
+          execution_readiness: 'blocked',
+        })
+      );
     if (rows.length > 0) {
       return { rows, source: 'active_work_context' };
     }
+  }
+
+  // Pasted compact readiness summary table (including alias headers).
+  const readiness = parseReadinessSummaryTableFromMessage(question);
+  if (readiness && Array.isArray(readiness.rows) && readiness.rows.length > 0) {
+    return {
+      rows: readiness.rows.map((row) =>
+        normalizeReadinessSummaryRow({
+          ...row,
+          execution_readiness: 'blocked',
+        })
+      ),
+      source: 'readiness_summary_table',
+    };
   }
 
   const known = parseKnownCurrentStateBullets(question);
@@ -1270,7 +1296,9 @@ function handleCanarySummaryJudgmentContinuation(input = {}) {
     reason:
       resolved.source === 'active_work_context'
         ? 'active_work_context_canary_summary'
-        : 'known_current_state_canary_summary',
+        : resolved.source === 'readiness_summary_table'
+          ? 'readiness_summary_table_canary_summary'
+          : 'known_current_state_canary_summary',
     structured,
   };
 }
@@ -1327,6 +1355,9 @@ function formatCanarySummaryGateSummary(row) {
   if (row && row.gate_summary && String(row.gate_summary).trim()) {
     return String(row.gate_summary).trim();
   }
+  if (row && row.verification_summary && String(row.verification_summary).trim()) {
+    return String(row.verification_summary).trim();
+  }
   const parts = [
     `website ${row.website_status || 'unknown'}`,
     `address ${row.mailing_address_status || 'unknown'}`,
@@ -1365,6 +1396,8 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
   const question = String(input.question || '');
   const campaignId = String(input.campaignId || '001');
   const fromKnownState = input.source === 'known_current_state';
+  const fromReadinessTable = input.source === 'readiness_summary_table';
+  const fromPastedState = fromKnownState || fromReadinessTable;
   const suppressScaffolding = wantsPacketReviewArtifactSuppression(question);
   const debugOutput =
     !suppressScaffolding && wantsPacketReviewDebugOutput(question);
@@ -1505,7 +1538,9 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
   const reasoning = [
     fromKnownState
       ? 'Built canary summary / judgment from known current-state bullets; not treated as a new prospect paste.'
-      : 'Reused activeWorkContext.tableRows for canary summary / judgment; no prospect re-paste required.',
+      : fromReadinessTable
+        ? 'Built canary summary / judgment from pasted readiness summary table; not treated as a new prospect paste.'
+        : 'Reused activeWorkContext.tableRows for canary summary / judgment; no prospect re-paste required.',
     prioritize && prioritize.mail_ready_for_review
       ? `${prioritizeId} prioritized for packet review / final human approval because mail_readiness is ready_for_review and execution remains blocked.`
       : 'No mail-ready_for_review prospect — verification work is the priority.',
@@ -1541,7 +1576,9 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
     metadata: {
       sourcesUsed: fromKnownState
         ? { knownCurrentState: true }
-        : { activeWorkContext: true },
+        : fromReadinessTable
+          ? { readinessSummaryTable: true }
+          : { activeWorkContext: true },
       evidenceCount: debugOutput ? enriched.length : 0,
       unavailable: debugOutput ? [] : [],
       surface: 'workspace',
@@ -1550,7 +1587,8 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
       canaryPreparationOnly: true,
       canarySummary: true,
       knownCurrentState: fromKnownState || undefined,
-      activeWorkContextReused: !fromKnownState,
+      readinessSummaryTable: fromReadinessTable || undefined,
+      activeWorkContextReused: !fromPastedState,
       tableUpdate: false,
       campaignId,
       prospectCount: enriched.length,
@@ -1573,6 +1611,7 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
           (prioritize && prioritize.mail_readiness) || null,
         executionReadiness: 'blocked',
         knownCurrentState: fromKnownState || undefined,
+        readinessSummaryTable: fromReadinessTable || undefined,
       },
       strictOutputShape: !debugOutput,
     },
@@ -2382,9 +2421,11 @@ async function maybeBuildCanaryPreparationResponse(input) {
   const question = String(input.question || '');
   const session = input.session || null;
 
-  // Pasted fillable verification table before canary prospect sniffing /
-  // packet-review missing-table clarify / mission routing.
+  // Pasted fillable verification table / readiness summary table before
+  // canary prospect sniffing / packet-review missing-table clarify / mission
+  // routing.
   ingestPastedFillableVerificationTable({ question, session });
+  ingestPastedReadinessSummaryTable({ question, session });
 
   const prior = getActiveWorkContext(session);
 
@@ -2442,7 +2483,8 @@ async function maybeBuildCanaryPreparationResponse(input) {
     !isFillableTableUpdateRequest(question, prior) &&
     !isPacketReviewRequest(question) &&
     !isCanarySummaryJudgmentRequest(question) &&
-    !looksLikeFillableVerificationTablePaste(question);
+    !looksLikeFillableVerificationTablePaste(question) &&
+    !looksLikeReadinessSummaryTablePaste(question);
 
   // Execution / mail while preparation-only canary context is active:
   // never infer launch from desk context — block and ask for readiness.
@@ -2508,6 +2550,7 @@ async function maybeBuildCanaryPreparationResponse(input) {
     !isPacketReviewRequest(question) &&
     !isCanarySummaryJudgmentRequest(question) &&
     !looksLikeFillableVerificationTablePaste(question) &&
+    !looksLikeReadinessSummaryTablePaste(question) &&
     !(hasPriorCanary && isActiveWorkReuseProspectCue(question))
   ) {
     const count = intendedCount || 3;
@@ -2818,8 +2861,10 @@ function operatorAttemptedCanaryProspectSupply(question) {
   // a new prospect paste.
   if (isPacketReviewRequest(text)) return false;
   // Cross-prospect canary status summary / judgment mentions PM-00x ids and
-  // known-state bullets — never treat as a prospect paste.
+  // known-state bullets / readiness tables — never treat as a prospect paste.
   if (isCanarySummaryJudgmentRequest(text)) return false;
+  if (looksLikeReadinessSummaryTablePaste(text)) return false;
+  if (looksLikeFillableVerificationTablePaste(text)) return false;
 
   const hasRowSignals =
     hasInlineProspectList(text) ||

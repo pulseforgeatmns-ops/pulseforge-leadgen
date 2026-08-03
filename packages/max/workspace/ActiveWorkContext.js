@@ -367,10 +367,24 @@ function isCanarySummaryJudgmentRequest(text) {
     return true;
   }
 
+  // Readiness summary table cues — state paste / judgment, not prospect supply.
+  if (/\b(?:current\s+)?(?:canary\s+)?readiness\s+table\b/.test(lower)) {
+    return true;
+  }
+  if (/\breadiness\s+table\s+for\s+(?:all\s+)?\d+\s+prospects?\b/.test(lower)) {
+    return true;
+  }
+  if (looksLikeReadinessSummaryTablePaste(text)) return true;
+
+  // Avoid treating "Verification Summary" column headers as a summarize cue.
+  const proseForSummaryCue = lower.replace(
+    /\bverification\s+summary\b/g,
+    'verification_summary'
+  );
   const hasSummarizeOrJudgment =
-    /\bsummariz(?:e|ing)\b/.test(lower) ||
-    /\bsummary\b/.test(lower) ||
-    /\bjudg(?:e)?ment\b/.test(lower);
+    /\bsummariz(?:e|ing)\b/.test(proseForSummaryCue) ||
+    /\bsummary\b/.test(proseForSummaryCue) ||
+    /\bjudg(?:e)?ment\b/.test(proseForSummaryCue);
 
   if (
     hasSummarizeOrJudgment &&
@@ -646,18 +660,46 @@ function isActiveWorkTransformCue(text) {
 }
 
 /**
+ * True when a regex match is not preceded by a negation (do not / don't / never).
+ * @param {string} lower
+ * @param {RegExpExecArray} match
+ */
+function matchIsNegated(lower, match) {
+  if (!match || match.index == null) return false;
+  const before = String(lower || '').slice(
+    Math.max(0, match.index - 24),
+    match.index
+  );
+  return /(?:do\s+not|don't|dont|never)\s+$/i.test(before);
+}
+
+/**
  * Explicit new mission / campaign work — must not be intercepted by desk context.
+ * Negations like "Do not create a mission" are constraints, not create requests.
  * @param {string} text
  */
 function isExplicitNewMissionRequest(text) {
   const lower = String(text || '').toLowerCase();
-  return (
-    /\bbuild\s+campaign\b/.test(lower) ||
-    /\bcreate\s+(?:a\s+)?(?:new\s+)?(?:campaign|mission)\b/.test(lower) ||
-    /\bstart\s+(?:a\s+)?(?:new\s+)?(?:campaign|mission|direct\s+mail)\b/.test(
-      lower
-    )
-  );
+  if (!lower.trim()) return false;
+
+  if (/\bbuild\s+campaign\b/.test(lower)) return true;
+
+  const startRe =
+    /\bstart\s+(?:a\s+)?(?:new\s+)?(?:campaign|mission|direct\s+mail)\b/g;
+  let startMatch = startRe.exec(lower);
+  while (startMatch) {
+    if (!matchIsNegated(lower, startMatch)) return true;
+    startMatch = startRe.exec(lower);
+  }
+
+  const createRe = /\bcreate\s+(?:a\s+)?(?:new\s+)?(?:campaign|mission)\b/g;
+  let createMatch = createRe.exec(lower);
+  while (createMatch) {
+    if (!matchIsNegated(lower, createMatch)) return true;
+    createMatch = createRe.exec(lower);
+  }
+
+  return false;
 }
 
 /**
@@ -1741,6 +1783,255 @@ function looksLikeFillableVerificationTablePaste(text) {
 }
 
 /**
+ * Compact readiness summary table headers (cross-prospect canary judgment).
+ * Distinct from the full fillable verification table.
+ */
+const READINESS_SUMMARY_TABLE_DETECT_HEADERS = Object.freeze([
+  'prospect_id',
+  'company_name',
+  'contact_name',
+  'verification_summary',
+  'mail_readiness',
+  'draft_readiness',
+  'execution_readiness',
+]);
+
+/**
+ * Map common readiness-table header aliases to canonical keys.
+ * @param {string} cell
+ * @returns {string}
+ */
+function normalizeReadinessSummaryHeaderKey(cell) {
+  const key = normalizeFillableTableHeaderKey(cell);
+  if (!key) return '';
+  if (key === 'prospect' || key === 'id' || key === 'prospectid') {
+    return 'prospect_id';
+  }
+  if (key === 'company' || key === 'companyname') return 'company_name';
+  if (
+    key === 'contact' ||
+    key === 'contactname' ||
+    key === 'decision_maker' ||
+    key === 'decisionmaker'
+  ) {
+    return 'contact_name';
+  }
+  if (
+    key === 'verification' ||
+    key === 'gate_summary' ||
+    key === 'gates' ||
+    key === 'verification_status'
+  ) {
+    return 'verification_summary';
+  }
+  return key;
+}
+
+/**
+ * True when header cells look like a compact readiness summary table.
+ * @param {string[]} headerCells
+ */
+function isReadinessSummaryTableHeader(headerCells) {
+  const keys = (Array.isArray(headerCells) ? headerCells : [])
+    .map(normalizeReadinessSummaryHeaderKey)
+    .filter(Boolean);
+  if (!keys.length) return false;
+  const set = new Set(keys);
+
+  if (!set.has('prospect_id') || !set.has('company_name')) return false;
+
+  // Full fillable verification tables are owned by fillable ingest — not this
+  // compact readiness summary shape.
+  if (
+    set.has('website_value') ||
+    set.has('mailing_address_value') ||
+    set.has('phone_value') ||
+    set.has('operator_next_action')
+  ) {
+    return false;
+  }
+
+  const hasReadinessTrio =
+    set.has('mail_readiness') &&
+    set.has('draft_readiness') &&
+    set.has('execution_readiness');
+  const hasVerificationSummary = set.has('verification_summary');
+
+  if (hasVerificationSummary && (hasReadinessTrio || set.has('contact_name'))) {
+    return true;
+  }
+  if (hasReadinessTrio && set.has('contact_name')) return true;
+
+  const hits = READINESS_SUMMARY_TABLE_DETECT_HEADERS.filter((h) =>
+    set.has(h)
+  ).length;
+  return hits >= 5 && hasReadinessTrio;
+}
+
+/**
+ * Normalize a readiness summary row: map verification_summary → gates.
+ * @param {object} row
+ * @returns {object}
+ */
+function normalizeReadinessSummaryRow(row) {
+  const base = row && typeof row === 'object' ? { ...row } : {};
+  const verificationSummary = String(
+    base.verification_summary || base.gate_summary || ''
+  ).trim();
+
+  if (verificationSummary) {
+    const gates = parseKnownStateGateSummary(verificationSummary);
+    base.gate_summary = verificationSummary;
+    base.verification_summary = verificationSummary;
+    if (!base.website_status || /^unknown$/i.test(String(base.website_status))) {
+      base.website_status = gates.website_status;
+    }
+    if (
+      !base.mailing_address_status ||
+      /^unknown$/i.test(String(base.mailing_address_status))
+    ) {
+      base.mailing_address_status = gates.mailing_address_status;
+    }
+    if (!base.phone_status || /^unknown$/i.test(String(base.phone_status))) {
+      base.phone_status = gates.phone_status;
+    }
+    if (
+      !base.contact_role_status ||
+      /^unknown$/i.test(String(base.contact_role_status))
+    ) {
+      base.contact_role_status = gates.contact_role_status;
+    }
+  }
+
+  base.mail_readiness = String(base.mail_readiness || 'blocked')
+    .trim()
+    .toLowerCase() || 'blocked';
+  base.draft_readiness = String(base.draft_readiness || 'allowed')
+    .trim()
+    .toLowerCase() || 'allowed';
+  // Preparation-only: never authorize execution from a readiness paste.
+  base.execution_readiness = 'blocked';
+  if (!base.operator_next_action) {
+    base.operator_next_action = deriveOperatorNextActionFromGates(base);
+  }
+  return base;
+}
+
+/**
+ * Extract a compact readiness summary markdown table from operator text.
+ * @param {string} text
+ * @returns {{ headers: string[], rows: object[], startLine: number, endLine: number }|null}
+ */
+function parseReadinessSummaryTableFromMessage(text) {
+  const raw = String(text || '').replace(/^\uFEFF/, '');
+  if (!raw.trim()) return null;
+  const lines = raw.split(/\r?\n/);
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const headerCells = splitMarkdownTableCells(lines[i]);
+    if (!isReadinessSummaryTableHeader(headerCells)) continue;
+
+    const headers = headerCells.map(normalizeReadinessSummaryHeaderKey);
+    let rowStart = i + 1;
+    if (
+      rowStart < lines.length &&
+      isMarkdownTableSeparatorRow(splitMarkdownTableCells(lines[rowStart]))
+    ) {
+      rowStart += 1;
+    }
+
+    /** @type {object[]} */
+    const rows = [];
+    let end = i;
+    for (let j = rowStart; j < lines.length; j += 1) {
+      const line = String(lines[j] || '');
+      if (!line.trim()) break;
+      if (!line.includes('|')) break;
+      const cells = splitMarkdownTableCells(line);
+      if (!cells.length || isMarkdownTableSeparatorRow(cells)) continue;
+      if (isReadinessSummaryTableHeader(cells) && rows.length > 0) break;
+
+      /** @type {Record<string, string>} */
+      const row = {};
+      headers.forEach((header, idx) => {
+        if (!header) return;
+        row[header] = cells[idx] != null ? String(cells[idx]) : '';
+      });
+      if (
+        !String(row.prospect_id || '').trim() &&
+        !String(row.company_name || '').trim()
+      ) {
+        continue;
+      }
+      rows.push(normalizeReadinessSummaryRow(row));
+      end = j;
+    }
+
+    if (rows.length === 0) continue;
+    return { headers, rows, startLine: i, endLine: end };
+  }
+
+  return null;
+}
+
+/**
+ * True when the message embeds a compact readiness summary markdown table.
+ * @param {string} text
+ */
+function looksLikeReadinessSummaryTablePaste(text) {
+  const parsed = parseReadinessSummaryTableFromMessage(text);
+  return Boolean(parsed && Array.isArray(parsed.rows) && parsed.rows.length > 0);
+}
+
+/**
+ * Ingest a pasted readiness summary table into session activeWorkContext.
+ * Skips when a full fillable verification table is present (caller ingests that
+ * first). Does not invent values. Does not create a mission or imply execution.
+ * @param {{ question: string, session: object|null }} input
+ * @returns {object|null}
+ */
+function ingestPastedReadinessSummaryTable(input = {}) {
+  const question = String(input.question || '');
+  const session = input.session || null;
+  if (!session || !question.trim()) return null;
+
+  // Full fillable verification tables are owned by fillable ingest.
+  if (looksLikeFillableVerificationTablePaste(question)) return null;
+
+  const parsed = parseReadinessSummaryTableFromMessage(question);
+  if (!parsed || !parsed.rows.length) return null;
+
+  const prior = getActiveWorkContext(session);
+  const tableRows = parsed.rows.map((row) => ({ ...row }));
+  const entities = entitiesFromFillableTableRows(
+    tableRows,
+    prior && Array.isArray(prior.entities) ? prior.entities : []
+  );
+  const prospects = entitiesToProspects(entities);
+  const campaignId =
+    extractCampaignIdFromText(question) ||
+    (prior && prior.target && prior.target.campaignId) ||
+    '001';
+  const workflow = resolveCanaryDeskWorkflow(question, prior);
+
+  return setActiveWorkContext(
+    session,
+    buildCanaryActiveWorkContext({
+      prospects,
+      campaignId,
+      workflow,
+      prior,
+      tableRows,
+      lastOutputType: LAST_OUTPUT_TYPES.FILLABLE_TABLE,
+      lastOutputKind: 'canary_readiness_table',
+      nextAction:
+        (prior && prior.nextAction) ||
+        'await_operator_canary_summary_or_verification',
+    })
+  );
+}
+
+/**
  * Build desk entities from pasted fillable table rows (facts only).
  * Preserves industry/vertical from prior desk entities when the table omits them.
  * @param {object[]} rows
@@ -2055,7 +2346,7 @@ function ingestPastedFillableVerificationTable(input = {}) {
   if (!parsed || !parsed.rows.length) return null;
 
   const prior = getActiveWorkContext(session);
-  const tableRows = parsed.rows.map((row) => ({ ...row }));
+  const tableRows = parsed.rows.map((row) => normalizeReadinessSummaryRow(row));
 
   const entities = entitiesFromFillableTableRows(
     tableRows,
@@ -2158,5 +2449,9 @@ module.exports = {
   extractInlineKnownFactsSection,
   isInlineKnownFactsSectionStopLine,
   parseKnownCurrentStateBullets,
+  looksLikeReadinessSummaryTablePaste,
+  parseReadinessSummaryTableFromMessage,
+  normalizeReadinessSummaryRow,
   ingestPastedFillableVerificationTable,
+  ingestPastedReadinessSummaryTable,
 };

@@ -99,6 +99,9 @@ function buildResponseMetadata(partial = {}) {
   if (partial.knownCurrentState === true) {
     meta.knownCurrentState = true;
   }
+  if (partial.readinessSummaryTable === true) {
+    meta.readinessSummaryTable = true;
+  }
   if (partial.inlineKnownFacts === true) {
     meta.inlineKnownFacts = true;
   }

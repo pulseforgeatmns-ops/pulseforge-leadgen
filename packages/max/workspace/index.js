@@ -106,6 +106,12 @@ module.exports = {
   parseFillableVerificationTableFromMessage:
     ActiveWorkContext.parseFillableVerificationTableFromMessage,
   parseKnownCurrentStateBullets: ActiveWorkContext.parseKnownCurrentStateBullets,
+  looksLikeReadinessSummaryTablePaste:
+    ActiveWorkContext.looksLikeReadinessSummaryTablePaste,
+  parseReadinessSummaryTableFromMessage:
+    ActiveWorkContext.parseReadinessSummaryTableFromMessage,
   ingestPastedFillableVerificationTable:
     ActiveWorkContext.ingestPastedFillableVerificationTable,
+  ingestPastedReadinessSummaryTable:
+    ActiveWorkContext.ingestPastedReadinessSummaryTable,
 };
