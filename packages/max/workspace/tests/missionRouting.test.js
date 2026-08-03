@@ -3770,10 +3770,46 @@ describe('Active work context continuation before domain routing', () => {
     assert.equal(result.mission, null);
     assert.equal(afterMissions.length, beforeMissions.length);
     assert.equal(meta.packetReview, true);
+    assert.equal(meta.packetContentReview, true);
     assert.equal(meta.focusedWorkOrder, undefined);
     assert.equal(meta.canarySummary, undefined);
     assert.equal(meta.executionReadiness, 'blocked');
-    assert.match(answer, /Preparation-only packet review — Campaign 001 \/ PM-001/i);
+    assert.match(
+      answer,
+      /Preparation-only packet-content review — Campaign 001 \/ PM-001/i
+    );
+    assert.match(answer, /Work order:\s*packet-content review/i);
+    assert.match(answer, /Packet-content approval checklist:/i);
+    assert.match(answer, /letter draft reviewed/i);
+    assert.match(answer, /handwritten note reviewed/i);
+    assert.match(answer, /scorecard cover reviewed/i);
+    assert.match(answer, /customer-facing copy contains no unsupported claims/i);
+    assert.match(answer, /known-facts caveats accepted/i);
+    assert.match(answer, /packet contents checklist complete/i);
+    assert.match(answer, /review decision recorded/i);
+    assert.match(answer, /launch\/mail approval still pending/i);
+    assert.match(answer, /Future mail approval gate:/i);
+    assert.match(
+      answer,
+      /Packet-content approval is not mail approval/i
+    );
+    assert.match(answer, /PulseForge packet-review tracking fields:/i);
+    assert.match(answer, /packet_review_status:\s*in_review/i);
+    assert.match(answer, /packet_reviewed_by:\s*\(operator\)/i);
+    assert.match(answer, /packet_reviewed_at:\s*\(set when reviewed\)/i);
+    assert.match(answer, /packet_content_decision:\s*\(pending\)/i);
+    assert.match(answer, /approved_for_print:\s*false/i);
+    assert.match(answer, /launch_approval_status:\s*pending/i);
+    assert.match(answer, /execution_readiness:\s*blocked/i);
+    assert.match(answer, /mail_readiness_at_review:\s*ready_for_review/i);
+    assert.match(
+      answer,
+      /Confirm verified website \/ mailing address \/ phone \/ contact role values are present in the source system and packet metadata/i
+    );
+    assert.match(answer, /do not re-verify those gates from scratch/i);
+    assert.doesNotMatch(answer, /Pre-mail verification plan/i);
+    assert.doesNotMatch(answer, /Verify (?:mailing address|website|phone).*from scratch/i);
+    assert.doesNotMatch(answer, /tracking fields to log after mailing/i);
     assert.doesNotMatch(answer, /readiness table did not come through/i);
     assert.doesNotMatch(answer, /Recommended next work order:/i);
     assert.doesNotMatch(answer, /I can choose the next preparation-only work order/i);

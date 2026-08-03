@@ -69,6 +69,7 @@ const {
   shouldEmitCanaryReadinessDiagnostics,
   parseInlinePacketReviewKnownFacts,
   parseKnownCurrentStateBullets,
+  isProceedWithPacketContentReviewRequest,
   entitiesFromFillableTableRows,
   CAMPAIGN_001_PREPARATION_ONLY_CANARY,
   LAST_OUTPUT_TYPES,
@@ -2249,6 +2250,84 @@ function formatPacketReviewConfirmField(label, status, verifiedValue, rawValue) 
 }
 
 /**
+ * True when the operator / row names this turn as packet-content review.
+ * @param {object} row
+ * @param {string} question
+ * @returns {boolean}
+ */
+function isPacketContentReviewWorkOrder(row, question) {
+  const workOrder = String((row && row.work_order) || '').toLowerCase();
+  if (/\bpacket[-\s]*content\s+review\b/.test(workOrder)) return true;
+  if (isProceedWithPacketContentReviewRequest(question)) return true;
+  const q = String(question || '').toLowerCase();
+  if (/\bpacket[-\s]*content\s+review\b/.test(q) && /\bPM-\d{3}\b/i.test(question)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * True when verification_summary / gate statuses say core gates are verified.
+ * @param {object} row
+ * @returns {boolean}
+ */
+function packetReviewGatesLookVerified(row) {
+  const summary = String(
+    (row && (row.verification_summary || row.gate_summary)) || ''
+  ).toLowerCase();
+  if (
+    /\bwebsite\b/.test(summary) &&
+    /\b(?:address|mailing)\b/.test(summary) &&
+    /\bphone\b/.test(summary) &&
+    /\bcontact\s+role\b/.test(summary) &&
+    /\bverified\b/.test(summary) &&
+    !/\bneeds?\s+verification\b/.test(summary) &&
+    !/\bunknown\s+or\s+blocked\b/.test(summary)
+  ) {
+    return true;
+  }
+  const website = String((row && row.website_status) || '').trim();
+  const mailing = String((row && row.mailing_address_status) || '').trim();
+  const phone = String((row && row.phone_status) || '').trim();
+  const contactRole = String((row && row.contact_role_status) || '').trim();
+  return (
+    /^verified$/i.test(website) &&
+    /^verified$/i.test(mailing) &&
+    /^verified$/i.test(phone) &&
+    /^verified$/i.test(contactRole)
+  );
+}
+
+/**
+ * Packet-content approval checklist for ready_for_review reviews.
+ * @returns {string[]}
+ */
+function buildPacketContentApprovalChecklistLines() {
+  return [
+    'Packet-content approval checklist:',
+    '- letter draft reviewed',
+    '- handwritten note reviewed',
+    '- scorecard cover reviewed',
+    '- customer-facing copy contains no unsupported claims',
+    '- known-facts caveats accepted',
+    '- packet contents checklist complete',
+    '- review decision recorded',
+    '- launch/mail approval still pending',
+  ];
+}
+
+/**
+ * Future launch/mail gate — packet-content approval is not mail approval.
+ * @returns {string[]}
+ */
+function buildFutureMailApprovalGateLines() {
+  return [
+    'Future mail approval gate:',
+    'No outbound action can happen until the operator explicitly approves launch/mail in a future step. Packet-content approval is not mail approval. Execution readiness remains blocked.',
+  ];
+}
+
+/**
  * Packet review artifact from a single desk table row — known facts only.
  * ready_for_review means packet can be reviewed, not mailed.
  * @param {{ row: object, entity?: object|null, question?: string, campaignId?: string, source?: string }} input
@@ -2258,6 +2337,7 @@ function buildPacketReviewArtifactResponse(input = {}) {
   const entity = input.entity && typeof input.entity === 'object' ? input.entity : {};
   const campaignId = String(input.campaignId || '001');
   const fromInlineFacts = input.source === 'inline_known_facts';
+  const question = String(input.question || '');
   const prospectId = String(row.prospect_id || entity.id || 'unknown').trim();
   const company =
     blankTableValue(row.company_name) || blankToNull(entity.companyName) || null;
@@ -2286,6 +2366,13 @@ function buildPacketReviewArtifactResponse(input = {}) {
   const operatorNext = String(row.operator_next_action || '').trim();
 
   const mailReadyForReview = /^ready(?:_for_review)?$/i.test(mailReadiness);
+  const packetContentWorkOrder = isPacketContentReviewWorkOrder(row, question);
+  const gatesVerified = packetReviewGatesLookVerified(row);
+  // Explicit packet-content review work order + ready_for_review centers the
+  // artifact on content approval (not verification / post-mail tracking).
+  const packetContentReviewMode =
+    mailReadyForReview && packetContentWorkOrder;
+
   const personalizationGaps = [];
   if (!company) personalizationGaps.push('company name');
   if (!contact) personalizationGaps.push('contact name');
@@ -2338,7 +2425,10 @@ function buildPacketReviewArtifactResponse(input = {}) {
         row,
       });
 
-  const needsPreMailVerification = !mailReadyForReview || !mailing || !phone;
+  // ready_for_review means verification is complete enough for packet review —
+  // do not reopen a pre-mail verification plan solely because raw values are
+  // absent from this turn's known facts.
+  const needsPreMailVerification = !mailReadyForReview;
   const draftLabel = draftsHeld
     ? 'held'
     : mailReadyForReview
@@ -2376,57 +2466,117 @@ function buildPacketReviewArtifactResponse(input = {}) {
     .filter(Boolean)
     .join('; ');
 
-  const question = String(input.question || '');
   const suppressScaffolding = wantsPacketReviewArtifactSuppression(question);
   const debugOutput =
     !suppressScaffolding && wantsPacketReviewDebugOutput(question);
 
-  const printMailChecklist = mailReadyForReview
+  const printMailChecklist = packetContentReviewMode
     ? [
-        'Print / sign / mail checklist:',
-        '- Confirm fields below against a trusted source',
-        '- Print packet only after operator sign-off',
-        '- Sign letter / note only after operator review',
-        '- Mail only after explicit future launch approval (not this turn)',
-        '',
-        'Fields to confirm before printing:',
+        'Confirm before any future print step:',
+        gatesVerified
+          ? 'Gates are already verified. Confirm verified website / mailing address / phone / contact role values are present in the source system and packet metadata before any future print step — do not re-verify those gates from scratch unless a value is missing or disputed.'
+          : 'Confirm fields below against a trusted source before any future print step.',
         confirmBeforePrinting,
+        '- Print / sign / mail only after a separate explicit launch/mail approval (not this turn).',
+      ]
+    : mailReadyForReview
+      ? [
+          'Print / sign / mail checklist:',
+          '- Confirm fields below against a trusted source',
+          '- Print packet only after operator sign-off',
+          '- Sign letter / note only after operator review',
+          '- Mail only after explicit future launch approval (not this turn)',
+          '',
+          'Fields to confirm before printing:',
+          confirmBeforePrinting,
+        ]
+      : [
+          'Print / sign / mail checklist: not available until verification is complete.',
+          'Future print / sign / mail checklist (after verification):',
+          '- Confirm fields below against a trusted source',
+          '- Print packet only after operator sign-off',
+          '- Sign letter / note only after operator review',
+          '- Mail only after explicit future launch approval (not this turn)',
+          '',
+          'Fields that must be verified before any future print/mail step:',
+          confirmBeforePrinting,
+        ];
+
+  const operatorActionSection = packetContentReviewMode
+    ? [
+        ...buildPacketContentApprovalChecklistLines(),
+        '',
+        ...buildFutureMailApprovalGateLines(),
+      ]
+    : needsPreMailVerification
+      ? [
+          'Pre-mail verification plan (operator only):',
+          drafts.preMailVerificationPlan ||
+            buildPreMailVerificationPlan({
+              contactName: contact,
+              mailing,
+              website,
+              phone,
+              mailingStatus,
+              websiteStatus,
+              phoneStatus,
+              contactRoleStatus,
+              industry,
+            }),
+        ]
+      : [
+          'First follow-up call notes (operator only):',
+          drafts.followUpNotes,
+        ];
+
+  const trackingFieldsSection = packetContentReviewMode
+    ? [
+        'PulseForge packet-review tracking fields:',
+        `- prospect_id: ${prospectId}`,
+        `- company: ${company || 'unknown'}`,
+        `- contact: ${contact || 'unknown'}`,
+        '- packet_review_status: in_review',
+        '- packet_reviewed_by: (operator)',
+        '- packet_reviewed_at: (set when reviewed)',
+        '- packet_content_decision: (pending)',
+        '- approved_for_print: false',
+        '- launch_approval_status: pending',
+        `- execution_readiness: ${executionReadiness}`,
+        `- mail_readiness_at_review: ${mailReadiness}`,
       ]
     : [
-        'Print / sign / mail checklist: not available until verification is complete.',
-        'Future print / sign / mail checklist (after verification):',
-        '- Confirm fields below against a trusted source',
-        '- Print packet only after operator sign-off',
-        '- Sign letter / note only after operator review',
-        '- Mail only after explicit future launch approval (not this turn)',
-        '',
-        'Fields that must be verified before any future print/mail step:',
-        confirmBeforePrinting,
+        mailReadyForReview
+          ? 'PulseForge tracking fields to log after mailing:'
+          : 'PulseForge tracking fields (current state + future mail log):',
+        `- prospect_id: ${prospectId}`,
+        `- company: ${company || 'unknown'}`,
+        `- contact: ${contact || 'unknown'}`,
+        `- industry: ${industry || 'not provided'}`,
+        `- current_mail_readiness: ${mailReadiness}`,
+        `- mail_date: (set when mailed)`,
+        '- packet_contents: letter / handwritten note / scorecard / business card',
+        '- mail_readiness_at_send: (set when mailed)',
+        needsPreMailVerification
+          ? '- first_follow_up_call_outcome: (set after call — only after a verified phone exists and packet is mailed)'
+          : '- first_follow_up_call_outcome: (set after call)',
       ];
 
-  const operatorActionSection = needsPreMailVerification
+  const finalDecisionSection = packetContentReviewMode
     ? [
-        'Pre-mail verification plan (operator only):',
-        drafts.preMailVerificationPlan ||
-          buildPreMailVerificationPlan({
-            contactName: contact,
-            mailing,
-            website,
-            phone,
-            mailingStatus,
-            websiteStatus,
-            phoneStatus,
-            contactRoleStatus,
-            industry,
-          }),
+        '--- Final operator decision required ---',
+        'Complete packet-content review only. Packet-content approval is not mail approval. Explicit future launch/mail approval is still required before any print or mail. I will not print, mail, launch, or execute from this checklist.',
       ]
     : [
-        'First follow-up call notes (operator only):',
-        drafts.followUpNotes,
+        '--- Final operator decision required ---',
+        mailReadyForReview
+          ? 'Packet is ready_for_review only. Explicitly approve a future launch/mail step after readiness remains complete — I will not print, mail, launch, or execute from this checklist.'
+          : 'Mail readiness is blocked. Complete pre-mail verification first; then request an explicit launch/mail approval. I will not print, mail, launch, or execute from this checklist.',
       ];
 
   const answer = [
-    `Preparation-only packet review — Campaign ${campaignId} / ${prospectId}`,
+    packetContentReviewMode
+      ? `Preparation-only packet-content review — Campaign ${campaignId} / ${prospectId}`
+      : `Preparation-only packet review — Campaign ${campaignId} / ${prospectId}`,
     '',
     `Company: ${company || 'unknown'}`,
     `Contact: ${contact || 'unknown'}`,
@@ -2443,6 +2593,7 @@ function buildPacketReviewArtifactResponse(input = {}) {
     `Draft confidence: ${draftConfidence}`,
     notes ? `Notes (from table): ${notes}` : null,
     operatorNext ? `Operator next action (from table): ${operatorNext}` : null,
+    packetContentWorkOrder ? 'Work order: packet-content review' : null,
     '',
     whyBlockedForMailing.length
       ? ['Why blocked for mailing:', ...whyBlockedForMailing, ''].join('\n')
@@ -2488,25 +2639,9 @@ function buildPacketReviewArtifactResponse(input = {}) {
     '',
     ...operatorActionSection,
     '',
-    mailReadyForReview
-      ? 'PulseForge tracking fields to log after mailing:'
-      : 'PulseForge tracking fields (current state + future mail log):',
-    `- prospect_id: ${prospectId}`,
-    `- company: ${company || 'unknown'}`,
-    `- contact: ${contact || 'unknown'}`,
-    `- industry: ${industry || 'not provided'}`,
-    `- current_mail_readiness: ${mailReadiness}`,
-    `- mail_date: (set when mailed)`,
-    '- packet_contents: letter / handwritten note / scorecard / business card',
-    '- mail_readiness_at_send: (set when mailed)',
-    needsPreMailVerification
-      ? '- first_follow_up_call_outcome: (set after call — only after a verified phone exists and packet is mailed)'
-      : '- first_follow_up_call_outcome: (set after call)',
+    ...trackingFieldsSection,
     '',
-    '--- Final operator decision required ---',
-    mailReadyForReview
-      ? 'Packet is ready_for_review only. Explicitly approve a future launch/mail step after readiness remains complete — I will not print, mail, launch, or execute from this checklist.'
-      : 'Mail readiness is blocked. Complete pre-mail verification first; then request an explicit launch/mail approval. I will not print, mail, launch, or execute from this checklist.',
+    ...finalDecisionSection,
     '',
     'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
   ]
@@ -2520,7 +2655,9 @@ function buildPacketReviewArtifactResponse(input = {}) {
     fromInlineFacts
       ? `Selected prospect_id ${prospectId} from operator-supplied known facts for Campaign ${campaignId}.`
       : `Selected prospect_id ${prospectId} from the current Campaign ${campaignId} canary table.`,
-    'ready_for_review means packet review is allowed; execution_readiness stays blocked absent explicit launch.',
+    packetContentReviewMode
+      ? 'Packet-content review mode: approval checklist + future mail gate; verification not reopened.'
+      : 'ready_for_review means packet review is allowed; execution_readiness stays blocked absent explicit launch.',
     canDraft
       ? 'Provisional drafts generated from known company/contact facts; missing industry does not block drafting.'
       : 'Drafts held because company_name and contact_name are both required.',
@@ -2564,7 +2701,9 @@ function buildPacketReviewArtifactResponse(input = {}) {
       : [],
     recommendedActions: debugOutput
       ? [
-          'Review the provisional packet drafts, confirm print fields, then explicitly request any later launch/mail approval.',
+          packetContentReviewMode
+            ? 'Complete the packet-content approval checklist, then explicitly request any later launch/mail approval.'
+            : 'Review the provisional packet drafts, confirm print fields, then explicitly request any later launch/mail approval.',
         ]
       : [],
     metadata: {
@@ -2580,6 +2719,7 @@ function buildPacketReviewArtifactResponse(input = {}) {
       route: 'intelligence',
       canaryPreparationOnly: true,
       packetReview: true,
+      packetContentReview: packetContentReviewMode || undefined,
       fillableTable: !fromInlineFacts,
       inlineKnownFacts: fromInlineFacts || undefined,
       provisionalDrafts: draftsProvisional || draftsHeld || undefined,
@@ -2601,6 +2741,7 @@ function buildPacketReviewArtifactResponse(input = {}) {
         outputKind: 'packet_review_artifact',
         preparationOnly: true,
         packetReview: true,
+        packetContentReview: packetContentReviewMode || undefined,
         prospectId,
         campaignId,
         mailReadiness,
