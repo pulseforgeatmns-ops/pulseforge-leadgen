@@ -1,97 +1,168 @@
 # Pulseforge
 
-**AI-powered business intelligence and multi-agent outreach for local service companies.**
+**A modular AI platform for workflow automation, operational intelligence, and human-governed decision support.**
 
-Pulseforge scrapes and scores leads, runs multi-channel outreach through a roster of named AI agents, and surfaces pipeline truth through authenticated operator dashboards. It is evolving from a lead-gen CRM into a conversation-first operating system grounded in a business knowledge graph and an explainable reasoning engine (Max).
+Pulseforge is an applied AI systems project built to reduce operational burden in real service businesses. It combines specialized agents, CRM automation, knowledge management, reporting, operator dashboards, policy gates, and evidence-based reasoning into one production-oriented platform.
+
+This repository is intentionally public as an engineering portfolio: it shows the architecture, implementation history, specifications, tests, and decision records behind the platform.
 
 | | |
 |---|---|
-| **Version** | v0.9.2 |
-| **Current milestone** | Command Deck UI on `/command-deck` (SPEC-008) |
-| **Current spec** | [SPEC-008](docs/specs/SPEC-008_Command_Deck_UI.md) (Implemented) · [SPEC-006](docs/specs/SPEC-006_Command_Deck.md) remaining |
-| **Last shipped** | SPEC-008 UI + [SPEC-007](docs/specs/SPEC-007_Command_Deck_Composition_Engine.md) Composition Engine |
-| **Next** | Ask Max workspace / explainability pages; parallel shadow CRM → GraphSyncEngine |
-| **Deploy** | Railway · `node server.js` |
+| **Current version** | v0.9.2 |
+| **Runtime** | Node.js / Express / PostgreSQL |
+| **Primary architecture** | Multi-agent workflows + knowledge graph + deterministic reasoning + human approval |
+| **Deployment target** | Railway (`node server.js`) |
+| **Executive portfolio** | [portfolio.jacobmaynard.co](https://portfolio.jacobmaynard.co) |
+| **LinkedIn** | [linkedin.com/in/jacob-maynard7](https://www.linkedin.com/in/jacob-maynard7/) |
 
 ---
 
-## Start here (15 minutes)
+## What This Project Demonstrates
 
-1. **[docs/00_START_HERE.md](docs/00_START_HERE.md)** — navigation map
-2. **[CURRENT_STATE.md](CURRENT_STATE.md)** — what is true *right now*
-3. **[docs/vision/Mission.md](docs/vision/Mission.md)** — why Pulseforge exists
-4. **[PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)** — required reading for AI contributors
-5. **[docs/architecture/System_Architecture.md](docs/architecture/System_Architecture.md)** — how the system is shaped
+Pulseforge is not a single chatbot or prompt wrapper. It is a modular platform organized around explicit service boundaries and governed execution.
 
-Product philosophy lives under `docs/vision/`. Engineering truth lives under `docs/architecture/`, `docs/specs/`, and `docs/adr/`. Operational runbooks remain under `docs/` (legacy flat files) until migrated.
+Core capabilities include:
 
----
+- **Prospect intelligence** - discovery, enrichment, scoring, and prioritization.
+- **CRM automation** - lifecycle state, setter/closer workflows, and client-scoped pipeline views.
+- **Workflow orchestration** - named agents, cron/API triggers, routing, and operational runbooks.
+- **Knowledge management** - graph-backed memory, claims, evidence, query, timeline, and explainability surfaces.
+- **Reasoning and recommendations** - Max reasoning, policy checks, command deck composition, and outcome review.
+- **Human-in-the-loop controls** - approval gates before customer-visible actions.
+- **Reporting and observability** - dashboards, agent logs, production readiness checks, and release evidence.
 
-## What this repository is
-
-| Layer | Role |
-|---|---|
-| `server.js` + `routes/` | Authenticated Express app, cron, webhooks |
-| `*Agent.js` | Named agents (Max, Emmett, Scout/`leadgen.js`, Riley, …) |
-| `services/` + `utils/` | Domain services and shared helpers |
-| `migrations/` | Tracked PostgreSQL schema |
-| `docs/` | Source of truth for vision, architecture, specs, ADRs, releases |
-
-Legacy architecture notes also live in `CLAUDE.md` and `AGENTS.md`. Prefer the new hierarchy for product and planning decisions; keep those files for operational agent detail until they are folded in.
+The project has been validated against real operating constraints through Anchor Cleaning and other local-service workflows.
 
 ---
 
-## Quick start (local)
+## Architecture at a Glance
 
-```bash
-cp .env.example .env   # if present; otherwise set DATABASE_URL and secrets locally
-npm install
-npm test
-npm start              # node server.js
+```text
+Operator / Dashboard
+        |
+        v
+Express App + Auth + Routes
+        |
+        v
+Agent & Workflow Layer
+        |
+        +--> Prospect Intelligence
+        +--> CRM Automation
+        +--> Communications
+        +--> Reporting
+        +--> Max Reasoning
+        |
+        v
+Knowledge + Evidence Layer
+        |
+        v
+Policy / Approval / Execution Boundaries
+        |
+        v
+External Systems
+Brevo · Twilio · Bland · Google · Prospeo · Hunter · Stripe
 ```
 
-Staging/production require `DATABASE_URL` and a non-empty `CRON_SECRET`. Migrations are explicit:
+The important architectural constraint: language models are used inside governed workflows. They do not silently execute customer-visible actions, overwrite business truth, or bypass approval policy.
+
+---
+
+## Recommended Review Path
+
+If you are evaluating this repository for an AI engineering, solutions architecture, or forward-deployed engineering role, start here:
+
+| Time | Read | Why |
+|---:|---|---|
+| 2 min | [docs/RECRUITER_GUIDE.md](docs/RECRUITER_GUIDE.md) | Fast map of the portfolio-relevant parts of the repo |
+| 5 min | [docs/00_START_HERE.md](docs/00_START_HERE.md) | Contributor orientation and documentation hierarchy |
+| 5 min | [docs/vision/Product_Thesis.md](docs/vision/Product_Thesis.md) | Product thesis and operating philosophy |
+| 10 min | [docs/architecture/System_Architecture.md](docs/architecture/System_Architecture.md) | Runtime topology, route ownership, and control planes |
+| 10 min | [packages/max/README.md](packages/max/README.md) | Reasoning, policy, briefing, command deck, memory, and outcome intelligence |
+| 10 min | [packages/knowledge/README.md](packages/knowledge/README.md) | Knowledge graph, evidence, claims, query engine, and storage abstraction |
+| 10 min | [docs/adr/README.md](docs/adr/README.md) | Architecture decisions and design rationale |
+
+---
+
+## Repository Map
+
+| Path | Purpose |
+|---|---|
+| `server.js`, `routes/` | Express application, authenticated pages, API routes, cron endpoints, webhooks |
+| `*Agent.js` | Named operational agents including Scout, Emmett, Riley, Max, Paige, Vera, and routing agents |
+| `packages/max/` | Reasoning engine, policy engine, command deck, live loop, operator intelligence, outcome intelligence |
+| `packages/knowledge/` | Storage-agnostic knowledge graph, event bus, evidence, claims, query, sync, Postgres repository |
+| `packages/mission-engine/` | Mission planning, artifact resolution, execution routing, intent understanding |
+| `packages/capabilities/` | Capability framework for discovery, ranking, sales intelligence, business intelligence, playbooks, inbox |
+| `packages/reasoning-runtime/` | Domain-neutral runtime for reasoning providers and strategy packs |
+| `packages/eql/` | Evidence Query Language parser, planner, executor, and tests |
+| `public/` | Operator dashboards, command deck UI, scorecard, shared browser assets |
+| `docs/vision/` | Mission, product thesis, constitution, roadmap, intelligence architecture |
+| `docs/architecture/` | System, agent, data, memory, knowledge graph, security, deployment |
+| `docs/specs/` | Numbered implementation specs and acceptance criteria |
+| `docs/adr/` | Architecture Decision Records |
+| `migrations/` | PostgreSQL schema evolution |
+| `test/`, `packages/**/tests/` | Node test suites and package-level validation |
+
+---
+
+## Design Principles
+
+- **Deterministic before autonomous** - use explicit state and workflow contracts where business risk is high.
+- **Evidence before recommendation** - recommendations must be explainable from stored business signals.
+- **Human approval before execution** - customer-visible actions require review unless explicitly permitted.
+- **Tenant isolation by default** - business state is scoped and guarded by `client_id`.
+- **Observability over opacity** - agent work is logged, reviewed, and explainable.
+- **Architecture through specs and ADRs** - meaningful changes are captured in durable design records.
+
+---
+
+## Running Locally
+
+```bash
+npm install
+npm test
+npm start
+```
+
+Production and staging require environment-specific secrets such as `DATABASE_URL`, `CRON_SECRET`, and provider credentials. Migrations are explicit:
 
 ```bash
 npm run db:migrate:status
 npm run db:migrate
 ```
 
-See [docs/architecture/Deployment.md](docs/architecture/Deployment.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+See [docs/architecture/Deployment.md](docs/architecture/Deployment.md) for deployment notes.
 
 ---
 
-## Documentation map
+## Test Surfaces
 
-| Path | Purpose |
-|---|---|
-| [CURRENT_STATE.md](CURRENT_STATE.md) | Project heartbeat — version, sprint, blockers |
-| [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md) | AI contributor onboarding |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Spec workflow, PR rules, review process |
-| [DECISIONS.md](DECISIONS.md) | Index of architectural decisions |
-| [CHANGELOG.md](CHANGELOG.md) | Human-readable release history |
-| [docs/vision/](docs/vision/) | Mission, thesis, constitution, roadmap |
-| [docs/architecture/](docs/architecture/) | System, data, agents, memory, KG, security, deploy |
-| [docs/specs/](docs/specs/) | Implementation specs (SPEC-NNN) |
-| [docs/adr/](docs/adr/) | Architecture Decision Records |
-| [docs/releases/](docs/releases/) | Release plans v0.7 → v1.0 |
+The repository includes focused test scripts for major subsystems:
+
+```bash
+npm test
+npm run test:knowledge
+npm run test:max
+npm run test:mission
+npm run test:capabilities
+npm run test:eql
+npm run test:replay
+```
+
+Some tests require local or disposable PostgreSQL configuration. The core documentation cleanup in this branch does not change runtime behavior.
 
 ---
 
-## Development rules (summary)
+## Status
 
-Every pull request must:
+Pulseforge remains an actively developed founder-led platform. Current sprint and production state live in [CURRENT_STATE.md](CURRENT_STATE.md). Release history lives in [CHANGELOG.md](CHANGELOG.md) and [docs/releases/](docs/releases/).
 
-1. Update `CURRENT_STATE.md` if project state changes.
-2. Update `CHANGELOG.md`.
-3. Create an ADR if architecture changes.
-4. Link back to the relevant spec.
-5. Preserve backwards compatibility unless explicitly approved.
+For a concise external summary, see the executive portfolio:
 
-Full rules: [CONTRIBUTING.md](CONTRIBUTING.md).
+[https://portfolio.jacobmaynard.co](https://portfolio.jacobmaynard.co)
 
 ---
 
 ## License
 
-ISC — see `package.json`.
+ISC - see [package.json](package.json).
