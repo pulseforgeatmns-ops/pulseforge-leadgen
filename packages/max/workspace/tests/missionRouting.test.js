@@ -3583,6 +3583,180 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(answer, /^Next:/m);
     assert.doesNotMatch(answer, /(?<!No )Mission created/i);
   });
+
+  it('UI-submitted compact readiness fixture parses canary summary (blank after separator)', async () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const {
+      isCanarySummaryJudgmentRequest,
+      isPacketReviewRequest,
+      looksLikeReadinessSummaryTablePaste,
+      parseReadinessSummaryTableFromMessage,
+      diagnoseCanaryReadinessTableIngestion,
+      hasCanaryReadinessTableCues,
+      isExplicitNewMissionRequest,
+    } = require('../ActiveWorkContext');
+
+    // Exact Command Deck UI-submitted shape: blank line after the markdown
+    // separator (common paste artifact). Do not use the idealized contiguous table.
+    const fixturePath = path.join(
+      __dirname,
+      'fixtures',
+      'ui-submitted-compact-readiness-canary-summary.txt'
+    );
+    const question = fs.readFileSync(fixturePath, 'utf8');
+
+    assert.match(question, /\|\s*prospect_id\s*\|/i);
+    assert.match(question, /verification_summary/i);
+    assert.match(
+      question,
+      /\|---\|[\s\S]*?\n\n\| PM-001/,
+      'fixture must keep the blank line after the separator (UI paste shape)'
+    );
+
+    const diagnostics = diagnoseCanaryReadinessTableIngestion(question);
+    assert.ok(diagnostics.latestUserMessageLength > 0);
+    assert.equal(diagnostics.containsPipeProspectId, true);
+    assert.equal(diagnostics.containsVerificationSummary, true);
+    assert.ok(diagnostics.markdownTableRowCount >= 5);
+    assert.equal(diagnostics.parsedCanarySummaryRowsCount, 3);
+    assert.equal(diagnostics.parseFailureReason, null);
+
+    assert.equal(isExplicitNewMissionRequest(question), false);
+    assert.equal(isCanarySummaryJudgmentRequest(question), true);
+    assert.equal(isPacketReviewRequest(question), false);
+    assert.equal(looksLikeReadinessSummaryTablePaste(question), true);
+    assert.equal(hasCanaryReadinessTableCues(question), true);
+
+    const parsed = parseReadinessSummaryTableFromMessage(question);
+    assert.ok(parsed);
+    assert.equal(parsed.rows.length, 3);
+    assert.equal(parsed.rows[0].prospect_id, 'PM-001');
+    assert.equal(parsed.rows[1].prospect_id, 'PM-002');
+    assert.equal(parsed.rows[2].prospect_id, 'PM-003');
+
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const meta = result.structured.metadata || {};
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(meta.canarySummary, true);
+    assert.equal(meta.missingActiveWorkContext, undefined);
+    assert.equal(meta.readinessTableNotIngested, undefined);
+    assert.equal(meta.packetReview, undefined);
+    assert.equal(meta.prospectCount, 3);
+    assert.equal(meta.prioritizedProspectId, 'PM-001');
+    assert.equal(meta.outputKind, 'canary_summary');
+
+    assert.doesNotMatch(
+      answer,
+      /don.?t have the current table or known state/i
+    );
+    assert.doesNotMatch(
+      answer,
+      /readiness table did not come through/i
+    );
+    assert.doesNotMatch(answer, /could not parse them cleanly/i);
+    assert.doesNotMatch(answer, /paste\s+(?:the\s+)?(?:3\s+)?prospects?/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /Preparation-only packet review —/i);
+    assert.doesNotMatch(answer, /--- Customer-facing drafts ---/i);
+
+    assert.match(answer, /preparation-only canary/i);
+    assert.match(answer, /Readiness table/i);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /PM-002/);
+    assert.match(answer, /PM-003/);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /ready_for_review/);
+    assert.match(answer, /No mission created/i);
+  });
+
+  it('summary intent with readiness cues but unparseable table asks for paste, not generic missing-state', async () => {
+    const {
+      isCanarySummaryJudgmentRequest,
+      diagnoseCanaryReadinessTableIngestion,
+      hasCanaryReadinessTableCues,
+    } = require('../ActiveWorkContext');
+
+    // Summary cues + readiness-table wording, but table body stripped the way
+    // a collapsed Expand preview / truncated paste would — no pipe rows.
+    const question = [
+      'Summarize the Campaign 001 preparation-only canary status',
+      'one-line overall status',
+      'readiness table for all 3 prospects',
+      'which prospect should be worked next',
+      'exact next operator action for each prospect',
+      'what is safe to draft now',
+      '…',
+    ].join('\n');
+
+    assert.equal(isCanarySummaryJudgmentRequest(question), true);
+    assert.equal(hasCanaryReadinessTableCues(question), true);
+
+    const diagnostics = diagnoseCanaryReadinessTableIngestion(question);
+    assert.equal(diagnostics.parsedCanarySummaryRowsCount, 0);
+    assert.equal(diagnostics.parseFailureReason, 'no_table_block_found');
+    assert.equal(diagnostics.containsPipeProspectId, false);
+
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const meta = result.structured.metadata || {};
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(meta.canarySummary, true);
+    assert.equal(meta.readinessTableNotIngested, true);
+    assert.equal(meta.packetReview, undefined);
+    assert.match(
+      answer,
+      /readiness table did not come through/i
+    );
+    assert.match(
+      answer,
+      /Paste either the compact readiness table or one state line per prospect/i
+    );
+    assert.doesNotMatch(
+      answer,
+      /don.?t have the current table or known state/i
+    );
+    assert.doesNotMatch(answer, /could not parse them cleanly/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /Preparation-only packet review —/i);
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {
