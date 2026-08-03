@@ -58,6 +58,7 @@ const {
   looksLikeFillableVerificationTablePaste,
   looksLikeReadinessSummaryTablePaste,
   parseReadinessSummaryTableFromMessage,
+  parseFillableVerificationTableFromMessage,
   normalizeReadinessSummaryRow,
   parseInlinePacketReviewKnownFacts,
   parseKnownCurrentStateBullets,
@@ -1212,17 +1213,17 @@ function handlePacketReviewContinuation(input) {
 
 /**
  * Resolve readiness rows for a canary summary / judgment request.
- * Order: activeWorkContext.tableRows → pasted readiness/fillable table →
- * known current-state bullets → null (caller clarifies).
+ * Order: latest-message compact readiness table → latest fillable paste →
+ * activeWorkContext.tableRows → known current-state bullets → null.
  * @param {{ question: string, prior: object|null }} input
- * @returns {{ rows: object[], source: string }|null}
+ * @returns {{ rows: object[], source: string, canarySummaryRows?: object[] }|null}
  */
 function resolveCanarySummaryJudgmentRows(input = {}) {
   const question = String(input.question || '');
   const prior = input.prior || null;
 
-  if (prior && activeContextHasFillableTable(prior)) {
-    const rows = (Array.isArray(prior.tableRows) ? prior.tableRows : [])
+  const toSummaryRows = (rows) =>
+    (Array.isArray(rows) ? rows : [])
       .filter(Boolean)
       .map((row) =>
         normalizeReadinessSummaryRow({
@@ -1230,35 +1231,53 @@ function resolveCanarySummaryJudgmentRows(input = {}) {
           execution_readiness: 'blocked',
         })
       );
-    if (rows.length > 0) {
-      return { rows, source: 'active_work_context' };
-    }
-  }
 
-  // Pasted compact readiness summary table (including alias headers).
+  // Latest-message compact readiness table owns canarySummaryRows — do not
+  // require fillable columns or treat this paste as a ProspectList.
   const readiness = parseReadinessSummaryTableFromMessage(question);
   if (readiness && Array.isArray(readiness.rows) && readiness.rows.length > 0) {
+    const rows = toSummaryRows(readiness.rows);
     return {
-      rows: readiness.rows.map((row) =>
-        normalizeReadinessSummaryRow({
-          ...row,
-          execution_readiness: 'blocked',
-        })
-      ),
+      rows,
       source: 'readiness_summary_table',
+      canarySummaryRows: rows,
     };
+  }
+
+  // Full fillable paste in the same turn can also feed summary rows.
+  const fillable = parseFillableVerificationTableFromMessage(question);
+  if (fillable && Array.isArray(fillable.rows) && fillable.rows.length > 0) {
+    const rows = toSummaryRows(fillable.rows);
+    return {
+      rows,
+      source: 'fillable_verification_table',
+      canarySummaryRows: rows,
+    };
+  }
+
+  if (prior && activeContextHasFillableTable(prior)) {
+    const rows = toSummaryRows(prior.tableRows);
+    if (rows.length > 0) {
+      return {
+        rows,
+        source: 'active_work_context',
+        canarySummaryRows: rows,
+      };
+    }
   }
 
   const known = parseKnownCurrentStateBullets(question);
   if (known && known.hasKnownState && known.rows.length > 0) {
+    const rows = known.rows.map((row) => ({
+      ...row,
+      execution_readiness: 'blocked',
+      operator_next_action:
+        row.operator_next_action || deriveOperatorNextActionFromGates(row),
+    }));
     return {
-      rows: known.rows.map((row) => ({
-        ...row,
-        execution_readiness: 'blocked',
-        operator_next_action:
-          row.operator_next_action || deriveOperatorNextActionFromGates(row),
-      })),
+      rows,
       source: 'known_current_state',
+      canarySummaryRows: rows,
     };
   }
 
@@ -1299,7 +1318,9 @@ function handleCanarySummaryJudgmentContinuation(input = {}) {
         ? 'active_work_context_canary_summary'
         : resolved.source === 'readiness_summary_table'
           ? 'readiness_summary_table_canary_summary'
-          : 'known_current_state_canary_summary',
+          : resolved.source === 'fillable_verification_table'
+            ? 'fillable_table_canary_summary'
+            : 'known_current_state_canary_summary',
     structured,
   };
 }
@@ -1397,7 +1418,9 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
   const question = String(input.question || '');
   const campaignId = String(input.campaignId || '001');
   const fromKnownState = input.source === 'known_current_state';
-  const fromReadinessTable = input.source === 'readiness_summary_table';
+  const fromReadinessTable =
+    input.source === 'readiness_summary_table' ||
+    input.source === 'fillable_verification_table';
   const fromPastedState = fromKnownState || fromReadinessTable;
   const suppressScaffolding = wantsPacketReviewArtifactSuppression(question);
   const debugOutput =

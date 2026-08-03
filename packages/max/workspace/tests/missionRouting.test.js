@@ -3230,12 +3230,22 @@ describe('Active work context continuation before domain routing', () => {
       '| PM-003 | Mill City Property Management | Lauren DuPaul | needs verification | needs verification | unknown | blocked | unknown | needs verification | unknown | needs verification | blocked | allowed | blocked | verify mailing address first | |',
     ].join('\n');
 
-    const beforeMissions = await missionEngine.list({ tenantId: '10' });
-    const result = await workspace.ask({
+    // Ingest the fillable desk table in its own turn, then summarize without
+    // re-pasting so canarySummaryRows come from activeWorkContext.tableRows.
+    await workspace.ask({
       sessionId: setup.sessionId,
       question: [
         tableMarkdown,
         '',
+        'Update the fillable verification table from this paste.',
+        'Do not create a mission. Do not launch, execute, approve, print, or mail.',
+      ].join('\n'),
+    });
+
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+    const result = await workspace.ask({
+      sessionId: setup.sessionId,
+      question: [
         'Summarize the Campaign 001 preparation-only canary status across PM-001, PM-002, and PM-003.',
         'Which prospect should be worked next and why?',
         'Do not include Reasoning, Unavailable context, or Next sections.',
@@ -3357,6 +3367,125 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /verification/i);
     assert.match(answer, /safe to draft now/i);
     assert.match(answer, /blocked from printing\/mailing/i);
+    assert.match(answer, /No mission created/i);
+  });
+
+  it('compact readiness table with bold/alias headers populates canary summary rows', async () => {
+    const {
+      isCanarySummaryJudgmentRequest,
+      isPacketReviewRequest,
+      looksLikeReadinessSummaryTablePaste,
+      looksLikeFillableVerificationTablePaste,
+      parseReadinessSummaryTableFromMessage,
+    } = require('../ActiveWorkContext');
+
+    const question = [
+      'Summarize the Campaign 001 preparation-only canary status',
+      'one-line overall status',
+      'readiness table for all 3 prospects',
+      'which prospect should be worked next',
+      'exact next operator action for each prospect',
+      'what is safe to draft now',
+      'what is blocked from printing/mailing',
+      'what PulseForge should track next',
+      '',
+      '| **Prospect ID** | **Company** | **Contact** | **Status Summary** | **Mail Readiness** | **Draft Readiness** | **Execution Readiness** |',
+      '| --- | --- | --- | --- | --- | --- | --- |',
+      '| PM-001 | Gamache Properties | Ben Gamache | website/address/phone/contact role verified | ready_for_review | allowed | blocked |',
+      '| PM-002 | Elm Grove Companies | David Schleyer | website/address/phone unknown or blocked; contact role needs verification | blocked | allowed | blocked |',
+      '| PM-003 | Mill City Property Management | Lauren DuPaul | website/address/phone unknown or blocked; contact role needs verification | blocked | allowed | blocked |',
+      '',
+      'Do not include Reasoning, Unavailable context, or Next sections.',
+      'Do not create a mission. Do not launch, execute, approve, print, or mail.',
+    ].join('\n');
+
+    assert.equal(isCanarySummaryJudgmentRequest(question), true);
+    assert.equal(isPacketReviewRequest(question), false);
+    assert.equal(looksLikeReadinessSummaryTablePaste(question), true);
+    assert.equal(
+      looksLikeFillableVerificationTablePaste(question),
+      false,
+      'compact readiness must not be treated as a fillable / ProspectList table'
+    );
+
+    const parsed = parseReadinessSummaryTableFromMessage(question);
+    assert.ok(parsed);
+    assert.equal(parsed.rows.length, 3);
+    assert.equal(parsed.rows[0].prospect_id, 'PM-001');
+    assert.equal(parsed.rows[0].company_name, 'Gamache Properties');
+    assert.equal(parsed.rows[0].contact_name, 'Ben Gamache');
+    assert.match(
+      String(parsed.rows[0].verification_summary || ''),
+      /website\/address\/phone\/contact role verified/i
+    );
+    assert.equal(parsed.rows[0].mail_readiness, 'ready_for_review');
+    assert.match(
+      String(parsed.rows[1].verification_summary || ''),
+      /unknown or blocked;\s*contact role needs verification/i
+    );
+
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const meta = result.structured.metadata || {};
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(meta.canarySummary, true);
+    assert.equal(meta.missingActiveWorkContext, undefined);
+    assert.equal(meta.packetReview, undefined);
+    assert.equal(meta.prospectCount, 3);
+    assert.equal(meta.prioritizedProspectId, 'PM-001');
+    assert.equal(meta.outputKind, 'canary_summary');
+    assert.equal(meta.strictOutputShape, true);
+
+    assert.doesNotMatch(
+      answer,
+      /don.?t have the current table or known state/i
+    );
+    assert.doesNotMatch(answer, /could not parse them cleanly/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /^Next:/m);
+    assert.doesNotMatch(answer, /Preparation-only packet review —/i);
+    assert.doesNotMatch(answer, /--- Customer-facing drafts ---/i);
+    assert.doesNotMatch(answer, /verified:\s*unknown/i);
+
+    assert.match(answer, /preparation-only canary/i);
+    assert.match(answer, /Readiness table/i);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /PM-002/);
+    assert.match(answer, /PM-003/);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /Elm Grove Companies/);
+    assert.match(answer, /Mill City Property Management/);
+    assert.match(answer, /ready_for_review/);
+    assert.match(
+      answer,
+      /PM-001[\s\S]*packet review|packet review[\s\S]*PM-001|prioritize[\s\S]*PM-001|PM-001[\s\S]*priorit/i
+    );
+    assert.match(answer, /final human approval/i);
+    assert.match(answer, /verification/i);
+    assert.match(answer, /safe to draft now/i);
+    assert.match(answer, /blocked from printing\/mailing/i);
+    assert.match(answer, /PulseForge should track next/i);
+    assert.match(answer, /Final operator decision required/i);
     assert.match(answer, /No mission created/i);
   });
 
