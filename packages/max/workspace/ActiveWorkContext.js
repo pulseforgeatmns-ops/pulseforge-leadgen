@@ -24,6 +24,7 @@ const LAST_OUTPUT_TYPES = Object.freeze({
   PROVISIONAL_DRAFTS: 'provisional_drafts',
   PACKET_REVIEW: 'packet_review',
   CANARY_SUMMARY: 'canary_summary',
+  FOCUSED_WORK_ORDER: 'focused_work_order',
 });
 
 /**
@@ -350,6 +351,126 @@ function extractOperatorIntentProse(text) {
 }
 
 /**
+ * Operator wants one selected next work-order artifact (not the full canary
+ * status summary). Checked inside canary summary/judgment routing.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasFocusedCanaryWorkOrderCues(text) {
+  const prose = extractOperatorIntentProse(text);
+  const proseLower = prose.toLowerCase();
+  if (!proseLower.trim()) return false;
+
+  if (
+    /\b(?:create|build|draft|give|return)\s+(?:me\s+)?(?:the\s+)?(?:recommended\s+)?next\s+(?:preparation[-\s]*only\s+)?work\s+order\b/.test(
+      proseLower
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\brecommended\s+next\s+(?:preparation[-\s]*only\s+)?work\s+order\b/.test(
+      proseLower
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\bchoose\s+one\s+next\s+(?:preparation[-\s]*only\s+)?work\s+order\s+only\b/.test(
+      proseLower
+    ) ||
+    /\bone\s+next\s+(?:preparation[-\s]*only\s+)?work\s+order\s+only\b/.test(
+      proseLower
+    ) ||
+    /\bnext\s+(?:preparation[-\s]*only\s+)?work\s+order\s+only\b/.test(
+      proseLower
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\bexact\s+steps?\s+for\s+the\s+operator\b/.test(proseLower) ||
+    /\bexact\s+operator\s+steps?\b/.test(proseLower)
+  ) {
+    return true;
+  }
+  if (/\bwhat\s+max\s+can\s+prepare\s+next\b/.test(proseLower)) {
+    return true;
+  }
+  if (/\bwhat\s+max\s+must\s+not\s+do\b/.test(proseLower)) {
+    return true;
+  }
+  if (/\bdeferred\s+prospects?\b/.test(proseLower)) {
+    return true;
+  }
+  if (
+    /\bdo\s+not\s+return\s+the\s+full\s+(?:canary\s+)?summary\b/.test(
+      proseLower
+    ) ||
+    /\bnot\s+the\s+full\s+(?:canary\s+)?summary\b/.test(proseLower)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Explicit full canary-summary output cues (overall status / readiness table /
+ * all prospects). Used to prefer the summary artifact when both subtypes are
+ * ambiguous; focused work-order cues still win when present.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasCanarySummaryOutputCues(text) {
+  const prose = extractOperatorIntentProse(text);
+  const proseLower = prose.toLowerCase();
+  if (!proseLower.trim()) return false;
+
+  const proseForSummaryCue = proseLower.replace(
+    /\bverification\s+summary\b/g,
+    'verification_summary'
+  );
+
+  if (/\bsummariz(?:e|ing)\b/.test(proseForSummaryCue)) return true;
+  if (/\boverall\s+status\b/.test(proseLower)) return true;
+  if (/\ball\s+\d+\s+prospects?\b/.test(proseLower)) return true;
+  if (
+    /\b(?:current\s+)?(?:canary\s+)?readiness\s+table\b/.test(proseLower) &&
+    !hasFocusedCanaryWorkOrderCues(text)
+  ) {
+    return true;
+  }
+  if (/\bexact\s+next\s+operator\s+action\s+for\s+each\b/.test(proseLower)) {
+    return true;
+  }
+  if (/\bwhat\s+is\s+safe\s+to\s+draft\s+now\b/.test(proseLower)) return true;
+  if (
+    /\bwhat\s+is\s+blocked\s+from\s+(?:printing|mailing)\b/.test(proseLower) ||
+    /\bblocked\s+from\s+printing\s*[\/,]?\s*mailing\b/.test(proseLower)
+  ) {
+    return true;
+  }
+  if (/\bwhat\s+pulseforge\s+should\s+track\s+next\b/.test(proseLower)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * True when canary summary/judgment routing should emit the focused next
+ * work-order artifact instead of the full cross-prospect summary.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isFocusedCanaryWorkOrderRequest(text) {
+  if (!hasFocusedCanaryWorkOrderCues(text)) return false;
+  // Focused work-order cues win even when summary cues are also present.
+  return true;
+}
+
+/**
  * True when the operator asks for a cross-prospect preparation-only canary
  * status summary / judgment. Packet-review residue in state rows must not
  * suppress these cues — summary outranks packet review.
@@ -364,6 +485,17 @@ function hasCanarySummaryJudgmentCues(text) {
   // but still honor an embedded readiness summary paste as state for judgment.
   const prose = extractOperatorIntentProse(text);
   const proseLower = prose.toLowerCase();
+
+  const hasCanaryOrCampaign =
+    /\bcanary\b/.test(proseLower) ||
+    /\bcampaign\s+0*01\b/.test(proseLower) ||
+    /\bpreparation[-\s]*only\b/.test(proseLower) ||
+    /\bprep[-\s]*only\b/.test(proseLower);
+
+  // Focused next-work-order asks share this routing entry, then subtype inside.
+  if (hasFocusedCanaryWorkOrderCues(text) && hasCanaryOrCampaign) {
+    return true;
+  }
 
   // Strong judgment / status cues.
   if (/\bknown\s+current\s+state\b/.test(proseLower)) return true;
@@ -416,12 +548,6 @@ function hasCanarySummaryJudgmentCues(text) {
   ) {
     return true;
   }
-
-  const hasCanaryOrCampaign =
-    /\bcanary\b/.test(proseLower) ||
-    /\bcampaign\s+0*01\b/.test(proseLower) ||
-    /\bpreparation[-\s]*only\b/.test(proseLower) ||
-    /\bprep[-\s]*only\b/.test(proseLower);
 
   const hasStatusCue =
     /\bstatus\b/.test(proseLower) ||
@@ -2870,6 +2996,9 @@ module.exports = {
   isPacketReviewRequest,
   isCanarySummaryJudgmentRequest,
   hasCanarySummaryJudgmentCues,
+  hasFocusedCanaryWorkOrderCues,
+  hasCanarySummaryOutputCues,
+  isFocusedCanaryWorkOrderRequest,
   extractOperatorIntentProse,
   extractPacketReviewProspectId,
   isExplicitNewMissionRequest,

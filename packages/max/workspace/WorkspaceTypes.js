@@ -96,6 +96,12 @@ function buildResponseMetadata(partial = {}) {
   if (partial.canarySummary === true) {
     meta.canarySummary = true;
   }
+  if (partial.focusedWorkOrder === true) {
+    meta.focusedWorkOrder = true;
+  }
+  if (partial.outputSubtype != null && String(partial.outputSubtype).trim() !== '') {
+    meta.outputSubtype = String(partial.outputSubtype);
+  }
   if (partial.knownCurrentState === true) {
     meta.knownCurrentState = true;
   }

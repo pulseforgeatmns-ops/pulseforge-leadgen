@@ -32,6 +32,7 @@ const {
   isActiveWorkTransformCue,
   isPacketReviewRequest,
   isCanarySummaryJudgmentRequest,
+  isFocusedCanaryWorkOrderRequest,
   extractPacketReviewProspectId,
   isExplicitNewMissionRequest,
   isExplicitContextOverride,
@@ -66,6 +67,7 @@ const {
   shouldEmitCanaryReadinessDiagnostics,
   parseInlinePacketReviewKnownFacts,
   parseKnownCurrentStateBullets,
+  entitiesFromFillableTableRows,
   CAMPAIGN_001_PREPARATION_ONLY_CANARY,
   LAST_OUTPUT_TYPES,
 } = require('./ActiveWorkContext');
@@ -1295,10 +1297,14 @@ function resolveCanarySummaryJudgmentRows(input = {}) {
  */
 function handleCanarySummaryJudgmentContinuation(input = {}) {
   const question = String(input.question || '');
-  const prior = input.prior || getActiveWorkContext(input.session) || null;
+  const session = input.session || null;
+  const prior = input.prior || getActiveWorkContext(session) || null;
+  const focusedWorkOrder = isFocusedCanaryWorkOrderRequest(question);
   const diagnostics = emitCanaryReadinessIngestDiagnostics(question, {
-    stage: 'canary_summary_judgment',
-    summaryIntent: true,
+    stage: focusedWorkOrder
+      ? 'canary_focused_work_order'
+      : 'canary_summary_judgment',
+    summaryIntent: !focusedWorkOrder,
   });
   const resolved = resolveCanarySummaryJudgmentRows({ question, prior });
 
@@ -1306,13 +1312,54 @@ function handleCanarySummaryJudgmentContinuation(input = {}) {
     const tableCuesPresent = hasCanaryReadinessTableCues(question);
     return {
       reason: tableCuesPresent
-        ? 'canary_summary_table_not_ingested'
-        : 'canary_summary_missing_state',
+        ? focusedWorkOrder
+          ? 'canary_focused_work_order_table_not_ingested'
+          : 'canary_summary_table_not_ingested'
+        : focusedWorkOrder
+          ? 'canary_focused_work_order_missing_state'
+          : 'canary_summary_missing_state',
       structured: buildMissingCanarySummaryJudgmentResponse({
         question,
         tableCuesPresent,
         diagnostics,
+        focusedWorkOrder,
       }),
+    };
+  }
+
+  const campaignId =
+    (prior && prior.target && prior.target.campaignId) ||
+    extractCampaignIdFromText(question) ||
+    '001';
+
+  if (focusedWorkOrder) {
+    const structured = buildFocusedCanaryWorkOrderResponse({
+      rows: resolved.rows,
+      question,
+      source: resolved.source,
+      campaignId,
+      prior,
+    });
+    rememberCanaryJudgmentActiveWorkContext({
+      session,
+      prior,
+      question,
+      campaignId,
+      rows: resolved.rows,
+      lastOutputType: LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER,
+      prioritizedProspectId:
+        structured.metadata && structured.metadata.prioritizedProspectId,
+    });
+    return {
+      reason:
+        resolved.source === 'active_work_context'
+          ? 'active_work_context_focused_work_order'
+          : resolved.source === 'readiness_summary_table'
+            ? 'readiness_summary_table_focused_work_order'
+            : resolved.source === 'fillable_verification_table'
+              ? 'fillable_table_focused_work_order'
+              : 'known_current_state_focused_work_order',
+      structured,
     };
   }
 
@@ -1320,11 +1367,18 @@ function handleCanarySummaryJudgmentContinuation(input = {}) {
     rows: resolved.rows,
     question,
     source: resolved.source,
-    campaignId:
-      (prior && prior.target && prior.target.campaignId) ||
-      extractCampaignIdFromText(question) ||
-      '001',
+    campaignId,
     prior,
+  });
+  rememberCanaryJudgmentActiveWorkContext({
+    session,
+    prior,
+    question,
+    campaignId,
+    rows: resolved.rows,
+    lastOutputType: LAST_OUTPUT_TYPES.CANARY_SUMMARY,
+    prioritizedProspectId:
+      structured.metadata && structured.metadata.prioritizedProspectId,
   });
 
   return {
@@ -1341,44 +1395,123 @@ function handleCanarySummaryJudgmentContinuation(input = {}) {
 }
 
 /**
+ * Persist desk memory after canary summary / focused work-order artifacts so
+ * suggestion chips follow the response subtype instead of the readiness-table
+ * ingest placeholder (canary_readiness_table → review package).
+ * @param {{ session?: object|null, prior?: object|null, question?: string, campaignId?: string, rows?: object[], lastOutputType: string, prioritizedProspectId?: string|null }} input
+ */
+function rememberCanaryJudgmentActiveWorkContext(input = {}) {
+  const session = input.session || null;
+  if (!session) return null;
+
+  const rows = Array.isArray(input.rows) ? input.rows : [];
+  const prior = input.prior || getActiveWorkContext(session) || null;
+  const tableRows =
+    rows.length > 0
+      ? rows.map((row) => ({ ...row, execution_readiness: 'blocked' }))
+      : prior && Array.isArray(prior.tableRows)
+        ? prior.tableRows
+        : [];
+  const entities = entitiesFromFillableTableRows(
+    tableRows,
+    prior && Array.isArray(prior.entities) ? prior.entities : []
+  );
+  const prospects = entitiesToProspects(entities);
+  if (!prospects.length && !(prior && activeContextHasEntities(prior))) {
+    return null;
+  }
+
+  return rememberCanaryActiveWorkContext({
+    session,
+    prospects: prospects.length
+      ? prospects
+      : entitiesToProspects(prior.entities),
+    question: input.question,
+    campaignId: input.campaignId,
+    lastOutputType: input.lastOutputType,
+    lastOutputKind: input.lastOutputType,
+    prior,
+    tableRows: tableRows.length
+      ? tableRows
+      : prior && prior.tableRows
+        ? prior.tableRows
+        : [],
+    nextAction:
+      input.lastOutputType === LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER
+        ? input.prioritizedProspectId
+          ? `operator_next_work_order_${String(input.prioritizedProspectId).toLowerCase()}`
+          : 'operator_next_focused_work_order'
+        : 'await_operator_packet_review_or_verification',
+  });
+}
+
+/**
  * Ask for the current canary table / known state — never pipe-format prospects.
  * When summary intent is clear and readiness-table cues were present but rows
  * did not parse, return a targeted clarification (not a generic missing-state
  * or prospect-parse fallthrough).
- * @param {{ question?: string, tableCuesPresent?: boolean, diagnostics?: object|null }} input
+ * @param {{ question?: string, tableCuesPresent?: boolean, diagnostics?: object|null, focusedWorkOrder?: boolean }} input
  */
 function buildMissingCanarySummaryJudgmentResponse(input = {}) {
   const question = String(input.question || '');
   const tableCuesPresent =
     input.tableCuesPresent === true || hasCanaryReadinessTableCues(question);
+  const focusedWorkOrder = input.focusedWorkOrder === true;
   const diagnostics =
     input.diagnostics ||
     (shouldEmitCanaryReadinessDiagnostics()
       ? diagnoseCanaryReadinessTableIngestion(question)
       : null);
 
-  const answer = tableCuesPresent
-    ? [
-        'I can summarize this, but the readiness table did not come through. Paste either the compact readiness table or one state line per prospect.',
-        'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
-      ].join(' ')
-    : [
-        'I can summarize Campaign 001 preparation-only canary status and judge next actions, but I don’t have the current table or known state for those prospects.',
-        'Paste the fillable verification table, continue from a session with the active canary table, or provide known current-state bullets (prospect_id, company, contact, gate summary, mail_readiness, draft_readiness, execution_readiness).',
-        'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
-      ].join(' ');
+  const answer = focusedWorkOrder
+    ? tableCuesPresent
+      ? [
+          'I can choose the next preparation-only work order, but the readiness table did not come through. Paste either the compact readiness table or one state line per prospect.',
+          'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+        ].join(' ')
+      : [
+          'I can create the next preparation-only work order for Campaign 001, but I don’t have the current table or known state for those prospects.',
+          'Paste the fillable verification table, continue from a session with the active canary table, or provide known current-state bullets (prospect_id, company, contact, gate summary, mail_readiness, draft_readiness, execution_readiness).',
+          'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+        ].join(' ')
+    : tableCuesPresent
+      ? [
+          'I can summarize this, but the readiness table did not come through. Paste either the compact readiness table or one state line per prospect.',
+          'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+        ].join(' ')
+      : [
+          'I can summarize Campaign 001 preparation-only canary status and judge next actions, but I don’t have the current table or known state for those prospects.',
+          'Paste the fillable verification table, continue from a session with the active canary table, or provide known current-state bullets (prospect_id, company, contact, gate summary, mail_readiness, draft_readiness, execution_readiness).',
+          'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+        ].join(' ');
 
-  const reasoning = tableCuesPresent
-    ? [
-        'Operator asked for a canary status summary / judgment and the message included readiness-table cues, but canarySummaryRows did not parse.',
-        'Clarifying for a compact readiness table or per-prospect state lines instead of falling through to prospect-parse fallback.',
-        'No mission create/resume.',
-      ]
-    : [
-        'Operator asked for a canary status summary / judgment without desk tableRows or known current-state bullets.',
-        'Clarifying for current state instead of falling through to prospect-parse fallback.',
-        'No mission create/resume.',
-      ];
+  const reasoning = focusedWorkOrder
+    ? tableCuesPresent
+      ? [
+          'Operator asked for the next focused preparation-only work order and the message included readiness-table cues, but canarySummaryRows did not parse.',
+          'Clarifying for a compact readiness table or per-prospect state lines instead of falling through to prospect-parse fallback.',
+          'No mission create/resume.',
+        ]
+      : [
+          'Operator asked for the next focused preparation-only work order without desk tableRows or known current-state bullets.',
+          'Clarifying for current state instead of falling through to prospect-parse fallback.',
+          'No mission create/resume.',
+        ]
+    : tableCuesPresent
+      ? [
+          'Operator asked for a canary status summary / judgment and the message included readiness-table cues, but canarySummaryRows did not parse.',
+          'Clarifying for a compact readiness table or per-prospect state lines instead of falling through to prospect-parse fallback.',
+          'No mission create/resume.',
+        ]
+      : [
+          'Operator asked for a canary status summary / judgment without desk tableRows or known current-state bullets.',
+          'Clarifying for current state instead of falling through to prospect-parse fallback.',
+          'No mission create/resume.',
+        ];
+
+  const outputKind = focusedWorkOrder
+    ? LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER
+    : LAST_OUTPUT_TYPES.CANARY_SUMMARY;
 
   return buildStructuredResponse({
     answer,
@@ -1389,7 +1522,9 @@ function buildMissingCanarySummaryJudgmentResponse(input = {}) {
     nextInvestigations: [
       tableCuesPresent
         ? 'Paste the compact readiness table (prospect_id / company / contact / verification_summary / readiness columns) or one known-state line per prospect, then ask again.'
-        : 'Paste the Campaign 001 fillable verification table or known current-state bullets, then ask again for the preparation-only canary status summary.',
+        : focusedWorkOrder
+          ? 'Paste the Campaign 001 fillable verification table or known current-state bullets, then ask again for the next preparation-only work order.'
+          : 'Paste the Campaign 001 fillable verification table or known current-state bullets, then ask again for the preparation-only canary status summary.',
     ],
     recommendedActions: [],
     metadata: {
@@ -1402,11 +1537,13 @@ function buildMissingCanarySummaryJudgmentResponse(input = {}) {
       executionDomain: EXECUTION_DOMAINS.WORKSPACE,
       route: 'intelligence',
       canaryPreparationOnly: true,
-      canarySummary: true,
+      canarySummary: !focusedWorkOrder,
+      focusedWorkOrder: focusedWorkOrder || undefined,
       missingActiveWorkContext: true,
       readinessTableNotIngested: tableCuesPresent || undefined,
-      outputKind: 'canary_summary',
-      lastOutputKind: LAST_OUTPUT_TYPES.CANARY_SUMMARY,
+      outputKind,
+      lastOutputKind: outputKind,
+      outputSubtype: focusedWorkOrder ? 'focused_work_order' : 'summary',
       strictOutputShape: wantsPacketReviewArtifactSuppression(question),
       ...(diagnostics
         ? { canaryReadinessIngestDiagnostics: diagnostics }
@@ -1454,6 +1591,257 @@ function resolveCanarySummaryNextAction(row) {
 }
 
 /**
+ * Enrich readiness rows and pick the single next work-order prospect.
+ * Prefer mail_readiness=ready_for_review; else first verification-blocked row.
+ * @param {object[]} rows
+ * @returns {{ enriched: object[], prioritize: object|null, reviewReady: object[], needsVerification: object[], draftAllowed: object[] }}
+ */
+function selectNextCanaryWorkOrderProspect(rows) {
+  const enriched = (Array.isArray(rows) ? rows : []).map((row) => {
+    const nextAction = resolveCanarySummaryNextAction(row);
+    const draft = String(row.draft_readiness || 'blocked').toLowerCase();
+    return {
+      ...row,
+      execution_readiness: 'blocked',
+      operator_next_action: nextAction,
+      draft_allowed: /^allowed$/.test(draft),
+      mail_ready_for_review: /^ready(?:_for_review)?$/i.test(
+        String(row.mail_readiness || '')
+      ),
+    };
+  });
+
+  const reviewReady = enriched.filter((r) => r.mail_ready_for_review);
+  const needsVerification = enriched.filter((r) => !r.mail_ready_for_review);
+  const draftAllowed = enriched.filter((r) => r.draft_allowed);
+
+  let prioritize = reviewReady[0] || null;
+  if (!prioritize && enriched.length) {
+    prioritize = enriched.find(
+      (r) =>
+        String(r.prospect_id || '')
+          .toUpperCase()
+          .trim() === 'PM-001'
+    );
+  }
+  if (!prioritize) prioritize = enriched[0] || null;
+
+  return {
+    enriched,
+    prioritize,
+    reviewReady,
+    needsVerification,
+    draftAllowed,
+  };
+}
+
+/**
+ * One selected preparation-only work order — not the full canary summary.
+ * @param {{ rows: object[], question?: string, source?: string, campaignId?: string, prior?: object|null }} input
+ */
+function buildFocusedCanaryWorkOrderResponse(input = {}) {
+  const question = String(input.question || '');
+  const campaignId = String(input.campaignId || '001');
+  const fromKnownState = input.source === 'known_current_state';
+  const fromReadinessTable =
+    input.source === 'readiness_summary_table' ||
+    input.source === 'fillable_verification_table';
+  const fromPastedState = fromKnownState || fromReadinessTable;
+  const suppressScaffolding = wantsPacketReviewArtifactSuppression(question);
+  const debugOutput =
+    !suppressScaffolding && wantsPacketReviewDebugOutput(question);
+
+  const {
+    enriched,
+    prioritize,
+    reviewReady,
+    needsVerification,
+  } = selectNextCanaryWorkOrderProspect(input.rows);
+
+  const prioritizeId = prioritize
+    ? String(prioritize.prospect_id || '').trim()
+    : null;
+  const packetReviewWorkOrder =
+    prioritize && prioritize.mail_ready_for_review === true;
+
+  const deferred = needsVerification
+    .map((r) => String(r.prospect_id || '').trim())
+    .filter(Boolean);
+  const deferredLabel =
+    deferred.length === 0
+      ? 'None'
+      : deferred.length === 1
+        ? deferred[0]
+        : deferred.length === 2
+          ? `${deferred[0]} and ${deferred[1]}`
+          : `${deferred.slice(0, -1).join(', ')}, and ${deferred[deferred.length - 1]}`;
+
+  const workOrderTitle = packetReviewWorkOrder
+    ? `${prioritizeId} packet-content review.`
+    : prioritizeId
+      ? `${prioritizeId} verification work.`
+      : 'No work order available.';
+
+  const whyFirst = !prioritize
+    ? 'No prospects are available to prioritize.'
+    : packetReviewWorkOrder
+      ? reviewReady.length === 1
+        ? `${prioritizeId} is the only prospect with mail_readiness=ready_for_review while execution_readiness remains blocked. ${deferredLabel} still need verification.`
+        : `${prioritizeId} has mail_readiness=ready_for_review while execution_readiness remains blocked. Other ready_for_review prospects are deferred until this work order completes; ${deferredLabel === 'None' ? 'no other prospects still need verification.' : `${deferredLabel} still need verification.`}`
+      : `${prioritizeId} still needs verification before packet review; do not print or mail. Deferred prospects: ${deferred.filter((id) => id !== prioritizeId).join(', ') || 'none'}.`;
+
+  const operatorSteps = packetReviewWorkOrder
+    ? [
+        `1. Review ${prioritizeId} packet contents.`,
+        '2. Confirm customer-facing drafts are acceptable.',
+        '3. Confirm print/sign/mail checklist is complete.',
+        '4. Record packet-content review decision.',
+        '5. Do not print/mail unless a separate future launch/mail approval is given.',
+      ]
+    : [
+        `1. Complete verification for ${prioritizeId} (website, mailing address, phone, contact role as needed).`,
+        '2. Update mail_readiness / draft_readiness / execution_readiness from verified gates.',
+        '3. Do not start packet review until mail_readiness is ready_for_review.',
+        '4. Do not print/mail unless a separate future launch/mail approval is given.',
+      ];
+
+  const maxCanPrepare = packetReviewWorkOrder
+    ? [
+        `- ${prioritizeId} packet review checklist`,
+        '- provisional letter / handwritten note / scorecard cover',
+        '- tracking fields for review',
+      ]
+    : [
+        `- ${prioritizeId} verification checklist`,
+        '- gate status update fields',
+        '- tracking fields for verification progress',
+      ];
+
+  const maxMustNot = [
+    '- create a mission',
+    '- launch, execute, approve, print, or mail',
+    '- mark execution ready',
+  ];
+
+  const deferredLines = needsVerification
+    .filter((r) => {
+      const id = String(r.prospect_id || '').trim();
+      return id && (!packetReviewWorkOrder || id !== prioritizeId);
+    })
+    .map((row) => {
+      const id = String(row.prospect_id || '').trim();
+      const action =
+        row.operator_next_action || 'Complete verification work';
+      return `- ${id}: ${action}`;
+    });
+
+  const answer = [
+    'Recommended next work order:',
+    workOrderTitle,
+    '',
+    'Why this work order is first:',
+    whyFirst,
+    '',
+    'Exact operator steps:',
+    ...operatorSteps,
+    '',
+    'What Max can prepare next:',
+    ...maxCanPrepare,
+    '',
+    'What Max must not do:',
+    ...maxMustNot,
+    '',
+    'Deferred prospects:',
+    ...(deferredLines.length ? deferredLines : ['- None']),
+    '',
+    'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+  ].join('\n');
+
+  const reasoning = [
+    fromKnownState
+      ? 'Built focused next work order from known current-state bullets; not treated as a new prospect paste.'
+      : fromReadinessTable
+        ? 'Built focused next work order from pasted readiness summary table; not treated as a new prospect paste.'
+        : 'Reused activeWorkContext.tableRows for focused next work order; no prospect re-paste required.',
+    prioritize && prioritize.mail_ready_for_review
+      ? `${prioritizeId} selected for packet-content review because mail_readiness is ready_for_review and execution remains blocked.`
+      : 'No mail-ready_for_review prospect — verification work is the selected next work order.',
+    'Returned one work order only; full canary summary suppressed.',
+    'No mission create/resume.',
+  ];
+
+  return buildStructuredResponse({
+    answer,
+    reasoning: debugOutput ? reasoning : [],
+    supportingEvidence: debugOutput
+      ? enriched.map((row) => ({
+          id: `canary-prospect:${row.prospect_id}`,
+          summary: `${row.company_name || row.prospect_id}: mail ${row.mail_readiness}, draft ${row.draft_readiness}, execution blocked`,
+          sourceType: 'operator',
+          confidence: null,
+        }))
+      : [],
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: debugOutput
+      ? [
+          prioritize && prioritize.mail_ready_for_review
+            ? `Create a preparation-only packet review checklist for ${prioritizeId}.`
+            : 'Paste updated verification state or continue verification work for blocked prospects.',
+        ]
+      : [],
+    recommendedActions: debugOutput
+      ? [
+          'Execute the selected preparation-only work order, then explicitly request packet review or verification work — never launch from this artifact.',
+        ]
+      : [],
+    metadata: {
+      sourcesUsed: fromKnownState
+        ? { knownCurrentState: true }
+        : fromReadinessTable
+          ? { readinessSummaryTable: true }
+          : { activeWorkContext: true },
+      evidenceCount: debugOutput ? enriched.length : 0,
+      unavailable: debugOutput ? [] : [],
+      surface: 'workspace',
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      route: 'intelligence',
+      canaryPreparationOnly: true,
+      focusedWorkOrder: true,
+      knownCurrentState: fromKnownState || undefined,
+      readinessSummaryTable: fromReadinessTable || undefined,
+      activeWorkContextReused: !fromPastedState,
+      tableUpdate: false,
+      campaignId,
+      prospectCount: enriched.length,
+      prioritizedProspectId: prioritizeId,
+      mailReadiness:
+        (prioritize && prioritize.mail_readiness) || null,
+      executionReadiness: 'blocked',
+      outputKind: LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER,
+      lastOutputKind: LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER,
+      outputSubtype: 'focused_work_order',
+      contextHints: {
+        workflow: CAMPAIGN_001_PREPARATION_ONLY_CANARY,
+        lastOutputKind: LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER,
+        lastOutputType: LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER,
+        outputKind: LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER,
+        preparationOnly: true,
+        focusedWorkOrder: true,
+        campaignId,
+        prospectId: prioritizeId,
+        mailReadiness:
+          (prioritize && prioritize.mail_readiness) || null,
+        executionReadiness: 'blocked',
+        knownCurrentState: fromKnownState || undefined,
+        readinessSummaryTable: fromReadinessTable || undefined,
+      },
+      strictOutputShape: !debugOutput,
+    },
+  });
+}
+
+/**
  * Cross-prospect preparation-only canary summary / judgment artifact.
  * @param {{ rows: object[], question?: string, source?: string, campaignId?: string, prior?: object|null }} input
  */
@@ -1473,34 +1861,13 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
   const debugOutput =
     !suppressScaffolding && wantsPacketReviewDebugOutput(question);
 
-  const enriched = rows.map((row) => {
-    const nextAction = resolveCanarySummaryNextAction(row);
-    const draft = String(row.draft_readiness || 'blocked').toLowerCase();
-    return {
-      ...row,
-      operator_next_action: nextAction,
-      draft_allowed: /^allowed$/.test(draft),
-      mail_ready_for_review: /^ready(?:_for_review)?$/i.test(
-        String(row.mail_readiness || '')
-      ),
-    };
-  });
-
-  const reviewReady = enriched.filter((r) => r.mail_ready_for_review);
-  const needsVerification = enriched.filter((r) => !r.mail_ready_for_review);
-  const draftAllowed = enriched.filter((r) => r.draft_allowed);
-
-  // Prefer mail-ready_for_review prospects (e.g. PM-001) for packet review next.
-  let prioritize = reviewReady[0] || null;
-  if (!prioritize && enriched.length) {
-    prioritize = enriched.find(
-      (r) =>
-        String(r.prospect_id || '')
-          .toUpperCase()
-          .trim() === 'PM-001'
-    );
-  }
-  if (!prioritize) prioritize = enriched[0] || null;
+  const {
+    enriched,
+    prioritize,
+    reviewReady,
+    needsVerification,
+    draftAllowed,
+  } = selectNextCanaryWorkOrderProspect(rows);
 
   const prioritizeId = prioritize
     ? String(prioritize.prospect_id || '').trim()
@@ -1675,6 +2042,7 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
       executionReadiness: 'blocked',
       outputKind: 'canary_summary',
       lastOutputKind: LAST_OUTPUT_TYPES.CANARY_SUMMARY,
+      outputSubtype: 'summary',
       contextHints: {
         workflow: CAMPAIGN_001_PREPARATION_ONLY_CANARY,
         lastOutputKind: LAST_OUTPUT_TYPES.CANARY_SUMMARY,

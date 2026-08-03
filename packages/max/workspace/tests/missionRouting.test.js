@@ -3398,6 +3398,167 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /No mission created/i);
   });
 
+  it('focused next work-order cues return one work order, not full canary summary', async () => {
+    const {
+      isCanarySummaryJudgmentRequest,
+      isFocusedCanaryWorkOrderRequest,
+      hasFocusedCanaryWorkOrderCues,
+      hasCanarySummaryOutputCues,
+    } = require('../ActiveWorkContext');
+
+    const question = [
+      'Create the next preparation-only work order for Campaign 001.',
+      'Choose one next work order only.',
+      'Do not return the full canary summary.',
+      'Include exact steps for the operator, what Max can prepare next, what Max must not do, and deferred prospects.',
+      '',
+      'current canary readiness table for all 3 prospects:',
+      '| prospect_id | company_name | contact_name | verification_summary | mail_readiness | draft_readiness | execution_readiness |',
+      '|---|---|---|---|---|---|---|',
+      '| PM-001 | Gamache Properties | Ben Gamache | website/address/phone/contact role verified | ready_for_review | allowed | blocked |',
+      '| PM-002 | Elm Grove Companies | David Schleyer | website/address/phone unknown or blocked, contact role needs verification | blocked | allowed | blocked |',
+      '| PM-003 | Mill City Property Management | Lauren DuPaul | website/address/phone unknown or blocked, contact role needs verification | blocked | allowed | blocked |',
+      '',
+      'Do not include Reasoning, Unavailable context, or Next sections.',
+      'Do not create a mission. Do not launch, execute, approve, print, or mail.',
+    ].join('\n');
+
+    assert.equal(hasFocusedCanaryWorkOrderCues(question), true);
+    assert.equal(isFocusedCanaryWorkOrderRequest(question), true);
+    assert.equal(isCanarySummaryJudgmentRequest(question), true);
+
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const meta = result.structured.metadata || {};
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(meta.canaryPreparationOnly, true);
+    assert.equal(meta.focusedWorkOrder, true);
+    assert.equal(meta.canarySummary, undefined);
+    assert.equal(meta.prioritizedProspectId, 'PM-001');
+    assert.equal(meta.outputKind, 'focused_work_order');
+    assert.equal(meta.lastOutputKind, 'focused_work_order');
+    assert.equal(meta.outputSubtype, 'focused_work_order');
+    assert.equal(meta.strictOutputShape, true);
+
+    assert.match(answer, /Recommended next work order:/i);
+    assert.match(answer, /PM-001 packet-content review/i);
+    assert.match(answer, /Why this work order is first:/i);
+    assert.match(
+      answer,
+      /PM-001 is the only prospect with mail_readiness=ready_for_review while execution_readiness remains blocked/i
+    );
+    assert.match(answer, /PM-002 and PM-003 still need verification/i);
+    assert.match(answer, /Exact operator steps:/i);
+    assert.match(answer, /Review PM-001 packet contents/i);
+    assert.match(answer, /Confirm customer-facing drafts are acceptable/i);
+    assert.match(answer, /Confirm print\/sign\/mail checklist is complete/i);
+    assert.match(answer, /Record packet-content review decision/i);
+    assert.match(
+      answer,
+      /Do not print\/mail unless a separate future launch\/mail approval is given/i
+    );
+    assert.match(answer, /What Max can prepare next:/i);
+    assert.match(answer, /PM-001 packet review checklist/i);
+    assert.match(
+      answer,
+      /provisional letter \/ handwritten note \/ scorecard cover/i
+    );
+    assert.match(answer, /tracking fields for review/i);
+    assert.match(answer, /What Max must not do:/i);
+    assert.match(answer, /create a mission/i);
+    assert.match(answer, /launch, execute, approve, print, or mail/i);
+    assert.match(answer, /mark execution ready/i);
+    assert.match(answer, /Deferred prospects:/i);
+    assert.match(answer, /PM-002/);
+    assert.match(answer, /PM-003/);
+    assert.match(answer, /No mission created/i);
+    assert.match(answer, /No launch, execution, approval, print, or mail/i);
+
+    // Full canary summary sections must not appear.
+    assert.doesNotMatch(answer, /Readiness table:/i);
+    assert.doesNotMatch(answer, /Exact next operator action per prospect:/i);
+    assert.doesNotMatch(answer, /Safe to draft now:/i);
+    assert.doesNotMatch(answer, /Blocked from printing\/mailing:/i);
+    assert.doesNotMatch(answer, /What PulseForge should track next:/i);
+    assert.doesNotMatch(answer, /Final operator decision required/i);
+    assert.doesNotMatch(answer, /preparation-only canary:\s*\d+\s+prospect/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /^Next:/m);
+
+    const chips = Array.isArray(result.suggestions) ? result.suggestions : [];
+    assert.ok(
+      chips.some((s) =>
+        /packet review checklist for PM-001/i.test(String(s || ''))
+      ),
+      `expected packet-review chip, got: ${JSON.stringify(chips)}`
+    );
+    assert.ok(
+      !chips.some((s) =>
+        /^(?:mail|launch|execute|approve|print)\b/i.test(String(s || '').trim())
+      ),
+      `unsafe action chips: ${JSON.stringify(chips)}`
+    );
+
+    // Summary-subtype ask still returns the full canary summary.
+    const summaryQuestion = [
+      'Summarize the Campaign 001 preparation-only canary status across PM-001, PM-002, and PM-003.',
+      'Which prospect should be worked next and why?',
+      'What is safe to draft now?',
+      'What is blocked from printing/mailing?',
+      '',
+      'current canary readiness table for all 3 prospects:',
+      '| prospect_id | company_name | contact_name | verification_summary | mail_readiness | draft_readiness | execution_readiness |',
+      '|---|---|---|---|---|---|---|',
+      '| PM-001 | Gamache Properties | Ben Gamache | website/address/phone/contact role verified | ready_for_review | allowed | blocked |',
+      '| PM-002 | Elm Grove Companies | David Schleyer | website/address/phone unknown or blocked, contact role needs verification | blocked | allowed | blocked |',
+      '| PM-003 | Mill City Property Management | Lauren DuPaul | website/address/phone unknown or blocked, contact role needs verification | blocked | allowed | blocked |',
+      '',
+      'Do not include Reasoning, Unavailable context, or Next sections.',
+      'Do not create a mission. Do not launch, execute, approve, print, or mail.',
+    ].join('\n');
+
+    assert.equal(hasCanarySummaryOutputCues(summaryQuestion), true);
+    assert.equal(isFocusedCanaryWorkOrderRequest(summaryQuestion), false);
+
+    const summaryResult = await workspace.ask({
+      question: summaryQuestion,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+    const summaryAnswer =
+      summaryResult.prose || summaryResult.structured.answer || '';
+    const summaryMeta = summaryResult.structured.metadata || {};
+    assert.equal(summaryMeta.canarySummary, true);
+    assert.equal(summaryMeta.focusedWorkOrder, undefined);
+    assert.equal(summaryMeta.outputKind, 'canary_summary');
+    assert.equal(summaryMeta.outputSubtype, 'summary');
+    assert.match(summaryAnswer, /Readiness table:/i);
+    assert.match(summaryAnswer, /Safe to draft now:/i);
+    assert.doesNotMatch(summaryAnswer, /Recommended next work order:/i);
+  });
+
   it('compact readiness table with bold/alias headers populates canary summary rows', async () => {
     const {
       isCanarySummaryJudgmentRequest,
