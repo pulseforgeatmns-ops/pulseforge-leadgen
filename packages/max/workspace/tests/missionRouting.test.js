@@ -3733,10 +3733,7 @@ describe('Active work context continuation before domain routing', () => {
       '- draft_readiness: allowed',
       '- execution_readiness: blocked',
       '- work_order: packet-content review',
-      '- website_status: verified',
-      '- mailing_address_status: verified',
-      '- phone_status: verified',
-      '- contact_role_status: verified',
+      '- verification_summary: website/address/phone/contact role verified',
       '',
       'Do not include Reasoning, Unavailable context, or Next sections.',
       'Do not create a mission. Do not launch, execute, approve, print, or mail.',
@@ -3801,12 +3798,39 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /approved_for_print:\s*false/i);
     assert.match(answer, /launch_approval_status:\s*pending/i);
     assert.match(answer, /execution_readiness:\s*blocked/i);
+    assert.equal(meta.mailReadiness, 'ready_for_review');
     assert.match(answer, /mail_readiness_at_review:\s*ready_for_review/i);
+    assert.match(answer, /Confirm before any future print step:/i);
     assert.match(
       answer,
-      /Confirm verified website \/ mailing address \/ phone \/ contact role values are present in the source system and packet metadata/i
+      /Website gate:\s*verified;\s*value not included in this prompt/i
     );
-    assert.match(answer, /do not re-verify those gates from scratch/i);
+    assert.match(
+      answer,
+      /Mailing address gate:\s*verified;\s*value not included in this prompt/i
+    );
+    assert.match(
+      answer,
+      /Phone gate:\s*verified;\s*value not included in this prompt/i
+    );
+    assert.match(
+      answer,
+      /Contact role gate:\s*verified;\s*value not included in this prompt/i
+    );
+    assert.match(
+      answer,
+      /Gate statuses are verified, but the specific website\/address\/phone values were not included in this prompt/i
+    );
+    assert.match(
+      answer,
+      /Confirm the values are present in the source system and packet metadata before any future print step/i
+    );
+    assert.doesNotMatch(answer, /verified:\s*unknown/i);
+    assert.doesNotMatch(answer, /mailing address\s*\(unknown\)/i);
+    assert.doesNotMatch(answer, /website\s*\(unknown\)/i);
+    assert.doesNotMatch(answer, /phone\s*\(unknown\)/i);
+    assert.doesNotMatch(answer, /contact role\s*\(unknown\)/i);
+    assert.doesNotMatch(answer, /https?:\/\//i);
     assert.doesNotMatch(answer, /Pre-mail verification plan/i);
     assert.doesNotMatch(answer, /Verify (?:mailing address|website|phone).*from scratch/i);
     assert.doesNotMatch(answer, /tracking fields to log after mailing/i);
