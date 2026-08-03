@@ -102,6 +102,12 @@ function buildResponseMetadata(partial = {}) {
   if (partial.packetContentReview === true) {
     meta.packetContentReview = true;
   }
+  if (partial.callScriptReview === true) {
+    meta.callScriptReview = true;
+  }
+  if (partial.callScriptContentReview === true) {
+    meta.callScriptContentReview = true;
+  }
   if (partial.canarySummary === true) {
     meta.canarySummary = true;
   }
@@ -172,6 +178,9 @@ function buildResponseMetadata(partial = {}) {
   }
   if (partial.callReadiness != null) {
     meta.callReadiness = String(partial.callReadiness);
+  }
+  if (partial.scriptReadiness != null) {
+    meta.scriptReadiness = String(partial.scriptReadiness);
   }
   if (partial.primaryReadiness != null) {
     meta.primaryReadiness = String(partial.primaryReadiness);

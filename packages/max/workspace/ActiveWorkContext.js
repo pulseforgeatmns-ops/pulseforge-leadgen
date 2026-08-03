@@ -23,6 +23,7 @@ const LAST_OUTPUT_TYPES = Object.freeze({
   FILLABLE_TABLE: 'fillable_table',
   PROVISIONAL_DRAFTS: 'provisional_drafts',
   PACKET_REVIEW: 'packet_review',
+  CALL_SCRIPT_REVIEW: 'call_script_review',
   CANARY_SUMMARY: 'canary_summary',
   FOCUSED_WORK_ORDER: 'focused_work_order',
 });
@@ -281,6 +282,7 @@ function isActiveWorkFollowUpCue(text) {
   if (isActiveWorkReuseProspectCue(lower)) return true;
   if (isFillableTableRequest(lower)) return true;
   if (isPacketReviewRequest(lower)) return true;
+  if (isCallScriptReviewRequest(lower)) return true;
 
   const cues = [
     /\bcontinue\b/,
@@ -399,9 +401,10 @@ function looksLikeCanaryStateLine(line) {
  * @returns {boolean}
  */
 function hasFocusedCanaryWorkOrderCues(text) {
-  // Proceeding with a named packet-content work order is packet review, not
-  // focused work-order selection.
+  // Proceeding with a named packet-content or call-script work order is review
+  // artifact generation, not focused work-order selection.
   if (isProceedWithPacketContentReviewRequest(text)) return false;
+  if (isProceedWithCallScriptReviewRequest(text)) return false;
 
   const prose = extractOperatorIntentProse(text);
   const proseLower = prose.toLowerCase();
@@ -581,9 +584,10 @@ function hasCanarySummaryJudgmentCues(text) {
   const lower = String(text || '').toLowerCase();
   if (!lower.trim()) return false;
 
-  // Proceed-with a named packet-content work order is packet review, not
-  // summary / focused selection.
+  // Proceed-with a named packet-content or call-script work order is review
+  // artifact generation, not summary / focused selection.
   if (isProceedWithPacketContentReviewRequest(text)) return false;
+  if (isProceedWithCallScriptReviewRequest(text)) return false;
 
   // Prefer operator prose so table headers/cells do not invent summary intent,
   // but still honor an embedded readiness summary paste as state for judgment.
@@ -706,6 +710,76 @@ function isProceedWithPacketContentReviewRequest(text) {
   if (!hasPacketContent) return false;
 
   return /\bPM-\d{3}\b/i.test(prose);
+}
+
+/**
+ * Operator is proceeding with a named preparation-only work order that is
+ * call-script review for an explicit CP prospect_id — generate the call-script
+ * review artifact, do not re-run canary summary / focused work-order selection.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isProceedWithCallScriptReviewRequest(text) {
+  const prose = extractOperatorIntentProse(text);
+  const lower = prose.toLowerCase();
+  if (!lower.trim()) return false;
+
+  const proceeding =
+    /\bproceed\s+with\b/.test(lower) ||
+    /\bexecute\s+the\s+(?:recommended\s+)?(?:next\s+)?(?:preparation[-\s]*only\s+)?work\s+order\b/.test(
+      lower
+    );
+  if (!proceeding) return false;
+
+  const hasWorkOrder =
+    /\b(?:recommended\s+)?(?:next\s+)?(?:preparation[-\s]*only\s+)?work\s+order\b/.test(
+      lower
+    ) || /\bcall[-\s]*script\s+review\b/.test(lower);
+  if (!hasWorkOrder) return false;
+
+  const hasCallScript =
+    /\bcall[-\s]*script\s+review\b/.test(lower) ||
+    /\bCP-\d{3}\s+call[-\s]*script\s+review\b/i.test(prose);
+  if (!hasCallScript) return false;
+
+  return /\bCP-\d{3}\b/i.test(prose);
+}
+
+/**
+ * Operator wants a preparation-only call-script review artifact — not a canary
+ * status summary and not focused next-work-order selection.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isCallScriptReviewRequest(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return false;
+
+  // Proceed-with a named call-script work order always wins over summary /
+  // focused selection cues in the same message.
+  if (isProceedWithCallScriptReviewRequest(raw)) return true;
+
+  // Summary / judgment cues always outrank call-script review generation,
+  // except the proceed-with path above.
+  if (hasCanarySummaryJudgmentCues(raw)) return false;
+
+  const prose = extractOperatorIntentProse(raw);
+  const lower = prose.toLowerCase();
+  if (!lower.trim()) return false;
+
+  if (
+    /\bcreate\s+(?:a\s+)?(?:preparation[-\s]*only\s+)?call[-\s]*script\s+review(?:\s+checklist|\s+package|\s+artifact)?\b/.test(
+      lower
+    ) ||
+    /\bcall[-\s]*script\s+review\s+checklist\b/.test(lower) ||
+    /\boperator\s+call[-\s]*script\s+review\b/.test(lower) ||
+    (/\bcall[-\s]*script\s+review\b/.test(lower) &&
+      /\b(?:for|of)\s+CP-\d{3}\b/i.test(prose))
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -1232,6 +1306,39 @@ function extractPacketReviewProspectId(text, knownIds = []) {
   }
 
   // Single-row desk: allow omitting the id.
+  if (known.length === 1) return known[0];
+  return null;
+}
+
+/**
+ * Resolve which desk prospect a call-script review request targets.
+ * @param {string} text
+ * @param {string[]} [knownIds]
+ * @returns {string|null}
+ */
+function extractCallScriptReviewProspectId(text, knownIds = []) {
+  const raw = String(text || '');
+  const known = (Array.isArray(knownIds) ? knownIds : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
+  const knownUpper = new Set(known.map((id) => id.toUpperCase()));
+
+  const patterns = [
+    /\b(?:for|of)\s+(CP-\d{3})\b/i,
+    /\b(CP-\d{3})\s+call[-\s]*script\s+review\b/i,
+    /\b(CP-\d{3})\s+(?:only|call[-\s]*script|review)\b/i,
+    /\bcall[-\s]*script\s+review(?:\s+checklist)?\s+for\s+(CP-\d{3})\b/i,
+    /\b(CP-\d{3})\b/i,
+  ];
+  for (const re of patterns) {
+    const match = re.exec(raw);
+    if (!match) continue;
+    const id = String(match[1] || '').trim();
+    if (!id) continue;
+    if (knownUpper.size === 0 || knownUpper.has(id.toUpperCase())) return id;
+    return id;
+  }
+
   if (known.length === 1) return known[0];
   return null;
 }
@@ -3061,6 +3168,18 @@ const PACKET_REVIEW_INLINE_REQUIRED_FIELDS = Object.freeze([
 ]);
 
 /**
+ * Required fields for preparation-only call-script review from inline known facts.
+ */
+const CALL_SCRIPT_REVIEW_INLINE_REQUIRED_FIELDS = Object.freeze([
+  'prospect_id',
+  'company_name',
+  'contact_name',
+  'call_readiness',
+  'script_readiness',
+  'execution_readiness',
+]);
+
+/**
  * Optional fields accepted when building packet review from inline known facts.
  */
 const PACKET_REVIEW_INLINE_OPTIONAL_FIELDS = Object.freeze([
@@ -3072,6 +3191,8 @@ const PACKET_REVIEW_INLINE_OPTIONAL_FIELDS = Object.freeze([
   'phone_value',
   'contact_role_status',
   'draft_readiness',
+  'call_readiness',
+  'script_readiness',
   'notes',
   'operator_next_action',
   'verification_status',
@@ -3084,6 +3205,30 @@ const PACKET_REVIEW_INLINE_OPTIONAL_FIELDS = Object.freeze([
 const PACKET_REVIEW_INLINE_ALLOWLIST = Object.freeze([
   ...PACKET_REVIEW_INLINE_REQUIRED_FIELDS,
   ...PACKET_REVIEW_INLINE_OPTIONAL_FIELDS,
+]);
+
+const CALL_SCRIPT_REVIEW_INLINE_OPTIONAL_FIELDS = Object.freeze([
+  'phone_status',
+  'phone_value',
+  'contact_role_status',
+  'notes',
+  'operator_next_action',
+  'verification_status',
+  'verification_summary',
+  'work_order',
+]);
+
+const CALL_SCRIPT_REVIEW_INLINE_ALLOWLIST = Object.freeze([
+  ...CALL_SCRIPT_REVIEW_INLINE_REQUIRED_FIELDS,
+  ...CALL_SCRIPT_REVIEW_INLINE_OPTIONAL_FIELDS,
+]);
+
+/** Shared allowlist so one bullet parser covers packet + call-script fields. */
+const INLINE_KNOWN_FACTS_ALLOWLIST = Object.freeze([
+  ...new Set([
+    ...PACKET_REVIEW_INLINE_ALLOWLIST,
+    ...CALL_SCRIPT_REVIEW_INLINE_ALLOWLIST,
+  ]),
 ]);
 
 /**
@@ -3200,7 +3345,7 @@ function parseInlineKnownFactBulletLine(line) {
   if (!match) return null;
 
   const key = match[1].toLowerCase();
-  if (!PACKET_REVIEW_INLINE_ALLOWLIST.includes(key)) return null;
+  if (!INLINE_KNOWN_FACTS_ALLOWLIST.includes(key)) return null;
 
   let value = String(match[2] || '').trim();
   // Notes: free text through end of line (keep commas / semicolons).
@@ -3316,6 +3461,109 @@ function parseInlinePacketReviewKnownFacts(text) {
 }
 
 /**
+ * Parse a single-prospect inline known-facts block for preparation-only
+ * call-script review. Does not invent values. Does not require a markdown table.
+ *
+ * @param {string} text
+ * @returns {{
+ *   hasInlineFacts: boolean,
+ *   row: object|null,
+ *   missingRequired: string[],
+ *   assignedFields: string[],
+ * }}
+ */
+function parseInlineCallScriptReviewKnownFacts(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) {
+    return {
+      hasInlineFacts: false,
+      row: null,
+      missingRequired: [...CALL_SCRIPT_REVIEW_INLINE_REQUIRED_FIELDS],
+      assignedFields: [],
+    };
+  }
+
+  const columnSet = new Set(CALL_SCRIPT_REVIEW_INLINE_ALLOWLIST);
+  /** @type {Record<string, string>} */
+  const fields = {};
+  /** @type {Set<string>} */
+  const explicitlyAssigned = new Set();
+
+  const section = extractInlineKnownFactsSection(raw);
+  const sectionLines = section ? section.split(/\r?\n/) : [];
+
+  for (const line of sectionLines) {
+    const parsed = parseInlineKnownFactBulletLine(line);
+    if (!parsed) continue;
+    if (!columnSet.has(parsed.key)) continue;
+    fields[parsed.key] = parsed.value;
+    explicitlyAssigned.add(parsed.key);
+  }
+
+  if (section.trim()) {
+    const proseParsed = parseMutableFieldAssignments(section, columnSet);
+    for (const [field, value] of Object.entries(proseParsed || {})) {
+      const key = String(field || '')
+        .trim()
+        .toLowerCase();
+      if (!columnSet.has(key)) continue;
+      const cleaned = String(value == null ? '' : value).trim();
+      if (!cleaned) continue;
+      if (explicitlyAssigned.has(key)) continue;
+      fields[key] = cleaned;
+      explicitlyAssigned.add(key);
+    }
+  }
+
+  if (!fields.prospect_id) {
+    const fromProse = extractCallScriptReviewProspectId(raw, []);
+    if (fromProse) fields.prospect_id = fromProse;
+  }
+
+  // Accept work_order phrasing from proceed-with prose when not in bullets.
+  if (!fields.work_order && /\bcall[-\s]*script\s+review\b/i.test(raw)) {
+    fields.work_order = 'call-script review';
+    explicitlyAssigned.add('work_order');
+  }
+
+  const nonProspectAssigned = [...explicitlyAssigned].filter(
+    (k) => k !== 'prospect_id'
+  );
+  const hasInlineFacts = nonProspectAssigned.length > 0;
+
+  const missingRequired = CALL_SCRIPT_REVIEW_INLINE_REQUIRED_FIELDS.filter(
+    (field) => {
+      const value = fields[field];
+      return value == null || !String(value).trim();
+    }
+  );
+
+  if (!hasInlineFacts) {
+    return {
+      hasInlineFacts: false,
+      row: null,
+      missingRequired: [...CALL_SCRIPT_REVIEW_INLINE_REQUIRED_FIELDS],
+      assignedFields: [...explicitlyAssigned],
+    };
+  }
+
+  /** @type {Record<string, string>} */
+  const row = {};
+  for (const key of CALL_SCRIPT_REVIEW_INLINE_ALLOWLIST) {
+    if (fields[key] != null && String(fields[key]).trim()) {
+      row[key] = String(fields[key]).trim();
+    }
+  }
+
+  return {
+    hasInlineFacts: true,
+    row,
+    missingRequired,
+    assignedFields: Object.keys(row),
+  };
+}
+
+/**
  * Ingest a pasted fillable verification table into session activeWorkContext.
  * Does not mutate row values. Does not create a mission or imply execution.
  * @param {{ question: string, session: object|null }} input
@@ -3390,6 +3638,8 @@ module.exports = {
   FILLABLE_VERIFICATION_TABLE_DETECT_HEADERS,
   PACKET_REVIEW_INLINE_REQUIRED_FIELDS,
   PACKET_REVIEW_INLINE_OPTIONAL_FIELDS,
+  CALL_SCRIPT_REVIEW_INLINE_REQUIRED_FIELDS,
+  CALL_SCRIPT_REVIEW_INLINE_OPTIONAL_FIELDS,
   getActiveWorkContext,
   setActiveWorkContext,
   cloneActiveWorkContext,
@@ -3402,6 +3652,7 @@ module.exports = {
   isActiveWorkFollowUpCue,
   isActiveWorkTransformCue,
   isPacketReviewRequest,
+  isCallScriptReviewRequest,
   isCanarySummaryJudgmentRequest,
   hasCanarySummaryJudgmentCues,
   hasFocusedCanaryWorkOrderCues,
@@ -3409,9 +3660,11 @@ module.exports = {
   wantsFocusedFutureMailingEligibilitySection,
   wantsFocusedFinalApprovalGateSection,
   isProceedWithPacketContentReviewRequest,
+  isProceedWithCallScriptReviewRequest,
   isFocusedCanaryWorkOrderRequest,
   extractOperatorIntentProse,
   extractPacketReviewProspectId,
+  extractCallScriptReviewProspectId,
   isExplicitNewMissionRequest,
   isExplicitContextOverride,
   isExplicitExecutionRequest,
@@ -3437,6 +3690,7 @@ module.exports = {
   looksLikeFillableVerificationTablePaste,
   parseFillableVerificationTableFromMessage,
   parseInlinePacketReviewKnownFacts,
+  parseInlineCallScriptReviewKnownFacts,
   parseInlineKnownFactBulletLine,
   extractInlineKnownFactsSection,
   isInlineKnownFactsSectionStopLine,

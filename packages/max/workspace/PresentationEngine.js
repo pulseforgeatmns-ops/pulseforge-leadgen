@@ -50,10 +50,10 @@ class PresentationEngine {
       };
     }
 
-    // Packet-review artifacts default to answer-only unless debug explicitly
-    // disabled strict shaping (strictOutputShape === false).
+    // Packet-review / call-script-review artifacts default to answer-only
+    // unless debug explicitly disabled strict shaping (strictOutputShape === false).
     if (
-      metadata.packetReview === true &&
+      (metadata.packetReview === true || metadata.callScriptReview === true) &&
       metadata.strictOutputShape !== false
     ) {
       const answerOnly = {

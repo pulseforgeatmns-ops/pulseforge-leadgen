@@ -88,6 +88,7 @@ module.exports = {
   isActiveWorkReuseProspectCue: ActiveWorkContext.isActiveWorkReuseProspectCue,
   isActiveWorkTransformCue: ActiveWorkContext.isActiveWorkTransformCue,
   isPacketReviewRequest: ActiveWorkContext.isPacketReviewRequest,
+  isCallScriptReviewRequest: ActiveWorkContext.isCallScriptReviewRequest,
   isCanarySummaryJudgmentRequest:
     ActiveWorkContext.isCanarySummaryJudgmentRequest,
   hasCanarySummaryJudgmentCues: ActiveWorkContext.hasCanarySummaryJudgmentCues,
@@ -96,8 +97,14 @@ module.exports = {
   hasCanarySummaryOutputCues: ActiveWorkContext.hasCanarySummaryOutputCues,
   isFocusedCanaryWorkOrderRequest:
     ActiveWorkContext.isFocusedCanaryWorkOrderRequest,
+  isProceedWithPacketContentReviewRequest:
+    ActiveWorkContext.isProceedWithPacketContentReviewRequest,
+  isProceedWithCallScriptReviewRequest:
+    ActiveWorkContext.isProceedWithCallScriptReviewRequest,
   extractOperatorIntentProse: ActiveWorkContext.extractOperatorIntentProse,
   extractPacketReviewProspectId: ActiveWorkContext.extractPacketReviewProspectId,
+  extractCallScriptReviewProspectId:
+    ActiveWorkContext.extractCallScriptReviewProspectId,
   isFillableTableRequest: ActiveWorkContext.isFillableTableRequest,
   isFillableTableUpdateRequest: ActiveWorkContext.isFillableTableUpdateRequest,
   isFillableTableReadinessReassessRequest:

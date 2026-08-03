@@ -3952,6 +3952,127 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /No launch, execution, approval, print, or mail/i);
   });
 
+  it('proceed with CP-001 call-script review routes to call-script review artifact', async () => {
+    const {
+      isProceedWithCallScriptReviewRequest,
+      isCallScriptReviewRequest,
+      isFocusedCanaryWorkOrderRequest,
+      isCanarySummaryJudgmentRequest,
+    } = require('../ActiveWorkContext');
+
+    const question = [
+      'Proceed with the recommended next preparation-only work order: CP-001 call-script review',
+      '',
+      'Known facts available:',
+      '- prospect_id: CP-001',
+      '- company_name: Gamache Properties',
+      '- contact_name: Ben Gamache',
+      '- phone_status: verified',
+      '- phone_value: 603-555-0198',
+      '- contact_role_status: verified',
+      '- call_readiness: ready_for_review',
+      '- script_readiness: allowed',
+      '- execution_readiness: blocked',
+      '- work_order: call-script review',
+      '- final_gate: call-script review is not call approval',
+      '',
+      'Do not include Reasoning, Unavailable context, or Next sections.',
+      'Do not create a mission. Do not launch, execute, approve, dial, call, text, or email.',
+    ].join('\n');
+
+    assert.equal(isProceedWithCallScriptReviewRequest(question), true);
+    assert.equal(isCallScriptReviewRequest(question), true);
+    assert.equal(isFocusedCanaryWorkOrderRequest(question), false);
+    assert.equal(isCanarySummaryJudgmentRequest(question), false);
+
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const meta = result.structured.metadata || {};
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(meta.callScriptReview, true);
+    assert.equal(meta.callScriptContentReview, true);
+    assert.equal(meta.focusedWorkOrder, undefined);
+    assert.equal(meta.canarySummary, undefined);
+    assert.equal(meta.executionReadiness, 'blocked');
+    assert.equal(meta.callReadiness, 'ready_for_review');
+    assert.equal(meta.scriptReadiness, 'allowed');
+    assert.match(
+      answer,
+      /Preparation-only call-script review — Campaign 001 \/ CP-001/i
+    );
+    assert.match(answer, /Work order:\s*call-script review/i);
+    assert.match(answer, /CP-001 call-script review checklist:/i);
+    assert.match(answer, /Provisional call opener/i);
+    assert.match(answer, /Discovery questions:/i);
+    assert.match(answer, /Objection-handling notes:/i);
+    assert.match(answer, /Voicemail draft/i);
+    assert.match(answer, /--- Operator caveats ---/i);
+    assert.match(answer, /Call-script approval checklist:/i);
+    assert.match(answer, /provisional call opener reviewed/i);
+    assert.match(answer, /discovery questions reviewed/i);
+    assert.match(answer, /objection-handling notes reviewed/i);
+    assert.match(answer, /voicemail draft reviewed/i);
+    assert.match(answer, /operator caveats accepted/i);
+    assert.match(answer, /call-script review checklist complete/i);
+    assert.match(answer, /review decision recorded/i);
+    assert.match(answer, /dial\/call approval still pending/i);
+    assert.match(answer, /Final approval gate before outbound action:/i);
+    assert.match(answer, /Call-script review is not call approval/i);
+    assert.match(answer, /PulseForge call-review tracking fields:/i);
+    assert.match(answer, /call_script_review_status:\s*in_review/i);
+    assert.match(answer, /call_script_reviewed_by:\s*\(operator\)/i);
+    assert.match(answer, /call_script_reviewed_at:\s*\(set when reviewed\)/i);
+    assert.match(answer, /call_script_content_decision:\s*\(pending\)/i);
+    assert.match(answer, /approved_for_dial:\s*false/i);
+    assert.match(answer, /dial_call_approval_status:\s*pending/i);
+    assert.match(answer, /execution_readiness:\s*blocked/i);
+    assert.match(answer, /call_readiness_at_review:\s*ready_for_review/i);
+    assert.match(answer, /script_readiness_at_review:\s*allowed/i);
+    assert.match(answer, /phone_value_at_review:\s*603-555-0198 \(review only — do not dial\)/i);
+    assert.match(answer, /What remains blocked:/i);
+    assert.match(
+      answer,
+      /Use verified phone as a review field only; do not call it from this turn/i
+    );
+    assert.match(
+      answer,
+      /Do not invent industry, pain points, sources, portfolio size, or evidence/i
+    );
+    assert.doesNotMatch(answer, /Recommended next work order:/i);
+    assert.doesNotMatch(answer, /I can choose the next preparation-only work order/i);
+    assert.doesNotMatch(answer, /call-prep canary:/i);
+    assert.doesNotMatch(answer, /readiness table for CP-001\/002\/003/i);
+    assert.doesNotMatch(answer, /\| prospect_id \| company_name \| contact_name \| call_readiness \|/i);
+    assert.doesNotMatch(answer, /packet-content review/i);
+    assert.doesNotMatch(answer, /mail_readiness/i);
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.match(answer, /No mission created/i);
+    assert.match(
+      answer,
+      /No launch, execution, approval, dial, call, text, or email/i
+    );
+  });
+
   it('compact readiness table with bold/alias headers populates canary summary rows', async () => {
     const {
       isCanarySummaryJudgmentRequest,
