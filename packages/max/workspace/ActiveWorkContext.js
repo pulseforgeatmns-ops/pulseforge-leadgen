@@ -322,7 +322,10 @@ function extractOperatorIntentProse(text) {
       if (cells.length >= 2) continue;
     }
 
-    if (/^known\s+current\s+state\s*:?\s*$/i.test(trimmed)) {
+    if (
+      /^known\s+current\s+state\s*:?\s*$/i.test(trimmed) ||
+      /^current\s+canary\s+state(?:\s+lines?)?\s*:?\s*$/i.test(trimmed)
+    ) {
       inKnownState = true;
       continue;
     }
@@ -344,10 +347,35 @@ function extractOperatorIntentProse(text) {
       continue;
     }
 
+    // Drop key=value canary state lines even without a heading.
+    if (looksLikeCanaryStateLine(trimmed)) {
+      continue;
+    }
+
     kept.push(line);
   }
 
   return kept.join('\n');
+}
+
+/**
+ * True when a line looks like a per-prospect canary state line
+ * (PM-001: company=...; mail_readiness=... or legacy comma prose).
+ * @param {string} line
+ * @returns {boolean}
+ */
+function looksLikeCanaryStateLine(line) {
+  const cleaned = String(line || '')
+    .replace(/^[-*•]\s*/, '')
+    .trim();
+  if (!/^PM-\d{3}\s*:/i.test(cleaned)) return false;
+  if (/\bmail_readiness\s*=/i.test(cleaned)) return true;
+  if (/\b(?:company|company_name)\s*=/i.test(cleaned)) return true;
+  if (/\bverification_summary\s*=/i.test(cleaned)) return true;
+  if (/\bmail_readiness\b/i.test(cleaned) && /\bdraft_readiness\b/i.test(cleaned)) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -357,6 +385,10 @@ function extractOperatorIntentProse(text) {
  * @returns {boolean}
  */
 function hasFocusedCanaryWorkOrderCues(text) {
+  // Proceeding with a named packet-content work order is packet review, not
+  // focused work-order selection.
+  if (isProceedWithPacketContentReviewRequest(text)) return false;
+
   const prose = extractOperatorIntentProse(text);
   const proseLower = prose.toLowerCase();
   if (!proseLower.trim()) return false;
@@ -532,6 +564,10 @@ function hasCanarySummaryJudgmentCues(text) {
   const lower = String(text || '').toLowerCase();
   if (!lower.trim()) return false;
 
+  // Proceed-with a named packet-content work order is packet review, not
+  // summary / focused selection.
+  if (isProceedWithPacketContentReviewRequest(text)) return false;
+
   // Prefer operator prose so table headers/cells do not invent summary intent,
   // but still honor an embedded readiness summary paste as state for judgment.
   const prose = extractOperatorIntentProse(text);
@@ -620,6 +656,39 @@ function hasCanarySummaryJudgmentCues(text) {
 }
 
 /**
+ * Operator is proceeding with a named preparation-only work order that is
+ * packet-content review for an explicit prospect_id — generate the packet
+ * review artifact, do not re-run focused work-order selection.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isProceedWithPacketContentReviewRequest(text) {
+  const prose = extractOperatorIntentProse(text);
+  const lower = prose.toLowerCase();
+  if (!lower.trim()) return false;
+
+  const proceeding =
+    /\bproceed\s+with\b/.test(lower) ||
+    /\bexecute\s+the\s+(?:recommended\s+)?(?:next\s+)?(?:preparation[-\s]*only\s+)?work\s+order\b/.test(
+      lower
+    );
+  if (!proceeding) return false;
+
+  const hasWorkOrder =
+    /\b(?:recommended\s+)?(?:next\s+)?(?:preparation[-\s]*only\s+)?work\s+order\b/.test(
+      lower
+    ) || /\bpacket[-\s]*content\s+review\b/.test(lower);
+  if (!hasWorkOrder) return false;
+
+  const hasPacketContent =
+    /\bpacket[-\s]*content\s+review\b/.test(lower) ||
+    /\bpacket\s+review\b/.test(lower);
+  if (!hasPacketContent) return false;
+
+  return /\bPM-\d{3}\b/i.test(prose);
+}
+
+/**
  * Operator wants a preparation-only packet review artifact from the desk table
  * (checklist / drafts / tracking) — not a canary status summary, not a new
  * prospect paste, and not an initial multi-prospect canary package list.
@@ -634,6 +703,10 @@ function isPacketReviewRequest(text) {
   const raw = String(text || '');
   if (!raw.trim()) return false;
 
+  // Proceed-with a named packet-content work order always wins over summary /
+  // focused selection cues in the same message.
+  if (isProceedWithPacketContentReviewRequest(raw)) return true;
+
   // Summary / judgment cues always outrank packet-review generation.
   if (hasCanarySummaryJudgmentCues(raw)) return false;
 
@@ -647,6 +720,7 @@ function isPacketReviewRequest(text) {
       lower
     ) ||
     /\bpacket\s+contents\s+checklist\b/.test(lower) ||
+    /\bpacket[-\s]*content\s+review\b/.test(lower) ||
     /\bpacket\s+review(?:\s+checklist|\s+package|\s+artifact)?\b/.test(lower) ||
     /\boperator\s+packet\s+review\b/.test(lower) ||
     /\bcreate\s+(?:a\s+)?(?:preparation[-\s]*only\s+)?packet(?:\s+review)?\b/.test(
@@ -798,11 +872,12 @@ function parseKnownStateGateSummary(prose) {
 }
 
 /**
- * Parse operator "known current state" bullets into readiness rows.
- * Does not treat bullets as a new prospect list (no pipe/em-dash required).
+ * Parse operator "known current state" bullets / canary state lines into
+ * readiness rows. Does not treat lines as a new prospect list.
  *
- * Example:
+ * Supported shapes:
  * - PM-001: Gamache Properties, Ben Gamache, website/address/phone/contact role verified, mail_readiness ready_for_review, draft_readiness allowed, execution_readiness blocked
+ * - PM-001: company=Gamache Properties; contact=Ben Gamache; verification_summary=...; mail_readiness=ready_for_review; draft_readiness=allowed; execution_readiness=blocked; next_action=...
  *
  * @param {string} text
  * @returns {{ rows: object[], hasKnownState: boolean }}
@@ -827,68 +902,191 @@ function parseKnownCurrentStateBullets(text) {
     const prospectId = String(match[1] || '')
       .trim()
       .toUpperCase();
-    let rest = String(match[2] || '').trim();
+    const rest = String(match[2] || '').trim();
     if (!prospectId || !rest) continue;
 
-    let mail_readiness = null;
-    let draft_readiness = null;
-    let execution_readiness = null;
-
-    const mailM = /(?:^|,\s*)mail_readiness\s+([a-z0-9_]+)/i.exec(rest);
-    if (mailM) {
-      mail_readiness = String(mailM[1] || '')
-        .trim()
-        .toLowerCase();
-      rest = rest.replace(mailM[0], '').trim();
-    }
-    const draftM = /(?:^|,\s*)draft_readiness\s+([a-z0-9_]+)/i.exec(rest);
-    if (draftM) {
-      draft_readiness = String(draftM[1] || '')
-        .trim()
-        .toLowerCase();
-      rest = rest.replace(draftM[0], '').trim();
-    }
-    const execM = /(?:^|,\s*)execution_readiness\s+([a-z0-9_]+)/i.exec(rest);
-    if (execM) {
-      execution_readiness = String(execM[1] || '')
-        .trim()
-        .toLowerCase();
-      rest = rest.replace(execM[0], '').trim();
+    const kvRow = parseCanaryStateLineKeyValues(prospectId, rest);
+    if (kvRow) {
+      rows.push(kvRow);
+      continue;
     }
 
-    // Strip trailing commas left by readiness removals.
-    rest = rest.replace(/^,\s*|,\s*$/g, '').replace(/,\s*,/g, ',').trim();
-
-    // company, contact, gate prose…
-    const parts = rest.split(',').map((p) => p.trim()).filter(Boolean);
-    if (parts.length < 2) continue;
-
-    const company_name = parts[0];
-    const contact_name = parts[1];
-    const gateProse = parts.slice(2).join(', ').trim();
-    const gates = parseKnownStateGateSummary(gateProse);
-
-    rows.push({
-      prospect_id: prospectId,
-      company_name,
-      contact_name,
-      website_status: gates.website_status,
-      mailing_address_status: gates.mailing_address_status,
-      phone_status: gates.phone_status,
-      contact_role_status: gates.contact_role_status,
-      gate_summary: gates.gate_summary || gateProse,
-      mail_readiness: mail_readiness || 'blocked',
-      draft_readiness: draft_readiness || 'allowed',
-      // Preparation-only: never authorize execution from known-state bullets.
-      execution_readiness: 'blocked',
-      operator_next_action: '',
-      notes: '',
-    });
+    const proseRow = parseCanaryStateLineProse(prospectId, rest);
+    if (proseRow) rows.push(proseRow);
   }
 
   return {
     rows,
     hasKnownState: rows.length > 0,
+  };
+}
+
+/**
+ * Normalize canary state-line field aliases to canonical row keys.
+ * @param {string} rawKey
+ * @returns {string}
+ */
+function normalizeCanaryStateLineFieldKey(rawKey) {
+  const key = String(rawKey || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_');
+  if (key === 'company' || key === 'company_name') return 'company_name';
+  if (key === 'contact' || key === 'contact_name') return 'contact_name';
+  if (
+    key === 'verification_summary' ||
+    key === 'gate_summary' ||
+    key === 'status_summary'
+  ) {
+    return 'verification_summary';
+  }
+  if (key === 'mail_readiness' || key === 'mail') return 'mail_readiness';
+  if (key === 'draft_readiness' || key === 'draft') return 'draft_readiness';
+  if (key === 'execution_readiness' || key === 'execution') {
+    return 'execution_readiness';
+  }
+  if (
+    key === 'next_action' ||
+    key === 'operator_next_action' ||
+    key === 'operator_next'
+  ) {
+    return 'operator_next_action';
+  }
+  return key;
+}
+
+/**
+ * Parse semicolon-delimited key=value canary state line body.
+ * @param {string} prospectId
+ * @param {string} rest
+ * @returns {object|null}
+ */
+function parseCanaryStateLineKeyValues(prospectId, rest) {
+  const body = String(rest || '').trim();
+  if (!body) return null;
+  // Require at least one key=value assignment (not legacy comma prose).
+  if (!/^[a-z][a-z0-9_]*\s*=/i.test(body) && !/;\s*[a-z][a-z0-9_]*\s*=/i.test(body)) {
+    return null;
+  }
+
+  /** @type {Record<string, string>} */
+  const fields = {};
+  const segments = body.split(';');
+  for (const segment of segments) {
+    const part = String(segment || '').trim();
+    if (!part) continue;
+    const kv = /^([a-z][a-z0-9_]*)\s*=\s*(.+)$/i.exec(part);
+    if (!kv) continue;
+    const key = normalizeCanaryStateLineFieldKey(kv[1]);
+    const value = String(kv[2] || '').trim();
+    if (!key || !value) continue;
+    fields[key] = value;
+  }
+
+  if (!Object.keys(fields).length) return null;
+
+  const company_name = fields.company_name || '';
+  const contact_name = fields.contact_name || '';
+  // Need identifiable prospect facts — company+contact or readiness fields.
+  if (
+    !company_name &&
+    !contact_name &&
+    !fields.mail_readiness &&
+    !fields.verification_summary
+  ) {
+    return null;
+  }
+
+  const verificationSummary = String(fields.verification_summary || '').trim();
+  const gates = parseKnownStateGateSummary(verificationSummary);
+
+  return {
+    prospect_id: prospectId,
+    company_name: company_name || '',
+    contact_name: contact_name || '',
+    website_status: gates.website_status,
+    mailing_address_status: gates.mailing_address_status,
+    phone_status: gates.phone_status,
+    contact_role_status: gates.contact_role_status,
+    gate_summary: verificationSummary || gates.gate_summary || '',
+    verification_summary: verificationSummary || '',
+    mail_readiness: String(fields.mail_readiness || 'blocked')
+      .trim()
+      .toLowerCase(),
+    draft_readiness: String(fields.draft_readiness || 'allowed')
+      .trim()
+      .toLowerCase(),
+    // Preparation-only: never authorize execution from known-state lines.
+    execution_readiness: 'blocked',
+    operator_next_action: String(fields.operator_next_action || '').trim(),
+    notes: '',
+  };
+}
+
+/**
+ * Parse legacy comma-separated canary state line body.
+ * @param {string} prospectId
+ * @param {string} rest
+ * @returns {object|null}
+ */
+function parseCanaryStateLineProse(prospectId, rest) {
+  let body = String(rest || '').trim();
+  if (!body) return null;
+
+  let mail_readiness = null;
+  let draft_readiness = null;
+  let execution_readiness = null;
+
+  const mailM = /(?:^|,\s*)mail_readiness\s+([a-z0-9_]+)/i.exec(body);
+  if (mailM) {
+    mail_readiness = String(mailM[1] || '')
+      .trim()
+      .toLowerCase();
+    body = body.replace(mailM[0], '').trim();
+  }
+  const draftM = /(?:^|,\s*)draft_readiness\s+([a-z0-9_]+)/i.exec(body);
+  if (draftM) {
+    draft_readiness = String(draftM[1] || '')
+      .trim()
+      .toLowerCase();
+    body = body.replace(draftM[0], '').trim();
+  }
+  const execM = /(?:^|,\s*)execution_readiness\s+([a-z0-9_]+)/i.exec(body);
+  if (execM) {
+    execution_readiness = String(execM[1] || '')
+      .trim()
+      .toLowerCase();
+    body = body.replace(execM[0], '').trim();
+  }
+
+  // Strip trailing commas left by readiness removals.
+  body = body.replace(/^,\s*|,\s*$/g, '').replace(/,\s*,/g, ',').trim();
+
+  // company, contact, gate prose…
+  const parts = body.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+
+  const company_name = parts[0];
+  const contact_name = parts[1];
+  const gateProse = parts.slice(2).join(', ').trim();
+  const gates = parseKnownStateGateSummary(gateProse);
+
+  return {
+    prospect_id: prospectId,
+    company_name,
+    contact_name,
+    website_status: gates.website_status,
+    mailing_address_status: gates.mailing_address_status,
+    phone_status: gates.phone_status,
+    contact_role_status: gates.contact_role_status,
+    gate_summary: gates.gate_summary || gateProse,
+    verification_summary: gateProse,
+    mail_readiness: mail_readiness || 'blocked',
+    draft_readiness: draft_readiness || 'allowed',
+    // Preparation-only: never authorize execution from known-state bullets.
+    execution_readiness: 'blocked',
+    operator_next_action: '',
+    notes: '',
   };
 }
 
@@ -907,6 +1105,7 @@ function extractPacketReviewProspectId(text, knownIds = []) {
 
   const patterns = [
     /\b(?:for|of)\s+(PM-\d{3})\b/i,
+    /\b(PM-\d{3})\s+packet[-\s]*content\s+review\b/i,
     /\b(PM-\d{3})\s+(?:only|packet|review)\b/i,
     /\bpacket(?:\s+review)?(?:\s+checklist)?\s+for\s+(PM-\d{3})\b/i,
     /\bdraft\s+(PM-\d{3})\s+packet\b/i,
@@ -2720,6 +2919,8 @@ const PACKET_REVIEW_INLINE_OPTIONAL_FIELDS = Object.freeze([
   'notes',
   'operator_next_action',
   'verification_status',
+  'verification_summary',
+  'work_order',
   'industry',
   'vertical',
 ]);
@@ -3051,6 +3252,7 @@ module.exports = {
   hasCanarySummaryOutputCues,
   wantsFocusedFutureMailingEligibilitySection,
   wantsFocusedFinalApprovalGateSection,
+  isProceedWithPacketContentReviewRequest,
   isFocusedCanaryWorkOrderRequest,
   extractOperatorIntentProse,
   extractPacketReviewProspectId,

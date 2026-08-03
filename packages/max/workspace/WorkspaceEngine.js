@@ -686,21 +686,8 @@ async function maybeHandleActiveWorkContinuation(input) {
     });
   }
 
-  // Cross-prospect canary status summary / judgment — before prospect
-  // extraction / parse fallback. Input order: desk tableRows → pasted table
-  // (already ingested) → known current-state bullets → ask for state.
-  if (isCanarySummaryJudgmentRequest(question)) {
-    return handleCanarySummaryJudgmentContinuation({
-      question,
-      session,
-      prior,
-    });
-  }
-
-  // Preparation-only packet review from the active canary table — before
-  // prospect extraction / parse fallback / mission routing.
-  // Fallback order: activeWorkContext.tableRows → pasted markdown table
-  // (already ingested above) → inline known-facts block.
+  // Proceed-with a named packet-content work order (or explicit packet review)
+  // before focused work-order / canary summary selection.
   if (isPacketReview) {
     if (hasEntities && activeContextHasFillableTable(prior)) {
       return handlePacketReviewContinuation({
@@ -715,6 +702,17 @@ async function maybeHandleActiveWorkContinuation(input) {
       reason: 'active_work_context_missing_for_packet_review',
       structured: buildMissingPacketReviewResponse({ question }),
     };
+  }
+
+  // Cross-prospect canary status summary / judgment — before prospect
+  // extraction / parse fallback. Input order: desk tableRows → pasted table
+  // (already ingested) → known current-state bullets → ask for state.
+  if (isCanarySummaryJudgmentRequest(question)) {
+    return handleCanarySummaryJudgmentContinuation({
+      question,
+      session,
+      prior,
+    });
   }
 
   // Explicit table-update intent without desk table — ask for the current
@@ -2937,21 +2935,8 @@ async function maybeBuildCanaryPreparationResponse(input) {
     });
   }
 
-  // Cross-prospect canary summary / judgment outranks packet-review generation
-  // (even when a ready_for_review row recommends packet review). Secondary hard
-  // stop before prospect sniff / parse clarification.
-  if (isCanarySummaryJudgmentRequest(question)) {
-    return handleCanarySummaryJudgmentContinuation({
-      question,
-      session,
-      prior,
-    });
-  }
-
-  // Packet review from desk table — also owned by early continuation, but
-  // keep a secondary guard so canary routing never asks to re-paste prospects.
-  // Fallback: inline known-facts block when no desk table is present.
-  // Requires packet-specific cues; never inferred from mail_readiness alone.
+  // Proceed-with / packet review before canary summary — mirrors early
+  // continuation so secondary canary routing never re-selects a work order.
   if (isPacketReviewRequest(question)) {
     if (activeContextHasEntities(prior) && activeContextHasFillableTable(prior)) {
       return handlePacketReviewContinuation({
@@ -2966,6 +2951,16 @@ async function maybeBuildCanaryPreparationResponse(input) {
       reason: 'canary_packet_review_missing_table',
       structured: buildMissingPacketReviewResponse({ question }),
     };
+  }
+
+  // Cross-prospect canary summary / judgment. Secondary hard stop before
+  // prospect sniff / parse clarification.
+  if (isCanarySummaryJudgmentRequest(question)) {
+    return handleCanarySummaryJudgmentContinuation({
+      question,
+      session,
+      prior,
+    });
   }
 
   const isCanary = isPreparationOnlyCanary(question);
