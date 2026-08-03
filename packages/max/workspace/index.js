@@ -90,6 +90,8 @@ module.exports = {
   isPacketReviewRequest: ActiveWorkContext.isPacketReviewRequest,
   isCanarySummaryJudgmentRequest:
     ActiveWorkContext.isCanarySummaryJudgmentRequest,
+  hasCanarySummaryJudgmentCues: ActiveWorkContext.hasCanarySummaryJudgmentCues,
+  extractOperatorIntentProse: ActiveWorkContext.extractOperatorIntentProse,
   extractPacketReviewProspectId: ActiveWorkContext.extractPacketReviewProspectId,
   isFillableTableRequest: ActiveWorkContext.isFillableTableRequest,
   isFillableTableUpdateRequest: ActiveWorkContext.isFillableTableUpdateRequest,
