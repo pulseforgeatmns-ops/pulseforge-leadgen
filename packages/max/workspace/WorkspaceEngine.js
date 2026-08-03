@@ -33,6 +33,8 @@ const {
   isPacketReviewRequest,
   isCanarySummaryJudgmentRequest,
   isFocusedCanaryWorkOrderRequest,
+  wantsFocusedFutureMailingEligibilitySection,
+  wantsFocusedFinalApprovalGateSection,
   extractPacketReviewProspectId,
   isExplicitNewMissionRequest,
   isExplicitContextOverride,
@@ -1735,7 +1737,13 @@ function buildFocusedCanaryWorkOrderResponse(input = {}) {
       return `- ${id}: ${action}`;
     });
 
-  const answer = [
+  const eligibilityId = prioritizeId || 'PM-001';
+  const includeFutureMailingEligibility =
+    wantsFocusedFutureMailingEligibilitySection(question);
+  const includeFinalApprovalGate =
+    wantsFocusedFinalApprovalGateSection(question);
+
+  const answerLines = [
     'Recommended next work order:',
     workOrderTitle,
     '',
@@ -1750,12 +1758,38 @@ function buildFocusedCanaryWorkOrderResponse(input = {}) {
     '',
     'What Max must not do:',
     ...maxMustNot,
+  ];
+
+  if (includeFutureMailingEligibility) {
+    answerLines.push(
+      '',
+      `Future mailing eligibility for ${eligibilityId}:`,
+      '- packet-content review completed',
+      '- readiness remains complete at send time',
+      '- operator gives separate explicit launch/mail approval'
+    );
+  }
+
+  answerLines.push(
     '',
     'Deferred prospects:',
-    ...(deferredLines.length ? deferredLines : ['- None']),
+    ...(deferredLines.length ? deferredLines : ['- None'])
+  );
+
+  if (includeFinalApprovalGate) {
+    answerLines.push(
+      '',
+      'Final approval gate before outbound action:',
+      'No outbound action can happen until the operator explicitly approves launch/mail in a future step. Packet-content review is not mail approval.'
+    );
+  }
+
+  answerLines.push(
     '',
-    'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
-  ].join('\n');
+    'Preparation-only. No mission created. No launch, execution, approval, print, or mail.'
+  );
+
+  const answer = answerLines.join('\n');
 
   const reasoning = [
     fromKnownState

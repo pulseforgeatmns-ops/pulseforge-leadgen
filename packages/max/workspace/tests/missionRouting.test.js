@@ -3491,6 +3491,8 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /PM-003/);
     assert.match(answer, /No mission created/i);
     assert.match(answer, /No launch, execution, approval, print, or mail/i);
+    assert.doesNotMatch(answer, /Future mailing eligibility/i);
+    assert.doesNotMatch(answer, /Final approval gate/i);
 
     // Full canary summary sections must not appear.
     assert.doesNotMatch(answer, /Readiness table:/i);
@@ -3557,6 +3559,92 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(summaryAnswer, /Readiness table:/i);
     assert.match(summaryAnswer, /Safe to draft now:/i);
     assert.doesNotMatch(summaryAnswer, /Recommended next work order:/i);
+  });
+
+  it('focused work-order includes future mailing eligibility and final approval gate when requested', async () => {
+    const {
+      isFocusedCanaryWorkOrderRequest,
+      wantsFocusedFutureMailingEligibilitySection,
+      wantsFocusedFinalApprovalGateSection,
+    } = require('../ActiveWorkContext');
+
+    const question = [
+      'Create the next preparation-only work order for Campaign 001.',
+      'Choose one next work order only.',
+      'Do not return the full canary summary.',
+      'Include exact steps for the operator, what Max can prepare next, what Max must not do, and deferred prospects.',
+      'What would make PM-001 eligible for future mailing approval?',
+      'Include the final approval gate before any outbound action.',
+      '',
+      'current canary readiness table for all 3 prospects:',
+      '| prospect_id | company_name | contact_name | verification_summary | mail_readiness | draft_readiness | execution_readiness |',
+      '|---|---|---|---|---|---|---|',
+      '| PM-001 | Gamache Properties | Ben Gamache | website/address/phone/contact role verified | ready_for_review | allowed | blocked |',
+      '| PM-002 | Elm Grove Companies | David Schleyer | website/address/phone unknown or blocked, contact role needs verification | blocked | allowed | blocked |',
+      '| PM-003 | Mill City Property Management | Lauren DuPaul | website/address/phone unknown or blocked, contact role needs verification | blocked | allowed | blocked |',
+      '',
+      'Do not include Reasoning, Unavailable context, or Next sections.',
+      'Do not create a mission. Do not launch, execute, approve, print, or mail.',
+    ].join('\n');
+
+    assert.equal(isFocusedCanaryWorkOrderRequest(question), true);
+    assert.equal(wantsFocusedFutureMailingEligibilitySection(question), true);
+    assert.equal(wantsFocusedFinalApprovalGateSection(question), true);
+
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const meta = result.structured.metadata || {};
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(meta.focusedWorkOrder, true);
+    assert.equal(meta.outputKind, 'focused_work_order');
+    assert.equal(meta.prioritizedProspectId, 'PM-001');
+
+    assert.match(answer, /Recommended next work order:/i);
+    assert.match(answer, /Why this work order is first:/i);
+    assert.match(answer, /Exact operator steps:/i);
+    assert.match(answer, /What Max can prepare next:/i);
+    assert.match(answer, /What Max must not do:/i);
+    assert.match(answer, /Future mailing eligibility for PM-001:/i);
+    assert.match(answer, /packet-content review completed/i);
+    assert.match(answer, /readiness remains complete at send time/i);
+    assert.match(
+      answer,
+      /operator gives separate explicit launch\/mail approval/i
+    );
+    assert.match(answer, /Deferred prospects:/i);
+    assert.match(answer, /Final approval gate before outbound action:/i);
+    assert.match(
+      answer,
+      /No outbound action can happen until the operator explicitly approves launch\/mail in a future step/i
+    );
+    assert.match(
+      answer,
+      /Packet-content review is not mail approval/i
+    );
+    assert.match(
+      answer,
+      /Preparation-only\. No mission created\. No launch, execution, approval, print, or mail/i
+    );
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /Readiness table:/i);
   });
 
   it('compact readiness table with bold/alias headers populates canary summary rows', async () => {

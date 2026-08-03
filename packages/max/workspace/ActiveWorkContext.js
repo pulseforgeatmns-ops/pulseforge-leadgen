@@ -403,6 +403,12 @@ function hasFocusedCanaryWorkOrderCues(text) {
   if (/\bdeferred\s+prospects?\b/.test(proseLower)) {
     return true;
   }
+  if (wantsFocusedFutureMailingEligibilitySection(text)) {
+    return true;
+  }
+  if (wantsFocusedFinalApprovalGateSection(text)) {
+    return true;
+  }
   if (
     /\bdo\s+not\s+return\s+the\s+full\s+(?:canary\s+)?summary\b/.test(
       proseLower
@@ -412,6 +418,51 @@ function hasFocusedCanaryWorkOrderCues(text) {
     return true;
   }
 
+  return false;
+}
+
+/**
+ * Operator asked what would make a prospect eligible for future mailing
+ * approval — include that section in focused work-order output.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function wantsFocusedFutureMailingEligibilitySection(text) {
+  const prose = extractOperatorIntentProse(text);
+  const proseLower = prose.toLowerCase();
+  if (!proseLower.trim()) return false;
+  if (/\bfuture\s+mailing\s+eligibility\b/.test(proseLower)) return true;
+  if (
+    /\beligible\s+for\s+future\s+mailing(?:\s+approval)?\b/.test(proseLower)
+  ) {
+    return true;
+  }
+  if (
+    /\bwhat\s+would\s+make\s+\S+\s+eligible\s+for\s+future\s+mailing\b/.test(
+      proseLower
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Operator asked for the final approval gate before outbound action —
+ * include that section in focused work-order output.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function wantsFocusedFinalApprovalGateSection(text) {
+  const prose = extractOperatorIntentProse(text);
+  const proseLower = prose.toLowerCase();
+  if (!proseLower.trim()) return false;
+  if (/\bfinal\s+approval\s+gate\b/.test(proseLower)) return true;
+  if (
+    /\bapproval\s+gate\s+before\s+(?:any\s+)?outbound\b/.test(proseLower)
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -2998,6 +3049,8 @@ module.exports = {
   hasCanarySummaryJudgmentCues,
   hasFocusedCanaryWorkOrderCues,
   hasCanarySummaryOutputCues,
+  wantsFocusedFutureMailingEligibilitySection,
+  wantsFocusedFinalApprovalGateSection,
   isFocusedCanaryWorkOrderRequest,
   extractOperatorIntentProse,
   extractPacketReviewProspectId,
