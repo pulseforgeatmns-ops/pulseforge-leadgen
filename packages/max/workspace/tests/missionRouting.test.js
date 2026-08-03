@@ -4021,10 +4021,43 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /Work order:\s*call-script review/i);
     assert.match(answer, /CP-001 call-script review checklist:/i);
     assert.match(answer, /Provisional call opener/i);
+    assert.match(
+      answer,
+      /Hi Ben, this is \[operator\] with PulseForge\. I'm calling about Gamache Properties\. Do you have a minute for a quick question\?/
+    );
     assert.match(answer, /Discovery questions:/i);
     assert.match(answer, /Objection-handling notes:/i);
     assert.match(answer, /Voicemail draft/i);
+    assert.match(
+      answer,
+      /Hi Ben, this is \[operator\] with PulseForge calling about Gamache Properties\. When convenient, you can reach me at \[operator number\]\./
+    );
     assert.match(answer, /--- Operator caveats ---/i);
+    assert.match(
+      answer,
+      /--- Operator caveats ---[\s\S]*Preparation-only\. Call-script review is not call approval/i
+    );
+    assert.match(
+      answer,
+      /--- Operator caveats ---[\s\S]*do not call it from this turn/i
+    );
+    // Customer-facing opener / voicemail must not carry internal gate language.
+    const openerSection = answer.match(
+      /Provisional call opener[\s\S]*?(?=Discovery questions:)/i
+    );
+    const voicemailSection = answer.match(
+      /Voicemail draft[\s\S]*?(?=--- Operator caveats ---)/i
+    );
+    assert.ok(openerSection);
+    assert.ok(voicemailSection);
+    assert.doesNotMatch(openerSection[0], /preparation[-\s]*only/i);
+    assert.doesNotMatch(openerSection[0], /execution\s+blocked/i);
+    assert.doesNotMatch(openerSection[0], /review\s+only/i);
+    assert.doesNotMatch(openerSection[0], /operator-led/i);
+    assert.doesNotMatch(voicemailSection[0], /preparation[-\s]*only/i);
+    assert.doesNotMatch(voicemailSection[0], /no action needed/i);
+    assert.doesNotMatch(voicemailSection[0], /execution\s+blocked/i);
+    assert.doesNotMatch(voicemailSection[0], /review\s+only/i);
     assert.match(answer, /Call-script approval checklist:/i);
     assert.match(answer, /provisional call opener reviewed/i);
     assert.match(answer, /discovery questions reviewed/i);

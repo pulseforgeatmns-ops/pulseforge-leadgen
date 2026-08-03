@@ -2799,6 +2799,9 @@ function buildCallScriptReviewArtifactResponse(input = {}) {
   const callScriptWorkOrder = isCallScriptReviewWorkOrder(row, question);
 
   const canDraft = Boolean(company && contact);
+  const contactFirstName = contact
+    ? String(contact).trim().split(/\s+/)[0] || contact
+    : null;
   const draftLabel =
     canDraft && callReadyForReview && scriptAllowed
       ? 'provisional'
@@ -2806,8 +2809,10 @@ function buildCallScriptReviewArtifactResponse(input = {}) {
         ? 'provisional / held pending readiness'
         : 'held';
 
+  // Customer-facing scripts stay generic and natural — no preparation-only /
+  // execution-blocked / review-only / gate language. Safety stays in caveats.
   const opener = canDraft
-    ? `Hi ${contact}, this is [operator] with PulseForge calling ${company}. Do you have a minute for a preparation-only check-in about whether a short operator-led walkthrough would be useful?`
+    ? `Hi ${contactFirstName}, this is [operator] with PulseForge. I'm calling about ${company}. Do you have a minute for a quick question?`
     : '(opener held — company_name and contact_name are required)';
 
   const discoveryQuestions = canDraft
@@ -2827,7 +2832,7 @@ function buildCallScriptReviewArtifactResponse(input = {}) {
   ];
 
   const voicemail = canDraft
-    ? `Hi ${contact}, this is [operator] with PulseForge for ${company}. Calling with a short preparation-only note — no action needed from this message. Please call back at [operator number] when convenient.`
+    ? `Hi ${contactFirstName}, this is [operator] with PulseForge calling about ${company}. When convenient, you can reach me at [operator number].`
     : '(voicemail held — company_name and contact_name are required)';
 
   const phoneReviewField = formatPacketReviewConfirmField(
