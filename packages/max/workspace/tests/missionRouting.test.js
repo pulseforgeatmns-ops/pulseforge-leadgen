@@ -3171,7 +3171,19 @@ describe('Active work context continuation before domain routing', () => {
       answer,
       /PM-001[\s\S]*packet review|packet review[\s\S]*PM-001|prioritize[\s\S]*PM-001|PM-001[\s\S]*priorit/i
     );
-    assert.match(answer, /final human approval/i);
+    assert.match(
+      answer,
+      /Create a preparation-only packet review checklist and complete operator packet-content review\. Do not print, mail, launch, or execute\./
+    );
+    assert.match(
+      answer,
+      /PM-001 may be packet-reviewed now, but is still blocked from print\/mail until explicit approval\./
+    );
+    assert.match(
+      answer,
+      /Decide whether to run preparation-only packet review for PM-001 next\. Explicit future launch\/mail approval is still required before any print or mail\./
+    );
+    assert.doesNotMatch(answer, /final human approval/i);
     assert.match(answer, /verification/i);
     assert.match(answer, /safe to draft now/i);
     assert.match(answer, /PM-001[\s\S]*allowed|allowed[\s\S]*PM-001/i);
@@ -3266,7 +3278,11 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(answer, /could not parse them cleanly/i);
     assert.doesNotMatch(answer, /(?<!No )Mission created/i);
     assert.match(answer, /PM-001[\s\S]*ready_for_review|ready_for_review[\s\S]*PM-001/i);
-    assert.match(answer, /packet review|final human approval/i);
+    assert.match(
+      answer,
+      /packet review|operator packet-content (?:review|approval)|final packet review decision/i
+    );
+    assert.doesNotMatch(answer, /final human approval/i);
     assert.match(answer, /PM-002/);
     assert.match(answer, /PM-003/);
     assert.match(answer, /verification/i);
@@ -3363,7 +3379,19 @@ describe('Active work context continuation before domain routing', () => {
       answer,
       /PM-001[\s\S]*packet review|packet review[\s\S]*PM-001|prioritize[\s\S]*PM-001|PM-001[\s\S]*priorit/i
     );
-    assert.match(answer, /final human approval/i);
+    assert.match(
+      answer,
+      /Create a preparation-only packet review checklist and complete operator packet-content review\. Do not print, mail, launch, or execute\./
+    );
+    assert.match(
+      answer,
+      /PM-001 may be packet-reviewed now, but is still blocked from print\/mail until explicit approval\./
+    );
+    assert.match(
+      answer,
+      /Decide whether to run preparation-only packet review for PM-001 next\. Explicit future launch\/mail approval is still required before any print or mail\./
+    );
+    assert.doesNotMatch(answer, /final human approval/i);
     assert.match(answer, /verification/i);
     assert.match(answer, /safe to draft now/i);
     assert.match(answer, /blocked from printing\/mailing/i);
@@ -3480,7 +3508,19 @@ describe('Active work context continuation before domain routing', () => {
       answer,
       /PM-001[\s\S]*packet review|packet review[\s\S]*PM-001|prioritize[\s\S]*PM-001|PM-001[\s\S]*priorit/i
     );
-    assert.match(answer, /final human approval/i);
+    assert.match(
+      answer,
+      /Create a preparation-only packet review checklist and complete operator packet-content review\. Do not print, mail, launch, or execute\./
+    );
+    assert.match(
+      answer,
+      /PM-001 may be packet-reviewed now, but is still blocked from print\/mail until explicit approval\./
+    );
+    assert.match(
+      answer,
+      /Decide whether to run preparation-only packet review for PM-001 next\. Explicit future launch\/mail approval is still required before any print or mail\./
+    );
+    assert.doesNotMatch(answer, /final human approval/i);
     assert.match(answer, /verification/i);
     assert.match(answer, /safe to draft now/i);
     assert.match(answer, /blocked from printing\/mailing/i);
