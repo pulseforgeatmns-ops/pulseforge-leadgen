@@ -2110,7 +2110,214 @@ function normalizeReadinessSummaryRow(row) {
 }
 
 /**
+ * True when blank line(s) at index are followed by another markdown pipe row.
+ * UI pastes often insert a blank after the separator or between data rows.
+ * @param {string[]} lines
+ * @param {number} blankIndex
+ */
+function markdownTableContinuesAfterBlank(lines, blankIndex) {
+  let k = blankIndex + 1;
+  while (k < lines.length && !String(lines[k] || '').trim()) k += 1;
+  if (k >= lines.length) return false;
+  return String(lines[k] || '').includes('|');
+}
+
+/**
+ * Count lines that look like markdown table rows (header / sep / data).
+ * @param {string} text
+ * @returns {number}
+ */
+function countMarkdownTableRows(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  let count = 0;
+  for (const line of lines) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed || !trimmed.includes('|')) continue;
+    const cells = splitMarkdownTableCells(trimmed);
+    if (cells.length >= 2) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Operator text has canary/readiness-table cues even if rows failed to parse.
+ * Used to avoid a generic "no table" fallthrough when the paste was mangled.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasCanaryReadinessTableCues(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return false;
+  if (/\|\s*prospect[_ ]?id\s*\|/i.test(raw)) return true;
+  if (/\bverification_summary\b/i.test(raw)) return true;
+  if (/\b(?:canary\s+)?readiness\s+table\b/i.test(raw)) return true;
+  if (/\bgate_summary\b/i.test(raw) && raw.includes('|')) return true;
+  if (/\bmail_readiness\b/i.test(raw) && raw.includes('|')) return true;
+  if (/\bPM-\d{3}\b/i.test(raw) && raw.includes('|') && /\breadiness\b/i.test(raw)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Structured diagnostics for compact readiness-table canary summary ingestion.
+ * Emit in test/dev (or when MAX_CANARY_READINESS_DIAG=1).
+ * @param {string} text
+ * @returns {{
+ *   latestUserMessageLength: number,
+ *   containsPipeProspectId: boolean,
+ *   containsVerificationSummary: boolean,
+ *   markdownTableRowCount: number,
+ *   parsedCanarySummaryRowsCount: number,
+ *   parseFailureReason: string|null,
+ *   headerLineIndex: number|null,
+ *   boundaryStoppedEarly: boolean,
+ * }}
+ */
+function diagnoseCanaryReadinessTableIngestion(text) {
+  const raw = String(text || '').replace(/^\uFEFF/, '');
+  const containsPipeProspectId = /\|\s*prospect[_ ]?id\s*\|/i.test(raw);
+  const containsVerificationSummary = /\bverification_summary\b/i.test(raw);
+  const markdownTableRowCount = countMarkdownTableRows(raw);
+  const parsed = parseReadinessSummaryTableFromMessage(raw);
+  const parsedCanarySummaryRowsCount =
+    parsed && Array.isArray(parsed.rows) ? parsed.rows.length : 0;
+
+  /** @type {string|null} */
+  let parseFailureReason = null;
+  /** @type {number|null} */
+  let headerLineIndex = null;
+  let boundaryStoppedEarly = false;
+
+  if (parsedCanarySummaryRowsCount > 0) {
+    return {
+      latestUserMessageLength: raw.length,
+      containsPipeProspectId,
+      containsVerificationSummary,
+      markdownTableRowCount,
+      parsedCanarySummaryRowsCount,
+      parseFailureReason: null,
+      headerLineIndex: parsed.startLine,
+      boundaryStoppedEarly: false,
+    };
+  }
+
+  const lines = raw.split(/\r?\n/);
+  let sawPipeBlock = false;
+  let sawHeader = false;
+  let headerHadZeroRows = false;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = String(lines[i] || '');
+    if (!line.trim() || !line.includes('|')) continue;
+    const cells = splitMarkdownTableCells(line);
+    if (cells.length < 2) continue;
+    sawPipeBlock = true;
+
+    if (!isReadinessSummaryTableHeader(cells)) continue;
+    sawHeader = true;
+    headerLineIndex = i;
+
+    let rowStart = i + 1;
+    while (rowStart < lines.length) {
+      const peek = String(lines[rowStart] || '');
+      if (!peek.trim()) {
+        rowStart += 1;
+        continue;
+      }
+      if (isMarkdownTableSeparatorRow(splitMarkdownTableCells(peek))) {
+        rowStart += 1;
+        continue;
+      }
+      break;
+    }
+
+    let rowCount = 0;
+    let sawBlankGapWithPipesBelow = false;
+    for (let j = rowStart; j < lines.length; j += 1) {
+      const dataLine = String(lines[j] || '');
+      const trimmed = dataLine.trim();
+      if (!trimmed) {
+        if (markdownTableContinuesAfterBlank(lines, j)) {
+          sawBlankGapWithPipesBelow = true;
+          continue;
+        }
+        break;
+      }
+      if (!dataLine.includes('|')) break;
+      const dataCells = splitMarkdownTableCells(dataLine);
+      if (!dataCells.length || isMarkdownTableSeparatorRow(dataCells)) continue;
+      if (isReadinessSummaryTableHeader(dataCells) && rowCount > 0) break;
+
+      const headers = cells.map(normalizeReadinessSummaryHeaderKey);
+      const prospectIdx = headers.indexOf('prospect_id');
+      const companyIdx = headers.indexOf('company_name');
+      const prospectId = String(
+        prospectIdx >= 0 ? dataCells[prospectIdx] || '' : ''
+      ).trim();
+      const companyName = String(
+        companyIdx >= 0 ? dataCells[companyIdx] || '' : ''
+      ).trim();
+      if (!prospectId && !companyName) continue;
+      rowCount += 1;
+    }
+
+    if (rowCount > 0) {
+      // Parser and diagnostic walk should agree; treat as malformed if they diverge.
+      parseFailureReason = 'malformed_table';
+      break;
+    }
+
+    headerHadZeroRows = true;
+    let pipesBelow = false;
+    for (let j = rowStart; j < lines.length; j += 1) {
+      if (String(lines[j] || '').includes('|')) {
+        pipesBelow = true;
+        break;
+      }
+    }
+    if (sawBlankGapWithPipesBelow && pipesBelow) {
+      boundaryStoppedEarly = true;
+      parseFailureReason = 'boundary_stopped_early';
+    } else if (pipesBelow) {
+      parseFailureReason = 'malformed_table';
+    } else {
+      parseFailureReason = 'missing_rows';
+    }
+    break;
+  }
+
+  if (!parseFailureReason) {
+    if (!sawPipeBlock && !containsPipeProspectId && markdownTableRowCount === 0) {
+      parseFailureReason = 'no_table_block_found';
+    } else if (!sawHeader) {
+      parseFailureReason =
+        containsPipeProspectId || markdownTableRowCount > 0
+          ? 'missing_headers'
+          : 'no_table_block_found';
+    } else if (headerHadZeroRows) {
+      parseFailureReason = 'missing_rows';
+    } else {
+      parseFailureReason = 'malformed_table';
+    }
+  }
+
+  return {
+    latestUserMessageLength: raw.length,
+    containsPipeProspectId,
+    containsVerificationSummary,
+    markdownTableRowCount,
+    parsedCanarySummaryRowsCount,
+    parseFailureReason,
+    headerLineIndex,
+    boundaryStoppedEarly,
+  };
+}
+
+/**
  * Extract a compact readiness summary markdown table from operator text.
+ * Tolerates blank lines after the separator or between data rows (common in
+ * UI-submitted pastes) without treating them as end-of-table.
  * @param {string} text
  * @returns {{ headers: string[], rows: object[], startLine: number, endLine: number }|null}
  */
@@ -2125,11 +2332,18 @@ function parseReadinessSummaryTableFromMessage(text) {
 
     const headers = headerCells.map(normalizeReadinessSummaryHeaderKey);
     let rowStart = i + 1;
-    if (
-      rowStart < lines.length &&
-      isMarkdownTableSeparatorRow(splitMarkdownTableCells(lines[rowStart]))
-    ) {
-      rowStart += 1;
+    // Skip separator and any blank lines immediately after the header block.
+    while (rowStart < lines.length) {
+      const peek = String(lines[rowStart] || '');
+      if (!peek.trim()) {
+        rowStart += 1;
+        continue;
+      }
+      if (isMarkdownTableSeparatorRow(splitMarkdownTableCells(peek))) {
+        rowStart += 1;
+        continue;
+      }
+      break;
     }
 
     /** @type {object[]} */
@@ -2137,7 +2351,12 @@ function parseReadinessSummaryTableFromMessage(text) {
     let end = i;
     for (let j = rowStart; j < lines.length; j += 1) {
       const line = String(lines[j] || '');
-      if (!line.trim()) break;
+      const trimmed = line.trim();
+      if (!trimmed) {
+        // Blank gap inside the table — keep scanning when more pipe rows follow.
+        if (markdownTableContinuesAfterBlank(lines, j)) continue;
+        break;
+      }
       if (!line.includes('|')) break;
       const cells = splitMarkdownTableCells(line);
       if (!cells.length || isMarkdownTableSeparatorRow(cells)) continue;
@@ -2173,6 +2392,38 @@ function parseReadinessSummaryTableFromMessage(text) {
 function looksLikeReadinessSummaryTablePaste(text) {
   const parsed = parseReadinessSummaryTableFromMessage(text);
   return Boolean(parsed && Array.isArray(parsed.rows) && parsed.rows.length > 0);
+}
+
+/**
+ * Whether canary readiness ingest diagnostics should be emitted.
+ * Test/dev by default; force on/off via MAX_CANARY_READINESS_DIAG.
+ */
+function shouldEmitCanaryReadinessDiagnostics() {
+  const flag = String(process.env.MAX_CANARY_READINESS_DIAG || '').trim();
+  if (flag === '1' || /^true$/i.test(flag)) return true;
+  if (flag === '0' || /^false$/i.test(flag)) return false;
+  const env = String(process.env.NODE_ENV || '').toLowerCase();
+  return env !== 'production';
+}
+
+/**
+ * Emit structured canary readiness ingest diagnostics (test/dev).
+ * @param {string} text
+ * @param {object} [extra]
+ * @returns {object|null} diagnostics object when emitted, else null
+ */
+function emitCanaryReadinessIngestDiagnostics(text, extra = {}) {
+  if (!shouldEmitCanaryReadinessDiagnostics()) return null;
+  const diagnostics = {
+    ...diagnoseCanaryReadinessTableIngestion(text),
+    ...(extra && typeof extra === 'object' ? extra : {}),
+  };
+  try {
+    console.info('[canary-readiness-ingest]', diagnostics);
+  } catch (_err) {
+    // ignore logging failures
+  }
+  return diagnostics;
 }
 
 /**
@@ -2653,6 +2904,11 @@ module.exports = {
   looksLikeReadinessSummaryTablePaste,
   parseReadinessSummaryTableFromMessage,
   normalizeReadinessSummaryRow,
+  hasCanaryReadinessTableCues,
+  diagnoseCanaryReadinessTableIngestion,
+  emitCanaryReadinessIngestDiagnostics,
+  shouldEmitCanaryReadinessDiagnostics,
+  countMarkdownTableRows,
   ingestPastedFillableVerificationTable,
   ingestPastedReadinessSummaryTable,
 };

@@ -129,6 +129,17 @@ function buildResponseMetadata(partial = {}) {
   if (partial.missingActiveWorkContext === true) {
     meta.missingActiveWorkContext = true;
   }
+  if (partial.readinessTableNotIngested === true) {
+    meta.readinessTableNotIngested = true;
+  }
+  if (
+    partial.canaryReadinessIngestDiagnostics &&
+    typeof partial.canaryReadinessIngestDiagnostics === 'object'
+  ) {
+    meta.canaryReadinessIngestDiagnostics = {
+      ...partial.canaryReadinessIngestDiagnostics,
+    };
+  }
   if (partial.requestedProspectId != null) {
     meta.requestedProspectId = String(partial.requestedProspectId);
   }

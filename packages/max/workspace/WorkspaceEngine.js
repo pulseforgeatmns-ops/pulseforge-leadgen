@@ -60,6 +60,10 @@ const {
   parseReadinessSummaryTableFromMessage,
   parseFillableVerificationTableFromMessage,
   normalizeReadinessSummaryRow,
+  hasCanaryReadinessTableCues,
+  diagnoseCanaryReadinessTableIngestion,
+  emitCanaryReadinessIngestDiagnostics,
+  shouldEmitCanaryReadinessDiagnostics,
   parseInlinePacketReviewKnownFacts,
   parseKnownCurrentStateBullets,
   CAMPAIGN_001_PREPARATION_ONLY_CANARY,
@@ -1292,12 +1296,23 @@ function resolveCanarySummaryJudgmentRows(input = {}) {
 function handleCanarySummaryJudgmentContinuation(input = {}) {
   const question = String(input.question || '');
   const prior = input.prior || getActiveWorkContext(input.session) || null;
+  const diagnostics = emitCanaryReadinessIngestDiagnostics(question, {
+    stage: 'canary_summary_judgment',
+    summaryIntent: true,
+  });
   const resolved = resolveCanarySummaryJudgmentRows({ question, prior });
 
   if (!resolved || !resolved.rows.length) {
+    const tableCuesPresent = hasCanaryReadinessTableCues(question);
     return {
-      reason: 'canary_summary_missing_state',
-      structured: buildMissingCanarySummaryJudgmentResponse({ question }),
+      reason: tableCuesPresent
+        ? 'canary_summary_table_not_ingested'
+        : 'canary_summary_missing_state',
+      structured: buildMissingCanarySummaryJudgmentResponse({
+        question,
+        tableCuesPresent,
+        diagnostics,
+      }),
     };
   }
 
@@ -1327,43 +1342,75 @@ function handleCanarySummaryJudgmentContinuation(input = {}) {
 
 /**
  * Ask for the current canary table / known state — never pipe-format prospects.
- * @param {{ question?: string }} input
+ * When summary intent is clear and readiness-table cues were present but rows
+ * did not parse, return a targeted clarification (not a generic missing-state
+ * or prospect-parse fallthrough).
+ * @param {{ question?: string, tableCuesPresent?: boolean, diagnostics?: object|null }} input
  */
 function buildMissingCanarySummaryJudgmentResponse(input = {}) {
-  void input;
+  const question = String(input.question || '');
+  const tableCuesPresent =
+    input.tableCuesPresent === true || hasCanaryReadinessTableCues(question);
+  const diagnostics =
+    input.diagnostics ||
+    (shouldEmitCanaryReadinessDiagnostics()
+      ? diagnoseCanaryReadinessTableIngestion(question)
+      : null);
+
+  const answer = tableCuesPresent
+    ? [
+        'I can summarize this, but the readiness table did not come through. Paste either the compact readiness table or one state line per prospect.',
+        'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+      ].join(' ')
+    : [
+        'I can summarize Campaign 001 preparation-only canary status and judge next actions, but I don’t have the current table or known state for those prospects.',
+        'Paste the fillable verification table, continue from a session with the active canary table, or provide known current-state bullets (prospect_id, company, contact, gate summary, mail_readiness, draft_readiness, execution_readiness).',
+        'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+      ].join(' ');
+
+  const reasoning = tableCuesPresent
+    ? [
+        'Operator asked for a canary status summary / judgment and the message included readiness-table cues, but canarySummaryRows did not parse.',
+        'Clarifying for a compact readiness table or per-prospect state lines instead of falling through to prospect-parse fallback.',
+        'No mission create/resume.',
+      ]
+    : [
+        'Operator asked for a canary status summary / judgment without desk tableRows or known current-state bullets.',
+        'Clarifying for current state instead of falling through to prospect-parse fallback.',
+        'No mission create/resume.',
+      ];
+
   return buildStructuredResponse({
-    answer: [
-      'I can summarize Campaign 001 preparation-only canary status and judge next actions, but I don’t have the current table or known state for those prospects.',
-      'Paste the fillable verification table, continue from a session with the active canary table, or provide known current-state bullets (prospect_id, company, contact, gate summary, mail_readiness, draft_readiness, execution_readiness).',
-      'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
-    ].join(' '),
-    reasoning: [
-      'Operator asked for a canary status summary / judgment without desk tableRows or known current-state bullets.',
-      'Clarifying for current state instead of falling through to prospect-parse fallback.',
-      'No mission create/resume.',
-    ],
+    answer,
+    reasoning,
     supportingEvidence: [],
     contradictingEvidence: [],
     confidence: null,
     nextInvestigations: [
-      'Paste the Campaign 001 fillable verification table or known current-state bullets, then ask again for the preparation-only canary status summary.',
+      tableCuesPresent
+        ? 'Paste the compact readiness table (prospect_id / company / contact / verification_summary / readiness columns) or one known-state line per prospect, then ask again.'
+        : 'Paste the Campaign 001 fillable verification table or known current-state bullets, then ask again for the preparation-only canary status summary.',
     ],
     recommendedActions: [],
     metadata: {
       sourcesUsed: {},
       evidenceCount: 0,
-      unavailable: ['canary_summary_state'],
+      unavailable: tableCuesPresent
+        ? ['canary_summary_table_rows']
+        : ['canary_summary_state'],
       surface: 'workspace',
       executionDomain: EXECUTION_DOMAINS.WORKSPACE,
       route: 'intelligence',
       canaryPreparationOnly: true,
       canarySummary: true,
       missingActiveWorkContext: true,
+      readinessTableNotIngested: tableCuesPresent || undefined,
       outputKind: 'canary_summary',
       lastOutputKind: LAST_OUTPUT_TYPES.CANARY_SUMMARY,
-      strictOutputShape: wantsPacketReviewArtifactSuppression(
-        String(input.question || '')
-      ),
+      strictOutputShape: wantsPacketReviewArtifactSuppression(question),
+      ...(diagnostics
+        ? { canaryReadinessIngestDiagnostics: diagnostics }
+        : {}),
     },
   });
 }

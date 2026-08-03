@@ -112,6 +112,11 @@ module.exports = {
     ActiveWorkContext.looksLikeReadinessSummaryTablePaste,
   parseReadinessSummaryTableFromMessage:
     ActiveWorkContext.parseReadinessSummaryTableFromMessage,
+  hasCanaryReadinessTableCues: ActiveWorkContext.hasCanaryReadinessTableCues,
+  diagnoseCanaryReadinessTableIngestion:
+    ActiveWorkContext.diagnoseCanaryReadinessTableIngestion,
+  emitCanaryReadinessIngestDiagnostics:
+    ActiveWorkContext.emitCanaryReadinessIngestDiagnostics,
   ingestPastedFillableVerificationTable:
     ActiveWorkContext.ingestPastedFillableVerificationTable,
   ingestPastedReadinessSummaryTable:
