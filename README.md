@@ -2,7 +2,7 @@
 
 **A modular AI platform for workflow automation, operational intelligence, and human-governed decision support.**
 
-Pulseforge is an applied AI systems project built to reduce operational burden in real service businesses. It combines specialized agents, CRM automation, knowledge management, reporting, operator dashboards, policy gates, and evidence-based reasoning into one production-oriented platform.
+Pulseforge is a modular AI platform built to reduce operational burden for service businesses. Rather than acting as a standalone chatbot, it combines specialized AI agents, workflow orchestration, knowledge management, and human-governed decision support into a production-oriented operating system for business operations.
 
 This repository is intentionally public as an engineering portfolio: it shows the architecture, implementation history, specifications, tests, and decision records behind the platform.
 
@@ -12,7 +12,7 @@ This repository is intentionally public as an engineering portfolio: it shows th
 | **Runtime** | Node.js / Express / PostgreSQL |
 | **Primary architecture** | Multi-agent workflows + knowledge graph + deterministic reasoning + human approval |
 | **Deployment target** | Railway (`node server.js`) |
-| **Executive portfolio** | [portfolio.jacobmaynard.co](https://portfolio.jacobmaynard.co) |
+| **Portfolio** | [portfolio.jacobmaynard.co](https://portfolio.jacobmaynard.co) |
 | **LinkedIn** | [linkedin.com/in/jacob-maynard7](https://www.linkedin.com/in/jacob-maynard7/) |
 
 ---
@@ -32,6 +32,14 @@ Core capabilities include:
 - **Reporting and observability** - dashboards, agent logs, production readiness checks, and release evidence.
 
 The project has been validated against real operating constraints through Anchor Cleaning and other local-service workflows.
+
+---
+
+## Why I Built Pulseforge
+
+I spent more than a decade operating service businesses where the biggest constraint wasn't finding ideas. It was having enough time and attention to execute them consistently.
+
+Pulseforge started as a lead generation system for my own business and evolved into a modular AI platform for operational intelligence. Every major subsystem in this repository was built to solve a real operational problem before being generalized into reusable architecture.
 
 ---
 
@@ -63,7 +71,7 @@ External Systems
 Brevo · Twilio · Bland · Google · Prospeo · Hunter · Stripe
 ```
 
-The important architectural constraint: language models are used inside governed workflows. They do not silently execute customer-visible actions, overwrite business truth, or bypass approval policy.
+**The important architectural constraint: language models are used inside governed workflows. They do not silently execute customer-visible actions, overwrite business truth, or bypass approval policy.**
 
 ---
 
@@ -157,7 +165,7 @@ Some tests require local or disposable PostgreSQL configuration. The core docume
 
 Pulseforge remains an actively developed founder-led platform. Current sprint and production state live in [CURRENT_STATE.md](CURRENT_STATE.md). Release history lives in [CHANGELOG.md](CHANGELOG.md) and [docs/releases/](docs/releases/).
 
-For a concise external summary, see the executive portfolio:
+For a concise external summary, see the portfolio:
 
 [https://portfolio.jacobmaynard.co](https://portfolio.jacobmaynard.co)
 
