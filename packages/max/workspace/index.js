@@ -90,6 +90,13 @@ module.exports = {
   isPacketReviewRequest: ActiveWorkContext.isPacketReviewRequest,
   isCanarySummaryJudgmentRequest:
     ActiveWorkContext.isCanarySummaryJudgmentRequest,
+  hasCanarySummaryJudgmentCues: ActiveWorkContext.hasCanarySummaryJudgmentCues,
+  hasFocusedCanaryWorkOrderCues:
+    ActiveWorkContext.hasFocusedCanaryWorkOrderCues,
+  hasCanarySummaryOutputCues: ActiveWorkContext.hasCanarySummaryOutputCues,
+  isFocusedCanaryWorkOrderRequest:
+    ActiveWorkContext.isFocusedCanaryWorkOrderRequest,
+  extractOperatorIntentProse: ActiveWorkContext.extractOperatorIntentProse,
   extractPacketReviewProspectId: ActiveWorkContext.extractPacketReviewProspectId,
   isFillableTableRequest: ActiveWorkContext.isFillableTableRequest,
   isFillableTableUpdateRequest: ActiveWorkContext.isFillableTableUpdateRequest,
@@ -106,6 +113,17 @@ module.exports = {
   parseFillableVerificationTableFromMessage:
     ActiveWorkContext.parseFillableVerificationTableFromMessage,
   parseKnownCurrentStateBullets: ActiveWorkContext.parseKnownCurrentStateBullets,
+  looksLikeReadinessSummaryTablePaste:
+    ActiveWorkContext.looksLikeReadinessSummaryTablePaste,
+  parseReadinessSummaryTableFromMessage:
+    ActiveWorkContext.parseReadinessSummaryTableFromMessage,
+  hasCanaryReadinessTableCues: ActiveWorkContext.hasCanaryReadinessTableCues,
+  diagnoseCanaryReadinessTableIngestion:
+    ActiveWorkContext.diagnoseCanaryReadinessTableIngestion,
+  emitCanaryReadinessIngestDiagnostics:
+    ActiveWorkContext.emitCanaryReadinessIngestDiagnostics,
   ingestPastedFillableVerificationTable:
     ActiveWorkContext.ingestPastedFillableVerificationTable,
+  ingestPastedReadinessSummaryTable:
+    ActiveWorkContext.ingestPastedReadinessSummaryTable,
 };

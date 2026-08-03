@@ -32,6 +32,9 @@ const {
   isActiveWorkTransformCue,
   isPacketReviewRequest,
   isCanarySummaryJudgmentRequest,
+  isFocusedCanaryWorkOrderRequest,
+  wantsFocusedFutureMailingEligibilitySection,
+  wantsFocusedFinalApprovalGateSection,
   extractPacketReviewProspectId,
   isExplicitNewMissionRequest,
   isExplicitContextOverride,
@@ -54,12 +57,32 @@ const {
   activeContextHasEntities,
   isCanaryDeskWorkflow,
   ingestPastedFillableVerificationTable,
+  ingestPastedReadinessSummaryTable,
   looksLikeFillableVerificationTablePaste,
+  looksLikeReadinessSummaryTablePaste,
+  parseReadinessSummaryTableFromMessage,
+  parseFillableVerificationTableFromMessage,
+  normalizeReadinessSummaryRow,
+  hasCanaryReadinessTableCues,
+  diagnoseCanaryReadinessTableIngestion,
+  emitCanaryReadinessIngestDiagnostics,
+  shouldEmitCanaryReadinessDiagnostics,
   parseInlinePacketReviewKnownFacts,
   parseKnownCurrentStateBullets,
+  isProceedWithPacketContentReviewRequest,
+  entitiesFromFillableTableRows,
   CAMPAIGN_001_PREPARATION_ONLY_CANARY,
   LAST_OUTPUT_TYPES,
 } = require('./ActiveWorkContext');
+const {
+  CANARY_WORKFLOW_TYPES,
+  resolveCanaryWorkflowContract,
+  resolveCanaryWorkflowType,
+  isReadyForReviewValue,
+  isDraftAllowedValue,
+  formatBlockedOutboundVerbList,
+  formatCanarySafetyLine,
+} = require('./CanaryWorkflowContract');
 const {
   ROUTE_KINDS,
   missionEnabled,
@@ -604,6 +627,7 @@ function preserveActiveWorkFocusOverStaleRecommendation(input) {
 
   const continuingDesk =
     isFillableTableUpdateRequest(question, prior) ||
+    isCanarySummaryJudgmentRequest(question) ||
     isPacketReviewRequest(question) ||
     isActiveWorkFollowUpCue(question) ||
     isActiveWorkTransformCue(question) ||
@@ -643,9 +667,11 @@ async function maybeHandleActiveWorkContinuation(input) {
   // Explicit new campaign/mission work always goes through normal routing.
   if (isExplicitNewMissionRequest(question)) return null;
 
-  // Pasted fillable verification table → desk context before packet review,
-  // table mutation, prospect extraction, or mission routing.
+  // Pasted fillable verification table / readiness summary table → desk
+  // context before packet review, table mutation, prospect extraction, or
+  // mission routing.
   ingestPastedFillableVerificationTable({ question, session });
+  ingestPastedReadinessSummaryTable({ question, session });
 
   const prior = getActiveWorkContext(session);
   const hasEntities = activeContextHasEntities(prior);
@@ -670,21 +696,8 @@ async function maybeHandleActiveWorkContinuation(input) {
     });
   }
 
-  // Cross-prospect canary status summary / judgment — before prospect
-  // extraction / parse fallback. Input order: desk tableRows → pasted table
-  // (already ingested) → known current-state bullets → ask for state.
-  if (isCanarySummaryJudgmentRequest(question)) {
-    return handleCanarySummaryJudgmentContinuation({
-      question,
-      session,
-      prior,
-    });
-  }
-
-  // Preparation-only packet review from the active canary table — before
-  // prospect extraction / parse fallback / mission routing.
-  // Fallback order: activeWorkContext.tableRows → pasted markdown table
-  // (already ingested above) → inline known-facts block.
+  // Proceed-with a named packet-content work order (or explicit packet review)
+  // before focused work-order / canary summary selection.
   if (isPacketReview) {
     if (hasEntities && activeContextHasFillableTable(prior)) {
       return handlePacketReviewContinuation({
@@ -699,6 +712,17 @@ async function maybeHandleActiveWorkContinuation(input) {
       reason: 'active_work_context_missing_for_packet_review',
       structured: buildMissingPacketReviewResponse({ question }),
     };
+  }
+
+  // Cross-prospect canary status summary / judgment — before prospect
+  // extraction / parse fallback. Input order: desk tableRows → pasted table
+  // (already ingested) → known current-state bullets → ask for state.
+  if (isCanarySummaryJudgmentRequest(question)) {
+    return handleCanarySummaryJudgmentContinuation({
+      question,
+      session,
+      prior,
+    });
   }
 
   // Explicit table-update intent without desk table — ask for the current
@@ -741,7 +765,8 @@ async function maybeHandleActiveWorkContinuation(input) {
       !isFillableTableUpdateRequest(question, prior) &&
       !isPacketReviewRequest(question) &&
       !isCanarySummaryJudgmentRequest(question) &&
-      !looksLikeFillableVerificationTablePaste(question)
+      !looksLikeFillableVerificationTablePaste(question) &&
+      !looksLikeReadinessSummaryTablePaste(question)
     ) {
       const detected = detectOperatorProspectListInMessage(question);
       const intendedCount = extractIntendedCanaryProspectCount(question);
@@ -1204,34 +1229,77 @@ function handlePacketReviewContinuation(input) {
 
 /**
  * Resolve readiness rows for a canary summary / judgment request.
- * Order: activeWorkContext.tableRows → pasted table (already ingested) →
- * known current-state bullets → null (caller clarifies).
+ * Order: latest-message compact readiness table → latest fillable paste →
+ * activeWorkContext.tableRows → known current-state bullets → null.
  * @param {{ question: string, prior: object|null }} input
- * @returns {{ rows: object[], source: string }|null}
+ * @returns {{ rows: object[], source: string, canarySummaryRows?: object[] }|null}
  */
 function resolveCanarySummaryJudgmentRows(input = {}) {
   const question = String(input.question || '');
   const prior = input.prior || null;
 
-  if (prior && activeContextHasFillableTable(prior)) {
-    const rows = (Array.isArray(prior.tableRows) ? prior.tableRows : [])
+  const toSummaryRows = (rows) =>
+    (Array.isArray(rows) ? rows : [])
       .filter(Boolean)
-      .map((row) => ({ ...row, execution_readiness: 'blocked' }));
+      .map((row) =>
+        normalizeReadinessSummaryRow({
+          ...row,
+          execution_readiness: 'blocked',
+        })
+      );
+
+  // Latest-message compact readiness table owns canarySummaryRows — do not
+  // require fillable columns or treat this paste as a ProspectList.
+  const readiness = parseReadinessSummaryTableFromMessage(question);
+  if (readiness && Array.isArray(readiness.rows) && readiness.rows.length > 0) {
+    const rows = toSummaryRows(readiness.rows);
+    return {
+      rows,
+      source: 'readiness_summary_table',
+      canarySummaryRows: rows,
+    };
+  }
+
+  // Full fillable paste in the same turn can also feed summary rows.
+  const fillable = parseFillableVerificationTableFromMessage(question);
+  if (fillable && Array.isArray(fillable.rows) && fillable.rows.length > 0) {
+    const rows = toSummaryRows(fillable.rows);
+    return {
+      rows,
+      source: 'fillable_verification_table',
+      canarySummaryRows: rows,
+    };
+  }
+
+  if (prior && activeContextHasFillableTable(prior)) {
+    const rows = toSummaryRows(prior.tableRows);
     if (rows.length > 0) {
-      return { rows, source: 'active_work_context' };
+      return {
+        rows,
+        source: 'active_work_context',
+        canarySummaryRows: rows,
+      };
     }
   }
 
   const known = parseKnownCurrentStateBullets(question);
   if (known && known.hasKnownState && known.rows.length > 0) {
+    const contract = resolveCanaryWorkflowContract({
+      question,
+      rows: known.rows,
+      prior,
+    });
+    const rows = known.rows.map((row) => ({
+      ...row,
+      execution_readiness: 'blocked',
+      operator_next_action:
+        row.operator_next_action ||
+        resolveCanarySummaryNextAction(row, contract),
+    }));
     return {
-      rows: known.rows.map((row) => ({
-        ...row,
-        execution_readiness: 'blocked',
-        operator_next_action:
-          row.operator_next_action || deriveOperatorNextActionFromGates(row),
-      })),
+      rows,
       source: 'known_current_state',
+      canarySummaryRows: rows,
     };
   }
 
@@ -1245,13 +1313,71 @@ function resolveCanarySummaryJudgmentRows(input = {}) {
  */
 function handleCanarySummaryJudgmentContinuation(input = {}) {
   const question = String(input.question || '');
-  const prior = input.prior || getActiveWorkContext(input.session) || null;
+  const session = input.session || null;
+  const prior = input.prior || getActiveWorkContext(session) || null;
+  const focusedWorkOrder = isFocusedCanaryWorkOrderRequest(question);
+  const diagnostics = emitCanaryReadinessIngestDiagnostics(question, {
+    stage: focusedWorkOrder
+      ? 'canary_focused_work_order'
+      : 'canary_summary_judgment',
+    summaryIntent: !focusedWorkOrder,
+  });
   const resolved = resolveCanarySummaryJudgmentRows({ question, prior });
 
   if (!resolved || !resolved.rows.length) {
+    const tableCuesPresent = hasCanaryReadinessTableCues(question);
     return {
-      reason: 'canary_summary_missing_state',
-      structured: buildMissingCanarySummaryJudgmentResponse({ question }),
+      reason: tableCuesPresent
+        ? focusedWorkOrder
+          ? 'canary_focused_work_order_table_not_ingested'
+          : 'canary_summary_table_not_ingested'
+        : focusedWorkOrder
+          ? 'canary_focused_work_order_missing_state'
+          : 'canary_summary_missing_state',
+      structured: buildMissingCanarySummaryJudgmentResponse({
+        question,
+        tableCuesPresent,
+        diagnostics,
+        focusedWorkOrder,
+      }),
+    };
+  }
+
+  const campaignId =
+    (prior && prior.target && prior.target.campaignId) ||
+    extractCampaignIdFromText(question) ||
+    '001';
+
+  if (focusedWorkOrder) {
+    const structured = buildFocusedCanaryWorkOrderResponse({
+      rows: resolved.rows,
+      question,
+      source: resolved.source,
+      campaignId,
+      prior,
+    });
+    rememberCanaryJudgmentActiveWorkContext({
+      session,
+      prior,
+      question,
+      campaignId,
+      rows: resolved.rows,
+      lastOutputType: LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER,
+      prioritizedProspectId:
+        structured.metadata && structured.metadata.prioritizedProspectId,
+      canaryWorkflowType:
+        structured.metadata && structured.metadata.canaryWorkflowType,
+    });
+    return {
+      reason:
+        resolved.source === 'active_work_context'
+          ? 'active_work_context_focused_work_order'
+          : resolved.source === 'readiness_summary_table'
+            ? 'readiness_summary_table_focused_work_order'
+            : resolved.source === 'fillable_verification_table'
+              ? 'fillable_table_focused_work_order'
+              : 'known_current_state_focused_work_order',
+      structured,
     };
   }
 
@@ -1259,61 +1385,200 @@ function handleCanarySummaryJudgmentContinuation(input = {}) {
     rows: resolved.rows,
     question,
     source: resolved.source,
-    campaignId:
-      (prior && prior.target && prior.target.campaignId) ||
-      extractCampaignIdFromText(question) ||
-      '001',
+    campaignId,
     prior,
+  });
+  rememberCanaryJudgmentActiveWorkContext({
+    session,
+    prior,
+    question,
+    campaignId,
+    rows: resolved.rows,
+    lastOutputType: LAST_OUTPUT_TYPES.CANARY_SUMMARY,
+    prioritizedProspectId:
+      structured.metadata && structured.metadata.prioritizedProspectId,
+    canaryWorkflowType:
+      structured.metadata && structured.metadata.canaryWorkflowType,
   });
 
   return {
     reason:
       resolved.source === 'active_work_context'
         ? 'active_work_context_canary_summary'
-        : 'known_current_state_canary_summary',
+        : resolved.source === 'readiness_summary_table'
+          ? 'readiness_summary_table_canary_summary'
+          : resolved.source === 'fillable_verification_table'
+            ? 'fillable_table_canary_summary'
+            : 'known_current_state_canary_summary',
     structured,
   };
 }
 
 /**
+ * Persist desk memory after canary summary / focused work-order artifacts so
+ * suggestion chips follow the response subtype instead of the readiness-table
+ * ingest placeholder (canary_readiness_table → review package).
+ * @param {{ session?: object|null, prior?: object|null, question?: string, campaignId?: string, rows?: object[], lastOutputType: string, prioritizedProspectId?: string|null, canaryWorkflowType?: string|null }} input
+ */
+function rememberCanaryJudgmentActiveWorkContext(input = {}) {
+  const session = input.session || null;
+  if (!session) return null;
+
+  const rows = Array.isArray(input.rows) ? input.rows : [];
+  const prior = input.prior || getActiveWorkContext(session) || null;
+  const canaryWorkflowType =
+    input.canaryWorkflowType ||
+    resolveCanaryWorkflowType(input.question || '', rows, prior);
+  const tableRows =
+    rows.length > 0
+      ? rows.map((row) => ({ ...row, execution_readiness: 'blocked' }))
+      : prior && Array.isArray(prior.tableRows)
+        ? prior.tableRows
+        : [];
+  const entities = entitiesFromFillableTableRows(
+    tableRows,
+    prior && Array.isArray(prior.entities) ? prior.entities : []
+  );
+  const prospects = entitiesToProspects(entities);
+  if (!prospects.length && !(prior && activeContextHasEntities(prior))) {
+    return null;
+  }
+
+  return rememberCanaryActiveWorkContext({
+    session,
+    prospects: prospects.length
+      ? prospects
+      : entitiesToProspects(prior.entities),
+    question: input.question,
+    campaignId: input.campaignId,
+    lastOutputType: input.lastOutputType,
+    lastOutputKind: input.lastOutputType,
+    prior,
+    tableRows: tableRows.length
+      ? tableRows
+      : prior && prior.tableRows
+        ? prior.tableRows
+        : [],
+    canaryWorkflowType,
+    nextAction:
+      input.lastOutputType === LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER
+        ? input.prioritizedProspectId
+          ? `operator_next_work_order_${String(input.prioritizedProspectId).toLowerCase()}`
+          : 'operator_next_focused_work_order'
+        : 'await_operator_packet_review_or_verification',
+  });
+}
+
+/**
  * Ask for the current canary table / known state — never pipe-format prospects.
- * @param {{ question?: string }} input
+ * When summary intent is clear and readiness-table cues were present but rows
+ * did not parse, return a targeted clarification (not a generic missing-state
+ * or prospect-parse fallthrough).
+ * @param {{ question?: string, tableCuesPresent?: boolean, diagnostics?: object|null, focusedWorkOrder?: boolean }} input
  */
 function buildMissingCanarySummaryJudgmentResponse(input = {}) {
-  void input;
+  const question = String(input.question || '');
+  const tableCuesPresent =
+    input.tableCuesPresent === true || hasCanaryReadinessTableCues(question);
+  const focusedWorkOrder = input.focusedWorkOrder === true;
+  const contract = resolveCanaryWorkflowContract({ question });
+  const safety = formatCanarySafetyLine(contract);
+  const readinessHint =
+    contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+      ? 'prospect_id, company, contact, phone_status, contact_role_status, call_readiness, script_readiness, execution_readiness'
+      : 'prospect_id, company, contact, gate summary, mail_readiness, draft_readiness, execution_readiness';
+  const diagnostics =
+    input.diagnostics ||
+    (shouldEmitCanaryReadinessDiagnostics()
+      ? diagnoseCanaryReadinessTableIngestion(question)
+      : null);
+
+  const answer = focusedWorkOrder
+    ? tableCuesPresent
+      ? [
+          'I can choose the next preparation-only work order, but the readiness table did not come through. Paste either the compact readiness table or one state line per prospect.',
+          safety,
+        ].join(' ')
+      : [
+          'I can create the next preparation-only work order for Campaign 001, but I don’t have the current table or known state for those prospects.',
+          `Paste the fillable verification table, continue from a session with the active canary table, or provide known current-state bullets (${readinessHint}).`,
+          safety,
+        ].join(' ')
+    : tableCuesPresent
+      ? [
+          'I can summarize this, but the readiness table did not come through. Paste either the compact readiness table or one state line per prospect.',
+          safety,
+        ].join(' ')
+      : [
+          `I can summarize Campaign 001 ${contract.statusLabel} status and judge next actions, but I don’t have the current table or known state for those prospects.`,
+          `Paste the fillable verification table, continue from a session with the active canary table, or provide known current-state bullets (${readinessHint}).`,
+          safety,
+        ].join(' ');
+
+  const reasoning = focusedWorkOrder
+    ? tableCuesPresent
+      ? [
+          'Operator asked for the next focused preparation-only work order and the message included readiness-table cues, but canarySummaryRows did not parse.',
+          'Clarifying for a compact readiness table or per-prospect state lines instead of falling through to prospect-parse fallback.',
+          'No mission create/resume.',
+        ]
+      : [
+          'Operator asked for the next focused preparation-only work order without desk tableRows or known current-state bullets.',
+          'Clarifying for current state instead of falling through to prospect-parse fallback.',
+          'No mission create/resume.',
+        ]
+    : tableCuesPresent
+      ? [
+          'Operator asked for a canary status summary / judgment and the message included readiness-table cues, but canarySummaryRows did not parse.',
+          'Clarifying for a compact readiness table or per-prospect state lines instead of falling through to prospect-parse fallback.',
+          'No mission create/resume.',
+        ]
+      : [
+          'Operator asked for a canary status summary / judgment without desk tableRows or known current-state bullets.',
+          'Clarifying for current state instead of falling through to prospect-parse fallback.',
+          'No mission create/resume.',
+        ];
+
+  const outputKind = focusedWorkOrder
+    ? LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER
+    : LAST_OUTPUT_TYPES.CANARY_SUMMARY;
+
   return buildStructuredResponse({
-    answer: [
-      'I can summarize Campaign 001 preparation-only canary status and judge next actions, but I don’t have the current table or known state for those prospects.',
-      'Paste the fillable verification table, continue from a session with the active canary table, or provide known current-state bullets (prospect_id, company, contact, gate summary, mail_readiness, draft_readiness, execution_readiness).',
-      'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
-    ].join(' '),
-    reasoning: [
-      'Operator asked for a canary status summary / judgment without desk tableRows or known current-state bullets.',
-      'Clarifying for current state instead of falling through to prospect-parse fallback.',
-      'No mission create/resume.',
-    ],
+    answer,
+    reasoning,
     supportingEvidence: [],
     contradictingEvidence: [],
     confidence: null,
     nextInvestigations: [
-      'Paste the Campaign 001 fillable verification table or known current-state bullets, then ask again for the preparation-only canary status summary.',
+      tableCuesPresent
+        ? 'Paste the compact readiness table (prospect_id / company / contact / verification_summary / readiness columns) or one known-state line per prospect, then ask again.'
+        : focusedWorkOrder
+          ? 'Paste the Campaign 001 fillable verification table or known current-state bullets, then ask again for the next preparation-only work order.'
+          : 'Paste the Campaign 001 fillable verification table or known current-state bullets, then ask again for the preparation-only canary status summary.',
     ],
     recommendedActions: [],
     metadata: {
       sourcesUsed: {},
       evidenceCount: 0,
-      unavailable: ['canary_summary_state'],
+      unavailable: tableCuesPresent
+        ? ['canary_summary_table_rows']
+        : ['canary_summary_state'],
       surface: 'workspace',
       executionDomain: EXECUTION_DOMAINS.WORKSPACE,
       route: 'intelligence',
       canaryPreparationOnly: true,
-      canarySummary: true,
+      canaryWorkflowType: contract.type,
+      canarySummary: !focusedWorkOrder,
+      focusedWorkOrder: focusedWorkOrder || undefined,
       missingActiveWorkContext: true,
-      outputKind: 'canary_summary',
-      lastOutputKind: LAST_OUTPUT_TYPES.CANARY_SUMMARY,
-      strictOutputShape: wantsPacketReviewArtifactSuppression(
-        String(input.question || '')
-      ),
+      readinessTableNotIngested: tableCuesPresent || undefined,
+      outputKind,
+      lastOutputKind: outputKind,
+      outputSubtype: focusedWorkOrder ? 'focused_work_order' : 'summary',
+      strictOutputShape: wantsPacketReviewArtifactSuppression(question),
+      ...(diagnostics
+        ? { canaryReadinessIngestDiagnostics: diagnostics }
+        : {}),
     },
   });
 }
@@ -1321,36 +1586,511 @@ function buildMissingCanarySummaryJudgmentResponse(input = {}) {
 /**
  * Format a compact gate summary for the readiness table.
  * @param {object} row
+ * @param {object} [contract]
  * @returns {string}
  */
-function formatCanarySummaryGateSummary(row) {
+function formatCanarySummaryGateSummary(row, contract = null) {
   if (row && row.gate_summary && String(row.gate_summary).trim()) {
     return String(row.gate_summary).trim();
   }
-  const parts = [
-    `website ${row.website_status || 'unknown'}`,
-    `address ${row.mailing_address_status || 'unknown'}`,
-    `phone ${row.phone_status || 'unknown'}`,
-    `contact role ${row.contact_role_status || 'unknown'}`,
-  ];
+  if (row && row.verification_summary && String(row.verification_summary).trim()) {
+    return String(row.verification_summary).trim();
+  }
+  const gates =
+    (contract && Array.isArray(contract.verificationGates)
+      ? contract.verificationGates
+      : ['website_status', 'mailing_address_status', 'phone_status', 'contact_role_status']);
+  const labels =
+    (contract && contract.gateLabels) ||
+    {
+      website_status: 'website',
+      mailing_address_status: 'address',
+      phone_status: 'phone',
+      contact_role_status: 'contact role',
+    };
+  const parts = gates.map((field) => {
+    const label = labels[field] || field.replace(/_status$/, '').replace(/_/g, ' ');
+    return `${label} ${row[field] || 'unknown'}`;
+  });
   return parts.join('; ');
 }
 
 /**
  * Exact next operator action for a summary row, with judgment overrides.
  * @param {object} row
+ * @param {object} contract
  * @returns {string}
  */
-function resolveCanarySummaryNextAction(row) {
-  const mail = String((row && row.mail_readiness) || 'blocked').toLowerCase();
-  const mailReady = /^ready(?:_for_review)?$/.test(mail);
-  if (mailReady) {
-    return 'Run preparation-only packet review / final human approval (execution remains blocked; do not print or mail yet)';
+function resolveCanarySummaryNextAction(row, contract) {
+  const primaryField =
+    (contract && contract.primaryReadinessField) || 'mail_readiness';
+  const primary = String((row && row[primaryField]) || 'blocked').toLowerCase();
+  if (isReadyForReviewValue(primary)) {
+    if (contract && contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP) {
+      return 'Run preparation-only call-script review (execution remains blocked; do not dial, call, text, or email yet)';
+    }
+    return 'Run preparation-only packet review / operator packet-content approval (execution remains blocked; do not print or mail yet)';
   }
+
+  // Workflow-aware verification actions outrank any mail-oriented
+  // operator_next_action that may have been prefilled from known-state ingest.
+  if (contract && contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP) {
+    const phoneOk = isVerifiedGateStatus(row && row.phone_status);
+    const roleOk =
+      isVerifiedGateStatus(row && row.contact_role_status) &&
+      !isNeedsVerificationGateStatus(row && row.contact_role_status);
+    if (!phoneOk && !roleOk) {
+      return 'verify phone and contact role';
+    }
+    if (!phoneOk) {
+      return 'verify phone';
+    }
+    if (!roleOk) {
+      return 'verify contact role';
+    }
+    return 'Complete phone/contact-role verification';
+  }
+
   if (row && row.operator_next_action && String(row.operator_next_action).trim()) {
     return String(row.operator_next_action).trim();
   }
   return deriveOperatorNextActionFromGates(row) || 'Complete verification work';
+}
+
+/**
+ * Enrich readiness rows and pick the single next work-order prospect.
+ * Prefer primary readiness=ready_for_review; else first verification-blocked row.
+ * @param {object[]} rows
+ * @param {object} [contract]
+ * @returns {{ enriched: object[], prioritize: object|null, reviewReady: object[], needsVerification: object[], draftAllowed: object[] }}
+ */
+function selectNextCanaryWorkOrderProspect(rows, contract = null) {
+  const resolvedContract =
+    contract ||
+    resolveCanaryWorkflowContract({ rows: Array.isArray(rows) ? rows : [] });
+  const primaryField = resolvedContract.primaryReadinessField || 'mail_readiness';
+  const draftField = resolvedContract.draftReadinessField || 'draft_readiness';
+  const preferredId = `${resolvedContract.prospectIdPrefix || 'PM'}-001`;
+
+  const enriched = (Array.isArray(rows) ? rows : []).map((row) => {
+    const nextAction = resolveCanarySummaryNextAction(row, resolvedContract);
+    const draft = String(row[draftField] || 'blocked').toLowerCase();
+    const primary = String(row[primaryField] || '').toLowerCase();
+    return {
+      ...row,
+      execution_readiness: 'blocked',
+      operator_next_action: nextAction,
+      draft_allowed: isDraftAllowedValue(draft),
+      mail_ready_for_review: isReadyForReviewValue(primary),
+      primary_ready_for_review: isReadyForReviewValue(primary),
+      primary_readiness: primary || 'blocked',
+      draft_readiness_value: draft || 'blocked',
+    };
+  });
+
+  const reviewReady = enriched.filter((r) => r.primary_ready_for_review);
+  const needsVerification = enriched.filter((r) => !r.primary_ready_for_review);
+  const draftAllowed = enriched.filter((r) => r.draft_allowed);
+
+  let prioritize = reviewReady[0] || null;
+  if (!prioritize && enriched.length) {
+    prioritize = enriched.find(
+      (r) =>
+        String(r.prospect_id || '')
+          .toUpperCase()
+          .trim() === preferredId
+    );
+  }
+  if (!prioritize) prioritize = enriched[0] || null;
+
+  return {
+    enriched,
+    prioritize,
+    reviewReady,
+    needsVerification,
+    draftAllowed,
+  };
+}
+
+/**
+ * True when gate status is verified.
+ * Local helper so call-prep judgment does not depend on fillable-table exports.
+ * @param {unknown} status
+ */
+function isVerifiedGateStatus(status) {
+  return /^verified$/i.test(String(status || '').trim());
+}
+
+/**
+ * @param {unknown} status
+ */
+function isNeedsVerificationGateStatus(status) {
+  const value = String(status || '')
+    .trim()
+    .toLowerCase();
+  return (
+    value === 'needs_verification' ||
+    value === 'needs verification' ||
+    value === 'unknown' ||
+    value === 'blocked' ||
+    value === ''
+  );
+}
+
+/**
+ * Build markdown readiness table body for canary judgment artifacts.
+ * @param {object[]} enriched
+ * @param {object} contract
+ * @returns {{ header: string, sep: string, body: string }}
+ */
+function buildCanaryReadinessMarkdownTable(enriched, contract) {
+  const columns = (contract && contract.readinessTableColumns) || [
+    'prospect_id',
+    'company_name',
+    'contact_name',
+    'mail_readiness',
+    'draft_readiness',
+    'execution_readiness',
+    'gate_summary',
+  ];
+  const header = `| ${columns.join(' | ')} |`;
+  const sep = `|${columns.map(() => '---').join('|')}|`;
+  const body = (Array.isArray(enriched) ? enriched : [])
+    .map((row) => {
+      const cells = columns.map((col) => {
+        if (col === 'execution_readiness') return 'blocked';
+        if (col === 'gate_summary') {
+          return formatCanarySummaryGateSummary(row, contract);
+        }
+        if (
+          col === 'prospect_id' ||
+          col === 'company_name' ||
+          col === 'contact_name'
+        ) {
+          return row[col] || '';
+        }
+        return row[col] || 'blocked';
+      });
+      return `| ${cells.join(' | ')} |`;
+    })
+    .join('\n');
+  return { header, sep, body };
+}
+
+/**
+ * One selected preparation-only work order — not the full canary summary.
+ * @param {{ rows: object[], question?: string, source?: string, campaignId?: string, prior?: object|null }} input
+ */
+function buildFocusedCanaryWorkOrderResponse(input = {}) {
+  const question = String(input.question || '');
+  const campaignId = String(input.campaignId || '001');
+  const fromKnownState = input.source === 'known_current_state';
+  const fromReadinessTable =
+    input.source === 'readiness_summary_table' ||
+    input.source === 'fillable_verification_table';
+  const fromPastedState = fromKnownState || fromReadinessTable;
+  const suppressScaffolding = wantsPacketReviewArtifactSuppression(question);
+  const debugOutput =
+    !suppressScaffolding && wantsPacketReviewDebugOutput(question);
+  const contract = resolveCanaryWorkflowContract({
+    question,
+    rows: input.rows,
+    prior: input.prior,
+  });
+  const primaryField = contract.primaryReadinessField;
+  const draftField = contract.draftReadinessField;
+  const safety = formatCanarySafetyLine(contract);
+  const blockedVerbs = formatBlockedOutboundVerbList(contract);
+
+  const {
+    enriched,
+    prioritize,
+    reviewReady,
+    needsVerification,
+  } = selectNextCanaryWorkOrderProspect(input.rows, contract);
+
+  const prioritizeId = prioritize
+    ? String(prioritize.prospect_id || '').trim()
+    : null;
+  const packetReviewWorkOrder =
+    prioritize && prioritize.primary_ready_for_review === true;
+  const includeReadinessTable =
+    contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP;
+
+  const deferred = needsVerification
+    .map((r) => String(r.prospect_id || '').trim())
+    .filter(Boolean);
+  const deferredLabel =
+    deferred.length === 0
+      ? 'None'
+      : deferred.length === 1
+        ? deferred[0]
+        : deferred.length === 2
+          ? `${deferred[0]} and ${deferred[1]}`
+          : `${deferred.slice(0, -1).join(', ')}, and ${deferred[deferred.length - 1]}`;
+
+  const workOrderTitle = packetReviewWorkOrder
+    ? `${prioritizeId} ${contract.reviewWorkOrderShort}.`
+    : prioritizeId
+      ? `${prioritizeId} ${contract.verificationWorkOrderLabel}.`
+      : 'No work order available.';
+
+  const whyFirst = !prioritize
+    ? 'No prospects are available to prioritize.'
+    : packetReviewWorkOrder
+      ? reviewReady.length === 1
+        ? `${prioritizeId} is the only prospect with ${primaryField}=ready_for_review while execution_readiness remains blocked. ${deferredLabel} still need ${contract.verificationDeferredLabel}.`
+        : `${prioritizeId} has ${primaryField}=ready_for_review while execution_readiness remains blocked. Other ready_for_review prospects are deferred until this work order completes; ${deferredLabel === 'None' ? 'no other prospects still need verification.' : `${deferredLabel} still need ${contract.verificationDeferredLabel}.`}`
+      : `${prioritizeId} still needs ${contract.verificationDeferredLabel} before ${contract.reviewWorkOrderLabel}; do not ${blockedVerbs}. Deferred prospects: ${deferred.filter((id) => id !== prioritizeId).join(', ') || 'none'}.`;
+
+  const operatorSteps = packetReviewWorkOrder
+    ? contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+      ? [
+          `1. Review ${prioritizeId} call-script contents.`,
+          '2. Confirm provisional script is acceptable.',
+          '3. Confirm phone and contact role remain verified.',
+          '4. Record call-script review decision.',
+          '5. Do not dial/call/text/email unless a separate future outbound approval is given.',
+        ]
+      : [
+          `1. Review ${prioritizeId} packet contents.`,
+          '2. Confirm customer-facing drafts are acceptable.',
+          '3. Confirm print/sign/mail checklist is complete.',
+          '4. Record packet-content review decision.',
+          '5. Do not print/mail unless a separate future launch/mail approval is given.',
+        ]
+    : contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+      ? [
+          `1. Complete phone/contact-role verification for ${prioritizeId}.`,
+          `2. Update ${primaryField} / ${draftField} / execution_readiness from verified gates.`,
+          `3. Do not start call-script review until ${primaryField} is ready_for_review.`,
+          '4. Do not dial/call/text/email unless a separate future outbound approval is given.',
+        ]
+      : [
+          `1. Complete verification for ${prioritizeId} (website, mailing address, phone, contact role as needed).`,
+          `2. Update ${primaryField} / ${draftField} / execution_readiness from verified gates.`,
+          `3. Do not start packet review until ${primaryField} is ready_for_review.`,
+          '4. Do not print/mail unless a separate future launch/mail approval is given.',
+        ];
+
+  const maxCanPrepare = packetReviewWorkOrder
+    ? [
+        `- ${prioritizeId} ${contract.reviewArtifactName} review checklist`,
+        `- ${contract.draftArtifactLabel}`,
+        '- tracking fields for review',
+      ]
+    : [
+        `- ${prioritizeId} verification checklist`,
+        '- gate status update fields',
+        '- tracking fields for verification progress',
+      ];
+
+  const maxMustNot = [
+    '- create a mission',
+    `- ${contract.maxMustNotOutboundLine || blockedVerbs}`,
+    '- mark execution ready',
+  ];
+
+  const deferredLines = needsVerification
+    .filter((r) => {
+      const id = String(r.prospect_id || '').trim();
+      return id && (!packetReviewWorkOrder || id !== prioritizeId);
+    })
+    .map((row) => {
+      const id = String(row.prospect_id || '').trim();
+      const action =
+        row.operator_next_action ||
+        (contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+          ? 'Complete phone/contact-role verification'
+          : 'Complete verification work');
+      return `- ${id}: ${action}`;
+    });
+
+  const eligibilityId =
+    prioritizeId || `${contract.prospectIdPrefix || 'PM'}-001`;
+  const includeFutureMailingEligibility =
+    wantsFocusedFutureMailingEligibilitySection(question);
+  const includeFinalApprovalGate =
+    wantsFocusedFinalApprovalGateSection(question) ||
+    contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP;
+
+  const overallStatus = reviewReady.length
+    ? `Campaign ${campaignId} ${contract.statusLabel}: ${reviewReady.length} prospect(s) ready_for_review for ${contract.reviewWorkOrderLabel}; ${needsVerification.length} still need ${contract.verificationDeferredLabel}; ${contract.overallSafetyClause || 'nothing launched or executed'}.`
+    : `Campaign ${campaignId} ${contract.statusLabel}: all listed prospects still need ${contract.verificationDeferredLabel} before ${contract.reviewWorkOrderLabel}; ${contract.overallSafetyClause || 'nothing launched or executed'}.`;
+
+  const readinessTable = buildCanaryReadinessMarkdownTable(enriched, contract);
+
+  const remainsBlocked = [
+    'All prospects: execution_readiness remains blocked.',
+    contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+      ? contract.remainsBlockedOutboundLine ||
+        "Outbound remains blocked until the prospect's call readiness is ready_for_review, readiness remains current, and the operator gives explicit future dial/call approval."
+      : `Printing and mailing stay blocked until ${primaryField} is ready_for_review AND the operator later gives explicit launch/mail approval.`,
+    needsVerification.length
+      ? `${needsVerification.map((r) => r.prospect_id).join(', ')} remain blocked pending ${contract.verificationDeferredLabel}.`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  const answerLines = [];
+
+  if (includeReadinessTable) {
+    answerLines.push(
+      overallStatus,
+      '',
+      'Readiness table:',
+      readinessTable.header,
+      readinessTable.sep,
+      readinessTable.body,
+      ''
+    );
+  }
+
+  answerLines.push(
+    'Recommended next work order:',
+    workOrderTitle,
+    '',
+    'Why this work order is first:',
+    whyFirst,
+    '',
+    'Exact operator steps:',
+    ...operatorSteps,
+    '',
+    'What Max can prepare next:',
+    ...maxCanPrepare,
+    '',
+    'What Max must not do:',
+    ...maxMustNot
+  );
+
+  if (includeFutureMailingEligibility) {
+    answerLines.push(
+      '',
+      `${contract.futureEligibilityLabel} for ${eligibilityId}:`,
+      ...(contract.futureEligibilityItems || []).map((item) => `- ${item}`)
+    );
+  }
+
+  answerLines.push(
+    '',
+    'Deferred prospects:',
+    ...(deferredLines.length ? deferredLines : ['- None'])
+  );
+
+  if (contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP) {
+    answerLines.push('', 'What remains blocked:', remainsBlocked);
+  }
+
+  if (includeFinalApprovalGate) {
+    answerLines.push(
+      '',
+      'Final approval gate before outbound action:',
+      contract.finalApprovalGateLine
+    );
+  }
+
+  answerLines.push('', safety);
+
+  const answer = answerLines.join('\n');
+
+  const reasoning = [
+    fromKnownState
+      ? 'Built focused next work order from known current-state bullets; not treated as a new prospect paste.'
+      : fromReadinessTable
+        ? 'Built focused next work order from pasted readiness summary table; not treated as a new prospect paste.'
+        : 'Reused activeWorkContext.tableRows for focused next work order; no prospect re-paste required.',
+    prioritize && prioritize.primary_ready_for_review
+      ? `${prioritizeId} selected for ${contract.reviewWorkOrderLabel} because ${primaryField} is ready_for_review and execution remains blocked.`
+      : `No ${primaryField}=ready_for_review prospect — verification work is the selected next work order.`,
+    'Returned one work order only; full canary summary suppressed unless readiness table was requested.',
+    'No mission create/resume.',
+  ];
+
+  return buildStructuredResponse({
+    answer,
+    reasoning: debugOutput ? reasoning : [],
+    supportingEvidence: debugOutput
+      ? enriched.map((row) => ({
+          id: `canary-prospect:${row.prospect_id}`,
+          summary: `${row.company_name || row.prospect_id}: ${primaryField} ${row[primaryField]}, ${draftField} ${row[draftField]}, execution blocked`,
+          sourceType: 'operator',
+          confidence: null,
+        }))
+      : [],
+    contradictingEvidence: [],
+    confidence: null,
+    nextInvestigations: debugOutput
+      ? [
+          prioritize && prioritize.primary_ready_for_review
+            ? contract.suggestionReviewChip(prioritizeId)
+            : 'Paste updated verification state or continue verification work for blocked prospects.',
+        ]
+      : [],
+    recommendedActions: debugOutput
+      ? [
+          'Execute the selected preparation-only work order, then explicitly request review or verification work — never launch from this artifact.',
+        ]
+      : [],
+    metadata: {
+      sourcesUsed: fromKnownState
+        ? { knownCurrentState: true }
+        : fromReadinessTable
+          ? { readinessSummaryTable: true }
+          : { activeWorkContext: true },
+      evidenceCount: debugOutput ? enriched.length : 0,
+      unavailable: debugOutput ? [] : [],
+      surface: 'workspace',
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      route: 'intelligence',
+      canaryPreparationOnly: true,
+      canaryWorkflowType: contract.type,
+      focusedWorkOrder: true,
+      knownCurrentState: fromKnownState || undefined,
+      readinessSummaryTable: fromReadinessTable || undefined,
+      activeWorkContextReused: !fromPastedState,
+      tableUpdate: false,
+      campaignId,
+      prospectCount: enriched.length,
+      prioritizedProspectId: prioritizeId,
+      mailReadiness:
+        contract.type === CANARY_WORKFLOW_TYPES.DIRECT_MAIL
+          ? (prioritize && prioritize.mail_readiness) || null
+          : undefined,
+      callReadiness:
+        contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+          ? (prioritize && prioritize.call_readiness) || null
+          : undefined,
+      primaryReadiness: (prioritize && prioritize[primaryField]) || null,
+      executionReadiness: 'blocked',
+      outputKind: LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER,
+      lastOutputKind: LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER,
+      outputSubtype: 'focused_work_order',
+      contextHints: {
+        workflow: CAMPAIGN_001_PREPARATION_ONLY_CANARY,
+        canaryWorkflowType: contract.type,
+        lastOutputKind: LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER,
+        lastOutputType: LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER,
+        outputKind: LAST_OUTPUT_TYPES.FOCUSED_WORK_ORDER,
+        preparationOnly: true,
+        focusedWorkOrder: true,
+        campaignId,
+        prospectId: prioritizeId,
+        mailReadiness:
+          contract.type === CANARY_WORKFLOW_TYPES.DIRECT_MAIL
+            ? (prioritize && prioritize.mail_readiness) || null
+            : undefined,
+        callReadiness:
+          contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+            ? (prioritize && prioritize.call_readiness) || null
+            : undefined,
+        executionReadiness: 'blocked',
+        knownCurrentState: fromKnownState || undefined,
+        readinessSummaryTable: fromReadinessTable || undefined,
+      },
+      strictOutputShape: !debugOutput,
+    },
+  });
 }
 
 /**
@@ -1365,73 +2105,55 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
   const question = String(input.question || '');
   const campaignId = String(input.campaignId || '001');
   const fromKnownState = input.source === 'known_current_state';
+  const fromReadinessTable =
+    input.source === 'readiness_summary_table' ||
+    input.source === 'fillable_verification_table';
+  const fromPastedState = fromKnownState || fromReadinessTable;
   const suppressScaffolding = wantsPacketReviewArtifactSuppression(question);
   const debugOutput =
     !suppressScaffolding && wantsPacketReviewDebugOutput(question);
-
-  const enriched = rows.map((row) => {
-    const nextAction = resolveCanarySummaryNextAction(row);
-    const draft = String(row.draft_readiness || 'blocked').toLowerCase();
-    return {
-      ...row,
-      operator_next_action: nextAction,
-      draft_allowed: /^allowed$/.test(draft),
-      mail_ready_for_review: /^ready(?:_for_review)?$/i.test(
-        String(row.mail_readiness || '')
-      ),
-    };
+  const contract = resolveCanaryWorkflowContract({
+    question,
+    rows,
+    prior: input.prior,
   });
+  const primaryField = contract.primaryReadinessField;
+  const draftField = contract.draftReadinessField;
+  const safety = formatCanarySafetyLine(contract);
 
-  const reviewReady = enriched.filter((r) => r.mail_ready_for_review);
-  const needsVerification = enriched.filter((r) => !r.mail_ready_for_review);
-  const draftAllowed = enriched.filter((r) => r.draft_allowed);
-
-  // Prefer mail-ready_for_review prospects (e.g. PM-001) for packet review next.
-  let prioritize = reviewReady[0] || null;
-  if (!prioritize && enriched.length) {
-    prioritize = enriched.find(
-      (r) =>
-        String(r.prospect_id || '')
-          .toUpperCase()
-          .trim() === 'PM-001'
-    );
-  }
-  if (!prioritize) prioritize = enriched[0] || null;
+  const {
+    enriched,
+    prioritize,
+    reviewReady,
+    needsVerification,
+    draftAllowed,
+  } = selectNextCanaryWorkOrderProspect(rows, contract);
 
   const prioritizeId = prioritize
     ? String(prioritize.prospect_id || '').trim()
     : null;
   const prioritizeWhy = prioritize
-    ? prioritize.mail_ready_for_review
-      ? `${prioritizeId} has mail_readiness ready_for_review while execution_readiness remains blocked — prioritize preparation-only packet review / final human approval before any print or mail.`
-      : `${prioritizeId} still needs verification work before packet review; do not print or mail.`
+    ? prioritize.primary_ready_for_review
+      ? contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+        ? `${prioritizeId} has ${primaryField} ready_for_review while execution_readiness remains blocked — prioritize preparation-only ${contract.reviewWorkOrderLabel} before any outbound action.`
+        : `${prioritizeId} has mail_readiness ready_for_review while execution_readiness remains blocked — prioritize preparation-only packet review / final packet review decision before any print or mail.`
+      : contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+        ? `${prioritizeId} still needs ${contract.verificationDeferredLabel} before ${contract.reviewWorkOrderLabel}; do not ${formatBlockedOutboundVerbList(contract)}.`
+        : `${prioritizeId} still needs verification work before packet review; do not print or mail.`
     : 'No prospects available to prioritize.';
 
-  const tableHeader =
-    '| prospect_id | company_name | contact_name | mail_readiness | draft_readiness | execution_readiness | gate_summary |';
-  const tableSep =
-    '|---|---|---|---|---|---|---|';
-  const tableBody = enriched
-    .map((row) => {
-      const cells = [
-        row.prospect_id || '',
-        row.company_name || '',
-        row.contact_name || '',
-        row.mail_readiness || 'blocked',
-        row.draft_readiness || 'blocked',
-        'blocked',
-        formatCanarySummaryGateSummary(row),
-      ];
-      return `| ${cells.join(' | ')} |`;
-    })
-    .join('\n');
+  const readinessTable = buildCanaryReadinessMarkdownTable(enriched, contract);
 
   const perProspectActions = enriched.map((row) => {
     const id = row.prospect_id || 'unknown';
-    if (row.mail_ready_for_review) {
-      return `- ${id}: Create a preparation-only packet review checklist and complete final human approval. Do not print, mail, launch, or execute.`;
+    if (row.primary_ready_for_review) {
+      return contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+        ? `- ${id}: Create a preparation-only call-script review checklist and complete operator call-script review. Do not dial, call, text, email, launch, or execute.`
+        : `- ${id}: Create a preparation-only packet review checklist and complete operator packet-content review. Do not print, mail, launch, or execute.`;
     }
-    return `- ${id}: ${row.operator_next_action} — verification work only; not ready for printing/mailing.`;
+    return contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+      ? `- ${id}: ${row.operator_next_action} — phone/contact-role verification only; not ready for dialing/calling.`
+      : `- ${id}: ${row.operator_next_action} — verification work only; not ready for printing/mailing.`;
   });
 
   const safeToDraft = draftAllowed.length
@@ -1441,41 +2163,66 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
             `${r.prospect_id} (${r.company_name || 'unknown'} / ${r.contact_name || 'unknown'})`
         )
         .join('; ')
-    : 'None — draft_readiness is not allowed for any listed prospect.';
+    : `None — ${draftField} is not allowed for any listed prospect.`;
+
+  const reviewReadyIds = reviewReady.map((r) => r.prospect_id).join(', ');
+  const packetReviewedNowLine =
+    reviewReady.length === 1
+      ? contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+        ? `${reviewReadyIds} may be call-script-reviewed now, but is still blocked from dial/call until explicit approval.`
+        : `${reviewReadyIds} may be packet-reviewed now, but is still blocked from print/mail until explicit approval.`
+      : reviewReady.length
+        ? contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+          ? `${reviewReadyIds} may be call-script-reviewed now, but are still blocked from dial/call until explicit approval.`
+          : `${reviewReadyIds} may be packet-reviewed now, but are still blocked from print/mail until explicit approval.`
+        : `No prospect is ready_for_review for ${contract.reviewWorkOrderLabel} yet.`;
 
   const blockedFromPrintMail = [
     'All prospects: execution_readiness remains blocked.',
-    'Printing and mailing stay blocked until mail_readiness is ready_for_review AND the operator later gives explicit launch/mail approval.',
-    reviewReady.length
-      ? `${reviewReady.map((r) => r.prospect_id).join(', ')} may be packet-reviewed now, but are still blocked from print/mail.`
-      : 'No prospect is ready_for_review for packet review yet.',
+    contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+      ? contract.remainsBlockedOutboundLine ||
+        "Outbound remains blocked until the prospect's call readiness is ready_for_review, readiness remains current, and the operator gives explicit future dial/call approval."
+      : `Printing and mailing stay blocked until ${primaryField} is ready_for_review AND the operator later gives explicit launch/mail approval.`,
+    packetReviewedNowLine,
     needsVerification.length
-      ? `${needsVerification.map((r) => r.prospect_id).join(', ')} remain blocked pending verification.`
+      ? `${needsVerification.map((r) => r.prospect_id).join(', ')} remain blocked pending ${contract.verificationDeferredLabel}.`
       : null,
   ]
     .filter(Boolean)
     .join(' ');
 
   const trackNext = [
-    'mail_readiness / draft_readiness / execution_readiness per prospect',
-    'verification gate statuses (website, mailing address, phone, contact role)',
-    'packet review completion for ready_for_review prospects',
-    'explicit future launch/mail approval (never implied by this summary)',
+    contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+      ? `${primaryField} / ${draftField} / execution_readiness per prospect`
+      : 'mail_readiness / draft_readiness / execution_readiness per prospect',
+    contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+      ? 'verification gate statuses (phone, contact role)'
+      : 'verification gate statuses (website, mailing address, phone, contact role)',
+    contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+      ? `${contract.reviewArtifactName} review completion for ready_for_review prospects`
+      : 'packet review completion for ready_for_review prospects',
+    contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+      ? 'explicit future dial/call approval (never implied by this summary)'
+      : 'explicit future launch/mail approval (never implied by this summary)',
   ]
     .map((item) => `- ${item}`)
     .join('\n');
 
   const overallStatus = reviewReady.length
-    ? `Campaign ${campaignId} preparation-only canary: ${reviewReady.length} prospect(s) ready_for_review for packet review; ${needsVerification.length} still need verification; nothing launched, approved, printed, or mailed.`
-    : `Campaign ${campaignId} preparation-only canary: all listed prospects still need verification before packet review; nothing launched, approved, printed, or mailed.`;
+    ? contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+      ? `Campaign ${campaignId} ${contract.statusLabel}: ${reviewReady.length} prospect(s) ready_for_review for ${contract.reviewWorkOrderLabel}; ${needsVerification.length} still need ${contract.verificationDeferredLabel}; ${contract.overallSafetyClause}.`
+      : `Campaign ${campaignId} preparation-only canary: ${reviewReady.length} prospect(s) ready_for_review for packet review; ${needsVerification.length} still need verification; nothing launched, approved, printed, or mailed.`
+    : contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+      ? `Campaign ${campaignId} ${contract.statusLabel}: all listed prospects still need ${contract.verificationDeferredLabel} before ${contract.reviewWorkOrderLabel}; ${contract.overallSafetyClause}.`
+      : `Campaign ${campaignId} preparation-only canary: all listed prospects still need verification before packet review; nothing launched, approved, printed, or mailed.`;
 
   const answer = [
     overallStatus,
     '',
     'Readiness table:',
-    tableHeader,
-    tableSep,
-    tableBody,
+    readinessTable.header,
+    readinessTable.sep,
+    readinessTable.body,
     '',
     'Work next:',
     prioritizeWhy,
@@ -1485,31 +2232,39 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
     '',
     'Safe to draft now:',
     draftAllowed.length
-      ? `Provisional drafting is allowed for: ${safeToDraft}. Drafts stay preparation-only — not authorization to print or mail.`
+      ? contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+        ? `${contract.draftAllowedPhrase.charAt(0).toUpperCase()}${contract.draftAllowedPhrase.slice(1)} is allowed for: ${safeToDraft}. Drafts stay preparation-only — not authorization to ${formatBlockedOutboundVerbList(contract)}.`
+        : `Provisional drafting is allowed for: ${safeToDraft}. Drafts stay preparation-only — not authorization to print or mail.`
       : safeToDraft,
     '',
-    'Blocked from printing/mailing:',
+    `Blocked from ${contract.blockedFromLabel}:`,
     blockedFromPrintMail,
     '',
     'What PulseForge should track next:',
     trackNext,
     '',
     '--- Final operator decision required ---',
-    prioritize && prioritize.mail_ready_for_review
-      ? `Decide whether to run preparation-only packet review / final human approval for ${prioritizeId} next. Explicit future launch/mail approval is still required before any print or mail. I will not print, mail, launch, or execute from this summary.`
-      : 'Complete verification for blocked prospects before any packet review or outbound action. I will not print, mail, launch, or execute from this summary.',
+    prioritize && prioritize.primary_ready_for_review
+      ? contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+        ? `Decide whether to run preparation-only ${contract.reviewWorkOrderLabel} for ${prioritizeId} next. Explicit future outbound approval is still required. I will not ${formatBlockedOutboundVerbList(contract)} from this summary.`
+        : `Decide whether to run preparation-only packet review for ${prioritizeId} next. Explicit future launch/mail approval is still required before any print or mail. I will not print, mail, launch, or execute from this summary.`
+      : contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+        ? `Complete ${contract.verificationDeferredLabel} for blocked prospects before any ${contract.reviewWorkOrderLabel} or outbound action. I will not ${formatBlockedOutboundVerbList(contract)} from this summary.`
+        : 'Complete verification for blocked prospects before any packet review or outbound action. I will not print, mail, launch, or execute from this summary.',
     '',
-    'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
+    safety,
   ].join('\n');
 
   const reasoning = [
     fromKnownState
       ? 'Built canary summary / judgment from known current-state bullets; not treated as a new prospect paste.'
-      : 'Reused activeWorkContext.tableRows for canary summary / judgment; no prospect re-paste required.',
-    prioritize && prioritize.mail_ready_for_review
-      ? `${prioritizeId} prioritized for packet review / final human approval because mail_readiness is ready_for_review and execution remains blocked.`
-      : 'No mail-ready_for_review prospect — verification work is the priority.',
-    'Drafting may be allowed where draft_readiness=allowed; printing/mailing remain blocked.',
+      : fromReadinessTable
+        ? 'Built canary summary / judgment from pasted readiness summary table; not treated as a new prospect paste.'
+        : 'Reused activeWorkContext.tableRows for canary summary / judgment; no prospect re-paste required.',
+    prioritize && prioritize.primary_ready_for_review
+      ? `${prioritizeId} prioritized for final ${contract.reviewWorkOrderLabel} decision because ${primaryField} is ready_for_review and execution remains blocked.`
+      : `No ${primaryField}=ready_for_review prospect — verification work is the priority.`,
+    `Drafting may be allowed where ${draftField}=allowed; outbound actions remain blocked.`,
     'No mission create/resume. activeWorkContext not required to mutate for known-state path.',
   ];
 
@@ -1519,7 +2274,7 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
     supportingEvidence: debugOutput
       ? enriched.map((row) => ({
           id: `canary-prospect:${row.prospect_id}`,
-          summary: `${row.company_name || row.prospect_id}: mail ${row.mail_readiness}, draft ${row.draft_readiness}, execution blocked`,
+          summary: `${row.company_name || row.prospect_id}: ${primaryField} ${row[primaryField]}, ${draftField} ${row[draftField]}, execution blocked`,
           sourceType: 'operator',
           confidence: null,
         }))
@@ -1528,40 +2283,53 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
     confidence: null,
     nextInvestigations: debugOutput
       ? [
-          prioritize && prioritize.mail_ready_for_review
-            ? `Create a preparation-only packet review checklist for ${prioritizeId}.`
+          prioritize && prioritize.primary_ready_for_review
+            ? contract.suggestionReviewChip(prioritizeId)
             : 'Paste updated verification state or continue verification work for blocked prospects.',
         ]
       : [],
     recommendedActions: debugOutput
       ? [
-          'Review the readiness judgment, then explicitly request packet review or verification work — never launch from this summary.',
+          'Review the readiness judgment, then explicitly request review or verification work — never launch from this summary.',
         ]
       : [],
     metadata: {
       sourcesUsed: fromKnownState
         ? { knownCurrentState: true }
-        : { activeWorkContext: true },
+        : fromReadinessTable
+          ? { readinessSummaryTable: true }
+          : { activeWorkContext: true },
       evidenceCount: debugOutput ? enriched.length : 0,
       unavailable: debugOutput ? [] : [],
       surface: 'workspace',
       executionDomain: EXECUTION_DOMAINS.WORKSPACE,
       route: 'intelligence',
       canaryPreparationOnly: true,
+      canaryWorkflowType: contract.type,
       canarySummary: true,
       knownCurrentState: fromKnownState || undefined,
-      activeWorkContextReused: !fromKnownState,
+      readinessSummaryTable: fromReadinessTable || undefined,
+      activeWorkContextReused: !fromPastedState,
       tableUpdate: false,
       campaignId,
       prospectCount: enriched.length,
       prioritizedProspectId: prioritizeId,
       mailReadiness:
-        (prioritize && prioritize.mail_readiness) || null,
+        contract.type === CANARY_WORKFLOW_TYPES.DIRECT_MAIL
+          ? (prioritize && prioritize.mail_readiness) || null
+          : undefined,
+      callReadiness:
+        contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+          ? (prioritize && prioritize.call_readiness) || null
+          : undefined,
+      primaryReadiness: (prioritize && prioritize[primaryField]) || null,
       executionReadiness: 'blocked',
       outputKind: 'canary_summary',
       lastOutputKind: LAST_OUTPUT_TYPES.CANARY_SUMMARY,
+      outputSubtype: 'summary',
       contextHints: {
         workflow: CAMPAIGN_001_PREPARATION_ONLY_CANARY,
+        canaryWorkflowType: contract.type,
         lastOutputKind: LAST_OUTPUT_TYPES.CANARY_SUMMARY,
         lastOutputType: LAST_OUTPUT_TYPES.CANARY_SUMMARY,
         outputKind: 'canary_summary',
@@ -1570,9 +2338,16 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
         campaignId,
         prospectId: prioritizeId,
         mailReadiness:
-          (prioritize && prioritize.mail_readiness) || null,
+          contract.type === CANARY_WORKFLOW_TYPES.DIRECT_MAIL
+            ? (prioritize && prioritize.mail_readiness) || null
+            : undefined,
+        callReadiness:
+          contract.type === CANARY_WORKFLOW_TYPES.CALL_PREP
+            ? (prioritize && prioritize.call_readiness) || null
+            : undefined,
         executionReadiness: 'blocked',
         knownCurrentState: fromKnownState || undefined,
+        readinessSummaryTable: fromReadinessTable || undefined,
       },
       strictOutputShape: !debugOutput,
     },
@@ -1714,15 +2489,172 @@ function buildMissingInlineKnownFactsPacketReviewResponse(input = {}) {
 }
 
 /**
+ * Format a confirm-before-printing field without inventing "verified: unknown"
+ * when a status exists but no actual value was supplied.
+ * @param {string} label
+ * @param {string} status
+ * @param {string|null} verifiedValue
+ * @param {string|null} rawValue
+ * @returns {string}
+ */
+function formatPacketReviewConfirmField(label, status, verifiedValue, rawValue) {
+  const statusText = String(status || '').trim();
+  if (/^verified$/i.test(statusText)) {
+    if (verifiedValue) return `${label} (verified: ${verifiedValue})`;
+    // Gate verified, value absent — never say "verified: unknown" / "(unknown)".
+    return `${label} (verified; value not included in this prompt)`;
+  }
+  const displayStatus = statusText || 'unknown';
+  if (rawValue) {
+    return `${label} (${displayStatus}: ${rawValue} — not verified — do not treat as confirmed)`;
+  }
+  // Status-only: never append ": unknown" for a missing value.
+  return `${label} (${displayStatus})`;
+}
+
+/**
+ * Packet-content review confirm lines: gate status separate from value presence.
+ * @param {{
+ *   websiteStatus: string,
+ *   mailingStatus: string,
+ *   phoneStatus: string,
+ *   contactRoleStatus: string,
+ *   websiteValue?: string|null,
+ *   mailingValue?: string|null,
+ *   phoneValue?: string|null,
+ * }} input
+ * @returns {string[]}
+ */
+function buildPacketContentReviewConfirmLines(input = {}) {
+  const fields = [
+    {
+      label: 'Website',
+      status: input.websiteStatus,
+      value: input.websiteValue || null,
+    },
+    {
+      label: 'Mailing address',
+      status: input.mailingStatus,
+      value: input.mailingValue || null,
+    },
+    {
+      label: 'Phone',
+      status: input.phoneStatus,
+      value: input.phoneValue || null,
+    },
+    {
+      label: 'Contact role',
+      status: input.contactRoleStatus,
+      value: null,
+    },
+  ];
+
+  /** @type {string[]} */
+  const lines = ['Confirm before any future print step:'];
+  let anyVerifiedMissingValue = false;
+  let allCoreVerified = true;
+
+  for (const field of fields) {
+    const statusText = String(field.status || '').trim();
+    const verified = /^verified$/i.test(statusText);
+    if (!verified) allCoreVerified = false;
+    if (verified && !field.value) anyVerifiedMissingValue = true;
+
+    if (verified && field.value) {
+      lines.push(`- ${field.label} gate: verified; value: ${field.value}`);
+    } else if (verified) {
+      lines.push(
+        `- ${field.label} gate: verified; value not included in this prompt`
+      );
+    } else {
+      const display = statusText || 'unknown';
+      lines.push(
+        field.value
+          ? `- ${field.label} gate: ${display}; value: ${field.value}`
+          : `- ${field.label} gate: ${display}`
+      );
+    }
+  }
+
+  if (allCoreVerified && anyVerifiedMissingValue) {
+    lines.push(
+      'Gate statuses are verified, but the specific website/address/phone values were not included in this prompt. Confirm the values are present in the source system and packet metadata before any future print step.'
+    );
+  } else if (anyVerifiedMissingValue || allCoreVerified) {
+    lines.push(
+      '- Confirm actual values are present in the source system / packet metadata before future print/mail approval.'
+    );
+  } else {
+    lines.push(
+      '- Confirm fields against a trusted source before any future print step.'
+    );
+  }
+  lines.push(
+    '- Print / sign / mail only after a separate explicit launch/mail approval (not this turn).'
+  );
+  return lines;
+}
+
+/**
+ * True when the operator / row names this turn as packet-content review.
+ * @param {object} row
+ * @param {string} question
+ * @returns {boolean}
+ */
+function isPacketContentReviewWorkOrder(row, question) {
+  const workOrder = String((row && row.work_order) || '').toLowerCase();
+  if (/\bpacket[-\s]*content\s+review\b/.test(workOrder)) return true;
+  if (isProceedWithPacketContentReviewRequest(question)) return true;
+  const q = String(question || '').toLowerCase();
+  if (/\bpacket[-\s]*content\s+review\b/.test(q) && /\bPM-\d{3}\b/i.test(question)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Packet-content approval checklist for ready_for_review reviews.
+ * @returns {string[]}
+ */
+function buildPacketContentApprovalChecklistLines() {
+  return [
+    'Packet-content approval checklist:',
+    '- letter draft reviewed',
+    '- handwritten note reviewed',
+    '- scorecard cover reviewed',
+    '- customer-facing copy contains no unsupported claims',
+    '- known-facts caveats accepted',
+    '- packet contents checklist complete',
+    '- review decision recorded',
+    '- launch/mail approval still pending',
+  ];
+}
+
+/**
+ * Future launch/mail gate — packet-content approval is not mail approval.
+ * @returns {string[]}
+ */
+function buildFutureMailApprovalGateLines() {
+  return [
+    'Future mail approval gate:',
+    'No outbound action can happen until the operator explicitly approves launch/mail in a future step. Packet-content approval is not mail approval. Execution readiness remains blocked.',
+  ];
+}
+
+/**
  * Packet review artifact from a single desk table row — known facts only.
  * ready_for_review means packet can be reviewed, not mailed.
  * @param {{ row: object, entity?: object|null, question?: string, campaignId?: string, source?: string }} input
  */
 function buildPacketReviewArtifactResponse(input = {}) {
-  const row = input.row && typeof input.row === 'object' ? input.row : {};
+  const rawRow = input.row && typeof input.row === 'object' ? input.row : {};
+  // Apply verification_summary → gate statuses when individual statuses are
+  // blank/unknown. Never invent field values; never downgrade explicit statuses.
+  const row = normalizeReadinessSummaryRow({ ...rawRow });
   const entity = input.entity && typeof input.entity === 'object' ? input.entity : {};
   const campaignId = String(input.campaignId || '001');
   const fromInlineFacts = input.source === 'inline_known_facts';
+  const question = String(input.question || '');
   const prospectId = String(row.prospect_id || entity.id || 'unknown').trim();
   const company =
     blankTableValue(row.company_name) || blankToNull(entity.companyName) || null;
@@ -1744,13 +2676,25 @@ function buildPacketReviewArtifactResponse(input = {}) {
     row.mailing_address_value
   );
   const phone = verifiedPacketFieldValue(phoneStatus, row.phone_value);
-  const mailReadiness = String(row.mail_readiness || 'blocked');
-  const draftReadiness = String(row.draft_readiness || 'blocked');
+  // Prefer operator-supplied mail_readiness; normalizeReadinessSummaryRow may
+  // default blanks but must not downgrade ready_for_review.
+  const mailReadiness = String(
+    rawRow.mail_readiness || row.mail_readiness || 'blocked'
+  );
+  const draftReadiness = String(
+    rawRow.draft_readiness || row.draft_readiness || 'blocked'
+  );
   const executionReadiness = 'blocked';
   const notes = String(row.notes || '').trim();
   const operatorNext = String(row.operator_next_action || '').trim();
 
   const mailReadyForReview = /^ready(?:_for_review)?$/i.test(mailReadiness);
+  const packetContentWorkOrder = isPacketContentReviewWorkOrder(row, question);
+  // Explicit packet-content review work order + ready_for_review centers the
+  // artifact on content approval (not verification / post-mail tracking).
+  const packetContentReviewMode =
+    mailReadyForReview && packetContentWorkOrder;
+
   const personalizationGaps = [];
   if (!company) personalizationGaps.push('company name');
   if (!contact) personalizationGaps.push('contact name');
@@ -1803,7 +2747,10 @@ function buildPacketReviewArtifactResponse(input = {}) {
         row,
       });
 
-  const needsPreMailVerification = !mailReadyForReview || !mailing || !phone;
+  // ready_for_review means verification is complete enough for packet review —
+  // do not reopen a pre-mail verification plan solely because raw values are
+  // absent from this turn's known facts.
+  const needsPreMailVerification = !mailReadyForReview;
   const draftLabel = draftsHeld
     ? 'held'
     : mailReadyForReview
@@ -1815,27 +2762,24 @@ function buildPacketReviewArtifactResponse(input = {}) {
         : 'provisional / operator-only — do not print/mail until fields are verified';
 
   const confirmBeforePrinting = [
-    `mailing address (${mailingStatus}${
-      mailing
-        ? `: ${mailing}`
-        : blankTableValue(row.mailing_address_value)
-          ? `: ${blankTableValue(row.mailing_address_value)} (not verified — do not treat as confirmed)`
-          : ': unknown'
-    })`,
-    `website (${websiteStatus}${
-      website
-        ? `: ${website}`
-        : blankTableValue(row.website_value)
-          ? `: ${blankTableValue(row.website_value)} (not verified — do not treat as confirmed)`
-          : ': unknown'
-    })`,
-    `phone (${phoneStatus}${
-      phone
-        ? `: ${phone}`
-        : blankTableValue(row.phone_value)
-          ? `: ${blankTableValue(row.phone_value)} (not verified — do not treat as confirmed)`
-          : ': unknown'
-    })`,
+    formatPacketReviewConfirmField(
+      'mailing address',
+      mailingStatus,
+      mailing,
+      blankTableValue(row.mailing_address_value)
+    ),
+    formatPacketReviewConfirmField(
+      'website',
+      websiteStatus,
+      website,
+      blankTableValue(row.website_value)
+    ),
+    formatPacketReviewConfirmField(
+      'phone',
+      phoneStatus,
+      phone,
+      blankTableValue(row.phone_value)
+    ),
     `contact role (${contactRoleStatus})`,
     !industry
       ? 'industry / persona context (missing from table — needed for stronger personalization; drafts remain provisional)'
@@ -1844,57 +2788,118 @@ function buildPacketReviewArtifactResponse(input = {}) {
     .filter(Boolean)
     .join('; ');
 
-  const question = String(input.question || '');
   const suppressScaffolding = wantsPacketReviewArtifactSuppression(question);
   const debugOutput =
     !suppressScaffolding && wantsPacketReviewDebugOutput(question);
 
-  const printMailChecklist = mailReadyForReview
+  const printMailChecklist = packetContentReviewMode
+    ? buildPacketContentReviewConfirmLines({
+        websiteStatus,
+        mailingStatus,
+        phoneStatus,
+        contactRoleStatus,
+        websiteValue: website || blankTableValue(row.website_value),
+        mailingValue: mailing || blankTableValue(row.mailing_address_value),
+        phoneValue: phone || blankTableValue(row.phone_value),
+      })
+    : mailReadyForReview
+      ? [
+          'Print / sign / mail checklist:',
+          '- Confirm fields below against a trusted source',
+          '- Print packet only after operator sign-off',
+          '- Sign letter / note only after operator review',
+          '- Mail only after explicit future launch approval (not this turn)',
+          '',
+          'Fields to confirm before printing:',
+          confirmBeforePrinting,
+        ]
+      : [
+          'Print / sign / mail checklist: not available until verification is complete.',
+          'Future print / sign / mail checklist (after verification):',
+          '- Confirm fields below against a trusted source',
+          '- Print packet only after operator sign-off',
+          '- Sign letter / note only after operator review',
+          '- Mail only after explicit future launch approval (not this turn)',
+          '',
+          'Fields that must be verified before any future print/mail step:',
+          confirmBeforePrinting,
+        ];
+
+  const operatorActionSection = packetContentReviewMode
     ? [
-        'Print / sign / mail checklist:',
-        '- Confirm fields below against a trusted source',
-        '- Print packet only after operator sign-off',
-        '- Sign letter / note only after operator review',
-        '- Mail only after explicit future launch approval (not this turn)',
+        ...buildPacketContentApprovalChecklistLines(),
         '',
-        'Fields to confirm before printing:',
-        confirmBeforePrinting,
+        ...buildFutureMailApprovalGateLines(),
+      ]
+    : needsPreMailVerification
+      ? [
+          'Pre-mail verification plan (operator only):',
+          drafts.preMailVerificationPlan ||
+            buildPreMailVerificationPlan({
+              contactName: contact,
+              mailing,
+              website,
+              phone,
+              mailingStatus,
+              websiteStatus,
+              phoneStatus,
+              contactRoleStatus,
+              industry,
+            }),
+        ]
+      : [
+          'First follow-up call notes (operator only):',
+          drafts.followUpNotes,
+        ];
+
+  const trackingFieldsSection = packetContentReviewMode
+    ? [
+        'PulseForge packet-review tracking fields:',
+        `- prospect_id: ${prospectId}`,
+        `- company: ${company || 'unknown'}`,
+        `- contact: ${contact || 'unknown'}`,
+        '- packet_review_status: in_review',
+        '- packet_reviewed_by: (operator)',
+        '- packet_reviewed_at: (set when reviewed)',
+        '- packet_content_decision: (pending)',
+        '- approved_for_print: false',
+        '- launch_approval_status: pending',
+        `- execution_readiness: ${executionReadiness}`,
+        `- mail_readiness_at_review: ${mailReadiness}`,
       ]
     : [
-        'Print / sign / mail checklist: not available until verification is complete.',
-        'Future print / sign / mail checklist (after verification):',
-        '- Confirm fields below against a trusted source',
-        '- Print packet only after operator sign-off',
-        '- Sign letter / note only after operator review',
-        '- Mail only after explicit future launch approval (not this turn)',
-        '',
-        'Fields that must be verified before any future print/mail step:',
-        confirmBeforePrinting,
+        mailReadyForReview
+          ? 'PulseForge tracking fields to log after mailing:'
+          : 'PulseForge tracking fields (current state + future mail log):',
+        `- prospect_id: ${prospectId}`,
+        `- company: ${company || 'unknown'}`,
+        `- contact: ${contact || 'unknown'}`,
+        `- industry: ${industry || 'not provided'}`,
+        `- current_mail_readiness: ${mailReadiness}`,
+        `- mail_date: (set when mailed)`,
+        '- packet_contents: letter / handwritten note / scorecard / business card',
+        '- mail_readiness_at_send: (set when mailed)',
+        needsPreMailVerification
+          ? '- first_follow_up_call_outcome: (set after call — only after a verified phone exists and packet is mailed)'
+          : '- first_follow_up_call_outcome: (set after call)',
       ];
 
-  const operatorActionSection = needsPreMailVerification
+  const finalDecisionSection = packetContentReviewMode
     ? [
-        'Pre-mail verification plan (operator only):',
-        drafts.preMailVerificationPlan ||
-          buildPreMailVerificationPlan({
-            contactName: contact,
-            mailing,
-            website,
-            phone,
-            mailingStatus,
-            websiteStatus,
-            phoneStatus,
-            contactRoleStatus,
-            industry,
-          }),
+        '--- Final operator decision required ---',
+        'Complete packet-content review only. Packet-content approval is not mail approval. Explicit future launch/mail approval is still required before any print or mail. I will not print, mail, launch, or execute from this checklist.',
       ]
     : [
-        'First follow-up call notes (operator only):',
-        drafts.followUpNotes,
+        '--- Final operator decision required ---',
+        mailReadyForReview
+          ? 'Packet is ready_for_review only. Explicitly approve a future launch/mail step after readiness remains complete — I will not print, mail, launch, or execute from this checklist.'
+          : 'Mail readiness is blocked. Complete pre-mail verification first; then request an explicit launch/mail approval. I will not print, mail, launch, or execute from this checklist.',
       ];
 
   const answer = [
-    `Preparation-only packet review — Campaign ${campaignId} / ${prospectId}`,
+    packetContentReviewMode
+      ? `Preparation-only packet-content review — Campaign ${campaignId} / ${prospectId}`
+      : `Preparation-only packet review — Campaign ${campaignId} / ${prospectId}`,
     '',
     `Company: ${company || 'unknown'}`,
     `Contact: ${contact || 'unknown'}`,
@@ -1911,6 +2916,7 @@ function buildPacketReviewArtifactResponse(input = {}) {
     `Draft confidence: ${draftConfidence}`,
     notes ? `Notes (from table): ${notes}` : null,
     operatorNext ? `Operator next action (from table): ${operatorNext}` : null,
+    packetContentWorkOrder ? 'Work order: packet-content review' : null,
     '',
     whyBlockedForMailing.length
       ? ['Why blocked for mailing:', ...whyBlockedForMailing, ''].join('\n')
@@ -1956,25 +2962,9 @@ function buildPacketReviewArtifactResponse(input = {}) {
     '',
     ...operatorActionSection,
     '',
-    mailReadyForReview
-      ? 'PulseForge tracking fields to log after mailing:'
-      : 'PulseForge tracking fields (current state + future mail log):',
-    `- prospect_id: ${prospectId}`,
-    `- company: ${company || 'unknown'}`,
-    `- contact: ${contact || 'unknown'}`,
-    `- industry: ${industry || 'not provided'}`,
-    `- current_mail_readiness: ${mailReadiness}`,
-    `- mail_date: (set when mailed)`,
-    '- packet_contents: letter / handwritten note / scorecard / business card',
-    '- mail_readiness_at_send: (set when mailed)',
-    needsPreMailVerification
-      ? '- first_follow_up_call_outcome: (set after call — only after a verified phone exists and packet is mailed)'
-      : '- first_follow_up_call_outcome: (set after call)',
+    ...trackingFieldsSection,
     '',
-    '--- Final operator decision required ---',
-    mailReadyForReview
-      ? 'Packet is ready_for_review only. Explicitly approve a future launch/mail step after readiness remains complete — I will not print, mail, launch, or execute from this checklist.'
-      : 'Mail readiness is blocked. Complete pre-mail verification first; then request an explicit launch/mail approval. I will not print, mail, launch, or execute from this checklist.',
+    ...finalDecisionSection,
     '',
     'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
   ]
@@ -1988,7 +2978,9 @@ function buildPacketReviewArtifactResponse(input = {}) {
     fromInlineFacts
       ? `Selected prospect_id ${prospectId} from operator-supplied known facts for Campaign ${campaignId}.`
       : `Selected prospect_id ${prospectId} from the current Campaign ${campaignId} canary table.`,
-    'ready_for_review means packet review is allowed; execution_readiness stays blocked absent explicit launch.',
+    packetContentReviewMode
+      ? 'Packet-content review mode: approval checklist + future mail gate; verification not reopened.'
+      : 'ready_for_review means packet review is allowed; execution_readiness stays blocked absent explicit launch.',
     canDraft
       ? 'Provisional drafts generated from known company/contact facts; missing industry does not block drafting.'
       : 'Drafts held because company_name and contact_name are both required.',
@@ -2032,7 +3024,9 @@ function buildPacketReviewArtifactResponse(input = {}) {
       : [],
     recommendedActions: debugOutput
       ? [
-          'Review the provisional packet drafts, confirm print fields, then explicitly request any later launch/mail approval.',
+          packetContentReviewMode
+            ? 'Complete the packet-content approval checklist, then explicitly request any later launch/mail approval.'
+            : 'Review the provisional packet drafts, confirm print fields, then explicitly request any later launch/mail approval.',
         ]
       : [],
     metadata: {
@@ -2048,6 +3042,7 @@ function buildPacketReviewArtifactResponse(input = {}) {
       route: 'intelligence',
       canaryPreparationOnly: true,
       packetReview: true,
+      packetContentReview: packetContentReviewMode || undefined,
       fillableTable: !fromInlineFacts,
       inlineKnownFacts: fromInlineFacts || undefined,
       provisionalDrafts: draftsProvisional || draftsHeld || undefined,
@@ -2069,6 +3064,7 @@ function buildPacketReviewArtifactResponse(input = {}) {
         outputKind: 'packet_review_artifact',
         preparationOnly: true,
         packetReview: true,
+        packetContentReview: packetContentReviewMode || undefined,
         prospectId,
         campaignId,
         mailReadiness,
@@ -2382,9 +3378,11 @@ async function maybeBuildCanaryPreparationResponse(input) {
   const question = String(input.question || '');
   const session = input.session || null;
 
-  // Pasted fillable verification table before canary prospect sniffing /
-  // packet-review missing-table clarify / mission routing.
+  // Pasted fillable verification table / readiness summary table before
+  // canary prospect sniffing / packet-review missing-table clarify / mission
+  // routing.
   ingestPastedFillableVerificationTable({ question, session });
+  ingestPastedReadinessSummaryTable({ question, session });
 
   const prior = getActiveWorkContext(session);
 
@@ -2401,9 +3399,8 @@ async function maybeBuildCanaryPreparationResponse(input) {
     });
   }
 
-  // Packet review from desk table — also owned by early continuation, but
-  // keep a secondary guard so canary routing never asks to re-paste prospects.
-  // Fallback: inline known-facts block when no desk table is present.
+  // Proceed-with / packet review before canary summary — mirrors early
+  // continuation so secondary canary routing never re-selects a work order.
   if (isPacketReviewRequest(question)) {
     if (activeContextHasEntities(prior) && activeContextHasFillableTable(prior)) {
       return handlePacketReviewContinuation({
@@ -2420,7 +3417,7 @@ async function maybeBuildCanaryPreparationResponse(input) {
     };
   }
 
-  // Cross-prospect canary summary / judgment — secondary hard stop before
+  // Cross-prospect canary summary / judgment. Secondary hard stop before
   // prospect sniff / parse clarification.
   if (isCanarySummaryJudgmentRequest(question)) {
     return handleCanarySummaryJudgmentContinuation({
@@ -2442,7 +3439,8 @@ async function maybeBuildCanaryPreparationResponse(input) {
     !isFillableTableUpdateRequest(question, prior) &&
     !isPacketReviewRequest(question) &&
     !isCanarySummaryJudgmentRequest(question) &&
-    !looksLikeFillableVerificationTablePaste(question);
+    !looksLikeFillableVerificationTablePaste(question) &&
+    !looksLikeReadinessSummaryTablePaste(question);
 
   // Execution / mail while preparation-only canary context is active:
   // never infer launch from desk context — block and ask for readiness.
@@ -2508,6 +3506,7 @@ async function maybeBuildCanaryPreparationResponse(input) {
     !isPacketReviewRequest(question) &&
     !isCanarySummaryJudgmentRequest(question) &&
     !looksLikeFillableVerificationTablePaste(question) &&
+    !looksLikeReadinessSummaryTablePaste(question) &&
     !(hasPriorCanary && isActiveWorkReuseProspectCue(question))
   ) {
     const count = intendedCount || 3;
@@ -2655,6 +3654,13 @@ function rememberCanaryActiveWorkContext(input = {}) {
         input.workflow ||
         (input.prior && input.prior.workflow) ||
         undefined,
+      canaryWorkflowType:
+        input.canaryWorkflowType ||
+        resolveCanaryWorkflowType(
+          input.question || '',
+          Array.isArray(input.tableRows) ? input.tableRows : [],
+          input.prior || null
+        ),
       lastOutputType,
       lastOutputKind: input.lastOutputKind,
       nextAction,
@@ -2818,8 +3824,10 @@ function operatorAttemptedCanaryProspectSupply(question) {
   // a new prospect paste.
   if (isPacketReviewRequest(text)) return false;
   // Cross-prospect canary status summary / judgment mentions PM-00x ids and
-  // known-state bullets — never treat as a prospect paste.
+  // known-state bullets / readiness tables — never treat as a prospect paste.
   if (isCanarySummaryJudgmentRequest(text)) return false;
+  if (looksLikeReadinessSummaryTablePaste(text)) return false;
+  if (looksLikeFillableVerificationTablePaste(text)) return false;
 
   const hasRowSignals =
     hasInlineProspectList(text) ||

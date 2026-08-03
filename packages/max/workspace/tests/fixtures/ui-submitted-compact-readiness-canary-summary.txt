@@ -1,0 +1,18 @@
+Summarize the Campaign 001 preparation-only canary status
+one-line overall status
+readiness table for all 3 prospects
+which prospect should be worked next
+exact next operator action for each prospect
+what is safe to draft now
+what is blocked from printing/mailing
+what PulseForge should track next
+
+| prospect_id | company_name | contact_name | verification_summary | mail_readiness | draft_readiness | execution_readiness |
+|---|---|---|---|---|---|---|
+
+| PM-001 | Gamache Properties | Ben Gamache | website/address/phone/contact role verified | ready_for_review | allowed | blocked |
+| PM-002 | Elm Grove Companies | David Schleyer | website/address/phone unknown or blocked, contact role needs verification | blocked | allowed | blocked |
+| PM-003 | Mill City Property Management | Lauren DuPaul | website/address/phone unknown or blocked, contact role needs verification | blocked | allowed | blocked |
+
+Do not include Reasoning, Unavailable context, or Next sections.
+Do not create a mission. Do not launch, execute, approve, print, or mail.

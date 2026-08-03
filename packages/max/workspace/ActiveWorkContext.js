@@ -24,6 +24,7 @@ const LAST_OUTPUT_TYPES = Object.freeze({
   PROVISIONAL_DRAFTS: 'provisional_drafts',
   PACKET_REVIEW: 'packet_review',
   CANARY_SUMMARY: 'canary_summary',
+  FOCUSED_WORK_ORDER: 'focused_work_order',
 });
 
 /**
@@ -132,6 +133,10 @@ function buildCanaryActiveWorkContext(input = {}) {
       input.workflow ||
       (prior && prior.workflow) ||
       'campaign_canary',
+    canaryWorkflowType:
+      input.canaryWorkflowType ||
+      (prior && prior.canaryWorkflowType) ||
+      null,
     target: { campaignId: String(campaignId) },
     entities: prospects.map(prospectToEntity),
     tableRows,
@@ -141,6 +146,11 @@ function buildCanaryActiveWorkContext(input = {}) {
         ? prior.constraints
         : {}),
       ...DEFAULT_CANARY_CONSTRAINTS,
+      ...(input.canaryWorkflowType
+        ? { canaryWorkflowType: input.canaryWorkflowType }
+        : prior && prior.canaryWorkflowType
+          ? { canaryWorkflowType: prior.canaryWorkflowType }
+          : {}),
     },
     lastOutputType,
     lastOutputKind,
@@ -292,26 +302,455 @@ function isActiveWorkFollowUpCue(text) {
 }
 
 /**
- * Operator wants a preparation-only packet review artifact from the desk table
- * (checklist / drafts / tracking) — not a new prospect paste and not an initial
- * multi-prospect canary package deliverable list.
+ * Strip markdown tables and known-state / readiness rows so desk residue
+ * (e.g. operator_next_action = "Create packet review checklist") cannot be
+ * mistaken for an operator ask to generate a packet-review artifact.
  * @param {string} text
+ * @returns {string}
  */
-function isPacketReviewRequest(text) {
+function extractOperatorIntentProse(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return '';
+
+  const lines = raw.split(/\r?\n/);
+  /** @type {string[]} */
+  const kept = [];
+  let inKnownState = false;
+
+  for (const line of lines) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) {
+      inKnownState = false;
+      kept.push('');
+      continue;
+    }
+
+    // Drop markdown table rows / separators entirely.
+    if (trimmed.includes('|') && /\|/.test(trimmed.slice(1))) {
+      const cells = trimmed.split('|').filter((c) => c.trim() !== '');
+      if (cells.length >= 2) continue;
+    }
+
+    if (
+      /^known\s+current\s+state\s*:?\s*$/i.test(trimmed) ||
+      /^current\s+canary\s+state(?:\s+lines?)?\s*:?\s*$/i.test(trimmed)
+    ) {
+      inKnownState = true;
+      continue;
+    }
+    if (
+      inKnownState &&
+      (/^[-*•]\s*PM-\d{3}\b/i.test(trimmed) || /^PM-\d{3}\s*:/i.test(trimmed))
+    ) {
+      continue;
+    }
+    if (inKnownState && !/^[-*•]/.test(trimmed) && !/^PM-\d{3}\b/i.test(trimmed)) {
+      inKnownState = false;
+    }
+
+    // Drop readiness / fillable state bullets that only restate desk fields.
+    if (
+      /^[-*•]\s*PM-\d{3}\b/i.test(trimmed) &&
+      /\bmail_readiness\b/i.test(trimmed)
+    ) {
+      continue;
+    }
+
+    // Drop key=value canary state lines even without a heading.
+    if (looksLikeCanaryStateLine(trimmed)) {
+      continue;
+    }
+
+    kept.push(line);
+  }
+
+  return kept.join('\n');
+}
+
+/**
+ * True when a line looks like a per-prospect canary state line
+ * (PM-001 / CP-001: company=...; readiness fields... or legacy comma prose).
+ * @param {string} line
+ * @returns {boolean}
+ */
+function looksLikeCanaryStateLine(line) {
+  const cleaned = String(line || '')
+    .replace(/^[-*•]\s*/, '')
+    .trim();
+  if (!/^[A-Za-z]{1,4}-\d{3}\s*:/i.test(cleaned)) return false;
+  if (/\bmail_readiness\s*=/i.test(cleaned)) return true;
+  if (/\bcall_readiness\s*=/i.test(cleaned)) return true;
+  if (/\bscript_readiness\s*=/i.test(cleaned)) return true;
+  if (/\b(?:company|company_name)\s*=/i.test(cleaned)) return true;
+  if (/\bverification_summary\s*=/i.test(cleaned)) return true;
+  if (/\bmail_readiness\b/i.test(cleaned) && /\bdraft_readiness\b/i.test(cleaned)) {
+    return true;
+  }
+  if (/\bcall_readiness\b/i.test(cleaned) && /\bscript_readiness\b/i.test(cleaned)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Operator wants one selected next work-order artifact (not the full canary
+ * status summary). Checked inside canary summary/judgment routing.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasFocusedCanaryWorkOrderCues(text) {
+  // Proceeding with a named packet-content work order is packet review, not
+  // focused work-order selection.
+  if (isProceedWithPacketContentReviewRequest(text)) return false;
+
+  const prose = extractOperatorIntentProse(text);
+  const proseLower = prose.toLowerCase();
+  if (!proseLower.trim()) return false;
+
+  if (
+    /\b(?:create|build|draft|give|return)\s+(?:me\s+)?(?:the\s+)?(?:recommended\s+)?next\s+(?:preparation[-\s]*only\s+)?work\s+order\b/.test(
+      proseLower
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\brecommended\s+next\s+(?:preparation[-\s]*only\s+)?work\s+order\b/.test(
+      proseLower
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\bchoose\s+one\s+next\s+(?:preparation[-\s]*only\s+)?work\s+order\s+only\b/.test(
+      proseLower
+    ) ||
+    /\bone\s+next\s+(?:preparation[-\s]*only\s+)?work\s+order\s+only\b/.test(
+      proseLower
+    ) ||
+    /\bnext\s+(?:preparation[-\s]*only\s+)?work\s+order\s+only\b/.test(
+      proseLower
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\bexact\s+steps?\s+for\s+the\s+operator\b/.test(proseLower) ||
+    /\bexact\s+operator\s+steps?\b/.test(proseLower)
+  ) {
+    return true;
+  }
+  if (/\bwhat\s+max\s+can\s+prepare\s+next\b/.test(proseLower)) {
+    return true;
+  }
+  if (/\bwhat\s+max\s+must\s+not\s+do\b/.test(proseLower)) {
+    return true;
+  }
+  if (/\bdeferred\s+prospects?\b/.test(proseLower)) {
+    return true;
+  }
+  if (wantsFocusedFutureMailingEligibilitySection(text)) {
+    return true;
+  }
+  if (wantsFocusedFinalApprovalGateSection(text)) {
+    return true;
+  }
+  if (
+    /\bdo\s+not\s+return\s+the\s+full\s+(?:canary\s+)?summary\b/.test(
+      proseLower
+    ) ||
+    /\bnot\s+the\s+full\s+(?:canary\s+)?summary\b/.test(proseLower)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Operator asked what would make a prospect eligible for future mailing
+ * approval — include that section in focused work-order output.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function wantsFocusedFutureMailingEligibilitySection(text) {
+  const prose = extractOperatorIntentProse(text);
+  const proseLower = prose.toLowerCase();
+  if (!proseLower.trim()) return false;
+  if (/\bfuture\s+mailing\s+eligibility\b/.test(proseLower)) return true;
+  if (
+    /\beligible\s+for\s+future\s+mailing(?:\s+approval)?\b/.test(proseLower)
+  ) {
+    return true;
+  }
+  if (
+    /\bwhat\s+would\s+make\s+\S+\s+eligible\s+for\s+future\s+mailing\b/.test(
+      proseLower
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Operator asked for the final approval gate before outbound action —
+ * include that section in focused work-order output.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function wantsFocusedFinalApprovalGateSection(text) {
+  const prose = extractOperatorIntentProse(text);
+  const proseLower = prose.toLowerCase();
+  if (!proseLower.trim()) return false;
+  if (/\bfinal\s+approval\s+gate\b/.test(proseLower)) return true;
+  if (
+    /\bapproval\s+gate\s+before\s+(?:any\s+)?outbound\b/.test(proseLower)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Explicit full canary-summary output cues (overall status / readiness table /
+ * all prospects). Used to prefer the summary artifact when both subtypes are
+ * ambiguous; focused work-order cues still win when present.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasCanarySummaryOutputCues(text) {
+  const prose = extractOperatorIntentProse(text);
+  const proseLower = prose.toLowerCase();
+  if (!proseLower.trim()) return false;
+
+  const proseForSummaryCue = proseLower.replace(
+    /\bverification\s+summary\b/g,
+    'verification_summary'
+  );
+
+  if (/\bsummariz(?:e|ing)\b/.test(proseForSummaryCue)) return true;
+  if (/\boverall\s+status\b/.test(proseLower)) return true;
+  if (/\ball\s+\d+\s+prospects?\b/.test(proseLower)) return true;
+  if (
+    /\b(?:current\s+)?(?:canary\s+)?readiness\s+table\b/.test(proseLower) &&
+    !hasFocusedCanaryWorkOrderCues(text)
+  ) {
+    return true;
+  }
+  if (/\bexact\s+next\s+operator\s+action\s+for\s+each\b/.test(proseLower)) {
+    return true;
+  }
+  if (/\bwhat\s+is\s+safe\s+to\s+draft\s+now\b/.test(proseLower)) return true;
+  if (
+    /\bwhat\s+is\s+blocked\s+from\s+(?:printing|mailing|dialing|calling)\b/.test(
+      proseLower
+    ) ||
+    /\bblocked\s+from\s+printing\s*[\/,]?\s*mailing\b/.test(proseLower) ||
+    /\bwhat\s+remains\s+blocked\b/.test(proseLower)
+  ) {
+    return true;
+  }
+  if (/\bwhat\s+pulseforge\s+should\s+track\s+next\b/.test(proseLower)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * True when canary summary/judgment routing should emit the focused next
+ * work-order artifact instead of the full cross-prospect summary.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isFocusedCanaryWorkOrderRequest(text) {
+  if (!hasFocusedCanaryWorkOrderCues(text)) return false;
+  // Focused work-order cues win even when summary cues are also present.
+  return true;
+}
+
+/**
+ * True when the operator asks for a cross-prospect preparation-only canary
+ * status summary / judgment. Packet-review residue in state rows must not
+ * suppress these cues — summary outranks packet review.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasCanarySummaryJudgmentCues(text) {
   const lower = String(text || '').toLowerCase();
   if (!lower.trim()) return false;
 
-  // Strong cues: explicit packet-review artifact generation.
+  // Proceed-with a named packet-content work order is packet review, not
+  // summary / focused selection.
+  if (isProceedWithPacketContentReviewRequest(text)) return false;
+
+  // Prefer operator prose so table headers/cells do not invent summary intent,
+  // but still honor an embedded readiness summary paste as state for judgment.
+  const prose = extractOperatorIntentProse(text);
+  const proseLower = prose.toLowerCase();
+
+  const hasCanaryOrCampaign =
+    /\bcanary\b/.test(proseLower) ||
+    /\bcampaign\s+0*01\b/.test(proseLower) ||
+    /\bpreparation[-\s]*only\b/.test(proseLower) ||
+    /\bprep[-\s]*only\b/.test(proseLower);
+
+  // Focused next-work-order asks share this routing entry, then subtype inside.
+  if (hasFocusedCanaryWorkOrderCues(text) && hasCanaryOrCampaign) {
+    return true;
+  }
+
+  // Strong judgment / status cues.
+  if (/\bknown\s+current\s+state\b/.test(proseLower)) return true;
+  if (/\bone[-\s]?line\s+overall\s+status\b/.test(proseLower)) return true;
+  if (/\bwhich\s+prospect\s+should\s+be\s+worked\s+next\b/.test(proseLower)) {
+    return true;
+  }
+  if (/\bexact\s+next\s+operator\s+action\s+for\s+each\b/.test(proseLower)) {
+    return true;
+  }
+  if (/\bwhat\s+is\s+safe\s+to\s+draft\s+now\b/.test(proseLower)) return true;
   if (
-    /\bpacket\s+review(?:\s+checklist)?\b/.test(lower) ||
+    /\bwhat\s+is\s+blocked\s+from\s+(?:printing|mailing|dialing|calling)\b/.test(
+      proseLower
+    ) ||
+    /\bblocked\s+from\s+printing\s*[\/,]?\s*mailing\b/.test(proseLower) ||
+    /\bwhat\s+remains\s+blocked\b/.test(proseLower)
+  ) {
+    return true;
+  }
+  if (/\bwhat\s+pulseforge\s+should\s+track\s+next\b/.test(proseLower)) {
+    return true;
+  }
+
+  // Readiness summary table cues — state paste / judgment, not prospect supply.
+  if (/\b(?:current\s+)?(?:canary\s+)?readiness\s+table\b/.test(proseLower)) {
+    return true;
+  }
+  if (
+    /\breadiness\s+table\s+for\s+(?:all\s+)?\d+\s+prospects?\b/.test(proseLower)
+  ) {
+    return true;
+  }
+  // Compact readiness paste is summary/judgment state supply — never packet-
+  // review generation by itself (even when a ready_for_review row mentions
+  // packet review as operator_next_action).
+  if (looksLikeReadinessSummaryTablePaste(text)) return true;
+
+  // Avoid treating "Verification Summary" column headers as a summarize cue.
+  const proseForSummaryCue = proseLower.replace(
+    /\bverification\s+summary\b/g,
+    'verification_summary'
+  );
+  const hasSummarizeOrJudgment =
+    /\bsummariz(?:e|ing)\b/.test(proseForSummaryCue) ||
+    /\bsummary\b/.test(proseForSummaryCue) ||
+    /\bjudg(?:e)?ment\b/.test(proseForSummaryCue);
+
+  if (
+    hasSummarizeOrJudgment &&
+    /\bacross\s+(?:PM|CP)-\d{3}\b/i.test(prose) &&
+    /\b(?:PM|CP)-\d{3}\b/i.test(prose)
+  ) {
+    return true;
+  }
+
+  const hasStatusCue =
+    /\bstatus\b/.test(proseLower) ||
+    /\breadiness\b/.test(proseLower) ||
+    /\bjudg(?:e)?ment\b/.test(proseLower);
+
+  if (hasSummarizeOrJudgment && hasCanaryOrCampaign && hasStatusCue) {
+    return true;
+  }
+
+  if (/\bpreparation[-\s]*only\s+canary\s+status\b/.test(proseLower)) {
+    return true;
+  }
+  if (/\bcanary\s+(?:status|summary|judgment|judgement)\b/.test(proseLower)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Operator is proceeding with a named preparation-only work order that is
+ * packet-content review for an explicit prospect_id — generate the packet
+ * review artifact, do not re-run focused work-order selection.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isProceedWithPacketContentReviewRequest(text) {
+  const prose = extractOperatorIntentProse(text);
+  const lower = prose.toLowerCase();
+  if (!lower.trim()) return false;
+
+  const proceeding =
+    /\bproceed\s+with\b/.test(lower) ||
+    /\bexecute\s+the\s+(?:recommended\s+)?(?:next\s+)?(?:preparation[-\s]*only\s+)?work\s+order\b/.test(
+      lower
+    );
+  if (!proceeding) return false;
+
+  const hasWorkOrder =
+    /\b(?:recommended\s+)?(?:next\s+)?(?:preparation[-\s]*only\s+)?work\s+order\b/.test(
+      lower
+    ) || /\bpacket[-\s]*content\s+review\b/.test(lower);
+  if (!hasWorkOrder) return false;
+
+  const hasPacketContent =
+    /\bpacket[-\s]*content\s+review\b/.test(lower) ||
+    /\bpacket\s+review\b/.test(lower);
+  if (!hasPacketContent) return false;
+
+  return /\bPM-\d{3}\b/i.test(prose);
+}
+
+/**
+ * Operator wants a preparation-only packet review artifact from the desk table
+ * (checklist / drafts / tracking) — not a canary status summary, not a new
+ * prospect paste, and not an initial multi-prospect canary package list.
+ *
+ * Packet-review generation requires packet-specific cues in operator prose.
+ * Do not infer solely from mail_readiness=ready_for_review, operator_next_action
+ * text in a state row, or the words "packet review" appearing only as desk
+ * residue.
+ * @param {string} text
+ */
+function isPacketReviewRequest(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return false;
+
+  // Proceed-with a named packet-content work order always wins over summary /
+  // focused selection cues in the same message.
+  if (isProceedWithPacketContentReviewRequest(raw)) return true;
+
+  // Summary / judgment cues always outrank packet-review generation.
+  if (hasCanarySummaryJudgmentCues(raw)) return false;
+
+  const prose = extractOperatorIntentProse(raw);
+  const lower = prose.toLowerCase();
+  if (!lower.trim()) return false;
+
+  // Strong cues: explicit packet-review artifact generation in operator prose.
+  if (
+    /\bcreate\s+(?:a\s+)?(?:preparation[-\s]*only\s+)?packet\s+review\s+package\b/.test(
+      lower
+    ) ||
+    /\bpacket\s+contents\s+checklist\b/.test(lower) ||
+    /\bpacket[-\s]*content\s+review\b/.test(lower) ||
+    /\bpacket\s+review(?:\s+checklist|\s+package|\s+artifact)?\b/.test(lower) ||
     /\boperator\s+packet\s+review\b/.test(lower) ||
     /\bcreate\s+(?:a\s+)?(?:preparation[-\s]*only\s+)?packet(?:\s+review)?\b/.test(
       lower
     ) ||
     /\bdraft\s+(?:a\s+)?(?:PM-\d{3}\s+)?packet(?:\s+for\s+review)?\b/i.test(
-      text
+      prose
     ) ||
     /\bpacket\s+for\s+review\b/.test(lower) ||
+    /\bfor\s+PM-\d{3}\s+packet\b/i.test(prose) ||
     /\bprint\s*[\/-]?\s*sign\s*[\/-]?\s*mail\s+checklist\b/.test(lower) ||
     (/\buse\s+the\s+current\b/.test(lower) &&
       /\b(?:canary\s+)?table\b/.test(lower) &&
@@ -320,10 +759,12 @@ function isPacketReviewRequest(text) {
     return true;
   }
 
-  // Secondary cues only when targeting a named desk prospect.
+  // Secondary cues only when targeting a named desk prospect in prose.
   // Avoid matching initial canary package lists that mention letter/note/cover
   // as deliverables without asking to generate a packet review for PM-00x.
-  const namedProspect = /\b(?:for|of)\s+PM-\d{3}\b/i.test(text);
+  const namedProspect =
+    /\b(?:for|of)\s+PM-\d{3}\b/i.test(prose) ||
+    /\bfor\s+PM-\d{3}\s+packet\b/i.test(prose);
   if (!namedProspect) return false;
 
   return (
@@ -347,60 +788,10 @@ function isCanarySummaryJudgmentRequest(text) {
   const lower = String(text || '').toLowerCase();
   if (!lower.trim()) return false;
 
-  // Packet review and table mutation own their routes.
-  if (isPacketReviewRequest(text)) return false;
+  // Table mutation owns its route; summary otherwise outranks packet review.
   if (isFillableTableUpdateRequest(text)) return false;
 
-  // Strong judgment / status cues.
-  if (/\bknown\s+current\s+state\b/.test(lower)) return true;
-  if (/\bwhich\s+prospect\s+should\s+be\s+worked\s+next\b/.test(lower)) {
-    return true;
-  }
-  if (/\bexact\s+next\s+operator\s+action\s+for\s+each\b/.test(lower)) {
-    return true;
-  }
-  if (/\bwhat\s+is\s+safe\s+to\s+draft\s+now\b/.test(lower)) return true;
-  if (
-    /\bwhat\s+is\s+blocked\s+from\s+(?:printing|mailing)\b/.test(lower) ||
-    /\bblocked\s+from\s+printing\s*[\/,]?\s*mailing\b/.test(lower)
-  ) {
-    return true;
-  }
-
-  const hasSummarizeOrJudgment =
-    /\bsummariz(?:e|ing)\b/.test(lower) ||
-    /\bsummary\b/.test(lower) ||
-    /\bjudg(?:e)?ment\b/.test(lower);
-
-  if (
-    hasSummarizeOrJudgment &&
-    /\bacross\s+PM-\d{3}\b/i.test(text) &&
-    /\bPM-\d{3}\b/i.test(text)
-  ) {
-    return true;
-  }
-
-  const hasCanaryOrCampaign =
-    /\bcanary\b/.test(lower) ||
-    /\bcampaign\s+0*01\b/.test(lower) ||
-    /\bpreparation[-\s]*only\b/.test(lower) ||
-    /\bprep[-\s]*only\b/.test(lower);
-
-  const hasStatusCue =
-    /\bstatus\b/.test(lower) ||
-    /\breadiness\b/.test(lower) ||
-    /\bjudg(?:e)?ment\b/.test(lower);
-
-  if (hasSummarizeOrJudgment && hasCanaryOrCampaign && hasStatusCue) {
-    return true;
-  }
-
-  if (/\bpreparation[-\s]*only\s+canary\s+status\b/.test(lower)) return true;
-  if (/\bcanary\s+(?:status|summary|judgment|judgement)\b/.test(lower)) {
-    return true;
-  }
-
-  return false;
+  return hasCanarySummaryJudgmentCues(text);
 }
 
 /**
@@ -501,11 +892,13 @@ function parseKnownStateGateSummary(prose) {
 }
 
 /**
- * Parse operator "known current state" bullets into readiness rows.
- * Does not treat bullets as a new prospect list (no pipe/em-dash required).
+ * Parse operator "known current state" bullets / canary state lines into
+ * readiness rows. Does not treat lines as a new prospect list.
  *
- * Example:
+ * Supported shapes:
  * - PM-001: Gamache Properties, Ben Gamache, website/address/phone/contact role verified, mail_readiness ready_for_review, draft_readiness allowed, execution_readiness blocked
+ * - PM-001: company=Gamache Properties; contact=Ben Gamache; verification_summary=...; mail_readiness=ready_for_review; draft_readiness=allowed; execution_readiness=blocked; next_action=...
+ * - CP-001: company=Gamache Properties; contact=Ben Gamache; phone_status=verified; call_readiness=ready_for_review; script_readiness=allowed; execution_readiness=blocked; notes=...
  *
  * @param {string} text
  * @returns {{ rows: object[], hasKnownState: boolean }}
@@ -524,75 +917,287 @@ function parseKnownCurrentStateBullets(text) {
       .trim();
     if (!cleaned) continue;
 
-    const match = /^(PM-\d{3})\s*:\s*(.+)$/i.exec(cleaned);
+    const match = /^([A-Za-z]{1,4}-\d{3})\s*:\s*(.+)$/i.exec(cleaned);
     if (!match) continue;
 
     const prospectId = String(match[1] || '')
       .trim()
       .toUpperCase();
-    let rest = String(match[2] || '').trim();
+    const rest = String(match[2] || '').trim();
     if (!prospectId || !rest) continue;
 
-    let mail_readiness = null;
-    let draft_readiness = null;
-    let execution_readiness = null;
-
-    const mailM = /(?:^|,\s*)mail_readiness\s+([a-z0-9_]+)/i.exec(rest);
-    if (mailM) {
-      mail_readiness = String(mailM[1] || '')
-        .trim()
-        .toLowerCase();
-      rest = rest.replace(mailM[0], '').trim();
-    }
-    const draftM = /(?:^|,\s*)draft_readiness\s+([a-z0-9_]+)/i.exec(rest);
-    if (draftM) {
-      draft_readiness = String(draftM[1] || '')
-        .trim()
-        .toLowerCase();
-      rest = rest.replace(draftM[0], '').trim();
-    }
-    const execM = /(?:^|,\s*)execution_readiness\s+([a-z0-9_]+)/i.exec(rest);
-    if (execM) {
-      execution_readiness = String(execM[1] || '')
-        .trim()
-        .toLowerCase();
-      rest = rest.replace(execM[0], '').trim();
+    const kvRow = parseCanaryStateLineKeyValues(prospectId, rest);
+    if (kvRow) {
+      rows.push(kvRow);
+      continue;
     }
 
-    // Strip trailing commas left by readiness removals.
-    rest = rest.replace(/^,\s*|,\s*$/g, '').replace(/,\s*,/g, ',').trim();
-
-    // company, contact, gate prose…
-    const parts = rest.split(',').map((p) => p.trim()).filter(Boolean);
-    if (parts.length < 2) continue;
-
-    const company_name = parts[0];
-    const contact_name = parts[1];
-    const gateProse = parts.slice(2).join(', ').trim();
-    const gates = parseKnownStateGateSummary(gateProse);
-
-    rows.push({
-      prospect_id: prospectId,
-      company_name,
-      contact_name,
-      website_status: gates.website_status,
-      mailing_address_status: gates.mailing_address_status,
-      phone_status: gates.phone_status,
-      contact_role_status: gates.contact_role_status,
-      gate_summary: gates.gate_summary || gateProse,
-      mail_readiness: mail_readiness || 'blocked',
-      draft_readiness: draft_readiness || 'allowed',
-      // Preparation-only: never authorize execution from known-state bullets.
-      execution_readiness: 'blocked',
-      operator_next_action: '',
-      notes: '',
-    });
+    const proseRow = parseCanaryStateLineProse(prospectId, rest);
+    if (proseRow) rows.push(proseRow);
   }
 
   return {
     rows,
     hasKnownState: rows.length > 0,
   };
+}
+
+/**
+ * Normalize canary state-line field aliases to canonical row keys.
+ * @param {string} rawKey
+ * @returns {string}
+ */
+function normalizeCanaryStateLineFieldKey(rawKey) {
+  const key = String(rawKey || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_');
+  if (key === 'company' || key === 'company_name') return 'company_name';
+  if (key === 'contact' || key === 'contact_name') return 'contact_name';
+  if (
+    key === 'verification_summary' ||
+    key === 'gate_summary' ||
+    key === 'status_summary'
+  ) {
+    return 'verification_summary';
+  }
+  if (key === 'mail_readiness' || key === 'mail') return 'mail_readiness';
+  if (key === 'draft_readiness' || key === 'draft') return 'draft_readiness';
+  if (key === 'call_readiness' || key === 'call') return 'call_readiness';
+  if (key === 'script_readiness' || key === 'script') return 'script_readiness';
+  if (key === 'execution_readiness' || key === 'execution') {
+    return 'execution_readiness';
+  }
+  if (key === 'phone' || key === 'phone_status') return 'phone_status';
+  if (key === 'phone_value' || key === 'phone_number') return 'phone_value';
+  if (
+    key === 'contact_role' ||
+    key === 'contact_role_status' ||
+    key === 'role_status'
+  ) {
+    return 'contact_role_status';
+  }
+  if (
+    key === 'next_action' ||
+    key === 'operator_next_action' ||
+    key === 'operator_next'
+  ) {
+    return 'operator_next_action';
+  }
+  if (key === 'notes' || key === 'note') return 'notes';
+  return key;
+}
+
+/**
+ * Parse semicolon-delimited key=value canary state line body.
+ * @param {string} prospectId
+ * @param {string} rest
+ * @returns {object|null}
+ */
+function parseCanaryStateLineKeyValues(prospectId, rest) {
+  const body = String(rest || '').trim();
+  if (!body) return null;
+  // Require at least one key=value assignment (not legacy comma prose).
+  if (!/^[a-z][a-z0-9_]*\s*=/i.test(body) && !/;\s*[a-z][a-z0-9_]*\s*=/i.test(body)) {
+    return null;
+  }
+
+  /** @type {Record<string, string>} */
+  const fields = {};
+  const segments = body.split(';');
+  for (const segment of segments) {
+    const part = String(segment || '').trim();
+    if (!part) continue;
+    const kv = /^([a-z][a-z0-9_]*)\s*=\s*(.+)$/i.exec(part);
+    if (!kv) continue;
+    const key = normalizeCanaryStateLineFieldKey(kv[1]);
+    const value = String(kv[2] || '').trim();
+    if (!key || !value) continue;
+    fields[key] = value;
+  }
+
+  if (!Object.keys(fields).length) return null;
+
+  const company_name = fields.company_name || '';
+  const contact_name = fields.contact_name || '';
+  const hasCallPrepReadiness =
+    Boolean(fields.call_readiness) || Boolean(fields.script_readiness);
+  const hasDirectMailReadiness =
+    Boolean(fields.mail_readiness) || Boolean(fields.draft_readiness);
+  // Need identifiable prospect facts — company+contact or readiness fields.
+  if (
+    !company_name &&
+    !contact_name &&
+    !fields.mail_readiness &&
+    !fields.call_readiness &&
+    !fields.verification_summary
+  ) {
+    return null;
+  }
+
+  const verificationSummary = String(fields.verification_summary || '').trim();
+  const gates = parseKnownStateGateSummary(verificationSummary);
+  const phoneStatus = String(
+    fields.phone_status || gates.phone_status || 'unknown'
+  )
+    .trim()
+    .toLowerCase();
+  const contactRoleStatus = String(
+    fields.contact_role_status || gates.contact_role_status || 'unknown'
+  )
+    .trim()
+    .toLowerCase();
+
+  /** @type {Record<string, unknown>} */
+  const row = {
+    prospect_id: prospectId,
+    company_name: company_name || '',
+    contact_name: contact_name || '',
+    website_status: String(fields.website_status || gates.website_status || 'unknown')
+      .trim()
+      .toLowerCase(),
+    mailing_address_status: String(
+      fields.mailing_address_status || gates.mailing_address_status || 'unknown'
+    )
+      .trim()
+      .toLowerCase(),
+    phone_status: phoneStatus,
+    contact_role_status: contactRoleStatus,
+    phone_value: String(fields.phone_value || '').trim(),
+    gate_summary: verificationSummary || gates.gate_summary || '',
+    verification_summary: verificationSummary || '',
+    // Preparation-only: never authorize execution from known-state lines.
+    execution_readiness: 'blocked',
+    operator_next_action: String(fields.operator_next_action || '').trim(),
+    notes: String(fields.notes || '').trim(),
+  };
+
+  if (hasCallPrepReadiness || (!hasDirectMailReadiness && /^CP-/i.test(prospectId))) {
+    row.call_readiness = String(fields.call_readiness || 'blocked')
+      .trim()
+      .toLowerCase();
+    row.script_readiness = String(fields.script_readiness || 'allowed')
+      .trim()
+      .toLowerCase();
+  }
+
+  if (hasDirectMailReadiness || (!hasCallPrepReadiness && /^PM-/i.test(prospectId))) {
+    row.mail_readiness = String(fields.mail_readiness || 'blocked')
+      .trim()
+      .toLowerCase();
+    row.draft_readiness = String(fields.draft_readiness || 'allowed')
+      .trim()
+      .toLowerCase();
+  }
+
+  // Preserve explicit fields when both workflow cues appear on one line.
+  if (fields.call_readiness) {
+    row.call_readiness = String(fields.call_readiness).trim().toLowerCase();
+  }
+  if (fields.script_readiness) {
+    row.script_readiness = String(fields.script_readiness).trim().toLowerCase();
+  }
+  if (fields.mail_readiness) {
+    row.mail_readiness = String(fields.mail_readiness).trim().toLowerCase();
+  }
+  if (fields.draft_readiness) {
+    row.draft_readiness = String(fields.draft_readiness).trim().toLowerCase();
+  }
+
+  return row;
+}
+
+/**
+ * Parse legacy comma-separated canary state line body.
+ * @param {string} prospectId
+ * @param {string} rest
+ * @returns {object|null}
+ */
+function parseCanaryStateLineProse(prospectId, rest) {
+  let body = String(rest || '').trim();
+  if (!body) return null;
+
+  let mail_readiness = null;
+  let draft_readiness = null;
+  let call_readiness = null;
+  let script_readiness = null;
+  let execution_readiness = null;
+
+  const mailM = /(?:^|,\s*)mail_readiness\s+([a-z0-9_]+)/i.exec(body);
+  if (mailM) {
+    mail_readiness = String(mailM[1] || '')
+      .trim()
+      .toLowerCase();
+    body = body.replace(mailM[0], '').trim();
+  }
+  const draftM = /(?:^|,\s*)draft_readiness\s+([a-z0-9_]+)/i.exec(body);
+  if (draftM) {
+    draft_readiness = String(draftM[1] || '')
+      .trim()
+      .toLowerCase();
+    body = body.replace(draftM[0], '').trim();
+  }
+  const callM = /(?:^|,\s*)call_readiness\s+([a-z0-9_]+)/i.exec(body);
+  if (callM) {
+    call_readiness = String(callM[1] || '')
+      .trim()
+      .toLowerCase();
+    body = body.replace(callM[0], '').trim();
+  }
+  const scriptM = /(?:^|,\s*)script_readiness\s+([a-z0-9_]+)/i.exec(body);
+  if (scriptM) {
+    script_readiness = String(scriptM[1] || '')
+      .trim()
+      .toLowerCase();
+    body = body.replace(scriptM[0], '').trim();
+  }
+  const execM = /(?:^|,\s*)execution_readiness\s+([a-z0-9_]+)/i.exec(body);
+  if (execM) {
+    execution_readiness = String(execM[1] || '')
+      .trim()
+      .toLowerCase();
+    body = body.replace(execM[0], '').trim();
+  }
+
+  // Strip trailing commas left by readiness removals.
+  body = body.replace(/^,\s*|,\s*$/g, '').replace(/,\s*,/g, ',').trim();
+
+  // company, contact, gate prose…
+  const parts = body.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+
+  const company_name = parts[0];
+  const contact_name = parts[1];
+  const gateProse = parts.slice(2).join(', ').trim();
+  const gates = parseKnownStateGateSummary(gateProse);
+
+  /** @type {Record<string, unknown>} */
+  const row = {
+    prospect_id: prospectId,
+    company_name,
+    contact_name,
+    website_status: gates.website_status,
+    mailing_address_status: gates.mailing_address_status,
+    phone_status: gates.phone_status,
+    contact_role_status: gates.contact_role_status,
+    gate_summary: gates.gate_summary || gateProse,
+    verification_summary: gateProse,
+    // Preparation-only: never authorize execution from known-state bullets.
+    execution_readiness: 'blocked',
+    operator_next_action: '',
+    notes: '',
+  };
+
+  if (call_readiness != null || script_readiness != null || /^CP-/i.test(prospectId)) {
+    row.call_readiness = call_readiness || 'blocked';
+    row.script_readiness = script_readiness || 'allowed';
+  }
+  if (mail_readiness != null || draft_readiness != null || /^PM-/i.test(prospectId)) {
+    row.mail_readiness = mail_readiness || 'blocked';
+    row.draft_readiness = draft_readiness || 'allowed';
+  }
+
+  return row;
 }
 
 /**
@@ -610,6 +1215,7 @@ function extractPacketReviewProspectId(text, knownIds = []) {
 
   const patterns = [
     /\b(?:for|of)\s+(PM-\d{3})\b/i,
+    /\b(PM-\d{3})\s+packet[-\s]*content\s+review\b/i,
     /\b(PM-\d{3})\s+(?:only|packet|review)\b/i,
     /\bpacket(?:\s+review)?(?:\s+checklist)?\s+for\s+(PM-\d{3})\b/i,
     /\bdraft\s+(PM-\d{3})\s+packet\b/i,
@@ -646,18 +1252,46 @@ function isActiveWorkTransformCue(text) {
 }
 
 /**
+ * True when a regex match is not preceded by a negation (do not / don't / never).
+ * @param {string} lower
+ * @param {RegExpExecArray} match
+ */
+function matchIsNegated(lower, match) {
+  if (!match || match.index == null) return false;
+  const before = String(lower || '').slice(
+    Math.max(0, match.index - 24),
+    match.index
+  );
+  return /(?:do\s+not|don't|dont|never)\s+$/i.test(before);
+}
+
+/**
  * Explicit new mission / campaign work — must not be intercepted by desk context.
+ * Negations like "Do not create a mission" are constraints, not create requests.
  * @param {string} text
  */
 function isExplicitNewMissionRequest(text) {
   const lower = String(text || '').toLowerCase();
-  return (
-    /\bbuild\s+campaign\b/.test(lower) ||
-    /\bcreate\s+(?:a\s+)?(?:new\s+)?(?:campaign|mission)\b/.test(lower) ||
-    /\bstart\s+(?:a\s+)?(?:new\s+)?(?:campaign|mission|direct\s+mail)\b/.test(
-      lower
-    )
-  );
+  if (!lower.trim()) return false;
+
+  if (/\bbuild\s+campaign\b/.test(lower)) return true;
+
+  const startRe =
+    /\bstart\s+(?:a\s+)?(?:new\s+)?(?:campaign|mission|direct\s+mail)\b/g;
+  let startMatch = startRe.exec(lower);
+  while (startMatch) {
+    if (!matchIsNegated(lower, startMatch)) return true;
+    startMatch = startRe.exec(lower);
+  }
+
+  const createRe = /\bcreate\s+(?:a\s+)?(?:new\s+)?(?:campaign|mission)\b/g;
+  let createMatch = createRe.exec(lower);
+  while (createMatch) {
+    if (!matchIsNegated(lower, createMatch)) return true;
+    createMatch = createRe.exec(lower);
+  }
+
+  return false;
 }
 
 /**
@@ -1600,6 +2234,7 @@ function activeContextBlocksExecution(ctx) {
 
 /**
  * Split a markdown table line into cells (preserves empty cells).
+ * Preserves semicolon text inside cells (verification_summary prose).
  * @param {string} line
  * @returns {string[]}
  */
@@ -1612,7 +2247,7 @@ function splitMarkdownTableCells(line) {
 }
 
 /**
- * True when a markdown row is a separator (`|---|---|`).
+ * True when a markdown row is a separator (`|---|---|` / `| --- | --- |`).
  * @param {string[]} cells
  */
 function isMarkdownTableSeparatorRow(cells) {
@@ -1624,12 +2259,33 @@ function isMarkdownTableSeparatorRow(cells) {
 }
 
 /**
+ * Strip emphasis / code wrappers from a table header cell so
+ * `**Prospect ID**` / `*Company*` / `` `contact` `` normalize cleanly.
+ * @param {string} cell
+ * @returns {string}
+ */
+function stripMarkdownCellDecorations(cell) {
+  let text = String(cell || '').trim();
+  if (!text) return '';
+  // Unwrap repeated emphasis/code markers from both ends.
+  for (let i = 0; i < 3; i += 1) {
+    const next = text
+      .replace(/^\*{1,3}(.+?)\*{1,3}$/s, '$1')
+      .replace(/^_{1,3}(.+?)_{1,3}$/s, '$1')
+      .replace(/^`+(.+?)`+$/s, '$1')
+      .trim();
+    if (next === text) break;
+    text = next;
+  }
+  return text;
+}
+
+/**
  * Normalize a header cell to a snake_case column key.
  * @param {string} cell
  */
 function normalizeFillableTableHeaderKey(cell) {
-  return String(cell || '')
-    .trim()
+  return stripMarkdownCellDecorations(cell)
     .toLowerCase()
     .replace(/[\s-]+/g, '_');
 }
@@ -1658,6 +2314,9 @@ const FILLABLE_VERIFICATION_TABLE_DETECT_HEADERS = Object.freeze([
 
 /**
  * True when header cells look like a fillable verification table.
+ * Compact readiness summary tables (no field-value / gate-status columns) are
+ * excluded — those belong to canary summary ingestion, not ProspectList /
+ * fillable desk-table ownership.
  * @param {string[]} headerCells
  */
 function isFillableVerificationTableHeader(headerCells) {
@@ -1666,7 +2325,27 @@ function isFillableVerificationTableHeader(headerCells) {
     .filter(Boolean);
   if (!keys.length) return false;
   const set = new Set(keys);
+
+  // Alias tolerance for detect only (stored headers keep their own keys).
+  if (set.has('id') || set.has('prospect')) set.add('prospect_id');
+  if (set.has('company')) set.add('company_name');
+  if (set.has('contact')) set.add('contact_name');
+
   if (!set.has('prospect_id') || !set.has('company_name')) return false;
+
+  // Compact readiness summary shape: readiness trio (+ optional verification
+  // summary) without website/phone/address values or gate-status columns.
+  const hasFieldDetail =
+    set.has('website_value') ||
+    set.has('mailing_address_value') ||
+    set.has('phone_value') ||
+    set.has('website_status') ||
+    set.has('mailing_address_status') ||
+    set.has('phone_status') ||
+    set.has('contact_role_status') ||
+    set.has('operator_next_action');
+  if (!hasFieldDetail) return false;
+
   const hits = FILLABLE_VERIFICATION_TABLE_DETECT_HEADERS.filter((h) =>
     set.has(h)
   ).length;
@@ -1741,6 +2420,600 @@ function looksLikeFillableVerificationTablePaste(text) {
 }
 
 /**
+ * Compact readiness summary table headers (cross-prospect canary judgment).
+ * Distinct from the full fillable verification table.
+ */
+const READINESS_SUMMARY_TABLE_DETECT_HEADERS = Object.freeze([
+  'prospect_id',
+  'company_name',
+  'contact_name',
+  'verification_summary',
+  'mail_readiness',
+  'draft_readiness',
+  'call_readiness',
+  'script_readiness',
+  'execution_readiness',
+]);
+
+/**
+ * Map common readiness-table header aliases to canonical keys.
+ * Supports: prospect_id / Prospect ID / id, company_name / company / Company,
+ * contact_name / contact / Contact, verification_summary / gate summary /
+ * verification / status summary, and spaced readiness headers.
+ * @param {string} cell
+ * @returns {string}
+ */
+function normalizeReadinessSummaryHeaderKey(cell) {
+  const key = normalizeFillableTableHeaderKey(cell);
+  if (!key) return '';
+  if (
+    key === 'prospect' ||
+    key === 'id' ||
+    key === 'prospectid' ||
+    key === 'prospect_id'
+  ) {
+    return 'prospect_id';
+  }
+  if (key === 'company' || key === 'companyname' || key === 'company_name') {
+    return 'company_name';
+  }
+  if (
+    key === 'contact' ||
+    key === 'contactname' ||
+    key === 'contact_name' ||
+    key === 'decision_maker' ||
+    key === 'decisionmaker'
+  ) {
+    return 'contact_name';
+  }
+  if (
+    key === 'verification' ||
+    key === 'verification_summary' ||
+    key === 'gate_summary' ||
+    key === 'gates' ||
+    key === 'verification_status' ||
+    key === 'status_summary' ||
+    key === 'statussummary'
+  ) {
+    return 'verification_summary';
+  }
+  if (
+    key === 'mail_readiness' ||
+    key === 'mail' ||
+    key === 'mail_ready' ||
+    key === 'mailready'
+  ) {
+    return 'mail_readiness';
+  }
+  if (
+    key === 'draft_readiness' ||
+    key === 'draft' ||
+    key === 'draft_ready' ||
+    key === 'draftready'
+  ) {
+    return 'draft_readiness';
+  }
+  if (
+    key === 'call_readiness' ||
+    key === 'call' ||
+    key === 'call_ready' ||
+    key === 'callready'
+  ) {
+    return 'call_readiness';
+  }
+  if (
+    key === 'script_readiness' ||
+    key === 'script' ||
+    key === 'script_ready' ||
+    key === 'scriptready'
+  ) {
+    return 'script_readiness';
+  }
+  if (
+    key === 'execution_readiness' ||
+    key === 'execution' ||
+    key === 'execution_ready' ||
+    key === 'executionready'
+  ) {
+    return 'execution_readiness';
+  }
+  return key;
+}
+
+/**
+ * True when header cells look like a compact readiness summary table.
+ * @param {string[]} headerCells
+ */
+function isReadinessSummaryTableHeader(headerCells) {
+  const keys = (Array.isArray(headerCells) ? headerCells : [])
+    .map(normalizeReadinessSummaryHeaderKey)
+    .filter(Boolean);
+  if (!keys.length) return false;
+  const set = new Set(keys);
+
+  if (!set.has('prospect_id') || !set.has('company_name')) return false;
+
+  // Full fillable verification tables are owned by fillable ingest — not this
+  // compact readiness summary shape.
+  if (
+    set.has('website_value') ||
+    set.has('mailing_address_value') ||
+    set.has('phone_value') ||
+    set.has('operator_next_action')
+  ) {
+    return false;
+  }
+
+  const hasMailReadinessTrio =
+    set.has('mail_readiness') &&
+    set.has('draft_readiness') &&
+    set.has('execution_readiness');
+  const hasCallReadinessTrio =
+    set.has('call_readiness') &&
+    set.has('script_readiness') &&
+    set.has('execution_readiness');
+  const hasReadinessTrio = hasMailReadinessTrio || hasCallReadinessTrio;
+  const hasVerificationSummary = set.has('verification_summary');
+
+  if (hasVerificationSummary && (hasReadinessTrio || set.has('contact_name'))) {
+    return true;
+  }
+  if (hasReadinessTrio && set.has('contact_name')) return true;
+
+  const hits = READINESS_SUMMARY_TABLE_DETECT_HEADERS.filter((h) =>
+    set.has(h)
+  ).length;
+  return hits >= 5 && hasReadinessTrio;
+}
+
+/**
+ * Normalize a readiness summary row: map verification_summary → gates.
+ * @param {object} row
+ * @returns {object}
+ */
+function normalizeReadinessSummaryRow(row) {
+  const base = row && typeof row === 'object' ? { ...row } : {};
+  const verificationSummary = String(
+    base.verification_summary ||
+      base.gate_summary ||
+      base.status_summary ||
+      ''
+  ).trim();
+
+  if (verificationSummary) {
+    const gates = parseKnownStateGateSummary(verificationSummary);
+    base.gate_summary = verificationSummary;
+    base.verification_summary = verificationSummary;
+    if (!base.website_status || /^unknown$/i.test(String(base.website_status))) {
+      base.website_status = gates.website_status;
+    }
+    if (
+      !base.mailing_address_status ||
+      /^unknown$/i.test(String(base.mailing_address_status))
+    ) {
+      base.mailing_address_status = gates.mailing_address_status;
+    }
+    if (!base.phone_status || /^unknown$/i.test(String(base.phone_status))) {
+      base.phone_status = gates.phone_status;
+    }
+    if (
+      !base.contact_role_status ||
+      /^unknown$/i.test(String(base.contact_role_status))
+    ) {
+      base.contact_role_status = gates.contact_role_status;
+    }
+  }
+
+  const isCallPrepRow =
+    Object.prototype.hasOwnProperty.call(base, 'call_readiness') ||
+    Object.prototype.hasOwnProperty.call(base, 'script_readiness') ||
+    /^CP-/i.test(String(base.prospect_id || ''));
+
+  if (isCallPrepRow) {
+    base.call_readiness =
+      String(base.call_readiness || 'blocked')
+        .trim()
+        .toLowerCase() || 'blocked';
+    base.script_readiness =
+      String(base.script_readiness || 'allowed')
+        .trim()
+        .toLowerCase() || 'allowed';
+  } else {
+    base.mail_readiness =
+      String(base.mail_readiness || 'blocked')
+        .trim()
+        .toLowerCase() || 'blocked';
+    base.draft_readiness =
+      String(base.draft_readiness || 'allowed')
+        .trim()
+        .toLowerCase() || 'allowed';
+  }
+  // Preparation-only: never authorize execution from a readiness paste.
+  base.execution_readiness = 'blocked';
+  if (!base.operator_next_action) {
+    base.operator_next_action = deriveOperatorNextActionFromGates(base);
+  }
+  return base;
+}
+
+/**
+ * True when blank line(s) at index are followed by another markdown pipe row.
+ * UI pastes often insert a blank after the separator or between data rows.
+ * @param {string[]} lines
+ * @param {number} blankIndex
+ */
+function markdownTableContinuesAfterBlank(lines, blankIndex) {
+  let k = blankIndex + 1;
+  while (k < lines.length && !String(lines[k] || '').trim()) k += 1;
+  if (k >= lines.length) return false;
+  return String(lines[k] || '').includes('|');
+}
+
+/**
+ * Count lines that look like markdown table rows (header / sep / data).
+ * @param {string} text
+ * @returns {number}
+ */
+function countMarkdownTableRows(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  let count = 0;
+  for (const line of lines) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed || !trimmed.includes('|')) continue;
+    const cells = splitMarkdownTableCells(trimmed);
+    if (cells.length >= 2) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Operator text has canary/readiness-table cues even if rows failed to parse.
+ * Used to avoid a generic "no table" fallthrough when the paste was mangled.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasCanaryReadinessTableCues(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return false;
+  if (/\|\s*prospect[_ ]?id\s*\|/i.test(raw)) return true;
+  if (/\bverification_summary\b/i.test(raw)) return true;
+  if (/\b(?:canary\s+)?readiness\s+table\b/i.test(raw)) return true;
+  if (/\bgate_summary\b/i.test(raw) && raw.includes('|')) return true;
+  if (/\bmail_readiness\b/i.test(raw) && raw.includes('|')) return true;
+  if (/\bcall_readiness\b/i.test(raw) && raw.includes('|')) return true;
+  if (
+    /\b(?:PM|CP)-\d{3}\b/i.test(raw) &&
+    raw.includes('|') &&
+    /\breadiness\b/i.test(raw)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Structured diagnostics for compact readiness-table canary summary ingestion.
+ * Emit in test/dev (or when MAX_CANARY_READINESS_DIAG=1).
+ * @param {string} text
+ * @returns {{
+ *   latestUserMessageLength: number,
+ *   containsPipeProspectId: boolean,
+ *   containsVerificationSummary: boolean,
+ *   markdownTableRowCount: number,
+ *   parsedCanarySummaryRowsCount: number,
+ *   parseFailureReason: string|null,
+ *   headerLineIndex: number|null,
+ *   boundaryStoppedEarly: boolean,
+ * }}
+ */
+function diagnoseCanaryReadinessTableIngestion(text) {
+  const raw = String(text || '').replace(/^\uFEFF/, '');
+  const containsPipeProspectId = /\|\s*prospect[_ ]?id\s*\|/i.test(raw);
+  const containsVerificationSummary = /\bverification_summary\b/i.test(raw);
+  const markdownTableRowCount = countMarkdownTableRows(raw);
+  const parsed = parseReadinessSummaryTableFromMessage(raw);
+  const parsedCanarySummaryRowsCount =
+    parsed && Array.isArray(parsed.rows) ? parsed.rows.length : 0;
+
+  /** @type {string|null} */
+  let parseFailureReason = null;
+  /** @type {number|null} */
+  let headerLineIndex = null;
+  let boundaryStoppedEarly = false;
+
+  if (parsedCanarySummaryRowsCount > 0) {
+    return {
+      latestUserMessageLength: raw.length,
+      containsPipeProspectId,
+      containsVerificationSummary,
+      markdownTableRowCount,
+      parsedCanarySummaryRowsCount,
+      parseFailureReason: null,
+      headerLineIndex: parsed.startLine,
+      boundaryStoppedEarly: false,
+    };
+  }
+
+  const lines = raw.split(/\r?\n/);
+  let sawPipeBlock = false;
+  let sawHeader = false;
+  let headerHadZeroRows = false;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = String(lines[i] || '');
+    if (!line.trim() || !line.includes('|')) continue;
+    const cells = splitMarkdownTableCells(line);
+    if (cells.length < 2) continue;
+    sawPipeBlock = true;
+
+    if (!isReadinessSummaryTableHeader(cells)) continue;
+    sawHeader = true;
+    headerLineIndex = i;
+
+    let rowStart = i + 1;
+    while (rowStart < lines.length) {
+      const peek = String(lines[rowStart] || '');
+      if (!peek.trim()) {
+        rowStart += 1;
+        continue;
+      }
+      if (isMarkdownTableSeparatorRow(splitMarkdownTableCells(peek))) {
+        rowStart += 1;
+        continue;
+      }
+      break;
+    }
+
+    let rowCount = 0;
+    let sawBlankGapWithPipesBelow = false;
+    for (let j = rowStart; j < lines.length; j += 1) {
+      const dataLine = String(lines[j] || '');
+      const trimmed = dataLine.trim();
+      if (!trimmed) {
+        if (markdownTableContinuesAfterBlank(lines, j)) {
+          sawBlankGapWithPipesBelow = true;
+          continue;
+        }
+        break;
+      }
+      if (!dataLine.includes('|')) break;
+      const dataCells = splitMarkdownTableCells(dataLine);
+      if (!dataCells.length || isMarkdownTableSeparatorRow(dataCells)) continue;
+      if (isReadinessSummaryTableHeader(dataCells) && rowCount > 0) break;
+
+      const headers = cells.map(normalizeReadinessSummaryHeaderKey);
+      const prospectIdx = headers.indexOf('prospect_id');
+      const companyIdx = headers.indexOf('company_name');
+      const prospectId = String(
+        prospectIdx >= 0 ? dataCells[prospectIdx] || '' : ''
+      ).trim();
+      const companyName = String(
+        companyIdx >= 0 ? dataCells[companyIdx] || '' : ''
+      ).trim();
+      if (!prospectId && !companyName) continue;
+      rowCount += 1;
+    }
+
+    if (rowCount > 0) {
+      // Parser and diagnostic walk should agree; treat as malformed if they diverge.
+      parseFailureReason = 'malformed_table';
+      break;
+    }
+
+    headerHadZeroRows = true;
+    let pipesBelow = false;
+    for (let j = rowStart; j < lines.length; j += 1) {
+      if (String(lines[j] || '').includes('|')) {
+        pipesBelow = true;
+        break;
+      }
+    }
+    if (sawBlankGapWithPipesBelow && pipesBelow) {
+      boundaryStoppedEarly = true;
+      parseFailureReason = 'boundary_stopped_early';
+    } else if (pipesBelow) {
+      parseFailureReason = 'malformed_table';
+    } else {
+      parseFailureReason = 'missing_rows';
+    }
+    break;
+  }
+
+  if (!parseFailureReason) {
+    if (!sawPipeBlock && !containsPipeProspectId && markdownTableRowCount === 0) {
+      parseFailureReason = 'no_table_block_found';
+    } else if (!sawHeader) {
+      parseFailureReason =
+        containsPipeProspectId || markdownTableRowCount > 0
+          ? 'missing_headers'
+          : 'no_table_block_found';
+    } else if (headerHadZeroRows) {
+      parseFailureReason = 'missing_rows';
+    } else {
+      parseFailureReason = 'malformed_table';
+    }
+  }
+
+  return {
+    latestUserMessageLength: raw.length,
+    containsPipeProspectId,
+    containsVerificationSummary,
+    markdownTableRowCount,
+    parsedCanarySummaryRowsCount,
+    parseFailureReason,
+    headerLineIndex,
+    boundaryStoppedEarly,
+  };
+}
+
+/**
+ * Extract a compact readiness summary markdown table from operator text.
+ * Tolerates blank lines after the separator or between data rows (common in
+ * UI-submitted pastes) without treating them as end-of-table.
+ * @param {string} text
+ * @returns {{ headers: string[], rows: object[], startLine: number, endLine: number }|null}
+ */
+function parseReadinessSummaryTableFromMessage(text) {
+  const raw = String(text || '').replace(/^\uFEFF/, '');
+  if (!raw.trim()) return null;
+  const lines = raw.split(/\r?\n/);
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const headerCells = splitMarkdownTableCells(lines[i]);
+    if (!isReadinessSummaryTableHeader(headerCells)) continue;
+
+    const headers = headerCells.map(normalizeReadinessSummaryHeaderKey);
+    let rowStart = i + 1;
+    // Skip separator and any blank lines immediately after the header block.
+    while (rowStart < lines.length) {
+      const peek = String(lines[rowStart] || '');
+      if (!peek.trim()) {
+        rowStart += 1;
+        continue;
+      }
+      if (isMarkdownTableSeparatorRow(splitMarkdownTableCells(peek))) {
+        rowStart += 1;
+        continue;
+      }
+      break;
+    }
+
+    /** @type {object[]} */
+    const rows = [];
+    let end = i;
+    for (let j = rowStart; j < lines.length; j += 1) {
+      const line = String(lines[j] || '');
+      const trimmed = line.trim();
+      if (!trimmed) {
+        // Blank gap inside the table — keep scanning when more pipe rows follow.
+        if (markdownTableContinuesAfterBlank(lines, j)) continue;
+        break;
+      }
+      if (!line.includes('|')) break;
+      const cells = splitMarkdownTableCells(line);
+      if (!cells.length || isMarkdownTableSeparatorRow(cells)) continue;
+      if (isReadinessSummaryTableHeader(cells) && rows.length > 0) break;
+
+      /** @type {Record<string, string>} */
+      const row = {};
+      headers.forEach((header, idx) => {
+        if (!header) return;
+        row[header] = cells[idx] != null ? String(cells[idx]) : '';
+      });
+      if (
+        !String(row.prospect_id || '').trim() &&
+        !String(row.company_name || '').trim()
+      ) {
+        continue;
+      }
+      rows.push(normalizeReadinessSummaryRow(row));
+      end = j;
+    }
+
+    if (rows.length === 0) continue;
+    return { headers, rows, startLine: i, endLine: end };
+  }
+
+  return null;
+}
+
+/**
+ * True when the message embeds a compact readiness summary markdown table.
+ * @param {string} text
+ */
+function looksLikeReadinessSummaryTablePaste(text) {
+  const parsed = parseReadinessSummaryTableFromMessage(text);
+  return Boolean(parsed && Array.isArray(parsed.rows) && parsed.rows.length > 0);
+}
+
+/**
+ * Whether canary readiness ingest diagnostics should be emitted.
+ * Test/dev by default; force on/off via MAX_CANARY_READINESS_DIAG.
+ */
+function shouldEmitCanaryReadinessDiagnostics() {
+  const flag = String(process.env.MAX_CANARY_READINESS_DIAG || '').trim();
+  if (flag === '1' || /^true$/i.test(flag)) return true;
+  if (flag === '0' || /^false$/i.test(flag)) return false;
+  const env = String(process.env.NODE_ENV || '').toLowerCase();
+  return env !== 'production';
+}
+
+/**
+ * Emit structured canary readiness ingest diagnostics (test/dev).
+ * @param {string} text
+ * @param {object} [extra]
+ * @returns {object|null} diagnostics object when emitted, else null
+ */
+function emitCanaryReadinessIngestDiagnostics(text, extra = {}) {
+  if (!shouldEmitCanaryReadinessDiagnostics()) return null;
+  const diagnostics = {
+    ...diagnoseCanaryReadinessTableIngestion(text),
+    ...(extra && typeof extra === 'object' ? extra : {}),
+  };
+  try {
+    console.info('[canary-readiness-ingest]', diagnostics);
+  } catch (_err) {
+    // ignore logging failures
+  }
+  return diagnostics;
+}
+
+/**
+ * Ingest a pasted readiness summary table into session activeWorkContext.
+ * Compact readiness tables are never treated as fillable / ProspectList.
+ * When both a full fillable table and a compact readiness table appear, the
+ * fillable ingest owns the desk table; readiness rows still parse for summary.
+ * @param {{ question: string, session: object|null }} input
+ * @returns {object|null}
+ */
+function ingestPastedReadinessSummaryTable(input = {}) {
+  const question = String(input.question || '');
+  const session = input.session || null;
+  if (!session || !question.trim()) return null;
+
+  // Full fillable verification tables (with value/status columns) are owned by
+  // fillable ingest. Compact readiness-only tables are not fillable.
+  if (
+    looksLikeFillableVerificationTablePaste(question) &&
+    !looksLikeReadinessSummaryTablePaste(question)
+  ) {
+    return null;
+  }
+
+  const parsed = parseReadinessSummaryTableFromMessage(question);
+  if (!parsed || !parsed.rows.length) return null;
+
+  const prior = getActiveWorkContext(session);
+  const tableRows = parsed.rows.map((row) => ({ ...row }));
+  const entities = entitiesFromFillableTableRows(
+    tableRows,
+    prior && Array.isArray(prior.entities) ? prior.entities : []
+  );
+  const prospects = entitiesToProspects(entities);
+  const campaignId =
+    extractCampaignIdFromText(question) ||
+    (prior && prior.target && prior.target.campaignId) ||
+    '001';
+  const workflow = resolveCanaryDeskWorkflow(question, prior);
+
+  return setActiveWorkContext(
+    session,
+    buildCanaryActiveWorkContext({
+      prospects,
+      campaignId,
+      workflow,
+      prior,
+      tableRows,
+      lastOutputType: LAST_OUTPUT_TYPES.FILLABLE_TABLE,
+      lastOutputKind: 'canary_readiness_table',
+      nextAction:
+        (prior && prior.nextAction) ||
+        'await_operator_canary_summary_or_verification',
+    })
+  );
+}
+
+/**
  * Build desk entities from pasted fillable table rows (facts only).
  * Preserves industry/vertical from prior desk entities when the table omits them.
  * @param {object[]} rows
@@ -1802,6 +3075,8 @@ const PACKET_REVIEW_INLINE_OPTIONAL_FIELDS = Object.freeze([
   'notes',
   'operator_next_action',
   'verification_status',
+  'verification_summary',
+  'work_order',
   'industry',
   'vertical',
 ]);
@@ -2055,7 +3330,7 @@ function ingestPastedFillableVerificationTable(input = {}) {
   if (!parsed || !parsed.rows.length) return null;
 
   const prior = getActiveWorkContext(session);
-  const tableRows = parsed.rows.map((row) => ({ ...row }));
+  const tableRows = parsed.rows.map((row) => normalizeReadinessSummaryRow(row));
 
   const entities = entitiesFromFillableTableRows(
     tableRows,
@@ -2128,6 +3403,14 @@ module.exports = {
   isActiveWorkTransformCue,
   isPacketReviewRequest,
   isCanarySummaryJudgmentRequest,
+  hasCanarySummaryJudgmentCues,
+  hasFocusedCanaryWorkOrderCues,
+  hasCanarySummaryOutputCues,
+  wantsFocusedFutureMailingEligibilitySection,
+  wantsFocusedFinalApprovalGateSection,
+  isProceedWithPacketContentReviewRequest,
+  isFocusedCanaryWorkOrderRequest,
+  extractOperatorIntentProse,
   extractPacketReviewProspectId,
   isExplicitNewMissionRequest,
   isExplicitContextOverride,
@@ -2158,5 +3441,14 @@ module.exports = {
   extractInlineKnownFactsSection,
   isInlineKnownFactsSectionStopLine,
   parseKnownCurrentStateBullets,
+  looksLikeReadinessSummaryTablePaste,
+  parseReadinessSummaryTableFromMessage,
+  normalizeReadinessSummaryRow,
+  hasCanaryReadinessTableCues,
+  diagnoseCanaryReadinessTableIngestion,
+  emitCanaryReadinessIngestDiagnostics,
+  shouldEmitCanaryReadinessDiagnostics,
+  countMarkdownTableRows,
   ingestPastedFillableVerificationTable,
+  ingestPastedReadinessSummaryTable,
 };

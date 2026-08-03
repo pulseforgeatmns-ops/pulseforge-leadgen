@@ -81,6 +81,12 @@ function buildResponseMetadata(partial = {}) {
   if (partial.canaryPreparationOnly === true) {
     meta.canaryPreparationOnly = true;
   }
+  if (
+    partial.canaryWorkflowType != null &&
+    String(partial.canaryWorkflowType).trim() !== ''
+  ) {
+    meta.canaryWorkflowType = String(partial.canaryWorkflowType);
+  }
   if (partial.provisionalDrafts === true) {
     meta.provisionalDrafts = true;
   }
@@ -93,11 +99,23 @@ function buildResponseMetadata(partial = {}) {
   if (partial.packetReview === true) {
     meta.packetReview = true;
   }
+  if (partial.packetContentReview === true) {
+    meta.packetContentReview = true;
+  }
   if (partial.canarySummary === true) {
     meta.canarySummary = true;
   }
+  if (partial.focusedWorkOrder === true) {
+    meta.focusedWorkOrder = true;
+  }
+  if (partial.outputSubtype != null && String(partial.outputSubtype).trim() !== '') {
+    meta.outputSubtype = String(partial.outputSubtype);
+  }
   if (partial.knownCurrentState === true) {
     meta.knownCurrentState = true;
+  }
+  if (partial.readinessSummaryTable === true) {
+    meta.readinessSummaryTable = true;
   }
   if (partial.inlineKnownFacts === true) {
     meta.inlineKnownFacts = true;
@@ -126,6 +144,17 @@ function buildResponseMetadata(partial = {}) {
   if (partial.missingActiveWorkContext === true) {
     meta.missingActiveWorkContext = true;
   }
+  if (partial.readinessTableNotIngested === true) {
+    meta.readinessTableNotIngested = true;
+  }
+  if (
+    partial.canaryReadinessIngestDiagnostics &&
+    typeof partial.canaryReadinessIngestDiagnostics === 'object'
+  ) {
+    meta.canaryReadinessIngestDiagnostics = {
+      ...partial.canaryReadinessIngestDiagnostics,
+    };
+  }
   if (partial.requestedProspectId != null) {
     meta.requestedProspectId = String(partial.requestedProspectId);
   }
@@ -140,6 +169,12 @@ function buildResponseMetadata(partial = {}) {
   }
   if (partial.mailReadiness != null) {
     meta.mailReadiness = String(partial.mailReadiness);
+  }
+  if (partial.callReadiness != null) {
+    meta.callReadiness = String(partial.callReadiness);
+  }
+  if (partial.primaryReadiness != null) {
+    meta.primaryReadiness = String(partial.primaryReadiness);
   }
   if (partial.executionReadiness != null) {
     meta.executionReadiness = String(partial.executionReadiness);
