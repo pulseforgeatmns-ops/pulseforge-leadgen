@@ -4106,6 +4106,132 @@ describe('Active work context continuation before domain routing', () => {
     );
   });
 
+  it('record CP-001 call-script review decision from inline known facts', async () => {
+    const {
+      isCallScriptDecisionRecordRequest,
+      isCallScriptReviewRequest,
+      isFocusedCanaryWorkOrderRequest,
+      isCanarySummaryJudgmentRequest,
+    } = require('../ActiveWorkContext');
+
+    const question = [
+      'Record the preparation-only call-script review decision for CP-001.',
+      '',
+      'Known facts available:',
+      '- prospect_id: CP-001',
+      '- company_name: Gamache Properties',
+      '- contact_name: Ben Gamache',
+      '- phone_status: verified',
+      '- phone_value: 603-555-0198',
+      '- contact_role_status: verified',
+      '- call_readiness: ready_for_review',
+      '- script_readiness: allowed',
+      '- execution_readiness: blocked',
+      '- work_order: call-script review',
+      '- call_script_content_decision: approved_for_future_call_approval_review',
+      '- approved_for_dial: false',
+      '- dial_call_approval_status: pending',
+      '- notes: Preparation-only call-script review complete; dial/call approval still pending.',
+      '',
+      'Return:',
+      '- Decision record',
+      '- Updated readiness state',
+      '- What changed',
+      '- What did not change',
+      '- What remains blocked',
+      '- Next recommended work order',
+      '- Final approval gate before outbound action',
+      '- One preparation-only safety line',
+      '',
+      'Do not include Reasoning, Unavailable context, or Next sections.',
+      'Do not create a mission. Do not launch, execute, approve, dial, call, text, or email.',
+    ].join('\n');
+
+    assert.equal(isCallScriptDecisionRecordRequest(question), true);
+    assert.equal(isCallScriptReviewRequest(question), false);
+    assert.equal(isCanarySummaryJudgmentRequest(question), false);
+    assert.equal(isFocusedCanaryWorkOrderRequest(question), false);
+
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const meta = result.structured.metadata || {};
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(meta.callScriptDecisionRecord, true);
+    assert.ok(meta.callScriptReview !== true);
+    assert.equal(meta.focusedWorkOrder, undefined);
+    assert.equal(meta.canarySummary, undefined);
+    assert.equal(meta.executionReadiness, 'blocked');
+    assert.equal(meta.approvedForDial, false);
+    assert.equal(meta.dialCallApprovalStatus, 'pending');
+    assert.equal(
+      meta.callScriptContentDecision,
+      'approved_for_future_call_approval_review'
+    );
+    assert.match(meta.callScriptReviewStatus || '', /reviewed|content_reviewed/i);
+
+    assert.doesNotMatch(
+      answer,
+      /don.?t have the current table or known state/i
+    );
+    assert.doesNotMatch(answer, /I can choose the next preparation-only work order/i);
+    assert.doesNotMatch(answer, /readiness table did not come through/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /^Next:/m);
+    assert.doesNotMatch(answer, /Preparation-only call-script review — Campaign/i);
+    assert.doesNotMatch(answer, /Provisional call opener/i);
+
+    assert.match(
+      answer,
+      /Preparation-only call-script review decision record — Campaign 001 \/ CP-001/i
+    );
+    assert.match(answer, /Decision record:/i);
+    assert.match(answer, /Updated readiness state:/i);
+    assert.match(answer, /What changed:/i);
+    assert.match(answer, /What did not change:/i);
+    assert.match(answer, /What remains blocked:/i);
+    assert.match(answer, /Next recommended work order:/i);
+    assert.match(answer, /Final approval gate before outbound action:/i);
+    assert.match(
+      answer,
+      /call_script_content_decision:\s*approved_for_future_call_approval_review/i
+    );
+    assert.match(answer, /call_script_review_status:\s*(?:reviewed|content_reviewed)/i);
+    assert.match(answer, /approved_for_dial:\s*false/i);
+    assert.match(answer, /dial_call_approval_status:\s*pending/i);
+    assert.match(answer, /execution_readiness:\s*blocked/i);
+    assert.match(answer, /call_readiness:\s*ready_for_review/i);
+    assert.match(answer, /script_readiness:\s*(?:allowed|reviewed)/i);
+    assert.match(
+      answer,
+      /Call-script content approval did not become dial\/call approval/i
+    );
+    assert.match(answer, /No mission created/i);
+    assert.match(
+      answer,
+      /No launch, execution, approval, dial, call, text, or email/i
+    );
+  });
+
   it('compact readiness table with bold/alias headers populates canary summary rows', async () => {
     const {
       isCanarySummaryJudgmentRequest,

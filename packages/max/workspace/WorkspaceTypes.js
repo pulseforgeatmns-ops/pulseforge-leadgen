@@ -108,6 +108,36 @@ function buildResponseMetadata(partial = {}) {
   if (partial.callScriptContentReview === true) {
     meta.callScriptContentReview = true;
   }
+  if (partial.callScriptDecisionRecord === true) {
+    meta.callScriptDecisionRecord = true;
+  }
+  if (partial.callScriptDecisionRecord === false) {
+    meta.callScriptDecisionRecord = false;
+  }
+  if (partial.approvedForDial === false) {
+    meta.approvedForDial = false;
+  }
+  if (partial.approvedForDial === true) {
+    meta.approvedForDial = true;
+  }
+  if (
+    partial.dialCallApprovalStatus != null &&
+    String(partial.dialCallApprovalStatus).trim() !== ''
+  ) {
+    meta.dialCallApprovalStatus = String(partial.dialCallApprovalStatus);
+  }
+  if (
+    partial.callScriptContentDecision != null &&
+    String(partial.callScriptContentDecision).trim() !== ''
+  ) {
+    meta.callScriptContentDecision = String(partial.callScriptContentDecision);
+  }
+  if (
+    partial.callScriptReviewStatus != null &&
+    String(partial.callScriptReviewStatus).trim() !== ''
+  ) {
+    meta.callScriptReviewStatus = String(partial.callScriptReviewStatus);
+  }
   if (partial.canarySummary === true) {
     meta.canarySummary = true;
   }
