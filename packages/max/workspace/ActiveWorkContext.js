@@ -133,6 +133,10 @@ function buildCanaryActiveWorkContext(input = {}) {
       input.workflow ||
       (prior && prior.workflow) ||
       'campaign_canary',
+    canaryWorkflowType:
+      input.canaryWorkflowType ||
+      (prior && prior.canaryWorkflowType) ||
+      null,
     target: { campaignId: String(campaignId) },
     entities: prospects.map(prospectToEntity),
     tableRows,
@@ -142,6 +146,11 @@ function buildCanaryActiveWorkContext(input = {}) {
         ? prior.constraints
         : {}),
       ...DEFAULT_CANARY_CONSTRAINTS,
+      ...(input.canaryWorkflowType
+        ? { canaryWorkflowType: input.canaryWorkflowType }
+        : prior && prior.canaryWorkflowType
+          ? { canaryWorkflowType: prior.canaryWorkflowType }
+          : {}),
     },
     lastOutputType,
     lastOutputKind,
@@ -360,7 +369,7 @@ function extractOperatorIntentProse(text) {
 
 /**
  * True when a line looks like a per-prospect canary state line
- * (PM-001: company=...; mail_readiness=... or legacy comma prose).
+ * (PM-001 / CP-001: company=...; readiness fields... or legacy comma prose).
  * @param {string} line
  * @returns {boolean}
  */
@@ -368,11 +377,16 @@ function looksLikeCanaryStateLine(line) {
   const cleaned = String(line || '')
     .replace(/^[-*•]\s*/, '')
     .trim();
-  if (!/^PM-\d{3}\s*:/i.test(cleaned)) return false;
+  if (!/^[A-Za-z]{1,4}-\d{3}\s*:/i.test(cleaned)) return false;
   if (/\bmail_readiness\s*=/i.test(cleaned)) return true;
+  if (/\bcall_readiness\s*=/i.test(cleaned)) return true;
+  if (/\bscript_readiness\s*=/i.test(cleaned)) return true;
   if (/\b(?:company|company_name)\s*=/i.test(cleaned)) return true;
   if (/\bverification_summary\s*=/i.test(cleaned)) return true;
   if (/\bmail_readiness\b/i.test(cleaned) && /\bdraft_readiness\b/i.test(cleaned)) {
+    return true;
+  }
+  if (/\bcall_readiness\b/i.test(cleaned) && /\bscript_readiness\b/i.test(cleaned)) {
     return true;
   }
   return false;
@@ -529,8 +543,11 @@ function hasCanarySummaryOutputCues(text) {
   }
   if (/\bwhat\s+is\s+safe\s+to\s+draft\s+now\b/.test(proseLower)) return true;
   if (
-    /\bwhat\s+is\s+blocked\s+from\s+(?:printing|mailing)\b/.test(proseLower) ||
-    /\bblocked\s+from\s+printing\s*[\/,]?\s*mailing\b/.test(proseLower)
+    /\bwhat\s+is\s+blocked\s+from\s+(?:printing|mailing|dialing|calling)\b/.test(
+      proseLower
+    ) ||
+    /\bblocked\s+from\s+printing\s*[\/,]?\s*mailing\b/.test(proseLower) ||
+    /\bwhat\s+remains\s+blocked\b/.test(proseLower)
   ) {
     return true;
   }
@@ -595,8 +612,11 @@ function hasCanarySummaryJudgmentCues(text) {
   }
   if (/\bwhat\s+is\s+safe\s+to\s+draft\s+now\b/.test(proseLower)) return true;
   if (
-    /\bwhat\s+is\s+blocked\s+from\s+(?:printing|mailing)\b/.test(proseLower) ||
-    /\bblocked\s+from\s+printing\s*[\/,]?\s*mailing\b/.test(proseLower)
+    /\bwhat\s+is\s+blocked\s+from\s+(?:printing|mailing|dialing|calling)\b/.test(
+      proseLower
+    ) ||
+    /\bblocked\s+from\s+printing\s*[\/,]?\s*mailing\b/.test(proseLower) ||
+    /\bwhat\s+remains\s+blocked\b/.test(proseLower)
   ) {
     return true;
   }
@@ -630,8 +650,8 @@ function hasCanarySummaryJudgmentCues(text) {
 
   if (
     hasSummarizeOrJudgment &&
-    /\bacross\s+PM-\d{3}\b/i.test(prose) &&
-    /\bPM-\d{3}\b/i.test(prose)
+    /\bacross\s+(?:PM|CP)-\d{3}\b/i.test(prose) &&
+    /\b(?:PM|CP)-\d{3}\b/i.test(prose)
   ) {
     return true;
   }
@@ -878,6 +898,7 @@ function parseKnownStateGateSummary(prose) {
  * Supported shapes:
  * - PM-001: Gamache Properties, Ben Gamache, website/address/phone/contact role verified, mail_readiness ready_for_review, draft_readiness allowed, execution_readiness blocked
  * - PM-001: company=Gamache Properties; contact=Ben Gamache; verification_summary=...; mail_readiness=ready_for_review; draft_readiness=allowed; execution_readiness=blocked; next_action=...
+ * - CP-001: company=Gamache Properties; contact=Ben Gamache; phone_status=verified; call_readiness=ready_for_review; script_readiness=allowed; execution_readiness=blocked; notes=...
  *
  * @param {string} text
  * @returns {{ rows: object[], hasKnownState: boolean }}
@@ -896,7 +917,7 @@ function parseKnownCurrentStateBullets(text) {
       .trim();
     if (!cleaned) continue;
 
-    const match = /^(PM-\d{3})\s*:\s*(.+)$/i.exec(cleaned);
+    const match = /^([A-Za-z]{1,4}-\d{3})\s*:\s*(.+)$/i.exec(cleaned);
     if (!match) continue;
 
     const prospectId = String(match[1] || '')
@@ -942,8 +963,19 @@ function normalizeCanaryStateLineFieldKey(rawKey) {
   }
   if (key === 'mail_readiness' || key === 'mail') return 'mail_readiness';
   if (key === 'draft_readiness' || key === 'draft') return 'draft_readiness';
+  if (key === 'call_readiness' || key === 'call') return 'call_readiness';
+  if (key === 'script_readiness' || key === 'script') return 'script_readiness';
   if (key === 'execution_readiness' || key === 'execution') {
     return 'execution_readiness';
+  }
+  if (key === 'phone' || key === 'phone_status') return 'phone_status';
+  if (key === 'phone_value' || key === 'phone_number') return 'phone_value';
+  if (
+    key === 'contact_role' ||
+    key === 'contact_role_status' ||
+    key === 'role_status'
+  ) {
+    return 'contact_role_status';
   }
   if (
     key === 'next_action' ||
@@ -952,6 +984,7 @@ function normalizeCanaryStateLineFieldKey(rawKey) {
   ) {
     return 'operator_next_action';
   }
+  if (key === 'notes' || key === 'note') return 'notes';
   return key;
 }
 
@@ -987,11 +1020,16 @@ function parseCanaryStateLineKeyValues(prospectId, rest) {
 
   const company_name = fields.company_name || '';
   const contact_name = fields.contact_name || '';
+  const hasCallPrepReadiness =
+    Boolean(fields.call_readiness) || Boolean(fields.script_readiness);
+  const hasDirectMailReadiness =
+    Boolean(fields.mail_readiness) || Boolean(fields.draft_readiness);
   // Need identifiable prospect facts — company+contact or readiness fields.
   if (
     !company_name &&
     !contact_name &&
     !fields.mail_readiness &&
+    !fields.call_readiness &&
     !fields.verification_summary
   ) {
     return null;
@@ -999,28 +1037,74 @@ function parseCanaryStateLineKeyValues(prospectId, rest) {
 
   const verificationSummary = String(fields.verification_summary || '').trim();
   const gates = parseKnownStateGateSummary(verificationSummary);
+  const phoneStatus = String(
+    fields.phone_status || gates.phone_status || 'unknown'
+  )
+    .trim()
+    .toLowerCase();
+  const contactRoleStatus = String(
+    fields.contact_role_status || gates.contact_role_status || 'unknown'
+  )
+    .trim()
+    .toLowerCase();
 
-  return {
+  /** @type {Record<string, unknown>} */
+  const row = {
     prospect_id: prospectId,
     company_name: company_name || '',
     contact_name: contact_name || '',
-    website_status: gates.website_status,
-    mailing_address_status: gates.mailing_address_status,
-    phone_status: gates.phone_status,
-    contact_role_status: gates.contact_role_status,
+    website_status: String(fields.website_status || gates.website_status || 'unknown')
+      .trim()
+      .toLowerCase(),
+    mailing_address_status: String(
+      fields.mailing_address_status || gates.mailing_address_status || 'unknown'
+    )
+      .trim()
+      .toLowerCase(),
+    phone_status: phoneStatus,
+    contact_role_status: contactRoleStatus,
+    phone_value: String(fields.phone_value || '').trim(),
     gate_summary: verificationSummary || gates.gate_summary || '',
     verification_summary: verificationSummary || '',
-    mail_readiness: String(fields.mail_readiness || 'blocked')
-      .trim()
-      .toLowerCase(),
-    draft_readiness: String(fields.draft_readiness || 'allowed')
-      .trim()
-      .toLowerCase(),
     // Preparation-only: never authorize execution from known-state lines.
     execution_readiness: 'blocked',
     operator_next_action: String(fields.operator_next_action || '').trim(),
-    notes: '',
+    notes: String(fields.notes || '').trim(),
   };
+
+  if (hasCallPrepReadiness || (!hasDirectMailReadiness && /^CP-/i.test(prospectId))) {
+    row.call_readiness = String(fields.call_readiness || 'blocked')
+      .trim()
+      .toLowerCase();
+    row.script_readiness = String(fields.script_readiness || 'allowed')
+      .trim()
+      .toLowerCase();
+  }
+
+  if (hasDirectMailReadiness || (!hasCallPrepReadiness && /^PM-/i.test(prospectId))) {
+    row.mail_readiness = String(fields.mail_readiness || 'blocked')
+      .trim()
+      .toLowerCase();
+    row.draft_readiness = String(fields.draft_readiness || 'allowed')
+      .trim()
+      .toLowerCase();
+  }
+
+  // Preserve explicit fields when both workflow cues appear on one line.
+  if (fields.call_readiness) {
+    row.call_readiness = String(fields.call_readiness).trim().toLowerCase();
+  }
+  if (fields.script_readiness) {
+    row.script_readiness = String(fields.script_readiness).trim().toLowerCase();
+  }
+  if (fields.mail_readiness) {
+    row.mail_readiness = String(fields.mail_readiness).trim().toLowerCase();
+  }
+  if (fields.draft_readiness) {
+    row.draft_readiness = String(fields.draft_readiness).trim().toLowerCase();
+  }
+
+  return row;
 }
 
 /**
@@ -1035,6 +1119,8 @@ function parseCanaryStateLineProse(prospectId, rest) {
 
   let mail_readiness = null;
   let draft_readiness = null;
+  let call_readiness = null;
+  let script_readiness = null;
   let execution_readiness = null;
 
   const mailM = /(?:^|,\s*)mail_readiness\s+([a-z0-9_]+)/i.exec(body);
@@ -1050,6 +1136,20 @@ function parseCanaryStateLineProse(prospectId, rest) {
       .trim()
       .toLowerCase();
     body = body.replace(draftM[0], '').trim();
+  }
+  const callM = /(?:^|,\s*)call_readiness\s+([a-z0-9_]+)/i.exec(body);
+  if (callM) {
+    call_readiness = String(callM[1] || '')
+      .trim()
+      .toLowerCase();
+    body = body.replace(callM[0], '').trim();
+  }
+  const scriptM = /(?:^|,\s*)script_readiness\s+([a-z0-9_]+)/i.exec(body);
+  if (scriptM) {
+    script_readiness = String(scriptM[1] || '')
+      .trim()
+      .toLowerCase();
+    body = body.replace(scriptM[0], '').trim();
   }
   const execM = /(?:^|,\s*)execution_readiness\s+([a-z0-9_]+)/i.exec(body);
   if (execM) {
@@ -1071,7 +1171,8 @@ function parseCanaryStateLineProse(prospectId, rest) {
   const gateProse = parts.slice(2).join(', ').trim();
   const gates = parseKnownStateGateSummary(gateProse);
 
-  return {
+  /** @type {Record<string, unknown>} */
+  const row = {
     prospect_id: prospectId,
     company_name,
     contact_name,
@@ -1081,13 +1182,22 @@ function parseCanaryStateLineProse(prospectId, rest) {
     contact_role_status: gates.contact_role_status,
     gate_summary: gates.gate_summary || gateProse,
     verification_summary: gateProse,
-    mail_readiness: mail_readiness || 'blocked',
-    draft_readiness: draft_readiness || 'allowed',
     // Preparation-only: never authorize execution from known-state bullets.
     execution_readiness: 'blocked',
     operator_next_action: '',
     notes: '',
   };
+
+  if (call_readiness != null || script_readiness != null || /^CP-/i.test(prospectId)) {
+    row.call_readiness = call_readiness || 'blocked';
+    row.script_readiness = script_readiness || 'allowed';
+  }
+  if (mail_readiness != null || draft_readiness != null || /^PM-/i.test(prospectId)) {
+    row.mail_readiness = mail_readiness || 'blocked';
+    row.draft_readiness = draft_readiness || 'allowed';
+  }
+
+  return row;
 }
 
 /**
@@ -2320,6 +2430,8 @@ const READINESS_SUMMARY_TABLE_DETECT_HEADERS = Object.freeze([
   'verification_summary',
   'mail_readiness',
   'draft_readiness',
+  'call_readiness',
+  'script_readiness',
   'execution_readiness',
 ]);
 
@@ -2382,6 +2494,22 @@ function normalizeReadinessSummaryHeaderKey(cell) {
     return 'draft_readiness';
   }
   if (
+    key === 'call_readiness' ||
+    key === 'call' ||
+    key === 'call_ready' ||
+    key === 'callready'
+  ) {
+    return 'call_readiness';
+  }
+  if (
+    key === 'script_readiness' ||
+    key === 'script' ||
+    key === 'script_ready' ||
+    key === 'scriptready'
+  ) {
+    return 'script_readiness';
+  }
+  if (
     key === 'execution_readiness' ||
     key === 'execution' ||
     key === 'execution_ready' ||
@@ -2416,10 +2544,15 @@ function isReadinessSummaryTableHeader(headerCells) {
     return false;
   }
 
-  const hasReadinessTrio =
+  const hasMailReadinessTrio =
     set.has('mail_readiness') &&
     set.has('draft_readiness') &&
     set.has('execution_readiness');
+  const hasCallReadinessTrio =
+    set.has('call_readiness') &&
+    set.has('script_readiness') &&
+    set.has('execution_readiness');
+  const hasReadinessTrio = hasMailReadinessTrio || hasCallReadinessTrio;
   const hasVerificationSummary = set.has('verification_summary');
 
   if (hasVerificationSummary && (hasReadinessTrio || set.has('contact_name'))) {
@@ -2471,12 +2604,30 @@ function normalizeReadinessSummaryRow(row) {
     }
   }
 
-  base.mail_readiness = String(base.mail_readiness || 'blocked')
-    .trim()
-    .toLowerCase() || 'blocked';
-  base.draft_readiness = String(base.draft_readiness || 'allowed')
-    .trim()
-    .toLowerCase() || 'allowed';
+  const isCallPrepRow =
+    Object.prototype.hasOwnProperty.call(base, 'call_readiness') ||
+    Object.prototype.hasOwnProperty.call(base, 'script_readiness') ||
+    /^CP-/i.test(String(base.prospect_id || ''));
+
+  if (isCallPrepRow) {
+    base.call_readiness =
+      String(base.call_readiness || 'blocked')
+        .trim()
+        .toLowerCase() || 'blocked';
+    base.script_readiness =
+      String(base.script_readiness || 'allowed')
+        .trim()
+        .toLowerCase() || 'allowed';
+  } else {
+    base.mail_readiness =
+      String(base.mail_readiness || 'blocked')
+        .trim()
+        .toLowerCase() || 'blocked';
+    base.draft_readiness =
+      String(base.draft_readiness || 'allowed')
+        .trim()
+        .toLowerCase() || 'allowed';
+  }
   // Preparation-only: never authorize execution from a readiness paste.
   base.execution_readiness = 'blocked';
   if (!base.operator_next_action) {
@@ -2529,7 +2680,12 @@ function hasCanaryReadinessTableCues(text) {
   if (/\b(?:canary\s+)?readiness\s+table\b/i.test(raw)) return true;
   if (/\bgate_summary\b/i.test(raw) && raw.includes('|')) return true;
   if (/\bmail_readiness\b/i.test(raw) && raw.includes('|')) return true;
-  if (/\bPM-\d{3}\b/i.test(raw) && raw.includes('|') && /\breadiness\b/i.test(raw)) {
+  if (/\bcall_readiness\b/i.test(raw) && raw.includes('|')) return true;
+  if (
+    /\b(?:PM|CP)-\d{3}\b/i.test(raw) &&
+    raw.includes('|') &&
+    /\breadiness\b/i.test(raw)
+  ) {
     return true;
   }
   return false;

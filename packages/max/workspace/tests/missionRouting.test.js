@@ -3714,6 +3714,105 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /No launch, execution, approval, print, or mail/i);
   });
 
+  it('call-prep canary focused work order parses CP state lines without direct-mail fallback', async () => {
+    const {
+      isFocusedCanaryWorkOrderRequest,
+      parseKnownCurrentStateBullets,
+    } = require('../ActiveWorkContext');
+    const {
+      resolveCanaryWorkflowType,
+      CANARY_WORKFLOW_TYPES,
+    } = require('../CanaryWorkflowContract');
+
+    const question = [
+      'Create the next preparation-only work order for Campaign 001 call-prep canary.',
+      'Choose one next work order only.',
+      'Include one-line overall call-prep canary status, readiness table for CP-001/002/003, recommended next work order, why this work order is first, exact operator steps, what Max can prepare next, what Max must not do, what remains blocked, and final approval gate before outbound action.',
+      'Do not return the full canary summary.',
+      '',
+      'current canary state lines:',
+      'CP-001: company=Gamache Properties; contact=Ben Gamache; phone_status=verified; phone_value=603-555-0198; contact_role_status=verified; call_readiness=ready_for_review; script_readiness=allowed; execution_readiness=blocked; notes=ready for script review',
+      'CP-002: company=Elm Grove Companies; contact=David Schleyer; phone_status=unknown; phone_value=; contact_role_status=needs_verification; call_readiness=blocked; script_readiness=allowed; execution_readiness=blocked; notes=verify phone and role',
+      'CP-003: company=Mill City Property Management; contact=Lauren DuPaul; phone_status=blocked; phone_value=; contact_role_status=unknown; call_readiness=blocked; script_readiness=allowed; execution_readiness=blocked; notes=verify phone and role',
+      '',
+      'Do not include Reasoning, Unavailable context, or Next sections.',
+      'Do not create a mission. Do not launch, execute, approve, dial, call, text, or email.',
+    ].join('\n');
+
+    assert.equal(isFocusedCanaryWorkOrderRequest(question), true);
+    const parsed = parseKnownCurrentStateBullets(question);
+    assert.equal(parsed.hasKnownState, true);
+    assert.equal(parsed.rows.length, 3);
+    assert.equal(
+      resolveCanaryWorkflowType(question, parsed.rows),
+      CANARY_WORKFLOW_TYPES.CALL_PREP
+    );
+    const cp001 = parsed.rows.find((r) => r.prospect_id === 'CP-001');
+    assert.ok(cp001);
+    assert.equal(cp001.company_name, 'Gamache Properties');
+    assert.equal(cp001.contact_name, 'Ben Gamache');
+    assert.equal(cp001.phone_status, 'verified');
+    assert.equal(cp001.phone_value, '603-555-0198');
+    assert.equal(cp001.contact_role_status, 'verified');
+    assert.equal(cp001.call_readiness, 'ready_for_review');
+    assert.equal(cp001.script_readiness, 'allowed');
+    assert.equal(cp001.execution_readiness, 'blocked');
+
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const meta = result.structured.metadata || {};
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(meta.focusedWorkOrder, true);
+    assert.equal(meta.canaryWorkflowType, 'call_prep_canary');
+    assert.equal(meta.prioritizedProspectId, 'CP-001');
+    assert.equal(meta.outputKind, 'focused_work_order');
+    assert.equal(meta.strictOutputShape, true);
+    assert.doesNotMatch(answer, /readiness table did not come through/i);
+    assert.doesNotMatch(answer, /Paste either the compact readiness table/i);
+    assert.match(answer, /call-prep canary/i);
+    assert.match(answer, /Readiness table:/i);
+    assert.match(answer, /call_readiness/i);
+    assert.match(answer, /script_readiness/i);
+    assert.match(answer, /Recommended next work order:/i);
+    assert.match(answer, /CP-001 call-script review/i);
+    assert.match(answer, /call_readiness=ready_for_review/i);
+    assert.match(answer, /Deferred prospects:/i);
+    assert.match(answer, /CP-002/);
+    assert.match(answer, /CP-003/);
+    assert.match(answer, /verify phone|verify contact role|phone\/contact-role/i);
+    assert.match(answer, /What remains blocked:/i);
+    assert.match(answer, /Final approval gate before outbound action:/i);
+    assert.match(answer, /Call-script review is not call approval/i);
+    assert.match(
+      answer,
+      /Preparation-only\. No mission created\. No launch, execution, approval, dial, call, text, or email/i
+    );
+    assert.doesNotMatch(answer, /print, or mail/i);
+    assert.doesNotMatch(answer, /packet-content review/i);
+    assert.doesNotMatch(answer, /mail_readiness/i);
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+  });
+
   it('proceed with PM-001 packet-content review routes to packet review artifact', async () => {
     const {
       isProceedWithPacketContentReviewRequest,
