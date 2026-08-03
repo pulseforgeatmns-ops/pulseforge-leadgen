@@ -416,7 +416,7 @@ function hasFocusedCanaryWorkOrderCues(text) {
   if (!proseLower.trim()) return false;
 
   if (
-    /\b(?:create|build|draft|give|return)\s+(?:me\s+)?(?:the\s+)?(?:recommended\s+)?next\s+(?:preparation[-\s]*only\s+)?work\s+order\b/.test(
+    /\b(?:create|build|draft|give|return|choose|pick|select)\s+(?:me\s+)?(?:the\s+)?(?:recommended\s+)?next\s+(?:preparation[-\s]*only\s+)?work\s+order\b/.test(
       proseLower
     )
   ) {
@@ -1112,6 +1112,29 @@ function normalizeCanaryStateLineFieldKey(rawKey) {
     return 'operator_next_action';
   }
   if (key === 'notes' || key === 'note') return 'notes';
+  if (
+    key === 'call_script_review_status' ||
+    key === 'script_review_status' ||
+    key === 'call_script_status'
+  ) {
+    return 'call_script_review_status';
+  }
+  if (
+    key === 'call_script_content_decision' ||
+    key === 'script_content_decision'
+  ) {
+    return 'call_script_content_decision';
+  }
+  if (key === 'approved_for_dial' || key === 'dial_approved') {
+    return 'approved_for_dial';
+  }
+  if (
+    key === 'dial_call_approval_status' ||
+    key === 'call_approval_status' ||
+    key === 'dial_approval_status'
+  ) {
+    return 'dial_call_approval_status';
+  }
   return key;
 }
 
@@ -1229,6 +1252,27 @@ function parseCanaryStateLineKeyValues(prospectId, rest) {
   }
   if (fields.draft_readiness) {
     row.draft_readiness = String(fields.draft_readiness).trim().toLowerCase();
+  }
+
+  // Preserve call-script review / dial-approval tracking when present so
+  // focused work-order selection does not re-queue completed script review.
+  if (fields.call_script_review_status) {
+    row.call_script_review_status = String(fields.call_script_review_status)
+      .trim()
+      .toLowerCase();
+  }
+  if (fields.call_script_content_decision) {
+    row.call_script_content_decision = String(
+      fields.call_script_content_decision
+    ).trim();
+  }
+  if (fields.approved_for_dial != null && fields.approved_for_dial !== '') {
+    row.approved_for_dial = String(fields.approved_for_dial).trim().toLowerCase();
+  }
+  if (fields.dial_call_approval_status) {
+    row.dial_call_approval_status = String(fields.dial_call_approval_status)
+      .trim()
+      .toLowerCase();
   }
 
   return row;

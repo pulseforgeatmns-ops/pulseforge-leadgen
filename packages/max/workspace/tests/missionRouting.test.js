@@ -3825,6 +3825,134 @@ describe('Active work context continuation before domain routing', () => {
     assert.doesNotMatch(answer, /(?<!No )Mission created/i);
   });
 
+  it('call-prep focused work order skips reviewed CP-001 script and picks CP-002 verification', async () => {
+    const {
+      isFocusedCanaryWorkOrderRequest,
+      parseKnownCurrentStateBullets,
+    } = require('../ActiveWorkContext');
+    const {
+      resolveCanaryWorkflowType,
+      CANARY_WORKFLOW_TYPES,
+    } = require('../CanaryWorkflowContract');
+
+    const question = [
+      'Choose the next preparation-only work order after CP-001 call-script review.',
+      'Choose one next work order only.',
+      'Include recommended next work order, why this work order is first, exact operator steps, what Max can prepare next, what Max must not do, what remains blocked, and final approval gate before outbound action.',
+      'Do not return the full canary summary.',
+      '',
+      'current canary state lines:',
+      'CP-001: company=Gamache Properties; contact=Ben Gamache; phone_status=verified; phone_value=603-555-0198; contact_role_status=verified; call_readiness=ready_for_review; script_readiness=allowed; call_script_review_status=reviewed; call_script_content_decision=approved_for_future_call_approval_review; approved_for_dial=false; dial_call_approval_status=pending; execution_readiness=blocked; notes=script review complete; outbound approval pending',
+      'CP-002: company=Elm Grove Companies; contact=David Schleyer; phone_status=blocked; phone_value=; contact_role_status=needs verification; call_readiness=blocked; script_readiness=allowed; execution_readiness=blocked; notes=verify phone and role',
+      'CP-003: company=Mill City Property Management; contact=Lauren DuPaul; phone_status=blocked; phone_value=; contact_role_status=needs verification; call_readiness=blocked; script_readiness=allowed; execution_readiness=blocked; notes=verify phone and role',
+      '',
+      'Do not include Reasoning, Unavailable context, or Next sections.',
+      'Do not create a mission. Do not launch, execute, approve, dial, call, text, or email.',
+    ].join('\n');
+
+    assert.equal(isFocusedCanaryWorkOrderRequest(question), true);
+    const parsed = parseKnownCurrentStateBullets(question);
+    assert.equal(parsed.hasKnownState, true);
+    assert.equal(parsed.rows.length, 3);
+    assert.equal(
+      resolveCanaryWorkflowType(question, parsed.rows),
+      CANARY_WORKFLOW_TYPES.CALL_PREP
+    );
+    const cp001 = parsed.rows.find((r) => r.prospect_id === 'CP-001');
+    assert.ok(cp001);
+    assert.equal(cp001.call_readiness, 'ready_for_review');
+    assert.equal(cp001.call_script_review_status, 'reviewed');
+    assert.equal(
+      cp001.call_script_content_decision,
+      'approved_for_future_call_approval_review'
+    );
+    assert.equal(cp001.approved_for_dial, 'false');
+    assert.equal(cp001.dial_call_approval_status, 'pending');
+    assert.equal(cp001.execution_readiness, 'blocked');
+
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const meta = result.structured.metadata || {};
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(meta.focusedWorkOrder, true);
+    assert.equal(meta.canaryWorkflowType, 'call_prep_canary');
+    assert.equal(meta.prioritizedProspectId, 'CP-002');
+    assert.equal(meta.outputKind, 'focused_work_order');
+    assert.equal(meta.strictOutputShape, true);
+
+    assert.match(answer, /Recommended next work order:/i);
+    assert.match(answer, /CP-002 phone\/contact-role verification/i);
+    assert.doesNotMatch(
+      answer,
+      /Recommended next work order:\s*\nCP-001 call-script review/i
+    );
+    assert.doesNotMatch(
+      answer,
+      /Recommended next work order:\s*\n(?:dial|call)\s+CP-001/i
+    );
+    assert.doesNotMatch(answer, /Recommended next work order:[\s\S]{0,80}dial(?:ing)?\s+CP-001/i);
+
+    assert.match(answer, /Why this work order is first:/i);
+    assert.match(
+      answer,
+      /CP-001 script review is already complete and outbound approval is pending/i
+    );
+    assert.match(
+      answer,
+      /CP-002 is the next listed blocked prospect whose verification would move call_readiness forward/i
+    );
+
+    assert.match(answer, /Exact operator steps:/i);
+    assert.match(
+      answer,
+      /Complete phone\/contact-role verification for CP-002/i
+    );
+    assert.match(answer, /What Max can prepare next:/i);
+    assert.match(answer, /CP-002 verification checklist/i);
+    assert.match(answer, /What Max must not do:/i);
+    assert.match(answer, /re-run call-script review for CP-001/i);
+    assert.match(
+      answer,
+      /Waiting on future explicit dial\/call approval:/i
+    );
+    assert.match(
+      answer,
+      /CP-001: waiting on future explicit dial\/call approval/i
+    );
+    assert.match(answer, /Deferred prospects:/i);
+    assert.match(answer, /CP-003:\s*verify phone and contact role/i);
+    assert.match(answer, /What remains blocked:/i);
+    assert.match(answer, /execution_readiness remains blocked/i);
+    assert.match(answer, /Final approval gate before outbound action:/i);
+    assert.match(answer, /Call-script review is not call approval/i);
+    assert.match(
+      answer,
+      /Preparation-only\. No mission created\. No launch, execution, approval, dial, call, text, or email/i
+    );
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /^Next:/m);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+  });
+
   it('proceed with PM-001 packet-content review routes to packet review artifact', async () => {
     const {
       isProceedWithPacketContentReviewRequest,
