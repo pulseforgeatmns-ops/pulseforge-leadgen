@@ -292,26 +292,194 @@ function isActiveWorkFollowUpCue(text) {
 }
 
 /**
- * Operator wants a preparation-only packet review artifact from the desk table
- * (checklist / drafts / tracking) — not a new prospect paste and not an initial
- * multi-prospect canary package deliverable list.
+ * Strip markdown tables and known-state / readiness rows so desk residue
+ * (e.g. operator_next_action = "Create packet review checklist") cannot be
+ * mistaken for an operator ask to generate a packet-review artifact.
  * @param {string} text
+ * @returns {string}
  */
-function isPacketReviewRequest(text) {
+function extractOperatorIntentProse(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return '';
+
+  const lines = raw.split(/\r?\n/);
+  /** @type {string[]} */
+  const kept = [];
+  let inKnownState = false;
+
+  for (const line of lines) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) {
+      inKnownState = false;
+      kept.push('');
+      continue;
+    }
+
+    // Drop markdown table rows / separators entirely.
+    if (trimmed.includes('|') && /\|/.test(trimmed.slice(1))) {
+      const cells = trimmed.split('|').filter((c) => c.trim() !== '');
+      if (cells.length >= 2) continue;
+    }
+
+    if (/^known\s+current\s+state\s*:?\s*$/i.test(trimmed)) {
+      inKnownState = true;
+      continue;
+    }
+    if (
+      inKnownState &&
+      (/^[-*•]\s*PM-\d{3}\b/i.test(trimmed) || /^PM-\d{3}\s*:/i.test(trimmed))
+    ) {
+      continue;
+    }
+    if (inKnownState && !/^[-*•]/.test(trimmed) && !/^PM-\d{3}\b/i.test(trimmed)) {
+      inKnownState = false;
+    }
+
+    // Drop readiness / fillable state bullets that only restate desk fields.
+    if (
+      /^[-*•]\s*PM-\d{3}\b/i.test(trimmed) &&
+      /\bmail_readiness\b/i.test(trimmed)
+    ) {
+      continue;
+    }
+
+    kept.push(line);
+  }
+
+  return kept.join('\n');
+}
+
+/**
+ * True when the operator asks for a cross-prospect preparation-only canary
+ * status summary / judgment. Packet-review residue in state rows must not
+ * suppress these cues — summary outranks packet review.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasCanarySummaryJudgmentCues(text) {
   const lower = String(text || '').toLowerCase();
   if (!lower.trim()) return false;
 
-  // Strong cues: explicit packet-review artifact generation.
+  // Prefer operator prose so table headers/cells do not invent summary intent,
+  // but still honor an embedded readiness summary paste as state for judgment.
+  const prose = extractOperatorIntentProse(text);
+  const proseLower = prose.toLowerCase();
+
+  // Strong judgment / status cues.
+  if (/\bknown\s+current\s+state\b/.test(proseLower)) return true;
+  if (/\bone[-\s]?line\s+overall\s+status\b/.test(proseLower)) return true;
+  if (/\bwhich\s+prospect\s+should\s+be\s+worked\s+next\b/.test(proseLower)) {
+    return true;
+  }
+  if (/\bexact\s+next\s+operator\s+action\s+for\s+each\b/.test(proseLower)) {
+    return true;
+  }
+  if (/\bwhat\s+is\s+safe\s+to\s+draft\s+now\b/.test(proseLower)) return true;
   if (
-    /\bpacket\s+review(?:\s+checklist)?\b/.test(lower) ||
+    /\bwhat\s+is\s+blocked\s+from\s+(?:printing|mailing)\b/.test(proseLower) ||
+    /\bblocked\s+from\s+printing\s*[\/,]?\s*mailing\b/.test(proseLower)
+  ) {
+    return true;
+  }
+  if (/\bwhat\s+pulseforge\s+should\s+track\s+next\b/.test(proseLower)) {
+    return true;
+  }
+
+  // Readiness summary table cues — state paste / judgment, not prospect supply.
+  if (/\b(?:current\s+)?(?:canary\s+)?readiness\s+table\b/.test(proseLower)) {
+    return true;
+  }
+  if (
+    /\breadiness\s+table\s+for\s+(?:all\s+)?\d+\s+prospects?\b/.test(proseLower)
+  ) {
+    return true;
+  }
+  // Compact readiness paste is summary/judgment state supply — never packet-
+  // review generation by itself (even when a ready_for_review row mentions
+  // packet review as operator_next_action).
+  if (looksLikeReadinessSummaryTablePaste(text)) return true;
+
+  // Avoid treating "Verification Summary" column headers as a summarize cue.
+  const proseForSummaryCue = proseLower.replace(
+    /\bverification\s+summary\b/g,
+    'verification_summary'
+  );
+  const hasSummarizeOrJudgment =
+    /\bsummariz(?:e|ing)\b/.test(proseForSummaryCue) ||
+    /\bsummary\b/.test(proseForSummaryCue) ||
+    /\bjudg(?:e)?ment\b/.test(proseForSummaryCue);
+
+  if (
+    hasSummarizeOrJudgment &&
+    /\bacross\s+PM-\d{3}\b/i.test(prose) &&
+    /\bPM-\d{3}\b/i.test(prose)
+  ) {
+    return true;
+  }
+
+  const hasCanaryOrCampaign =
+    /\bcanary\b/.test(proseLower) ||
+    /\bcampaign\s+0*01\b/.test(proseLower) ||
+    /\bpreparation[-\s]*only\b/.test(proseLower) ||
+    /\bprep[-\s]*only\b/.test(proseLower);
+
+  const hasStatusCue =
+    /\bstatus\b/.test(proseLower) ||
+    /\breadiness\b/.test(proseLower) ||
+    /\bjudg(?:e)?ment\b/.test(proseLower);
+
+  if (hasSummarizeOrJudgment && hasCanaryOrCampaign && hasStatusCue) {
+    return true;
+  }
+
+  if (/\bpreparation[-\s]*only\s+canary\s+status\b/.test(proseLower)) {
+    return true;
+  }
+  if (/\bcanary\s+(?:status|summary|judgment|judgement)\b/.test(proseLower)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Operator wants a preparation-only packet review artifact from the desk table
+ * (checklist / drafts / tracking) — not a canary status summary, not a new
+ * prospect paste, and not an initial multi-prospect canary package list.
+ *
+ * Packet-review generation requires packet-specific cues in operator prose.
+ * Do not infer solely from mail_readiness=ready_for_review, operator_next_action
+ * text in a state row, or the words "packet review" appearing only as desk
+ * residue.
+ * @param {string} text
+ */
+function isPacketReviewRequest(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return false;
+
+  // Summary / judgment cues always outrank packet-review generation.
+  if (hasCanarySummaryJudgmentCues(raw)) return false;
+
+  const prose = extractOperatorIntentProse(raw);
+  const lower = prose.toLowerCase();
+  if (!lower.trim()) return false;
+
+  // Strong cues: explicit packet-review artifact generation in operator prose.
+  if (
+    /\bcreate\s+(?:a\s+)?(?:preparation[-\s]*only\s+)?packet\s+review\s+package\b/.test(
+      lower
+    ) ||
+    /\bpacket\s+contents\s+checklist\b/.test(lower) ||
+    /\bpacket\s+review(?:\s+checklist|\s+package|\s+artifact)?\b/.test(lower) ||
     /\boperator\s+packet\s+review\b/.test(lower) ||
     /\bcreate\s+(?:a\s+)?(?:preparation[-\s]*only\s+)?packet(?:\s+review)?\b/.test(
       lower
     ) ||
     /\bdraft\s+(?:a\s+)?(?:PM-\d{3}\s+)?packet(?:\s+for\s+review)?\b/i.test(
-      text
+      prose
     ) ||
     /\bpacket\s+for\s+review\b/.test(lower) ||
+    /\bfor\s+PM-\d{3}\s+packet\b/i.test(prose) ||
     /\bprint\s*[\/-]?\s*sign\s*[\/-]?\s*mail\s+checklist\b/.test(lower) ||
     (/\buse\s+the\s+current\b/.test(lower) &&
       /\b(?:canary\s+)?table\b/.test(lower) &&
@@ -320,10 +488,12 @@ function isPacketReviewRequest(text) {
     return true;
   }
 
-  // Secondary cues only when targeting a named desk prospect.
+  // Secondary cues only when targeting a named desk prospect in prose.
   // Avoid matching initial canary package lists that mention letter/note/cover
   // as deliverables without asking to generate a packet review for PM-00x.
-  const namedProspect = /\b(?:for|of)\s+PM-\d{3}\b/i.test(text);
+  const namedProspect =
+    /\b(?:for|of)\s+PM-\d{3}\b/i.test(prose) ||
+    /\bfor\s+PM-\d{3}\s+packet\b/i.test(prose);
   if (!namedProspect) return false;
 
   return (
@@ -347,74 +517,10 @@ function isCanarySummaryJudgmentRequest(text) {
   const lower = String(text || '').toLowerCase();
   if (!lower.trim()) return false;
 
-  // Packet review and table mutation own their routes.
-  if (isPacketReviewRequest(text)) return false;
+  // Table mutation owns its route; summary otherwise outranks packet review.
   if (isFillableTableUpdateRequest(text)) return false;
 
-  // Strong judgment / status cues.
-  if (/\bknown\s+current\s+state\b/.test(lower)) return true;
-  if (/\bwhich\s+prospect\s+should\s+be\s+worked\s+next\b/.test(lower)) {
-    return true;
-  }
-  if (/\bexact\s+next\s+operator\s+action\s+for\s+each\b/.test(lower)) {
-    return true;
-  }
-  if (/\bwhat\s+is\s+safe\s+to\s+draft\s+now\b/.test(lower)) return true;
-  if (
-    /\bwhat\s+is\s+blocked\s+from\s+(?:printing|mailing)\b/.test(lower) ||
-    /\bblocked\s+from\s+printing\s*[\/,]?\s*mailing\b/.test(lower)
-  ) {
-    return true;
-  }
-
-  // Readiness summary table cues — state paste / judgment, not prospect supply.
-  if (/\b(?:current\s+)?(?:canary\s+)?readiness\s+table\b/.test(lower)) {
-    return true;
-  }
-  if (/\breadiness\s+table\s+for\s+(?:all\s+)?\d+\s+prospects?\b/.test(lower)) {
-    return true;
-  }
-  if (looksLikeReadinessSummaryTablePaste(text)) return true;
-
-  // Avoid treating "Verification Summary" column headers as a summarize cue.
-  const proseForSummaryCue = lower.replace(
-    /\bverification\s+summary\b/g,
-    'verification_summary'
-  );
-  const hasSummarizeOrJudgment =
-    /\bsummariz(?:e|ing)\b/.test(proseForSummaryCue) ||
-    /\bsummary\b/.test(proseForSummaryCue) ||
-    /\bjudg(?:e)?ment\b/.test(proseForSummaryCue);
-
-  if (
-    hasSummarizeOrJudgment &&
-    /\bacross\s+PM-\d{3}\b/i.test(text) &&
-    /\bPM-\d{3}\b/i.test(text)
-  ) {
-    return true;
-  }
-
-  const hasCanaryOrCampaign =
-    /\bcanary\b/.test(lower) ||
-    /\bcampaign\s+0*01\b/.test(lower) ||
-    /\bpreparation[-\s]*only\b/.test(lower) ||
-    /\bprep[-\s]*only\b/.test(lower);
-
-  const hasStatusCue =
-    /\bstatus\b/.test(lower) ||
-    /\breadiness\b/.test(lower) ||
-    /\bjudg(?:e)?ment\b/.test(lower);
-
-  if (hasSummarizeOrJudgment && hasCanaryOrCampaign && hasStatusCue) {
-    return true;
-  }
-
-  if (/\bpreparation[-\s]*only\s+canary\s+status\b/.test(lower)) return true;
-  if (/\bcanary\s+(?:status|summary|judgment|judgement)\b/.test(lower)) {
-    return true;
-  }
-
-  return false;
+  return hasCanarySummaryJudgmentCues(text);
 }
 
 /**
@@ -2419,6 +2525,8 @@ module.exports = {
   isActiveWorkTransformCue,
   isPacketReviewRequest,
   isCanarySummaryJudgmentRequest,
+  hasCanarySummaryJudgmentCues,
+  extractOperatorIntentProse,
   extractPacketReviewProspectId,
   isExplicitNewMissionRequest,
   isExplicitContextOverride,

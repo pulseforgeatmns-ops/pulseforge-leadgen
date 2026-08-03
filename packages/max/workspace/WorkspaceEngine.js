@@ -608,6 +608,7 @@ function preserveActiveWorkFocusOverStaleRecommendation(input) {
 
   const continuingDesk =
     isFillableTableUpdateRequest(question, prior) ||
+    isCanarySummaryJudgmentRequest(question) ||
     isPacketReviewRequest(question) ||
     isActiveWorkFollowUpCue(question) ||
     isActiveWorkTransformCue(question) ||
@@ -1753,6 +1754,25 @@ function buildMissingInlineKnownFactsPacketReviewResponse(input = {}) {
 }
 
 /**
+ * Format a confirm-before-printing field without inventing "verified: unknown"
+ * when a status exists but no actual value was supplied.
+ * @param {string} label
+ * @param {string} status
+ * @param {string|null} verifiedValue
+ * @param {string|null} rawValue
+ * @returns {string}
+ */
+function formatPacketReviewConfirmField(label, status, verifiedValue, rawValue) {
+  const statusText = String(status || 'unknown').trim() || 'unknown';
+  if (verifiedValue) return `${label} (${statusText}: ${verifiedValue})`;
+  if (rawValue) {
+    return `${label} (${statusText}: ${rawValue} — not verified — do not treat as confirmed)`;
+  }
+  // Status-only: never append ": unknown" for a missing value.
+  return `${label} (${statusText})`;
+}
+
+/**
  * Packet review artifact from a single desk table row — known facts only.
  * ready_for_review means packet can be reviewed, not mailed.
  * @param {{ row: object, entity?: object|null, question?: string, campaignId?: string, source?: string }} input
@@ -1854,27 +1874,24 @@ function buildPacketReviewArtifactResponse(input = {}) {
         : 'provisional / operator-only — do not print/mail until fields are verified';
 
   const confirmBeforePrinting = [
-    `mailing address (${mailingStatus}${
-      mailing
-        ? `: ${mailing}`
-        : blankTableValue(row.mailing_address_value)
-          ? `: ${blankTableValue(row.mailing_address_value)} (not verified — do not treat as confirmed)`
-          : ': unknown'
-    })`,
-    `website (${websiteStatus}${
-      website
-        ? `: ${website}`
-        : blankTableValue(row.website_value)
-          ? `: ${blankTableValue(row.website_value)} (not verified — do not treat as confirmed)`
-          : ': unknown'
-    })`,
-    `phone (${phoneStatus}${
-      phone
-        ? `: ${phone}`
-        : blankTableValue(row.phone_value)
-          ? `: ${blankTableValue(row.phone_value)} (not verified — do not treat as confirmed)`
-          : ': unknown'
-    })`,
+    formatPacketReviewConfirmField(
+      'mailing address',
+      mailingStatus,
+      mailing,
+      blankTableValue(row.mailing_address_value)
+    ),
+    formatPacketReviewConfirmField(
+      'website',
+      websiteStatus,
+      website,
+      blankTableValue(row.website_value)
+    ),
+    formatPacketReviewConfirmField(
+      'phone',
+      phoneStatus,
+      phone,
+      blankTableValue(row.phone_value)
+    ),
     `contact role (${contactRoleStatus})`,
     !industry
       ? 'industry / persona context (missing from table — needed for stronger personalization; drafts remain provisional)'
@@ -2442,9 +2459,21 @@ async function maybeBuildCanaryPreparationResponse(input) {
     });
   }
 
+  // Cross-prospect canary summary / judgment outranks packet-review generation
+  // (even when a ready_for_review row recommends packet review). Secondary hard
+  // stop before prospect sniff / parse clarification.
+  if (isCanarySummaryJudgmentRequest(question)) {
+    return handleCanarySummaryJudgmentContinuation({
+      question,
+      session,
+      prior,
+    });
+  }
+
   // Packet review from desk table — also owned by early continuation, but
   // keep a secondary guard so canary routing never asks to re-paste prospects.
   // Fallback: inline known-facts block when no desk table is present.
+  // Requires packet-specific cues; never inferred from mail_readiness alone.
   if (isPacketReviewRequest(question)) {
     if (activeContextHasEntities(prior) && activeContextHasFillableTable(prior)) {
       return handlePacketReviewContinuation({
@@ -2459,16 +2488,6 @@ async function maybeBuildCanaryPreparationResponse(input) {
       reason: 'canary_packet_review_missing_table',
       structured: buildMissingPacketReviewResponse({ question }),
     };
-  }
-
-  // Cross-prospect canary summary / judgment — secondary hard stop before
-  // prospect sniff / parse clarification.
-  if (isCanarySummaryJudgmentRequest(question)) {
-    return handleCanarySummaryJudgmentContinuation({
-      question,
-      session,
-      prior,
-    });
   }
 
   const isCanary = isPreparationOnlyCanary(question);
