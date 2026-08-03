@@ -3261,6 +3261,97 @@ describe('Active work context continuation before domain routing', () => {
     assert.match(answer, /PM-003/);
     assert.match(answer, /verification/i);
   });
+
+  it('preparation-only canary summary from readiness table — no prospect parse fallback', async () => {
+    const {
+      isCanarySummaryJudgmentRequest,
+      looksLikeReadinessSummaryTablePaste,
+      parseReadinessSummaryTableFromMessage,
+      isExplicitNewMissionRequest,
+    } = require('../ActiveWorkContext');
+
+    const question = [
+      'Summarize the Campaign 001 preparation-only canary status',
+      'Which prospect should be worked next and why?',
+      'What is safe to draft now?',
+      'What is blocked from printing/mailing?',
+      '',
+      'current canary readiness table for all 3 prospects:',
+      '| prospect_id | company_name | contact_name | verification_summary | mail_readiness | draft_readiness | execution_readiness |',
+      '|---|---|---|---|---|---|---|',
+      '| PM-001 | Gamache Properties | Ben Gamache | website/address/phone/contact role verified | ready_for_review | allowed | blocked |',
+      '| PM-002 | Elm Grove Companies | David Schleyer | website/address/phone unknown or blocked, contact role needs verification | blocked | allowed | blocked |',
+      '| PM-003 | Mill City Property Management | Lauren DuPaul | website/address/phone unknown or blocked, contact role needs verification | blocked | allowed | blocked |',
+      '',
+      'Do not include Reasoning, Unavailable context, or Next sections.',
+      'Do not create a mission. Do not launch, execute, approve, print, or mail.',
+    ].join('\n');
+
+    assert.equal(isExplicitNewMissionRequest(question), false);
+    assert.equal(isCanarySummaryJudgmentRequest(question), true);
+    assert.equal(looksLikeReadinessSummaryTablePaste(question), true);
+
+    const parsed = parseReadinessSummaryTableFromMessage(question);
+    assert.ok(parsed);
+    assert.equal(parsed.rows.length, 3);
+    assert.equal(parsed.rows[0].prospect_id, 'PM-001');
+    assert.match(String(parsed.rows[0].gate_summary || ''), /verified/i);
+
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      disableLlm: true,
+    });
+    const beforeMissions = await missionEngine.list({ tenantId: '10' });
+
+    const result = await workspace.ask({
+      question,
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+      },
+    });
+
+    const afterMissions = await missionEngine.list({ tenantId: '10' });
+    const answer = result.prose || result.structured.answer || '';
+    const meta = result.structured.metadata || {};
+
+    assert.equal(result.mission, null);
+    assert.equal(afterMissions.length, beforeMissions.length);
+    assert.equal(meta.canaryPreparationOnly, true);
+    assert.equal(meta.canarySummary, true);
+    assert.equal(meta.prioritizedProspectId, 'PM-001');
+    assert.equal(meta.prospectCount, 3);
+    assert.equal(meta.outputKind, 'canary_summary');
+    assert.equal(meta.strictOutputShape, true);
+
+    assert.doesNotMatch(answer, /could not parse them cleanly/i);
+    assert.doesNotMatch(answer, /paste\s+(?:the\s+)?(?:3\s+)?prospects?/i);
+    assert.doesNotMatch(answer, /pipe\s*[-\s]?format/i);
+    assert.doesNotMatch(answer, /I see you intended to provide/i);
+    assert.doesNotMatch(answer, /(?<!No )Mission created/i);
+    assert.doesNotMatch(answer, /^Reasoning:/m);
+    assert.doesNotMatch(answer, /Unavailable in current context/i);
+    assert.doesNotMatch(answer, /^Next:/m);
+
+    assert.match(answer, /preparation-only canary/i);
+    assert.match(answer, /Readiness table/i);
+    assert.match(answer, /PM-001/);
+    assert.match(answer, /PM-002/);
+    assert.match(answer, /PM-003/);
+    assert.match(answer, /Gamache Properties/);
+    assert.match(answer, /ready_for_review/);
+    assert.match(
+      answer,
+      /PM-001[\s\S]*packet review|packet review[\s\S]*PM-001|prioritize[\s\S]*PM-001|PM-001[\s\S]*priorit/i
+    );
+    assert.match(answer, /final human approval/i);
+    assert.match(answer, /verification/i);
+    assert.match(answer, /safe to draft now/i);
+    assert.match(answer, /blocked from printing\/mailing/i);
+    assert.match(answer, /No mission created/i);
+  });
 });
 
 describe('SPEC-022 Command Deck Operations section', () => {
