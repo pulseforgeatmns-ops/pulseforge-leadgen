@@ -1445,7 +1445,7 @@ function resolveCanarySummaryNextAction(row) {
   const mail = String((row && row.mail_readiness) || 'blocked').toLowerCase();
   const mailReady = /^ready(?:_for_review)?$/.test(mail);
   if (mailReady) {
-    return 'Run preparation-only packet review / final human approval (execution remains blocked; do not print or mail yet)';
+    return 'Run preparation-only packet review / operator packet-content approval (execution remains blocked; do not print or mail yet)';
   }
   if (row && row.operator_next_action && String(row.operator_next_action).trim()) {
     return String(row.operator_next_action).trim();
@@ -1507,7 +1507,7 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
     : null;
   const prioritizeWhy = prioritize
     ? prioritize.mail_ready_for_review
-      ? `${prioritizeId} has mail_readiness ready_for_review while execution_readiness remains blocked — prioritize preparation-only packet review / final human approval before any print or mail.`
+      ? `${prioritizeId} has mail_readiness ready_for_review while execution_readiness remains blocked — prioritize preparation-only packet review / final packet review decision before any print or mail.`
       : `${prioritizeId} still needs verification work before packet review; do not print or mail.`
     : 'No prospects available to prioritize.';
 
@@ -1533,7 +1533,7 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
   const perProspectActions = enriched.map((row) => {
     const id = row.prospect_id || 'unknown';
     if (row.mail_ready_for_review) {
-      return `- ${id}: Create a preparation-only packet review checklist and complete final human approval. Do not print, mail, launch, or execute.`;
+      return `- ${id}: Create a preparation-only packet review checklist and complete operator packet-content review. Do not print, mail, launch, or execute.`;
     }
     return `- ${id}: ${row.operator_next_action} — verification work only; not ready for printing/mailing.`;
   });
@@ -1547,12 +1547,18 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
         .join('; ')
     : 'None — draft_readiness is not allowed for any listed prospect.';
 
+  const reviewReadyIds = reviewReady.map((r) => r.prospect_id).join(', ');
+  const packetReviewedNowLine =
+    reviewReady.length === 1
+      ? `${reviewReadyIds} may be packet-reviewed now, but is still blocked from print/mail until explicit approval.`
+      : reviewReady.length
+        ? `${reviewReadyIds} may be packet-reviewed now, but are still blocked from print/mail until explicit approval.`
+        : 'No prospect is ready_for_review for packet review yet.';
+
   const blockedFromPrintMail = [
     'All prospects: execution_readiness remains blocked.',
     'Printing and mailing stay blocked until mail_readiness is ready_for_review AND the operator later gives explicit launch/mail approval.',
-    reviewReady.length
-      ? `${reviewReady.map((r) => r.prospect_id).join(', ')} may be packet-reviewed now, but are still blocked from print/mail.`
-      : 'No prospect is ready_for_review for packet review yet.',
+    packetReviewedNowLine,
     needsVerification.length
       ? `${needsVerification.map((r) => r.prospect_id).join(', ')} remain blocked pending verification.`
       : null,
@@ -1600,7 +1606,7 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
     '',
     '--- Final operator decision required ---',
     prioritize && prioritize.mail_ready_for_review
-      ? `Decide whether to run preparation-only packet review / final human approval for ${prioritizeId} next. Explicit future launch/mail approval is still required before any print or mail. I will not print, mail, launch, or execute from this summary.`
+      ? `Decide whether to run preparation-only packet review for ${prioritizeId} next. Explicit future launch/mail approval is still required before any print or mail. I will not print, mail, launch, or execute from this summary.`
       : 'Complete verification for blocked prospects before any packet review or outbound action. I will not print, mail, launch, or execute from this summary.',
     '',
     'Preparation-only. No mission created. No launch, execution, approval, print, or mail.',
@@ -1613,7 +1619,7 @@ function buildCanarySummaryJudgmentResponse(input = {}) {
         ? 'Built canary summary / judgment from pasted readiness summary table; not treated as a new prospect paste.'
         : 'Reused activeWorkContext.tableRows for canary summary / judgment; no prospect re-paste required.',
     prioritize && prioritize.mail_ready_for_review
-      ? `${prioritizeId} prioritized for packet review / final human approval because mail_readiness is ready_for_review and execution remains blocked.`
+      ? `${prioritizeId} prioritized for final packet review decision because mail_readiness is ready_for_review and execution remains blocked.`
       : 'No mail-ready_for_review prospect — verification work is the priority.',
     'Drafting may be allowed where draft_readiness=allowed; printing/mailing remain blocked.',
     'No mission create/resume. activeWorkContext not required to mutate for known-state path.',
