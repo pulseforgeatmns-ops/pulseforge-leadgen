@@ -1,0 +1,24 @@
+{
+  "library_id": "industry_playbook.commercial_cleaning_beachhead",
+  "title": "Commercial Cleaning Beachhead Playbook",
+  "category": "industry_playbook",
+  "source_type": "curated_operator",
+  "trust_level": "high",
+  "scope": {
+    "audience": "global",
+    "verticals": ["cleaning"],
+    "clientIds": [10]
+  },
+  "summary": "Beachhead guidance for commercial cleaning buyer outreach (professional offices). Reference guidance only.",
+  "content_text": "Prioritize single-tenant professional offices (law, accounting) in the local ring. Prefer reachable office managers/owners. Disqualify national multi-office firms when detectable. Do not treat this guidance as a fact about any specific company.",
+  "content_ref": null,
+  "tags": ["cleaning", "beachhead", "commercial", "icp"],
+  "provenance": {
+    "curated_by": "pulseforge-ops",
+    "curated_at": "2026-08-03T00:00:00.000Z",
+    "notes": "Summarized from Anchor cleaning ICP operating notes.",
+    "permission": "internal"
+  },
+  "enabled": true,
+  "version": 1
+}
