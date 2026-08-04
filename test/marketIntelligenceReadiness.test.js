@@ -47,7 +47,7 @@ describe('marketIntelligenceReadiness helpers', () => {
       metrics: emptyMetrics(),
     });
     assert.equal(derived.status, 'blocked');
-    assert.ok(derived.blockers.some((b) => b.startsWith('empty_corpus')));
+    assert.ok(derived.blockers.some((b) => b === 'market_email_corpus_empty'));
     assert.ok(derived.nextActions.some((a) => a.includes('market:intel:import')));
   });
 
@@ -110,11 +110,11 @@ describe('marketIntelligenceReadiness helpers', () => {
       generatedAt: '2026-08-03T00:00:00.000Z',
       tableReadiness: allTablesPresent(),
       metrics: emptyMetrics(),
-      blockers: ['empty_corpus: no market_emails imported'],
+      blockers: ['market_email_corpus_empty'],
       nextActions: ['Run npm run market:intel:import to ingest labeled marketing emails'],
     });
     assert.match(text, /Status: blocked/);
-    assert.match(text, /empty_corpus/);
+    assert.match(text, /market_email_corpus_empty/);
     assert.match(text, /market:intel:import/);
   });
 });
@@ -171,7 +171,56 @@ describe('marketIntelligenceReadiness with mock pool', () => {
     const report = await buildMarketIntelReadinessReport({ pool });
     assert.equal(report.status, 'blocked');
     assert.equal(report.metrics.totalEmails, 0);
-    assert.ok(report.blockers.some((b) => b.startsWith('empty_corpus')));
+    assert.ok(report.blockers.some((b) => b === 'market_email_corpus_empty'));
+  });
+
+  it('merges failed Gmail preflight into blocked status', async () => {
+    const pool = {
+      async query(sql) {
+        if (sql.includes('to_regclass')) {
+          return { rows: [{ name: 'present' }] };
+        }
+        if (sql.includes('AS total_emails')) {
+          return {
+            rows: [{
+              total_emails: 20,
+              total_observations: 80,
+              emails_with_observations: 18,
+              companies_observed: 5,
+              companies_with_observations: 5,
+              companies_with_profiles: 4,
+              unknown_company_present: true,
+              emails_assigned_to_unknown: 1,
+            }],
+          };
+        }
+        if (sql.includes('FROM market_intel_sync_state')) {
+          return {
+            rows: [{
+              id: 'default',
+              label: 'MARKET_INTEL',
+              days: 365,
+              last_synced_at: new Date('2026-08-03T10:00:00.000Z'),
+              last_run_stats: { imported: 20 },
+              updated_at: new Date('2026-08-03T10:00:00.000Z'),
+            }],
+          };
+        }
+        throw new Error(`unexpected sql: ${sql}`);
+      },
+    };
+
+    const report = await buildMarketIntelReadinessReport({
+      pool,
+      gmailPreflight: {
+        ok: false,
+        blockers: ['gmail_label_missing: MARKET_INTEL'],
+        nextActions: ['Create label MARKET_INTEL'],
+      },
+    });
+    assert.equal(report.status, 'blocked');
+    assert.ok(report.blockers.includes('gmail_label_missing: MARKET_INTEL'));
+    assert.equal(report.metrics.totalEmails, 20);
   });
 
   it('builds a ready report from corpus metrics', async () => {
@@ -223,10 +272,12 @@ describe('marketIntelligenceReadiness with mock pool', () => {
 });
 
 describe('marketIntelReadiness CLI args', () => {
-  it('parses --json and --check', () => {
-    const options = parseArgs(['--json', '--check']);
+  it('parses --json, --check, and --probe-gmail', () => {
+    const options = parseArgs(['--json', '--check', '--probe-gmail', '--label=MARKET_INTEL']);
     assert.equal(options.json, true);
     assert.equal(options.check, true);
+    assert.equal(options.probeGmail, true);
+    assert.equal(options.label, 'MARKET_INTEL');
   });
 
   it('rejects unknown arguments', () => {

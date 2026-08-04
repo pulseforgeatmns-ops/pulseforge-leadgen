@@ -112,7 +112,7 @@ Ready floors (sensible defaults; email-level coverage is the readiness gate):
 
 | Status | When |
 |---|---|
-| `blocked` | Any required table missing **or** `totalEmails === 0` (empty corpus is never ready) **or** corpus counts cannot be queried |
+| `blocked` | Any required table missing **or** `totalEmails === 0` (`market_email_corpus_empty`) **or** corpus counts cannot be queried **or** optional Gmail probe reports hard ingestion-path failure |
 | `partial` | All tables present, `totalEmails > 0`, but email extraction coverage **or** profile rebuild coverage is below floor, **or** `last_synced_at` is null |
 | `ready` | All tables present, `totalEmails > 0`, email extraction coverage ≥ 50%, profile rebuild coverage ≥ 50%, and `last_synced_at` is present |
 
@@ -123,10 +123,11 @@ Company-level extraction coverage is reported for operator context but does not 
 Derived deterministically from the metrics above (examples):
 
 - Missing table → run the matching SPEC-061 / SPEC-065 migration
-- Zero emails → run `npm run market:intel:import`
+- Zero emails → `market_email_corpus_empty` → run `npm run market:intel:import`
 - Low email extraction coverage → run `npm run market:intel:extract`
 - Low profile coverage → run extract with profile rebuild (default)
 - Null `last_synced_at` with emails present → confirm sync state write path / re-import
+- Optional Gmail probe (`--probe-gmail`, SPEC-068) → auth/label hard failures demote readiness to `blocked`
 
 ## Implementation Plan
 

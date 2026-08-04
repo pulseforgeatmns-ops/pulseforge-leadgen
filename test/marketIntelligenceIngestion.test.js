@@ -13,7 +13,12 @@ const {
   parseGmailMessage,
 } = require('../utils/marketEmailParse');
 const { parseArgs } = require('../scripts/importMarketIntelligence');
-const { formatImportReport } = require('../services/marketIntelligenceIngestion');
+const {
+  DEFAULT_IMPORT_INTENT,
+  IMPORT_INTENTS,
+  formatImportReport,
+  resolveImportIntent,
+} = require('../services/marketIntelligenceIngestion');
 
 describe('marketCompanyResolve', () => {
   it('maps apollo.io → Apollo', () => {
@@ -91,6 +96,45 @@ describe('marketEmailParse', () => {
   });
 });
 
+describe('import intent helpers', () => {
+  it('defaults to general_market_messaging and treats sourceIntent as alias', () => {
+    assert.equal(resolveImportIntent({}), DEFAULT_IMPORT_INTENT);
+    assert.equal(
+      resolveImportIntent({ sourceIntent: 'competitive_watch' }),
+      IMPORT_INTENTS.COMPETITIVE_WATCH
+    );
+    assert.equal(
+      resolveImportIntent({ importIntent: 'general_market_messaging', sourceIntent: 'general_market_messaging' }),
+      IMPORT_INTENTS.GENERAL_MARKET_MESSAGING
+    );
+    assert.equal(resolveImportIntent({ importIntent: 'vendor_newsletter' }), IMPORT_INTENTS.VENDOR_NEWSLETTER);
+    assert.equal(resolveImportIntent({ importIntent: 'direct_competitor' }), IMPORT_INTENTS.DIRECT_COMPETITOR);
+    assert.equal(resolveImportIntent({ importIntent: 'indirect_competitor' }), IMPORT_INTENTS.INDIRECT_COMPETITOR);
+    assert.equal(resolveImportIntent({ importIntent: 'unknown' }), IMPORT_INTENTS.UNKNOWN);
+  });
+
+  it('rejects conflicting import/source intents', () => {
+    assert.throws(
+      () => resolveImportIntent({
+        importIntent: 'general_market_messaging',
+        sourceIntent: 'competitive_watch',
+      }),
+      /Conflicting intents/
+    );
+  });
+
+  it('rejects intents outside the SPEC-068 allowlist', () => {
+    assert.throws(
+      () => resolveImportIntent({ importIntent: 'rival_confirmed' }),
+      /Allowed: general_market_messaging, competitive_watch, vendor_newsletter, direct_competitor, indirect_competitor, unknown/
+    );
+    assert.throws(
+      () => resolveImportIntent({ importIntent: 'rival_confirmed' }),
+      /acquisition context only/
+    );
+  });
+});
+
 describe('importMarketIntelligence CLI', () => {
   it('parses options with defaults', () => {
     assert.deepEqual(parseArgs([]), {
@@ -99,22 +143,54 @@ describe('importMarketIntelligence CLI', () => {
       limit: 1000,
       dryRun: false,
       json: false,
+      preflight: false,
+      skipPreflight: false,
+      help: false,
+      importIntent: null,
+      sourceIntent: null,
+      resolvedIntent: DEFAULT_IMPORT_INTENT,
     });
     assert.equal(parseArgs(['--days=30', '--label=OTHER', '--limit=5', '--dry-run']).dryRun, true);
+    assert.equal(parseArgs(['--preflight']).preflight, true);
+    assert.equal(parseArgs(['--skip-preflight']).skipPreflight, true);
+    assert.equal(
+      parseArgs(['--intent=competitive_watch']).resolvedIntent,
+      IMPORT_INTENTS.COMPETITIVE_WATCH
+    );
+    assert.equal(
+      parseArgs(['--source-intent=general_market_messaging']).resolvedIntent,
+      IMPORT_INTENTS.GENERAL_MARKET_MESSAGING
+    );
   });
 
-  it('formats the operator report', () => {
+  it('formats the operator report including intent and unknown-company rate', () => {
     const report = formatImportReport({
       imported: 1482,
       skipped: 53,
       duplicates: 12,
       unknownCompany: 97,
+      unknownCompanyRatePct: 6.5,
+      importIntent: 'general_market_messaging',
       durationSeconds: 48,
     });
+    assert.match(report, /Import intent: general_market_messaging/);
     assert.match(report, /Imported: 1,482/);
     assert.match(report, /Skipped: 53/);
     assert.match(report, /Duplicates: 12/);
-    assert.match(report, /Unknown Company: 97/);
+    assert.match(report, /Unknown Company: 97 \(6\.5%\)/);
     assert.match(report, /Duration: 48s/);
+  });
+});
+
+describe('gmailClient label helpers', () => {
+  const { findLabelByName } = require('../utils/gmailClient');
+
+  it('matches exact Gmail label names', () => {
+    const labels = [
+      { id: '1', name: 'INBOX' },
+      { id: '2', name: 'MARKET_INTEL' },
+    ];
+    assert.equal(findLabelByName(labels, 'MARKET_INTEL').id, '2');
+    assert.equal(findLabelByName(labels, 'market_intel'), null);
   });
 });
