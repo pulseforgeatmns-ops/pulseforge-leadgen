@@ -21,6 +21,9 @@ function emptyCheck(ok = false) {
  * @param {number} [options.days=365]
  * @param {number} [options.limit=1000]
  * @param {boolean} [options.requireMessages=false] — when true, zero discovered messages fails
+ * @param {'gmail'|'riley'|'auto'} [options.tokenSource] — defaults via resolveMarketIntelTokenSource
+ * @param {boolean} [options.showAccount=false] — print callback for account before label discovery
+ * @param {function} [options.onAuthenticatedAccount] — diagnostic callback with email string
  * @param {object} [options.deps] — inject Gmail helpers for tests
  */
 async function preflightMarketIntelIngestion(options = {}) {
@@ -28,10 +31,17 @@ async function preflightMarketIntelIngestion(options = {}) {
   const days = Math.max(1, Number(options.days) || 365);
   const limit = Math.max(1, Number(options.limit) || 1000);
   const requireMessages = Boolean(options.requireMessages);
+  const showAccount = Boolean(options.showAccount);
+  const tokenSource = gmailClient.resolveMarketIntelTokenSource(options.tokenSource);
+  const onAuthenticatedAccount =
+    typeof options.onAuthenticatedAccount === 'function'
+      ? options.onAuthenticatedAccount
+      : null;
   const deps = options.deps || {};
 
   const loadOAuthCredentials = deps.loadOAuthCredentials || gmailClient.loadOAuthCredentials;
   const createGmailClient = deps.createGmailClient || gmailClient.createGmailClient;
+  const getGmailProfile = deps.getGmailProfile || gmailClient.getGmailProfile;
   const listGmailLabels = deps.listGmailLabels || gmailClient.listGmailLabels;
   const findLabelByName = deps.findLabelByName || gmailClient.findLabelByName;
   const countMatchingMessages = deps.countMatchingMessages || gmailClient.countMatchingMessages;
@@ -46,6 +56,7 @@ async function preflightMarketIntelIngestion(options = {}) {
   const warnings = [];
   const nextActions = [];
   const query = buildLabelQuery({ label, days });
+  let authenticatedEmail = null;
 
   try {
     loadOAuthCredentials();
@@ -60,25 +71,80 @@ async function preflightMarketIntelIngestion(options = {}) {
     nextActions.push(
       'Set GMAIL_CREDENTIALS (full OAuth client JSON starting with {"web": or {"installed":) or GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET'
     );
-    return finalize({ label, days, limit, query, checks, blockers, warnings, nextActions });
+    return finalize({
+      label,
+      days,
+      limit,
+      query,
+      checks,
+      blockers,
+      warnings,
+      nextActions,
+      tokenSource,
+      authenticatedEmail,
+    });
   }
 
   let gmail;
   try {
-    gmail = await createGmailClient();
-    checks.auth = { ok: true, detail: 'Gmail API client authenticated (readonly)' };
+    gmail = await createGmailClient({ tokenSource });
+    checks.auth = {
+      ok: true,
+      detail: `Gmail API client authenticated (readonly, tokenSource=${tokenSource})`,
+      tokenSource,
+    };
   } catch (err) {
     const message = err && err.message ? String(err.message) : 'auth_failed';
-    checks.auth = { ok: false, error: message };
+    checks.auth = { ok: false, error: message, tokenSource };
     blockers.push(`gmail_auth_unavailable: ${message}`);
-    nextActions.push(
-      'Set GMAIL_TOKEN (token JSON) or RILEY_ACCESS_TOKEN + RILEY_REFRESH_TOKEN, then re-run preflight'
-    );
-    return finalize({ label, days, limit, query, checks, blockers, warnings, nextActions });
+    if (tokenSource === 'gmail') {
+      nextActions.push(
+        'Set GMAIL_TOKEN (token JSON) for personal-inbox market intel, then re-run preflight'
+      );
+    } else if (tokenSource === 'riley') {
+      nextActions.push(
+        'Set RILEY_ACCESS_TOKEN + RILEY_REFRESH_TOKEN, then re-run preflight'
+      );
+    } else {
+      nextActions.push(
+        'Set GMAIL_TOKEN (token JSON) or RILEY_ACCESS_TOKEN + RILEY_REFRESH_TOKEN, then re-run preflight'
+      );
+    }
+    return finalize({
+      label,
+      days,
+      limit,
+      query,
+      checks,
+      blockers,
+      warnings,
+      nextActions,
+      tokenSource,
+      authenticatedEmail,
+    });
+  }
+
+  // Always resolve authenticated mailbox before label discovery (diagnostic).
+  try {
+    const profile = await getGmailProfile(gmail, { tokenSource });
+    authenticatedEmail = profile && profile.emailAddress
+      ? String(profile.emailAddress)
+      : null;
+    if (authenticatedEmail && onAuthenticatedAccount) {
+      onAuthenticatedAccount(authenticatedEmail, profile);
+    } else if (authenticatedEmail && showAccount && !onAuthenticatedAccount) {
+      // no-op: CLI owns printing when showAccount; report always includes email
+    }
+    if (!authenticatedEmail) {
+      warnings.push('gmail_profile_email_missing: users.getProfile returned no emailAddress');
+    }
+  } catch (err) {
+    const message = err && err.message ? String(err.message) : 'profile_failed';
+    warnings.push(`gmail_profile_unavailable: ${message}`);
   }
 
   try {
-    const labels = await listGmailLabels(gmail);
+    const labels = await listGmailLabels(gmail, { tokenSource });
     const match = findLabelByName(labels, label);
     if (!match) {
       const sample = labels
@@ -95,7 +161,18 @@ async function preflightMarketIntelIngestion(options = {}) {
       nextActions.push(
         `Create a Gmail label named exactly "${label}", apply it to competitor/vendor marketing emails, then re-run preflight`
       );
-      return finalize({ label, days, limit, query, checks, blockers, warnings, nextActions });
+      return finalize({
+        label,
+        days,
+        limit,
+        query,
+        checks,
+        blockers,
+        warnings,
+        nextActions,
+        tokenSource,
+        authenticatedEmail,
+      });
     }
     checks.label = {
       ok: true,
@@ -108,11 +185,22 @@ async function preflightMarketIntelIngestion(options = {}) {
     checks.label = { ok: false, label, error: message };
     blockers.push(`gmail_label_check_failed: ${message}`);
     nextActions.push('Confirm Gmail readonly scope and mailbox access, then re-run preflight');
-    return finalize({ label, days, limit, query, checks, blockers, warnings, nextActions });
+    return finalize({
+      label,
+      days,
+      limit,
+      query,
+      checks,
+      blockers,
+      warnings,
+      nextActions,
+      tokenSource,
+      authenticatedEmail,
+    });
   }
 
   try {
-    const discovery = await countMatchingMessages({ query, limit, gmail });
+    const discovery = await countMatchingMessages({ query, limit, gmail, tokenSource });
     const discoveredCount = Number(discovery.discoveredCount || 0);
     const discoveryOk = discoveredCount > 0 || !requireMessages;
     checks.discovery = {
@@ -140,10 +228,32 @@ async function preflightMarketIntelIngestion(options = {}) {
     nextActions.push('Fix Gmail list permissions / query, then re-run preflight');
   }
 
-  return finalize({ label, days, limit, query, checks, blockers, warnings, nextActions });
+  return finalize({
+    label,
+    days,
+    limit,
+    query,
+    checks,
+    blockers,
+    warnings,
+    nextActions,
+    tokenSource,
+    authenticatedEmail,
+  });
 }
 
-function finalize({ label, days, limit, query, checks, blockers, warnings, nextActions }) {
+function finalize({
+  label,
+  days,
+  limit,
+  query,
+  checks,
+  blockers,
+  warnings,
+  nextActions,
+  tokenSource = 'auto',
+  authenticatedEmail = null,
+}) {
   const ok =
     Boolean(checks.credentials.ok)
     && Boolean(checks.auth.ok)
@@ -165,6 +275,8 @@ function finalize({ label, days, limit, query, checks, blockers, warnings, nextA
     days,
     limit,
     query,
+    tokenSource,
+    authenticatedEmail: authenticatedEmail || null,
     checks,
     blockers,
     warnings,
@@ -178,6 +290,8 @@ function formatPreflightReport(report) {
     'Market Intelligence Ingestion Preflight (SPEC-068)',
     `Status: ${report.ok ? 'pass' : 'fail'}`,
     `Generated: ${report.generatedAt}`,
+    `Token source: ${report.tokenSource || 'auto'}`,
+    `Authenticated account: ${report.authenticatedEmail || '(unavailable)'}`,
     `Label: ${report.label}`,
     `Lookback days: ${report.days}`,
     `Query: ${report.query}`,

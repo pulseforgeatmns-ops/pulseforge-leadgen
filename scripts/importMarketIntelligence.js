@@ -11,6 +11,10 @@ require('dotenv').config();
 
 const pool = require('../db');
 const {
+  TOKEN_SOURCES,
+  resolveMarketIntelTokenSource,
+} = require('../utils/gmailClient');
+const {
   DEFAULT_IMPORT_INTENT,
   IMPORT_INTENTS,
   formatImportReport,
@@ -34,6 +38,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     help: false,
     importIntent: null,
     sourceIntent: null,
+    tokenSource: null,
   };
 
   for (const arg of argv) {
@@ -81,6 +86,10 @@ function parseArgs(argv = process.argv.slice(2)) {
       options.sourceIntent = arg.slice('--source-intent='.length);
       continue;
     }
+    if (arg.startsWith('--token-source=')) {
+      options.tokenSource = arg.slice('--token-source='.length);
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
@@ -98,6 +107,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     importIntent: options.importIntent,
     sourceIntent: options.sourceIntent,
   });
+  options.resolvedTokenSource = resolveMarketIntelTokenSource(options.tokenSource);
 
   return options;
 }
@@ -113,6 +123,8 @@ Options:
   --days=365              Lookback window (default 365)
   --label=MARKET_INTEL    Gmail label to import (required selection)
   --limit=1000            Max messages to fetch
+  --token-source=SOURCE   gmail | riley | auto
+                          default: gmail when GMAIL_TOKEN exists, else auto
   --intent=NAME           Import/source intent (default: ${DEFAULT_IMPORT_INTENT})
   --import-intent=NAME    Alias of --intent
   --source-intent=NAME    Alias of --intent (must match if both set)
@@ -121,6 +133,8 @@ Options:
   --skip-preflight        Skip automatic preflight before import/dry-run
   --json                  Print full JSON result after the report
   --help                  Show this help
+
+Allowed --token-source values: ${TOKEN_SOURCES.join(', ')}
 
 Initial allowed intents (SPEC-068):
   ${IMPORT_INTENTS.GENERAL_MARKET_MESSAGING}
@@ -154,6 +168,8 @@ async function main(argv = process.argv.slice(2)) {
       label: options.label,
       limit: options.limit,
       requireMessages: true,
+      tokenSource: options.resolvedTokenSource,
+      showAccount: true,
     });
     console.log(formatPreflightReport(report));
     console.log(`Import intent (for next import): ${options.resolvedIntent}`);
@@ -173,6 +189,7 @@ async function main(argv = process.argv.slice(2)) {
       label: options.label,
       limit: options.limit,
       requireMessages: true,
+      tokenSource: options.resolvedTokenSource,
     });
     if (!preflight.ok) {
       console.log(formatPreflightReport(preflight));
@@ -181,7 +198,10 @@ async function main(argv = process.argv.slice(2)) {
       return { ok: false, preflight };
     }
     const discovered = Number(preflight.checks?.discovery?.discoveredCount || 0);
-    console.log(`Preflight OK — discovered ${discovered.toLocaleString('en-US')} labeled messages`);
+    const account = preflight.authenticatedEmail || '(unavailable)';
+    console.log(
+      `Preflight OK — account ${account} via ${preflight.tokenSource}; discovered ${discovered.toLocaleString('en-US')} labeled messages`
+    );
   }
 
   const result = await importMarketIntelligence({
@@ -190,6 +210,7 @@ async function main(argv = process.argv.slice(2)) {
     limit: options.limit,
     dryRun: options.dryRun,
     importIntent: options.resolvedIntent,
+    tokenSource: options.resolvedTokenSource,
   });
 
   console.log(formatImportReport(result));
