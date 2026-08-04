@@ -1,18 +1,26 @@
 'use strict';
 
 /**
- * SPEC-061 Market Intelligence Ingestion CLI
+ * SPEC-061 / SPEC-068 Market Intelligence Ingestion CLI
  *
- *   npm run market:intel:import -- --days=365 --label=MARKET_INTEL --limit=1000 --dry-run
- *   pnpm market:intel:import -- --days=365 --label=MARKET_INTEL --limit=1000 --dry-run
+ *   npm run market:intel:import -- --days=365 --label=MARKET_INTEL --intent=general_market_messaging --dry-run
+ *   npm run market:intel:import -- --intent=competitive_watch --label=COMPETITIVE_WATCH
  */
 
 require('dotenv').config();
 
+const pool = require('../db');
 const {
+  DEFAULT_IMPORT_INTENT,
+  IMPORT_INTENTS,
   formatImportReport,
   importMarketIntelligence,
+  resolveImportIntent,
 } = require('../services/marketIntelligenceIngestion');
+const {
+  formatPreflightReport,
+  preflightMarketIntelIngestion,
+} = require('../services/marketIntelligencePreflight');
 
 function parseArgs(argv = process.argv.slice(2)) {
   const options = {
@@ -21,6 +29,11 @@ function parseArgs(argv = process.argv.slice(2)) {
     limit: 1000,
     dryRun: false,
     json: false,
+    preflight: false,
+    skipPreflight: false,
+    help: false,
+    importIntent: null,
+    sourceIntent: null,
   };
 
   for (const arg of argv) {
@@ -30,6 +43,14 @@ function parseArgs(argv = process.argv.slice(2)) {
     }
     if (arg === '--json') {
       options.json = true;
+      continue;
+    }
+    if (arg === '--preflight') {
+      options.preflight = true;
+      continue;
+    }
+    if (arg === '--skip-preflight') {
+      options.skipPreflight = true;
       continue;
     }
     if (arg === '--help' || arg === '-h') {
@@ -48,6 +69,18 @@ function parseArgs(argv = process.argv.slice(2)) {
       options.limit = Number(arg.slice('--limit='.length));
       continue;
     }
+    if (arg.startsWith('--intent=')) {
+      options.importIntent = arg.slice('--intent='.length);
+      continue;
+    }
+    if (arg.startsWith('--import-intent=')) {
+      options.importIntent = arg.slice('--import-intent='.length);
+      continue;
+    }
+    if (arg.startsWith('--source-intent=')) {
+      options.sourceIntent = arg.slice('--source-intent='.length);
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
@@ -61,11 +94,16 @@ function parseArgs(argv = process.argv.slice(2)) {
     throw new Error('--label is required');
   }
 
+  options.resolvedIntent = resolveImportIntent({
+    importIntent: options.importIntent,
+    sourceIntent: options.sourceIntent,
+  });
+
   return options;
 }
 
 function printHelp() {
-  console.log(`Market Intelligence Ingestion (SPEC-061)
+  console.log(`Market Intelligence Ingestion (SPEC-061 / SPEC-068)
 
 Usage:
   npm run market:intel:import -- [options]
@@ -75,9 +113,31 @@ Options:
   --days=365              Lookback window (default 365)
   --label=MARKET_INTEL    Gmail label to import (required selection)
   --limit=1000            Max messages to fetch
+  --intent=NAME           Import/source intent (default: ${DEFAULT_IMPORT_INTENT})
+  --import-intent=NAME    Alias of --intent
+  --source-intent=NAME    Alias of --intent (must match if both set)
   --dry-run               Parse and resolve without writing
+  --preflight             Run Gmail auth/label/discovery checks only
+  --skip-preflight        Skip automatic preflight before import/dry-run
   --json                  Print full JSON result after the report
   --help                  Show this help
+
+Initial allowed intents (SPEC-068):
+  ${IMPORT_INTENTS.GENERAL_MARKET_MESSAGING}
+  ${IMPORT_INTENTS.COMPETITIVE_WATCH}
+  ${IMPORT_INTENTS.VENDOR_NEWSLETTER}
+  ${IMPORT_INTENTS.DIRECT_COMPETITOR}
+  ${IMPORT_INTENTS.INDIRECT_COMPETITOR}
+  ${IMPORT_INTENTS.UNKNOWN}
+
+Rule:
+  import_intent is acquisition context only.
+  Never treat it as a factual claim that the sender is a competitor.
+
+Safe behavior:
+  - Dry-run writes nothing
+  - Re-runs dedupe on gmail_id / message_id (no duplicate emails)
+  - Real import only after preflight passes (unless --skip-preflight)
 `);
 }
 
@@ -88,11 +148,48 @@ async function main(argv = process.argv.slice(2)) {
     return { ok: true, help: true };
   }
 
+  if (options.preflight) {
+    const report = await preflightMarketIntelIngestion({
+      days: options.days,
+      label: options.label,
+      limit: options.limit,
+      requireMessages: true,
+    });
+    console.log(formatPreflightReport(report));
+    console.log(`Import intent (for next import): ${options.resolvedIntent}`);
+    if (options.json) {
+      console.log(JSON.stringify({ ...report, importIntent: options.resolvedIntent }, null, 2));
+    }
+    if (!report.ok) {
+      process.exitCode = 1;
+      return { ok: false, preflight: report, importIntent: options.resolvedIntent };
+    }
+    return { ok: true, preflight: report, importIntent: options.resolvedIntent };
+  }
+
+  if (!options.skipPreflight) {
+    const preflight = await preflightMarketIntelIngestion({
+      days: options.days,
+      label: options.label,
+      limit: options.limit,
+      requireMessages: true,
+    });
+    if (!preflight.ok) {
+      console.log(formatPreflightReport(preflight));
+      if (options.json) console.log(JSON.stringify(preflight, null, 2));
+      process.exitCode = 1;
+      return { ok: false, preflight };
+    }
+    const discovered = Number(preflight.checks?.discovery?.discoveredCount || 0);
+    console.log(`Preflight OK — discovered ${discovered.toLocaleString('en-US')} labeled messages`);
+  }
+
   const result = await importMarketIntelligence({
     days: options.days,
     label: options.label,
     limit: options.limit,
     dryRun: options.dryRun,
+    importIntent: options.resolvedIntent,
   });
 
   console.log(formatImportReport(result));
@@ -103,12 +200,20 @@ async function main(argv = process.argv.slice(2)) {
 }
 
 if (require.main === module) {
-  main().then((result) => {
-    process.exit(result.ok === false ? 1 : 0);
-  }).catch((err) => {
-    console.error(err.message || err);
-    process.exit(1);
-  });
+  main()
+    .then((result) => {
+      if (result && result.ok === false) process.exitCode = 1;
+    })
+    .catch((err) => {
+      console.error(err.message || err);
+      process.exitCode = 1;
+    })
+    .finally(() => {
+      if (typeof pool.end === 'function') {
+        return pool.end().catch(() => {});
+      }
+      return undefined;
+    });
 }
 
 module.exports = { main, parseArgs, printHelp };

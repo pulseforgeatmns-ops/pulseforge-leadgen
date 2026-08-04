@@ -111,7 +111,7 @@ async function loadCorpusMetrics(db) {
   );
 
   const sync = await db.query(
-    `SELECT id, label, days, last_synced_at, last_run_stats, updated_at
+    `SELECT id, label, days, import_intent, last_synced_at, last_run_stats, updated_at
        FROM market_intel_sync_state
       WHERE id = 'default'
       LIMIT 1`
@@ -122,6 +122,8 @@ async function loadCorpusMetrics(db) {
       id: s.id,
       label: s.label,
       days: s.days,
+      importIntent: s.import_intent || null,
+      sourceIntent: s.import_intent || null,
       lastSyncedAt: s.last_synced_at ? new Date(s.last_synced_at).toISOString() : null,
       lastRunStats: s.last_run_stats || {},
       updatedAt: s.updated_at ? new Date(s.updated_at).toISOString() : null,
@@ -155,7 +157,7 @@ function deriveReadinessStatus({ tableReadiness, metrics, queryError = null }) {
   }
 
   if (!metrics.totalEmails || metrics.totalEmails <= 0) {
-    blockers.push('empty_corpus: no market_emails imported');
+    blockers.push('market_email_corpus_empty');
     nextActions.push('Run npm run market:intel:import to ingest labeled marketing emails');
     return { status: 'blocked', blockers, nextActions };
   }
@@ -198,8 +200,12 @@ function deriveReadinessStatus({ tableReadiness, metrics, queryError = null }) {
 
 /**
  * Build full operational readiness report.
+ *
+ * @param {object} [options]
+ * @param {object} [options.pool]
+ * @param {object|null} [options.gmailPreflight] — optional SPEC-068 probe result to merge
  */
-async function buildMarketIntelReadinessReport({ pool = defaultPool } = {}) {
+async function buildMarketIntelReadinessReport({ pool = defaultPool, gmailPreflight = null } = {}) {
   const generatedAt = new Date().toISOString();
   let tableReadiness;
   try {
@@ -227,6 +233,7 @@ async function buildMarketIntelReadinessReport({ pool = defaultPool } = {}) {
       metrics: emptyMetrics(),
       blockers: derived.blockers,
       nextActions: derived.nextActions,
+      gmailPreflight: gmailPreflight || null,
       internal: true,
       observationalOnly: true,
     };
@@ -243,19 +250,37 @@ async function buildMarketIntelReadinessReport({ pool = defaultPool } = {}) {
   }
 
   const derived = deriveReadinessStatus({ tableReadiness, metrics, queryError });
+  const blockers = derived.blockers.slice();
+  const nextActions = derived.nextActions.slice();
+  let status = derived.status;
+
+  if (gmailPreflight && gmailPreflight.ok === false) {
+    status = 'blocked';
+    for (const b of gmailPreflight.blockers || []) {
+      if (!blockers.includes(b)) blockers.push(b);
+    }
+    for (const a of gmailPreflight.nextActions || []) {
+      if (!nextActions.includes(a)) nextActions.push(a);
+    }
+    if (!(gmailPreflight.blockers || []).length) {
+      blockers.push('gmail_ingestion_path_unavailable');
+      nextActions.push('Run npm run market:intel:preflight and fix Gmail auth/label blockers');
+    }
+  }
 
   return {
     ok: true,
     generatedAt,
-    status: derived.status,
+    status,
     thresholds: {
       emailExtractionReadyFloor: EMAIL_EXTRACTION_READY_FLOOR,
       profileRebuildReadyFloor: PROFILE_REBUILD_READY_FLOOR,
     },
     tableReadiness,
     metrics,
-    blockers: derived.blockers,
-    nextActions: derived.nextActions,
+    blockers,
+    nextActions,
+    gmailPreflight: gmailPreflight || null,
     internal: true,
     observationalOnly: true,
   };
@@ -287,6 +312,11 @@ function formatReadinessReport(report) {
     `Last synced at: ${
       m.lastSyncState && m.lastSyncState.lastSyncedAt
         ? m.lastSyncState.lastSyncedAt
+        : '(none)'
+    }`,
+    `Last sync import intent: ${
+      m.lastSyncState && m.lastSyncState.importIntent
+        ? m.lastSyncState.importIntent
         : '(none)'
     }`,
   ];

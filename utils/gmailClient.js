@@ -190,12 +190,51 @@ async function fetchLabeledMessages({
   return messages;
 }
 
+/**
+ * List Gmail labels for the authenticated mailbox (read-only).
+ */
+async function listGmailLabels(gmail = null) {
+  const client = gmail || await createGmailClient();
+  const res = await client.users.labels.list({ userId: 'me' });
+  return res.data.labels || [];
+}
+
+/**
+ * Exact-match label lookup by display name (case-sensitive, Gmail label names are exact).
+ */
+function findLabelByName(labels, labelName) {
+  const wanted = String(labelName || '').trim();
+  if (!wanted) return null;
+  return (labels || []).find((label) => label && label.name === wanted) || null;
+}
+
+/**
+ * Count discoverable message ids for a query without fetching full bodies.
+ */
+async function countMatchingMessages({
+  query,
+  limit = 1000,
+  gmail = null,
+} = {}) {
+  const client = gmail || await createGmailClient();
+  const ids = await listMessageIds(client, { query, limit });
+  return {
+    query,
+    discoveredCount: ids.length,
+    cappedByLimit: ids.length >= Math.max(1, Number(limit) || 1000),
+    sampleIds: ids.slice(0, 5),
+  };
+}
+
 module.exports = {
   SCOPES,
+  countMatchingMessages,
   createGmailClient,
   fetchLabeledMessages,
+  findLabelByName,
   getAuthClient,
   getFullMessage,
+  listGmailLabels,
   listMessageIds,
   loadOAuthCredentials,
 };

@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS market_emails (
   received_at TIMESTAMPTZ NOT NULL,
   sent_at TIMESTAMPTZ,
   imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT market_emails_gmail_id_unique UNIQUE (gmail_id)
+  import_intent TEXT NOT NULL DEFAULT 'general_market_messaging',
+  CONSTRAINT market_emails_gmail_id_unique UNIQUE (gmail_id),
+  CONSTRAINT market_emails_import_intent_nonempty CHECK (char_length(btrim(import_intent)) > 0)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS market_emails_message_id_uidx
@@ -55,10 +57,14 @@ CREATE INDEX IF NOT EXISTS market_emails_received_idx
 CREATE INDEX IF NOT EXISTS market_emails_from_email_idx
   ON market_emails (LOWER(from_email));
 
+CREATE INDEX IF NOT EXISTS market_emails_import_intent_received_idx
+  ON market_emails (import_intent, received_at DESC);
+
 CREATE TABLE IF NOT EXISTS market_intel_sync_state (
   id TEXT PRIMARY KEY DEFAULT 'default',
   label TEXT NOT NULL DEFAULT 'MARKET_INTEL',
   days INTEGER NOT NULL DEFAULT 365,
+  import_intent TEXT NOT NULL DEFAULT 'general_market_messaging',
   last_synced_at TIMESTAMPTZ,
   last_run_stats JSONB NOT NULL DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

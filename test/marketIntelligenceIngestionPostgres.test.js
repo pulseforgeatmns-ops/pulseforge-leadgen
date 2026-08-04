@@ -109,16 +109,22 @@ function fakeMessage({ id, threadId, from, subject, messageId, body, internalDat
     assert.equal(first.imported, 3);
     assert.equal(first.duplicates, 0);
     assert.equal(first.unknownCompany, 1);
+    assert.equal(first.importIntent, 'general_market_messaging');
 
     const companies = await pool.query('SELECT name, domain, is_unknown FROM market_companies ORDER BY name');
     assert.ok(companies.rows.some((row) => row.name === 'Apollo' && row.domain === 'apollo.io'));
     assert.ok(companies.rows.some((row) => row.is_unknown === true));
+
+    const intents = await pool.query('SELECT DISTINCT import_intent FROM market_emails');
+    assert.deepEqual(intents.rows.map((r) => r.import_intent).sort(), ['general_market_messaging']);
 
     const apollo = await pool.query(`SELECT id FROM market_companies WHERE domain = 'apollo.io'`);
     const timeline = await getCompanyTimeline(apollo.rows[0].id, { pool });
     assert.equal(timeline.length, 2);
     assert.equal(timeline[0].touch, 1);
     assert.equal(timeline[0].subject, 'Touch 1');
+    assert.equal(timeline[0].importIntent, 'general_market_messaging');
+    assert.equal(timeline[0].sourceIntent, 'general_market_messaging');
     assert.equal(timeline[1].touch, 2);
     assert.equal(timeline[1].subject, 'Touch 2');
 
@@ -178,7 +184,36 @@ function fakeMessage({ id, threadId, from, subject, messageId, body, internalDat
     });
     assert.equal(result.imported, 1);
     assert.equal(result.dryRun, true);
+    assert.equal(result.importIntent, 'general_market_messaging');
     const after = await pool.query('SELECT COUNT(*)::int AS n FROM market_emails');
     assert.equal(after.rows[0].n, before.rows[0].n);
+  });
+
+  it('stores competitive_watch intent without changing schema philosophy', async () => {
+    const result = await importMarketIntelligence({
+      pool,
+      importIntent: 'competitive_watch',
+      messages: [
+        fakeMessage({
+          id: 'comp-1',
+          threadId: 'tc',
+          from: 'Rival <hello@rival.example>',
+          subject: 'Watch',
+          messageId: '<comp@rival.example>',
+          body: 'competitive watch body',
+          internalDate: Date.parse('2024-07-01T12:00:00Z'),
+        }),
+      ],
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.importIntent, 'competitive_watch');
+    const row = await pool.query(
+      `SELECT import_intent FROM market_emails WHERE gmail_id = 'comp-1'`
+    );
+    assert.equal(row.rows[0].import_intent, 'competitive_watch');
+    const sync = await pool.query(
+      `SELECT import_intent FROM market_intel_sync_state WHERE id = 'default'`
+    );
+    assert.equal(sync.rows[0].import_intent, 'competitive_watch');
   });
 });
