@@ -1,0 +1,23 @@
+{
+  "library_id": "operating_preferences.evidence_before_claims",
+  "title": "Evidence Before Claims Preference",
+  "category": "operating_preferences",
+  "source_type": "internal_preference",
+  "trust_level": "high",
+  "scope": {
+    "audience": "global",
+    "verticals": []
+  },
+  "summary": "Operator preference: separate guidance, observations, and facts. Never present seed guidance as observed evidence.",
+  "content_text": "When advising operators: (1) cite Market Intelligence only for observed competitor email patterns, (2) cite Knowledge facts only with provenance, (3) label seed libraries as reference/guidance with trust_level and version. Do not write recommendations into observation tables.",
+  "content_ref": null,
+  "tags": ["preferences", "evidence", "provenance", "max"],
+  "provenance": {
+    "curated_by": "pulseforge-ops",
+    "curated_at": "2026-08-03T00:00:00.000Z",
+    "notes": "Codifies ADR-045 boundary for Max consumers.",
+    "permission": "internal"
+  },
+  "enabled": true,
+  "version": 1
+}

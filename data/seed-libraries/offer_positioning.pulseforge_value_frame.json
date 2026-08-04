@@ -1,0 +1,23 @@
+{
+  "library_id": "offer_positioning.pulseforge_value_frame",
+  "title": "Pulseforge Offer Positioning Frame",
+  "category": "offer_positioning",
+  "source_type": "curated_operator",
+  "trust_level": "high",
+  "scope": {
+    "audience": "global",
+    "verticals": []
+  },
+  "summary": "How Pulseforge frames its lead-gen and outbound operating system offer. Guidance only — not a prospect claim.",
+  "content_text": "Position around booked conversations and operator leverage, not vanity lead volume. Emphasize multi-channel sequencing, human approval gates, and measurable setter/closer handoff. Avoid unverified ROI guarantees.",
+  "content_ref": null,
+  "tags": ["offer", "positioning", "pulseforge"],
+  "provenance": {
+    "curated_by": "pulseforge-ops",
+    "curated_at": "2026-08-03T00:00:00.000Z",
+    "notes": "Internal offer framing summary.",
+    "permission": "internal"
+  },
+  "enabled": true,
+  "version": 1
+}
