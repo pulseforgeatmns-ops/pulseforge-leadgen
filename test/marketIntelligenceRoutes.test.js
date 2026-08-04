@@ -17,6 +17,13 @@ describe('marketIntelligence routes', () => {
 
     const expected = [
       '/api/v1/market-intel/readiness',
+      '/api/v1/market-intel/briefing',
+      '/api/v1/market-intel/offers',
+      '/api/v1/market-intel/ctas',
+      '/api/v1/market-intel/companies/cadence',
+      '/api/v1/market-intel/themes',
+      '/api/v1/market-intel/changes',
+      '/api/v1/market-intel/import-intents',
       '/api/v1/market-intel/companies',
       '/api/v1/market-intel/companies/:id',
       '/api/v1/market-intel/companies/:id/timeline',
@@ -28,6 +35,11 @@ describe('marketIntelligence routes', () => {
       assert.match(source, new RegExp(`router\\.get\\('${route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
     }
 
+    // Static /companies/cadence must be registered before /companies/:id.
+    const cadenceIdx = source.indexOf("router.get('/api/v1/market-intel/companies/cadence'");
+    const companyIdIdx = source.indexOf("router.get('/api/v1/market-intel/companies/:id'");
+    assert.ok(cadenceIdx > -1 && companyIdIdx > -1 && cadenceIdx < companyIdIdx);
+
     assert.equal((source.match(/router\.post\(/g) || []).length, 0);
     assert.equal((source.match(/router\.put\(/g) || []).length, 0);
     assert.equal((source.match(/router\.patch\(/g) || []).length, 0);
@@ -38,6 +50,18 @@ describe('marketIntelligence routes', () => {
     assert.match(source, /buildMarketIntelReadinessReport/);
     assert.match(source, /marketIntelligenceReadiness/);
     assert.match(source, /\/api\/v1\/market-intel\/readiness/);
+  });
+
+  it('wires SPEC-071 briefing surfaces as GET-only synthesis', () => {
+    assert.match(source, /getMarketIntelligenceBriefing/);
+    assert.match(source, /marketIntelligenceBriefing/);
+    assert.match(source, /isEvidence:\s*false/);
+    assert.match(source, /getTopOffers/);
+    assert.match(source, /getTopCtas/);
+    assert.match(source, /getCompanyCadence/);
+    assert.match(source, /getMessagingThemes/);
+    assert.match(source, /getRecentMessagingChanges/);
+    assert.match(source, /getObservationsByIntent/);
   });
 
   it('does not wire Max runtime or recommendation payloads', () => {
