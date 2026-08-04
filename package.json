@@ -43,6 +43,7 @@
     "anchor:verified-queue:dry-run": "node scripts/importAnchorVerifiedQueue.js",
     "anchor:verified-queue:apply": "node scripts/importAnchorVerifiedQueue.js --apply --confirm=client_10-anchor-verified-queue-2026-07-18",
     "market:intel:import": "node scripts/importMarketIntelligence.js",
+    "market:intel:extract": "node scripts/extractMarketIntelligence.js",
     "test:anchor-phone-setter:postgres": "ANCHOR_PHONE_SETTER_TEST_POSTGRES=true node --test test/anchorPhoneSetterPostgres.test.js",
     "revenue:rebuild": "node scripts/rebuildRevenueProjections.js",
     "revenue:phase16:preflight": "node scripts/preflightRevenuePhase16.js",

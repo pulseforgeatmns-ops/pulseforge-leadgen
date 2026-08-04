@@ -165,6 +165,9 @@ function answerForIntent({ intent, context, evidence, focus, question }) {
   if (intent === 'explain') {
     return explainAnswer({ hla, context, evidence, focus });
   }
+  if (corpus === 'market') {
+    return marketAnswer({ context, evidence, focus });
+  }
 
   // general
   const parts = [];
@@ -203,6 +206,85 @@ function answerForIntent({ intent, context, evidence, focus, question }) {
     answer: parts.join(' '),
     reasoning,
     unavailableExtra,
+  };
+}
+
+function marketAnswer({ context, evidence, focus }) {
+  const market = context.marketIntelligence || null;
+  const unavailableExtra = [];
+  if (!market) {
+    return {
+      answer: `I can route this to Market Intelligence, but no SPEC-065 market corpus was attached to this turn yet.`,
+      reasoning: [
+        'The market_intelligence domain was selected, but Max did not receive market profiles, timelines, or cross-market patterns in context.',
+      ],
+      unavailableExtra: ['market_intelligence_context'],
+    };
+  }
+
+  const parts = [];
+  const reasoning = [];
+  const selected = market.selectedCompany || null;
+  const profile = market.profile || null;
+
+  if (selected && profile) {
+    parts.push(
+      `${profile.companyName || selected.name || focus} has ${profile.emailsObserved || 0} observed market email(s) in the corpus.`
+    );
+    if (profile.currentCta) parts.push(`Current CTA observed: ${profile.currentCta}.`);
+    if (profile.primaryPositioning) {
+      parts.push(`Primary positioning observed: ${profile.primaryPositioning}.`);
+    }
+    if (profile.latestDirection) {
+      reasoning.push(`Latest observed direction: ${profile.latestDirection}.`);
+    }
+  } else if (selected) {
+    parts.push(
+      `${selected.name || selected.domain || focus} is present in Market Intelligence, but no rebuilt profile is available yet.`
+    );
+    unavailableExtra.push('market_company_profile');
+  } else {
+    const count = (market.companies || []).length;
+    parts.push(
+      count
+        ? `Market Intelligence has ${count} observed compan${count === 1 ? 'y' : 'ies'} matching this view.`
+        : 'Market Intelligence does not have a matching observed company in the current corpus yet.'
+    );
+    if (!count) unavailableExtra.push('market_company_match');
+  }
+
+  const topPatterns = [];
+  for (const bucket of market.patterns || []) {
+    const first = bucket.patterns && bucket.patterns[0];
+    if (first) {
+      topPatterns.push(`${bucket.field}: ${first.value} (${first.count || 0})`);
+    }
+  }
+  if (topPatterns.length) {
+    parts.push(`Top observed cross-market patterns: ${topPatterns.join('; ')}.`);
+    reasoning.push('Patterns are frequency counts from structured observations, not recommendations.');
+  } else {
+    unavailableExtra.push('market_patterns');
+  }
+
+  if (market.sequenceStats) {
+    const stats = market.sequenceStats;
+    reasoning.push(
+      `Sequence sample: ${stats.companies || 0} companies, median sequence length ${stats.medianSequenceLength ?? 'unknown'}, median follow-up spacing ${stats.medianFollowUpSpacingDays ?? 'unknown'} days.`
+    );
+  } else {
+    unavailableExtra.push('market_sequence_stats');
+  }
+
+  for (const item of market.unavailable || []) unavailableExtra.push(item);
+  if (evidence.supportingEvidence[0]) {
+    reasoning.push(`Evidence attached: ${evidence.supportingEvidence[0].summary}`);
+  }
+
+  return {
+    answer: parts.join(' '),
+    reasoning,
+    unavailableExtra: [...new Set(unavailableExtra)],
   };
 }
 
@@ -535,6 +617,8 @@ function findPolicyOnCards(context) {
 }
 
 function buildRecommendedActions(context, intent) {
+  if (context && context._answerCorpus === 'market') return [];
+
   const actions = [];
   const recId = context.recommendationId;
   const companyId = context.companyId;

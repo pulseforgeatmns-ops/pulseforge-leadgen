@@ -150,6 +150,8 @@ Duration: 48s
 
 ## Future Work
 
-- Recommendations / scoring / dashboards (later specs)
+- [SPEC-065](SPEC-065_Market_Intelligence_Foundation.md) — structured evidence, timelines, profiles, cross-market APIs
+- [SPEC-066](SPEC-066_Max_Market_Intelligence_Integration.md) — Max consumer (after SPEC-065)
 - Knowledge dual-write of campaign evidence
 - Public-suffix-aware domain parsing
+- Dashboards (later)
