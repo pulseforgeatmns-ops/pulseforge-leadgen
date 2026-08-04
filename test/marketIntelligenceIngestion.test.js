@@ -137,19 +137,21 @@ describe('import intent helpers', () => {
 
 describe('importMarketIntelligence CLI', () => {
   it('parses options with defaults', () => {
-    assert.deepEqual(parseArgs([]), {
-      days: 365,
-      label: 'MARKET_INTEL',
-      limit: 1000,
-      dryRun: false,
-      json: false,
-      preflight: false,
-      skipPreflight: false,
-      help: false,
-      importIntent: null,
-      sourceIntent: null,
-      resolvedIntent: DEFAULT_IMPORT_INTENT,
-    });
+    const defaults = parseArgs([]);
+    assert.equal(defaults.days, 365);
+    assert.equal(defaults.label, 'MARKET_INTEL');
+    assert.equal(defaults.limit, 1000);
+    assert.equal(defaults.dryRun, false);
+    assert.equal(defaults.json, false);
+    assert.equal(defaults.preflight, false);
+    assert.equal(defaults.skipPreflight, false);
+    assert.equal(defaults.help, false);
+    assert.equal(defaults.importIntent, null);
+    assert.equal(defaults.sourceIntent, null);
+    assert.equal(defaults.tokenSource, null);
+    assert.equal(defaults.resolvedIntent, DEFAULT_IMPORT_INTENT);
+    assert.ok(['gmail', 'auto'].includes(defaults.resolvedTokenSource));
+
     assert.equal(parseArgs(['--days=30', '--label=OTHER', '--limit=5', '--dry-run']).dryRun, true);
     assert.equal(parseArgs(['--preflight']).preflight, true);
     assert.equal(parseArgs(['--skip-preflight']).skipPreflight, true);
@@ -161,6 +163,9 @@ describe('importMarketIntelligence CLI', () => {
       parseArgs(['--source-intent=general_market_messaging']).resolvedIntent,
       IMPORT_INTENTS.GENERAL_MARKET_MESSAGING
     );
+    assert.equal(parseArgs(['--token-source=gmail']).resolvedTokenSource, 'gmail');
+    assert.equal(parseArgs(['--token-source=riley']).resolvedTokenSource, 'riley');
+    assert.equal(parseArgs(['--token-source=auto']).resolvedTokenSource, 'auto');
   });
 
   it('formats the operator report including intent and unknown-company rate', () => {

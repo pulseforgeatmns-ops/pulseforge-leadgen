@@ -5,10 +5,15 @@
  *
  *   npm run market:intel:preflight
  *   npm run market:intel:preflight -- --label=MARKET_INTEL --days=365 --require-messages
+ *   npm run market:intel:preflight -- --show-account --token-source=gmail --days=365 --label=MARKET_INTEL --limit=10
  */
 
 require('dotenv').config();
 
+const {
+  TOKEN_SOURCES,
+  resolveMarketIntelTokenSource,
+} = require('../utils/gmailClient');
 const {
   formatPreflightReport,
   preflightMarketIntelIngestion,
@@ -20,6 +25,8 @@ function parseArgs(argv = process.argv.slice(2)) {
     label: 'MARKET_INTEL',
     limit: 1000,
     requireMessages: false,
+    showAccount: false,
+    tokenSource: null,
     json: false,
     help: false,
   };
@@ -31,6 +38,10 @@ function parseArgs(argv = process.argv.slice(2)) {
     }
     if (arg === '--require-messages') {
       options.requireMessages = true;
+      continue;
+    }
+    if (arg === '--show-account') {
+      options.showAccount = true;
       continue;
     }
     if (arg === '--help' || arg === '-h') {
@@ -49,6 +60,10 @@ function parseArgs(argv = process.argv.slice(2)) {
       options.limit = Number(arg.slice('--limit='.length));
       continue;
     }
+    if (arg.startsWith('--token-source=')) {
+      options.tokenSource = arg.slice('--token-source='.length);
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
@@ -62,6 +77,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     throw new Error('--label is required');
   }
 
+  options.resolvedTokenSource = resolveMarketIntelTokenSource(options.tokenSource);
   return options;
 }
 
@@ -75,9 +91,14 @@ Options:
   --days=365              Lookback window (default 365)
   --label=MARKET_INTEL    Gmail label that must exist
   --limit=1000            Max messages to count for discovery
+  --token-source=SOURCE   gmail | riley | auto
+                          default: gmail when GMAIL_TOKEN exists, else auto
   --require-messages      Fail when the label has zero messages in-window
-  --json                  Print full JSON report
+  --show-account          Print authenticated Gmail address before label discovery
+  --json                  Print full JSON report (includes authenticatedEmail)
   --help                  Show this help
+
+Allowed --token-source values: ${TOKEN_SOURCES.join(', ')}
 
 Read-only. Verifies Gmail credentials, label existence, and discoverability.
 Does not write market_* tables or touch CRM.
@@ -96,6 +117,13 @@ async function main(argv = process.argv.slice(2)) {
     label: options.label,
     limit: options.limit,
     requireMessages: options.requireMessages,
+    tokenSource: options.resolvedTokenSource,
+    showAccount: options.showAccount,
+    onAuthenticatedAccount: options.showAccount && !options.json
+      ? (email) => {
+          console.log(`Authenticated Gmail account: ${email}`);
+        }
+      : null,
   });
 
   if (options.json) {

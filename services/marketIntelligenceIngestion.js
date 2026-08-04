@@ -9,7 +9,7 @@
  */
 
 const defaultPool = require('../db');
-const { fetchLabeledMessages } = require('../utils/gmailClient');
+const { fetchLabeledMessages, resolveMarketIntelTokenSource } = require('../utils/gmailClient');
 const { buildLabelQuery, parseGmailMessage } = require('../utils/marketEmailParse');
 const { resolveMarketCompany } = require('../utils/marketCompanyResolve');
 
@@ -289,7 +289,8 @@ async function importMarketIntelligence(options = {}) {
   let rawMessages = options.messages;
   if (!rawMessages) {
     const fetchFn = options.fetchMessages || fetchLabeledMessages;
-    rawMessages = await fetchFn({ query, limit });
+    const tokenSource = resolveMarketIntelTokenSource(options.tokenSource);
+    rawMessages = await fetchFn({ query, limit, tokenSource });
   }
   stats.fetched = rawMessages.length;
 
