@@ -46,6 +46,7 @@
     "market:intel:extract": "node scripts/extractMarketIntelligence.js",
     "market:intel:readiness": "node scripts/marketIntelReadiness.js",
     "market:intel:preflight": "node scripts/preflightMarketIntelligence.js",
+    "gmail:token": "node getGmailToken.js",
     "intel:seed:libraries": "node scripts/seedIntelligenceLibraries.js",
     "test:anchor-phone-setter:postgres": "ANCHOR_PHONE_SETTER_TEST_POSTGRES=true node --test test/anchorPhoneSetterPostgres.test.js",
     "revenue:rebuild": "node scripts/rebuildRevenueProjections.js",
