@@ -2,6 +2,7 @@
 
 /**
  * SPEC-066 thin slice — Max reads Market Intelligence as evidence.
+ * SPEC-071 — Max may also inspect a read-only briefing synthesis.
  * Read-only adapter. No scoring, recommendations, or MI writes.
  */
 
@@ -9,6 +10,10 @@ const DEFAULT_FIELDS = ['cta', 'offer', 'positioning'];
 
 function defaultService() {
   return require('../../../services/marketIntelligenceQuery');
+}
+
+function defaultBriefingService() {
+  return require('../../../services/marketIntelligenceBriefing');
 }
 
 function extractMarketSearchTerm(question) {
@@ -49,6 +54,34 @@ async function safeCall(fn, fallback) {
       error: err && err.message ? String(err.message) : 'market_intel_unavailable',
     };
   }
+}
+
+/**
+ * Read-only briefing inspection for Max / future apps.
+ * Synthesis only — never treated as raw evidence or an action instruction.
+ */
+async function getMarketIntelligenceBriefing(context = {}) {
+  const briefingService = context.briefingService || defaultBriefingService();
+  const options = {
+    days: context.days,
+    limit: context.limit,
+    importIntent: context.importIntent || context.intent,
+    companyId: context.companyId,
+    category: context.category,
+    since: context.since,
+    until: context.until,
+    pool: context.pool,
+  };
+
+  const briefing = await briefingService.getMarketIntelligenceBriefing(options);
+  return {
+    ...briefing,
+    ok: briefing && briefing.ok !== false,
+    kind: 'market_intelligence_briefing',
+    isEvidence: false,
+    source: 'SPEC-071',
+    inspectionOnly: true,
+  };
 }
 
 async function buildMarketIntelligenceContext(question, options = {}) {
@@ -110,6 +143,27 @@ async function buildMarketIntelligenceContext(question, options = {}) {
   );
   if (sequenceStats.error) unavailable.push('market_sequence_stats');
 
+  let briefing = null;
+  if (options.includeBriefing) {
+    const briefingResult = await safeCall(
+      () =>
+        getMarketIntelligenceBriefing({
+          briefingService: options.briefingService,
+          days: options.days,
+          limit: options.limit || 5,
+          importIntent: options.importIntent || options.intent,
+          companyId: options.companyId || selectedCompany?.id,
+          pool: options.pool,
+        }),
+      { error: 'market_briefing_unavailable' }
+    );
+    if (briefingResult.error) {
+      unavailable.push('market_briefing');
+    } else {
+      briefing = briefingResult;
+    }
+  }
+
   return {
     status: unavailable.length ? 'partial' : 'available',
     searchTerm: term,
@@ -119,6 +173,7 @@ async function buildMarketIntelligenceContext(question, options = {}) {
     timeline: Array.isArray(timeline) ? timeline : [],
     patterns,
     sequenceStats: sequenceStats.error ? null : sequenceStats,
+    briefing,
     unavailable,
     source: 'SPEC-065',
   };
@@ -127,5 +182,6 @@ async function buildMarketIntelligenceContext(question, options = {}) {
 module.exports = {
   buildMarketIntelligenceContext,
   extractMarketSearchTerm,
+  getMarketIntelligenceBriefing,
   requestedPatternFields,
 };

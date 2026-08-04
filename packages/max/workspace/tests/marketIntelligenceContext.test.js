@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const {
   buildMarketIntelligenceContext,
   extractMarketSearchTerm,
+  getMarketIntelligenceBriefing,
   requestedPatternFields,
 } = require('../MarketIntelligenceContext');
 const {
@@ -112,5 +113,63 @@ describe('SPEC-066 MarketIntelligenceContext', () => {
     assert.equal(result.structured.recommendedActions.length, 0);
     assert.ok(result.structured.supportingEvidence.some((e) => e.sourceType === 'market_intelligence'));
     assert.equal(result.structured.metadata.sourcesUsed.market, true);
+  });
+
+  it('retrieves SPEC-071 briefing without mutation', async () => {
+    let called = false;
+    const briefingService = {
+      async getMarketIntelligenceBriefing(options) {
+        called = true;
+        assert.equal(options.days, 14);
+        assert.equal(options.limit, 5);
+        return {
+          ok: true,
+          kind: 'market_intelligence_briefing',
+          isEvidence: false,
+          generatedAt: '2026-08-01T00:00:00.000Z',
+          window: { days: 14, since: '2026-07-18T00:00:00.000Z', until: '2026-08-01T00:00:00.000Z' },
+          corpus: {
+            emailCount: 3,
+            companyCount: 2,
+            observationCount: 5,
+            importIntents: ['general_market_messaging'],
+            readinessStatus: 'ready',
+          },
+          sections: {
+            topOffers: [{ label: '20% off annual', count: 2, companies: ['Apollo'] }],
+            topCtas: [],
+            messagingThemes: [],
+            companyCadence: [],
+            recentChanges: [],
+            observationsByIntent: [],
+          },
+          caveats: ['synthesis_not_evidence: briefing aggregates observational corpus; isEvidence is false'],
+        };
+      },
+    };
+
+    const briefing = await getMarketIntelligenceBriefing({
+      briefingService,
+      days: 14,
+      limit: 5,
+    });
+
+    assert.equal(called, true);
+    assert.equal(briefing.ok, true);
+    assert.equal(briefing.isEvidence, false);
+    assert.equal(briefing.inspectionOnly, true);
+    assert.equal(briefing.source, 'SPEC-071');
+    assert.equal(briefing.kind, 'market_intelligence_briefing');
+    assert.equal(briefing.sections.topOffers[0].label, '20% off annual');
+
+    const context = await buildMarketIntelligenceContext('Monitor Apollo CTAs.', {
+      service: fakeMarketService(),
+      briefingService,
+      includeBriefing: true,
+      days: 14,
+      limit: 5,
+    });
+    assert.equal(context.briefing.isEvidence, false);
+    assert.equal(context.briefing.inspectionOnly, true);
   });
 });
