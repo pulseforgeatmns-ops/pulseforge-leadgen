@@ -2,8 +2,10 @@
 
 /**
  * SPEC-065 — GET-only Market Intelligence query APIs.
+ * SPEC-067 — Operational readiness (GET /api/v1/market-intel/readiness).
  * Observational corpus. No recommendations, scoring, or Max wiring.
  *
+ * GET /api/v1/market-intel/readiness
  * GET /api/v1/market-intel/companies
  * GET /api/v1/market-intel/companies/:id
  * GET /api/v1/market-intel/companies/:id/timeline
@@ -25,12 +27,27 @@ const {
   listMarketCompanies,
   PATTERN_FIELDS,
 } = require('../services/marketIntelligenceQuery');
+const { buildMarketIntelReadinessReport } = require('../services/marketIntelligenceReadiness');
 
 const requireAdmin = [requireAuth, requireRole('admin', 'manager')];
 
 function noStore(res) {
   res.set('Cache-Control', 'no-store');
 }
+
+router.get('/api/v1/market-intel/readiness', requireAdmin, async (req, res) => {
+  try {
+    const report = await buildMarketIntelReadinessReport();
+    noStore(res);
+    return res.json(report);
+  } catch (err) {
+    console.error('[market-intel] readiness', err);
+    return res.status(500).json({
+      error: 'market_intel_readiness_failed',
+      message: err && err.message ? String(err.message) : 'failed',
+    });
+  }
+});
 
 router.get('/api/v1/market-intel/companies', requireAdmin, async (req, res) => {
   try {
