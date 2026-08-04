@@ -16,6 +16,7 @@ describe('marketIntelligence routes', () => {
     assert.match(source, /Cache-Control',\s*'no-store'/);
 
     const expected = [
+      '/api/v1/market-intel/readiness',
       '/api/v1/market-intel/companies',
       '/api/v1/market-intel/companies/:id',
       '/api/v1/market-intel/companies/:id/timeline',
@@ -31,6 +32,12 @@ describe('marketIntelligence routes', () => {
     assert.equal((source.match(/router\.put\(/g) || []).length, 0);
     assert.equal((source.match(/router\.patch\(/g) || []).length, 0);
     assert.equal((source.match(/router\.delete\(/g) || []).length, 0);
+  });
+
+  it('wires SPEC-067 readiness via read-only report builder', () => {
+    assert.match(source, /buildMarketIntelReadinessReport/);
+    assert.match(source, /marketIntelligenceReadiness/);
+    assert.match(source, /\/api\/v1\/market-intel\/readiness/);
   });
 
   it('does not wire Max runtime or recommendation payloads', () => {

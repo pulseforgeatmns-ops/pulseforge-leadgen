@@ -69,6 +69,7 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-061](SPEC-061_Market_Intelligence_Ingestion.md) | Market Intelligence Ingestion | In Progress | v0.1 |
 | [SPEC-065](SPEC-065_Market_Intelligence_Foundation.md) | Market Intelligence Foundation | Implemented (v1) | v0.1 |
 | [SPEC-066](SPEC-066_Max_Market_Intelligence_Integration.md) | Max Market Intelligence Integration | In Progress | TBD |
+| [SPEC-067](SPEC-067_Market_Intelligence_Operational_Acceptance.md) | Market Intelligence Operational Acceptance | Implemented (v1) | v0.1 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 
