@@ -11,6 +11,9 @@ const { SessionStore } = require('./SessionStore');
 const { composeResponse } = require('./ResponseComposer');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
 const {
+  buildMarketIntelligenceContext,
+} = require('./MarketIntelligenceContext');
+const {
   composeMissionResponse,
   composeActiveMissionResponse,
 } = require('./MissionResponse');
@@ -120,6 +123,7 @@ class WorkspaceEngine {
    * @param {object} [options.missionEngine] - SPEC-022 MissionEngine
    * @param {boolean} [options.missionsEnabled]
    * @param {boolean} [options.resolverEnabled] - SPEC-039
+   * @param {object} [options.marketIntelligenceService] - SPEC-066 read-only adapter dependency
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
@@ -139,6 +143,7 @@ class WorkspaceEngine {
       options.resolverEnabled != null
         ? options.resolverEnabled !== false
         : activeMissionResolverEnabled();
+    this._marketIntelligenceService = options.marketIntelligenceService || null;
   }
 
   /** @returns {SessionStore} */
@@ -509,6 +514,13 @@ class WorkspaceEngine {
         incomingContext: rawContext,
         mission: null,
       });
+      if (domainDecision.domain === EXECUTION_DOMAINS.MARKET_INTELLIGENCE) {
+        domainAttach.context.marketIntelligence = await buildMarketIntelligenceContext(
+          question,
+          { service: this._marketIntelligenceService || undefined }
+        );
+        session.context = domainAttach.context;
+      }
       // When missions disabled but domain is mission, still label the route
       if (
         isMissionDomain(domainDecision.domain) &&

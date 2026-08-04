@@ -41,6 +41,10 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-038](docs/adr/ADR-038_Explain_Planning_Decisions.md) | Explain Planning Decisions | Accepted | Planner explains select/reject/unavailable via Capability Registry diagnostics; no bare Unknown capability / Acquire via unavailable |
 | [ADR-039](docs/adr/ADR-039_Separate_Understanding_from_Execution.md) | Separate Understanding from Execution | Accepted | Intent Understanding → MissionIntent → Capability Planning → MissionPlan; language probabilistic, execution deterministic |
 | [ADR-040](docs/adr/ADR-040_Separate_Evidence_Acquisition_from_Capability_Selection.md) | Separate Evidence Acquisition from Capability Selection | Accepted | Evidence Planning between Intent and Capability Planning; acquire missing evidence before review/outcome capabilities |
+| [ADR-041](docs/adr/ADR-041_Operator_Intent_Selects_Execution_Domain.md) | Operator Intent Selects Execution Domain | Accepted | Operator intent selects execution domain; market_intelligence is a reserved domain socket |
+| [ADR-042](docs/adr/ADR-042_Diagnostic_Capabilities_Explain_Blocked_Execution.md) | Diagnostic Capabilities Explain Blocked Execution | Accepted | Diagnostic capabilities explain blocked execution instead of silent failure |
+| [ADR-044](docs/adr/ADR-044_Prospect_Acquisition_Independence.md) | Prospect Acquisition Independence | Accepted | Campaigns operate on ProspectLists; Discovery is one acquisition strategy among many |
+| [ADR-045](docs/adr/ADR-045_Evidence_Before_Reasoning.md) | Evidence Before Reasoning | Accepted | Domains collect evidence and do not recommend; reasoning engines consume evidence; facts persist, conclusions are ephemeral |
 
 ## How to add a decision
 

@@ -264,6 +264,14 @@ async function importMarketIntelligence(options = {}) {
 
       await client.query('COMMIT');
       stats.imported += 1;
+
+      // SPEC-065: fail-soft structured extraction after successful import
+      try {
+        const { safeExtractEmailEvidence } = require('./marketIntelligenceExtraction');
+        await safeExtractEmailEvidence(insertedId, { pool, rebuildProfile: true });
+      } catch (_extractErr) {
+        /* never block ingestion */
+      }
     } catch (err) {
       try { await client.query('ROLLBACK'); } catch (_rollbackErr) { /* ignore */ }
       if (err.code === '23505') {

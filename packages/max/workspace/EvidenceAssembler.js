@@ -21,6 +21,7 @@ function assembleEvidence(context) {
     memory: false,
     policy: false,
     knowledge: false,
+    market: false,
   };
   const unavailable = [];
 
@@ -44,6 +45,15 @@ function assembleEvidence(context) {
       supporting,
       contradicting,
       confidenceContributors,
+      timelineReferences,
+      relatedEntities,
+      sourcesUsed,
+    });
+  }
+
+  if (context.marketIntelligence) {
+    collectFromMarketIntelligence(context.marketIntelligence, {
+      supporting,
       timelineReferences,
       relatedEntities,
       sourcesUsed,
@@ -89,6 +99,63 @@ function assembleEvidence(context) {
     confidence: firstConfidence(cards, context),
     asOf: context.asOf,
   };
+}
+
+function collectFromMarketIntelligence(market, bag) {
+  bag.sourcesUsed.market = true;
+
+  for (const company of market.companies || []) {
+    if (!company || (!company.id && !company.name)) continue;
+    bag.relatedEntities.push({
+      id: company.id || company.name,
+      type: 'market_company',
+      name: company.name || company.domain || company.id,
+    });
+  }
+
+  if (market.profile) {
+    const profile = market.profile;
+    bag.supporting.push(
+      normalizeEvidenceRef({
+        id: `market-profile:${profile.companyId || profile.companyName || 'unknown'}`,
+        summary: `${profile.companyName || 'Market company'} has ${profile.emailsObserved || 0} observed market email(s).`,
+        sourceType: 'market_intelligence',
+        kind: 'profile',
+      })
+    );
+    for (const ref of (profile.evidenceRefs || []).slice(0, 5)) {
+      bag.supporting.push(
+        normalizeEvidenceRef({
+          id: String(ref),
+          summary: `Market evidence email ${ref}`,
+          sourceType: 'market_intelligence',
+          kind: 'email',
+        })
+      );
+    }
+  }
+
+  for (const touch of (market.timeline || []).slice(-5)) {
+    bag.timelineReferences.push({
+      id: touch.id,
+      summary: touch.subject || `Touch ${touch.touch}`,
+      at: touch.receivedAt,
+    });
+  }
+
+  for (const bucket of market.patterns || []) {
+    for (const pattern of (bucket.patterns || []).slice(0, 3)) {
+      const refs = (pattern.evidenceRefs || []).slice(0, 3).join(', ');
+      bag.supporting.push(
+        normalizeEvidenceRef({
+          id: `market-pattern:${bucket.field}:${pattern.value}`,
+          summary: `${bucket.field}: "${pattern.value}" observed ${pattern.count || 0} time(s)${refs ? `; sample evidence ${refs}` : ''}.`,
+          sourceType: 'market_intelligence',
+          kind: 'pattern',
+        })
+      );
+    }
+  }
 }
 
 function listRelevantCards(context) {
