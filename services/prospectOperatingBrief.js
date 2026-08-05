@@ -309,49 +309,33 @@ function matchesRelationshipTarget(row, target) {
   return false;
 }
 
-async function loadRelationshipContext(target, options = {}) {
-  const relationshipService =
-    options.relationshipService || defaultRelationshipService();
-  const storeOpts = {};
-  if (options.store) storeOpts.store = options.store;
-  if (options.pool) storeOpts.pool = options.pool;
-
-  const listFilters = {
-    status: 'committed',
-    limit: 50,
+function emptyRelationshipContext() {
+  return {
+    interactionCount: 0,
+    insights: [],
+    relationshipSummary: {
+      interactionCount: 0,
+      insightCount: 0,
+      latestOccurredAt: null,
+      interactionTypes: [],
+      summaries: [],
+      averageConfidence: null,
+    },
+    buyingSignals: [],
+    painsAndGoals: [],
+    objectionsAndRisks: [],
+    decisionProcess: [],
+    commitmentsAndNextSteps: [],
+    openQuestions: [],
+    preferencesAndContext: [],
+    sourceRefs: {
+      relationshipInteractionIds: [],
+      relationshipInsightIds: [],
+    },
   };
-  if (target.clientId != null) listFilters.clientId = target.clientId;
-  if (target.companyId) listFilters.companyId = target.companyId;
+}
 
-  let listed = await relationshipService.listInteractions(listFilters, storeOpts);
-
-  // If company-scoped list returned nothing but we have other soft refs,
-  // broaden (client-scoped or unscoped) then filter client-side.
-  const hasSoftTarget =
-    target.contactId || target.opportunityId || target.prospectId;
-  if ((!listed || !listed.length) && hasSoftTarget) {
-    const broadFilters = { status: 'committed', limit: 100 };
-    if (target.clientId != null) broadFilters.clientId = target.clientId;
-    listed = await relationshipService.listInteractions(broadFilters, storeOpts);
-  }
-
-  const hasAnyTargetId =
-    target.companyId ||
-    target.contactId ||
-    target.opportunityId ||
-    target.prospectId;
-  const interactions = hasAnyTargetId
-    ? (listed || []).filter((row) => matchesRelationshipTarget(row, target))
-    : listed || [];
-
-  const payloads = [];
-  for (const row of interactions) {
-    const payload = await relationshipService.getInteraction(row.id, storeOpts);
-    if (payload && payload.status === 'committed') {
-      payloads.push({ id: row.id, payload });
-    }
-  }
-
+function buildRelationshipFromPayloads(payloads) {
   const allInsights = [];
   const interactionIds = [];
   const insightIds = [];
@@ -427,6 +411,110 @@ async function loadRelationshipContext(target, options = {}) {
       relationshipInsightIds: uniq(insightIds),
     },
   };
+}
+
+/**
+ * Load a single committed relationship interaction by id.
+ * @returns {{ relationship, softRefs, payload }}
+ */
+async function loadRelationshipContextByInteractionId(interactionId, options = {}) {
+  const relationshipService =
+    options.relationshipService || defaultRelationshipService();
+  const storeOpts = {};
+  if (options.store) storeOpts.store = options.store;
+  if (options.pool) storeOpts.pool = options.pool;
+
+  const id = asText(interactionId);
+  if (!id) {
+    throw new ProspectOperatingBriefError(
+      'target_required',
+      'relationshipInteractionId is required when used as target',
+      400
+    );
+  }
+
+  let payload;
+  try {
+    payload = await relationshipService.getInteraction(id, storeOpts);
+  } catch (err) {
+    if (err && (err.code === 'not_found' || err.status === 404)) {
+      throw new ProspectOperatingBriefError(
+        'relationship_interaction_not_found',
+        `Relationship interaction not found: ${id}`,
+        404
+      );
+    }
+    throw err;
+  }
+
+  if (!payload || payload.status !== 'committed') {
+    throw new ProspectOperatingBriefError(
+      'relationship_interaction_not_committed',
+      `Relationship interaction ${id} is not committed (status=${
+        payload && payload.status ? payload.status : 'unknown'
+      })`,
+      409
+    );
+  }
+
+  const interaction = payload.interaction || {};
+  const softRefs = {
+    companyId: asText(interaction.companyId),
+    contactId: asText(interaction.contactId),
+    opportunityId: asText(interaction.opportunityId),
+  };
+
+  return {
+    relationship: buildRelationshipFromPayloads([{ id, payload }]),
+    softRefs,
+    payload,
+  };
+}
+
+async function loadRelationshipContext(target, options = {}) {
+  const relationshipService =
+    options.relationshipService || defaultRelationshipService();
+  const storeOpts = {};
+  if (options.store) storeOpts.store = options.store;
+  if (options.pool) storeOpts.pool = options.pool;
+
+  const listFilters = {
+    status: 'committed',
+    limit: 50,
+  };
+  if (target.clientId != null) listFilters.clientId = target.clientId;
+  if (target.companyId) listFilters.companyId = target.companyId;
+
+  let listed = await relationshipService.listInteractions(listFilters, storeOpts);
+
+  // If company-scoped list returned nothing but we have other soft refs,
+  // broaden (client-scoped or unscoped) then filter client-side.
+  const hasSoftTarget =
+    target.contactId || target.opportunityId || target.prospectId;
+  if ((!listed || !listed.length) && hasSoftTarget) {
+    const broadFilters = { status: 'committed', limit: 100 };
+    if (target.clientId != null) broadFilters.clientId = target.clientId;
+    listed = await relationshipService.listInteractions(broadFilters, storeOpts);
+  }
+
+  const hasAnyTargetId =
+    target.companyId ||
+    target.contactId ||
+    target.opportunityId ||
+    target.prospectId;
+  const interactions = hasAnyTargetId
+    ? (listed || []).filter((row) => matchesRelationshipTarget(row, target))
+    : listed || [];
+
+  const payloads = [];
+  for (const row of interactions) {
+    const payload = await relationshipService.getInteraction(row.id, storeOpts);
+    if (payload && payload.status === 'committed') {
+      payloads.push({ id: row.id, payload });
+    }
+  }
+
+  return buildRelationshipFromPayloads(payloads);
 }
 
 async function loadMarketContext(options = {}) {
@@ -567,7 +655,7 @@ function suggestNextAction({
   const objections = relationship.objectionsAndRisks || [];
   const blob = textBlob([...nextSteps, ...buying, ...objections]);
 
-  if (!snapshot || !snapshot.found) {
+  if ((!snapshot || !snapshot.found) && relationship.interactionCount === 0) {
     requiredInputs.push('company or prospect identifier with CRM record');
     return {
       actionType: 'research_company',
@@ -719,9 +807,18 @@ function suggestNextAction({
   };
 }
 
-function readinessFromParts({ snapshot, relationship, market, includeMarket, includeRelationship }) {
+function readinessFromParts({
+  snapshot,
+  relationship,
+  market,
+  includeMarket,
+  includeRelationship,
+  companyIntelligenceOverride = null,
+}) {
   let companyIntelligence = READINESS.UNKNOWN;
-  if (snapshot && snapshot.found) {
+  if (companyIntelligenceOverride) {
+    companyIntelligence = companyIntelligenceOverride;
+  } else if (snapshot && snapshot.found) {
     const hasCore =
       snapshot.companyName || snapshot.contactName || snapshot.website;
     companyIntelligence = hasCore ? READINESS.READY : READINESS.PARTIAL;
@@ -770,10 +867,13 @@ function readinessFromParts({ snapshot, relationship, market, includeMarket, inc
  * @returns {Promise<object>}
  */
 async function getProspectOperatingBrief(options = {}) {
-  const companyId = asText(options.companyId);
-  const prospectId = asText(options.prospectId);
-  const opportunityId = asText(options.opportunityId);
-  const contactId = asText(options.contactId);
+  let companyId = asText(options.companyId);
+  let prospectId = asText(options.prospectId);
+  let opportunityId = asText(options.opportunityId);
+  let contactId = asText(options.contactId);
+  const relationshipInteractionId = asText(
+    options.relationshipInteractionId || options.interactionId
+  );
   const days = clampDays(options.days);
   const includeMarketContext = parseTruthy(options.includeMarketContext, true);
   const includeRelationshipContext = parseTruthy(
@@ -781,89 +881,126 @@ async function getProspectOperatingBrief(options = {}) {
     true
   );
 
-  if (!companyId && !prospectId && !opportunityId && !contactId) {
+  if (
+    !companyId &&
+    !prospectId &&
+    !opportunityId &&
+    !contactId &&
+    !relationshipInteractionId
+  ) {
     throw new ProspectOperatingBriefError(
       'target_required',
-      'At least one of companyId, prospectId, opportunityId, or contactId is required',
+      'At least one of companyId, prospectId, opportunityId, contactId, or relationshipInteractionId is required',
       400
     );
   }
 
   const caveats = [];
   const generatedAt = new Date().toISOString();
+  let companyIntelligenceOverride = null;
+  let relationship = emptyRelationshipContext();
+  let interactionSoftRefs = null;
+
+  // Prefer an explicit committed interaction when provided.
+  if (relationshipInteractionId) {
+    if (!includeRelationshipContext) {
+      throw new ProspectOperatingBriefError(
+        'relationship_context_required',
+        'relationshipInteractionId requires includeRelationshipContext',
+        400
+      );
+    }
+    const loaded = await loadRelationshipContextByInteractionId(
+      relationshipInteractionId,
+      options
+    );
+    relationship = loaded.relationship;
+    interactionSoftRefs = loaded.softRefs;
+
+    // Fill target soft refs from the interaction when not already provided.
+    if (!companyId && interactionSoftRefs.companyId) {
+      companyId = interactionSoftRefs.companyId;
+    }
+    if (!contactId && interactionSoftRefs.contactId) {
+      contactId = interactionSoftRefs.contactId;
+      if (!prospectId) prospectId = interactionSoftRefs.contactId;
+    }
+    if (!opportunityId && interactionSoftRefs.opportunityId) {
+      opportunityId = interactionSoftRefs.opportunityId;
+    }
+
+    if (!interactionSoftRefs.companyId && !companyId) {
+      companyIntelligenceOverride = READINESS.UNKNOWN;
+      caveats.push('target_not_matched_to_company_record');
+    }
+  }
 
   const loadSnapshot =
     typeof options.loadCompanySnapshot === 'function'
       ? options.loadCompanySnapshot
       : loadCompanySnapshot;
 
-  const snapshot = await loadSnapshot({
-    pool: options.pool || defaultPool,
-    companyId,
-    prospectId,
-    opportunityId,
-    contactId,
-    clientId: options.clientId,
-  });
+  let snapshot = { found: false };
+  const hasCrmTarget = companyId || prospectId || opportunityId || contactId;
+  if (hasCrmTarget) {
+    snapshot = await loadSnapshot({
+      pool: options.pool || defaultPool,
+      companyId,
+      prospectId,
+      opportunityId,
+      contactId,
+      clientId: options.clientId,
+    });
 
-  if (!snapshot || !snapshot.found) {
+    if (!snapshot || !snapshot.found) {
+      caveats.push(
+        'company_snapshot_missing: CRM company/prospect record not found or incomplete'
+      );
+    }
+    if (snapshot && snapshot.error) {
+      caveats.push(`company_snapshot_error: ${snapshot.error}`);
+    }
+  } else if (relationshipInteractionId) {
+    // Interaction-only target with no company/contact/opportunity soft refs.
+    snapshot = { found: false };
+  } else {
     caveats.push(
       'company_snapshot_missing: CRM company/prospect record not found or incomplete'
     );
   }
-  if (snapshot && snapshot.error) {
-    caveats.push(`company_snapshot_error: ${snapshot.error}`);
-  }
 
   const resolvedTarget = {
-    companyId: (snapshot && snapshot.companyId) || companyId,
-    prospectId: (snapshot && snapshot.prospectId) || prospectId,
-    opportunityId: (snapshot && snapshot.opportunityId) || opportunityId,
+    companyId: (snapshot && snapshot.companyId) || companyId || null,
+    prospectId: (snapshot && snapshot.prospectId) || prospectId || null,
+    opportunityId:
+      (snapshot && snapshot.opportunityId) || opportunityId || null,
     contactId:
-      (snapshot && snapshot.contactId) || contactId || prospectId || null,
+      (snapshot && snapshot.contactId) ||
+      contactId ||
+      prospectId ||
+      null,
     companyName: (snapshot && snapshot.companyName) || null,
     contactName: (snapshot && snapshot.contactName) || null,
     clientId: (snapshot && snapshot.clientId) || options.clientId || null,
-  };
-
-  let relationship = {
-    interactionCount: 0,
-    insights: [],
-    relationshipSummary: {
-      interactionCount: 0,
-      insightCount: 0,
-      latestOccurredAt: null,
-      interactionTypes: [],
-      summaries: [],
-      averageConfidence: null,
-    },
-    buyingSignals: [],
-    painsAndGoals: [],
-    objectionsAndRisks: [],
-    decisionProcess: [],
-    commitmentsAndNextSteps: [],
-    openQuestions: [],
-    preferencesAndContext: [],
-    sourceRefs: {
-      relationshipInteractionIds: [],
-      relationshipInsightIds: [],
-    },
+    relationshipInteractionId: relationshipInteractionId || null,
   };
 
   if (includeRelationshipContext) {
-    try {
-      relationship = await loadRelationshipContext(resolvedTarget, options);
-      if (relationship.interactionCount === 0) {
+    if (!relationshipInteractionId) {
+      try {
+        relationship = await loadRelationshipContext(resolvedTarget, options);
+        if (relationship.interactionCount === 0) {
+          caveats.push(
+            'relationship_intelligence_missing: no committed relationship interactions for this target'
+          );
+        }
+      } catch (err) {
         caveats.push(
-          'relationship_intelligence_missing: no committed relationship interactions for this target'
+          `relationship_intelligence_unavailable: ${
+            err && err.message ? err.message : 'error'
+          }`
         );
       }
-    } catch (err) {
-      caveats.push(
-        `relationship_intelligence_unavailable: ${
-          err && err.message ? err.message : 'error'
-        }`
-      );
     }
   } else {
     caveats.push('relationship_context_excluded_by_request');
@@ -931,6 +1068,7 @@ async function getProspectOperatingBrief(options = {}) {
     market,
     includeMarket: includeMarketContext,
     includeRelationship: includeRelationshipContext,
+    companyIntelligenceOverride,
   });
 
   const openQuestions = [
@@ -943,7 +1081,7 @@ async function getProspectOperatingBrief(options = {}) {
       value: 'Confirm company/prospect CRM record for this target',
       confidence: null,
       sourceQuote: null,
-      interactionId: null,
+      interactionId: relationshipInteractionId || null,
     });
   }
 
@@ -959,6 +1097,7 @@ async function getProspectOperatingBrief(options = {}) {
       contactId: resolvedTarget.contactId,
       companyName: resolvedTarget.companyName,
       contactName: resolvedTarget.contactName,
+      relationshipInteractionId: resolvedTarget.relationshipInteractionId,
     },
     readiness,
     sections: {
@@ -1024,6 +1163,9 @@ function formatOperatingBriefReport(brief) {
     `- Prospect ID: ${t.prospectId || 'n/a'}`,
     `- Opportunity ID: ${t.opportunityId || 'n/a'}`,
   ];
+  if (t.relationshipInteractionId) {
+    lines.push(`- Relationship Interaction ID: ${t.relationshipInteractionId}`);
+  }
 
   const snap = s.companySnapshot || {};
   if (Object.keys(snap).length) {
@@ -1126,5 +1268,6 @@ module.exports = {
   formatOperatingBriefReport,
   getProspectOperatingBrief,
   loadCompanySnapshot,
+  loadRelationshipContextByInteractionId,
   suggestNextAction,
 };

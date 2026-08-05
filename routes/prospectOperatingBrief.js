@@ -4,7 +4,8 @@
  * SPEC-074 — Prospect Operating Brief API (GET-only, admin/manager).
  *
  * GET /api/v1/prospects/operating-brief
- *   ?companyId=&prospectId=&opportunityId=&contactId=&days=
+ *   ?companyId=&prospectId=&opportunityId=&contactId=
+ *   &relationshipInteractionId=&days=
  *
  * Read-only synthesis. No writes, no autonomous execution.
  */
@@ -30,6 +31,10 @@ router.get('/api/v1/prospects/operating-brief', requireAdmin, async (req, res) =
       prospectId: req.query.prospectId || undefined,
       opportunityId: req.query.opportunityId || undefined,
       contactId: req.query.contactId || undefined,
+      relationshipInteractionId:
+        req.query.relationshipInteractionId ||
+        req.query.interactionId ||
+        undefined,
       days: req.query.days,
       includeMarketContext: req.query.includeMarketContext,
       includeRelationshipContext: req.query.includeRelationshipContext,

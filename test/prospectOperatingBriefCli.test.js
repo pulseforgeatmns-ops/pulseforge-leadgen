@@ -18,10 +18,20 @@ describe('prospectOperatingBrief CLI', () => {
       'opp-1'
     );
     assert.equal(parseArgs(['--contact-id=c-1']).contactId, 'c-1');
+    assert.equal(
+      parseArgs(['--relationship-interaction-id=ri-1']).relationshipInteractionId,
+      'ri-1'
+    );
   });
 
   it('requires a target identifier', () => {
     assert.throws(() => parseArgs([]), /At least one of/);
+  });
+
+  it('accepts relationship-interaction-id as sole target', () => {
+    const options = parseArgs(['--relationship-interaction-id=abc-123']);
+    assert.equal(options.relationshipInteractionId, 'abc-123');
+    assert.equal(options.companyId, null);
   });
 
   it('rejects unknown args and invalid days', () => {
@@ -46,6 +56,7 @@ describe('prospectOperatingBrief CLI', () => {
     assert.match(text, /human-readable/);
     assert.match(text, /isEvidence=false/);
     assert.match(text, /SPEC-074/);
+    assert.match(text, /--relationship-interaction-id/);
   });
 
   it('main supports JSON and human output without mutation', async () => {

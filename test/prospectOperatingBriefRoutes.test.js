@@ -29,6 +29,7 @@ describe('prospectOperatingBrief routes', () => {
     assert.match(source, /getProspectOperatingBrief/);
     assert.match(source, /prospectOperatingBrief/);
     assert.match(source, /isEvidence:\s*false/);
+    assert.match(source, /relationshipInteractionId/);
   });
 
   it('does not wire outbound sends or CRM mutations', () => {
