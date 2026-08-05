@@ -63,6 +63,7 @@ describe('relationshipIntelligence routes (static)', () => {
     assert.match(source, /Cache-Control',\s*'no-store'/);
 
     const expected = [
+      '/api/v1/relationship-intel/readiness',
       '/api/v1/relationship-intel/interviews',
       '/api/v1/relationship-intel/interviews/:id/messages',
       '/api/v1/relationship-intel/interviews/:id/summarize',
@@ -79,16 +80,21 @@ describe('relationshipIntelligence routes (static)', () => {
     assert.match(source, /interviews\/:id\/messages/);
     assert.match(source, /interviews\/:id\/summarize/);
     assert.match(source, /interviews\/:id\/commit/);
+    assert.match(source, /buildRelationshipIntelReadinessReport/);
   });
 
   it('is mounted from server.js', () => {
     assert.match(serverSource, /require\('\.\/routes\/relationshipIntelligence'\)/);
   });
 
-  it('registers npm CLI script', () => {
+  it('registers npm CLI scripts', () => {
     assert.equal(
       packageJson.scripts['relationship:intel:interview'],
       'node scripts/relationshipIntelInterview.js'
+    );
+    assert.equal(
+      packageJson.scripts['relationship:intel:readiness'],
+      'node scripts/relationshipIntelReadiness.js'
     );
   });
 

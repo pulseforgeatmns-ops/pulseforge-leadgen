@@ -80,7 +80,7 @@ npm run test:max
 - `POST /api/v1/outcome/records|lifecycle` · `GET /api/v1/outcome/calibration|strategies|drift|review` → Outcome Intelligence (SPEC-013 / ADR-008)
 - `GET /admin/knowledge-health` · `GET /admin/flight-recorder` → SPEC-014 admin operational confidence (admin/manager only)
 - `POST/GET /cron/knowledge-outbox?secret=` → outbox drain worker
-- `POST/GET /api/v1/relationship-intel/interviews|interactions` → Relationship Intelligence Interview (SPEC-064); CLI `npm run relationship:intel:interview`
+- `POST/GET /api/v1/relationship-intel/interviews|interactions` · `GET /api/v1/relationship-intel/readiness` → Relationship Intelligence (SPEC-064); CLI `npm run relationship:intel:interview` · `npm run relationship:intel:readiness`
 
 ### Dual-write (SPEC-014)
 

@@ -4,6 +4,7 @@
  * SPEC-064 — Relationship Intelligence Interview APIs.
  * Max-owned capture. Mutations only touch relationship_* tables.
  *
+ * GET  /api/v1/relationship-intel/readiness
  * POST /api/v1/relationship-intel/interviews
  * POST /api/v1/relationship-intel/interviews/:id/messages
  * GET  /api/v1/relationship-intel/interviews/:id
@@ -27,6 +28,9 @@ const {
   getInteraction,
   INTERACTION_TYPES,
 } = require('../services/relationshipIntelligenceInterview');
+const {
+  buildRelationshipIntelReadinessReport,
+} = require('../services/relationshipIntelligenceReadiness');
 
 const requireAdmin = [requireAuth, requireRole('admin', 'manager')];
 
@@ -47,6 +51,20 @@ function sendError(res, err) {
     message: err && err.message ? String(err.message) : 'failed',
   });
 }
+
+router.get('/api/v1/relationship-intel/readiness', requireAdmin, async (req, res) => {
+  try {
+    const report = await buildRelationshipIntelReadinessReport();
+    noStore(res);
+    return res.json(report);
+  } catch (err) {
+    console.error('[relationship-intel] readiness', err);
+    return res.status(500).json({
+      error: 'relationship_intel_readiness_failed',
+      message: err && err.message ? String(err.message) : 'failed',
+    });
+  }
+});
 
 router.post('/api/v1/relationship-intel/interviews', requireAdmin, async (req, res) => {
   try {
