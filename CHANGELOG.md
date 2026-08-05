@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Relationship Intelligence Interview v1 ([SPEC-064](docs/specs/SPEC-064_Relationship_Intelligence_Interview.md))
+  - Durable `relationship_interactions` + `relationship_interaction_insights` (soft entity refs; no CRM FKs)
+  - Max-owned state-machine debrief service: start / answer / summarize / commit (notes mode first)
+  - Review-before-commit draft payload (`isEvidence: true`); mutations only touch RI tables
+  - Admin APIs under `/api/v1/relationship-intel/*`
+  - CLI: `npm run relationship:intel:interview -- --type=... --notes="..."`
+  - Tests: `test/relationshipIntelligenceInterview.test.js`, `test/relationshipIntelligenceRoutes.test.js`
 - Evidence-Driven Capability Planning ([SPEC-056](docs/specs/SPEC-056_Evidence_Driven_Capability_Planning.md) / [ADR-040](docs/adr/ADR-040_Separate_Evidence_Acquisition_from_Capability_Selection.md))
   - Three-stage planning: Intent Understanding → Evidence Planning → Capability Planning → MissionPlan
   - MissionIntent declares `requiresEvidence`; EvidencePlan compares catalog vs requirements
