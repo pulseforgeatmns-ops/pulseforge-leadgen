@@ -314,9 +314,19 @@ function extractInsightsFromNotes(notes) {
   // like "owner", "budget", or "timeline".
   const patterns = [
     {
-      re: /\bexpressed interest\b|\basked for more (?:info|information|details)\b|\bwants? more (?:info|information|details)\b|\b(interested|excited|ready to (?:move|buy|proceed)|let'?s do|sounds good)\b/i,
+      re: /\bexpressed interest\b|\basked for more (?:info|information|details)\b|\basked detailed buying questions\b|\breviewed (?:the\s+)?proposal\b|\bliked (?:the\s+)?(?:\d+[- ]day\s+)?pilot\b|\bfinal questions before moving forward\b|\bbefore moving forward\b|\bwants? more (?:info|information|details)\b|\b(interested|excited|ready to (?:move|buy|proceed)|let'?s do|sounds good)\b/i,
       kind: 'buying_signal',
       label: 'Buying signal',
+    },
+    {
+      re: /\b(?:send|prepare|draft|share|deliver)\b[\s\w-]*\b(?:service agreement|msa|contract|sow)\b|\bservice agreement\b/i,
+      kind: 'commitment',
+      label: 'Commitment',
+    },
+    {
+      re: /\b(?:schedule|book)\b[\s\w-]*\bkickoff\b|\bkickoff\b/i,
+      kind: 'next_step',
+      label: 'Next step',
     },
     {
       re: /\b(?:received|sent|delivered|shared)\b[\s\w-]*\b(?:personalized\s+)?(?:\d+[- ]page\s+)?(?:overview|proposal|one[- ]pager|deck|brief)\b/i,
@@ -324,7 +334,7 @@ function extractInsightsFromNotes(notes) {
       label: 'Commitment',
     },
     {
-      re: /\b(?:need(?:s)?(?:\s+to)?\s+follow[- ]?up|follow[- ]?up(?:\s+to|\s+needed|\s+required)?|next step|schedule|book)\b/i,
+      re: /\b(?:need(?:s)?(?:\s+to)?\s+follow[- ]?up|follow[- ]?up(?:\s+to|\s+needed|\s+required)?|next step|schedule|book|send service agreement)\b/i,
       kind: 'next_step',
       label: 'Next step',
     },

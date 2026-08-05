@@ -539,4 +539,106 @@ describe('SPEC-074 prospectOperatingBrief', () => {
     const stored = await store.getInteraction(started.interviewId);
     assert.equal(String(stored.raw_summary).trim(), AS_CLEANING_RAW.trim());
   });
+
+  it('AS Cleaning email-thread proposal stage yields high-priority seller next action', async () => {
+    const AS_CLEANING_EMAIL_THREAD =
+      'Follow-up / proposal review with Aji at AS Cleaning Co. Aji reviewed the proposal and asked detailed buying questions before moving forward. He liked the 30-day pilot idea and had final questions before moving forward. Next steps: send service agreement and schedule kickoff. Also awaiting his reply on one timing question.';
+
+    const store = createMemoryStore();
+    const started = await startRelationshipInterview(
+      {
+        type: 'proposal_review',
+        companyId: 'co-as-cleaning',
+        contactId: 'aji',
+        clientId: 1,
+        notes: AS_CLEANING_EMAIL_THREAD,
+      },
+      { store }
+    );
+    await summarizeRelationshipInterview(started.interviewId, { store });
+    await commitRelationshipInterview(started.interviewId, { store });
+
+    const brief = await getProspectOperatingBrief({
+      relationshipInteractionId: started.interviewId,
+      store,
+      loadCompanySnapshot: async () =>
+        torontoSnapshot({
+          companyId: 'co-as-cleaning',
+          companyName: 'AS Cleaning Co.',
+          contactName: 'Aji',
+        }),
+      marketBriefingService: fakeMarketService(),
+    });
+
+    assert.equal(brief.ok, true);
+    assert.equal(brief.target.relationshipInteractionId, started.interviewId);
+
+    const buyingValues = brief.sections.buyingSignals.map((i) =>
+      String(i.value || '').toLowerCase()
+    );
+    assert.ok(buyingValues.some((v) => v.includes('reviewed') && v.includes('proposal')));
+    assert.ok(
+      buyingValues.some((v) => v.includes('detailed buying questions') || v.includes('before moving forward'))
+    );
+    assert.ok(buyingValues.some((v) => v.includes('30-day pilot') || v.includes('pilot idea')));
+    assert.ok(
+      buyingValues.some((v) => v.includes('final questions') || v.includes('before moving forward'))
+    );
+
+    const nextValues = brief.sections.commitmentsAndNextSteps.map((i) =>
+      String(i.value || '').toLowerCase()
+    );
+    assert.ok(nextValues.some((v) => v.includes('service agreement')));
+    assert.ok(nextValues.some((v) => v.includes('kickoff')));
+
+    const action = brief.sections.suggestedNextAction;
+    assert.ok(
+      ['prepare_proposal', 'schedule_kickoff'].includes(action.actionType),
+      `expected prepare_proposal or schedule_kickoff, got ${action.actionType}`
+    );
+    assert.equal(action.priority, 'high');
+    assert.notEqual(action.actionType, 'wait_for_reply');
+  });
+
+  it('does not wait_for_reply when seller-side next steps remain', () => {
+    const action = suggestNextAction({
+      snapshot: torontoSnapshot(),
+      relationship: {
+        interactionCount: 1,
+        buyingSignals: [
+          { kind: 'buying_signal', value: 'liked the 30-day pilot idea' },
+        ],
+        commitmentsAndNextSteps: [
+          { kind: 'commitment', value: 'send service agreement' },
+          { kind: 'next_step', value: 'awaiting his reply on timing' },
+        ],
+        openQuestions: [],
+        objectionsAndRisks: [],
+      },
+      caveats: [],
+    });
+    assert.equal(action.actionType, 'prepare_proposal');
+    assert.equal(action.priority, 'high');
+    assert.notEqual(action.actionType, 'wait_for_reply');
+  });
+
+  it('suggestNextAction schedules kickoff when recorded', () => {
+    const action = suggestNextAction({
+      snapshot: torontoSnapshot(),
+      relationship: {
+        interactionCount: 1,
+        buyingSignals: [
+          { kind: 'buying_signal', value: 'final questions before moving forward' },
+        ],
+        commitmentsAndNextSteps: [
+          { kind: 'next_step', value: 'schedule kickoff' },
+        ],
+        openQuestions: [],
+        objectionsAndRisks: [],
+      },
+      caveats: [],
+    });
+    assert.equal(action.actionType, 'schedule_kickoff');
+    assert.equal(action.priority, 'high');
+  });
 });
