@@ -96,20 +96,33 @@ async function checkTableReadiness(db) {
 }
 
 /**
- * Parse CHECK (... IN (...)) constraint text into sorted unique string values.
+ * Parse CHECK enum values from pg_get_constraintdef output.
+ * Handles both `IN ('a','b')` and PG's rewritten `= ANY (ARRAY['a'::text, ...])`.
  * @param {string} def
  */
 function parseCheckInValues(def) {
   const text = String(def || '');
-  const match = text.match(/\bIN\s*\(([^)]+)\)/i);
-  if (!match) return [];
   const values = [];
   const re = /'([^']*)'/g;
   let m;
-  while ((m = re.exec(match[1]))) {
-    values.push(m[1]);
+
+  const inMatch = text.match(/\bIN\s*\(([^)]+)\)/i);
+  if (inMatch) {
+    while ((m = re.exec(inMatch[1]))) {
+      values.push(m[1]);
+    }
+    return [...new Set(values)].sort();
   }
-  return [...new Set(values)].sort();
+
+  const anyMatch = text.match(/=\s*ANY\s*\(\s*\(?\s*ARRAY\[([\s\S]*?)\]/i);
+  if (anyMatch) {
+    while ((m = re.exec(anyMatch[1]))) {
+      values.push(m[1]);
+    }
+    return [...new Set(values)].sort();
+  }
+
+  return [];
 }
 
 function compareEnumSets(expected, installed) {
@@ -146,23 +159,41 @@ async function loadConstraintValidation(db) {
        )
   `);
 
+  const byName = Object.fromEntries(
+    (result.rows || []).map((row) => [String(row.conname || ''), row])
+  );
+
   let typeInstalled = [];
   let kindInstalled = [];
+
+  // Prefer stable named constraints (repair migration / named installs).
+  const namedType = byName.relationship_interactions_interaction_type_check;
+  const namedKind = byName.relationship_interaction_insights_kind_check;
+  if (namedType) {
+    typeInstalled = parseCheckInValues(namedType.definition);
+  }
+  if (namedKind) {
+    kindInstalled = parseCheckInValues(namedKind.definition);
+  }
+
   for (const row of result.rows) {
     const def = String(row.definition || '');
     const values = parseCheckInValues(def);
-    if (/interaction_type/i.test(def) || /interaction_type/i.test(row.conname || '')) {
-      typeInstalled = values;
+    if (!typeInstalled.length) {
+      if (/interaction_type/i.test(def) || /interaction_type/i.test(row.conname || '')) {
+        typeInstalled = values;
+      }
     }
-    if (/\bkind\b/i.test(def) || /insight.*kind|kind/i.test(row.conname || '')) {
-      // Prefer the insights table kind constraint when both match loosely.
-      if (String(row.table_name).includes('insight') || /\bkind\b/i.test(def)) {
-        kindInstalled = values.length ? values : kindInstalled;
+    if (!kindInstalled.length) {
+      if (/\bkind\b/i.test(def) || /insight.*kind|kind/i.test(row.conname || '')) {
+        if (String(row.table_name).includes('insight') || /\bkind\b/i.test(def)) {
+          kindInstalled = values.length ? values : kindInstalled;
+        }
       }
     }
   }
 
-  // Fallback: if kind constraint not found via name heuristics, pick non-type IN lists on insights table.
+  // Fallback: if kind constraint not found via name heuristics, pick non-type IN/ANY lists on insights table.
   if (!kindInstalled.length) {
     for (const row of result.rows) {
       if (!String(row.table_name).includes('insight')) continue;
@@ -329,7 +360,7 @@ function deriveReadinessStatus({
       }
     }
     nextActions.push(
-      'Re-apply migrations/2026-08-04-relationship-intelligence-interview.sql and verify CHECK constraints'
+      'Apply migrations/2026-08-05-relationship-intelligence-constraints.sql (or re-apply 2026-08-04-relationship-intelligence-interview.sql) and verify CHECK constraints'
     );
     return { status: 'blocked', blockers, nextActions };
   }

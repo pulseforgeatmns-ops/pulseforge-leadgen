@@ -17,6 +17,7 @@ const {
   formatReadinessReport,
   createMemoryStore,
   ACCEPTANCE_SOURCE,
+  loadConstraintValidation,
 } = require('../services/relationshipIntelligenceReadiness');
 
 const interview = require('../services/relationshipIntelligenceInterview');
@@ -47,6 +48,70 @@ describe('relationshipIntelligenceReadiness helpers', () => {
       "CHECK (interaction_type IN ('cold_call', 'discovery_call', 'other'))"
     );
     assert.deepEqual(values, ['cold_call', 'discovery_call', 'other']);
+  });
+
+  it('parses PostgreSQL ANY ARRAY rewritten CHECK constraints', () => {
+    const types = parseCheckInValues(
+      "CHECK ((interaction_type = ANY (ARRAY['cold_call'::text, 'discovery_call'::text, 'walkthrough'::text, 'estimate'::text, 'meeting'::text, 'demo'::text, 'proposal_review'::text, 'follow_up'::text, 'other'::text])))"
+    );
+    assert.deepEqual(types, [
+      'cold_call',
+      'demo',
+      'discovery_call',
+      'estimate',
+      'follow_up',
+      'meeting',
+      'other',
+      'proposal_review',
+      'walkthrough',
+    ]);
+
+    const kinds = parseCheckInValues(
+      "CHECK ((kind = ANY ((ARRAY['pain'::text, 'goal'::text, 'context'::text]))))"
+    );
+    assert.deepEqual(kinds, ['context', 'goal', 'pain']);
+  });
+
+  it('validates constraints from pg-style ANY ARRAY definitions via fake pool', async () => {
+    const fakePool = {
+      async query(sql, params) {
+        if (/to_regclass/i.test(sql) && params) {
+          return { rows: [{ name: String(params[0]) }] };
+        }
+        if (/pg_constraint/i.test(sql)) {
+          return {
+            rows: [
+              {
+                table_name: 'relationship_interactions',
+                conname: 'relationship_interactions_interaction_type_check',
+                definition:
+                  "CHECK ((interaction_type = ANY (ARRAY['cold_call'::text, 'discovery_call'::text, 'walkthrough'::text, 'estimate'::text, 'meeting'::text, 'demo'::text, 'proposal_review'::text, 'follow_up'::text, 'other'::text])))",
+              },
+              {
+                table_name: 'relationship_interactions',
+                conname: 'relationship_interactions_status_check',
+                definition:
+                  "CHECK ((status = ANY (ARRAY['draft'::text, 'reviewed'::text, 'committed'::text])))",
+              },
+              {
+                table_name: 'relationship_interaction_insights',
+                conname: 'relationship_interaction_insights_kind_check',
+                definition:
+                  "CHECK ((kind = ANY (ARRAY['pain'::text, 'goal'::text, 'objection'::text, 'timeline'::text, 'budget'::text, 'decision_maker'::text, 'stakeholder'::text, 'competitor'::text, 'next_step'::text, 'commitment'::text, 'risk'::text, 'buying_signal'::text, 'open_question'::text, 'preference'::text, 'context'::text])))",
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected sql: ${sql}`);
+      },
+    };
+
+    const validation = await loadConstraintValidation(fakePool);
+    assert.equal(validation.ok, true);
+    assert.equal(validation.interactionTypes.ok, true);
+    assert.equal(validation.insightKinds.ok, true);
+    assert.equal(validation.interactionTypes.missing.length, 0);
+    assert.equal(validation.insightKinds.missing.length, 0);
   });
 
   it('compareEnumSets reports missing and unexpected', () => {

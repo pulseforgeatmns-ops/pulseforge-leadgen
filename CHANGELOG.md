@@ -13,6 +13,7 @@ All notable changes to this project are documented here. Format inspired by [Kee
   - Admin APIs under `/api/v1/relationship-intel/*`
   - CLI: `npm run relationship:intel:interview -- --type=... --notes="..."`
   - Readiness/acceptance: `npm run relationship:intel:readiness` (+ `--accept` notes fixture, `--check`, `--json`); GET `/api/v1/relationship-intel/readiness`
+  - Constraint repair: `migrations/2026-08-05-relationship-intelligence-constraints.sql`; readiness parses PG `ANY (ARRAY[...])` CHECK forms
   - Tests: `test/relationshipIntelligenceInterview.test.js`, `test/relationshipIntelligenceRoutes.test.js`, `test/relationshipIntelligenceReadiness.test.js`
 - Evidence-Driven Capability Planning ([SPEC-056](docs/specs/SPEC-056_Evidence_Driven_Capability_Planning.md) / [ADR-040](docs/adr/ADR-040_Separate_Evidence_Acquisition_from_Capability_Selection.md))
   - Three-stage planning: Intent Understanding → Evidence Planning → Capability Planning → MissionPlan
