@@ -46,8 +46,12 @@ const {
   toRouteDecision,
 } = require('./ExecutionDomain');
 const ActiveWorkContext = require('./ActiveWorkContext');
+const {
+  getProspectOperatingBrief,
+} = require('./ProspectOperatingBriefContext');
 
 module.exports = {
+  getProspectOperatingBrief,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,
