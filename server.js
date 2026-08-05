@@ -189,6 +189,7 @@ app.use('/', require('./routes/outcomeIntelligence'));
 app.use('/', require('./routes/knowledgeAdmin'));
 app.use('/', require('./routes/marketIntelligence'));
 app.use('/', require('./routes/relationshipIntelligence'));
+app.use('/', require('./routes/prospectOperatingBrief'));
 app.use('/', require('./routes/intelligenceSeedLibraries'));
 app.use('/', require('./routes/workspace'));
 app.use('/', require('./routes/maxChat'));
