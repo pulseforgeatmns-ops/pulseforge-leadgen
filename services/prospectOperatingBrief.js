@@ -17,6 +17,7 @@ const ACTION_TYPES = Object.freeze([
   'send_follow_up',
   'prepare_proposal',
   'schedule_walkthrough',
+  'schedule_kickoff',
   'ask_clarifying_question',
   'research_company',
   'wait_for_reply',
@@ -690,6 +691,15 @@ function textBlob(items) {
     .join(' ');
 }
 
+/** Seller-owned next steps (Jake/Pulseforge still owes an action). */
+function hasSellerSideNextSteps(nextSteps) {
+  return (nextSteps || []).some((item) =>
+    /\b(send|schedule|prepare|draft|book|deliver|share|kickoff|service agreement|msa|contract|proposal|walkthrough|follow[- ]?up|estimate|quote)\b/i.test(
+      insightText(item)
+    )
+  );
+}
+
 function suggestNextAction({
   snapshot,
   relationship,
@@ -720,6 +730,7 @@ function suggestNextAction({
   const openQs = relationship.openQuestions || [];
   const objections = relationship.objectionsAndRisks || [];
   const blob = textBlob([...nextSteps, ...buying, ...objections]);
+  const sellerSideNext = hasSellerSideNextSteps(nextSteps);
 
   if ((!snapshot || !snapshot.found) && relationship.interactionCount === 0) {
     requiredInputs.push('company or prospect identifier with CRM record');
@@ -755,6 +766,25 @@ function suggestNextAction({
     };
   }
 
+  if (/\bkickoff\b/.test(blob)) {
+    return {
+      actionType: 'schedule_kickoff',
+      priority: 'high',
+      rationale:
+        'Committed relationship insights reference scheduling a kickoff.',
+      suggestedMessageAngle:
+        buying.length
+          ? 'Confirm kickoff timing while interest is warm'
+          : 'Propose kickoff windows and confirm attendees',
+      requiredInputs: uniq([
+        ...requiredInputs,
+        'available kickoff windows',
+        snapshot && snapshot.contactName ? null : 'decision-maker contact',
+      ].filter(Boolean)),
+      cautions,
+    };
+  }
+
   if (/\bwalkthrough|site visit|on[- ]?site\b/.test(blob)) {
     return {
       actionType: 'schedule_walkthrough',
@@ -766,16 +796,41 @@ function suggestNextAction({
       requiredInputs: uniq([
         ...requiredInputs,
         'available walkthrough windows',
-        snapshot.contactName ? null : 'decision-maker contact',
+        snapshot && snapshot.contactName ? null : 'decision-maker contact',
       ].filter(Boolean)),
       cautions,
+    };
+  }
+
+  if (/\bservice agreement|msa\b|\bcontract\b|\bsow\b/.test(blob)) {
+    return {
+      actionType: 'prepare_proposal',
+      priority: 'high',
+      rationale: buying.length
+        ? 'Buying signal(s) plus a service-agreement next step — prepare/send the agreement while intent is active.'
+        : 'Committed insights reference sending or preparing a service agreement.',
+      suggestedMessageAngle:
+        buying.length
+          ? 'Send the service agreement and reference the stated buying signal'
+          : 'Deliver the service agreement without new commercial claims',
+      requiredInputs: uniq([
+        ...requiredInputs,
+        'service agreement / MSA draft',
+        'confirmed commercial terms',
+      ]),
+      cautions: [
+        ...cautions,
+        ...(objections.length
+          ? ['Address recorded objections/risks in the agreement package']
+          : []),
+      ],
     };
   }
 
   if (/\bproposal|estimate|quote|pricing\b/.test(blob)) {
     return {
       actionType: 'prepare_proposal',
-      priority: 'high',
+      priority: buying.length ? 'high' : 'medium',
       rationale:
         'Committed insights reference a proposal, estimate, quote, or pricing commitment.',
       suggestedMessageAngle:
@@ -808,12 +863,16 @@ function suggestNextAction({
     };
   }
 
-  if (/\bwait|they will (reply|email|send)|awaiting\b/.test(blob)) {
+  // Only wait when there is no active seller-side next step.
+  if (
+    !sellerSideNext &&
+    /\bwait|they will (reply|email|send)|awaiting\b/.test(blob)
+  ) {
     return {
       actionType: 'wait_for_reply',
       priority: 'low',
       rationale:
-        'Recorded next steps suggest the ball is in their court.',
+        'Recorded next steps suggest the ball is in their court, with no seller-side action outstanding.',
       suggestedMessageAngle: null,
       requiredInputs: ['follow-up date if silence continues'],
       cautions,
@@ -826,13 +885,15 @@ function suggestNextAction({
     if (nextSteps[0]) angleParts.push(insightText(nextSteps[0]));
     return {
       actionType: 'send_follow_up',
-      priority: buying.length ? 'high' : 'medium',
+      priority: buying.length || sellerSideNext ? 'high' : 'medium',
       rationale: buying.length
         ? 'Buying signal(s) are recorded in committed relationship intelligence; a manual follow-up is the conservative next move.'
         : 'A committed next step exists; send a manual follow-up that honors the recorded commitment.',
       suggestedMessageAngle: angleParts.filter(Boolean).join(' — ') || null,
       requiredInputs: uniq([
-        snapshot.email || snapshot.phone ? null : 'reachable contact channel',
+        snapshot && (snapshot.email || snapshot.phone)
+          ? null
+          : 'reachable contact channel',
         ...requiredInputs,
       ].filter(Boolean)),
       cautions,

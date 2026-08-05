@@ -227,6 +227,26 @@ describe('relationshipIntelligenceInterview', () => {
     );
   });
 
+  it('AS Cleaning proposal/follow-up notes extract buying signals and seller next steps', () => {
+    const AS_CLEANING_FOLLOW_UP =
+      'Follow-up / proposal review with Aji at AS Cleaning Co. Aji reviewed the proposal and asked detailed buying questions before moving forward. He liked the 30-day pilot idea and had final questions before moving forward. Next steps: send service agreement and schedule kickoff. Also awaiting his reply on one timing question.';
+
+    const { insights } = extractInsightsFromNotes(AS_CLEANING_FOLLOW_UP);
+    const buying = insights.filter((i) => i.kind === 'buying_signal');
+    const nextish = insights.filter((i) =>
+      ['next_step', 'commitment'].includes(i.kind)
+    );
+    const buyingValues = buying.map((i) => String(i.value || '').toLowerCase());
+    const nextValues = nextish.map((i) => String(i.value || '').toLowerCase());
+
+    assert.ok(buyingValues.some((v) => v.includes('reviewed') && v.includes('proposal')));
+    assert.ok(buyingValues.some((v) => v.includes('detailed buying questions')));
+    assert.ok(buyingValues.some((v) => v.includes('30-day pilot') || v.includes('pilot idea')));
+    assert.ok(buyingValues.some((v) => v.includes('final questions')));
+    assert.ok(nextValues.some((v) => v.includes('service agreement')));
+    assert.ok(nextValues.some((v) => v.includes('kickoff')));
+  });
+
   it('low-information notes produce caveats and open questions', async () => {
     const { opts } = withStore();
     const started = await startRelationshipInterview(
