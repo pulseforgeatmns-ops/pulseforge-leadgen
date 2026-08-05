@@ -49,9 +49,13 @@ const ActiveWorkContext = require('./ActiveWorkContext');
 const {
   getProspectOperatingBrief,
 } = require('./ProspectOperatingBriefContext');
+const {
+  getServiceModeOperatorLoop,
+} = require('./ServiceModeOperatorLoopContext');
 
 module.exports = {
   getProspectOperatingBrief,
+  getServiceModeOperatorLoop,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,
