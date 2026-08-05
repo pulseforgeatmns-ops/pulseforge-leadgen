@@ -332,4 +332,127 @@ describe('SPEC-074 prospectOperatingBrief', () => {
     assert.match(text, /Autonomous execution: disabled/);
     assert.match(text, /isEvidence: false/);
   });
+
+  it('accepts relationshipInteractionId as a sole target', async () => {
+    const store = createMemoryStore();
+    const opts = { store };
+    const started = await startRelationshipInterview(
+      {
+        type: 'discovery_call',
+        companyId: 'co-from-interaction',
+        contactId: 'contact-from-interaction',
+        opportunityId: 'opp-from-interaction',
+        clientId: 1,
+        notes:
+          'Discovery call with cleaning company owner. They are interested and ready. Main pain is inconsistent night staff. Goal is reliable coverage. Next step: send a proposal with pricing. We promised the estimate by Thursday.',
+      },
+      opts
+    );
+    await summarizeRelationshipInterview(started.interviewId, opts);
+    await commitRelationshipInterview(started.interviewId, opts);
+
+    let snapshotCalls = 0;
+    const brief = await getProspectOperatingBrief({
+      relationshipInteractionId: started.interviewId,
+      store,
+      loadCompanySnapshot: async (loadOpts) => {
+        snapshotCalls += 1;
+        assert.equal(loadOpts.companyId, 'co-from-interaction');
+        assert.equal(loadOpts.contactId, 'contact-from-interaction');
+        return torontoSnapshot({
+          companyId: 'co-from-interaction',
+          contactId: 'contact-from-interaction',
+          prospectId: 'contact-from-interaction',
+          companyName: 'From Interaction Co',
+        });
+      },
+      marketBriefingService: fakeMarketService(),
+    });
+
+    assert.equal(brief.ok, true);
+    assert.equal(brief.target.relationshipInteractionId, started.interviewId);
+    assert.equal(brief.target.companyId, 'co-from-interaction');
+    assert.equal(brief.target.contactId, 'contact-from-interaction');
+    assert.equal(brief.target.opportunityId, 'opp-from-interaction');
+    assert.equal(brief.sections.relationshipSummary.interactionCount, 1);
+    assert.deepEqual(brief.sourceRefs.relationshipInteractionIds, [
+      started.interviewId,
+    ]);
+    assert.ok(brief.sections.buyingSignals.length >= 1);
+    assert.ok(brief.sections.commitmentsAndNextSteps.length >= 1);
+    assert.ok(ACTION_TYPES.includes(brief.sections.suggestedNextAction.actionType));
+    assert.equal(brief.autonomousExecution, false);
+    assert.ok(snapshotCalls >= 1);
+    assert.ok(!brief.caveats.includes('target_not_matched_to_company_record'));
+  });
+
+  it('marks companyIntelligence unknown when interaction has no company_id', async () => {
+    const store = createMemoryStore();
+    const opts = { store };
+    const started = await startRelationshipInterview(
+      {
+        type: 'discovery_call',
+        // intentionally no companyId / contactId / opportunityId
+        clientId: 1,
+        notes:
+          'Orphan discovery. Owner is interested and ready. Next step: schedule walkthrough Friday. Goal is reliable coverage.',
+      },
+      opts
+    );
+    await summarizeRelationshipInterview(started.interviewId, opts);
+    await commitRelationshipInterview(started.interviewId, opts);
+
+    let snapshotCalls = 0;
+    const brief = await getProspectOperatingBrief({
+      relationshipInteractionId: started.interviewId,
+      store,
+      loadCompanySnapshot: async () => {
+        snapshotCalls += 1;
+        return { found: false };
+      },
+      marketBriefingService: fakeMarketService(),
+    });
+
+    assert.equal(brief.readiness.companyIntelligence, 'unknown');
+    assert.ok(brief.caveats.includes('target_not_matched_to_company_record'));
+    assert.equal(brief.target.companyId, null);
+    assert.equal(brief.target.relationshipInteractionId, started.interviewId);
+    assert.equal(brief.sections.relationshipSummary.interactionCount, 1);
+    assert.ok(
+      brief.sections.buyingSignals.length >= 1 ||
+        brief.sections.commitmentsAndNextSteps.length >= 1
+    );
+    assert.ok(brief.sections.marketContext.topCtas.length >= 1);
+    assert.equal(brief.sections.suggestedNextAction.actionType, 'schedule_walkthrough');
+    assert.equal(brief.autonomousExecution, false);
+    assert.equal(snapshotCalls, 0);
+  });
+
+  it('rejects non-committed relationshipInteractionId', async () => {
+    const store = createMemoryStore();
+    const opts = { store };
+    const started = await startRelationshipInterview(
+      {
+        type: 'discovery_call',
+        companyId: 'co-draft',
+        notes:
+          'Draft notes with enough detail. Owner interested. Next step send proposal. Pain staffing.',
+      },
+      opts
+    );
+    await summarizeRelationshipInterview(started.interviewId, opts);
+
+    await assert.rejects(
+      () =>
+        getProspectOperatingBrief({
+          relationshipInteractionId: started.interviewId,
+          store,
+          loadCompanySnapshot: async () => ({ found: false }),
+          marketBriefingService: fakeMarketService(),
+        }),
+      (err) =>
+        err instanceof ProspectOperatingBriefError &&
+        err.code === 'relationship_interaction_not_committed'
+    );
+  });
 });

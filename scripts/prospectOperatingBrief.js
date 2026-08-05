@@ -5,6 +5,7 @@
  *
  *   npm run prospect:brief -- --company-id=...
  *   npm run prospect:brief -- --prospect-id=... --json
+ *   npm run prospect:brief -- --relationship-interaction-id=...
  *   npm run prospect:brief -- --company-id=... --days=30
  */
 
@@ -26,6 +27,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     prospectId: null,
     opportunityId: null,
     contactId: null,
+    relationshipInteractionId: null,
     includeMarketContext: true,
     includeRelationshipContext: true,
   };
@@ -67,6 +69,12 @@ function parseArgs(argv = process.argv.slice(2)) {
       options.contactId = arg.slice('--contact-id='.length);
       continue;
     }
+    if (arg.startsWith('--relationship-interaction-id=')) {
+      options.relationshipInteractionId = arg.slice(
+        '--relationship-interaction-id='.length
+      );
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
@@ -79,10 +87,11 @@ function parseArgs(argv = process.argv.slice(2)) {
     !options.companyId &&
     !options.prospectId &&
     !options.opportunityId &&
-    !options.contactId
+    !options.contactId &&
+    !options.relationshipInteractionId
   ) {
     throw new Error(
-      'At least one of --company-id, --prospect-id, --opportunity-id, or --contact-id is required'
+      'At least one of --company-id, --prospect-id, --opportunity-id, --contact-id, or --relationship-interaction-id is required'
     );
   }
 
@@ -96,15 +105,16 @@ Usage:
   npm run prospect:brief -- [options]
 
 Options:
-  --company-id=ID        CRM / soft company id
-  --prospect-id=ID       Prospect id
-  --opportunity-id=ID    Opportunity id (soft or CRM)
-  --contact-id=ID        Contact / soft contact id
-  --days=30              Market corpus lookback window
-  --json                 Print full JSON brief (default: human-readable text)
-  --no-market            Skip market intelligence context
-  --no-relationship      Skip relationship intelligence context
-  --help                 Show this help
+  --company-id=ID                      CRM / soft company id
+  --prospect-id=ID                     Prospect id
+  --opportunity-id=ID                  Opportunity id (soft or CRM)
+  --contact-id=ID                      Contact / soft contact id
+  --relationship-interaction-id=ID     Committed relationship interaction id
+  --days=30                            Market corpus lookback window
+  --json                               Print full JSON brief (default: human-readable text)
+  --no-market                          Skip market intelligence context
+  --no-relationship                    Skip relationship intelligence context
+  --help                               Show this help
 
 Read-only synthesis for Jake. isEvidence=false. No outbound email, CRM
 mutation, Composer generation, or autonomous Max execution.
@@ -124,6 +134,7 @@ async function main(argv = process.argv.slice(2), db = pool) {
     prospectId: options.prospectId || undefined,
     opportunityId: options.opportunityId || undefined,
     contactId: options.contactId || undefined,
+    relationshipInteractionId: options.relationshipInteractionId || undefined,
     days: options.days,
     includeMarketContext: options.includeMarketContext,
     includeRelationshipContext: options.includeRelationshipContext,

@@ -20,6 +20,8 @@ async function getProspectOperatingBrief(context = {}) {
     prospectId: context.prospectId,
     opportunityId: context.opportunityId,
     contactId: context.contactId,
+    relationshipInteractionId:
+      context.relationshipInteractionId || context.interactionId,
     clientId: context.clientId,
     days: context.days,
     includeMarketContext: context.includeMarketContext,
