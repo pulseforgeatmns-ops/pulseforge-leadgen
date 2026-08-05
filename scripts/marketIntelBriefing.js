@@ -29,6 +29,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     companyId: null,
     since: null,
     until: null,
+    includeHeadlines: false,
   };
 
   for (const arg of argv) {
@@ -38,6 +39,10 @@ function parseArgs(argv = process.argv.slice(2)) {
     }
     if (arg === '--help' || arg === '-h') {
       options.help = true;
+      continue;
+    }
+    if (arg === '--include-headlines') {
+      options.includeHeadlines = true;
       continue;
     }
     if (arg.startsWith('--days=')) {
@@ -91,10 +96,12 @@ Options:
   --company-id=UUID      Filter to one market company
   --since=ISO            Explicit window start (overrides days when set with --until)
   --until=ISO            Explicit window end
+  --include-headlines    Include raw headline patterns as a separate section
   --help                 Show this help
 
 Read-only synthesis. isEvidence=false. No scoring, recommendations, CRM writes,
-or Max side effects.
+or Max side effects. CTA image/social/footer/tracking URLs are filtered in
+briefing output only; raw observations are unchanged.
 `);
 }
 
@@ -113,6 +120,7 @@ async function main(argv = process.argv.slice(2), db = pool) {
     companyId: options.companyId || undefined,
     since: options.since || undefined,
     until: options.until || undefined,
+    includeHeadlines: options.includeHeadlines,
   });
 
   if (options.json) {

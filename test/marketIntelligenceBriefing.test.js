@@ -232,6 +232,31 @@ function buildMockPool({ empty = false } = {}) {
         };
       }
 
+      // Raw CTA rows for briefing normalize/re-aggregate
+      if (
+        text.includes("o.field = 'cta'") &&
+        !text.includes('GROUP BY') &&
+        text.includes('o.value_json')
+      ) {
+        const hasCompany = text.includes('e.company_id = $');
+        const hasIntent = text.includes('e.import_intent = $');
+        const filtered = observations.filter((o) => {
+          if (o.field !== 'cta') return false;
+          return matchesFilters(o, params, hasCompany, hasIntent);
+        });
+        return {
+          rows: filtered.map((o) => ({
+            id: o.id,
+            value_text: o.value_text,
+            value_json: {},
+            evidence_quote: o.value_text,
+            email_id: o.email_id,
+            received_at: o.received_at,
+            company_name: o.company_name,
+          })),
+        };
+      }
+
       // company cadence
       if (
         text.includes('AS company_name') &&
@@ -325,7 +350,7 @@ function buildMockPool({ empty = false } = {}) {
         };
       }
 
-      // pattern aggregates (offers/ctas/themes)
+      // pattern aggregates (offers/themes)
       if (
         text.includes('FROM market_observations o') &&
         text.includes('GROUP BY') &&
@@ -369,6 +394,7 @@ function buildMockPool({ empty = false } = {}) {
             groups.set(key, {
               label: o.value_text,
               theme: key,
+              field: o.field,
               count: 0,
               companies: new Set(),
               latest_observed_at: o.received_at,
@@ -390,6 +416,7 @@ function buildMockPool({ empty = false } = {}) {
           .map((g) => ({
             label: g.label,
             theme: g.theme,
+            field: g.field,
             count: g.count,
             companies: [...g.companies],
             latest_observed_at: g.latest_observed_at,
@@ -536,7 +563,7 @@ describe('marketIntelligenceBriefing with mock pool', () => {
     assert.deepEqual(names, ['competitive_watch', 'general_market_messaging']);
   });
 
-  it('messaging themes aggregate positioning and related fields', async () => {
+  it('messaging themes prefer structured fields and keep headlines optional', async () => {
     const pool = buildMockPool();
     const themes = await getMessagingThemes({
       pool,
@@ -544,6 +571,18 @@ describe('marketIntelligenceBriefing with mock pool', () => {
       until: fixedNow().toISOString(),
     });
     assert.ok(themes.items.some((t) => t.theme === 'positioning:outbound_automation'));
+    assert.equal(themes.items.some((t) => String(t.theme).startsWith('headline:')), false);
+    assert.equal(themes.includeHeadlines, false);
+
+    const withHeadlines = await getMessagingThemes({
+      pool,
+      days: 30,
+      until: fixedNow().toISOString(),
+      includeHeadlines: true,
+    });
+    assert.equal(withHeadlines.includeHeadlines, true);
+    // Fixture has no headline field; section should still be present/empty.
+    assert.ok(Array.isArray(withHeadlines.headlinePatterns));
   });
 
   it('recent changes returns caveats when contrast is thin', async () => {

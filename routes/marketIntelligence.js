@@ -61,6 +61,7 @@ function briefingQueryOptions(query = {}) {
     category: query.category || undefined,
     since: query.since || undefined,
     until: query.until || undefined,
+    includeHeadlines: query.includeHeadlines,
   };
 }
 
@@ -161,6 +162,8 @@ router.get('/api/v1/market-intel/themes', requireAdmin, async (req, res) => {
       kind: 'market_intelligence_themes',
       isEvidence: false,
       themes: result.items,
+      headlinePatterns: result.includeHeadlines ? result.headlinePatterns : undefined,
+      includeHeadlines: Boolean(result.includeHeadlines),
       internal: true,
       observationalOnly: true,
     });

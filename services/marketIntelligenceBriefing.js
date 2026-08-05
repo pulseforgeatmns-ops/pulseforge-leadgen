@@ -14,14 +14,28 @@ const {
   getCompanyCampaignTimeline,
   diffTimelineField,
 } = require('./marketIntelligenceQuery');
+const {
+  STRUCTURED_THEME_FIELDS,
+  HEADLINE_THEME_FIELDS,
+  aggregateNormalizedCtas,
+  sanitizeTimelineForBriefing,
+} = require('../utils/marketIntelBriefingNormalize');
 
 const DEFAULT_DAYS = 30;
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 100;
 const EXAMPLE_REF_CAP = 5;
+const CTA_ROW_CAP = 2500;
 const CHANGE_FIELDS = ['cta', 'offer', 'positioning'];
-const THEME_FIELDS = ['positioning', 'urgency', 'social_proof', 'headline', 'guarantee'];
+/** @deprecated Prefer STRUCTURED_THEME_FIELDS; kept for export compatibility. */
+const THEME_FIELDS = [...STRUCTURED_THEME_FIELDS, ...HEADLINE_THEME_FIELDS];
 const MIN_CHANGE_CONFIDENCE_SAMPLES = 2;
+
+function parseTruthy(value) {
+  if (value === true || value === 1) return true;
+  const s = String(value == null ? '' : value).trim().toLowerCase();
+  return s === '1' || s === 'true' || s === 'yes';
+}
 
 function clampLimit(limit, fallback = DEFAULT_LIMIT) {
   const n = Number(limit);
@@ -234,14 +248,53 @@ async function getTopOffers(options = {}) {
   }));
 }
 
+/**
+ * Fetch raw CTA observation rows for briefing-only normalize/re-aggregate.
+ * Does not mutate stored observations.
+ */
+async function fetchRawCtaRows(options = {}) {
+  const pool = options.pool || defaultPool;
+  const { where, params, nextParam } = buildEmailWindowFilters(options);
+  const queryParams = params.concat([CTA_ROW_CAP]);
+
+  const result = await pool.query(
+    `SELECT
+       o.id,
+       o.value_text,
+       o.value_json,
+       o.evidence_quote,
+       o.email_id,
+       e.received_at,
+       c.name AS company_name
+     FROM market_observations o
+     JOIN market_emails e ON e.id = o.email_id
+     JOIN market_companies c ON c.id = o.company_id
+     WHERE ${where.join(' AND ')}
+       AND o.field = 'cta'
+       AND o.value_text IS NOT NULL
+       AND TRIM(o.value_text) <> ''
+       AND LOWER(TRIM(o.value_text)) <> 'none'
+     ORDER BY e.received_at DESC, o.extracted_at DESC
+     LIMIT $${nextParam}`,
+    queryParams
+  );
+  return result.rows;
+}
+
 async function getTopCtas(options = {}) {
-  const { items } = await aggregateObservationField('cta', options);
+  const limit = clampLimit(options.limit);
+  const rows = await fetchRawCtaRows(options);
+  const { items, excluded } = aggregateNormalizedCtas(rows, { limit });
   return items.map((item) => ({
-    cta: item.label,
+    cta: item.cta,
     count: item.count,
     companies: item.companies,
     latestObservedAt: item.latestObservedAt,
     exampleObservationIds: item.exampleObservationIds,
+    ctaQuality: item.ctaQuality,
+    ...(options.includeExcludedMeta
+      ? { excludedSample: excluded.slice(0, 5) }
+      : {}),
   }));
 }
 
@@ -283,14 +336,15 @@ async function getCompanyCadence(options = {}) {
   }));
 }
 
-async function getMessagingThemes(options = {}) {
+async function aggregateThemeFields(fields, options = {}) {
   const pool = options.pool || defaultPool;
   const limit = clampLimit(options.limit);
   const { where, params, nextParam, window } = buildEmailWindowFilters(options);
   const category = options.category ? String(options.category).trim() : null;
+  const fieldList = Array.isArray(fields) && fields.length ? fields : STRUCTURED_THEME_FIELDS;
 
   const filterParams = params.slice();
-  filterParams.push(THEME_FIELDS);
+  filterParams.push(fieldList);
   const fieldsIdx = nextParam;
   let categoryClause = '';
   if (category) {
@@ -299,7 +353,6 @@ async function getMessagingThemes(options = {}) {
   }
   filterParams.push(limit);
 
-  // Theme axis: category + field when category-scoped; otherwise field:value.
   const themeExpr = category
     ? `o.category || ':' || o.field || ':' || o.value_text`
     : `o.field || ':' || o.value_text`;
@@ -307,6 +360,7 @@ async function getMessagingThemes(options = {}) {
   const result = await pool.query(
     `SELECT
        ${themeExpr} AS theme,
+       o.field AS field,
        COUNT(*)::int AS count,
        ARRAY_AGG(DISTINCT c.name) FILTER (
          WHERE c.name IS NOT NULL AND COALESCE(c.is_unknown, FALSE) = FALSE
@@ -322,7 +376,7 @@ async function getMessagingThemes(options = {}) {
        AND TRIM(o.value_text) <> ''
        AND LOWER(TRIM(o.value_text)) <> 'none'
        ${categoryClause}
-     GROUP BY 1
+     GROUP BY 1, o.field
      ORDER BY COUNT(*) DESC, theme ASC
      LIMIT $${filterParams.length}`,
     filterParams
@@ -332,10 +386,33 @@ async function getMessagingThemes(options = {}) {
     window,
     items: result.rows.map((row) => ({
       theme: row.theme,
+      field: row.field,
+      kind: HEADLINE_THEME_FIELDS.includes(row.field) ? 'headline' : 'structured',
       count: Number(row.count || 0),
       companies: normalizeCompanies(row.companies),
       exampleObservationIds: uniqStrings(row.example_observation_ids),
     })),
+  };
+}
+
+/**
+ * Structured messaging themes only by default (positioning/urgency/etc).
+ * Pass includeHeadlines=true to also return headlinePatterns.
+ */
+async function getMessagingThemes(options = {}) {
+  const includeHeadlines = parseTruthy(options.includeHeadlines);
+  const structured = await aggregateThemeFields(STRUCTURED_THEME_FIELDS, options);
+  let headlinePatterns = [];
+  if (includeHeadlines) {
+    const headlines = await aggregateThemeFields(HEADLINE_THEME_FIELDS, options);
+    headlinePatterns = headlines.items;
+  }
+
+  return {
+    window: structured.window,
+    items: structured.items,
+    headlinePatterns,
+    includeHeadlines,
   };
 }
 
@@ -429,11 +506,15 @@ async function getRecentMessagingChanges(options = {}) {
       pool,
       limit: 100,
     });
-    const inWindow = timeline.filter((t) => {
+    // Briefing-only: drop image/social/footer/unsubscribe CTAs before change heuristics.
+    const sanitizedTimeline = sanitizeTimelineForBriefing(timeline);
+    const inWindow = sanitizedTimeline.filter((t) => {
       const at = new Date(t.receivedAt);
       return at >= window.sinceDate && at <= window.untilDate;
     });
-    const split = midpointSplit(inWindow.length >= MIN_CHANGE_CONFIDENCE_SAMPLES ? inWindow : timeline);
+    const split = midpointSplit(
+      inWindow.length >= MIN_CHANGE_CONFIDENCE_SAMPLES ? inWindow : sanitizedTimeline
+    );
     if (!split) continue;
 
     const supporting = [];
@@ -444,7 +525,13 @@ async function getRecentMessagingChanges(options = {}) {
       const recentMode = modeFromTouches(split.recent, prop);
       if (!prevMode || !recentMode || prevMode === recentMode) continue;
 
-      const diffs = diffTimelineField(split.previous.concat(split.recent), field);
+      // For CTA changes, both sides must be included (non-null after sanitize).
+      if (field === 'cta' && (!prevMode || !recentMode)) continue;
+
+      const diffs = diffTimelineField(split.previous.concat(split.recent), field).filter((d) => {
+        if (field !== 'cta') return true;
+        return d.before != null && d.after != null && String(d.before) !== '' && String(d.after) !== '';
+      });
       for (const d of diffs) {
         if (d.toEmailId) supporting.push(d.toEmailId);
         if (d.fromEmailId) supporting.push(d.fromEmailId);
@@ -540,10 +627,14 @@ function buildCaveats({ corpus, sections }) {
     caveats.push('thin_offers: no offer observations matched the selected filters');
   }
   if (!(sections.topCtas || []).length && corpus.observationCount > 0) {
-    caveats.push('thin_ctas: no CTA observations matched the selected filters');
+    caveats.push(
+      'thin_ctas: no usable CTA observations after excluding image/social/footer/tracking links'
+    );
   }
   if (!(sections.messagingThemes || []).length && corpus.observationCount > 0) {
-    caveats.push('thin_themes: no messaging theme observations matched the selected filters');
+    caveats.push(
+      'thin_themes: no structured messaging themes matched the selected filters (headlines excluded by default)'
+    );
   }
   if (!(sections.companyCadence || []).length && corpus.emailCount > 0) {
     caveats.push('thin_cadence: no known companies with email activity in the selected window');
@@ -576,7 +667,7 @@ async function getMarketIntelligenceBriefing(options = {}) {
   ] = await Promise.all([
     getTopOffers(opts),
     getTopCtas(opts),
-    getMessagingThemes(opts).then((r) => r.items),
+    getMessagingThemes(opts),
     getCompanyCadence(opts),
     getRecentMessagingChanges(opts),
     getObservationsByIntent(opts),
@@ -585,16 +676,27 @@ async function getMarketIntelligenceBriefing(options = {}) {
   const sections = {
     topOffers,
     topCtas,
-    messagingThemes: messagingThemesResult,
+    messagingThemes: messagingThemesResult.items,
     companyCadence,
     recentChanges: recentChangesResult.items,
     observationsByIntent,
   };
 
+  if (parseTruthy(options.includeHeadlines)) {
+    sections.headlinePatterns = messagingThemesResult.headlinePatterns || [];
+  }
+
   const caveats = [
     ...buildCaveats({ corpus, sections }),
     ...(recentChangesResult.caveats || []),
+    'cta_normalized: briefing CTAs exclude image/social/footer/unsubscribe/tracking URLs; raw observations unchanged',
   ];
+
+  if (!parseTruthy(options.includeHeadlines)) {
+    caveats.push(
+      'headlines_omitted: pass includeHeadlines=true to include raw headline patterns separately'
+    );
+  }
 
   return {
     ok: true,
@@ -667,6 +769,13 @@ function formatBriefingReport(briefing) {
     return `${item.theme} (${item.count}; ${companies})`;
   });
 
+  if (Array.isArray(s.headlinePatterns)) {
+    listSection('Headline Patterns', s.headlinePatterns, (item) => {
+      const companies = (item.companies || []).slice(0, 3).join(', ') || 'n/a';
+      return `${item.theme} (${item.count}; ${companies})`;
+    });
+  }
+
   listSection('Most Active Companies', s.companyCadence, (item) => {
     return `${item.companyName} — ${item.emailCount} emails, ${item.observationCount} observations`;
   });
@@ -693,6 +802,8 @@ module.exports = {
   DEFAULT_DAYS,
   DEFAULT_LIMIT,
   THEME_FIELDS,
+  STRUCTURED_THEME_FIELDS,
+  HEADLINE_THEME_FIELDS,
   CHANGE_FIELDS,
   clampDays,
   clampLimit,
@@ -705,5 +816,6 @@ module.exports = {
   getRecentMessagingChanges,
   getTopCtas,
   getTopOffers,
+  parseTruthy,
   resolveWindow,
 };
