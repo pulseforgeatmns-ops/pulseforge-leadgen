@@ -455,4 +455,88 @@ describe('SPEC-074 prospectOperatingBrief', () => {
         err.code === 'relationship_interaction_not_committed'
     );
   });
+
+  it('AS Cleaning brief synthesizes buying signals from raw_summary fallback', async () => {
+    const AS_CLEANING_RAW =
+      'Aji is the owner of AS Cleaning Co. The company is less than 6 months old, focused on commercial cleaning clients, and currently doing about ,500 in monthly recurring revenue. Aji expressed interest after the discovery call, asked for more information, and received a personalized 2-page overview for AS Cleaning Co. Need to follow up to confirm interest, clarify target client type, budget/timeline, decision process, and whether they want help generating commercial cleaning leads.';
+
+    const store = createMemoryStore();
+    // Simulate a committed interaction whose stored insights missed commercial kinds
+    // (legacy heuristics) but still have the raw_summary text.
+    const started = await startRelationshipInterview(
+      {
+        type: 'discovery_call',
+        companyId: 'co-as-cleaning',
+        contactId: 'aji',
+        clientId: 1,
+        notes: AS_CLEANING_RAW,
+      },
+      { store }
+    );
+    await summarizeRelationshipInterview(started.interviewId, { store });
+    await commitRelationshipInterview(started.interviewId, { store });
+
+    // Strip commercial kinds from stored insights to force brief fallback synthesis.
+    const row = await store.getInteraction(started.interviewId);
+    const legacyInsights = (await store.listInsights(started.interviewId))
+      .filter((i) =>
+        ['decision_maker', 'context'].includes(i.kind)
+      )
+      .map((i) => ({
+        kind: i.kind,
+        label: i.label,
+        value: i.value,
+        confidence: i.confidence,
+        sourceQuote: i.source_quote,
+      }));
+    assert.ok(row.raw_summary && String(row.raw_summary).includes('expressed interest'));
+    await store.replaceInsights(started.interviewId, legacyInsights);
+
+    const brief = await getProspectOperatingBrief({
+      relationshipInteractionId: started.interviewId,
+      store,
+      loadCompanySnapshot: async () =>
+        torontoSnapshot({
+          companyId: 'co-as-cleaning',
+          companyName: 'AS Cleaning Co.',
+          contactName: 'Aji',
+        }),
+      marketBriefingService: fakeMarketService(),
+    });
+
+    assert.equal(brief.ok, true);
+    assert.ok(brief.sections.buyingSignals.length >= 1);
+    assert.ok(
+      brief.sections.buyingSignals.some((i) =>
+        /expressed interest|asked for more info/i.test(String(i.value || ''))
+      )
+    );
+    assert.ok(brief.sections.commitmentsAndNextSteps.length >= 1);
+    assert.ok(
+      brief.sections.commitmentsAndNextSteps.some((i) =>
+        /overview|follow-up|follow up/i.test(String(i.value || ''))
+      )
+    );
+    assert.ok(
+      brief.sections.openQuestions.some((i) =>
+        /budget|timeline|decision process|lead-gen|client type|help generating/i.test(
+          String(i.value || '')
+        )
+      )
+    );
+    assert.ok(
+      brief.sections.decisionProcess.some((i) => /owner|aji/i.test(String(i.value || ''))) ||
+        brief.sections.painsAndGoals.some((i) => /commercial cleaning/i.test(String(i.value || '')))
+    );
+    assert.equal(
+      brief.sections.relationshipSummary.rawSummaryFallbackApplied,
+      true
+    );
+    assert.ok(
+      brief.caveats.some((c) => c.includes('relationship_raw_summary_fallback'))
+    );
+    // Stored raw_summary / observations remain the source text — brief does not rewrite them.
+    const stored = await store.getInteraction(started.interviewId);
+    assert.equal(String(stored.raw_summary).trim(), AS_CLEANING_RAW.trim());
+  });
 });

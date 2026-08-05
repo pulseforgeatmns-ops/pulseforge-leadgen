@@ -350,27 +350,91 @@ function buildRelationshipFromPayloads(payloads) {
     }
   }
 
-  const byKind = (kinds) =>
-    allInsights
+  const byKind = (kinds, list = allInsights) =>
+    list
       .filter((i) => kinds.includes(i.kind))
       .map(({ _id, ...rest }) => rest);
 
   const summaries = payloads
     .map(({ payload: p }) => {
+      const structured =
+        (p.interaction && p.interaction.structuredSummary) ||
+        p.structuredSummary ||
+        {};
       const raw =
         (p.interaction && p.interaction.rawSummary) ||
         p.rawSummary ||
+        structured.rawSummary ||
+        structured.notes ||
+        structured.raw_summary ||
         null;
       return raw ? String(raw).trim() : null;
     })
     .filter(Boolean);
 
+  let insightsForSections = allInsights;
+  let fallbackApplied = false;
+
+  // Fallback synthesis from raw_summary when stored insights lack commercial
+  // buying / next-step kinds. Applies for companyId and relationshipInteractionId
+  // targets alike. Does not mutate stored Relationship Intelligence records.
+  const hasBuying = allInsights.some((i) => i.kind === 'buying_signal');
+  const hasCommitOrNext = allInsights.some((i) =>
+    ['next_step', 'commitment'].includes(i.kind)
+  );
+  if ((!hasBuying || !hasCommitOrNext) && summaries.length) {
+    const { extractInsightsFromNotes } = defaultRelationshipService();
+    const extracted = extractInsightsFromNotes(summaries.join('\n'));
+    const existingKeys = new Set(
+      allInsights.map(
+        (i) => `${i.kind}::${String(i.value || '').trim().toLowerCase()}`
+      )
+    );
+    const synthesized = [];
+    for (const insight of extracted.insights || []) {
+      if (
+        insight.kind === 'context' &&
+        String(insight.label || '') === 'Interaction notes'
+      ) {
+        continue;
+      }
+      const key = `${insight.kind}::${String(insight.value || '')
+        .trim()
+        .toLowerCase()}`;
+      if (existingKeys.has(key)) continue;
+
+      const fillsBuying = insight.kind === 'buying_signal' && !hasBuying;
+      const fillsCommit =
+        ['next_step', 'commitment'].includes(insight.kind) && !hasCommitOrNext;
+      const enrichMeta = [
+        'open_question',
+        'decision_maker',
+        'goal',
+        'budget',
+        'context',
+      ].includes(insight.kind);
+
+      if (!fillsBuying && !fillsCommit && !enrichMeta) continue;
+
+      existingKeys.add(key);
+      synthesized.push({
+        ...mapInsightItem(insight, null),
+        _id: null,
+        synthesizedFromRawSummary: true,
+      });
+    }
+    if (synthesized.length) {
+      insightsForSections = [...allInsights, ...synthesized];
+      fallbackApplied = true;
+    }
+  }
+
   return {
     interactionCount: payloads.length,
-    insights: allInsights.map(({ _id, ...rest }) => rest),
+    insights: insightsForSections.map(({ _id, ...rest }) => rest),
     relationshipSummary: {
       interactionCount: payloads.length,
-      insightCount: allInsights.length,
+      insightCount: insightsForSections.length,
       latestOccurredAt: payloads[0]?.payload?.interaction?.occurredAt || null,
       interactionTypes: uniq(
         payloads
@@ -393,19 +457,21 @@ function buildRelationshipFromPayloads(payloads) {
                 ) / payloads.length
               ).toFixed(3)
             ),
+      rawSummaryFallbackApplied: fallbackApplied,
     },
-    buyingSignals: byKind(['buying_signal']),
-    painsAndGoals: byKind(['pain', 'goal']),
-    objectionsAndRisks: byKind(['objection', 'risk']),
-    decisionProcess: byKind([
-      'decision_maker',
-      'stakeholder',
-      'timeline',
-      'budget',
-    ]),
-    commitmentsAndNextSteps: byKind(['next_step', 'commitment']),
-    openQuestions: byKind(['open_question']),
-    preferencesAndContext: byKind(['preference', 'context']),
+    buyingSignals: byKind(['buying_signal'], insightsForSections),
+    painsAndGoals: byKind(['pain', 'goal'], insightsForSections),
+    objectionsAndRisks: byKind(['objection', 'risk'], insightsForSections),
+    decisionProcess: byKind(
+      ['decision_maker', 'stakeholder', 'timeline', 'budget'],
+      insightsForSections
+    ),
+    commitmentsAndNextSteps: byKind(
+      ['next_step', 'commitment'],
+      insightsForSections
+    ),
+    openQuestions: byKind(['open_question'], insightsForSections),
+    preferencesAndContext: byKind(['preference', 'context'], insightsForSections),
     sourceRefs: {
       relationshipInteractionIds: uniq(interactionIds.filter(Boolean)),
       relationshipInsightIds: uniq(insightIds),
@@ -1001,6 +1067,15 @@ async function getProspectOperatingBrief(options = {}) {
           }`
         );
       }
+    }
+    if (
+      relationship &&
+      relationship.relationshipSummary &&
+      relationship.relationshipSummary.rawSummaryFallbackApplied
+    ) {
+      caveats.push(
+        'relationship_raw_summary_fallback: synthesized missing buying/next-step insights from raw_summary; stored observations unchanged'
+      );
     }
   } else {
     caveats.push('relationship_context_excluded_by_request');

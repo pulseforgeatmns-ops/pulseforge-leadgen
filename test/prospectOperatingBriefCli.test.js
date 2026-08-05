@@ -72,17 +72,7 @@ describe('prospectOperatingBrief CLI', () => {
     const original = console.log;
     console.log = (...args) => logs.push(args.join(' '));
 
-    // Patch service deps via pool-only path; empty CRM + empty RI + empty market.
-    // Inject by monkeypatching require cache is brittle — call main with pool and
-    // rely on empty results + caveats. For deterministic output, stub via env is
-    // unnecessary: empty DB rows still produce a valid brief envelope.
     try {
-      // Use a thin wrapper: require the service path through main's getProspectOperatingBrief
-      // by providing pool that returns empty for CRM, and let RI postgres path fail softly.
-      // Instead, invoke format path by temporarily replacing module internals via main's
-      // exported surface with a mocked getProspectOperatingBrief is not available.
-      // So we use parseArgs + direct service in sibling tests; here we verify CLI wiring
-      // with a pool that never writes.
       const jsonResult = await main(
         ['--json', '--company-id=co-missing', '--days=7', '--no-market', '--no-relationship'],
         fakePool
@@ -111,5 +101,99 @@ describe('prospectOperatingBrief CLI', () => {
       queries.every((sql) => !/\b(INSERT|UPDATE|DELETE|ALTER)\b/i.test(sql)),
       true
     );
+  });
+
+  it('CLI relationship-interaction-id path applies AS Cleaning raw_summary fallback', async () => {
+    const AS_CLEANING_RAW =
+      'Aji is the owner of AS Cleaning Co. The company is less than 6 months old, focused on commercial cleaning clients, and currently doing about ,500 in monthly recurring revenue. Aji expressed interest after the discovery call, asked for more information, and received a personalized 2-page overview for AS Cleaning Co. Need to follow up to confirm interest, clarify target client type, budget/timeline, decision process, and whether they want help generating commercial cleaning leads.';
+    const LIVE_ID = '7b304188-cfc7-48e1-a21f-ee9d266e1879';
+
+    assert.equal(
+      parseArgs([`--relationship-interaction-id=${LIVE_ID}`]).relationshipInteractionId,
+      LIVE_ID
+    );
+
+    const {
+      createMemoryStore,
+      startRelationshipInterview,
+      summarizeRelationshipInterview,
+      commitRelationshipInterview,
+    } = require('../services/relationshipIntelligenceInterview');
+
+    const store = createMemoryStore();
+    const started = await startRelationshipInterview(
+      {
+        type: 'discovery_call',
+        companyId: 'co-as-cleaning',
+        contactId: 'aji',
+        clientId: 1,
+        notes: AS_CLEANING_RAW,
+      },
+      { store }
+    );
+    await summarizeRelationshipInterview(started.interviewId, { store });
+    await commitRelationshipInterview(started.interviewId, { store });
+
+    // Legacy thin insights only — forces raw_summary fallback on the brief path.
+    const legacyInsights = (await store.listInsights(started.interviewId))
+      .filter((i) => ['decision_maker', 'context'].includes(i.kind))
+      .map((i) => ({
+        kind: i.kind,
+        label: i.label,
+        value: i.value,
+        confidence: i.confidence,
+        sourceQuote: i.source_quote,
+      }));
+    await store.replaceInsights(started.interviewId, legacyInsights);
+
+    const logs = [];
+    const original = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    try {
+      // Exact operator command shape (id may be any committed interaction):
+      // npm run prospect:brief -- --relationship-interaction-id=<id>
+      const brief = await main(
+        [`--relationship-interaction-id=${started.interviewId}`, '--no-market'],
+        { async query() { return { rows: [] }; } },
+        {
+          store,
+          loadCompanySnapshot: async () => ({
+            found: true,
+            companyId: 'co-as-cleaning',
+            companyName: 'AS Cleaning Co.',
+            contactName: 'Aji',
+            contactId: 'aji',
+            prospectId: 'aji',
+            doNotContact: false,
+          }),
+        }
+      );
+
+      assert.equal(brief.ok, true);
+      assert.equal(brief.target.relationshipInteractionId, started.interviewId);
+      assert.ok(brief.sections.buyingSignals.length >= 1, 'expected buying signals');
+      assert.ok(
+        brief.sections.commitmentsAndNextSteps.length >= 1,
+        'expected commitments/next steps'
+      );
+      assert.equal(
+        brief.sections.relationshipSummary.rawSummaryFallbackApplied,
+        true
+      );
+      assert.ok(
+        brief.caveats.some((c) => c.includes('relationship_raw_summary_fallback'))
+      );
+      const text = logs.join('\n');
+      assert.match(text, /Prospect Operating Brief/);
+      assert.match(text, /Buying Signals:/);
+      assert.match(text, /Commitments \/ Next Steps:/);
+      assert.match(text, /expressed interest|asked for more information/i);
+      assert.match(text, /overview|follow up|follow-up/i);
+      assert.match(text, /relationship_raw_summary_fallback/);
+      assert.equal(/\nBuying Signals:\n\(none\)/.test(text), false);
+      assert.equal(/\nCommitments \/ Next Steps:\n\(none\)/.test(text), false);
+    } finally {
+      console.log = original;
+    }
   });
 });

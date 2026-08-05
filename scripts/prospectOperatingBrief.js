@@ -121,15 +121,20 @@ mutation, Composer generation, or autonomous Max execution.
 `);
 }
 
-async function main(argv = process.argv.slice(2), db = pool) {
+async function main(argv = process.argv.slice(2), db = pool, deps = {}) {
   const options = parseArgs(argv);
   if (options.help) {
     printHelp();
     return { ok: true, help: true };
   }
 
-  const brief = await getProspectOperatingBrief({
+  const briefFn = deps.getProspectOperatingBrief || getProspectOperatingBrief;
+  const brief = await briefFn({
     pool: db,
+    store: deps.store,
+    loadCompanySnapshot: deps.loadCompanySnapshot,
+    marketBriefingService: deps.marketBriefingService,
+    relationshipService: deps.relationshipService,
     companyId: options.companyId || undefined,
     prospectId: options.prospectId || undefined,
     opportunityId: options.opportunityId || undefined,
