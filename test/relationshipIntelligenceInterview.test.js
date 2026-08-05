@@ -17,6 +17,7 @@ const {
   getInterview,
   listInteractions,
   getInteraction,
+  extractInsightsFromNotes,
 } = require('../services/relationshipIntelligenceInterview');
 
 function withStore() {
@@ -189,6 +190,41 @@ describe('relationshipIntelligenceInterview', () => {
     assert.equal(draft.isEvidence, true);
     assert.ok(draft.insights.some((i) => i.kind === 'context'));
     assert.ok(draft.insights.some((i) => ['pain', 'goal', 'objection', 'next_step', 'commitment'].includes(i.kind)));
+  });
+
+  it('AS Cleaning comma-separated notes extract buying signals and next steps', () => {
+    const AS_CLEANING_NOTES =
+      'Aji is the owner of AS Cleaning Co. The company is less than 6 months old, focused on commercial cleaning clients, and currently doing about ,500 in monthly recurring revenue. Aji expressed interest after the discovery call, asked for more information, and received a personalized 2-page overview for AS Cleaning Co. Need to follow up to confirm interest, clarify target client type, budget/timeline, decision process, and whether they want help generating commercial cleaning leads.';
+
+    const { insights } = extractInsightsFromNotes(AS_CLEANING_NOTES);
+    const kinds = insights.map((i) => i.kind);
+    const values = insights.map((i) => String(i.value || '').toLowerCase());
+
+    assert.ok(kinds.includes('buying_signal'));
+    assert.ok(values.some((v) => v.includes('expressed interest')));
+    assert.ok(values.some((v) => v.includes('asked for more information') || v.includes('asked for more info')));
+    assert.ok(kinds.includes('commitment'));
+    assert.ok(values.some((v) => v.includes('2-page overview') || v.includes('personalized')));
+    assert.ok(kinds.includes('next_step'));
+    assert.ok(values.some((v) => v.includes('follow-up') || v.includes('follow up')));
+    assert.ok(kinds.includes('open_question'));
+    assert.ok(values.some((v) => v.includes('budget') || v.includes('timeline')));
+    assert.ok(values.some((v) => v.includes('decision process') || v.includes('target client')));
+    assert.ok(kinds.includes('decision_maker'));
+    assert.ok(values.some((v) => v.includes('aji') && v.includes('owner')));
+    assert.ok(kinds.includes('goal'));
+    assert.ok(values.some((v) => v.includes('commercial cleaning')));
+    assert.ok(kinds.includes('budget') || kinds.includes('context'));
+    assert.ok(values.some((v) => v.includes('less than 6 months') || v.includes('monthly recurring')));
+    // Raw notes preserved as context; extractor does not rewrite the source string.
+    assert.ok(
+      insights.some(
+        (i) =>
+          i.kind === 'context' &&
+          String(i.value).includes('expressed interest') &&
+          String(i.value).includes('AS Cleaning Co')
+      )
+    );
   });
 
   it('low-information notes produce caveats and open questions', async () => {
