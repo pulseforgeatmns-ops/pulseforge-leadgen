@@ -102,8 +102,9 @@ Interview id equals draft interaction id. Turn state lives in `interview_state J
 3. Interview service (state machine + notes heuristics)
 4. Admin routes + server mount
 5. CLI + npm script
-6. Unit + route smoke tests
-7. CURRENT_STATE / CHANGELOG
+6. Readiness/acceptance report (`relationship:intel:readiness`, GET readiness, `--accept` fixture)
+7. Unit + route smoke tests
+8. CURRENT_STATE / CHANGELOG
 
 ## Migration Strategy
 
@@ -114,6 +115,7 @@ Interview id equals draft interaction id. Turn state lives in `interview_state J
 ## Testing
 
 - Unit: start, answer, summarize, refuse commit pre-summary, commit, notes draft, low-info caveats, insight kind validation, CRM SQL allowlist
+- Readiness: blocked/partial/ready derivation, acceptance fixture (notes→summarize→commit), no CRM writes, CLI/route wiring
 - Route: auth gates, payload validation, endpoint registration
 
 ## Acceptance Criteria
@@ -126,6 +128,8 @@ Interview id equals draft interaction id. Turn state lives in `interview_state J
 - [x] Tests pass
 - [x] No unrelated CRM/opportunity writes
 - [x] Flow feels like a debrief (one question at a time / notes), not a CRM form
+- [x] Readiness report covers tables, enums, counts, commit exercise, CRM mutation detection
+- [x] `--accept` creates a safe committed fixture and verifies queryability
 
 ## Future Work
 
