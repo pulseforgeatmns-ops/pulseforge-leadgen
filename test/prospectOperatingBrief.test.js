@@ -455,4 +455,190 @@ describe('SPEC-074 prospectOperatingBrief', () => {
         err.code === 'relationship_interaction_not_committed'
     );
   });
+
+  it('AS Cleaning brief synthesizes buying signals from raw_summary fallback', async () => {
+    const AS_CLEANING_RAW =
+      'Aji is the owner of AS Cleaning Co. The company is less than 6 months old, focused on commercial cleaning clients, and currently doing about ,500 in monthly recurring revenue. Aji expressed interest after the discovery call, asked for more information, and received a personalized 2-page overview for AS Cleaning Co. Need to follow up to confirm interest, clarify target client type, budget/timeline, decision process, and whether they want help generating commercial cleaning leads.';
+
+    const store = createMemoryStore();
+    // Simulate a committed interaction whose stored insights missed commercial kinds
+    // (legacy heuristics) but still have the raw_summary text.
+    const started = await startRelationshipInterview(
+      {
+        type: 'discovery_call',
+        companyId: 'co-as-cleaning',
+        contactId: 'aji',
+        clientId: 1,
+        notes: AS_CLEANING_RAW,
+      },
+      { store }
+    );
+    await summarizeRelationshipInterview(started.interviewId, { store });
+    await commitRelationshipInterview(started.interviewId, { store });
+
+    // Strip commercial kinds from stored insights to force brief fallback synthesis.
+    const row = await store.getInteraction(started.interviewId);
+    const legacyInsights = (await store.listInsights(started.interviewId))
+      .filter((i) =>
+        ['decision_maker', 'context'].includes(i.kind)
+      )
+      .map((i) => ({
+        kind: i.kind,
+        label: i.label,
+        value: i.value,
+        confidence: i.confidence,
+        sourceQuote: i.source_quote,
+      }));
+    assert.ok(row.raw_summary && String(row.raw_summary).includes('expressed interest'));
+    await store.replaceInsights(started.interviewId, legacyInsights);
+
+    const brief = await getProspectOperatingBrief({
+      relationshipInteractionId: started.interviewId,
+      store,
+      loadCompanySnapshot: async () =>
+        torontoSnapshot({
+          companyId: 'co-as-cleaning',
+          companyName: 'AS Cleaning Co.',
+          contactName: 'Aji',
+        }),
+      marketBriefingService: fakeMarketService(),
+    });
+
+    assert.equal(brief.ok, true);
+    assert.ok(brief.sections.buyingSignals.length >= 1);
+    assert.ok(
+      brief.sections.buyingSignals.some((i) =>
+        /expressed interest|asked for more info/i.test(String(i.value || ''))
+      )
+    );
+    assert.ok(brief.sections.commitmentsAndNextSteps.length >= 1);
+    assert.ok(
+      brief.sections.commitmentsAndNextSteps.some((i) =>
+        /overview|follow-up|follow up/i.test(String(i.value || ''))
+      )
+    );
+    assert.ok(
+      brief.sections.openQuestions.some((i) =>
+        /budget|timeline|decision process|lead-gen|client type|help generating/i.test(
+          String(i.value || '')
+        )
+      )
+    );
+    assert.ok(
+      brief.sections.decisionProcess.some((i) => /owner|aji/i.test(String(i.value || ''))) ||
+        brief.sections.painsAndGoals.some((i) => /commercial cleaning/i.test(String(i.value || '')))
+    );
+    assert.equal(
+      brief.sections.relationshipSummary.rawSummaryFallbackApplied,
+      true
+    );
+    assert.ok(
+      brief.caveats.some((c) => c.includes('relationship_raw_summary_fallback'))
+    );
+    // Stored raw_summary / observations remain the source text — brief does not rewrite them.
+    const stored = await store.getInteraction(started.interviewId);
+    assert.equal(String(stored.raw_summary).trim(), AS_CLEANING_RAW.trim());
+  });
+
+  it('AS Cleaning email-thread proposal stage yields high-priority seller next action', async () => {
+    const AS_CLEANING_EMAIL_THREAD =
+      'Follow-up / proposal review with Aji at AS Cleaning Co. Aji reviewed the proposal and asked detailed buying questions before moving forward. He liked the 30-day pilot idea and had final questions before moving forward. Next steps: send service agreement and schedule kickoff. Also awaiting his reply on one timing question.';
+
+    const store = createMemoryStore();
+    const started = await startRelationshipInterview(
+      {
+        type: 'proposal_review',
+        companyId: 'co-as-cleaning',
+        contactId: 'aji',
+        clientId: 1,
+        notes: AS_CLEANING_EMAIL_THREAD,
+      },
+      { store }
+    );
+    await summarizeRelationshipInterview(started.interviewId, { store });
+    await commitRelationshipInterview(started.interviewId, { store });
+
+    const brief = await getProspectOperatingBrief({
+      relationshipInteractionId: started.interviewId,
+      store,
+      loadCompanySnapshot: async () =>
+        torontoSnapshot({
+          companyId: 'co-as-cleaning',
+          companyName: 'AS Cleaning Co.',
+          contactName: 'Aji',
+        }),
+      marketBriefingService: fakeMarketService(),
+    });
+
+    assert.equal(brief.ok, true);
+    assert.equal(brief.target.relationshipInteractionId, started.interviewId);
+
+    const buyingValues = brief.sections.buyingSignals.map((i) =>
+      String(i.value || '').toLowerCase()
+    );
+    assert.ok(buyingValues.some((v) => v.includes('reviewed') && v.includes('proposal')));
+    assert.ok(
+      buyingValues.some((v) => v.includes('detailed buying questions') || v.includes('before moving forward'))
+    );
+    assert.ok(buyingValues.some((v) => v.includes('30-day pilot') || v.includes('pilot idea')));
+    assert.ok(
+      buyingValues.some((v) => v.includes('final questions') || v.includes('before moving forward'))
+    );
+
+    const nextValues = brief.sections.commitmentsAndNextSteps.map((i) =>
+      String(i.value || '').toLowerCase()
+    );
+    assert.ok(nextValues.some((v) => v.includes('service agreement')));
+    assert.ok(nextValues.some((v) => v.includes('kickoff')));
+
+    const action = brief.sections.suggestedNextAction;
+    assert.ok(
+      ['prepare_proposal', 'schedule_kickoff'].includes(action.actionType),
+      `expected prepare_proposal or schedule_kickoff, got ${action.actionType}`
+    );
+    assert.equal(action.priority, 'high');
+    assert.notEqual(action.actionType, 'wait_for_reply');
+  });
+
+  it('does not wait_for_reply when seller-side next steps remain', () => {
+    const action = suggestNextAction({
+      snapshot: torontoSnapshot(),
+      relationship: {
+        interactionCount: 1,
+        buyingSignals: [
+          { kind: 'buying_signal', value: 'liked the 30-day pilot idea' },
+        ],
+        commitmentsAndNextSteps: [
+          { kind: 'commitment', value: 'send service agreement' },
+          { kind: 'next_step', value: 'awaiting his reply on timing' },
+        ],
+        openQuestions: [],
+        objectionsAndRisks: [],
+      },
+      caveats: [],
+    });
+    assert.equal(action.actionType, 'prepare_proposal');
+    assert.equal(action.priority, 'high');
+    assert.notEqual(action.actionType, 'wait_for_reply');
+  });
+
+  it('suggestNextAction schedules kickoff when recorded', () => {
+    const action = suggestNextAction({
+      snapshot: torontoSnapshot(),
+      relationship: {
+        interactionCount: 1,
+        buyingSignals: [
+          { kind: 'buying_signal', value: 'final questions before moving forward' },
+        ],
+        commitmentsAndNextSteps: [
+          { kind: 'next_step', value: 'schedule kickoff' },
+        ],
+        openQuestions: [],
+        objectionsAndRisks: [],
+      },
+      caveats: [],
+    });
+    assert.equal(action.actionType, 'schedule_kickoff');
+    assert.equal(action.priority, 'high');
+  });
 });

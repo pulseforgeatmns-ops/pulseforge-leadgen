@@ -281,6 +281,26 @@ function advanceAfterAnswer(state, questionId, message) {
 }
 
 /**
+ * Split notes into clauses so comma-separated debriefs yield multiple insights.
+ * Does not mutate the original notes / raw_summary.
+ * @param {string} text
+ * @returns {string[]}
+ */
+function splitNotesClauses(text) {
+  return String(text || '')
+    .split(/(?<=[.!?])\s+|\n+|;\s*|,\s+|\s+&\s+|\s+and\s+/i)
+    .map((s) =>
+      s
+        .trim()
+        .replace(/^[-•*]+\s*/, '')
+        .replace(/^(?:and|&)\s+/i, '')
+        .replace(/[.!?]+$/g, '')
+        .trim()
+    )
+    .filter((s) => s.length > 1);
+}
+
+/**
  * Heuristic notes → insights.
  * @param {string} notes
  */
@@ -288,32 +308,88 @@ function extractInsightsFromNotes(notes) {
   const text = String(notes || '').trim();
   const insights = [];
   const caveats = [];
-  const sentences = text
-    .split(/(?<=[.!?])\s+|\n+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const clauses = splitNotesClauses(text);
 
+  // Order matters: more specific commercial phrases before generic tokens
+  // like "owner", "budget", or "timeline".
   const patterns = [
+    {
+      re: /\bexpressed interest\b|\basked for more (?:info|information|details)\b|\basked detailed buying questions\b|\breviewed (?:the\s+)?proposal\b|\bliked (?:the\s+)?(?:\d+[- ]day\s+)?pilot\b|\bfinal questions before moving forward\b|\bbefore moving forward\b|\bwants? more (?:info|information|details)\b|\b(interested|excited|ready to (?:move|buy|proceed)|let'?s do|sounds good)\b/i,
+      kind: 'buying_signal',
+      label: 'Buying signal',
+    },
+    {
+      re: /\b(?:send|prepare|draft|share|deliver)\b[\s\w-]*\b(?:service agreement|msa|contract|sow)\b|\bservice agreement\b/i,
+      kind: 'commitment',
+      label: 'Commitment',
+    },
+    {
+      re: /\b(?:schedule|book)\b[\s\w-]*\bkickoff\b|\bkickoff\b/i,
+      kind: 'next_step',
+      label: 'Next step',
+    },
+    {
+      re: /\b(?:received|sent|delivered|shared)\b[\s\w-]*\b(?:personalized\s+)?(?:\d+[- ]page\s+)?(?:overview|proposal|one[- ]pager|deck|brief)\b/i,
+      kind: 'commitment',
+      label: 'Commitment',
+    },
+    {
+      re: /\b(?:need(?:s)?(?:\s+to)?\s+follow[- ]?up|follow[- ]?up(?:\s+to|\s+needed|\s+required)?|next step|schedule|book|send service agreement)\b/i,
+      kind: 'next_step',
+      label: 'Next step',
+    },
+    {
+      re: /^(?:clarify\s+|confirm\s+|open:\s*)?(?:budget(?:\s*\/\s*timeline)?|timeline|decision(?:\s+process)?|target client(?:\s+type)?|client type|lead[- ]?gen(?:eration)?(?:\s+help)?)$/i,
+      kind: 'open_question',
+      label: 'Open question',
+    },
+    {
+      re: /\b(?:clarify|confirm|unknown|tbd|still need|need to (?:confirm|clarify|know)|whether they want)\b[\s\w/,-]*\b(?:budget|timeline|decision(?:\s+process)?|target client|lead[- ]?gen|help generating|commercial cleaning leads)/i,
+      kind: 'open_question',
+      label: 'Open question',
+    },
+    {
+      re: /\b(?:under\s+\d+\s+months?|less than\s+\d+\s+months?|early[- ]stage|just started|new company|company (?:is )?(?:young|new))\b/i,
+      kind: 'context',
+      label: 'Company stage',
+    },
+    {
+      re: /\b(?:\$?\d[\d,]*(?:\.\d+)?\s*k?\s*mrr|mrr\s*(?:of\s*)?\$?\d[\d,]*(?:\.\d+)?k?|about\s+[\$,]?\d[\d,]*\s*(?:mrr|in monthly)|monthly recurring revenue)\b/i,
+      kind: 'budget',
+      label: 'MRR / budget',
+    },
+    {
+      re: /\bfocused on\b|\bgrowing\b.*\bcommercial\b|\bcommercial cleaning\b|\bcommercial focus\b/i,
+      kind: 'goal',
+      label: 'Focus / goal',
+    },
+    {
+      re: /\b(?:is|as)\s+owner\b|\bowner\b|\bdecision.?maker\b|\bpartner\b|\bceo\b|\bcfo\b|\bapprover\b/i,
+      kind: 'decision_maker',
+      label: 'Decision maker',
+    },
     { re: /\b(pain|struggle|problem|frustrated|issue)\b/i, kind: 'pain', label: 'Pain' },
-    { re: /\b(goal|want|hoping|looking to|need to)\b/i, kind: 'goal', label: 'Goal' },
+    { re: /\b(goal|want|hoping|looking to)\b/i, kind: 'goal', label: 'Goal' },
     {
       re: /\b(object|concern|worried|hesitat|pushback)\b/i,
       kind: 'objection',
       label: 'Objection',
     },
-    { re: /\b(timeline|by\s+\w+|next\s+(week|month|quarter)|asap)\b/i, kind: 'timeline', label: 'Timeline' },
+    {
+      re: /\b(timeline|by\s+\w+|next\s+(week|month|quarter)|asap)\b/i,
+      kind: 'timeline',
+      label: 'Timeline',
+    },
     { re: /\b(budget|price|cost|\$\d+)\b/i, kind: 'budget', label: 'Budget' },
     {
-      re: /\b(decision.?maker|owner|partner|ceo|cfo|approver)\b/i,
-      kind: 'decision_maker',
-      label: 'Decision maker',
+      re: /\b(stakeholder|team|committee|office manager)\b/i,
+      kind: 'stakeholder',
+      label: 'Stakeholder',
     },
-    { re: /\b(stakeholder|team|committee|office manager)\b/i, kind: 'stakeholder', label: 'Stakeholder' },
-    { re: /\b(competitor|versus|vs\.?|alternative)\b/i, kind: 'competitor', label: 'Competitor' },
     {
-      re: /\b(next step|follow.?up|schedule|send|book)\b/i,
-      kind: 'next_step',
-      label: 'Next step',
+      re: /\b(competitor|versus|vs\.?|alternative)\b/i,
+      kind: 'competitor',
+      label: 'Competitor',
     },
     {
       re: /\b(promis|commit|we will|i will|agreed to)\b/i,
@@ -322,28 +398,40 @@ function extractInsightsFromNotes(notes) {
     },
     { re: /\b(risk|block|blocker|deal.?breaker)\b/i, kind: 'risk', label: 'Risk' },
     {
-      re: /\b(interested|excited|ready|let.?s do|sounds good)\b/i,
-      kind: 'buying_signal',
-      label: 'Buying signal',
+      re: /\b(prefer|preference|don'?t call|email only)\b/i,
+      kind: 'preference',
+      label: 'Preference',
     },
-    { re: /\b(prefer|preference|don.?t call|email only)\b/i, kind: 'preference', label: 'Preference' },
   ];
 
-  const used = new Set();
-  for (const sentence of sentences) {
+  // Allow multiple buying_signal / next_step / commitment / open_question / context
+  // insights; keep other kinds singleton so noise stays low.
+  const MULTI_OK = new Set([
+    'buying_signal',
+    'next_step',
+    'commitment',
+    'open_question',
+    'context',
+  ]);
+  const usedSingleton = new Set();
+  const seenValue = new Set();
+
+  for (const clause of clauses) {
     for (const p of patterns) {
-      if (used.has(p.kind)) continue;
-      if (p.re.test(sentence)) {
-        insights.push({
-          kind: p.kind,
-          label: p.label,
-          value: sentence,
-          confidence: BASE_CONFIDENCE,
-          sourceQuote: sentence,
-        });
-        used.add(p.kind);
-        break;
-      }
+      if (!MULTI_OK.has(p.kind) && usedSingleton.has(p.kind)) continue;
+      if (!p.re.test(clause)) continue;
+      const key = `${p.kind}::${clause.toLowerCase()}`;
+      if (seenValue.has(key)) continue;
+      seenValue.add(key);
+      insights.push({
+        kind: p.kind,
+        label: p.label,
+        value: clause,
+        confidence: BASE_CONFIDENCE,
+        sourceQuote: clause,
+      });
+      if (!MULTI_OK.has(p.kind)) usedSingleton.add(p.kind);
+      break;
     }
   }
 
@@ -357,7 +445,8 @@ function extractInsightsFromNotes(notes) {
     });
   }
 
-  const thin = text.length < MIN_NOTES_CHARS || insights.length <= 1;
+  const structuredCount = insights.filter((i) => i.kind !== 'context').length;
+  const thin = text.length < MIN_NOTES_CHARS || structuredCount === 0;
   if (thin) {
     caveats.push('Notes were thin; several relationship fields remain unknown.');
     insights.push({
@@ -1142,6 +1231,7 @@ module.exports = {
   assertAllowedSql,
   assertInsightKind,
   extractInsightsFromNotes,
+  splitNotesClauses,
   startRelationshipInterview,
   answerRelationshipInterview,
   summarizeRelationshipInterview,

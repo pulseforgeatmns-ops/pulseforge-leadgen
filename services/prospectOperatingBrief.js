@@ -17,6 +17,7 @@ const ACTION_TYPES = Object.freeze([
   'send_follow_up',
   'prepare_proposal',
   'schedule_walkthrough',
+  'schedule_kickoff',
   'ask_clarifying_question',
   'research_company',
   'wait_for_reply',
@@ -350,27 +351,91 @@ function buildRelationshipFromPayloads(payloads) {
     }
   }
 
-  const byKind = (kinds) =>
-    allInsights
+  const byKind = (kinds, list = allInsights) =>
+    list
       .filter((i) => kinds.includes(i.kind))
       .map(({ _id, ...rest }) => rest);
 
   const summaries = payloads
     .map(({ payload: p }) => {
+      const structured =
+        (p.interaction && p.interaction.structuredSummary) ||
+        p.structuredSummary ||
+        {};
       const raw =
         (p.interaction && p.interaction.rawSummary) ||
         p.rawSummary ||
+        structured.rawSummary ||
+        structured.notes ||
+        structured.raw_summary ||
         null;
       return raw ? String(raw).trim() : null;
     })
     .filter(Boolean);
 
+  let insightsForSections = allInsights;
+  let fallbackApplied = false;
+
+  // Fallback synthesis from raw_summary when stored insights lack commercial
+  // buying / next-step kinds. Applies for companyId and relationshipInteractionId
+  // targets alike. Does not mutate stored Relationship Intelligence records.
+  const hasBuying = allInsights.some((i) => i.kind === 'buying_signal');
+  const hasCommitOrNext = allInsights.some((i) =>
+    ['next_step', 'commitment'].includes(i.kind)
+  );
+  if ((!hasBuying || !hasCommitOrNext) && summaries.length) {
+    const { extractInsightsFromNotes } = defaultRelationshipService();
+    const extracted = extractInsightsFromNotes(summaries.join('\n'));
+    const existingKeys = new Set(
+      allInsights.map(
+        (i) => `${i.kind}::${String(i.value || '').trim().toLowerCase()}`
+      )
+    );
+    const synthesized = [];
+    for (const insight of extracted.insights || []) {
+      if (
+        insight.kind === 'context' &&
+        String(insight.label || '') === 'Interaction notes'
+      ) {
+        continue;
+      }
+      const key = `${insight.kind}::${String(insight.value || '')
+        .trim()
+        .toLowerCase()}`;
+      if (existingKeys.has(key)) continue;
+
+      const fillsBuying = insight.kind === 'buying_signal' && !hasBuying;
+      const fillsCommit =
+        ['next_step', 'commitment'].includes(insight.kind) && !hasCommitOrNext;
+      const enrichMeta = [
+        'open_question',
+        'decision_maker',
+        'goal',
+        'budget',
+        'context',
+      ].includes(insight.kind);
+
+      if (!fillsBuying && !fillsCommit && !enrichMeta) continue;
+
+      existingKeys.add(key);
+      synthesized.push({
+        ...mapInsightItem(insight, null),
+        _id: null,
+        synthesizedFromRawSummary: true,
+      });
+    }
+    if (synthesized.length) {
+      insightsForSections = [...allInsights, ...synthesized];
+      fallbackApplied = true;
+    }
+  }
+
   return {
     interactionCount: payloads.length,
-    insights: allInsights.map(({ _id, ...rest }) => rest),
+    insights: insightsForSections.map(({ _id, ...rest }) => rest),
     relationshipSummary: {
       interactionCount: payloads.length,
-      insightCount: allInsights.length,
+      insightCount: insightsForSections.length,
       latestOccurredAt: payloads[0]?.payload?.interaction?.occurredAt || null,
       interactionTypes: uniq(
         payloads
@@ -393,19 +458,21 @@ function buildRelationshipFromPayloads(payloads) {
                 ) / payloads.length
               ).toFixed(3)
             ),
+      rawSummaryFallbackApplied: fallbackApplied,
     },
-    buyingSignals: byKind(['buying_signal']),
-    painsAndGoals: byKind(['pain', 'goal']),
-    objectionsAndRisks: byKind(['objection', 'risk']),
-    decisionProcess: byKind([
-      'decision_maker',
-      'stakeholder',
-      'timeline',
-      'budget',
-    ]),
-    commitmentsAndNextSteps: byKind(['next_step', 'commitment']),
-    openQuestions: byKind(['open_question']),
-    preferencesAndContext: byKind(['preference', 'context']),
+    buyingSignals: byKind(['buying_signal'], insightsForSections),
+    painsAndGoals: byKind(['pain', 'goal'], insightsForSections),
+    objectionsAndRisks: byKind(['objection', 'risk'], insightsForSections),
+    decisionProcess: byKind(
+      ['decision_maker', 'stakeholder', 'timeline', 'budget'],
+      insightsForSections
+    ),
+    commitmentsAndNextSteps: byKind(
+      ['next_step', 'commitment'],
+      insightsForSections
+    ),
+    openQuestions: byKind(['open_question'], insightsForSections),
+    preferencesAndContext: byKind(['preference', 'context'], insightsForSections),
     sourceRefs: {
       relationshipInteractionIds: uniq(interactionIds.filter(Boolean)),
       relationshipInsightIds: uniq(insightIds),
@@ -624,6 +691,15 @@ function textBlob(items) {
     .join(' ');
 }
 
+/** Seller-owned next steps (Jake/Pulseforge still owes an action). */
+function hasSellerSideNextSteps(nextSteps) {
+  return (nextSteps || []).some((item) =>
+    /\b(send|schedule|prepare|draft|book|deliver|share|kickoff|service agreement|msa|contract|proposal|walkthrough|follow[- ]?up|estimate|quote)\b/i.test(
+      insightText(item)
+    )
+  );
+}
+
 function suggestNextAction({
   snapshot,
   relationship,
@@ -654,6 +730,7 @@ function suggestNextAction({
   const openQs = relationship.openQuestions || [];
   const objections = relationship.objectionsAndRisks || [];
   const blob = textBlob([...nextSteps, ...buying, ...objections]);
+  const sellerSideNext = hasSellerSideNextSteps(nextSteps);
 
   if ((!snapshot || !snapshot.found) && relationship.interactionCount === 0) {
     requiredInputs.push('company or prospect identifier with CRM record');
@@ -689,6 +766,25 @@ function suggestNextAction({
     };
   }
 
+  if (/\bkickoff\b/.test(blob)) {
+    return {
+      actionType: 'schedule_kickoff',
+      priority: 'high',
+      rationale:
+        'Committed relationship insights reference scheduling a kickoff.',
+      suggestedMessageAngle:
+        buying.length
+          ? 'Confirm kickoff timing while interest is warm'
+          : 'Propose kickoff windows and confirm attendees',
+      requiredInputs: uniq([
+        ...requiredInputs,
+        'available kickoff windows',
+        snapshot && snapshot.contactName ? null : 'decision-maker contact',
+      ].filter(Boolean)),
+      cautions,
+    };
+  }
+
   if (/\bwalkthrough|site visit|on[- ]?site\b/.test(blob)) {
     return {
       actionType: 'schedule_walkthrough',
@@ -700,16 +796,41 @@ function suggestNextAction({
       requiredInputs: uniq([
         ...requiredInputs,
         'available walkthrough windows',
-        snapshot.contactName ? null : 'decision-maker contact',
+        snapshot && snapshot.contactName ? null : 'decision-maker contact',
       ].filter(Boolean)),
       cautions,
+    };
+  }
+
+  if (/\bservice agreement|msa\b|\bcontract\b|\bsow\b/.test(blob)) {
+    return {
+      actionType: 'prepare_proposal',
+      priority: 'high',
+      rationale: buying.length
+        ? 'Buying signal(s) plus a service-agreement next step — prepare/send the agreement while intent is active.'
+        : 'Committed insights reference sending or preparing a service agreement.',
+      suggestedMessageAngle:
+        buying.length
+          ? 'Send the service agreement and reference the stated buying signal'
+          : 'Deliver the service agreement without new commercial claims',
+      requiredInputs: uniq([
+        ...requiredInputs,
+        'service agreement / MSA draft',
+        'confirmed commercial terms',
+      ]),
+      cautions: [
+        ...cautions,
+        ...(objections.length
+          ? ['Address recorded objections/risks in the agreement package']
+          : []),
+      ],
     };
   }
 
   if (/\bproposal|estimate|quote|pricing\b/.test(blob)) {
     return {
       actionType: 'prepare_proposal',
-      priority: 'high',
+      priority: buying.length ? 'high' : 'medium',
       rationale:
         'Committed insights reference a proposal, estimate, quote, or pricing commitment.',
       suggestedMessageAngle:
@@ -742,12 +863,16 @@ function suggestNextAction({
     };
   }
 
-  if (/\bwait|they will (reply|email|send)|awaiting\b/.test(blob)) {
+  // Only wait when there is no active seller-side next step.
+  if (
+    !sellerSideNext &&
+    /\bwait|they will (reply|email|send)|awaiting\b/.test(blob)
+  ) {
     return {
       actionType: 'wait_for_reply',
       priority: 'low',
       rationale:
-        'Recorded next steps suggest the ball is in their court.',
+        'Recorded next steps suggest the ball is in their court, with no seller-side action outstanding.',
       suggestedMessageAngle: null,
       requiredInputs: ['follow-up date if silence continues'],
       cautions,
@@ -760,13 +885,15 @@ function suggestNextAction({
     if (nextSteps[0]) angleParts.push(insightText(nextSteps[0]));
     return {
       actionType: 'send_follow_up',
-      priority: buying.length ? 'high' : 'medium',
+      priority: buying.length || sellerSideNext ? 'high' : 'medium',
       rationale: buying.length
         ? 'Buying signal(s) are recorded in committed relationship intelligence; a manual follow-up is the conservative next move.'
         : 'A committed next step exists; send a manual follow-up that honors the recorded commitment.',
       suggestedMessageAngle: angleParts.filter(Boolean).join(' — ') || null,
       requiredInputs: uniq([
-        snapshot.email || snapshot.phone ? null : 'reachable contact channel',
+        snapshot && (snapshot.email || snapshot.phone)
+          ? null
+          : 'reachable contact channel',
         ...requiredInputs,
       ].filter(Boolean)),
       cautions,
@@ -1001,6 +1128,15 @@ async function getProspectOperatingBrief(options = {}) {
           }`
         );
       }
+    }
+    if (
+      relationship &&
+      relationship.relationshipSummary &&
+      relationship.relationshipSummary.rawSummaryFallbackApplied
+    ) {
+      caveats.push(
+        'relationship_raw_summary_fallback: synthesized missing buying/next-step insights from raw_summary; stored observations unchanged'
+      );
     }
   } else {
     caveats.push('relationship_context_excluded_by_request');
