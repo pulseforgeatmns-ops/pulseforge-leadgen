@@ -6,6 +6,14 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Client Intelligence Engine v1 thin slice ([SPEC-083](docs/specs/SPEC-083_Client_Intelligence_Engine.md))
+  - Text interview → evidence → simple confidence → Business Blueprint → client approve
+  - Durable `cie_interview_sessions`, `cie_interview_turns`, `cie_evidence`, `cie_business_blueprints`
+  - Approval generates `pending_review` Client Playbook (SPEC-028) from understanding only — no channels/offers/sequences invented; no Scout/Composer activation
+  - APIs under `/api/v1/clients/:id/interview/*`, `/api/v1/interview/*`, `/api/v1/blueprint/*`
+  - UI: `/client-intel` · CLI: `npm run client:intel:interview`
+  - Migration: `migrations/2026-08-06-client-intelligence-engine.sql`
+  - Tests: `test/clientIntelligenceInterview.test.js`, `test/clientIntelligenceHandoff.test.js`, `test/clientIntelligenceRoutes.test.js`
 - Relationship Intelligence Interview v1 ([SPEC-064](docs/specs/SPEC-064_Relationship_Intelligence_Interview.md))
   - Durable `relationship_interactions` + `relationship_interaction_insights` (soft entity refs; no CRM FKs)
   - Max-owned state-machine debrief service: start / answer / summarize / commit (notes mode first)

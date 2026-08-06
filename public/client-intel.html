@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pulseforge — Client Intelligence</title>
+  <link rel="icon" href="/favicon.ico">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/shared/tokens.css">
+  <style>
+    :root {
+      --cie-bg: #0f1419;
+      --cie-panel: #1a222c;
+      --cie-border: #2a3544;
+      --cie-text: #e8eef5;
+      --cie-muted: #8b9bb0;
+      --cie-accent: #3d9cfd;
+      --cie-ok: #3ecf8e;
+      --cie-warn: #e6b84d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #1a2a3d, var(--cie-bg));
+      color: var(--cie-text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--cie-border);
+      display: flex;
+      gap: 1rem;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
+    header h1 { margin: 0; font-size: 1.25rem; font-weight: 600; letter-spacing: 0.02em; }
+    header p { margin: 0; color: var(--cie-muted); font-size: 0.9rem; }
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      padding: 1rem 1.5rem 2rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+    .panel {
+      background: var(--cie-panel);
+      border: 1px solid var(--cie-border);
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      min-height: 70vh;
+    }
+    .panel h2 {
+      margin: 0;
+      padding: 0.9rem 1rem;
+      font-size: 0.95rem;
+      border-bottom: 1px solid var(--cie-border);
+      font-weight: 600;
+    }
+    .controls {
+      display: flex;
+      gap: 0.5rem;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--cie-border);
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    input, textarea, button {
+      font: inherit;
+    }
+    input, textarea {
+      background: #0f1419;
+      border: 1px solid var(--cie-border);
+      color: var(--cie-text);
+      border-radius: 8px;
+      padding: 0.5rem 0.65rem;
+    }
+    input { width: 7rem; }
+    button {
+      background: var(--cie-accent);
+      color: #041018;
+      border: none;
+      border-radius: 8px;
+      padding: 0.5rem 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary { background: transparent; color: var(--cie-text); border: 1px solid var(--cie-border); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #chatLog {
+      flex: 1;
+      overflow: auto;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+    .bubble {
+      max-width: 90%;
+      padding: 0.65rem 0.8rem;
+      border-radius: 10px;
+      font-size: 0.92rem;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
+    .bubble.assistant { align-self: flex-start; background: #243142; }
+    .bubble.client { align-self: flex-end; background: #1e3a55; }
+    .bubble.meta { align-self: center; color: var(--cie-muted); font-size: 0.8rem; background: transparent; }
+    .composer {
+      display: flex;
+      gap: 0.5rem;
+      padding: 0.75rem 1rem;
+      border-top: 1px solid var(--cie-border);
+    }
+    .composer textarea { flex: 1; min-height: 3.2rem; resize: vertical; }
+    #blueprintPanel { padding: 1rem; overflow: auto; flex: 1; }
+    .section {
+      border: 1px solid var(--cie-border);
+      border-radius: 10px;
+      padding: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+      align-items: baseline;
+      margin-bottom: 0.4rem;
+    }
+    .section-head strong { font-size: 0.85rem; text-transform: capitalize; }
+    .conf { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: var(--cie-ok); }
+    .conf.low { color: var(--cie-warn); }
+    .unknowns { color: var(--cie-warn); font-size: 0.8rem; margin-top: 0.35rem; }
+    .evidence-count { color: var(--cie-muted); font-size: 0.78rem; }
+    .section textarea { width: 100%; min-height: 3rem; margin-top: 0.35rem; }
+    .status-bar {
+      padding: 0.5rem 1rem;
+      font-size: 0.8rem;
+      color: var(--cie-muted);
+      border-top: 1px solid var(--cie-border);
+    }
+    .actions { display: flex; gap: 0.5rem; padding: 0.75rem 1rem; border-top: 1px solid var(--cie-border); }
+    .error { color: #ff7b7b; padding: 0.5rem 1rem; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Client Intelligence</h1>
+    <p>Interview → Business Blueprint → pending_review Playbook (SPEC-083)</p>
+  </header>
+
+  <div class="layout">
+    <section class="panel" aria-label="Interview chat">
+      <h2>Interview</h2>
+      <div class="controls">
+        <label>Client ID <input id="clientId" value="1" inputmode="numeric"></label>
+        <button type="button" id="startBtn">Start interview</button>
+        <button type="button" id="notesBtn" class="secondary">Start from notes</button>
+      </div>
+      <div id="chatLog" aria-live="polite"></div>
+      <div class="composer">
+        <textarea id="messageInput" placeholder="Answer here…" rows="2"></textarea>
+        <button type="button" id="sendBtn" disabled>Send</button>
+      </div>
+      <div class="status-bar" id="sessionStatus">No active session</div>
+    </section>
+
+    <section class="panel" aria-label="Business Blueprint">
+      <h2>Business Blueprint</h2>
+      <div id="blueprintPanel"><p class="bubble meta">Blueprint appears after discovery completes.</p></div>
+      <div class="actions">
+        <button type="button" id="reviseBtn" class="secondary" disabled>Save edits</button>
+        <button type="button" id="approveBtn" disabled>Approve → Playbook</button>
+      </div>
+      <div class="status-bar" id="blueprintStatus"></div>
+    </section>
+  </div>
+  <div class="error" id="errorBox" hidden></div>
+
+  <script>
+    const state = {
+      interviewId: null,
+      blueprint: null,
+    };
+
+    const els = {
+      clientId: document.getElementById('clientId'),
+      chatLog: document.getElementById('chatLog'),
+      messageInput: document.getElementById('messageInput'),
+      sendBtn: document.getElementById('sendBtn'),
+      startBtn: document.getElementById('startBtn'),
+      notesBtn: document.getElementById('notesBtn'),
+      sessionStatus: document.getElementById('sessionStatus'),
+      blueprintPanel: document.getElementById('blueprintPanel'),
+      reviseBtn: document.getElementById('reviseBtn'),
+      approveBtn: document.getElementById('approveBtn'),
+      blueprintStatus: document.getElementById('blueprintStatus'),
+      errorBox: document.getElementById('errorBox'),
+    };
+
+    function showError(err) {
+      els.errorBox.hidden = !err;
+      els.errorBox.textContent = err || '';
+    }
+
+    function addBubble(role, text) {
+      const div = document.createElement('div');
+      div.className = 'bubble ' + role;
+      div.textContent = text;
+      els.chatLog.appendChild(div);
+      els.chatLog.scrollTop = els.chatLog.scrollHeight;
+    }
+
+    async function api(method, url, body) {
+      showError('');
+      const res = await fetch(url, {
+        method,
+        headers: {
+          Accept: 'application/json',
+          ...(body == null ? {} : { 'Content-Type': 'application/json' }),
+        },
+        body: body == null ? undefined : JSON.stringify(body),
+        credentials: 'same-origin',
+      });
+      const text = await res.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch (_) {}
+      if (!res.ok) {
+        const msg = (json && (json.message || json.error)) || text || res.statusText;
+        throw new Error(msg);
+      }
+      return json;
+    }
+
+    function confClass(n) {
+      return Number(n) < 0.6 ? 'conf low' : 'conf';
+    }
+
+    function renderBlueprint(bp) {
+      state.blueprint = bp;
+      if (!bp) {
+        els.blueprintPanel.innerHTML = '<p class="bubble meta">No blueprint yet.</p>';
+        els.reviseBtn.disabled = true;
+        els.approveBtn.disabled = true;
+        return;
+      }
+      const sections = bp.sections || {};
+      const html = Object.keys(sections).map((key) => {
+        const s = sections[key] || {};
+        const conf = Number(s.confidence || 0);
+        const unknowns = (s.unknowns || []).join('; ');
+        const count = (s.evidenceIds || []).length;
+        return (
+          '<div class="section" data-section="' + key + '">' +
+            '<div class="section-head">' +
+              '<strong>' + key + '</strong>' +
+              '<span class="' + confClass(conf) + '">' + Math.round(conf * 100) + '%</span>' +
+            '</div>' +
+            '<div class="evidence-count">' + count + ' evidence</div>' +
+            '<textarea data-key="' + key + '">' + (s.summary || '').replace(/</g, '&lt;') + '</textarea>' +
+            (unknowns ? '<div class="unknowns">Unknowns: ' + unknowns.replace(/</g, '&lt;') + '</div>' : '') +
+          '</div>'
+        );
+      }).join('');
+      els.blueprintPanel.innerHTML = html;
+      const canEdit = bp.status === 'draft' || bp.status === 'in_review';
+      els.reviseBtn.disabled = !canEdit;
+      els.approveBtn.disabled = bp.status === 'approved';
+      els.blueprintStatus.textContent =
+        bp.status + ' · v' + bp.version +
+        (bp.playbookId ? ' · playbook ' + bp.playbookId + '@' + bp.playbookVersion : '');
+    }
+
+    function setSession(data) {
+      state.interviewId = data.interviewId || data.id;
+      els.sendBtn.disabled = !state.interviewId || data.status === 'CLIENT_REVIEW' || data.status === 'APPROVED';
+      els.sessionStatus.textContent =
+        'Session ' + state.interviewId + ' · ' + data.status +
+        (data.currentStage ? ' · ' + data.currentStage : '');
+      if (data.message && data.nextAction !== 'COMPLETE') {
+        addBubble('assistant', data.message);
+      }
+      if (data.blueprint) renderBlueprint(data.blueprint);
+    }
+
+    els.startBtn.addEventListener('click', async () => {
+      try {
+        els.chatLog.innerHTML = '';
+        const clientId = els.clientId.value.trim() || '1';
+        const data = await api('POST', '/api/v1/clients/' + encodeURIComponent(clientId) + '/interview/start', {});
+        setSession(data);
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+
+    els.notesBtn.addEventListener('click', async () => {
+      try {
+        const notes = prompt('Paste business notes for Aji-style onboarding:');
+        if (!notes) return;
+        els.chatLog.innerHTML = '';
+        addBubble('client', notes);
+        const clientId = els.clientId.value.trim() || '1';
+        const data = await api('POST', '/api/v1/clients/' + encodeURIComponent(clientId) + '/interview/start', { notes });
+        setSession(data);
+        addBubble('meta', data.message || 'Blueprint ready');
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+
+    async function sendMessage() {
+      try {
+        const text = els.messageInput.value.trim();
+        if (!text || !state.interviewId) return;
+        addBubble('client', text);
+        els.messageInput.value = '';
+        const data = await api('POST', '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/message', {
+          message: text,
+        });
+        setSession(data);
+        if (data.blueprint) addBubble('meta', 'Blueprint ready for review');
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    els.sendBtn.addEventListener('click', sendMessage);
+    els.messageInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    els.reviseBtn.addEventListener('click', async () => {
+      try {
+        if (!state.blueprint) return;
+        const sections = {};
+        els.blueprintPanel.querySelectorAll('textarea[data-key]').forEach((ta) => {
+          sections[ta.getAttribute('data-key')] = { summary: ta.value };
+        });
+        const bp = await api('POST', '/api/v1/blueprint/' + encodeURIComponent(state.blueprint.id) + '/revise', {
+          sections,
+        });
+        renderBlueprint(bp);
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+
+    els.approveBtn.addEventListener('click', async () => {
+      try {
+        if (!state.blueprint) return;
+        const result = await api('POST', '/api/v1/blueprint/' + encodeURIComponent(state.blueprint.id) + '/approve', {});
+        renderBlueprint(result.blueprint);
+        addBubble(
+          'meta',
+          'Approved. Pending playbook ' +
+            (result.playbook && result.playbook.id) +
+            '@' +
+            (result.playbook && result.playbook.version)
+        );
+        els.sendBtn.disabled = true;
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+  </script>
+</body>
+</html>
