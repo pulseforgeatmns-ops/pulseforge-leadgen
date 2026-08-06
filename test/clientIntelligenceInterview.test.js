@@ -13,12 +13,15 @@ const {
   scoreEvidenceConfidence,
   summarizeSection,
   computeProgress,
+  buildUnderstandingProgress,
+  buildExecutiveSummary,
   buildReflection,
   hasSpecificitySignals,
   looksAmbiguous,
   assertTransition,
   startClientInterview,
   postInterviewMessage,
+  resumeInterview,
   getInterview,
   reviseBlueprint,
   approveBlueprint,
@@ -59,12 +62,13 @@ describe('clientIntelligenceInterview lifecycle', () => {
   it('allows only sequential status transitions', () => {
     assert.deepEqual(ALLOWED_TRANSITIONS.NEW, ['DISCOVERY']);
     assert.deepEqual(ALLOWED_TRANSITIONS.DISCOVERY, ['CLARIFICATION']);
+    assert.deepEqual(ALLOWED_TRANSITIONS.CLIENT_REVIEW, ['APPROVED', 'DISCOVERY']);
     assert.throws(() => assertTransition('NEW', 'APPROVED'), ClientIntelligenceError);
     assert.throws(() => assertTransition('DISCOVERY', 'APPROVED'), ClientIntelligenceError);
     assert.equal(SESSION_STATUSES.length, 7);
   });
 
-  it('starts interactive interview with first question and goal/askedBecause', async () => {
+  it('starts interactive interview with first question and understanding progress', async () => {
     const { opts } = withStore();
     const started = await startClientInterview({ clientId: 7 }, opts);
     assert.ok(started.interviewId);
@@ -76,6 +80,13 @@ describe('clientIntelligenceInterview lifecycle', () => {
     assert.match(started.message, /tell me about the business/i);
     assert.equal(started.progress.percent, 0);
     assert.equal(started.progress.label, 'Business Understanding');
+    assert.ok(started.understanding);
+    assert.equal(started.understanding.sections.length, BLUEPRINT_SECTIONS.length);
+    for (const row of started.understanding.sections) {
+      assert.equal('summary' in row, false);
+      assert.ok(row.title);
+      assert.ok(row.status);
+    }
   });
 
   it('extracts evidence after every answer and advances stages', async () => {
@@ -105,6 +116,10 @@ describe('clientIntelligenceInterview lifecycle', () => {
     assert.ok(turn.blueprint);
     assert.equal(turn.blueprint.generatedBy, 'CIE-v1');
     assert.equal(turn.blueprint.status, 'in_review');
+    assert.ok(turn.executiveSummary);
+    assert.equal(turn.executiveSummary.title, 'My Understanding of Your Business');
+    assert.equal(turn.executiveSummary.subtitle, 'Generated from our conversation');
+    assert.equal(turn.executiveSummary.sections.length, 6);
     for (const key of BLUEPRINT_SECTIONS) {
       assert.ok(turn.blueprint.sections[key]);
       assert.ok(Array.isArray(turn.blueprint.sections[key].evidenceIds));
@@ -113,6 +128,10 @@ describe('clientIntelligenceInterview lifecycle', () => {
       assert.ok(turn.blueprint.sections[key].summary);
       // Consultant notes — not raw transcript mirroring
       assert.notEqual(turn.blueprint.sections[key].summary, AJI_ANSWERS[BLUEPRINT_SECTIONS.indexOf(key)]);
+    }
+    assert.ok(turn.understanding);
+    for (const row of turn.understanding.sections) {
+      assert.equal('summary' in row, false);
     }
     assert.equal(QUESTION_BANK.length, 9);
     assert.equal(turn.progress.percent, 100);
@@ -126,16 +145,51 @@ describe('clientIntelligenceInterview lifecycle', () => {
       turn = await postInterviewMessage(started.interviewId, AJI_ANSWERS[i], opts);
     }
     assert.ok(turn.reflection);
-    assert.match(turn.reflection, /so far i'm hearing|let me make sure i understand|taking away so far/i);
+    assert.match(
+      turn.reflection,
+      /here's what i'm hearing so far|let me make sure i understand|taking away so far/i
+    );
     assert.equal(turn.question.id, 'avoid_customers');
     assert.equal(QUESTION_BANK.length, 9);
 
     const detail = await getInterview(started.interviewId, opts);
     const reflections = detail.turns.filter(
-      (t) => t.speaker === 'assistant' && /so far i'm hearing|let me make sure i understand|taking away so far/i.test(t.message)
+      (t) =>
+        t.speaker === 'assistant' &&
+        /here's what i'm hearing so far|let me make sure i understand|taking away so far/i.test(
+          t.message
+        )
     );
     assert.equal(reflections.length, 1);
     assert.equal(turn.progress.completed, 3);
+  });
+
+  it('resumes CLIENT_REVIEW into discovery for refinement', async () => {
+    const { opts } = withStore();
+    const { turn } = await completeInterview(opts);
+    assert.equal(turn.status, 'CLIENT_REVIEW');
+    await assert.rejects(
+      () => postInterviewMessage(turn.interviewId, 'More detail', opts),
+      (err) => err instanceof ClientIntelligenceError && err.code === 'awaiting_review'
+    );
+
+    const resumed = await resumeInterview(turn.interviewId, opts);
+    assert.equal(resumed.status, 'DISCOVERY');
+    assert.equal(resumed.resumed, true);
+    assert.match(resumed.message, /refine/i);
+
+    const refined = await postInterviewMessage(
+      turn.interviewId,
+      'Our ideal customers are boutique hotel owners along the coast.',
+      opts
+    );
+    assert.equal(refined.status, 'CLIENT_REVIEW');
+    assert.ok(refined.blueprint);
+    assert.ok(refined.executiveSummary);
+    assert.match(
+      refined.blueprint.sections.idealCustomers.summary,
+      /boutique hotel|ideal customers/i
+    );
   });
 
   it('notes mode skips Q&A and generates blueprint', async () => {
@@ -267,9 +321,53 @@ describe('confidence rules', () => {
       },
       3
     );
-    assert.match(text, /so far i'm hearing/i);
+    assert.match(text, /here's what i'm hearing so far/i);
     assert.match(text, /Identity:/);
     assert.match(text, /Services:/);
+  });
+
+  it('buildUnderstandingProgress never includes summaries', () => {
+    const progress = buildUnderstandingProgress({
+      identity: {
+        summary: 'Secret narrative that clients must not see yet.',
+        confidence: 0.9,
+        evidenceIds: ['e1'],
+        unknowns: [],
+      },
+      services: {
+        summary: '',
+        confidence: 0.2,
+        evidenceIds: [],
+        unknowns: ['Missing clear answer for services'],
+      },
+    });
+    assert.equal(progress.sections.length, BLUEPRINT_SECTIONS.length);
+    const identity = progress.sections.find((s) => s.key === 'identity');
+    assert.equal(identity.status, 'ready');
+    assert.equal('summary' in identity, false);
+    assert.ok(!JSON.stringify(progress).includes('Secret narrative'));
+  });
+
+  it('buildExecutiveSummary maps blueprint sections into read-only narratives', () => {
+    const summary = buildExecutiveSummary({
+      identity: { summary: 'Aji is a cleaning company.', confidence: 0.9, unknowns: [] },
+      services: { summary: 'Recurring cleans.', confidence: 0.8, unknowns: [] },
+      idealCustomers: { summary: 'Homeowners.', confidence: 0.8, unknowns: [] },
+      avoidCustomers: { summary: 'Bargain hunters.', confidence: 0.7, unknowns: [] },
+      targetMarkets: { summary: 'Coastal SC.', confidence: 0.7, unknowns: [] },
+      competitiveAdvantages: { summary: 'Reliable crews.', confidence: 0.8, unknowns: [] },
+      brandVoice: { summary: 'Friendly professional.', confidence: 0.7, unknowns: [] },
+      campaignGoals: { summary: 'Book appointments.', confidence: 0.8, unknowns: [] },
+      successMetrics: {
+        summary: 'Close rate.',
+        confidence: 0.6,
+        unknowns: ['Pricing philosophy'],
+      },
+    });
+    assert.equal(summary.title, 'My Understanding of Your Business');
+    assert.equal(summary.sections.length, 6);
+    assert.match(summary.sections[0].body, /Aji/);
+    assert.match(summary.sections[5].body, /Pricing philosophy/);
   });
 });
 

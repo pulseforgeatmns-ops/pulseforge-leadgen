@@ -20,6 +20,7 @@
       --cie-accent-soft: rgba(61, 156, 253, 0.14);
       --cie-ok: #3ecf8e;
       --cie-warn: #e6b84d;
+      --cie-bad: #e57373;
       --cie-assistant: #1e2836;
       --cie-client: #1a3348;
       --cie-header-h: 3.5rem;
@@ -48,30 +49,25 @@
       display: flex;
       gap: 1rem;
       align-items: center;
-      flex-wrap: nowrap;
     }
     header h1 {
       margin: 0;
       font-size: 1.1rem;
       font-weight: 600;
       letter-spacing: 0.02em;
-      white-space: nowrap;
     }
     header p {
       margin: 0;
       color: var(--cie-muted);
       font-size: 0.85rem;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
     .workspace {
       flex: 1 1 auto;
       min-height: 0;
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 1rem;
-      padding: 1rem 1.5rem 1.25rem;
+      gap: 1.25rem;
+      padding: 1.15rem 1.5rem 1.25rem;
       max-width: 1280px;
       width: 100%;
       margin: 0 auto;
@@ -101,34 +97,33 @@
     }
     .panel-head {
       flex: 0 0 auto;
-      padding: 0.85rem 1.1rem 0.75rem;
+      padding: 1rem 1.25rem 0.9rem;
       border-bottom: 1px solid var(--cie-border);
     }
     .panel-head h2 {
       margin: 0;
-      font-size: 0.92rem;
+      font-size: 0.95rem;
       font-weight: 600;
       letter-spacing: 0.01em;
     }
-    .progress-block {
-      margin-top: 0.7rem;
+    .panel-head .sub {
+      margin: 0.35rem 0 0;
+      color: var(--cie-muted);
+      font-size: 0.8rem;
+      line-height: 1.4;
     }
+    .progress-block { margin-top: 0.85rem; }
     .progress-label {
       display: flex;
       justify-content: space-between;
-      align-items: baseline;
       gap: 0.75rem;
-      margin-bottom: 0.35rem;
+      margin-bottom: 0.4rem;
       font-size: 0.78rem;
       color: var(--cie-muted);
     }
-    .progress-label strong {
-      color: var(--cie-text);
-      font-weight: 500;
-    }
+    .progress-label strong { color: var(--cie-text); font-weight: 500; }
     .progress-pct {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 0.78rem;
       color: var(--cie-accent);
     }
     .progress-track {
@@ -149,10 +144,14 @@
       flex: 0 0 auto;
       display: flex;
       gap: 0.5rem;
-      padding: 0.7rem 1.1rem;
+      padding: 0.65rem 1.15rem;
       border-bottom: 1px solid var(--cie-border);
       flex-wrap: wrap;
       align-items: center;
+    }
+    .controls.soft {
+      opacity: 0.72;
+      font-size: 0.82rem;
     }
     input, textarea, button { font: inherit; }
     input, textarea {
@@ -162,13 +161,13 @@
       border-radius: 10px;
       padding: 0.55rem 0.7rem;
     }
-    input { width: 6.5rem; }
+    input { width: 5.5rem; }
     button {
       background: var(--cie-accent);
       color: #041018;
       border: none;
       border-radius: 10px;
-      padding: 0.55rem 0.9rem;
+      padding: 0.55rem 0.95rem;
       font-weight: 600;
       cursor: pointer;
     }
@@ -183,18 +182,18 @@
       min-height: 0;
       overflow-y: auto;
       overflow-x: hidden;
-      padding: 1.15rem 1.2rem 1.4rem;
+      padding: 1.25rem 1.3rem 1.5rem;
       display: flex;
       flex-direction: column;
-      gap: 0.95rem;
+      gap: 1.05rem;
       scroll-behavior: smooth;
     }
     .bubble {
-      max-width: 86%;
-      padding: 0.85rem 1rem;
+      max-width: 88%;
+      padding: 0.95rem 1.05rem;
       border-radius: 16px;
-      font-size: 0.95rem;
-      line-height: 1.55;
+      font-size: 0.96rem;
+      line-height: 1.6;
       letter-spacing: 0.005em;
       white-space: pre-wrap;
       word-break: break-word;
@@ -228,14 +227,23 @@
       padding: 0.35rem 0.5rem;
       max-width: 100%;
     }
+    .bubble.trust {
+      align-self: flex-start;
+      max-width: 94%;
+      background: linear-gradient(160deg, rgba(61, 156, 253, 0.16), rgba(30, 40, 54, 0.9));
+      border: 1px solid rgba(61, 156, 253, 0.35);
+      font-size: 1.02rem;
+      line-height: 1.65;
+    }
     .composer {
       flex: 0 0 auto;
       display: flex;
       gap: 0.6rem;
-      padding: 0.85rem 1.1rem;
+      padding: 0.9rem 1.15rem;
       border-top: 1px solid var(--cie-border);
       background: var(--cie-panel-elevated);
     }
+    .composer[hidden], .controls[hidden], .actions[hidden] { display: none !important; }
     .composer textarea {
       flex: 1;
       min-height: 3.4rem;
@@ -243,36 +251,110 @@
       resize: none;
       line-height: 1.45;
     }
-    #blueprintPanel {
+    #sidePanel {
       flex: 1 1 auto;
       min-height: 0;
       overflow-y: auto;
       overflow-x: hidden;
-      padding: 1rem 1.1rem 1.25rem;
+      padding: 1.15rem 1.2rem 1.4rem;
     }
     .blueprint-empty {
       color: var(--cie-muted);
+      font-size: 0.92rem;
+      line-height: 1.55;
+      margin: 0.35rem 0;
+    }
+    .understanding-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+    }
+    .understanding-row {
+      position: relative;
+      padding: 0.85rem 0.95rem;
+      border-radius: 12px;
+      border: 1px solid var(--cie-border-soft);
+      background: rgba(15, 20, 25, 0.55);
+    }
+    .understanding-row-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      align-items: baseline;
+    }
+    .understanding-title {
       font-size: 0.9rem;
-      line-height: 1.5;
-      margin: 0.5rem 0;
+      font-weight: 600;
+    }
+    .understanding-title.ready::before {
+      content: '✓ ';
+      color: var(--cie-ok);
+    }
+    .conf-pct {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+    }
+    .conf-pct.bad { color: var(--cie-bad); }
+    .conf-pct.warn { color: var(--cie-warn); }
+    .conf-pct.ok { color: var(--cie-ok); }
+    .conf-bar {
+      margin-top: 0.55rem;
+      height: 0.28rem;
+      border-radius: 999px;
+      background: #0f1419;
+      overflow: hidden;
+    }
+    .conf-bar > span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      transition: width 280ms ease;
+    }
+    .conf-bar > span.bad { background: var(--cie-bad); }
+    .conf-bar > span.warn { background: var(--cie-warn); }
+    .conf-bar > span.ok { background: var(--cie-ok); }
+    .understanding-status {
+      margin-top: 0.45rem;
+      font-size: 0.78rem;
+      color: var(--cie-muted);
+    }
+    .conf-tip {
+      display: none;
+      position: absolute;
+      left: 0.75rem;
+      right: 0.75rem;
+      top: calc(100% - 0.35rem);
+      z-index: 5;
+      padding: 0.7rem 0.8rem;
+      border-radius: 10px;
+      background: #0f1620;
+      border: 1px solid var(--cie-border);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+      font-size: 0.78rem;
+      line-height: 1.45;
+      color: var(--cie-text);
+    }
+    .understanding-row:hover .conf-tip,
+    .understanding-row:focus-within .conf-tip {
+      display: block;
     }
     .section {
-      padding: 1rem 0 1.15rem;
+      padding: 1.1rem 0 1.2rem;
       border-bottom: 1px solid var(--cie-border-soft);
     }
     .section:last-child { border-bottom: none; }
     .section-title {
       margin: 0 0 0.55rem;
-      font-size: 0.82rem;
+      font-size: 0.78rem;
       font-weight: 600;
-      letter-spacing: 0.03em;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
       color: var(--cie-muted);
     }
     .section-summary {
-      margin: 0 0 0.75rem;
-      font-size: 0.92rem;
-      line-height: 1.55;
+      margin: 0 0 0.8rem;
+      font-size: 0.94rem;
+      line-height: 1.6;
       color: var(--cie-text);
     }
     .section-meta {
@@ -282,12 +364,6 @@
       align-items: center;
       margin-bottom: 0.55rem;
     }
-    .conf {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.78rem;
-      color: var(--cie-ok);
-    }
-    .conf.low { color: var(--cie-warn); }
     .evidence-count {
       color: var(--cie-muted);
       font-size: 0.78rem;
@@ -295,7 +371,7 @@
     .unknowns {
       color: var(--cie-warn);
       font-size: 0.8rem;
-      line-height: 1.4;
+      line-height: 1.45;
       margin: 0 0 0.55rem;
       padding: 0.55rem 0.7rem;
       border-radius: 8px;
@@ -309,9 +385,63 @@
       line-height: 1.5;
       resize: vertical;
     }
+    .exec-card {
+      padding: 0.25rem 0 0.5rem;
+    }
+    .exec-card h3 {
+      margin: 0 0 0.35rem;
+      font-size: 1.15rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    .exec-card .exec-sub {
+      margin: 0 0 1.25rem;
+      color: var(--cie-muted);
+      font-size: 0.85rem;
+    }
+    .exec-section {
+      margin: 0 0 1.15rem;
+    }
+    .exec-section h4 {
+      margin: 0 0 0.4rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: var(--cie-muted);
+    }
+    .exec-section p {
+      margin: 0;
+      font-size: 0.95rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+    }
+    .checklist {
+      display: flex;
+      flex-direction: column;
+      gap: 0.7rem;
+      padding: 0.35rem 0;
+    }
+    .checklist-item {
+      display: flex;
+      gap: 0.65rem;
+      align-items: flex-start;
+      color: var(--cie-muted);
+      font-size: 0.92rem;
+      line-height: 1.45;
+      transition: color 220ms ease;
+    }
+    .checklist-item.done { color: var(--cie-text); }
+    .checklist-mark {
+      font-family: 'JetBrains Mono', monospace;
+      width: 1.1rem;
+      color: var(--cie-border);
+    }
+    .checklist-item.done .checklist-mark { color: var(--cie-ok); }
+    .checklist-item.active .checklist-mark { color: var(--cie-accent); }
     .status-bar {
       flex: 0 0 auto;
-      padding: 0.55rem 1.1rem;
+      padding: 0.55rem 1.15rem;
       font-size: 0.78rem;
       color: var(--cie-muted);
       border-top: 1px solid var(--cie-border);
@@ -320,9 +450,35 @@
       flex: 0 0 auto;
       display: flex;
       gap: 0.5rem;
-      padding: 0.75rem 1.1rem;
+      padding: 0.85rem 1.15rem;
       border-top: 1px solid var(--cie-border);
       background: var(--cie-panel-elevated);
+      flex-wrap: wrap;
+    }
+    .completion-card h3 {
+      margin: 0 0 0.75rem;
+      font-size: 1.2rem;
+    }
+    .completion-card p {
+      margin: 0 0 0.85rem;
+      line-height: 1.6;
+      font-size: 0.95rem;
+    }
+    .completion-checks {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 1.15rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+    .completion-checks li {
+      font-size: 0.92rem;
+      color: var(--cie-text);
+    }
+    .completion-checks li::before {
+      content: '✓ ';
+      color: var(--cie-ok);
     }
     .error {
       position: fixed;
@@ -339,18 +495,22 @@
       max-width: 1280px;
       margin: 0 auto;
     }
+    .fade-out {
+      opacity: 0;
+      transition: opacity 480ms ease;
+    }
   </style>
 </head>
 <body>
   <header>
     <h1>Client Intelligence</h1>
-    <p>Interview → Business Blueprint → pending_review Playbook</p>
+    <p>A conversation with Max about how your business works</p>
   </header>
 
   <div class="workspace">
     <section class="panel" aria-label="Interview chat">
       <div class="panel-head">
-        <h2>Interview</h2>
+        <h2 id="chatPanelTitle">Conversation</h2>
         <div class="progress-block" id="progressBlock" hidden>
           <div class="progress-label">
             <strong id="progressLabel">Business Understanding</strong>
@@ -361,27 +521,37 @@
           </div>
         </div>
       </div>
-      <div class="controls">
+      <div class="controls soft" id="operatorControls">
         <label>Client ID <input id="clientId" value="1" inputmode="numeric"></label>
-        <button type="button" id="startBtn">Start interview</button>
+        <button type="button" id="startBtn">Begin</button>
         <button type="button" id="notesBtn" class="secondary">Start from notes</button>
       </div>
       <div id="chatLog" aria-live="polite"></div>
-      <div class="composer">
-        <textarea id="messageInput" placeholder="Share your answer…" rows="2"></textarea>
+      <div class="composer" id="composer" hidden>
+        <textarea id="messageInput" placeholder="Share your thoughts…" rows="2"></textarea>
         <button type="button" id="sendBtn" disabled>Send</button>
       </div>
-      <div class="status-bar" id="sessionStatus">No active session</div>
+      <div class="actions" id="execActions" hidden>
+        <button type="button" id="accurateBtn">Yes, that's accurate</button>
+        <button type="button" id="refineBtn" class="secondary">I'd like to refine this</button>
+        <button type="button" id="keepTalkingBtn" class="secondary">Let's keep talking</button>
+      </div>
+      <div class="actions" id="completeActions" hidden>
+        <button type="button" id="dashboardBtn">Return to Dashboard</button>
+        <button type="button" id="finishBtn" class="secondary">Finish</button>
+      </div>
+      <div class="status-bar" id="sessionStatus">Welcome</div>
     </section>
 
-    <section class="panel" aria-label="Business Blueprint">
+    <section class="panel" aria-label="Business understanding">
       <div class="panel-head">
-        <h2>Business Blueprint</h2>
+        <h2 id="sidePanelTitle">Business Understanding</h2>
+        <p class="sub" id="sidePanelSub">Progress builds as we talk. Narratives appear after Max shares his understanding.</p>
       </div>
-      <div id="blueprintPanel"><p class="blueprint-empty">Blueprint appears as understanding takes shape.</p></div>
-      <div class="actions">
+      <div id="sidePanel"><p class="blueprint-empty">When you're ready, begin the conversation.</p></div>
+      <div class="actions" id="blueprintActions" hidden>
         <button type="button" id="reviseBtn" class="secondary" disabled>Save edits</button>
-        <button type="button" id="approveBtn" disabled>Approve → Playbook</button>
+        <button type="button" id="approveBtn" disabled>Approve Blueprint</button>
       </div>
       <div class="status-bar" id="blueprintStatus"></div>
     </section>
@@ -401,10 +571,32 @@
       successMetrics: 'Success Metrics',
     };
 
+    const LOAD_STEPS = [
+      'Reviewing interview',
+      'Organizing evidence',
+      'Identifying patterns',
+      'Building Business Blueprint',
+      'Measuring confidence',
+      'Preparing executive summary',
+    ];
+
+    const PLAYBOOK_STEPS = [
+      'Translating business understanding',
+      'Building operational strategy',
+      'Ready',
+    ];
+
+    const TRUST_BRIDGE =
+      "One last thing.\n\nBefore I ask you to trust my recommendations, I want to make sure I've earned your trust by showing you that I understood your business.";
+
     const state = {
+      phase: 'welcome',
       interviewId: null,
       blueprint: null,
+      executiveSummary: null,
+      understanding: null,
       stickToBottom: true,
+      pendingCompletion: null,
     };
 
     const els = {
@@ -415,16 +607,29 @@
       startBtn: document.getElementById('startBtn'),
       notesBtn: document.getElementById('notesBtn'),
       sessionStatus: document.getElementById('sessionStatus'),
-      blueprintPanel: document.getElementById('blueprintPanel'),
+      sidePanel: document.getElementById('sidePanel'),
+      sidePanelTitle: document.getElementById('sidePanelTitle'),
+      sidePanelSub: document.getElementById('sidePanelSub'),
       reviseBtn: document.getElementById('reviseBtn'),
       approveBtn: document.getElementById('approveBtn'),
       blueprintStatus: document.getElementById('blueprintStatus'),
+      blueprintActions: document.getElementById('blueprintActions'),
       errorBox: document.getElementById('errorBox'),
       progressBlock: document.getElementById('progressBlock'),
       progressLabel: document.getElementById('progressLabel'),
       progressPct: document.getElementById('progressPct'),
       progressFill: document.getElementById('progressFill'),
       progressTrack: document.getElementById('progressTrack'),
+      composer: document.getElementById('composer'),
+      operatorControls: document.getElementById('operatorControls'),
+      execActions: document.getElementById('execActions'),
+      completeActions: document.getElementById('completeActions'),
+      accurateBtn: document.getElementById('accurateBtn'),
+      refineBtn: document.getElementById('refineBtn'),
+      keepTalkingBtn: document.getElementById('keepTalkingBtn'),
+      dashboardBtn: document.getElementById('dashboardBtn'),
+      finishBtn: document.getElementById('finishBtn'),
+      chatPanelTitle: document.getElementById('chatPanelTitle'),
     };
 
     function showError(err) {
@@ -452,6 +657,21 @@
       div.textContent = text;
       els.chatLog.appendChild(div);
       maybeScrollChat();
+      return div;
+    }
+
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function confBand(pct) {
+      if (pct <= 50) return 'bad';
+      if (pct <= 80) return 'warn';
+      return 'ok';
     }
 
     function renderProgress(progress) {
@@ -465,6 +685,184 @@
       els.progressPct.textContent = pct + '%';
       els.progressFill.style.width = pct + '%';
       els.progressTrack.setAttribute('aria-valuenow', String(pct));
+    }
+
+    function renderUnderstanding(understanding) {
+      state.understanding = understanding;
+      if (!understanding || !understanding.sections || !understanding.sections.length) {
+        els.sidePanel.innerHTML = '<p class="blueprint-empty">Understanding will grow as you answer.</p>';
+        return;
+      }
+      const html = '<div class="understanding-list">' + understanding.sections.map((row) => {
+        const pct = Math.max(0, Math.min(100, Number(row.confidencePercent != null
+          ? row.confidencePercent
+          : Math.round((Number(row.confidence) || 0) * 100))));
+        const band = confBand(pct);
+        const unknowns = (row.unknowns || []).filter(Boolean);
+        const tipSupported = [
+          'Interview responses',
+          row.evidenceCount > 1 ? 'Consistency across answers' : null,
+        ].filter(Boolean);
+        const tipMissing = unknowns.length ? unknowns : ['Nothing flagged yet'];
+        return (
+          '<article class="understanding-row" tabindex="0">' +
+            '<div class="understanding-row-top">' +
+              '<div class="understanding-title ' + escapeHtml(row.status || '') + '">' +
+                escapeHtml(row.title) +
+              '</div>' +
+              '<div class="conf-pct ' + band + '">' + pct + '%</div>' +
+            '</div>' +
+            '<div class="conf-bar" aria-hidden="true"><span class="' + band + '" style="width:' + pct + '%"></span></div>' +
+            '<div class="understanding-status">' + escapeHtml(row.statusLabel || '') + '</div>' +
+            '<div class="conf-tip" role="tooltip">' +
+              '<strong>Confidence ' + pct + '%</strong><br>' +
+              'Supported by:<br>' + tipSupported.map((t) => '✓ ' + escapeHtml(t)).join('<br>') +
+              (unknowns.length
+                ? '<br><br>Missing:<br>' + tipMissing.map((t) => '• ' + escapeHtml(t)).join('<br>')
+                : '') +
+            '</div>' +
+          '</article>'
+        );
+      }).join('') + '</div>';
+      els.sidePanel.innerHTML = html;
+      els.sidePanelTitle.textContent = 'Business Understanding';
+      els.sidePanelSub.textContent = 'Titles, confidence, and gaps — narratives come after Max shares his understanding.';
+      els.blueprintActions.hidden = true;
+      els.blueprintStatus.textContent = '';
+    }
+
+    function renderExecutiveSummary(summary) {
+      if (!summary) return;
+      state.executiveSummary = summary;
+      const sections = summary.sections || [];
+      els.sidePanel.innerHTML =
+        '<div class="exec-card">' +
+          '<h3>' + escapeHtml(summary.title || 'My Understanding of Your Business') + '</h3>' +
+          '<p class="exec-sub">' + escapeHtml(summary.subtitle || 'Generated from our conversation') + '</p>' +
+          sections.map((s) =>
+            '<section class="exec-section">' +
+              '<h4>' + escapeHtml(s.title) + '</h4>' +
+              '<p>' + escapeHtml(s.body || '') + '</p>' +
+            '</section>'
+          ).join('') +
+        '</div>';
+      els.sidePanelTitle.textContent = 'My Understanding of Your Business';
+      els.sidePanelSub.textContent = 'Read-only findings from Max — confirm before reviewing the Business Blueprint.';
+      els.blueprintActions.hidden = true;
+      els.blueprintStatus.textContent = 'Executive Summary · read only';
+    }
+
+    function renderBlueprint(bp, { editable } = { editable: true }) {
+      state.blueprint = bp;
+      if (!bp) {
+        els.sidePanel.innerHTML = '<p class="blueprint-empty">No blueprint yet.</p>';
+        els.reviseBtn.disabled = true;
+        els.approveBtn.disabled = true;
+        return;
+      }
+      const sections = bp.sections || {};
+      const order = Object.keys(SECTION_TITLES);
+      const keys = order.filter((k) => sections[k]).concat(
+        Object.keys(sections).filter((k) => !SECTION_TITLES[k])
+      );
+      const created = bp.createdAt || bp.updatedAt || '';
+      const metaLine = 'Version ' + escapeHtml(String(bp.version || '1')) +
+        (created ? ' · ' + escapeHtml(new Date(created).toLocaleString()) : '');
+      const html = '<p class="blueprint-empty">' + metaLine + '</p>' + keys.map((key) => {
+        const s = sections[key] || {};
+        const conf = Number(s.confidence || 0);
+        const pct = Math.round(conf * 100);
+        const band = confBand(pct);
+        const unknowns = (s.unknowns || []).filter(Boolean);
+        const count = (s.evidenceIds || []).length;
+        const title = SECTION_TITLES[key] || key;
+        const summary = s.summary || '';
+        return (
+          '<article class="section" data-section="' + escapeHtml(key) + '">' +
+            '<h3 class="section-title">' + escapeHtml(title) + '</h3>' +
+            (summary
+              ? '<p class="section-summary">' + escapeHtml(summary) + '</p>'
+              : '<p class="section-summary blueprint-empty">No summary yet.</p>') +
+            '<div class="section-meta">' +
+              '<span class="conf-pct ' + band + '">Confidence ' + pct + '%</span>' +
+              '<span class="evidence-count">Evidence ' + count + '</span>' +
+            '</div>' +
+            '<div class="conf-bar" aria-hidden="true"><span class="' + band + '" style="width:' + pct + '%"></span></div>' +
+            (unknowns.length
+              ? '<div class="unknowns">Unknowns: ' + escapeHtml(unknowns.join('; ')) + '</div>'
+              : '') +
+            (editable
+              ? '<textarea data-key="' + escapeHtml(key) + '">' + escapeHtml(summary) + '</textarea>'
+              : '') +
+          '</article>'
+        );
+      }).join('');
+      els.sidePanel.innerHTML = html;
+      els.sidePanelTitle.textContent = 'Business Blueprint';
+      els.sidePanelSub.textContent = editable
+        ? 'Editable artifact of Max\'s understanding. Adjust anything that needs sharpening.'
+        : 'Approved foundation for future recommendations.';
+      els.blueprintActions.hidden = !editable;
+      const canEdit = editable && (bp.status === 'draft' || bp.status === 'in_review');
+      els.reviseBtn.disabled = !canEdit;
+      els.approveBtn.disabled = !canEdit || bp.status === 'approved';
+      els.blueprintStatus.textContent =
+        bp.status + ' · v' + bp.version +
+        (bp.playbookId ? ' · playbook ' + bp.playbookId + '@' + bp.playbookVersion : '');
+    }
+
+    function renderCompletion(result) {
+      const version = (result.blueprint && result.blueprint.version) || '1';
+      els.sidePanel.innerHTML =
+        '<div class="completion-card">' +
+          '<h3>Business Blueprint Approved</h3>' +
+          '<p>Thank you.</p>' +
+          '<p>This Business Blueprint is now the foundation Pulseforge will use to understand your business.</p>' +
+          '<ul class="completion-checks">' +
+            '<li>Version ' + escapeHtml(String(version)) + ' created</li>' +
+            '<li>Draft Client Playbook created</li>' +
+            '<li>Awaiting operator review</li>' +
+          '</ul>' +
+          '<p><strong>Max</strong></p>' +
+          '<p>Every future recommendation will build on this understanding.</p>' +
+          '<p>As your business evolves, we\'ll continue refining this blueprint together.</p>' +
+        '</div>';
+      els.sidePanelTitle.textContent = 'Complete';
+      els.sidePanelSub.textContent = 'Our next conversation will focus on growing your business.';
+      els.blueprintActions.hidden = true;
+      els.blueprintStatus.textContent = 'Awaiting operator review';
+    }
+
+    function setComposerEnabled(on) {
+      els.composer.hidden = !on;
+      els.sendBtn.disabled = !on || !state.interviewId;
+      if (!on) els.messageInput.blur();
+    }
+
+    function setPhase(phase) {
+      state.phase = phase;
+      els.execActions.hidden = phase !== 'executive_summary';
+      els.completeActions.hidden = phase !== 'complete';
+      els.operatorControls.hidden = phase !== 'welcome';
+      if (phase === 'welcome') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = 'Conversation';
+      } else if (phase === 'discovery') {
+        setComposerEnabled(true);
+        els.chatPanelTitle.textContent = 'Discovery';
+      } else if (phase === 'understanding_load' || phase === 'trust_bridge') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = 'Understanding';
+      } else if (phase === 'executive_summary') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = 'Understanding';
+      } else if (phase === 'blueprint') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = 'Business Blueprint';
+      } else if (phase === 'playbook_prep' || phase === 'complete') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = phase === 'complete' ? 'Complete' : 'Preparing Playbook';
+      }
     }
 
     async function api(method, url, body) {
@@ -488,104 +886,151 @@
       return json;
     }
 
-    function confClass(n) {
-      return Number(n) < 0.6 ? 'conf low' : 'conf';
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
-    function escapeHtml(value) {
-      return String(value || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    }
+    async function runChecklist(steps, minMs, backendPromise) {
+      const wrap = document.createElement('div');
+      wrap.className = 'checklist';
+      wrap.setAttribute('aria-live', 'polite');
+      const items = steps.map((label) => {
+        const row = document.createElement('div');
+        row.className = 'checklist-item';
+        row.innerHTML = '<span class="checklist-mark">○</span><span>' + escapeHtml(label) + '</span>';
+        wrap.appendChild(row);
+        return row;
+      });
+      els.chatLog.appendChild(wrap);
+      maybeScrollChat();
 
-    function renderBlueprint(bp) {
-      state.blueprint = bp;
-      if (!bp) {
-        els.blueprintPanel.innerHTML = '<p class="blueprint-empty">No blueprint yet.</p>';
-        els.reviseBtn.disabled = true;
-        els.approveBtn.disabled = true;
-        return;
+      const started = Date.now();
+      let backendResult = null;
+      let backendDone = false;
+      const backendWait = Promise.resolve(backendPromise).then((r) => {
+        backendDone = true;
+        backendResult = r;
+        return r;
+      });
+
+      const stepDelay = Math.max(320, Math.floor(minMs / Math.max(steps.length, 1)));
+      for (let i = 0; i < items.length; i += 1) {
+        items[i].classList.add('active');
+        items[i].querySelector('.checklist-mark').textContent = '…';
+        await sleep(stepDelay);
+        items[i].classList.remove('active');
+        items[i].classList.add('done');
+        items[i].querySelector('.checklist-mark').textContent = '✓';
+        maybeScrollChat();
+        if (backendDone && Date.now() - started >= minMs && i >= items.length - 2) {
+          for (let j = i + 1; j < items.length; j += 1) {
+            items[j].classList.add('done');
+            items[j].querySelector('.checklist-mark').textContent = '✓';
+          }
+          break;
+        }
       }
-      const sections = bp.sections || {};
-      const order = Object.keys(SECTION_TITLES);
-      const keys = order.filter((k) => sections[k]).concat(
-        Object.keys(sections).filter((k) => !SECTION_TITLES[k])
-      );
-      const html = keys.map((key) => {
-        const s = sections[key] || {};
-        const conf = Number(s.confidence || 0);
-        const unknowns = (s.unknowns || []).filter(Boolean);
-        const count = (s.evidenceIds || []).length;
-        const title = SECTION_TITLES[key] || key;
-        const summary = s.summary || '';
-        return (
-          '<article class="section" data-section="' + escapeHtml(key) + '">' +
-            '<h3 class="section-title">' + escapeHtml(title) + '</h3>' +
-            (summary
-              ? '<p class="section-summary">' + escapeHtml(summary) + '</p>'
-              : '<p class="section-summary blueprint-empty">No summary yet.</p>') +
-            '<div class="section-meta">' +
-              '<span class="' + confClass(conf) + '">Confidence ' + Math.round(conf * 100) + '%</span>' +
-              '<span class="evidence-count">Evidence ' + count + '</span>' +
-            '</div>' +
-            (unknowns.length
-              ? '<div class="unknowns">Unknowns: ' + escapeHtml(unknowns.join('; ')) + '</div>'
-              : '') +
-            '<textarea data-key="' + escapeHtml(key) + '">' + escapeHtml(summary) + '</textarea>' +
-          '</article>'
-        );
-      }).join('');
-      els.blueprintPanel.innerHTML = html || '<p class="blueprint-empty">No sections yet.</p>';
-      const canEdit = bp.status === 'draft' || bp.status === 'in_review';
-      els.reviseBtn.disabled = !canEdit;
-      els.approveBtn.disabled = bp.status === 'approved';
-      els.blueprintStatus.textContent =
-        bp.status + ' · v' + bp.version +
-        (bp.playbookId ? ' · playbook ' + bp.playbookId + '@' + bp.playbookVersion : '');
+
+      const elapsed = Date.now() - started;
+      if (elapsed < minMs) await sleep(minMs - elapsed);
+      await backendWait;
+      return backendResult;
     }
 
-    function setSession(data) {
+    async function playTrustBridge() {
+      setPhase('trust_bridge');
+      const bubble = addBubble('trust', TRUST_BRIDGE);
+      await sleep(2200);
+      bubble.classList.add('fade-out');
+      await sleep(500);
+    }
+
+    async function enterUnderstandingFlow(data) {
+      state.interviewId = data.interviewId || data.id || state.interviewId;
+      state.blueprint = data.blueprint || null;
+      state.executiveSummary = data.executiveSummary || null;
+      renderProgress(data.progress);
+      if (data.understanding) renderUnderstanding(data.understanding);
+
+      setPhase('understanding_load');
+      addBubble('meta', 'Understanding your business…');
+      await runChecklist(LOAD_STEPS, 2500, Promise.resolve(data));
+      await playTrustBridge();
+
+      setPhase('executive_summary');
+      addBubble(
+        'assistant',
+        "Thank you.\n\nI believe I understand your business well enough to begin helping you grow it.\n\nBefore we move forward, I'd like to show you what I've learned."
+      );
+      if (state.executiveSummary) {
+        renderExecutiveSummary(state.executiveSummary);
+      } else if (state.blueprint && state.blueprint.sections) {
+        renderExecutiveSummary({
+          title: 'My Understanding of Your Business',
+          subtitle: 'Generated from our conversation',
+          sections: [],
+        });
+      }
+      els.sessionStatus.textContent =
+        'Session ' + state.interviewId + ' · Executive Summary';
+    }
+
+    function applyDiscoveryPayload(data, { skipMessage } = {}) {
       state.interviewId = data.interviewId || data.id;
-      els.sendBtn.disabled = !state.interviewId || data.status === 'CLIENT_REVIEW' || data.status === 'APPROVED';
       els.sessionStatus.textContent =
         'Session ' + state.interviewId + ' · ' + data.status +
         (data.currentStage ? ' · ' + data.currentStage : '');
       renderProgress(data.progress);
-      if (data.reflection) {
-        addBubble('reflection', data.reflection);
-      }
-      if (data.message && data.nextAction !== 'COMPLETE' && data.nextAction !== 'GENERATE_BLUEPRINT') {
+      if (data.understanding) renderUnderstanding(data.understanding);
+      if (data.reflection) addBubble('reflection', data.reflection);
+      if (
+        !skipMessage &&
+        data.message &&
+        data.nextAction !== 'COMPLETE' &&
+        data.nextAction !== 'GENERATE_BLUEPRINT'
+      ) {
         addBubble('assistant', data.message);
       }
-      if (data.blueprint) renderBlueprint(data.blueprint);
+    }
+
+    function showWelcome() {
+      setPhase('welcome');
+      els.chatLog.innerHTML = '';
+      state.stickToBottom = true;
+      addBubble(
+        'assistant',
+        "Welcome.\n\nBefore Pulseforge recommends anything, I'd like to understand how your business works.\n\nThe better I understand your business, the better every future recommendation will become."
+      );
+      els.sidePanel.innerHTML = '<p class="blueprint-empty">When you\'re ready, begin the conversation.</p>';
+      els.sessionStatus.textContent = 'Welcome';
+      renderProgress(null);
     }
 
     els.startBtn.addEventListener('click', async () => {
       try {
+        const clientId = els.clientId.value.trim() || '1';
         els.chatLog.innerHTML = '';
         state.stickToBottom = true;
-        const clientId = els.clientId.value.trim() || '1';
+        setPhase('discovery');
         const data = await api('POST', '/api/v1/clients/' + encodeURIComponent(clientId) + '/interview/start', {});
-        setSession(data);
+        applyDiscoveryPayload(data);
+        setComposerEnabled(true);
       } catch (err) {
         showError(err.message);
+        showWelcome();
       }
     });
 
     els.notesBtn.addEventListener('click', async () => {
       try {
-        const notes = prompt('Paste business notes for Aji-style onboarding:');
+        const notes = prompt('Paste business notes:');
         if (!notes) return;
+        const clientId = els.clientId.value.trim() || '1';
         els.chatLog.innerHTML = '';
         state.stickToBottom = true;
         addBubble('client', notes);
-        const clientId = els.clientId.value.trim() || '1';
         const data = await api('POST', '/api/v1/clients/' + encodeURIComponent(clientId) + '/interview/start', { notes });
-        setSession(data);
-        addBubble('meta', data.message || 'Blueprint ready');
-        renderProgress(data.progress);
+        await enterUnderstandingFlow(data);
       } catch (err) {
         showError(err.message);
       }
@@ -597,13 +1042,21 @@
         if (!text || !state.interviewId) return;
         addBubble('client', text);
         els.messageInput.value = '';
-        const data = await api('POST', '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/message', {
+        els.sendBtn.disabled = true;
+        const pending = api('POST', '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/message', {
           message: text,
         });
-        setSession(data);
-        if (data.blueprint) addBubble('meta', 'Blueprint ready for review');
+        const data = await pending;
+        if (data.blueprint || data.nextAction === 'GENERATE_BLUEPRINT' || data.nextAction === 'COMPLETE') {
+          if (data.reflection) addBubble('reflection', data.reflection);
+          await enterUnderstandingFlow(data);
+          return;
+        }
+        applyDiscoveryPayload(data);
+        setComposerEnabled(true);
       } catch (err) {
         showError(err.message);
+        setComposerEnabled(state.phase === 'discovery');
       }
     }
 
@@ -615,17 +1068,42 @@
       }
     });
 
+    els.accurateBtn.addEventListener('click', () => {
+      setPhase('blueprint');
+      addBubble(
+        'assistant',
+        "Here's your Business Blueprint — the living record of what I understand about your business. Edit anything that needs sharpening, then approve when it feels right."
+      );
+      renderBlueprint(state.blueprint, { editable: true });
+      els.sessionStatus.textContent =
+        'Session ' + state.interviewId + ' · Business Blueprint';
+    });
+
+    async function resumeConversation() {
+      try {
+        const data = await api('POST', '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/resume', {});
+        setPhase('discovery');
+        applyDiscoveryPayload(data);
+        setComposerEnabled(true);
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    els.refineBtn.addEventListener('click', resumeConversation);
+    els.keepTalkingBtn.addEventListener('click', resumeConversation);
+
     els.reviseBtn.addEventListener('click', async () => {
       try {
         if (!state.blueprint) return;
         const sections = {};
-        els.blueprintPanel.querySelectorAll('textarea[data-key]').forEach((ta) => {
+        els.sidePanel.querySelectorAll('textarea[data-key]').forEach((ta) => {
           sections[ta.getAttribute('data-key')] = { summary: ta.value };
         });
         const bp = await api('POST', '/api/v1/blueprint/' + encodeURIComponent(state.blueprint.id) + '/revise', {
           sections,
         });
-        renderBlueprint(bp);
+        renderBlueprint(bp, { editable: true });
       } catch (err) {
         showError(err.message);
       }
@@ -634,20 +1112,33 @@
     els.approveBtn.addEventListener('click', async () => {
       try {
         if (!state.blueprint) return;
-        const result = await api('POST', '/api/v1/blueprint/' + encodeURIComponent(state.blueprint.id) + '/approve', {});
-        renderBlueprint(result.blueprint);
+        setPhase('playbook_prep');
+        addBubble('meta', 'Preparing your Client Playbook…');
+        const pending = api('POST', '/api/v1/blueprint/' + encodeURIComponent(state.blueprint.id) + '/approve', {});
+        const result = await runChecklist(PLAYBOOK_STEPS, 2500, pending);
+        state.pendingCompletion = result;
+        setPhase('complete');
         addBubble(
-          'meta',
-          'Approved. Pending playbook ' +
-            (result.playbook && result.playbook.id) +
-            '@' +
-            (result.playbook && result.playbook.version)
+          'assistant',
+          'Excellent.\n\nI now understand your business well enough to begin helping it grow.\n\nEvery recommendation Pulseforge makes will build on this understanding.\n\nOur next conversation will focus on growing your business.'
         );
-        els.sendBtn.disabled = true;
+        renderCompletion(result);
+        els.sessionStatus.textContent = 'Complete · Awaiting operator review';
       } catch (err) {
         showError(err.message);
+        setPhase('blueprint');
       }
     });
+
+    els.dashboardBtn.addEventListener('click', () => {
+      window.location.href = '/dashboard';
+    });
+    els.finishBtn.addEventListener('click', () => {
+      addBubble('meta', 'You can return whenever you are ready for the next conversation.');
+      els.completeActions.hidden = true;
+    });
+
+    showWelcome();
   </script>
 </body>
 </html>

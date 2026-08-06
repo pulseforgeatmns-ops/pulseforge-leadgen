@@ -65,6 +65,7 @@ describe('clientIntelligence routes (static)', () => {
     const expected = [
       '/api/v1/clients/:id/interview/start',
       '/api/v1/interview/:id/message',
+      '/api/v1/interview/:id/resume',
       '/api/v1/interview/:id',
       '/api/v1/interview/:id/blueprint',
       '/api/v1/blueprint/:id/revise',
@@ -85,16 +86,22 @@ describe('clientIntelligence routes (static)', () => {
     );
   });
 
-  it('ships client-intel UI with chat + blueprint approve', () => {
-    assert.match(uiSource, /Interview/);
+  it('ships client-intel UI with SPEC-084 experience markers', () => {
+    assert.match(uiSource, /Conversation/);
     assert.match(uiSource, /Business Blueprint/);
-    assert.match(uiSource, /Approve/);
+    assert.match(uiSource, /Approve Blueprint/);
     assert.match(uiSource, /\/api\/v1\/clients\//);
+    assert.match(uiSource, /\/resume/);
     assert.match(uiSource, /overflow:\s*hidden/);
     assert.match(uiSource, /stickToBottom/);
     assert.match(uiSource, /Business Understanding/);
     assert.match(uiSource, /progress-fill/);
-    assert.match(uiSource, /Unknowns/);
+    assert.match(uiSource, /My Understanding of Your Business/);
+    assert.match(uiSource, /I'd like to refine this/);
+    assert.match(uiSource, /earned your trust/);
+    assert.match(uiSource, /foundation Pulseforge will use/);
+    assert.match(uiSource, /Return to Dashboard/);
+    assert.match(uiSource, /2500/);
   });
 });
 
