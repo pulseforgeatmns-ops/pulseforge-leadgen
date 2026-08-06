@@ -60,29 +60,44 @@ const NEXT_ACTIONS = Object.freeze([
   'COMPLETE',
 ]);
 
-const EXPLICIT_CONFIDENCE = 0.78;
-const CONFIRMATION_BUMP = 0.08;
-const CONSISTENCY_BUMP = 0.06;
-const CORROBORATION_BUMP = 0.05;
-const CONTRADICTION_PENALTY = 0.2;
-const INFERRED_CONFIDENCE = 0.55;
-const UNKNOWN_CONFIDENCE = 0.2;
+const EXPLICIT_CONFIDENCE = 0.64;
+const SPECIFICITY_BUMP = 0.1;
+const CONFIRMATION_BUMP = 0.1;
+const CONSISTENCY_BUMP = 0.08;
+const CORROBORATION_BUMP = 0.07;
+const AMBIGUITY_PENALTY = 0.15;
+const CONTRADICTION_PENALTY = 0.22;
+const INFERRED_CONFIDENCE = 0.48;
+const UNKNOWN_CONFIDENCE = 0.18;
 const MAX_CONFIDENCE = 0.98;
 const MIN_SECTION_CONFIDENCE = 0.55;
 const GENERATED_BY = 'CIE-v1';
+const REFLECTION_EVERY_N = 3;
 
 const CONFIRMATION_RE =
   /\b(yes|correct|exactly|that'?s right|confirm|confirmed|agreed|accurate)\b/i;
-const CONTRADICTION_MARKERS = Object.freeze([
-  [/\b(not|never|no longer|don'?t|do not)\b/i, /\b(are|is|we|our)\b/i],
-]);
+const AMBIGUITY_RE =
+  /\b(maybe|perhaps|not sure|unsure|kind of|sort of|various|etc\.?|something like|i think|probably|roughly|around|whatever|idk|tbd)\b/i;
+
+const SECTION_TITLES = Object.freeze({
+  identity: 'Identity',
+  services: 'Services',
+  idealCustomers: 'Ideal Customers',
+  avoidCustomers: 'Customers to Avoid',
+  targetMarkets: 'Target Markets',
+  competitiveAdvantages: 'Competitive Advantages',
+  brandVoice: 'Brand Voice',
+  campaignGoals: 'Campaign Goals',
+  successMetrics: 'Success Metrics',
+});
 
 const QUESTION_BANK = Object.freeze([
   {
     id: 'identity',
     stage: 'Identity',
     section: 'identity',
-    prompt: 'What is the business name, and in one sentence what do you do?',
+    prompt:
+      "Tell me about the business — what's the name, and how would you describe what you do today?",
     goal: 'Capture business identity',
     askedBecause: 'Identity is required for every Business Blueprint section downstream.',
   },
@@ -90,7 +105,7 @@ const QUESTION_BANK = Object.freeze([
     id: 'services',
     stage: 'Services',
     section: 'services',
-    prompt: 'What services or offers do you sell today?',
+    prompt: 'Tell me about the services your business provides today.',
     goal: 'Capture services',
     askedBecause: 'Services describe what the business delivers to customers.',
   },
@@ -98,7 +113,8 @@ const QUESTION_BANK = Object.freeze([
     id: 'ideal_customers',
     stage: 'Ideal Customers',
     section: 'idealCustomers',
-    prompt: 'Who is your ideal customer (ICP)? Be specific about roles, business types, or segments.',
+    prompt:
+      'Who do you most want to work with? Paint me a picture of the ideal customer — roles, business types, or segments.',
     goal: 'Capture ideal customers',
     askedBecause: 'ICP understanding feeds playbook idealCustomer fields after approval.',
   },
@@ -106,7 +122,8 @@ const QUESTION_BANK = Object.freeze([
     id: 'avoid_customers',
     stage: 'Avoid Customers',
     section: 'avoidCustomers',
-    prompt: 'Which customers or segments should we avoid, and why?',
+    prompt:
+      "Are there customers or segments you'd rather not take on — and what's usually the reason?",
     goal: 'Capture avoid list',
     askedBecause: 'Avoidance constraints protect targeting quality.',
   },
@@ -114,7 +131,8 @@ const QUESTION_BANK = Object.freeze([
     id: 'target_markets',
     stage: 'Markets',
     section: 'targetMarkets',
-    prompt: 'Which geographic or vertical markets should we prioritize?',
+    prompt:
+      'Where should we focus first — geography, verticals, or both? Walk me through the markets that matter.',
     goal: 'Capture target markets',
     askedBecause: 'Markets bound discovery and campaign geography later.',
   },
@@ -122,7 +140,8 @@ const QUESTION_BANK = Object.freeze([
     id: 'advantages',
     stage: 'Advantages',
     section: 'competitiveAdvantages',
-    prompt: 'What makes you competitively different or better?',
+    prompt:
+      'When a great-fit customer chooses you over someone else, what usually tips the decision?',
     goal: 'Capture competitive advantages',
     askedBecause: 'Advantages ground messaging without inventing strategy.',
   },
@@ -131,7 +150,7 @@ const QUESTION_BANK = Object.freeze([
     stage: 'Brand Voice',
     section: 'brandVoice',
     prompt:
-      'How should the brand sound? (e.g. professional, friendly, premium, direct, relationship-first)',
+      'If I were writing as your brand tomorrow, how should it sound — tone, personality, anything we should avoid?',
     goal: 'Capture brand voice',
     askedBecause: 'Brand voice constrains later language without choosing channels.',
   },
@@ -139,7 +158,8 @@ const QUESTION_BANK = Object.freeze([
     id: 'campaign_goals',
     stage: 'Goals',
     section: 'campaignGoals',
-    prompt: 'What business outcomes do you want from growth work in the next 90 days?',
+    prompt:
+      'Looking at the next 90 days, what business outcomes would make this growth work feel successful?',
     goal: 'Capture campaign goals',
     askedBecause: 'Goals describe desired outcomes, not sequences or offers.',
   },
@@ -147,12 +167,12 @@ const QUESTION_BANK = Object.freeze([
     id: 'success_metrics',
     stage: 'Success Metrics',
     section: 'successMetrics',
-    prompt: 'How will we know this is working? Name the success metrics you care about.',
+    prompt:
+      "How will we know it's working — which numbers or signals do you actually watch?",
     goal: 'Capture success metrics',
     askedBecause: 'Metrics define success for the Business Blueprint.',
   },
 ]);
-
 class ClientIntelligenceError extends Error {
   /**
    * @param {string} code
@@ -239,6 +259,30 @@ function looksLikeConfirmation(text) {
   return CONFIRMATION_RE.test(String(text || ''));
 }
 
+function looksAmbiguous(text) {
+  return AMBIGUITY_RE.test(String(text || ''));
+}
+
+/**
+ * Specificity signals — never response length.
+ * Named entities (2+ capitalized tokens), concrete domain terms, numeric facts.
+ */
+function hasSpecificitySignals(statement) {
+  const s = String(statement || '').trim();
+  if (!s) return false;
+  if (/\b\d+(\.\d+)?%?\b/.test(s)) return true;
+  if (
+    /\b(commercial|residential|recurring|property managers?|homeowners?|law firms?|manchester|charleston|myrtle|nashville|premium|enterprise|b2b|b2c|weekly|monthly|quarterly)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  // Multi-word proper name / place (e.g. "South Carolina", "Aji Home Services")
+  if (/\b[A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+){1,4}\b/.test(s)) return true;
+  return false;
+}
+
 function detectContradiction(previousStatements, nextText) {
   const next = String(nextText || '').trim().toLowerCase();
   if (!next) return false;
@@ -279,8 +323,8 @@ function isConsistentRepeat(previousStatements, nextText) {
 
 /**
  * Confidence must NOT use response length.
- * Increases: explicit, confirmation, consistency, corroboration.
- * Decreases: contradiction / ambiguity (unknown).
+ * Increases: explicit, confirmation, consistency, corroboration, specificity.
+ * Decreases: contradiction / ambiguity / missing information.
  */
 function scoreEvidenceConfidence({
   type,
@@ -290,12 +334,186 @@ function scoreEvidenceConfidence({
   hasCorroboration,
 }) {
   if (answerLooksEmpty(statement)) return UNKNOWN_CONFIDENCE;
-  let score = type === 'EXPLICIT' ? EXPLICIT_CONFIDENCE : INFERRED_CONFIDENCE;
+  let score = type === 'EXPLICIT' || type === 'CLIENT_EDITED' ? EXPLICIT_CONFIDENCE : INFERRED_CONFIDENCE;
+  if (hasSpecificitySignals(statement)) score += SPECIFICITY_BUMP;
+  if (looksAmbiguous(statement)) score -= AMBIGUITY_PENALTY;
   if (isConfirmation) score += CONFIRMATION_BUMP;
   if (isConsistentRepeat(priorStatements, statement)) score += CONSISTENCY_BUMP;
   if (hasCorroboration) score += CORROBORATION_BUMP;
   if (detectContradiction(priorStatements, statement)) score -= CONTRADICTION_PENALTY;
   return clampConfidence(score);
+}
+
+function capitalizeSentence(text) {
+  const s = String(text || '').trim();
+  if (!s) return '';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function ensurePeriod(text) {
+  const s = String(text || '').trim().replace(/\s+/g, ' ');
+  if (!s) return '';
+  return /[.!?]$/.test(s) ? s : `${s}.`;
+}
+
+function firstSentence(text) {
+  const s = String(text || '').trim();
+  if (!s) return '';
+  const parts = s.split(/(?<=[.!?])\s+/);
+  return parts[0] || s;
+}
+
+function stripLeadingWeAre(text) {
+  return String(text || '')
+    .trim()
+    .replace(/^(we are|we're|i am|i'm|this is|our company is|the business is)\s+/i, '');
+}
+
+/**
+ * Consultant-style section summary (2–4 sentences). Never a raw transcript dump.
+ */
+function summarizeSection(sectionKey, statements) {
+  const cleaned = (statements || [])
+    .map((s) => String(s || '').trim())
+    .filter((s) => s && !/^Unknown:/i.test(s) && !answerLooksEmpty(s));
+  if (!cleaned.length) return '';
+
+  const latest = cleaned[cleaned.length - 1];
+
+  switch (sectionKey) {
+    case 'identity': {
+      const dash = latest.match(/^(.+?)\s*[—–-]\s*(.+)$/);
+      if (dash) {
+        const name = dash[1].trim().replace(/[.!?,]+$/, '');
+        const desc = stripLeadingWeAre(dash[2]).replace(/^(a|an|the)\s+/i, '');
+        return [
+          ensurePeriod(`${name} is ${/^[aeiou]/i.test(desc) ? 'an' : 'a'} ${desc}`),
+          'This identity framing is how the operator describes the business today, and it anchors every other Blueprint section.',
+        ].join(' ');
+      }
+      const named = latest.match(
+        /^([A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+){0,5})\s+(?:is|are|provides?|offers?|does)\s+(.+)$/i
+      );
+      if (named) {
+        return [
+          ensurePeriod(`${named[1].trim()} is ${stripLeadingWeAre(named[2]).replace(/^(a|an|the)\s+/i, '')}`),
+          'Understanding of the business starts from this operator-stated identity.',
+        ].join(' ');
+      }
+      return [
+        ensurePeriod(
+          `The business is understood as ${stripLeadingWeAre(latest).replace(/^(a|an|the)\s+/i, '')}`
+        ),
+        'This identity note will ground services, markets, and messaging downstream.',
+      ].join(' ');
+    }
+    case 'services':
+      return [
+        ensurePeriod(
+          `Today the business delivers ${stripLeadingWeAre(latest).replace(/^(we (sell|offer|provide|do)|services? (include|are))\s+/i, '')}`
+        ),
+        'Service understanding reflects what is actually sold now, not aspirational packaging.',
+      ].join(' ');
+    case 'idealCustomers':
+      return [
+        ensurePeriod(
+          `Ideal customers are ${stripLeadingWeAre(latest).replace(/^(our ideal (customer|client)s? (are|is)|we (want|prefer|target))\s+/i, '')}`
+        ),
+        'This ICP picture prioritizes fit over volume.',
+      ].join(' ');
+    case 'avoidCustomers':
+      return [
+        ensurePeriod(
+          `The business prefers to avoid ${stripLeadingWeAre(latest).replace(/^(we (avoid|don't want|do not want|should avoid)|avoid)\s+/i, '')}`
+        ),
+        'These constraints protect targeting quality and should stay visible in the Blueprint.',
+      ].join(' ');
+    case 'targetMarkets':
+      return [
+        ensurePeriod(
+          `Priority markets center on ${stripLeadingWeAre(latest).replace(/^(we (focus|serve|cover|target)|markets? (are|include))\s+/i, '')}`
+        ),
+        'Geography and vertical focus here bound where discovery should concentrate first.',
+      ].join(' ');
+    case 'competitiveAdvantages':
+      return [
+        ensurePeriod(
+          `Competitive edge is described as ${stripLeadingWeAre(latest).replace(/^(we (are|offer|have)|our (edge|advantage) is)\s+/i, '')}`
+        ),
+        'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
+      ].join(' ');
+    case 'brandVoice':
+      return [
+        ensurePeriod(
+          `Brand voice should read as ${stripLeadingWeAre(latest).replace(/^(we (sound|are)|voice (is|should be)|brand (is|should))\s+/i, '')}`
+        ),
+        'Tone guidance constrains later language without choosing channels or campaigns.',
+      ].join(' ');
+    case 'campaignGoals':
+      return [
+        ensurePeriod(
+          `Near-term growth goals focus on ${stripLeadingWeAre(latest).replace(/^(we want to|our goal is to|goals? (are|include))\s+/i, '')}`
+        ),
+        'These are desired business outcomes for the next phase of work, not execution tactics.',
+      ].join(' ');
+    case 'successMetrics':
+      return [
+        ensurePeriod(
+          `Success will be judged by ${stripLeadingWeAre(latest).replace(/^(we (track|measure|watch)|metrics? (are|include)|success (is|means))\s+/i, '')}`
+        ),
+        'These signals define whether the engagement is working from the client\'s perspective.',
+      ].join(' ');
+    default:
+      return [
+        ensurePeriod(capitalizeSentence(latest)),
+        cleaned.length > 1
+          ? ensurePeriod(`Earlier notes in this area remain consistent with that understanding`)
+          : ensurePeriod(`This section reflects current operator understanding`),
+      ].join(' ');
+  }
+}
+
+function computeProgress(sectionState) {
+  let completed = 0;
+  for (const key of BLUEPRINT_SECTIONS) {
+    const section = sectionState && sectionState[key];
+    if (section && String(section.summary || '').trim() && !answerLooksEmpty(section.summary)) {
+      completed += 1;
+    }
+  }
+  const total = BLUEPRINT_SECTIONS.length;
+  return {
+    label: 'Business Understanding',
+    completed,
+    total,
+    percent: total ? Math.round((completed / total) * 100) : 0,
+  };
+}
+
+function shouldReflect(stepIndex) {
+  const answered = Number(stepIndex) || 0;
+  return answered > 0 && answered % REFLECTION_EVERY_N === 0;
+}
+
+function buildReflection(sectionState, answeredCount) {
+  const filled = BLUEPRINT_SECTIONS.map((key) => {
+    const section = sectionState && sectionState[key];
+    if (!section || !String(section.summary || '').trim()) return null;
+    return { key, summary: section.summary };
+  }).filter(Boolean);
+  if (!filled.length) return null;
+
+  const openings = [
+    "So far I'm hearing",
+    'Let me make sure I understand',
+    "Here's what I'm taking away so far",
+  ];
+  const opener = openings[Math.max(0, Math.floor(answeredCount / REFLECTION_EVERY_N) - 1) % openings.length];
+  const snippets = filled.slice(-Math.min(3, filled.length)).map((row) => {
+    const title = SECTION_TITLES[row.key] || row.key;
+    return `${title}: ${firstSentence(row.summary)}`;
+  });
+  return `${opener}: ${snippets.join(' ')}`;
 }
 
 function currentQuestion(state) {
@@ -315,6 +533,7 @@ function initialInterviewState({ notes } = {}) {
     contradictions: [],
     notes: notes ? String(notes) : null,
     blueprintId: null,
+    lastReflectionAt: 0,
   };
 }
 
@@ -830,7 +1049,9 @@ async function applySectionUpdate(store, session, sectionKey, statement, type, t
   const priorEvidence = (await store.listEvidence(session.id)).filter(
     (e) => e.category === sectionKey
   );
-  const priorStatements = priorEvidence.map((e) => e.statement);
+  const priorStatements = priorEvidence
+    .map((e) => e.statement)
+    .filter((s) => s && !/^Unknown:/i.test(String(s)));
   const empty = answerLooksEmpty(statement);
   const isConfirmation = looksLikeConfirmation(statement);
   const hasCorroboration = priorEvidence.length >= 1 && !empty;
@@ -876,14 +1097,32 @@ async function applySectionUpdate(store, session, sectionKey, statement, type, t
       { section: sectionKey, statement: String(statement).trim(), at: nowIso() },
     ];
   } else if (!empty) {
-    nextConfidence = clampConfidence(
-      Math.max(section.confidence || 0, confidence)
-    );
+    const prior = Number(section.confidence) || 0;
+    if (prior <= 0) {
+      nextConfidence = confidence;
+    } else {
+      nextConfidence = clampConfidence(prior * 0.35 + confidence * 0.65);
+    }
+  } else if (empty && (!section.summary || answerLooksEmpty(section.summary))) {
+    nextConfidence = UNKNOWN_CONFIDENCE;
+  }
+
+  let summary = section.summary || '';
+  if (!empty) {
+    if (type === 'CLIENT_EDITED') {
+      summary = String(statement).trim();
+    } else {
+      summary = summarizeSection(sectionKey, [...priorStatements, String(statement).trim()]);
+    }
   }
 
   sectionState[sectionKey] = {
-    summary: empty ? section.summary || '' : String(statement).trim(),
-    confidence: empty ? section.confidence || UNKNOWN_CONFIDENCE : nextConfidence,
+    summary,
+    confidence: empty
+      ? section.summary && !answerLooksEmpty(section.summary)
+        ? section.confidence || UNKNOWN_CONFIDENCE
+        : UNKNOWN_CONFIDENCE
+      : nextConfidence,
     evidenceIds: [...(section.evidenceIds || []), evidenceRow.id],
     unknowns,
   };
@@ -1084,6 +1323,7 @@ async function startClientInterview(input = {}, opts = {}) {
       question: null,
       message: 'Notes ingested. Draft Business Blueprint is ready for review.',
       blueprint: publicBlueprint(blueprint),
+      progress: computeProgress(session.interview_state.sectionState),
     };
   }
 
@@ -1121,6 +1361,7 @@ async function startClientInterview(input = {}, opts = {}) {
     message: q.question.prompt,
     turnId: assistantTurn.id,
     blueprint: null,
+    progress: computeProgress(session.interview_state.sectionState),
   };
 }
 
@@ -1165,6 +1406,8 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       question: null,
       message: 'Draft Business Blueprint is ready for review.',
       blueprint: publicBlueprint(blueprint),
+      progress: computeProgress(session.interview_state.sectionState),
+      reflection: null,
     };
   }
 
@@ -1222,7 +1465,27 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       message: 'Draft Business Blueprint is ready for review.',
       evidence: publicEvidence(evidenceRow),
       blueprint: publicBlueprint(blueprint),
+      progress: computeProgress(state.sectionState),
+      reflection: null,
     };
+  }
+
+  let reflection = null;
+  if (shouldReflect(state.stepIndex) && state.lastReflectionAt !== state.stepIndex) {
+    reflection = buildReflection(state.sectionState, state.stepIndex);
+    if (reflection) {
+      state.lastReflectionAt = state.stepIndex;
+      await store.insertTurn({
+        id: newId(),
+        session_id: session.id,
+        speaker: 'assistant',
+        message: reflection,
+        goal: 'Reflect current understanding',
+        asked_because: 'Lightweight conversational summary before continuing the fixed question bank.',
+        derived_evidence: [],
+        created_at: new Date(),
+      });
+    }
   }
 
   const nextQ = currentQuestion(state);
@@ -1237,6 +1500,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     derived_evidence: [],
     created_at: new Date(),
   });
+  session.interview_state = state;
   await store.updateSession(session.id, {
     status: 'DISCOVERY',
     current_stage: session.current_stage,
@@ -1256,9 +1520,11 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       askedBecause: nextQ.question.askedBecause,
     },
     message: nextQ.question.prompt,
+    reflection,
     evidence: publicEvidence(evidenceRow),
     contradiction: contradiction || false,
     blueprint: null,
+    progress: computeProgress(state.sectionState),
   };
 }
 
@@ -1295,6 +1561,9 @@ async function getInterview(sessionId, opts = {}) {
         }
       : null,
     sectionState: (session.interview_state && session.interview_state.sectionState) || {},
+    progress: computeProgress(
+      (session.interview_state && session.interview_state.sectionState) || {}
+    ),
   };
 }
 
@@ -1543,12 +1812,18 @@ module.exports = {
   EVIDENCE_TYPES,
   NEXT_ACTIONS,
   QUESTION_BANK,
+  SECTION_TITLES,
   GENERATED_BY,
   MIN_SECTION_CONFIDENCE,
   ClientIntelligenceError,
   createMemoryStore,
   createPostgresStore,
   scoreEvidenceConfidence,
+  summarizeSection,
+  computeProgress,
+  buildReflection,
+  hasSpecificitySignals,
+  looksAmbiguous,
   assertTransition,
   startClientInterview,
   postInterviewMessage,
