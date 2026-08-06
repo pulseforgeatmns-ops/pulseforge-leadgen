@@ -2,6 +2,7 @@
 
 /**
  * SPEC-083 — Client Intelligence Engine (CIE) thin-slice v1.
+ * SPEC-084 — Interview experience helpers (understanding progress, executive summary, resume).
  * Text interview → evidence → confidence → Business Blueprint → approve → playbook handoff.
  * Does not invent campaign strategy or activate Scout/Composer.
  */
@@ -28,7 +29,7 @@ const ALLOWED_TRANSITIONS = Object.freeze({
   CLARIFICATION: ['VALIDATION'],
   VALIDATION: ['BLUEPRINT_GENERATION'],
   BLUEPRINT_GENERATION: ['CLIENT_REVIEW'],
-  CLIENT_REVIEW: ['APPROVED'],
+  CLIENT_REVIEW: ['APPROVED', 'DISCOVERY'],
   APPROVED: [],
 });
 
@@ -490,30 +491,168 @@ function computeProgress(sectionState) {
   };
 }
 
+const UNDERSTANDING_STATUS_LABELS = Object.freeze({
+  ready: 'Ready',
+  building: 'Building…',
+  learning: 'Still learning…',
+  waiting: 'Waiting for more information…',
+});
+
+/**
+ * Redacted live progress for the interview panel — never includes summaries.
+ * @returns {{ label: string, sections: Array<object> }}
+ */
+function buildUnderstandingProgress(sectionState) {
+  const sections = BLUEPRINT_SECTIONS.map((key) => {
+    const section = (sectionState && sectionState[key]) || emptySection();
+    const confidence = clampConfidence(section.confidence || 0);
+    const evidenceCount = Array.isArray(section.evidenceIds) ? section.evidenceIds.length : 0;
+    const hasSummary =
+      Boolean(String(section.summary || '').trim()) && !answerLooksEmpty(section.summary);
+    const unknowns = [...(section.unknowns || [])].filter(Boolean);
+    let status = 'waiting';
+    const pct = Math.round(confidence * 100);
+    if (evidenceCount > 0 || hasSummary) {
+      if (pct >= 81) status = 'ready';
+      else if (pct >= 51) status = 'building';
+      else status = 'learning';
+    }
+    return {
+      key,
+      title: SECTION_TITLES[key] || key,
+      confidence,
+      confidencePercent: pct,
+      evidenceCount,
+      unknowns,
+      status,
+      statusLabel: UNDERSTANDING_STATUS_LABELS[status],
+    };
+  });
+  return {
+    label: 'Business Understanding',
+    sections,
+  };
+}
+
+/**
+ * Read-only executive summary Max presents before the editable Blueprint.
+ */
+function buildExecutiveSummary(sections) {
+  const s = (key) => (sections && sections[key]) || emptySection();
+  const joinBodies = (keys) =>
+    keys
+      .map((key) => String(s(key).summary || '').trim())
+      .filter(Boolean)
+      .join(' ');
+
+  const unknownLines = [];
+  for (const key of BLUEPRINT_SECTIONS) {
+    for (const u of s(key).unknowns || []) {
+      if (u && !unknownLines.includes(u)) unknownLines.push(u);
+    }
+  }
+
+  return {
+    title: 'My Understanding of Your Business',
+    subtitle: 'Generated from our conversation',
+    sections: [
+      {
+        id: 'whoYouAre',
+        title: 'Who you are',
+        body: joinBodies(['identity', 'services']) || 'Still forming an identity picture.',
+      },
+      {
+        id: 'whoYouServe',
+        title: 'Who you serve',
+        body:
+          joinBodies(['idealCustomers', 'avoidCustomers', 'targetMarkets']) ||
+          'Ideal customers and markets are still emerging.',
+      },
+      {
+        id: 'whyChooseYou',
+        title: 'Why customers choose you',
+        body:
+          joinBodies(['competitiveAdvantages', 'brandVoice']) ||
+          'Differentiation and brand voice need more detail.',
+      },
+      {
+        id: 'whereHeaded',
+        title: "Where you're headed",
+        body: joinBodies(['campaignGoals']) || 'Near-term growth priorities are still open.',
+      },
+      {
+        id: 'whatSuccess',
+        title: 'What success looks like',
+        body: joinBodies(['successMetrics']) || 'Success signals are not yet defined.',
+      },
+      {
+        id: 'learnMore',
+        title: "Where I'd like to learn more",
+        body: unknownLines.length
+          ? unknownLines.map((u) => `• ${u}`).join('\n')
+          : 'Nothing major outstanding from this conversation.',
+      },
+    ],
+  };
+}
+
+function sectionStateFromSession(session) {
+  return (session && session.interview_state && session.interview_state.sectionState) || emptySections();
+}
+
+function withExperienceFields(session, payload = {}) {
+  const sectionState = sectionStateFromSession(session);
+  const out = {
+    ...payload,
+    progress: payload.progress || computeProgress(sectionState),
+    understanding: buildUnderstandingProgress(sectionState),
+  };
+  if (payload.blueprint && payload.blueprint.sections) {
+    out.executiveSummary = buildExecutiveSummary(payload.blueprint.sections);
+  }
+  return out;
+}
+
 function shouldReflect(stepIndex) {
   const answered = Number(stepIndex) || 0;
   return answered > 0 && answered % REFLECTION_EVERY_N === 0;
 }
 
 function buildReflection(sectionState, answeredCount) {
-  const filled = BLUEPRINT_SECTIONS.map((key) => {
+  const priorityKeys = ['identity', 'services', 'idealCustomers', 'campaignGoals'];
+  const filled = priorityKeys
+    .map((key) => {
+      const section = sectionState && sectionState[key];
+      if (!section || !String(section.summary || '').trim()) return null;
+      return { key, summary: section.summary };
+    })
+    .filter(Boolean);
+  const fallback = BLUEPRINT_SECTIONS.map((key) => {
     const section = sectionState && sectionState[key];
     if (!section || !String(section.summary || '').trim()) return null;
     return { key, summary: section.summary };
   }).filter(Boolean);
-  if (!filled.length) return null;
+  const source = filled.length ? filled : fallback;
+  if (!source.length) return null;
 
   const openings = [
-    "So far I'm hearing",
+    "Thanks, that's helpful. Here's what I'm hearing so far",
     'Let me make sure I understand',
     "Here's what I'm taking away so far",
   ];
-  const opener = openings[Math.max(0, Math.floor(answeredCount / REFLECTION_EVERY_N) - 1) % openings.length];
-  const snippets = filled.slice(-Math.min(3, filled.length)).map((row) => {
-    const title = SECTION_TITLES[row.key] || row.key;
+  const opener =
+    openings[Math.max(0, Math.floor(answeredCount / REFLECTION_EVERY_N) - 1) % openings.length];
+  const directionTitles = {
+    identity: 'Identity',
+    services: 'Services',
+    idealCustomers: 'Ideal Customer',
+    campaignGoals: 'Direction',
+  };
+  const snippets = source.slice(0, 4).map((row) => {
+    const title = directionTitles[row.key] || SECTION_TITLES[row.key] || row.key;
     return `${title}: ${firstSentence(row.summary)}`;
   });
-  return `${opener}: ${snippets.join(' ')}`;
+  return `${opener}…\n\n${snippets.join('\n')}`;
 }
 
 function currentQuestion(state) {
@@ -1315,7 +1454,7 @@ async function startClientInterview(input = {}, opts = {}) {
       current_stage: 'Notes',
     });
     const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
-    return {
+    return withExperienceFields(session, {
       interviewId: session.id,
       ...publicSession(session),
       mode: 'notes',
@@ -1323,8 +1462,7 @@ async function startClientInterview(input = {}, opts = {}) {
       question: null,
       message: 'Notes ingested. Draft Business Blueprint is ready for review.',
       blueprint: publicBlueprint(blueprint),
-      progress: computeProgress(session.interview_state.sectionState),
-    };
+    });
   }
 
   const q = currentQuestion(session.interview_state);
@@ -1345,7 +1483,7 @@ async function startClientInterview(input = {}, opts = {}) {
     interview_state: session.interview_state,
   });
 
-  return {
+  return withExperienceFields(session, {
     interviewId: session.id,
     ...publicSession(session),
     mode: 'interactive',
@@ -1361,8 +1499,7 @@ async function startClientInterview(input = {}, opts = {}) {
     message: q.question.prompt,
     turnId: assistantTurn.id,
     blueprint: null,
-    progress: computeProgress(session.interview_state.sectionState),
-  };
+  });
 }
 
 async function postInterviewMessage(sessionId, message, opts = {}) {
@@ -1397,18 +1534,68 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
 
   const state = session.interview_state || initialInterviewState();
   const q = currentQuestion(state);
+
+  // Refinement pass after resume: free-form note updates then regenerate blueprint.
+  if (!q && state.refinementPass) {
+    const clientTurn = await store.insertTurn({
+      id: newId(),
+      session_id: session.id,
+      speaker: 'client',
+      message: text,
+      goal: 'Refine Business Blueprint understanding',
+      asked_because: 'Client returned to the interview to refine Max\'s understanding.',
+      derived_evidence: [],
+      created_at: new Date(),
+    });
+    const mapped = extractNotesIntoSections(text);
+    const evidenceIds = [];
+    const sectionsToUpdate = Object.keys(mapped).length
+      ? Object.keys(mapped)
+      : ['identity'];
+    for (const section of sectionsToUpdate) {
+      const statement = mapped[section] || text;
+      const { evidenceRow } = await applySectionUpdate(
+        store,
+        session,
+        section,
+        statement,
+        'EXPLICIT',
+        clientTurn.id
+      );
+      evidenceIds.push(evidenceRow.id);
+    }
+    await store.updateTurn(clientTurn.id, { derived_evidence: evidenceIds });
+    state.refinementPass = false;
+    state.done = true;
+    session.interview_state = state;
+    await store.updateSession(session.id, {
+      status: 'DISCOVERY',
+      interview_state: state,
+      current_stage: 'Refinement',
+    });
+    const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
+    return withExperienceFields(await store.getSession(session.id), {
+      interviewId: session.id,
+      ...publicSession(await store.getSession(session.id)),
+      nextAction: 'GENERATE_BLUEPRINT',
+      question: null,
+      message: 'Draft Business Blueprint is ready for review.',
+      blueprint: publicBlueprint(blueprint),
+      reflection: null,
+    });
+  }
+
   if (!q) {
     const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
-    return {
+    return withExperienceFields(await store.getSession(session.id), {
       interviewId: session.id,
       ...publicSession(await store.getSession(session.id)),
       nextAction: 'COMPLETE',
       question: null,
       message: 'Draft Business Blueprint is ready for review.',
       blueprint: publicBlueprint(blueprint),
-      progress: computeProgress(session.interview_state.sectionState),
       reflection: null,
-    };
+    });
   }
 
   const clientTurn = await store.insertTurn({
@@ -1457,7 +1644,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       current_stage: session.current_stage,
     });
     const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
-    return {
+    return withExperienceFields(await store.getSession(session.id), {
       interviewId: session.id,
       ...publicSession(await store.getSession(session.id)),
       nextAction: 'GENERATE_BLUEPRINT',
@@ -1465,9 +1652,8 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       message: 'Draft Business Blueprint is ready for review.',
       evidence: publicEvidence(evidenceRow),
       blueprint: publicBlueprint(blueprint),
-      progress: computeProgress(state.sectionState),
       reflection: null,
-    };
+    });
   }
 
   let reflection = null;
@@ -1507,7 +1693,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     interview_state: state,
   });
 
-  return {
+  return withExperienceFields(await store.getSession(session.id), {
     interviewId: session.id,
     ...publicSession(await store.getSession(session.id)),
     nextAction: contradiction ? 'CLARIFY' : 'ASK',
@@ -1524,8 +1710,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     evidence: publicEvidence(evidenceRow),
     contradiction: contradiction || false,
     blueprint: null,
-    progress: computeProgress(state.sectionState),
-  };
+  });
 }
 
 async function getInterview(sessionId, opts = {}) {
@@ -1544,7 +1729,7 @@ async function getInterview(sessionId, opts = {}) {
     );
   }
   const q = currentQuestion(session.interview_state);
-  return {
+  return withExperienceFields(session, {
     interviewId: session.id,
     ...publicSession(session),
     turns: turns.map(publicTurn),
@@ -1561,10 +1746,7 @@ async function getInterview(sessionId, opts = {}) {
         }
       : null,
     sectionState: (session.interview_state && session.interview_state.sectionState) || {},
-    progress: computeProgress(
-      (session.interview_state && session.interview_state.sectionState) || {}
-    ),
-  };
+  });
 }
 
 async function getInterviewBlueprint(sessionId, opts = {}) {
@@ -1730,6 +1912,72 @@ async function reviseBlueprint(blueprintId, revisions = {}, opts = {}) {
 }
 
 /**
+ * Resume discovery after CLIENT_REVIEW so the client can refine understanding.
+ */
+async function resumeInterview(sessionId, opts = {}) {
+  const store = await resolveStore(opts);
+  const session = await store.getSession(sessionId);
+  if (!session) {
+    throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
+  }
+  if (session.status === 'APPROVED') {
+    throw new ClientIntelligenceError(
+      'interview_complete',
+      'Interview already approved; start a new session to recalibrate'
+    );
+  }
+  if (session.status !== 'CLIENT_REVIEW') {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      `Can only resume from CLIENT_REVIEW (was ${session.status})`
+    );
+  }
+
+  advanceStatus(session, 'DISCOVERY');
+  const state = {
+    ...(session.interview_state || initialInterviewState()),
+    done: false,
+    refinementPass: true,
+  };
+  // Keep stepIndex past the bank so free-form refinement messages are accepted.
+  if ((Number(state.stepIndex) || 0) < QUESTION_BANK.length) {
+    state.stepIndex = QUESTION_BANK.length;
+  }
+  session.interview_state = state;
+  session.current_stage = 'Refinement';
+
+  const prompt =
+    'What would you like to refine or add? Share anything that would sharpen my understanding.';
+  await store.insertTurn({
+    id: newId(),
+    session_id: session.id,
+    speaker: 'assistant',
+    message: prompt,
+    goal: 'Invite refinement of Business Blueprint understanding',
+    asked_because: 'Client chose to refine before approving the Executive Summary or Blueprint.',
+    derived_evidence: [],
+    created_at: new Date(),
+  });
+
+  await store.updateSession(session.id, {
+    status: 'DISCOVERY',
+    current_stage: session.current_stage,
+    interview_state: state,
+  });
+
+  return withExperienceFields(session, {
+    interviewId: session.id,
+    ...publicSession(session),
+    nextAction: 'ASK',
+    question: null,
+    message: prompt,
+    blueprint: null,
+    reflection: null,
+    resumed: true,
+  });
+}
+
+/**
  * Approve blueprint: immutable snapshot + pending_review playbook handoff.
  */
 async function approveBlueprint(blueprintId, opts = {}) {
@@ -1821,12 +2069,15 @@ module.exports = {
   scoreEvidenceConfidence,
   summarizeSection,
   computeProgress,
+  buildUnderstandingProgress,
+  buildExecutiveSummary,
   buildReflection,
   hasSpecificitySignals,
   looksAmbiguous,
   assertTransition,
   startClientInterview,
   postInterviewMessage,
+  resumeInterview,
   getInterview,
   getInterviewBlueprint,
   getClientBlueprint,

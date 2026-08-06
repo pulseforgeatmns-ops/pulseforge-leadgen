@@ -2,9 +2,11 @@
 
 /**
  * SPEC-083 — Client Intelligence Engine APIs.
+ * SPEC-084 — Interview experience (resume + understanding fields).
  *
  * POST /api/v1/clients/:id/interview/start
  * POST /api/v1/interview/:id/message
+ * POST /api/v1/interview/:id/resume
  * GET  /api/v1/interview/:id
  * GET  /api/v1/interview/:id/blueprint
  * POST /api/v1/blueprint/:id/revise
@@ -21,6 +23,7 @@ const {
   ClientIntelligenceError,
   startClientInterview,
   postInterviewMessage,
+  resumeInterview,
   getInterview,
   getInterviewBlueprint,
   getClientBlueprint,
@@ -81,6 +84,16 @@ router.post('/api/v1/interview/:id/message', requireOperator, async (req, res) =
       });
     }
     const result = await postInterviewMessage(req.params.id, message);
+    noStore(res);
+    return res.json(result);
+  } catch (err) {
+    return sendError(res, err);
+  }
+});
+
+router.post('/api/v1/interview/:id/resume', requireOperator, async (req, res) => {
+  try {
+    const result = await resumeInterview(req.params.id);
     noStore(res);
     return res.json(result);
   } catch (err) {

@@ -6,6 +6,11 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Client Intelligence Interview Experience ([SPEC-084](docs/specs/SPEC-084_Client_Intelligence_Interview_Experience.md))
+  - Welcome → Discovery → Understanding → read-only Executive Summary → editable Blueprint → on-page completion
+  - Live understanding progress (titles/confidence/unknowns only); narratives reserved for Understanding reveal
+  - Interruptible premium loading + trust bridge before **My Understanding of Your Business**
+  - `POST /api/v1/interview/:id/resume` for refine / keep talking
 - Client Intelligence Engine v1 thin slice ([SPEC-083](docs/specs/SPEC-083_Client_Intelligence_Engine.md))
   - Text interview → evidence → simple confidence → Business Blueprint → client approve
   - Durable `cie_interview_sessions`, `cie_interview_turns`, `cie_evidence`, `cie_business_blueprints`
