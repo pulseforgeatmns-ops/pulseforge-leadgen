@@ -348,26 +348,75 @@ describe('confidence rules', () => {
     assert.ok(!JSON.stringify(progress).includes('Secret narrative'));
   });
 
-  it('buildExecutiveSummary maps blueprint sections into read-only narratives', () => {
+  it('buildExecutiveSummary synthesizes CEO-facing consultant narratives', () => {
     const summary = buildExecutiveSummary({
-      identity: { summary: 'Aji is a cleaning company.', confidence: 0.9, unknowns: [] },
-      services: { summary: 'Recurring cleans.', confidence: 0.8, unknowns: [] },
-      idealCustomers: { summary: 'Homeowners.', confidence: 0.8, unknowns: [] },
-      avoidCustomers: { summary: 'Bargain hunters.', confidence: 0.7, unknowns: [] },
-      targetMarkets: { summary: 'Coastal SC.', confidence: 0.7, unknowns: [] },
-      competitiveAdvantages: { summary: 'Reliable crews.', confidence: 0.8, unknowns: [] },
-      brandVoice: { summary: 'Friendly professional.', confidence: 0.7, unknowns: [] },
-      campaignGoals: { summary: 'Book appointments.', confidence: 0.8, unknowns: [] },
+      identity: {
+        summary:
+          'Aji is a cleaning company. This identity framing is how the operator describes the business today, and it anchors every other Blueprint section.',
+        confidence: 0.9,
+        unknowns: [],
+      },
+      services: {
+        summary:
+          'Today the business delivers recurring cleans. Service understanding reflects what is actually sold now, not aspirational packaging.',
+        confidence: 0.8,
+        unknowns: [],
+      },
+      idealCustomers: {
+        summary: 'Ideal customers are busy homeowners. This ICP picture prioritizes fit over volume.',
+        confidence: 0.8,
+        unknowns: [],
+      },
+      avoidCustomers: {
+        summary:
+          'The business prefers to avoid bargain hunters. These constraints protect targeting quality and should stay visible in the Blueprint.',
+        confidence: 0.7,
+        unknowns: [],
+      },
+      targetMarkets: {
+        summary:
+          'Priority markets center on Coastal SC. Geography and vertical focus here bound where discovery should concentrate first.',
+        confidence: 0.7,
+        unknowns: [],
+      },
+      competitiveAdvantages: {
+        summary:
+          'Competitive edge is described as reliable crews. This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
+        confidence: 0.8,
+        unknowns: [],
+      },
+      brandVoice: {
+        summary:
+          'Brand voice should read as friendly professional. Tone guidance constrains later language without choosing channels or campaigns.',
+        confidence: 0.7,
+        unknowns: [],
+      },
+      campaignGoals: {
+        summary:
+          'Near-term growth goals focus on book appointments. These are desired business outcomes for the next phase of work, not execution tactics.',
+        confidence: 0.8,
+        unknowns: [],
+      },
       successMetrics: {
-        summary: 'Close rate.',
+        summary:
+          'Success will be judged by close rate. These signals define whether the engagement is working from the client\'s perspective.',
         confidence: 0.6,
-        unknowns: ['Pricing philosophy'],
+        unknowns: ['Pricing philosophy', 'Missing clear answer for capacity'],
       },
     });
     assert.equal(summary.title, 'My Understanding of Your Business');
     assert.equal(summary.sections.length, 6);
+    for (const section of summary.sections) {
+      const sentences = section.body.split(/(?<=[.!?])\s+/).filter(Boolean);
+      assert.ok(sentences.length >= 2 && sentences.length <= 4, section.id);
+      assert.equal(/\n|•|Blueprint|operator-stated|ICP|Unknown:|Missing clear answer/i.test(section.body), false);
+    }
     assert.match(summary.sections[0].body, /Aji/);
-    assert.match(summary.sections[5].body, /Pricing philosophy/);
+    assert.match(summary.sections[0].body, /recurring cleans/i);
+    assert.equal(/Service understanding reflects|anchors every other/i.test(summary.sections[0].body), false);
+    assert.match(summary.sections[5].body, /pricing philosophy/i);
+    assert.match(summary.sections[5].body, /capacity/i);
+    assert.equal(/^•/m.test(summary.sections[5].body), false);
   });
 });
 
