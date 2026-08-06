@@ -49,6 +49,7 @@
     "market:intel:briefing": "node scripts/marketIntelBriefing.js",
     "relationship:intel:interview": "node scripts/relationshipIntelInterview.js",
     "relationship:intel:readiness": "node scripts/relationshipIntelReadiness.js",
+    "client:intel:interview": "node scripts/clientIntelInterview.js",
     "prospect:brief": "node scripts/prospectOperatingBrief.js",
     "operator:service-loop": "node scripts/serviceModeOperatorLoop.js",
     "gmail:token": "node getGmailToken.js",

@@ -49,9 +49,15 @@ Downstream capabilities currently invent or hardcode outreach assumptions (chann
 - Seed playbooks (AS Cleaning Co., Anchor Cleaning)
 - No duplicate strategy configuration in downstream capabilities
 
+## Understanding vs strategy
+
+- **Business Blueprint (SPEC-083)** = understanding — *who is this business?*
+- **Client Playbook (this spec)** = strategy — *how should Pulseforge help grow this business?*
+
+CIE ends at an approved Blueprint. On approval it may generate a `pending_review` playbook from understanding fields only; operators still review and activate. Scout, Composer, and campaigns continue to consume playbooks — never blueprints directly.
+
 ## Out of Scope
 
-- Guided onboarding interview UI (Future — operator experience)
 - Visual Playbook editor UI (Future)
 - Automated learning-loop recommendations that mutate playbooks (advisory only later; operator approval always required)
 - Full live Campaign Builder (still stub adapter; stub now respects Playbook)
@@ -69,6 +75,8 @@ Downstream capabilities currently invent or hardcode outreach assumptions (chann
 
 ```text
 Client
+      ↓
+Business Blueprint (understanding — SPEC-083)
       ↓
 Client Playbook  (strategy — ADR-015)
       ↓
@@ -199,7 +207,7 @@ interface PlaybookConstraint {
 
 ## Future Work
 
-- Guided onboarding interview → draft playbook
+- CIE consumes an approved Business Blueprint and maps business understanding into a draft Client Playbook ([SPEC-083](SPEC-083_Client_Intelligence_Engine.md)) — v1 handoff shipped; richer strategy-field operator tooling remains
 - Visual Playbook editor
 - Advisory learning recommendations (“Medical offices convert 38% better…”) requiring operator approval
 - Execution Engine enforcement of call windows / CRM exclusions at send time ([SPEC-029](SPEC-029_Execution_Engine.md) / [ADR-016](../adr/ADR-016_Execution_Does_Not_Decide.md))
