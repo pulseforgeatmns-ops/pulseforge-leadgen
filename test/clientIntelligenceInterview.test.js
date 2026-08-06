@@ -118,7 +118,7 @@ describe('clientIntelligenceInterview lifecycle', () => {
     assert.equal(turn.blueprint.status, 'in_review');
     assert.ok(turn.executiveSummary);
     assert.equal(turn.executiveSummary.title, 'My Understanding of Your Business');
-    assert.equal(turn.executiveSummary.subtitle, 'Generated from our conversation');
+    assert.equal(turn.executiveSummary.subtitle, 'A working picture for leadership review');
     assert.equal(turn.executiveSummary.sections.length, 6);
     for (const key of BLUEPRINT_SECTIONS) {
       assert.ok(turn.blueprint.sections[key]);
@@ -405,18 +405,34 @@ describe('confidence rules', () => {
       },
     });
     assert.equal(summary.title, 'My Understanding of Your Business');
+    assert.equal(summary.subtitle, 'A working picture for leadership review');
     assert.equal(summary.sections.length, 6);
+    const banned =
+      /\n|•|Blueprint|operator-stated|ICP|Unknown:|Missing clear answer|Generated from|evidenceId|sectionKey|CIE-v|prompt artifact/i;
     for (const section of summary.sections) {
       const sentences = section.body.split(/(?<=[.!?])\s+/).filter(Boolean);
-      assert.ok(sentences.length >= 2 && sentences.length <= 4, section.id);
-      assert.equal(/\n|•|Blueprint|operator-stated|ICP|Unknown:|Missing clear answer/i.test(section.body), false);
+      assert.ok(sentences.length >= 2 && sentences.length <= 4, `${section.id}: ${sentences.length} sentences`);
+      assert.equal(banned.test(section.body), false, section.body);
+      // Synthesis should not restate Blueprint second-sentence boilerplate
+      assert.equal(/Service understanding reflects|anchors every other|ICP picture|operator-stated/i.test(section.body), false);
     }
     assert.match(summary.sections[0].body, /Aji/);
     assert.match(summary.sections[0].body, /recurring cleans/i);
-    assert.equal(/Service understanding reflects|anchors every other/i.test(summary.sections[0].body), false);
+    assert.match(summary.sections[0].body, /center of gravity|growth advice/i);
+    assert.match(summary.sections[1].body, /busy homeowners/i);
+    assert.match(summary.sections[1].body, /bargain hunters/i);
+    assert.match(summary.sections[1].body, /Coastal SC/i);
+    assert.match(summary.sections[2].body, /reliable crews/i);
+    assert.match(summary.sections[2].body, /friendly and professional/i);
+    assert.match(summary.sections[3].body, /booking appointments/i);
+    assert.match(summary.sections[4].body, /close rate/i);
     assert.match(summary.sections[5].body, /pricing philosophy/i);
     assert.match(summary.sections[5].body, /capacity/i);
     assert.equal(/^•/m.test(summary.sections[5].body), false);
+    // No Mad-Lib fragment splicing
+    assert.equal(/deciding factors tend to be|creates value through recurring|concentrate first in /i.test(
+      summary.sections.map((s) => s.body).join(' ')
+    ), false);
   });
 });
 

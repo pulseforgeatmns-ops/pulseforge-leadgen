@@ -738,7 +738,7 @@
       els.sidePanel.innerHTML =
         '<div class="exec-card">' +
           '<h3>' + escapeHtml(summary.title || 'My Understanding of Your Business') + '</h3>' +
-          '<p class="exec-sub">' + escapeHtml(summary.subtitle || 'Generated from our conversation') + '</p>' +
+          '<p class="exec-sub">' + escapeHtml(summary.subtitle || 'A working picture for leadership review') + '</p>' +
           sections.map((s) =>
             '<section class="exec-section">' +
               '<h4>' + escapeHtml(s.title) + '</h4>' +
@@ -967,7 +967,7 @@
       } else if (state.blueprint && state.blueprint.sections) {
         renderExecutiveSummary({
           title: 'My Understanding of Your Business',
-          subtitle: 'Generated from our conversation',
+          subtitle: 'A working picture for leadership review',
           sections: [],
         });
       }
