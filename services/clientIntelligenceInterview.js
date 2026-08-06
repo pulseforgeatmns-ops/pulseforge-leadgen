@@ -535,20 +535,329 @@ function buildUnderstandingProgress(sectionState) {
 }
 
 /**
- * Read-only executive summary Max presents before the editable Blueprint.
+ * Strip Blueprint / interview boilerplate so only substantive meaning remains.
+ */
+function isMetaConsultantSentence(sentence) {
+  const s = String(sentence || '').trim();
+  if (!s) return true;
+  return (
+    /\b(blueprint|operator-stated|operator understanding|downstream|discovery should|ICP picture|engagement is working)\b/i.test(
+      s
+    ) ||
+    /anchors every other/i.test(s) ||
+    /useful for messaging/i.test(s) ||
+    /not an invented strategy/i.test(s) ||
+    /not execution tactics/i.test(s) ||
+    /without choosing channels/i.test(s) ||
+    /from the client's perspective/i.test(s) ||
+    /not aspirational packaging/i.test(s) ||
+    /should stay visible in the Blueprint/i.test(s) ||
+    /Understanding of the business starts/i.test(s) ||
+    /will ground services, markets/i.test(s) ||
+    /Earlier notes in this area/i.test(s) ||
+    /reflects current operator/i.test(s) ||
+    /Service understanding reflects/i.test(s) ||
+    /These constraints protect targeting/i.test(s) ||
+    /Tone guidance constrains/i.test(s) ||
+    /These are desired business outcomes for the next phase/i.test(s) ||
+    /These signals define whether/i.test(s) ||
+    /^Unknown:/i.test(s) ||
+    /^Missing clear answer/i.test(s) ||
+    /^No evidence yet/i.test(s)
+  );
+}
+
+function substantiveSentences(summary, limit = 2) {
+  const parts = String(summary || '')
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((s) => !isMetaConsultantSentence(s))
+    .map((s) =>
+      s
+        .replace(/\bICP\b/g, 'ideal customer')
+        .replace(/\bBlueprint\b/gi, 'understanding')
+        .replace(/\boperator-stated\b/gi, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim()
+    )
+    .filter(Boolean);
+  return parts.slice(0, limit);
+}
+
+function coreClaim(summary) {
+  const sentences = substantiveSentences(summary, 1);
+  if (!sentences.length) return '';
+  return sentences[0].replace(/[.!?]+$/, '').trim();
+}
+
+function softenClaim(claim) {
+  return String(claim || '')
+    .replace(
+      /^(Today the business delivers|Ideal customers are|The business prefers to avoid|Priority markets center on|Competitive edge is described as|Brand voice should read as|Near-term growth goals focus on|Success will be judged by|The business is understood as)\s+/i,
+      ''
+    )
+    .replace(/\bfriendly professional\b/i, 'friendly and professional')
+    .replace(/\bpremium residential\b/i, 'premium residential')
+    .trim();
+}
+
+function asGerundPhrase(claim) {
+  const text = softenClaim(claim);
+  if (!text) return text;
+  if (/^(book|grow|build|increase|improve|win|close|hire|launch|expand)\b/i.test(text)) {
+    return text.replace(
+      /^(book|grow|build|increase|improve|win|close|hire|launch|expand)\b/i,
+      (m) => `${m.toLowerCase()}ing`
+    );
+  }
+  return text;
+}
+
+function humanizeUnknownLabel(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  if (/^Pricing philosophy$/i.test(text)) return 'pricing philosophy';
+  if (/^Capacity$/i.test(text)) return 'capacity and delivery constraints';
+  const missing = text.match(/^Missing clear answer for\s+(.+)$/i);
+  if (missing) {
+    const key = missing[1].trim();
+    const map = {
+      identity: 'how the business defines itself',
+      services: 'the full service mix',
+      idealCustomers: 'the ideal customer profile',
+      avoidCustomers: 'which customers to decline',
+      targetMarkets: 'priority markets',
+      competitiveAdvantages: 'what wins competitive decisions',
+      brandVoice: 'brand voice and tone',
+      campaignGoals: 'near-term growth priorities',
+      successMetrics: 'how success will be measured',
+    };
+    return map[key] || key.replace(/([A-Z])/g, ' $1').toLowerCase().trim();
+  }
+  const noEvidence = text.match(/^No evidence yet for\s+(.+)$/i);
+  if (noEvidence) {
+    return humanizeUnknownLabel(`Missing clear answer for ${noEvidence[1]}`);
+  }
+  return text
+    .replace(/^Unknown:\s*/i, '')
+    .replace(/\b(blueprint|evidenceIds?|sectionKey)\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function joinPolished(sentences) {
+  return sentences
+    .map((s) => ensurePeriod(String(s || '').trim()))
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(' ');
+}
+
+function composeWhoYouAre(identity, services) {
+  const idCore = coreClaim(identity);
+  const svcCore = coreClaim(services);
+  const sentences = [];
+  if (idCore) {
+    sentences.push(capitalizeSentence(idCore));
+    if (svcCore) {
+      sentences.push(
+        `At its core, the company creates value through ${softenClaim(svcCore)}.`
+      );
+      sentences.push(
+        'That combination of identity and offer is the foundation any growth recommendation should respect.'
+      );
+    } else {
+      sentences.push(
+        'The operating identity is clear enough to orient strategy, though the service mix still needs sharper definition.'
+      );
+    }
+  } else if (svcCore) {
+    sentences.push(
+      `The business is best understood through what it delivers: ${softenClaim(svcCore)}.`
+    );
+    sentences.push(
+      'A tighter statement of who the company is — beyond the offer itself — would complete this picture.'
+    );
+  } else {
+    sentences.push(
+      'The business identity is still taking shape.'
+    );
+    sentences.push(
+      'A concise statement of who you are and what you deliver would give every later recommendation a firmer center of gravity.'
+    );
+  }
+  return joinPolished(sentences);
+}
+
+function composeWhoYouServe(ideal, avoid, markets) {
+  const idealCore = coreClaim(ideal);
+  const avoidCore = coreClaim(avoid);
+  const marketCore = coreClaim(markets);
+  const sentences = [];
+  if (idealCore) {
+    sentences.push(
+      `The customers worth pursuing are ${softenClaim(idealCore).replace(/^(are\s+)/i, '')}.`
+    );
+  }
+  if (avoidCore) {
+    sentences.push(
+      `Equally important, the business is intentional about who not to serve: ${softenClaim(avoidCore)}.`
+    );
+  }
+  if (marketCore) {
+    sentences.push(
+      `Attention should concentrate first in ${softenClaim(marketCore)}.`
+    );
+  }
+  if (sentences.length >= 2) {
+    sentences.push(
+      'Taken together, this is a focused commercial beachhead rather than an open-ended pursuit of volume.'
+    );
+  } else if (sentences.length === 1) {
+    sentences.push(
+      'Clarity here will keep outreach disciplined and protect time for the relationships that matter most.'
+    );
+  } else {
+    sentences.push(
+      'The ideal customer and market focus are not yet fully drawn.'
+    );
+    sentences.push(
+      'Defining who is a strong fit — and who is not — will sharpen every commercial decision that follows.'
+    );
+  }
+  return joinPolished(sentences);
+}
+
+function composeWhyChooseYou(advantages, brandVoice) {
+  const advCore = coreClaim(advantages);
+  const voiceCore = coreClaim(brandVoice);
+  const sentences = [];
+  if (advCore) {
+    sentences.push(
+      `When a strong-fit customer chooses this business, the deciding factors tend to be ${softenClaim(advCore)}.`
+    );
+  }
+  if (voiceCore) {
+    sentences.push(
+      `That advantage should be expressed in a voice that feels ${softenClaim(voiceCore)}.`
+    );
+  }
+  if (advCore && voiceCore) {
+    sentences.push(
+      'Differentiation and tone reinforce each other: the market should experience the same promise the business actually keeps.'
+    );
+  } else if (advCore) {
+    sentences.push(
+      'Protecting and articulating that edge is more valuable than inventing a broader claim the company does not own.'
+    );
+  } else if (voiceCore) {
+    sentences.push(
+      'The voice is clear; the competitive reason to choose you still needs a sharper commercial expression.'
+    );
+  } else {
+    sentences.push(
+      'What wins the decision — and how that win should sound — remains under-specified.'
+    );
+    sentences.push(
+      'A crisp point of difference, stated in the company’s own language, would make growth work feel authentic rather than generic.'
+    );
+  }
+  return joinPolished(sentences);
+}
+
+function composeWhereHeaded(goals) {
+  const goalCore = coreClaim(goals);
+  const sentences = [];
+  if (goalCore) {
+    sentences.push(
+      `Over the next phase of growth, success is framed around ${asGerundPhrase(goalCore)}.`
+    );
+    sentences.push(
+      'That outcome should govern priorities, sequencing, and what the team declines so focus is not diluted.'
+    );
+    sentences.push(
+      'Every recommendation should be judged by whether it meaningfully advances this direction.'
+    );
+  } else {
+    sentences.push(
+      'Near-term direction is still open.'
+    );
+    sentences.push(
+      'Naming the business outcome that would make the next 90 days feel successful would turn activity into a coherent agenda.'
+    );
+  }
+  return joinPolished(sentences);
+}
+
+function composeWhatSuccess(metrics) {
+  const metricCore = coreClaim(metrics);
+  const sentences = [];
+  if (metricCore) {
+    sentences.push(
+      `Progress will be judged by ${softenClaim(metricCore)}.`
+    );
+    sentences.push(
+      'Those signals matter because they reflect commercial reality, not vanity activity.'
+    );
+    sentences.push(
+      'If those numbers move in the right direction, the growth work is working; if they do not, the approach should be questioned quickly.'
+    );
+  } else {
+    sentences.push(
+      'The measures of success have not yet been named with enough precision.'
+    );
+    sentences.push(
+      'Agreeing on a small set of watched signals would make it obvious whether the relationship is creating value.'
+    );
+  }
+  return joinPolished(sentences);
+}
+
+function composeLearnMore(unknownLabels) {
+  const cleaned = [...new Set((unknownLabels || []).map(humanizeUnknownLabel).filter(Boolean))];
+  if (!cleaned.length) {
+    return joinPolished([
+      'From this conversation, there are no major gaps that would block a thoughtful first wave of recommendations.',
+      'As the work proceeds, we can deepen the picture wherever real decisions require more precision.',
+    ]);
+  }
+  if (cleaned.length === 1) {
+    return joinPolished([
+      `The clearest place to deepen understanding next is ${cleaned[0]}.`,
+      'Closing that gap would make subsequent recommendations more precise without slowing the relationship down.',
+    ]);
+  }
+  if (cleaned.length === 2) {
+    return joinPolished([
+      `Two areas deserve more depth before we lean too hard on them: ${cleaned[0]}, and ${cleaned[1]}.`,
+      'Neither needs to be perfect now, but each will matter once recommendations become more specific.',
+    ]);
+  }
+  const head = cleaned.slice(0, -1).join(', ');
+  const tail = cleaned[cleaned.length - 1];
+  return joinPolished([
+    `A few topics remain lightly sketched: ${head}, and ${tail}.`,
+    'We do not need exhaustive answers on day one, but clarifying these will steadily raise the quality of every recommendation that follows.',
+  ]);
+}
+
+/**
+ * Read-only executive summary — CEO-facing synthesis from a senior consultant.
+ * Never concatenates raw Blueprint summaries or exposes implementation metadata.
  */
 function buildExecutiveSummary(sections) {
   const s = (key) => (sections && sections[key]) || emptySection();
-  const joinBodies = (keys) =>
-    keys
-      .map((key) => String(s(key).summary || '').trim())
-      .filter(Boolean)
-      .join(' ');
 
-  const unknownLines = [];
+  const unknownLabels = [];
   for (const key of BLUEPRINT_SECTIONS) {
     for (const u of s(key).unknowns || []) {
-      if (u && !unknownLines.includes(u)) unknownLines.push(u);
+      const label = humanizeUnknownLabel(u);
+      if (label && !unknownLabels.includes(label)) unknownLabels.push(label);
+    }
+    if (!String(s(key).summary || '').trim() || answerLooksEmpty(s(key).summary)) {
+      const label = humanizeUnknownLabel(`Missing clear answer for ${key}`);
+      if (label && !unknownLabels.includes(label)) unknownLabels.push(label);
     }
   }
 
@@ -559,38 +868,39 @@ function buildExecutiveSummary(sections) {
       {
         id: 'whoYouAre',
         title: 'Who you are',
-        body: joinBodies(['identity', 'services']) || 'Still forming an identity picture.',
+        body: composeWhoYouAre(s('identity').summary, s('services').summary),
       },
       {
         id: 'whoYouServe',
         title: 'Who you serve',
-        body:
-          joinBodies(['idealCustomers', 'avoidCustomers', 'targetMarkets']) ||
-          'Ideal customers and markets are still emerging.',
+        body: composeWhoYouServe(
+          s('idealCustomers').summary,
+          s('avoidCustomers').summary,
+          s('targetMarkets').summary
+        ),
       },
       {
         id: 'whyChooseYou',
         title: 'Why customers choose you',
-        body:
-          joinBodies(['competitiveAdvantages', 'brandVoice']) ||
-          'Differentiation and brand voice need more detail.',
+        body: composeWhyChooseYou(
+          s('competitiveAdvantages').summary,
+          s('brandVoice').summary
+        ),
       },
       {
         id: 'whereHeaded',
         title: "Where you're headed",
-        body: joinBodies(['campaignGoals']) || 'Near-term growth priorities are still open.',
+        body: composeWhereHeaded(s('campaignGoals').summary),
       },
       {
         id: 'whatSuccess',
         title: 'What success looks like',
-        body: joinBodies(['successMetrics']) || 'Success signals are not yet defined.',
+        body: composeWhatSuccess(s('successMetrics').summary),
       },
       {
         id: 'learnMore',
         title: "Where I'd like to learn more",
-        body: unknownLines.length
-          ? unknownLines.map((u) => `• ${u}`).join('\n')
-          : 'Nothing major outstanding from this conversation.',
+        body: composeLearnMore(unknownLabels),
       },
     ],
   };
