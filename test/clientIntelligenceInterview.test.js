@@ -11,6 +11,11 @@ const {
   ClientIntelligenceError,
   createMemoryStore,
   scoreEvidenceConfidence,
+  summarizeSection,
+  computeProgress,
+  buildReflection,
+  hasSpecificitySignals,
+  looksAmbiguous,
   assertTransition,
   startClientInterview,
   postInterviewMessage,
@@ -68,7 +73,9 @@ describe('clientIntelligenceInterview lifecycle', () => {
     assert.equal(started.question.id, 'identity');
     assert.ok(started.question.goal);
     assert.ok(started.question.askedBecause);
-    assert.match(started.message, /business name/i);
+    assert.match(started.message, /tell me about the business/i);
+    assert.equal(started.progress.percent, 0);
+    assert.equal(started.progress.label, 'Business Understanding');
   });
 
   it('extracts evidence after every answer and advances stages', async () => {
@@ -103,8 +110,32 @@ describe('clientIntelligenceInterview lifecycle', () => {
       assert.ok(Array.isArray(turn.blueprint.sections[key].evidenceIds));
       assert.ok(Array.isArray(turn.blueprint.sections[key].unknowns));
       assert.ok('confidence' in turn.blueprint.sections[key]);
+      assert.ok(turn.blueprint.sections[key].summary);
+      // Consultant notes — not raw transcript mirroring
+      assert.notEqual(turn.blueprint.sections[key].summary, AJI_ANSWERS[BLUEPRINT_SECTIONS.indexOf(key)]);
     }
     assert.equal(QUESTION_BANK.length, 9);
+    assert.equal(turn.progress.percent, 100);
+  });
+
+  it('inserts conversational reflections every 3 answers without adding questions', async () => {
+    const { opts } = withStore();
+    const started = await startClientInterview({ clientId: 11 }, opts);
+    let turn = started;
+    for (let i = 0; i < 3; i += 1) {
+      turn = await postInterviewMessage(started.interviewId, AJI_ANSWERS[i], opts);
+    }
+    assert.ok(turn.reflection);
+    assert.match(turn.reflection, /so far i'm hearing|let me make sure i understand|taking away so far/i);
+    assert.equal(turn.question.id, 'avoid_customers');
+    assert.equal(QUESTION_BANK.length, 9);
+
+    const detail = await getInterview(started.interviewId, opts);
+    const reflections = detail.turns.filter(
+      (t) => t.speaker === 'assistant' && /so far i'm hearing|let me make sure i understand|taking away so far/i.test(t.message)
+    );
+    assert.equal(reflections.length, 1);
+    assert.equal(turn.progress.completed, 3);
   });
 
   it('notes mode skips Q&A and generates blueprint', async () => {
@@ -120,6 +151,21 @@ describe('clientIntelligenceInterview lifecycle', () => {
     assert.equal(started.status, 'CLIENT_REVIEW');
     assert.ok(started.blueprint);
     assert.ok(started.blueprint.sections.identity.summary);
+    assert.match(started.blueprint.sections.identity.summary, /Aji Home Services/i);
+    assert.equal(
+      /^We are Aji Home Services\.?$/i.test(started.blueprint.sections.identity.summary),
+      false
+    );
+  });
+});
+
+describe('consultant summaries', () => {
+  it('rewrites identity into understanding notes', () => {
+    const summary = summarizeSection('identity', [
+      'Anchor Cleaning—we are a commercial focused cleaning company serving Greater Manchester',
+    ]);
+    assert.match(summary, /Anchor Cleaning is a commercial/i);
+    assert.ok(summary.split(/(?<=[.!?])\s+/).length <= 4);
   });
 });
 
@@ -140,10 +186,29 @@ describe('confidence rules', () => {
       isConfirmation: false,
       hasCorroboration: false,
     });
+    // Length alone must not change score; both share the property-managers specificity signal.
     assert.equal(short, long);
   });
 
-  it('increases on confirmation and consistency, decreases on contradiction', () => {
+  it('differs naturally across specificity, ambiguity, confirmation, and contradiction', () => {
+    const vague = scoreEvidenceConfidence({
+      type: 'EXPLICIT',
+      statement: 'Maybe various customers, not sure.',
+      priorStatements: [],
+      isConfirmation: false,
+      hasCorroboration: false,
+    });
+    const specific = scoreEvidenceConfidence({
+      type: 'EXPLICIT',
+      statement: 'Commercial property managers in Manchester.',
+      priorStatements: [],
+      isConfirmation: false,
+      hasCorroboration: false,
+    });
+    assert.ok(specific > vague);
+    assert.equal(looksAmbiguous('Maybe various customers, not sure.'), true);
+    assert.equal(hasSpecificitySignals('Commercial property managers in Manchester.'), true);
+
     const base = scoreEvidenceConfidence({
       type: 'EXPLICIT',
       statement: 'We serve property managers.',
@@ -170,9 +235,41 @@ describe('confidence rules', () => {
     assert.ok(contradicted < base);
   });
 
+  it('spreads section confidence across a completed interview', async () => {
+    const { opts } = withStore();
+    const { turn } = await completeInterview(opts);
+    const scores = BLUEPRINT_SECTIONS.map((k) => turn.blueprint.sections[k].confidence);
+    const unique = new Set(scores.map((n) => Number(n.toFixed(3))));
+    assert.ok(unique.size >= 2, 'expected confidence values to differ across sections');
+  });
+
   it('treats empty answers as unknowns without inventing facts', () => {
     assert.equal(answerLooksEmpty('n/a'), true);
     assert.equal(answerLooksEmpty('Property managers'), false);
+  });
+
+  it('progress is driven by completed blueprint sections', () => {
+    const progress = computeProgress({
+      identity: { summary: 'Acme is a cleaning company.' },
+      services: { summary: '' },
+      idealCustomers: { summary: 'Busy homeowners.' },
+    });
+    assert.equal(progress.completed, 2);
+    assert.equal(progress.total, BLUEPRINT_SECTIONS.length);
+    assert.equal(progress.percent, Math.round((2 / BLUEPRINT_SECTIONS.length) * 100));
+  });
+
+  it('buildReflection summarizes current understanding only', () => {
+    const text = buildReflection(
+      {
+        identity: { summary: 'Aji Home Services is a premium residential cleaning company.' },
+        services: { summary: 'Today the business delivers recurring and deep cleans.' },
+      },
+      3
+    );
+    assert.match(text, /so far i'm hearing/i);
+    assert.match(text, /Identity:/);
+    assert.match(text, /Services:/);
   });
 });
 

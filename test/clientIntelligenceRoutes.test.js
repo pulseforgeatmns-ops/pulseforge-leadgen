@@ -90,6 +90,11 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /Business Blueprint/);
     assert.match(uiSource, /Approve/);
     assert.match(uiSource, /\/api\/v1\/clients\//);
+    assert.match(uiSource, /overflow:\s*hidden/);
+    assert.match(uiSource, /stickToBottom/);
+    assert.match(uiSource, /Business Understanding/);
+    assert.match(uiSource, /progress-fill/);
+    assert.match(uiSource, /Unknowns/);
   });
 });
 
