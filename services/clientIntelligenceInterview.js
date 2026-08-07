@@ -176,7 +176,30 @@ const SUPPLEMENTAL_CONTEXT_RE =
 
 /** Correction markers — update/supersede a prior fact, don't append as a new answer. */
 const CORRECTION_RE =
-  /^\s*(actually|correction|i meant|not that|replace that|that should be|sorry,?\s+i meant|to clarify|let me correct)\b/i;
+  /^\s*(actually|correction|i meant(?:\s+to\s+say)?|not that|replace that|that should be|sorry,?\s+i meant|to clarify|let me correct)\b/i;
+
+/**
+ * Mid-message replacement intent — "disregard last message, please replace with…"
+ * These may appear anywhere in the turn, not only at the start.
+ */
+const CORRECTION_PHRASE_RE =
+  /\b(disregard\s+(?:the\s+)?(?:last|previous)\s+(?:message|answer)|replace\s+(?:the\s+)?(?:last|previous)\s+(?:message|answer)|please\s+replace(?:\s+with)?|replace\s+with(?:\s+the\s+following)?|use\s+this\s+instead)\b/i;
+
+/** Explicit reference to the prior answer (priority B for correction targeting). */
+const LAST_ANSWER_REF_RE =
+  /\b(?:last|previous)\s+(?:message|answer)\b/i;
+
+/** Correction preamble wrappers that must never become evidence. */
+const CORRECTION_PREAMBLE_PATTERNS = Object.freeze([
+  /^\s*disregard\s+(?:the\s+)?(?:last|previous)\s+(?:message|answer)[,.\s:]*/i,
+  /^\s*please\s+replace\s+with(?:\s+the\s+following)?[,;:\s-]*/i,
+  /^\s*replace\s+(?:the\s+)?(?:last|previous)\s+(?:message|answer)(?:\s+with(?:\s+the\s+following)?)?[,;:\s-]*/i,
+  /^\s*replace\s+with(?:\s+the\s+following)?[,;:\s-]*/i,
+  /^\s*use\s+this\s+instead[,;:\s-]*/i,
+  /^\s*(?:actually|correction|i meant(?:\s+to\s+say)?|not that|replace that|that should be|sorry,?\s+i meant|to clarify|let me correct)\b[,;:\s-]*/i,
+  /^\s*(?:to\s+say|that|to\s+clarify that)\s+/i,
+  /^\s*please\s+/i,
+]);
 
 /** Question directed at Max (not an interview answer). */
 const QUESTION_TO_MAX_RE =
@@ -397,7 +420,169 @@ function looksLikeRefinementFeedback(text) {
 function looksLikeCorrection(text) {
   const s = String(text || '').trim();
   if (!s) return false;
-  return CORRECTION_RE.test(s);
+  return CORRECTION_RE.test(s) || CORRECTION_PHRASE_RE.test(s);
+}
+
+/**
+ * Strip correction/replacement wrappers so only answer substance remains.
+ */
+function stripCorrectionPreamble(text) {
+  let s = String(text || '').trim();
+  if (!s) return '';
+
+  // Peel wrappers repeatedly (e.g. "disregard last message, please replace with the following; …").
+  for (let i = 0; i < 8; i += 1) {
+    const before = s;
+    for (const re of CORRECTION_PREAMBLE_PATTERNS) {
+      s = s.replace(re, '').trim();
+    }
+    // Mid-message wrappers after a leading clause.
+    s = s
+      .replace(
+        /\bdisregard\s+(?:the\s+)?(?:last|previous)\s+(?:message|answer)[,.\s:]*/gi,
+        ' '
+      )
+      .replace(/\bplease\s+replace\s+with(?:\s+the\s+following)?[,;:\s-]*/gi, ' ')
+      .replace(
+        /\breplace\s+(?:the\s+)?(?:last|previous)\s+(?:message|answer)(?:\s+with(?:\s+the\s+following)?)?[,;:\s-]*/gi,
+        ' '
+      )
+      .replace(/\breplace\s+with(?:\s+the\s+following)?[,;:\s-]*/gi, ' ')
+      .replace(/\buse\s+this\s+instead[,;:\s-]*/gi, ' ')
+      .replace(/\bcorrection\b[,;:\s-]*/gi, ' ')
+      .replace(/^\s*[,;:\-–—]+\s*/, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (s === before) break;
+  }
+  return s;
+}
+
+function refersToLastAnswer(text) {
+  return LAST_ANSWER_REF_RE.test(String(text || ''));
+}
+
+/**
+ * Infer domain from question-echo / domain language in a replacement body.
+ * @returns {string|null} one of CONTEXT_DOMAINS
+ */
+function inferDomainFromQuestionEcho(text) {
+  const s = String(text || '').toLowerCase();
+  if (!s) return null;
+  if (
+    /great-fit customer chooses|tips the decision|why customers choose|competitive (?:edge|advantage)|chooses (?:\w+\s+){0,3}over someone else/.test(
+      s
+    )
+  ) {
+    return 'differentiation';
+  }
+  if (
+    /brand voice should|writing as (?:your|the) brand|how should (?:it|the brand|anchor) sound|\bbrand voice\b/.test(
+      s
+    )
+  ) {
+    return 'brand_voice';
+  }
+  if (
+    /next 90 days|would feel successful|growth work feel successful|ninety[\s-]?day/.test(s)
+  ) {
+    return 'growth_goals';
+  }
+  if (/we will know(?: it'?s| the growth)|how will we know|success metrics?/.test(s)) {
+    return 'success_metrics';
+  }
+  if (
+    /greater manchester|bedford|hooksett|londonderry|auburn|goffstown|geography|markets that matter/.test(
+      s
+    )
+  ) {
+    return 'geography';
+  }
+  if (
+    /ideal customers?|who do you most want|paint me a picture of the ideal/.test(s)
+  ) {
+    return 'ideal_customer';
+  }
+  if (
+    /services include|services (?:your business )?provides|tell me about the services/.test(s)
+  ) {
+    return 'services';
+  }
+  if (
+    /don'?t want to work with|rather not take on|customers to avoid|excluded customers?/.test(s)
+  ) {
+    return 'objections';
+  }
+  return null;
+}
+
+/** Reverse DOMAIN_TO_SECTION → primary domain for a Blueprint section. */
+function domainFromSection(section) {
+  if (!section) return null;
+  const entry = Object.entries(DOMAIN_TO_SECTION).find(([, sec]) => sec === section);
+  return entry ? entry[0] : null;
+}
+
+/**
+ * Most recent answered question id (by QUESTION_BANK order), if any.
+ */
+function findLastAnsweredQuestionId(state = {}) {
+  const answers = state.answers || {};
+  for (let i = QUESTION_BANK.length - 1; i >= 0; i -= 1) {
+    const id = QUESTION_BANK[i].id;
+    if (answers[id] != null && String(answers[id]).trim()) return id;
+  }
+  const idx = Number(state.stepIndex) || 0;
+  if (idx > 0 && QUESTION_BANK[idx - 1]) return QUESTION_BANK[idx - 1].id;
+  return null;
+}
+
+/**
+ * Resolve which prior answer a correction should update.
+ * Priority: A) explicit domain/question match → B) last/previous answer ref → C) active question.
+ * @returns {{ domain: string|null, section: string|null, reason: string, questionId: string|null }}
+ */
+function resolveCorrectionTarget(text, opts = {}) {
+  const activeQuestion = opts.activeQuestion || null;
+  const state = opts.state || {};
+  const raw = String(text || '').trim();
+  const body = stripCorrectionPreamble(raw);
+
+  // A. Explicit domain / question-echo match
+  const echoDomain = inferDomainFromQuestionEcho(raw) || inferDomainFromQuestionEcho(body);
+  const taggedDomain = tagContextDomain(raw) || tagContextDomain(body);
+  const domain = echoDomain || taggedDomain;
+  if (domain && DOMAIN_TO_SECTION[domain]) {
+    const section = DOMAIN_TO_SECTION[domain];
+    const questionId = QUESTION_BANK.find((row) => row.section === section)?.id || null;
+    return { domain, section, reason: 'explicit_domain', questionId };
+  }
+
+  // B. "last message" / "previous answer" → most recent user answer
+  if (refersToLastAnswer(raw)) {
+    const lastId = opts.lastAnsweredQuestionId || findLastAnsweredQuestionId(state);
+    const lastQ = lastId ? QUESTION_BANK.find((row) => row.id === lastId) : null;
+    if (lastQ) {
+      return {
+        domain: domainFromSection(lastQ.section),
+        section: lastQ.section,
+        reason: 'last_answered',
+        questionId: lastQ.id,
+      };
+    }
+  }
+
+  // C. Current active question only when A and B do not apply
+  if (activeQuestion && activeQuestion.section) {
+    return {
+      domain: domainFromSection(activeQuestion.section),
+      section: activeQuestion.section,
+      reason: 'active_question',
+      questionId: activeQuestion.id || null,
+    };
+  }
+
+  return { domain: null, section: null, reason: 'unresolved', questionId: null };
 }
 
 function looksLikeSupplementalContext(text) {
@@ -461,6 +646,9 @@ function tagContextDomain(text) {
   const s = String(text || '').toLowerCase();
   if (!s) return null;
 
+  const echo = inferDomainFromQuestionEcho(s);
+  if (echo) return echo;
+
   const pointer = s.match(DOMAIN_POINTER_RE);
   if (pointer) {
     const fromPointer = domainFromPointerLabel(pointer[1]);
@@ -474,7 +662,7 @@ function tagContextDomain(text) {
     return 'success_metrics';
   }
   if (/\b(90 days|next quarter|growth goal|campaign goal|expansion)\b/.test(s)) return 'growth_goals';
-  if (/\b(trust|tips the decision|advantage|differen|accountab)\b/.test(s)) {
+  if (/\b(trust|tips the decision|advantage|differen|accountab|responsiv)\b/.test(s)) {
     return 'differentiation';
   }
   if (/\b(manchester|bedford|hooksett|londonderry|auburn|goffstown|geography|geo\b|county)\b/.test(s)) {
@@ -492,21 +680,41 @@ function tagContextDomain(text) {
 
 /**
  * Parse a correction message into target domain + cleaned substance.
- * Never returns the active-question section unless no domain can be inferred.
- * @returns {{ domain: string|null, section: string|null, substance: string, raw: string }}
+ * Target resolution prefers explicit domain match, then last-answer refs, then optional fallback.
+ * @param {string} text
+ * @param {string|null} [fallbackSection]
+ * @param {{ activeQuestion?: object|null, state?: object, lastAnsweredQuestionId?: string|null }} [opts]
+ * @returns {{ domain: string|null, section: string|null, substance: string, raw: string, reason: string, questionId: string|null }}
  */
-function parseCorrectionMessage(text, fallbackSection = null) {
+function parseCorrectionMessage(text, fallbackSection = null, opts = {}) {
   const raw = String(text || '').trim();
-  let body = raw.replace(CORRECTION_RE, '').trim();
+  let body = stripCorrectionPreamble(raw);
 
-  // "I meant to say X" / "I meant that X" / leftover "replace that —"
+  // Legacy leftovers after preamble strip.
   body = body
     .replace(/^(?:to\s+say|that|to\s+clarify that)\s+/i, '')
     .replace(/^(?:replace that|not that)\s*[—–,:;-]?\s*/i, '')
     .trim();
 
-  const domain = tagContextDomain(raw) || tagContextDomain(body);
-  const section = (domain && DOMAIN_TO_SECTION[domain]) || fallbackSection || null;
+  const resolved = resolveCorrectionTarget(raw, {
+    activeQuestion: opts.activeQuestion || null,
+    state: opts.state || {},
+    lastAnsweredQuestionId: opts.lastAnsweredQuestionId || null,
+  });
+
+  let domain = resolved.domain;
+  let section = resolved.section;
+  let reason = resolved.reason;
+  let questionId = resolved.questionId;
+
+  // Caller may supply a fallback only when resolution left section empty.
+  if (!section && fallbackSection) {
+    section = fallbackSection;
+    domain = domain || domainFromSection(fallbackSection);
+    reason = reason === 'unresolved' ? 'fallback_section' : reason;
+    questionId =
+      questionId || QUESTION_BANK.find((row) => row.section === fallbackSection)?.id || null;
+  }
 
   // Once domain is known, drop trailing/leading domain pointers from substance.
   let substance = body
@@ -520,7 +728,10 @@ function parseCorrectionMessage(text, fallbackSection = null) {
   if (section) substance = cleanRawAnswer(section, substance);
   substance = normalizeBusinessPhrase(substance);
 
-  return { domain, section, substance, raw };
+  // Never keep correction wrappers in stored evidence.
+  substance = stripCorrectionPreamble(substance);
+
+  return { domain, section, substance, raw, reason, questionId };
 }
 
 /**
@@ -538,10 +749,12 @@ function classifyInterviewMessage(text, opts = {}) {
   if (speaker === 'system' || speaker === 'developer' || context === 'system_guidance') {
     return MESSAGE_TYPES.OFF_TOPIC;
   }
+  // Corrections first — "disregard last message / replace with…" must not be
+  // swallowed as refinement or attached to the active question.
+  if (looksLikeCorrection(text)) return MESSAGE_TYPES.CORRECTION;
   if (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text)) {
     return MESSAGE_TYPES.REFINEMENT_FEEDBACK;
   }
-  if (looksLikeCorrection(text)) return MESSAGE_TYPES.CORRECTION;
   if (looksLikeSupplementalContext(text)) return MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT;
   if (looksLikeQuestionToMax(text)) return MESSAGE_TYPES.QUESTION_TO_MAX;
   if (/^(hi|hello|hey|thanks|thank you|ok|okay|cool|great|nice)\s*[.!]?$/i.test(String(text || '').trim())) {
@@ -586,10 +799,60 @@ function classifyUserResponse(text, opts = {}) {
   return ANSWER_KINDS.BUSINESS_FACT;
 }
 
+function correctionTargetLabel(domain, businessName) {
+  const name = String(businessName || 'the business').trim() || 'the business';
+  const shortName = name.replace(/\s+Cleaning$/i, '') || name;
+  const labels = {
+    services: 'services',
+    ideal_customer: 'ideal customers',
+    geography: 'geography',
+    differentiation: `why customers choose ${shortName}`,
+    objections: 'customers to decline',
+    pricing: 'pricing',
+    brand_voice: `how ${shortName} should sound`,
+    success_metrics: 'success metrics',
+    growth_goals: 'near-term goals',
+    operations: 'operations',
+  };
+  return labels[domain] || domain || 'that topic';
+}
+
+function conversationalQuestionRestate(question, businessName) {
+  if (!question) return 'the current question';
+  const name = String(businessName || 'the business').trim() || 'the business';
+  const shortName = name.replace(/\s+Cleaning$/i, '') || name;
+  switch (question.id) {
+    case 'brand_voice':
+      return `how should ${shortName} sound if I'm writing as the brand?`;
+    case 'advantages':
+      return `when a great-fit customer chooses ${shortName} over someone else, what usually tips the decision?`;
+    case 'campaign_goals':
+      return 'looking at the next 90 days, what outcomes would make this growth work feel successful?';
+    case 'success_metrics':
+      return "how will we know it's working?";
+    case 'services':
+      return 'what services does the business provide today?';
+    case 'ideal_customers':
+      return 'who do you most want to work with?';
+    case 'avoid_customers':
+      return "are there customers you'd rather not take on?";
+    case 'target_markets':
+      return 'where should we focus first — geography, verticals, or both?';
+    case 'identity':
+      return "what's the business name, and how would you describe what you do today?";
+    default:
+      return question.prompt || 'the current question';
+  }
+}
+
 /**
  * Conversational acknowledgement for non-answer interview messages.
+ * @param {string} messageType
+ * @param {string} text
+ * @param {string|null} domain
+ * @param {{ activeQuestion?: object|null, targetSection?: string|null, businessName?: string|null }} [opts]
  */
-function conversationalAck(messageType, text, domain) {
+function conversationalAck(messageType, text, domain, opts = {}) {
   const domainLabel = {
     services: 'services',
     ideal_customer: 'ideal customer fit',
@@ -602,17 +865,31 @@ function conversationalAck(messageType, text, domain) {
     growth_goals: 'growth goals',
     operations: 'operations',
   };
+  const activeQuestion = opts.activeQuestion || null;
+  const targetSection = opts.targetSection || null;
+  const businessName = opts.businessName || null;
+
   switch (messageType) {
     case MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT:
       if (domain && domainLabel[domain]) {
         return `Got it. That sounds like it belongs under ${domainLabel[domain]}. I'll remember it there rather than treating it as your answer to this question.`;
       }
       return "Got it. I'll add that to the business context rather than treating it as your answer to this question.";
-    case MESSAGE_TYPES.CORRECTION:
+    case MESSAGE_TYPES.CORRECTION: {
+      const correctingPrior =
+        Boolean(targetSection) &&
+        Boolean(activeQuestion) &&
+        targetSection !== activeQuestion.section;
+      if (correctingPrior) {
+        const about = correctionTargetLabel(domain, businessName);
+        const reopen = conversationalQuestionRestate(activeQuestion, businessName);
+        return `Got it. I replaced your previous answer about ${about}. Let's keep the current question open: ${reopen}`;
+      }
       if (domain && domainLabel[domain]) {
         return `Helpful correction. I'll update ${domainLabel[domain]} rather than adding it as a new answer.`;
       }
       return "Helpful correction. I'll update the relevant fact rather than treating this as a new answer to the current question.";
+    }
     case MESSAGE_TYPES.REFINEMENT_FEEDBACK:
       return "Understood — I'll treat that as guidance for how I write and regenerate, not as business evidence.";
     case MESSAGE_TYPES.QUESTION_TO_MAX:
@@ -1107,7 +1384,7 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
 }
 
 function normalizeBrandVoiceTone(text) {
-  let tone = String(text || '').trim();
+  let tone = stripCorrectionPreamble(String(text || '').trim());
   // Peel lead-ins repeatedly until stable.
   for (let i = 0; i < 4; i += 1) {
     const before = tone;
@@ -1119,6 +1396,8 @@ function normalizeBrandVoiceTone(text) {
       .replace(/^(?:should\s+(?:sound|feel|read|be)\s+)/i, '')
       .replace(/^(?:sound|feel|read|be)\s+/i, '')
       .replace(/^(?:anchor(?:'s|’s)\s+)/i, '')
+      .replace(/^(?:disregard\s+last\s+message[,.\s:]*)/i, '')
+      .replace(/^(?:please\s+replace\s+with(?:\s+the\s+following)?[,;:\s-]*)/i, '')
       .trim();
     if (tone === before) break;
   }
@@ -3824,6 +4103,9 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
 
   // Non-answers: store appropriately, stay on the same question, respond conversationally.
   if (messageType !== MESSAGE_TYPES.DIRECT_ANSWER) {
+    let correctionDomain = domain;
+    let correctionTargetSection = null;
+
     if (messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
       state.revisionGuidance = [
         ...(state.revisionGuidance || []),
@@ -3846,11 +4128,16 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         },
       ];
     } else if (messageType === MESSAGE_TYPES.CORRECTION) {
-      const parsed = parseCorrectionMessage(text, null);
-      // Never fall back to the active question section — corrections without a
-      // resolvable domain stay in supplemental memory until confirmed.
+      const parsed = parseCorrectionMessage(text, null, {
+        activeQuestion: q.question,
+        state,
+        lastAnsweredQuestionId: findLastAnsweredQuestionId(state),
+      });
+      // Prefer resolved target (domain match → last answer → active). Do not
+      // blindly attach to the active question when a prior domain matches.
       const targetSection = parsed.section;
-      const correctionDomain = parsed.domain || domain;
+      correctionDomain = parsed.domain || domain;
+      correctionTargetSection = targetSection;
       const substance = parsed.substance;
 
       if (targetSection && substance && isBusinessFactStatement(substance)) {
@@ -3892,12 +4179,14 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         await store.updateTurn(clientTurn.id, {
           derived_evidence: evidenceRow ? [evidenceRow.id] : [],
         });
-        const questionId = QUESTION_BANK.find((row) => row.section === targetSection)?.id;
+        const questionId =
+          parsed.questionId ||
+          QUESTION_BANK.find((row) => row.section === targetSection)?.id;
         if (questionId) {
-          const priorAnswer = (state.answers || {})[questionId] || '';
+          // Replacement: overwrite the prior answer, do not append correction wrappers.
           state.answers = {
             ...(state.answers || {}),
-            [questionId]: priorAnswer ? `${priorAnswer}; ${substance}` : substance,
+            [questionId]: substance,
           };
         }
       }
@@ -3911,6 +4200,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
           kind: MESSAGE_TYPES.CORRECTION,
           section: targetSection,
           substance,
+          reason: parsed.reason,
           supersedes: Boolean(targetSection),
           activeQuestionId: q.question.id,
           confirmed: Boolean(targetSection),
@@ -3938,7 +4228,15 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       interview_state: state,
     });
 
-    const ack = conversationalAck(messageType, text, domain);
+    const businessName =
+      state.normalizedFacts?.business_name ||
+      extractBusinessName(Object.values(state.answers || {}).join(' ')) ||
+      null;
+    const ack = conversationalAck(messageType, text, correctionDomain, {
+      activeQuestion: q.question,
+      targetSection: correctionTargetSection,
+      businessName,
+    });
     await store.insertTurn({
       id: newId(),
       session_id: session.id,
@@ -4490,10 +4788,14 @@ module.exports = {
   sanitizeSummaryForBrief,
   sanitizeSectionsForBrief,
   stripInterviewQuestionEcho,
+  stripCorrectionPreamble,
   cleanRawAnswer,
   synthesizeNormalizedFact,
   normalizeClaim,
   tagContextDomain,
+  inferDomainFromQuestionEcho,
+  resolveCorrectionTarget,
+  findLastAnsweredQuestionId,
   conversationalAck,
   extractBusinessName,
   mergeSupplementalIntoSections,
