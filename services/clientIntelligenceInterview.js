@@ -81,6 +81,25 @@ const CONFIRMATION_RE =
 const AMBIGUITY_RE =
   /\b(maybe|perhaps|not sure|unsure|kind of|sort of|various|etc\.?|something like|i think|probably|roughly|around|whatever|idk|tbd)\b/i;
 
+/**
+ * Answer kinds for CIE interview / refinement traffic.
+ * Only business_fact may become Blueprint / Brief commercial evidence.
+ */
+const ANSWER_KINDS = Object.freeze({
+  BUSINESS_FACT: 'business_fact',
+  REFINEMENT_FEEDBACK: 'refinement_feedback',
+  SYSTEM_GUIDANCE: 'system_guidance',
+  GENERATED_BRIEF: 'generated_brief',
+});
+
+/** User refinement / meta-instruction intent (not business evidence). */
+const REFINEMENT_INTENT_RE =
+  /\b(please\s+refine|this\s+revision|max\s+is\s+treating|regenerate(?:\s+the\s+brief)?|turn\s+the\s+raw\s+(?:interview\s+)?answers|instructions?\s+to\s+max|not\s+facts?\s+about(?:\s+\w+)?|refinement\s+feedback|revision\s+guidance|the\s+brief\s+is\s+treating|please\s+regenerate)\b/i;
+
+/** Snippets that must never appear in Executive Business Brief evidence. */
+const META_INSTRUCTION_SANITIZE_RE =
+  /\b(this\s+revision\s+introduced|brief\s+is\s+treating|please\s+regenerate|do\s+not\s+include.{0,60}(?:brief|max|instruction|raw|fact|revision)|raw\s+interview\s+answers|clean\s+business\s+language|the\s+substance\s+is\s+mostly\s+right|instructions?\s+to\s+max|business\s+facts?\s+only|treating\s+refinement|not\s+evidence\s+about\s+the\s+business|paste(?:d)?\s+into\s+templates?)\b/i;
+
 const SECTION_TITLES = Object.freeze({
   identity: 'Identity',
   services: 'Services',
@@ -257,6 +276,112 @@ function answerLooksEmpty(text) {
   return /^(n\/?a|none|no|nothing|nope|nil|unknown|not sure|-)$/i.test(s);
 }
 
+/**
+ * Detect user refinement / regeneration instructions.
+ * These are guidance for Max — never business facts about the client.
+ */
+function looksLikeRefinementFeedback(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (REFINEMENT_INTENT_RE.test(s)) return true;
+  if (/\b(please\s+)?(refine|regenerate|rewrite)\b/i.test(s) && /\b(brief|summary|section|max)\b/i.test(s)) {
+    return true;
+  }
+  if (/\bturn\s+.{0,40}\binto\s+clean\b/i.test(s)) return true;
+  if (/\bnot\s+facts?\s+about\b/i.test(s)) return true;
+  if (/\bdo\s+not\s+include\b/i.test(s) && /\b(brief|max|instruction|raw|fact|revision|section)\b/i.test(s)) {
+    return true;
+  }
+  if (/\bthe\s+brief\b/i.test(s) && /\b(treating|refine|regenerate|please|revision|instruction|max)\b/i.test(s)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Detect meta-instruction language that must be stripped before Brief render.
+ */
+function containsMetaInstructionLanguage(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (META_INSTRUCTION_SANITIZE_RE.test(s)) return true;
+  if (looksLikeRefinementFeedback(s)) return true;
+  return false;
+}
+
+/**
+ * Classify a user/system response for evidence routing.
+ * @param {string} text
+ * @param {{ speaker?: string, context?: string }} [opts]
+ * @returns {string} one of ANSWER_KINDS
+ */
+function classifyUserResponse(text, opts = {}) {
+  const speaker = String(opts.speaker || '').toLowerCase();
+  const context = String(opts.context || '').toLowerCase();
+  if (context === 'generated_brief' || speaker === 'assistant') {
+    return ANSWER_KINDS.GENERATED_BRIEF;
+  }
+  if (speaker === 'system' || speaker === 'developer' || context === 'system_guidance') {
+    return ANSWER_KINDS.SYSTEM_GUIDANCE;
+  }
+  if (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text)) {
+    return ANSWER_KINDS.REFINEMENT_FEEDBACK;
+  }
+  return ANSWER_KINDS.BUSINESS_FACT;
+}
+
+/**
+ * Split a free-form message into business facts vs revision guidance.
+ * Only facts may populate Blueprint / Brief commercial fields.
+ */
+function partitionUserResponse(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return { facts: [], guidance: [], kind: ANSWER_KINDS.BUSINESS_FACT };
+
+  const sentences = raw
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const facts = [];
+  const guidance = [];
+
+  if (sentences.length <= 1) {
+    const kind = classifyUserResponse(raw);
+    if (kind === ANSWER_KINDS.BUSINESS_FACT) facts.push(raw);
+    else guidance.push(raw);
+    return { facts, guidance, kind };
+  }
+
+  for (const sentence of sentences) {
+    const kind = classifyUserResponse(sentence);
+    if (kind === ANSWER_KINDS.BUSINESS_FACT) facts.push(sentence);
+    else guidance.push(sentence);
+  }
+
+  // Whole-message refinement intent wins when every "fact" sentence is still meta-ish.
+  if (!facts.length && guidance.length) {
+    return { facts, guidance, kind: ANSWER_KINDS.REFINEMENT_FEEDBACK };
+  }
+  if (facts.length && guidance.length) {
+    return { facts, guidance, kind: ANSWER_KINDS.BUSINESS_FACT };
+  }
+  if (looksLikeRefinementFeedback(raw) && !facts.length) {
+    return { facts: [], guidance: guidance.length ? guidance : [raw], kind: ANSWER_KINDS.REFINEMENT_FEEDBACK };
+  }
+  return {
+    facts,
+    guidance,
+    kind: facts.length ? ANSWER_KINDS.BUSINESS_FACT : ANSWER_KINDS.REFINEMENT_FEEDBACK,
+  };
+}
+
+function isBusinessFactStatement(text) {
+  if (answerLooksEmpty(text)) return false;
+  if (/^Unknown:/i.test(String(text || ''))) return false;
+  return classifyUserResponse(text) === ANSWER_KINDS.BUSINESS_FACT;
+}
+
 function looksLikeConfirmation(text) {
   return CONFIRMATION_RE.test(String(text || ''));
 }
@@ -377,7 +502,8 @@ function stripLeadingWeAre(text) {
 function summarizeSection(sectionKey, statements) {
   const cleaned = (statements || [])
     .map((s) => String(s || '').trim())
-    .filter((s) => s && !/^Unknown:/i.test(s) && !answerLooksEmpty(s));
+    .filter((s) => s && !/^Unknown:/i.test(s) && !answerLooksEmpty(s))
+    .filter((s) => isBusinessFactStatement(s));
   if (!cleaned.length) return '';
 
   const latest = cleaned[cleaned.length - 1];
@@ -542,6 +668,7 @@ function buildUnderstandingProgress(sectionState) {
 function isMetaConsultantSentence(sentence) {
   const s = String(sentence || '').trim();
   if (!s) return true;
+  if (containsMetaInstructionLanguage(s)) return true;
   return (
     /\b(blueprint|operator-stated|operator understanding|downstream|discovery should|ICP picture|engagement is working|evidenceIds?|sectionKey|CIE-v?\d*|prompt|token|json|payload)\b/i.test(
       s
@@ -570,6 +697,47 @@ function isMetaConsultantSentence(sentence) {
     /^Missing clear answer/i.test(s) ||
     /^No evidence yet/i.test(s)
   );
+}
+
+/**
+ * Remove meta-instruction / refinement language from a Blueprint summary
+ * before Executive Business Brief synthesis.
+ */
+function sanitizeSummaryForBrief(summary) {
+  const parts = String(summary || '')
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((s) => !isMetaConsultantSentence(s))
+    .filter((s) => isBusinessFactStatement(s) || !containsMetaInstructionLanguage(s))
+    .map((s) => scrubArtifactLanguage(s))
+    .filter(Boolean)
+    // Drop sentences that became empty or still carry instruction phrasing after scrub.
+    .filter((s) => !containsMetaInstructionLanguage(s) && !looksLikeRefinementFeedback(s));
+  return parts.join(' ');
+}
+
+/**
+ * Defense-in-depth: strip contaminated section summaries before Brief render.
+ * Contaminated-only sections lose confidence contribution for ratings.
+ */
+function sanitizeSectionsForBrief(sections) {
+  const out = {};
+  for (const key of BLUEPRINT_SECTIONS) {
+    const src = (sections && sections[key]) || emptySection();
+    const original = String(src.summary || '').trim();
+    const cleanSummary = sanitizeSummaryForBrief(original);
+    const contaminatedOnly = Boolean(original) && !cleanSummary;
+    out[key] = {
+      summary: cleanSummary,
+      confidence: contaminatedOnly
+        ? UNKNOWN_CONFIDENCE
+        : clampConfidence(src.confidence || 0),
+      evidenceIds: [...(src.evidenceIds || [])],
+      unknowns: [...(src.unknowns || [])],
+    };
+  }
+  return out;
 }
 
 function scrubArtifactLanguage(text) {
@@ -702,20 +870,27 @@ function joinPolished(sentences) {
 
 /**
  * Normalize a Blueprint summary into a complete CEO-ready sentence for a given facet.
- * Prefers rewriting known interview-summary patterns over fragment insertion.
+ * Converts business facts into polished executive language — never Mad-Lib
+ * concatenation of raw interview text or refinement instructions.
  */
 function normalizeClaim(kind, summary) {
-  const claim = coreClaim(summary);
+  const claim = coreClaim(sanitizeSummaryForBrief(summary));
   if (!claim) return '';
+  if (containsMetaInstructionLanguage(claim) || looksLikeRefinementFeedback(claim)) return '';
 
   switch (kind) {
     case 'identity': {
       let sentence = claim;
       if (/^The business is understood as\s+/i.test(sentence)) {
-        sentence = sentence.replace(
-          /^The business is understood as\s+/i,
-          'This is a business built around '
-        );
+        const rest = sentence.replace(/^The business is understood as\s+/i, '').trim();
+        if (containsMetaInstructionLanguage(rest) || looksLikeRefinementFeedback(rest)) return '';
+        if (/^[A-Z][a-zA-Z0-9&'.-]+/.test(rest) && /\bis\b/i.test(rest)) {
+          sentence = rest;
+        } else if (/^an?\s+/i.test(rest)) {
+          sentence = `This is ${rest}`;
+        } else {
+          sentence = `This is a ${rest}`;
+        }
       }
       if (
         /\bis an?\s+.+\bcleaning$/i.test(sentence) &&
@@ -731,9 +906,11 @@ function normalizeClaim(kind, summary) {
           [/^Today the business delivers\s+(.+)$/i],
           [/^The business (?:delivers|offers|provides|sells)\s+(.+)$/i],
           [/^Services? (?:include|are|center on)\s+(.+)$/i],
+          [/^Day to day,? the company creates value by delivering\s+(.+)$/i],
         ])
       );
-      return `Day to day, the company creates value by delivering ${offer}`;
+      if (!offer || containsMetaInstructionLanguage(offer)) return '';
+      return `Services include ${offer}`;
     }
     case 'ideal': {
       const who = midSentence(
@@ -741,9 +918,12 @@ function normalizeClaim(kind, summary) {
           [/^Ideal customers are\s+(.+)$/i],
           [/^The (?:ideal|best) (?:customers?|clients?) (?:are|is)\s+(.+)$/i],
           [/^Customers worth (?:pursuing|winning) are\s+(.+)$/i],
+          [/^The relationships worth winning are with\s+(.+)$/i],
+          [/^Ideal customers include\s+(.+)$/i],
         ])
       );
-      return `The relationships worth winning are with ${who}`;
+      if (!who || containsMetaInstructionLanguage(who)) return '';
+      return `Ideal customers include ${who}`;
     }
     case 'avoid': {
       const who = midSentence(
@@ -751,9 +931,12 @@ function normalizeClaim(kind, summary) {
           [/^The business prefers to avoid\s+(.+)$/i],
           [/^Avoid(?:s|ing)?\s+(.+)$/i],
           [/^The business (?:should|will) (?:avoid|decline)\s+(.+)$/i],
+          [/^Just as deliberately, it declines\s+(.+)$/i],
+          [/^The business declines\s+(.+)$/i],
         ])
       );
-      return `Just as deliberately, it declines ${who}`;
+      if (!who || containsMetaInstructionLanguage(who)) return '';
+      return `The business declines ${who}`;
     }
     case 'markets': {
       const where = midSentence(
@@ -761,20 +944,27 @@ function normalizeClaim(kind, summary) {
           [/^Priority markets center on\s+(.+)$/i],
           [/^Markets? (?:center on|include|are|focus on)\s+(.+)$/i],
           [/^Geography (?:centers on|focuses on)\s+(.+)$/i],
+          [/^Geographic focus centers on\s+(.+)$/i],
+          [/^Near-term commercial attention belongs in\s+(.+)$/i],
         ])
       );
-      return `Near-term commercial attention belongs in ${where}`;
+      if (!where || containsMetaInstructionLanguage(where)) return '';
+      return `Geographic focus centers on ${where}`;
     }
     case 'advantages': {
       const edge = midSentence(
         extractSubstance(claim, [
           [/^Competitive edge is described as\s+(.+)$/i],
           [/^Differentiation (?:is|centers on)\s+(.+)$/i],
-          [/^Customers choose (?:us|this business) (?:for|because of)\s+(.+)$/i],
+          [/^Customers choose (?:us|this business) (?:for|because(?:\s+of)?)\s+(.+)$/i],
           [/^The (?:edge|advantage) is\s+(.+)$/i],
         ])
       );
-      return `Customers choose this business for ${edge} — a concrete reason to prefer it over a generic alternative`;
+      if (!edge || containsMetaInstructionLanguage(edge)) return '';
+      if (/^(they|customers?|clients?)\s+/i.test(edge) || /^(trust|show|communicate|solve|make)\b/i.test(edge)) {
+        return `Customers choose this business because ${edge}`;
+      }
+      return `Customers choose this business because of ${edge}`;
     }
     case 'voice': {
       const tone = midSentence(
@@ -782,9 +972,12 @@ function normalizeClaim(kind, summary) {
           [/^Brand voice should read as\s+(.+)$/i],
           [/^Voice (?:should (?:read|feel|be)|is|feels)\s+(.+)$/i],
           [/^Tone (?:should be|is)\s+(.+)$/i],
+          [/^That promise should sound\s+(.+?)(?:\s+in every customer-facing moment)?$/i],
+          [/^Brand voice should feel\s+(.+)$/i],
         ])
       );
-      return `That promise should sound ${tone} in every customer-facing moment`;
+      if (!tone || containsMetaInstructionLanguage(tone)) return '';
+      return `Brand voice should feel ${tone}`;
     }
     case 'goals': {
       const outcome = asGerundPhrase(
@@ -793,10 +986,13 @@ function normalizeClaim(kind, summary) {
             [/^Near-term growth goals focus on\s+(.+)$/i],
             [/^Goals? (?:focus on|are|include)\s+(.+)$/i],
             [/^The (?:near-term |next )?priority is\s+(.+)$/i],
+            [/^For the next phase of growth, the organizing outcome is\s+(.+)$/i],
+            [/^Near-term growth priorities center on\s+(.+)$/i],
           ])
         )
       );
-      return `For the next phase of growth, the organizing outcome is ${outcome}`;
+      if (!outcome || containsMetaInstructionLanguage(outcome)) return '';
+      return `Near-term growth priorities center on ${outcome}`;
     }
     case 'metrics': {
       const signals = midSentence(
@@ -807,6 +1003,7 @@ function normalizeClaim(kind, summary) {
           [/^We (?:track|measure|watch)\s+(.+)$/i],
         ])
       );
+      if (!signals || containsMetaInstructionLanguage(signals)) return '';
       return `Success will be judged by ${signals}`;
     }
     default:
@@ -822,7 +1019,7 @@ function composeWhoYouAre(identity, services) {
     sentences.push(id);
     sentences.push(svc);
     sentences.push(
-      'Identity and offer together form the center of gravity any growth advice must respect — not an afterthought to be reverse-engineered later.'
+      'Together, identity and offer define the commercial center of gravity any growth advice must respect.'
     );
   } else if (id) {
     sentences.push(id);
@@ -1236,14 +1433,17 @@ function composeConversationStarters(sections, learnMoreItems) {
  * SPEC-085 — Executive Business Brief.
  * CEO-facing synthesis from a senior consultant. Never concatenates raw
  * interview wording or exposes implementation metadata.
+ * Only business interview answers become evidence; refinement instructions
+ * are sanitized out before render.
  */
 function buildExecutiveSummary(sections) {
-  const s = (key) => (sections && sections[key]) || emptySection();
-  const unknownLabels = collectUnknownLabels(sections);
+  const clean = sanitizeSectionsForBrief(sections);
+  const s = (key) => clean[key] || emptySection();
+  const unknownLabels = collectUnknownLabels(clean);
   const learnMoreItems = composeLearnMoreItems(unknownLabels);
-  const observations = composeObservations(sections);
-  const assessment = composeAssessment(sections);
-  const conversations = composeConversationStarters(sections, learnMoreItems);
+  const observations = composeObservations(clean);
+  const assessment = composeAssessment(clean);
+  const conversations = composeConversationStarters(clean, learnMoreItems);
 
   return {
     title: 'Executive Business Brief',
@@ -1399,6 +1599,7 @@ function initialInterviewState({ notes } = {}) {
     answers: {},
     sectionState: emptySections(),
     contradictions: [],
+    revisionGuidance: [],
     notes: notes ? String(notes) : null,
     blueprintId: null,
     lastReflectionAt: 0,
@@ -1919,7 +2120,38 @@ async function applySectionUpdate(store, session, sectionKey, statement, type, t
   );
   const priorStatements = priorEvidence
     .map((e) => e.statement)
-    .filter((s) => s && !/^Unknown:/i.test(String(s)));
+    .filter((s) => s && !/^Unknown:/i.test(String(s)))
+    .filter((s) => isBusinessFactStatement(s));
+
+  const rawStatement = String(statement || '').trim();
+  const responseKind = classifyUserResponse(rawStatement);
+
+  // Refinement / system guidance must never populate commercial Blueprint fields.
+  if (
+    responseKind === ANSWER_KINDS.REFINEMENT_FEEDBACK ||
+    responseKind === ANSWER_KINDS.SYSTEM_GUIDANCE ||
+    containsMetaInstructionLanguage(rawStatement)
+  ) {
+    state.revisionGuidance = [
+      ...(state.revisionGuidance || []),
+      {
+        at: nowIso(),
+        kind: responseKind,
+        message: rawStatement,
+        section: sectionKey,
+      },
+    ];
+    state.sectionState = sectionState;
+    session.interview_state = state;
+    return {
+      evidenceRow: null,
+      contradiction: false,
+      sectionState,
+      skippedAsGuidance: true,
+      responseKind,
+    };
+  }
+
   const empty = answerLooksEmpty(statement);
   const isConfirmation = looksLikeConfirmation(statement);
   const hasCorroboration = priorEvidence.length >= 1 && !empty;
@@ -1940,7 +2172,7 @@ async function applySectionUpdate(store, session, sectionKey, statement, type, t
     source: `Interview Turn`,
     source_turn_id: turnId,
     category: sectionKey,
-    statement: empty ? `Unknown: ${sectionKey}` : String(statement).trim(),
+    statement: empty ? `Unknown: ${sectionKey}` : rawStatement,
     confidence,
     type: empty ? 'INFERRED' : type,
     created_at: new Date(),
@@ -1962,7 +2194,7 @@ async function applySectionUpdate(store, session, sectionKey, statement, type, t
     nextConfidence = clampConfidence(Math.min(section.confidence || confidence, confidence));
     state.contradictions = [
       ...(state.contradictions || []),
-      { section: sectionKey, statement: String(statement).trim(), at: nowIso() },
+      { section: sectionKey, statement: rawStatement, at: nowIso() },
     ];
   } else if (!empty) {
     const prior = Number(section.confidence) || 0;
@@ -1978,9 +2210,9 @@ async function applySectionUpdate(store, session, sectionKey, statement, type, t
   let summary = section.summary || '';
   if (!empty) {
     if (type === 'CLIENT_EDITED') {
-      summary = String(statement).trim();
+      summary = isBusinessFactStatement(rawStatement) ? rawStatement : summary;
     } else {
-      summary = summarizeSection(sectionKey, [...priorStatements, String(statement).trim()]);
+      summary = summarizeSection(sectionKey, [...priorStatements, rawStatement]);
     }
   }
 
@@ -1997,7 +2229,7 @@ async function applySectionUpdate(store, session, sectionKey, statement, type, t
   state.sectionState = sectionState;
   session.interview_state = state;
 
-  return { evidenceRow, contradiction, sectionState };
+  return { evidenceRow, contradiction, sectionState, skippedAsGuidance: false, responseKind };
 }
 
 function confidenceSummaryFromSections(sections) {
@@ -2097,11 +2329,16 @@ async function advanceThroughLifecycleToBlueprint(store, session) {
 }
 
 function extractNotesIntoSections(notes) {
-  const text = String(notes || '').trim();
+  const partitioned = partitionUserResponse(notes);
+  // Persist guidance separately when callers read interview_state; facts only map to sections.
+  const text = partitioned.facts.join(' ').trim() || '';
+  if (!text) return { assigned: {}, guidance: partitioned.guidance };
+
   const sentences = text
     .split(/(?<=[.!?])\s+|\n+/)
     .map((s) => s.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((s) => isBusinessFactStatement(s));
   const patterns = [
     { re: /\b(we are|company|business|dba|called)\b/i, section: 'identity' },
     { re: /\b(service|offer|provide|sell|product)\b/i, section: 'services' },
@@ -2123,9 +2360,16 @@ function extractNotesIntoSections(notes) {
       }
     }
   }
-  // leftover sentences fill identity if missing
-  if (!assigned.identity && sentences[0]) assigned.identity = sentences[0];
-  return assigned;
+  // leftover sentences fill identity if missing — but never with refinement guidance
+  if (!assigned.identity && sentences[0] && isBusinessFactStatement(sentences[0])) {
+    assigned.identity = sentences[0];
+  }
+  return { assigned, guidance: partitioned.guidance };
+}
+
+/** Back-compat: return only the section map (tests / older callers). */
+function mapNotesToSections(notes) {
+  return extractNotesIntoSections(notes).assigned;
 }
 
 /**
@@ -2153,7 +2397,19 @@ async function startClientInterview(input = {}, opts = {}) {
   session.status = 'DISCOVERY';
 
   if (notes) {
-    const mapped = extractNotesIntoSections(notes);
+    const { assigned: mapped, guidance } = extractNotesIntoSections(notes);
+    if (guidance.length) {
+      state.revisionGuidance = [
+        ...(state.revisionGuidance || []),
+        ...guidance.map((message) => ({
+          at: nowIso(),
+          kind: ANSWER_KINDS.REFINEMENT_FEEDBACK,
+          message,
+          section: null,
+        })),
+      ];
+      session.interview_state = state;
+    }
     const systemTurn = await store.insertTurn({
       id: newId(),
       session_id: session.id,
@@ -2265,6 +2521,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   const q = currentQuestion(state);
 
   // Refinement pass after resume: free-form note updates then regenerate blueprint.
+  // Refinement instructions are stored as revision guidance — never as business facts.
   if (!q && state.refinementPass) {
     const clientTurn = await store.insertTurn({
       id: newId(),
@@ -2276,14 +2533,26 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       derived_evidence: [],
       created_at: new Date(),
     });
-    const mapped = extractNotesIntoSections(text);
+    const { assigned: mapped, guidance } = extractNotesIntoSections(text);
+    if (guidance.length) {
+      state.revisionGuidance = [
+        ...(state.revisionGuidance || []),
+        ...guidance.map((message) => ({
+          at: nowIso(),
+          kind: ANSWER_KINDS.REFINEMENT_FEEDBACK,
+          message,
+          section: null,
+        })),
+      ];
+    }
     const evidenceIds = [];
-    const sectionsToUpdate = Object.keys(mapped).length
-      ? Object.keys(mapped)
-      : ['identity'];
+    const sectionsToUpdate = Object.keys(mapped);
+    // Only apply when we extracted real business facts — never default the whole
+    // refinement message into identity.
     for (const section of sectionsToUpdate) {
-      const statement = mapped[section] || text;
-      const { evidenceRow } = await applySectionUpdate(
+      const statement = mapped[section];
+      if (!statement || !isBusinessFactStatement(statement)) continue;
+      const { evidenceRow, skippedAsGuidance } = await applySectionUpdate(
         store,
         session,
         section,
@@ -2291,7 +2560,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         'EXPLICIT',
         clientTurn.id
       );
-      evidenceIds.push(evidenceRow.id);
+      if (!skippedAsGuidance && evidenceRow) evidenceIds.push(evidenceRow.id);
     }
     await store.updateTurn(clientTurn.id, { derived_evidence: evidenceIds });
     state.refinementPass = false;
@@ -2338,7 +2607,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     created_at: new Date(),
   });
 
-  const { evidenceRow, contradiction } = await applySectionUpdate(
+  const { evidenceRow, contradiction, skippedAsGuidance } = await applySectionUpdate(
     store,
     session,
     q.question.section,
@@ -2348,10 +2617,15 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   );
 
   await store.updateTurn(clientTurn.id, {
-    derived_evidence: [evidenceRow.id],
+    derived_evidence: evidenceRow ? [evidenceRow.id] : [],
   });
 
-  state.answers = { ...(state.answers || {}), [q.question.id]: text };
+  // Only record business answers against the question bank — refinement stays in revisionGuidance.
+  if (!skippedAsGuidance) {
+    state.answers = { ...(state.answers || {}), [q.question.id]: text };
+  } else {
+    state.answers = { ...(state.answers || {}) };
+  }
   state.stepIndex = (Number(state.stepIndex) || 0) + 1;
   if (state.stepIndex >= QUESTION_BANK.length) state.done = true;
   session.interview_state = state;
@@ -2379,7 +2653,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       nextAction: 'GENERATE_BLUEPRINT',
       question: null,
       message: 'Draft Business Blueprint is ready for review.',
-      evidence: publicEvidence(evidenceRow),
+      evidence: evidenceRow ? publicEvidence(evidenceRow) : null,
       blueprint: publicBlueprint(blueprint),
       reflection: null,
     });
@@ -2436,7 +2710,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     },
     message: nextQ.question.prompt,
     reflection,
-    evidence: publicEvidence(evidenceRow),
+    evidence: evidenceRow ? publicEvidence(evidenceRow) : null,
     contradiction: contradiction || false,
     blueprint: null,
   });
@@ -2555,7 +2829,24 @@ async function reviseBlueprint(blueprintId, revisions = {}, opts = {}) {
           ? String(edit.summary)
           : null;
     if (summary == null) continue;
-    const { evidenceRow } = await applySectionUpdate(
+
+    // Refinement / meta-instruction edits are guidance only — never overwrite commercial fields.
+    if (!isBusinessFactStatement(summary)) {
+      const state = session.interview_state || initialInterviewState();
+      state.revisionGuidance = [
+        ...(state.revisionGuidance || []),
+        {
+          at: nowIso(),
+          kind: classifyUserResponse(summary),
+          message: summary,
+          section: key,
+        },
+      ];
+      session.interview_state = state;
+      continue;
+    }
+
+    const { evidenceRow, skippedAsGuidance } = await applySectionUpdate(
       store,
       session,
       key,
@@ -2563,6 +2854,7 @@ async function reviseBlueprint(blueprintId, revisions = {}, opts = {}) {
       'CLIENT_EDITED',
       editTurn.id
     );
+    if (skippedAsGuidance || !evidenceRow) continue;
     derived.push(evidenceRow.id);
     sections[key] = {
       ...(sections[key] || emptySection()),
@@ -2788,6 +3080,7 @@ module.exports = {
   BLUEPRINT_SECTIONS,
   EVIDENCE_TYPES,
   NEXT_ACTIONS,
+  ANSWER_KINDS,
   QUESTION_BANK,
   SECTION_TITLES,
   GENERATED_BY,
@@ -2815,4 +3108,11 @@ module.exports = {
   approveBlueprint,
   detectContradiction,
   answerLooksEmpty,
+  classifyUserResponse,
+  looksLikeRefinementFeedback,
+  containsMetaInstructionLanguage,
+  partitionUserResponse,
+  isBusinessFactStatement,
+  sanitizeSummaryForBrief,
+  sanitizeSectionsForBrief,
 };

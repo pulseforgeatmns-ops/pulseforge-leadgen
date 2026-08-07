@@ -79,6 +79,8 @@ Interview Complete
 
 `buildExecutiveSummary(sections)` (CIE service) synthesizes the Brief from Blueprint section summaries + confidence + unknowns. No new tables. No LLM required for v1 — deterministic consultant synthesis from evidence already on the Blueprint.
 
+Before render, summaries pass through `sanitizeSectionsForBrief`: only `business_fact` evidence is kept; `refinement_feedback` / meta-instruction language is rejected. Refinement messages may be stored on `interview_state.revisionGuidance` and must not populate commercial Blueprint fields.
+
 Presentation lives on `/client-intel` (phase `executive_summary` / Brief reveal).
 
 ## Data Model
@@ -128,9 +130,11 @@ None. Forward-compatible enrichment of existing `executiveSummary` response fiel
 - [x] Brief never repeats interview answers verbatim
 - [x] Every section demonstrates synthesis rather than transcription
 - [x] Implementation language / prompts / system terminology absent from client-facing copy
+- [x] Refinement feedback / meta-instructions never populate commercial Brief fields (who you are / serve / choose / headed / success)
+- [x] Pre-render sanitization rejects meta-instruction evidence snippets
 - [x] Observations connect evidence instead of prescribing actions (max five)
 - [x] Unknowns are always identified (never "nothing outstanding")
-- [x] Assessment scores derive from observed section confidence — never fabricated
+- [x] Assessment scores derive from observed section confidence — never fabricated; refinement instructions do not inflate ratings
 - [x] Premium Understanding Transition feels deliberate (min 2.5s; no artificial stall after processing)
 - [x] Client validation precedes editable Business Blueprint
 - [x] Brief can be read independently and still provide meaningful value
@@ -141,3 +145,4 @@ None. Forward-compatible enrichment of existing `executiveSummary` response fiel
 - Optional client annotations on Brief sections
 - Adaptive Brief depth when interview is notes-only vs full discovery
 - Soften trust-bridge copy into Brief intro when product prefers a single beat
+- Optional LLM polish pass that still consumes only sanitized business_fact evidence

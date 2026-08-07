@@ -8,6 +8,7 @@ const {
   ALLOWED_TRANSITIONS,
   BLUEPRINT_SECTIONS,
   QUESTION_BANK,
+  ANSWER_KINDS,
   ClientIntelligenceError,
   createMemoryStore,
   scoreEvidenceConfidence,
@@ -26,6 +27,11 @@ const {
   reviseBlueprint,
   approveBlueprint,
   answerLooksEmpty,
+  classifyUserResponse,
+  looksLikeRefinementFeedback,
+  containsMetaInstructionLanguage,
+  partitionUserResponse,
+  sanitizeSummaryForBrief,
 } = require('../services/clientIntelligenceInterview');
 
 const {
@@ -430,10 +436,18 @@ describe('confidence rules', () => {
     assert.match(byId.whoYouAre.body, /Aji/);
     assert.match(byId.whoYouAre.body, /recurring cleans/i);
     assert.match(byId.whoYouAre.body, /center of gravity|growth advice/i);
-    assert.equal(/Service understanding reflects|anchors every other|deciding factors tend to be|creates value through recurring|concentrate first in /i.test(byId.whoYouAre.body + byId.whyChooseYou.body + byId.whoYouServe.body), false);
+    assert.equal(
+      /Service understanding reflects|anchors every other|deciding factors tend to be|creates value through recurring|concentrate first in |This is a business built around|The relationships worth winning are with|Near-term commercial attention belongs in |Customers choose this business for /i.test(
+        byId.whoYouAre.body + byId.whyChooseYou.body + byId.whoYouServe.body
+      ),
+      false
+    );
     assert.match(byId.whoYouServe.body, /busy homeowners/i);
+    assert.match(byId.whoYouServe.body, /Ideal customers include/i);
     assert.match(byId.whyChooseYou.body, /reliable crews/i);
+    assert.match(byId.whyChooseYou.body, /Customers choose this business because/i);
     assert.match(byId.whereHeaded.body, /booking appointments/i);
+    assert.match(byId.whereHeaded.body, /Near-term growth priorities center on/i);
 
     assert.ok(byId.observations.items.length >= 1);
     assert.ok(byId.observations.items.length <= 5);
@@ -475,6 +489,235 @@ describe('confidence rules', () => {
     const learnMore = summary.sections.find((s) => s.id === 'learnMore');
     assert.ok(learnMore.items.length >= 3);
     assert.equal(/nothing outstanding/i.test(JSON.stringify(learnMore)), false);
+  });
+});
+
+describe('Executive Brief refinement / evidence separation', () => {
+  const BANNED_META =
+    /This revision introduced a problem|turn the raw interview answers|the brief is treating|instructions to Max|do not include|please regenerate|clean business language|business facts only|the substance is mostly right/i;
+
+  const ANCHOR_SECTIONS = {
+    identity: {
+      summary:
+        'Anchor Cleaning is a cleaning company. This identity framing is how the operator describes the business today, and it anchors every other Blueprint section.',
+      confidence: 0.9,
+      unknowns: [],
+    },
+    services: {
+      summary:
+        'Today the business delivers residential cleaning, office cleaning, deep cleans, move-in/move-out cleans, short-term rental turnovers, and recurring cleaning. Service understanding reflects what is actually sold now, not aspirational packaging.',
+      confidence: 0.88,
+      unknowns: [],
+    },
+    idealCustomers: {
+      summary:
+        'Ideal customers are property managers, short-term rental companies, facilities managers, daycares, schools, and high-traffic buildings — plus residential clients who value reliability. This ICP picture prioritizes fit over volume.',
+      confidence: 0.86,
+      unknowns: [],
+    },
+    avoidCustomers: {
+      summary:
+        'The business prefers to avoid customers who only value the lowest price. Better-fit customers value reliability, responsiveness, professionalism, accountability, and peace of mind. These constraints protect targeting quality and should stay visible in the Blueprint.',
+      confidence: 0.84,
+      unknowns: [],
+    },
+    targetMarkets: {
+      summary:
+        'Priority markets center on Greater Manchester, including Bedford, Londonderry, Auburn, Goffstown, and Hooksett, with a near-term growth focus on commercial cleaning. Geography and vertical focus here bound where discovery should concentrate first.',
+      confidence: 0.85,
+      unknowns: [],
+    },
+    competitiveAdvantages: {
+      summary:
+        'Competitive edge is described as customers trust the team to show up consistently, communicate clearly, solve problems quickly, and make facilities feel taken care of. This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
+      confidence: 0.87,
+      unknowns: [],
+    },
+    brandVoice: {
+      summary:
+        'Brand voice should read as calm, professional, reliable, direct, and easy to work with. Tone guidance constrains later language without choosing channels or campaigns.',
+      confidence: 0.82,
+      unknowns: [],
+    },
+    campaignGoals: {
+      summary:
+        'Near-term growth goals focus on commercial cleaning growth in Greater Manchester. These are desired business outcomes for the next phase of work, not execution tactics.',
+      confidence: 0.83,
+      unknowns: [],
+    },
+    successMetrics: {
+      summary:
+        'Success will be judged by more qualified conversations, more walkthroughs or estimate requests, clearer market learning, and a small but real pipeline of commercial opportunities. These signals define whether the engagement is working from the client\'s perspective.',
+      confidence: 0.8,
+      unknowns: [],
+    },
+  };
+
+  it('classifies refinement phrases as refinement_feedback, not business_fact', () => {
+    const samples = [
+      'Please refine the Executive Business Brief.',
+      'This revision introduced a problem in Who You Are.',
+      'The brief is treating instructions as facts.',
+      'Max is treating refinement feedback as business evidence.',
+      'Do not include instructions to Max in the brief.',
+      'Please regenerate with clean business language.',
+      'Turn the raw interview answers into clean business language.',
+      'These are instructions to Max, not facts about Anchor.',
+    ];
+    for (const sample of samples) {
+      assert.equal(
+        classifyUserResponse(sample),
+        ANSWER_KINDS.REFINEMENT_FEEDBACK,
+        sample
+      );
+      assert.equal(looksLikeRefinementFeedback(sample), true, sample);
+      assert.equal(containsMetaInstructionLanguage(sample), true, sample);
+    }
+    assert.equal(
+      classifyUserResponse('Anchor is a cleaning company serving Greater Manchester.'),
+      ANSWER_KINDS.BUSINESS_FACT
+    );
+    assert.equal(
+      classifyUserResponse('ignore this', { speaker: 'system' }),
+      ANSWER_KINDS.SYSTEM_GUIDANCE
+    );
+    assert.equal(
+      classifyUserResponse('Executive Business Brief body', { context: 'generated_brief' }),
+      ANSWER_KINDS.GENERATED_BRIEF
+    );
+  });
+
+  it('partitions mixed messages so only business facts remain', () => {
+    const partitioned = partitionUserResponse(
+      'This revision introduced a problem. Anchor is a cleaning company serving Greater Manchester. Please regenerate and do not include instructions to Max.'
+    );
+    assert.ok(partitioned.facts.some((f) => /Anchor is a cleaning company/i.test(f)));
+    assert.ok(partitioned.guidance.length >= 1);
+    assert.equal(
+      partitioned.facts.some((f) => /This revision introduced/i.test(f)),
+      false
+    );
+  });
+
+  it('sanitizeSummaryForBrief strips meta-instruction language from evidence', () => {
+    const dirty =
+      'Anchor Cleaning is a cleaning company. This revision introduced a problem. Please regenerate with clean business language.';
+    const clean = sanitizeSummaryForBrief(dirty);
+    assert.match(clean, /Anchor Cleaning is a cleaning company/i);
+    assert.equal(BANNED_META.test(clean), false, clean);
+  });
+
+  it('does not include refinement feedback in Executive Business Brief sections', () => {
+    const contaminated = {
+      ...ANCHOR_SECTIONS,
+      identity: {
+        summary:
+          'The business is understood as This revision introduced a problem — turn the raw interview answers into clean business language. This identity framing is how the operator describes the business today, and it anchors every other Blueprint section.',
+        confidence: 0.95,
+        unknowns: [],
+      },
+      idealCustomers: {
+        summary:
+          'Ideal customers are The brief is treating instructions to Max as facts about Anchor. Please regenerate. This ICP picture prioritizes fit over volume.',
+        confidence: 0.95,
+        unknowns: [],
+      },
+    };
+    const brief = buildExecutiveSummary(contaminated);
+    const blob = JSON.stringify(brief);
+    assert.equal(BANNED_META.test(blob), false, blob);
+    for (const section of brief.sections) {
+      const text = `${section.body || ''} ${(section.items || []).join(' ')} ${(section.ratings || [])
+        .map((r) => r.explanation)
+        .join(' ')}`;
+      assert.equal(BANNED_META.test(text), false, `${section.id}: ${text}`);
+    }
+  });
+
+  it('preserves valid Anchor facts in polished synthesized form', () => {
+    const brief = buildExecutiveSummary(ANCHOR_SECTIONS);
+    const byId = Object.fromEntries(brief.sections.map((s) => [s.id, s]));
+    const blob = JSON.stringify(brief);
+
+    assert.equal(BANNED_META.test(blob), false, blob);
+    assert.match(byId.whoYouAre.body, /Anchor/i);
+    assert.match(byId.whoYouAre.body, /cleaning/i);
+    assert.match(
+      byId.whoYouAre.body,
+      /residential cleaning|office cleaning|deep cleans|move-in|recurring cleaning/i
+    );
+    assert.match(byId.whoYouServe.body, /property managers|Greater Manchester|Bedford|Hooksett/i);
+    assert.match(byId.whoYouServe.body, /lowest price|reliability|peace of mind/i);
+    assert.match(
+      byId.whyChooseYou.body,
+      /show up consistently|communicate clearly|solve problems|taken care of/i
+    );
+    assert.match(byId.whyChooseYou.body, /calm|professional|reliable|direct/i);
+    assert.match(byId.whereHeaded.body, /commercial cleaning|Greater Manchester/i);
+    assert.match(
+      byId.successLooksLike.body,
+      /qualified conversations|walkthroughs|estimate|commercial opportunities/i
+    );
+
+    // Polished synthesis — not Mad-Lib raw concatenation templates
+    assert.equal(
+      /This is a business built around|The relationships worth winning are with|Near-term commercial attention belongs in |Customers choose this business for /i.test(
+        blob
+      ),
+      false
+    );
+    assert.match(byId.whoYouServe.body, /Ideal customers include/i);
+    assert.match(byId.whyChooseYou.body, /Customers choose this business because/i);
+    assert.match(byId.whoYouAre.body, /Services include/i);
+  });
+
+  it('ratings do not depend on refinement instructions as evidence', () => {
+    const clean = buildExecutiveSummary(ANCHOR_SECTIONS);
+    const contaminated = buildExecutiveSummary({
+      ...ANCHOR_SECTIONS,
+      identity: {
+        summary:
+          'This revision introduced a problem. Please regenerate. Instructions to Max are not facts about Anchor.',
+        confidence: 0.99,
+        unknowns: [],
+      },
+      services: {
+        summary: 'Do not include raw interview answers. The substance is mostly right.',
+        confidence: 0.99,
+        unknowns: [],
+      },
+    });
+    const cleanAssessment = clean.sections.find((s) => s.id === 'assessment');
+    const dirtyAssessment = contaminated.sections.find((s) => s.id === 'assessment');
+    assert.ok(dirtyAssessment.confidencePercent < cleanAssessment.confidencePercent);
+    const clarity = dirtyAssessment.ratings.find((r) => r.label === 'Business Clarity');
+    assert.ok(clarity.stars <= 2);
+    assert.equal(BANNED_META.test(JSON.stringify(dirtyAssessment)), false);
+  });
+
+  it('refinement resume stores guidance without contaminating blueprint commercial fields', async () => {
+    const { opts, store } = withStore();
+    const { turn } = await completeInterview(opts);
+    await resumeInterview(turn.interviewId, opts);
+    const refined = await postInterviewMessage(
+      turn.interviewId,
+      'This revision introduced a problem. The brief is treating instructions to Max as facts. Please regenerate and turn the raw interview answers into clean business language. Do not include refinement feedback.',
+      opts
+    );
+    assert.equal(refined.status, 'CLIENT_REVIEW');
+    assert.ok(refined.executiveSummary);
+    const blob = JSON.stringify(refined.executiveSummary);
+    assert.equal(BANNED_META.test(blob), false, blob);
+    assert.equal(BANNED_META.test(JSON.stringify(refined.blueprint.sections)), false);
+
+    const session = await store.getSession(turn.interviewId);
+    assert.ok((session.interview_state.revisionGuidance || []).length >= 1);
+    assert.equal(
+      session.interview_state.revisionGuidance.some((g) =>
+        /This revision introduced/i.test(g.message)
+      ),
+      true
+    );
   });
 });
 
