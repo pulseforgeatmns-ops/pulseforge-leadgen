@@ -4,6 +4,16 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Executive Business Brief synthesis no longer treats refinement instructions as business facts ([SPEC-085](docs/specs/SPEC-085_Executive_Business_Brief.md))
+  - Classifies responses as `business_fact` / `refinement_feedback` / `system_guidance` / `generated_brief`
+  - Refinement intent detection (“please refine”, “this revision”, “instructions to Max”, etc.)
+  - Revision guidance stored in session metadata — never in who_you_are / who_you_serve / related commercial fields
+  - Pre-render sanitization strips meta-instruction snippets from Brief evidence
+  - Polished executive synthesis replaces Mad-Lib raw-answer concatenation
+  - Regression coverage in `test/clientIntelligenceInterview.test.js` (Anchor facts preserved; banned meta phrases absent; ratings ignore refinement evidence)
+
 ### Added
 
 - Executive Business Brief ([SPEC-085](docs/specs/SPEC-085_Executive_Business_Brief.md))
