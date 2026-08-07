@@ -141,6 +141,7 @@ const NORMALIZED_FACT_KEYS = Object.freeze([
   'services',
   'growth_focus',
   'ideal_customers',
+  'ideal_customer_traits',
   'disqualified_customers',
   'geography',
   'vertical_focus',
@@ -651,6 +652,8 @@ function stripSupplementalPreamble(text) {
     }
     s = s
       .replace(/\s+for\s+(?:the\s+)?(?:icp|ideal\s+customers?|ideal\s+customer\s+profile)\s*$/i, '')
+      .replace(/\s+as\s+part\s+of\s+(?:my|our|the)\s+ideal\s+customer(?:\s+profile)?\s*$/i, '')
+      .replace(/\bas\s+part\s+of\s+(?:my|our|the)\s+ideal\s+customer(?:\s+profile)?\b/gi, ' ')
       .replace(/\bfor\s+(?:the\s+)?(?:icp|ideal\s+customers?|ideal\s+customer\s+profile)\b/gi, ' ')
       .replace(/^(?:to\s+mention)\s+/i, '')
       .replace(/^\s*[,;:\-–—]+\s*/, '')
@@ -688,6 +691,17 @@ function parseSupplementalMessage(text, opts = {}) {
   if (section) substance = cleanRawAnswer(section, substance);
   substance = normalizeBusinessPhrase(substance);
   substance = stripSupplementalPreamble(substance);
+
+  // Prefer clean entity extraction for list domains.
+  if (section === 'idealCustomers') {
+    const segments = extractCustomerSegments(substance) || extractCustomerSegments(raw);
+    if (segments.length === 1) substance = segments[0];
+    else if (segments.length > 1) substance = segments.join(', ');
+  } else if (section === 'services') {
+    const services = extractServiceList(substance) || extractServiceList(raw);
+    if (services.length === 1) substance = services[0];
+    else if (services.length > 1) substance = services.join(', ');
+  }
 
   // Ignore unused opts.activeQuestion for now — domain inference is enough.
   void opts;
@@ -1224,6 +1238,7 @@ function normalizeBusinessPhrase(phrase) {
     .replace(/\bfacility managers?\b/gi, 'facility managers')
     .replace(/\bproperty managers?\b/gi, 'property managers')
     .replace(/\bprofessional offices?\b/gi, 'professional offices')
+    .replace(/\bdaycares?\b/gi, 'daycares')
     .replace(/\bgreater\s+manchester(?:\s+area)?\b/gi, 'Greater Manchester')
     .replace(PLACE_NAME_RE, (m) => titleCaseWords(m))
     .replace(/\s{2,}/g, ' ')
@@ -1232,6 +1247,229 @@ function normalizeBusinessPhrase(phrase) {
   // Avoid double "cleaning cleaning"
   s = s.replace(/\bcleaning cleaning\b/gi, 'cleaning');
   return s;
+}
+
+/**
+ * Strip business-name / company lead-ins from answer prose.
+ * "Anchor Cleaning provides standard home cleaning" → "standard home cleaning"
+ */
+function stripBusinessNameLeadIn(text) {
+  let s = String(text || '').trim();
+  if (!s) return '';
+  s = s
+    .replace(
+      /^(?:anchor(?:\s+cleaning)?|[A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+){0,5})\s+(?:provides?|offers?|delivers?|does|serves?|most wants to work with|wants to work with|prefers? to work with)\s+/i,
+      ''
+    )
+    .replace(
+      /^(?:the\s+)?(?:business|company)\s+(?:provides?|offers?|delivers?|most wants to work with|wants to work with)\s+/i,
+      ''
+    )
+    .replace(/^services?(?:\s+include|\s+are|:)\s+/i, '')
+    .replace(/^ideal customers?(?:\s+include|\s+are|:)\s+/i, '')
+    .replace(/^the ideal customers?(?:\s+include|\s+are|:)\s+/i, '')
+    .trim();
+  return s;
+}
+
+/** Known cleaning service entity patterns → canonical labels. */
+const SERVICE_ENTITY_PATTERNS = Object.freeze([
+  [/standard\s+home(?:\s+cleaning)?/gi, 'standard home cleaning'],
+  [/standard\s+office(?:\s+cleaning)?/gi, 'standard office cleaning'],
+  [/deep\s+cleans?/gi, 'deep cleans'],
+  [/move[\s-]?in\s*\/\s*move[\s-]?out\s+(?:cleans?|cleaning)/gi, 'move-in/move-out cleaning'],
+  [/move[\s-]?in\/(?:move[\s-]?)?outs?\s+(?:cleans?|cleaning)/gi, 'move-in/move-out cleaning'],
+  [/recurring\s+(?:cleans?|cleaning)(?!\s+commercial)/gi, 'recurring cleaning'],
+  [/short[\s-]?term\s+rental\s+turnovers?/gi, 'short-term rental turnovers'],
+  [/short[\s-]?term\s+rental\s+companies/gi, 'short-term rental companies'],
+]);
+
+/** Known ICP segment patterns → canonical labels. */
+const CUSTOMER_SEGMENT_PATTERNS = Object.freeze([
+  [/property managers?/gi, 'property managers'],
+  [/short[\s-]?term\s+rental\s+companies/gi, 'short-term rental companies'],
+  [/\bSTR companies\b/gi, 'short-term rental companies'],
+  [/facility managers?/gi, 'facility managers'],
+  [/professional offices?/gi, 'professional offices'],
+  [/daycares?/gi, 'daycares'],
+  [/rec centers?/gi, 'rec centers'],
+  [/high[\s-]?traffic buildings?/gi, 'high-traffic buildings'],
+  [/commercial customers?/gi, 'commercial customers'],
+]);
+
+/** Value traits that must not become ICP segment rows. */
+const VALUE_TRAIT_PATTERNS = Object.freeze([
+  [/\breliability\b/gi, 'reliability'],
+  [/\bconsistency\b/gi, 'consistency'],
+  [/\bclear communication\b/gi, 'clear communication'],
+  [/\baccountability\b/gi, 'accountability'],
+  [/\bprofessionalism\b/gi, 'professionalism'],
+]);
+
+/**
+ * Deduplicate a normalized list (case-insensitive).
+ */
+function dedupeNormalizedList(items) {
+  const out = [];
+  for (const item of items || []) {
+    const normalized = normalizeBusinessPhrase(item);
+    if (!normalized) continue;
+    if (out.some((x) => x.toLowerCase() === normalized.toLowerCase())) continue;
+    out.push(normalized);
+  }
+  return out;
+}
+
+/**
+ * Extract canonical service entities from free-form prose.
+ * Never returns "Anchor Cleaning provides…" style lead-ins.
+ */
+function extractServiceList(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return [];
+
+  const found = [];
+  for (const [re, canon] of SERVICE_ENTITY_PATTERNS) {
+    re.lastIndex = 0;
+    if (re.test(raw)) {
+      if (!found.some((f) => f.toLowerCase() === canon.toLowerCase())) found.push(canon);
+    }
+  }
+  if (found.length) return dedupeNormalizedList(found);
+
+  // Fallback: strip lead-ins / growth sentences, then list-split safely.
+  let body = stripBusinessNameLeadIn(raw);
+  body = body
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !/\bgrowth focus\b|\bweekly or multiple\b/i.test(sentence))
+    .join(' ');
+  // Protect move-in/move-out before splitting.
+  body = body.replace(/move-in\/move-out/gi, 'move-in-MOVEOUT');
+  const parts = String(body || '')
+    .split(/\s*(?:,|;|\band\b|\n)\s*/i)
+    .map((p) => p.replace(/move-in-MOVEOUT/gi, 'move-in/move-out').trim())
+    .filter(Boolean)
+    .map((p) =>
+      normalizeBusinessPhrase(
+        stripBusinessNameLeadIn(p.replace(/^[-–—*•]\s*/, '')).replace(/[.]+$/, '')
+      )
+    )
+    .filter((p) => p && !/^(?:anchor(?:\s+cleaning)?|provides?|offers?)\b/i.test(p))
+    .filter((p) => p.split(/\s+/).length <= 8);
+  return dedupeNormalizedList(parts);
+}
+
+/**
+ * Extract growth-focus statements that should not live inside the services list.
+ */
+function extractGrowthFocusItems(text) {
+  const raw = String(text || '');
+  const items = [];
+  const focusMatch = raw.match(
+    /(?:strongest\s+)?growth focus is\s+([^.;]+)(?:[.;]|$)/i
+  );
+  if (focusMatch) {
+    let focus = focusMatch[1].trim();
+    const forCustomers = focus.match(
+      /^(.*?(?:cleaning|service))\s+for\s+(customers?\s+who\s+need\s+.+)$/i
+    );
+    if (forCustomers) {
+      items.push(normalizeBusinessPhrase(forCustomers[1]));
+      items.push(normalizeBusinessPhrase(forCustomers[2]));
+    } else {
+      items.push(normalizeBusinessPhrase(focus));
+    }
+  }
+  if (
+    /recurring commercial cleaning/i.test(raw) &&
+    !items.some((i) => /recurring commercial/i.test(i))
+  ) {
+    items.push('recurring commercial cleaning');
+  }
+  if (
+    /weekly or multiple[\s-]?times[\s-]?per[\s-]?week/i.test(raw) &&
+    !items.some((i) => /weekly or multiple/i.test(i))
+  ) {
+    items.push('customers who need weekly or multiple-times-per-week service');
+  }
+  return dedupeNormalizedList(items);
+}
+
+/**
+ * Extract clean ICP segment entities from free-form prose.
+ */
+function extractCustomerSegments(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return [];
+
+  const found = [];
+  const listClause = raw.match(
+    /(?:the\s+)?ideal customers?\s+(?:are|include)\s+([^.]+?)(?:\.|$)/i
+  );
+  const searchSpace = listClause ? listClause[1] : raw;
+
+  for (const [re, canon] of CUSTOMER_SEGMENT_PATTERNS) {
+    re.lastIndex = 0;
+    if (re.test(searchSpace) || (!listClause && re.test(raw))) {
+      if (canon === 'commercial customers' && listClause) continue;
+      if (!found.some((f) => f.toLowerCase() === canon.toLowerCase())) found.push(canon);
+    }
+  }
+  if (found.length) {
+    return dedupeNormalizedList(
+      found.filter((f) => f !== 'commercial customers' || found.length === 1)
+    );
+  }
+
+  let body = stripBusinessNameLeadIn(raw);
+  body = body
+    .replace(/^commercial customers?\s+who value\s+[^.]+[. ]*/i, '')
+    .replace(/^who value\s+[^.]+[. ]*/i, '')
+    .replace(/\s+that need\s+.+$/i, '')
+    .replace(/\s+as part of (?:my|our|the)\s+ideal customer(?:\s+profile)?\s*$/i, '');
+  const parts = String(body || '')
+    .split(/\s*(?:,|;|\band\b|\n)\s*/i)
+    .map((p) =>
+      normalizeBusinessPhrase(
+        stripBusinessNameLeadIn(p.replace(/^[-–—*•]\s*/, ''))
+          .replace(/[.]+$/, '')
+          .replace(/\s+as part of (?:my|our|the)\s+ideal customer(?:\s+profile)?$/i, '')
+          .replace(/\s+who value\s+.+$/i, '')
+          .replace(/\s+that need\s+.+$/i, '')
+      )
+    )
+    .filter(
+      (p) =>
+        p &&
+        !isValueTraitPhrase(p) &&
+        !/^(?:anchor(?:\s+cleaning)?|most wants|wants to work)\b/i.test(p)
+    )
+    .filter((p) => p.split(/\s+/).length <= 6);
+  return dedupeNormalizedList(parts);
+}
+
+function isValueTraitPhrase(text) {
+  const s = String(text || '').toLowerCase().trim();
+  return /^(reliability|consistency|clear communication|accountability|professionalism)$/i.test(
+    s
+  );
+}
+
+/**
+ * Extract value traits (reliability, consistency, …) from ICP prose.
+ */
+function extractValueTraits(text) {
+  const raw = String(text || '');
+  const found = [];
+  const valueClause = raw.match(/who value\s+([^.]+?)(?:\.|$)/i);
+  const space = valueClause ? valueClause[1] : raw;
+  for (const [re, canon] of VALUE_TRAIT_PATTERNS) {
+    re.lastIndex = 0;
+    if (re.test(space)) {
+      if (!found.some((f) => f.toLowerCase() === canon.toLowerCase())) found.push(canon);
+    }
+  }
+  return dedupeNormalizedList(found);
 }
 
 /**
@@ -1261,11 +1499,15 @@ function sanitizeBusinessName(name) {
 
 /**
  * Split a free-form list answer into cleaned phrase items.
+ * Protects compound tokens like move-in/move-out before splitting.
  */
 function splitListItems(text) {
-  return String(text || '')
-    .split(/\s*(?:,|;|\band\b|\n|\||\/(?!out))\s*/i)
-    .map((p) => p.trim())
+  let s = String(text || '').trim();
+  if (!s) return [];
+  s = s.replace(/move-in\/move-out/gi, 'move-in-MOVEOUT');
+  return s
+    .split(/\s*(?:,|;|\band\b|\n|\|)\s*/i)
+    .map((p) => p.replace(/move-in-MOVEOUT/gi, 'move-in/move-out').trim())
     .filter(Boolean)
     .map((p) => normalizeBusinessPhrase(p.replace(/^[-–—*•]\s*/, '')))
     .filter(Boolean);
@@ -1278,6 +1520,7 @@ function emptyNormalizedFacts() {
     services: [],
     growth_focus: null,
     ideal_customers: [],
+    ideal_customer_traits: [],
     disqualified_customers: [],
     geography: [],
     vertical_focus: null,
@@ -1296,6 +1539,7 @@ function cloneNormalizedFacts(facts) {
     services: [...(src.services || [])],
     growth_focus: src.growth_focus || null,
     ideal_customers: [...(src.ideal_customers || [])],
+    ideal_customer_traits: [...(src.ideal_customer_traits || [])],
     disqualified_customers: [...(src.disqualified_customers || [])],
     geography: [...(src.geography || [])],
     vertical_focus: src.vertical_focus || null,
@@ -1307,15 +1551,7 @@ function cloneNormalizedFacts(facts) {
 }
 
 function uniquePush(list, items) {
-  const out = [...(list || [])];
-  for (const item of items || []) {
-    const normalized = normalizeBusinessPhrase(item);
-    if (!normalized) continue;
-    if (!out.some((x) => x.toLowerCase() === normalized.toLowerCase())) {
-      out.push(normalized);
-    }
-  }
-  return out;
+  return dedupeNormalizedList([...(list || []), ...(items || [])]);
 }
 
 function extractPlaces(text) {
@@ -1384,16 +1620,33 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
       break;
     }
     case 'services': {
-      // Prefer comma/list split; fall back to whole phrase.
-      let items = splitListItems(cleaned);
-      // If the answer listed "short term rental companies" as a service, keep it —
-      // correction can replace with turnovers later.
-      if (!items.length) items = [normalizeBusinessPhrase(cleaned)];
-      next.services = uniquePush([], items);
+      const items = extractServiceList(cleaned);
+      next.services = uniquePush([], items.length ? items : splitListItems(cleaned));
+      const focuses = extractGrowthFocusItems(String(rawAnswer || cleaned));
+      if (focuses.length) {
+        next.growth_focus = focuses.join('; ');
+      } else if (/commercial/i.test(cleaned)) {
+        next.growth_focus = next.growth_focus || 'commercial cleaning';
+      }
       break;
     }
     case 'idealCustomers': {
-      next.ideal_customers = uniquePush([], splitListItems(cleaned));
+      const segments = extractCustomerSegments(cleaned);
+      next.ideal_customers = uniquePush(
+        [],
+        segments.length ? segments : splitListItems(stripBusinessNameLeadIn(cleaned))
+      );
+      // Drop accidental trait / preamble bleed from the segment list.
+      next.ideal_customers = next.ideal_customers.filter(
+        (item) =>
+          !isValueTraitPhrase(item) &&
+          !/as part of (?:my|our|the)\s+ideal customer/i.test(item) &&
+          !/^(?:anchor(?:\s+cleaning)?|most wants)\b/i.test(item)
+      );
+      next.ideal_customer_traits = uniquePush(
+        next.ideal_customer_traits,
+        extractValueTraits(String(rawAnswer || cleaned))
+      );
       break;
     }
     case 'avoidCustomers': {
@@ -1451,15 +1704,31 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
     case 'services': {
       // Replace near-duplicate STR company service lines with turnovers when correcting.
       let services = [...(next.services || [])];
-      if (/short-term rental turnover/i.test(substance)) {
+      const serviceItems = extractServiceList(substance);
+      const toAdd = serviceItems.length ? serviceItems : [substance];
+      if (toAdd.some((s) => /short-term rental turnover/i.test(s)) || /short-term rental turnover/i.test(substance)) {
         services = services.filter((s) => !/short-term rental compan/i.test(s));
       }
-      next.services = uniquePush(services, [substance]);
+      next.services = uniquePush(services, toAdd);
       break;
     }
-    case 'idealCustomers':
-      next.ideal_customers = uniquePush(next.ideal_customers, splitListItems(substance));
+    case 'idealCustomers': {
+      const segments = extractCustomerSegments(substance);
+      next.ideal_customers = uniquePush(
+        next.ideal_customers,
+        segments.length ? segments : splitListItems(substance)
+      );
+      next.ideal_customers = next.ideal_customers.filter(
+        (item) =>
+          !isValueTraitPhrase(item) &&
+          !/as part of (?:my|our|the)\s+ideal customer/i.test(item)
+      );
+      next.ideal_customer_traits = uniquePush(
+        next.ideal_customer_traits,
+        extractValueTraits(substance)
+      );
       break;
+    }
     case 'avoidCustomers':
       next.disqualified_customers = uniquePush(
         next.disqualified_customers,
@@ -1733,14 +2002,19 @@ function stripInterviewQuestionEcho(text) {
 function cleanRawAnswer(sectionKey, text) {
   let s = stripInterviewQuestionEcho(text);
   if (!s) return '';
+  s = stripBusinessNameLeadIn(s);
+  s = stripSupplementalPreamble(s);
 
   const sectionStrips = {
     identity: [/^(?:the business(?: name)? is|we are|we're|i run)\s+/i],
     services: [
       /^(?:we (?:sell|offer|provide|do|deliver)|services? (?:include|are)|today (?:we|the business) (?:delivers?|offers?))\s+/i,
+      /^(?:anchor(?:\s+cleaning)?\s+)?provides?\s+/i,
     ],
     idealCustomers: [
       /^(?:our ideal (?:customer|client)s? (?:are|is)|we (?:want|prefer|target|most want to work with)|ideal customers? (?:are|include))\s+/i,
+      /^(?:anchor(?:\s+cleaning)?\s+)?most wants to work with\s+/i,
+      /\s+as part of (?:my|our|the)\s+ideal customer(?:\s+profile)?$/i,
     ],
     avoidCustomers: [
       /^(?:i don'?t want to work with|we (?:avoid|don'?t want|do not want|should avoid|decline)|avoid|customers? (?:who|that))\s+/i,
@@ -2890,20 +3164,47 @@ function buildExecutiveSummary(sections, opts = {}) {
 
   if (normalizedFacts) {
     const f = cloneNormalizedFacts(normalizedFacts);
-    if (f.services.length) {
-      whoYouAre = joinPolished([
+    const cleanServices = (f.services || []).filter(
+      (item) => item && !/^(?:anchor(?:\s+cleaning)?\s+)?provides?\b/i.test(item)
+    );
+    const cleanIdeal = (f.ideal_customers || []).filter(
+      (item) =>
+        item &&
+        !isValueTraitPhrase(item) &&
+        !/as part of (?:my|our|the)\s+ideal customer/i.test(item) &&
+        !/^(?:anchor(?:\s+cleaning)?\s+)?most wants\b/i.test(item)
+    );
+
+    if (cleanServices.length || f.business_name || f.business_description) {
+      const identityLine =
         synthesizeNormalizedFact('identity', s('identity').summary, briefOpts) ||
-          (f.business_name
-            ? `${f.business_name} is a ${f.business_description || 'cleaning company'}`
-            : 'This is a cleaning company'),
-        `Services include ${f.services.join(', ')}`,
-        'Together, identity and offer define the commercial center of gravity any growth advice must respect.',
-      ]);
+        (f.business_name
+          ? `${f.business_name} is a ${f.business_description || 'cleaning company'}`
+          : 'This is a cleaning company');
+      const whoYouAreParts = [identityLine];
+      if (cleanServices.length) {
+        whoYouAreParts.push(`Services include ${cleanServices.join(', ')}`);
+      }
+      whoYouAre = joinPolished(whoYouAreParts);
     }
-    if (f.ideal_customers.length || f.geography.length) {
+    if (cleanIdeal.length || f.geography.length) {
       const sentences = [];
-      if (f.ideal_customers.length) {
-        sentences.push(`Ideal customers include ${f.ideal_customers.join(', ')}`);
+      if (cleanIdeal.length) {
+        const shortName = String(businessName || 'Anchor').replace(/\s+Cleaning$/i, '') || 'Anchor';
+        const possessive = /s$/i.test(shortName) ? `${shortName}'` : `${shortName}'s`;
+        const needsRecurring = /dependable recurring|recurring(?:\s+commercial)?(?:\s+cleaning)?|weekly or multiple/i.test(
+          [
+            s('idealCustomers').summary,
+            f.growth_focus,
+            (f.ideal_customer_traits || []).join(' '),
+            cleanIdeal.join(' '),
+          ].join(' ')
+        );
+        sentences.push(
+          `${possessive} ideal customers include ${cleanIdeal.join(', ')}${
+            needsRecurring ? ' that need dependable recurring cleaning' : ''
+          }`
+        );
       }
       if (f.disqualified_customers.length) {
         sentences.push(
@@ -5002,6 +5303,12 @@ module.exports = {
   normalizeBusinessPhrase,
   normalizeBrandVoiceTone,
   sanitizeBusinessName,
+  stripBusinessNameLeadIn,
+  extractServiceList,
+  extractCustomerSegments,
+  extractValueTraits,
+  extractGrowthFocusItems,
+  dedupeNormalizedList,
   synthesizeDifferentiationSnippet,
   emptyNormalizedFacts,
   ingestAnswerIntoNormalizedFacts,

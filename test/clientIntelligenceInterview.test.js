@@ -1696,3 +1696,195 @@ describe('Anchor transcript — correction routing + normalized brief', () => {
     assert.equal(/commercial — focused/i.test(facts.business_description || ''), false);
   });
 });
+
+describe('Executive Brief field normalization — clean entity lists', () => {
+  const SERVICES_PROSE =
+    'Anchor Cleaning provides standard home cleaning, standard office cleaning, deep cleans, move-in/move-out cleaning, recurring cleaning, and short-term rental turnovers. The strongest growth focus is recurring commercial cleaning for customers who need weekly or multiple-times-per-week service.';
+  const ICP_PROSE =
+    'Anchor Cleaning most wants to work with commercial customers who value reliability, consistency, and clear communication. The ideal customers are property managers, short-term rental companies, facility managers, professional offices, rec centers, and high-traffic buildings that need dependable recurring cleaning.';
+  const SUPP_DAYCARES = 'I forgot to mention daycares as part of my ideal customer profile';
+
+  it('extracts clean service and ICP entities from prose answers', () => {
+    const {
+      extractServiceList,
+      extractCustomerSegments,
+      extractValueTraits,
+      extractGrowthFocusItems,
+      stripBusinessNameLeadIn,
+      parseSupplementalMessage,
+      ingestAnswerIntoNormalizedFacts,
+      emptyNormalizedFacts,
+      applyCorrectionToNormalizedFacts,
+    } = require('../services/clientIntelligenceInterview');
+
+    assert.equal(
+      /Anchor Cleaning provides/i.test(stripBusinessNameLeadIn(SERVICES_PROSE)),
+      false
+    );
+    assert.deepEqual(extractServiceList(SERVICES_PROSE), [
+      'standard home cleaning',
+      'standard office cleaning',
+      'deep cleans',
+      'move-in/move-out cleaning',
+      'recurring cleaning',
+      'short-term rental turnovers',
+    ]);
+    assert.ok(
+      extractGrowthFocusItems(SERVICES_PROSE).some((g) => /recurring commercial cleaning/i.test(g))
+    );
+    assert.ok(
+      extractGrowthFocusItems(SERVICES_PROSE).some((g) =>
+        /weekly or multiple-times-per-week/i.test(g)
+      )
+    );
+
+    assert.deepEqual(extractCustomerSegments(ICP_PROSE), [
+      'property managers',
+      'short-term rental companies',
+      'facility managers',
+      'professional offices',
+      'rec centers',
+      'high-traffic buildings',
+    ]);
+    assert.deepEqual(extractValueTraits(ICP_PROSE), [
+      'reliability',
+      'consistency',
+      'clear communication',
+    ]);
+
+    const parsed = parseSupplementalMessage(SUPP_DAYCARES);
+    assert.equal(parsed.substance, 'daycares');
+    assert.equal(/as part of my ideal customer profile/i.test(parsed.substance), false);
+    assert.equal(/forgot to mention/i.test(parsed.substance), false);
+
+    let facts = emptyNormalizedFacts();
+    facts = ingestAnswerIntoNormalizedFacts(
+      facts,
+      'identity',
+      'Anchor Cleaning we are a commercial-focused cleaning company. Happy to take residential work too.'
+    );
+    facts = ingestAnswerIntoNormalizedFacts(facts, 'services', SERVICES_PROSE);
+    facts = ingestAnswerIntoNormalizedFacts(facts, 'idealCustomers', ICP_PROSE);
+    facts = applyCorrectionToNormalizedFacts(facts, {
+      section: 'idealCustomers',
+      substance: parsed.substance,
+      domain: 'ideal_customer',
+    });
+
+    assert.equal(
+      facts.services.some((s) => /Anchor Cleaning provides/i.test(s)),
+      false
+    );
+    assert.equal(
+      facts.ideal_customers.some((s) => /Anchor Cleaning most wants/i.test(s)),
+      false
+    );
+    assert.ok(facts.ideal_customers.includes('daycares'));
+    assert.equal(
+      facts.ideal_customers.some((s) =>
+        /daycares as part of my ideal customer profile/i.test(s)
+      ),
+      false
+    );
+    assert.ok(facts.ideal_customer_traits.includes('reliability'));
+    assert.match(String(facts.growth_focus || ''), /recurring commercial cleaning/i);
+  });
+
+  it('renders WHO YOU ARE / WHO YOU SERVE from clean entity lists', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 10 }, opts);
+
+    await postInterviewMessage(
+      started.interviewId,
+      'Anchor Cleaning we are a commercial-focused cleaning company. Happy to take residential work too.',
+      opts
+    );
+    await postInterviewMessage(started.interviewId, SERVICES_PROSE, opts);
+    await postInterviewMessage(started.interviewId, ICP_PROSE, opts);
+
+    const beforeSupp = await store.getSession(started.interviewId);
+    assert.equal(
+      QUESTION_BANK[beforeSupp.interview_state.stepIndex].id,
+      'avoid_customers'
+    );
+
+    const supplement = await postInterviewMessage(started.interviewId, SUPP_DAYCARES, opts);
+    assert.equal(supplement.messageType, MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT);
+    assert.equal(supplement.question.id, 'avoid_customers');
+
+    const afterSupp = await store.getSession(started.interviewId);
+    assert.ok(afterSupp.interview_state.normalizedFacts.ideal_customers.includes('daycares'));
+    assert.equal(
+      afterSupp.interview_state.normalizedFacts.ideal_customers.some((s) =>
+        /as part of my ideal customer profile/i.test(s)
+      ),
+      false
+    );
+    assert.deepEqual(
+      afterSupp.interview_state.normalizedFacts.disqualified_customers || [],
+      []
+    );
+
+    await postInterviewMessage(
+      started.interviewId,
+      "I don't want to work with customers whose main priority is the lowest price",
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'Greater Manchester area includes Bedford, Hooksett, Londonderry, Auburn, Goffstown',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'trust — responsive, consistent, and accountable',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      "anchor's brand voice should sound calm, professional, reliable, and easy to work with",
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'would feel successful if Anchor has a clearer path to commercial opportunities over the next 90 days',
+      opts
+    );
+    const done = await postInterviewMessage(
+      started.interviewId,
+      'we will know by watching qualified replies, booked conversations, and walkthroughs',
+      opts
+    );
+
+    assert.ok(done.executiveSummary);
+    const byId = Object.fromEntries(done.executiveSummary.sections.map((s) => [s.id, s]));
+    const whoYouAre = byId.whoYouAre.body;
+    const whoYouServe = byId.whoYouServe.body;
+
+    assert.equal(/Services include Anchor Cleaning provides/i.test(whoYouAre), false);
+    assert.equal(/Ideal customers include Anchor Cleaning most wants/i.test(whoYouServe), false);
+    assert.equal(/forgot to mention/i.test(whoYouServe), false);
+    assert.equal(/as part of my ideal customer profile/i.test(whoYouServe), false);
+
+    assert.match(whoYouAre, /Services include standard home cleaning/i);
+    assert.match(whoYouAre, /standard office cleaning/i);
+    assert.match(whoYouAre, /move-in\/move-out cleaning/i);
+    assert.match(whoYouAre, /short-term rental turnovers/i);
+
+    assert.match(whoYouServe, /ideal customers include/i);
+    assert.match(whoYouServe, /property managers/i);
+    assert.match(whoYouServe, /short-term rental companies/i);
+    assert.match(whoYouServe, /daycares/i);
+    assert.match(whoYouServe, /rec centers/i);
+    assert.match(whoYouServe, /high-traffic buildings/i);
+
+    const session = await store.getSession(started.interviewId);
+    const facts = session.interview_state.normalizedFacts;
+    assert.equal(facts.services.some((s) => /Anchor Cleaning provides/i.test(s)), false);
+    assert.equal(
+      facts.ideal_customers.some((s) => /Anchor Cleaning most wants/i.test(s)),
+      false
+    );
+    assert.ok(facts.ideal_customers.includes('daycares'));
+  });
+});
