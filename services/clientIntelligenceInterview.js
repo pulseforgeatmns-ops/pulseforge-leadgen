@@ -3,6 +3,7 @@
 /**
  * SPEC-083 — Client Intelligence Engine (CIE) thin-slice v1.
  * SPEC-084 — Interview experience helpers (understanding progress, executive summary, resume).
+ * SPEC-085 — Executive Business Brief (client-facing synthesis after interview).
  * Text interview → evidence → confidence → Business Blueprint → approve → playbook handoff.
  * Does not invent campaign strategy or activate Scout/Composer.
  */
@@ -814,41 +815,25 @@ function composeWhatSuccess(metrics) {
   return joinPolished(sentences);
 }
 
-function composeLearnMore(unknownLabels) {
-  const cleaned = [...new Set((unknownLabels || []).map(humanizeUnknownLabel).filter(Boolean))];
-  if (!cleaned.length) {
-    return joinPolished([
-      'From this conversation, there are no major gaps that would block a thoughtful first wave of recommendations.',
-      'As the work proceeds, we can deepen the picture wherever real decisions require more precision.',
-    ]);
-  }
-  if (cleaned.length === 1) {
-    return joinPolished([
-      `The clearest place to deepen understanding next is ${cleaned[0]}.`,
-      'Closing that gap would make subsequent recommendations more precise without slowing the relationship down.',
-    ]);
-  }
-  if (cleaned.length === 2) {
-    return joinPolished([
-      `Two areas deserve more depth before we lean too hard on them: ${cleaned[0]}, and ${cleaned[1]}.`,
-      'Neither needs to be perfect now, but each will matter once recommendations become more specific.',
-    ]);
-  }
-  const head = cleaned.slice(0, -1).join(', ');
-  const tail = cleaned[cleaned.length - 1];
-  return joinPolished([
-    `A few topics remain lightly sketched: ${head}, and ${tail}.`,
-    'We do not need exhaustive answers on day one, but clarifying these will steadily raise the quality of every recommendation that follows.',
-  ]);
+const DEFAULT_LEARN_MORE_TOPICS = [
+  'Pricing philosophy',
+  'Capacity planning',
+  'Seasonality',
+  'Hiring strategy',
+  'Operational bottlenecks',
+  'Referral sources',
+  'Technology stack',
+];
+
+function titleCasePhrase(text) {
+  return String(text || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
-/**
- * Read-only executive summary — CEO-facing synthesis from a senior consultant.
- * Never concatenates raw Blueprint summaries or exposes implementation metadata.
- */
-function buildExecutiveSummary(sections) {
+function collectUnknownLabels(sections) {
   const s = (key) => (sections && sections[key]) || emptySection();
-
   const unknownLabels = [];
   for (const key of BLUEPRINT_SECTIONS) {
     for (const u of s(key).unknowns || []) {
@@ -860,19 +845,309 @@ function buildExecutiveSummary(sections) {
       if (label && !unknownLabels.includes(label)) unknownLabels.push(label);
     }
   }
+  return unknownLabels;
+}
+
+/**
+ * SPEC-085 — always identify meaningful unknowns. Never return "nothing outstanding."
+ */
+function composeLearnMoreItems(unknownLabels) {
+  const cleaned = [...new Set((unknownLabels || []).map(humanizeUnknownLabel).filter(Boolean))];
+  const items = cleaned.map((label) => titleCasePhrase(label));
+  for (const fallback of DEFAULT_LEARN_MORE_TOPICS) {
+    if (items.length >= 4) break;
+    if (!items.some((item) => item.toLowerCase() === fallback.toLowerCase())) {
+      items.push(fallback);
+    }
+  }
+  return items.slice(0, 5);
+}
+
+function composeLearnMoreBody(items) {
+  const list = (items || []).filter(Boolean);
+  if (!list.length) {
+    return joinPolished([
+      'A few practical areas still deserve a closer look before recommendations get specific.',
+      'Future recommendations become more confident as these areas become understood.',
+    ]);
+  }
+  return joinPolished([
+    'A few practical areas still deserve a closer look before recommendations get specific.',
+    'Future recommendations become more confident as these areas become understood.',
+  ]);
+}
+
+function sectionFilled(section) {
+  return Boolean(section && String(section.summary || '').trim() && !answerLooksEmpty(section.summary));
+}
+
+function sectionConfidence(section) {
+  const conf = Number(section && section.confidence);
+  if (!Number.isFinite(conf)) return 0;
+  return Math.max(0, Math.min(1, conf));
+}
+
+/**
+ * Evidence-connected observations — not recommendations, not strategy.
+ * Maximum five.
+ */
+function composeObservations(sections) {
+  const s = (key) => (sections && sections[key]) || emptySection();
+  const observations = [];
+
+  const identity = coreClaim(s('identity').summary);
+  const services = coreClaim(s('services').summary);
+  const ideal = coreClaim(s('idealCustomers').summary);
+  const avoid = coreClaim(s('avoidCustomers').summary);
+  const markets = coreClaim(s('targetMarkets').summary);
+  const advantages = coreClaim(s('competitiveAdvantages').summary);
+  const voice = coreClaim(s('brandVoice').summary);
+  const goals = coreClaim(s('campaignGoals').summary);
+  const metrics = coreClaim(s('successMetrics').summary);
+
+  if (advantages) {
+    observations.push(
+      `Your positioning around ${softenClaim(advantages)} appears consistently when you describe why customers choose you.`
+    );
+  }
+  if (ideal && avoid) {
+    observations.push(
+      'Your commercial focus is unusually clear: you name both the relationships worth pursuing and the ones you prefer to decline.'
+    );
+  } else if (ideal) {
+    observations.push(
+      `Your ideal-customer picture — centered on ${softenClaim(ideal).replace(/^(are\s+)/i, '')} — gives outreach a disciplined starting point.`
+    );
+  }
+  if (goals && /recurr|relationship|retain|lifetime|loyal/i.test(String(s('campaignGoals').summary || '') + String(s('idealCustomers').summary || ''))) {
+    observations.push(
+      'Your long-term emphasis leans toward durable relationships rather than purely transactional growth.'
+    );
+  } else if (goals) {
+    observations.push(
+      `Near-term direction is already framed around ${asGerundPhrase(goals)}, which gives later work a clear success test.`
+    );
+  }
+  if (markets) {
+    observations.push(
+      `Geographic and market attention appears concentrated first in ${softenClaim(markets)}, which keeps discovery from spreading too thin.`
+    );
+  }
+  if (voice && advantages) {
+    observations.push(
+      `Differentiation and voice reinforce each other: the promise you describe should sound ${softenClaim(voice)} in market.`
+    );
+  } else if (voice) {
+    observations.push(
+      `Brand tone is already intentional — ${softenClaim(voice)} — which helps keep later messaging authentic.`
+    );
+  }
+  if (metrics) {
+    observations.push(
+      `Success is anchored in business outcomes such as ${softenClaim(metrics)}, not vanity activity.`
+    );
+  }
+  if (identity && services && observations.length < 3) {
+    observations.push(
+      'Identity and offer already form a coherent foundation any growth recommendation should respect.'
+    );
+  }
+  if (!observations.length) {
+    observations.push(
+      'The conversation establishes a workable foundation, though several themes still need more evidence before they can be stated with high confidence.'
+    );
+  }
+  return observations.slice(0, 5).map((line) => ensurePeriod(line));
+}
+
+function starsFromConfidence(conf) {
+  const c = Math.max(0, Math.min(1, Number(conf) || 0));
+  if (c >= 0.9) return 5;
+  if (c >= 0.75) return 4;
+  if (c >= 0.55) return 3;
+  if (c >= 0.35) return 2;
+  if (c > 0) return 1;
+  return 1;
+}
+
+function averageConfidence(values) {
+  const nums = values.filter((v) => Number.isFinite(v));
+  if (!nums.length) return 0;
+  return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+/**
+ * Assessment scores derive only from observed section confidence.
+ * Explanations always reference evidence patterns — never fabricated.
+ */
+function composeAssessment(sections) {
+  const s = (key) => (sections && sections[key]) || emptySection();
+
+  const clarityParts = [sectionConfidence(s('identity')), sectionConfidence(s('services'))];
+  const focusParts = [
+    sectionConfidence(s('idealCustomers')),
+    sectionConfidence(s('avoidCustomers')),
+    sectionConfidence(s('targetMarkets')),
+  ];
+  const diffParts = [
+    sectionConfidence(s('competitiveAdvantages')),
+    sectionConfidence(s('brandVoice')),
+  ];
+  const growthParts = [
+    sectionConfidence(s('campaignGoals')),
+    sectionConfidence(s('successMetrics')),
+  ];
+
+  const clarity = averageConfidence(clarityParts);
+  const focus = averageConfidence(focusParts);
+  const diff = averageConfidence(diffParts);
+  const growth = averageConfidence(growthParts);
+  const overall = averageConfidence([clarity, focus, diff, growth]);
+
+  const identityClaim = coreClaim(s('identity').summary);
+  const idealClaim = coreClaim(s('idealCustomers').summary);
+  const avoidClaim = coreClaim(s('avoidCustomers').summary);
+  const advClaim = coreClaim(s('competitiveAdvantages').summary);
+  const goalClaim = coreClaim(s('campaignGoals').summary);
+  const metricClaim = coreClaim(s('successMetrics').summary);
+
+  const ratings = [
+    {
+      label: 'Business Clarity',
+      stars: starsFromConfidence(clarity),
+      explanation: identityClaim
+        ? `Supported by a clear identity statement${sectionFilled(s('services')) ? ' and a concrete service mix' : ''}.`
+        : 'Identity and service mix are still lightly sketched in the conversation.',
+    },
+    {
+      label: 'Market Focus',
+      stars: starsFromConfidence(focus),
+      explanation:
+        idealClaim && avoidClaim
+          ? 'Supported by both a named ideal customer and explicit constraints on who not to serve.'
+          : idealClaim || coreClaim(s('targetMarkets').summary)
+            ? 'Supported by customer or market focus signals, with room to sharpen the full beachhead.'
+            : 'Customer and market focus still need more specific evidence.',
+    },
+    {
+      label: 'Differentiation',
+      stars: starsFromConfidence(diff),
+      explanation: advClaim
+        ? `Supported by stated advantages around ${softenClaim(advClaim)}.`
+        : 'Competitive reason-to-choose is not yet evidenced with enough specificity.',
+    },
+    {
+      label: 'Growth Readiness',
+      stars: starsFromConfidence(growth),
+      explanation:
+        goalClaim && metricClaim
+          ? 'Supported by named near-term outcomes and business metrics for judging progress.'
+          : goalClaim || metricClaim
+            ? 'Direction or success measures are present; pairing both would raise readiness further.'
+            : 'Near-term outcomes and success measures are still open.',
+    },
+  ];
 
   return {
-    title: 'My Understanding of Your Business',
-    subtitle: 'Generated from our conversation',
+    ratings,
+    confidencePercent: Math.round(overall * 100),
+    confidenceNote:
+      'Confidence reflects how consistently the conversation evidenced each theme — not a grade of the business itself.',
+  };
+}
+
+function composeConversationStarters(sections, learnMoreItems) {
+  const s = (key) => (sections && sections[key]) || emptySection();
+  const starters = [];
+
+  if (sectionFilled(s('idealCustomers'))) {
+    starters.push(
+      'Which customer segments generate the highest lifetime value — and how you recognize them early.'
+    );
+  }
+  if (sectionFilled(s('competitiveAdvantages'))) {
+    starters.push(
+      'Whether your pricing reflects the premium positioning you described.'
+    );
+  }
+  if (sectionFilled(s('avoidCustomers')) || sectionFilled(s('idealCustomers'))) {
+    starters.push(
+      'How referral partnerships compare with outbound acquisition for the relationships you want most.'
+    );
+  }
+  if (sectionFilled(s('campaignGoals'))) {
+    starters.push(
+      'What would make the next ninety days feel unmistakably successful from the owner\'s chair.'
+    );
+  }
+  if (sectionFilled(s('successMetrics'))) {
+    starters.push(
+      'Which leading indicators you trust before lagging revenue numbers move.'
+    );
+  }
+
+  for (const topic of learnMoreItems || []) {
+    if (starters.length >= 4) break;
+    const lower = String(topic).toLowerCase();
+    if (/pric/.test(lower)) {
+      starters.push('How pricing decisions get made when demand is strong versus soft.');
+    } else if (/capacit/.test(lower)) {
+      starters.push('Where capacity starts to constrain growth before marketing does.');
+    } else if (/season/.test(lower)) {
+      starters.push('How seasonality shapes staffing, cash flow, and outreach timing.');
+    } else if (/hir/.test(lower)) {
+      starters.push('What a strong hire looks like for the next stage of the business.');
+    } else if (/referral/.test(lower)) {
+      starters.push('Which referral sources historically produce the cleanest fit.');
+    } else if (/technolog|stack/.test(lower)) {
+      starters.push('Which tools actually carry the customer relationship day to day.');
+    } else if (/operational|bottleneck/.test(lower)) {
+      starters.push('Where work most often slows between winning a job and delivering it well.');
+    }
+  }
+
+  const unique = [];
+  for (const line of starters) {
+    if (!unique.includes(line)) unique.push(line);
+  }
+  if (!unique.length) {
+    unique.push(
+      'Which customer segments generate the highest lifetime value.',
+      'Whether your pricing reflects your positioning.',
+      'How referral partnerships compare with outbound acquisition.'
+    );
+  }
+  return unique.slice(0, 4);
+}
+
+/**
+ * SPEC-085 — Executive Business Brief.
+ * CEO-facing synthesis from a senior consultant. Never concatenates raw
+ * interview wording or exposes implementation metadata.
+ */
+function buildExecutiveSummary(sections) {
+  const s = (key) => (sections && sections[key]) || emptySection();
+  const unknownLabels = collectUnknownLabels(sections);
+  const learnMoreItems = composeLearnMoreItems(unknownLabels);
+  const observations = composeObservations(sections);
+  const assessment = composeAssessment(sections);
+  const conversations = composeConversationStarters(sections, learnMoreItems);
+
+  return {
+    title: 'Executive Business Brief',
+    subtitle: 'Prepared by Max',
+    tagline: 'Generated from our conversation',
     sections: [
       {
         id: 'whoYouAre',
-        title: 'Who you are',
+        title: 'Who You Are',
+        kind: 'prose',
         body: composeWhoYouAre(s('identity').summary, s('services').summary),
       },
       {
         id: 'whoYouServe',
-        title: 'Who you serve',
+        title: 'Who You Serve',
+        kind: 'prose',
         body: composeWhoYouServe(
           s('idealCustomers').summary,
           s('avoidCustomers').summary,
@@ -881,7 +1156,8 @@ function buildExecutiveSummary(sections) {
       },
       {
         id: 'whyChooseYou',
-        title: 'Why customers choose you',
+        title: 'Why Customers Choose You',
+        kind: 'prose',
         body: composeWhyChooseYou(
           s('competitiveAdvantages').summary,
           s('brandVoice').summary
@@ -889,21 +1165,52 @@ function buildExecutiveSummary(sections) {
       },
       {
         id: 'whereHeaded',
-        title: "Where you're headed",
+        title: "Where You're Headed",
+        kind: 'prose',
         body: composeWhereHeaded(s('campaignGoals').summary),
       },
       {
-        id: 'whatSuccess',
-        title: 'What success looks like',
+        id: 'successLooksLike',
+        title: 'Success Looks Like',
+        kind: 'prose',
         body: composeWhatSuccess(s('successMetrics').summary),
       },
       {
+        id: 'observations',
+        title: 'Initial Observations',
+        kind: 'list',
+        body: 'These observations connect themes from our conversation. They are not recommendations.',
+        items: observations,
+      },
+      {
+        id: 'assessment',
+        title: "Max's Initial Assessment",
+        kind: 'assessment',
+        ratings: assessment.ratings,
+        confidencePercent: assessment.confidencePercent,
+        body: assessment.confidenceNote,
+      },
+      {
         id: 'learnMore',
-        title: "Where I'd like to learn more",
-        body: composeLearnMore(unknownLabels),
+        title: "Areas I'd Like To Learn More",
+        kind: 'list',
+        body: composeLearnMoreBody(learnMoreItems),
+        items: learnMoreItems,
+      },
+      {
+        id: 'conversations',
+        title: "Conversations I'd Recommend Next",
+        kind: 'list',
+        body: "I'd enjoy exploring:",
+        items: conversations,
       },
     ],
   };
+}
+
+/** @deprecated Use buildExecutiveSummary — alias retained for SPEC-085 naming clarity. */
+function buildExecutiveBusinessBrief(sections) {
+  return buildExecutiveSummary(sections);
 }
 
 function sectionStateFromSession(session) {
@@ -2381,6 +2688,7 @@ module.exports = {
   computeProgress,
   buildUnderstandingProgress,
   buildExecutiveSummary,
+  buildExecutiveBusinessBrief,
   buildReflection,
   hasSpecificitySignals,
   looksAmbiguous,

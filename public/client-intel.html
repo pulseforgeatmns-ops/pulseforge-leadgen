@@ -386,35 +386,101 @@
       resize: vertical;
     }
     .exec-card {
-      padding: 0.25rem 0 0.5rem;
+      padding: 0.55rem 0.15rem 1rem;
+      animation: briefReveal 640ms ease both;
+    }
+    @keyframes briefReveal {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
     }
     .exec-card h3 {
-      margin: 0 0 0.35rem;
-      font-size: 1.15rem;
+      margin: 0 0 0.4rem;
+      font-size: 1.35rem;
       font-weight: 600;
-      letter-spacing: 0.01em;
+      letter-spacing: 0.015em;
+      line-height: 1.25;
     }
     .exec-card .exec-sub {
-      margin: 0 0 1.25rem;
+      margin: 0;
       color: var(--cie-muted);
-      font-size: 0.85rem;
+      font-size: 0.88rem;
+      line-height: 1.45;
+    }
+    .exec-card .exec-tagline {
+      margin: 0.2rem 0 1.55rem;
+      color: var(--cie-muted);
+      font-size: 0.8rem;
+      opacity: 0.9;
     }
     .exec-section {
-      margin: 0 0 1.15rem;
+      margin: 0 0 1.55rem;
+      padding-bottom: 0.15rem;
     }
     .exec-section h4 {
-      margin: 0 0 0.4rem;
-      font-size: 0.82rem;
+      margin: 0 0 0.55rem;
+      font-size: 0.78rem;
       font-weight: 600;
-      letter-spacing: 0.03em;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
       color: var(--cie-muted);
     }
     .exec-section p {
       margin: 0;
-      font-size: 0.95rem;
-      line-height: 1.6;
+      font-size: 0.98rem;
+      line-height: 1.68;
       white-space: pre-wrap;
+    }
+    .exec-section p + p { margin-top: 0.65rem; }
+    .exec-list {
+      margin: 0.55rem 0 0;
+      padding: 0 0 0 1.1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+    }
+    .exec-list li {
+      font-size: 0.95rem;
+      line-height: 1.55;
+      color: var(--cie-text);
+    }
+    .assessment-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      margin: 0.35rem 0 0.85rem;
+    }
+    .assessment-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.35rem 1rem;
+      align-items: baseline;
+    }
+    .assessment-label {
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+    .assessment-stars {
+      font-size: 0.95rem;
+      letter-spacing: 0.08em;
+      color: var(--cie-warn);
+      font-variant-emoji: text;
+    }
+    .assessment-explain {
+      grid-column: 1 / -1;
+      margin: 0;
+      font-size: 0.82rem;
+      line-height: 1.45;
+      color: var(--cie-muted);
+    }
+    .assessment-confidence {
+      margin-top: 0.35rem;
+      font-size: 1.05rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .assessment-confidence span {
+      color: var(--cie-accent);
+      font-family: 'JetBrains Mono', monospace;
     }
     .checklist {
       display: flex;
@@ -532,9 +598,9 @@
         <button type="button" id="sendBtn" disabled>Send</button>
       </div>
       <div class="actions" id="execActions" hidden>
-        <button type="button" id="accurateBtn">Yes, that's accurate</button>
-        <button type="button" id="refineBtn" class="secondary">I'd like to refine this</button>
-        <button type="button" id="keepTalkingBtn" class="secondary">Let's keep talking</button>
+        <button type="button" id="accurateBtn">✓ Yes, this reflects my business.</button>
+        <button type="button" id="refineBtn" class="secondary">✏️ I'd like to refine this.</button>
+        <button type="button" id="keepTalkingBtn" class="secondary">💬 Let's keep talking.</button>
       </div>
       <div class="actions" id="completeActions" hidden>
         <button type="button" id="dashboardBtn">Return to Dashboard</button>
@@ -574,10 +640,10 @@
     const LOAD_STEPS = [
       'Reviewing interview',
       'Organizing evidence',
-      'Identifying patterns',
-      'Building Business Blueprint',
+      'Connecting themes',
       'Measuring confidence',
-      'Preparing executive summary',
+      'Identifying opportunities',
+      'Preparing Executive Business Brief',
     ];
 
     const PLAYBOOK_STEPS = [
@@ -588,6 +654,8 @@
 
     const TRUST_BRIDGE =
       "One last thing.\n\nBefore I ask you to trust my recommendations, I want to make sure I've earned your trust by showing you that I understood your business.";
+
+    const PREMIUM_LOAD_MS = 3000;
 
     const state = {
       phase: 'welcome',
@@ -731,25 +799,67 @@
       els.blueprintStatus.textContent = '';
     }
 
+    function renderStars(count) {
+      const n = Math.max(1, Math.min(5, Number(count) || 1));
+      return '★'.repeat(n) + '☆'.repeat(5 - n);
+    }
+
+    function renderBriefSection(section) {
+      const kind = section.kind || (section.items ? 'list' : section.ratings ? 'assessment' : 'prose');
+      let inner = '';
+      if (kind === 'assessment') {
+        const rows = (section.ratings || []).map((row) =>
+          '<div class="assessment-row">' +
+            '<div class="assessment-label">' + escapeHtml(row.label || '') + '</div>' +
+            '<div class="assessment-stars" aria-label="' + escapeHtml(String(row.stars || 0)) + ' of 5">' +
+              escapeHtml(renderStars(row.stars)) +
+            '</div>' +
+            (row.explanation
+              ? '<p class="assessment-explain">' + escapeHtml(row.explanation) + '</p>'
+              : '') +
+          '</div>'
+        ).join('');
+        inner =
+          '<div class="assessment-grid">' + rows + '</div>' +
+          (section.confidencePercent != null
+            ? '<div class="assessment-confidence">Confidence <span>' +
+                escapeHtml(String(section.confidencePercent)) + '%</span></div>'
+            : '') +
+          (section.body ? '<p style="margin-top:0.65rem">' + escapeHtml(section.body) + '</p>' : '');
+      } else if (kind === 'list') {
+        inner =
+          (section.body ? '<p>' + escapeHtml(section.body) + '</p>' : '') +
+          '<ul class="exec-list">' +
+            (section.items || []).map((item) => '<li>' + escapeHtml(item) + '</li>').join('') +
+          '</ul>';
+      } else {
+        inner = '<p>' + escapeHtml(section.body || '') + '</p>';
+      }
+      return (
+        '<section class="exec-section">' +
+          '<h4>' + escapeHtml(section.title || '') + '</h4>' +
+          inner +
+        '</section>'
+      );
+    }
+
     function renderExecutiveSummary(summary) {
       if (!summary) return;
       state.executiveSummary = summary;
       const sections = summary.sections || [];
       els.sidePanel.innerHTML =
         '<div class="exec-card">' +
-          '<h3>' + escapeHtml(summary.title || 'My Understanding of Your Business') + '</h3>' +
-          '<p class="exec-sub">' + escapeHtml(summary.subtitle || 'Generated from our conversation') + '</p>' +
-          sections.map((s) =>
-            '<section class="exec-section">' +
-              '<h4>' + escapeHtml(s.title) + '</h4>' +
-              '<p>' + escapeHtml(s.body || '') + '</p>' +
-            '</section>'
-          ).join('') +
+          '<h3>' + escapeHtml(summary.title || 'Executive Business Brief') + '</h3>' +
+          '<p class="exec-sub">' + escapeHtml(summary.subtitle || 'Prepared by Max') + '</p>' +
+          '<p class="exec-tagline">' +
+            escapeHtml(summary.tagline || 'Generated from our conversation') +
+          '</p>' +
+          sections.map(renderBriefSection).join('') +
         '</div>';
-      els.sidePanelTitle.textContent = 'My Understanding of Your Business';
-      els.sidePanelSub.textContent = 'Read-only findings from Max — confirm before reviewing the Business Blueprint.';
+      els.sidePanelTitle.textContent = 'Executive Business Brief';
+      els.sidePanelSub.textContent = 'A consultant-quality synthesis from Max — confirm before reviewing the Business Blueprint.';
       els.blueprintActions.hidden = true;
-      els.blueprintStatus.textContent = 'Executive Summary · read only';
+      els.blueprintStatus.textContent = 'Executive Business Brief · read only';
     }
 
     function renderBlueprint(bp, { editable } = { editable: true }) {
@@ -954,25 +1064,26 @@
 
       setPhase('understanding_load');
       addBubble('meta', 'Understanding your business…');
-      await runChecklist(LOAD_STEPS, 2500, Promise.resolve(data));
+      await runChecklist(LOAD_STEPS, PREMIUM_LOAD_MS, Promise.resolve(data));
       await playTrustBridge();
 
       setPhase('executive_summary');
       addBubble(
         'assistant',
-        "Thank you.\n\nI believe I understand your business well enough to begin helping you grow it.\n\nBefore we move forward, I'd like to show you what I've learned."
+        "Thank you.\n\nI believe I understand your business well enough to begin helping you grow it.\n\nBefore we move forward, I'd like to share your Executive Business Brief."
       );
       if (state.executiveSummary) {
         renderExecutiveSummary(state.executiveSummary);
       } else if (state.blueprint && state.blueprint.sections) {
         renderExecutiveSummary({
-          title: 'My Understanding of Your Business',
-          subtitle: 'Generated from our conversation',
+          title: 'Executive Business Brief',
+          subtitle: 'Prepared by Max',
+          tagline: 'Generated from our conversation',
           sections: [],
         });
       }
       els.sessionStatus.textContent =
-        'Session ' + state.interviewId + ' · Executive Summary';
+        'Session ' + state.interviewId + ' · Executive Business Brief';
     }
 
     function applyDiscoveryPayload(data, { skipMessage } = {}) {
