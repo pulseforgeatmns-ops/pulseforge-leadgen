@@ -127,12 +127,44 @@ const DOMAIN_TO_SECTION = Object.freeze({
   geography: 'targetMarkets',
   differentiation: 'competitiveAdvantages',
   objections: 'avoidCustomers',
-  pricing: 'successMetrics',
+  pricing: 'avoidCustomers',
   brand_voice: 'brandVoice',
   success_metrics: 'successMetrics',
   growth_goals: 'campaignGoals',
   operations: 'services',
 });
+
+/** Normalized evidence keys consumed by Executive Business Brief synthesis. */
+const NORMALIZED_FACT_KEYS = Object.freeze([
+  'business_name',
+  'business_description',
+  'services',
+  'growth_focus',
+  'ideal_customers',
+  'disqualified_customers',
+  'geography',
+  'vertical_focus',
+  'differentiation',
+  'brand_voice',
+  'ninety_day_outcomes',
+  'success_metrics',
+]);
+
+const SECTION_TO_NORMALIZED = Object.freeze({
+  identity: ['business_name', 'business_description'],
+  services: ['services'],
+  idealCustomers: ['ideal_customers'],
+  avoidCustomers: ['disqualified_customers'],
+  targetMarkets: ['geography', 'vertical_focus', 'growth_focus'],
+  competitiveAdvantages: ['differentiation'],
+  brandVoice: ['brand_voice'],
+  campaignGoals: ['ninety_day_outcomes', 'growth_focus'],
+  successMetrics: ['success_metrics'],
+});
+
+/** Explicit domain pointers in correction / supplemental messages. */
+const DOMAIN_POINTER_RE =
+  /\b(?:for|about|regarding|on|to)\s+(?:the\s+)?(services?|ideal\s+customers?|customers?\s+to\s+avoid|geography|markets?|brand\s+voice|voice|success\s+metrics?|metrics?|goals?|growth|differentiation|advantages?|pricing|operations?)\b/i;
 
 /** User refinement / meta-instruction intent (not business evidence). */
 const REFINEMENT_INTENT_RE =
@@ -159,7 +191,7 @@ const META_INSTRUCTION_SANITIZE_RE =
  * These are the bleed patterns from Mad-Lib slot filling.
  */
 const RAW_PROMPT_FRAGMENT_RE =
-  /\b(when a great-fit customer chooses|what usually tips the decision|anchor'?s brand voice should sound|if i were writing as your brand|over the next 90 days(?:, this growth work)?|we will know(?: the growth work is working)?|i don't want to work with|looking at the next 90 days|how will we know it'?s working|paint me a picture of the ideal|tell me about the (?:business|services))\b/i;
+  /\b(when a great-fit customer chooses|what usually tips the decision|anchor'?s brand voice should sound|if i were writing as your brand|over the next 90 days(?:, this growth work)?|we will know(?: the growth work is working)?|i don't want to work with|looking at the next 90 days|how will we know it'?s working|paint me a picture of the ideal|tell me about the (?:business|services)|would feel successful if|both geography is|to say short term)\b/i;
 
 const SECTION_TITLES = Object.freeze({
   identity: 'Identity',
@@ -402,31 +434,93 @@ function containsRawPromptFragment(text) {
 }
 
 /**
- * Infer a likely business domain tag for supplemental memory.
+ * Map free-text domain pointer language → CONTEXT_DOMAINS key.
+ */
+function domainFromPointerLabel(label) {
+  const s = String(label || '').toLowerCase().trim();
+  if (!s) return null;
+  if (/^services?$/.test(s)) return 'services';
+  if (/ideal|customer/.test(s) && !/avoid/.test(s)) return 'ideal_customer';
+  if (/avoid/.test(s)) return 'objections';
+  if (/geo|market/.test(s)) return 'geography';
+  if (/brand|voice/.test(s)) return 'brand_voice';
+  if (/success|metric/.test(s)) return 'success_metrics';
+  if (/goal|growth/.test(s)) return 'growth_goals';
+  if (/differen|advantage/.test(s)) return 'differentiation';
+  if (/pric/.test(s)) return 'pricing';
+  if (/operat/.test(s)) return 'operations';
+  return null;
+}
+
+/**
+ * Infer a likely business domain tag for supplemental memory / corrections.
+ * Explicit "for services" pointers win over keyword heuristics.
  * @returns {string|null} one of CONTEXT_DOMAINS
  */
 function tagContextDomain(text) {
   const s = String(text || '').toLowerCase();
   if (!s) return null;
+
+  const pointer = s.match(DOMAIN_POINTER_RE);
+  if (pointer) {
+    const fromPointer = domainFromPointerLabel(pointer[1]);
+    if (fromPointer) return fromPointer;
+  }
+
   if (/\b(price|pricing|rate|cost|cheap|lowest price|budget)\b/.test(s)) return 'pricing';
   if (/\b(avoid|don'?t want|do not want|decline|not a fit|no longer)\b/.test(s)) return 'objections';
-  if (/\b(tone|voice|sound|brand|professional|friendly|calm|direct)\b/.test(s)) return 'brand_voice';
-  if (/\b(metric|kpi|measure|success|walkthrough|pipeline|reply|booked)\b/.test(s)) {
+  if (/\b(tone|voice|sound|brand voice)\b/.test(s)) return 'brand_voice';
+  if (/\b(metric|kpi|measure|success metric|walkthroughs?|pipeline|repl(?:y|ies)|booked)\b/.test(s)) {
     return 'success_metrics';
   }
-  if (/\b(goal|grow|90 days|next quarter|priority|expansion)\b/.test(s)) return 'growth_goals';
-  if (/\b(trust|tips the decision|choose|advantage|differen|reliable|responsive|accountab)\b/.test(s)) {
+  if (/\b(90 days|next quarter|growth goal|campaign goal|expansion)\b/.test(s)) return 'growth_goals';
+  if (/\b(trust|tips the decision|advantage|differen|accountab)\b/.test(s)) {
     return 'differentiation';
   }
-  if (/\b(manchester|bedford|hooksett|londonderry|auburn|goffstown|geo|city|area|market|county)\b/.test(s)) {
+  if (/\b(manchester|bedford|hooksett|londonderry|auburn|goffstown|geography|geo\b|county)\b/.test(s)) {
     return 'geography';
   }
-  if (/\b(ideal|property manager|homeowner|customer|client|segment|fit)\b/.test(s)) {
+  if (/\b(ideal customer|property managers?|homeowners?|facility managers?|segment fit)\b/.test(s)) {
     return 'ideal_customer';
   }
-  if (/\b(service|clean|offer|provide|recurring|turnover|walkthrough)\b/.test(s)) return 'services';
-  if (/\b(ops|operation|staff|crew|capacity|schedule|delivery)\b/.test(s)) return 'operations';
+  if (/\b(services?|cleans?|cleaning|offers?|provides?|recurring|turnovers?)\b/.test(s)) {
+    return 'services';
+  }
+  if (/\b(ops|operations?|staff|crew|capacity|schedule|delivery)\b/.test(s)) return 'operations';
   return null;
+}
+
+/**
+ * Parse a correction message into target domain + cleaned substance.
+ * Never returns the active-question section unless no domain can be inferred.
+ * @returns {{ domain: string|null, section: string|null, substance: string, raw: string }}
+ */
+function parseCorrectionMessage(text, fallbackSection = null) {
+  const raw = String(text || '').trim();
+  let body = raw.replace(CORRECTION_RE, '').trim();
+
+  // "I meant to say X" / "I meant that X" / leftover "replace that —"
+  body = body
+    .replace(/^(?:to\s+say|that|to\s+clarify that)\s+/i, '')
+    .replace(/^(?:replace that|not that)\s*[—–,:;-]?\s*/i, '')
+    .trim();
+
+  const domain = tagContextDomain(raw) || tagContextDomain(body);
+  const section = (domain && DOMAIN_TO_SECTION[domain]) || fallbackSection || null;
+
+  // Once domain is known, drop trailing/leading domain pointers from substance.
+  let substance = body
+    .replace(DOMAIN_POINTER_RE, ' ')
+    .replace(/^(?:to\s+say|that)\s+/i, '')
+    .replace(/^(?:geography|markets?|services?|brand\s+voice|voice|ideal\s+customers?)\s+should\s+be\s+/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  substance = stripInterviewQuestionEcho(substance);
+  if (section) substance = cleanRawAnswer(section, substance);
+  substance = normalizeBusinessPhrase(substance);
+
+  return { domain, section, substance, raw };
 }
 
 /**
@@ -707,6 +801,399 @@ function titleCaseWords(text) {
     .join('');
 }
 
+const PLACE_NAME_RE =
+  /\b(bedford|hooksett|londonderry|auburn|goffstown|manchester|charleston|nashville)\b/gi;
+
+/**
+ * Normalize a business phrase for Brief rendering (lists, services, segments, places).
+ */
+function normalizeBusinessPhrase(phrase) {
+  let s = String(phrase || '').trim();
+  if (!s) return '';
+
+  s = s
+    .replace(/\bSTR\b/g, 'short-term rental')
+    .replace(/\bshort[\s-]?term\s+rental\s+companies\b/gi, 'short-term rental companies')
+    .replace(/\bshort[\s-]?term\s+rental\s+turnovers?\b/gi, 'short-term rental turnovers')
+    .replace(/\bmove[\s-]?in\s*\/\s*move[\s-]?out\s+cleans?\b/gi, 'move-in/move-out cleaning')
+    .replace(/\bmove[\s-]?in\/?outs?\s+cleans?\b/gi, 'move-in/move-out cleaning')
+    .replace(/\bmove[\s-]?in\/out\s+cleans?\b/gi, 'move-in/move-out cleaning')
+    .replace(/\bmove in\/out cleans?\b/gi, 'move-in/move-out cleaning')
+    .replace(/\bstandard homes?\b/gi, 'standard home cleaning')
+    .replace(/\bstandard offices?\b/gi, 'standard office cleaning')
+    .replace(/\brecurring cleans?\b/gi, 'recurring cleaning')
+    .replace(/\bdeep cleans?\b/gi, 'deep cleans')
+    .replace(/\bhigh[\s-]?traffic buildings?\b/gi, 'high-traffic buildings')
+    .replace(/\brec centers?\b/gi, 'rec centers')
+    .replace(/\bfacility managers?\b/gi, 'facility managers')
+    .replace(/\bproperty managers?\b/gi, 'property managers')
+    .replace(/\bprofessional offices?\b/gi, 'professional offices')
+    .replace(/\bgreater\s+manchester(?:\s+area)?\b/gi, 'Greater Manchester')
+    .replace(PLACE_NAME_RE, (m) => titleCaseWords(m))
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  // Avoid double "cleaning cleaning"
+  s = s.replace(/\bcleaning cleaning\b/gi, 'cleaning');
+  return s;
+}
+
+/**
+ * Split a free-form list answer into cleaned phrase items.
+ */
+function splitListItems(text) {
+  return String(text || '')
+    .split(/\s*(?:,|;|\band\b|\n|\||\/(?!out))\s*/i)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => normalizeBusinessPhrase(p.replace(/^[-–—*•]\s*/, '')))
+    .filter(Boolean);
+}
+
+function emptyNormalizedFacts() {
+  return {
+    business_name: null,
+    business_description: null,
+    services: [],
+    growth_focus: null,
+    ideal_customers: [],
+    disqualified_customers: [],
+    geography: [],
+    vertical_focus: null,
+    differentiation: null,
+    brand_voice: null,
+    ninety_day_outcomes: null,
+    success_metrics: [],
+  };
+}
+
+function cloneNormalizedFacts(facts) {
+  const src = facts || emptyNormalizedFacts();
+  return {
+    business_name: src.business_name || null,
+    business_description: src.business_description || null,
+    services: [...(src.services || [])],
+    growth_focus: src.growth_focus || null,
+    ideal_customers: [...(src.ideal_customers || [])],
+    disqualified_customers: [...(src.disqualified_customers || [])],
+    geography: [...(src.geography || [])],
+    vertical_focus: src.vertical_focus || null,
+    differentiation: src.differentiation || null,
+    brand_voice: src.brand_voice || null,
+    ninety_day_outcomes: src.ninety_day_outcomes || null,
+    success_metrics: [...(src.success_metrics || [])],
+  };
+}
+
+function uniquePush(list, items) {
+  const out = [...(list || [])];
+  for (const item of items || []) {
+    const normalized = normalizeBusinessPhrase(item);
+    if (!normalized) continue;
+    if (!out.some((x) => x.toLowerCase() === normalized.toLowerCase())) {
+      out.push(normalized);
+    }
+  }
+  return out;
+}
+
+function extractPlaces(text) {
+  const s = String(text || '');
+  const places = [];
+  if (/greater\s+manchester/i.test(s)) places.push('Greater Manchester');
+  for (const m of s.matchAll(PLACE_NAME_RE)) {
+    const place = titleCaseWords(m[0]);
+    if (place.toLowerCase() === 'manchester' && /greater\s+manchester/i.test(s)) continue;
+    if (!places.some((p) => p.toLowerCase() === place.toLowerCase())) places.push(place);
+  }
+  return places;
+}
+
+/**
+ * Ingest a direct answer into normalized evidence for a Blueprint section.
+ */
+function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
+  const next = cloneNormalizedFacts(facts);
+  const cleaned = cleanRawAnswer(sectionKey, stripInterviewQuestionEcho(rawAnswer));
+  if (!cleaned) return next;
+
+  switch (sectionKey) {
+    case 'identity': {
+      const dash = cleaned.match(/^(.+?)\s*[—–-]\s*(.+)$/);
+      if (dash) {
+        next.business_name = dash[1].trim().replace(/[.!?,]+$/, '');
+        next.business_description = normalizeBusinessPhrase(
+          stripLeadingWeAre(dash[2]).replace(/^(a|an|the)\s+/i, '')
+        );
+      } else {
+        const named = cleaned.match(
+          /^([A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+){0,5})\s+(?:is|are|provides?|offers?)\s+(.+)$/i
+        );
+        if (named) {
+          next.business_name = named[1].trim();
+          next.business_description = normalizeBusinessPhrase(
+            stripLeadingWeAre(named[2]).replace(/^(a|an|the)\s+/i, '')
+          );
+        } else {
+          next.business_description = normalizeBusinessPhrase(cleaned);
+          if (/\banchor(?:\s+cleaning)?\b/i.test(cleaned)) {
+            next.business_name = /anchor\s+cleaning/i.test(cleaned) ? 'Anchor Cleaning' : 'Anchor';
+          }
+        }
+      }
+      if (/commercial/i.test(cleaned)) next.growth_focus = 'commercial cleaning';
+      if (/residential/i.test(cleaned) && !next.vertical_focus) {
+        next.vertical_focus = /commercial/i.test(cleaned)
+          ? 'commercial-focused cleaning with residential welcome'
+          : 'residential cleaning';
+      }
+      break;
+    }
+    case 'services': {
+      // Prefer comma/list split; fall back to whole phrase.
+      let items = splitListItems(cleaned);
+      // If the answer listed "short term rental companies" as a service, keep it —
+      // correction can replace with turnovers later.
+      if (!items.length) items = [normalizeBusinessPhrase(cleaned)];
+      next.services = uniquePush([], items);
+      break;
+    }
+    case 'idealCustomers': {
+      next.ideal_customers = uniquePush([], splitListItems(cleaned));
+      break;
+    }
+    case 'avoidCustomers': {
+      next.disqualified_customers = uniquePush([], splitListItems(cleaned));
+      break;
+    }
+    case 'targetMarkets': {
+      next.geography = uniquePush([], extractPlaces(cleaned));
+      if (/commercial/i.test(cleaned)) next.growth_focus = next.growth_focus || 'commercial cleaning';
+      if (/residential/i.test(cleaned) && !next.vertical_focus) {
+        next.vertical_focus = 'residential';
+      }
+      if (!next.geography.length) {
+        next.geography = uniquePush([], [normalizeBusinessPhrase(cleaned)]);
+      }
+      break;
+    }
+    case 'competitiveAdvantages': {
+      next.differentiation = normalizeBusinessPhrase(cleaned);
+      break;
+    }
+    case 'brandVoice': {
+      next.brand_voice = normalizeBrandVoiceTone(cleaned);
+      break;
+    }
+    case 'campaignGoals': {
+      next.ninety_day_outcomes = normalizeBusinessPhrase(cleaned);
+      if (/commercial/i.test(cleaned)) next.growth_focus = next.growth_focus || 'commercial cleaning';
+      break;
+    }
+    case 'successMetrics': {
+      next.success_metrics = uniquePush([], splitListItems(cleaned));
+      if (!next.success_metrics.length) {
+        next.success_metrics = [normalizeBusinessPhrase(cleaned)];
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  return next;
+}
+
+/**
+ * Apply a correction to normalized facts for the targeted domain.
+ * Never writes into the active-question domain unless that is the explicit target.
+ */
+function applyCorrectionToNormalizedFacts(facts, correction) {
+  const next = cloneNormalizedFacts(facts);
+  const section = correction.section;
+  const substance = normalizeBusinessPhrase(correction.substance || '');
+  if (!section || !substance) return next;
+
+  switch (section) {
+    case 'services': {
+      // Replace near-duplicate STR company service lines with turnovers when correcting.
+      let services = [...(next.services || [])];
+      if (/short-term rental turnover/i.test(substance)) {
+        services = services.filter((s) => !/short-term rental compan/i.test(s));
+      }
+      next.services = uniquePush(services, [substance]);
+      break;
+    }
+    case 'idealCustomers':
+      next.ideal_customers = uniquePush(next.ideal_customers, splitListItems(substance));
+      break;
+    case 'avoidCustomers':
+      next.disqualified_customers = uniquePush(
+        next.disqualified_customers,
+        splitListItems(substance)
+      );
+      break;
+    case 'targetMarkets':
+      next.geography = uniquePush(extractPlaces(substance), next.geography);
+      if (!extractPlaces(substance).length) {
+        next.geography = uniquePush(next.geography, [substance]);
+      }
+      break;
+    case 'competitiveAdvantages':
+      next.differentiation = substance;
+      break;
+    case 'brandVoice':
+      next.brand_voice = normalizeBrandVoiceTone(substance);
+      break;
+    case 'campaignGoals':
+      next.ninety_day_outcomes = substance;
+      break;
+    case 'successMetrics':
+      next.success_metrics = uniquePush([], splitListItems(substance));
+      break;
+    case 'identity': {
+      next.business_description = substance;
+      break;
+    }
+    default:
+      break;
+  }
+  return next;
+}
+
+function normalizeBrandVoiceTone(text) {
+  let tone = String(text || '').trim();
+  tone = tone
+    .replace(/^(?:anchor(?:\s+cleaning)?'?s\s+)/i, '')
+    .replace(/^(?:the\s+)?(?:brand\s+)?voice should (?:sound|feel|read|be)\s+/i, '')
+    .replace(/^(?:should\s+(?:sound|feel|read|be)\s+)/i, '')
+    .replace(/^(?:sound|feel|read|be)\s+/i, '')
+    .trim();
+  return normalizeBusinessPhrase(tone);
+}
+
+/**
+ * Build Blueprint-shaped section summaries from normalized evidence (not raw transcript).
+ */
+function sectionsFromNormalizedFacts(facts, priorSections = null) {
+  const f = cloneNormalizedFacts(facts);
+  const prior = priorSections || emptySections();
+  const sections = emptySections();
+  const name = f.business_name || '';
+
+  const identityBits = [];
+  if (name && f.business_description) {
+    identityBits.push(`${name} is ${/^[aeiou]/i.test(f.business_description) ? 'an' : 'a'} ${f.business_description}`);
+  } else if (name) {
+    identityBits.push(`${name} is a cleaning company`);
+  } else if (f.business_description) {
+    identityBits.push(`The business is understood as ${f.business_description}`);
+  }
+  sections.identity = {
+    ...(prior.identity || emptySection()),
+    summary: identityBits.length
+      ? [
+          ensurePeriod(identityBits[0]),
+          'This identity framing is how the operator describes the business today, and it anchors every other Blueprint section.',
+        ].join(' ')
+      : prior.identity?.summary || '',
+  };
+
+  sections.services = {
+    ...(prior.services || emptySection()),
+    summary: f.services.length
+      ? [
+          ensurePeriod(`Today the business delivers ${f.services.join(', ')}`),
+          'Service understanding reflects what is actually sold now, not aspirational packaging.',
+        ].join(' ')
+      : prior.services?.summary || '',
+  };
+
+  sections.idealCustomers = {
+    ...(prior.idealCustomers || emptySection()),
+    summary: f.ideal_customers.length
+      ? [
+          ensurePeriod(`Ideal customers are ${f.ideal_customers.join(', ')}`),
+          'This ICP picture prioritizes fit over volume.',
+        ].join(' ')
+      : prior.idealCustomers?.summary || '',
+  };
+
+  sections.avoidCustomers = {
+    ...(prior.avoidCustomers || emptySection()),
+    summary: f.disqualified_customers.length
+      ? [
+          ensurePeriod(`The business prefers to avoid ${f.disqualified_customers.join(', ')}`),
+          'These constraints protect targeting quality and should stay visible in the Blueprint.',
+        ].join(' ')
+      : prior.avoidCustomers?.summary || '',
+  };
+
+  const marketBits = [];
+  if (f.geography.length) marketBits.push(f.geography.join(', '));
+  if (f.growth_focus) marketBits.push(`with a near-term growth focus on ${f.growth_focus}`);
+  sections.targetMarkets = {
+    ...(prior.targetMarkets || emptySection()),
+    summary: marketBits.length
+      ? [
+          ensurePeriod(`Priority markets center on ${marketBits.join(' ')}`),
+          'Geography and vertical focus here bound where discovery should concentrate first.',
+        ].join(' ')
+      : prior.targetMarkets?.summary || '',
+  };
+
+  sections.competitiveAdvantages = {
+    ...(prior.competitiveAdvantages || emptySection()),
+    summary: f.differentiation
+      ? [
+          ensurePeriod(`Competitive edge is described as ${f.differentiation}`),
+          'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
+        ].join(' ')
+      : prior.competitiveAdvantages?.summary || '',
+  };
+
+  sections.brandVoice = {
+    ...(prior.brandVoice || emptySection()),
+    summary: f.brand_voice
+      ? [
+          ensurePeriod(`Brand voice should read as ${f.brand_voice}`),
+          'Tone guidance constrains later language without choosing channels or campaigns.',
+        ].join(' ')
+      : prior.brandVoice?.summary || '',
+  };
+
+  sections.campaignGoals = {
+    ...(prior.campaignGoals || emptySection()),
+    summary: f.ninety_day_outcomes
+      ? [
+          ensurePeriod(`Near-term growth goals focus on ${f.ninety_day_outcomes}`),
+          'These are desired business outcomes for the next phase of work, not execution tactics.',
+        ].join(' ')
+      : prior.campaignGoals?.summary || '',
+  };
+
+  sections.successMetrics = {
+    ...(prior.successMetrics || emptySection()),
+    summary: f.success_metrics.length
+      ? [
+          ensurePeriod(`Success will be judged by ${f.success_metrics.join(', ')}`),
+          'These signals define whether the engagement is working from the client\'s perspective.',
+        ].join(' ')
+      : prior.successMetrics?.summary || '',
+  };
+
+  // Preserve confidence / evidenceIds / unknowns from prior when present.
+  for (const key of BLUEPRINT_SECTIONS) {
+    const p = prior[key] || emptySection();
+    sections[key] = {
+      summary: sections[key].summary || '',
+      confidence: p.confidence || (sections[key].summary ? EXPLICIT_CONFIDENCE : 0),
+      evidenceIds: [...(p.evidenceIds || [])],
+      unknowns: sections[key].summary ? [] : [...(p.unknowns || [])],
+    };
+  }
+  return sections;
+}
+
 /**
  * Strip interview-question echo / Mad-Lib filler so only the substance remains.
  */
@@ -731,6 +1218,9 @@ function stripInterviewQuestionEcho(text) {
     /\bwhere should we focus first[:\s-]*/gi,
     /\bare there customers or segments you'?d rather not take on[:\s-]*/gi,
     /\bi don't want to work with\s+/gi,
+    /\bwould feel successful if\s*/gi,
+    /\bboth\s+geography\s+is\s*/gi,
+    /\bto say\s+/gi,
   ];
   for (const re of echoPatterns) {
     s = s.replace(re, '');
@@ -965,15 +1455,15 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
       return `Customers choose ${subject} because ${midSentence(edge)}`;
     }
     case 'voice': {
-      let tone = substance
-        .replace(/^(?:calm,?\s*)?professional,?\s*reliable,?\s*direct(?:,?\s*and\s*easy to work with)?/i, (m) => m)
-        .trim();
+      let tone = normalizeBrandVoiceTone(substance);
       tone = midSentence(tone);
-      // Avoid "should feel [clause that already has should]"
-      if (/should\s+(?:sound|feel|read|be)\b/i.test(tone)) {
-        tone = tone.replace(/^.*?\bshould\s+(?:sound|feel|read|be)\s+/i, '');
-      }
-      return `${possessive} brand voice should sound ${tone}`;
+      if (!tone) return '';
+      // Prefer "feel" for adjective lists; avoid "sound anchor's …"
+      const shortName = name.replace(/\s+Cleaning$/i, '') || name;
+      const voicePossessive = shortName
+        ? businessSubject(shortName, { possessive: true })
+        : possessive;
+      return `${voicePossessive} brand voice should feel ${tone}`;
     }
     case 'goals': {
       let outcome = substance
@@ -1593,75 +2083,105 @@ function sectionConfidence(section) {
 
 /**
  * Evidence-connected observations — not recommendations, not strategy.
- * Maximum five.
+ * Built from normalized facts / synthesized claims. Maximum five.
  */
-function composeObservations(sections) {
+function composeObservations(sections, normalizedFacts = null) {
+  const facts = normalizedFacts || emptyNormalizedFacts();
   const s = (key) => (sections && sections[key]) || emptySection();
   const observations = [];
+  const name =
+    facts.business_name ||
+    extractBusinessName(s('identity').summary) ||
+    'The business';
+  const shortName = String(name).replace(/\s+Cleaning$/i, '') || name;
 
-  const identity = coreClaim(s('identity').summary);
-  const services = coreClaim(s('services').summary);
-  const ideal = coreClaim(s('idealCustomers').summary);
-  const avoid = coreClaim(s('avoidCustomers').summary);
-  const markets = coreClaim(s('targetMarkets').summary);
-  const advantages = coreClaim(s('competitiveAdvantages').summary);
-  const voice = coreClaim(s('brandVoice').summary);
-  const goals = coreClaim(s('campaignGoals').summary);
-  const metrics = coreClaim(s('successMetrics').summary);
+  if (facts.differentiation || coreClaim(s('competitiveAdvantages').summary)) {
+    const edge =
+      facts.differentiation ||
+      midSentence(
+        String(coreClaim(s('competitiveAdvantages').summary) || '')
+          .replace(/^Competitive edge is described as\s+/i, '')
+          .trim()
+      );
+    if (edge && !containsRawPromptFragment(edge)) {
+      observations.push(
+        `${shortName}'s differentiation centers on ${edge} — a consistent reason customers choose them.`
+      );
+    }
+  }
 
-  if (advantages) {
+  if ((facts.ideal_customers || []).length && (facts.disqualified_customers || []).length) {
     observations.push(
-      `Your positioning around ${softenClaim(advantages)} appears consistently when you describe why customers choose you.`
+      'Commercial focus is unusually clear: both the relationships worth pursuing and the ones to decline are named explicitly.'
+    );
+  } else if ((facts.ideal_customers || []).length) {
+    observations.push(
+      `Ideal-customer focus on ${facts.ideal_customers.slice(0, 3).join(', ')} gives outreach a disciplined starting point.`
     );
   }
-  if (ideal && avoid) {
+
+  if (facts.ninety_day_outcomes || facts.growth_focus) {
+    const goal =
+      facts.growth_focus && /commercial/i.test(facts.growth_focus)
+        ? `${shortName}'s near-term growth goal is to build a clearer, repeatable path to commercial cleaning opportunities`
+        : `${shortName}'s near-term growth goal is ${midSentence(
+            normalizeBusinessPhrase(facts.ninety_day_outcomes || facts.growth_focus)
+          )}`;
+    if (goal && !containsRawPromptFragment(goal) && !/would feel successful/i.test(goal)) {
+      observations.push(goal);
+    }
+  }
+
+  if ((facts.geography || []).length) {
     observations.push(
-      'Your commercial focus is unusually clear: you name both the relationships worth pursuing and the ones you prefer to decline.'
+      `Geographic attention concentrates first in ${facts.geography.join(', ')}, which keeps discovery from spreading too thin.`
     );
-  } else if (ideal) {
+  } else if (coreClaim(s('targetMarkets').summary)) {
+    const marketLine = synthesizeNormalizedFact('markets', s('targetMarkets').summary, {
+      businessName: name,
+    });
+    if (marketLine && !containsRawPromptFragment(marketLine) && !/both geography is/i.test(marketLine)) {
+      observations.push(marketLine.replace(/\.$/, ''));
+    }
+  }
+
+  if (facts.brand_voice && facts.differentiation) {
     observations.push(
-      `Your ideal-customer picture — centered on ${softenClaim(ideal).replace(/^(are\s+)/i, '')} — gives outreach a disciplined starting point.`
+      `Differentiation and voice reinforce each other: the market should experience a ${normalizeBrandVoiceTone(
+        facts.brand_voice
+      )} promise that matches how the work is delivered.`
+    );
+  } else if (facts.brand_voice) {
+    observations.push(
+      `Brand tone is already intentional — ${normalizeBrandVoiceTone(
+        facts.brand_voice
+      )} — which helps keep later messaging authentic.`
     );
   }
-  if (goals && /recurr|relationship|retain|lifetime|loyal/i.test(String(s('campaignGoals').summary || '') + String(s('idealCustomers').summary || ''))) {
+
+  if ((facts.success_metrics || []).length) {
     observations.push(
-      'Your long-term emphasis leans toward durable relationships rather than purely transactional growth.'
-    );
-  } else if (goals) {
-    observations.push(
-      `Near-term direction is already framed around ${asGerundPhrase(goals)}, which gives later work a clear success test.`
+      `Success is anchored in outcomes such as ${facts.success_metrics.slice(0, 4).join(', ')}, not vanity activity.`
     );
   }
-  if (markets) {
-    observations.push(
-      `Geographic and market attention appears concentrated first in ${softenClaim(markets)}, which keeps discovery from spreading too thin.`
-    );
-  }
-  if (voice && advantages) {
-    observations.push(
-      `Differentiation and voice reinforce each other: the promise you describe should sound ${softenClaim(voice)} in market.`
-    );
-  } else if (voice) {
-    observations.push(
-      `Brand tone is already intentional — ${softenClaim(voice)} — which helps keep later messaging authentic.`
-    );
-  }
-  if (metrics) {
-    observations.push(
-      `Success is anchored in business outcomes such as ${softenClaim(metrics)}, not vanity activity.`
-    );
-  }
-  if (identity && services && observations.length < 3) {
+
+  if (facts.business_description && (facts.services || []).length && observations.length < 3) {
     observations.push(
       'Identity and offer already form a coherent foundation any growth recommendation should respect.'
     );
   }
+
   if (!observations.length) {
     observations.push(
       'The conversation establishes a workable foundation, though several themes still need more evidence before they can be stated with high confidence.'
     );
   }
-  return observations.slice(0, 5).map((line) => ensurePeriod(line));
+
+  return observations
+    .filter((line) => line && !containsRawPromptFragment(line))
+    .filter((line) => !/would feel successful|we will know|both geography is|brand voice should sound anchor/i.test(line))
+    .slice(0, 5)
+    .map((line) => ensurePeriod(line));
 }
 
 function starsFromConfidence(conf) {
@@ -1831,40 +2351,123 @@ function composeConversationStarters(sections, learnMoreItems) {
  * Only business interview answers become evidence; refinement instructions
  * are sanitized out before render.
  */
-function buildExecutiveSummary(sections) {
-  const clean = sanitizeSectionsForBrief(sections);
+function buildExecutiveSummary(sections, opts = {}) {
+  const normalizedFacts =
+    opts.normalizedFacts ||
+    (opts.interviewState && opts.interviewState.normalizedFacts) ||
+    null;
+  const fromNormalized = normalizedFacts
+    ? sectionsFromNormalizedFacts(normalizedFacts, sections)
+    : null;
+  const clean = sanitizeSectionsForBrief(fromNormalized || sections);
   const s = (key) => clean[key] || emptySection();
-  const businessName = extractBusinessName(s('identity').summary);
-  const briefOpts = { businessName };
+  const businessName =
+    (normalizedFacts && normalizedFacts.business_name) ||
+    extractBusinessName(s('identity').summary);
+  const briefOpts = { businessName, normalizedFacts };
   const unknownLabels = collectUnknownLabels(clean);
   const learnMoreItems = composeLearnMoreItems(unknownLabels);
-  const observations = composeObservations(clean);
+  const observations = composeObservations(clean, normalizedFacts);
   const assessment = composeAssessment(clean);
   const conversations = composeConversationStarters(clean, learnMoreItems);
 
-  const whoYouAre = composeWhoYouAre(s('identity').summary, s('services').summary, briefOpts);
-  const whoYouServe = composeWhoYouServe(
+  // Prefer direct normalized list rendering for key prose sections when available.
+  let whoYouAre = composeWhoYouAre(s('identity').summary, s('services').summary, briefOpts);
+  let whoYouServe = composeWhoYouServe(
     s('idealCustomers').summary,
     s('avoidCustomers').summary,
     s('targetMarkets').summary,
     briefOpts
   );
-  const whyChooseYou = composeWhyChooseYou(
+  let whyChooseYou = composeWhyChooseYou(
     s('competitiveAdvantages').summary,
     s('brandVoice').summary,
     briefOpts
   );
-  const whereHeaded = composeWhereHeaded(s('campaignGoals').summary, briefOpts);
-  const successLooksLike = composeWhatSuccess(s('successMetrics').summary, briefOpts);
+  let whereHeaded = composeWhereHeaded(s('campaignGoals').summary, briefOpts);
+  let successLooksLike = composeWhatSuccess(s('successMetrics').summary, briefOpts);
 
-  // Final bleed guard — never ship raw prompt fragments to the client.
-  const proseBodies = [whoYouAre, whoYouServe, whyChooseYou, whereHeaded, successLooksLike];
-  for (const body of proseBodies) {
-    if (containsRawPromptFragment(body)) {
-      // Soft-fail: strip offending sentences rather than shipping bleed.
-      // (compose* already reject; this is defense-in-depth.)
+  if (normalizedFacts) {
+    const f = cloneNormalizedFacts(normalizedFacts);
+    if (f.services.length) {
+      whoYouAre = joinPolished([
+        synthesizeNormalizedFact('identity', s('identity').summary, briefOpts) ||
+          (f.business_name
+            ? `${f.business_name} is a ${f.business_description || 'cleaning company'}`
+            : 'This is a cleaning company'),
+        `Services include ${f.services.join(', ')}`,
+        'Together, identity and offer define the commercial center of gravity any growth advice must respect.',
+      ]);
+    }
+    if (f.ideal_customers.length || f.geography.length) {
+      const sentences = [];
+      if (f.ideal_customers.length) {
+        sentences.push(`Ideal customers include ${f.ideal_customers.join(', ')}`);
+      }
+      if (f.disqualified_customers.length) {
+        sentences.push(
+          synthesizeNormalizedFact(
+            'avoid',
+            `The business prefers to avoid ${f.disqualified_customers.join(', ')}`,
+            briefOpts
+          ) ||
+            `${businessName || 'The business'} deliberately avoids ${f.disqualified_customers.join(', ')}`
+        );
+      }
+      if (f.geography.length) {
+        const towns = f.geography.filter((g) => !/^Greater Manchester$/i.test(g));
+        const hasGM = f.geography.some((g) => /Greater Manchester/i.test(g));
+        if (hasGM) {
+          sentences.push(
+            `${businessSubject(businessName || 'Anchor', { possessive: true })} near-term geography is the Greater Manchester area${
+              towns.length ? `, including ${towns.join(', ')}` : ''
+            }`
+          );
+        } else {
+          sentences.push(
+            `${businessSubject(businessName || 'the business', { possessive: true })} near-term geography centers on ${f.geography.join(', ')}`
+          );
+        }
+      }
+      if (sentences.length >= 2) {
+        sentences.push(
+          'Taken together, this is a disciplined beachhead: fit over volume, and geography chosen to match that fit.'
+        );
+      }
+      whoYouServe = joinPolished(sentences);
+    }
+    if (f.brand_voice) {
+      const adv =
+        synthesizeNormalizedFact('advantages', s('competitiveAdvantages').summary, briefOpts) ||
+        (f.differentiation
+          ? `Customers choose ${businessName || 'this business'} because ${midSentence(f.differentiation)}`
+          : '');
+      const voice = synthesizeNormalizedFact(
+        'voice',
+        `Brand voice should read as ${f.brand_voice}`,
+        briefOpts
+      );
+      whyChooseYou = joinPolished(
+        [adv, voice, 'Differentiation and tone must reinforce each other so the market experiences the same promise the business actually keeps.'].filter(
+          Boolean
+        )
+      );
     }
   }
+
+  const bleedRe =
+    /would feel successful if|we will know the growth work|both geography is|anchor'?s brand voice should sound|when a great-fit customer chooses|to say short term/i;
+  const scrubBleed = (body) =>
+    String(body || '')
+      .split(/(?<=[.!?])\s+/)
+      .filter((sentence) => !bleedRe.test(sentence) && !containsRawPromptFragment(sentence))
+      .join(' ');
+
+  whoYouAre = scrubBleed(whoYouAre);
+  whoYouServe = scrubBleed(whoYouServe);
+  whyChooseYou = scrubBleed(whyChooseYou);
+  whereHeaded = scrubBleed(whereHeaded);
+  successLooksLike = scrubBleed(successLooksLike);
 
   return {
     title: 'Executive Business Brief',
@@ -1945,13 +2548,18 @@ function sectionStateFromSession(session) {
 
 function withExperienceFields(session, payload = {}) {
   const sectionState = sectionStateFromSession(session);
+  const normalizedFacts =
+    (session && session.interview_state && session.interview_state.normalizedFacts) || null;
   const out = {
     ...payload,
     progress: payload.progress || computeProgress(sectionState),
     understanding: buildUnderstandingProgress(sectionState),
   };
   if (payload.blueprint && payload.blueprint.sections) {
-    out.executiveSummary = buildExecutiveSummary(payload.blueprint.sections);
+    out.executiveSummary = buildExecutiveSummary(payload.blueprint.sections, {
+      normalizedFacts,
+      interviewState: session && session.interview_state,
+    });
   }
   return out;
 }
@@ -2016,6 +2624,8 @@ function initialInterviewState({ notes } = {}) {
     revisionGuidance: [],
     /** Out-of-order facts that must not overwrite the active question answer. */
     supplementalContext: [],
+    /** Normalized business evidence — Brief reads this, not raw transcript. */
+    normalizedFacts: emptyNormalizedFacts(),
     notes: notes ? String(notes) : null,
     blueprintId: null,
     lastReflectionAt: 0,
@@ -2625,11 +3235,27 @@ async function applySectionUpdate(store, session, sectionKey, statement, type, t
 
   let summary = section.summary || '';
   if (!empty) {
+    // Keep normalized evidence as the source of truth for Brief rendering.
     if (type === 'CLIENT_EDITED') {
-      summary = isBusinessFactStatement(rawStatement) ? rawStatement : summary;
+      // Corrections are applied via applyCorrectionToNormalizedFacts by the caller
+      // when domain is known; here we still ingest as a merge for safety.
+      state.normalizedFacts = applyCorrectionToNormalizedFacts(
+        state.normalizedFacts || emptyNormalizedFacts(),
+        { section: sectionKey, substance: rawStatement }
+      );
     } else {
-      summary = summarizeSection(sectionKey, [...priorStatements, rawStatement]);
+      state.normalizedFacts = ingestAnswerIntoNormalizedFacts(
+        state.normalizedFacts || emptyNormalizedFacts(),
+        sectionKey,
+        rawStatement
+      );
     }
+    const fromFacts = sectionsFromNormalizedFacts(state.normalizedFacts, sectionState);
+    summary =
+      (fromFacts[sectionKey] && fromFacts[sectionKey].summary) ||
+      (type === 'CLIENT_EDITED' && isBusinessFactStatement(rawStatement)
+        ? summarizeSection(sectionKey, [rawStatement])
+        : summarizeSection(sectionKey, [...priorStatements, rawStatement]));
   }
 
   sectionState[sectionKey] = {
@@ -2731,10 +3357,14 @@ async function generateBlueprint(store, session) {
     advanceStatus(session, 'BLUEPRINT_GENERATION');
   }
   const state = session.interview_state || initialInterviewState();
-  const sections = mergeSupplementalIntoSections(
+  const merged = mergeSupplementalIntoSections(
     state.sectionState,
     state.supplementalContext
   );
+  // Prefer normalized evidence for Blueprint/Brief commercial fields.
+  const sections = state.normalizedFacts
+    ? sectionsFromNormalizedFacts(state.normalizedFacts, merged)
+    : merged;
   const confidence_summary = confidenceSummaryFromSections(sections);
   const blueprint = await store.insertBlueprint({
     id: newId(),
@@ -2758,6 +3388,7 @@ async function generateBlueprint(store, session) {
     blueprintId: blueprint.id,
     blueprintVersion: blueprint.version,
     sectionState: sections,
+    normalizedFacts: state.normalizedFacts || emptyNormalizedFacts(),
   };
   session.confidence_score = overallConfidence(confidence_summary);
   session.summary = `Draft Business Blueprint ${blueprint.id}@${blueprint.version}`;
@@ -3104,40 +3735,74 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         },
       ];
     } else if (messageType === MESSAGE_TYPES.CORRECTION) {
-      const targetSection =
-        (domain && DOMAIN_TO_SECTION[domain]) || q.question.section;
-      const cleaned = stripInterviewQuestionEcho(
-        text.replace(CORRECTION_RE, '').trim()
-      );
-      if (cleaned && isBusinessFactStatement(cleaned)) {
+      const parsed = parseCorrectionMessage(text, null);
+      // Never fall back to the active question section — corrections without a
+      // resolvable domain stay in supplemental memory until confirmed.
+      const targetSection = parsed.section;
+      const correctionDomain = parsed.domain || domain;
+      const substance = parsed.substance;
+
+      if (targetSection && substance && isBusinessFactStatement(substance)) {
+        state.normalizedFacts = applyCorrectionToNormalizedFacts(
+          state.normalizedFacts || emptyNormalizedFacts(),
+          { section: targetSection, substance, domain: correctionDomain }
+        );
+        session.interview_state = state;
+
         const { evidenceRow } = await applySectionUpdate(
           store,
           session,
           targetSection,
-          cleaned,
+          substance,
           'CLIENT_EDITED',
           clientTurn.id
         );
+        // Prefer correction merge over raw CLIENT_EDITED ingest side effects.
+        state.normalizedFacts = applyCorrectionToNormalizedFacts(
+          session.interview_state.normalizedFacts || state.normalizedFacts,
+          { section: targetSection, substance, domain: correctionDomain }
+        );
+        const rebuilt = sectionsFromNormalizedFacts(
+          state.normalizedFacts,
+          session.interview_state.sectionState || state.sectionState
+        );
+        const curSection =
+          (session.interview_state.sectionState || state.sectionState)[targetSection] ||
+          emptySection();
+        state.sectionState = {
+          ...(session.interview_state.sectionState || state.sectionState),
+          [targetSection]: {
+            ...curSection,
+            summary: rebuilt[targetSection].summary,
+            confidence: Math.max(curSection.confidence || 0, EXPLICIT_CONFIDENCE),
+            unknowns: [],
+          },
+        };
         await store.updateTurn(clientTurn.id, {
           derived_evidence: evidenceRow ? [evidenceRow.id] : [],
         });
-        // Supersede prior answer for that section when we know the question id.
         const questionId = QUESTION_BANK.find((row) => row.section === targetSection)?.id;
         if (questionId) {
-          state.answers = { ...(state.answers || {}), [questionId]: cleaned };
+          const priorAnswer = (state.answers || {})[questionId] || '';
+          state.answers = {
+            ...(state.answers || {}),
+            [questionId]: priorAnswer ? `${priorAnswer}; ${substance}` : substance,
+          };
         }
       }
+
       state.supplementalContext = [
         ...(state.supplementalContext || []),
         {
           at: nowIso(),
           text,
-          domain: domain || null,
+          domain: correctionDomain || null,
           kind: MESSAGE_TYPES.CORRECTION,
           section: targetSection,
-          supersedes: true,
+          substance,
+          supersedes: Boolean(targetSection),
           activeQuestionId: q.question.id,
-          confirmed: true,
+          confirmed: Boolean(targetSection),
         },
       ];
     } else {
@@ -3673,6 +4338,8 @@ module.exports = {
   MESSAGE_TYPES,
   CONTEXT_DOMAINS,
   DOMAIN_TO_SECTION,
+  NORMALIZED_FACT_KEYS,
+  SECTION_TO_NORMALIZED,
   QUESTION_BANK,
   SECTION_TITLES,
   GENERATED_BY,
@@ -3719,4 +4386,12 @@ module.exports = {
   conversationalAck,
   extractBusinessName,
   mergeSupplementalIntoSections,
+  parseCorrectionMessage,
+  normalizeBusinessPhrase,
+  normalizeBrandVoiceTone,
+  emptyNormalizedFacts,
+  ingestAnswerIntoNormalizedFacts,
+  applyCorrectionToNormalizedFacts,
+  sectionsFromNormalizedFacts,
+  splitListItems,
 };

@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- Executive Business Brief consumes normalized evidence, not raw transcript bleed ([SPEC-085](docs/specs/SPEC-085_Executive_Business_Brief.md))
+  - Correction messages target the intended domain (`for services`, geography, brand voice, etc.) and never attach to the active question
+  - Session `normalizedFacts` store (services, ideal customers, geography, brand voice, …) feeds Brief synthesis
+  - Phrase normalization: `standard home` → `standard home cleaning`, `STR companies` → `short-term rental companies`, place title-casing
+  - Brand voice renders as “Anchor’s brand voice should feel …” (no “should sound anchor’s …”)
+  - Observations synthesized from normalized facts (no “would feel successful if” / “both geography is” fragments)
+  - Anchor transcript regression coverage in `test/clientIntelligenceInterview.test.js`
 - Max interview conversation handling + Executive Business Brief synthesis hardening ([SPEC-085](docs/specs/SPEC-085_Executive_Business_Brief.md))
   - Classify every interview message before attaching to the active question (`direct_answer`, `supplemental_context`, `refinement_feedback`, `correction`, `question_to_max`, `off_topic`)
   - Supplemental session memory for out-of-order facts (domain-tagged; does not overwrite the active answer)

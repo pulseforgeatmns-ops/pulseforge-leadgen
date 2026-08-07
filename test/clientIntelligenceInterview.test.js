@@ -456,7 +456,7 @@ describe('confidence rules', () => {
 
     assert.ok(byId.observations.items.length >= 1);
     assert.ok(byId.observations.items.length <= 5);
-    assert.match(byId.observations.items.join(' '), /reliable crews|commercial focus|positioning/i);
+    assert.match(byId.observations.items.join(' '), /reliable crews|commercial focus|positioning|differentiation|geography|Coastal SC/i);
     assert.equal(/should launch|recommend that you|campaign/i.test(byId.observations.items.join(' ')), false);
 
     assert.equal(byId.assessment.ratings.length, 4);
@@ -1035,8 +1035,9 @@ describe('Executive Brief synthesis — no raw answer bleed', () => {
     );
     assert.match(byId.whyChooseYou.body, /Customers choose Anchor/i);
     assert.match(byId.whyChooseYou.body, /trust/i);
-    assert.match(byId.whyChooseYou.body, /brand voice should sound/i);
-    assert.equal(/Brand voice should feel/i.test(byId.whyChooseYou.body), false);
+    assert.match(byId.whyChooseYou.body, /brand voice should feel/i);
+    assert.equal(/Brand voice should feel .*\bshould\s+(?:sound|feel)/i.test(byId.whyChooseYou.body), false);
+    assert.equal(/anchor'?s brand voice should sound/i.test(byId.whyChooseYou.body), false);
     assert.match(byId.whereHeaded.body, /commercial cleaning|Greater Manchester|near-term priority/i);
     assert.equal(/Near-term growth priorities center on over the next/i.test(byId.whereHeaded.body), false);
     assert.match(
@@ -1045,5 +1046,221 @@ describe('Executive Brief synthesis — no raw answer bleed', () => {
     );
     assert.equal(/Success will be judged by we will know/i.test(byId.successLooksLike.body), false);
     assert.equal(/i don't want to work with/i.test(byId.whoYouServe.body), false);
+  });
+});
+
+describe('Anchor transcript — correction routing + normalized brief', () => {
+  const ANCHOR_TRANSCRIPT = [
+    {
+      type: 'answer',
+      text:
+        'Anchor Cleaning — a commercial-focused cleaning company. Happy to take residential work too.',
+    },
+    {
+      type: 'answer',
+      text:
+        'standard home, standard office, move in/out cleans, deep cleans, recurring cleans, short term rental companies',
+    },
+    {
+      type: 'correction',
+      text: 'I meant to say short term rental turnovers for services',
+    },
+    {
+      type: 'answer',
+      text:
+        'property managers, STR companies, facility managers, professional offices, daycares, rec centers, high traffic buildings',
+    },
+    {
+      type: 'answer',
+      text:
+        "I don't want to work with customers whose main priority is the lowest price — better-fit customers value reliability, professionalism, and accountability.",
+    },
+    {
+      type: 'answer',
+      text:
+        'both — Greater Manchester area includes Bedford, Hooksett, Londonderry, Auburn, Goffstown',
+    },
+    {
+      type: 'answer',
+      text:
+        'when a great-fit customer chooses Anchor over someone else, what usually tips the decision is trust — responsive, consistent, and accountable without needing to chase the work',
+    },
+    {
+      type: 'answer',
+      text: "anchor's brand voice should sound calm, professional, reliable, and easy to work with",
+    },
+    {
+      type: 'answer',
+      text:
+        'would feel successful if Anchor has a clearer, repeatable path to commercial cleaning opportunities in Greater Manchester over the next 90 days',
+    },
+    {
+      type: 'answer',
+      text:
+        'we will know the growth work is working by watching qualified replies, booked conversations, walkthroughs, estimate requests, and real commercial pipeline movement',
+    },
+  ];
+
+  const BANNED =
+    /would feel successful if|we will know the growth work|both geography is|anchor'?s brand voice should sound|when a great-fit customer chooses|to say short term|Ideal customers include to say/i;
+
+  async function runAnchorTranscript(opts) {
+    const started = await startClientInterview({ clientId: 10 }, opts);
+    let turn = started;
+    for (const step of ANCHOR_TRANSCRIPT) {
+      turn = await postInterviewMessage(started.interviewId, step.text, opts);
+    }
+    return { started, turn };
+  }
+
+  it('routes services correction into services, not the active ideal-customer question', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 10 }, opts);
+    await postInterviewMessage(
+      started.interviewId,
+      ANCHOR_TRANSCRIPT[0].text,
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      ANCHOR_TRANSCRIPT[1].text,
+      opts
+    );
+
+    const before = await store.getSession(started.interviewId);
+    assert.equal(
+      require('../services/clientIntelligenceInterview').QUESTION_BANK[
+        before.interview_state.stepIndex
+      ].id,
+      'ideal_customers'
+    );
+
+    const corrected = await postInterviewMessage(
+      started.interviewId,
+      'I meant to say short term rental turnovers for services',
+      opts
+    );
+    assert.equal(corrected.messageType, MESSAGE_TYPES.CORRECTION);
+    assert.equal(corrected.question.id, 'ideal_customers');
+    assert.match(corrected.message, /services|update/i);
+
+    const session = await store.getSession(started.interviewId);
+    assert.equal(session.interview_state.stepIndex, before.interview_state.stepIndex);
+    assert.equal(session.interview_state.answers.ideal_customers, undefined);
+    assert.ok(
+      (session.interview_state.normalizedFacts.services || []).some((s) =>
+        /short-term rental turnovers/i.test(s)
+      )
+    );
+    assert.equal(
+      (session.interview_state.normalizedFacts.ideal_customers || []).some((s) =>
+        /to say|turnovers for services/i.test(s)
+      ),
+      false
+    );
+    assert.match(
+      String(session.interview_state.sectionState.services.summary || ''),
+      /short-term rental turnovers/i
+    );
+    assert.equal(
+      /to say short term rental turnovers for services/i.test(
+        String(session.interview_state.sectionState.idealCustomers.summary || '')
+      ),
+      false
+    );
+  });
+
+  it('normalizes business phrases used in Anchor services and segments', () => {
+    const {
+      normalizeBusinessPhrase,
+      splitListItems,
+      parseCorrectionMessage,
+    } = require('../services/clientIntelligenceInterview');
+    assert.equal(normalizeBusinessPhrase('standard home'), 'standard home cleaning');
+    assert.equal(normalizeBusinessPhrase('standard office'), 'standard office cleaning');
+    assert.equal(
+      normalizeBusinessPhrase('move in/out cleans'),
+      'move-in/move-out cleaning'
+    );
+    assert.equal(normalizeBusinessPhrase('recurring cleans'), 'recurring cleaning');
+    assert.equal(
+      normalizeBusinessPhrase('STR companies'),
+      'short-term rental companies'
+    );
+    assert.equal(
+      normalizeBusinessPhrase('short term rental turnovers'),
+      'short-term rental turnovers'
+    );
+    assert.equal(normalizeBusinessPhrase('auburn'), 'Auburn');
+    assert.equal(normalizeBusinessPhrase('hooksett'), 'Hooksett');
+    assert.ok(
+      splitListItems('property managers, STR companies, high traffic buildings').includes(
+        'short-term rental companies'
+      )
+    );
+    const parsed = parseCorrectionMessage(
+      'I meant to say short term rental turnovers for services'
+    );
+    assert.equal(parsed.domain, 'services');
+    assert.equal(parsed.section, 'services');
+    assert.equal(parsed.substance, 'short-term rental turnovers');
+  });
+
+  it('Anchor end-to-end brief uses normalized evidence with no raw bleed', async () => {
+    const { opts, store } = withStore();
+    const { turn } = await runAnchorTranscript(opts);
+    assert.equal(turn.status, 'CLIENT_REVIEW');
+    assert.ok(turn.executiveSummary);
+
+    const session = await store.getSession(turn.interviewId);
+    const facts = session.interview_state.normalizedFacts;
+    assert.ok(facts.services.some((s) => /short-term rental turnovers/i.test(s)));
+    assert.equal(
+      facts.ideal_customers.some((s) => /to say|turnovers for services/i.test(s)),
+      false
+    );
+
+    const brief = turn.executiveSummary;
+    const byId = Object.fromEntries(brief.sections.map((s) => [s.id, s]));
+    const blob = JSON.stringify(brief);
+
+    assert.equal(BANNED.test(blob), false, blob);
+    assert.equal(containsRawPromptFragment(blob), false, blob);
+
+    assert.match(byId.whoYouAre.body, /short-term rental turnovers/i);
+    assert.match(
+      byId.whoYouAre.body,
+      /standard home cleaning|standard office cleaning|move-in\/move-out cleaning|recurring cleaning|deep cleans/i
+    );
+
+    assert.match(byId.whoYouServe.body, /property managers/i);
+    assert.match(byId.whoYouServe.body, /short-term rental companies/i);
+    assert.match(byId.whoYouServe.body, /facility managers/i);
+    assert.match(byId.whoYouServe.body, /professional offices/i);
+    assert.match(byId.whoYouServe.body, /daycares/i);
+    assert.match(byId.whoYouServe.body, /rec centers/i);
+    assert.match(byId.whoYouServe.body, /high-traffic buildings/i);
+    assert.equal(/to say short term rental turnovers for services/i.test(byId.whoYouServe.body), false);
+
+    assert.match(byId.whoYouServe.body, /Greater Manchester/i);
+    assert.match(byId.whoYouServe.body, /Bedford/i);
+    assert.match(byId.whoYouServe.body, /Londonderry/i);
+    assert.match(byId.whoYouServe.body, /Auburn/i);
+    assert.match(byId.whoYouServe.body, /Goffstown/i);
+    assert.match(byId.whoYouServe.body, /Hooksett/i);
+
+    assert.match(byId.whyChooseYou.body, /Customers choose Anchor/i);
+    assert.match(
+      byId.whyChooseYou.body,
+      /Anchor'?s brand voice should feel calm, professional, reliable(?:,)? and easy to work with/i
+    );
+    assert.equal(/should sound anchor/i.test(byId.whyChooseYou.body), false);
+
+    assert.equal(/would feel successful if/i.test(byId.whereHeaded.body), false);
+    assert.equal(/both geography is/i.test(byId.whoYouServe.body), false);
+
+    const observations = (byId.observations.items || []).join(' ');
+    assert.equal(BANNED.test(observations), false, observations);
+    assert.match(observations, /commercial cleaning|Greater Manchester|differentiation|Ideal-customer|Brand tone/i);
   });
 });
