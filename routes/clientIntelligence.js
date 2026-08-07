@@ -3,6 +3,7 @@
 /**
  * SPEC-083 — Client Intelligence Engine APIs.
  * SPEC-084 — Interview experience (resume + understanding fields).
+ * SPEC-085 — Executive Business Brief payload via executiveSummary.
  *
  * POST /api/v1/clients/:id/interview/start
  * POST /api/v1/interview/:id/message

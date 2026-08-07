@@ -117,9 +117,10 @@ describe('clientIntelligenceInterview lifecycle', () => {
     assert.equal(turn.blueprint.generatedBy, 'CIE-v1');
     assert.equal(turn.blueprint.status, 'in_review');
     assert.ok(turn.executiveSummary);
-    assert.equal(turn.executiveSummary.title, 'My Understanding of Your Business');
-    assert.equal(turn.executiveSummary.subtitle, 'Generated from our conversation');
-    assert.equal(turn.executiveSummary.sections.length, 6);
+    assert.equal(turn.executiveSummary.title, 'Executive Business Brief');
+    assert.equal(turn.executiveSummary.subtitle, 'Prepared by Max');
+    assert.equal(turn.executiveSummary.tagline, 'Generated from our conversation');
+    assert.equal(turn.executiveSummary.sections.length, 9);
     for (const key of BLUEPRINT_SECTIONS) {
       assert.ok(turn.blueprint.sections[key]);
       assert.ok(Array.isArray(turn.blueprint.sections[key].evidenceIds));
@@ -348,7 +349,7 @@ describe('confidence rules', () => {
     assert.ok(!JSON.stringify(progress).includes('Secret narrative'));
   });
 
-  it('buildExecutiveSummary synthesizes CEO-facing consultant narratives', () => {
+  it('buildExecutiveSummary synthesizes CEO-facing Executive Business Brief', () => {
     const summary = buildExecutiveSummary({
       identity: {
         summary:
@@ -404,19 +405,70 @@ describe('confidence rules', () => {
         unknowns: ['Pricing philosophy', 'Missing clear answer for capacity'],
       },
     });
-    assert.equal(summary.title, 'My Understanding of Your Business');
-    assert.equal(summary.sections.length, 6);
-    for (const section of summary.sections) {
+    assert.equal(summary.title, 'Executive Business Brief');
+    assert.equal(summary.subtitle, 'Prepared by Max');
+    assert.equal(summary.tagline, 'Generated from our conversation');
+    assert.equal(summary.sections.length, 9);
+    const byId = Object.fromEntries(summary.sections.map((s) => [s.id, s]));
+    assert.equal(byId.whoYouAre.title, 'Who You Are');
+    assert.equal(byId.whoYouServe.title, 'Who You Serve');
+    assert.equal(byId.whyChooseYou.title, 'Why Customers Choose You');
+    assert.equal(byId.whereHeaded.title, "Where You're Headed");
+    assert.equal(byId.successLooksLike.title, 'Success Looks Like');
+    assert.equal(byId.observations.title, 'Initial Observations');
+    assert.equal(byId.assessment.title, "Max's Initial Assessment");
+    assert.equal(byId.learnMore.title, "Areas I'd Like To Learn More");
+    assert.equal(byId.conversations.title, "Conversations I'd Recommend Next");
+
+    for (const section of [byId.whoYouAre, byId.whoYouServe, byId.whyChooseYou, byId.whereHeaded, byId.successLooksLike]) {
       const sentences = section.body.split(/(?<=[.!?])\s+/).filter(Boolean);
       assert.ok(sentences.length >= 2 && sentences.length <= 4, section.id);
       assert.equal(/\n|•|Blueprint|operator-stated|ICP|Unknown:|Missing clear answer/i.test(section.body), false);
     }
-    assert.match(summary.sections[0].body, /Aji/);
-    assert.match(summary.sections[0].body, /recurring cleans/i);
-    assert.equal(/Service understanding reflects|anchors every other/i.test(summary.sections[0].body), false);
-    assert.match(summary.sections[5].body, /pricing philosophy/i);
-    assert.match(summary.sections[5].body, /capacity/i);
-    assert.equal(/^•/m.test(summary.sections[5].body), false);
+    assert.match(byId.whoYouAre.body, /Aji/);
+    assert.match(byId.whoYouAre.body, /recurring cleans/i);
+    assert.equal(/Service understanding reflects|anchors every other/i.test(byId.whoYouAre.body), false);
+
+    assert.ok(byId.observations.items.length >= 1);
+    assert.ok(byId.observations.items.length <= 5);
+    assert.match(byId.observations.items.join(' '), /reliable crews|commercial focus|positioning/i);
+    assert.equal(/should launch|recommend that you|campaign/i.test(byId.observations.items.join(' ')), false);
+
+    assert.equal(byId.assessment.ratings.length, 4);
+    for (const rating of byId.assessment.ratings) {
+      assert.ok(rating.stars >= 1 && rating.stars <= 5);
+      assert.ok(String(rating.explanation || '').length > 10);
+    }
+    assert.ok(byId.assessment.confidencePercent >= 1 && byId.assessment.confidencePercent <= 100);
+
+    assert.ok(byId.learnMore.items.length >= 1);
+    assert.match(byId.learnMore.items.join(' '), /Pricing philosophy/i);
+    assert.equal(/nothing outstanding|no major gaps/i.test(byId.learnMore.body + byId.learnMore.items.join(' ')), false);
+
+    assert.ok(byId.conversations.items.length >= 1);
+    assert.match(byId.conversations.body, /I'd enjoy exploring/i);
+  });
+
+  it('buildExecutiveSummary always identifies learn-more areas even when unknowns are empty', () => {
+    const filled = {
+      summary: 'A clear statement about the business.',
+      confidence: 0.85,
+      unknowns: [],
+    };
+    const summary = buildExecutiveSummary({
+      identity: filled,
+      services: filled,
+      idealCustomers: filled,
+      avoidCustomers: filled,
+      targetMarkets: filled,
+      competitiveAdvantages: filled,
+      brandVoice: filled,
+      campaignGoals: filled,
+      successMetrics: filled,
+    });
+    const learnMore = summary.sections.find((s) => s.id === 'learnMore');
+    assert.ok(learnMore.items.length >= 3);
+    assert.equal(/nothing outstanding/i.test(JSON.stringify(learnMore)), false);
   });
 });
 
