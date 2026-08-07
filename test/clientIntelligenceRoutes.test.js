@@ -86,7 +86,7 @@ describe('clientIntelligence routes (static)', () => {
     );
   });
 
-  it('ships client-intel UI with SPEC-084 experience markers', () => {
+  it('ships client-intel UI with SPEC-085 Executive Business Brief markers', () => {
     assert.match(uiSource, /Conversation/);
     assert.match(uiSource, /Business Blueprint/);
     assert.match(uiSource, /Approve Blueprint/);
@@ -96,11 +96,17 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /stickToBottom/);
     assert.match(uiSource, /Business Understanding/);
     assert.match(uiSource, /progress-fill/);
-    assert.match(uiSource, /My Understanding of Your Business/);
+    assert.match(uiSource, /Executive Business Brief/);
+    assert.match(uiSource, /Prepared by Max/);
+    assert.match(uiSource, /Connecting themes/);
+    assert.match(uiSource, /PREMIUM_LOAD_MS\s*=\s*3000/);
+    assert.match(uiSource, /Yes, this reflects my business/);
     assert.match(uiSource, /I'd like to refine this/);
+    assert.match(uiSource, /Let's keep talking/);
     assert.match(uiSource, /earned your trust/);
     assert.match(uiSource, /foundation Pulseforge will use/);
     assert.match(uiSource, /Return to Dashboard/);
+    assert.match(uiSource, /assessment-stars/);
     assert.match(uiSource, /2500/);
   });
 });

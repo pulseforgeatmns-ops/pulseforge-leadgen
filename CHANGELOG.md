@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Executive Business Brief ([SPEC-085](docs/specs/SPEC-085_Executive_Business_Brief.md))
+  - Client-facing consultant synthesis after interview: Who You Are → Conversations I'd Recommend Next
+  - Premium Understanding Transition (deliberate checklist; target 3–4s; min 2.5s; never stalls after backend)
+  - Evidence-backed Initial Observations + Max's Initial Assessment (stars + confidence %)
+  - Always identifies Areas I'd Like To Learn More; conversation starters (not prescriptions)
+  - Client validation: Yes / Refine / Keep talking → then editable Business Blueprint
+  - API field `executiveSummary` carries the Brief payload (title **Executive Business Brief**)
 - Client Intelligence Interview Experience ([SPEC-084](docs/specs/SPEC-084_Client_Intelligence_Interview_Experience.md))
   - Welcome → Discovery → Understanding → read-only Executive Summary → editable Blueprint → on-page completion
   - Live understanding progress (titles/confidence/unknowns only); narratives reserved for Understanding reveal

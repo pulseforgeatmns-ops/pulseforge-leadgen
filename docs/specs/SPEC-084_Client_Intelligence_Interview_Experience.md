@@ -113,3 +113,4 @@ None. Forward-compatible API fields only.
 - Adaptive questioning
 - Voice interview
 - Blueprint recalibration sessions
+- Executive Business Brief depth / share / PDF — see [SPEC-085](SPEC-085_Executive_Business_Brief.md)
