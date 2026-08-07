@@ -746,6 +746,10 @@ describe('blueprint revise + approve + playbook handoff', () => {
     const { turn } = await completeInterview(opts);
     const result = await approveBlueprint(turn.blueprint.id, opts);
     assert.equal(result.blueprint.status, 'approved');
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 'APPROVED');
+    assert.equal(result.message, 'approved');
+    assert.equal(result.alreadyApproved, false);
     assert.ok(result.playbook);
     assert.equal(result.playbook.status, 'pending_review');
     assert.deepEqual(result.playbook.preferredChannels, []);
@@ -761,7 +765,29 @@ describe('blueprint revise + approve + playbook handoff', () => {
 
     const again = await approveBlueprint(turn.blueprint.id, opts);
     assert.equal(again.alreadyApproved, true);
+    assert.equal(again.ok, true);
+    assert.equal(again.status, 'APPROVED');
+    assert.equal(again.message, 'already_approved');
     assert.equal(again.blueprint.status, 'approved');
+  });
+
+  it('treats APPROVED session retries as already_approved (no red error)', async () => {
+    const { opts, store } = withStore();
+    const { turn } = await completeInterview(opts);
+    const first = await approveBlueprint(turn.blueprint.id, opts);
+    assert.equal(first.alreadyApproved, false);
+
+    // Simulate stale UI race: session APPROVED but caller still holding in_review snapshot id.
+    await store.updateBlueprint(turn.blueprint.id, turn.blueprint.version, {
+      status: 'in_review',
+    });
+    await store.updateSession(turn.interviewId, { status: 'APPROVED' });
+
+    const again = await approveBlueprint(turn.blueprint.id, opts);
+    assert.equal(again.ok, true);
+    assert.equal(again.status, 'APPROVED');
+    assert.equal(again.message, 'already_approved');
+    assert.equal(again.alreadyApproved, true);
   });
 
   it('never overwrites an approved blueprint — revise creates new version', async () => {

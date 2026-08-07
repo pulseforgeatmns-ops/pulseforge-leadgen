@@ -18,6 +18,8 @@ const uiSource = fs.readFileSync(uiPath, 'utf8');
 const {
   createMemoryStore,
   startClientInterview,
+  postInterviewMessage,
+  approveBlueprint,
   ClientIntelligenceError,
 } = require('../services/clientIntelligenceInterview');
 
@@ -109,6 +111,24 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /assessment-stars/);
     assert.match(uiSource, /2500/);
   });
+
+  it('handles blueprint approval post-state without stuck loading or red APPROVED error', () => {
+    assert.match(uiSource, /Blueprint approved\. Client Playbook is ready\./);
+    assert.match(uiSource, /applyApprovedState/);
+    assert.match(uiSource, /approveInFlight/);
+    assert.match(uiSource, /already_approved|alreadyApproved/);
+    assert.match(uiSource, /sessionStatus\s*===\s*'APPROVED'/);
+    assert.match(uiSource, /playbook_prep/);
+    assert.match(uiSource, /approvalSuccess|Client Playbook is ready/);
+    assert.match(uiSource, /was APPROVED/);
+    assert.doesNotMatch(uiSource, /Session must be CLIENT_REVIEW to approve/);
+    // After Ready checklist, UI must land on complete / approved outcome.
+    assert.match(uiSource, /setPhase\('complete'\)/);
+    assert.match(uiSource, /renderCompletion/);
+    // Approve action must not stay actionable after approval.
+    assert.match(uiSource, /Blueprint approved/);
+    assert.match(uiSource, /els\.blueprintActions\.hidden\s*=\s*true/);
+  });
 });
 
 describe('clientIntelligence routes (http smoke)', () => {
@@ -135,6 +155,74 @@ describe('clientIntelligence routes (http smoke)', () => {
       assert.ok(res.json.interviewId);
       assert.equal(res.json.status, 'DISCOVERY');
       assert.equal(res.json.question.id, 'identity');
+    } finally {
+      await close();
+    }
+  });
+
+  it('approve endpoint is idempotent for already APPROVED sessions', async () => {
+    const store = createMemoryStore();
+    const opts = { store, useMemoryPlaybookStore: true };
+    const answers = [
+      'Acme Cleaning — premium commercial cleaning.',
+      'Recurring office cleans and deep cleans.',
+      'Property managers and professional offices.',
+      'Bargain hunters and one-off cheap jobs.',
+      'Manchester NH and nearby towns.',
+      'Reliable crews and clear communication.',
+      'Warm professional voice.',
+      'Book qualified walkthroughs in 90 days.',
+      'Walkthroughs booked and close rate.',
+    ];
+    const started = await startClientInterview({ clientId: 77 }, opts);
+    let turn = started;
+    for (const answer of answers) {
+      turn = await postInterviewMessage(started.interviewId, answer, opts);
+    }
+    assert.ok(turn.blueprint, 'expected blueprint before approve');
+    assert.equal(turn.status, 'CLIENT_REVIEW');
+
+    const app = express();
+    app.use(express.json());
+    app.post('/api/v1/blueprint/:id/approve', async (req, res) => {
+      try {
+        const result = await approveBlueprint(req.params.id, opts);
+        res.json(result);
+      } catch (err) {
+        const status = err instanceof ClientIntelligenceError ? err.status || 400 : 500;
+        res.status(status).json({
+          error: err.code || 'failed',
+          message: err.message,
+        });
+      }
+    });
+
+    const { base, close } = await listen(app);
+    try {
+      const first = await request(
+        base,
+        'POST',
+        '/api/v1/blueprint/' + encodeURIComponent(turn.blueprint.id) + '/approve',
+        {}
+      );
+      assert.equal(first.status, 200);
+      assert.equal(first.json.ok, true);
+      assert.equal(first.json.status, 'APPROVED');
+      assert.equal(first.json.alreadyApproved, false);
+      assert.equal(first.json.blueprint.status, 'approved');
+
+      const second = await request(
+        base,
+        'POST',
+        '/api/v1/blueprint/' + encodeURIComponent(turn.blueprint.id) + '/approve',
+        {}
+      );
+      assert.equal(second.status, 200);
+      assert.equal(second.json.ok, true);
+      assert.equal(second.json.status, 'APPROVED');
+      assert.equal(second.json.message, 'already_approved');
+      assert.equal(second.json.alreadyApproved, true);
+      assert.doesNotMatch(String(second.json.message || ''), /was APPROVED/);
     } finally {
       await close();
     }

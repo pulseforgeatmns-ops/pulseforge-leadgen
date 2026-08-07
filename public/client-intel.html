@@ -660,11 +660,13 @@
     const state = {
       phase: 'welcome',
       interviewId: null,
+      sessionStatus: null,
       blueprint: null,
       executiveSummary: null,
       understanding: null,
       stickToBottom: true,
       pendingCompletion: null,
+      approveInFlight: false,
     };
 
     const els = {
@@ -862,12 +864,37 @@
       els.blueprintStatus.textContent = 'Executive Business Brief · read only';
     }
 
+    function isBlueprintApproved(bp) {
+      return !!(bp && (bp.status === 'approved' || state.sessionStatus === 'APPROVED'));
+    }
+
+    function setApproveButtonState(bp, { editable } = { editable: true }) {
+      const approved = isBlueprintApproved(bp);
+      if (approved) {
+        els.blueprintActions.hidden = false;
+        els.reviseBtn.disabled = true;
+        els.approveBtn.disabled = true;
+        els.approveBtn.textContent = 'Blueprint approved';
+        return;
+      }
+      const canEdit = editable && bp && (bp.status === 'draft' || bp.status === 'in_review');
+      els.blueprintActions.hidden = !editable;
+      els.reviseBtn.disabled = !canEdit || state.approveInFlight;
+      els.approveBtn.disabled = !canEdit || state.approveInFlight;
+      els.approveBtn.textContent = state.approveInFlight ? 'Approving…' : 'Approve Blueprint';
+    }
+
     function renderBlueprint(bp, { editable } = { editable: true }) {
       state.blueprint = bp;
       if (!bp) {
         els.sidePanel.innerHTML = '<p class="blueprint-empty">No blueprint yet.</p>';
         els.reviseBtn.disabled = true;
         els.approveBtn.disabled = true;
+        els.approveBtn.textContent = 'Approve Blueprint';
+        return;
+      }
+      if (isBlueprintApproved(bp) && state.phase === 'complete') {
+        renderCompletion({ blueprint: bp, playbook: state.pendingCompletion && state.pendingCompletion.playbook });
         return;
       }
       const sections = bp.sections || {};
@@ -901,7 +928,7 @@
             (unknowns.length
               ? '<div class="unknowns">Unknowns: ' + escapeHtml(unknowns.join('; ')) + '</div>'
               : '') +
-            (editable
+            (editable && !isBlueprintApproved(bp)
               ? '<textarea data-key="' + escapeHtml(key) + '">' + escapeHtml(summary) + '</textarea>'
               : '') +
           '</article>'
@@ -909,38 +936,64 @@
       }).join('');
       els.sidePanel.innerHTML = html;
       els.sidePanelTitle.textContent = 'Business Blueprint';
-      els.sidePanelSub.textContent = editable
+      els.sidePanelSub.textContent = editable && !isBlueprintApproved(bp)
         ? 'Editable artifact of Max\'s understanding. Adjust anything that needs sharpening.'
         : 'Approved foundation for future recommendations.';
-      els.blueprintActions.hidden = !editable;
-      const canEdit = editable && (bp.status === 'draft' || bp.status === 'in_review');
-      els.reviseBtn.disabled = !canEdit;
-      els.approveBtn.disabled = !canEdit || bp.status === 'approved';
+      setApproveButtonState(bp, { editable: editable && !isBlueprintApproved(bp) });
+      if (isBlueprintApproved(bp)) {
+        els.blueprintActions.hidden = true;
+      }
       els.blueprintStatus.textContent =
         bp.status + ' · v' + bp.version +
         (bp.playbookId ? ' · playbook ' + bp.playbookId + '@' + bp.playbookVersion : '');
     }
 
     function renderCompletion(result) {
-      const version = (result.blueprint && result.blueprint.version) || '1';
+      const bp = (result && result.blueprint) || state.blueprint;
+      const playbook = (result && result.playbook) || null;
+      const version = (bp && bp.version) || '1';
+      const playbookLabel = playbook && playbook.id
+        ? escapeHtml(String(playbook.id)) + (playbook.version ? '@' + escapeHtml(String(playbook.version)) : '')
+        : 'Draft Client Playbook';
       els.sidePanel.innerHTML =
-        '<div class="completion-card">' +
-          '<h3>Business Blueprint Approved</h3>' +
+        '<div class="completion-card" id="approvalSuccess">' +
+          '<h3>Blueprint approved. Client Playbook is ready.</h3>' +
           '<p>Thank you.</p>' +
           '<p>This Business Blueprint is now the foundation Pulseforge will use to understand your business.</p>' +
           '<ul class="completion-checks">' +
-            '<li>Version ' + escapeHtml(String(version)) + ' created</li>' +
-            '<li>Draft Client Playbook created</li>' +
+            '<li>Version ' + escapeHtml(String(version)) + ' approved</li>' +
+            '<li>Client Playbook ready · ' + playbookLabel + '</li>' +
             '<li>Awaiting operator review</li>' +
           '</ul>' +
           '<p><strong>Max</strong></p>' +
           '<p>Every future recommendation will build on this understanding.</p>' +
           '<p>As your business evolves, we\'ll continue refining this blueprint together.</p>' +
         '</div>';
-      els.sidePanelTitle.textContent = 'Complete';
-      els.sidePanelSub.textContent = 'Our next conversation will focus on growing your business.';
+      els.sidePanelTitle.textContent = 'Client Playbook';
+      els.sidePanelSub.textContent = 'Blueprint approved. Client Playbook is ready.';
       els.blueprintActions.hidden = true;
-      els.blueprintStatus.textContent = 'Awaiting operator review';
+      els.approveBtn.disabled = true;
+      els.approveBtn.textContent = 'Blueprint approved';
+      els.reviseBtn.disabled = true;
+      els.blueprintStatus.textContent = 'APPROVED · Client Playbook ready';
+    }
+
+    function applyApprovedState(result, { alreadyApproved } = {}) {
+      state.sessionStatus = 'APPROVED';
+      state.approveInFlight = false;
+      state.pendingCompletion = result || state.pendingCompletion;
+      if (result && result.blueprint) {
+        state.blueprint = result.blueprint;
+      } else if (state.blueprint) {
+        state.blueprint = { ...state.blueprint, status: 'approved' };
+      }
+      showError('');
+      setPhase('complete');
+      if (alreadyApproved) {
+        addBubble('meta', 'Blueprint already approved. Client Playbook is ready.');
+      }
+      renderCompletion(state.pendingCompletion || { blueprint: state.blueprint });
+      els.sessionStatus.textContent = 'APPROVED · Client Playbook ready';
     }
 
     function setComposerEnabled(on) {
@@ -969,9 +1022,14 @@
       } else if (phase === 'blueprint') {
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Business Blueprint';
-      } else if (phase === 'playbook_prep' || phase === 'complete') {
+      } else if (phase === 'playbook_prep') {
         setComposerEnabled(false);
-        els.chatPanelTitle.textContent = phase === 'complete' ? 'Complete' : 'Preparing Playbook';
+        els.chatPanelTitle.textContent = 'Preparing Playbook';
+        els.blueprintActions.hidden = true;
+      } else if (phase === 'complete') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = 'Complete';
+        els.blueprintActions.hidden = true;
       }
     }
 
@@ -1057,6 +1115,7 @@
 
     async function enterUnderstandingFlow(data) {
       state.interviewId = data.interviewId || data.id || state.interviewId;
+      if (data.status) state.sessionStatus = data.status;
       state.blueprint = data.blueprint || null;
       state.executiveSummary = data.executiveSummary || null;
       renderProgress(data.progress);
@@ -1088,6 +1147,7 @@
 
     function applyDiscoveryPayload(data, { skipMessage } = {}) {
       state.interviewId = data.interviewId || data.id;
+      if (data.status) state.sessionStatus = data.status;
       els.sessionStatus.textContent =
         'Session ' + state.interviewId + ' · ' + data.status +
         (data.currentStage ? ' · ' + data.currentStage : '');
@@ -1223,21 +1283,82 @@
     els.approveBtn.addEventListener('click', async () => {
       try {
         if (!state.blueprint) return;
+
+        // Already approved — friendly idempotent UI, never call approve again.
+        if (
+          state.sessionStatus === 'APPROVED' ||
+          state.blueprint.status === 'approved' ||
+          state.phase === 'complete'
+        ) {
+          applyApprovedState(state.pendingCompletion || { blueprint: state.blueprint }, {
+            alreadyApproved: true,
+          });
+          return;
+        }
+
+        if (state.approveInFlight || state.phase === 'playbook_prep') return;
+
+        state.approveInFlight = true;
+        els.approveBtn.disabled = true;
+        els.reviseBtn.disabled = true;
+        els.approveBtn.textContent = 'Approving…';
+        els.blueprintActions.hidden = true;
         setPhase('playbook_prep');
         addBubble('meta', 'Preparing your Client Playbook…');
-        const pending = api('POST', '/api/v1/blueprint/' + encodeURIComponent(state.blueprint.id) + '/approve', {});
-        const result = await runChecklist(PLAYBOOK_STEPS, 2500, pending);
-        state.pendingCompletion = result;
-        setPhase('complete');
-        addBubble(
-          'assistant',
-          'Excellent.\n\nI now understand your business well enough to begin helping it grow.\n\nEvery recommendation Pulseforge makes will build on this understanding.\n\nOur next conversation will focus on growing your business.'
+
+        const pending = api(
+          'POST',
+          '/api/v1/blueprint/' + encodeURIComponent(state.blueprint.id) + '/approve',
+          {}
         );
-        renderCompletion(result);
-        els.sessionStatus.textContent = 'Complete · Awaiting operator review';
+        const result = await runChecklist(PLAYBOOK_STEPS, 2500, pending);
+
+        // Refresh session/artifacts after approval so local status matches server.
+        let fresh = null;
+        if (state.interviewId) {
+          try {
+            fresh = await api('GET', '/api/v1/interview/' + encodeURIComponent(state.interviewId));
+          } catch (_) {
+            fresh = null;
+          }
+        }
+        if (fresh && fresh.status) state.sessionStatus = fresh.status;
+        if (fresh && fresh.blueprint) {
+          state.blueprint = fresh.blueprint;
+        } else if (result && result.blueprint) {
+          state.blueprint = result.blueprint;
+        }
+
+        const already =
+          !!(result && (result.alreadyApproved || result.message === 'already_approved'));
+        applyApprovedState(
+          {
+            ...(result || {}),
+            blueprint: state.blueprint || (result && result.blueprint),
+            playbook: (result && result.playbook) || null,
+          },
+          { alreadyApproved: already }
+        );
+        if (!already) {
+          addBubble(
+            'assistant',
+            'Excellent.\n\nI now understand your business well enough to begin helping it grow.\n\nEvery recommendation Pulseforge makes will build on this understanding.\n\nOur next conversation will focus on growing your business.'
+          );
+        }
       } catch (err) {
-        showError(err.message);
+        const msg = String((err && err.message) || '');
+        if (/already_approved|was APPROVED|already approved/i.test(msg)) {
+          applyApprovedState(state.pendingCompletion || { blueprint: state.blueprint }, {
+            alreadyApproved: true,
+          });
+          return;
+        }
+        state.approveInFlight = false;
+        showError(msg);
         setPhase('blueprint');
+        if (state.blueprint) {
+          renderBlueprint(state.blueprint, { editable: true });
+        }
       }
     });
 

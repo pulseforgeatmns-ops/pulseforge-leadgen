@@ -5159,27 +5159,42 @@ async function resumeInterview(sessionId, opts = {}) {
   });
 }
 
+function alreadyApprovedPayload(blueprint, playbook = null) {
+  const bp = publicBlueprint(blueprint);
+  let pb = playbook;
+  if (!pb && blueprint) {
+    const id = blueprint.playbook_id || blueprint.playbookId;
+    const version = blueprint.playbook_version || blueprint.playbookVersion;
+    if (id) {
+      pb = {
+        id,
+        version,
+        status: 'pending_review',
+      };
+    }
+  }
+  return {
+    ok: true,
+    status: 'APPROVED',
+    message: 'already_approved',
+    blueprint: bp,
+    playbook: pb,
+    alreadyApproved: true,
+  };
+}
+
 /**
  * Approve blueprint: immutable snapshot + pending_review playbook handoff.
+ * Idempotent when the blueprint or session is already APPROVED.
  */
 async function approveBlueprint(blueprintId, opts = {}) {
   const store = await resolveStore(opts);
-  const current = await store.getBlueprint(blueprintId);
+  let current = await store.getBlueprint(blueprintId);
   if (!current) {
     throw new ClientIntelligenceError('not_found', 'Blueprint not found', 404);
   }
   if (current.status === 'approved') {
-    return {
-      blueprint: publicBlueprint(current),
-      playbook: current.playbook_id
-        ? {
-            id: current.playbook_id,
-            version: current.playbook_version,
-            status: 'pending_review',
-          }
-        : null,
-      alreadyApproved: true,
-    };
+    return alreadyApprovedPayload(current);
   }
   if (!['draft', 'in_review'].includes(current.status)) {
     throw new ClientIntelligenceError(
@@ -5192,6 +5207,31 @@ async function approveBlueprint(blueprintId, opts = {}) {
   if (!session) {
     throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
   }
+
+  // Session already APPROVED (retry, race, or stale UI) — never error red.
+  if (session.status === 'APPROVED') {
+    const latest = await store.getBlueprint(
+      session.interview_state && session.interview_state.blueprintId
+        ? session.interview_state.blueprintId
+        : current.id,
+      session.interview_state && session.interview_state.blueprintVersion
+        ? session.interview_state.blueprintVersion
+        : undefined
+    );
+    const approvedBp =
+      (latest && latest.status === 'approved' && latest) ||
+      (current.status === 'approved' && current) ||
+      latest ||
+      current;
+    return alreadyApprovedPayload(approvedBp, session.interview_state && session.interview_state.playbookId
+      ? {
+          id: session.interview_state.playbookId,
+          version: session.interview_state.playbookVersion,
+          status: 'pending_review',
+        }
+      : null);
+  }
+
   if (session.status !== 'CLIENT_REVIEW') {
     throw new ClientIntelligenceError(
       'invalid_transition',
@@ -5228,6 +5268,9 @@ async function approveBlueprint(blueprintId, opts = {}) {
   });
 
   return {
+    ok: true,
+    status: 'APPROVED',
+    message: 'approved',
     blueprint: publicBlueprint(approved),
     playbook: handoff.playbook,
     sectionProvenance: handoff.sectionProvenance,
