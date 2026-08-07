@@ -811,6 +811,14 @@ function normalizeBusinessPhrase(phrase) {
   let s = String(phrase || '').trim();
   if (!s) return '';
 
+  // Repair spaced punctuation that should be compound hyphens.
+  s = s
+    .replace(/\b(commercial|residential|short[\s-]?term|high[\s-]?traffic|low|great|move[\s-]?in)\s*[—–]\s*(focused|term|traffic|price|fit|out)\b/gi, '$1-$2')
+    .replace(/\b(low|great)\s+[—–-]\s+(price|fit)\b/gi, '$1-$2')
+    .replace(/\bcommercial\s+[—–-]\s+focused\b/gi, 'commercial-focused')
+    .replace(/\bgreat\s+[—–-]\s+fit\b/gi, 'great-fit')
+    .replace(/\blow\s+[—–-]\s+price\b/gi, 'low-price');
+
   s = s
     .replace(/\bSTR\b/g, 'short-term rental')
     .replace(/\bshort[\s-]?term\s+rental\s+companies\b/gi, 'short-term rental companies')
@@ -835,6 +843,31 @@ function normalizeBusinessPhrase(phrase) {
 
   // Avoid double "cleaning cleaning"
   s = s.replace(/\bcleaning cleaning\b/gi, 'cleaning');
+  return s;
+}
+
+/**
+ * Clean a candidate business name — strip pronouns / intro bleed.
+ * "Anchor Cleaning we" → "Anchor Cleaning"
+ */
+function sanitizeBusinessName(name) {
+  let s = String(name || '').trim();
+  if (!s) return '';
+  s = s
+    .replace(/\s+(?:we|we're|we are|i|i'm|i am|my company|our company|the company)\b.*$/i, '')
+    .replace(/^(?:we are|we're|i am|i'm|my company is|our company is)\s+/i, '')
+    .replace(/[—–,:;.\s]+$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  // Prefer canonical Anchor Cleaning when present.
+  if (/\banchor\s+cleaning\b/i.test(s) || /\banchor\b/i.test(s)) {
+    if (/\banchor\s+cleaning\b/i.test(String(name || '')) || /\banchor\s+cleaning\b/i.test(s)) {
+      return 'Anchor Cleaning';
+    }
+    if (/^anchor\b/i.test(s) && s.split(/\s+/).length <= 2) return 'Anchor';
+  }
+  // Drop trailing lowercase filler words that aren't part of a proper name.
+  s = s.replace(/\s+(?:we|are|is|a|an|the|and|for|to)$/i, '').trim();
   return s;
 }
 
@@ -919,28 +952,41 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
 
   switch (sectionKey) {
     case 'identity': {
-      const dash = cleaned.match(/^(.+?)\s*[—–-]\s*(.+)$/);
+      // Prefer em/en dash or spaced hyphen as name/description separator —
+      // never split on compound-word hyphens like commercial-focused.
+      const dash =
+        cleaned.match(/^(.+?)\s+[—–]\s+(.+)$/) ||
+        cleaned.match(/^(.+?)[—–](.+)$/) ||
+        cleaned.match(/^(.+?)\s+-\s+(.+)$/);
+      const weAre = cleaned.match(/^(.+?)\s+we(?:'re| are)\s+(.+)$/i);
       if (dash) {
-        next.business_name = dash[1].trim().replace(/[.!?,]+$/, '');
-        next.business_description = normalizeBusinessPhrase(
+        next.business_name = sanitizeBusinessName(dash[1]);
+        const desc = firstSentence(
           stripLeadingWeAre(dash[2]).replace(/^(a|an|the)\s+/i, '')
+        );
+        next.business_description = normalizeBusinessPhrase(desc);
+      } else if (weAre) {
+        next.business_name = sanitizeBusinessName(weAre[1]);
+        next.business_description = normalizeBusinessPhrase(
+          firstSentence(weAre[2].replace(/^(a|an|the)\s+/i, ''))
         );
       } else {
         const named = cleaned.match(
           /^([A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+){0,5})\s+(?:is|are|provides?|offers?)\s+(.+)$/i
         );
         if (named) {
-          next.business_name = named[1].trim();
+          next.business_name = sanitizeBusinessName(named[1]);
           next.business_description = normalizeBusinessPhrase(
-            stripLeadingWeAre(named[2]).replace(/^(a|an|the)\s+/i, '')
+            firstSentence(stripLeadingWeAre(named[2]).replace(/^(a|an|the)\s+/i, ''))
           );
         } else {
-          next.business_description = normalizeBusinessPhrase(cleaned);
+          next.business_description = normalizeBusinessPhrase(firstSentence(cleaned));
           if (/\banchor(?:\s+cleaning)?\b/i.test(cleaned)) {
             next.business_name = /anchor\s+cleaning/i.test(cleaned) ? 'Anchor Cleaning' : 'Anchor';
           }
         }
       }
+      next.business_name = sanitizeBusinessName(next.business_name);
       if (/commercial/i.test(cleaned)) next.growth_focus = 'commercial cleaning';
       if (/residential/i.test(cleaned) && !next.vertical_focus) {
         next.vertical_focus = /commercial/i.test(cleaned)
@@ -978,7 +1024,7 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
       break;
     }
     case 'competitiveAdvantages': {
-      next.differentiation = normalizeBusinessPhrase(cleaned);
+      next.differentiation = synthesizeDifferentiationSnippet(cleaned);
       break;
     }
     case 'brandVoice': {
@@ -1039,7 +1085,7 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
       }
       break;
     case 'competitiveAdvantages':
-      next.differentiation = substance;
+      next.differentiation = synthesizeDifferentiationSnippet(substance);
       break;
     case 'brandVoice':
       next.brand_voice = normalizeBrandVoiceTone(substance);
@@ -1062,13 +1108,61 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
 
 function normalizeBrandVoiceTone(text) {
   let tone = String(text || '').trim();
-  tone = tone
-    .replace(/^(?:anchor(?:\s+cleaning)?'?s\s+)/i, '')
-    .replace(/^(?:the\s+)?(?:brand\s+)?voice should (?:sound|feel|read|be)\s+/i, '')
-    .replace(/^(?:should\s+(?:sound|feel|read|be)\s+)/i, '')
-    .replace(/^(?:sound|feel|read|be)\s+/i, '')
+  // Peel lead-ins repeatedly until stable.
+  for (let i = 0; i < 4; i += 1) {
+    const before = tone;
+    tone = tone
+      .replace(/^(?:anchor(?:\s+cleaning)?(?:'s|’s)?\s+)/i, '')
+      .replace(/^(?:the\s+business(?:'s|’s)?\s+)/i, '')
+      .replace(/^(?:the\s+)?(?:brand\s+)?voice should (?:sound|feel|read|be)\s+/i, '')
+      .replace(/^(?:brand voice should (?:sound|feel|read|be)\s+)/i, '')
+      .replace(/^(?:should\s+(?:sound|feel|read|be)\s+)/i, '')
+      .replace(/^(?:sound|feel|read|be)\s+/i, '')
+      .replace(/^(?:anchor(?:'s|’s)\s+)/i, '')
+      .trim();
+    if (tone === before) break;
+  }
+  // If a long paragraph remains, keep the adjective-list head.
+  const adjList = tone.match(
+    /^((?:calm|professional|reliable|direct|friendly|warm|clear|confident|easy to work with)(?:(?:,\s*(?:and\s+)?|\s+and\s+)(?:calm|professional|reliable|direct|friendly|warm|clear|confident|easy to work with)){1,6})/i
+  );
+  if (adjList) tone = adjList[1];
+  else tone = firstSentence(tone);
+  tone = normalizeBusinessPhrase(tone);
+  // Final possessive bleed guard.
+  tone = tone.replace(/^(?:anchor(?:\s+cleaning)?(?:'s|’s)\s+)/i, '').trim();
+  return tone;
+}
+
+/**
+ * Compress a differentiation answer into one short synthesized phrase.
+ * Never keep multi-sentence raw transcript paragraphs.
+ */
+function synthesizeDifferentiationSnippet(text) {
+  let s = stripInterviewQuestionEcho(String(text || '').trim());
+  s = s
+    .replace(/^competitive edge is described as\s+/i, '')
+    .replace(/^customers? choose (?:us|anchor(?:\s+cleaning)?|this business) because(?:\s+of)?\s+/i, '')
     .trim();
-  return normalizeBusinessPhrase(tone);
+  if (!s) return '';
+
+  // Prefer trust / responsiveness framing when present.
+  if (/\btrust\b/i.test(s) && /\b(responsive|consistent|accountab|chase|confidence|done right)\b/i.test(s)) {
+    return 'trust, responsiveness, and confidence that the work will be done right without customers needing to chase the team';
+  }
+  if (/\btrust\b/i.test(s) && /\b(show up|communicate|solve|taken care)\b/i.test(s)) {
+    return 'trust that the team shows up consistently, communicates clearly, and solves problems quickly';
+  }
+  if (/reliable crews/i.test(s)) return 'reliable crews and clear communication';
+
+  // Otherwise first sentence, capped.
+  let snippet = firstSentence(s);
+  snippet = normalizeBusinessPhrase(snippet);
+  const words = snippet.split(/\s+/);
+  if (words.length > 28) {
+    snippet = `${words.slice(0, 28).join(' ')}…`;
+  }
+  return snippet.replace(/[.!?]+$/, '').trim();
 }
 
 /**
@@ -1078,15 +1172,19 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
   const f = cloneNormalizedFacts(facts);
   const prior = priorSections || emptySections();
   const sections = emptySections();
-  const name = f.business_name || '';
+  const name = sanitizeBusinessName(f.business_name || '');
 
   const identityBits = [];
   if (name && f.business_description) {
-    identityBits.push(`${name} is ${/^[aeiou]/i.test(f.business_description) ? 'an' : 'a'} ${f.business_description}`);
+    const desc = normalizeBusinessPhrase(firstSentence(f.business_description));
+    const article = /^[aeiou]/i.test(desc) ? 'an' : 'a';
+    identityBits.push(`${name} is ${article} ${desc}`);
   } else if (name) {
     identityBits.push(`${name} is a cleaning company`);
   } else if (f.business_description) {
-    identityBits.push(`The business is understood as ${f.business_description}`);
+    identityBits.push(
+      `The business is understood as ${normalizeBusinessPhrase(firstSentence(f.business_description))}`
+    );
   }
   sections.identity = {
     ...(prior.identity || emptySection()),
@@ -1227,11 +1325,13 @@ function stripInterviewQuestionEcho(text) {
   }
 
   // Strip common answer preambles that restate the question.
+  // Only normalize spaced dashes — never rewrite compound hyphens (commercial-focused).
   s = s
     .replace(/^(?:the (?:answer|decision|tip|thing) is|it(?:'s| is)|that (?:is|would be))\s+/i, '')
     .replace(/^(?:both\s*[-–—:]\s*)/i, '')
     .replace(/^(?:well,?\s+)/i, '')
-    .replace(/\s*[—–-]\s*/g, ' — ')
+    .replace(/\s+[—–]\s+/g, ' — ')
+    .replace(/\s+-\s+/g, ' — ')
     .trim();
 
   return s.replace(/\s{2,}/g, ' ').trim();
@@ -1296,21 +1396,23 @@ function cleanRawAnswer(sectionKey, text) {
 function extractBusinessName(identitySummary) {
   const s = String(identitySummary || '').trim();
   if (!s) return '';
+  if (/\banchor\s+cleaning\b/i.test(s)) return 'Anchor Cleaning';
   const named = s.match(
     /^([A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+){0,5})\s+(?:is|are)\b/
   );
-  if (named) return named[1].trim();
+  if (named) return sanitizeBusinessName(named[1]);
   const cleaning = s.match(/\b(Anchor(?:\s+Cleaning)?)\b/i);
-  if (cleaning) return cleaning[1].replace(/\bcleaning\b/i, 'Cleaning');
+  if (cleaning) return sanitizeBusinessName(cleaning[1]);
   return '';
 }
 
 function businessSubject(name, { possessive = false } = {}) {
-  if (!name) return possessive ? "the business's" : 'the business';
+  const cleaned = sanitizeBusinessName(name) || String(name || '').trim();
+  if (!cleaned) return possessive ? "the business's" : 'the business';
   if (possessive) {
-    return /s$/i.test(name) ? `${name}'` : `${name}'s`;
+    return /s$/i.test(cleaned) ? `${cleaned}'` : `${cleaned}'s`;
   }
-  return name;
+  return cleaned;
 }
 
 /**
@@ -1457,12 +1559,9 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
     case 'voice': {
       let tone = normalizeBrandVoiceTone(substance);
       tone = midSentence(tone);
-      if (!tone) return '';
-      // Prefer "feel" for adjective lists; avoid "sound anchor's …"
-      const shortName = name.replace(/\s+Cleaning$/i, '') || name;
-      const voicePossessive = shortName
-        ? businessSubject(shortName, { possessive: true })
-        : possessive;
+      if (!tone || /^(?:anchor|the business)\b/i.test(tone)) return '';
+      const cleanName = sanitizeBusinessName(name) || name;
+      const voicePossessive = businessSubject(cleanName || 'the business', { possessive: true });
       return `${voicePossessive} brand voice should feel ${tone}`;
     }
     case 'goals': {
@@ -1518,12 +1617,19 @@ function summarizeSection(sectionKey, statements) {
 
   switch (sectionKey) {
     case 'identity': {
-      const dash = latest.match(/^(.+?)\s*[—–-]\s*(.+)$/);
-      if (dash) {
-        const name = dash[1].trim().replace(/[.!?,]+$/, '');
-        const desc = stripLeadingWeAre(dash[2]).replace(/^(a|an|the)\s+/i, '');
+      const dash =
+        latest.match(/^(.+?)\s+[—–]\s+(.+)$/) ||
+        latest.match(/^(.+?)[—–](.+)$/) ||
+        latest.match(/^(.+?)\s+-\s+(.+)$/);
+      const weAre = latest.match(/^(.+?)\s+we(?:'re| are)\s+(.+)$/i);
+      if (dash || weAre) {
+        const parts = dash || weAre;
+        const name = sanitizeBusinessName(parts[1].trim().replace(/[.!?,]+$/, ''));
+        const desc = firstSentence(
+          stripLeadingWeAre(parts[2]).replace(/^(a|an|the)\s+/i, '')
+        );
         return [
-          ensurePeriod(`${name} is ${/^[aeiou]/i.test(desc) ? 'an' : 'a'} ${desc}`),
+          ensurePeriod(`${name} is ${/^[aeiou]/i.test(desc) ? 'an' : 'a'} ${normalizeBusinessPhrase(desc)}`),
           'This identity framing is how the operator describes the business today, and it anchors every other Blueprint section.',
         ].join(' ');
       }
@@ -2084,28 +2190,29 @@ function sectionConfidence(section) {
 /**
  * Evidence-connected observations — not recommendations, not strategy.
  * Built from normalized facts / synthesized claims. Maximum five.
+ * Each observation is one concise sentence — never a raw answer paragraph.
  */
 function composeObservations(sections, normalizedFacts = null) {
   const facts = normalizedFacts || emptyNormalizedFacts();
   const s = (key) => (sections && sections[key]) || emptySection();
   const observations = [];
-  const name =
-    facts.business_name ||
-    extractBusinessName(s('identity').summary) ||
-    'The business';
+  const name = sanitizeBusinessName(
+    facts.business_name || extractBusinessName(s('identity').summary) || 'The business'
+  );
   const shortName = String(name).replace(/\s+Cleaning$/i, '') || name;
+  const possessiveShort = /s$/i.test(shortName) ? `${shortName}'` : `${shortName}'s`;
 
   if (facts.differentiation || coreClaim(s('competitiveAdvantages').summary)) {
-    const edge =
+    const edge = synthesizeDifferentiationSnippet(
       facts.differentiation ||
-      midSentence(
-        String(coreClaim(s('competitiveAdvantages').summary) || '')
-          .replace(/^Competitive edge is described as\s+/i, '')
-          .trim()
-      );
-    if (edge && !containsRawPromptFragment(edge)) {
+        String(coreClaim(s('competitiveAdvantages').summary) || '').replace(
+          /^Competitive edge is described as\s+/i,
+          ''
+        )
+    );
+    if (edge && !containsRawPromptFragment(edge) && edge.split(/\s+/).length <= 40) {
       observations.push(
-        `${shortName}'s differentiation centers on ${edge} — a consistent reason customers choose them.`
+        `${possessiveShort} differentiation centers on ${edge}.`
       );
     }
   }
@@ -2123,11 +2230,16 @@ function composeObservations(sections, normalizedFacts = null) {
   if (facts.ninety_day_outcomes || facts.growth_focus) {
     const goal =
       facts.growth_focus && /commercial/i.test(facts.growth_focus)
-        ? `${shortName}'s near-term growth goal is to build a clearer, repeatable path to commercial cleaning opportunities`
-        : `${shortName}'s near-term growth goal is ${midSentence(
-            normalizeBusinessPhrase(facts.ninety_day_outcomes || facts.growth_focus)
+        ? `${possessiveShort} near-term growth goal is to build a clearer, repeatable path to commercial cleaning opportunities`
+        : `${possessiveShort} near-term growth goal is ${midSentence(
+            firstSentence(normalizeBusinessPhrase(facts.ninety_day_outcomes || facts.growth_focus))
           )}`;
-    if (goal && !containsRawPromptFragment(goal) && !/would feel successful/i.test(goal)) {
+    if (
+      goal &&
+      !containsRawPromptFragment(goal) &&
+      !/would feel successful/i.test(goal) &&
+      goal.split(/\s+/).length <= 40
+    ) {
       observations.push(goal);
     }
   }
@@ -2136,27 +2248,15 @@ function composeObservations(sections, normalizedFacts = null) {
     observations.push(
       `Geographic attention concentrates first in ${facts.geography.join(', ')}, which keeps discovery from spreading too thin.`
     );
-  } else if (coreClaim(s('targetMarkets').summary)) {
-    const marketLine = synthesizeNormalizedFact('markets', s('targetMarkets').summary, {
-      businessName: name,
-    });
-    if (marketLine && !containsRawPromptFragment(marketLine) && !/both geography is/i.test(marketLine)) {
-      observations.push(marketLine.replace(/\.$/, ''));
-    }
   }
 
-  if (facts.brand_voice && facts.differentiation) {
-    observations.push(
-      `Differentiation and voice reinforce each other: the market should experience a ${normalizeBrandVoiceTone(
-        facts.brand_voice
-      )} promise that matches how the work is delivered.`
-    );
-  } else if (facts.brand_voice) {
-    observations.push(
-      `Brand tone is already intentional — ${normalizeBrandVoiceTone(
-        facts.brand_voice
-      )} — which helps keep later messaging authentic.`
-    );
+  if (facts.brand_voice) {
+    const tone = normalizeBrandVoiceTone(facts.brand_voice);
+    if (tone && !/anchor/i.test(tone)) {
+      observations.push(
+        `${possessiveShort} brand voice reinforces its positioning by sounding ${tone}.`
+      );
+    }
   }
 
   if ((facts.success_metrics || []).length) {
@@ -2178,8 +2278,18 @@ function composeObservations(sections, normalizedFacts = null) {
   }
 
   return observations
-    .filter((line) => line && !containsRawPromptFragment(line))
-    .filter((line) => !/would feel successful|we will know|both geography is|brand voice should sound anchor/i.test(line))
+    .map((line) => String(line || '').trim())
+    .filter(Boolean)
+    .filter((line) => !containsRawPromptFragment(line))
+    .filter(
+      (line) =>
+        !/would feel successful|we will know|both geography is|brand voice should sound anchor|Anchor Cleaning we|a Anchor|anchor'?s calm|low — price|great — fit/i.test(
+          line
+        )
+    )
+    // One sentence only — drop anything that still looks like a paragraph dump.
+    .map((line) => firstSentence(line))
+    .filter((line) => line.split(/\s+/).length <= 45)
     .slice(0, 5)
     .map((line) => ensurePeriod(line));
 }
@@ -2361,9 +2471,10 @@ function buildExecutiveSummary(sections, opts = {}) {
     : null;
   const clean = sanitizeSectionsForBrief(fromNormalized || sections);
   const s = (key) => clean[key] || emptySection();
-  const businessName =
+  const businessName = sanitizeBusinessName(
     (normalizedFacts && normalizedFacts.business_name) ||
-    extractBusinessName(s('identity').summary);
+      extractBusinessName(s('identity').summary)
+  );
   const briefOpts = { businessName, normalizedFacts };
   const unknownLabels = collectUnknownLabels(clean);
   const learnMoreItems = composeLearnMoreItems(unknownLabels);
@@ -2456,7 +2567,7 @@ function buildExecutiveSummary(sections, opts = {}) {
   }
 
   const bleedRe =
-    /would feel successful if|we will know the growth work|both geography is|anchor'?s brand voice should sound|when a great-fit customer chooses|to say short term/i;
+    /would feel successful if|we will know the growth work|both geography is|anchor'?s brand voice should sound|when a great-fit customer chooses|to say short term|Anchor Cleaning we|a Anchor|anchor'?s calm|low — price|great — fit|we'?s brand voice/i;
   const scrubBleed = (body) =>
     String(body || '')
       .split(/(?<=[.!?])\s+/)
@@ -4389,6 +4500,8 @@ module.exports = {
   parseCorrectionMessage,
   normalizeBusinessPhrase,
   normalizeBrandVoiceTone,
+  sanitizeBusinessName,
+  synthesizeDifferentiationSnippet,
   emptyNormalizedFacts,
   ingestAnswerIntoNormalizedFacts,
   applyCorrectionToNormalizedFacts,

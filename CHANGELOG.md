@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- Executive Business Brief name/voice/observation polish ([SPEC-085](docs/specs/SPEC-085_Executive_Business_Brief.md))
+  - Sanitize business names (`Anchor Cleaning we` → `Anchor Cleaning`); never split on compound hyphens like `commercial-focused`
+  - Brand voice strips possessive lead-ins (`anchor’s calm…` → `calm, professional, reliable, and easy to work with`)
+  - Observations are one concise synthesized sentence each — no raw answer paragraph dumps
+  - Grammar guards: no `a Anchor`, `Anchor Cleaning we’s`, `low — price`, or `great — fit`
+  - Anchor regression assertions updated in `test/clientIntelligenceInterview.test.js`
 - Executive Business Brief consumes normalized evidence, not raw transcript bleed ([SPEC-085](docs/specs/SPEC-085_Executive_Business_Brief.md))
   - Correction messages target the intended domain (`for services`, geography, brand voice, etc.) and never attach to the active question
   - Session `normalizedFacts` store (services, ideal customers, geography, brand voice, …) feeds Brief synthesis
