@@ -852,7 +852,7 @@
           '<h3>' + escapeHtml(summary.title || 'Executive Business Brief') + '</h3>' +
           '<p class="exec-sub">' + escapeHtml(summary.subtitle || 'Prepared by Max') + '</p>' +
           '<p class="exec-tagline">' +
-            escapeHtml(summary.tagline || 'Generated from our conversation') +
+            escapeHtml(summary.tagline || 'A working picture for leadership review') +
           '</p>' +
           sections.map(renderBriefSection).join('') +
         '</div>';
@@ -1078,7 +1078,7 @@
         renderExecutiveSummary({
           title: 'Executive Business Brief',
           subtitle: 'Prepared by Max',
-          tagline: 'Generated from our conversation',
+          tagline: 'A working picture for leadership review',
           sections: [],
         });
       }

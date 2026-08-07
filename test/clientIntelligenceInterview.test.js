@@ -119,7 +119,7 @@ describe('clientIntelligenceInterview lifecycle', () => {
     assert.ok(turn.executiveSummary);
     assert.equal(turn.executiveSummary.title, 'Executive Business Brief');
     assert.equal(turn.executiveSummary.subtitle, 'Prepared by Max');
-    assert.equal(turn.executiveSummary.tagline, 'Generated from our conversation');
+    assert.equal(turn.executiveSummary.tagline, 'A working picture for leadership review');
     assert.equal(turn.executiveSummary.sections.length, 9);
     for (const key of BLUEPRINT_SECTIONS) {
       assert.ok(turn.blueprint.sections[key]);
@@ -407,7 +407,7 @@ describe('confidence rules', () => {
     });
     assert.equal(summary.title, 'Executive Business Brief');
     assert.equal(summary.subtitle, 'Prepared by Max');
-    assert.equal(summary.tagline, 'Generated from our conversation');
+    assert.equal(summary.tagline, 'A working picture for leadership review');
     assert.equal(summary.sections.length, 9);
     const byId = Object.fromEntries(summary.sections.map((s) => [s.id, s]));
     assert.equal(byId.whoYouAre.title, 'Who You Are');
@@ -420,14 +420,20 @@ describe('confidence rules', () => {
     assert.equal(byId.learnMore.title, "Areas I'd Like To Learn More");
     assert.equal(byId.conversations.title, "Conversations I'd Recommend Next");
 
+    const banned =
+      /\n|•|Blueprint|operator-stated|ICP|Unknown:|Missing clear answer|Generated from|evidenceId|sectionKey|CIE-v|prompt artifact/i;
     for (const section of [byId.whoYouAre, byId.whoYouServe, byId.whyChooseYou, byId.whereHeaded, byId.successLooksLike]) {
       const sentences = section.body.split(/(?<=[.!?])\s+/).filter(Boolean);
-      assert.ok(sentences.length >= 2 && sentences.length <= 4, section.id);
-      assert.equal(/\n|•|Blueprint|operator-stated|ICP|Unknown:|Missing clear answer/i.test(section.body), false);
+      assert.ok(sentences.length >= 2 && sentences.length <= 4, `${section.id}: ${sentences.length}`);
+      assert.equal(banned.test(section.body), false, section.body);
     }
     assert.match(byId.whoYouAre.body, /Aji/);
     assert.match(byId.whoYouAre.body, /recurring cleans/i);
-    assert.equal(/Service understanding reflects|anchors every other/i.test(byId.whoYouAre.body), false);
+    assert.match(byId.whoYouAre.body, /center of gravity|growth advice/i);
+    assert.equal(/Service understanding reflects|anchors every other|deciding factors tend to be|creates value through recurring|concentrate first in /i.test(byId.whoYouAre.body + byId.whyChooseYou.body + byId.whoYouServe.body), false);
+    assert.match(byId.whoYouServe.body, /busy homeowners/i);
+    assert.match(byId.whyChooseYou.body, /reliable crews/i);
+    assert.match(byId.whereHeaded.body, /booking appointments/i);
 
     assert.ok(byId.observations.items.length >= 1);
     assert.ok(byId.observations.items.length <= 5);
