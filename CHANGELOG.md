@@ -6,6 +6,14 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- Max interview conversation handling + Executive Business Brief synthesis hardening ([SPEC-085](docs/specs/SPEC-085_Executive_Business_Brief.md))
+  - Classify every interview message before attaching to the active question (`direct_answer`, `supplemental_context`, `refinement_feedback`, `correction`, `question_to_max`, `off_topic`)
+  - Supplemental session memory for out-of-order facts (domain-tagged; does not overwrite the active answer)
+  - Corrections supersede relevant stored facts; refinement feedback guides regeneration only
+  - Conversational Max acknowledgements when users add context / corrections mid-question
+  - Brief synthesis layer normalizes raw answers into polished consultant prose (no Mad-Lib template bleed)
+  - Rejects raw interview-question fragments (“when a great-fit customer chooses…”, “we will know the growth work…”, etc.)
+  - Regression coverage in `test/clientIntelligenceInterview.test.js`
 - Executive Business Brief synthesis no longer treats refinement instructions as business facts ([SPEC-085](docs/specs/SPEC-085_Executive_Business_Brief.md))
   - Classifies responses as `business_fact` / `refinement_feedback` / `system_guidance` / `generated_brief`
   - Refinement intent detection (“please refine”, “this revision”, “instructions to Max”, etc.)
