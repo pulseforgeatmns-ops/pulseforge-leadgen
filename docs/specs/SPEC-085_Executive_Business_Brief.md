@@ -91,7 +91,7 @@ Brief payload shape (illustrative):
 {
   "title": "Executive Business Brief",
   "subtitle": "Prepared by Max",
-  "tagline": "Generated from our conversation",
+  "tagline": "A working picture for leadership review",
   "sections": [
     { "id": "whoYouAre", "title": "Who You Are", "kind": "prose", "body": "…" },
     { "id": "observations", "title": "Initial Observations", "kind": "list", "items": ["…"] },
