@@ -1054,7 +1054,7 @@ describe('Anchor transcript — correction routing + normalized brief', () => {
     {
       type: 'answer',
       text:
-        'Anchor Cleaning — a commercial-focused cleaning company. Happy to take residential work too.',
+        'Anchor Cleaning we are a commercial-focused cleaning company. Happy to take residential work too.',
     },
     {
       type: 'answer',
@@ -1083,7 +1083,7 @@ describe('Anchor transcript — correction routing + normalized brief', () => {
     {
       type: 'answer',
       text:
-        'when a great-fit customer chooses Anchor over someone else, what usually tips the decision is trust — responsive, consistent, and accountable without needing to chase the work',
+        'trust — They are usually not just choosing the cheapest cleaning company. The decision usually tips toward Anchor when a great-fit customer chooses confidence that the work will be done right without needing to chase the team. A great-fit customer chooses Anchor for responsiveness and accountability.',
     },
     {
       type: 'answer',
@@ -1252,15 +1252,74 @@ describe('Anchor transcript — correction routing + normalized brief', () => {
     assert.match(byId.whyChooseYou.body, /Customers choose Anchor/i);
     assert.match(
       byId.whyChooseYou.body,
-      /Anchor'?s brand voice should feel calm, professional, reliable(?:,)? and easy to work with/i
+      /Anchor(?: Cleaning)?'?s brand voice should feel calm, professional, reliable(?:,)? and easy to work with/i
     );
     assert.equal(/should sound anchor/i.test(byId.whyChooseYou.body), false);
+    assert.match(byId.whyChooseYou.body, /calm, professional, reliable(?:,)? and easy to work with/i);
+    assert.equal(/anchor'?s calm/i.test(byId.whyChooseYou.body), false);
 
     assert.equal(/would feel successful if/i.test(byId.whereHeaded.body), false);
     assert.equal(/both geography is/i.test(byId.whoYouServe.body), false);
 
-    const observations = (byId.observations.items || []).join(' ');
+    // Business name + grammar hygiene
+    assert.equal(/Anchor Cleaning we/i.test(blob), false, blob);
+    assert.equal(/\ba Anchor\b/i.test(blob), false, blob);
+    assert.equal(/low — price|great — fit/i.test(blob), false, blob);
+    assert.match(byId.whoYouAre.body, /Anchor Cleaning\b/);
+    assert.equal(/Anchor Cleaning we\b/i.test(byId.whoYouAre.body), false);
+
+    const observationItems = byId.observations.items || [];
+    assert.ok(observationItems.length >= 1);
+    assert.ok(observationItems.length <= 5);
+    for (const item of observationItems) {
+      const sentences = item.split(/(?<=[.!?])\s+/).filter(Boolean);
+      assert.ok(sentences.length === 1, `observation should be one sentence: ${item}`);
+      assert.ok(item.split(/\s+/).length <= 45, `observation too long: ${item}`);
+      assert.equal(/They are usually not just choosing|The decision usually tips|A great-fit customer chooses/i.test(item), false);
+    }
+    const observations = observationItems.join(' ');
     assert.equal(BANNED.test(observations), false, observations);
-    assert.match(observations, /commercial cleaning|Greater Manchester|differentiation|Ideal-customer|Brand tone/i);
+    assert.equal(/Anchor Cleaning we|a Anchor|anchor'?s calm|low — price|great — fit/i.test(observations), false);
+    assert.match(observations, /differentiation centers on trust|brand voice reinforces|Geographic attention|near-term growth goal|Commercial focus/i);
+  });
+
+  it('sanitizes business names and brand-voice lead-ins', () => {
+    const {
+      sanitizeBusinessName,
+      normalizeBrandVoiceTone,
+      synthesizeDifferentiationSnippet,
+      ingestAnswerIntoNormalizedFacts,
+      emptyNormalizedFacts,
+    } = require('../services/clientIntelligenceInterview');
+
+    assert.equal(sanitizeBusinessName('Anchor Cleaning we'), 'Anchor Cleaning');
+    assert.equal(sanitizeBusinessName('Anchor Cleaning we are'), 'Anchor Cleaning');
+    assert.equal(sanitizeBusinessName('We are Anchor Cleaning'), 'Anchor Cleaning');
+
+    assert.equal(
+      normalizeBrandVoiceTone("anchor's calm, professional, reliable, and easy to work with"),
+      'calm, professional, reliable, and easy to work with'
+    );
+    assert.equal(
+      normalizeBrandVoiceTone("anchor's brand voice should sound calm, professional, reliable, and easy to work with"),
+      'calm, professional, reliable, and easy to work with'
+    );
+
+    const longDiff =
+      'trust — they are usually not just choosing the cheapest cleaning company. The decision usually tips toward Anchor when a great-fit customer chooses confidence that the work will be done right without needing to chase the team.';
+    const snippet = synthesizeDifferentiationSnippet(longDiff);
+    assert.match(snippet, /trust/i);
+    assert.equal(/They are usually not just choosing/i.test(snippet), false);
+    assert.ok(snippet.split(/\s+/).length <= 30);
+
+    let facts = emptyNormalizedFacts();
+    facts = ingestAnswerIntoNormalizedFacts(
+      facts,
+      'identity',
+      'Anchor Cleaning we are a commercial-focused cleaning company'
+    );
+    assert.equal(facts.business_name, 'Anchor Cleaning');
+    assert.match(facts.business_description || '', /commercial-focused cleaning company/i);
+    assert.equal(/commercial — focused/i.test(facts.business_description || ''), false);
   });
 });
