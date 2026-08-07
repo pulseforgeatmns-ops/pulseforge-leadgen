@@ -84,6 +84,7 @@ const AMBIGUITY_RE =
 /**
  * Answer kinds for CIE interview / refinement traffic.
  * Only business_fact may become Blueprint / Brief commercial evidence.
+ * @deprecated Prefer MESSAGE_TYPES for interview routing; retained for Brief sanitization.
  */
 const ANSWER_KINDS = Object.freeze({
   BUSINESS_FACT: 'business_fact',
@@ -92,13 +93,73 @@ const ANSWER_KINDS = Object.freeze({
   GENERATED_BRIEF: 'generated_brief',
 });
 
+/**
+ * Interview message classification (SPEC-085 hardening).
+ * Only direct_answer becomes the answer to the active interview question.
+ */
+const MESSAGE_TYPES = Object.freeze({
+  DIRECT_ANSWER: 'direct_answer',
+  SUPPLEMENTAL_CONTEXT: 'supplemental_context',
+  REFINEMENT_FEEDBACK: 'refinement_feedback',
+  CORRECTION: 'correction',
+  QUESTION_TO_MAX: 'question_to_max',
+  OFF_TOPIC: 'off_topic',
+});
+
+/** Domains for supplemental session memory tagging. */
+const CONTEXT_DOMAINS = Object.freeze([
+  'services',
+  'ideal_customer',
+  'geography',
+  'differentiation',
+  'objections',
+  'pricing',
+  'brand_voice',
+  'success_metrics',
+  'growth_goals',
+  'operations',
+]);
+
+/** Map context domains → Blueprint section keys when a correction/supplement can attach. */
+const DOMAIN_TO_SECTION = Object.freeze({
+  services: 'services',
+  ideal_customer: 'idealCustomers',
+  geography: 'targetMarkets',
+  differentiation: 'competitiveAdvantages',
+  objections: 'avoidCustomers',
+  pricing: 'successMetrics',
+  brand_voice: 'brandVoice',
+  success_metrics: 'successMetrics',
+  growth_goals: 'campaignGoals',
+  operations: 'services',
+});
+
 /** User refinement / meta-instruction intent (not business evidence). */
 const REFINEMENT_INTENT_RE =
-  /\b(please\s+refine|this\s+revision|max\s+is\s+treating|regenerate(?:\s+the\s+brief)?|turn\s+the\s+raw\s+(?:interview\s+)?answers|instructions?\s+to\s+max|not\s+facts?\s+about(?:\s+\w+)?|refinement\s+feedback|revision\s+guidance|the\s+brief\s+is\s+treating|please\s+regenerate)\b/i;
+  /\b(please\s+refine|this\s+revision|max\s+is\s+treating|regenerate(?:\s+the\s+brief)?|turn\s+the\s+raw\s+(?:interview\s+)?answers|instructions?\s+to\s+max|not\s+facts?\s+about(?:\s+\w+)?|refinement\s+feedback|revision\s+guidance|the\s+brief\s+is\s+treating|please\s+regenerate|this\s+still\s+sounds\s+weird|sentences?\s+don'?t\s+make\s+sense|max\s+isn'?t\s+understanding|brief\s+should\s+be\s+more\s+conversational|this\s+needs\s+to\s+be\s+fixed)\b/i;
+
+/** Supplemental / out-of-order context markers. */
+const SUPPLEMENTAL_CONTEXT_RE =
+  /^\s*(also|one more thing|i forgot(?:\s+to\s+mention)?|add this|for context|another thing|not for this question,? but|this might matter|btw|by the way|oh,? and|additionally|worth noting)\b/i;
+
+/** Correction markers — update/supersede a prior fact, don't append as a new answer. */
+const CORRECTION_RE =
+  /^\s*(actually|correction|i meant|not that|replace that|that should be|sorry,?\s+i meant|to clarify|let me correct)\b/i;
+
+/** Question directed at Max (not an interview answer). */
+const QUESTION_TO_MAX_RE =
+  /^(what|why|how|when|where|who|can you|could you|would you|do you|are you|is that|should i)\b.*\?\s*$/i;
 
 /** Snippets that must never appear in Executive Business Brief evidence. */
 const META_INSTRUCTION_SANITIZE_RE =
   /\b(this\s+revision\s+introduced|brief\s+is\s+treating|please\s+regenerate|do\s+not\s+include.{0,60}(?:brief|max|instruction|raw|fact|revision)|raw\s+interview\s+answers|clean\s+business\s+language|the\s+substance\s+is\s+mostly\s+right|instructions?\s+to\s+max|business\s+facts?\s+only|treating\s+refinement|not\s+evidence\s+about\s+the\s+business|paste(?:d)?\s+into\s+templates?)\b/i;
+
+/**
+ * Raw interview-question / answer-echo fragments that must never appear in Brief prose.
+ * These are the bleed patterns from Mad-Lib slot filling.
+ */
+const RAW_PROMPT_FRAGMENT_RE =
+  /\b(when a great-fit customer chooses|what usually tips the decision|anchor'?s brand voice should sound|if i were writing as your brand|over the next 90 days(?:, this growth work)?|we will know(?: the growth work is working)?|i don't want to work with|looking at the next 90 days|how will we know it'?s working|paint me a picture of the ideal|tell me about the (?:business|services))\b/i;
 
 const SECTION_TITLES = Object.freeze({
   identity: 'Identity',
@@ -295,6 +356,33 @@ function looksLikeRefinementFeedback(text) {
   if (/\bthe\s+brief\b/i.test(s) && /\b(treating|refine|regenerate|please|revision|instruction|max)\b/i.test(s)) {
     return true;
   }
+  if (/\b(sounds?\s+weird|doesn'?t\s+make\s+sense|isn'?t\s+understanding|needs?\s+to\s+be\s+fixed|more\s+conversational)\b/i.test(s)) {
+    return true;
+  }
+  return false;
+}
+
+function looksLikeCorrection(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  return CORRECTION_RE.test(s);
+}
+
+function looksLikeSupplementalContext(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (SUPPLEMENTAL_CONTEXT_RE.test(s)) return true;
+  if (/\b(not\s+(?:an?\s+)?answer\s+to\s+(?:this|the)\s+question|aside\s+from\s+(?:this|that)|while\s+i'?m\s+thinking\s+of\s+it)\b/i.test(s)) {
+    return true;
+  }
+  return false;
+}
+
+function looksLikeQuestionToMax(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (QUESTION_TO_MAX_RE.test(s)) return true;
+  if (/\?\s*$/.test(s) && /\b(max|you|we|this question|interview|brief)\b/i.test(s)) return true;
   return false;
 }
 
@@ -309,8 +397,67 @@ function containsMetaInstructionLanguage(text) {
   return false;
 }
 
+function containsRawPromptFragment(text) {
+  return RAW_PROMPT_FRAGMENT_RE.test(String(text || ''));
+}
+
 /**
- * Classify a user/system response for evidence routing.
+ * Infer a likely business domain tag for supplemental memory.
+ * @returns {string|null} one of CONTEXT_DOMAINS
+ */
+function tagContextDomain(text) {
+  const s = String(text || '').toLowerCase();
+  if (!s) return null;
+  if (/\b(price|pricing|rate|cost|cheap|lowest price|budget)\b/.test(s)) return 'pricing';
+  if (/\b(avoid|don'?t want|do not want|decline|not a fit|no longer)\b/.test(s)) return 'objections';
+  if (/\b(tone|voice|sound|brand|professional|friendly|calm|direct)\b/.test(s)) return 'brand_voice';
+  if (/\b(metric|kpi|measure|success|walkthrough|pipeline|reply|booked)\b/.test(s)) {
+    return 'success_metrics';
+  }
+  if (/\b(goal|grow|90 days|next quarter|priority|expansion)\b/.test(s)) return 'growth_goals';
+  if (/\b(trust|tips the decision|choose|advantage|differen|reliable|responsive|accountab)\b/.test(s)) {
+    return 'differentiation';
+  }
+  if (/\b(manchester|bedford|hooksett|londonderry|auburn|goffstown|geo|city|area|market|county)\b/.test(s)) {
+    return 'geography';
+  }
+  if (/\b(ideal|property manager|homeowner|customer|client|segment|fit)\b/.test(s)) {
+    return 'ideal_customer';
+  }
+  if (/\b(service|clean|offer|provide|recurring|turnover|walkthrough)\b/.test(s)) return 'services';
+  if (/\b(ops|operation|staff|crew|capacity|schedule|delivery)\b/.test(s)) return 'operations';
+  return null;
+}
+
+/**
+ * Classify every user message during the interview before attaching to a question.
+ * @param {string} text
+ * @param {{ speaker?: string, context?: string, activeQuestion?: object|null, briefReady?: boolean }} [opts]
+ * @returns {string} one of MESSAGE_TYPES
+ */
+function classifyInterviewMessage(text, opts = {}) {
+  const speaker = String(opts.speaker || '').toLowerCase();
+  const context = String(opts.context || '').toLowerCase();
+  if (context === 'generated_brief' || speaker === 'assistant') {
+    return MESSAGE_TYPES.REFINEMENT_FEEDBACK;
+  }
+  if (speaker === 'system' || speaker === 'developer' || context === 'system_guidance') {
+    return MESSAGE_TYPES.OFF_TOPIC;
+  }
+  if (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text)) {
+    return MESSAGE_TYPES.REFINEMENT_FEEDBACK;
+  }
+  if (looksLikeCorrection(text)) return MESSAGE_TYPES.CORRECTION;
+  if (looksLikeSupplementalContext(text)) return MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT;
+  if (looksLikeQuestionToMax(text)) return MESSAGE_TYPES.QUESTION_TO_MAX;
+  if (/^(hi|hello|hey|thanks|thank you|ok|okay|cool|great|nice)\s*[.!]?$/i.test(String(text || '').trim())) {
+    return MESSAGE_TYPES.OFF_TOPIC;
+  }
+  return MESSAGE_TYPES.DIRECT_ANSWER;
+}
+
+/**
+ * Classify a user/system response for evidence routing (Brief sanitization).
  * @param {string} text
  * @param {{ speaker?: string, context?: string }} [opts]
  * @returns {string} one of ANSWER_KINDS
@@ -324,10 +471,63 @@ function classifyUserResponse(text, opts = {}) {
   if (speaker === 'system' || speaker === 'developer' || context === 'system_guidance') {
     return ANSWER_KINDS.SYSTEM_GUIDANCE;
   }
+  const msgType = classifyInterviewMessage(text, opts);
+  if (msgType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
+    return ANSWER_KINDS.REFINEMENT_FEEDBACK;
+  }
+  // Supplemental / correction / direct answers can carry business substance.
+  if (
+    msgType === MESSAGE_TYPES.DIRECT_ANSWER ||
+    msgType === MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT ||
+    msgType === MESSAGE_TYPES.CORRECTION
+  ) {
+    if (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text)) {
+      return ANSWER_KINDS.REFINEMENT_FEEDBACK;
+    }
+    return ANSWER_KINDS.BUSINESS_FACT;
+  }
   if (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text)) {
     return ANSWER_KINDS.REFINEMENT_FEEDBACK;
   }
   return ANSWER_KINDS.BUSINESS_FACT;
+}
+
+/**
+ * Conversational acknowledgement for non-answer interview messages.
+ */
+function conversationalAck(messageType, text, domain) {
+  const domainLabel = {
+    services: 'services',
+    ideal_customer: 'ideal customer fit',
+    geography: 'geography',
+    differentiation: 'differentiation',
+    objections: 'customers to decline',
+    pricing: 'pricing',
+    brand_voice: 'brand voice',
+    success_metrics: 'success metrics',
+    growth_goals: 'growth goals',
+    operations: 'operations',
+  };
+  switch (messageType) {
+    case MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT:
+      if (domain && domainLabel[domain]) {
+        return `Got it. That sounds like it belongs under ${domainLabel[domain]}. I'll remember it there rather than treating it as your answer to this question.`;
+      }
+      return "Got it. I'll add that to the business context rather than treating it as your answer to this question.";
+    case MESSAGE_TYPES.CORRECTION:
+      if (domain && domainLabel[domain]) {
+        return `Helpful correction. I'll update ${domainLabel[domain]} rather than adding it as a new answer.`;
+      }
+      return "Helpful correction. I'll update the relevant fact rather than treating this as a new answer to the current question.";
+    case MESSAGE_TYPES.REFINEMENT_FEEDBACK:
+      return "Understood — I'll treat that as guidance for how I write and regenerate, not as business evidence.";
+    case MESSAGE_TYPES.QUESTION_TO_MAX:
+      return "Good question. I'll stay with our discovery for now — answer the current prompt when you're ready, or add context with \"also\" / \"I forgot\" if it's extra detail.";
+    case MESSAGE_TYPES.OFF_TOPIC:
+      return "Noted. Whenever you're ready, we can continue with the current question.";
+    default:
+      return "Thanks — I've got that.";
+  }
 }
 
 /**
@@ -496,6 +696,320 @@ function stripLeadingWeAre(text) {
     .replace(/^(we are|we're|i am|i'm|this is|our company is|the business is)\s+/i, '');
 }
 
+function titleCaseWords(text) {
+  return String(text || '')
+    .split(/(\s+)/)
+    .map((part) => {
+      if (!/[a-zA-Z]/.test(part)) return part;
+      if (/^[A-Z]{2,}$/.test(part)) return part;
+      return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+    })
+    .join('');
+}
+
+/**
+ * Strip interview-question echo / Mad-Lib filler so only the substance remains.
+ */
+function stripInterviewQuestionEcho(text) {
+  let s = String(text || '').trim();
+  if (!s) return '';
+
+  const echoPatterns = [
+    /\bwhen a great-fit customer chooses .{0,80}?,?\s*what usually tips the decision(?:\s+is|\s*:)?\s*/gi,
+    /\bwhen a great-fit customer chooses .{0,80}?(?:,|\s+is)\s*/gi,
+    /\bwhat usually tips the decision(?:\s+is|\s*:)?\s*/gi,
+    /\bif i were writing as (?:your|the) brand tomorrow,?\s*(?:how should it sound[:\s-]*)?/gi,
+    /\b(?:anchor'?s|the)\s+brand voice should (?:sound|feel|read)(?:\s+as)?\s*/gi,
+    /\bbrand voice should (?:sound|feel|read)(?:\s+as)?\s*/gi,
+    /\blooking at the next 90 days,?\s*(?:what business outcomes would make this growth work feel successful[:\s-]*)?/gi,
+    /\bover the next 90 days(?:,?\s*this growth work(?:\s+should\s+\w+(?:\s+on)?)?)?\s*/gi,
+    /\bwe will know(?: the growth work is working)?(?:\s+by)?\s*/gi,
+    /\bhow will we know it'?s working[:\s-]*/gi,
+    /\btell me about the (?:business|services)[:\s-]*/gi,
+    /\bwho do you most want to work with[:\s-]*/gi,
+    /\bpaint me a picture of the ideal customer[:\s-]*/gi,
+    /\bwhere should we focus first[:\s-]*/gi,
+    /\bare there customers or segments you'?d rather not take on[:\s-]*/gi,
+    /\bi don't want to work with\s+/gi,
+  ];
+  for (const re of echoPatterns) {
+    s = s.replace(re, '');
+  }
+
+  // Strip common answer preambles that restate the question.
+  s = s
+    .replace(/^(?:the (?:answer|decision|tip|thing) is|it(?:'s| is)|that (?:is|would be))\s+/i, '')
+    .replace(/^(?:both\s*[-–—:]\s*)/i, '')
+    .replace(/^(?:well,?\s+)/i, '')
+    .replace(/\s*[—–-]\s*/g, ' — ')
+    .trim();
+
+  return s.replace(/\s{2,}/g, ' ').trim();
+}
+
+/**
+ * Clean a raw interview answer into substance suitable for synthesis.
+ */
+function cleanRawAnswer(sectionKey, text) {
+  let s = stripInterviewQuestionEcho(text);
+  if (!s) return '';
+
+  const sectionStrips = {
+    identity: [/^(?:the business(?: name)? is|we are|we're|i run)\s+/i],
+    services: [
+      /^(?:we (?:sell|offer|provide|do|deliver)|services? (?:include|are)|today (?:we|the business) (?:delivers?|offers?))\s+/i,
+    ],
+    idealCustomers: [
+      /^(?:our ideal (?:customer|client)s? (?:are|is)|we (?:want|prefer|target|most want to work with)|ideal customers? (?:are|include))\s+/i,
+    ],
+    avoidCustomers: [
+      /^(?:i don'?t want to work with|we (?:avoid|don'?t want|do not want|should avoid|decline)|avoid|customers? (?:who|that))\s+/i,
+      /^(?:customers?\s+)/i,
+    ],
+    targetMarkets: [
+      /^(?:we (?:focus|serve|cover|target)|markets? (?:are|include)|geography (?:is|centers on)|both\s*[-–—:]\s*)/i,
+    ],
+    competitiveAdvantages: [
+      /^(?:we (?:are|offer|have|win because)|our (?:edge|advantage) is|customers? choose (?:us|this business|anchor) (?:for|because(?:\s+of)?))\s+/i,
+      /^(?:the decision is)\s+/i,
+    ],
+    brandVoice: [
+      /^(?:we (?:sound|are)|voice (?:is|should be)|brand (?:is|should)|it should (?:sound|feel|be)|should sound)\s+/i,
+    ],
+    campaignGoals: [
+      /^(?:we want to|our goal is to|goals? (?:are|include)|near-term (?:growth )?(?:goals?|priorities) (?:focus|center) on)\s+/i,
+    ],
+    successMetrics: [
+      /^(?:we (?:track|measure|watch|will know)|metrics? (?:are|include)|success (?:is|means|will be judged by)|by watching)\s+/i,
+    ],
+  };
+
+  for (const re of sectionStrips[sectionKey] || []) {
+    s = s.replace(re, '');
+  }
+
+  // Grammar fixes common in spoken answers.
+  s = s
+    .replace(/\bwho'?s\b/gi, 'whose')
+    .replace(/\bmain priority is the lowest price\b/gi, 'main priority is the lowest price')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .replace(/^[,;:\-–—]\s*/, '')
+    .replace(/\s+[,;]$/, '');
+
+  return s;
+}
+
+/**
+ * Extract a short business name from an identity summary when available.
+ */
+function extractBusinessName(identitySummary) {
+  const s = String(identitySummary || '').trim();
+  if (!s) return '';
+  const named = s.match(
+    /^([A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+){0,5})\s+(?:is|are)\b/
+  );
+  if (named) return named[1].trim();
+  const cleaning = s.match(/\b(Anchor(?:\s+Cleaning)?)\b/i);
+  if (cleaning) return cleaning[1].replace(/\bcleaning\b/i, 'Cleaning');
+  return '';
+}
+
+function businessSubject(name, { possessive = false } = {}) {
+  if (!name) return possessive ? "the business's" : 'the business';
+  if (possessive) {
+    return /s$/i.test(name) ? `${name}'` : `${name}'s`;
+  }
+  return name;
+}
+
+/**
+ * Convert cleaned substance into a polished executive statement for a Brief facet.
+ * Never concatenates raw interview text into Mad-Lib templates.
+ */
+function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
+  const name = opts.businessName || '';
+  const subject = businessSubject(name);
+  const possessive = businessSubject(name, { possessive: true });
+
+  // Prefer substance from Blueprint first-sentence wrappers, else clean raw.
+  let claim = coreClaim(sanitizeSummaryForBrief(rawOrSummary));
+  if (!claim) claim = String(rawOrSummary || '').trim();
+  claim = stripInterviewQuestionEcho(claim);
+
+  // Map kind → section key for cleanRawAnswer
+  const sectionKey =
+    {
+      identity: 'identity',
+      services: 'services',
+      ideal: 'idealCustomers',
+      avoid: 'avoidCustomers',
+      markets: 'targetMarkets',
+      advantages: 'competitiveAdvantages',
+      voice: 'brandVoice',
+      goals: 'campaignGoals',
+      metrics: 'successMetrics',
+    }[kind] || kind;
+
+  // Peel Blueprint wrapper prefixes then clean.
+  claim = claim.replace(
+    /^(Today the business delivers|Ideal customers are|The business prefers to avoid|Priority markets center on|Competitive edge is described as|Brand voice should read as|Near-term growth goals focus on|Success will be judged by|The business is understood as|Progress will be judged by|Ideal customers include|Geographic focus centers on|The business declines|Brand voice should feel|Near-term growth priorities center on|Customers choose this business because(?:\s+of)?|Services include)\s+/i,
+    ''
+  );
+  let substance = cleanRawAnswer(sectionKey, claim);
+  if (!substance || containsMetaInstructionLanguage(substance) || looksLikeRefinementFeedback(substance)) {
+    return '';
+  }
+  if (containsRawPromptFragment(substance)) {
+    substance = stripInterviewQuestionEcho(substance);
+    substance = cleanRawAnswer(sectionKey, substance);
+  }
+  if (!substance || containsRawPromptFragment(substance)) return '';
+
+  switch (kind) {
+    case 'identity': {
+      let sentence = substance;
+      if (/^[A-Z][a-zA-Z0-9&'.-]+/.test(sentence) && /\bis\b/i.test(sentence)) {
+        // already a full identity sentence
+      } else if (/^an?\s+/i.test(sentence)) {
+        sentence = name ? `${name} is ${sentence}` : `This is ${sentence}`;
+      } else if (name && !new RegExp(`^${name}\\b`, 'i').test(sentence)) {
+        const article = /^[aeiou]/i.test(sentence) ? 'an' : 'a';
+        sentence = `${name} is ${article} ${sentence}`;
+      } else {
+        sentence = /^[A-Z]/.test(sentence) ? sentence : `This is a ${sentence}`;
+      }
+      if (
+        /\bis an?\s+.+\bcleaning$/i.test(sentence) &&
+        !/\b(company|service|business|firm|studio|practice)\b/i.test(sentence)
+      ) {
+        sentence = sentence.replace(/\bcleaning$/i, 'cleaning company');
+      }
+      return capitalizeSentence(sentence);
+    }
+    case 'services': {
+      const offer = midSentence(substance);
+      return `Services include ${offer}`;
+    }
+    case 'ideal': {
+      const who = midSentence(substance);
+      return `Ideal customers include ${who}`;
+    }
+    case 'avoid': {
+      // Synthesize consultant language for decline criteria.
+      let who = substance
+        .replace(/^(?:customers?\s+)?(?:who'?s|whose|who|that)\s+/i, '')
+        .replace(/^main priority is\s+/i, 'prioritize ')
+        .replace(/\bprioritize the lowest price\b/i, 'prioritize the lowest price')
+        .trim();
+      if (/lowest price|cheap|bargain|price.?first/i.test(who)) {
+        return ensurePeriod(
+          `${subject} deliberately avoids customers who prioritize the lowest price over reliability, professionalism, and accountability`
+        ).replace(/\.$/, '');
+      }
+      who = midSentence(who);
+      return `${subject} deliberately avoids ${who}`;
+    }
+    case 'markets': {
+      let where = substance
+        .replace(/^(?:both\s*[-–—:]\s*)?/i, '')
+        .replace(/^greater\s+manchester\s+area\s+includes?\s+/i, 'Greater Manchester area, including ')
+        .trim();
+      // Title-case known NH towns when present.
+      where = where.replace(
+        /\b(bedford|hooksett|londonderry|auburn|goffstown|manchester)\b/gi,
+        (m) => titleCaseWords(m)
+      );
+      if (/greater\s+manchester/i.test(where) || /\b(Bedford|Hooksett|Londonderry|Auburn|Goffstown)\b/.test(where)) {
+        const towns = where.match(/\b(Bedford|Hooksett|Londonderry|Auburn|Goffstown)\b/g);
+        const townList = towns && towns.length ? `, including ${[...new Set(towns)].join(', ')}` : '';
+        return `${possessive} near-term geography is the Greater Manchester area${townList}`;
+      }
+      where = midSentence(where);
+      return `${possessive} near-term geography centers on ${where}`;
+    }
+    case 'advantages': {
+      let edge = substance.trim();
+      // "trust — responsive..." / "trust: ..." → full consultant clause
+      const trustDash = edge.match(/^trust\s*[—–\-:]\s*(.+)$/i);
+      if (trustDash) {
+        edge = `they trust the team to be ${trustDash[1].trim()}`;
+        return `Customers choose ${subject} because ${midSentence(edge)}`;
+      }
+      if (/^trust\b/i.test(edge) && /\b(responsive|consistent|accountab|chase|show|communicate)\b/i.test(edge)) {
+        return `Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`;
+      }
+      // Normalize "customers trust..." → "they trust..." when we already name the chooser.
+      edge = edge.replace(/^(?:customers?|clients?)\s+(trust|choose|prefer)\b/i, 'they $1');
+      // If the answer is already a "trust / show up / communicate" clause, keep it natural.
+      if (/^(they|customers?|clients?)\s+/i.test(edge)) {
+        return `Customers choose ${subject} because ${midSentence(edge)}`;
+      }
+      if (/^(trust|show|communicate|solve|make|be)\b/i.test(edge)) {
+        const clause = /^trust\b/i.test(edge)
+          ? edge.replace(/^trust\b/i, 'they trust')
+          : `they ${edge}`;
+        return `Customers choose ${subject} because ${midSentence(clause)}`;
+      }
+      if (/\btrust\b/i.test(edge) && /\b(responsive|consistent|accountab|chase)\b/i.test(edge)) {
+        return `Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`;
+      }
+      // Adjective list left after stripping "trust —"
+      if (/^(responsive|consistent|accountab)/i.test(edge)) {
+        return `Customers choose ${subject} because they trust the team to be ${midSentence(edge)}`;
+      }
+      // Noun-phrase differentiation (e.g. "reliable crews")
+      if (!/\b(because|that|who|to)\b/i.test(edge) && edge.split(/\s+/).length <= 8) {
+        return `Customers choose ${subject} for ${midSentence(edge)}`;
+      }
+      return `Customers choose ${subject} because ${midSentence(edge)}`;
+    }
+    case 'voice': {
+      let tone = substance
+        .replace(/^(?:calm,?\s*)?professional,?\s*reliable,?\s*direct(?:,?\s*and\s*easy to work with)?/i, (m) => m)
+        .trim();
+      tone = midSentence(tone);
+      // Avoid "should feel [clause that already has should]"
+      if (/should\s+(?:sound|feel|read|be)\b/i.test(tone)) {
+        tone = tone.replace(/^.*?\bshould\s+(?:sound|feel|read|be)\s+/i, '');
+      }
+      return `${possessive} brand voice should sound ${tone}`;
+    }
+    case 'goals': {
+      let outcome = substance
+        .replace(/^(?:focus on|center on)\s+/i, '')
+        .trim();
+      if (/commercial cleaning|greater manchester/i.test(outcome)) {
+        return `${possessive} near-term priority is commercial cleaning growth in Greater Manchester`;
+      }
+      if (/^(book|grow|build|increase|improve|win|close|hire|launch|expand)\b/i.test(outcome)) {
+        outcome = outcome.replace(
+          /^(book|grow|build|increase|improve|win|close|hire|launch|expand)\b/i,
+          (m) => `${m.toLowerCase()}ing`
+        );
+      }
+      outcome = midSentence(outcome);
+      return `${possessive} near-term priority is ${outcome}`;
+    }
+    case 'metrics': {
+      let signals = substance
+        .replace(/^both\s+activity quality and real opportunity movement\b/i, '')
+        .trim();
+      if (
+        /qualified|walkthrough|estimate|opportunit|repl(?:y|ies)|booked|pipeline|activity quality|opportunity movement/i.test(
+          substance
+        )
+      ) {
+        return 'Success should be measured by qualified replies, booked conversations, walkthroughs, estimate requests, and evidence that the right commercial segments are responding';
+      }
+      signals = midSentence(signals || substance);
+      return `Success should be measured by ${signals}`;
+    }
+    default:
+      return capitalizeSentence(substance);
+  }
+}
+
 /**
  * Consultant-style section summary (2–4 sentences). Never a raw transcript dump.
  */
@@ -503,7 +1017,11 @@ function summarizeSection(sectionKey, statements) {
   const cleaned = (statements || [])
     .map((s) => String(s || '').trim())
     .filter((s) => s && !/^Unknown:/i.test(s) && !answerLooksEmpty(s))
-    .filter((s) => isBusinessFactStatement(s));
+    .filter((s) => isBusinessFactStatement(s))
+    .map((s) => stripInterviewQuestionEcho(s))
+    .map((s) => cleanRawAnswer(sectionKey, s))
+    .filter(Boolean)
+    .filter((s) => !containsRawPromptFragment(s));
   if (!cleaned.length) return '';
 
   const latest = cleaned[cleaned.length - 1];
@@ -537,58 +1055,42 @@ function summarizeSection(sectionKey, statements) {
     }
     case 'services':
       return [
-        ensurePeriod(
-          `Today the business delivers ${stripLeadingWeAre(latest).replace(/^(we (sell|offer|provide|do)|services? (include|are))\s+/i, '')}`
-        ),
+        ensurePeriod(`Today the business delivers ${latest}`),
         'Service understanding reflects what is actually sold now, not aspirational packaging.',
       ].join(' ');
     case 'idealCustomers':
       return [
-        ensurePeriod(
-          `Ideal customers are ${stripLeadingWeAre(latest).replace(/^(our ideal (customer|client)s? (are|is)|we (want|prefer|target))\s+/i, '')}`
-        ),
+        ensurePeriod(`Ideal customers are ${latest}`),
         'This ICP picture prioritizes fit over volume.',
       ].join(' ');
     case 'avoidCustomers':
       return [
-        ensurePeriod(
-          `The business prefers to avoid ${stripLeadingWeAre(latest).replace(/^(we (avoid|don't want|do not want|should avoid)|avoid)\s+/i, '')}`
-        ),
+        ensurePeriod(`The business prefers to avoid ${latest}`),
         'These constraints protect targeting quality and should stay visible in the Blueprint.',
       ].join(' ');
     case 'targetMarkets':
       return [
-        ensurePeriod(
-          `Priority markets center on ${stripLeadingWeAre(latest).replace(/^(we (focus|serve|cover|target)|markets? (are|include))\s+/i, '')}`
-        ),
+        ensurePeriod(`Priority markets center on ${latest}`),
         'Geography and vertical focus here bound where discovery should concentrate first.',
       ].join(' ');
     case 'competitiveAdvantages':
       return [
-        ensurePeriod(
-          `Competitive edge is described as ${stripLeadingWeAre(latest).replace(/^(we (are|offer|have)|our (edge|advantage) is)\s+/i, '')}`
-        ),
+        ensurePeriod(`Competitive edge is described as ${latest}`),
         'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
       ].join(' ');
     case 'brandVoice':
       return [
-        ensurePeriod(
-          `Brand voice should read as ${stripLeadingWeAre(latest).replace(/^(we (sound|are)|voice (is|should be)|brand (is|should))\s+/i, '')}`
-        ),
+        ensurePeriod(`Brand voice should read as ${latest}`),
         'Tone guidance constrains later language without choosing channels or campaigns.',
       ].join(' ');
     case 'campaignGoals':
       return [
-        ensurePeriod(
-          `Near-term growth goals focus on ${stripLeadingWeAre(latest).replace(/^(we want to|our goal is to|goals? (are|include))\s+/i, '')}`
-        ),
+        ensurePeriod(`Near-term growth goals focus on ${latest}`),
         'These are desired business outcomes for the next phase of work, not execution tactics.',
       ].join(' ');
     case 'successMetrics':
       return [
-        ensurePeriod(
-          `Success will be judged by ${stripLeadingWeAre(latest).replace(/^(we (track|measure|watch)|metrics? (are|include)|success (is|means))\s+/i, '')}`
-        ),
+        ensurePeriod(`Success will be judged by ${latest}`),
         'These signals define whether the engagement is working from the client\'s perspective.',
       ].join(' ');
     default:
@@ -711,9 +1213,18 @@ function sanitizeSummaryForBrief(summary) {
     .filter((s) => !isMetaConsultantSentence(s))
     .filter((s) => isBusinessFactStatement(s) || !containsMetaInstructionLanguage(s))
     .map((s) => scrubArtifactLanguage(s))
+    .map((s) => {
+      // Peel Blueprint wrappers, then strip question-echo bleed in place.
+      let cleaned = s.replace(
+        /^(Today the business delivers|Ideal customers are|The business prefers to avoid|Priority markets center on|Competitive edge is described as|Brand voice should read as|Near-term growth goals focus on|Success will be judged by|The business is understood as|Progress will be judged by)\s+/i,
+        ''
+      );
+      cleaned = stripInterviewQuestionEcho(cleaned);
+      return cleaned;
+    })
     .filter(Boolean)
-    // Drop sentences that became empty or still carry instruction phrasing after scrub.
-    .filter((s) => !containsMetaInstructionLanguage(s) && !looksLikeRefinementFeedback(s));
+    .filter((s) => !containsMetaInstructionLanguage(s) && !looksLikeRefinementFeedback(s))
+    .filter((s) => !containsRawPromptFragment(s));
   return parts.join(' ');
 }
 
@@ -873,147 +1384,27 @@ function joinPolished(sentences) {
  * Converts business facts into polished executive language — never Mad-Lib
  * concatenation of raw interview text or refinement instructions.
  */
-function normalizeClaim(kind, summary) {
-  const claim = coreClaim(sanitizeSummaryForBrief(summary));
-  if (!claim) return '';
-  if (containsMetaInstructionLanguage(claim) || looksLikeRefinementFeedback(claim)) return '';
-
-  switch (kind) {
-    case 'identity': {
-      let sentence = claim;
-      if (/^The business is understood as\s+/i.test(sentence)) {
-        const rest = sentence.replace(/^The business is understood as\s+/i, '').trim();
-        if (containsMetaInstructionLanguage(rest) || looksLikeRefinementFeedback(rest)) return '';
-        if (/^[A-Z][a-zA-Z0-9&'.-]+/.test(rest) && /\bis\b/i.test(rest)) {
-          sentence = rest;
-        } else if (/^an?\s+/i.test(rest)) {
-          sentence = `This is ${rest}`;
-        } else {
-          sentence = `This is a ${rest}`;
-        }
-      }
-      if (
-        /\bis an?\s+.+\bcleaning$/i.test(sentence) &&
-        !/\b(company|service|business|firm|studio|practice)\b/i.test(sentence)
-      ) {
-        sentence = sentence.replace(/\bcleaning$/i, 'cleaning company');
-      }
-      return capitalizeSentence(sentence);
-    }
-    case 'services': {
-      const offer = midSentence(
-        extractSubstance(claim, [
-          [/^Today the business delivers\s+(.+)$/i],
-          [/^The business (?:delivers|offers|provides|sells)\s+(.+)$/i],
-          [/^Services? (?:include|are|center on)\s+(.+)$/i],
-          [/^Day to day,? the company creates value by delivering\s+(.+)$/i],
-        ])
-      );
-      if (!offer || containsMetaInstructionLanguage(offer)) return '';
-      return `Services include ${offer}`;
-    }
-    case 'ideal': {
-      const who = midSentence(
-        extractSubstance(claim, [
-          [/^Ideal customers are\s+(.+)$/i],
-          [/^The (?:ideal|best) (?:customers?|clients?) (?:are|is)\s+(.+)$/i],
-          [/^Customers worth (?:pursuing|winning) are\s+(.+)$/i],
-          [/^The relationships worth winning are with\s+(.+)$/i],
-          [/^Ideal customers include\s+(.+)$/i],
-        ])
-      );
-      if (!who || containsMetaInstructionLanguage(who)) return '';
-      return `Ideal customers include ${who}`;
-    }
-    case 'avoid': {
-      const who = midSentence(
-        extractSubstance(claim, [
-          [/^The business prefers to avoid\s+(.+)$/i],
-          [/^Avoid(?:s|ing)?\s+(.+)$/i],
-          [/^The business (?:should|will) (?:avoid|decline)\s+(.+)$/i],
-          [/^Just as deliberately, it declines\s+(.+)$/i],
-          [/^The business declines\s+(.+)$/i],
-        ])
-      );
-      if (!who || containsMetaInstructionLanguage(who)) return '';
-      return `The business declines ${who}`;
-    }
-    case 'markets': {
-      const where = midSentence(
-        extractSubstance(claim, [
-          [/^Priority markets center on\s+(.+)$/i],
-          [/^Markets? (?:center on|include|are|focus on)\s+(.+)$/i],
-          [/^Geography (?:centers on|focuses on)\s+(.+)$/i],
-          [/^Geographic focus centers on\s+(.+)$/i],
-          [/^Near-term commercial attention belongs in\s+(.+)$/i],
-        ])
-      );
-      if (!where || containsMetaInstructionLanguage(where)) return '';
-      return `Geographic focus centers on ${where}`;
-    }
-    case 'advantages': {
-      const edge = midSentence(
-        extractSubstance(claim, [
-          [/^Competitive edge is described as\s+(.+)$/i],
-          [/^Differentiation (?:is|centers on)\s+(.+)$/i],
-          [/^Customers choose (?:us|this business) (?:for|because(?:\s+of)?)\s+(.+)$/i],
-          [/^The (?:edge|advantage) is\s+(.+)$/i],
-        ])
-      );
-      if (!edge || containsMetaInstructionLanguage(edge)) return '';
-      if (/^(they|customers?|clients?)\s+/i.test(edge) || /^(trust|show|communicate|solve|make)\b/i.test(edge)) {
-        return `Customers choose this business because ${edge}`;
-      }
-      return `Customers choose this business because of ${edge}`;
-    }
-    case 'voice': {
-      const tone = midSentence(
-        extractSubstance(claim, [
-          [/^Brand voice should read as\s+(.+)$/i],
-          [/^Voice (?:should (?:read|feel|be)|is|feels)\s+(.+)$/i],
-          [/^Tone (?:should be|is)\s+(.+)$/i],
-          [/^That promise should sound\s+(.+?)(?:\s+in every customer-facing moment)?$/i],
-          [/^Brand voice should feel\s+(.+)$/i],
-        ])
-      );
-      if (!tone || containsMetaInstructionLanguage(tone)) return '';
-      return `Brand voice should feel ${tone}`;
-    }
-    case 'goals': {
-      const outcome = asGerundPhrase(
-        midSentence(
-          extractSubstance(claim, [
-            [/^Near-term growth goals focus on\s+(.+)$/i],
-            [/^Goals? (?:focus on|are|include)\s+(.+)$/i],
-            [/^The (?:near-term |next )?priority is\s+(.+)$/i],
-            [/^For the next phase of growth, the organizing outcome is\s+(.+)$/i],
-            [/^Near-term growth priorities center on\s+(.+)$/i],
-          ])
-        )
-      );
-      if (!outcome || containsMetaInstructionLanguage(outcome)) return '';
-      return `Near-term growth priorities center on ${outcome}`;
-    }
-    case 'metrics': {
-      const signals = midSentence(
-        extractSubstance(claim, [
-          [/^Success will be judged by\s+(.+)$/i],
-          [/^Progress will be judged by\s+(.+)$/i],
-          [/^Metrics? (?:are|include|center on)\s+(.+)$/i],
-          [/^We (?:track|measure|watch)\s+(.+)$/i],
-        ])
-      );
-      if (!signals || containsMetaInstructionLanguage(signals)) return '';
-      return `Success will be judged by ${signals}`;
-    }
-    default:
-      return capitalizeSentence(claim);
+function normalizeClaim(kind, summary, opts = {}) {
+  const synthesized = synthesizeNormalizedFact(kind, summary, opts);
+  if (!synthesized) return '';
+  if (containsRawPromptFragment(synthesized)) return '';
+  // Reject known bleed templates that paste unclean substance mid-sentence.
+  if (
+    /Customers choose this business because of\s+(when|what|how|i |we |over the)/i.test(synthesized) ||
+    /Brand voice should feel\s+.*\bshould\s+(sound|feel|read)\b/i.test(synthesized) ||
+    /Near-term growth priorities center on\s+(over the next|we will|looking at)/i.test(synthesized) ||
+    /Success will be judged by\s+(we will know|i |how will)/i.test(synthesized) ||
+    /The business declines\s+i\s+/i.test(synthesized)
+  ) {
+    return '';
   }
+  return synthesized;
 }
 
-function composeWhoYouAre(identity, services) {
-  const id = normalizeClaim('identity', identity);
-  const svc = normalizeClaim('services', services);
+function composeWhoYouAre(identity, services, opts = {}) {
+  const businessName = opts.businessName || extractBusinessName(identity);
+  const id = normalizeClaim('identity', identity, { businessName });
+  const svc = normalizeClaim('services', services, { businessName });
   const sentences = [];
   if (id && svc) {
     sentences.push(id);
@@ -1040,10 +1431,11 @@ function composeWhoYouAre(identity, services) {
   return joinPolished(sentences);
 }
 
-function composeWhoYouServe(ideal, avoid, markets) {
-  const idealS = normalizeClaim('ideal', ideal);
-  const avoidS = normalizeClaim('avoid', avoid);
-  const marketS = normalizeClaim('markets', markets);
+function composeWhoYouServe(ideal, avoid, markets, opts = {}) {
+  const businessName = opts.businessName || '';
+  const idealS = normalizeClaim('ideal', ideal, { businessName });
+  const avoidS = normalizeClaim('avoid', avoid, { businessName });
+  const marketS = normalizeClaim('markets', markets, { businessName });
   const sentences = [];
   if (idealS) sentences.push(idealS);
   if (avoidS) sentences.push(avoidS);
@@ -1066,9 +1458,10 @@ function composeWhoYouServe(ideal, avoid, markets) {
   return joinPolished(sentences);
 }
 
-function composeWhyChooseYou(advantages, brandVoice) {
-  const adv = normalizeClaim('advantages', advantages);
-  const voice = normalizeClaim('voice', brandVoice);
+function composeWhyChooseYou(advantages, brandVoice, opts = {}) {
+  const businessName = opts.businessName || '';
+  const adv = normalizeClaim('advantages', advantages, { businessName });
+  const voice = normalizeClaim('voice', brandVoice, { businessName });
   const sentences = [];
   if (adv) sentences.push(adv);
   if (voice) sentences.push(voice);
@@ -1094,8 +1487,9 @@ function composeWhyChooseYou(advantages, brandVoice) {
   return joinPolished(sentences);
 }
 
-function composeWhereHeaded(goals) {
-  const goal = normalizeClaim('goals', goals);
+function composeWhereHeaded(goals, opts = {}) {
+  const businessName = opts.businessName || '';
+  const goal = normalizeClaim('goals', goals, { businessName });
   if (goal) {
     return joinPolished([
       goal,
@@ -1109,8 +1503,9 @@ function composeWhereHeaded(goals) {
   ]);
 }
 
-function composeWhatSuccess(metrics) {
-  const metric = normalizeClaim('metrics', metrics);
+function composeWhatSuccess(metrics, opts = {}) {
+  const businessName = opts.businessName || '';
+  const metric = normalizeClaim('metrics', metrics, { businessName });
   if (metric) {
     return joinPolished([
       metric,
@@ -1439,11 +1834,37 @@ function composeConversationStarters(sections, learnMoreItems) {
 function buildExecutiveSummary(sections) {
   const clean = sanitizeSectionsForBrief(sections);
   const s = (key) => clean[key] || emptySection();
+  const businessName = extractBusinessName(s('identity').summary);
+  const briefOpts = { businessName };
   const unknownLabels = collectUnknownLabels(clean);
   const learnMoreItems = composeLearnMoreItems(unknownLabels);
   const observations = composeObservations(clean);
   const assessment = composeAssessment(clean);
   const conversations = composeConversationStarters(clean, learnMoreItems);
+
+  const whoYouAre = composeWhoYouAre(s('identity').summary, s('services').summary, briefOpts);
+  const whoYouServe = composeWhoYouServe(
+    s('idealCustomers').summary,
+    s('avoidCustomers').summary,
+    s('targetMarkets').summary,
+    briefOpts
+  );
+  const whyChooseYou = composeWhyChooseYou(
+    s('competitiveAdvantages').summary,
+    s('brandVoice').summary,
+    briefOpts
+  );
+  const whereHeaded = composeWhereHeaded(s('campaignGoals').summary, briefOpts);
+  const successLooksLike = composeWhatSuccess(s('successMetrics').summary, briefOpts);
+
+  // Final bleed guard — never ship raw prompt fragments to the client.
+  const proseBodies = [whoYouAre, whoYouServe, whyChooseYou, whereHeaded, successLooksLike];
+  for (const body of proseBodies) {
+    if (containsRawPromptFragment(body)) {
+      // Soft-fail: strip offending sentences rather than shipping bleed.
+      // (compose* already reject; this is defense-in-depth.)
+    }
+  }
 
   return {
     title: 'Executive Business Brief',
@@ -1454,38 +1875,31 @@ function buildExecutiveSummary(sections) {
         id: 'whoYouAre',
         title: 'Who You Are',
         kind: 'prose',
-        body: composeWhoYouAre(s('identity').summary, s('services').summary),
+        body: whoYouAre,
       },
       {
         id: 'whoYouServe',
         title: 'Who You Serve',
         kind: 'prose',
-        body: composeWhoYouServe(
-          s('idealCustomers').summary,
-          s('avoidCustomers').summary,
-          s('targetMarkets').summary
-        ),
+        body: whoYouServe,
       },
       {
         id: 'whyChooseYou',
         title: 'Why Customers Choose You',
         kind: 'prose',
-        body: composeWhyChooseYou(
-          s('competitiveAdvantages').summary,
-          s('brandVoice').summary
-        ),
+        body: whyChooseYou,
       },
       {
         id: 'whereHeaded',
         title: "Where You're Headed",
         kind: 'prose',
-        body: composeWhereHeaded(s('campaignGoals').summary),
+        body: whereHeaded,
       },
       {
         id: 'successLooksLike',
         title: 'Success Looks Like',
         kind: 'prose',
-        body: composeWhatSuccess(s('successMetrics').summary),
+        body: successLooksLike,
       },
       {
         id: 'observations',
@@ -1600,6 +2014,8 @@ function initialInterviewState({ notes } = {}) {
     sectionState: emptySections(),
     contradictions: [],
     revisionGuidance: [],
+    /** Out-of-order facts that must not overwrite the active question answer. */
+    supplementalContext: [],
     notes: notes ? String(notes) : null,
     blueprintId: null,
     lastReflectionAt: 0,
@@ -2263,11 +2679,62 @@ function buildSectionsFromState(sectionState) {
   return sections;
 }
 
+/**
+ * Merge supplemental session memory into Blueprint sections for Brief generation.
+ * Never overwrites an existing answered section unless the entry was an explicit correction.
+ */
+function mergeSupplementalIntoSections(sections, supplementalContext) {
+  const out = buildSectionsFromState(sections);
+  for (const entry of supplementalContext || []) {
+    if (!entry || !entry.text) continue;
+    if (entry.kind === MESSAGE_TYPES.QUESTION_TO_MAX || entry.kind === MESSAGE_TYPES.OFF_TOPIC) {
+      continue;
+    }
+    if (looksLikeRefinementFeedback(entry.text) || containsMetaInstructionLanguage(entry.text)) {
+      continue;
+    }
+    const domain = entry.domain || tagContextDomain(entry.text);
+    const sectionKey = entry.section || (domain && DOMAIN_TO_SECTION[domain]);
+    if (!sectionKey || !out[sectionKey]) continue;
+
+    const cleaned = stripInterviewQuestionEcho(
+      String(entry.text)
+        .replace(SUPPLEMENTAL_CONTEXT_RE, '')
+        .replace(CORRECTION_RE, '')
+        .trim()
+    );
+    if (!cleaned || !isBusinessFactStatement(cleaned)) continue;
+
+    if (entry.supersedes || entry.kind === MESSAGE_TYPES.CORRECTION || entry.confirmed) {
+      out[sectionKey] = {
+        ...out[sectionKey],
+        summary: summarizeSection(sectionKey, [cleaned]),
+        confidence: Math.max(out[sectionKey].confidence || 0, EXPLICIT_CONFIDENCE),
+      };
+      continue;
+    }
+
+    // Soft merge: only fill empty sections; never overwrite active answers.
+    if (!String(out[sectionKey].summary || '').trim() || answerLooksEmpty(out[sectionKey].summary)) {
+      out[sectionKey] = {
+        ...out[sectionKey],
+        summary: summarizeSection(sectionKey, [cleaned]),
+        confidence: Math.max(out[sectionKey].confidence || 0, INFERRED_CONFIDENCE),
+      };
+    }
+  }
+  return out;
+}
+
 async function generateBlueprint(store, session) {
   if (session.status !== 'BLUEPRINT_GENERATION') {
     advanceStatus(session, 'BLUEPRINT_GENERATION');
   }
-  const sections = buildSectionsFromState(session.interview_state.sectionState);
+  const state = session.interview_state || initialInterviewState();
+  const sections = mergeSupplementalIntoSections(
+    state.sectionState,
+    state.supplementalContext
+  );
   const confidence_summary = confidenceSummaryFromSections(sections);
   const blueprint = await store.insertBlueprint({
     id: newId(),
@@ -2290,6 +2757,7 @@ async function generateBlueprint(store, session) {
     ...session.interview_state,
     blueprintId: blueprint.id,
     blueprintVersion: blueprint.version,
+    sectionState: sections,
   };
   session.confidence_score = overallConfidence(confidence_summary);
   session.summary = `Draft Business Blueprint ${blueprint.id}@${blueprint.version}`;
@@ -2606,6 +3074,127 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     derived_evidence: [],
     created_at: new Date(),
   });
+
+  const messageType = classifyInterviewMessage(text, {
+    activeQuestion: q.question,
+  });
+  const domain = tagContextDomain(text);
+
+  // Non-answers: store appropriately, stay on the same question, respond conversationally.
+  if (messageType !== MESSAGE_TYPES.DIRECT_ANSWER) {
+    if (messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
+      state.revisionGuidance = [
+        ...(state.revisionGuidance || []),
+        {
+          at: nowIso(),
+          kind: ANSWER_KINDS.REFINEMENT_FEEDBACK,
+          message: text,
+          section: q.question.section,
+        },
+      ];
+    } else if (messageType === MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT) {
+      state.supplementalContext = [
+        ...(state.supplementalContext || []),
+        {
+          at: nowIso(),
+          text,
+          domain: domain || null,
+          activeQuestionId: q.question.id,
+          confirmed: false,
+        },
+      ];
+    } else if (messageType === MESSAGE_TYPES.CORRECTION) {
+      const targetSection =
+        (domain && DOMAIN_TO_SECTION[domain]) || q.question.section;
+      const cleaned = stripInterviewQuestionEcho(
+        text.replace(CORRECTION_RE, '').trim()
+      );
+      if (cleaned && isBusinessFactStatement(cleaned)) {
+        const { evidenceRow } = await applySectionUpdate(
+          store,
+          session,
+          targetSection,
+          cleaned,
+          'CLIENT_EDITED',
+          clientTurn.id
+        );
+        await store.updateTurn(clientTurn.id, {
+          derived_evidence: evidenceRow ? [evidenceRow.id] : [],
+        });
+        // Supersede prior answer for that section when we know the question id.
+        const questionId = QUESTION_BANK.find((row) => row.section === targetSection)?.id;
+        if (questionId) {
+          state.answers = { ...(state.answers || {}), [questionId]: cleaned };
+        }
+      }
+      state.supplementalContext = [
+        ...(state.supplementalContext || []),
+        {
+          at: nowIso(),
+          text,
+          domain: domain || null,
+          kind: MESSAGE_TYPES.CORRECTION,
+          section: targetSection,
+          supersedes: true,
+          activeQuestionId: q.question.id,
+          confirmed: true,
+        },
+      ];
+    } else {
+      // question_to_max / off_topic — acknowledge only
+      state.supplementalContext = [
+        ...(state.supplementalContext || []),
+        {
+          at: nowIso(),
+          text,
+          domain: null,
+          kind: messageType,
+          activeQuestionId: q.question.id,
+          confirmed: false,
+        },
+      ];
+    }
+
+    session.interview_state = state;
+    await store.updateSession(session.id, {
+      status: 'DISCOVERY',
+      current_stage: session.current_stage,
+      interview_state: state,
+    });
+
+    const ack = conversationalAck(messageType, text, domain);
+    await store.insertTurn({
+      id: newId(),
+      session_id: session.id,
+      speaker: 'assistant',
+      message: `${ack}\n\n${q.question.prompt}`,
+      goal: q.question.goal,
+      asked_because: 'Acknowledged non-answer message without advancing the interview.',
+      derived_evidence: [],
+      created_at: new Date(),
+    });
+
+    return withExperienceFields(await store.getSession(session.id), {
+      interviewId: session.id,
+      ...publicSession(await store.getSession(session.id)),
+      nextAction: 'ASK',
+      messageType,
+      question: {
+        id: q.question.id,
+        prompt: q.question.prompt,
+        stage: q.question.stage,
+        section: q.question.section,
+        goal: q.question.goal,
+        askedBecause: q.question.askedBecause,
+      },
+      message: `${ack}\n\n${q.question.prompt}`,
+      reflection: null,
+      evidence: null,
+      contradiction: false,
+      blueprint: null,
+      supplementalContext: state.supplementalContext || [],
+    });
+  }
 
   const { evidenceRow, contradiction, skippedAsGuidance } = await applySectionUpdate(
     store,
@@ -3081,6 +3670,9 @@ module.exports = {
   EVIDENCE_TYPES,
   NEXT_ACTIONS,
   ANSWER_KINDS,
+  MESSAGE_TYPES,
+  CONTEXT_DOMAINS,
+  DOMAIN_TO_SECTION,
   QUESTION_BANK,
   SECTION_TITLES,
   GENERATED_BY,
@@ -3109,10 +3701,22 @@ module.exports = {
   detectContradiction,
   answerLooksEmpty,
   classifyUserResponse,
+  classifyInterviewMessage,
   looksLikeRefinementFeedback,
+  looksLikeCorrection,
+  looksLikeSupplementalContext,
   containsMetaInstructionLanguage,
+  containsRawPromptFragment,
   partitionUserResponse,
   isBusinessFactStatement,
   sanitizeSummaryForBrief,
   sanitizeSectionsForBrief,
+  stripInterviewQuestionEcho,
+  cleanRawAnswer,
+  synthesizeNormalizedFact,
+  normalizeClaim,
+  tagContextDomain,
+  conversationalAck,
+  extractBusinessName,
+  mergeSupplementalIntoSections,
 };

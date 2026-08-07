@@ -9,6 +9,7 @@ const {
   BLUEPRINT_SECTIONS,
   QUESTION_BANK,
   ANSWER_KINDS,
+  MESSAGE_TYPES,
   ClientIntelligenceError,
   createMemoryStore,
   scoreEvidenceConfidence,
@@ -28,10 +29,14 @@ const {
   approveBlueprint,
   answerLooksEmpty,
   classifyUserResponse,
+  classifyInterviewMessage,
   looksLikeRefinementFeedback,
   containsMetaInstructionLanguage,
+  containsRawPromptFragment,
   partitionUserResponse,
   sanitizeSummaryForBrief,
+  synthesizeNormalizedFact,
+  stripInterviewQuestionEcho,
 } = require('../services/clientIntelligenceInterview');
 
 const {
@@ -445,9 +450,9 @@ describe('confidence rules', () => {
     assert.match(byId.whoYouServe.body, /busy homeowners/i);
     assert.match(byId.whoYouServe.body, /Ideal customers include/i);
     assert.match(byId.whyChooseYou.body, /reliable crews/i);
-    assert.match(byId.whyChooseYou.body, /Customers choose this business because/i);
+    assert.match(byId.whyChooseYou.body, /Customers choose (?:Aji|this business)/i);
     assert.match(byId.whereHeaded.body, /booking appointments/i);
-    assert.match(byId.whereHeaded.body, /Near-term growth priorities center on/i);
+    assert.match(byId.whereHeaded.body, /(?:near-term priority|growth priorities)/i);
 
     assert.ok(byId.observations.items.length >= 1);
     assert.ok(byId.observations.items.length <= 5);
@@ -667,7 +672,7 @@ describe('Executive Brief refinement / evidence separation', () => {
       false
     );
     assert.match(byId.whoYouServe.body, /Ideal customers include/i);
-    assert.match(byId.whyChooseYou.body, /Customers choose this business because/i);
+    assert.match(byId.whyChooseYou.body, /Customers choose (?:Anchor(?: Cleaning)?|this business)/i);
     assert.match(byId.whoYouAre.body, /Services include/i);
   });
 
@@ -771,5 +776,274 @@ describe('blueprint revise + approve + playbook handoff', () => {
     assert.notEqual(next.version, '1.0');
     assert.equal(next.status, 'in_review');
     assert.equal(next.sections.services.summary, 'Only recurring residential cleans');
+  });
+});
+
+describe('interview message classification + supplemental memory', () => {
+  it('classifies message types before attaching to the active question', () => {
+    assert.equal(
+      classifyInterviewMessage('Also, we only serve Greater Manchester.'),
+      MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT
+    );
+    assert.equal(
+      classifyInterviewMessage('I forgot to mention we avoid bargain hunters.'),
+      MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT
+    );
+    assert.equal(
+      classifyInterviewMessage('Actually, focus on Bedford and Hooksett first.'),
+      MESSAGE_TYPES.CORRECTION
+    );
+    assert.equal(
+      classifyInterviewMessage('This still sounds weird — Max isn’t understanding.'),
+      MESSAGE_TYPES.REFINEMENT_FEEDBACK
+    );
+    assert.equal(
+      classifyInterviewMessage('Can you explain what you mean by ideal customer?'),
+      MESSAGE_TYPES.QUESTION_TO_MAX
+    );
+    assert.equal(
+      classifyInterviewMessage('Anchor Cleaning is a commercial cleaning company.'),
+      MESSAGE_TYPES.DIRECT_ANSWER
+    );
+  });
+
+  it('stores supplemental context separately without advancing the active question', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 99 }, opts);
+    assert.equal(started.question.id, 'identity');
+
+    const supplement = await postInterviewMessage(
+      started.interviewId,
+      'Also, for context — we only take commercial accounts in Greater Manchester.',
+      opts
+    );
+    assert.equal(supplement.messageType, MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT);
+    assert.equal(supplement.question.id, 'identity');
+    assert.match(supplement.message, /business context|ideal customer|geography|remember/i);
+    assert.ok((supplement.supplementalContext || []).length >= 1);
+
+    const session = await store.getSession(started.interviewId);
+    assert.equal(session.interview_state.stepIndex, 0);
+    assert.equal(session.interview_state.answers.identity, undefined);
+    assert.ok((session.interview_state.supplementalContext || []).length >= 1);
+    assert.equal(
+      session.interview_state.supplementalContext[0].confirmed,
+      false
+    );
+
+    const realAnswer = await postInterviewMessage(
+      started.interviewId,
+      'Anchor Cleaning — commercial cleaning for professional offices.',
+      opts
+    );
+    assert.equal(realAnswer.question.id, 'services');
+    const after = await store.getSession(started.interviewId);
+    assert.equal(after.interview_state.stepIndex, 1);
+    assert.match(after.interview_state.answers.identity, /Anchor Cleaning/i);
+  });
+
+  it('refinement feedback does not become business evidence', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 100 }, opts);
+    const turn = await postInterviewMessage(
+      started.interviewId,
+      'The brief should be more conversational — this needs to be fixed.',
+      opts
+    );
+    assert.equal(turn.messageType, MESSAGE_TYPES.REFINEMENT_FEEDBACK);
+    assert.equal(turn.question.id, 'identity');
+    assert.equal(turn.evidence, null);
+
+    const session = await store.getSession(started.interviewId);
+    assert.ok((session.interview_state.revisionGuidance || []).length >= 1);
+    assert.equal(session.interview_state.stepIndex, 0);
+    assert.equal(
+      String(session.interview_state.sectionState.identity.summary || ''),
+      ''
+    );
+  });
+
+  it('correction messages update or supersede relevant facts', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 101 }, opts);
+    await postInterviewMessage(
+      started.interviewId,
+      'Anchor Cleaning — commercial cleaning.',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'Office cleaning and recurring commercial cleans.',
+      opts
+    );
+    // On ideal_customers question — correction about geography should not become the ICP answer.
+    const before = await store.getSession(started.interviewId);
+    assert.equal(
+      QUESTION_BANK[before.interview_state.stepIndex].id,
+      'ideal_customers'
+    );
+
+    const corrected = await postInterviewMessage(
+      started.interviewId,
+      'Actually, replace that — geography should be Greater Manchester including Bedford and Hooksett.',
+      opts
+    );
+    assert.equal(corrected.messageType, MESSAGE_TYPES.CORRECTION);
+    assert.equal(corrected.question.id, 'ideal_customers');
+    assert.match(corrected.message, /update|geography|correction/i);
+
+    const session = await store.getSession(started.interviewId);
+    assert.equal(session.interview_state.stepIndex, before.interview_state.stepIndex);
+    assert.equal(session.interview_state.answers.ideal_customers, undefined);
+    assert.match(
+      String(session.interview_state.sectionState.targetMarkets.summary || ''),
+      /Greater Manchester|Bedford|Hooksett/i
+    );
+  });
+});
+
+describe('Executive Brief synthesis — no raw answer bleed', () => {
+  const BANNED_BLEED =
+    /when a great-fit customer chooses|anchor'?s brand voice should sound|over the next 90 days,\s*this growth work|we will know the growth work is working|i don't want to work with|Customers choose this business because of when|Brand voice should feel .*\bshould\s+(?:sound|feel)|Near-term growth priorities center on over the next|Success will be judged by we will know|The business declines i don't want/i;
+
+  it('normalizes raw answers before brief rendering', () => {
+    assert.match(
+      synthesizeNormalizedFact(
+        'avoid',
+        "i don't want to work with customers who's main priority is the lowest price",
+        { businessName: 'Anchor' }
+      ),
+      /Anchor deliberately avoids customers who prioritize the lowest price/i
+    );
+    assert.match(
+      synthesizeNormalizedFact(
+        'markets',
+        'both- greater Manchester area includes Bedford, hooksett, Londonderry, auburn, goffstown',
+        { businessName: 'Anchor' }
+      ),
+      /Greater Manchester area.*Bedford.*Hooksett.*Londonderry.*Auburn.*Goffstown/i
+    );
+    assert.match(
+      synthesizeNormalizedFact(
+        'advantages',
+        'when a great-fit customer chooses Anchor over someone else, what usually tips the decision is trust — responsive, consistent, and accountable without needing to chase the work',
+        { businessName: 'Anchor' }
+      ),
+      /Customers choose Anchor because they trust/i
+    );
+    assert.equal(
+      containsRawPromptFragment(
+        synthesizeNormalizedFact(
+          'advantages',
+          'when a great-fit customer chooses Anchor over someone else, what usually tips the decision is trust',
+          { businessName: 'Anchor' }
+        )
+      ),
+      false
+    );
+    assert.match(
+      synthesizeNormalizedFact(
+        'metrics',
+        'we will know the growth work is working by watching both activity quality and real opportunity movement',
+        { businessName: 'Anchor' }
+      ),
+      /Success should be measured by qualified replies/i
+    );
+  });
+
+  it('strips interview question echoes from raw answers', () => {
+    const cleaned = stripInterviewQuestionEcho(
+      "when a great-fit customer chooses Anchor over someone else, what usually tips the decision is trust and consistency"
+    );
+    assert.equal(/when a great-fit customer chooses/i.test(cleaned), false);
+    assert.match(cleaned, /trust and consistency/i);
+  });
+
+  it('Anchor brief renders polished sentences with no raw prompt fragments', () => {
+    const sections = {
+      identity: {
+        summary:
+          'Anchor Cleaning is a cleaning company. This identity framing is how the operator describes the business today, and it anchors every other Blueprint section.',
+        confidence: 0.9,
+        unknowns: [],
+      },
+      services: {
+        summary:
+          'Today the business delivers commercial cleaning for professional offices. Service understanding reflects what is actually sold now, not aspirational packaging.',
+        confidence: 0.88,
+        unknowns: [],
+      },
+      idealCustomers: {
+        summary:
+          'Ideal customers are law firms and accounting practices that value reliability. This ICP picture prioritizes fit over volume.',
+        confidence: 0.86,
+        unknowns: [],
+      },
+      avoidCustomers: {
+        summary:
+          "The business prefers to avoid i don't want to work with customers who's main priority is the lowest price. These constraints protect targeting quality and should stay visible in the Blueprint.",
+        confidence: 0.84,
+        unknowns: [],
+      },
+      targetMarkets: {
+        summary:
+          'Priority markets center on both- greater Manchester area includes Bedford, hooksett, Londonderry, auburn, goffstown. Geography and vertical focus here bound where discovery should concentrate first.',
+        confidence: 0.85,
+        unknowns: [],
+      },
+      competitiveAdvantages: {
+        summary:
+          'Competitive edge is described as when a great-fit customer chooses Anchor over someone else, what usually tips the decision is trust — responsive, consistent, and accountable without needing to chase the work. This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
+        confidence: 0.87,
+        unknowns: [],
+      },
+      brandVoice: {
+        summary:
+          "Brand voice should read as anchor's brand voice should sound calm, professional, reliable, and direct. Tone guidance constrains later language without choosing channels or campaigns.",
+        confidence: 0.82,
+        unknowns: [],
+      },
+      campaignGoals: {
+        summary:
+          'Near-term growth goals focus on over the next 90 days, this growth work should grow commercial cleaning in Greater Manchester. These are desired business outcomes for the next phase of work, not execution tactics.',
+        confidence: 0.83,
+        unknowns: [],
+      },
+      successMetrics: {
+        summary:
+          'Success will be judged by we will know the growth work is working by watching both activity quality and real opportunity movement. These signals define whether the engagement is working from the client\'s perspective.',
+        confidence: 0.8,
+        unknowns: [],
+      },
+    };
+
+    const brief = buildExecutiveSummary(sections);
+    const byId = Object.fromEntries(brief.sections.map((s) => [s.id, s]));
+    const blob = JSON.stringify(brief);
+
+    assert.equal(BANNED_BLEED.test(blob), false, blob);
+    assert.equal(containsRawPromptFragment(blob), false, blob);
+
+    assert.match(byId.whoYouServe.body, /Ideal customers include|law firms|accounting/i);
+    assert.match(
+      byId.whoYouServe.body,
+      /deliberately avoids|lowest price|reliability|professionalism|accountability/i
+    );
+    assert.match(
+      byId.whoYouServe.body,
+      /Greater Manchester|Bedford|Hooksett|Londonderry|Auburn|Goffstown/i
+    );
+    assert.match(byId.whyChooseYou.body, /Customers choose Anchor/i);
+    assert.match(byId.whyChooseYou.body, /trust/i);
+    assert.match(byId.whyChooseYou.body, /brand voice should sound/i);
+    assert.equal(/Brand voice should feel/i.test(byId.whyChooseYou.body), false);
+    assert.match(byId.whereHeaded.body, /commercial cleaning|Greater Manchester|near-term priority/i);
+    assert.equal(/Near-term growth priorities center on over the next/i.test(byId.whereHeaded.body), false);
+    assert.match(
+      byId.successLooksLike.body,
+      /Success should be measured by|qualified replies|walkthroughs|estimate/i
+    );
+    assert.equal(/Success will be judged by we will know/i.test(byId.successLooksLike.body), false);
+    assert.equal(/i don't want to work with/i.test(byId.whoYouServe.body), false);
   });
 });
