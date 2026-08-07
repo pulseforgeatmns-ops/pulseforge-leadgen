@@ -164,15 +164,35 @@ const SECTION_TO_NORMALIZED = Object.freeze({
 
 /** Explicit domain pointers in correction / supplemental messages. */
 const DOMAIN_POINTER_RE =
-  /\b(?:for|about|regarding|on|to)\s+(?:the\s+)?(services?|ideal\s+customers?|customers?\s+to\s+avoid|geography|markets?|brand\s+voice|voice|success\s+metrics?|metrics?|goals?|growth|differentiation|advantages?|pricing|operations?)\b/i;
+  /\b(?:for|about|regarding|on|to)\s+(?:the\s+)?(services?|ideal\s+customers?|ideal\s+customer\s+profile|icp|customers?\s+to\s+avoid|geography|markets?|brand\s+voice|voice|success\s+metrics?|metrics?|goals?|growth|differentiation|advantages?|pricing|operations?)\b/i;
 
 /** User refinement / meta-instruction intent (not business evidence). */
 const REFINEMENT_INTENT_RE =
   /\b(please\s+refine|this\s+revision|max\s+is\s+treating|regenerate(?:\s+the\s+brief)?|turn\s+the\s+raw\s+(?:interview\s+)?answers|instructions?\s+to\s+max|not\s+facts?\s+about(?:\s+\w+)?|refinement\s+feedback|revision\s+guidance|the\s+brief\s+is\s+treating|please\s+regenerate|this\s+still\s+sounds\s+weird|sentences?\s+don'?t\s+make\s+sense|max\s+isn'?t\s+understanding|brief\s+should\s+be\s+more\s+conversational|this\s+needs\s+to\s+be\s+fixed)\b/i;
 
-/** Supplemental / out-of-order context markers. */
+/** Supplemental / out-of-order context markers (start-anchored). */
 const SUPPLEMENTAL_CONTEXT_RE =
-  /^\s*(also|one more thing|i forgot(?:\s+to\s+mention)?|add this|for context|another thing|not for this question,? but|this might matter|btw|by the way|oh,? and|additionally|worth noting)\b/i;
+  /^\s*(?:i\s+also\s+forgot(?:\s+to\s+mention)?|also\s+forgot(?:\s+to\s+mention)?|i\s+forgot(?:\s+to\s+mention)?|forgot\s+to\s+mention|also|one more thing|add this|for context|another thing|not for this question,? but|this might matter|btw|by the way|oh,? and|additionally|worth noting)\b/i;
+
+/**
+ * Mid-message supplemental / out-of-order markers —
+ * "I also forgot to mention … for ICP"
+ */
+const SUPPLEMENTAL_PHRASE_RE =
+  /\b((?:i\s+)?also\s+forgot(?:\s+to\s+mention)?|forgot\s+to\s+mention|one more thing|for\s+context|not for this question|while i'?m thinking of it|aside from (?:this|that)|for\s+(?:the\s+)?(?:icp|ideal\s+customer(?:\s+profile)?))\b/i;
+
+/** Supplemental preamble wrappers that must never become evidence. */
+const SUPPLEMENTAL_PREAMBLE_PATTERNS = Object.freeze([
+  /^\s*i\s+also\s+forgot\s+to\s+mention\s+/i,
+  /^\s*(?:i\s+)?also\s+forgot(?:\s+to\s+mention)?\s+/i,
+  /^\s*forgot\s+to\s+mention\s+/i,
+  /^\s*i\s+forgot(?:\s+to\s+mention)?\s+/i,
+  /^\s*also[,:\s-]+/i,
+  /^\s*add this\s*[,:\s-]*/i,
+  /^\s*for\s+context\s*[,:\s-]*/i,
+  /^\s*(?:one more thing|another thing|btw|by the way|oh,? and|additionally|worth noting)\s*[,:\s-]*/i,
+  /^\s*not for this question,? but\s*/i,
+]);
 
 /** Correction markers — update/supersede a prior fact, don't append as a new answer. */
 const CORRECTION_RE =
@@ -214,7 +234,7 @@ const META_INSTRUCTION_SANITIZE_RE =
  * These are the bleed patterns from Mad-Lib slot filling.
  */
 const RAW_PROMPT_FRAGMENT_RE =
-  /\b(when a great-fit customer chooses|what usually tips the decision|anchor'?s brand voice should sound|if i were writing as your brand|over the next 90 days(?:, this growth work)?|we will know(?: the growth work is working)?|i don't want to work with|looking at the next 90 days|how will we know it'?s working|paint me a picture of the ideal|tell me about the (?:business|services)|would feel successful if|both geography is|to say short term)\b/i;
+  /\b(when a great-fit customer chooses|what usually tips the decision|anchor'?s brand voice should sound|if i were writing as your brand|over the next 90 days(?:, this growth work)?|we will know(?: the growth work is working)?|i don't want to work with|looking at the next 90 days|how will we know it'?s working|paint me a picture of the ideal|tell me about the (?:business|services)|would feel successful if|both geography is|to say short term|i also forgot to mention|forgot to mention)\b/i;
 
 const SECTION_TITLES = Object.freeze({
   identity: 'Identity',
@@ -499,7 +519,9 @@ function inferDomainFromQuestionEcho(text) {
     return 'geography';
   }
   if (
-    /ideal customers?|who do you most want|paint me a picture of the ideal/.test(s)
+    /ideal customers?|ideal customer profile|\bicp\b|who do you most want|paint me a picture of the ideal/.test(
+      s
+    )
   ) {
     return 'ideal_customer';
   }
@@ -585,14 +607,92 @@ function resolveCorrectionTarget(text, opts = {}) {
   return { domain: null, section: null, reason: 'unresolved', questionId: null };
 }
 
-function looksLikeSupplementalContext(text) {
+function looksLikeSupplementalContext(text, opts = {}) {
   const s = String(text || '').trim();
   if (!s) return false;
   if (SUPPLEMENTAL_CONTEXT_RE.test(s)) return true;
+  if (SUPPLEMENTAL_PHRASE_RE.test(s)) return true;
   if (/\b(not\s+(?:an?\s+)?answer\s+to\s+(?:this|the)\s+question|aside\s+from\s+(?:this|that)|while\s+i'?m\s+thinking\s+of\s+it)\b/i.test(s)) {
     return true;
   }
+
+  // Out-of-order ICP / domain add-on while a different question is active.
+  const activeQuestion = opts.activeQuestion || null;
+  if (activeQuestion && activeQuestion.section) {
+    const domain = tagContextDomain(s);
+    const activeDomain = domainFromSection(activeQuestion.section);
+    if (domain && activeDomain && domain !== activeDomain) {
+      if (
+        /\b(also|forgot|add(?:ing)?|additionally|btw|by the way|one more|for\s+(?:the\s+)?(?:icp|ideal)|ideal\s+customer)\b/i.test(
+          s
+        )
+      ) {
+        return true;
+      }
+      if (domain === 'ideal_customer' && /\b(icp|ideal\s+customer|property managers?)\b/i.test(s)) {
+        return true;
+      }
+    }
+  }
   return false;
+}
+
+/**
+ * Strip supplemental wrappers so only business substance remains.
+ */
+function stripSupplementalPreamble(text) {
+  let s = String(text || '').trim();
+  if (!s) return '';
+
+  for (let i = 0; i < 6; i += 1) {
+    const before = s;
+    for (const re of SUPPLEMENTAL_PREAMBLE_PATTERNS) {
+      s = s.replace(re, '').trim();
+    }
+    s = s
+      .replace(/\s+for\s+(?:the\s+)?(?:icp|ideal\s+customers?|ideal\s+customer\s+profile)\s*$/i, '')
+      .replace(/\bfor\s+(?:the\s+)?(?:icp|ideal\s+customers?|ideal\s+customer\s+profile)\b/gi, ' ')
+      .replace(/^(?:to\s+mention)\s+/i, '')
+      .replace(/^\s*[,;:\-–—]+\s*/, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (s === before) break;
+  }
+  return s;
+}
+
+/**
+ * Parse a supplemental / out-of-order message into target domain + cleaned substance.
+ * @returns {{ domain: string|null, section: string|null, substance: string, raw: string, questionId: string|null }}
+ */
+function parseSupplementalMessage(text, opts = {}) {
+  const raw = String(text || '').trim();
+  let body = stripSupplementalPreamble(raw);
+
+  const domain =
+    inferDomainFromQuestionEcho(raw) ||
+    tagContextDomain(raw) ||
+    inferDomainFromQuestionEcho(body) ||
+    tagContextDomain(body) ||
+    null;
+  const section = (domain && DOMAIN_TO_SECTION[domain]) || null;
+  const questionId = section
+    ? QUESTION_BANK.find((row) => row.section === section)?.id || null
+    : null;
+
+  let substance = body
+    .replace(DOMAIN_POINTER_RE, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  substance = stripInterviewQuestionEcho(substance);
+  if (section) substance = cleanRawAnswer(section, substance);
+  substance = normalizeBusinessPhrase(substance);
+  substance = stripSupplementalPreamble(substance);
+
+  // Ignore unused opts.activeQuestion for now — domain inference is enough.
+  void opts;
+
+  return { domain, section, substance, raw, questionId };
 }
 
 function looksLikeQuestionToMax(text) {
@@ -625,6 +725,7 @@ function domainFromPointerLabel(label) {
   const s = String(label || '').toLowerCase().trim();
   if (!s) return null;
   if (/^services?$/.test(s)) return 'services';
+  if (/^icp$/.test(s)) return 'ideal_customer';
   if (/ideal|customer/.test(s) && !/avoid/.test(s)) return 'ideal_customer';
   if (/avoid/.test(s)) return 'objections';
   if (/geo|market/.test(s)) return 'geography';
@@ -668,7 +769,7 @@ function tagContextDomain(text) {
   if (/\b(manchester|bedford|hooksett|londonderry|auburn|goffstown|geography|geo\b|county)\b/.test(s)) {
     return 'geography';
   }
-  if (/\b(ideal customer|property managers?|homeowners?|facility managers?|segment fit)\b/.test(s)) {
+  if (/\b(ideal customer|ideal customer profile|\bicp\b|property managers?|homeowners?|facility managers?|segment fit)\b/.test(s)) {
     return 'ideal_customer';
   }
   if (/\b(services?|cleans?|cleaning|offers?|provides?|recurring|turnovers?)\b/.test(s)) {
@@ -752,10 +853,10 @@ function classifyInterviewMessage(text, opts = {}) {
   // Corrections first — "disregard last message / replace with…" must not be
   // swallowed as refinement or attached to the active question.
   if (looksLikeCorrection(text)) return MESSAGE_TYPES.CORRECTION;
+  if (looksLikeSupplementalContext(text, opts)) return MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT;
   if (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text)) {
     return MESSAGE_TYPES.REFINEMENT_FEEDBACK;
   }
-  if (looksLikeSupplementalContext(text)) return MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT;
   if (looksLikeQuestionToMax(text)) return MESSAGE_TYPES.QUESTION_TO_MAX;
   if (/^(hi|hello|hey|thanks|thank you|ok|okay|cool|great|nice)\s*[.!]?$/i.test(String(text || '').trim())) {
     return MESSAGE_TYPES.OFF_TOPIC;
@@ -835,7 +936,7 @@ function conversationalQuestionRestate(question, businessName) {
     case 'ideal_customers':
       return 'who do you most want to work with?';
     case 'avoid_customers':
-      return "are there customers you'd rather not take on?";
+      return 'are there any customers or segments you\'d rather not take on?';
     case 'target_markets':
       return 'where should we focus first — geography, verticals, or both?';
     case 'identity':
@@ -850,7 +951,7 @@ function conversationalQuestionRestate(question, businessName) {
  * @param {string} messageType
  * @param {string} text
  * @param {string|null} domain
- * @param {{ activeQuestion?: object|null, targetSection?: string|null, businessName?: string|null }} [opts]
+ * @param {{ activeQuestion?: object|null, targetSection?: string|null, businessName?: string|null, substance?: string|null }} [opts]
  */
 function conversationalAck(messageType, text, domain, opts = {}) {
   const domainLabel = {
@@ -868,13 +969,23 @@ function conversationalAck(messageType, text, domain, opts = {}) {
   const activeQuestion = opts.activeQuestion || null;
   const targetSection = opts.targetSection || null;
   const businessName = opts.businessName || null;
+  const substance = String(opts.substance || '').trim();
 
   switch (messageType) {
-    case MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT:
-      if (domain && domainLabel[domain]) {
-        return `Got it. That sounds like it belongs under ${domainLabel[domain]}. I'll remember it there rather than treating it as your answer to this question.`;
+    case MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT: {
+      const reopen = conversationalQuestionRestate(activeQuestion, businessName);
+      if (domain === 'ideal_customer' && substance) {
+        const added = substance.replace(/\.$/, '');
+        return `Got it. I'll add ${added} to your ideal customer profile. For this question, ${reopen}`;
       }
-      return "Got it. I'll add that to the business context rather than treating it as your answer to this question.";
+      if (domain && domainLabel[domain] && substance) {
+        return `Got it. I'll add ${substance.replace(/\.$/, '')} under ${domainLabel[domain]}. For this question, ${reopen}`;
+      }
+      if (domain && domainLabel[domain]) {
+        return `Got it. That sounds like it belongs under ${domainLabel[domain]}. I'll remember it there rather than treating it as your answer to this question.\n\nFor this question, ${reopen}`;
+      }
+      return `Got it. I'll add that to the business context rather than treating it as your answer to this question.\n\nFor this question, ${reopen}`;
+    }
     case MESSAGE_TYPES.CORRECTION: {
       const correctingPrior =
         Boolean(targetSection) &&
@@ -3714,17 +3825,31 @@ function mergeSupplementalIntoSections(sections, supplementalContext) {
     if (!sectionKey || !out[sectionKey]) continue;
 
     const cleaned = stripInterviewQuestionEcho(
-      String(entry.text)
-        .replace(SUPPLEMENTAL_CONTEXT_RE, '')
-        .replace(CORRECTION_RE, '')
-        .trim()
+      stripSupplementalPreamble(
+        stripCorrectionPreamble(
+          String(entry.substance || entry.text || '')
+            .replace(SUPPLEMENTAL_CONTEXT_RE, '')
+            .replace(CORRECTION_RE, '')
+            .trim()
+        )
+      )
     );
     if (!cleaned || !isBusinessFactStatement(cleaned)) continue;
 
-    if (entry.supersedes || entry.kind === MESSAGE_TYPES.CORRECTION || entry.confirmed) {
+    if (
+      entry.supersedes ||
+      entry.kind === MESSAGE_TYPES.CORRECTION ||
+      entry.kind === MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT ||
+      entry.confirmed
+    ) {
+      // Confirmed supplemental/correction: merge substance into the section summary.
+      const priorSummary = String(out[sectionKey].summary || '').trim();
+      const nextSummary = priorSummary
+        ? summarizeSection(sectionKey, [priorSummary, cleaned])
+        : summarizeSection(sectionKey, [cleaned]);
       out[sectionKey] = {
         ...out[sectionKey],
-        summary: summarizeSection(sectionKey, [cleaned]),
+        summary: nextSummary,
         confidence: Math.max(out[sectionKey].confidence || 0, EXPLICIT_CONFIDENCE),
       };
       continue;
@@ -4105,6 +4230,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   if (messageType !== MESSAGE_TYPES.DIRECT_ANSWER) {
     let correctionDomain = domain;
     let correctionTargetSection = null;
+    let ackSubstance = null;
 
     if (messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
       state.revisionGuidance = [
@@ -4117,14 +4243,84 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         },
       ];
     } else if (messageType === MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT) {
+      const parsed = parseSupplementalMessage(text, { activeQuestion: q.question });
+      const targetSection = parsed.section;
+      correctionDomain = parsed.domain || domain;
+      correctionTargetSection = targetSection;
+      const substance = parsed.substance;
+      ackSubstance = substance;
+
+      if (targetSection && substance && isBusinessFactStatement(substance)) {
+        // Append into the targeted prior domain — never into the unanswered active question.
+        state.normalizedFacts = applyCorrectionToNormalizedFacts(
+          state.normalizedFacts || emptyNormalizedFacts(),
+          { section: targetSection, substance, domain: correctionDomain }
+        );
+        session.interview_state = state;
+
+        const { evidenceRow } = await applySectionUpdate(
+          store,
+          session,
+          targetSection,
+          substance,
+          'CLIENT_EDITED',
+          clientTurn.id
+        );
+        state.normalizedFacts = applyCorrectionToNormalizedFacts(
+          session.interview_state.normalizedFacts || state.normalizedFacts,
+          { section: targetSection, substance, domain: correctionDomain }
+        );
+        const rebuilt = sectionsFromNormalizedFacts(
+          state.normalizedFacts,
+          session.interview_state.sectionState || state.sectionState
+        );
+        const curSection =
+          (session.interview_state.sectionState || state.sectionState)[targetSection] ||
+          emptySection();
+        state.sectionState = {
+          ...(session.interview_state.sectionState || state.sectionState),
+          [targetSection]: {
+            ...curSection,
+            summary: rebuilt[targetSection].summary,
+            confidence: Math.max(curSection.confidence || 0, EXPLICIT_CONFIDENCE),
+            unknowns: [],
+          },
+        };
+        await store.updateTurn(clientTurn.id, {
+          derived_evidence: evidenceRow ? [evidenceRow.id] : [],
+        });
+
+        const questionId =
+          parsed.questionId ||
+          QUESTION_BANK.find((row) => row.section === targetSection)?.id;
+        if (questionId) {
+          const priorAnswer = (state.answers || {})[questionId] || '';
+          // Append supplemental detail to the prior answer without overwriting it.
+          const alreadyHas = priorAnswer
+            .toLowerCase()
+            .includes(String(substance).toLowerCase());
+          state.answers = {
+            ...(state.answers || {}),
+            [questionId]: alreadyHas
+              ? priorAnswer
+              : priorAnswer
+                ? `${priorAnswer}; ${substance}`
+                : substance,
+          };
+        }
+      }
+
       state.supplementalContext = [
         ...(state.supplementalContext || []),
         {
           at: nowIso(),
           text,
-          domain: domain || null,
+          domain: correctionDomain || null,
+          kind: MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT,
+          section: targetSection,
+          substance,
           activeQuestionId: q.question.id,
-          confirmed: false,
+          confirmed: Boolean(targetSection && substance),
         },
       ];
     } else if (messageType === MESSAGE_TYPES.CORRECTION) {
@@ -4236,6 +4432,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       activeQuestion: q.question,
       targetSection: correctionTargetSection,
       businessName,
+      substance: ackSubstance,
     });
     await store.insertTurn({
       id: newId(),
@@ -4789,6 +4986,7 @@ module.exports = {
   sanitizeSectionsForBrief,
   stripInterviewQuestionEcho,
   stripCorrectionPreamble,
+  stripSupplementalPreamble,
   cleanRawAnswer,
   synthesizeNormalizedFact,
   normalizeClaim,
@@ -4800,6 +4998,7 @@ module.exports = {
   extractBusinessName,
   mergeSupplementalIntoSections,
   parseCorrectionMessage,
+  parseSupplementalMessage,
   normalizeBusinessPhrase,
   normalizeBrandVoiceTone,
   sanitizeBusinessName,

@@ -790,6 +790,12 @@ describe('interview message classification + supplemental memory', () => {
       MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT
     );
     assert.equal(
+      classifyInterviewMessage('I also forgot to mention property managers for ICP', {
+        activeQuestion: QUESTION_BANK.find((q) => q.id === 'avoid_customers'),
+      }),
+      MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT
+    );
+    assert.equal(
       classifyInterviewMessage('Actually, focus on Bedford and Hooksett first.'),
       MESSAGE_TYPES.CORRECTION
     );
@@ -827,8 +833,12 @@ describe('interview message classification + supplemental memory', () => {
     assert.equal(session.interview_state.answers.identity, undefined);
     assert.ok((session.interview_state.supplementalContext || []).length >= 1);
     assert.equal(
+      session.interview_state.supplementalContext[0].domain,
+      'geography'
+    );
+    assert.equal(
       session.interview_state.supplementalContext[0].confirmed,
-      false
+      true
     );
 
     const realAnswer = await postInterviewMessage(
@@ -932,6 +942,136 @@ describe('interview message classification + supplemental memory', () => {
     assert.equal(target.reason, 'last_answered');
     assert.equal(target.section, 'competitiveAdvantages');
     assert.equal(target.questionId, 'advantages');
+  });
+
+  it('ICP forgot-to-mention add-on updates ideal customers without answering avoid question', async () => {
+    const {
+      looksLikeSupplementalContext,
+      classifyInterviewMessage,
+      parseSupplementalMessage,
+    } = require('../services/clientIntelligenceInterview');
+
+    const msg = 'I also forgot to mention property managers for ICP';
+    const avoidQ = QUESTION_BANK.find((q) => q.id === 'avoid_customers');
+    assert.equal(looksLikeSupplementalContext(msg, { activeQuestion: avoidQ }), true);
+    assert.equal(
+      classifyInterviewMessage(msg, { activeQuestion: avoidQ }),
+      MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT
+    );
+    const parsed = parseSupplementalMessage(msg);
+    assert.equal(parsed.domain, 'ideal_customer');
+    assert.equal(parsed.section, 'idealCustomers');
+    assert.equal(parsed.substance, 'property managers');
+    assert.equal(/forgot to mention|for ICP/i.test(parsed.substance), false);
+
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 10 }, opts);
+    await postInterviewMessage(
+      started.interviewId,
+      'Anchor Cleaning we are a commercial-focused cleaning company.',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'standard office, recurring cleans, deep cleans',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'facility managers, professional offices, daycares',
+      opts
+    );
+
+    const before = await store.getSession(started.interviewId);
+    assert.equal(QUESTION_BANK[before.interview_state.stepIndex].id, 'avoid_customers');
+    assert.equal(
+      (before.interview_state.normalizedFacts.ideal_customers || []).some((s) =>
+        /property managers/i.test(s)
+      ),
+      false
+    );
+    assert.deepEqual(before.interview_state.normalizedFacts.disqualified_customers || [], []);
+
+    const supplement = await postInterviewMessage(started.interviewId, msg, opts);
+    assert.equal(supplement.messageType, MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT);
+    assert.equal(supplement.question.id, 'avoid_customers');
+    assert.match(
+      supplement.message,
+      /add property managers to your ideal customer profile/i
+    );
+    assert.match(
+      supplement.message,
+      /are there any customers or segments you'?d rather not take on/i
+    );
+    assert.equal(/Where should we focus first/i.test(supplement.message), false);
+
+    const after = await store.getSession(started.interviewId);
+    assert.equal(after.interview_state.stepIndex, before.interview_state.stepIndex);
+    assert.equal(QUESTION_BANK[after.interview_state.stepIndex].id, 'avoid_customers');
+    assert.equal(after.interview_state.answers.avoid_customers, undefined);
+    assert.ok(
+      (after.interview_state.normalizedFacts.ideal_customers || []).some((s) =>
+        /property managers/i.test(s)
+      )
+    );
+    assert.deepEqual(after.interview_state.normalizedFacts.disqualified_customers || [], []);
+    assert.equal(
+      /forgot to mention|I also forgot/i.test(
+        JSON.stringify(after.interview_state.normalizedFacts)
+      ),
+      false
+    );
+
+    // Finish interview and assert brief treats property managers as ICP, not declined.
+    await postInterviewMessage(
+      started.interviewId,
+      "I don't want to work with customers whose main priority is the lowest price",
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'Greater Manchester area includes Bedford, Hooksett, Londonderry, Auburn, Goffstown',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'trust — responsive, consistent, and accountable without needing to chase the work',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      "anchor's brand voice should sound calm, professional, reliable, and easy to work with",
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'would feel successful if Anchor has a clearer path to commercial opportunities over the next 90 days',
+      opts
+    );
+    const done = await postInterviewMessage(
+      started.interviewId,
+      'we will know by watching qualified replies, booked conversations, and walkthroughs',
+      opts
+    );
+    assert.ok(done.executiveSummary);
+    const blob = JSON.stringify(done.executiveSummary);
+    assert.match(blob, /property managers/i);
+    assert.equal(/forgot to mention/i.test(blob), false, blob);
+    assert.equal(
+      /declines? property managers|avoid(?:s|ing)? property managers|does not want .*property managers/i.test(
+        blob
+      ),
+      false,
+      blob
+    );
+    const byId = Object.fromEntries(done.executiveSummary.sections.map((s) => [s.id, s]));
+    assert.match(byId.whoYouServe.body, /property managers/i);
+    assert.equal(
+      /declines? property managers|avoid(?:s|ing)? property managers/i.test(
+        byId.whoYouServe.body
+      ),
+      false
+    );
   });
 });
 
