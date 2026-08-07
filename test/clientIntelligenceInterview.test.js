@@ -890,7 +890,7 @@ describe('interview message classification + supplemental memory', () => {
     );
     assert.equal(corrected.messageType, MESSAGE_TYPES.CORRECTION);
     assert.equal(corrected.question.id, 'ideal_customers');
-    assert.match(corrected.message, /update|geography|correction/i);
+    assert.match(corrected.message, /update|geography|correction|replaced/i);
 
     const session = await store.getSession(started.interviewId);
     assert.equal(session.interview_state.stepIndex, before.interview_state.stepIndex);
@@ -899,6 +899,39 @@ describe('interview message classification + supplemental memory', () => {
       String(session.interview_state.sectionState.targetMarkets.summary || ''),
       /Greater Manchester|Bedford|Hooksett/i
     );
+  });
+
+  it('last-message correction without domain language targets the prior answer', async () => {
+    const {
+      resolveCorrectionTarget,
+      looksLikeCorrection,
+    } = require('../services/clientIntelligenceInterview');
+
+    assert.equal(
+      looksLikeCorrection('disregard last message, please replace with the following; calm and reliable crews'),
+      true
+    );
+
+    const target = resolveCorrectionTarget(
+      'disregard last message, please replace with the following; calm and reliable crews',
+      {
+        activeQuestion: QUESTION_BANK.find((q) => q.id === 'brand_voice'),
+        state: {
+          stepIndex: 6,
+          answers: {
+            identity: 'Anchor Cleaning',
+            services: 'office cleaning',
+            ideal_customers: 'property managers',
+            avoid_customers: 'lowest price',
+            target_markets: 'Greater Manchester',
+            advantages: 'Pulseforge software automation',
+          },
+        },
+      }
+    );
+    assert.equal(target.reason, 'last_answered');
+    assert.equal(target.section, 'competitiveAdvantages');
+    assert.equal(target.questionId, 'advantages');
   });
 });
 
@@ -1167,6 +1200,206 @@ describe('Anchor transcript — correction routing + normalized brief', () => {
         String(session.interview_state.sectionState.idealCustomers.summary || '')
       ),
       false
+    );
+  });
+
+  it('routes disregard-last-message correction to prior differentiation, not brand voice', async () => {
+    const {
+      looksLikeCorrection,
+      classifyInterviewMessage,
+      parseCorrectionMessage,
+      resolveCorrectionTarget,
+      stripCorrectionPreamble,
+    } = require('../services/clientIntelligenceInterview');
+
+    const wrongDiff =
+      'Pulseforge wins on software automation and lead generation for marketing agencies.';
+    const correctionMsg =
+      'disregard last message, please replace with the following; When a great-fit customer chooses Anchor over someone else, what usually tips the decision is trust — responsive, consistent, and accountable without needing to chase the work.';
+    const brandVoiceAnswer =
+      "anchor's brand voice should sound calm, professional, reliable, and easy to work with";
+
+    assert.equal(looksLikeCorrection(correctionMsg), true);
+    assert.equal(classifyInterviewMessage(correctionMsg), MESSAGE_TYPES.CORRECTION);
+    assert.equal(
+      /disregard last message|please replace with the following/i.test(
+        stripCorrectionPreamble(correctionMsg)
+      ),
+      false
+    );
+
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 10 }, opts);
+
+    await postInterviewMessage(
+      started.interviewId,
+      'Anchor Cleaning we are a commercial-focused cleaning company.',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'standard office, recurring cleans, deep cleans',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'property managers, facility managers, professional offices',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      "I don't want to work with customers whose main priority is the lowest price",
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'Greater Manchester area includes Bedford, Hooksett, Londonderry, Auburn, Goffstown',
+      opts
+    );
+    await postInterviewMessage(started.interviewId, wrongDiff, opts);
+
+    const beforeCorrection = await store.getSession(started.interviewId);
+    assert.equal(
+      QUESTION_BANK[beforeCorrection.interview_state.stepIndex].id,
+      'brand_voice'
+    );
+    assert.match(
+      String(beforeCorrection.interview_state.normalizedFacts.differentiation || ''),
+      /software|lead generation|Pulseforge/i
+    );
+    assert.equal(beforeCorrection.interview_state.normalizedFacts.brand_voice, null);
+
+    const resolved = resolveCorrectionTarget(correctionMsg, {
+      activeQuestion: QUESTION_BANK.find((q) => q.id === 'brand_voice'),
+      state: beforeCorrection.interview_state,
+    });
+    assert.equal(resolved.domain, 'differentiation');
+    assert.equal(resolved.section, 'competitiveAdvantages');
+    assert.equal(resolved.reason, 'explicit_domain');
+
+    const parsed = parseCorrectionMessage(correctionMsg, null, {
+      activeQuestion: QUESTION_BANK.find((q) => q.id === 'brand_voice'),
+      state: beforeCorrection.interview_state,
+    });
+    assert.equal(parsed.domain, 'differentiation');
+    assert.equal(parsed.section, 'competitiveAdvantages');
+    assert.equal(/disregard|please replace/i.test(parsed.substance), false);
+    assert.match(parsed.substance, /trust|responsive|accountable/i);
+
+    const corrected = await postInterviewMessage(
+      started.interviewId,
+      correctionMsg,
+      opts
+    );
+    assert.equal(corrected.messageType, MESSAGE_TYPES.CORRECTION);
+    assert.equal(corrected.question.id, 'brand_voice');
+    assert.match(
+      corrected.message,
+      /replaced your previous answer about why customers choose Anchor/i
+    );
+    assert.match(corrected.message, /keep the current question open/i);
+    assert.match(corrected.message, /how should Anchor sound/i);
+
+    const afterCorrection = await store.getSession(started.interviewId);
+    assert.equal(
+      afterCorrection.interview_state.stepIndex,
+      beforeCorrection.interview_state.stepIndex
+    );
+    assert.equal(
+      QUESTION_BANK[afterCorrection.interview_state.stepIndex].id,
+      'brand_voice'
+    );
+
+    const facts = afterCorrection.interview_state.normalizedFacts;
+    assert.match(String(facts.differentiation || ''), /trust|responsive|accountab/i);
+    assert.equal(/Pulseforge|software|lead generation/i.test(String(facts.differentiation || '')), false);
+    assert.equal(facts.brand_voice, null);
+    assert.equal(
+      /disregard last message/i.test(String(facts.brand_voice || '')),
+      false
+    );
+    assert.equal(
+      /disregard last message/i.test(
+        String(afterCorrection.interview_state.answers.brand_voice || '')
+      ),
+      false
+    );
+    assert.equal(afterCorrection.interview_state.answers.brand_voice, undefined);
+    assert.match(
+      String(afterCorrection.interview_state.answers.advantages || ''),
+      /trust|responsive|accountab/i
+    );
+    assert.equal(
+      /disregard last message|please replace with the following/i.test(
+        String(afterCorrection.interview_state.answers.advantages || '')
+      ),
+      false
+    );
+
+    const brandTurn = await postInterviewMessage(
+      started.interviewId,
+      brandVoiceAnswer,
+      opts
+    );
+    // Active question advances only after a real brand-voice answer.
+    assert.equal(brandTurn.question.id, 'campaign_goals');
+    assert.notEqual(brandTurn.messageType, MESSAGE_TYPES.CORRECTION);
+
+    const afterBrand = await store.getSession(started.interviewId);
+    assert.match(
+      String(afterBrand.interview_state.normalizedFacts.brand_voice || ''),
+      /calm, professional, reliable/i
+    );
+    assert.equal(
+      /disregard last message/i.test(
+        String(afterBrand.interview_state.normalizedFacts.brand_voice || '')
+      ),
+      false
+    );
+    assert.match(
+      String(afterBrand.interview_state.normalizedFacts.differentiation || ''),
+      /trust|responsive|accountab/i
+    );
+    assert.equal(
+      /Pulseforge|software|lead generation/i.test(
+        String(afterBrand.interview_state.normalizedFacts.differentiation || '')
+      ),
+      false
+    );
+
+    // Finish remaining questions so we can assert on the generated brief.
+    await postInterviewMessage(
+      started.interviewId,
+      'would feel successful if Anchor has a clearer path to commercial cleaning opportunities in Greater Manchester over the next 90 days',
+      opts
+    );
+    const done = await postInterviewMessage(
+      started.interviewId,
+      'we will know the growth work is working by watching qualified replies, booked conversations, and walkthroughs',
+      opts
+    );
+    assert.ok(done.executiveSummary);
+    const briefBlob = JSON.stringify(done.executiveSummary);
+    assert.equal(/disregard last message/i.test(briefBlob), false, briefBlob);
+    assert.equal(/please replace with the following/i.test(briefBlob), false, briefBlob);
+    assert.equal(/Pulseforge|software automation|lead generation for marketing/i.test(briefBlob), false, briefBlob);
+
+    const byId = Object.fromEntries(done.executiveSummary.sections.map((s) => [s.id, s]));
+    assert.match(byId.whyChooseYou.body, /trust|responsive|accountab/i);
+    assert.equal(
+      /disregard last message/i.test(byId.whyChooseYou.body),
+      false
+    );
+    // Differentiation content must not be used as brand voice.
+    assert.equal(
+      /Brand voice should feel .*disregard|brand voice should feel trust — responsive/i.test(
+        byId.whyChooseYou.body
+      ),
+      false
+    );
+    assert.match(
+      byId.whyChooseYou.body,
+      /brand voice should feel calm, professional, reliable/i
     );
   });
 
