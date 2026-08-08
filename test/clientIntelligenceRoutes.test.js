@@ -72,6 +72,8 @@ describe('clientIntelligence routes (static)', () => {
       '/api/v1/interview/:id/blueprint',
       '/api/v1/blueprint/:id/revise',
       '/api/v1/blueprint/:id/approve',
+      '/api/v1/interview/:id/growth/start',
+      '/api/v1/interview/:id/growth/message',
       '/api/v1/clients/:id/blueprint',
       '/client-intel',
     ];
@@ -108,19 +110,25 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /earned your trust/);
     assert.match(uiSource, /foundation Pulseforge will use/);
     assert.match(uiSource, /Return to Dashboard/);
+    assert.match(uiSource, /Start Growth Conversation/);
+    assert.match(uiSource, /Initial Growth Direction/);
     assert.match(uiSource, /assessment-stars/);
     assert.match(uiSource, /2500/);
   });
 
   it('handles blueprint approval post-state without stuck loading or red APPROVED error', () => {
-    assert.match(uiSource, /Blueprint approved\. Client Playbook is ready\./);
+    assert.match(uiSource, /Blueprint approved/);
+    assert.match(uiSource, /Client Playbook ready/);
+    assert.match(uiSource, /Initial Growth Direction/);
+    assert.match(uiSource, /Start Growth Conversation/);
     assert.match(uiSource, /applyApprovedState/);
     assert.match(uiSource, /approveInFlight/);
     assert.match(uiSource, /already_approved|alreadyApproved/);
     assert.match(uiSource, /sessionStatus\s*===\s*'APPROVED'/);
     assert.match(uiSource, /playbook_prep/);
-    assert.match(uiSource, /approvalSuccess|Client Playbook is ready/);
+    assert.match(uiSource, /approvalSuccess|Client Playbook ready/);
     assert.match(uiSource, /was APPROVED/);
+    assert.match(uiSource, /startGrowthConversation|\/growth\/start/);
     assert.doesNotMatch(uiSource, /Session must be CLIENT_REVIEW to approve/);
     // After Ready checklist, UI must land on complete / approved outcome.
     assert.match(uiSource, /setPhase\('complete'\)/);

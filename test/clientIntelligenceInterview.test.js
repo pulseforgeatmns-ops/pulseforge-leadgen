@@ -755,6 +755,9 @@ describe('blueprint revise + approve + playbook handoff', () => {
     assert.deepEqual(result.playbook.preferredChannels, []);
     assert.deepEqual(result.playbook.offers, []);
     assert.deepEqual(result.playbook.outreachSequence, []);
+    assert.ok(result.initialGrowthDirection);
+    assert.equal(result.initialGrowthDirection.kind, 'initial_growth_direction');
+    assert.ok(result.initialGrowthDirection.paragraphs.length >= 3);
     assert.ok(result.sectionProvenance);
     for (const [field, sources] of Object.entries(SECTION_PROVENANCE)) {
       if (['preferredChannels', 'outreachSequence', 'offers', 'constraints'].includes(field)) {

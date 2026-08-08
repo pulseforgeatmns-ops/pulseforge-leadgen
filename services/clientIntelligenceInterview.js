@@ -13,6 +13,11 @@ const defaultPool = require('../db');
 const {
   createPlaybookFromApprovedBlueprint,
 } = require('./clientIntelligencePlaybookHandoff');
+const {
+  buildInitialGrowthDirection,
+  buildGrowthConversationOpening,
+  buildGrowthConversationReply,
+} = require('./clientIntelligenceGrowthDirection');
 
 const SESSION_STATUSES = Object.freeze([
   'NEW',
@@ -4893,12 +4898,19 @@ async function getInterview(sessionId, opts = {}) {
     );
   }
   const q = currentQuestion(session.interview_state);
+  const initialGrowthDirection =
+    session.status === 'APPROVED'
+      ? resolveInitialGrowthDirection(blueprint, session.interview_state)
+      : (session.interview_state && session.interview_state.initialGrowthDirection) || null;
   return withExperienceFields(session, {
     interviewId: session.id,
     ...publicSession(session),
     turns: turns.map(publicTurn),
     evidence: evidence.map(publicEvidence),
     blueprint: publicBlueprint(blueprint),
+    initialGrowthDirection,
+    growthConversation:
+      (session.interview_state && session.interview_state.growthConversation) || null,
     question: q
       ? {
           id: q.question.id,
@@ -5159,7 +5171,26 @@ async function resumeInterview(sessionId, opts = {}) {
   });
 }
 
-function alreadyApprovedPayload(blueprint, playbook = null) {
+function resolveInitialGrowthDirection(blueprint, interviewState = null) {
+  if (
+    interviewState &&
+    interviewState.initialGrowthDirection &&
+    interviewState.initialGrowthDirection.kind === 'initial_growth_direction'
+  ) {
+    return interviewState.initialGrowthDirection;
+  }
+  if (!blueprint || !blueprint.sections) return null;
+  try {
+    return buildInitialGrowthDirection(blueprint, {
+      normalizedFacts:
+        (interviewState && interviewState.normalizedFacts) || null,
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+function alreadyApprovedPayload(blueprint, playbook = null, interviewState = null) {
   const bp = publicBlueprint(blueprint);
   let pb = playbook;
   if (!pb && blueprint) {
@@ -5179,6 +5210,7 @@ function alreadyApprovedPayload(blueprint, playbook = null) {
     message: 'already_approved',
     blueprint: bp,
     playbook: pb,
+    initialGrowthDirection: resolveInitialGrowthDirection(blueprint, interviewState),
     alreadyApproved: true,
   };
 }
@@ -5194,7 +5226,12 @@ async function approveBlueprint(blueprintId, opts = {}) {
     throw new ClientIntelligenceError('not_found', 'Blueprint not found', 404);
   }
   if (current.status === 'approved') {
-    return alreadyApprovedPayload(current);
+    const approvedSession = await store.getSession(current.session_id);
+    return alreadyApprovedPayload(
+      current,
+      null,
+      approvedSession && approvedSession.interview_state
+    );
   }
   if (!['draft', 'in_review'].includes(current.status)) {
     throw new ClientIntelligenceError(
@@ -5223,13 +5260,17 @@ async function approveBlueprint(blueprintId, opts = {}) {
       (current.status === 'approved' && current) ||
       latest ||
       current;
-    return alreadyApprovedPayload(approvedBp, session.interview_state && session.interview_state.playbookId
-      ? {
-          id: session.interview_state.playbookId,
-          version: session.interview_state.playbookVersion,
-          status: 'pending_review',
-        }
-      : null);
+    return alreadyApprovedPayload(
+      approvedBp,
+      session.interview_state && session.interview_state.playbookId
+        ? {
+            id: session.interview_state.playbookId,
+            version: session.interview_state.playbookVersion,
+            status: 'pending_review',
+          }
+        : null,
+      session.interview_state
+    );
   }
 
   if (session.status !== 'CLIENT_REVIEW') {
@@ -5252,6 +5293,11 @@ async function approveBlueprint(blueprintId, opts = {}) {
   });
   await store.supersedeBlueprints(current.id, current.version);
 
+  const initialGrowthDirection = buildInitialGrowthDirection(approved, {
+    normalizedFacts:
+      (session.interview_state && session.interview_state.normalizedFacts) || null,
+  });
+
   advanceStatus(session, 'APPROVED');
   session.completed_at = new Date();
   await store.updateSession(session.id, {
@@ -5264,6 +5310,8 @@ async function approveBlueprint(blueprintId, opts = {}) {
       blueprintVersion: approved.version,
       playbookId: handoff.playbook.id,
       playbookVersion: handoff.playbook.version,
+      initialGrowthDirection,
+      growthConversation: null,
     },
   });
 
@@ -5273,8 +5321,167 @@ async function approveBlueprint(blueprintId, opts = {}) {
     message: 'approved',
     blueprint: publicBlueprint(approved),
     playbook: handoff.playbook,
+    initialGrowthDirection,
     sectionProvenance: handoff.sectionProvenance,
     alreadyApproved: false,
+  };
+}
+
+/**
+ * Begin the post-approval Growth Conversation using the approved Blueprint
+ * and Initial Growth Direction as context.
+ */
+async function startGrowthConversation(sessionId, opts = {}) {
+  const store = await resolveStore(opts);
+  const session = await store.getSession(sessionId);
+  if (!session) {
+    throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
+  }
+  if (session.status !== 'APPROVED') {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      'Growth Conversation requires an approved Blueprint'
+    );
+  }
+
+  let blueprint = null;
+  if (session.interview_state && session.interview_state.blueprintId) {
+    blueprint = await store.getBlueprint(
+      session.interview_state.blueprintId,
+      session.interview_state.blueprintVersion
+    );
+  }
+  if (!blueprint || blueprint.status !== 'approved') {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      'Approved Business Blueprint not found for this interview'
+    );
+  }
+
+  const growthDirection = resolveInitialGrowthDirection(
+    blueprint,
+    session.interview_state
+  );
+  const opening = buildGrowthConversationOpening(growthDirection);
+  const prior =
+    (session.interview_state && session.interview_state.growthConversation) || null;
+  const turns = (prior && Array.isArray(prior.turns) && prior.turns.length
+    ? prior.turns
+    : []
+  ).slice();
+
+  if (!turns.length) {
+    turns.push({
+      speaker: 'assistant',
+      message: opening,
+      at: new Date().toISOString(),
+    });
+  }
+
+  const growthConversation = {
+    status: 'active',
+    startedAt:
+      (prior && prior.startedAt) || new Date().toISOString(),
+    context: {
+      blueprintId: blueprint.id,
+      blueprintVersion: blueprint.version,
+      initialGrowthDirection: growthDirection,
+    },
+    turns,
+  };
+
+  await store.updateSession(session.id, {
+    interview_state: {
+      ...session.interview_state,
+      initialGrowthDirection: growthDirection,
+      growthConversation,
+    },
+  });
+
+  return {
+    ok: true,
+    interviewId: session.id,
+    status: 'GROWTH_CONVERSATION',
+    message: opening,
+    initialGrowthDirection: growthDirection,
+    blueprint: publicBlueprint(blueprint),
+    growthConversation,
+    resumed: Boolean(prior && prior.turns && prior.turns.length),
+  };
+}
+
+/**
+ * Continue the Growth Conversation. Blueprint-grounded only — no campaigns,
+ * prospect lists, or autonomous execution.
+ */
+async function postGrowthMessage(sessionId, message, opts = {}) {
+  const store = await resolveStore(opts);
+  const session = await store.getSession(sessionId);
+  if (!session) {
+    throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
+  }
+  if (session.status !== 'APPROVED') {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      'Growth Conversation requires an approved Blueprint'
+    );
+  }
+
+  const text = String(message || '').trim();
+  if (!text) {
+    throw new ClientIntelligenceError('empty_message', 'message is required', 400);
+  }
+
+  let blueprint = null;
+  if (session.interview_state && session.interview_state.blueprintId) {
+    blueprint = await store.getBlueprint(
+      session.interview_state.blueprintId,
+      session.interview_state.blueprintVersion
+    );
+  }
+  const growthDirection = resolveInitialGrowthDirection(
+    blueprint,
+    session.interview_state
+  );
+  let growthConversation =
+    (session.interview_state && session.interview_state.growthConversation) || null;
+  if (!growthConversation || growthConversation.status !== 'active') {
+    const started = await startGrowthConversation(sessionId, opts);
+    growthConversation = started.growthConversation;
+  }
+
+  const reply = buildGrowthConversationReply(
+    text,
+    growthDirection,
+    blueprint || { sections: {} }
+  );
+  const turns = [
+    ...((growthConversation && growthConversation.turns) || []),
+    { speaker: 'client', message: text, at: new Date().toISOString() },
+    { speaker: 'assistant', message: reply, at: new Date().toISOString() },
+  ];
+  const nextGrowth = {
+    ...growthConversation,
+    status: 'active',
+    turns,
+  };
+
+  await store.updateSession(session.id, {
+    interview_state: {
+      ...session.interview_state,
+      initialGrowthDirection: growthDirection,
+      growthConversation: nextGrowth,
+    },
+  });
+
+  return {
+    ok: true,
+    interviewId: session.id,
+    status: 'GROWTH_CONVERSATION',
+    message: reply,
+    initialGrowthDirection: growthDirection,
+    blueprint: publicBlueprint(blueprint),
+    growthConversation: nextGrowth,
   };
 }
 
@@ -5315,6 +5522,9 @@ module.exports = {
   getClientBlueprint,
   reviseBlueprint,
   approveBlueprint,
+  startGrowthConversation,
+  postGrowthMessage,
+  resolveInitialGrowthDirection,
   detectContradiction,
   answerLooksEmpty,
   classifyUserResponse,

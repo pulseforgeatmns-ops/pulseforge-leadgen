@@ -12,6 +12,8 @@
  * GET  /api/v1/interview/:id/blueprint
  * POST /api/v1/blueprint/:id/revise
  * POST /api/v1/blueprint/:id/approve
+ * POST /api/v1/interview/:id/growth/start
+ * POST /api/v1/interview/:id/growth/message
  * GET  /api/v1/clients/:id/blueprint
  * GET  /client-intel → UI
  */
@@ -30,6 +32,8 @@ const {
   getClientBlueprint,
   reviseBlueprint,
   approveBlueprint,
+  startGrowthConversation,
+  postGrowthMessage,
 } = require('../services/clientIntelligenceInterview');
 
 const requireOperator = [requireAuth, requireRole('admin', 'manager', 'client')];
@@ -142,6 +146,41 @@ router.post('/api/v1/blueprint/:id/approve', requireOperator, async (req, res) =
     return sendError(res, err);
   }
 });
+
+router.post(
+  '/api/v1/interview/:id/growth/start',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const result = await startGrowthConversation(req.params.id);
+      noStore(res);
+      return res.json(result);
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
+
+router.post(
+  '/api/v1/interview/:id/growth/message',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const message = req.body && req.body.message;
+      if (message == null || String(message).trim() === '') {
+        return res.status(400).json({
+          error: 'empty_message',
+          message: 'message is required',
+        });
+      }
+      const result = await postGrowthMessage(req.params.id, message);
+      noStore(res);
+      return res.json(result);
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
 
 router.get('/api/v1/clients/:id/blueprint', requireOperator, async (req, res) => {
   try {
