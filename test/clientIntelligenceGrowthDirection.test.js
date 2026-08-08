@@ -103,11 +103,16 @@ describe('Initial Growth Direction artifact', () => {
     const gd = buildInitialGrowthDirection(ANCHOR_BLUEPRINT, {
       normalizedFacts: {
         business_name: 'Anchor Cleaning',
-        growth_focus: 'recurring commercial cleaning',
+        growth_focus:
+          'recurring commercial cleaning; customers who need weekly or multiple-times-per-week service',
         ideal_customers: [
           'property managers',
+          'short-term rental companies',
           'facility managers',
           'professional offices',
+          'daycares',
+          'rec centers',
+          'high-traffic buildings',
         ],
         geography: [
           'Greater Manchester',
@@ -124,17 +129,57 @@ describe('Initial Growth Direction artifact', () => {
     assert.equal(gd.title, 'Initial Growth Direction');
     assert.equal(gd.directional, true);
     assert.equal(gd.disclaimer, DIRECTIONAL_LABEL);
-    assert.match(gd.heading, /Anchor/i);
+    assert.match(gd.heading, /Anchor'?s first growth focus/i);
     assert.match(gd.firstFocus, /recurring commercial cleaning/i);
     assert.ok(gd.paragraphs.length >= 3 && gd.paragraphs.length <= 5);
-    assert.match(gd.paragraphs[0], /Based on this Blueprint/i);
-    assert.match(gd.paragraphs[0], /Greater Manchester/i);
+
+    const lead = gd.paragraphs[0];
+    assert.match(
+      lead,
+      /Based on this Blueprint, Anchor'?s first growth focus should be recurring commercial cleaning in Greater Manchester/i
+    );
+    assert.match(
+      lead,
+      /especially for customers who need consistent service weekly or multiple times per week\./i
+    );
+    assert.doesNotMatch(
+      lead,
+      /weekly or multiple times per week in Greater Manchester/i
+    );
+
+    assert.match(
+      gd.paragraphs[1],
+      /follows directly from the approved Blueprint:/i
+    );
+    assert.match(gd.paragraphs[1], /directional read, not market validation/i);
+
+    const segmentsPara = gd.paragraphs[2];
+    assert.match(segmentsPara, /first segments worth comparing are/i);
+    assert.match(
+      segmentsPara,
+      /across Greater Manchester, especially Bedford, Hooksett, Londonderry, Auburn, and Goffstown/i
+    );
+    assert.equal(
+      (segmentsPara.match(/Greater Manchester/gi) || []).length,
+      1,
+      'segments paragraph should not repeat Greater Manchester'
+    );
+
+    assert.match(gd.paragraphs.join('\n'), /who Anchor should avoid/i);
+    assert.match(
+      gd.paragraphs[gd.paragraphs.length - 1],
+      /next conversation should turn this directional read into a focused growth plan/i
+    );
+
     assert.ok(gd.segmentsToInspect.some((s) => /property managers/i.test(s)));
-    assert.ok(gd.marketsToInspect.some((m) => /Greater Manchester|Bedford/i.test(m)));
-    assert.match(gd.nextConversationPreview, /growth conversation/i);
+    assert.ok(gd.marketsToInspect.some((m) => /Greater Manchester/i.test(m)));
     const blob = gd.paragraphs.join(' ');
-    assert.doesNotMatch(blob, /campaign sequence|here is your prospect list|I validated|market is validated/i);
-    assert.match(blob, /not from market validation|has not done yet/i);
+    assert.doesNotMatch(
+      blob,
+      /campaign sequence|here is your prospect list|I validated|market is validated/i
+    );
+    assert.doesNotMatch(blob, /First, Max would inspect/i);
+    assert.doesNotMatch(blob, /Greater Manchester \(/i);
   });
 
   it('growth conversation opening stays pre-strategy', () => {
