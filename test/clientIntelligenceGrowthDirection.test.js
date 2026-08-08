@@ -9,8 +9,11 @@ const {
   buildGrowthConversationReply,
   detectGrowthConversationIntent,
   buildSegmentRanking,
+  buildValidationTarget,
   DIRECTIONAL_LABEL,
   SEGMENT_RANKING_KIND,
+  VALIDATION_TARGET_KIND,
+  VALIDATION_TARGET_INTENT,
 } = require('../services/clientIntelligenceGrowthDirection');
 const {
   createMemoryStore,
@@ -413,6 +416,206 @@ describe('Growth Conversation segment ranking', () => {
     assert.doesNotMatch(
       reply.message,
       /prospect list|campaign is live|here is your campaign copy/i
+    );
+  });
+});
+
+const GOOD_FIRST_WIN_MESSAGE = `Let's define what a good first win looks like before building any campaign or prospect list.
+
+For the property manager segment, I want to know:
+- What type of property manager is the best first test?
+- What size or type of property should Anchor pursue first?
+- What pain point should the first message focus on?
+- What proof would make Anchor credible enough to consider?
+- What early signals would tell us this segment is worth continuing?
+- What would count as a successful first 30 days of validation?
+
+Keep this directional and practical. I'm not asking for outreach copy or a prospect list yet. I want the validation target first.`;
+
+describe('Growth Conversation define_validation_target', () => {
+  function anchorGrowthDirection() {
+    return buildInitialGrowthDirection(ANCHOR_BLUEPRINT, {
+      normalizedFacts: {
+        business_name: 'Anchor Cleaning',
+        growth_focus:
+          'recurring commercial cleaning; customers who need weekly or multiple-times-per-week service',
+        ideal_customers: [
+          'property managers',
+          'short-term rental companies',
+          'facility managers',
+          'professional offices',
+          'daycares',
+          'rec centers',
+          'high-traffic buildings',
+        ],
+        geography: [
+          'Greater Manchester',
+          'Bedford',
+          'Hooksett',
+          'Londonderry',
+          'Auburn',
+          'Goffstown',
+        ],
+      },
+    });
+  }
+
+  it('detects good-first-win / validation-target phrases as define_validation_target', () => {
+    assert.equal(
+      detectGrowthConversationIntent(GOOD_FIRST_WIN_MESSAGE),
+      VALIDATION_TARGET_INTENT
+    );
+    assert.equal(
+      detectGrowthConversationIntent(
+        'Define the validation target for property managers'
+      ),
+      VALIDATION_TARGET_INTENT
+    );
+    assert.equal(
+      detectGrowthConversationIntent(
+        'What early signals would tell us this is worth continuing?'
+      ),
+      VALIDATION_TARGET_INTENT
+    );
+    assert.equal(
+      detectGrowthConversationIntent(
+        'What would count as a successful first 30 days?'
+      ),
+      VALIDATION_TARGET_INTENT
+    );
+    assert.equal(
+      detectGrowthConversationIntent(
+        'I am not asking for outreach copy — give me the first win criteria'
+      ),
+      VALIDATION_TARGET_INTENT
+    );
+    // Ranking still wins when the user explicitly asks to rank, without
+    // validation-target phrasing.
+    assert.equal(
+      detectGrowthConversationIntent('Please rank the segments'),
+      'rank_segments'
+    );
+  });
+
+  it('after Segment Ranking, a good-first-win request does not repeat Segment Ranking', () => {
+    const gd = anchorGrowthDirection();
+    const rankingReply = buildGrowthConversationReply(
+      'Please rank the segments and make a directional call.',
+      gd,
+      ANCHOR_BLUEPRINT
+    );
+    assert.equal(rankingReply.segmentRanking.kind, SEGMENT_RANKING_KIND);
+
+    const reply = buildGrowthConversationReply(
+      GOOD_FIRST_WIN_MESSAGE,
+      gd,
+      ANCHOR_BLUEPRINT,
+      { priorSegmentRanking: rankingReply.segmentRanking }
+    );
+
+    assert.equal(reply.intent, VALIDATION_TARGET_INTENT);
+    assert.equal(reply.segmentRanking, null);
+    assert.ok(reply.validationTarget);
+    assert.equal(reply.validationTarget.kind, VALIDATION_TARGET_KIND);
+    assert.match(reply.message, /^Property Manager Validation Target/m);
+    assert.doesNotMatch(reply.message, /^Segment Ranking/m);
+    assert.doesNotMatch(reply.message, /Best first segment to test/i);
+    assert.doesNotMatch(reply.message, /Directional recommendation:/i);
+  });
+
+  it('validation target includes type, size, pain point, proof, signals, 30-day criteria, cautions', () => {
+    const gd = anchorGrowthDirection();
+    const prior = buildSegmentRanking(gd, ANCHOR_BLUEPRINT, {
+      intent: 'rank_segments',
+    });
+    const target = buildValidationTarget(gd, ANCHOR_BLUEPRINT, {
+      intent: VALIDATION_TARGET_INTENT,
+      userMessage: GOOD_FIRST_WIN_MESSAGE,
+      priorSegmentRanking: prior,
+    });
+    const reply = buildGrowthConversationReply(
+      GOOD_FIRST_WIN_MESSAGE,
+      gd,
+      ANCHOR_BLUEPRINT,
+      { priorSegmentRanking: prior }
+    );
+
+    assert.equal(target.focusSegment, 'property managers');
+    assert.match(reply.message, /Best first property manager type/i);
+    assert.match(
+      reply.message,
+      /Small to mid-sized local property managers/i
+    );
+    assert.match(reply.message, /Property size\/type to pursue first/i);
+    assert.match(reply.message, /weekly or multiple times per week/i);
+    assert.match(reply.message, /First pain point to test/i);
+    assert.match(reply.message, /Reliability and responsiveness/i);
+    assert.match(reply.message, /Credibility proof/i);
+    assert.match(reply.message, /commercial cleaning checklist/i);
+    assert.match(reply.message, /Early signals worth continuing/i);
+    assert.match(reply.message, /agrees to a walkthrough/i);
+    assert.match(reply.message, /Successful first 30 days of validation/i);
+    assert.match(reply.message, /walkthrough or estimate request/i);
+    assert.match(reply.message, /Cautions/i);
+    assert.match(reply.message, /Do not chase every property manager/i);
+    assert.match(reply.message, /Directional, not market-validated/i);
+    assert.equal(target.marketValidated, false);
+
+    assert.doesNotMatch(
+      reply.message,
+      /outreach copy|email sequence|here is your campaign|prospect list|here are \d+ prospects/i
+    );
+  });
+
+  it('postGrowthMessage progresses from ranking to validation target end-to-end', async () => {
+    const store = createMemoryStore();
+    const opts = { store, useMemoryPlaybookStore: true };
+    const started = await startClientInterview({ clientId: 214 }, opts);
+    let turn = started;
+    for (const a of ANSWERS) {
+      turn = await postInterviewMessage(started.interviewId, a, opts);
+    }
+    await approveBlueprint(turn.blueprint.id, opts);
+    await startGrowthConversation(started.interviewId, opts);
+
+    const ranked = await postGrowthMessage(
+      started.interviewId,
+      'Please rank the segments and make a directional call.',
+      opts
+    );
+    assert.match(ranked.message, /Segment Ranking/i);
+    assert.equal(ranked.segmentRanking.kind, SEGMENT_RANKING_KIND);
+    assert.equal(ranked.growthConversation.status, 'ranking_ready');
+
+    const reply = await postGrowthMessage(
+      started.interviewId,
+      GOOD_FIRST_WIN_MESSAGE,
+      opts
+    );
+    assert.equal(reply.intent, VALIDATION_TARGET_INTENT);
+    assert.match(reply.message, /Property Manager Validation Target/i);
+    assert.doesNotMatch(reply.message, /^Segment Ranking/m);
+    assert.doesNotMatch(reply.message, /Best first segment to test/i);
+    assert.ok(reply.validationTarget);
+    assert.equal(reply.validationTarget.kind, VALIDATION_TARGET_KIND);
+    assert.match(reply.message, /Best first property manager type/i);
+    assert.match(reply.message, /First pain point to test/i);
+    assert.match(reply.message, /Early signals worth continuing/i);
+    assert.match(reply.message, /Successful first 30 days of validation/i);
+    assert.match(reply.message, /Cautions/i);
+    assert.doesNotMatch(
+      reply.message,
+      /outreach copy|here is your campaign copy|prospect list/i
+    );
+    assert.equal(
+      reply.growthConversation.status,
+      'validation_target_ready'
+    );
+    // Prior ranking is retained; not regenerated as the reply body.
+    assert.ok(reply.growthConversation.segmentRanking);
+    assert.equal(
+      reply.growthConversation.segmentRanking.kind,
+      SEGMENT_RANKING_KIND
     );
   });
 });

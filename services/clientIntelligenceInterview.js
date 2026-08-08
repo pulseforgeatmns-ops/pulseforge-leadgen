@@ -5445,20 +5445,32 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
   );
   let growthConversation =
     (session.interview_state && session.interview_state.growthConversation) || null;
-  if (!growthConversation || growthConversation.status !== 'active') {
+  const continuableStatuses = new Set([
+    'active',
+    'ranking_ready',
+    'validation_target_ready',
+  ]);
+  if (!growthConversation || !continuableStatuses.has(growthConversation.status)) {
     const started = await startGrowthConversation(sessionId, opts);
     growthConversation = started.growthConversation;
   }
 
+  const priorSegmentRanking =
+    (growthConversation && growthConversation.segmentRanking) ||
+    (session.interview_state && session.interview_state.segmentRanking) ||
+    null;
   const reply = buildGrowthConversationReply(
     text,
     growthDirection,
-    blueprint || { sections: {} }
+    blueprint || { sections: {} },
+    { priorSegmentRanking }
   );
   const replyMessage =
     reply && typeof reply === 'object' ? reply.message : String(reply || '');
   const segmentRanking =
     reply && typeof reply === 'object' ? reply.segmentRanking || null : null;
+  const validationTarget =
+    reply && typeof reply === 'object' ? reply.validationTarget || null : null;
   const turns = [
     ...((growthConversation && growthConversation.turns) || []),
     { speaker: 'client', message: text, at: new Date().toISOString() },
@@ -5469,11 +5481,24 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
       intent: (reply && reply.intent) || null,
     },
   ];
+  let nextStatus = 'active';
+  if (validationTarget) nextStatus = 'validation_target_ready';
+  else if (segmentRanking) nextStatus = 'ranking_ready';
+  else if (
+    growthConversation.status === 'ranking_ready' ||
+    growthConversation.status === 'validation_target_ready'
+  ) {
+    nextStatus = growthConversation.status;
+  }
   const nextGrowth = {
     ...growthConversation,
-    status: segmentRanking ? 'ranking_ready' : 'active',
+    status: nextStatus,
     turns,
+    ...(priorSegmentRanking && !segmentRanking
+      ? { segmentRanking: priorSegmentRanking }
+      : {}),
     ...(segmentRanking ? { segmentRanking } : {}),
+    ...(validationTarget ? { validationTarget } : {}),
   };
 
   await store.updateSession(session.id, {
@@ -5482,6 +5507,7 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
       initialGrowthDirection: growthDirection,
       growthConversation: nextGrowth,
       ...(segmentRanking ? { segmentRanking } : {}),
+      ...(validationTarget ? { validationTarget } : {}),
     },
   });
 
@@ -5491,7 +5517,8 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
     status: 'GROWTH_CONVERSATION',
     message: replyMessage,
     intent: (reply && reply.intent) || null,
-    segmentRanking,
+    segmentRanking: segmentRanking || priorSegmentRanking || null,
+    validationTarget,
     initialGrowthDirection: growthDirection,
     blueprint: publicBlueprint(blueprint),
     growthConversation: nextGrowth,

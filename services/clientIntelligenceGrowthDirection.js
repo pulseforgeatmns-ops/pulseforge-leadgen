@@ -10,9 +10,12 @@
 
 const ARTIFACT_KIND = 'initial_growth_direction';
 const SEGMENT_RANKING_KIND = 'segment_ranking';
+const VALIDATION_TARGET_KIND = 'validation_target';
 const DIRECTIONAL_LABEL =
   'This is a directional read, not market validation.';
 const SEGMENT_RANKING_CONFIDENCE =
+  'Directional, not market-validated.';
+const VALIDATION_TARGET_CONFIDENCE =
   'Directional, not market-validated.';
 
 /** Growth Conversation intents that request a ranked segment call. */
@@ -24,6 +27,28 @@ const RANKING_INTENTS = Object.freeze([
   'prioritize_segments',
 ]);
 
+/** Intent for first-win / validation-target definitions after ranking. */
+const VALIDATION_TARGET_INTENT = 'define_validation_target';
+
+/**
+ * Phrases that mean “define the validation target / first win” — checked
+ * before ranking so “best first test” does not loop on Segment Ranking.
+ */
+const VALIDATION_TARGET_PHRASES = Object.freeze([
+  /good first win/,
+  /\bfirst win\b/,
+  /validation target/,
+  /first 30 days/,
+  /early signals/,
+  /what type of property manager/,
+  /what size or type/,
+  /pain point/,
+  /\bproof\b/,
+  /worth continuing/,
+  /before building any campaign/,
+  /not asking for outreach copy/,
+  /not asking for a (?:prospect )?list/,
+]);
 /**
  * Deterministic segment tier hints grounded in recurring commercial-cleaning
  * Blueprint themes. Only applied when the segment appears in the approved
@@ -488,7 +513,20 @@ function buildInitialGrowthDirection(blueprint, opts = {}) {
 }
 
 /**
+ * True when the message asks to define a validation target / first-win
+ * criteria rather than re-rank segments.
+ *
+ * @param {string} msg lowercased message
+ * @returns {boolean}
+ */
+function isDefineValidationTargetRequest(msg) {
+  return VALIDATION_TARGET_PHRASES.some((re) => re.test(msg));
+}
+
+/**
  * Detect Growth Conversation intents from a user message.
+ * Validation-target intents win over ranking so follow-ups like
+ * “good first win” / “best first test” do not repeat Segment Ranking.
  * Ranking / directional-call intents are returned before generic dig intents.
  *
  * @param {string} userMessage
@@ -497,6 +535,10 @@ function buildInitialGrowthDirection(blueprint, opts = {}) {
 function detectGrowthConversationIntent(userMessage) {
   const msg = String(userMessage || '').trim().toLowerCase();
   if (!msg) return null;
+
+  if (isDefineValidationTargetRequest(msg)) {
+    return VALIDATION_TARGET_INTENT;
+  }
 
   const asksRank =
     /\brank(?:ing|ed|s)?\b/.test(msg) ||
@@ -537,7 +579,6 @@ function detectGrowthConversationIntent(userMessage) {
   if (/success|metric|90|ninety|goal|win\b/.test(msg)) return 'dig_success';
   return null;
 }
-
 function displaySegmentName(segment) {
   const s = String(segment || '').trim();
   if (!s) return s;
@@ -880,6 +921,246 @@ function formatSegmentRankingMessage(ranking) {
 }
 
 /**
+ * Resolve which Blueprint segment a validation-target request is about.
+ * Prefers an explicit mention in the user message, then prior Segment Ranking
+ * best-first, then property managers when present in the Blueprint list.
+ *
+ * @param {string} userMessage
+ * @param {string[]} segments
+ * @param {object|null} priorRanking
+ * @returns {string|null}
+ */
+function resolveValidationFocusSegment(userMessage, segments, priorRanking) {
+  const msg = String(userMessage || '').toLowerCase();
+  const list = uniqueStrings(segments || []);
+
+  if (/property manager/.test(msg)) {
+    return findSegmentByHint(list, ['property managers']) || 'property managers';
+  }
+  for (const [re, canon] of SEGMENT_PATTERNS) {
+    if (re.test(msg) && findSegmentByHint(list, [canon])) return canon;
+  }
+
+  const best =
+    priorRanking &&
+    Array.isArray(priorRanking.rankings) &&
+    priorRanking.rankings.find((r) => r && r.role === 'best_first' && r.segment);
+  if (best && best.segment) return best.segment;
+
+  return (
+    findSegmentByHint(list, ['property managers']) ||
+    (list.length ? list[0] : null)
+  );
+}
+
+function propertyManagerValidationSections(ctx) {
+  const name = ctx.businessName || 'the business';
+  const area = ctx.primaryArea || 'the Blueprint market bound';
+  return {
+    bestFirstType: {
+      label: 'Best first property manager type',
+      body:
+        `Small to mid-sized local property managers overseeing offices, mixed-use buildings, small commercial properties, or multi-tenant spaces in ${area}.`,
+    },
+    propertySizeType: {
+      label: 'Property size/type to pursue first',
+      body:
+        `Properties large enough to need recurring cleaning weekly or multiple times per week, but not so large that they require complex staffing, compliance, or overnight operations beyond ${name}'s current capacity.`,
+    },
+    painPoint: {
+      label: 'First pain point to test',
+      body: ctx.reliabilityTheme
+        ? 'Reliability and responsiveness: missed details, inconsistent cleaners, slow issue resolution, and the manager having to chase the vendor.'
+        : 'Consistency and vendor follow-through: missed details, uneven quality, and managers having to chase the cleaning vendor.',
+    },
+    proof: {
+      label: `Credibility proof ${name} should show`,
+      body:
+        'Simple commercial cleaning checklist, before/after photos, proof of responsiveness, references if available, clear service area, and a professional walkthrough/estimate process.',
+    },
+    earlySignals: {
+      label: 'Early signals worth continuing',
+      bullets: [
+        'Replies mention current cleaning frustration',
+        'Property manager agrees to a walkthrough',
+        'Prospect asks about recurring schedule',
+        'Prospect asks about reliability/process',
+        'Estimate request from a qualified property',
+        'Interest without pushing immediately to lowest price',
+      ],
+    },
+    first30Days: {
+      label: 'Successful first 30 days of validation',
+      body:
+        `A successful first 30 days would mean ${name} gets a small number of qualified conversations with property managers, at least one walkthrough or estimate request, and clear evidence about which property types respond best.`,
+    },
+    cautions: {
+      label: 'Cautions',
+      body:
+        'Do not chase every property manager. Avoid prospects whose first question is only price, properties that are operationally too complex, or opportunities that would strain service quality.',
+    },
+  };
+}
+
+function genericValidationSections(segment, ctx) {
+  const name = ctx.businessName || 'the business';
+  const display = displaySegmentName(segment || 'the focus segment');
+  const area = ctx.primaryArea || 'the Blueprint market bound';
+  return {
+    bestFirstType: {
+      label: `Best first ${display} type`,
+      body:
+        `Start with the clearest ${display.toLowerCase()} fit named in the approved Blueprint inside ${area} — selective, local, and aligned with ${ctx.firstFocus || 'the directional first focus'}.`,
+    },
+    propertySizeType: {
+      label: 'Size/type to pursue first',
+      body: ctx.recurringFocus
+        ? `Accounts large enough to need recurring service weekly or multiple times per week, but within ${name}'s current capacity.`
+        : `Accounts that fit ${name}'s current capacity and the Blueprint first focus — not the largest or most complex opportunities first.`,
+    },
+    painPoint: {
+      label: 'First pain point to test',
+      body: ctx.reliabilityTheme
+        ? 'Reliability and responsiveness — work done right without the customer chasing the vendor.'
+        : 'Whether the segment feels the Blueprint pain clearly enough to take a next step.',
+    },
+    proof: {
+      label: `Credibility proof ${name} should show`,
+      body:
+        'Clear service scope, proof of responsiveness, references if available, defined service area, and a professional walkthrough or estimate process.',
+    },
+    earlySignals: {
+      label: 'Early signals worth continuing',
+      bullets: [
+        'Replies mention current vendor frustration',
+        'Prospect agrees to a walkthrough or discovery conversation',
+        'Prospect asks about recurring schedule or process',
+        'Estimate or site-visit request from a qualified account',
+        'Interest without pushing immediately to lowest price',
+      ],
+    },
+    first30Days: {
+      label: 'Successful first 30 days of validation',
+      body:
+        `A successful first 30 days would mean ${name} gets a small number of qualified conversations in this segment, at least one walkthrough or estimate request, and clearer evidence of which sub-types respond best.`,
+    },
+    cautions: {
+      label: 'Cautions',
+      body: ctx.avoidPhrase
+        ? `Stay selective. Watch the Blueprint avoid constraint (${ctx.avoidPhrase}) and do not chase accounts that are operationally too complex or price-only.`
+        : 'Stay selective. Avoid price-only prospects and opportunities that would strain service quality.',
+    },
+  };
+}
+
+/**
+ * Build a Validation Target / first-win definition from the approved Blueprint
+ * and prior Segment Ranking. Does not create campaign copy or prospect lists.
+ *
+ * @param {object} growthDirection
+ * @param {object} [blueprint]
+ * @param {{ intent?: string, userMessage?: string, priorSegmentRanking?: object|null }} [opts]
+ */
+function buildValidationTarget(growthDirection, blueprint, opts = {}) {
+  const gd = growthDirection || {};
+  const sections = (blueprint && blueprint.sections) || {};
+  const segments = uniqueStrings(gd.segmentsToInspect || []).slice(0, 8);
+  const firstFocus = gd.firstFocus || resolveFirstFocus(sections, null);
+  const businessName = shortName(gd.businessName || resolveBusinessName(sections, null));
+  const primaryArea = gd.primaryArea || splitGeography(
+    sectionSummary(sections, 'targetMarkets'),
+    null
+  ).primaryArea || null;
+  const avoidSummary = sectionSummary(sections, 'avoidCustomers');
+  const avoidPhrase = cleanAvoidPhrase(avoidSummary);
+  const advantages = sectionSummary(sections, 'competitiveAdvantages');
+  const services = sectionSummary(sections, 'services');
+  const recurringFocus =
+    /recurring/i.test(firstFocus || '') ||
+    /recurring/i.test(services) ||
+    /commercial cleaning/i.test(firstFocus || '');
+  const reliabilityTheme =
+    /reliab|trust|without needing to chase|responsiv/i.test(advantages) ||
+    /lowest price|reliability/i.test(avoidSummary);
+
+  const focusSegment = resolveValidationFocusSegment(
+    opts.userMessage || '',
+    segments,
+    opts.priorSegmentRanking || null
+  );
+  const ctx = {
+    businessName,
+    primaryArea,
+    firstFocus,
+    avoidPhrase,
+    recurringFocus,
+    reliabilityTheme,
+  };
+
+  const isPropertyManager = /property manager/i.test(String(focusSegment || ''));
+  const content = isPropertyManager
+    ? propertyManagerValidationSections(ctx)
+    : genericValidationSections(focusSegment, ctx);
+
+  const title = isPropertyManager
+    ? 'Property Manager Validation Target'
+    : `${displaySegmentName(focusSegment || 'Segment')} Validation Target`;
+
+  return {
+    kind: VALIDATION_TARGET_KIND,
+    title,
+    intent: opts.intent || VALIDATION_TARGET_INTENT,
+    focusSegment: focusSegment || null,
+    displaySegment: displaySegmentName(focusSegment || 'segment'),
+    sections: content,
+    confidence: VALIDATION_TARGET_CONFIDENCE,
+    confidenceLevel: 'directional',
+    marketValidated: false,
+    firstFocus: firstFocus || null,
+    primaryArea: primaryArea || null,
+    businessName: businessName || null,
+    priorRankingIntent:
+      (opts.priorSegmentRanking && opts.priorSegmentRanking.intent) || null,
+    blueprintId: (blueprint && blueprint.id) || gd.blueprintId || null,
+    blueprintVersion:
+      (blueprint && blueprint.version) || gd.blueprintVersion || null,
+  };
+}
+
+/**
+ * Format a Validation Target artifact as the Growth Conversation message.
+ */
+function formatValidationTargetMessage(target) {
+  const t = target || {};
+  const s = t.sections || {};
+  const lines = [t.title || 'Validation Target', ''];
+
+  const pushSection = (key, index) => {
+    const section = s[key];
+    if (!section) return;
+    lines.push(`${index}. ${section.label}`);
+    if (section.body) lines.push(section.body);
+    if (Array.isArray(section.bullets)) {
+      for (const b of section.bullets) lines.push(`- ${b}`);
+    }
+    lines.push('');
+  };
+
+  pushSection('bestFirstType', 1);
+  pushSection('propertySizeType', 2);
+  pushSection('painPoint', 3);
+  pushSection('proof', 4);
+  pushSection('earlySignals', 5);
+  pushSection('first30Days', 6);
+  pushSection('cautions', 7);
+
+  lines.push('Confidence:');
+  lines.push(t.confidence || VALIDATION_TARGET_CONFIDENCE);
+
+  return lines.join('\n').trim();
+}
+
+/**
  * Max opening message when the Growth Conversation begins.
  */
 function buildGrowthConversationOpening(growthDirection) {
@@ -915,12 +1196,22 @@ function buildGrowthConversationOpening(growthDirection) {
 
 /**
  * Deterministic follow-up for the Growth Conversation (no campaign generation).
- * Ranking / compare / prioritize / directional-call intents return a Segment
- * Ranking artifact instead of repeating the generic segment-mix prompt.
+ * Validation-target intents return a first-win definition. Ranking / compare /
+ * prioritize / directional-call intents return a Segment Ranking artifact
+ * instead of repeating the generic segment-mix prompt.
  *
- * @returns {{ message: string, intent: string|null, segmentRanking: object|null }}
+ * @param {string} userMessage
+ * @param {object} growthDirection
+ * @param {object} [blueprint]
+ * @param {{ priorSegmentRanking?: object|null }} [opts]
+ * @returns {{ message: string, intent: string|null, segmentRanking: object|null, validationTarget: object|null }}
  */
-function buildGrowthConversationReply(userMessage, growthDirection, blueprint) {
+function buildGrowthConversationReply(
+  userMessage,
+  growthDirection,
+  blueprint,
+  opts = {}
+) {
   const gd = growthDirection || {};
   const intent = detectGrowthConversationIntent(userMessage);
   const focus = gd.firstFocus || 'the Blueprint first focus';
@@ -932,12 +1223,27 @@ function buildGrowthConversationReply(userMessage, growthDirection, blueprint) {
   const goals = sectionSummary(sections, 'campaignGoals');
   const avoid = sectionSummary(sections, 'avoidCustomers');
 
+  if (intent === VALIDATION_TARGET_INTENT) {
+    const validationTarget = buildValidationTarget(gd, blueprint, {
+      intent,
+      userMessage,
+      priorSegmentRanking: opts.priorSegmentRanking || null,
+    });
+    return {
+      message: formatValidationTargetMessage(validationTarget),
+      intent,
+      segmentRanking: null,
+      validationTarget,
+    };
+  }
+
   if (intent && RANKING_INTENTS.includes(intent)) {
     const segmentRanking = buildSegmentRanking(gd, blueprint, { intent });
     return {
       message: formatSegmentRankingMessage(segmentRanking),
       intent,
       segmentRanking,
+      validationTarget: null,
     };
   }
 
@@ -955,6 +1261,7 @@ function buildGrowthConversationReply(userMessage, growthDirection, blueprint) {
       ].join('\n'),
       intent,
       segmentRanking: null,
+      validationTarget: null,
     };
   }
 
@@ -975,6 +1282,7 @@ function buildGrowthConversationReply(userMessage, growthDirection, blueprint) {
       ].join('\n'),
       intent,
       segmentRanking: null,
+      validationTarget: null,
     };
   }
 
@@ -990,6 +1298,7 @@ function buildGrowthConversationReply(userMessage, growthDirection, blueprint) {
       ].join('\n'),
       intent,
       segmentRanking: null,
+      validationTarget: null,
     };
   }
 
@@ -1009,21 +1318,28 @@ function buildGrowthConversationReply(userMessage, growthDirection, blueprint) {
     ].join('\n'),
     intent: null,
     segmentRanking: null,
+    validationTarget: null,
   };
 }
 
 module.exports = {
   ARTIFACT_KIND,
   SEGMENT_RANKING_KIND,
+  VALIDATION_TARGET_KIND,
   DIRECTIONAL_LABEL,
   SEGMENT_RANKING_CONFIDENCE,
+  VALIDATION_TARGET_CONFIDENCE,
   RANKING_INTENTS,
+  VALIDATION_TARGET_INTENT,
   buildInitialGrowthDirection,
   buildGrowthConversationOpening,
   buildGrowthConversationReply,
   detectGrowthConversationIntent,
+  isDefineValidationTargetRequest,
   buildSegmentRanking,
   formatSegmentRankingMessage,
+  buildValidationTarget,
+  formatValidationTargetMessage,
   naturalList,
   splitGeography,
   extractFocusQualifier,
