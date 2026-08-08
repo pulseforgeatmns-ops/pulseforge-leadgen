@@ -5394,6 +5394,12 @@ async function startGrowthConversation(sessionId, opts = {}) {
       (prior && (prior.first_segment_decision || prior.firstSegmentDecision)) ||
       (session.interview_state && session.interview_state.firstSegmentDecision) ||
       null,
+    first_growth_plan_preview:
+      (prior &&
+        (prior.first_growth_plan_preview || prior.firstGrowthPlanPreview)) ||
+      (session.interview_state &&
+        session.interview_state.firstGrowthPlanPreview) ||
+      null,
   });
   const turns = (prior && Array.isArray(prior.turns) && prior.turns.length
     ? prior.turns
@@ -5410,13 +5416,15 @@ async function startGrowthConversation(sessionId, opts = {}) {
 
   const resumedStatus =
     (prior && prior.status) ||
-    (priorState.validation_target
-      ? 'validation_target_ready'
-      : priorState.primary_segment
-        ? 'primary_selected'
-        : priorState.segment_ranking
-          ? 'ranking_ready'
-          : 'active');
+    (priorState.first_growth_plan_preview
+      ? 'preview_ready'
+      : priorState.validation_target
+        ? 'validation_target_ready'
+        : priorState.primary_segment
+          ? 'primary_selected'
+          : priorState.segment_ranking
+            ? 'ranking_ready'
+            : 'active');
 
   const growthConversation = {
     status: resumedStatus,
@@ -5434,6 +5442,7 @@ async function startGrowthConversation(sessionId, opts = {}) {
     segmentRanking: priorState.segment_ranking,
     validationTarget: priorState.validation_target,
     firstSegmentDecision: priorState.first_segment_decision,
+    firstGrowthPlanPreview: priorState.first_growth_plan_preview,
   };
 
   await store.updateSession(session.id, {
@@ -5449,6 +5458,9 @@ async function startGrowthConversation(sessionId, opts = {}) {
         : {}),
       ...(priorState.first_segment_decision
         ? { firstSegmentDecision: priorState.first_segment_decision }
+        : {}),
+      ...(priorState.first_growth_plan_preview
+        ? { firstGrowthPlanPreview: priorState.first_growth_plan_preview }
         : {}),
     },
   });
@@ -5505,6 +5517,7 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
     'ranking_ready',
     'primary_selected',
     'validation_target_ready',
+    'preview_ready',
   ]);
   if (!growthConversation || !continuableStatuses.has(growthConversation.status)) {
     const started = await startGrowthConversation(sessionId, opts);
@@ -5530,6 +5543,13 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
           growthConversation.firstSegmentDecision)) ||
       (session.interview_state && session.interview_state.firstSegmentDecision) ||
       null,
+    first_growth_plan_preview:
+      (growthConversation &&
+        (growthConversation.first_growth_plan_preview ||
+          growthConversation.firstGrowthPlanPreview)) ||
+      (session.interview_state &&
+        session.interview_state.firstGrowthPlanPreview) ||
+      null,
   });
   const priorSegmentRanking = priorState.segment_ranking;
   const reply = buildGrowthConversationReply(
@@ -5546,6 +5566,10 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
     reply && typeof reply === 'object' ? reply.validationTarget || null : null;
   const firstSegmentDecision =
     reply && typeof reply === 'object' ? reply.firstSegmentDecision || null : null;
+  const firstGrowthPlanPreview =
+    reply && typeof reply === 'object'
+      ? reply.firstGrowthPlanPreview || null
+      : null;
   const nextState = normalizeGrowthState(
     (reply && reply.growthState) || priorState
   );
@@ -5553,6 +5577,9 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
   else if (priorSegmentRanking) nextState.segment_ranking = priorSegmentRanking;
   if (validationTarget) nextState.validation_target = validationTarget;
   if (firstSegmentDecision) nextState.first_segment_decision = firstSegmentDecision;
+  if (firstGrowthPlanPreview) {
+    nextState.first_growth_plan_preview = firstGrowthPlanPreview;
+  }
 
   const turns = [
     ...((growthConversation && growthConversation.turns) || []),
@@ -5566,7 +5593,9 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
     },
   ];
   let nextStatus = 'active';
-  if (validationTarget || nextState.validation_target) {
+  if (firstGrowthPlanPreview || nextState.first_growth_plan_preview) {
+    nextStatus = 'preview_ready';
+  } else if (validationTarget || nextState.validation_target) {
     nextStatus = 'validation_target_ready';
   } else if (nextState.primary_segment || firstSegmentDecision) {
     nextStatus = 'primary_selected';
@@ -5575,7 +5604,8 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
   } else if (
     growthConversation.status === 'ranking_ready' ||
     growthConversation.status === 'primary_selected' ||
-    growthConversation.status === 'validation_target_ready'
+    growthConversation.status === 'validation_target_ready' ||
+    growthConversation.status === 'preview_ready'
   ) {
     nextStatus = growthConversation.status;
   }
@@ -5587,6 +5617,7 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
     segmentRanking: nextState.segment_ranking,
     validationTarget: nextState.validation_target,
     firstSegmentDecision: nextState.first_segment_decision,
+    firstGrowthPlanPreview: nextState.first_growth_plan_preview,
   };
 
   await store.updateSession(session.id, {
@@ -5603,6 +5634,9 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
       ...(nextState.first_segment_decision
         ? { firstSegmentDecision: nextState.first_segment_decision }
         : {}),
+      ...(nextState.first_growth_plan_preview
+        ? { firstGrowthPlanPreview: nextState.first_growth_plan_preview }
+        : {}),
     },
   });
 
@@ -5615,6 +5649,7 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
     segmentRanking: nextState.segment_ranking,
     validationTarget: nextState.validation_target,
     firstSegmentDecision: nextState.first_segment_decision,
+    firstGrowthPlanPreview: nextState.first_growth_plan_preview,
     growthState: nextState,
     initialGrowthDirection: growthDirection,
     blueprint: publicBlueprint(blueprint),

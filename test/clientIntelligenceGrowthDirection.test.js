@@ -16,6 +16,8 @@ const {
   VALIDATION_TARGET_INTENT,
   SELECT_PRIMARY_INTENT,
   FIRST_SEGMENT_DECISION_KIND,
+  FIRST_GROWTH_PLAN_PREVIEW_KIND,
+  SUMMARIZE_FIRST_GROWTH_PLAN_PREVIEW_INTENT,
 } = require('../services/clientIntelligenceGrowthDirection');
 const {
   createMemoryStore,
@@ -871,6 +873,211 @@ describe('Growth Conversation state progression (segment mix → ranking → pri
       /From the Blueprint, the segments worth comparing first are/i
     );
     assert.equal(followUp.growthConversation.primary_segment, 'property_managers');
+  });
+});
+
+describe('Growth Conversation First Growth Plan Preview transition', () => {
+  const RANK_MESSAGE =
+    'Please compare the segments and rank them. Give me the best first segment to test.';
+  const PRIMARY_SELECT_MESSAGE =
+    'I agree — property managers feel like the most attractive first segment, with professional offices as secondary.';
+  const PREVIEW_MESSAGE = `Good. Now summarize this into a First Growth Plan Preview.
+
+Use the approved Blueprint, the segment ranking, and the property manager validation target.
+
+Include:
+1. Recommended first segment
+2. Why this segment fits Anchor
+3. Why professional offices are secondary
+4. First subtype to test
+5. Early signals to watch
+6. What a successful first 30 days would look like
+7. What should happen next before any campaign or prospect list
+
+Keep this directional. Do not create outreach copy. Do not create a prospect list.`;
+
+  function anchorGrowthDirection() {
+    return buildInitialGrowthDirection(ANCHOR_BLUEPRINT, {
+      normalizedFacts: {
+        business_name: 'Anchor Cleaning',
+        growth_focus:
+          'recurring commercial cleaning; customers who need weekly or multiple-times-per-week service',
+        ideal_customers: [
+          'property managers',
+          'short-term rental companies',
+          'facility managers',
+          'professional offices',
+          'daycares',
+          'rec centers',
+          'high-traffic buildings',
+        ],
+        geography: [
+          'Greater Manchester',
+          'Bedford',
+          'Hooksett',
+          'Londonderry',
+          'Auburn',
+          'Goffstown',
+        ],
+      },
+    });
+  }
+
+  it('detects summarize_first_growth_plan_preview over validation-target phrases', () => {
+    assert.equal(
+      detectGrowthConversationIntent(PREVIEW_MESSAGE),
+      SUMMARIZE_FIRST_GROWTH_PLAN_PREVIEW_INTENT
+    );
+    assert.equal(
+      detectGrowthConversationIntent(
+        'summarize this into a First Growth Plan Preview'
+      ),
+      SUMMARIZE_FIRST_GROWTH_PLAN_PREVIEW_INTENT
+    );
+    assert.equal(
+      detectGrowthConversationIntent(
+        'Use the approved Blueprint, the segment ranking, and the validation target'
+      ),
+      SUMMARIZE_FIRST_GROWTH_PLAN_PREVIEW_INTENT
+    );
+    // Explicit validation-target requests still win when preview is not asked.
+    assert.equal(
+      detectGrowthConversationIntent(
+        'Define the validation target for property managers'
+      ),
+      VALIDATION_TARGET_INTENT
+    );
+  });
+
+  it('regression: ranking → validation → First Growth Plan Preview without looping validation target', () => {
+    const gd = anchorGrowthDirection();
+
+    const ranked = buildGrowthConversationReply(
+      RANK_MESSAGE,
+      gd,
+      ANCHOR_BLUEPRINT
+    );
+    assert.ok(ranked.segmentRanking);
+    assert.equal(ranked.segmentRanking.kind, SEGMENT_RANKING_KIND);
+
+    const selected = buildGrowthConversationReply(
+      PRIMARY_SELECT_MESSAGE,
+      gd,
+      ANCHOR_BLUEPRINT,
+      { growthState: ranked.growthState }
+    );
+    assert.ok(selected.validationTarget);
+    assert.equal(selected.validationTarget.kind, VALIDATION_TARGET_KIND);
+    assert.equal(selected.growthState.primary_segment, 'property_managers');
+
+    const previewReply = buildGrowthConversationReply(
+      PREVIEW_MESSAGE,
+      gd,
+      ANCHOR_BLUEPRINT,
+      { growthState: selected.growthState }
+    );
+
+    assert.equal(
+      previewReply.intent,
+      SUMMARIZE_FIRST_GROWTH_PLAN_PREVIEW_INTENT
+    );
+    assert.ok(previewReply.firstGrowthPlanPreview);
+    assert.equal(
+      previewReply.firstGrowthPlanPreview.kind,
+      FIRST_GROWTH_PLAN_PREVIEW_KIND
+    );
+    assert.equal(
+      previewReply.growthState.first_growth_plan_preview.kind,
+      FIRST_GROWTH_PLAN_PREVIEW_KIND
+    );
+    assert.ok(
+      [
+        'summarize_first_growth_plan_preview',
+        'complete_first_growth_plan_preview',
+      ].includes(previewReply.growthState.current_growth_step)
+    );
+
+    assert.match(previewReply.message, /^First Growth Plan Preview/m);
+    assert.match(previewReply.message, /Recommended first segment/i);
+    assert.match(
+      previewReply.message,
+      /Property managers in Greater Manchester/i
+    );
+    assert.match(previewReply.message, /Why this segment fits Anchor/i);
+    assert.match(
+      previewReply.message,
+      /Why professional offices are secondary/i
+    );
+    assert.match(previewReply.message, /First subtype to test/i);
+    assert.match(previewReply.message, /Early signals to watch/i);
+    assert.match(previewReply.message, /Successful first 30 days/i);
+    assert.match(
+      previewReply.message,
+      /Next step before campaign\/prospect list/i
+    );
+    assert.match(
+      previewReply.message,
+      /Directional, not market-validated/i
+    );
+
+    // Must not repeat the full Property Manager Validation Target artifact.
+    assert.doesNotMatch(
+      previewReply.message,
+      /^Property Manager Validation Target/m
+    );
+    assert.doesNotMatch(previewReply.message, /^Segment Ranking/m);
+    assert.doesNotMatch(
+      previewReply.message,
+      /Best first property manager type/i
+    );
+    assert.doesNotMatch(
+      previewReply.message,
+      /outreach copy|email sequence|here is your campaign|here are \d+ prospects|prospect list of/i
+    );
+
+    // Prior artifacts remain in state; preview is additive.
+    assert.ok(previewReply.growthState.segment_ranking);
+    assert.ok(previewReply.growthState.validation_target);
+  });
+
+  it('regression e2e: postGrowthMessage stores First Growth Plan Preview', async () => {
+    const store = createMemoryStore();
+    const opts = { store, useMemoryPlaybookStore: true };
+    const started = await startClientInterview({ clientId: 216 }, opts);
+    let turn = started;
+    for (const a of ANSWERS) {
+      turn = await postInterviewMessage(started.interviewId, a, opts);
+    }
+    await approveBlueprint(turn.blueprint.id, opts);
+    await startGrowthConversation(started.interviewId, opts);
+
+    await postGrowthMessage(started.interviewId, RANK_MESSAGE, opts);
+    await postGrowthMessage(started.interviewId, PRIMARY_SELECT_MESSAGE, opts);
+
+    const preview = await postGrowthMessage(
+      started.interviewId,
+      PREVIEW_MESSAGE,
+      opts
+    );
+
+    assert.equal(preview.intent, SUMMARIZE_FIRST_GROWTH_PLAN_PREVIEW_INTENT);
+    assert.match(preview.message, /First Growth Plan Preview/i);
+    assert.doesNotMatch(preview.message, /^Property Manager Validation Target/m);
+    assert.doesNotMatch(preview.message, /^Segment Ranking/m);
+    assert.ok(preview.firstGrowthPlanPreview);
+    assert.equal(
+      preview.firstGrowthPlanPreview.kind,
+      FIRST_GROWTH_PLAN_PREVIEW_KIND
+    );
+    assert.equal(preview.growthConversation.status, 'preview_ready');
+    assert.equal(
+      preview.growthConversation.first_growth_plan_preview.kind,
+      FIRST_GROWTH_PLAN_PREVIEW_KIND
+    );
+    assert.doesNotMatch(
+      preview.message,
+      /outreach copy|here is your campaign copy|prospect list of/i
+    );
   });
 });
 

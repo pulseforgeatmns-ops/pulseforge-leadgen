@@ -33,8 +33,15 @@ const VALIDATION_TARGET_INTENT = 'define_validation_target';
 /** Intent when the user agrees with a ranking or names a preferred first segment. */
 const SELECT_PRIMARY_INTENT = 'select_primary_segment';
 
+/** Intent to combine prior artifacts into a First Growth Plan Preview. */
+const SUMMARIZE_FIRST_GROWTH_PLAN_PREVIEW_INTENT =
+  'summarize_first_growth_plan_preview';
+
 /** Artifact kinds beyond Segment Ranking / Validation Target. */
 const FIRST_SEGMENT_DECISION_KIND = 'first_segment_decision';
+const FIRST_GROWTH_PLAN_PREVIEW_KIND = 'first_growth_plan_preview';
+const FIRST_GROWTH_PLAN_PREVIEW_CONFIDENCE =
+  'Directional, not market-validated.';
 
 /** Focus areas the Growth Conversation can dig into first. */
 const FOCUS_AREAS = Object.freeze([
@@ -53,11 +60,34 @@ const GROWTH_STEPS = Object.freeze([
   'define_validation_target',
   'define_success_signals',
   'summarize_first_growth_plan_preview',
+  'complete_first_growth_plan_preview',
+]);
+
+/**
+ * Phrases that mean “produce the First Growth Plan Preview” — checked before
+ * validation-target so preview requests that mention signals / proof / “no
+ * prospect list” do not re-emit Property Manager Validation Target.
+ */
+const FIRST_GROWTH_PLAN_PREVIEW_PHRASES = Object.freeze([
+  /first growth plan preview/,
+  /growth plan preview/,
+  /summarize (?:this |it )?(?:into |as )?(?:a )?first growth plan/,
+  /summarize (?:this |it )?(?:into |as )?(?:a )?growth plan/,
+  /use the approved blueprint.{0,120}(?:segment ranking|validation target)/,
+  /(?:segment ranking).{0,120}(?:validation target)/,
+  /(?:validation target).{0,120}(?:segment ranking)/,
+  /include recommended first segment/,
+  /recommended first segment/,
+  /what should happen next before (?:any )?(?:a )?campaign/,
+  /next (?:step )?before (?:any )?(?:campaign|prospect)/,
+  /do not create (?:outreach copy|a prospect list|prospect lists)/,
+  /don't create (?:outreach copy|a prospect list|prospect lists)/,
 ]);
 
 /**
  * Phrases that mean “define the validation target / first win” — checked
  * before ranking so “best first test” does not loop on Segment Ranking.
+ * Preview requests are excluded via FIRST_GROWTH_PLAN_PREVIEW_PHRASES first.
  */
 const VALIDATION_TARGET_PHRASES = Object.freeze([
   /good first win/,
@@ -589,6 +619,7 @@ function emptyGrowthState() {
     confidence_level: 'directional',
     first_segment_decision: null,
     validation_target: null,
+    first_growth_plan_preview: null,
   };
 }
 
@@ -612,6 +643,10 @@ function normalizeGrowthState(raw) {
     raw.first_segment_decision || raw.firstSegmentDecision || null;
   const validation =
     raw.validation_target || raw.validationTarget || null;
+  const preview =
+    raw.first_growth_plan_preview ||
+    raw.firstGrowthPlanPreview ||
+    null;
 
   const completed = Array.isArray(raw.completed_steps)
     ? raw.completed_steps.slice()
@@ -662,6 +697,7 @@ function normalizeGrowthState(raw) {
     confidence_level: raw.confidence_level || raw.confidenceLevel || 'directional',
     first_segment_decision: decision,
     validation_target: validation,
+    first_growth_plan_preview: preview,
   };
 }
 
@@ -714,14 +750,27 @@ function isRestartSegmentRequest(msg) {
 }
 
 /**
+ * True when the message asks to summarize into a First Growth Plan Preview.
+ *
+ * @param {string} msg lowercased / normalized message
+ * @returns {boolean}
+ */
+function isSummarizeFirstGrowthPlanPreviewRequest(msg) {
+  const normalized = normalizeUserMessage(msg);
+  return FIRST_GROWTH_PLAN_PREVIEW_PHRASES.some((re) => re.test(normalized));
+}
+
+/**
  * True when the message asks to define a validation target / first-win
- * criteria rather than re-rank segments.
+ * criteria rather than re-rank segments or produce a Growth Plan Preview.
  *
  * @param {string} msg lowercased message
  * @returns {boolean}
  */
 function isDefineValidationTargetRequest(msg) {
-  return VALIDATION_TARGET_PHRASES.some((re) => re.test(msg));
+  const normalized = normalizeUserMessage(msg);
+  if (isSummarizeFirstGrowthPlanPreviewRequest(normalized)) return false;
+  return VALIDATION_TARGET_PHRASES.some((re) => re.test(normalized));
 }
 
 /**
@@ -964,6 +1013,12 @@ function detectGrowthConversationIntent(userMessage, opts = {}) {
   const msg = normalizeUserMessage(userMessage);
   if (!msg) return null;
   const state = normalizeGrowthState(opts.growthState || null);
+
+  // Preview must win over validation-target — preview prompts often mention
+  // signals, proof, “no outreach copy”, and “validation target” as inputs.
+  if (isSummarizeFirstGrowthPlanPreviewRequest(msg)) {
+    return SUMMARIZE_FIRST_GROWTH_PLAN_PREVIEW_INTENT;
+  }
 
   if (isDefineValidationTargetRequest(msg)) {
     return VALIDATION_TARGET_INTENT;
@@ -1617,6 +1672,265 @@ function formatValidationTargetMessage(target) {
   return lines.join('\n').trim();
 }
 
+function displayFromSegmentKey(keyOrName) {
+  if (!keyOrName) return null;
+  const s = String(keyOrName).trim();
+  if (!s) return null;
+  if (/\s/.test(s)) return s;
+  return s.replace(/_/g, ' ');
+}
+
+function previewWhyPrimaryFits(primaryDisplay, businessName, ranking, gd) {
+  const name = businessName || 'the business';
+  if (/property manager/i.test(String(primaryDisplay || ''))) {
+    return (
+      `Property managers match ${name}'s recurring commercial focus, value reliability and responsiveness, ` +
+      `and may create expansion opportunities across multiple properties.`
+    );
+  }
+  const best =
+    ranking &&
+    Array.isArray(ranking.rankings) &&
+    ranking.rankings.find((r) => r && r.role === 'best_first');
+  if (best && Array.isArray(best.why) && best.why.length) {
+    return (
+      `${displaySegmentName(primaryDisplay)} fit ${name}'s ${gd.firstFocus || 'directional first focus'}: ` +
+      `${best.why.slice(0, 3).join('; ')}.`
+    );
+  }
+  return (
+    `${displaySegmentName(primaryDisplay)} fits ${name}'s approved Blueprint first focus` +
+    `${gd.firstFocus ? ` (${gd.firstFocus})` : ''} and is the sharpest first segment to validate.`
+  );
+}
+
+function previewWhySecondary(secondaryDisplay, businessName) {
+  const name = businessName || 'the business';
+  if (!secondaryDisplay) {
+    return `Keep a secondary path warm only after the first segment shows early signal — still before campaigns or prospect lists for ${name}.`;
+  }
+  if (/professional office/i.test(String(secondaryDisplay))) {
+    return (
+      `Professional offices are a strong backup because they have clear recurring needs and may move faster to walkthroughs, ` +
+      `but account expansion may be smaller than property management relationships.`
+    );
+  }
+  return (
+    `${displaySegmentName(secondaryDisplay)} remains a strong secondary path for ${name}, ` +
+    `but should stay behind the primary segment until first-win evidence is clearer.`
+  );
+}
+
+function previewEarlySignals(validationTarget, primaryDisplay) {
+  const fromTarget =
+    validationTarget && Array.isArray(validationTarget.early_signals)
+      ? validationTarget.early_signals.filter(Boolean)
+      : [];
+  if (fromTarget.length) {
+    return fromTarget.map((s) => {
+      const t = String(s);
+      if (/replies mention current cleaning frustration/i.test(t)) {
+        return 'Qualified replies mentioning cleaning frustration';
+      }
+      if (/agrees to a walkthrough/i.test(t)) {
+        return 'Walkthrough or estimate requests';
+      }
+      if (/asks about recurring schedule/i.test(t)) {
+        return 'Interest in recurring weekly or multiple-times-per-week service';
+      }
+      if (/reliability\/process|reliability or process|asks about reliability/i.test(t)) {
+        return 'Questions about reliability, process, or responsiveness';
+      }
+      if (/lowest price/i.test(t)) {
+        return 'Interest that does not immediately collapse into lowest-price shopping';
+      }
+      return t;
+    });
+  }
+  const label = displaySegmentName(primaryDisplay || 'the focus segment');
+  return [
+    `Qualified replies mentioning current vendor frustration in ${label.toLowerCase()}`,
+    'Walkthrough or estimate requests',
+    'Interest in recurring weekly or multiple-times-per-week service',
+    'Questions about reliability, process, or responsiveness',
+    'Interest that does not immediately collapse into lowest-price shopping',
+  ];
+}
+
+/**
+ * Build a First Growth Plan Preview from the approved Blueprint plus prior
+ * Segment Ranking / Validation Target / primary-segment decision.
+ * Understanding-led only — no outreach copy or prospect lists.
+ *
+ * @param {object} growthDirection
+ * @param {object} [blueprint]
+ * @param {{ growthState?: object|null, intent?: string }} [opts]
+ */
+function buildFirstGrowthPlanPreview(growthDirection, blueprint, opts = {}) {
+  const gd = growthDirection || {};
+  const state = normalizeGrowthState(opts.growthState || null);
+  const sections = (blueprint && blueprint.sections) || {};
+  const businessName = shortName(
+    gd.businessName || resolveBusinessName(sections, null)
+  );
+  const primaryArea =
+    gd.primaryArea ||
+    splitGeography(sectionSummary(sections, 'targetMarkets'), null).primaryArea ||
+    null;
+
+  let ranking = state.segment_ranking;
+  if (!ranking) {
+    ranking = buildSegmentRanking(gd, blueprint, { intent: 'rank_segments' });
+  }
+
+  let validationTarget = state.validation_target;
+  const primaryDisplay =
+    (state.first_segment_decision &&
+      state.first_segment_decision.primarySegmentDisplay) ||
+    displayFromSegmentKey(state.primary_segment) ||
+    rankingRoleSegment(ranking, 'best_first') ||
+    'property managers';
+  const secondaryDisplay =
+    (state.first_segment_decision &&
+      state.first_segment_decision.secondarySegmentDisplay) ||
+    displayFromSegmentKey(state.secondary_segment) ||
+    rankingRoleSegment(ranking, 'second_best') ||
+    null;
+
+  if (!validationTarget) {
+    validationTarget = buildValidationTarget(gd, blueprint, {
+      intent: VALIDATION_TARGET_INTENT,
+      priorSegmentRanking: ranking,
+      focusSegment: primaryDisplay,
+    });
+  }
+
+  const recommended =
+    primaryArea
+      ? `${displaySegmentName(primaryDisplay)} in ${primaryArea}.`
+      : `${displaySegmentName(primaryDisplay)}.`;
+
+  const firstSubtype =
+    (validationTarget && validationTarget.best_fit_subtype) ||
+    (validationTarget &&
+      validationTarget.sections &&
+      validationTarget.sections.bestFirstType &&
+      validationTarget.sections.bestFirstType.body) ||
+    `Start with the clearest ${String(primaryDisplay).toLowerCase()} fit named in the approved Blueprint.`;
+
+  const first30 =
+    (validationTarget && validationTarget.first_30_day_success_definition) ||
+    (validationTarget &&
+      validationTarget.sections &&
+      validationTarget.sections.first30Days &&
+      validationTarget.sections.first30Days.body) ||
+    `A successful first 30 days would mean ${businessName} gets a small number of qualified conversations and clearer evidence of which sub-types respond best.`;
+
+  const proof =
+    (validationTarget && validationTarget.credibility_proof_needed) ||
+    (validationTarget &&
+      validationTarget.sections &&
+      validationTarget.sections.proof &&
+      validationTarget.sections.proof.body) ||
+    'Clear service scope, proof of responsiveness, references if available, defined service area, and a professional walkthrough or estimate process.';
+
+  const nextStep = /property manager/i.test(String(primaryDisplay))
+    ? `Before building a campaign or prospect list, ${businessName} should confirm credibility proof: service checklist, photos or examples, responsiveness promise, service area, and walkthrough/estimate process.`
+    : `Before building a campaign or prospect list, ${businessName} should confirm credibility proof and the walkthrough/estimate process for ${String(primaryDisplay).toLowerCase()}.`;
+
+  const earlySignals = previewEarlySignals(validationTarget, primaryDisplay);
+
+  return {
+    kind: FIRST_GROWTH_PLAN_PREVIEW_KIND,
+    title: 'First Growth Plan Preview',
+    intent: opts.intent || SUMMARIZE_FIRST_GROWTH_PLAN_PREVIEW_INTENT,
+    recommended_first_segment: recommended.replace(/\.$/, ''),
+    why_this_segment: previewWhyPrimaryFits(
+      primaryDisplay,
+      businessName,
+      ranking,
+      gd
+    ),
+    why_secondary: previewWhySecondary(secondaryDisplay, businessName),
+    first_subtype_to_test: firstSubtype,
+    early_signals: earlySignals,
+    successful_first_30_days: first30,
+    next_step_before_campaign: nextStep,
+    credibility_proof_needed: proof,
+    primary_segment: toSegmentKey(primaryDisplay),
+    secondary_segment: toSegmentKey(secondaryDisplay),
+    primarySegmentDisplay: primaryDisplay,
+    secondarySegmentDisplay: secondaryDisplay,
+    primaryArea: primaryArea || null,
+    businessName: businessName || null,
+    confidence: FIRST_GROWTH_PLAN_PREVIEW_CONFIDENCE,
+    confidenceLevel: 'directional',
+    marketValidated: false,
+    inputs: {
+      hasSegmentRanking: Boolean(state.segment_ranking),
+      hasValidationTarget: Boolean(state.validation_target),
+      hasFirstSegmentDecision: Boolean(state.first_segment_decision),
+    },
+    blueprintId: (blueprint && blueprint.id) || gd.blueprintId || null,
+    blueprintVersion:
+      (blueprint && blueprint.version) || gd.blueprintVersion || null,
+  };
+}
+
+/**
+ * Format a First Growth Plan Preview artifact as the Growth Conversation message.
+ */
+function formatFirstGrowthPlanPreviewMessage(preview) {
+  const p = preview || {};
+  const lines = [p.title || 'First Growth Plan Preview', ''];
+
+  lines.push('1. Recommended first segment');
+  lines.push(
+    p.recommended_first_segment
+      ? `${p.recommended_first_segment}${/\.$/.test(p.recommended_first_segment) ? '' : '.'}`
+      : '—'
+  );
+  lines.push('');
+
+  const name = p.businessName || 'the business';
+  lines.push(`2. Why this segment fits ${name}`);
+  lines.push(p.why_this_segment || '—');
+  lines.push('');
+
+  if (p.secondarySegmentDisplay) {
+    const verb = /s$/i.test(String(p.secondarySegmentDisplay).trim())
+      ? 'are'
+      : 'is';
+    lines.push(`3. Why ${p.secondarySegmentDisplay} ${verb} secondary`);
+  } else {
+    lines.push('3. Why the secondary path stays secondary');
+  }
+  lines.push(p.why_secondary || '—');
+  lines.push('');
+
+  lines.push('4. First subtype to test');
+  lines.push(p.first_subtype_to_test || '—');
+  lines.push('');
+
+  lines.push('5. Early signals to watch');
+  for (const s of p.early_signals || []) lines.push(`- ${s}`);
+  if (!(p.early_signals || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push('6. Successful first 30 days');
+  lines.push(p.successful_first_30_days || '—');
+  lines.push('');
+
+  lines.push('7. Next step before campaign/prospect list');
+  lines.push(p.next_step_before_campaign || '—');
+  lines.push('');
+
+  lines.push('Confidence:');
+  lines.push(p.confidence || FIRST_GROWTH_PLAN_PREVIEW_CONFIDENCE);
+
+  return lines.join('\n').trim();
+}
+
 /**
  * Max opening message when the Growth Conversation begins.
  */
@@ -1677,23 +1991,27 @@ function canShowGenericSegmentMixFallback(state, userMessage) {
     Array.isArray(state.completed_steps) &&
     (state.completed_steps.includes('rank_segments') ||
       state.completed_steps.includes('select_primary_segment') ||
-      state.completed_steps.includes('define_validation_target'))
+      state.completed_steps.includes('define_validation_target') ||
+      state.completed_steps.includes('summarize_first_growth_plan_preview') ||
+      state.completed_steps.includes('complete_first_growth_plan_preview'))
   ) {
     return false;
   }
+  if (state.first_growth_plan_preview) return false;
   return true;
 }
 
 /**
  * Deterministic follow-up for the Growth Conversation (no campaign generation).
  * Stateful: remembers focus area, segment ranking, primary/secondary selection,
- * and advances toward Validation Target instead of looping the segment-mix menu.
+ * validation target, and First Growth Plan Preview — and advances artifact to
+ * artifact instead of looping the most recent one.
  *
  * @param {string} userMessage
  * @param {object} growthDirection
  * @param {object} [blueprint]
  * @param {{ priorSegmentRanking?: object|null, growthState?: object|null }} [opts]
- * @returns {{ message: string, intent: string|null, segmentRanking: object|null, validationTarget: object|null, firstSegmentDecision: object|null, growthState: object }}
+ * @returns {{ message: string, intent: string|null, segmentRanking: object|null, validationTarget: object|null, firstSegmentDecision: object|null, firstGrowthPlanPreview: object|null, growthState: object }}
  */
 function buildGrowthConversationReply(
   userMessage,
@@ -1726,7 +2044,48 @@ function buildGrowthConversationReply(
     segmentRanking: null,
     validationTarget: null,
     firstSegmentDecision: null,
+    firstGrowthPlanPreview: null,
   };
+
+  if (intent === SUMMARIZE_FIRST_GROWTH_PLAN_PREVIEW_INTENT) {
+    const preview = buildFirstGrowthPlanPreview(gd, blueprint, {
+      intent,
+      growthState: priorState,
+    });
+    const nextState = {
+      ...priorState,
+      current_growth_step: 'complete_first_growth_plan_preview',
+      completed_steps: markStepCompleted(
+        {
+          completed_steps: markStepCompleted(
+            {
+              completed_steps: markStepCompleted(
+                priorState,
+                'define_validation_target'
+              ),
+            },
+            'summarize_first_growth_plan_preview'
+          ),
+        },
+        'complete_first_growth_plan_preview'
+      ),
+      first_growth_plan_preview: preview,
+      confidence_level: 'directional',
+    };
+    if (!nextState.primary_segment && preview.primary_segment) {
+      nextState.primary_segment = preview.primary_segment;
+    }
+    if (!nextState.secondary_segment && preview.secondary_segment) {
+      nextState.secondary_segment = preview.secondary_segment;
+    }
+    return {
+      ...baseReply,
+      message: formatFirstGrowthPlanPreviewMessage(preview),
+      intent,
+      firstGrowthPlanPreview: preview,
+      growthState: nextState,
+    };
+  }
 
   if (intent === VALIDATION_TARGET_INTENT) {
     const ranking = priorState.segment_ranking;
@@ -1857,7 +2216,50 @@ function buildGrowthConversationReply(
       'segment_mix';
     const restart = isRestartSegmentRequest(String(userMessage || '').toLowerCase());
 
-    // Primary already chosen → advance, do not re-list segments.
+    // Preview already exists → hold it; do not re-loop earlier artifacts.
+    if (priorState.first_growth_plan_preview && !restart) {
+      return {
+        ...baseReply,
+        message: [
+          `We already have a First Growth Plan Preview for ${String(priorState.primary_segment || 'the first segment').replace(/_/g, ' ')}.`,
+          `Ask me to refine that preview, compare another segment, or confirm this focus — still before campaigns or prospect lists.`,
+        ].join('\n'),
+        intent,
+        firstGrowthPlanPreview: priorState.first_growth_plan_preview,
+        growthState: {
+          ...priorState,
+          selected_focus_area: 'segment_mix',
+          current_growth_step: 'complete_first_growth_plan_preview',
+        },
+      };
+    }
+
+    // Validation target already set → invite First Growth Plan Preview, do not re-emit it.
+    if (
+      priorState.validation_target &&
+      priorState.primary_segment &&
+      !restart
+    ) {
+      const primaryLabel =
+        (priorState.first_segment_decision &&
+          priorState.first_segment_decision.primarySegmentDisplay) ||
+        String(priorState.primary_segment).replace(/_/g, ' ');
+      return {
+        ...baseReply,
+        message: [
+          `We've already locked ${primaryLabel} and defined the validation target.`,
+          `Next I can summarize this into a First Growth Plan Preview using the approved Blueprint, the Segment Ranking, and that validation target — still before any campaign or prospect list.`,
+        ].join('\n'),
+        intent,
+        growthState: {
+          ...priorState,
+          selected_focus_area: 'segment_mix',
+          current_growth_step: 'summarize_first_growth_plan_preview',
+        },
+      };
+    }
+
+    // Primary already chosen → advance to validation target, do not re-list segments.
     if (priorState.primary_segment && !restart) {
       const validationTarget = buildValidationTarget(gd, blueprint, {
         intent: VALIDATION_TARGET_INTENT,
@@ -2015,6 +2417,32 @@ function buildGrowthConversationReply(
   }
 
   // Holding reply — still state-aware when decisions already exist.
+  if (priorState.first_growth_plan_preview) {
+    return {
+      ...baseReply,
+      message: [
+        `Holding the First Growth Plan Preview for ${String(priorState.primary_segment || 'the first segment').replace(/_/g, ' ')}.`,
+        `We can refine it, compare another segment, or confirm this focus — still before campaigns or prospect lists.`,
+      ].join('\n'),
+      intent: null,
+      firstGrowthPlanPreview: priorState.first_growth_plan_preview,
+      growthState: priorState,
+    };
+  }
+  if (priorState.validation_target && priorState.primary_segment) {
+    return {
+      ...baseReply,
+      message: [
+        `Holding the Growth Conversation state: primary segment is ${String(priorState.primary_segment).replace(/_/g, ' ')}${priorState.secondary_segment ? `, secondary ${String(priorState.secondary_segment).replace(/_/g, ' ')}` : ''}, with a validation target already defined.`,
+        `Next I can summarize this into a First Growth Plan Preview — still before campaigns or prospect lists.`,
+      ].join('\n'),
+      intent: null,
+      growthState: {
+        ...priorState,
+        current_growth_step: 'summarize_first_growth_plan_preview',
+      },
+    };
+  }
   if (priorState.primary_segment) {
     return {
       ...baseReply,
@@ -2067,12 +2495,15 @@ module.exports = {
   SEGMENT_RANKING_KIND,
   VALIDATION_TARGET_KIND,
   FIRST_SEGMENT_DECISION_KIND,
+  FIRST_GROWTH_PLAN_PREVIEW_KIND,
   DIRECTIONAL_LABEL,
   SEGMENT_RANKING_CONFIDENCE,
   VALIDATION_TARGET_CONFIDENCE,
+  FIRST_GROWTH_PLAN_PREVIEW_CONFIDENCE,
   RANKING_INTENTS,
   VALIDATION_TARGET_INTENT,
   SELECT_PRIMARY_INTENT,
+  SUMMARIZE_FIRST_GROWTH_PLAN_PREVIEW_INTENT,
   FOCUS_AREAS,
   GROWTH_STEPS,
   buildInitialGrowthDirection,
@@ -2080,6 +2511,7 @@ module.exports = {
   buildGrowthConversationReply,
   detectGrowthConversationIntent,
   isDefineValidationTargetRequest,
+  isSummarizeFirstGrowthPlanPreviewRequest,
   isSelectPrimarySegmentRequest,
   resolveSegmentSelection,
   normalizeGrowthState,
@@ -2091,6 +2523,8 @@ module.exports = {
   formatSegmentRankingMessage,
   buildValidationTarget,
   formatValidationTargetMessage,
+  buildFirstGrowthPlanPreview,
+  formatFirstGrowthPlanPreviewMessage,
   naturalList,
   splitGeography,
   extractFocusQualifier,
