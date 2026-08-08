@@ -154,13 +154,15 @@ Sections:
 | Section | Content |
 |---|---|
 | **Overall readiness status** | Aggregate: `ready` / `partial` / `not_ready` / `unknown` |
-| **Demand capture risks** | High-priority gaps in lead capture, phone/email routing, forms, missed-lead process |
-| **Trust / discoverability gaps** | Website, GBP, reviews, social, brand proof |
-| **Tracking gaps** | Analytics, pixels, Search Console, call/form/CRM source tracking, UTMs |
-| **Conversion / follow-up gaps** | CRM stages, estimate/proposal process, follow-up cadence |
+| **Can prospects reach you?** | High-priority gaps in lead capture, phone/email routing, forms, missed-lead process (`demandCaptureRisks`) |
+| **Can prospects trust you?** | Website, GBP, reviews, social, brand proof (`trustDiscoverabilityGaps`) |
+| **Can we measure what works?** | Analytics, pixels, Search Console, call/form/CRM source tracking, UTMs (`trackingGaps`) |
+| **Can inquiries become booked opportunities?** | CRM stages, estimate/proposal process, follow-up cadence (`conversionFollowUpGaps`) |
 | **What Max can check automatically** | Items with `owner: max_can_check` |
 | **What the operator/client must complete** | `operator_guided` + `client_required` outstanding items |
-| **Recommended setup sequence** | Ordered next steps before campaign execution |
+| **Recommended setup sequence** | Ordered next steps before campaign execution — domain ownership/connection → branded email/auth → website reachability CTA → GBP/photos/reviews/service area → lead tracking → estimate/follow-up |
+
+**Evidence discipline:** Do not mark an item `missing` unless there is clear evidence (client-stated absence or automated observation). Client uncertainty or no automated check → `unknown` / “needs verification”. Binary facts (domain owned, domain connected, branded email, reviews present, GA installed) avoid `partial` unless incomplete evidence is specific. Display labels: domain owned → confirmed / unconfirmed / not owned; domain connected → connected / not connected / needs verification; branded email → present / not present / needs setup / unknown.
 
 Item shape:
 

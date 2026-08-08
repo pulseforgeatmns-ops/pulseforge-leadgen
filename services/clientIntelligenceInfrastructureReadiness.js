@@ -12,7 +12,89 @@
 const ARTIFACT_KIND = 'growth_infrastructure_readiness_report';
 const REPORT_TITLE = 'Growth Infrastructure Readiness Report';
 const REPORT_DISCLAIMER =
-  'Assessment only — no DNS, GBP, social, or tracking changes were made. Client-stated facts stay separate from automated observations until reviewed.';
+  'Assessment only — no DNS, GBP, social, or tracking changes without explicit approval. No passwords requested. No campaigns or prospect lists generated. Client-stated facts stay separate from automated observations until reviewed.';
+
+const SECTION_TITLES = Object.freeze({
+  demandCaptureRisks: 'Can prospects reach you?',
+  trustDiscoverabilityGaps: 'Can prospects trust you?',
+  trackingGaps: 'Can we measure what works?',
+  conversionFollowUpGaps: 'Can inquiries become booked opportunities?',
+  maxCanCheck: 'What Max can check automatically',
+  operatorClientMustComplete: 'What the operator/client must complete',
+  recommendedSetupSequence: 'Recommended setup sequence',
+});
+
+/** Binary readiness facts — avoid "partial" unless there is specific incomplete evidence. */
+const BINARY_ITEM_IDS = Object.freeze(
+  new Set([
+    'domain_owned',
+    'domain_connected',
+    'ssl_active',
+    'spf_dkim_dmarc',
+    'branded_email',
+    'dns_provider_known',
+    'website_exists',
+    'contact_form_works',
+    'phone_email_visible',
+    'analytics_pixels',
+    'gbp_exists',
+    'gbp_claimed',
+    'gbp_photos',
+    'gbp_reviews',
+    'review_count',
+    'facebook_present',
+    'instagram_present',
+    'linkedin_present',
+    'google_analytics',
+    'search_console',
+    'call_tracking',
+    'form_tracking',
+    'crm_source_tracking',
+    'conversion_events',
+    'utm_discipline',
+    'contact_forms',
+    'phone_routing',
+    'email_routing',
+    'booking_link',
+    'crm_exists',
+    'logo',
+  ])
+);
+
+/**
+ * Practical setup blockers first — confirm ownership/connection before outreach.
+ * Item ids not listed fall through by area preference.
+ */
+const SETUP_SEQUENCE_ITEM_PRIORITY = Object.freeze([
+  'domain_owned',
+  'domain_connected',
+  'branded_email',
+  'spf_dkim_dmarc',
+  'phone_email_visible',
+  'contact_forms',
+  'contact_form_works',
+  'clear_cta',
+  'estimate_request_flow',
+  'gbp_exists',
+  'gbp_claimed',
+  'gbp_nap',
+  'gbp_photos',
+  'gbp_reviews',
+  'google_analytics',
+  'form_tracking',
+  'crm_source_tracking',
+  'call_tracking',
+  'search_console',
+  'estimate_process',
+  'proposal_template',
+  'walkthrough_process',
+  'follow_up_cadence',
+  'crm_exists',
+  'stages_defined',
+  'contacts_captured',
+  'missed_lead_process',
+  'response_time_expectation',
+]);
 
 const ITEM_STATUSES = Object.freeze([
   'ready',
@@ -339,6 +421,84 @@ function looksPositive(text) {
   );
 }
 
+function looksUncertain(text) {
+  return /\b(not sure|unsure|don't know|do not know|unknown|maybe|i think|probably|need to (check|verify)|needs? verification|haven't checked|have not checked)\b/i.test(
+    text || ''
+  );
+}
+
+/**
+ * Map internal status → owner-friendly label for binary / common facts.
+ * Keep internal status codes stable; labels are presentation only.
+ */
+function statusLabelForItem(itemId, status, context = {}) {
+  const s = ITEM_STATUSES.includes(status) ? status : 'unknown';
+  if (itemId === 'domain_owned') {
+    if (s === 'ready') return 'confirmed';
+    if (s === 'missing') return 'not owned';
+    return 'unconfirmed';
+  }
+  if (itemId === 'domain_connected') {
+    if (s === 'ready') return 'connected';
+    if (s === 'missing') return 'not connected';
+    return 'needs verification';
+  }
+  if (itemId === 'branded_email') {
+    if (s === 'ready') return 'present';
+    if (s === 'missing') {
+      return context.domainOwnedReady ? 'needs setup' : 'not present';
+    }
+    if (s === 'partial') return 'needs setup';
+    return 'unknown';
+  }
+  if (s === 'ready') return 'ready';
+  if (s === 'missing') return 'missing';
+  if (s === 'partial') return 'partial';
+  if (s === 'not_applicable') return 'not applicable';
+  return 'needs verification';
+}
+
+/**
+ * Infer status from conversational evidence.
+ * Never mark missing from uncertainty or lack of an automated check.
+ */
+function statusFromEvidence(text, { binary = false, allowPartial = !binary } = {}) {
+  if (looksUncertain(text)) return 'unknown';
+  if (looksNegative(text)) return 'missing';
+  if (looksPositive(text)) return 'ready';
+  if (binary || !allowPartial) return 'unknown';
+  return 'partial';
+}
+
+/** Polarity for one matched term — avoids "we have GA4 but no UTMs" flipping GA to missing. */
+function statusNearMatch(text, re, opts = {}) {
+  const raw = String(text || '');
+  const lower = raw.toLowerCase();
+  const m = raw.match(re);
+  if (!m) return 'unknown';
+  const idx = lower.indexOf(m[0].toLowerCase());
+  if (idx < 0) return 'unknown';
+  const before = lower.slice(Math.max(0, idx - 28), idx);
+  const around = raw.slice(Math.max(0, idx - 40), Math.min(raw.length, idx + m[0].length + 24));
+  if (looksUncertain(around)) return 'unknown';
+  // Negation must sit immediately before the term ("no GA4", "don't have analytics").
+  if (
+    /\b(no|without|not have|don't have|do not have|doesn't have)\b[\w\s'’-]{0,22}$/i.test(
+      before
+    )
+  ) {
+    return 'missing';
+  }
+  const after = lower.slice(idx, Math.min(lower.length, idx + m[0].length + 18));
+  if (
+    /\b(yes|we have|we've got|already|live|working|set up|setup|have)\b/i.test(before) ||
+    /\b(ready|live|working|set up|setup|active)\b/i.test(after)
+  ) {
+    return 'ready';
+  }
+  return statusFromEvidence(around, opts);
+}
+
 function detectReportRequest(message) {
   return /\b(report|wrap up|summarize|readiness report|how ready|setup sequence|enough for now)\b/i.test(
     message || ''
@@ -372,52 +532,101 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
   if (stepId === 'website_domain') {
     if (url) {
       mark('website', 'website_exists', 'ready', `Website URL stated: ${url}`);
-      mark('domain_dns', 'domain_connected', 'partial', `Domain referenced via ${url}`);
-      mark('domain_dns', 'domain_owned', 'partial', 'Domain referenced; ownership not independently verified', 'client_stated');
-      mark('domain_dns', 'ssl_active', /https:\/\//i.test(url) ? 'ready' : 'unknown', url);
-    } else if (/no (website|site)|don't have a (website|site)|no site yet/i.test(lower)) {
+      // URL alone does not prove DNS points at the site — needs verification.
+      mark(
+        'domain_dns',
+        'domain_connected',
+        'unknown',
+        `Domain referenced via ${url}; website connection not independently verified`
+      );
+      mark(
+        'domain_dns',
+        'domain_owned',
+        'unknown',
+        'Domain referenced; ownership not independently verified'
+      );
+      mark(
+        'domain_dns',
+        'ssl_active',
+        /https:\/\//i.test(url) ? 'ready' : 'unknown',
+        /https:\/\//i.test(url)
+          ? `HTTPS present in stated URL: ${url}`
+          : `URL stated without HTTPS evidence: ${url}`
+      );
+    } else if (
+      /no (website|site)|don't have a (website|site)|no site yet/i.test(lower) &&
+      !looksUncertain(text)
+    ) {
       mark('website', 'website_exists', 'missing', text);
       mark('domain_dns', 'domain_connected', 'missing', text);
     }
-    if (/domain (is )?owned|we own the domain|registered/i.test(lower)) {
+    if (/domain (is )?owned|we own the domain|registered/i.test(lower) && !looksUncertain(text)) {
       mark('domain_dns', 'domain_owned', 'ready', text);
     }
-    if (/no domain|don't own|do not own/i.test(lower)) {
+    if (/no domain|don't own|do not own/i.test(lower) && !looksUncertain(text)) {
       mark('domain_dns', 'domain_owned', 'missing', text);
     }
     if (/spf|dkim|dmarc/i.test(lower)) {
       mark(
         'domain_dns',
         'spf_dkim_dmarc',
-        looksNegative(text) ? 'missing' : 'partial',
+        statusFromEvidence(text, { binary: true }),
         text
       );
     }
-    if (/branded email|@[a-z0-9.-]+\.[a-z]{2,}/i.test(lower) && !/@gmail\.|@yahoo\.|@hotmail\./i.test(lower)) {
-      mark('domain_dns', 'branded_email', 'ready', text);
-    } else if (/gmail|yahoo|hotmail|no branded/i.test(lower)) {
+    if (
+      /branded email|@[a-z0-9.-]+\.[a-z]{2,}/i.test(lower) &&
+      !/@gmail\.|@yahoo\.|@hotmail\./i.test(lower)
+    ) {
+      mark(
+        'domain_dns',
+        'branded_email',
+        looksUncertain(text) ? 'unknown' : 'ready',
+        text
+      );
+    } else if (/gmail|yahoo|hotmail|no branded/i.test(lower) && !looksUncertain(text)) {
       mark('domain_dns', 'branded_email', 'missing', text);
     }
     if (/cloudflare|godaddy|namecheap|google domains|route ?53|dns provider/i.test(lower)) {
       mark('domain_dns', 'dns_provider_known', 'ready', text);
     }
     if (/mobile|responsive/i.test(lower)) {
-      mark('website', 'mobile_usability', looksNegative(text) ? 'missing' : 'partial', text);
+      mark(
+        'website',
+        'mobile_usability',
+        statusFromEvidence(text, { allowPartial: true }),
+        text
+      );
     }
     if (/services?\b/i.test(lower)) {
-      mark('website', 'clear_services', looksNegative(text) ? 'missing' : 'partial', text);
+      mark(
+        'website',
+        'clear_services',
+        statusFromEvidence(text, { allowPartial: true }),
+        text
+      );
     }
     if (/service area|we serve|coverage/i.test(lower)) {
-      mark('website', 'clear_service_area', looksNegative(text) ? 'missing' : 'partial', text);
+      mark(
+        'website',
+        'clear_service_area',
+        statusFromEvidence(text, { allowPartial: true }),
+        text
+      );
     }
     if (/\bcta\b|call to action|contact (us )?button|book now/i.test(lower)) {
-      mark('website', 'clear_cta', looksNegative(text) ? 'missing' : 'partial', text);
+      mark(
+        'website',
+        'clear_cta',
+        statusFromEvidence(text, { allowPartial: true }),
+        text
+      );
     }
     if (/form/i.test(lower)) {
       mark(
         'website',
         'contact_form_works',
-        looksNegative(text) ? 'missing' : looksPositive(text) ? 'ready' : 'partial',
+        statusFromEvidence(text, { binary: true }),
         text
       );
     }
@@ -425,7 +634,7 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
       mark(
         'website',
         'phone_email_visible',
-        looksNegative(text) ? 'missing' : 'partial',
+        statusFromEvidence(text, { binary: true }),
         text
       );
     }
@@ -433,10 +642,21 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
 
   if (stepId === 'gbp') {
     if (/google business|gbp|gmb|business profile/i.test(lower) || looksPositive(text)) {
-      if (/no (gbp|google business|profile)|don't have|do not have/i.test(lower)) {
+      if (
+        /no (gbp|google business|profile)|don't have|do not have/i.test(lower) &&
+        !looksUncertain(text)
+      ) {
         mark('gbp', 'gbp_exists', 'missing', text);
         mark('gbp', 'gbp_claimed', 'missing', text);
-      } else {
+      } else if (looksUncertain(text) && /google business|gbp|gmb|business profile/i.test(lower)) {
+        mark(
+          'gbp',
+          'gbp_exists',
+          'unknown',
+          'GBP status uncertain; profile not independently checked'
+        );
+        mark('gbp', 'gbp_claimed', 'unknown', 'Claim/verification not confirmed');
+      } else if (/google business|gbp|gmb|business profile/i.test(lower) || looksPositive(text)) {
         mark('gbp', 'gbp_exists', 'ready', text);
         if (/claimed|verified/i.test(lower)) {
           mark(
@@ -448,31 +668,77 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
             text
           );
         } else {
-          mark('gbp', 'gbp_claimed', 'unknown', 'Existence mentioned; claim/verification not confirmed');
+          mark(
+            'gbp',
+            'gbp_claimed',
+            'unknown',
+            'Existence mentioned; claim/verification not confirmed'
+          );
         }
       }
     }
     if (/review/i.test(lower)) {
-      const count = text.match(/(\d+)\s*reviews?/i);
-      if (count) {
-        mark('reviews', 'review_count', Number(count[1]) > 0 ? 'partial' : 'missing', text);
-        mark('gbp', 'gbp_reviews', Number(count[1]) > 0 ? 'partial' : 'missing', text);
-      } else if (looksNegative(text)) {
+      // Reviews stay unknown until GBP/review profile is actually checked,
+      // unless the client clearly states there are none.
+      if (looksUncertain(text)) {
+        mark(
+          'reviews',
+          'review_count',
+          'unknown',
+          'Review status uncertain; GBP/review profile not checked'
+        );
+        mark(
+          'gbp',
+          'gbp_reviews',
+          'unknown',
+          'Review status uncertain; GBP/review profile not checked'
+        );
+      } else if (looksNegative(text) && !/\d+\s*reviews?/i.test(text)) {
         mark('reviews', 'review_count', 'missing', text);
         mark('gbp', 'gbp_reviews', 'missing', text);
       } else {
-        mark('reviews', 'review_count', 'partial', text);
-        mark('gbp', 'gbp_reviews', 'partial', text);
+        const count = text.match(/(\d+)\s*reviews?/i);
+        const evidence = count
+          ? `Client stated ${count[1]} reviews; GBP/review profile not independently checked`
+          : 'Reviews mentioned; GBP/review profile not independently checked';
+        mark('reviews', 'review_count', 'unknown', evidence);
+        mark('gbp', 'gbp_reviews', 'unknown', evidence);
       }
     }
     if (/photo/i.test(lower)) {
-      mark('gbp', 'gbp_photos', looksNegative(text) ? 'missing' : 'partial', text);
+      mark(
+        'gbp',
+        'gbp_photos',
+        statusFromEvidence(text, { binary: true }),
+        looksPositive(text) && !looksNegative(text)
+          ? `${text.slice(0, 200)} (photos not independently verified on GBP)`
+          : text
+      );
+      // Thin/incomplete photos are incomplete evidence — rare justified partial.
+      if (/thin|few|need more|outdated/i.test(lower) && !looksNegative(text) && !looksUncertain(text)) {
+        mark(
+          'gbp',
+          'gbp_photos',
+          'partial',
+          `${text.slice(0, 200)} (some photos indicated; completeness needs verification)`
+        );
+      }
+    }
+    if (/service area|nap|address|categories/i.test(lower)) {
+      if (/service area|nap|address/i.test(lower)) {
+        mark(
+          'gbp',
+          'gbp_nap',
+          statusFromEvidence(text, { allowPartial: true }),
+          text
+        );
+      }
     }
     if (/request review|ask for review|review process/i.test(lower)) {
       mark(
         'reviews',
         'review_request_process',
-        looksNegative(text) ? 'missing' : 'partial',
+        statusFromEvidence(text, { allowPartial: true }),
         text
       );
     }
@@ -480,46 +746,80 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
 
   if (stepId === 'lead_flow') {
     if (/phone|call/i.test(lower)) {
-      mark('lead_capture', 'phone_routing', looksNegative(text) ? 'missing' : 'partial', text);
+      mark(
+        'lead_capture',
+        'phone_routing',
+        statusFromEvidence(text, { binary: true }),
+        text
+      );
     }
     if (/form/i.test(lower)) {
-      mark('lead_capture', 'contact_forms', looksNegative(text) ? 'missing' : 'partial', text);
+      mark(
+        'lead_capture',
+        'contact_forms',
+        statusFromEvidence(text, { binary: true }),
+        text
+      );
     }
     if (/email/i.test(lower)) {
-      mark('lead_capture', 'email_routing', looksNegative(text) ? 'missing' : 'partial', text);
+      mark(
+        'lead_capture',
+        'email_routing',
+        statusFromEvidence(text, { binary: true }),
+        text
+      );
     }
     if (/calendar|booking|calendly|schedule/i.test(lower)) {
       mark(
         'lead_capture',
         'booking_link',
-        looksNegative(text) ? 'missing' : 'partial',
+        statusFromEvidence(text, { binary: true }),
         text
       );
     }
     if (/crm|pipeline|spreadsheet|inbox|goes to|we put them/i.test(lower)) {
-      if (/no crm|don't have a crm|spreadsheet only|just (the )?inbox/i.test(lower)) {
+      if (looksUncertain(text)) {
+        mark('crm_pipeline', 'crm_exists', 'unknown', text);
+      } else if (/no crm|don't have a crm|spreadsheet only|just (the )?inbox/i.test(lower)) {
         mark('crm_pipeline', 'crm_exists', 'missing', text);
         mark('crm_pipeline', 'stages_defined', 'missing', text);
       } else if (/crm|pulseforge|hubspot|salesforce|jobber|housecall/i.test(lower)) {
         mark('crm_pipeline', 'crm_exists', 'ready', text);
-        mark('crm_pipeline', 'contacts_captured', 'partial', text);
+        mark(
+          'crm_pipeline',
+          'contacts_captured',
+          'unknown',
+          'CRM mentioned; contact capture not independently verified'
+        );
       } else {
-        mark('crm_pipeline', 'crm_exists', 'partial', text);
+        mark('crm_pipeline', 'crm_exists', 'unknown', text);
       }
     }
     if (/missed|after hours|voicemail|no process/i.test(lower)) {
       mark(
         'lead_capture',
         'missed_lead_process',
-        /no process|nothing happens|fall through/i.test(lower) ? 'missing' : 'partial',
+        /no process|nothing happens|fall through/i.test(lower) && !looksUncertain(text)
+          ? 'missing'
+          : statusFromEvidence(text, { allowPartial: true }),
         text
       );
     }
     if (/response time|within \d+|same day|asap/i.test(lower)) {
-      mark('lead_capture', 'response_time_expectation', 'partial', text);
+      mark(
+        'lead_capture',
+        'response_time_expectation',
+        statusFromEvidence(text, { allowPartial: true }),
+        text
+      );
     }
     if (/estimate request|request (an )?estimate/i.test(lower)) {
-      mark('lead_capture', 'estimate_request_flow', 'partial', text);
+      mark(
+        'lead_capture',
+        'estimate_request_flow',
+        statusFromEvidence(text, { allowPartial: true }),
+        text
+      );
     }
   }
 
@@ -528,7 +828,7 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
       mark(
         'sales_process',
         'estimate_process',
-        looksNegative(text) ? 'missing' : 'partial',
+        statusFromEvidence(text, { allowPartial: true }),
         text
       );
     }
@@ -536,7 +836,7 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
       mark(
         'sales_process',
         'proposal_template',
-        looksNegative(text) ? 'missing' : 'partial',
+        statusFromEvidence(text, { allowPartial: true }),
         text
       );
     }
@@ -544,7 +844,7 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
       mark(
         'sales_process',
         'pricing_inputs',
-        looksNegative(text) ? 'missing' : 'partial',
+        statusFromEvidence(text, { allowPartial: true }),
         text
       );
     }
@@ -552,7 +852,7 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
       mark(
         'sales_process',
         'walkthrough_process',
-        looksNegative(text) ? 'missing' : 'partial',
+        statusFromEvidence(text, { allowPartial: true }),
         text
       );
     }
@@ -560,7 +860,7 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
       mark(
         'sales_process',
         'follow_up_cadence',
-        looksNegative(text) ? 'missing' : 'partial',
+        statusFromEvidence(text, { allowPartial: true }),
         text
       );
     }
@@ -568,7 +868,7 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
       mark(
         'sales_process',
         'qualification_questions',
-        looksNegative(text) ? 'missing' : 'partial',
+        statusFromEvidence(text, { allowPartial: true }),
         text
       );
     }
@@ -582,44 +882,54 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
       [/form tracking|form conversion/i, 'form_tracking'],
       [/source tracking|lead source|utm.*crm|crm source/i, 'crm_source_tracking'],
       [/conversion event|goals?/i, 'conversion_events'],
-      [/\butm\b/i, 'utm_discipline'],
+      [/\butms?\b/i, 'utm_discipline'],
     ];
     let any = false;
     for (const [re, id] of trackMap) {
       if (re.test(lower)) {
         any = true;
-        mark(
-          'tracking',
-          id,
-          looksNegative(text) ? 'missing' : looksPositive(text) ? 'ready' : 'partial',
-          text
-        );
+        // Binary tracking facts: ready / missing / unknown only.
+        // Client clear "no X" is evidence; Max does not invent missing without inspection.
+        const status = statusNearMatch(text, re, { binary: true });
+        const evidence =
+          status === 'ready' && id === 'google_analytics'
+            ? `${text.slice(0, 200)} (client-stated; site tag not independently inspected)`
+            : status === 'missing'
+              ? text
+              : `${text.slice(0, 200)} (needs verification; not independently inspected)`;
+        mark('tracking', id, status, evidence);
       }
     }
-    if (!any && looksNegative(text)) {
+    // Vague "no" / "nothing" without naming tools → unknown, not mass-missing.
+    if (!any && (looksNegative(text) || looksUncertain(text))) {
       for (const def of READINESS_AREAS.find((a) => a.id === 'tracking').items) {
-        mark('tracking', def.id, 'missing', text);
+        mark(
+          'tracking',
+          def.id,
+          'unknown',
+          'Tracking not confirmed; site/accounts not independently inspected'
+        );
       }
     }
   }
 
   if (stepId === 'assets') {
     const assetMap = [
-      [/logo/i, 'logo'],
-      [/color|font|brand kit/i, 'colors_fonts'],
-      [/photo|picture|image/i, 'photos'],
-      [/before.?after/i, 'before_after'],
-      [/service description/i, 'service_descriptions'],
-      [/proof|license|testimonial|guarantee/i, 'proof_points'],
-      [/differentiat|why (customers )?choose|unique/i, 'differentiation'],
-      [/voice|tone|brand voice/i, 'voice_tone'],
+      [/logo/i, 'logo', true],
+      [/color|font|brand kit/i, 'colors_fonts', false],
+      [/photos?\b|pictures?\b|images?\b/i, 'photos', false],
+      [/before.?after/i, 'before_after', false],
+      [/service description/i, 'service_descriptions', false],
+      [/proof|license|testimonial|guarantee/i, 'proof_points', false],
+      [/differentiat|why (customers )?choose|unique/i, 'differentiation', false],
+      [/voice|tone|brand voice/i, 'voice_tone', false],
     ];
-    for (const [re, id] of assetMap) {
+    for (const [re, id, binary] of assetMap) {
       if (re.test(lower)) {
         mark(
           'brand_assets',
           id,
-          looksNegative(text) ? 'missing' : looksPositive(text) ? 'ready' : 'partial',
+          statusNearMatch(text, re, { binary: !!binary, allowPartial: !binary }),
           text
         );
       }
@@ -628,7 +938,7 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
       mark(
         'social',
         'facebook_present',
-        looksNegative(text) ? 'missing' : 'partial',
+        statusNearMatch(text, /facebook/i, { binary: true }),
         text
       );
     }
@@ -636,25 +946,39 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
       mark(
         'social',
         'instagram_present',
-        looksNegative(text) ? 'missing' : 'partial',
+        statusNearMatch(text, /instagram/i, { binary: true }),
         text
       );
     }
     if (/linkedin/i.test(lower)) {
-      mark(
-        'social',
-        'linkedin_present',
-        looksNegative(text) ? 'missing' : /not relevant|n\/a/i.test(lower) ? 'not_applicable' : 'partial',
-        text
-      );
+      if (/not relevant|n\/a/i.test(lower)) {
+        mark('social', 'linkedin_present', 'not_applicable', text);
+      } else {
+        mark(
+          'social',
+          'linkedin_present',
+          statusNearMatch(text, /linkedin/i, { binary: true }),
+          text
+        );
+      }
     }
   }
 
   return refreshAreaStatuses(next);
 }
 
+function domainOwnedReady(areas) {
+  const item =
+    areas &&
+    areas.domain_dns &&
+    areas.domain_dns.items &&
+    areas.domain_dns.items.domain_owned;
+  return !!(item && item.status === 'ready');
+}
+
 function listGapItems(areas, predicate) {
   const out = [];
+  const owned = domainOwnedReady(areas);
   for (const area of Object.values(areas || {})) {
     for (const it of Object.values(area.items || {})) {
       if (predicate(it, area)) {
@@ -664,6 +988,9 @@ function listGapItems(areas, predicate) {
           id: it.id,
           label: it.label,
           status: it.status,
+          statusLabel: statusLabelForItem(it.id, it.status, {
+            domainOwnedReady: owned,
+          }),
           owner: it.owner,
           priority: it.priority,
           evidence: it.evidence || '',
@@ -702,6 +1029,42 @@ function overallStatus(areas) {
   return 'unknown';
 }
 
+function sequenceActionForGap(g) {
+  const confirmByItem = {
+    domain_owned: 'Confirm domain ownership at the registrar.',
+    domain_connected: 'Confirm the domain is connected to the live website.',
+    branded_email: 'Confirm a branded email mailbox exists (e.g. hello@domain).',
+    spf_dkim_dmarc: 'Confirm SPF/DKIM/DMARC email authentication is in place.',
+    phone_email_visible: 'Confirm the website shows a phone number and email.',
+    contact_forms: 'Confirm a working contact or estimate form is on the site.',
+    contact_form_works: 'Confirm form submissions arrive in a monitored inbox.',
+    clear_cta: 'Confirm one clear estimate or walkthrough CTA on the site.',
+    estimate_request_flow: 'Confirm how estimate or walkthrough requests are received.',
+    gbp_exists: 'Confirm a Google Business Profile exists for the business.',
+    gbp_claimed: 'Confirm the Google Business Profile is claimed and verified.',
+    gbp_nap: 'Confirm GBP name, address, and service area are accurate.',
+    gbp_photos: 'Confirm GBP has current photos.',
+    gbp_reviews: 'Confirm reviews are present on the GBP/review profile.',
+    google_analytics: 'Confirm lead/site tracking (e.g. GA4) exists before outreach.',
+    form_tracking: 'Confirm form submissions are tracked as conversions.',
+    crm_source_tracking: 'Confirm lead source is captured in the CRM.',
+    call_tracking: 'Confirm call tracking or call logging is in place.',
+    estimate_process: 'Confirm the estimate or proposal process is documented.',
+    proposal_template: 'Confirm a reusable proposal template exists.',
+    walkthrough_process: 'Confirm the walkthrough process and checklist.',
+    follow_up_cadence: 'Confirm the follow-up cadence after estimates.',
+  };
+  if (confirmByItem[g.id] && (g.status === 'unknown' || g.status === 'partial' || g.status === 'missing')) {
+    return confirmByItem[g.id];
+  }
+  const base = g.recommended_next_step || `Resolve ${g.label}.`;
+  if (g.status === 'unknown' || g.status === 'partial') {
+    if (/^confirm\b/i.test(base)) return base;
+    return `Confirm: ${base}`;
+  }
+  return base;
+}
+
 function buildRecommendedSetupSequence(areas) {
   const gaps = listGapItems(
     areas,
@@ -710,34 +1073,47 @@ function buildRecommendedSetupSequence(areas) {
 
   const sequence = [];
   const seen = new Set();
-  const preferOrder = [
+  const preferAreaOrder = [
     'domain_dns',
     'website',
     'lead_capture',
     'gbp',
+    'reviews',
     'tracking',
     'crm_pipeline',
     'sales_process',
-    'reviews',
     'brand_assets',
     'social',
   ];
 
-  for (const areaId of preferOrder) {
+  const pushGap = (g) => {
+    const key = `${g.areaId}:${g.id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    sequence.push({
+      order: sequence.length + 1,
+      areaId: g.areaId,
+      itemId: g.id,
+      label: g.label,
+      owner: g.owner,
+      priority: g.priority,
+      status: g.status,
+      statusLabel: g.statusLabel,
+      action: sequenceActionForGap(g),
+    });
+  };
+
+  // 1) Practical blockers in explicit confirm order
+  for (const itemId of SETUP_SEQUENCE_ITEM_PRIORITY) {
+    const match = gaps.find((g) => g.id === itemId);
+    if (match) pushGap(match);
+    if (sequence.length >= 12) return sequence;
+  }
+
+  // 2) Remaining high-priority gaps by area preference
+  for (const areaId of preferAreaOrder) {
     for (const g of gaps.filter((x) => x.areaId === areaId)) {
-      const key = `${g.areaId}:${g.id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      sequence.push({
-        order: sequence.length + 1,
-        areaId: g.areaId,
-        itemId: g.id,
-        label: g.label,
-        owner: g.owner,
-        priority: g.priority,
-        status: g.status,
-        action: g.recommended_next_step || `Resolve ${g.label}.`,
-      });
+      pushGap(g);
       if (sequence.length >= 12) return sequence;
     }
   }
@@ -747,15 +1123,30 @@ function buildRecommendedSetupSequence(areas) {
 /**
  * Build the Growth Infrastructure Readiness Report artifact.
  */
+function isGapStatus(it, { includeHighUnknown = false } = {}) {
+  if (it.status === 'missing' || it.status === 'partial') return true;
+  if (includeHighUnknown && it.priority === 'high' && it.status === 'unknown') return true;
+  return false;
+}
+
 function buildGrowthInfrastructureReadinessReport(areas, opts = {}) {
   const snapshot = refreshAreaStatuses(cloneAreas(areas));
   const businessName = shortName(opts.businessName || 'the business');
   const gaps = (pred) => listGapItems(snapshot, pred);
 
+  // Enrich area items with status labels for UI consumers.
+  for (const area of Object.values(snapshot)) {
+    for (const it of Object.values(area.items || {})) {
+      it.statusLabel = statusLabelForItem(it.id, it.status, {
+        domainOwnedReady: domainOwnedReady(snapshot),
+      });
+    }
+  }
+
   const demandCaptureRisks = gaps(
     (it, area) =>
       (area.id === 'lead_capture' || area.id === 'domain_dns' || area.id === 'website') &&
-      (it.status === 'missing' || it.status === 'partial' || (it.priority === 'high' && it.status === 'unknown'))
+      isGapStatus(it, { includeHighUnknown: true })
   );
   const trustDiscoverabilityGaps = gaps(
     (it, area) =>
@@ -764,17 +1155,19 @@ function buildGrowthInfrastructureReadinessReport(areas, opts = {}) {
         area.id === 'reviews' ||
         area.id === 'social' ||
         area.id === 'brand_assets') &&
-      (it.status === 'missing' || it.status === 'partial')
+      isGapStatus(it, { includeHighUnknown: true })
   );
   const trackingGaps = gaps(
     (it, area) =>
       area.id === 'tracking' &&
-      (it.status === 'missing' || it.status === 'partial' || it.status === 'unknown')
+      (it.status === 'missing' ||
+        it.status === 'partial' ||
+        (it.priority === 'high' && it.status === 'unknown'))
   );
   const conversionFollowUpGaps = gaps(
     (it, area) =>
       (area.id === 'crm_pipeline' || area.id === 'sales_process') &&
-      (it.status === 'missing' || it.status === 'partial' || (it.priority === 'high' && it.status === 'unknown'))
+      isGapStatus(it, { includeHighUnknown: true })
   );
 
   const maxCanCheck = gaps(
@@ -794,6 +1187,7 @@ function buildGrowthInfrastructureReadinessReport(areas, opts = {}) {
     title: REPORT_TITLE,
     businessName,
     overallStatus: overallStatus(snapshot),
+    sectionTitles: { ...SECTION_TITLES },
     demandCaptureRisks,
     trustDiscoverabilityGaps,
     trackingGaps,
@@ -806,6 +1200,7 @@ function buildGrowthInfrastructureReadinessReport(areas, opts = {}) {
     status: 'draft',
     directional: true,
     campaignsGenerated: false,
+    assessmentOnly: true,
     disclaimer: REPORT_DISCLAIMER,
     blueprintId: opts.blueprintId || null,
     blueprintVersion: opts.blueprintVersion || null,
@@ -814,12 +1209,13 @@ function buildGrowthInfrastructureReadinessReport(areas, opts = {}) {
 
 function formatReadinessReportMessage(report) {
   const r = report || {};
+  const titles = r.sectionTitles || SECTION_TITLES;
   const lines = [
     r.title || REPORT_TITLE,
     '',
     `Overall readiness: ${r.overallStatus || 'unknown'}`,
     '',
-    'Demand capture risks:',
+    `${titles.demandCaptureRisks}:`,
   ];
   const pushList = (arr, empty) => {
     if (!arr || !arr.length) {
@@ -827,24 +1223,27 @@ function formatReadinessReportMessage(report) {
       return;
     }
     for (const g of arr.slice(0, 6)) {
-      lines.push(`- [${g.priority}] ${g.areaLabel}: ${g.label} (${g.status}) — owner: ${g.owner}`);
+      const label = g.statusLabel || statusLabelForItem(g.id, g.status);
+      lines.push(
+        `- [${g.priority}] ${g.areaLabel}: ${g.label} (${label}) — owner: ${g.owner}`
+      );
     }
   };
-  pushList(r.demandCaptureRisks, 'None flagged yet from answers so far.');
-  lines.push('', 'Trust / discoverability gaps:');
-  pushList(r.trustDiscoverabilityGaps, 'None flagged yet.');
-  lines.push('', 'Tracking gaps:');
-  pushList(r.trackingGaps, 'None flagged yet.');
-  lines.push('', 'Conversion / follow-up gaps:');
-  pushList(r.conversionFollowUpGaps, 'None flagged yet.');
-  lines.push('', 'What Max can check automatically:');
+  pushList(r.demandCaptureRisks, 'Nothing blocking reachability from answers so far.');
+  lines.push('', `${titles.trustDiscoverabilityGaps}:`);
+  pushList(r.trustDiscoverabilityGaps, 'Nothing flagged yet — or still needs verification.');
+  lines.push('', `${titles.trackingGaps}:`);
+  pushList(r.trackingGaps, 'Nothing flagged yet — or still needs verification.');
+  lines.push('', `${titles.conversionFollowUpGaps}:`);
+  pushList(r.conversionFollowUpGaps, 'Nothing flagged yet from answers so far.');
+  lines.push('', `${titles.maxCanCheck}:`);
   pushList(r.maxCanCheck, 'No outstanding Max-checkable items from current answers.');
-  lines.push('', 'What the operator/client must complete:');
+  lines.push('', `${titles.operatorClientMustComplete}:`);
   pushList(
     r.operatorClientMustComplete,
     'No outstanding operator/client items from current answers.'
   );
-  lines.push('', 'Recommended setup sequence:');
+  lines.push('', `${titles.recommendedSetupSequence}:`);
   if (r.recommendedSetupSequence && r.recommendedSetupSequence.length) {
     for (const step of r.recommendedSetupSequence.slice(0, 8)) {
       lines.push(
@@ -855,7 +1254,6 @@ function formatReadinessReportMessage(report) {
     lines.push('- Continue answering so I can sequence the highest-priority setup work.');
   }
   lines.push('', r.disclaimer || REPORT_DISCLAIMER);
-  lines.push('This report does not generate campaigns.');
   return lines.join('\n').trim();
 }
 
@@ -1006,12 +1404,15 @@ module.exports = {
   ARTIFACT_KIND,
   REPORT_TITLE,
   REPORT_DISCLAIMER,
+  SECTION_TITLES,
   ITEM_STATUSES,
   OWNERS,
   PRIORITIES,
   CONVERSATION_STEPS,
   READINESS_AREAS,
   QUESTION_BANK,
+  BINARY_ITEM_IDS,
+  SETUP_SEQUENCE_ITEM_PRIORITY,
   buildEmptyAreas,
   applyAnswerToAreas,
   buildGrowthInfrastructureReadinessReport,
@@ -1023,5 +1424,7 @@ module.exports = {
   containsForbiddenReadinessLanguage,
   overallStatus,
   listGapItems,
+  statusLabelForItem,
+  statusFromEvidence,
   stepAfter,
 };

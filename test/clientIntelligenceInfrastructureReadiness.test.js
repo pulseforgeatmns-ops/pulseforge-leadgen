@@ -9,12 +9,15 @@ const {
   ARTIFACT_KIND,
   OWNERS,
   READINESS_AREAS,
+  SECTION_TITLES,
   buildEmptyAreas,
   buildInfrastructureReadinessOpening,
   buildInfrastructureReadinessReply,
   buildGrowthInfrastructureReadinessReport,
+  formatReadinessReportMessage,
   containsForbiddenReadinessLanguage,
   applyAnswerToAreas,
+  statusLabelForItem,
 } = require('../services/clientIntelligenceInfrastructureReadiness');
 const {
   createMemoryStore,
@@ -164,9 +167,80 @@ describe('Growth Infrastructure Readiness domain', () => {
     assert.equal(areas.website.items.website_exists.status, 'ready');
     assert.equal(areas.domain_dns.items.domain_owned.status, 'ready');
     assert.equal(areas.domain_dns.items.dns_provider_known.status, 'ready');
+    // URL alone does not prove DNS connection — needs verification.
+    assert.equal(areas.domain_dns.items.domain_connected.status, 'unknown');
     assert.equal(areas.website.items.website_exists.owner, 'max_can_check');
     assert.equal(areas.domain_dns.items.domain_owned.owner, 'client_required');
     assert.equal(areas.website.items.website_exists.source, 'client_stated');
+  });
+
+  it('does not mark binary facts partial/missing without evidence', () => {
+    const urlOnly = applyAnswerToAreas(
+      buildEmptyAreas(),
+      'website_domain',
+      'Site is https://anchorcleaning.example'
+    );
+    assert.equal(urlOnly.domain_dns.items.domain_owned.status, 'unknown');
+    assert.equal(urlOnly.domain_dns.items.domain_connected.status, 'unknown');
+    assert.equal(
+      statusLabelForItem('domain_owned', urlOnly.domain_dns.items.domain_owned.status),
+      'unconfirmed'
+    );
+    assert.equal(
+      statusLabelForItem(
+        'domain_connected',
+        urlOnly.domain_dns.items.domain_connected.status
+      ),
+      'needs verification'
+    );
+
+    const reviews = applyAnswerToAreas(
+      buildEmptyAreas(),
+      'gbp',
+      'GBP exists and is claimed. About 12 reviews.'
+    );
+    assert.equal(reviews.gbp.items.gbp_reviews.status, 'unknown');
+    assert.equal(reviews.reviews.items.review_count.status, 'unknown');
+    assert.match(
+      reviews.gbp.items.gbp_reviews.evidence,
+      /not independently checked/i
+    );
+
+    const vagueTracking = applyAnswerToAreas(
+      buildEmptyAreas(),
+      'tracking',
+      'Not sure what tracking we have.'
+    );
+    assert.equal(vagueTracking.tracking.items.google_analytics.status, 'unknown');
+    assert.notEqual(vagueTracking.tracking.items.google_analytics.status, 'missing');
+
+    const mixedTracking = applyAnswerToAreas(
+      buildEmptyAreas(),
+      'tracking',
+      'We have GA4 but no UTMs or call tracking yet.'
+    );
+    assert.equal(mixedTracking.tracking.items.google_analytics.status, 'ready');
+    assert.equal(mixedTracking.tracking.items.utm_discipline.status, 'missing');
+    assert.equal(mixedTracking.tracking.items.call_tracking.status, 'missing');
+  });
+
+  it('uses clean status labels for domain and branded email', () => {
+    assert.equal(statusLabelForItem('domain_owned', 'ready'), 'confirmed');
+    assert.equal(statusLabelForItem('domain_owned', 'missing'), 'not owned');
+    assert.equal(statusLabelForItem('domain_owned', 'unknown'), 'unconfirmed');
+    assert.equal(statusLabelForItem('domain_connected', 'ready'), 'connected');
+    assert.equal(statusLabelForItem('domain_connected', 'missing'), 'not connected');
+    assert.equal(
+      statusLabelForItem('domain_connected', 'unknown'),
+      'needs verification'
+    );
+    assert.equal(statusLabelForItem('branded_email', 'ready'), 'present');
+    assert.equal(statusLabelForItem('branded_email', 'missing'), 'not present');
+    assert.equal(
+      statusLabelForItem('branded_email', 'missing', { domainOwnedReady: true }),
+      'needs setup'
+    );
+    assert.equal(statusLabelForItem('branded_email', 'unknown'), 'unknown');
   });
 
   it('builds a Growth Infrastructure Readiness Report with required sections', () => {
@@ -207,7 +281,31 @@ describe('Growth Infrastructure Readiness domain', () => {
     assert.ok(Array.isArray(report.operatorClientMustComplete));
     assert.ok(report.recommendedSetupSequence.length >= 1);
     assert.equal(report.campaignsGenerated, false);
+    assert.equal(report.assessmentOnly, true);
     assert.match(report.disclaimer, /Assessment only/i);
+    assert.match(report.disclaimer, /without explicit approval/i);
+    assert.equal(
+      report.sectionTitles.demandCaptureRisks,
+      SECTION_TITLES.demandCaptureRisks
+    );
+    assert.equal(report.sectionTitles.demandCaptureRisks, 'Can prospects reach you?');
+    assert.equal(
+      report.sectionTitles.trustDiscoverabilityGaps,
+      'Can prospects trust you?'
+    );
+    assert.equal(
+      report.sectionTitles.trackingGaps,
+      'Can we measure what works?'
+    );
+    assert.equal(
+      report.sectionTitles.conversionFollowUpGaps,
+      'Can inquiries become booked opportunities?'
+    );
+    // Practical blockers first: domain ownership before tracking/sales.
+    assert.equal(report.recommendedSetupSequence[0].itemId, 'domain_connected');
+    assert.ok(
+      report.recommendedSetupSequence.some((s) => s.itemId === 'branded_email')
+    );
     assert.ok(
       report.operatorClientMustComplete.some((g) => g.owner === 'client_required')
     );
@@ -215,6 +313,14 @@ describe('Growth Infrastructure Readiness domain', () => {
       report.maxCanCheck.some((g) => g.owner === 'max_can_check') ||
         report.demandCaptureRisks.some((g) => g.owner === 'max_can_check')
     );
+
+    const formatted = formatReadinessReportMessage(report);
+    assert.match(formatted, /Can prospects reach you\?/i);
+    assert.match(formatted, /Can prospects trust you\?/i);
+    assert.match(formatted, /Can we measure what works\?/i);
+    assert.match(formatted, /Can inquiries become booked opportunities\?/i);
+    assert.doesNotMatch(formatted, /Demand capture risks/i);
+    assert.match(formatted, /no passwords requested/i);
   });
 
   it('reply advances steps then produces report without forbidden language', () => {
@@ -239,8 +345,16 @@ describe('Growth Infrastructure Readiness domain', () => {
         businessName: 'Anchor Cleaning',
       });
       assert.equal(containsForbiddenReadinessLanguage(reply.message), false);
-      assert.doesNotMatch(reply.message, /password/i);
-      assert.doesNotMatch(reply.message, /campaign is live|prospect list/i);
+      // Guardrail may say "No passwords requested"; forbid asking for one.
+      assert.doesNotMatch(
+        reply.message,
+        /what(?:'| i)?s your password|send (?:me )?your password|login password/i
+      );
+      // Guardrail may say "No campaigns or prospect lists generated".
+      assert.doesNotMatch(
+        reply.message,
+        /campaign is live|I built a prospect list|launching outreach now/i
+      );
       state = {
         ...state,
         step: reply.step,
@@ -326,8 +440,13 @@ describe('client-intel UI markers for infrastructure readiness', () => {
     assert.match(uiSource, /Check Growth Infrastructure/);
     assert.match(uiSource, /startInfrastructureReadiness|\/readiness\/start/);
     assert.match(uiSource, /Growth Infrastructure Readiness Report/);
-    assert.match(uiSource, /Demand capture risks/);
+    assert.match(uiSource, /Can prospects reach you\?/);
+    assert.match(uiSource, /Can prospects trust you\?/);
+    assert.match(uiSource, /Can we measure what works\?/);
+    assert.match(uiSource, /Can inquiries become booked opportunities\?/);
+    assert.doesNotMatch(uiSource, /Demand capture risks/);
     assert.match(uiSource, /Recommended setup sequence/);
+    assert.match(uiSource, /statusLabel/);
     assert.match(uiSource, /phase === 'readiness'|setPhase\('readiness'\)/);
     assert.match(uiSource, /growthPreviewActions/);
     assert.match(uiSource, /Use this focus/);
