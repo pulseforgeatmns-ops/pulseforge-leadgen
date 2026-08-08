@@ -6,7 +6,11 @@ const assert = require('node:assert/strict');
 const {
   buildInitialGrowthDirection,
   buildGrowthConversationOpening,
+  buildGrowthConversationReply,
+  detectGrowthConversationIntent,
+  buildSegmentRanking,
   DIRECTIONAL_LABEL,
+  SEGMENT_RANKING_KIND,
 } = require('../services/clientIntelligenceGrowthDirection');
 const {
   createMemoryStore,
@@ -238,6 +242,7 @@ describe('approve → Initial Growth Direction → Growth Conversation', () => {
     assert.equal(reply.status, 'GROWTH_CONVERSATION');
     assert.match(reply.message, /segment/i);
     assert.doesNotMatch(reply.message, /I built a prospect list|campaign is live/i);
+    assert.equal(reply.segmentRanking, null);
   });
 
   it('idempotent approve still returns growth direction', async () => {
@@ -258,3 +263,166 @@ describe('approve → Initial Growth Direction → Growth Conversation', () => {
     );
   });
 });
+
+describe('Growth Conversation segment ranking', () => {
+  function anchorGrowthDirection() {
+    return buildInitialGrowthDirection(ANCHOR_BLUEPRINT, {
+      normalizedFacts: {
+        business_name: 'Anchor Cleaning',
+        growth_focus:
+          'recurring commercial cleaning; customers who need weekly or multiple-times-per-week service',
+        ideal_customers: [
+          'property managers',
+          'short-term rental companies',
+          'facility managers',
+          'professional offices',
+          'daycares',
+          'rec centers',
+          'high-traffic buildings',
+        ],
+        geography: [
+          'Greater Manchester',
+          'Bedford',
+          'Hooksett',
+          'Londonderry',
+          'Auburn',
+          'Goffstown',
+        ],
+      },
+    });
+  }
+
+  it('detects rank / compare / prioritize / directional-call intents', () => {
+    assert.equal(
+      detectGrowthConversationIntent('Please rank the segments'),
+      'rank_segments'
+    );
+    assert.equal(
+      detectGrowthConversationIntent('Please compare the segments and give me the best first'),
+      'compare_segments'
+    );
+    assert.equal(
+      detectGrowthConversationIntent('prioritize these segments for me'),
+      'prioritize_segments'
+    );
+    assert.equal(
+      detectGrowthConversationIntent('Make a directional call on where we should start'),
+      'make_directional_call'
+    );
+    assert.equal(
+      detectGrowthConversationIntent('which segment should we test first'),
+      'choose_first_segment'
+    );
+    assert.equal(
+      detectGrowthConversationIntent('Let us dig into the segments first.'),
+      'dig_segments'
+    );
+  });
+
+  it('user request containing "rank" produces Segment Ranking, not the generic mix prompt', () => {
+    const gd = anchorGrowthDirection();
+    const reply = buildGrowthConversationReply(
+      'Please compare the segments and rank them. Give me:\n1. Best first segment to test\n2. Second-best segment\n3. Segment to keep warm but not prioritize yet\n4. Segment to avoid for now',
+      gd,
+      ANCHOR_BLUEPRINT
+    );
+    assert.equal(reply.intent, 'rank_segments');
+
+    assert.ok(RANKING_INTENTS_INCLUDES(reply.intent));
+    assert.equal(reply.segmentRanking.kind, SEGMENT_RANKING_KIND);
+    assert.match(reply.message, /^Segment Ranking/m);
+    assert.doesNotMatch(
+      reply.message,
+      /From the Blueprint, the segments worth comparing first are/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Still directional — next we can bound the market/i
+    );
+
+    assert.match(reply.message, /Best first segment to test:\s*Property managers/i);
+    assert.match(reply.message, /Second-best segment:\s*Professional offices/i);
+    assert.match(reply.message, /Keep warm:\s*Short-term rental companies/i);
+    assert.match(reply.message, /Avoid for now:\s*Rec centers or broad high-traffic buildings/i);
+    assert.match(reply.message, /Directional recommendation:/i);
+    assert.match(
+      reply.message,
+      /Start with property managers, while testing professional offices as a secondary path/i
+    );
+    assert.match(reply.message, /Confidence:/i);
+    assert.match(
+      reply.message,
+      /Directional, not market-validated|not market-validated/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /prospect list|campaign copy|email sequence|here is your campaign/i
+    );
+  });
+
+  it('buildSegmentRanking returns structured slots with why and cautions', () => {
+    const gd = anchorGrowthDirection();
+    const ranking = buildSegmentRanking(gd, ANCHOR_BLUEPRINT, {
+      intent: 'rank_segments',
+    });
+    assert.equal(ranking.kind, SEGMENT_RANKING_KIND);
+    assert.equal(ranking.marketValidated, false);
+    const byRole = Object.fromEntries(
+      ranking.rankings.map((r) => [r.role, r])
+    );
+    assert.equal(byRole.best_first.segment, 'property managers');
+    assert.ok(byRole.best_first.why.length >= 2);
+    assert.ok(byRole.best_first.cautions.length >= 1);
+    assert.equal(byRole.second_best.segment, 'professional offices');
+    assert.equal(byRole.keep_warm.segment, 'short-term rental companies');
+    assert.match(byRole.avoid_for_now.displaySegment, /rec centers/i);
+    assert.match(ranking.directionalRecommendation, /property managers/i);
+    assert.match(ranking.confidence, /directional|not market-validated/i);
+  });
+
+  it('postGrowthMessage rank request returns ranking artifact end-to-end', async () => {
+    const store = createMemoryStore();
+    const opts = { store, useMemoryPlaybookStore: true };
+    const started = await startClientInterview({ clientId: 213 }, opts);
+    let turn = started;
+    for (const a of ANSWERS) {
+      turn = await postInterviewMessage(started.interviewId, a, opts);
+    }
+    await approveBlueprint(turn.blueprint.id, opts);
+    await startGrowthConversation(started.interviewId, opts);
+
+    const reply = await postGrowthMessage(
+      started.interviewId,
+      'Please rank the segments and make a directional call.',
+      opts
+    );
+    assert.match(reply.message, /Segment Ranking/i);
+    assert.ok(reply.segmentRanking);
+    assert.equal(reply.segmentRanking.kind, SEGMENT_RANKING_KIND);
+    assert.match(reply.message, /Best first segment to test/i);
+    assert.match(reply.message, /Directional recommendation/i);
+    assert.match(reply.message, /not market-validated|directional/i);
+    assert.doesNotMatch(
+      reply.message,
+      /From the Blueprint, the segments worth comparing first are/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Still directional — next we can bound the market/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /prospect list|campaign is live|here is your campaign copy/i
+    );
+  });
+});
+
+function RANKING_INTENTS_INCLUDES(intent) {
+  return [
+    'rank_segments',
+    'compare_segments',
+    'choose_first_segment',
+    'make_directional_call',
+    'prioritize_segments',
+  ].includes(intent);
+}
