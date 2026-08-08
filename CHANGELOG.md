@@ -4,6 +4,14 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Growth Conversation v1 spec ([SPEC-086](docs/specs/SPEC-086_Growth_Conversation.md))
+  - Post–Blueprint-approval Max conversation: choose first market segment before campaigns or prospect lists
+  - Inputs: approved Blueprint + growth answers only; output: First Growth Plan Preview
+  - Flow: confirm Initial Growth Direction → preference / fit / access / deal quality / constraints / proof → preview CTAs
+  - Upgrades the existing thin growth chat APIs; full Growth Planning workspace remains deferred
+
 ### Fixed
 
 - Executive Business Brief name/voice/observation polish ([SPEC-085](docs/specs/SPEC-085_Executive_Business_Brief.md))

@@ -45,7 +45,7 @@ The CIE v1 UI jumps from Q&A straight into an editable Blueprint. That skips the
 - Adaptive LLM questioning
 - Campaign generation
 - Blueprint evolution / recalibration product
-- Workspace / Growth Planning destination
+- Workspace / Growth Planning destination (see [SPEC-086 Growth Conversation](SPEC-086_Growth_Conversation.md) for the post-approval focus conversation; full Growth Planning workspace remains deferred)
 - Editable Executive Summary
 - Mid-interview narrative summary streaming
 
@@ -109,7 +109,7 @@ None. Forward-compatible API fields only.
 
 ## Future Work
 
-- Growth Planning destination after completion
+- Growth Planning destination after completion — superseded in part by [SPEC-086 Growth Conversation v1](SPEC-086_Growth_Conversation.md) (First Growth Plan Preview); full workspace still deferred
 - Adaptive questioning
 - Voice interview
 - Blueprint recalibration sessions
