@@ -79,11 +79,19 @@ function buildCieDevConfig() {
 router.get('/client-intel', requireOperator, (req, res) => {
   try {
     let html = fs.readFileSync(CLIENT_INTEL_HTML, 'utf8');
-    const inject = `window.__CIE_DEV__ = ${JSON.stringify(buildCieDevConfig())};`;
+    const devConfig = buildCieDevConfig();
+    const inject = `window.__CIE_DEV__ = ${JSON.stringify(devConfig)};`;
     if (html.includes(CIE_DEV_CONFIG_MARKER)) {
       html = html.replace(CIE_DEV_CONFIG_MARKER, inject);
     } else {
       html = html.replace('<script>', `<script>${inject}\n`);
+    }
+    // Production/client-facing: remove the shortcut markup entirely when gated off.
+    if (!devConfig.growthInfraFixtures) {
+      html = html.replace(
+        /<div class="actions" id="readinessDevActions"[\s\S]*?<\/div>\s*/,
+        ''
+      );
     }
     noStore(res);
     res.type('html').send(html);

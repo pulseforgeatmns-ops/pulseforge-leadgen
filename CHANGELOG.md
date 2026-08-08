@@ -12,7 +12,7 @@ All notable changes to this project are documented here. Format inspired by [Kee
   - Item model: status / evidence / owner (`max_can_check` | `operator_guided` | `client_required`) / priority / next step
   - Artifact: Growth Infrastructure Readiness Report with setup sequence; no DNS/GBP/social/tracking mutations; no password asks; no campaigns
   - APIs: `POST /api/v1/interview/:id/readiness/start|message`; `/client-intel` CTA **Check Growth Infrastructure**
-  - Dev/test shortcut: Anchor sample answers fixture + **Use Anchor sample answers** (gated; off in production unless `CIE_GROWTH_INFRA_DEV_FIXTURES=1`); CLI `npm run growth:infra:smoke -- --fixture=anchor` exercises the real report path
+  - Dev/test shortcut: Anchor sample answers fixture + **Use Anchor sample answers (dev)** — fail-closed in production/staging/unset `NODE_ENV` unless `CIE_GROWTH_INFRA_DEV_FIXTURES=1`; shortcut markup stripped from `/client-intel` when gated off; answers/report marked SAMPLE/DEV; CLI `npm run growth:infra:smoke -- --fixture=anchor` exercises the real report path
 - Growth Conversation v1 spec ([SPEC-086](docs/specs/SPEC-086_Growth_Conversation.md))
   - Post–Blueprint-approval Max conversation: choose first market segment before campaigns or prospect lists
   - Inputs: approved Blueprint + growth answers only; output: First Growth Plan Preview

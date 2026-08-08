@@ -458,10 +458,12 @@ describe('client-intel UI markers for infrastructure readiness', () => {
     assert.match(uiSource, /growthPreviewActions/);
     assert.match(uiSource, /Use this focus/);
     assert.match(uiSource, /Refine first segment/);
-    assert.match(uiSource, /Use Anchor sample answers/);
+    assert.match(uiSource, /Use Anchor sample answers \(dev\)/);
     assert.match(uiSource, /readiness\/dev\/fixture/);
     assert.match(uiSource, /__CIE_DEV_CONFIG__/);
     assert.match(uiSource, /SAMPLE\/DEV/);
+    assert.match(uiSource, /growthInfraDevFixturesEnabled/);
+    assert.match(uiSource, /readinessDevActions/);
   });
 });
 
@@ -511,6 +513,15 @@ describe('Growth Infrastructure Anchor sample fixture (dev)', () => {
       false
     );
     assert.equal(
+      isGrowthInfraDevFixturesEnabled({ NODE_ENV: 'staging' }),
+      false
+    );
+    assert.equal(
+      isGrowthInfraDevFixturesEnabled({}),
+      false,
+      'unset NODE_ENV must fail closed'
+    );
+    assert.equal(
       isGrowthInfraDevFixturesEnabled({
         NODE_ENV: 'production',
         CIE_GROWTH_INFRA_DEV_FIXTURES: '1',
@@ -519,6 +530,10 @@ describe('Growth Infrastructure Anchor sample fixture (dev)', () => {
     );
     assert.equal(
       isGrowthInfraDevFixturesEnabled({ NODE_ENV: 'development' }),
+      true
+    );
+    assert.equal(
+      isGrowthInfraDevFixturesEnabled({ NODE_ENV: 'test' }),
       true
     );
 

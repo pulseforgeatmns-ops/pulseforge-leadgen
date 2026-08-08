@@ -64,7 +64,8 @@ Options:
   --help           Show this help
 
 Dev gate:
-  Enabled when NODE_ENV is not production, or CIE_GROWTH_INFRA_DEV_FIXTURES=1.
+  Enabled when NODE_ENV is development|test, or CIE_GROWTH_INFRA_DEV_FIXTURES=1.
+  Production/staging/unset NODE_ENV are fail-closed unless the flag is set.
   Uses in-memory store only — no DNS/GBP/social/analytics/CRM writes.
 `);
 }
@@ -159,6 +160,11 @@ async function main() {
   if (process.argv.includes('--help') || process.argv.includes('-h')) {
     printHelp();
     return;
+  }
+
+  // This CLI is itself a dev/test tool — opt in for this process when unset.
+  if (!String(process.env.CIE_GROWTH_INFRA_DEV_FIXTURES || '').trim()) {
+    process.env.CIE_GROWTH_INFRA_DEV_FIXTURES = '1';
   }
 
   const options = {

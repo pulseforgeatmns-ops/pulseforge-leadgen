@@ -85,6 +85,7 @@ describe('clientIntelligence routes (static)', () => {
     }
     assert.match(source, /isGrowthInfraDevFixturesEnabled|dev_fixtures_disabled/);
     assert.match(source, /__CIE_DEV_CONFIG__/);
+    assert.match(source, /readinessDevActions/);
   });
 
   it('is mounted from server.js and registers npm script', () => {

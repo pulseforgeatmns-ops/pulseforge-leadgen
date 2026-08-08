@@ -27,8 +27,12 @@ const FIXTURE_LOADERS = Object.freeze({
 
 /**
  * Dev fixtures enabled when:
- * - CIE_GROWTH_INFRA_DEV_FIXTURES=1 (explicit enable, including production), or
- * - NODE_ENV is not production and CIE_GROWTH_INFRA_DEV_FIXTURES is not '0'
+ * - CIE_GROWTH_INFRA_DEV_FIXTURES=1 (explicit opt-in, including production/staging), or
+ * - NODE_ENV is development|test and CIE_GROWTH_INFRA_DEV_FIXTURES is not '0'
+ *
+ * Fail closed: production, staging, or unset NODE_ENV → disabled unless
+ * CIE_GROWTH_INFRA_DEV_FIXTURES=1. Client-facing production must not show
+ * the shortcut unless intentionally enabled.
  *
  * @param {NodeJS.ProcessEnv} [env]
  */
@@ -37,7 +41,7 @@ function isGrowthInfraDevFixturesEnabled(env = process.env) {
   if (flag === '1' || /^true$/i.test(flag)) return true;
   if (flag === '0' || /^false$/i.test(flag)) return false;
   const nodeEnv = String(env.NODE_ENV || '').trim().toLowerCase();
-  return nodeEnv !== 'production';
+  return nodeEnv === 'development' || nodeEnv === 'test';
 }
 
 function listGrowthInfraFixtures() {
