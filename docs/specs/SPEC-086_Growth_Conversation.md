@@ -337,6 +337,7 @@ None required. Forward-compatible enrichment of existing `interview_state.growth
 - LLM-assisted synthesis that still consumes only Blueprint + growth answers (no invented market proof)
 - Multi-location / multi-brand segment comparison
 - Soft write of accepted focus into Playbook review notes (operator-visible only; still not execution)
+- Coordinate with [SPEC-087 Growth Infrastructure Readiness](SPEC-087_Growth_Infrastructure_Readiness.md) so market focus and capture/convert setup stay separate but sequenced before campaigns
 
 ## Relationship to shipped thin slice
 
