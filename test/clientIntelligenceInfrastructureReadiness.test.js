@@ -26,8 +26,15 @@ const {
   approveBlueprint,
   startInfrastructureReadinessConversation,
   postInfrastructureReadinessMessage,
+  applyInfrastructureReadinessFixture,
+  isGrowthInfraDevFixturesEnabled,
   getInterview,
 } = require('../services/clientIntelligenceInterview');
+const {
+  getGrowthInfraFixture,
+  applyGrowthInfraFixtureThroughReplyPath,
+} = require('../services/clientIntelligenceInfrastructureReadinessDev');
+const anchorFixture = require('../fixtures/growthInfrastructureReadiness/anchor');
 
 const ANCHOR_BLUEPRINT = {
   id: 'bp-anchor-ready',
@@ -451,5 +458,115 @@ describe('client-intel UI markers for infrastructure readiness', () => {
     assert.match(uiSource, /growthPreviewActions/);
     assert.match(uiSource, /Use this focus/);
     assert.match(uiSource, /Refine first segment/);
+    assert.match(uiSource, /Use Anchor sample answers/);
+    assert.match(uiSource, /readiness\/dev\/fixture/);
+    assert.match(uiSource, /__CIE_DEV_CONFIG__/);
+    assert.match(uiSource, /SAMPLE\/DEV/);
+  });
+});
+
+describe('Growth Infrastructure Anchor sample fixture (dev)', () => {
+  it('marks Anchor fixture as sample/dev data', () => {
+    assert.equal(anchorFixture.id, 'anchor');
+    assert.equal(anchorFixture.sample, true);
+    assert.equal(anchorFixture.devOnly, true);
+    assert.match(anchorFixture.disclaimer, /SAMPLE\/DEV/i);
+    assert.ok(anchorFixture.answers.length >= 6);
+    for (const a of anchorFixture.answers) {
+      assert.match(a.message, /\[SAMPLE\/DEV\]/);
+    }
+    const loaded = getGrowthInfraFixture('anchor');
+    assert.equal(loaded.id, 'anchor');
+  });
+
+  it('applies fixture through the same reply/report path', () => {
+    const applied = applyGrowthInfraFixtureThroughReplyPath(
+      {
+        status: 'active',
+        step: 'website_domain',
+        answers: {},
+        areas: buildEmptyAreas(),
+        turns: [],
+      },
+      anchorFixture,
+      ANCHOR_BLUEPRINT,
+      { businessName: 'Anchor Cleaning' }
+    );
+    assert.equal(applied.state.status, 'report_ready');
+    assert.equal(applied.state.step, 'report');
+    assert.ok(applied.report);
+    assert.equal(applied.report.kind, ARTIFACT_KIND);
+    assert.equal(applied.report.campaignsGenerated, false);
+    assert.equal(applied.report.devFixture.sample, true);
+    assert.equal(applied.state.devFixture.id, 'anchor');
+    for (const ans of Object.values(applied.state.answers)) {
+      assert.equal(ans.sample, true);
+      assert.equal(ans.source, 'dev_fixture');
+    }
+  });
+
+  it('session shortcut lands on report_ready and is gated in production', async () => {
+    assert.equal(
+      isGrowthInfraDevFixturesEnabled({ NODE_ENV: 'production' }),
+      false
+    );
+    assert.equal(
+      isGrowthInfraDevFixturesEnabled({
+        NODE_ENV: 'production',
+        CIE_GROWTH_INFRA_DEV_FIXTURES: '1',
+      }),
+      true
+    );
+    assert.equal(
+      isGrowthInfraDevFixturesEnabled({ NODE_ENV: 'development' }),
+      true
+    );
+
+    const store = createMemoryStore();
+    const opts = {
+      store,
+      useMemoryPlaybookStore: true,
+      env: { NODE_ENV: 'test', CIE_GROWTH_INFRA_DEV_FIXTURES: '1' },
+    };
+    const started = await startClientInterview({ clientId: 411 }, opts);
+    let turn = started;
+    for (const a of ANSWERS) {
+      turn = await postInterviewMessage(started.interviewId, a, opts);
+    }
+    await approveBlueprint(turn.blueprint.id, opts);
+    await startInfrastructureReadinessConversation(started.interviewId, opts);
+
+    await assert.rejects(
+      () =>
+        applyInfrastructureReadinessFixture(started.interviewId, 'anchor', {
+          ...opts,
+          env: { NODE_ENV: 'production' },
+        }),
+      (err) => err && err.code === 'dev_fixtures_disabled'
+    );
+
+    const applied = await applyInfrastructureReadinessFixture(
+      started.interviewId,
+      'anchor',
+      opts
+    );
+    assert.equal(applied.sample, true);
+    assert.equal(applied.infrastructureReadiness.status, 'report_ready');
+    assert.equal(
+      applied.growthInfrastructureReadinessReport.kind,
+      ARTIFACT_KIND
+    );
+    assert.equal(
+      applied.growthInfrastructureReadinessReport.campaignsGenerated,
+      false
+    );
+    assert.match(
+      applied.devFixture.disclaimer || '',
+      /SAMPLE\/DEV/i
+    );
+
+    const detail = await getInterview(started.interviewId, opts);
+    assert.equal(detail.infrastructureReadiness.status, 'report_ready');
+    assert.ok(detail.growthInfrastructureReadinessReport);
   });
 });

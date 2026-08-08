@@ -17,10 +17,12 @@
  * POST /api/v1/interview/:id/growth/message
  * POST /api/v1/interview/:id/readiness/start
  * POST /api/v1/interview/:id/readiness/message
+ * POST /api/v1/interview/:id/readiness/dev/fixture  (dev/test only)
  * GET  /api/v1/clients/:id/blueprint
  * GET  /client-intel → UI
  */
 
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const router = express.Router();
@@ -39,9 +41,14 @@ const {
   postGrowthMessage,
   startInfrastructureReadinessConversation,
   postInfrastructureReadinessMessage,
+  applyInfrastructureReadinessFixture,
+  isGrowthInfraDevFixturesEnabled,
+  listGrowthInfraFixtures,
 } = require('../services/clientIntelligenceInterview');
 
 const requireOperator = [requireAuth, requireRole('admin', 'manager', 'client')];
+const CLIENT_INTEL_HTML = path.join(__dirname, '..', 'public', 'client-intel.html');
+const CIE_DEV_CONFIG_MARKER = '/*__CIE_DEV_CONFIG__*/';
 
 function noStore(res) {
   res.set('Cache-Control', 'no-store');
@@ -61,8 +68,28 @@ function sendError(res, err) {
   });
 }
 
+function buildCieDevConfig() {
+  const growthInfraFixtures = isGrowthInfraDevFixturesEnabled();
+  return {
+    growthInfraFixtures,
+    fixtures: growthInfraFixtures ? listGrowthInfraFixtures() : [],
+  };
+}
+
 router.get('/client-intel', requireOperator, (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'client-intel.html'));
+  try {
+    let html = fs.readFileSync(CLIENT_INTEL_HTML, 'utf8');
+    const inject = `window.__CIE_DEV__ = ${JSON.stringify(buildCieDevConfig())};`;
+    if (html.includes(CIE_DEV_CONFIG_MARKER)) {
+      html = html.replace(CIE_DEV_CONFIG_MARKER, inject);
+    } else {
+      html = html.replace('<script>', `<script>${inject}\n`);
+    }
+    noStore(res);
+    res.type('html').send(html);
+  } catch (err) {
+    return sendError(res, err);
+  }
 });
 
 router.post(
@@ -214,6 +241,36 @@ router.post(
         });
       }
       const result = await postInfrastructureReadinessMessage(req.params.id, message);
+      noStore(res);
+      return res.json(result);
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
+
+/**
+ * Dev/test only: apply sample fixture answers and generate the real readiness report.
+ * Disabled in production unless CIE_GROWTH_INFRA_DEV_FIXTURES=1.
+ */
+router.post(
+  '/api/v1/interview/:id/readiness/dev/fixture',
+  requireOperator,
+  async (req, res) => {
+    try {
+      if (!isGrowthInfraDevFixturesEnabled()) {
+        return res.status(403).json({
+          error: 'dev_fixtures_disabled',
+          message:
+            'Growth Infrastructure sample answers are disabled in this environment',
+        });
+      }
+      const body = req.body || {};
+      const fixtureId = body.fixture || body.fixtureId || 'anchor';
+      const result = await applyInfrastructureReadinessFixture(
+        req.params.id,
+        fixtureId
+      );
       noStore(res);
       return res.json(result);
     } catch (err) {

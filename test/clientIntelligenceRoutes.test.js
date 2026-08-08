@@ -76,12 +76,15 @@ describe('clientIntelligence routes (static)', () => {
       '/api/v1/interview/:id/growth/message',
       '/api/v1/interview/:id/readiness/start',
       '/api/v1/interview/:id/readiness/message',
+      '/api/v1/interview/:id/readiness/dev/fixture',
       '/api/v1/clients/:id/blueprint',
       '/client-intel',
     ];
     for (const route of expected) {
       assert.match(source, new RegExp(route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
+    assert.match(source, /isGrowthInfraDevFixturesEnabled|dev_fixtures_disabled/);
+    assert.match(source, /__CIE_DEV_CONFIG__/);
   });
 
   it('is mounted from server.js and registers npm script', () => {
@@ -89,6 +92,10 @@ describe('clientIntelligence routes (static)', () => {
     assert.equal(
       packageJson.scripts['client:intel:interview'],
       'node scripts/clientIntelInterview.js'
+    );
+    assert.equal(
+      packageJson.scripts['growth:infra:smoke'],
+      'node scripts/growthInfraSmoke.js'
     );
   });
 

@@ -26,6 +26,12 @@ const {
   buildInfrastructureReadinessReply,
   extractBusinessName: extractReadinessBusinessName,
 } = require('./clientIntelligenceInfrastructureReadiness');
+const {
+  isGrowthInfraDevFixturesEnabled,
+  getGrowthInfraFixture,
+  applyGrowthInfraFixtureThroughReplyPath,
+  listGrowthInfraFixtures,
+} = require('./clientIntelligenceInfrastructureReadinessDev');
 
 const SESSION_STATUSES = Object.freeze([
   'NEW',
@@ -5882,6 +5888,114 @@ async function postInfrastructureReadinessMessage(sessionId, message, opts = {})
   };
 }
 
+/**
+ * Dev/test shortcut: populate readiness answers from a sample fixture, run the
+ * same reply → report path as live chat, and land on report_ready.
+ * Gated by isGrowthInfraDevFixturesEnabled(). Never mutates DNS/GBP/CRM.
+ */
+async function applyInfrastructureReadinessFixture(sessionId, fixtureId, opts = {}) {
+  if (!isGrowthInfraDevFixturesEnabled(opts.env || process.env)) {
+    throw new ClientIntelligenceError(
+      'dev_fixtures_disabled',
+      'Growth Infrastructure sample answers are disabled in this environment',
+      403
+    );
+  }
+
+  let fixture;
+  try {
+    fixture = getGrowthInfraFixture(fixtureId || 'anchor');
+  } catch (err) {
+    throw new ClientIntelligenceError(
+      err.code || 'unknown_fixture',
+      err.message || 'Unknown fixture',
+      err.status || 400
+    );
+  }
+
+  const store = await resolveStore(opts);
+  const session = await store.getSession(sessionId);
+  if (!session) {
+    throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
+  }
+  if (session.status !== 'APPROVED') {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      'Growth Infrastructure Readiness requires an approved Blueprint'
+    );
+  }
+
+  let infrastructureReadiness =
+    (session.interview_state && session.interview_state.infrastructureReadiness) ||
+    null;
+  if (!infrastructureReadiness || infrastructureReadiness.status === undefined) {
+    const started = await startInfrastructureReadinessConversation(sessionId, opts);
+    infrastructureReadiness = started.infrastructureReadiness;
+  }
+
+  // Fresh session snapshot after possible start.
+  const fresh = await store.getSession(sessionId);
+  let blueprint = null;
+  if (fresh.interview_state && fresh.interview_state.blueprintId) {
+    blueprint = await store.getBlueprint(
+      fresh.interview_state.blueprintId,
+      fresh.interview_state.blueprintVersion
+    );
+  }
+
+  const businessName =
+    (infrastructureReadiness.context &&
+      infrastructureReadiness.context.businessName) ||
+    fixture.businessName ||
+    extractReadinessBusinessName(blueprint || { sections: {} });
+
+  const applied = applyGrowthInfraFixtureThroughReplyPath(
+    infrastructureReadiness,
+    fixture,
+    blueprint || { sections: {} },
+    {
+      businessName,
+      blueprintId: blueprint && blueprint.id,
+      blueprintVersion: blueprint && blueprint.version,
+    }
+  );
+
+  await store.updateSession(fresh.id, {
+    interview_state: {
+      ...fresh.interview_state,
+      infrastructureReadiness: applied.state,
+      growthInfrastructureReadinessReport: applied.report,
+    },
+  });
+
+  const assistantMessages = applied.messages
+    .filter((m) => m.role === 'assistant')
+    .map((m) => m.message);
+  const lastAssistant =
+    assistantMessages[assistantMessages.length - 1] ||
+    (applied.report
+      ? 'Sample answers applied — Growth Infrastructure Readiness Report ready.'
+      : 'Sample answers applied.');
+
+  return {
+    ok: true,
+    interviewId: fresh.id,
+    status: 'INFRASTRUCTURE_READINESS',
+    message: lastAssistant,
+    sample: true,
+    devFixture: {
+      id: fixture.id,
+      label: fixture.label,
+      sample: true,
+      disclaimer: fixture.disclaimer,
+    },
+    blueprint: publicBlueprint(blueprint),
+    infrastructureReadiness: applied.state,
+    growthInfrastructureReadinessReport: applied.report,
+    fixturesAvailable: listGrowthInfraFixtures(),
+  };
+}
+
 module.exports = {
   SESSION_STATUSES,
   ALLOWED_TRANSITIONS,
@@ -5923,6 +6037,9 @@ module.exports = {
   postGrowthMessage,
   startInfrastructureReadinessConversation,
   postInfrastructureReadinessMessage,
+  applyInfrastructureReadinessFixture,
+  isGrowthInfraDevFixturesEnabled,
+  listGrowthInfraFixtures,
   resolveInitialGrowthDirection,
   detectContradiction,
   answerLooksEmpty,

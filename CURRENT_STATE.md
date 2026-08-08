@@ -81,7 +81,7 @@ npm run test:max
 - `GET /admin/knowledge-health` · `GET /admin/flight-recorder` → SPEC-014 admin operational confidence (admin/manager only)
 - `POST/GET /cron/knowledge-outbox?secret=` → outbox drain worker
 - `POST/GET /api/v1/relationship-intel/interviews|interactions` · `GET /api/v1/relationship-intel/readiness` → Relationship Intelligence (SPEC-064); CLI `npm run relationship:intel:interview` · `npm run relationship:intel:readiness`
-- `POST /api/v1/clients/:id/interview/start` · `POST/GET /api/v1/interview/:id` · `POST /api/v1/interview/:id/resume` · `GET /api/v1/interview/:id/blueprint` · `POST /api/v1/blueprint/:id/revise|approve` · `POST /api/v1/interview/:id/growth/start|message` · `GET /api/v1/clients/:id/blueprint` · `GET /client-intel` → Client Intelligence (SPEC-083/084/085 Brief; Initial Growth Direction; SPEC-086 Growth Conversation Draft); CLI `npm run client:intel:interview`
+- `POST /api/v1/clients/:id/interview/start` · `POST/GET /api/v1/interview/:id` · `POST /api/v1/interview/:id/resume` · `GET /api/v1/interview/:id/blueprint` · `POST /api/v1/blueprint/:id/revise|approve` · `POST /api/v1/interview/:id/growth/start|message` · `POST /api/v1/interview/:id/readiness/start|message` · `POST /api/v1/interview/:id/readiness/dev/fixture` (dev/test) · `GET /api/v1/clients/:id/blueprint` · `GET /client-intel` → Client Intelligence (SPEC-083/084/085 Brief; Initial Growth Direction; SPEC-086 Growth Conversation Draft; SPEC-087 Growth Infrastructure Readiness); CLI `npm run client:intel:interview` · `npm run growth:infra:smoke -- --fixture=anchor`
 
 ### Dual-write (SPEC-014)
 
