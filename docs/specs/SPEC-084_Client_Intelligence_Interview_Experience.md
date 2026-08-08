@@ -109,7 +109,7 @@ None. Forward-compatible API fields only.
 
 ## Future Work
 
-- Growth Planning destination after completion — superseded in part by [SPEC-086 Growth Conversation v1](SPEC-086_Growth_Conversation.md) (First Growth Plan Preview); full workspace still deferred
+- Growth Planning destination after completion — superseded in part by [SPEC-086 Growth Conversation v1](SPEC-086_Growth_Conversation.md) (First Growth Plan Preview) and [SPEC-087 Growth Infrastructure Readiness](SPEC-087_Growth_Infrastructure_Readiness.md) (capture/convert setup); full workspace still deferred
 - Adaptive questioning
 - Voice interview
 - Blueprint recalibration sessions

@@ -639,6 +639,7 @@
       </div>
       <div class="actions" id="completeActions" hidden>
         <button type="button" id="growthBtn">Start Growth Conversation</button>
+        <button type="button" id="readinessBtn" class="secondary">Check Growth Infrastructure</button>
         <button type="button" id="dashboardBtn" class="secondary">Return to Dashboard</button>
       </div>
       <div class="status-bar" id="sessionStatus">Welcome</div>
@@ -704,6 +705,8 @@
       approveInFlight: false,
       initialGrowthDirection: null,
       growthConversationActive: false,
+      readinessConversationActive: false,
+      growthInfrastructureReadinessReport: null,
     };
 
     const els = {
@@ -735,6 +738,7 @@
       refineBtn: document.getElementById('refineBtn'),
       keepTalkingBtn: document.getElementById('keepTalkingBtn'),
       growthBtn: document.getElementById('growthBtn'),
+      readinessBtn: document.getElementById('readinessBtn'),
       dashboardBtn: document.getElementById('dashboardBtn'),
       chatPanelTitle: document.getElementById('chatPanelTitle'),
     };
@@ -1007,6 +1011,58 @@
       );
     }
 
+    function renderGapList(items, emptyLabel) {
+      const list = (items || []).slice(0, 8);
+      if (!list.length) return '<p class="blueprint-empty">' + escapeHtml(emptyLabel) + '</p>';
+      return (
+        '<ul class="completion-checks">' +
+        list.map((g) =>
+          '<li><strong>' + escapeHtml(g.areaLabel || '') + ':</strong> ' +
+          escapeHtml(g.label || '') +
+          ' <span class="conf-pct">(' + escapeHtml(g.status || 'unknown') +
+          ' · ' + escapeHtml(g.owner || '') + ')</span></li>'
+        ).join('') +
+        '</ul>'
+      );
+    }
+
+    function renderReadinessReport(report) {
+      if (!report) return '';
+      const seq = (report.recommendedSetupSequence || []).slice(0, 8);
+      const seqHtml = seq.length
+        ? '<ol class="completion-checks">' +
+          seq.map((s) =>
+            '<li>' + escapeHtml(String(s.order || '') + '. ' + (s.label || '')) +
+            ' — ' + escapeHtml(s.action || '') +
+            ' <span class="conf-pct">(' + escapeHtml(s.owner || '') + ')</span></li>'
+          ).join('') +
+          '</ol>'
+        : '<p class="blueprint-empty">Answer more questions to build the setup sequence.</p>';
+      return (
+        '<div class="growth-direction" id="growthInfrastructureReadinessReport">' +
+          '<p class="growth-kicker">Growth Infrastructure Readiness Report</p>' +
+          '<h4>Overall readiness: ' + escapeHtml(report.overallStatus || 'unknown') + '</h4>' +
+          '<p><strong>Demand capture risks</strong></p>' +
+          renderGapList(report.demandCaptureRisks, 'None flagged yet.') +
+          '<p><strong>Trust / discoverability gaps</strong></p>' +
+          renderGapList(report.trustDiscoverabilityGaps, 'None flagged yet.') +
+          '<p><strong>Tracking gaps</strong></p>' +
+          renderGapList(report.trackingGaps, 'None flagged yet.') +
+          '<p><strong>Conversion / follow-up gaps</strong></p>' +
+          renderGapList(report.conversionFollowUpGaps, 'None flagged yet.') +
+          '<p><strong>What Max can check automatically</strong></p>' +
+          renderGapList(report.maxCanCheck, 'No outstanding Max-checkable items.') +
+          '<p><strong>What the operator/client must complete</strong></p>' +
+          renderGapList(report.operatorClientMustComplete, 'No outstanding operator/client items.') +
+          '<p><strong>Recommended setup sequence</strong></p>' +
+          seqHtml +
+          '<p class="growth-disclaimer">' +
+            escapeHtml(report.disclaimer || 'Assessment only — no campaigns generated.') +
+          '</p>' +
+        '</div>'
+      );
+    }
+
     function renderCompletion(result) {
       const bp = (result && result.blueprint) || state.blueprint;
       const playbook = (result && result.playbook) || null;
@@ -1104,6 +1160,14 @@
         els.chatPanelTitle.textContent = 'Growth Conversation';
         els.blueprintActions.hidden = true;
         els.completeActions.hidden = true;
+      } else if (phase === 'readiness') {
+        setComposerEnabled(true);
+        els.chatPanelTitle.textContent = 'Growth Infrastructure Readiness';
+        els.blueprintActions.hidden = true;
+        els.completeActions.hidden = true;
+        els.sidePanelTitle.textContent = 'Infrastructure Readiness';
+        els.sidePanelSub.textContent =
+          'Operational setup before campaigns — capture, convert, track';
       }
     }
 
@@ -1289,6 +1353,23 @@
         els.messageInput.value = '';
         els.sendBtn.disabled = true;
 
+        if (state.phase === 'readiness' || state.readinessConversationActive) {
+          const data = await api(
+            'POST',
+            '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/readiness/message',
+            { message: text }
+          );
+          if (data && data.growthInfrastructureReadinessReport) {
+            state.growthInfrastructureReadinessReport = data.growthInfrastructureReadinessReport;
+            els.sidePanel.innerHTML = renderReadinessReport(data.growthInfrastructureReadinessReport);
+            els.sidePanelTitle.textContent = 'Growth Infrastructure Readiness Report';
+            els.sidePanelSub.textContent = 'Assessment only — setup sequence before campaigns';
+          }
+          if (data && data.message) addBubble('assistant', data.message);
+          setComposerEnabled(true);
+          return;
+        }
+
         if (state.phase === 'growth' || state.growthConversationActive) {
           const data = await api(
             'POST',
@@ -1316,7 +1397,11 @@
         setComposerEnabled(true);
       } catch (err) {
         showError(err.message);
-        setComposerEnabled(state.phase === 'discovery' || state.phase === 'growth');
+        setComposerEnabled(
+          state.phase === 'discovery' ||
+            state.phase === 'growth' ||
+            state.phase === 'readiness'
+        );
       }
     }
 
@@ -1324,6 +1409,8 @@
       try {
         if (!state.interviewId) return;
         els.growthBtn.disabled = true;
+        if (els.readinessBtn) els.readinessBtn.disabled = true;
+        state.readinessConversationActive = false;
         const data = await api(
           'POST',
           '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/growth/start',
@@ -1344,6 +1431,39 @@
         els.messageInput.focus();
       } catch (err) {
         showError(err.message);
+        els.growthBtn.disabled = false;
+        if (els.readinessBtn) els.readinessBtn.disabled = false;
+      }
+    }
+
+    async function startInfrastructureReadiness() {
+      try {
+        if (!state.interviewId) return;
+        els.readinessBtn.disabled = true;
+        els.growthBtn.disabled = true;
+        state.growthConversationActive = false;
+        const data = await api(
+          'POST',
+          '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/readiness/start',
+          {}
+        );
+        if (data && data.blueprint) state.blueprint = data.blueprint;
+        if (data && data.growthInfrastructureReadinessReport) {
+          state.growthInfrastructureReadinessReport = data.growthInfrastructureReadinessReport;
+          els.sidePanel.innerHTML = renderReadinessReport(data.growthInfrastructureReadinessReport);
+        }
+        state.readinessConversationActive = true;
+        setPhase('readiness');
+        if (data && data.message) {
+          if (!data.resumed) addBubble('meta', 'Growth Infrastructure Readiness started');
+          addBubble('assistant', data.message);
+        }
+        els.sessionStatus.textContent = 'READINESS · capture & convert setup';
+        els.messageInput.placeholder = 'Tell Max about website, GBP, leads, tracking, assets…';
+        els.messageInput.focus();
+      } catch (err) {
+        showError(err.message);
+        els.readinessBtn.disabled = false;
         els.growthBtn.disabled = false;
       }
     }
@@ -1497,6 +1617,7 @@
     });
 
     els.growthBtn.addEventListener('click', startGrowthConversation);
+    els.readinessBtn.addEventListener('click', startInfrastructureReadiness);
     els.dashboardBtn.addEventListener('click', () => {
       window.location.href = '/dashboard';
     });

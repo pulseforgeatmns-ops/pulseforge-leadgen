@@ -18,6 +18,12 @@ const {
   buildGrowthConversationOpening,
   buildGrowthConversationReply,
 } = require('./clientIntelligenceGrowthDirection');
+const {
+  buildEmptyAreas,
+  buildInfrastructureReadinessOpening,
+  buildInfrastructureReadinessReply,
+  extractBusinessName: extractReadinessBusinessName,
+} = require('./clientIntelligenceInfrastructureReadiness');
 
 const SESSION_STATUSES = Object.freeze([
   'NEW',
@@ -4911,6 +4917,12 @@ async function getInterview(sessionId, opts = {}) {
     initialGrowthDirection,
     growthConversation:
       (session.interview_state && session.interview_state.growthConversation) || null,
+    infrastructureReadiness:
+      (session.interview_state && session.interview_state.infrastructureReadiness) || null,
+    growthInfrastructureReadinessReport:
+      (session.interview_state &&
+        session.interview_state.growthInfrastructureReadinessReport) ||
+      null,
     question: q
       ? {
           id: q.question.id,
@@ -5312,6 +5324,8 @@ async function approveBlueprint(blueprintId, opts = {}) {
       playbookVersion: handoff.playbook.version,
       initialGrowthDirection,
       growthConversation: null,
+      infrastructureReadiness: null,
+      growthInfrastructureReadinessReport: null,
     },
   });
 
@@ -5525,6 +5539,210 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
   };
 }
 
+/**
+ * Begin the post-approval Growth Infrastructure Readiness Conversation.
+ * Separate from Growth Conversation (market focus) — operational setup only.
+ */
+async function startInfrastructureReadinessConversation(sessionId, opts = {}) {
+  const store = await resolveStore(opts);
+  const session = await store.getSession(sessionId);
+  if (!session) {
+    throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
+  }
+  if (session.status !== 'APPROVED') {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      'Growth Infrastructure Readiness requires an approved Blueprint'
+    );
+  }
+
+  let blueprint = null;
+  if (session.interview_state && session.interview_state.blueprintId) {
+    blueprint = await store.getBlueprint(
+      session.interview_state.blueprintId,
+      session.interview_state.blueprintVersion
+    );
+  }
+  if (!blueprint || blueprint.status !== 'approved') {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      'Approved Business Blueprint not found for this interview'
+    );
+  }
+
+  const businessName = extractReadinessBusinessName(blueprint);
+  const opening = buildInfrastructureReadinessOpening(blueprint, { businessName });
+  const prior =
+    (session.interview_state && session.interview_state.infrastructureReadiness) ||
+    null;
+  const turns = (prior && Array.isArray(prior.turns) && prior.turns.length
+    ? prior.turns
+    : []
+  ).slice();
+
+  if (!turns.length) {
+    turns.push({
+      speaker: 'assistant',
+      message: opening,
+      at: new Date().toISOString(),
+      step: 'opening',
+    });
+  }
+
+  const infrastructureReadiness = {
+    status: (prior && prior.status) || 'active',
+    startedAt: (prior && prior.startedAt) || new Date().toISOString(),
+    step: (prior && prior.step) || 'website_domain',
+    answers: (prior && prior.answers) || {},
+    areas: (prior && prior.areas) || buildEmptyAreas(),
+    context: {
+      blueprintId: blueprint.id,
+      blueprintVersion: blueprint.version,
+      businessName,
+    },
+    turns,
+  };
+
+  await store.updateSession(session.id, {
+    interview_state: {
+      ...session.interview_state,
+      infrastructureReadiness,
+      growthInfrastructureReadinessReport:
+        (session.interview_state &&
+          session.interview_state.growthInfrastructureReadinessReport) ||
+        null,
+    },
+  });
+
+  const resumed = Boolean(prior && prior.turns && prior.turns.length);
+  const lastAssistant = [...turns].reverse().find((t) => t && t.speaker === 'assistant');
+
+  return {
+    ok: true,
+    interviewId: session.id,
+    status: 'INFRASTRUCTURE_READINESS',
+    message: resumed && lastAssistant ? lastAssistant.message : opening,
+    blueprint: publicBlueprint(blueprint),
+    infrastructureReadiness,
+    growthInfrastructureReadinessReport:
+      (session.interview_state &&
+        session.interview_state.growthInfrastructureReadinessReport) ||
+      null,
+    resumed,
+  };
+}
+
+/**
+ * Continue Growth Infrastructure Readiness. Assessment only — no campaigns,
+ * password asks, or unapproved DNS/GBP/social/tracking changes.
+ */
+async function postInfrastructureReadinessMessage(sessionId, message, opts = {}) {
+  const store = await resolveStore(opts);
+  const session = await store.getSession(sessionId);
+  if (!session) {
+    throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
+  }
+  if (session.status !== 'APPROVED') {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      'Growth Infrastructure Readiness requires an approved Blueprint'
+    );
+  }
+
+  const text = String(message || '').trim();
+  if (!text) {
+    throw new ClientIntelligenceError('empty_message', 'message is required', 400);
+  }
+
+  let blueprint = null;
+  if (session.interview_state && session.interview_state.blueprintId) {
+    blueprint = await store.getBlueprint(
+      session.interview_state.blueprintId,
+      session.interview_state.blueprintVersion
+    );
+  }
+
+  let infrastructureReadiness =
+    (session.interview_state && session.interview_state.infrastructureReadiness) ||
+    null;
+  const continuableStatuses = new Set(['active', 'report_ready']);
+  if (
+    !infrastructureReadiness ||
+    !continuableStatuses.has(infrastructureReadiness.status)
+  ) {
+    const started = await startInfrastructureReadinessConversation(sessionId, opts);
+    infrastructureReadiness = started.infrastructureReadiness;
+  }
+
+  const businessName =
+    (infrastructureReadiness.context &&
+      infrastructureReadiness.context.businessName) ||
+    extractReadinessBusinessName(blueprint || { sections: {} });
+
+  const reply = buildInfrastructureReadinessReply(
+    text,
+    infrastructureReadiness,
+    blueprint || { sections: {} },
+    {
+      businessName,
+      blueprintId: blueprint && blueprint.id,
+      blueprintVersion: blueprint && blueprint.version,
+    }
+  );
+
+  const turns = [
+    ...((infrastructureReadiness && infrastructureReadiness.turns) || []),
+    {
+      speaker: 'client',
+      message: text,
+      at: new Date().toISOString(),
+      step: infrastructureReadiness.step,
+    },
+    {
+      speaker: 'assistant',
+      message: reply.message,
+      at: new Date().toISOString(),
+      step: reply.step,
+      intent: reply.intent,
+    },
+  ];
+
+  const nextStatus = reply.report ? 'report_ready' : 'active';
+  const nextReadiness = {
+    ...infrastructureReadiness,
+    status: nextStatus,
+    step: reply.step,
+    answers: reply.answers,
+    areas: reply.areas,
+    turns,
+  };
+
+  await store.updateSession(session.id, {
+    interview_state: {
+      ...session.interview_state,
+      infrastructureReadiness: nextReadiness,
+      ...(reply.report
+        ? { growthInfrastructureReadinessReport: reply.report }
+        : {}),
+    },
+  });
+
+  return {
+    ok: true,
+    interviewId: session.id,
+    status: 'INFRASTRUCTURE_READINESS',
+    message: reply.message,
+    intent: reply.intent,
+    blueprint: publicBlueprint(blueprint),
+    infrastructureReadiness: nextReadiness,
+    growthInfrastructureReadinessReport:
+      reply.report ||
+      (session.interview_state &&
+        session.interview_state.growthInfrastructureReadinessReport) ||
+      null,
+  };
+}
+
 module.exports = {
   SESSION_STATUSES,
   ALLOWED_TRANSITIONS,
@@ -5564,6 +5782,8 @@ module.exports = {
   approveBlueprint,
   startGrowthConversation,
   postGrowthMessage,
+  startInfrastructureReadinessConversation,
+  postInfrastructureReadinessMessage,
   resolveInitialGrowthDirection,
   detectContradiction,
   answerLooksEmpty,

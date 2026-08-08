@@ -74,6 +74,8 @@ describe('clientIntelligence routes (static)', () => {
       '/api/v1/blueprint/:id/approve',
       '/api/v1/interview/:id/growth/start',
       '/api/v1/interview/:id/growth/message',
+      '/api/v1/interview/:id/readiness/start',
+      '/api/v1/interview/:id/readiness/message',
       '/api/v1/clients/:id/blueprint',
       '/client-intel',
     ];
@@ -111,6 +113,7 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /foundation Pulseforge will use/);
     assert.match(uiSource, /Return to Dashboard/);
     assert.match(uiSource, /Start Growth Conversation/);
+    assert.match(uiSource, /Check Growth Infrastructure/);
     assert.match(uiSource, /Initial Growth Direction/);
     assert.match(uiSource, /assessment-stars/);
     assert.match(uiSource, /2500/);

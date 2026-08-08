@@ -4,6 +4,7 @@
  * SPEC-083 — Client Intelligence Engine APIs.
  * SPEC-084 — Interview experience (resume + understanding fields).
  * SPEC-085 — Executive Business Brief payload via executiveSummary.
+ * SPEC-087 — Growth Infrastructure Readiness start/message.
  *
  * POST /api/v1/clients/:id/interview/start
  * POST /api/v1/interview/:id/message
@@ -14,6 +15,8 @@
  * POST /api/v1/blueprint/:id/approve
  * POST /api/v1/interview/:id/growth/start
  * POST /api/v1/interview/:id/growth/message
+ * POST /api/v1/interview/:id/readiness/start
+ * POST /api/v1/interview/:id/readiness/message
  * GET  /api/v1/clients/:id/blueprint
  * GET  /client-intel → UI
  */
@@ -34,6 +37,8 @@ const {
   approveBlueprint,
   startGrowthConversation,
   postGrowthMessage,
+  startInfrastructureReadinessConversation,
+  postInfrastructureReadinessMessage,
 } = require('../services/clientIntelligenceInterview');
 
 const requireOperator = [requireAuth, requireRole('admin', 'manager', 'client')];
@@ -174,6 +179,41 @@ router.post(
         });
       }
       const result = await postGrowthMessage(req.params.id, message);
+      noStore(res);
+      return res.json(result);
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
+
+router.post(
+  '/api/v1/interview/:id/readiness/start',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const result = await startInfrastructureReadinessConversation(req.params.id);
+      noStore(res);
+      return res.json(result);
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
+
+router.post(
+  '/api/v1/interview/:id/readiness/message',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const message = req.body && req.body.message;
+      if (message == null || String(message).trim() === '') {
+        return res.status(400).json({
+          error: 'empty_message',
+          message: 'message is required',
+        });
+      }
+      const result = await postInfrastructureReadinessMessage(req.params.id, message);
       noStore(res);
       return res.json(result);
     } catch (err) {

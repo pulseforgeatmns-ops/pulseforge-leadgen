@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Growth Infrastructure Readiness Conversation ([SPEC-087](docs/specs/SPEC-087_Growth_Infrastructure_Readiness.md))
+  - Separate post–Blueprint-approval Max conversation: assess whether the business can capture, convert, and track demand before campaigns
+  - Ten readiness areas (domain/DNS, website, GBP, reviews, social, tracking, lead capture, CRM/pipeline, sales process, brand assets)
+  - Item model: status / evidence / owner (`max_can_check` | `operator_guided` | `client_required`) / priority / next step
+  - Artifact: Growth Infrastructure Readiness Report with setup sequence; no DNS/GBP/social/tracking mutations; no password asks; no campaigns
+  - APIs: `POST /api/v1/interview/:id/readiness/start|message`; `/client-intel` CTA **Check Growth Infrastructure**
 - Growth Conversation v1 spec ([SPEC-086](docs/specs/SPEC-086_Growth_Conversation.md))
   - Post–Blueprint-approval Max conversation: choose first market segment before campaigns or prospect lists
   - Inputs: approved Blueprint + growth answers only; output: First Growth Plan Preview
