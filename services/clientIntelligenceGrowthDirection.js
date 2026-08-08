@@ -10,7 +10,29 @@
 
 const ARTIFACT_KIND = 'initial_growth_direction';
 const DIRECTIONAL_LABEL =
-  'Directional only — not final strategy. Max has not validated this market yet.';
+  'This is a directional read, not market validation.';
+
+const PRIMARY_AREA_PATTERNS = [
+  [/\bGreater Manchester(?:\s+area)?\b/i, 'Greater Manchester'],
+  [/\bManchester(?:\s+NH)?\b/i, 'Manchester'],
+  [/\bCharleston(?:\s+WV)?\b/i, 'Charleston'],
+  [/\bNashville(?:\s+TN)?\b/i, 'Nashville'],
+  [/\bMyrtle Beach\b/i, 'Myrtle Beach'],
+];
+
+const TOWN_NAMES = [
+  'Bedford',
+  'Hooksett',
+  'Londonderry',
+  'Auburn',
+  'Goffstown',
+  'South Charleston',
+  'St. Albans',
+  'Dunbar',
+  'Nitro',
+  'Cross Lanes',
+  'Hurricane',
+];
 
 function firstSentence(text) {
   const s = String(text || '').trim();
@@ -73,6 +95,14 @@ function uniqueStrings(items) {
   return out;
 }
 
+function naturalList(items) {
+  const list = uniqueStrings(items);
+  if (!list.length) return '';
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]} and ${list[1]}`;
+  return `${list.slice(0, -1).join(', ')}, and ${list[list.length - 1]}`;
+}
+
 function extractGrowthFocus(text) {
   const raw = String(text || '');
   const focusMatch = raw.match(
@@ -89,11 +119,50 @@ function extractGrowthFocus(text) {
   return '';
 }
 
+/**
+ * Optional cadence / consistency qualifier for the first-focus sentence.
+ * Kept separate from geography so we never produce
+ * "weekly or multiple times per week in Greater Manchester".
+ */
+function extractFocusQualifier(sections, facts) {
+  const parts = [];
+  if (facts && facts.growth_focus) {
+    parts.push(...String(facts.growth_focus).split(';').slice(1));
+  }
+  parts.push(sectionSummary(sections, 'services'));
+  parts.push(sectionSummary(sections, 'campaignGoals'));
+  const blob = parts.filter(Boolean).join(' ');
+
+  if (
+    /weekly or multiple[\s-]?times[\s-]?per[\s-]?week/i.test(blob) ||
+    /multiple[\s-]?times[\s-]?per[\s-]?week/i.test(blob)
+  ) {
+    return 'customers who need consistent service weekly or multiple times per week';
+  }
+  if (/weekly/i.test(blob) && /recurring/i.test(blob)) {
+    return 'customers who need consistent weekly service';
+  }
+  if (/customers?\s+who\s+need\s+([^.;]+)/i.test(blob)) {
+    const m = blob.match(/customers?\s+who\s+need\s+([^.;]+)/i);
+    if (m) {
+      const need = m[1]
+        .trim()
+        .replace(/\s+service\.?$/i, ' service')
+        .replace(/multiple-times-per-week/gi, 'multiple times per week');
+      if (need && need.length < 90) {
+        return `customers who need ${need}`;
+      }
+    }
+  }
+  return '';
+}
+
 const SEGMENT_PATTERNS = [
   [/\bproperty managers?\b/i, 'property managers'],
   [/\bshort-?term rental(?:\s+companies)?\b/i, 'short-term rental companies'],
   [/\bfacility managers?\b/i, 'facility managers'],
   [/\bprofessional offices?\b/i, 'professional offices'],
+  [/\bdaycares?\b/i, 'daycares'],
   [/\brec(?:reation)? centers?\b/i, 'rec centers'],
   [/\bhigh-traffic buildings?\b/i, 'high-traffic buildings'],
   [/\blaw firms?\b/i, 'law firms'],
@@ -111,31 +180,57 @@ function extractSegments(text) {
   if (found.length) return found;
   return splitPhrases(raw)
     .filter((p) => p.split(/\s+/).length <= 6)
-    .slice(0, 5);
+    .slice(0, 7);
 }
 
-function extractGeographyHints(marketsSummary, facts) {
-  if (facts && Array.isArray(facts.geography) && facts.geography.length) {
-    return uniqueStrings(facts.geography).slice(0, 6);
+function isPrimaryAreaName(value) {
+  const s = String(value || '').trim().toLowerCase();
+  return PRIMARY_AREA_PATTERNS.some(([, canon]) => canon.toLowerCase() === s);
+}
+
+function splitGeography(marketsSummary, facts) {
+  const rawBits = [];
+  if (facts && Array.isArray(facts.geography)) rawBits.push(...facts.geography);
+  rawBits.push(String(marketsSummary || ''));
+  const blob = rawBits.filter(Boolean).join(' ; ');
+
+  let primaryArea = '';
+  for (const [re, canon] of PRIMARY_AREA_PATTERNS) {
+    if (re.test(blob)) {
+      primaryArea = canon;
+      break;
+    }
   }
-  const raw = String(marketsSummary || '');
-  const places = [];
-  const namedArea = raw.match(
-    /\b(Greater Manchester(?:\s+area)?|Manchester(?:\s+NH)?|Charleston(?:\s+WV)?|Nashville(?:\s+TN)?|Myrtle Beach)\b/i
-  );
-  if (namedArea) places.push(namedArea[1].replace(/\s+/g, ' ').trim());
-  for (const place of [
-    'Bedford',
-    'Hooksett',
-    'Londonderry',
-    'Auburn',
-    'Goffstown',
-    'Manchester',
-  ]) {
-    if (new RegExp(`\\b${place}\\b`, 'i').test(raw)) places.push(place);
+
+  const towns = [];
+  for (const town of TOWN_NAMES) {
+    if (new RegExp(`\\b${town.replace(/\./g, '\\.')}\\b`, 'i').test(blob)) {
+      towns.push(town);
+    }
   }
-  if (places.length) return uniqueStrings(places).slice(0, 6);
-  return splitPhrases(raw).slice(0, 4);
+
+  // If facts listed bare "Manchester" alongside Greater Manchester towns, prefer area.
+  if (/greater manchester/i.test(primaryArea)) {
+    const filtered = towns.filter((t) => !/^manchester$/i.test(t));
+    towns.length = 0;
+    towns.push(...filtered);
+  }
+
+  if (!primaryArea && facts && Array.isArray(facts.geography) && facts.geography.length) {
+    const first = String(facts.geography[0] || '').trim();
+    if (first && isPrimaryAreaName(first)) primaryArea = first;
+    else if (first && !towns.includes(first)) primaryArea = first;
+  }
+
+  if (!primaryArea && !towns.length) {
+    const phrases = splitPhrases(marketsSummary).slice(0, 4);
+    if (phrases.length) primaryArea = phrases[0];
+  }
+
+  return {
+    primaryArea,
+    towns: uniqueStrings(towns).slice(0, 6),
+  };
 }
 
 function resolveBusinessName(sections, facts) {
@@ -162,7 +257,7 @@ function resolveBusinessName(sections, facts) {
 function resolveFirstFocus(sections, facts) {
   if (facts && facts.growth_focus) {
     const fromFacts = String(facts.growth_focus).split(';')[0].trim();
-    if (fromFacts) return fromFacts;
+    if (fromFacts && !/^customers?\s+who\b/i.test(fromFacts)) return fromFacts;
   }
   const services = sectionSummary(sections, 'services');
   const goals = sectionSummary(sections, 'campaignGoals');
@@ -192,9 +287,9 @@ function resolveFirstFocus(sections, facts) {
 
 function resolveSegments(sections, facts) {
   if (facts && Array.isArray(facts.ideal_customers) && facts.ideal_customers.length) {
-    return uniqueStrings(facts.ideal_customers).slice(0, 5);
+    return uniqueStrings(facts.ideal_customers).slice(0, 7);
   }
-  return extractSegments(sectionSummary(sections, 'idealCustomers')).slice(0, 5);
+  return extractSegments(sectionSummary(sections, 'idealCustomers')).slice(0, 7);
 }
 
 function possessive(name) {
@@ -207,6 +302,92 @@ function shortName(name) {
   const n = String(name || '').trim();
   if (!n || /^this business$/i.test(n)) return 'the business';
   return n.replace(/\s+Cleaning$/i, '') || n;
+}
+
+function cleanAvoidPhrase(summary) {
+  let s = firstSentence(summary);
+  if (!s) return '';
+  s = s
+    .replace(/^customers?\s+to\s+avoid\s*(?:are|:)?\s*/i, '')
+    .replace(/^avoid(?:s|ing)?\s+/i, '')
+    .replace(/^the business (?:deliberately )?avoids?\s+/i, '')
+    .replace(/^anchor(?:\s+cleaning)?\s+(?:deliberately )?avoids?\s+/i, '')
+    .replace(/\.$/, '')
+    .trim();
+  if (!s) return '';
+  if (/^customers?\s+who\b/i.test(s)) return s;
+  if (/^(?:the\s+)?lowest price/i.test(s)) {
+    return `customers who prioritize ${s}`;
+  }
+  if (/prioritize|prefer|want|value/i.test(s)) {
+    return /^customers?\b/i.test(s) ? s : `customers who ${s}`;
+  }
+  return s;
+}
+
+function composeFocusSentence(displayName, firstFocus, primaryArea, qualifier) {
+  const poss = possessive(displayName);
+  let sentence = `Based on this Blueprint, ${poss} first growth focus should be ${firstFocus}`;
+  if (primaryArea) sentence += ` in ${primaryArea}`;
+  if (qualifier) sentence += `, especially for ${qualifier}`;
+  return `${sentence}.`;
+}
+
+function composeWhySentence(displayName) {
+  const name = shortName(displayName);
+  const subject = /^the business$/i.test(name) ? 'the business' : name;
+  return (
+    `That focus follows directly from the approved Blueprint: what ${subject} delivers today, ` +
+    `who counts as an ideal customer, where the business wants to concentrate, ` +
+    `and what near-term success looks like. ${DIRECTIONAL_LABEL}`
+  );
+}
+
+function composeSegmentsSentence(segments, primaryArea, towns) {
+  if (!segments.length && !primaryArea && !towns.length) {
+    return (
+      'The first segments worth comparing come from the Blueprint’s ideal-customer ' +
+      'and market picture — sharpened before any outreach list is built.'
+    );
+  }
+  if (!segments.length) {
+    if (primaryArea && towns.length) {
+      return (
+        `The market bound worth comparing first is ${primaryArea}, especially ${naturalList(towns)}.`
+      );
+    }
+    if (primaryArea) return `The market bound worth comparing first is ${primaryArea}.`;
+    return `The markets worth comparing first are ${naturalList(towns)}.`;
+  }
+
+  let sentence = `The first segments worth comparing are ${naturalList(segments)}`;
+  if (primaryArea && towns.length) {
+    sentence += ` across ${primaryArea}, especially ${naturalList(towns)}`;
+  } else if (primaryArea) {
+    sentence += ` across ${primaryArea}`;
+  } else if (towns.length) {
+    sentence += ` across ${naturalList(towns)}`;
+  }
+  return `${sentence}.`;
+}
+
+function lowercaseLead(text) {
+  const s = String(text || '');
+  if (!s) return s;
+  // Keep proper nouns / acronyms; only lower ordinary sentence leads like "Customers".
+  if (/^[A-Z][a-z]+(?:\s|$)/.test(s) && !/^(Anchor|Greater|Manchester)\b/.test(s)) {
+    return s.charAt(0).toLowerCase() + s.slice(1);
+  }
+  return s;
+}
+
+function composeAvoidSentence(displayName, avoidSummary) {
+  const phrase = lowercaseLead(cleanAvoidPhrase(avoidSummary));
+  if (!phrase) return '';
+  return (
+    `The Blueprint also clarifies who ${shortName(displayName)} should avoid: ${phrase}. ` +
+    `That constraint keeps the first growth focus honest instead of chasing volume.`
+  );
 }
 
 /**
@@ -223,87 +404,49 @@ function buildInitialGrowthDirection(blueprint, opts = {}) {
   const businessName = resolveBusinessName(sections, facts);
   const displayName = shortName(businessName);
   const firstFocus = resolveFirstFocus(sections, facts);
+  const focusQualifier = extractFocusQualifier(sections, facts);
   const segments = resolveSegments(sections, facts);
-  const markets = extractGeographyHints(
+  const { primaryArea, towns } = splitGeography(
     sectionSummary(sections, 'targetMarkets'),
     facts
   );
-  const marketLabel =
-    markets.length > 1
-      ? `${markets[0]} (${markets.slice(1, 4).join(', ')})`
-      : markets[0] || 'the markets named in the Blueprint';
+  const markets = uniqueStrings(
+    [primaryArea, ...towns].filter(Boolean)
+  );
   const avoid = sectionSummary(sections, 'avoidCustomers');
-  const advantages = sectionSummary(sections, 'competitiveAdvantages');
-  const goals = sectionSummary(sections, 'campaignGoals');
 
-  const heading = `${displayName}'s first growth focus`;
-
-  const paragraphs = [];
-  paragraphs.push(
-    `Based on this Blueprint, ${possessive(displayName)} first growth focus should be ${firstFocus} in ${marketLabel}.`
+  const heading = `${possessive(displayName)} first growth focus`.replace(
+    /^the business's/i,
+    "The business's"
   );
 
-  const whyBits = [];
-  if (sectionSummary(sections, 'services')) {
-    whyBits.push('what the business delivers today');
-  }
-  if (segments.length) whyBits.push('who counts as an ideal customer');
-  if (markets.length) whyBits.push('where the Blueprint says to concentrate');
-  if (goals) whyBits.push('the near-term outcomes already named');
+  const paragraphs = [
+    composeFocusSentence(displayName, firstFocus, primaryArea, focusQualifier),
+    composeWhySentence(displayName),
+    composeSegmentsSentence(segments, primaryArea, towns),
+  ];
+
+  const avoidPara = composeAvoidSentence(displayName, avoid);
+  if (avoidPara) paragraphs.push(avoidPara);
+
   paragraphs.push(
-    whyBits.length
-      ? `That focus follows directly from the approved understanding — ${whyBits.join(', ')} — not from market validation Max has not done yet.`
-      : 'That focus follows from the approved Blueprint understanding, not from market validation Max has not done yet.'
+    'The next conversation should turn this directional read into a focused growth plan: which segment to prioritize first, how tightly to bound the market, and what early signals will show whether the approach is working.'
   );
 
-  if (segments.length && markets.length) {
-    paragraphs.push(
-      `First, Max would inspect ${segments.join('; ')} across ${markets.join(', ')}.`
-    );
-  } else if (segments.length) {
-    paragraphs.push(
-      `First segments Max would inspect: ${segments.join('; ')}.`
-    );
-  } else if (markets.length) {
-    paragraphs.push(
-      `First markets Max would inspect: ${markets.join(', ')}.`
-    );
-  } else {
-    paragraphs.push(
-      'First, Max would inspect the ideal-customer and market picture in the Blueprint before any outreach list is built.'
-    );
-  }
-
-  if (avoid || advantages) {
-    const extras = [];
-    if (avoid) extras.push('who to decline');
-    if (advantages) extras.push('why great-fit customers choose this business');
-    paragraphs.push(
-      `The Blueprint also clarifies ${extras.join(' and ')}, which keeps the first focus honest instead of chasing volume.`
-    );
-  }
-
-  const nextConversation =
-    'The next conversation will turn this directional read into a sharper growth plan: which segment to prioritize first, how tightly to bound the market, and what “good” looks like before any campaigns or prospect lists are created.';
-
-  // Keep 3–5 body paragraphs; always end with the next-conversation preview.
-  let body = paragraphs.slice(0, 4);
-  body.push(nextConversation);
-  while (body.length < 3) {
-    body.unshift(
-      'This is a directional preview from the approved Blueprint — useful for the next conversation, not a final strategy.'
-    );
-  }
-  body = body.slice(0, 5);
+  // Keep 3–5 body paragraphs; heading is separate.
+  const body = paragraphs.slice(0, 5);
 
   return {
     kind: ARTIFACT_KIND,
     title: 'Initial Growth Direction',
     heading,
     firstFocus,
+    focusQualifier,
     businessName,
     segmentsToInspect: segments,
     marketsToInspect: markets,
+    primaryArea: primaryArea || null,
+    towns,
     paragraphs: body,
     nextConversationPreview:
       'Turn this first focus into a concrete growth conversation — still understanding-led, still before campaigns or prospect lists.',
@@ -321,21 +464,26 @@ function buildGrowthConversationOpening(growthDirection) {
   const gd = growthDirection || {};
   const name = shortName(gd.businessName || 'the business');
   const focus = gd.firstFocus || 'the first focus from the Blueprint';
-  const segments = (gd.segmentsToInspect || []).slice(0, 3);
-  const markets = (gd.marketsToInspect || []).slice(0, 3);
+  const primary = gd.primaryArea || null;
+  const towns = gd.towns || [];
+  const segments = (gd.segmentsToInspect || []).slice(0, 4);
   const segmentHint = segments.length
-    ? segments.join(', ')
+    ? naturalList(segments)
     : 'the ideal-customer segments in the Blueprint';
-  const marketHint = markets.length
-    ? markets.join(', ')
-    : 'the markets named in the Blueprint';
+  const marketHint = primary
+    ? towns.length
+      ? `${primary}, especially ${naturalList(towns.slice(0, 4))}`
+      : primary
+    : towns.length
+      ? naturalList(towns.slice(0, 4))
+      : 'the markets named in the Blueprint';
 
   return [
     `Let's grow from the approved Blueprint.`,
     ``,
-    `Directional first focus for ${name}: ${focus}.`,
+    `Directional first focus for ${name}: ${focus}${primary ? ` in ${primary}` : ''}.`,
     ``,
-    `I'd start by inspecting ${segmentHint} across ${marketHint}.`,
+    `I'd start by comparing ${segmentHint} across ${marketHint}.`,
     ``,
     `This is still a conversation — not a campaign, not a prospect list, and not a claim that the market is validated.`,
     ``,
@@ -351,6 +499,8 @@ function buildGrowthConversationReply(userMessage, growthDirection, blueprint) {
   const msg = String(userMessage || '').trim().toLowerCase();
   const focus = gd.firstFocus || 'the Blueprint first focus';
   const segments = gd.segmentsToInspect || [];
+  const primary = gd.primaryArea || null;
+  const towns = gd.towns || [];
   const markets = gd.marketsToInspect || [];
   const sections = (blueprint && blueprint.sections) || {};
   const goals = sectionSummary(sections, 'campaignGoals');
@@ -359,7 +509,7 @@ function buildGrowthConversationReply(userMessage, growthDirection, blueprint) {
   if (/segment|customer|icp|who\b/.test(msg)) {
     return [
       segments.length
-        ? `From the Blueprint, the segments I'd inspect first are: ${segments.join('; ')}.`
+        ? `From the Blueprint, the segments worth comparing first are ${naturalList(segments)}.`
         : `The Blueprint's ideal-customer section is the place to sharpen segments before we rank anything.`,
       avoid
         ? `We should also keep the avoid list in view so the first focus stays selective.`
@@ -370,10 +520,15 @@ function buildGrowthConversationReply(userMessage, growthDirection, blueprint) {
   }
 
   if (/market|geo|area|region|city|where\b/.test(msg)) {
+    const marketLine = primary
+      ? towns.length
+        ? `From the Blueprint, I'd bound the market to ${primary}, especially ${naturalList(towns)}.`
+        : `From the Blueprint, I'd bound the market to ${primary}.`
+      : markets.length
+        ? `From the Blueprint, the markets I'd compare first are ${naturalList(markets)}.`
+        : `The Blueprint's target-markets section is the bound I'd use before widening.`;
     return [
-      markets.length
-        ? `From the Blueprint, the markets I'd inspect first are: ${markets.join(', ')}.`
-        : `The Blueprint's target-markets section is the bound I'd use before widening.`,
+      marketLine,
       `I would not treat that as validated demand yet — only as the approved geographic focus.`,
       ``,
       `Want to pressure-test the segment mix next, or define the ninety-day success picture?`,
@@ -394,11 +549,13 @@ function buildGrowthConversationReply(userMessage, growthDirection, blueprint) {
   return [
     `Holding to the approved Blueprint, the directional first focus remains ${focus}.`,
     segments.length
-      ? `Segments to inspect: ${segments.slice(0, 4).join('; ')}.`
-      : `Next I'd sharpen which segments the Blueprint implies we should inspect first.`,
-    markets.length
-      ? `Markets to inspect: ${markets.slice(0, 4).join(', ')}.`
-      : `Next I'd tighten the market bound from the Blueprint.`,
+      ? `Segments worth comparing: ${naturalList(segments.slice(0, 4))}.`
+      : `Next I'd sharpen which segments the Blueprint implies we should compare first.`,
+    primary
+      ? `Market bound: ${primary}${towns.length ? `, especially ${naturalList(towns.slice(0, 4))}` : ''}.`
+      : markets.length
+        ? `Markets worth comparing: ${naturalList(markets.slice(0, 4))}.`
+        : `Next I'd tighten the market bound from the Blueprint.`,
     ``,
     `Tell me whether to dig into segments, markets, or success criteria — and we'll keep this pre-strategy.`,
   ].join('\n');
@@ -410,4 +567,7 @@ module.exports = {
   buildInitialGrowthDirection,
   buildGrowthConversationOpening,
   buildGrowthConversationReply,
+  naturalList,
+  splitGeography,
+  extractFocusQualifier,
 };
