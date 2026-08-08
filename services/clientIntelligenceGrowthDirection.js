@@ -30,6 +30,31 @@ const RANKING_INTENTS = Object.freeze([
 /** Intent for first-win / validation-target definitions after ranking. */
 const VALIDATION_TARGET_INTENT = 'define_validation_target';
 
+/** Intent when the user agrees with a ranking or names a preferred first segment. */
+const SELECT_PRIMARY_INTENT = 'select_primary_segment';
+
+/** Artifact kinds beyond Segment Ranking / Validation Target. */
+const FIRST_SEGMENT_DECISION_KIND = 'first_segment_decision';
+
+/** Focus areas the Growth Conversation can dig into first. */
+const FOCUS_AREAS = Object.freeze([
+  'segment_mix',
+  'market_bound',
+  'success_definition',
+  'infrastructure_readiness',
+  'unknown',
+]);
+
+/** Ordered Growth Conversation steps (state machine). */
+const GROWTH_STEPS = Object.freeze([
+  'choose_focus_area',
+  'rank_segments',
+  'select_primary_segment',
+  'define_validation_target',
+  'define_success_signals',
+  'summarize_first_growth_plan_preview',
+]);
+
 /**
  * Phrases that mean “define the validation target / first win” — checked
  * before ranking so “best first test” does not loop on Segment Ranking.
@@ -48,6 +73,16 @@ const VALIDATION_TARGET_PHRASES = Object.freeze([
   /before building any campaign/,
   /not asking for outreach copy/,
   /not asking for a (?:prospect )?list/,
+]);
+
+/** Explicit restart / re-compare requests that may re-open the segment-mix fallback. */
+const RESTART_SEGMENT_PHRASES = Object.freeze([
+  /\brestart\b/,
+  /\bstart over\b/,
+  /\bre-?rank\b/,
+  /\bcompare again\b/,
+  /\brank again\b/,
+  /\breset (?:the )?(?:segments?|ranking|growth)\b/,
 ]);
 /**
  * Deterministic segment tier hints grounded in recurring commercial-cleaning
@@ -513,6 +548,172 @@ function buildInitialGrowthDirection(blueprint, opts = {}) {
 }
 
 /**
+ * Normalize a display segment name to a stable snake_case key.
+ * "property managers" → "property_managers"
+ * "rec centers or broad high-traffic buildings" → handled via ranking helpers.
+ *
+ * @param {string} segment
+ * @returns {string|null}
+ */
+function toSegmentKey(segment) {
+  const s = String(segment || '')
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+  if (!s) return null;
+  if (s === 'high_traffic_buildings') return 'broad_high_traffic_buildings';
+  return s;
+}
+
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Empty Growth Conversation decision state.
+ * @returns {object}
+ */
+function emptyGrowthState() {
+  return {
+    selected_focus_area: 'unknown',
+    segment_ranking: null,
+    primary_segment: null,
+    secondary_segment: null,
+    held_segments: [],
+    deprioritized_segments: [],
+    current_growth_step: 'choose_focus_area',
+    completed_steps: [],
+    confidence_level: 'directional',
+    first_segment_decision: null,
+    validation_target: null,
+  };
+}
+
+/**
+ * Normalize persisted growthConversation fields into the required state shape.
+ * Accepts snake_case and legacy camelCase mirrors.
+ *
+ * @param {object|null|undefined} raw
+ * @returns {object}
+ */
+function normalizeGrowthState(raw) {
+  const base = emptyGrowthState();
+  if (!raw || typeof raw !== 'object') return base;
+
+  const ranking =
+    raw.segment_ranking ||
+    raw.segmentRanking ||
+    (raw.context && raw.context.segmentRanking) ||
+    null;
+  const decision =
+    raw.first_segment_decision || raw.firstSegmentDecision || null;
+  const validation =
+    raw.validation_target || raw.validationTarget || null;
+
+  const completed = Array.isArray(raw.completed_steps)
+    ? raw.completed_steps.slice()
+    : Array.isArray(raw.completedSteps)
+      ? raw.completedSteps.slice()
+      : [];
+
+  const held = Array.isArray(raw.held_segments)
+    ? raw.held_segments.slice()
+    : Array.isArray(raw.heldSegments)
+      ? raw.heldSegments.slice()
+      : [];
+  const deprioritized = Array.isArray(raw.deprioritized_segments)
+    ? raw.deprioritized_segments.slice()
+    : Array.isArray(raw.deprioritizedSegments)
+      ? raw.deprioritizedSegments.slice()
+      : [];
+
+  let focus = raw.selected_focus_area || raw.selectedFocusArea || base.selected_focus_area;
+  if (!FOCUS_AREAS.includes(focus)) focus = 'unknown';
+
+  let step = raw.current_growth_step || raw.currentGrowthStep || base.current_growth_step;
+  if (!GROWTH_STEPS.includes(step)) step = 'choose_focus_area';
+
+  const primary =
+    raw.primary_segment ||
+    raw.primarySegment ||
+    (decision && decision.primary_segment) ||
+    null;
+  const secondary =
+    raw.secondary_segment ||
+    raw.secondarySegment ||
+    (decision && decision.secondary_segment) ||
+    null;
+
+  return {
+    ...base,
+    selected_focus_area: focus,
+    segment_ranking: ranking,
+    primary_segment: primary ? toSegmentKey(primary) || primary : null,
+    secondary_segment: secondary ? toSegmentKey(secondary) || secondary : null,
+    held_segments: held.map((s) => toSegmentKey(s) || s).filter(Boolean),
+    deprioritized_segments: deprioritized
+      .map((s) => toSegmentKey(s) || s)
+      .filter(Boolean),
+    current_growth_step: step,
+    completed_steps: completed,
+    confidence_level: raw.confidence_level || raw.confidenceLevel || 'directional',
+    first_segment_decision: decision,
+    validation_target: validation,
+  };
+}
+
+function markStepCompleted(state, step) {
+  const completed = Array.isArray(state.completed_steps)
+    ? state.completed_steps.slice()
+    : [];
+  if (step && !completed.includes(step)) completed.push(step);
+  return completed;
+}
+
+function mentionsKnownSegment(msg) {
+  return SEGMENT_PATTERNS.some(([re]) => re.test(msg));
+}
+
+function mentionedSegmentsFromMessage(msg) {
+  const found = [];
+  for (const [re, canon] of SEGMENT_PATTERNS) {
+    if (re.test(msg) && !found.includes(canon)) found.push(canon);
+  }
+  return found;
+}
+
+function rankingRoleSegment(ranking, role) {
+  if (!ranking || !Array.isArray(ranking.rankings)) return null;
+  const hit = ranking.rankings.find((r) => r && r.role === role && r.segment);
+  return hit ? hit.segment : null;
+}
+
+function deprioritizedKeysFromRanking(ranking) {
+  if (!ranking || !Array.isArray(ranking.rankings)) return [];
+  const avoid = ranking.rankings.find((r) => r && r.role === 'avoid_for_now');
+  if (!avoid) return [];
+  const label = String(avoid.displaySegment || avoid.segment || '');
+  if (/rec centers?/i.test(label) && /high-traffic/i.test(label)) {
+    return ['rec_centers', 'broad_high_traffic_buildings'];
+  }
+  const key = toSegmentKey(avoid.segment || label);
+  return key ? [key] : [];
+}
+
+function heldKeysFromRanking(ranking) {
+  const warm = rankingRoleSegment(ranking, 'keep_warm');
+  const key = toSegmentKey(warm);
+  return key ? [key] : [];
+}
+
+function isRestartSegmentRequest(msg) {
+  return RESTART_SEGMENT_PHRASES.some((re) => re.test(msg));
+}
+
+/**
  * True when the message asks to define a validation target / first-win
  * criteria rather than re-rank segments.
  *
@@ -524,20 +725,253 @@ function isDefineValidationTargetRequest(msg) {
 }
 
 /**
+ * True when the user is selecting / agreeing on a primary segment rather than
+ * asking for a fresh ranking or the generic segment-mix list.
+ *
+ * @param {string} msg lowercased message
+ * @param {object} [state]
+ * @returns {boolean}
+ */
+function isSelectPrimarySegmentRequest(msg, state) {
+  const normalized = normalizeUserMessage(msg);
+  const hasRanking = Boolean(state && state.segment_ranking);
+  const mentioned = mentionedSegmentsFromMessage(normalized);
+  if (!mentioned.length && !hasRanking) return false;
+
+  if (/feel(?:s)? like the most attractive/.test(normalized) && mentioned.length) {
+    return true;
+  }
+  if (/let'?s start with/.test(normalized) && mentioned.length) return true;
+  if (
+    /\bi agree\b/.test(normalized) &&
+    (hasRanking ||
+      /property managers?|professional offices?|first/.test(normalized))
+  ) {
+    return true;
+  }
+  if (/most attractive first segment/.test(normalized) && mentioned.length) {
+    return true;
+  }
+  if (
+    mentioned.length &&
+    /\b(first|primary)\b/.test(normalized) &&
+    /\b(secondary|attractive|start|prefer|validate|path)\b/.test(normalized)
+  ) {
+    return true;
+  }
+  if (
+    hasRanking &&
+    mentioned.length &&
+    /\b(first|secondary|attractive|prefer|primary)\b/.test(normalized)
+  ) {
+    return true;
+  }
+  if (
+    hasRanking &&
+    /\block (?:that|it|this) in|go with (?:your|the) (?:ranking|recommendation)|use (?:your|the) ranking/i.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Resolve primary / secondary / held / deprioritized from the user message
+ * plus the prior Segment Ranking.
+ *
+ * @param {string} userMessage
+ * @param {object|null} priorRanking
+ * @returns {{ primary: string|null, secondary: string|null, held: string[], deprioritized: string[], primaryDisplay: string|null, secondaryDisplay: string|null }}
+ */
+function resolveSegmentSelection(userMessage, priorRanking) {
+  const msg = normalizeUserMessage(userMessage);
+  const mentioned = mentionedSegmentsFromMessage(msg);
+
+  let primaryDisplay = null;
+  let secondaryDisplay = null;
+
+  for (const seg of mentioned) {
+    const re = new RegExp(
+      `${escapeRegex(seg)}.{0,40}(?:as\\s+)?(?:the\\s+)?secondary|` +
+        `(?:as\\s+)?(?:the\\s+)?secondary.{0,40}${escapeRegex(seg)}`,
+      'i'
+    );
+    if (re.test(msg)) {
+      secondaryDisplay = seg;
+      break;
+    }
+  }
+
+  for (const seg of mentioned) {
+    if (seg === secondaryDisplay) continue;
+    const after = new RegExp(
+      `${escapeRegex(seg)}.{0,60}(most attractive|attractive first|first segment|to validate|primary|start with|prefer)`,
+      'i'
+    );
+    const before = new RegExp(
+      `(start with|let'?s start with|prefer|preferred|primary|most attractive|attractive).{0,60}${escapeRegex(seg)}`,
+      'i'
+    );
+    const firstNear = new RegExp(
+      `${escapeRegex(seg)}.{0,40}\\bfirst\\b|\\bfirst\\b.{0,40}${escapeRegex(seg)}`,
+      'i'
+    );
+    if (after.test(msg) || before.test(msg) || firstNear.test(msg)) {
+      primaryDisplay = seg;
+      break;
+    }
+  }
+
+  if (
+    !primaryDisplay &&
+    priorRanking &&
+    /\bi agree\b|sounds (?:good|right)|that (?:works|makes sense)|go with (?:that|your)|lock (?:that|it|this) in|use (?:your|the) ranking/i.test(
+      msg
+    )
+  ) {
+    primaryDisplay = rankingRoleSegment(priorRanking, 'best_first');
+  }
+
+  if (
+    !primaryDisplay &&
+    mentioned.length &&
+    /(attractive|first|start|prefer|primary|validate)/i.test(msg)
+  ) {
+    primaryDisplay = mentioned.find((m) => m !== secondaryDisplay) || mentioned[0];
+  }
+
+  if (!secondaryDisplay && priorRanking) {
+    secondaryDisplay = rankingRoleSegment(priorRanking, 'second_best');
+  }
+  if (!primaryDisplay && priorRanking) {
+    primaryDisplay = rankingRoleSegment(priorRanking, 'best_first');
+  }
+
+  const held = heldKeysFromRanking(priorRanking);
+  const deprioritized = deprioritizedKeysFromRanking(priorRanking);
+
+  return {
+    primary: toSegmentKey(primaryDisplay),
+    secondary: toSegmentKey(secondaryDisplay),
+    held,
+    deprioritized,
+    primaryDisplay,
+    secondaryDisplay,
+  };
+}
+
+/**
+ * Detect which focus area the user wants to dig into first.
+ * @param {string} msg lowercased
+ * @returns {string|null}
+ */
+function detectSelectedFocusArea(msg) {
+  if (/segment mix|dig (?:into )?(?:the )?segments|compare (?:the )?segments|segment focus/.test(msg)) {
+    return 'segment_mix';
+  }
+  if (/market bound|bound the market|geo(?:graphy)?|service area/.test(msg)) {
+    return 'market_bound';
+  }
+  if (/success definition|what success|ninety days|90 days|success (?:should|criteria)/.test(msg)) {
+    return 'success_definition';
+  }
+  if (/infrastructure readiness|ops readiness|operational readiness/.test(msg)) {
+    return 'infrastructure_readiness';
+  }
+  return null;
+}
+
+/**
+ * Build the First Segment Decision artifact after the user picks a primary.
+ */
+function buildFirstSegmentDecision(selection, opts = {}) {
+  const primaryDisplay = selection.primaryDisplay || selection.primary || 'the focus segment';
+  const secondaryDisplay = selection.secondaryDisplay || null;
+  const rationale =
+    opts.rationale ||
+    (secondaryDisplay
+      ? `${displaySegmentName(primaryDisplay)} is the first segment to validate; ${displaySegmentName(secondaryDisplay)} stays the secondary path.`
+      : `${displaySegmentName(primaryDisplay)} is the first segment to validate.`);
+  const cautions = Array.isArray(opts.cautions)
+    ? opts.cautions
+    : [
+        'Still directional — not market-validated.',
+        'Do not build campaigns or prospect lists until a validation target is defined.',
+      ];
+
+  return {
+    kind: FIRST_SEGMENT_DECISION_KIND,
+    title: 'First Segment Decision',
+    primary_segment: selection.primary,
+    secondary_segment: selection.secondary,
+    held_segments: selection.held || [],
+    deprioritized_segments: selection.deprioritized || [],
+    primarySegmentDisplay: primaryDisplay,
+    secondarySegmentDisplay: secondaryDisplay,
+    rationale,
+    cautions,
+    next_step: 'define_validation_target',
+    confidence_level: opts.confidence_level || 'directional',
+  };
+}
+
+function formatFirstSegmentDecisionMessage(decision) {
+  const d = decision || {};
+  const lines = [d.title || 'First Segment Decision', ''];
+  lines.push(`Primary segment: ${d.primarySegmentDisplay || d.primary_segment || '—'}`);
+  lines.push(
+    `Secondary segment: ${d.secondarySegmentDisplay || d.secondary_segment || '—'}`
+  );
+  lines.push(
+    `Held segments: ${(d.held_segments || []).length ? (d.held_segments || []).join(', ') : '—'}`
+  );
+  lines.push(
+    `Deprioritized segments: ${(d.deprioritized_segments || []).length ? (d.deprioritized_segments || []).join(', ') : '—'}`
+  );
+  lines.push('');
+  lines.push('Rationale:');
+  lines.push(d.rationale || '');
+  lines.push('');
+  lines.push('Cautions:');
+  for (const c of d.cautions || []) lines.push(`- ${c}`);
+  lines.push('');
+  lines.push(`Next step: ${d.next_step || 'define_validation_target'}`);
+  return lines.join('\n').trim();
+}
+
+/**
  * Detect Growth Conversation intents from a user message.
  * Validation-target intents win over ranking so follow-ups like
  * “good first win” / “best first test” do not repeat Segment Ranking.
+ * Primary-segment selection wins over generic dig_segments when the user
+ * agrees with a ranking or names a preferred first segment.
  * Ranking / directional-call intents are returned before generic dig intents.
  *
  * @param {string} userMessage
+ * @param {{ growthState?: object|null }} [opts]
  * @returns {string|null}
  */
-function detectGrowthConversationIntent(userMessage) {
-  const msg = String(userMessage || '').trim().toLowerCase();
+function normalizeUserMessage(userMessage) {
+  return String(userMessage || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u201A\u2032]/g, "'");
+}
+
+function detectGrowthConversationIntent(userMessage, opts = {}) {
+  const msg = normalizeUserMessage(userMessage);
   if (!msg) return null;
+  const state = normalizeGrowthState(opts.growthState || null);
 
   if (isDefineValidationTargetRequest(msg)) {
     return VALIDATION_TARGET_INTENT;
+  }
+
+  // Selecting a primary segment must win over dig_segments (“segment” in msg).
+  if (isSelectPrimarySegmentRequest(msg, state)) {
+    return SELECT_PRIMARY_INTENT;
   }
 
   const asksRank =
@@ -1083,11 +1517,21 @@ function buildValidationTarget(growthDirection, blueprint, opts = {}) {
     /reliab|trust|without needing to chase|responsiv/i.test(advantages) ||
     /lowest price|reliability/i.test(avoidSummary);
 
-  const focusSegment = resolveValidationFocusSegment(
-    opts.userMessage || '',
-    segments,
-    opts.priorSegmentRanking || null
-  );
+  let focusSegment = opts.focusSegment || null;
+  if (focusSegment && /_/.test(String(focusSegment)) && !/\s/.test(String(focusSegment))) {
+    // Accept snake_case keys from growth state (property_managers → property managers).
+    const fromKey = String(focusSegment).replace(/_/g, ' ');
+    focusSegment =
+      findSegmentByHint(segments, [fromKey, String(focusSegment).replace(/_/g, ' ')]) ||
+      fromKey;
+  }
+  if (!focusSegment) {
+    focusSegment = resolveValidationFocusSegment(
+      opts.userMessage || '',
+      segments,
+      opts.priorSegmentRanking || null
+    );
+  }
   const ctx = {
     businessName,
     primaryArea,
@@ -1112,6 +1556,19 @@ function buildValidationTarget(growthDirection, blueprint, opts = {}) {
     intent: opts.intent || VALIDATION_TARGET_INTENT,
     focusSegment: focusSegment || null,
     displaySegment: displaySegmentName(focusSegment || 'segment'),
+    // Flat Validation Target fields (required growth artifact shape).
+    target_segment: toSegmentKey(focusSegment),
+    best_fit_subtype: content.bestFirstType ? content.bestFirstType.body : null,
+    property_size_or_context: content.propertySizeType
+      ? content.propertySizeType.body
+      : null,
+    likely_pain_point: content.painPoint ? content.painPoint.body : null,
+    credibility_proof_needed: content.proof ? content.proof.body : null,
+    early_signals: content.earlySignals ? content.earlySignals.bullets || [] : [],
+    first_30_day_success_definition: content.first30Days
+      ? content.first30Days.body
+      : null,
+    cautions: content.cautions ? content.cautions.body : null,
     sections: content,
     confidence: VALIDATION_TARGET_CONFIDENCE,
     confidenceLevel: 'directional',
@@ -1195,16 +1652,48 @@ function buildGrowthConversationOpening(growthDirection) {
 }
 
 /**
+ * Generic segment-mix fallback — only when no ranking / primary decision exists
+ * (or the user explicitly asks to restart / compare again).
+ */
+function buildGenericSegmentMixFallback(segments, avoid) {
+  return [
+    segments.length
+      ? `From the Blueprint, the segments worth comparing first are ${naturalList(segments)}.`
+      : `The Blueprint's ideal-customer section is the place to sharpen segments before we rank anything.`,
+    avoid
+      ? `We should also keep the avoid list in view so the first focus stays selective.`
+      : `We should keep selectivity explicit so growth talk does not drift into anyone-with-a-budget.`,
+    ``,
+    `Still directional — next we can bound the market or define what a good first win looks like.`,
+  ].join('\n');
+}
+
+function canShowGenericSegmentMixFallback(state, userMessage) {
+  const msg = String(userMessage || '').toLowerCase();
+  if (isRestartSegmentRequest(msg)) return true;
+  if (state.primary_segment) return false;
+  if (state.segment_ranking) return false;
+  if (
+    Array.isArray(state.completed_steps) &&
+    (state.completed_steps.includes('rank_segments') ||
+      state.completed_steps.includes('select_primary_segment') ||
+      state.completed_steps.includes('define_validation_target'))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Deterministic follow-up for the Growth Conversation (no campaign generation).
- * Validation-target intents return a first-win definition. Ranking / compare /
- * prioritize / directional-call intents return a Segment Ranking artifact
- * instead of repeating the generic segment-mix prompt.
+ * Stateful: remembers focus area, segment ranking, primary/secondary selection,
+ * and advances toward Validation Target instead of looping the segment-mix menu.
  *
  * @param {string} userMessage
  * @param {object} growthDirection
  * @param {object} [blueprint]
- * @param {{ priorSegmentRanking?: object|null }} [opts]
- * @returns {{ message: string, intent: string|null, segmentRanking: object|null, validationTarget: object|null }}
+ * @param {{ priorSegmentRanking?: object|null, growthState?: object|null }} [opts]
+ * @returns {{ message: string, intent: string|null, segmentRanking: object|null, validationTarget: object|null, firstSegmentDecision: object|null, growthState: object }}
  */
 function buildGrowthConversationReply(
   userMessage,
@@ -1213,7 +1702,17 @@ function buildGrowthConversationReply(
   opts = {}
 ) {
   const gd = growthDirection || {};
-  const intent = detectGrowthConversationIntent(userMessage);
+  const priorState = normalizeGrowthState({
+    ...(opts.growthState || {}),
+    segment_ranking:
+      (opts.growthState &&
+        (opts.growthState.segment_ranking || opts.growthState.segmentRanking)) ||
+      opts.priorSegmentRanking ||
+      null,
+  });
+  const intent = detectGrowthConversationIntent(userMessage, {
+    growthState: priorState,
+  });
   const focus = gd.firstFocus || 'the Blueprint first focus';
   const segments = gd.segmentsToInspect || [];
   const primary = gd.primaryArea || null;
@@ -1223,45 +1722,241 @@ function buildGrowthConversationReply(
   const goals = sectionSummary(sections, 'campaignGoals');
   const avoid = sectionSummary(sections, 'avoidCustomers');
 
+  const baseReply = {
+    segmentRanking: null,
+    validationTarget: null,
+    firstSegmentDecision: null,
+  };
+
   if (intent === VALIDATION_TARGET_INTENT) {
+    const ranking = priorState.segment_ranking;
     const validationTarget = buildValidationTarget(gd, blueprint, {
       intent,
       userMessage,
-      priorSegmentRanking: opts.priorSegmentRanking || null,
+      priorSegmentRanking: ranking,
+      focusSegment: priorState.primary_segment || null,
     });
+    const nextState = {
+      ...priorState,
+      current_growth_step: 'define_validation_target',
+      completed_steps: markStepCompleted(
+        {
+          completed_steps: markStepCompleted(priorState, 'select_primary_segment'),
+        },
+        'define_validation_target'
+      ),
+      validation_target: validationTarget,
+      confidence_level: 'directional',
+    };
+    if (priorState.primary_segment) {
+      nextState.primary_segment = priorState.primary_segment;
+    } else if (validationTarget.target_segment) {
+      nextState.primary_segment = validationTarget.target_segment;
+      nextState.completed_steps = markStepCompleted(
+        nextState,
+        'select_primary_segment'
+      );
+    }
     return {
+      ...baseReply,
       message: formatValidationTargetMessage(validationTarget),
       intent,
-      segmentRanking: null,
       validationTarget,
+      growthState: nextState,
+    };
+  }
+
+  if (intent === SELECT_PRIMARY_INTENT) {
+    const selection = resolveSegmentSelection(
+      userMessage,
+      priorState.segment_ranking
+    );
+    const decision = buildFirstSegmentDecision(selection);
+    const validationTarget = buildValidationTarget(gd, blueprint, {
+      intent: VALIDATION_TARGET_INTENT,
+      userMessage,
+      priorSegmentRanking: priorState.segment_ranking,
+      focusSegment: selection.primaryDisplay || selection.primary,
+    });
+    const primaryLabel = selection.primaryDisplay || 'the chosen segment';
+    const secondaryLabel = selection.secondaryDisplay;
+    const ack = secondaryLabel
+      ? `Good. I'll treat ${primaryLabel} as the first segment to validate and ${secondaryLabel} as the secondary path. Next, let's define what a good first win looks like before any campaign or prospect list.`
+      : `Good. I'll treat ${primaryLabel} as the first segment to validate. Next, let's define what a good first win looks like before any campaign or prospect list.`;
+    const nextState = {
+      ...priorState,
+      selected_focus_area:
+        priorState.selected_focus_area === 'unknown'
+          ? 'segment_mix'
+          : priorState.selected_focus_area,
+      primary_segment: selection.primary,
+      secondary_segment: selection.secondary,
+      held_segments: selection.held || [],
+      deprioritized_segments: selection.deprioritized || [],
+      current_growth_step: 'define_validation_target',
+      completed_steps: markStepCompleted(
+        {
+          completed_steps: markStepCompleted(
+            {
+              completed_steps: markStepCompleted(priorState, 'rank_segments'),
+            },
+            'select_primary_segment'
+          ),
+        },
+        'define_validation_target'
+      ),
+      first_segment_decision: decision,
+      validation_target: validationTarget,
+      confidence_level: 'directional',
+    };
+    return {
+      ...baseReply,
+      message: [
+        ack,
+        '',
+        formatFirstSegmentDecisionMessage(decision),
+        '',
+        formatValidationTargetMessage(validationTarget),
+      ].join('\n'),
+      intent,
+      firstSegmentDecision: decision,
+      validationTarget,
+      growthState: nextState,
     };
   }
 
   if (intent && RANKING_INTENTS.includes(intent)) {
     const segmentRanking = buildSegmentRanking(gd, blueprint, { intent });
+    const nextState = {
+      ...priorState,
+      selected_focus_area:
+        priorState.selected_focus_area === 'unknown'
+          ? 'segment_mix'
+          : priorState.selected_focus_area,
+      segment_ranking: segmentRanking,
+      current_growth_step: 'select_primary_segment',
+      completed_steps: markStepCompleted(
+        {
+          completed_steps: markStepCompleted(priorState, 'choose_focus_area'),
+        },
+        'rank_segments'
+      ),
+      confidence_level: 'directional',
+    };
     return {
+      ...baseReply,
       message: formatSegmentRankingMessage(segmentRanking),
       intent,
       segmentRanking,
-      validationTarget: null,
+      growthState: nextState,
     };
   }
 
   if (intent === 'dig_segments') {
+    const focusArea = detectSelectedFocusArea(String(userMessage || '').toLowerCase()) ||
+      'segment_mix';
+    const restart = isRestartSegmentRequest(String(userMessage || '').toLowerCase());
+
+    // Primary already chosen → advance, do not re-list segments.
+    if (priorState.primary_segment && !restart) {
+      const validationTarget = buildValidationTarget(gd, blueprint, {
+        intent: VALIDATION_TARGET_INTENT,
+        userMessage,
+        priorSegmentRanking: priorState.segment_ranking,
+        focusSegment: priorState.primary_segment,
+      });
+      const nextState = {
+        ...priorState,
+        selected_focus_area: 'segment_mix',
+        current_growth_step: 'define_validation_target',
+        completed_steps: markStepCompleted(priorState, 'define_validation_target'),
+        validation_target: validationTarget,
+      };
+      const primaryLabel =
+        (priorState.first_segment_decision &&
+          priorState.first_segment_decision.primarySegmentDisplay) ||
+        String(priorState.primary_segment).replace(/_/g, ' ');
+      return {
+        ...baseReply,
+        message: [
+          `We've already chosen ${primaryLabel} as the first segment to validate.`,
+          `Next is the validation target — what a good first win looks like before any campaign or prospect list.`,
+          '',
+          formatValidationTargetMessage(validationTarget),
+        ].join('\n'),
+        intent: VALIDATION_TARGET_INTENT,
+        validationTarget,
+        growthState: nextState,
+      };
+    }
+
+    // Ranking exists but primary not locked → ask for selection, don't loop mix.
+    if (priorState.segment_ranking && !restart) {
+      const best =
+        rankingRoleSegment(priorState.segment_ranking, 'best_first') ||
+        'the top-ranked segment';
+      const second = rankingRoleSegment(priorState.segment_ranking, 'second_best');
+      const nextState = {
+        ...priorState,
+        selected_focus_area: 'segment_mix',
+        current_growth_step: 'select_primary_segment',
+        completed_steps: markStepCompleted(priorState, 'choose_focus_area'),
+      };
+      return {
+        ...baseReply,
+        message: [
+          `We already have a Segment Ranking — ${best} leads${second ? `, with ${second} as the secondary path` : ''}.`,
+          `Which first segment do you want to validate, or shall I lock in that ranking recommendation?`,
+        ].join('\n'),
+        intent,
+        growthState: nextState,
+      };
+    }
+
+    // True first dig into segments — generic mix only when state is empty.
+    if (canShowGenericSegmentMixFallback(priorState, userMessage) || restart) {
+      const nextState = {
+        ...priorState,
+        selected_focus_area: focusArea,
+        current_growth_step: 'rank_segments',
+        completed_steps: markStepCompleted(priorState, 'choose_focus_area'),
+        ...(restart
+          ? {
+              primary_segment: null,
+              secondary_segment: null,
+              segment_ranking: null,
+              first_segment_decision: null,
+              validation_target: null,
+              held_segments: [],
+              deprioritized_segments: [],
+            }
+          : {}),
+      };
+      return {
+        ...baseReply,
+        message: buildGenericSegmentMixFallback(segments, avoid),
+        intent,
+        growthState: nextState,
+      };
+    }
+
+    // State-aware safety net (should be rare).
     return {
+      ...baseReply,
       message: [
-        segments.length
-          ? `From the Blueprint, the segments worth comparing first are ${naturalList(segments)}.`
-          : `The Blueprint's ideal-customer section is the place to sharpen segments before we rank anything.`,
-        avoid
-          ? `We should also keep the avoid list in view so the first focus stays selective.`
-          : `We should keep selectivity explicit so growth talk does not drift into anyone-with-a-budget.`,
-        ``,
-        `Still directional — next we can bound the market or define what a good first win looks like.`,
+        `We're past the open segment-mix list.`,
+        priorState.segment_ranking
+          ? `Use the Segment Ranking we already have, or name the first segment to validate.`
+          : `Tell me which Blueprint segment should be first to validate.`,
       ].join('\n'),
       intent,
-      segmentRanking: null,
-      validationTarget: null,
+      growthState: {
+        ...priorState,
+        selected_focus_area: 'segment_mix',
+        current_growth_step: priorState.segment_ranking
+          ? 'select_primary_segment'
+          : 'rank_segments',
+      },
     };
   }
 
@@ -1273,36 +1968,82 @@ function buildGrowthConversationReply(
       : markets.length
         ? `From the Blueprint, the markets I'd compare first are ${naturalList(markets)}.`
         : `The Blueprint's target-markets section is the bound I'd use before widening.`;
+    const nextState = {
+      ...priorState,
+      selected_focus_area: 'market_bound',
+      completed_steps: markStepCompleted(priorState, 'choose_focus_area'),
+    };
     return {
+      ...baseReply,
       message: [
         marketLine,
         `I would not treat that as validated demand yet — only as the approved geographic focus.`,
         ``,
-        `Want to pressure-test the segment mix next, or define the ninety-day success picture?`,
+        priorState.primary_segment
+          ? `We've already locked ${String(priorState.primary_segment).replace(/_/g, ' ')} as the first segment — want to define the validation target next?`
+          : `Want to pressure-test the segment mix next, or define the ninety-day success picture?`,
       ].join('\n'),
       intent,
-      segmentRanking: null,
-      validationTarget: null,
+      growthState: nextState,
     };
   }
 
   if (intent === 'dig_success') {
+    const nextState = {
+      ...priorState,
+      selected_focus_area: 'success_definition',
+      completed_steps: markStepCompleted(priorState, 'choose_focus_area'),
+      current_growth_step: priorState.primary_segment
+        ? 'define_validation_target'
+        : priorState.current_growth_step,
+    };
     return {
+      ...baseReply,
       message: [
         goals
           ? `The Blueprint already names near-term outcomes: ${firstSentence(goals)}`
           : `The Blueprint's campaign-goals and success-metrics sections are the yardstick for this conversation.`,
         `We can translate those into a sharper “first win” definition — still without launching campaigns or building prospect lists.`,
         ``,
-        `Shall we lock the first focus as “${focus}”, or refine the segment/market bound first?`,
+        priorState.primary_segment
+          ? `Shall we define the validation target for ${String(priorState.primary_segment).replace(/_/g, ' ')} next?`
+          : `Shall we lock the first focus as “${focus}”, or refine the segment/market bound first?`,
       ].join('\n'),
       intent,
-      segmentRanking: null,
-      validationTarget: null,
+      growthState: nextState,
+    };
+  }
+
+  // Holding reply — still state-aware when decisions already exist.
+  if (priorState.primary_segment) {
+    return {
+      ...baseReply,
+      message: [
+        `Holding the Growth Conversation state: primary segment is ${String(priorState.primary_segment).replace(/_/g, ' ')}${priorState.secondary_segment ? `, secondary ${String(priorState.secondary_segment).replace(/_/g, ' ')}` : ''}.`,
+        `Next step is ${priorState.current_growth_step === 'define_validation_target' || priorState.validation_target ? 'refining the validation target / first-win criteria' : 'defining the validation target'} — still before campaigns or prospect lists.`,
+      ].join('\n'),
+      intent: null,
+      growthState: priorState,
+    };
+  }
+  if (priorState.segment_ranking) {
+    const best = rankingRoleSegment(priorState.segment_ranking, 'best_first');
+    return {
+      ...baseReply,
+      message: [
+        `Holding the Segment Ranking — ${best || 'the top segment'} is the current directional lead.`,
+        `Tell me which first segment to validate, or ask me to define what a good first win looks like.`,
+      ].join('\n'),
+      intent: null,
+      growthState: {
+        ...priorState,
+        current_growth_step: 'select_primary_segment',
+      },
     };
   }
 
   return {
+    ...baseReply,
     message: [
       `Holding to the approved Blueprint, the directional first focus remains ${focus}.`,
       segments.length
@@ -1317,8 +2058,7 @@ function buildGrowthConversationReply(
       `Tell me whether to dig into segments, markets, or success criteria — and we'll keep this pre-strategy.`,
     ].join('\n'),
     intent: null,
-    segmentRanking: null,
-    validationTarget: null,
+    growthState: priorState,
   };
 }
 
@@ -1326,16 +2066,27 @@ module.exports = {
   ARTIFACT_KIND,
   SEGMENT_RANKING_KIND,
   VALIDATION_TARGET_KIND,
+  FIRST_SEGMENT_DECISION_KIND,
   DIRECTIONAL_LABEL,
   SEGMENT_RANKING_CONFIDENCE,
   VALIDATION_TARGET_CONFIDENCE,
   RANKING_INTENTS,
   VALIDATION_TARGET_INTENT,
+  SELECT_PRIMARY_INTENT,
+  FOCUS_AREAS,
+  GROWTH_STEPS,
   buildInitialGrowthDirection,
   buildGrowthConversationOpening,
   buildGrowthConversationReply,
   detectGrowthConversationIntent,
   isDefineValidationTargetRequest,
+  isSelectPrimarySegmentRequest,
+  resolveSegmentSelection,
+  normalizeGrowthState,
+  emptyGrowthState,
+  toSegmentKey,
+  buildFirstSegmentDecision,
+  formatFirstSegmentDecisionMessage,
   buildSegmentRanking,
   formatSegmentRankingMessage,
   buildValidationTarget,

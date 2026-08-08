@@ -17,6 +17,7 @@ const {
   buildInitialGrowthDirection,
   buildGrowthConversationOpening,
   buildGrowthConversationReply,
+  normalizeGrowthState,
 } = require('./clientIntelligenceGrowthDirection');
 const {
   buildEmptyAreas,
@@ -5379,6 +5380,21 @@ async function startGrowthConversation(sessionId, opts = {}) {
   const opening = buildGrowthConversationOpening(growthDirection);
   const prior =
     (session.interview_state && session.interview_state.growthConversation) || null;
+  const priorState = normalizeGrowthState({
+    ...(prior || {}),
+    segment_ranking:
+      (prior && (prior.segment_ranking || prior.segmentRanking)) ||
+      (session.interview_state && session.interview_state.segmentRanking) ||
+      null,
+    validation_target:
+      (prior && (prior.validation_target || prior.validationTarget)) ||
+      (session.interview_state && session.interview_state.validationTarget) ||
+      null,
+    first_segment_decision:
+      (prior && (prior.first_segment_decision || prior.firstSegmentDecision)) ||
+      (session.interview_state && session.interview_state.firstSegmentDecision) ||
+      null,
+  });
   const turns = (prior && Array.isArray(prior.turns) && prior.turns.length
     ? prior.turns
     : []
@@ -5392,8 +5408,18 @@ async function startGrowthConversation(sessionId, opts = {}) {
     });
   }
 
+  const resumedStatus =
+    (prior && prior.status) ||
+    (priorState.validation_target
+      ? 'validation_target_ready'
+      : priorState.primary_segment
+        ? 'primary_selected'
+        : priorState.segment_ranking
+          ? 'ranking_ready'
+          : 'active');
+
   const growthConversation = {
-    status: 'active',
+    status: resumedStatus,
     startedAt:
       (prior && prior.startedAt) || new Date().toISOString(),
     context: {
@@ -5402,6 +5428,12 @@ async function startGrowthConversation(sessionId, opts = {}) {
       initialGrowthDirection: growthDirection,
     },
     turns,
+    // Required growth decision state (persisted across turns).
+    ...priorState,
+    // CamelCase mirrors for existing consumers / side panel.
+    segmentRanking: priorState.segment_ranking,
+    validationTarget: priorState.validation_target,
+    firstSegmentDecision: priorState.first_segment_decision,
   };
 
   await store.updateSession(session.id, {
@@ -5409,6 +5441,15 @@ async function startGrowthConversation(sessionId, opts = {}) {
       ...session.interview_state,
       initialGrowthDirection: growthDirection,
       growthConversation,
+      ...(priorState.segment_ranking
+        ? { segmentRanking: priorState.segment_ranking }
+        : {}),
+      ...(priorState.validation_target
+        ? { validationTarget: priorState.validation_target }
+        : {}),
+      ...(priorState.first_segment_decision
+        ? { firstSegmentDecision: priorState.first_segment_decision }
+        : {}),
     },
   });
 
@@ -5462,6 +5503,7 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
   const continuableStatuses = new Set([
     'active',
     'ranking_ready',
+    'primary_selected',
     'validation_target_ready',
   ]);
   if (!growthConversation || !continuableStatuses.has(growthConversation.status)) {
@@ -5469,15 +5511,32 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
     growthConversation = started.growthConversation;
   }
 
-  const priorSegmentRanking =
-    (growthConversation && growthConversation.segmentRanking) ||
-    (session.interview_state && session.interview_state.segmentRanking) ||
-    null;
+  const priorState = normalizeGrowthState({
+    ...(growthConversation || {}),
+    segment_ranking:
+      (growthConversation &&
+        (growthConversation.segment_ranking || growthConversation.segmentRanking)) ||
+      (session.interview_state && session.interview_state.segmentRanking) ||
+      null,
+    validation_target:
+      (growthConversation &&
+        (growthConversation.validation_target ||
+          growthConversation.validationTarget)) ||
+      (session.interview_state && session.interview_state.validationTarget) ||
+      null,
+    first_segment_decision:
+      (growthConversation &&
+        (growthConversation.first_segment_decision ||
+          growthConversation.firstSegmentDecision)) ||
+      (session.interview_state && session.interview_state.firstSegmentDecision) ||
+      null,
+  });
+  const priorSegmentRanking = priorState.segment_ranking;
   const reply = buildGrowthConversationReply(
     text,
     growthDirection,
     blueprint || { sections: {} },
-    { priorSegmentRanking }
+    { priorSegmentRanking, growthState: priorState }
   );
   const replyMessage =
     reply && typeof reply === 'object' ? reply.message : String(reply || '');
@@ -5485,6 +5544,16 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
     reply && typeof reply === 'object' ? reply.segmentRanking || null : null;
   const validationTarget =
     reply && typeof reply === 'object' ? reply.validationTarget || null : null;
+  const firstSegmentDecision =
+    reply && typeof reply === 'object' ? reply.firstSegmentDecision || null : null;
+  const nextState = normalizeGrowthState(
+    (reply && reply.growthState) || priorState
+  );
+  if (segmentRanking) nextState.segment_ranking = segmentRanking;
+  else if (priorSegmentRanking) nextState.segment_ranking = priorSegmentRanking;
+  if (validationTarget) nextState.validation_target = validationTarget;
+  if (firstSegmentDecision) nextState.first_segment_decision = firstSegmentDecision;
+
   const turns = [
     ...((growthConversation && growthConversation.turns) || []),
     { speaker: 'client', message: text, at: new Date().toISOString() },
@@ -5493,13 +5562,19 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
       message: replyMessage,
       at: new Date().toISOString(),
       intent: (reply && reply.intent) || null,
+      growth_step: nextState.current_growth_step,
     },
   ];
   let nextStatus = 'active';
-  if (validationTarget) nextStatus = 'validation_target_ready';
-  else if (segmentRanking) nextStatus = 'ranking_ready';
-  else if (
+  if (validationTarget || nextState.validation_target) {
+    nextStatus = 'validation_target_ready';
+  } else if (nextState.primary_segment || firstSegmentDecision) {
+    nextStatus = 'primary_selected';
+  } else if (segmentRanking || nextState.segment_ranking) {
+    nextStatus = 'ranking_ready';
+  } else if (
     growthConversation.status === 'ranking_ready' ||
+    growthConversation.status === 'primary_selected' ||
     growthConversation.status === 'validation_target_ready'
   ) {
     nextStatus = growthConversation.status;
@@ -5508,11 +5583,10 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
     ...growthConversation,
     status: nextStatus,
     turns,
-    ...(priorSegmentRanking && !segmentRanking
-      ? { segmentRanking: priorSegmentRanking }
-      : {}),
-    ...(segmentRanking ? { segmentRanking } : {}),
-    ...(validationTarget ? { validationTarget } : {}),
+    ...nextState,
+    segmentRanking: nextState.segment_ranking,
+    validationTarget: nextState.validation_target,
+    firstSegmentDecision: nextState.first_segment_decision,
   };
 
   await store.updateSession(session.id, {
@@ -5520,8 +5594,15 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
       ...session.interview_state,
       initialGrowthDirection: growthDirection,
       growthConversation: nextGrowth,
-      ...(segmentRanking ? { segmentRanking } : {}),
-      ...(validationTarget ? { validationTarget } : {}),
+      ...(nextState.segment_ranking
+        ? { segmentRanking: nextState.segment_ranking }
+        : {}),
+      ...(nextState.validation_target
+        ? { validationTarget: nextState.validation_target }
+        : {}),
+      ...(nextState.first_segment_decision
+        ? { firstSegmentDecision: nextState.first_segment_decision }
+        : {}),
     },
   });
 
@@ -5531,8 +5612,10 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
     status: 'GROWTH_CONVERSATION',
     message: replyMessage,
     intent: (reply && reply.intent) || null,
-    segmentRanking: segmentRanking || priorSegmentRanking || null,
-    validationTarget,
+    segmentRanking: nextState.segment_ranking,
+    validationTarget: nextState.validation_target,
+    firstSegmentDecision: nextState.first_segment_decision,
+    growthState: nextState,
     initialGrowthDirection: growthDirection,
     blueprint: publicBlueprint(blueprint),
     growthConversation: nextGrowth,

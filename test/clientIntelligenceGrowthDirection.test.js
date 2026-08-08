@@ -14,6 +14,8 @@ const {
   SEGMENT_RANKING_KIND,
   VALIDATION_TARGET_KIND,
   VALIDATION_TARGET_INTENT,
+  SELECT_PRIMARY_INTENT,
+  FIRST_SEGMENT_DECISION_KIND,
 } = require('../services/clientIntelligenceGrowthDirection');
 const {
   createMemoryStore,
@@ -617,6 +619,258 @@ describe('Growth Conversation define_validation_target', () => {
       reply.growthConversation.segmentRanking.kind,
       SEGMENT_RANKING_KIND
     );
+  });
+});
+
+describe('Growth Conversation state progression (segment mix → ranking → primary → validation)', () => {
+  const SEGMENT_MIX_MESSAGE =
+    "Let's dig into the segment mix first — that feels like the right place to start.";
+  const RANK_MESSAGE =
+    'Please compare the segments and rank them. Give me the best first segment to test.';
+  const PRIMARY_SELECT_MESSAGE =
+    'I agree — property managers feel like the most attractive first segment, with professional offices as secondary.';
+
+  function anchorGrowthDirection() {
+    return buildInitialGrowthDirection(ANCHOR_BLUEPRINT, {
+      normalizedFacts: {
+        business_name: 'Anchor Cleaning',
+        growth_focus:
+          'recurring commercial cleaning; customers who need weekly or multiple-times-per-week service',
+        ideal_customers: [
+          'property managers',
+          'short-term rental companies',
+          'facility managers',
+          'professional offices',
+          'daycares',
+          'rec centers',
+          'high-traffic buildings',
+        ],
+        geography: [
+          'Greater Manchester',
+          'Bedford',
+          'Hooksett',
+          'Londonderry',
+          'Auburn',
+          'Goffstown',
+        ],
+      },
+    });
+  }
+
+  it('detects primary-segment selection after ranking (not dig_segments)', () => {
+    const rankingReply = buildGrowthConversationReply(
+      RANK_MESSAGE,
+      anchorGrowthDirection(),
+      ANCHOR_BLUEPRINT
+    );
+    assert.equal(
+      detectGrowthConversationIntent(PRIMARY_SELECT_MESSAGE, {
+        growthState: rankingReply.growthState,
+      }),
+      SELECT_PRIMARY_INTENT
+    );
+    assert.equal(
+      detectGrowthConversationIntent("Let's start with property managers", {
+        growthState: rankingReply.growthState,
+      }),
+      SELECT_PRIMARY_INTENT
+    );
+    assert.equal(
+      detectGrowthConversationIntent('Let’s start with property managers', {
+        growthState: rankingReply.growthState,
+      }),
+      SELECT_PRIMARY_INTENT
+    );
+  });
+
+  it('regression: Anchor sequence advances ranking → primary → validation without segment-mix loop', () => {
+    const gd = anchorGrowthDirection();
+
+    // 1) Choose segment mix.
+    const mix = buildGrowthConversationReply(
+      SEGMENT_MIX_MESSAGE,
+      gd,
+      ANCHOR_BLUEPRINT
+    );
+    assert.equal(mix.intent, 'dig_segments');
+    assert.equal(mix.growthState.selected_focus_area, 'segment_mix');
+    assert.match(
+      mix.message,
+      /From the Blueprint, the segments worth comparing first are/i
+    );
+
+    // 2) Rank segments → store ranking, advance step.
+    const ranked = buildGrowthConversationReply(
+      RANK_MESSAGE,
+      gd,
+      ANCHOR_BLUEPRINT,
+      { growthState: mix.growthState }
+    );
+    assert.equal(ranked.intent, 'rank_segments');
+    assert.ok(ranked.segmentRanking);
+    assert.equal(ranked.segmentRanking.kind, SEGMENT_RANKING_KIND);
+    assert.ok(ranked.growthState.segment_ranking);
+    assert.ok(ranked.growthState.completed_steps.includes('rank_segments'));
+    assert.equal(
+      ranked.growthState.current_growth_step,
+      'select_primary_segment'
+    );
+
+    // 3) Select property managers + professional offices secondary.
+    const selected = buildGrowthConversationReply(
+      PRIMARY_SELECT_MESSAGE,
+      gd,
+      ANCHOR_BLUEPRINT,
+      { growthState: ranked.growthState }
+    );
+
+    assert.equal(selected.intent, SELECT_PRIMARY_INTENT);
+    assert.equal(selected.growthState.primary_segment, 'property_managers');
+    assert.equal(selected.growthState.secondary_segment, 'professional_offices');
+    assert.ok(
+      selected.growthState.held_segments.includes('short_term_rental_companies')
+    );
+    assert.ok(
+      selected.growthState.deprioritized_segments.includes('rec_centers')
+    );
+    assert.ok(
+      selected.growthState.deprioritized_segments.includes(
+        'broad_high_traffic_buildings'
+      )
+    );
+    assert.equal(
+      selected.growthState.current_growth_step,
+      'define_validation_target'
+    );
+    assert.ok(
+      selected.growthState.completed_steps.includes('select_primary_segment')
+    );
+
+    assert.doesNotMatch(
+      selected.message,
+      /From the Blueprint, the segments worth comparing first are/i
+    );
+    assert.doesNotMatch(
+      selected.message,
+      /Still directional — next we can bound the market or define what a good first win looks like/i
+    );
+    assert.match(
+      selected.message,
+      /I'll treat property managers as the first segment to validate and professional offices as the secondary path/i
+    );
+    assert.match(selected.message, /First Segment Decision/i);
+    assert.ok(selected.firstSegmentDecision);
+    assert.equal(
+      selected.firstSegmentDecision.kind,
+      FIRST_SEGMENT_DECISION_KIND
+    );
+    assert.equal(
+      selected.firstSegmentDecision.primary_segment,
+      'property_managers'
+    );
+    assert.equal(
+      selected.firstSegmentDecision.secondary_segment,
+      'professional_offices'
+    );
+    assert.equal(
+      selected.firstSegmentDecision.next_step,
+      'define_validation_target'
+    );
+    assert.ok(selected.validationTarget);
+    assert.equal(selected.validationTarget.kind, VALIDATION_TARGET_KIND);
+    assert.equal(selected.validationTarget.target_segment, 'property_managers');
+    assert.match(selected.message, /Property Manager Validation Target/i);
+    assert.match(selected.message, /Best first property manager type/i);
+    assert.match(selected.message, /Successful first 30 days of validation/i);
+
+    // 4) Later "segment" talk stays state-aware.
+    const followUp = buildGrowthConversationReply(
+      'Can we talk more about the segment focus?',
+      gd,
+      ANCHOR_BLUEPRINT,
+      { growthState: selected.growthState }
+    );
+    assert.doesNotMatch(
+      followUp.message,
+      /From the Blueprint, the segments worth comparing first are/i
+    );
+    assert.doesNotMatch(
+      followUp.message,
+      /Still directional — next we can bound the market or define what a good first win looks like/i
+    );
+    assert.equal(followUp.growthState.primary_segment, 'property_managers');
+  });
+
+  it('regression e2e: postGrowthMessage persists primary selection and does not re-loop', async () => {
+    const store = createMemoryStore();
+    const opts = { store, useMemoryPlaybookStore: true };
+    const started = await startClientInterview({ clientId: 215 }, opts);
+    let turn = started;
+    for (const a of ANSWERS) {
+      turn = await postInterviewMessage(started.interviewId, a, opts);
+    }
+    await approveBlueprint(turn.blueprint.id, opts);
+    await startGrowthConversation(started.interviewId, opts);
+
+    const mix = await postGrowthMessage(
+      started.interviewId,
+      SEGMENT_MIX_MESSAGE,
+      opts
+    );
+    assert.equal(mix.growthConversation.selected_focus_area, 'segment_mix');
+
+    const ranked = await postGrowthMessage(
+      started.interviewId,
+      RANK_MESSAGE,
+      opts
+    );
+    assert.match(ranked.message, /Segment Ranking/i);
+    assert.equal(ranked.growthConversation.status, 'ranking_ready');
+    assert.ok(
+      ranked.growthConversation.completed_steps.includes('rank_segments')
+    );
+
+    const selected = await postGrowthMessage(
+      started.interviewId,
+      PRIMARY_SELECT_MESSAGE,
+      opts
+    );
+    assert.equal(selected.intent, SELECT_PRIMARY_INTENT);
+    assert.equal(selected.growthConversation.primary_segment, 'property_managers');
+    assert.equal(
+      selected.growthConversation.secondary_segment,
+      'professional_offices'
+    );
+    assert.equal(
+      selected.growthConversation.current_growth_step,
+      'define_validation_target'
+    );
+    assert.doesNotMatch(
+      selected.message,
+      /From the Blueprint, the segments worth comparing first are/i
+    );
+    assert.doesNotMatch(
+      selected.message,
+      /Still directional — next we can bound the market or define what a good first win looks like/i
+    );
+    assert.match(selected.message, /First Segment Decision/i);
+    assert.ok(selected.validationTarget);
+    assert.equal(selected.validationTarget.kind, VALIDATION_TARGET_KIND);
+    assert.equal(
+      selected.growthConversation.status,
+      'validation_target_ready'
+    );
+
+    const followUp = await postGrowthMessage(
+      started.interviewId,
+      'Can we talk more about the segment focus?',
+      opts
+    );
+    assert.doesNotMatch(
+      followUp.message,
+      /From the Blueprint, the segments worth comparing first are/i
+    );
+    assert.equal(followUp.growthConversation.primary_segment, 'property_managers');
   });
 });
 
