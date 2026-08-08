@@ -546,6 +546,41 @@
       content: '✓ ';
       color: var(--cie-ok);
     }
+    .growth-direction {
+      margin-top: 1.35rem;
+      padding-top: 1.15rem;
+      border-top: 1px solid var(--cie-border-soft);
+      animation: briefReveal 640ms ease both;
+    }
+    .growth-direction .growth-kicker {
+      margin: 0 0 0.45rem;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--cie-accent);
+    }
+    .growth-direction h4 {
+      margin: 0 0 0.85rem;
+      font-size: 1.08rem;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+    .growth-direction p {
+      margin: 0 0 0.75rem;
+      line-height: 1.6;
+      font-size: 0.94rem;
+    }
+    .growth-direction .growth-disclaimer {
+      margin: 0.9rem 0 0;
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      background: rgba(230, 184, 77, 0.08);
+      border: 1px solid rgba(230, 184, 77, 0.22);
+      color: var(--cie-warn);
+      font-size: 0.8rem;
+      line-height: 1.45;
+    }
     .error {
       position: fixed;
       left: 1.5rem;
@@ -603,8 +638,8 @@
         <button type="button" id="keepTalkingBtn" class="secondary">💬 Let's keep talking.</button>
       </div>
       <div class="actions" id="completeActions" hidden>
-        <button type="button" id="dashboardBtn">Return to Dashboard</button>
-        <button type="button" id="finishBtn" class="secondary">Finish</button>
+        <button type="button" id="growthBtn">Start Growth Conversation</button>
+        <button type="button" id="dashboardBtn" class="secondary">Return to Dashboard</button>
       </div>
       <div class="status-bar" id="sessionStatus">Welcome</div>
     </section>
@@ -667,6 +702,8 @@
       stickToBottom: true,
       pendingCompletion: null,
       approveInFlight: false,
+      initialGrowthDirection: null,
+      growthConversationActive: false,
     };
 
     const els = {
@@ -697,8 +734,8 @@
       accurateBtn: document.getElementById('accurateBtn'),
       refineBtn: document.getElementById('refineBtn'),
       keepTalkingBtn: document.getElementById('keepTalkingBtn'),
+      growthBtn: document.getElementById('growthBtn'),
       dashboardBtn: document.getElementById('dashboardBtn'),
-      finishBtn: document.getElementById('finishBtn'),
       chatPanelTitle: document.getElementById('chatPanelTitle'),
     };
 
@@ -894,7 +931,14 @@
         return;
       }
       if (isBlueprintApproved(bp) && state.phase === 'complete') {
-        renderCompletion({ blueprint: bp, playbook: state.pendingCompletion && state.pendingCompletion.playbook });
+        renderCompletion({
+          blueprint: bp,
+          playbook: state.pendingCompletion && state.pendingCompletion.playbook,
+          initialGrowthDirection:
+            state.initialGrowthDirection ||
+            (state.pendingCompletion && state.pendingCompletion.initialGrowthDirection) ||
+            null,
+        });
         return;
       }
       const sections = bp.sections || {};
@@ -948,29 +992,48 @@
         (bp.playbookId ? ' · playbook ' + bp.playbookId + '@' + bp.playbookVersion : '');
     }
 
+    function renderGrowthDirection(gd) {
+      if (!gd) return '';
+      const paras = (gd.paragraphs || []).filter(Boolean).slice(0, 5);
+      return (
+        '<div class="growth-direction" id="initialGrowthDirection">' +
+          '<p class="growth-kicker">Initial Growth Direction</p>' +
+          '<h4>' + escapeHtml(gd.heading || gd.title || 'First growth focus') + '</h4>' +
+          paras.map((p) => '<p>' + escapeHtml(p) + '</p>').join('') +
+          '<p class="growth-disclaimer">' +
+            escapeHtml(gd.disclaimer || 'Directional only — not final strategy.') +
+          '</p>' +
+        '</div>'
+      );
+    }
+
     function renderCompletion(result) {
       const bp = (result && result.blueprint) || state.blueprint;
       const playbook = (result && result.playbook) || null;
+      const gd =
+        (result && result.initialGrowthDirection) ||
+        state.initialGrowthDirection ||
+        null;
+      if (gd) state.initialGrowthDirection = gd;
       const version = (bp && bp.version) || '1';
       const playbookLabel = playbook && playbook.id
         ? escapeHtml(String(playbook.id)) + (playbook.version ? '@' + escapeHtml(String(playbook.version)) : '')
         : 'Draft Client Playbook';
       els.sidePanel.innerHTML =
         '<div class="completion-card" id="approvalSuccess">' +
-          '<h3>Blueprint approved. Client Playbook is ready.</h3>' +
-          '<p>Thank you.</p>' +
+          '<h3>Blueprint approved</h3>' +
           '<p>This Business Blueprint is now the foundation Pulseforge will use to understand your business.</p>' +
           '<ul class="completion-checks">' +
             '<li>Version ' + escapeHtml(String(version)) + ' approved</li>' +
             '<li>Client Playbook ready · ' + playbookLabel + '</li>' +
             '<li>Awaiting operator review</li>' +
           '</ul>' +
-          '<p><strong>Max</strong></p>' +
-          '<p>Every future recommendation will build on this understanding.</p>' +
-          '<p>As your business evolves, we\'ll continue refining this blueprint together.</p>' +
+          renderGrowthDirection(gd) +
         '</div>';
-      els.sidePanelTitle.textContent = 'Client Playbook';
-      els.sidePanelSub.textContent = 'Blueprint approved. Client Playbook is ready.';
+      els.sidePanelTitle.textContent = gd ? 'Initial Growth Direction' : 'Client Playbook';
+      els.sidePanelSub.textContent = gd
+        ? 'Blueprint approved · directional first-focus preview'
+        : 'Blueprint approved. Client Playbook is ready.';
       els.blueprintActions.hidden = true;
       els.approveBtn.disabled = true;
       els.approveBtn.textContent = 'Blueprint approved';
@@ -987,12 +1050,18 @@
       } else if (state.blueprint) {
         state.blueprint = { ...state.blueprint, status: 'approved' };
       }
+      if (result && result.initialGrowthDirection) {
+        state.initialGrowthDirection = result.initialGrowthDirection;
+      }
       showError('');
       setPhase('complete');
       if (alreadyApproved) {
         addBubble('meta', 'Blueprint already approved. Client Playbook is ready.');
       }
-      renderCompletion(state.pendingCompletion || { blueprint: state.blueprint });
+      renderCompletion(state.pendingCompletion || {
+        blueprint: state.blueprint,
+        initialGrowthDirection: state.initialGrowthDirection,
+      });
       els.sessionStatus.textContent = 'APPROVED · Client Playbook ready';
     }
 
@@ -1030,6 +1099,11 @@
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Complete';
         els.blueprintActions.hidden = true;
+      } else if (phase === 'growth') {
+        setComposerEnabled(true);
+        els.chatPanelTitle.textContent = 'Growth Conversation';
+        els.blueprintActions.hidden = true;
+        els.completeActions.hidden = true;
       }
     }
 
@@ -1214,6 +1288,21 @@
         addBubble('client', text);
         els.messageInput.value = '';
         els.sendBtn.disabled = true;
+
+        if (state.phase === 'growth' || state.growthConversationActive) {
+          const data = await api(
+            'POST',
+            '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/growth/message',
+            { message: text }
+          );
+          if (data && data.initialGrowthDirection) {
+            state.initialGrowthDirection = data.initialGrowthDirection;
+          }
+          if (data && data.message) addBubble('assistant', data.message);
+          setComposerEnabled(true);
+          return;
+        }
+
         const pending = api('POST', '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/message', {
           message: text,
         });
@@ -1227,7 +1316,35 @@
         setComposerEnabled(true);
       } catch (err) {
         showError(err.message);
-        setComposerEnabled(state.phase === 'discovery');
+        setComposerEnabled(state.phase === 'discovery' || state.phase === 'growth');
+      }
+    }
+
+    async function startGrowthConversation() {
+      try {
+        if (!state.interviewId) return;
+        els.growthBtn.disabled = true;
+        const data = await api(
+          'POST',
+          '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/growth/start',
+          {}
+        );
+        if (data && data.initialGrowthDirection) {
+          state.initialGrowthDirection = data.initialGrowthDirection;
+        }
+        if (data && data.blueprint) state.blueprint = data.blueprint;
+        state.growthConversationActive = true;
+        setPhase('growth');
+        if (data && data.message) {
+          if (!data.resumed) addBubble('meta', 'Growth Conversation started');
+          addBubble('assistant', data.message);
+        }
+        els.sessionStatus.textContent = 'GROWTH · using approved Blueprint';
+        els.messageInput.placeholder = 'Talk with Max about the first growth focus…';
+        els.messageInput.focus();
+      } catch (err) {
+        showError(err.message);
+        els.growthBtn.disabled = false;
       }
     }
 
@@ -1331,18 +1448,35 @@
 
         const already =
           !!(result && (result.alreadyApproved || result.message === 'already_approved'));
+        if (result && result.initialGrowthDirection) {
+          state.initialGrowthDirection = result.initialGrowthDirection;
+        } else if (fresh && fresh.initialGrowthDirection) {
+          state.initialGrowthDirection = fresh.initialGrowthDirection;
+        }
         applyApprovedState(
           {
             ...(result || {}),
             blueprint: state.blueprint || (result && result.blueprint),
             playbook: (result && result.playbook) || null,
+            initialGrowthDirection:
+              state.initialGrowthDirection ||
+              (result && result.initialGrowthDirection) ||
+              null,
           },
           { alreadyApproved: already }
         );
         if (!already) {
+          const focusLine =
+            state.initialGrowthDirection && state.initialGrowthDirection.firstFocus
+              ? '\n\nBased on this Blueprint, a sensible first growth focus is ' +
+                state.initialGrowthDirection.firstFocus +
+                '.'
+              : '';
           addBubble(
             'assistant',
-            'Excellent.\n\nI now understand your business well enough to begin helping it grow.\n\nEvery recommendation Pulseforge makes will build on this understanding.\n\nOur next conversation will focus on growing your business.'
+            'Excellent.\n\nI now understand your business well enough to begin helping it grow.\n\nEvery recommendation Pulseforge makes will build on this understanding.' +
+              focusLine +
+              '\n\nReview the Initial Growth Direction, then start the Growth Conversation when you are ready.'
           );
         }
       } catch (err) {
@@ -1362,12 +1496,9 @@
       }
     });
 
+    els.growthBtn.addEventListener('click', startGrowthConversation);
     els.dashboardBtn.addEventListener('click', () => {
       window.location.href = '/dashboard';
-    });
-    els.finishBtn.addEventListener('click', () => {
-      addBubble('meta', 'You can return whenever you are ready for the next conversation.');
-      els.completeActions.hidden = true;
     });
 
     showWelcome();

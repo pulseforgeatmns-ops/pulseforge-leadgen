@@ -77,5 +77,7 @@ describe('clientIntelligenceHandoff', () => {
     const result = await approveBlueprint(turn.blueprint.id, opts);
     assert.equal(result.playbook.status, 'pending_review');
     assert.notEqual(result.playbook.status, 'active');
+    assert.ok(result.initialGrowthDirection);
+    assert.equal(result.initialGrowthDirection.directional, true);
   });
 });
