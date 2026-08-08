@@ -55,7 +55,7 @@ Without that depth, clients can feel "summarized" rather than understood, and Ma
 - Recommendations / tactics / campaign strategy
 - Blueprint content changes beyond what Brief synthesis consumes
 - Voice interview
-- Growth Planning destination
+- Growth Planning destination (post-approval focus selection is [SPEC-086](SPEC-086_Growth_Conversation.md))
 - Sharing / PDF export infrastructure
 
 ## Dependencies
