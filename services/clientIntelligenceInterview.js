@@ -5455,15 +5455,25 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
     growthDirection,
     blueprint || { sections: {} }
   );
+  const replyMessage =
+    reply && typeof reply === 'object' ? reply.message : String(reply || '');
+  const segmentRanking =
+    reply && typeof reply === 'object' ? reply.segmentRanking || null : null;
   const turns = [
     ...((growthConversation && growthConversation.turns) || []),
     { speaker: 'client', message: text, at: new Date().toISOString() },
-    { speaker: 'assistant', message: reply, at: new Date().toISOString() },
+    {
+      speaker: 'assistant',
+      message: replyMessage,
+      at: new Date().toISOString(),
+      intent: (reply && reply.intent) || null,
+    },
   ];
   const nextGrowth = {
     ...growthConversation,
-    status: 'active',
+    status: segmentRanking ? 'ranking_ready' : 'active',
     turns,
+    ...(segmentRanking ? { segmentRanking } : {}),
   };
 
   await store.updateSession(session.id, {
@@ -5471,6 +5481,7 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
       ...session.interview_state,
       initialGrowthDirection: growthDirection,
       growthConversation: nextGrowth,
+      ...(segmentRanking ? { segmentRanking } : {}),
     },
   });
 
@@ -5478,7 +5489,9 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
     ok: true,
     interviewId: session.id,
     status: 'GROWTH_CONVERSATION',
-    message: reply,
+    message: replyMessage,
+    intent: (reply && reply.intent) || null,
+    segmentRanking,
     initialGrowthDirection: growthDirection,
     blueprint: publicBlueprint(blueprint),
     growthConversation: nextGrowth,

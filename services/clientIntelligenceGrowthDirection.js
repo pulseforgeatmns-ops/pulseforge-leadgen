@@ -9,8 +9,38 @@
  */
 
 const ARTIFACT_KIND = 'initial_growth_direction';
+const SEGMENT_RANKING_KIND = 'segment_ranking';
 const DIRECTIONAL_LABEL =
   'This is a directional read, not market validation.';
+const SEGMENT_RANKING_CONFIDENCE =
+  'Directional, not market-validated.';
+
+/** Growth Conversation intents that request a ranked segment call. */
+const RANKING_INTENTS = Object.freeze([
+  'rank_segments',
+  'compare_segments',
+  'choose_first_segment',
+  'make_directional_call',
+  'prioritize_segments',
+]);
+
+/**
+ * Deterministic segment tier hints grounded in recurring commercial-cleaning
+ * Blueprint themes. Only applied when the segment appears in the approved
+ * Blueprint list — never invents segments.
+ */
+const SEGMENT_TIER_HINTS = Object.freeze({
+  'property managers': 'first',
+  'facility managers': 'second',
+  'professional offices': 'second',
+  'law firms': 'second',
+  'accounting practices': 'second',
+  'short-term rental companies': 'warm',
+  daycares: 'warm',
+  'rec centers': 'defer',
+  'high-traffic buildings': 'defer',
+  homeowners: 'defer',
+});
 
 const PRIMARY_AREA_PATTERNS = [
   [/\bGreater Manchester(?:\s+area)?\b/i, 'Greater Manchester'],
@@ -458,6 +488,398 @@ function buildInitialGrowthDirection(blueprint, opts = {}) {
 }
 
 /**
+ * Detect Growth Conversation intents from a user message.
+ * Ranking / directional-call intents are returned before generic dig intents.
+ *
+ * @param {string} userMessage
+ * @returns {string|null}
+ */
+function detectGrowthConversationIntent(userMessage) {
+  const msg = String(userMessage || '').trim().toLowerCase();
+  if (!msg) return null;
+
+  const asksRank =
+    /\brank(?:ing|ed|s)?\b/.test(msg) ||
+    /\bprioritiz(?:e|es|ing|ation)\b/.test(msg);
+  const asksCompare =
+    /\bcompare\b/.test(msg) || /\bcomparison\b/.test(msg);
+  const asksFirst =
+    /\bbest first\b/.test(msg) ||
+    /\bfirst segment to test\b/.test(msg) ||
+    /\bwhere should we start\b/.test(msg) ||
+    /\bwhich segment\b/.test(msg) ||
+    /\bsecond[- ]?best\b/.test(msg);
+  const asksCall =
+    /\bdirectional call\b/.test(msg) ||
+    /\bmake a (?:directional )?call\b/.test(msg) ||
+    /\bmake the call\b/.test(msg);
+  const clearlyMarketsOnly =
+    /\bmarkets?\b/.test(msg) &&
+    !/\bsegments?\b/.test(msg) &&
+    !asksRank &&
+    !asksFirst &&
+    !asksCall;
+
+  if (
+    (asksRank || asksCompare || asksFirst || asksCall) &&
+    !clearlyMarketsOnly
+  ) {
+    if (asksCall) return 'make_directional_call';
+    if (/\brank(?:ing|ed|s)?\b/.test(msg)) return 'rank_segments';
+    if (/\bprioritiz/.test(msg)) return 'prioritize_segments';
+    if (asksFirst && !asksCompare) return 'choose_first_segment';
+    if (asksCompare) return 'compare_segments';
+    return 'rank_segments';
+  }
+
+  if (/segment|customer|icp|who\b/.test(msg)) return 'dig_segments';
+  if (/market|geo|area|region|city|where\b/.test(msg)) return 'dig_markets';
+  if (/success|metric|90|ninety|goal|win\b/.test(msg)) return 'dig_success';
+  return null;
+}
+
+function displaySegmentName(segment) {
+  const s = String(segment || '').trim();
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function findSegmentByHint(segments, hintKeys) {
+  const list = segments || [];
+  for (const key of hintKeys) {
+    const hit = list.find((s) => String(s).toLowerCase() === key);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function remainingSegments(segments, used) {
+  const usedLc = new Set((used || []).map((s) => String(s).toLowerCase()));
+  return (segments || []).filter((s) => !usedLc.has(String(s).toLowerCase()));
+}
+
+function segmentWhyBullets(segment, ctx) {
+  const s = String(segment || '').toLowerCase();
+  const recurring = ctx.recurringFocus;
+  const reliability = ctx.reliabilityTheme;
+
+  if (/property manager/.test(s)) {
+    return [
+      recurring
+        ? 'Strong recurring cleaning potential'
+        : 'Fits the Blueprint’s named commercial growth focus',
+      reliability
+        ? 'Clear need for reliability and responsiveness'
+        : 'Decision-makers care about consistent service quality',
+      'Multiple properties can create account expansion',
+      recurring
+        ? 'Good fit with recurring commercial cleaning'
+        : 'Good fit with the Blueprint first focus',
+    ];
+  }
+  if (/professional office|law firm|accounting/.test(s)) {
+    return [
+      'Clear recurring need',
+      'Easier to understand and service',
+      'Faster path to walkthroughs',
+    ];
+  }
+  if (/facility manager/.test(s)) {
+    return [
+      recurring
+        ? 'Aligned with recurring commercial cleaning'
+        : 'Aligned with the Blueprint first focus',
+      'Single-site operators who value reliability',
+      'Reachable decision-maker path when access exists',
+    ];
+  }
+  if (/short-?term rental/.test(s)) {
+    return [
+      'Strong cleaning frequency',
+      'Fits turnover service',
+    ];
+  }
+  if (/daycare/.test(s)) {
+    return [
+      'Recurring service rhythm when schedules are stable',
+      'Fits reliability-sensitive commercial work',
+    ];
+  }
+  if (/rec(?:reation)? center|high-traffic/.test(s)) {
+    return [
+      'Can look attractive on volume',
+      'May fit later once proof and capacity are stronger',
+    ];
+  }
+  return [
+    `Named as an ideal-customer segment in the approved Blueprint`,
+    ctx.firstFocus
+      ? `Compatible with the directional first focus (${ctx.firstFocus})`
+      : 'Compatible with the directional first focus',
+  ];
+}
+
+function segmentCautionBullets(segment, ctx) {
+  const s = String(segment || '').toLowerCase();
+  if (/property manager/.test(s)) {
+    return [
+      'Decision makers may be busy or vendor-saturated',
+      'May require proof of reliability before switching',
+    ];
+  }
+  if (/professional office|law firm|accounting/.test(s)) {
+    return ['Smaller account values than multi-property relationships'];
+  }
+  if (/facility manager/.test(s)) {
+    return ['May need clearer site access before it outranks multi-property paths'];
+  }
+  if (/short-?term rental/.test(s)) {
+    return ['Schedule volatility and price sensitivity may be higher'];
+  }
+  if (/daycare/.test(s)) {
+    return ['Access windows and compliance sensitivity can slow first wins'];
+  }
+  if (/rec(?:reation)? center|high-traffic/.test(s)) {
+    return [
+      'Operational complexity may be higher',
+      'Requirements may be less predictable',
+      ctx.businessName && !/^the business$/i.test(ctx.businessName)
+        ? `Better revisited after ${shortName(ctx.businessName)} has stronger proof and capacity`
+        : 'Better revisited after the business has stronger proof and capacity',
+    ];
+  }
+  if (ctx.avoidPhrase) {
+    return [`Watch the Blueprint avoid constraint: ${ctx.avoidPhrase}`];
+  }
+  return ['Evidence from the Blueprint alone is thin — treat as directional'];
+}
+
+/**
+ * Build a structured Segment Ranking from approved Blueprint segments only.
+ * Makes a directional call even when evidence is thin; never invents segments
+ * or claims market validation.
+ *
+ * @param {object} growthDirection
+ * @param {object} [blueprint]
+ * @param {{ intent?: string }} [opts]
+ */
+function buildSegmentRanking(growthDirection, blueprint, opts = {}) {
+  const gd = growthDirection || {};
+  const sections = (blueprint && blueprint.sections) || {};
+  const segments = uniqueStrings(gd.segmentsToInspect || []).slice(0, 8);
+  const firstFocus = gd.firstFocus || resolveFirstFocus(sections, null);
+  const businessName = shortName(gd.businessName || resolveBusinessName(sections, null));
+  const avoidSummary = sectionSummary(sections, 'avoidCustomers');
+  const avoidPhrase = cleanAvoidPhrase(avoidSummary);
+  const advantages = sectionSummary(sections, 'competitiveAdvantages');
+  const services = sectionSummary(sections, 'services');
+  const recurringFocus =
+    /recurring/i.test(firstFocus) ||
+    /recurring/i.test(services) ||
+    /commercial cleaning/i.test(firstFocus);
+  const reliabilityTheme =
+    /reliab|trust|without needing to chase|responsiv/i.test(advantages) ||
+    /lowest price|reliability/i.test(avoidSummary);
+
+  const ctx = {
+    firstFocus,
+    businessName,
+    avoidPhrase,
+    recurringFocus,
+    reliabilityTheme,
+  };
+
+  const used = [];
+  let best = findSegmentByHint(segments, ['property managers']);
+  if (!best && segments.length) {
+    const hinted = segments.find(
+      (s) => SEGMENT_TIER_HINTS[String(s).toLowerCase()] === 'first'
+    );
+    best = hinted || segments[0];
+  }
+  if (best) used.push(best);
+
+  let second =
+    findSegmentByHint(segments, [
+      'professional offices',
+      'facility managers',
+      'law firms',
+      'accounting practices',
+    ]) || null;
+  if (!second) {
+    const pool = remainingSegments(segments, used);
+    second =
+      pool.find((s) => SEGMENT_TIER_HINTS[String(s).toLowerCase()] === 'second') ||
+      pool[0] ||
+      null;
+  }
+  if (second) used.push(second);
+
+  let warm =
+    findSegmentByHint(segments, ['short-term rental companies', 'daycares']) ||
+    null;
+  if (!warm) {
+    const pool = remainingSegments(segments, used);
+    warm =
+      pool.find((s) => SEGMENT_TIER_HINTS[String(s).toLowerCase()] === 'warm') ||
+      pool[0] ||
+      null;
+  }
+  if (warm) used.push(warm);
+
+  let avoid =
+    findSegmentByHint(segments, ['rec centers', 'high-traffic buildings']) ||
+    null;
+  let avoidLabel = avoid;
+  if (avoid) {
+    const alsoHighTraffic = findSegmentByHint(segments, ['high-traffic buildings']);
+    const alsoRec = findSegmentByHint(segments, ['rec centers']);
+    if (
+      alsoHighTraffic &&
+      alsoRec &&
+      String(alsoHighTraffic).toLowerCase() !== String(alsoRec).toLowerCase()
+    ) {
+      avoidLabel = 'rec centers or broad high-traffic buildings';
+      used.push(alsoRec, alsoHighTraffic);
+    } else {
+      used.push(avoid);
+    }
+  } else {
+    const pool = remainingSegments(segments, used);
+    avoid =
+      pool.find((s) => SEGMENT_TIER_HINTS[String(s).toLowerCase()] === 'defer') ||
+      pool[pool.length - 1] ||
+      null;
+    avoidLabel = avoid;
+    if (avoid) used.push(avoid);
+  }
+
+  const thinEvidence = segments.length < 2;
+  const rankings = [];
+
+  if (best) {
+    rankings.push({
+      rank: 1,
+      role: 'best_first',
+      label: 'Best first segment to test',
+      segment: best,
+      displaySegment: displaySegmentName(best),
+      why: segmentWhyBullets(best, ctx),
+      cautions: segmentCautionBullets(best, ctx),
+    });
+  }
+  if (second && String(second).toLowerCase() !== String(best || '').toLowerCase()) {
+    rankings.push({
+      rank: 2,
+      role: 'second_best',
+      label: 'Second-best segment',
+      segment: second,
+      displaySegment: displaySegmentName(second),
+      why: segmentWhyBullets(second, ctx),
+      cautions: segmentCautionBullets(second, ctx),
+    });
+  }
+  if (warm && !used.slice(0, 2).some((u) => String(u).toLowerCase() === String(warm).toLowerCase())) {
+    rankings.push({
+      rank: 3,
+      role: 'keep_warm',
+      label: 'Keep warm',
+      segment: warm,
+      displaySegment: displaySegmentName(warm),
+      why: segmentWhyBullets(warm, ctx),
+      cautions: segmentCautionBullets(warm, ctx),
+    });
+  }
+  if (
+    avoidLabel &&
+    !rankings.some(
+      (r) => String(r.segment).toLowerCase() === String(avoid).toLowerCase()
+    )
+  ) {
+    rankings.push({
+      rank: 4,
+      role: 'avoid_for_now',
+      label: 'Avoid for now',
+      segment: avoid,
+      displaySegment: displaySegmentName(avoidLabel),
+      why: segmentWhyBullets(avoid || avoidLabel, ctx),
+      cautions: segmentCautionBullets(avoid || avoidLabel, ctx),
+    });
+  }
+
+  // If Blueprint segments are missing, still make a limited directional call.
+  if (!rankings.length) {
+    rankings.push({
+      rank: 1,
+      role: 'best_first',
+      label: 'Best first segment to test',
+      segment: null,
+      displaySegment: 'the ideal-customer segments named in the Blueprint',
+      why: [
+        'The approved Blueprint does not yet list discrete segments to rank',
+        'Sharpen ideal customers before treating any segment as first to test',
+      ],
+      cautions: [
+        'Confidence is limited until segments are explicit in the Blueprint',
+      ],
+    });
+  }
+
+  const bestName = rankings.find((r) => r.role === 'best_first');
+  const secondName = rankings.find((r) => r.role === 'second_best');
+  let directionalRecommendation = 'Hold for clearer Blueprint segments before prioritizing outreach.';
+  if (bestName && bestName.segment && secondName && secondName.segment) {
+    directionalRecommendation =
+      `Start with ${bestName.segment}, while testing ${secondName.segment} as a secondary path.`;
+  } else if (bestName && bestName.segment) {
+    directionalRecommendation = `Start with ${bestName.segment} as the first segment to test.`;
+  }
+
+  return {
+    kind: SEGMENT_RANKING_KIND,
+    title: 'Segment Ranking',
+    intent: opts.intent || 'rank_segments',
+    rankings,
+    directionalRecommendation,
+    confidence: thinEvidence
+      ? 'Limited — directional only; Blueprint segment evidence is thin. Not market-validated.'
+      : SEGMENT_RANKING_CONFIDENCE,
+    confidenceLevel: thinEvidence ? 'limited_directional' : 'directional',
+    marketValidated: false,
+    firstFocus: firstFocus || null,
+    segmentsConsidered: segments,
+    blueprintId: (blueprint && blueprint.id) || gd.blueprintId || null,
+    blueprintVersion:
+      (blueprint && blueprint.version) || gd.blueprintVersion || null,
+  };
+}
+
+/**
+ * Format a Segment Ranking artifact as the Growth Conversation message.
+ */
+function formatSegmentRankingMessage(ranking) {
+  const r = ranking || {};
+  const lines = [r.title || 'Segment Ranking', ''];
+
+  for (const item of r.rankings || []) {
+    lines.push(`${item.rank}. ${item.label}: ${item.displaySegment || item.segment}`);
+    lines.push('Why:');
+    for (const w of item.why || []) lines.push(`- ${w}`);
+    lines.push('Cautions:');
+    for (const c of item.cautions || []) lines.push(`- ${c}`);
+    lines.push('');
+  }
+
+  lines.push('Directional recommendation:');
+  lines.push(r.directionalRecommendation || '');
+  lines.push('');
+  lines.push('Confidence:');
+  lines.push(r.confidence || SEGMENT_RANKING_CONFIDENCE);
+
+  return lines.join('\n').trim();
+}
+
+/**
  * Max opening message when the Growth Conversation begins.
  */
 function buildGrowthConversationOpening(growthDirection) {
@@ -493,10 +915,14 @@ function buildGrowthConversationOpening(growthDirection) {
 
 /**
  * Deterministic follow-up for the Growth Conversation (no campaign generation).
+ * Ranking / compare / prioritize / directional-call intents return a Segment
+ * Ranking artifact instead of repeating the generic segment-mix prompt.
+ *
+ * @returns {{ message: string, intent: string|null, segmentRanking: object|null }}
  */
 function buildGrowthConversationReply(userMessage, growthDirection, blueprint) {
   const gd = growthDirection || {};
-  const msg = String(userMessage || '').trim().toLowerCase();
+  const intent = detectGrowthConversationIntent(userMessage);
   const focus = gd.firstFocus || 'the Blueprint first focus';
   const segments = gd.segmentsToInspect || [];
   const primary = gd.primaryArea || null;
@@ -506,20 +932,33 @@ function buildGrowthConversationReply(userMessage, growthDirection, blueprint) {
   const goals = sectionSummary(sections, 'campaignGoals');
   const avoid = sectionSummary(sections, 'avoidCustomers');
 
-  if (/segment|customer|icp|who\b/.test(msg)) {
-    return [
-      segments.length
-        ? `From the Blueprint, the segments worth comparing first are ${naturalList(segments)}.`
-        : `The Blueprint's ideal-customer section is the place to sharpen segments before we rank anything.`,
-      avoid
-        ? `We should also keep the avoid list in view so the first focus stays selective.`
-        : `We should keep selectivity explicit so growth talk does not drift into anyone-with-a-budget.`,
-      ``,
-      `Still directional — next we can bound the market or define what a good first win looks like.`,
-    ].join('\n');
+  if (intent && RANKING_INTENTS.includes(intent)) {
+    const segmentRanking = buildSegmentRanking(gd, blueprint, { intent });
+    return {
+      message: formatSegmentRankingMessage(segmentRanking),
+      intent,
+      segmentRanking,
+    };
   }
 
-  if (/market|geo|area|region|city|where\b/.test(msg)) {
+  if (intent === 'dig_segments') {
+    return {
+      message: [
+        segments.length
+          ? `From the Blueprint, the segments worth comparing first are ${naturalList(segments)}.`
+          : `The Blueprint's ideal-customer section is the place to sharpen segments before we rank anything.`,
+        avoid
+          ? `We should also keep the avoid list in view so the first focus stays selective.`
+          : `We should keep selectivity explicit so growth talk does not drift into anyone-with-a-budget.`,
+        ``,
+        `Still directional — next we can bound the market or define what a good first win looks like.`,
+      ].join('\n'),
+      intent,
+      segmentRanking: null,
+    };
+  }
+
+  if (intent === 'dig_markets') {
     const marketLine = primary
       ? towns.length
         ? `From the Blueprint, I'd bound the market to ${primary}, especially ${naturalList(towns)}.`
@@ -527,46 +966,64 @@ function buildGrowthConversationReply(userMessage, growthDirection, blueprint) {
       : markets.length
         ? `From the Blueprint, the markets I'd compare first are ${naturalList(markets)}.`
         : `The Blueprint's target-markets section is the bound I'd use before widening.`;
-    return [
-      marketLine,
-      `I would not treat that as validated demand yet — only as the approved geographic focus.`,
-      ``,
-      `Want to pressure-test the segment mix next, or define the ninety-day success picture?`,
-    ].join('\n');
+    return {
+      message: [
+        marketLine,
+        `I would not treat that as validated demand yet — only as the approved geographic focus.`,
+        ``,
+        `Want to pressure-test the segment mix next, or define the ninety-day success picture?`,
+      ].join('\n'),
+      intent,
+      segmentRanking: null,
+    };
   }
 
-  if (/success|metric|90|ninety|goal|win\b/.test(msg)) {
-    return [
-      goals
-        ? `The Blueprint already names near-term outcomes: ${firstSentence(goals)}`
-        : `The Blueprint's campaign-goals and success-metrics sections are the yardstick for this conversation.`,
-      `We can translate those into a sharper “first win” definition — still without launching campaigns or building prospect lists.`,
-      ``,
-      `Shall we lock the first focus as “${focus}”, or refine the segment/market bound first?`,
-    ].join('\n');
+  if (intent === 'dig_success') {
+    return {
+      message: [
+        goals
+          ? `The Blueprint already names near-term outcomes: ${firstSentence(goals)}`
+          : `The Blueprint's campaign-goals and success-metrics sections are the yardstick for this conversation.`,
+        `We can translate those into a sharper “first win” definition — still without launching campaigns or building prospect lists.`,
+        ``,
+        `Shall we lock the first focus as “${focus}”, or refine the segment/market bound first?`,
+      ].join('\n'),
+      intent,
+      segmentRanking: null,
+    };
   }
 
-  return [
-    `Holding to the approved Blueprint, the directional first focus remains ${focus}.`,
-    segments.length
-      ? `Segments worth comparing: ${naturalList(segments.slice(0, 4))}.`
-      : `Next I'd sharpen which segments the Blueprint implies we should compare first.`,
-    primary
-      ? `Market bound: ${primary}${towns.length ? `, especially ${naturalList(towns.slice(0, 4))}` : ''}.`
-      : markets.length
-        ? `Markets worth comparing: ${naturalList(markets.slice(0, 4))}.`
-        : `Next I'd tighten the market bound from the Blueprint.`,
-    ``,
-    `Tell me whether to dig into segments, markets, or success criteria — and we'll keep this pre-strategy.`,
-  ].join('\n');
+  return {
+    message: [
+      `Holding to the approved Blueprint, the directional first focus remains ${focus}.`,
+      segments.length
+        ? `Segments worth comparing: ${naturalList(segments.slice(0, 4))}.`
+        : `Next I'd sharpen which segments the Blueprint implies we should compare first.`,
+      primary
+        ? `Market bound: ${primary}${towns.length ? `, especially ${naturalList(towns.slice(0, 4))}` : ''}.`
+        : markets.length
+          ? `Markets worth comparing: ${naturalList(markets.slice(0, 4))}.`
+          : `Next I'd tighten the market bound from the Blueprint.`,
+      ``,
+      `Tell me whether to dig into segments, markets, or success criteria — and we'll keep this pre-strategy.`,
+    ].join('\n'),
+    intent: null,
+    segmentRanking: null,
+  };
 }
 
 module.exports = {
   ARTIFACT_KIND,
+  SEGMENT_RANKING_KIND,
   DIRECTIONAL_LABEL,
+  SEGMENT_RANKING_CONFIDENCE,
+  RANKING_INTENTS,
   buildInitialGrowthDirection,
   buildGrowthConversationOpening,
   buildGrowthConversationReply,
+  detectGrowthConversationIntent,
+  buildSegmentRanking,
+  formatSegmentRankingMessage,
   naturalList,
   splitGeography,
   extractFocusQualifier,
