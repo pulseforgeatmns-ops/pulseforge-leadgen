@@ -648,6 +648,9 @@
         <button type="button" id="checkInfraFromGrowthBtn" class="secondary">Check Growth Infrastructure</button>
         <button type="button" id="growthDashboardBtn" class="secondary">Return to Dashboard</button>
       </div>
+      <div class="actions" id="readinessDevActions" hidden>
+        <button type="button" id="anchorSampleAnswersBtn" class="secondary">Use Anchor sample answers (dev)</button>
+      </div>
       <div class="status-bar" id="sessionStatus">Welcome</div>
     </section>
 
@@ -667,6 +670,7 @@
   <div class="error" id="errorBox" hidden></div>
 
   <script>
+    /*__CIE_DEV_CONFIG__*/
     const SECTION_TITLES = {
       identity: 'Identity',
       services: 'Services',
@@ -752,8 +756,24 @@
       growthBtn: document.getElementById('growthBtn'),
       readinessBtn: document.getElementById('readinessBtn'),
       dashboardBtn: document.getElementById('dashboardBtn'),
+      readinessDevActions: document.getElementById('readinessDevActions'),
+      anchorSampleAnswersBtn: document.getElementById('anchorSampleAnswersBtn'),
       chatPanelTitle: document.getElementById('chatPanelTitle'),
     };
+
+    function growthInfraDevFixturesEnabled() {
+      return !!(
+        typeof window !== 'undefined' &&
+        window.__CIE_DEV__ &&
+        window.__CIE_DEV__.growthInfraFixtures
+      );
+    }
+
+    function setReadinessDevActionsVisible(visible) {
+      if (!els.readinessDevActions) return;
+      const show = Boolean(visible) && growthInfraDevFixturesEnabled();
+      els.readinessDevActions.hidden = !show;
+    }
 
     function showError(err) {
       els.errorBox.hidden = !err;
@@ -1052,9 +1072,19 @@
           ).join('') +
           '</ol>'
         : '<p class="blueprint-empty">Answer more questions to build the setup sequence.</p>';
+      const sampleBanner =
+        report.devFixture && report.devFixture.sample
+          ? '<p class="growth-disclaimer"><strong>SAMPLE/DEV DATA</strong> — ' +
+            escapeHtml(
+              (report.devFixture && report.devFixture.note) ||
+                'Populated from fixture answers for testing. Not live client data.'
+            ) +
+            '</p>'
+          : '';
       return (
         '<div class="growth-direction" id="growthInfrastructureReadinessReport">' +
           '<p class="growth-kicker">Growth Infrastructure Readiness Report</p>' +
+          sampleBanner +
           '<h4>Overall readiness: ' + escapeHtml(report.overallStatus || 'unknown') + '</h4>' +
           '<p><strong>' + escapeHtml(titles.demandCaptureRisks || 'Can prospects reach you?') + '</strong></p>' +
           renderGapList(report.demandCaptureRisks, 'Nothing blocking reachability from answers so far.') +
@@ -1152,6 +1182,7 @@
       els.completeActions.hidden = phase !== 'complete';
       els.operatorControls.hidden = phase !== 'welcome';
       if (phase !== 'growth') setGrowthPreviewActionsVisible(false);
+      setReadinessDevActionsVisible(phase === 'readiness');
       if (phase === 'welcome') {
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Conversation';
@@ -1507,6 +1538,45 @@
       }
     }
 
+    async function useAnchorSampleAnswers() {
+      if (!state.interviewId || !growthInfraDevFixturesEnabled()) return;
+      const btn = els.anchorSampleAnswersBtn;
+      try {
+        if (btn) btn.disabled = true;
+        addBubble('meta', 'Applying Anchor sample answers (dev/test fixture)…');
+        const data = await api(
+          'POST',
+          '/api/v1/interview/' +
+            encodeURIComponent(state.interviewId) +
+            '/readiness/dev/fixture',
+          { fixture: 'anchor' }
+        );
+        state.readinessConversationActive = true;
+        setPhase('readiness');
+        if (data && data.blueprint) state.blueprint = data.blueprint;
+        if (data && data.growthInfrastructureReadinessReport) {
+          state.growthInfrastructureReadinessReport =
+            data.growthInfrastructureReadinessReport;
+          els.sidePanel.innerHTML = renderReadinessReport(
+            data.growthInfrastructureReadinessReport
+          );
+        }
+        addBubble(
+          'meta',
+          'SAMPLE/DEV — Anchor fixture answers applied. Report uses the same generator as live answers.'
+        );
+        if (data && data.message) addBubble('assistant', data.message);
+        els.sessionStatus.textContent =
+          'READINESS · sample answers · report ready';
+        els.messageInput.placeholder =
+          'Refine any section, or review the readiness report…';
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
     async function sendGrowthCtaMessage(text) {
       if (!state.interviewId || !text) return;
       addBubble('client', text);
@@ -1681,6 +1751,9 @@
 
     els.growthBtn.addEventListener('click', startGrowthConversation);
     els.readinessBtn.addEventListener('click', startInfrastructureReadiness);
+    if (els.anchorSampleAnswersBtn) {
+      els.anchorSampleAnswersBtn.addEventListener('click', useAnchorSampleAnswers);
+    }
     els.dashboardBtn.addEventListener('click', () => {
       window.location.href = '/dashboard';
     });
