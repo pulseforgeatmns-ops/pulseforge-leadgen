@@ -18,6 +18,7 @@ const {
   buildGrowthConversationOpening,
   buildGrowthConversationReply,
   normalizeGrowthState,
+  buildGrowthInfrastructureHandoffContext,
 } = require('./clientIntelligenceGrowthDirection');
 const {
   buildEmptyAreas,
@@ -5650,6 +5651,7 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
     validationTarget: nextState.validation_target,
     firstSegmentDecision: nextState.first_segment_decision,
     firstGrowthPlanPreview: nextState.first_growth_plan_preview,
+    suggestedActions: (reply && reply.suggestedActions) || null,
     growthState: nextState,
     initialGrowthDirection: growthDirection,
     blueprint: publicBlueprint(blueprint),
@@ -5689,7 +5691,23 @@ async function startInfrastructureReadinessConversation(sessionId, opts = {}) {
   }
 
   const businessName = extractReadinessBusinessName(blueprint);
-  const opening = buildInfrastructureReadinessOpening(blueprint, { businessName });
+  const growthConversation =
+    (session.interview_state && session.interview_state.growthConversation) || null;
+  const growthDirection = resolveInitialGrowthDirection(
+    blueprint,
+    session.interview_state
+  );
+  const growthHandoff =
+    buildGrowthInfrastructureHandoffContext(
+      growthConversation,
+      blueprint,
+      growthDirection
+    ) || null;
+  const opening = buildInfrastructureReadinessOpening(blueprint, {
+    businessName:
+      (growthHandoff && growthHandoff.businessName) || businessName,
+    growthHandoff,
+  });
   const prior =
     (session.interview_state && session.interview_state.infrastructureReadiness) ||
     null;
@@ -5716,7 +5734,9 @@ async function startInfrastructureReadinessConversation(sessionId, opts = {}) {
     context: {
       blueprintId: blueprint.id,
       blueprintVersion: blueprint.version,
-      businessName,
+      businessName:
+        (growthHandoff && growthHandoff.businessName) || businessName,
+      growthHandoff,
     },
     turns,
   };
@@ -5742,6 +5762,7 @@ async function startInfrastructureReadinessConversation(sessionId, opts = {}) {
     message: resumed && lastAssistant ? lastAssistant.message : opening,
     blueprint: publicBlueprint(blueprint),
     infrastructureReadiness,
+    growthHandoff,
     growthInfrastructureReadinessReport:
       (session.interview_state &&
         session.interview_state.growthInfrastructureReadinessReport) ||

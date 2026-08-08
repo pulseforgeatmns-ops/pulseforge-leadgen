@@ -10,6 +10,13 @@ const {
   detectGrowthConversationIntent,
   buildSegmentRanking,
   buildValidationTarget,
+  buildFirstGrowthPlanPreview,
+  formatFirstSegmentDecisionMessage,
+  buildFirstSegmentDecision,
+  humanizeSegmentLabel,
+  segmentCopula,
+  buildGrowthInfrastructureHandoffContext,
+  PREFERRED_EARLY_SIGNALS_PROPERTY_MANAGERS,
   DIRECTIONAL_LABEL,
   SEGMENT_RANKING_KIND,
   VALIDATION_TARGET_KIND,
@@ -557,7 +564,15 @@ describe('Growth Conversation define_validation_target', () => {
     assert.match(reply.message, /Credibility proof/i);
     assert.match(reply.message, /commercial cleaning checklist/i);
     assert.match(reply.message, /Early signals worth continuing/i);
-    assert.match(reply.message, /agrees to a walkthrough/i);
+    assert.match(
+      reply.message,
+      /Walkthrough or estimate requests from qualified properties/i
+    );
+    assert.match(
+      reply.message,
+      /Qualified replies mentioning current cleaning frustration/i
+    );
+    assert.match(reply.message, /clear response-time expectation/i);
     assert.match(reply.message, /Successful first 30 days of validation/i);
     assert.match(reply.message, /walkthrough or estimate request/i);
     assert.match(reply.message, /Cautions/i);
@@ -1090,3 +1105,176 @@ function RANKING_INTENTS_INCLUDES(intent) {
     'prioritize_segments',
   ].includes(intent);
 }
+
+describe('Growth Conversation artifact polish + infrastructure bridge', () => {
+  it('humanizes segment keys without snake_case in user-facing output', () => {
+    assert.equal(
+      humanizeSegmentLabel('short_term_rental_companies'),
+      'short-term rental companies'
+    );
+    assert.equal(
+      humanizeSegmentLabel('broad_high_traffic_buildings'),
+      'broad high-traffic buildings'
+    );
+    assert.equal(humanizeSegmentLabel('rec_centers'), 'rec centers');
+    assert.equal(segmentCopula('Property managers'), 'are');
+    assert.equal(segmentCopula('professional offices'), 'are');
+  });
+
+  it('First Segment Decision uses plural grammar and humanized held/deprioritized lists', () => {
+    const decision = buildFirstSegmentDecision({
+      primary: 'property_managers',
+      secondary: 'professional_offices',
+      held: ['short_term_rental_companies'],
+      deprioritized: ['rec_centers', 'broad_high_traffic_buildings'],
+      primaryDisplay: 'property managers',
+      secondaryDisplay: 'professional offices',
+    });
+    assert.match(
+      decision.rationale,
+      /Property managers are the first segment to validate/i
+    );
+    assert.doesNotMatch(
+      decision.rationale,
+      /Property managers is the first segment/i
+    );
+
+    const formatted = formatFirstSegmentDecisionMessage(decision);
+    assert.match(formatted, /Held segments: short-term rental companies/i);
+    assert.match(
+      formatted,
+      /Deprioritized segments: rec centers and broad high-traffic buildings/i
+    );
+    assert.doesNotMatch(formatted, /short_term_rental_companies/);
+    assert.doesNotMatch(formatted, /broad_high_traffic_buildings/);
+    assert.doesNotMatch(formatted, /rec_centers/);
+    assert.match(formatted, /Next step: define the validation target/i);
+  });
+
+  it('First Growth Plan Preview cleans early signals, proof wording, and bridges to infrastructure', () => {
+    const gd = buildInitialGrowthDirection(ANCHOR_BLUEPRINT, {
+      normalizedFacts: {
+        business_name: 'Anchor Cleaning',
+        growth_focus:
+          'recurring commercial cleaning; customers who need weekly or multiple-times-per-week service',
+        ideal_customers: [
+          'property managers',
+          'short-term rental companies',
+          'facility managers',
+          'professional offices',
+          'daycares',
+          'rec centers',
+          'high-traffic buildings',
+        ],
+        geography: ['Greater Manchester', 'Bedford', 'Hooksett'],
+      },
+    });
+    const ranked = buildGrowthConversationReply(
+      'Please compare the segments and rank them. Give me the best first segment to test.',
+      gd,
+      ANCHOR_BLUEPRINT
+    );
+    const selected = buildGrowthConversationReply(
+      'I agree — property managers feel like the most attractive first segment, with professional offices as secondary.',
+      gd,
+      ANCHOR_BLUEPRINT,
+      { growthState: ranked.growthState }
+    );
+    const previewReply = buildGrowthConversationReply(
+      'Good. Now summarize this into a First Growth Plan Preview.',
+      gd,
+      ANCHOR_BLUEPRINT,
+      { growthState: selected.growthState }
+    );
+
+    assert.ok(previewReply.firstGrowthPlanPreview);
+    const signals = previewReply.firstGrowthPlanPreview.early_signals;
+    assert.deepEqual(signals, PREFERRED_EARLY_SIGNALS_PROPERTY_MANAGERS.slice());
+    assert.equal(
+      signals.filter((s) => /walkthrough|estimate/i.test(s)).length,
+      1
+    );
+    assert.doesNotMatch(
+      previewReply.message,
+      /Estimate request from a qualified property/i
+    );
+    assert.doesNotMatch(previewReply.message, /responsiveness promise/i);
+    assert.match(previewReply.message, /clear response-time expectation/i);
+    assert.match(
+      previewReply.message,
+      /Before we build a campaign or prospect list, I'd check whether Anchor has the infrastructure to capture and convert this demand/i
+    );
+    assert.ok(Array.isArray(previewReply.suggestedActions));
+    assert.ok(
+      previewReply.suggestedActions.some((a) => a.id === 'check_infrastructure')
+    );
+    assert.ok(previewReply.suggestedActions.some((a) => a.id === 'use_focus'));
+    assert.doesNotMatch(previewReply.message, /\b\w+_\w+\b/);
+  });
+
+  it('builds Growth Infrastructure handoff context from the preview', () => {
+    const gd = buildInitialGrowthDirection(ANCHOR_BLUEPRINT, {
+      normalizedFacts: {
+        business_name: 'Anchor Cleaning',
+        ideal_customers: ['property managers', 'professional offices'],
+        geography: ['Greater Manchester'],
+      },
+    });
+    const preview = buildFirstGrowthPlanPreview(gd, ANCHOR_BLUEPRINT, {
+      growthState: {
+        primary_segment: 'property_managers',
+        secondary_segment: 'professional_offices',
+        first_growth_plan_preview: null,
+      },
+    });
+    const handoff = buildGrowthInfrastructureHandoffContext(
+      {
+        primary_segment: 'property_managers',
+        secondary_segment: 'professional_offices',
+        first_growth_plan_preview: preview,
+      },
+      ANCHOR_BLUEPRINT,
+      gd
+    );
+    assert.ok(handoff);
+    assert.equal(handoff.primarySegment, 'property managers');
+    assert.equal(handoff.secondarySegment, 'professional offices');
+    assert.match(handoff.targetMarket || '', /Greater Manchester/i);
+    assert.equal(handoff.noCampaignOrProspectListYet, true);
+    assert.ok(handoff.proofNeeded.includes('clear response-time expectation'));
+    assert.match(handoff.conversionGoal, /walkthroughs/i);
+  });
+
+  it('suggestedActions include Check Growth Infrastructure after preview', () => {
+    const gd = buildInitialGrowthDirection(ANCHOR_BLUEPRINT, {
+      normalizedFacts: {
+        business_name: 'Anchor Cleaning',
+        ideal_customers: ['property managers', 'professional offices'],
+        geography: ['Greater Manchester'],
+      },
+    });
+    const ranked = buildGrowthConversationReply(
+      'Please compare the segments and rank them.',
+      gd,
+      ANCHOR_BLUEPRINT
+    );
+    const selected = buildGrowthConversationReply(
+      'I agree — property managers feel like the most attractive first segment, with professional offices as secondary.',
+      gd,
+      ANCHOR_BLUEPRINT,
+      { growthState: ranked.growthState }
+    );
+    const previewReply = buildGrowthConversationReply(
+      'summarize this into a First Growth Plan Preview',
+      gd,
+      ANCHOR_BLUEPRINT,
+      { growthState: selected.growthState }
+    );
+    assert.ok(previewReply.suggestedActions);
+    const labels = previewReply.suggestedActions.map((a) => a.label);
+    assert.ok(labels.includes('Check Growth Infrastructure'));
+    assert.ok(labels.includes('Use this focus'));
+    assert.ok(labels.includes('Refine first segment'));
+    assert.ok(labels.includes('Return to Dashboard'));
+  });
+});
