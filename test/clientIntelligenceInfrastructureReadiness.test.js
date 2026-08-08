@@ -123,6 +123,38 @@ describe('Growth Infrastructure Readiness domain', () => {
     assert.equal(containsForbiddenReadinessLanguage(opening), false);
   });
 
+  it('opening with Growth Conversation handoff bridges before campaign/prospect list', () => {
+    const opening = buildInfrastructureReadinessOpening(ANCHOR_BLUEPRINT, {
+      businessName: 'Anchor Cleaning',
+      growthHandoff: {
+        primarySegment: 'property managers',
+        secondarySegment: 'professional offices',
+        targetMarket: 'Greater Manchester',
+        conversionGoal:
+          'qualified conversations, walkthroughs, estimate requests',
+        proofNeeded: [
+          'service checklist',
+          'photos/examples',
+          'clear response-time expectation',
+          'service area',
+          'walkthrough/estimate process',
+        ],
+        noCampaignOrProspectListYet: true,
+      },
+    });
+    assert.match(
+      opening,
+      /Before we build a campaign or prospect list, I'd check whether Anchor Cleaning has the infrastructure/i
+    );
+    assert.match(opening, /First Growth Plan focus: property managers/i);
+    assert.match(opening, /Secondary path: professional offices/i);
+    assert.match(opening, /Greater Manchester/i);
+    assert.match(opening, /clear response-time expectation/i);
+    assert.match(opening, /No campaign or prospect list yet/i);
+    assert.doesNotMatch(opening, /property_managers|professional_offices/);
+    assert.equal(containsForbiddenReadinessLanguage(opening), false);
+  });
+
   it('website/domain answer marks website + domain items from URL', () => {
     const areas = applyAnswerToAreas(
       buildEmptyAreas(),
@@ -297,5 +329,8 @@ describe('client-intel UI markers for infrastructure readiness', () => {
     assert.match(uiSource, /Demand capture risks/);
     assert.match(uiSource, /Recommended setup sequence/);
     assert.match(uiSource, /phase === 'readiness'|setPhase\('readiness'\)/);
+    assert.match(uiSource, /growthPreviewActions/);
+    assert.match(uiSource, /Use this focus/);
+    assert.match(uiSource, /Refine first segment/);
   });
 });

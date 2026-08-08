@@ -642,6 +642,12 @@
         <button type="button" id="readinessBtn" class="secondary">Check Growth Infrastructure</button>
         <button type="button" id="dashboardBtn" class="secondary">Return to Dashboard</button>
       </div>
+      <div class="actions" id="growthPreviewActions" hidden>
+        <button type="button" id="useFocusBtn">Use this focus</button>
+        <button type="button" id="refineSegmentBtn" class="secondary">Refine first segment</button>
+        <button type="button" id="checkInfraFromGrowthBtn" class="secondary">Check Growth Infrastructure</button>
+        <button type="button" id="growthDashboardBtn" class="secondary">Return to Dashboard</button>
+      </div>
       <div class="status-bar" id="sessionStatus">Welcome</div>
     </section>
 
@@ -707,6 +713,7 @@
       growthConversationActive: false,
       readinessConversationActive: false,
       growthInfrastructureReadinessReport: null,
+      firstGrowthPlanPreview: null,
     };
 
     const els = {
@@ -734,6 +741,11 @@
       operatorControls: document.getElementById('operatorControls'),
       execActions: document.getElementById('execActions'),
       completeActions: document.getElementById('completeActions'),
+      growthPreviewActions: document.getElementById('growthPreviewActions'),
+      useFocusBtn: document.getElementById('useFocusBtn'),
+      refineSegmentBtn: document.getElementById('refineSegmentBtn'),
+      checkInfraFromGrowthBtn: document.getElementById('checkInfraFromGrowthBtn'),
+      growthDashboardBtn: document.getElementById('growthDashboardBtn'),
       accurateBtn: document.getElementById('accurateBtn'),
       refineBtn: document.getElementById('refineBtn'),
       keepTalkingBtn: document.getElementById('keepTalkingBtn'),
@@ -1127,11 +1139,17 @@
       if (!on) els.messageInput.blur();
     }
 
+    function setGrowthPreviewActionsVisible(on) {
+      if (!els.growthPreviewActions) return;
+      els.growthPreviewActions.hidden = !on;
+    }
+
     function setPhase(phase) {
       state.phase = phase;
       els.execActions.hidden = phase !== 'executive_summary';
       els.completeActions.hidden = phase !== 'complete';
       els.operatorControls.hidden = phase !== 'welcome';
+      if (phase !== 'growth') setGrowthPreviewActionsVisible(false);
       if (phase === 'welcome') {
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Conversation';
@@ -1160,11 +1178,13 @@
         els.chatPanelTitle.textContent = 'Growth Conversation';
         els.blueprintActions.hidden = true;
         els.completeActions.hidden = true;
+        setGrowthPreviewActionsVisible(Boolean(state.firstGrowthPlanPreview));
       } else if (phase === 'readiness') {
         setComposerEnabled(true);
         els.chatPanelTitle.textContent = 'Growth Infrastructure Readiness';
         els.blueprintActions.hidden = true;
         els.completeActions.hidden = true;
+        setGrowthPreviewActionsVisible(false);
         els.sidePanelTitle.textContent = 'Infrastructure Readiness';
         els.sidePanelSub.textContent =
           'Operational setup before campaigns — capture, convert, track';
@@ -1379,6 +1399,12 @@
           if (data && data.initialGrowthDirection) {
             state.initialGrowthDirection = data.initialGrowthDirection;
           }
+          if (data && data.firstGrowthPlanPreview) {
+            state.firstGrowthPlanPreview = data.firstGrowthPlanPreview;
+            setGrowthPreviewActionsVisible(true);
+          } else if (data && data.suggestedActions && data.suggestedActions.length) {
+            setGrowthPreviewActionsVisible(true);
+          }
           if (data && data.message) addBubble('assistant', data.message);
           setComposerEnabled(true);
           return;
@@ -1439,9 +1465,11 @@
     async function startInfrastructureReadiness() {
       try {
         if (!state.interviewId) return;
-        els.readinessBtn.disabled = true;
-        els.growthBtn.disabled = true;
+        if (els.readinessBtn) els.readinessBtn.disabled = true;
+        if (els.growthBtn) els.growthBtn.disabled = true;
+        if (els.checkInfraFromGrowthBtn) els.checkInfraFromGrowthBtn.disabled = true;
         state.growthConversationActive = false;
+        setGrowthPreviewActionsVisible(false);
         const data = await api(
           'POST',
           '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/readiness/start',
@@ -1455,7 +1483,14 @@
         state.readinessConversationActive = true;
         setPhase('readiness');
         if (data && data.message) {
-          if (!data.resumed) addBubble('meta', 'Growth Infrastructure Readiness started');
+          if (!data.resumed) {
+            addBubble(
+              'meta',
+              data.growthHandoff && data.growthHandoff.primarySegment
+                ? 'Growth Infrastructure Readiness · from First Growth Plan'
+                : 'Growth Infrastructure Readiness started'
+            );
+          }
           addBubble('assistant', data.message);
         }
         els.sessionStatus.textContent = 'READINESS · capture & convert setup';
@@ -1463,8 +1498,34 @@
         els.messageInput.focus();
       } catch (err) {
         showError(err.message);
-        els.readinessBtn.disabled = false;
-        els.growthBtn.disabled = false;
+        if (els.readinessBtn) els.readinessBtn.disabled = false;
+        if (els.growthBtn) els.growthBtn.disabled = false;
+        if (els.checkInfraFromGrowthBtn) els.checkInfraFromGrowthBtn.disabled = false;
+        if (state.firstGrowthPlanPreview) setGrowthPreviewActionsVisible(true);
+      }
+    }
+
+    async function sendGrowthCtaMessage(text) {
+      if (!state.interviewId || !text) return;
+      addBubble('client', text);
+      setComposerEnabled(false);
+      try {
+        const data = await api(
+          'POST',
+          '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/growth/message',
+          { message: text }
+        );
+        if (data && data.firstGrowthPlanPreview) {
+          state.firstGrowthPlanPreview = data.firstGrowthPlanPreview;
+        }
+        if (data && data.message) addBubble('assistant', data.message);
+        if (data && data.suggestedActions && data.suggestedActions.length) {
+          setGrowthPreviewActionsVisible(true);
+        }
+        setComposerEnabled(true);
+      } catch (err) {
+        showError(err.message);
+        setComposerEnabled(true);
       }
     }
 
@@ -1621,6 +1682,27 @@
     els.dashboardBtn.addEventListener('click', () => {
       window.location.href = '/dashboard';
     });
+    if (els.useFocusBtn) {
+      els.useFocusBtn.addEventListener('click', () =>
+        sendGrowthCtaMessage('Use this focus')
+      );
+    }
+    if (els.refineSegmentBtn) {
+      els.refineSegmentBtn.addEventListener('click', () =>
+        sendGrowthCtaMessage('Refine first segment')
+      );
+    }
+    if (els.checkInfraFromGrowthBtn) {
+      els.checkInfraFromGrowthBtn.addEventListener(
+        'click',
+        startInfrastructureReadiness
+      );
+    }
+    if (els.growthDashboardBtn) {
+      els.growthDashboardBtn.addEventListener('click', () => {
+        window.location.href = '/dashboard';
+      });
+    }
 
     showWelcome();
   </script>

@@ -861,6 +861,37 @@ function formatReadinessReportMessage(report) {
 
 function buildInfrastructureReadinessOpening(blueprint, opts = {}) {
   const name = shortName(opts.businessName || extractBusinessName(blueprint));
+  const handoff = opts.growthHandoff || null;
+  const hasFocus =
+    handoff &&
+    (handoff.primarySegment ||
+      handoff.firstGrowthPlanPreview ||
+      handoff.noCampaignOrProspectListYet);
+
+  if (hasFocus) {
+    const primary = handoff.primarySegment || 'the chosen first segment';
+    const secondary = handoff.secondarySegment
+      ? ` Secondary path: ${handoff.secondarySegment}.`
+      : '';
+    const market = handoff.targetMarket || handoff.geography || null;
+    const proof =
+      Array.isArray(handoff.proofNeeded) && handoff.proofNeeded.length
+        ? handoff.proofNeeded.join(', ')
+        : 'service checklist, photos/examples, clear response-time expectation, service area, walkthrough/estimate process';
+    return [
+      `Before we build a campaign or prospect list, I'd check whether ${name} has the infrastructure to capture and convert this demand.`,
+      ``,
+      `We're carrying the First Growth Plan focus: ${primary}${market ? ` in ${market}` : ''}.${secondary}`,
+      `Conversion goal: ${handoff.conversionGoal || 'qualified conversations, walkthroughs, estimate requests'}.`,
+      `Proof still needed before outreach: ${proof}.`,
+      `No campaign or prospect list yet.`,
+      ``,
+      `This is Growth Infrastructure Readiness — making sure ${name} can catch the ball. I will not change DNS, GBP, social profiles, or tracking without explicit approval, and I will never ask for passwords here.`,
+      ``,
+      QUESTION_BANK[0].prompt,
+    ].join('\n');
+  }
+
   return [
     `Before we create demand, I want to make sure ${name} can capture and convert it. I'll check the basics first.`,
     ``,
