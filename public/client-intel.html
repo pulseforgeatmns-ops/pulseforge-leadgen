@@ -1037,8 +1037,10 @@
       initialGrowthDirection: null,
       growthConversationActive: false,
       readinessConversationActive: false,
+      campaignPlanningConversationActive: false,
       growthInfrastructureReadinessReport: null,
       firstGrowthPlanPreview: null,
+      firstCampaignPlanPreview: null,
       growthPlan: null,
       workspaceTab: 'overview',
       isSample: false,
@@ -1448,6 +1450,70 @@
       );
     }
 
+    function renderListBlock(items, empty) {
+      if (!items || !items.length) {
+        return '<p class="blueprint-empty">' + escapeHtml(empty || '—') + '</p>';
+      }
+      return (
+        '<ul class="completion-checks">' +
+        items.map((item) => '<li>' + escapeHtml(item) + '</li>').join('') +
+        '</ul>'
+      );
+    }
+
+    function renderFirstCampaignPlanPreview(preview) {
+      if (!preview) return '';
+      const titles = preview.sectionTitles || {};
+      return (
+        '<div class="growth-direction" id="firstCampaignPlanPreview">' +
+          '<p class="growth-kicker">First Campaign Plan Preview</p>' +
+          '<h4>Planning only — not a launch</h4>' +
+          '<p><strong>' +
+            escapeHtml(titles.campaignObjective || 'Campaign objective') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.campaignObjective || '—') + '</p>' +
+          '<p><strong>' +
+            escapeHtml(titles.targetSegment || 'Target segment') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.targetSegment || '—') + '</p>' +
+          '<p><strong>' +
+            escapeHtml(titles.marketBound || 'Market bound') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.marketBound || '—') + '</p>' +
+          '<p><strong>' +
+            escapeHtml(titles.hypothesis || 'Hypothesis') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.hypothesis || '—') + '</p>' +
+          '<p><strong>' +
+            escapeHtml(titles.proofAssetsNeeded || 'Proof assets needed') +
+          '</strong></p>' +
+          renderListBlock(preview.proofAssetsNeeded, 'No proof assets listed yet.') +
+          '<p><strong>' +
+            escapeHtml(titles.validationMetrics || 'Validation metrics') +
+          '</strong></p>' +
+          renderListBlock(preview.validationMetrics, 'No validation metrics listed yet.') +
+          '<p><strong>' +
+            escapeHtml(titles.risksCautions || 'Risks/cautions') +
+          '</strong></p>' +
+          renderListBlock(preview.risksCautions, 'No risks listed yet.') +
+          '<p><strong>' +
+            escapeHtml(titles.approvalCheckpoints || 'Approval checkpoints') +
+          '</strong></p>' +
+          renderListBlock(preview.approvalCheckpoints, 'No checkpoints listed yet.') +
+          '<p><strong>' +
+            escapeHtml(titles.recommendedNextStep || 'Recommended next step') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.recommendedNextStep || '—') + '</p>' +
+          '<p class="growth-disclaimer">' +
+            escapeHtml(
+              preview.disclaimer ||
+                'Planning preview only — no prospect list, outreach copy, sends, or account changes.'
+            ) +
+          '</p>' +
+        '</div>'
+      );
+    }
+
     function renderCompletion(result) {
       const bp = (result && result.blueprint) || state.blueprint;
       const playbook = (result && result.playbook) || null;
@@ -1608,7 +1674,8 @@
         els.workspaceTabs.hidden =
           phase !== 'growth_workspace' &&
           phase !== 'growth' &&
-          phase !== 'readiness';
+          phase !== 'readiness' &&
+          phase !== 'campaign_planning';
       }
       if (phase !== 'growth') setGrowthPreviewActionsVisible(false);
       if (phase === 'welcome') {
@@ -1666,6 +1733,21 @@
           els.sidePanelTitle.textContent = 'Infrastructure Readiness';
           els.sidePanelSub.textContent =
             'Operational setup before campaigns — capture, convert, track';
+        }
+      } else if (phase === 'campaign_planning') {
+        setComposerEnabled(true);
+        els.chatPanelTitle.textContent = 'First Campaign Planning';
+        els.blueprintActions.hidden = true;
+        els.completeActions.hidden = true;
+        setGrowthPreviewActionsVisible(false);
+        if (els.growthWorkspaceActions) els.growthWorkspaceActions.hidden = true;
+        els.sidePanelTitle.textContent = 'First Campaign Plan Preview';
+        els.sidePanelSub.textContent =
+          'Planning only — hypothesis and validation gates before any build';
+        if (state.firstCampaignPlanPreview) {
+          els.sidePanel.innerHTML = renderFirstCampaignPlanPreview(
+            state.firstCampaignPlanPreview
+          );
         }
       }
       syncGrowthWorkspaceChrome();
@@ -2338,6 +2420,7 @@
       state.growthPlan = data.growthPlan || state.growthPlan;
       state.growthConversationActive = false;
       state.readinessConversationActive = false;
+      state.campaignPlanningConversationActive = false;
       state.taskGuidanceOpen = false;
       setPhase('growth_workspace');
       state.workspaceTab = 'overview';
@@ -2514,6 +2597,7 @@
       state.isSample = Boolean(data.isSample);
       state.growthConversationActive = false;
       state.readinessConversationActive = false;
+      state.campaignPlanningConversationActive = false;
 
       const mode = action || data.action || 'continue';
       const target = data.resumeTarget || 'growth_workspace';
@@ -2588,7 +2672,9 @@
       state.blueprint = null;
       state.growthConversationActive = false;
       state.readinessConversationActive = false;
+      state.campaignPlanningConversationActive = false;
       state.firstGrowthPlanPreview = null;
+      state.firstCampaignPlanPreview = null;
       state.growthInfrastructureReadinessReport = null;
       state.isSample = false;
       state.taskGuidanceOpen = false;
@@ -2668,6 +2754,31 @@
           return;
         }
 
+        if (
+          state.phase === 'campaign_planning' ||
+          state.campaignPlanningConversationActive
+        ) {
+          const data = await api(
+            'POST',
+            '/api/v1/interview/' +
+              encodeURIComponent(state.interviewId) +
+              '/campaign/message',
+            { message: text }
+          );
+          if (data && data.firstCampaignPlanPreview) {
+            state.firstCampaignPlanPreview = data.firstCampaignPlanPreview;
+            els.sidePanel.innerHTML = renderFirstCampaignPlanPreview(
+              data.firstCampaignPlanPreview
+            );
+            els.sidePanelTitle.textContent = 'First Campaign Plan Preview';
+            els.sidePanelSub.textContent =
+              'Planning only — no list, copy, send, or account changes';
+          }
+          if (data && data.message) addBubble('assistant', data.message);
+          setComposerEnabled(true);
+          return;
+        }
+
         if (state.phase === 'growth' || state.growthConversationActive) {
           const data = await api(
             'POST',
@@ -2704,8 +2815,52 @@
         setComposerEnabled(
           state.phase === 'discovery' ||
             state.phase === 'growth' ||
-            state.phase === 'readiness'
+            state.phase === 'readiness' ||
+            state.phase === 'campaign_planning'
         );
+      }
+    }
+
+    async function startCampaignPlanningConversation() {
+      try {
+        if (!state.interviewId) return;
+        state.growthConversationActive = false;
+        state.readinessConversationActive = false;
+        setGrowthPreviewActionsVisible(false);
+        const data = await api(
+          'POST',
+          '/api/v1/interview/' +
+            encodeURIComponent(state.interviewId) +
+            '/campaign/start',
+          {}
+        );
+        if (data && data.blueprint) state.blueprint = data.blueprint;
+        if (data && data.firstCampaignPlanPreview) {
+          state.firstCampaignPlanPreview = data.firstCampaignPlanPreview;
+          els.sidePanel.innerHTML = renderFirstCampaignPlanPreview(
+            data.firstCampaignPlanPreview
+          );
+        } else {
+          els.sidePanel.innerHTML =
+            '<div class="growth-direction" id="firstCampaignPlanPreview">' +
+              '<p class="growth-kicker">First Campaign Plan Preview</p>' +
+              '<p class="blueprint-empty">Answer a few planning questions and Max will draft the preview here. Still review-first — no list, copy, or launch.</p>' +
+            '</div>';
+        }
+        state.campaignPlanningConversationActive = true;
+        setPhase('campaign_planning');
+        if (data && data.message) {
+          if (!data.resumed) {
+            addBubble('meta', 'First Campaign Planning started');
+          }
+          addBubble('assistant', data.message);
+        }
+        els.sessionStatus.textContent = 'CAMPAIGN PLANNING · review-first';
+        els.messageInput.placeholder =
+          'Confirm objective, segment, market, proof, hypothesis…';
+        els.messageInput.focus();
+      } catch (err) {
+        showError(err.message);
       }
     }
 
@@ -2715,6 +2870,7 @@
         els.growthBtn.disabled = true;
         if (els.readinessBtn) els.readinessBtn.disabled = true;
         state.readinessConversationActive = false;
+        state.campaignPlanningConversationActive = false;
         const data = await api(
           'POST',
           '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/growth/start',
@@ -2747,6 +2903,7 @@
         if (els.growthBtn) els.growthBtn.disabled = true;
         if (els.checkInfraFromGrowthBtn) els.checkInfraFromGrowthBtn.disabled = true;
         state.growthConversationActive = false;
+        state.campaignPlanningConversationActive = false;
         setGrowthPreviewActionsVisible(false);
         const data = await api(
           'POST',
@@ -3005,8 +3162,10 @@
         let followUp =
           'This stays review-first. No campaign, prospect list, or account changes begin without operator approval — start a new Growth Conversation or return to the dashboard when you are ready.';
         if (id === 'launch_campaign' || label === 'Plan First Campaign') {
-          followUp =
-            'This stays review-first. Max will help define the campaign strategy, validation criteria, and approval checkpoints before any campaign, prospect list, or account changes begin.';
+          startCampaignPlanningConversation().catch((err) =>
+            showError(err.message)
+          );
+          return;
         }
         addBubble(
           'assistant',

@@ -76,6 +76,8 @@ describe('clientIntelligence routes (static)', () => {
       '/api/v1/interview/:id/growth/message',
       '/api/v1/interview/:id/readiness/start',
       '/api/v1/interview/:id/readiness/message',
+      '/api/v1/interview/:id/campaign/start',
+      '/api/v1/interview/:id/campaign/message',
       '/api/v1/clients/:id/blueprint',
       '/api/v1/client-intel/sessions',
       '/api/v1/client-intel/sessions/:id/resume',
@@ -118,6 +120,9 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /Resume Growth Plan/);
     assert.match(uiSource, /growth_workspace|Growth Workspace/);
     assert.match(uiSource, /Check Growth Infrastructure/);
+    assert.match(uiSource, /Plan First Campaign/);
+    assert.match(uiSource, /\/campaign\/start/);
+    assert.match(uiSource, /First Campaign Plan Preview/);
     assert.match(uiSource, /Initial Growth Direction/);
     assert.match(uiSource, /assessment-stars/);
     assert.match(uiSource, /2500/);

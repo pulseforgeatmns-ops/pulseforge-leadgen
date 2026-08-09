@@ -5,6 +5,7 @@
  * SPEC-084 — Interview experience helpers (understanding progress, executive summary, resume).
  * SPEC-085 — Executive Business Brief (client-facing synthesis after interview).
  * SPEC-088 — Growth Work Continuation Flow (resume to first incomplete Growth Plan task).
+ * SPEC-089 — First Campaign Planning Conversation (review-first plan preview after Growth Plan).
  * Text interview → evidence → confidence → Business Blueprint → approve → playbook handoff.
  * Does not invent campaign strategy or activate Scout/Composer.
  */
@@ -41,6 +42,11 @@ const {
   resolveGrowthPlanResumeTarget,
   applyTaskCompletion,
 } = require('./clientIntelligenceGrowthPlan');
+const {
+  buildCampaignPlanningContext,
+  buildCampaignPlanningOpening,
+  buildCampaignPlanningReply,
+} = require('./clientIntelligenceCampaignPlanning');
 
 const SESSION_STATUSES = Object.freeze([
   'NEW',
@@ -6506,6 +6512,215 @@ async function postInfrastructureReadinessMessage(sessionId, message, opts = {})
   };
 }
 
+/**
+ * Begin First Campaign Planning Conversation (SPEC-089).
+ * Review-first only — carries prior artifacts; no lists/copy/sends/account changes.
+ */
+async function startCampaignPlanningConversation(sessionId, opts = {}) {
+  const store = await resolveStore(opts);
+  const session = await store.getSession(sessionId);
+  if (!session) {
+    throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
+  }
+  if (session.status !== 'APPROVED') {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      'First Campaign Planning requires an approved Blueprint'
+    );
+  }
+
+  let blueprint = null;
+  if (session.interview_state && session.interview_state.blueprintId) {
+    blueprint = await store.getBlueprint(
+      session.interview_state.blueprintId,
+      session.interview_state.blueprintVersion
+    );
+  }
+  if (!blueprint || blueprint.status !== 'approved') {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      'Approved Business Blueprint not found for this interview'
+    );
+  }
+
+  const growthDirection = resolveInitialGrowthDirection(
+    blueprint,
+    session.interview_state
+  );
+  const context = buildCampaignPlanningContext(session, blueprint, {
+    growthDirection,
+  });
+  const opening = buildCampaignPlanningOpening(context);
+  const prior =
+    (session.interview_state && session.interview_state.campaignPlanning) || null;
+  const turns = (prior && Array.isArray(prior.turns) && prior.turns.length
+    ? prior.turns
+    : []
+  ).slice();
+
+  if (!turns.length) {
+    turns.push({
+      speaker: 'assistant',
+      message: opening,
+      at: new Date().toISOString(),
+      step: 'opening',
+    });
+  }
+
+  const campaignPlanning = {
+    status: (prior && prior.status) || 'active',
+    startedAt: (prior && prior.startedAt) || new Date().toISOString(),
+    step: (prior && prior.step) || 'opening',
+    answers: (prior && prior.answers) || {},
+    context: {
+      ...(prior && prior.context ? prior.context : {}),
+      ...context,
+    },
+    turns,
+  };
+
+  await store.updateSession(session.id, {
+    interview_state: {
+      ...session.interview_state,
+      campaignPlanning,
+      firstCampaignPlanPreview:
+        (session.interview_state &&
+          session.interview_state.firstCampaignPlanPreview) ||
+        null,
+    },
+  });
+
+  const resumed = Boolean(prior && prior.turns && prior.turns.length);
+  const lastAssistant = [...turns]
+    .reverse()
+    .find((t) => t && t.speaker === 'assistant');
+
+  return {
+    ok: true,
+    interviewId: session.id,
+    status: 'CAMPAIGN_PLANNING',
+    message: resumed && lastAssistant ? lastAssistant.message : opening,
+    blueprint: publicBlueprint(blueprint),
+    campaignPlanning,
+    campaignContext: context,
+    firstCampaignPlanPreview:
+      (session.interview_state &&
+        session.interview_state.firstCampaignPlanPreview) ||
+      null,
+    resumed,
+  };
+}
+
+/**
+ * Continue First Campaign Planning. Planning preview only — no execution.
+ */
+async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
+  const store = await resolveStore(opts);
+  const session = await store.getSession(sessionId);
+  if (!session) {
+    throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
+  }
+  if (session.status !== 'APPROVED') {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      'First Campaign Planning requires an approved Blueprint'
+    );
+  }
+
+  const text = String(message || '').trim();
+  if (!text) {
+    throw new ClientIntelligenceError('empty_message', 'message is required', 400);
+  }
+
+  let blueprint = null;
+  if (session.interview_state && session.interview_state.blueprintId) {
+    blueprint = await store.getBlueprint(
+      session.interview_state.blueprintId,
+      session.interview_state.blueprintVersion
+    );
+  }
+
+  let campaignPlanning =
+    (session.interview_state && session.interview_state.campaignPlanning) || null;
+  const continuableStatuses = new Set(['active', 'preview_ready']);
+  if (!campaignPlanning || !continuableStatuses.has(campaignPlanning.status)) {
+    const started = await startCampaignPlanningConversation(sessionId, opts);
+    campaignPlanning = started.campaignPlanning;
+  }
+
+  const growthDirection = resolveInitialGrowthDirection(
+    blueprint,
+    session.interview_state
+  );
+  const context =
+    (campaignPlanning.context && campaignPlanning.context.primarySegment
+      ? campaignPlanning.context
+      : null) ||
+    buildCampaignPlanningContext(session, blueprint || { sections: {} }, {
+      growthDirection,
+    });
+
+  const reply = buildCampaignPlanningReply(
+    text,
+    campaignPlanning,
+    context,
+    {
+      blueprintId: blueprint && blueprint.id,
+      blueprintVersion: blueprint && blueprint.version,
+    }
+  );
+
+  const turns = [
+    ...((campaignPlanning && campaignPlanning.turns) || []),
+    {
+      speaker: 'client',
+      message: text,
+      at: new Date().toISOString(),
+      step: campaignPlanning.step,
+    },
+    {
+      speaker: 'assistant',
+      message: reply.message,
+      at: new Date().toISOString(),
+      step: reply.step,
+      intent: reply.intent,
+    },
+  ];
+
+  const nextStatus = reply.preview ? 'preview_ready' : 'active';
+  const nextPlanning = {
+    ...campaignPlanning,
+    status: nextStatus,
+    step: reply.step,
+    answers: reply.answers,
+    context,
+    turns,
+  };
+
+  await store.updateSession(session.id, {
+    interview_state: {
+      ...session.interview_state,
+      campaignPlanning: nextPlanning,
+      ...(reply.preview ? { firstCampaignPlanPreview: reply.preview } : {}),
+    },
+  });
+
+  return {
+    ok: true,
+    interviewId: session.id,
+    status: 'CAMPAIGN_PLANNING',
+    message: reply.message,
+    intent: reply.intent,
+    blueprint: publicBlueprint(blueprint),
+    campaignPlanning: nextPlanning,
+    firstCampaignPlanPreview:
+      reply.preview ||
+      (session.interview_state &&
+        session.interview_state.firstCampaignPlanPreview) ||
+      null,
+  };
+}
+
 module.exports = {
   SESSION_STATUSES,
   ALLOWED_TRANSITIONS,
@@ -6553,6 +6768,8 @@ module.exports = {
   postGrowthMessage,
   startInfrastructureReadinessConversation,
   postInfrastructureReadinessMessage,
+  startCampaignPlanningConversation,
+  postCampaignPlanningMessage,
   resolveInitialGrowthDirection,
   repairInitialGrowthDirection,
   detectContradiction,

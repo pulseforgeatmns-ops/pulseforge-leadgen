@@ -51,6 +51,11 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- First Campaign Planning Conversation ([SPEC-089](docs/specs/SPEC-089_First_Campaign_Planning_Conversation.md))
+  - **Plan First Campaign** from Growth Plan completion opens a review-first Max conversation
+  - Carries approved Blueprint, Initial Growth Direction, segment ranking, validation target, readiness report, and completed setup checklist
+  - Artifact: First Campaign Plan Preview (objective, segment, market, hypothesis, proof, metrics, risks, checkpoints, next step)
+  - APIs: `POST /api/v1/interview/:id/campaign/start|message`; no prospect list, outreach copy, sends, CRM writes, or account changes
 - Growth Work Continuation Flow ([SPEC-088](docs/specs/SPEC-088_Growth_Work_Continuation_Flow.md))
   - **Resume Growth Plan** opens the Growth Workspace on the first incomplete task (never a Readiness Report dead end)
   - Workspace tabs: Overview · Tasks · Readiness Report · Blueprint · History
