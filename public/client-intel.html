@@ -656,6 +656,118 @@
       align-items: center;
       margin-top: 0.75rem;
     }
+    .workspace-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-top: 0.75rem;
+    }
+    .workspace-tabs button {
+      background: transparent;
+      color: var(--cie-muted);
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 0.35rem 0.65rem;
+      font-size: 0.78rem;
+      font-weight: 500;
+    }
+    .workspace-tabs button.active {
+      color: var(--cie-text);
+      border-color: var(--cie-border);
+      background: var(--cie-accent-soft);
+    }
+    .current-task-card {
+      border: 1px solid var(--cie-border);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(61, 156, 253, 0.08), transparent 70%),
+        var(--cie-panel-elevated);
+      padding: 1.1rem 1.15rem 1.15rem;
+      margin-bottom: 0.85rem;
+    }
+    .current-task-card .kicker {
+      margin: 0 0 0.35rem;
+      font-size: 0.7rem;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--cie-accent);
+      font-weight: 600;
+    }
+    .current-task-card h3 {
+      margin: 0 0 0.55rem;
+      font-size: 1.15rem;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+    .current-task-card .task-meta {
+      margin: 0 0 0.85rem;
+      color: var(--cie-muted);
+      font-size: 0.84rem;
+      line-height: 1.45;
+    }
+    .current-task-card .task-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+    }
+    .task-queue {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+    .task-queue li {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid var(--cie-border-soft);
+      border-radius: 10px;
+      font-size: 0.86rem;
+    }
+    .task-queue li.complete { opacity: 0.55; }
+    .task-queue li.current {
+      border-color: rgba(61, 156, 253, 0.45);
+      background: var(--cie-accent-soft);
+    }
+    .task-queue .task-status {
+      color: var(--cie-muted);
+      font-size: 0.72rem;
+      white-space: nowrap;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .completion-options {
+      display: grid;
+      gap: 0.5rem;
+      margin-top: 0.85rem;
+    }
+    .completion-options button {
+      width: 100%;
+      text-align: left;
+    }
+    .previous-plans {
+      margin-top: 0.85rem;
+      border-top: 1px solid var(--cie-border-soft);
+      padding-top: 0.75rem;
+    }
+    .previous-plans summary {
+      cursor: pointer;
+      color: var(--cie-muted);
+      font-size: 0.82rem;
+      font-weight: 500;
+      list-style: none;
+    }
+    .previous-plans summary::-webkit-details-marker { display: none; }
+    .previous-plans .session-list { margin-top: 0.65rem; }
+    .plan-progress-label {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.35rem;
+      font-size: 0.8rem;
+      color: var(--cie-muted);
+    }
   </style>
 </head>
 <body>
@@ -697,7 +809,7 @@
         <button type="button" id="keepTalkingBtn" class="secondary">💬 Let's keep talking.</button>
       </div>
       <div class="actions" id="completeActions" hidden>
-        <button type="button" id="growthBtn">Start Growth Conversation</button>
+        <button type="button" id="growthBtn">Resume Growth Plan</button>
         <button type="button" id="readinessBtn" class="secondary">Check Growth Infrastructure</button>
         <button type="button" id="dashboardBtn" class="secondary">Return to Dashboard</button>
       </div>
@@ -707,6 +819,11 @@
         <button type="button" id="checkInfraFromGrowthBtn" class="secondary">Check Growth Infrastructure</button>
         <button type="button" id="growthDashboardBtn" class="secondary">Return to Dashboard</button>
       </div>
+      <div class="actions" id="growthWorkspaceActions" hidden>
+        <button type="button" id="continueTaskBtn">Continue Task</button>
+        <button type="button" id="completeTaskBtn" class="secondary">Mark Complete</button>
+        <button type="button" id="workspaceDashboardBtn" class="secondary">Return to Dashboard</button>
+      </div>
       <div class="status-bar" id="sessionStatus">Welcome</div>
     </section>
 
@@ -714,6 +831,13 @@
       <div class="panel-head">
         <h2 id="sidePanelTitle">Business Understanding</h2>
         <p class="sub" id="sidePanelSub">Progress builds as we talk. Narratives appear after Max shares his understanding.</p>
+        <div class="workspace-tabs" id="workspaceTabs" hidden>
+          <button type="button" data-tab="overview" class="active">Overview</button>
+          <button type="button" data-tab="tasks">Tasks</button>
+          <button type="button" data-tab="readiness">Readiness Report</button>
+          <button type="button" data-tab="blueprint">Blueprint</button>
+          <button type="button" data-tab="history">History</button>
+        </div>
       </div>
       <div id="sidePanel"><p class="blueprint-empty">When you're ready, begin the conversation.</p></div>
       <div class="actions" id="blueprintActions" hidden>
@@ -773,6 +897,8 @@
       readinessConversationActive: false,
       growthInfrastructureReadinessReport: null,
       firstGrowthPlanPreview: null,
+      growthPlan: null,
+      workspaceTab: 'overview',
       isSample: false,
       savedSessions: [],
       fixturesAllowed: false,
@@ -818,6 +944,11 @@
       readinessBtn: document.getElementById('readinessBtn'),
       dashboardBtn: document.getElementById('dashboardBtn'),
       chatPanelTitle: document.getElementById('chatPanelTitle'),
+      growthWorkspaceActions: document.getElementById('growthWorkspaceActions'),
+      continueTaskBtn: document.getElementById('continueTaskBtn'),
+      completeTaskBtn: document.getElementById('completeTaskBtn'),
+      workspaceDashboardBtn: document.getElementById('workspaceDashboardBtn'),
+      workspaceTabs: document.getElementById('workspaceTabs'),
     };
 
     function showError(err) {
@@ -1215,6 +1346,9 @@
       state.phase = phase;
       els.execActions.hidden = phase !== 'executive_summary';
       els.completeActions.hidden = phase !== 'complete';
+      if (els.growthWorkspaceActions) {
+        els.growthWorkspaceActions.hidden = phase !== 'growth_workspace';
+      }
       els.operatorControls.hidden = phase !== 'welcome';
       if (els.savedSessions) {
         els.savedSessions.hidden = phase !== 'welcome';
@@ -1226,10 +1360,17 @@
         els.loadAnchorFixtureBtn.hidden =
           phase !== 'welcome' || !state.fixturesAllowed;
       }
+      if (els.workspaceTabs) {
+        els.workspaceTabs.hidden =
+          phase !== 'growth_workspace' &&
+          phase !== 'growth' &&
+          phase !== 'readiness';
+      }
       if (phase !== 'growth') setGrowthPreviewActionsVisible(false);
       if (phase === 'welcome') {
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Conversation';
+        if (els.workspaceTabs) els.workspaceTabs.hidden = true;
       } else if (phase === 'discovery') {
         setComposerEnabled(true);
         els.chatPanelTitle.textContent = 'Discovery';
@@ -1250,21 +1391,34 @@
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Complete';
         els.blueprintActions.hidden = true;
+      } else if (phase === 'growth_workspace') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = 'Growth Workspace';
+        els.blueprintActions.hidden = true;
+        els.completeActions.hidden = true;
+        setGrowthPreviewActionsVisible(false);
+        if (els.workspaceTabs) els.workspaceTabs.hidden = false;
+        syncWorkspaceActions(state.growthPlan);
       } else if (phase === 'growth') {
         setComposerEnabled(true);
         els.chatPanelTitle.textContent = 'Growth Conversation';
         els.blueprintActions.hidden = true;
         els.completeActions.hidden = true;
         setGrowthPreviewActionsVisible(Boolean(state.firstGrowthPlanPreview));
+        if (els.growthWorkspaceActions) els.growthWorkspaceActions.hidden = true;
       } else if (phase === 'readiness') {
         setComposerEnabled(true);
         els.chatPanelTitle.textContent = 'Growth Infrastructure Readiness';
         els.blueprintActions.hidden = true;
         els.completeActions.hidden = true;
         setGrowthPreviewActionsVisible(false);
-        els.sidePanelTitle.textContent = 'Infrastructure Readiness';
-        els.sidePanelSub.textContent =
-          'Operational setup before campaigns — capture, convert, track';
+        if (els.growthWorkspaceActions) els.growthWorkspaceActions.hidden = true;
+        // Keep readiness report as a tab destination; do not force-replace workspace tabs.
+        if (!els.workspaceTabs || els.workspaceTabs.hidden) {
+          els.sidePanelTitle.textContent = 'Infrastructure Readiness';
+          els.sidePanelSub.textContent =
+            'Operational setup before campaigns — capture, convert, track';
+        }
       }
     }
 
@@ -1401,8 +1555,12 @@
 
     function resumeTargetLabel(target) {
       switch (target) {
+        case 'growth_workspace':
+          return 'Growth Plan in progress';
+        case 'growth_complete':
+          return 'Growth Plan complete';
         case 'infrastructure_readiness':
-          return 'Infrastructure readiness report';
+          return 'Infrastructure readiness';
         case 'first_growth_plan_preview':
           return 'First Growth Plan Preview';
         case 'growth_conversation':
@@ -1410,8 +1568,60 @@
         case 'initial_growth_direction':
           return 'Initial Growth Direction';
         default:
-          return 'Approved Blueprint';
+          return 'Growth Plan';
       }
+    }
+
+    function sessionCardHtml(s, { primary } = {}) {
+      const id = s.sessionId || s.interviewId;
+      const sample = s.isSample
+        ? '<span class="sample-badge">Sample / Dev</span>'
+        : '';
+      const pct =
+        s.growthPlan && typeof s.growthPlan.percentComplete === 'number'
+          ? s.growthPlan.percentComplete
+          : null;
+      const currentTitle =
+        s.growthPlan && s.growthPlan.currentTask && s.growthPlan.currentTask.title
+          ? s.growthPlan.currentTask.title
+          : resumeTargetLabel(s.resumeTarget);
+      const meta = [
+        pct != null ? pct + '% complete' : null,
+        currentTitle,
+        s.blueprintVersion ? 'Blueprint v' + s.blueprintVersion : null,
+      ].filter(Boolean).join(' · ');
+      const cta =
+        s.resumeTarget === 'growth_complete' ||
+        (s.growthPlan && s.growthPlan.status === 'complete')
+          ? 'View Completion'
+          : 'Resume Growth Plan';
+      return (
+        '<article class="session-card' + (s.isSample ? ' sample' : '') + '" data-session-id="' +
+        escapeHtml(id) + '">' +
+          '<p class="session-card-title">' +
+            escapeHtml(
+              primary
+                ? (s.businessName || 'Business') + ' · Growth Plan'
+                : s.label || ((s.businessName || 'Business') + ' · Growth Plan')
+            ) +
+            sample +
+          '</p>' +
+          '<p class="session-card-meta">' + escapeHtml(meta) + '</p>' +
+          '<div class="session-card-actions">' +
+            '<button type="button" data-action="continue" data-session-id="' +
+              escapeHtml(id) +
+            '">' +
+              cta +
+            '</button>' +
+            '<button type="button" class="secondary" data-action="view" data-session-id="' +
+              escapeHtml(id) +
+            '">View Blueprint</button>' +
+            (primary
+              ? '<button type="button" class="secondary" data-action="new">Start New Interview</button>'
+              : '') +
+          '</div>' +
+        '</article>'
+      );
     }
 
     function renderSavedSessions(sessions) {
@@ -1424,32 +1634,25 @@
         return;
       }
       els.savedSessions.hidden = state.phase !== 'welcome';
-      els.savedSessions.innerHTML =
-        '<p class="blueprint-empty" style="margin:0 0 0.25rem">Approved Blueprint sessions</p>' +
-        list.map((s) => {
-          const id = s.sessionId || s.interviewId;
-          const sample = s.isSample
-            ? '<span class="sample-badge">Sample / Dev</span>'
-            : '';
-          const meta = [
-            resumeTargetLabel(s.resumeTarget),
-            s.blueprintVersion ? 'v' + s.blueprintVersion : null,
-            s.approvedAt ? 'approved ' + new Date(s.approvedAt).toLocaleDateString() : null,
-          ].filter(Boolean).join(' · ');
-          return (
-            '<article class="session-card' + (s.isSample ? ' sample' : '') + '" data-session-id="' +
-            escapeHtml(id) + '">' +
-              '<p class="session-card-title">' + escapeHtml(s.label || (s.businessName + ' · Blueprint approved')) +
-              sample + '</p>' +
-              '<p class="session-card-meta">' + escapeHtml(meta) + '</p>' +
-              '<div class="session-card-actions">' +
-                '<button type="button" data-action="continue" data-session-id="' + escapeHtml(id) + '">Continue Growth Work</button>' +
-                '<button type="button" class="secondary" data-action="view" data-session-id="' + escapeHtml(id) + '">View Blueprint</button>' +
-                '<button type="button" class="secondary" data-action="new">Start New Interview</button>' +
-              '</div>' +
-            '</article>'
-          );
-        }).join('');
+      const current = list[0];
+      const previous = list.slice(1);
+      let html =
+        '<p class="blueprint-empty" style="margin:0 0 0.25rem">Current Growth Plan</p>' +
+        sessionCardHtml(current, { primary: true });
+      if (previous.length) {
+        html +=
+          '<details class="previous-plans">' +
+            '<summary>Previous Plans (' +
+            previous.length +
+            ')</summary>' +
+            '<div class="session-list">' +
+            previous
+              .map((s) => sessionCardHtml(s, { primary: false }))
+              .join('') +
+            '</div>' +
+          '</details>';
+      }
+      els.savedSessions.innerHTML = html;
     }
 
     async function loadSavedSessions() {
@@ -1483,6 +1686,343 @@
       }
     }
 
+    function setWorkspaceTab(tab) {
+      state.workspaceTab = tab || 'overview';
+      if (!els.workspaceTabs) return;
+      Array.from(els.workspaceTabs.querySelectorAll('button[data-tab]')).forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-tab') === state.workspaceTab);
+      });
+      renderWorkspaceSidePanel();
+    }
+
+    function renderPlanProgress(plan) {
+      if (!plan) return '';
+      const pct = typeof plan.percentComplete === 'number' ? plan.percentComplete : 0;
+      return (
+        '<div class="progress-block" style="margin:0 0 0.9rem">' +
+          '<div class="plan-progress-label">' +
+            '<strong>' + escapeHtml(plan.title || 'Growth Plan') + '</strong>' +
+            '<span class="progress-pct">' + pct + '%</span>' +
+          '</div>' +
+          '<div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' +
+            pct +
+          '"><div class="progress-fill" style="width:' +
+            pct +
+          '%"></div></div>' +
+        '</div>'
+      );
+    }
+
+    function renderCurrentTaskCard(plan) {
+      if (!plan) return '';
+      if (plan.status === 'complete' || !plan.currentTask) {
+        const options = (plan.completionOptions || [])
+          .map(
+            (opt) =>
+              '<button type="button" class="secondary" data-completion="' +
+              escapeHtml(opt.id) +
+              '">' +
+              escapeHtml(opt.label) +
+              '</button>'
+          )
+          .join('');
+        return (
+          '<div class="current-task-card" id="growthCompleteCard">' +
+            '<p class="kicker">Growth Complete</p>' +
+            '<h3>All current recommendations have been completed.</h3>' +
+            '<p class="task-meta">Choose your next objective.</p>' +
+            '<div class="completion-options">' +
+              options +
+            '</div>' +
+          '</div>'
+        );
+      }
+      const task = plan.currentTask;
+      const next = plan.nextTask;
+      const after = plan.afterTask;
+      return (
+        '<div class="current-task-card" id="currentTaskCard">' +
+          '<p class="kicker">Current Task</p>' +
+          '<h3>' + escapeHtml(task.title || 'Next step') + '</h3>' +
+          '<p class="task-meta">' +
+            escapeHtml(task.description || '') +
+            (task.estimatedMinutes
+              ? '<br>Estimated time · ' + task.estimatedMinutes + ' minutes'
+              : '') +
+            (next ? '<br>Next · ' + escapeHtml(next.title) : '') +
+            (after ? '<br>After · ' + escapeHtml(after.title) : '') +
+          '</p>' +
+        '</div>'
+      );
+    }
+
+    function renderTaskList(plan) {
+      const tasks = (plan && plan.tasks) || [];
+      if (!tasks.length) {
+        return '<p class="blueprint-empty">Nothing left to complete.</p>';
+      }
+      const currentId = plan.currentTask && plan.currentTask.id;
+      return (
+        '<ul class="task-queue">' +
+        tasks
+          .map((t) => {
+            const cls =
+              t.status === 'complete'
+                ? 'complete'
+                : t.id === currentId
+                  ? 'current'
+                  : '';
+            return (
+              '<li class="' +
+              cls +
+              '"><span>' +
+              escapeHtml(t.title) +
+              '</span><span class="task-status">' +
+              escapeHtml(t.status) +
+              '</span></li>'
+            );
+          })
+          .join('') +
+        '</ul>'
+      );
+    }
+
+    function renderHistory(plan) {
+      const history = (plan && plan.history) || [];
+      if (!history.length) {
+        return '<p class="blueprint-empty">No completed Growth Plan tasks yet.</p>';
+      }
+      return (
+        '<ul class="completion-checks">' +
+        history
+          .slice()
+          .reverse()
+          .map((h) => {
+            const when = h.completedAt
+              ? new Date(h.completedAt).toLocaleString()
+              : '';
+            return (
+              '<li>' +
+              escapeHtml(h.title || h.taskId || 'Task') +
+              (when ? ' <span class="conf-pct">· ' + escapeHtml(when) + '</span>' : '') +
+              '</li>'
+            );
+          })
+          .join('') +
+        '</ul>'
+      );
+    }
+
+    function renderWorkspaceOverview(plan) {
+      return (
+        '<div class="completion-card">' +
+          renderPlanProgress(plan) +
+          renderCurrentTaskCard(plan) +
+          (plan && plan.artifacts && plan.artifacts.hasInitialGrowthDirection
+            ? renderGrowthDirection(state.initialGrowthDirection)
+            : '') +
+          '<p class="growth-disclaimer">' +
+            'Readiness Report is available as a tab. Resume always opens the first incomplete task.' +
+          '</p>' +
+        '</div>'
+      );
+    }
+
+    function renderWorkspaceSidePanel() {
+      const plan = state.growthPlan;
+      const tab = state.workspaceTab || 'overview';
+      if (tab === 'tasks') {
+        els.sidePanel.innerHTML =
+          '<div class="completion-card">' +
+          renderPlanProgress(plan) +
+          '<p class="growth-kicker">Tasks</p>' +
+          renderTaskList(plan) +
+          '</div>';
+        els.sidePanelTitle.textContent = 'Tasks';
+        els.sidePanelSub.textContent = 'Guided Growth Plan sequence';
+        return;
+      }
+      if (tab === 'readiness') {
+        if (state.growthInfrastructureReadinessReport) {
+          els.sidePanel.innerHTML = renderReadinessReport(
+            state.growthInfrastructureReadinessReport
+          );
+        } else {
+          els.sidePanel.innerHTML =
+            '<p class="blueprint-empty">No Readiness Report yet. Continue the Growth Plan to assess infrastructure when that task is current.</p>';
+        }
+        els.sidePanelTitle.textContent = 'Readiness Report';
+        els.sidePanelSub.textContent = 'Informational — does not block progress';
+        return;
+      }
+      if (tab === 'blueprint') {
+        if (state.blueprint) {
+          renderBlueprint(state.blueprint, { editable: false });
+        } else {
+          els.sidePanel.innerHTML =
+            '<p class="blueprint-empty">Approved Blueprint unavailable.</p>';
+        }
+        els.sidePanelTitle.textContent = 'Business Blueprint';
+        els.sidePanelSub.textContent = 'Approved foundation for this Growth Plan';
+        return;
+      }
+      if (tab === 'history') {
+        els.sidePanel.innerHTML =
+          '<div class="completion-card">' +
+          '<p class="growth-kicker">History</p>' +
+          renderHistory(plan) +
+          '</div>';
+        els.sidePanelTitle.textContent = 'History';
+        els.sidePanelSub.textContent = 'Completed Growth Plan tasks';
+        return;
+      }
+      els.sidePanel.innerHTML = renderWorkspaceOverview(plan);
+      els.sidePanelTitle.textContent = 'Growth Workspace';
+      els.sidePanelSub.textContent = 'Overview · first incomplete task is active';
+    }
+
+    function syncWorkspaceActions(plan) {
+      if (!els.growthWorkspaceActions) return;
+      const task = plan && plan.currentTask;
+      const complete = !task || (plan && plan.status === 'complete');
+      if (els.continueTaskBtn) {
+        els.continueTaskBtn.hidden = complete;
+        if (task) {
+          if (task.resumeAction === 'growth_conversation') {
+            els.continueTaskBtn.textContent = 'Continue Growth Conversation';
+          } else if (task.resumeAction === 'infrastructure_readiness') {
+            els.continueTaskBtn.textContent = 'Continue Readiness Check';
+          } else if (task.resumeAction === 'growth_complete') {
+            els.continueTaskBtn.textContent = 'Choose Next Objective';
+          } else {
+            els.continueTaskBtn.textContent = 'Open Task Guidance';
+          }
+        }
+      }
+      if (els.completeTaskBtn) {
+        els.completeTaskBtn.hidden = complete || (task && task.type === 'milestone' && task.resumeAction !== 'growth_complete');
+        els.completeTaskBtn.textContent =
+          task && task.resumeAction === 'growth_complete'
+            ? 'Mark Objectives Reviewed'
+            : 'Mark Complete';
+      }
+    }
+
+    function openGrowthWorkspace(data, { autoOpenTask } = {}) {
+      state.growthPlan = data.growthPlan || state.growthPlan;
+      state.growthConversationActive = false;
+      state.readinessConversationActive = false;
+      setPhase('growth_workspace');
+      state.workspaceTab = 'overview';
+      if (els.workspaceTabs) els.workspaceTabs.hidden = false;
+      setWorkspaceTab('overview');
+      syncWorkspaceActions(state.growthPlan);
+
+      els.chatLog.innerHTML = '';
+      state.stickToBottom = true;
+      if (state.isSample) {
+        addBubble(
+          'meta',
+          'SAMPLE / DEV DATA — resuming Anchor sample Growth Plan. This is not a real client interview.'
+        );
+      }
+
+      const plan = state.growthPlan;
+      if (!plan || plan.status === 'complete' || !plan.currentTask) {
+        addBubble(
+          'assistant',
+          'Growth Complete.\n\nAll current recommendations have been completed.\n\nChoose your next objective from the workspace panel.'
+        );
+        els.sessionStatus.textContent = 'GROWTH PLAN · complete';
+        setComposerEnabled(false);
+        return;
+      }
+
+      const task = plan.currentTask;
+      addBubble(
+        'assistant',
+        'Resuming your Growth Plan.\n\nCurrent task: ' +
+          (task.title || 'Next step') +
+          (task.description ? '\n\n' + task.description : '')
+      );
+      els.sessionStatus.textContent =
+        'GROWTH PLAN · ' +
+        (typeof plan.percentComplete === 'number' ? plan.percentComplete + '% · ' : '') +
+        (task.title || 'in progress');
+
+      if (autoOpenTask !== false) {
+        // Defer so the workspace chrome paints before conversation start.
+        setTimeout(() => {
+          continueCurrentTask({ silent: true }).catch(() => {});
+        }, 0);
+      }
+    }
+
+    async function continueCurrentTask({ silent } = {}) {
+      const plan = state.growthPlan;
+      const task = plan && plan.currentTask;
+      if (!task) return;
+      if (task.resumeAction === 'growth_conversation') {
+        await startGrowthConversation();
+        return;
+      }
+      if (task.resumeAction === 'infrastructure_readiness') {
+        await startInfrastructureReadiness();
+        return;
+      }
+      if (task.resumeAction === 'growth_complete') {
+        setWorkspaceTab('overview');
+        if (!silent) {
+          addBubble('meta', 'Choose a next objective from the completion options.');
+        }
+        return;
+      }
+      // Setup task — keep operator in workspace with guidance; no dead-end report.
+      setPhase('growth_workspace');
+      setComposerEnabled(false);
+      setWorkspaceTab('overview');
+      if (!silent) {
+        addBubble(
+          'assistant',
+          (task.title || 'Setup task') +
+            '\n\n' +
+            (task.description || 'Complete this recommendation, then mark it done to advance.') +
+            '\n\nOwner: ' +
+            (task.owner || 'operator_guided')
+        );
+      }
+      els.sessionStatus.textContent = 'GROWTH PLAN · ' + (task.title || 'setup task');
+    }
+
+    async function completeCurrentTask() {
+      const plan = state.growthPlan;
+      const task = plan && plan.currentTask;
+      if (!task || !state.interviewId) return;
+      const data = await api(
+        'POST',
+        '/api/v1/interview/' +
+          encodeURIComponent(state.interviewId) +
+          '/growth-plan/tasks/' +
+          encodeURIComponent(task.id) +
+          '/complete',
+        {}
+      );
+      state.growthPlan = data.growthPlan || state.growthPlan;
+      if (data.growthInfrastructureReadinessReport) {
+        state.growthInfrastructureReadinessReport =
+          data.growthInfrastructureReadinessReport;
+      }
+      openGrowthWorkspace(
+        {
+          growthPlan: state.growthPlan,
+        },
+        { autoOpenTask: Boolean(state.growthPlan && state.growthPlan.currentTask) }
+      );
+      if (data.completedTask) {
+        addBubble('meta', 'Completed · ' + (data.completedTask.title || task.id));
+      }
+    }
+
     function applyResumeState(data, action) {
       state.interviewId = data.interviewId || data.id || state.interviewId;
       state.sessionStatus = data.status || state.sessionStatus;
@@ -1493,12 +2033,13 @@
       state.firstGrowthPlanPreview = data.firstGrowthPlanPreview ||
         (data.latestGrowthState && data.latestGrowthState.firstGrowthPlanPreview) ||
         null;
+      state.growthPlan = data.growthPlan || null;
       state.isSample = Boolean(data.isSample);
       state.growthConversationActive = false;
       state.readinessConversationActive = false;
 
       const mode = action || data.action || 'continue';
-      const target = data.resumeTarget || 'initial_growth_direction';
+      const target = data.resumeTarget || 'growth_workspace';
 
       els.chatLog.innerHTML = '';
       state.stickToBottom = true;
@@ -1527,74 +2068,27 @@
           'Session ' + state.interviewId + ' · Viewing approved Blueprint';
         addBubble(
           'assistant',
-          'Here is the approved Business Blueprint. Continue Growth Work whenever you are ready — you will not need to re-answer the interview.'
+          'Here is the approved Business Blueprint. Resume Growth Plan whenever you are ready — you will not need to re-answer the interview.'
         );
+        if (els.growthBtn) els.growthBtn.textContent = 'Resume Growth Plan';
         return;
       }
 
-      // Continue Growth Work — never restart Business Understanding.
-      if (target === 'infrastructure_readiness') {
-        state.readinessConversationActive = true;
-        setPhase('readiness');
-        const readinessTurns =
-          (data.infrastructureReadiness && data.infrastructureReadiness.turns) || [];
-        hydrateTurns(readinessTurns);
-        if (state.growthInfrastructureReadinessReport) {
-          els.sidePanel.innerHTML = renderReadinessReport(
-            state.growthInfrastructureReadinessReport
-          );
-          els.sidePanelTitle.textContent = 'Growth Infrastructure Readiness Report';
-          els.sidePanelSub.textContent = 'Latest saved readiness assessment';
-        }
-        els.sessionStatus.textContent = 'READINESS · resumed from approved Blueprint';
-        els.messageInput.placeholder = 'Continue the readiness conversation…';
+      // SPEC-088: Continue/Resume always enters Growth Workspace (or completion).
+      // Readiness Report is a tab — never the intermediate destination.
+      if (
+        target === 'growth_workspace' ||
+        target === 'growth_complete' ||
+        target === 'infrastructure_readiness' ||
+        target === 'first_growth_plan_preview' ||
+        target === 'growth_conversation' ||
+        target === 'initial_growth_direction'
+      ) {
+        openGrowthWorkspace(data, { autoOpenTask: mode === 'continue' });
         return;
       }
 
-      if (target === 'first_growth_plan_preview' || target === 'growth_conversation') {
-        state.growthConversationActive = true;
-        setPhase('growth');
-        const growthTurns =
-          (data.growthConversation && data.growthConversation.turns) || [];
-        hydrateTurns(growthTurns);
-        if (state.initialGrowthDirection) {
-          els.sidePanel.innerHTML =
-            '<div class="completion-card">' +
-            renderGrowthDirection(state.initialGrowthDirection) +
-            '</div>';
-          els.sidePanelTitle.textContent = 'Initial Growth Direction';
-          els.sidePanelSub.textContent = 'Resumed from approved Blueprint';
-        }
-        if (state.firstGrowthPlanPreview) {
-          setGrowthPreviewActionsVisible(true);
-          addBubble('meta', 'First Growth Plan Preview is ready — use the actions below.');
-        } else if (!growthTurns.length) {
-          addBubble(
-            'assistant',
-            'Continuing from your approved Blueprint. Start or resume the Growth Conversation whenever you are ready.'
-          );
-        }
-        els.sessionStatus.textContent = 'GROWTH · resumed from approved Blueprint';
-        els.messageInput.placeholder = 'Talk with Max about the first growth focus…';
-        return;
-      }
-
-      // Default: Initial Growth Direction after approval.
-      applyApprovedState(
-        {
-          blueprint: state.blueprint,
-          initialGrowthDirection: state.initialGrowthDirection,
-          playbook: data.playbook || null,
-        },
-        { alreadyApproved: true }
-      );
-      addBubble(
-        'assistant',
-        'Welcome back.\n\nYour Business Blueprint is still approved. Review the Initial Growth Direction, then continue into the Growth Conversation — no need to re-answer the interview.'
-      );
-      if (els.growthBtn) els.growthBtn.textContent = 'Continue Growth Work';
-      els.sessionStatus.textContent =
-        'APPROVED · ' + (data.businessName || 'Blueprint') + ' ready for growth work';
+      openGrowthWorkspace(data, { autoOpenTask: mode === 'continue' });
     }
 
     async function resumeSession(sessionId, action) {
@@ -1606,21 +2100,6 @@
           encodeURIComponent(action || 'continue')
       );
       applyResumeState(data, action || 'continue');
-
-      // If continuing with no growth conversation yet, open Initial Growth Direction
-      // and leave Start/Continue Growth Work CTA available (complete phase).
-      if (
-        (action || 'continue') === 'continue' &&
-        data.resumeTarget === 'initial_growth_direction'
-      ) {
-        // Already on complete via applyResumeState.
-      } else if (
-        (action || 'continue') === 'continue' &&
-        data.resumeTarget === 'growth_conversation' &&
-        !(data.growthConversation && data.growthConversation.turns && data.growthConversation.turns.length)
-      ) {
-        await startGrowthConversation();
-      }
     }
 
     function showWelcome() {
@@ -1635,10 +2114,12 @@
       state.firstGrowthPlanPreview = null;
       state.growthInfrastructureReadinessReport = null;
       state.isSample = false;
-      if (els.growthBtn) els.growthBtn.textContent = 'Start Growth Conversation';
+      if (els.growthBtn) els.growthBtn.textContent = 'Resume Growth Plan';
+      state.growthPlan = null;
+      if (els.workspaceTabs) els.workspaceTabs.hidden = true;
       addBubble(
         'assistant',
-        "Welcome.\n\nBefore Pulseforge recommends anything, I'd like to understand how your business works.\n\nThe better I understand your business, the better every future recommendation will become.\n\nIf you already approved a Blueprint, continue from a saved session below — you will not re-answer the interview."
+        "Welcome.\n\nBefore Pulseforge recommends anything, I'd like to understand how your business works.\n\nThe better I understand your business, the better every future recommendation will become.\n\nIf you already have a Growth Plan, resume from the current plan below — you will not re-answer the interview."
       );
       els.sidePanel.innerHTML = '<p class="blueprint-empty">When you\'re ready, begin the conversation or resume an approved Blueprint.</p>';
       els.sessionStatus.textContent = 'Welcome';
@@ -1995,11 +2476,60 @@
       }
     });
 
-    els.growthBtn.addEventListener('click', startGrowthConversation);
+    els.growthBtn.addEventListener('click', async () => {
+      if (state.interviewId && state.sessionStatus === 'APPROVED') {
+        try {
+          await resumeSession(state.interviewId, 'continue');
+          return;
+        } catch (err) {
+          showError(err.message);
+        }
+      }
+      await startGrowthConversation();
+    });
     els.readinessBtn.addEventListener('click', startInfrastructureReadiness);
     els.dashboardBtn.addEventListener('click', () => {
       window.location.href = '/dashboard';
     });
+    if (els.continueTaskBtn) {
+      els.continueTaskBtn.addEventListener('click', () => {
+        continueCurrentTask({ silent: false }).catch((err) => showError(err.message));
+      });
+    }
+    if (els.completeTaskBtn) {
+      els.completeTaskBtn.addEventListener('click', () => {
+        completeCurrentTask().catch((err) => showError(err.message));
+      });
+    }
+    if (els.workspaceDashboardBtn) {
+      els.workspaceDashboardBtn.addEventListener('click', () => {
+        window.location.href = '/dashboard';
+      });
+    }
+    if (els.workspaceTabs) {
+      els.workspaceTabs.addEventListener('click', (event) => {
+        const btn = event.target && event.target.closest('button[data-tab]');
+        if (!btn) return;
+        setWorkspaceTab(btn.getAttribute('data-tab'));
+      });
+    }
+    if (els.sidePanel) {
+      els.sidePanel.addEventListener('click', (event) => {
+        const btn = event.target && event.target.closest('button[data-completion]');
+        if (!btn) return;
+        const id = btn.getAttribute('data-completion');
+        if (id === 'new_growth_plan') {
+          startNewInterviewFlow();
+          return;
+        }
+        addBubble(
+          'assistant',
+          'Next objective noted: ' +
+            (btn.textContent || id) +
+            '.\n\nCampaign launch and market expansion stay operator-directed — start a new Growth Conversation or return to the dashboard when you are ready.'
+        );
+      });
+    }
     if (els.useFocusBtn) {
       els.useFocusBtn.addEventListener('click', () =>
         sendGrowthCtaMessage('Use this focus')

@@ -1356,6 +1356,51 @@ body.light-mode .ask-max-answer { color: var(--text-primary); }
   background: rgba(212, 160, 50, 0.85);
   color: #1a1408;
 }
+.cie-session-card.current {
+  border-color: rgba(61, 156, 253, 0.4);
+  background: rgba(61, 156, 253, 0.06);
+}
+.cie-plan-progress {
+  margin-top: 0.45rem;
+  max-width: 280px;
+}
+.cie-plan-progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.68rem;
+  color: var(--gray-light);
+  margin-bottom: 0.25rem;
+}
+.cie-plan-track {
+  height: 0.35rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.cie-plan-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f7fd6, #3d9cfd);
+}
+.cie-previous-plans {
+  margin-top: 0.35rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.65rem;
+}
+.cie-previous-plans summary {
+  cursor: pointer;
+  color: var(--gray-light);
+  font-size: 0.75rem;
+  font-weight: 500;
+  list-style: none;
+}
+.cie-previous-plans summary::-webkit-details-marker { display: none; }
+.cie-previous-plans .cie-sessions-list {
+  margin-top: 0.55rem;
+}
 
 /* ACTIONS AREA */
 .actions-area { display: none; overflow-y: auto; height: 100%; padding: 1.5rem 2rem; }
@@ -2703,7 +2748,7 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
       <div class="area-header" style="margin-bottom:0.65rem">
         <div>
           <div class="area-title">CLIENT INTELLIGENCE</div>
-          <div class="area-sub" id="cieSessionsSub">Approved Blueprints you can resume without re-interviewing</div>
+          <div class="area-sub" id="cieSessionsSub">Resume the current Growth Plan — first incomplete task opens automatically</div>
         </div>
         <div class="area-actions">
           <a class="btn-outline" href="/client-intel" id="cieOpenLink">Open Client Intel</a>
@@ -7244,12 +7289,13 @@ async function loadCieSessions() {
     const fixturesAllowed = Boolean(data.fixturesAllowed);
     if (sub) {
       sub.textContent = sessions.length
-        ? sessions.length + ' approved Blueprint session' + (sessions.length === 1 ? '' : 's') + ' ready to resume'
-        : 'No approved Blueprints yet — start an interview or load the Anchor sample in Client Intel';
+        ? 'Current Growth Plan ready to resume' +
+          (sessions.length > 1 ? ' · ' + (sessions.length - 1) + ' previous plan' + (sessions.length === 2 ? '' : 's') : '')
+        : 'No Growth Plans yet — start an interview or load the Anchor sample in Client Intel';
     }
     if (!sessions.length) {
       let empty =
-        '<div class="no-data-note">No approved Blueprint sessions yet. ' +
+        '<div class="no-data-note">No Growth Plans yet. ' +
         '<a href="/client-intel">Start a Client Intelligence interview</a>';
       if (fixturesAllowed) {
         empty +=
@@ -7259,44 +7305,78 @@ async function loadCieSessions() {
       list.innerHTML = empty;
       return;
     }
-    list.innerHTML = sessions.map((s) => {
+
+    function cieCardHtml(s, { current }) {
       const id = encodeURIComponent(s.sessionId || s.interviewId);
-      const label = s.label || ((s.businessName || 'Business') + ' · Blueprint approved');
-      const meta = [
-        s.resumeTarget === 'infrastructure_readiness'
-          ? 'Infrastructure readiness'
-          : s.resumeTarget === 'first_growth_plan_preview'
-            ? 'First Growth Plan Preview'
-            : s.resumeTarget === 'growth_conversation'
-              ? 'Growth Conversation'
-              : 'Initial Growth Direction',
-        s.blueprintVersion ? 'v' + s.blueprintVersion : null,
-      ].filter(Boolean).join(' · ');
-      const sample = s.isSample
-        ? '<span class="cie-sample-badge">Sample / Dev</span>'
-        : '';
+      const pct =
+        s.growthPlan && typeof s.growthPlan.percentComplete === 'number'
+          ? s.growthPlan.percentComplete
+          : null;
+      const taskTitle =
+        s.growthPlan && s.growthPlan.currentTask && s.growthPlan.currentTask.title
+          ? s.growthPlan.currentTask.title
+          : s.resumeTarget === 'growth_complete'
+            ? 'Growth Plan complete'
+            : 'Resume next task';
+      const done =
+        s.resumeTarget === 'growth_complete' ||
+        (s.growthPlan && s.growthPlan.status === 'complete');
+      const cta = done ? 'View Completion' : 'Resume Growth Plan';
       return (
-        '<article class="cie-session-card' + (s.isSample ? ' sample' : '') + '">' +
+        '<article class="cie-session-card' +
+          (s.isSample ? ' sample' : '') +
+          (current ? ' current' : '') +
+        '">' +
           '<div class="cie-session-copy">' +
             '<div class="cie-session-title"></div>' +
             '<div class="cie-session-meta"></div>' +
+            (pct != null
+              ? '<div class="cie-plan-progress">' +
+                  '<div class="cie-plan-progress-label"><span>Growth Plan</span><span>' +
+                  pct +
+                  '% Complete</span></div>' +
+                  '<div class="cie-plan-track"><div class="cie-plan-fill" style="width:' +
+                  pct +
+                  '%"></div></div>' +
+                '</div>'
+              : '') +
           '</div>' +
           '<div class="cie-session-actions">' +
-            '<a href="/client-intel?interviewId=' + id + '&action=continue">Continue Growth Work</a>' +
+            '<a href="/client-intel?interviewId=' + id + '&action=continue">' + cta + '</a>' +
             '<a class="secondary" href="/client-intel?interviewId=' + id + '&action=view">View Blueprint</a>' +
-            '<a class="secondary" href="/client-intel?action=new">Start New Interview</a>' +
+            (current
+              ? '<a class="secondary" href="/client-intel?action=new">Start New Interview</a>'
+              : '') +
           '</div>' +
         '</article>'
       );
-    }).join('');
+    }
 
-    Array.from(list.querySelectorAll('.cie-session-card')).forEach((card, idx) => {
-      const s = sessions[idx];
+    const current = sessions[0];
+    const previous = sessions.slice(1);
+    let html = cieCardHtml(current, { current: true });
+    if (previous.length) {
+      html +=
+        '<details class="cie-previous-plans">' +
+          '<summary>Previous Plans (' + previous.length + ')</summary>' +
+          '<div class="cie-sessions-list">' +
+          previous.map((s) => cieCardHtml(s, { current: false })).join('') +
+          '</div>' +
+        '</details>';
+    }
+    list.innerHTML = html;
+
+    const cards = Array.from(list.querySelectorAll('.cie-session-card'));
+    const ordered = [current].concat(previous);
+    cards.forEach((card, idx) => {
+      const s = ordered[idx];
       if (!s) return;
       const title = card.querySelector('.cie-session-title');
       const metaEl = card.querySelector('.cie-session-meta');
       if (title) {
-        title.textContent = s.label || ((s.businessName || 'Business') + ' · Blueprint approved');
+        title.textContent =
+          (s.businessName || 'Business') +
+          (idx === 0 ? ' · Growth Plan' : ' · Previous plan');
         if (s.isSample) {
           const badge = document.createElement('span');
           badge.className = 'cie-sample-badge';
@@ -7305,16 +7385,19 @@ async function loadCieSessions() {
         }
       }
       if (metaEl) {
-        metaEl.textContent = [
-          s.resumeTarget === 'infrastructure_readiness'
-            ? 'Infrastructure readiness'
-            : s.resumeTarget === 'first_growth_plan_preview'
-              ? 'First Growth Plan Preview'
-              : s.resumeTarget === 'growth_conversation'
-                ? 'Growth Conversation'
-                : 'Initial Growth Direction',
-          s.blueprintVersion ? 'v' + s.blueprintVersion : null,
-        ].filter(Boolean).join(' · ');
+        const pct =
+          s.growthPlan && typeof s.growthPlan.percentComplete === 'number'
+            ? s.growthPlan.percentComplete + '% complete'
+            : null;
+        const taskTitle =
+          s.growthPlan && s.growthPlan.currentTask && s.growthPlan.currentTask.title
+            ? s.growthPlan.currentTask.title
+            : s.resumeTarget === 'growth_complete'
+              ? 'All recommendations complete'
+              : 'Ready to resume';
+        metaEl.textContent = [pct, taskTitle, s.blueprintVersion ? 'Blueprint v' + s.blueprintVersion : null]
+          .filter(Boolean)
+          .join(' · ');
       }
     });
   } catch (err) {
