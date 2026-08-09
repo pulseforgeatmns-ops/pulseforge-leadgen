@@ -73,6 +73,18 @@ const CLEAR_CTA_TASK = Object.freeze({
   resumeAction: 'setup_task',
 });
 
+const CLEAR_SERVICE_AREA_TASK = Object.freeze({
+  id: 'setup:website:clear_service_area',
+  itemId: 'clear_service_area',
+  type: 'setup',
+  title: 'Clear service area',
+  description: 'State cities/markets served.',
+  owner: 'operator_guided',
+  priority: 'high',
+  estimatedMinutes: 3,
+  resumeAction: 'setup_task',
+});
+
 describe('Growth Workspace left panel', () => {
   it('formats readiness owner labels for operators', () => {
     assert.equal(formatOwnerLabel('client_required'), 'Client/operator');
@@ -462,6 +474,77 @@ describe('Growth Workspace left panel', () => {
     assert.equal(
       guidance.completeWhen,
       'Anchor has one clear primary CTA for commercial prospects, and the path behind it works.'
+    );
+  });
+
+  it('Clear service area guidance covers market bound copy, not generic capture language', () => {
+    const html = taskGuidanceCardHtml(
+      { ...CLEAR_SERVICE_AREA_TASK },
+      { businessName: 'Anchor Cleaning' }
+    );
+    assert.equal(analyzeLeftPanelHtml(html).taskGuidanceCards, 1);
+    assert.match(html, /Clear service area/);
+    assert.match(html, /Owner · Operator guided/);
+    assert.match(
+      html,
+      /Before outreach, prospects should know whether Anchor serves their location/
+    );
+    assert.match(
+      html,
+      /keeps the first growth push focused on Greater Manchester/
+    );
+    assert.match(
+      html,
+      /State the priority service area clearly on the website and growth materials/
+    );
+    assert.match(
+      html,
+      /use Greater Manchester first, especially Bedford, Hooksett, Londonderry, Auburn, and Goffstown/
+    );
+    assert.match(html, /The website names the primary service area\./);
+    assert.match(html, /Priority towns match the approved Blueprint\./);
+    assert.match(
+      html,
+      /The service area is easy to find from the homepage or contact\/estimate path\./
+    );
+    assert.match(
+      html,
+      /Outreach and future prospect lists stay inside the approved market bound unless changed intentionally\./
+    );
+    assert.match(
+      html,
+      /No website changes are published without approval\./
+    );
+    assert.match(
+      html,
+      /Anchor&#39;s service area is clearly stated and matches the approved Growth Plan\./
+    );
+    assert.doesNotMatch(html, /reliable capture and follow-up/);
+    assert.doesNotMatch(html, /The person who owns replies knows how this works/);
+
+    const guidance = resolveTaskGuidance(
+      CLEAR_SERVICE_AREA_TASK,
+      'Anchor Cleaning'
+    );
+    assert.equal(
+      guidance.whyThisMatters,
+      'Before outreach, prospects should know whether Anchor serves their location. A clear service area keeps the first growth push focused on Greater Manchester and prevents wasted conversations outside the target market.'
+    );
+    assert.equal(
+      guidance.whatToDo,
+      'State the priority service area clearly on the website and growth materials. For Anchor, use Greater Manchester first, especially Bedford, Hooksett, Londonderry, Auburn, and Goffstown.'
+    );
+    assert.deepEqual(guidance.whatToConfirm, [
+      'The website names the primary service area.',
+      'Priority towns match the approved Blueprint.',
+      'The service area is easy to find from the homepage or contact/estimate path.',
+      'Outreach and future prospect lists stay inside the approved market bound unless changed intentionally.',
+      'No website changes are published without approval.',
+    ]);
+    assert.equal(guidance.whoOwnsIt, 'Operator guided');
+    assert.equal(
+      guidance.completeWhen,
+      "Anchor's service area is clearly stated and matches the approved Growth Plan."
     );
   });
 
