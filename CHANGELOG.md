@@ -51,6 +51,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- First Campaign Plan Preview final copy ([SPEC-089](docs/specs/SPEC-089_First_Campaign_Planning_Conversation.md))
+  - Target segment never opens with lowercase/internal labels (`property managers — …`)
+  - Uses “who oversee …” polished segment prose
+  - Tighter objective close: “rather than ignoring the outreach or responding only on price”
+  - Artifact uses “Core validation question:” (no first-person “I’d treat the goal as”)
+  - Keeps side-panel subtitle: “Hypothesis and validation gates before any build”
 - First Campaign Plan Preview polish ([SPEC-089](docs/specs/SPEC-089_First_Campaign_Planning_Conversation.md))
   - Single planning-only footer disclaimer (no duplicate “planning only” banners)
   - Humanized readiness labels (`not_ready` → plain language in risks)
