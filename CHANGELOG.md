@@ -6,6 +6,11 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- Phone/email visible task guidance no longer uses generic capture/follow-up copy
+  - Why this matters: interested property managers should not hunt for a way to reach the business
+  - What to do: confirm phone and branded email in header, footer, contact page, and estimate/request flow
+  - What to confirm: mobile-tappable phone, clear email path, GBP/outreach match, monitored contacts, approval before site changes
+  - Who owns it: Max can check; operator approves fixes; complete when phone/email are easy to find, accurate, and monitored
 - Contact form works task guidance no longer uses generic capture/follow-up copy
   - Why this matters: a broken form makes the business look unresponsive and can lose qualified property manager inquiries
   - What to do: submit a test inquiry; confirm delivery and reply ownership

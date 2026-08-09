@@ -255,6 +255,28 @@
     };
   }
 
+  function phoneEmailVisibleGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'If a property manager is interested, they should not have to hunt for a way to reach ' +
+        name +
+        '. Visible contact information makes the business easier to trust and easier to contact from the website, Google profile, and outreach follow-up.',
+      whatToDo:
+        'Confirm the website shows a working phone number and branded email address in obvious places, especially the header, footer, contact page, and estimate/request flow.',
+      whatToConfirm: [
+        'Phone number is visible and tappable on mobile.',
+        'Email address is visible or available through a clear contact path.',
+        'Contact information matches the Google Business Profile and outreach materials.',
+        'The listed phone/email are monitored by the right person.',
+        'No website changes are published without approval.',
+      ],
+      whoOwnsIt: 'Max can check; operator approves fixes.',
+      completeWhen:
+        'Phone and email are easy to find, accurate, and monitored.',
+    };
+  }
+
   function defaultSetupGuidance(task, businessName) {
     const name = shortBusinessName(businessName);
     const title = (task && task.title) || 'this setup item';
@@ -319,6 +341,9 @@
     }
     if (itemId === 'contact_form_works' || /:contact_form_works$/.test(id)) {
       return contactFormWorksGuidance(businessName);
+    }
+    if (itemId === 'phone_email_visible' || /:phone_email_visible$/.test(id)) {
+      return phoneEmailVisibleGuidance(businessName);
     }
     if (task.type === 'setup' || itemId || /^setup:/.test(id)) {
       return defaultSetupGuidance(task, businessName);
@@ -620,6 +645,7 @@
     clearServiceAreaGuidance,
     clearServicesGuidance,
     contactFormWorksGuidance,
+    phoneEmailVisibleGuidance,
     taskGuidanceCardHtml,
     renderGrowthWorkspaceLeftPanel,
     analyzeLeftPanelHtml,
