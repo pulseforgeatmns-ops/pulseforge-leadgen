@@ -9,14 +9,20 @@ const {
   ARTIFACT_KIND,
   PREVIEW_TITLE,
   PREVIEW_DISCLAIMER,
+  CRITERIA_ARTIFACT_KIND,
+  CRITERIA_PREVIEW_TITLE,
   SECTION_TITLES,
   CONVERSATION_STEPS,
+  PROSPECT_LIST_CRITERIA_STEP,
+  SLOT_KEYS,
+  DEFAULT_PROOF_ASSETS,
   DEFAULT_PROOF_ASSETS_AVAILABLE,
   DEFAULT_PROOF_ASSETS_MISSING,
   DEFAULT_INCLUSION_CRITERIA,
   DEFAULT_TARGET_SUBTYPE_PROPERTY_MANAGERS,
   DEFAULT_APPROVAL_BEFORE_LIST,
   DEFAULT_APPROVAL_BEFORE_LAUNCH,
+  DEFAULT_APPROVAL_CHECKPOINTS,
   VALIDATION_SUCCESS_STATEMENT,
   buildCampaignPlanningContext,
   buildCampaignPlanningOpening,
@@ -26,6 +32,8 @@ const {
   extractCampaignPlanFields,
   stripCampaignWrappers,
   extractAvoidPhrase,
+  seedSlotsFromContext,
+  isSlotSatisfied,
   containsForbiddenCampaignPlanningLanguage,
   humanizeStatusLabel,
   sanitizeTargetSegmentText,
@@ -816,19 +824,25 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     );
   });
 
-  it('advances steps then produces preview without forbidden launch language', () => {
+  it('advances unsatisfied slots then produces preview without forbidden launch language', () => {
     const ctx = {
       businessName: 'Anchor Cleaning',
       primarySegment: 'property managers',
       secondarySegment: 'professional offices',
       targetMarket: 'Greater Manchester',
+      subtype: 'Multi-family / HOA property managers',
+      proofFromPrior: 'checklist, photos, response-time expectation',
       towns: ['Bedford', 'Hooksett', 'Londonderry', 'Auburn', 'Goffstown'],
       completedSetupChecklist: true,
       readinessOverallStatus: 'partial',
       blueprintId: 'bp-1',
       blueprintVersion: '1.0',
     };
-    let state = { step: 'opening', answers: {} };
+    let state = {
+      step: 'opening',
+      answers: {},
+      slots: seedSlotsFromContext(ctx, null),
+    };
     const r1 = buildCampaignPlanningReply(
       'Keep property managers exactly as defined.',
       state,
@@ -837,41 +851,295 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.equal(r1.step, 'campaign_objective');
     assert.equal(r1.intent, 'advance');
     assert.equal(r1.preview, null);
+    assert.equal(isSlotSatisfied(r1.slots, 'targetSegment'), true);
+    assert.equal(isSlotSatisfied(r1.slots, 'targetSubtype'), true);
     assert.equal(containsForbiddenCampaignPlanningLanguage(r1.message), false);
 
-    state = { step: r1.step, answers: r1.answers };
+    state = {
+      step: r1.step,
+      answers: r1.answers,
+      slots: r1.slots,
+      currentAsk: r1.currentAsk,
+    };
     const steps = [
       'Prove walkthrough demand.',
-      'Property managers — HOA subtype',
-      'Greater Manchester',
-      'Checklist and photos available',
       'If we approach HOA PMs with proof, we get walkthroughs',
       '2 conversations and 1 walkthrough',
-    ];
-    for (const msg of steps) {
-      const reply = buildCampaignPlanningReply(msg, state, ctx);
-      assert.equal(containsForbiddenCampaignPlanningLanguage(reply.message), false);
-      state = { step: reply.step, answers: reply.answers };
-    }
-    const final = buildCampaignPlanningReply(
       'Preview sign-off before any list or copy',
-      state,
-      ctx
+    ];
+    let final = null;
+    for (const msg of steps) {
+      final = buildCampaignPlanningReply(msg, state, ctx);
+      assert.equal(containsForbiddenCampaignPlanningLanguage(final.message), false);
+      state = {
+        step: final.step,
+        answers: final.answers,
+        slots: final.slots,
+        currentAsk: final.currentAsk,
+      };
+      if (final.preview) break;
+    }
+    assert.ok(final);
+    assert.ok(
+      final.intent === 'produce_preview' ||
+        final.slots.previewGenerated === true
     );
-    assert.equal(final.intent, 'produce_preview');
-    assert.ok(final.preview);
-    assert.equal(final.preview.kind, ARTIFACT_KIND);
-    assert.match(final.message, /Planning preview only\./i);
-    assert.equal(
-      (final.message.match(/Planning preview only/gi) || []).length,
-      1
-    );
-    assert.doesNotMatch(final.message, /This stays planning-only/i);
+    assert.ok(final.preview || final.slots.previewGenerated);
+    if (final.preview) {
+      assert.equal(final.preview.kind, ARTIFACT_KIND);
+      assert.match(final.message, /Planning preview only\./i);
+      assert.doesNotMatch(final.message, /This stays planning-only/i);
+    }
     assert.equal(containsForbiddenCampaignPlanningLanguage(final.message), false);
     assert.equal(
       containsForbiddenCampaignPlanningLanguage('I built a prospect list'),
       true
     );
+  });
+
+  it('Anchor path does not re-ask objective or segment after they are captured', () => {
+    const ctx = buildCampaignPlanningContext(
+      {
+        interview_state: {
+          initialGrowthDirection: {
+            businessName: 'Anchor Cleaning',
+            primaryArea: 'Greater Manchester',
+            towns: ['Bedford', 'Hooksett', 'Londonderry', 'Auburn', 'Goffstown'],
+          },
+          validationTarget: {
+            best_fit_subtype:
+              'Multi-family / HOA property managers with recurring building needs',
+            credibility_proof_needed:
+              'service checklist, photos/examples, clear response-time expectation',
+          },
+          firstGrowthPlanPreview: {
+            businessName: 'Anchor Cleaning',
+            primarySegmentDisplay: 'property managers',
+            secondarySegmentDisplay: 'professional offices',
+            primaryArea: 'Greater Manchester',
+            first_subtype_to_test:
+              'Multi-family / HOA property managers with recurring building needs',
+            credibility_proof_needed:
+              'service checklist, photos/examples, clear response-time expectation',
+          },
+        },
+      },
+      ANCHOR_BLUEPRINT
+    );
+
+    let state = {
+      step: 'opening',
+      answers: {},
+      slots: seedSlotsFromContext(ctx, null),
+    };
+    const openingReply = buildCampaignPlanningReply(
+      'Keep property managers as defined.',
+      state,
+      ctx
+    );
+    assert.equal(openingReply.currentAsk, 'campaignObjective');
+    assert.match(openingReply.message, /What should this first campaign prove/i);
+    assert.doesNotMatch(
+      openingReply.message,
+      /Confirm the first target segment/i
+    );
+
+    state = {
+      step: openingReply.step,
+      answers: openingReply.answers,
+      slots: openingReply.slots,
+      currentAsk: openingReply.currentAsk,
+    };
+
+    const multi = buildCampaignPlanningReply(
+      [
+        'Prove that multi-family / HOA property managers will request walkthroughs.',
+        'Inclusion: HOA and multi-family managers with recurring building needs in Greater Manchester.',
+        'Exclusion: national firms and price-only buyers.',
+      ].join(' '),
+      state,
+      ctx
+    );
+
+    assert.equal(isSlotSatisfied(multi.slots, 'campaignObjective'), true);
+    assert.equal(isSlotSatisfied(multi.slots, 'inclusionCriteria'), true);
+    assert.equal(isSlotSatisfied(multi.slots, 'exclusionCriteria'), true);
+    assert.equal(isSlotSatisfied(multi.slots, 'targetSegment'), true);
+    assert.doesNotMatch(multi.message, /What should this first campaign prove/i);
+    assert.doesNotMatch(
+      multi.message,
+      /Confirm the first target segment and subtype/i
+    );
+    assert.equal(multi.slots.previewGenerated, true);
+    assert.ok(multi.preview);
+    assert.equal(multi.preview.kind, ARTIFACT_KIND);
+    assert.ok(multi.criteriaPreview);
+    assert.equal(multi.criteriaPreview.kind, CRITERIA_ARTIFACT_KIND);
+    assert.equal(multi.criteriaPreview.title, CRITERIA_PREVIEW_TITLE);
+    assert.equal(multi.criteriaPreview.prospectListGenerated, false);
+    assert.equal(multi.criteriaPreview.outreachCopyGenerated, false);
+    assert.equal(multi.criteriaPreview.accountChangesMade, false);
+    assert.match(multi.message, /Prospect List Criteria Preview/i);
+    assert.equal(containsForbiddenCampaignPlanningLanguage(multi.message), false);
+
+    // After criteria preview, do not loop back to objective.
+    state = {
+      step: multi.step,
+      answers: multi.answers,
+      slots: multi.slots,
+      currentAsk: multi.currentAsk,
+      status: 'preview_ready',
+    };
+    const followUp = buildCampaignPlanningReply(
+      'Looks good',
+      state,
+      ctx
+    );
+    assert.doesNotMatch(followUp.message, /What should this first campaign prove/i);
+    assert.doesNotMatch(
+      followUp.message,
+      /Confirm the first target segment and subtype/i
+    );
+  });
+
+  it('defines required planning slots including preview flags', () => {
+    for (const key of [
+      'campaignObjective',
+      'targetSegment',
+      'targetSubtype',
+      'marketBound',
+      'campaignHypothesis',
+      'proofAssets',
+      'validationMetrics',
+      'inclusionCriteria',
+      'exclusionCriteria',
+      'approvalCheckpoints',
+      'previewGenerated',
+      'previewApproved',
+    ]) {
+      assert.ok(SLOT_KEYS.includes(key), `missing slot ${key}`);
+    }
+  });
+
+  it('approving First Campaign Plan Preview advances to prospect_list_criteria', () => {
+    const ctx = buildCampaignPlanningContext(
+      {
+        interview_state: {
+          initialGrowthDirection: {
+            businessName: 'Anchor Cleaning',
+            primaryArea: 'Greater Manchester',
+            towns: ['Bedford', 'Hooksett'],
+          },
+          firstGrowthPlanPreview: {
+            businessName: 'Anchor Cleaning',
+            primarySegmentDisplay: 'property managers',
+            secondarySegmentDisplay: 'professional offices',
+            primaryArea: 'Greater Manchester',
+            first_subtype_to_test:
+              'property managers overseeing offices and mixed-use buildings',
+          },
+        },
+      },
+      ANCHOR_BLUEPRINT
+    );
+
+    const answers = {
+      opening: { raw: 'Keep property managers as defined.', at: 't0' },
+      campaign_objective: {
+        raw: 'Prove that property managers will request walkthroughs.',
+        at: 't1',
+      },
+      target_segment: { raw: 'property managers as defined', at: 't2' },
+      market_bounds: { raw: 'Greater Manchester', at: 't3' },
+      proof_assets: {
+        raw: 'Checklist available; photos still needed.',
+        at: 't4',
+      },
+      hypothesis: {
+        raw:
+          'If we approach property managers in Greater Manchester with a checklist, we expect walkthrough requests.',
+        at: 't5',
+      },
+      validation_metrics: {
+        raw: 'Qualified replies and walkthroughs in 30 days.',
+        at: 't6',
+      },
+      approval_checkpoints: {
+        raw: 'Preview sign-off before list; copy review before launch.',
+        at: 't7',
+      },
+    };
+
+    const previewReply = buildCampaignPlanningReply(
+      answers.approval_checkpoints.raw,
+      {
+        step: 'approval_checkpoints',
+        answers: Object.fromEntries(
+          Object.entries(answers).filter(([k]) => k !== 'approval_checkpoints')
+        ),
+        slots: seedSlotsFromContext(ctx, {
+          campaignObjective: answers.campaign_objective.raw,
+          targetSegment: 'property managers',
+          marketBound: 'Greater Manchester',
+          proofAssets: answers.proof_assets.raw,
+          campaignHypothesis: answers.hypothesis.raw,
+          validationMetrics: answers.validation_metrics.raw,
+        }),
+        context: ctx,
+      },
+      ctx
+    );
+
+    assert.equal(previewReply.step, 'preview');
+    assert.ok(previewReply.preview);
+    assert.equal(previewReply.preview.status, 'draft');
+    assert.equal(previewReply.slots.previewGenerated, true);
+    assert.equal(previewReply.slots.previewApproved, false);
+    const draftPreview = previewReply.preview;
+
+    const approveReply = buildCampaignPlanningReply(
+      'Approve',
+      {
+        step: 'preview',
+        status: 'preview_ready',
+        answers: previewReply.answers,
+        slots: previewReply.slots,
+        currentAsk: 'previewApproved',
+        context: ctx,
+        firstCampaignPlanPreview: draftPreview,
+      },
+      ctx,
+      { priorPreview: draftPreview }
+    );
+
+    assert.equal(approveReply.step, PROSPECT_LIST_CRITERIA_STEP);
+    assert.equal(approveReply.previewApproved, true);
+    assert.equal(approveReply.slots.previewApproved, true);
+    assert.equal(approveReply.preview.status, 'approved');
+    assert.equal(approveReply.preview.kind, draftPreview.kind);
+    assert.equal(
+      approveReply.preview.campaignObjective,
+      draftPreview.campaignObjective
+    );
+    assert.match(
+      approveReply.message,
+      /Before building a prospect list, define what should qualify or disqualify a property manager for this first test\./
+    );
+    assert.doesNotMatch(
+      approveReply.message,
+      /What should this first campaign prove/
+    );
+    assert.doesNotMatch(
+      approveReply.message,
+      /Confirm the first target segment/
+    );
+    assert.doesNotMatch(approveReply.message, /Confirm the market bounds/);
+    assert.doesNotMatch(approveReply.message, /proof assets are already available/i);
+    assert.doesNotMatch(approveReply.message, /campaign hypothesis/i);
+    assert.doesNotMatch(approveReply.message, /approval checkpoints should block/i);
+    assert.equal(approveReply.intent, 'preview_approved');
+    // Approved preview is not regenerated as a new draft artifact.
+    assert.notEqual(approveReply.preview.status, 'draft');
   });
 });
 
@@ -898,9 +1166,6 @@ describe('First Campaign Planning session APIs', () => {
     const answers = [
       'Keep property managers as defined.',
       'Prove PMs will request walkthroughs.',
-      'Property managers — multi-family HOA',
-      'Greater Manchester',
-      'Checklist ready; need one reference',
       'If we approach HOA PMs in Greater Manchester with a checklist, we expect walkthrough requests.',
       '3 conversations; 1 walkthrough',
       'Preview approval; proof ready; no list until signed off',
@@ -908,6 +1173,7 @@ describe('First Campaign Planning session APIs', () => {
     let last = null;
     for (const msg of answers) {
       last = await postCampaignPlanningMessage('int-campaign-1', msg, { store });
+      if (last.firstCampaignPlanPreview) break;
     }
     assert.ok(last);
     assert.equal(last.status, 'CAMPAIGN_PLANNING');
@@ -918,12 +1184,119 @@ describe('First Campaign Planning session APIs', () => {
     assert.equal(last.firstCampaignPlanPreview.outreachCopyGenerated, false);
     assert.equal(last.firstCampaignPlanPreview.accountChangesMade, false);
     assert.equal(last.campaignPlanning.status, 'preview_ready');
+    assert.equal(last.campaignPlanning.slots.previewGenerated, true);
 
     const session = await store.getSession('int-campaign-1');
     assert.ok(session.interview_state.campaignPlanning);
+    assert.ok(session.interview_state.campaignPlanning.slots);
     assert.ok(session.interview_state.firstCampaignPlanPreview);
     // No CRM / prospect writes — only interview_state keys.
     assert.equal(session.status, 'APPROVED');
+  });
+
+  it('persists preview approval and advances session to prospect_list_criteria', async () => {
+    const store = createMemoryStore();
+    await seedApprovedSession(store);
+    await startCampaignPlanningConversation('int-campaign-1', { store });
+
+    const answers = [
+      'Keep property managers as defined.',
+      'Prove PMs will request walkthroughs.',
+      'If we approach HOA PMs in Greater Manchester with a checklist, we expect walkthrough requests.',
+      '3 conversations; 1 walkthrough',
+      'Preview approval; proof ready; no list until signed off',
+    ];
+    let previewMsg = null;
+    for (const msg of answers) {
+      previewMsg = await postCampaignPlanningMessage('int-campaign-1', msg, {
+        store,
+      });
+      if (previewMsg.firstCampaignPlanPreview) break;
+    }
+    assert.ok(previewMsg && previewMsg.firstCampaignPlanPreview);
+    const draftObjective =
+      previewMsg.firstCampaignPlanPreview.campaignObjective;
+
+    const approved = await postCampaignPlanningMessage(
+      'int-campaign-1',
+      'Approve',
+      { store }
+    );
+
+    assert.equal(approved.campaignPlanning.step, PROSPECT_LIST_CRITERIA_STEP);
+    assert.equal(approved.campaignPlanning.previewApproved, true);
+    assert.equal(approved.campaignPlanning.slots.previewApproved, true);
+    assert.equal(approved.firstCampaignPlanPreview.status, 'approved');
+    assert.equal(
+      approved.firstCampaignPlanPreview.campaignObjective,
+      draftObjective
+    );
+    assert.match(
+      approved.message,
+      /Before building a prospect list, define what should qualify or disqualify a property manager for this first test\./
+    );
+    assert.doesNotMatch(
+      approved.message,
+      /What should this first campaign prove/
+    );
+
+    const session = await store.getSession('int-campaign-1');
+    assert.equal(
+      session.interview_state.firstCampaignPlanPreview.status,
+      'approved'
+    );
+    assert.equal(
+      session.interview_state.campaignPlanning.previewApproved,
+      true
+    );
+    assert.equal(
+      session.interview_state.campaignPlanning.step,
+      PROSPECT_LIST_CRITERIA_STEP
+    );
+  });
+
+  it('fills objective + criteria in one message and returns criteria preview', async () => {
+    const store = createMemoryStore();
+    await seedApprovedSession(store);
+    await startCampaignPlanningConversation('int-campaign-1', { store });
+    await postCampaignPlanningMessage(
+      'int-campaign-1',
+      'Keep property managers as defined.',
+      { store }
+    );
+    const last = await postCampaignPlanningMessage(
+      'int-campaign-1',
+      [
+        'Prove that multi-family property managers will book walkthroughs.',
+        'Inclusion: local HOA / multi-family managers with recurring needs.',
+        'Exclusion: national property firms and lowest-price shoppers.',
+      ].join(' '),
+      { store }
+    );
+    assert.ok(last.firstCampaignPlanPreview);
+    assert.ok(last.prospectListCriteriaPreview);
+    assert.equal(last.prospectListCriteriaPreview.kind, CRITERIA_ARTIFACT_KIND);
+    assert.equal(last.prospectListCriteriaPreview.prospectListGenerated, false);
+    assert.equal(last.prospectListCriteriaPreview.outreachCopyGenerated, false);
+    assert.match(last.message, /Prospect List Criteria Preview/i);
+    assert.doesNotMatch(last.message, /What should this first campaign prove/i);
+    assert.doesNotMatch(
+      last.message,
+      /Confirm the first target segment and subtype/i
+    );
+
+    const session = await store.getSession('int-campaign-1');
+    assert.ok(session.interview_state.prospectListCriteriaPreview);
+    assert.equal(
+      session.interview_state.campaignPlanning.slots.previewGenerated,
+      true
+    );
+    assert.ok(
+      session.interview_state.campaignPlanning.slots.inclusionCriteria
+    );
+    assert.ok(
+      session.interview_state.campaignPlanning.slots.exclusionCriteria
+    );
   });
 
   it('rejects unapproved sessions', async () => {
@@ -954,11 +1327,13 @@ describe('First Campaign Planning UI markers', () => {
     assert.match(uiSource, /\/campaign\/message/);
     assert.match(uiSource, /campaign_planning/);
     assert.match(uiSource, /renderFirstCampaignPlanPreview/);
+    assert.match(uiSource, /renderProspectListCriteriaPreview/);
     assert.match(uiSource, /First Campaign Plan Preview/);
     assert.match(uiSource, /campaignHypothesis/);
     assert.match(uiSource, /approvalCheckpointsBeforeList/);
     assert.match(uiSource, /coreValidationQuestion/);
     assert.match(uiSource, /Structured fields only/);
+    assert.match(uiSource, /Prospect List Criteria Preview/);
     assert.match(uiSource, /Campaign hypothesis/);
     assert.match(uiSource, /Risks and cautions/);
     assert.match(uiSource, /Available or close to ready/);

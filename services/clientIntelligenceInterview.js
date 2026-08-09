@@ -46,6 +46,7 @@ const {
   buildCampaignPlanningContext,
   buildCampaignPlanningOpening,
   buildCampaignPlanningReply,
+  seedSlotsFromContext,
 } = require('./clientIntelligenceCampaignPlanning');
 
 const SESSION_STATUSES = Object.freeze([
@@ -6567,11 +6568,24 @@ async function startCampaignPlanningConversation(sessionId, opts = {}) {
     });
   }
 
+  const slots = seedSlotsFromContext(
+    context,
+    (prior && prior.slots) || null
+  );
+  if (
+    session.interview_state &&
+    session.interview_state.firstCampaignPlanPreview
+  ) {
+    slots.previewGenerated = true;
+  }
+
   const campaignPlanning = {
     status: (prior && prior.status) || 'active',
     startedAt: (prior && prior.startedAt) || new Date().toISOString(),
     step: (prior && prior.step) || 'opening',
     answers: (prior && prior.answers) || {},
+    slots,
+    currentAsk: (prior && prior.currentAsk) || 'opening',
     context: {
       ...(prior && prior.context ? prior.context : {}),
       ...context,
@@ -6586,6 +6600,10 @@ async function startCampaignPlanningConversation(sessionId, opts = {}) {
       firstCampaignPlanPreview:
         (session.interview_state &&
           session.interview_state.firstCampaignPlanPreview) ||
+        null,
+      prospectListCriteriaPreview:
+        (session.interview_state &&
+          session.interview_state.prospectListCriteriaPreview) ||
         null,
     },
   });
@@ -6606,6 +6624,10 @@ async function startCampaignPlanningConversation(sessionId, opts = {}) {
     firstCampaignPlanPreview:
       (session.interview_state &&
         session.interview_state.firstCampaignPlanPreview) ||
+      null,
+    prospectListCriteriaPreview:
+      (session.interview_state &&
+        session.interview_state.prospectListCriteriaPreview) ||
       null,
     resumed,
   };
@@ -6660,13 +6682,22 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       growthDirection,
     });
 
+  const priorPreview =
+    (session.interview_state &&
+      session.interview_state.firstCampaignPlanPreview) ||
+    null;
+
   const reply = buildCampaignPlanningReply(
     text,
-    campaignPlanning,
+    {
+      ...campaignPlanning,
+      firstCampaignPlanPreview: priorPreview,
+    },
     context,
     {
       blueprintId: blueprint && blueprint.id,
       blueprintVersion: blueprint && blueprint.version,
+      priorPreview,
     }
   );
 
@@ -6677,6 +6708,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       message: text,
       at: new Date().toISOString(),
       step: campaignPlanning.step,
+      currentAsk: campaignPlanning.currentAsk || null,
     },
     {
       speaker: 'assistant',
@@ -6684,15 +6716,51 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       at: new Date().toISOString(),
       step: reply.step,
       intent: reply.intent,
+      currentAsk: reply.currentAsk || null,
     },
   ];
 
-  const nextStatus = reply.preview ? 'preview_ready' : 'active';
+  const previewApproved = Boolean(
+    reply.previewApproved ||
+      (reply.slots && reply.slots.previewApproved) ||
+      campaignPlanning.previewApproved ||
+      (priorPreview && priorPreview.status === 'approved')
+  );
+
+  let nextPreview =
+    reply.preview ||
+    (previewApproved && priorPreview
+      ? { ...priorPreview, status: 'approved' }
+      : null);
+  if (nextPreview && previewApproved && nextPreview.status !== 'approved') {
+    nextPreview = {
+      ...nextPreview,
+      status: 'approved',
+      approvedAt: nextPreview.approvedAt || new Date().toISOString(),
+    };
+  }
+
+  const nextStatus =
+    reply.criteriaPreview ||
+    reply.preview ||
+    reply.slots?.previewGenerated ||
+    previewApproved
+      ? 'preview_ready'
+      : 'active';
+  const nextSlots = {
+    ...((reply.slots || campaignPlanning.slots || {})),
+    ...(previewApproved
+      ? { previewApproved: true, previewGenerated: true }
+      : {}),
+  };
   const nextPlanning = {
     ...campaignPlanning,
     status: nextStatus,
     step: reply.step,
     answers: reply.answers,
+    slots: nextSlots,
+    currentAsk: reply.currentAsk || null,
+    previewApproved,
     context,
     turns,
   };
@@ -6701,7 +6769,10 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     interview_state: {
       ...session.interview_state,
       campaignPlanning: nextPlanning,
-      ...(reply.preview ? { firstCampaignPlanPreview: reply.preview } : {}),
+      ...(nextPreview ? { firstCampaignPlanPreview: nextPreview } : {}),
+      ...(reply.criteriaPreview
+        ? { prospectListCriteriaPreview: reply.criteriaPreview }
+        : {}),
     },
   });
 
@@ -6714,9 +6785,14 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     blueprint: publicBlueprint(blueprint),
     campaignPlanning: nextPlanning,
     firstCampaignPlanPreview:
-      reply.preview ||
+      nextPreview ||
       (session.interview_state &&
         session.interview_state.firstCampaignPlanPreview) ||
+      null,
+    prospectListCriteriaPreview:
+      reply.criteriaPreview ||
+      (session.interview_state &&
+        session.interview_state.prospectListCriteriaPreview) ||
       null,
   };
 }
