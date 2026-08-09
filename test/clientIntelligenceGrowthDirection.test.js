@@ -16,6 +16,8 @@ const {
   humanizeSegmentLabel,
   segmentCopula,
   buildGrowthInfrastructureHandoffContext,
+  cleanAvoidPhrase,
+  composeAvoidSentence,
   PREFERRED_EARLY_SIGNALS_PROPERTY_MANAGERS,
   DIRECTIONAL_LABEL,
   SEGMENT_RANKING_KIND,
@@ -169,7 +171,19 @@ describe('Initial Growth Direction artifact', () => {
       gd.paragraphs[1],
       /follows directly from the approved Blueprint:/i
     );
-    assert.match(gd.paragraphs[1], /directional read, not market validation/i);
+    assert.doesNotMatch(
+      gd.paragraphs[1],
+      /directional read, not market validation/i
+    );
+    const disclaimerHits = gd.paragraphs
+      .concat(gd.disclaimer || '')
+      .join('\n')
+      .match(/This is a directional read, not market validation\./g);
+    assert.equal(
+      (disclaimerHits || []).length,
+      1,
+      'directional disclaimer must appear exactly once per artifact'
+    );
 
     const segmentsPara = gd.paragraphs[2];
     assert.match(segmentsPara, /first segments worth comparing are/i);
@@ -206,6 +220,67 @@ describe('Initial Growth Direction artifact', () => {
     assert.match(opening, /approved Blueprint/i);
     assert.match(opening, /Directional first focus/i);
     assert.doesNotMatch(opening, /here is your prospect list|launching campaign/i);
+  });
+
+  it('Anchor avoid sentence strips wrapper bleed for clean and pre-wrapped inputs', () => {
+    const expected =
+      'The Blueprint also clarifies who Anchor should avoid: customers who only care about the lowest price.';
+    const variants = [
+      'customers who only care about the lowest price',
+      'Anchor should avoid customers who only care about the lowest price',
+      'The business prefers to avoid customers who only care about the lowest price',
+      'customers who The business prefers to avoid Anchor should avoid customers who only care about the lowest price',
+    ];
+
+    for (const avoidSummary of variants) {
+      assert.equal(
+        cleanAvoidPhrase(avoidSummary),
+        'customers who only care about the lowest price',
+        `cleanAvoidPhrase failed for: ${avoidSummary}`
+      );
+
+      const sentence = composeAvoidSentence('Anchor Cleaning', avoidSummary);
+      assert.match(sentence, new RegExp(`^${expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+      assert.doesNotMatch(sentence, /prefers to avoid/i);
+      assert.doesNotMatch(
+        sentence,
+        /should avoid:\s*(?:Anchor|The business|customers who The business)/i
+      );
+      assert.equal(
+        (sentence.match(/should avoid/gi) || []).length,
+        1,
+        `wrapper "should avoid" must appear once for: ${avoidSummary}`
+      );
+      assert.equal(
+        (sentence.match(/customers who/gi) || []).length,
+        1,
+        `"customers who" must not be duplicated for: ${avoidSummary}`
+      );
+
+      const bp = {
+        ...ANCHOR_BLUEPRINT,
+        sections: {
+          ...ANCHOR_BLUEPRINT.sections,
+          avoidCustomers: {
+            summary: avoidSummary,
+            confidence: 0.8,
+            evidenceIds: [],
+            unknowns: [],
+          },
+        },
+      };
+      const gd = buildInitialGrowthDirection(bp, {
+        normalizedFacts: { business_name: 'Anchor Cleaning' },
+      });
+      const avoidPara = gd.paragraphs.find((p) => /should avoid/i.test(p));
+      assert.ok(avoidPara);
+      assert.match(avoidPara, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      assert.doesNotMatch(avoidPara, /prefers to avoid/i);
+      assert.doesNotMatch(
+        avoidPara,
+        /customers who The business|avoid Anchor should avoid/i
+      );
+    }
   });
 });
 
