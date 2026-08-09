@@ -353,7 +353,11 @@
       }
     }
 
-    return html;
+    // Hard guarantee: left panel never includes compact/simple active-task cards.
+    return html.replace(
+      /<(?:div|article)\b[^>]*data-role="simple-task"[^>]*>[\s\S]*?<\/(?:div|article)>/gi,
+      ''
+    );
   }
 
   function countMarkers(html, marker) {

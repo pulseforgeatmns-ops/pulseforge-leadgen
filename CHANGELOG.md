@@ -6,6 +6,10 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- Growth Workspace guidance clearance: sticky footer no longer covers expanded task guidance
+  - Larger bottom scroll padding (`--gw-sticky-footer-clearance`)
+  - Chat log hard-hidden + cleared on Open Task Guidance so no simple card sits under guidance
+  - Left panel strips any `data-role="simple-task"` nodes; active-task card count stays at 1
 - Growth Workspace expanded task guidance: exactly one active-task card; scroll above sticky footer
   - Removed duplicate simple task summary bubble under expanded guidance
   - Left nav becomes the scroll region with bottom padding so the footer does not cover guidance
