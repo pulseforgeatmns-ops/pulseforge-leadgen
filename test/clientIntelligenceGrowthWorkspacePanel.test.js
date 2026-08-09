@@ -37,6 +37,18 @@ const DOMAIN_CONNECTED_TASK = Object.freeze({
   resumeAction: 'setup_task',
 });
 
+const DOMAIN_OWNED_TASK = Object.freeze({
+  id: 'setup:domain_dns:domain_owned',
+  itemId: 'domain_owned',
+  type: 'setup',
+  title: 'Domain owned',
+  description: 'Confirm domain registrar ownership.',
+  owner: 'client_required',
+  priority: 'high',
+  estimatedMinutes: 3,
+  resumeAction: 'setup_task',
+});
+
 describe('Growth Workspace left panel', () => {
   it('formats readiness owner labels for operators', () => {
     assert.equal(formatOwnerLabel('client_required'), 'Client/operator');
@@ -245,6 +257,59 @@ describe('Growth Workspace left panel', () => {
     assert.doesNotMatch(
       guidance.whatToConfirm.join(' '),
       /owns replies/
+    );
+  });
+
+  it('domain owned guidance covers registrar access, not lead-reply language', () => {
+    const html = taskGuidanceCardHtml(
+      { ...DOMAIN_OWNED_TASK },
+      { businessName: 'Anchor Cleaning' }
+    );
+    assert.equal(analyzeLeftPanelHtml(html).taskGuidanceCards, 1);
+    assert.match(html, /Domain owned/);
+    assert.match(html, /Owner · Client\/operator/);
+    assert.match(
+      html,
+      /Before outreach, Anchor needs to know who controls the domain/
+    );
+    assert.match(
+      html,
+      /Confirm which registrar or platform owns the domain, and who has access to manage it\./
+    );
+    assert.match(html, /The domain is registered and active\./);
+    assert.match(html, /Anchor knows where the domain is managed\./);
+    assert.match(
+      html,
+      /The owner\/operator knows who can approve DNS changes\./
+    );
+    assert.match(
+      html,
+      /The domain is not expired or at risk of renewal issues\./
+    );
+    assert.match(html, /No login credentials are shared inside Max\./);
+    assert.match(html, /Domain ownership and access path are confirmed\./);
+    assert.doesNotMatch(html, /The person who owns replies knows how this works/);
+
+    const guidance = resolveTaskGuidance(DOMAIN_OWNED_TASK, 'Anchor Cleaning');
+    assert.equal(
+      guidance.whyThisMatters,
+      'Before outreach, Anchor needs to know who controls the domain. Domain ownership is what lets the business connect the website, set up branded email, verify tools, and protect the brand.'
+    );
+    assert.equal(
+      guidance.whatToDo,
+      'Confirm which registrar or platform owns the domain, and who has access to manage it.'
+    );
+    assert.deepEqual(guidance.whatToConfirm, [
+      'The domain is registered and active.',
+      'Anchor knows where the domain is managed.',
+      'The owner/operator knows who can approve DNS changes.',
+      'The domain is not expired or at risk of renewal issues.',
+      'No login credentials are shared inside Max.',
+    ]);
+    assert.equal(guidance.whoOwnsIt, 'Client/operator');
+    assert.equal(
+      guidance.completeWhen,
+      'Domain ownership and access path are confirmed.'
     );
   });
 

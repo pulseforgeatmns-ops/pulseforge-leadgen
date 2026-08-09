@@ -110,6 +110,27 @@
     };
   }
 
+  function domainOwnedGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Before outreach, ' +
+        name +
+        ' needs to know who controls the domain. Domain ownership is what lets the business connect the website, set up branded email, verify tools, and protect the brand.',
+      whatToDo:
+        'Confirm which registrar or platform owns the domain, and who has access to manage it.',
+      whatToConfirm: [
+        'The domain is registered and active.',
+        name + ' knows where the domain is managed.',
+        'The owner/operator knows who can approve DNS changes.',
+        'The domain is not expired or at risk of renewal issues.',
+        'No login credentials are shared inside Max.',
+      ],
+      whoOwnsIt: 'Client/operator',
+      completeWhen: 'Domain ownership and access path are confirmed.',
+    };
+  }
+
   function defaultSetupGuidance(task, businessName) {
     const name = shortBusinessName(businessName);
     const title = (task && task.title) || 'this setup item';
@@ -156,6 +177,9 @@
     }
     if (itemId === 'domain_connected' || /:domain_connected$/.test(id)) {
       return domainConnectedGuidance(businessName);
+    }
+    if (itemId === 'domain_owned' || /:domain_owned$/.test(id)) {
+      return domainOwnedGuidance(businessName);
     }
     if (task.type === 'setup' || itemId || /^setup:/.test(id)) {
       return defaultSetupGuidance(task, businessName);
@@ -451,6 +475,7 @@
     resolveTaskGuidance,
     brandedEmailGuidance,
     domainConnectedGuidance,
+    domainOwnedGuidance,
     taskGuidanceCardHtml,
     renderGrowthWorkspaceLeftPanel,
     analyzeLeftPanelHtml,
