@@ -131,6 +131,30 @@
     };
   }
 
+  function spfDkimDmarcGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Before any serious outbound outreach, ' +
+        name +
+        "'s domain should be authenticated so emails are more likely to reach inboxes and less likely to look suspicious. SPF, DKIM, and DMARC help receiving mail systems trust that messages from " +
+        name +
+        ' are legitimate.',
+      whatToDo:
+        'Check whether SPF, DKIM, and DMARC records exist for the sending domain. If records are missing or incorrect, document the DNS changes needed for approval.',
+      whatToConfirm: [
+        'SPF is present for the domain.',
+        'DKIM is enabled for the email provider.',
+        'DMARC is present, even if starting with a monitoring policy.',
+        'The branded mailbox can send and receive successfully.',
+        'No DNS changes are made without explicit approval.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      completeWhen:
+        'SPF, DKIM, and DMARC are confirmed or the required DNS changes are documented for approval.',
+    };
+  }
+
   function defaultSetupGuidance(task, businessName) {
     const name = shortBusinessName(businessName);
     const title = (task && task.title) || 'this setup item';
@@ -180,6 +204,9 @@
     }
     if (itemId === 'domain_owned' || /:domain_owned$/.test(id)) {
       return domainOwnedGuidance(businessName);
+    }
+    if (itemId === 'spf_dkim_dmarc' || /:spf_dkim_dmarc$/.test(id)) {
+      return spfDkimDmarcGuidance(businessName);
     }
     if (task.type === 'setup' || itemId || /^setup:/.test(id)) {
       return defaultSetupGuidance(task, businessName);
@@ -476,6 +503,7 @@
     brandedEmailGuidance,
     domainConnectedGuidance,
     domainOwnedGuidance,
+    spfDkimDmarcGuidance,
     taskGuidanceCardHtml,
     renderGrowthWorkspaceLeftPanel,
     analyzeLeftPanelHtml,

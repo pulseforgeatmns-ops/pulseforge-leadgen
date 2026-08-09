@@ -49,6 +49,18 @@ const DOMAIN_OWNED_TASK = Object.freeze({
   resumeAction: 'setup_task',
 });
 
+const SPF_DKIM_DMARC_TASK = Object.freeze({
+  id: 'setup:domain_dns:spf_dkim_dmarc',
+  itemId: 'spf_dkim_dmarc',
+  type: 'setup',
+  title: 'SPF/DKIM/DMARC present',
+  description: 'Add email authentication records at the DNS provider.',
+  owner: 'operator_guided',
+  priority: 'high',
+  estimatedMinutes: 3,
+  resumeAction: 'setup_task',
+});
+
 describe('Growth Workspace left panel', () => {
   it('formats readiness owner labels for operators', () => {
     assert.equal(formatOwnerLabel('client_required'), 'Client/operator');
@@ -310,6 +322,66 @@ describe('Growth Workspace left panel', () => {
     assert.equal(
       guidance.completeWhen,
       'Domain ownership and access path are confirmed.'
+    );
+  });
+
+  it('SPF/DKIM/DMARC guidance covers email auth, not generic capture copy', () => {
+    const html = taskGuidanceCardHtml(
+      { ...SPF_DKIM_DMARC_TASK },
+      { businessName: 'Anchor Cleaning' }
+    );
+    assert.equal(analyzeLeftPanelHtml(html).taskGuidanceCards, 1);
+    assert.match(html, /SPF\/DKIM\/DMARC present/);
+    assert.match(html, /Owner · Operator guided/);
+    assert.match(
+      html,
+      /Before any serious outbound outreach, Anchor&#39;s domain should be authenticated/
+    );
+    assert.match(
+      html,
+      /Check whether SPF, DKIM, and DMARC records exist for the sending domain/
+    );
+    assert.match(html, /SPF is present for the domain\./);
+    assert.match(html, /DKIM is enabled for the email provider\./);
+    assert.match(
+      html,
+      /DMARC is present, even if starting with a monitoring policy\./
+    );
+    assert.match(
+      html,
+      /The branded mailbox can send and receive successfully\./
+    );
+    assert.match(html, /No DNS changes are made without explicit approval\./);
+    assert.match(
+      html,
+      /SPF, DKIM, and DMARC are confirmed or the required DNS changes are documented for approval\./
+    );
+    assert.doesNotMatch(html, /reliable capture and follow-up/);
+    assert.doesNotMatch(html, /The person who owns replies knows how this works/);
+
+    const guidance = resolveTaskGuidance(
+      SPF_DKIM_DMARC_TASK,
+      'Anchor Cleaning'
+    );
+    assert.equal(
+      guidance.whyThisMatters,
+      "Before any serious outbound outreach, Anchor's domain should be authenticated so emails are more likely to reach inboxes and less likely to look suspicious. SPF, DKIM, and DMARC help receiving mail systems trust that messages from Anchor are legitimate."
+    );
+    assert.equal(
+      guidance.whatToDo,
+      'Check whether SPF, DKIM, and DMARC records exist for the sending domain. If records are missing or incorrect, document the DNS changes needed for approval.'
+    );
+    assert.deepEqual(guidance.whatToConfirm, [
+      'SPF is present for the domain.',
+      'DKIM is enabled for the email provider.',
+      'DMARC is present, even if starting with a monitoring policy.',
+      'The branded mailbox can send and receive successfully.',
+      'No DNS changes are made without explicit approval.',
+    ]);
+    assert.equal(guidance.whoOwnsIt, 'Operator guided');
+    assert.equal(
+      guidance.completeWhen,
+      'SPF, DKIM, and DMARC are confirmed or the required DNS changes are documented for approval.'
     );
   });
 
