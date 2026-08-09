@@ -760,6 +760,24 @@
     }
     .previous-plans summary::-webkit-details-marker { display: none; }
     .previous-plans .session-list { margin-top: 0.65rem; }
+    .gw-left-section { margin: 0; }
+    .gw-section-label {
+      font-size: 0.78rem;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      color: var(--cie-muted);
+    }
+    #savedSessions.workspace-left-nav {
+      flex: 0 1 auto;
+      max-height: 48%;
+      overflow-y: auto;
+      padding: 0.75rem 1.15rem 0.35rem;
+      border-bottom: 1px solid var(--cie-border);
+      margin-top: 0;
+    }
+    #savedSessions .task-guidance-card {
+      margin-top: 0.15rem;
+    }
     .plan-progress-label {
       display: flex;
       justify-content: space-between;
@@ -849,7 +867,11 @@
   </div>
   <div class="error" id="errorBox" hidden></div>
 
+  <script src="/shared/growth-workspace-panel.js"></script>
   <script>
+    const GrowthWorkspacePanel =
+      (typeof window !== 'undefined' && window.PulseforgeGrowthWorkspacePanel) || {};
+
     const SECTION_TITLES = {
       identity: 'Identity',
       services: 'Services',
@@ -902,6 +924,7 @@
       isSample: false,
       savedSessions: [],
       fixturesAllowed: false,
+      taskGuidanceOpen: false,
     };
 
     const els = {
@@ -1219,6 +1242,18 @@
       );
     }
 
+    function formatOwnerLabel(owner) {
+      if (GrowthWorkspacePanel.formatOwnerLabel) {
+        return GrowthWorkspacePanel.formatOwnerLabel(owner);
+      }
+      const labels = {
+        client_required: 'Client/operator',
+        operator_guided: 'Operator guided',
+        max_can_check: 'Max can check',
+      };
+      return labels[owner] || String(owner || '');
+    }
+
     function renderGapList(items, emptyLabel) {
       const list = (items || []).slice(0, 8);
       if (!list.length) return '<p class="blueprint-empty">' + escapeHtml(emptyLabel) + '</p>';
@@ -1228,7 +1263,8 @@
           '<li><strong>' + escapeHtml(g.areaLabel || '') + ':</strong> ' +
           escapeHtml(g.label || '') +
           ' <span class="conf-pct">(' + escapeHtml(g.statusLabel || g.status || 'needs verification') +
-          ' · ' + escapeHtml(g.owner || '') + ')</span></li>'
+          (g.owner ? ' · ' + escapeHtml(formatOwnerLabel(g.owner)) : '') +
+          ')</span></li>'
         ).join('') +
         '</ul>'
       );
@@ -1244,7 +1280,7 @@
             '<li>' + escapeHtml(String(s.order || '') + '. ' + (s.label || '')) +
             ' — ' + escapeHtml(s.action || '') +
             ' <span class="conf-pct">(' + escapeHtml(s.statusLabel || s.status || '') +
-            (s.owner ? ' · ' + escapeHtml(s.owner) : '') + ')</span></li>'
+            (s.owner ? ' · ' + escapeHtml(formatOwnerLabel(s.owner)) : '') + ')</span></li>'
           ).join('') +
           '</ol>'
         : '<p class="blueprint-empty">Answer more questions to build the setup sequence.</p>';
@@ -1351,7 +1387,9 @@
       }
       els.operatorControls.hidden = phase !== 'welcome';
       if (els.savedSessions) {
-        els.savedSessions.hidden = phase !== 'welcome';
+        const showNav = phase === 'welcome' || phase === 'growth_workspace';
+        els.savedSessions.hidden = !showNav;
+        els.savedSessions.classList.toggle('workspace-left-nav', phase === 'growth_workspace');
       }
       if (els.newInterviewBtn) {
         els.newInterviewBtn.hidden = phase !== 'welcome';
@@ -1399,6 +1437,10 @@
         setGrowthPreviewActionsVisible(false);
         if (els.workspaceTabs) els.workspaceTabs.hidden = false;
         syncWorkspaceActions(state.growthPlan);
+        if (els.savedSessions) {
+          els.savedSessions.hidden = false;
+          els.savedSessions.classList.add('workspace-left-nav');
+        }
       } else if (phase === 'growth') {
         setComposerEnabled(true);
         els.chatPanelTitle.textContent = 'Growth Conversation';
@@ -1573,6 +1615,9 @@
     }
 
     function sessionCardHtml(s, { primary } = {}) {
+      if (GrowthWorkspacePanel.planCardHtml) {
+        return GrowthWorkspacePanel.planCardHtml(s, { primary: Boolean(primary) });
+      }
       const id = s.sessionId || s.interviewId;
       const sample = s.isSample
         ? '<span class="sample-badge">Sample / Dev</span>'
@@ -1624,16 +1669,124 @@
       );
     }
 
+    function currentSessionFromList(list) {
+      const sessions = Array.isArray(list) ? list : [];
+      if (!sessions.length) return null;
+      if (!state.interviewId) return sessions[0];
+      const match = sessions.find((s) => {
+        const id = s.sessionId || s.interviewId;
+        return String(id) === String(state.interviewId);
+      });
+      return match || sessions[0];
+    }
+
+    function renderWorkspaceLeftNav() {
+      if (!els.savedSessions) return;
+      const list = Array.isArray(state.savedSessions) ? state.savedSessions : [];
+      const plan = state.growthPlan;
+      let current = currentSessionFromList(list);
+      if (!current && plan) {
+        current = {
+          sessionId: state.interviewId || plan.sessionId,
+          interviewId: state.interviewId || plan.sessionId,
+          businessName: plan.businessName,
+          growthPlan: plan,
+          resumeTarget:
+            plan.status === 'complete' ? 'growth_complete' : 'growth_workspace',
+          isSample: state.isSample,
+        };
+      }
+      const currentId =
+        (current && (current.sessionId || current.interviewId)) ||
+        state.interviewId ||
+        null;
+      const previous = list.filter((s) => {
+        const id = s.sessionId || s.interviewId;
+        return currentId ? String(id) !== String(currentId) : false;
+      });
+      const task = plan && plan.currentTask ? plan.currentTask : null;
+      const currentForRender =
+        current && plan
+          ? Object.assign({}, current, {
+              growthPlan: Object.assign({}, current.growthPlan || {}, {
+                percentComplete: plan.percentComplete,
+                status: plan.status,
+                currentTask: task,
+              }),
+            })
+          : current;
+
+      if (!currentForRender && !previous.length) {
+        els.savedSessions.innerHTML = '';
+        els.savedSessions.hidden = true;
+        return;
+      }
+
+      if (GrowthWorkspacePanel.renderGrowthWorkspaceLeftPanel) {
+        els.savedSessions.innerHTML =
+          GrowthWorkspacePanel.renderGrowthWorkspaceLeftPanel({
+            currentSession: currentForRender,
+            previousSessions: previous,
+            currentSessionId: currentId,
+            currentTask: task,
+            guidanceOpen: Boolean(state.taskGuidanceOpen),
+            collapsePrevious: true,
+          });
+      } else {
+        let html =
+          '<p class="blueprint-empty" style="margin:0 0 0.25rem">Current Growth Plan</p>' +
+          (currentForRender
+            ? sessionCardHtml(currentForRender, { primary: true })
+            : '');
+        if (state.taskGuidanceOpen && task) {
+          html +=
+            '<div class="current-task-card task-guidance-card" data-role="task-guidance">' +
+            '<p class="kicker">Current Task Guidance</p>' +
+            '<h3>' +
+            escapeHtml(task.title || 'Next step') +
+            '</h3>' +
+            '<p class="task-meta">' +
+            escapeHtml(task.description || '') +
+            '<br>Owner · ' +
+            escapeHtml(formatOwnerLabel(task.owner || 'operator_guided')) +
+            '</p></div>';
+        }
+        if (previous.length) {
+          html +=
+            '<details class="previous-plans">' +
+            '<summary>Previous Plans (' +
+            previous.length +
+            ')</summary>' +
+            '<div class="session-list">' +
+            previous.map((s) => sessionCardHtml(s, { primary: false })).join('') +
+            '</div></details>';
+        }
+        els.savedSessions.innerHTML = html;
+      }
+      els.savedSessions.hidden = false;
+      els.savedSessions.classList.add('workspace-left-nav');
+    }
+
     function renderSavedSessions(sessions) {
       if (!els.savedSessions) return;
       const list = Array.isArray(sessions) ? sessions : [];
       state.savedSessions = list;
+      if (state.phase === 'growth_workspace') {
+        if (!list.length && !state.growthPlan) {
+          els.savedSessions.innerHTML = '';
+          els.savedSessions.hidden = true;
+          return;
+        }
+        renderWorkspaceLeftNav();
+        return;
+      }
       if (!list.length) {
         els.savedSessions.innerHTML = '';
         els.savedSessions.hidden = true;
         return;
       }
       els.savedSessions.hidden = state.phase !== 'welcome';
+      els.savedSessions.classList.remove('workspace-left-nav');
       const current = list[0];
       const previous = list.slice(1);
       let html =
@@ -1912,11 +2065,15 @@
       state.growthPlan = data.growthPlan || state.growthPlan;
       state.growthConversationActive = false;
       state.readinessConversationActive = false;
+      state.taskGuidanceOpen = false;
       setPhase('growth_workspace');
       state.workspaceTab = 'overview';
       if (els.workspaceTabs) els.workspaceTabs.hidden = false;
       setWorkspaceTab('overview');
       syncWorkspaceActions(state.growthPlan);
+      renderWorkspaceLeftNav();
+      // Refresh session list so Previous Plans stays accurate while in workspace.
+      loadSavedSessions().catch(() => {});
 
       els.chatLog.innerHTML = '';
       state.stickToBottom = true;
@@ -1950,11 +2107,18 @@
         (typeof plan.percentComplete === 'number' ? plan.percentComplete + '% · ' : '') +
         (task.title || 'in progress');
 
+      // Auto-continue only conversation milestones — setup task guidance opens
+      // explicitly via "Open Task Guidance" so the left panel never duplicates cards.
       if (autoOpenTask !== false) {
-        // Defer so the workspace chrome paints before conversation start.
-        setTimeout(() => {
-          continueCurrentTask({ silent: true }).catch(() => {});
-        }, 0);
+        const action = task.resumeAction;
+        if (
+          action === 'growth_conversation' ||
+          action === 'infrastructure_readiness'
+        ) {
+          setTimeout(() => {
+            continueCurrentTask({ silent: true }).catch(() => {});
+          }, 0);
+        }
       }
     }
 
@@ -1963,33 +2127,48 @@
       const task = plan && plan.currentTask;
       if (!task) return;
       if (task.resumeAction === 'growth_conversation') {
+        state.taskGuidanceOpen = false;
+        renderWorkspaceLeftNav();
         await startGrowthConversation();
         return;
       }
       if (task.resumeAction === 'infrastructure_readiness') {
+        state.taskGuidanceOpen = false;
+        renderWorkspaceLeftNav();
         await startInfrastructureReadiness();
         return;
       }
       if (task.resumeAction === 'growth_complete') {
+        state.taskGuidanceOpen = false;
         setWorkspaceTab('overview');
+        renderWorkspaceLeftNav();
         if (!silent) {
           addBubble('meta', 'Choose a next objective from the completion options.');
         }
         return;
       }
-      // Setup task — keep operator in workspace with guidance; no dead-end report.
+      // Setup task — show exactly one expanded guidance card in the left panel.
       setPhase('growth_workspace');
       setComposerEnabled(false);
       setWorkspaceTab('overview');
+      state.taskGuidanceOpen = true;
+      renderWorkspaceLeftNav();
       if (!silent) {
-        addBubble(
-          'assistant',
-          (task.title || 'Setup task') +
-            '\n\n' +
-            (task.description || 'Complete this recommendation, then mark it done to advance.') +
-            '\n\nOwner: ' +
-            (task.owner || 'operator_guided')
-        );
+        const existing = els.chatLog.querySelector('[data-task-guidance-note="1"]');
+        if (!existing) {
+          const ownerLabel = formatOwnerLabel(task.owner || 'operator_guided');
+          addBubble(
+            'assistant',
+            (task.title || 'Setup task') +
+              '\n\n' +
+              (task.description ||
+                'Complete this recommendation, then mark it done to advance.') +
+              '\n\nOwner: ' +
+              ownerLabel
+          );
+          const last = els.chatLog.lastElementChild;
+          if (last) last.setAttribute('data-task-guidance-note', '1');
+        }
       }
       els.sessionStatus.textContent = 'GROWTH PLAN · ' + (task.title || 'setup task');
     }
@@ -2114,9 +2293,11 @@
       state.firstGrowthPlanPreview = null;
       state.growthInfrastructureReadinessReport = null;
       state.isSample = false;
+      state.taskGuidanceOpen = false;
       if (els.growthBtn) els.growthBtn.textContent = 'Resume Growth Plan';
       state.growthPlan = null;
       if (els.workspaceTabs) els.workspaceTabs.hidden = true;
+      if (els.savedSessions) els.savedSessions.classList.remove('workspace-left-nav');
       addBubble(
         'assistant',
         "Welcome.\n\nBefore Pulseforge recommends anything, I'd like to understand how your business works.\n\nThe better I understand your business, the better every future recommendation will become.\n\nIf you already have a Growth Plan, resume from the current plan below — you will not re-answer the interview."
