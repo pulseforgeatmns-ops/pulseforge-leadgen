@@ -82,4 +82,4 @@ Tasks are derived (not a new table): growth conversation milestone, infrastructu
 
 - Deep-link task ids in the URL
 - Live connector checks that auto-complete Max-checkable setup items
-- Campaign Builder handoff from completion options
+- Campaign Builder / review handoff after [SPEC-089 First Campaign Planning Conversation](SPEC-089_First_Campaign_Planning_Conversation.md) preview approval

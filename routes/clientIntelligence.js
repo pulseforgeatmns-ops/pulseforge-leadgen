@@ -6,6 +6,7 @@
  * SPEC-085 — Executive Business Brief payload via executiveSummary.
  * SPEC-087 — Growth Infrastructure Readiness start/message.
  * SPEC-088 — Growth Work Continuation (Growth Plan resume + task complete).
+ * SPEC-089 — First Campaign Planning Conversation start/message.
  *
  * POST /api/v1/clients/:id/interview/start
  * POST /api/v1/interview/:id/message
@@ -18,6 +19,8 @@
  * POST /api/v1/interview/:id/growth/message
  * POST /api/v1/interview/:id/readiness/start
  * POST /api/v1/interview/:id/readiness/message
+ * POST /api/v1/interview/:id/campaign/start
+ * POST /api/v1/interview/:id/campaign/message
  * POST /api/v1/interview/:id/growth-plan/tasks/:taskId/complete
  * GET  /api/v1/clients/:id/blueprint
  * GET  /api/v1/client-intel/sessions
@@ -47,6 +50,8 @@ const {
   postGrowthMessage,
   startInfrastructureReadinessConversation,
   postInfrastructureReadinessMessage,
+  startCampaignPlanningConversation,
+  postCampaignPlanningMessage,
   completeGrowthPlanTask,
 } = require('../services/clientIntelligenceInterview');
 
@@ -278,6 +283,41 @@ router.post(
         });
       }
       const result = await postInfrastructureReadinessMessage(req.params.id, message);
+      noStore(res);
+      return res.json(result);
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
+
+router.post(
+  '/api/v1/interview/:id/campaign/start',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const result = await startCampaignPlanningConversation(req.params.id);
+      noStore(res);
+      return res.json(result);
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
+
+router.post(
+  '/api/v1/interview/:id/campaign/message',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const message = req.body && req.body.message;
+      if (message == null || String(message).trim() === '') {
+        return res.status(400).json({
+          error: 'empty_message',
+          message: 'message is required',
+        });
+      }
+      const result = await postCampaignPlanningMessage(req.params.id, message);
       noStore(res);
       return res.json(result);
     } catch (err) {

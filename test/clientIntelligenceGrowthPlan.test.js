@@ -342,10 +342,9 @@ describe('SPEC-088 Growth Plan continuation', () => {
       'utf8'
     );
     assert.match(ui, /Plan First Campaign/);
-    assert.match(
-      ui,
-      /Max will help define the campaign strategy, validation criteria, and approval checkpoints/
-    );
+    assert.match(ui, /startCampaignPlanningConversation/);
+    assert.match(ui, /\/campaign\/start/);
+    assert.match(ui, /First Campaign Plan Preview/);
     assert.doesNotMatch(ui, /Launch New Campaign/);
     assert.doesNotMatch(ui, /Expand Market/);
     assert.doesNotMatch(ui, /Improve Conversion(?!s)/);
