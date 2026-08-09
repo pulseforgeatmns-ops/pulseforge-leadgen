@@ -424,22 +424,87 @@ function shortName(name) {
   return n.replace(/\s+Cleaning$/i, '') || n;
 }
 
+/** Known prompt/wrapper fragments that must never appear inside avoid copy. */
+const AVOID_WRAPPER_PATTERNS = Object.freeze([
+  /^customers?\s+to\s+avoid\s*(?:are|:)?\s*/i,
+  /^the business prefers to avoid\s+/i,
+  /^the business (?:deliberately )?avoids?\s+/i,
+  /^anchor(?:\s+cleaning)?\s+should avoid\s+/i,
+  /^anchor(?:\s+cleaning)?\s+(?:deliberately )?avoids?\s+/i,
+  /^[\w][\w\s&.'-]{0,48}?\s+should avoid\s+/i,
+  /^avoid(?:s|ing)?\s+/i,
+]);
+
+/**
+ * Strip known Blueprint / prompt wrapper language from an avoidCustomers
+ * summary so generated growth-direction copy can wrap it safely once.
+ */
+function stripAvoidWrappers(text) {
+  let s = String(text || '')
+    .replace(/\.$/, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (!s) return '';
+
+  let prev;
+  do {
+    prev = s;
+    for (const re of AVOID_WRAPPER_PATTERNS) {
+      s = s.replace(re, '').trim();
+    }
+    // Drop a leading "customers who" only when another "customers who" follows
+    // (wrapper bleed / concatenation), so we keep a single clean phrase.
+    s = s
+      .replace(/^customers?\s+who\s+(?=[\s\S]*\bcustomers?\s+who\b)/i, '')
+      .replace(/^(?:customers?\s+who\s+){2,}/i, (m) => {
+        const keep = m.match(/^(customers?\s+who\s+)/i);
+        return keep ? keep[1] : m;
+      })
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  } while (s && s !== prev);
+
+  return s;
+}
+
+/**
+ * Normalize avoidCustomers text to a clean phrase suitable for insertion after
+ * "who {Name} should avoid: …". Never returns wrapper language.
+ */
 function cleanAvoidPhrase(summary) {
   let s = firstSentence(summary);
   if (!s) return '';
-  s = s
-    .replace(/^customers?\s+to\s+avoid\s*(?:are|:)?\s*/i, '')
-    .replace(/^avoid(?:s|ing)?\s+/i, '')
-    .replace(/^the business (?:deliberately )?avoids?\s+/i, '')
-    .replace(/^anchor(?:\s+cleaning)?\s+(?:deliberately )?avoids?\s+/i, '')
-    .replace(/\.$/, '')
-    .trim();
+  s = stripAvoidWrappers(s);
+  if (!s) return '';
+
+  // Mid-string bleed (concatenated generated + Blueprint text): keep the
+  // innermost "customers who …" clause when wrappers remain anywhere.
+  if (
+    /the business prefers to avoid/i.test(s) ||
+    /\bshould avoid\b/i.test(s) ||
+    /the business (?:deliberately )?avoids?\b/i.test(s)
+  ) {
+    const matches = [...s.matchAll(/\bcustomers?\s+who\s+(.+)$/gi)];
+    if (matches.length) {
+      s = stripAvoidWrappers(`customers who ${matches[matches.length - 1][1]}`);
+    } else {
+      s = stripAvoidWrappers(
+        s
+          .replace(/the business prefers to avoid\s*/gi, '')
+          .replace(/the business (?:deliberately )?avoids?\s*/gi, '')
+          .replace(/\banchor(?:\s+cleaning)?\s+should avoid\s*/gi, '')
+          .replace(/\b[\w][\w\s&.'-]{0,48}?\s+should avoid\s*/gi, '')
+      );
+    }
+  }
+
   if (!s) return '';
   if (/^customers?\s+who\b/i.test(s)) return s;
   if (/^(?:the\s+)?lowest price/i.test(s)) {
     return `customers who prioritize ${s}`;
   }
-  if (/prioritize|prefer|want|value/i.test(s)) {
+  // Do not treat "prefers to avoid" as a content cue — wrappers are stripped above.
+  if (/\b(prioritize|prefer|want|value|care about)\b/i.test(s)) {
     return /^customers?\b/i.test(s) ? s : `customers who ${s}`;
   }
   return s;
@@ -456,10 +521,12 @@ function composeFocusSentence(displayName, firstFocus, primaryArea, qualifier) {
 function composeWhySentence(displayName) {
   const name = shortName(displayName);
   const subject = /^the business$/i.test(name) ? 'the business' : name;
+  // Disclaimer lives once on the artifact (`disclaimer` field / UI footer) —
+  // do not also embed DIRECTIONAL_LABEL here.
   return (
     `That focus follows directly from the approved Blueprint: what ${subject} delivers today, ` +
     `who counts as an ideal customer, where the business wants to concentrate, ` +
-    `and what near-term success looks like. ${DIRECTIONAL_LABEL}`
+    `and what near-term success looks like.`
   );
 }
 
@@ -501,11 +568,29 @@ function lowercaseLead(text) {
   return s;
 }
 
+/**
+ * Safe avoid-customer sentence builder. Inserts a cleaned phrase after a single
+ * wrapper — never concatenates generated wrapper text with already-normalized
+ * Blueprint / prompt language.
+ */
 function composeAvoidSentence(displayName, avoidSummary) {
-  const phrase = lowercaseLead(cleanAvoidPhrase(avoidSummary));
+  let phrase = lowercaseLead(cleanAvoidPhrase(avoidSummary));
   if (!phrase) return '';
+
+  // Final guard: if cleanup missed wrapper language, strip again rather than
+  // double-wrapping ("who Anchor should avoid: Anchor should avoid …").
+  if (
+    /\bshould avoid\b/i.test(phrase) ||
+    /the business prefers to avoid/i.test(phrase) ||
+    /the business (?:deliberately )?avoids?\b/i.test(phrase)
+  ) {
+    phrase = lowercaseLead(cleanAvoidPhrase(phrase));
+  }
+  if (!phrase) return '';
+
+  const name = shortName(displayName);
   return (
-    `The Blueprint also clarifies who ${shortName(displayName)} should avoid: ${phrase}. ` +
+    `The Blueprint also clarifies who ${name} should avoid: ${phrase}. ` +
     `That constraint keeps the first growth focus honest instead of chasing volume.`
   );
 }
@@ -2822,6 +2907,8 @@ module.exports = {
   GROWTH_STEPS,
   PREVIEW_CTA_ACTIONS,
   PREFERRED_EARLY_SIGNALS_PROPERTY_MANAGERS,
+  cleanAvoidPhrase,
+  composeAvoidSentence,
   buildInitialGrowthDirection,
   buildGrowthConversationOpening,
   buildGrowthConversationReply,
