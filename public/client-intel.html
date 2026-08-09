@@ -1618,6 +1618,7 @@
     function renderProspectListCriteriaPreview(preview) {
       if (!preview) return '';
       const titles = preview.sectionTitles || {};
+      // Structured fields only — never stitch/split raw transcript prose here.
       return (
         '<div class="growth-direction" id="prospectListCriteriaPreview">' +
           '<p class="growth-kicker">Prospect List Criteria Preview</p>' +
@@ -1646,6 +1647,19 @@
           '</strong></p>' +
           renderListBlock(preview.exclusionCriteria, 'No exclusion criteria listed yet.') +
           '<p><strong>7. ' +
+            escapeHtml(
+              titles.requiredProspectFields || 'Required prospect record fields'
+            ) +
+          '</strong></p>' +
+          renderListBlock(
+            preview.requiredProspectFields,
+            'No required prospect record fields listed yet.'
+          ) +
+          '<p><strong>8. ' +
+            escapeHtml(titles.reviewGate || 'Review gate') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.reviewGate || '—') + '</p>' +
+          '<p><strong>9. ' +
             escapeHtml(titles.recommendedNextStep || 'Recommended next step') +
           '</strong></p>' +
           '<p>' + escapeHtml(preview.recommendedNextStep || '—') + '</p>' +
