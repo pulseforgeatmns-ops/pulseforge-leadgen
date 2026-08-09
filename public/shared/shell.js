@@ -25,6 +25,11 @@
       href: { default: '/command-deck' },
     },
     {
+      id: 'client-intel', label: 'Client Intel',
+      roles: ['admin', 'manager', 'client'],
+      href: { default: '/client-intel' },
+    },
+    {
       id: 'pipeline', label: 'Pipeline',
       roles: ['admin', 'manager', 'viewer', 'client', 'setter', 'sales'],
       href: { default: '/dashboard#pf-tab=pipeline', setter: '/setter#view=pipeline', sales: '/setter#view=pipeline' },
@@ -76,6 +81,7 @@
       if ((window.location.hash || '') === '#operations') return 'operations';
       return 'command-deck';
     }
+    if (path.startsWith('/client-intel')) return 'client-intel';
     if (path.startsWith('/setter')) return 'calls';
     if (path.startsWith('/closer')) return 'customers';
     if (path.startsWith('/dashboard')) {

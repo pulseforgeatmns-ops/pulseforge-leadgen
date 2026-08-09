@@ -18,6 +18,9 @@
  * POST /api/v1/interview/:id/readiness/start
  * POST /api/v1/interview/:id/readiness/message
  * GET  /api/v1/clients/:id/blueprint
+ * GET  /api/v1/client-intel/sessions
+ * GET  /api/v1/client-intel/sessions/:id/resume
+ * POST /api/v1/client-intel/fixtures/anchor-blueprint
  * GET  /client-intel → UI
  */
 
@@ -33,6 +36,9 @@ const {
   getInterview,
   getInterviewBlueprint,
   getClientBlueprint,
+  listApprovedBlueprintSessions,
+  getResumePayload,
+  loadAnchorSampleBlueprint,
   reviseBlueprint,
   approveBlueprint,
   startGrowthConversation,
@@ -61,9 +67,64 @@ function sendError(res, err) {
   });
 }
 
+function parseBool(value, fallback) {
+  if (value == null || value === '') return fallback;
+  const s = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(s)) return true;
+  if (['0', 'false', 'no', 'off'].includes(s)) return false;
+  return fallback;
+}
+
 router.get('/client-intel', requireOperator, (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'client-intel.html'));
 });
+
+router.get('/api/v1/client-intel/sessions', requireOperator, async (req, res) => {
+  try {
+    const result = await listApprovedBlueprintSessions({
+      clientId: req.query.clientId,
+      includeSamples: parseBool(req.query.includeSamples, true),
+      samplesOnly: parseBool(req.query.samplesOnly, false),
+      limit: req.query.limit,
+    });
+    noStore(res);
+    return res.json(result);
+  } catch (err) {
+    return sendError(res, err);
+  }
+});
+
+router.get(
+  '/api/v1/client-intel/sessions/:id/resume',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const action = String((req.query && req.query.action) || 'continue');
+      const result = await getResumePayload(req.params.id, { action });
+      noStore(res);
+      return res.json(result);
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
+
+router.post(
+  '/api/v1/client-intel/fixtures/anchor-blueprint',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await loadAnchorSampleBlueprint({
+        forceNew: Boolean(body.forceNew),
+      });
+      noStore(res);
+      return res.status(result.created ? 201 : 200).json(result);
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
 
 router.post(
   '/api/v1/clients/:id/interview/start',

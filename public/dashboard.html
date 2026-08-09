@@ -1283,6 +1283,80 @@ body.light-mode .ask-max-panel,
 body.light-mode .ask-max-input,
 body.light-mode .ask-max-answer { color: var(--text-primary); }
 
+.cie-sessions-panel {
+  background: var(--bg-card);
+  border: var(--hairline);
+  border-radius: 10px;
+  padding: 1rem 1.25rem 1.15rem;
+  margin: -0.5rem 0 1.5rem;
+}
+.cie-sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+.cie-session-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(16, 32, 60, 0.04);
+}
+.cie-session-card.sample {
+  border-color: rgba(212, 160, 50, 0.45);
+  background: rgba(212, 160, 50, 0.08);
+}
+.cie-session-copy { min-width: 0; flex: 1 1 220px; }
+.cie-session-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--white);
+}
+.cie-session-meta {
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+  color: var(--gray-light);
+}
+.cie-session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.cie-session-actions a,
+.cie-session-actions button {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-decoration: none;
+  border: 1px solid rgba(61, 156, 253, 0.35);
+  color: var(--accent-light, #3d9cfd);
+  background: transparent;
+  border-radius: 4px;
+  padding: 0.45rem 0.7rem;
+  cursor: pointer;
+}
+.cie-session-actions a.secondary,
+.cie-session-actions button.secondary {
+  border-color: var(--border);
+  color: var(--gray-light);
+}
+.cie-sample-badge {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.08rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.58rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: rgba(212, 160, 50, 0.85);
+  color: #1a1408;
+}
+
 /* ACTIONS AREA */
 .actions-area { display: none; overflow-y: auto; height: 100%; padding: 1.5rem 2rem; }
 .actions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1rem; margin-top: 1rem; }
@@ -2622,6 +2696,21 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
       </form>
       <div class="ask-max-history" id="askMaxHistory">
         <div class="ask-max-empty">Ask a question and Max will answer from current pipeline context.</div>
+      </div>
+    </div>
+
+    <div class="cie-sessions-panel" id="cieSessionsPanel">
+      <div class="area-header" style="margin-bottom:0.65rem">
+        <div>
+          <div class="area-title">CLIENT INTELLIGENCE</div>
+          <div class="area-sub" id="cieSessionsSub">Approved Blueprints you can resume without re-interviewing</div>
+        </div>
+        <div class="area-actions">
+          <a class="btn-outline" href="/client-intel" id="cieOpenLink">Open Client Intel</a>
+        </div>
+      </div>
+      <div id="cieSessionsList" class="cie-sessions-list">
+        <div class="no-data-note">Loading approved Blueprint sessions…</div>
       </div>
     </div>
 
@@ -4149,7 +4238,7 @@ async function loadClientSelector() {
       }
       _statsCacheTime = 0;
       _activityCacheTime = 0;
-      await Promise.all([loadLiveData(), loadActivityFeed(), loadApprovals(), loadProspects(), loadActions()]);
+      await Promise.all([loadLiveData(), loadActivityFeed(), loadApprovals(), loadProspects(), loadActions(), loadCieSessions()]);
       if (document.getElementById('analyticsArea')?.style.display !== 'none') loadAnalytics();
       if (isPipelineTabActive()) loadPipeline();
       loadAgentVisibility();
@@ -7134,14 +7223,117 @@ document.getElementById('pipelineReviewCallbacksBtn')?.addEventListener('click',
 });
 
 
+async function loadCieSessions() {
+  const list = document.getElementById('cieSessionsList');
+  const sub = document.getElementById('cieSessionsSub');
+  if (!list) return;
+  try {
+    const qs = new URLSearchParams({ includeSamples: '1', limit: '12' });
+    if (_activeClientId != null) qs.set('clientId', String(_activeClientId));
+    const res = await fetch('/api/v1/client-intel/sessions?' + qs.toString(), {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) {
+      list.innerHTML =
+        '<div class="no-data-note">Client Intelligence sessions unavailable. <a href="/client-intel">Open Client Intel</a></div>';
+      return;
+    }
+    const data = await res.json();
+    const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    const fixturesAllowed = Boolean(data.fixturesAllowed);
+    if (sub) {
+      sub.textContent = sessions.length
+        ? sessions.length + ' approved Blueprint session' + (sessions.length === 1 ? '' : 's') + ' ready to resume'
+        : 'No approved Blueprints yet — start an interview or load the Anchor sample in Client Intel';
+    }
+    if (!sessions.length) {
+      let empty =
+        '<div class="no-data-note">No approved Blueprint sessions yet. ' +
+        '<a href="/client-intel">Start a Client Intelligence interview</a>';
+      if (fixturesAllowed) {
+        empty +=
+          ' or open Client Intel and choose <strong>Load Anchor sample Blueprint</strong>.';
+      }
+      empty += '</div>';
+      list.innerHTML = empty;
+      return;
+    }
+    list.innerHTML = sessions.map((s) => {
+      const id = encodeURIComponent(s.sessionId || s.interviewId);
+      const label = s.label || ((s.businessName || 'Business') + ' · Blueprint approved');
+      const meta = [
+        s.resumeTarget === 'infrastructure_readiness'
+          ? 'Infrastructure readiness'
+          : s.resumeTarget === 'first_growth_plan_preview'
+            ? 'First Growth Plan Preview'
+            : s.resumeTarget === 'growth_conversation'
+              ? 'Growth Conversation'
+              : 'Initial Growth Direction',
+        s.blueprintVersion ? 'v' + s.blueprintVersion : null,
+      ].filter(Boolean).join(' · ');
+      const sample = s.isSample
+        ? '<span class="cie-sample-badge">Sample / Dev</span>'
+        : '';
+      return (
+        '<article class="cie-session-card' + (s.isSample ? ' sample' : '') + '">' +
+          '<div class="cie-session-copy">' +
+            '<div class="cie-session-title"></div>' +
+            '<div class="cie-session-meta"></div>' +
+          '</div>' +
+          '<div class="cie-session-actions">' +
+            '<a href="/client-intel?interviewId=' + id + '&action=continue">Continue Growth Work</a>' +
+            '<a class="secondary" href="/client-intel?interviewId=' + id + '&action=view">View Blueprint</a>' +
+            '<a class="secondary" href="/client-intel?action=new">Start New Interview</a>' +
+          '</div>' +
+        '</article>'
+      );
+    }).join('');
+
+    Array.from(list.querySelectorAll('.cie-session-card')).forEach((card, idx) => {
+      const s = sessions[idx];
+      if (!s) return;
+      const title = card.querySelector('.cie-session-title');
+      const metaEl = card.querySelector('.cie-session-meta');
+      if (title) {
+        title.textContent = s.label || ((s.businessName || 'Business') + ' · Blueprint approved');
+        if (s.isSample) {
+          const badge = document.createElement('span');
+          badge.className = 'cie-sample-badge';
+          badge.textContent = 'Sample / Dev';
+          title.appendChild(badge);
+        }
+      }
+      if (metaEl) {
+        metaEl.textContent = [
+          s.resumeTarget === 'infrastructure_readiness'
+            ? 'Infrastructure readiness'
+            : s.resumeTarget === 'first_growth_plan_preview'
+              ? 'First Growth Plan Preview'
+              : s.resumeTarget === 'growth_conversation'
+                ? 'Growth Conversation'
+                : 'Initial Growth Direction',
+          s.blueprintVersion ? 'v' + s.blueprintVersion : null,
+        ].filter(Boolean).join(' · ');
+      }
+    });
+  } catch (err) {
+    console.error('loadCieSessions:', err);
+    list.innerHTML =
+      '<div class="no-data-note">Could not load Client Intelligence sessions. <a href="/client-intel">Open Client Intel</a></div>';
+  }
+}
+
 loadClientSelector();
 loadLiveData();
 loadAgentHealth();
 loadActivityFeed();
+loadCieSessions();
 loadAgentSparklines();
 setInterval(loadLiveData, 60000);
 setInterval(loadAgentHealth, 30000);
 setInterval(loadActivityFeed, 30000);
+setInterval(loadCieSessions, 60000);
 setInterval(loadAgentSparklines, 300000);
 setInterval(() => {
   if (isPipelineTabActive()) loadPipeline();

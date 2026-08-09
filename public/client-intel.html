@@ -600,6 +600,62 @@
       opacity: 0;
       transition: opacity 480ms ease;
     }
+    .session-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      margin-top: 0.85rem;
+    }
+    .session-card {
+      border: 1px solid var(--cie-border);
+      border-radius: 12px;
+      background: var(--cie-panel-elevated);
+      padding: 0.85rem 0.95rem;
+      text-align: left;
+    }
+    .session-card.sample {
+      border-color: rgba(230, 184, 77, 0.45);
+      background: rgba(230, 184, 77, 0.08);
+    }
+    .session-card-title {
+      margin: 0;
+      font-size: 0.92rem;
+      font-weight: 600;
+    }
+    .session-card-meta {
+      margin: 0.3rem 0 0.7rem;
+      color: var(--cie-muted);
+      font-size: 0.78rem;
+      line-height: 1.4;
+    }
+    .session-card-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+    .session-card-actions button {
+      font-size: 0.78rem;
+      padding: 0.4rem 0.7rem;
+    }
+    .sample-badge {
+      display: inline-block;
+      margin-left: 0.4rem;
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #1a1408;
+      background: var(--cie-warn);
+    }
+    .fixture-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+      margin-top: 0.75rem;
+    }
   </style>
 </head>
 <body>
@@ -626,7 +682,10 @@
         <label>Client ID <input id="clientId" value="1" inputmode="numeric"></label>
         <button type="button" id="startBtn">Begin</button>
         <button type="button" id="notesBtn" class="secondary">Start from notes</button>
+        <button type="button" id="newInterviewBtn" class="secondary" hidden>Start New Interview</button>
+        <button type="button" id="loadAnchorFixtureBtn" class="secondary" hidden>Load Anchor sample Blueprint</button>
       </div>
+      <div id="savedSessions" class="session-list" hidden></div>
       <div id="chatLog" aria-live="polite"></div>
       <div class="composer" id="composer" hidden>
         <textarea id="messageInput" placeholder="Share your thoughts…" rows="2"></textarea>
@@ -714,6 +773,9 @@
       readinessConversationActive: false,
       growthInfrastructureReadinessReport: null,
       firstGrowthPlanPreview: null,
+      isSample: false,
+      savedSessions: [],
+      fixturesAllowed: false,
     };
 
     const els = {
@@ -723,6 +785,9 @@
       sendBtn: document.getElementById('sendBtn'),
       startBtn: document.getElementById('startBtn'),
       notesBtn: document.getElementById('notesBtn'),
+      newInterviewBtn: document.getElementById('newInterviewBtn'),
+      loadAnchorFixtureBtn: document.getElementById('loadAnchorFixtureBtn'),
+      savedSessions: document.getElementById('savedSessions'),
       sessionStatus: document.getElementById('sessionStatus'),
       sidePanel: document.getElementById('sidePanel'),
       sidePanelTitle: document.getElementById('sidePanelTitle'),
@@ -1151,6 +1216,16 @@
       els.execActions.hidden = phase !== 'executive_summary';
       els.completeActions.hidden = phase !== 'complete';
       els.operatorControls.hidden = phase !== 'welcome';
+      if (els.savedSessions) {
+        els.savedSessions.hidden = phase !== 'welcome';
+      }
+      if (els.newInterviewBtn) {
+        els.newInterviewBtn.hidden = phase !== 'welcome';
+      }
+      if (els.loadAnchorFixtureBtn) {
+        els.loadAnchorFixtureBtn.hidden =
+          phase !== 'welcome' || !state.fixturesAllowed;
+      }
       if (phase !== 'growth') setGrowthPreviewActionsVisible(false);
       if (phase === 'welcome') {
         setComposerEnabled(false);
@@ -1324,17 +1399,257 @@
       }
     }
 
+    function resumeTargetLabel(target) {
+      switch (target) {
+        case 'infrastructure_readiness':
+          return 'Infrastructure readiness report';
+        case 'first_growth_plan_preview':
+          return 'First Growth Plan Preview';
+        case 'growth_conversation':
+          return 'Growth Conversation in progress';
+        case 'initial_growth_direction':
+          return 'Initial Growth Direction';
+        default:
+          return 'Approved Blueprint';
+      }
+    }
+
+    function renderSavedSessions(sessions) {
+      if (!els.savedSessions) return;
+      const list = Array.isArray(sessions) ? sessions : [];
+      state.savedSessions = list;
+      if (!list.length) {
+        els.savedSessions.innerHTML = '';
+        els.savedSessions.hidden = true;
+        return;
+      }
+      els.savedSessions.hidden = state.phase !== 'welcome';
+      els.savedSessions.innerHTML =
+        '<p class="blueprint-empty" style="margin:0 0 0.25rem">Approved Blueprint sessions</p>' +
+        list.map((s) => {
+          const id = s.sessionId || s.interviewId;
+          const sample = s.isSample
+            ? '<span class="sample-badge">Sample / Dev</span>'
+            : '';
+          const meta = [
+            resumeTargetLabel(s.resumeTarget),
+            s.blueprintVersion ? 'v' + s.blueprintVersion : null,
+            s.approvedAt ? 'approved ' + new Date(s.approvedAt).toLocaleDateString() : null,
+          ].filter(Boolean).join(' · ');
+          return (
+            '<article class="session-card' + (s.isSample ? ' sample' : '') + '" data-session-id="' +
+            escapeHtml(id) + '">' +
+              '<p class="session-card-title">' + escapeHtml(s.label || (s.businessName + ' · Blueprint approved')) +
+              sample + '</p>' +
+              '<p class="session-card-meta">' + escapeHtml(meta) + '</p>' +
+              '<div class="session-card-actions">' +
+                '<button type="button" data-action="continue" data-session-id="' + escapeHtml(id) + '">Continue Growth Work</button>' +
+                '<button type="button" class="secondary" data-action="view" data-session-id="' + escapeHtml(id) + '">View Blueprint</button>' +
+                '<button type="button" class="secondary" data-action="new">Start New Interview</button>' +
+              '</div>' +
+            '</article>'
+          );
+        }).join('');
+    }
+
+    async function loadSavedSessions() {
+      try {
+        const clientId = (els.clientId && els.clientId.value.trim()) || '';
+        const qs = new URLSearchParams({ includeSamples: '1', limit: '20' });
+        if (clientId) qs.set('clientId', clientId);
+        const data = await api('GET', '/api/v1/client-intel/sessions?' + qs.toString());
+        state.fixturesAllowed = Boolean(data && data.fixturesAllowed);
+        if (els.loadAnchorFixtureBtn) {
+          els.loadAnchorFixtureBtn.hidden =
+            state.phase !== 'welcome' || !state.fixturesAllowed;
+        }
+        renderSavedSessions((data && data.sessions) || []);
+      } catch (_) {
+        state.fixturesAllowed = true;
+        if (els.loadAnchorFixtureBtn) {
+          els.loadAnchorFixtureBtn.hidden = state.phase !== 'welcome';
+        }
+        renderSavedSessions([]);
+      }
+    }
+
+    function hydrateTurns(turns) {
+      const list = Array.isArray(turns) ? turns : [];
+      for (const turn of list) {
+        if (!turn || !turn.message) continue;
+        if (turn.speaker === 'assistant') addBubble('assistant', turn.message);
+        else if (turn.speaker === 'client') addBubble('client', turn.message);
+        else addBubble('meta', turn.message);
+      }
+    }
+
+    function applyResumeState(data, action) {
+      state.interviewId = data.interviewId || data.id || state.interviewId;
+      state.sessionStatus = data.status || state.sessionStatus;
+      state.blueprint = data.blueprint || state.blueprint;
+      state.initialGrowthDirection = data.initialGrowthDirection || null;
+      state.growthInfrastructureReadinessReport =
+        data.growthInfrastructureReadinessReport || null;
+      state.firstGrowthPlanPreview = data.firstGrowthPlanPreview ||
+        (data.latestGrowthState && data.latestGrowthState.firstGrowthPlanPreview) ||
+        null;
+      state.isSample = Boolean(data.isSample);
+      state.growthConversationActive = false;
+      state.readinessConversationActive = false;
+
+      const mode = action || data.action || 'continue';
+      const target = data.resumeTarget || 'initial_growth_direction';
+
+      els.chatLog.innerHTML = '';
+      state.stickToBottom = true;
+
+      if (state.isSample) {
+        addBubble(
+          'meta',
+          'SAMPLE / DEV DATA — resuming Anchor sample Blueprint. This is not a real client interview.'
+        );
+      }
+
+      if (mode === 'view') {
+        setPhase('complete');
+        applyApprovedState(
+          {
+            blueprint: state.blueprint,
+            initialGrowthDirection: state.initialGrowthDirection,
+            playbook: data.playbook || null,
+          },
+          { alreadyApproved: true }
+        );
+        if (state.blueprint) {
+          renderBlueprint(state.blueprint, { editable: false });
+        }
+        els.sessionStatus.textContent =
+          'Session ' + state.interviewId + ' · Viewing approved Blueprint';
+        addBubble(
+          'assistant',
+          'Here is the approved Business Blueprint. Continue Growth Work whenever you are ready — you will not need to re-answer the interview.'
+        );
+        return;
+      }
+
+      // Continue Growth Work — never restart Business Understanding.
+      if (target === 'infrastructure_readiness') {
+        state.readinessConversationActive = true;
+        setPhase('readiness');
+        const readinessTurns =
+          (data.infrastructureReadiness && data.infrastructureReadiness.turns) || [];
+        hydrateTurns(readinessTurns);
+        if (state.growthInfrastructureReadinessReport) {
+          els.sidePanel.innerHTML = renderReadinessReport(
+            state.growthInfrastructureReadinessReport
+          );
+          els.sidePanelTitle.textContent = 'Growth Infrastructure Readiness Report';
+          els.sidePanelSub.textContent = 'Latest saved readiness assessment';
+        }
+        els.sessionStatus.textContent = 'READINESS · resumed from approved Blueprint';
+        els.messageInput.placeholder = 'Continue the readiness conversation…';
+        return;
+      }
+
+      if (target === 'first_growth_plan_preview' || target === 'growth_conversation') {
+        state.growthConversationActive = true;
+        setPhase('growth');
+        const growthTurns =
+          (data.growthConversation && data.growthConversation.turns) || [];
+        hydrateTurns(growthTurns);
+        if (state.initialGrowthDirection) {
+          els.sidePanel.innerHTML =
+            '<div class="completion-card">' +
+            renderGrowthDirection(state.initialGrowthDirection) +
+            '</div>';
+          els.sidePanelTitle.textContent = 'Initial Growth Direction';
+          els.sidePanelSub.textContent = 'Resumed from approved Blueprint';
+        }
+        if (state.firstGrowthPlanPreview) {
+          setGrowthPreviewActionsVisible(true);
+          addBubble('meta', 'First Growth Plan Preview is ready — use the actions below.');
+        } else if (!growthTurns.length) {
+          addBubble(
+            'assistant',
+            'Continuing from your approved Blueprint. Start or resume the Growth Conversation whenever you are ready.'
+          );
+        }
+        els.sessionStatus.textContent = 'GROWTH · resumed from approved Blueprint';
+        els.messageInput.placeholder = 'Talk with Max about the first growth focus…';
+        return;
+      }
+
+      // Default: Initial Growth Direction after approval.
+      applyApprovedState(
+        {
+          blueprint: state.blueprint,
+          initialGrowthDirection: state.initialGrowthDirection,
+          playbook: data.playbook || null,
+        },
+        { alreadyApproved: true }
+      );
+      addBubble(
+        'assistant',
+        'Welcome back.\n\nYour Business Blueprint is still approved. Review the Initial Growth Direction, then continue into the Growth Conversation — no need to re-answer the interview.'
+      );
+      if (els.growthBtn) els.growthBtn.textContent = 'Continue Growth Work';
+      els.sessionStatus.textContent =
+        'APPROVED · ' + (data.businessName || 'Blueprint') + ' ready for growth work';
+    }
+
+    async function resumeSession(sessionId, action) {
+      const data = await api(
+        'GET',
+        '/api/v1/client-intel/sessions/' +
+          encodeURIComponent(sessionId) +
+          '/resume?action=' +
+          encodeURIComponent(action || 'continue')
+      );
+      applyResumeState(data, action || 'continue');
+
+      // If continuing with no growth conversation yet, open Initial Growth Direction
+      // and leave Start/Continue Growth Work CTA available (complete phase).
+      if (
+        (action || 'continue') === 'continue' &&
+        data.resumeTarget === 'initial_growth_direction'
+      ) {
+        // Already on complete via applyResumeState.
+      } else if (
+        (action || 'continue') === 'continue' &&
+        data.resumeTarget === 'growth_conversation' &&
+        !(data.growthConversation && data.growthConversation.turns && data.growthConversation.turns.length)
+      ) {
+        await startGrowthConversation();
+      }
+    }
+
     function showWelcome() {
       setPhase('welcome');
       els.chatLog.innerHTML = '';
       state.stickToBottom = true;
+      state.interviewId = null;
+      state.sessionStatus = null;
+      state.blueprint = null;
+      state.growthConversationActive = false;
+      state.readinessConversationActive = false;
+      state.firstGrowthPlanPreview = null;
+      state.growthInfrastructureReadinessReport = null;
+      state.isSample = false;
+      if (els.growthBtn) els.growthBtn.textContent = 'Start Growth Conversation';
       addBubble(
         'assistant',
-        "Welcome.\n\nBefore Pulseforge recommends anything, I'd like to understand how your business works.\n\nThe better I understand your business, the better every future recommendation will become."
+        "Welcome.\n\nBefore Pulseforge recommends anything, I'd like to understand how your business works.\n\nThe better I understand your business, the better every future recommendation will become.\n\nIf you already approved a Blueprint, continue from a saved session below — you will not re-answer the interview."
       );
-      els.sidePanel.innerHTML = '<p class="blueprint-empty">When you\'re ready, begin the conversation.</p>';
+      els.sidePanel.innerHTML = '<p class="blueprint-empty">When you\'re ready, begin the conversation or resume an approved Blueprint.</p>';
       els.sessionStatus.textContent = 'Welcome';
       renderProgress(null);
+      loadSavedSessions();
+    }
+
+    function startNewInterviewFlow() {
+      showWelcome();
+      els.clientId.focus();
+      addBubble('meta', 'Start a new interview when ready — existing approved Blueprints stay saved.');
     }
 
     els.startBtn.addEventListener('click', async () => {
@@ -1342,6 +1657,7 @@
         const clientId = els.clientId.value.trim() || '1';
         els.chatLog.innerHTML = '';
         state.stickToBottom = true;
+        if (els.savedSessions) els.savedSessions.hidden = true;
         setPhase('discovery');
         const data = await api('POST', '/api/v1/clients/' + encodeURIComponent(clientId) + '/interview/start', {});
         applyDiscoveryPayload(data);
@@ -1706,7 +2022,77 @@
       });
     }
 
-    showWelcome();
+    if (els.savedSessions) {
+      els.savedSessions.addEventListener('click', async (event) => {
+        const btn = event.target && event.target.closest('button[data-action]');
+        if (!btn) return;
+        const action = btn.getAttribute('data-action');
+        if (action === 'new') {
+          startNewInterviewFlow();
+          return;
+        }
+        const sessionId = btn.getAttribute('data-session-id');
+        if (!sessionId) return;
+        try {
+          btn.disabled = true;
+          await resumeSession(sessionId, action);
+        } catch (err) {
+          showError(err.message);
+          showWelcome();
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    }
+
+    if (els.newInterviewBtn) {
+      els.newInterviewBtn.addEventListener('click', startNewInterviewFlow);
+    }
+
+    if (els.loadAnchorFixtureBtn) {
+      els.loadAnchorFixtureBtn.addEventListener('click', async () => {
+        try {
+          els.loadAnchorFixtureBtn.disabled = true;
+          const data = await api(
+            'POST',
+            '/api/v1/client-intel/fixtures/anchor-blueprint',
+            {}
+          );
+          applyResumeState(data, 'continue');
+          await loadSavedSessions();
+        } catch (err) {
+          showError(err.message);
+        } finally {
+          els.loadAnchorFixtureBtn.disabled = false;
+        }
+      });
+    }
+
+    async function bootFromQuery() {
+      const params = new URLSearchParams(window.location.search || '');
+      const interviewId = params.get('interviewId') || params.get('sessionId');
+      const action = params.get('action') || 'continue';
+      const clientId = params.get('clientId');
+      if (clientId && els.clientId) els.clientId.value = clientId;
+
+      if (action === 'new' && !interviewId) {
+        showWelcome();
+        addBubble('meta', 'Start a new interview when ready — existing approved Blueprints stay saved.');
+        return;
+      }
+
+      if (interviewId) {
+        try {
+          await resumeSession(interviewId, action);
+          return;
+        } catch (err) {
+          showError(err.message);
+        }
+      }
+      showWelcome();
+    }
+
+    bootFromQuery();
   </script>
 </body>
 </html>

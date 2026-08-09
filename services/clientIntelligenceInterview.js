@@ -26,6 +26,14 @@ const {
   buildInfrastructureReadinessReply,
   extractBusinessName: extractReadinessBusinessName,
 } = require('./clientIntelligenceInfrastructureReadiness');
+const {
+  ANCHOR_SAMPLE_CLIENT_ID,
+  ANCHOR_FIXTURE_KEY,
+  ANCHOR_BUSINESS_NAME,
+  fixturesAllowed,
+  cloneAnchorSections,
+  cloneAnchorNormalizedFacts,
+} = require('./clientIntelligenceFixtures');
 
 const SESSION_STATUSES = Object.freeze([
   'NEW',
@@ -3447,6 +3455,11 @@ function initialInterviewState({ notes } = {}) {
   };
 }
 
+function cloneJson(value) {
+  if (value == null) return value;
+  return JSON.parse(JSON.stringify(value));
+}
+
 function createMemoryStore() {
   /** @type {Map<string, object>} */
   const sessions = new Map();
@@ -3464,15 +3477,23 @@ function createMemoryStore() {
   return {
     kind: 'memory',
     async insertSession(row) {
-      const copy = { ...row };
+      const copy = {
+        ...row,
+        interview_state: cloneJson(row.interview_state || {}),
+      };
       sessions.set(copy.id, copy);
       turnsBySession.set(copy.id, []);
       evidenceBySession.set(copy.id, []);
-      return { ...copy };
+      return {
+        ...copy,
+        interview_state: cloneJson(copy.interview_state),
+      };
     },
     async getSession(id) {
       const row = sessions.get(String(id));
-      return row ? { ...row, interview_state: { ...row.interview_state } } : null;
+      return row
+        ? { ...row, interview_state: cloneJson(row.interview_state || {}) }
+        : null;
     },
     async updateSession(id, patch) {
       const cur = sessions.get(String(id));
@@ -3480,13 +3501,16 @@ function createMemoryStore() {
       const next = {
         ...cur,
         ...patch,
-        interview_state: patch.interview_state
-          ? { ...patch.interview_state }
+        interview_state: Object.prototype.hasOwnProperty.call(patch, 'interview_state')
+          ? cloneJson(patch.interview_state || {})
           : cur.interview_state,
         updated_at: new Date(),
       };
       sessions.set(String(id), next);
-      return { ...next, interview_state: { ...next.interview_state } };
+      return {
+        ...next,
+        interview_state: cloneJson(next.interview_state || {}),
+      };
     },
     async insertTurn(row) {
       const copy = { ...row };
@@ -3521,36 +3545,62 @@ function createMemoryStore() {
       return (evidenceBySession.get(String(sessionId)) || []).map((e) => ({ ...e }));
     },
     async insertBlueprint(row) {
-      const copy = { ...row };
+      const copy = {
+        ...row,
+        sections: cloneJson(row.sections || {}),
+        confidence_summary: cloneJson(row.confidence_summary || {}),
+        section_provenance: cloneJson(row.section_provenance || {}),
+      };
       const key = `${copy.id}@${copy.version}`;
       blueprints.set(key, copy);
       const list = blueprintsByClient.get(String(copy.client_id)) || [];
       list.push(copy);
       blueprintsByClient.set(String(copy.client_id), list);
-      return { ...copy };
+      return cloneJson(copy);
     },
     async getBlueprint(id, version) {
       if (version != null) {
         const row = blueprints.get(`${id}@${version}`);
-        return row ? { ...row } : null;
+        return row ? cloneJson(row) : null;
       }
       const matches = [...blueprints.values()].filter((b) => b.id === String(id));
       matches.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      return matches[0] ? { ...matches[0] } : null;
+      return matches[0] ? cloneJson(matches[0]) : null;
     },
     async updateBlueprint(id, version, patch) {
       const key = `${id}@${version}`;
       const cur = blueprints.get(key);
       if (!cur) return null;
-      const next = { ...cur, ...patch, updated_at: new Date() };
+      const next = {
+        ...cur,
+        ...patch,
+        sections: Object.prototype.hasOwnProperty.call(patch, 'sections')
+          ? cloneJson(patch.sections || {})
+          : cur.sections,
+        confidence_summary: Object.prototype.hasOwnProperty.call(
+          patch,
+          'confidence_summary'
+        )
+          ? cloneJson(patch.confidence_summary || {})
+          : cur.confidence_summary,
+        section_provenance: Object.prototype.hasOwnProperty.call(
+          patch,
+          'section_provenance'
+        )
+          ? cloneJson(patch.section_provenance || {})
+          : cur.section_provenance,
+        updated_at: new Date(),
+      };
       blueprints.set(key, next);
       const list = blueprintsByClient.get(String(next.client_id)) || [];
       const idx = list.findIndex((b) => b.id === id && b.version === version);
       if (idx >= 0) list[idx] = next;
-      return { ...next };
+      return cloneJson(next);
     },
     async listBlueprintsForClient(clientId, { status } = {}) {
-      let rows = (blueprintsByClient.get(String(clientId)) || []).map((b) => ({ ...b }));
+      let rows = (blueprintsByClient.get(String(clientId)) || []).map((b) =>
+        cloneJson(b)
+      );
       if (status) rows = rows.filter((b) => b.status === status);
       rows.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       return rows;
@@ -3562,6 +3612,25 @@ function createMemoryStore() {
           blueprints.set(key, next);
         }
       }
+    },
+    async listSessions({ status, clientId, limit } = {}) {
+      let rows = [...sessions.values()].map((row) => ({
+        ...row,
+        interview_state: { ...(row.interview_state || {}) },
+      }));
+      if (status) rows = rows.filter((r) => r.status === status);
+      if (clientId != null && clientId !== '') {
+        rows = rows.filter((r) => Number(r.client_id) === Number(clientId));
+      }
+      rows.sort((a, b) => {
+        const aTime = new Date(a.completed_at || a.updated_at || a.started_at || 0).getTime();
+        const bTime = new Date(b.completed_at || b.updated_at || b.started_at || 0).getTime();
+        return bTime - aTime;
+      });
+      if (limit != null && Number.isFinite(Number(limit))) {
+        rows = rows.slice(0, Math.max(0, Number(limit)));
+      }
+      return rows;
     },
   };
 }
@@ -3804,6 +3873,27 @@ function createPostgresStore(pool) {
          WHERE id = $1 AND version <> $2 AND status = 'approved'`,
         [String(logicalId), String(exceptVersion)]
       );
+    },
+    async listSessions({ status, clientId, limit } = {}) {
+      const params = [];
+      const where = [];
+      if (status) {
+        params.push(status);
+        where.push(`status = $${params.length}`);
+      }
+      if (clientId != null && clientId !== '') {
+        params.push(Number(clientId));
+        where.push(`client_id = $${params.length}`);
+      }
+      let sql = `SELECT * FROM cie_interview_sessions`;
+      if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
+      sql += ` ORDER BY COALESCE(completed_at, updated_at, started_at) DESC`;
+      if (limit != null && Number.isFinite(Number(limit))) {
+        params.push(Math.max(0, Math.trunc(Number(limit))));
+        sql += ` LIMIT $${params.length}`;
+      }
+      const result = await pool.query(sql, params);
+      return result.rows.map(normalizeSessionRow);
     },
   };
 }
@@ -4890,6 +4980,388 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   });
 }
 
+function sessionIsSample(session) {
+  const state = (session && session.interview_state) || {};
+  return Boolean(state.isSample || state.is_sample || state.fixtureKey);
+}
+
+function extractSessionBusinessName(session, blueprint) {
+  const state = (session && session.interview_state) || {};
+  const facts = state.normalizedFacts || {};
+  if (facts.business_name) return String(facts.business_name).trim();
+  if (state.businessName) return String(state.businessName).trim();
+  const sections =
+    (blueprint && blueprint.sections) ||
+    state.sectionState ||
+    {};
+  const identity = sections.identity && sections.identity.summary;
+  return (
+    extractBusinessName(identity) ||
+    extractReadinessBusinessName(blueprint) ||
+    ''
+  );
+}
+
+/**
+ * Decide the next useful UI/API resume target for an approved session.
+ * Never restarts Business Understanding.
+ */
+function resolveResumeTarget(session) {
+  const state = (session && session.interview_state) || {};
+  if (session && session.status !== 'APPROVED') {
+    if (session.status === 'CLIENT_REVIEW') return 'blueprint_review';
+    if (
+      ['DISCOVERY', 'CLARIFICATION', 'VALIDATION', 'BLUEPRINT_GENERATION', 'NEW'].includes(
+        session.status
+      )
+    ) {
+      return 'interview';
+    }
+  }
+
+  if (state.growthInfrastructureReadinessReport) {
+    return 'infrastructure_readiness';
+  }
+
+  const growth = state.growthConversation || null;
+  const preview =
+    (growth && (growth.first_growth_plan_preview || growth.firstGrowthPlanPreview)) ||
+    state.firstGrowthPlanPreview ||
+    null;
+  if (preview) return 'first_growth_plan_preview';
+
+  if (growth && (growth.status || (Array.isArray(growth.turns) && growth.turns.length))) {
+    return 'growth_conversation';
+  }
+
+  return 'initial_growth_direction';
+}
+
+function resumePhaseForTarget(target) {
+  switch (target) {
+    case 'infrastructure_readiness':
+      return 'readiness';
+    case 'first_growth_plan_preview':
+    case 'growth_conversation':
+      return 'growth';
+    case 'blueprint_review':
+      return 'blueprint';
+    case 'interview':
+      return 'discovery';
+    case 'initial_growth_direction':
+    default:
+      return 'complete';
+  }
+}
+
+function publicGrowthState(growthConversation) {
+  if (!growthConversation) return null;
+  const normalized = normalizeGrowthState(growthConversation);
+  return {
+    status: growthConversation.status || null,
+    startedAt: growthConversation.startedAt || null,
+    selectedFocusArea: normalized.selected_focus_area,
+    primarySegment: normalized.primary_segment,
+    secondarySegment: normalized.secondary_segment,
+    currentGrowthStep: normalized.current_growth_step,
+    completedSteps: normalized.completed_steps,
+    confidenceLevel: normalized.confidence_level,
+    firstGrowthPlanPreview:
+      normalized.first_growth_plan_preview ||
+      growthConversation.firstGrowthPlanPreview ||
+      null,
+    segmentRanking:
+      normalized.segment_ranking || growthConversation.segmentRanking || null,
+    validationTarget:
+      normalized.validation_target || growthConversation.validationTarget || null,
+    firstSegmentDecision:
+      normalized.first_segment_decision ||
+      growthConversation.firstSegmentDecision ||
+      null,
+    turnCount: Array.isArray(growthConversation.turns)
+      ? growthConversation.turns.length
+      : 0,
+  };
+}
+
+function publicInfrastructureState(session) {
+  const state = (session && session.interview_state) || {};
+  const readiness = state.infrastructureReadiness || null;
+  const report = state.growthInfrastructureReadinessReport || null;
+  if (!readiness && !report) return null;
+  return {
+    status: (readiness && readiness.status) || (report ? 'report_ready' : null),
+    step: (readiness && readiness.step) || null,
+    startedAt: (readiness && readiness.startedAt) || null,
+    turnCount:
+      readiness && Array.isArray(readiness.turns) ? readiness.turns.length : 0,
+    hasReport: Boolean(report),
+    report,
+  };
+}
+
+function summarizeApprovedSession(session, blueprint) {
+  const state = (session && session.interview_state) || {};
+  const businessName =
+    extractSessionBusinessName(session, blueprint) || 'Untitled business';
+  const resumeTarget = resolveResumeTarget(session);
+  const isSample = sessionIsSample(session);
+  const label = isSample
+    ? `${businessName} · Sample Blueprint (dev)`
+    : `${businessName} · Blueprint approved`;
+
+  return {
+    sessionId: session.id,
+    interviewId: session.id,
+    clientId: session.client_id,
+    businessName,
+    label,
+    status: session.status,
+    approvedAt: session.completed_at || state.approvedAt || null,
+    blueprintVersion:
+      (blueprint && blueprint.version) || state.blueprintVersion || null,
+    blueprintId: (blueprint && blueprint.id) || state.blueprintId || null,
+    approvedBlueprint: publicBlueprint(blueprint),
+    latestGrowthState: publicGrowthState(state.growthConversation || null),
+    latestInfrastructureState: publicInfrastructureState(session),
+    resumeTarget,
+    resumePhase: resumePhaseForTarget(resumeTarget),
+    isSample,
+    fixtureKey: state.fixtureKey || null,
+    source: state.source || (isSample ? 'fixture' : 'interview'),
+    updatedAt: session.updated_at || null,
+    startedAt: session.started_at || null,
+  };
+}
+
+async function listApprovedBlueprintSessions(opts = {}) {
+  const store = await resolveStore(opts);
+  const clientId =
+    opts.clientId != null && opts.clientId !== ''
+      ? asClientId(opts.clientId)
+      : null;
+  const includeSamples =
+    opts.includeSamples == null ? true : Boolean(opts.includeSamples);
+  const samplesOnly = Boolean(opts.samplesOnly);
+  const limit =
+    opts.limit != null && Number.isFinite(Number(opts.limit))
+      ? Math.max(1, Math.min(200, Math.trunc(Number(opts.limit))))
+      : 50;
+
+  const fetchLimit = Math.max(limit * 3, 60);
+  /** @type {object[]} */
+  let candidates = [];
+
+  if (samplesOnly) {
+    candidates = await store.listSessions({ status: 'APPROVED', limit: fetchLimit });
+    candidates = candidates.filter(sessionIsSample);
+  } else {
+    const real = await store.listSessions({
+      status: 'APPROVED',
+      clientId: clientId == null ? undefined : clientId,
+      limit: fetchLimit,
+    });
+    candidates = real.filter((row) => !sessionIsSample(row));
+
+    // Samples are a separate lineage — append when requested, never merged into
+    // a real client's interview history as if they were that client's sessions.
+    if (includeSamples) {
+      const samples = (await store.listSessions({
+        status: 'APPROVED',
+        limit: fetchLimit,
+      })).filter(sessionIsSample);
+      candidates = candidates.concat(samples);
+    }
+  }
+
+  candidates.sort((a, b) => {
+    const aTime = new Date(a.completed_at || a.updated_at || a.started_at || 0).getTime();
+    const bTime = new Date(b.completed_at || b.updated_at || b.started_at || 0).getTime();
+    return bTime - aTime;
+  });
+
+  const out = [];
+  const seen = new Set();
+  for (const session of candidates) {
+    if (seen.has(session.id)) continue;
+    seen.add(session.id);
+
+    let blueprint = null;
+    const state = session.interview_state || {};
+    if (state.blueprintId) {
+      blueprint = await store.getBlueprint(state.blueprintId, state.blueprintVersion);
+    }
+    out.push(summarizeApprovedSession(session, blueprint));
+    if (out.length >= limit) break;
+  }
+
+  return {
+    ok: true,
+    sessions: out,
+    count: out.length,
+    fixturesAllowed: fixturesAllowed(opts.env || process.env),
+  };
+}
+
+async function getResumePayload(sessionId, opts = {}) {
+  const detail = await getInterview(sessionId, opts);
+  return {
+    ...detail,
+    ok: true,
+    resumeTarget: detail.resumeTarget,
+    resumePhase: detail.resumePhase,
+    action: opts.action || 'continue',
+  };
+}
+
+/**
+ * Create or reuse the Anchor Cleaning sample approved Blueprint (dev/test only).
+ * Marked isSample — never overwrites a real approved Blueprint session.
+ */
+async function loadAnchorSampleBlueprint(opts = {}) {
+  if (!fixturesAllowed(opts.env || process.env)) {
+    throw new ClientIntelligenceError(
+      'fixtures_disabled',
+      'CIE fixtures are disabled in this environment',
+      403
+    );
+  }
+
+  const store = await resolveStore(opts);
+  const forceNew = Boolean(opts.forceNew);
+
+  if (!forceNew) {
+    const existing = await store.listSessions({
+      status: 'APPROVED',
+      clientId: ANCHOR_SAMPLE_CLIENT_ID,
+      limit: 40,
+    });
+    const prior = existing.find(
+      (row) =>
+        sessionIsSample(row) &&
+        (row.interview_state || {}).fixtureKey === ANCHOR_FIXTURE_KEY
+    );
+    if (prior) {
+      const resume = await getResumePayload(prior.id, { ...opts, action: 'continue' });
+      return {
+        ...resume,
+        created: false,
+        isSample: true,
+        fixtureKey: ANCHOR_FIXTURE_KEY,
+        message: 'Resumed existing Anchor sample Blueprint (dev/test data).',
+      };
+    }
+  }
+
+  const sections = cloneAnchorSections();
+  const normalizedFacts = cloneAnchorNormalizedFacts();
+  const sessionId = newId();
+  const blueprintId = newId();
+  const now = new Date();
+  const confidenceSummary = confidenceSummaryFromSections(sections);
+
+  const draftBlueprint = {
+    id: blueprintId,
+    client_id: ANCHOR_SAMPLE_CLIENT_ID,
+    session_id: sessionId,
+    version: '1.0',
+    status: 'approved',
+    generated_by: `${GENERATED_BY}-fixture`,
+    sections,
+    confidence_summary: confidenceSummary,
+    playbook_id: null,
+    playbook_version: null,
+    section_provenance: {},
+    parent_blueprint_id: null,
+    created_at: now,
+    updated_at: now,
+  };
+
+  const initialGrowthDirection = buildInitialGrowthDirection(draftBlueprint, {
+    normalizedFacts,
+  });
+
+  const interviewState = {
+    mode: 'fixture',
+    done: true,
+    stepIndex: 9,
+    answers: {},
+    sectionState: sections,
+    contradictions: [],
+    revisionGuidance: [],
+    supplementalContext: [],
+    normalizedFacts,
+    blueprintId,
+    blueprintVersion: '1.0',
+    initialGrowthDirection,
+    growthConversation: null,
+    infrastructureReadiness: null,
+    growthInfrastructureReadinessReport: null,
+    isSample: true,
+    fixtureKey: ANCHOR_FIXTURE_KEY,
+    source: 'fixture',
+    businessName: ANCHOR_BUSINESS_NAME,
+    approvedAt: now.toISOString(),
+    sampleLabel: 'SAMPLE / DEV DATA — Anchor Cleaning approved Blueprint fixture',
+  };
+
+  await store.insertSession({
+    id: sessionId,
+    client_id: ANCHOR_SAMPLE_CLIENT_ID,
+    status: 'APPROVED',
+    started_at: now,
+    completed_at: now,
+    current_stage: 'Approved',
+    summary: `SAMPLE approved Blueprint for ${ANCHOR_BUSINESS_NAME}`,
+    confidence_score: overallConfidence(confidenceSummary),
+    interview_state: interviewState,
+  });
+
+  let approved = await store.insertBlueprint(draftBlueprint);
+
+  // Best-effort playbook handoff so resume lineage matches real approvals.
+  try {
+    const handoffOpts = { ...opts };
+    if (store.kind === 'memory' && !handoffOpts.playbookStore) {
+      handoffOpts.useMemoryPlaybookStore = true;
+    }
+    const handoff = await createPlaybookFromApprovedBlueprint(approved, handoffOpts);
+    approved = await store.updateBlueprint(approved.id, approved.version, {
+      playbook_id: handoff.playbook.id,
+      playbook_version: handoff.playbook.version,
+      section_provenance: handoff.sectionProvenance,
+    });
+    interviewState.playbookId = handoff.playbook.id;
+    interviewState.playbookVersion = handoff.playbook.version;
+    await store.updateSession(sessionId, { interview_state: interviewState });
+  } catch (err) {
+    // Fixture remains usable for Growth Conversation even if playbook store is unavailable.
+    console.warn('[cie-fixture] playbook handoff skipped:', err && err.message);
+  }
+
+  await store.insertTurn({
+    id: newId(),
+    session_id: sessionId,
+    speaker: 'system',
+    message:
+      'SAMPLE / DEV DATA: Loaded Anchor Cleaning approved Business Blueprint fixture. This session is not a real client interview.',
+    goal: 'Load fixture',
+    asked_because: 'Operator requested Anchor sample Blueprint for growth testing.',
+    derived_evidence: [],
+    created_at: now,
+  });
+
+  const resume = await getResumePayload(sessionId, { ...opts, action: 'continue' });
+  return {
+    ...resume,
+    ok: true,
+    created: true,
+    isSample: true,
+    fixtureKey: ANCHOR_FIXTURE_KEY,
+    message: 'Loaded Anchor sample Blueprint (dev/test data).',
+  };
+}
+
 async function getInterview(sessionId, opts = {}) {
   const store = await resolveStore(opts);
   const session = await store.getSession(sessionId);
@@ -4910,6 +5382,17 @@ async function getInterview(sessionId, opts = {}) {
     session.status === 'APPROVED'
       ? resolveInitialGrowthDirection(blueprint, session.interview_state)
       : (session.interview_state && session.interview_state.initialGrowthDirection) || null;
+  const growthConversation =
+    (session.interview_state && session.interview_state.growthConversation) || null;
+  const firstGrowthPlanPreview =
+    (growthConversation &&
+      (growthConversation.first_growth_plan_preview ||
+        growthConversation.firstGrowthPlanPreview)) ||
+    (session.interview_state && session.interview_state.firstGrowthPlanPreview) ||
+    null;
+  const resumeTarget = resolveResumeTarget(session);
+  const businessName = extractSessionBusinessName(session, blueprint);
+  const isSample = sessionIsSample(session);
   return withExperienceFields(session, {
     interviewId: session.id,
     ...publicSession(session),
@@ -4917,13 +5400,25 @@ async function getInterview(sessionId, opts = {}) {
     evidence: evidence.map(publicEvidence),
     blueprint: publicBlueprint(blueprint),
     initialGrowthDirection,
-    growthConversation:
-      (session.interview_state && session.interview_state.growthConversation) || null,
+    growthConversation,
+    firstGrowthPlanPreview,
     infrastructureReadiness:
       (session.interview_state && session.interview_state.infrastructureReadiness) || null,
     growthInfrastructureReadinessReport:
       (session.interview_state &&
         session.interview_state.growthInfrastructureReadinessReport) ||
+      null,
+    latestGrowthState: publicGrowthState(growthConversation),
+    latestInfrastructureState: publicInfrastructureState(session),
+    businessName: businessName || null,
+    isSample,
+    fixtureKey:
+      (session.interview_state && session.interview_state.fixtureKey) || null,
+    resumeTarget,
+    resumePhase: resumePhaseForTarget(resumeTarget),
+    approvedAt:
+      session.completed_at ||
+      (session.interview_state && session.interview_state.approvedAt) ||
       null,
     question: q
       ? {
@@ -5917,6 +6412,10 @@ module.exports = {
   getInterview,
   getInterviewBlueprint,
   getClientBlueprint,
+  listApprovedBlueprintSessions,
+  getResumePayload,
+  loadAnchorSampleBlueprint,
+  resolveResumeTarget,
   reviseBlueprint,
   approveBlueprint,
   startGrowthConversation,
