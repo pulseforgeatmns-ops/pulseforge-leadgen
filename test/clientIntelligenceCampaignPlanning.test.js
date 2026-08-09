@@ -19,6 +19,8 @@ const {
   DEFAULT_PROOF_ASSETS_AVAILABLE,
   DEFAULT_PROOF_ASSETS_MISSING,
   DEFAULT_INCLUSION_CRITERIA,
+  DEFAULT_REQUIRED_PROSPECT_FIELDS,
+  DEFAULT_REVIEW_GATE,
   DEFAULT_TARGET_SUBTYPE_PROPERTY_MANAGERS,
   DEFAULT_APPROVAL_BEFORE_LIST,
   DEFAULT_APPROVAL_BEFORE_LAUNCH,
@@ -28,7 +30,9 @@ const {
   buildCampaignPlanningOpening,
   buildCampaignPlanningReply,
   buildFirstCampaignPlanPreview,
+  buildProspectListCriteriaPreview,
   formatFirstCampaignPlanPreviewMessage,
+  formatProspectListCriteriaPreviewMessage,
   extractCampaignPlanFields,
   stripCampaignWrappers,
   extractAvoidPhrase,
@@ -982,6 +986,38 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.match(multi.message, /Prospect List Criteria Preview/i);
     assert.equal(containsForbiddenCampaignPlanningLanguage(multi.message), false);
 
+    // Structured-field criteria preview — no stitched/truncated fragments.
+    const criteria = multi.criteriaPreview;
+    assert.deepEqual(criteria.inclusionCriteria, [...DEFAULT_INCLUSION_CRITERIA]);
+    assert.ok(criteria.exclusionCriteria.length >= 3);
+    assert.ok(
+      criteria.exclusionCriteria.every(
+        (item) => !/each prospect record should include/i.test(item)
+      )
+    );
+    assert.ok(Array.isArray(criteria.requiredProspectFields));
+    assert.ok(criteria.requiredProspectFields.length >= 3);
+    assert.equal(criteria.sectionTitles.requiredProspectFields, 'Required prospect record fields');
+    assert.equal(criteria.sectionTitles.reviewGate, 'Review gate');
+    assert.match(criteria.reviewGate, /before any list is built/i);
+    assert.doesNotMatch(criteria.targetSubtype || '', /-\s*Li\b|Inclusion:|Exclusion:/i);
+    assert.doesNotMatch(
+      criteria.marketBound || '',
+      /will engage|recurring clea(?!ning)/i
+    );
+    assert.doesNotMatch(
+      formatProspectListCriteriaPreviewMessage(criteria),
+      /-\s*Li\b|recurring clea(?!ning)/i
+    );
+    assert.match(
+      formatProspectListCriteriaPreviewMessage(criteria),
+      /7\.\s+Required prospect record fields/
+    );
+    assert.match(
+      formatProspectListCriteriaPreviewMessage(criteria),
+      /8\.\s+Review gate/
+    );
+
     // After criteria preview, do not loop back to objective.
     state = {
       step: multi.step,
@@ -1270,6 +1306,7 @@ describe('First Campaign Planning session APIs', () => {
         'Prove that multi-family property managers will book walkthroughs.',
         'Inclusion: local HOA / multi-family managers with recurring needs.',
         'Exclusion: national property firms and lowest-price shoppers.',
+        'Each prospect record should include: business name, contact name, email, phone, property type, town.',
       ].join(' '),
       { store }
     );
@@ -1278,11 +1315,40 @@ describe('First Campaign Planning session APIs', () => {
     assert.equal(last.prospectListCriteriaPreview.kind, CRITERIA_ARTIFACT_KIND);
     assert.equal(last.prospectListCriteriaPreview.prospectListGenerated, false);
     assert.equal(last.prospectListCriteriaPreview.outreachCopyGenerated, false);
+    assert.equal(last.prospectListCriteriaPreview.accountChangesMade, false);
     assert.match(last.message, /Prospect List Criteria Preview/i);
     assert.doesNotMatch(last.message, /What should this first campaign prove/i);
     assert.doesNotMatch(
       last.message,
       /Confirm the first target segment and subtype/i
+    );
+
+    const criteria = last.prospectListCriteriaPreview;
+    assert.deepEqual(criteria.inclusionCriteria, [...DEFAULT_INCLUSION_CRITERIA]);
+    assert.ok(
+      criteria.exclusionCriteria.every(
+        (item) => !/each prospect record should include/i.test(item)
+      )
+    );
+    assert.ok(
+      criteria.requiredProspectFields.some((f) => /business name/i.test(f))
+    );
+    assert.ok(criteria.requiredProspectFields.some((f) => /town/i.test(f)));
+    assert.doesNotMatch(
+      criteria.requiredProspectFields.join(' '),
+      /photos?\/examples?/i
+    );
+    assert.match(criteria.reviewGate || '', /before any list is built/i);
+    assert.doesNotMatch(criteria.targetSubtype || '', /-\s*Li\b|Inclusion:/i);
+    assert.doesNotMatch(
+      criteria.marketBound || '',
+      /will engage|recurring clea(?!ning)/i
+    );
+    // Comma-rich location bullets stay intact (not split into town fragments).
+    assert.ok(
+      criteria.inclusionCriteria.some((item) =>
+        /Bedford,\s*Hooksett,\s*Londonderry/i.test(item)
+      )
     );
 
     const session = await store.getSession('int-campaign-1');
@@ -1297,6 +1363,76 @@ describe('First Campaign Planning session APIs', () => {
     assert.ok(
       session.interview_state.campaignPlanning.slots.exclusionCriteria
     );
+  });
+
+  it('renders Prospect List Criteria Preview from structured fields only', () => {
+    const preview = buildProspectListCriteriaPreview(
+      {
+        businessName: 'Anchor Cleaning',
+        primarySegment: 'property managers',
+        subtype: DEFAULT_TARGET_SUBTYPE_PROPERTY_MANAGERS,
+        targetMarket: 'Greater Manchester',
+        towns: ['Bedford', 'Hooksett', 'Londonderry', 'Auburn', 'Goffstown'],
+      },
+      {
+        campaignObjective:
+          'Prove that multi-family / HOA property managers will request walkthroughs. Inclusion: HOA managers. Exclusion: national firms. Each prospect record should include: name, email.',
+        targetSegment: 'property managers',
+        targetSubtype:
+          'family / HOA property managers will request walkthroughs. Inclusion: HOA',
+        marketBound:
+          'Greater Manchester will engage in qualified conversations about recurring clea',
+        inclusionCriteria:
+          'HOA and multi-family managers with recurring building needs in Greater Manchester',
+        exclusionCriteria:
+          'national firms and price-only buyers. Each prospect record should include: business name, email, phone',
+        requiredProspectFields:
+          'business name, contact name, email, phone, property type, town',
+      }
+    );
+
+    assert.equal(preview.kind, CRITERIA_ARTIFACT_KIND);
+    assert.equal(preview.prospectListGenerated, false);
+    assert.equal(preview.outreachCopyGenerated, false);
+    assert.equal(preview.accountChangesMade, false);
+    assert.deepEqual(preview.inclusionCriteria, [...DEFAULT_INCLUSION_CRITERIA]);
+    assert.ok(
+      preview.exclusionCriteria.every(
+        (item) => !/each prospect record should include/i.test(item)
+      )
+    );
+    assert.deepEqual(preview.requiredProspectFields, [
+      'Business name',
+      'Contact name',
+      'Email',
+      'Phone',
+      'Property type',
+      'Town',
+    ]);
+    assert.equal(preview.reviewGate, DEFAULT_REVIEW_GATE);
+    assert.doesNotMatch(preview.targetSubtype, /-\s*Li\b|Inclusion:/i);
+    assert.doesNotMatch(
+      preview.marketBound,
+      /will engage|recurring clea(?!ning)/i
+    );
+    assert.match(preview.marketBound, /Bedford|Greater Manchester/i);
+    assert.ok(
+      preview.inclusionCriteria.every(
+        (item) => !/^Bedford$|^Hooksett$|^Londonderry$/i.test(item)
+      )
+    );
+
+    const rendered = formatProspectListCriteriaPreviewMessage(preview);
+    assert.match(rendered, /1\.\s+Campaign objective/);
+    assert.match(rendered, /7\.\s+Required prospect record fields/);
+    assert.match(rendered, /8\.\s+Review gate/);
+    assert.match(rendered, /9\.\s+Recommended next step/);
+    assert.doesNotMatch(rendered, /-\s*Li\b|recurring clea(?!ning)/i);
+    assert.equal(
+      preview.requiredProspectFields.length >= 1,
+      true
+    );
+    assert.ok(DEFAULT_REQUIRED_PROSPECT_FIELDS.length >= 3);
   });
 
   it('rejects unapproved sessions', async () => {
@@ -1339,6 +1475,10 @@ describe('First Campaign Planning UI markers', () => {
     assert.match(uiSource, /Available or close to ready/);
     assert.match(uiSource, /Before list-building/);
     assert.match(uiSource, /inclusionCriteria/);
+    assert.match(uiSource, /requiredProspectFields/);
+    assert.match(uiSource, /reviewGate/);
+    assert.match(uiSource, /Required prospect record fields/);
+    assert.match(uiSource, /Review gate/);
     assert.match(
       uiSource,
       /Hypothesis and validation gates before any build/

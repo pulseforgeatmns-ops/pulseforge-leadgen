@@ -44,6 +44,8 @@ const CRITERIA_SECTION_TITLES = Object.freeze({
   marketBound: 'Market bound',
   inclusionCriteria: 'Inclusion criteria',
   exclusionCriteria: 'Exclusion criteria',
+  requiredProspectFields: 'Required prospect record fields',
+  reviewGate: 'Review gate',
   recommendedNextStep: 'Recommended next step',
 });
 
@@ -162,6 +164,19 @@ const DEFAULT_EXCLUSION_CRITERIA = Object.freeze([
   'Properties outside the approved service area',
   'Prospects with no clear decision-maker or contact path',
 ]);
+
+/** Required CRM fields for a prospect-list record (criteria preview only). */
+const DEFAULT_REQUIRED_PROSPECT_FIELDS = Object.freeze([
+  'Business / property name',
+  'Decision-maker or operations contact name',
+  'Email and/or phone',
+  'Property type (multi-family, HOA, office, mixed-use, or multi-tenant)',
+  'Town / market location',
+  'Website or online listing when available',
+]);
+
+const DEFAULT_REVIEW_GATE =
+  'Operator reviews and approves these prospect-list criteria before any list is built. No outreach copy, sends, CRM writes, or account changes happen at this step.';
 
 /** Polished first-test subtype for property-manager campaigns. */
 const DEFAULT_TARGET_SUBTYPE_PROPERTY_MANAGERS =
@@ -615,6 +630,8 @@ function emptySlots() {
     validationMetrics: null,
     inclusionCriteria: null,
     exclusionCriteria: null,
+    requiredProspectFields: null,
+    reviewGate: null,
     approvalCheckpoints: null,
     previewGenerated: false,
     previewApproved: false,
@@ -700,11 +717,40 @@ function stripCriteriaClauses(text) {
     .trim();
 }
 
+const CRITERIA_SECTION_STOP =
+  'inclusion(?:\\s+criteria)?|include|includes?|exclusion(?:\\s+criteria)?|exclude|excludes?|avoid|each\\s+prospect\\s+record\\s+should\\s+include|required\\s+(?:prospect\\s+)?(?:record\\s+)?fields?|review\\s+gate';
+
 function extractLabeledCriteria(text, labels) {
   const s = String(text || '');
   const labelRe = labels.map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   const re = new RegExp(
-    `(?:^|[\\n;.]\\s*)(?:${labelRe})\\s*[:\\-]?\\s*([\\s\\S]+?)(?=(?:[\\n;.]\\s*)(?:inclusion(?:\\s+criteria)?|include|includes?|exclusion(?:\\s+criteria)?|exclude|excludes?|avoid)\\s*[:\\-]|$)`,
+    `(?:^|[\\n;.]\\s*)(?:${labelRe})\\s*[:\\-]?\\s*([\\s\\S]+?)(?=(?:[\\n;.]\\s*)(?:${CRITERIA_SECTION_STOP})\\s*[:\\-]|$)`,
+    'i'
+  );
+  const m = s.match(re);
+  if (!m || !m[1]) return null;
+  const value = peelRecordFieldsClause(m[1]).replace(/\s+/g, ' ').trim();
+  return value.length > 2 ? value : null;
+}
+
+/**
+ * Peel "Each prospect record should include …" / required-fields clauses so
+ * they never land inside exclusion/inclusion bullets.
+ */
+function peelRecordFieldsClause(text) {
+  return String(text || '')
+    .replace(
+      /(?:^|\n|;|\.)\s*(?:each\s+prospect\s+record\s+should\s+include|required\s+(?:prospect\s+)?(?:record\s+)?fields?)\s*[:\-–—]?\s*[\s\S]*$/i,
+      ' '
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractRequiredProspectFieldsText(text) {
+  const s = String(text || '');
+  const re = new RegExp(
+    `(?:^|[\\n;.]\\s*)(?:each\\s+prospect\\s+record\\s+should\\s+include|required\\s+(?:prospect\\s+)?(?:record\\s+)?fields?)\\s*[:\\-–—]?\\s*([\\s\\S]+?)(?=(?:[\\n;.]\\s*)(?:${CRITERIA_SECTION_STOP}|recommended\\s+next\\s+step)\\s*[:\\-]|$)`,
     'i'
   );
   const m = s.match(re);
@@ -759,6 +805,34 @@ function looksLikeMarket(text) {
   );
 }
 
+/**
+ * Capture a geography phrase only — never trailing objective / criteria prose
+ * after a market name (e.g. "Greater Manchester will engage…").
+ */
+function extractMarketBoundPhrase(text) {
+  const s = String(text || '').trim();
+  if (!s) return null;
+  const named = s.match(
+    /\b(Greater Manchester(?:\s+NH)?|Manchester(?:\s+NH)?)\b/i
+  );
+  if (named) {
+    // If the operator listed towns nearby, keep the compact cluster form.
+    const towns = [];
+    for (const t of DEFAULT_TOWNS) {
+      if (new RegExp(`\\b${t}\\b`, 'i').test(s)) towns.push(t);
+    }
+    if (towns.length >= 2) {
+      return `${towns.join(', ')} inside ${named[1]}`;
+    }
+    return named[1];
+  }
+  const townHits = DEFAULT_TOWNS.filter((t) =>
+    new RegExp(`\\b${t}\\b`, 'i').test(s)
+  );
+  if (townHits.length) return townHits.join(', ');
+  return null;
+}
+
 function looksLikeProof(text) {
   return /\b(checklist|photo|photos|example|reference|testimonial|response[- ]?time|proof asset|walkthrough\/estimate|service area)\b/i.test(
     String(text || '')
@@ -786,12 +860,38 @@ function looksLikeSegmentOrSubtype(text) {
 function extractSubtypeFromText(text, context) {
   const s = String(text || '').trim();
   if (!s) return null;
-  const dash = s.match(/[—-]\s*(.+)$/);
-  if (dash && dash[1] && dash[1].length > 3) return dash[1].trim();
+  // Only treat spaced dash / em-dash as a segment—subtype separator.
+  // Never match the hyphen inside "multi-family".
+  const dash = s.match(/\s[—–-]\s+(.+)$/);
+  if (dash && dash[1] && dash[1].length > 3) {
+    const afterDash = peelRecordFieldsClause(
+      stripCriteriaClauses(dash[1])
+    ).trim();
+    if (
+      afterDash.length > 3 &&
+      !/^(inclusion|exclusion|include|exclude)\b/i.test(afterDash) &&
+      !looksLikeObjective(afterDash)
+    ) {
+      return afterDash;
+    }
+  }
+  // Narrow subtype phrases only — never pull objective prose that happens
+  // to mention multi-family / HOA.
   const subtype = s.match(
-    /\b((?:multi[- ]family|hoa|office|mixed[- ]use)[^.]{0,80})/i
+    /\b((?:multi[- ]family|hoa)(?:\s*\/\s*(?:hoa|multi[- ]family))?[^.]{0,60}?)(?=\s+(?:with|in|for|that)\b|[.,;]|$)/i
   );
-  if (subtype) return subtype[1].trim();
+  if (subtype) {
+    const candidate = String(subtype[1] || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (
+      candidate.length >= 8 &&
+      candidate.length <= 90 &&
+      !/\bwill\b|\bprove\b|\brequest\b|\binclude\b|\bexclude\b/i.test(candidate)
+    ) {
+      return candidate;
+    }
+  }
   if (
     context &&
     context.subtype &&
@@ -1019,12 +1119,13 @@ function extractSlotsFromMessage(userMessage, slots, context, currentAsk) {
 
   if (ask === 'marketBound' || (!answeringOther && looksLikeMarket(text))) {
     if (ask === 'marketBound' && text.length > 8 && !inclusion && !exclusion) {
-      next.marketBound = stripCriteriaClauses(text) || text;
+      const cleaned = stripCriteriaClauses(text) || text;
+      // Keep geography only — never stitch objective tails like
+      // "Greater Manchester will engage in qualified conversations…".
+      next.marketBound = extractMarketBoundPhrase(cleaned) || cleaned;
     } else if (looksLikeMarket(text) && (ask === 'marketBound' || ask === 'opening')) {
-      const marketHit = text.match(
-        /\b(Greater Manchester|Manchester(?:\s+NH)?|Bedford|Hooksett|Londonderry|Auburn|Goffstown)([^.]{0,60})/i
-      );
-      if (marketHit) next.marketBound = marketHit[0].trim();
+      const marketHit = extractMarketBoundPhrase(text);
+      if (marketHit) next.marketBound = marketHit;
       else if (ask === 'marketBound') {
         next.marketBound = stripCriteriaClauses(text) || text;
       }
@@ -1072,24 +1173,35 @@ function extractSlotsFromMessage(userMessage, slots, context, currentAsk) {
     if (body.length > 6) next.approvalCheckpoints = body;
   }
 
+  const requiredFieldsText = extractRequiredProspectFieldsText(text);
+  if (requiredFieldsText) {
+    next.requiredProspectFields = requiredFieldsText;
+  }
+
   if (ask === 'inclusionCriteria' && !inclusion && text.length > 4) {
-    next.inclusionCriteria = stripCriteriaClauses(text) || text;
+    next.inclusionCriteria =
+      peelRecordFieldsClause(stripCriteriaClauses(text) || text) || text;
   }
   if (ask === 'exclusionCriteria' && !exclusion && text.length > 4) {
-    next.exclusionCriteria = stripCriteriaClauses(text) || text;
+    next.exclusionCriteria =
+      peelRecordFieldsClause(stripCriteriaClauses(text) || text) || text;
   }
   if (ask === 'inclusionExclusion' || ask === 'prospectListCriteria') {
     if (!inclusion && !exclusion) {
       // Split "include X / exclude Y" style without labels if possible.
       const parts = text.split(/\b(?:exclude|avoid|disqualify)\b/i);
       if (parts.length >= 2) {
-        next.inclusionCriteria = parts[0]
-          .replace(
-            /^(?:include|inclusion(?:\s+criteria)?|qualify)\s*[:\-]?\s*/i,
-            ''
-          )
-          .trim();
-        next.exclusionCriteria = parts.slice(1).join(' ').trim();
+        next.inclusionCriteria = peelRecordFieldsClause(
+          parts[0]
+            .replace(
+              /^(?:include|inclusion(?:\s+criteria)?|qualify)\s*[:\-]?\s*/i,
+              ''
+            )
+            .trim()
+        );
+        next.exclusionCriteria = peelRecordFieldsClause(
+          parts.slice(1).join(' ').trim()
+        );
       }
     }
   }
@@ -1122,30 +1234,190 @@ function criteriaSlotsReady(slots) {
   );
 }
 
+/**
+ * Normalize criteria into clean bullets.
+ * Never split on commas inside locations/roles — only newlines, bullets,
+ * semicolons, or sentence boundaries.
+ */
 function normalizeCriteriaList(value) {
   if (Array.isArray(value)) {
-    return uniqueStrings(value.map((x) => String(x).trim())).slice(0, 8);
+    return uniqueStrings(
+      value
+        .map((x) => peelRecordFieldsClause(String(x || '').trim()))
+        .filter(Boolean)
+    ).slice(0, 8);
   }
-  const listed = splitList(value);
-  if (listed.length) return listed;
-  const s = String(value || '').trim();
-  return s ? [s] : [];
+  const s = peelRecordFieldsClause(String(value || '').trim());
+  if (!s) return [];
+  const listed = s
+    .split(/\n|;|•|\u2022|(?<=\.)\s+(?=[A-Z])/g)
+    .map((x) => x.replace(/^[-–—*\d.)\s]+/, '').trim())
+    .filter((x) => x.length > 2);
+  if (listed.length > 1) return uniqueStrings(listed).slice(0, 8);
+  return [s];
+}
+
+function parseProspectFieldList(text) {
+  return String(text || '')
+    .split(/\n|;|•|\u2022|,(?=\s)/g)
+    .map((x) => x.replace(/^[-–—*\d.)\s]+/, '').replace(/\.$/, '').trim())
+    .filter((x) => x.length > 2 && x.length < 80)
+    .filter((x) => !/^(each prospect|required)/i.test(x))
+    // Reject proof-asset / criteria bleed that is not a CRM field label.
+    .filter(
+      (x) =>
+        !/\b(photos?\/examples?|response-time|checklist|inclusion|exclusion|walkthrough)\b/i.test(
+          x
+        )
+    )
+    .map((x) => x.charAt(0).toUpperCase() + x.slice(1));
+}
+
+function normalizeRequiredProspectFields(value, answers, context) {
+  if (Array.isArray(value) && value.length >= 3) {
+    return uniqueStrings(
+      value.map((x) => String(x).trim().replace(/\.$/, ''))
+    ).slice(0, 10);
+  }
+  const fromSlot = String(value || '').trim();
+  const candidates = [
+    fromSlot,
+    extractRequiredProspectFieldsText(fromSlot),
+    // Prefer the active criteria answers only — never the full planning blob
+    // (proof assets / hypothesis text can look like field lists).
+    extractRequiredProspectFieldsText(
+      [
+        answerText(answers, 'inclusion_criteria'),
+        answerText(answers, 'exclusion_criteria'),
+        answerText(answers, 'prospect_list_criteria'),
+        answerText(answers, 'campaign_objective'),
+      ]
+        .filter(Boolean)
+        .join('\n')
+    ),
+  ].filter(Boolean);
+
+  for (const labeled of candidates) {
+    const fields = uniqueStrings(parseProspectFieldList(labeled)).slice(0, 10);
+    if (fields.length >= 3) return fields;
+  }
+  return [...DEFAULT_REQUIRED_PROSPECT_FIELDS];
+}
+
+function normalizeReviewGate(value) {
+  const s = String(value || '').replace(/\s+/g, ' ').trim();
+  if (
+    s.length >= 24 &&
+    /approv|review|before\b/i.test(s) &&
+    !/will engage|recurring clea/i.test(s)
+  ) {
+    return s.endsWith('.') ? s : `${s}.`;
+  }
+  return DEFAULT_REVIEW_GATE;
+}
+
+function looksTruncatedArtifactText(text) {
+  const s = String(text || '').trim();
+  if (!s) return true;
+  if (/\b-\s*[A-Z]?[a-z]{0,2}$/.test(s)) return true; // e.g. "- Li"
+  if (/\b(clea|manag|propert|conversat)$/i.test(s)) return true;
+  if (/inclusion\s*:|exclusion\s*:/i.test(s)) return true;
+  return false;
 }
 
 function buildProspectListCriteriaPreview(context, slots, opts = {}) {
   const ctx = context || {};
   const s = slots || {};
   const name = shortName(ctx.businessName || 'the business');
+  const answers = opts.answers || syncAnswersFromSlots({}, s);
+  const prior =
+    opts.priorPreview && typeof opts.priorPreview === 'object'
+      ? opts.priorPreview
+      : null;
+
+  // Structured synthesis only — never stitch raw slot/transcript fragments.
+  const fields = extractCampaignPlanFields(ctx, answers);
+  const slotInclusion = normalizeCriteriaList(s.inclusionCriteria);
+  const slotExclusion = normalizeCriteriaList(s.exclusionCriteria);
+  if (slotInclusion.length >= 3) fields.inclusionCriteria = slotInclusion;
+  if (slotExclusion.length >= 3) fields.exclusionCriteria = slotExclusion;
+
+  const objectivePart = normalizeObjectiveSection(ctx, answers, fields);
+  const segmentPart = normalizeTargetSegmentSection(ctx, answers, fields);
+  const marketBound = normalizeMarketBoundSection(ctx, {
+    ...fields,
+    marketBound:
+      extractMarketBoundPhrase(s.marketBound || fields.marketBound || '') ||
+      fields.marketBound,
+  });
+
+  const pickText = (priorVal, synthesized, fallback) => {
+    if (priorVal && !looksTruncatedArtifactText(priorVal)) return priorVal;
+    if (synthesized && !looksTruncatedArtifactText(synthesized)) {
+      return synthesized;
+    }
+    return fallback || synthesized || priorVal || null;
+  };
+
+  const pickList = (slotList, priorList, synthesized) => {
+    if (Array.isArray(slotList) && slotList.length >= 3) return slotList;
+    if (Array.isArray(priorList) && priorList.length >= 3) return priorList;
+    return synthesized || [];
+  };
+
+  const campaignObjective = pickText(
+    prior && prior.campaignObjective,
+    objectivePart.campaignObjective,
+    defaultObjectiveParagraph(ctx, answers)
+  );
+  const targetSegment = pickText(
+    prior && prior.targetSegment,
+    segmentPart.targetSegment,
+    defaultTargetSegmentBody(ctx)
+  );
+  const targetSubtype = pickText(
+    prior && prior.targetSubtype,
+    segmentPart.targetSubtype,
+    defaultTargetSubtype(ctx, answers)
+  );
+  const market = pickText(
+    prior && prior.marketBound,
+    marketBound,
+    defaultMarketBound(ctx)
+  );
+  const inclusionCriteria = pickList(
+    slotInclusion,
+    prior && prior.inclusionCriteria,
+    segmentPart.inclusionCriteria
+  );
+  const exclusionCriteria = pickList(
+    slotExclusion,
+    prior && prior.exclusionCriteria,
+    segmentPart.exclusionCriteria
+  );
+  const requiredProspectFields = normalizeRequiredProspectFields(
+    s.requiredProspectFields ||
+      (prior && prior.requiredProspectFields) ||
+      null,
+    answers,
+    ctx
+  );
+  const reviewGate = normalizeReviewGate(
+    s.reviewGate || (prior && prior.reviewGate) || null
+  );
+
   return {
     kind: CRITERIA_ARTIFACT_KIND,
     title: CRITERIA_PREVIEW_TITLE,
     businessName: name,
-    campaignObjective: s.campaignObjective || null,
-    targetSegment: s.targetSegment || ctx.primarySegment || null,
-    targetSubtype: s.targetSubtype || ctx.subtype || null,
-    marketBound: s.marketBound || ctx.targetMarket || null,
-    inclusionCriteria: normalizeCriteriaList(s.inclusionCriteria),
-    exclusionCriteria: normalizeCriteriaList(s.exclusionCriteria),
+    campaignObjective,
+    targetSegment,
+    targetSubtype,
+    marketBound: market,
+    inclusionCriteria,
+    exclusionCriteria,
+    requiredProspectFields,
+    reviewGate,
     sectionTitles: { ...CRITERIA_SECTION_TITLES },
     planningOnly: true,
     prospectListGenerated: false,
@@ -1193,7 +1465,16 @@ function formatProspectListCriteriaPreviewMessage(preview) {
   if (!(p.exclusionCriteria || []).length) lines.push('- —');
   lines.push('');
 
-  lines.push(`7. ${titles.recommendedNextStep}`);
+  lines.push(`7. ${titles.requiredProspectFields}`);
+  for (const item of p.requiredProspectFields || []) lines.push(`- ${item}`);
+  if (!(p.requiredProspectFields || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`8. ${titles.reviewGate}`);
+  lines.push(p.reviewGate || '—');
+  lines.push('');
+
+  lines.push(`9. ${titles.recommendedNextStep}`);
   lines.push(p.recommendedNextStep || '—');
   lines.push('');
 
@@ -2375,6 +2656,8 @@ function produceCampaignPlanPreviewResult(ctx, answers, slots, opts, leadIn) {
     const criteriaPreview = buildProspectListCriteriaPreview(ctx, nextSlots, {
       blueprintId: opts.blueprintId || ctx.blueprintId,
       blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion,
+      answers,
+      priorPreview: preview,
     });
     lines.push('');
     lines.push(
@@ -2409,12 +2692,15 @@ function produceCampaignPlanPreviewResult(ctx, answers, slots, opts, leadIn) {
 }
 
 function produceCriteriaPreviewResult(ctx, answers, slots, opts, leadIn) {
+  const priorPreview = opts.priorPreview || null;
   const criteriaPreview = buildProspectListCriteriaPreview(ctx, slots, {
     blueprintId: opts.blueprintId || ctx.blueprintId,
     blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion,
+    answers,
+    priorPreview,
   });
   const approved = markCampaignPlanPreviewApproved(
-    opts.priorPreview || null,
+    priorPreview,
     { ...slots, previewApproved: true, previewGenerated: true },
     opts
   );
@@ -2755,6 +3041,8 @@ module.exports = {
   DEFAULT_VALIDATION_METRICS_SECONDARY,
   DEFAULT_INCLUSION_CRITERIA,
   DEFAULT_EXCLUSION_CRITERIA,
+  DEFAULT_REQUIRED_PROSPECT_FIELDS,
+  DEFAULT_REVIEW_GATE,
   DEFAULT_TARGET_SUBTYPE_PROPERTY_MANAGERS,
   DEFAULT_APPROVAL_CHECKPOINTS,
   DEFAULT_APPROVAL_BEFORE_LIST,
