@@ -354,10 +354,16 @@
     }
 
     // Hard guarantee: left panel never includes compact/simple active-task cards.
-    return html.replace(
+    let out = html.replace(
       /<(?:div|article)\b[^>]*data-role="simple-task"[^>]*>[\s\S]*?<\/(?:div|article)>/gi,
       ''
     );
+    if (guidanceOpen) {
+      // In-flow spacer so Who owns it / Complete when clear the sticky footer.
+      out +=
+        '<div class="gw-guidance-scroll-spacer" data-role="guidance-scroll-spacer" aria-hidden="true"></div>';
+    }
+    return out;
   }
 
   function countMarkers(html, marker) {
