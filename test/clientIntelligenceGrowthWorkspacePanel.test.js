@@ -61,6 +61,18 @@ const SPF_DKIM_DMARC_TASK = Object.freeze({
   resumeAction: 'setup_task',
 });
 
+const CLEAR_CTA_TASK = Object.freeze({
+  id: 'setup:website:clear_cta',
+  itemId: 'clear_cta',
+  type: 'setup',
+  title: 'Clear CTA',
+  description: 'Add one primary call-to-action (call / form / book).',
+  owner: 'operator_guided',
+  priority: 'high',
+  estimatedMinutes: 3,
+  resumeAction: 'setup_task',
+});
+
 describe('Growth Workspace left panel', () => {
   it('formats readiness owner labels for operators', () => {
     assert.equal(formatOwnerLabel('client_required'), 'Client/operator');
@@ -382,6 +394,74 @@ describe('Growth Workspace left panel', () => {
     assert.equal(
       guidance.completeWhen,
       'SPF, DKIM, and DMARC are confirmed or the required DNS changes are documented for approval.'
+    );
+  });
+
+  it('Clear CTA guidance covers commercial next-step copy, not generic capture language', () => {
+    const html = taskGuidanceCardHtml(
+      { ...CLEAR_CTA_TASK },
+      { businessName: 'Anchor Cleaning' }
+    );
+    assert.equal(analyzeLeftPanelHtml(html).taskGuidanceCards, 1);
+    assert.match(html, /Clear CTA/);
+    assert.match(html, /Owner · Operator guided/);
+    assert.match(
+      html,
+      /Before outreach, visitors should immediately know what action to take/
+    );
+    assert.match(
+      html,
+      /Anchor should have one obvious next step for commercial prospects/
+    );
+    assert.match(
+      html,
+      /Choose one primary CTA for the website and growth materials/
+    );
+    assert.match(
+      html,
+      /prefer estimate request or walkthrough request over vague language like &quot;learn more\.&quot;/
+    );
+    assert.match(html, /The primary CTA is visible on the website\./);
+    assert.match(html, /The CTA matches the commercial growth goal\./);
+    assert.match(
+      html,
+      /The CTA leads to a working form, phone number, email, or booking path\./
+    );
+    assert.match(
+      html,
+      /The CTA does not create confusion with multiple competing actions\./
+    );
+    assert.match(
+      html,
+      /No website changes are published without approval\./
+    );
+    assert.match(
+      html,
+      /Anchor has one clear primary CTA for commercial prospects, and the path behind it works\./
+    );
+    assert.doesNotMatch(html, /reliable capture and follow-up/);
+    assert.doesNotMatch(html, /The person who owns replies knows how this works/);
+
+    const guidance = resolveTaskGuidance(CLEAR_CTA_TASK, 'Anchor Cleaning');
+    assert.equal(
+      guidance.whyThisMatters,
+      'Before outreach, visitors should immediately know what action to take. Anchor should have one obvious next step for commercial prospects, such as requesting an estimate, booking a walkthrough, or calling for availability.'
+    );
+    assert.equal(
+      guidance.whatToDo,
+      'Choose one primary CTA for the website and growth materials. For Anchor, prefer estimate request or walkthrough request over vague language like "learn more."'
+    );
+    assert.deepEqual(guidance.whatToConfirm, [
+      'The primary CTA is visible on the website.',
+      'The CTA matches the commercial growth goal.',
+      'The CTA leads to a working form, phone number, email, or booking path.',
+      'The CTA does not create confusion with multiple competing actions.',
+      'No website changes are published without approval.',
+    ]);
+    assert.equal(guidance.whoOwnsIt, 'Operator guided');
+    assert.equal(
+      guidance.completeWhen,
+      'Anchor has one clear primary CTA for commercial prospects, and the path behind it works.'
     );
   });
 
