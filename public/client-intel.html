@@ -1615,54 +1615,92 @@
       );
     }
 
+    function isTruncatedCriteriaText(value) {
+      const s = String(value || '').trim();
+      if (!s) return true;
+      if (/\b-\s*[A-Z]?[a-z]{0,2}$/.test(s)) return true; // e.g. "- Li"
+      if (/\b(clea|manag|propert|conversat)$/i.test(s)) return true;
+      // Market bound that swallowed objective prose.
+      if (
+        /^(greater\s+)?manchester\b/i.test(s) &&
+        /will engage in qualified conversations/i.test(s)
+      ) {
+        return true;
+      }
+      if (/inclusion\s*:|exclusion\s*:/i.test(s)) return true;
+      if (/each prospect record should include/i.test(s)) return true;
+      return false;
+    }
+
+    function criteriaPlainText(value) {
+      const s = String(value || '').trim();
+      if (!s || isTruncatedCriteriaText(s)) return '—';
+      return s;
+    }
+
+    function criteriaListItems(items) {
+      if (!Array.isArray(items) || !items.length) return [];
+      const towns = /^(bedford|hooksett|londonderry|auburn|goffstown|manchester)\.?$/i;
+      return items
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+        .filter((item) => !towns.test(item))
+        .filter((item) => !isTruncatedCriteriaText(item))
+        .filter((item) => !/\s[-–—]\s+located in\b/i.test(item))
+        .filter((item) => !/each prospect record|review gate/i.test(item));
+    }
+
     function renderProspectListCriteriaPreview(preview) {
       if (!preview) return '';
       const titles = preview.sectionTitles || {};
       // Structured fields only — never stitch/split raw transcript prose here.
+      const inclusion = criteriaListItems(preview.inclusionCriteria);
+      const exclusion = criteriaListItems(preview.exclusionCriteria);
+      const requiredFields = criteriaListItems(preview.requiredProspectFields);
       return (
         '<div class="growth-direction" id="prospectListCriteriaPreview">' +
           '<p class="growth-kicker">Prospect List Criteria Preview</p>' +
           '<p><strong>1. ' +
             escapeHtml(titles.campaignObjective || 'Campaign objective') +
           '</strong></p>' +
-          '<p>' + escapeHtml(preview.campaignObjective || '—') + '</p>' +
+          '<p>' + escapeHtml(criteriaPlainText(preview.campaignObjective)) + '</p>' +
           '<p><strong>2. ' +
             escapeHtml(titles.targetSegment || 'Target segment') +
           '</strong></p>' +
-          '<p>' + escapeHtml(preview.targetSegment || '—') + '</p>' +
+          '<p>' + escapeHtml(criteriaPlainText(preview.targetSegment)) + '</p>' +
           '<p><strong>3. ' +
             escapeHtml(titles.targetSubtype || 'Target subtype') +
           '</strong></p>' +
-          '<p>' + escapeHtml(preview.targetSubtype || '—') + '</p>' +
+          '<p>' + escapeHtml(criteriaPlainText(preview.targetSubtype)) + '</p>' +
           '<p><strong>4. ' +
             escapeHtml(titles.marketBound || 'Market bound') +
           '</strong></p>' +
-          '<p>' + escapeHtml(preview.marketBound || '—') + '</p>' +
+          '<p>' + escapeHtml(criteriaPlainText(preview.marketBound)) + '</p>' +
           '<p><strong>5. ' +
             escapeHtml(titles.inclusionCriteria || 'Inclusion criteria') +
           '</strong></p>' +
-          renderListBlock(preview.inclusionCriteria, 'No inclusion criteria listed yet.') +
+          renderListBlock(inclusion, 'No inclusion criteria listed yet.') +
           '<p><strong>6. ' +
             escapeHtml(titles.exclusionCriteria || 'Exclusion criteria') +
           '</strong></p>' +
-          renderListBlock(preview.exclusionCriteria, 'No exclusion criteria listed yet.') +
+          renderListBlock(exclusion, 'No exclusion criteria listed yet.') +
           '<p><strong>7. ' +
             escapeHtml(
               titles.requiredProspectFields || 'Required prospect record fields'
             ) +
           '</strong></p>' +
           renderListBlock(
-            preview.requiredProspectFields,
+            requiredFields,
             'No required prospect record fields listed yet.'
           ) +
           '<p><strong>8. ' +
             escapeHtml(titles.reviewGate || 'Review gate') +
           '</strong></p>' +
-          '<p>' + escapeHtml(preview.reviewGate || '—') + '</p>' +
+          '<p>' + escapeHtml(criteriaPlainText(preview.reviewGate)) + '</p>' +
           '<p><strong>9. ' +
             escapeHtml(titles.recommendedNextStep || 'Recommended next step') +
           '</strong></p>' +
-          '<p>' + escapeHtml(preview.recommendedNextStep || '—') + '</p>' +
+          '<p>' + escapeHtml(criteriaPlainText(preview.recommendedNextStep)) + '</p>' +
           '<p class="growth-disclaimer">' +
             escapeHtml(
               preview.disclaimer ||
@@ -1900,13 +1938,22 @@
         els.completeActions.hidden = true;
         setGrowthPreviewActionsVisible(false);
         if (els.growthWorkspaceActions) els.growthWorkspaceActions.hidden = true;
-        els.sidePanelTitle.textContent = 'First Campaign Plan Preview';
-        els.sidePanelSub.textContent =
-          'Hypothesis and validation gates before any build';
-        if (state.firstCampaignPlanPreview) {
-          els.sidePanel.innerHTML = renderFirstCampaignPlanPreview(
-            state.firstCampaignPlanPreview
+        if (state.prospectListCriteriaPreview) {
+          els.sidePanelTitle.textContent = 'Prospect List Criteria Preview';
+          els.sidePanelSub.textContent =
+            'Criteria only — no prospect list built yet';
+          els.sidePanel.innerHTML = renderProspectListCriteriaPreview(
+            state.prospectListCriteriaPreview
           );
+        } else {
+          els.sidePanelTitle.textContent = 'First Campaign Plan Preview';
+          els.sidePanelSub.textContent =
+            'Hypothesis and validation gates before any build';
+          if (state.firstCampaignPlanPreview) {
+            els.sidePanel.innerHTML = renderFirstCampaignPlanPreview(
+              state.firstCampaignPlanPreview
+            );
+          }
         }
       }
       syncGrowthWorkspaceChrome();
@@ -3005,8 +3052,17 @@
         if (data && data.blueprint) state.blueprint = data.blueprint;
         if (data && data.firstCampaignPlanPreview) {
           state.firstCampaignPlanPreview = data.firstCampaignPlanPreview;
+        }
+        if (data && data.prospectListCriteriaPreview) {
+          state.prospectListCriteriaPreview = data.prospectListCriteriaPreview;
+        }
+        if (state.prospectListCriteriaPreview) {
+          els.sidePanel.innerHTML = renderProspectListCriteriaPreview(
+            state.prospectListCriteriaPreview
+          );
+        } else if (state.firstCampaignPlanPreview) {
           els.sidePanel.innerHTML = renderFirstCampaignPlanPreview(
-            data.firstCampaignPlanPreview
+            state.firstCampaignPlanPreview
           );
         } else {
           els.sidePanel.innerHTML =

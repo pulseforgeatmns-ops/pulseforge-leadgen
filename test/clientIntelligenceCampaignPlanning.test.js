@@ -1375,17 +1375,16 @@ describe('First Campaign Planning session APIs', () => {
         towns: ['Bedford', 'Hooksett', 'Londonderry', 'Auburn', 'Goffstown'],
       },
       {
-        campaignObjective:
-          'Prove that multi-family / HOA property managers will request walkthroughs. Inclusion: HOA managers. Exclusion: national firms. Each prospect record should include: name, email.',
+        campaignObjective: null,
         targetSegment: 'property managers',
         targetSubtype:
-          'family / HOA property managers will request walkthroughs. Inclusion: HOA',
+          'family / HOA property managers will request walkthroughs. Inclusion: HOA - Li',
         marketBound:
           'Greater Manchester will engage in qualified conversations about recurring clea',
         inclusionCriteria:
-          'HOA and multi-family managers with recurring building needs in Greater Manchester',
+          'Small to mid-sized local property managers - Located in Bedford, Hooksett, Londonderry, Auburn, Goffstown, or nearby Greater Manchester markets - Likely need recurring cleaning',
         exclusionCriteria:
-          'national firms and price-only buyers. Each prospect record should include: business name, email, phone',
+          'national firms and price-only buyers. Each prospect record should include: business name, email, phone. Review gate: approve before list.',
         requiredProspectFields:
           'business name, contact name, email, phone, property type, town',
       }
@@ -1479,6 +1478,9 @@ describe('First Campaign Planning UI markers', () => {
     assert.match(uiSource, /reviewGate/);
     assert.match(uiSource, /Required prospect record fields/);
     assert.match(uiSource, /Review gate/);
+    assert.match(uiSource, /isTruncatedCriteriaText/);
+    assert.match(uiSource, /criteriaListItems/);
+    assert.match(uiSource, /prospectListCriteriaPreview/);
     assert.match(
       uiSource,
       /Hypothesis and validation gates before any build/
