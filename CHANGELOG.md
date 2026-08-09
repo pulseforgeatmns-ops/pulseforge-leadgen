@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Growth Workspace left panel no longer duplicates active task guidance under Previous Plans
+  - Sections: Current Growth Plan → Current Task Guidance (after Open Task Guidance) → Previous Plans (historical only)
+  - Owner labels render as Client/operator · Operator guided · Max can check (not raw enums)
+  - Regression coverage in `test/clientIntelligenceGrowthWorkspacePanel.test.js`
+
 ### Added
 
 - Growth Work Continuation Flow ([SPEC-088](docs/specs/SPEC-088_Growth_Work_Continuation_Flow.md))
