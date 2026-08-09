@@ -11,13 +11,20 @@ const {
   PREVIEW_DISCLAIMER,
   SECTION_TITLES,
   CONVERSATION_STEPS,
-  DEFAULT_PROOF_ASSETS,
-  DEFAULT_APPROVAL_CHECKPOINTS,
+  DEFAULT_PROOF_ASSETS_AVAILABLE,
+  DEFAULT_PROOF_ASSETS_MISSING,
+  DEFAULT_INCLUSION_CRITERIA,
+  DEFAULT_APPROVAL_BEFORE_LIST,
+  DEFAULT_APPROVAL_BEFORE_LAUNCH,
+  VALIDATION_SUCCESS_STATEMENT,
   buildCampaignPlanningContext,
   buildCampaignPlanningOpening,
   buildCampaignPlanningReply,
   buildFirstCampaignPlanPreview,
   formatFirstCampaignPlanPreviewMessage,
+  extractCampaignPlanFields,
+  stripCampaignWrappers,
+  extractAvoidPhrase,
   containsForbiddenCampaignPlanningLanguage,
   humanizeStatusLabel,
   sanitizeTargetSegmentText,
@@ -53,7 +60,8 @@ const ANCHOR_BLUEPRINT = {
       unknowns: [],
     },
     avoidCustomers: {
-      summary: 'Lowest-price shoppers.',
+      summary:
+        'the business prefers to avoid Anchor should avoid buyers focused only on the lowest price',
       confidence: 0.8,
       evidenceIds: [],
       unknowns: [],
@@ -285,33 +293,66 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.equal(preview.title, PREVIEW_TITLE);
     assert.equal(preview.sectionTitles.hypothesis, 'Campaign hypothesis');
     assert.equal(preview.sectionTitles.risksCautions, 'Risks and cautions');
+    assert.equal(preview.sectionTitles.proofAssets, 'Proof assets');
     assert.match(preview.campaignObjective, /Core validation question:/i);
     assert.doesNotMatch(preview.campaignObjective, /Core question:/i);
+    assert.doesNotMatch(preview.campaignObjective, /\bI'd\b/);
     assert.match(
       preview.campaignObjective,
-      /rather than ignoring the outreach or responding only on price/i
+      /^Prove that property managers will book walkthroughs\./i
     );
     assert.doesNotMatch(
       preview.campaignObjective,
-      /not just ignore the outreach or shop on price/i
+      /Prove that Prove|The first campaign should prove/i
     );
-    assert.doesNotMatch(preview.campaignObjective, /\bI'd\b/);
-    assert.match(preview.campaignObjective, /walkthrough/i);
+    assert.doesNotMatch(
+      preview.campaignObjective,
+      /Include property managers who/i
+    );
     assert.match(
       preview.targetSegment,
       /^Small to mid-sized local property managers in Greater Manchester who oversee/i
     );
     assert.doesNotMatch(preview.targetSegment, /^property managers/i);
     assert.doesNotMatch(preview.targetSegment, /—/);
-    assert.match(preview.targetSegmentAvoid, /Avoid large institutional/i);
-    assert.match(preview.marketBound, /early attention on Bedford/i);
-    assert.match(preview.hypothesis, /local property managers/i);
+    assert.equal(preview.targetSegmentAvoid, null);
+    assert.deepEqual(preview.inclusionCriteria, [...DEFAULT_INCLUSION_CRITERIA]);
+    assert.ok(
+      preview.exclusionCriteria.some((x) => /lowest price/i.test(x))
+    );
+    assert.doesNotMatch(
+      preview.exclusionCriteria.join(' '),
+      /prefers to avoid|should avoid/i
+    );
+    assert.match(preview.marketBound, /^Start with Bedford/i);
+    assert.match(preview.marketBound, /tight enough to learn quickly/i);
+    assert.match(
+      preview.hypothesis,
+      /^If Anchor approaches small to mid-sized local property managers/i
+    );
     assert.doesNotMatch(
       preview.hypothesis,
       /Greater Manchester in Greater Manchester/i
     );
-    assert.deepEqual(preview.proofAssetsNeeded, [...DEFAULT_PROOF_ASSETS]);
-    assert.ok(preview.validationMetrics.includes('Qualified replies'));
+    assert.doesNotMatch(preview.hypothesis, /Primary signals|If we approach/i);
+    assert.deepEqual(
+      preview.proofAssetsAvailable,
+      [...DEFAULT_PROOF_ASSETS_AVAILABLE]
+    );
+    assert.deepEqual(
+      preview.proofAssetsMissing,
+      [...DEFAULT_PROOF_ASSETS_MISSING]
+    );
+    assert.ok(
+      preview.validationMetricsPrimary.some((m) =>
+        /Qualified replies from property managers/i.test(m)
+      )
+    );
+    assert.ok(preview.validationMetricsSecondary.length >= 2);
+    assert.equal(
+      preview.validationSuccessStatement,
+      VALIDATION_SUCCESS_STATEMENT
+    );
     assert.ok(
       preview.risksCautions.some((r) =>
         /growth infrastructure items may still need review/i.test(r)
@@ -321,12 +362,16 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
       preview.risksCautions.every((r) => !/\bnot_ready\b/.test(r))
     );
     assert.deepEqual(
-      preview.approvalCheckpoints,
-      [...DEFAULT_APPROVAL_CHECKPOINTS]
+      preview.approvalCheckpointsBeforeListBuilding,
+      [...DEFAULT_APPROVAL_BEFORE_LIST]
+    );
+    assert.deepEqual(
+      preview.approvalCheckpointsBeforeLaunch,
+      [...DEFAULT_APPROVAL_BEFORE_LAUNCH]
     );
     assert.match(
       preview.recommendedNextStep,
-      /Review and approve the campaign plan preview/i
+      /Review and approve this preview/i
     );
     assert.match(
       preview.recommendedNextStep,
@@ -347,7 +392,16 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     const formatted = formatFirstCampaignPlanPreviewMessage(preview);
     assert.match(formatted, /1\. Campaign objective/);
     assert.match(formatted, /2\. Target segment/);
+    assert.match(formatted, /Include property managers who:/);
+    assert.match(formatted, /Exclude property managers who:/);
     assert.match(formatted, /4\. Campaign hypothesis/);
+    assert.match(formatted, /5\. Proof assets/);
+    assert.match(formatted, /Available or close to ready:/);
+    assert.match(formatted, /Still needed or should be packaged:/);
+    assert.match(formatted, /Primary signals:/);
+    assert.match(formatted, /Secondary signals:/);
+    assert.match(formatted, /Before list-building:/);
+    assert.match(formatted, /Before launch:/);
     assert.match(formatted, /7\. Risks and cautions/);
     assert.match(formatted, /Planning preview only\./);
     assert.equal(
@@ -360,13 +414,186 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.doesNotMatch(formatted, /campaign is live/i);
   });
 
+  it('Anchor demo answers normalize without raw transcript stitching', () => {
+    const ctx = buildCampaignPlanningContext(
+      {
+        interview_state: {
+          firstGrowthPlanPreview: {
+            businessName: 'Anchor Cleaning',
+            primarySegmentDisplay: 'property managers',
+            secondarySegmentDisplay: 'professional offices',
+            primaryArea: 'Greater Manchester',
+          },
+          initialGrowthDirection: {
+            businessName: 'Anchor Cleaning',
+            primaryArea: 'Greater Manchester',
+            towns: ['Bedford', 'Hooksett', 'Londonderry', 'Auburn', 'Goffstown'],
+          },
+          growthInfrastructureReadinessReport: { overallStatus: 'partial' },
+          growthWork: { completedTaskIds: ['growth_focus', 'infra_report'] },
+        },
+      },
+      ANCHOR_BLUEPRINT
+    );
+
+    assert.equal(
+      extractAvoidPhrase(ANCHOR_BLUEPRINT.sections.avoidCustomers.summary),
+      'buyers focused only on the lowest price'
+    );
+    assert.equal(
+      stripCampaignWrappers(
+        'Prove that The first campaign should prove that small PMs will engage'
+      ),
+      'small PMs will engage'
+    );
+
+    const answers = {
+      opening: { raw: 'Keep property managers as defined.' },
+      campaign_objective: {
+        raw: [
+          'The first campaign should prove that small to mid-sized property managers in Greater Manchester will engage in qualified conversations about recurring cleaning.',
+          '',
+          'Include property managers who:',
+          '- Manage offices, mixed-use buildings, small commercial properties, or multi-tenant spaces',
+          'Exclude property managers who:',
+          '- Focus only on the lowest price',
+          '',
+          'Core validation question:',
+          'Can Anchor create qualified property-manager conversations that turn into walkthroughs or estimates?',
+        ].join('\n'),
+      },
+      target_segment: {
+        raw: 'Property managers — multi-family / HOA subtype',
+      },
+      market_bounds: {
+        raw: 'Start with Bedford, Hooksett, Londonderry, Auburn, and Goffstown. Keep Greater Manchester in scope.',
+      },
+      proof_assets: {
+        raw: [
+          'Available or close to ready:',
+          '- Clear service mix and commercial cleaning focus',
+          '- The positioning is clear: reliability / Responsiveness',
+          '- Defined service area',
+          'Still needed or should be packaged:',
+          '- Commercial cleaning checklist',
+          '- Before/after photos',
+        ].join('\n'),
+      },
+      hypothesis: {
+        raw: [
+          'If Anchor approaches small to mid-sized local property managers with clear proof of reliability, responsiveness, and a simple walkthrough path, the campaign should produce qualified conversations and at least some walkthrough or estimate interest within the first validation window.',
+          '',
+          'Primary signals:',
+          '- Qualified replies from property managers',
+          'Secondary signals:',
+          '- Questions about recurring schedule, reliability, response time, or cleaning frustrations',
+        ].join('\n'),
+      },
+      validation_metrics: {
+        raw: '3 conversations',
+      },
+      approval_checkpoints: {
+        raw: [
+          'Before list-building:',
+          '- Campaign plan preview is approved.',
+          '- Target segment. subtype. and market bound are confirmed.',
+          'Before launch:',
+          '- Prospect list criteria are approved.',
+        ].join('\n'),
+      },
+    };
+
+    const fields = extractCampaignPlanFields(ctx, answers);
+    assert.doesNotMatch(fields.objective, /Include property managers/i);
+    assert.doesNotMatch(fields.hypothesis, /Primary signals/i);
+    assert.ok(fields.inclusionCriteria.length >= 1);
+    assert.ok(fields.exclusionCriteria.length >= 1);
+
+    const preview = buildFirstCampaignPlanPreview(ctx, answers, {
+      blueprintId: ANCHOR_BLUEPRINT.id,
+      blueprintVersion: ANCHOR_BLUEPRINT.version,
+    });
+    const formatted = formatFirstCampaignPlanPreviewMessage(preview);
+
+    assert.match(
+      preview.objective,
+      /^Prove that small to mid-sized property managers in Greater Manchester will engage in qualified conversations about recurring cleaning\.?$/i
+    );
+    assert.doesNotMatch(
+      preview.campaignObjective,
+      /Prove that The first campaign should prove/i
+    );
+    assert.doesNotMatch(
+      preview.campaignObjective,
+      /Include property managers who/i
+    );
+    assert.match(
+      preview.coreValidationQuestion,
+      /^Can Anchor create qualified property-manager conversations/
+    );
+    assert.match(
+      preview.targetSegment,
+      /that likely need recurring cleaning weekly or multiple times per week/i
+    );
+    assert.match(preview.marketBound, /^Start with Bedford/i);
+    assert.match(preview.hypothesis, /^If Anchor approaches/i);
+    assert.doesNotMatch(preview.hypothesis, /Primary signals|Qualified replies/i);
+    assert.ok(
+      preview.proofAssetsAvailable.some((x) =>
+        /Positioning around reliability, responsiveness, and accountability/i.test(
+          x
+        )
+      )
+    );
+    assert.doesNotMatch(
+      preview.proofAssetsAvailable.join(' '),
+      /The positioning is clear:/i
+    );
+    assert.ok(
+      preview.approvalCheckpointsBeforeListBuilding.includes(
+        'Target segment, subtype, and market bound are confirmed.'
+      )
+    );
+    assert.ok(
+      preview.approvalCheckpointsBeforeListBuilding.every(
+        (x) => !/Target segment\. subtype\./i.test(x)
+      )
+    );
+    assert.ok(
+      preview.exclusionCriteria.every(
+        (x) => !/prefers to avoid|should avoid/i.test(x)
+      )
+    );
+    assert.ok(
+      preview.risksCautions.every(
+        (x) => !/prefers to avoid|Anchor should avoid/i.test(x)
+      )
+    );
+
+    assert.match(formatted, /Include property managers who:/);
+    assert.match(formatted, /Exclude property managers who:/);
+    assert.match(formatted, /Available or close to ready:/);
+    assert.match(formatted, /Still needed or should be packaged:/);
+    assert.match(formatted, /Primary signals:/);
+    assert.match(formatted, /Before list-building:/);
+    assert.doesNotMatch(formatted, /Prove that The first campaign should prove/i);
+    assert.doesNotMatch(formatted, /the business prefers to avoid/i);
+    assert.doesNotMatch(formatted, /Anchor should avoid/i);
+    assert.doesNotMatch(formatted, /Target segment\. subtype\./i);
+    assert.doesNotMatch(formatted, /The positioning is clear:/i);
+    assert.equal(preview.campaignsGenerated, false);
+    assert.equal(preview.prospectListGenerated, false);
+    assert.equal(preview.outreachCopyGenerated, false);
+    assert.equal(preview.accountChangesMade, false);
+  });
+
   it('sanitizes awkward target-segment joins and first-person objective copy', () => {
     assert.equal(
       sanitizeTargetSegmentText(
         'property managers — Small to mid-sized local property managers in Greater Manchester who manage offices.',
         { primarySegment: 'property managers', targetMarket: 'Greater Manchester' }
       ),
-      'Small to mid-sized local property managers in Greater Manchester who oversee offices, mixed-use buildings, small commercial properties, or multi-tenant spaces.'
+      'Small to mid-sized local property managers in Greater Manchester who oversee offices, mixed-use buildings, small commercial properties, or multi-tenant spaces that likely need recurring cleaning weekly or multiple times per week.'
     );
     assert.match(
       stripFirstPersonArtifactLanguage(
@@ -390,6 +617,8 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
           'property managers — Small to mid-sized local property managers overseeing offices in Greater Manchester',
         readinessOverallStatus: 'partial',
         completedSetupChecklist: true,
+        avoidPhrase:
+          'the business prefers to avoid Anchor should avoid buyers focused only on the lowest price',
       },
       {
         opening: { raw: 'as defined' },
@@ -408,9 +637,14 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.doesNotMatch(preview.targetSegment, /^property managers/i);
     assert.match(preview.campaignObjective, /Core validation question:/i);
     assert.doesNotMatch(preview.campaignObjective, /\bI'd\b/);
-    assert.match(
+    assert.doesNotMatch(
       preview.campaignObjective,
-      /rather than ignoring the outreach or responding only on price/i
+      /Prove that The first campaign should prove/i
+    );
+    assert.ok(
+      preview.exclusionCriteria.every(
+        (x) => !/prefers to avoid|should avoid/i.test(x)
+      )
     );
   });
 
@@ -555,6 +789,9 @@ describe('First Campaign Planning UI markers', () => {
     assert.match(uiSource, /First Campaign Plan Preview/);
     assert.match(uiSource, /Campaign hypothesis/);
     assert.match(uiSource, /Risks and cautions/);
+    assert.match(uiSource, /Available or close to ready/);
+    assert.match(uiSource, /Before list-building/);
+    assert.match(uiSource, /inclusionCriteria/);
     assert.match(
       uiSource,
       /Hypothesis and validation gates before any build/
