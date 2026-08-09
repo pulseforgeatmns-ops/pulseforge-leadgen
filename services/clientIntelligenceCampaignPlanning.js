@@ -460,10 +460,56 @@ function uniqueStrings(items) {
 function defaultTargetSegmentBody(context) {
   const market = (context && context.targetMarket) || 'Greater Manchester';
   if (/property manager/i.test(String(context && context.primarySegment))) {
-    return `Small to mid-sized local property managers in ${market} who manage offices, mixed-use buildings, small commercial properties, or multi-tenant spaces.`;
+    return `Small to mid-sized local property managers in ${market} who oversee offices, mixed-use buildings, small commercial properties, or multi-tenant spaces.`;
   }
   const primary = (context && context.primarySegment) || 'the focus segment';
   return `Small to mid-sized local ${primary} in ${market}, aligned with the approved Blueprint first focus.`;
+}
+
+/**
+ * Strip internal labels / awkward joins so the target segment never opens with
+ * lowercase keys like "property managers — …".
+ */
+function sanitizeTargetSegmentText(text, context) {
+  let s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!s) return defaultTargetSegmentBody(context);
+
+  // "property managers — Small to mid-sized…" / "property_managers - …"
+  s = s.replace(
+    /^(?:the\s+)?property[_\s-]*managers?\s*[—–:-]+\s*/i,
+    ''
+  );
+  s = s.replace(/^(?:segment|primary|target)\s*[—–:-]+\s*/i, '');
+
+  // If a validation subtype body already has the polished sentence, normalize it.
+  if (/^small to mid-sized/i.test(s)) {
+    s = s
+      .replace(/\bwho manage\b/i, 'who oversee')
+      .replace(/\boverseeing\b/i, 'who oversee');
+    // Prefer "who oversee … in Market" → "in Market who oversee …"
+    const market = (context && context.targetMarket) || 'Greater Manchester';
+    const mRe = new RegExp(
+      `^(Small to mid-sized local property managers) who oversee (.+?) in ${market.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.?$`,
+      'i'
+    );
+    const m = s.match(mRe);
+    if (m) {
+      s = `${m[1]} in ${market} who oversee ${m[2]}.`;
+    }
+    // Incomplete polish → canonical default for property-manager focus.
+    if (
+      /property manager/i.test(String(context && context.primarySegment)) &&
+      !/mixed-use|multi-tenant/i.test(s)
+    ) {
+      return defaultTargetSegmentBody(context);
+    }
+  }
+
+  if (!s || /^[a-z]/.test(s) || /^(property managers?|professional offices?)\b/i.test(s)) {
+    return defaultTargetSegmentBody(context);
+  }
+
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 function defaultTargetSegmentAvoid(context) {
@@ -480,16 +526,26 @@ function resolveTargetSegment(context, answers) {
   const segmentAnswer = answerText(answers, 'target_segment');
   const opening = answerText(answers, 'opening');
   const market = (context && context.targetMarket) || 'Greater Manchester';
+  const subtype = (context && context.subtype) || '';
 
   // Prefer polished default for "as defined", thin, or awkward "segment — subtype" joins.
   const keepAsDefined = /\bas defined\b|\bexactly as\b|\bas-is\b|\bkeep (it |them )?as\b/i.test(
     `${opening} ${segmentAnswer}`
   );
-  const awkwardJoin = /property managers?\s*[—-]\s*/i.test(segmentAnswer);
+  const awkwardJoin = /property[_\s-]*managers?\s*[—–:-]\s*/i.test(
+    `${segmentAnswer} ${subtype}`
+  );
   if (!segmentAnswer || keepAsDefined || awkwardJoin || segmentAnswer.length < 48) {
+    // If subtype is already a polished sentence, sanitize rather than re-prefix.
+    if (subtype && /^small to mid-sized/i.test(subtype) && !keepAsDefined) {
+      return sanitizeTargetSegmentText(subtype, context);
+    }
     return defaultTargetSegmentBody(context);
   }
-  return stripTrailingMarket(segmentAnswer, market);
+  return sanitizeTargetSegmentText(
+    stripTrailingMarket(segmentAnswer, market),
+    context
+  );
 }
 
 function resolveTargetSegmentAvoid(context, answers) {
@@ -511,21 +567,61 @@ function resolveMarketBound(context, answers) {
   return `${market}, with early attention on ${naturalList(towns)}.`;
 }
 
+function stripFirstPersonArtifactLanguage(text) {
+  return String(text || '')
+    .replace(
+      /\bFor the first test,\s*I'd treat the goal as:\s*/gi,
+      'Core validation question:\n'
+    )
+    .replace(/\bI'd\b/g, 'Max would')
+    .replace(/\bI would\b/g, 'Max would')
+    .replace(/\bI want\b/gi, 'The goal is')
+    .replace(
+      /not just ignore the outreach or shop on price/gi,
+      'rather than ignoring the outreach or responding only on price'
+    )
+    .replace(
+      /ignore the outreach or shop on price/gi,
+      'ignoring the outreach or responding only on price'
+    );
+}
+
 function resolveObjective(context, answers) {
-  const obj = answerText(answers, 'campaign_objective');
+  const objRaw = answerText(answers, 'campaign_objective');
+  const obj = stripFirstPersonArtifactLanguage(objRaw);
   const name = shortName((context && context.businessName) || 'the business');
   const market = (context && context.targetMarket) || 'Greater Manchester';
   const pm = isPropertyManagerFocus(context, answers);
 
-  if (obj && obj.length > 80 && /core question/i.test(obj)) {
-    return obj;
+  if (obj && obj.length > 80 && /core validation question|core question/i.test(obj)) {
+    return stripFirstPersonArtifactLanguage(
+      obj.replace(/Core question:/gi, 'Core validation question:')
+    );
   }
 
-  const proveLine = obj && obj.length > 20
-    ? (/^prove\b/i.test(obj) ? obj.replace(/\.$/, '') : `Prove that ${obj.replace(/^prove that\s+/i, '').replace(/\.$/, '')}`)
+  let proveLine = obj && obj.length > 20
+    ? (/^prove\b/i.test(obj)
+        ? obj.replace(/\.$/, '')
+        : `Prove that ${obj.replace(/^prove that\s+/i, '').replace(/\.$/, '')}`)
     : pm
-      ? `Prove that small to mid-sized property managers in ${market} are willing to have a real conversation about recurring cleaning`
-      : `Prove that ${context.primarySegment || 'the focus segment'} in ${market} will take a real conversation about recurring service`;
+      ? `Prove that small to mid-sized property managers in ${market} are willing to have a real conversation about recurring cleaning, rather than ignoring the outreach or responding only on price`
+      : `Prove that ${context.primarySegment || 'the focus segment'} in ${market} will take a real conversation about recurring service, rather than ignoring the outreach or responding only on price`;
+
+  // Prefer the tighter closing clause on the prove line.
+  if (
+    !/rather than ignoring the outreach or responding only on price/i.test(
+      proveLine
+    )
+  ) {
+    if (/not just ignore the outreach or shop on price/i.test(proveLine)) {
+      proveLine = proveLine.replace(
+        /,??\s*not just ignore the outreach or shop on price\.?$/i,
+        ', rather than ignoring the outreach or responding only on price'
+      );
+    } else if (pm || /property manager/i.test(proveLine)) {
+      proveLine = `${proveLine.replace(/\.$/, '')}, rather than ignoring the outreach or responding only on price`;
+    }
+  }
 
   const strong = pm
     ? 'The strongest signal would be a walkthrough or estimate request from a qualified property manager. Good early signals include positive replies, questions about recurring service, reliability, responsiveness, scheduling, or current cleaning frustrations.'
@@ -539,16 +635,18 @@ function resolveObjective(context, answers) {
     ? `Can ${name} create qualified property-manager conversations that turn into walkthroughs or estimates?`
     : `Can ${name} create qualified conversations that turn into walkthroughs or estimates?`;
 
-  return [
-    `${proveLine.replace(/\.$/, '')}.`,
-    '',
-    strong,
-    '',
-    weak,
-    '',
-    'Core question:',
-    core,
-  ].join('\n');
+  return stripFirstPersonArtifactLanguage(
+    [
+      `${proveLine.replace(/\.$/, '')}.`,
+      '',
+      strong,
+      '',
+      weak,
+      '',
+      'Core validation question:',
+      core,
+    ].join('\n')
+  );
 }
 
 function resolveHypothesis(context, answers) {
@@ -637,10 +735,15 @@ function buildFirstCampaignPlanPreview(context, answers, opts = {}) {
   const ctx = context || {};
   const ans = answers || {};
   const objective = resolveObjective(ctx, ans);
-  const targetSegment = resolveTargetSegment(ctx, ans);
+  const targetSegment = sanitizeTargetSegmentText(
+    resolveTargetSegment(ctx, ans),
+    ctx
+  );
   const targetSegmentAvoid = resolveTargetSegmentAvoid(ctx, ans);
   const marketBound = resolveMarketBound(ctx, ans);
-  const hypothesis = resolveHypothesis(ctx, ans);
+  const hypothesis = stripFirstPersonArtifactLanguage(
+    resolveHypothesis(ctx, ans)
+  );
   const proofAssetsNeeded = resolveProofAssets(ctx, ans);
   const validationMetrics = resolveValidationMetrics(ctx, ans);
   const approvalCheckpoints = resolveApprovalCheckpoints(ans);
@@ -880,4 +983,6 @@ module.exports = {
   stepAfterOpening,
   humanizeSegment,
   humanizeStatusLabel,
+  sanitizeTargetSegmentText,
+  stripFirstPersonArtifactLanguage,
 };
