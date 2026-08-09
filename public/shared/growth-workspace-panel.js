@@ -155,6 +155,31 @@
     };
   }
 
+  function clearCtaGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Before outreach, visitors should immediately know what action to take. ' +
+        name +
+        ' should have one obvious next step for commercial prospects, such as requesting an estimate, booking a walkthrough, or calling for availability.',
+      whatToDo:
+        'Choose one primary CTA for the website and growth materials. For ' +
+        name +
+        ', prefer estimate request or walkthrough request over vague language like "learn more."',
+      whatToConfirm: [
+        'The primary CTA is visible on the website.',
+        'The CTA matches the commercial growth goal.',
+        'The CTA leads to a working form, phone number, email, or booking path.',
+        'The CTA does not create confusion with multiple competing actions.',
+        'No website changes are published without approval.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      completeWhen:
+        name +
+        ' has one clear primary CTA for commercial prospects, and the path behind it works.',
+    };
+  }
+
   function defaultSetupGuidance(task, businessName) {
     const name = shortBusinessName(businessName);
     const title = (task && task.title) || 'this setup item';
@@ -207,6 +232,9 @@
     }
     if (itemId === 'spf_dkim_dmarc' || /:spf_dkim_dmarc$/.test(id)) {
       return spfDkimDmarcGuidance(businessName);
+    }
+    if (itemId === 'clear_cta' || /:clear_cta$/.test(id)) {
+      return clearCtaGuidance(businessName);
     }
     if (task.type === 'setup' || itemId || /^setup:/.test(id)) {
       return defaultSetupGuidance(task, businessName);
@@ -504,6 +532,7 @@
     domainConnectedGuidance,
     domainOwnedGuidance,
     spfDkimDmarcGuidance,
+    clearCtaGuidance,
     taskGuidanceCardHtml,
     renderGrowthWorkspaceLeftPanel,
     analyzeLeftPanelHtml,
