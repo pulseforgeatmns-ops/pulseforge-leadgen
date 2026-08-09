@@ -14,6 +14,7 @@ const {
   DEFAULT_PROOF_ASSETS_AVAILABLE,
   DEFAULT_PROOF_ASSETS_MISSING,
   DEFAULT_INCLUSION_CRITERIA,
+  DEFAULT_TARGET_SUBTYPE_PROPERTY_MANAGERS,
   DEFAULT_APPROVAL_BEFORE_LIST,
   DEFAULT_APPROVAL_BEFORE_LAUNCH,
   VALIDATION_SUCCESS_STATEMENT,
@@ -326,9 +327,21 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.doesNotMatch(preview.targetSegment, /—/);
     assert.equal(preview.targetSegmentAvoid, null);
     assert.deepEqual(preview.inclusionCriteria, [...DEFAULT_INCLUSION_CRITERIA]);
-    assert.ok(
-      preview.exclusionCriteria.some((x) => /lowest price/i.test(x))
+    assert.equal(
+      preview.targetSubtype,
+      DEFAULT_TARGET_SUBTYPE_PROPERTY_MANAGERS
     );
+    assert.doesNotMatch(
+      preview.targetSubtype,
+      /price buyers|service area|decision-maker/i
+    );
+    assert.deepEqual(preview.exclusionCriteria, [
+      'Large institutional property managers',
+      'Highly complex properties',
+      'Lowest-price buyers',
+      "Properties outside Anchor's service area",
+      'Prospects with no clear decision-maker or contact path',
+    ]);
     assert.doesNotMatch(
       preview.exclusionCriteria.join(' '),
       /prefers to avoid|should avoid/i
@@ -404,6 +417,16 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.match(formatted, /2\. Target segment/);
     assert.match(formatted, /Include property managers who:/);
     assert.match(formatted, /Exclude property managers who:/);
+    assert.match(
+      formatted,
+      /Subtype: property managers overseeing offices, mixed-use buildings/
+    );
+    assert.doesNotMatch(
+      formatted,
+      /Subtype:.*price buyers|Subtype:.*service area/i
+    );
+    assert.match(formatted, /Large institutional property managers/);
+    assert.match(formatted, /Lowest-price buyers/);
     assert.match(formatted, /4\. Campaign hypothesis/);
     assert.match(formatted, /5\. Proof assets/);
     assert.match(formatted, /Available or close to ready:/);
@@ -425,6 +448,53 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.doesNotMatch(
       formatted,
       /Prove that[\s\S]*Include property managers who manage/i
+    );
+  });
+
+  it('rejects exclusion-bleed subtype and keeps polished exclusion bullets', () => {
+    const preview = buildFirstCampaignPlanPreview(
+      {
+        businessName: 'Anchor Cleaning',
+        primarySegment: 'property managers',
+        targetMarket: 'Greater Manchester',
+        towns: ['Bedford', 'Hooksett', 'Londonderry', 'Auburn', 'Goffstown'],
+        subtype:
+          'price buyers, properties outside Anchor’s service area, and prospects with no clear decision-maker or contact path',
+        avoidPhrase:
+          'the business prefers to avoid Anchor should avoid buyers focused only on the lowest price',
+        readinessOverallStatus: 'partial',
+        completedSetupChecklist: true,
+      },
+      {
+        opening: { raw: 'Keep property managers as defined.' },
+        target_segment: {
+          raw: 'Property managers — price buyers, properties outside Anchor’s service area, and prospects with no clear decision-maker or contact path',
+        },
+      }
+    );
+    const formatted = formatFirstCampaignPlanPreviewMessage(preview);
+    assert.equal(
+      preview.targetSubtype,
+      DEFAULT_TARGET_SUBTYPE_PROPERTY_MANAGERS
+    );
+    assert.doesNotMatch(
+      preview.targetSubtype,
+      /price buyers|service area|decision-maker/i
+    );
+    assert.deepEqual(preview.exclusionCriteria, [
+      'Large institutional property managers',
+      'Highly complex properties',
+      'Lowest-price buyers',
+      "Properties outside Anchor's service area",
+      'Prospects with no clear decision-maker or contact path',
+    ]);
+    assert.match(
+      formatted,
+      /Subtype: property managers overseeing offices, mixed-use buildings/
+    );
+    assert.doesNotMatch(
+      formatted,
+      /Subtype:\s*price buyers/i
     );
   });
 
