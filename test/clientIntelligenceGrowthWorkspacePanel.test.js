@@ -109,6 +109,18 @@ const CONTACT_FORM_WORKS_TASK = Object.freeze({
   resumeAction: 'setup_task',
 });
 
+const PHONE_EMAIL_VISIBLE_TASK = Object.freeze({
+  id: 'setup:website:phone_email_visible',
+  itemId: 'phone_email_visible',
+  type: 'setup',
+  title: 'Phone/email visible',
+  description: 'Show phone and email in header/footer.',
+  owner: 'max_can_check',
+  priority: 'high',
+  estimatedMinutes: 3,
+  resumeAction: 'setup_task',
+});
+
 describe('Growth Workspace left panel', () => {
   it('formats readiness owner labels for operators', () => {
     assert.equal(formatOwnerLabel('client_required'), 'Client/operator');
@@ -713,6 +725,84 @@ describe('Growth Workspace left panel', () => {
     assert.equal(
       guidance.completeWhen,
       'A test form submission is received successfully and the follow-up owner is clear.'
+    );
+  });
+
+  it('Phone/email visible guidance covers findability and NAP match, not generic capture language', () => {
+    const html = taskGuidanceCardHtml(
+      { ...PHONE_EMAIL_VISIBLE_TASK },
+      { businessName: 'Anchor Cleaning' }
+    );
+    assert.equal(analyzeLeftPanelHtml(html).taskGuidanceCards, 1);
+    assert.match(html, /Phone\/email visible/);
+    assert.match(html, /Owner · Max can check/);
+    assert.match(
+      html,
+      /If a property manager is interested, they should not have to hunt for a way to reach Anchor/
+    );
+    assert.match(
+      html,
+      /Visible contact information makes the business easier to trust/
+    );
+    assert.match(
+      html,
+      /Confirm the website shows a working phone number and branded email address in obvious places/
+    );
+    assert.match(
+      html,
+      /especially the header, footer, contact page, and estimate\/request flow/
+    );
+    assert.match(html, /Phone number is visible and tappable on mobile\./);
+    assert.match(
+      html,
+      /Email address is visible or available through a clear contact path\./
+    );
+    assert.match(
+      html,
+      /Contact information matches the Google Business Profile and outreach materials\./
+    );
+    assert.match(
+      html,
+      /The listed phone\/email are monitored by the right person\./
+    );
+    assert.match(
+      html,
+      /No website changes are published without approval\./
+    );
+    assert.match(
+      html,
+      /Max can check; operator approves fixes\./
+    );
+    assert.match(
+      html,
+      /Phone and email are easy to find, accurate, and monitored\./
+    );
+    assert.doesNotMatch(html, /reliable capture and follow-up/);
+    assert.doesNotMatch(html, /The person who owns replies knows how this works/);
+
+    const guidance = resolveTaskGuidance(
+      PHONE_EMAIL_VISIBLE_TASK,
+      'Anchor Cleaning'
+    );
+    assert.equal(
+      guidance.whyThisMatters,
+      'If a property manager is interested, they should not have to hunt for a way to reach Anchor. Visible contact information makes the business easier to trust and easier to contact from the website, Google profile, and outreach follow-up.'
+    );
+    assert.equal(
+      guidance.whatToDo,
+      'Confirm the website shows a working phone number and branded email address in obvious places, especially the header, footer, contact page, and estimate/request flow.'
+    );
+    assert.deepEqual(guidance.whatToConfirm, [
+      'Phone number is visible and tappable on mobile.',
+      'Email address is visible or available through a clear contact path.',
+      'Contact information matches the Google Business Profile and outreach materials.',
+      'The listed phone/email are monitored by the right person.',
+      'No website changes are published without approval.',
+    ]);
+    assert.equal(guidance.whoOwnsIt, 'Max can check; operator approves fixes.');
+    assert.equal(
+      guidance.completeWhen,
+      'Phone and email are easy to find, accurate, and monitored.'
     );
   });
 
