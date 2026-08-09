@@ -831,7 +831,8 @@
     }
     /* Guidance open: left nav becomes the scroll region above the sticky footer. */
     .panel[data-workspace="growth"] {
-      --gw-sticky-footer-clearance: 7.5rem; /* actions row + status bar + breathing room */
+      /* Fallback until JS measures actions + status-bar height (+ 24px). */
+      --gw-sticky-footer-clearance: calc(7.5rem + 24px);
     }
     .panel[data-workspace="growth"] #savedSessions.workspace-left-nav.guidance-open {
       flex: 1 1 auto;
@@ -839,7 +840,8 @@
       max-height: none;
       overflow-x: hidden;
       overflow-y: auto;
-      padding-bottom: var(--gw-sticky-footer-clearance);
+      /* Footer height + 24px — applied via --gw-sticky-footer-clearance. */
+      padding-bottom: var(--gw-sticky-footer-clearance) !important;
       border-bottom: none;
       scroll-padding-bottom: var(--gw-sticky-footer-clearance);
     }
@@ -1500,6 +1502,33 @@
       els.growthPreviewActions.hidden = !on;
     }
 
+    function applyGuidanceFooterClearance() {
+      const scroll = els.savedSessions;
+      if (!scroll) return;
+      const guidanceOpen =
+        state.phase === 'growth_workspace' && Boolean(state.taskGuidanceOpen);
+      const chatPanel = els.chatLog && els.chatLog.closest('.panel');
+      if (!guidanceOpen) {
+        scroll.style.removeProperty('--gw-sticky-footer-clearance');
+        if (chatPanel) chatPanel.style.removeProperty('--gw-sticky-footer-clearance');
+        return;
+      }
+      // Bottom padding = sticky footer height (actions + status) + 24px.
+      let footerHeight = 0;
+      if (els.growthWorkspaceActions && !els.growthWorkspaceActions.hidden) {
+        footerHeight += els.growthWorkspaceActions.getBoundingClientRect().height;
+      }
+      if (els.sessionStatus) {
+        footerHeight += els.sessionStatus.getBoundingClientRect().height;
+      }
+      const clearancePx = Math.max(0, Math.ceil(footerHeight)) + 24;
+      const value = clearancePx + 'px';
+      scroll.style.setProperty('--gw-sticky-footer-clearance', value);
+      if (chatPanel) chatPanel.style.setProperty('--gw-sticky-footer-clearance', value);
+      scroll.style.paddingBottom = value;
+      scroll.style.scrollPaddingBottom = value;
+    }
+
     function syncGrowthWorkspaceChrome() {
       const chatPanel = els.chatLog && els.chatLog.closest('.panel');
       const inWorkspace = state.phase === 'growth_workspace';
@@ -1515,6 +1544,12 @@
         // Suppress chat bubbles while expanded guidance is open so a simple
         // task summary does not appear under the guidance card.
         els.chatLog.classList.toggle('guidance-suppressed', guidanceOpen);
+      }
+      // Measure after layout so Who owns it / Complete when clear the footer.
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => applyGuidanceFooterClearance());
+      } else {
+        applyGuidanceFooterClearance();
       }
     }
 
@@ -2333,6 +2368,7 @@
         }
       }
       els.sessionStatus.textContent = 'GROWTH PLAN · ' + (task.title || 'setup task');
+      applyGuidanceFooterClearance();
     }
 
     async function completeCurrentTask() {
@@ -2964,6 +3000,12 @@
       }
       showWelcome();
     }
+
+    window.addEventListener('resize', () => {
+      if (state.phase === 'growth_workspace' && state.taskGuidanceOpen) {
+        applyGuidanceFooterClearance();
+      }
+    });
 
     bootFromQuery();
   </script>

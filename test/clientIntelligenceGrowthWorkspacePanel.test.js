@@ -262,6 +262,8 @@ describe('Growth Workspace left panel', () => {
     assert.match(ui, /guidance-suppressed/);
     assert.match(ui, /--gw-sticky-footer-clearance/);
     assert.match(ui, /padding-bottom:\s*var\(--gw-sticky-footer-clearance\)/);
+    assert.match(ui, /applyGuidanceFooterClearance/);
+    assert.match(ui, /footerHeight \+ 24|Math\.ceil\(footerHeight\)\) \+ 24/);
     assert.match(ui, /#savedSessions \[data-role="simple-task"\]/);
     assert.match(ui, /data-active-task-card="1"/);
     assert.match(ui, /els\.chatLog\.innerHTML = ''/);
