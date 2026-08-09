@@ -232,6 +232,29 @@
     };
   }
 
+  function contactFormWorksGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'If outreach creates interest, the form has to deliver every inquiry reliably. A broken form would make ' +
+        name +
+        ' look unresponsive and could lose qualified property manager opportunities before anyone sees them.',
+      whatToDo:
+        'Submit a test inquiry through the website form using a test name and email. Confirm the message arrives in the right inbox or lead tracker, and confirm someone knows who is responsible for replying.',
+      whatToConfirm: [
+        'The form can be submitted successfully.',
+        'The submission arrives in a monitored inbox or lead tracker.',
+        'The notification includes enough detail to follow up.',
+        'The reply-to email or phone number is usable.',
+        'The person responsible for new inquiries knows where to check.',
+        'No tracking or website changes are made without approval.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      completeWhen:
+        'A test form submission is received successfully and the follow-up owner is clear.',
+    };
+  }
+
   function defaultSetupGuidance(task, businessName) {
     const name = shortBusinessName(businessName);
     const title = (task && task.title) || 'this setup item';
@@ -293,6 +316,9 @@
     }
     if (itemId === 'clear_services' || /:clear_services$/.test(id)) {
       return clearServicesGuidance(businessName);
+    }
+    if (itemId === 'contact_form_works' || /:contact_form_works$/.test(id)) {
+      return contactFormWorksGuidance(businessName);
     }
     if (task.type === 'setup' || itemId || /^setup:/.test(id)) {
       return defaultSetupGuidance(task, businessName);
@@ -593,6 +619,7 @@
     clearCtaGuidance,
     clearServiceAreaGuidance,
     clearServicesGuidance,
+    contactFormWorksGuidance,
     taskGuidanceCardHtml,
     renderGrowthWorkspaceLeftPanel,
     analyzeLeftPanelHtml,

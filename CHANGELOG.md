@@ -6,6 +6,11 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- Contact form works task guidance no longer uses generic capture/follow-up copy
+  - Why this matters: a broken form makes the business look unresponsive and can lose qualified property manager inquiries
+  - What to do: submit a test inquiry; confirm delivery and reply ownership
+  - What to confirm: successful submit, monitored inbox/tracker, usable reply-to, no unapproved tracking/site changes
+  - Who owns it: Operator guided; complete when a test submission is received and the follow-up owner is clear
 - SPF/DKIM/DMARC present task guidance no longer uses generic capture/follow-up copy
   - Why this matters: domain authentication improves inbox placement and sender trust for outbound mail
   - What to confirm: SPF, DKIM, DMARC (monitoring OK), branded mailbox send/receive, no unapproved DNS changes

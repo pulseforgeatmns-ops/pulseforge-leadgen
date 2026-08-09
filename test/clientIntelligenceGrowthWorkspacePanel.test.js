@@ -97,6 +97,18 @@ const CLEAR_SERVICES_TASK = Object.freeze({
   resumeAction: 'setup_task',
 });
 
+const CONTACT_FORM_WORKS_TASK = Object.freeze({
+  id: 'setup:website:contact_form_works',
+  itemId: 'contact_form_works',
+  type: 'setup',
+  title: 'Contact form works',
+  description: 'Test form delivery end-to-end.',
+  owner: 'operator_guided',
+  priority: 'high',
+  estimatedMinutes: 3,
+  resumeAction: 'setup_task',
+});
+
 describe('Growth Workspace left panel', () => {
   it('formats readiness owner labels for operators', () => {
     assert.equal(formatOwnerLabel('client_required'), 'Client/operator');
@@ -625,6 +637,82 @@ describe('Growth Workspace left panel', () => {
     assert.equal(
       guidance.completeWhen,
       "Anchor's primary services are clearly stated and aligned with the approved Blueprint."
+    );
+  });
+
+  it('Contact form works guidance covers test submission and follow-up ownership', () => {
+    const html = taskGuidanceCardHtml(
+      { ...CONTACT_FORM_WORKS_TASK },
+      { businessName: 'Anchor Cleaning' }
+    );
+    assert.equal(analyzeLeftPanelHtml(html).taskGuidanceCards, 1);
+    assert.match(html, /Contact form works/);
+    assert.match(html, /Owner · Operator guided/);
+    assert.match(
+      html,
+      /If outreach creates interest, the form has to deliver every inquiry reliably/
+    );
+    assert.match(
+      html,
+      /A broken form would make Anchor look unresponsive and could lose qualified property manager opportunities/
+    );
+    assert.match(
+      html,
+      /Submit a test inquiry through the website form using a test name and email/
+    );
+    assert.match(
+      html,
+      /Confirm the message arrives in the right inbox or lead tracker/
+    );
+    assert.match(html, /The form can be submitted successfully\./);
+    assert.match(
+      html,
+      /The submission arrives in a monitored inbox or lead tracker\./
+    );
+    assert.match(
+      html,
+      /The notification includes enough detail to follow up\./
+    );
+    assert.match(html, /The reply-to email or phone number is usable\./);
+    assert.match(
+      html,
+      /The person responsible for new inquiries knows where to check\./
+    );
+    assert.match(
+      html,
+      /No tracking or website changes are made without approval\./
+    );
+    assert.match(
+      html,
+      /A test form submission is received successfully and the follow-up owner is clear\./
+    );
+    assert.doesNotMatch(html, /reliable capture and follow-up/);
+    assert.doesNotMatch(html, /The person who owns replies knows how this works/);
+
+    const guidance = resolveTaskGuidance(
+      CONTACT_FORM_WORKS_TASK,
+      'Anchor Cleaning'
+    );
+    assert.equal(
+      guidance.whyThisMatters,
+      'If outreach creates interest, the form has to deliver every inquiry reliably. A broken form would make Anchor look unresponsive and could lose qualified property manager opportunities before anyone sees them.'
+    );
+    assert.equal(
+      guidance.whatToDo,
+      'Submit a test inquiry through the website form using a test name and email. Confirm the message arrives in the right inbox or lead tracker, and confirm someone knows who is responsible for replying.'
+    );
+    assert.deepEqual(guidance.whatToConfirm, [
+      'The form can be submitted successfully.',
+      'The submission arrives in a monitored inbox or lead tracker.',
+      'The notification includes enough detail to follow up.',
+      'The reply-to email or phone number is usable.',
+      'The person responsible for new inquiries knows where to check.',
+      'No tracking or website changes are made without approval.',
+    ]);
+    assert.equal(guidance.whoOwnsIt, 'Operator guided');
+    assert.equal(
+      guidance.completeWhen,
+      'A test form submission is received successfully and the follow-up owner is clear.'
     );
   });
 
