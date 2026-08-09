@@ -49,6 +49,15 @@ All notable changes to this project are documented here. Format inspired by [Kee
   - Owner labels render as Client/operator · Operator guided · Max can check (not raw enums)
   - Regression coverage in `test/clientIntelligenceGrowthWorkspacePanel.test.js`
 
+### Fixed
+
+- First Campaign Plan Preview polish ([SPEC-089](docs/specs/SPEC-089_First_Campaign_Planning_Conversation.md))
+  - Single planning-only footer disclaimer (no duplicate “planning only” banners)
+  - Humanized readiness labels (`not_ready` → plain language in risks)
+  - Polished target segment prose (no awkward `segment — subtype` joins)
+  - Hypothesis no longer doubles geography (`…in Greater Manchester in Greater Manchester`)
+  - Concise proof assets + approval checkpoints; review-first next step before any list build
+
 ### Added
 
 - First Campaign Planning Conversation ([SPEC-089](docs/specs/SPEC-089_First_Campaign_Planning_Conversation.md))

@@ -1461,53 +1461,69 @@
       );
     }
 
+    function renderParagraphBlock(text) {
+      const parts = String(text || '—')
+        .split(/\n\s*\n/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (!parts.length) return '<p>—</p>';
+      return parts
+        .map((part) => {
+          const html = escapeHtml(part).replace(/\n/g, '<br>');
+          return '<p>' + html + '</p>';
+        })
+        .join('');
+    }
+
     function renderFirstCampaignPlanPreview(preview) {
       if (!preview) return '';
       const titles = preview.sectionTitles || {};
       return (
         '<div class="growth-direction" id="firstCampaignPlanPreview">' +
           '<p class="growth-kicker">First Campaign Plan Preview</p>' +
-          '<h4>Planning only — not a launch</h4>' +
-          '<p><strong>' +
+          '<p><strong>1. ' +
             escapeHtml(titles.campaignObjective || 'Campaign objective') +
           '</strong></p>' +
-          '<p>' + escapeHtml(preview.campaignObjective || '—') + '</p>' +
-          '<p><strong>' +
+          renderParagraphBlock(preview.campaignObjective) +
+          '<p><strong>2. ' +
             escapeHtml(titles.targetSegment || 'Target segment') +
           '</strong></p>' +
           '<p>' + escapeHtml(preview.targetSegment || '—') + '</p>' +
-          '<p><strong>' +
+          (preview.targetSegmentAvoid
+            ? '<p>' + escapeHtml(preview.targetSegmentAvoid) + '</p>'
+            : '') +
+          '<p><strong>3. ' +
             escapeHtml(titles.marketBound || 'Market bound') +
           '</strong></p>' +
           '<p>' + escapeHtml(preview.marketBound || '—') + '</p>' +
-          '<p><strong>' +
-            escapeHtml(titles.hypothesis || 'Hypothesis') +
+          '<p><strong>4. ' +
+            escapeHtml(titles.hypothesis || 'Campaign hypothesis') +
           '</strong></p>' +
           '<p>' + escapeHtml(preview.hypothesis || '—') + '</p>' +
-          '<p><strong>' +
+          '<p><strong>5. ' +
             escapeHtml(titles.proofAssetsNeeded || 'Proof assets needed') +
           '</strong></p>' +
           renderListBlock(preview.proofAssetsNeeded, 'No proof assets listed yet.') +
-          '<p><strong>' +
+          '<p><strong>6. ' +
             escapeHtml(titles.validationMetrics || 'Validation metrics') +
           '</strong></p>' +
           renderListBlock(preview.validationMetrics, 'No validation metrics listed yet.') +
-          '<p><strong>' +
-            escapeHtml(titles.risksCautions || 'Risks/cautions') +
+          '<p><strong>7. ' +
+            escapeHtml(titles.risksCautions || 'Risks and cautions') +
           '</strong></p>' +
           renderListBlock(preview.risksCautions, 'No risks listed yet.') +
-          '<p><strong>' +
+          '<p><strong>8. ' +
             escapeHtml(titles.approvalCheckpoints || 'Approval checkpoints') +
           '</strong></p>' +
           renderListBlock(preview.approvalCheckpoints, 'No checkpoints listed yet.') +
-          '<p><strong>' +
+          '<p><strong>9. ' +
             escapeHtml(titles.recommendedNextStep || 'Recommended next step') +
           '</strong></p>' +
           '<p>' + escapeHtml(preview.recommendedNextStep || '—') + '</p>' +
           '<p class="growth-disclaimer">' +
             escapeHtml(
               preview.disclaimer ||
-                'Planning preview only — no prospect list, outreach copy, sends, or account changes.'
+                'Planning preview only. No prospect list, outreach copy, sends, CRM writes, or account changes have been created or launched.'
             ) +
           '</p>' +
         '</div>'
@@ -1743,7 +1759,7 @@
         if (els.growthWorkspaceActions) els.growthWorkspaceActions.hidden = true;
         els.sidePanelTitle.textContent = 'First Campaign Plan Preview';
         els.sidePanelSub.textContent =
-          'Planning only — hypothesis and validation gates before any build';
+          'Hypothesis and validation gates before any build';
         if (state.firstCampaignPlanPreview) {
           els.sidePanel.innerHTML = renderFirstCampaignPlanPreview(
             state.firstCampaignPlanPreview
@@ -2771,8 +2787,7 @@
               data.firstCampaignPlanPreview
             );
             els.sidePanelTitle.textContent = 'First Campaign Plan Preview';
-            els.sidePanelSub.textContent =
-              'Planning only — no list, copy, send, or account changes';
+            els.sidePanelSub.textContent = 'Review before any list, copy, or launch';
           }
           if (data && data.message) addBubble('assistant', data.message);
           setComposerEnabled(true);
@@ -2844,7 +2859,7 @@
           els.sidePanel.innerHTML =
             '<div class="growth-direction" id="firstCampaignPlanPreview">' +
               '<p class="growth-kicker">First Campaign Plan Preview</p>' +
-              '<p class="blueprint-empty">Answer a few planning questions and Max will draft the preview here. Still review-first — no list, copy, or launch.</p>' +
+              '<p class="blueprint-empty">Answer a few planning questions and Max will draft the preview here.</p>' +
             '</div>';
         }
         state.campaignPlanningConversationActive = true;
