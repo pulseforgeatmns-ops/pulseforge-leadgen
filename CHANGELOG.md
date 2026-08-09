@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Growth Work Continuation Flow ([SPEC-088](docs/specs/SPEC-088_Growth_Work_Continuation_Flow.md))
+  - **Resume Growth Plan** opens the Growth Workspace on the first incomplete task (never a Readiness Report dead end)
+  - Workspace tabs: Overview · Tasks · Readiness Report · Blueprint · History
+  - Setup tasks can be marked complete and auto-advance; completed plans show next-objective options
+  - Dashboard shows current plan progress and collapses previous plans
+  - API: `POST /api/v1/interview/:id/growth-plan/tasks/:taskId/complete`
 - Growth Infrastructure Readiness Conversation ([SPEC-087](docs/specs/SPEC-087_Growth_Infrastructure_Readiness.md))
   - Separate post–Blueprint-approval Max conversation: assess whether the business can capture, convert, and track demand before campaigns
   - Ten readiness areas (domain/DNS, website, GBP, reviews, social, tracking, lead capture, CRM/pipeline, sales process, brand assets)

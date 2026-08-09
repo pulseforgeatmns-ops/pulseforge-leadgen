@@ -5,6 +5,7 @@
  * SPEC-084 — Interview experience (resume + understanding fields).
  * SPEC-085 — Executive Business Brief payload via executiveSummary.
  * SPEC-087 — Growth Infrastructure Readiness start/message.
+ * SPEC-088 — Growth Work Continuation (Growth Plan resume + task complete).
  *
  * POST /api/v1/clients/:id/interview/start
  * POST /api/v1/interview/:id/message
@@ -17,6 +18,7 @@
  * POST /api/v1/interview/:id/growth/message
  * POST /api/v1/interview/:id/readiness/start
  * POST /api/v1/interview/:id/readiness/message
+ * POST /api/v1/interview/:id/growth-plan/tasks/:taskId/complete
  * GET  /api/v1/clients/:id/blueprint
  * GET  /api/v1/client-intel/sessions
  * GET  /api/v1/client-intel/sessions/:id/resume
@@ -45,6 +47,7 @@ const {
   postGrowthMessage,
   startInfrastructureReadinessConversation,
   postInfrastructureReadinessMessage,
+  completeGrowthPlanTask,
 } = require('../services/clientIntelligenceInterview');
 
 const requireOperator = [requireAuth, requireRole('admin', 'manager', 'client')];
@@ -275,6 +278,24 @@ router.post(
         });
       }
       const result = await postInfrastructureReadinessMessage(req.params.id, message);
+      noStore(res);
+      return res.json(result);
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
+
+router.post(
+  '/api/v1/interview/:id/growth-plan/tasks/:taskId/complete',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await completeGrowthPlanTask(req.params.id, req.params.taskId, {
+        note: body.note,
+        source: body.source || 'operator',
+      });
       noStore(res);
       return res.json(result);
     } catch (err) {

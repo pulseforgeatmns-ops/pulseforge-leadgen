@@ -70,9 +70,10 @@ describe('CIE saved Blueprint sessions', () => {
     assert.equal(detail.blueprint.version, approved.blueprint.version);
     assert.ok(detail.businessName);
     assert.match(detail.businessName, /Anchor/i);
-    assert.equal(detail.resumeTarget, 'initial_growth_direction');
-    assert.equal(detail.resumePhase, 'complete');
+    assert.equal(detail.resumeTarget, 'growth_workspace');
+    assert.equal(detail.resumePhase, 'growth_workspace');
     assert.ok(detail.initialGrowthDirection);
+    assert.ok(detail.growthPlan);
     assert.equal(detail.isSample, false);
 
     const listed = await listApprovedBlueprintSessions({
@@ -84,34 +85,40 @@ describe('CIE saved Blueprint sessions', () => {
     const row = listed.sessions[0];
     assert.equal(row.sessionId, interviewId);
     assert.equal(row.clientId, 42);
-    assert.match(row.label, /Blueprint approved/i);
+    assert.match(row.label, /Growth Plan/i);
     assert.equal(row.blueprintVersion, approved.blueprint.version);
     assert.ok(row.approvedBlueprint);
     assert.equal(row.approvedBlueprint.id, approved.blueprint.id);
-    assert.equal(row.resumeTarget, 'initial_growth_direction');
+    assert.equal(row.resumeTarget, 'growth_workspace');
+    assert.ok(row.growthPlan);
     assert.equal(row.isSample, false);
   });
 
-  it('routes Continue Growth Work to growth artifacts without restarting interview', async () => {
+  it('routes Resume Growth Plan to Growth Workspace without restarting interview', async () => {
     const store = createMemoryStore();
     const opts = { store, useMemoryPlaybookStore: true };
     const { interviewId } = await approveFreshInterview(opts, 43);
 
     let resume = await getResumePayload(interviewId, { ...opts, action: 'continue' });
-    assert.equal(resume.resumeTarget, 'initial_growth_direction');
-    assert.equal(resume.resumePhase, 'complete');
+    assert.equal(resume.resumeTarget, 'growth_workspace');
+    assert.equal(resume.resumePhase, 'growth_workspace');
     assert.doesNotMatch(JSON.stringify(resume.question || {}), /What is the name/);
 
     await startGrowthConversation(interviewId, opts);
     resume = await getResumePayload(interviewId, opts);
-    assert.equal(resume.resumeTarget, 'growth_conversation');
-    assert.equal(resume.resumePhase, 'growth');
+    assert.equal(resume.resumeTarget, 'growth_workspace');
+    assert.equal(resume.resumePhase, 'growth_workspace');
     assert.ok(resume.growthConversation);
     assert.ok(Array.isArray(resume.growthConversation.turns));
     assert.ok(resume.growthConversation.turns.length >= 1);
+    assert.ok(resume.growthPlan);
+    assert.equal(
+      resume.growthPlan.currentTask.id,
+      'milestone:growth_conversation'
+    );
 
     const session = await store.getSession(interviewId);
-    assert.equal(resolveResumeTarget(session), 'growth_conversation');
+    assert.equal(resolveResumeTarget(session), 'growth_workspace');
   });
 
   it('does not overwrite an approved Blueprint unless revise creates a new version', async () => {
@@ -155,7 +162,7 @@ describe('CIE saved Blueprint sessions', () => {
     assert.equal(fixture.fixtureKey, ANCHOR_FIXTURE_KEY);
     assert.equal(fixture.clientId, ANCHOR_SAMPLE_CLIENT_ID);
     assert.match(String(fixture.message || ''), /sample|dev/i);
-    assert.equal(fixture.resumeTarget, 'initial_growth_direction');
+    assert.equal(fixture.resumeTarget, 'growth_workspace');
 
     const realOnly = await listApprovedBlueprintSessions({
       ...opts,
@@ -218,17 +225,19 @@ describe('CIE saved sessions UI/routes markers', () => {
     assert.match(routeSource, /listApprovedBlueprintSessions/);
     assert.match(routeSource, /loadAnchorSampleBlueprint/);
 
-    assert.match(uiSource, /Continue Growth Work/);
+    assert.match(uiSource, /Resume Growth Plan/);
     assert.match(uiSource, /View Blueprint/);
     assert.match(uiSource, /Start New Interview/);
     assert.match(uiSource, /Load Anchor sample Blueprint/);
     assert.match(uiSource, /resumeSession/);
     assert.match(uiSource, /applyResumeState/);
+    assert.match(uiSource, /growth_workspace/);
     assert.match(uiSource, /SAMPLE \/ DEV DATA/);
 
     assert.match(dashSource, /cieSessionsPanel|CLIENT INTELLIGENCE/);
     assert.match(dashSource, /loadCieSessions/);
-    assert.match(dashSource, /Continue Growth Work/);
+    assert.match(dashSource, /Resume Growth Plan/);
+    assert.match(dashSource, /Previous Plans/);
     assert.match(shellSource, /client-intel/);
     assert.match(shellSource, /Client Intel/);
   });

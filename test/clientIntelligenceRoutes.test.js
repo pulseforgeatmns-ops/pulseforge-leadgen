@@ -115,7 +115,8 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /earned your trust/);
     assert.match(uiSource, /foundation Pulseforge will use/);
     assert.match(uiSource, /Return to Dashboard/);
-    assert.match(uiSource, /Start Growth Conversation/);
+    assert.match(uiSource, /Resume Growth Plan/);
+    assert.match(uiSource, /growth_workspace|Growth Workspace/);
     assert.match(uiSource, /Check Growth Infrastructure/);
     assert.match(uiSource, /Initial Growth Direction/);
     assert.match(uiSource, /assessment-stars/);
@@ -126,7 +127,7 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /Blueprint approved/);
     assert.match(uiSource, /Client Playbook ready/);
     assert.match(uiSource, /Initial Growth Direction/);
-    assert.match(uiSource, /Start Growth Conversation/);
+    assert.match(uiSource, /Resume Growth Plan/);
     assert.match(uiSource, /applyApprovedState/);
     assert.match(uiSource, /approveInFlight/);
     assert.match(uiSource, /already_approved|alreadyApproved/);

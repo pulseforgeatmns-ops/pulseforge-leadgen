@@ -4,6 +4,7 @@
  * SPEC-083 — Client Intelligence Engine (CIE) thin-slice v1.
  * SPEC-084 — Interview experience helpers (understanding progress, executive summary, resume).
  * SPEC-085 — Executive Business Brief (client-facing synthesis after interview).
+ * SPEC-088 — Growth Work Continuation Flow (resume to first incomplete Growth Plan task).
  * Text interview → evidence → confidence → Business Blueprint → approve → playbook handoff.
  * Does not invent campaign strategy or activate Scout/Composer.
  */
@@ -34,6 +35,11 @@ const {
   cloneAnchorSections,
   cloneAnchorNormalizedFacts,
 } = require('./clientIntelligenceFixtures');
+const {
+  buildGrowthPlan,
+  resolveGrowthPlanResumeTarget,
+  applyTaskCompletion,
+} = require('./clientIntelligenceGrowthPlan');
 
 const SESSION_STATUSES = Object.freeze([
   'NEW',
@@ -5005,9 +5011,11 @@ function extractSessionBusinessName(session, blueprint) {
 /**
  * Decide the next useful UI/API resume target for an approved session.
  * Never restarts Business Understanding.
+ *
+ * SPEC-088: approved sessions resume into the Growth Workspace (first incomplete
+ * task) — never a Readiness Report dead end.
  */
-function resolveResumeTarget(session) {
-  const state = (session && session.interview_state) || {};
+function resolveResumeTarget(session, blueprint) {
   if (session && session.status !== 'APPROVED') {
     if (session.status === 'CLIENT_REVIEW') return 'blueprint_review';
     if (
@@ -5019,26 +5027,29 @@ function resolveResumeTarget(session) {
     }
   }
 
-  if (state.growthInfrastructureReadinessReport) {
-    return 'infrastructure_readiness';
-  }
+  const planTarget = resolveGrowthPlanResumeTarget(session, blueprint);
+  if (planTarget) return planTarget;
 
+  const state = (session && session.interview_state) || {};
   const growth = state.growthConversation || null;
   const preview =
     (growth && (growth.first_growth_plan_preview || growth.firstGrowthPlanPreview)) ||
     state.firstGrowthPlanPreview ||
     null;
-  if (preview) return 'first_growth_plan_preview';
+  if (preview) return 'growth_workspace';
 
   if (growth && (growth.status || (Array.isArray(growth.turns) && growth.turns.length))) {
-    return 'growth_conversation';
+    return 'growth_workspace';
   }
 
-  return 'initial_growth_direction';
+  return 'growth_workspace';
 }
 
 function resumePhaseForTarget(target) {
   switch (target) {
+    case 'growth_workspace':
+    case 'growth_complete':
+      return 'growth_workspace';
     case 'infrastructure_readiness':
       return 'readiness';
     case 'first_growth_plan_preview':
@@ -5049,8 +5060,9 @@ function resumePhaseForTarget(target) {
     case 'interview':
       return 'discovery';
     case 'initial_growth_direction':
-    default:
       return 'complete';
+    default:
+      return 'growth_workspace';
   }
 }
 
@@ -5104,11 +5116,12 @@ function summarizeApprovedSession(session, blueprint) {
   const state = (session && session.interview_state) || {};
   const businessName =
     extractSessionBusinessName(session, blueprint) || 'Untitled business';
-  const resumeTarget = resolveResumeTarget(session);
+  const growthPlan = buildGrowthPlan(session, blueprint);
+  const resumeTarget = resolveResumeTarget(session, blueprint);
   const isSample = sessionIsSample(session);
   const label = isSample
-    ? `${businessName} · Sample Blueprint (dev)`
-    : `${businessName} · Blueprint approved`;
+    ? `${businessName} · Sample Growth Plan (dev)`
+    : `${businessName} · Growth Plan`;
 
   return {
     sessionId: session.id,
@@ -5124,6 +5137,21 @@ function summarizeApprovedSession(session, blueprint) {
     approvedBlueprint: publicBlueprint(blueprint),
     latestGrowthState: publicGrowthState(state.growthConversation || null),
     latestInfrastructureState: publicInfrastructureState(session),
+    growthPlan: {
+      percentComplete: growthPlan.percentComplete,
+      status: growthPlan.status,
+      currentTask: growthPlan.currentTask
+        ? {
+            id: growthPlan.currentTask.id,
+            title: growthPlan.currentTask.title,
+            type: growthPlan.currentTask.type,
+            estimatedMinutes: growthPlan.currentTask.estimatedMinutes,
+          }
+        : null,
+      taskCount: growthPlan.tasks.length,
+      incompleteCount: growthPlan.tasks.filter((t) => t.status !== 'complete')
+        .length,
+    },
     resumeTarget,
     resumePhase: resumePhaseForTarget(resumeTarget),
     isSample,
@@ -5210,7 +5238,67 @@ async function getResumePayload(sessionId, opts = {}) {
     ok: true,
     resumeTarget: detail.resumeTarget,
     resumePhase: detail.resumePhase,
+    growthPlan: detail.growthPlan || null,
+    currentTask:
+      (detail.growthPlan && detail.growthPlan.currentTask) || null,
     action: opts.action || 'continue',
+  };
+}
+
+/**
+ * Mark a Growth Plan task complete and advance to the next incomplete task.
+ */
+async function completeGrowthPlanTask(sessionId, taskId, opts = {}) {
+  const store = await resolveStore(opts);
+  const session = await store.getSession(sessionId);
+  if (!session) {
+    throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
+  }
+  if (session.status !== 'APPROVED') {
+    throw new ClientIntelligenceError(
+      'invalid_state',
+      'Growth Plan tasks require an approved Blueprint session',
+      409
+    );
+  }
+
+  let blueprint = null;
+  const state = session.interview_state || {};
+  if (state.blueprintId) {
+    blueprint = await store.getBlueprint(state.blueprintId, state.blueprintVersion);
+  }
+
+  let applied;
+  try {
+    applied = applyTaskCompletion(session, taskId, {
+      blueprint,
+      note: opts.note,
+      source: opts.source || 'operator',
+    });
+  } catch (err) {
+    throw new ClientIntelligenceError(
+      err.code || 'invalid_task',
+      err.message || 'Could not complete Growth Plan task',
+      err.status || 400
+    );
+  }
+
+  const updated = await store.updateSession(session.id, {
+    interview_state: applied.interview_state,
+  });
+
+  const growthPlan = buildGrowthPlan(updated, blueprint);
+  return {
+    ok: true,
+    interviewId: updated.id,
+    status: updated.status,
+    completedTask: applied.completedTask,
+    nextTask: growthPlan.currentTask,
+    growthPlan,
+    resumeTarget: resolveResumeTarget(updated, blueprint),
+    resumePhase: resumePhaseForTarget(resolveResumeTarget(updated, blueprint)),
+    growthInfrastructureReadinessReport:
+      applied.interview_state.growthInfrastructureReadinessReport || null,
   };
 }
 
@@ -5390,7 +5478,8 @@ async function getInterview(sessionId, opts = {}) {
         growthConversation.firstGrowthPlanPreview)) ||
     (session.interview_state && session.interview_state.firstGrowthPlanPreview) ||
     null;
-  const resumeTarget = resolveResumeTarget(session);
+  const growthPlan = buildGrowthPlan(session, blueprint);
+  const resumeTarget = resolveResumeTarget(session, blueprint);
   const businessName = extractSessionBusinessName(session, blueprint);
   const isSample = sessionIsSample(session);
   return withExperienceFields(session, {
@@ -5408,6 +5497,7 @@ async function getInterview(sessionId, opts = {}) {
       (session.interview_state &&
         session.interview_state.growthInfrastructureReadinessReport) ||
       null,
+    growthPlan,
     latestGrowthState: publicGrowthState(growthConversation),
     latestInfrastructureState: publicInfrastructureState(session),
     businessName: businessName || null,
@@ -6415,7 +6505,9 @@ module.exports = {
   listApprovedBlueprintSessions,
   getResumePayload,
   loadAnchorSampleBlueprint,
+  completeGrowthPlanTask,
   resolveResumeTarget,
+  buildGrowthPlan,
   reviseBlueprint,
   approveBlueprint,
   startGrowthConversation,
