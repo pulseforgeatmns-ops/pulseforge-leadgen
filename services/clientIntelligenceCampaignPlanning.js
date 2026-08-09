@@ -13,6 +13,11 @@ const PREVIEW_TITLE = 'First Campaign Plan Preview';
 const PREVIEW_DISCLAIMER =
   'Planning preview only. No prospect list, outreach copy, sends, CRM writes, or account changes have been created or launched.';
 
+const CRITERIA_ARTIFACT_KIND = 'prospect_list_criteria_preview';
+const CRITERIA_PREVIEW_TITLE = 'Prospect List Criteria Preview';
+const CRITERIA_PREVIEW_DISCLAIMER =
+  'Criteria preview only. No prospect list has been built, and no outreach copy, sends, CRM writes, or account changes have been created or launched.';
+
 const SECTION_TITLES = Object.freeze({
   campaignObjective: 'Campaign objective',
   targetSegment: 'Target segment',
@@ -23,6 +28,68 @@ const SECTION_TITLES = Object.freeze({
   risksCautions: 'Risks and cautions',
   approvalCheckpoints: 'Approval checkpoints',
   recommendedNextStep: 'Recommended next step',
+});
+
+const CRITERIA_SECTION_TITLES = Object.freeze({
+  campaignObjective: 'Campaign objective',
+  targetSegment: 'Target segment',
+  targetSubtype: 'Target subtype',
+  marketBound: 'Market bound',
+  inclusionCriteria: 'Inclusion criteria',
+  exclusionCriteria: 'Exclusion criteria',
+  recommendedNextStep: 'Recommended next step',
+});
+
+/** Required planning slots persisted on campaignPlanning.slots */
+const SLOT_KEYS = Object.freeze([
+  'campaignObjective',
+  'targetSegment',
+  'targetSubtype',
+  'marketBound',
+  'campaignHypothesis',
+  'proofAssets',
+  'validationMetrics',
+  'inclusionCriteria',
+  'exclusionCriteria',
+  'approvalCheckpoints',
+  'previewGenerated',
+  'previewApproved',
+]);
+
+/** Pre-preview ask order. targetSubtype is covered by the targetSegment prompt. */
+const PRE_PREVIEW_SLOT_ORDER = Object.freeze([
+  'campaignObjective',
+  'targetSegment',
+  'marketBound',
+  'proofAssets',
+  'campaignHypothesis',
+  'validationMetrics',
+  'approvalCheckpoints',
+]);
+
+const SLOT_PROMPTS = Object.freeze({
+  campaignObjective:
+    'What should this first campaign prove? For example: that property managers will take a discovery conversation, request a walkthrough, or ask for an estimate.',
+  targetSegment:
+    'Confirm the first target segment and subtype. Keep property managers as defined, or name a narrower subtype for the first test.',
+  marketBound:
+    'Confirm the market bounds for this first test. Stay inside Greater Manchester (or the approved Blueprint market), or name a tighter town cluster.',
+  proofAssets:
+    'What proof assets are already available for this segment — photos/examples, checklist, response-time promise, references, walkthrough/estimate process — and what is still missing?',
+  campaignHypothesis:
+    'In one sentence, what is the campaign hypothesis? If we approach [segment] in [market] with [proof], we expect [signal].',
+  validationMetrics:
+    'What early metrics would prove this is worth pursuing — for example qualified conversations, walkthroughs booked, or estimate requests in the first 30 days?',
+  approvalCheckpoints:
+    'What approval checkpoints should block list-building or launch? Typical gates: preview sign-off, proof assets ready, readiness gaps cleared, copy review.',
+  previewApproved:
+    'Does this First Campaign Plan Preview look right to approve, or do you want to revise a specific section?',
+  inclusionCriteria:
+    'What inclusion criteria should define the prospect list for this first test (who belongs on the list)?',
+  exclusionCriteria:
+    'What exclusion criteria should keep the wrong accounts out of this first test?',
+  inclusionExclusion:
+    'What inclusion and exclusion criteria should define the prospect list for this first test? Who belongs on the list, and who should stay out?',
 });
 
 const DEFAULT_TOWNS = Object.freeze([
@@ -354,6 +421,546 @@ function nextQuestion(stepId) {
 
 function stepAfterOpening() {
   return 'campaign_objective';
+}
+
+function emptySlots() {
+  return {
+    campaignObjective: null,
+    targetSegment: null,
+    targetSubtype: null,
+    marketBound: null,
+    campaignHypothesis: null,
+    proofAssets: null,
+    validationMetrics: null,
+    inclusionCriteria: null,
+    exclusionCriteria: null,
+    approvalCheckpoints: null,
+    previewGenerated: false,
+    previewApproved: false,
+  };
+}
+
+function isSlotSatisfied(slots, key) {
+  if (!slots) return false;
+  if (key === 'previewGenerated' || key === 'previewApproved') {
+    return Boolean(slots[key]);
+  }
+  const v = slots[key];
+  if (v == null) return false;
+  if (typeof v === 'boolean') return v;
+  if (Array.isArray(v)) return v.length > 0;
+  return String(v).trim().length > 0;
+}
+
+function seedSlotsFromContext(context, priorSlots) {
+  const slots = { ...emptySlots(), ...(priorSlots || {}) };
+  const ctx = context || {};
+
+  if (!isSlotSatisfied(slots, 'targetSegment') && ctx.primarySegment) {
+    slots.targetSegment = humanizeSegment(ctx.primarySegment);
+  }
+  if (!isSlotSatisfied(slots, 'targetSubtype') && ctx.subtype) {
+    slots.targetSubtype = String(ctx.subtype).trim();
+  }
+  if (!isSlotSatisfied(slots, 'marketBound') && ctx.targetMarket) {
+    slots.marketBound = String(ctx.targetMarket).trim();
+  }
+  if (!isSlotSatisfied(slots, 'proofAssets') && ctx.proofFromPrior) {
+    slots.proofAssets = String(ctx.proofFromPrior).trim();
+  }
+  // Preserve boolean flags from prior session state.
+  slots.previewGenerated = Boolean(
+    (priorSlots && priorSlots.previewGenerated) || slots.previewGenerated
+  );
+  slots.previewApproved = Boolean(
+    (priorSlots && priorSlots.previewApproved) || slots.previewApproved
+  );
+  return slots;
+}
+
+function detectReviseIntent(userMessage) {
+  return /\b(revise|change|update|edit|redo|rework|instead)\b/i.test(
+    String(userMessage || '')
+  );
+}
+
+function detectRevisedSlotKeys(userMessage) {
+  const s = String(userMessage || '').toLowerCase();
+  const keys = [];
+  if (/\bobjective\b/.test(s)) keys.push('campaignObjective');
+  if (/\bsegment\b|\bsubtype\b/.test(s)) {
+    keys.push('targetSegment', 'targetSubtype');
+  }
+  if (/\bmarket\b|\btown\b|\bgeograph/.test(s)) keys.push('marketBound');
+  if (/\bproof\b|\basset\b/.test(s)) keys.push('proofAssets');
+  if (/\bhypoth/.test(s)) keys.push('campaignHypothesis');
+  if (/\bmetric\b|\bsignal\b/.test(s)) keys.push('validationMetrics');
+  if (/\bapproval\b|\bcheckpoint\b|\bgate\b/.test(s)) {
+    keys.push('approvalCheckpoints');
+  }
+  if (/\binclusion\b|\binclude\b/.test(s)) keys.push('inclusionCriteria');
+  if (/\bexclusion\b|\bexclude\b|\bavoid\b/.test(s)) {
+    keys.push('exclusionCriteria');
+  }
+  return uniqueStrings(keys);
+}
+
+function stripCriteriaClauses(text) {
+  return String(text || '')
+    .replace(
+      /(?:^|\n|;|\.)\s*(?:inclusion(?:\s+criteria)?|include|includes?)\s*[:-]?\s*[\s\S]*?(?=(?:^|\n|;|\.)\s*(?:exclusion(?:\s+criteria)?|exclude|excludes?|avoid)\s*[:\-]|$)/gi,
+      ' '
+    )
+    .replace(
+      /(?:^|\n|;|\.)\s*(?:exclusion(?:\s+criteria)?|exclude|excludes?|avoid)\s*[:-]?\s*[\s\S]*$/gi,
+      ' '
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractLabeledCriteria(text, labels) {
+  const s = String(text || '');
+  const labelRe = labels.map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const re = new RegExp(
+    `(?:^|[\\n;.]\\s*)(?:${labelRe})\\s*[:\\-]?\\s*([\\s\\S]+?)(?=(?:[\\n;.]\\s*)(?:inclusion(?:\\s+criteria)?|include|includes?|exclusion(?:\\s+criteria)?|exclude|excludes?|avoid)\\s*[:\\-]|$)`,
+    'i'
+  );
+  const m = s.match(re);
+  if (!m || !m[1]) return null;
+  const value = m[1].replace(/\s+/g, ' ').trim();
+  return value.length > 2 ? value : null;
+}
+
+function extractInclusionCriteria(text) {
+  return (
+    extractLabeledCriteria(text, [
+      'inclusion criteria',
+      'inclusion',
+      'include',
+      'includes',
+      'must include',
+    ]) || null
+  );
+}
+
+function extractExclusionCriteria(text) {
+  return (
+    extractLabeledCriteria(text, [
+      'exclusion criteria',
+      'exclusion',
+      'exclude',
+      'excludes',
+      'avoid',
+      'must exclude',
+    ]) || null
+  );
+}
+
+function looksLikeObjective(text) {
+  const s = String(text || '');
+  return (
+    /\b(prove|proof that|objective|walkthrough|estimate|discover(?:y)? conversation|validate|worth pursuing)\b/i.test(
+      s
+    ) || /\b(first campaign|this campaign)\b/i.test(s)
+  );
+}
+
+function looksLikeHypothesis(text) {
+  return /\b(if we|hypothesis|we expect|should create|with proof)\b/i.test(
+    String(text || '')
+  );
+}
+
+function looksLikeMarket(text) {
+  return /\b(greater manchester|manchester|bedford|hooksett|londonderry|auburn|goffstown|market|town cluster|service area)\b/i.test(
+    String(text || '')
+  );
+}
+
+function looksLikeProof(text) {
+  return /\b(checklist|photo|photos|example|reference|testimonial|response[- ]?time|proof asset|walkthrough\/estimate|service area)\b/i.test(
+    String(text || '')
+  );
+}
+
+function looksLikeMetrics(text) {
+  return /\b(metric|conversation|walkthrough|estimate request|repl(?:y|ies)|signal|30 days|booked)\b/i.test(
+    String(text || '')
+  );
+}
+
+function looksLikeCheckpoints(text) {
+  return /\b(approval|checkpoint|sign[- ]?off|gate|before (?:any )?list|before launch)\b/i.test(
+    String(text || '')
+  );
+}
+
+function looksLikeSegmentOrSubtype(text) {
+  return /\b(property managers?|professional offices?|subtype|hoa|multi[- ]family|segment|as defined|exactly as)\b/i.test(
+    String(text || '')
+  );
+}
+
+function extractSubtypeFromText(text, context) {
+  const s = String(text || '').trim();
+  if (!s) return null;
+  const dash = s.match(/[—-]\s*(.+)$/);
+  if (dash && dash[1] && dash[1].length > 3) return dash[1].trim();
+  const subtype = s.match(
+    /\b((?:multi[- ]family|hoa|office|mixed[- ]use)[^.]{0,80})/i
+  );
+  if (subtype) return subtype[1].trim();
+  if (
+    context &&
+    context.subtype &&
+    /\bas defined\b|\bexactly as\b|\bkeep\b/i.test(s)
+  ) {
+    return String(context.subtype).trim();
+  }
+  return null;
+}
+
+const SOFT_PREVIEW_SLOTS = Object.freeze([
+  'proofAssets',
+  'campaignHypothesis',
+  'validationMetrics',
+  'approvalCheckpoints',
+]);
+
+function nextMissingPrePreviewSlot(slots, opts = {}) {
+  const skipSoft = Boolean(opts && opts.skipSoft);
+  const soft = new Set(SOFT_PREVIEW_SLOTS);
+  for (const key of PRE_PREVIEW_SLOT_ORDER) {
+    if (skipSoft && soft.has(key)) continue;
+    if (key === 'targetSegment') {
+      // Subtype is enrichment from prior artifacts or user text — do not
+      // block the flow when segment is already satisfied.
+      if (!isSlotSatisfied(slots, 'targetSegment')) return 'targetSegment';
+      continue;
+    }
+    if (!isSlotSatisfied(slots, key)) return key;
+  }
+  return null;
+}
+
+function slotToStep(slotKey) {
+  const map = {
+    campaignObjective: 'campaign_objective',
+    targetSegment: 'target_segment',
+    targetSubtype: 'target_segment',
+    marketBound: 'market_bounds',
+    proofAssets: 'proof_assets',
+    campaignHypothesis: 'hypothesis',
+    validationMetrics: 'validation_metrics',
+    approvalCheckpoints: 'approval_checkpoints',
+    inclusionCriteria: 'inclusion_criteria',
+    exclusionCriteria: 'exclusion_criteria',
+    previewApproved: 'preview',
+    previewGenerated: 'preview',
+  };
+  return map[slotKey] || slotKey || 'opening';
+}
+
+function syncAnswersFromSlots(answers, slots) {
+  const next = { ...(answers || {}) };
+  const write = (step, raw) => {
+    if (raw == null || String(raw).trim() === '') return;
+    next[step] = { raw: String(raw).trim(), at: new Date().toISOString() };
+  };
+
+  write('campaign_objective', slots.campaignObjective);
+  if (isSlotSatisfied(slots, 'targetSegment')) {
+    const segmentRaw = isSlotSatisfied(slots, 'targetSubtype')
+      ? `${slots.targetSegment} — ${slots.targetSubtype}`
+      : slots.targetSegment;
+    write('target_segment', segmentRaw);
+  }
+  write('market_bounds', slots.marketBound);
+  write('proof_assets', slots.proofAssets);
+  write('hypothesis', slots.campaignHypothesis);
+  write('validation_metrics', slots.validationMetrics);
+  write('approval_checkpoints', slots.approvalCheckpoints);
+  write('inclusion_criteria', slots.inclusionCriteria);
+  write('exclusion_criteria', slots.exclusionCriteria);
+  return next;
+}
+
+/**
+ * Infer and merge slot values from free-text. Fills multiple slots when
+ * the operator packs several answers into one message.
+ */
+function extractSlotsFromMessage(userMessage, slots, context, currentAsk) {
+  const text = String(userMessage || '').trim();
+  const next = { ...emptySlots(), ...(slots || {}) };
+  if (!text) return next;
+
+  if (detectReviseIntent(text)) {
+    for (const key of detectRevisedSlotKeys(text)) {
+      if (key === 'previewGenerated' || key === 'previewApproved') continue;
+      next[key] = null;
+      if (key === 'targetSegment') next.targetSubtype = null;
+    }
+  }
+
+  const inclusion = extractInclusionCriteria(text);
+  const exclusion = extractExclusionCriteria(text);
+  if (inclusion) next.inclusionCriteria = inclusion;
+  if (exclusion) next.exclusionCriteria = exclusion;
+
+  if (next.previewGenerated && !next.previewApproved) {
+    if (
+      /\b(approve|approved|looks good|lgtm|accept|yes)\b/i.test(text) &&
+      !detectReviseIntent(text)
+    ) {
+      next.previewApproved = true;
+    }
+  }
+
+  const keepAsDefined = /\bas defined\b|\bexactly as\b|\bas-is\b|\bkeep (it |them )?as\b/i.test(
+    text
+  );
+  if (keepAsDefined) {
+    if (context && context.primarySegment) {
+      next.targetSegment = humanizeSegment(context.primarySegment);
+    }
+    if (context && context.subtype) {
+      next.targetSubtype = String(context.subtype).trim();
+    }
+    if (context && context.targetMarket && !isSlotSatisfied(next, 'marketBound')) {
+      next.marketBound = String(context.targetMarket).trim();
+    }
+  }
+
+  const objectiveBody = stripCriteriaClauses(text);
+  const ask = currentAsk || null;
+
+  const shouldFillObjective =
+    ask === 'campaignObjective' ||
+    (looksLikeObjective(objectiveBody) &&
+      objectiveBody.length > 12 &&
+      !looksLikeHypothesis(objectiveBody) &&
+      // Opening confirmations like "as defined" are not objectives.
+      ask !== 'opening');
+  if (shouldFillObjective && objectiveBody.length > 12) {
+    // Avoid treating pure include/exclude answers as the objective.
+    if (!/^(inclusion|exclusion|include|exclude)\b/i.test(objectiveBody)) {
+      next.campaignObjective = objectiveBody;
+    }
+  }
+
+  if (
+    ask === 'targetSegment' ||
+    ask === 'targetSubtype' ||
+    looksLikeSegmentOrSubtype(text)
+  ) {
+    if (keepAsDefined) {
+      // already seeded above
+    } else if (/property managers?/i.test(text)) {
+      next.targetSegment = 'property managers';
+      const subtype = extractSubtypeFromText(text, context);
+      if (subtype) next.targetSubtype = subtype;
+    } else if (/professional offices?/i.test(text)) {
+      next.targetSegment = 'professional offices';
+      const subtype = extractSubtypeFromText(text, context);
+      if (subtype) next.targetSubtype = subtype;
+    } else if (ask === 'targetSegment' || ask === 'targetSubtype') {
+      const subtype = extractSubtypeFromText(text, context);
+      if (subtype) next.targetSubtype = subtype;
+      if (!isSlotSatisfied(next, 'targetSegment') && text.length > 8) {
+        next.targetSegment = stripTrailingMarket(
+          text,
+          (context && context.targetMarket) || ''
+        );
+      }
+    }
+  }
+
+  const answeringOther =
+    ask &&
+    ![
+      'opening',
+      'marketBound',
+      'proofAssets',
+      'campaignHypothesis',
+      'validationMetrics',
+      'approvalCheckpoints',
+      'targetSegment',
+      'targetSubtype',
+      null,
+      undefined,
+    ].includes(ask);
+
+  if (ask === 'marketBound' || (!answeringOther && looksLikeMarket(text))) {
+    if (ask === 'marketBound' && text.length > 8 && !inclusion && !exclusion) {
+      next.marketBound = stripCriteriaClauses(text) || text;
+    } else if (looksLikeMarket(text) && (ask === 'marketBound' || ask === 'opening')) {
+      const marketHit = text.match(
+        /\b(Greater Manchester|Manchester(?:\s+NH)?|Bedford|Hooksett|Londonderry|Auburn|Goffstown)([^.]{0,60})/i
+      );
+      if (marketHit) next.marketBound = marketHit[0].trim();
+      else if (ask === 'marketBound') {
+        next.marketBound = stripCriteriaClauses(text) || text;
+      }
+    }
+  }
+
+  if (ask === 'proofAssets' || (!answeringOther && looksLikeProof(text))) {
+    if (ask === 'proofAssets' || (looksLikeProof(text) && ask === 'opening')) {
+      const body = stripCriteriaClauses(text);
+      if (body.length > 8) next.proofAssets = body;
+    }
+  }
+
+  if (
+    ask === 'campaignHypothesis' ||
+    (!answeringOther && looksLikeHypothesis(text))
+  ) {
+    const body = stripCriteriaClauses(text);
+    if (
+      body.length > 12 &&
+      (ask === 'campaignHypothesis' || looksLikeHypothesis(body))
+    ) {
+      next.campaignHypothesis = body;
+    }
+  }
+
+  if (
+    ask === 'validationMetrics' ||
+    (!answeringOther && looksLikeMetrics(text))
+  ) {
+    const body = stripCriteriaClauses(text);
+    if (
+      body.length > 4 &&
+      (ask === 'validationMetrics' || /\d/.test(body) || /metric/i.test(body))
+    ) {
+      next.validationMetrics = body;
+    }
+  }
+
+  if (
+    ask === 'approvalCheckpoints' ||
+    (!answeringOther && looksLikeCheckpoints(text))
+  ) {
+    const body = stripCriteriaClauses(text);
+    if (body.length > 6) next.approvalCheckpoints = body;
+  }
+
+  if (ask === 'inclusionCriteria' && !inclusion && text.length > 4) {
+    next.inclusionCriteria = stripCriteriaClauses(text) || text;
+  }
+  if (ask === 'exclusionCriteria' && !exclusion && text.length > 4) {
+    next.exclusionCriteria = stripCriteriaClauses(text) || text;
+  }
+  if (ask === 'inclusionExclusion') {
+    if (!inclusion && !exclusion) {
+      // Split "include X / exclude Y" style without labels if possible.
+      const parts = text.split(/\b(?:exclude|avoid)\b/i);
+      if (parts.length >= 2) {
+        next.inclusionCriteria = parts[0]
+          .replace(/^(?:include|inclusion(?:\s+criteria)?)\s*[:\-]?\s*/i, '')
+          .trim();
+        next.exclusionCriteria = parts.slice(1).join(' ').trim();
+      }
+    }
+  }
+
+  return next;
+}
+
+function promptForSlot(slotKey, context) {
+  if (slotKey === 'targetSegment') {
+    const primary =
+      (context && context.primarySegment) || 'property managers';
+    return SLOT_PROMPTS.targetSegment.replace(/property managers/i, primary);
+  }
+  return SLOT_PROMPTS[slotKey] || SLOT_PROMPTS.campaignObjective;
+}
+
+function criteriaSlotsReady(slots) {
+  return (
+    isSlotSatisfied(slots, 'inclusionCriteria') &&
+    isSlotSatisfied(slots, 'exclusionCriteria')
+  );
+}
+
+function normalizeCriteriaList(value) {
+  if (Array.isArray(value)) {
+    return uniqueStrings(value.map((x) => String(x).trim())).slice(0, 8);
+  }
+  const listed = splitList(value);
+  if (listed.length) return listed;
+  const s = String(value || '').trim();
+  return s ? [s] : [];
+}
+
+function buildProspectListCriteriaPreview(context, slots, opts = {}) {
+  const ctx = context || {};
+  const s = slots || {};
+  const name = shortName(ctx.businessName || 'the business');
+  return {
+    kind: CRITERIA_ARTIFACT_KIND,
+    title: CRITERIA_PREVIEW_TITLE,
+    businessName: name,
+    campaignObjective: s.campaignObjective || null,
+    targetSegment: s.targetSegment || ctx.primarySegment || null,
+    targetSubtype: s.targetSubtype || ctx.subtype || null,
+    marketBound: s.marketBound || ctx.targetMarket || null,
+    inclusionCriteria: normalizeCriteriaList(s.inclusionCriteria),
+    exclusionCriteria: normalizeCriteriaList(s.exclusionCriteria),
+    sectionTitles: { ...CRITERIA_SECTION_TITLES },
+    planningOnly: true,
+    prospectListGenerated: false,
+    outreachCopyGenerated: false,
+    accountChangesMade: false,
+    campaignsGenerated: false,
+    status: 'draft',
+    disclaimer: CRITERIA_PREVIEW_DISCLAIMER,
+    recommendedNextStep:
+      'Review and approve these prospect-list criteria before any list is built. No outreach copy or launch steps yet.',
+    generatedAt: new Date().toISOString(),
+    blueprintId: opts.blueprintId || ctx.blueprintId || null,
+    blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion || null,
+  };
+}
+
+function formatProspectListCriteriaPreviewMessage(preview) {
+  const p = preview || {};
+  const titles = p.sectionTitles || CRITERIA_SECTION_TITLES;
+  const lines = [p.title || CRITERIA_PREVIEW_TITLE, ''];
+
+  lines.push(`1. ${titles.campaignObjective}`);
+  lines.push(p.campaignObjective || '—');
+  lines.push('');
+
+  lines.push(`2. ${titles.targetSegment}`);
+  lines.push(p.targetSegment || '—');
+  lines.push('');
+
+  lines.push(`3. ${titles.targetSubtype}`);
+  lines.push(p.targetSubtype || '—');
+  lines.push('');
+
+  lines.push(`4. ${titles.marketBound}`);
+  lines.push(p.marketBound || '—');
+  lines.push('');
+
+  lines.push(`5. ${titles.inclusionCriteria}`);
+  for (const item of p.inclusionCriteria || []) lines.push(`- ${item}`);
+  if (!(p.inclusionCriteria || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`6. ${titles.exclusionCriteria}`);
+  for (const item of p.exclusionCriteria || []) lines.push(`- ${item}`);
+  if (!(p.exclusionCriteria || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`7. ${titles.recommendedNextStep}`);
+  lines.push(p.recommendedNextStep || '—');
+  lines.push('');
+
+  lines.push(p.disclaimer || CRITERIA_PREVIEW_DISCLAIMER);
+  return lines.join('\n').trim();
 }
 
 function answerText(answers, step) {
@@ -756,48 +1363,286 @@ function formatFirstCampaignPlanPreviewMessage(preview) {
   return lines.join('\n').trim();
 }
 
+function produceCampaignPlanPreviewResult(ctx, answers, slots, opts, leadIn) {
+  const preview = buildFirstCampaignPlanPreview(ctx, answers, {
+    blueprintId: opts.blueprintId || ctx.blueprintId,
+    blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion,
+  });
+  const nextSlots = { ...slots, previewGenerated: true };
+  const lines = [];
+  if (leadIn) lines.push(leadIn, '');
+  lines.push(formatFirstCampaignPlanPreviewMessage(preview));
+
+  // If inclusion/exclusion were already captured, continue straight into the
+  // Prospect List Criteria Preview instead of looping on planning questions.
+  if (criteriaSlotsReady(nextSlots)) {
+    const criteriaPreview = buildProspectListCriteriaPreview(ctx, nextSlots, {
+      blueprintId: opts.blueprintId || ctx.blueprintId,
+      blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion,
+    });
+    lines.push('');
+    lines.push(
+      'I also captured your prospect-list criteria. Here is the Prospect List Criteria Preview — still planning-only.'
+    );
+    lines.push('');
+    lines.push(formatProspectListCriteriaPreviewMessage(criteriaPreview));
+    return {
+      message: lines.join('\n'),
+      step: 'prospect_list_criteria_preview',
+      answers,
+      slots: nextSlots,
+      preview,
+      criteriaPreview,
+      intent: 'produce_criteria_preview',
+      currentAsk: null,
+    };
+  }
+
+  lines.push('');
+  lines.push(SLOT_PROMPTS.previewApproved);
+  return {
+    message: lines.join('\n'),
+    step: 'preview',
+    answers,
+    slots: nextSlots,
+    preview,
+    criteriaPreview: null,
+    intent: 'produce_preview',
+    currentAsk: 'previewApproved',
+  };
+}
+
+function produceCriteriaPreviewResult(ctx, answers, slots, opts, leadIn) {
+  const criteriaPreview = buildProspectListCriteriaPreview(ctx, slots, {
+    blueprintId: opts.blueprintId || ctx.blueprintId,
+    blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion,
+  });
+  const lines = [];
+  if (leadIn) lines.push(leadIn, '');
+  lines.push(formatProspectListCriteriaPreviewMessage(criteriaPreview));
+  return {
+    message: lines.join('\n'),
+    step: 'prospect_list_criteria_preview',
+    answers,
+    slots: { ...slots },
+    preview: null,
+    criteriaPreview,
+    intent: 'produce_criteria_preview',
+  };
+}
+
 /**
  * Deterministic reply for the campaign planning conversation.
+ * Slot/state-driven: infers answered slots from prior artifacts and user text,
+ * skips satisfied slots, and only re-asks on explicit revise/change/update.
  *
- * @returns {{ message: string, step: string, answers: object, preview: object|null, intent: string|null }}
+ * @returns {{ message: string, step: string, answers: object, slots: object, preview: object|null, criteriaPreview: object|null, intent: string|null }}
  */
 function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
   const prior = state || {};
+  const ctx = context || prior.context || {};
+  const priorSlots = seedSlotsFromContext(ctx, prior.slots || {});
+  if (prior.previewGenerated || priorSlots.previewGenerated) {
+    priorSlots.previewGenerated = true;
+  }
+  if (
+    prior.status === 'preview_ready' ||
+    (prior.step === 'preview' && prior.answers)
+  ) {
+    // Session already produced a campaign plan preview.
+    priorSlots.previewGenerated = true;
+  }
+
   const currentStep =
     prior.step && prior.step !== 'opening' ? prior.step : 'opening';
+  const currentAsk =
+    prior.currentAsk ||
+    (currentStep === 'opening'
+      ? 'opening'
+      : currentStep === 'preview'
+        ? priorSlots.previewApproved
+          ? criteriaSlotsReady(priorSlots)
+            ? null
+            : !isSlotSatisfied(priorSlots, 'inclusionCriteria') ||
+                !isSlotSatisfied(priorSlots, 'exclusionCriteria')
+              ? 'inclusionExclusion'
+              : null
+          : 'previewApproved'
+        : Object.keys(SLOT_PROMPTS).find((k) => slotToStep(k) === currentStep) ||
+          nextMissingPrePreviewSlot(priorSlots));
+
   const answers = { ...(prior.answers || {}) };
   answers[currentStep] = {
     raw: String(userMessage || '').trim(),
     at: new Date().toISOString(),
   };
 
-  const ctx = context || prior.context || {};
-  const wantPreview =
-    detectPreviewRequest(userMessage) ||
-    currentStep === 'approval_checkpoints' ||
-    opts.forcePreview;
+  let slots = extractSlotsFromMessage(
+    userMessage,
+    priorSlots,
+    ctx,
+    currentAsk
+  );
+  // Re-seed any still-empty context-backed slots after extraction/revise clears.
+  slots = seedSlotsFromContext(ctx, slots);
+  // Preserve satisfied values that extractors should not wipe unless revise.
+  if (!detectReviseIntent(userMessage)) {
+    for (const key of SLOT_KEYS) {
+      if (
+        key === 'previewGenerated' ||
+        key === 'previewApproved' ||
+        isSlotSatisfied(slots, key)
+      ) {
+        continue;
+      }
+      if (isSlotSatisfied(priorSlots, key)) {
+        slots[key] = priorSlots[key];
+      }
+    }
+  } else {
+    // Keep non-revised prior values.
+    const revised = new Set(detectRevisedSlotKeys(userMessage));
+    for (const key of SLOT_KEYS) {
+      if (revised.has(key)) continue;
+      if (!isSlotSatisfied(slots, key) && isSlotSatisfied(priorSlots, key)) {
+        slots[key] = priorSlots[key];
+      }
+    }
+    if (revised.has('campaignObjective') || revised.size === 0) {
+      // If revise with no specific section, only clear when extractor cleared.
+    }
+  }
 
-  if (wantPreview) {
-    const preview = buildFirstCampaignPlanPreview(ctx, answers, {
-      blueprintId: opts.blueprintId || ctx.blueprintId,
-      blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion,
-    });
+  slots.previewGenerated = Boolean(
+    slots.previewGenerated || priorSlots.previewGenerated
+  );
+  slots.previewApproved = Boolean(
+    slots.previewApproved || priorSlots.previewApproved
+  );
+
+  const syncedAnswers = syncAnswersFromSlots(answers, slots);
+  // Keep the raw current utterance on the active step for audit.
+  syncedAnswers[currentStep] = answers[currentStep];
+
+  const wantPreview =
+    detectPreviewRequest(userMessage) || opts.forcePreview;
+
+  // --- Post-preview path: never re-ask objective/segment ---
+  if (slots.previewGenerated) {
+    if (detectReviseIntent(userMessage) && detectRevisedSlotKeys(userMessage).length) {
+      const missing = nextMissingPrePreviewSlot(slots);
+      if (missing) {
+        return {
+          message: [
+            `Understood — we'll revise that section.`,
+            ``,
+            promptForSlot(missing, ctx),
+          ].join('\n'),
+          step: slotToStep(missing),
+          answers: syncedAnswers,
+          slots: { ...slots, previewGenerated: false, previewApproved: false },
+          preview: null,
+          criteriaPreview: null,
+          intent: 'revise',
+          currentAsk: missing,
+        };
+      }
+    }
+
+    if (criteriaSlotsReady(slots)) {
+      return produceCriteriaPreviewResult(
+        ctx,
+        syncedAnswers,
+        slots,
+        opts,
+        slots.previewApproved
+          ? 'Approved. Here is the Prospect List Criteria Preview — still planning-only.'
+          : 'Thanks — I captured the prospect-list criteria. Here is the Prospect List Criteria Preview — still planning-only.'
+      );
+    }
+
+    if (!slots.previewApproved) {
+      // Soft-ack if they answered something else (e.g. criteria) while preview pending approval.
+      if (
+        isSlotSatisfied(slots, 'inclusionCriteria') ||
+        isSlotSatisfied(slots, 'exclusionCriteria')
+      ) {
+        if (criteriaSlotsReady(slots)) {
+          return produceCriteriaPreviewResult(
+            ctx,
+            syncedAnswers,
+            slots,
+            opts,
+            'Thanks — I captured the prospect-list criteria. Here is the Prospect List Criteria Preview — still planning-only.'
+          );
+        }
+        const needInclusion = !isSlotSatisfied(slots, 'inclusionCriteria');
+        const needExclusion = !isSlotSatisfied(slots, 'exclusionCriteria');
+        const askKey =
+          needInclusion && needExclusion
+            ? 'inclusionExclusion'
+            : needInclusion
+              ? 'inclusionCriteria'
+              : 'exclusionCriteria';
+        return {
+          message: [
+            `Noted.`,
+            ``,
+            promptForSlot(askKey, ctx),
+          ].join('\n'),
+          step: slotToStep(askKey),
+          answers: syncedAnswers,
+          slots,
+          preview: null,
+          criteriaPreview: null,
+          intent: 'advance',
+          currentAsk: askKey,
+        };
+      }
+      return {
+        message: [
+          `Thanks — the First Campaign Plan Preview is ready for review.`,
+          ``,
+          SLOT_PROMPTS.previewApproved,
+        ].join('\n'),
+        step: 'preview',
+        answers: syncedAnswers,
+        slots,
+        preview: null,
+        criteriaPreview: null,
+        intent: 'await_approval',
+        currentAsk: 'previewApproved',
+      };
+    }
+
+    // Approved, still need criteria.
+    const needInclusion = !isSlotSatisfied(slots, 'inclusionCriteria');
+    const needExclusion = !isSlotSatisfied(slots, 'exclusionCriteria');
+    const askKey =
+      needInclusion && needExclusion
+        ? 'inclusionExclusion'
+        : needInclusion
+          ? 'inclusionCriteria'
+          : 'exclusionCriteria';
     return {
       message: [
-        `Thanks — I have enough to draft the First Campaign Plan Preview.`,
+        `Great — preview approved. Next we'll define prospect-list criteria before any list is built.`,
         ``,
-        formatFirstCampaignPlanPreviewMessage(preview),
+        promptForSlot(askKey, ctx),
       ].join('\n'),
-      step: 'preview',
-      answers,
-      preview,
-      intent: 'produce_preview',
+      step: slotToStep(askKey),
+      answers: syncedAnswers,
+      slots,
+      preview: null,
+      criteriaPreview: null,
+      intent: 'advance',
+      currentAsk: askKey,
     };
   }
 
-  // Advance from opening into the question bank.
+  // --- Opening: confirm focus, then ask first missing slot ---
   if (currentStep === 'opening') {
-    const nxt = QUESTION_BANK[0];
+    const missing = nextMissingPrePreviewSlot(slots) || 'campaignObjective';
     return {
       message: [
         `Got it — we'll plan from the approved focus${
@@ -806,40 +1651,67 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
             : ' as defined'
         }.`,
         ``,
-        nxt.prompt,
+        promptForSlot(missing, ctx),
       ].join('\n'),
-      step: nxt.step,
-      answers,
+      step: slotToStep(missing),
+      answers: syncedAnswers,
+      slots,
       preview: null,
+      criteriaPreview: null,
       intent: 'advance',
+      currentAsk: missing,
     };
   }
 
-  const nxt = nextQuestion(currentStep);
-  if (!nxt) {
-    const preview = buildFirstCampaignPlanPreview(ctx, answers, {
-      blueprintId: opts.blueprintId || ctx.blueprintId,
-      blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion,
-    });
-    return {
-      message: formatFirstCampaignPlanPreviewMessage(preview),
-      step: 'preview',
-      answers,
-      preview,
-      intent: 'produce_preview',
-    };
+  // --- Pre-preview: ask only unsatisfied slots ---
+  // When inclusion/exclusion are already captured, soft slots can use preview
+  // defaults so we do not loop — next output is the criteria preview path.
+  const skipSoft = criteriaSlotsReady(slots) || wantPreview;
+  const missing = nextMissingPrePreviewSlot(slots, { skipSoft });
+
+  if (!missing || wantPreview) {
+    return produceCampaignPlanPreviewResult(
+      ctx,
+      syncedAnswers,
+      slots,
+      opts,
+      'Thanks — I have enough to draft the First Campaign Plan Preview.'
+    );
   }
+
+  // If the operator already gave inclusion/exclusion early, acknowledge once
+  // but keep collecting remaining planning slots (do not loop objective).
+  const filledNote = (() => {
+    const filled = [];
+    if (
+      isSlotSatisfied(slots, 'campaignObjective') &&
+      currentAsk === 'campaignObjective'
+    ) {
+      filled.push('campaign objective');
+    }
+    if (
+      (isSlotSatisfied(slots, 'inclusionCriteria') ||
+        isSlotSatisfied(slots, 'exclusionCriteria')) &&
+      (extractInclusionCriteria(userMessage) ||
+        extractExclusionCriteria(userMessage))
+    ) {
+      filled.push('prospect-list criteria');
+    }
+    if (!filled.length) {
+      return `Noted for ${String(currentAsk || currentStep).replace(/_/g, ' ')}.`;
+    }
+    return `Noted — captured ${filled.join(' and ')}.`;
+  })();
 
   return {
-    message: [
-      `Noted for ${currentStep.replace(/_/g, ' ')}.`,
-      ``,
-      nxt.prompt,
-    ].join('\n'),
-    step: nxt.step,
-    answers,
+    message: [filledNote, '', promptForSlot(missing, ctx)].join('\n'),
+    step: slotToStep(missing),
+    answers: syncedAnswers,
+    slots,
     preview: null,
+    criteriaPreview: null,
     intent: 'advance',
+    currentAsk: missing,
   };
 }
 
@@ -863,9 +1735,16 @@ module.exports = {
   ARTIFACT_KIND,
   PREVIEW_TITLE,
   PREVIEW_DISCLAIMER,
+  CRITERIA_ARTIFACT_KIND,
+  CRITERIA_PREVIEW_TITLE,
+  CRITERIA_PREVIEW_DISCLAIMER,
   SECTION_TITLES,
+  CRITERIA_SECTION_TITLES,
   CONVERSATION_STEPS,
   QUESTION_BANK,
+  SLOT_KEYS,
+  PRE_PREVIEW_SLOT_ORDER,
+  SLOT_PROMPTS,
   DEFAULT_PROOF_ASSETS,
   DEFAULT_VALIDATION_METRICS,
   DEFAULT_APPROVAL_CHECKPOINTS,
@@ -874,7 +1753,15 @@ module.exports = {
   buildCampaignPlanningReply,
   buildFirstCampaignPlanPreview,
   formatFirstCampaignPlanPreviewMessage,
+  buildProspectListCriteriaPreview,
+  formatProspectListCriteriaPreviewMessage,
+  emptySlots,
+  seedSlotsFromContext,
+  extractSlotsFromMessage,
+  isSlotSatisfied,
+  nextMissingPrePreviewSlot,
   detectPreviewRequest,
+  detectReviseIntent,
   containsForbiddenCampaignPlanningLanguage,
   extractBusinessName,
   stepAfterOpening,

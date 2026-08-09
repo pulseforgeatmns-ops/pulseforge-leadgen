@@ -46,6 +46,7 @@ const {
   buildCampaignPlanningContext,
   buildCampaignPlanningOpening,
   buildCampaignPlanningReply,
+  seedSlotsFromContext,
 } = require('./clientIntelligenceCampaignPlanning');
 
 const SESSION_STATUSES = Object.freeze([
@@ -6567,11 +6568,24 @@ async function startCampaignPlanningConversation(sessionId, opts = {}) {
     });
   }
 
+  const slots = seedSlotsFromContext(
+    context,
+    (prior && prior.slots) || null
+  );
+  if (
+    session.interview_state &&
+    session.interview_state.firstCampaignPlanPreview
+  ) {
+    slots.previewGenerated = true;
+  }
+
   const campaignPlanning = {
     status: (prior && prior.status) || 'active',
     startedAt: (prior && prior.startedAt) || new Date().toISOString(),
     step: (prior && prior.step) || 'opening',
     answers: (prior && prior.answers) || {},
+    slots,
+    currentAsk: (prior && prior.currentAsk) || 'opening',
     context: {
       ...(prior && prior.context ? prior.context : {}),
       ...context,
@@ -6586,6 +6600,10 @@ async function startCampaignPlanningConversation(sessionId, opts = {}) {
       firstCampaignPlanPreview:
         (session.interview_state &&
           session.interview_state.firstCampaignPlanPreview) ||
+        null,
+      prospectListCriteriaPreview:
+        (session.interview_state &&
+          session.interview_state.prospectListCriteriaPreview) ||
         null,
     },
   });
@@ -6606,6 +6624,10 @@ async function startCampaignPlanningConversation(sessionId, opts = {}) {
     firstCampaignPlanPreview:
       (session.interview_state &&
         session.interview_state.firstCampaignPlanPreview) ||
+      null,
+    prospectListCriteriaPreview:
+      (session.interview_state &&
+        session.interview_state.prospectListCriteriaPreview) ||
       null,
     resumed,
   };
@@ -6677,6 +6699,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       message: text,
       at: new Date().toISOString(),
       step: campaignPlanning.step,
+      currentAsk: campaignPlanning.currentAsk || null,
     },
     {
       speaker: 'assistant',
@@ -6684,15 +6707,21 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       at: new Date().toISOString(),
       step: reply.step,
       intent: reply.intent,
+      currentAsk: reply.currentAsk || null,
     },
   ];
 
-  const nextStatus = reply.preview ? 'preview_ready' : 'active';
+  const nextStatus =
+    reply.criteriaPreview || reply.preview || reply.slots?.previewGenerated
+      ? 'preview_ready'
+      : 'active';
   const nextPlanning = {
     ...campaignPlanning,
     status: nextStatus,
     step: reply.step,
     answers: reply.answers,
+    slots: reply.slots || campaignPlanning.slots || null,
+    currentAsk: reply.currentAsk || null,
     context,
     turns,
   };
@@ -6702,6 +6731,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       ...session.interview_state,
       campaignPlanning: nextPlanning,
       ...(reply.preview ? { firstCampaignPlanPreview: reply.preview } : {}),
+      ...(reply.criteriaPreview
+        ? { prospectListCriteriaPreview: reply.criteriaPreview }
+        : {}),
     },
   });
 
@@ -6717,6 +6749,11 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       reply.preview ||
       (session.interview_state &&
         session.interview_state.firstCampaignPlanPreview) ||
+      null,
+    prospectListCriteriaPreview:
+      reply.criteriaPreview ||
+      (session.interview_state &&
+        session.interview_state.prospectListCriteriaPreview) ||
       null,
   };
 }

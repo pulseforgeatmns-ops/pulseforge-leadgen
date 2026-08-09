@@ -1041,6 +1041,7 @@
       growthInfrastructureReadinessReport: null,
       firstGrowthPlanPreview: null,
       firstCampaignPlanPreview: null,
+      prospectListCriteriaPreview: null,
       growthPlan: null,
       workspaceTab: 'overview',
       isSample: false,
@@ -1524,6 +1525,50 @@
             escapeHtml(
               preview.disclaimer ||
                 'Planning preview only. No prospect list, outreach copy, sends, CRM writes, or account changes have been created or launched.'
+            ) +
+          '</p>' +
+        '</div>'
+      );
+    }
+
+    function renderProspectListCriteriaPreview(preview) {
+      if (!preview) return '';
+      const titles = preview.sectionTitles || {};
+      return (
+        '<div class="growth-direction" id="prospectListCriteriaPreview">' +
+          '<p class="growth-kicker">Prospect List Criteria Preview</p>' +
+          '<p><strong>1. ' +
+            escapeHtml(titles.campaignObjective || 'Campaign objective') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.campaignObjective || '—') + '</p>' +
+          '<p><strong>2. ' +
+            escapeHtml(titles.targetSegment || 'Target segment') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.targetSegment || '—') + '</p>' +
+          '<p><strong>3. ' +
+            escapeHtml(titles.targetSubtype || 'Target subtype') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.targetSubtype || '—') + '</p>' +
+          '<p><strong>4. ' +
+            escapeHtml(titles.marketBound || 'Market bound') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.marketBound || '—') + '</p>' +
+          '<p><strong>5. ' +
+            escapeHtml(titles.inclusionCriteria || 'Inclusion criteria') +
+          '</strong></p>' +
+          renderListBlock(preview.inclusionCriteria, 'No inclusion criteria listed yet.') +
+          '<p><strong>6. ' +
+            escapeHtml(titles.exclusionCriteria || 'Exclusion criteria') +
+          '</strong></p>' +
+          renderListBlock(preview.exclusionCriteria, 'No exclusion criteria listed yet.') +
+          '<p><strong>7. ' +
+            escapeHtml(titles.recommendedNextStep || 'Recommended next step') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.recommendedNextStep || '—') + '</p>' +
+          '<p class="growth-disclaimer">' +
+            escapeHtml(
+              preview.disclaimer ||
+                'Criteria preview only. No prospect list has been built, and no outreach copy, sends, CRM writes, or account changes have been created or launched.'
             ) +
           '</p>' +
         '</div>'
@@ -2783,6 +2828,16 @@
           );
           if (data && data.firstCampaignPlanPreview) {
             state.firstCampaignPlanPreview = data.firstCampaignPlanPreview;
+          }
+          if (data && data.prospectListCriteriaPreview) {
+            state.prospectListCriteriaPreview = data.prospectListCriteriaPreview;
+            els.sidePanel.innerHTML = renderProspectListCriteriaPreview(
+              data.prospectListCriteriaPreview
+            );
+            els.sidePanelTitle.textContent = 'Prospect List Criteria Preview';
+            els.sidePanelSub.textContent =
+              'Criteria only — no prospect list built yet';
+          } else if (data && data.firstCampaignPlanPreview) {
             els.sidePanel.innerHTML = renderFirstCampaignPlanPreview(
               data.firstCampaignPlanPreview
             );
