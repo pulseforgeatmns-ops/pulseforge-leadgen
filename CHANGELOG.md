@@ -6,6 +6,10 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- SPF/DKIM/DMARC present task guidance no longer uses generic capture/follow-up copy
+  - Why this matters: domain authentication improves inbox placement and sender trust for outbound mail
+  - What to confirm: SPF, DKIM, DMARC (monitoring OK), branded mailbox send/receive, no unapproved DNS changes
+  - Who owns it: Operator guided; complete when records are confirmed or DNS changes documented for approval
 - Domain owned task guidance no longer uses generic lead-reply language
   - Why this matters: ownership enables website, branded email, tool verification, and brand protection
   - What to confirm: registration active, where managed, who approves DNS, renewal risk, no credentials in Max
