@@ -10,11 +10,14 @@ const {
   OWNERS,
   READINESS_AREAS,
   SECTION_TITLES,
+  TOP_SETUP_PRIORITIES,
+  MANUAL_ESTIMATE_NOTE,
   buildEmptyAreas,
   buildInfrastructureReadinessOpening,
   buildInfrastructureReadinessReply,
   buildGrowthInfrastructureReadinessReport,
   formatReadinessReportMessage,
+  formatOwnerLabel,
   containsForbiddenReadinessLanguage,
   applyAnswerToAreas,
   statusLabelForItem,
@@ -205,6 +208,19 @@ describe('Growth Infrastructure Readiness domain', () => {
       reviews.gbp.items.gbp_reviews.evidence,
       /not independently checked/i
     );
+    assert.equal(
+      statusLabelForItem('gbp_reviews', reviews.gbp.items.gbp_reviews.status),
+      'needs verification'
+    );
+
+    const noReviews = applyAnswerToAreas(
+      buildEmptyAreas(),
+      'gbp',
+      'No Google Business Profile yet and no reviews.'
+    );
+    assert.equal(noReviews.gbp.items.gbp_reviews.status, 'unknown');
+    assert.equal(noReviews.reviews.items.review_count.status, 'unknown');
+    assert.notEqual(noReviews.gbp.items.gbp_reviews.status, 'missing');
 
     const vagueTracking = applyAnswerToAreas(
       buildEmptyAreas(),
@@ -214,6 +230,23 @@ describe('Growth Infrastructure Readiness domain', () => {
     assert.equal(vagueTracking.tracking.items.google_analytics.status, 'unknown');
     assert.notEqual(vagueTracking.tracking.items.google_analytics.status, 'missing');
 
+    const noGa = applyAnswerToAreas(
+      buildEmptyAreas(),
+      'tracking',
+      'No Google Analytics, no Search Console, no UTMs.'
+    );
+    assert.equal(noGa.tracking.items.google_analytics.status, 'unknown');
+    assert.equal(noGa.tracking.items.search_console.status, 'unknown');
+    assert.equal(noGa.tracking.items.utm_discipline.status, 'missing');
+    assert.equal(
+      statusLabelForItem('google_analytics', noGa.tracking.items.google_analytics.status),
+      'needs verification'
+    );
+    assert.equal(
+      statusLabelForItem('search_console', noGa.tracking.items.search_console.status),
+      'needs verification'
+    );
+
     const mixedTracking = applyAnswerToAreas(
       buildEmptyAreas(),
       'tracking',
@@ -222,6 +255,26 @@ describe('Growth Infrastructure Readiness domain', () => {
     assert.equal(mixedTracking.tracking.items.google_analytics.status, 'ready');
     assert.equal(mixedTracking.tracking.items.utm_discipline.status, 'missing');
     assert.equal(mixedTracking.tracking.items.call_tracking.status, 'missing');
+  });
+
+  it('marks manual estimate process as partial, not missing', () => {
+    const areas = applyAnswerToAreas(
+      buildEmptyAreas(),
+      'estimates',
+      'Estimates are handled manually with walkthroughs. No proposal template yet.'
+    );
+    assert.equal(areas.sales_process.items.estimate_process.status, 'partial');
+    assert.equal(areas.sales_process.items.estimate_process.evidence, MANUAL_ESTIMATE_NOTE);
+    assert.match(
+      areas.sales_process.items.estimate_process.evidence,
+      /proposal template and follow-up cadence need setup/i
+    );
+  });
+
+  it('formats owner labels for display', () => {
+    assert.equal(formatOwnerLabel('client_required'), 'Client/operator');
+    assert.equal(formatOwnerLabel('operator_guided'), 'Operator guided');
+    assert.equal(formatOwnerLabel('max_can_check'), 'Max can check');
   });
 
   it('uses clean status labels for domain and branded email', () => {
@@ -262,6 +315,11 @@ describe('Growth Infrastructure Readiness domain', () => {
     );
     areas = applyAnswerToAreas(
       areas,
+      'estimates',
+      'Estimates are handled manually with walkthroughs.'
+    );
+    areas = applyAnswerToAreas(
+      areas,
       'tracking',
       'No Google Analytics, no Search Console, no UTMs.'
     );
@@ -273,6 +331,12 @@ describe('Growth Infrastructure Readiness domain', () => {
     assert.equal(report.kind, ARTIFACT_KIND);
     assert.equal(report.title, 'Growth Infrastructure Readiness Report');
     assert.ok(['ready', 'partial', 'not_ready', 'unknown'].includes(report.overallStatus));
+    assert.match(
+      report.executiveSummary,
+      /Before outreach, Anchor should confirm three things/i
+    );
+    assert.match(report.executiveSummary, /trust signals are visible/i);
+    assert.deepEqual(report.topSetupPriorities, [...TOP_SETUP_PRIORITIES]);
     assert.ok(Array.isArray(report.demandCaptureRisks));
     assert.ok(Array.isArray(report.trustDiscoverabilityGaps));
     assert.ok(Array.isArray(report.trackingGaps));
@@ -284,6 +348,8 @@ describe('Growth Infrastructure Readiness domain', () => {
     assert.equal(report.assessmentOnly, true);
     assert.match(report.disclaimer, /Assessment only/i);
     assert.match(report.disclaimer, /without explicit approval/i);
+    assert.match(report.disclaimer, /No passwords requested/i);
+    assert.match(report.disclaimer, /No campaigns or prospect lists generated/i);
     assert.equal(
       report.sectionTitles.demandCaptureRisks,
       SECTION_TITLES.demandCaptureRisks
@@ -301,6 +367,7 @@ describe('Growth Infrastructure Readiness domain', () => {
       report.sectionTitles.conversionFollowUpGaps,
       'Can inquiries become booked opportunities?'
     );
+    assert.equal(report.sectionTitles.topSetupPriorities, 'Top Setup Priorities');
     // Practical blockers first: domain ownership before tracking/sales.
     assert.equal(report.recommendedSetupSequence[0].itemId, 'domain_connected');
     assert.ok(
@@ -313,14 +380,26 @@ describe('Growth Infrastructure Readiness domain', () => {
       report.maxCanCheck.some((g) => g.owner === 'max_can_check') ||
         report.demandCaptureRisks.some((g) => g.owner === 'max_can_check')
     );
+    assert.equal(
+      areas.sales_process.items.estimate_process.status,
+      'partial'
+    );
 
     const formatted = formatReadinessReportMessage(report);
+    assert.match(formatted, /Before outreach, Anchor should confirm three things/i);
+    assert.match(formatted, /Top Setup Priorities/i);
+    assert.match(formatted, /Confirm domain \+ website connection/i);
     assert.match(formatted, /Can prospects reach you\?/i);
     assert.match(formatted, /Can prospects trust you\?/i);
     assert.match(formatted, /Can we measure what works\?/i);
     assert.match(formatted, /Can inquiries become booked opportunities\?/i);
     assert.doesNotMatch(formatted, /Demand capture risks/i);
+    assert.doesNotMatch(formatted, /\bclient_required\b/);
+    assert.doesNotMatch(formatted, /\boperator_guided\b/);
+    assert.doesNotMatch(formatted, /\bmax_can_check\b/);
+    assert.match(formatted, /Client\/operator|Operator guided|Max can check/);
     assert.match(formatted, /no passwords requested/i);
+    assert.match(formatted, /No campaigns or prospect lists generated/i);
   });
 
   it('reply advances steps then produces report without forbidden language', () => {
@@ -446,6 +525,9 @@ describe('client-intel UI markers for infrastructure readiness', () => {
     assert.match(uiSource, /Can inquiries become booked opportunities\?/);
     assert.doesNotMatch(uiSource, /Demand capture risks/);
     assert.match(uiSource, /Recommended setup sequence/);
+    assert.match(uiSource, /Top Setup Priorities/);
+    assert.match(uiSource, /executiveSummary|growth-exec-summary/);
+    assert.match(uiSource, /formatOwnerLabel/);
     assert.match(uiSource, /statusLabel/);
     assert.match(uiSource, /phase === 'readiness'|setPhase\('readiness'\)/);
     assert.match(uiSource, /growthPreviewActions/);

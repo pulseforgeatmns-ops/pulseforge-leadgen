@@ -1273,6 +1273,19 @@
     function renderReadinessReport(report) {
       if (!report) return '';
       const titles = report.sectionTitles || {};
+      const priorities = report.topSetupPriorities || [
+        'Confirm domain + website connection',
+        'Confirm branded email + SPF/DKIM/DMARC',
+        'Confirm website phone/email/form + clear estimate/walkthrough CTA',
+        'Confirm GBP, reviews, and photos',
+        'Confirm lead tracking and follow-up process',
+      ];
+      const priorityHtml =
+        '<ul class="completion-checks">' +
+        priorities
+          .map((p) => '<li>' + escapeHtml(p) + '</li>')
+          .join('') +
+        '</ul>';
       const seq = (report.recommendedSetupSequence || []).slice(0, 8);
       const seqHtml = seq.length
         ? '<ol class="completion-checks">' +
@@ -1284,10 +1297,16 @@
           ).join('') +
           '</ol>'
         : '<p class="blueprint-empty">Answer more questions to build the setup sequence.</p>';
+      const summary =
+        report.executiveSummary ||
+        'Before outreach, the business should confirm three things: prospects can reach the business, trust signals are visible, and every inquiry can be tracked and followed up.';
       return (
         '<div class="growth-direction" id="growthInfrastructureReadinessReport">' +
           '<p class="growth-kicker">Growth Infrastructure Readiness Report</p>' +
           '<h4>Overall readiness: ' + escapeHtml(report.overallStatus || 'unknown') + '</h4>' +
+          '<p class="growth-exec-summary">' + escapeHtml(summary) + '</p>' +
+          '<p><strong>' + escapeHtml(titles.topSetupPriorities || 'Top Setup Priorities') + '</strong></p>' +
+          priorityHtml +
           '<p><strong>' + escapeHtml(titles.demandCaptureRisks || 'Can prospects reach you?') + '</strong></p>' +
           renderGapList(report.demandCaptureRisks, 'Nothing blocking reachability from answers so far.') +
           '<p><strong>' + escapeHtml(titles.trustDiscoverabilityGaps || 'Can prospects trust you?') + '</strong></p>' +
@@ -1303,7 +1322,7 @@
           '<p><strong>' + escapeHtml(titles.recommendedSetupSequence || 'Recommended setup sequence') + '</strong></p>' +
           seqHtml +
           '<p class="growth-disclaimer">' +
-            escapeHtml(report.disclaimer || 'Assessment only — no DNS, GBP, social, or tracking changes without explicit approval. No campaigns generated.') +
+            escapeHtml(report.disclaimer || 'Assessment only — no DNS, GBP, social, or tracking changes without explicit approval. No passwords requested. No campaigns or prospect lists generated.') +
           '</p>' +
         '</div>'
       );
