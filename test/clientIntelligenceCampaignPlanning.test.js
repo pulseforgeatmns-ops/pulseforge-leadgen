@@ -25,6 +25,8 @@ const {
   isSlotSatisfied,
   containsForbiddenCampaignPlanningLanguage,
   humanizeStatusLabel,
+  sanitizeTargetSegmentText,
+  stripFirstPersonArtifactLanguage,
 } = require('../services/clientIntelligenceCampaignPlanning');
 const {
   createMemoryStore,
@@ -288,12 +290,23 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.equal(preview.title, PREVIEW_TITLE);
     assert.equal(preview.sectionTitles.hypothesis, 'Campaign hypothesis');
     assert.equal(preview.sectionTitles.risksCautions, 'Risks and cautions');
-    assert.match(preview.campaignObjective, /Core question:/i);
+    assert.match(preview.campaignObjective, /Core validation question:/i);
+    assert.doesNotMatch(preview.campaignObjective, /Core question:/i);
+    assert.match(
+      preview.campaignObjective,
+      /rather than ignoring the outreach or responding only on price/i
+    );
+    assert.doesNotMatch(
+      preview.campaignObjective,
+      /not just ignore the outreach or shop on price/i
+    );
+    assert.doesNotMatch(preview.campaignObjective, /\bI'd\b/);
     assert.match(preview.campaignObjective, /walkthrough/i);
     assert.match(
       preview.targetSegment,
-      /Small to mid-sized local property managers in Greater Manchester/i
+      /^Small to mid-sized local property managers in Greater Manchester who oversee/i
     );
+    assert.doesNotMatch(preview.targetSegment, /^property managers/i);
     assert.doesNotMatch(preview.targetSegment, /—/);
     assert.match(preview.targetSegmentAvoid, /Avoid large institutional/i);
     assert.match(preview.marketBound, /early attention on Bedford/i);
@@ -350,6 +363,60 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.doesNotMatch(formatted, /Planning only — not a launch/i);
     assert.doesNotMatch(formatted, /\bnot_ready\b/);
     assert.doesNotMatch(formatted, /campaign is live/i);
+  });
+
+  it('sanitizes awkward target-segment joins and first-person objective copy', () => {
+    assert.equal(
+      sanitizeTargetSegmentText(
+        'property managers — Small to mid-sized local property managers in Greater Manchester who manage offices.',
+        { primarySegment: 'property managers', targetMarket: 'Greater Manchester' }
+      ),
+      'Small to mid-sized local property managers in Greater Manchester who oversee offices, mixed-use buildings, small commercial properties, or multi-tenant spaces.'
+    );
+    assert.match(
+      stripFirstPersonArtifactLanguage(
+        "For the first test, I'd treat the goal as: Can Anchor win?"
+      ),
+      /^Core validation question:\nCan Anchor win\?$/
+    );
+    assert.match(
+      stripFirstPersonArtifactLanguage(
+        'willing to talk, not just ignore the outreach or shop on price'
+      ),
+      /rather than ignoring the outreach or responding only on price/i
+    );
+
+    const preview = buildFirstCampaignPlanPreview(
+      {
+        businessName: 'Anchor Cleaning',
+        primarySegment: 'property managers',
+        targetMarket: 'Greater Manchester',
+        subtype:
+          'property managers — Small to mid-sized local property managers overseeing offices in Greater Manchester',
+        readinessOverallStatus: 'partial',
+        completedSetupChecklist: true,
+      },
+      {
+        opening: { raw: 'as defined' },
+        campaign_objective: {
+          raw: "For the first test, I'd treat the goal as: prove they will talk, not just ignore the outreach or shop on price",
+        },
+        target_segment: {
+          raw: 'property managers — Small to mid-sized local PMs',
+        },
+      }
+    );
+    assert.match(
+      preview.targetSegment,
+      /^Small to mid-sized local property managers in Greater Manchester who oversee/i
+    );
+    assert.doesNotMatch(preview.targetSegment, /^property managers/i);
+    assert.match(preview.campaignObjective, /Core validation question:/i);
+    assert.doesNotMatch(preview.campaignObjective, /\bI'd\b/);
+    assert.match(
+      preview.campaignObjective,
+      /rather than ignoring the outreach or responding only on price/i
+    );
   });
 
   it('advances unsatisfied slots then produces preview without forbidden launch language', () => {
@@ -678,6 +745,10 @@ describe('First Campaign Planning UI markers', () => {
     assert.match(uiSource, /Prospect List Criteria Preview/);
     assert.match(uiSource, /Campaign hypothesis/);
     assert.match(uiSource, /Risks and cautions/);
+    assert.match(
+      uiSource,
+      /Hypothesis and validation gates before any build/
+    );
     assert.doesNotMatch(uiSource, /Planning only — not a launch/);
   });
 });
