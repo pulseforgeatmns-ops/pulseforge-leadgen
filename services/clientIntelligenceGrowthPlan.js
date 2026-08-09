@@ -171,12 +171,12 @@ function buildGrowthPlanTasks(session, opts = {}) {
   if (readinessComplete && (setupTasks.length === 0 || setupDone)) {
     const launchId = 'milestone:campaign_ready';
     const launchComplete = completedIds.has(launchId);
+    const name = businessNameFrom(session, null);
     tasks.push({
       id: launchId,
       type: 'milestone',
       title: 'Choose next growth objective',
-      description:
-        'All current recommendations are complete. Pick the next objective when ready.',
+      description: nextObjectiveDescription(name),
       status: launchComplete ? 'complete' : 'incomplete',
       estimatedMinutes: 2,
       resumeAction: 'growth_complete',
@@ -218,6 +218,41 @@ function businessNameFrom(session, blueprint) {
   return 'Growth';
 }
 
+/** Client-facing short name (Anchor Cleaning → Anchor). */
+function shortBusinessName(name) {
+  const s = String(name || '').trim();
+  if (!s || s === 'Growth') return 'the business';
+  if (/\banchor\s+cleaning\b/i.test(s) || /^anchor\b/i.test(s)) return 'Anchor';
+  return s;
+}
+
+/**
+ * Status line for next-objective / completion state.
+ * Prefer "Completed setup: {title}" only when the final completed task was a setup item.
+ */
+function completionStatusLine(tasks, history) {
+  const hist = asArray(history);
+  if (!hist.length) return 'Growth infrastructure checklist complete';
+  const last = hist[hist.length - 1];
+  if (!last) return 'Growth infrastructure checklist complete';
+  const taskList = asArray(tasks);
+  const lastTask =
+    taskList.find((t) => t && String(t.id) === String(last.taskId)) || null;
+  if (lastTask && lastTask.type === 'setup') {
+    const title = lastTask.title || last.title || 'setup item';
+    return 'Completed setup: ' + title;
+  }
+  return 'Growth infrastructure checklist complete';
+}
+
+function nextObjectiveDescription(businessName) {
+  const name = shortBusinessName(businessName);
+  return (
+    name +
+    ' has completed the current growth setup checklist. The next step is to choose what Max should help with next.'
+  );
+}
+
 /**
  * Full Growth Plan workspace model.
  */
@@ -245,6 +280,10 @@ function buildGrowthPlan(session, blueprint, opts = {}) {
   const preview = firstGrowthPlanPreview(session);
   const gw = growthWorkState(session);
 
+  const atNextObjective =
+    Boolean(currentTask && currentTask.resumeAction === 'growth_complete') ||
+    complete;
+
   return {
     kind: 'growth_plan',
     title: `${name} Growth Plan`,
@@ -261,6 +300,9 @@ function buildGrowthPlan(session, blueprint, opts = {}) {
     history: gw.history,
     activeTaskId: (currentTask && currentTask.id) || gw.activeTaskId || null,
     emptyRecommendations: complete,
+    completionStatusLine: atNextObjective
+      ? completionStatusLine(tasks, gw.history)
+      : null,
     completionOptions: complete
       ? [
           { id: 'launch_campaign', label: 'Launch New Campaign' },
@@ -383,4 +425,7 @@ module.exports = {
   resolveGrowthPlanResumeTarget,
   applyTaskCompletion,
   setupTaskId,
+  shortBusinessName,
+  nextObjectiveDescription,
+  completionStatusLine,
 };

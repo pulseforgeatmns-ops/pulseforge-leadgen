@@ -2080,6 +2080,30 @@
       );
     }
 
+    function shortClientName(name) {
+      const s = String(name || '').trim();
+      if (!s) return 'the business';
+      if (/\banchor\s+cleaning\b/i.test(s) || /^anchor\b/i.test(s)) return 'Anchor';
+      return s;
+    }
+
+    function nextObjectiveCopy(plan) {
+      const name = shortClientName(
+        (plan && plan.businessName) ||
+          (state.growthPlan && state.growthPlan.businessName) ||
+          ''
+      );
+      return (
+        name +
+        ' has completed the current growth setup checklist. The next step is to choose what Max should help with next.'
+      );
+    }
+
+    function completionStatusMeta(plan) {
+      if (plan && plan.completionStatusLine) return plan.completionStatusLine;
+      return 'Growth infrastructure checklist complete';
+    }
+
     function renderCurrentTaskCard(plan, { guidanceOpen } = {}) {
       if (!plan) return '';
       if (plan.status === 'complete' || !plan.currentTask) {
@@ -2096,11 +2120,36 @@
         return (
           '<div class="current-task-card" id="growthCompleteCard">' +
             '<p class="kicker">Growth Complete</p>' +
-            '<h3>All current recommendations have been completed.</h3>' +
-            '<p class="task-meta">Choose your next objective.</p>' +
+            '<h3>' +
+            escapeHtml(nextObjectiveCopy(plan)) +
+            '</h3>' +
+            '<p class="task-meta">' +
+            escapeHtml(completionStatusMeta(plan)) +
+            '<br>Next objectives stay review-first — no campaign, prospect list, or account changes begin without operator approval.</p>' +
             '<div class="completion-options">' +
               options +
             '</div>' +
+          '</div>'
+        );
+      }
+      // Next-objective milestone: show the same client-facing framing before Finish Review.
+      if (plan.currentTask && plan.currentTask.resumeAction === 'growth_complete') {
+        const task = plan.currentTask;
+        return (
+          '<div class="current-task-card" id="currentTaskCard" data-role="simple-task">' +
+            '<p class="kicker">Next Objective</p>' +
+            '<h3>' +
+            escapeHtml(task.title || 'Choose next growth objective') +
+            '</h3>' +
+            '<p class="task-meta">' +
+            escapeHtml(task.description || nextObjectiveCopy(plan)) +
+            '<br>' +
+            escapeHtml(completionStatusMeta(plan)) +
+            '<br>Next objectives stay review-first — no campaign, prospect list, or account changes begin without operator approval.' +
+            (task.estimatedMinutes
+              ? '<br>Estimated time · ' + task.estimatedMinutes + ' minutes'
+              : '') +
+            '</p>' +
           '</div>'
         );
       }
@@ -2280,7 +2329,7 @@
         els.completeTaskBtn.hidden = complete || (task && task.type === 'milestone' && task.resumeAction !== 'growth_complete');
         els.completeTaskBtn.textContent =
           task && task.resumeAction === 'growth_complete'
-            ? 'Mark Objectives Reviewed'
+            ? 'Finish Review'
             : 'Mark Complete';
       }
     }
@@ -2312,24 +2361,41 @@
       if (!plan || plan.status === 'complete' || !plan.currentTask) {
         addBubble(
           'assistant',
-          'Growth Complete.\n\nAll current recommendations have been completed.\n\nChoose your next objective from the workspace panel.'
+          'Growth Complete.\n\n' +
+            nextObjectiveCopy(plan) +
+            '\n\n' +
+            completionStatusMeta(plan) +
+            '\n\nNext objectives stay review-first — no campaign, prospect list, or account changes begin without operator approval.'
         );
-        els.sessionStatus.textContent = 'GROWTH PLAN · complete';
+        els.sessionStatus.textContent =
+          'GROWTH PLAN · ' + completionStatusMeta(plan);
         setComposerEnabled(false);
         return;
       }
 
       const task = plan.currentTask;
-      addBubble(
-        'assistant',
-        'Resuming your Growth Plan.\n\nCurrent task: ' +
-          (task.title || 'Next step') +
-          (task.description ? '\n\n' + task.description : '')
-      );
-      els.sessionStatus.textContent =
-        'GROWTH PLAN · ' +
-        (typeof plan.percentComplete === 'number' ? plan.percentComplete + '% · ' : '') +
-        (task.title || 'in progress');
+      if (task.resumeAction === 'growth_complete') {
+        addBubble(
+          'assistant',
+          (task.description || nextObjectiveCopy(plan)) +
+            '\n\n' +
+            completionStatusMeta(plan) +
+            '\n\nUse Choose Next Objective to review options, or Finish Review when you are done. Nothing launches without operator approval.'
+        );
+        els.sessionStatus.textContent =
+          'GROWTH PLAN · ' + completionStatusMeta(plan);
+      } else {
+        addBubble(
+          'assistant',
+          'Resuming your Growth Plan.\n\nCurrent task: ' +
+            (task.title || 'Next step') +
+            (task.description ? '\n\n' + task.description : '')
+        );
+        els.sessionStatus.textContent =
+          'GROWTH PLAN · ' +
+          (typeof plan.percentComplete === 'number' ? plan.percentComplete + '% · ' : '') +
+          (task.title || 'in progress');
+      }
 
       // Auto-continue only conversation milestones — setup task guidance opens
       // explicitly via "Open Task Guidance" so the left panel never duplicates cards.
@@ -2367,7 +2433,10 @@
         setWorkspaceTab('overview');
         renderWorkspaceLeftNav();
         if (!silent) {
-          addBubble('meta', 'Choose a next objective from the completion options.');
+          addBubble(
+            'meta',
+            'Review next-objective options when ready. Finish Review saves this checkpoint — no campaign or account changes start without approval.'
+          );
         }
         return;
       }
@@ -2936,7 +3005,7 @@
           'assistant',
           'Next objective noted: ' +
             (btn.textContent || id) +
-            '.\n\nCampaign launch and market expansion stay operator-directed — start a new Growth Conversation or return to the dashboard when you are ready.'
+            '.\n\nThis stays review-first. No campaign, prospect list, or account changes begin without operator approval — start a new Growth Conversation or return to the dashboard when you are ready.'
         );
       });
     }
