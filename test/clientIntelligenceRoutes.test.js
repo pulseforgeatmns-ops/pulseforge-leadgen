@@ -77,6 +77,9 @@ describe('clientIntelligence routes (static)', () => {
       '/api/v1/interview/:id/readiness/start',
       '/api/v1/interview/:id/readiness/message',
       '/api/v1/clients/:id/blueprint',
+      '/api/v1/client-intel/sessions',
+      '/api/v1/client-intel/sessions/:id/resume',
+      '/api/v1/client-intel/fixtures/anchor-blueprint',
       '/client-intel',
     ];
     for (const route of expected) {
