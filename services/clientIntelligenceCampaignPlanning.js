@@ -747,6 +747,16 @@ function peelRecordFieldsClause(text) {
     .trim();
 }
 
+function peelReviewGateClause(text) {
+  return String(text || '')
+    .replace(
+      /(?:^|\n|;|\.)\s*(?:review\s+gate|approval\s+gate)\s*[:\-–—]?\s*[\s\S]*$/i,
+      ' '
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function extractRequiredProspectFieldsText(text) {
   const s = String(text || '');
   const re = new RegExp(
@@ -1241,19 +1251,31 @@ function criteriaSlotsReady(slots) {
  */
 function normalizeCriteriaList(value) {
   if (Array.isArray(value)) {
-    return uniqueStrings(
+    const cleaned = uniqueStrings(
       value
-        .map((x) => peelRecordFieldsClause(String(x || '').trim()))
+        .map((x) =>
+          peelReviewGateClause(peelRecordFieldsClause(String(x || '').trim()))
+        )
         .filter(Boolean)
+        .filter((x) => !isGeographyFragmentItem(x))
     ).slice(0, 8);
+    return looksLikeMalformedCriteriaList(cleaned) ? [] : cleaned;
   }
-  const s = peelRecordFieldsClause(String(value || '').trim());
+  const s = peelReviewGateClause(
+    peelRecordFieldsClause(String(value || '').trim())
+  );
   if (!s) return [];
   const listed = s
     .split(/\n|;|•|\u2022|(?<=\.)\s+(?=[A-Z])/g)
     .map((x) => x.replace(/^[-–—*\d.)\s]+/, '').trim())
-    .filter((x) => x.length > 2);
-  if (listed.length > 1) return uniqueStrings(listed).slice(0, 8);
+    .filter((x) => x.length > 2)
+    .filter((x) => !isGeographyFragmentItem(x));
+  if (listed.length > 1) {
+    const uniq = uniqueStrings(listed).slice(0, 8);
+    return looksLikeMalformedCriteriaList(uniq) ? [] : uniq;
+  }
+  // Single prose blob with dash-stitched locations is not a clean bullet.
+  if (looksLikeMalformedCriteriaList([s])) return [];
   return [s];
 }
 
@@ -1336,11 +1358,16 @@ function buildProspectListCriteriaPreview(context, slots, opts = {}) {
       : null;
 
   // Structured synthesis only — never stitch raw slot/transcript fragments.
+  // Clear comma-split inclusion/exclusion from extractCampaignPlanFields so
+  // geography prose cannot win over polished defaults.
   const fields = extractCampaignPlanFields(ctx, answers);
+  fields.inclusionCriteria = [];
+  fields.exclusionCriteria = [];
+
   const slotInclusion = normalizeCriteriaList(s.inclusionCriteria);
-  const slotExclusion = normalizeCriteriaList(s.exclusionCriteria);
-  if (slotInclusion.length >= 3) fields.inclusionCriteria = slotInclusion;
-  if (slotExclusion.length >= 3) fields.exclusionCriteria = slotExclusion;
+  const slotExclusion = normalizeCriteriaList(
+    peelReviewGateClause(s.exclusionCriteria)
+  );
 
   const objectivePart = normalizeObjectiveSection(ctx, answers, fields);
   const segmentPart = normalizeTargetSegmentSection(ctx, answers, fields);
@@ -1359,10 +1386,13 @@ function buildProspectListCriteriaPreview(context, slots, opts = {}) {
     return fallback || synthesized || priorVal || null;
   };
 
-  const pickList = (slotList, priorList, synthesized) => {
-    if (Array.isArray(slotList) && slotList.length >= 3) return slotList;
-    if (Array.isArray(priorList) && priorList.length >= 3) return priorList;
-    return synthesized || [];
+  const pickCriteriaList = (slotList, priorList, synthesized) => {
+    if (looksLikeCleanCriteriaList(slotList)) return slotList;
+    if (looksLikeCleanCriteriaList(priorList)) return priorList;
+    if (looksLikeCleanCriteriaList(synthesized)) return synthesized;
+    return synthesized && synthesized.length
+      ? synthesized
+      : defaultInclusionCriteria(ctx, answers);
   };
 
   const campaignObjective = pickText(
@@ -1385,16 +1415,18 @@ function buildProspectListCriteriaPreview(context, slots, opts = {}) {
     marketBound,
     defaultMarketBound(ctx)
   );
-  const inclusionCriteria = pickList(
+  const inclusionCriteria = pickCriteriaList(
     slotInclusion,
     prior && prior.inclusionCriteria,
     segmentPart.inclusionCriteria
   );
-  const exclusionCriteria = pickList(
-    slotExclusion,
-    prior && prior.exclusionCriteria,
-    segmentPart.exclusionCriteria
-  );
+  const exclusionCriteria = (() => {
+    if (looksLikeCleanCriteriaList(slotExclusion)) return slotExclusion;
+    if (looksLikeCleanCriteriaList(prior && prior.exclusionCriteria)) {
+      return prior.exclusionCriteria;
+    }
+    return segmentPart.exclusionCriteria;
+  })();
   const requiredProspectFields = normalizeRequiredProspectFields(
     s.requiredProspectFields ||
       (prior && prior.requiredProspectFields) ||
@@ -1498,6 +1530,92 @@ function splitList(text) {
     .slice(0, 12);
 }
 
+/**
+ * Split inclusion/exclusion criteria without comma-splitting locations or roles.
+ * Commas inside "Bedford, Hooksett, Londonderry…" must stay in one bullet.
+ */
+function splitCriteriaItems(text) {
+  const s = String(text || '').trim();
+  if (!s) return [];
+  return s
+    .split(/\n|;|•|\u2022|(?<=\.)\s+(?=[A-Z])/g)
+    .map((x) => x.replace(/^[-–—*\d.)\s]+/, '').trim())
+    .filter((x) => x.length > 2)
+    .slice(0, 12);
+}
+
+const CRITERIA_TOWN_FRAGMENTS = new Set([
+  'bedford',
+  'hooksett',
+  'londonderry',
+  'auburn',
+  'goffstown',
+  'manchester',
+]);
+
+function isGeographyFragmentItem(item) {
+  const s = String(item || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\.$/, '');
+  if (!s) return true;
+  if (CRITERIA_TOWN_FRAGMENTS.has(s)) return true;
+  if (/^(or|and)\s+nearby\b/.test(s)) return true;
+  return false;
+}
+
+/**
+ * True when a criteria list looks like comma-split geography fragments or
+ * dash-stitched prose rather than clean inclusion/exclusion bullets.
+ */
+function looksLikeMalformedCriteriaList(items) {
+  const list = (items || [])
+    .map((x) => String(x || '').trim())
+    .filter(Boolean);
+  if (!list.length) return true;
+
+  const townOnlyCount = list.filter(isGeographyFragmentItem).length;
+  if (townOnlyCount >= 1 && list.length <= 8 && townOnlyCount >= Math.min(2, list.length)) {
+    return true;
+  }
+  if (list.length === 1 && isGeographyFragmentItem(list[0])) return true;
+
+  const shortFragments = list.filter((item) => item.length < 12).length;
+  if (shortFragments >= 2) return true;
+
+  if (
+    list.some((item) =>
+      /each prospect record|required prospect|review gate/i.test(item)
+    )
+  ) {
+    return true;
+  }
+
+  // "Segment prose - Located in Bedford, Hooksett…" stitched into one bullet
+  // or split into broken pieces.
+  if (
+    list.some(
+      (item) =>
+        /\s[-–—]\s+located in\b/i.test(item) ||
+        (/^located in\b/i.test(item) && /bedford|hooksett/i.test(item)) ||
+        (/^small to mid-sized\b/i.test(item) && /\s[-–—]\s+/.test(item))
+    )
+  ) {
+    return true;
+  }
+
+  if (list.some((item) => looksTruncatedArtifactText(item))) return true;
+  return false;
+}
+
+function looksLikeCleanCriteriaList(items) {
+  return (
+    Array.isArray(items) &&
+    items.length >= 3 &&
+    !looksLikeMalformedCriteriaList(items)
+  );
+}
+
 function uniqueStrings(items) {
   const out = [];
   const seen = new Set();
@@ -1572,9 +1690,13 @@ function extractBulletBlock(text, labels) {
     'i'
   );
   const m = s.match(re);
+  const criteriaLabels = /include|exclude|inclusion|exclusion|avoid/i.test(
+    labels.join(' ')
+  );
+  const splitFn = criteriaLabels ? splitCriteriaItems : splitList;
   if (!m || !m[1]) {
     const inline = extractLabeledSection(text, labels);
-    return inline ? splitList(inline.split(/\n\s*\n/)[0] || inline) : [];
+    return inline ? splitFn(inline.split(/\n\s*\n/)[0] || inline) : [];
   }
   const body = m[1];
   // Prefer explicit bullet lines so the next unlabeled answer paragraph
@@ -1590,7 +1712,7 @@ function extractBulletBlock(text, labels) {
       .slice(0, 12);
   }
   const firstPara = body.split(/\n\s*\n/)[0] || body;
-  return splitList(firstPara);
+  return splitFn(firstPara);
 }
 
 function looksLikeMetricItem(item) {
@@ -1980,6 +2102,7 @@ function extractCampaignPlanFields(context, answers) {
   const inclusionRaw = answerText(answers, 'inclusion_criteria');
   const exclusionRaw = answerText(answers, 'exclusion_criteria');
 
+  // Never comma-split inclusion/exclusion — towns/roles stay in one bullet.
   const inclusionFromLabels = [
     ...extractBulletBlock(blob, [
       'include property managers who',
@@ -1988,8 +2111,8 @@ function extractCampaignPlanFields(context, answers) {
       'inclusion criteria',
       'must include',
     ]),
-    ...splitList(inclusionRaw),
-  ];
+    ...splitCriteriaItems(peelRecordFieldsClause(inclusionRaw)),
+  ].filter((item) => !looksLikeMalformedCriteriaList([item]));
   const exclusionFromLabels = [
     ...extractBulletBlock(blob, [
       'exclude property managers who',
@@ -1999,8 +2122,14 @@ function extractCampaignPlanFields(context, answers) {
       'must exclude',
       'avoid',
     ]),
-    ...splitList(exclusionRaw),
-  ];
+    ...splitCriteriaItems(
+      peelRecordFieldsClause(peelReviewGateClause(exclusionRaw))
+    ),
+  ].filter(
+    (item) =>
+      !looksLikeMalformedCriteriaList([item]) &&
+      !/each prospect record|review gate/i.test(item)
+  );
 
   let objectiveSubstance = objRaw;
   // Peel criteria / metrics / core-question blocks out of the objective answer.
@@ -2243,19 +2372,18 @@ function normalizeTargetSegmentSection(context, answers, fields) {
     targetSegment = sanitizeTargetSegmentText(segmentAnswer, context);
   }
 
-  const inclusionCriteria =
-    fields && fields.inclusionCriteria && fields.inclusionCriteria.length >= 3
-      ? fields.inclusionCriteria
-      : defaultInclusionCriteria(context, answers);
+  const inclusionCriteria = looksLikeCleanCriteriaList(
+    fields && fields.inclusionCriteria
+  )
+    ? fields.inclusionCriteria
+    : defaultInclusionCriteria(context, answers);
 
   // Property-manager first campaigns use the polished exclusion set. Operator
   // lists only win when every item already matches that shape (never raw
   // transcript / avoid-wrapper bleed, and never as Subtype content).
   let exclusionCriteria = defaultExclusionCriteria(context, answers);
   if (
-    fields &&
-    Array.isArray(fields.exclusionCriteria) &&
-    fields.exclusionCriteria.length >= 3 &&
+    looksLikeCleanCriteriaList(fields && fields.exclusionCriteria) &&
     fields.exclusionCriteria.every(looksLikePolishedExclusionItem)
   ) {
     exclusionCriteria = fields.exclusionCriteria;
