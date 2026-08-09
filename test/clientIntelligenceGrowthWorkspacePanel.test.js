@@ -261,9 +261,11 @@ describe('Growth Workspace left panel', () => {
     assert.match(ui, /guidance-open/);
     assert.match(ui, /guidance-suppressed/);
     assert.match(ui, /--gw-sticky-footer-clearance/);
-    assert.match(ui, /padding-bottom:\s*var\(--gw-sticky-footer-clearance\)/);
     assert.match(ui, /applyGuidanceFooterClearance/);
+    assert.match(ui, /guidance-scroll-spacer/);
+    assert.match(ui, /gw-guidance-scroll-spacer/);
     assert.match(ui, /footerHeight \+ 24|Math\.ceil\(footerHeight\)\) \+ 24/);
+    assert.match(ui, /flex:\s*1\s+1\s+0/);
     assert.match(ui, /#savedSessions \[data-role="simple-task"\]/);
     assert.match(ui, /data-active-task-card="1"/);
     assert.match(ui, /els\.chatLog\.innerHTML = ''/);
@@ -283,6 +285,31 @@ describe('Growth Workspace left panel', () => {
     assert.doesNotMatch(
       ui,
       /addBubble\(\s*'assistant',\s*\n?\s*\(task\.title/
+    );
+  });
+
+  it('guidance-open left panel HTML includes an end spacer for footer clearance', () => {
+    const html = renderGrowthWorkspaceLeftPanel({
+      currentSession: {
+        sessionId: 's1',
+        businessName: 'Anchor Cleaning',
+        growthPlan: {
+          percentComplete: 40,
+          status: 'in_progress',
+          currentTask: { ...BRANDED_EMAIL_TASK },
+        },
+      },
+      previousSessions: [],
+      currentTask: { ...BRANDED_EMAIL_TASK },
+      guidanceOpen: true,
+      businessName: 'Anchor Cleaning',
+    });
+    assert.equal(analyzeLeftPanelHtml(html).activeTaskCards, 1);
+    assert.match(html, /data-role="guidance-scroll-spacer"/);
+    assert.ok(
+      html.indexOf('data-role="task-guidance"') <
+        html.indexOf('data-role="guidance-scroll-spacer"'),
+      'spacer must sit after the guidance card inside the scroll container'
     );
   });
 });

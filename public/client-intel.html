@@ -829,21 +829,36 @@
       gap: 0.35rem;
       margin-top: 0;
     }
-    /* Guidance open: left nav becomes the scroll region above the sticky footer. */
+    /* Guidance open: left nav is the ONLY scroll owner above the sticky footer. */
     .panel[data-workspace="growth"] {
-      /* Fallback until JS measures actions + status-bar height (+ 24px). */
       --gw-sticky-footer-clearance: calc(7.5rem + 24px);
     }
     .panel[data-workspace="growth"] #savedSessions.workspace-left-nav.guidance-open {
-      flex: 1 1 auto;
+      /* flex-basis 0 so this takes remaining space and scrolls internally */
+      flex: 1 1 0;
       min-height: 0;
       max-height: none;
+      height: auto;
+      /* Block layout: flex scroll containers often ignore padding-bottom overflow */
+      display: block;
       overflow-x: hidden;
       overflow-y: auto;
-      /* Footer height + 24px — applied via --gw-sticky-footer-clearance. */
-      padding-bottom: var(--gw-sticky-footer-clearance) !important;
+      padding-bottom: 0 !important; /* spacer owns clearance, not padding */
       border-bottom: none;
       scroll-padding-bottom: var(--gw-sticky-footer-clearance);
+    }
+    .panel[data-workspace="growth"] #savedSessions.workspace-left-nav.guidance-open > .gw-left-section,
+    .panel[data-workspace="growth"] #savedSessions.workspace-left-nav.guidance-open > .previous-plans {
+      display: block;
+    }
+    /* Explicit end spacer inside the scroll container (footer height + 24px). */
+    .gw-guidance-scroll-spacer {
+      display: block;
+      width: 100%;
+      height: var(--gw-sticky-footer-clearance);
+      min-height: var(--gw-sticky-footer-clearance);
+      flex: 0 0 auto;
+      pointer-events: none;
     }
     .panel[data-workspace="growth"] #chatLog.guidance-suppressed {
       display: none !important;
@@ -860,7 +875,7 @@
     .panel[data-workspace="growth"] #sessionStatus {
       flex: 0 0 auto;
       position: relative;
-      z-index: 2;
+      z-index: 3;
       background: var(--cie-panel-elevated);
     }
     .panel[data-workspace="growth"] #sessionStatus {
@@ -1511,9 +1526,13 @@
       if (!guidanceOpen) {
         scroll.style.removeProperty('--gw-sticky-footer-clearance');
         if (chatPanel) chatPanel.style.removeProperty('--gw-sticky-footer-clearance');
+        const stale = scroll.querySelector('[data-role="guidance-scroll-spacer"]');
+        if (stale) stale.remove();
         return;
       }
-      // Bottom padding = sticky footer height (actions + status) + 24px.
+      // Bottom clearance = sticky footer height (actions + status) + 24px.
+      // Applied as an in-flow spacer inside the scroll container (not outer panel
+      // padding) so Complete when / Who owns it can scroll fully above the footer.
       let footerHeight = 0;
       if (els.growthWorkspaceActions && !els.growthWorkspaceActions.hidden) {
         footerHeight += els.growthWorkspaceActions.getBoundingClientRect().height;
@@ -1525,8 +1544,20 @@
       const value = clearancePx + 'px';
       scroll.style.setProperty('--gw-sticky-footer-clearance', value);
       if (chatPanel) chatPanel.style.setProperty('--gw-sticky-footer-clearance', value);
-      scroll.style.paddingBottom = value;
       scroll.style.scrollPaddingBottom = value;
+
+      let spacer = scroll.querySelector('[data-role="guidance-scroll-spacer"]');
+      if (!spacer) {
+        spacer = document.createElement('div');
+        spacer.className = 'gw-guidance-scroll-spacer';
+        spacer.setAttribute('data-role', 'guidance-scroll-spacer');
+        spacer.setAttribute('aria-hidden', 'true');
+        scroll.appendChild(spacer);
+      } else if (spacer.parentElement !== scroll || spacer !== scroll.lastElementChild) {
+        scroll.appendChild(spacer);
+      }
+      spacer.style.height = value;
+      spacer.style.minHeight = value;
     }
 
     function syncGrowthWorkspaceChrome() {
