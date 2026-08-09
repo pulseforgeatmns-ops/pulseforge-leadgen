@@ -6,6 +6,10 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- Domain owned task guidance no longer uses generic lead-reply language
+  - Why this matters: ownership enables website, branded email, tool verification, and brand protection
+  - What to confirm: registration active, where managed, who approves DNS, renewal risk, no credentials in Max
+  - Who owns it: Client/operator; complete when ownership and access path are confirmed
 - Domain connected to website task guidance no longer uses email/lead-routing confirm items
   - What to confirm covers live site load, www/non-www routing, HTTPS, marketing domain match, and approval before DNS/site changes
   - What to do: confirm the domain points to the live site; document A/CNAME changes for approval
