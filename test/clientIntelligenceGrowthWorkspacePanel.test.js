@@ -25,6 +25,18 @@ const BRANDED_EMAIL_TASK = Object.freeze({
   resumeAction: 'setup_task',
 });
 
+const DOMAIN_CONNECTED_TASK = Object.freeze({
+  id: 'setup:domain_dns:domain_connected',
+  itemId: 'domain_connected',
+  type: 'setup',
+  title: 'Domain connected to website',
+  description: 'Point domain A/CNAME to the live site.',
+  owner: 'max_can_check',
+  priority: 'high',
+  estimatedMinutes: 3,
+  resumeAction: 'setup_task',
+});
+
 describe('Growth Workspace left panel', () => {
   it('formats readiness owner labels for operators', () => {
     assert.equal(formatOwnerLabel('client_required'), 'Client/operator');
@@ -179,6 +191,60 @@ describe('Growth Workspace left panel', () => {
     assert.equal(
       guidance.completeWhen,
       'Anchor has a working branded mailbox and someone is responsible for checking it.'
+    );
+  });
+
+  it('domain connected guidance is DNS/site checks, not email reply ownership', () => {
+    const html = taskGuidanceCardHtml(
+      { ...DOMAIN_CONNECTED_TASK },
+      { businessName: 'Anchor Cleaning' }
+    );
+    assert.equal(analyzeLeftPanelHtml(html).taskGuidanceCards, 1);
+    assert.match(html, /Domain connected to website/);
+    assert.match(html, /Owner · Max can check/);
+    assert.match(
+      html,
+      /Confirm the domain points to the live website\. If not, document the needed A\/CNAME change for approval\./
+    );
+    assert.match(html, /The domain loads the live website\./);
+    assert.match(
+      html,
+      /Both www and non-www versions route correctly, or one redirects cleanly to the other\./
+    );
+    assert.match(html, /The site uses HTTPS\./);
+    assert.match(
+      html,
+      /The domain shown in marketing materials matches the live site\./
+    );
+    assert.match(
+      html,
+      /No DNS or website changes are made without explicit approval\./
+    );
+    assert.match(html, /Max can check, operator\/client approves changes\./);
+    assert.doesNotMatch(html, /The person who owns replies knows how this works/);
+
+    const guidance = resolveTaskGuidance(
+      DOMAIN_CONNECTED_TASK,
+      'Anchor Cleaning'
+    );
+    assert.equal(
+      guidance.whatToDo,
+      'Confirm the domain points to the live website. If not, document the needed A/CNAME change for approval.'
+    );
+    assert.deepEqual(guidance.whatToConfirm, [
+      'The domain loads the live website.',
+      'Both www and non-www versions route correctly, or one redirects cleanly to the other.',
+      'The site uses HTTPS.',
+      'The domain shown in marketing materials matches the live site.',
+      'No DNS or website changes are made without explicit approval.',
+    ]);
+    assert.equal(
+      guidance.whoOwnsIt,
+      'Max can check, operator/client approves changes.'
+    );
+    assert.doesNotMatch(
+      guidance.whatToConfirm.join(' '),
+      /owns replies/
     );
   });
 
