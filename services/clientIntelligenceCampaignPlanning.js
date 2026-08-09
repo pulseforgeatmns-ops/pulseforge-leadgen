@@ -467,8 +467,9 @@ function defaultTargetSegmentBody(context) {
 }
 
 function defaultTargetSegmentAvoid(context) {
-  const avoid =
+  const avoidRaw =
     (context && context.avoidPhrase) || 'buyers focused only on the lowest price';
+  const avoid = String(avoidRaw).replace(/^./, (c) => c.toLowerCase());
   if (/property manager/i.test(String(context && context.primarySegment))) {
     return `Avoid large institutional property managers, overly complex properties, and ${avoid}.`;
   }
