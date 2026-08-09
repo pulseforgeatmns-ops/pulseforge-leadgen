@@ -85,6 +85,18 @@ const CLEAR_SERVICE_AREA_TASK = Object.freeze({
   resumeAction: 'setup_task',
 });
 
+const CLEAR_SERVICES_TASK = Object.freeze({
+  id: 'setup:website:clear_services',
+  itemId: 'clear_services',
+  type: 'setup',
+  title: 'Clear services',
+  description: 'List primary services above the fold.',
+  owner: 'operator_guided',
+  priority: 'high',
+  estimatedMinutes: 3,
+  resumeAction: 'setup_task',
+});
+
 describe('Growth Workspace left panel', () => {
   it('formats readiness owner labels for operators', () => {
     assert.equal(formatOwnerLabel('client_required'), 'Client/operator');
@@ -545,6 +557,74 @@ describe('Growth Workspace left panel', () => {
     assert.equal(
       guidance.completeWhen,
       "Anchor's service area is clearly stated and matches the approved Growth Plan."
+    );
+  });
+
+  it('Clear services guidance covers commercial service mix, not generic capture language', () => {
+    const html = taskGuidanceCardHtml(
+      { ...CLEAR_SERVICES_TASK },
+      { businessName: 'Anchor Cleaning' }
+    );
+    assert.equal(analyzeLeftPanelHtml(html).taskGuidanceCards, 1);
+    assert.match(html, /Clear services/);
+    assert.match(html, /Owner · Operator guided/);
+    assert.match(
+      html,
+      /Before outreach, property managers should quickly understand what Anchor actually provides/
+    );
+    assert.match(
+      html,
+      /Clear services help prospects self-identify fit/
+    );
+    assert.match(
+      html,
+      /List Anchor&#39;s primary services clearly on the website and growth materials/
+    );
+    assert.match(
+      html,
+      /Emphasize recurring commercial cleaning while still showing the current service mix/
+    );
+    assert.match(html, /The website clearly lists the main services\./);
+    assert.match(html, /Recurring commercial cleaning is easy to understand\./);
+    assert.match(
+      html,
+      /Short-term rental turnovers, office cleaning, deep cleans, move-in\/move-out, and residential cleaning are represented accurately\./
+    );
+    assert.match(
+      html,
+      /Service descriptions do not overpromise capacity or specialized work Anchor has not approved\./
+    );
+    assert.match(
+      html,
+      /No website changes are published without approval\./
+    );
+    assert.match(
+      html,
+      /Anchor&#39;s primary services are clearly stated and aligned with the approved Blueprint\./
+    );
+    assert.doesNotMatch(html, /reliable capture and follow-up/);
+    assert.doesNotMatch(html, /The person who owns replies knows how this works/);
+
+    const guidance = resolveTaskGuidance(CLEAR_SERVICES_TASK, 'Anchor Cleaning');
+    assert.equal(
+      guidance.whyThisMatters,
+      'Before outreach, property managers should quickly understand what Anchor actually provides. Clear services help prospects self-identify fit and reduce vague inquiries that do not match the commercial growth plan.'
+    );
+    assert.equal(
+      guidance.whatToDo,
+      "List Anchor's primary services clearly on the website and growth materials. Emphasize recurring commercial cleaning while still showing the current service mix."
+    );
+    assert.deepEqual(guidance.whatToConfirm, [
+      'The website clearly lists the main services.',
+      'Recurring commercial cleaning is easy to understand.',
+      'Short-term rental turnovers, office cleaning, deep cleans, move-in/move-out, and residential cleaning are represented accurately.',
+      'Service descriptions do not overpromise capacity or specialized work Anchor has not approved.',
+      'No website changes are published without approval.',
+    ]);
+    assert.equal(guidance.whoOwnsIt, 'Operator guided');
+    assert.equal(
+      guidance.completeWhen,
+      "Anchor's primary services are clearly stated and aligned with the approved Blueprint."
     );
   });
 
