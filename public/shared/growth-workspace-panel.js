@@ -63,8 +63,55 @@
   }
 
   /**
-   * Structured setup-task guidance. Keys are itemId (preferred) or full task id.
+   * Structured setup-task guidance keyed by stable itemId / slug.
+   * Fallback defaultSetupGuidance is only for unknown/custom tasks.
    */
+  const TASK_GUIDANCE_ALIASES = Object.freeze({
+    branded_email_available: 'branded_email',
+    domain_connected_to_website: 'domain_connected',
+    spf_dkim_dmarc_present: 'spf_dkim_dmarc',
+    google_business_profile_claimed: 'gbp_claimed',
+    gbp_name_address_service_area: 'gbp_nap',
+    gbp_website_phone_connected: 'gbp_contact',
+    reviews_present: 'gbp_reviews',
+    photos_present: 'gbp_photos',
+  });
+
+  /** Canonical itemIds / slugs with task-specific guidance (no placeholder fallback). */
+  const KNOWN_GROWTH_INFRA_GUIDANCE_IDS = Object.freeze([
+    'branded_email',
+    'domain_connected',
+    'domain_owned',
+    'spf_dkim_dmarc',
+    'clear_cta',
+    'clear_service_area',
+    'clear_services',
+    'contact_form_works',
+    'contact_forms',
+    'mobile_usability',
+    'phone_email_visible',
+    'gbp_claimed',
+    'gbp_nap',
+    'gbp_contact',
+    'gbp_reviews',
+    'gbp_photos',
+    'review_request_process',
+    'crm_exists',
+    'contacts_captured',
+    'stages_defined',
+    'follow_up_reminders',
+    'crm_source_tracking',
+    'form_tracking',
+    'google_analytics',
+    'search_console',
+    'call_tracking',
+    'conversion_events',
+    'estimate_process',
+    'follow_up_cadence',
+    'brand_assets_ready',
+    'social_profiles_present',
+  ]);
+
   function brandedEmailGuidance(businessName) {
     const name = shortBusinessName(businessName);
     return {
@@ -80,6 +127,7 @@
         'SPF, DKIM, and DMARC should be checked before outbound outreach.',
       ],
       whoOwnsIt: 'Client/operator',
+      owner: 'Client/operator',
       completeWhen:
         name +
         ' has a working branded mailbox and someone is responsible for checking it.',
@@ -103,6 +151,7 @@
         'No DNS or website changes are made without explicit approval.',
       ],
       whoOwnsIt: 'Max can check, operator/client approves changes.',
+      owner: 'Max can check; operator approves fixes',
       completeWhen:
         'The domain for ' +
         name +
@@ -127,6 +176,7 @@
         'No login credentials are shared inside Max.',
       ],
       whoOwnsIt: 'Client/operator',
+      owner: 'Client/operator',
       completeWhen: 'Domain ownership and access path are confirmed.',
     };
   }
@@ -150,6 +200,7 @@
         'No DNS changes are made without explicit approval.',
       ],
       whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
       completeWhen:
         'SPF, DKIM, and DMARC are confirmed or the required DNS changes are documented for approval.',
     };
@@ -174,6 +225,7 @@
         'No website changes are published without approval.',
       ],
       whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
       completeWhen:
         name +
         ' has one clear primary CTA for commercial prospects, and the path behind it works.',
@@ -199,6 +251,7 @@
         'No website changes are published without approval.',
       ],
       whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
       completeWhen:
         name +
         "'s service area is clearly stated and matches the approved Growth Plan.",
@@ -226,6 +279,7 @@
         'No website changes are published without approval.',
       ],
       whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
       completeWhen:
         name +
         "'s primary services are clearly stated and aligned with the approved Blueprint.",
@@ -250,8 +304,56 @@
         'No tracking or website changes are made without approval.',
       ],
       whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
       completeWhen:
         'A test form submission is received successfully and the follow-up owner is clear.',
+    };
+  }
+
+  function contactFormsGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Outreach only works if interested prospects have a clear way to request an estimate or walkthrough. ' +
+        name +
+        ' needs a working contact or estimate form on the site before campaigns send traffic.',
+      whatToDo:
+        'Confirm the website has a contact or estimate form that is easy to find from the homepage and CTA path. Note any missing form for operator-approved website work.',
+      whatToConfirm: [
+        'A contact or estimate form exists on the live site.',
+        'The form is reachable from the primary CTA.',
+        'Required fields collect enough detail to follow up (name, contact, location or property type as needed).',
+        'Spam protection does not block legitimate submissions.',
+        'No website changes are published without approval.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        name + ' has a discoverable contact/estimate form ready for testing.',
+    };
+  }
+
+  function mobileUsabilityGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Many property managers will open ' +
+        name +
+        "'s site on a phone. If buttons are hard to tap, text overflows, or the CTA is buried, outreach clicks will not convert.",
+      whatToDo:
+        'Open the live site on a phone-width viewport and check layout, tap targets, and the path to contact/estimate. Document any fixes needed for approval.',
+      whatToConfirm: [
+        'Primary content is readable without horizontal scrolling.',
+        'Phone and CTA buttons are easy to tap.',
+        'The contact or estimate path works on mobile.',
+        'Images and menus do not obscure key actions.',
+        'No website changes are published without approval.',
+      ],
+      whoOwnsIt: 'Max can check; operator approves fixes',
+      owner: 'Max can check; operator approves fixes',
+      completeWhen:
+        name +
+        "'s mobile layout and tap targets are usable, or needed fixes are documented for approval.",
     };
   }
 
@@ -272,9 +374,519 @@
         'No website changes are published without approval.',
       ],
       whoOwnsIt: 'Max can check; operator approves fixes.',
+      owner: 'Max can check; operator approves fixes',
       completeWhen:
         'Phone and email are easy to find, accurate, and monitored.',
     };
+  }
+
+  function gbpClaimedGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'A claimed Google Business Profile is how local search and Maps show ' +
+        name +
+        ' as a real business. Unclaimed or unverified listings limit trust and make it harder to control name, phone, and website details.',
+      whatToDo:
+        'Confirm whether the Google Business Profile exists and is claimed/verified by someone at ' +
+        name +
+        '. If not, outline the claim/verify steps for the client/operator — do not change GBP without approval.',
+      whatToConfirm: [
+        'A Google Business Profile listing exists for the business.',
+        'The listing is claimed and verified by the owner/operator.',
+        'The person with GBP access is known (no password sharing in Max).',
+        'No GBP edits are made without explicit approval.',
+      ],
+      whoOwnsIt: 'Client/operator',
+      owner: 'Client/operator',
+      completeWhen:
+        name +
+        "'s Google Business Profile is claimed/verified, or the claim path is assigned to the client/operator.",
+    };
+  }
+
+  function gbpNapGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Incorrect name, address, or service area on Google confuses prospects and weakens local trust. ' +
+        name +
+        "'s GBP should match the website and the approved Greater Manchester focus.",
+      whatToDo:
+        'Review the GBP name, address (or service-area business settings), and service area against the website and Blueprint. Document corrections for client/operator approval before any GBP edit.',
+      whatToConfirm: [
+        'Business name matches how ' + name + ' wants to appear publicly.',
+        'Address or service-area setting is accurate for how the business operates.',
+        'Service area aligns with the approved Growth Plan markets.',
+        'Website NAP and GBP NAP do not conflict.',
+        'No GBP changes are made without explicit approval.',
+      ],
+      whoOwnsIt: 'Client/operator',
+      owner: 'Client/operator',
+      completeWhen:
+        'GBP name, address/service-area settings, and website NAP are aligned or correction steps are approved.',
+    };
+  }
+
+  function gbpContactGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'When someone finds ' +
+        name +
+        ' on Google, the website and phone on the profile must work and match outreach materials. Broken or mismatched contact details waste warm interest.',
+      whatToDo:
+        'Confirm the GBP website URL and phone number match the live site and monitored contact paths. Document any link or phone updates for approval.',
+      whatToConfirm: [
+        'GBP website URL loads the live site.',
+        'GBP phone number is correct and monitored.',
+        'Contact details match the website header/footer.',
+        'No GBP or website changes are made without explicit approval.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        'GBP website and phone match the live, monitored contact paths.',
+    };
+  }
+
+  function gbpReviewsGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Reviews are a primary trust signal for property managers checking ' +
+        name +
+        ' before responding to outreach. A thin or empty review profile makes cold outreach harder to convert.',
+      whatToDo:
+        'Check current Google review count and recency. If reviews are thin, plan a client-approved review request process rather than fabricating or scraping reviews.',
+      whatToConfirm: [
+        'Current review count and average rating are documented.',
+        'Recent reviews exist or a gap is clearly noted.',
+        'There is a plan to request reviews from real customers after jobs.',
+        'No fake reviews or review-gating practices are used.',
+        'No GBP changes are made without approval.',
+      ],
+      whoOwnsIt: 'Client/operator',
+      owner: 'Client/operator',
+      completeWhen:
+        'Review presence is documented and a real-customer review plan exists if the profile is thin.',
+    };
+  }
+
+  function gbpPhotosGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Photos help prospects recognize ' +
+        name +
+        ' as a real operating business. Empty or stock-only GBP galleries reduce trust when someone checks the listing after outreach.',
+      whatToDo:
+        'Confirm GBP has current exterior, team, and work photos. If missing, collect client-approved photos and document an upload plan — do not publish without approval.',
+      whatToConfirm: [
+        'Exterior and/or team photos are present or queued for upload.',
+        'Work photos represent real jobs ' + name + ' has permission to show.',
+        'Photos are not misleading stock imagery presented as the business.',
+        'No GBP photo uploads happen without explicit approval.',
+      ],
+      whoOwnsIt: 'Client/operator',
+      owner: 'Client/operator',
+      completeWhen:
+        'GBP photos are present or a client-approved photo set is ready to upload.',
+    };
+  }
+
+  function reviewRequestProcessGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Reviews will not grow on their own. ' +
+        name +
+        ' needs a simple post-job ask so satisfied customers know how to leave a Google review without awkward or non-compliant prompting.',
+      whatToDo:
+        'Define when and how the team asks for a Google review after a completed job (who asks, which link, and what language to use). Keep it optional and authentic.',
+      whatToConfirm: [
+        'A post-job trigger is defined (e.g. after final walkthrough or invoice).',
+        'The Google review link or GBP short link is known to the team.',
+        'Ask language is short, optional, and does not filter for positive-only reviews.',
+        'Someone owns sending the ask.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        name + ' has a documented, owner-assigned review request process.',
+    };
+  }
+
+  function crmExistsGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'If inquiries live only in inboxes or texts, ' +
+        name +
+        ' will lose follow-ups as volume grows. A CRM (Pulseforge or another system) is the system of record before outreach scales.',
+      whatToDo:
+        'Confirm which CRM or lead tracker will hold every new inquiry. If none exists, choose Pulseforge or another approved tool and name who will use it daily.',
+      whatToConfirm: [
+        'A CRM or equivalent lead tracker is selected.',
+        'The owner/operator can access it (no passwords shared in Max).',
+        'New inquiries will be logged there by default.',
+        'The team agrees this is the source of truth for open leads.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        name + ' has a named CRM/lead tracker and a person responsible for using it.',
+    };
+  }
+
+  function contactsCapturedGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Every missed log is a missed follow-up. ' +
+        name +
+        ' should capture every inquiry as a contact so outreach-driven demand does not disappear into voicemail or email threads.',
+      whatToDo:
+        'Agree that every phone, form, email, and referral inquiry is logged as a contact the same day, with name, channel, and next step.',
+      whatToConfirm: [
+        'There is a rule: no inquiry stays only in a personal inbox.',
+        'Minimum fields are defined (name, company, channel, next step).',
+        'Someone checks daily that new inquiries were logged.',
+        'DNC or unsubscribe requests can be marked on the contact.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        'Every inquiry path has a same-day contact-logging rule and an owner.',
+    };
+  }
+
+  function stagesDefinedGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Without stages, ' +
+        name +
+        ' cannot see which leads need a first reply, estimate, walkthrough, or decision. Clear stages keep follow-up disciplined after outreach starts.',
+      whatToDo:
+        'Define a short pipeline (for example: new → contacted → estimate sent → walkthrough booked → won/lost) and make sure the CRM uses those stages.',
+      whatToConfirm: [
+        'Pipeline stages are written down and shared with the reply owner.',
+        'Stages match how ' + name + ' actually sells (estimate/walkthrough).',
+        'Every open lead has a current stage.',
+        'Won/lost outcomes are represented.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        name + ' has a shared stage list in the CRM and uses it on open leads.',
+    };
+  }
+
+  function followUpRemindersGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Property managers rarely book on the first touch. ' +
+        name +
+        ' needs reminders so promised follow-ups happen even when the day gets busy.',
+      whatToDo:
+        'Turn on or define follow-up reminders in the CRM for next calls, estimate nudges, and post-walkthrough check-ins. Assign who closes each reminder.',
+      whatToConfirm: [
+        'Reminders can be set on a contact or opportunity.',
+        'The reply owner sees due reminders daily.',
+        'Completed touches clear or reschedule the reminder.',
+        'No lead sits without a next-touch date once contacted.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        'Follow-up reminders are in use and owned for open commercial leads.',
+    };
+  }
+
+  function crmSourceTrackingGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Without source tracking, ' +
+        name +
+        ' cannot tell whether a lead came from outreach, Google, referral, or the website. Source data is required before scaling channels.',
+      whatToDo:
+        'Add a required lead-source field (or equivalent) on every new contact and agree on a short source list (e.g. outreach, website form, Google, referral, other).',
+      whatToConfirm: [
+        'Lead source is captured on every new contact.',
+        'Source values are consistent enough to report later.',
+        'Website/form sources can be distinguished from outbound outreach.',
+        'No tracking tool changes are made without approval.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        'Every new contact records a lead source using an agreed list.',
+    };
+  }
+
+  function formTrackingGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'If form submits are not tracked, ' +
+        name +
+        ' cannot see whether website or campaign traffic produces inquiries. Form conversion tracking is part of capture readiness.',
+      whatToDo:
+        'Confirm form submissions fire a conversion event or CRM/create notification that can be counted. If missing, document the GA4/event or CRM wiring needed for approval.',
+      whatToConfirm: [
+        'A successful form submit is countable (analytics event and/or CRM create).',
+        'Test submissions appear in the tracking path.',
+        'Spam submits can be filtered or ignored in reporting.',
+        'No tracking or website changes are made without approval.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        'Form submits are tracked as conversions or the approved setup steps are documented.',
+    };
+  }
+
+  function googleAnalyticsGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Google Analytics (GA4) shows whether ' +
+        name +
+        "'s site receives traffic and which pages matter. Without it, growth work is flying blind after outreach or local search interest.",
+      whatToDo:
+        'Confirm GA4 is installed on the live site and that an operator/client admin can access the property. Do not install or change tags without approval.',
+      whatToConfirm: [
+        'GA4 is present on key site pages (or absence is documented).',
+        'Admin access path is known (no password sharing in Max).',
+        'Realtime or recent hits confirm the tag fires.',
+        'No tracking installs happen without explicit approval.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        'GA4 is confirmed on the live site with a known access path, or install steps are documented for approval.',
+    };
+  }
+
+  function searchConsoleGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Search Console shows how Google sees ' +
+        name +
+        "'s domain and which queries/pages get impressions. It is the baseline for organic visibility before content or local SEO work.",
+      whatToDo:
+        'Confirm the domain (or URL prefix) is verified in Google Search Console and that the right people can view it. Document verification steps for approval if missing.',
+      whatToConfirm: [
+        'Search Console property exists for the domain or site URL.',
+        'Verification method is known to the owner/operator.',
+        'Coverage/performance data can be viewed (or property is newly verified).',
+        'No DNS or site-file verification changes are made without approval.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        'Search Console is verified with a known access path, or verification steps are documented for approval.',
+    };
+  }
+
+  function callTrackingGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Phone is often the fastest path for commercial cleaning inquiries. ' +
+        name +
+        ' needs either call tracking or at least consistent call logging so outreach and website calls are not invisible.',
+      whatToDo:
+        'Decide whether to use a call-tracking number or simple CRM call logging. Confirm every inbound sales call is recorded as a touch with source when known. Do not swap public numbers without approval.',
+      whatToConfirm: [
+        'Inbound sales calls are logged somewhere durable.',
+        'If call tracking is used, numbers map to the right campaigns/pages.',
+        'The public phone number remains monitored during any transition.',
+        'No phone or tracking changes go live without approval.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        'Call tracking or reliable call logging is in place for sales inquiries.',
+    };
+  }
+
+  function conversionEventsGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Traffic without conversion events cannot tell ' +
+        name +
+        ' which pages or campaigns produce estimates, calls, or form fills. Key events are the measurement layer for growth.',
+      whatToDo:
+        'Define 2–4 key conversion events (e.g. form_submit, click_to_call, estimate_request) and confirm they fire — or document the approved implementation steps.',
+      whatToConfirm: [
+        'Key conversion events are named and agreed.',
+        'At least the primary form or CTA path has an event.',
+        'Test actions show up in analytics or the tag assistant equivalent.',
+        'No tracking changes are made without approval.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        'Key conversion events are defined and firing, or implementation is documented for approval.',
+    };
+  }
+
+  function estimateProcessGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'When outreach creates interest, ' +
+        name +
+        ' must know how estimates are scoped and delivered. An unclear estimate process slows replies and loses property manager deals.',
+      whatToDo:
+        'Document how estimates are scoped today (walkthrough vs remote, pricing inputs, who prepares them, and typical turnaround). Note gaps like missing proposal template separately.',
+      whatToConfirm: [
+        'Estimate steps are written down in plain language.',
+        'Pricing inputs are listed (e.g. sq ft, frequency, scope).',
+        'Someone is responsible for preparing estimates.',
+        'Typical response time for an estimate request is known.',
+      ],
+      whoOwnsIt: 'Client/operator',
+      owner: 'Client/operator',
+      completeWhen:
+        name +
+        "'s estimate/scoping process is documented with an owner and turnaround expectation.",
+    };
+  }
+
+  function followUpCadenceGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Estimates and walkthroughs often need a second and third touch. A written follow-up cadence keeps ' +
+        name +
+        ' consistent without sounding spammy.',
+      whatToDo:
+        'Set a simple cadence after estimate send or walkthrough (e.g. day 2 email/call, day 5 nudge, day 10 final check-in) and assign who runs it.',
+      whatToConfirm: [
+        'Cadence steps and timing are written down.',
+        'The cadence stops on win, loss, or unsubscribe/DNC.',
+        'Reminders exist for each step.',
+        'Language stays helpful and specific to the estimate/walkthrough.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      owner: 'Operator guided',
+      completeWhen:
+        'A post-estimate follow-up cadence is documented and reminder-ready.',
+    };
+  }
+
+  function brandAssetsReadyGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Outreach, the website, and GBP all need consistent brand assets. Missing logo or real photos makes ' +
+        name +
+        ' look unfinished when a prospect checks credentials.',
+      whatToDo:
+        'Confirm a usable logo file and a small set of real work/team/location photos are available for site, GBP, and outreach. Collect gaps from the client without requesting passwords.',
+      whatToConfirm: [
+        'A logo file suitable for web/email exists.',
+        'At least a few real photos are available (not only stock).',
+        'Assets may be used on the website and Google profile with approval.',
+        'No public asset changes are published without approval.',
+      ],
+      whoOwnsIt: 'Client/operator',
+      owner: 'Client/operator',
+      completeWhen:
+        name + ' has logo and core photo assets ready for approved use.',
+    };
+  }
+
+  function socialProfilesPresentGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Prospects often check Facebook or Instagram after an email. Missing or unclaimed profiles create doubt about whether ' +
+        name +
+        ' is an active local business.',
+      whatToDo:
+        'Confirm which social profiles exist and are claimed. Note gaps for Facebook/Instagram (and LinkedIn if B2B-relevant). Do not create or change profiles without approval.',
+      whatToConfirm: [
+        'Existing profile URLs are documented.',
+        'Name, logo, and contact info are consistent where profiles exist.',
+        'Missing priority profiles are listed for client/operator decision.',
+        'No social account creation or edits happen without approval.',
+        'No passwords are shared in Max.',
+      ],
+      whoOwnsIt: 'Max can check; operator approves fixes',
+      owner: 'Max can check; operator approves fixes',
+      completeWhen:
+        'Priority social profiles are confirmed present/claimed, or intentional gaps are documented for approval.',
+    };
+  }
+
+  const TASK_GUIDANCE_BY_ID = Object.freeze({
+    branded_email: brandedEmailGuidance,
+    domain_connected: domainConnectedGuidance,
+    domain_owned: domainOwnedGuidance,
+    spf_dkim_dmarc: spfDkimDmarcGuidance,
+    clear_cta: clearCtaGuidance,
+    clear_service_area: clearServiceAreaGuidance,
+    clear_services: clearServicesGuidance,
+    contact_form_works: contactFormWorksGuidance,
+    contact_forms: contactFormsGuidance,
+    mobile_usability: mobileUsabilityGuidance,
+    phone_email_visible: phoneEmailVisibleGuidance,
+    gbp_claimed: gbpClaimedGuidance,
+    gbp_nap: gbpNapGuidance,
+    gbp_contact: gbpContactGuidance,
+    gbp_reviews: gbpReviewsGuidance,
+    gbp_photos: gbpPhotosGuidance,
+    review_request_process: reviewRequestProcessGuidance,
+    crm_exists: crmExistsGuidance,
+    contacts_captured: contactsCapturedGuidance,
+    stages_defined: stagesDefinedGuidance,
+    follow_up_reminders: followUpRemindersGuidance,
+    crm_source_tracking: crmSourceTrackingGuidance,
+    form_tracking: formTrackingGuidance,
+    google_analytics: googleAnalyticsGuidance,
+    search_console: searchConsoleGuidance,
+    call_tracking: callTrackingGuidance,
+    conversion_events: conversionEventsGuidance,
+    estimate_process: estimateProcessGuidance,
+    follow_up_cadence: followUpCadenceGuidance,
+    brand_assets_ready: brandAssetsReadyGuidance,
+    social_profiles_present: socialProfilesPresentGuidance,
+    // Related brand/social itemIds share practical guidance.
+    photos: brandAssetsReadyGuidance,
+    logo: brandAssetsReadyGuidance,
+    facebook_present: socialProfilesPresentGuidance,
+    instagram_present: socialProfilesPresentGuidance,
+    linkedin_present: socialProfilesPresentGuidance,
+  });
+
+  function normalizeGuidanceKey(raw) {
+    const key = String(raw || '').trim();
+    if (!key) return '';
+    if (TASK_GUIDANCE_ALIASES[key]) return TASK_GUIDANCE_ALIASES[key];
+    if (TASK_GUIDANCE_BY_ID[key]) return key;
+    return key;
+  }
+
+  function resolveGuidanceKey(task) {
+    if (!task) return '';
+    const itemId = normalizeGuidanceKey(task.itemId || '');
+    if (itemId && TASK_GUIDANCE_BY_ID[itemId]) return itemId;
+    const id = String(task.id || '');
+    const suffix = id.includes(':') ? id.split(':').pop() : id;
+    const fromSuffix = normalizeGuidanceKey(suffix);
+    if (fromSuffix && TASK_GUIDANCE_BY_ID[fromSuffix]) return fromSuffix;
+    // Title-like slugs (e.g. branded_email_available) passed as id/itemId.
+    const alias = normalizeGuidanceKey(itemId || suffix);
+    if (alias && TASK_GUIDANCE_BY_ID[alias]) return alias;
+    return itemId || fromSuffix || '';
   }
 
   function defaultSetupGuidance(task, businessName) {
@@ -297,6 +909,7 @@
         'Nothing here requires a password share or unapproved DNS/GBP change.',
       ],
       whoOwnsIt: formatOwnerLabel((task && task.owner) || 'operator_guided'),
+      owner: formatOwnerLabel((task && task.owner) || 'operator_guided'),
       completeWhen: title + ' is confirmed and ready for outreach.',
     };
   }
@@ -304,51 +917,35 @@
   function resolveTaskGuidance(task, businessName) {
     if (!task) return null;
     if (task.guidance && typeof task.guidance === 'object') {
+      const who =
+        task.guidance.whoOwnsIt ||
+        task.guidance.owner ||
+        formatOwnerLabel(task.owner || 'operator_guided');
       return {
         whyThisMatters: task.guidance.whyThisMatters || '',
         whatToDo: task.guidance.whatToDo || '',
         whatToConfirm: Array.isArray(task.guidance.whatToConfirm)
           ? task.guidance.whatToConfirm
           : [],
-        whoOwnsIt:
-          task.guidance.whoOwnsIt ||
-          formatOwnerLabel(task.owner || 'operator_guided'),
+        whoOwnsIt: who,
+        owner: task.guidance.owner || who,
         completeWhen: task.guidance.completeWhen || '',
       };
     }
-    const itemId = task.itemId || '';
-    const id = String(task.id || '');
-    if (itemId === 'branded_email' || /:branded_email$/.test(id)) {
-      return brandedEmailGuidance(businessName);
+    const key = resolveGuidanceKey(task);
+    const builder = key && TASK_GUIDANCE_BY_ID[key];
+    if (typeof builder === 'function') {
+      return builder(businessName);
     }
-    if (itemId === 'domain_connected' || /:domain_connected$/.test(id)) {
-      return domainConnectedGuidance(businessName);
-    }
-    if (itemId === 'domain_owned' || /:domain_owned$/.test(id)) {
-      return domainOwnedGuidance(businessName);
-    }
-    if (itemId === 'spf_dkim_dmarc' || /:spf_dkim_dmarc$/.test(id)) {
-      return spfDkimDmarcGuidance(businessName);
-    }
-    if (itemId === 'clear_cta' || /:clear_cta$/.test(id)) {
-      return clearCtaGuidance(businessName);
-    }
-    if (itemId === 'clear_service_area' || /:clear_service_area$/.test(id)) {
-      return clearServiceAreaGuidance(businessName);
-    }
-    if (itemId === 'clear_services' || /:clear_services$/.test(id)) {
-      return clearServicesGuidance(businessName);
-    }
-    if (itemId === 'contact_form_works' || /:contact_form_works$/.test(id)) {
-      return contactFormWorksGuidance(businessName);
-    }
-    if (itemId === 'phone_email_visible' || /:phone_email_visible$/.test(id)) {
-      return phoneEmailVisibleGuidance(businessName);
-    }
-    if (task.type === 'setup' || itemId || /^setup:/.test(id)) {
+    if (task.type === 'setup' || task.itemId || /^setup:/.test(String(task.id || ''))) {
       return defaultSetupGuidance(task, businessName);
     }
     return defaultSetupGuidance(task, businessName);
+  }
+
+  function hasKnownTaskGuidance(task) {
+    const key = resolveGuidanceKey(task);
+    return Boolean(key && TASK_GUIDANCE_BY_ID[key]);
   }
 
   function planCardHtml(session, { primary, guidanceOpen } = {}) {
@@ -630,13 +1227,19 @@
 
   return {
     OWNER_LABELS,
+    TASK_GUIDANCE_ALIASES,
+    KNOWN_GROWTH_INFRA_GUIDANCE_IDS,
+    TASK_GUIDANCE_BY_ID,
     escapeHtml,
     formatOwnerLabel,
     shortBusinessName,
     sessionIdOf,
     filterPreviousPlans,
     planCardHtml,
+    resolveGuidanceKey,
     resolveTaskGuidance,
+    hasKnownTaskGuidance,
+    defaultSetupGuidance,
     brandedEmailGuidance,
     domainConnectedGuidance,
     domainOwnedGuidance,
@@ -645,7 +1248,29 @@
     clearServiceAreaGuidance,
     clearServicesGuidance,
     contactFormWorksGuidance,
+    contactFormsGuidance,
+    mobileUsabilityGuidance,
     phoneEmailVisibleGuidance,
+    gbpClaimedGuidance,
+    gbpNapGuidance,
+    gbpContactGuidance,
+    gbpReviewsGuidance,
+    gbpPhotosGuidance,
+    reviewRequestProcessGuidance,
+    crmExistsGuidance,
+    contactsCapturedGuidance,
+    stagesDefinedGuidance,
+    followUpRemindersGuidance,
+    crmSourceTrackingGuidance,
+    formTrackingGuidance,
+    googleAnalyticsGuidance,
+    searchConsoleGuidance,
+    callTrackingGuidance,
+    conversionEventsGuidance,
+    estimateProcessGuidance,
+    followUpCadenceGuidance,
+    brandAssetsReadyGuidance,
+    socialProfilesPresentGuidance,
     taskGuidanceCardHtml,
     renderGrowthWorkspaceLeftPanel,
     analyzeLeftPanelHtml,

@@ -11,7 +11,271 @@ const {
   analyzeLeftPanelHtml,
   taskGuidanceCardHtml,
   resolveTaskGuidance,
+  hasKnownTaskGuidance,
+  defaultSetupGuidance,
+  KNOWN_GROWTH_INFRA_GUIDANCE_IDS,
+  TASK_GUIDANCE_ALIASES,
 } = require('../public/shared/growth-workspace-panel');
+
+const PLACEHOLDER_GUIDANCE_PATTERNS = Object.freeze([
+  /needs reliable capture and follow-up\. Completing/,
+  /The change is live or documented\./,
+  /The person who owns replies knows how this works\./,
+  /Nothing here requires a password share or unapproved DNS\/GBP change\./,
+  / is confirmed and ready for outreach\./,
+]);
+
+/** Minimum known Growth Infrastructure tasks (stable itemId / slug). */
+const KNOWN_GROWTH_INFRA_TASKS = Object.freeze([
+  {
+    itemId: 'branded_email',
+    aliases: ['branded_email_available'],
+    id: 'setup:domain_dns:branded_email',
+    title: 'Branded email available',
+    owner: 'client_required',
+    ownerDisplay: 'Client/operator',
+  },
+  {
+    itemId: 'domain_connected',
+    aliases: ['domain_connected_to_website'],
+    id: 'setup:domain_dns:domain_connected',
+    title: 'Domain connected to website',
+    owner: 'max_can_check',
+    ownerDisplay: /Max can check/,
+  },
+  {
+    itemId: 'domain_owned',
+    aliases: [],
+    id: 'setup:domain_dns:domain_owned',
+    title: 'Domain owned',
+    owner: 'client_required',
+    ownerDisplay: 'Client/operator',
+  },
+  {
+    itemId: 'spf_dkim_dmarc',
+    aliases: ['spf_dkim_dmarc_present'],
+    id: 'setup:domain_dns:spf_dkim_dmarc',
+    title: 'SPF/DKIM/DMARC present',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'clear_cta',
+    aliases: [],
+    id: 'setup:website:clear_cta',
+    title: 'Clear CTA',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'clear_service_area',
+    aliases: [],
+    id: 'setup:website:clear_service_area',
+    title: 'Clear service area',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'clear_services',
+    aliases: [],
+    id: 'setup:website:clear_services',
+    title: 'Clear services',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'contact_form_works',
+    aliases: [],
+    id: 'setup:website:contact_form_works',
+    title: 'Contact form works',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'contact_forms',
+    aliases: [],
+    id: 'setup:lead_capture:contact_forms',
+    title: 'Contact forms',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'mobile_usability',
+    aliases: [],
+    id: 'setup:website:mobile_usability',
+    title: 'Mobile usability',
+    owner: 'max_can_check',
+    ownerDisplay: /Max can check; operator approves fixes/,
+  },
+  {
+    itemId: 'phone_email_visible',
+    aliases: [],
+    id: 'setup:website:phone_email_visible',
+    title: 'Phone/email visible',
+    owner: 'max_can_check',
+    ownerDisplay: /Max can check; operator approves fixes/,
+  },
+  {
+    itemId: 'gbp_claimed',
+    aliases: ['google_business_profile_claimed'],
+    id: 'setup:gbp:gbp_claimed',
+    title: 'GBP claimed',
+    owner: 'client_required',
+    ownerDisplay: 'Client/operator',
+  },
+  {
+    itemId: 'gbp_nap',
+    aliases: ['gbp_name_address_service_area'],
+    id: 'setup:gbp:gbp_nap',
+    title: 'Correct name/address/service area',
+    owner: 'client_required',
+    ownerDisplay: 'Client/operator',
+  },
+  {
+    itemId: 'gbp_contact',
+    aliases: ['gbp_website_phone_connected'],
+    id: 'setup:gbp:gbp_contact',
+    title: 'Website/phone connected',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'gbp_reviews',
+    aliases: ['reviews_present'],
+    id: 'setup:gbp:gbp_reviews',
+    title: 'Reviews present',
+    owner: 'client_required',
+    ownerDisplay: 'Client/operator',
+  },
+  {
+    itemId: 'gbp_photos',
+    aliases: ['photos_present'],
+    id: 'setup:gbp:gbp_photos',
+    title: 'Photos present',
+    owner: 'client_required',
+    ownerDisplay: 'Client/operator',
+  },
+  {
+    itemId: 'review_request_process',
+    aliases: [],
+    id: 'setup:reviews:review_request_process',
+    title: 'Review request process',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'crm_exists',
+    aliases: [],
+    id: 'setup:crm_pipeline:crm_exists',
+    title: 'CRM exists',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'contacts_captured',
+    aliases: [],
+    id: 'setup:crm_pipeline:contacts_captured',
+    title: 'Contacts captured',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'stages_defined',
+    aliases: [],
+    id: 'setup:crm_pipeline:stages_defined',
+    title: 'Stages defined',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'follow_up_reminders',
+    aliases: [],
+    id: 'setup:crm_pipeline:follow_up_reminders',
+    title: 'Follow-up reminders',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'crm_source_tracking',
+    aliases: [],
+    id: 'setup:tracking:crm_source_tracking',
+    title: 'CRM source tracking',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'form_tracking',
+    aliases: [],
+    id: 'setup:tracking:form_tracking',
+    title: 'Form tracking',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'google_analytics',
+    aliases: [],
+    id: 'setup:tracking:google_analytics',
+    title: 'Google Analytics',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'search_console',
+    aliases: [],
+    id: 'setup:tracking:search_console',
+    title: 'Search Console',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'call_tracking',
+    aliases: [],
+    id: 'setup:tracking:call_tracking',
+    title: 'Call tracking',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'conversion_events',
+    aliases: [],
+    id: 'setup:tracking:conversion_events',
+    title: 'Conversion events',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'estimate_process',
+    aliases: [],
+    id: 'setup:sales_process:estimate_process',
+    title: 'Estimate process',
+    owner: 'client_required',
+    ownerDisplay: 'Client/operator',
+  },
+  {
+    itemId: 'follow_up_cadence',
+    aliases: [],
+    id: 'setup:sales_process:follow_up_cadence',
+    title: 'Follow-up cadence',
+    owner: 'operator_guided',
+    ownerDisplay: 'Operator guided',
+  },
+  {
+    itemId: 'brand_assets_ready',
+    aliases: [],
+    id: 'setup:brand_assets:brand_assets_ready',
+    title: 'Brand assets ready',
+    owner: 'client_required',
+    ownerDisplay: 'Client/operator',
+  },
+  {
+    itemId: 'social_profiles_present',
+    aliases: [],
+    id: 'setup:social:social_profiles_present',
+    title: 'Social profiles present',
+    owner: 'max_can_check',
+    ownerDisplay: /Max can check; operator approves fixes/,
+  },
+]);
 
 const BRANDED_EMAIL_TASK = Object.freeze({
   id: 'setup:domain_dns:branded_email',
@@ -935,5 +1199,132 @@ describe('Growth Workspace left panel', () => {
         html.indexOf('data-role="guidance-scroll-spacer"'),
       'spacer must sit after the guidance card inside the scroll container'
     );
+  });
+
+  it('known Growth Infrastructure guidance ids cover the minimum task set', () => {
+    for (const task of KNOWN_GROWTH_INFRA_TASKS) {
+      assert.ok(
+        KNOWN_GROWTH_INFRA_GUIDANCE_IDS.includes(task.itemId),
+        'missing known guidance id: ' + task.itemId
+      );
+    }
+    assert.equal(KNOWN_GROWTH_INFRA_TASKS.length, 31);
+    assert.equal(KNOWN_GROWTH_INFRA_GUIDANCE_IDS.length, 31);
+  });
+
+  it('no known Growth Infrastructure task renders placeholder guidance', () => {
+    for (const spec of KNOWN_GROWTH_INFRA_TASKS) {
+      const task = {
+        id: spec.id,
+        itemId: spec.itemId,
+        type: 'setup',
+        title: spec.title,
+        description: 'Confirm ' + spec.title,
+        owner: spec.owner,
+        priority: 'high',
+        estimatedMinutes: 3,
+        resumeAction: 'setup_task',
+      };
+      assert.equal(
+        hasKnownTaskGuidance(task),
+        true,
+        'expected known guidance for ' + spec.itemId
+      );
+      const guidance = resolveTaskGuidance(task, 'Anchor Cleaning');
+      assert.ok(guidance, 'guidance missing for ' + spec.itemId);
+      assert.ok(
+        guidance.whyThisMatters && guidance.whyThisMatters.length > 40,
+        'whyThisMatters too thin for ' + spec.itemId
+      );
+      assert.ok(
+        guidance.whatToDo && guidance.whatToDo.length > 20,
+        'whatToDo too thin for ' + spec.itemId
+      );
+      assert.ok(
+        Array.isArray(guidance.whatToConfirm) &&
+          guidance.whatToConfirm.length >= 3,
+        'whatToConfirm incomplete for ' + spec.itemId
+      );
+      assert.ok(
+        guidance.whoOwnsIt || guidance.owner,
+        'owner missing for ' + spec.itemId
+      );
+      assert.ok(
+        guidance.completeWhen && guidance.completeWhen.length > 10,
+        'completeWhen missing for ' + spec.itemId
+      );
+
+      const blob = [
+        guidance.whyThisMatters,
+        guidance.whatToDo,
+        ...(guidance.whatToConfirm || []),
+        guidance.whoOwnsIt,
+        guidance.owner,
+        guidance.completeWhen,
+      ].join('\n');
+
+      for (const pattern of PLACEHOLDER_GUIDANCE_PATTERNS) {
+        assert.doesNotMatch(
+          blob,
+          pattern,
+          'placeholder guidance for ' + spec.itemId + ': ' + pattern
+        );
+      }
+      assert.doesNotMatch(
+        blob,
+        /(?:send|share|provide|enter|give)\s+(?:me\s+|us\s+)?(?:your\s+)?password/i
+      );
+      assert.doesNotMatch(
+        blob,
+        /(?:I will|we will|Max will)\s+(?:change|edit|update|publish)\s+(?:DNS|GBP|the website|tracking|social)/i
+      );
+
+      if (typeof spec.ownerDisplay === 'string') {
+        assert.equal(guidance.whoOwnsIt, spec.ownerDisplay);
+      } else {
+        assert.match(guidance.whoOwnsIt, spec.ownerDisplay);
+      }
+
+      for (const alias of spec.aliases || []) {
+        assert.equal(TASK_GUIDANCE_ALIASES[alias], spec.itemId);
+        const viaAlias = resolveTaskGuidance(
+          { ...task, itemId: alias, id: 'setup:x:' + alias },
+          'Anchor Cleaning'
+        );
+        assert.equal(
+          viaAlias.whyThisMatters,
+          guidance.whyThisMatters,
+          'alias mismatch for ' + alias
+        );
+      }
+
+      const html = taskGuidanceCardHtml(task, {
+        businessName: 'Anchor Cleaning',
+      });
+      assert.equal(analyzeLeftPanelHtml(html).taskGuidanceCards, 1);
+      assert.doesNotMatch(html, /reliable capture and follow-up/);
+      assert.doesNotMatch(
+        html,
+        /The person who owns replies knows how this works/
+      );
+      assert.doesNotMatch(html, /The change is live or documented/);
+    }
+  });
+
+  it('unknown custom setup tasks still use the placeholder fallback', () => {
+    const custom = {
+      id: 'setup:custom:widget_entangle',
+      itemId: 'widget_entangle',
+      type: 'setup',
+      title: 'Widget entangle',
+      description: 'Confirm the custom widget path.',
+      owner: 'operator_guided',
+    };
+    assert.equal(hasKnownTaskGuidance(custom), false);
+    const guidance = resolveTaskGuidance(custom, 'Anchor Cleaning');
+    const fallback = defaultSetupGuidance(custom, 'Anchor Cleaning');
+    assert.equal(guidance.whyThisMatters, fallback.whyThisMatters);
+    assert.match(guidance.whyThisMatters, /reliable capture and follow-up/);
+    assert.deepEqual(guidance.whatToConfirm, fallback.whatToConfirm);
   });
 });
