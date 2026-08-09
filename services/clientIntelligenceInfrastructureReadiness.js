@@ -22,7 +22,41 @@ const SECTION_TITLES = Object.freeze({
   maxCanCheck: 'What Max can check automatically',
   operatorClientMustComplete: 'What the operator/client must complete',
   recommendedSetupSequence: 'Recommended setup sequence',
+  topSetupPriorities: 'Top Setup Priorities',
 });
+
+const OWNER_LABELS = Object.freeze({
+  client_required: 'Client/operator',
+  operator_guided: 'Operator guided',
+  max_can_check: 'Max can check',
+});
+
+/**
+ * External facts Max can observe — do not mark `missing` from conversation alone.
+ * Use unknown / "needs verification" until Max checks website/GBP/reviews/DNS.
+ */
+const MAX_VERIFIED_ABSENCE_ITEM_IDS = Object.freeze(
+  new Set([
+    'gbp_reviews',
+    'review_count',
+    'average_rating',
+    'review_recency',
+    'google_analytics',
+    'search_console',
+    'analytics_pixels',
+  ])
+);
+
+const TOP_SETUP_PRIORITIES = Object.freeze([
+  'Confirm domain + website connection',
+  'Confirm branded email + SPF/DKIM/DMARC',
+  'Confirm website phone/email/form + clear estimate/walkthrough CTA',
+  'Confirm GBP, reviews, and photos',
+  'Confirm lead tracking and follow-up process',
+]);
+
+const MANUAL_ESTIMATE_NOTE =
+  'Manual estimate/walkthrough process exists, but proposal template and follow-up cadence need setup.';
 
 /** Binary readiness facts — avoid "partial" unless there is specific incomplete evidence. */
 const BINARY_ITEM_IDS = Object.freeze(
@@ -321,6 +355,48 @@ function shortName(name) {
   return s;
 }
 
+/** Shorter display name for executive summary (Anchor Cleaning → Anchor). */
+function executiveSummaryName(name) {
+  const s = shortName(name);
+  if (/\banchor\s+cleaning\b/i.test(s) || /^anchor\b/i.test(s)) return 'Anchor';
+  return s;
+}
+
+function formatOwnerLabel(owner) {
+  if (owner == null || owner === '') return '';
+  const key = String(owner);
+  if (OWNER_LABELS[key]) return OWNER_LABELS[key];
+  return key
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function buildExecutiveSummary(businessName) {
+  const name = executiveSummaryName(businessName);
+  return `Before outreach, ${name} should confirm three things: prospects can reach the business, trust signals are visible, and every inquiry can be tracked and followed up.`;
+}
+
+/**
+ * Missing is only allowed for Max-verifiable external facts when Max actually checked.
+ * Conversation alone → unknown / needs verification.
+ */
+function coerceExternalFactStatus(itemId, status, source) {
+  if (!MAX_VERIFIED_ABSENCE_ITEM_IDS.has(itemId)) return status;
+  if (status !== 'missing') return status;
+  const src = String(source || '');
+  if (
+    src === 'automated' ||
+    src === 'automated_observation' ||
+    src === 'max_checked' ||
+    src === 'max_observation'
+  ) {
+    return 'missing';
+  }
+  return 'unknown';
+}
+
 function extractBusinessName(blueprint) {
   const sections = (blueprint && blueprint.sections) || {};
   const identity = sections.identity && sections.identity.summary
@@ -518,12 +594,19 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
   const mark = (areaId, itemId, status, evidence, source = 'client_stated') => {
     const defArea = READINESS_AREAS.find((a) => a.id === areaId);
     const def = defArea && defArea.items.find((i) => i.id === itemId);
+    const coerced = coerceExternalFactStatus(itemId, status, source);
+    const evidenceOut =
+      coerced === 'unknown' &&
+      status === 'missing' &&
+      MAX_VERIFIED_ABSENCE_ITEM_IDS.has(itemId)
+        ? `${String(evidence || text).slice(0, 220)} (needs verification; not independently checked)`
+        : evidence || text.slice(0, 280);
     setItem(next, areaId, itemId, {
-      status,
-      evidence: evidence || text.slice(0, 280),
+      status: coerced,
+      evidence: evidenceOut,
       source,
       recommended_next_step:
-        status === 'ready'
+        coerced === 'ready'
           ? 'No action needed.'
           : (def && def.defaultNextStep) || '',
     });
@@ -678,24 +761,14 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
       }
     }
     if (/review/i.test(lower)) {
-      // Reviews stay unknown until GBP/review profile is actually checked,
-      // unless the client clearly states there are none.
-      if (looksUncertain(text)) {
-        mark(
-          'reviews',
-          'review_count',
-          'unknown',
-          'Review status uncertain; GBP/review profile not checked'
-        );
-        mark(
-          'gbp',
-          'gbp_reviews',
-          'unknown',
-          'Review status uncertain; GBP/review profile not checked'
-        );
-      } else if (looksNegative(text) && !/\d+\s*reviews?/i.test(text)) {
-        mark('reviews', 'review_count', 'missing', text);
-        mark('gbp', 'gbp_reviews', 'missing', text);
+      // Reviews stay unknown until GBP/review profile is actually checked.
+      // Client-stated absence is not enough for `missing` without Max verification.
+      if (looksUncertain(text) || looksNegative(text) || !/\d+\s*reviews?/i.test(text)) {
+        const evidence = looksNegative(text)
+          ? `${text.slice(0, 200)} (needs verification; GBP/review profile not checked)`
+          : 'Review status uncertain; GBP/review profile not checked';
+        mark('reviews', 'review_count', 'unknown', evidence);
+        mark('gbp', 'gbp_reviews', 'unknown', evidence);
       } else {
         const count = text.match(/(\d+)\s*reviews?/i);
         const evidence = count
@@ -824,13 +897,51 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
   }
 
   if (stepId === 'estimates') {
-    if (/estimate|quote/i.test(lower)) {
-      mark(
-        'sales_process',
-        'estimate_process',
-        statusFromEvidence(text, { allowPartial: true }),
-        text
-      );
+    if (/estimate|quote|walkthrough|proposal/i.test(lower)) {
+      const estimateNegated =
+        /\bno (estimates?|quotes?|walk-?throughs?)\b|don'?t (do|have) (estimates?|quotes?|walk-?throughs?)/i.test(
+          lower
+        );
+      const manualEstimate =
+        !estimateNegated &&
+        !looksUncertain(text) &&
+        (/\bmanual(ly)?\b|by hand|handled (manually|in person|by phone)/i.test(lower) ||
+          /\bwe (just )?handle\b/i.test(lower) ||
+          /\b(do|have|use) walk-?throughs?\b/i.test(lower));
+      if (manualEstimate && /estimate|quote|walkthrough/i.test(lower)) {
+        mark('sales_process', 'estimate_process', 'partial', MANUAL_ESTIMATE_NOTE);
+        if (!/proposal|template/i.test(lower)) {
+          mark(
+            'sales_process',
+            'proposal_template',
+            'unknown',
+            'Proposal template not confirmed; needed after manual estimate process'
+          );
+        }
+        if (!/follow[- ]?up|cadence/i.test(lower)) {
+          mark(
+            'sales_process',
+            'follow_up_cadence',
+            'unknown',
+            'Follow-up cadence not confirmed; needed after manual estimate process'
+          );
+        }
+        if (/walkthrough|site visit|walk-through/i.test(lower)) {
+          mark(
+            'sales_process',
+            'walkthrough_process',
+            'partial',
+            MANUAL_ESTIMATE_NOTE
+          );
+        }
+      } else if (/estimate|quote/i.test(lower)) {
+        mark(
+          'sales_process',
+          'estimate_process',
+          statusFromEvidence(text, { allowPartial: true }),
+          text
+        );
+      }
     }
     if (/proposal|template/i.test(lower)) {
       mark(
@@ -849,12 +960,15 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
       );
     }
     if (/walkthrough|site visit|walk-through/i.test(lower)) {
-      mark(
-        'sales_process',
-        'walkthrough_process',
-        statusFromEvidence(text, { allowPartial: true }),
-        text
-      );
+      // Prefer partial + shared note when already classified as manual estimate flow.
+      if (next.sales_process.items.estimate_process.status !== 'partial') {
+        mark(
+          'sales_process',
+          'walkthrough_process',
+          statusFromEvidence(text, { allowPartial: true }),
+          text
+        );
+      }
     }
     if (/follow[- ]?up|cadence/i.test(lower)) {
       mark(
@@ -889,14 +1003,22 @@ function applyAnswerToAreas(areas, stepId, userMessage) {
       if (re.test(lower)) {
         any = true;
         // Binary tracking facts: ready / missing / unknown only.
-        // Client clear "no X" is evidence; Max does not invent missing without inspection.
-        const status = statusNearMatch(text, re, { binary: true });
+        // GA / Search Console stay needs-verification unless Max inspected the site.
+        let status = statusNearMatch(text, re, { binary: true });
+        if (
+          (id === 'google_analytics' || id === 'search_console') &&
+          status === 'missing'
+        ) {
+          status = 'unknown';
+        }
         const evidence =
           status === 'ready' && id === 'google_analytics'
             ? `${text.slice(0, 200)} (client-stated; site tag not independently inspected)`
-            : status === 'missing'
-              ? text
-              : `${text.slice(0, 200)} (needs verification; not independently inspected)`;
+            : status === 'ready' && id === 'search_console'
+              ? `${text.slice(0, 200)} (client-stated; Search Console not independently verified)`
+              : status === 'missing'
+                ? text
+                : `${text.slice(0, 200)} (needs verification; not independently inspected)`;
         mark('tracking', id, status, evidence);
       }
     }
@@ -1187,6 +1309,8 @@ function buildGrowthInfrastructureReadinessReport(areas, opts = {}) {
     title: REPORT_TITLE,
     businessName,
     overallStatus: overallStatus(snapshot),
+    executiveSummary: buildExecutiveSummary(businessName),
+    topSetupPriorities: [...TOP_SETUP_PRIORITIES],
     sectionTitles: { ...SECTION_TITLES },
     demandCaptureRisks,
     trustDiscoverabilityGaps,
@@ -1210,13 +1334,21 @@ function buildGrowthInfrastructureReadinessReport(areas, opts = {}) {
 function formatReadinessReportMessage(report) {
   const r = report || {};
   const titles = r.sectionTitles || SECTION_TITLES;
+  const businessName = r.businessName || 'the business';
   const lines = [
     r.title || REPORT_TITLE,
     '',
     `Overall readiness: ${r.overallStatus || 'unknown'}`,
     '',
-    `${titles.demandCaptureRisks}:`,
+    r.executiveSummary || buildExecutiveSummary(businessName),
+    '',
+    `${titles.topSetupPriorities || SECTION_TITLES.topSetupPriorities}:`,
   ];
+  const priorities = r.topSetupPriorities || TOP_SETUP_PRIORITIES;
+  for (const p of priorities) {
+    lines.push(`- ${p}`);
+  }
+  lines.push('', `${titles.demandCaptureRisks}:`);
   const pushList = (arr, empty) => {
     if (!arr || !arr.length) {
       lines.push(`- ${empty}`);
@@ -1224,8 +1356,9 @@ function formatReadinessReportMessage(report) {
     }
     for (const g of arr.slice(0, 6)) {
       const label = g.statusLabel || statusLabelForItem(g.id, g.status);
+      const owner = formatOwnerLabel(g.owner);
       lines.push(
-        `- [${g.priority}] ${g.areaLabel}: ${g.label} (${label}) — owner: ${g.owner}`
+        `- [${g.priority}] ${g.areaLabel}: ${g.label} (${label}) — owner: ${owner}`
       );
     }
   };
@@ -1247,7 +1380,7 @@ function formatReadinessReportMessage(report) {
   if (r.recommendedSetupSequence && r.recommendedSetupSequence.length) {
     for (const step of r.recommendedSetupSequence.slice(0, 8)) {
       lines.push(
-        `${step.order}. ${step.label} (${step.owner}) — ${step.action}`
+        `${step.order}. ${step.label} (${formatOwnerLabel(step.owner)}) — ${step.action}`
       );
     }
   } else {
@@ -1405,6 +1538,10 @@ module.exports = {
   REPORT_TITLE,
   REPORT_DISCLAIMER,
   SECTION_TITLES,
+  OWNER_LABELS,
+  TOP_SETUP_PRIORITIES,
+  MANUAL_ESTIMATE_NOTE,
+  MAX_VERIFIED_ABSENCE_ITEM_IDS,
   ITEM_STATUSES,
   OWNERS,
   PRIORITIES,
@@ -1417,6 +1554,8 @@ module.exports = {
   applyAnswerToAreas,
   buildGrowthInfrastructureReadinessReport,
   formatReadinessReportMessage,
+  formatOwnerLabel,
+  buildExecutiveSummary,
   buildInfrastructureReadinessOpening,
   buildInfrastructureReadinessReply,
   detectReportRequest,

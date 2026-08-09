@@ -154,6 +154,8 @@ Sections:
 | Section | Content |
 |---|---|
 | **Overall readiness status** | Aggregate: `ready` / `partial` / `not_ready` / `unknown` |
+| **Executive summary** | Short pre-outreach framing (reachability, trust signals, inquiry tracking/follow-up) |
+| **Top Setup Priorities** | Fixed confirm list: domain/website, branded email + auth, site contact CTA, GBP/reviews/photos, lead tracking/follow-up |
 | **Can prospects reach you?** | High-priority gaps in lead capture, phone/email routing, forms, missed-lead process (`demandCaptureRisks`) |
 | **Can prospects trust you?** | Website, GBP, reviews, social, brand proof (`trustDiscoverabilityGaps`) |
 | **Can we measure what works?** | Analytics, pixels, Search Console, call/form/CRM source tracking, UTMs (`trackingGaps`) |
@@ -162,7 +164,7 @@ Sections:
 | **What the operator/client must complete** | `operator_guided` + `client_required` outstanding items |
 | **Recommended setup sequence** | Ordered next steps before campaign execution — domain ownership/connection → branded email/auth → website reachability CTA → GBP/photos/reviews/service area → lead tracking → estimate/follow-up |
 
-**Evidence discipline:** Do not mark an item `missing` unless there is clear evidence (client-stated absence or automated observation). Client uncertainty or no automated check → `unknown` / “needs verification”. Binary facts (domain owned, domain connected, branded email, reviews present, GA installed) avoid `partial` unless incomplete evidence is specific. Display labels: domain owned → confirmed / unconfirmed / not owned; domain connected → connected / not connected / needs verification; branded email → present / not present / needs setup / unknown.
+**Evidence discipline:** Do not mark unverified external facts (`gbp_reviews`, `review_count`, `google_analytics`, `search_console`, and similar Max-checkable observations) as `missing` from conversation alone — use `unknown` / “needs verification” until Max has checked the website/GBP/reviews/DNS and confirmed absence. Other items may be `missing` on clear client-stated absence. Display owner labels: `client_required` → Client/operator; `operator_guided` → Operator guided; `max_can_check` → Max can check. Manual estimate/walkthrough answers → `estimate_process` status `partial` with note that proposal template and follow-up cadence still need setup. Binary facts (domain owned, domain connected, branded email) avoid `partial` unless incomplete evidence is specific. Display labels: domain owned → confirmed / unconfirmed / not owned; domain connected → connected / not connected / needs verification; branded email → present / not present / needs setup / unknown.
 
 Item shape:
 
