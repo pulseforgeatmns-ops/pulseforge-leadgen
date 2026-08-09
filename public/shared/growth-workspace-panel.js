@@ -37,6 +37,13 @@
       .join(' ');
   }
 
+  function shortBusinessName(name) {
+    const s = String(name || '').trim();
+    if (!s) return 'the business';
+    if (/\banchor\s+cleaning\b/i.test(s) || /^anchor\b/i.test(s)) return 'Anchor';
+    return s;
+  }
+
   function sessionIdOf(session) {
     if (!session) return null;
     return session.sessionId || session.interviewId || session.id || null;
@@ -47,8 +54,6 @@
     const id = sessionIdOf(session);
     if (!id) return false;
     if (currentSessionId && String(id) === String(currentSessionId)) return false;
-    // Active growth work for another session still counts as a previous plan
-    // card, but never as task-guidance chrome for the current workspace.
     return true;
   }
 
@@ -57,7 +62,76 @@
     return list.filter((s) => isHistoricalPreviousPlan(s, currentSessionId));
   }
 
-  function planCardHtml(session, { primary } = {}) {
+  /**
+   * Structured setup-task guidance. Keys are itemId (preferred) or full task id.
+   */
+  function brandedEmailGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Before outreach, ' +
+        name +
+        ' should look legitimate and be easy to reply to. A branded email helps property managers trust the business and keeps replies organized.',
+      whatToDo: 'Create a mailbox such as hello@domain or estimates@domain.',
+      whatToConfirm: [
+        'The mailbox can send and receive email.',
+        'Replies go to the person responsible for new opportunities.',
+        'The email is connected to the website/contact form if applicable.',
+        'SPF, DKIM, and DMARC should be checked before outbound outreach.',
+      ],
+      completeWhen:
+        name +
+        ' has a working branded mailbox and someone is responsible for checking it.',
+    };
+  }
+
+  function defaultSetupGuidance(task, businessName) {
+    const name = shortBusinessName(businessName);
+    const title = (task && task.title) || 'this setup item';
+    const action =
+      (task && (task.description || task.action || task.recommended_next_step)) ||
+      ('Confirm ' + title + ' is in place.');
+    return {
+      whyThisMatters:
+        'Before outreach, ' +
+        name +
+        ' needs reliable capture and follow-up. Completing “' +
+        title +
+        '” reduces the chance inquiries are missed.',
+      whatToDo: action,
+      whatToConfirm: [
+        'The change is live or documented.',
+        'The person who owns replies knows how this works.',
+        'Nothing here requires a password share or unapproved DNS/GBP change.',
+      ],
+      completeWhen: title + ' is confirmed and ready for outreach.',
+    };
+  }
+
+  function resolveTaskGuidance(task, businessName) {
+    if (!task) return null;
+    if (task.guidance && typeof task.guidance === 'object') {
+      return {
+        whyThisMatters: task.guidance.whyThisMatters || '',
+        whatToDo: task.guidance.whatToDo || '',
+        whatToConfirm: Array.isArray(task.guidance.whatToConfirm)
+          ? task.guidance.whatToConfirm
+          : [],
+        completeWhen: task.guidance.completeWhen || '',
+      };
+    }
+    const itemId = task.itemId || '';
+    const id = String(task.id || '');
+    if (itemId === 'branded_email' || /:branded_email$/.test(id)) {
+      return brandedEmailGuidance(businessName);
+    }
+    if (task.type === 'setup' || itemId || /^setup:/.test(id)) {
+      return defaultSetupGuidance(task, businessName);
+    }
+    return defaultSetupGuidance(task, businessName);
+  }
+
+  function planCardHtml(session, { primary, guidanceOpen } = {}) {
     if (!session) return '';
     const id = sessionIdOf(session);
     const sample = session.isSample
@@ -71,15 +145,22 @@
     const done =
       session.resumeTarget === 'growth_complete' ||
       (plan && plan.status === 'complete');
+    // When guidance is open, do not repeat the active task title on the plan card.
     const currentTitle =
-      plan && plan.currentTask && plan.currentTask.title
-        ? plan.currentTask.title
-        : done
-          ? 'Growth Plan complete'
-          : 'Ready to resume';
+      guidanceOpen
+        ? null
+        : plan && plan.currentTask && plan.currentTask.title
+          ? plan.currentTask.title
+          : done
+            ? 'Growth Plan complete'
+            : 'Ready to resume';
     const meta = [
       pct != null ? pct + '% complete' : null,
-      primary ? currentTitle : done ? 'Completed plan' : 'Previous plan',
+      primary
+        ? currentTitle || (guidanceOpen ? 'Guidance open' : null)
+        : done
+          ? 'Completed plan'
+          : 'Previous plan',
       session.blueprintVersion ? 'Blueprint v' + session.blueprintVersion : null,
     ]
       .filter(Boolean)
@@ -98,7 +179,7 @@
       escapeHtml(id) +
       '" data-plan-role="' +
       (primary ? 'current' : 'previous') +
-      '">' +
+      '" data-simple-task-card="0">' +
       '<p class="session-card-title">' +
       escapeHtml(title) +
       sample +
@@ -123,32 +204,83 @@
     );
   }
 
-  /**
-   * Expanded guidance for the single active setup task.
-   * Must never be nested under Previous Plans.
-   */
-  function taskGuidanceCardHtml(task) {
-    if (!task) return '';
-    const ownerLabel = formatOwnerLabel(task.owner || 'operator_guided');
-    const mins = task.estimatedMinutes
-      ? '<br>Estimated time · ' + escapeHtml(String(task.estimatedMinutes)) + ' minutes'
-      : '';
+  function listHtml(items) {
+    const list = Array.isArray(items) ? items.filter(Boolean) : [];
+    if (!list.length) return '';
     return (
-      '<div class="current-task-card task-guidance-card" id="taskGuidanceCard" data-task-id="' +
+      '<ul class="task-guidance-list">' +
+      list.map((item) => '<li>' + escapeHtml(item) + '</li>').join('') +
+      '</ul>'
+    );
+  }
+
+  /**
+   * Exactly one expanded guidance card for the active setup task.
+   * Must never be nested under Previous Plans or duplicated by a simple card.
+   */
+  function taskGuidanceCardHtml(task, opts) {
+    if (!task) return '';
+    const options = opts && typeof opts === 'object' ? opts : {};
+    const businessName =
+      options.businessName ||
+      task.businessName ||
+      (options.currentSession && options.currentSession.businessName) ||
+      '';
+    const ownerLabel = formatOwnerLabel(task.owner || 'operator_guided');
+    const guidance = resolveTaskGuidance(task, businessName) || {};
+    const mins = task.estimatedMinutes
+      ? escapeHtml(String(task.estimatedMinutes)) + ' minutes'
+      : '';
+
+    return (
+      '<article class="current-task-card task-guidance-card" id="taskGuidanceCard" data-task-id="' +
       escapeHtml(task.id || '') +
-      '" data-role="task-guidance">' +
+      '" data-role="task-guidance" data-simple-task-card="0">' +
       '<p class="kicker">Current Task Guidance</p>' +
       '<h3>' +
       escapeHtml(task.title || 'Next step') +
       '</h3>' +
       '<p class="task-meta">' +
-      escapeHtml(task.description || 'Complete this recommendation, then mark it done to advance.') +
-      mins +
+      escapeHtml(
+        task.description ||
+          'Complete this recommendation, then mark it done to advance.'
+      ) +
+      (mins ? '<br>Estimated time · ' + mins : '') +
       '<br>Owner · ' +
       escapeHtml(ownerLabel) +
       (task.priority ? '<br>Priority · ' + escapeHtml(String(task.priority)) : '') +
       '</p>' +
-      '</div>'
+      '<div class="task-guidance-body">' +
+      '<section class="task-guidance-block" data-block="why">' +
+      '<h4>Why this matters</h4>' +
+      '<p>' +
+      escapeHtml(guidance.whyThisMatters || '') +
+      '</p>' +
+      '</section>' +
+      '<section class="task-guidance-block" data-block="do">' +
+      '<h4>What to do</h4>' +
+      '<p>' +
+      escapeHtml(guidance.whatToDo || '') +
+      '</p>' +
+      '</section>' +
+      '<section class="task-guidance-block" data-block="confirm">' +
+      '<h4>What to confirm</h4>' +
+      listHtml(guidance.whatToConfirm) +
+      '</section>' +
+      '<section class="task-guidance-block" data-block="owner">' +
+      '<h4>Who owns it</h4>' +
+      '<p>' +
+      escapeHtml(ownerLabel) +
+      '</p>' +
+      '</section>' +
+      '<section class="task-guidance-block" data-block="complete">' +
+      '<h4>Complete when</h4>' +
+      '<p>' +
+      escapeHtml(guidance.completeWhen || '') +
+      '</p>' +
+      '</section>' +
+      '</div>' +
+      '</article>'
     );
   }
 
@@ -157,7 +289,7 @@
    *
    * Sections:
    * 1. Current Growth Plan
-   * 2. Current Task Guidance (only when guidanceOpen)
+   * 2. Current Task Guidance (only when guidanceOpen) — exactly one card
    * 3. Previous Plans (historical only; omitted when empty)
    */
   function renderGrowthWorkspaceLeftPanel(opts) {
@@ -174,26 +306,30 @@
     const task = options.currentTask || null;
     const guidanceOpen = Boolean(options.guidanceOpen) && Boolean(task);
     const collapsePrevious = options.collapsePrevious !== false;
+    const businessName =
+      options.businessName ||
+      (currentSession && currentSession.businessName) ||
+      '';
 
     let html =
       '<section class="gw-left-section" data-section="current-plan">' +
       '<p class="blueprint-empty gw-section-label" style="margin:0 0 0.25rem">Current Growth Plan</p>' +
       (currentSession
-        ? planCardHtml(currentSession, { primary: true })
+        ? planCardHtml(currentSession, { primary: true, guidanceOpen })
         : '<p class="blueprint-empty">No active Growth Plan.</p>') +
       '</section>';
 
     if (guidanceOpen) {
+      // Single structured card only — no section label duplicate, no simple card.
       html +=
         '<section class="gw-left-section" data-section="task-guidance">' +
-        '<p class="blueprint-empty gw-section-label" style="margin:0.85rem 0 0.25rem">Current Task Guidance</p>' +
-        taskGuidanceCardHtml(task) +
+        taskGuidanceCardHtml(task, { businessName, currentSession }) +
         '</section>';
     }
 
     if (previousSessions.length) {
       const body =
-        '<div class="session-list">' +
+        '<div class="session-list previous-plan-list">' +
         previousSessions
           .map((s) => planCardHtml(s, { primary: false }))
           .join('') +
@@ -220,9 +356,6 @@
     return html;
   }
 
-  /**
-   * Count helpers for regression assertions (no DOM required).
-   */
   function countMarkers(html, marker) {
     if (!html) return 0;
     let count = 0;
@@ -239,15 +372,23 @@
   function analyzeLeftPanelHtml(html) {
     const source = String(html || '');
     const previousIdx = source.indexOf('data-section="previous-plans"');
-    const previousHtml =
-      previousIdx >= 0 ? source.slice(previousIdx) : '';
+    const previousHtml = previousIdx >= 0 ? source.slice(previousIdx) : '';
+    const guidanceSectionMatch = source.match(
+      /data-section="task-guidance"[\s\S]*?(?=<section class="gw-left-section"|<details class="previous-plans"|$)/
+    );
+    const guidanceSection = guidanceSectionMatch ? guidanceSectionMatch[0] : '';
     return {
       currentPlanCards: countMarkers(source, 'data-plan-role="current"'),
       previousPlanCards: countMarkers(source, 'data-plan-role="previous"'),
       taskGuidanceCards: countMarkers(source, 'data-role="task-guidance"'),
+      simpleTaskCards: countMarkers(source, 'data-role="simple-task"'),
       taskGuidanceInPreviousPlans: countMarkers(
         previousHtml,
         'data-role="task-guidance"'
+      ),
+      guidanceSectionSimpleCards: countMarkers(
+        guidanceSection,
+        'data-role="simple-task"'
       ),
       hasPreviousPlansSection: previousIdx >= 0,
       rawOwnerLeaks: Boolean(
@@ -260,9 +401,12 @@
     OWNER_LABELS,
     escapeHtml,
     formatOwnerLabel,
+    shortBusinessName,
     sessionIdOf,
     filterPreviousPlans,
     planCardHtml,
+    resolveTaskGuidance,
+    brandedEmailGuidance,
     taskGuidanceCardHtml,
     renderGrowthWorkspaceLeftPanel,
     analyzeLeftPanelHtml,

@@ -6,6 +6,11 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- Current Task Guidance renders exactly one structured card (no duplicates / clipping)
+  - Full sections: Why this matters · What to do · What to confirm · Who owns it · Complete when
+  - Branded email available uses Anchor-specific copy; left panel uses normal document flow
+  - Overview suppresses the simple Current Task card while guidance is open
+  - Regression coverage in `test/clientIntelligenceGrowthWorkspacePanel.test.js`
 - Growth Workspace left panel no longer duplicates active task guidance under Previous Plans
   - Sections: Current Growth Plan → Current Task Guidance (after Open Task Guidance) → Previous Plans (historical only)
   - Owner labels render as Client/operator · Operator guided · Max can check (not raw enums)

@@ -677,6 +677,10 @@
       background: var(--cie-accent-soft);
     }
     .current-task-card {
+      position: static;
+      height: auto;
+      max-height: none;
+      overflow: visible;
       border: 1px solid var(--cie-border);
       border-radius: 14px;
       background: linear-gradient(180deg, rgba(61, 156, 253, 0.08), transparent 70%),
@@ -709,6 +713,40 @@
       flex-wrap: wrap;
       gap: 0.45rem;
     }
+    .task-guidance-card {
+      position: static;
+      height: auto;
+      max-height: none;
+      overflow: visible;
+      margin-top: 0.75rem;
+    }
+    .task-guidance-body {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .task-guidance-block h4 {
+      margin: 0 0 0.3rem;
+      font-size: 0.78rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--cie-accent);
+      font-weight: 600;
+    }
+    .task-guidance-block p {
+      margin: 0;
+      color: var(--cie-text);
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+    .task-guidance-list {
+      margin: 0;
+      padding-left: 1.1rem;
+      color: var(--cie-text);
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+    .task-guidance-list li { margin: 0.2rem 0; }
     .task-queue {
       list-style: none;
       margin: 0;
@@ -760,7 +798,12 @@
     }
     .previous-plans summary::-webkit-details-marker { display: none; }
     .previous-plans .session-list { margin-top: 0.65rem; }
-    .gw-left-section { margin: 0; }
+    .gw-left-section {
+      position: static;
+      margin: 0;
+      height: auto;
+      overflow: visible;
+    }
     .gw-section-label {
       font-size: 0.78rem;
       letter-spacing: 0.02em;
@@ -768,15 +811,31 @@
       color: var(--cie-muted);
     }
     #savedSessions.workspace-left-nav {
+      position: static;
       flex: 0 1 auto;
-      max-height: 48%;
+      height: auto;
+      max-height: 58%;
+      overflow-x: hidden;
       overflow-y: auto;
-      padding: 0.75rem 1.15rem 0.35rem;
+      padding: 0.75rem 1.15rem 0.85rem;
       border-bottom: 1px solid var(--cie-border);
+      margin-top: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    #savedSessions.workspace-left-nav.session-list {
+      /* Avoid session-list gap stacking that looked like overlapping cards. */
+      gap: 0.35rem;
       margin-top: 0;
     }
     #savedSessions .task-guidance-card {
-      margin-top: 0.15rem;
+      position: static;
+      height: auto;
+      max-height: none;
+      overflow: visible;
+      margin-top: 0.35rem;
+      margin-bottom: 0;
     }
     .plan-progress-label {
       display: flex;
@@ -1750,33 +1809,39 @@
             currentTask: task,
             guidanceOpen: Boolean(state.taskGuidanceOpen),
             collapsePrevious: true,
+            businessName:
+              (currentForRender && currentForRender.businessName) ||
+              (state.blueprint && state.blueprint.businessName) ||
+              'Anchor Cleaning',
           });
       } else {
+        // Fallback: still use the shared single-card helper when available.
         let html =
-          '<p class="blueprint-empty" style="margin:0 0 0.25rem">Current Growth Plan</p>' +
+          '<section class="gw-left-section" data-section="current-plan">' +
+          '<p class="blueprint-empty gw-section-label" style="margin:0 0 0.25rem">Current Growth Plan</p>' +
           (currentForRender
             ? sessionCardHtml(currentForRender, { primary: true })
-            : '');
+            : '') +
+          '</section>';
         if (state.taskGuidanceOpen && task) {
           html +=
-            '<div class="current-task-card task-guidance-card" data-role="task-guidance">' +
-            '<p class="kicker">Current Task Guidance</p>' +
-            '<h3>' +
-            escapeHtml(task.title || 'Next step') +
-            '</h3>' +
-            '<p class="task-meta">' +
-            escapeHtml(task.description || '') +
-            '<br>Owner · ' +
-            escapeHtml(formatOwnerLabel(task.owner || 'operator_guided')) +
-            '</p></div>';
+            '<section class="gw-left-section" data-section="task-guidance">' +
+            (GrowthWorkspacePanel.taskGuidanceCardHtml
+              ? GrowthWorkspacePanel.taskGuidanceCardHtml(task, {
+                  businessName:
+                    (currentForRender && currentForRender.businessName) ||
+                    'Anchor Cleaning',
+                })
+              : '') +
+            '</section>';
         }
         if (previous.length) {
           html +=
-            '<details class="previous-plans">' +
+            '<details class="previous-plans" data-section="previous-plans">' +
             '<summary>Previous Plans (' +
             previous.length +
             ')</summary>' +
-            '<div class="session-list">' +
+            '<div class="session-list previous-plan-list">' +
             previous.map((s) => sessionCardHtml(s, { primary: false })).join('') +
             '</div></details>';
         }
@@ -1885,7 +1950,7 @@
       );
     }
 
-    function renderCurrentTaskCard(plan) {
+    function renderCurrentTaskCard(plan, { guidanceOpen } = {}) {
       if (!plan) return '';
       if (plan.status === 'complete' || !plan.currentTask) {
         const options = (plan.completionOptions || [])
@@ -1909,11 +1974,19 @@
           '</div>'
         );
       }
+      // When left-panel guidance is open, do not render a second simple task card.
+      if (guidanceOpen) {
+        return (
+          '<p class="blueprint-empty" data-role="guidance-open-note">' +
+          'Task guidance is open in the left panel.' +
+          '</p>'
+        );
+      }
       const task = plan.currentTask;
       const next = plan.nextTask;
       const after = plan.afterTask;
       return (
-        '<div class="current-task-card" id="currentTaskCard">' +
+        '<div class="current-task-card" id="currentTaskCard" data-role="simple-task">' +
           '<p class="kicker">Current Task</p>' +
           '<h3>' + escapeHtml(task.title || 'Next step') + '</h3>' +
           '<p class="task-meta">' +
@@ -1989,7 +2062,9 @@
       return (
         '<div class="completion-card">' +
           renderPlanProgress(plan) +
-          renderCurrentTaskCard(plan) +
+          renderCurrentTaskCard(plan, {
+            guidanceOpen: Boolean(state.taskGuidanceOpen),
+          }) +
           (plan && plan.artifacts && plan.artifacts.hasInitialGrowthDirection
             ? renderGrowthDirection(state.initialGrowthDirection)
             : '') +
@@ -2172,6 +2247,7 @@
       setWorkspaceTab('overview');
       state.taskGuidanceOpen = true;
       renderWorkspaceLeftNav();
+      renderWorkspaceSidePanel();
       if (!silent) {
         const existing = els.chatLog.querySelector('[data-task-guidance-note="1"]');
         if (!existing) {
