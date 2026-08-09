@@ -51,6 +51,9 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- First Campaign Plan Preview subtype + exclusion polish ([SPEC-089](docs/specs/SPEC-089_First_Campaign_Planning_Conversation.md))
+  - Subtype is the polished property-manager first-test description (never an exclusion summary)
+  - Exclusion bullets normalized: institutional PMs, complex properties, lowest-price buyers, out-of-area, no decision-maker
 - First Campaign Plan Preview renders from structured fields only ([SPEC-089](docs/specs/SPEC-089_First_Campaign_Planning_Conversation.md))
   - No raw transcript stitching into objective/hypothesis/proof/checkpoints
   - Peels unlabeled include/exclude clauses out of Campaign Objective

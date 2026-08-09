@@ -85,13 +85,16 @@ const DEFAULT_INCLUSION_CRITERIA = Object.freeze([
 ]);
 
 const DEFAULT_EXCLUSION_CRITERIA = Object.freeze([
-  'Focus only on the lowest price',
-  'Are outside the approved service area',
-  'Are too large, institutional, or operationally complex for the first test',
-  'Need specialized cleaning that has not been approved',
-  'Have no clear decision-maker or contact path',
-  'Do not appear to need recurring cleaning',
+  'Large institutional property managers',
+  'Highly complex properties',
+  'Lowest-price buyers',
+  'Properties outside the approved service area',
+  'Prospects with no clear decision-maker or contact path',
 ]);
+
+/** Polished first-test subtype for property-manager campaigns. */
+const DEFAULT_TARGET_SUBTYPE_PROPERTY_MANAGERS =
+  'property managers overseeing offices, mixed-use buildings, small commercial properties, or multi-tenant spaces that likely need recurring cleaning weekly or multiple times per week';
 
 const DEFAULT_APPROVAL_BEFORE_LIST = Object.freeze([
   'Campaign plan preview is approved.',
@@ -743,6 +746,63 @@ function defaultTargetSegmentBody(context) {
   return `Small to mid-sized local ${primary} in ${market}, aligned with the approved Blueprint first focus.`;
 }
 
+function defaultTargetSubtype(context, answers) {
+  if (isPropertyManagerFocus(context, answers)) {
+    return DEFAULT_TARGET_SUBTYPE_PROPERTY_MANAGERS;
+  }
+  return null;
+}
+
+/**
+ * Reject subtype values that are actually exclusion summaries or thin dash
+ * suffixes from conversational answers (e.g. "multi-family / HOA subtype",
+ * "price buyers, properties outside …").
+ */
+function looksLikeExclusionBleedSubtype(text) {
+  const s = String(text || '').trim();
+  if (!s) return true;
+  if (
+    /price buyers|lowest-price|service area|decision-maker|decision maker|no clear|institutional property|highly complex|prospects with/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  // Joined exclusion-style lists: "X, Y, and Z"
+  if (
+    /,/.test(s) &&
+    /\band\b/.test(s) &&
+    /\b(buyers|properties|prospects)\b/i.test(s) &&
+    !/overseeing|mixed-use|multi-tenant/i.test(s)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeTargetSubtype(context, answers, fields) {
+  const raw = String((fields && fields.targetSubtype) || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (
+    raw &&
+    /property managers overseeing/i.test(raw) &&
+    /mixed-use|multi-tenant/i.test(raw) &&
+    !looksLikeExclusionBleedSubtype(raw)
+  ) {
+    return raw.replace(/\.$/, '');
+  }
+  // Thin dash-suffix answers ("multi-family / HOA subtype") and exclusion
+  // bleed must never render under Subtype.
+  if (!raw || raw.length < 48 || looksLikeExclusionBleedSubtype(raw)) {
+    return defaultTargetSubtype(context, answers);
+  }
+  if (isPropertyManagerFocus(context, answers)) {
+    return defaultTargetSubtype(context, answers);
+  }
+  return raw.replace(/\.$/, '');
+}
+
 /**
  * Strip internal labels / awkward joins so the target segment never opens with
  * lowercase keys like "property managers — …".
@@ -859,34 +919,42 @@ function defaultInclusionCriteria(context, answers) {
 }
 
 function defaultExclusionCriteria(context, answers) {
-  const avoid = extractAvoidPhrase(
-    (context && context.avoidPhrase) || 'buyers focused only on the lowest price'
-  );
-  const lowestPrice =
-    /lowest price|price only|cheapest/i.test(avoid)
-      ? 'Focus only on the lowest price'
-      : avoid.charAt(0).toUpperCase() + avoid.slice(1);
   if (isPropertyManagerFocus(context, answers)) {
     const name = displayName((context && context.businessName) || 'the business');
     const poss =
-      name === 'the business' ? "the business's" : /s$/i.test(name) ? `${name}'` : `${name}'s`;
-    return [
-      lowestPrice,
-      `Are outside ${poss} service area`,
-      'Are too large, institutional, or operationally complex for the first test',
       name === 'the business'
-        ? 'Need specialized cleaning that has not been approved'
-        : `Need specialized cleaning ${name} has not approved`,
-      'Have no clear decision-maker or contact path',
-      'Do not appear to need recurring cleaning',
+        ? "the business's"
+        : /s$/i.test(name)
+          ? `${name}'`
+          : `${name}'s`;
+    return [
+      'Large institutional property managers',
+      'Highly complex properties',
+      'Lowest-price buyers',
+      `Properties outside ${poss} service area`,
+      'Prospects with no clear decision-maker or contact path',
     ];
   }
+  const avoid = extractAvoidPhrase(
+    (context && context.avoidPhrase) || 'buyers focused only on the lowest price'
+  );
+  const lowestPrice = /lowest price|price only|cheapest/i.test(avoid)
+    ? 'Lowest-price buyers'
+    : avoid.charAt(0).toUpperCase() + avoid.slice(1);
   return [
     lowestPrice,
-    'Are outside the approved service area',
-    'Are too large or operationally complex for the first test',
-    'Have no clear decision-maker or contact path',
+    'Properties outside the approved service area',
+    'Prospects with no clear decision-maker or contact path',
   ];
+}
+
+function looksLikePolishedExclusionItem(item) {
+  const s = String(item || '').trim();
+  if (!s || s.length < 8) return false;
+  if (/prefers to avoid|should avoid|the business prefers/i.test(s)) return false;
+  return /^(Large institutional|Highly complex|Lowest-price|Properties outside|Prospects with)\b/i.test(
+    s
+  );
 }
 
 function defaultMarketBound(context) {
@@ -1230,14 +1298,23 @@ function normalizeTargetSegmentSection(context, answers, fields) {
     fields && fields.inclusionCriteria && fields.inclusionCriteria.length >= 3
       ? fields.inclusionCriteria
       : defaultInclusionCriteria(context, answers);
-  const exclusionCriteria =
-    fields && fields.exclusionCriteria && fields.exclusionCriteria.length >= 2
-      ? fields.exclusionCriteria
-      : defaultExclusionCriteria(context, answers);
+
+  // Property-manager first campaigns use the polished exclusion set. Operator
+  // lists only win when every item already matches that shape (never raw
+  // transcript / avoid-wrapper bleed, and never as Subtype content).
+  let exclusionCriteria = defaultExclusionCriteria(context, answers);
+  if (
+    fields &&
+    Array.isArray(fields.exclusionCriteria) &&
+    fields.exclusionCriteria.length >= 3 &&
+    fields.exclusionCriteria.every(looksLikePolishedExclusionItem)
+  ) {
+    exclusionCriteria = fields.exclusionCriteria;
+  }
 
   return {
     targetSegment,
-    targetSubtype: (fields && fields.targetSubtype) || null,
+    targetSubtype: normalizeTargetSubtype(context, answers, fields),
     inclusionCriteria,
     exclusionCriteria,
   };
@@ -1732,6 +1809,7 @@ module.exports = {
   DEFAULT_VALIDATION_METRICS_SECONDARY,
   DEFAULT_INCLUSION_CRITERIA,
   DEFAULT_EXCLUSION_CRITERIA,
+  DEFAULT_TARGET_SUBTYPE_PROPERTY_MANAGERS,
   DEFAULT_APPROVAL_CHECKPOINTS,
   DEFAULT_APPROVAL_BEFORE_LIST,
   DEFAULT_APPROVAL_BEFORE_LAUNCH,
