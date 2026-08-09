@@ -292,6 +292,65 @@ describe('SPEC-088 Growth Plan continuation', () => {
     assert.equal(plan.completionStatusLine, 'Completed setup: Email routing');
   });
 
+  it('completion options use review-first next-objective labels', () => {
+    const session = sessionWithReport({ id: 's-complete', client_id: 10 });
+    session.interview_state.growthInfrastructureReadinessReport.areas.gbp.items.gbp_claimed.status =
+      'ready';
+    session.interview_state.growthInfrastructureReadinessReport.areas.domain_dns.items.branded_email.status =
+      'ready';
+    session.interview_state.growthInfrastructureReadinessReport.recommendedSetupSequence =
+      session.interview_state.growthInfrastructureReadinessReport.recommendedSetupSequence.map(
+        (s) => ({ ...s, status: 'ready', statusLabel: 'Ready' })
+      );
+    session.interview_state.growthWork = {
+      completedTaskIds: ['milestone:campaign_ready'],
+      history: [
+        {
+          taskId: 'milestone:campaign_ready',
+          title: 'Choose next growth objective',
+          completedAt: new Date().toISOString(),
+          source: 'operator',
+        },
+      ],
+      activeTaskId: null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const plan = buildGrowthPlan(session, null);
+    assert.equal(plan.status, 'complete');
+    assert.deepEqual(
+      plan.completionOptions.map((o) => o.label),
+      [
+        'Plan First Campaign',
+        'Explore Another Market',
+        'Improve Lead Conversion',
+        'Create New Growth Plan',
+      ]
+    );
+    assert.deepEqual(
+      plan.completionOptions.map((o) => o.id),
+      [
+        'launch_campaign',
+        'expand_market',
+        'improve_conversion',
+        'new_growth_plan',
+      ]
+    );
+
+    const ui = fs.readFileSync(
+      path.join(__dirname, '..', 'public', 'client-intel.html'),
+      'utf8'
+    );
+    assert.match(ui, /Plan First Campaign/);
+    assert.match(
+      ui,
+      /Max will help define the campaign strategy, validation criteria, and approval checkpoints/
+    );
+    assert.doesNotMatch(ui, /Launch New Campaign/);
+    assert.doesNotMatch(ui, /Expand Market/);
+    assert.doesNotMatch(ui, /Improve Conversion(?!s)/);
+  });
+
   it('completion status line falls back when final completed task was not setup', () => {
     assert.equal(
       completionStatusLine(

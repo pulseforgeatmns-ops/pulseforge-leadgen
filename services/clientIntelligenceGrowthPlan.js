@@ -305,9 +305,9 @@ function buildGrowthPlan(session, blueprint, opts = {}) {
       : null,
     completionOptions: complete
       ? [
-          { id: 'launch_campaign', label: 'Launch New Campaign' },
-          { id: 'expand_market', label: 'Expand Market' },
-          { id: 'improve_conversion', label: 'Improve Conversion' },
+          { id: 'launch_campaign', label: 'Plan First Campaign' },
+          { id: 'expand_market', label: 'Explore Another Market' },
+          { id: 'improve_conversion', label: 'Improve Lead Conversion' },
           { id: 'new_growth_plan', label: 'Create New Growth Plan' },
         ]
       : [],

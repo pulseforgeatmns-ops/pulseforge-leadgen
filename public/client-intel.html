@@ -3001,11 +3001,16 @@
           startNewInterviewFlow();
           return;
         }
+        const label = String(btn.textContent || id).trim();
+        let followUp =
+          'This stays review-first. No campaign, prospect list, or account changes begin without operator approval — start a new Growth Conversation or return to the dashboard when you are ready.';
+        if (id === 'launch_campaign' || label === 'Plan First Campaign') {
+          followUp =
+            'This stays review-first. Max will help define the campaign strategy, validation criteria, and approval checkpoints before any campaign, prospect list, or account changes begin.';
+        }
         addBubble(
           'assistant',
-          'Next objective noted: ' +
-            (btn.textContent || id) +
-            '.\n\nThis stays review-first. No campaign, prospect list, or account changes begin without operator approval — start a new Growth Conversation or return to the dashboard when you are ready.'
+          'Next objective noted: ' + label + '.\n\n' + followUp
         );
       });
     }
