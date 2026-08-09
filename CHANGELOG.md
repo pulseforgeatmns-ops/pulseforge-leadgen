@@ -51,6 +51,15 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- First Campaign Plan Preview renders from structured fields only ([SPEC-089](docs/specs/SPEC-089_First_Campaign_Planning_Conversation.md))
+  - No raw transcript stitching into objective/hypothesis/proof/checkpoints
+  - Peels unlabeled include/exclude clauses out of Campaign Objective
+  - Peels validation metrics out of Campaign Hypothesis
+  - Removes duplicated wrappers (`Prove that The first campaign should prove…`) and avoid-customer Blueprint bleed
+  - Proof assets no longer truncate into `reliability / Responsiveness`
+  - Fragmented checklist sentences repaired (`Target segment. subtype.` → commas)
+  - Canonical fields: `campaignObjective`, `coreValidationQuestion`, `campaignHypothesis`, `risks`, `approvalCheckpointsBeforeList`
+  - Preview generation stays planning-only (no list, copy, send, CRM, or account changes)
 - First Campaign Plan Preview final copy ([SPEC-089](docs/specs/SPEC-089_First_Campaign_Planning_Conversation.md))
   - Target segment never opens with lowercase/internal labels (`property managers — …`)
   - Uses “who oversee …” polished segment prose
