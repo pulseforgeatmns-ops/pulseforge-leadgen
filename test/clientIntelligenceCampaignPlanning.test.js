@@ -8,14 +8,18 @@ const path = require('node:path');
 const {
   ARTIFACT_KIND,
   PREVIEW_TITLE,
+  PREVIEW_DISCLAIMER,
   SECTION_TITLES,
   CONVERSATION_STEPS,
+  DEFAULT_PROOF_ASSETS,
+  DEFAULT_APPROVAL_CHECKPOINTS,
   buildCampaignPlanningContext,
   buildCampaignPlanningOpening,
   buildCampaignPlanningReply,
   buildFirstCampaignPlanPreview,
   formatFirstCampaignPlanPreviewMessage,
   containsForbiddenCampaignPlanningLanguage,
+  humanizeStatusLabel,
 } = require('../services/clientIntelligenceCampaignPlanning');
 const {
   createMemoryStore,
@@ -228,7 +232,7 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.equal(ctx.completedSetupChecklist, true);
   });
 
-  it('builds First Campaign Plan Preview with required sections', () => {
+  it('builds First Campaign Plan Preview with preferred polished shape', () => {
     const ctx = buildCampaignPlanningContext(
       {
         interview_state: {
@@ -238,7 +242,12 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
             secondarySegmentDisplay: 'professional offices',
             primaryArea: 'Greater Manchester',
           },
-          growthInfrastructureReadinessReport: { overallStatus: 'partial' },
+          initialGrowthDirection: {
+            businessName: 'Anchor Cleaning',
+            primaryArea: 'Greater Manchester',
+            towns: ['Bedford', 'Hooksett', 'Londonderry', 'Auburn', 'Goffstown'],
+          },
+          growthInfrastructureReadinessReport: { overallStatus: 'not_ready' },
           growthWork: { completedTaskIds: ['t1'] },
         },
       },
@@ -252,18 +261,18 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
       target_segment: {
         raw: 'Property managers — multi-family / HOA subtype',
       },
-      market_bounds: { raw: 'Greater Manchester, starting with Bedford and Hooksett' },
+      market_bounds: { raw: 'Greater Manchester' },
       proof_assets: {
         raw: 'Checklist and photos ready; still need a reference.',
       },
       hypothesis: {
-        raw: 'If we approach HOA property managers in Greater Manchester with a clear checklist, we expect walkthrough requests.',
+        raw: 'If we approach local property managers in Greater Manchester in Greater Manchester with proof, we expect walkthroughs.',
       },
       validation_metrics: {
-        raw: '3 qualified conversations; 1 walkthrough booked',
+        raw: '3 conversations',
       },
       approval_checkpoints: {
-        raw: 'Preview sign-off; proof ready; no list until approved',
+        raw: 'Preview sign-off',
       },
     };
     const preview = buildFirstCampaignPlanPreview(ctx, answers, {
@@ -272,35 +281,70 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     });
     assert.equal(preview.kind, ARTIFACT_KIND);
     assert.equal(preview.title, PREVIEW_TITLE);
-    assert.equal(preview.sectionTitles.campaignObjective, SECTION_TITLES.campaignObjective);
-    assert.match(preview.campaignObjective, /walkthroughs/i);
-    assert.match(preview.targetSegment, /property managers/i);
-    assert.match(preview.marketBound, /Greater Manchester/i);
-    assert.match(preview.hypothesis, /HOA|property managers/i);
-    assert.ok(preview.proofAssetsNeeded.length >= 1);
-    assert.ok(preview.validationMetrics.length >= 1);
-    assert.ok(preview.risksCautions.length >= 1);
-    assert.ok(preview.approvalCheckpoints.length >= 1);
-    assert.match(preview.recommendedNextStep, /Operator reviews/i);
+    assert.equal(preview.sectionTitles.hypothesis, 'Campaign hypothesis');
+    assert.equal(preview.sectionTitles.risksCautions, 'Risks and cautions');
+    assert.match(preview.campaignObjective, /Core question:/i);
+    assert.match(preview.campaignObjective, /walkthrough/i);
+    assert.match(
+      preview.targetSegment,
+      /Small to mid-sized local property managers in Greater Manchester/i
+    );
+    assert.doesNotMatch(preview.targetSegment, /—/);
+    assert.match(preview.targetSegmentAvoid, /Avoid large institutional/i);
+    assert.match(preview.marketBound, /early attention on Bedford/i);
+    assert.match(preview.hypothesis, /local property managers/i);
+    assert.doesNotMatch(
+      preview.hypothesis,
+      /Greater Manchester in Greater Manchester/i
+    );
+    assert.deepEqual(preview.proofAssetsNeeded, [...DEFAULT_PROOF_ASSETS]);
+    assert.ok(preview.validationMetrics.includes('Qualified replies'));
+    assert.ok(
+      preview.risksCautions.some((r) =>
+        /growth infrastructure items may still need review/i.test(r)
+      )
+    );
+    assert.ok(
+      preview.risksCautions.every((r) => !/\bnot_ready\b/.test(r))
+    );
+    assert.deepEqual(
+      preview.approvalCheckpoints,
+      [...DEFAULT_APPROVAL_CHECKPOINTS]
+    );
+    assert.match(
+      preview.recommendedNextStep,
+      /Review and approve the campaign plan preview/i
+    );
+    assert.match(
+      preview.recommendedNextStep,
+      /prospect-list criteria before any list is built/i
+    );
     assert.equal(preview.planningOnly, true);
     assert.equal(preview.campaignsGenerated, false);
     assert.equal(preview.prospectListGenerated, false);
     assert.equal(preview.outreachCopyGenerated, false);
     assert.equal(preview.accountChangesMade, false);
-    assert.match(preview.disclaimer, /Planning preview only/i);
+    assert.equal(preview.disclaimer, PREVIEW_DISCLAIMER);
+    assert.equal(humanizeStatusLabel('not_ready'), 'not ready');
+    assert.equal(
+      preview.context.readinessOverallStatusLabel,
+      'not ready'
+    );
 
     const formatted = formatFirstCampaignPlanPreviewMessage(preview);
-    assert.match(formatted, /Campaign objective/i);
-    assert.match(formatted, /Target segment/i);
-    assert.match(formatted, /Market bound/i);
-    assert.match(formatted, /Hypothesis/i);
-    assert.match(formatted, /Proof assets needed/i);
-    assert.match(formatted, /Validation metrics/i);
-    assert.match(formatted, /Risks\/cautions/i);
-    assert.match(formatted, /Approval checkpoints/i);
-    assert.match(formatted, /Recommended next step/i);
+    assert.match(formatted, /1\. Campaign objective/);
+    assert.match(formatted, /2\. Target segment/);
+    assert.match(formatted, /4\. Campaign hypothesis/);
+    assert.match(formatted, /7\. Risks and cautions/);
+    assert.match(formatted, /Planning preview only\./);
+    assert.equal(
+      (formatted.match(/Planning preview only/gi) || []).length,
+      1
+    );
+    assert.doesNotMatch(formatted, /This stays planning-only/i);
+    assert.doesNotMatch(formatted, /Planning only — not a launch/i);
+    assert.doesNotMatch(formatted, /\bnot_ready\b/);
     assert.doesNotMatch(formatted, /campaign is live/i);
-    assert.doesNotMatch(formatted, /prospect list is ready/i);
   });
 
   it('advances steps then produces preview without forbidden launch language', () => {
@@ -309,6 +353,7 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
       primarySegment: 'property managers',
       secondarySegment: 'professional offices',
       targetMarket: 'Greater Manchester',
+      towns: ['Bedford', 'Hooksett', 'Londonderry', 'Auburn', 'Goffstown'],
       completedSetupChecklist: true,
       readinessOverallStatus: 'partial',
       blueprintId: 'bp-1',
@@ -347,7 +392,12 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.equal(final.intent, 'produce_preview');
     assert.ok(final.preview);
     assert.equal(final.preview.kind, ARTIFACT_KIND);
-    assert.match(final.message, /planning-only/i);
+    assert.match(final.message, /Planning preview only\./i);
+    assert.equal(
+      (final.message.match(/Planning preview only/gi) || []).length,
+      1
+    );
+    assert.doesNotMatch(final.message, /This stays planning-only/i);
     assert.equal(containsForbiddenCampaignPlanningLanguage(final.message), false);
     assert.equal(
       containsForbiddenCampaignPlanningLanguage('I built a prospect list'),
@@ -436,6 +486,8 @@ describe('First Campaign Planning UI markers', () => {
     assert.match(uiSource, /campaign_planning/);
     assert.match(uiSource, /renderFirstCampaignPlanPreview/);
     assert.match(uiSource, /First Campaign Plan Preview/);
-    assert.match(uiSource, /Planning only — not a launch/);
+    assert.match(uiSource, /Campaign hypothesis/);
+    assert.match(uiSource, /Risks and cautions/);
+    assert.doesNotMatch(uiSource, /Planning only — not a launch/);
   });
 });
