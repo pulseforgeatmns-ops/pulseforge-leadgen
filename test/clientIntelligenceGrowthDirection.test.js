@@ -65,7 +65,7 @@ const ANCHOR_BLUEPRINT = {
       unknowns: [],
     },
     avoidCustomers: {
-      summary: 'Customers who prioritize the lowest price over reliability.',
+      summary: 'customers who only care about the lowest price',
       confidence: 0.8,
       evidenceIds: [],
       unknowns: [],
@@ -199,6 +199,14 @@ describe('Initial Growth Direction artifact', () => {
 
     assert.match(gd.paragraphs.join('\n'), /who Anchor should avoid/i);
     assert.match(
+      gd.paragraphs.join('\n'),
+      /The Blueprint also clarifies who Anchor should avoid: customers who only care about the lowest price\./
+    );
+    assert.doesNotMatch(
+      gd.paragraphs.join('\n'),
+      /customers who The business|prefers to avoid|avoid Anchor should avoid/i
+    );
+    assert.match(
       gd.paragraphs[gd.paragraphs.length - 1],
       /next conversation should turn this directional read into a focused growth plan/i
     );
@@ -281,6 +289,44 @@ describe('Initial Growth Direction artifact', () => {
         /customers who The business|avoid Anchor should avoid/i
       );
     }
+  });
+
+  it('resolveInitialGrowthDirection regenerates past wrapper-bleed avoid copy', () => {
+    const {
+      resolveInitialGrowthDirection,
+      repairInitialGrowthDirection,
+    } = require('../services/clientIntelligenceInterview');
+    const expected =
+      'The Blueprint also clarifies who Anchor should avoid: customers who only care about the lowest price.';
+    const stale = {
+      kind: 'initial_growth_direction',
+      businessName: 'Anchor Cleaning',
+      paragraphs: [
+        'Focus paragraph.',
+        'customers who The business prefers to avoid Anchor should avoid customers who only care about the lowest price.',
+      ],
+    };
+    const repaired = repairInitialGrowthDirection(stale, {
+      normalizedFacts: { business_name: 'Anchor Cleaning' },
+    });
+    assert.match(repaired.paragraphs.join('\n'), new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.doesNotMatch(
+      repaired.paragraphs.join('\n'),
+      /customers who The business|prefers to avoid/i
+    );
+
+    const resolved = resolveInitialGrowthDirection(ANCHOR_BLUEPRINT, {
+      normalizedFacts: { business_name: 'Anchor Cleaning' },
+      initialGrowthDirection: stale,
+    });
+    assert.match(
+      resolved.paragraphs.join('\n'),
+      /The Blueprint also clarifies who Anchor should avoid: customers who only care about the lowest price\./
+    );
+    assert.doesNotMatch(
+      resolved.paragraphs.join('\n'),
+      /customers who The business|prefers to avoid/i
+    );
   });
 });
 

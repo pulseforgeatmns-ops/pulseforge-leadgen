@@ -69,6 +69,7 @@ describe('Growth Workspace left panel', () => {
     const openedStats = analyzeLeftPanelHtml(opened);
     assert.equal(openedStats.currentPlanCards, 1);
     assert.equal(openedStats.taskGuidanceCards, 1);
+    assert.equal(openedStats.activeTaskCards, 1);
     assert.equal(openedStats.simpleTaskCards, 0);
     assert.equal(openedStats.guidanceSectionSimpleCards, 0);
     assert.equal(openedStats.hasPreviousPlansSection, false);
@@ -124,11 +125,13 @@ describe('Growth Workspace left panel', () => {
     for (const html of [first, second]) {
       const stats = analyzeLeftPanelHtml(html);
       assert.equal(stats.taskGuidanceCards, 1);
+      assert.equal(stats.activeTaskCards, 1, 'exactly one visible active-task card');
       assert.equal(stats.simpleTaskCards, 0);
       assert.equal(stats.guidanceSectionSimpleCards, 0);
       assert.doesNotMatch(html, /data-role="simple-task"/);
       assert.equal((html.match(/id="taskGuidanceCard"/g) || []).length, 1);
       assert.equal((html.match(/data-role="task-guidance"/g) || []).length, 1);
+      assert.equal((html.match(/data-active-task-card="1"/g) || []).length, 1);
     }
   });
 
@@ -254,6 +257,10 @@ describe('Growth Workspace left panel', () => {
     assert.match(ui, /data-role="simple-task"/);
     assert.match(ui, /guidanceOpen:\s*Boolean\(state\.taskGuidanceOpen\)/);
     assert.match(ui, /task-guidance-body/);
+    assert.match(ui, /syncGrowthWorkspaceChrome/);
+    assert.match(ui, /guidance-open/);
+    assert.match(ui, /guidance-suppressed/);
+    assert.match(ui, /padding-bottom:\s*2rem/);
     // Left-nav region may scroll, but the guidance card itself must not clip.
     assert.doesNotMatch(
       ui,
@@ -266,6 +273,11 @@ describe('Growth Workspace left panel', () => {
     assert.doesNotMatch(
       ui,
       /html \+=\s*'\s*<div class="current-task-card task-guidance-card"/
+    );
+    // Open Task Guidance must not add a duplicate simple chat summary card.
+    assert.doesNotMatch(
+      ui,
+      /addBubble\(\s*'assistant',\s*\n?\s*\(task\.title/
     );
   });
 });

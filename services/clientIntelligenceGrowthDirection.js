@@ -482,11 +482,26 @@ function cleanAvoidPhrase(summary) {
   if (
     /the business prefers to avoid/i.test(s) ||
     /\bshould avoid\b/i.test(s) ||
-    /the business (?:deliberately )?avoids?\b/i.test(s)
+    /the business (?:deliberately )?avoids?\b/i.test(s) ||
+    /customers who\s+the business/i.test(s)
   ) {
     const matches = [...s.matchAll(/\bcustomers?\s+who\s+(.+)$/gi)];
     if (matches.length) {
-      s = stripAvoidWrappers(`customers who ${matches[matches.length - 1][1]}`);
+      // Prefer the last clause that does not itself start with wrapper language.
+      let picked = null;
+      for (let i = matches.length - 1; i >= 0; i -= 1) {
+        const candidate = String(matches[i][1] || '').trim();
+        if (
+          !/^(?:the business|anchor)\b/i.test(candidate) &&
+          !/\bshould avoid\b/i.test(candidate) &&
+          !/prefers to avoid/i.test(candidate)
+        ) {
+          picked = candidate;
+          break;
+        }
+      }
+      if (!picked) picked = matches[matches.length - 1][1];
+      s = stripAvoidWrappers(`customers who ${picked}`);
     } else {
       s = stripAvoidWrappers(
         s
@@ -498,8 +513,18 @@ function cleanAvoidPhrase(summary) {
     }
   }
 
+  // Collapse residual "customers who The business…" lead-ins.
+  s = s
+    .replace(/^customers?\s+who\s+the business\s+(?:prefers to avoid\s+)?/i, 'customers who ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
   if (!s) return '';
-  if (/^customers?\s+who\b/i.test(s)) return s;
+  if (/^customers?\s+who\b/i.test(s)) {
+    // Ensure we didn't leave "customers who customers who".
+    s = s.replace(/^(customers?\s+who\s+)+/i, 'customers who ');
+    return s;
+  }
   if (/^(?:the\s+)?lowest price/i.test(s)) {
     return `customers who prioritize ${s}`;
   }
