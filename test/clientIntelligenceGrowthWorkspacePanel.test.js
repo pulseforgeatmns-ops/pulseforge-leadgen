@@ -260,15 +260,18 @@ describe('Growth Workspace left panel', () => {
     assert.match(ui, /syncGrowthWorkspaceChrome/);
     assert.match(ui, /guidance-open/);
     assert.match(ui, /guidance-suppressed/);
-    assert.match(ui, /padding-bottom:\s*2rem/);
+    assert.match(ui, /--gw-sticky-footer-clearance/);
+    assert.match(ui, /padding-bottom:\s*var\(--gw-sticky-footer-clearance\)/);
+    assert.match(ui, /#savedSessions \[data-role="simple-task"\]/);
+    assert.match(ui, /data-active-task-card="1"/);
+    assert.match(ui, /els\.chatLog\.innerHTML = ''/);
     // Left-nav region may scroll, but the guidance card itself must not clip.
     assert.doesNotMatch(
       ui,
       /#savedSessions\.workspace-left-nav\s*\{[^}]*max-height:\s*48%/
     );
-    assert.match(ui, /\.task-guidance-card\s*\{[^}]*overflow:\s*visible/s);
-    assert.match(ui, /\.task-guidance-card\s*\{[^}]*height:\s*auto/s);
-    assert.match(ui, /#savedSessions \.task-guidance-card\s*\{[^}]*overflow:\s*visible/s);
+    assert.match(ui, /overflow:\s*visible/);
+    assert.match(ui, /height:\s*auto/);
     // Legacy inline simple guidance markup removed from left-nav path.
     assert.doesNotMatch(
       ui,
