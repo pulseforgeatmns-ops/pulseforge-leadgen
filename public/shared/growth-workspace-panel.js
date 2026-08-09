@@ -180,6 +180,31 @@
     };
   }
 
+  function clearServiceAreaGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Before outreach, prospects should know whether ' +
+        name +
+        ' serves their location. A clear service area keeps the first growth push focused on Greater Manchester and prevents wasted conversations outside the target market.',
+      whatToDo:
+        'State the priority service area clearly on the website and growth materials. For ' +
+        name +
+        ', use Greater Manchester first, especially Bedford, Hooksett, Londonderry, Auburn, and Goffstown.',
+      whatToConfirm: [
+        'The website names the primary service area.',
+        'Priority towns match the approved Blueprint.',
+        'The service area is easy to find from the homepage or contact/estimate path.',
+        'Outreach and future prospect lists stay inside the approved market bound unless changed intentionally.',
+        'No website changes are published without approval.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      completeWhen:
+        name +
+        "'s service area is clearly stated and matches the approved Growth Plan.",
+    };
+  }
+
   function defaultSetupGuidance(task, businessName) {
     const name = shortBusinessName(businessName);
     const title = (task && task.title) || 'this setup item';
@@ -235,6 +260,9 @@
     }
     if (itemId === 'clear_cta' || /:clear_cta$/.test(id)) {
       return clearCtaGuidance(businessName);
+    }
+    if (itemId === 'clear_service_area' || /:clear_service_area$/.test(id)) {
+      return clearServiceAreaGuidance(businessName);
     }
     if (task.type === 'setup' || itemId || /^setup:/.test(id)) {
       return defaultSetupGuidance(task, businessName);
@@ -533,6 +561,7 @@
     domainOwnedGuidance,
     spfDkimDmarcGuidance,
     clearCtaGuidance,
+    clearServiceAreaGuidance,
     taskGuidanceCardHtml,
     renderGrowthWorkspaceLeftPanel,
     analyzeLeftPanelHtml,
