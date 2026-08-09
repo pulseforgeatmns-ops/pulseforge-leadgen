@@ -9,6 +9,9 @@ const {
   buildGrowthPlan,
   applyTaskCompletion,
   resolveGrowthPlanResumeTarget,
+  nextObjectiveDescription,
+  completionStatusLine,
+  shortBusinessName,
 } = require('../services/clientIntelligenceGrowthPlan');
 const {
   createMemoryStore,
@@ -201,6 +204,13 @@ describe('SPEC-088 Growth Plan continuation', () => {
     assert.match(ui, /workspaceTabs/);
     assert.match(ui, /Readiness Report/);
     assert.match(ui, /Previous Plans/);
+    assert.match(ui, /Finish Review/);
+    assert.match(ui, /Choose Next Objective/);
+    assert.doesNotMatch(ui, /Mark Objectives Reviewed/);
+    assert.match(
+      ui,
+      /no campaign, prospect list, or account changes begin without operator approval/i
+    );
     assert.match(dash, /Resume Growth Plan/);
     assert.match(dash, /Previous Plans/);
     assert.match(dash, /cie-previous-plans/);
@@ -208,5 +218,126 @@ describe('SPEC-088 Growth Plan continuation', () => {
       routes,
       /\/api\/v1\/interview\/:id\/growth-plan\/tasks\/:taskId\/complete/
     );
+  });
+
+  it('next-objective milestone uses client-facing checklist copy', () => {
+    assert.equal(shortBusinessName('Anchor Cleaning'), 'Anchor');
+    assert.equal(
+      nextObjectiveDescription('Anchor Cleaning'),
+      'Anchor has completed the current growth setup checklist. The next step is to choose what Max should help with next.'
+    );
+
+    const session = sessionWithReport({ id: 's1', client_id: 10 });
+    // Mark both setup gaps ready so the plan advances to choose-next-objective.
+    session.interview_state.growthInfrastructureReadinessReport.areas.gbp.items.gbp_claimed.status =
+      'ready';
+    session.interview_state.growthInfrastructureReadinessReport.areas.domain_dns.items.branded_email.status =
+      'ready';
+    session.interview_state.growthInfrastructureReadinessReport.recommendedSetupSequence =
+      session.interview_state.growthInfrastructureReadinessReport.recommendedSetupSequence.map(
+        (s) => ({ ...s, status: 'ready', statusLabel: 'Ready' })
+      );
+    session.interview_state.growthWork = {
+      completedTaskIds: [],
+      history: [
+        {
+          taskId: 'setup:lead_capture:email_routing',
+          title: 'Email routing',
+          completedAt: new Date().toISOString(),
+          source: 'operator',
+        },
+      ],
+      activeTaskId: null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Inject a completed setup task id into the plan task list via report sequence.
+    session.interview_state.growthInfrastructureReadinessReport.recommendedSetupSequence.push(
+      {
+        order: 3,
+        areaId: 'lead_capture',
+        itemId: 'email_routing',
+        label: 'Email routing',
+        action: 'Route inbound email to a monitored inbox.',
+        owner: 'client_required',
+        priority: 'high',
+        status: 'ready',
+        statusLabel: 'Ready',
+      }
+    );
+    session.interview_state.growthInfrastructureReadinessReport.areas.lead_capture = {
+      id: 'lead_capture',
+      items: {
+        email_routing: {
+          id: 'email_routing',
+          status: 'ready',
+          owner: 'client_required',
+          priority: 'high',
+          recommended_next_step: 'Route inbound email',
+        },
+      },
+    };
+
+    const plan = buildGrowthPlan(session, null);
+    assert.ok(plan.currentTask);
+    assert.equal(plan.currentTask.id, 'milestone:campaign_ready');
+    assert.equal(
+      plan.currentTask.description,
+      'Anchor has completed the current growth setup checklist. The next step is to choose what Max should help with next.'
+    );
+    assert.doesNotMatch(
+      plan.currentTask.description,
+      /All current recommendations are complete/
+    );
+    assert.equal(plan.completionStatusLine, 'Completed setup: Email routing');
+  });
+
+  it('completion status line falls back when final completed task was not setup', () => {
+    assert.equal(
+      completionStatusLine(
+        [
+          {
+            id: 'setup:lead_capture:email_routing',
+            type: 'setup',
+            title: 'Email routing',
+          },
+          {
+            id: 'milestone:campaign_ready',
+            type: 'milestone',
+            title: 'Choose next growth objective',
+          },
+        ],
+        [
+          {
+            taskId: 'setup:lead_capture:email_routing',
+            title: 'Email routing',
+          },
+          {
+            taskId: 'milestone:campaign_ready',
+            title: 'Choose next growth objective',
+          },
+        ]
+      ),
+      'Growth infrastructure checklist complete'
+    );
+    assert.equal(
+      completionStatusLine(
+        [
+          {
+            id: 'setup:lead_capture:email_routing',
+            type: 'setup',
+            title: 'Email routing',
+          },
+        ],
+        [
+          {
+            taskId: 'setup:lead_capture:email_routing',
+            title: 'Email routing',
+          },
+        ]
+      ),
+      'Completed setup: Email routing'
+    );
+    assert.equal(completionStatusLine([], []), 'Growth infrastructure checklist complete');
   });
 });
