@@ -6,7 +6,13 @@
  * After Growth Plan completion, Max helps define the first campaign hypothesis
  * and validation gates. Review-first only: no prospect lists, outreach copy,
  * sends, CRM writes, or account/DNS/GBP/social/tracking changes.
+ *
+ * Preview synthesis extracts structured fields from operator answers and
+ * normalizes each section — never concatenates wrapper phrases with raw
+ * transcript text.
  */
+
+const { cleanAvoidPhrase } = require('./clientIntelligenceGrowthDirection');
 
 const ARTIFACT_KIND = 'first_campaign_plan_preview';
 const PREVIEW_TITLE = 'First Campaign Plan Preview';
@@ -18,7 +24,8 @@ const SECTION_TITLES = Object.freeze({
   targetSegment: 'Target segment',
   marketBound: 'Market bound',
   hypothesis: 'Campaign hypothesis',
-  proofAssetsNeeded: 'Proof assets needed',
+  proofAssets: 'Proof assets',
+  proofAssetsNeeded: 'Proof assets',
   validationMetrics: 'Validation metrics',
   risksCautions: 'Risks and cautions',
   approvalCheckpoints: 'Approval checkpoints',
@@ -33,30 +40,95 @@ const DEFAULT_TOWNS = Object.freeze([
   'Goffstown',
 ]);
 
-const DEFAULT_PROOF_ASSETS = Object.freeze([
+const DEFAULT_PROOF_ASSETS_AVAILABLE = Object.freeze([
+  'Clear service mix and commercial cleaning focus',
+  'Defined service area',
+  'Clear ideal customer profile',
+  'Positioning around reliability, responsiveness, and accountability',
+  'Walkthrough/estimate process that can be described simply',
+]);
+
+const DEFAULT_PROOF_ASSETS_MISSING = Object.freeze([
   'Commercial cleaning checklist',
-  'Before/after photos or examples',
-  'Clear response-time expectation',
-  'References or testimonials if available',
-  'Clear service area',
-  'Walkthrough/estimate process',
+  'Before/after photos or commercial work examples',
+  'Clear response-time promise',
+  'References, testimonials, or review proof if available',
+  'Reusable walkthrough/estimate process for property managers',
+  'Short credibility statement for recurring commercial cleaning',
 ]);
 
-const DEFAULT_VALIDATION_METRICS = Object.freeze([
-  'Qualified replies',
-  'Decision-maker conversations',
-  'Walkthroughs or site visits booked',
-  'Estimate or proposal requests',
-  'Evidence about which property-manager subtype responds best',
+/** @deprecated Prefer DEFAULT_PROOF_ASSETS_MISSING — kept for older callers. */
+const DEFAULT_PROOF_ASSETS = DEFAULT_PROOF_ASSETS_MISSING;
+
+const DEFAULT_VALIDATION_METRICS_PRIMARY = Object.freeze([
+  'Qualified replies from property managers',
+  'Discovery conversations booked',
+  'Walkthroughs or site visits requested',
+  'Estimate requests from properties that fit the target',
 ]);
 
-const DEFAULT_APPROVAL_CHECKPOINTS = Object.freeze([
-  'Operator approves this campaign plan preview.',
-  'Proof assets are confirmed ready.',
+const DEFAULT_VALIDATION_METRICS_SECONDARY = Object.freeze([
+  'Questions about recurring schedule, reliability, response time, or cleaning frustrations',
+  'Clarity on which property type responds best',
+  'Replies that are not only about lowest price',
+]);
+
+/** @deprecated Prefer primary/secondary defaults. */
+const DEFAULT_VALIDATION_METRICS = DEFAULT_VALIDATION_METRICS_PRIMARY;
+
+const DEFAULT_INCLUSION_CRITERIA = Object.freeze([
+  'Manage offices, mixed-use buildings, small commercial properties, or multi-tenant spaces',
+  'Are located in Bedford, Hooksett, Londonderry, Auburn, Goffstown, or nearby Greater Manchester markets',
+  'Likely need recurring cleaning weekly or multiple times per week',
+  'Value reliability, responsiveness, and accountability',
+  'Have a reachable owner, manager, facilities contact, or operations contact',
+]);
+
+const DEFAULT_EXCLUSION_CRITERIA = Object.freeze([
+  'Focus only on the lowest price',
+  'Are outside the approved service area',
+  'Are too large, institutional, or operationally complex for the first test',
+  'Need specialized cleaning that has not been approved',
+  'Have no clear decision-maker or contact path',
+  'Do not appear to need recurring cleaning',
+]);
+
+const DEFAULT_APPROVAL_BEFORE_LIST = Object.freeze([
+  'Campaign plan preview is approved.',
+  'Target segment, subtype, and market bound are confirmed.',
+  'Inclusion and exclusion criteria are approved.',
+  'Proof assets are ready enough for outreach.',
   'High-priority infrastructure gaps are reviewed.',
-  'Prospect list creation is approved separately.',
-  'Outreach copy is approved separately.',
-  'Launch is approved separately.',
+]);
+
+const DEFAULT_APPROVAL_BEFORE_LAUNCH = Object.freeze([
+  'Prospect list criteria are approved.',
+  'Prospect list is reviewed.',
+  'Outreach copy is reviewed and approved.',
+  'Tracking and follow-up process are confirmed.',
+  'Capacity and scheduling expectations are confirmed.',
+  'Operator gives explicit launch approval.',
+]);
+
+/** @deprecated Prefer before-list / before-launch groups. */
+const DEFAULT_APPROVAL_CHECKPOINTS = Object.freeze([
+  ...DEFAULT_APPROVAL_BEFORE_LIST,
+  ...DEFAULT_APPROVAL_BEFORE_LAUNCH,
+]);
+
+const VALIDATION_SUCCESS_STATEMENT =
+  'A successful first 30 days means a small number of qualified conversations and at least one walkthrough or estimate request.';
+
+/** Known prompt / transcript wrappers that must never be stitched into prose. */
+const CAMPAIGN_WRAPPER_PATTERNS = Object.freeze([
+  /^the first campaign should prove(?:\s+that)?\s+/i,
+  /^this (?:first )?campaign should prove(?:\s+that)?\s+/i,
+  /^what should this first campaign prove[?:]?\s*/i,
+  /^campaign objective\s*[:\-–—]\s*/i,
+  /^prove(?:\s+that)?\s+/i,
+  /^for the first test,?\s*/i,
+  /^i'?d treat the goal as\s*[:\-–—]?\s*/i,
+  /^the goal is\s+(?:to\s+)?/i,
 ]);
 
 const CONVERSATION_STEPS = Object.freeze([
@@ -113,6 +185,33 @@ function shortName(name) {
   const s = String(name || '').trim();
   if (!s) return 'the business';
   return s.replace(/\s+/g, ' ');
+}
+
+/** Display name for prose (Anchor Cleaning → Anchor). */
+function displayName(name) {
+  const s = shortName(name);
+  if (!s || s === 'the business') return 'the business';
+  return s.replace(/\s+Cleaning$/i, '') || s;
+}
+
+/**
+ * Strip known campaign / interview wrapper fragments so section normalizers
+ * never concatenate "Prove that" + "The first campaign should prove…".
+ */
+function stripCampaignWrappers(text) {
+  let s = String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return '';
+  let prev;
+  do {
+    prev = s;
+    for (const re of CAMPAIGN_WRAPPER_PATTERNS) {
+      s = s.replace(re, '').trim();
+    }
+    s = s.replace(/^(?:that|to)\s+/i, '').trim();
+  } while (s && s !== prev);
+  return s;
 }
 
 function sectionSummary(sections, key) {
@@ -244,13 +343,25 @@ function extractTownsFromMarketSummary(summary) {
 }
 
 function extractAvoidPhrase(summary) {
-  const s = String(summary || '').trim();
-  if (!s) return 'buyers focused only on the lowest price';
-  return s
-    .replace(/^who only care about\s+/i, '')
-    .replace(/^customers who only care about\s+/i, '')
+  const cleaned = cleanAvoidPhrase(summary);
+  if (!cleaned) return 'buyers focused only on the lowest price';
+  let s = cleaned
+    .replace(/^customers?\s+who\s+/i, '')
+    .replace(/^who\s+/i, '')
     .replace(/\.$/, '')
-    .trim() || 'buyers focused only on the lowest price';
+    .trim();
+  // Final guard against residual Blueprint/Growth Direction wrapper bleed.
+  s = s
+    .replace(/^the business prefers to avoid\s+/i, '')
+    .replace(/^anchor(?:\s+cleaning)?\s+should avoid\s+/i, '')
+    .replace(/\bthe business prefers to avoid\b/gi, '')
+    .replace(/\banchor(?:\s+cleaning)?\s+should avoid\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (!s || /\bshould avoid\b/i.test(s) || /prefers to avoid/i.test(s)) {
+    return 'buyers focused only on the lowest price';
+  }
+  return s || 'buyers focused only on the lowest price';
 }
 
 function humanizeStatusLabel(status) {
@@ -284,23 +395,6 @@ function isPropertyManagerFocus(context, answers) {
     .join(' ')
     .toLowerCase();
   return /property manager/.test(blob);
-}
-
-function stripTrailingMarket(text, market) {
-  const s = String(text || '').trim();
-  const m = String(market || '').trim();
-  if (!s || !m) return s;
-  const re = new RegExp(
-    `\\s+(?:in|across|within|around)\\s+${m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.?$`,
-    'i'
-  );
-  return s.replace(re, '').trim();
-}
-
-function containsMarket(text, market) {
-  const s = String(text || '').toLowerCase();
-  const m = String(market || '').toLowerCase();
-  return Boolean(m) && s.includes(m);
 }
 
 function humanizeSegment(value) {
@@ -366,81 +460,10 @@ function splitList(text) {
   const s = String(text || '').trim();
   if (!s) return [];
   return s
-    .split(/\n|;|,(?=\s)|•|\u2022/g)
+    .split(/\n|;|•|\u2022|(?<=\.)\s+(?=[A-Z])|,(?=\s)/g)
     .map((x) => x.replace(/^[-–—*\d.)\s]+/, '').trim())
     .filter((x) => x.length > 2)
-    .slice(0, 8);
-}
-
-function polishProofAssetLabel(item) {
-  const s = String(item || '').trim();
-  if (!s) return s;
-  const lower = s.toLowerCase();
-  if (/checklist/.test(lower)) return 'Commercial cleaning checklist';
-  if (/before\/after|photo|example/.test(lower)) {
-    return 'Before/after photos or examples';
-  }
-  if (/response[- ]?time/.test(lower)) return 'Clear response-time expectation';
-  if (/reference|testimonial/.test(lower)) {
-    return 'References or testimonials if available';
-  }
-  if (/service area/.test(lower)) return 'Clear service area';
-  if (/walkthrough|estimate/.test(lower)) return 'Walkthrough/estimate process';
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-function defaultProofAssets() {
-  return [...DEFAULT_PROOF_ASSETS];
-}
-
-function defaultValidationMetrics(context, answers) {
-  if (isPropertyManagerFocus(context, answers)) {
-    return [...DEFAULT_VALIDATION_METRICS];
-  }
-  return [
-    'Qualified replies',
-    'Decision-maker conversations',
-    'Walkthroughs or site visits booked',
-    'Estimate or proposal requests',
-    'Evidence about which subtype responds best',
-  ];
-}
-
-function defaultApprovalCheckpoints() {
-  return [...DEFAULT_APPROVAL_CHECKPOINTS];
-}
-
-function defaultRisks(context, answers) {
-  const risks = [];
-  const readiness = context && context.readinessOverallStatus;
-  if (readiness && readiness !== 'ready') {
-    risks.push(
-      'Some growth infrastructure items may still need review before launch.'
-    );
-  } else if (!(context && context.completedSetupChecklist)) {
-    risks.push(
-      'Some growth infrastructure items may still need review before launch.'
-    );
-  }
-  risks.push('Market demand has not been validated yet.');
-  risks.push(
-    'Strong response could create capacity or scheduling pressure.'
-  );
-  if (isPropertyManagerFocus(context, answers)) {
-    risks.push('Lowest-price buyers should not define the test.');
-  } else {
-    const avoid = (context && context.avoidPhrase) || 'lowest-price buyers';
-    risks.push(`${avoid.charAt(0).toUpperCase()}${avoid.slice(1)} should not define the test.`);
-  }
-  const proof = answerText(answers, 'proof_assets');
-  if (/missing|need|don't have|do not have|none|still/i.test(proof)) {
-    risks.splice(
-      1,
-      0,
-      'Proof assets are incomplete — credibility gaps can weaken the first test.'
-    );
-  }
-  return uniqueStrings(risks).slice(0, 6);
+    .slice(0, 12);
 }
 
 function uniqueStrings(items) {
@@ -457,10 +480,170 @@ function uniqueStrings(items) {
   return out;
 }
 
+function allAnswerBlob(answers) {
+  const keys = [
+    'opening',
+    'campaign_objective',
+    'target_segment',
+    'market_bounds',
+    'proof_assets',
+    'hypothesis',
+    'validation_metrics',
+    'approval_checkpoints',
+    'inclusion_criteria',
+    'exclusion_criteria',
+  ];
+  return keys
+    .map((k) => answerText(answers, k))
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function stripLabeledBlocks(text, labelGroups) {
+  let s = String(text || '');
+  for (const labels of labelGroups) {
+    const labelRe = labels
+      .map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('|');
+    const re = new RegExp(
+      `(?:^|\\n|;|\\.)\\s*(?:${labelRe})\\s*[:\\-–—]?\\s*[\\s\\S]*?(?=(?:\\n\\s*(?:[A-Z][\\w ]{2,40}:|Include|Exclude|Primary|Secondary|Available|Still|Before|Core validation|If\\b))|$)`,
+      'gi'
+    );
+    s = s.replace(re, '\n');
+  }
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+function extractLabeledSection(text, labels) {
+  const s = String(text || '');
+  if (!s) return '';
+  const labelRe = labels
+    .map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  const re = new RegExp(
+    `(?:^|[\\n;.]\\s*)(?:${labelRe})\\s*[:\\-–—]?\\s*([\\s\\S]+?)(?=(?:[\\n.]\\s*)(?:inclusion(?:\\s+criteria)?|exclusion(?:\\s+criteria)?|include\\b|exclude\\b|avoid\\b|primary(?:\\s+signals?)?|secondary(?:\\s+signals?)?|available(?:\\s+or\\s+close\\s+to\\s+ready)?|still\\s+needed|before\\s+(?:list|launch)|core validation|campaign (?:objective|hypothesis)|target segment|market bound|proof assets|validation metrics|approval checkpoints|if\\s+\\w+)\\b|$)`,
+    'i'
+  );
+  const m = s.match(re);
+  if (!m || !m[1]) return '';
+  return m[1].replace(/\s+/g, ' ').trim();
+}
+
+function extractBulletBlock(text, labels) {
+  const s = String(text || '');
+  if (!s) return [];
+  const labelRe = labels
+    .map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  const re = new RegExp(
+    `(?:^|\\n)\\s*(?:${labelRe})\\s*[:\\-–—]?\\s*\\n?([\\s\\S]+?)(?=(?:\\n\\s*(?:${labelRe}|Include|Exclude|Primary|Secondary|Available|Still|Before|Core validation|If\\b)\\b)|$)`,
+    'i'
+  );
+  const m = s.match(re);
+  if (!m || !m[1]) {
+    const inline = extractLabeledSection(text, labels);
+    return inline ? splitList(inline.split(/\n\s*\n/)[0] || inline) : [];
+  }
+  const body = m[1];
+  // Prefer explicit bullet lines so the next unlabeled answer paragraph
+  // (joined into the blob) cannot leak into this section.
+  const bulletLines = body
+    .split(/\n/)
+    .map((l) => l.trim())
+    .filter((l) => /^[-–—•*\u2022]/.test(l) || /^\d+[.)]\s+/.test(l));
+  if (bulletLines.length) {
+    return bulletLines
+      .map((x) => x.replace(/^[-–—*•\u2022\d.)\s]+/, '').trim())
+      .filter((x) => x.length > 2)
+      .slice(0, 12);
+  }
+  const firstPara = body.split(/\n\s*\n/)[0] || body;
+  return splitList(firstPara);
+}
+
+function looksLikeMetricItem(item) {
+  const s = String(item || '').trim();
+  if (s.length < 16) return false;
+  if (/sign[- ]?off|checkpoint|approved|preview/i.test(s)) return false;
+  return /\b(repl(?:y|ies)|conversation|walkthrough|estimate|signal|question|booked|request|clarity|price)\b/i.test(
+    s
+  );
+}
+
+function looksLikeProofAssetItem(item) {
+  const s = String(item || '').trim();
+  if (s.length < 8) return false;
+  return /\b(checklist|photo|example|response|reference|testimonial|service area|walkthrough|estimate|positioning|reliability|credibility|service mix|ideal customer|icp|review)\b/i.test(
+    s
+  );
+}
+
+function polishProofAssetLabel(item, { missing = false } = {}) {
+  let s = String(item || '').trim();
+  if (!s) return s;
+  s = s
+    .replace(/^the positioning is clear:\s*/i, '')
+    .replace(/\s*\/\s*/g, ', ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const lower = s.toLowerCase();
+  if (/positioning|reliability.*responsiveness|responsiveness.*accountability/.test(lower)) {
+    return 'Positioning around reliability, responsiveness, and accountability';
+  }
+  if (/checklist/.test(lower)) return 'Commercial cleaning checklist';
+  if (/before\/after|photo|example|commercial work/.test(lower)) {
+    return missing
+      ? 'Before/after photos or commercial work examples'
+      : 'Before/after photos or commercial work examples';
+  }
+  if (/response[- ]?time/.test(lower)) return 'Clear response-time promise';
+  if (/reference|testimonial|review proof/.test(lower)) {
+    return 'References, testimonials, or review proof if available';
+  }
+  if (/service mix|commercial cleaning focus/.test(lower)) {
+    return 'Clear service mix and commercial cleaning focus';
+  }
+  if (/service area/.test(lower)) return 'Defined service area';
+  if (/ideal customer|icp/.test(lower)) return 'Clear ideal customer profile';
+  if (/credibility statement/.test(lower)) {
+    return 'Short credibility statement for recurring commercial cleaning';
+  }
+  if (/walkthrough|estimate/.test(lower)) {
+    return missing
+      ? 'Reusable walkthrough/estimate process for property managers'
+      : 'Walkthrough/estimate process that can be described simply';
+  }
+  // Drop truncated fragment tails.
+  if (/^(reliability|responsiveness)\b/i.test(s) && s.length < 40) {
+    return 'Positioning around reliability, responsiveness, and accountability';
+  }
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function polishCheckpointItem(item) {
+  let s = String(item || '').trim();
+  if (!s) return '';
+  // Fix fragmented checklist sentences: "Target segment. subtype. and market…"
+  s = s
+    .replace(
+      /\bTarget segment\.\s*subtype\.\s*and\b/gi,
+      'Target segment, subtype, and'
+    )
+    .replace(/\b([A-Za-z][A-Za-z ]+?)\.\s+([a-z]+)\.\s+and\b/g, '$1, $2, and')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!/\.$/.test(s)) s = `${s}.`;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function defaultTargetSegmentBody(context) {
   const market = (context && context.targetMarket) || 'Greater Manchester';
   if (/property manager/i.test(String(context && context.primarySegment))) {
-    return `Small to mid-sized local property managers in ${market} who oversee offices, mixed-use buildings, small commercial properties, or multi-tenant spaces.`;
+    return (
+      `Small to mid-sized local property managers in ${market} who oversee ` +
+      `offices, mixed-use buildings, small commercial properties, or multi-tenant spaces ` +
+      `that likely need recurring cleaning weekly or multiple times per week.`
+    );
   }
   const primary = (context && context.primarySegment) || 'the focus segment';
   return `Small to mid-sized local ${primary} in ${market}, aligned with the approved Blueprint first focus.`;
@@ -471,22 +654,26 @@ function defaultTargetSegmentBody(context) {
  * lowercase keys like "property managers — …".
  */
 function sanitizeTargetSegmentText(text, context) {
-  let s = String(text || '').replace(/\s+/g, ' ').trim();
+  let s = stripCampaignWrappers(String(text || ''))
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!s) return defaultTargetSegmentBody(context);
 
-  // "property managers — Small to mid-sized…" / "property_managers - …"
   s = s.replace(
     /^(?:the\s+)?property[_\s-]*managers?\s*[—–:-]+\s*/i,
     ''
   );
   s = s.replace(/^(?:segment|primary|target)\s*[—–:-]+\s*/i, '');
+  // Strip inclusion/exclusion bleed if still present.
+  s = stripLabeledBlocks(s, [
+    ['include property managers who', 'include', 'inclusion criteria'],
+    ['exclude property managers who', 'exclude', 'exclusion criteria', 'avoid'],
+  ]);
 
-  // If a validation subtype body already has the polished sentence, normalize it.
   if (/^small to mid-sized/i.test(s)) {
     s = s
       .replace(/\bwho manage\b/i, 'who oversee')
       .replace(/\boverseeing\b/i, 'who oversee');
-    // Prefer "who oversee … in Market" → "in Market who oversee …"
     const market = (context && context.targetMarket) || 'Greater Manchester';
     const mRe = new RegExp(
       `^(Small to mid-sized local property managers) who oversee (.+?) in ${market.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.?$`,
@@ -496,7 +683,6 @@ function sanitizeTargetSegmentText(text, context) {
     if (m) {
       s = `${m[1]} in ${market} who oversee ${m[2]}.`;
     }
-    // Incomplete polish → canonical default for property-manager focus.
     if (
       /property manager/i.test(String(context && context.primarySegment)) &&
       !/mixed-use|multi-tenant/i.test(s)
@@ -505,66 +691,16 @@ function sanitizeTargetSegmentText(text, context) {
     }
   }
 
-  if (!s || /^[a-z]/.test(s) || /^(property managers?|professional offices?)\b/i.test(s)) {
+  if (
+    !s ||
+    /^[a-z]/.test(s) ||
+    /^(property managers?|professional offices?)\b/i.test(s)
+  ) {
     return defaultTargetSegmentBody(context);
   }
 
+  if (!/\.$/.test(s)) s = `${s}.`;
   return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-function defaultTargetSegmentAvoid(context) {
-  const avoidRaw =
-    (context && context.avoidPhrase) || 'buyers focused only on the lowest price';
-  const avoid = String(avoidRaw).replace(/^./, (c) => c.toLowerCase());
-  if (/property manager/i.test(String(context && context.primarySegment))) {
-    return `Avoid large institutional property managers, overly complex properties, and ${avoid}.`;
-  }
-  return `Avoid overly complex accounts and ${avoid}.`;
-}
-
-function resolveTargetSegment(context, answers) {
-  const segmentAnswer = answerText(answers, 'target_segment');
-  const opening = answerText(answers, 'opening');
-  const market = (context && context.targetMarket) || 'Greater Manchester';
-  const subtype = (context && context.subtype) || '';
-
-  // Prefer polished default for "as defined", thin, or awkward "segment — subtype" joins.
-  const keepAsDefined = /\bas defined\b|\bexactly as\b|\bas-is\b|\bkeep (it |them )?as\b/i.test(
-    `${opening} ${segmentAnswer}`
-  );
-  const awkwardJoin = /property[_\s-]*managers?\s*[—–:-]\s*/i.test(
-    `${segmentAnswer} ${subtype}`
-  );
-  if (!segmentAnswer || keepAsDefined || awkwardJoin || segmentAnswer.length < 48) {
-    // If subtype is already a polished sentence, sanitize rather than re-prefix.
-    if (subtype && /^small to mid-sized/i.test(subtype) && !keepAsDefined) {
-      return sanitizeTargetSegmentText(subtype, context);
-    }
-    return defaultTargetSegmentBody(context);
-  }
-  return sanitizeTargetSegmentText(
-    stripTrailingMarket(segmentAnswer, market),
-    context
-  );
-}
-
-function resolveTargetSegmentAvoid(context, answers) {
-  return defaultTargetSegmentAvoid(context);
-}
-
-function resolveMarketBound(context, answers) {
-  const marketAnswer = answerText(answers, 'market_bounds');
-  const market = (context && context.targetMarket) || 'Greater Manchester';
-  const towns =
-    (context && Array.isArray(context.towns) && context.towns.length
-      ? context.towns
-      : DEFAULT_TOWNS
-    ).slice(0, 5);
-
-  if (marketAnswer && marketAnswer.length > 24) {
-    return marketAnswer;
-  }
-  return `${market}, with early attention on ${naturalList(towns)}.`;
 }
 
 function stripFirstPersonArtifactLanguage(text) {
@@ -586,183 +722,610 @@ function stripFirstPersonArtifactLanguage(text) {
     );
 }
 
-function resolveObjective(context, answers) {
-  const objRaw = answerText(answers, 'campaign_objective');
-  const obj = stripFirstPersonArtifactLanguage(objRaw);
-  const name = shortName((context && context.businessName) || 'the business');
+function ensureProveObjective(substance) {
+  let s = stripCampaignWrappers(substance);
+  s = stripFirstPersonArtifactLanguage(s);
+  s = s
+    .replace(/^core validation question[:\s]*/i, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\.$/, '')
+    .trim();
+  if (!s) return '';
+  // Avoid "Prove that The …" capitalization stitch.
+  const body = /^[A-Z]/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s;
+  return `Prove that ${body}.`;
+}
+
+function defaultObjectiveParagraph(context, answers) {
   const market = (context && context.targetMarket) || 'Greater Manchester';
-  const pm = isPropertyManagerFocus(context, answers);
-
-  if (obj && obj.length > 80 && /core validation question|core question/i.test(obj)) {
-    return stripFirstPersonArtifactLanguage(
-      obj.replace(/Core question:/gi, 'Core validation question:')
-    );
+  if (isPropertyManagerFocus(context, answers)) {
+    return `Prove that small to mid-sized property managers in ${market} will engage in qualified conversations about recurring cleaning.`;
   }
+  const segment = (context && context.primarySegment) || 'the focus segment';
+  return `Prove that ${segment} in ${market} will engage in qualified conversations about recurring service.`;
+}
 
-  let proveLine = obj && obj.length > 20
-    ? (/^prove\b/i.test(obj)
-        ? obj.replace(/\.$/, '')
-        : `Prove that ${obj.replace(/^prove that\s+/i, '').replace(/\.$/, '')}`)
-    : pm
-      ? `Prove that small to mid-sized property managers in ${market} are willing to have a real conversation about recurring cleaning, rather than ignoring the outreach or responding only on price`
-      : `Prove that ${context.primarySegment || 'the focus segment'} in ${market} will take a real conversation about recurring service, rather than ignoring the outreach or responding only on price`;
-
-  // Prefer the tighter closing clause on the prove line.
-  if (
-    !/rather than ignoring the outreach or responding only on price/i.test(
-      proveLine
-    )
-  ) {
-    if (/not just ignore the outreach or shop on price/i.test(proveLine)) {
-      proveLine = proveLine.replace(
-        /,??\s*not just ignore the outreach or shop on price\.?$/i,
-        ', rather than ignoring the outreach or responding only on price'
-      );
-    } else if (pm || /property manager/i.test(proveLine)) {
-      proveLine = `${proveLine.replace(/\.$/, '')}, rather than ignoring the outreach or responding only on price`;
-    }
+function defaultCoreValidationQuestion(context, answers) {
+  const name = displayName((context && context.businessName) || 'the business');
+  if (isPropertyManagerFocus(context, answers)) {
+    return `Can ${name} create qualified property-manager conversations that turn into walkthroughs or estimates?`;
   }
+  return `Can ${name} create qualified conversations that turn into walkthroughs or estimates?`;
+}
 
-  const strong = pm
-    ? 'The strongest signal would be a walkthrough or estimate request from a qualified property manager. Good early signals include positive replies, questions about recurring service, reliability, responsiveness, scheduling, or current cleaning frustrations.'
-    : 'The strongest signal would be a walkthrough or estimate request from a qualified decision-maker. Good early signals include positive replies and questions about recurring service, reliability, or responsiveness.';
+function defaultInclusionCriteria(context, answers) {
+  if (isPropertyManagerFocus(context, answers)) {
+    return [...DEFAULT_INCLUSION_CRITERIA];
+  }
+  return [
+    'Match the approved Blueprint ideal-customer profile',
+    `Are located in ${(context && context.targetMarket) || 'the approved market'}`,
+    'Have a reachable decision-maker or operations contact',
+  ];
+}
 
-  const weak = pm
-    ? `Weak signals include price-only replies, vague interest with no next step, or responses from properties outside ${name}'s service area or beyond current operational fit.`
-    : `Weak signals include price-only replies, vague interest with no next step, or responses outside ${name}'s service area or operational fit.`;
+function defaultExclusionCriteria(context, answers) {
+  const avoid = extractAvoidPhrase(
+    (context && context.avoidPhrase) || 'buyers focused only on the lowest price'
+  );
+  const lowestPrice =
+    /lowest price|price only|cheapest/i.test(avoid)
+      ? 'Focus only on the lowest price'
+      : avoid.charAt(0).toUpperCase() + avoid.slice(1);
+  if (isPropertyManagerFocus(context, answers)) {
+    const name = displayName((context && context.businessName) || 'the business');
+    const poss =
+      name === 'the business' ? "the business's" : /s$/i.test(name) ? `${name}'` : `${name}'s`;
+    return [
+      lowestPrice,
+      `Are outside ${poss} service area`,
+      'Are too large, institutional, or operationally complex for the first test',
+      name === 'the business'
+        ? 'Need specialized cleaning that has not been approved'
+        : `Need specialized cleaning ${name} has not approved`,
+      'Have no clear decision-maker or contact path',
+      'Do not appear to need recurring cleaning',
+    ];
+  }
+  return [
+    lowestPrice,
+    'Are outside the approved service area',
+    'Are too large or operationally complex for the first test',
+    'Have no clear decision-maker or contact path',
+  ];
+}
 
-  const core = pm
-    ? `Can ${name} create qualified property-manager conversations that turn into walkthroughs or estimates?`
-    : `Can ${name} create qualified conversations that turn into walkthroughs or estimates?`;
-
-  return stripFirstPersonArtifactLanguage(
-    [
-      `${proveLine.replace(/\.$/, '')}.`,
-      '',
-      strong,
-      '',
-      weak,
-      '',
-      'Core validation question:',
-      core,
-    ].join('\n')
+function defaultMarketBound(context) {
+  const market = (context && context.targetMarket) || 'Greater Manchester';
+  const towns = (
+    context && Array.isArray(context.towns) && context.towns.length
+      ? context.towns
+      : DEFAULT_TOWNS
+  ).slice(0, 5);
+  return (
+    `Start with ${naturalList(towns)}. Keep ${market} in scope, ` +
+    `but keep the first test tight enough to learn quickly.`
   );
 }
 
-function resolveHypothesis(context, answers) {
-  const h = answerText(answers, 'hypothesis');
-  const name = shortName((context && context.businessName) || 'the business');
-  const market = (context && context.targetMarket) || 'Greater Manchester';
-  const pm = isPropertyManagerFocus(context, answers);
-
-  if (h) {
-    // Drop duplicated geography if the segment clause already includes the market.
-    let cleaned = h.replace(/\s+/g, ' ').trim();
-    const dup = new RegExp(
-      `(local\\s+)?property managers(?:\\s+in\\s+${market.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})?\\s+in\\s+${market.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
-      'i'
+function defaultHypothesis(context, answers) {
+  const name = displayName((context && context.businessName) || 'the business');
+  if (isPropertyManagerFocus(context, answers)) {
+    return (
+      `If ${name} approaches small to mid-sized local property managers with clear proof of ` +
+      `reliability, responsiveness, and a simple walkthrough path, the campaign should produce ` +
+      `qualified conversations and at least some walkthrough or estimate interest within the ` +
+      `first validation window.`
     );
-    cleaned = cleaned.replace(dup, (match) => {
-      if (/in\s+/i.test(match) && (match.match(/in\s+/gi) || []).length > 1) {
-        return match.replace(
-          new RegExp(`\\s+in\\s+${market.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
-          ''
-        );
+  }
+  const segment =
+    (context && context.primarySegment) || 'the focus segment';
+  const market = (context && context.targetMarket) || 'Greater Manchester';
+  return (
+    `If ${name} approaches ${segment} in ${market} with clear proof of reliability, ` +
+    `responsiveness, and a simple walkthrough path, the campaign should produce qualified ` +
+    `conversations and at least some walkthrough or estimate interest within the first validation window.`
+  );
+}
+
+function defaultRisks(context, answers, fields) {
+  const risks = [];
+  const readiness = context && context.readinessOverallStatus;
+  if (readiness && readiness !== 'ready') {
+    risks.push(
+      'Some growth infrastructure items may still need review before launch.'
+    );
+  } else if (!(context && context.completedSetupChecklist)) {
+    risks.push(
+      'Some growth infrastructure items may still need review before launch.'
+    );
+  }
+  const missing =
+    (fields && fields.proofAssetsMissing) ||
+    DEFAULT_PROOF_ASSETS_MISSING;
+  if (missing.length) {
+    risks.push('Proof assets are incomplete.');
+  }
+  risks.push('Market demand has not been validated yet.');
+  risks.push('Strong response could create capacity or scheduling pressure.');
+  risks.push('Lowest-price buyers should not define the test.');
+  return uniqueStrings(risks).slice(0, 6);
+}
+
+/**
+ * Extract structured campaign-plan fields from operator answers.
+ * Cross-section bleed (criteria in objective, metrics in hypothesis) is
+ * peeled into the matching field arrays — never left as raw transcript.
+ */
+function extractCampaignPlanFields(context, answers) {
+  const blob = allAnswerBlob(answers);
+  const objRaw = answerText(answers, 'campaign_objective');
+  const segmentRaw = answerText(answers, 'target_segment');
+  const marketRaw = answerText(answers, 'market_bounds');
+  const proofRaw = answerText(answers, 'proof_assets');
+  const hypRaw = answerText(answers, 'hypothesis');
+  const metricsRaw = answerText(answers, 'validation_metrics');
+  const approvalRaw = answerText(answers, 'approval_checkpoints');
+  const inclusionRaw = answerText(answers, 'inclusion_criteria');
+  const exclusionRaw = answerText(answers, 'exclusion_criteria');
+
+  const inclusionFromLabels = [
+    ...extractBulletBlock(blob, [
+      'include property managers who',
+      'include',
+      'includes',
+      'inclusion criteria',
+      'must include',
+    ]),
+    ...splitList(inclusionRaw),
+  ];
+  const exclusionFromLabels = [
+    ...extractBulletBlock(blob, [
+      'exclude property managers who',
+      'exclude',
+      'excludes',
+      'exclusion criteria',
+      'must exclude',
+      'avoid',
+    ]),
+    ...splitList(exclusionRaw),
+  ];
+
+  let objectiveSubstance = objRaw;
+  // Peel criteria / metrics / core-question blocks out of the objective answer.
+  const coreFromObj =
+    extractLabeledSection(objRaw, [
+      'core validation question',
+      'core question',
+    ]) ||
+    extractLabeledSection(blob, ['core validation question', 'core question']);
+  objectiveSubstance = stripLabeledBlocks(objectiveSubstance, [
+    ['include property managers who', 'include', 'inclusion criteria'],
+    ['exclude property managers who', 'exclude', 'exclusion criteria', 'avoid'],
+    ['primary signals', 'primary', 'secondary signals', 'secondary', 'validation metrics'],
+    ['core validation question', 'core question'],
+  ]);
+  objectiveSubstance = stripCampaignWrappers(
+    stripFirstPersonArtifactLanguage(objectiveSubstance)
+  );
+
+  // Hypothesis: keep If/then only — peel metrics.
+  let hypothesisSubstance = hypRaw;
+  const metricsFromHypPrimary = extractBulletBlock(hypRaw, [
+    'primary signals',
+    'primary',
+  ]);
+  const metricsFromHypSecondary = extractBulletBlock(hypRaw, [
+    'secondary signals',
+    'secondary',
+  ]);
+  hypothesisSubstance = stripLabeledBlocks(hypothesisSubstance, [
+    ['primary signals', 'primary', 'secondary signals', 'secondary', 'validation metrics'],
+    ['include', 'exclude', 'inclusion criteria', 'exclusion criteria'],
+  ]);
+  hypothesisSubstance = stripCampaignWrappers(
+    stripFirstPersonArtifactLanguage(hypothesisSubstance)
+  );
+
+  const available = [
+    ...extractBulletBlock(proofRaw, [
+      'available or close to ready',
+      'available',
+      'already have',
+      'ready',
+    ]),
+    ...extractBulletBlock(blob, ['available or close to ready']),
+  ]
+    .map((x) => polishProofAssetLabel(x, { missing: false }))
+    .filter(looksLikeProofAssetItem);
+
+  const missing = [
+    ...extractBulletBlock(proofRaw, [
+      'still needed or should be packaged',
+      'still needed',
+      'missing',
+      'need',
+      'needed',
+    ]),
+    ...extractBulletBlock(blob, ['still needed or should be packaged']),
+  ]
+    .map((x) => polishProofAssetLabel(x, { missing: true }))
+    .filter(looksLikeProofAssetItem);
+
+  // If proof answer is a flat list without labels, split on need/missing cues.
+  if (!available.length && !missing.length && proofRaw) {
+    const parts = splitList(proofRaw);
+    for (const part of parts) {
+      if (/missing|still need|need to|don't have|do not have/i.test(part)) {
+        const label = polishProofAssetLabel(part, { missing: true });
+        if (looksLikeProofAssetItem(label)) missing.push(label);
+      } else {
+        const label = polishProofAssetLabel(part, { missing: false });
+        if (looksLikeProofAssetItem(label)) available.push(label);
       }
-      return match;
-    });
-    // Generic "X in Market in Market"
-    cleaned = cleaned.replace(
+    }
+  }
+
+  const primaryMetrics = uniqueStrings([
+    ...extractBulletBlock(metricsRaw, ['primary signals', 'primary']),
+    ...extractBulletBlock(blob, ['primary signals']),
+    ...metricsFromHypPrimary,
+  ]).filter(looksLikeMetricItem);
+  const secondaryMetrics = uniqueStrings([
+    ...extractBulletBlock(metricsRaw, ['secondary signals', 'secondary']),
+    ...extractBulletBlock(blob, ['secondary signals']),
+    ...metricsFromHypSecondary,
+  ]).filter(looksLikeMetricItem);
+
+  // Flat metrics answer with no labels — only trust when it already looks like
+  // a real metric list (never a thin "3 conversations" fragment).
+  if (!primaryMetrics.length && metricsRaw) {
+    const cleanedMetrics = stripLabeledBlocks(metricsRaw, [
+      ['a successful first 30 days', 'success means'],
+    ]);
+    const listed = splitList(cleanedMetrics).filter(looksLikeMetricItem);
+    for (const item of listed) {
+      if (/secondary|not only about|which .* responds/i.test(item)) {
+        secondaryMetrics.push(item);
+      } else {
+        primaryMetrics.push(item);
+      }
+    }
+  }
+
+  const beforeList = extractBulletBlock(approvalRaw, [
+    'before list-building',
+    'before list building',
+    'before any list',
+  ]).map(polishCheckpointItem);
+  const beforeLaunch = extractBulletBlock(approvalRaw, [
+    'before launch',
+    'before go-live',
+  ]).map(polishCheckpointItem);
+  let flatCheckpoints = [];
+  if (!beforeList.length && !beforeLaunch.length && approvalRaw) {
+    flatCheckpoints = splitList(approvalRaw).map(polishCheckpointItem);
+  }
+
+  const subtypeDash = segmentRaw.match(/[—–-]\s*(.+)$/);
+  const targetSubtype =
+    (subtypeDash && subtypeDash[1] && subtypeDash[1].trim()) ||
+    (context && context.subtype) ||
+    null;
+
+  const marketTownsOnly = (() => {
+    let m = String(marketRaw || '').trim();
+    if (!m) return '';
+    // Drop non-geography bleed.
+    m = stripLabeledBlocks(m, [
+      ['include', 'exclude', 'primary', 'secondary', 'proof'],
+    ]);
+    return m.replace(/\s+/g, ' ').trim();
+  })();
+
+  return {
+    objective: objectiveSubstance,
+    coreValidationQuestion: coreFromObj
+      ? stripCampaignWrappers(coreFromObj).replace(/\?*$/, '?')
+      : '',
+    inclusionCriteria: uniqueStrings(inclusionFromLabels).slice(0, 8),
+    exclusionCriteria: uniqueStrings(
+      exclusionFromLabels.map((item) => {
+        const cleaned = extractAvoidPhrase(item);
+        // If cleaner collapsed a wrapper-only phrase, keep polished item text.
+        if (
+          cleaned === 'buyers focused only on the lowest price' &&
+          !/lowest price|price/i.test(item)
+        ) {
+          return polishCheckpointItem(item).replace(/\.$/, '');
+        }
+        return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+      })
+    ).slice(0, 8),
+    targetSegment: segmentRaw,
+    targetSubtype: targetSubtype ? String(targetSubtype).trim() : null,
+    marketBound: marketTownsOnly,
+    hypothesis: hypothesisSubstance,
+    proofAssetsAvailable: uniqueStrings(available).slice(0, 8),
+    proofAssetsMissing: uniqueStrings(missing).slice(0, 8),
+    validationMetricsPrimary: uniqueStrings(primaryMetrics).slice(0, 8),
+    validationMetricsSecondary: uniqueStrings(secondaryMetrics).slice(0, 8),
+    approvalCheckpointsBeforeListBuilding: uniqueStrings(beforeList).slice(0, 8),
+    approvalCheckpointsBeforeLaunch: uniqueStrings(beforeLaunch).slice(0, 8),
+    approvalCheckpointsFlat: uniqueStrings(flatCheckpoints).slice(0, 12),
+    notes: null,
+  };
+}
+
+function normalizeObjectiveSection(context, answers, fields) {
+  const substance = fields && fields.objective;
+  let objective;
+  if (substance && substance.length > 24) {
+    objective = ensureProveObjective(substance);
+    // Prefer the polished Anchor default when the cleaned substance is still
+    // a thin fragment or still contains stitched wrapper residue.
+    if (
+      /prove that prove|the first campaign should prove/i.test(objective) ||
+      objective.length < 40
+    ) {
+      objective = defaultObjectiveParagraph(context, answers);
+    }
+  } else {
+    objective = defaultObjectiveParagraph(context, answers);
+  }
+  const core =
+    (fields && fields.coreValidationQuestion) ||
+    defaultCoreValidationQuestion(context, answers);
+  return {
+    objective,
+    coreValidationQuestion: core,
+    campaignObjective: `${objective}\n\nCore validation question:\n${core}`,
+  };
+}
+
+function normalizeTargetSegmentSection(context, answers, fields) {
+  const opening = answerText(answers, 'opening');
+  const segmentAnswer = (fields && fields.targetSegment) || '';
+  const keepAsDefined =
+    /\bas defined\b|\bexactly as\b|\bas-is\b|\bkeep (it |them )?as\b/i.test(
+      `${opening} ${segmentAnswer}`
+    );
+  const awkwardJoin = /property[_\s-]*managers?\s*[—–:-]\s*/i.test(
+    `${segmentAnswer} ${fields && fields.targetSubtype}`
+  );
+  let targetSegment;
+  if (
+    !segmentAnswer ||
+    keepAsDefined ||
+    awkwardJoin ||
+    segmentAnswer.length < 48
+  ) {
+    const subtype = fields && fields.targetSubtype;
+    if (subtype && /^small to mid-sized/i.test(subtype) && !keepAsDefined) {
+      targetSegment = sanitizeTargetSegmentText(subtype, context);
+    } else {
+      targetSegment = defaultTargetSegmentBody(context);
+    }
+  } else {
+    targetSegment = sanitizeTargetSegmentText(segmentAnswer, context);
+  }
+
+  const inclusionCriteria =
+    fields && fields.inclusionCriteria && fields.inclusionCriteria.length >= 3
+      ? fields.inclusionCriteria
+      : defaultInclusionCriteria(context, answers);
+  const exclusionCriteria =
+    fields && fields.exclusionCriteria && fields.exclusionCriteria.length >= 2
+      ? fields.exclusionCriteria
+      : defaultExclusionCriteria(context, answers);
+
+  return {
+    targetSegment,
+    targetSubtype: (fields && fields.targetSubtype) || null,
+    inclusionCriteria,
+    exclusionCriteria,
+  };
+}
+
+function normalizeMarketBoundSection(context, fields) {
+  const raw = fields && fields.marketBound;
+  if (raw && /bedford|hooksett|londonderry|auburn|goffstown|manchester/i.test(raw)) {
+    // Keep towns/cluster language only; if the operator already wrote the
+    // polished form, use it after light cleanup.
+    let s = String(raw).replace(/\s+/g, ' ').trim();
+    if (/^start with\b/i.test(s)) {
+      if (!/\.$/.test(s)) s = `${s}.`;
+      if (!/tight enough to learn quickly/i.test(s) && /greater manchester/i.test(s)) {
+        s = s.replace(/\.$/, '') + ', but keep the first test tight enough to learn quickly.';
+      }
+      return s;
+    }
+    const towns = (
+      context && Array.isArray(context.towns) && context.towns.length
+        ? context.towns
+        : DEFAULT_TOWNS
+    ).slice(0, 5);
+    const mentioned = towns.filter((t) => new RegExp(`\\b${t}\\b`, 'i').test(s));
+    if (mentioned.length >= 3) {
+      return defaultMarketBound({ ...context, towns: mentioned });
+    }
+  }
+  return defaultMarketBound(context);
+}
+
+function normalizeHypothesisSection(context, answers, fields) {
+  let h = (fields && fields.hypothesis) || '';
+  h = stripFirstPersonArtifactLanguage(h).replace(/\s+/g, ' ').trim();
+  const market = (context && context.targetMarket) || 'Greater Manchester';
+  const name = displayName((context && context.businessName) || 'the business');
+  if (h) {
+    h = h.replace(
       new RegExp(
         `\\bin\\s+${market.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+in\\s+${market.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
         'gi'
       ),
       `in ${market}`
     );
-    return cleaned;
-  }
-
-  if (pm) {
-    return `If ${name} approaches local property managers with clear proof of reliability, responsiveness, and a simple walkthrough path, the campaign should create qualified conversations and at least some walkthrough or estimate interest within the validation window.`;
-  }
-  const segment = stripTrailingMarket(
-    resolveTargetSegment(context, answers),
-    market
-  );
-  const segmentClause = containsMarket(segment, market)
-    ? segment
-    : `${segment} in ${market}`;
-  return `If ${name} approaches ${segmentClause} with clear proof of reliability, responsiveness, and a simple walkthrough path, the campaign should create qualified conversations and at least some walkthrough or estimate interest within the validation window.`;
-}
-
-function resolveProofAssets(context, answers) {
-  const proof = answerText(answers, 'proof_assets');
-  if (proof) {
-    const listed = splitList(proof).map(polishProofAssetLabel);
-    if (listed.length >= 3) return uniqueStrings(listed).slice(0, 6);
-  }
-  return defaultProofAssets();
-}
-
-function resolveValidationMetrics(context, answers) {
-  const m = answerText(answers, 'validation_metrics');
-  if (m) {
-    const listed = splitList(m);
-    if (listed.length >= 3) return listed.slice(0, 6);
-  }
-  return defaultValidationMetrics(context, answers);
-}
-
-function resolveApprovalCheckpoints(answers) {
-  const a = answerText(answers, 'approval_checkpoints');
-  if (a) {
-    const listed = splitList(a);
-    // Prefer the concise review-first gate list unless the operator gave a full set.
-    if (listed.length >= 5) {
-      return listed.map((item) =>
-        /\.$/.test(item) ? item : `${item}.`
-      );
+    // Rewrite thin first-person hypotheses onto the business subject.
+    h = h.replace(/^if\s+we\s+approach\b/i, `If ${name} approaches`);
+    // Thin "with proof, we expect X" sketches are not artifact-ready — use default.
+    if (
+      /\bwith proof,\s*we expect\b/i.test(h) ||
+      h.length < 80
+    ) {
+      return defaultHypothesis(context, answers);
+    }
+    // Require If/then shape; otherwise fall back to polished default.
+    if (/^if\b/i.test(h) && !/primary signals|qualified replies/i.test(h)) {
+      if (!/\.$/.test(h)) h = `${h}.`;
+      return h;
     }
   }
-  return defaultApprovalCheckpoints();
+  return defaultHypothesis(context, answers);
+}
+
+function normalizeProofAssetsSection(fields) {
+  // Trust operator lists only when they are complete enough; otherwise use the
+  // polished available/missing defaults so fragments cannot truncate the section.
+  const available =
+    fields && fields.proofAssetsAvailable && fields.proofAssetsAvailable.length >= 4
+      ? fields.proofAssetsAvailable
+      : [...DEFAULT_PROOF_ASSETS_AVAILABLE];
+  const missing =
+    fields && fields.proofAssetsMissing && fields.proofAssetsMissing.length >= 4
+      ? fields.proofAssetsMissing
+      : [...DEFAULT_PROOF_ASSETS_MISSING];
+  return {
+    proofAssetsAvailable: uniqueStrings(available).slice(0, 8),
+    proofAssetsMissing: uniqueStrings(missing).slice(0, 8),
+  };
+}
+
+function defaultPrimaryValidationMetrics(context, answers) {
+  if (!isPropertyManagerFocus(context, answers)) {
+    return [
+      'Qualified replies',
+      'Discovery conversations booked',
+      'Walkthroughs or site visits requested',
+      'Estimate requests from properties that fit the target',
+    ];
+  }
+  const name = displayName((context && context.businessName) || 'the business');
+  const poss =
+    name === 'the business' ? 'the' : /s$/i.test(name) ? `${name}'` : `${name}'s`;
+  return [
+    'Qualified replies from property managers',
+    'Discovery conversations booked',
+    'Walkthroughs or site visits requested',
+    `Estimate requests from properties that fit ${poss} target`,
+  ];
+}
+
+function normalizeValidationMetricsSection(context, answers, fields) {
+  const primary =
+    fields &&
+    fields.validationMetricsPrimary &&
+    fields.validationMetricsPrimary.length >= 3 &&
+    fields.validationMetricsPrimary.every(looksLikeMetricItem)
+      ? fields.validationMetricsPrimary
+      : defaultPrimaryValidationMetrics(context, answers);
+  const secondary =
+    fields &&
+    fields.validationMetricsSecondary &&
+    fields.validationMetricsSecondary.length >= 2 &&
+    fields.validationMetricsSecondary.every(looksLikeMetricItem)
+      ? fields.validationMetricsSecondary
+      : [...DEFAULT_VALIDATION_METRICS_SECONDARY];
+  return {
+    validationMetricsPrimary: uniqueStrings(primary).slice(0, 8),
+    validationMetricsSecondary: uniqueStrings(secondary).slice(0, 8),
+    validationSuccessStatement: VALIDATION_SUCCESS_STATEMENT,
+  };
+}
+
+function normalizeApprovalCheckpointsSection(fields) {
+  const beforeList =
+    fields &&
+    fields.approvalCheckpointsBeforeListBuilding &&
+    fields.approvalCheckpointsBeforeListBuilding.length >= 3
+      ? fields.approvalCheckpointsBeforeListBuilding.map(polishCheckpointItem)
+      : [...DEFAULT_APPROVAL_BEFORE_LIST];
+  const beforeLaunch =
+    fields &&
+    fields.approvalCheckpointsBeforeLaunch &&
+    fields.approvalCheckpointsBeforeLaunch.length >= 3
+      ? fields.approvalCheckpointsBeforeLaunch.map(polishCheckpointItem)
+      : [...DEFAULT_APPROVAL_BEFORE_LAUNCH];
+
+  // If the operator only gave a flat fragmented list, prefer defaults unless
+  // the polished flat list is already clean and complete.
+  if (
+    fields &&
+    fields.approvalCheckpointsFlat &&
+    fields.approvalCheckpointsFlat.length >= 5 &&
+    beforeList === DEFAULT_APPROVAL_BEFORE_LIST
+  ) {
+    // Keep defaults — fragmented flat lists are not trustworthy.
+  }
+
+  return {
+    approvalCheckpointsBeforeListBuilding: uniqueStrings(beforeList),
+    approvalCheckpointsBeforeLaunch: uniqueStrings(beforeLaunch),
+    approvalCheckpoints: uniqueStrings([...beforeList, ...beforeLaunch]),
+  };
 }
 
 function resolveRecommendedNextStep() {
-  return 'Review and approve the campaign plan preview. After approval, Max can help define the prospect-list criteria before any list is built.';
+  return 'Review and approve this preview. After approval, Max can help define prospect-list criteria before any list is built.';
 }
 
 function buildFirstCampaignPlanPreview(context, answers, opts = {}) {
   const ctx = context || {};
   const ans = answers || {};
-  const objective = resolveObjective(ctx, ans);
-  const targetSegment = sanitizeTargetSegmentText(
-    resolveTargetSegment(ctx, ans),
-    ctx
-  );
-  const targetSegmentAvoid = resolveTargetSegmentAvoid(ctx, ans);
-  const marketBound = resolveMarketBound(ctx, ans);
-  const hypothesis = stripFirstPersonArtifactLanguage(
-    resolveHypothesis(ctx, ans)
-  );
-  const proofAssetsNeeded = resolveProofAssets(ctx, ans);
-  const validationMetrics = resolveValidationMetrics(ctx, ans);
-  const approvalCheckpoints = resolveApprovalCheckpoints(ans);
-  const risksCautions = defaultRisks(ctx, ans);
+  const fields = extractCampaignPlanFields(ctx, ans);
+
+  const objectivePart = normalizeObjectiveSection(ctx, ans, fields);
+  const segmentPart = normalizeTargetSegmentSection(ctx, ans, fields);
+  const marketBound = normalizeMarketBoundSection(ctx, fields);
+  const hypothesis = normalizeHypothesisSection(ctx, ans, fields);
+  const proofPart = normalizeProofAssetsSection(fields);
+  const metricsPart = normalizeValidationMetricsSection(ctx, ans, fields);
+  const approvalPart = normalizeApprovalCheckpointsSection(fields);
+  const risksCautions = defaultRisks(ctx, ans, proofPart);
   const name = shortName(ctx.businessName || 'the business');
 
   return {
     kind: ARTIFACT_KIND,
     title: PREVIEW_TITLE,
     businessName: name,
-    campaignObjective: objective,
-    targetSegment,
-    targetSegmentAvoid,
+    // Structured fields
+    objective: objectivePart.objective,
+    coreValidationQuestion: objectivePart.coreValidationQuestion,
+    inclusionCriteria: segmentPart.inclusionCriteria,
+    exclusionCriteria: segmentPart.exclusionCriteria,
+    targetSubtype: segmentPart.targetSubtype,
+    proofAssetsAvailable: proofPart.proofAssetsAvailable,
+    proofAssetsMissing: proofPart.proofAssetsMissing,
+    validationMetricsPrimary: metricsPart.validationMetricsPrimary,
+    validationMetricsSecondary: metricsPart.validationMetricsSecondary,
+    validationSuccessStatement: metricsPart.validationSuccessStatement,
+    approvalCheckpointsBeforeListBuilding:
+      approvalPart.approvalCheckpointsBeforeListBuilding,
+    approvalCheckpointsBeforeLaunch:
+      approvalPart.approvalCheckpointsBeforeLaunch,
+    // Rendered section bodies / compat fields
+    campaignObjective: objectivePart.campaignObjective,
+    targetSegment: segmentPart.targetSegment,
+    targetSegmentAvoid: null,
     marketBound,
     hypothesis,
-    proofAssetsNeeded,
-    validationMetrics,
+    proofAssetsNeeded: proofPart.proofAssetsMissing,
+    validationMetrics: [
+      ...metricsPart.validationMetricsPrimary,
+      ...metricsPart.validationMetricsSecondary,
+    ],
     risksCautions,
-    approvalCheckpoints,
+    approvalCheckpoints: approvalPart.approvalCheckpoints,
     recommendedNextStep: resolveRecommendedNextStep(),
     sectionTitles: { ...SECTION_TITLES },
     planningOnly: true,
@@ -805,6 +1368,17 @@ function formatMultilineSection(text) {
     .join('\n');
 }
 
+function formatBulletBlock(label, items) {
+  const lines = [label];
+  const list = items || [];
+  if (!list.length) {
+    lines.push('- —');
+    return lines;
+  }
+  for (const item of list) lines.push(`- ${item}`);
+  return lines;
+}
+
 function formatFirstCampaignPlanPreviewMessage(preview) {
   const p = preview || {};
   const titles = p.sectionTitles || SECTION_TITLES;
@@ -816,10 +1390,20 @@ function formatFirstCampaignPlanPreviewMessage(preview) {
 
   lines.push(`2. ${titles.targetSegment}`);
   lines.push(p.targetSegment || '—');
-  if (p.targetSegmentAvoid) {
-    lines.push('');
-    lines.push(p.targetSegmentAvoid);
-  }
+  lines.push('');
+  const includeLabel = /property manager/i.test(
+    String((p.context && p.context.primarySegment) || p.targetSegment || '')
+  )
+    ? 'Include property managers who:'
+    : 'Include accounts who:';
+  const excludeLabel = /property manager/i.test(
+    String((p.context && p.context.primarySegment) || p.targetSegment || '')
+  )
+    ? 'Exclude property managers who:'
+    : 'Exclude accounts who:';
+  lines.push(...formatBulletBlock(includeLabel, p.inclusionCriteria));
+  lines.push('');
+  lines.push(...formatBulletBlock(excludeLabel, p.exclusionCriteria));
   lines.push('');
 
   lines.push(`3. ${titles.marketBound}`);
@@ -830,14 +1414,32 @@ function formatFirstCampaignPlanPreviewMessage(preview) {
   lines.push(p.hypothesis || '—');
   lines.push('');
 
-  lines.push(`5. ${titles.proofAssetsNeeded}`);
-  for (const item of p.proofAssetsNeeded || []) lines.push(`- ${item}`);
-  if (!(p.proofAssetsNeeded || []).length) lines.push('- —');
+  lines.push(`5. ${titles.proofAssets || titles.proofAssetsNeeded}`);
+  lines.push(
+    ...formatBulletBlock(
+      'Available or close to ready:',
+      p.proofAssetsAvailable
+    )
+  );
+  lines.push('');
+  lines.push(
+    ...formatBulletBlock(
+      'Still needed or should be packaged:',
+      p.proofAssetsMissing || p.proofAssetsNeeded
+    )
+  );
   lines.push('');
 
   lines.push(`6. ${titles.validationMetrics}`);
-  for (const item of p.validationMetrics || []) lines.push(`- ${item}`);
-  if (!(p.validationMetrics || []).length) lines.push('- —');
+  lines.push(
+    ...formatBulletBlock('Primary signals:', p.validationMetricsPrimary)
+  );
+  lines.push('');
+  lines.push(
+    ...formatBulletBlock('Secondary signals:', p.validationMetricsSecondary)
+  );
+  lines.push('');
+  lines.push(p.validationSuccessStatement || VALIDATION_SUCCESS_STATEMENT);
   lines.push('');
 
   lines.push(`7. ${titles.risksCautions}`);
@@ -846,8 +1448,19 @@ function formatFirstCampaignPlanPreviewMessage(preview) {
   lines.push('');
 
   lines.push(`8. ${titles.approvalCheckpoints}`);
-  for (const item of p.approvalCheckpoints || []) lines.push(`- ${item}`);
-  if (!(p.approvalCheckpoints || []).length) lines.push('- —');
+  lines.push(
+    ...formatBulletBlock(
+      'Before list-building:',
+      p.approvalCheckpointsBeforeListBuilding
+    )
+  );
+  lines.push('');
+  lines.push(
+    ...formatBulletBlock(
+      'Before launch:',
+      p.approvalCheckpointsBeforeLaunch
+    )
+  );
   lines.push('');
 
   lines.push(`9. ${titles.recommendedNextStep}`);
@@ -970,19 +1583,32 @@ module.exports = {
   CONVERSATION_STEPS,
   QUESTION_BANK,
   DEFAULT_PROOF_ASSETS,
+  DEFAULT_PROOF_ASSETS_AVAILABLE,
+  DEFAULT_PROOF_ASSETS_MISSING,
   DEFAULT_VALIDATION_METRICS,
+  DEFAULT_VALIDATION_METRICS_PRIMARY,
+  DEFAULT_VALIDATION_METRICS_SECONDARY,
+  DEFAULT_INCLUSION_CRITERIA,
+  DEFAULT_EXCLUSION_CRITERIA,
   DEFAULT_APPROVAL_CHECKPOINTS,
+  DEFAULT_APPROVAL_BEFORE_LIST,
+  DEFAULT_APPROVAL_BEFORE_LAUNCH,
+  VALIDATION_SUCCESS_STATEMENT,
   buildCampaignPlanningContext,
   buildCampaignPlanningOpening,
   buildCampaignPlanningReply,
   buildFirstCampaignPlanPreview,
   formatFirstCampaignPlanPreviewMessage,
+  extractCampaignPlanFields,
+  stripCampaignWrappers,
   detectPreviewRequest,
   containsForbiddenCampaignPlanningLanguage,
   extractBusinessName,
+  extractAvoidPhrase,
   stepAfterOpening,
   humanizeSegment,
   humanizeStatusLabel,
+  displayName,
   sanitizeTargetSegmentText,
   stripFirstPersonArtifactLanguage,
 };

@@ -1475,9 +1475,29 @@
         .join('');
     }
 
+    function renderLabeledListBlock(label, items, empty) {
+      return (
+        '<p>' + escapeHtml(label) + '</p>' +
+        renderListBlock(items, empty || '—')
+      );
+    }
+
     function renderFirstCampaignPlanPreview(preview) {
       if (!preview) return '';
       const titles = preview.sectionTitles || {};
+      const pmFocus = /property manager/i.test(
+        String(
+          (preview.context && preview.context.primarySegment) ||
+            preview.targetSegment ||
+            ''
+        )
+      );
+      const includeLabel = pmFocus
+        ? 'Include property managers who:'
+        : 'Include accounts who:';
+      const excludeLabel = pmFocus
+        ? 'Exclude property managers who:'
+        : 'Exclude accounts who:';
       return (
         '<div class="growth-direction" id="firstCampaignPlanPreview">' +
           '<p class="growth-kicker">First Campaign Plan Preview</p>' +
@@ -1489,9 +1509,16 @@
             escapeHtml(titles.targetSegment || 'Target segment') +
           '</strong></p>' +
           '<p>' + escapeHtml(preview.targetSegment || '—') + '</p>' +
-          (preview.targetSegmentAvoid
-            ? '<p>' + escapeHtml(preview.targetSegmentAvoid) + '</p>'
-            : '') +
+          renderLabeledListBlock(
+            includeLabel,
+            preview.inclusionCriteria,
+            'No inclusion criteria listed yet.'
+          ) +
+          renderLabeledListBlock(
+            excludeLabel,
+            preview.exclusionCriteria,
+            'No exclusion criteria listed yet.'
+          ) +
           '<p><strong>3. ' +
             escapeHtml(titles.marketBound || 'Market bound') +
           '</strong></p>' +
@@ -1501,13 +1528,39 @@
           '</strong></p>' +
           '<p>' + escapeHtml(preview.hypothesis || '—') + '</p>' +
           '<p><strong>5. ' +
-            escapeHtml(titles.proofAssetsNeeded || 'Proof assets needed') +
+            escapeHtml(
+              titles.proofAssets || titles.proofAssetsNeeded || 'Proof assets'
+            ) +
           '</strong></p>' +
-          renderListBlock(preview.proofAssetsNeeded, 'No proof assets listed yet.') +
+          renderLabeledListBlock(
+            'Available or close to ready:',
+            preview.proofAssetsAvailable,
+            'No available proof assets listed yet.'
+          ) +
+          renderLabeledListBlock(
+            'Still needed or should be packaged:',
+            preview.proofAssetsMissing || preview.proofAssetsNeeded,
+            'No missing proof assets listed yet.'
+          ) +
           '<p><strong>6. ' +
             escapeHtml(titles.validationMetrics || 'Validation metrics') +
           '</strong></p>' +
-          renderListBlock(preview.validationMetrics, 'No validation metrics listed yet.') +
+          renderLabeledListBlock(
+            'Primary signals:',
+            preview.validationMetricsPrimary || preview.validationMetrics,
+            'No primary metrics listed yet.'
+          ) +
+          renderLabeledListBlock(
+            'Secondary signals:',
+            preview.validationMetricsSecondary,
+            'No secondary metrics listed yet.'
+          ) +
+          '<p>' +
+            escapeHtml(
+              preview.validationSuccessStatement ||
+                'A successful first 30 days means a small number of qualified conversations and at least one walkthrough or estimate request.'
+            ) +
+          '</p>' +
           '<p><strong>7. ' +
             escapeHtml(titles.risksCautions || 'Risks and cautions') +
           '</strong></p>' +
@@ -1515,7 +1568,17 @@
           '<p><strong>8. ' +
             escapeHtml(titles.approvalCheckpoints || 'Approval checkpoints') +
           '</strong></p>' +
-          renderListBlock(preview.approvalCheckpoints, 'No checkpoints listed yet.') +
+          renderLabeledListBlock(
+            'Before list-building:',
+            preview.approvalCheckpointsBeforeListBuilding ||
+              preview.approvalCheckpoints,
+            'No list-building checkpoints listed yet.'
+          ) +
+          renderLabeledListBlock(
+            'Before launch:',
+            preview.approvalCheckpointsBeforeLaunch,
+            'No launch checkpoints listed yet.'
+          ) +
           '<p><strong>9. ' +
             escapeHtml(titles.recommendedNextStep || 'Recommended next step') +
           '</strong></p>' +
