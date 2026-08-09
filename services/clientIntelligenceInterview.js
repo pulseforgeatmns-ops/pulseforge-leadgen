@@ -20,6 +20,7 @@ const {
   buildGrowthConversationReply,
   normalizeGrowthState,
   buildGrowthInfrastructureHandoffContext,
+  composeAvoidSentence,
 } = require('./clientIntelligenceGrowthDirection');
 const {
   buildEmptyAreas,
@@ -5771,22 +5772,60 @@ async function resumeInterview(sessionId, opts = {}) {
 }
 
 function resolveInitialGrowthDirection(blueprint, interviewState = null) {
-  if (
+  // Always rebuild from the approved Blueprint when available so avoid-copy
+  // wrappers cannot linger in a stale stored artifact.
+  if (blueprint && blueprint.sections) {
+    try {
+      return buildInitialGrowthDirection(blueprint, {
+        normalizedFacts:
+          (interviewState && interviewState.normalizedFacts) || null,
+      });
+    } catch (_) {
+      /* fall through to stored */
+    }
+  }
+  const stored =
     interviewState &&
     interviewState.initialGrowthDirection &&
     interviewState.initialGrowthDirection.kind === 'initial_growth_direction'
-  ) {
-    return interviewState.initialGrowthDirection;
+      ? interviewState.initialGrowthDirection
+      : null;
+  if (!stored) return null;
+  return repairInitialGrowthDirection(stored, interviewState);
+}
+
+/**
+ * Repair a stored Initial Growth Direction whose avoid paragraph still has
+ * wrapper bleed ("customers who The business prefers to avoid…").
+ */
+function repairInitialGrowthDirection(gd, interviewState = null) {
+  if (!gd || typeof gd !== 'object') return gd;
+  const name =
+    (gd.businessName && String(gd.businessName)) ||
+    (interviewState &&
+      interviewState.normalizedFacts &&
+      interviewState.normalizedFacts.business_name) ||
+    'the business';
+  const paragraphs = Array.isArray(gd.paragraphs) ? gd.paragraphs.slice() : [];
+  let changed = false;
+  for (let i = 0; i < paragraphs.length; i += 1) {
+    const p = String(paragraphs[i] || '');
+    if (
+      /customers who The business/i.test(p) ||
+      /prefers to avoid/i.test(p) ||
+      /avoid Anchor should avoid/i.test(p) ||
+      /should avoid:\s*(?:Anchor|The business)/i.test(p)
+    ) {
+      const afterColon = p.split(/should avoid:\s*/i)[1] || p;
+      const repaired = composeAvoidSentence(name, afterColon);
+      if (repaired) {
+        paragraphs[i] = repaired;
+        changed = true;
+      }
+    }
   }
-  if (!blueprint || !blueprint.sections) return null;
-  try {
-    return buildInitialGrowthDirection(blueprint, {
-      normalizedFacts:
-        (interviewState && interviewState.normalizedFacts) || null,
-    });
-  } catch (_) {
-    return null;
-  }
+  if (!changed) return gd;
+  return { ...gd, paragraphs };
 }
 
 function alreadyApprovedPayload(blueprint, playbook = null, interviewState = null) {
@@ -6515,6 +6554,7 @@ module.exports = {
   startInfrastructureReadinessConversation,
   postInfrastructureReadinessMessage,
   resolveInitialGrowthDirection,
+  repairInitialGrowthDirection,
   detectContradiction,
   answerLooksEmpty,
   classifyUserResponse,

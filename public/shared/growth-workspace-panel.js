@@ -235,7 +235,7 @@
     return (
       '<article class="current-task-card task-guidance-card" id="taskGuidanceCard" data-task-id="' +
       escapeHtml(task.id || '') +
-      '" data-role="task-guidance" data-simple-task-card="0">' +
+      '" data-role="task-guidance" data-active-task-card="1" data-simple-task-card="0">' +
       '<p class="kicker">Current Task Guidance</p>' +
       '<h3>' +
       escapeHtml(task.title || 'Next step') +
@@ -381,6 +381,7 @@
       currentPlanCards: countMarkers(source, 'data-plan-role="current"'),
       previousPlanCards: countMarkers(source, 'data-plan-role="previous"'),
       taskGuidanceCards: countMarkers(source, 'data-role="task-guidance"'),
+      activeTaskCards: countMarkers(source, 'data-active-task-card="1"'),
       simpleTaskCards: countMarkers(source, 'data-role="simple-task"'),
       taskGuidanceInPreviousPlans: countMarkers(
         previousHtml,

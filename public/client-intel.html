@@ -829,13 +829,37 @@
       gap: 0.35rem;
       margin-top: 0;
     }
+    /* Guidance open: left nav becomes the scroll region above the sticky footer. */
+    .panel[data-workspace="growth"] #savedSessions.workspace-left-nav.guidance-open {
+      flex: 1 1 auto;
+      min-height: 0;
+      max-height: none;
+      overflow-x: hidden;
+      overflow-y: auto;
+      padding-bottom: 2rem; /* keep last guidance section clear of sticky footer */
+      border-bottom: none;
+    }
+    .panel[data-workspace="growth"] #chatLog.guidance-suppressed {
+      display: none;
+    }
+    .panel[data-workspace="growth"] #growthWorkspaceActions,
+    .panel[data-workspace="growth"] #sessionStatus {
+      flex: 0 0 auto;
+      position: relative;
+      z-index: 2;
+      background: var(--cie-panel-elevated);
+    }
+    .panel[data-workspace="growth"] #sessionStatus {
+      background: var(--cie-panel);
+    }
     #savedSessions .task-guidance-card {
       position: static;
       height: auto;
       max-height: none;
       overflow: visible;
       margin-top: 0.35rem;
-      margin-bottom: 0;
+      margin-bottom: 0.5rem;
+      flex: 0 0 auto;
     }
     .plan-progress-label {
       display: flex;
@@ -1456,6 +1480,24 @@
       els.growthPreviewActions.hidden = !on;
     }
 
+    function syncGrowthWorkspaceChrome() {
+      const chatPanel = els.chatLog && els.chatLog.closest('.panel');
+      const inWorkspace = state.phase === 'growth_workspace';
+      const guidanceOpen = Boolean(state.taskGuidanceOpen) && inWorkspace;
+      if (chatPanel) {
+        if (inWorkspace) chatPanel.setAttribute('data-workspace', 'growth');
+        else chatPanel.removeAttribute('data-workspace');
+      }
+      if (els.savedSessions) {
+        els.savedSessions.classList.toggle('guidance-open', guidanceOpen);
+      }
+      if (els.chatLog) {
+        // Suppress chat bubbles while expanded guidance is open so a simple
+        // task summary does not appear under the guidance card.
+        els.chatLog.classList.toggle('guidance-suppressed', guidanceOpen);
+      }
+    }
+
     function setPhase(phase) {
       state.phase = phase;
       els.execActions.hidden = phase !== 'executive_summary';
@@ -1540,6 +1582,7 @@
             'Operational setup before campaigns — capture, convert, track';
         }
       }
+      syncGrowthWorkspaceChrome();
     }
 
     async function api(method, url, body) {
@@ -1849,6 +1892,7 @@
       }
       els.savedSessions.hidden = false;
       els.savedSessions.classList.add('workspace-left-nav');
+      syncGrowthWorkspaceChrome();
     }
 
     function renderSavedSessions(sessions) {
@@ -2242,29 +2286,15 @@
         return;
       }
       // Setup task — show exactly one expanded guidance card in the left panel.
+      // Do not also render a simple task summary bubble (that looked like a
+      // second card under the expanded guidance).
       setPhase('growth_workspace');
       setComposerEnabled(false);
       setWorkspaceTab('overview');
       state.taskGuidanceOpen = true;
       renderWorkspaceLeftNav();
       renderWorkspaceSidePanel();
-      if (!silent) {
-        const existing = els.chatLog.querySelector('[data-task-guidance-note="1"]');
-        if (!existing) {
-          const ownerLabel = formatOwnerLabel(task.owner || 'operator_guided');
-          addBubble(
-            'assistant',
-            (task.title || 'Setup task') +
-              '\n\n' +
-              (task.description ||
-                'Complete this recommendation, then mark it done to advance.') +
-              '\n\nOwner: ' +
-              ownerLabel
-          );
-          const last = els.chatLog.lastElementChild;
-          if (last) last.setAttribute('data-task-guidance-note', '1');
-        }
-      }
+      syncGrowthWorkspaceChrome();
       els.sessionStatus.textContent = 'GROWTH PLAN · ' + (task.title || 'setup task');
     }
 

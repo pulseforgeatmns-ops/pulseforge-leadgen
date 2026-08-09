@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- Growth Workspace expanded task guidance: exactly one active-task card; scroll above sticky footer
+  - Removed duplicate simple task summary bubble under expanded guidance
+  - Left nav becomes the scroll region with bottom padding so the footer does not cover guidance
+  - Overview still shows “Task guidance is open in the left panel.”
+- Initial Growth Direction avoid sentence no longer bleeds wrapper language
+  - Expected: “The Blueprint also clarifies who Anchor should avoid: customers who only care about the lowest price.”
+  - Stale stored artifacts are regenerated/repaired on resolve
 - Current Task Guidance renders exactly one structured card (no duplicates / clipping)
   - Full sections: Why this matters · What to do · What to confirm · Who owns it · Complete when
   - Branded email available uses Anchor-specific copy; left panel uses normal document flow

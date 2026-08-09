@@ -63,7 +63,7 @@ const ANCHOR_BLUEPRINT_SECTIONS = Object.freeze({
     unknowns: [],
   },
   avoidCustomers: {
-    summary: 'Customers who prioritize the lowest price over reliability.',
+    summary: 'customers who only care about the lowest price',
     confidence: 0.8,
     evidenceIds: [],
     unknowns: [],
