@@ -294,13 +294,12 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.equal(preview.sectionTitles.hypothesis, 'Campaign hypothesis');
     assert.equal(preview.sectionTitles.risksCautions, 'Risks and cautions');
     assert.equal(preview.sectionTitles.proofAssets, 'Proof assets');
-    assert.match(preview.campaignObjective, /Core validation question:/i);
-    assert.doesNotMatch(preview.campaignObjective, /Core question:/i);
-    assert.doesNotMatch(preview.campaignObjective, /\bI'd\b/);
     assert.match(
       preview.campaignObjective,
       /^Prove that property managers will book walkthroughs\./i
     );
+    assert.doesNotMatch(preview.campaignObjective, /Core validation question/i);
+    assert.doesNotMatch(preview.campaignObjective, /\bI'd\b/);
     assert.doesNotMatch(
       preview.campaignObjective,
       /Prove that Prove|The first campaign should prove/i
@@ -308,6 +307,16 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.doesNotMatch(
       preview.campaignObjective,
       /Include property managers who/i
+    );
+    assert.match(
+      preview.coreValidationQuestion,
+      /^Can Anchor create qualified property-manager conversations/
+    );
+    assert.equal(preview.campaignHypothesis, preview.hypothesis);
+    assert.deepEqual(preview.risks, preview.risksCautions);
+    assert.deepEqual(
+      preview.approvalCheckpointsBeforeList,
+      preview.approvalCheckpointsBeforeListBuilding
     );
     assert.match(
       preview.targetSegment,
@@ -391,6 +400,7 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
 
     const formatted = formatFirstCampaignPlanPreviewMessage(preview);
     assert.match(formatted, /1\. Campaign objective/);
+    assert.match(formatted, /Core validation question:/);
     assert.match(formatted, /2\. Target segment/);
     assert.match(formatted, /Include property managers who:/);
     assert.match(formatted, /Exclude property managers who:/);
@@ -412,6 +422,10 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.doesNotMatch(formatted, /Planning only — not a launch/i);
     assert.doesNotMatch(formatted, /\bnot_ready\b/);
     assert.doesNotMatch(formatted, /campaign is live/i);
+    assert.doesNotMatch(
+      formatted,
+      /Prove that[\s\S]*Include property managers who manage/i
+    );
   });
 
   it('Anchor demo answers normalize without raw transcript stitching', () => {
@@ -516,7 +530,7 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     const formatted = formatFirstCampaignPlanPreviewMessage(preview);
 
     assert.match(
-      preview.objective,
+      preview.campaignObjective,
       /^Prove that small to mid-sized property managers in Greater Manchester will engage in qualified conversations about recurring cleaning\.?$/i
     );
     assert.doesNotMatch(
@@ -527,6 +541,7 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
       preview.campaignObjective,
       /Include property managers who/i
     );
+    assert.doesNotMatch(preview.campaignObjective, /Core validation question/i);
     assert.match(
       preview.coreValidationQuestion,
       /^Can Anchor create qualified property-manager conversations/
@@ -536,8 +551,11 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
       /that likely need recurring cleaning weekly or multiple times per week/i
     );
     assert.match(preview.marketBound, /^Start with Bedford/i);
-    assert.match(preview.hypothesis, /^If Anchor approaches/i);
-    assert.doesNotMatch(preview.hypothesis, /Primary signals|Qualified replies/i);
+    assert.match(preview.campaignHypothesis, /^If Anchor approaches/i);
+    assert.doesNotMatch(
+      preview.campaignHypothesis,
+      /Primary signals|Qualified replies/i
+    );
     assert.ok(
       preview.proofAssetsAvailable.some((x) =>
         /Positioning around reliability, responsiveness, and accountability/i.test(
@@ -547,15 +565,15 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     );
     assert.doesNotMatch(
       preview.proofAssetsAvailable.join(' '),
-      /The positioning is clear:/i
+      /The positioning is clear:|reliability\s*\/\s*Responsiveness/i
     );
     assert.ok(
-      preview.approvalCheckpointsBeforeListBuilding.includes(
+      preview.approvalCheckpointsBeforeList.includes(
         'Target segment, subtype, and market bound are confirmed.'
       )
     );
     assert.ok(
-      preview.approvalCheckpointsBeforeListBuilding.every(
+      preview.approvalCheckpointsBeforeList.every(
         (x) => !/Target segment\. subtype\./i.test(x)
       )
     );
@@ -565,7 +583,7 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
       )
     );
     assert.ok(
-      preview.risksCautions.every(
+      preview.risks.every(
         (x) => !/prefers to avoid|Anchor should avoid/i.test(x)
       )
     );
@@ -581,6 +599,85 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     assert.doesNotMatch(formatted, /Anchor should avoid/i);
     assert.doesNotMatch(formatted, /Target segment\. subtype\./i);
     assert.doesNotMatch(formatted, /The positioning is clear:/i);
+    assert.doesNotMatch(formatted, /reliability\s*\/\s*Responsiveness/i);
+    assert.equal(preview.campaignsGenerated, false);
+    assert.equal(preview.prospectListGenerated, false);
+    assert.equal(preview.outreachCopyGenerated, false);
+    assert.equal(preview.accountChangesMade, false);
+  });
+
+  it('peels unlabeled include/exclude bleed from conversational objective answers', () => {
+    const preview = buildFirstCampaignPlanPreview(
+      {
+        businessName: 'Anchor Cleaning',
+        primarySegment: 'property managers',
+        targetMarket: 'Greater Manchester',
+        towns: ['Bedford', 'Hooksett', 'Londonderry', 'Auburn', 'Goffstown'],
+        avoidPhrase:
+          'the business prefers to avoid Anchor should avoid buyers focused only on the lowest price',
+        readinessOverallStatus: 'not_ready',
+        completedSetupChecklist: true,
+      },
+      {
+        opening: { raw: 'Keep property managers as defined.' },
+        campaign_objective: {
+          raw:
+            'The first campaign should prove that small to mid-sized property managers in Greater Manchester will engage. ' +
+            'We should include property managers who manage offices and exclude property managers who only care about price. ' +
+            'Core validation question: Can Anchor create qualified conversations?',
+        },
+        target_segment: { raw: 'Property managers — multi-family / HOA subtype' },
+        market_bounds: { raw: 'Greater Manchester' },
+        proof_assets: {
+          raw:
+            'The positioning is clear: reliability / Responsiveness. Also service area and checklist. ' +
+            'Still need references and before/after photos.',
+        },
+        hypothesis: {
+          raw:
+            'If we approach local property managers in Greater Manchester in Greater Manchester with proof, we expect walkthroughs. ' +
+            'Primary signals: Qualified replies. Secondary signals: Questions about price.',
+        },
+        validation_metrics: { raw: '3 conversations' },
+        approval_checkpoints: {
+          raw: 'Target segment. subtype. and market bound are confirmed. Preview sign-off. Proof ready.',
+        },
+      }
+    );
+    const formatted = formatFirstCampaignPlanPreviewMessage(preview);
+
+    assert.match(preview.campaignObjective, /^Prove that /i);
+    assert.doesNotMatch(preview.campaignObjective, /\binclude\b|\bexclude\b/i);
+    assert.doesNotMatch(
+      preview.campaignObjective,
+      /Prove that The first campaign should prove/i
+    );
+    assert.doesNotMatch(preview.campaignObjective, /Core validation question/i);
+    assert.match(preview.coreValidationQuestion, /^Can Anchor create/i);
+    assert.match(preview.campaignHypothesis, /^If Anchor approaches/i);
+    assert.doesNotMatch(
+      preview.campaignHypothesis,
+      /Primary signals|Qualified replies/i
+    );
+    assert.ok(
+      preview.exclusionCriteria.every(
+        (x) => !/prefers to avoid|should avoid/i.test(x)
+      )
+    );
+    assert.doesNotMatch(
+      preview.proofAssetsAvailable.join(' '),
+      /The positioning is clear:|reliability\s*\/\s*Responsiveness/i
+    );
+    assert.ok(
+      preview.approvalCheckpointsBeforeList.every(
+        (x) => !/Target segment\. subtype\./i.test(x)
+      )
+    );
+    assert.doesNotMatch(formatted, /\bWe should include\b/i);
+    assert.doesNotMatch(formatted, /the business prefers to avoid/i);
+    assert.doesNotMatch(formatted, /Target segment\. subtype\./i);
+    assert.doesNotMatch(formatted, /reliability\s*\/\s*Responsiveness/i);
+    assert.equal(preview.notes, null);
     assert.equal(preview.campaignsGenerated, false);
     assert.equal(preview.prospectListGenerated, false);
     assert.equal(preview.outreachCopyGenerated, false);
@@ -635,7 +732,8 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
       /^Small to mid-sized local property managers in Greater Manchester who oversee/i
     );
     assert.doesNotMatch(preview.targetSegment, /^property managers/i);
-    assert.match(preview.campaignObjective, /Core validation question:/i);
+    assert.match(preview.coreValidationQuestion, /Can Anchor/i);
+    assert.doesNotMatch(preview.campaignObjective, /Core validation question/i);
     assert.doesNotMatch(preview.campaignObjective, /\bI'd\b/);
     assert.doesNotMatch(
       preview.campaignObjective,
@@ -787,6 +885,10 @@ describe('First Campaign Planning UI markers', () => {
     assert.match(uiSource, /campaign_planning/);
     assert.match(uiSource, /renderFirstCampaignPlanPreview/);
     assert.match(uiSource, /First Campaign Plan Preview/);
+    assert.match(uiSource, /campaignHypothesis/);
+    assert.match(uiSource, /approvalCheckpointsBeforeList/);
+    assert.match(uiSource, /coreValidationQuestion/);
+    assert.match(uiSource, /Structured fields only/);
     assert.match(uiSource, /Campaign hypothesis/);
     assert.match(uiSource, /Risks and cautions/);
     assert.match(uiSource, /Available or close to ready/);

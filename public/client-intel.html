@@ -1485,6 +1485,17 @@
     function renderFirstCampaignPlanPreview(preview) {
       if (!preview) return '';
       const titles = preview.sectionTitles || {};
+      // Structured fields only — do not render raw transcript text here.
+      const objective = preview.campaignObjective || preview.objective || '—';
+      const coreQ = preview.coreValidationQuestion || '';
+      const hypothesis =
+        preview.campaignHypothesis || preview.hypothesis || '—';
+      const risks = preview.risks || preview.risksCautions || [];
+      const beforeList =
+        preview.approvalCheckpointsBeforeList ||
+        preview.approvalCheckpointsBeforeListBuilding ||
+        [];
+      const beforeLaunch = preview.approvalCheckpointsBeforeLaunch || [];
       const pmFocus = /property manager/i.test(
         String(
           (preview.context && preview.context.primarySegment) ||
@@ -1504,11 +1515,18 @@
           '<p><strong>1. ' +
             escapeHtml(titles.campaignObjective || 'Campaign objective') +
           '</strong></p>' +
-          renderParagraphBlock(preview.campaignObjective) +
+          renderParagraphBlock(objective) +
+          (coreQ
+            ? '<p><strong>Core validation question</strong></p>' +
+              '<p>' + escapeHtml(coreQ) + '</p>'
+            : '') +
           '<p><strong>2. ' +
             escapeHtml(titles.targetSegment || 'Target segment') +
           '</strong></p>' +
           '<p>' + escapeHtml(preview.targetSegment || '—') + '</p>' +
+          (preview.targetSubtype
+            ? '<p>Subtype: ' + escapeHtml(preview.targetSubtype) + '</p>'
+            : '') +
           renderLabeledListBlock(
             includeLabel,
             preview.inclusionCriteria,
@@ -1526,7 +1544,7 @@
           '<p><strong>4. ' +
             escapeHtml(titles.hypothesis || 'Campaign hypothesis') +
           '</strong></p>' +
-          '<p>' + escapeHtml(preview.hypothesis || '—') + '</p>' +
+          '<p>' + escapeHtml(hypothesis) + '</p>' +
           '<p><strong>5. ' +
             escapeHtml(
               titles.proofAssets || titles.proofAssetsNeeded || 'Proof assets'
@@ -1547,7 +1565,7 @@
           '</strong></p>' +
           renderLabeledListBlock(
             'Primary signals:',
-            preview.validationMetricsPrimary || preview.validationMetrics,
+            preview.validationMetricsPrimary,
             'No primary metrics listed yet.'
           ) +
           renderLabeledListBlock(
@@ -1564,25 +1582,28 @@
           '<p><strong>7. ' +
             escapeHtml(titles.risksCautions || 'Risks and cautions') +
           '</strong></p>' +
-          renderListBlock(preview.risksCautions, 'No risks listed yet.') +
+          renderListBlock(risks, 'No risks listed yet.') +
           '<p><strong>8. ' +
             escapeHtml(titles.approvalCheckpoints || 'Approval checkpoints') +
           '</strong></p>' +
           renderLabeledListBlock(
             'Before list-building:',
-            preview.approvalCheckpointsBeforeListBuilding ||
-              preview.approvalCheckpoints,
+            beforeList,
             'No list-building checkpoints listed yet.'
           ) +
           renderLabeledListBlock(
             'Before launch:',
-            preview.approvalCheckpointsBeforeLaunch,
+            beforeLaunch,
             'No launch checkpoints listed yet.'
           ) +
           '<p><strong>9. ' +
             escapeHtml(titles.recommendedNextStep || 'Recommended next step') +
           '</strong></p>' +
           '<p>' + escapeHtml(preview.recommendedNextStep || '—') + '</p>' +
+          (preview.notes
+            ? '<p><strong>Notes</strong></p>' +
+              renderParagraphBlock(preview.notes)
+            : '') +
           '<p class="growth-disclaimer">' +
             escapeHtml(
               preview.disclaimer ||

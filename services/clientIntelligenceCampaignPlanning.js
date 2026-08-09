@@ -209,9 +209,89 @@ function stripCampaignWrappers(text) {
     for (const re of CAMPAIGN_WRAPPER_PATTERNS) {
       s = s.replace(re, '').trim();
     }
-    s = s.replace(/^(?:that|to)\s+/i, '').trim();
+    // Also strip mid-string residual wrappers after a peel left them hanging.
+    s = s
+      .replace(/\bthe first campaign should prove(?:\s+that)?\s+/gi, '')
+      .replace(/\bthis (?:first )?campaign should prove(?:\s+that)?\s+/gi, '')
+      .replace(/^(?:that|to)\s+/i, '')
+      .trim();
   } while (s && s !== prev);
   return s;
+}
+
+/**
+ * Peel unlabeled include/exclude clauses from prose (common when Max or the
+ * operator stitches criteria into the objective answer).
+ * Returns { text, inclusion[], exclusion[] }.
+ */
+function peelInlineIncludeExclude(text) {
+  let s = String(text || '').replace(/\s+/g, ' ').trim();
+  const inclusion = [];
+  const exclusion = [];
+  if (!s) return { text: '', inclusion, exclusion };
+
+  const whoClause =
+    '(?:property managers who|accounts who|customers who|managers who|who)';
+  const includeSource =
+    `(?:(?:we|you|operators?)\\s+should\\s+|should\\s+|must\\s+)?(?:include|includes)\\s+${whoClause}\\s+([^.;]+?)(?=\\s+(?:and\\s+)?(?:exclude|avoid)\\b|[.;]|$)`;
+  const excludeSource =
+    `(?:(?:and\\s+)?(?:(?:we|you|operators?)\\s+should\\s+|should\\s+|must\\s+)?)?(?:exclude|excludes|avoid)\\s+${whoClause}\\s+([^.;]+?)(?=[.;]|$)`;
+
+  for (const m of s.matchAll(new RegExp(includeSource, 'gi'))) {
+    const item = String(m[1] || '')
+      .replace(/\s+/g, ' ')
+      .replace(/\s+and\s*$/i, '')
+      .trim();
+    if (item.length > 4) {
+      inclusion.push(item.charAt(0).toUpperCase() + item.slice(1));
+    }
+  }
+  for (const m of s.matchAll(new RegExp(excludeSource, 'gi'))) {
+    const item = String(m[1] || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (item.length > 4) {
+      exclusion.push(item.charAt(0).toUpperCase() + item.slice(1));
+    }
+  }
+
+  s = s
+    .replace(new RegExp(includeSource, 'gi'), ' ')
+    .replace(new RegExp(excludeSource, 'gi'), ' ')
+    .replace(
+      /\b(?:we|you|operators?)\s+should\s+(?:include|exclude)\b[^.;]*/gi,
+      ' '
+    )
+    .replace(/\s*(?:and|,)\s*(?=[.;]|$)/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*[.;]\s*$/g, '')
+    .trim();
+
+  return { text: s, inclusion, exclusion };
+}
+
+function objectiveHasCrossSectionBleed(text) {
+  const s = String(text || '');
+  return (
+    /\binclude(?:s|d)?\b/i.test(s) ||
+    /\bexclude(?:s|d)?\b/i.test(s) ||
+    /\bprimary signals?\b/i.test(s) ||
+    /\bsecondary signals?\b/i.test(s) ||
+    /\bcore validation question\b/i.test(s) ||
+    /\bthe first campaign should prove\b/i.test(s) ||
+    /\bprove that prove\b/i.test(s)
+  );
+}
+
+function hypothesisHasCrossSectionBleed(text) {
+  const s = String(text || '');
+  return (
+    /\bprimary signals?\b/i.test(s) ||
+    /\bsecondary signals?\b/i.test(s) ||
+    /\bvalidation metrics?\b/i.test(s) ||
+    /\bqualified replies\b/i.test(s) ||
+    /\ba successful first 30 days\b/i.test(s)
+  );
 }
 
 function sectionSummary(sections, key) {
@@ -629,11 +709,25 @@ function polishCheckpointItem(item) {
       /\bTarget segment\.\s*subtype\.\s*and\b/gi,
       'Target segment, subtype, and'
     )
+    .replace(
+      /\bInclusion\.\s*(?:and\s+)?exclusion criteria\b/gi,
+      'Inclusion and exclusion criteria'
+    )
+    .replace(
+      /\bProof assets?\.\s*(?:are\s+)?ready\b/gi,
+      'Proof assets are ready'
+    )
     .replace(/\b([A-Za-z][A-Za-z ]+?)\.\s+([a-z]+)\.\s+and\b/g, '$1, $2, and')
+    // Collapse remaining mid-item "Word. word." fragments into commas.
+    .replace(/\b([A-Za-z][A-Za-z-]{1,24})\.\s+([a-z][a-z-]{1,24})\b/g, '$1, $2')
     .replace(/\s+/g, ' ')
     .trim();
   if (!/\.$/.test(s)) s = `${s}.`;
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function looksFragmentedCheckpoint(item) {
+  return /\b[A-Za-z][A-Za-z ]+\.\s+[a-z]+\./.test(String(item || ''));
 }
 
 function defaultTargetSegmentBody(context) {
@@ -908,6 +1002,11 @@ function extractCampaignPlanFields(context, answers) {
   objectiveSubstance = stripCampaignWrappers(
     stripFirstPersonArtifactLanguage(objectiveSubstance)
   );
+  // Unlabeled prose: "We should include … and exclude …"
+  const peeledObjective = peelInlineIncludeExclude(objectiveSubstance);
+  objectiveSubstance = peeledObjective.text;
+  inclusionFromLabels.push(...peeledObjective.inclusion);
+  exclusionFromLabels.push(...peeledObjective.exclusion);
 
   // Hypothesis: keep If/then only — peel metrics.
   let hypothesisSubstance = hypRaw;
@@ -926,6 +1025,14 @@ function extractCampaignPlanFields(context, answers) {
   hypothesisSubstance = stripCampaignWrappers(
     stripFirstPersonArtifactLanguage(hypothesisSubstance)
   );
+  // Drop residual unlabeled metric sentences that still cling to the If/then.
+  hypothesisSubstance = hypothesisSubstance
+    .replace(
+      /\s*(?:Primary|Secondary)\s+signals?\s*[:\-–—]?\s*[^.]*(?:\.|$)/gi,
+      ''
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
 
   const available = [
     ...extractBulletBlock(proofRaw, [
@@ -1060,12 +1167,13 @@ function extractCampaignPlanFields(context, answers) {
 function normalizeObjectiveSection(context, answers, fields) {
   const substance = fields && fields.objective;
   let objective;
-  if (substance && substance.length > 24) {
+  if (substance && substance.length > 24 && !objectiveHasCrossSectionBleed(substance)) {
     objective = ensureProveObjective(substance);
     // Prefer the polished Anchor default when the cleaned substance is still
-    // a thin fragment or still contains stitched wrapper residue.
+    // a thin fragment or still contains stitched wrapper / cross-section residue.
     if (
-      /prove that prove|the first campaign should prove/i.test(objective) ||
+      objectiveHasCrossSectionBleed(objective) ||
+      /prove that prove/i.test(objective) ||
       objective.length < 40
     ) {
       objective = defaultObjectiveParagraph(context, answers);
@@ -1073,13 +1181,21 @@ function normalizeObjectiveSection(context, answers, fields) {
   } else {
     objective = defaultObjectiveParagraph(context, answers);
   }
-  const core =
+  let core =
     (fields && fields.coreValidationQuestion) ||
     defaultCoreValidationQuestion(context, answers);
+  core = stripCampaignWrappers(String(core || ''))
+    .replace(/^core validation question[:\s]*/i, '')
+    .replace(/\?*$/, '?')
+    .trim();
+  if (!core || core.length < 12) {
+    core = defaultCoreValidationQuestion(context, answers);
+  }
   return {
     objective,
+    // Structured fields only — do not bundle core into campaignObjective.
     coreValidationQuestion: core,
-    campaignObjective: `${objective}\n\nCore validation question:\n${core}`,
+    campaignObjective: objective,
   };
 }
 
@@ -1171,12 +1287,13 @@ function normalizeHypothesisSection(context, answers, fields) {
     // Thin "with proof, we expect X" sketches are not artifact-ready — use default.
     if (
       /\bwith proof,\s*we expect\b/i.test(h) ||
-      h.length < 80
+      h.length < 80 ||
+      hypothesisHasCrossSectionBleed(h)
     ) {
       return defaultHypothesis(context, answers);
     }
-    // Require If/then shape; otherwise fall back to polished default.
-    if (/^if\b/i.test(h) && !/primary signals|qualified replies/i.test(h)) {
+    // Require If/then shape without metric/criteria bleed.
+    if (/^if\b/i.test(h) && !hypothesisHasCrossSectionBleed(h)) {
       if (!/\.$/.test(h)) h = `${h}.`;
       return h;
     }
@@ -1184,17 +1301,31 @@ function normalizeHypothesisSection(context, answers, fields) {
   return defaultHypothesis(context, answers);
 }
 
+function looksTruncatedProofAsset(item) {
+  const s = String(item || '').trim();
+  if (!s) return true;
+  if (/the positioning is clear:/i.test(s)) return true;
+  if (/\/\s*Responsiveness\b/i.test(s)) return true;
+  if (/^(reliability|responsiveness)\b/i.test(s) && s.length < 48) return true;
+  if (/\breliability\s*\/\s*responsiveness\b/i.test(s) && s.length < 60) {
+    return true;
+  }
+  return false;
+}
+
 function normalizeProofAssetsSection(fields) {
-  // Trust operator lists only when they are complete enough; otherwise use the
-  // polished available/missing defaults so fragments cannot truncate the section.
+  // Trust operator lists only when they are complete enough and free of
+  // truncated transcript fragments; otherwise use polished defaults.
+  const rawAvailable = (fields && fields.proofAssetsAvailable) || [];
+  const rawMissing = (fields && fields.proofAssetsMissing) || [];
+  const availableClean = rawAvailable.filter((x) => !looksTruncatedProofAsset(x));
+  const missingClean = rawMissing.filter((x) => !looksTruncatedProofAsset(x));
   const available =
-    fields && fields.proofAssetsAvailable && fields.proofAssetsAvailable.length >= 4
-      ? fields.proofAssetsAvailable
+    availableClean.length >= 4
+      ? availableClean
       : [...DEFAULT_PROOF_ASSETS_AVAILABLE];
   const missing =
-    fields && fields.proofAssetsMissing && fields.proofAssetsMissing.length >= 4
-      ? fields.proofAssetsMissing
-      : [...DEFAULT_PROOF_ASSETS_MISSING];
+    missingClean.length >= 4 ? missingClean : [...DEFAULT_PROOF_ASSETS_MISSING];
   return {
     proofAssetsAvailable: uniqueStrings(available).slice(0, 8),
     proofAssetsMissing: uniqueStrings(missing).slice(0, 8),
@@ -1244,31 +1375,25 @@ function normalizeValidationMetricsSection(context, answers, fields) {
 }
 
 function normalizeApprovalCheckpointsSection(fields) {
-  const beforeList =
-    fields &&
-    fields.approvalCheckpointsBeforeListBuilding &&
-    fields.approvalCheckpointsBeforeListBuilding.length >= 3
-      ? fields.approvalCheckpointsBeforeListBuilding.map(polishCheckpointItem)
-      : [...DEFAULT_APPROVAL_BEFORE_LIST];
-  const beforeLaunch =
-    fields &&
-    fields.approvalCheckpointsBeforeLaunch &&
-    fields.approvalCheckpointsBeforeLaunch.length >= 3
-      ? fields.approvalCheckpointsBeforeLaunch.map(polishCheckpointItem)
-      : [...DEFAULT_APPROVAL_BEFORE_LAUNCH];
+  const polishList = (items) =>
+    (items || [])
+      .map(polishCheckpointItem)
+      .filter((x) => x && !looksFragmentedCheckpoint(x));
 
-  // If the operator only gave a flat fragmented list, prefer defaults unless
-  // the polished flat list is already clean and complete.
-  if (
-    fields &&
-    fields.approvalCheckpointsFlat &&
-    fields.approvalCheckpointsFlat.length >= 5 &&
-    beforeList === DEFAULT_APPROVAL_BEFORE_LIST
-  ) {
-    // Keep defaults — fragmented flat lists are not trustworthy.
+  let beforeList = polishList(
+    fields && fields.approvalCheckpointsBeforeListBuilding
+  );
+  let beforeLaunch = polishList(
+    fields && fields.approvalCheckpointsBeforeLaunch
+  );
+
+  if (beforeList.length < 3) beforeList = [...DEFAULT_APPROVAL_BEFORE_LIST];
+  if (beforeLaunch.length < 3) {
+    beforeLaunch = [...DEFAULT_APPROVAL_BEFORE_LAUNCH];
   }
 
   return {
+    approvalCheckpointsBeforeList: uniqueStrings(beforeList),
     approvalCheckpointsBeforeListBuilding: uniqueStrings(beforeList),
     approvalCheckpointsBeforeLaunch: uniqueStrings(beforeLaunch),
     approvalCheckpoints: uniqueStrings([...beforeList, ...beforeLaunch]),
@@ -1298,35 +1423,40 @@ function buildFirstCampaignPlanPreview(context, answers, opts = {}) {
     kind: ARTIFACT_KIND,
     title: PREVIEW_TITLE,
     businessName: name,
-    // Structured fields
-    objective: objectivePart.objective,
+    // Structured fields (canonical contract for renderers)
+    campaignObjective: objectivePart.campaignObjective,
     coreValidationQuestion: objectivePart.coreValidationQuestion,
+    targetSegment: segmentPart.targetSegment,
+    targetSubtype: segmentPart.targetSubtype,
     inclusionCriteria: segmentPart.inclusionCriteria,
     exclusionCriteria: segmentPart.exclusionCriteria,
-    targetSubtype: segmentPart.targetSubtype,
+    marketBound,
+    campaignHypothesis: hypothesis,
     proofAssetsAvailable: proofPart.proofAssetsAvailable,
     proofAssetsMissing: proofPart.proofAssetsMissing,
     validationMetricsPrimary: metricsPart.validationMetricsPrimary,
     validationMetricsSecondary: metricsPart.validationMetricsSecondary,
-    validationSuccessStatement: metricsPart.validationSuccessStatement,
-    approvalCheckpointsBeforeListBuilding:
-      approvalPart.approvalCheckpointsBeforeListBuilding,
+    risks: risksCautions,
+    approvalCheckpointsBeforeList:
+      approvalPart.approvalCheckpointsBeforeList,
     approvalCheckpointsBeforeLaunch:
       approvalPart.approvalCheckpointsBeforeLaunch,
-    // Rendered section bodies / compat fields
-    campaignObjective: objectivePart.campaignObjective,
-    targetSegment: segmentPart.targetSegment,
-    targetSegmentAvoid: null,
-    marketBound,
+    recommendedNextStep: resolveRecommendedNextStep(),
+    // Compat aliases for older UI / callers
+    objective: objectivePart.objective,
     hypothesis,
     proofAssetsNeeded: proofPart.proofAssetsMissing,
     validationMetrics: [
       ...metricsPart.validationMetricsPrimary,
       ...metricsPart.validationMetricsSecondary,
     ],
+    validationSuccessStatement: metricsPart.validationSuccessStatement,
     risksCautions,
+    approvalCheckpointsBeforeListBuilding:
+      approvalPart.approvalCheckpointsBeforeListBuilding,
     approvalCheckpoints: approvalPart.approvalCheckpoints,
-    recommendedNextStep: resolveRecommendedNextStep(),
+    targetSegmentAvoid: null,
+    notes: fields.notes || null,
     sectionTitles: { ...SECTION_TITLES },
     planningOnly: true,
     directional: true,
@@ -1384,12 +1514,31 @@ function formatFirstCampaignPlanPreviewMessage(preview) {
   const titles = p.sectionTitles || SECTION_TITLES;
   const lines = [p.title || PREVIEW_TITLE, ''];
 
+  // Render from structured fields only — never dump raw transcript/notes here.
+  const objective = p.campaignObjective || p.objective || '—';
+  const coreQ = p.coreValidationQuestion || '';
+  const hypothesis = p.campaignHypothesis || p.hypothesis || '—';
+  const risks = p.risks || p.risksCautions || [];
+  const beforeList =
+    p.approvalCheckpointsBeforeList ||
+    p.approvalCheckpointsBeforeListBuilding ||
+    [];
+  const beforeLaunch = p.approvalCheckpointsBeforeLaunch || [];
+
   lines.push(`1. ${titles.campaignObjective}`);
-  lines.push(formatMultilineSection(p.campaignObjective));
+  lines.push(formatMultilineSection(objective));
+  if (coreQ) {
+    lines.push('');
+    lines.push('Core validation question:');
+    lines.push(coreQ);
+  }
   lines.push('');
 
   lines.push(`2. ${titles.targetSegment}`);
   lines.push(p.targetSegment || '—');
+  if (p.targetSubtype) {
+    lines.push(`Subtype: ${p.targetSubtype}`);
+  }
   lines.push('');
   const includeLabel = /property manager/i.test(
     String((p.context && p.context.primarySegment) || p.targetSegment || '')
@@ -1411,15 +1560,12 @@ function formatFirstCampaignPlanPreviewMessage(preview) {
   lines.push('');
 
   lines.push(`4. ${titles.hypothesis}`);
-  lines.push(p.hypothesis || '—');
+  lines.push(hypothesis);
   lines.push('');
 
   lines.push(`5. ${titles.proofAssets || titles.proofAssetsNeeded}`);
   lines.push(
-    ...formatBulletBlock(
-      'Available or close to ready:',
-      p.proofAssetsAvailable
-    )
+    ...formatBulletBlock('Available or close to ready:', p.proofAssetsAvailable)
   );
   lines.push('');
   lines.push(
@@ -1443,29 +1589,25 @@ function formatFirstCampaignPlanPreviewMessage(preview) {
   lines.push('');
 
   lines.push(`7. ${titles.risksCautions}`);
-  for (const item of p.risksCautions || []) lines.push(`- ${item}`);
-  if (!(p.risksCautions || []).length) lines.push('- —');
+  for (const item of risks) lines.push(`- ${item}`);
+  if (!risks.length) lines.push('- —');
   lines.push('');
 
   lines.push(`8. ${titles.approvalCheckpoints}`);
-  lines.push(
-    ...formatBulletBlock(
-      'Before list-building:',
-      p.approvalCheckpointsBeforeListBuilding
-    )
-  );
+  lines.push(...formatBulletBlock('Before list-building:', beforeList));
   lines.push('');
-  lines.push(
-    ...formatBulletBlock(
-      'Before launch:',
-      p.approvalCheckpointsBeforeLaunch
-    )
-  );
+  lines.push(...formatBulletBlock('Before launch:', beforeLaunch));
   lines.push('');
 
   lines.push(`9. ${titles.recommendedNextStep}`);
   lines.push(p.recommendedNextStep || '—');
   lines.push('');
+
+  if (p.notes) {
+    lines.push('Notes:');
+    lines.push(formatMultilineSection(p.notes));
+    lines.push('');
+  }
 
   lines.push(p.disclaimer || PREVIEW_DISCLAIMER);
 
@@ -1601,6 +1743,7 @@ module.exports = {
   formatFirstCampaignPlanPreviewMessage,
   extractCampaignPlanFields,
   stripCampaignWrappers,
+  peelInlineIncludeExclude,
   detectPreviewRequest,
   containsForbiddenCampaignPlanningLanguage,
   extractBusinessName,
