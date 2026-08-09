@@ -79,9 +79,34 @@
         'The email is connected to the website/contact form if applicable.',
         'SPF, DKIM, and DMARC should be checked before outbound outreach.',
       ],
+      whoOwnsIt: 'Client/operator',
       completeWhen:
         name +
         ' has a working branded mailbox and someone is responsible for checking it.',
+    };
+  }
+
+  function domainConnectedGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Before outreach, ' +
+        name +
+        ' needs a domain that loads the live website. Prospects and marketing links should land on the real site over HTTPS, not an old host or parking page.',
+      whatToDo:
+        'Confirm the domain points to the live website. If not, document the needed A/CNAME change for approval.',
+      whatToConfirm: [
+        'The domain loads the live website.',
+        'Both www and non-www versions route correctly, or one redirects cleanly to the other.',
+        'The site uses HTTPS.',
+        'The domain shown in marketing materials matches the live site.',
+        'No DNS or website changes are made without explicit approval.',
+      ],
+      whoOwnsIt: 'Max can check, operator/client approves changes.',
+      completeWhen:
+        'The domain for ' +
+        name +
+        ' loads the live website over HTTPS with www/non-www routing confirmed.',
     };
   }
 
@@ -104,6 +129,7 @@
         'The person who owns replies knows how this works.',
         'Nothing here requires a password share or unapproved DNS/GBP change.',
       ],
+      whoOwnsIt: formatOwnerLabel((task && task.owner) || 'operator_guided'),
       completeWhen: title + ' is confirmed and ready for outreach.',
     };
   }
@@ -117,6 +143,9 @@
         whatToConfirm: Array.isArray(task.guidance.whatToConfirm)
           ? task.guidance.whatToConfirm
           : [],
+        whoOwnsIt:
+          task.guidance.whoOwnsIt ||
+          formatOwnerLabel(task.owner || 'operator_guided'),
         completeWhen: task.guidance.completeWhen || '',
       };
     }
@@ -124,6 +153,9 @@
     const id = String(task.id || '');
     if (itemId === 'branded_email' || /:branded_email$/.test(id)) {
       return brandedEmailGuidance(businessName);
+    }
+    if (itemId === 'domain_connected' || /:domain_connected$/.test(id)) {
+      return domainConnectedGuidance(businessName);
     }
     if (task.type === 'setup' || itemId || /^setup:/.test(id)) {
       return defaultSetupGuidance(task, businessName);
@@ -270,7 +302,7 @@
       '<section class="task-guidance-block" data-block="owner">' +
       '<h4>Who owns it</h4>' +
       '<p>' +
-      escapeHtml(ownerLabel) +
+      escapeHtml(guidance.whoOwnsIt || ownerLabel) +
       '</p>' +
       '</section>' +
       '<section class="task-guidance-block" data-block="complete">' +
@@ -418,6 +450,7 @@
     planCardHtml,
     resolveTaskGuidance,
     brandedEmailGuidance,
+    domainConnectedGuidance,
     taskGuidanceCardHtml,
     renderGrowthWorkspaceLeftPanel,
     analyzeLeftPanelHtml,
