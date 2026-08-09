@@ -205,6 +205,33 @@
     };
   }
 
+  function clearServicesGuidance(businessName) {
+    const name = shortBusinessName(businessName);
+    return {
+      whyThisMatters:
+        'Before outreach, property managers should quickly understand what ' +
+        name +
+        ' actually provides. Clear services help prospects self-identify fit and reduce vague inquiries that do not match the commercial growth plan.',
+      whatToDo:
+        'List ' +
+        name +
+        "'s primary services clearly on the website and growth materials. Emphasize recurring commercial cleaning while still showing the current service mix.",
+      whatToConfirm: [
+        'The website clearly lists the main services.',
+        'Recurring commercial cleaning is easy to understand.',
+        'Short-term rental turnovers, office cleaning, deep cleans, move-in/move-out, and residential cleaning are represented accurately.',
+        'Service descriptions do not overpromise capacity or specialized work ' +
+          name +
+          ' has not approved.',
+        'No website changes are published without approval.',
+      ],
+      whoOwnsIt: 'Operator guided',
+      completeWhen:
+        name +
+        "'s primary services are clearly stated and aligned with the approved Blueprint.",
+    };
+  }
+
   function defaultSetupGuidance(task, businessName) {
     const name = shortBusinessName(businessName);
     const title = (task && task.title) || 'this setup item';
@@ -263,6 +290,9 @@
     }
     if (itemId === 'clear_service_area' || /:clear_service_area$/.test(id)) {
       return clearServiceAreaGuidance(businessName);
+    }
+    if (itemId === 'clear_services' || /:clear_services$/.test(id)) {
+      return clearServicesGuidance(businessName);
     }
     if (task.type === 'setup' || itemId || /^setup:/.test(id)) {
       return defaultSetupGuidance(task, businessName);
@@ -562,6 +592,7 @@
     spfDkimDmarcGuidance,
     clearCtaGuidance,
     clearServiceAreaGuidance,
+    clearServicesGuidance,
     taskGuidanceCardHtml,
     renderGrowthWorkspaceLeftPanel,
     analyzeLeftPanelHtml,
