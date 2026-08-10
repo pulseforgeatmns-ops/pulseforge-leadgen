@@ -18,6 +18,12 @@ const SEGMENT_RANKING_CONFIDENCE =
 const VALIDATION_TARGET_CONFIDENCE =
   'Directional, not market-validated.';
 
+const {
+  buildArtifactSynthesisContext,
+  stripInstructionFraming,
+  asEmbeddablePhrase,
+} = require('./maxSynthesis');
+
 /** Growth Conversation intents that request a ranked segment call. */
 const RANKING_INTENTS = Object.freeze([
   'rank_segments',
@@ -599,7 +605,10 @@ function lowercaseLead(text) {
  * Blueprint / prompt language.
  */
 function composeAvoidSentence(displayName, avoidSummary) {
-  let phrase = lowercaseLead(cleanAvoidPhrase(avoidSummary));
+  let phrase = lowercaseLead(
+    asEmbeddablePhrase(cleanAvoidPhrase(avoidSummary)) ||
+      asEmbeddablePhrase(stripInstructionFraming(avoidSummary))
+  );
   if (!phrase) return '';
 
   // Final guard: if cleanup missed wrapper language, strip again rather than
@@ -607,9 +616,14 @@ function composeAvoidSentence(displayName, avoidSummary) {
   if (
     /\bshould avoid\b/i.test(phrase) ||
     /the business prefers to avoid/i.test(phrase) ||
-    /the business (?:deliberately )?avoids?\b/i.test(phrase)
+    /the business (?:deliberately )?avoids?\b/i.test(phrase) ||
+    /\bI forgot to mention\b/i.test(phrase) ||
+    /\bThis revision introduced\b/i.test(phrase)
   ) {
-    phrase = lowercaseLead(cleanAvoidPhrase(phrase));
+    phrase = lowercaseLead(
+      asEmbeddablePhrase(cleanAvoidPhrase(phrase)) ||
+        asEmbeddablePhrase(stripInstructionFraming(phrase))
+    );
   }
   if (!phrase) return '';
 
@@ -666,6 +680,26 @@ function buildInitialGrowthDirection(blueprint, opts = {}) {
   // Keep 3–5 body paragraphs; heading is separate.
   const body = paragraphs.slice(0, 5);
 
+  const synthesis = buildArtifactSynthesisContext({
+    context: {
+      businessName,
+      primarySegment: firstFocus,
+      targetMarket: primaryArea,
+      towns,
+    },
+    normalizedFacts: facts,
+    priorArtifact: {
+      businessName,
+      targetSegment: firstFocus,
+      marketBound: primaryArea
+        ? towns.length
+          ? `${towns.join(', ')} inside ${primaryArea}`
+          : primaryArea
+        : null,
+      avoidCustomers: avoid,
+    },
+  });
+
   return {
     kind: ARTIFACT_KIND,
     title: 'Initial Growth Direction',
@@ -678,6 +712,7 @@ function buildInitialGrowthDirection(blueprint, opts = {}) {
     primaryArea: primaryArea || null,
     towns,
     paragraphs: body,
+    synthesisPhrases: { ...synthesis.phrases },
     nextConversationPreview:
       'Turn this first focus into a concrete growth conversation — still understanding-led, still before campaigns or prospect lists.',
     directional: true,

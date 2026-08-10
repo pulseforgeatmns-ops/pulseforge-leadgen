@@ -46,3 +46,4 @@ Actual (pre-fix): Max repeated Prospect List Criteria Preview
 
 - `test/clientIntelligenceReasoning.test.js` — intent + progression helpers
 - `test/clientIntelligenceCampaignPlanning.test.js` — acceptance path for build proposal
+- `test/maxSynthesisLayer.test.js` — shared Max Synthesis Layer phrases + Build Proposal snapshot (bans raw prompt stitching)
