@@ -996,10 +996,16 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
       )
     );
     assert.ok(Array.isArray(criteria.requiredProspectFields));
-    assert.ok(criteria.requiredProspectFields.length >= 3);
+    assert.deepEqual(criteria.requiredProspectFields, [
+      ...DEFAULT_REQUIRED_PROSPECT_FIELDS,
+    ]);
     assert.equal(criteria.sectionTitles.requiredProspectFields, 'Required prospect record fields');
     assert.equal(criteria.sectionTitles.reviewGate, 'Review gate');
     assert.match(criteria.reviewGate, /before any list is built/i);
+    assert.doesNotMatch(
+      criteria.requiredProspectFields.join(' '),
+      /questions about|reliability|responsiveness|vague interest/i
+    );
     assert.doesNotMatch(criteria.targetSubtype || '', /-\s*Li\b|Inclusion:|Exclusion:/i);
     assert.doesNotMatch(
       criteria.marketBound || '',
@@ -1331,12 +1337,20 @@ describe('First Campaign Planning session APIs', () => {
       )
     );
     assert.ok(
-      criteria.requiredProspectFields.some((f) => /business name/i.test(f))
+      criteria.requiredProspectFields.some((f) =>
+        /company or property manager name/i.test(f)
+      )
     );
-    assert.ok(criteria.requiredProspectFields.some((f) => /town/i.test(f)));
+    assert.ok(
+      criteria.requiredProspectFields.some((f) => /confidence level/i.test(f))
+    );
+    assert.deepEqual(
+      criteria.requiredProspectFields,
+      [...DEFAULT_REQUIRED_PROSPECT_FIELDS]
+    );
     assert.doesNotMatch(
       criteria.requiredProspectFields.join(' '),
-      /photos?\/examples?/i
+      /questions about|reliability|responsiveness|vague interest|photos?\/examples?|business name|contact name/i
     );
     assert.match(criteria.reviewGate || '', /before any list is built/i);
     assert.doesNotMatch(criteria.targetSubtype || '', /-\s*Li\b|Inclusion:/i);
@@ -1386,7 +1400,7 @@ describe('First Campaign Planning session APIs', () => {
         exclusionCriteria:
           'national firms and price-only buyers. Each prospect record should include: business name, email, phone. Review gate: approve before list.',
         requiredProspectFields:
-          'business name, contact name, email, phone, property type, town',
+          'Questions about recurring service, reliability, responsiveness, scheduling, or current cleaning frustrations, Vague interest with no next step',
       }
     );
 
@@ -1401,13 +1415,12 @@ describe('First Campaign Planning session APIs', () => {
       )
     );
     assert.deepEqual(preview.requiredProspectFields, [
-      'Business name',
-      'Contact name',
-      'Email',
-      'Phone',
-      'Property type',
-      'Town',
+      ...DEFAULT_REQUIRED_PROSPECT_FIELDS,
     ]);
+    assert.doesNotMatch(
+      preview.requiredProspectFields.join(' '),
+      /questions about|reliability|responsiveness|scheduling|vague interest|cleaning frustrations/i
+    );
     assert.equal(preview.reviewGate, DEFAULT_REVIEW_GATE);
     assert.doesNotMatch(preview.targetSubtype, /-\s*Li\b|Inclusion:/i);
     assert.doesNotMatch(

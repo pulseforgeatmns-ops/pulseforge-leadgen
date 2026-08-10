@@ -1647,7 +1647,13 @@
         .filter((item) => !towns.test(item))
         .filter((item) => !isTruncatedCriteriaText(item))
         .filter((item) => !/\s[-–—]\s+located in\b/i.test(item))
-        .filter((item) => !/each prospect record|review gate/i.test(item));
+        .filter((item) => !/each prospect record|review gate/i.test(item))
+        .filter(
+          (item) =>
+            !/\b(questions about|recurring service|reliability|responsiveness|scheduling|cleaning frustrations|vague interest|no next step)\b/i.test(
+              item
+            )
+        );
     }
 
     function renderProspectListCriteriaPreview(preview) {
