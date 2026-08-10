@@ -41,9 +41,12 @@ Actual (pre-fix): Max repeated Prospect List Criteria Preview
 - [x] “Approved. Before we build anything…” produces Prospect List Build Proposal
 - [x] Approved Prospect List Criteria Preview is not repeated
 - [x] Guardrails preserved (no list/outreach/account changes without approval)
+- [x] After Build Proposal approval + “generate the first reviewable prospect list batch”, advance to `prospect_list_draft_requested` / draft generated
+- [x] Explicit planning states: `prospect_list_criteria_approved`, `prospect_list_build_proposal_approved`, `prospect_list_draft_requested`, `prospect_list_draft_generated`, `prospect_list_draft_reviewed`
+- [x] Replay guard: when `approvedArtifacts` includes criteria preview + build proposal, never ask “Before building a prospect list, define what should qualify or disqualify…”
 
 ## Testing
 
 - `test/clientIntelligenceReasoning.test.js` — intent + progression helpers
-- `test/clientIntelligenceCampaignPlanning.test.js` — acceptance path for build proposal
+- `test/clientIntelligenceCampaignPlanning.test.js` — acceptance path for build proposal + reviewable draft transcript
 - `test/maxSynthesisLayer.test.js` — shared Max Synthesis Layer phrases + Build Proposal snapshot (bans raw prompt stitching)

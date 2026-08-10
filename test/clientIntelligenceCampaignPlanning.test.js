@@ -1663,3 +1663,113 @@ describe('SPEC-091 Prospect List Build Proposal progression', () => {
     assert.match(uiSource, /Approach only — no prospect list built yet/);
   });
 });
+
+describe('Reviewable prospect list draft progression', () => {
+  const APPROVAL_PLUS =
+    'Approved. Before we build anything, tell me how you would approach building the first prospect list for this test...';
+  const DRAFT_REQ =
+    'Now generate the first reviewable prospect list batch. This is a reviewable list draft only. No outreach copy, sends, CRM writes, or account changes.';
+
+  async function reachBuildProposal(store) {
+    await seedApprovedSession(store);
+    await startCampaignPlanningConversation('int-campaign-1', { store });
+    await postCampaignPlanningMessage(
+      'int-campaign-1',
+      'Keep property managers as defined.',
+      { store }
+    );
+    await postCampaignPlanningMessage(
+      'int-campaign-1',
+      [
+        'Prove that multi-family property managers will book walkthroughs.',
+        'Inclusion: local HOA / multi-family managers with recurring needs.',
+        'Exclusion: national property firms and lowest-price shoppers.',
+      ].join(' '),
+      { store }
+    );
+    return postCampaignPlanningMessage('int-campaign-1', APPROVAL_PLUS, {
+      store,
+    });
+  }
+
+  it('transcript: approve criteria → build proposal → approve → draft request advances to draft', async () => {
+    const store = createMemoryStore();
+    const build = await reachBuildProposal(store);
+    assert.ok(build.prospectListBuildProposal);
+    assert.equal(build.intent, 'produce_build_proposal');
+
+    const approvedBuild = await postCampaignPlanningMessage(
+      'int-campaign-1',
+      'Approved',
+      { store }
+    );
+    assert.equal(
+      approvedBuild.campaignPlanning.step,
+      'prospect_list_build_proposal_approved'
+    );
+    assert.equal(approvedBuild.intent, 'build_proposal_approved');
+    assert.equal(
+      approvedBuild.prospectListBuildProposal.status,
+      'approved'
+    );
+    assert.doesNotMatch(
+      approvedBuild.message,
+      /Before building a prospect list, define what should qualify or disqualify/
+    );
+
+    const draft = await postCampaignPlanningMessage(
+      'int-campaign-1',
+      DRAFT_REQ,
+      { store }
+    );
+
+    assert.ok(
+      draft.intent === 'produce_prospect_list_draft' ||
+        draft.campaignPlanning.step === 'prospect_list_draft_requested' ||
+        draft.campaignPlanning.step === 'prospect_list_draft_generated'
+    );
+    assert.ok(
+      draft.prospectListDraft ||
+        draft.reviewableProspectListDraft ||
+        draft.campaignPlanning.step === 'prospect_list_draft_requested' ||
+        draft.campaignPlanning.step === 'prospect_list_draft_generated'
+    );
+    assert.equal(
+      draft.prospectListDraft && draft.prospectListDraft.kind,
+      'reviewable_prospect_list_draft'
+    );
+    assert.equal(draft.prospectListDraft.outreachCopyGenerated, false);
+    assert.equal(draft.prospectListDraft.accountChangesMade, false);
+    assert.equal(draft.prospectListDraft.crmWritesMade, false);
+    assert.match(draft.message, /Reviewable Prospect List Draft/i);
+    assert.doesNotMatch(
+      draft.message,
+      /Before building a prospect list, define what should qualify or disqualify/
+    );
+
+    const session = await store.getSession('int-campaign-1');
+    const approved = session.interview_state.reasoningMemory.approvedArtifacts;
+    assert.ok(
+      approved.includes('prospect_list_criteria_preview') ||
+        approved.includes('prospect_criteria')
+    );
+    assert.ok(approved.includes('prospect_list_build_proposal'));
+  });
+
+  it('does not re-ask criteria after criteria + build proposal approval', async () => {
+    const store = createMemoryStore();
+    await reachBuildProposal(store);
+    await postCampaignPlanningMessage('int-campaign-1', 'Approved', { store });
+    const draft = await postCampaignPlanningMessage(
+      'int-campaign-1',
+      DRAFT_REQ,
+      { store }
+    );
+    assert.doesNotMatch(
+      draft.message,
+      /Before building a prospect list, define what should qualify or disqualify/
+    );
+    assert.notEqual(draft.intent, 'preview_approved');
+    assert.notEqual(draft.campaignPlanning.currentAsk, 'prospectListCriteria');
+  });
+});
