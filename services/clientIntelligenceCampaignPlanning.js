@@ -20,6 +20,7 @@ const {
   isBannedCriteriaReplayQuestion,
   looksLikeProspectListDraftRequest,
   looksLikeScoutHandoffBriefRequest,
+  looksLikeHandBriefToScoutRequest,
   looksLikeLiveSourcingApproval,
   classifyProspectAcquisitionIntent,
   PROSPECT_ACQUISITION_INTENTS,
@@ -34,6 +35,16 @@ const {
   findRawPromptFragments,
   asEmbeddablePhrase,
 } = require('./maxSynthesis');
+const {
+  SCOUT_HANDOFF_KIND,
+  SCOUT_HANDOFF_STATUSES,
+  SCOUT_HANDOFF_UI_STATUS,
+  SCOUT_SOURCING_NOT_WIRED_MESSAGE,
+  buildScoutHandoff,
+  handBriefToScout,
+  isScoutSourcingExecutionWired,
+  uiStatusForHandoff,
+} = require('./scoutHandoff');
 
 const ARTIFACT_KIND = 'first_campaign_plan_preview';
 const PREVIEW_TITLE = 'First Campaign Plan Preview';
@@ -64,7 +75,7 @@ const LIVE_PROSPECT_LIST_TITLE = 'Live Public-Source Prospect List';
 const SCOUT_HANDOFF_BRIEF_KIND = 'scout_handoff_brief';
 const SCOUT_HANDOFF_BRIEF_TITLE = 'Scout Handoff Brief';
 const SCOUT_HANDOFF_BRIEF_DISCLAIMER =
-  'Scout Handoff Brief only. Max did not build a prospect list. Scout inspects public sources; no outreach copy, sends, CRM writes, or account changes have been created or launched.';
+  'Scout Handoff Brief only. Max did not build a prospect list and did not hand this brief to Scout yet. No outreach copy, sends, CRM writes, or account changes have been created or launched.';
 
 /** Explicit post-build-proposal planning states (SPEC-091 continuation). */
 const CAMPAIGN_PLANNING_STATES = Object.freeze({
@@ -74,12 +85,19 @@ const CAMPAIGN_PLANNING_STATES = Object.freeze({
   PROSPECT_LIST_DRAFT_GENERATED: 'prospect_list_draft_generated',
   PROSPECT_LIST_DRAFT_REVIEWED: 'prospect_list_draft_reviewed',
   SCOUT_HANDOFF_BRIEF: 'scout_handoff_brief',
+  SCOUT_HANDOFF_APPROVED: 'scout_handoff_approved',
+  SCOUT_HANDOFF_QUEUED: 'scout_handoff_queued',
+  SCOUT_HANDOFF_IN_PROGRESS: 'scout_handoff_in_progress',
+  SCOUT_HANDOFF_COMPLETED: 'scout_handoff_completed',
+  SCOUT_HANDOFF_NOT_WIRED: 'scout_handoff_not_wired',
+  SCOUT_HANDOFF_FAILED: 'scout_handoff_failed',
   LIVE_SOURCING_APPROVED: 'live_sourcing_approved',
   LIVE_SOURCING_UNAVAILABLE: 'live_sourcing_unavailable',
   LIVE_SOURCING_GENERATED: 'live_sourcing_generated',
 });
 
 const SCOUT_HANDOFF_SECTION_TITLES = Object.freeze({
+  handoffStatus: 'Handoff status',
   campaignObjective: 'Campaign objective',
   targetSegmentSubtype: 'Target segment / subtype',
   marketBounds: 'Market bounds',
@@ -116,7 +134,8 @@ const DEFAULT_SCOUT_CONFIDENCE_RULES = Object.freeze([
 
 const DEFAULT_SCOUT_HANDOFF_GUARDRAILS = Object.freeze([
   'Max does not build or fabricate the prospect list in this step',
-  'Scout inspects public sources only',
+  'Creating this brief does not hand it to Scout — say “Hand this brief to Scout” to approve and queue',
+  'Scout inspects public sources only when sourcing execution is wired',
   'No outreach copy, sends, CRM writes, or account/DNS/GBP/social/tracking changes',
   'Operator reviews Scout’s returned batch before any enrichment expansion or outreach',
 ]);
@@ -2256,7 +2275,7 @@ function produceLiveSourcingResult(ctx, answers, slots, opts, leadIn) {
 
 /**
  * Planning handoff for Scout — uses approved campaign/list criteria.
- * Does not perform live sourcing and must not hit the sourcing capability boundary.
+ * Creates a draft Scout handoff object. Does not queue Scout or perform sourcing.
  */
 function buildScoutHandoffBrief(context, slots, opts = {}) {
   const ctx = context || {};
@@ -2297,16 +2316,54 @@ function buildScoutHandoffBrief(context, slots, opts = {}) {
       null
   );
   const reviewGate =
-    'Operator reviews Scout’s returned prospect batch against this brief before outreach, enrichment expansion, CRM writes, or launch. Max does not source prospects in this step.';
+    'Operator reviews Scout’s returned prospect batch against this brief before outreach, enrichment expansion, CRM writes, or launch. Creating this brief does not hand it to Scout.';
 
   const targetSegmentSubtype = [targetSegment, targetSubtype]
     .filter(Boolean)
     .join(' — ');
 
+  const priorHandoff =
+    opts.priorScoutHandoff ||
+    (opts.priorScoutHandoffBrief && opts.priorScoutHandoffBrief.scoutHandoff) ||
+    null;
+
+  const scoutHandoff = buildScoutHandoff(
+    {
+      ...(priorHandoff || {}),
+      campaignObjective,
+      targetSegment,
+      targetSubtype,
+      marketBounds,
+      inclusionCriteria,
+      exclusionCriteria,
+      requiredFields: requiredProspectFields,
+      requiredProspectFields,
+      sourceTypes: [...DEFAULT_SCOUT_SOURCE_TYPES],
+      evidenceRequirements: [...DEFAULT_SCOUT_EVIDENCE],
+      evidenceRequired: [...DEFAULT_SCOUT_EVIDENCE],
+      confidenceRules: [...DEFAULT_SCOUT_CONFIDENCE_RULES],
+      guardrails: [...DEFAULT_SCOUT_HANDOFF_GUARDRAILS],
+      status: SCOUT_HANDOFF_STATUSES.DRAFT,
+      scoutRan: false,
+      sourcingUnavailable: false,
+      executionWired: null,
+      workRequestId: null,
+      workRequest: null,
+      candidateBatch: null,
+      resultsApproved: false,
+    },
+    {
+      handoffId: priorHandoff && priorHandoff.handoffId,
+      createdAt: priorHandoff && priorHandoff.createdAt,
+    }
+  );
+
   return {
     kind: SCOUT_HANDOFF_BRIEF_KIND,
     title: SCOUT_HANDOFF_BRIEF_TITLE,
     businessName: name,
+    handoffId: scoutHandoff.handoffId,
+    scoutHandoff,
     campaignObjective,
     targetSegment,
     targetSubtype,
@@ -2316,8 +2373,10 @@ function buildScoutHandoffBrief(context, slots, opts = {}) {
     inclusionCriteria,
     exclusionCriteria,
     requiredProspectFields,
+    requiredFields: requiredProspectFields,
     sourceTypes: [...DEFAULT_SCOUT_SOURCE_TYPES],
     evidenceRequired: [...DEFAULT_SCOUT_EVIDENCE],
+    evidenceRequirements: [...DEFAULT_SCOUT_EVIDENCE],
     confidenceRules: [...DEFAULT_SCOUT_CONFIDENCE_RULES],
     reviewGate,
     guardrails: [...DEFAULT_SCOUT_HANDOFF_GUARDRAILS],
@@ -2325,15 +2384,20 @@ function buildScoutHandoffBrief(context, slots, opts = {}) {
     planningOnly: true,
     prospectListGenerated: false,
     liveSourcingPerformed: false,
+    scoutRan: false,
+    handedToScout: false,
     outreachCopyGenerated: false,
     accountChangesMade: false,
     crmWritesMade: false,
     campaignsGenerated: false,
-    status: 'draft',
+    status: SCOUT_HANDOFF_STATUSES.DRAFT,
+    uiStatus: scoutHandoff.uiStatus || SCOUT_HANDOFF_UI_STATUS.BRIEF_CREATED,
     disclaimer: SCOUT_HANDOFF_BRIEF_DISCLAIMER,
     recommendedNextStep:
-      'Hand this brief to Scout. Scout inspects public sources and returns evidenced prospects for operator review. Max does not live-source here.',
+      'Say “Hand this brief to Scout” to approve and queue a Scout work request. Creating this brief alone does not start Scout.',
     generatedAt: new Date().toISOString(),
+    createdAt: scoutHandoff.createdAt,
+    updatedAt: scoutHandoff.updatedAt,
     blueprintId: opts.blueprintId || ctx.blueprintId || null,
     blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion || null,
     basedOnCriteriaStatus: (criteria && criteria.status) || 'approved',
@@ -2344,6 +2408,19 @@ function formatScoutHandoffBriefMessage(brief) {
   const p = brief || {};
   const titles = p.sectionTitles || SCOUT_HANDOFF_SECTION_TITLES;
   const lines = [p.title || SCOUT_HANDOFF_BRIEF_TITLE, ''];
+
+  lines.push(`0. ${titles.handoffStatus || 'Handoff status'}`);
+  lines.push(
+    p.uiStatus ||
+      (p.scoutHandoff && p.scoutHandoff.uiStatus) ||
+      SCOUT_HANDOFF_UI_STATUS.BRIEF_CREATED
+  );
+  if (p.handoffId || (p.scoutHandoff && p.scoutHandoff.handoffId)) {
+    lines.push(
+      `handoffId: ${p.handoffId || p.scoutHandoff.handoffId}`
+    );
+  }
+  lines.push('');
 
   lines.push(`1. ${titles.campaignObjective}`);
   lines.push(p.campaignObjective || '—');
@@ -2372,8 +2449,12 @@ function formatScoutHandoffBriefMessage(brief) {
   lines.push('');
 
   lines.push(`6. ${titles.requiredProspectFields}`);
-  for (const item of p.requiredProspectFields || []) lines.push(`- ${item}`);
-  if (!(p.requiredProspectFields || []).length) lines.push('- —');
+  for (const item of p.requiredProspectFields || p.requiredFields || []) {
+    lines.push(`- ${item}`);
+  }
+  if (!((p.requiredProspectFields || p.requiredFields || []).length)) {
+    lines.push('- —');
+  }
   lines.push('');
 
   lines.push(`7. ${titles.sourceTypes}`);
@@ -2382,8 +2463,12 @@ function formatScoutHandoffBriefMessage(brief) {
   lines.push('');
 
   lines.push(`8. ${titles.evidenceRequired}`);
-  for (const item of p.evidenceRequired || []) lines.push(`- ${item}`);
-  if (!(p.evidenceRequired || []).length) lines.push('- —');
+  for (const item of p.evidenceRequired || p.evidenceRequirements || []) {
+    lines.push(`- ${item}`);
+  }
+  if (!((p.evidenceRequired || p.evidenceRequirements || []).length)) {
+    lines.push('- —');
+  }
   lines.push('');
 
   lines.push(`9. ${titles.confidenceRules}`);
@@ -2433,6 +2518,8 @@ function produceScoutHandoffBriefResult(ctx, answers, slots, opts, leadIn) {
     priorPreview: opts.priorPreview || null,
     priorCriteriaPreview: opts.priorCriteriaPreview || null,
     priorBuildProposal: opts.priorBuildProposal || null,
+    priorScoutHandoffBrief: opts.priorScoutHandoffBrief || null,
+    priorScoutHandoff: opts.priorScoutHandoff || null,
     blueprintId: opts.blueprintId,
     blueprintVersion: opts.blueprintVersion,
   });
@@ -2445,12 +2532,18 @@ function produceScoutHandoffBriefResult(ctx, answers, slots, opts, leadIn) {
     message: lines.join('\n'),
     step: CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_BRIEF,
     answers,
-    slots: briefSlots,
+    slots: {
+      ...briefSlots,
+      scoutHandoffBriefGenerated: true,
+    },
     preview: opts.priorPreview || null,
     criteriaPreview: opts.priorCriteriaPreview || null,
     buildProposal: opts.priorBuildProposal || null,
     prospectListDraft: opts.priorProspectListDraft || null,
     scoutHandoffBrief: brief,
+    scoutHandoff: brief.scoutHandoff,
+    scoutWorkRequest: null,
+    scoutCandidateBatch: null,
     liveProspectList: null,
     intent: PROSPECT_ACQUISITION_INTENTS.CREATE_SCOUT_HANDOFF_BRIEF,
     previewApproved: true,
@@ -2458,6 +2551,140 @@ function produceScoutHandoffBriefResult(ctx, answers, slots, opts, leadIn) {
     buildProposalApproved: Boolean(briefSlots.buildProposalApproved),
     liveSourcingApproved: false,
     planningState: CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_BRIEF,
+    currentAsk: null,
+  };
+}
+
+function planningStateForHandoffResult(result) {
+  if (!result) return CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_NOT_WIRED;
+  if (result.sourcingUnavailable) {
+    return CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_NOT_WIRED;
+  }
+  if (result.intent === 'scout_handoff_completed') {
+    return CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_COMPLETED;
+  }
+  if (result.intent === 'scout_sourcing_failed') {
+    return CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_FAILED;
+  }
+  const status = result.handoff && result.handoff.status;
+  if (status === SCOUT_HANDOFF_STATUSES.QUEUED) {
+    return CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_QUEUED;
+  }
+  if (status === SCOUT_HANDOFF_STATUSES.IN_PROGRESS) {
+    return CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_IN_PROGRESS;
+  }
+  if (status === SCOUT_HANDOFF_STATUSES.APPROVED) {
+    return CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_APPROVED;
+  }
+  return CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_NOT_WIRED;
+}
+
+/**
+ * Approve the Scout Handoff Brief and create/queue a Scout work request.
+ * If Scout sourcing is not wired, returns the capability boundary — no placeholders.
+ */
+function produceHandBriefToScoutResult(ctx, answers, slots, opts, leadIn) {
+  const briefSlots = {
+    ...slots,
+    previewApproved: true,
+    criteriaGenerated: true,
+    criteriaApproved: true,
+    buildProposalGenerated: Boolean(
+      slots.buildProposalGenerated ||
+        slots.buildProposalApproved ||
+        opts.priorBuildProposal
+    ),
+    buildProposalApproved: Boolean(
+      slots.buildProposalApproved ||
+        (opts.priorBuildProposal &&
+          opts.priorBuildProposal.status === 'approved')
+    ),
+  };
+
+  const priorBrief = opts.priorScoutHandoffBrief || null;
+  const priorHandoff =
+    opts.priorScoutHandoff ||
+    (priorBrief && priorBrief.scoutHandoff) ||
+    null;
+
+  // Ensure a draft handoff/brief exists from approved criteria before queuing.
+  const brief =
+    priorBrief && priorBrief.kind === SCOUT_HANDOFF_BRIEF_KIND
+      ? {
+          ...priorBrief,
+          scoutHandoff:
+            priorHandoff ||
+            priorBrief.scoutHandoff ||
+            buildScoutHandoff(priorBrief),
+        }
+      : buildScoutHandoffBrief(ctx, briefSlots, {
+          answers,
+          priorPreview: opts.priorPreview || null,
+          priorCriteriaPreview: opts.priorCriteriaPreview || null,
+          priorBuildProposal: opts.priorBuildProposal || null,
+          priorScoutHandoff: priorHandoff,
+          blueprintId: opts.blueprintId,
+          blueprintVersion: opts.blueprintVersion,
+        });
+
+  const handoffFields = brief.scoutHandoff || buildScoutHandoff(brief);
+  const result = handBriefToScout(handoffFields, opts);
+
+  const nextBrief = {
+    ...brief,
+    handoffId: result.handoff.handoffId,
+    scoutHandoff: result.handoff,
+    status: result.handoff.status,
+    uiStatus: result.handoff.uiStatus,
+    handedToScout: true,
+    scoutRan: Boolean(result.scoutRan),
+    liveSourcingPerformed: false,
+    prospectListGenerated: false,
+    workRequestId: result.workRequest && result.workRequest.workRequestId,
+    updatedAt: result.handoff.updatedAt,
+    recommendedNextStep: result.sourcingUnavailable
+      ? 'Scout sourcing execution is the next build gap — not a Max failure. Wire Scout public-source sourcing to this handoff.'
+      : result.scoutRan
+        ? 'Review Scout candidates. Approve before Composer / CRM / export use. No outreach or CRM writes yet.'
+        : 'Scout work request queued.',
+    disclaimer: result.sourcingUnavailable
+      ? SCOUT_SOURCING_NOT_WIRED_MESSAGE
+      : 'Scout handoff results are review-only. No outreach copy, sends, CRM writes, or account changes have been made.',
+  };
+
+  const planningState = planningStateForHandoffResult(result);
+  const lines = [];
+  if (leadIn) lines.push(leadIn, '');
+  lines.push(result.message);
+
+  return {
+    message: lines.join('\n'),
+    step: planningState,
+    answers,
+    slots: {
+      ...briefSlots,
+      scoutHandoffBriefGenerated: true,
+      scoutHandoffApproved: true,
+      scoutHandoffQueued: Boolean(
+        result.workRequest &&
+          (result.executionWired || result.sourcingUnavailable)
+      ),
+    },
+    preview: opts.priorPreview || null,
+    criteriaPreview: opts.priorCriteriaPreview || null,
+    buildProposal: opts.priorBuildProposal || null,
+    prospectListDraft: opts.priorProspectListDraft || null,
+    scoutHandoffBrief: nextBrief,
+    scoutHandoff: result.handoff,
+    scoutWorkRequest: result.workRequest,
+    scoutCandidateBatch: result.candidateBatch,
+    liveProspectList: null,
+    intent: result.intent,
+    previewApproved: true,
+    criteriaApproved: true,
+    buildProposalApproved: Boolean(briefSlots.buildProposalApproved),
+    liveSourcingApproved: false,
+    planningState,
     currentAsk: null,
   };
 }
@@ -4164,7 +4391,61 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
     priorSlots.previewApproved = true;
   }
 
-  // Scout Handoff Brief — planning artifact; never live-sourcing / capability boundary.
+  // Hand brief to Scout — approve + queue work request (or clear not-wired boundary).
+  if (
+    looksLikeHandBriefToScoutRequest(userMessage) ||
+    classifyProspectAcquisitionIntent(userMessage) ===
+      PROSPECT_ACQUISITION_INTENTS.HAND_BRIEF_TO_SCOUT
+  ) {
+    const answersEarly = { ...(prior.answers || {}) };
+    const syncedEarly = syncAnswersFromSlots(answersEarly, {
+      ...priorSlots,
+      previewGenerated: true,
+      previewApproved: true,
+      criteriaGenerated: true,
+      criteriaApproved: true,
+    });
+    return produceHandBriefToScoutResult(
+      ctx,
+      syncedEarly,
+      {
+        ...priorSlots,
+        previewGenerated: true,
+        previewApproved: true,
+        criteriaGenerated: true,
+        criteriaApproved: true,
+      },
+      {
+        ...opts,
+        priorPreview,
+        priorCriteriaPreview:
+          opts.priorCriteriaPreview ||
+          prior.prospectListCriteriaPreview ||
+          prior.criteriaPreview ||
+          null,
+        priorBuildProposal:
+          opts.priorBuildProposal ||
+          prior.prospectListBuildProposal ||
+          prior.buildProposal ||
+          null,
+        priorProspectListDraft:
+          opts.priorProspectListDraft ||
+          prior.prospectListDraft ||
+          prior.reviewableProspectListDraft ||
+          null,
+        priorScoutHandoffBrief:
+          opts.priorScoutHandoffBrief || prior.scoutHandoffBrief || null,
+        priorScoutHandoff:
+          opts.priorScoutHandoff ||
+          prior.scoutHandoff ||
+          (prior.scoutHandoffBrief && prior.scoutHandoffBrief.scoutHandoff) ||
+          null,
+      },
+      'Approving the Scout Handoff Brief and creating a Scout work request. Max will not claim Scout inspected sources unless Scout actually ran.'
+    );
+  }
+
+  // Scout Handoff Brief — planning artifact only; does not queue Scout.
   if (
     looksLikeScoutHandoffBriefRequest(userMessage) ||
     classifyProspectAcquisitionIntent(userMessage) ===
@@ -4206,8 +4487,15 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
           prior.prospectListDraft ||
           prior.reviewableProspectListDraft ||
           null,
+        priorScoutHandoffBrief:
+          opts.priorScoutHandoffBrief || prior.scoutHandoffBrief || null,
+        priorScoutHandoff:
+          opts.priorScoutHandoff ||
+          prior.scoutHandoff ||
+          (prior.scoutHandoffBrief && prior.scoutHandoffBrief.scoutHandoff) ||
+          null,
       },
-      'Creating the Scout Handoff Brief from approved campaign/list criteria. Scout will inspect public sources — Max is not live-sourcing here.'
+      'Creating the Scout Handoff Brief from approved campaign/list criteria. This is planning only — say “Hand this brief to Scout” to approve and queue Scout.'
     );
   }
 
@@ -4643,6 +4931,33 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
         );
       }
 
+      if (artifactAction.action === 'hand_brief_to_scout') {
+        return produceHandBriefToScoutResult(
+          ctx,
+          syncedAnswers,
+          {
+            ...slots,
+            previewApproved: true,
+            criteriaGenerated: true,
+            criteriaApproved: true,
+          },
+          {
+            ...replyOpts,
+            priorScoutHandoffBrief:
+              opts.priorScoutHandoffBrief ||
+              prior.scoutHandoffBrief ||
+              null,
+            priorScoutHandoff:
+              opts.priorScoutHandoff ||
+              prior.scoutHandoff ||
+              (prior.scoutHandoffBrief && prior.scoutHandoffBrief.scoutHandoff) ||
+              null,
+          },
+          artifactAction.note ||
+            'Approving the Scout Handoff Brief and creating a Scout work request.'
+        );
+      }
+
       if (artifactAction.action === 'emit_scout_handoff_brief') {
         return produceScoutHandoffBriefResult(
           ctx,
@@ -4653,9 +4968,18 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
             criteriaGenerated: true,
             criteriaApproved: true,
           },
-          replyOpts,
+          {
+            ...replyOpts,
+            priorScoutHandoffBrief:
+              opts.priorScoutHandoffBrief || prior.scoutHandoffBrief || null,
+            priorScoutHandoff:
+              opts.priorScoutHandoff ||
+              prior.scoutHandoff ||
+              (prior.scoutHandoffBrief && prior.scoutHandoffBrief.scoutHandoff) ||
+              null,
+          },
           artifactAction.note ||
-            'Creating the Scout Handoff Brief from approved campaign/list criteria. Scout will inspect public sources — Max is not live-sourcing here.'
+            'Creating the Scout Handoff Brief from approved campaign/list criteria. This is planning only — say “Hand this brief to Scout” to approve and queue Scout.'
         );
       }
 
@@ -5077,6 +5401,10 @@ module.exports = {
   SCOUT_HANDOFF_BRIEF_TITLE,
   SCOUT_HANDOFF_BRIEF_DISCLAIMER,
   SCOUT_HANDOFF_SECTION_TITLES,
+  SCOUT_HANDOFF_KIND,
+  SCOUT_HANDOFF_STATUSES,
+  SCOUT_HANDOFF_UI_STATUS,
+  SCOUT_SOURCING_NOT_WIRED_MESSAGE,
   SECTION_TITLES,
   CRITERIA_SECTION_TITLES,
   BUILD_PROPOSAL_SECTION_TITLES,
@@ -5126,9 +5454,14 @@ module.exports = {
   buildScoutHandoffBrief,
   formatScoutHandoffBriefMessage,
   produceScoutHandoffBriefResult,
+  produceHandBriefToScoutResult,
   isLivePublicSourcingSupported,
+  isScoutSourcingExecutionWired,
   produceLiveSourcingResult,
   formatLiveSourcedProspectListMessage,
+  buildScoutHandoff,
+  handBriefToScout,
+  uiStatusForHandoff,
   markCriteriaPreviewApproved,
   markBuildProposalApproved,
   emptySlots,

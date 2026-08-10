@@ -26,6 +26,7 @@ const {
   looksLikeApprovalPlusNextRequest,
   looksLikeProspectListDraftRequest,
   looksLikeScoutHandoffBriefRequest,
+  looksLikeHandBriefToScoutRequest,
   looksLikeLiveSourcingApproval,
   classifyProspectAcquisitionIntent,
   PROSPECT_ACQUISITION_INTENTS,
@@ -522,6 +523,8 @@ describe('Live sourcing approval after prospect list draft', () => {
   const SCOUT_HANDOFF =
     'Do not build the prospect list directly as Max. Create a Scout Handoff Brief using the approved campaign/list criteria. Scout’s job is to inspect public sources and gather prospects with evidence.';
 
+  const HAND_TO_SCOUT = 'Hand this brief to Scout';
+
   it('detects live_sourcing_approved from explicit approval + public sources + real prospects', () => {
     assert.equal(looksLikeLiveSourcingApproval(LIVE_APPROVAL), true);
     assert.equal(looksLikeProspectListDraftRequest(LIVE_APPROVAL), false);
@@ -541,6 +544,45 @@ describe('Live sourcing approval after prospect list draft', () => {
       classifyProspectAcquisitionIntent(LIVE_APPROVAL),
       PROSPECT_ACQUISITION_INTENTS.PERFORM_LIVE_SOURCING
     );
+  });
+
+  it('routes Hand this brief to Scout separately from create brief', () => {
+    assert.equal(looksLikeHandBriefToScoutRequest(HAND_TO_SCOUT), true);
+    assert.equal(looksLikeScoutHandoffBriefRequest(HAND_TO_SCOUT), false);
+    assert.equal(looksLikeLiveSourcingApproval(HAND_TO_SCOUT), false);
+    assert.equal(
+      classifyProspectAcquisitionIntent(HAND_TO_SCOUT),
+      PROSPECT_ACQUISITION_INTENTS.HAND_BRIEF_TO_SCOUT
+    );
+
+    let mem = emptyReasoningMemory();
+    mem = markArtifactApproved(mem, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    mem = markArtifactApproved(
+      mem,
+      ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW
+    );
+    mem = markArtifactApproved(
+      mem,
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    );
+
+    const action = resolveCampaignArtifactAction({
+      userMessage: HAND_TO_SCOUT,
+      memory: mem,
+      priorCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+      },
+      priorBuildProposal: {
+        kind: 'prospect_list_build_proposal',
+        status: 'approved',
+      },
+      step: 'scout_handoff_brief',
+    });
+
+    assert.equal(action.action, 'hand_brief_to_scout');
+    assert.notEqual(action.action, 'emit_scout_handoff_brief');
+    assert.notEqual(action.action, 'emit_live_sourcing');
   });
 
   it('routes Scout Handoff Brief to emit_scout_handoff_brief, not live sourcing', () => {

@@ -581,6 +581,38 @@
       font-size: 0.8rem;
       line-height: 1.45;
     }
+    .scout-handoff-status {
+      display: inline-block;
+      margin: 0.15rem 0 0.85rem;
+      padding: 0.28rem 0.55rem;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 6px;
+      font-size: 0.78rem;
+      letter-spacing: 0.02em;
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .scout-handoff-status.is-unavailable {
+      border-color: rgba(230, 184, 77, 0.45);
+      background: rgba(230, 184, 77, 0.12);
+      color: var(--cie-warn);
+    }
+    .scout-handoff-status.is-ready {
+      border-color: rgba(110, 231, 183, 0.4);
+      background: rgba(110, 231, 183, 0.12);
+      color: #bbf7d0;
+    }
+    .scout-handoff-meta {
+      font-size: 0.78rem;
+      opacity: 0.8;
+      margin-bottom: 0.75rem;
+    }
+    .scout-candidate-row {
+      margin: 0.35rem 0;
+    }
+    .scout-candidate-row a {
+      color: inherit;
+      text-decoration: underline;
+    }
     .error {
       position: fixed;
       left: 1.5rem;
@@ -1043,6 +1075,10 @@
       firstCampaignPlanPreview: null,
       prospectListCriteriaPreview: null,
       prospectListBuildProposal: null,
+      scoutHandoffBrief: null,
+      scoutHandoff: null,
+      scoutWorkRequest: null,
+      scoutCandidateBatch: null,
       growthPlan: null,
       workspaceTab: 'overview',
       isSample: false,
@@ -1790,6 +1826,177 @@
       );
     }
 
+    function scoutHandoffStatusClass(uiStatus) {
+      const s = String(uiStatus || '');
+      if (/unavailable|not wired/i.test(s)) return ' is-unavailable';
+      if (/results ready/i.test(s)) return ' is-ready';
+      return '';
+    }
+
+    function renderScoutHandoffBrief(brief) {
+      if (!brief) return '';
+      const titles = brief.sectionTitles || {};
+      const handoff = brief.scoutHandoff || state.scoutHandoff || null;
+      const uiStatus =
+        brief.uiStatus ||
+        (handoff && handoff.uiStatus) ||
+        'Brief created';
+      const workRequest =
+        (handoff && handoff.workRequest) ||
+        state.scoutWorkRequest ||
+        null;
+      const batch =
+        (handoff && handoff.candidateBatch) ||
+        state.scoutCandidateBatch ||
+        null;
+      const candidates = (batch && batch.candidates) || [];
+      const candidateHtml = candidates.length
+        ? '<p><strong>Scout candidates (review-only)</strong></p><ul class="completion-checks">' +
+          candidates
+            .map((row) => {
+              const url = row.sourceUrl || row.website || '';
+              const link = url
+                ? '<a href="' +
+                  escapeHtml(url) +
+                  '" target="_blank" rel="noopener noreferrer">' +
+                  escapeHtml(url) +
+                  '</a>'
+                : '—';
+              return (
+                '<li class="scout-candidate-row">' +
+                escapeHtml(row.companyName || 'Unknown') +
+                ' · ' +
+                escapeHtml(row.location || '—') +
+                ' · ' +
+                link +
+                '<br>Fit: ' +
+                escapeHtml(row.fitRationale || row.fitReason || '—') +
+                '<br>Role: ' +
+                escapeHtml(row.suggestedContactRole || row.contactRole || '—') +
+                ' · Risks: ' +
+                escapeHtml(row.risks || '—') +
+                ' · Confidence: ' +
+                escapeHtml(row.confidence || '—') +
+                '</li>'
+              );
+            })
+            .join('') +
+          '</ul>'
+        : '';
+      return (
+        '<div class="growth-direction" id="scoutHandoffBrief">' +
+          '<p class="growth-kicker">Scout Handoff Brief</p>' +
+          '<div class="scout-handoff-status' +
+            scoutHandoffStatusClass(uiStatus) +
+          '">' +
+            escapeHtml(uiStatus) +
+          '</div>' +
+          (brief.handoffId || (handoff && handoff.handoffId)
+            ? '<p class="scout-handoff-meta">handoffId: ' +
+              escapeHtml(brief.handoffId || handoff.handoffId) +
+              '</p>'
+            : '') +
+          (workRequest && workRequest.workRequestId
+            ? '<p class="scout-handoff-meta">workRequestId: ' +
+              escapeHtml(workRequest.workRequestId) +
+              (workRequest.sourcingUnavailable
+                ? ' · Scout sourcing not wired'
+                : '') +
+              '</p>'
+            : '') +
+          '<p><strong>1. ' +
+            escapeHtml(titles.campaignObjective || 'Campaign objective') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(brief.campaignObjective)) + '</p>' +
+          '<p><strong>2. ' +
+            escapeHtml(titles.targetSegmentSubtype || 'Target segment / subtype') +
+          '</strong></p>' +
+          '<p>' +
+            escapeHtml(
+              criteriaPlainText(
+                brief.targetSegmentSubtype ||
+                  [brief.targetSegment, brief.targetSubtype]
+                    .filter(Boolean)
+                    .join(' — ')
+              )
+            ) +
+          '</p>' +
+          '<p><strong>3. ' +
+            escapeHtml(titles.marketBounds || 'Market bounds') +
+          '</strong></p>' +
+          '<p>' +
+            escapeHtml(
+              criteriaPlainText(brief.marketBounds || brief.marketBound)
+            ) +
+          '</p>' +
+          '<p><strong>4. ' +
+            escapeHtml(titles.inclusionCriteria || 'Inclusion criteria') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(brief.inclusionCriteria),
+            'No inclusion criteria listed yet.'
+          ) +
+          '<p><strong>5. ' +
+            escapeHtml(titles.exclusionCriteria || 'Exclusion criteria') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(brief.exclusionCriteria),
+            'No exclusion criteria listed yet.'
+          ) +
+          '<p><strong>6. ' +
+            escapeHtml(titles.requiredProspectFields || 'Required prospect fields') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(brief.requiredProspectFields || brief.requiredFields),
+            'No required fields listed yet.'
+          ) +
+          '<p><strong>7. ' +
+            escapeHtml(titles.sourceTypes || 'Source types Scout should inspect') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(brief.sourceTypes),
+            'No source types listed yet.'
+          ) +
+          '<p><strong>8. ' +
+            escapeHtml(titles.evidenceRequired || 'Evidence Scout must attach') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(
+              brief.evidenceRequired || brief.evidenceRequirements
+            ),
+            'No evidence requirements listed yet.'
+          ) +
+          '<p><strong>9. ' +
+            escapeHtml(titles.confidenceRules || 'Confidence rules') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(brief.confidenceRules),
+            'No confidence rules listed yet.'
+          ) +
+          '<p><strong>10. ' +
+            escapeHtml(titles.reviewGate || 'Review gate') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(brief.reviewGate)) + '</p>' +
+          '<p><strong>11. ' +
+            escapeHtml(titles.guardrails || 'Guardrails') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(brief.guardrails),
+            'No guardrails listed yet.'
+          ) +
+          candidateHtml +
+          '<p><strong>Recommended next step</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(brief.recommendedNextStep)) + '</p>' +
+          '<p class="growth-disclaimer">' +
+            escapeHtml(
+              brief.disclaimer ||
+                'Scout Handoff Brief only. Creating this brief does not hand it to Scout.'
+            ) +
+          '</p>' +
+        '</div>'
+      );
+    }
+
     function renderCompletion(result) {
       const bp = (result && result.blueprint) || state.blueprint;
       const playbook = (result && result.playbook) || null;
@@ -2017,7 +2224,15 @@
         els.completeActions.hidden = true;
         setGrowthPreviewActionsVisible(false);
         if (els.growthWorkspaceActions) els.growthWorkspaceActions.hidden = true;
-        if (state.prospectListBuildProposal) {
+        if (state.scoutHandoffBrief) {
+          els.sidePanelTitle.textContent = 'Scout Handoff';
+          els.sidePanelSub.textContent =
+            state.scoutHandoffBrief.uiStatus ||
+            'Brief created — hand to Scout to queue';
+          els.sidePanel.innerHTML = renderScoutHandoffBrief(
+            state.scoutHandoffBrief
+          );
+        } else if (state.prospectListBuildProposal) {
           els.sidePanelTitle.textContent = 'Prospect List Build Proposal';
           els.sidePanelSub.textContent =
             'Approach only — no prospect list built yet';
@@ -2967,6 +3182,12 @@
       state.campaignPlanningConversationActive = false;
       state.firstGrowthPlanPreview = null;
       state.firstCampaignPlanPreview = null;
+      state.prospectListCriteriaPreview = null;
+      state.prospectListBuildProposal = null;
+      state.scoutHandoffBrief = null;
+      state.scoutHandoff = null;
+      state.scoutWorkRequest = null;
+      state.scoutCandidateBatch = null;
       state.growthInfrastructureReadinessReport = null;
       state.isSample = false;
       state.taskGuidanceOpen = false;
@@ -3065,6 +3286,29 @@
           }
           if (data && data.prospectListBuildProposal) {
             state.prospectListBuildProposal = data.prospectListBuildProposal;
+          }
+          if (data && data.scoutHandoffBrief) {
+            state.scoutHandoffBrief = data.scoutHandoffBrief;
+          }
+          if (data && data.scoutHandoff) {
+            state.scoutHandoff = data.scoutHandoff;
+          }
+          if (data && data.scoutWorkRequest) {
+            state.scoutWorkRequest = data.scoutWorkRequest;
+          }
+          if (data && data.scoutCandidateBatch) {
+            state.scoutCandidateBatch = data.scoutCandidateBatch;
+          }
+          if (data && data.scoutHandoffBrief) {
+            els.sidePanel.innerHTML = renderScoutHandoffBrief(
+              data.scoutHandoffBrief
+            );
+            els.sidePanelTitle.textContent = 'Scout Handoff';
+            els.sidePanelSub.textContent =
+              data.scoutHandoffBrief.uiStatus ||
+              (data.scoutHandoff && data.scoutHandoff.uiStatus) ||
+              'Brief created';
+          } else if (data && data.prospectListBuildProposal) {
             els.sidePanel.innerHTML = renderProspectListBuildProposal(
               data.prospectListBuildProposal
             );

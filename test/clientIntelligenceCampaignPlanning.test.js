@@ -2058,60 +2058,68 @@ describe('Reviewable prospect list draft progression', () => {
       buildCampaignPlanningReply,
       LIVE_SOURCING_BOUNDARY_MESSAGE,
       SCOUT_HANDOFF_BRIEF_TITLE,
+      SCOUT_HANDOFF_UI_STATUS,
+      SCOUT_SOURCING_NOT_WIRED_MESSAGE,
     } = require('../services/clientIntelligenceCampaignPlanning');
 
     const handoffAsk =
       'Do not build the prospect list directly as Max. Create a Scout Handoff Brief using the approved campaign/list criteria. Scout’s job is to inspect public sources and gather prospects with evidence.';
 
-    const reply = buildCampaignPlanningReply(
-      handoffAsk,
-      {
-        step: 'prospect_list_build_proposal_approved',
-        slots: {
-          previewGenerated: true,
-          previewApproved: true,
-          criteriaGenerated: true,
-          criteriaApproved: true,
-          inclusionCriteria: ['Local property managers in approved towns'],
-          exclusionCriteria: ['National chains'],
-          buildProposalGenerated: true,
-          buildProposalApproved: true,
-        },
-        prospectListCriteriaPreview: {
-          kind: 'prospect_list_criteria_preview',
-          status: 'approved',
-          campaignObjective:
-            'Validate whether local property managers will book a walkthrough.',
-          targetSegment: 'Property managers and facility contacts',
-          targetSubtype: 'multi-family and small commercial portfolios',
-          marketBound: 'Greater Manchester NH pilot towns',
-          inclusionCriteria: ['Local property managers in approved towns'],
-          exclusionCriteria: ['National chains'],
-          requiredProspectFields: [
-            'Company or property manager name',
-            'Website or source URL',
-            'Location',
-          ],
-          reviewGate: 'Operator reviews criteria before list build.',
-        },
-        prospectListBuildProposal: {
-          kind: 'prospect_list_build_proposal',
-          status: 'approved',
-        },
+    const prior = {
+      step: 'prospect_list_build_proposal_approved',
+      slots: {
+        previewGenerated: true,
+        previewApproved: true,
+        criteriaGenerated: true,
+        criteriaApproved: true,
+        inclusionCriteria: ['Local property managers in approved towns'],
+        exclusionCriteria: ['National chains'],
+        buildProposalGenerated: true,
+        buildProposalApproved: true,
       },
-      {
-        businessName: 'Anchor Cleaning',
-        primarySegment: 'property_managers',
-        targetMarket: 'Greater Manchester',
-      }
-    );
+      prospectListCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+        campaignObjective:
+          'Validate whether local property managers will book a walkthrough.',
+        targetSegment: 'Property managers and facility contacts',
+        targetSubtype: 'multi-family and small commercial portfolios',
+        marketBound: 'Greater Manchester NH pilot towns',
+        inclusionCriteria: ['Local property managers in approved towns'],
+        exclusionCriteria: ['National chains'],
+        requiredProspectFields: [
+          'Company or property manager name',
+          'Website or source URL',
+          'Location',
+        ],
+        reviewGate: 'Operator reviews criteria before list build.',
+      },
+      prospectListBuildProposal: {
+        kind: 'prospect_list_build_proposal',
+        status: 'approved',
+      },
+    };
+    const ctx = {
+      businessName: 'Anchor Cleaning',
+      primarySegment: 'property_managers',
+      targetMarket: 'Greater Manchester',
+    };
+
+    const reply = buildCampaignPlanningReply(handoffAsk, prior, ctx);
 
     assert.equal(reply.intent, 'create_scout_handoff_brief');
     assert.equal(reply.liveSourcingApproved, false);
     assert.ok(reply.scoutHandoffBrief);
+    assert.ok(reply.scoutHandoff);
     assert.equal(reply.scoutHandoffBrief.kind, 'scout_handoff_brief');
+    assert.equal(reply.scoutHandoff.source, 'max');
+    assert.equal(reply.scoutHandoff.target, 'scout');
+    assert.equal(reply.scoutHandoff.status, 'draft');
+    assert.equal(reply.scoutHandoffBrief.uiStatus, SCOUT_HANDOFF_UI_STATUS.BRIEF_CREATED);
     assert.equal(reply.message.includes(LIVE_SOURCING_BOUNDARY_MESSAGE), false);
+    assert.equal(reply.message.includes(SCOUT_SOURCING_NOT_WIRED_MESSAGE), false);
     assert.match(reply.message, new RegExp(SCOUT_HANDOFF_BRIEF_TITLE));
+    assert.match(reply.message, /Brief created/i);
     assert.match(reply.message, /Campaign objective/i);
     assert.match(reply.message, /Target segment \/ subtype/i);
     assert.match(reply.message, /Market bounds/i);
@@ -2123,7 +2131,176 @@ describe('Reviewable prospect list draft progression', () => {
     assert.match(reply.message, /Confidence rules/i);
     assert.match(reply.message, /Review gate/i);
     assert.match(reply.message, /Guardrails/i);
+    assert.match(reply.message, /Hand this brief to Scout/i);
     assert.equal(reply.scoutHandoffBrief.liveSourcingPerformed, false);
     assert.equal(reply.scoutHandoffBrief.prospectListGenerated, false);
+    assert.equal(reply.scoutHandoffBrief.handedToScout, false);
+    assert.equal(reply.scoutHandoffBrief.scoutRan, false);
+    assert.equal(reply.scoutWorkRequest, null);
+  });
+
+  it('Hand this brief to Scout creates work request or not-wired boundary — never pretends Scout ran', () => {
+    const {
+      buildCampaignPlanningReply,
+      SCOUT_SOURCING_NOT_WIRED_MESSAGE,
+      SCOUT_HANDOFF_UI_STATUS,
+    } = require('../services/clientIntelligenceCampaignPlanning');
+
+    const prior = {
+      step: 'scout_handoff_brief',
+      slots: {
+        previewGenerated: true,
+        previewApproved: true,
+        criteriaGenerated: true,
+        criteriaApproved: true,
+        buildProposalGenerated: true,
+        buildProposalApproved: true,
+        scoutHandoffBriefGenerated: true,
+      },
+      prospectListCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+        campaignObjective: 'Validate walkthrough demand',
+        targetSegment: 'Property managers',
+        targetSubtype: 'multi-family',
+        marketBound: 'Greater Manchester NH',
+        inclusionCriteria: ['Local property managers'],
+        exclusionCriteria: ['National chains'],
+        requiredProspectFields: ['Company name', 'Source URL', 'Location'],
+      },
+      prospectListBuildProposal: {
+        kind: 'prospect_list_build_proposal',
+        status: 'approved',
+      },
+      scoutHandoffBrief: {
+        kind: 'scout_handoff_brief',
+        status: 'draft',
+        campaignObjective: 'Validate walkthrough demand',
+        targetSegment: 'Property managers',
+        targetSubtype: 'multi-family',
+        marketBounds: 'Greater Manchester NH',
+        inclusionCriteria: ['Local property managers'],
+        exclusionCriteria: ['National chains'],
+        requiredProspectFields: ['Company name', 'Source URL', 'Location'],
+        scoutHandoff: {
+          kind: 'scout_handoff',
+          handoffId: 'test-handoff-1',
+          source: 'max',
+          target: 'scout',
+          status: 'draft',
+          campaignObjective: 'Validate walkthrough demand',
+          targetSegment: 'Property managers',
+          targetSubtype: 'multi-family',
+          marketBounds: 'Greater Manchester NH',
+          inclusionCriteria: ['Local property managers'],
+          exclusionCriteria: ['National chains'],
+          requiredFields: ['Company name', 'Source URL', 'Location'],
+          sourceTypes: ['Public directories'],
+          evidenceRequirements: ['Source URL'],
+          confidenceRules: ['High with source URL'],
+          guardrails: ['No CRM writes'],
+          createdAt: '2026-08-10T00:00:00.000Z',
+          updatedAt: '2026-08-10T00:00:00.000Z',
+        },
+      },
+    };
+
+    const reply = buildCampaignPlanningReply(
+      'Hand this brief to Scout',
+      prior,
+      {
+        businessName: 'Anchor Cleaning',
+        primarySegment: 'property_managers',
+        targetMarket: 'Greater Manchester',
+      }
+    );
+
+    assert.equal(reply.intent, 'scout_sourcing_not_wired');
+    assert.ok(reply.scoutWorkRequest);
+    assert.ok(reply.scoutWorkRequest.workRequestId);
+    assert.equal(reply.scoutHandoff.scoutRan, false);
+    assert.equal(reply.scoutHandoffBrief.scoutRan, false);
+    assert.match(reply.message, new RegExp(SCOUT_SOURCING_NOT_WIRED_MESSAGE));
+    assert.equal(
+      reply.scoutHandoff.uiStatus,
+      SCOUT_HANDOFF_UI_STATUS.SCOUT_UNAVAILABLE
+    );
+    assert.doesNotMatch(reply.message, /Scout inspected public sources/i);
+    assert.doesNotMatch(reply.message, /placeholder/i);
+    assert.equal(reply.scoutCandidateBatch, null);
+    assert.equal(reply.liveSourcingApproved, false);
+    assert.equal(reply.scoutHandoff.crmWritesMade, false);
+    assert.equal(reply.scoutHandoff.outreachCopyGenerated, false);
+  });
+
+  it('Hand this brief to Scout with wired sourcing returns review-only candidates with URLs', () => {
+    const {
+      buildCampaignPlanningReply,
+      SCOUT_HANDOFF_UI_STATUS,
+    } = require('../services/clientIntelligenceCampaignPlanning');
+
+    const reply = buildCampaignPlanningReply(
+      'Hand this brief to Scout',
+      {
+        step: 'scout_handoff_brief',
+        slots: {
+          previewGenerated: true,
+          previewApproved: true,
+          criteriaGenerated: true,
+          criteriaApproved: true,
+          buildProposalGenerated: true,
+          buildProposalApproved: true,
+        },
+        prospectListCriteriaPreview: {
+          kind: 'prospect_list_criteria_preview',
+          status: 'approved',
+          campaignObjective: 'Validate walkthrough demand',
+          targetSegment: 'Property managers',
+          marketBound: 'Manchester NH',
+          inclusionCriteria: ['Local'],
+          exclusionCriteria: ['Chains'],
+          requiredProspectFields: ['Company name', 'Source URL'],
+        },
+        prospectListBuildProposal: {
+          kind: 'prospect_list_build_proposal',
+          status: 'approved',
+        },
+      },
+      {
+        businessName: 'Anchor Cleaning',
+        primarySegment: 'property_managers',
+        targetMarket: 'Manchester',
+      },
+      {
+        scoutSourcingFn: () => [
+          {
+            companyName: 'Granite PM',
+            sourceUrl: 'https://example.com/granite',
+            location: 'Manchester NH',
+            fitRationale: 'In-market PM',
+            suggestedContactRole: 'Owner',
+            risks: 'None noted',
+            confidence: 'high',
+          },
+        ],
+      }
+    );
+
+    assert.equal(reply.intent, 'scout_handoff_completed');
+    assert.equal(reply.scoutHandoff.scoutRan, true);
+    assert.equal(
+      reply.scoutHandoff.uiStatus,
+      SCOUT_HANDOFF_UI_STATUS.SCOUT_RESULTS_READY
+    );
+    assert.ok(reply.scoutCandidateBatch);
+    assert.equal(reply.scoutCandidateBatch.reviewOnly, true);
+    assert.equal(reply.scoutCandidateBatch.resultsApproved, false);
+    assert.ok(reply.scoutCandidateBatch.candidates.length >= 1);
+    for (const row of reply.scoutCandidateBatch.candidates) {
+      assert.ok(row.sourceUrl);
+    }
+    assert.equal(reply.scoutCandidateBatch.crmWritesMade, false);
+    assert.equal(reply.scoutCandidateBatch.outreachCopyGenerated, false);
+    assert.doesNotMatch(reply.message, /placeholder/i);
   });
 });

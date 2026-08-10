@@ -7044,6 +7044,13 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       (session.interview_state.prospectListDraft ||
         session.interview_state.reviewableProspectListDraft)) ||
     null;
+  const priorScoutHandoffBrief =
+    (session.interview_state && session.interview_state.scoutHandoffBrief) ||
+    null;
+  const priorScoutHandoff =
+    (session.interview_state && session.interview_state.scoutHandoff) ||
+    (priorScoutHandoffBrief && priorScoutHandoffBrief.scoutHandoff) ||
+    null;
 
   // SPEC-090/091 — classify intent before workflow handling.
   let reasoningMemory = ensureReasoningMemory(session.interview_state || {});
@@ -7129,6 +7136,8 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       prospectListCriteriaPreview: priorCriteriaPreview,
       prospectListBuildProposal: priorBuildProposal,
       prospectListDraft: priorProspectListDraft,
+      scoutHandoffBrief: priorScoutHandoffBrief,
+      scoutHandoff: priorScoutHandoff,
     },
     context,
     {
@@ -7138,6 +7147,8 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       priorCriteriaPreview,
       priorBuildProposal,
       priorProspectListDraft,
+      priorScoutHandoffBrief,
+      priorScoutHandoff,
       messageClass,
       artifactAction,
       reasoningMemory,
@@ -7208,6 +7219,10 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     reply.intent === 'build_proposal_approved' ||
     reply.intent === 'produce_prospect_list_draft' ||
     reply.intent === 'create_scout_handoff_brief' ||
+    reply.intent === 'hand_brief_to_scout' ||
+    reply.intent === 'scout_sourcing_not_wired' ||
+    reply.intent === 'scout_handoff_completed' ||
+    reply.intent === 'scout_sourcing_failed' ||
     reply.intent === 'live_sourcing_unavailable' ||
     reply.intent === 'produce_live_sourced_prospects'
       ? priorBuildProposal
@@ -7219,6 +7234,10 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       reply.intent === 'build_proposal_approved' ||
       reply.intent === 'produce_prospect_list_draft' ||
       reply.intent === 'create_scout_handoff_brief' ||
+      reply.intent === 'hand_brief_to_scout' ||
+      reply.intent === 'scout_sourcing_not_wired' ||
+      reply.intent === 'scout_handoff_completed' ||
+      reply.intent === 'scout_sourcing_failed' ||
       reply.intent === 'live_sourcing_unavailable' ||
       reply.intent === 'produce_live_sourced_prospects') &&
     nextBuildProposal.status !== 'approved'
@@ -7236,12 +7255,19 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       ? priorProspectListDraft
       : reply.intent === 'live_sourcing_unavailable' ||
           reply.intent === 'produce_live_sourced_prospects' ||
-          reply.intent === 'create_scout_handoff_brief'
+          reply.intent === 'create_scout_handoff_brief' ||
+          reply.intent === 'hand_brief_to_scout' ||
+          reply.intent === 'scout_sourcing_not_wired' ||
+          reply.intent === 'scout_handoff_completed' ||
+          reply.intent === 'scout_sourcing_failed'
         ? priorProspectListDraft
         : null);
 
   const nextLiveProspectList = reply.liveProspectList || null;
   const nextScoutHandoffBrief = reply.scoutHandoffBrief || null;
+  const nextScoutHandoff = reply.scoutHandoff || null;
+  const nextScoutWorkRequest = reply.scoutWorkRequest || null;
+  const nextScoutCandidateBatch = reply.scoutCandidateBatch || null;
   const liveSourcingApproved = Boolean(
     reply.liveSourcingApproved ||
       (reply.slots && reply.slots.liveSourcingApproved) ||
@@ -7250,6 +7276,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
 
   const nextStatus =
     reply.scoutHandoffBrief ||
+    reply.scoutHandoff ||
     reply.liveProspectList ||
     reply.prospectListDraft ||
     reply.buildProposal ||
@@ -7276,6 +7303,10 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       ? { draftRequested: true, draftGenerated: true }
       : {}),
     ...(nextScoutHandoffBrief ? { scoutHandoffBriefGenerated: true } : {}),
+    ...(nextScoutHandoff && nextScoutHandoff.status !== 'draft'
+      ? { scoutHandoffApproved: true }
+      : {}),
+    ...(nextScoutWorkRequest ? { scoutHandoffQueued: true } : {}),
     ...(liveSourcingApproved ? { liveSourcingApproved: true } : {}),
   };
   const nextPlanning = {
@@ -7318,6 +7349,13 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
         : {}),
       ...(nextScoutHandoffBrief
         ? { scoutHandoffBrief: nextScoutHandoffBrief }
+        : {}),
+      ...(nextScoutHandoff ? { scoutHandoff: nextScoutHandoff } : {}),
+      ...(nextScoutWorkRequest
+        ? { scoutWorkRequest: nextScoutWorkRequest }
+        : {}),
+      ...(nextScoutCandidateBatch
+        ? { scoutCandidateBatch: nextScoutCandidateBatch }
         : {}),
       reasoningMemory: (() => {
         let mem = reasoningMemory;
@@ -7367,6 +7405,15 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
             ARTIFACT_KINDS.SCOUT_HANDOFF_BRIEF,
             nextScoutHandoffBrief.status || 'draft'
           );
+          if (
+            nextScoutHandoffBrief.status &&
+            nextScoutHandoffBrief.status !== 'draft'
+          ) {
+            mem = markArtifactApproved(
+              mem,
+              ARTIFACT_KINDS.SCOUT_HANDOFF_BRIEF
+            );
+          }
         }
         if (liveSourcingApproved) {
           mem = markLiveSourcingApproved(mem);
@@ -7414,6 +7461,20 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       nextScoutHandoffBrief ||
       (session.interview_state &&
         session.interview_state.scoutHandoffBrief) ||
+      null,
+    scoutHandoff:
+      nextScoutHandoff ||
+      (session.interview_state && session.interview_state.scoutHandoff) ||
+      null,
+    scoutWorkRequest:
+      nextScoutWorkRequest ||
+      (session.interview_state &&
+        session.interview_state.scoutWorkRequest) ||
+      null,
+    scoutCandidateBatch:
+      nextScoutCandidateBatch ||
+      (session.interview_state &&
+        session.interview_state.scoutCandidateBatch) ||
       null,
     liveProspectList:
       nextLiveProspectList ||
