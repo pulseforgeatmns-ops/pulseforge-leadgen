@@ -9,6 +9,17 @@ const { diagnoseScoutPlaces } = require('../services/scoutPlacesDiagnostic');
 
 const anthropic = new Anthropic();
 
+/** Agents handled by dedicated cron handlers (not CRON_MODULES run()). */
+const CRON_SPECIAL_HANDLERS = Object.freeze({
+  'scout-places-diagnostic': 'scoutPlacesDiagnostic',
+  scout_places_diagnostic: 'scoutPlacesDiagnostic',
+});
+
+function isScoutPlacesDiagnosticAgent(agent) {
+  const key = String(agent || '').trim();
+  return CRON_SPECIAL_HANDLERS[key] === 'scoutPlacesDiagnostic';
+}
+
 const CRON_MODULES = {
   scout:     '../leadgen',
   emmett:    '../emmettAgent',
@@ -379,12 +390,19 @@ router.post('/cron/scoutExpansion', handleScoutExpansionCron);
 router.get('/cron/scoutExpansion', handleScoutExpansionCron);
 router.post('/cron/pulse-health', handlePulseHealthCron);
 router.get('/cron/pulse-health', handlePulseHealthCron);
+// Dedicated path (preferred). Also registered in /cron/:agent dispatcher below so
+// production never returns Unknown agent: scout-places-diagnostic.
 router.post('/cron/scout-places-diagnostic', handleScoutPlacesDiagnostic);
 router.get('/cron/scout-places-diagnostic', handleScoutPlacesDiagnostic);
+router.post('/cron/scout_places_diagnostic', handleScoutPlacesDiagnostic);
+router.get('/cron/scout_places_diagnostic', handleScoutPlacesDiagnostic);
 router.post('/internal/cron/max-decay', createMaxDecayCronHandler());
 
 router.post('/cron/:agent', async (req, res) => {
   const { agent } = req.params;
+  if (isScoutPlacesDiagnosticAgent(agent)) {
+    return handleScoutPlacesDiagnostic(req, res);
+  }
   const secret = req.body?.secret || req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -394,6 +412,9 @@ router.post('/cron/:agent', async (req, res) => {
 
 router.get('/cron/:agent', async (req, res) => {
   const { agent } = req.params;
+  if (isScoutPlacesDiagnosticAgent(agent)) {
+    return handleScoutPlacesDiagnostic(req, res);
+  }
   const secret = req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -402,3 +423,6 @@ router.get('/cron/:agent', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.handleScoutPlacesDiagnostic = handleScoutPlacesDiagnostic;
+module.exports.isScoutPlacesDiagnosticAgent = isScoutPlacesDiagnosticAgent;
+module.exports.CRON_SPECIAL_HANDLERS = CRON_SPECIAL_HANDLERS;
