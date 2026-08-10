@@ -2052,4 +2052,78 @@ describe('Reviewable prospect list draft progression', () => {
     assert.equal(reply.liveProspectList.crmWritesMade, false);
     assert.equal(reply.liveProspectList.accountChangesMade, false);
   });
+
+  it('Scout Handoff Brief returns planning artifact, not live-sourcing boundary', () => {
+    const {
+      buildCampaignPlanningReply,
+      LIVE_SOURCING_BOUNDARY_MESSAGE,
+      SCOUT_HANDOFF_BRIEF_TITLE,
+    } = require('../services/clientIntelligenceCampaignPlanning');
+
+    const handoffAsk =
+      'Do not build the prospect list directly as Max. Create a Scout Handoff Brief using the approved campaign/list criteria. Scout’s job is to inspect public sources and gather prospects with evidence.';
+
+    const reply = buildCampaignPlanningReply(
+      handoffAsk,
+      {
+        step: 'prospect_list_build_proposal_approved',
+        slots: {
+          previewGenerated: true,
+          previewApproved: true,
+          criteriaGenerated: true,
+          criteriaApproved: true,
+          inclusionCriteria: ['Local property managers in approved towns'],
+          exclusionCriteria: ['National chains'],
+          buildProposalGenerated: true,
+          buildProposalApproved: true,
+        },
+        prospectListCriteriaPreview: {
+          kind: 'prospect_list_criteria_preview',
+          status: 'approved',
+          campaignObjective:
+            'Validate whether local property managers will book a walkthrough.',
+          targetSegment: 'Property managers and facility contacts',
+          targetSubtype: 'multi-family and small commercial portfolios',
+          marketBound: 'Greater Manchester NH pilot towns',
+          inclusionCriteria: ['Local property managers in approved towns'],
+          exclusionCriteria: ['National chains'],
+          requiredProspectFields: [
+            'Company or property manager name',
+            'Website or source URL',
+            'Location',
+          ],
+          reviewGate: 'Operator reviews criteria before list build.',
+        },
+        prospectListBuildProposal: {
+          kind: 'prospect_list_build_proposal',
+          status: 'approved',
+        },
+      },
+      {
+        businessName: 'Anchor Cleaning',
+        primarySegment: 'property_managers',
+        targetMarket: 'Greater Manchester',
+      }
+    );
+
+    assert.equal(reply.intent, 'create_scout_handoff_brief');
+    assert.equal(reply.liveSourcingApproved, false);
+    assert.ok(reply.scoutHandoffBrief);
+    assert.equal(reply.scoutHandoffBrief.kind, 'scout_handoff_brief');
+    assert.equal(reply.message.includes(LIVE_SOURCING_BOUNDARY_MESSAGE), false);
+    assert.match(reply.message, new RegExp(SCOUT_HANDOFF_BRIEF_TITLE));
+    assert.match(reply.message, /Campaign objective/i);
+    assert.match(reply.message, /Target segment \/ subtype/i);
+    assert.match(reply.message, /Market bounds/i);
+    assert.match(reply.message, /Inclusion criteria/i);
+    assert.match(reply.message, /Exclusion criteria/i);
+    assert.match(reply.message, /Required prospect fields/i);
+    assert.match(reply.message, /Source types Scout should inspect/i);
+    assert.match(reply.message, /Evidence Scout must attach/i);
+    assert.match(reply.message, /Confidence rules/i);
+    assert.match(reply.message, /Review gate/i);
+    assert.match(reply.message, /Guardrails/i);
+    assert.equal(reply.scoutHandoffBrief.liveSourcingPerformed, false);
+    assert.equal(reply.scoutHandoffBrief.prospectListGenerated, false);
+  });
 });

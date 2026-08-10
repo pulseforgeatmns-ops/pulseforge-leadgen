@@ -19,11 +19,13 @@ const {
   shouldBlockCriteriaQuestionReplay,
   isBannedCriteriaReplayQuestion,
   looksLikeProspectListDraftRequest,
+  looksLikeScoutHandoffBriefRequest,
   looksLikeLiveSourcingApproval,
+  classifyProspectAcquisitionIntent,
+  PROSPECT_ACQUISITION_INTENTS,
   looksLikeReviseCriteriaRequest,
   shouldForceProspectListDraft,
   inferApprovedArtifactsFromMessage,
-  isLiveSourcingApproved,
 } = require('./clientIntelligenceReasoning');
 const {
   buildArtifactSynthesisContext,
@@ -59,6 +61,11 @@ const LIVE_SOURCING_BOUNDARY_MESSAGE =
 const LIVE_PROSPECT_LIST_KIND = 'live_sourced_prospect_list';
 const LIVE_PROSPECT_LIST_TITLE = 'Live Public-Source Prospect List';
 
+const SCOUT_HANDOFF_BRIEF_KIND = 'scout_handoff_brief';
+const SCOUT_HANDOFF_BRIEF_TITLE = 'Scout Handoff Brief';
+const SCOUT_HANDOFF_BRIEF_DISCLAIMER =
+  'Scout Handoff Brief only. Max did not build a prospect list. Scout inspects public sources; no outreach copy, sends, CRM writes, or account changes have been created or launched.';
+
 /** Explicit post-build-proposal planning states (SPEC-091 continuation). */
 const CAMPAIGN_PLANNING_STATES = Object.freeze({
   PROSPECT_LIST_CRITERIA_APPROVED: 'prospect_list_criteria_approved',
@@ -66,10 +73,53 @@ const CAMPAIGN_PLANNING_STATES = Object.freeze({
   PROSPECT_LIST_DRAFT_REQUESTED: 'prospect_list_draft_requested',
   PROSPECT_LIST_DRAFT_GENERATED: 'prospect_list_draft_generated',
   PROSPECT_LIST_DRAFT_REVIEWED: 'prospect_list_draft_reviewed',
+  SCOUT_HANDOFF_BRIEF: 'scout_handoff_brief',
   LIVE_SOURCING_APPROVED: 'live_sourcing_approved',
   LIVE_SOURCING_UNAVAILABLE: 'live_sourcing_unavailable',
   LIVE_SOURCING_GENERATED: 'live_sourcing_generated',
 });
+
+const SCOUT_HANDOFF_SECTION_TITLES = Object.freeze({
+  campaignObjective: 'Campaign objective',
+  targetSegmentSubtype: 'Target segment / subtype',
+  marketBounds: 'Market bounds',
+  inclusionCriteria: 'Inclusion criteria',
+  exclusionCriteria: 'Exclusion criteria',
+  requiredProspectFields: 'Required prospect fields',
+  sourceTypes: 'Source types Scout should inspect',
+  evidenceRequired: 'Evidence Scout must attach',
+  confidenceRules: 'Confidence rules',
+  reviewGate: 'Review gate',
+  guardrails: 'Guardrails',
+});
+
+const DEFAULT_SCOUT_SOURCE_TYPES = Object.freeze([
+  'Public business directories and local listings for the approved segment',
+  'Company websites and about/contact pages that confirm location and role signals',
+  'Public property / facility / office manager listings when relevant to the segment',
+  'Other openly published local-market sources — no private or gated scrapes',
+]);
+
+const DEFAULT_SCOUT_EVIDENCE = Object.freeze([
+  'Source URL for each prospect record',
+  'Location / market-town evidence matching approved bounds',
+  'Segment or subtype signal from the public source',
+  'Fit rationale grounded in visible public facts (not invented)',
+  'Any disqualifying risk or uncertainty noted on the record',
+]);
+
+const DEFAULT_SCOUT_CONFIDENCE_RULES = Object.freeze([
+  'High — source URL + in-market location + clear segment/subtype + reachable decision-maker signal',
+  'Medium — source URL + in-market location + segment fit, but thin contact or subtype evidence',
+  'Low / review_required — missing source URL, weak market match, or ambiguous fit; do not treat as ready',
+]);
+
+const DEFAULT_SCOUT_HANDOFF_GUARDRAILS = Object.freeze([
+  'Max does not build or fabricate the prospect list in this step',
+  'Scout inspects public sources only',
+  'No outreach copy, sends, CRM writes, or account/DNS/GBP/social/tracking changes',
+  'Operator reviews Scout’s returned batch before any enrichment expansion or outreach',
+]);
 
 const DRAFT_SECTION_TITLES = Object.freeze({
   batchSummary: 'Batch summary',
@@ -2204,6 +2254,214 @@ function produceLiveSourcingResult(ctx, answers, slots, opts, leadIn) {
   };
 }
 
+/**
+ * Planning handoff for Scout — uses approved campaign/list criteria.
+ * Does not perform live sourcing and must not hit the sourcing capability boundary.
+ */
+function buildScoutHandoffBrief(context, slots, opts = {}) {
+  const ctx = context || {};
+  const s = slots || {};
+  const answers = opts.answers || syncAnswersFromSlots({}, s);
+  const criteria =
+    opts.priorCriteriaPreview ||
+    buildProspectListCriteriaPreview(ctx, s, {
+      answers,
+      priorPreview: opts.priorPreview || null,
+      blueprintId: opts.blueprintId,
+      blueprintVersion: opts.blueprintVersion,
+    });
+  const name = shortName(
+    (criteria && criteria.businessName) || ctx.businessName || 'the business'
+  );
+
+  const campaignObjective =
+    (criteria && criteria.campaignObjective) ||
+    defaultObjectiveParagraph(ctx, answers);
+  const targetSegment =
+    (criteria && criteria.targetSegment) || defaultTargetSegmentBody(ctx);
+  const targetSubtype =
+    (criteria && criteria.targetSubtype) || defaultTargetSubtype(ctx, answers);
+  const marketBounds =
+    (criteria && criteria.marketBound) || defaultMarketBound(ctx);
+  const inclusionCriteria =
+    (criteria && criteria.inclusionCriteria) ||
+    normalizeCriteriaList(s.inclusionCriteria) ||
+    defaultInclusionCriteria(ctx, answers);
+  const exclusionCriteria =
+    (criteria && criteria.exclusionCriteria) ||
+    normalizeCriteriaList(s.exclusionCriteria) ||
+    defaultExclusionCriteria(ctx, answers);
+  const requiredProspectFields = normalizeRequiredProspectFields(
+    (criteria && criteria.requiredProspectFields) ||
+      s.requiredProspectFields ||
+      null
+  );
+  const reviewGate =
+    'Operator reviews Scout’s returned prospect batch against this brief before outreach, enrichment expansion, CRM writes, or launch. Max does not source prospects in this step.';
+
+  const targetSegmentSubtype = [targetSegment, targetSubtype]
+    .filter(Boolean)
+    .join(' — ');
+
+  return {
+    kind: SCOUT_HANDOFF_BRIEF_KIND,
+    title: SCOUT_HANDOFF_BRIEF_TITLE,
+    businessName: name,
+    campaignObjective,
+    targetSegment,
+    targetSubtype,
+    targetSegmentSubtype,
+    marketBounds,
+    marketBound: marketBounds,
+    inclusionCriteria,
+    exclusionCriteria,
+    requiredProspectFields,
+    sourceTypes: [...DEFAULT_SCOUT_SOURCE_TYPES],
+    evidenceRequired: [...DEFAULT_SCOUT_EVIDENCE],
+    confidenceRules: [...DEFAULT_SCOUT_CONFIDENCE_RULES],
+    reviewGate,
+    guardrails: [...DEFAULT_SCOUT_HANDOFF_GUARDRAILS],
+    sectionTitles: { ...SCOUT_HANDOFF_SECTION_TITLES },
+    planningOnly: true,
+    prospectListGenerated: false,
+    liveSourcingPerformed: false,
+    outreachCopyGenerated: false,
+    accountChangesMade: false,
+    crmWritesMade: false,
+    campaignsGenerated: false,
+    status: 'draft',
+    disclaimer: SCOUT_HANDOFF_BRIEF_DISCLAIMER,
+    recommendedNextStep:
+      'Hand this brief to Scout. Scout inspects public sources and returns evidenced prospects for operator review. Max does not live-source here.',
+    generatedAt: new Date().toISOString(),
+    blueprintId: opts.blueprintId || ctx.blueprintId || null,
+    blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion || null,
+    basedOnCriteriaStatus: (criteria && criteria.status) || 'approved',
+  };
+}
+
+function formatScoutHandoffBriefMessage(brief) {
+  const p = brief || {};
+  const titles = p.sectionTitles || SCOUT_HANDOFF_SECTION_TITLES;
+  const lines = [p.title || SCOUT_HANDOFF_BRIEF_TITLE, ''];
+
+  lines.push(`1. ${titles.campaignObjective}`);
+  lines.push(p.campaignObjective || '—');
+  lines.push('');
+
+  lines.push(`2. ${titles.targetSegmentSubtype}`);
+  lines.push(
+    p.targetSegmentSubtype ||
+      [p.targetSegment, p.targetSubtype].filter(Boolean).join(' — ') ||
+      '—'
+  );
+  lines.push('');
+
+  lines.push(`3. ${titles.marketBounds}`);
+  lines.push(p.marketBounds || p.marketBound || '—');
+  lines.push('');
+
+  lines.push(`4. ${titles.inclusionCriteria}`);
+  for (const item of p.inclusionCriteria || []) lines.push(`- ${item}`);
+  if (!(p.inclusionCriteria || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`5. ${titles.exclusionCriteria}`);
+  for (const item of p.exclusionCriteria || []) lines.push(`- ${item}`);
+  if (!(p.exclusionCriteria || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`6. ${titles.requiredProspectFields}`);
+  for (const item of p.requiredProspectFields || []) lines.push(`- ${item}`);
+  if (!(p.requiredProspectFields || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`7. ${titles.sourceTypes}`);
+  for (const item of p.sourceTypes || []) lines.push(`- ${item}`);
+  if (!(p.sourceTypes || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`8. ${titles.evidenceRequired}`);
+  for (const item of p.evidenceRequired || []) lines.push(`- ${item}`);
+  if (!(p.evidenceRequired || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`9. ${titles.confidenceRules}`);
+  for (const item of p.confidenceRules || []) lines.push(`- ${item}`);
+  if (!(p.confidenceRules || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`10. ${titles.reviewGate}`);
+  lines.push(p.reviewGate || '—');
+  lines.push('');
+
+  lines.push(`11. ${titles.guardrails}`);
+  for (const item of p.guardrails || []) lines.push(`- ${item}`);
+  if (!(p.guardrails || []).length) lines.push('- —');
+  lines.push('');
+
+  if (p.recommendedNextStep) {
+    lines.push(`Recommended next step`);
+    lines.push(p.recommendedNextStep);
+    lines.push('');
+  }
+
+  lines.push(p.disclaimer || SCOUT_HANDOFF_BRIEF_DISCLAIMER);
+  return lines.join('\n').trim();
+}
+
+function produceScoutHandoffBriefResult(ctx, answers, slots, opts, leadIn) {
+  const briefSlots = {
+    ...slots,
+    previewApproved: true,
+    criteriaGenerated: true,
+    criteriaApproved: true,
+    buildProposalGenerated: Boolean(
+      slots.buildProposalGenerated ||
+        slots.buildProposalApproved ||
+        opts.priorBuildProposal
+    ),
+    buildProposalApproved: Boolean(
+      slots.buildProposalApproved ||
+        (opts.priorBuildProposal &&
+          opts.priorBuildProposal.status === 'approved')
+    ),
+  };
+
+  const brief = buildScoutHandoffBrief(ctx, briefSlots, {
+    answers,
+    priorPreview: opts.priorPreview || null,
+    priorCriteriaPreview: opts.priorCriteriaPreview || null,
+    priorBuildProposal: opts.priorBuildProposal || null,
+    blueprintId: opts.blueprintId,
+    blueprintVersion: opts.blueprintVersion,
+  });
+
+  const lines = [];
+  if (leadIn) lines.push(leadIn, '');
+  lines.push(formatScoutHandoffBriefMessage(brief));
+
+  return {
+    message: lines.join('\n'),
+    step: CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_BRIEF,
+    answers,
+    slots: briefSlots,
+    preview: opts.priorPreview || null,
+    criteriaPreview: opts.priorCriteriaPreview || null,
+    buildProposal: opts.priorBuildProposal || null,
+    prospectListDraft: opts.priorProspectListDraft || null,
+    scoutHandoffBrief: brief,
+    liveProspectList: null,
+    intent: PROSPECT_ACQUISITION_INTENTS.CREATE_SCOUT_HANDOFF_BRIEF,
+    previewApproved: true,
+    criteriaApproved: true,
+    buildProposalApproved: Boolean(briefSlots.buildProposalApproved),
+    liveSourcingApproved: false,
+    planningState: CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_BRIEF,
+    currentAsk: null,
+  };
+}
+
 function formatReviewableProspectListDraftMessage(draft) {
   const p = draft || {};
   const titles = p.sectionTitles || DRAFT_SECTION_TITLES;
@@ -3906,17 +4164,56 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
     priorSlots.previewApproved = true;
   }
 
-  // Live sourcing approval short-circuit — never emit placeholder draft rows.
+  // Scout Handoff Brief — planning artifact; never live-sourcing / capability boundary.
   if (
-    looksLikeLiveSourcingApproval(userMessage) ||
-    priorSlots.liveSourcingApproved ||
-    isLiveSourcingApproved(
-      opts.reasoningMemory ||
-        (opts.reasoningState && opts.reasoningState.reasoningMemory) ||
-        {},
-      userMessage
-    )
+    looksLikeScoutHandoffBriefRequest(userMessage) ||
+    classifyProspectAcquisitionIntent(userMessage) ===
+      PROSPECT_ACQUISITION_INTENTS.CREATE_SCOUT_HANDOFF_BRIEF
   ) {
+    const answersEarly = { ...(prior.answers || {}) };
+    const syncedEarly = syncAnswersFromSlots(answersEarly, {
+      ...priorSlots,
+      previewGenerated: true,
+      previewApproved: true,
+      criteriaGenerated: true,
+      criteriaApproved: true,
+    });
+    return produceScoutHandoffBriefResult(
+      ctx,
+      syncedEarly,
+      {
+        ...priorSlots,
+        previewGenerated: true,
+        previewApproved: true,
+        criteriaGenerated: true,
+        criteriaApproved: true,
+      },
+      {
+        ...opts,
+        priorPreview,
+        priorCriteriaPreview:
+          opts.priorCriteriaPreview ||
+          prior.prospectListCriteriaPreview ||
+          prior.criteriaPreview ||
+          null,
+        priorBuildProposal:
+          opts.priorBuildProposal ||
+          prior.prospectListBuildProposal ||
+          prior.buildProposal ||
+          null,
+        priorProspectListDraft:
+          opts.priorProspectListDraft ||
+          prior.prospectListDraft ||
+          prior.reviewableProspectListDraft ||
+          null,
+      },
+      'Creating the Scout Handoff Brief from approved campaign/list criteria. Scout will inspect public sources — Max is not live-sourcing here.'
+    );
+  }
+
+  // Live sourcing only when the operator asks Max to source real prospects now.
+  // Sticky liveSourcingApproved alone must not block Scout handoff / other artifacts.
+  if (looksLikeLiveSourcingApproval(userMessage)) {
     const answersEarly = { ...(prior.answers || {}) };
     const syncedEarly = syncAnswersFromSlots(answersEarly, {
       ...priorSlots,
@@ -4188,15 +4485,41 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       slots.buildProposalGenerated = true;
     }
     if (
-      inferredMemory.liveSourcingApproved ||
       looksLikeLiveSourcingApproval(userMessage) ||
-      isLiveSourcingApproved(inferredMemory, userMessage)
+      (inferredMemory.liveSourcingApproved &&
+        looksLikeProspectListDraftRequest(userMessage))
     ) {
       slots.liveSourcingApproved = true;
     }
 
-    // HARD GUARD — explicit live sourcing approval never regenerates placeholders.
-    if (slots.liveSourcingApproved || looksLikeLiveSourcingApproval(userMessage)) {
+    // Scout Handoff Brief wins — never block on live-sourcing capability.
+    if (
+      looksLikeScoutHandoffBriefRequest(userMessage) ||
+      classifyProspectAcquisitionIntent(userMessage) ===
+        PROSPECT_ACQUISITION_INTENTS.CREATE_SCOUT_HANDOFF_BRIEF
+    ) {
+      return produceScoutHandoffBriefResult(
+        ctx,
+        syncedAnswers,
+        {
+          ...slots,
+          previewApproved: true,
+          criteriaGenerated: true,
+          criteriaApproved: true,
+        },
+        replyOpts,
+        'Creating the Scout Handoff Brief from approved campaign/list criteria. Scout will inspect public sources — Max is not live-sourcing here.'
+      );
+    }
+
+    // HARD GUARD — explicit live sourcing request never regenerates placeholders.
+    // Sticky approval alone is not enough; require a live-sourcing ask (or a
+    // draft ask after live approval, which must not emit placeholders).
+    if (
+      looksLikeLiveSourcingApproval(userMessage) ||
+      (slots.liveSourcingApproved &&
+        looksLikeProspectListDraftRequest(userMessage))
+    ) {
       return produceLiveSourcingResult(
         ctx,
         syncedAnswers,
@@ -4317,6 +4640,22 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
           { ...slots, previewApproved: true, criteriaGenerated: true },
           replyOpts,
           'Here is the Prospect List Criteria Preview again — still planning-only.'
+        );
+      }
+
+      if (artifactAction.action === 'emit_scout_handoff_brief') {
+        return produceScoutHandoffBriefResult(
+          ctx,
+          syncedAnswers,
+          {
+            ...slots,
+            previewApproved: true,
+            criteriaGenerated: true,
+            criteriaApproved: true,
+          },
+          replyOpts,
+          artifactAction.note ||
+            'Creating the Scout Handoff Brief from approved campaign/list criteria. Scout will inspect public sources — Max is not live-sourcing here.'
         );
       }
 
@@ -4734,6 +5073,10 @@ module.exports = {
   LIVE_SOURCING_BOUNDARY_MESSAGE,
   LIVE_PROSPECT_LIST_KIND,
   LIVE_PROSPECT_LIST_TITLE,
+  SCOUT_HANDOFF_BRIEF_KIND,
+  SCOUT_HANDOFF_BRIEF_TITLE,
+  SCOUT_HANDOFF_BRIEF_DISCLAIMER,
+  SCOUT_HANDOFF_SECTION_TITLES,
   SECTION_TITLES,
   CRITERIA_SECTION_TITLES,
   BUILD_PROPOSAL_SECTION_TITLES,
@@ -4780,6 +5123,9 @@ module.exports = {
   formatProspectListBuildProposalMessage,
   buildReviewableProspectListDraft,
   formatReviewableProspectListDraftMessage,
+  buildScoutHandoffBrief,
+  formatScoutHandoffBriefMessage,
+  produceScoutHandoffBriefResult,
   isLivePublicSourcingSupported,
   produceLiveSourcingResult,
   formatLiveSourcedProspectListMessage,

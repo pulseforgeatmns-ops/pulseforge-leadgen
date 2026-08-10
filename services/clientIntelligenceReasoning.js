@@ -34,6 +34,18 @@ const ARTIFACT_KINDS = Object.freeze({
   PROSPECT_LIST_CRITERIA_PREVIEW: 'prospect_list_criteria_preview',
   PROSPECT_LIST_BUILD_PROPOSAL: 'prospect_list_build_proposal',
   REVIEWABLE_PROSPECT_LIST_DRAFT: 'reviewable_prospect_list_draft',
+  /** Planning handoff for Scout — not live sourcing by Max. */
+  SCOUT_HANDOFF_BRIEF: 'scout_handoff_brief',
+});
+
+/**
+ * Prospect-acquisition artifact intents.
+ * create_scout_handoff_brief = Max writes a planning/handoff artifact.
+ * perform_live_sourcing = Scout/browser/tooling gathers real prospects.
+ */
+const PROSPECT_ACQUISITION_INTENTS = Object.freeze({
+  CREATE_SCOUT_HANDOFF_BRIEF: 'create_scout_handoff_brief',
+  PERFORM_LIVE_SOURCING: 'perform_live_sourcing',
 });
 
 const ARTIFACT_ORDER = Object.freeze([
@@ -183,9 +195,36 @@ function looksLikeNextPlanningRequest(text) {
   return NEXT_REQUEST_RE.test(String(text || ''));
 }
 
+/**
+ * Max should create a Scout Handoff Brief (planning artifact), not source
+ * prospects itself. Mentions of "public sources" describe Scout's job.
+ */
+function looksLikeScoutHandoffBriefRequest(text) {
+  const s = String(text || '');
+  if (!s.trim()) return false;
+  if (/\bscout\s+handoff\s+brief\b/i.test(s)) return true;
+  if (
+    /\b(?:create|generate|produce|draft|write|prepare|build)\b[\s\S]{0,80}\b(?:a\s+)?scout\s+handoff\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\bdo\s+not\s+build\b[\s\S]{0,120}\b(?:the\s+)?prospect\s+list\b[\s\S]{0,80}\bas\s+max\b/i.test(
+      s
+    ) &&
+    /\bscout\b/i.test(s)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function looksLikeProspectListDraftRequest(text) {
   const s = String(text || '');
-  // Live sourcing approval is never a reviewable-placeholder draft request.
+  // Handoff brief / live sourcing are never reviewable-placeholder drafts.
+  if (looksLikeScoutHandoffBriefRequest(s)) return false;
   if (looksLikeLiveSourcingApproval(s)) return false;
   if (/\breviewable\s+prospect\s+list\s+batch\b/i.test(s)) return true;
   if (/\bprospect\s+list\s+draft\b/i.test(s)) return true;
@@ -196,32 +235,74 @@ function looksLikeProspectListDraftRequest(text) {
 }
 
 /**
+ * True approval utterance for live sourcing — not "using the approved criteria".
+ */
+function hasLiveSourcingApprovalSignal(text) {
+  const s = String(text || '');
+  if (looksLikeApprovalLead(s)) return true;
+  // Sentence-initial approval after punctuation ("… Done. Approved. Build…").
+  if (
+    /(?:^|[.!?]\s+)(?:yes[,.]?\s+)?(?:approved?|approve(?:\s+it)?|go\s+ahead|proceed|ship\s+it|i\s+approve)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Explicit approval to live-source real prospects from public sources.
  * Example: "Approved. Use only public sources. Build 15–25 real prospects."
+ * Never matches Scout Handoff Brief / planning-handoff requests.
  */
 function looksLikeLiveSourcingApproval(text) {
   const s = String(text || '');
   if (!s.trim()) return false;
-  const hasApproval =
-    looksLikeApprovalLead(s) ||
-    /\b(?:approved?|approve(?:\s+it)?|go\s+ahead|proceed|ship\s+it|i\s+approve)\b/i.test(
-      s
-    );
+  // Planning handoff for Scout is never Max live-sourcing.
+  if (looksLikeScoutHandoffBriefRequest(s)) return false;
+
+  const hasApproval = hasLiveSourcingApprovalSignal(s);
   const publicSources =
     /\b(?:only\s+)?public\s+sources?\b/i.test(s) ||
     /\buse\s+only\s+public\b/i.test(s) ||
     /\blive\s+(?:public[- ]?)?sourc/i.test(s);
+  const forbidsMaxBuild = /\bdo\s+not\s+build\b/i.test(s);
   const realProspects =
     /\breal\s+prospects?\b/i.test(s) ||
     /\b(?:\d+\s*[–-]\s*\d+|\d+)\s+real\s+prospects?\b/i.test(s) ||
-    /\bbuild\b[\s\S]{0,80}\b(?:real\s+)?prospects?\b/i.test(s) ||
+    (!forbidsMaxBuild &&
+      /\bbuild\b[\s\S]{0,80}\b(?:real\s+)?prospects?\b/i.test(s)) ||
     /\binclude\s+source\s+urls?\b/i.test(s);
   if (hasApproval && publicSources && realProspects) return true;
-  if (hasApproval && publicSources && /\bprospects?\b/i.test(s)) return true;
+  if (
+    hasApproval &&
+    publicSources &&
+    !forbidsMaxBuild &&
+    /\b(?:build|generate|create|source)\b[\s\S]{0,80}\bprospects?\b/i.test(s)
+  ) {
+    return true;
+  }
   if (hasApproval && /\blive\s+sourc/i.test(s) && /\bprospects?\b/i.test(s)) {
     return true;
   }
   return false;
+}
+
+/**
+ * Classify whether the operator wants a Scout handoff artifact or Max to
+ * perform live sourcing directly.
+ * @returns {'create_scout_handoff_brief'|'perform_live_sourcing'|null}
+ */
+function classifyProspectAcquisitionIntent(text) {
+  const s = String(text || '');
+  if (looksLikeScoutHandoffBriefRequest(s)) {
+    return PROSPECT_ACQUISITION_INTENTS.CREATE_SCOUT_HANDOFF_BRIEF;
+  }
+  if (looksLikeLiveSourcingApproval(s)) {
+    return PROSPECT_ACQUISITION_INTENTS.PERFORM_LIVE_SOURCING;
+  }
+  return null;
 }
 
 function markLiveSourcingApproved(memory) {
@@ -848,7 +929,7 @@ function resolveNextArtifact(memory, requestedKind, opts = {}) {
  * Campaign-loop artifact progression from session context + classified intent.
  *
  * @returns {{
- *   action: 'emit_criteria'|'emit_build_proposal'|'emit_prospect_list_draft'|'emit_live_sourcing'|'ack_approval'|'ack_build_approval'|'replay_criteria'|'hold',
+ *   action: 'emit_criteria'|'emit_build_proposal'|'emit_prospect_list_draft'|'emit_live_sourcing'|'emit_scout_handoff_brief'|'ack_approval'|'ack_build_approval'|'replay_criteria'|'hold',
  *   approveKind: string|null,
  *   emitKind: string|null,
  *   memory: object,
@@ -876,8 +957,43 @@ function resolveCampaignArtifactAction(opts = {}) {
   const priorDraft =
     opts.priorProspectListDraft || opts.priorReviewableProspectListDraft || null;
 
+  const acquisitionIntent = classifyProspectAcquisitionIntent(text);
+
+  // HARD GUARD: Scout Handoff Brief is a planning artifact — never live sourcing.
+  if (
+    acquisitionIntent ===
+    PROSPECT_ACQUISITION_INTENTS.CREATE_SCOUT_HANDOFF_BRIEF
+  ) {
+    memory = markProspectCriteriaApproved(memory);
+    if (
+      priorBuild ||
+      approvedArtifactsInclude(memory, ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL)
+    ) {
+      memory = markArtifactApproved(
+        memory,
+        ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+      );
+    }
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.SCOUT_HANDOFF_BRIEF;
+    return {
+      action: 'emit_scout_handoff_brief',
+      approveKind: null,
+      emitKind: ARTIFACT_KINDS.SCOUT_HANDOFF_BRIEF,
+      memory,
+      messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
+      note:
+        'Creating the Scout Handoff Brief from approved campaign/list criteria — planning only. Scout performs sourcing.',
+      planningState: 'scout_handoff_brief',
+    };
+  }
+
   // HARD GUARD: explicit live-sourcing approval never regenerates placeholders.
-  if (isLiveSourcingApproved(memory, text)) {
+  // Only when the operator asks Max to perform live sourcing — not sticky alone.
+  const liveApprovalNow = looksLikeLiveSourcingApproval(text);
+  const blockPlaceholderAfterLive =
+    Boolean(memory.liveSourcingApproved) &&
+    looksLikeProspectListDraftRequest(text);
+  if (liveApprovalNow || blockPlaceholderAfterLive) {
     memory = markLiveSourcingApproved(memory);
     memory = markProspectCriteriaApproved(memory);
     if (priorBuild || approvedArtifactsInclude(memory, ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL)) {
@@ -1210,6 +1326,8 @@ function humanArtifactLabel(kind) {
       return 'Prospect List Criteria Preview';
     case ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL:
       return 'Prospect List Build Proposal';
+    case ARTIFACT_KINDS.SCOUT_HANDOFF_BRIEF:
+      return 'Scout Handoff Brief';
     case ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT:
       return 'Reviewable Prospect List Draft';
     default:
@@ -1484,6 +1602,7 @@ module.exports = {
   ARTIFACT_KINDS,
   ARTIFACT_ORDER,
   ARTIFACT_REQUIRED_SECTIONS,
+  PROSPECT_ACQUISITION_INTENTS,
   MIN_ARTIFACT_SECTION_CONFIDENCE,
   emptyReasoningMemory,
   ensureReasoningMemory,
@@ -1515,7 +1634,9 @@ module.exports = {
   looksLikeApprovalPlusNextRequest,
   looksLikeNextPlanningRequest,
   looksLikeProspectListDraftRequest,
+  looksLikeScoutHandoffBriefRequest,
   looksLikeLiveSourcingApproval,
+  classifyProspectAcquisitionIntent,
   looksLikeReviseCriteriaRequest,
   inferApprovedArtifactsFromMessage,
   shouldForceProspectListDraft,
