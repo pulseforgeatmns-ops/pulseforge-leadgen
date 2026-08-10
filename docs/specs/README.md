@@ -81,6 +81,7 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-087](SPEC-087_Growth_Infrastructure_Readiness.md) | Growth Infrastructure Readiness Conversation | Implemented (v1) | v0.1 |
 | [SPEC-088](SPEC-088_Growth_Work_Continuation_Flow.md) | Growth Work Continuation Flow | Implemented (v1) | v0.1 |
 | [SPEC-089](SPEC-089_First_Campaign_Planning_Conversation.md) | First Campaign Planning Conversation | Implemented (v1) | v0.1 |
+| [SPEC-090](SPEC-090_Max_Conversational_Reasoning_Layer.md) | Max Conversational Reasoning Layer | Implemented (v1) | v0.1 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

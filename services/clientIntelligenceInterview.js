@@ -6,6 +6,7 @@
  * SPEC-085 — Executive Business Brief (client-facing synthesis after interview).
  * SPEC-088 — Growth Work Continuation Flow (resume to first incomplete Growth Plan task).
  * SPEC-089 — First Campaign Planning Conversation (review-first plan preview after Growth Plan).
+ * SPEC-090 — Max Conversational Reasoning Layer (classify → memory → probe → readiness).
  * Text interview → evidence → confidence → Business Blueprint → approve → playbook handoff.
  * Does not invent campaign strategy or activate Scout/Composer.
  */
@@ -48,6 +49,30 @@ const {
   buildCampaignPlanningReply,
   seedSlotsFromContext,
 } = require('./clientIntelligenceCampaignPlanning');
+const {
+  MESSAGE_CLASSES,
+  ARTIFACT_KINDS,
+  emptyReasoningMemory,
+  ensureReasoningMemory,
+  classifyReasoningMessage,
+  assessAnswerSufficiency,
+  buildProbingFollowUp,
+  inferCrossSectionTarget,
+  recordAcceptedFact,
+  recordPendingCorrection,
+  resolvePendingCorrection,
+  syncConfidenceFromSections,
+  addQuestionDebt,
+  clearQuestionDebt,
+  setActiveProbe,
+  markClassification,
+  markArtifactGenerated,
+  resolveNextArtifact,
+  checkArtifactReadiness,
+  synthesizeBusinessLanguage,
+  reasoningAck,
+  planReasoningTurn,
+} = require('./clientIntelligenceReasoning');
 
 const SESSION_STATUSES = Object.freeze([
   'NEW',
@@ -91,6 +116,7 @@ const EVIDENCE_TYPES = Object.freeze([
 const NEXT_ACTIONS = Object.freeze([
   'ASK',
   'CLARIFY',
+  'PROBE',
   'SUMMARIZE',
   'VALIDATE',
   'GENERATE_BLUEPRINT',
@@ -129,16 +155,24 @@ const ANSWER_KINDS = Object.freeze({
 });
 
 /**
- * Interview message classification (SPEC-085 hardening).
+ * Interview message classification (SPEC-085 + SPEC-090).
  * Only direct_answer becomes the answer to the active interview question.
+ * ADD_ON / CLARIFICATION_REQUEST are canonical; older names alias to them.
  */
 const MESSAGE_TYPES = Object.freeze({
-  DIRECT_ANSWER: 'direct_answer',
-  SUPPLEMENTAL_CONTEXT: 'supplemental_context',
-  REFINEMENT_FEEDBACK: 'refinement_feedback',
-  CORRECTION: 'correction',
-  QUESTION_TO_MAX: 'question_to_max',
-  OFF_TOPIC: 'off_topic',
+  DIRECT_ANSWER: MESSAGE_CLASSES.DIRECT_ANSWER,
+  CORRECTION: MESSAGE_CLASSES.CORRECTION,
+  ADD_ON: MESSAGE_CLASSES.ADD_ON,
+  /** @deprecated Alias of ADD_ON — retained for callers/tests. */
+  SUPPLEMENTAL_CONTEXT: MESSAGE_CLASSES.ADD_ON,
+  APPROVAL: MESSAGE_CLASSES.APPROVAL,
+  CLARIFICATION_REQUEST: MESSAGE_CLASSES.CLARIFICATION_REQUEST,
+  /** @deprecated Alias of CLARIFICATION_REQUEST. */
+  QUESTION_TO_MAX: MESSAGE_CLASSES.CLARIFICATION_REQUEST,
+  INSUFFICIENT_ANSWER: MESSAGE_CLASSES.INSUFFICIENT_ANSWER,
+  OFF_TOPIC: MESSAGE_CLASSES.OFF_TOPIC,
+  SKIP: MESSAGE_CLASSES.SKIP,
+  REFINEMENT_FEEDBACK: MESSAGE_CLASSES.REFINEMENT_FEEDBACK,
 });
 
 /** Domains for supplemental session memory tagging. */
@@ -886,31 +920,23 @@ function parseCorrectionMessage(text, fallbackSection = null, opts = {}) {
 
 /**
  * Classify every user message during the interview before attaching to a question.
+ * SPEC-090: delegates to the conversational reasoning layer while preserving
+ * CIE detectors for correction / add-on / refinement.
  * @param {string} text
  * @param {{ speaker?: string, context?: string, activeQuestion?: object|null, briefReady?: boolean }} [opts]
  * @returns {string} one of MESSAGE_TYPES
  */
 function classifyInterviewMessage(text, opts = {}) {
-  const speaker = String(opts.speaker || '').toLowerCase();
-  const context = String(opts.context || '').toLowerCase();
-  if (context === 'generated_brief' || speaker === 'assistant') {
-    return MESSAGE_TYPES.REFINEMENT_FEEDBACK;
-  }
-  if (speaker === 'system' || speaker === 'developer' || context === 'system_guidance') {
-    return MESSAGE_TYPES.OFF_TOPIC;
-  }
-  // Corrections first — "disregard last message / replace with…" must not be
-  // swallowed as refinement or attached to the active question.
-  if (looksLikeCorrection(text)) return MESSAGE_TYPES.CORRECTION;
-  if (looksLikeSupplementalContext(text, opts)) return MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT;
-  if (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text)) {
-    return MESSAGE_TYPES.REFINEMENT_FEEDBACK;
-  }
-  if (looksLikeQuestionToMax(text)) return MESSAGE_TYPES.QUESTION_TO_MAX;
-  if (/^(hi|hello|hey|thanks|thank you|ok|okay|cool|great|nice)\s*[.!]?$/i.test(String(text || '').trim())) {
-    return MESSAGE_TYPES.OFF_TOPIC;
-  }
-  return MESSAGE_TYPES.DIRECT_ANSWER;
+  return classifyReasoningMessage(text, {
+    speaker: opts.speaker,
+    context: opts.context,
+    activeQuestion: opts.activeQuestion,
+    looksLikeCorrection,
+    looksLikeAddOn: looksLikeSupplementalContext,
+    looksLikeRefinement: looksLikeRefinementFeedback,
+    containsMetaInstruction: containsMetaInstructionLanguage,
+    answerLooksEmpty,
+  });
 }
 
 /**
@@ -1021,6 +1047,7 @@ function conversationalAck(messageType, text, domain, opts = {}) {
   const substance = String(opts.substance || '').trim();
 
   switch (messageType) {
+    case MESSAGE_TYPES.ADD_ON:
     case MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT: {
       const reopen = conversationalQuestionRestate(activeQuestion, businessName);
       if (domain === 'ideal_customer' && substance) {
@@ -1052,8 +1079,22 @@ function conversationalAck(messageType, text, domain, opts = {}) {
     }
     case MESSAGE_TYPES.REFINEMENT_FEEDBACK:
       return "Understood — I'll treat that as guidance for how I write and regenerate, not as business evidence.";
+    case MESSAGE_TYPES.CLARIFICATION_REQUEST:
     case MESSAGE_TYPES.QUESTION_TO_MAX:
       return "Good question. I'll stay with our discovery for now — answer the current prompt when you're ready, or add context with \"also\" / \"I forgot\" if it's extra detail.";
+    case MESSAGE_TYPES.APPROVAL:
+      return reasoningAck(MESSAGE_TYPES.APPROVAL, {
+        activeQuestion,
+        reopenPrompt: conversationalQuestionRestate(activeQuestion, businessName),
+      });
+    case MESSAGE_TYPES.SKIP:
+      return reasoningAck(MESSAGE_TYPES.SKIP, {
+        reopenPrompt: null,
+      });
+    case MESSAGE_TYPES.INSUFFICIENT_ANSWER:
+      return reasoningAck(MESSAGE_TYPES.INSUFFICIENT_ANSWER, {
+        probe: opts.probe || null,
+      });
     case MESSAGE_TYPES.OFF_TOPIC:
       return "Noted. Whenever you're ready, we can continue with the current question.";
     default:
@@ -3463,6 +3504,8 @@ function initialInterviewState({ notes } = {}) {
     supplementalContext: [],
     /** Normalized business evidence — Brief reads this, not raw transcript. */
     normalizedFacts: emptyNormalizedFacts(),
+    /** SPEC-090 — session-level conversational reasoning memory. */
+    reasoningMemory: emptyReasoningMemory(),
     notes: notes ? String(notes) : null,
     blueprintId: null,
     lastReflectionAt: 0,
@@ -4023,6 +4066,7 @@ function publicBlueprint(bp) {
     playbookVersion: bp.playbook_version,
     sectionProvenance: bp.section_provenance,
     parentBlueprintId: bp.parent_blueprint_id,
+    readiness: bp.readiness || null,
     createdAt: bp.created_at,
     updatedAt: bp.updated_at,
   };
@@ -4232,7 +4276,13 @@ function mergeSupplementalIntoSections(sections, supplementalContext) {
   const out = buildSectionsFromState(sections);
   for (const entry of supplementalContext || []) {
     if (!entry || !entry.text) continue;
-    if (entry.kind === MESSAGE_TYPES.QUESTION_TO_MAX || entry.kind === MESSAGE_TYPES.OFF_TOPIC) {
+    if (entry.kind === MESSAGE_TYPES.CLARIFICATION_REQUEST ||
+      entry.kind === MESSAGE_TYPES.QUESTION_TO_MAX ||
+      entry.kind === MESSAGE_TYPES.OFF_TOPIC ||
+      entry.kind === MESSAGE_TYPES.APPROVAL ||
+      entry.kind === MESSAGE_TYPES.SKIP ||
+      entry.kind === MESSAGE_TYPES.INSUFFICIENT_ANSWER ||
+      entry.kind === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
       continue;
     }
     if (looksLikeRefinementFeedback(entry.text) || containsMetaInstructionLanguage(entry.text)) {
@@ -4298,7 +4348,26 @@ async function generateBlueprint(store, session) {
   const sections = state.normalizedFacts
     ? sectionsFromNormalizedFacts(state.normalizedFacts, merged)
     : merged;
+
+  // SPEC-090 — artifact readiness: mark weak evidence clearly; never invent facts.
+  const readiness = checkArtifactReadiness(ARTIFACT_KINDS.BLUEPRINT, {
+    sectionState: sections,
+    normalizedFacts: state.normalizedFacts || emptyNormalizedFacts(),
+  });
+  let reasoningMemory = ensureReasoningMemory(state);
+  const artifactProgress = resolveNextArtifact(
+    reasoningMemory,
+    ARTIFACT_KINDS.BLUEPRINT
+  );
+  if (artifactProgress.emit === ARTIFACT_KINDS.BLUEPRINT || !reasoningMemory.artifactsGenerated.includes(ARTIFACT_KINDS.BLUEPRINT)) {
+    reasoningMemory = markArtifactGenerated(reasoningMemory, ARTIFACT_KINDS.BLUEPRINT);
+  }
+  reasoningMemory = syncConfidenceFromSections(reasoningMemory, sections);
+
   const confidence_summary = confidenceSummaryFromSections(sections);
+  if (readiness.confidenceNote) {
+    confidence_summary._readinessNote = readiness.confidenceNote;
+  }
   const blueprint = await store.insertBlueprint({
     id: newId(),
     client_id: session.client_id,
@@ -4312,6 +4381,12 @@ async function generateBlueprint(store, session) {
     playbook_version: null,
     section_provenance: {},
     parent_blueprint_id: null,
+    readiness: {
+      ready: readiness.ready,
+      missing: readiness.missing,
+      weak: readiness.weak,
+      confidenceNote: readiness.confidenceNote,
+    },
     created_at: new Date(),
     updated_at: new Date(),
   });
@@ -4322,9 +4397,15 @@ async function generateBlueprint(store, session) {
     blueprintVersion: blueprint.version,
     sectionState: sections,
     normalizedFacts: state.normalizedFacts || emptyNormalizedFacts(),
+    reasoningMemory,
+    artifactReadiness: {
+      blueprint: readiness,
+    },
   };
   session.confidence_score = overallConfidence(confidence_summary);
-  session.summary = `Draft Business Blueprint ${blueprint.id}@${blueprint.version}`;
+  session.summary = readiness.confidenceNote
+    ? `Draft Business Blueprint ${blueprint.id}@${blueprint.version} (${readiness.confidenceNote})`
+    : `Draft Business Blueprint ${blueprint.id}@${blueprint.version}`;
   session.current_stage = 'Client Review';
   await store.updateSession(session.id, {
     status: session.status,
@@ -4639,16 +4720,51 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     created_at: new Date(),
   });
 
-  const messageType = classifyInterviewMessage(text, {
-    activeQuestion: q.question,
-  });
   const domain = tagContextDomain(text);
+  const businessNameHint =
+    state.normalizedFacts?.business_name ||
+    extractBusinessName(Object.values(state.answers || {}).join(' ')) ||
+    null;
 
-  // Non-answers: store appropriately, stay on the same question, respond conversationally.
+  // SPEC-090 — session-level reasoning before attaching to the active question.
+  let reasoningMemory = ensureReasoningMemory(state);
+  const planned = planReasoningTurn(text, {
+    activeQuestion: q.question,
+    state,
+    businessName: businessNameHint,
+    hasSpecificity: hasSpecificitySignals(text),
+    looksLikeCorrection,
+    looksLikeAddOn: looksLikeSupplementalContext,
+    looksLikeRefinement: looksLikeRefinementFeedback,
+    containsMetaInstruction: containsMetaInstructionLanguage,
+    answerLooksEmpty,
+    crossSectionHelpers: {
+      inferDomain: (t) => inferDomainFromQuestionEcho(t) || tagContextDomain(t),
+      tagDomain: tagContextDomain,
+      domainToSection: DOMAIN_TO_SECTION,
+    },
+  });
+  let messageType = planned.messageClass;
+  reasoningMemory = markClassification(reasoningMemory, messageType);
+  state.reasoningMemory = reasoningMemory;
+
+  // Soft cross-section: treat high-confidence prior-section substance as add-on.
+  if (
+    messageType === MESSAGE_TYPES.DIRECT_ANSWER &&
+    planned.cross &&
+    planned.cross.section &&
+    planned.cross.confidence >= 0.8
+  ) {
+    messageType = MESSAGE_TYPES.ADD_ON;
+  }
+
+  // Non-answers: store appropriately, stay on the same question (or skip-advance), respond conversationally.
   if (messageType !== MESSAGE_TYPES.DIRECT_ANSWER) {
     let correctionDomain = domain;
     let correctionTargetSection = null;
     let ackSubstance = null;
+    let probePrompt = planned.probe || null;
+    let advancedAfterSkip = false;
 
     if (messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
       state.revisionGuidance = [
@@ -4660,12 +4776,91 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
           section: q.question.section,
         },
       ];
-    } else if (messageType === MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT) {
+    } else if (messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER) {
+      probePrompt =
+        planned.probe ||
+        buildProbingFollowUp(
+          q.question,
+          planned.sufficiency || { reason: 'vague' },
+          businessNameHint
+        );
+      reasoningMemory = setActiveProbe(reasoningMemory, {
+        questionId: q.question.id,
+        section: q.question.section,
+        prompt: probePrompt,
+        reason: (planned.sufficiency && planned.sufficiency.reason) || 'vague',
+      });
+      reasoningMemory = addQuestionDebt(reasoningMemory, {
+        questionId: q.question.id,
+        section: q.question.section,
+        reason: (planned.sufficiency && planned.sufficiency.reason) || 'vague',
+      });
+      state.reasoningMemory = reasoningMemory;
+      state.supplementalContext = [
+        ...(state.supplementalContext || []),
+        {
+          at: nowIso(),
+          text,
+          domain: null,
+          kind: MESSAGE_TYPES.INSUFFICIENT_ANSWER,
+          activeQuestionId: q.question.id,
+          confirmed: false,
+          probe: probePrompt,
+        },
+      ];
+    } else if (messageType === MESSAGE_TYPES.SKIP) {
+      reasoningMemory = addQuestionDebt(reasoningMemory, {
+        questionId: q.question.id,
+        section: q.question.section,
+        reason: 'skipped',
+      });
+      reasoningMemory = setActiveProbe(reasoningMemory, null);
+      state.reasoningMemory = reasoningMemory;
+      state.answers = { ...(state.answers || {}), [q.question.id]: '' };
+      state.stepIndex = (Number(state.stepIndex) || 0) + 1;
+      if (state.stepIndex >= QUESTION_BANK.length) state.done = true;
+      advancedAfterSkip = true;
+      state.supplementalContext = [
+        ...(state.supplementalContext || []),
+        {
+          at: nowIso(),
+          text,
+          domain: null,
+          kind: MESSAGE_TYPES.SKIP,
+          activeQuestionId: q.question.id,
+          confirmed: false,
+        },
+      ];
+    } else if (messageType === MESSAGE_TYPES.APPROVAL) {
+      state.supplementalContext = [
+        ...(state.supplementalContext || []),
+        {
+          at: nowIso(),
+          text,
+          domain: null,
+          kind: MESSAGE_TYPES.APPROVAL,
+          activeQuestionId: q.question.id,
+          confirmed: false,
+        },
+      ];
+    } else if (
+      messageType === MESSAGE_TYPES.ADD_ON ||
+      messageType === MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT
+    ) {
       const parsed = parseSupplementalMessage(text, { activeQuestion: q.question });
-      const targetSection = parsed.section;
-      correctionDomain = parsed.domain || domain;
+      // Prefer reasoning-layer cross-section when supplemental parse lacks a target.
+      const targetSection =
+        parsed.section ||
+        (planned.cross && planned.cross.section) ||
+        (planned.targetSection && planned.routeReason === 'cross_section_add_on'
+          ? planned.targetSection
+          : null);
+      correctionDomain = parsed.domain || (planned.cross && planned.cross.domain) || domain;
       correctionTargetSection = targetSection;
-      const substance = parsed.substance;
+      const substance = parsed.substance || synthesizeBusinessLanguage(text, {
+        section: targetSection,
+        businessName: businessNameHint,
+      });
       ackSubstance = substance;
 
       if (targetSection && substance && isBusinessFactStatement(substance)) {
@@ -4726,6 +4921,16 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
                 : substance,
           };
         }
+
+        reasoningMemory = recordAcceptedFact(reasoningMemory, {
+          section: targetSection,
+          substance,
+          source: 'add_on',
+        });
+        reasoningMemory = clearQuestionDebt(
+          reasoningMemory,
+          QUESTION_BANK.find((row) => row.section === targetSection)?.id
+        );
       }
 
       state.supplementalContext = [
@@ -4734,7 +4939,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
           at: nowIso(),
           text,
           domain: correctionDomain || null,
-          kind: MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT,
+          kind: MESSAGE_TYPES.ADD_ON,
           section: targetSection,
           substance,
           activeQuestionId: q.question.id,
@@ -4753,6 +4958,12 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       correctionDomain = parsed.domain || domain;
       correctionTargetSection = targetSection;
       const substance = parsed.substance;
+
+      reasoningMemory = recordPendingCorrection(reasoningMemory, {
+        section: targetSection,
+        substance,
+        status: 'pending',
+      });
 
       if (targetSection && substance && isBusinessFactStatement(substance)) {
         state.normalizedFacts = applyCorrectionToNormalizedFacts(
@@ -4803,6 +5014,12 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
             [questionId]: substance,
           };
         }
+        reasoningMemory = resolvePendingCorrection(reasoningMemory, targetSection);
+        reasoningMemory = recordAcceptedFact(reasoningMemory, {
+          section: targetSection,
+          substance,
+          source: 'correction',
+        });
       }
 
       state.supplementalContext = [
@@ -4821,7 +5038,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         },
       ];
     } else {
-      // question_to_max / off_topic — acknowledge only
+      // clarification_request / off_topic — acknowledge only
       state.supplementalContext = [
         ...(state.supplementalContext || []),
         {
@@ -4835,30 +5052,80 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       ];
     }
 
+    reasoningMemory = syncConfidenceFromSections(reasoningMemory, state.sectionState);
+    state.reasoningMemory = reasoningMemory;
     session.interview_state = state;
-    await store.updateSession(session.id, {
-      status: 'DISCOVERY',
-      current_stage: session.current_stage,
-      interview_state: state,
-    });
 
+    // Skip may finish the bank — generate blueprint with readiness metadata.
+    if (advancedAfterSkip && state.done) {
+      await store.updateSession(session.id, {
+        status: 'DISCOVERY',
+        interview_state: state,
+        current_stage: session.current_stage,
+      });
+      const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
+      return withExperienceFields(await store.getSession(session.id), {
+        interviewId: session.id,
+        ...publicSession(await store.getSession(session.id)),
+        nextAction: 'GENERATE_BLUEPRINT',
+        messageType,
+        question: null,
+        message: 'Draft Business Blueprint is ready for review.',
+        blueprint: publicBlueprint(blueprint),
+        reflection: null,
+        reasoningMemory,
+      });
+    }
+
+    const nextQAfterSkip = advancedAfterSkip ? currentQuestion(state) : q;
+    const activeForAck = nextQAfterSkip ? nextQAfterSkip.question : q.question;
     const businessName =
       state.normalizedFacts?.business_name ||
       extractBusinessName(Object.values(state.answers || {}).join(' ')) ||
       null;
-    const ack = conversationalAck(messageType, text, correctionDomain, {
-      activeQuestion: q.question,
-      targetSection: correctionTargetSection,
-      businessName,
-      substance: ackSubstance,
+
+    let ack;
+    if (messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER) {
+      ack = probePrompt;
+    } else if (messageType === MESSAGE_TYPES.SKIP) {
+      ack = reasoningAck(MESSAGE_TYPES.SKIP, {
+        reopenPrompt: activeForAck ? activeForAck.prompt : null,
+      });
+    } else {
+      ack = conversationalAck(messageType, text, correctionDomain, {
+        activeQuestion: q.question,
+        targetSection: correctionTargetSection,
+        businessName,
+        substance: ackSubstance,
+        probe: probePrompt,
+      });
+    }
+
+    const assistantMessage =
+      messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER
+        ? ack
+        : advancedAfterSkip && activeForAck
+          ? `${ack}`
+          : `${ack}\n\n${q.question.prompt}`;
+
+    await store.updateSession(session.id, {
+      status: 'DISCOVERY',
+      current_stage: advancedAfterSkip && activeForAck ? activeForAck.stage : session.current_stage,
+      interview_state: state,
     });
+
     await store.insertTurn({
       id: newId(),
       session_id: session.id,
       speaker: 'assistant',
-      message: `${ack}\n\n${q.question.prompt}`,
-      goal: q.question.goal,
-      asked_because: 'Acknowledged non-answer message without advancing the interview.',
+      message: assistantMessage,
+      goal: activeForAck ? activeForAck.goal : q.question.goal,
+      asked_because:
+        messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER
+          ? 'Probing follow-up before advancing — answer was vague or incomplete.'
+          : messageType === MESSAGE_TYPES.SKIP
+            ? 'Skipped question recorded as question debt; advanced to next prompt.'
+            : 'Acknowledged non-answer message without advancing the interview.',
       derived_evidence: [],
       created_at: new Date(),
     });
@@ -4866,22 +5133,32 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     return withExperienceFields(await store.getSession(session.id), {
       interviewId: session.id,
       ...publicSession(await store.getSession(session.id)),
-      nextAction: 'ASK',
+      nextAction:
+        messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER
+          ? 'PROBE'
+          : 'ASK',
       messageType,
-      question: {
-        id: q.question.id,
-        prompt: q.question.prompt,
-        stage: q.question.stage,
-        section: q.question.section,
-        goal: q.question.goal,
-        askedBecause: q.question.askedBecause,
-      },
-      message: `${ack}\n\n${q.question.prompt}`,
+      question: activeForAck
+        ? {
+            id: activeForAck.id,
+            prompt:
+              messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER
+                ? probePrompt || activeForAck.prompt
+                : activeForAck.prompt,
+            stage: activeForAck.stage,
+            section: activeForAck.section,
+            goal: activeForAck.goal,
+            askedBecause: activeForAck.askedBecause,
+          }
+        : null,
+      message: assistantMessage,
       reflection: null,
       evidence: null,
       contradiction: false,
       blueprint: null,
       supplementalContext: state.supplementalContext || [],
+      reasoningMemory,
+      probe: messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER ? probePrompt : null,
     });
   }
 
@@ -4901,11 +5178,28 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   // Only record business answers against the question bank — refinement stays in revisionGuidance.
   if (!skippedAsGuidance) {
     state.answers = { ...(state.answers || {}), [q.question.id]: text };
+    const synthesized = synthesizeBusinessLanguage(text, {
+      section: q.question.section,
+      businessName: businessNameHint,
+    });
+    reasoningMemory = recordAcceptedFact(reasoningMemory, {
+      section: q.question.section,
+      substance: synthesized || text,
+      source: 'direct_answer',
+    });
+    reasoningMemory = clearQuestionDebt(reasoningMemory, q.question.id);
+    reasoningMemory = setActiveProbe(reasoningMemory, null);
   } else {
     state.answers = { ...(state.answers || {}) };
   }
   state.stepIndex = (Number(state.stepIndex) || 0) + 1;
   if (state.stepIndex >= QUESTION_BANK.length) state.done = true;
+  reasoningMemory = syncConfidenceFromSections(
+    reasoningMemory,
+    session.interview_state.sectionState || state.sectionState
+  );
+  state.reasoningMemory = reasoningMemory;
+  state.sectionState = session.interview_state.sectionState || state.sectionState;
   session.interview_state = state;
   session.current_stage = q.question.stage;
 
@@ -4934,6 +5228,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       evidence: evidenceRow ? publicEvidence(evidenceRow) : null,
       blueprint: publicBlueprint(blueprint),
       reflection: null,
+      reasoningMemory: (await store.getSession(session.id)).interview_state?.reasoningMemory,
     });
   }
 
@@ -4978,6 +5273,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     interviewId: session.id,
     ...publicSession(await store.getSession(session.id)),
     nextAction: contradiction ? 'CLARIFY' : 'ASK',
+    messageType: MESSAGE_TYPES.DIRECT_ANSWER,
     question: {
       id: nextQ.question.id,
       prompt: nextQ.question.prompt,
@@ -4991,6 +5287,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     evidence: evidenceRow ? publicEvidence(evidenceRow) : null,
     contradiction: contradiction || false,
     blueprint: null,
+    reasoningMemory,
   });
 }
 
@@ -5943,6 +6240,24 @@ async function approveBlueprint(blueprintId, opts = {}) {
       (session.interview_state && session.interview_state.normalizedFacts) || null,
   });
 
+  let reasoningMemory = ensureReasoningMemory(session.interview_state || {});
+  const growthReadiness = checkArtifactReadiness(ARTIFACT_KINDS.GROWTH_DIRECTION, {
+    sectionState: (approved && approved.sections) || {},
+    normalizedFacts:
+      (session.interview_state && session.interview_state.normalizedFacts) ||
+      emptyNormalizedFacts(),
+  });
+  if (growthReadiness.confidenceNote && initialGrowthDirection) {
+    initialGrowthDirection.confidenceNote = growthReadiness.confidenceNote;
+    if (growthReadiness.weak.length) {
+      initialGrowthDirection.confidenceLevel = 'limited_directional';
+    }
+  }
+  reasoningMemory = markArtifactGenerated(
+    reasoningMemory,
+    ARTIFACT_KINDS.GROWTH_DIRECTION
+  );
+
   advanceStatus(session, 'APPROVED');
   session.completed_at = new Date();
   await store.updateSession(session.id, {
@@ -5959,6 +6274,11 @@ async function approveBlueprint(blueprintId, opts = {}) {
       growthConversation: null,
       infrastructureReadiness: null,
       growthInfrastructureReadinessReport: null,
+      reasoningMemory,
+      artifactReadiness: {
+        ...((session.interview_state && session.interview_state.artifactReadiness) || {}),
+        growth_direction: growthReadiness,
+      },
     },
   });
 
@@ -6257,6 +6577,16 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
       ...session.interview_state,
       initialGrowthDirection: growthDirection,
       growthConversation: nextGrowth,
+      reasoningMemory: (() => {
+        let mem = ensureReasoningMemory(session.interview_state || {});
+        // Track progression so asking for "the next" artifact does not re-loop.
+        if (nextState.first_growth_plan_preview) {
+          mem = markArtifactGenerated(mem, ARTIFACT_KINDS.CAMPAIGN_PREVIEW);
+        } else if (nextState.validation_target || nextState.segment_ranking) {
+          mem = markArtifactGenerated(mem, ARTIFACT_KINDS.GROWTH_DIRECTION);
+        }
+        return mem;
+      })(),
       ...(nextState.segment_ranking
         ? { segmentRanking: nextState.segment_ranking }
         : {}),
@@ -6773,6 +7103,16 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       ...(reply.criteriaPreview
         ? { prospectListCriteriaPreview: reply.criteriaPreview }
         : {}),
+      reasoningMemory: (() => {
+        let mem = ensureReasoningMemory(session.interview_state || {});
+        if (nextPreview) {
+          mem = markArtifactGenerated(mem, ARTIFACT_KINDS.CAMPAIGN_PREVIEW);
+        }
+        if (reply.criteriaPreview) {
+          mem = markArtifactGenerated(mem, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+        }
+        return mem;
+      })(),
     },
   });
 
@@ -6805,6 +7145,8 @@ module.exports = {
   NEXT_ACTIONS,
   ANSWER_KINDS,
   MESSAGE_TYPES,
+  MESSAGE_CLASSES,
+  ARTIFACT_KINDS,
   CONTEXT_DOMAINS,
   DOMAIN_TO_SECTION,
   NORMALIZED_FACT_KEYS,
@@ -6891,4 +7233,13 @@ module.exports = {
   applyCorrectionToNormalizedFacts,
   sectionsFromNormalizedFacts,
   splitListItems,
+  // SPEC-090 reasoning layer
+  emptyReasoningMemory,
+  ensureReasoningMemory,
+  planReasoningTurn,
+  checkArtifactReadiness,
+  synthesizeBusinessLanguage,
+  resolveNextArtifact,
+  assessAnswerSufficiency,
+  buildProbingFollowUp,
 };
