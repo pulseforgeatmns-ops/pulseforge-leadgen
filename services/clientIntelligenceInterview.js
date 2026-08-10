@@ -48,8 +48,10 @@ const {
   buildCampaignPlanningOpening,
   buildCampaignPlanningReply,
   seedSlotsFromContext,
+  applyScoutExecutionResult,
+  executeScoutWorkRequest,
 } = require('./clientIntelligenceCampaignPlanning');
-  const {
+const {
   MESSAGE_CLASSES,
   ARTIFACT_KINDS,
   emptyReasoningMemory,
@@ -7128,7 +7130,34 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
   });
   reasoningMemory = artifactAction.memory || reasoningMemory;
 
-  const reply = buildCampaignPlanningReply(
+  const campaignReplyOpts = {
+    blueprintId: blueprint && blueprint.id,
+    blueprintVersion: blueprint && blueprint.version,
+    priorPreview,
+    priorCriteriaPreview,
+    priorBuildProposal,
+    priorProspectListDraft,
+    priorScoutHandoffBrief,
+    priorScoutHandoff,
+    messageClass,
+    artifactAction,
+    reasoningMemory,
+    reasoningState: { reasoningMemory },
+    ...(opts.scoutSourcingFn ? { scoutSourcingFn: opts.scoutSourcingFn } : {}),
+    ...(opts.publicSearchFn ? { publicSearchFn: opts.publicSearchFn } : {}),
+    ...(opts.searchProvider ? { searchProvider: opts.searchProvider } : {}),
+    ...(opts.workRequestStore
+      ? { workRequestStore: opts.workRequestStore }
+      : {}),
+    ...(opts.scoutSourcingSupported != null
+      ? { scoutSourcingSupported: opts.scoutSourcingSupported }
+      : {}),
+    ...(opts.scoutPublicSourcingSupported != null
+      ? { scoutPublicSourcingSupported: opts.scoutPublicSourcingSupported }
+      : {}),
+  };
+
+  let reply = buildCampaignPlanningReply(
     text,
     {
       ...campaignPlanning,
@@ -7140,21 +7169,21 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       scoutHandoff: priorScoutHandoff,
     },
     context,
-    {
-      blueprintId: blueprint && blueprint.id,
-      blueprintVersion: blueprint && blueprint.version,
-      priorPreview,
-      priorCriteriaPreview,
-      priorBuildProposal,
-      priorProspectListDraft,
-      priorScoutHandoffBrief,
-      priorScoutHandoff,
-      messageClass,
-      artifactAction,
-      reasoningMemory,
-      reasoningState: { reasoningMemory },
-    }
+    campaignReplyOpts
   );
+
+  // SPEC-077 — run queued Scout public-source sourcing when tooling is wired.
+  if (reply && reply.shouldExecuteScoutSourcing) {
+    const executed = await executeScoutWorkRequest({
+      workRequestId:
+        reply.scoutWorkRequest && reply.scoutWorkRequest.workRequestId,
+      handoffId: reply.scoutHandoff && reply.scoutHandoff.handoffId,
+      handoff: reply.scoutHandoff,
+      workRequest: reply.scoutWorkRequest,
+      ...campaignReplyOpts,
+    });
+    reply = applyScoutExecutionResult(reply, executed);
+  }
 
   const turns = [
     ...((campaignPlanning && campaignPlanning.turns) || []),
@@ -7221,6 +7250,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     reply.intent === 'create_scout_handoff_brief' ||
     reply.intent === 'hand_brief_to_scout' ||
     reply.intent === 'scout_sourcing_not_wired' ||
+    reply.intent === 'scout_handoff_queued' ||
     reply.intent === 'scout_handoff_completed' ||
     reply.intent === 'scout_sourcing_failed' ||
     reply.intent === 'live_sourcing_unavailable' ||
@@ -7236,6 +7266,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       reply.intent === 'create_scout_handoff_brief' ||
       reply.intent === 'hand_brief_to_scout' ||
       reply.intent === 'scout_sourcing_not_wired' ||
+      reply.intent === 'scout_handoff_queued' ||
       reply.intent === 'scout_handoff_completed' ||
       reply.intent === 'scout_sourcing_failed' ||
       reply.intent === 'live_sourcing_unavailable' ||
@@ -7258,6 +7289,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
           reply.intent === 'create_scout_handoff_brief' ||
           reply.intent === 'hand_brief_to_scout' ||
           reply.intent === 'scout_sourcing_not_wired' ||
+          reply.intent === 'scout_handoff_queued' ||
           reply.intent === 'scout_handoff_completed' ||
           reply.intent === 'scout_sourcing_failed'
         ? priorProspectListDraft

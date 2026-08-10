@@ -1901,7 +1901,9 @@
               escapeHtml(workRequest.workRequestId) +
               (workRequest.sourcingUnavailable
                 ? ' · Scout sourcing not wired'
-                : '') +
+                : workRequest.status
+                  ? ' · status: ' + escapeHtml(workRequest.status)
+                  : '') +
               '</p>'
             : '') +
           '<p><strong>1. ' +
