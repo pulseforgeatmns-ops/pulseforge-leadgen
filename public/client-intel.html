@@ -1830,6 +1830,7 @@
       const s = String(uiStatus || '');
       if (/unavailable|not wired/i.test(s)) return ' is-unavailable';
       if (/results ready/i.test(s)) return ' is-ready';
+      if (/failed quality gate|scout failed/i.test(s)) return ' is-unavailable';
       return '';
     }
 
