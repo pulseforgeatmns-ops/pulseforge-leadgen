@@ -210,7 +210,7 @@ describe('scoutPublicSourcing (SPEC-077)', () => {
     });
     assert.equal(result.ok, false);
     assert.equal(result.candidates.length, 0);
-    assert.equal(result.error, 'no_usable_candidates');
+    assert.equal(result.error, 'failed_quality_gate');
     assert.doesNotMatch(JSON.stringify(result), /placeholder company/i);
   });
 });
@@ -345,16 +345,19 @@ describe('scout work request execution (SPEC-077)', () => {
       workRequestStore: store,
     });
     assert.equal(result.ok, false);
-    assert.equal(result.intent, 'scout_sourcing_failed');
-    assert.equal(result.handoff.status, SCOUT_HANDOFF_STATUSES.FAILED);
-    assert.equal(result.candidateBatch, null);
-    assert.match(result.message, /preserved/i);
+    assert.equal(result.intent, 'scout_failed_quality_gate');
+    assert.equal(
+      result.handoff.status,
+      SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE
+    );
+    assert.match(result.message, /preserved|quality gate/i);
     assert.match(result.message, /No .*placeholder/i);
     assert.doesNotMatch(result.message, /fabricated company/i);
+    assert.doesNotMatch(result.message, /Creating this brief does not hand/i);
 
     const stored = store.getByWorkRequestId(queued.workRequest.workRequestId);
     assert.ok(stored);
-    assert.equal(stored.status, SCOUT_HANDOFF_STATUSES.FAILED);
+    assert.equal(stored.status, SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE);
     assert.equal(stored.workRequestId, queued.workRequest.workRequestId);
   });
 

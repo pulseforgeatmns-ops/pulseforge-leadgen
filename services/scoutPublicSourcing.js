@@ -311,6 +311,10 @@ function mapPublicHitToScoutCandidate(hit, workRequest, idx = 0, opts = {}) {
     sourceUrl,
     website,
     location: enrichedHit.location,
+    address: hit.address || hit.formatted_address || enrichedHit.location,
+    industry: hit.industry || hit.snippet || null,
+    placeTypes: hit.placeTypes || hit.types || [],
+    phone: hit.phone || hit.formatted_phone_number || null,
     marketTown: hit.marketTown || geoTownLabel(gate) || enrichedHit.location,
     segment:
       hit.segment ||
@@ -327,9 +331,10 @@ function mapPublicHitToScoutCandidate(hit, workRequest, idx = 0, opts = {}) {
     confidence: gate.confidence,
     status: gate.status,
     statusReason: gate.statusReason,
+    reasonCode: gate.reasonCode || null,
     rejectionReason:
       gate.status === CANDIDATE_STATUS.REJECTED
-        ? gate.rejectionReason || gate.statusReason
+        ? gate.rejectionReason || gate.reasonCode || gate.statusReason
         : null,
     exclusionRisk: Boolean(gate.exclusionRisk),
     signals: gate.signals || null,
@@ -588,32 +593,34 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
   const groups =
     selected.groups || groupCandidatesByStatus(candidates, rejected);
 
-  if (!candidates.length) {
+  const acceptedCount = (groups.accepted || []).length;
+  const reviewRequiredCount = (groups.review_required || []).length;
+  const usableCount = acceptedCount + reviewRequiredCount;
+
+  if (!candidates.length || usableCount < targetMin) {
     return {
       ok: false,
-      candidates: [],
+      candidates,
       rejected,
       groups,
       warnings: warnings.concat([
-        'Public-source search returned no usable in-market candidates after quality gates.',
+        !candidates.length
+          ? 'Public-source search returned no usable in-market candidates after quality gates.'
+          : `Usable accepted/reviewable property-manager candidates (${usableCount}) below minimum (${targetMin}) — failed_quality_gate.`,
         'No placeholder rows were generated.',
+        'Rejected rows are audit-only and must not appear as usable review candidates.',
       ]),
-      error: 'no_usable_candidates',
+      error: 'failed_quality_gate',
       queried,
       market,
+      usableCount,
+      targetMin,
       crmWritesMade: false,
       outreachCopyGenerated: false,
       accountChangesMade: false,
     };
   }
 
-  if (candidates.length < targetMin) {
-    warnings.push(
-      `Returned ${candidates.length} evidenced candidates (target ${targetMin}–${targetMax}). Shortfall preserved for operator review — no placeholders filled.`
-    );
-  }
-
-  const acceptedCount = (groups.accepted || []).length;
   if (acceptedCount === 0) {
     warnings.push(
       'No candidates reached accepted status — batch is review_required only and must not be treated as outreach-ready.'
@@ -629,6 +636,8 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
     error: null,
     queried,
     market,
+    usableCount,
+    targetMin,
     crmWritesMade: false,
     outreachCopyGenerated: false,
     accountChangesMade: false,

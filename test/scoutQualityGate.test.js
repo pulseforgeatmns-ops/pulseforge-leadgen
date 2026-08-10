@@ -12,11 +12,14 @@ const {
   CANDIDATE_STATUS,
   CONFIDENCE,
   PRIORITY_TOWNS_NH,
+  REJECTION_REASON,
   interpretAnchorMarket,
   buildNhScopedSearchQueries,
   evaluateScoutCandidate,
   isGenericCriteriaCopy,
   formatSuggestedContactRole,
+  batchMeetsQualityThreshold,
+  gateScoutCandidateRows,
 } = require('../services/scoutQualityGate');
 const {
   buildSearchQueries,
@@ -25,6 +28,7 @@ const {
 } = require('../services/scoutPublicSourcing');
 const {
   COMPLETED_RESULT_GUARDRAILS,
+  SCOUT_HANDOFF_STATUSES,
   buildScoutHandoff,
   handBriefToScout,
   handBriefToScoutAsync,
@@ -86,7 +90,7 @@ describe('scoutQualityGate — market interpretation', () => {
 });
 
 describe('scoutQualityGate — hard rejects', () => {
-  it('rejects UK Greater Manchester / Salford / Stockport results', () => {
+  it('rejects UK candidates with rejectionReason outside_market_country', () => {
     const gate = evaluateScoutCandidate(
       {
         companyName: 'Salford Estates Management',
@@ -98,8 +102,8 @@ describe('scoutQualityGate — hard rejects', () => {
       PM_WORK_REQUEST
     );
     assert.equal(gate.status, CANDIDATE_STATUS.REJECTED);
-    assert.ok(gate.rejectionReason);
-    assert.match(gate.statusReason, /UK|non-US|New Hampshire/i);
+    assert.equal(gate.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_COUNTRY);
+    assert.match(gate.statusReason, /outside_market_country|UK|non-US/i);
 
     const bareManchester = evaluateScoutCandidate(
       {
@@ -112,7 +116,10 @@ describe('scoutQualityGate — hard rejects', () => {
       PM_WORK_REQUEST
     );
     assert.equal(bareManchester.status, CANDIDATE_STATUS.REJECTED);
-    assert.match(bareManchester.rejectionReason || bareManchester.statusReason, /UK|Manchester|NH/i);
+    assert.equal(
+      bareManchester.rejectionReason,
+      REJECTION_REASON.OUTSIDE_MARKET_COUNTRY
+    );
 
     const mapped = mapPublicHitToScoutCandidate(
       {
@@ -127,10 +134,10 @@ describe('scoutQualityGate — hard rejects', () => {
     );
     assert.ok(mapped);
     assert.equal(mapped.status, CANDIDATE_STATUS.REJECTED);
-    assert.match(mapped.statusReason, /UK|non-US|New Hampshire/i);
+    assert.equal(mapped.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_COUNTRY);
   });
 
-  it('rejects cleaning companies, maid services, and housekeeping competitors', () => {
+  it('rejects cleaning companies with rejectionReason wrong_segment_cleaning_competitor', () => {
     const cases = [
       {
         companyName: 'Sparkle Cleaning Company',
@@ -167,7 +174,12 @@ describe('scoutQualityGate — hard rejects', () => {
         CANDIDATE_STATUS.REJECTED,
         `expected reject for ${hit.companyName}`
       );
-      assert.match(gate.statusReason, /cleaning|maid|housekeeping|janitorial|carpet/i);
+      assert.equal(
+        gate.rejectionReason,
+        REJECTION_REASON.WRONG_SEGMENT_CLEANING_COMPETITOR,
+        `expected cleaning code for ${hit.companyName}`
+      );
+      assert.match(gate.statusReason, /wrong_segment_cleaning_competitor|cleaning|maid|housekeeping|janitorial|carpet/i);
     }
   });
 
@@ -263,7 +275,11 @@ describe('scoutQualityGate — confidence and rationale', () => {
     );
     assert.ok(gate.fitRationale);
     assert.notEqual(gate.fitRationale, criteriaLine);
-    assert.match(gate.fitRationale, /Hooksett Facilities Partners|Hooksett|listing types|source URL/i);
+    assert.doesNotMatch(gate.fitRationale, /Manage offices, mixed-use/i);
+    assert.match(
+      gate.fitRationale,
+      /Hooksett Facilities Partners|address\/location on source|listing category\/type|website\/source signal|property-management relevance/i
+    );
     assert.equal(isGenericCriteriaCopy(gate.fitRationale, PM_WORK_REQUEST), false);
   });
 
@@ -281,69 +297,60 @@ describe('scoutQualityGate — confidence and rationale', () => {
     assert.doesNotMatch(verified, /^Suggested contact role:/i);
   });
 
-  it('marks Manchester NH as review_required (nearby/fill)', () => {
-    const gate = evaluateScoutCandidate(
-      {
-        companyName: 'Manchester NH Property Co',
-        address: '1000 Elm St, Manchester, NH',
-        location: 'Manchester NH',
-        website: 'https://mancpm.example',
-        placeTypes: ['real_estate_agency'],
-        industry: 'property management',
-        phone: '603-555-0188',
-      },
-      PM_WORK_REQUEST
-    );
-    assert.equal(gate.status, CANDIDATE_STATUS.REVIEW_REQUIRED);
-    assert.match(gate.statusReason, /Manchester|nearby|fill|review/i);
+  it('marks Manchester/Derry/Concord NH as review_required with outside_primary_town_cluster', () => {
+    for (const town of ['Manchester', 'Derry', 'Concord']) {
+      const gate = evaluateScoutCandidate(
+        {
+          companyName: `${town} NH Property Co`,
+          address: `100 Main St, ${town}, NH`,
+          location: `${town} NH`,
+          website: `https://${town.toLowerCase()}pm.example`,
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0188',
+        },
+        PM_WORK_REQUEST
+      );
+      assert.equal(gate.status, CANDIDATE_STATUS.REVIEW_REQUIRED);
+      assert.notEqual(gate.status, CANDIDATE_STATUS.ACCEPTED);
+      assert.notEqual(gate.confidence, CONFIDENCE.HIGH);
+      assert.match(
+        `${gate.statusReason} ${gate.risks} ${gate.reasonCode || ''}`,
+        /outside_primary_town_cluster/
+      );
+    }
   });
 
-  it('downgrades Concord/Derry NH unless explicitly allowed', () => {
-    const concord = evaluateScoutCandidate(
+  it('accepts only primary NH town cluster with property-management evidence', () => {
+    const accepted = evaluateScoutCandidate(
       {
-        companyName: 'Concord Property Management',
-        address: '33 N Main St, Concord, NH',
-        location: 'Concord NH',
-        website: 'https://concordpm.example',
+        companyName: 'Bedford Property Management LLC',
+        address: '12 Main St, Bedford, NH 03110',
+        location: 'Bedford NH',
+        website: 'https://bedfordpm.example',
+        sourceUrl: 'https://bedfordpm.example',
         placeTypes: ['real_estate_agency'],
         industry: 'property management',
-        phone: '603-555-0200',
+        phone: '603-555-0111',
       },
       PM_WORK_REQUEST
     );
-    assert.equal(concord.status, CANDIDATE_STATUS.REVIEW_REQUIRED);
-    assert.notEqual(concord.status, CANDIDATE_STATUS.ACCEPTED);
-    assert.match(concord.statusReason, /Concord|cluster|review/i);
-    assert.notEqual(concord.confidence, CONFIDENCE.HIGH);
+    assert.equal(accepted.status, CANDIDATE_STATUS.ACCEPTED);
+    assert.equal(accepted.geo.tier, 'priority');
+    assert.equal(accepted.signals.propertyManagementFit, true);
 
-    const derry = evaluateScoutCandidate(
+    const noPm = evaluateScoutCandidate(
       {
-        companyName: 'Derry Real Estate Management',
-        address: '10 Birch St, Derry, NH',
-        location: 'Derry NH',
-        website: 'https://derrypm.example',
-        placeTypes: ['real_estate_agency'],
-        industry: 'property management',
-        phone: '603-555-0201',
+        companyName: 'Bedford Widget Shop',
+        address: '12 Main St, Bedford, NH 03110',
+        location: 'Bedford NH',
+        website: 'https://bedfordwidgets.example',
+        placeTypes: ['store'],
+        phone: '603-555-0111',
       },
       PM_WORK_REQUEST
     );
-    assert.equal(derry.status, CANDIDATE_STATUS.REVIEW_REQUIRED);
-    assert.notEqual(derry.confidence, CONFIDENCE.HIGH);
-
-    const manchester = evaluateScoutCandidate(
-      {
-        companyName: 'Manchester NH Property Co',
-        address: '1000 Elm St, Manchester, NH',
-        location: 'Manchester NH',
-        website: 'https://mancpm.example',
-        placeTypes: ['real_estate_agency'],
-        industry: 'property management',
-        phone: '603-555-0188',
-      },
-      PM_WORK_REQUEST
-    );
-    assert.equal(manchester.status, CANDIDATE_STATUS.REVIEW_REQUIRED);
+    assert.notEqual(noPm.status, CANDIDATE_STATUS.ACCEPTED);
   });
 });
 
@@ -395,10 +402,15 @@ describe('scoutQualityGate — sourcing integration', () => {
     assert.equal(result.ok, true);
     assert.ok(result.rejected.length >= 2);
     assert.ok(
-      result.rejected.some((r) => /Salford|UK/i.test(r.companyName + r.statusReason))
+      result.rejected.some(
+        (r) => r.rejectionReason === REJECTION_REASON.OUTSIDE_MARKET_COUNTRY
+      )
     );
     assert.ok(
-      result.rejected.some((r) => /Maid|cleaning/i.test(r.companyName + r.statusReason))
+      result.rejected.some(
+        (r) =>
+          r.rejectionReason === REJECTION_REASON.WRONG_SEGMENT_CLEANING_COMPETITOR
+      )
     );
     assert.ok(result.candidates.every((c) => c.status !== CANDIDATE_STATUS.REJECTED));
     assert.ok(
@@ -409,9 +421,98 @@ describe('scoutQualityGate — sourcing integration', () => {
       assert.ok(c.statusReason);
       assert.match(c.suggestedContactRole, /Suggested contact role:|^.+\s—\s.+/);
     }
+    assert.ok(result.groups);
+    assert.ok(Array.isArray(result.groups.rejected));
+    assert.ok(
+      !result.groups.review_required.some((r) =>
+        /Salford|Maid|cleaning/i.test(r.companyName)
+      )
+    );
   });
 
-  it('completed handoff drops draft-style guardrail text', async () => {
+  it('fails quality gate when accepted/reviewable count is below threshold', () => {
+    const gated = gateScoutCandidateRows(
+      [
+        {
+          companyName: 'Bedford Property Management LLC',
+          sourceUrl: 'https://bedfordpm.example',
+          location: 'Bedford NH',
+          address: 'Bedford, NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0111',
+        },
+        {
+          companyName: 'UK Manchester Cleaners',
+          sourceUrl: 'https://cleaners.example.co.uk',
+          location: 'Manchester',
+        },
+      ],
+      { ...PM_WORK_REQUEST, targetCountMin: 5, targetCountMax: 10 }
+    );
+    assert.equal(gated.meetsQualityThreshold, false);
+    assert.ok(gated.usableCount < 5);
+    const threshold = batchMeetsQualityThreshold(gated.candidates, {
+      ...PM_WORK_REQUEST,
+      targetCountMin: 5,
+    });
+    assert.equal(threshold.ok, false);
+
+    const draft = buildScoutHandoff({
+      campaignObjective: 'Validate walkthrough demand',
+      targetSegment: 'Property managers',
+      marketBounds: 'Bedford NH',
+    });
+    const result = handBriefToScout(draft, {
+      targetCountMin: 5,
+      scoutSourcingFn: () => [
+        {
+          companyName: 'Bedford Property Management LLC',
+          sourceUrl: 'https://bedfordpm.example',
+          location: 'Bedford NH',
+          address: 'Bedford, NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0111',
+        },
+        {
+          companyName: 'Salford Estates UK',
+          sourceUrl: 'https://salford.example.co.uk',
+          location: 'Salford, UK',
+        },
+        {
+          companyName: 'Sparkle Cleaning Company',
+          sourceUrl: 'https://sparkle.example',
+          location: 'Bedford NH',
+          placeTypes: ['cleaning_service'],
+        },
+      ],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.handoff.status, SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE);
+    assert.equal(result.workRequest.status, SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE);
+    assert.ok(result.candidateBatch);
+    assert.ok(
+      (result.candidateBatch.groups.rejected || []).some(
+        (r) => r.rejectionReason === REJECTION_REASON.OUTSIDE_MARKET_COUNTRY
+      )
+    );
+    assert.ok(
+      (result.candidateBatch.groups.rejected || []).some(
+        (r) =>
+          r.rejectionReason === REJECTION_REASON.WRONG_SEGMENT_CLEANING_COMPETITOR
+      )
+    );
+    assert.ok(
+      !(result.candidateBatch.groups.review_required || []).some((r) =>
+        /Salford|Sparkle|UK|Cleaning/i.test(r.companyName)
+      )
+    );
+    assert.match(result.message, /Accepted candidates|Review required|Rejected candidates/i);
+    assert.doesNotMatch(result.message, /Creating this brief does not hand/i);
+  });
+
+  it('executed work request output does not include draft handoff instructions', async () => {
     const store = createMemoryScoutWorkRequestStore();
     const draft = buildScoutHandoff({
       campaignObjective: 'Validate walkthrough demand',
@@ -425,6 +526,7 @@ describe('scoutQualityGate — sourcing integration', () => {
     });
     const result = await handBriefToScoutAsync(draft, {
       workRequestStore: store,
+      targetCountMin: 1,
       publicSearchFn: async () => [
         {
           companyName: 'Bedford Property Management LLC',
@@ -437,6 +539,7 @@ describe('scoutQualityGate — sourcing integration', () => {
         },
       ],
     });
+    // One evidenced PM with min=1 completes; draft text must still be gone.
     assert.equal(result.ok, true);
     assert.deepEqual(result.handoff.guardrails, [...COMPLETED_RESULT_GUARDRAILS]);
     assert.doesNotMatch(
@@ -472,6 +575,34 @@ describe('scoutQualityGate — sourcing integration', () => {
       JSON.stringify(applied.scoutHandoffBrief),
       /Creating this brief does not hand|when sourcing execution is wired|in this step/i
     );
+
+    // Failed quality-gate path also strips draft section-11 language.
+    const failed = handBriefToScout(draft, {
+      targetCountMin: 10,
+      scoutSourcingFn: () => [
+        {
+          companyName: 'Salford UK PM',
+          sourceUrl: 'https://salford.example.co.uk',
+          location: 'Salford, UK',
+        },
+      ],
+    });
+    assert.equal(failed.handoff.status, SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE);
+    assert.deepEqual(failed.handoff.guardrails, [...COMPLETED_RESULT_GUARDRAILS]);
+    const appliedFailed = applyScoutExecutionResult(
+      {
+        scoutHandoffBrief: {
+          guardrails: [
+            'Creating this brief does not hand it to Scout — say “Hand this brief to Scout” to approve and queue',
+          ],
+        },
+      },
+      failed
+    );
+    assert.doesNotMatch(
+      JSON.stringify(appliedFailed.scoutHandoffBrief.guardrails),
+      /Creating this brief does not hand/i
+    );
   });
 
   it('injected scoutSourcingFn path cannot bypass quality gates', () => {
@@ -483,6 +614,7 @@ describe('scoutQualityGate — sourcing integration', () => {
       exclusionCriteria: PM_WORK_REQUEST.exclusionCriteria,
     });
     const result = handBriefToScout(draft, {
+      targetCountMin: 1,
       scoutSourcingFn: () => [
         {
           companyName: 'UK Manchester Cleaners',
@@ -508,10 +640,10 @@ describe('scoutQualityGate — sourcing integration', () => {
     });
     assert.equal(result.ok, true);
     assert.ok(
-      (result.candidateBatch.rejected || []).some((r) =>
-        /UK|Manchester|cleaning|cleaner/i.test(
-          `${r.companyName} ${r.rejectionReason || ''}`
-        )
+      (result.candidateBatch.rejected || []).some(
+        (r) =>
+          r.rejectionReason === REJECTION_REASON.OUTSIDE_MARKET_COUNTRY ||
+          r.rejectionReason === REJECTION_REASON.WRONG_SEGMENT_CLEANING_COMPETITOR
       )
     );
     const kept = result.candidateBatch.candidates;
@@ -519,7 +651,10 @@ describe('scoutQualityGate — sourcing integration', () => {
     assert.ok(kept.every((r) => r.status !== 'rejected'));
     for (const row of kept) {
       assert.doesNotMatch(row.fitRationale || '', /Manage offices, mixed-use/i);
-      assert.match(row.fitRationale || '', /sourced from public listing|address\/location on source|source URL/i);
+      assert.match(
+        row.fitRationale || '',
+        /sourced from public listing|address\/location on source|listing category\/type|website\/source signal|property-management relevance/i
+      );
       assert.match(row.suggestedContactRole || '', /Suggested contact role:/i);
       assert.doesNotMatch(row.suggestedContactRole || '', /decision-maker/i);
     }

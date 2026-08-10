@@ -105,6 +105,7 @@ describe('scoutHandoff lifecycle', () => {
       marketBounds: 'Bedford NH, Hooksett NH',
     });
     const result = handBriefToScout(draft, {
+      targetCountMin: 2,
       scoutSourcingFn: () => [
         {
           companyName: 'Granite Property Management',
@@ -203,6 +204,7 @@ describe('scoutHandoff lifecycle', () => {
       marketBounds: 'Bedford NH',
     });
     const ran = handBriefToScout(draft, {
+      targetCountMin: 1,
       scoutSourcingFn: () => [
         {
           companyName: 'Bedford Property Management',

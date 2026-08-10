@@ -1855,14 +1855,35 @@
         (groups && groups.rejected) || (batch && batch.rejected) || [];
       const scoutCompleted = Boolean(
         (handoff &&
-          (handoff.status === 'completed' || handoff.status === 'failed')) ||
+          (handoff.status === 'completed' ||
+            handoff.status === 'failed' ||
+            handoff.status === 'failed_quality_gate')) ||
           (brief && brief.scoutRan) ||
-          (batch && batch.candidates)
+          (batch && (batch.candidates || batch.rejected))
       );
+      const completedGuardrailsFallback = [
+        'Review-only — no CRM writes',
+        'No outreach copy',
+        'No sends',
+        'No account, DNS, GBP, social, or tracking changes',
+        'Operator must approve before Composer / CRM / export use',
+        'Rejected and review_required rows are not outreach-ready',
+      ];
+      function stripDraftHandoffGuardrails(list) {
+        const arr = Array.isArray(list) ? list : [];
+        const cleaned = arr.filter(function (g) {
+          return !/Creating this brief does not hand|when sourcing execution is wired|in this step/i.test(
+            String(g || '')
+          );
+        });
+        return cleaned.length ? cleaned : completedGuardrailsFallback;
+      }
       const guardrailsForDisplay = scoutCompleted
-        ? (handoff && handoff.guardrails) ||
-          (batch && batch.guardrails) ||
-          brief.guardrails
+        ? stripDraftHandoffGuardrails(
+            (handoff && handoff.guardrails) ||
+              (batch && batch.guardrails) ||
+              brief.guardrails
+          )
         : brief.guardrails;
       function renderCandidateGroup(label, rows, opts) {
         const list = Array.isArray(rows) ? rows : [];
