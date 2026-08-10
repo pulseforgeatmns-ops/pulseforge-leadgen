@@ -167,12 +167,14 @@ const DEFAULT_EXCLUSION_CRITERIA = Object.freeze([
 
 /** Required CRM fields for a prospect-list record (criteria preview only). */
 const DEFAULT_REQUIRED_PROSPECT_FIELDS = Object.freeze([
-  'Business / property name',
-  'Decision-maker or operations contact name',
-  'Email and/or phone',
-  'Property type (multi-family, HOA, office, mixed-use, or multi-tenant)',
-  'Town / market location',
-  'Website or online listing when available',
+  'Company or property manager name',
+  'Website or source URL',
+  'Location',
+  'Segment/subtype',
+  'Why they fit',
+  'Any disqualifying risk or uncertainty',
+  'Suggested contact role',
+  'Confidence level',
 ]);
 
 const DEFAULT_REVIEW_GATE =
@@ -1279,49 +1281,72 @@ function normalizeCriteriaList(value) {
   return [s];
 }
 
+function looksLikeValidationSignalField(item) {
+  const s = String(item || '').trim();
+  if (!s) return true;
+  return (
+    /\b(questions about|recurring service|reliability|responsiveness|scheduling|cleaning frustrations|vague interest|no next step|qualified repl(?:y|ies)|walkthroughs? booked|estimate requests?|primary signals?|secondary signals?|validation metrics?)\b/i.test(
+      s
+    ) ||
+    /^(reliability|responsiveness|scheduling|clarity on)\b/i.test(s) ||
+    /^or\b/i.test(s)
+  );
+}
+
+function looksLikeProspectRecordField(item) {
+  const s = String(item || '').trim();
+  if (!s || s.length < 3 || s.length > 80) return false;
+  if (looksLikeValidationSignalField(s)) return false;
+  if (/^(each prospect|required|inclusion|exclusion|review gate)\b/i.test(s)) {
+    return false;
+  }
+  // Accept known record-field labels and close operator variants.
+  return (
+    /\b(company|property manager|business|website|source url|url|location|town|market|segment|subtype|why they fit|fit|disqualif|risk|uncertainty|contact role|decision-?maker|confidence|email|phone|name)\b/i.test(
+      s
+    ) || DEFAULT_REQUIRED_PROSPECT_FIELDS.some((f) => f.toLowerCase() === s.toLowerCase())
+  );
+}
+
 function parseProspectFieldList(text) {
   return String(text || '')
     .split(/\n|;|•|\u2022|,(?=\s)/g)
     .map((x) => x.replace(/^[-–—*\d.)\s]+/, '').replace(/\.$/, '').trim())
     .filter((x) => x.length > 2 && x.length < 80)
     .filter((x) => !/^(each prospect|required)/i.test(x))
-    // Reject proof-asset / criteria bleed that is not a CRM field label.
-    .filter(
-      (x) =>
-        !/\b(photos?\/examples?|response-time|checklist|inclusion|exclusion|walkthrough)\b/i.test(
-          x
-        )
-    )
+    .filter(looksLikeProspectRecordField)
     .map((x) => x.charAt(0).toUpperCase() + x.slice(1));
 }
 
-function normalizeRequiredProspectFields(value, answers, context) {
-  if (Array.isArray(value) && value.length >= 3) {
-    return uniqueStrings(
-      value.map((x) => String(x).trim().replace(/\.$/, ''))
-    ).slice(0, 10);
-  }
-  const fromSlot = String(value || '').trim();
-  const candidates = [
-    fromSlot,
-    extractRequiredProspectFieldsText(fromSlot),
-    // Prefer the active criteria answers only — never the full planning blob
-    // (proof assets / hypothesis text can look like field lists).
-    extractRequiredProspectFieldsText(
-      [
-        answerText(answers, 'inclusion_criteria'),
-        answerText(answers, 'exclusion_criteria'),
-        answerText(answers, 'prospect_list_criteria'),
-        answerText(answers, 'campaign_objective'),
-      ]
-        .filter(Boolean)
-        .join('\n')
-    ),
-  ].filter(Boolean);
-
-  for (const labeled of candidates) {
-    const fields = uniqueStrings(parseProspectFieldList(labeled)).slice(0, 10);
-    if (fields.length >= 3) return fields;
+/**
+ * Required prospect record fields only — never validation metrics, secondary
+ * signals, or campaign-objective prose. Section 7 always uses the canonical
+ * prospect-record field list for the criteria preview.
+ */
+function normalizeRequiredProspectFields(value) {
+  // Guard: if a caller passes validation-signal text/arrays, discard them.
+  if (Array.isArray(value)) {
+    const hasValidationBleed = value.some((item) =>
+      looksLikeValidationSignalField(item)
+    );
+    if (hasValidationBleed) return [...DEFAULT_REQUIRED_PROSPECT_FIELDS];
+    const cleaned = uniqueStrings(
+      value
+        .map((x) => String(x || '').trim().replace(/\.$/, ''))
+        .filter(looksLikeProspectRecordField)
+    );
+    const defaultKeys = DEFAULT_REQUIRED_PROSPECT_FIELDS.map((d) =>
+      d.toLowerCase()
+    );
+    const isCanonical =
+      cleaned.length === DEFAULT_REQUIRED_PROSPECT_FIELDS.length &&
+      cleaned.every((item) => defaultKeys.includes(item.toLowerCase()));
+    if (isCanonical) return cleaned;
+  } else if (value) {
+    const raw = String(value).trim();
+    if (looksLikeValidationSignalField(raw)) {
+      return [...DEFAULT_REQUIRED_PROSPECT_FIELDS];
+    }
   }
   return [...DEFAULT_REQUIRED_PROSPECT_FIELDS];
 }
@@ -1430,9 +1455,7 @@ function buildProspectListCriteriaPreview(context, slots, opts = {}) {
   const requiredProspectFields = normalizeRequiredProspectFields(
     s.requiredProspectFields ||
       (prior && prior.requiredProspectFields) ||
-      null,
-    answers,
-    ctx
+      null
   );
   const reviewGate = normalizeReviewGate(
     s.reviewGate || (prior && prior.reviewGate) || null
