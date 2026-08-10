@@ -23,6 +23,7 @@ const {
   buildNhScopedSearchQueries,
   evaluateScoutCandidate,
   selectBatchWithManchesterFill,
+  groupCandidatesByStatus,
   formatSuggestedContactRole,
   isGenericCriteriaCopy,
 } = require('./scoutQualityGate');
@@ -47,6 +48,8 @@ const SCOUT_PLACES_DETAILS_FIELDS =
 function buildScoutPlacesTextSearchUrl({ query, apiKey }) {
   const url = new URL(SCOUT_PLACES_TEXTSEARCH_URL);
   url.searchParams.set('query', String(query || '').trim());
+  // Bias legacy Text Search toward USA — never UK Greater Manchester.
+  url.searchParams.set('region', 'us');
   url.searchParams.set('key', String(apiKey || ''));
   return url;
 }
@@ -324,6 +327,10 @@ function mapPublicHitToScoutCandidate(hit, workRequest, idx = 0, opts = {}) {
     confidence: gate.confidence,
     status: gate.status,
     statusReason: gate.statusReason,
+    rejectionReason:
+      gate.status === CANDIDATE_STATUS.REJECTED
+        ? gate.rejectionReason || gate.statusReason
+        : null,
     exclusionRisk: Boolean(gate.exclusionRisk),
     signals: gate.signals || null,
     geo: gate.geo || null,
@@ -578,12 +585,15 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
   const rejected = dedupeCandidates(
     rejectedEarly.concat(selected.rejected || [])
   );
+  const groups =
+    selected.groups || groupCandidatesByStatus(candidates, rejected);
 
   if (!candidates.length) {
     return {
       ok: false,
       candidates: [],
       rejected,
+      groups,
       warnings: warnings.concat([
         'Public-source search returned no usable in-market candidates after quality gates.',
         'No placeholder rows were generated.',
@@ -603,9 +613,7 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
     );
   }
 
-  const acceptedCount = candidates.filter(
-    (c) => c.status === CANDIDATE_STATUS.ACCEPTED
-  ).length;
+  const acceptedCount = (groups.accepted || []).length;
   if (acceptedCount === 0) {
     warnings.push(
       'No candidates reached accepted status — batch is review_required only and must not be treated as outreach-ready.'
@@ -616,6 +624,7 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
     ok: true,
     candidates,
     rejected,
+    groups,
     warnings,
     error: null,
     queried,
