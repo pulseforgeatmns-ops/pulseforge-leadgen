@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Max Conversational Reasoning Layer ([SPEC-090](docs/specs/SPEC-090_Max_Conversational_Reasoning_Layer.md))
+  - Classifies each CIE interview turn (`direct_answer`, `correction`, `add_on`, `approval`, `clarification_request`, `insufficient_answer`, `off_topic`, `skip`) before question handling
+  - Session `reasoningMemory`: accepted facts, pending corrections, open questions, confidence/evidence by section, question debt, artifact progression
+  - Cross-section add-ons update the correct prior section (e.g. ICP add-on while on avoid)
+  - Vague answers get one focused probing follow-up instead of advancing
+  - Artifact readiness checks for Blueprint / Growth Direction / Campaign Preview / Prospect Criteria
+  - Synthesis helper rewrites into clean business language (no stitched prompt text)
+  - Guardrails unchanged: no campaigns, lists, outreach, CRM/DNS/GBP/social/account changes without approval
+
 ### Fixed
 
 - Phone/email visible task guidance no longer uses generic capture/follow-up copy
