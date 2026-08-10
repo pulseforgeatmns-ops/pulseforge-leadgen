@@ -21,6 +21,8 @@ const {
   looksLikeProspectListDraftRequest,
   looksLikeScoutHandoffBriefRequest,
   looksLikeHandBriefToScoutRequest,
+  looksLikeExecuteExistingScoutWorkRequest,
+  extractWorkRequestIdFromMessage,
   looksLikeLiveSourcingApproval,
   classifyProspectAcquisitionIntent,
   PROSPECT_ACQUISITION_INTENTS,
@@ -43,6 +45,7 @@ const {
   buildScoutHandoff,
   handBriefToScout,
   handBriefToScoutAsync,
+  queueOrExecuteExistingScoutWorkRequest,
   executeScoutWorkRequest,
   isScoutSourcingExecutionWired,
   uiStatusForHandoff,
@@ -2747,6 +2750,122 @@ function applyScoutExecutionResult(reply, result) {
     scoutWorkRequest: result.workRequest || reply.scoutWorkRequest,
     scoutCandidateBatch: result.candidateBatch || null,
     shouldExecuteScoutSourcing: false,
+    createdNewHandoff: Boolean(result.createdNewHandoff),
+  };
+}
+
+/**
+ * Execute / retry a preserved Scout work request by ID.
+ * Does not create a new handoff, does not re-ask for build-proposal approval,
+ * and does not emit placeholder drafts.
+ */
+function produceExecuteExistingScoutWorkRequestResult(
+  ctx,
+  answers,
+  slots,
+  opts,
+  leadIn
+) {
+  const workRequestId =
+    (opts && opts.workRequestId) ||
+    extractWorkRequestIdFromMessage(opts && opts.userMessage) ||
+    null;
+
+  const result = queueOrExecuteExistingScoutWorkRequest({
+    workRequestId,
+    handoff: opts.priorScoutHandoff || null,
+    workRequest:
+      (opts.priorScoutHandoff && opts.priorScoutHandoff.workRequest) || null,
+    ...opts,
+  });
+
+  const briefSlots = {
+    ...slots,
+    previewApproved: true,
+    criteriaGenerated: true,
+    criteriaApproved: true,
+    buildProposalGenerated: Boolean(
+      slots.buildProposalGenerated ||
+        slots.buildProposalApproved ||
+        opts.priorBuildProposal
+    ),
+    buildProposalApproved: Boolean(
+      slots.buildProposalApproved ||
+        (opts.priorBuildProposal &&
+          opts.priorBuildProposal.status === 'approved')
+    ),
+  };
+
+  const planningState = planningStateForHandoffResult(result);
+  const lines = [];
+  if (leadIn) lines.push(leadIn, '');
+  lines.push(result.message || '');
+
+  const priorBrief = opts.priorScoutHandoffBrief || null;
+  const nextBrief = priorBrief
+    ? {
+        ...priorBrief,
+        handoffId: result.handoff && result.handoff.handoffId,
+        scoutHandoff: result.handoff || priorBrief.scoutHandoff,
+        status: (result.handoff && result.handoff.status) || priorBrief.status,
+        uiStatus:
+          (result.handoff && result.handoff.uiStatus) || priorBrief.uiStatus,
+        handedToScout: true,
+        scoutRan: Boolean(result.scoutRan),
+        liveSourcingPerformed: false,
+        prospectListGenerated: false,
+        workRequestId:
+          (result.workRequest && result.workRequest.workRequestId) ||
+          workRequestId,
+        updatedAt:
+          (result.handoff && result.handoff.updatedAt) || priorBrief.updatedAt,
+        recommendedNextStep: result.scoutRan
+          ? result.ok
+            ? 'Review Scout candidates. Approve before Composer / CRM / export use. No outreach or CRM writes yet.'
+            : 'Scout sourcing failed — work request preserved. Review failure and retry or revise criteria.'
+          : result.shouldExecuteScoutSourcing
+            ? 'Scout work request execution queued — public-source sourcing will run next.'
+            : result.sourcingUnavailable
+              ? 'Scout sourcing execution is the next build gap — wire Scout public-source sourcing.'
+              : priorBrief.recommendedNextStep,
+      }
+    : null;
+
+  return {
+    message: lines.filter((l, i) => !(l === '' && i === lines.length - 1)).join('\n'),
+    step: planningState,
+    answers,
+    slots: {
+      ...briefSlots,
+      scoutHandoffBriefGenerated: Boolean(
+        briefSlots.scoutHandoffBriefGenerated || nextBrief
+      ),
+      scoutHandoffApproved: Boolean(result.workRequest),
+      scoutHandoffQueued: Boolean(
+        result.workRequest &&
+          (result.executionWired || result.sourcingUnavailable || result.ok === false)
+      ),
+    },
+    preview: opts.priorPreview || null,
+    criteriaPreview: opts.priorCriteriaPreview || null,
+    buildProposal: opts.priorBuildProposal || null,
+    prospectListDraft: opts.priorProspectListDraft || null,
+    scoutHandoffBrief: nextBrief,
+    scoutHandoff: result.handoff || opts.priorScoutHandoff || null,
+    scoutWorkRequest: result.workRequest || null,
+    scoutCandidateBatch: result.candidateBatch || null,
+    liveProspectList: null,
+    intent: result.intent,
+    shouldExecuteScoutSourcing: Boolean(result.shouldExecuteScoutSourcing),
+    createdNewHandoff: false,
+    previewApproved: true,
+    criteriaApproved: true,
+    buildProposalApproved: Boolean(briefSlots.buildProposalApproved),
+    liveSourcingApproved: false,
+    planningState,
+    currentAsk: null,
+    workRequestId:
+      (result.workRequest && result.workRequest.workRequestId) || workRequestId,
   };
 }
 
@@ -4452,6 +4571,67 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
     priorSlots.previewApproved = true;
   }
 
+  // Execute / retry an existing Scout work request by ID — never create a new handoff
+  // and never fall through to "ask me to generate batch when ready".
+  if (
+    looksLikeExecuteExistingScoutWorkRequest(userMessage) ||
+    classifyProspectAcquisitionIntent(userMessage) ===
+      PROSPECT_ACQUISITION_INTENTS.EXECUTE_EXISTING_SCOUT_WORK_REQUEST
+  ) {
+    const answersEarly = { ...(prior.answers || {}) };
+    const syncedEarly = syncAnswersFromSlots(answersEarly, {
+      ...priorSlots,
+      previewGenerated: true,
+      previewApproved: true,
+      criteriaGenerated: true,
+      criteriaApproved: true,
+      buildProposalGenerated: true,
+      buildProposalApproved: true,
+    });
+    return produceExecuteExistingScoutWorkRequestResult(
+      ctx,
+      syncedEarly,
+      {
+        ...priorSlots,
+        previewGenerated: true,
+        previewApproved: true,
+        criteriaGenerated: true,
+        criteriaApproved: true,
+        buildProposalGenerated: true,
+        buildProposalApproved: true,
+      },
+      {
+        ...opts,
+        userMessage,
+        workRequestId: extractWorkRequestIdFromMessage(userMessage),
+        priorPreview,
+        priorCriteriaPreview:
+          opts.priorCriteriaPreview ||
+          prior.prospectListCriteriaPreview ||
+          prior.criteriaPreview ||
+          null,
+        priorBuildProposal:
+          opts.priorBuildProposal ||
+          prior.prospectListBuildProposal ||
+          prior.buildProposal ||
+          null,
+        priorProspectListDraft:
+          opts.priorProspectListDraft ||
+          prior.prospectListDraft ||
+          prior.reviewableProspectListDraft ||
+          null,
+        priorScoutHandoffBrief:
+          opts.priorScoutHandoffBrief || prior.scoutHandoffBrief || null,
+        priorScoutHandoff:
+          opts.priorScoutHandoff ||
+          prior.scoutHandoff ||
+          (prior.scoutHandoffBrief && prior.scoutHandoffBrief.scoutHandoff) ||
+          null,
+      },
+      'Executing the existing Scout work request. No new handoff will be created.'
+    );
+  }
+
   // Hand brief to Scout — approve + queue work request (or clear not-wired boundary).
   if (
     looksLikeHandBriefToScoutRequest(userMessage) ||
@@ -4992,6 +5172,37 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
         );
       }
 
+      if (artifactAction.action === 'execute_existing_scout_work_request') {
+        return produceExecuteExistingScoutWorkRequestResult(
+          ctx,
+          syncedAnswers,
+          {
+            ...slots,
+            previewApproved: true,
+            criteriaGenerated: true,
+            criteriaApproved: true,
+            buildProposalGenerated: true,
+            buildProposalApproved: true,
+          },
+          {
+            ...replyOpts,
+            userMessage,
+            workRequestId: artifactAction.workRequestId || null,
+            priorScoutHandoffBrief:
+              opts.priorScoutHandoffBrief ||
+              prior.scoutHandoffBrief ||
+              null,
+            priorScoutHandoff:
+              opts.priorScoutHandoff ||
+              prior.scoutHandoff ||
+              (prior.scoutHandoffBrief && prior.scoutHandoffBrief.scoutHandoff) ||
+              null,
+          },
+          artifactAction.note ||
+            'Executing the existing Scout work request. No new handoff will be created.'
+        );
+      }
+
       if (artifactAction.action === 'hand_brief_to_scout') {
         return produceHandBriefToScoutResult(
           ctx,
@@ -5516,6 +5727,7 @@ module.exports = {
   formatScoutHandoffBriefMessage,
   produceScoutHandoffBriefResult,
   produceHandBriefToScoutResult,
+  produceExecuteExistingScoutWorkRequestResult,
   applyScoutExecutionResult,
   isLivePublicSourcingSupported,
   isScoutSourcingExecutionWired,
@@ -5524,6 +5736,7 @@ module.exports = {
   buildScoutHandoff,
   handBriefToScout,
   handBriefToScoutAsync,
+  queueOrExecuteExistingScoutWorkRequest,
   executeScoutWorkRequest,
   uiStatusForHandoff,
   markCriteriaPreviewApproved,

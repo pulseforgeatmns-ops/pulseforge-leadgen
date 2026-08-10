@@ -13,6 +13,7 @@ const {
   buildScoutHandoff,
   handBriefToScout,
   handBriefToScoutAsync,
+  queueOrExecuteExistingScoutWorkRequest,
   executeScoutWorkRequest,
   isScoutSourcingExecutionWired,
   approveScoutResults,
@@ -365,5 +366,39 @@ describe('scout work request execution (SPEC-077)', () => {
     });
     assert.equal(result.ok, false);
     assert.match(result.message, /No Scout work request found/i);
+  });
+
+  it('queueOrExecuteExistingScoutWorkRequest runs by ID without creating a new handoff', async () => {
+    const draft = buildScoutHandoff({
+      campaignObjective: 'Validate walkthrough demand',
+      targetSegment: 'Property managers',
+      marketBounds: 'Manchester NH',
+    });
+    const queued = handBriefToScout(draft, {
+      publicSearchFn: async () => sampleHits(16),
+      workRequestStore: store,
+    });
+    const workRequestId = queued.workRequest.workRequestId;
+    const sizeBefore = store.size();
+
+    const queuedExec = queueOrExecuteExistingScoutWorkRequest({
+      workRequestId,
+      publicSearchFn: async () => sampleHits(16),
+      workRequestStore: store,
+    });
+    assert.equal(queuedExec.createdNewHandoff, false);
+    assert.equal(queuedExec.shouldExecuteScoutSourcing, true);
+    assert.equal(queuedExec.workRequest.workRequestId, workRequestId);
+    assert.equal(store.size(), sizeBefore);
+
+    const result = await executeScoutWorkRequest({
+      workRequestId,
+      publicSearchFn: async () => sampleHits(16),
+      workRequestStore: store,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.workRequest.workRequestId, workRequestId);
+    assert.equal(store.size(), sizeBefore);
+    assert.ok(result.candidateBatch.candidates.every((c) => c.sourceUrl));
   });
 });

@@ -27,6 +27,8 @@ const {
   looksLikeProspectListDraftRequest,
   looksLikeScoutHandoffBriefRequest,
   looksLikeHandBriefToScoutRequest,
+  looksLikeExecuteExistingScoutWorkRequest,
+  extractWorkRequestIdFromMessage,
   looksLikeLiveSourcingApproval,
   classifyProspectAcquisitionIntent,
   PROSPECT_ACQUISITION_INTENTS,
@@ -655,5 +657,90 @@ describe('Live sourcing approval after prospect list draft', () => {
     assert.equal(action.liveSourcingApproved, true);
     assert.equal(action.memory.liveSourcingApproved, true);
     assert.notEqual(action.action, 'emit_prospect_list_draft');
+  });
+
+  it('routes execute existing Scout work request by ID — never ask-to-generate-batch fallback', () => {
+    const EXECUTE_MSG =
+      'Execute the existing Scout work request now.\nworkRequestId: f0ac74ac-16a6-4dba-b024-d3727b285a86';
+
+    assert.equal(
+      extractWorkRequestIdFromMessage(EXECUTE_MSG),
+      'f0ac74ac-16a6-4dba-b024-d3727b285a86'
+    );
+    assert.equal(looksLikeExecuteExistingScoutWorkRequest(EXECUTE_MSG), true);
+    assert.equal(looksLikeHandBriefToScoutRequest(EXECUTE_MSG), false);
+    assert.equal(looksLikeScoutHandoffBriefRequest(EXECUTE_MSG), false);
+    assert.equal(looksLikeLiveSourcingApproval(EXECUTE_MSG), false);
+    assert.equal(looksLikeProspectListDraftRequest(EXECUTE_MSG), false);
+    assert.equal(
+      classifyProspectAcquisitionIntent(EXECUTE_MSG),
+      PROSPECT_ACQUISITION_INTENTS.EXECUTE_EXISTING_SCOUT_WORK_REQUEST
+    );
+
+    let mem = emptyReasoningMemory();
+    mem = markArtifactApproved(mem, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    mem = markArtifactApproved(
+      mem,
+      ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW
+    );
+    mem = markArtifactApproved(
+      mem,
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    );
+
+    const action = resolveCampaignArtifactAction({
+      userMessage: EXECUTE_MSG,
+      memory: mem,
+      priorCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+      },
+      priorBuildProposal: {
+        kind: 'prospect_list_build_proposal',
+        status: 'approved',
+      },
+      step: 'prospect_list_build_proposal_approved',
+    });
+
+    assert.equal(action.action, 'execute_existing_scout_work_request');
+    assert.equal(
+      action.workRequestId,
+      'f0ac74ac-16a6-4dba-b024-d3727b285a86'
+    );
+    assert.notEqual(action.action, 'ack_build_approval');
+    assert.notEqual(action.action, 'hand_brief_to_scout');
+    assert.notEqual(action.action, 'emit_prospect_list_draft');
+    assert.doesNotMatch(
+      String(action.note || ''),
+      /Ask me to generate the first reviewable prospect list batch/i
+    );
+  });
+
+  it('routes retry failed Scout work request by ID', () => {
+    const RETRY_MSG =
+      'Retry the failed Scout work request.\nworkRequestId: a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    assert.equal(looksLikeExecuteExistingScoutWorkRequest(RETRY_MSG), true);
+    assert.equal(
+      classifyProspectAcquisitionIntent(RETRY_MSG),
+      PROSPECT_ACQUISITION_INTENTS.EXECUTE_EXISTING_SCOUT_WORK_REQUEST
+    );
+    const action = resolveCampaignArtifactAction({
+      userMessage: RETRY_MSG,
+      memory: emptyReasoningMemory(),
+      priorCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+      },
+      priorBuildProposal: {
+        kind: 'prospect_list_build_proposal',
+        status: 'approved',
+      },
+      step: 'scout_handoff_failed',
+    });
+    assert.equal(action.action, 'execute_existing_scout_work_request');
+    assert.equal(
+      action.workRequestId,
+      'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+    );
   });
 });

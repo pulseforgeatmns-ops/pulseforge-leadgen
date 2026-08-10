@@ -2307,4 +2307,239 @@ describe('Reviewable prospect list draft progression', () => {
     assert.equal(reply.scoutCandidateBatch.outreachCopyGenerated, false);
     assert.doesNotMatch(reply.message, /placeholder/i);
   });
+
+  it('executes existing Scout work request by ID — no ask-to-generate-batch, no new handoff', () => {
+    const {
+      buildCampaignPlanningReply,
+      SCOUT_HANDOFF_UI_STATUS,
+      handBriefToScout,
+      buildScoutHandoff,
+    } = require('../services/clientIntelligenceCampaignPlanning');
+    const {
+      createMemoryScoutWorkRequestStore,
+    } = require('../services/scoutWorkRequestStore');
+
+    const store = createMemoryScoutWorkRequestStore();
+    const draft = buildScoutHandoff({
+      campaignObjective: 'Validate walkthrough demand',
+      targetSegment: 'Property managers',
+      targetSubtype: 'multi-family',
+      marketBounds: 'Manchester NH',
+      inclusionCriteria: ['Local'],
+      exclusionCriteria: ['Chains'],
+      requiredFields: ['Company name', 'Source URL'],
+    });
+    const queued = handBriefToScout(draft, {
+      scoutSourcingSupported: false,
+      scoutPublicSourcingSupported: false,
+      workRequestStore: store,
+    });
+    const workRequestId = queued.workRequest.workRequestId;
+    const storeSizeBefore = store.size();
+
+    const prior = {
+      step: 'prospect_list_build_proposal_approved',
+      slots: {
+        previewGenerated: true,
+        previewApproved: true,
+        criteriaGenerated: true,
+        criteriaApproved: true,
+        buildProposalGenerated: true,
+        buildProposalApproved: true,
+      },
+      prospectListCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+      },
+      prospectListBuildProposal: {
+        kind: 'prospect_list_build_proposal',
+        status: 'approved',
+      },
+    };
+
+    const reply = buildCampaignPlanningReply(
+      [
+        'Execute the existing Scout work request now.',
+        `workRequestId: ${workRequestId}`,
+      ].join('\n'),
+      prior,
+      {
+        businessName: 'Anchor Cleaning',
+        primarySegment: 'property_managers',
+        targetMarket: 'Manchester',
+      },
+      {
+        workRequestStore: store,
+        scoutSourcingFn: () => [
+          {
+            companyName: 'Granite PM',
+            sourceUrl: 'https://example.com/granite',
+            location: 'Manchester NH',
+            fitRationale: 'In-market PM',
+            suggestedContactRole: 'Owner',
+            risks: 'None noted',
+            confidence: 'high',
+          },
+        ],
+      }
+    );
+
+    assert.equal(reply.intent, 'scout_handoff_completed');
+    assert.equal(reply.createdNewHandoff, false);
+    assert.equal(store.size(), storeSizeBefore);
+    assert.equal(
+      reply.scoutWorkRequest && reply.scoutWorkRequest.workRequestId,
+      workRequestId
+    );
+    assert.ok(reply.scoutCandidateBatch);
+    assert.ok(reply.scoutCandidateBatch.candidates.length >= 1);
+    for (const row of reply.scoutCandidateBatch.candidates) {
+      assert.ok(row.sourceUrl);
+    }
+    assert.doesNotMatch(
+      reply.message,
+      /Ask me to generate the first reviewable prospect list batch/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Build proposal already approved/i
+    );
+    assert.match(reply.message, /No new handoff was created|Work request/i);
+    assert.equal(reply.scoutCandidateBatch.crmWritesMade, false);
+    assert.equal(reply.scoutCandidateBatch.outreachCopyGenerated, false);
+    assert.equal(
+      reply.scoutHandoff.uiStatus,
+      SCOUT_HANDOFF_UI_STATUS.SCOUT_RESULTS_READY
+    );
+  });
+
+  it('retries failed Scout work request by ID without creating a duplicate handoff', async () => {
+    const {
+      buildCampaignPlanningReply,
+      handBriefToScout,
+      buildScoutHandoff,
+      executeScoutWorkRequest,
+    } = require('../services/clientIntelligenceCampaignPlanning');
+    const {
+      createMemoryScoutWorkRequestStore,
+    } = require('../services/scoutWorkRequestStore');
+
+    const store = createMemoryScoutWorkRequestStore();
+    const draft = buildScoutHandoff({
+      campaignObjective: 'Validate walkthrough demand',
+      targetSegment: 'Property managers',
+      marketBounds: 'Manchester NH',
+    });
+    const queued = handBriefToScout(draft, {
+      publicSearchFn: async () => [],
+      workRequestStore: store,
+    });
+    const failed = await executeScoutWorkRequest({
+      workRequestId: queued.workRequest.workRequestId,
+      publicSearchFn: async () => [],
+      workRequestStore: store,
+    });
+    assert.equal(failed.intent, 'scout_sourcing_failed');
+    const workRequestId = failed.workRequest.workRequestId;
+    const storeSizeBefore = store.size();
+
+    const reply = buildCampaignPlanningReply(
+      [
+        'Retry the failed Scout work request.',
+        `workRequestId: ${workRequestId}`,
+      ].join('\n'),
+      {
+        step: 'scout_handoff_failed',
+        slots: {
+          previewApproved: true,
+          criteriaApproved: true,
+          buildProposalApproved: true,
+        },
+        prospectListCriteriaPreview: {
+          kind: 'prospect_list_criteria_preview',
+          status: 'approved',
+        },
+        prospectListBuildProposal: {
+          kind: 'prospect_list_build_proposal',
+          status: 'approved',
+        },
+      },
+      {
+        businessName: 'Anchor Cleaning',
+        primarySegment: 'property_managers',
+        targetMarket: 'Manchester',
+      },
+      {
+        workRequestStore: store,
+        scoutSourcingFn: () => [
+          {
+            companyName: 'Riverbend Rentals',
+            sourceUrl: 'https://example.com/riverbend',
+            location: 'Manchester NH',
+            fitRationale: 'Local PM',
+            suggestedContactRole: 'Property manager',
+            risks: 'Thin contact page',
+            confidence: 'medium',
+          },
+        ],
+      }
+    );
+
+    assert.equal(reply.intent, 'scout_handoff_completed');
+    assert.equal(reply.createdNewHandoff, false);
+    assert.equal(store.size(), storeSizeBefore);
+    assert.equal(reply.scoutWorkRequest.workRequestId, workRequestId);
+    assert.doesNotMatch(
+      reply.message,
+      /Ask me to generate the first reviewable prospect list batch/i
+    );
+    assert.ok(reply.scoutCandidateBatch.candidates[0].sourceUrl);
+  });
+
+  it('execute existing Scout work request never falls back to ask-me-to-generate-batch', () => {
+    const {
+      buildCampaignPlanningReply,
+    } = require('../services/clientIntelligenceCampaignPlanning');
+    const {
+      createMemoryScoutWorkRequestStore,
+    } = require('../services/scoutWorkRequestStore');
+
+    const store = createMemoryScoutWorkRequestStore();
+    const missingId = 'f0ac74ac-16a6-4dba-b024-d3727b285a86';
+    const reply = buildCampaignPlanningReply(
+      [
+        'Execute the existing Scout work request now.',
+        `workRequestId: ${missingId}`,
+      ].join('\n'),
+      {
+        step: 'prospect_list_build_proposal_approved',
+        slots: {
+          previewApproved: true,
+          criteriaApproved: true,
+          buildProposalApproved: true,
+        },
+        prospectListCriteriaPreview: {
+          kind: 'prospect_list_criteria_preview',
+          status: 'approved',
+        },
+        prospectListBuildProposal: {
+          kind: 'prospect_list_build_proposal',
+          status: 'approved',
+        },
+      },
+      { businessName: 'Anchor Cleaning' },
+      { workRequestStore: store }
+    );
+
+    assert.equal(reply.intent, 'scout_sourcing_failed');
+    assert.equal(reply.createdNewHandoff, false);
+    assert.equal(store.size(), 0);
+    assert.match(reply.message, /No Scout work request found/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Ask me to generate the first reviewable prospect list batch/i
+    );
+    assert.doesNotMatch(reply.message, /Build proposal already approved/i);
+    assert.equal(reply.scoutCandidateBatch, null);
+  });
 });
