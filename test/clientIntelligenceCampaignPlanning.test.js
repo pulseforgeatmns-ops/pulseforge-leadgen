@@ -349,9 +349,11 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     );
     assert.deepEqual(preview.exclusionCriteria, [
       'Large institutional property managers',
+      'Cleaning companies, maid services, housekeeping, janitorial, carpet cleaning, and cleaning competitors',
       'Highly complex properties',
       'Lowest-price buyers',
-      "Properties outside Anchor's service area",
+      "Properties outside Anchor's New Hampshire, USA service area",
+      'UK Greater Manchester / Salford / Stockport or other non-US results',
       'Prospects with no clear decision-maker or contact path',
     ]);
     assert.doesNotMatch(
@@ -359,7 +361,7 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
       /prefers to avoid|should avoid/i
     );
     assert.match(preview.marketBound, /^Start with Bedford/i);
-    assert.match(preview.marketBound, /tight enough to learn quickly/i);
+    assert.match(preview.marketBound, /New Hampshire|nearby\/review-required/i);
     assert.match(
       preview.hypothesis,
       /^If Anchor approaches small to mid-sized local property managers/i
@@ -495,9 +497,11 @@ describe('First Campaign Planning domain (SPEC-089)', () => {
     );
     assert.deepEqual(preview.exclusionCriteria, [
       'Large institutional property managers',
+      'Cleaning companies, maid services, housekeeping, janitorial, carpet cleaning, and cleaning competitors',
       'Highly complex properties',
       'Lowest-price buyers',
-      "Properties outside Anchor's service area",
+      "Properties outside Anchor's New Hampshire, USA service area",
+      'UK Greater Manchester / Salford / Stockport or other non-US results',
       'Prospects with no clear decision-maker or contact path',
     ]);
     assert.match(
@@ -1361,7 +1365,9 @@ describe('First Campaign Planning session APIs', () => {
     // Comma-rich location bullets stay intact (not split into town fragments).
     assert.ok(
       criteria.inclusionCriteria.some((item) =>
-        /Bedford,\s*Hooksett,\s*Londonderry/i.test(item)
+        /Bedford(?:\s+NH)?,\s*Hooksett(?:\s+NH)?,\s*Londonderry(?:\s+NH)?/i.test(
+          item
+        )
       )
     );
 

@@ -17,6 +17,15 @@
 const {
   createPlacesProvider,
 } = require('../packages/capabilities/discovery/providers/PlacesProvider');
+const {
+  CANDIDATE_STATUS,
+  interpretAnchorMarket,
+  buildNhScopedSearchQueries,
+  evaluateScoutCandidate,
+  selectBatchWithManchesterFill,
+  formatSuggestedContactRole,
+  isGenericCriteriaCopy,
+} = require('./scoutQualityGate');
 
 const TARGET_COUNT_MIN = 15;
 const TARGET_COUNT_MAX = 25;
@@ -60,22 +69,6 @@ function scoutPlacesUrlHostPath(urlLike) {
     return { host: null, path: null };
   }
 }
-
-const DEFAULT_CONTACT_ROLE_BY_SEGMENT = Object.freeze({
-  property_managers: 'Owner / property manager',
-  property_manager: 'Owner / property manager',
-  'property managers': 'Owner / property manager',
-  law_firm: 'Office manager / managing partner',
-  'law firm': 'Office manager / managing partner',
-  accounting: 'Office manager / principal',
-  cleaning: 'Owner / operations manager',
-  restaurant: 'Owner / general manager',
-  salon: 'Owner / studio manager',
-  fitness: 'Owner / general manager',
-  landscaping: 'Owner / operations manager',
-  home_services: 'Owner / office manager',
-  home_renovation: 'Owner / project manager',
-});
 
 /**
  * Whether Scout can run live public-source sourcing in this environment.
@@ -136,66 +129,64 @@ function resolveSourceUrl(hit) {
   return mapsSourceUrl(hit);
 }
 
-function segmentKey(workRequest) {
-  return String(
-    (workRequest && (workRequest.targetSegment || workRequest.segment)) || ''
-  )
-    .trim()
-    .toLowerCase()
-    .replace(/[_-]+/g, ' ');
-}
-
 function suggestedContactRole(workRequest, hit) {
-  if (hit && (hit.suggestedContactRole || hit.contactRole)) {
-    return hit.suggestedContactRole || hit.contactRole;
+  // Always label as suggested unless a verified named+title contact is present
+  // (formatSuggestedContactRole enforces that rule).
+  if (
+    hit &&
+    hit.suggestedContactRole &&
+    /^suggested contact role:/i.test(String(hit.suggestedContactRole))
+  ) {
+    return hit.suggestedContactRole;
   }
-  const key = segmentKey(workRequest);
-  if (DEFAULT_CONTACT_ROLE_BY_SEGMENT[key]) {
-    return DEFAULT_CONTACT_ROLE_BY_SEGMENT[key];
-  }
-  const compact = key.replace(/\s+/g, '_');
-  if (DEFAULT_CONTACT_ROLE_BY_SEGMENT[compact]) {
-    return DEFAULT_CONTACT_ROLE_BY_SEGMENT[compact];
-  }
-  return 'Owner / decision-maker';
+  return formatSuggestedContactRole(workRequest, hit);
 }
 
-function buildSearchQueries(workRequest) {
-  const segment =
-    (workRequest && (workRequest.targetSegment || workRequest.segment)) ||
-    'local businesses';
-  const subtype =
-    (workRequest && (workRequest.targetSubtype || workRequest.subtype)) || null;
-  const market =
-    (workRequest && (workRequest.marketBounds || workRequest.location)) || '';
+/**
+ * Build NH-scoped Places queries: every query includes town + "NH" or
+ * "New Hampshire". Interprets Anchor / Greater Manchester as New Hampshire, USA.
+ */
+function buildSearchQueries(workRequest, opts = {}) {
+  const { queries, market } = buildNhScopedSearchQueries(workRequest, {
+    clientId: opts.clientId || (workRequest && workRequest.clientId),
+    clientSlug: opts.clientSlug || (workRequest && workRequest.clientSlug),
+    scoringProfile:
+      opts.scoringProfile || (workRequest && workRequest.scoringProfile),
+    forceNewHampshire:
+      opts.forceNewHampshire !== false &&
+      shouldForceNewHampshire(workRequest, opts),
+  });
+  // Attach interpreted market for callers/tests (non-enumerable-safe via return only).
+  buildSearchQueries.lastMarket = market;
+  return queries;
+}
 
-  const queries = [];
-  const primary = [segment, subtype, market].filter(Boolean).join(' ').trim();
-  if (primary) queries.push(primary);
-
-  if (subtype && market) {
-    const alt = `${subtype} ${market}`.trim();
-    if (alt !== primary) queries.push(alt);
+function shouldForceNewHampshire(workRequest, opts = {}) {
+  if (opts.forceNewHampshire === true) return true;
+  if (opts.forceNewHampshire === false) return false;
+  const market = String(
+    (workRequest && (workRequest.marketBounds || workRequest.location)) || ''
+  );
+  const segment = String(
+    (workRequest && (workRequest.targetSegment || workRequest.segment)) || ''
+  );
+  // Anchor PM campaigns and any NH / Greater Manchester brief → NH USA.
+  if (
+    opts.clientId === 10 ||
+    opts.clientSlug === 'cleaning-co' ||
+    (workRequest && workRequest.clientId === 10)
+  ) {
+    return true;
   }
-  if (segment && market && !subtype) {
-    // already primary
-  } else if (segment && market) {
-    const alt2 = `${segment} ${market}`.trim();
-    if (!queries.includes(alt2)) queries.push(alt2);
+  if (/property\s*manager/i.test(segment)) return true;
+  if (
+    /new hampshire|\bnh\b|bedford|hooksett|londonderry|auburn|goffstown|greater\s+manchester|manchester/i.test(
+      market
+    )
+  ) {
+    return true;
   }
-
-  // Inclusion criteria can seed additional public-directory queries.
-  const inclusions = Array.isArray(workRequest && workRequest.inclusionCriteria)
-    ? workRequest.inclusionCriteria
-    : [];
-  for (const inc of inclusions.slice(0, 3)) {
-    const text = String(inc || '').trim();
-    if (!text || text.length > 80) continue;
-    const q = `${text} ${market}`.trim();
-    if (q && !queries.includes(q)) queries.push(q);
-  }
-
-  return queries.length ? queries : [`${segment} ${market}`.trim()].filter(Boolean);
+  return true; // Scout public sourcing for this product path is NH-first.
 }
 
 function exclusionMatched(hit, workRequest) {
@@ -248,101 +239,39 @@ function exclusionMatched(hit, workRequest) {
 }
 
 function confidenceForHit(hit, workRequest, sourceUrl) {
-  if (hit.confidence) return String(hit.confidence);
-  const hasWebsite = Boolean(
-    normalizeWebsiteUrl(hit.website) || normalizeWebsiteUrl(hit.sourceUrl)
+  const gate = evaluateScoutCandidate(
+    { ...hit, sourceUrl: sourceUrl || hit.sourceUrl || hit.website },
+    workRequest,
+    { sourceUrl }
   );
-  const location = String(hit.location || hit.address || '').toLowerCase();
-  const market = String(
-    (workRequest && (workRequest.marketBounds || workRequest.location)) || ''
-  ).toLowerCase();
-  const marketTokens = market
-    .split(/[^a-z0-9]+/i)
-    .filter((t) => t.length >= 3)
-    .slice(0, 4);
-  const inMarket =
-    !marketTokens.length ||
-    marketTokens.some((t) => location.includes(t));
-  const segment = segmentKey(workRequest);
-  const hay = `${hit.companyName || ''} ${hit.industry || ''} ${(
-    hit.placeTypes || []
-  ).join(' ')}`.toLowerCase();
-  const segmentHit =
-    !segment ||
-    segment
-      .split(/\s+/)
-      .filter((t) => t.length >= 4)
-      .some((t) => hay.includes(t));
-
-  if (hasWebsite && inMarket && segmentHit && sourceUrl) return 'high';
-  if (sourceUrl && inMarket) return 'medium';
-  return 'review_required';
+  return gate.confidence;
 }
 
 function fitRationaleForHit(hit, workRequest) {
   if (hit.fitRationale || hit.fitReason || hit.rationale) {
-    return hit.fitRationale || hit.fitReason || hit.rationale;
+    const provided = hit.fitRationale || hit.fitReason || hit.rationale;
+    if (!isGenericCriteriaCopy(provided, workRequest)) {
+      return provided;
+    }
   }
-  const segment =
-    (workRequest && (workRequest.targetSegment || workRequest.segment)) ||
-    'target segment';
-  const market =
-    (workRequest && (workRequest.marketBounds || workRequest.location)) ||
-    'approved market';
-  const subtype =
-    (workRequest && (workRequest.targetSubtype || workRequest.subtype)) || null;
-  const parts = [
-    `Public listing matches ${segment}${subtype ? ` / ${subtype}` : ''}`,
-    `Location evidence: ${hit.location || hit.address || 'see source'}`,
-    `Market bounds: ${market}`,
-  ];
-  if (hit.googleRating != null) {
-    parts.push(`Google rating ${hit.googleRating}`);
-  }
-  return parts.join(' — ');
+  const gate = evaluateScoutCandidate(hit, workRequest, {});
+  return gate.fitRationale;
 }
 
 function risksForHit(hit, workRequest) {
   if (hit.risks || hit.disqualifyRisk || hit.risk || hit.uncertainty) {
     return hit.risks || hit.disqualifyRisk || hit.risk || hit.uncertainty;
   }
-  const risks = [];
-  const website = normalizeWebsiteUrl(hit.website) || normalizeWebsiteUrl(hit.sourceUrl);
-  if (!website) {
-    risks.push('No company website on listing — using maps listing as source URL');
-  }
-  if (!hit.phone) {
-    risks.push('Phone not confirmed on public listing');
-  }
-  const exclusion = exclusionMatched(hit, workRequest);
-  if (exclusion) {
-    risks.push(`Possible exclusion match: ${exclusion}`);
-  }
-  const market = String(
-    (workRequest && (workRequest.marketBounds || workRequest.location)) || ''
-  ).toLowerCase();
-  const location = String(hit.location || hit.address || '').toLowerCase();
-  const marketTokens = market
-    .split(/[^a-z0-9]+/i)
-    .filter((t) => t.length >= 4)
-    .slice(0, 3);
-  if (
-    marketTokens.length &&
-    !marketTokens.some((t) => location.includes(t))
-  ) {
-    risks.push('Location may be outside approved market bounds — verify');
-  }
-  if (!risks.length) {
-    risks.push('Public-source only — contact role not verified beyond listing signals');
-  }
-  return risks.join('; ');
+  const gate = evaluateScoutCandidate(hit, workRequest, {});
+  return gate.risks;
 }
 
 /**
  * Map a public-source hit into a Scout candidate row.
  * Returns null when company name or source URL is missing (never fabricate).
+ * Applies NH / cleaning / institutional quality gates and status labels.
  */
-function mapPublicHitToScoutCandidate(hit, workRequest, idx = 0) {
+function mapPublicHitToScoutCandidate(hit, workRequest, idx = 0, opts = {}) {
   const companyName =
     (hit &&
       (hit.companyName ||
@@ -358,13 +287,28 @@ function mapPublicHitToScoutCandidate(hit, workRequest, idx = 0) {
     normalizeWebsiteUrl(hit.sourceUrl) ||
     sourceUrl;
 
+  const enrichedHit = {
+    ...hit,
+    companyName: String(companyName).trim(),
+    sourceUrl,
+    website,
+    location: hit.location || hit.address || hit.marketTown || null,
+  };
+
+  const gate = evaluateScoutCandidate(enrichedHit, workRequest, {
+    sourceUrl,
+    market: opts.market,
+    clientId: opts.clientId || (workRequest && workRequest.clientId),
+    forceNewHampshire: shouldForceNewHampshire(workRequest, opts),
+  });
+
   return {
     id: hit.id || `scout-public-${idx + 1}`,
     companyName: String(companyName).trim(),
     sourceUrl,
     website,
-    location: hit.location || hit.address || hit.marketTown || null,
-    marketTown: hit.marketTown || hit.location || hit.address || null,
+    location: enrichedHit.location,
+    marketTown: hit.marketTown || geoTownLabel(gate) || enrichedHit.location,
     segment:
       hit.segment ||
       (workRequest && workRequest.targetSegment) ||
@@ -374,10 +318,15 @@ function mapPublicHitToScoutCandidate(hit, workRequest, idx = 0) {
       hit.segmentSubtype ||
       (workRequest && workRequest.targetSubtype) ||
       null,
-    fitRationale: fitRationaleForHit(hit, workRequest),
-    risks: risksForHit(hit, workRequest),
-    suggestedContactRole: suggestedContactRole(workRequest, hit),
-    confidence: confidenceForHit(hit, workRequest, sourceUrl),
+    fitRationale: gate.fitRationale,
+    risks: gate.risks,
+    suggestedContactRole: gate.suggestedContactRole,
+    confidence: gate.confidence,
+    status: gate.status,
+    statusReason: gate.statusReason,
+    exclusionRisk: Boolean(gate.exclusionRisk),
+    signals: gate.signals || null,
+    geo: gate.geo || null,
     reviewOnly: true,
     placeholder: false,
     crmWritesMade: false,
@@ -385,6 +334,10 @@ function mapPublicHitToScoutCandidate(hit, workRequest, idx = 0) {
     publicSource: hit.source || 'google_places',
     placeId: hit.placeId || hit.place_id || null,
   };
+}
+
+function geoTownLabel(gate) {
+  return (gate && gate.geo && gate.geo.town) || null;
 }
 
 /**
@@ -531,7 +484,21 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
     searchFn = (query) => provider.search(query);
   }
 
-  const queries = buildSearchQueries(workRequest);
+  const market = interpretAnchorMarket(
+    workRequest.marketBounds || workRequest.location || '',
+    {
+      clientId: opts.clientId || workRequest.clientId,
+      clientSlug: opts.clientSlug || workRequest.clientSlug,
+      forceNewHampshire: shouldForceNewHampshire(workRequest, opts),
+    }
+  );
+  if (market.interpretedAsNewHampshire) {
+    warnings.push(
+      `Market interpreted as ${market.marketLabel} (priority towns: ${market.priorityTowns.join(', ')}; Manchester NH is nearby/fill).`
+    );
+  }
+
+  const queries = buildSearchQueries(workRequest, opts);
   const rawHits = [];
 
   try {
@@ -541,23 +508,26 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
         query: q,
         industry:
           workRequest.targetSegment || workRequest.segment || q,
-        location: workRequest.marketBounds || workRequest.location || '',
+        location: `${market.priorityTowns[0] || 'Bedford'} NH`,
         limit: fetchLimit,
         workRequest,
+        market,
       });
       if (!Array.isArray(hits)) continue;
       for (const hit of hits) {
         rawHits.push(hit);
       }
-      if (rawHits.length >= targetMax * 2) break;
+      if (rawHits.length >= targetMax * 3) break;
     }
   } catch (err) {
     return {
       ok: false,
       candidates: [],
+      rejected: [],
       warnings,
       error: err && err.message ? String(err.message) : 'public_sourcing_failed',
       queried,
+      market,
       crmWritesMade: false,
       outreachCopyGenerated: false,
       accountChangesMade: false,
@@ -565,38 +535,62 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
   }
 
   const mapped = [];
+  const rejectedEarly = [];
   for (let i = 0; i < rawHits.length; i += 1) {
-    const candidate = mapPublicHitToScoutCandidate(rawHits[i], workRequest, i);
+    const candidate = mapPublicHitToScoutCandidate(rawHits[i], workRequest, i, {
+      market,
+      ...opts,
+    });
     if (!candidate) continue;
-    // Soft-skip hard exclusion matches when they look like national chains etc.
-    const exclusion = exclusionMatched(rawHits[i], workRequest);
-    if (
-      exclusion &&
-      /national|chain|franchise/i.test(String(exclusion)) &&
-      /national|chain|franchise|inc\.|llc/i.test(
-        `${rawHits[i].companyName || ''} ${(rawHits[i].placeTypes || []).join(' ')}`
-      )
-    ) {
+    if (candidate.status === CANDIDATE_STATUS.REJECTED) {
+      rejectedEarly.push(candidate);
       warnings.push(
-        `Skipped ${candidate.companyName} — exclusion: ${exclusion}`
+        `Rejected ${candidate.companyName} — ${candidate.statusReason}`
       );
       continue;
+    }
+    // Legacy soft exclusionCriteria still surfaces as risk, but institutional/
+    // national hard-rejects are handled by the quality gate above.
+    const exclusion = exclusionMatched(rawHits[i], workRequest);
+    if (exclusion && !candidate.exclusionRisk) {
+      candidate.risks = candidate.risks
+        ? `${candidate.risks}; Possible exclusion match: ${exclusion}`
+        : `Possible exclusion match: ${exclusion}`;
+      if (/national|chain|franchise|institutional/i.test(String(exclusion))) {
+        candidate.status = CANDIDATE_STATUS.REVIEW_REQUIRED;
+        candidate.statusReason = `Exclusion criteria match: ${exclusion}`;
+        candidate.exclusionRisk = true;
+        if (candidate.confidence === 'high') {
+          candidate.confidence = 'review_required';
+        }
+      }
     }
     mapped.push(candidate);
   }
 
-  const candidates = dedupeCandidates(mapped).slice(0, targetMax);
+  const deduped = dedupeCandidates(mapped);
+  const selected = selectBatchWithManchesterFill(
+    deduped,
+    targetMax,
+    targetMin
+  );
+  const candidates = selected.candidates;
+  const rejected = dedupeCandidates(
+    rejectedEarly.concat(selected.rejected || [])
+  );
 
   if (!candidates.length) {
     return {
       ok: false,
       candidates: [],
+      rejected,
       warnings: warnings.concat([
-        'Public-source search returned no usable candidates with source URLs.',
+        'Public-source search returned no usable in-market candidates after quality gates.',
         'No placeholder rows were generated.',
       ]),
       error: 'no_usable_candidates',
       queried,
+      market,
       crmWritesMade: false,
       outreachCopyGenerated: false,
       accountChangesMade: false,
@@ -609,12 +603,23 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
     );
   }
 
+  const acceptedCount = candidates.filter(
+    (c) => c.status === CANDIDATE_STATUS.ACCEPTED
+  ).length;
+  if (acceptedCount === 0) {
+    warnings.push(
+      'No candidates reached accepted status — batch is review_required only and must not be treated as outreach-ready.'
+    );
+  }
+
   return {
     ok: true,
     candidates,
+    rejected,
     warnings,
     error: null,
     queried,
+    market,
     crmWritesMade: false,
     outreachCopyGenerated: false,
     accountChangesMade: false,
@@ -639,4 +644,6 @@ module.exports = {
   sourceScoutCandidatesFromPublicSources,
   normalizeWebsiteUrl,
   resolveSourceUrl,
+  shouldForceNewHampshire,
+  CANDIDATE_STATUS,
 };
