@@ -19,9 +19,11 @@ const {
   shouldBlockCriteriaQuestionReplay,
   isBannedCriteriaReplayQuestion,
   looksLikeProspectListDraftRequest,
+  looksLikeLiveSourcingApproval,
   looksLikeReviseCriteriaRequest,
   shouldForceProspectListDraft,
   inferApprovedArtifactsFromMessage,
+  isLiveSourcingApproved,
 } = require('./clientIntelligenceReasoning');
 const {
   buildArtifactSynthesisContext,
@@ -51,6 +53,12 @@ const DRAFT_TITLE = 'Reviewable Prospect List Draft';
 const DRAFT_DISCLAIMER =
   'Reviewable list draft only. No outreach copy, sends, CRM writes, or account/DNS/GBP/social/tracking changes have been made.';
 
+const LIVE_SOURCING_BOUNDARY_MESSAGE =
+  'I cannot perform live sourcing in this environment yet.';
+
+const LIVE_PROSPECT_LIST_KIND = 'live_sourced_prospect_list';
+const LIVE_PROSPECT_LIST_TITLE = 'Live Public-Source Prospect List';
+
 /** Explicit post-build-proposal planning states (SPEC-091 continuation). */
 const CAMPAIGN_PLANNING_STATES = Object.freeze({
   PROSPECT_LIST_CRITERIA_APPROVED: 'prospect_list_criteria_approved',
@@ -58,11 +66,14 @@ const CAMPAIGN_PLANNING_STATES = Object.freeze({
   PROSPECT_LIST_DRAFT_REQUESTED: 'prospect_list_draft_requested',
   PROSPECT_LIST_DRAFT_GENERATED: 'prospect_list_draft_generated',
   PROSPECT_LIST_DRAFT_REVIEWED: 'prospect_list_draft_reviewed',
+  LIVE_SOURCING_APPROVED: 'live_sourcing_approved',
+  LIVE_SOURCING_UNAVAILABLE: 'live_sourcing_unavailable',
+  LIVE_SOURCING_GENERATED: 'live_sourcing_generated',
 });
 
 const DRAFT_SECTION_TITLES = Object.freeze({
   batchSummary: 'Batch summary',
-  draftRows: 'Draft rows (illustrative placeholders)',
+  draftRows: 'Prospect record fields (awaiting live public sources)',
   reviewNotes: 'Review notes',
   guardrails: 'Guardrails',
   recommendedNextStep: 'Recommended next step',
@@ -124,6 +135,7 @@ const SLOT_KEYS = Object.freeze([
   'buildProposalGenerated',
   'draftRequested',
   'draftGenerated',
+  'liveSourcingApproved',
 ]);
 
 /** Pre-preview ask order. targetSubtype is covered by the targetSegment prompt. */
@@ -1883,9 +1895,11 @@ function formatProspectListBuildProposalMessage(proposal) {
 }
 
 /**
- * Review-only first prospect list batch draft.
- * Uses illustrative placeholders — never writes CRM, sends outreach, or
- * changes accounts/DNS/GBP/social/tracking.
+ * Schema-only first prospect list batch draft.
+ * Never fabricates illustrative placeholder companies — live public-source
+ * rows are produced only after live_sourcing_approved (or a capability
+ * boundary is returned when live sourcing is unavailable).
+ * Never writes CRM, sends outreach, or changes accounts/DNS/GBP/social/tracking.
  */
 function buildReviewableProspectListDraft(context, slots, opts = {}) {
   const ctx = context || {};
@@ -1912,9 +1926,6 @@ function buildReviewableProspectListDraft(context, slots, opts = {}) {
   const marketTownsOnly = String(marketPhrase || '')
     .replace(/,?\s*with\s+.+?\s+kept in scope\.?$/i, '')
     .trim();
-  const towns = (marketTownsOnly.match(
-    /Bedford|Hooksett|Londonderry|Auburn|Goffstown|Manchester/gi
-  ) || ['Bedford', 'Hooksett', 'Londonderry', 'Auburn', 'Goffstown']).slice(0, 5);
 
   const inclusion =
     (criteria && criteria.inclusionCriteria) ||
@@ -1925,52 +1936,47 @@ function buildReviewableProspectListDraft(context, slots, opts = {}) {
     normalizeCriteriaList(s.exclusionCriteria) ||
     defaultExclusionCriteria(ctx, opts.answers || {});
 
-  const draftRows = towns.map((town, idx) => ({
-    id: `draft-sample-${idx + 1}`,
-    placeholder: true,
-    companyName: `[Draft sample ${idx + 1}] Local ${segmentNoun} — ${town}`,
-    marketTown: town,
-    segment: segmentNoun,
-    subtype:
-      (criteria && criteria.targetSubtype) ||
-      s.targetSubtype ||
-      phrases.targetSubtypePhrase ||
-      'local fit pending review',
-    fitReason:
-      (inclusion && inclusion[0]) ||
-      'Matches approved inclusion criteria (placeholder)',
-    disqualifyRisk:
-      (exclusion && exclusion[0]) ||
-      'Review against approved exclusion criteria',
-    contactRole: 'Owner / property manager (placeholder)',
-    sourceNote: 'Illustrative placeholder — not a live scrape or CRM write',
-    confidence: 'review_required',
-  }));
-
   const batchSize =
     (build &&
       build.firstBatchPlan &&
       build.firstBatchPlan.size) ||
     '15–25 accounts for the first reviewable batch';
 
+  const requiredFields = [
+    'company / property manager name',
+    'website / source URL',
+    'location',
+    'segment / subtype',
+    'fit rationale',
+    'risk / uncertainty',
+    'suggested contact role',
+    'confidence',
+  ];
+
   return {
     kind: DRAFT_ARTIFACT_KIND,
     title: DRAFT_TITLE,
     businessName: name,
     batchSummary: [
-      `First reviewable prospect list batch for ${name}.`,
+      `First reviewable prospect list batch plan for ${name}.`,
       `Target: ${segmentNoun} in ${marketTownsOnly || marketPhrase}.`,
       `Planned batch size: ${batchSize}.`,
-      'Rows below are illustrative placeholders for operator review structure — not live sourced accounts.',
+      'No company rows are included yet — this draft defines the review schema only.',
+      `Each live-sourced record will include: ${requiredFields.join('; ')}.`,
     ].join(' '),
-    draftRows,
+    // Never emit illustrative / fabricated company rows.
+    draftRows: [],
+    requiredProspectFields: requiredFields,
+    inclusionCriteria: inclusion,
+    exclusionCriteria: exclusion,
     reviewNotes: [
-      'Confirm each placeholder pattern matches the approved inclusion/exclusion criteria before authorizing live sourcing.',
-      'Replace placeholders with real sourced accounts only after explicit approval to proceed beyond this draft.',
-      'Do not treat placeholder company names as real businesses.',
+      'Schema-only draft: no fabricated company names or sample rows.',
+      'Approve live public-source sourcing to fill 15–25 real prospect records with source URLs.',
+      'Until live sourcing runs, treat this as a field/plan checklist — not a prospect list.',
     ],
     guardrails: [
       'Reviewable list draft only',
+      'No fabricated company rows',
       'No outreach copy generated',
       'No sends',
       'No CRM writes',
@@ -1979,8 +1985,9 @@ function buildReviewableProspectListDraft(context, slots, opts = {}) {
     sectionTitles: { ...DRAFT_SECTION_TITLES },
     planningOnly: true,
     reviewOnly: true,
-    prospectListGenerated: true,
+    prospectListGenerated: false,
     liveListGenerated: false,
+    liveSourcingApproved: Boolean(s.liveSourcingApproved),
     outreachCopyGenerated: false,
     accountChangesMade: false,
     crmWritesMade: false,
@@ -1988,12 +1995,212 @@ function buildReviewableProspectListDraft(context, slots, opts = {}) {
     status: 'draft',
     disclaimer: DRAFT_DISCLAIMER,
     recommendedNextStep:
-      'Review this draft batch structure. Approve to proceed toward live sourcing, or revise criteria/build approach first. No outreach or CRM writes yet.',
+      'Approve live public-source sourcing to build 15–25 real prospects with source URLs, or revise criteria/build approach first. No outreach or CRM writes yet.',
     generatedAt: new Date().toISOString(),
     blueprintId: opts.blueprintId || ctx.blueprintId || null,
     blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion || null,
     basedOnCriteriaStatus: (criteria && criteria.status) || 'approved',
     basedOnBuildProposalStatus: (build && build.status) || 'approved',
+  };
+}
+
+/**
+ * Whether CIE campaign planning can run live public-source sourcing now.
+ * Default: unavailable unless a sync liveSourcingFn (or explicit flag) is injected.
+ */
+function isLivePublicSourcingSupported(opts = {}) {
+  if (opts.liveSourcingSupported === false) return false;
+  if (opts.liveSourcingSupported === true) return true;
+  if (typeof opts.liveSourcingFn === 'function') return true;
+  return false;
+}
+
+function normalizeLiveProspectRecord(row, idx) {
+  const r = row || {};
+  return {
+    id: r.id || `live-prospect-${idx + 1}`,
+    placeholder: false,
+    companyName:
+      r.companyName ||
+      r.name ||
+      r.propertyManagerName ||
+      r.company ||
+      null,
+    website: r.website || r.sourceUrl || r.url || null,
+    sourceUrl: r.sourceUrl || r.website || r.url || null,
+    location: r.location || r.marketTown || r.address || null,
+    marketTown: r.marketTown || r.location || null,
+    segment: r.segment || null,
+    subtype: r.subtype || r.segmentSubtype || null,
+    fitReason: r.fitReason || r.fitRationale || r.rationale || null,
+    disqualifyRisk: r.disqualifyRisk || r.risk || r.uncertainty || null,
+    contactRole: r.contactRole || r.suggestedContactRole || null,
+    confidence: r.confidence || 'review_required',
+    sourceNote: r.sourceNote || 'Public source',
+  };
+}
+
+function formatLiveSourcedProspectListMessage(list) {
+  const p = list || {};
+  const lines = [p.title || LIVE_PROSPECT_LIST_TITLE, ''];
+  lines.push(p.summary || 'Live public-source prospect records:');
+  lines.push('');
+  for (const row of p.prospects || []) {
+    lines.push(
+      `- ${row.companyName || 'Unknown'} | ${row.location || '—'} | ${
+        row.sourceUrl || row.website || '—'
+      } | ${row.fitReason || '—'} | confidence: ${row.confidence || '—'}`
+    );
+  }
+  if (!(p.prospects || []).length) {
+    lines.push('- (no prospects returned)');
+  }
+  lines.push('');
+  lines.push('Guardrails:');
+  for (const g of p.guardrails || []) lines.push(`- ${g}`);
+  lines.push('');
+  if (p.disclaimer) lines.push(p.disclaimer);
+  return lines.join('\n').trim();
+}
+
+function produceLiveSourcingResult(ctx, answers, slots, opts, leadIn) {
+  const liveApprovedSlots = {
+    ...slots,
+    previewApproved: true,
+    criteriaGenerated: true,
+    criteriaApproved: true,
+    buildProposalGenerated: true,
+    buildProposalApproved: true,
+    draftRequested: true,
+    liveSourcingApproved: true,
+  };
+
+  if (!isLivePublicSourcingSupported(opts)) {
+    const message = [
+      leadIn || null,
+      LIVE_SOURCING_BOUNDARY_MESSAGE,
+      '',
+      'Live public-source sourcing is approved, but sourcing tooling is not available in this environment.',
+      'No fabricated company rows were generated.',
+      'No outreach copy, sends, CRM writes, or account/DNS/GBP/social/tracking changes were made.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    return {
+      message,
+      step: CAMPAIGN_PLANNING_STATES.LIVE_SOURCING_UNAVAILABLE,
+      answers,
+      slots: liveApprovedSlots,
+      preview: opts.priorPreview || null,
+      criteriaPreview: opts.priorCriteriaPreview || null,
+      buildProposal: opts.priorBuildProposal || null,
+      prospectListDraft: opts.priorProspectListDraft || null,
+      liveProspectList: null,
+      intent: 'live_sourcing_unavailable',
+      previewApproved: true,
+      criteriaApproved: true,
+      buildProposalApproved: true,
+      liveSourcingApproved: true,
+      planningState: CAMPAIGN_PLANNING_STATES.LIVE_SOURCING_UNAVAILABLE,
+      currentAsk: null,
+    };
+  }
+
+  let raw = [];
+  try {
+    raw = opts.liveSourcingFn({
+      context: ctx,
+      slots: liveApprovedSlots,
+      answers,
+      priorCriteriaPreview: opts.priorCriteriaPreview || null,
+      priorBuildProposal: opts.priorBuildProposal || null,
+    });
+  } catch (_err) {
+    raw = [];
+  }
+  if (!Array.isArray(raw)) raw = [];
+  const prospects = raw
+    .map((row, idx) => normalizeLiveProspectRecord(row, idx))
+    .filter((row) => row.companyName);
+
+  if (!prospects.length) {
+    const message = [
+      leadIn || null,
+      LIVE_SOURCING_BOUNDARY_MESSAGE,
+      '',
+      'Live sourcing was attempted but returned no usable public-source prospect records.',
+      'No fabricated company rows were generated.',
+      'No outreach copy, sends, CRM writes, or account/DNS/GBP/social/tracking changes were made.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    return {
+      message,
+      step: CAMPAIGN_PLANNING_STATES.LIVE_SOURCING_UNAVAILABLE,
+      answers,
+      slots: liveApprovedSlots,
+      preview: opts.priorPreview || null,
+      criteriaPreview: opts.priorCriteriaPreview || null,
+      buildProposal: opts.priorBuildProposal || null,
+      prospectListDraft: opts.priorProspectListDraft || null,
+      liveProspectList: null,
+      intent: 'live_sourcing_unavailable',
+      previewApproved: true,
+      criteriaApproved: true,
+      buildProposalApproved: true,
+      liveSourcingApproved: true,
+      planningState: CAMPAIGN_PLANNING_STATES.LIVE_SOURCING_UNAVAILABLE,
+      currentAsk: null,
+    };
+  }
+
+  const list = {
+    kind: LIVE_PROSPECT_LIST_KIND,
+    title: LIVE_PROSPECT_LIST_TITLE,
+    summary: `Live public-source batch of ${prospects.length} real prospects. Review-only — no outreach or CRM writes.`,
+    prospects,
+    guardrails: [
+      'Public sources only',
+      'No outreach copy generated',
+      'No sends',
+      'No CRM writes',
+      'No account, DNS, GBP, social, or tracking changes',
+    ],
+    liveListGenerated: true,
+    liveSourcingApproved: true,
+    outreachCopyGenerated: false,
+    accountChangesMade: false,
+    crmWritesMade: false,
+    status: 'review',
+    disclaimer:
+      'Live-sourced review list only. No outreach copy, sends, CRM writes, or account changes have been made.',
+    generatedAt: new Date().toISOString(),
+  };
+
+  const lines = [];
+  if (leadIn) lines.push(leadIn, '');
+  lines.push(formatLiveSourcedProspectListMessage(list));
+
+  return {
+    message: lines.join('\n'),
+    step: CAMPAIGN_PLANNING_STATES.LIVE_SOURCING_GENERATED,
+    answers,
+    slots: {
+      ...liveApprovedSlots,
+      draftGenerated: true,
+    },
+    preview: opts.priorPreview || null,
+    criteriaPreview: opts.priorCriteriaPreview || null,
+    buildProposal: opts.priorBuildProposal || null,
+    prospectListDraft: opts.priorProspectListDraft || null,
+    liveProspectList: list,
+    intent: 'produce_live_sourced_prospects',
+    previewApproved: true,
+    criteriaApproved: true,
+    buildProposalApproved: true,
+    liveSourcingApproved: true,
+    planningState: CAMPAIGN_PLANNING_STATES.LIVE_SOURCING_GENERATED,
+    currentAsk: null,
   };
 }
 
@@ -3666,6 +3873,13 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
     priorSlots.draftRequested = true;
   }
   if (
+    prior.liveSourcingApproved ||
+    priorSlots.liveSourcingApproved ||
+    (prior.reasoningMemory && prior.reasoningMemory.liveSourcingApproved)
+  ) {
+    priorSlots.liveSourcingApproved = true;
+  }
+  if (
     prior.prospectListCriteriaPreview ||
     prior.criteriaPreview
   ) {
@@ -3690,6 +3904,64 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
   }
   if (priorPreview && priorPreview.status === 'approved') {
     priorSlots.previewApproved = true;
+  }
+
+  // Live sourcing approval short-circuit — never emit placeholder draft rows.
+  if (
+    looksLikeLiveSourcingApproval(userMessage) ||
+    priorSlots.liveSourcingApproved ||
+    isLiveSourcingApproved(
+      opts.reasoningMemory ||
+        (opts.reasoningState && opts.reasoningState.reasoningMemory) ||
+        {},
+      userMessage
+    )
+  ) {
+    const answersEarly = { ...(prior.answers || {}) };
+    const syncedEarly = syncAnswersFromSlots(answersEarly, {
+      ...priorSlots,
+      liveSourcingApproved: true,
+      previewGenerated: true,
+      previewApproved: true,
+      criteriaGenerated: true,
+      criteriaApproved: true,
+      buildProposalGenerated: true,
+      buildProposalApproved: true,
+    });
+    return produceLiveSourcingResult(
+      ctx,
+      syncedEarly,
+      {
+        ...priorSlots,
+        liveSourcingApproved: true,
+        previewGenerated: true,
+        previewApproved: true,
+        criteriaGenerated: true,
+        criteriaApproved: true,
+        buildProposalGenerated: true,
+        buildProposalApproved: true,
+      },
+      {
+        ...opts,
+        priorPreview,
+        priorCriteriaPreview:
+          opts.priorCriteriaPreview ||
+          prior.prospectListCriteriaPreview ||
+          prior.criteriaPreview ||
+          null,
+        priorBuildProposal:
+          opts.priorBuildProposal ||
+          prior.prospectListBuildProposal ||
+          prior.buildProposal ||
+          null,
+        priorProspectListDraft:
+          opts.priorProspectListDraft ||
+          prior.prospectListDraft ||
+          prior.reviewableProspectListDraft ||
+          null,
+      },
+      null
+    );
   }
 
   const currentStep =
@@ -3915,6 +4187,32 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       slots.buildProposalApproved = true;
       slots.buildProposalGenerated = true;
     }
+    if (
+      inferredMemory.liveSourcingApproved ||
+      looksLikeLiveSourcingApproval(userMessage) ||
+      isLiveSourcingApproved(inferredMemory, userMessage)
+    ) {
+      slots.liveSourcingApproved = true;
+    }
+
+    // HARD GUARD — explicit live sourcing approval never regenerates placeholders.
+    if (slots.liveSourcingApproved || looksLikeLiveSourcingApproval(userMessage)) {
+      return produceLiveSourcingResult(
+        ctx,
+        syncedAnswers,
+        {
+          ...slots,
+          previewApproved: true,
+          criteriaGenerated: true,
+          criteriaApproved: true,
+          buildProposalGenerated: true,
+          buildProposalApproved: true,
+          liveSourcingApproved: true,
+        },
+        replyOpts,
+        null
+      );
+    }
 
     // HARD GUARD — draft request + approved criteria + approved build proposal
     // wins over revise-criteria / criteria-question fallbacks.
@@ -4019,6 +4317,24 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
           { ...slots, previewApproved: true, criteriaGenerated: true },
           replyOpts,
           'Here is the Prospect List Criteria Preview again — still planning-only.'
+        );
+      }
+
+      if (artifactAction.action === 'emit_live_sourcing') {
+        return produceLiveSourcingResult(
+          ctx,
+          syncedAnswers,
+          {
+            ...slots,
+            previewApproved: true,
+            criteriaGenerated: true,
+            criteriaApproved: true,
+            buildProposalGenerated: true,
+            buildProposalApproved: true,
+            liveSourcingApproved: true,
+          },
+          replyOpts,
+          artifactAction.note
         );
       }
 
@@ -4415,6 +4731,9 @@ module.exports = {
   DRAFT_ARTIFACT_KIND,
   DRAFT_TITLE,
   DRAFT_DISCLAIMER,
+  LIVE_SOURCING_BOUNDARY_MESSAGE,
+  LIVE_PROSPECT_LIST_KIND,
+  LIVE_PROSPECT_LIST_TITLE,
   SECTION_TITLES,
   CRITERIA_SECTION_TITLES,
   BUILD_PROPOSAL_SECTION_TITLES,
@@ -4461,6 +4780,9 @@ module.exports = {
   formatProspectListBuildProposalMessage,
   buildReviewableProspectListDraft,
   formatReviewableProspectListDraftMessage,
+  isLivePublicSourcingSupported,
+  produceLiveSourcingResult,
+  formatLiveSourcedProspectListMessage,
   markCriteriaPreviewApproved,
   markBuildProposalApproved,
   emptySlots,

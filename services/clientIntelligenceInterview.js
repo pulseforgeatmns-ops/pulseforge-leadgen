@@ -69,6 +69,7 @@ const {
   markArtifactGenerated,
   markArtifactApproved,
   markProspectCriteriaApproved,
+  markLiveSourcingApproved,
   resolveNextArtifact,
   resolveCampaignArtifactAction,
   inferApprovedArtifactsFromMessage,
@@ -7205,7 +7206,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     reply.buildProposal ||
     (reply.intent === 'hold_criteria' ||
     reply.intent === 'build_proposal_approved' ||
-    reply.intent === 'produce_prospect_list_draft'
+    reply.intent === 'produce_prospect_list_draft' ||
+    reply.intent === 'live_sourcing_unavailable' ||
+    reply.intent === 'produce_live_sourced_prospects'
       ? priorBuildProposal
       : null);
   if (
@@ -7213,7 +7216,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     (reply.buildProposalApproved ||
       (reply.slots && reply.slots.buildProposalApproved) ||
       reply.intent === 'build_proposal_approved' ||
-      reply.intent === 'produce_prospect_list_draft') &&
+      reply.intent === 'produce_prospect_list_draft' ||
+      reply.intent === 'live_sourcing_unavailable' ||
+      reply.intent === 'produce_live_sourced_prospects') &&
     nextBuildProposal.status !== 'approved'
   ) {
     nextBuildProposal = {
@@ -7227,9 +7232,20 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     reply.prospectListDraft ||
     (reply.intent === 'produce_prospect_list_draft'
       ? priorProspectListDraft
-      : null);
+      : reply.intent === 'live_sourcing_unavailable' ||
+          reply.intent === 'produce_live_sourced_prospects'
+        ? priorProspectListDraft
+        : null);
+
+  const nextLiveProspectList = reply.liveProspectList || null;
+  const liveSourcingApproved = Boolean(
+    reply.liveSourcingApproved ||
+      (reply.slots && reply.slots.liveSourcingApproved) ||
+      (reasoningMemory && reasoningMemory.liveSourcingApproved)
+  );
 
   const nextStatus =
+    reply.liveProspectList ||
     reply.prospectListDraft ||
     reply.buildProposal ||
     reply.criteriaPreview ||
@@ -7254,6 +7270,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     ...(nextProspectListDraft
       ? { draftRequested: true, draftGenerated: true }
       : {}),
+    ...(liveSourcingApproved ? { liveSourcingApproved: true } : {}),
   };
   const nextPlanning = {
     ...campaignPlanning,
@@ -7269,6 +7286,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     buildProposalApproved: Boolean(
       nextBuildProposal && nextBuildProposal.status === 'approved'
     ),
+    liveSourcingApproved,
     planningState: reply.planningState || reply.step || null,
     context,
     turns,
@@ -7288,6 +7306,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
             prospectListDraft: nextProspectListDraft,
             reviewableProspectListDraft: nextProspectListDraft,
           }
+        : {}),
+      ...(nextLiveProspectList
+        ? { liveProspectList: nextLiveProspectList }
         : {}),
       reasoningMemory: (() => {
         let mem = reasoningMemory;
@@ -7331,6 +7352,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
             nextProspectListDraft.status || 'draft'
           );
         }
+        if (liveSourcingApproved) {
+          mem = markLiveSourcingApproved(mem);
+        }
         return mem;
       })(),
     },
@@ -7370,6 +7394,11 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       (session.interview_state &&
         session.interview_state.reviewableProspectListDraft) ||
       null,
+    liveProspectList:
+      nextLiveProspectList ||
+      (session.interview_state && session.interview_state.liveProspectList) ||
+      null,
+    liveSourcingApproved,
   };
 }
 
