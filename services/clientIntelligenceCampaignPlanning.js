@@ -309,7 +309,7 @@ const DEFAULT_VALIDATION_METRICS = DEFAULT_VALIDATION_METRICS_PRIMARY;
 
 const DEFAULT_INCLUSION_CRITERIA = Object.freeze([
   'Manage offices, mixed-use buildings, small commercial properties, or multi-tenant spaces',
-  'Are located in Bedford, Hooksett, Londonderry, Auburn, Goffstown, or nearby Greater Manchester markets',
+  'Are located in Bedford NH, Hooksett NH, Londonderry NH, Auburn NH, Goffstown NH, or nearby Manchester NH (New Hampshire, USA)',
   'Likely need recurring cleaning weekly or multiple times per week',
   'Value reliability, responsiveness, and accountability',
   'Have a reachable owner, manager, facilities contact, or operations contact',
@@ -317,9 +317,11 @@ const DEFAULT_INCLUSION_CRITERIA = Object.freeze([
 
 const DEFAULT_EXCLUSION_CRITERIA = Object.freeze([
   'Large institutional property managers',
+  'Cleaning companies, maid services, housekeeping, janitorial, carpet cleaning, and cleaning competitors',
   'Highly complex properties',
   'Lowest-price buyers',
-  'Properties outside the approved service area',
+  'Properties outside New Hampshire, USA / the approved service area',
+  'UK Greater Manchester / Salford / Stockport or other non-US results',
   'Prospects with no clear decision-maker or contact path',
 ]);
 
@@ -3418,9 +3420,11 @@ function defaultExclusionCriteria(context, answers) {
           : `${name}'s`;
     return [
       'Large institutional property managers',
+      'Cleaning companies, maid services, housekeeping, janitorial, carpet cleaning, and cleaning competitors',
       'Highly complex properties',
       'Lowest-price buyers',
-      `Properties outside ${poss} service area`,
+      `Properties outside ${poss} New Hampshire, USA service area`,
+      'UK Greater Manchester / Salford / Stockport or other non-US results',
       'Prospects with no clear decision-maker or contact path',
     ];
   }
@@ -3441,21 +3445,25 @@ function looksLikePolishedExclusionItem(item) {
   const s = String(item || '').trim();
   if (!s || s.length < 8) return false;
   if (/prefers to avoid|should avoid|the business prefers/i.test(s)) return false;
-  return /^(Large institutional|Highly complex|Lowest-price|Properties outside|Prospects with)\b/i.test(
+  return /^(Large institutional|Cleaning companies|Highly complex|Lowest-price|Properties outside|UK Greater Manchester|Prospects with)\b/i.test(
     s
   );
 }
 
 function defaultMarketBound(context) {
-  const market = (context && context.targetMarket) || 'Greater Manchester';
+  const rawMarket = (context && context.targetMarket) || 'New Hampshire, USA';
+  const market = /greater\s+manchester/i.test(String(rawMarket))
+    ? 'New Hampshire, USA (Manchester NH nearby/fill only)'
+    : rawMarket;
   const towns = (
     context && Array.isArray(context.towns) && context.towns.length
       ? context.towns
       : DEFAULT_TOWNS
   ).slice(0, 5);
   return (
-    `Start with ${naturalList(towns)}. Keep ${market} in scope, ` +
-    `but keep the first test tight enough to learn quickly.`
+    `Start with ${naturalList(towns.map((t) => (/NH|New Hampshire/i.test(t) ? t : `${t} NH`)))}. ` +
+    `Market is ${market}. Prioritize Bedford NH, Hooksett NH, Londonderry NH, Auburn NH, and Goffstown NH; ` +
+    `treat Manchester NH as nearby/review-required unless needed to fill the batch.`
   );
 }
 

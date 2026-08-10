@@ -30,16 +30,27 @@ const {
   createMemoryScoutWorkRequestStore,
 } = require('../services/scoutWorkRequestStore');
 
+const SAMPLE_TOWNS = [
+  'Bedford NH',
+  'Hooksett NH',
+  'Londonderry NH',
+  'Auburn NH',
+  'Goffstown NH',
+  'Manchester NH',
+];
+
 function sampleHits(count = 18) {
   const rows = [];
   for (let i = 1; i <= count; i += 1) {
+    const location = SAMPLE_TOWNS[(i - 1) % SAMPLE_TOWNS.length];
     rows.push({
-      companyName: `Manchester Property Co ${i}`,
+      companyName: `${location.split(' ')[0]} Property Co ${i}`,
       website: `https://example.com/pm-${i}`,
-      address: `Manchester NH — suite ${i}`,
-      location: 'Manchester NH',
+      address: `${location} — suite ${i}`,
+      location,
       placeId: `place_${i}`,
       placeTypes: ['real_estate_agency'],
+      industry: 'property management',
       source: 'fixture_public',
       phone: i % 3 === 0 ? null : `603-555-${String(1000 + i).slice(-4)}`,
     });
@@ -91,7 +102,9 @@ describe('scoutPublicSourcing (SPEC-077)', () => {
     });
     assert.ok(queries.length >= 1);
     assert.ok(queries.some((q) => /Property managers/i.test(q)));
-    assert.ok(queries.some((q) => /Manchester/i.test(q)));
+    assert.ok(queries.every((q) => /\bNH\b|New Hampshire/.test(q)));
+    assert.ok(queries.some((q) => /Bedford NH/.test(q)));
+    assert.ok(queries.some((q) => /Hooksett NH/.test(q)));
   });
 
   it('maps public hits to Scout candidate fields with source URL', () => {
@@ -99,13 +112,16 @@ describe('scoutPublicSourcing (SPEC-077)', () => {
       {
         companyName: 'Granite PM',
         website: 'https://granitepm.example',
-        address: 'Manchester NH',
+        address: 'Bedford NH',
+        location: 'Bedford NH',
         placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0100',
       },
       {
         targetSegment: 'Property managers',
         targetSubtype: 'multi-family',
-        marketBounds: 'Manchester NH',
+        marketBounds: 'Bedford NH',
       },
       0
     );
@@ -114,8 +130,10 @@ describe('scoutPublicSourcing (SPEC-077)', () => {
     assert.ok(row.sourceUrl);
     assert.ok(row.fitRationale);
     assert.ok(row.risks);
-    assert.ok(row.suggestedContactRole);
+    assert.match(row.suggestedContactRole, /Suggested contact role:/i);
     assert.ok(row.confidence);
+    assert.ok(row.status === 'accepted' || row.status === 'review_required');
+    assert.ok(row.statusReason);
     assert.equal(row.placeholder, false);
     assert.equal(row.reviewOnly, true);
   });

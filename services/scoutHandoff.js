@@ -89,6 +89,16 @@ const DEFAULT_GUARDRAILS = Object.freeze([
   'Composer / CRM / export must not use candidates before operator approval',
 ]);
 
+/** Completed handoff / batch guardrails — no draft-brief language. */
+const COMPLETED_RESULT_GUARDRAILS = Object.freeze([
+  'Review-only — no CRM writes',
+  'No outreach copy',
+  'No sends',
+  'No account, DNS, GBP, social, or tracking changes',
+  'Operator must approve before Composer / CRM / export use',
+  'Rejected and review_required rows are not outreach-ready',
+]);
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -260,13 +270,18 @@ function persistWorkRequestRecord(handoff, workRequest, opts = {}, extra = {}) {
 }
 
 function finishWithCandidates(handoff, workRequest, candidates, opts = {}) {
-  const candidateBatch = buildCandidateBatch(handoff, candidates);
+  const rejected = Array.isArray(opts.rejected) ? opts.rejected : [];
+  const candidateBatch = buildCandidateBatch(handoff, candidates, {
+    rejected,
+  });
   const updatedAt = nowIso();
+  const completedGuardrails = [...COMPLETED_RESULT_GUARDRAILS];
   const nextWorkRequest = {
     ...workRequest,
     status: SCOUT_HANDOFF_STATUSES.COMPLETED,
     updatedAt,
     completedAt: updatedAt,
+    guardrails: completedGuardrails,
   };
   const nextHandoff = {
     ...handoff,
@@ -283,6 +298,8 @@ function finishWithCandidates(handoff, workRequest, candidates, opts = {}) {
     crmWritesMade: false,
     outreachCopyGenerated: false,
     accountChangesMade: false,
+    // Replace draft-brief guardrails on completed handoffs.
+    guardrails: completedGuardrails,
   };
   nextHandoff.uiStatus = uiStatusForHandoff(nextHandoff);
   persistWorkRequestRecord(nextHandoff, nextWorkRequest, opts, {
@@ -300,12 +317,23 @@ function finishWithCandidates(handoff, workRequest, candidates, opts = {}) {
   ];
   for (const row of candidates) {
     lines.push(
-      `- ${row.companyName} | ${row.location || '—'} | ${row.sourceUrl} | ${
-        row.fitRationale || '—'
-      } | role: ${row.suggestedContactRole || '—'} | risks: ${
-        row.risks || '—'
-      } | confidence: ${row.confidence}`
+      `- [${row.status || 'review_required'}] ${row.companyName} | ${
+        row.location || '—'
+      } | ${row.sourceUrl} | ${row.fitRationale || '—'} | role: ${
+        row.suggestedContactRole || '—'
+      } | risks: ${row.risks || '—'} | confidence: ${row.confidence}${
+        row.statusReason ? ` | reason: ${row.statusReason}` : ''
+      }`
     );
+  }
+  if (rejected.length) {
+    lines.push('');
+    lines.push(`Rejected (${rejected.length}):`);
+    for (const row of rejected.slice(0, 25)) {
+      lines.push(
+        `- ${row.companyName || '—'} — ${row.statusReason || 'rejected'}`
+      );
+    }
   }
   lines.push('');
   lines.push('Guardrails:');
@@ -384,6 +412,13 @@ function finishWithFailure(handoff, workRequest, opts = {}, detail = {}) {
 function normalizeScoutCandidate(row, idx) {
   const r = row || {};
   const sourceUrl = r.sourceUrl || r.website || r.url || null;
+  const roleRaw = r.suggestedContactRole || r.contactRole || null;
+  const suggestedContactRole =
+    roleRaw && !/^suggested contact role:/i.test(String(roleRaw))
+      ? r.contactName && r.contactTitle
+        ? String(roleRaw)
+        : `Suggested contact role: ${roleRaw}`
+      : roleRaw;
   return {
     id: r.id || `scout-candidate-${idx + 1}`,
     companyName:
@@ -396,8 +431,11 @@ function normalizeScoutCandidate(row, idx) {
     subtype: r.subtype || r.segmentSubtype || null,
     fitRationale: r.fitRationale || r.fitReason || r.rationale || null,
     risks: r.risks || r.disqualifyRisk || r.risk || r.uncertainty || null,
-    suggestedContactRole: r.suggestedContactRole || r.contactRole || null,
+    suggestedContactRole,
     confidence: r.confidence || 'review_required',
+    status: r.status || 'review_required',
+    statusReason: r.statusReason || null,
+    exclusionRisk: Boolean(r.exclusionRisk),
     reviewOnly: true,
     placeholder: false,
   };
@@ -415,6 +453,7 @@ function filterValidScoutCandidates(rows) {
 
 function buildCandidateBatch(handoff, candidates, opts = {}) {
   const createdAt = opts.createdAt || nowIso();
+  const rejected = Array.isArray(opts.rejected) ? opts.rejected : [];
   return {
     kind: SCOUT_CANDIDATE_BATCH_KIND,
     handoffId: handoff.handoffId,
@@ -424,13 +463,9 @@ function buildCandidateBatch(handoff, candidates, opts = {}) {
     resultsApproved: false,
     candidateCount: candidates.length,
     candidates,
-    guardrails: [
-      'Review-only — no CRM writes',
-      'No outreach copy',
-      'No sends',
-      'No account, DNS, GBP, social, or tracking changes',
-      'Operator must approve before Composer / CRM / export use',
-    ],
+    rejected,
+    rejectedCount: rejected.length,
+    guardrails: [...COMPLETED_RESULT_GUARDRAILS],
     crmWritesMade: false,
     outreachCopyGenerated: false,
     accountChangesMade: false,
@@ -998,7 +1033,10 @@ async function executeScoutWorkRequest(input = {}) {
     });
   }
 
-  const result = finishWithCandidates(handoff, workRequest, candidates, opts);
+  const result = finishWithCandidates(handoff, workRequest, candidates, {
+    ...opts,
+    rejected: Array.isArray(sourced.rejected) ? sourced.rejected : [],
+  });
   if (sourced.warnings && sourced.warnings.length) {
     result.message = `${result.message}\n\nSourcing notes:\n- ${sourced.warnings.join(
       '\n- '
@@ -1006,6 +1044,8 @@ async function executeScoutWorkRequest(input = {}) {
     result.warnings = sourced.warnings;
   }
   result.queried = sourced.queried || [];
+  result.rejected = sourced.rejected || [];
+  result.market = sourced.market || null;
   return result;
 }
 
@@ -1058,6 +1098,7 @@ module.exports = {
   DEFAULT_EVIDENCE_REQUIREMENTS,
   DEFAULT_CONFIDENCE_RULES,
   DEFAULT_GUARDRAILS,
+  COMPLETED_RESULT_GUARDRAILS,
   buildScoutHandoff,
   buildScoutWorkRequest,
   buildCandidateBatch,
