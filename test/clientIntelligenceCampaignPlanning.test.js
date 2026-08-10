@@ -2212,6 +2212,10 @@ describe('Reviewable prospect list draft progression', () => {
         businessName: 'Anchor Cleaning',
         primarySegment: 'property_managers',
         targetMarket: 'Greater Manchester',
+      },
+      {
+        scoutSourcingSupported: false,
+        scoutPublicSourcingSupported: false,
       }
     );
 

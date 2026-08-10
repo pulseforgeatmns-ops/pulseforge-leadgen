@@ -42,6 +42,8 @@ const {
   SCOUT_SOURCING_NOT_WIRED_MESSAGE,
   buildScoutHandoff,
   handBriefToScout,
+  handBriefToScoutAsync,
+  executeScoutWorkRequest,
   isScoutSourcingExecutionWired,
   uiStatusForHandoff,
 } = require('./scoutHandoff');
@@ -2566,6 +2568,9 @@ function planningStateForHandoffResult(result) {
   if (result.intent === 'scout_sourcing_failed') {
     return CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_FAILED;
   }
+  if (result.intent === 'scout_handoff_queued') {
+    return CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_QUEUED;
+  }
   const status = result.handoff && result.handoff.status;
   if (status === SCOUT_HANDOFF_STATUSES.QUEUED) {
     return CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_QUEUED;
@@ -2582,6 +2587,8 @@ function planningStateForHandoffResult(result) {
 /**
  * Approve the Scout Handoff Brief and create/queue a Scout work request.
  * If Scout sourcing is not wired, returns the capability boundary — no placeholders.
+ * When public-source tooling is available, sets shouldExecuteScoutSourcing so the
+ * interview layer can await executeScoutWorkRequest / handBriefToScoutAsync.
  */
 function produceHandBriefToScoutResult(ctx, answers, slots, opts, leadIn) {
   const briefSlots = {
@@ -2646,7 +2653,9 @@ function produceHandBriefToScoutResult(ctx, answers, slots, opts, leadIn) {
       ? 'Scout sourcing execution is the next build gap — not a Max failure. Wire Scout public-source sourcing to this handoff.'
       : result.scoutRan
         ? 'Review Scout candidates. Approve before Composer / CRM / export use. No outreach or CRM writes yet.'
-        : 'Scout work request queued.',
+        : result.shouldExecuteScoutSourcing
+          ? 'Scout work request queued — public-source sourcing will run next.'
+          : 'Scout work request queued.',
     disclaimer: result.sourcingUnavailable
       ? SCOUT_SOURCING_NOT_WIRED_MESSAGE
       : 'Scout handoff results are review-only. No outreach copy, sends, CRM writes, or account changes have been made.',
@@ -2680,12 +2689,64 @@ function produceHandBriefToScoutResult(ctx, answers, slots, opts, leadIn) {
     scoutCandidateBatch: result.candidateBatch,
     liveProspectList: null,
     intent: result.intent,
+    shouldExecuteScoutSourcing: Boolean(result.shouldExecuteScoutSourcing),
     previewApproved: true,
     criteriaApproved: true,
     buildProposalApproved: Boolean(briefSlots.buildProposalApproved),
     liveSourcingApproved: false,
     planningState,
     currentAsk: null,
+  };
+}
+
+/**
+ * Apply an executeScoutWorkRequest / handBriefToScoutAsync result onto a
+ * produceHandBriefToScoutResult reply shape (session + UI fields).
+ */
+function applyScoutExecutionResult(reply, result) {
+  if (!reply || !result) return reply;
+  const handoff = result.handoff || reply.scoutHandoff;
+  const brief = reply.scoutHandoffBrief
+    ? {
+        ...reply.scoutHandoffBrief,
+        handoffId: handoff && handoff.handoffId,
+        scoutHandoff: handoff,
+        status: handoff && handoff.status,
+        uiStatus: handoff && handoff.uiStatus,
+        scoutRan: Boolean(result.scoutRan),
+        workRequestId: result.workRequest && result.workRequest.workRequestId,
+        updatedAt: handoff && handoff.updatedAt,
+        recommendedNextStep: result.scoutRan
+          ? result.ok
+            ? 'Review Scout candidates. Approve before Composer / CRM / export use. No outreach or CRM writes yet.'
+            : 'Scout sourcing failed — work request preserved. Review failure and retry or revise criteria.'
+          : reply.scoutHandoffBrief.recommendedNextStep,
+        disclaimer:
+          'Scout handoff results are review-only. No outreach copy, sends, CRM writes, or account changes have been made.',
+      }
+    : reply.scoutHandoffBrief;
+
+  const planningState = planningStateForHandoffResult(result);
+  const leadIn =
+    typeof reply.message === 'string' &&
+    reply.message.startsWith('Approving the Scout Handoff Brief')
+      ? 'Approving the Scout Handoff Brief and creating a Scout work request. Max will not claim Scout inspected sources unless Scout actually ran.'
+      : null;
+  const message = leadIn
+    ? `${leadIn}\n\n${result.message}`
+    : result.message || reply.message;
+
+  return {
+    ...reply,
+    message,
+    step: planningState,
+    planningState,
+    intent: result.intent,
+    scoutHandoffBrief: brief,
+    scoutHandoff: handoff,
+    scoutWorkRequest: result.workRequest || reply.scoutWorkRequest,
+    scoutCandidateBatch: result.candidateBatch || null,
+    shouldExecuteScoutSourcing: false,
   };
 }
 
@@ -5455,12 +5516,15 @@ module.exports = {
   formatScoutHandoffBriefMessage,
   produceScoutHandoffBriefResult,
   produceHandBriefToScoutResult,
+  applyScoutExecutionResult,
   isLivePublicSourcingSupported,
   isScoutSourcingExecutionWired,
   produceLiveSourcingResult,
   formatLiveSourcedProspectListMessage,
   buildScoutHandoff,
   handBriefToScout,
+  handBriefToScoutAsync,
+  executeScoutWorkRequest,
   uiStatusForHandoff,
   markCriteriaPreviewApproved,
   markBuildProposalApproved,

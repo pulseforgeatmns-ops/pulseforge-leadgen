@@ -22,6 +22,9 @@
  * POST /api/v1/interview/:id/campaign/start
  * POST /api/v1/interview/:id/campaign/message
  * POST /api/v1/interview/:id/growth-plan/tasks/:taskId/complete
+ * GET  /api/v1/scout/work-requests/:id — read Scout work request (SPEC-077)
+ * POST /api/v1/scout/work-requests/:id/execute — run public-source sourcing (SPEC-077)
+ * GET  /api/v1/scout/handoffs/:handoffId — read by handoffId (SPEC-077)
  * GET  /api/v1/clients/:id/blueprint
  * GET  /api/v1/client-intel/sessions
  * GET  /api/v1/client-intel/sessions/:id/resume
@@ -54,6 +57,13 @@ const {
   postCampaignPlanningMessage,
   completeGrowthPlanTask,
 } = require('../services/clientIntelligenceInterview');
+const {
+  executeScoutWorkRequest,
+  approveScoutResults,
+} = require('../services/scoutHandoff');
+const {
+  defaultScoutWorkRequestStore,
+} = require('../services/scoutWorkRequestStore');
 
 const requireOperator = [requireAuth, requireRole('admin', 'manager', 'client')];
 
@@ -353,5 +363,133 @@ router.get('/api/v1/clients/:id/blueprint', requireOperator, async (req, res) =>
     return sendError(res, err);
   }
 });
+
+/**
+ * SPEC-077 — read a Scout work request / handoff record (review-only).
+ */
+router.get(
+  '/api/v1/scout/work-requests/:id',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const record = defaultScoutWorkRequestStore.getByWorkRequestId(
+        req.params.id
+      );
+      if (!record) {
+        return res.status(404).json({
+          error: 'not_found',
+          message: `Scout work request not found: ${req.params.id}`,
+        });
+      }
+      noStore(res);
+      return res.json({
+        ok: true,
+        reviewOnly: true,
+        crmWritesMade: false,
+        outreachCopyGenerated: false,
+        accountChangesMade: false,
+        ...record,
+      });
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
+
+router.get(
+  '/api/v1/scout/handoffs/:handoffId',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const record = defaultScoutWorkRequestStore.getByHandoffId(
+        req.params.handoffId
+      );
+      if (!record) {
+        return res.status(404).json({
+          error: 'not_found',
+          message: `Scout handoff not found: ${req.params.handoffId}`,
+        });
+      }
+      noStore(res);
+      return res.json({
+        ok: true,
+        reviewOnly: true,
+        crmWritesMade: false,
+        outreachCopyGenerated: false,
+        accountChangesMade: false,
+        ...record,
+      });
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
+
+/**
+ * SPEC-077 — execute public-source Scout sourcing for an approved work request.
+ * Never writes CRM, outreach, or account changes.
+ */
+router.post(
+  '/api/v1/scout/work-requests/:id/execute',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const result = await executeScoutWorkRequest({
+        workRequestId: req.params.id,
+        workRequestStore: defaultScoutWorkRequestStore,
+      });
+      noStore(res);
+      return res.status(result.ok ? 200 : 422).json({
+        ...result,
+        reviewOnly: true,
+        crmWritesMade: false,
+        outreachCopyGenerated: false,
+        accountChangesMade: false,
+      });
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
+
+/**
+ * SPEC-077 — operator approves Scout candidate batch for downstream use.
+ * Still no CRM writes / outreach from this step.
+ */
+router.post(
+  '/api/v1/scout/work-requests/:id/approve-results',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const record = defaultScoutWorkRequestStore.getByWorkRequestId(
+        req.params.id
+      );
+      if (!record || !record.handoff) {
+        return res.status(404).json({
+          error: 'not_found',
+          message: `Scout work request not found: ${req.params.id}`,
+        });
+      }
+      const approved = approveScoutResults(record.handoff);
+      if (approved.ok && approved.handoff) {
+        defaultScoutWorkRequestStore.update(req.params.id, {
+          handoff: approved.handoff,
+          candidateBatch: approved.handoff.candidateBatch,
+          resultsApproved: true,
+        });
+      }
+      noStore(res);
+      return res.status(approved.ok ? 200 : 422).json({
+        ...approved,
+        reviewOnly: true,
+        crmWritesMade: false,
+        outreachCopyGenerated: false,
+        accountChangesMade: false,
+      });
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
 
 module.exports = router;

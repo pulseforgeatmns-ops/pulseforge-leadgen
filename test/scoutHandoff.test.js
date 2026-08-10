@@ -44,12 +44,24 @@ describe('scoutHandoff lifecycle', () => {
     assert.equal(handoff.outreachCopyGenerated, false);
   });
 
-  it('defaults Scout sourcing as not wired', () => {
-    assert.equal(isScoutSourcingExecutionWired({}), false);
+  it('defaults Scout sourcing as not wired without Places or injects', () => {
     assert.equal(isScoutSourcingExecutionWired({ scoutSourcingSupported: false }), false);
+    assert.equal(
+      isScoutSourcingExecutionWired({
+        scoutSourcingSupported: false,
+        scoutPublicSourcingSupported: false,
+      }),
+      false
+    );
     assert.equal(isScoutSourcingExecutionWired({ scoutSourcingSupported: true }), true);
     assert.equal(
       isScoutSourcingExecutionWired({ scoutSourcingFn: () => [] }),
+      true
+    );
+    assert.equal(
+      isScoutSourcingExecutionWired({
+        publicSearchFn: async () => [],
+      }),
       true
     );
   });
@@ -60,12 +72,16 @@ describe('scoutHandoff lifecycle', () => {
       targetSegment: 'Property managers',
       marketBounds: 'Manchester NH',
     });
-    const result = handBriefToScout(draft);
+    const result = handBriefToScout(draft, {
+      scoutSourcingSupported: false,
+      scoutPublicSourcingSupported: false,
+    });
 
     assert.equal(result.ok, true);
     assert.equal(result.scoutRan, false);
     assert.equal(result.sourcingUnavailable, true);
     assert.equal(result.executionWired, false);
+    assert.equal(result.shouldExecuteScoutSourcing, false);
     assert.equal(result.intent, 'scout_sourcing_not_wired');
     assert.match(result.message, new RegExp(SCOUT_SOURCING_NOT_WIRED_MESSAGE));
     assert.doesNotMatch(result.message, /Scout inspected/i);
