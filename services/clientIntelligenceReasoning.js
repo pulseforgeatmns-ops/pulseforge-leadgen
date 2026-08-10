@@ -182,15 +182,110 @@ function looksLikeNextPlanningRequest(text) {
 }
 
 function looksLikeProspectListDraftRequest(text) {
-  return PROSPECT_LIST_DRAFT_REQUEST_RE.test(String(text || ''));
+  const s = String(text || '');
+  if (/\breviewable\s+prospect\s+list\s+batch\b/i.test(s)) return true;
+  if (/\bprospect\s+list\s+draft\b/i.test(s)) return true;
+  if (/\breviewable\s+(?:prospect\s+)?list\s+(?:batch|draft)\b/i.test(s)) {
+    return true;
+  }
+  return PROSPECT_LIST_DRAFT_REQUEST_RE.test(s);
 }
 
+/**
+ * Explicit criteria revision only.
+ * Never treat "reviewable" / draft generation as revise-criteria.
+ */
 function looksLikeReviseCriteriaRequest(text) {
-  const s = String(text || '');
-  return (
+  const s = String(text || '').trim();
+  if (!s) return false;
+  // Draft / reviewable list requests are never criteria revisions.
+  if (looksLikeProspectListDraftRequest(s)) return false;
+  if (/\breviewable\b/i.test(s) && !/\brevise\b/i.test(s)) return false;
+
+  if (
+    /\b(?:revise|change|update|redefine|redo|rework)\s+(?:the\s+)?(?:prospect[- ]list\s+)?criteria\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(?:revise|change|update|edit)\s+(?:the\s+)?(?:inclusion|exclusion)(?:\s*(?:\/|and|or)\s*(?:inclusion|exclusion))?(?:\s+criteria)?\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(?:update|change)\s+inclusion\s*\/\s*exclusion\b/i.test(s) ||
+    /\bredefine\s+(?:the\s+)?(?:qualification|disqualification)\b/i.test(s)
+  ) {
+    return true;
+  }
+  // Narrow fallback: explicit revise verb + criteria vocabulary, but not
+  // when the operator is only mentioning an approved criteria artifact.
+  if (
     /\b(revise|change|update|edit|redo|rework)\b/i.test(s) &&
-    /\b(criteria|inclusion|exclusion|qualify|disqualify)\b/i.test(s)
+    /\b(inclusion|exclusion|qualify|disqualify)\b/i.test(s)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Infer criteria/build approvals declared in operator text into memory.
+ * Example: "Prospect List Criteria Preview approved".
+ */
+function inferApprovedArtifactsFromMessage(memory, text) {
+  let next = ensureReasoningMemory({ reasoningMemory: memory });
+  const s = String(text || '');
+  if (
+    /\bprospect\s+list\s+criteria\s+preview\b[\s\S]{0,40}\bapproved\b/i.test(s) ||
+    /\bcriteria\s+preview\b[\s\S]{0,40}\bapproved\b/i.test(s) ||
+    /\bapproved\b[\s\S]{0,40}\bprospect\s+list\s+criteria\s+preview\b/i.test(s)
+  ) {
+    next = markProspectCriteriaApproved(next);
+  }
+  if (
+    /\bprospect\s+list\s+build\s+proposal\b[\s\S]{0,40}\bapproved\b/i.test(s) ||
+    /\bbuild\s+proposal\b[\s\S]{0,40}\bapproved\b/i.test(s) ||
+    /\bapproved\b[\s\S]{0,40}\bprospect\s+list\s+build\s+proposal\b/i.test(s)
+  ) {
+    next = markArtifactApproved(
+      next,
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    );
+  }
+  return next;
+}
+
+/**
+ * Hard progression guard for reviewable prospect list draft.
+ * Draft wording + approved criteria + approved build proposal → draft path.
+ */
+function shouldForceProspectListDraft(message, memory, opts = {}) {
+  if (!looksLikeProspectListDraftRequest(message)) return false;
+  let mem = ensureReasoningMemory({
+    reasoningMemory: inferApprovedArtifactsFromMessage(memory, message),
+  });
+  if (opts.priorCriteriaPreview && opts.priorCriteriaPreview.status === 'approved') {
+    mem = markProspectCriteriaApproved(mem);
+  }
+  if (opts.priorBuildProposal && opts.priorBuildProposal.status === 'approved') {
+    mem = markArtifactApproved(
+      mem,
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    );
+  }
+  const approved = mem.approvedArtifacts || [];
+  const hasCriteria =
+    approved.includes(ARTIFACT_KINDS.PROSPECT_CRITERIA) ||
+    approved.includes(ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW);
+  const hasBuild = approved.includes(
+    ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
   );
+  return hasCriteria && hasBuild;
 }
 
 /**
@@ -724,11 +819,43 @@ function resolveCampaignArtifactAction(opts = {}) {
     text,
     messageClass,
   });
+  // Honor approvals declared in the operator message before progression.
+  memory = inferApprovedArtifactsFromMessage(memory, text);
 
   const priorCriteria = opts.priorCriteriaPreview || null;
   const priorBuild = opts.priorBuildProposal || null;
   const priorDraft =
     opts.priorProspectListDraft || opts.priorReviewableProspectListDraft || null;
+
+  // HARD GUARD: draft request + approved criteria + approved build proposal
+  // always routes to draft — never criteria replay / revise fallback.
+  if (
+    shouldForceProspectListDraft(text, memory, {
+      priorCriteriaPreview: priorCriteria,
+      priorBuildProposal: priorBuild,
+    })
+  ) {
+    memory = markProspectCriteriaApproved(memory);
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    );
+    memory.nextRecommendedArtifact =
+      ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT;
+    return {
+      action: 'emit_prospect_list_draft',
+      approveKind: ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+      emitKind: ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT,
+      memory,
+      messageClass: looksLikeProspectListDraftRequest(text)
+        ? MESSAGE_CLASSES.ARTIFACT_REQUEST
+        : messageClass,
+      note:
+        'Build proposal approved — generating the first reviewable prospect list draft.',
+      planningState: 'prospect_list_draft_requested',
+    };
+  }
+
   const criteriaShown = Boolean(
     priorCriteria &&
       (priorCriteria.kind === 'prospect_list_criteria_preview' ||
@@ -1318,6 +1445,8 @@ module.exports = {
   looksLikeNextPlanningRequest,
   looksLikeProspectListDraftRequest,
   looksLikeReviseCriteriaRequest,
+  inferApprovedArtifactsFromMessage,
+  shouldForceProspectListDraft,
   looksLikeArtifactRequest,
   looksLikeExplicitReplayRequest,
   looksLikeSkip,

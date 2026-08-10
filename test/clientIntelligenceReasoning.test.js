@@ -25,8 +25,10 @@ const {
   looksLikeVagueAnswer,
   looksLikeApprovalPlusNextRequest,
   looksLikeProspectListDraftRequest,
+  looksLikeReviseCriteriaRequest,
   shouldBlockCriteriaQuestionReplay,
   isBannedCriteriaReplayQuestion,
+  shouldForceProspectListDraft,
 } = require('../services/clientIntelligenceReasoning');
 
 const {
@@ -468,5 +470,41 @@ describe('Prospect list draft progression after build proposal approval', () => 
       ),
       true
     );
+  });
+
+  it('does not treat reviewable draft wording as revise-criteria', () => {
+    const confusion =
+      'We already completed validation metrics and approved the Prospect List Build Proposal.\n\n' +
+      'Current state:\n' +
+      '- Prospect List Criteria Preview approved\n' +
+      '- Prospect List Build Proposal approved\n' +
+      '- Next step is a reviewable prospect list draft\n\n' +
+      'Now generate the first reviewable prospect list batch...';
+    assert.equal(looksLikeReviseCriteriaRequest(confusion), false);
+    assert.equal(looksLikeProspectListDraftRequest(confusion), true);
+    assert.equal(looksLikeReviseCriteriaRequest('revise criteria'), true);
+    assert.equal(looksLikeReviseCriteriaRequest('change criteria'), true);
+    assert.equal(
+      looksLikeReviseCriteriaRequest('update inclusion/exclusion'),
+      true
+    );
+  });
+
+  it('hard guard forces draft when message declares approvals + draft request', () => {
+    const confusion =
+      'Current state:\n' +
+      '- Prospect List Criteria Preview approved\n' +
+      '- Prospect List Build Proposal approved\n' +
+      '- Next step is a reviewable prospect list draft\n\n' +
+      'Now generate the first reviewable prospect list batch...';
+    const mem = emptyReasoningMemory();
+    assert.equal(shouldForceProspectListDraft(confusion, mem), true);
+    const action = resolveCampaignArtifactAction({
+      userMessage: confusion,
+      memory: mem,
+      step: 'opening',
+    });
+    assert.equal(action.action, 'emit_prospect_list_draft');
+    assert.equal(action.planningState, 'prospect_list_draft_requested');
   });
 });
