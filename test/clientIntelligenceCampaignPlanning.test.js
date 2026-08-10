@@ -1866,4 +1866,190 @@ describe('Reviewable prospect list draft progression', () => {
     assert.equal(reply.intent, 'produce_prospect_list_draft');
     assert.ok(reply.prospectListDraft);
   });
+
+  it('after live_sourcing_approved, never emits placeholder draft language', async () => {
+    const store = createMemoryStore();
+    await reachBuildProposal(store);
+    await postCampaignPlanningMessage('int-campaign-1', 'Approved', { store });
+    await postCampaignPlanningMessage('int-campaign-1', DRAFT_REQ, { store });
+
+    const liveApproval =
+      'Approved. Use only public sources. Build 15–25 real prospects. Include source URLs. No outreach copy, sends, CRM writes, or account changes.';
+
+    const result = await postCampaignPlanningMessage(
+      'int-campaign-1',
+      liveApproval,
+      { store }
+    );
+
+    assert.equal(result.liveSourcingApproved, true);
+    assert.ok(
+      result.intent === 'live_sourcing_unavailable' ||
+        result.intent === 'produce_live_sourced_prospects'
+    );
+    assert.match(
+      result.message,
+      /I cannot perform live sourcing in this environment yet\.|Live Public-Source Prospect List/i
+    );
+
+    // Banned placeholder phrases after live_sourcing_approved
+    assert.doesNotMatch(result.message, /illustrative placeholders/i);
+    assert.doesNotMatch(result.message, /\[Draft sample/i);
+    assert.doesNotMatch(result.message, /placeholder/i);
+    assert.doesNotMatch(
+      result.message,
+      /Approve to proceed toward live sourcing/i
+    );
+  });
+
+  it('unit: live_sourcing_approved returns capability boundary without placeholders', () => {
+    const {
+      buildCampaignPlanningReply,
+      LIVE_SOURCING_BOUNDARY_MESSAGE,
+      buildReviewableProspectListDraft,
+    } = require('../services/clientIntelligenceCampaignPlanning');
+
+    const liveApproval =
+      'Approved. Use only public sources. Build 15–25 real prospects. Include source URLs.';
+
+    const reply = buildCampaignPlanningReply(
+      liveApproval,
+      {
+        step: 'prospect_list_draft_generated',
+        slots: {
+          previewGenerated: true,
+          previewApproved: true,
+          criteriaGenerated: true,
+          criteriaApproved: true,
+          inclusionCriteria: ['local managers'],
+          exclusionCriteria: ['national firms'],
+          buildProposalGenerated: true,
+          buildProposalApproved: true,
+          draftRequested: true,
+          draftGenerated: true,
+        },
+        prospectListCriteriaPreview: {
+          kind: 'prospect_list_criteria_preview',
+          status: 'approved',
+        },
+        prospectListBuildProposal: {
+          kind: 'prospect_list_build_proposal',
+          status: 'approved',
+        },
+        prospectListDraft: {
+          kind: 'reviewable_prospect_list_draft',
+          status: 'draft',
+          draftRows: [],
+        },
+      },
+      {
+        businessName: 'Anchor Cleaning',
+        primarySegment: 'property_managers',
+        targetMarket: 'Greater Manchester',
+      }
+    );
+
+    assert.equal(reply.liveSourcingApproved, true);
+    assert.equal(reply.intent, 'live_sourcing_unavailable');
+    assert.equal(reply.message.includes(LIVE_SOURCING_BOUNDARY_MESSAGE), true);
+    assert.doesNotMatch(reply.message, /illustrative placeholders/i);
+    assert.doesNotMatch(reply.message, /\[Draft sample/i);
+    assert.doesNotMatch(reply.message, /placeholder/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Approve to proceed toward live sourcing/i
+    );
+
+    const draft = buildReviewableProspectListDraft(
+      {
+        businessName: 'Anchor Cleaning',
+        primarySegment: 'property_managers',
+        targetMarket: 'Bedford and Hooksett',
+      },
+      {
+        criteriaApproved: true,
+        buildProposalApproved: true,
+      }
+    );
+    assert.deepEqual(draft.draftRows, []);
+    assert.equal(draft.liveListGenerated, false);
+    const draftText = JSON.stringify(draft);
+    assert.doesNotMatch(draftText, /illustrative placeholders/i);
+    assert.doesNotMatch(draftText, /\[Draft sample/i);
+    assert.doesNotMatch(draftText, /Approve to proceed toward live sourcing/i);
+  });
+
+  it('unit: when live sourcing is supported, returns real prospect records', () => {
+    const {
+      buildCampaignPlanningReply,
+    } = require('../services/clientIntelligenceCampaignPlanning');
+
+    const liveApproval =
+      'Approved. Use only public sources. Build 15–25 real prospects. Include source URLs.';
+
+    const reply = buildCampaignPlanningReply(
+      liveApproval,
+      {
+        step: 'prospect_list_draft_generated',
+        slots: {
+          previewGenerated: true,
+          previewApproved: true,
+          criteriaGenerated: true,
+          criteriaApproved: true,
+          buildProposalGenerated: true,
+          buildProposalApproved: true,
+          draftGenerated: true,
+        },
+        prospectListCriteriaPreview: {
+          kind: 'prospect_list_criteria_preview',
+          status: 'approved',
+        },
+        prospectListBuildProposal: {
+          kind: 'prospect_list_build_proposal',
+          status: 'approved',
+        },
+      },
+      {
+        businessName: 'Anchor Cleaning',
+        primarySegment: 'property_managers',
+        targetMarket: 'Greater Manchester',
+      },
+      {
+        liveSourcingFn: () => [
+          {
+            companyName: 'Granite State Property Mgmt',
+            website: 'https://example-public-pm.example',
+            sourceUrl: 'https://example-public-pm.example',
+            location: 'Bedford, NH',
+            segment: 'property managers',
+            subtype: 'multi-family',
+            fitReason: 'Local multi-family manager in approved market',
+            disqualifyRisk: 'Confirm portfolio size on review',
+            contactRole: 'Owner / property manager',
+            confidence: 'medium',
+          },
+        ],
+      }
+    );
+
+    assert.equal(reply.intent, 'produce_live_sourced_prospects');
+    assert.equal(reply.liveSourcingApproved, true);
+    assert.ok(reply.liveProspectList);
+    assert.equal(reply.liveProspectList.prospects.length, 1);
+    assert.equal(
+      reply.liveProspectList.prospects[0].companyName,
+      'Granite State Property Mgmt'
+    );
+    assert.equal(reply.liveProspectList.prospects[0].placeholder, false);
+    assert.doesNotMatch(reply.message, /illustrative placeholders/i);
+    assert.doesNotMatch(reply.message, /\[Draft sample/i);
+    assert.doesNotMatch(reply.message, /placeholder/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Approve to proceed toward live sourcing/i
+    );
+    assert.equal(reply.liveProspectList.outreachCopyGenerated, false);
+    assert.equal(reply.liveProspectList.crmWritesMade, false);
+    assert.equal(reply.liveProspectList.accountChangesMade, false);
+  });
 });

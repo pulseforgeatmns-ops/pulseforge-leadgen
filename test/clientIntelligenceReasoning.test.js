@@ -25,10 +25,13 @@ const {
   looksLikeVagueAnswer,
   looksLikeApprovalPlusNextRequest,
   looksLikeProspectListDraftRequest,
+  looksLikeLiveSourcingApproval,
   looksLikeReviseCriteriaRequest,
   shouldBlockCriteriaQuestionReplay,
   isBannedCriteriaReplayQuestion,
   shouldForceProspectListDraft,
+  isLiveSourcingApproved,
+  markLiveSourcingApproved,
 } = require('../services/clientIntelligenceReasoning');
 
 const {
@@ -506,5 +509,59 @@ describe('Prospect list draft progression after build proposal approval', () => 
     });
     assert.equal(action.action, 'emit_prospect_list_draft');
     assert.equal(action.planningState, 'prospect_list_draft_requested');
+  });
+});
+
+describe('Live sourcing approval after prospect list draft', () => {
+  const LIVE_APPROVAL =
+    'Approved. Use only public sources. Build 15–25 real prospects. Include source URLs. No outreach/copy/CRM/account changes.';
+
+  it('detects live_sourcing_approved from explicit approval + public sources + real prospects', () => {
+    assert.equal(looksLikeLiveSourcingApproval(LIVE_APPROVAL), true);
+    assert.equal(looksLikeProspectListDraftRequest(LIVE_APPROVAL), false);
+    const mem = markLiveSourcingApproved(emptyReasoningMemory());
+    assert.equal(isLiveSourcingApproved(mem, ''), true);
+    assert.equal(isLiveSourcingApproved(emptyReasoningMemory(), LIVE_APPROVAL), true);
+  });
+
+  it('routes live sourcing approval to emit_live_sourcing, never draft placeholders', () => {
+    let mem = emptyReasoningMemory();
+    mem = markArtifactApproved(mem, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    mem = markArtifactApproved(
+      mem,
+      ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW
+    );
+    mem = markArtifactApproved(
+      mem,
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    );
+    mem = markArtifactGenerated(
+      mem,
+      ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT,
+      'draft'
+    );
+
+    const action = resolveCampaignArtifactAction({
+      userMessage: LIVE_APPROVAL,
+      memory: mem,
+      priorCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+      },
+      priorBuildProposal: {
+        kind: 'prospect_list_build_proposal',
+        status: 'approved',
+      },
+      priorProspectListDraft: {
+        kind: 'reviewable_prospect_list_draft',
+        status: 'draft',
+      },
+      step: 'prospect_list_draft_generated',
+    });
+
+    assert.equal(action.action, 'emit_live_sourcing');
+    assert.equal(action.liveSourcingApproved, true);
+    assert.equal(action.memory.liveSourcingApproved, true);
+    assert.notEqual(action.action, 'emit_prospect_list_draft');
   });
 });

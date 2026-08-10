@@ -140,6 +140,8 @@ function emptyReasoningMemory() {
     approvedArtifacts: [],
     nextRecommendedArtifact: null,
     pendingUserRequest: null,
+    /** Explicit operator approval to live-source real public prospects. */
+    liveSourcingApproved: false,
   };
 }
 
@@ -183,12 +185,55 @@ function looksLikeNextPlanningRequest(text) {
 
 function looksLikeProspectListDraftRequest(text) {
   const s = String(text || '');
+  // Live sourcing approval is never a reviewable-placeholder draft request.
+  if (looksLikeLiveSourcingApproval(s)) return false;
   if (/\breviewable\s+prospect\s+list\s+batch\b/i.test(s)) return true;
   if (/\bprospect\s+list\s+draft\b/i.test(s)) return true;
   if (/\breviewable\s+(?:prospect\s+)?list\s+(?:batch|draft)\b/i.test(s)) {
     return true;
   }
   return PROSPECT_LIST_DRAFT_REQUEST_RE.test(s);
+}
+
+/**
+ * Explicit approval to live-source real prospects from public sources.
+ * Example: "Approved. Use only public sources. Build 15–25 real prospects."
+ */
+function looksLikeLiveSourcingApproval(text) {
+  const s = String(text || '');
+  if (!s.trim()) return false;
+  const hasApproval =
+    looksLikeApprovalLead(s) ||
+    /\b(?:approved?|approve(?:\s+it)?|go\s+ahead|proceed|ship\s+it|i\s+approve)\b/i.test(
+      s
+    );
+  const publicSources =
+    /\b(?:only\s+)?public\s+sources?\b/i.test(s) ||
+    /\buse\s+only\s+public\b/i.test(s) ||
+    /\blive\s+(?:public[- ]?)?sourc/i.test(s);
+  const realProspects =
+    /\breal\s+prospects?\b/i.test(s) ||
+    /\b(?:\d+\s*[–-]\s*\d+|\d+)\s+real\s+prospects?\b/i.test(s) ||
+    /\bbuild\b[\s\S]{0,80}\b(?:real\s+)?prospects?\b/i.test(s) ||
+    /\binclude\s+source\s+urls?\b/i.test(s);
+  if (hasApproval && publicSources && realProspects) return true;
+  if (hasApproval && publicSources && /\bprospects?\b/i.test(s)) return true;
+  if (hasApproval && /\blive\s+sourc/i.test(s) && /\bprospects?\b/i.test(s)) {
+    return true;
+  }
+  return false;
+}
+
+function markLiveSourcingApproved(memory) {
+  const next = ensureReasoningMemory({ reasoningMemory: memory });
+  next.liveSourcingApproved = true;
+  return next;
+}
+
+function isLiveSourcingApproved(memory, text) {
+  const mem = ensureReasoningMemory({ reasoningMemory: memory });
+  if (mem.liveSourcingApproved) return true;
+  return looksLikeLiveSourcingApproval(text);
 }
 
 /**
@@ -256,6 +301,9 @@ function inferApprovedArtifactsFromMessage(memory, text) {
       next,
       ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
     );
+  }
+  if (looksLikeLiveSourcingApproval(s)) {
+    next = markLiveSourcingApproved(next);
   }
   return next;
 }
@@ -800,13 +848,14 @@ function resolveNextArtifact(memory, requestedKind, opts = {}) {
  * Campaign-loop artifact progression from session context + classified intent.
  *
  * @returns {{
- *   action: 'emit_criteria'|'emit_build_proposal'|'emit_prospect_list_draft'|'ack_approval'|'ack_build_approval'|'replay_criteria'|'hold',
+ *   action: 'emit_criteria'|'emit_build_proposal'|'emit_prospect_list_draft'|'emit_live_sourcing'|'ack_approval'|'ack_build_approval'|'replay_criteria'|'hold',
  *   approveKind: string|null,
  *   emitKind: string|null,
  *   memory: object,
  *   messageClass: string,
  *   note: string|null,
  *   planningState: string|null,
+ *   liveSourcingApproved?: boolean,
  * }}
  */
 function resolveCampaignArtifactAction(opts = {}) {
@@ -826,6 +875,28 @@ function resolveCampaignArtifactAction(opts = {}) {
   const priorBuild = opts.priorBuildProposal || null;
   const priorDraft =
     opts.priorProspectListDraft || opts.priorReviewableProspectListDraft || null;
+
+  // HARD GUARD: explicit live-sourcing approval never regenerates placeholders.
+  if (isLiveSourcingApproved(memory, text)) {
+    memory = markLiveSourcingApproved(memory);
+    memory = markProspectCriteriaApproved(memory);
+    if (priorBuild || approvedArtifactsInclude(memory, ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL)) {
+      memory = markArtifactApproved(
+        memory,
+        ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+      );
+    }
+    return {
+      action: 'emit_live_sourcing',
+      approveKind: ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+      emitKind: null,
+      memory,
+      messageClass,
+      note: null,
+      planningState: 'live_sourcing_approved',
+      liveSourcingApproved: true,
+    };
+  }
 
   // HARD GUARD: draft request + approved criteria + approved build proposal
   // always routes to draft — never criteria replay / revise fallback.
@@ -1444,9 +1515,12 @@ module.exports = {
   looksLikeApprovalPlusNextRequest,
   looksLikeNextPlanningRequest,
   looksLikeProspectListDraftRequest,
+  looksLikeLiveSourcingApproval,
   looksLikeReviseCriteriaRequest,
   inferApprovedArtifactsFromMessage,
   shouldForceProspectListDraft,
+  markLiveSourcingApproved,
+  isLiveSourcingApproved,
   looksLikeArtifactRequest,
   looksLikeExplicitReplayRequest,
   looksLikeSkip,
