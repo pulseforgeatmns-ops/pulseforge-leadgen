@@ -21,6 +21,23 @@ const {
 const TARGET_COUNT_MIN = 15;
 const TARGET_COUNT_MAX = 25;
 
+/** Alternate Scout public-source fallback (SerpAPI / Custom Search) is not wired on this path. */
+const SCOUT_PUBLIC_SOURCE_FALLBACK = Object.freeze({
+  id: 'serpapi_or_custom_search',
+  available: false,
+  status: 'unavailable',
+  message:
+    'SerpAPI / Google Custom Search fallback is not wired for Scout public-source handoff sourcing. Fix Google Places config, then retry the work request.',
+});
+
+const PLACES_SETUP_STEPS = Object.freeze([
+  'Confirm GOOGLE_PLACES_KEY is set on the Railway service that runs Scout (node server.js).',
+  'In Google Cloud Console for that API key’s project, enable Places API (Places API / Places API legacy — Text Search + Place Details).',
+  'Confirm billing is enabled on the Google Cloud project (Places requires a billing account).',
+  'Relax or fix API key restrictions so Railway server calls are allowed (prefer IP/server restrictions — not HTTP-referrer-only browser keys; allow Places API under API restrictions).',
+  'After fixing config, retry the same Scout work request (POST /api/v1/scout/work-requests/:id/execute).',
+]);
+
 const DEFAULT_CONTACT_ROLE_BY_SEGMENT = Object.freeze({
   property_managers: 'Owner / property manager',
   property_manager: 'Owner / property manager',
@@ -40,6 +57,9 @@ const DEFAULT_CONTACT_ROLE_BY_SEGMENT = Object.freeze({
 /**
  * Whether Scout can run live public-source sourcing in this environment.
  * Available when GOOGLE_PLACES_KEY is set, or a search provider / fn is injected.
+ *
+ * Note: a set key only means the wiring check passes — Google may still return
+ * REQUEST_DENIED at search time (billing / API enablement / key restrictions).
  */
 function isScoutPublicSourcingAvailable(opts = {}) {
   if (opts.scoutPublicSourcingSupported === false) return false;
@@ -56,6 +76,144 @@ function isScoutPublicSourcingAvailable(opts = {}) {
     fetchImpl: opts.fetchImpl,
   });
   return places.available();
+}
+
+/**
+ * Build an operator-facing Google Places setup diagnosis for Scout UI.
+ * Does not mutate CRM / outreach / accounts.
+ *
+ * @param {object} detail
+ * @param {string} [detail.status] Google Places status (e.g. REQUEST_DENIED)
+ * @param {string} [detail.errorMessage] Google error_message field
+ * @param {string} [detail.code] Internal error code
+ * @param {boolean} [detail.keyPresent]
+ */
+function diagnosePlacesConfig(detail = {}) {
+  const status = String(detail.status || '')
+    .trim()
+    .toUpperCase();
+  const googleMsg = String(detail.errorMessage || detail.error_message || '')
+    .trim();
+  const keyPresent =
+    detail.keyPresent != null
+      ? Boolean(detail.keyPresent)
+      : Boolean(String(detail.apiKey || process.env.GOOGLE_PLACES_KEY || '').trim());
+
+  let code = detail.code || null;
+  if (!code) {
+    if (!keyPresent) code = 'google_places_key_missing';
+    else if (status) code = `google_places_status_${status}`;
+    else code = 'google_places_config_error';
+  }
+
+  const setupNeeded = [...PLACES_SETUP_STEPS];
+  const lines = [];
+
+  if (!keyPresent || code === 'google_places_key_missing' || code === 'public_sourcing_unavailable') {
+    lines.push(
+      'Scout public-source sourcing is blocked: GOOGLE_PLACES_KEY is missing or empty in this environment.'
+    );
+    lines.push(
+      'Set GOOGLE_PLACES_KEY on Railway to a Google Cloud API key with Places API enabled, then retry.'
+    );
+  } else if (status === 'REQUEST_DENIED' || /REQUEST_DENIED/i.test(code)) {
+    lines.push(
+      'Scout public-source sourcing failed: Google Places returned REQUEST_DENIED.'
+    );
+    lines.push(
+      'The API key is present, but Google rejected the request — this is an integration/config issue, not a Scout criteria failure.'
+    );
+  } else if (status === 'OVER_QUERY_LIMIT' || /OVER_QUERY_LIMIT/i.test(code)) {
+    lines.push(
+      'Scout public-source sourcing failed: Google Places returned OVER_QUERY_LIMIT (quota / billing).'
+    );
+  } else if (status === 'INVALID_REQUEST' || /INVALID_REQUEST/i.test(code)) {
+    lines.push(
+      'Scout public-source sourcing failed: Google Places returned INVALID_REQUEST.'
+    );
+  } else {
+    lines.push(
+      `Scout public-source sourcing failed: Google Places error (${code}).`
+    );
+  }
+
+  if (googleMsg) {
+    lines.push(`Google message: ${googleMsg}`);
+  }
+
+  lines.push('');
+  lines.push('Setup needed:');
+  for (let i = 0; i < setupNeeded.length; i += 1) {
+    lines.push(`${i + 1}. ${setupNeeded[i]}`);
+  }
+  lines.push('');
+  lines.push(`Fallback: ${SCOUT_PUBLIC_SOURCE_FALLBACK.message}`);
+  lines.push('Work request remains retryable after Places config is fixed.');
+
+  return {
+    code,
+    status: status || null,
+    googleErrorMessage: googleMsg || null,
+    keyPresent,
+    retryable: true,
+    setupNeeded,
+    fallback: { ...SCOUT_PUBLIC_SOURCE_FALLBACK },
+    operatorMessage: lines.join('\n'),
+  };
+}
+
+/**
+ * Parse thrown Places errors into a diagnosis payload.
+ */
+function diagnosePlacesError(err, opts = {}) {
+  const message = err && err.message ? String(err.message) : '';
+  const statusMatch = message.match(/google_places_status_([A-Z0-9_]+)/i);
+  const httpMatch = message.match(/google_places_http_(\d+)/i);
+  const googleMsg =
+    (err && (err.googleErrorMessage || err.error_message)) ||
+    (opts && opts.errorMessage) ||
+    '';
+
+  if (/public_sourcing_unavailable|google_places_key_missing/i.test(message)) {
+    return diagnosePlacesConfig({
+      code: 'google_places_key_missing',
+      keyPresent: false,
+      errorMessage: googleMsg,
+      apiKey: opts.apiKey,
+    });
+  }
+
+  if (statusMatch) {
+    return diagnosePlacesConfig({
+      status: statusMatch[1],
+      code: `google_places_status_${statusMatch[1].toUpperCase()}`,
+      errorMessage: googleMsg,
+      keyPresent: true,
+      apiKey: opts.apiKey,
+    });
+  }
+
+  if (httpMatch) {
+    return diagnosePlacesConfig({
+      code: `google_places_http_${httpMatch[1]}`,
+      errorMessage: googleMsg || `HTTP ${httpMatch[1]} from Google Places`,
+      keyPresent: true,
+      apiKey: opts.apiKey,
+    });
+  }
+
+  return null;
+}
+
+class ScoutPlacesConfigError extends Error {
+  constructor(diagnosis) {
+    super(diagnosis.code || 'google_places_config_error');
+    this.name = 'ScoutPlacesConfigError';
+    this.code = diagnosis.code;
+    this.diagnosis = diagnosis;
+    this.googleErrorMessage = diagnosis.googleErrorMessage;
+    this.retryable = true;
+  }
 }
 
 function normalizeWebsiteUrl(value) {
@@ -362,7 +520,14 @@ function createScoutPlacesSearchProvider(deps = {}) {
       return !!(apiKey && fetchImpl);
     },
     async search(query) {
-      if (!this.available()) return [];
+      if (!this.available()) {
+        const diagnosis = diagnosePlacesConfig({
+          code: 'google_places_key_missing',
+          keyPresent: false,
+          apiKey,
+        });
+        throw new ScoutPlacesConfigError(diagnosis);
+      }
       const limit = Math.min(Number(query.limit) || 20, 20);
       const q = String(query.query || query.industry || '').trim();
       if (!q) return [];
@@ -375,12 +540,24 @@ function createScoutPlacesSearchProvider(deps = {}) {
 
       const res = await fetchImpl(url.toString());
       if (!res.ok) {
-        throw new Error(`google_places_http_${res.status}`);
+        const diagnosis = diagnosePlacesConfig({
+          code: `google_places_http_${res.status}`,
+          errorMessage: `HTTP ${res.status} from Google Places Text Search`,
+          keyPresent: true,
+          apiKey,
+        });
+        throw new ScoutPlacesConfigError(diagnosis);
       }
       const data = await res.json();
       if (data.status === 'ZERO_RESULTS') return [];
       if (data.status !== 'OK') {
-        throw new Error(`google_places_status_${data.status || 'unknown'}`);
+        const diagnosis = diagnosePlacesConfig({
+          status: data.status,
+          errorMessage: data.error_message || '',
+          keyPresent: true,
+          apiKey,
+        });
+        throw new ScoutPlacesConfigError(diagnosis);
       }
 
       const results = (data.results || []).slice(0, limit);
@@ -451,7 +628,7 @@ function dedupeCandidates(rows) {
  * @param {object} input.workRequest
  * @param {object} [input.handoff]
  * @param {object} [input.opts]
- * @returns {Promise<{ ok: boolean, candidates: object[], warnings: string[], error: string|null, queried: string[], crmWritesMade: boolean, outreachCopyGenerated: boolean, accountChangesMade: boolean }>}
+ * @returns {Promise<{ ok: boolean, candidates: object[], warnings: string[], error: string|null, queried: string[], crmWritesMade: boolean, outreachCopyGenerated: boolean, accountChangesMade: boolean, retryable?: boolean, operatorMessage?: string|null, setupNeeded?: string[], placesDiagnosis?: object|null, fallback?: object|null }>}
  */
 async function sourceScoutCandidatesFromPublicSources(input = {}) {
   const workRequest = input.workRequest || input;
@@ -459,17 +636,28 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
   const warnings = [];
   const queried = [];
 
+  const emptyFailure = (extra = {}) => ({
+    ok: false,
+    candidates: [],
+    warnings: extra.warnings || warnings,
+    error: extra.error || null,
+    queried,
+    crmWritesMade: false,
+    outreachCopyGenerated: false,
+    accountChangesMade: false,
+    retryable: extra.retryable !== false,
+    operatorMessage: extra.operatorMessage || null,
+    setupNeeded: extra.setupNeeded || null,
+    placesDiagnosis: extra.placesDiagnosis || null,
+    fallback: extra.fallback || { ...SCOUT_PUBLIC_SOURCE_FALLBACK },
+  });
+
   if (!workRequest || typeof workRequest !== 'object') {
-    return {
-      ok: false,
-      candidates: [],
-      warnings,
+    return emptyFailure({
       error: 'missing_work_request',
-      queried,
-      crmWritesMade: false,
-      outreachCopyGenerated: false,
-      accountChangesMade: false,
-    };
+      retryable: false,
+      fallback: null,
+    });
   }
 
   const targetMin = Number(workRequest.targetCountMin) || TARGET_COUNT_MIN;
@@ -487,18 +675,20 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
   } else {
     const provider = createScoutPlacesSearchProvider(opts);
     if (!provider.available()) {
-      return {
-        ok: false,
-        candidates: [],
-        warnings: [
-          'Scout public-source sourcing unavailable — set GOOGLE_PLACES_KEY or inject a search provider.',
-        ],
-        error: 'public_sourcing_unavailable',
-        queried,
-        crmWritesMade: false,
-        outreachCopyGenerated: false,
-        accountChangesMade: false,
-      };
+      const diagnosis = diagnosePlacesConfig({
+        code: 'public_sourcing_unavailable',
+        keyPresent: false,
+        apiKey: opts.apiKey || process.env.GOOGLE_PLACES_KEY || '',
+      });
+      return emptyFailure({
+        warnings: [diagnosis.operatorMessage],
+        error: diagnosis.code,
+        retryable: true,
+        operatorMessage: diagnosis.operatorMessage,
+        setupNeeded: diagnosis.setupNeeded,
+        placesDiagnosis: diagnosis,
+        fallback: diagnosis.fallback,
+      });
     }
     searchFn = (query) => provider.search(query);
   }
@@ -524,16 +714,28 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
       if (rawHits.length >= targetMax * 2) break;
     }
   } catch (err) {
-    return {
-      ok: false,
-      candidates: [],
-      warnings,
+    const diagnosis =
+      (err && err.diagnosis) ||
+      diagnosePlacesError(err, {
+        apiKey: opts.apiKey || process.env.GOOGLE_PLACES_KEY || '',
+        errorMessage: err && err.googleErrorMessage,
+      });
+    if (diagnosis) {
+      return emptyFailure({
+        warnings: [diagnosis.operatorMessage],
+        error: diagnosis.code,
+        retryable: true,
+        operatorMessage: diagnosis.operatorMessage,
+        setupNeeded: diagnosis.setupNeeded,
+        placesDiagnosis: diagnosis,
+        fallback: diagnosis.fallback,
+      });
+    }
+    return emptyFailure({
       error: err && err.message ? String(err.message) : 'public_sourcing_failed',
-      queried,
-      crmWritesMade: false,
-      outreachCopyGenerated: false,
-      accountChangesMade: false,
-    };
+      retryable: true,
+      operatorMessage: err && err.message ? String(err.message) : null,
+    });
   }
 
   const mapped = [];
@@ -560,19 +762,18 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
   const candidates = dedupeCandidates(mapped).slice(0, targetMax);
 
   if (!candidates.length) {
-    return {
-      ok: false,
-      candidates: [],
+    return emptyFailure({
       warnings: warnings.concat([
         'Public-source search returned no usable candidates with source URLs.',
         'No placeholder rows were generated.',
+        `Fallback: ${SCOUT_PUBLIC_SOURCE_FALLBACK.message}`,
       ]),
       error: 'no_usable_candidates',
-      queried,
-      crmWritesMade: false,
-      outreachCopyGenerated: false,
-      accountChangesMade: false,
-    };
+      retryable: true,
+      operatorMessage:
+        'Public-source search returned no usable candidates with source URLs. No placeholders were generated. Work request remains retryable.',
+      fallback: { ...SCOUT_PUBLIC_SOURCE_FALLBACK },
+    });
   }
 
   if (candidates.length < targetMin) {
@@ -590,13 +791,23 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
     crmWritesMade: false,
     outreachCopyGenerated: false,
     accountChangesMade: false,
+    retryable: true,
+    operatorMessage: null,
+    setupNeeded: null,
+    placesDiagnosis: null,
+    fallback: null,
   };
 }
 
 module.exports = {
   TARGET_COUNT_MIN,
   TARGET_COUNT_MAX,
+  SCOUT_PUBLIC_SOURCE_FALLBACK,
+  PLACES_SETUP_STEPS,
   isScoutPublicSourcingAvailable,
+  diagnosePlacesConfig,
+  diagnosePlacesError,
+  ScoutPlacesConfigError,
   buildSearchQueries,
   mapPublicHitToScoutCandidate,
   createScoutPlacesSearchProvider,

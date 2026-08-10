@@ -22,6 +22,7 @@ const {
   buildSearchQueries,
   mapPublicHitToScoutCandidate,
   sourceScoutCandidatesFromPublicSources,
+  diagnosePlacesConfig,
   TARGET_COUNT_MIN,
   TARGET_COUNT_MAX,
 } = require('../services/scoutPublicSourcing');
@@ -192,7 +193,87 @@ describe('scoutPublicSourcing (SPEC-077)', () => {
     assert.equal(result.ok, false);
     assert.equal(result.candidates.length, 0);
     assert.equal(result.error, 'no_usable_candidates');
+    assert.equal(result.retryable, true);
     assert.doesNotMatch(JSON.stringify(result), /placeholder company/i);
+  });
+
+  it('surfaces operator setup guidance for Google Places REQUEST_DENIED', async () => {
+    const result = await sourceScoutCandidatesFromPublicSources({
+      workRequest: {
+        targetSegment: 'Property managers',
+        marketBounds: 'Manchester NH',
+      },
+      opts: {
+        apiKey: 'test-key-present',
+        fetchImpl: async () => ({
+          ok: true,
+          async json() {
+            return {
+              status: 'REQUEST_DENIED',
+              error_message:
+                'This API project is not authorized to use this API.',
+              results: [],
+            };
+          },
+        }),
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'google_places_status_REQUEST_DENIED');
+    assert.equal(result.retryable, true);
+    assert.ok(result.operatorMessage);
+    assert.match(result.operatorMessage, /REQUEST_DENIED/);
+    assert.match(result.operatorMessage, /GOOGLE_PLACES_KEY/);
+    assert.match(result.operatorMessage, /Places API/i);
+    assert.match(result.operatorMessage, /billing/i);
+    assert.match(result.operatorMessage, /restrictions/i);
+    assert.match(result.operatorMessage, /Fallback:/i);
+    assert.match(result.operatorMessage, /not wired/i);
+    assert.match(result.operatorMessage, /retryable/i);
+    assert.ok(Array.isArray(result.setupNeeded));
+    assert.ok(result.setupNeeded.length >= 4);
+    assert.equal(result.fallback.available, false);
+    assert.equal(result.candidates.length, 0);
+  });
+
+  it('surfaces missing-key setup guidance when Places is unavailable', async () => {
+    const result = await sourceScoutCandidatesFromPublicSources({
+      workRequest: {
+        targetSegment: 'Property managers',
+        marketBounds: 'Manchester NH',
+      },
+      opts: {
+        apiKey: '',
+        fetchImpl: async () => {
+          throw new Error('should_not_call_places_without_key');
+        },
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.error === 'public_sourcing_unavailable' ||
+        result.error === 'google_places_key_missing'
+    );
+    assert.equal(result.retryable, true);
+    assert.match(result.operatorMessage, /GOOGLE_PLACES_KEY/);
+    assert.match(result.operatorMessage, /Railway/);
+    assert.equal(result.fallback.available, false);
+  });
+
+  it('diagnosePlacesConfig lists actionable Railway / GCP setup steps', () => {
+    const d = diagnosePlacesConfig({
+      status: 'REQUEST_DENIED',
+      errorMessage: 'API key not valid',
+      keyPresent: true,
+    });
+    assert.equal(d.code, 'google_places_status_REQUEST_DENIED');
+    assert.equal(d.retryable, true);
+    assert.match(d.operatorMessage, /API key not valid/);
+    assert.ok(d.setupNeeded.some((s) => /GOOGLE_PLACES_KEY/.test(s)));
+    assert.ok(d.setupNeeded.some((s) => /Places API/.test(s)));
+    assert.ok(d.setupNeeded.some((s) => /billing/i.test(s)));
+    assert.ok(d.setupNeeded.some((s) => /restrictions/i.test(s)));
+    assert.ok(d.setupNeeded.some((s) => /retry/i.test(s)));
   });
 });
 
@@ -336,6 +417,59 @@ describe('scout work request execution (SPEC-077)', () => {
     const stored = store.getByWorkRequestId(queued.workRequest.workRequestId);
     assert.ok(stored);
     assert.equal(stored.status, SCOUT_HANDOFF_STATUSES.FAILED);
+    assert.equal(stored.workRequestId, queued.workRequest.workRequestId);
+  });
+
+  it('REQUEST_DENIED surfaces Places setup message and remains retryable', async () => {
+    const draft = buildScoutHandoff({
+      campaignObjective: 'x',
+      targetSegment: 'Property managers',
+      marketBounds: 'Manchester NH',
+    });
+    const deniedFetch = async () => ({
+      ok: true,
+      async json() {
+        return {
+          status: 'REQUEST_DENIED',
+          error_message: 'This API project is not authorized to use this API.',
+          results: [],
+        };
+      },
+    });
+    const queued = handBriefToScout(draft, {
+      apiKey: 'present-but-denied',
+      fetchImpl: deniedFetch,
+      workRequestStore: store,
+    });
+    const failed = await executeScoutWorkRequest({
+      workRequestId: queued.workRequest.workRequestId,
+      apiKey: 'present-but-denied',
+      fetchImpl: deniedFetch,
+      workRequestStore: store,
+    });
+    assert.equal(failed.ok, false);
+    assert.equal(failed.retryable, true);
+    assert.equal(failed.workRequest.failureReason, 'google_places_status_REQUEST_DENIED');
+    assert.match(failed.message, /REQUEST_DENIED/);
+    assert.match(failed.message, /GOOGLE_PLACES_KEY/);
+    assert.match(failed.message, /Places API/i);
+    assert.match(failed.message, /billing/i);
+    assert.match(failed.message, /retryable/i);
+    assert.ok(failed.setupNeeded.length >= 4);
+    assert.equal(failed.fallback.available, false);
+
+    // Same work request can be retried after config is fixed.
+    const recovered = await executeScoutWorkRequest({
+      workRequestId: queued.workRequest.workRequestId,
+      publicSearchFn: async () => sampleHits(16),
+      workRequestStore: store,
+    });
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.intent, 'scout_handoff_completed');
+    assert.equal(recovered.handoff.status, SCOUT_HANDOFF_STATUSES.COMPLETED);
+    assert.ok(recovered.candidateBatch.candidates.length >= TARGET_COUNT_MIN);
+    const stored = store.getByWorkRequestId(queued.workRequest.workRequestId);
+    assert.equal(stored.status, SCOUT_HANDOFF_STATUSES.COMPLETED);
     assert.equal(stored.workRequestId, queued.workRequest.workRequestId);
   });
 

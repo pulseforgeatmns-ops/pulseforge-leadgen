@@ -330,12 +330,18 @@ function finishWithCandidates(handoff, workRequest, candidates, opts = {}) {
 
 function finishWithFailure(handoff, workRequest, opts = {}, detail = {}) {
   const updatedAt = nowIso();
+  const failureReason = detail.error || detail.message || 'scout_sourcing_failed';
   const nextWorkRequest = {
     ...workRequest,
     status: SCOUT_HANDOFF_STATUSES.FAILED,
     updatedAt,
     failedAt: updatedAt,
-    failureReason: detail.error || detail.message || 'scout_sourcing_failed',
+    failureReason,
+    retryable: detail.retryable !== false,
+    setupNeeded: detail.setupNeeded || null,
+    operatorMessage: detail.operatorMessage || null,
+    placesDiagnosis: detail.placesDiagnosis || null,
+    fallback: detail.fallback || null,
   };
   const nextHandoff = {
     ...handoff,
@@ -350,13 +356,47 @@ function finishWithFailure(handoff, workRequest, opts = {}, detail = {}) {
     crmWritesMade: false,
     outreachCopyGenerated: false,
     accountChangesMade: false,
+    retryable: detail.retryable !== false,
+    setupNeeded: detail.setupNeeded || null,
+    operatorMessage: detail.operatorMessage || null,
   };
   nextHandoff.uiStatus = uiStatusForHandoff(nextHandoff);
   persistWorkRequestRecord(nextHandoff, nextWorkRequest, opts, {
     status: SCOUT_HANDOFF_STATUSES.FAILED,
     candidateBatch: null,
     failureReason: nextWorkRequest.failureReason,
+    retryable: nextWorkRequest.retryable,
+    setupNeeded: nextWorkRequest.setupNeeded,
+    operatorMessage: nextWorkRequest.operatorMessage,
+    placesDiagnosis: nextWorkRequest.placesDiagnosis,
+    fallback: nextWorkRequest.fallback,
   });
+
+  const messageParts = [
+    detail.operatorMessage ||
+      detail.message ||
+      'Scout ran against the approved handoff but returned no usable candidates with source URLs.',
+  ];
+  if (!detail.operatorMessage) {
+    messageParts.push('No fabricated placeholder rows were generated.');
+    messageParts.push(
+      'No outreach copy, sends, CRM writes, or account changes were made.'
+    );
+  } else {
+    messageParts.push('');
+    messageParts.push(
+      'No fabricated placeholder rows were generated. No outreach copy, sends, CRM writes, or account changes were made.'
+    );
+  }
+  messageParts.push(`Handoff status: ${nextHandoff.uiStatus}`);
+  messageParts.push(
+    `Work request ${nextWorkRequest.workRequestId} preserved and remains retryable after config/criteria are fixed.`
+  );
+  if (detail.error && !detail.operatorMessage) {
+    messageParts.push(`Failure: ${detail.error}`);
+  } else if (detail.error && detail.operatorMessage) {
+    messageParts.push(`Failure code: ${detail.error}`);
+  }
 
   return {
     ok: false,
@@ -367,17 +407,12 @@ function finishWithFailure(handoff, workRequest, opts = {}, detail = {}) {
     sourcingUnavailable: false,
     executionWired: true,
     intent: 'scout_sourcing_failed',
-    message: [
-      detail.message ||
-        'Scout ran against the approved handoff but returned no usable candidates with source URLs.',
-      'No fabricated placeholder rows were generated.',
-      'No outreach copy, sends, CRM writes, or account changes were made.',
-      `Handoff status: ${nextHandoff.uiStatus}`,
-      `Work request ${nextWorkRequest.workRequestId} preserved for retry / operator review.`,
-      detail.error ? `Failure: ${detail.error}` : null,
-    ]
-      .filter(Boolean)
-      .join('\n'),
+    retryable: detail.retryable !== false,
+    setupNeeded: detail.setupNeeded || null,
+    operatorMessage: detail.operatorMessage || null,
+    placesDiagnosis: detail.placesDiagnosis || null,
+    fallback: detail.fallback || null,
+    message: messageParts.filter(Boolean).join('\n'),
   };
 }
 
@@ -723,16 +758,33 @@ async function executeScoutWorkRequest(input = {}) {
       ...workRequest,
       status: SCOUT_HANDOFF_STATUSES.IN_PROGRESS,
       updatedAt,
-      startedAt: updatedAt,
+      startedAt: workRequest.startedAt || updatedAt,
+      // Clear prior failure metadata so retries are clean/operator-visible.
+      failureReason: null,
+      failedAt: null,
+      operatorMessage: null,
+      setupNeeded: null,
+      placesDiagnosis: null,
+      fallback: null,
+      retryable: true,
     },
     updatedAt,
     executionWired: true,
     sourcingUnavailable: false,
+    retryable: true,
+    operatorMessage: null,
+    setupNeeded: null,
   };
   handoff.uiStatus = uiStatusForHandoff(handoff);
   workRequest = handoff.workRequest;
   persistWorkRequestRecord(handoff, workRequest, opts, {
     status: SCOUT_HANDOFF_STATUSES.IN_PROGRESS,
+    failureReason: null,
+    operatorMessage: null,
+    setupNeeded: null,
+    placesDiagnosis: null,
+    fallback: null,
+    retryable: true,
   });
 
   // Prefer injected sync/async scoutSourcingFn when provided at execute time.
@@ -774,6 +826,11 @@ async function executeScoutWorkRequest(input = {}) {
         ...(sourced.warnings || []),
         'Work request preserved — no fabricated placeholders, CRM writes, or outreach.',
       ].join('\n'),
+      operatorMessage: sourced.operatorMessage || null,
+      setupNeeded: sourced.setupNeeded || null,
+      placesDiagnosis: sourced.placesDiagnosis || null,
+      fallback: sourced.fallback || null,
+      retryable: sourced.retryable !== false,
     });
   }
 
