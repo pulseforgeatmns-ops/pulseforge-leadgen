@@ -42,12 +42,18 @@ const ARTIFACT_KINDS = Object.freeze({
  * Prospect-acquisition artifact intents.
  * create_scout_handoff_brief = Max writes a planning/handoff artifact.
  * perform_live_sourcing = Scout/browser/tooling gathers real prospects.
+ * execute_existing_scout_work_request = run/retry a preserved Scout work request by ID.
  */
 const PROSPECT_ACQUISITION_INTENTS = Object.freeze({
   CREATE_SCOUT_HANDOFF_BRIEF: 'create_scout_handoff_brief',
   HAND_BRIEF_TO_SCOUT: 'hand_brief_to_scout',
+  EXECUTE_EXISTING_SCOUT_WORK_REQUEST: 'execute_existing_scout_work_request',
   PERFORM_LIVE_SOURCING: 'perform_live_sourcing',
 });
+
+/** Explicit workRequestId token in operator messages. */
+const WORK_REQUEST_ID_RE =
+  /\bworkRequestId\s*[:=]\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i;
 
 const ARTIFACT_ORDER = Object.freeze([
   ARTIFACT_KINDS.BLUEPRINT,
@@ -197,12 +203,48 @@ function looksLikeNextPlanningRequest(text) {
 }
 
 /**
+ * Extract a preserved Scout workRequestId from an operator message.
+ * @returns {string|null}
+ */
+function extractWorkRequestIdFromMessage(text) {
+  const s = String(text || '');
+  if (!s.trim()) return null;
+  const m = s.match(WORK_REQUEST_ID_RE);
+  return m && m[1] ? m[1] : null;
+}
+
+/**
+ * Operator asks to execute / retry / run an existing Scout work request by ID.
+ * Distinct from creating a brief, handing a brief to Scout, or Max live-sourcing.
+ */
+function looksLikeExecuteExistingScoutWorkRequest(text) {
+  const s = String(text || '');
+  if (!s.trim()) return false;
+  const workRequestId = extractWorkRequestIdFromMessage(s);
+  if (!workRequestId) return false;
+  const executeVerb =
+    /\b(?:execute|retry|re-?run|run)\b/i.test(s) ||
+    /\bexecute\s+the\s+existing\b/i.test(s);
+  if (!executeVerb) return false;
+  if (
+    /\bscout\b/i.test(s) ||
+    /\bwork\s*request\b/i.test(s) ||
+    /\bworkRequestId\b/i.test(s)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Operator asks to approve + queue the existing Scout Handoff Brief.
  * Distinct from creating the brief and from Max live-sourcing.
  */
 function looksLikeHandBriefToScoutRequest(text) {
   const s = String(text || '');
   if (!s.trim()) return false;
+  // Existing work-request execution wins over creating/queuing a new handoff.
+  if (looksLikeExecuteExistingScoutWorkRequest(s)) return false;
   if (/\bhand\s+this\s+brief\s+to\s+scout\b/i.test(s)) return true;
   if (
     /\bhand\s+(?:the\s+)?(?:scout\s+)?(?:handoff\s+)?brief\s+to\s+scout\b/i.test(
@@ -242,7 +284,8 @@ function looksLikeHandBriefToScoutRequest(text) {
 function looksLikeScoutHandoffBriefRequest(text) {
   const s = String(text || '');
   if (!s.trim()) return false;
-  // Executable handoff is a different intent.
+  // Executable handoff / existing work-request execution are different intents.
+  if (looksLikeExecuteExistingScoutWorkRequest(s)) return false;
   if (looksLikeHandBriefToScoutRequest(s)) return false;
   if (
     /\b(?:create|generate|produce|draft|write|prepare|build)\b[\s\S]{0,80}\b(?:a\s+)?scout\s+handoff\s+brief\b/i.test(
@@ -274,7 +317,8 @@ function looksLikeScoutHandoffBriefRequest(text) {
 
 function looksLikeProspectListDraftRequest(text) {
   const s = String(text || '');
-  // Handoff brief / live sourcing are never reviewable-placeholder drafts.
+  // Handoff brief / live sourcing / existing WR execution are never drafts.
+  if (looksLikeExecuteExistingScoutWorkRequest(s)) return false;
   if (looksLikeHandBriefToScoutRequest(s)) return false;
   if (looksLikeScoutHandoffBriefRequest(s)) return false;
   if (looksLikeLiveSourcingApproval(s)) return false;
@@ -311,7 +355,8 @@ function hasLiveSourcingApprovalSignal(text) {
 function looksLikeLiveSourcingApproval(text) {
   const s = String(text || '');
   if (!s.trim()) return false;
-  // Planning handoff for Scout is never Max live-sourcing.
+  // Planning handoff / existing WR execution is never Max live-sourcing.
+  if (looksLikeExecuteExistingScoutWorkRequest(s)) return false;
   if (looksLikeHandBriefToScoutRequest(s)) return false;
   if (looksLikeScoutHandoffBriefRequest(s)) return false;
 
@@ -344,11 +389,15 @@ function looksLikeLiveSourcingApproval(text) {
 
 /**
  * Classify whether the operator wants a Scout handoff artifact, to hand that
- * brief to Scout, or Max to perform live sourcing directly.
- * @returns {'hand_brief_to_scout'|'create_scout_handoff_brief'|'perform_live_sourcing'|null}
+ * brief to Scout, to execute an existing Scout work request, or Max to perform
+ * live sourcing directly.
+ * @returns {'execute_existing_scout_work_request'|'hand_brief_to_scout'|'create_scout_handoff_brief'|'perform_live_sourcing'|null}
  */
 function classifyProspectAcquisitionIntent(text) {
   const s = String(text || '');
+  if (looksLikeExecuteExistingScoutWorkRequest(s)) {
+    return PROSPECT_ACQUISITION_INTENTS.EXECUTE_EXISTING_SCOUT_WORK_REQUEST;
+  }
   if (looksLikeHandBriefToScoutRequest(s)) {
     return PROSPECT_ACQUISITION_INTENTS.HAND_BRIEF_TO_SCOUT;
   }
@@ -985,7 +1034,7 @@ function resolveNextArtifact(memory, requestedKind, opts = {}) {
  * Campaign-loop artifact progression from session context + classified intent.
  *
  * @returns {{
- *   action: 'emit_criteria'|'emit_build_proposal'|'emit_prospect_list_draft'|'emit_live_sourcing'|'emit_scout_handoff_brief'|'hand_brief_to_scout'|'ack_approval'|'ack_build_approval'|'replay_criteria'|'hold',
+ *   action: 'emit_criteria'|'emit_build_proposal'|'emit_prospect_list_draft'|'emit_live_sourcing'|'emit_scout_handoff_brief'|'hand_brief_to_scout'|'execute_existing_scout_work_request'|'ack_approval'|'ack_build_approval'|'replay_criteria'|'hold',
  *   approveKind: string|null,
  *   emitKind: string|null,
  *   memory: object,
@@ -993,6 +1042,7 @@ function resolveNextArtifact(memory, requestedKind, opts = {}) {
  *   note: string|null,
  *   planningState: string|null,
  *   liveSourcingApproved?: boolean,
+ *   workRequestId?: string|null,
  * }}
  */
 function resolveCampaignArtifactAction(opts = {}) {
@@ -1014,6 +1064,27 @@ function resolveCampaignArtifactAction(opts = {}) {
     opts.priorProspectListDraft || opts.priorReviewableProspectListDraft || null;
 
   const acquisitionIntent = classifyProspectAcquisitionIntent(text);
+  const executeWorkRequestId = extractWorkRequestIdFromMessage(text);
+
+  // HARD GUARD: execute / retry an existing Scout work request by ID.
+  // Never fall through to "ask me to generate batch when ready".
+  if (
+    acquisitionIntent ===
+    PROSPECT_ACQUISITION_INTENTS.EXECUTE_EXISTING_SCOUT_WORK_REQUEST
+  ) {
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.SCOUT_HANDOFF_BRIEF;
+    return {
+      action: 'execute_existing_scout_work_request',
+      approveKind: null,
+      emitKind: null,
+      memory,
+      messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
+      note:
+        'Executing the existing Scout work request. Max will not create a new handoff or ask for build-proposal approval again.',
+      planningState: 'scout_handoff_queued',
+      workRequestId: executeWorkRequestId,
+    };
+  }
 
   // HARD GUARD: Hand brief to Scout — approve + queue work request (not Max live sourcing).
   if (
@@ -1724,6 +1795,8 @@ module.exports = {
   looksLikeProspectListDraftRequest,
   looksLikeScoutHandoffBriefRequest,
   looksLikeHandBriefToScoutRequest,
+  looksLikeExecuteExistingScoutWorkRequest,
+  extractWorkRequestIdFromMessage,
   looksLikeLiveSourcingApproval,
   classifyProspectAcquisitionIntent,
   looksLikeReviseCriteriaRequest,

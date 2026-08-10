@@ -620,6 +620,218 @@ async function handBriefToScoutAsync(priorHandoffOrBrief, opts = {}) {
 }
 
 /**
+ * Load a preserved Scout work request by ID and queue/run sourcing.
+ * Does NOT create a new handoff or work request. Suitable for execute/retry.
+ *
+ * Sync when `scoutSourcingFn` is sync (tests); otherwise sets
+ * `shouldExecuteScoutSourcing` for the interview layer to await
+ * `executeScoutWorkRequest`.
+ *
+ * @param {object} input
+ * @param {string} input.workRequestId
+ */
+function queueOrExecuteExistingScoutWorkRequest(input = {}) {
+  const opts = input.opts || input;
+  const workRequestId = input.workRequestId
+    ? String(input.workRequestId).trim()
+    : '';
+  const store = resolveWorkRequestStore(opts);
+
+  if (!workRequestId) {
+    return {
+      ok: false,
+      handoff: null,
+      workRequest: null,
+      candidateBatch: null,
+      scoutRan: false,
+      sourcingUnavailable: false,
+      executionWired: isScoutSourcingExecutionWired(opts),
+      shouldExecuteScoutSourcing: false,
+      createdNewHandoff: false,
+      intent: 'scout_sourcing_failed',
+      message:
+        'Scout work request is required to execute public-source sourcing. Provide workRequestId.',
+    };
+  }
+
+  const record = store.get({ workRequestId }) || null;
+  let handoff = (record && record.handoff) || input.handoff || null;
+  let workRequest =
+    (record && record.workRequest) ||
+    input.workRequest ||
+    (handoff && handoff.workRequest) ||
+    null;
+
+  if (!workRequest) {
+    return {
+      ok: false,
+      handoff,
+      workRequest: null,
+      candidateBatch: null,
+      scoutRan: false,
+      sourcingUnavailable: false,
+      executionWired: isScoutSourcingExecutionWired(opts),
+      shouldExecuteScoutSourcing: false,
+      createdNewHandoff: false,
+      intent: 'scout_sourcing_failed',
+      message: [
+        `No Scout work request found for workRequestId=${workRequestId}.`,
+        'Work request was not modified.',
+      ].join('\n'),
+    };
+  }
+
+  // Reconstruct a handoff shell from the preserved work request when needed —
+  // never mint a new workRequestId / handoffId.
+  if (!handoff) {
+    handoff = buildScoutHandoff({
+      handoffId: workRequest.handoffId,
+      campaignObjective: workRequest.campaignObjective,
+      targetSegment: workRequest.targetSegment,
+      targetSubtype: workRequest.targetSubtype,
+      marketBounds: workRequest.marketBounds,
+      inclusionCriteria: workRequest.inclusionCriteria,
+      exclusionCriteria: workRequest.exclusionCriteria,
+      requiredFields: workRequest.requiredFields,
+      sourceTypes: workRequest.sourceTypes,
+      evidenceRequirements: workRequest.evidenceRequirements,
+      confidenceRules: workRequest.confidenceRules,
+      guardrails: workRequest.guardrails,
+      workRequestId: workRequest.workRequestId,
+      workRequest,
+      status: workRequest.status || SCOUT_HANDOFF_STATUSES.QUEUED,
+      executionWired: true,
+    });
+  }
+
+  const wired = isScoutSourcingExecutionWired(opts);
+  if (!wired) {
+    return {
+      ok: true,
+      handoff,
+      workRequest,
+      candidateBatch: null,
+      scoutRan: false,
+      sourcingUnavailable: true,
+      executionWired: false,
+      shouldExecuteScoutSourcing: false,
+      createdNewHandoff: false,
+      intent: 'scout_sourcing_not_wired',
+      message: [
+        `Existing Scout work request ${workRequest.workRequestId} loaded — not re-approved, not replaced.`,
+        '',
+        SCOUT_SOURCING_NOT_WIRED_MESSAGE,
+        '',
+        'No new handoff was created.',
+        'No prospect candidates were generated.',
+        'No outreach copy, sends, CRM writes, or account changes were made.',
+      ].join('\n'),
+    };
+  }
+
+  // Sync injected scoutSourcingFn — run immediately (unit tests / fixtures).
+  if (typeof opts.scoutSourcingFn === 'function') {
+    const updatedAt = nowIso();
+    handoff = {
+      ...handoff,
+      status: SCOUT_HANDOFF_STATUSES.IN_PROGRESS,
+      workRequestId: workRequest.workRequestId,
+      workRequest: {
+        ...workRequest,
+        status: SCOUT_HANDOFF_STATUSES.IN_PROGRESS,
+        updatedAt,
+        startedAt: workRequest.startedAt || updatedAt,
+      },
+      updatedAt,
+      executionWired: true,
+      sourcingUnavailable: false,
+    };
+    handoff.uiStatus = uiStatusForHandoff(handoff);
+    workRequest = handoff.workRequest;
+    persistWorkRequestRecord(handoff, workRequest, opts, {
+      status: SCOUT_HANDOFF_STATUSES.IN_PROGRESS,
+    });
+
+    let raw = [];
+    try {
+      raw = opts.scoutSourcingFn({
+        handoff,
+        workRequest,
+        opts,
+      });
+    } catch (err) {
+      return {
+        ...finishWithFailure(handoff, workRequest, opts, {
+          error:
+            err && err.message ? String(err.message) : 'scout_sourcing_fn_threw',
+          message:
+            'Scout sourcing function failed. Work request preserved as failed — no placeholders generated.',
+        }),
+        createdNewHandoff: false,
+        shouldExecuteScoutSourcing: false,
+      };
+    }
+    if (raw && typeof raw.then === 'function') {
+      return {
+        ok: true,
+        handoff,
+        workRequest,
+        candidateBatch: null,
+        scoutRan: false,
+        sourcingUnavailable: false,
+        executionWired: true,
+        shouldExecuteScoutSourcing: true,
+        createdNewHandoff: false,
+        intent: 'scout_handoff_queued',
+        message: [
+          `Executing existing Scout work request ${workRequest.workRequestId}.`,
+          `Handoff status: ${handoff.uiStatus}`,
+          'No new handoff was created. No CRM writes, outreach copy, or account changes were made.',
+        ].join('\n'),
+      };
+    }
+    if (!Array.isArray(raw)) raw = [];
+    const candidates = filterValidScoutCandidates(raw);
+    if (!candidates.length) {
+      return {
+        ...finishWithFailure(handoff, workRequest, opts, {
+          message:
+            'Scout ran against the preserved work request but returned no usable candidates with source URLs.',
+        }),
+        createdNewHandoff: false,
+        shouldExecuteScoutSourcing: false,
+      };
+    }
+    return {
+      ...finishWithCandidates(handoff, workRequest, candidates, opts),
+      createdNewHandoff: false,
+      shouldExecuteScoutSourcing: false,
+    };
+  }
+
+  // Public-source tooling available — queue for async executeScoutWorkRequest.
+  return {
+    ok: true,
+    handoff,
+    workRequest,
+    candidateBatch: null,
+    scoutRan: false,
+    sourcingUnavailable: false,
+    executionWired: true,
+    shouldExecuteScoutSourcing: true,
+    createdNewHandoff: false,
+    intent: 'scout_handoff_queued',
+    message: [
+      `Executing existing Scout work request ${workRequest.workRequestId}.`,
+      '',
+      `Handoff status: ${handoff.uiStatus || uiStatusForHandoff(handoff)}`,
+      'Scout will inspect public sources and return evidenced candidates for operator review.',
+      'No new handoff was created. No CRM writes, outreach copy, sends, or account changes will be made.',
+    ].join('\n'),
+  };
+}
+
+/**
  * Execute (or resume) Scout public-source sourcing for a work request.
  * Lookup by workRequestId or handoffId. Preserves the work request on failure.
  *
@@ -854,6 +1066,7 @@ module.exports = {
   normalizeScoutCandidate,
   handBriefToScout,
   handBriefToScoutAsync,
+  queueOrExecuteExistingScoutWorkRequest,
   executeScoutWorkRequest,
   approveScoutResults,
   uiStatusForHandoff,
