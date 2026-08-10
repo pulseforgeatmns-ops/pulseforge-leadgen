@@ -102,18 +102,23 @@ describe('scoutHandoff lifecycle', () => {
     const draft = buildScoutHandoff({
       campaignObjective: 'Validate walkthrough demand',
       targetSegment: 'Property managers',
-      marketBounds: 'Manchester NH',
+      marketBounds: 'Bedford NH, Hooksett NH',
     });
     const result = handBriefToScout(draft, {
       scoutSourcingFn: () => [
         {
-          companyName: 'Granite Property Mgmt',
+          companyName: 'Granite Property Management',
           sourceUrl: 'https://example.com/granite',
-          location: 'Manchester NH',
-          fitRationale: 'Local PM in market bounds',
+          location: 'Bedford NH',
+          address: '12 Main St, Bedford, NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0100',
+          fitRationale:
+            'Granite Property Management sourced from public listing — address/location on source: 12 Main St, Bedford, NH — source URL: https://example.com/granite',
           risks: 'Thin contact page',
           suggestedContactRole: 'Owner / property manager',
-          confidence: 'medium',
+          confidence: 'high',
         },
         {
           companyName: 'Missing URL Co',
@@ -121,10 +126,22 @@ describe('scoutHandoff lifecycle', () => {
           fitRationale: 'Should be dropped',
         },
         {
-          companyName: 'Hooksett Facilities LLC',
+          companyName: 'Salford UK Cleaning Co',
+          sourceUrl: 'https://salford.example.co.uk',
+          location: 'Salford, Greater Manchester, UK',
+          placeTypes: ['cleaning_service'],
+          confidence: 'high',
+        },
+        {
+          companyName: 'Hooksett Property Management LLC',
           website: 'https://example.com/hooksett',
           location: 'Hooksett NH',
-          fitReason: 'Facility contact listing',
+          address: 'Hooksett NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0101',
+          fitReason:
+            'Hooksett Property Management LLC sourced from public listing — address/location on source: Hooksett NH — source URL: https://example.com/hooksett',
           contactRole: 'Office manager',
           confidence: 'high',
         },
@@ -144,12 +161,29 @@ describe('scoutHandoff lifecycle', () => {
     assert.equal(result.candidateBatch.resultsApproved, false);
     assert.equal(result.candidateBatch.crmWritesMade, false);
     assert.equal(result.candidateBatch.outreachCopyGenerated, false);
-    assert.equal(result.candidateBatch.candidates.length, 2);
+    assert.ok(result.candidateBatch.candidates.length >= 1);
+    assert.ok(
+      result.candidateBatch.candidates.every((row) => row.status !== 'rejected')
+    );
+    assert.ok(
+      (result.candidateBatch.rejected || []).some((row) =>
+        /Salford|UK|cleaning/i.test(
+          `${row.companyName} ${row.rejectionReason || row.statusReason || ''}`
+        )
+      )
+    );
     for (const row of result.candidateBatch.candidates) {
       assert.ok(row.sourceUrl);
       assert.equal(row.placeholder, false);
+      assert.match(String(row.suggestedContactRole || ''), /Suggested contact role:/i);
+      assert.doesNotMatch(
+        String(row.suggestedContactRole || ''),
+        /Owner \/ decision-maker/i
+      );
     }
     assert.doesNotMatch(result.message, /placeholder/i);
+    assert.doesNotMatch(result.message, /Creating this brief does not hand/i);
+    assert.doesNotMatch(result.message, /when sourcing execution is wired/i);
   });
 
   it('drops candidates without source URLs', () => {
@@ -163,17 +197,27 @@ describe('scoutHandoff lifecycle', () => {
   });
 
   it('approveScoutResults marks review gate without CRM/outreach', () => {
-    const draft = buildScoutHandoff({ campaignObjective: 'x' });
+    const draft = buildScoutHandoff({
+      campaignObjective: 'x',
+      targetSegment: 'Property managers',
+      marketBounds: 'Bedford NH',
+    });
     const ran = handBriefToScout(draft, {
       scoutSourcingFn: () => [
         {
-          companyName: 'A',
+          companyName: 'Bedford Property Management',
           sourceUrl: 'https://a.example',
-          location: 'Manchester',
-          fitRationale: 'fit',
+          location: 'Bedford NH',
+          address: 'Bedford, NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0100',
+          fitRationale:
+            'Bedford Property Management sourced from public listing — address/location on source: Bedford, NH — source URL: https://a.example',
         },
       ],
     });
+    assert.equal(ran.ok, true);
     const approved = approveScoutResults(ran.handoff);
     assert.equal(approved.ok, true);
     assert.equal(approved.handoff.resultsApproved, true);

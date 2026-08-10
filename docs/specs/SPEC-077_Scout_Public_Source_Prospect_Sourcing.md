@@ -104,16 +104,18 @@ Reports endpoint family (legacy Text Search), host/path only, HTTP status, Googl
 Scout public sourcing applies hard quality gates before a batch is reviewable:
 
 1. Market is interpreted as **New Hampshire, USA** (never UK Greater Manchester)
-2. Every Places query includes `{town} NH` or `New Hampshire`
+2. Every Places query includes `{town} NH` or `New Hampshire` and Text Search is biased with `region=us`
 3. Priority towns: Bedford, Hooksett, Londonderry, Auburn, Goffstown; Manchester NH is nearby/fill (`review_required`) unless needed to fill the batch
-4. Hard-reject UK / non-US geography
-5. Hard-reject cleaning / maid / housekeeping / janitorial / carpet-cleaning competitors when targeting property managers
-6. Hard-reject large institutional/national firms unless `allowInstitutional` is set on the work request
-7. `confidence=high` only when source URL + NH location + property-management fit + reachable contact signal are all present and no exclusion risk remains
-8. Fit rationale must be source-specific (not copied inclusion/exclusion criteria)
-9. Contact roles are labeled `Suggested contact role: …` unless a verified named+title contact is present
-10. Each candidate is marked `accepted` | `review_required` | `rejected` with `statusReason`
-11. Completed handoffs replace draft-brief guardrail text with completed-result guardrails
+4. Concord / Derry / other NH towns outside the cluster are `review_required` unless explicitly allowed — never `accepted`
+5. Hard-reject UK / non-US geography, including bare “Manchester” without an NH/USA token and UK place markers (Salford, Stockport, Deansgate, +44, `.co.uk`)
+6. Hard-reject cleaning / maid / housekeeping / janitorial / carpet-cleaning competitors when targeting property managers
+7. Hard-reject large institutional/national firms unless `allowInstitutional` is set on the work request
+8. `confidence=high` only when source URL + NH location + property-management fit + reachable contact signal are all present on a priority town and no exclusion risk remains
+9. Fit rationale must be source-specific (not copied inclusion/exclusion criteria)
+10. Contact roles are labeled `Suggested contact role: …` unless a verified named+title contact is present — never overclaim `Owner / decision-maker`
+11. Results are grouped as `accepted` / `review_required` / `rejected` with `rejectionReason` on rejected rows
+12. Injected `scoutSourcingFn` paths are re-gated — they cannot bypass quality rules
+13. Completed handoffs and CIE brief/UI replace draft-brief guardrail text with completed-result guardrails
 
 ## Acceptance
 

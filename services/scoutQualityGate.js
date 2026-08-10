@@ -20,9 +20,55 @@ const PRIORITY_TOWNS_NH = Object.freeze([
 
 const NEARBY_FILL_TOWNS_NH = Object.freeze(['Manchester']);
 
+/** NH towns outside the approved pilot cluster — never accepted unless explicitly allowed. */
+const EXTENDED_REVIEW_TOWNS_NH = Object.freeze([
+  'Concord',
+  'Derry',
+  'Nashua',
+  'Salem',
+  'Merrimack',
+  'Amherst',
+  'Windham',
+  'Hudson',
+  'Milford',
+]);
+
 const ALL_NH_PILOT_TOWNS = Object.freeze([
   ...PRIORITY_TOWNS_NH,
   ...NEARBY_FILL_TOWNS_NH,
+]);
+
+const ALL_KNOWN_NH_TOWNS = Object.freeze([
+  ...ALL_NH_PILOT_TOWNS,
+  ...EXTENDED_REVIEW_TOWNS_NH,
+]);
+
+/** UK-only place names that must never be treated as NH Manchester. */
+const UK_MANCHESTER_PLACE_MARKERS = Object.freeze([
+  'deansgate',
+  'salford',
+  'stockport',
+  'bolton',
+  'oldham',
+  'rochdale',
+  'bury',
+  'wigan',
+  'trafford',
+  'tameside',
+  'piccadilly',
+  'spinningfields',
+  'ancoats',
+  'chorlton',
+  'didsbury',
+  'altrincham',
+  'sale,',
+  'eccles',
+  'prestwich',
+  'stalybridge',
+  'ashton-under-lyne',
+  'm1 ',
+  'm2 ',
+  'm3 ',
 ]);
 
 const CANDIDATE_STATUS = Object.freeze({
@@ -123,10 +169,14 @@ const NON_US_MARKERS = Object.freeze([
 const CLEANING_COMPETITOR_PATTERNS = Object.freeze([
   /\bcleaning\s+(?:company|service|services|crew|co\.?|llc|inc)\b/i,
   /\b(?:company|service|services)\s+cleaning\b/i,
+  /\bcleaners?\b/i,
+  /\bclean\s+(?:co\.?|company|llc|inc|services?)\b/i,
+  /\b(?:co\.?|company|llc|inc)\s+clean(?:ing)?\b/i,
   /\bmaid\s+service/i,
   /\bmaids?\b/i,
   /\bhousekeeping\b/i,
   /\bjanitorial\b/i,
+  /\bjanitor\b/i,
   /\bcarpet\s+cleaning\b/i,
   /\boffice\s+cleaning\b/i,
   /\bcommercial\s+cleaning\b/i,
@@ -137,6 +187,8 @@ const CLEANING_COMPETITOR_PATTERNS = Object.freeze([
   /\bmolly\s+maid/i,
   /\bthe\s+maids\b/i,
   /\bservice\s*master\s*clean/i,
+  /\bsparkle\s+clean/i,
+  /\bmaid\s*brigade\b/i,
 ]);
 
 /** Place-types / industry tokens that mark cleaning competitors. */
@@ -178,6 +230,9 @@ const PROPERTY_MANAGEMENT_TOKENS = Object.freeze([
   'property management',
   'property manager',
   'property_management',
+  'real estate management',
+  'real_estate_management',
+  'commercial property management',
   'real_estate_agency',
   'real estate agency',
   'real_estate',
@@ -189,6 +244,8 @@ const PROPERTY_MANAGEMENT_TOKENS = Object.freeze([
   'multi-family',
   'multifamily',
   'property_managers',
+  'property mgmt',
+  'prop management',
 ]);
 
 function hitHaystack(hit) {
@@ -341,12 +398,37 @@ function buildNhScopedSearchQueries(workRequest, opts = {}) {
   };
 }
 
+function hasUsOrNhStateToken(text) {
+  return /\bnh\b|\bnew hampshire\b|\bunited states\b|\busa\b|\bu\.s\.a\.?\b/i.test(
+    String(text || '')
+  );
+}
+
 function detectUkOrNonUs(hit) {
   const hay = paddedHay(hitHaystack(hit));
+  const loc = String(
+    (hit && (hit.location || hit.address || hit.formatted_address || hit.marketTown)) ||
+      ''
+  ).toLowerCase();
   const website = String((hit && (hit.website || hit.sourceUrl)) || '').toLowerCase();
+  const phone = String(
+    (hit && (hit.phone || hit.formatted_phone_number)) || ''
+  ).trim();
 
   if (/\.co\.uk\b/i.test(website) || website.includes('.uk/')) {
     return { rejected: true, reason: 'UK / non-US domain (.co.uk)' };
+  }
+  if (/^\+44\b|^0044\b/.test(phone)) {
+    return { rejected: true, reason: 'UK phone country code (+44) — not USA' };
+  }
+  if (hit && hit.country) {
+    const country = String(hit.country).trim().toLowerCase();
+    if (country && !/^(us|usa|united states|united states of america)$/.test(country)) {
+      return {
+        rejected: true,
+        reason: `Non-US country (${hit.country}) — Anchor market is New Hampshire, USA`,
+      };
+    }
   }
 
   for (const marker of UK_GEO_MARKERS) {
@@ -357,21 +439,28 @@ function detectUkOrNonUs(hit) {
       };
     }
   }
+  for (const marker of UK_MANCHESTER_PLACE_MARKERS) {
+    if (hay.includes(marker)) {
+      return {
+        rejected: true,
+        reason: `UK Greater Manchester place marker (${marker.trim()}) — not New Hampshire, USA`,
+      };
+    }
+  }
 
-  // Bare "Manchester" without NH / New Hampshire / US state → treat as ambiguous UK risk
-  // when paired with UK postal-ish tokens already handled; also catch ", Manchester" + UK words.
-  if (
-    /\bmanchester\b/.test(hay) &&
-    !/\bnh\b|\bnew hampshire\b|\bunited states\b|\busa\b|\bbedford\b|\bhooksett\b/.test(
-      hay
-    ) &&
-    (/\bsalford\b|\bstockport\b|\buk\b|\bengland\b|\bm\d{1,2}\b/.test(hay) ||
-      /\bgreater manchester\b/.test(hay))
-  ) {
-    return {
-      rejected: true,
-      reason: 'UK Greater Manchester / Salford / Stockport — not New Hampshire, USA',
-    };
+  // Bare / ambiguous "Manchester" without an explicit NH/USA state token is UK risk.
+  // Never treat "Manchester" alone as Manchester NH.
+  if (/\bmanchester\b/.test(hay) && !hasUsOrNhStateToken(hay) && !hasUsOrNhStateToken(loc)) {
+    const otherPriorityNh = PRIORITY_TOWNS_NH.some((t) =>
+      hay.includes(t.toLowerCase())
+    );
+    if (!otherPriorityNh) {
+      return {
+        rejected: true,
+        reason:
+          'Ambiguous Manchester without NH/USA token — rejected as UK / non-verified New Hampshire',
+      };
+    }
   }
 
   for (const marker of NON_US_MARKERS) {
@@ -392,40 +481,79 @@ function isNhLocation(hit, market) {
       ''
   ).toLowerCase();
   const hay = hitHaystack(hit);
+  const combined = `${loc} ${hay}`;
+  const hasState = hasUsOrNhStateToken(combined);
+  const town = matchTown(combined);
 
-  if (/\bnh\b|\bnew hampshire\b/.test(loc) || /\bnh\b|\bnew hampshire\b/.test(hay)) {
-    return { inNh: true, town: matchTown(loc || hay), tier: townTier(loc || hay) };
+  if (hasState) {
+    return {
+      inNh: true,
+      country: 'US',
+      state: 'NH',
+      town,
+      tier: townTier(town || combined),
+    };
   }
 
-  const town = matchTown(loc || hay);
-  if (town) {
-    // Town match without NH still counts as NH pilot cluster but review-required.
-    return { inNh: true, town, tier: townTier(town), missingStateToken: true };
+  // Priority/extended NH town names without NH/USA token are not auto-accepted as NH.
+  // Manchester without NH was already hard-rejected in detectUkOrNonUs.
+  if (town && town !== 'Manchester') {
+    return {
+      inNh: false,
+      town,
+      tier: townTier(town),
+      missingStateToken: true,
+      country: null,
+      state: null,
+    };
   }
 
   if (market && market.interpretedAsNewHampshire) {
-    return { inNh: false, town: null, tier: 'out_of_market' };
+    return { inNh: false, town: null, tier: 'out_of_market', country: null, state: null };
   }
-  return { inNh: false, town: null, tier: 'unknown' };
+  return { inNh: false, town: null, tier: 'unknown', country: null, state: null };
 }
 
 function matchTown(text) {
   const s = String(text || '').toLowerCase();
-  for (const town of ALL_NH_PILOT_TOWNS) {
-    if (s.includes(town.toLowerCase())) return town;
+  for (const town of ALL_KNOWN_NH_TOWNS) {
+    if (new RegExp(`\\b${town.toLowerCase()}\\b`, 'i').test(s)) return town;
   }
   return null;
 }
 
 function townTier(textOrTown) {
   const town = matchTown(textOrTown) || textOrTown;
-  if (PRIORITY_TOWNS_NH.some((t) => t.toLowerCase() === String(town || '').toLowerCase())) {
+  const lower = String(town || '').toLowerCase();
+  if (PRIORITY_TOWNS_NH.some((t) => t.toLowerCase() === lower)) {
     return 'priority';
   }
-  if (NEARBY_FILL_TOWNS_NH.some((t) => t.toLowerCase() === String(town || '').toLowerCase())) {
+  if (NEARBY_FILL_TOWNS_NH.some((t) => t.toLowerCase() === lower)) {
     return 'nearby_fill';
   }
+  if (EXTENDED_REVIEW_TOWNS_NH.some((t) => t.toLowerCase() === lower)) {
+    return 'extended_review';
+  }
   return 'other';
+}
+
+function extendedTownsExplicitlyAllowed(workRequest) {
+  if (
+    workRequest &&
+    (workRequest.allowExtendedNhTowns === true ||
+      workRequest.allowConcordDerry === true ||
+      workRequest.allowOutOfClusterNh === true)
+  ) {
+    return true;
+  }
+  const blob = [
+    workRequest && workRequest.marketBounds,
+    ...((workRequest && workRequest.inclusionCriteria) || []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return EXTENDED_REVIEW_TOWNS_NH.some((t) => blob.includes(t.toLowerCase()));
 }
 
 function detectCleaningCompetitor(hit, workRequest) {
@@ -446,8 +574,10 @@ function detectCleaningCompetitor(hit, workRequest) {
   // Clear PM / real-estate companies are not cleaning competitors even if a
   // directory blurb mentions "cleaning".
   if (
-    /\bproperty\s+management\b|\bproperty\s+manager\b|\breal\s+estate\b/i.test(name) &&
-    !/\bcleaning\b|\bmaid\b|\bjanitorial\b|\bhousekeeping\b/i.test(name)
+    /\bproperty\s+management\b|\bproperty\s+manager\b|\breal\s+estate\s+management\b|\breal\s+estate\b/i.test(
+      name
+    ) &&
+    !/\bcleaning\b|\bmaid\b|\bjanitorial\b|\bhousekeeping\b|\bcleaners?\b/i.test(name)
   ) {
     return { rejected: false, reason: null };
   }
@@ -469,6 +599,18 @@ function detectCleaningCompetitor(hit, workRequest) {
           'Cleaning service / maid / housekeeping / janitorial / carpet cleaning competitor — not a property-manager prospect',
       };
     }
+  }
+
+  // Name contains a standalone cleaning stem without PM signal.
+  if (
+    /\bclean(?:ing|ers?)?\b/i.test(name) &&
+    !/\bproperty\b|\breal\s+estate\b/i.test(name)
+  ) {
+    return {
+      rejected: true,
+      reason:
+        'Cleaning competitor name signal — not a property-manager prospect',
+    };
   }
 
   return { rejected: false, reason: null };
@@ -532,9 +674,19 @@ function formatSuggestedContactRole(workRequest, hit) {
     ).trim();
     return `${name} — ${title}`;
   }
-  const role =
+  let role =
     (hit && (hit.suggestedContactRole || hit.contactRole)) ||
     defaultRoleForSegment(workRequest);
+  role = String(role || '')
+    .replace(/^suggested contact role:\s*/i, '')
+    .trim();
+  // Never overclaim a verified owner/decision-maker without source person+title.
+  if (/^owner\s*\/\s*decision-?maker$/i.test(role)) {
+    role = defaultRoleForSegment(workRequest);
+  }
+  if (/^owner\s*\/\s*decision-?maker$/i.test(role)) {
+    role = 'property / operations contact';
+  }
   return `Suggested contact role: ${role}`;
 }
 
@@ -545,7 +697,7 @@ function defaultRoleForSegment(workRequest) {
   if (/property\s*manager/.test(segment)) return 'Owner / property manager';
   if (/law/.test(segment)) return 'Office manager / managing partner';
   if (/account/.test(segment)) return 'Office manager / principal';
-  return 'Owner / decision-maker';
+  return 'property / operations contact';
 }
 
 /**
@@ -602,23 +754,43 @@ function isGenericCriteriaCopy(rationale, workRequest) {
   const criteria = [
     ...((workRequest && workRequest.inclusionCriteria) || []),
     ...((workRequest && workRequest.exclusionCriteria) || []),
+    workRequest && workRequest.targetSegment,
+    workRequest && workRequest.targetSubtype,
+    workRequest && workRequest.marketBounds,
   ]
     .map((c) => String(c || '').toLowerCase().replace(/\s+/g, ' ').trim())
-    .filter((c) => c.length >= 20);
+    .filter((c) => c.length >= 12);
 
   for (const c of criteria) {
-    if (text === c || text.includes(c) || c.includes(text)) return true;
+    if (text === c || text.includes(c) || (c.length >= 24 && c.includes(text))) {
+      return true;
+    }
   }
 
   // Template phrases that only restate the brief (no source facts).
-  const genericOnly =
-    /^(public listing matches|matches target segment|fits inclusion criteria|meets campaign criteria)/i.test(
+  const hasSourceFacts =
+    /\bhttps?:\/\//i.test(text) ||
+    /\bnh\b|\bstreet\b|\broad\b|\bave\b|\bsuite\b|\blisting types\b|address\/location on source/i.test(
+      text
+    );
+  if (
+    /^(public listing matches|matches target segment|fits inclusion criteria|meets campaign criteria|local pm in market|why they fit)/i.test(
       text
     ) &&
-    !/\bhttps?:\/\//i.test(text) &&
-    !/\bnh\b|\bstreet\b|\broad\b|\bave\b|\bsuite\b|\blisting types\b/i.test(text);
+    !hasSourceFacts
+  ) {
+    return true;
+  }
+  if (
+    /manage offices|mixed-use buildings|recurring cleaning weekly|greater manchester/i.test(
+      text
+    ) &&
+    !hasSourceFacts
+  ) {
+    return true;
+  }
 
-  return Boolean(genericOnly);
+  return false;
 }
 
 function operatorApprovedInstitutional(workRequest) {
@@ -686,14 +858,32 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
   const sourceUrl = Boolean(
     (hit && (hit.sourceUrl || hit.website || hit.url)) || opts.sourceUrl
   );
-  const fit = buildSourceSpecificFitRationale(hit, workRequest, geo);
+  // Prefer source-built rationale; ignore generic criteria copies from upstream.
+  let fit = buildSourceSpecificFitRationale(hit, workRequest, geo);
+  if (hit && (hit.fitRationale || hit.fitReason || hit.rationale)) {
+    const provided = hit.fitRationale || hit.fitReason || hit.rationale;
+    if (!isGenericCriteriaCopy(provided, workRequest)) {
+      fit = { ok: true, rationale: String(provided), reason: null };
+    }
+  }
   const role = formatSuggestedContactRole(workRequest, hit);
+  const targetingPm = /property\s*manager/i.test(
+    String((workRequest && (workRequest.targetSegment || workRequest.segment)) || '')
+  );
+  const extendedAllowed = extendedTownsExplicitlyAllowed(workRequest);
 
   const risks = [];
-  let exclusionRisk = Boolean(institutional.rejected && operatorApprovedInstitutional(workRequest));
+  let exclusionRisk = Boolean(
+    institutional.rejected && operatorApprovedInstitutional(workRequest)
+  );
   if (institutional.rejected && operatorApprovedInstitutional(workRequest)) {
     risks.push('Institutional/national firm — included only because operator approved');
     exclusionRisk = true;
+  }
+  const exclusionCriteriaHit = softExclusionCriteriaMatch(hit, workRequest);
+  if (exclusionCriteriaHit) {
+    exclusionRisk = true;
+    risks.push(`Exclusion criteria match: ${exclusionCriteriaHit}`);
   }
   const hasCompanyWebsite = Boolean(
     hit &&
@@ -715,6 +905,11 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
       'Manchester NH is nearby/fill — review required unless needed to fill the batch'
     );
   }
+  if (geo.tier === 'extended_review') {
+    risks.push(
+      `${geo.town || 'Town'} NH is outside the approved priority cluster — review required unless explicitly allowed`
+    );
+  }
   if (!pmFit) {
     risks.push('Weak property-management fit signal on public source');
   }
@@ -729,7 +924,11 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
   }
 
   // Hard reject out-of-NH when we can determine location at all.
-  if (!geo.inNh && (hit.location || hit.address || hit.formatted_address)) {
+  if (
+    !geo.inNh &&
+    !geo.missingStateToken &&
+    (hit.location || hit.address || hit.formatted_address)
+  ) {
     return rejectResult(hit, workRequest, {
       statusReason: 'Outside New Hampshire, USA market',
       exclusionRisk: true,
@@ -740,8 +939,29 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
     });
   }
 
-  if (!fit.ok && opts.requireSourceSpecificRationale !== false) {
-    // Downgrade rather than hard-reject when other signals are strong — still not accepted.
+  // Missing NH/USA state token on a known town → never accepted.
+  if (geo.missingStateToken && geo.town) {
+    return {
+      ...reviewResult(hit, workRequest, {
+        statusReason: `${geo.town} listing missing NH/USA state token — verify New Hampshire, USA`,
+        confidence: CONFIDENCE.REVIEW_REQUIRED,
+        fitRationale: fit.rationale,
+        suggestedContactRole: role,
+        risks,
+        exclusionRisk,
+        geo,
+        market,
+        signals: {
+          sourceUrl,
+          nhLocation: false,
+          propertyManagementFit: pmFit,
+          reachableContactSignal: contactSignal,
+          exclusionRisk,
+          priorityTown: false,
+          nearbyFillTown: geo.tier === 'nearby_fill',
+        },
+      }),
+    };
   }
 
   const signals = {
@@ -752,6 +972,7 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
     exclusionRisk,
     priorityTown: geo.tier === 'priority',
     nearbyFillTown: geo.tier === 'nearby_fill',
+    extendedReviewTown: geo.tier === 'extended_review',
   };
 
   let confidence = CONFIDENCE.REVIEW_REQUIRED;
@@ -761,55 +982,90 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
     signals.propertyManagementFit &&
     signals.reachableContactSignal &&
     !signals.exclusionRisk &&
-    fit.ok;
+    fit.ok &&
+    geo.tier === 'priority';
 
-  if (highEligible && geo.tier === 'priority') {
+  if (highEligible) {
     confidence = CONFIDENCE.HIGH;
   } else if (
     signals.sourceUrl &&
-    geo.inNh &&
+    signals.nhLocation &&
     signals.propertyManagementFit &&
-    !signals.exclusionRisk
+    !signals.exclusionRisk &&
+    (geo.tier === 'priority' || geo.tier === 'nearby_fill')
   ) {
     confidence = CONFIDENCE.MEDIUM;
   } else {
     confidence = CONFIDENCE.REVIEW_REQUIRED;
   }
 
-  // High confidence blocked whenever exclusion risk exists.
-  if (signals.exclusionRisk && confidence === CONFIDENCE.HIGH) {
+  // Any exclusion match must never be high confidence.
+  if (signals.exclusionRisk) {
     confidence = CONFIDENCE.REVIEW_REQUIRED;
   }
 
   let status = CANDIDATE_STATUS.ACCEPTED;
   let statusReason = 'Passes NH property-manager quality gates';
 
-  if (!geo.inNh || !pmFit || !fit.ok || !sourceUrl) {
+  if (!sourceUrl) {
     status = CANDIDATE_STATUS.REVIEW_REQUIRED;
-    statusReason = !sourceUrl
-      ? 'Missing source URL'
-      : !geo.inNh
-        ? 'NH location not confirmed'
-        : !pmFit
-          ? 'Property-management fit not evidenced on source'
-          : fit.reason || 'Source-specific fit rationale incomplete';
+    statusReason = 'Missing source URL';
+  } else if (!geo.inNh) {
+    status = CANDIDATE_STATUS.REVIEW_REQUIRED;
+    statusReason = 'NH location not confirmed';
+  } else if (targetingPm && !pmFit) {
+    status = CANDIDATE_STATUS.REVIEW_REQUIRED;
+    statusReason = 'Property-management fit not evidenced on source';
+  } else if (!fit.ok) {
+    status = CANDIDATE_STATUS.REVIEW_REQUIRED;
+    statusReason = fit.reason || 'Source-specific fit rationale incomplete';
   } else if (geo.tier === 'nearby_fill') {
     status = CANDIDATE_STATUS.REVIEW_REQUIRED;
     statusReason =
       'Manchester NH nearby/fill — review required unless needed to fill the batch';
-  } else if (geo.missingStateToken || !contactSignal) {
+  } else if (geo.tier === 'extended_review') {
+    if (!extendedAllowed) {
+      status = CANDIDATE_STATUS.REVIEW_REQUIRED;
+      statusReason = `${geo.town} NH is outside approved town cluster (Bedford/Hooksett/Londonderry/Auburn/Goffstown) — review required unless explicitly allowed`;
+    } else {
+      status = CANDIDATE_STATUS.REVIEW_REQUIRED;
+      statusReason = `${geo.town} NH explicitly allowed but still review_required (not a priority town)`;
+    }
+  } else if (geo.tier === 'other') {
     status = CANDIDATE_STATUS.REVIEW_REQUIRED;
-    statusReason = geo.missingStateToken
-      ? 'NH state token missing on listing — verify New Hampshire, USA'
-      : 'Reachable contact signal missing — review before outreach';
+    statusReason =
+      'Location outside approved priority town cluster — review required';
+  } else if (!contactSignal) {
+    status = CANDIDATE_STATUS.REVIEW_REQUIRED;
+    statusReason = 'Reachable contact signal missing — review before outreach';
   } else if (exclusionRisk) {
     status = CANDIDATE_STATUS.REVIEW_REQUIRED;
     statusReason = 'Exclusion risk present — operator review required';
+  } else if (geo.tier !== 'priority') {
+    status = CANDIDATE_STATUS.REVIEW_REQUIRED;
+    statusReason = 'Not in priority NH town cluster';
+  }
+
+  // Accepted only for priority NH towns with full signals.
+  if (
+    status === CANDIDATE_STATUS.ACCEPTED &&
+    !(
+      geo.tier === 'priority' &&
+      signals.nhLocation &&
+      pmFit &&
+      sourceUrl &&
+      fit.ok &&
+      !exclusionRisk
+    )
+  ) {
+    status = CANDIDATE_STATUS.REVIEW_REQUIRED;
+    statusReason = 'Does not meet accepted priority-town quality bar';
   }
 
   return {
     status,
     statusReason,
+    rejectionReason: null,
     confidence,
     fitRationale: fit.rationale,
     suggestedContactRole: role,
@@ -823,6 +1079,70 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
   };
 }
 
+function softExclusionCriteriaMatch(hit, workRequest) {
+  const exclusions = Array.isArray(workRequest && workRequest.exclusionCriteria)
+    ? workRequest.exclusionCriteria
+    : [];
+  if (!exclusions.length) return null;
+  const hay = hitHaystack(hit);
+  const STOP = new Set([
+    'large',
+    'property',
+    'properties',
+    'managers',
+    'manager',
+    'companies',
+    'company',
+    'services',
+    'service',
+    'other',
+    'results',
+    'outside',
+    'approved',
+    'hampshire',
+    'greater',
+    'manchester',
+  ]);
+  for (const ex of exclusions) {
+    const token = String(ex || '').trim().toLowerCase();
+    if (!token || token.length < 8) continue;
+    if (
+      !/cleaning|maid|housekeeping|janitorial|carpet|institutional|national|franchise|salford|stockport|\buk\b/.test(
+        token
+      )
+    ) {
+      continue;
+    }
+    // Require distinctive exclusion tokens — not generic "property"/"managers".
+    const words = token
+      .split(/[^a-z0-9]+/i)
+      .filter((w) => w.length >= 6 && !STOP.has(w));
+    if (words.some((w) => hay.includes(w))) return ex;
+  }
+  return null;
+}
+
+function reviewResult(hit, workRequest, fields = {}) {
+  return {
+    status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+    statusReason: fields.statusReason || 'Review required',
+    rejectionReason: null,
+    confidence: fields.confidence || CONFIDENCE.REVIEW_REQUIRED,
+    fitRationale:
+      fields.fitRationale ||
+      buildSourceSpecificFitRationale(hit, workRequest, fields.geo).rationale,
+    suggestedContactRole:
+      fields.suggestedContactRole || formatSuggestedContactRole(workRequest, hit),
+    risks: Array.isArray(fields.risks)
+      ? fields.risks.join('; ')
+      : fields.risks || fields.statusReason || 'Review required',
+    exclusionRisk: Boolean(fields.exclusionRisk),
+    geo: fields.geo || null,
+    signals: fields.signals || null,
+    market: fields.market || null,
+  };
+}
+
 function rejectResult(hit, workRequest, extra = {}) {
   const geo =
     extra.geo ||
@@ -830,16 +1150,18 @@ function rejectResult(hit, workRequest, extra = {}) {
   const fit =
     extra.fitRationale ||
     buildSourceSpecificFitRationale(hit, workRequest, geo).rationale;
+  const reason = extra.statusReason || 'Rejected by Scout quality gate';
   return {
     status: CANDIDATE_STATUS.REJECTED,
-    statusReason: extra.statusReason || 'Rejected by Scout quality gate',
+    statusReason: reason,
+    rejectionReason: reason,
     confidence: CONFIDENCE.REVIEW_REQUIRED,
     fitRationale: fit,
     suggestedContactRole:
       extra.suggestedContactRole || formatSuggestedContactRole(workRequest, hit),
     risks: Array.isArray(extra.risks)
       ? extra.risks.join('; ')
-      : extra.statusReason || 'Rejected',
+      : reason,
     exclusionRisk: extra.exclusionRisk !== false,
     geo,
     signals: {
@@ -855,29 +1177,37 @@ function rejectResult(hit, workRequest, extra = {}) {
 
 /**
  * Prefer priority-town accepted rows; use Manchester NH review_required only to fill.
+ * Concord/Derry/extended towns stay review_required and never become accepted.
  */
 function selectBatchWithManchesterFill(evaluatedRows, targetMax = 25, targetMin = 15) {
   const acceptedPriority = [];
-  const acceptedOther = [];
   const reviewPriority = [];
   const reviewManchester = [];
+  const reviewExtended = [];
   const reviewOther = [];
   const rejected = [];
 
   for (const row of evaluatedRows) {
     if (!row) continue;
     if (row.status === CANDIDATE_STATUS.REJECTED) {
-      rejected.push(row);
+      rejected.push(ensureRejectionReason(row));
       continue;
     }
     const tier = (row.geo && row.geo.tier) || townTier(row.location || '');
+    // Force non-priority accepted rows down to review_required.
+    if (row.status === CANDIDATE_STATUS.ACCEPTED && tier !== 'priority') {
+      row.status = CANDIDATE_STATUS.REVIEW_REQUIRED;
+      row.statusReason =
+        row.statusReason ||
+        'Downgraded — only priority NH towns can be accepted';
+    }
     if (row.status === CANDIDATE_STATUS.ACCEPTED) {
-      if (tier === 'priority') acceptedPriority.push(row);
-      else acceptedOther.push(row);
+      acceptedPriority.push(row);
       continue;
     }
     if (tier === 'priority') reviewPriority.push(row);
     else if (tier === 'nearby_fill') reviewManchester.push(row);
+    else if (tier === 'extended_review') reviewExtended.push(row);
     else reviewOther.push(row);
   }
 
@@ -890,33 +1220,150 @@ function selectBatchWithManchesterFill(evaluatedRows, targetMax = 25, targetMin 
   };
 
   take(acceptedPriority);
-  take(acceptedOther);
   take(reviewPriority);
-  take(reviewOther);
+  // Extended towns (Concord/Derry/etc.) only if still short and not filling before priority.
+  if (batch.length < targetMin) {
+    take(reviewExtended);
+    take(reviewOther);
+  } else {
+    for (const row of reviewExtended.concat(reviewOther)) {
+      rejected.push(
+        ensureRejectionReason({
+          ...row,
+          status: CANDIDATE_STATUS.REJECTED,
+          statusReason:
+            row.statusReason ||
+            'Outside approved priority town cluster — deferred from batch',
+          rejectionReason:
+            row.rejectionReason ||
+            row.statusReason ||
+            'Outside approved priority town cluster — deferred from batch',
+        })
+      );
+    }
+  }
 
   // Manchester fill only if batch still short.
   if (batch.length < targetMin) {
     take(reviewManchester);
   } else {
-    // Leave Manchester out of the approved-facing batch when not needed;
-    // still report them in rejected/deferred via statusReason if we skip.
     for (const row of reviewManchester) {
-      rejected.push({
-        ...row,
-        status: CANDIDATE_STATUS.REJECTED,
-        statusReason:
-          'Manchester NH deferred — priority towns filled the batch (nearby/fill only)',
-      });
+      rejected.push(
+        ensureRejectionReason({
+          ...row,
+          status: CANDIDATE_STATUS.REJECTED,
+          statusReason:
+            'Manchester NH deferred — priority towns filled the batch (nearby/fill only)',
+          rejectionReason:
+            'Manchester NH deferred — priority towns filled the batch (nearby/fill only)',
+        })
+      );
     }
   }
 
-  return { candidates: batch, rejected };
+  return {
+    candidates: batch,
+    rejected,
+    groups: groupCandidatesByStatus(batch, rejected),
+  };
+}
+
+function ensureRejectionReason(row) {
+  if (!row) return row;
+  if (row.status === CANDIDATE_STATUS.REJECTED) {
+    return {
+      ...row,
+      rejectionReason: row.rejectionReason || row.statusReason || 'Rejected',
+    };
+  }
+  return { ...row, rejectionReason: row.rejectionReason || null };
+}
+
+function groupCandidatesByStatus(candidates = [], rejected = []) {
+  const accepted = [];
+  const reviewRequired = [];
+  for (const row of candidates || []) {
+    if (!row) continue;
+    if (row.status === CANDIDATE_STATUS.ACCEPTED) accepted.push(row);
+    else if (row.status === CANDIDATE_STATUS.REJECTED) {
+      // Should not be in candidates; move defensively.
+      rejected.push(ensureRejectionReason(row));
+    } else reviewRequired.push(row);
+  }
+  return {
+    accepted,
+    review_required: reviewRequired,
+    rejected: (rejected || []).map(ensureRejectionReason),
+  };
+}
+
+/**
+ * Apply quality gates to raw candidate rows (including injected scoutSourcingFn paths).
+ */
+function gateScoutCandidateRows(rows, workRequest, opts = {}) {
+  const evaluated = [];
+  const rejected = [];
+  const list = Array.isArray(rows) ? rows : [];
+  for (let i = 0; i < list.length; i += 1) {
+    const row = list[i] || {};
+    const companyName =
+      row.companyName || row.name || row.propertyManagerName || row.company || null;
+    const sourceUrl = row.sourceUrl || row.website || row.url || null;
+    if (!companyName || !sourceUrl) continue;
+    const hit = {
+      ...row,
+      companyName: String(companyName).trim(),
+      sourceUrl,
+      website: row.website || sourceUrl,
+      location: row.location || row.marketTown || row.address || null,
+    };
+    const gate = evaluateScoutCandidate(hit, workRequest, opts);
+    const merged = {
+      id: row.id || `scout-gated-${i + 1}`,
+      companyName: hit.companyName,
+      sourceUrl,
+      website: hit.website,
+      location: hit.location,
+      marketTown: row.marketTown || (gate.geo && gate.geo.town) || hit.location,
+      segment: row.segment || (workRequest && workRequest.targetSegment) || null,
+      subtype: row.subtype || (workRequest && workRequest.targetSubtype) || null,
+      fitRationale: gate.fitRationale,
+      risks: gate.risks,
+      suggestedContactRole: gate.suggestedContactRole,
+      confidence: gate.confidence,
+      status: gate.status,
+      statusReason: gate.statusReason,
+      rejectionReason:
+        gate.status === CANDIDATE_STATUS.REJECTED
+          ? gate.rejectionReason || gate.statusReason
+          : null,
+      exclusionRisk: Boolean(gate.exclusionRisk),
+      signals: gate.signals || null,
+      geo: gate.geo || null,
+      reviewOnly: true,
+      placeholder: false,
+    };
+    if (merged.status === CANDIDATE_STATUS.REJECTED) rejected.push(merged);
+    else evaluated.push(merged);
+  }
+
+  const targetMax = Number(opts.targetMax) || Number(workRequest && workRequest.targetCountMax) || 25;
+  const targetMin = Number(opts.targetMin) || Number(workRequest && workRequest.targetCountMin) || 15;
+  const selected = selectBatchWithManchesterFill(evaluated, targetMax, targetMin);
+  const allRejected = (selected.rejected || []).concat(rejected).map(ensureRejectionReason);
+  return {
+    candidates: selected.candidates,
+    rejected: allRejected,
+    groups: groupCandidatesByStatus(selected.candidates, allRejected),
+  };
 }
 
 module.exports = {
   PRIORITY_TOWNS_NH,
   NEARBY_FILL_TOWNS_NH,
+  EXTENDED_REVIEW_TOWNS_NH,
   ALL_NH_PILOT_TOWNS,
+  ALL_KNOWN_NH_TOWNS,
   CANDIDATE_STATUS,
   CONFIDENCE,
   interpretAnchorMarket,
@@ -932,5 +1379,8 @@ module.exports = {
   isGenericCriteriaCopy,
   evaluateScoutCandidate,
   selectBatchWithManchesterFill,
+  groupCandidatesByStatus,
+  gateScoutCandidateRows,
   isNhLocation,
+  extendedTownsExplicitlyAllowed,
 };

@@ -26,8 +26,12 @@ const {
 const {
   COMPLETED_RESULT_GUARDRAILS,
   buildScoutHandoff,
+  handBriefToScout,
   handBriefToScoutAsync,
 } = require('../services/scoutHandoff');
+const {
+  applyScoutExecutionResult,
+} = require('../services/clientIntelligenceCampaignPlanning');
 const {
   createMemoryScoutWorkRequestStore,
 } = require('../services/scoutWorkRequestStore');
@@ -94,7 +98,21 @@ describe('scoutQualityGate — hard rejects', () => {
       PM_WORK_REQUEST
     );
     assert.equal(gate.status, CANDIDATE_STATUS.REJECTED);
+    assert.ok(gate.rejectionReason);
     assert.match(gate.statusReason, /UK|non-US|New Hampshire/i);
+
+    const bareManchester = evaluateScoutCandidate(
+      {
+        companyName: 'Deansgate Property Management',
+        address: '1 Deansgate, Manchester',
+        location: 'Manchester',
+        website: 'https://deansgate-pm.example',
+        placeTypes: ['real_estate_agency'],
+      },
+      PM_WORK_REQUEST
+    );
+    assert.equal(bareManchester.status, CANDIDATE_STATUS.REJECTED);
+    assert.match(bareManchester.rejectionReason || bareManchester.statusReason, /UK|Manchester|NH/i);
 
     const mapped = mapPublicHitToScoutCandidate(
       {
@@ -279,6 +297,54 @@ describe('scoutQualityGate — confidence and rationale', () => {
     assert.equal(gate.status, CANDIDATE_STATUS.REVIEW_REQUIRED);
     assert.match(gate.statusReason, /Manchester|nearby|fill|review/i);
   });
+
+  it('downgrades Concord/Derry NH unless explicitly allowed', () => {
+    const concord = evaluateScoutCandidate(
+      {
+        companyName: 'Concord Property Management',
+        address: '33 N Main St, Concord, NH',
+        location: 'Concord NH',
+        website: 'https://concordpm.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0200',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.equal(concord.status, CANDIDATE_STATUS.REVIEW_REQUIRED);
+    assert.notEqual(concord.status, CANDIDATE_STATUS.ACCEPTED);
+    assert.match(concord.statusReason, /Concord|cluster|review/i);
+    assert.notEqual(concord.confidence, CONFIDENCE.HIGH);
+
+    const derry = evaluateScoutCandidate(
+      {
+        companyName: 'Derry Real Estate Management',
+        address: '10 Birch St, Derry, NH',
+        location: 'Derry NH',
+        website: 'https://derrypm.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0201',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.equal(derry.status, CANDIDATE_STATUS.REVIEW_REQUIRED);
+    assert.notEqual(derry.confidence, CONFIDENCE.HIGH);
+
+    const manchester = evaluateScoutCandidate(
+      {
+        companyName: 'Manchester NH Property Co',
+        address: '1000 Elm St, Manchester, NH',
+        location: 'Manchester NH',
+        website: 'https://mancpm.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0188',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.equal(manchester.status, CANDIDATE_STATUS.REVIEW_REQUIRED);
+  });
 });
 
 describe('scoutQualityGate — sourcing integration', () => {
@@ -381,5 +447,83 @@ describe('scoutQualityGate — sourcing integration', () => {
     for (const g of COMPLETED_RESULT_GUARDRAILS) {
       assert.ok(result.candidateBatch.guardrails.includes(g));
     }
+
+    const applied = applyScoutExecutionResult(
+      {
+        message: 'Approving the Scout Handoff Brief…',
+        scoutHandoffBrief: {
+          guardrails: [
+            'Creating this brief does not hand it to Scout — say “Hand this brief to Scout” to approve and queue',
+            'Scout inspects public sources only when sourcing execution is wired',
+          ],
+          reviewGate:
+            'Creating this brief does not hand it to Scout.',
+          disclaimer:
+            'Scout Handoff Brief only. Creating this brief does not hand it to Scout.',
+          recommendedNextStep: 'Say Hand this brief to Scout',
+        },
+      },
+      result
+    );
+    assert.deepEqual(applied.scoutHandoffBrief.guardrails, [
+      ...COMPLETED_RESULT_GUARDRAILS,
+    ]);
+    assert.doesNotMatch(
+      JSON.stringify(applied.scoutHandoffBrief),
+      /Creating this brief does not hand|when sourcing execution is wired|in this step/i
+    );
+  });
+
+  it('injected scoutSourcingFn path cannot bypass quality gates', () => {
+    const draft = buildScoutHandoff({
+      campaignObjective: 'Validate walkthrough demand',
+      targetSegment: 'Property managers',
+      marketBounds: 'Bedford NH',
+      inclusionCriteria: PM_WORK_REQUEST.inclusionCriteria,
+      exclusionCriteria: PM_WORK_REQUEST.exclusionCriteria,
+    });
+    const result = handBriefToScout(draft, {
+      scoutSourcingFn: () => [
+        {
+          companyName: 'UK Manchester Cleaners',
+          sourceUrl: 'https://cleaners.example.co.uk',
+          location: 'Manchester',
+          fitRationale: PM_WORK_REQUEST.inclusionCriteria[0],
+          suggestedContactRole: 'Owner / decision-maker',
+          confidence: 'high',
+        },
+        {
+          companyName: 'Bedford Property Management LLC',
+          sourceUrl: 'https://bedfordpm.example',
+          location: 'Bedford NH',
+          address: 'Bedford, NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0111',
+          fitRationale: PM_WORK_REQUEST.inclusionCriteria[0],
+          suggestedContactRole: 'Owner / decision-maker',
+          confidence: 'high',
+        },
+      ],
+    });
+    assert.equal(result.ok, true);
+    assert.ok(
+      (result.candidateBatch.rejected || []).some((r) =>
+        /UK|Manchester|cleaning|cleaner/i.test(
+          `${r.companyName} ${r.rejectionReason || ''}`
+        )
+      )
+    );
+    const kept = result.candidateBatch.candidates;
+    assert.ok(kept.length >= 1);
+    assert.ok(kept.every((r) => r.status !== 'rejected'));
+    for (const row of kept) {
+      assert.doesNotMatch(row.fitRationale || '', /Manage offices, mixed-use/i);
+      assert.match(row.fitRationale || '', /sourced from public listing|address\/location on source|source URL/i);
+      assert.match(row.suggestedContactRole || '', /Suggested contact role:/i);
+      assert.doesNotMatch(row.suggestedContactRole || '', /decision-maker/i);
+    }
+    assert.ok(result.candidateBatch.groups);
+    assert.ok(Array.isArray(result.candidateBatch.groups.rejected));
   });
 });

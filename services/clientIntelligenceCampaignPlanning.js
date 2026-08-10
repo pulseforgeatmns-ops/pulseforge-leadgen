@@ -2711,6 +2711,15 @@ function produceHandBriefToScoutResult(ctx, answers, slots, opts, leadIn) {
 function applyScoutExecutionResult(reply, result) {
   if (!reply || !result) return reply;
   const handoff = result.handoff || reply.scoutHandoff;
+  const completed =
+    handoff &&
+    (handoff.status === 'completed' ||
+      handoff.status === 'failed' ||
+      Boolean(result.scoutRan));
+  const completedGuardrails =
+    (handoff && handoff.guardrails) ||
+    (result.candidateBatch && result.candidateBatch.guardrails) ||
+    null;
   const brief = reply.scoutHandoffBrief
     ? {
         ...reply.scoutHandoffBrief,
@@ -2721,13 +2730,21 @@ function applyScoutExecutionResult(reply, result) {
         scoutRan: Boolean(result.scoutRan),
         workRequestId: result.workRequest && result.workRequest.workRequestId,
         updatedAt: handoff && handoff.updatedAt,
+        // Once Scout has run, drop draft-brief guardrail / review-gate language.
+        guardrails: completed && completedGuardrails
+          ? [...completedGuardrails]
+          : reply.scoutHandoffBrief.guardrails,
+        reviewGate: completed
+          ? 'Operator reviews Scout’s returned batch (accepted / review_required / rejected) before any Composer, CRM, export, or outreach use. Rejected and review_required rows are not outreach-ready.'
+          : reply.scoutHandoffBrief.reviewGate,
         recommendedNextStep: result.scoutRan
           ? result.ok
-            ? 'Review Scout candidates. Approve before Composer / CRM / export use. No outreach or CRM writes yet.'
+            ? 'Review Scout candidates by status (accepted / review_required / rejected). Approve before Composer / CRM / export use. No outreach or CRM writes yet.'
             : 'Scout sourcing failed — work request preserved. Review failure and retry or revise criteria.'
           : reply.scoutHandoffBrief.recommendedNextStep,
-        disclaimer:
-          'Scout handoff results are review-only. No outreach copy, sends, CRM writes, or account changes have been made.',
+        disclaimer: completed
+          ? 'Scout handoff results are review-only. No outreach copy, sends, CRM writes, or account changes have been made. Draft brief instructions no longer apply.'
+          : 'Scout handoff results are review-only. No outreach copy, sends, CRM writes, or account changes have been made.',
       }
     : reply.scoutHandoffBrief;
 

@@ -17,6 +17,11 @@ const {
   sourceScoutCandidatesFromPublicSources,
 } = require('./scoutPublicSourcing');
 const {
+  gateScoutCandidateRows,
+  groupCandidatesByStatus,
+  CANDIDATE_STATUS,
+} = require('./scoutQualityGate');
+const {
   defaultScoutWorkRequestStore,
 } = require('./scoutWorkRequestStore');
 
@@ -271,8 +276,11 @@ function persistWorkRequestRecord(handoff, workRequest, opts = {}, extra = {}) {
 
 function finishWithCandidates(handoff, workRequest, candidates, opts = {}) {
   const rejected = Array.isArray(opts.rejected) ? opts.rejected : [];
+  const groups =
+    opts.groups || groupCandidatesByStatus(candidates, rejected);
   const candidateBatch = buildCandidateBatch(handoff, candidates, {
     rejected,
+    groups,
   });
   const updatedAt = nowIso();
   const completedGuardrails = [...COMPLETED_RESULT_GUARDRAILS];
@@ -312,35 +320,40 @@ function finishWithCandidates(handoff, workRequest, candidates, opts = {}) {
     '',
     `Handoff status: ${nextHandoff.uiStatus}`,
     `Work request: ${nextWorkRequest.workRequestId}`,
-    `Candidates returned: ${candidates.length} (source URLs required)`,
+    `Accepted: ${(groups.accepted || []).length} · Review required: ${(
+      groups.review_required || []
+    ).length} · Rejected: ${(groups.rejected || []).length}`,
     '',
   ];
-  for (const row of candidates) {
-    lines.push(
-      `- [${row.status || 'review_required'}] ${row.companyName} | ${
-        row.location || '—'
-      } | ${row.sourceUrl} | ${row.fitRationale || '—'} | role: ${
-        row.suggestedContactRole || '—'
-      } | risks: ${row.risks || '—'} | confidence: ${row.confidence}${
-        row.statusReason ? ` | reason: ${row.statusReason}` : ''
-      }`
-    );
-  }
-  if (rejected.length) {
-    lines.push('');
-    lines.push(`Rejected (${rejected.length}):`);
-    for (const row of rejected.slice(0, 25)) {
+  const pushGroup = (label, rows) => {
+    if (!rows.length) return;
+    lines.push(`${label}:`);
+    for (const row of rows) {
       lines.push(
-        `- ${row.companyName || '—'} — ${row.statusReason || 'rejected'}`
+        `- ${row.companyName} | ${row.location || '—'} | ${row.sourceUrl} | ${
+          row.fitRationale || '—'
+        } | role: ${row.suggestedContactRole || '—'} | risks: ${
+          row.risks || '—'
+        } | confidence: ${row.confidence}${
+          row.statusReason ? ` | reason: ${row.statusReason}` : ''
+        }${
+          row.rejectionReason ? ` | rejectionReason: ${row.rejectionReason}` : ''
+        }`
       );
     }
-  }
-  lines.push('');
+    lines.push('');
+  };
+  pushGroup('Accepted', groups.accepted || []);
+  pushGroup('Review required', groups.review_required || []);
+  pushGroup('Rejected', groups.rejected || []);
   lines.push('Guardrails:');
   for (const g of candidateBatch.guardrails) lines.push(`- ${g}`);
   lines.push('');
   lines.push(
     'Operator must approve these Scout results before Composer, CRM, or export can use them.'
+  );
+  lines.push(
+    'Do not treat rejected or review_required rows as outreach-ready.'
   );
 
   return {
@@ -413,12 +426,24 @@ function normalizeScoutCandidate(row, idx) {
   const r = row || {};
   const sourceUrl = r.sourceUrl || r.website || r.url || null;
   const roleRaw = r.suggestedContactRole || r.contactRole || null;
-  const suggestedContactRole =
-    roleRaw && !/^suggested contact role:/i.test(String(roleRaw))
-      ? r.contactName && r.contactTitle
-        ? String(roleRaw)
-        : `Suggested contact role: ${roleRaw}`
-      : roleRaw;
+  const verifiedPerson = Boolean(r.contactName && r.contactTitle);
+  let suggestedContactRole = roleRaw;
+  if (roleRaw && !/^suggested contact role:/i.test(String(roleRaw))) {
+    suggestedContactRole = verifiedPerson
+      ? String(roleRaw)
+      : `Suggested contact role: ${String(roleRaw).replace(
+          /^owner\s*\/\s*decision-?maker$/i,
+          'property / operations contact'
+        )}`;
+  } else if (
+    roleRaw &&
+    /suggested contact role:\s*owner\s*\/\s*decision-?maker/i.test(String(roleRaw)) &&
+    !verifiedPerson
+  ) {
+    suggestedContactRole = 'Suggested contact role: property / operations contact';
+  }
+  const status = r.status || 'review_required';
+  const statusReason = r.statusReason || null;
   return {
     id: r.id || `scout-candidate-${idx + 1}`,
     companyName:
@@ -433,9 +458,15 @@ function normalizeScoutCandidate(row, idx) {
     risks: r.risks || r.disqualifyRisk || r.risk || r.uncertainty || null,
     suggestedContactRole,
     confidence: r.confidence || 'review_required',
-    status: r.status || 'review_required',
-    statusReason: r.statusReason || null,
+    status,
+    statusReason,
+    rejectionReason:
+      status === CANDIDATE_STATUS.REJECTED
+        ? r.rejectionReason || statusReason || 'Rejected'
+        : r.rejectionReason || null,
     exclusionRisk: Boolean(r.exclusionRisk),
+    geo: r.geo || null,
+    signals: r.signals || null,
     reviewOnly: true,
     placeholder: false,
   };
@@ -443,17 +474,37 @@ function normalizeScoutCandidate(row, idx) {
 
 /**
  * Candidates without a source URL are dropped — never fabricated.
+ * Prefer gateScoutCandidateRows when a work request is available.
  */
-function filterValidScoutCandidates(rows) {
+function filterValidScoutCandidates(rows, workRequest = null, opts = {}) {
   if (!Array.isArray(rows)) return [];
+  if (workRequest) {
+    const gated = gateScoutCandidateRows(rows, workRequest, opts);
+    return gated.candidates.map((row, idx) => normalizeScoutCandidate(row, idx));
+  }
   return rows
     .map((row, idx) => normalizeScoutCandidate(row, idx))
     .filter((row) => row.companyName && row.sourceUrl);
 }
 
+function gateAndSplitScoutCandidates(rows, workRequest, opts = {}) {
+  const gated = gateScoutCandidateRows(rows || [], workRequest || {}, opts);
+  return {
+    candidates: (gated.candidates || []).map((row, idx) =>
+      normalizeScoutCandidate(row, idx)
+    ),
+    rejected: (gated.rejected || []).map((row, idx) =>
+      normalizeScoutCandidate(row, idx)
+    ),
+    groups: gated.groups,
+  };
+}
+
 function buildCandidateBatch(handoff, candidates, opts = {}) {
   const createdAt = opts.createdAt || nowIso();
   const rejected = Array.isArray(opts.rejected) ? opts.rejected : [];
+  const groups =
+    opts.groups || groupCandidatesByStatus(candidates, rejected);
   return {
     kind: SCOUT_CANDIDATE_BATCH_KIND,
     handoffId: handoff.handoffId,
@@ -465,6 +516,9 @@ function buildCandidateBatch(handoff, candidates, opts = {}) {
     candidates,
     rejected,
     rejectedCount: rejected.length,
+    groups,
+    acceptedCount: (groups.accepted || []).length,
+    reviewRequiredCount: (groups.review_required || []).length,
     guardrails: [...COMPLETED_RESULT_GUARDRAILS],
     crmWritesMade: false,
     outreachCopyGenerated: false,
@@ -603,16 +657,19 @@ function handBriefToScout(priorHandoffOrBrief, opts = {}) {
     }
     if (!Array.isArray(raw)) raw = [];
 
-    const candidates = filterValidScoutCandidates(raw);
-
-    if (!candidates.length) {
+    const gated = gateAndSplitScoutCandidates(raw, workRequest, opts);
+    if (!gated.candidates.length) {
       return finishWithFailure(handoff, workRequest, opts, {
         message:
-          'Scout ran against the approved handoff but returned no usable candidates with source URLs.',
+          'Scout ran against the approved handoff but returned no usable in-market candidates after quality gates.',
       });
     }
 
-    return finishWithCandidates(handoff, workRequest, candidates, opts);
+    return finishWithCandidates(handoff, workRequest, gated.candidates, {
+      ...opts,
+      rejected: gated.rejected,
+      groups: gated.groups,
+    });
   }
 
   // Public-source tooling available — queue for async executeScoutWorkRequest.
@@ -826,19 +883,23 @@ function queueOrExecuteExistingScoutWorkRequest(input = {}) {
       };
     }
     if (!Array.isArray(raw)) raw = [];
-    const candidates = filterValidScoutCandidates(raw);
-    if (!candidates.length) {
+    const gated = gateAndSplitScoutCandidates(raw, workRequest, opts);
+    if (!gated.candidates.length) {
       return {
         ...finishWithFailure(handoff, workRequest, opts, {
           message:
-            'Scout ran against the preserved work request but returned no usable candidates with source URLs.',
+            'Scout ran against the preserved work request but returned no usable in-market candidates after quality gates.',
         }),
         createdNewHandoff: false,
         shouldExecuteScoutSourcing: false,
       };
     }
     return {
-      ...finishWithCandidates(handoff, workRequest, candidates, opts),
+      ...finishWithCandidates(handoff, workRequest, gated.candidates, {
+        ...opts,
+        rejected: gated.rejected,
+        groups: gated.groups,
+      }),
       createdNewHandoff: false,
       shouldExecuteScoutSourcing: false,
     };
@@ -997,14 +1058,18 @@ async function executeScoutWorkRequest(input = {}) {
       });
     }
     if (!Array.isArray(raw)) raw = [];
-    const candidates = filterValidScoutCandidates(raw);
-    if (!candidates.length) {
+    const gatedFn = gateAndSplitScoutCandidates(raw, workRequest, opts);
+    if (!gatedFn.candidates.length) {
       return finishWithFailure(handoff, workRequest, opts, {
         message:
-          'Scout ran against the approved handoff but returned no usable candidates with source URLs.',
+          'Scout ran against the approved handoff but returned no usable in-market candidates after quality gates.',
       });
     }
-    return finishWithCandidates(handoff, workRequest, candidates, opts);
+    return finishWithCandidates(handoff, workRequest, gatedFn.candidates, {
+      ...opts,
+      rejected: gatedFn.rejected,
+      groups: gatedFn.groups,
+    });
   }
 
   const sourced = await sourceScoutCandidatesFromPublicSources({
@@ -1024,18 +1089,24 @@ async function executeScoutWorkRequest(input = {}) {
     });
   }
 
-  const candidates = filterValidScoutCandidates(sourced.candidates);
-  if (!candidates.length) {
+  // Re-gate sourced rows so injected/legacy fields cannot bypass status rules.
+  const gated = gateAndSplitScoutCandidates(
+    [...(sourced.candidates || []), ...(sourced.rejected || [])],
+    workRequest,
+    opts
+  );
+  if (!gated.candidates.length) {
     return finishWithFailure(handoff, workRequest, opts, {
       error: 'candidates_failed_validation',
       message:
-        'Scout returned rows but none had both a company name and source URL. Work request preserved.',
+        'Scout returned rows but none passed NH property-manager quality gates. Work request preserved.',
     });
   }
 
-  const result = finishWithCandidates(handoff, workRequest, candidates, {
+  const result = finishWithCandidates(handoff, workRequest, gated.candidates, {
     ...opts,
-    rejected: Array.isArray(sourced.rejected) ? sourced.rejected : [],
+    rejected: gated.rejected,
+    groups: gated.groups,
   });
   if (sourced.warnings && sourced.warnings.length) {
     result.message = `${result.message}\n\nSourcing notes:\n- ${sourced.warnings.join(
@@ -1044,7 +1115,8 @@ async function executeScoutWorkRequest(input = {}) {
     result.warnings = sourced.warnings;
   }
   result.queried = sourced.queried || [];
-  result.rejected = sourced.rejected || [];
+  result.rejected = gated.rejected;
+  result.groups = gated.groups;
   result.market = sourced.market || null;
   return result;
 }
@@ -1104,6 +1176,7 @@ module.exports = {
   buildCandidateBatch,
   isScoutSourcingExecutionWired,
   filterValidScoutCandidates,
+  gateAndSplitScoutCandidates,
   normalizeScoutCandidate,
   handBriefToScout,
   handBriefToScoutAsync,

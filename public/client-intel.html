@@ -1849,11 +1849,33 @@
         (handoff && handoff.candidateBatch) ||
         state.scoutCandidateBatch ||
         null;
+      const groups = (batch && batch.groups) || null;
       const candidates = (batch && batch.candidates) || [];
-      const candidateHtml = candidates.length
-        ? '<p><strong>Scout candidates (review-only)</strong></p><ul class="completion-checks">' +
-          candidates
-            .map((row) => {
+      const rejected =
+        (groups && groups.rejected) || (batch && batch.rejected) || [];
+      const scoutCompleted = Boolean(
+        (handoff &&
+          (handoff.status === 'completed' || handoff.status === 'failed')) ||
+          (brief && brief.scoutRan) ||
+          (batch && batch.candidates)
+      );
+      const guardrailsForDisplay = scoutCompleted
+        ? (handoff && handoff.guardrails) ||
+          (batch && batch.guardrails) ||
+          brief.guardrails
+        : brief.guardrails;
+      function renderCandidateGroup(label, rows, opts) {
+        const list = Array.isArray(rows) ? rows : [];
+        if (!list.length) return '';
+        const showRejection = opts && opts.showRejection;
+        return (
+          '<p><strong>' +
+          escapeHtml(label) +
+          ' (' +
+          list.length +
+          ')</strong></p><ul class="completion-checks">' +
+          list
+            .map(function (row) {
               const url = row.sourceUrl || row.website || '';
               const link = url
                 ? '<a href="' +
@@ -1868,6 +1890,8 @@
                 ' · ' +
                 escapeHtml(row.location || '—') +
                 ' · ' +
+                escapeHtml(row.status || 'review_required') +
+                ' · ' +
                 link +
                 '<br>Fit: ' +
                 escapeHtml(row.fitRationale || row.fitReason || '—') +
@@ -1877,11 +1901,36 @@
                 escapeHtml(row.risks || '—') +
                 ' · Confidence: ' +
                 escapeHtml(row.confidence || '—') +
+                (row.statusReason
+                  ? '<br>Reason: ' + escapeHtml(row.statusReason)
+                  : '') +
+                (showRejection && (row.rejectionReason || row.statusReason)
+                  ? '<br>Rejection: ' +
+                    escapeHtml(row.rejectionReason || row.statusReason)
+                  : '') +
                 '</li>'
               );
             })
             .join('') +
           '</ul>'
+        );
+      }
+      const candidateHtml = batch
+        ? renderCandidateGroup(
+            'Accepted (review-only)',
+            (groups && groups.accepted) ||
+              candidates.filter(function (r) {
+                return r.status === 'accepted';
+              })
+          ) +
+            renderCandidateGroup(
+              'Review required',
+              (groups && groups.review_required) ||
+                candidates.filter(function (r) {
+                  return r.status !== 'accepted' && r.status !== 'rejected';
+                })
+            ) +
+            renderCandidateGroup('Rejected', rejected, { showRejection: true })
         : '';
       return (
         '<div class="growth-direction" id="scoutHandoffBrief">' +
@@ -1983,7 +2032,7 @@
             escapeHtml(titles.guardrails || 'Guardrails') +
           '</strong></p>' +
           renderListBlock(
-            criteriaListItems(brief.guardrails),
+            criteriaListItems(guardrailsForDisplay),
             'No guardrails listed yet.'
           ) +
           candidateHtml +
@@ -1992,7 +2041,9 @@
           '<p class="growth-disclaimer">' +
             escapeHtml(
               brief.disclaimer ||
-                'Scout Handoff Brief only. Creating this brief does not hand it to Scout.'
+                (scoutCompleted
+                  ? 'Scout handoff results are review-only. No outreach copy, sends, CRM writes, or account changes have been made.'
+                  : 'Scout Handoff Brief only. Creating this brief does not hand it to Scout.')
             ) +
           '</p>' +
         '</div>'
