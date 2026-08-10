@@ -7207,6 +7207,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     (reply.intent === 'hold_criteria' ||
     reply.intent === 'build_proposal_approved' ||
     reply.intent === 'produce_prospect_list_draft' ||
+    reply.intent === 'create_scout_handoff_brief' ||
     reply.intent === 'live_sourcing_unavailable' ||
     reply.intent === 'produce_live_sourced_prospects'
       ? priorBuildProposal
@@ -7217,6 +7218,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       (reply.slots && reply.slots.buildProposalApproved) ||
       reply.intent === 'build_proposal_approved' ||
       reply.intent === 'produce_prospect_list_draft' ||
+      reply.intent === 'create_scout_handoff_brief' ||
       reply.intent === 'live_sourcing_unavailable' ||
       reply.intent === 'produce_live_sourced_prospects') &&
     nextBuildProposal.status !== 'approved'
@@ -7233,11 +7235,13 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     (reply.intent === 'produce_prospect_list_draft'
       ? priorProspectListDraft
       : reply.intent === 'live_sourcing_unavailable' ||
-          reply.intent === 'produce_live_sourced_prospects'
+          reply.intent === 'produce_live_sourced_prospects' ||
+          reply.intent === 'create_scout_handoff_brief'
         ? priorProspectListDraft
         : null);
 
   const nextLiveProspectList = reply.liveProspectList || null;
+  const nextScoutHandoffBrief = reply.scoutHandoffBrief || null;
   const liveSourcingApproved = Boolean(
     reply.liveSourcingApproved ||
       (reply.slots && reply.slots.liveSourcingApproved) ||
@@ -7245,6 +7249,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
   );
 
   const nextStatus =
+    reply.scoutHandoffBrief ||
     reply.liveProspectList ||
     reply.prospectListDraft ||
     reply.buildProposal ||
@@ -7270,6 +7275,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     ...(nextProspectListDraft
       ? { draftRequested: true, draftGenerated: true }
       : {}),
+    ...(nextScoutHandoffBrief ? { scoutHandoffBriefGenerated: true } : {}),
     ...(liveSourcingApproved ? { liveSourcingApproved: true } : {}),
   };
   const nextPlanning = {
@@ -7309,6 +7315,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
         : {}),
       ...(nextLiveProspectList
         ? { liveProspectList: nextLiveProspectList }
+        : {}),
+      ...(nextScoutHandoffBrief
+        ? { scoutHandoffBrief: nextScoutHandoffBrief }
         : {}),
       reasoningMemory: (() => {
         let mem = reasoningMemory;
@@ -7352,6 +7361,13 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
             nextProspectListDraft.status || 'draft'
           );
         }
+        if (nextScoutHandoffBrief) {
+          mem = markArtifactGenerated(
+            mem,
+            ARTIFACT_KINDS.SCOUT_HANDOFF_BRIEF,
+            nextScoutHandoffBrief.status || 'draft'
+          );
+        }
         if (liveSourcingApproved) {
           mem = markLiveSourcingApproved(mem);
         }
@@ -7393,6 +7409,11 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       nextProspectListDraft ||
       (session.interview_state &&
         session.interview_state.reviewableProspectListDraft) ||
+      null,
+    scoutHandoffBrief:
+      nextScoutHandoffBrief ||
+      (session.interview_state &&
+        session.interview_state.scoutHandoffBrief) ||
       null,
     liveProspectList:
       nextLiveProspectList ||
