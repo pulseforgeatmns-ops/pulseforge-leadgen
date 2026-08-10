@@ -20,6 +20,8 @@ const {
   isBannedCriteriaReplayQuestion,
   looksLikeProspectListDraftRequest,
   looksLikeReviseCriteriaRequest,
+  shouldForceProspectListDraft,
+  inferApprovedArtifactsFromMessage,
 } = require('./clientIntelligenceReasoning');
 const {
   buildArtifactSynthesisContext,
@@ -3780,6 +3782,39 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
     slots.draftGenerated || priorSlots.draftGenerated
   );
 
+  // If the operator declares approvals + asks for a reviewable draft, force
+  // post-preview progression even when session slots were reset/stale.
+  {
+    const inferredEarly = inferApprovedArtifactsFromMessage(
+      opts.reasoningMemory ||
+        (opts.reasoningState && opts.reasoningState.reasoningMemory) ||
+        {},
+      userMessage
+    );
+    if (
+      shouldForceProspectListDraft(userMessage, inferredEarly, {
+        priorCriteriaPreview:
+          opts.priorCriteriaPreview ||
+          prior.prospectListCriteriaPreview ||
+          prior.criteriaPreview ||
+          null,
+        priorBuildProposal:
+          opts.priorBuildProposal ||
+          prior.prospectListBuildProposal ||
+          prior.buildProposal ||
+          null,
+      })
+    ) {
+      slots.previewGenerated = true;
+      slots.previewApproved = true;
+      slots.criteriaGenerated = true;
+      slots.criteriaApproved = true;
+      slots.buildProposalGenerated = true;
+      slots.buildProposalApproved = true;
+      slots.draftRequested = true;
+    }
+  }
+
   const syncedAnswers = syncAnswersFromSlots(answers, slots);
   // Keep the raw current utterance on the active step for audit.
   syncedAnswers[currentStep] = answers[currentStep];
@@ -3789,7 +3824,32 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
 
   // --- Post-preview path: never re-ask objective/segment ---
   if (slots.previewGenerated) {
-    if (detectReviseIntent(userMessage) && detectRevisedSlotKeys(userMessage).length) {
+    // Draft requests always beat revise/slot-reopen logic.
+    const earlyForceDraft =
+      shouldForceProspectListDraft(
+        userMessage,
+        opts.reasoningMemory ||
+          (opts.reasoningState && opts.reasoningState.reasoningMemory) ||
+          {},
+        {
+          priorCriteriaPreview:
+            opts.priorCriteriaPreview ||
+            prior.prospectListCriteriaPreview ||
+            prior.criteriaPreview ||
+            null,
+          priorBuildProposal:
+            opts.priorBuildProposal ||
+            prior.prospectListBuildProposal ||
+            prior.buildProposal ||
+            null,
+        }
+      ) || looksLikeProspectListDraftRequest(userMessage);
+
+    if (
+      !earlyForceDraft &&
+      detectReviseIntent(userMessage) &&
+      detectRevisedSlotKeys(userMessage).length
+    ) {
       const missing = nextMissingPrePreviewSlot(slots);
       if (missing) {
         return {
@@ -3829,7 +3889,63 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
         null,
     };
 
+    // Sync approvals declared in the operator message into slot/memory state.
+    const inferredMemory = inferApprovedArtifactsFromMessage(
+      opts.reasoningMemory ||
+        (opts.reasoningState && opts.reasoningState.reasoningMemory) ||
+        {},
+      userMessage
+    );
+    if (
+      (inferredMemory.approvedArtifacts || []).includes(
+        ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW
+      ) ||
+      (inferredMemory.approvedArtifacts || []).includes(
+        ARTIFACT_KINDS.PROSPECT_CRITERIA
+      )
+    ) {
+      slots.criteriaApproved = true;
+      slots.criteriaGenerated = true;
+    }
+    if (
+      (inferredMemory.approvedArtifacts || []).includes(
+        ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+      )
+    ) {
+      slots.buildProposalApproved = true;
+      slots.buildProposalGenerated = true;
+    }
+
+    // HARD GUARD — draft request + approved criteria + approved build proposal
+    // wins over revise-criteria / criteria-question fallbacks.
+    if (
+      shouldForceProspectListDraft(userMessage, inferredMemory, {
+        priorCriteriaPreview: replyOpts.priorCriteriaPreview,
+        priorBuildProposal: replyOpts.priorBuildProposal,
+      }) ||
+      (looksLikeProspectListDraftRequest(userMessage) &&
+        slots.criteriaApproved &&
+        (slots.buildProposalApproved || replyOpts.priorBuildProposal))
+    ) {
+      return produceProspectListDraftResult(
+        ctx,
+        syncedAnswers,
+        {
+          ...slots,
+          previewApproved: true,
+          criteriaGenerated: true,
+          criteriaApproved: true,
+          buildProposalGenerated: true,
+          buildProposalApproved: true,
+          draftRequested: true,
+        },
+        replyOpts,
+        'Generating the first reviewable prospect list draft — review-only. No outreach, sends, CRM writes, or account changes.'
+      );
+    }
+
     // Never re-ask criteria once approved unless operator explicitly revises criteria.
+    // "reviewable prospect list draft" is NOT a revise-criteria request.
     if (
       slots.criteriaApproved &&
       looksLikeReviseCriteriaRequest(userMessage)

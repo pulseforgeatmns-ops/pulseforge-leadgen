@@ -71,6 +71,7 @@ const {
   markProspectCriteriaApproved,
   resolveNextArtifact,
   resolveCampaignArtifactAction,
+  inferApprovedArtifactsFromMessage,
   checkArtifactReadiness,
   synthesizeBusinessLanguage,
   reasoningAck,
@@ -7029,11 +7030,11 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     (session.interview_state &&
       session.interview_state.firstCampaignPlanPreview) ||
     null;
-  const priorCriteriaPreview =
+  let priorCriteriaPreview =
     (session.interview_state &&
       session.interview_state.prospectListCriteriaPreview) ||
     null;
-  const priorBuildProposal =
+  let priorBuildProposal =
     (session.interview_state &&
       session.interview_state.prospectListBuildProposal) ||
     null;
@@ -7045,6 +7046,67 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
 
   // SPEC-090/091 — classify intent before workflow handling.
   let reasoningMemory = ensureReasoningMemory(session.interview_state || {});
+  // Honor approvals declared in the operator message (e.g. pasted current state).
+  reasoningMemory = inferApprovedArtifactsFromMessage(reasoningMemory, text);
+  if (
+    priorCriteriaPreview &&
+    ((reasoningMemory.approvedArtifacts || []).includes(
+      ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW
+    ) ||
+      (reasoningMemory.approvedArtifacts || []).includes(
+        ARTIFACT_KINDS.PROSPECT_CRITERIA
+      ))
+  ) {
+    priorCriteriaPreview = {
+      ...priorCriteriaPreview,
+      status: 'approved',
+      approvedAt:
+        priorCriteriaPreview.approvedAt || new Date().toISOString(),
+    };
+  }
+  if (
+    priorBuildProposal &&
+    (reasoningMemory.approvedArtifacts || []).includes(
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    )
+  ) {
+    priorBuildProposal = {
+      ...priorBuildProposal,
+      status: 'approved',
+      approvedAt: priorBuildProposal.approvedAt || new Date().toISOString(),
+    };
+  }
+  // If operator declares approvals but artifacts are missing from session,
+  // synthesize minimal approved shells so progression can continue.
+  if (
+    !priorCriteriaPreview &&
+    ((reasoningMemory.approvedArtifacts || []).includes(
+      ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW
+    ) ||
+      (reasoningMemory.approvedArtifacts || []).includes(
+        ARTIFACT_KINDS.PROSPECT_CRITERIA
+      ))
+  ) {
+    priorCriteriaPreview = {
+      kind: ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW,
+      title: 'Prospect List Criteria Preview',
+      status: 'approved',
+      approvedAt: new Date().toISOString(),
+    };
+  }
+  if (
+    !priorBuildProposal &&
+    (reasoningMemory.approvedArtifacts || []).includes(
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    )
+  ) {
+    priorBuildProposal = {
+      kind: ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+      title: 'Prospect List Build Proposal',
+      status: 'approved',
+      approvedAt: new Date().toISOString(),
+    };
+  }
   const messageClass = classifyReasoningMessage(text);
   reasoningMemory = markClassification(reasoningMemory, messageClass);
   const artifactAction = resolveCampaignArtifactAction({

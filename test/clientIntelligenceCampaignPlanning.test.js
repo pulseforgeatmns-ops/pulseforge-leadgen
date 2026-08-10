@@ -1772,4 +1772,98 @@ describe('Reviewable prospect list draft progression', () => {
     assert.notEqual(draft.intent, 'preview_approved');
     assert.notEqual(draft.campaignPlanning.currentAsk, 'prospectListCriteria');
   });
+
+  it('exact confusion prompt advances to draft, never revise-criteria fallback', async () => {
+    const store = createMemoryStore();
+    await reachBuildProposal(store);
+    await postCampaignPlanningMessage('int-campaign-1', 'Approved', { store });
+
+    const confusion =
+      'We already completed validation metrics and approved the Prospect List Build Proposal.\n\n' +
+      'Current state:\n' +
+      '- Prospect List Criteria Preview approved\n' +
+      '- Prospect List Build Proposal approved\n' +
+      '- Next step is a reviewable prospect list draft\n\n' +
+      'Now generate the first reviewable prospect list batch...\n\n' +
+      'This is a reviewable list draft only.\n' +
+      'No outreach copy.\n' +
+      'No sends.\n' +
+      'No CRM writes.\n' +
+      'No account changes.\n' +
+      'No DNS / GBP / social / tracking changes.';
+
+    const draft = await postCampaignPlanningMessage(
+      'int-campaign-1',
+      confusion,
+      { store }
+    );
+
+    assert.doesNotMatch(draft.message, /revise the prospect-list criteria/i);
+    assert.doesNotMatch(
+      draft.message,
+      /define what should qualify or disqualify/i
+    );
+    assert.doesNotMatch(draft.message, /^Prospect List Criteria Preview$/m);
+    assert.notEqual(draft.intent, 'revise_criteria');
+    assert.notEqual(draft.campaignPlanning.currentAsk, 'prospectListCriteria');
+    assert.ok(
+      draft.intent === 'produce_prospect_list_draft' ||
+        draft.campaignPlanning.step === 'prospect_list_draft_requested' ||
+        draft.campaignPlanning.step === 'prospect_list_draft_generated'
+    );
+    assert.equal(
+      draft.prospectListDraft && draft.prospectListDraft.kind,
+      'reviewable_prospect_list_draft'
+    );
+    assert.match(draft.message, /Reviewable Prospect List Draft/i);
+  });
+
+  it('unit: confusion prompt with declared state forces draft even if slots stale', () => {
+    const {
+      buildCampaignPlanningReply,
+    } = require('../services/clientIntelligenceCampaignPlanning');
+    const confusion =
+      'We already completed validation metrics and approved the Prospect List Build Proposal.\n\n' +
+      'Current state:\n' +
+      '- Prospect List Criteria Preview approved\n' +
+      '- Prospect List Build Proposal approved\n' +
+      '- Next step is a reviewable prospect list draft\n\n' +
+      'Now generate the first reviewable prospect list batch...';
+    const reply = buildCampaignPlanningReply(
+      confusion,
+      {
+        step: 'prospect_list_build_proposal',
+        slots: {
+          previewGenerated: true,
+          previewApproved: true,
+          criteriaGenerated: true,
+          criteriaApproved: true,
+          inclusionCriteria: ['local managers'],
+          exclusionCriteria: ['national firms'],
+          buildProposalGenerated: true,
+          buildProposalApproved: true,
+        },
+        prospectListCriteriaPreview: {
+          kind: 'prospect_list_criteria_preview',
+          status: 'approved',
+        },
+        prospectListBuildProposal: {
+          kind: 'prospect_list_build_proposal',
+          status: 'approved',
+        },
+      },
+      {
+        businessName: 'Anchor Cleaning',
+        primarySegment: 'property_managers',
+        targetMarket: 'Greater Manchester',
+      }
+    );
+    assert.doesNotMatch(reply.message, /revise the prospect-list criteria/i);
+    assert.doesNotMatch(
+      reply.message,
+      /define what should qualify or disqualify/i
+    );
+    assert.equal(reply.intent, 'produce_prospect_list_draft');
+    assert.ok(reply.prospectListDraft);
+  });
 });
