@@ -45,6 +45,7 @@ const ARTIFACT_KINDS = Object.freeze({
  */
 const PROSPECT_ACQUISITION_INTENTS = Object.freeze({
   CREATE_SCOUT_HANDOFF_BRIEF: 'create_scout_handoff_brief',
+  HAND_BRIEF_TO_SCOUT: 'hand_brief_to_scout',
   PERFORM_LIVE_SOURCING: 'perform_live_sourcing',
 });
 
@@ -196,13 +197,63 @@ function looksLikeNextPlanningRequest(text) {
 }
 
 /**
+ * Operator asks to approve + queue the existing Scout Handoff Brief.
+ * Distinct from creating the brief and from Max live-sourcing.
+ */
+function looksLikeHandBriefToScoutRequest(text) {
+  const s = String(text || '');
+  if (!s.trim()) return false;
+  if (/\bhand\s+this\s+brief\s+to\s+scout\b/i.test(s)) return true;
+  if (
+    /\bhand\s+(?:the\s+)?(?:scout\s+)?(?:handoff\s+)?brief\s+to\s+scout\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(?:send|pass|queue|give|deliver)\s+(?:this\s+|the\s+)?(?:scout\s+)?(?:handoff\s+)?brief\s+to\s+scout\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\bapprove\s+(?:and\s+)?(?:queue|hand\s+off)\s+(?:(?:this|the)\s+)?(?:scout\s+)?(?:handoff\s+)?brief\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\bqueue\s+(?:this\s+|the\s+)?scout\s+handoff\b/i.test(s) ||
+    /\bhand\s+off\s+(?:this\s+|the\s+)?(?:brief\s+)?to\s+scout\b/i.test(s)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Max should create a Scout Handoff Brief (planning artifact), not source
  * prospects itself. Mentions of "public sources" describe Scout's job.
+ * Never matches "Hand this brief to Scout" (executable handoff).
  */
 function looksLikeScoutHandoffBriefRequest(text) {
   const s = String(text || '');
   if (!s.trim()) return false;
-  if (/\bscout\s+handoff\s+brief\b/i.test(s)) return true;
+  // Executable handoff is a different intent.
+  if (looksLikeHandBriefToScoutRequest(s)) return false;
+  if (
+    /\b(?:create|generate|produce|draft|write|prepare|build)\b[\s\S]{0,80}\b(?:a\s+)?scout\s+handoff\s+brief\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/\bscout\s+handoff\s+brief\b/i.test(s) && !/\bhand\b/i.test(s)) {
+    return true;
+  }
   if (
     /\b(?:create|generate|produce|draft|write|prepare|build)\b[\s\S]{0,80}\b(?:a\s+)?scout\s+handoff\b/i.test(
       s
@@ -224,6 +275,7 @@ function looksLikeScoutHandoffBriefRequest(text) {
 function looksLikeProspectListDraftRequest(text) {
   const s = String(text || '');
   // Handoff brief / live sourcing are never reviewable-placeholder drafts.
+  if (looksLikeHandBriefToScoutRequest(s)) return false;
   if (looksLikeScoutHandoffBriefRequest(s)) return false;
   if (looksLikeLiveSourcingApproval(s)) return false;
   if (/\breviewable\s+prospect\s+list\s+batch\b/i.test(s)) return true;
@@ -260,6 +312,7 @@ function looksLikeLiveSourcingApproval(text) {
   const s = String(text || '');
   if (!s.trim()) return false;
   // Planning handoff for Scout is never Max live-sourcing.
+  if (looksLikeHandBriefToScoutRequest(s)) return false;
   if (looksLikeScoutHandoffBriefRequest(s)) return false;
 
   const hasApproval = hasLiveSourcingApprovalSignal(s);
@@ -290,12 +343,15 @@ function looksLikeLiveSourcingApproval(text) {
 }
 
 /**
- * Classify whether the operator wants a Scout handoff artifact or Max to
- * perform live sourcing directly.
- * @returns {'create_scout_handoff_brief'|'perform_live_sourcing'|null}
+ * Classify whether the operator wants a Scout handoff artifact, to hand that
+ * brief to Scout, or Max to perform live sourcing directly.
+ * @returns {'hand_brief_to_scout'|'create_scout_handoff_brief'|'perform_live_sourcing'|null}
  */
 function classifyProspectAcquisitionIntent(text) {
   const s = String(text || '');
+  if (looksLikeHandBriefToScoutRequest(s)) {
+    return PROSPECT_ACQUISITION_INTENTS.HAND_BRIEF_TO_SCOUT;
+  }
   if (looksLikeScoutHandoffBriefRequest(s)) {
     return PROSPECT_ACQUISITION_INTENTS.CREATE_SCOUT_HANDOFF_BRIEF;
   }
@@ -929,7 +985,7 @@ function resolveNextArtifact(memory, requestedKind, opts = {}) {
  * Campaign-loop artifact progression from session context + classified intent.
  *
  * @returns {{
- *   action: 'emit_criteria'|'emit_build_proposal'|'emit_prospect_list_draft'|'emit_live_sourcing'|'emit_scout_handoff_brief'|'ack_approval'|'ack_build_approval'|'replay_criteria'|'hold',
+ *   action: 'emit_criteria'|'emit_build_proposal'|'emit_prospect_list_draft'|'emit_live_sourcing'|'emit_scout_handoff_brief'|'hand_brief_to_scout'|'ack_approval'|'ack_build_approval'|'replay_criteria'|'hold',
  *   approveKind: string|null,
  *   emitKind: string|null,
  *   memory: object,
@@ -959,6 +1015,38 @@ function resolveCampaignArtifactAction(opts = {}) {
 
   const acquisitionIntent = classifyProspectAcquisitionIntent(text);
 
+  // HARD GUARD: Hand brief to Scout — approve + queue work request (not Max live sourcing).
+  if (
+    acquisitionIntent === PROSPECT_ACQUISITION_INTENTS.HAND_BRIEF_TO_SCOUT
+  ) {
+    memory = markProspectCriteriaApproved(memory);
+    if (
+      priorBuild ||
+      approvedArtifactsInclude(memory, ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL)
+    ) {
+      memory = markArtifactApproved(
+        memory,
+        ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+      );
+    }
+    memory = markArtifactGenerated(
+      memory,
+      ARTIFACT_KINDS.SCOUT_HANDOFF_BRIEF,
+      'approved'
+    );
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.SCOUT_HANDOFF_BRIEF;
+    return {
+      action: 'hand_brief_to_scout',
+      approveKind: ARTIFACT_KINDS.SCOUT_HANDOFF_BRIEF,
+      emitKind: ARTIFACT_KINDS.SCOUT_HANDOFF_BRIEF,
+      memory,
+      messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
+      note:
+        'Approving the Scout Handoff Brief and queuing a Scout work request. Max does not pretend Scout ran unless sourcing execution is wired.',
+      planningState: 'scout_handoff_queued',
+    };
+  }
+
   // HARD GUARD: Scout Handoff Brief is a planning artifact — never live sourcing.
   if (
     acquisitionIntent ===
@@ -982,7 +1070,7 @@ function resolveCampaignArtifactAction(opts = {}) {
       memory,
       messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
       note:
-        'Creating the Scout Handoff Brief from approved campaign/list criteria — planning only. Scout performs sourcing.',
+        'Creating the Scout Handoff Brief from approved campaign/list criteria — planning only. Say “Hand this brief to Scout” to approve and queue Scout.',
       planningState: 'scout_handoff_brief',
     };
   }
@@ -1635,6 +1723,7 @@ module.exports = {
   looksLikeNextPlanningRequest,
   looksLikeProspectListDraftRequest,
   looksLikeScoutHandoffBriefRequest,
+  looksLikeHandBriefToScoutRequest,
   looksLikeLiveSourcingApproval,
   classifyProspectAcquisitionIntent,
   looksLikeReviseCriteriaRequest,
