@@ -5,6 +5,7 @@ const pool = require('../db');
 const { normalizeClientId } = require('../utils/clientContext');
 const { runScoutExpansionCron } = require('../scoutExpansion');
 const { createMaxDecayCronHandler } = require('../utils/maxDecayCron');
+const { diagnoseScoutPlaces } = require('../services/scoutPlacesDiagnostic');
 
 const anthropic = new Anthropic();
 
@@ -324,10 +325,62 @@ Respond with valid JSON only:
   }
 }
 
+async function handleScoutPlacesDiagnostic(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const compareRaw =
+      req.query.compare_places_new ??
+      req.query.comparePlacesNew ??
+      req.body?.compare_places_new ??
+      req.body?.comparePlacesNew;
+    let comparePlacesNew = true;
+    if (compareRaw != null && compareRaw !== '') {
+      const s = String(compareRaw).trim().toLowerCase();
+      if (['0', 'false', 'no', 'off'].includes(s)) comparePlacesNew = false;
+      if (['1', 'true', 'yes', 'on'].includes(s)) comparePlacesNew = true;
+    }
+
+    const report = await diagnoseScoutPlaces({
+      comparePlacesNew,
+      query:
+        req.query.query || req.body?.query
+          ? String(req.query.query || req.body.query)
+          : undefined,
+    });
+
+    res.set('Cache-Control', 'no-store');
+    return res.status(report.ok ? 200 : 422).json({
+      ...report,
+      reviewOnly: true,
+      crmWritesMade: false,
+      outreachCopyGenerated: false,
+      accountChangesMade: false,
+      placeholdersCreated: false,
+      fullKeyLogged: false,
+    });
+  } catch (err) {
+    console.error('[cron] scout-places-diagnostic error:', err.message);
+    return res.status(500).json({
+      ok: false,
+      error: err.message,
+      crmWritesMade: false,
+      outreachCopyGenerated: false,
+      placeholdersCreated: false,
+      fullKeyLogged: false,
+    });
+  }
+}
+
 router.post('/cron/scoutExpansion', handleScoutExpansionCron);
 router.get('/cron/scoutExpansion', handleScoutExpansionCron);
 router.post('/cron/pulse-health', handlePulseHealthCron);
 router.get('/cron/pulse-health', handlePulseHealthCron);
+router.post('/cron/scout-places-diagnostic', handleScoutPlacesDiagnostic);
+router.get('/cron/scout-places-diagnostic', handleScoutPlacesDiagnostic);
 router.post('/internal/cron/max-decay', createMaxDecayCronHandler());
 
 router.post('/cron/:agent', async (req, res) => {

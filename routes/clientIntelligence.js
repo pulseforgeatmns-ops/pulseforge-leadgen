@@ -25,6 +25,7 @@
  * GET  /api/v1/scout/work-requests/:id — read Scout work request (SPEC-077)
  * POST /api/v1/scout/work-requests/:id/execute — run public-source sourcing (SPEC-077)
  * GET  /api/v1/scout/handoffs/:handoffId — read by handoffId (SPEC-077)
+ * GET  /api/v1/scout/places-diagnostic — safe Places connectivity probe (Scout path)
  * GET  /api/v1/clients/:id/blueprint
  * GET  /api/v1/client-intel/sessions
  * GET  /api/v1/client-intel/sessions/:id/resume
@@ -64,6 +65,9 @@ const {
 const {
   defaultScoutWorkRequestStore,
 } = require('../services/scoutWorkRequestStore');
+const {
+  diagnoseScoutPlaces,
+} = require('../services/scoutPlacesDiagnostic');
 
 const requireOperator = [requireAuth, requireRole('admin', 'manager', 'client')];
 
@@ -363,6 +367,39 @@ router.get('/api/v1/clients/:id/blueprint', requireOperator, async (req, res) =>
     return sendError(res, err);
   }
 });
+
+/**
+ * Safe Scout Places diagnostic — same legacy Text Search path as sourcing.
+ * No CRM writes, outreach, placeholders, or full key logging.
+ */
+router.get(
+  '/api/v1/scout/places-diagnostic',
+  requireOperator,
+  async (req, res) => {
+    try {
+      const comparePlacesNew = parseBool(
+        req.query.compare_places_new ?? req.query.comparePlacesNew,
+        true
+      );
+      const report = await diagnoseScoutPlaces({
+        comparePlacesNew,
+        query: req.query.query ? String(req.query.query) : undefined,
+      });
+      noStore(res);
+      return res.status(report.ok ? 200 : 422).json({
+        ...report,
+        reviewOnly: true,
+        crmWritesMade: false,
+        outreachCopyGenerated: false,
+        accountChangesMade: false,
+        placeholdersCreated: false,
+        fullKeyLogged: false,
+      });
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
 
 /**
  * SPEC-077 — read a Scout work request / handoff record (review-only).

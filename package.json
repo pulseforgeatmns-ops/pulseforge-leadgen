@@ -52,6 +52,7 @@
     "client:intel:interview": "node scripts/clientIntelInterview.js",
     "prospect:brief": "node scripts/prospectOperatingBrief.js",
     "operator:service-loop": "node scripts/serviceModeOperatorLoop.js",
+    "scout:places:diagnostic": "node scripts/diagnoseScoutPlaces.js",
     "gmail:token": "node getGmailToken.js",
     "intel:seed:libraries": "node scripts/seedIntelligenceLibraries.js",
     "test:anchor-phone-setter:postgres": "ANCHOR_PHONE_SETTER_TEST_POSTGRES=true node --test test/anchorPhoneSetterPostgres.test.js",

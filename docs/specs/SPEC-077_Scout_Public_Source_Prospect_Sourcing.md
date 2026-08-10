@@ -82,6 +82,20 @@ Operator reviews → approveScoutResults
 - `GET /api/v1/scout/handoffs/:handoffId`
 - `POST /api/v1/scout/work-requests/:id/execute`
 - `POST /api/v1/scout/work-requests/:id/approve-results`
+- `GET /api/v1/scout/places-diagnostic` — safe Places connectivity probe (operator auth)
+- `GET|POST /cron/scout-places-diagnostic?secret=CRON_SECRET` — same probe on Railway runtime
+
+## Places diagnostic
+
+When Scout fails with `google_places_status_REQUEST_DENIED`, run:
+
+```bash
+npm run scout:places:diagnostic -- --json
+# or against Railway:
+curl -sS "$APP_URL/cron/scout-places-diagnostic?secret=$CRON_SECRET"
+```
+
+Reports endpoint family (legacy Text Search), host/path only, HTTP status, Google status / error_message, key fingerprint (first4…last4), key presence, and Railway service/environment. Never logs the full key; never writes CRM/outreach/placeholders. Optionally compares Places API (New) to detect New-only keys.
 
 ## Acceptance
 
@@ -90,7 +104,8 @@ Operator reviews → approveScoutResults
 - [x] Failure is explicit and preserves the work request
 - [x] Operator must approve results before any downstream use
 - [x] No CRM writes, outreach copy, sends, or account changes
+- [x] Places diagnostic probes Scout's legacy Text Search path and reports status without logging the full key
 
 ## Tests
 
-- `node --test test/scoutPublicSourcing.test.js test/scoutHandoff.test.js`
+- `node --test test/scoutPublicSourcing.test.js test/scoutHandoff.test.js test/scoutPlacesDiagnostic.test.js`
