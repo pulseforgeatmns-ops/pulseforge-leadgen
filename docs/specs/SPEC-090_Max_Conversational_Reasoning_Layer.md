@@ -112,6 +112,18 @@ None. Forward-compatible JSONB fields only. Existing sessions without `reasoning
 
 ## Future Work
 
-- Shared classifier across Growth / Readiness / Campaign message loops
 - LLM-assisted sufficiency scoring
 - Adaptive question bank ordering driven by question debt
+
+## Related: Max Synthesis Layer (2026-08)
+
+Shared modules under `services/maxSynthesis/`:
+
+| Module | Role |
+|---|---|
+| `MessageIntentClassifier` | Shared intents (`direct_answer`, `approval`, `approval_plus_next_request`, `correction`, `add_on`, …) |
+| `ConversationMemoryUpdater` | Routes add-ons/corrections/approvals into the right memory section |
+| `BusinessFactNormalizer` | Phrase-safe canonical fields (`targetSegmentPhrase`, `marketBoundPhrase`, …) |
+| `ArtifactSynthesisContext` | Renderers consume normalized phrases only; raw answers stay on `evidence` |
+
+Growth Direction, Campaign Preview, Prospect Criteria, and Prospect List Build Proposal all attach `synthesisPhrases` from this path. Build Proposal approach copy embeds phrases — never raw prior artifact paragraphs.

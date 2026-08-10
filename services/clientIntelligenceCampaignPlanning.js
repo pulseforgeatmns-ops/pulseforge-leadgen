@@ -17,6 +17,13 @@ const {
   ARTIFACT_KINDS,
   resolveCampaignArtifactAction,
 } = require('./clientIntelligenceReasoning');
+const {
+  buildArtifactSynthesisContext,
+  shortBusinessName,
+  containsRawPromptFragment,
+  findRawPromptFragments,
+  asEmbeddablePhrase,
+} = require('./maxSynthesis');
 
 const ARTIFACT_KIND = 'first_campaign_plan_preview';
 const PREVIEW_TITLE = 'First Campaign Plan Preview';
@@ -1490,6 +1497,27 @@ function buildProspectListCriteriaPreview(context, slots, opts = {}) {
     s.reviewGate || (prior && prior.reviewGate) || null
   );
 
+  // Recompute phrases from the fields actually selected for this artifact so
+  // downstream Build Proposal / UI embeddings share one normalization path.
+  const finalSynthesis = buildArtifactSynthesisContext({
+    context: ctx,
+    normalizedFacts: opts.normalizedFacts || null,
+    priorArtifact: {
+      businessName: name,
+      campaignObjective,
+      targetSegment,
+      targetSubtype,
+      marketBound: market,
+      inclusionCriteria,
+      exclusionCriteria,
+      coreValidationQuestion:
+        (prior && prior.coreValidationQuestion) ||
+        objectivePart.coreValidationQuestion,
+    },
+    slots: s,
+    answers,
+  });
+
   return {
     kind: CRITERIA_ARTIFACT_KIND,
     title: CRITERIA_PREVIEW_TITLE,
@@ -1502,6 +1530,7 @@ function buildProspectListCriteriaPreview(context, slots, opts = {}) {
     exclusionCriteria,
     requiredProspectFields,
     reviewGate,
+    synthesisPhrases: { ...finalSynthesis.phrases },
     sectionTitles: { ...CRITERIA_SECTION_TITLES },
     planningOnly: true,
     prospectListGenerated: false,
@@ -1594,20 +1623,66 @@ function markCriteriaPreviewApproved(preview, slots = {}) {
 /**
  * Planning-only proposal for HOW we would build the first prospect list.
  * Does not generate a list, outreach, sends, or account changes.
+ *
+ * Synthesis uses Max Synthesis Layer phrases only — never pastes raw prior
+ * artifact paragraphs into wrapper sentences.
  */
 function buildProspectListBuildProposal(context, slots, opts = {}) {
   const ctx = context || {};
   const s = slots || {};
-  const name = shortName(ctx.businessName || 'the business');
   const answers = opts.answers || syncAnswersFromSlots({}, s);
   const criteria = opts.priorCriteriaPreview || null;
-  const segment =
-    (criteria && criteria.targetSegment) ||
-    humanizeSegment(ctx.primarySegment || 'property managers');
-  const market =
-    (criteria && criteria.marketBound) ||
-    defaultMarketBound(ctx) ||
-    'the approved Blueprint market';
+
+  const synthesis = buildArtifactSynthesisContext({
+    context: ctx,
+    normalizedFacts: opts.normalizedFacts || null,
+    priorCriteriaPreview: criteria,
+    priorCampaignPreview: opts.priorCampaignPreview || null,
+    slots: s,
+    answers,
+  });
+  const { phrases, facts } = synthesis;
+  const name = shortBusinessName(
+    facts.businessName || ctx.businessName || 'the business'
+  );
+
+  const segmentPhrase = phrases.targetSegmentPhrase;
+  const subtypePhrase = phrases.targetSubtypePhrase;
+  const marketPhrase = phrases.marketBoundPhrase;
+
+  // Compact noun for "15–25 property managers in …"
+  const segmentNoun = /property managers?/i.test(segmentPhrase)
+    ? 'property managers'
+    : asEmbeddablePhrase(humanizeSegment(ctx.primarySegment || segmentPhrase)) ||
+      'accounts';
+
+  // Town list without the ", with Greater Manchester kept in scope" tail.
+  const marketTownsOnly = String(marketPhrase || '')
+    .replace(/,?\s*with\s+.+?\s+kept in scope\.?$/i, '')
+    .trim();
+
+  // Subtype → "firms that manage offices…" (avoid duplicating full subtype sentence).
+  let manageClause = '';
+  if (subtypePhrase) {
+    const overs = subtypePhrase.match(
+      /overseeing\s+(.+?)(?:\s+that likely need.*)?$/i
+    );
+    if (overs && overs[1]) {
+      manageClause = `that manage ${asEmbeddablePhrase(overs[1])}`;
+    }
+  }
+
+  const focusSegment = /small to mid-sized/i.test(segmentPhrase)
+    ? 'small to mid-sized local firms'
+    : segmentPhrase;
+
+  const approachSummary = [
+    `For ${name}'s first test, I would build a small, reviewable batch of 15–25 ${segmentNoun} in ${marketTownsOnly || marketPhrase}.`,
+    manageClause
+      ? `The list should focus on ${focusSegment} ${manageClause}.`
+      : `The list should focus on ${focusSegment}.`,
+  ].join(' ');
+
   const inclusion =
     (criteria && criteria.inclusionCriteria) ||
     normalizeCriteriaList(s.inclusionCriteria) ||
@@ -1617,13 +1692,8 @@ function buildProspectListBuildProposal(context, slots, opts = {}) {
     normalizeCriteriaList(s.exclusionCriteria) ||
     defaultExclusionCriteria(ctx, answers);
 
-  const approachSummary =
-    `For ${name}'s first test, I would build a small, criteria-gated prospect list of ${segment} inside ${market}, ` +
-    `using the approved inclusion/exclusion rules as hard filters before any enrichment or outreach planning. ` +
-    `The goal is a reviewable first batch — not a large scraped dump.`;
-
   const sourcingStrategy = [
-    `Start from local business directories and market sources that match ${segment} in ${market}.`,
+    `Start from local business directories and market sources for ${segmentPhrase} across ${marketTownsOnly || marketPhrase}.`,
     'Prefer sources that expose decision-maker role signals (property / facility / office manager) over generic company dumps.',
     'De-duplicate by company name + market before enrichment so the first batch stays tight.',
   ];
@@ -1635,15 +1705,19 @@ function buildProspectListBuildProposal(context, slots, opts = {}) {
   ];
 
   const qualityGates = [
-    ...(inclusion || []).slice(0, 4).map((item) => `Include only when: ${item}`),
-    ...(exclusion || []).slice(0, 4).map((item) => `Exclude when: ${item}`),
+    ...(inclusion || [])
+      .slice(0, 4)
+      .map((item) => `Include only when: ${asEmbeddablePhrase(item) || item}`),
+    ...(exclusion || [])
+      .slice(0, 4)
+      .map((item) => `Exclude when: ${asEmbeddablePhrase(item) || item}`),
     'Drop national chains, bargain-only buyers, and out-of-market accounts before the batch is presented.',
   ].filter(Boolean);
 
   const firstBatchPlan = {
     size: '15–25 accounts for the first reviewable batch',
-    marketFocus: market,
-    segmentFocus: segment,
+    marketFocus: marketPhrase,
+    segmentFocus: segmentPhrase,
     successSignal:
       'Enough qualified contacts to test reply/walkthrough interest without over-building.',
   };
@@ -1662,7 +1736,7 @@ function buildProspectListBuildProposal(context, slots, opts = {}) {
     'Change DNS, GBP, social, tracking, or account settings',
   ];
 
-  return {
+  const proposal = {
     kind: BUILD_PROPOSAL_ARTIFACT_KIND,
     title: BUILD_PROPOSAL_TITLE,
     businessName: name,
@@ -1673,6 +1747,8 @@ function buildProspectListBuildProposal(context, slots, opts = {}) {
     firstBatchPlan,
     reviewCheckpoints,
     whatWeWillNotDo,
+    /** Phrase-safe fields from Max Synthesis Layer (for UI / downstream). */
+    synthesisPhrases: { ...phrases },
     sectionTitles: { ...BUILD_PROPOSAL_SECTION_TITLES },
     planningOnly: true,
     prospectListGenerated: false,
@@ -1688,6 +1764,21 @@ function buildProspectListBuildProposal(context, slots, opts = {}) {
     blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion || null,
     basedOnCriteriaStatus: (criteria && criteria.status) || 'approved',
   };
+
+  // Hard guard: never ship banned raw-prompt stitching.
+  const rendered = formatProspectListBuildProposalMessage(proposal);
+  const hits = findRawPromptFragments(rendered);
+  if (hits.length) {
+    // Re-normalize market/segment focus if somehow instruction leads leaked.
+    proposal.firstBatchPlan = {
+      ...proposal.firstBatchPlan,
+      marketFocus: phrases.marketBoundPhrase,
+      segmentFocus: phrases.targetSegmentPhrase,
+    };
+    proposal.approachSummary = approachSummary.replace(/\bStart with\b/gi, '').replace(/\bProve that\b/gi, '');
+  }
+
+  return proposal;
 }
 
 function formatProspectListBuildProposalMessage(proposal) {
@@ -2799,6 +2890,23 @@ function buildFirstCampaignPlanPreview(context, answers, opts = {}) {
   const risksCautions = defaultRisks(ctx, ans, proofPart);
   const name = shortName(ctx.businessName || 'the business');
 
+  const synthesis = buildArtifactSynthesisContext({
+    context: ctx,
+    normalizedFacts: opts.normalizedFacts || null,
+    priorArtifact: {
+      businessName: name,
+      campaignObjective: objectivePart.campaignObjective,
+      coreValidationQuestion: objectivePart.coreValidationQuestion,
+      targetSegment: segmentPart.targetSegment,
+      targetSubtype: segmentPart.targetSubtype,
+      marketBound,
+      proofAssetsAvailable: proofPart.proofAssetsAvailable,
+      validationMetricsPrimary: metricsPart.validationMetricsPrimary,
+      exclusionCriteria: segmentPart.exclusionCriteria,
+    },
+    answers: ans,
+  });
+
   return {
     kind: ARTIFACT_KIND,
     title: PREVIEW_TITLE,
@@ -2822,6 +2930,7 @@ function buildFirstCampaignPlanPreview(context, answers, opts = {}) {
     approvalCheckpointsBeforeLaunch:
       approvalPart.approvalCheckpointsBeforeLaunch,
     recommendedNextStep: resolveRecommendedNextStep(),
+    synthesisPhrases: { ...synthesis.phrases },
     // Compat aliases for older UI / callers
     objective: objectivePart.objective,
     hypothesis,
@@ -3629,4 +3738,8 @@ module.exports = {
   displayName,
   sanitizeTargetSegmentText,
   stripFirstPersonArtifactLanguage,
+  // Max Synthesis Layer re-exports for tests / callers
+  buildArtifactSynthesisContext,
+  containsRawPromptFragment,
+  findRawPromptFragments,
 };
