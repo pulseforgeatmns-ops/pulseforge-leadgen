@@ -6,6 +6,11 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Prospect List Build Proposal & artifact progression ([SPEC-091](docs/specs/SPEC-091_Prospect_List_Build_Proposal.md))
+  - `approval_plus_next_request` advances past approved Prospect List Criteria Preview
+  - “Approved. Before we build anything…” produces Prospect List Build Proposal (planning-only)
+  - Artifact replay guard: approved criteria are not regenerated unless explicitly re-requested
+  - Session memory: `lastArtifactType`, `lastArtifactStatus`, `approvedArtifacts`, `nextRecommendedArtifact`, `pendingUserRequest`
 - Max Conversational Reasoning Layer ([SPEC-090](docs/specs/SPEC-090_Max_Conversational_Reasoning_Layer.md))
   - Classifies each CIE interview turn (`direct_answer`, `correction`, `add_on`, `approval`, `clarification_request`, `insufficient_answer`, `off_topic`, `skip`) before question handling
   - Session `reasoningMemory`: accepted facts, pending corrections, open questions, confidence/evidence by section, question debt, artifact progression

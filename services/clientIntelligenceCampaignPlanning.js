@@ -13,6 +13,10 @@
  */
 
 const { cleanAvoidPhrase } = require('./clientIntelligenceGrowthDirection');
+const {
+  ARTIFACT_KINDS,
+  resolveCampaignArtifactAction,
+} = require('./clientIntelligenceReasoning');
 
 const ARTIFACT_KIND = 'first_campaign_plan_preview';
 const PREVIEW_TITLE = 'First Campaign Plan Preview';
@@ -23,6 +27,11 @@ const CRITERIA_ARTIFACT_KIND = 'prospect_list_criteria_preview';
 const CRITERIA_PREVIEW_TITLE = 'Prospect List Criteria Preview';
 const CRITERIA_PREVIEW_DISCLAIMER =
   'Criteria preview only. No prospect list has been built, and no outreach copy, sends, CRM writes, or account changes have been created or launched.';
+
+const BUILD_PROPOSAL_ARTIFACT_KIND = 'prospect_list_build_proposal';
+const BUILD_PROPOSAL_TITLE = 'Prospect List Build Proposal';
+const BUILD_PROPOSAL_DISCLAIMER =
+  'Build proposal only. No prospect list has been built, and no outreach copy, sends, CRM writes, or account changes have been created or launched.';
 
 const SECTION_TITLES = Object.freeze({
   campaignObjective: 'Campaign objective',
@@ -49,6 +58,17 @@ const CRITERIA_SECTION_TITLES = Object.freeze({
   recommendedNextStep: 'Recommended next step',
 });
 
+const BUILD_PROPOSAL_SECTION_TITLES = Object.freeze({
+  approachSummary: 'Approach summary',
+  sourcingStrategy: 'Sourcing strategy',
+  enrichmentPlan: 'Enrichment plan',
+  qualityGates: 'Quality gates',
+  firstBatchPlan: 'First batch plan',
+  reviewCheckpoints: 'Review checkpoints before build',
+  whatWeWillNotDo: 'What we will not do yet',
+  recommendedNextStep: 'Recommended next step',
+});
+
 /** Required planning slots persisted on campaignPlanning.slots */
 const SLOT_KEYS = Object.freeze([
   'campaignObjective',
@@ -63,6 +83,8 @@ const SLOT_KEYS = Object.freeze([
   'approvalCheckpoints',
   'previewGenerated',
   'previewApproved',
+  'criteriaApproved',
+  'criteriaGenerated',
 ]);
 
 /** Pre-preview ask order. targetSubtype is covered by the targetSegment prompt. */
@@ -637,12 +659,19 @@ function emptySlots() {
     approvalCheckpoints: null,
     previewGenerated: false,
     previewApproved: false,
+    criteriaGenerated: false,
+    criteriaApproved: false,
   };
 }
 
 function isSlotSatisfied(slots, key) {
   if (!slots) return false;
-  if (key === 'previewGenerated' || key === 'previewApproved') {
+  if (
+    key === 'previewGenerated' ||
+    key === 'previewApproved' ||
+    key === 'criteriaGenerated' ||
+    key === 'criteriaApproved'
+  ) {
     return Boolean(slots[key]);
   }
   const v = slots[key];
@@ -1534,6 +1563,180 @@ function formatProspectListCriteriaPreviewMessage(preview) {
   lines.push('');
 
   lines.push(p.disclaimer || CRITERIA_PREVIEW_DISCLAIMER);
+  return lines.join('\n').trim();
+}
+
+function markCriteriaPreviewApproved(preview, slots = {}) {
+  const base =
+    preview && typeof preview === 'object' && Object.keys(preview).length
+      ? preview
+      : null;
+  const nextSlots = {
+    ...slots,
+    previewApproved: true,
+    previewGenerated: true,
+    criteriaGenerated: true,
+    criteriaApproved: true,
+  };
+  if (!base) {
+    return { criteriaPreview: null, slots: nextSlots };
+  }
+  return {
+    criteriaPreview: {
+      ...base,
+      status: 'approved',
+      approvedAt: base.approvedAt || new Date().toISOString(),
+    },
+    slots: nextSlots,
+  };
+}
+
+/**
+ * Planning-only proposal for HOW we would build the first prospect list.
+ * Does not generate a list, outreach, sends, or account changes.
+ */
+function buildProspectListBuildProposal(context, slots, opts = {}) {
+  const ctx = context || {};
+  const s = slots || {};
+  const name = shortName(ctx.businessName || 'the business');
+  const answers = opts.answers || syncAnswersFromSlots({}, s);
+  const criteria = opts.priorCriteriaPreview || null;
+  const segment =
+    (criteria && criteria.targetSegment) ||
+    humanizeSegment(ctx.primarySegment || 'property managers');
+  const market =
+    (criteria && criteria.marketBound) ||
+    defaultMarketBound(ctx) ||
+    'the approved Blueprint market';
+  const inclusion =
+    (criteria && criteria.inclusionCriteria) ||
+    normalizeCriteriaList(s.inclusionCriteria) ||
+    defaultInclusionCriteria(ctx, answers);
+  const exclusion =
+    (criteria && criteria.exclusionCriteria) ||
+    normalizeCriteriaList(s.exclusionCriteria) ||
+    defaultExclusionCriteria(ctx, answers);
+
+  const approachSummary =
+    `For ${name}'s first test, I would build a small, criteria-gated prospect list of ${segment} inside ${market}, ` +
+    `using the approved inclusion/exclusion rules as hard filters before any enrichment or outreach planning. ` +
+    `The goal is a reviewable first batch — not a large scraped dump.`;
+
+  const sourcingStrategy = [
+    `Start from local business directories and market sources that match ${segment} in ${market}.`,
+    'Prefer sources that expose decision-maker role signals (property / facility / office manager) over generic company dumps.',
+    'De-duplicate by company name + market before enrichment so the first batch stays tight.',
+  ];
+
+  const enrichmentPlan = [
+    'Enrich only records that already pass inclusion criteria.',
+    'Prioritize required prospect fields: decision-maker name/role, company, market town, phone and/or email when available, and a source note.',
+    'Leave thin records flagged for review rather than inventing contacts.',
+  ];
+
+  const qualityGates = [
+    ...(inclusion || []).slice(0, 4).map((item) => `Include only when: ${item}`),
+    ...(exclusion || []).slice(0, 4).map((item) => `Exclude when: ${item}`),
+    'Drop national chains, bargain-only buyers, and out-of-market accounts before the batch is presented.',
+  ].filter(Boolean);
+
+  const firstBatchPlan = {
+    size: '15–25 accounts for the first reviewable batch',
+    marketFocus: market,
+    segmentFocus: segment,
+    successSignal:
+      'Enough qualified contacts to test reply/walkthrough interest without over-building.',
+  };
+
+  const reviewCheckpoints = [
+    'Operator reviews the Prospect List Build Proposal before any list generation.',
+    'Approved criteria remain the filter set — no silent widening mid-build.',
+    'First batch is presented for review before enrichment expansion or outreach planning.',
+    'No outreach copy, sends, CRM writes, or account/DNS/GBP/social/tracking changes without explicit approval.',
+  ];
+
+  const whatWeWillNotDo = [
+    'Build or export a full prospect list yet',
+    'Write or send outreach copy',
+    'Write to CRM or activate Scout/Composer',
+    'Change DNS, GBP, social, tracking, or account settings',
+  ];
+
+  return {
+    kind: BUILD_PROPOSAL_ARTIFACT_KIND,
+    title: BUILD_PROPOSAL_TITLE,
+    businessName: name,
+    approachSummary,
+    sourcingStrategy,
+    enrichmentPlan,
+    qualityGates,
+    firstBatchPlan,
+    reviewCheckpoints,
+    whatWeWillNotDo,
+    sectionTitles: { ...BUILD_PROPOSAL_SECTION_TITLES },
+    planningOnly: true,
+    prospectListGenerated: false,
+    outreachCopyGenerated: false,
+    accountChangesMade: false,
+    campaignsGenerated: false,
+    status: 'draft',
+    disclaimer: BUILD_PROPOSAL_DISCLAIMER,
+    recommendedNextStep:
+      'Review and approve this build approach before any prospect list is generated. No outreach, sends, or account changes yet.',
+    generatedAt: new Date().toISOString(),
+    blueprintId: opts.blueprintId || ctx.blueprintId || null,
+    blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion || null,
+    basedOnCriteriaStatus: (criteria && criteria.status) || 'approved',
+  };
+}
+
+function formatProspectListBuildProposalMessage(proposal) {
+  const p = proposal || {};
+  const titles = p.sectionTitles || BUILD_PROPOSAL_SECTION_TITLES;
+  const lines = [p.title || BUILD_PROPOSAL_TITLE, ''];
+
+  lines.push(`1. ${titles.approachSummary}`);
+  lines.push(p.approachSummary || '—');
+  lines.push('');
+
+  lines.push(`2. ${titles.sourcingStrategy}`);
+  for (const item of p.sourcingStrategy || []) lines.push(`- ${item}`);
+  if (!(p.sourcingStrategy || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`3. ${titles.enrichmentPlan}`);
+  for (const item of p.enrichmentPlan || []) lines.push(`- ${item}`);
+  if (!(p.enrichmentPlan || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`4. ${titles.qualityGates}`);
+  for (const item of p.qualityGates || []) lines.push(`- ${item}`);
+  if (!(p.qualityGates || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`5. ${titles.firstBatchPlan}`);
+  const batch = p.firstBatchPlan || {};
+  lines.push(`- Size: ${batch.size || '—'}`);
+  lines.push(`- Market focus: ${batch.marketFocus || '—'}`);
+  lines.push(`- Segment focus: ${batch.segmentFocus || '—'}`);
+  lines.push(`- Success signal: ${batch.successSignal || '—'}`);
+  lines.push('');
+
+  lines.push(`6. ${titles.reviewCheckpoints}`);
+  for (const item of p.reviewCheckpoints || []) lines.push(`- ${item}`);
+  if (!(p.reviewCheckpoints || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`7. ${titles.whatWeWillNotDo}`);
+  for (const item of p.whatWeWillNotDo || []) lines.push(`- ${item}`);
+  if (!(p.whatWeWillNotDo || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`8. ${titles.recommendedNextStep}`);
+  lines.push(p.recommendedNextStep || '—');
+  lines.push('');
+
+  lines.push(p.disclaimer || BUILD_PROPOSAL_DISCLAIMER);
   return lines.join('\n').trim();
 }
 
@@ -2848,11 +3051,16 @@ function produceCriteriaPreviewResult(ctx, answers, slots, opts, leadIn) {
     blueprintId: opts.blueprintId || ctx.blueprintId,
     blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion,
     answers,
-    priorPreview,
+    priorPreview: opts.priorCriteriaPreview || null,
   });
   const approved = markCampaignPlanPreviewApproved(
     priorPreview,
-    { ...slots, previewApproved: true, previewGenerated: true },
+    {
+      ...slots,
+      previewApproved: true,
+      previewGenerated: true,
+      criteriaGenerated: true,
+    },
     opts
   );
   const lines = [];
@@ -2862,11 +3070,84 @@ function produceCriteriaPreviewResult(ctx, answers, slots, opts, leadIn) {
     message: lines.join('\n'),
     step: 'prospect_list_criteria_preview',
     answers,
-    slots: approved.slots,
+    slots: {
+      ...approved.slots,
+      criteriaGenerated: true,
+    },
     preview: approved.preview,
     criteriaPreview,
+    buildProposal: null,
     intent: 'produce_criteria_preview',
     previewApproved: true,
+  };
+}
+
+function produceBuildProposalResult(ctx, answers, slots, opts, leadIn) {
+  const priorPreview = opts.priorPreview || null;
+  const priorCriteria = opts.priorCriteriaPreview || null;
+  const approvedPreview = markCampaignPlanPreviewApproved(
+    priorPreview,
+    {
+      ...slots,
+      previewApproved: true,
+      previewGenerated: true,
+      criteriaGenerated: true,
+      criteriaApproved: true,
+    },
+    opts
+  );
+  const approvedCriteria = markCriteriaPreviewApproved(
+    priorCriteria ||
+      buildProspectListCriteriaPreview(ctx, approvedPreview.slots, {
+        blueprintId: opts.blueprintId || ctx.blueprintId,
+        blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion,
+        answers,
+      }),
+    approvedPreview.slots
+  );
+  const buildProposal = buildProspectListBuildProposal(
+    ctx,
+    approvedCriteria.slots,
+    {
+      blueprintId: opts.blueprintId || ctx.blueprintId,
+      blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion,
+      answers,
+      priorCriteriaPreview: approvedCriteria.criteriaPreview,
+    }
+  );
+  const lines = [];
+  if (leadIn) lines.push(leadIn, '');
+  lines.push(formatProspectListBuildProposalMessage(buildProposal));
+  return {
+    message: lines.join('\n'),
+    step: 'prospect_list_build_proposal',
+    answers,
+    slots: approvedCriteria.slots,
+    preview: approvedPreview.preview,
+    criteriaPreview: approvedCriteria.criteriaPreview,
+    buildProposal,
+    intent: 'produce_build_proposal',
+    previewApproved: true,
+    criteriaApproved: true,
+  };
+}
+
+function acknowledgeCriteriaHold(ctx, answers, slots, opts, note) {
+  const priorPreview = opts.priorPreview || null;
+  const priorCriteria = opts.priorCriteriaPreview || null;
+  return {
+    message:
+      note ||
+      'The Prospect List Criteria Preview is already available. Approve it, ask how I would approach building the first list, or request a revision.',
+    step: priorCriteria ? 'prospect_list_criteria_preview' : 'prospect_list_criteria',
+    answers,
+    slots,
+    preview: priorPreview,
+    criteriaPreview: priorCriteria,
+    buildProposal: opts.priorBuildProposal || null,
+    intent: 'hold_criteria',
+    previewApproved: Boolean(slots.previewApproved),
+    currentAsk: null,
   };
 }
 
@@ -2891,6 +3172,25 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
   }
   if (prior.previewApproved || priorSlots.previewApproved) {
     priorSlots.previewApproved = true;
+  }
+  if (prior.criteriaGenerated || priorSlots.criteriaGenerated) {
+    priorSlots.criteriaGenerated = true;
+  }
+  if (prior.criteriaApproved || priorSlots.criteriaApproved) {
+    priorSlots.criteriaApproved = true;
+  }
+  if (
+    prior.prospectListCriteriaPreview ||
+    prior.criteriaPreview
+  ) {
+    priorSlots.criteriaGenerated = true;
+    if (
+      (prior.prospectListCriteriaPreview &&
+        prior.prospectListCriteriaPreview.status === 'approved') ||
+      (prior.criteriaPreview && prior.criteriaPreview.status === 'approved')
+    ) {
+      priorSlots.criteriaApproved = true;
+    }
   }
   if (
     prior.status === 'preview_ready' ||
@@ -2943,6 +3243,8 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       if (
         key === 'previewGenerated' ||
         key === 'previewApproved' ||
+        key === 'criteriaGenerated' ||
+        key === 'criteriaApproved' ||
         isSlotSatisfied(slots, key)
       ) {
         continue;
@@ -2970,6 +3272,12 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
   );
   slots.previewApproved = Boolean(
     slots.previewApproved || priorSlots.previewApproved
+  );
+  slots.criteriaGenerated = Boolean(
+    slots.criteriaGenerated || priorSlots.criteriaGenerated
+  );
+  slots.criteriaApproved = Boolean(
+    slots.criteriaApproved || priorSlots.criteriaApproved
   );
 
   const syncedAnswers = syncAnswersFromSlots(answers, slots);
@@ -3001,16 +3309,105 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       }
     }
 
-    const replyOpts = { ...opts, priorPreview };
+    const replyOpts = {
+      ...opts,
+      priorPreview,
+      priorCriteriaPreview:
+        opts.priorCriteriaPreview ||
+        prior.prospectListCriteriaPreview ||
+        prior.criteriaPreview ||
+        null,
+      priorBuildProposal:
+        opts.priorBuildProposal ||
+        prior.prospectListBuildProposal ||
+        prior.buildProposal ||
+        null,
+    };
+
     if (criteriaSlotsReady(slots)) {
-      return produceCriteriaPreviewResult(
+      const priorCriteria = replyOpts.priorCriteriaPreview;
+      const criteriaAlreadyShown = Boolean(
+        priorCriteria ||
+          prior.step === 'prospect_list_criteria_preview' ||
+          slots.criteriaGenerated
+      );
+
+      if (!criteriaAlreadyShown) {
+        return produceCriteriaPreviewResult(
+          ctx,
+          syncedAnswers,
+          { ...slots, previewApproved: true, criteriaGenerated: true },
+          replyOpts,
+          'Thanks — I captured the prospect-list criteria. Here is the Prospect List Criteria Preview — still planning-only.'
+        );
+      }
+
+      // Criteria already shown — classify intent and advance (never silent replay).
+      const artifactAction =
+        opts.artifactAction ||
+        resolveCampaignArtifactAction({
+          userMessage,
+          messageClass: opts.messageClass || null,
+          state: opts.reasoningState || { reasoningMemory: opts.reasoningMemory },
+          priorCriteriaPreview: priorCriteria,
+          priorBuildProposal: replyOpts.priorBuildProposal,
+          step: prior.step || 'prospect_list_criteria_preview',
+        });
+
+      if (artifactAction.action === 'replay_criteria') {
+        return produceCriteriaPreviewResult(
+          ctx,
+          syncedAnswers,
+          { ...slots, previewApproved: true, criteriaGenerated: true },
+          replyOpts,
+          'Here is the Prospect List Criteria Preview again — still planning-only.'
+        );
+      }
+
+      if (artifactAction.action === 'emit_build_proposal') {
+        return produceBuildProposalResult(
+          ctx,
+          syncedAnswers,
+          {
+            ...slots,
+            previewApproved: true,
+            criteriaGenerated: true,
+            criteriaApproved: true,
+          },
+          replyOpts,
+          artifactAction.note ||
+            'Approved. Here is the Prospect List Build Proposal — still planning-only. No list will be built until you approve this approach.'
+        );
+      }
+
+      if (artifactAction.action === 'ack_approval' || artifactAction.action === 'hold') {
+        return acknowledgeCriteriaHold(
+          ctx,
+          syncedAnswers,
+          {
+            ...slots,
+            criteriaGenerated: true,
+            ...(artifactAction.approveKind === ARTIFACT_KINDS.PROSPECT_CRITERIA
+              ? { criteriaApproved: true }
+              : {}),
+          },
+          replyOpts,
+          artifactAction.note
+        );
+      }
+
+      // Default: treat as build-proposal advance once criteria exist.
+      return produceBuildProposalResult(
         ctx,
         syncedAnswers,
-        { ...slots, previewApproved: true },
+        {
+          ...slots,
+          previewApproved: true,
+          criteriaGenerated: true,
+          criteriaApproved: true,
+        },
         replyOpts,
-        slots.previewApproved
-          ? 'Approved. Here is the Prospect List Criteria Preview — still planning-only.'
-          : 'Thanks — I captured the prospect-list criteria. Here is the Prospect List Criteria Preview — still planning-only.'
+        'Here is the Prospect List Build Proposal — still planning-only.'
       );
     }
 
@@ -3176,8 +3573,12 @@ module.exports = {
   CRITERIA_ARTIFACT_KIND,
   CRITERIA_PREVIEW_TITLE,
   CRITERIA_PREVIEW_DISCLAIMER,
+  BUILD_PROPOSAL_ARTIFACT_KIND,
+  BUILD_PROPOSAL_TITLE,
+  BUILD_PROPOSAL_DISCLAIMER,
   SECTION_TITLES,
   CRITERIA_SECTION_TITLES,
+  BUILD_PROPOSAL_SECTION_TITLES,
   CONVERSATION_STEPS,
   QUESTION_BANK,
   SLOT_KEYS,
@@ -3209,6 +3610,9 @@ module.exports = {
   peelInlineIncludeExclude,
   buildProspectListCriteriaPreview,
   formatProspectListCriteriaPreviewMessage,
+  buildProspectListBuildProposal,
+  formatProspectListBuildProposalMessage,
+  markCriteriaPreviewApproved,
   emptySlots,
   seedSlotsFromContext,
   extractSlotsFromMessage,

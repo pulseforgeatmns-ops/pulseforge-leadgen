@@ -49,7 +49,7 @@ const {
   buildCampaignPlanningReply,
   seedSlotsFromContext,
 } = require('./clientIntelligenceCampaignPlanning');
-const {
+  const {
   MESSAGE_CLASSES,
   ARTIFACT_KINDS,
   emptyReasoningMemory,
@@ -67,7 +67,9 @@ const {
   setActiveProbe,
   markClassification,
   markArtifactGenerated,
+  markArtifactApproved,
   resolveNextArtifact,
+  resolveCampaignArtifactAction,
   checkArtifactReadiness,
   synthesizeBusinessLanguage,
   reasoningAck,
@@ -166,9 +168,11 @@ const MESSAGE_TYPES = Object.freeze({
   /** @deprecated Alias of ADD_ON — retained for callers/tests. */
   SUPPLEMENTAL_CONTEXT: MESSAGE_CLASSES.ADD_ON,
   APPROVAL: MESSAGE_CLASSES.APPROVAL,
+  APPROVAL_PLUS_NEXT_REQUEST: MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST,
   CLARIFICATION_REQUEST: MESSAGE_CLASSES.CLARIFICATION_REQUEST,
   /** @deprecated Alias of CLARIFICATION_REQUEST. */
   QUESTION_TO_MAX: MESSAGE_CLASSES.CLARIFICATION_REQUEST,
+  ARTIFACT_REQUEST: MESSAGE_CLASSES.ARTIFACT_REQUEST,
   INSUFFICIENT_ANSWER: MESSAGE_CLASSES.INSUFFICIENT_ANSWER,
   OFF_TOPIC: MESSAGE_CLASSES.OFF_TOPIC,
   SKIP: MESSAGE_CLASSES.SKIP,
@@ -6935,6 +6939,10 @@ async function startCampaignPlanningConversation(sessionId, opts = {}) {
         (session.interview_state &&
           session.interview_state.prospectListCriteriaPreview) ||
         null,
+      prospectListBuildProposal:
+        (session.interview_state &&
+          session.interview_state.prospectListBuildProposal) ||
+        null,
     },
   });
 
@@ -6958,6 +6966,10 @@ async function startCampaignPlanningConversation(sessionId, opts = {}) {
     prospectListCriteriaPreview:
       (session.interview_state &&
         session.interview_state.prospectListCriteriaPreview) ||
+      null,
+    prospectListBuildProposal:
+      (session.interview_state &&
+        session.interview_state.prospectListBuildProposal) ||
       null,
     resumed,
   };
@@ -7016,18 +7028,48 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     (session.interview_state &&
       session.interview_state.firstCampaignPlanPreview) ||
     null;
+  const priorCriteriaPreview =
+    (session.interview_state &&
+      session.interview_state.prospectListCriteriaPreview) ||
+    null;
+  const priorBuildProposal =
+    (session.interview_state &&
+      session.interview_state.prospectListBuildProposal) ||
+    null;
+
+  // SPEC-090/091 — classify intent before workflow handling.
+  let reasoningMemory = ensureReasoningMemory(session.interview_state || {});
+  const messageClass = classifyReasoningMessage(text);
+  reasoningMemory = markClassification(reasoningMemory, messageClass);
+  const artifactAction = resolveCampaignArtifactAction({
+    userMessage: text,
+    messageClass,
+    memory: reasoningMemory,
+    priorCriteriaPreview,
+    priorBuildProposal,
+    step: campaignPlanning.step,
+  });
+  reasoningMemory = artifactAction.memory || reasoningMemory;
 
   const reply = buildCampaignPlanningReply(
     text,
     {
       ...campaignPlanning,
       firstCampaignPlanPreview: priorPreview,
+      prospectListCriteriaPreview: priorCriteriaPreview,
+      prospectListBuildProposal: priorBuildProposal,
     },
     context,
     {
       blueprintId: blueprint && blueprint.id,
       blueprintVersion: blueprint && blueprint.version,
       priorPreview,
+      priorCriteriaPreview,
+      priorBuildProposal,
+      messageClass,
+      artifactAction,
+      reasoningMemory,
+      reasoningState: { reasoningMemory },
     }
   );
 
@@ -7039,6 +7081,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       at: new Date().toISOString(),
       step: campaignPlanning.step,
       currentAsk: campaignPlanning.currentAsk || null,
+      messageClass,
     },
     {
       speaker: 'assistant',
@@ -7070,7 +7113,29 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     };
   }
 
+  let nextCriteria =
+    reply.criteriaPreview ||
+    (reply.criteriaApproved && priorCriteriaPreview
+      ? { ...priorCriteriaPreview, status: 'approved' }
+      : priorCriteriaPreview);
+  if (
+    nextCriteria &&
+    (reply.criteriaApproved || (reply.slots && reply.slots.criteriaApproved)) &&
+    nextCriteria.status !== 'approved'
+  ) {
+    nextCriteria = {
+      ...nextCriteria,
+      status: 'approved',
+      approvedAt: nextCriteria.approvedAt || new Date().toISOString(),
+    };
+  }
+
+  const nextBuildProposal =
+    reply.buildProposal ||
+    (reply.intent === 'hold_criteria' ? priorBuildProposal : null);
+
   const nextStatus =
+    reply.buildProposal ||
     reply.criteriaPreview ||
     reply.preview ||
     reply.slots?.previewGenerated ||
@@ -7082,6 +7147,10 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     ...(previewApproved
       ? { previewApproved: true, previewGenerated: true }
       : {}),
+    ...(nextCriteria ? { criteriaGenerated: true } : {}),
+    ...(nextCriteria && nextCriteria.status === 'approved'
+      ? { criteriaApproved: true }
+      : {}),
   };
   const nextPlanning = {
     ...campaignPlanning,
@@ -7091,6 +7160,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     slots: nextSlots,
     currentAsk: reply.currentAsk || null,
     previewApproved,
+    criteriaApproved: Boolean(
+      nextCriteria && nextCriteria.status === 'approved'
+    ),
     context,
     turns,
   };
@@ -7100,16 +7172,38 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       ...session.interview_state,
       campaignPlanning: nextPlanning,
       ...(nextPreview ? { firstCampaignPlanPreview: nextPreview } : {}),
-      ...(reply.criteriaPreview
-        ? { prospectListCriteriaPreview: reply.criteriaPreview }
+      ...(nextCriteria ? { prospectListCriteriaPreview: nextCriteria } : {}),
+      ...(nextBuildProposal
+        ? { prospectListBuildProposal: nextBuildProposal }
         : {}),
       reasoningMemory: (() => {
-        let mem = ensureReasoningMemory(session.interview_state || {});
+        let mem = reasoningMemory;
         if (nextPreview) {
-          mem = markArtifactGenerated(mem, ARTIFACT_KINDS.CAMPAIGN_PREVIEW);
+          mem = markArtifactGenerated(
+            mem,
+            ARTIFACT_KINDS.CAMPAIGN_PREVIEW,
+            nextPreview.status || 'draft'
+          );
+          if (nextPreview.status === 'approved') {
+            mem = markArtifactApproved(mem, ARTIFACT_KINDS.CAMPAIGN_PREVIEW);
+          }
         }
-        if (reply.criteriaPreview) {
-          mem = markArtifactGenerated(mem, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+        if (nextCriteria) {
+          mem = markArtifactGenerated(
+            mem,
+            ARTIFACT_KINDS.PROSPECT_CRITERIA,
+            nextCriteria.status || 'draft'
+          );
+          if (nextCriteria.status === 'approved') {
+            mem = markArtifactApproved(mem, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+          }
+        }
+        if (nextBuildProposal) {
+          mem = markArtifactGenerated(
+            mem,
+            ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+            nextBuildProposal.status || 'draft'
+          );
         }
         return mem;
       })(),
@@ -7122,6 +7216,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     status: 'CAMPAIGN_PLANNING',
     message: reply.message,
     intent: reply.intent,
+    messageClass,
     blueprint: publicBlueprint(blueprint),
     campaignPlanning: nextPlanning,
     firstCampaignPlanPreview:
@@ -7130,9 +7225,14 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
         session.interview_state.firstCampaignPlanPreview) ||
       null,
     prospectListCriteriaPreview:
-      reply.criteriaPreview ||
+      nextCriteria ||
       (session.interview_state &&
         session.interview_state.prospectListCriteriaPreview) ||
+      null,
+    prospectListBuildProposal:
+      nextBuildProposal ||
+      (session.interview_state &&
+        session.interview_state.prospectListBuildProposal) ||
       null,
   };
 }
@@ -7233,13 +7333,16 @@ module.exports = {
   applyCorrectionToNormalizedFacts,
   sectionsFromNormalizedFacts,
   splitListItems,
-  // SPEC-090 reasoning layer
+  // SPEC-090/091 reasoning layer
   emptyReasoningMemory,
   ensureReasoningMemory,
   planReasoningTurn,
+  markArtifactGenerated,
+  markArtifactApproved,
+  resolveNextArtifact,
+  resolveCampaignArtifactAction,
   checkArtifactReadiness,
   synthesizeBusinessLanguage,
-  resolveNextArtifact,
   assessAnswerSufficiency,
   buildProbingFollowUp,
 };
