@@ -5,8 +5,20 @@ const pool = require('../db');
 const { normalizeClientId } = require('../utils/clientContext');
 const { runScoutExpansionCron } = require('../scoutExpansion');
 const { createMaxDecayCronHandler } = require('../utils/maxDecayCron');
+const { diagnoseScoutPlaces } = require('../services/scoutPlacesDiagnostic');
 
 const anthropic = new Anthropic();
+
+/** Agents handled by dedicated cron handlers (not CRON_MODULES run()). */
+const CRON_SPECIAL_HANDLERS = Object.freeze({
+  'scout-places-diagnostic': 'scoutPlacesDiagnostic',
+  scout_places_diagnostic: 'scoutPlacesDiagnostic',
+});
+
+function isScoutPlacesDiagnosticAgent(agent) {
+  const key = String(agent || '').trim();
+  return CRON_SPECIAL_HANDLERS[key] === 'scoutPlacesDiagnostic';
+}
 
 const CRON_MODULES = {
   scout:     '../leadgen',
@@ -324,14 +336,73 @@ Respond with valid JSON only:
   }
 }
 
+async function handleScoutPlacesDiagnostic(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const compareRaw =
+      req.query.compare_places_new ??
+      req.query.comparePlacesNew ??
+      req.body?.compare_places_new ??
+      req.body?.comparePlacesNew;
+    let comparePlacesNew = true;
+    if (compareRaw != null && compareRaw !== '') {
+      const s = String(compareRaw).trim().toLowerCase();
+      if (['0', 'false', 'no', 'off'].includes(s)) comparePlacesNew = false;
+      if (['1', 'true', 'yes', 'on'].includes(s)) comparePlacesNew = true;
+    }
+
+    const report = await diagnoseScoutPlaces({
+      comparePlacesNew,
+      query:
+        req.query.query || req.body?.query
+          ? String(req.query.query || req.body.query)
+          : undefined,
+    });
+
+    res.set('Cache-Control', 'no-store');
+    return res.status(report.ok ? 200 : 422).json({
+      ...report,
+      reviewOnly: true,
+      crmWritesMade: false,
+      outreachCopyGenerated: false,
+      accountChangesMade: false,
+      placeholdersCreated: false,
+      fullKeyLogged: false,
+    });
+  } catch (err) {
+    console.error('[cron] scout-places-diagnostic error:', err.message);
+    return res.status(500).json({
+      ok: false,
+      error: err.message,
+      crmWritesMade: false,
+      outreachCopyGenerated: false,
+      placeholdersCreated: false,
+      fullKeyLogged: false,
+    });
+  }
+}
+
 router.post('/cron/scoutExpansion', handleScoutExpansionCron);
 router.get('/cron/scoutExpansion', handleScoutExpansionCron);
 router.post('/cron/pulse-health', handlePulseHealthCron);
 router.get('/cron/pulse-health', handlePulseHealthCron);
+// Dedicated path (preferred). Also registered in /cron/:agent dispatcher below so
+// production never returns Unknown agent: scout-places-diagnostic.
+router.post('/cron/scout-places-diagnostic', handleScoutPlacesDiagnostic);
+router.get('/cron/scout-places-diagnostic', handleScoutPlacesDiagnostic);
+router.post('/cron/scout_places_diagnostic', handleScoutPlacesDiagnostic);
+router.get('/cron/scout_places_diagnostic', handleScoutPlacesDiagnostic);
 router.post('/internal/cron/max-decay', createMaxDecayCronHandler());
 
 router.post('/cron/:agent', async (req, res) => {
   const { agent } = req.params;
+  if (isScoutPlacesDiagnosticAgent(agent)) {
+    return handleScoutPlacesDiagnostic(req, res);
+  }
   const secret = req.body?.secret || req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -341,6 +412,9 @@ router.post('/cron/:agent', async (req, res) => {
 
 router.get('/cron/:agent', async (req, res) => {
   const { agent } = req.params;
+  if (isScoutPlacesDiagnosticAgent(agent)) {
+    return handleScoutPlacesDiagnostic(req, res);
+  }
   const secret = req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -349,3 +423,6 @@ router.get('/cron/:agent', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.handleScoutPlacesDiagnostic = handleScoutPlacesDiagnostic;
+module.exports.isScoutPlacesDiagnosticAgent = isScoutPlacesDiagnosticAgent;
+module.exports.CRON_SPECIAL_HANDLERS = CRON_SPECIAL_HANDLERS;

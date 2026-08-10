@@ -21,6 +21,46 @@ const {
 const TARGET_COUNT_MIN = 15;
 const TARGET_COUNT_MAX = 25;
 
+/**
+ * Scout public sourcing uses the legacy Places Text Search + Details endpoints
+ * (maps.googleapis.com) with `?key=` query auth — NOT Places API (New).
+ * Keep these constants/builders as the single source of truth for Scout + diagnostics.
+ */
+const SCOUT_PLACES_ENDPOINT_FAMILY = 'legacy_places_text_search_details';
+const SCOUT_PLACES_AUTH_STYLE = 'query_param_key';
+const SCOUT_PLACES_TEXTSEARCH_URL =
+  'https://maps.googleapis.com/maps/api/place/textsearch/json';
+const SCOUT_PLACES_DETAILS_URL =
+  'https://maps.googleapis.com/maps/api/place/details/json';
+const SCOUT_PLACES_DETAILS_FIELDS =
+  'name,formatted_address,formatted_phone_number,website,place_id,types,rating,business_status';
+
+function buildScoutPlacesTextSearchUrl({ query, apiKey }) {
+  const url = new URL(SCOUT_PLACES_TEXTSEARCH_URL);
+  url.searchParams.set('query', String(query || '').trim());
+  url.searchParams.set('key', String(apiKey || ''));
+  return url;
+}
+
+function buildScoutPlacesDetailsUrl({ placeId, apiKey }) {
+  const url = new URL(SCOUT_PLACES_DETAILS_URL);
+  url.searchParams.set('place_id', String(placeId || ''));
+  url.searchParams.set('fields', SCOUT_PLACES_DETAILS_FIELDS);
+  url.searchParams.set('key', String(apiKey || ''));
+  return url;
+}
+
+/** Host + pathname only — never include query/key. */
+function scoutPlacesUrlHostPath(urlLike) {
+  try {
+    const url =
+      urlLike instanceof URL ? urlLike : new URL(String(urlLike || ''));
+    return { host: url.host, path: url.pathname };
+  } catch {
+    return { host: null, path: null };
+  }
+}
+
 const DEFAULT_CONTACT_ROLE_BY_SEGMENT = Object.freeze({
   property_managers: 'Owner / property manager',
   property_manager: 'Owner / property manager',
@@ -367,11 +407,7 @@ function createScoutPlacesSearchProvider(deps = {}) {
       const q = String(query.query || query.industry || '').trim();
       if (!q) return [];
 
-      const url = new URL(
-        'https://maps.googleapis.com/maps/api/place/textsearch/json'
-      );
-      url.searchParams.set('query', q);
-      url.searchParams.set('key', apiKey);
+      const url = buildScoutPlacesTextSearchUrl({ query: q, apiKey });
 
       const res = await fetchImpl(url.toString());
       if (!res.ok) {
@@ -411,15 +447,7 @@ function createScoutPlacesSearchProvider(deps = {}) {
 
 async function fetchPlaceDetails(placeId, apiKey, fetchImpl) {
   if (!placeId) return null;
-  const url = new URL(
-    'https://maps.googleapis.com/maps/api/place/details/json'
-  );
-  url.searchParams.set('place_id', placeId);
-  url.searchParams.set(
-    'fields',
-    'name,formatted_address,formatted_phone_number,website,place_id,types,rating,business_status'
-  );
-  url.searchParams.set('key', apiKey);
+  const url = buildScoutPlacesDetailsUrl({ placeId, apiKey });
   const res = await fetchImpl(url.toString());
   if (!res.ok) return null;
   const data = await res.json();
@@ -596,6 +624,14 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
 module.exports = {
   TARGET_COUNT_MIN,
   TARGET_COUNT_MAX,
+  SCOUT_PLACES_ENDPOINT_FAMILY,
+  SCOUT_PLACES_AUTH_STYLE,
+  SCOUT_PLACES_TEXTSEARCH_URL,
+  SCOUT_PLACES_DETAILS_URL,
+  SCOUT_PLACES_DETAILS_FIELDS,
+  buildScoutPlacesTextSearchUrl,
+  buildScoutPlacesDetailsUrl,
+  scoutPlacesUrlHostPath,
   isScoutPublicSourcingAvailable,
   buildSearchQueries,
   mapPublicHitToScoutCandidate,
