@@ -68,6 +68,7 @@ const {
   markClassification,
   markArtifactGenerated,
   markArtifactApproved,
+  markProspectCriteriaApproved,
   resolveNextArtifact,
   resolveCampaignArtifactAction,
   checkArtifactReadiness,
@@ -7036,6 +7037,11 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     (session.interview_state &&
       session.interview_state.prospectListBuildProposal) ||
     null;
+  const priorProspectListDraft =
+    (session.interview_state &&
+      (session.interview_state.prospectListDraft ||
+        session.interview_state.reviewableProspectListDraft)) ||
+    null;
 
   // SPEC-090/091 — classify intent before workflow handling.
   let reasoningMemory = ensureReasoningMemory(session.interview_state || {});
@@ -7047,6 +7053,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     memory: reasoningMemory,
     priorCriteriaPreview,
     priorBuildProposal,
+    priorProspectListDraft,
     step: campaignPlanning.step,
   });
   reasoningMemory = artifactAction.memory || reasoningMemory;
@@ -7058,6 +7065,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       firstCampaignPlanPreview: priorPreview,
       prospectListCriteriaPreview: priorCriteriaPreview,
       prospectListBuildProposal: priorBuildProposal,
+      prospectListDraft: priorProspectListDraft,
     },
     context,
     {
@@ -7066,6 +7074,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       priorPreview,
       priorCriteriaPreview,
       priorBuildProposal,
+      priorProspectListDraft,
       messageClass,
       artifactAction,
       reasoningMemory,
@@ -7130,11 +7139,36 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     };
   }
 
-  const nextBuildProposal =
+  let nextBuildProposal =
     reply.buildProposal ||
-    (reply.intent === 'hold_criteria' ? priorBuildProposal : null);
+    (reply.intent === 'hold_criteria' ||
+    reply.intent === 'build_proposal_approved' ||
+    reply.intent === 'produce_prospect_list_draft'
+      ? priorBuildProposal
+      : null);
+  if (
+    nextBuildProposal &&
+    (reply.buildProposalApproved ||
+      (reply.slots && reply.slots.buildProposalApproved) ||
+      reply.intent === 'build_proposal_approved' ||
+      reply.intent === 'produce_prospect_list_draft') &&
+    nextBuildProposal.status !== 'approved'
+  ) {
+    nextBuildProposal = {
+      ...nextBuildProposal,
+      status: 'approved',
+      approvedAt: nextBuildProposal.approvedAt || new Date().toISOString(),
+    };
+  }
+
+  const nextProspectListDraft =
+    reply.prospectListDraft ||
+    (reply.intent === 'produce_prospect_list_draft'
+      ? priorProspectListDraft
+      : null);
 
   const nextStatus =
+    reply.prospectListDraft ||
     reply.buildProposal ||
     reply.criteriaPreview ||
     reply.preview ||
@@ -7151,6 +7185,13 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     ...(nextCriteria && nextCriteria.status === 'approved'
       ? { criteriaApproved: true }
       : {}),
+    ...(nextBuildProposal ? { buildProposalGenerated: true } : {}),
+    ...(nextBuildProposal && nextBuildProposal.status === 'approved'
+      ? { buildProposalApproved: true }
+      : {}),
+    ...(nextProspectListDraft
+      ? { draftRequested: true, draftGenerated: true }
+      : {}),
   };
   const nextPlanning = {
     ...campaignPlanning,
@@ -7163,6 +7204,10 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     criteriaApproved: Boolean(
       nextCriteria && nextCriteria.status === 'approved'
     ),
+    buildProposalApproved: Boolean(
+      nextBuildProposal && nextBuildProposal.status === 'approved'
+    ),
+    planningState: reply.planningState || reply.step || null,
     context,
     turns,
   };
@@ -7175,6 +7220,12 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       ...(nextCriteria ? { prospectListCriteriaPreview: nextCriteria } : {}),
       ...(nextBuildProposal
         ? { prospectListBuildProposal: nextBuildProposal }
+        : {}),
+      ...(nextProspectListDraft
+        ? {
+            prospectListDraft: nextProspectListDraft,
+            reviewableProspectListDraft: nextProspectListDraft,
+          }
         : {}),
       reasoningMemory: (() => {
         let mem = reasoningMemory;
@@ -7195,7 +7246,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
             nextCriteria.status || 'draft'
           );
           if (nextCriteria.status === 'approved') {
-            mem = markArtifactApproved(mem, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+            mem = markProspectCriteriaApproved(mem);
           }
         }
         if (nextBuildProposal) {
@@ -7203,6 +7254,19 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
             mem,
             ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
             nextBuildProposal.status || 'draft'
+          );
+          if (nextBuildProposal.status === 'approved') {
+            mem = markArtifactApproved(
+              mem,
+              ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+            );
+          }
+        }
+        if (nextProspectListDraft) {
+          mem = markArtifactGenerated(
+            mem,
+            ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT,
+            nextProspectListDraft.status || 'draft'
           );
         }
         return mem;
@@ -7233,6 +7297,16 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       nextBuildProposal ||
       (session.interview_state &&
         session.interview_state.prospectListBuildProposal) ||
+      null,
+    prospectListDraft:
+      nextProspectListDraft ||
+      (session.interview_state &&
+        session.interview_state.prospectListDraft) ||
+      null,
+    reviewableProspectListDraft:
+      nextProspectListDraft ||
+      (session.interview_state &&
+        session.interview_state.reviewableProspectListDraft) ||
       null,
   };
 }

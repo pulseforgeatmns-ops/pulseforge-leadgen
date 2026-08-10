@@ -24,6 +24,9 @@ const {
   planReasoningTurn,
   looksLikeVagueAnswer,
   looksLikeApprovalPlusNextRequest,
+  looksLikeProspectListDraftRequest,
+  shouldBlockCriteriaQuestionReplay,
+  isBannedCriteriaReplayQuestion,
 } = require('../services/clientIntelligenceReasoning');
 
 const {
@@ -394,5 +397,76 @@ describe('SPEC-091 artifact progression — approval + next request', () => {
     assert.equal(action.messageClass, MESSAGE_CLASSES.APPROVAL);
     assert.equal(action.action, 'emit_build_proposal');
     assert.notEqual(action.action, 'replay_criteria');
+  });
+});
+
+describe('Prospect list draft progression after build proposal approval', () => {
+  const DRAFT_REQ =
+    'Now generate the first reviewable prospect list batch. This is a reviewable list draft only. No outreach copy, sends, CRM writes, or account changes.';
+
+  it('classifies reviewable list draft requests', () => {
+    assert.equal(looksLikeProspectListDraftRequest(DRAFT_REQ), true);
+    assert.equal(
+      classifyReasoningMessage(DRAFT_REQ),
+      MESSAGE_CLASSES.ARTIFACT_REQUEST
+    );
+  });
+
+  it('routes draft request after approved build proposal to emit_prospect_list_draft', () => {
+    let mem = emptyReasoningMemory();
+    mem = markArtifactApproved(mem, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    mem = markArtifactApproved(
+      mem,
+      ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW
+    );
+    mem = markArtifactApproved(
+      mem,
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    );
+
+    const action = resolveCampaignArtifactAction({
+      userMessage: DRAFT_REQ,
+      memory: mem,
+      priorCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+      },
+      priorBuildProposal: {
+        kind: 'prospect_list_build_proposal',
+        status: 'approved',
+      },
+      step: 'prospect_list_build_proposal_approved',
+    });
+
+    assert.equal(action.action, 'emit_prospect_list_draft');
+    assert.equal(
+      action.emitKind,
+      ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT
+    );
+    assert.equal(action.planningState, 'prospect_list_draft_requested');
+    assert.equal(
+      shouldBlockCriteriaQuestionReplay(action.memory),
+      true
+    );
+  });
+
+  it('blocks criteria question replay when criteria + build proposal are approved', () => {
+    let mem = emptyReasoningMemory();
+    mem = markArtifactApproved(mem, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    mem = markArtifactApproved(
+      mem,
+      ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW
+    );
+    mem = markArtifactApproved(
+      mem,
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    );
+    assert.equal(shouldBlockCriteriaQuestionReplay(mem), true);
+    assert.equal(
+      isBannedCriteriaReplayQuestion(
+        'Before building a prospect list, define what should qualify or disqualify a property manager for this first test.'
+      ),
+      true
+    );
   });
 });

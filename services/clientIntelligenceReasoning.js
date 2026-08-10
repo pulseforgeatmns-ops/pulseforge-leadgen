@@ -30,7 +30,10 @@ const ARTIFACT_KINDS = Object.freeze({
   GROWTH_DIRECTION: 'growth_direction',
   CAMPAIGN_PREVIEW: 'campaign_preview',
   PROSPECT_CRITERIA: 'prospect_criteria',
+  /** Alias used in approvedArtifacts progression guards (SPEC-091+). */
+  PROSPECT_LIST_CRITERIA_PREVIEW: 'prospect_list_criteria_preview',
   PROSPECT_LIST_BUILD_PROPOSAL: 'prospect_list_build_proposal',
+  REVIEWABLE_PROSPECT_LIST_DRAFT: 'reviewable_prospect_list_draft',
 });
 
 const ARTIFACT_ORDER = Object.freeze([
@@ -39,7 +42,12 @@ const ARTIFACT_ORDER = Object.freeze([
   ARTIFACT_KINDS.CAMPAIGN_PREVIEW,
   ARTIFACT_KINDS.PROSPECT_CRITERIA,
   ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+  ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT,
 ]);
+
+/** Banned reopen of criteria after criteria + build proposal are approved. */
+const CRITERIA_REPLAY_QUESTION_RE =
+  /Before building a prospect list, define what should qualify or disqualify/i;
 
 const MIN_ARTIFACT_SECTION_CONFIDENCE = 0.45;
 const MIN_PROBE_WORD_COUNT = 4;
@@ -54,8 +62,12 @@ const APPROVAL_LEAD_RE =
 const NEXT_REQUEST_RE =
   /\b(?:before\s+we\s+build(?:\s+anything)?|how\s+(?:would|will|do|should)\s+you\s+approach|tell\s+me\s+how\s+you\s+would|what'?s\s+next|what\s+is\s+next|next\s+step|approach\s+building|build(?:ing)?\s+(?:the\s+)?(?:first\s+)?(?:prospect\s+)?list|how\s+to\s+build|propose\s+(?:the\s+)?(?:build|approach)|planning\s+(?:the\s+)?build)\b/i;
 
+/** Explicit ask to generate the first reviewable prospect list batch/draft. */
+const PROSPECT_LIST_DRAFT_REQUEST_RE =
+  /\b(?:generate|create|produce|build|start|begin|draft|prepare)\b[\s\S]{0,120}\b(?:first\s+)?reviewable\s+(?:prospect\s+)?list(?:\s+batch|\s+draft)?\b|\b(?:generate|create|produce|start|begin|draft|prepare)\b[\s\S]{0,80}\b(?:prospect\s+)?list\s+(?:batch|draft)\b|\bfirst\s+reviewable\s+(?:prospect\s+)?list\b|\breviewable\s+(?:prospect\s+)?list\s+(?:batch|draft)\b/i;
+
 const ARTIFACT_REQUEST_RE =
-  /\b(?:show|view|see|open|pull\s+up|regenerate|revise|replay)\s+(?:me\s+)?(?:the\s+)?(?:criteria|preview|blueprint|build\s+proposal|proposal)\b|\b(?:criteria\s+preview|build\s+proposal|campaign\s+preview)\s+again\b/i;
+  /\b(?:show|view|see|open|pull\s+up|regenerate|revise|replay)\s+(?:me\s+)?(?:the\s+)?(?:criteria|preview|blueprint|build\s+proposal|proposal|list\s+draft|prospect\s+list)\b|\b(?:criteria\s+preview|build\s+proposal|campaign\s+preview|list\s+draft)\s+again\b/i;
 
 const EXPLICIT_REPLAY_RE =
   /\b(?:show|view|see|open|pull\s+up|regenerate|revise|replay|again)\b/i;
@@ -169,6 +181,18 @@ function looksLikeNextPlanningRequest(text) {
   return NEXT_REQUEST_RE.test(String(text || ''));
 }
 
+function looksLikeProspectListDraftRequest(text) {
+  return PROSPECT_LIST_DRAFT_REQUEST_RE.test(String(text || ''));
+}
+
+function looksLikeReviseCriteriaRequest(text) {
+  const s = String(text || '');
+  return (
+    /\b(revise|change|update|edit|redo|rework)\b/i.test(s) &&
+    /\b(criteria|inclusion|exclusion|qualify|disqualify)\b/i.test(s)
+  );
+}
+
 /**
  * Approval plus an ask for the next planning step / build approach.
  * Example: "Approved. Before we build anything, tell me how you would approach…"
@@ -177,17 +201,45 @@ function looksLikeApprovalPlusNextRequest(text) {
   const s = String(text || '').trim();
   if (!s) return false;
   if (looksLikeApproval(s)) return false; // pure approval handled separately
-  return looksLikeApprovalLead(s) && looksLikeNextPlanningRequest(s);
+  return (
+    looksLikeApprovalLead(s) &&
+    (looksLikeNextPlanningRequest(s) || looksLikeProspectListDraftRequest(s))
+  );
 }
 
 function looksLikeArtifactRequest(text) {
   const s = String(text || '').trim();
   if (!s) return false;
+  if (looksLikeProspectListDraftRequest(s)) return true;
   if (ARTIFACT_REQUEST_RE.test(s)) return true;
-  if (looksLikeNextPlanningRequest(s) && /\b(list|build|approach|proposal|criteria|preview)\b/i.test(s)) {
+  if (looksLikeNextPlanningRequest(s) && /\b(list|build|approach|proposal|criteria|preview|draft|batch)\b/i.test(s)) {
     return true;
   }
   return false;
+}
+
+function approvedArtifactsInclude(memory, kind) {
+  const approved = (memory && memory.approvedArtifacts) || [];
+  return approved.includes(kind);
+}
+
+/**
+ * True when criteria + build proposal are both approved — criteria question
+ * must not be replayed unless the operator explicitly revises criteria.
+ */
+function shouldBlockCriteriaQuestionReplay(memory) {
+  const approved = (memory && memory.approvedArtifacts) || [];
+  const hasCriteria =
+    approved.includes(ARTIFACT_KINDS.PROSPECT_CRITERIA) ||
+    approved.includes(ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW);
+  const hasBuild = approved.includes(
+    ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+  );
+  return hasCriteria && hasBuild;
+}
+
+function isBannedCriteriaReplayQuestion(text) {
+  return CRITERIA_REPLAY_QUESTION_RE.test(String(text || ''));
 }
 
 function looksLikeExplicitReplayRequest(text) {
@@ -559,6 +611,22 @@ function markArtifactApproved(memory, kind) {
   return next;
 }
 
+/**
+ * Mark criteria approved under both memory keys used by progression guards.
+ */
+function markProspectCriteriaApproved(memory) {
+  let next = markArtifactApproved(memory, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+  const recommended = next.nextRecommendedArtifact;
+  next = markArtifactApproved(
+    next,
+    ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW
+  );
+  // Alias kind is not in ARTIFACT_ORDER — restore progression pointer.
+  next.nextRecommendedArtifact =
+    recommended || ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL;
+  return next;
+}
+
 function setPendingUserRequest(memory, request) {
   const next = ensureReasoningMemory({ reasoningMemory: memory });
   next.pendingUserRequest = request
@@ -637,12 +705,13 @@ function resolveNextArtifact(memory, requestedKind, opts = {}) {
  * Campaign-loop artifact progression from session context + classified intent.
  *
  * @returns {{
- *   action: 'emit_criteria'|'emit_build_proposal'|'ack_approval'|'replay_criteria'|'hold',
+ *   action: 'emit_criteria'|'emit_build_proposal'|'emit_prospect_list_draft'|'ack_approval'|'ack_build_approval'|'replay_criteria'|'hold',
  *   approveKind: string|null,
  *   emitKind: string|null,
  *   memory: object,
  *   messageClass: string,
  *   note: string|null,
+ *   planningState: string|null,
  * }}
  */
 function resolveCampaignArtifactAction(opts = {}) {
@@ -658,23 +727,48 @@ function resolveCampaignArtifactAction(opts = {}) {
 
   const priorCriteria = opts.priorCriteriaPreview || null;
   const priorBuild = opts.priorBuildProposal || null;
+  const priorDraft =
+    opts.priorProspectListDraft || opts.priorReviewableProspectListDraft || null;
   const criteriaShown = Boolean(
     priorCriteria &&
       (priorCriteria.kind === 'prospect_list_criteria_preview' ||
-        opts.step === 'prospect_list_criteria_preview')
+        opts.step === 'prospect_list_criteria_preview' ||
+        opts.step === 'prospect_list_criteria_approved' ||
+        opts.step === 'prospect_list_build_proposal' ||
+        opts.step === 'prospect_list_build_proposal_approved')
   );
   const criteriaApproved =
     Boolean(priorCriteria && priorCriteria.status === 'approved') ||
-    (memory.approvedArtifacts || []).includes(ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    approvedArtifactsInclude(memory, ARTIFACT_KINDS.PROSPECT_CRITERIA) ||
+    approvedArtifactsInclude(
+      memory,
+      ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW
+    );
   const buildShown = Boolean(
     priorBuild &&
       (priorBuild.kind === ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL ||
         priorBuild.kind === 'prospect_list_build_proposal')
   );
+  const buildApproved =
+    Boolean(priorBuild && priorBuild.status === 'approved') ||
+    approvedArtifactsInclude(
+      memory,
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    ) ||
+    opts.step === 'prospect_list_build_proposal_approved' ||
+    opts.step === 'prospect_list_draft_requested' ||
+    opts.step === 'prospect_list_draft_generated';
+  const draftShown = Boolean(
+    priorDraft &&
+      (priorDraft.kind === ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT ||
+        priorDraft.kind === 'reviewable_prospect_list_draft')
+  );
+  const wantsDraft = looksLikeProspectListDraftRequest(text);
   const allowReplay =
     looksLikeExplicitReplayRequest(text) &&
     /\b(criteria|preview)\b/i.test(text) &&
-    !looksLikeNextPlanningRequest(text);
+    !looksLikeNextPlanningRequest(text) &&
+    !wantsDraft;
 
   // First-time criteria emission is handled by the caller when criteria are new.
   if (!criteriaShown) {
@@ -685,6 +779,7 @@ function resolveCampaignArtifactAction(opts = {}) {
       memory,
       messageClass,
       note: null,
+      planningState: null,
     };
   }
 
@@ -696,11 +791,70 @@ function resolveCampaignArtifactAction(opts = {}) {
       memory,
       messageClass,
       note: null,
+      planningState: 'prospect_list_criteria',
+    };
+  }
+
+  // Build proposal approved (or shown) + explicit draft request → draft path.
+  if (wantsDraft && (buildApproved || buildShown)) {
+    memory = markProspectCriteriaApproved(memory);
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    );
+    memory.nextRecommendedArtifact =
+      ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT;
+    return {
+      action: 'emit_prospect_list_draft',
+      approveKind: ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+      emitKind: ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT,
+      memory,
+      messageClass: looksLikeApprovalPlusNextRequest(text)
+        ? MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST
+        : MESSAGE_CLASSES.ARTIFACT_REQUEST,
+      note:
+        'Build proposal approved — generating the first reviewable prospect list draft.',
+      planningState: draftShown
+        ? 'prospect_list_draft_generated'
+        : 'prospect_list_draft_requested',
     };
   }
 
   if (messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST) {
-    memory = markArtifactApproved(memory, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    if (buildShown || buildApproved) {
+      memory = markProspectCriteriaApproved(memory);
+      memory = markArtifactApproved(
+        memory,
+        ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+      );
+      if (wantsDraft || looksLikeNextPlanningRequest(text)) {
+        memory.nextRecommendedArtifact =
+          ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT;
+        return {
+          action: 'emit_prospect_list_draft',
+          approveKind: ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+          emitKind: ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT,
+          memory,
+          messageClass,
+          note:
+            'Build proposal approved — generating the first reviewable prospect list draft.',
+          planningState: 'prospect_list_draft_requested',
+        };
+      }
+      memory.nextRecommendedArtifact =
+        ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT;
+      return {
+        action: 'ack_build_approval',
+        approveKind: ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+        emitKind: null,
+        memory,
+        messageClass,
+        note:
+          'Build proposal approved. Ask me to generate the first reviewable prospect list batch when ready.',
+        planningState: 'prospect_list_build_proposal_approved',
+      };
+    }
+    memory = markProspectCriteriaApproved(memory);
     memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL;
     return {
       action: 'emit_build_proposal',
@@ -709,22 +863,32 @@ function resolveCampaignArtifactAction(opts = {}) {
       memory,
       messageClass,
       note: 'Criteria approved — advancing to Prospect List Build Proposal.',
+      planningState: 'prospect_list_criteria_approved',
     };
   }
 
   if (messageClass === MESSAGE_CLASSES.APPROVAL) {
-    memory = markArtifactApproved(memory, ARTIFACT_KINDS.PROSPECT_CRITERIA);
-    memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL;
-    if (buildShown) {
+    if (buildShown || buildApproved) {
+      memory = markProspectCriteriaApproved(memory);
+      memory = markArtifactApproved(
+        memory,
+        ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+      );
+      memory.nextRecommendedArtifact =
+        ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT;
       return {
-        action: 'hold',
-        approveKind: ARTIFACT_KINDS.PROSPECT_CRITERIA,
+        action: 'ack_build_approval',
+        approveKind: ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
         emitKind: null,
         memory,
         messageClass,
-        note: 'Criteria approved. Prospect List Build Proposal is already available.',
+        note:
+          'Build proposal approved. Ask me to generate the first reviewable prospect list batch when ready.',
+        planningState: 'prospect_list_build_proposal_approved',
       };
     }
+    memory = markProspectCriteriaApproved(memory);
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL;
     // Pure approval: acknowledge and offer/emit the next artifact (build proposal)
     // rather than replaying criteria.
     return {
@@ -734,15 +898,51 @@ function resolveCampaignArtifactAction(opts = {}) {
       memory,
       messageClass,
       note: 'Criteria approved. Here is the Prospect List Build Proposal — still planning-only.',
+      planningState: 'prospect_list_criteria_approved',
     };
   }
 
   if (
     messageClass === MESSAGE_CLASSES.ARTIFACT_REQUEST ||
-    looksLikeNextPlanningRequest(text)
+    looksLikeNextPlanningRequest(text) ||
+    wantsDraft
   ) {
+    if (buildShown || buildApproved) {
+      memory = markProspectCriteriaApproved(memory);
+      if (!buildApproved) {
+        memory = markArtifactApproved(
+          memory,
+          ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+        );
+      }
+      memory.nextRecommendedArtifact =
+        ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT;
+      if (wantsDraft) {
+        return {
+          action: 'emit_prospect_list_draft',
+          approveKind: ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+          emitKind: ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT,
+          memory,
+          messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
+          note: null,
+          planningState: 'prospect_list_draft_requested',
+        };
+      }
+      return {
+        action: 'ack_build_approval',
+        approveKind: buildApproved
+          ? null
+          : ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+        emitKind: null,
+        memory,
+        messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
+        note:
+          'Build proposal is ready. Ask me to generate the first reviewable prospect list batch when you want the draft.',
+        planningState: 'prospect_list_build_proposal_approved',
+      };
+    }
     if (criteriaShown && !criteriaApproved) {
-      memory = markArtifactApproved(memory, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+      memory = markProspectCriteriaApproved(memory);
     }
     memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL;
     return {
@@ -752,21 +952,38 @@ function resolveCampaignArtifactAction(opts = {}) {
       memory,
       messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
       note: null,
+      planningState: 'prospect_list_criteria_approved',
     };
   }
 
-  // Criteria already shown — never silently re-emit unless explicit replay.
+  // Criteria already shown — never silently re-emit unless explicit revise.
   if (criteriaApproved) {
+    if (buildShown || buildApproved) {
+      memory.nextRecommendedArtifact =
+        ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT;
+      return {
+        action: buildApproved ? 'ack_build_approval' : 'hold',
+        approveKind: null,
+        emitKind: null,
+        memory,
+        messageClass,
+        note: buildApproved
+          ? 'Build proposal already approved. Ask me to generate the first reviewable prospect list batch when ready.'
+          : 'Criteria already approved. Approve the build proposal, or ask me to generate the first reviewable prospect list batch.',
+        planningState: buildApproved
+          ? 'prospect_list_build_proposal_approved'
+          : 'prospect_list_criteria_approved',
+      };
+    }
     memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL;
     return {
-      action: buildShown ? 'hold' : 'emit_build_proposal',
+      action: 'emit_build_proposal',
       approveKind: null,
-      emitKind: buildShown ? null : ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+      emitKind: ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
       memory,
       messageClass,
-      note: buildShown
-        ? 'Criteria already approved. Ask to revise the build proposal, or approve before any list is built.'
-        : null,
+      note: null,
+      planningState: 'prospect_list_criteria_approved',
     };
   }
 
@@ -778,6 +995,7 @@ function resolveCampaignArtifactAction(opts = {}) {
     messageClass,
     note:
       'The Prospect List Criteria Preview is ready. Approve it, or ask how I would approach building the first list.',
+    planningState: null,
   };
 }
 
@@ -790,9 +1008,12 @@ function humanArtifactLabel(kind) {
     case ARTIFACT_KINDS.CAMPAIGN_PREVIEW:
       return 'Campaign Preview';
     case ARTIFACT_KINDS.PROSPECT_CRITERIA:
+    case ARTIFACT_KINDS.PROSPECT_LIST_CRITERIA_PREVIEW:
       return 'Prospect List Criteria Preview';
     case ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL:
       return 'Prospect List Build Proposal';
+    case ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT:
+      return 'Reviewable Prospect List Draft';
     default:
       return kind || 'artifact';
   }
@@ -1082,9 +1303,12 @@ module.exports = {
   markClassification,
   markArtifactGenerated,
   markArtifactApproved,
+  markProspectCriteriaApproved,
   setPendingUserRequest,
   resolveNextArtifact,
   resolveCampaignArtifactAction,
+  shouldBlockCriteriaQuestionReplay,
+  isBannedCriteriaReplayQuestion,
   checkArtifactReadiness,
   synthesizeBusinessLanguage,
   reasoningAck,
@@ -1092,6 +1316,8 @@ module.exports = {
   looksLikeApproval,
   looksLikeApprovalPlusNextRequest,
   looksLikeNextPlanningRequest,
+  looksLikeProspectListDraftRequest,
+  looksLikeReviseCriteriaRequest,
   looksLikeArtifactRequest,
   looksLikeExplicitReplayRequest,
   looksLikeSkip,
