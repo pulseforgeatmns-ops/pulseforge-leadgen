@@ -1501,3 +1501,165 @@ describe('First Campaign Planning UI markers', () => {
     assert.doesNotMatch(uiSource, /Planning only — not a launch/);
   });
 });
+
+describe('SPEC-091 Prospect List Build Proposal progression', () => {
+  const APPROVAL_PLUS =
+    'Approved. Before we build anything, tell me how you would approach building the first prospect list for this test...';
+
+  async function reachCriteriaPreview(store) {
+    await seedApprovedSession(store);
+    await startCampaignPlanningConversation('int-campaign-1', { store });
+    await postCampaignPlanningMessage(
+      'int-campaign-1',
+      'Keep property managers as defined.',
+      { store }
+    );
+    return postCampaignPlanningMessage(
+      'int-campaign-1',
+      [
+        'Prove that multi-family property managers will book walkthroughs.',
+        'Inclusion: local HOA / multi-family managers with recurring needs.',
+        'Exclusion: national property firms and lowest-price shoppers.',
+      ].join(' '),
+      { store }
+    );
+  }
+
+  it('approval_plus_next_request produces Prospect List Build Proposal, not criteria replay', async () => {
+    const store = createMemoryStore();
+    const criteriaTurn = await reachCriteriaPreview(store);
+    assert.ok(criteriaTurn.prospectListCriteriaPreview);
+    assert.match(criteriaTurn.message, /Prospect List Criteria Preview/i);
+    assert.equal(
+      criteriaTurn.prospectListCriteriaPreview.prospectListGenerated,
+      false
+    );
+
+    const next = await postCampaignPlanningMessage(
+      'int-campaign-1',
+      APPROVAL_PLUS,
+      { store }
+    );
+
+    assert.equal(next.messageClass, 'approval_plus_next_request');
+    assert.equal(next.intent, 'produce_build_proposal');
+    assert.ok(next.prospectListBuildProposal);
+    assert.equal(
+      next.prospectListBuildProposal.kind,
+      'prospect_list_build_proposal'
+    );
+    assert.equal(next.prospectListBuildProposal.title, 'Prospect List Build Proposal');
+    assert.equal(next.prospectListBuildProposal.prospectListGenerated, false);
+    assert.equal(next.prospectListBuildProposal.outreachCopyGenerated, false);
+    assert.equal(next.prospectListBuildProposal.accountChangesMade, false);
+    assert.match(next.message, /Prospect List Build Proposal/i);
+    assert.doesNotMatch(
+      next.message,
+      /^Prospect List Criteria Preview$/m
+    );
+    // Must not be a criteria-title-led replay of the prior artifact.
+    assert.equal(
+      /^Prospect List Criteria Preview/m.test(next.message.split('\n\n').pop() || ''),
+      false
+    );
+    assert.ok(
+      next.prospectListCriteriaPreview &&
+        next.prospectListCriteriaPreview.status === 'approved'
+    );
+
+    const session = await store.getSession('int-campaign-1');
+    assert.equal(
+      session.interview_state.prospectListCriteriaPreview.status,
+      'approved'
+    );
+    assert.ok(session.interview_state.prospectListBuildProposal);
+    assert.ok(
+      session.interview_state.reasoningMemory.approvedArtifacts.includes(
+        'prospect_criteria'
+      )
+    );
+    assert.equal(
+      session.interview_state.campaignPlanning.step,
+      'prospect_list_build_proposal'
+    );
+  });
+
+  it('does not repeat approved criteria on a second approval-style turn', async () => {
+    const store = createMemoryStore();
+    await reachCriteriaPreview(store);
+    const first = await postCampaignPlanningMessage(
+      'int-campaign-1',
+      APPROVAL_PLUS,
+      { store }
+    );
+    assert.ok(first.prospectListBuildProposal);
+
+    const second = await postCampaignPlanningMessage(
+      'int-campaign-1',
+      'Approved',
+      { store }
+    );
+    assert.doesNotMatch(second.message, /^Prospect List Criteria Preview/m);
+    assert.notEqual(second.intent, 'produce_criteria_preview');
+  });
+
+  it('buildCampaignPlanningReply unit: approval+next after criteria advances', () => {
+    const {
+      BUILD_PROPOSAL_ARTIFACT_KIND,
+      BUILD_PROPOSAL_TITLE,
+    } = require('../services/clientIntelligenceCampaignPlanning');
+    const ctx = {
+      businessName: 'Anchor Cleaning',
+      primarySegment: 'property_managers',
+      marketLabel: 'Greater Manchester',
+    };
+    const slots = {
+      campaignObjective: 'Prove walkthroughs',
+      targetSegment: 'property managers',
+      marketBound: 'Greater Manchester',
+      proofAssets: 'photos',
+      campaignHypothesis: 'If we approach PMs we expect walkthroughs',
+      validationMetrics: 'walkthroughs booked',
+      approvalCheckpoints: 'preview sign-off',
+      inclusionCriteria: ['local managers'],
+      exclusionCriteria: ['national firms'],
+      previewGenerated: true,
+      previewApproved: true,
+      criteriaGenerated: true,
+    };
+    const priorCriteria = buildProspectListCriteriaPreview(ctx, slots, {
+      answers: {},
+    });
+    const reply = buildCampaignPlanningReply(
+      APPROVAL_PLUS,
+      {
+        step: 'prospect_list_criteria_preview',
+        slots,
+        prospectListCriteriaPreview: priorCriteria,
+        previewApproved: true,
+      },
+      ctx,
+      {
+        priorCriteriaPreview: priorCriteria,
+        messageClass: 'approval_plus_next_request',
+      }
+    );
+    assert.equal(reply.intent, 'produce_build_proposal');
+    assert.ok(reply.buildProposal);
+    assert.equal(reply.buildProposal.kind, BUILD_PROPOSAL_ARTIFACT_KIND);
+    assert.equal(reply.buildProposal.title, BUILD_PROPOSAL_TITLE);
+    assert.match(reply.message, /Prospect List Build Proposal/i);
+    assert.equal(reply.criteriaPreview.status, 'approved');
+  });
+
+  it('UI renders Prospect List Build Proposal markers', () => {
+    const uiSource = fs.readFileSync(
+      path.join(__dirname, '../public/client-intel.html'),
+      'utf8'
+    );
+    assert.match(uiSource, /renderProspectListBuildProposal/);
+    assert.match(uiSource, /Prospect List Build Proposal/);
+    assert.match(uiSource, /prospectListBuildProposal/);
+    assert.match(uiSource, /Approach only — no prospect list built yet/);
+  });
+});

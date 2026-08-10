@@ -16,11 +16,14 @@ const {
   addQuestionDebt,
   clearQuestionDebt,
   markArtifactGenerated,
+  markArtifactApproved,
   resolveNextArtifact,
+  resolveCampaignArtifactAction,
   checkArtifactReadiness,
   synthesizeBusinessLanguage,
   planReasoningTurn,
   looksLikeVagueAnswer,
+  looksLikeApprovalPlusNextRequest,
 } = require('../services/clientIntelligenceReasoning');
 
 const {
@@ -321,5 +324,75 @@ describe('SPEC-090 conversational reasoning — synthesis + guardrails', () => {
       }),
       /Anchor Cleaning provides/i
     );
+  });
+});
+
+describe('SPEC-091 artifact progression — approval + next request', () => {
+  const APPROVAL_PLUS =
+    'Approved. Before we build anything, tell me how you would approach building the first prospect list for this test...';
+
+  it('classifies approval_plus_next_request and artifact_request', () => {
+    assert.equal(looksLikeApprovalPlusNextRequest(APPROVAL_PLUS), true);
+    assert.equal(
+      classifyReasoningMessage(APPROVAL_PLUS),
+      MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST
+    );
+    assert.equal(
+      classifyReasoningMessage('Approved'),
+      MESSAGE_CLASSES.APPROVAL
+    );
+    assert.equal(
+      classifyReasoningMessage('How would you approach building the first prospect list?'),
+      MESSAGE_CLASSES.ARTIFACT_REQUEST
+    );
+  });
+
+  it('does not replay an approved criteria artifact — advances to build proposal', () => {
+    let mem = emptyReasoningMemory();
+    mem = markArtifactGenerated(mem, ARTIFACT_KINDS.PROSPECT_CRITERIA, 'draft');
+    mem = markArtifactApproved(mem, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    assert.equal(mem.lastArtifactStatus, 'approved');
+    assert.equal(
+      mem.nextRecommendedArtifact,
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    );
+
+    const resolved = resolveNextArtifact(mem, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    assert.equal(resolved.hold, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    assert.equal(resolved.emit, ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL);
+    assert.match(resolved.message, /already approved|Build Proposal/i);
+  });
+
+  it('resolveCampaignArtifactAction advances on approval_plus_next_request', () => {
+    const priorCriteria = {
+      kind: 'prospect_list_criteria_preview',
+      status: 'draft',
+      title: 'Prospect List Criteria Preview',
+    };
+    const action = resolveCampaignArtifactAction({
+      userMessage: APPROVAL_PLUS,
+      priorCriteriaPreview: priorCriteria,
+      step: 'prospect_list_criteria_preview',
+    });
+    assert.equal(action.messageClass, MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST);
+    assert.equal(action.action, 'emit_build_proposal');
+    assert.equal(action.emitKind, ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL);
+    assert.ok(
+      action.memory.approvedArtifacts.includes(ARTIFACT_KINDS.PROSPECT_CRITERIA)
+    );
+  });
+
+  it('approval-only after criteria shown advances without replaying criteria', () => {
+    const action = resolveCampaignArtifactAction({
+      userMessage: 'Approved',
+      priorCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'draft',
+      },
+      step: 'prospect_list_criteria_preview',
+    });
+    assert.equal(action.messageClass, MESSAGE_CLASSES.APPROVAL);
+    assert.equal(action.action, 'emit_build_proposal');
+    assert.notEqual(action.action, 'replay_criteria');
   });
 });

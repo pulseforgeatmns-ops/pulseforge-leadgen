@@ -13,7 +13,10 @@ const MESSAGE_CLASSES = Object.freeze({
   CORRECTION: 'correction',
   ADD_ON: 'add_on',
   APPROVAL: 'approval',
+  /** Approval plus an explicit ask for the next planning step / approach. */
+  APPROVAL_PLUS_NEXT_REQUEST: 'approval_plus_next_request',
   CLARIFICATION_REQUEST: 'clarification_request',
+  ARTIFACT_REQUEST: 'artifact_request',
   INSUFFICIENT_ANSWER: 'insufficient_answer',
   OFF_TOPIC: 'off_topic',
   SKIP: 'skip',
@@ -27,6 +30,7 @@ const ARTIFACT_KINDS = Object.freeze({
   GROWTH_DIRECTION: 'growth_direction',
   CAMPAIGN_PREVIEW: 'campaign_preview',
   PROSPECT_CRITERIA: 'prospect_criteria',
+  PROSPECT_LIST_BUILD_PROPOSAL: 'prospect_list_build_proposal',
 });
 
 const ARTIFACT_ORDER = Object.freeze([
@@ -34,6 +38,7 @@ const ARTIFACT_ORDER = Object.freeze([
   ARTIFACT_KINDS.GROWTH_DIRECTION,
   ARTIFACT_KINDS.CAMPAIGN_PREVIEW,
   ARTIFACT_KINDS.PROSPECT_CRITERIA,
+  ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
 ]);
 
 const MIN_ARTIFACT_SECTION_CONFIDENCE = 0.45;
@@ -41,6 +46,19 @@ const MIN_PROBE_WORD_COUNT = 4;
 
 const APPROVAL_RE =
   /^\s*(?:yes[,.]?\s+)?(?:looks?\s+good|lgtm|approved?|approve(?:\s+it)?|ship\s+it|go\s+ahead|proceed|sounds?\s+good|that\s+works|perfect|confirmed?|i\s+approve)\s*[.!]*$/i;
+
+/** Leading approval token inside a longer turn. */
+const APPROVAL_LEAD_RE =
+  /^\s*(?:yes[,.]?\s+)?(?:looks?\s+good|lgtm|approved?|approve(?:\s+it)?|ship\s+it|go\s+ahead|proceed|sounds?\s+good|that\s+works|perfect|confirmed?|i\s+approve)\b/i;
+
+const NEXT_REQUEST_RE =
+  /\b(?:before\s+we\s+build(?:\s+anything)?|how\s+(?:would|will|do|should)\s+you\s+approach|tell\s+me\s+how\s+you\s+would|what'?s\s+next|what\s+is\s+next|next\s+step|approach\s+building|build(?:ing)?\s+(?:the\s+)?(?:first\s+)?(?:prospect\s+)?list|how\s+to\s+build|propose\s+(?:the\s+)?(?:build|approach)|planning\s+(?:the\s+)?build)\b/i;
+
+const ARTIFACT_REQUEST_RE =
+  /\b(?:show|view|see|open|pull\s+up|regenerate|revise|replay)\s+(?:me\s+)?(?:the\s+)?(?:criteria|preview|blueprint|build\s+proposal|proposal)\b|\b(?:criteria\s+preview|build\s+proposal|campaign\s+preview)\s+again\b/i;
+
+const EXPLICIT_REPLAY_RE =
+  /\b(?:show|view|see|open|pull\s+up|regenerate|revise|replay|again)\b/i;
 
 const SKIP_RE =
   /^\s*(?:skip(?:\s+(?:this|it|for\s+now))?|pass|next(?:\s+question)?|n\/?a|not\s+applicable|come\s+back\s+later|no\s+answer|i'?ll\s+skip)\s*[.!]*$/i;
@@ -83,6 +101,11 @@ const ARTIFACT_REQUIRED_SECTIONS = Object.freeze({
     'avoidCustomers',
     'targetMarkets',
   ],
+  [ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL]: [
+    'idealCustomers',
+    'avoidCustomers',
+    'targetMarkets',
+  ],
 });
 
 function nowIso() {
@@ -100,6 +123,11 @@ function emptyReasoningMemory() {
     activeProbe: null,
     artifactsGenerated: [],
     lastClassification: null,
+    lastArtifactType: null,
+    lastArtifactStatus: null,
+    approvedArtifacts: [],
+    nextRecommendedArtifact: null,
+    pendingUserRequest: null,
   };
 }
 
@@ -116,6 +144,7 @@ function ensureReasoningMemory(state = {}) {
       evidenceBySection: { ...(existing.evidenceBySection || {}) },
       questionDebt: [...(existing.questionDebt || [])],
       artifactsGenerated: [...(existing.artifactsGenerated || [])],
+      approvedArtifacts: [...(existing.approvedArtifacts || [])],
     };
   }
   return emptyReasoningMemory();
@@ -130,6 +159,39 @@ function wordCount(text) {
 
 function looksLikeApproval(text) {
   return APPROVAL_RE.test(String(text || '').trim());
+}
+
+function looksLikeApprovalLead(text) {
+  return APPROVAL_LEAD_RE.test(String(text || '').trim());
+}
+
+function looksLikeNextPlanningRequest(text) {
+  return NEXT_REQUEST_RE.test(String(text || ''));
+}
+
+/**
+ * Approval plus an ask for the next planning step / build approach.
+ * Example: "Approved. Before we build anything, tell me how you would approach…"
+ */
+function looksLikeApprovalPlusNextRequest(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (looksLikeApproval(s)) return false; // pure approval handled separately
+  return looksLikeApprovalLead(s) && looksLikeNextPlanningRequest(s);
+}
+
+function looksLikeArtifactRequest(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (ARTIFACT_REQUEST_RE.test(s)) return true;
+  if (looksLikeNextPlanningRequest(s) && /\b(list|build|approach|proposal|criteria|preview)\b/i.test(s)) {
+    return true;
+  }
+  return false;
+}
+
+function looksLikeExplicitReplayRequest(text) {
+  return EXPLICIT_REPLAY_RE.test(String(text || ''));
 }
 
 function looksLikeSkip(text) {
@@ -205,7 +267,12 @@ function classifyReasoningMessage(text, opts = {}) {
     return MESSAGE_CLASSES.REFINEMENT_FEEDBACK;
   }
   if (looksLikeSkip(raw)) return MESSAGE_CLASSES.SKIP;
+  // Approval+next before pure approval so longer turns are not truncated.
+  if (looksLikeApprovalPlusNextRequest(raw)) {
+    return MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST;
+  }
   if (looksLikeApproval(raw)) return MESSAGE_CLASSES.APPROVAL;
+  if (looksLikeArtifactRequest(raw)) return MESSAGE_CLASSES.ARTIFACT_REQUEST;
   if (looksLikeClarificationRequest(raw)) return MESSAGE_CLASSES.CLARIFICATION_REQUEST;
   if (/^(hi|hello|hey|thanks|thank you|ok|okay|cool|great|nice)\s*[.!]?$/i.test(raw)) {
     return MESSAGE_CLASSES.OFF_TOPIC;
@@ -451,28 +518,102 @@ function markClassification(memory, messageClass) {
 /**
  * Record that an artifact was generated so the next request advances.
  */
-function markArtifactGenerated(memory, kind) {
+function markArtifactGenerated(memory, kind, status = 'draft') {
   const next = ensureReasoningMemory({ reasoningMemory: memory });
   const k = String(kind || '').trim();
   if (!k) return next;
   if (!next.artifactsGenerated.includes(k)) {
     next.artifactsGenerated.push(k);
   }
+  next.lastArtifactType = k;
+  next.lastArtifactStatus = status || 'draft';
+  const idx = ARTIFACT_ORDER.indexOf(k);
+  if (idx >= 0 && idx < ARTIFACT_ORDER.length - 1) {
+    next.nextRecommendedArtifact = ARTIFACT_ORDER[idx + 1];
+  } else if (!next.approvedArtifacts.includes(k)) {
+    next.nextRecommendedArtifact = k;
+  } else {
+    next.nextRecommendedArtifact = ARTIFACT_ORDER[idx + 1] || null;
+  }
+  return next;
+}
+
+/**
+ * Mark an artifact approved and recommend the next planning artifact.
+ */
+function markArtifactApproved(memory, kind) {
+  const next = ensureReasoningMemory({ reasoningMemory: memory });
+  const k = String(kind || '').trim();
+  if (!k) return next;
+  if (!next.artifactsGenerated.includes(k)) {
+    next.artifactsGenerated.push(k);
+  }
+  if (!next.approvedArtifacts.includes(k)) {
+    next.approvedArtifacts.push(k);
+  }
+  next.lastArtifactType = k;
+  next.lastArtifactStatus = 'approved';
+  const idx = ARTIFACT_ORDER.indexOf(k);
+  next.nextRecommendedArtifact =
+    idx >= 0 ? ARTIFACT_ORDER[idx + 1] || null : null;
+  return next;
+}
+
+function setPendingUserRequest(memory, request) {
+  const next = ensureReasoningMemory({ reasoningMemory: memory });
+  next.pendingUserRequest = request
+    ? {
+        text: String(request.text || request || '').trim(),
+        messageClass: request.messageClass || null,
+        at: nowIso(),
+      }
+    : null;
   return next;
 }
 
 /**
  * Prevent re-emitting the same artifact when the user asks for the next one.
+ * Honors approvedArtifacts: approved kinds are never replayed unless explicitly requested.
  * @returns {{ emit: string|null, hold: string|null, message: string|null }}
  */
-function resolveNextArtifact(memory, requestedKind) {
+function resolveNextArtifact(memory, requestedKind, opts = {}) {
   const next = ensureReasoningMemory({ reasoningMemory: memory });
   const generated = next.artifactsGenerated || [];
+  const approved = next.approvedArtifacts || [];
   const requested = String(requestedKind || '').trim();
+  const allowReplay = Boolean(opts.allowReplay);
+
   if (!requested) {
+    // Prefer nextRecommendedArtifact when no explicit request.
+    const recommended = next.nextRecommendedArtifact;
+    if (recommended && !approved.includes(recommended)) {
+      return { emit: recommended, hold: null, message: null };
+    }
     return { emit: null, hold: null, message: null };
   }
-  if (generated.includes(requested)) {
+
+  if (approved.includes(requested) && !allowReplay) {
+    const idx = ARTIFACT_ORDER.indexOf(requested);
+    const following = idx >= 0 ? ARTIFACT_ORDER.slice(idx + 1) : [];
+    const nextKind =
+      following.find((k) => !approved.includes(k)) ||
+      next.nextRecommendedArtifact ||
+      null;
+    if (nextKind) {
+      return {
+        emit: nextKind,
+        hold: requested,
+        message: `The ${humanArtifactLabel(requested)} is already approved. Next up is the ${humanArtifactLabel(nextKind)}.`,
+      };
+    }
+    return {
+      emit: null,
+      hold: requested,
+      message: `The ${humanArtifactLabel(requested)} is already approved. Say if you'd like to revise it.`,
+    };
+  }
+
+  if (generated.includes(requested) && !allowReplay) {
     const idx = ARTIFACT_ORDER.indexOf(requested);
     const following = idx >= 0 ? ARTIFACT_ORDER.slice(idx + 1) : [];
     const nextKind = following.find((k) => !generated.includes(k)) || null;
@@ -492,6 +633,154 @@ function resolveNextArtifact(memory, requestedKind) {
   return { emit: requested, hold: null, message: null };
 }
 
+/**
+ * Campaign-loop artifact progression from session context + classified intent.
+ *
+ * @returns {{
+ *   action: 'emit_criteria'|'emit_build_proposal'|'ack_approval'|'replay_criteria'|'hold',
+ *   approveKind: string|null,
+ *   emitKind: string|null,
+ *   memory: object,
+ *   messageClass: string,
+ *   note: string|null,
+ * }}
+ */
+function resolveCampaignArtifactAction(opts = {}) {
+  const text = String(opts.userMessage || '').trim();
+  const messageClass =
+    opts.messageClass || classifyReasoningMessage(text, opts.classifyOpts || {});
+  let memory = ensureReasoningMemory(opts.state || { reasoningMemory: opts.memory });
+  memory = markClassification(memory, messageClass);
+  memory = setPendingUserRequest(memory, {
+    text,
+    messageClass,
+  });
+
+  const priorCriteria = opts.priorCriteriaPreview || null;
+  const priorBuild = opts.priorBuildProposal || null;
+  const criteriaShown = Boolean(
+    priorCriteria &&
+      (priorCriteria.kind === 'prospect_list_criteria_preview' ||
+        opts.step === 'prospect_list_criteria_preview')
+  );
+  const criteriaApproved =
+    Boolean(priorCriteria && priorCriteria.status === 'approved') ||
+    (memory.approvedArtifacts || []).includes(ARTIFACT_KINDS.PROSPECT_CRITERIA);
+  const buildShown = Boolean(
+    priorBuild &&
+      (priorBuild.kind === ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL ||
+        priorBuild.kind === 'prospect_list_build_proposal')
+  );
+  const allowReplay =
+    looksLikeExplicitReplayRequest(text) &&
+    /\b(criteria|preview)\b/i.test(text) &&
+    !looksLikeNextPlanningRequest(text);
+
+  // First-time criteria emission is handled by the caller when criteria are new.
+  if (!criteriaShown) {
+    return {
+      action: 'emit_criteria',
+      approveKind: null,
+      emitKind: ARTIFACT_KINDS.PROSPECT_CRITERIA,
+      memory,
+      messageClass,
+      note: null,
+    };
+  }
+
+  if (allowReplay) {
+    return {
+      action: 'replay_criteria',
+      approveKind: null,
+      emitKind: ARTIFACT_KINDS.PROSPECT_CRITERIA,
+      memory,
+      messageClass,
+      note: null,
+    };
+  }
+
+  if (messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST) {
+    memory = markArtifactApproved(memory, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL;
+    return {
+      action: 'emit_build_proposal',
+      approveKind: ARTIFACT_KINDS.PROSPECT_CRITERIA,
+      emitKind: ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+      memory,
+      messageClass,
+      note: 'Criteria approved — advancing to Prospect List Build Proposal.',
+    };
+  }
+
+  if (messageClass === MESSAGE_CLASSES.APPROVAL) {
+    memory = markArtifactApproved(memory, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL;
+    if (buildShown) {
+      return {
+        action: 'hold',
+        approveKind: ARTIFACT_KINDS.PROSPECT_CRITERIA,
+        emitKind: null,
+        memory,
+        messageClass,
+        note: 'Criteria approved. Prospect List Build Proposal is already available.',
+      };
+    }
+    // Pure approval: acknowledge and offer/emit the next artifact (build proposal)
+    // rather than replaying criteria.
+    return {
+      action: 'emit_build_proposal',
+      approveKind: ARTIFACT_KINDS.PROSPECT_CRITERIA,
+      emitKind: ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+      memory,
+      messageClass,
+      note: 'Criteria approved. Here is the Prospect List Build Proposal — still planning-only.',
+    };
+  }
+
+  if (
+    messageClass === MESSAGE_CLASSES.ARTIFACT_REQUEST ||
+    looksLikeNextPlanningRequest(text)
+  ) {
+    if (criteriaShown && !criteriaApproved) {
+      memory = markArtifactApproved(memory, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    }
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL;
+    return {
+      action: 'emit_build_proposal',
+      approveKind: criteriaApproved ? null : ARTIFACT_KINDS.PROSPECT_CRITERIA,
+      emitKind: ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+      memory,
+      messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
+      note: null,
+    };
+  }
+
+  // Criteria already shown — never silently re-emit unless explicit replay.
+  if (criteriaApproved) {
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL;
+    return {
+      action: buildShown ? 'hold' : 'emit_build_proposal',
+      approveKind: null,
+      emitKind: buildShown ? null : ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL,
+      memory,
+      messageClass,
+      note: buildShown
+        ? 'Criteria already approved. Ask to revise the build proposal, or approve before any list is built.'
+        : null,
+    };
+  }
+
+  return {
+    action: 'ack_approval',
+    approveKind: null,
+    emitKind: null,
+    memory,
+    messageClass,
+    note:
+      'The Prospect List Criteria Preview is ready. Approve it, or ask how I would approach building the first list.',
+  };
+}
+
 function humanArtifactLabel(kind) {
   switch (kind) {
     case ARTIFACT_KINDS.BLUEPRINT:
@@ -501,7 +790,9 @@ function humanArtifactLabel(kind) {
     case ARTIFACT_KINDS.CAMPAIGN_PREVIEW:
       return 'Campaign Preview';
     case ARTIFACT_KINDS.PROSPECT_CRITERIA:
-      return 'Prospect Criteria';
+      return 'Prospect List Criteria Preview';
+    case ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL:
+      return 'Prospect List Build Proposal';
     default:
       return kind || 'artifact';
   }
@@ -790,12 +1081,19 @@ module.exports = {
   setActiveProbe,
   markClassification,
   markArtifactGenerated,
+  markArtifactApproved,
+  setPendingUserRequest,
   resolveNextArtifact,
+  resolveCampaignArtifactAction,
   checkArtifactReadiness,
   synthesizeBusinessLanguage,
   reasoningAck,
   planReasoningTurn,
   looksLikeApproval,
+  looksLikeApprovalPlusNextRequest,
+  looksLikeNextPlanningRequest,
+  looksLikeArtifactRequest,
+  looksLikeExplicitReplayRequest,
   looksLikeSkip,
   looksLikeClarificationRequest,
   looksLikeVagueAnswer,

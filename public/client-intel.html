@@ -1042,6 +1042,7 @@
       firstGrowthPlanPreview: null,
       firstCampaignPlanPreview: null,
       prospectListCriteriaPreview: null,
+      prospectListBuildProposal: null,
       growthPlan: null,
       workspaceTab: 'overview',
       isSample: false,
@@ -1717,6 +1718,78 @@
       );
     }
 
+    function renderProspectListBuildProposal(proposal) {
+      if (!proposal) return '';
+      const titles = proposal.sectionTitles || {};
+      const batch = proposal.firstBatchPlan || {};
+      return (
+        '<div class="growth-direction" id="prospectListBuildProposal">' +
+          '<p class="growth-kicker">Prospect List Build Proposal</p>' +
+          '<p><strong>1. ' +
+            escapeHtml(titles.approachSummary || 'Approach summary') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(proposal.approachSummary)) + '</p>' +
+          '<p><strong>2. ' +
+            escapeHtml(titles.sourcingStrategy || 'Sourcing strategy') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(proposal.sourcingStrategy),
+            'No sourcing steps listed yet.'
+          ) +
+          '<p><strong>3. ' +
+            escapeHtml(titles.enrichmentPlan || 'Enrichment plan') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(proposal.enrichmentPlan),
+            'No enrichment steps listed yet.'
+          ) +
+          '<p><strong>4. ' +
+            escapeHtml(titles.qualityGates || 'Quality gates') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(proposal.qualityGates),
+            'No quality gates listed yet.'
+          ) +
+          '<p><strong>5. ' +
+            escapeHtml(titles.firstBatchPlan || 'First batch plan') +
+          '</strong></p>' +
+          renderListBlock(
+            [
+              batch.size ? 'Size: ' + batch.size : null,
+              batch.marketFocus ? 'Market focus: ' + batch.marketFocus : null,
+              batch.segmentFocus ? 'Segment focus: ' + batch.segmentFocus : null,
+              batch.successSignal ? 'Success signal: ' + batch.successSignal : null,
+            ].filter(Boolean),
+            'No first-batch plan listed yet.'
+          ) +
+          '<p><strong>6. ' +
+            escapeHtml(titles.reviewCheckpoints || 'Review checkpoints before build') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(proposal.reviewCheckpoints),
+            'No review checkpoints listed yet.'
+          ) +
+          '<p><strong>7. ' +
+            escapeHtml(titles.whatWeWillNotDo || 'What we will not do yet') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(proposal.whatWeWillNotDo),
+            'No guardrails listed yet.'
+          ) +
+          '<p><strong>8. ' +
+            escapeHtml(titles.recommendedNextStep || 'Recommended next step') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(proposal.recommendedNextStep)) + '</p>' +
+          '<p class="growth-disclaimer">' +
+            escapeHtml(
+              proposal.disclaimer ||
+                'Build proposal only. No prospect list has been built, and no outreach copy, sends, CRM writes, or account changes have been created or launched.'
+            ) +
+          '</p>' +
+        '</div>'
+      );
+    }
+
     function renderCompletion(result) {
       const bp = (result && result.blueprint) || state.blueprint;
       const playbook = (result && result.playbook) || null;
@@ -1944,7 +2017,14 @@
         els.completeActions.hidden = true;
         setGrowthPreviewActionsVisible(false);
         if (els.growthWorkspaceActions) els.growthWorkspaceActions.hidden = true;
-        if (state.prospectListCriteriaPreview) {
+        if (state.prospectListBuildProposal) {
+          els.sidePanelTitle.textContent = 'Prospect List Build Proposal';
+          els.sidePanelSub.textContent =
+            'Approach only — no prospect list built yet';
+          els.sidePanel.innerHTML = renderProspectListBuildProposal(
+            state.prospectListBuildProposal
+          );
+        } else if (state.prospectListCriteriaPreview) {
           els.sidePanelTitle.textContent = 'Prospect List Criteria Preview';
           els.sidePanelSub.textContent =
             'Criteria only — no prospect list built yet';
@@ -2982,6 +3062,16 @@
           }
           if (data && data.prospectListCriteriaPreview) {
             state.prospectListCriteriaPreview = data.prospectListCriteriaPreview;
+          }
+          if (data && data.prospectListBuildProposal) {
+            state.prospectListBuildProposal = data.prospectListBuildProposal;
+            els.sidePanel.innerHTML = renderProspectListBuildProposal(
+              data.prospectListBuildProposal
+            );
+            els.sidePanelTitle.textContent = 'Prospect List Build Proposal';
+            els.sidePanelSub.textContent =
+              'Approach only — no prospect list built yet';
+          } else if (data && data.prospectListCriteriaPreview) {
             els.sidePanel.innerHTML = renderProspectListCriteriaPreview(
               data.prospectListCriteriaPreview
             );
@@ -3062,7 +3152,14 @@
         if (data && data.prospectListCriteriaPreview) {
           state.prospectListCriteriaPreview = data.prospectListCriteriaPreview;
         }
-        if (state.prospectListCriteriaPreview) {
+        if (data && data.prospectListBuildProposal) {
+          state.prospectListBuildProposal = data.prospectListBuildProposal;
+        }
+        if (state.prospectListBuildProposal) {
+          els.sidePanel.innerHTML = renderProspectListBuildProposal(
+            state.prospectListBuildProposal
+          );
+        } else if (state.prospectListCriteriaPreview) {
           els.sidePanel.innerHTML = renderProspectListCriteriaPreview(
             state.prospectListCriteriaPreview
           );
