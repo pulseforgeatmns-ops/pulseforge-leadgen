@@ -75,6 +75,7 @@ Operator reviews → approveScoutResults
 
 - Sourcing is **wired** when `GOOGLE_PLACES_KEY` is set, or when `publicSearchFn` / `searchProvider` / `scoutSourcingFn` is injected.
 - Without tooling, handoff still creates a work request and returns the clear not-wired boundary (no placeholders).
+- If Google Places returns `REQUEST_DENIED` (or similar), Scout returns an **operator-facing setup checklist** (Railway `GOOGLE_PLACES_KEY`, Places API enablement, billing, key restrictions). SerpAPI / Custom Search fallback is **not wired** on this path and is marked unavailable. The work request stays **retryable**.
 
 ## APIs
 

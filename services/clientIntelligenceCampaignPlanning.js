@@ -2719,7 +2719,9 @@ function applyScoutExecutionResult(reply, result) {
         recommendedNextStep: result.scoutRan
           ? result.ok
             ? 'Review Scout candidates. Approve before Composer / CRM / export use. No outreach or CRM writes yet.'
-            : 'Scout sourcing failed — work request preserved. Review failure and retry or revise criteria.'
+            : result.setupNeeded && result.setupNeeded.length
+              ? 'Fix Google Places setup (GOOGLE_PLACES_KEY / Places API enablement / billing / key restrictions), then retry the preserved Scout work request.'
+              : 'Scout sourcing failed — work request preserved. Review failure and retry or revise criteria.'
           : reply.scoutHandoffBrief.recommendedNextStep,
         disclaimer:
           'Scout handoff results are review-only. No outreach copy, sends, CRM writes, or account changes have been made.',
@@ -2747,6 +2749,11 @@ function applyScoutExecutionResult(reply, result) {
     scoutWorkRequest: result.workRequest || reply.scoutWorkRequest,
     scoutCandidateBatch: result.candidateBatch || null,
     shouldExecuteScoutSourcing: false,
+    retryable: result.retryable != null ? result.retryable : reply.retryable,
+    setupNeeded: result.setupNeeded || reply.setupNeeded || null,
+    operatorMessage: result.operatorMessage || reply.operatorMessage || null,
+    placesDiagnosis: result.placesDiagnosis || reply.placesDiagnosis || null,
+    fallback: result.fallback || reply.fallback || null,
   };
 }
 
