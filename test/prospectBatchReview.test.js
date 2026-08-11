@@ -464,13 +464,14 @@ describe('Prospect Batch Review — formatting', () => {
     assert.ok(review.operatorDigest);
 
     const msg = formatProspectBatchReviewMessage(review);
-    assert.match(msg, /Prospect Batch Review/);
     assert.match(msg, /## Recommended decision/);
     assert.match(msg, /Approve 2 cold prospects as Batch 1/);
     assert.match(msg, /## What is included/);
     assert.match(msg, /Elm Grove Companies/);
-    assert.match(msg, /## What is excluded \/ held back/);
-    assert.match(msg, /Held back: Cedar Management Group until source verification/);
+    assert.match(msg, /## Held back/);
+    assert.match(msg, /Cedar Management Group — source verification required/);
+    assert.match(msg, /## Why this is recommended/);
+    assert.match(msg, /clean, net-new prospects in the approved priority towns/i);
     assert.match(msg, /## Next step after approval/);
     assert.match(msg, /Outreach Strategy Preview/);
     assert.match(msg, /View evidence \(collapsed by default\)/);
@@ -731,7 +732,7 @@ describe('Prospect Batch Review — Keyrenter relationship override', () => {
     );
     assert.equal(review.existingRelationship[0].doNotOutreach, true);
     const msg = formatProspectBatchReviewMessage(review);
-    assert.match(msg, /Nurture only:\s*Keyrenter/i);
+    assert.match(msg, /Keyrenter New England Property Management — existing relationship \/ nurture only/i);
     assert.match(msg, /Keyrenter/);
     const evidence = formatProspectBatchReviewEvidenceMessage(review);
     assert.match(evidence, /Existing relationship \/ nurture/i);
@@ -777,10 +778,14 @@ describe('Prospect Batch Review — Keyrenter relationship override', () => {
 
     const msg = formatProspectBatchReviewMessage(review);
     assert.match(msg, /Approve 6 cold prospects as Batch 1/);
-    assert.match(msg, /Nurture only:\s*Keyrenter/i);
-    assert.match(msg, /Held back: Cedar.*until source verification/i);
-    assert.match(msg, /Excluded for now: optional Manchester expansion candidates/i);
-    assert.match(msg, /Rejected:\s*Cushman/i);
+    assert.match(msg, /## Held back/);
+    assert.match(
+      msg,
+      /Keyrenter New England Property Management — existing relationship \/ nurture only/i
+    );
+    assert.match(msg, /Cedar Management Group — source verification required/i);
+    assert.match(msg, /Optional Manchester candidates — not included yet/i);
+    assert.match(msg, /Cushman\s*&\s*Wakefield — rejected as too institutional/i);
     assert.match(msg, /View evidence \(collapsed by default\)/);
     assert.doesNotMatch(msg, /## 1\. Accepted cold first-pass/i);
     assert.doesNotMatch(msg, /8 primary-town candidates/i);
@@ -893,7 +898,10 @@ describe('Prospect Batch Review — Keyrenter relationship override', () => {
     assert.equal(reply.intent, 'prospect_batch_review');
     assert.ok(reply.prospectBatchReview);
     assert.match(reply.message, /Prospect Batch Review/);
-    assert.match(reply.message, /Nurture only:\s*Keyrenter/i);
+    assert.match(
+      reply.message,
+      /Keyrenter New England Property Management — existing relationship \/ nurture only/i
+    );
     assert.match(reply.message, /Keyrenter/);
     assert.doesNotMatch(
       reply.message,
@@ -981,7 +989,10 @@ describe('Prospect Batch Review — Keyrenter relationship override', () => {
     assert.equal(review.counts.existingRelationship, 1);
     assert.equal(review.existingRelationship.length, 1);
     const msg = formatProspectBatchReviewMessage(review);
-    assert.match(msg, /Nurture only:\s*Keyrenter/i);
+    assert.match(
+      msg,
+      /Keyrenter New England Property Management — existing relationship \/ nurture only/i
+    );
     assert.equal(review.operatorDigest.meta.nurtureCount, 1);
   });
 
@@ -1286,7 +1297,7 @@ describe('Prospect Batch Review — Batch 1 approval transition', () => {
 function sampleOperatorDigestBatch1() {
   const cold = [
     {
-      companyName: 'RPM Thrive',
+      companyName: 'Real Property Management Thrive',
       location: 'Bedford NH',
       sourceUrl: 'https://rpmthrive.example',
       website: 'https://rpmthrive.example',
@@ -1310,7 +1321,7 @@ function sampleOperatorDigestBatch1() {
       statusReason: 'Passes NH property-manager quality gates',
     },
     {
-      companyName: 'RPM Premier Network',
+      companyName: 'Real Property Management Premier Network',
       location: 'Londonderry NH',
       sourceUrl: 'https://rpmpremier.example',
       website: 'https://rpmpremier.example',
@@ -1322,7 +1333,7 @@ function sampleOperatorDigestBatch1() {
       statusReason: 'Passes NH property-manager quality gates',
     },
     {
-      companyName: 'Northcity',
+      companyName: 'Northcity Property Management',
       location: 'Auburn NH',
       sourceUrl: 'https://northcity.example',
       website: 'https://northcity.example',
@@ -1346,7 +1357,7 @@ function sampleOperatorDigestBatch1() {
       statusReason: 'Passes NH property-manager quality gates',
     },
     {
-      companyName: 'Avise',
+      companyName: 'Avise Properties',
       location: 'Bedford NH',
       sourceUrl: 'https://avise.example',
       website: 'https://avise.example',
@@ -1446,31 +1457,85 @@ describe('Operator Review Digest — Prospect Batch Review acceptance', () => {
     const digest = review.operatorDigest;
     assert.equal(digest.recommendedDecision, 'Approve 6 cold prospects as Batch 1.');
     assert.deepEqual(digest.included, [
-      'RPM Thrive',
+      'Real Property Management Thrive',
       'Elm Grove Companies',
-      'RPM Premier Network',
-      'Northcity',
+      'Real Property Management Premier Network',
+      'Northcity Property Management',
       'The MEG Companies',
-      'Avise',
+      'Avise Properties',
     ]);
+    assert.equal(digest.sectionTitles.excluded, 'Held back');
+    assert.deepEqual(digest.heldBack, digest.excluded);
     assert.ok(
-      digest.excluded.some((line) =>
-        /Held back: Cedar.*until source verification/i.test(line)
-      )
-    );
-    assert.ok(digest.excluded.some((line) => /Nurture only: Keyrenter/i.test(line)));
-    assert.ok(
-      digest.excluded.some((line) =>
-        /Excluded for now: optional Manchester expansion candidates/i.test(line)
+      digest.heldBack.some((line) =>
+        /Cedar Management Group — source verification required/i.test(line)
       )
     );
     assert.ok(
-      digest.excluded.some((line) => /Rejected: Cushman\s*&\s*Wakefield/i.test(line))
+      digest.heldBack.some((line) =>
+        /Keyrenter New England Property Management — existing relationship \/ nurture only/i.test(
+          line
+        )
+      )
+    );
+    assert.ok(
+      digest.heldBack.some((line) =>
+        /Optional Manchester candidates — not included yet/i.test(line)
+      )
+    );
+    assert.ok(
+      digest.heldBack.some((line) =>
+        /Cushman\s*&\s*Wakefield — rejected as too institutional/i.test(line)
+      )
+    );
+    assert.match(
+      digest.whyRecommended.join(' '),
+      /clean, net-new prospects in the approved priority towns/i
     );
     assert.equal(digest.nextStepAfterApproval, OUTREACH_STRATEGY_PREVIEW_TITLE);
     assert.equal(digest.nextStepAfterApproval, 'Outreach Strategy Preview');
     assert.ok(digest.primaryActions.some((a) => a.id === 'approve_batch_1'));
     assert.equal(digest.evidence.collapsedByDefault, true);
+  });
+
+  it('Held back section appears in digest before evidence', () => {
+    const review = digestReview();
+    const msg = formatProspectBatchReviewMessage(review);
+    assert.match(msg, /## Held back/);
+    assert.match(
+      msg,
+      /Cedar Management Group — source verification required/
+    );
+    assert.match(
+      msg,
+      /Keyrenter New England Property Management — existing relationship \/ nurture only/
+    );
+    assert.match(msg, /Optional Manchester candidates — not included yet/);
+    assert.match(
+      msg,
+      /Cushman\s*&\s*Wakefield — rejected as too institutional/
+    );
+    // Held back comes after included and before why.
+    const includedIdx = msg.indexOf('## What is included');
+    const heldIdx = msg.indexOf('## Held back');
+    const whyIdx = msg.indexOf('## Why this is recommended');
+    assert.ok(includedIdx >= 0 && heldIdx > includedIdx);
+    assert.ok(whyIdx > heldIdx);
+    assert.ok(msg.indexOf('View evidence') > heldIdx || msg.includes(EVIDENCE_COLLAPSED_NOTE));
+    assert.doesNotMatch(msg, /Source URL:/);
+
+    const html = renderOperatorReviewDigest(review.operatorDigest, {
+      elementId: 'prospectBatchReview',
+      evidenceOpen: false,
+    });
+    const analysis = analyzeOperatorReviewHtml(html);
+    assert.equal(analysis.hasHeldBackSection, true);
+    assert.equal(analysis.digestBeforeEvidence, true);
+    assert.match(html, /Cedar Management Group — source verification required/);
+    assert.match(
+      html,
+      /Keyrenter New England Property Management — existing relationship \/ nurture only/
+    );
   });
 
   it('digest renders before evidence and evidence is collapsed by default', () => {
@@ -1479,6 +1544,7 @@ describe('Operator Review Digest — Prospect Batch Review acceptance', () => {
     const split = splitDigestAndEvidence(msg);
     assert.match(split.digest, /## Recommended decision/);
     assert.match(split.digest, /Approve 6 cold prospects as Batch 1/);
+    assert.match(split.digest, /## Held back/);
     assert.ok(split.digest.includes(EVIDENCE_COLLAPSED_NOTE));
     assert.equal(split.evidence, '');
     assert.equal(split.evidenceCollapsed, true);
@@ -1489,7 +1555,7 @@ describe('Operator Review Digest — Prospect Batch Review acceptance', () => {
 
     const evidence = formatProspectBatchReviewEvidenceMessage(review);
     assert.match(evidence, /View evidence/);
-    assert.match(evidence, /RPM Thrive/);
+    assert.match(evidence, /Real Property Management Thrive/);
     assert.match(evidence, /Source URL:/);
     assert.match(evidence, /fit rationale/i);
     assert.match(evidence, /Confidence:/);
@@ -1504,6 +1570,7 @@ describe('Operator Review Digest — Prospect Batch Review acceptance', () => {
     assert.equal(analysis.hasDigest, true);
     assert.equal(analysis.hasEvidenceDrawer, true);
     assert.equal(analysis.hasPrimaryActions, true);
+    assert.equal(analysis.hasHeldBackSection, true);
     assert.equal(analysis.digestBeforeEvidence, true);
     assert.equal(analysis.actionsBeforeEvidence, true);
     assert.equal(analysis.evidenceCollapsedByDefault, true);

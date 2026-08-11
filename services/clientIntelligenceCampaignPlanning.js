@@ -53,6 +53,7 @@ const {
   formatOperatorReviewArtifactMessage,
   formatOperatorReviewEvidenceMessage,
   VIEW_EVIDENCE_LABEL,
+  PROSPECT_BATCH_REVIEW_DIGEST_SECTION_ORDER,
 } = require('./operatorReviewDigest');
 const {
   buildArtifactSynthesisContext,
@@ -3327,15 +3328,25 @@ function formatBatchReviewCandidateBlock(row, index) {
     .join('\n');
 }
 
-function shortCompanyLabel(row) {
-  const name = companyNameOf(row);
-  if (!name) return '—';
-  // Digest uses a short operator-facing label (drop trailing legal fluff when long).
-  return name
-    .replace(/\s+Property\s+Management(?:\s+Company)?$/i, '')
-    .replace(/\s+LLC\.?$/i, '')
-    .replace(/\s+Inc\.?$/i, '')
-    .trim() || name;
+function digestCompanyLabel(row) {
+  // Held-back / included lines use the full company name for operator trust.
+  return companyNameOf(row) || '—';
+}
+
+function rejectionHeldBackReason(row) {
+  const reason = String(
+    (row && (row.rejectionReason || row.statusReason || row.risks)) || ''
+  ).toLowerCase();
+  if (/institutional|large_institutional|cushman|national\s+firm/i.test(reason)) {
+    return 'rejected as too institutional';
+  }
+  if (/outside.?market|outside.?region/i.test(reason)) {
+    return 'rejected — outside market region';
+  }
+  if (/wrong.?segment/i.test(reason)) {
+    return 'rejected — wrong segment';
+  }
+  return 'rejected';
 }
 
 /**
@@ -3364,62 +3375,38 @@ function buildProspectBatchReviewOperatorDigest(review) {
     (r) => !/\bkeyrenter\b/i.test(companyNameOf(r))
   );
 
-  const excluded = [];
-  if (cedarRows.length) {
-    excluded.push(
-      `Held back: ${cedarRows.map(shortCompanyLabel).join(', ')} until source verification`
-    );
-  }
-  otherSourceVerification.forEach((r) => {
-    excluded.push(
-      `Held back: ${shortCompanyLabel(r)} until source verification`
+  const heldBack = [];
+  cedarRows.forEach((r) => {
+    heldBack.push(
+      `${digestCompanyLabel(r)} — source verification required`
     );
   });
-  if (keyrenterRows.length) {
-    excluded.push(
-      `Nurture only: ${keyrenterRows.map(shortCompanyLabel).join(', ')}`
+  otherSourceVerification.forEach((r) => {
+    heldBack.push(
+      `${digestCompanyLabel(r)} — source verification required`
     );
-  }
+  });
+  keyrenterRows.forEach((r) => {
+    heldBack.push(
+      `${digestCompanyLabel(r)} — existing relationship / nurture only`
+    );
+  });
   otherNurture.forEach((r) => {
-    excluded.push(`Nurture only: ${shortCompanyLabel(r)}`);
+    heldBack.push(
+      `${digestCompanyLabel(r)} — existing relationship / nurture only`
+    );
   });
   if (expansion.length) {
-    excluded.push('Excluded for now: optional Manchester expansion candidates');
+    heldBack.push('Optional Manchester candidates — not included yet');
   }
   rejected.forEach((r) => {
-    excluded.push(`Rejected: ${shortCompanyLabel(r)}`);
+    heldBack.push(
+      `${digestCompanyLabel(r)} — ${rejectionHeldBackReason(r)}`
+    );
   });
 
-  const watchouts = [];
-  if (cedarRows.length || sourceVerification.length) {
-    watchouts.push(
-      'Source-verification accounts stay out of Batch 1 until verified'
-    );
-  }
-  if (nurture.length) {
-    watchouts.push(
-      'Existing-relationship accounts are nurture only — not cold outreach'
-    );
-  }
-  if (expansion.length) {
-    watchouts.push(
-      'Optional expansion (Manchester / nearby) stays excluded unless explicitly approved'
-    );
-  }
-  if (rejected.length) {
-    watchouts.push(
-      'Rejected candidates remain audit-only and are never outreach-ready'
-    );
-  }
-  if (!watchouts.length) {
-    watchouts.push('Review-first only — no outreach copy, sends, or CRM writes');
-  }
-
   const why = [
-    `${acceptedCount} accepted cold first-pass primary-town candidate${
-      acceptedCount === 1 ? '' : 's'
-    } with public-source evidence`,
-    'Held, nurture, expansion, and rejected rows stay out of Batch 1',
+    'This keeps Batch 1 focused on clean, net-new prospects in the approved priority towns.',
   ];
 
   const evidenceSections = [
@@ -3468,10 +3455,14 @@ function buildProspectBatchReviewOperatorDigest(review) {
       acceptedCount === 1 ? '' : 's'
     } as Batch 1.`,
     whyRecommended: why,
-    included: accepted.map(shortCompanyLabel),
-    excluded,
-    keyWatchouts: watchouts,
+    included: accepted.map(digestCompanyLabel),
+    heldBack,
+    keyWatchouts: [],
     nextStepAfterApproval: OUTREACH_STRATEGY_PREVIEW_TITLE,
+    sectionOrder: PROSPECT_BATCH_REVIEW_DIGEST_SECTION_ORDER.slice(),
+    sectionTitles: {
+      excluded: 'Held back',
+    },
     primaryActions: [
       {
         id: 'approve_batch_1',
