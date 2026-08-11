@@ -70,7 +70,11 @@ const {
   outreachStrategyPreviewLooksStale,
   findStaleOutreachStrategyFragments,
   repairOutreachStrategyPreview,
+  outreachCopyPlanLooksStale,
+  findStaleOutreachCopyPlanFragments,
+  repairOutreachCopyPlan,
   OPERATOR_BANNED_FRAGMENT_RES,
+  STALE_OUTREACH_COPY_PLAN_FRAGMENT_RES,
 } = require('../services/clientIntelligenceCampaignPlanning');
 const {
   splitDigestAndEvidence,
@@ -2453,6 +2457,24 @@ describe('Outreach Copy Plan section 4 and 5 operator-facing quality', () => {
     return { plan, msg: formatOutreachCopyPlanMessage(plan), ctx, strategy };
   }
 
+  it('section 2 uses operator-facing first-touch goal without meta Batch 1 language', () => {
+    const { plan, msg } = buildPlan();
+    const section2 = extractNumberedSection(msg, 2);
+    assert.match(section2, /First-touch message goal/i);
+    assert.match(
+      section2,
+      /Open a low-pressure conversation with approved Batch 1 property managers about recurring cleaning support, with the goal of earning a short conversation, walkthrough, or estimate request\./
+    );
+    assert.equal(
+      plan.firstTouchGoal,
+      'Open a low-pressure conversation with approved Batch 1 property managers about recurring cleaning support, with the goal of earning a short conversation, walkthrough, or estimate request.'
+    );
+    assert.doesNotMatch(section2, /approved Batch 1 record/i);
+    assert.doesNotMatch(section2, /Stay inside Batch 1/i);
+    assert.doesNotMatch(section2, /do not expand the list/i);
+    assert.doesNotMatch(section2, /Hold final email\/SMS\/call scripts/i);
+  });
+
   it('section 4 lists all towns without ellipses or clipped lists', () => {
     const { plan, msg } = buildPlan();
     const section4 = extractNumberedSection(msg, 4);
@@ -2535,6 +2557,326 @@ describe('Outreach Copy Plan section 4 and 5 operator-facing quality', () => {
     assert.equal(plan.accountChangesMade, false);
   });
 });
+
+describe('Outreach Copy Plan stale-artifact repair before display', () => {
+  function extractNumberedSection(message, sectionNumber) {
+    const msg = String(message || '');
+    const re = new RegExp(
+      `${sectionNumber}\\.[^\\n]*\\n[\\s\\S]*?(?=\\n\\d+\\. |$)`
+    );
+    const match = msg.match(re);
+    return match ? match[0] : '';
+  }
+
+  function copyPlanFixtures() {
+    const batch = withGroups(sampleKeyrenterCorrectionBatch());
+    const review = approveProspectBatchReviewBatch1(
+      buildProspectBatchReview(batch, {
+        userMessage:
+          'Remove Keyrenter New England Property Management from the accepted cold first-pass candidates — it is an existing relationship, not a cold prospect. Keep it as nurture.',
+        workRequestId: batch.workRequestId,
+      })
+    );
+    const ctx = {
+      businessName: 'Anchor Cleaning',
+      brandVoice:
+        'calm, professional, reliable, direct, and easy to work with',
+      competitiveAdvantages:
+        'Reliability and accountability. Responsive communication. Peace of mind for recurring commercial cleaning relationships.',
+      primarySegment: 'property managers',
+      targetMarket: 'Greater Manchester',
+      towns: [
+        'Bedford',
+        'Hooksett',
+        'Londonderry',
+        'Auburn',
+        'Goffstown',
+      ],
+    };
+    const strategy = approveOutreachStrategyPreview(
+      buildOutreachStrategyPreview(review, ctx, {
+        priorCriteriaPreview: {
+          kind: 'prospect_list_criteria_preview',
+          status: 'approved',
+          campaignObjective:
+            'Prove that Greater Manchester property managers will take a discovery conversation about recurring commercial cleaning.',
+        },
+      })
+    );
+    return { batch, review, ctx, strategy };
+  }
+
+  function staleCopyPlan(review) {
+    return {
+      kind: 'outreach_copy_plan',
+      title: OUTREACH_COPY_PLAN_TITLE,
+      status: 'draft',
+      channelSequence: [
+        'Email first — short intro.',
+        'Hold phone / SMS until after approval.',
+      ],
+      firstTouchGoal:
+        'Stay inside Batch 1 (the approved Batch 1 record) and hold scripts until later.',
+      ctaToTest: 'A short discovery conversation.',
+      personalizationInputs: [
+        'prefer Bedford, Hooksett, Londonderry, Auburn, …',
+        'Voice: calm professional',
+      ],
+      proofPoints: [
+        'Carry forward proof already noted: approved Blueprint proof assets',
+        'Hold final email/SMS/call scripts until after strategy approval.',
+        'Differentiator to lean on: Competitive edge is described as reliable crews.',
+        'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
+      ],
+      followUpTiming: ['Follow-up 1 in a few days.'],
+      approvalGate: [
+        'Operator must approve before drafting.',
+        'No sends, CRM writes, exports.',
+      ],
+      generatedAt: '2026-08-11T12:00:00.000Z',
+      workRequestId: review.workRequestId || 'wr-stale-ocp',
+    };
+  }
+
+  it('repairs stale Outreach Copy Plan before display', () => {
+    const { review, ctx, strategy, batch } = copyPlanFixtures();
+    const stale = staleCopyPlan(review);
+
+    assert.equal(outreachCopyPlanLooksStale(stale), true);
+    assert.ok(findStaleOutreachCopyPlanFragments(stale).length >= 1);
+
+    const repairedDirect = repairOutreachCopyPlan(
+      stale,
+      strategy,
+      review,
+      ctx,
+      {}
+    );
+    assert.equal(repairedDirect.repairedFromStale, true);
+    assert.equal(outreachCopyPlanLooksStale(repairedDirect), false);
+    assert.equal(
+      repairedDirect.firstTouchGoal,
+      'Open a low-pressure conversation with approved Batch 1 property managers about recurring cleaning support, with the goal of earning a short conversation, walkthrough, or estimate request.'
+    );
+
+    const reply = buildCampaignPlanningReply(
+      'Show the Outreach Copy Plan',
+      {
+        step: 'outreach_copy_plan',
+        answers: {},
+        slots: {
+          previewGenerated: true,
+          previewApproved: true,
+          criteriaGenerated: true,
+          criteriaApproved: true,
+          buildProposalGenerated: true,
+          buildProposalApproved: true,
+          prospectBatchReviewApproved: true,
+          batch1Approved: true,
+          outreachStrategyPreviewGenerated: true,
+          outreachStrategyPreviewApproved: true,
+          strategyApproved: true,
+          outreachCopyPlanGenerated: true,
+        },
+        outreachStrategyPreview: strategy,
+        outreachCopyPlan: stale,
+        prospectBatchReview: review,
+        scoutCandidateBatch: batch,
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: stale,
+        priorScoutCandidateBatch: batch,
+      }
+    );
+
+    assert.equal(reply.intent, 'repair_outreach_copy_plan');
+    assert.equal(reply.planningState, 'outreach_copy_plan');
+    assert.equal(reply.step, 'outreach_copy_plan');
+    assert.equal(reply.outreachStrategyPreviewApproved, true);
+    assert.ok(reply.outreachCopyPlan);
+    assert.equal(reply.outreachCopyPlan.repairedFromStale, true);
+    assert.equal(outreachCopyPlanLooksStale(reply.outreachCopyPlan), false);
+    assert.equal(reply.repairedFromStale, true);
+
+    assert.match(reply.message, /repaired stale|for approval or revision/i);
+    assert.match(reply.message, /Outreach Copy Plan/);
+    assert.match(
+      reply.message,
+      /Does this Outreach Copy Plan look right to approve/
+    );
+    assert.match(
+      reply.message,
+      /Not re-rendering the Outreach Strategy Preview/
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Does this Outreach Strategy Preview look right to approve/
+    );
+    assert.doesNotMatch(reply.message, /^Outreach Strategy Preview$/m);
+
+    // Workflow state unchanged — still on Outreach Copy Plan, strategy stays approved.
+    assert.equal(reply.planningState, 'outreach_copy_plan');
+    assert.equal(reply.outreachStrategyPreview.status, 'approved');
+    assert.equal(reply.prospectBatchReview.status, 'batch_1_approved');
+  });
+
+  it('banned fragments never render after repair', () => {
+    const { review, ctx, strategy, batch } = copyPlanFixtures();
+    const stale = staleCopyPlan(review);
+    const reply = buildCampaignPlanningReply(
+      'Show the Outreach Copy Plan',
+      {
+        step: 'outreach_copy_plan',
+        answers: {},
+        slots: {
+          previewApproved: true,
+          criteriaApproved: true,
+          buildProposalApproved: true,
+          prospectBatchReviewApproved: true,
+          batch1Approved: true,
+          outreachStrategyPreviewApproved: true,
+          strategyApproved: true,
+          outreachCopyPlanGenerated: true,
+        },
+        outreachStrategyPreview: strategy,
+        outreachCopyPlan: stale,
+        prospectBatchReview: review,
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: stale,
+        priorScoutCandidateBatch: batch,
+      }
+    );
+
+    const msg = reply.message;
+    for (const re of STALE_OUTREACH_COPY_PLAN_FRAGMENT_RES) {
+      assert.doesNotMatch(
+        msg,
+        re,
+        `Banned fragment still rendered: ${re}`
+      );
+    }
+    assert.doesNotMatch(msg, /prefer\s+Bedford/i);
+    assert.doesNotMatch(msg, /Carry forward proof already noted/i);
+    assert.doesNotMatch(msg, /Hold final email\/SMS\/call scripts/i);
+    assert.doesNotMatch(msg, /Competitive edge is described as/i);
+    assert.doesNotMatch(msg, /This is operator-stated differentiation/i);
+    assert.doesNotMatch(msg, /approved Batch 1 record/i);
+    assert.doesNotMatch(msg, /Differentiator to lean on/i);
+    assert.doesNotMatch(msg, /…/);
+    assert.doesNotMatch(msg, /,\s*\.\.\./);
+  });
+
+  it('no ellipses or clipped town lists in repaired Copy Plan', () => {
+    const { review, ctx, strategy } = copyPlanFixtures();
+    const stale = staleCopyPlan(review);
+    const repaired = repairOutreachCopyPlan(stale, strategy, review, ctx, {});
+    const msg = formatOutreachCopyPlanMessage(repaired);
+    const section4 = extractNumberedSection(msg, 4);
+    assert.match(
+      section4,
+      /Prospect town: Bedford, Hooksett, Londonderry, Auburn, or Goffstown\./
+    );
+    assert.doesNotMatch(section4, /…|\.\.\.|, \u2026/);
+    assert.doesNotMatch(section4, /prefer\s+Bedford/i);
+    assert.deepEqual(repaired.personalizationInputs, [
+      'Prospect town: Bedford, Hooksett, Londonderry, Auburn, or Goffstown.',
+      'Property type or portfolio cue when publicly visible.',
+      'Public role or decision-maker title when present.',
+      'Any visible signal that reliability, responsiveness, or recurring service may matter.',
+    ]);
+  });
+
+  it('guardrail language stays in section 7 only', () => {
+    const { review, ctx, strategy } = copyPlanFixtures();
+    const stale = staleCopyPlan(review);
+    const repaired = repairOutreachCopyPlan(stale, strategy, review, ctx, {});
+    const msg = formatOutreachCopyPlanMessage(repaired);
+    const section2 = extractNumberedSection(msg, 2);
+    const section4 = extractNumberedSection(msg, 4);
+    const section5 = extractNumberedSection(msg, 5);
+    const section7 = extractNumberedSection(msg, 7);
+
+    assert.match(
+      section2,
+      /Open a low-pressure conversation with approved Batch 1 property managers about recurring cleaning support/
+    );
+    assert.doesNotMatch(section2, /No sends|No CRM writes|No export/i);
+    assert.doesNotMatch(section4, /No sends|No CRM writes|No export/i);
+    assert.doesNotMatch(section5, /No sends|No CRM writes|No export/i);
+    assert.doesNotMatch(section5, /Hold final email\/SMS\/call scripts/i);
+    assert.match(section7, /Approval gate before drafting final copy/i);
+    assert.match(section7, /No final email\/SMS\/call scripts/i);
+    assert.match(section7, /No sends, CRM writes, exports/i);
+    assert.deepEqual(repaired.proofPoints, [
+      'Simple commercial cleaning checklist.',
+      'Clear response-time expectation.',
+      'Clear service area.',
+      'Professional walkthrough / estimate process.',
+      'Before/after photos, references, or reviews if available.',
+      "Anchor's practical promise: reliable cleaning, responsive communication, and fewer vendor-chasing headaches.",
+    ]);
+  });
+
+  it('workflow state remains unchanged when repairing Copy Plan', () => {
+    const { review, ctx, strategy, batch } = copyPlanFixtures();
+    const stale = staleCopyPlan(review);
+    const reply = buildCampaignPlanningReply(
+      'Show the Outreach Copy Plan',
+      {
+        step: 'outreach_copy_plan',
+        answers: {},
+        slots: {
+          previewApproved: true,
+          criteriaApproved: true,
+          buildProposalApproved: true,
+          prospectBatchReviewApproved: true,
+          batch1Approved: true,
+          outreachStrategyPreviewApproved: true,
+          strategyApproved: true,
+          outreachCopyPlanGenerated: true,
+        },
+        outreachStrategyPreview: strategy,
+        outreachCopyPlan: stale,
+        prospectBatchReview: review,
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: stale,
+        priorScoutCandidateBatch: batch,
+      }
+    );
+
+    assert.equal(reply.planningState, 'outreach_copy_plan');
+    assert.equal(reply.step, 'outreach_copy_plan');
+    assert.equal(reply.batch1Approved, true);
+    assert.equal(reply.prospectBatchReviewApproved, true);
+    assert.equal(reply.outreachStrategyPreviewApproved, true);
+    assert.equal(reply.strategyApproved, true);
+    assert.equal(reply.liveSourcingApproved, false);
+    assert.equal(reply.outreachCopyGenerated, false);
+    assert.equal(reply.finalOutreachCopyGenerated, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.accountChangesMade, false);
+    // Does not bounce back to strategy preview or re-ask strategy approval.
+    assert.notEqual(reply.planningState, 'outreach_strategy_preview');
+    assert.doesNotMatch(
+      reply.message,
+      /Does this Outreach Strategy Preview look right to approve/
+    );
+  });
+});
+
 describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate', () => {
   const copyPlanApprovalMessage =
     'Approve the Outreach Copy Plan. Next step: create the Outreach Draft Preview.';
