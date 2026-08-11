@@ -14,6 +14,7 @@ const {
   resolveCampaignArtifactAction,
   looksLikeProspectBatchReviewRequest,
   looksLikeProspectBatchReviewCorrection,
+  looksLikeProspectBatchReviewApproval,
   classifyProspectAcquisitionIntent,
   PROSPECT_ACQUISITION_INTENTS,
   emptyReasoningMemory,
@@ -30,6 +31,8 @@ const {
   applyRelationshipOverridesToBatch,
   relationshipOverrideMatchesRow,
   normalizeCompanyIdentity,
+  approveProspectBatchReviewBatch1,
+  BATCH_1_APPROVED_MESSAGE,
   RELATIONSHIP_STATUS,
 } = require('../services/clientIntelligenceCampaignPlanning');
 
@@ -992,5 +995,258 @@ describe('Prospect Batch Review — Keyrenter relationship override', () => {
     );
     assert.equal(normalizeCompanyIdentity('Property Management'), '');
     assert.match(normalizeCompanyIdentity('Keyrenter New England Property Management'), /keyrenter/i);
+  });
+});
+
+describe('Prospect Batch Review — Batch 1 approval transition', () => {
+  const correctionMessage =
+    'Remove Keyrenter New England Property Management from the accepted cold first-pass candidates — it is an existing relationship, not a cold prospect. Keep it as nurture.';
+  const approvalMessage =
+    'Approve the 6 accepted cold first-pass candidates as Batch 1. Leave Cedar for source verification and Keyrenter as existing-relationship nurture.';
+
+  function correctedReview() {
+    const batch = withGroups(sampleKeyrenterCorrectionBatch());
+    return buildProspectBatchReview(batch, {
+      userMessage: correctionMessage,
+      workRequestId: batch.workRequestId,
+    });
+  }
+
+  function approvedSessionState(review) {
+    return {
+      step: 'prospect_batch_review',
+      slots: {
+        previewGenerated: true,
+        previewApproved: true,
+        criteriaGenerated: true,
+        criteriaApproved: true,
+        buildProposalGenerated: true,
+        buildProposalApproved: true,
+      },
+      prospectListCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+      },
+      prospectListBuildProposal: {
+        kind: 'prospect_list_build_proposal',
+        status: 'approved',
+      },
+      scoutCandidateBatch: withGroups(sampleKeyrenterCorrectionBatch()),
+      prospectBatchReview: review,
+    };
+  }
+
+  it('approval of Prospect Batch Review advances state', () => {
+    const review = correctedReview();
+    assert.equal(review.counts.accepted, 6);
+
+    assert.equal(
+      looksLikeProspectBatchReviewApproval(approvalMessage, {
+        priorProspectBatchReview: review,
+        step: 'prospect_batch_review',
+      }),
+      true
+    );
+    assert.equal(
+      classifyProspectAcquisitionIntent(approvalMessage, {
+        priorProspectBatchReview: review,
+        step: 'prospect_batch_review',
+      }),
+      PROSPECT_ACQUISITION_INTENTS.APPROVE_PROSPECT_BATCH_REVIEW
+    );
+
+    let mem = emptyReasoningMemory();
+    mem = markArtifactApproved(mem, ARTIFACT_KINDS.PROSPECT_CRITERIA);
+    mem = markArtifactApproved(
+      mem,
+      ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    );
+    mem = markArtifactGenerated(
+      mem,
+      ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
+      'draft'
+    );
+
+    const action = resolveCampaignArtifactAction({
+      userMessage: approvalMessage,
+      messageClass: MESSAGE_CLASSES.APPROVAL,
+      memory: mem,
+      priorCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+      },
+      priorBuildProposal: {
+        kind: 'prospect_list_build_proposal',
+        status: 'approved',
+      },
+      priorProspectBatchReview: review,
+      priorScoutCandidateBatch: withGroups(sampleKeyrenterCorrectionBatch()),
+      step: 'prospect_batch_review',
+    });
+    assert.equal(action.action, 'approve_prospect_batch_review');
+    assert.equal(action.planningState, 'outreach_strategy_preview');
+    assert.match(String(action.note || ''), /Batch 1 approved/i);
+
+    const reply = buildCampaignPlanningReply(
+      approvalMessage,
+      approvedSessionState(review),
+      { businessName: 'Anchor Cleaning' },
+      {
+        priorScoutCandidateBatch: withGroups(sampleKeyrenterCorrectionBatch()),
+        priorProspectBatchReview: review,
+        messageClass: MESSAGE_CLASSES.APPROVAL,
+      }
+    );
+
+    assert.equal(reply.intent, 'prospect_batch_1_approved');
+    assert.equal(reply.planningState, 'outreach_strategy_preview');
+    assert.equal(reply.step, 'outreach_strategy_preview');
+    assert.ok(reply.prospectBatchReview.batch1Approved);
+    assert.equal(reply.prospectBatchReview.status, 'batch_1_approved');
+    assert.match(reply.message, /Batch 1 approved/i);
+    assert.match(reply.message, /outreach strategy preview/i);
+    assert.ok(reply.message.includes(BATCH_1_APPROVED_MESSAGE));
+    assert.ok(reply.outreachStrategyPreview);
+    assert.equal(reply.outreachStrategyPreview.kind, 'outreach_strategy_preview');
+    assert.equal(reply.outreachCopyGenerated, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+  });
+
+  it('approved batch excludes Cedar, Keyrenter, optional expansion, and rejected candidates', () => {
+    const review = correctedReview();
+    const approved = approveProspectBatchReviewBatch1(review);
+    assert.equal(approved.approvedBatch.candidateCount, 6);
+    assert.equal(approved.approvedBatch.candidates.length, 6);
+    assert.ok(
+      approved.approvedBatch.candidates.every((c) => c.approvedInBatch1)
+    );
+    assert.ok(
+      !approved.approvedBatch.candidates.some((c) =>
+        /cedar|keyrenter|cushman/i.test(c.companyName)
+      )
+    );
+    assert.ok(
+      !approved.approvedBatch.candidates.some((c) =>
+        /^Property Management$/i.test(c.companyName)
+      )
+    );
+    assert.ok(
+      approved.approvedBatch.excludedSourceVerification.some((n) =>
+        /Cedar/i.test(n)
+      )
+    );
+    assert.ok(
+      approved.approvedBatch.excludedExistingRelationship.some((n) =>
+        /Keyrenter/i.test(n)
+      )
+    );
+    assert.ok(
+      (approved.approvedBatch.excludedOptionalExpansion || []).some((n) =>
+        /Property Management/i.test(n)
+      ) ||
+        (approved.optionalExpansion || []).some((r) =>
+          /realpropertynh\.com/i.test(r.sourceUrl || '')
+        )
+    );
+    assert.ok(
+      approved.approvedBatch.excludedRejected.some((n) => /Cushman/i.test(n))
+    );
+
+    const reply = buildCampaignPlanningReply(
+      approvalMessage,
+      approvedSessionState(review),
+      { businessName: 'Anchor Cleaning' },
+      {
+        priorProspectBatchReview: review,
+        priorScoutCandidateBatch: withGroups(sampleKeyrenterCorrectionBatch()),
+      }
+    );
+    const batch = reply.prospectBatchReview.approvedBatch;
+    assert.equal(batch.candidateCount, 6);
+    assert.ok(batch.excludedSourceVerification.some((n) => /Cedar/i.test(n)));
+    assert.ok(
+      batch.excludedExistingRelationship.some((n) => /Keyrenter/i.test(n))
+    );
+    assert.match(reply.message, /Cedar remains source-verification/i);
+    assert.match(reply.message, /Keyrenter remains existing-relationship/i);
+    assert.match(reply.message, /Optional expansion candidates remain excluded/i);
+  });
+
+  it('repeated approval does not duplicate or re-render the review artifact', () => {
+    const review = correctedReview();
+    const first = buildCampaignPlanningReply(
+      approvalMessage,
+      approvedSessionState(review),
+      { businessName: 'Anchor Cleaning' },
+      {
+        priorProspectBatchReview: review,
+        priorScoutCandidateBatch: withGroups(sampleKeyrenterCorrectionBatch()),
+      }
+    );
+    assert.equal(first.intent, 'prospect_batch_1_approved');
+    assert.doesNotMatch(first.message, /## 1\. Accepted cold first-pass/i);
+    assert.doesNotMatch(
+      first.message,
+      /Do you want to approve the 6 accepted cold first-pass candidates/i
+    );
+
+    const second = buildCampaignPlanningReply(
+      approvalMessage,
+      {
+        ...approvedSessionState(first.prospectBatchReview),
+        step: 'outreach_strategy_preview',
+        outreachStrategyPreview: first.outreachStrategyPreview,
+      },
+      { businessName: 'Anchor Cleaning' },
+      {
+        priorProspectBatchReview: first.prospectBatchReview,
+        priorScoutCandidateBatch: withGroups(sampleKeyrenterCorrectionBatch()),
+      }
+    );
+    assert.equal(second.intent, 'prospect_batch_1_approved');
+    assert.equal(second.planningState, 'outreach_strategy_preview');
+    assert.match(second.message, /Batch 1 approved/i);
+    assert.doesNotMatch(second.message, /## 1\. Accepted cold first-pass/i);
+    assert.doesNotMatch(
+      second.message,
+      /Do you want to approve the 6 accepted cold first-pass candidates/i
+    );
+    assert.equal(
+      second.prospectBatchReview.approvedBatch.candidateCount,
+      6
+    );
+  });
+
+  it('next state is outreach strategy preview / copy planning, not live send', () => {
+    const review = correctedReview();
+    const reply = buildCampaignPlanningReply(
+      approvalMessage,
+      approvedSessionState(review),
+      { businessName: 'Anchor Cleaning' },
+      {
+        priorProspectBatchReview: review,
+        priorScoutCandidateBatch: withGroups(sampleKeyrenterCorrectionBatch()),
+      }
+    );
+    assert.equal(reply.planningState, 'outreach_strategy_preview');
+    assert.equal(reply.outreachStrategyPreview.status, 'pending');
+    assert.equal(reply.outreachStrategyPreview.reviewFirst, true);
+    assert.equal(reply.outreachStrategyPreview.planningOnly, true);
+    assert.equal(reply.outreachStrategyPreview.outreachCopyGenerated, false);
+    assert.equal(reply.outreachStrategyPreview.sendsMade, false);
+    assert.equal(reply.outreachCopyGenerated, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.accountChangesMade, false);
+    assert.match(
+      reply.outreachStrategyPreview.summary,
+      /copy planning only|not live send/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /campaign is live|I (?:am )?sending|launching outreach now/i
+    );
   });
 });

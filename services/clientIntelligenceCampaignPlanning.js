@@ -21,8 +21,12 @@ const {
   looksLikeProspectListDraftRequest,
   looksLikeProspectBatchReviewRequest,
   looksLikeProspectBatchReviewCorrection,
+  looksLikeProspectBatchReviewApproval,
   hasActiveProspectBatchReview,
+  isProspectBatchReviewAlreadyApproved,
   hasCompletedScoutCandidateBatch,
+  looksLikeApproval,
+  looksLikeApprovalLead,
   looksLikeScoutHandoffBriefRequest,
   looksLikeHandBriefToScoutRequest,
   looksLikeExecuteExistingScoutWorkRequest,
@@ -186,10 +190,19 @@ const CAMPAIGN_PLANNING_STATES = Object.freeze({
   SCOUT_HANDOFF_NOT_WIRED: 'scout_handoff_not_wired',
   SCOUT_HANDOFF_FAILED: 'scout_handoff_failed',
   PROSPECT_BATCH_REVIEW: 'prospect_batch_review',
+  PROSPECT_BATCH_1_APPROVED: 'prospect_batch_1_approved',
+  OUTREACH_STRATEGY_PREVIEW: 'outreach_strategy_preview',
   LIVE_SOURCING_APPROVED: 'live_sourcing_approved',
   LIVE_SOURCING_UNAVAILABLE: 'live_sourcing_unavailable',
   LIVE_SOURCING_GENERATED: 'live_sourcing_generated',
 });
+
+const BATCH_1_APPROVED_MESSAGE =
+  'Batch 1 approved. Next step: prepare outreach strategy preview.';
+const BATCH_1_APPROVED_DISCLAIMER =
+  'Review-first only — no outreach copy, sends, CRM writes, exports, or account changes.';
+const OUTREACH_STRATEGY_PREVIEW_KIND = 'outreach_strategy_preview';
+const OUTREACH_STRATEGY_PREVIEW_TITLE = 'Outreach Strategy Preview';
 
 const SCOUT_HANDOFF_SECTION_TITLES = Object.freeze({
   handoffStatus: 'Handoff status',
@@ -3667,6 +3680,286 @@ function produceProspectBatchReviewResult(ctx, answers, slots, opts, leadIn) {
   };
 }
 
+/**
+ * Mark Batch 1 (accepted cold first-pass only) approved on a Prospect Batch Review.
+ * Cedar / source-verification, Keyrenter / nurture, optional expansion, and rejected
+ * stay excluded from the approved cold batch.
+ */
+function approveProspectBatchReviewBatch1(review, opts = {}) {
+  const prior = review || {};
+  const approvedCandidates = (prior.acceptedFirstPass || []).map((row) => ({
+    ...row,
+    batchMembership: 'batch_1',
+    approvedInBatch1: true,
+  }));
+  const approvedAt =
+    opts.approvedAt ||
+    prior.batch1ApprovedAt ||
+    (prior.approvedBatch && prior.approvedBatch.approvedAt) ||
+    new Date().toISOString();
+
+  return {
+    ...prior,
+    kind: PROSPECT_BATCH_REVIEW_KIND,
+    title: prior.title || PROSPECT_BATCH_REVIEW_TITLE,
+    status: 'batch_1_approved',
+    batch1Approved: true,
+    batch1ApprovedAt: approvedAt,
+    approvedBatch: {
+      name: 'Batch 1',
+      status: 'approved',
+      approvedAt,
+      candidateCount: approvedCandidates.length,
+      candidates: approvedCandidates,
+      // Explicit exclusions — not cold outreach for Batch 1
+      excludedSourceVerification: (prior.sourceVerificationRequired || []).map(
+        (r) => r.companyName || r.company
+      ),
+      excludedExistingRelationship: (prior.existingRelationship || []).map(
+        (r) => r.companyName || r.company
+      ),
+      excludedOptionalExpansion: (prior.optionalExpansion || []).map(
+        (r) => r.companyName || r.company
+      ),
+      excludedRejected: (prior.rejected || []).map(
+        (r) => r.companyName || r.company
+      ),
+    },
+    acceptedFirstPass: prior.acceptedFirstPass || [],
+    sourceVerificationRequired: prior.sourceVerificationRequired || [],
+    optionalExpansion: prior.optionalExpansion || [],
+    existingRelationship: prior.existingRelationship || [],
+    rejected: prior.rejected || [],
+    counts: {
+      ...(prior.counts || {}),
+      accepted: (prior.acceptedFirstPass || []).length,
+      approvedBatch1: approvedCandidates.length,
+      sourceVerificationRequired: (prior.sourceVerificationRequired || [])
+        .length,
+      existingRelationship: (prior.existingRelationship || []).length,
+      optionalExpansion: (prior.optionalExpansion || []).length,
+      rejected: (prior.rejected || []).length,
+    },
+    closingQuestion: null,
+    nextStep: CAMPAIGN_PLANNING_STATES.OUTREACH_STRATEGY_PREVIEW,
+    nextStepLabel: 'prepare outreach strategy preview',
+    disclaimer: BATCH_1_APPROVED_DISCLAIMER,
+    reviewOnly: true,
+    crmWritesMade: false,
+    outreachCopyGenerated: false,
+    accountChangesMade: false,
+    exportMade: false,
+    sendsMade: false,
+  };
+}
+
+function buildOutreachStrategyPreviewStub(approvedReview, opts = {}) {
+  const batch = (approvedReview && approvedReview.approvedBatch) || {};
+  return {
+    kind: OUTREACH_STRATEGY_PREVIEW_KIND,
+    title: OUTREACH_STRATEGY_PREVIEW_TITLE,
+    status: 'pending',
+    batchName: batch.name || 'Batch 1',
+    approvedCandidateCount:
+      batch.candidateCount != null
+        ? batch.candidateCount
+        : ((approvedReview && approvedReview.acceptedFirstPass) || []).length,
+    planningOnly: true,
+    reviewFirst: true,
+    outreachCopyGenerated: false,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+    summary:
+      'Prepare an outreach strategy preview for Batch 1 — copy planning only, not live send.',
+    disclaimer: BATCH_1_APPROVED_DISCLAIMER,
+    workRequestId:
+      opts.workRequestId ||
+      (approvedReview && approvedReview.workRequestId) ||
+      null,
+  };
+}
+
+function formatProspectBatch1ApprovalMessage(approvedReview, opts = {}) {
+  const review = approvedReview || {};
+  const count =
+    (review.approvedBatch && review.approvedBatch.candidateCount) != null
+      ? review.approvedBatch.candidateCount
+      : (review.acceptedFirstPass || []).length;
+  const lines = [
+    BATCH_1_APPROVED_MESSAGE,
+    '',
+    `Approved cold first-pass candidates (Batch 1): ${count}`,
+  ];
+  const cedar = (review.sourceVerificationRequired || []).find((r) =>
+    /cedar/i.test(String(r.companyName || r.company || ''))
+  );
+  if (cedar) {
+    lines.push(
+      'Cedar remains source-verification required — not approved into Batch 1.'
+    );
+  } else if ((review.sourceVerificationRequired || []).length) {
+    lines.push(
+      `Source-verification required accounts (${
+        review.sourceVerificationRequired.length
+      }) remain excluded from Batch 1.`
+    );
+  }
+  const keyrenter = (review.existingRelationship || []).find((r) =>
+    /keyrenter/i.test(String(r.companyName || r.company || ''))
+  );
+  if (keyrenter) {
+    lines.push(
+      'Keyrenter remains existing-relationship / nurture — not cold outreach.'
+    );
+  } else if ((review.existingRelationship || []).length) {
+    lines.push(
+      'Existing-relationship / nurture accounts remain excluded from cold outreach.'
+    );
+  }
+  if ((review.optionalExpansion || []).length) {
+    lines.push('Optional expansion candidates remain excluded.');
+  }
+  if ((review.rejected || []).length) {
+    lines.push('Rejected candidates remain excluded.');
+  }
+  lines.push('');
+  lines.push(BATCH_1_APPROVED_DISCLAIMER);
+  if (opts.repeatAck) {
+    lines.unshift(
+      'Batch 1 is already approved — not re-rendering the Prospect Batch Review.',
+      ''
+    );
+  }
+  return lines.join('\n').trim();
+}
+
+function produceProspectBatchReviewApprovalResult(
+  ctx,
+  answers,
+  slots,
+  opts,
+  leadIn
+) {
+  const priorReview = opts.priorProspectBatchReview || null;
+  const alreadyApproved = isProspectBatchReviewAlreadyApproved(priorReview);
+
+  let review = priorReview;
+  if (!review || !review.acceptedFirstPass) {
+    // Rebuild from Scout batch so approval still works if only the batch is loaded.
+    const batch =
+      (priorReview && priorReview.sourceScoutCandidateBatch) ||
+      opts.priorScoutCandidateBatch ||
+      (opts.priorScoutHandoff && opts.priorScoutHandoff.candidateBatch) ||
+      (priorReview && priorReview.scoutCandidateBatch) ||
+      null;
+    if (hasCompletedScoutCandidateBatch(batch)) {
+      review = buildProspectBatchReview(batch, {
+        workRequestId:
+          opts.workRequestId ||
+          (priorReview && priorReview.workRequestId) ||
+          null,
+        relationshipOverrides:
+          (priorReview && priorReview.relationshipOverrides) ||
+          opts.relationshipOverrides ||
+          [],
+        userMessage: opts.userMessage || '',
+        priorProspectBatchReview: priorReview,
+      });
+    }
+  }
+
+  if (!review) {
+    return {
+      message: [
+        leadIn || 'Prospect Batch Review approval needs the active review.',
+        '',
+        'No Prospect Batch Review is loaded to approve as Batch 1.',
+        BATCH_1_APPROVED_DISCLAIMER,
+      ].join('\n'),
+      step: CAMPAIGN_PLANNING_STATES.PROSPECT_BATCH_REVIEW,
+      answers,
+      slots: { ...slots },
+      prospectBatchReview: null,
+      outreachStrategyPreview: null,
+      intent: 'prospect_batch_review_approval_missing',
+      planningState: CAMPAIGN_PLANNING_STATES.PROSPECT_BATCH_REVIEW,
+      currentAsk: PROSPECT_BATCH_REVIEW_CLOSING_QUESTION,
+    };
+  }
+
+  const approvedReview = approveProspectBatchReviewBatch1(review, {
+    approvedAt:
+      (alreadyApproved &&
+        (review.batch1ApprovedAt ||
+          (review.approvedBatch && review.approvedBatch.approvedAt))) ||
+      new Date().toISOString(),
+  });
+  const outreachStrategyPreview = buildOutreachStrategyPreviewStub(
+    approvedReview,
+    {
+      workRequestId: approvedReview.workRequestId,
+    }
+  );
+
+  const message = [
+    leadIn || null,
+    formatProspectBatch1ApprovalMessage(approvedReview, {
+      repeatAck: alreadyApproved,
+    }),
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
+  return {
+    message,
+    step: CAMPAIGN_PLANNING_STATES.OUTREACH_STRATEGY_PREVIEW,
+    answers,
+    slots: {
+      ...slots,
+      scoutHandoffBriefGenerated: true,
+      scoutHandoffApproved: true,
+      scoutHandoffQueued: true,
+      buildProposalApproved: true,
+      criteriaApproved: true,
+      previewApproved: true,
+      prospectBatchReviewApproved: true,
+      batch1Approved: true,
+    },
+    preview: opts.priorPreview || null,
+    criteriaPreview: opts.priorCriteriaPreview || null,
+    buildProposal: opts.priorBuildProposal || null,
+    prospectListDraft: opts.priorProspectListDraft || null,
+    scoutHandoffBrief: opts.priorScoutHandoffBrief || null,
+    scoutHandoff: opts.priorScoutHandoff || null,
+    scoutWorkRequest: opts.priorScoutWorkRequest || null,
+    scoutCandidateBatch:
+      opts.priorScoutCandidateBatch ||
+      approvedReview.scoutCandidateBatch ||
+      null,
+    prospectBatchReview: approvedReview,
+    outreachStrategyPreview,
+    liveProspectList: null,
+    intent: 'prospect_batch_1_approved',
+    previewApproved: true,
+    criteriaApproved: true,
+    buildProposalApproved: true,
+    prospectBatchReviewApproved: true,
+    batch1Approved: true,
+    liveSourcingApproved: false,
+    planningState: CAMPAIGN_PLANNING_STATES.OUTREACH_STRATEGY_PREVIEW,
+    currentAsk: 'outreachStrategyPreview',
+    workRequestId: approvedReview.workRequestId || null,
+    // Safety flags
+    outreachCopyGenerated: false,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+  };
+}
+
 function produceExecuteExistingScoutWorkRequestResult(
   ctx,
   answers,
@@ -5572,6 +5865,103 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
     );
   }
 
+  // HARD GUARD — approve Batch 1 on an active Prospect Batch Review.
+  // Never re-render the same closing question.
+  {
+    const priorBatchReviewEarly =
+      opts.priorProspectBatchReview || prior.prospectBatchReview || null;
+    const approvalOpts = {
+      priorProspectBatchReview: priorBatchReviewEarly,
+      step: prior.step,
+      memory: opts.reasoningMemory || null,
+      messageClass: opts.messageClass || null,
+      state: opts.reasoningState || null,
+    };
+    if (
+      looksLikeProspectBatchReviewApproval(userMessage, approvalOpts) ||
+      classifyProspectAcquisitionIntent(userMessage, approvalOpts) ===
+        PROSPECT_ACQUISITION_INTENTS.APPROVE_PROSPECT_BATCH_REVIEW ||
+      (isProspectBatchReviewAlreadyApproved(priorBatchReviewEarly) &&
+        (looksLikeApproval(userMessage) ||
+          looksLikeApprovalLead(userMessage) ||
+          /\bapprov(?:e|ed|ing)\b[\s\S]{0,160}\b(?:batch\s*1|accepted\s+cold\s+first[- ]pass|first[- ]pass)\b/i.test(
+            userMessage
+          )))
+    ) {
+      // Only short-circuit when there is an active or already-approved review.
+      if (
+        priorBatchReviewEarly ||
+        prior.step === CAMPAIGN_PLANNING_STATES.PROSPECT_BATCH_REVIEW ||
+        prior.step === CAMPAIGN_PLANNING_STATES.OUTREACH_STRATEGY_PREVIEW ||
+        prior.step === CAMPAIGN_PLANNING_STATES.PROSPECT_BATCH_1_APPROVED
+      ) {
+        const answersEarly = { ...(prior.answers || {}) };
+        const syncedEarly = syncAnswersFromSlots(answersEarly, {
+          ...priorSlots,
+          previewGenerated: true,
+          previewApproved: true,
+          criteriaGenerated: true,
+          criteriaApproved: true,
+          buildProposalGenerated: true,
+          buildProposalApproved: true,
+          prospectBatchReviewApproved: true,
+          batch1Approved: true,
+        });
+        return produceProspectBatchReviewApprovalResult(
+          ctx,
+          syncedEarly,
+          {
+            ...priorSlots,
+            previewGenerated: true,
+            previewApproved: true,
+            criteriaGenerated: true,
+            criteriaApproved: true,
+            buildProposalGenerated: true,
+            buildProposalApproved: true,
+            prospectBatchReviewApproved: true,
+            batch1Approved: true,
+          },
+          {
+            ...opts,
+            userMessage,
+            priorPreview,
+            priorCriteriaPreview:
+              opts.priorCriteriaPreview ||
+              prior.prospectListCriteriaPreview ||
+              prior.criteriaPreview ||
+              null,
+            priorBuildProposal:
+              opts.priorBuildProposal ||
+              prior.prospectListBuildProposal ||
+              prior.buildProposal ||
+              null,
+            priorProspectListDraft:
+              opts.priorProspectListDraft ||
+              prior.prospectListDraft ||
+              prior.reviewableProspectListDraft ||
+              null,
+            priorScoutHandoffBrief:
+              opts.priorScoutHandoffBrief || prior.scoutHandoffBrief || null,
+            priorScoutHandoff:
+              opts.priorScoutHandoff ||
+              prior.scoutHandoff ||
+              (prior.scoutHandoffBrief && prior.scoutHandoffBrief.scoutHandoff) ||
+              null,
+            priorScoutCandidateBatch:
+              opts.priorScoutCandidateBatch ||
+              prior.scoutCandidateBatch ||
+              (prior.scoutHandoff && prior.scoutHandoff.candidateBatch) ||
+              null,
+            priorScoutWorkRequest:
+              opts.priorScoutWorkRequest || prior.scoutWorkRequest || null,
+            priorProspectBatchReview: priorBatchReviewEarly,
+          },
+          null
+        );
+      }
+    }
+  }
+
   // HARD GUARD — correction against an active Prospect Batch Review.
   // Never fall back to "Build proposal already approved".
   {
@@ -6271,6 +6661,86 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
         );
       }
 
+      if (
+        artifactAction.action === 'approve_prospect_batch_review' ||
+        artifactAction.action === 'ack_prospect_batch_approval'
+      ) {
+        return produceProspectBatchReviewApprovalResult(
+          ctx,
+          syncedAnswers,
+          {
+            ...slots,
+            previewApproved: true,
+            criteriaGenerated: true,
+            criteriaApproved: true,
+            buildProposalGenerated: true,
+            buildProposalApproved: true,
+            prospectBatchReviewApproved: true,
+            batch1Approved: true,
+          },
+          {
+            ...replyOpts,
+            userMessage,
+            priorScoutHandoffBrief:
+              opts.priorScoutHandoffBrief || prior.scoutHandoffBrief || null,
+            priorScoutHandoff:
+              opts.priorScoutHandoff ||
+              prior.scoutHandoff ||
+              (prior.scoutHandoffBrief && prior.scoutHandoffBrief.scoutHandoff) ||
+              null,
+            priorScoutCandidateBatch:
+              opts.priorScoutCandidateBatch ||
+              prior.scoutCandidateBatch ||
+              (prior.scoutHandoff && prior.scoutHandoff.candidateBatch) ||
+              null,
+            priorScoutWorkRequest:
+              opts.priorScoutWorkRequest || prior.scoutWorkRequest || null,
+            priorProspectBatchReview:
+              opts.priorProspectBatchReview ||
+              prior.prospectBatchReview ||
+              null,
+          },
+          null
+        );
+      }
+
+      if (artifactAction.action === 'hold_prospect_batch_review') {
+        const priorReview =
+          opts.priorProspectBatchReview || prior.prospectBatchReview || null;
+        return {
+          message: [
+            artifactAction.note ||
+              'Prospect Batch Review is ready. Approve the accepted cold first-pass candidates as Batch 1 to continue.',
+            '',
+            BATCH_1_APPROVED_DISCLAIMER,
+          ].join('\n'),
+          step: CAMPAIGN_PLANNING_STATES.PROSPECT_BATCH_REVIEW,
+          answers: syncedAnswers,
+          slots: {
+            ...slots,
+            previewApproved: true,
+            criteriaApproved: true,
+            buildProposalApproved: true,
+          },
+          preview: replyOpts.priorPreview || null,
+          criteriaPreview: replyOpts.priorCriteriaPreview || null,
+          buildProposal: replyOpts.priorBuildProposal || null,
+          prospectListDraft: replyOpts.priorProspectListDraft || null,
+          scoutCandidateBatch:
+            opts.priorScoutCandidateBatch || prior.scoutCandidateBatch || null,
+          prospectBatchReview: priorReview,
+          outreachStrategyPreview: null,
+          intent: 'hold_prospect_batch_review',
+          planningState: CAMPAIGN_PLANNING_STATES.PROSPECT_BATCH_REVIEW,
+          currentAsk:
+            (priorReview && priorReview.closingQuestion) ||
+            PROSPECT_BATCH_REVIEW_CLOSING_QUESTION,
+          outreachCopyGenerated: false,
+          crmWritesMade: false,
+          accountChangesMade: false,
+        };
+      }
+
       if (artifactAction.action === 'execute_existing_scout_work_request') {
         return produceExecuteExistingScoutWorkRequestResult(
           ctx,
@@ -6837,6 +7307,10 @@ module.exports = {
   buildProspectBatchReview,
   formatProspectBatchReviewMessage,
   produceProspectBatchReviewResult,
+  produceProspectBatchReviewApprovalResult,
+  approveProspectBatchReviewBatch1,
+  buildOutreachStrategyPreviewStub,
+  formatProspectBatch1ApprovalMessage,
   buildProspectBatchReviewClosingQuestion,
   parseRelationshipOverridesFromMessage,
   applyRelationshipOverridesToBatch,
@@ -6845,6 +7319,10 @@ module.exports = {
   normalizeCompanyIdentity,
   extractDomainFromUrl,
   RELATIONSHIP_STATUS,
+  BATCH_1_APPROVED_MESSAGE,
+  BATCH_1_APPROVED_DISCLAIMER,
+  OUTREACH_STRATEGY_PREVIEW_KIND,
+  OUTREACH_STRATEGY_PREVIEW_TITLE,
   buildScoutHandoffBrief,
   formatScoutHandoffBriefMessage,
   produceScoutHandoffBriefResult,
