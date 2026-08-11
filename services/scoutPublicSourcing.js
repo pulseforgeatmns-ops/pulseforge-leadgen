@@ -587,22 +587,26 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
     targetMin
   );
   const candidates = selected.candidates;
+  // Merge early hard-rejects (UK / cleaning / institutional) with batch
+  // deferrals, then rebuild groups so Rejected count matches audit rows.
   const rejected = dedupeCandidates(
     rejectedEarly.concat(selected.rejected || [])
   );
-  const groups =
-    selected.groups || groupCandidatesByStatus(candidates, rejected);
+  const groups = groupCandidatesByStatus(candidates, rejected.slice());
 
   const acceptedCount = (groups.accepted || []).length;
   const reviewRequiredCount = (groups.review_required || []).length;
+  const rejectedCount = (groups.rejected || []).length;
   const usableCount = acceptedCount + reviewRequiredCount;
-
   if (!candidates.length || usableCount < targetMin) {
     return {
       ok: false,
       candidates,
-      rejected,
+      rejected: groups.rejected,
       groups,
+      acceptedCount,
+      reviewRequiredCount,
+      rejectedCount,
       warnings: warnings.concat([
         !candidates.length
           ? 'Public-source search returned no usable in-market candidates after quality gates.'
@@ -630,8 +634,11 @@ async function sourceScoutCandidatesFromPublicSources(input = {}) {
   return {
     ok: true,
     candidates,
-    rejected,
+    rejected: groups.rejected,
     groups,
+    acceptedCount,
+    reviewRequiredCount,
+    rejectedCount,
     warnings,
     error: null,
     queried,

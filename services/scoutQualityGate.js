@@ -93,72 +93,36 @@ const CONFIDENCE = Object.freeze({
   REVIEW_REQUIRED: 'review_required',
 });
 
-const UK_GEO_MARKERS = Object.freeze([
+/** Word/phrase UK markers checked only against candidate address/source geo text. */
+const UK_GEO_PHRASE_MARKERS = Object.freeze([
   'united kingdom',
-  ' u.k.',
-  ' uk ',
-  ', uk',
-  'uk,',
-  'england',
+  'greater manchester',
+  'manchester, england',
+  'manchester england',
   'scotland',
   'wales',
-  'greater manchester',
   'salford',
   'stockport',
   'bolton',
   'oldham',
   'rochdale',
-  'bury',
   'wigan',
   'trafford',
   'tameside',
-  'm1 ',
-  'm2 ',
-  'm3 ',
-  'm4 ',
-  'm5 ',
-  'm6 ',
-  'm7 ',
-  'm8 ',
-  'm9 ',
-  'm13',
-  'm14',
-  'm15',
-  'm16',
-  'm17',
-  'm18',
-  'm19',
-  'm20',
-  'm21',
-  'm22',
-  'm23',
-  'm24',
-  'm25',
-  'm26',
-  'm27',
-  'm28',
-  'm29',
-  'm30',
-  'm31',
-  'm32',
-  'm33',
-  'm34',
-  'm35',
-  'm38',
-  'm40',
-  'm41',
-  'm43',
-  'm44',
-  'm45',
-  'm46',
-  'm50',
-  'm60',
-  'm90',
   'lancashire',
   'cheshire',
-  '.co.uk',
-  'manchester, england',
-  'manchester england',
+]);
+
+/** UK place tokens that need word-boundary matching (avoid "New England" → england). */
+const UK_GEO_WORD_MARKERS = Object.freeze([
+  'england',
+  'scotland',
+  'wales',
+  'salford',
+  'stockport',
+  'uk',
+  'u.k.',
+  'u.k',
 ]);
 
 const NON_US_MARKERS = Object.freeze([
@@ -176,6 +140,12 @@ const NON_US_MARKERS = Object.freeze([
   'india',
 ]);
 
+/**
+ * UK Manchester outward codes (M1–M90). Matched as postcode tokens on address text
+ * only — never on campaign/brief prose.
+ */
+const UK_MANCHESTER_POSTCODE_RE =
+  /\bM(?:[1-9]|[1-9]\d)\s*\d[A-Z]{2}\b|\bM(?:[1-9]|[1-9]\d)\b(?=\s|,|$)/i;
 const CLEANING_COMPETITOR_PATTERNS = Object.freeze([
   /\bcleaning\s+(?:company|service|services|crew|co\.?|llc|inc)\b/i,
   /\b(?:company|service|services)\s+cleaning\b/i,
@@ -285,6 +255,69 @@ function hitHaystack(hit) {
 
 function paddedHay(hay) {
   return ` ${String(hay || '').toLowerCase()} `;
+}
+
+/**
+ * Geography evidence from the candidate listing only.
+ * Never includes campaign objective, market bounds, target segment, fit
+ * rationale, inclusion/exclusion criteria, or other brief/plan prose.
+ */
+function candidateGeoEvidence(hit) {
+  const h = hit || {};
+  const addressParts = [
+    h.formatted_address,
+    h.formattedAddress,
+    h.address,
+    h.vicinity,
+    h.location,
+    h.city,
+    h.town,
+    h.marketTown,
+    h.state,
+    h.stateCode,
+    h.state_code,
+    h.administrative_area_level_1,
+    h.administrativeArea,
+    h.administrative_area,
+    h.region,
+    h.postal_code,
+    h.postalCode,
+    h.zip,
+  ]
+    .filter((v) => v != null && String(v).trim())
+    .map((v) => String(v).trim());
+  const country = String(
+    h.country || h.countryCode || h.country_code || ''
+  ).trim();
+  const sourceUrl = String(h.sourceUrl || h.website || h.url || '').trim();
+  const phone = String(
+    h.phone || h.formatted_phone_number || h.international_phone_number || ''
+  ).trim();
+  return {
+    addressText: addressParts.join(' '),
+    country,
+    sourceUrl,
+    phone,
+    combined: [addressParts.join(' '), country].filter(Boolean).join(' '),
+  };
+}
+
+function hasUsOrNhAddressEvidence(text) {
+  return /\bNH\b|\bNew Hampshire\b|\bUSA\b|\bU\.S\.A\.?\b|\bUnited States\b/i.test(
+    String(text || '')
+  );
+}
+
+/** England as UK — never "New England". */
+function containsUkEnglandToken(text) {
+  const s = String(text || '').replace(/\bnew\s+england\b/gi, ' ');
+  return /\bengland\b/i.test(s);
+}
+
+function containsUkWordMarker(text, marker) {
+  if (marker === 'england') return containsUkEnglandToken(text);
+  const escaped = String(marker).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`, 'i').test(String(text || ''));
 }
 
 /**
@@ -415,24 +448,27 @@ function buildNhScopedSearchQueries(workRequest, opts = {}) {
 }
 
 function hasUsOrNhStateToken(text) {
-  return /\bnh\b|\bnew hampshire\b|\bunited states\b|\busa\b|\bu\.s\.a\.?\b/i.test(
-    String(text || '')
-  );
+  return hasUsOrNhAddressEvidence(text);
 }
 
+/**
+ * Classify UK / non-US geography from candidate address/source fields only.
+ * Campaign objective, market bounds, target segment, fit rationale, and
+ * plan phrases like "Greater Manchester" must never drive this decision.
+ */
 function detectUkOrNonUs(hit) {
-  const hay = paddedHay(hitHaystack(hit));
-  const loc = String(
-    (hit && (hit.location || hit.address || hit.formatted_address || hit.marketTown)) ||
-      ''
-  ).toLowerCase();
-  const website = String((hit && (hit.website || hit.sourceUrl)) || '').toLowerCase();
-  const phone = String(
-    (hit &&
-      (hit.phone || hit.formatted_phone_number || hit.international_phone_number)) ||
-      ''
-  ).trim();
+  const geo = candidateGeoEvidence(hit);
+  const addressText = geo.addressText || '';
+  const combined = geo.combined || '';
+  const addressHay = paddedHay(combined);
+  const website = String(geo.sourceUrl || '').toLowerCase();
+  const phone = String(geo.phone || '').trim();
   const code = REJECTION_REASON.OUTSIDE_MARKET_COUNTRY;
+
+  // Explicit NH / USA / New Hampshire on the candidate address → never UK reject.
+  if (hasUsOrNhAddressEvidence(addressText) || hasUsOrNhAddressEvidence(geo.country)) {
+    return { rejected: false, reason: null, reasonCode: null };
+  }
 
   if (/\.co\.uk\b/i.test(website) || website.includes('.uk/') || /\.uk\b/i.test(website)) {
     return {
@@ -448,19 +484,19 @@ function detectUkOrNonUs(hit) {
       reason: 'UK phone country code (+44) — outside_market_country',
     };
   }
-  if (hit && hit.country) {
-    const country = String(hit.country).trim().toLowerCase();
+  if (geo.country) {
+    const country = String(geo.country).trim().toLowerCase();
     if (country && !/^(us|usa|united states|united states of america)$/.test(country)) {
       return {
         rejected: true,
         reasonCode: code,
-        reason: `Non-US country (${hit.country}) — outside_market_country`,
+        reason: `Non-US country (${geo.country}) — outside_market_country`,
       };
     }
   }
 
-  for (const marker of UK_GEO_MARKERS) {
-    if (hay.includes(marker)) {
+  for (const marker of UK_GEO_PHRASE_MARKERS) {
+    if (addressHay.includes(marker)) {
       return {
         rejected: true,
         reasonCode: code,
@@ -468,8 +504,24 @@ function detectUkOrNonUs(hit) {
       };
     }
   }
+  for (const marker of UK_GEO_WORD_MARKERS) {
+    if (containsUkWordMarker(combined, marker)) {
+      return {
+        rejected: true,
+        reasonCode: code,
+        reason: `UK geography detected (${marker}) — outside_market_country`,
+      };
+    }
+  }
+  if (UK_MANCHESTER_POSTCODE_RE.test(combined)) {
+    return {
+      rejected: true,
+      reasonCode: code,
+      reason: 'UK Manchester M-postcode on candidate address — outside_market_country',
+    };
+  }
   for (const marker of UK_MANCHESTER_PLACE_MARKERS) {
-    if (hay.includes(marker)) {
+    if (addressHay.includes(marker)) {
       return {
         rejected: true,
         reasonCode: code,
@@ -478,11 +530,13 @@ function detectUkOrNonUs(hit) {
     }
   }
 
-  // Bare / ambiguous "Manchester" without an explicit NH/USA state token is UK risk.
-  // Never treat "Manchester" alone as Manchester NH.
-  if (/\bmanchester\b/.test(hay) && !hasUsOrNhStateToken(hay) && !hasUsOrNhStateToken(loc)) {
+  // Bare / ambiguous "Manchester" on address without NH/USA token is UK risk.
+  if (
+    /\bmanchester\b/i.test(combined) &&
+    !hasUsOrNhAddressEvidence(combined)
+  ) {
     const otherPriorityNh = PRIORITY_TOWNS_NH.some((t) =>
-      hay.includes(t.toLowerCase())
+      new RegExp(`\\b${t}\\b`, 'i').test(combined)
     );
     if (!otherPriorityNh) {
       return {
@@ -495,7 +549,7 @@ function detectUkOrNonUs(hit) {
   }
 
   for (const marker of NON_US_MARKERS) {
-    if (hay.includes(marker)) {
+    if (addressHay.includes(marker)) {
       return {
         rejected: true,
         reasonCode: code,
@@ -508,14 +562,10 @@ function detectUkOrNonUs(hit) {
 }
 
 function isNhLocation(hit, market) {
-  const loc = String(
-    (hit && (hit.location || hit.address || hit.marketTown || hit.formatted_address)) ||
-      ''
-  ).toLowerCase();
-  const hay = hitHaystack(hit);
-  const combined = `${loc} ${hay}`;
-  const hasState = hasUsOrNhStateToken(combined);
-  const town = matchTown(combined);
+  const geo = candidateGeoEvidence(hit);
+  const loc = geo.addressText || geo.combined || '';
+  const hasState = hasUsOrNhAddressEvidence(loc) || hasUsOrNhAddressEvidence(geo.country);
+  const town = matchTown(loc);
 
   if (hasState) {
     return {
@@ -523,7 +573,7 @@ function isNhLocation(hit, market) {
       country: 'US',
       state: 'NH',
       town,
-      tier: townTier(town || combined),
+      tier: townTier(town || loc),
     };
   }
 
@@ -545,7 +595,6 @@ function isNhLocation(hit, market) {
   }
   return { inNh: false, town: null, tier: 'unknown', country: null, state: null };
 }
-
 function matchTown(text) {
   const s = String(text || '').toLowerCase();
   for (const town of ALL_KNOWN_NH_TOWNS) {
@@ -928,14 +977,15 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
     });
   }
 
+  // Geography + segment classification first — fit rationale is generated after
+  // these signals exist and must cite candidate source fields only (never brief
+  // market-bounds / "Greater Manchester" plan prose).
   const geo = isNhLocation(hit, market);
   const pmFit = hasPropertyManagementFit(hit, workRequest);
   const contactSignal = hasReachableContactSignal(hit);
   const sourceUrl = Boolean(
     (hit && (hit.sourceUrl || hit.website || hit.url)) || opts.sourceUrl
   );
-  // Always rebuild source-specific rationale. Never reuse generic criteria copy
-  // from upstream as the fit rationale.
   const fit = buildSourceSpecificFitRationale(hit, workRequest, geo);
   const role = formatSuggestedContactRole(workRequest, hit);
   const targetingPm =
@@ -1369,16 +1419,15 @@ function selectBatchWithManchesterFill(evaluatedRows, targetMax = 25, targetMin 
     }
   }
 
+  const groups = groupCandidatesByStatus(batch, rejected.slice());
   return {
     candidates: batch,
-    rejected,
-    groups: groupCandidatesByStatus(batch, rejected),
+    rejected: groups.rejected,
+    groups,
     usableCount: batch.length,
-    acceptedCount: batch.filter((r) => r.status === CANDIDATE_STATUS.ACCEPTED)
-      .length,
-    reviewRequiredCount: batch.filter(
-      (r) => r.status === CANDIDATE_STATUS.REVIEW_REQUIRED
-    ).length,
+    acceptedCount: (groups.accepted || []).length,
+    reviewRequiredCount: (groups.review_required || []).length,
+    rejectedCount: (groups.rejected || []).length,
   };
 }
 
@@ -1510,16 +1559,24 @@ function gateScoutCandidateRows(rows, workRequest, opts = {}) {
   const targetMax = Number(opts.targetMax) || Number(workRequest && workRequest.targetCountMax) || 25;
   const targetMin = Number(opts.targetMin) || Number(workRequest && workRequest.targetCountMin) || 15;
   const selected = selectBatchWithManchesterFill(evaluated, targetMax, targetMin);
-  const allRejected = (selected.rejected || []).concat(rejected).map(ensureRejectionReason);
+  const allRejected = (selected.rejected || [])
+    .concat(rejected)
+    .map(ensureRejectionReason);
   const candidates = selected.candidates;
-  const groups = groupCandidatesByStatus(candidates, allRejected);
+  const groups = groupCandidatesByStatus(candidates, allRejected.slice());
   const threshold = batchMeetsQualityThreshold(candidates, workRequest, {
     targetMin,
   });
+  const acceptedCount = (groups.accepted || []).length;
+  const reviewRequiredCount = (groups.review_required || []).length;
+  const rejectedCount = (groups.rejected || []).length;
   return {
     candidates,
-    rejected: allRejected,
+    rejected: groups.rejected,
     groups,
+    acceptedCount,
+    reviewRequiredCount,
+    rejectedCount,
     usableCount: threshold.usableCount,
     targetMin: threshold.targetMin,
     meetsQualityThreshold: threshold.ok,
@@ -1537,6 +1594,7 @@ module.exports = {
   REJECTION_REASON,
   interpretAnchorMarket,
   buildNhScopedSearchQueries,
+  candidateGeoEvidence,
   detectUkOrNonUs,
   detectCleaningCompetitor,
   detectInstitutional,
