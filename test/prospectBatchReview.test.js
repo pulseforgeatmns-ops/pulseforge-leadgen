@@ -2373,3 +2373,147 @@ describe('Outreach Strategy Preview → Outreach Copy Plan approval transition',
     assert.match(OUTREACH_STRATEGY_APPROVED_MESSAGE, /Outreach Copy Plan/);
   });
 });
+
+describe('Outreach Copy Plan section 4 and 5 operator-facing quality', () => {
+  function extractNumberedSection(message, sectionNumber) {
+    const msg = String(message || '');
+    const re = new RegExp(
+      `${sectionNumber}\\.[^\\n]*\\n[\\s\\S]*?(?=\\n\\d+\\. |$)`
+    );
+    const match = msg.match(re);
+    return match ? match[0] : '';
+  }
+
+  function buildPlan(overrides = {}) {
+    const batch = withGroups(sampleKeyrenterCorrectionBatch());
+    const review = approveProspectBatchReviewBatch1(
+      buildProspectBatchReview(batch, {
+        userMessage: 'Approve Batch 1',
+        workRequestId: batch.workRequestId,
+      })
+    );
+    const ctx = {
+      businessName: 'Anchor Cleaning',
+      brandVoice:
+        'calm, professional, reliable, direct, and easy to work with',
+      competitiveAdvantages:
+        'Reliability and accountability. Responsive communication. Peace of mind for recurring commercial cleaning relationships.',
+      primarySegment: 'property managers',
+      targetMarket: 'Greater Manchester',
+      towns: [
+        'Bedford',
+        'Hooksett',
+        'Londonderry',
+        'Auburn',
+        'Goffstown',
+      ],
+      proofFromPrior: 'checklist, photos, response-time expectation',
+      ...overrides.ctx,
+    };
+    const strategy = buildOutreachStrategyPreview(review, ctx, {
+      priorCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+        campaignObjective:
+          'Prove that Greater Manchester property managers will take a discovery conversation about recurring commercial cleaning.',
+      },
+    });
+    // Simulate contaminated strategy proofFraming (must not leak into Copy Plan §5).
+    strategy.proofFraming = [
+      'Carry forward proof already noted: approved Blueprint proof assets',
+      'Hold final email/SMS/call scripts until after strategy approval.',
+      'Competitive edge is described as reliable crews.',
+      'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
+      ...(overrides.extraProofFraming || []),
+    ];
+    const plan = buildOutreachCopyPlan(
+      approveOutreachStrategyPreview(strategy),
+      review,
+      ctx,
+      {}
+    );
+    return { plan, msg: formatOutreachCopyPlanMessage(plan), ctx, strategy };
+  }
+
+  it('section 4 lists all towns without ellipses or clipped lists', () => {
+    const { plan, msg } = buildPlan();
+    const section4 = extractNumberedSection(msg, 4);
+    assert.match(section4, /Personalization inputs from Batch 1/i);
+    assert.match(
+      section4,
+      /Prospect town: Bedford, Hooksett, Londonderry, Auburn, or Goffstown\./
+    );
+    assert.doesNotMatch(section4, /…|\.\.\.|, \u2026/);
+    assert.doesNotMatch(section4, /prefer\s+Bedford/i);
+    assert.doesNotMatch(section4, /Voice:/i);
+    assert.match(
+      section4,
+      /Property type or portfolio cue when publicly visible\./
+    );
+    assert.match(
+      section4,
+      /Public role or decision-maker title when present\./
+    );
+    assert.match(
+      section4,
+      /Any visible signal that reliability, responsiveness, or recurring service may matter\./
+    );
+    assert.deepEqual(plan.personalizationInputs, [
+      'Prospect town: Bedford, Hooksett, Londonderry, Auburn, or Goffstown.',
+      'Property type or portfolio cue when publicly visible.',
+      'Public role or decision-maker title when present.',
+      'Any visible signal that reliability, responsiveness, or recurring service may matter.',
+    ]);
+  });
+
+  it('section 5 is operator-facing proof points without internal/meta language', () => {
+    const { plan, msg } = buildPlan();
+    const section5 = extractNumberedSection(msg, 5);
+    assert.match(section5, /Proof points to use/i);
+    assert.match(section5, /Simple commercial cleaning checklist\./);
+    assert.match(section5, /Clear response-time expectation\./);
+    assert.match(section5, /Clear service area\./);
+    assert.match(section5, /Professional walkthrough \/ estimate process\./);
+    assert.match(
+      section5,
+      /Before\/after photos, references, or reviews if available\./
+    );
+    assert.match(
+      section5,
+      /Anchor's practical promise: reliable cleaning, responsive communication, and fewer vendor-chasing headaches\./
+    );
+    assert.doesNotMatch(section5, /Carry forward proof already noted/i);
+    assert.doesNotMatch(section5, /Hold final email\/SMS\/call scripts/i);
+    assert.doesNotMatch(section5, /Competitive edge is described as/i);
+    assert.doesNotMatch(section5, /operator-stated/i);
+    assert.doesNotMatch(section5, /Differentiator to lean on/i);
+    assert.doesNotMatch(section5, /approved Blueprint proof assets/i);
+    assert.doesNotMatch(section5, /Do not invent testimonials/i);
+    assert.deepEqual(plan.proofPoints, [
+      'Simple commercial cleaning checklist.',
+      'Clear response-time expectation.',
+      'Clear service area.',
+      'Professional walkthrough / estimate process.',
+      'Before/after photos, references, or reviews if available.',
+      "Anchor's practical promise: reliable cleaning, responsive communication, and fewer vendor-chasing headaches.",
+    ]);
+  });
+
+  it('keeps guardrails in the approval gate section only', () => {
+    const { plan, msg } = buildPlan();
+    const section4 = extractNumberedSection(msg, 4);
+    const section5 = extractNumberedSection(msg, 5);
+    const section7 = extractNumberedSection(msg, 7);
+    assert.doesNotMatch(section4, /No sends|No CRM writes|No export/i);
+    assert.doesNotMatch(section5, /No sends|No CRM writes|No export/i);
+    assert.match(section7, /Approval gate before drafting final copy/i);
+    assert.match(section7, /No final email\/SMS\/call scripts/i);
+    assert.match(section7, /No sends, CRM writes, exports/i);
+    assert.equal(plan.finalOutreachCopyGenerated, false);
+    assert.equal(plan.outreachCopyGenerated, false);
+    assert.equal(plan.sendsMade, false);
+    assert.equal(plan.crmWritesMade, false);
+    assert.equal(plan.exportMade, false);
+    assert.equal(plan.accountChangesMade, false);
+  });
+});
