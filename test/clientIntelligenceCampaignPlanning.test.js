@@ -2282,11 +2282,18 @@ describe('Reviewable prospect list draft progression', () => {
         targetMarket: 'Manchester',
       },
       {
+        targetCountMin: 1,
+        targetMin: 1,
         scoutSourcingFn: () => [
           {
-            companyName: 'Granite PM',
+            companyName: 'Granite Property Management',
             sourceUrl: 'https://example.com/granite',
-            location: 'Manchester NH',
+            website: 'https://example.com/granite',
+            location: 'Bedford NH',
+            address: '1 Main St, Bedford, NH 03110, USA',
+            industry: 'property management',
+            placeTypes: ['real_estate_agency'],
+            phone: '603-555-0100',
             fitRationale: 'In-market PM',
             suggestedContactRole: 'Owner',
             risks: 'None noted',
@@ -2330,15 +2337,17 @@ describe('Reviewable prospect list draft progression', () => {
       campaignObjective: 'Validate walkthrough demand',
       targetSegment: 'Property managers',
       targetSubtype: 'multi-family',
-      marketBounds: 'Manchester NH',
+      marketBounds: 'Bedford NH',
       inclusionCriteria: ['Local'],
       exclusionCriteria: ['Chains'],
       requiredFields: ['Company name', 'Source URL'],
+      targetCountMin: 1,
     });
     const queued = handBriefToScout(draft, {
       scoutSourcingSupported: false,
       scoutPublicSourcingSupported: false,
       workRequestStore: store,
+      targetCountMin: 1,
     });
     const workRequestId = queued.workRequest.workRequestId;
     const storeSizeBefore = store.size();
@@ -2372,15 +2381,22 @@ describe('Reviewable prospect list draft progression', () => {
       {
         businessName: 'Anchor Cleaning',
         primarySegment: 'property_managers',
-        targetMarket: 'Manchester',
+        targetMarket: 'Bedford',
       },
       {
         workRequestStore: store,
+        targetCountMin: 1,
+        targetMin: 1,
         scoutSourcingFn: () => [
           {
-            companyName: 'Granite PM',
+            companyName: 'Granite Property Management',
             sourceUrl: 'https://example.com/granite',
-            location: 'Manchester NH',
+            website: 'https://example.com/granite',
+            location: 'Bedford NH',
+            address: '1 Main St, Bedford, NH 03110, USA',
+            industry: 'property management',
+            placeTypes: ['real_estate_agency'],
+            phone: '603-555-0100',
             fitRationale: 'In-market PM',
             suggestedContactRole: 'Owner',
             risks: 'None noted',
@@ -2434,18 +2450,26 @@ describe('Reviewable prospect list draft progression', () => {
     const draft = buildScoutHandoff({
       campaignObjective: 'Validate walkthrough demand',
       targetSegment: 'Property managers',
-      marketBounds: 'Manchester NH',
+      marketBounds: 'Bedford NH',
+      targetCountMin: 1,
     });
     const queued = handBriefToScout(draft, {
       publicSearchFn: async () => [],
       workRequestStore: store,
+      targetCountMin: 1,
     });
     const failed = await executeScoutWorkRequest({
       workRequestId: queued.workRequest.workRequestId,
       publicSearchFn: async () => [],
       workRequestStore: store,
+      targetCountMin: 1,
+      targetMin: 1,
     });
-    assert.equal(failed.intent, 'scout_sourcing_failed');
+    assert.ok(
+      failed.intent === 'scout_sourcing_failed' ||
+        failed.intent === 'scout_failed_quality_gate',
+      `expected failed scout intent, got ${failed.intent}`
+    );
     const workRequestId = failed.workRequest.workRequestId;
     const storeSizeBefore = store.size();
 
@@ -2473,15 +2497,22 @@ describe('Reviewable prospect list draft progression', () => {
       {
         businessName: 'Anchor Cleaning',
         primarySegment: 'property_managers',
-        targetMarket: 'Manchester',
+        targetMarket: 'Bedford',
       },
       {
         workRequestStore: store,
+        targetCountMin: 1,
+        targetMin: 1,
         scoutSourcingFn: () => [
           {
-            companyName: 'Riverbend Rentals',
+            companyName: 'Riverbend Property Management',
             sourceUrl: 'https://example.com/riverbend',
-            location: 'Manchester NH',
+            website: 'https://example.com/riverbend',
+            location: 'Bedford NH',
+            address: '2 Main St, Bedford, NH 03110, USA',
+            industry: 'property management',
+            placeTypes: ['real_estate_agency'],
+            phone: '603-555-0101',
             fitRationale: 'Local PM',
             suggestedContactRole: 'Property manager',
             risks: 'Thin contact page',

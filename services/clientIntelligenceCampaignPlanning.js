@@ -19,6 +19,8 @@ const {
   shouldBlockCriteriaQuestionReplay,
   isBannedCriteriaReplayQuestion,
   looksLikeProspectListDraftRequest,
+  looksLikeProspectBatchReviewRequest,
+  hasCompletedScoutCandidateBatch,
   looksLikeScoutHandoffBriefRequest,
   looksLikeHandBriefToScoutRequest,
   looksLikeExecuteExistingScoutWorkRequest,
@@ -30,6 +32,13 @@ const {
   shouldForceProspectListDraft,
   inferApprovedArtifactsFromMessage,
 } = require('./clientIntelligenceReasoning');
+const {
+  applyMapsOnlyDowngradeToBatch,
+  PRIORITY_TOWNS_NH,
+  NEARBY_FILL_TOWNS_NH,
+  EXTENDED_REVIEW_TOWNS_NH,
+  CANDIDATE_STATUS,
+} = require('./scoutQualityGate');
 const {
   buildArtifactSynthesisContext,
   shortBusinessName,
@@ -72,6 +81,18 @@ const DRAFT_TITLE = 'Reviewable Prospect List Draft';
 const DRAFT_DISCLAIMER =
   'Reviewable list draft only. No outreach copy, sends, CRM writes, or account/DNS/GBP/social/tracking changes have been made.';
 
+const PROSPECT_BATCH_REVIEW_KIND = 'prospect_batch_review';
+const PROSPECT_BATCH_REVIEW_TITLE = 'Prospect Batch Review';
+const PROSPECT_BATCH_REVIEW_DISCLAIMER =
+  'Prospect Batch Review only — from the latest completed Scout result. No outreach copy, sends, CRM writes, exports, or account changes.';
+const PROSPECT_BATCH_REVIEW_CLOSING_QUESTION =
+  'Do you want to approve the 8 primary-town candidates only, or include Manchester NH expansion candidates to reach the first 15–25 account batch?';
+const PROSPECT_BATCH_REVIEW_SECTION_TITLES = Object.freeze({
+  acceptedFirstPass: 'Accepted first-pass candidates',
+  optionalExpansion: 'Optional expansion candidates',
+  rejected: 'Rejected candidates',
+});
+
 const LIVE_SOURCING_BOUNDARY_MESSAGE =
   'I cannot perform live sourcing in this environment yet.';
 
@@ -97,6 +118,7 @@ const CAMPAIGN_PLANNING_STATES = Object.freeze({
   SCOUT_HANDOFF_COMPLETED: 'scout_handoff_completed',
   SCOUT_HANDOFF_NOT_WIRED: 'scout_handoff_not_wired',
   SCOUT_HANDOFF_FAILED: 'scout_handoff_failed',
+  PROSPECT_BATCH_REVIEW: 'prospect_batch_review',
   LIVE_SOURCING_APPROVED: 'live_sourcing_approved',
   LIVE_SOURCING_UNAVAILABLE: 'live_sourcing_unavailable',
   LIVE_SOURCING_GENERATED: 'live_sourcing_generated',
@@ -2811,6 +2833,310 @@ function applyScoutExecutionResult(reply, result) {
  * Does not create a new handoff, does not re-ask for build-proposal approval,
  * and does not emit placeholder drafts.
  */
+function candidateTownToken(row) {
+  const hay = [
+    row && row.location,
+    row && row.address,
+    row && row.formatted_address,
+    row && row.marketTown,
+    row && row.geo && row.geo.town,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const s = String(hay);
+  for (const town of PRIORITY_TOWNS_NH) {
+    if (new RegExp(`\\b${town}\\b`, 'i').test(s)) return town;
+  }
+  for (const town of NEARBY_FILL_TOWNS_NH) {
+    if (new RegExp(`\\b${town}\\b`, 'i').test(s)) return town;
+  }
+  for (const town of EXTENDED_REVIEW_TOWNS_NH) {
+    if (new RegExp(`\\b${town}\\b`, 'i').test(s)) return town;
+  }
+  return (row && row.geo && row.geo.town) || null;
+}
+
+function isPrimaryTownCandidate(row) {
+  const town = candidateTownToken(row);
+  return Boolean(
+    town && PRIORITY_TOWNS_NH.some((t) => t.toLowerCase() === String(town).toLowerCase())
+  );
+}
+
+function isExpansionTownCandidate(row) {
+  const town = candidateTownToken(row);
+  if (!town) return false;
+  const lower = String(town).toLowerCase();
+  return (
+    NEARBY_FILL_TOWNS_NH.some((t) => t.toLowerCase() === lower) ||
+    EXTENDED_REVIEW_TOWNS_NH.some((t) => t.toLowerCase() === lower)
+  );
+}
+
+function normalizeBatchReviewRow(row) {
+  const r = row || {};
+  const role = r.suggestedContactRole || r.contactRole || null;
+  const suggestedContactRole =
+    role && !/^suggested contact role:/i.test(String(role))
+      ? `Suggested contact role: ${role}`
+      : role || 'Suggested contact role: Owner / property manager';
+  return {
+    company: r.companyName || r.company || '—',
+    companyName: r.companyName || r.company || '—',
+    location: r.location || r.address || r.marketTown || '—',
+    sourceUrl: r.sourceUrl || r.website || r.url || '—',
+    whyItFits: r.fitRationale || r.fitReason || r.whyItFits || '—',
+    fitRationale: r.fitRationale || r.fitReason || r.whyItFits || '—',
+    riskUncertainty: r.risks || r.riskUncertainty || r.statusReason || '—',
+    risks: r.risks || r.riskUncertainty || '—',
+    suggestedContactRole,
+    confidence: r.confidence || 'medium',
+    reviewStatus:
+      r.reviewStatus || r.status || CANDIDATE_STATUS.REVIEW_REQUIRED,
+    status: r.status || CANDIDATE_STATUS.REVIEW_REQUIRED,
+    statusReason: r.statusReason || null,
+    rejectionReason: r.rejectionReason || null,
+  };
+}
+
+function formatBatchReviewCandidateBlock(row, index) {
+  const r = normalizeBatchReviewRow(row);
+  return [
+    `${index}. **${r.company}**`,
+    `   - Company: ${r.company}`,
+    `   - Location: ${r.location}`,
+    `   - Source URL: ${r.sourceUrl}`,
+    `   - Why it fits: ${r.whyItFits}`,
+    `   - Risk/uncertainty: ${r.riskUncertainty}`,
+    `   - Suggested contact role: ${String(r.suggestedContactRole).replace(
+      /^Suggested contact role:\s*/i,
+      ''
+    )}`,
+    `   - Confidence: ${r.confidence}`,
+    `   - Review status: ${r.reviewStatus}`,
+  ].join('\n');
+}
+
+/**
+ * Build Prospect Batch Review from a completed Scout candidate batch.
+ * Applies maps-only downgrade (Cedar Management Group → review_required / medium).
+ */
+function buildProspectBatchReview(batch, opts = {}) {
+  const downgraded = applyMapsOnlyDowngradeToBatch(batch || {});
+  const groups = downgraded.groups || {
+    accepted: [],
+    review_required: [],
+    rejected: [],
+  };
+  const accepted = (groups.accepted || []).filter(isPrimaryTownCandidate);
+  // Optional expansion: Manchester / Derry / nearby review_required, plus
+  // primary-town rows downgraded to review_required (e.g. maps-only Cedar).
+  const optionalExpansion = (groups.review_required || []).filter(
+    (row) => isExpansionTownCandidate(row) || isPrimaryTownCandidate(row)
+  );
+  const rejected = groups.rejected || [];
+  const workRequestId =
+    opts.workRequestId ||
+    (batch && batch.workRequestId) ||
+    (opts.priorScoutWorkRequest && opts.priorScoutWorkRequest.workRequestId) ||
+    null;
+
+  return {
+    kind: PROSPECT_BATCH_REVIEW_KIND,
+    title: PROSPECT_BATCH_REVIEW_TITLE,
+    status: 'review_only',
+    workRequestId,
+    sectionTitles: { ...PROSPECT_BATCH_REVIEW_SECTION_TITLES },
+    acceptedFirstPass: accepted.map(normalizeBatchReviewRow),
+    optionalExpansion: optionalExpansion.map(normalizeBatchReviewRow),
+    rejected: rejected.map(normalizeBatchReviewRow),
+    counts: {
+      accepted: accepted.length,
+      reviewRequired: optionalExpansion.length,
+      rejected: rejected.length,
+      scoutAccepted: (groups.accepted || []).length,
+      scoutReviewRequired: (groups.review_required || []).length,
+      scoutRejected: (groups.rejected || []).length,
+    },
+    scoutCandidateBatch: downgraded,
+    closingQuestion: PROSPECT_BATCH_REVIEW_CLOSING_QUESTION,
+    disclaimer: PROSPECT_BATCH_REVIEW_DISCLAIMER,
+    reviewOnly: true,
+    crmWritesMade: false,
+    outreachCopyGenerated: false,
+    accountChangesMade: false,
+    exportMade: false,
+  };
+}
+
+function formatProspectBatchReviewMessage(review) {
+  const p = review || {};
+  const titles = p.sectionTitles || PROSPECT_BATCH_REVIEW_SECTION_TITLES;
+  const lines = [p.title || PROSPECT_BATCH_REVIEW_TITLE, ''];
+  if (p.workRequestId) {
+    lines.push(`workRequestId: ${p.workRequestId}`);
+    lines.push(
+      `Scout counts — Accepted: ${
+        (p.counts && p.counts.scoutAccepted) != null
+          ? p.counts.scoutAccepted
+          : (p.acceptedFirstPass || []).length
+      } · Review required: ${
+        (p.counts && p.counts.scoutReviewRequired) != null
+          ? p.counts.scoutReviewRequired
+          : (p.optionalExpansion || []).length
+      } · Rejected: ${
+        (p.counts && p.counts.scoutRejected) != null
+          ? p.counts.scoutRejected
+          : (p.rejected || []).length
+      }`
+    );
+    lines.push('');
+  }
+
+  lines.push(`## 1. ${titles.acceptedFirstPass}`);
+  lines.push(
+    'Primary-town candidates in Bedford NH, Hooksett NH, Londonderry NH, Auburn NH, or Goffstown NH.'
+  );
+  lines.push('');
+  if ((p.acceptedFirstPass || []).length) {
+    (p.acceptedFirstPass || []).forEach((row, i) => {
+      lines.push(formatBatchReviewCandidateBlock(row, i + 1));
+      lines.push('');
+    });
+  } else {
+    lines.push('_None._');
+    lines.push('');
+  }
+
+  lines.push(`## 2. ${titles.optionalExpansion}`);
+  lines.push(
+    'Manchester NH candidates, plus Derry/nearby or primary-town review_required rows (including maps-only / no-website downgrades), unless explicitly approved.'
+  );
+  lines.push('');
+  if ((p.optionalExpansion || []).length) {
+    (p.optionalExpansion || []).forEach((row, i) => {
+      lines.push(formatBatchReviewCandidateBlock(row, i + 1));
+      lines.push('');
+    });
+  } else {
+    lines.push('_None._');
+    lines.push('');
+  }
+
+  lines.push(`## 3. ${titles.rejected}`);
+  lines.push(
+    'Large institutional / wrong segment / outside market candidates (audit only — not outreach-ready).'
+  );
+  lines.push('');
+  if ((p.rejected || []).length) {
+    (p.rejected || []).forEach((row, i) => {
+      lines.push(formatBatchReviewCandidateBlock(row, i + 1));
+      if (row.rejectionReason || row.statusReason) {
+        lines.push(
+          `   - Rejection reason: ${row.rejectionReason || row.statusReason}`
+        );
+      }
+      lines.push('');
+    });
+  } else {
+    lines.push('_None._');
+    lines.push('');
+  }
+
+  lines.push(p.disclaimer || PROSPECT_BATCH_REVIEW_DISCLAIMER);
+  lines.push('');
+  lines.push(p.closingQuestion || PROSPECT_BATCH_REVIEW_CLOSING_QUESTION);
+  return lines.join('\n').trim();
+}
+
+function produceProspectBatchReviewResult(ctx, answers, slots, opts, leadIn) {
+  const batch =
+    opts.priorScoutCandidateBatch ||
+    (opts.priorScoutHandoff && opts.priorScoutHandoff.candidateBatch) ||
+    null;
+  const workRequestId =
+    opts.workRequestId ||
+    extractWorkRequestIdFromMessage(opts.userMessage) ||
+    (opts.priorScoutWorkRequest && opts.priorScoutWorkRequest.workRequestId) ||
+    (opts.priorScoutHandoff &&
+      opts.priorScoutHandoff.workRequest &&
+      opts.priorScoutHandoff.workRequest.workRequestId) ||
+    (batch && batch.workRequestId) ||
+    null;
+
+  if (!hasCompletedScoutCandidateBatch(batch)) {
+    return {
+      message: [
+        leadIn || 'Prospect Batch Review needs the latest completed Scout result.',
+        '',
+        workRequestId
+          ? `No completed Scout candidate batch is loaded for workRequestId=${workRequestId}.`
+          : 'No completed Scout candidate batch is loaded in this session.',
+        'Max will not invent placeholders or repeat the build proposal.',
+        'No outreach copy, sends, CRM writes, or account changes were made.',
+      ].join('\n'),
+      step: CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_COMPLETED,
+      answers,
+      slots: { ...slots },
+      preview: opts.priorPreview || null,
+      criteriaPreview: opts.priorCriteriaPreview || null,
+      buildProposal: opts.priorBuildProposal || null,
+      prospectListDraft: opts.priorProspectListDraft || null,
+      scoutHandoffBrief: opts.priorScoutHandoffBrief || null,
+      scoutHandoff: opts.priorScoutHandoff || null,
+      scoutWorkRequest: opts.priorScoutWorkRequest || null,
+      scoutCandidateBatch: batch,
+      prospectBatchReview: null,
+      liveProspectList: null,
+      intent: 'prospect_batch_review_missing_batch',
+      planningState: CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_COMPLETED,
+      currentAsk: null,
+      workRequestId,
+    };
+  }
+
+  const review = buildProspectBatchReview(batch, {
+    workRequestId,
+    priorScoutWorkRequest: opts.priorScoutWorkRequest || null,
+  });
+  const lines = [];
+  if (leadIn) lines.push(leadIn, '');
+  lines.push(formatProspectBatchReviewMessage(review));
+
+  return {
+    message: lines.join('\n'),
+    step: CAMPAIGN_PLANNING_STATES.PROSPECT_BATCH_REVIEW,
+    answers,
+    slots: {
+      ...slots,
+      scoutHandoffBriefGenerated: true,
+      scoutHandoffApproved: true,
+      scoutHandoffQueued: true,
+      buildProposalApproved: true,
+      criteriaApproved: true,
+      previewApproved: true,
+    },
+    preview: opts.priorPreview || null,
+    criteriaPreview: opts.priorCriteriaPreview || null,
+    buildProposal: opts.priorBuildProposal || null,
+    prospectListDraft: opts.priorProspectListDraft || null,
+    scoutHandoffBrief: opts.priorScoutHandoffBrief || null,
+    scoutHandoff: opts.priorScoutHandoff || null,
+    scoutWorkRequest: opts.priorScoutWorkRequest || null,
+    scoutCandidateBatch: review.scoutCandidateBatch || batch,
+    prospectBatchReview: review,
+    liveProspectList: null,
+    intent: 'prospect_batch_review',
+    previewApproved: true,
+    criteriaApproved: true,
+    buildProposalApproved: true,
+    liveSourcingApproved: false,
+    planningState: CAMPAIGN_PLANNING_STATES.PROSPECT_BATCH_REVIEW,
+    currentAsk: PROSPECT_BATCH_REVIEW_CLOSING_QUESTION,
+    workRequestId,
+  };
+}
+
 function produceExecuteExistingScoutWorkRequestResult(
   ctx,
   answers,
@@ -2823,6 +3149,16 @@ function produceExecuteExistingScoutWorkRequestResult(
     extractWorkRequestIdFromMessage(opts && opts.userMessage) ||
     null;
 
+  // Prefer session-completed Scout batch over re-sourcing or "not found".
+  const priorBatch =
+    opts.priorScoutCandidateBatch ||
+    (opts.priorScoutHandoff && opts.priorScoutHandoff.candidateBatch) ||
+    null;
+  const wantsRetry = /\bretry|re-?run\b/i.test(String((opts && opts.userMessage) || ''));
+  if (hasCompletedScoutCandidateBatch(priorBatch) && !wantsRetry) {
+    return produceProspectBatchReviewResult(ctx, answers, slots, opts, leadIn);
+  }
+
   const result = queueOrExecuteExistingScoutWorkRequest({
     workRequestId,
     handoff: opts.priorScoutHandoff || null,
@@ -2830,6 +3166,22 @@ function produceExecuteExistingScoutWorkRequestResult(
       (opts.priorScoutHandoff && opts.priorScoutHandoff.workRequest) || null,
     ...opts,
   });
+
+  // Store lost the WR after deploy, but session still has the completed batch.
+  if (
+    !result.ok &&
+    hasCompletedScoutCandidateBatch(priorBatch) &&
+    !wantsRetry
+  ) {
+    return produceProspectBatchReviewResult(
+      ctx,
+      answers,
+      slots,
+      opts,
+      leadIn ||
+        'Scout work request already completed in this session — presenting Prospect Batch Review from that result.'
+    );
+  }
 
   const briefSlots = {
     ...slots,
@@ -4931,6 +5283,26 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
   slots.buildProposalApproved = Boolean(
     slots.buildProposalApproved || priorSlots.buildProposalApproved
   );
+
+  // Completed Scout batch means campaign planning already advanced past preview /
+  // criteria / build proposal — do not fall back to stale pre-preview "advance".
+  const priorScoutBatchSeed =
+    opts.priorScoutCandidateBatch ||
+    prior.scoutCandidateBatch ||
+    (prior.scoutHandoff && prior.scoutHandoff.candidateBatch) ||
+    null;
+  if (
+    hasCompletedScoutCandidateBatch(priorScoutBatchSeed) ||
+    prior.step === CAMPAIGN_PLANNING_STATES.SCOUT_HANDOFF_COMPLETED ||
+    prior.step === CAMPAIGN_PLANNING_STATES.PROSPECT_BATCH_REVIEW
+  ) {
+    slots.previewGenerated = true;
+    slots.previewApproved = true;
+    slots.criteriaGenerated = true;
+    slots.criteriaApproved = true;
+    slots.buildProposalGenerated = true;
+    slots.buildProposalApproved = true;
+  }
   slots.draftRequested = Boolean(
     slots.draftRequested || priorSlots.draftRequested
   );
@@ -5208,6 +5580,16 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       }
 
       // Criteria already shown — classify intent and advance (never silent replay).
+      const priorScoutBatchForAction =
+        opts.priorScoutCandidateBatch ||
+        prior.scoutCandidateBatch ||
+        (prior.scoutHandoff && prior.scoutHandoff.candidateBatch) ||
+        null;
+      const priorScoutHandoffForAction =
+        opts.priorScoutHandoff ||
+        prior.scoutHandoff ||
+        (prior.scoutHandoffBrief && prior.scoutHandoffBrief.scoutHandoff) ||
+        null;
       const artifactAction =
         opts.artifactAction ||
         resolveCampaignArtifactAction({
@@ -5217,6 +5599,8 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
           priorCriteriaPreview: priorCriteria,
           priorBuildProposal: replyOpts.priorBuildProposal,
           priorProspectListDraft: replyOpts.priorProspectListDraft,
+          priorScoutCandidateBatch: priorScoutBatchForAction,
+          priorScoutHandoff: priorScoutHandoffForAction,
           step: prior.step || 'prospect_list_criteria_preview',
         });
 
@@ -5227,6 +5611,44 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
           { ...slots, previewApproved: true, criteriaGenerated: true },
           replyOpts,
           'Here is the Prospect List Criteria Preview again — still planning-only.'
+        );
+      }
+
+      if (artifactAction.action === 'emit_prospect_batch_review') {
+        return produceProspectBatchReviewResult(
+          ctx,
+          syncedAnswers,
+          {
+            ...slots,
+            previewApproved: true,
+            criteriaGenerated: true,
+            criteriaApproved: true,
+            buildProposalGenerated: true,
+            buildProposalApproved: true,
+          },
+          {
+            ...replyOpts,
+            userMessage,
+            workRequestId: artifactAction.workRequestId || null,
+            priorScoutHandoffBrief:
+              opts.priorScoutHandoffBrief ||
+              prior.scoutHandoffBrief ||
+              null,
+            priorScoutHandoff:
+              opts.priorScoutHandoff ||
+              prior.scoutHandoff ||
+              (prior.scoutHandoffBrief && prior.scoutHandoffBrief.scoutHandoff) ||
+              null,
+            priorScoutCandidateBatch:
+              opts.priorScoutCandidateBatch ||
+              prior.scoutCandidateBatch ||
+              (prior.scoutHandoff && prior.scoutHandoff.candidateBatch) ||
+              null,
+            priorScoutWorkRequest:
+              opts.priorScoutWorkRequest || prior.scoutWorkRequest || null,
+          },
+          artifactAction.note ||
+            'Prospect Batch Review from the latest completed Scout result. No new batch will be generated.'
         );
       }
 
@@ -5255,6 +5677,13 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
               prior.scoutHandoff ||
               (prior.scoutHandoffBrief && prior.scoutHandoffBrief.scoutHandoff) ||
               null,
+            priorScoutCandidateBatch:
+              opts.priorScoutCandidateBatch ||
+              prior.scoutCandidateBatch ||
+              (prior.scoutHandoff && prior.scoutHandoff.candidateBatch) ||
+              null,
+            priorScoutWorkRequest:
+              opts.priorScoutWorkRequest || prior.scoutWorkRequest || null,
           },
           artifactAction.note ||
             'Executing the existing Scout work request. No new handoff will be created.'
@@ -5724,6 +6153,11 @@ module.exports = {
   DRAFT_ARTIFACT_KIND,
   DRAFT_TITLE,
   DRAFT_DISCLAIMER,
+  PROSPECT_BATCH_REVIEW_KIND,
+  PROSPECT_BATCH_REVIEW_TITLE,
+  PROSPECT_BATCH_REVIEW_DISCLAIMER,
+  PROSPECT_BATCH_REVIEW_CLOSING_QUESTION,
+  PROSPECT_BATCH_REVIEW_SECTION_TITLES,
   LIVE_SOURCING_BOUNDARY_MESSAGE,
   LIVE_PROSPECT_LIST_KIND,
   LIVE_PROSPECT_LIST_TITLE,
@@ -5781,6 +6215,9 @@ module.exports = {
   formatProspectListBuildProposalMessage,
   buildReviewableProspectListDraft,
   formatReviewableProspectListDraftMessage,
+  buildProspectBatchReview,
+  formatProspectBatchReviewMessage,
+  produceProspectBatchReviewResult,
   buildScoutHandoffBrief,
   formatScoutHandoffBriefMessage,
   produceScoutHandoffBriefResult,

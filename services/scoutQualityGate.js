@@ -93,6 +93,46 @@ const CONFIDENCE = Object.freeze({
   REVIEW_REQUIRED: 'review_required',
 });
 
+const MAPS_ONLY_SOURCE_RE =
+  /google\.com\/maps|maps\.google\.|goo\.gl\/maps|maps\.app\.goo\.gl/i;
+
+/**
+ * True when the listing has a real company website (not a Google Maps URL).
+ * Accepts either `website` or a non-maps `sourceUrl` as company-site evidence.
+ */
+function hasNonMapsCompanyWebsite(hit, opts = {}) {
+  const candidates = [
+    hit && hit.website,
+    hit && hit.sourceUrl,
+    hit && hit.url,
+    opts.sourceUrl,
+  ];
+  for (const raw of candidates) {
+    const url = String(raw || '').trim();
+    if (!url) continue;
+    if (MAPS_ONLY_SOURCE_RE.test(url)) continue;
+    // Require an http(s) URL that is not a maps link.
+    if (/^https?:\/\//i.test(url)) return true;
+  }
+  return false;
+}
+
+/**
+ * Maps-only / directory-only public source — no company website evidence.
+ * These must not stay `accepted` / `high` (e.g. Cedar Management Group).
+ */
+function isMapsOnlyPublicSource(hit, opts = {}) {
+  if (hasNonMapsCompanyWebsite(hit, opts)) return false;
+  const sourceUrl = String(
+    (hit && (hit.sourceUrl || hit.url)) || opts.sourceUrl || ''
+  ).trim();
+  const website = String((hit && hit.website) || '').trim();
+  if (!sourceUrl && !website) return false;
+  return (
+    MAPS_ONLY_SOURCE_RE.test(sourceUrl) || MAPS_ONLY_SOURCE_RE.test(website)
+  );
+}
+
 /** Word/phrase UK markers checked only against candidate address/source geo text. */
 const UK_GEO_PHRASE_MARKERS = Object.freeze([
   'united kingdom',
@@ -1014,14 +1054,12 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
     exclusionRisk = true;
     risks.push(`Exclusion criteria match: ${exclusionCriteriaHit}`);
   }
-  const hasCompanyWebsite = Boolean(
-    hit &&
-      hit.website &&
-      !/google\.com\/maps/i.test(String(hit.website)) &&
-      String(hit.website).trim()
-  );
+  const mapsOnly = isMapsOnlyPublicSource(hit, opts);
+  const hasCompanyWebsite = !mapsOnly && hasNonMapsCompanyWebsite(hit);
   if (!hasCompanyWebsite) {
-    risks.push('No company website on listing — using maps listing as source URL');
+    risks.push(
+      'No company website on listing — Google Maps / directory source only (downgrade to review_required / medium)'
+    );
   }
   if (!geo.inNh) {
     risks.push('Location not confirmed in New Hampshire, USA');
@@ -1207,6 +1245,16 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
     }
   }
 
+  // Maps-only / no company website → never accepted, never high confidence.
+  if (mapsOnly) {
+    status = CANDIDATE_STATUS.REVIEW_REQUIRED;
+    statusReason =
+      'Maps-only public source with no company website — review_required / medium';
+    if (confidence === CONFIDENCE.HIGH || confidence === CONFIDENCE.REVIEW_REQUIRED) {
+      confidence = CONFIDENCE.MEDIUM;
+    }
+  }
+
   const risksText = risks.length
     ? risks.join('; ')
     : 'Public-source only — verify contact before outreach';
@@ -1222,8 +1270,74 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
     risks: risksText,
     exclusionRisk,
     geo,
-    signals,
+    signals: {
+      ...signals,
+      hasCompanyWebsite,
+      mapsOnly,
+    },
     market,
+  };
+}
+
+/**
+ * Downgrade maps-only rows on an already-completed Scout batch (review artifact).
+ * Does not invent candidates — only adjusts status/confidence/risks in place copies.
+ */
+function applyMapsOnlyDowngradeToCandidate(row) {
+  if (!row || typeof row !== 'object') return row;
+  const hit = {
+    ...row,
+    website: row.website,
+    sourceUrl: row.sourceUrl || row.url || null,
+  };
+  if (!isMapsOnlyPublicSource(hit)) return { ...row };
+  const risks = String(row.risks || '');
+  const mapsRisk =
+    'No company website on listing — Google Maps / directory source only (downgrade to review_required / medium)';
+  return {
+    ...row,
+    status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+    statusReason:
+      row.statusReason && /maps-only|no company website/i.test(String(row.statusReason))
+        ? row.statusReason
+        : 'Maps-only public source with no company website — review_required / medium',
+    confidence:
+      row.confidence === CONFIDENCE.HIGH ||
+      row.confidence === CONFIDENCE.REVIEW_REQUIRED ||
+      !row.confidence
+        ? CONFIDENCE.MEDIUM
+        : row.confidence,
+    risks: risks.includes('No company website')
+      ? risks
+      : risks
+        ? `${risks}; ${mapsRisk}`
+        : mapsRisk,
+    reviewStatus: 'review_required',
+  };
+}
+
+function applyMapsOnlyDowngradeToBatch(batch) {
+  if (!batch || typeof batch !== 'object') return batch;
+  const candidates = Array.isArray(batch.candidates)
+    ? batch.candidates.map(applyMapsOnlyDowngradeToCandidate)
+    : [];
+  const rejected = Array.isArray(batch.rejected)
+    ? batch.rejected.map((r) => ({ ...r }))
+    : [];
+  const fromGroupsRejected =
+    batch.groups && Array.isArray(batch.groups.rejected)
+      ? batch.groups.rejected.map((r) => ({ ...r }))
+      : [];
+  const allRejected = rejected.length ? rejected : fromGroupsRejected;
+  const groups = groupCandidatesByStatus(candidates, allRejected.slice());
+  return {
+    ...batch,
+    candidates,
+    rejected: groups.rejected,
+    groups,
+    acceptedCount: groups.accepted.length,
+    reviewRequiredCount: groups.review_required.length,
+    rejectedCount: groups.rejected.length,
   };
 }
 
@@ -1592,6 +1706,7 @@ module.exports = {
   CANDIDATE_STATUS,
   CONFIDENCE,
   REJECTION_REASON,
+  MAPS_ONLY_SOURCE_RE,
   interpretAnchorMarket,
   buildNhScopedSearchQueries,
   candidateGeoEvidence,
@@ -1612,4 +1727,8 @@ module.exports = {
   batchMeetsQualityThreshold,
   isNhLocation,
   extendedTownsExplicitlyAllowed,
+  hasNonMapsCompanyWebsite,
+  isMapsOnlyPublicSource,
+  applyMapsOnlyDowngradeToCandidate,
+  applyMapsOnlyDowngradeToBatch,
 };

@@ -36,6 +36,8 @@ const ARTIFACT_KINDS = Object.freeze({
   REVIEWABLE_PROSPECT_LIST_DRAFT: 'reviewable_prospect_list_draft',
   /** Planning handoff for Scout — not live sourcing by Max. */
   SCOUT_HANDOFF_BRIEF: 'scout_handoff_brief',
+  /** Operator-facing review of a completed Scout candidate batch. */
+  PROSPECT_BATCH_REVIEW: 'prospect_batch_review',
 });
 
 /**
@@ -43,11 +45,13 @@ const ARTIFACT_KINDS = Object.freeze({
  * create_scout_handoff_brief = Max writes a planning/handoff artifact.
  * perform_live_sourcing = Scout/browser/tooling gathers real prospects.
  * execute_existing_scout_work_request = run/retry a preserved Scout work request by ID.
+ * emit_prospect_batch_review = format completed Scout results for operator review.
  */
 const PROSPECT_ACQUISITION_INTENTS = Object.freeze({
   CREATE_SCOUT_HANDOFF_BRIEF: 'create_scout_handoff_brief',
   HAND_BRIEF_TO_SCOUT: 'hand_brief_to_scout',
   EXECUTE_EXISTING_SCOUT_WORK_REQUEST: 'execute_existing_scout_work_request',
+  EMIT_PROSPECT_BATCH_REVIEW: 'emit_prospect_batch_review',
   PERFORM_LIVE_SOURCING: 'perform_live_sourcing',
 });
 
@@ -84,6 +88,10 @@ const NEXT_REQUEST_RE =
 /** Explicit ask to generate the first reviewable prospect list batch/draft. */
 const PROSPECT_LIST_DRAFT_REQUEST_RE =
   /\b(?:generate|create|produce|build|start|begin|draft|prepare)\b[\s\S]{0,120}\b(?:first\s+)?reviewable\s+(?:prospect\s+)?list(?:\s+batch|\s+draft)?\b|\b(?:generate|create|produce|start|begin|draft|prepare)\b[\s\S]{0,80}\b(?:prospect\s+)?list\s+(?:batch|draft)\b|\bfirst\s+reviewable\s+(?:prospect\s+)?list\b|\breviewable\s+(?:prospect\s+)?list\s+(?:batch|draft)\b/i;
+
+/** Ask for Prospect Batch Review from a completed Scout result (not a new draft). */
+const PROSPECT_BATCH_REVIEW_REQUEST_RE =
+  /\bprospect\s+batch\s+review\b|\breview\s+(?:the\s+)?(?:scout\s+)?(?:candidate\s+)?batch\b|\bscout\s+(?:candidate\s+)?(?:batch\s+)?review\b|\b(?:show|create|produce|format|emit)\b[\s\S]{0,80}\b(?:prospect\s+)?batch\s+review\b|\b(?:accepted|review\s+required|rejected)\s+candidates\b|\bfrom\s+the\s+latest\s+completed\s+scout\b/i;
 
 const ARTIFACT_REQUEST_RE =
   /\b(?:show|view|see|open|pull\s+up|regenerate|revise|replay)\s+(?:me\s+)?(?:the\s+)?(?:criteria|preview|blueprint|build\s+proposal|proposal|list\s+draft|prospect\s+list)\b|\b(?:criteria\s+preview|build\s+proposal|campaign\s+preview|list\s+draft)\s+again\b/i;
@@ -315,10 +323,30 @@ function looksLikeScoutHandoffBriefRequest(text) {
   return false;
 }
 
+function looksLikeProspectBatchReviewRequest(text) {
+  const s = String(text || '');
+  if (!s.trim()) return false;
+  if (looksLikeExecuteExistingScoutWorkRequest(s)) return false;
+  return PROSPECT_BATCH_REVIEW_REQUEST_RE.test(s);
+}
+
+function hasCompletedScoutCandidateBatch(batch) {
+  if (!batch || typeof batch !== 'object') return false;
+  const candidates = Array.isArray(batch.candidates) ? batch.candidates : [];
+  const rejected = Array.isArray(batch.rejected) ? batch.rejected : [];
+  const groups = batch.groups || {};
+  const grouped =
+    (Array.isArray(groups.accepted) ? groups.accepted.length : 0) +
+    (Array.isArray(groups.review_required) ? groups.review_required.length : 0) +
+    (Array.isArray(groups.rejected) ? groups.rejected.length : 0);
+  return candidates.length > 0 || rejected.length > 0 || grouped > 0;
+}
+
 function looksLikeProspectListDraftRequest(text) {
   const s = String(text || '');
   // Handoff brief / live sourcing / existing WR execution are never drafts.
   if (looksLikeExecuteExistingScoutWorkRequest(s)) return false;
+  if (looksLikeProspectBatchReviewRequest(s)) return false;
   if (looksLikeHandBriefToScoutRequest(s)) return false;
   if (looksLikeScoutHandoffBriefRequest(s)) return false;
   if (looksLikeLiveSourcingApproval(s)) return false;
@@ -397,6 +425,9 @@ function classifyProspectAcquisitionIntent(text) {
   const s = String(text || '');
   if (looksLikeExecuteExistingScoutWorkRequest(s)) {
     return PROSPECT_ACQUISITION_INTENTS.EXECUTE_EXISTING_SCOUT_WORK_REQUEST;
+  }
+  if (looksLikeProspectBatchReviewRequest(s)) {
+    return PROSPECT_ACQUISITION_INTENTS.EMIT_PROSPECT_BATCH_REVIEW;
   }
   if (looksLikeHandBriefToScoutRequest(s)) {
     return PROSPECT_ACQUISITION_INTENTS.HAND_BRIEF_TO_SCOUT;
@@ -1062,9 +1093,60 @@ function resolveCampaignArtifactAction(opts = {}) {
   const priorBuild = opts.priorBuildProposal || null;
   const priorDraft =
     opts.priorProspectListDraft || opts.priorReviewableProspectListDraft || null;
+  const priorScoutBatch =
+    opts.priorScoutCandidateBatch ||
+    opts.scoutCandidateBatch ||
+    (opts.priorScoutHandoff && opts.priorScoutHandoff.candidateBatch) ||
+    null;
+  const scoutBatchReady = hasCompletedScoutCandidateBatch(priorScoutBatch);
+  const scoutCompletedStep =
+    opts.step === 'scout_handoff_completed' ||
+    opts.step === 'scout_handoff_failed' ||
+    (opts.priorScoutHandoff &&
+      (opts.priorScoutHandoff.status === 'completed' ||
+        opts.priorScoutHandoff.status === 'failed_quality_gate' ||
+        opts.priorScoutHandoff.scoutRan));
 
   const acquisitionIntent = classifyProspectAcquisitionIntent(text);
   const executeWorkRequestId = extractWorkRequestIdFromMessage(text);
+
+  // HARD GUARD: completed Scout batch already exists — emit Prospect Batch Review.
+  // Never ask to generate the first reviewable batch or re-emit the build proposal.
+  const wantsBatchReview =
+    acquisitionIntent ===
+      PROSPECT_ACQUISITION_INTENTS.EMIT_PROSPECT_BATCH_REVIEW ||
+    looksLikeProspectBatchReviewRequest(text) ||
+    (scoutBatchReady &&
+      scoutCompletedStep &&
+      (looksLikeNextPlanningRequest(text) ||
+        messageClass === MESSAGE_CLASSES.ARTIFACT_REQUEST ||
+        messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST ||
+        // Stale "generate first reviewable batch" asks must surface the Scout result.
+        looksLikeProspectListDraftRequest(text)));
+
+  if (
+    wantsBatchReview &&
+    acquisitionIntent !==
+      PROSPECT_ACQUISITION_INTENTS.EXECUTE_EXISTING_SCOUT_WORK_REQUEST
+  ) {
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW;
+    memory = markArtifactGenerated(
+      memory,
+      ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
+      'draft'
+    );
+    return {
+      action: 'emit_prospect_batch_review',
+      approveKind: null,
+      emitKind: ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
+      memory,
+      messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
+      note: scoutBatchReady
+        ? 'Using the latest completed Scout candidate batch. Max will not regenerate the first reviewable batch or repeat the build proposal.'
+        : 'Creating the Prospect Batch Review from the completed Scout result.',
+      planningState: 'scout_handoff_completed',
+    };
+  }
 
   // HARD GUARD: execute / retry an existing Scout work request by ID.
   // Never fall through to "ask me to generate batch when ready".
@@ -1072,6 +1154,23 @@ function resolveCampaignArtifactAction(opts = {}) {
     acquisitionIntent ===
     PROSPECT_ACQUISITION_INTENTS.EXECUTE_EXISTING_SCOUT_WORK_REQUEST
   ) {
+    // If the work request already completed and the session still has the batch,
+    // prefer Prospect Batch Review over re-sourcing (unless message says retry).
+    const wantsRetry = /\bretry|re-?run\b/i.test(text);
+    if (scoutBatchReady && !wantsRetry) {
+      memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW;
+      return {
+        action: 'emit_prospect_batch_review',
+        approveKind: null,
+        emitKind: ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
+        memory,
+        messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
+        note:
+          'Scout work request already completed — presenting Prospect Batch Review from the latest result.',
+        planningState: 'scout_handoff_completed',
+        workRequestId: executeWorkRequestId,
+      };
+    }
     memory.nextRecommendedArtifact = ARTIFACT_KINDS.SCOUT_HANDOFF_BRIEF;
     return {
       action: 'execute_existing_scout_work_request',
@@ -1489,6 +1588,8 @@ function humanArtifactLabel(kind) {
       return 'Scout Handoff Brief';
     case ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT:
       return 'Reviewable Prospect List Draft';
+    case ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW:
+      return 'Prospect Batch Review';
     default:
       return kind || 'artifact';
   }
@@ -1793,6 +1894,8 @@ module.exports = {
   looksLikeApprovalPlusNextRequest,
   looksLikeNextPlanningRequest,
   looksLikeProspectListDraftRequest,
+  looksLikeProspectBatchReviewRequest,
+  hasCompletedScoutCandidateBatch,
   looksLikeScoutHandoffBriefRequest,
   looksLikeHandBriefToScoutRequest,
   looksLikeExecuteExistingScoutWorkRequest,

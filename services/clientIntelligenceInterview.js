@@ -7053,6 +7053,14 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     (session.interview_state && session.interview_state.scoutHandoff) ||
     (priorScoutHandoffBrief && priorScoutHandoffBrief.scoutHandoff) ||
     null;
+  const priorScoutCandidateBatch =
+    (session.interview_state && session.interview_state.scoutCandidateBatch) ||
+    (priorScoutHandoff && priorScoutHandoff.candidateBatch) ||
+    null;
+  const priorScoutWorkRequest =
+    (session.interview_state && session.interview_state.scoutWorkRequest) ||
+    (priorScoutHandoff && priorScoutHandoff.workRequest) ||
+    null;
 
   // SPEC-090/091 — classify intent before workflow handling.
   let reasoningMemory = ensureReasoningMemory(session.interview_state || {});
@@ -7126,6 +7134,8 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     priorCriteriaPreview,
     priorBuildProposal,
     priorProspectListDraft,
+    priorScoutCandidateBatch,
+    priorScoutHandoff,
     step: campaignPlanning.step,
   });
   reasoningMemory = artifactAction.memory || reasoningMemory;
@@ -7139,6 +7149,8 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     priorProspectListDraft,
     priorScoutHandoffBrief,
     priorScoutHandoff,
+    priorScoutCandidateBatch,
+    priorScoutWorkRequest,
     messageClass,
     artifactAction,
     reasoningMemory,
@@ -7167,6 +7179,8 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       prospectListDraft: priorProspectListDraft,
       scoutHandoffBrief: priorScoutHandoffBrief,
       scoutHandoff: priorScoutHandoff,
+      scoutCandidateBatch: priorScoutCandidateBatch,
+      scoutWorkRequest: priorScoutWorkRequest,
     },
     context,
     campaignReplyOpts
@@ -7300,6 +7314,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
   const nextScoutHandoff = reply.scoutHandoff || null;
   const nextScoutWorkRequest = reply.scoutWorkRequest || null;
   const nextScoutCandidateBatch = reply.scoutCandidateBatch || null;
+  const nextProspectBatchReview = reply.prospectBatchReview || null;
   const liveSourcingApproved = Boolean(
     reply.liveSourcingApproved ||
       (reply.slots && reply.slots.liveSourcingApproved) ||
@@ -7389,6 +7404,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       ...(nextScoutCandidateBatch
         ? { scoutCandidateBatch: nextScoutCandidateBatch }
         : {}),
+      ...(nextProspectBatchReview
+        ? { prospectBatchReview: nextProspectBatchReview }
+        : {}),
       reasoningMemory: (() => {
         let mem = reasoningMemory;
         if (nextPreview) {
@@ -7446,6 +7464,13 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
               ARTIFACT_KINDS.SCOUT_HANDOFF_BRIEF
             );
           }
+        }
+        if (nextProspectBatchReview) {
+          mem = markArtifactGenerated(
+            mem,
+            ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
+            nextProspectBatchReview.status || 'draft'
+          );
         }
         if (liveSourcingApproved) {
           mem = markLiveSourcingApproved(mem);
@@ -7507,6 +7532,11 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       nextScoutCandidateBatch ||
       (session.interview_state &&
         session.interview_state.scoutCandidateBatch) ||
+      null,
+    prospectBatchReview:
+      nextProspectBatchReview ||
+      (session.interview_state &&
+        session.interview_state.prospectBatchReview) ||
       null,
     liveProspectList:
       nextLiveProspectList ||
