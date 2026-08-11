@@ -89,6 +89,7 @@ const {
 const {
   mergeOperatorLearnings,
   draftOutputFingerprint,
+  emptyCampaignWorkingState,
 } = require('../services/maxSynthesis');
 const {
   splitDigestAndEvidence,
@@ -4069,5 +4070,150 @@ describe('Max Chat Responsiveness — Anchor Outreach Draft Preview', () => {
     assert.match(second.message, /Source that won/i);
     assert.doesNotMatch(second.message, /## First-touch email/);
     assert.equal(second.sendsMade, false);
+    assert.equal(
+      second.campaignWorkingState.awaitingForceRebuildConfirmation,
+      true
+    );
+  });
+
+  it('force-rebuild confirmation bypasses stored draft and does not re-ask', () => {
+    const { review, ctx, strategy, plan, memory } = anchorFixtures();
+    const staleDraft = {
+      kind: 'outreach_draft_preview',
+      title: OUTREACH_DRAFT_PREVIEW_TITLE,
+      status: 'draft',
+      businessName: 'Anchor',
+      subjectOptions: ['Anchor - commercial cleaning'],
+      firstTouchBody: [
+        'Hi {{first_name}},',
+        '',
+        'I work with property managers at 12 North Street.',
+        '',
+        'Would you be open to a chat?',
+      ].join('\n'),
+      personalizationByProspect: [
+        {
+          companyName: 'Acme Property Group',
+          town: 'Bedford',
+          personalizationNote: 'Reference 45 Elm Street in Bedford.',
+        },
+      ],
+      batchProspects: ['Acme Property Group'],
+      followUpSketch: [
+        'Follow-up 1 (~3 business days): restate the same CTA with one fresh personalization detail.',
+        'Follow-up 2 (~7 business days): offer a clear close-the-loop option (reply / book / not now).',
+      ],
+      approvalGate: ['No sends'],
+      operatorDigest: {
+        kind: 'outreach_draft_preview_digest',
+        title: OUTREACH_DRAFT_PREVIEW_TITLE,
+        recommendedDecision: 'Approve',
+        primaryActions: [{ id: 'approve', label: 'Approve' }],
+      },
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    const correction =
+      'Revise the Outreach Draft Preview. Use `{{business_name}} - commercial cleaning`; no street addresses; draft actual follow-ups; answer like an LLM/operator, not a workflow renderer.';
+
+    const rejectedFp = draftOutputFingerprint(staleDraft);
+    const working = {
+      ...emptyCampaignWorkingState(),
+      rejectedOutputFingerprints: [rejectedFp, rejectedFp],
+      latestOperatorInstruction: correction,
+      activeArtifactKind: 'outreach_draft_preview',
+      awaitingForceRebuildConfirmation: true,
+      lastResponseMode: 'stale_source_diagnostic',
+      lastStaleDiagnostic: {
+        winningSource: 'stored_artifact_or_template_overrode_operator_chat',
+        latestOperatorInstruction: correction,
+      },
+    };
+
+    const reply = buildCampaignPlanningReply(
+      'Yes, force-rebuild from operator instructions only.',
+      {
+        step: 'outreach_draft_preview',
+        slots: {
+          previewApproved: true,
+          criteriaApproved: true,
+          buildProposalApproved: true,
+          prospectBatchReviewApproved: true,
+          batch1Approved: true,
+          outreachStrategyPreviewApproved: true,
+          strategyApproved: true,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewGenerated: true,
+        },
+        prospectBatchReview: review,
+        outreachStrategyPreview: strategy,
+        outreachCopyPlan: plan,
+        outreachDraftPreview: staleDraft,
+        campaignMemory: memory,
+        campaignWorkingState: working,
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: plan,
+        priorOutreachDraftPreview: staleDraft,
+        campaignMemory: memory,
+        campaignWorkingState: working,
+        messageClass: 'direct_answer',
+      }
+    );
+
+    assert.equal(reply.intent, 'force_rebuild_outreach_draft_preview');
+    assert.equal(reply.responseMode, 'operator_chat_response');
+    assert.doesNotMatch(reply.message, /Confirm whether to force-rebuild/i);
+    assert.doesNotMatch(reply.message, /Confirm force-rebuild from operator/i);
+    assert.doesNotMatch(
+      reply.message,
+      /I will not produce another draft until this stale source/i
+    );
+    assert.match(reply.message, /Force-rebuild confirmed|bypassed stored/i);
+    assert.ok(reply.outreachDraftPreview);
+    assert.equal(
+      reply.outreachDraftPreview.forceRebuiltFromOperatorInstructions,
+      true
+    );
+    assert.equal(reply.outreachDraftPreview.bypassedStoredArtifact, true);
+    assert.equal(reply.outreachDraftPreview.operatorDigest, null);
+    assert.deepEqual(reply.outreachDraftPreview.subjectOptions, [
+      '{{business_name}} - commercial cleaning',
+    ]);
+    assert.match(reply.message, /\{\{business_name\}\} - commercial cleaning/);
+    assert.doesNotMatch(reply.message, /Anchor - commercial cleaning/);
+    assert.doesNotMatch(reply.message, /View evidence/i);
+    assert.doesNotMatch(reply.message, /Primary actions/i);
+    assert.doesNotMatch(reply.message, /tested winner/i);
+    assert.doesNotMatch(reply.message, /\d{1,6}\s+\w+\s+Street/i);
+    assert.ok(
+      Array.isArray(reply.outreachDraftPreview.followUpDrafts) &&
+        reply.outreachDraftPreview.followUpDrafts.length >= 2
+    );
+    assert.match(
+      reply.outreachDraftPreview.followUpDrafts[0].body,
+      /Hi \{\{first_name\}\}/
+    );
+    assert.match(
+      reply.outreachDraftPreview.followUpDrafts[1].body,
+      /Hi \{\{first_name\}\}/
+    );
+    assert.match(reply.outreachDraftPreview.firstTouchBody, /\{\{town\}\}/);
+    assert.match(reply.outreachDraftPreview.firstTouchBody, /Anchor helps/);
+    for (const row of reply.outreachDraftPreview.personalizationByProspect || []) {
+      assert.doesNotMatch(row.personalizationNote, /\d{1,6}\s+\w+\s+Street/i);
+    }
+    assert.equal(
+      reply.campaignWorkingState.awaitingForceRebuildConfirmation,
+      false
+    );
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.accountChangesMade, false);
   });
 });
