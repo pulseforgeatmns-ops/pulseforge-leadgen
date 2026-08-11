@@ -50,6 +50,12 @@ const RAW_PROMPT_FRAGMENT_RES = Object.freeze([
   /\binside Start with\b/,
   /\bthat match Small to\b/,
   /\bMarket focus:\s*Start with\b/i,
+  // Criteria / campaign artifact paragraphs must never leak into wrappers.
+  /\bSmall to mid-sized local property managers in Greater Manchester who oversee\b/i,
+  /\bKeep Greater Manchester in scope\b/i,
+  /\bkeep the first test tight enough to learn quickly\b/i,
+  /\bin Start with\b/i,
+  /(?<!\.)\.\.(?!\.)/,
 ]);
 
 function naturalList(items) {

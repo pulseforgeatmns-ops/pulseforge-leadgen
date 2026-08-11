@@ -40,6 +40,8 @@ const {
   RELATIONSHIP_STATUS,
   OUTREACH_STRATEGY_PREVIEW_TITLE,
   OUTREACH_STRATEGY_PREVIEW_CLOSING_QUESTION,
+  containsRawPromptFragment,
+  findRawPromptFragments,
 } = require('../services/clientIntelligenceCampaignPlanning');
 const {
   splitDigestAndEvidence,
@@ -1470,6 +1472,95 @@ describe('Prospect Batch Review — Batch 1 approval transition', () => {
     assert.match(msg, /Voice & tone/i);
     assert.match(msg, new RegExp(OUTREACH_STRATEGY_PREVIEW_CLOSING_QUESTION));
     assert.doesNotMatch(msg, /Subject:|Hi \{|Dear /);
+  });
+
+  it('Outreach Strategy Preview section 5 uses phrase-safe synthesis, not raw criteria stitching', () => {
+    const review = correctedReview();
+    const approved = approveProspectBatchReviewBatch1(review);
+    const rawCriteria = {
+      targetSegment:
+        'Small to mid-sized local property managers in Greater Manchester who oversee offices, mixed-use buildings, small commercial properties, or multi-tenant spaces.',
+      targetSubtype:
+        'property managers overseeing offices, mixed-use buildings, small commercial properties, or multi-tenant spaces',
+      marketBound:
+        'Start with Bedford, Hooksett, Londonderry, Auburn, and Goffstown. Keep Greater Manchester in scope, but keep the first test tight enough to learn quickly.',
+      campaignObjective:
+        'Prove that Greater Manchester property managers will take a discovery conversation.',
+      status: 'approved',
+    };
+    const strategy = buildOutreachStrategyPreview(
+      approved,
+      {
+        businessName: 'Anchor Cleaning',
+        brandVoice:
+          'Brand voice should read as calm, professional, reliable, and easy to work with.',
+        competitiveAdvantages:
+          "Customers choose this business for reliability and responsiveness. Responsive communication. Peace of mind for recurring relationships.",
+        primarySegment: 'property managers',
+        targetMarket: 'Greater Manchester',
+        towns: ['Bedford', 'Hooksett', 'Londonderry', 'Auburn', 'Goffstown'],
+      },
+      { priorCriteriaPreview: rawCriteria }
+    );
+
+    assert.equal(
+      strategy.outreachAudiencePhrase,
+      'small to mid-sized property managers'
+    );
+    assert.equal(
+      strategy.outreachMarketPhrase,
+      'Bedford, Hooksett, Londonderry, Auburn, and Goffstown'
+    );
+    assert.equal(strategy.outreachAnglePhrase, 'reliability and responsiveness');
+    assert.match(strategy.outreachCtaPhrase, /conversation or walkthrough/i);
+    assert.match(strategy.approvedBatchPhrase, /approved Batch 1 record/i);
+    assert.ok(strategy.synthesisPhrases);
+    assert.equal(
+      strategy.synthesisPhrases.outreachAudiencePhrase,
+      strategy.outreachAudiencePhrase
+    );
+
+    const lead = strategy.outreachApproach[0];
+    assert.equal(
+      lead,
+      "Lead with Anchor's reliability and responsiveness for small to mid-sized property managers in Bedford, Hooksett, Londonderry, Auburn, and Goffstown."
+    );
+    assert.match(
+      strategy.outreachApproach[1],
+      /Personalize by town, property type, and any public role signal from the approved Batch 1 record/i
+    );
+    assert.match(
+      strategy.outreachApproach[2],
+      /Keep the first ask simple: a short conversation or walkthrough/i
+    );
+    assert.match(
+      strategy.outreachApproach[3],
+      /validation campaign, not a broad launch/i
+    );
+
+    const msg = formatOutreachStrategyPreviewMessage(strategy);
+    const hits = findRawPromptFragments(msg);
+    assert.equal(
+      hits.length,
+      0,
+      `Outreach Strategy Preview leaked raw fragments: ${hits.join(', ')}\n---\n${msg}`
+    );
+    assert.equal(containsRawPromptFragment(msg), false);
+    assert.doesNotMatch(
+      msg,
+      /Small to mid-sized local property managers in Greater Manchester who oversee/i
+    );
+    assert.doesNotMatch(msg, /Start with Bedford/i);
+    assert.doesNotMatch(msg, /Keep Greater Manchester in scope/i);
+    assert.doesNotMatch(msg, /keep the first test tight enough to learn quickly/i);
+    assert.doesNotMatch(msg, /differentiators for /i);
+    assert.doesNotMatch(msg, /(?<!\.)\.\.(?!\.)/);
+    assert.doesNotMatch(msg, /Subject:|Hi \{|Dear /);
+    assert.equal(strategy.outreachCopyGenerated, false);
+    assert.equal(strategy.sendsMade, false);
+    assert.equal(strategy.crmWritesMade, false);
+    assert.equal(strategy.exportMade, false);
+    assert.equal(strategy.accountChangesMade, false);
   });
 });
 

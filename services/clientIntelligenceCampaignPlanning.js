@@ -64,6 +64,9 @@ const {
   containsRawPromptFragment,
   findRawPromptFragments,
   asEmbeddablePhrase,
+  normalizeObjectivePhrase,
+  naturalList: synthesisNaturalList,
+  DEFAULT_TOWNS: SYNTHESIS_DEFAULT_TOWNS,
 } = require('./maxSynthesis');
 const {
   SCOUT_HANDOFF_KIND,
@@ -4039,9 +4042,154 @@ function normalizeVoiceGuidance(text, businessName) {
 }
 
 /**
+ * Phrase-safe audience noun for Outreach Strategy wrappers.
+ * Never embed raw criteria paragraphs ("Small to mid-sized… who oversee…").
+ */
+function normalizeOutreachAudiencePhrase(segmentPhrase, ctx = {}) {
+  let s = asEmbeddablePhrase(segmentPhrase || '');
+  s = s
+    .replace(/\bin\s+Greater Manchester(?:\s+NH)?\b.*$/i, '')
+    .replace(/\bwho\s+(?:oversee|manage)\b.*$/i, '')
+    .replace(/\boverseeing\b.*$/i, '')
+    .replace(/\bthat likely need\b.*$/i, '')
+    .replace(/\blocal\s+(?=property managers?\b)/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (/property managers?/i.test(s) && /small to mid-sized/i.test(s)) {
+    return 'small to mid-sized property managers';
+  }
+  if (/^property managers?\b/i.test(s) || !s) {
+    if (/property manager/i.test(String(ctx.primarySegment || segmentPhrase || ''))) {
+      return 'small to mid-sized property managers';
+    }
+    return s || 'the focus segment';
+  }
+  return s;
+}
+
+/**
+ * Towns-only market phrase for outreach strategy (no "Start with" / "Keep … in scope").
+ */
+function normalizeOutreachMarketPhrase(marketBoundPhrase, ctx = {}) {
+  const preferred =
+    Array.isArray(ctx.towns) && ctx.towns.length
+      ? ctx.towns.filter((t) =>
+          SYNTHESIS_DEFAULT_TOWNS.some((d) => new RegExp(`^${d}$`, 'i').test(t))
+        )
+      : [];
+  const towns =
+    preferred.length >= 2
+      ? preferred
+      : Array.isArray(ctx.towns) && ctx.towns.length >= 2
+        ? ctx.towns.slice(0, 5)
+        : [...DEFAULT_TOWNS];
+
+  let fromPhrase = String(marketBoundPhrase || '')
+    .replace(/,?\s*with\s+.+?\s+kept in scope\.?$/i, '')
+    .replace(/^Start with\s+/i, '')
+    .replace(/\.\s*Keep Greater Manchester in scope[\s\S]*$/i, '')
+    .replace(/\bKeep Greater Manchester in scope[\s\S]*$/i, '')
+    .replace(/\bkeep the first test tight enough to learn quickly\b\.?/gi, '')
+    .replace(/[.!?]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (containsRawPromptFragment(fromPhrase) || !fromPhrase || fromPhrase.length < 8) {
+    return synthesisNaturalList(towns) || naturalList(towns);
+  }
+  // Prefer canonical town list when the phrase already lists primary towns.
+  const listed = DEFAULT_TOWNS.filter((t) =>
+    new RegExp(`\\b${t}\\b`, 'i').test(fromPhrase)
+  );
+  if (listed.length >= 3) {
+    return synthesisNaturalList(listed.length >= 5 ? listed : towns);
+  }
+  return fromPhrase;
+}
+
+/**
+ * Angle noun phrase from Blueprint differentiators — never a raw paragraph.
+ */
+function normalizeOutreachAnglePhrase(differentiators, ctx = {}) {
+  const blob = [
+    ctx.competitiveAdvantages,
+    ctx.differentiators,
+    ...(Array.isArray(differentiators) ? differentiators : []),
+  ]
+    .filter(Boolean)
+    .join(' ');
+  if (/reliab/i.test(blob) && /respons/i.test(blob)) {
+    return 'reliability and responsiveness';
+  }
+  if (/reliab/i.test(blob) && /accountab/i.test(blob)) {
+    return 'reliability and accountability';
+  }
+  if (/respons/i.test(blob) && /accountab/i.test(blob)) {
+    return 'responsiveness and accountability';
+  }
+  return 'reliability and responsiveness';
+}
+
+/**
+ * First-ask CTA phrase — strategy only, not final copy.
+ */
+function normalizeOutreachCtaPhrase(ctx = {}, answers = {}, criteria = null) {
+  const objectiveBlob = [
+    criteria && criteria.campaignObjective,
+    answers.campaignObjective,
+    ctx.coreValidationQuestion,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  if (/walkthrough/i.test(objectiveBlob) || /conversation/i.test(objectiveBlob)) {
+    return 'a short conversation or walkthrough to see whether recurring cleaning support is worth discussing';
+  }
+  return 'a short conversation or walkthrough to see whether recurring cleaning support is worth discussing';
+}
+
+function normalizeApprovedBatchPhrase(batch = {}, candidates = []) {
+  const count =
+    batch.candidateCount != null ? batch.candidateCount : (candidates || []).length;
+  if (count === 1) return 'the approved Batch 1 record';
+  return 'the approved Batch 1 record';
+}
+
+function polishOutreachObjectiveSentence(rawPhrase, ctx = {}, answers = {}) {
+  let s = asEmbeddablePhrase(rawPhrase || '');
+  if (!s) {
+    s = normalizeObjectivePhrase('', {
+      primarySegment: ctx.primarySegment,
+      coreValidationQuestion: ctx.coreValidationQuestion || answers.coreValidationQuestion,
+    });
+  }
+  if (!s) {
+    return defaultObjectiveParagraph(ctx, answers);
+  }
+  s = s.replace(/[.!?]+$/g, '').trim();
+  if (!s) return defaultObjectiveParagraph(ctx, answers);
+  const sentence = s.charAt(0).toUpperCase() + s.slice(1);
+  return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
+}
+
+function rejectRawOutreachLines(lines) {
+  return (lines || []).map((line) => {
+    const text = String(line || '').replace(/\s+/g, ' ').trim();
+    if (!text) return text;
+    if (containsRawPromptFragment(text) || /(?<!\.)\.\.(?!\.)/.test(text)) {
+      // Never emit stitched criteria fragments — fall back to a safe strategy line.
+      return 'Keep the first outreach pass tight, reviewable, and validation-oriented.';
+    }
+    return text.replace(/\.{2,}/g, '.').replace(/\s+/g, ' ').trim();
+  });
+}
+
+/**
  * Build Outreach Strategy Preview from approved Blueprint, campaign objective,
  * Batch 1 cold prospects, and brand voice/differentiators.
  * Planning angles only — never final outreach copy.
+ *
+ * Section 5 (Outreach approach) uses Max Synthesis phrase-safe fields only —
+ * never concatenates wrapper text with raw prior campaign/criteria answers.
  */
 function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
   const prior =
@@ -4073,18 +4221,23 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
     batch.candidates ||
     review.acceptedFirstPass ||
     [];
-  const name = shortName(ctx.businessName || 'the business');
   const answers = opts.answers || {};
   const criteria = opts.priorCriteriaPreview || null;
   const campaignPreview = opts.priorPreview || null;
 
-  const campaignObjective =
-    (criteria && criteria.campaignObjective) ||
-    (campaignPreview &&
-      (campaignPreview.campaignObjective || campaignPreview.objective)) ||
-    answers.campaignObjective ||
-    (prior && prior.campaignObjective) ||
-    defaultObjectiveParagraph(ctx, answers);
+  const synthesis = buildArtifactSynthesisContext({
+    context: ctx,
+    normalizedFacts: opts.normalizedFacts || null,
+    priorCriteriaPreview: criteria,
+    priorCampaignPreview: campaignPreview,
+    priorArtifact: prior,
+    slots: opts.slots || {},
+    answers,
+  });
+  const { phrases, facts } = synthesis;
+  const name = shortBusinessName(
+    facts.businessName || ctx.businessName || 'the business'
+  );
 
   const differentiatorSource =
     ctx.competitiveAdvantages ||
@@ -4105,14 +4258,30 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
     name
   );
 
-  const segment =
-    (criteria && criteria.targetSegment) ||
-    ctx.primarySegment ||
-    'property managers';
-  const market =
-    (criteria && criteria.marketBound) ||
-    ctx.targetMarket ||
-    'Greater Manchester';
+  const approvedBatchPhrase = normalizeApprovedBatchPhrase(batch, candidates);
+  const outreachAudiencePhrase = normalizeOutreachAudiencePhrase(
+    phrases.targetSegmentPhrase || facts.targetSegment,
+    ctx
+  );
+  const outreachMarketPhrase = normalizeOutreachMarketPhrase(
+    phrases.marketBoundPhrase || facts.marketBound,
+    ctx
+  );
+  const outreachAnglePhrase = normalizeOutreachAnglePhrase(differentiators, ctx);
+  const outreachCtaPhrase = normalizeOutreachCtaPhrase(ctx, answers, criteria);
+
+  const campaignObjective = polishOutreachObjectiveSentence(
+    phrases.objectivePhrase ||
+      facts.campaignObjective ||
+      (criteria && criteria.campaignObjective) ||
+      (campaignPreview &&
+        (campaignPreview.campaignObjective || campaignPreview.objective)) ||
+      answers.campaignObjective ||
+      (prior && prior.campaignObjective),
+    ctx,
+    answers
+  );
+
   const towns = Array.isArray(ctx.towns) && ctx.towns.length
     ? ctx.towns
     : [...DEFAULT_TOWNS];
@@ -4130,20 +4299,20 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
     'Cedar / source-verification, existing-relationship nurture, optional expansion, and rejected accounts stay excluded from this cold strategy.',
   ].join(' ');
 
-  const outreachApproach = [
-    `Lead with ${name}'s reliability and responsiveness differentiators for ${segment} in ${market}.`,
-    `Personalize first-touch framing to each Batch 1 account's town and public role signal — still strategy only, not final copy.`,
-    'Keep the first ask discovery-oriented (conversation / walkthrough / estimate interest) aligned to the approved campaign objective.',
-    'Sequence planning stays review-first: draft angles here; write final copy only after this preview is approved.',
-  ];
+  const outreachApproach = rejectRawOutreachLines([
+    `Lead with ${name}'s ${outreachAnglePhrase} for ${outreachAudiencePhrase} in ${outreachMarketPhrase}.`,
+    `Personalize by town, property type, and any public role signal from ${approvedBatchPhrase}.`,
+    `Keep the first ask simple: ${outreachCtaPhrase}.`,
+    'Treat this as a validation campaign, not a broad launch.',
+  ]);
 
-  const proofFraming = [
+  const proofFraming = rejectRawOutreachLines([
     ctx.proofFromPrior
-      ? `Carry forward proof already noted: ${String(ctx.proofFromPrior).trim()}`
+      ? `Carry forward proof already noted: ${asEmbeddablePhrase(ctx.proofFromPrior) || 'approved Blueprint proof assets'}`
       : 'Lead with tangible proof of reliability (response-time promise, checklist discipline, references, before/after examples) once packaged.',
     'Do not invent testimonials, pricing, or service claims beyond the approved Blueprint.',
     'Hold final email/SMS/call scripts until after strategy approval.',
-  ];
+  ]);
 
   const guardrails = [
     'No final outreach copy in this step',
@@ -4152,6 +4321,15 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
     'No export',
     'No account, DNS, GBP, social, or tracking changes',
   ];
+
+  const synthesisPhrases = Object.freeze({
+    ...phrases,
+    approvedBatchPhrase,
+    outreachAudiencePhrase,
+    outreachMarketPhrase,
+    outreachAnglePhrase,
+    outreachCtaPhrase,
+  });
 
   return {
     kind: OUTREACH_STRATEGY_PREVIEW_KIND,
@@ -4170,12 +4348,19 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
     outreachApproach,
     proofFraming,
     guardrails,
-    targetSegment: segment,
-    marketBound: market,
+    /** Phrase-safe fields — renderers must use these, not raw criteria text. */
+    approvedBatchPhrase,
+    outreachAudiencePhrase,
+    outreachMarketPhrase,
+    outreachAnglePhrase,
+    outreachCtaPhrase,
+    synthesisPhrases,
+    targetSegment: outreachAudiencePhrase,
+    marketBound: outreachMarketPhrase,
     towns,
     approachSummary: `Review-first outreach strategy for ${name}'s Batch 1 (${
       batch.candidateCount != null ? batch.candidateCount : candidates.length
-    } cold prospects) in ${market} — angles and voice only, not live send.`,
+    } cold prospects) in ${outreachMarketPhrase} — angles and voice only, not live send.`,
     summary: `Review-first outreach strategy for Batch 1 — copy planning only, not live send.`,
     sectionTitles: { ...OUTREACH_STRATEGY_SECTION_TITLES },
     closingQuestion: OUTREACH_STRATEGY_PREVIEW_CLOSING_QUESTION,

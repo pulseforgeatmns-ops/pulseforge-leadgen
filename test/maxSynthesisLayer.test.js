@@ -77,6 +77,8 @@ function assertNoRawPromptFragments(text, label = 'text') {
   assert.doesNotMatch(String(text), /Market focus:\s*Start with/i);
   assert.doesNotMatch(String(text), /I forgot to mention/i);
   assert.doesNotMatch(String(text), /This revision introduced/i);
+  assert.doesNotMatch(String(text), /Keep Greater Manchester in scope/i);
+  assert.doesNotMatch(String(text), /(?<!\.)\.\.(?!\.)/);
 }
 
 describe('Max Synthesis Layer — BusinessFactNormalizer', () => {
@@ -272,6 +274,55 @@ describe('Max Synthesis Layer — shared path on Growth/Campaign artifacts', () 
       JSON.stringify(criteria.synthesisPhrases),
       'criteria phrases'
     );
+  });
+
+  it('Outreach Strategy Preview section 5 embeds phrase-safe fields only', () => {
+    const {
+      buildOutreachStrategyPreview,
+      formatOutreachStrategyPreviewMessage,
+    } = require('../services/clientIntelligenceCampaignPlanning');
+
+    const strategy = buildOutreachStrategyPreview(
+      {
+        approvedBatch: {
+          name: 'Batch 1',
+          candidateCount: 6,
+          candidates: [
+            { companyName: 'Elm Grove Companies' },
+            { companyName: 'Avise Properties' },
+          ],
+        },
+      },
+      {
+        ...ANCHOR_CTX,
+        competitiveAdvantages:
+          'Customers choose this business for reliability and responsiveness.',
+      },
+      { priorCriteriaPreview: RAW_CRITERIA_FIELDS }
+    );
+
+    assert.equal(
+      strategy.outreachApproach[0],
+      "Lead with Anchor's reliability and responsiveness for small to mid-sized property managers in Bedford, Hooksett, Londonderry, Auburn, and Goffstown."
+    );
+    assert.equal(
+      strategy.outreachAudiencePhrase,
+      'small to mid-sized property managers'
+    );
+    assert.equal(
+      strategy.outreachMarketPhrase,
+      'Bedford, Hooksett, Londonderry, Auburn, and Goffstown'
+    );
+    assert.equal(strategy.outreachAnglePhrase, 'reliability and responsiveness');
+    assert.match(strategy.approvedBatchPhrase, /approved Batch 1 record/);
+
+    const message = formatOutreachStrategyPreviewMessage(strategy);
+    assertNoRawPromptFragments(message, 'outreach strategy preview message');
+    assert.doesNotMatch(
+      message,
+      /Small to mid-sized local property managers in Greater Manchester who oversee/i
+    );
+    assert.doesNotMatch(message, /differentiators for /i);
   });
 
   it('Growth Direction attaches synthesisPhrases and strips meta fragments from avoid copy', () => {

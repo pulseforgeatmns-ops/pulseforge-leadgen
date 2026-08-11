@@ -52,6 +52,7 @@ module.exports = {
   normalizeObjectivePhrase: BusinessFactNormalizer.normalizeObjectivePhrase,
   containsRawPromptFragment: BusinessFactNormalizer.containsRawPromptFragment,
   findRawPromptFragments: BusinessFactNormalizer.findRawPromptFragments,
+  naturalList: BusinessFactNormalizer.naturalList,
   DEFAULT_TOWNS: BusinessFactNormalizer.DEFAULT_TOWNS,
   DEFAULT_TARGET_SUBTYPE_PROPERTY_MANAGERS:
     BusinessFactNormalizer.DEFAULT_TARGET_SUBTYPE_PROPERTY_MANAGERS,
