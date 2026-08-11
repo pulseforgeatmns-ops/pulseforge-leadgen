@@ -34,10 +34,13 @@ const {
 } = require('./clientIntelligenceReasoning');
 const {
   applyMapsOnlyDowngradeToBatch,
+  mergePreservedNhCandidatesFromPriorBatch,
+  isNhMarketCandidateRow,
   PRIORITY_TOWNS_NH,
   NEARBY_FILL_TOWNS_NH,
   EXTENDED_REVIEW_TOWNS_NH,
   CANDIDATE_STATUS,
+  REJECTION_REASON,
 } = require('./scoutQualityGate');
 const {
   buildArtifactSynthesisContext,
@@ -2920,26 +2923,81 @@ function formatBatchReviewCandidateBlock(row, index) {
 /**
  * Build Prospect Batch Review from a completed Scout candidate batch.
  * Applies maps-only downgrade (Cedar Management Group → review_required / medium).
+ * Hard-filters out-of-state rows from usable sections; can merge prior NH primaries.
  */
 function buildProspectBatchReview(batch, opts = {}) {
-  const downgraded = applyMapsOnlyDowngradeToBatch(batch || {});
+  const preserved = mergePreservedNhCandidatesFromPriorBatch(
+    batch || {},
+    opts.preserveFromBatch || opts.priorCompletedScoutCandidateBatch || null
+  );
+  const downgraded = applyMapsOnlyDowngradeToBatch(preserved || {});
   const groups = downgraded.groups || {
     accepted: [],
     review_required: [],
     rejected: [],
   };
-  const accepted = (groups.accepted || []).filter(isPrimaryTownCandidate);
+
+  const outOfStateRejected = [];
+  const nhAccepted = [];
+  const nhReview = [];
+
+  for (const row of groups.accepted || []) {
+    if (!isNhMarketCandidateRow(row)) {
+      outOfStateRejected.push({
+        ...row,
+        status: CANDIDATE_STATUS.REJECTED,
+        statusReason:
+          row.statusReason ||
+          'Outside New Hampshire market region — outside_market_region',
+        rejectionReason:
+          row.rejectionReason || REJECTION_REASON.OUTSIDE_MARKET_REGION,
+      });
+      continue;
+    }
+    nhAccepted.push(row);
+  }
+  for (const row of groups.review_required || []) {
+    if (!isNhMarketCandidateRow(row)) {
+      outOfStateRejected.push({
+        ...row,
+        status: CANDIDATE_STATUS.REJECTED,
+        statusReason:
+          row.statusReason ||
+          'Outside New Hampshire market region — outside_market_region',
+        rejectionReason:
+          row.rejectionReason || REJECTION_REASON.OUTSIDE_MARKET_REGION,
+      });
+      continue;
+    }
+    nhReview.push(row);
+  }
+
+  const accepted = nhAccepted.filter(isPrimaryTownCandidate);
   // Optional expansion: Manchester / Derry / nearby review_required, plus
   // primary-town rows downgraded to review_required (e.g. maps-only Cedar).
-  const optionalExpansion = (groups.review_required || []).filter(
+  const optionalExpansion = nhReview.filter(
     (row) => isExpansionTownCandidate(row) || isPrimaryTownCandidate(row)
   );
-  const rejected = groups.rejected || [];
+  const rejected = (groups.rejected || []).concat(outOfStateRejected);
   const workRequestId =
     opts.workRequestId ||
     (batch && batch.workRequestId) ||
     (opts.priorScoutWorkRequest && opts.priorScoutWorkRequest.workRequestId) ||
     null;
+
+  const scoutCandidateBatch = {
+    ...downgraded,
+    candidates: nhAccepted.concat(nhReview),
+    rejected,
+    groups: {
+      accepted: nhAccepted,
+      review_required: nhReview,
+      rejected,
+    },
+    acceptedCount: nhAccepted.length,
+    reviewRequiredCount: nhReview.length,
+    rejectedCount: rejected.length,
+  };
 
   return {
     kind: PROSPECT_BATCH_REVIEW_KIND,
@@ -2954,11 +3012,11 @@ function buildProspectBatchReview(batch, opts = {}) {
       accepted: accepted.length,
       reviewRequired: optionalExpansion.length,
       rejected: rejected.length,
-      scoutAccepted: (groups.accepted || []).length,
-      scoutReviewRequired: (groups.review_required || []).length,
-      scoutRejected: (groups.rejected || []).length,
+      scoutAccepted: nhAccepted.length,
+      scoutReviewRequired: nhReview.length,
+      scoutRejected: rejected.length,
     },
-    scoutCandidateBatch: downgraded,
+    scoutCandidateBatch,
     closingQuestion: PROSPECT_BATCH_REVIEW_CLOSING_QUESTION,
     disclaimer: PROSPECT_BATCH_REVIEW_DISCLAIMER,
     reviewOnly: true,
@@ -3098,6 +3156,10 @@ function produceProspectBatchReviewResult(ctx, answers, slots, opts, leadIn) {
   const review = buildProspectBatchReview(batch, {
     workRequestId,
     priorScoutWorkRequest: opts.priorScoutWorkRequest || null,
+    preserveFromBatch:
+      opts.preserveFromBatch ||
+      opts.priorCompletedScoutCandidateBatch ||
+      null,
   });
   const lines = [];
   if (leadIn) lines.push(leadIn, '');

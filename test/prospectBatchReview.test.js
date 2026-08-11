@@ -368,3 +368,144 @@ describe('Prospect Batch Review — formatting', () => {
     assert.doesNotMatch(reply.message, /Prospect List Build Proposal/i);
   });
 });
+
+describe('Prospect Batch Review — NH market filter + preserve', () => {
+  it('never shows out-of-state candidates as usable review candidates', () => {
+    const batch = {
+      workRequestId: 'f0ac74ac-16a6-4dba-b024-d3727b285a86',
+      candidates: [
+        {
+          companyName: 'Keyrenter New England',
+          location: 'Bedford NH',
+          sourceUrl: 'https://keyrenter.example',
+          website: 'https://keyrenter.example',
+          status: 'accepted',
+          confidence: 'high',
+          fitRationale: 'Bedford NH property management',
+          risks: 'none',
+          suggestedContactRole: 'Owner / property manager',
+        },
+        {
+          companyName: 'Capitol Property Partners',
+          location: 'Washington, DC, USA',
+          sourceUrl: 'https://capitolpp.example',
+          website: 'https://capitolpp.example',
+          status: 'review_required',
+          confidence: 'medium',
+          fitRationale: 'DC listing',
+          risks: 'out of market',
+          suggestedContactRole: 'Owner / property manager',
+        },
+        {
+          companyName: 'Arlington Asset Managers',
+          location: 'Arlington, VA, USA',
+          sourceUrl: 'https://arlingtonam.example',
+          website: 'https://arlingtonam.example',
+          status: 'review_required',
+          confidence: 'medium',
+          fitRationale: 'VA listing',
+          risks: 'out of market',
+          suggestedContactRole: 'Owner / property manager',
+        },
+        {
+          companyName: 'Mill City Property Management',
+          location: 'Manchester NH',
+          sourceUrl: 'https://millcity.example',
+          website: 'https://millcity.example',
+          status: 'review_required',
+          confidence: 'medium',
+          fitRationale: 'Manchester NH expansion',
+          risks: 'outside_primary_town_cluster',
+          suggestedContactRole: 'Owner / property manager',
+        },
+      ],
+      rejected: [],
+    };
+    const review = buildProspectBatchReview(batch);
+    assert.ok(
+      review.acceptedFirstPass.every((r) => /NH|New Hampshire/i.test(r.location))
+    );
+    assert.ok(
+      review.optionalExpansion.every((r) => /NH|New Hampshire/i.test(r.location))
+    );
+    assert.ok(
+      !review.optionalExpansion.some((r) =>
+        /Washington|Arlington|DC|VA/i.test(r.location)
+      )
+    );
+    assert.ok(
+      review.rejected.some((r) => /Capitol|Arlington/i.test(r.companyName))
+    );
+  });
+
+  it('preserves prior valid NH primary-town candidates when latest batch drops them', () => {
+    const prior = {
+      workRequestId: 'f0ac74ac-16a6-4dba-b024-d3727b285a86',
+      candidates: [
+        {
+          companyName: 'Keyrenter New England',
+          location: 'Bedford NH',
+          sourceUrl: 'https://keyrenter.example',
+          website: 'https://keyrenter.example',
+          status: 'accepted',
+          confidence: 'high',
+          fitRationale: 'Bedford NH',
+          risks: 'none',
+          suggestedContactRole: 'Owner',
+        },
+        {
+          companyName: 'Elm Grove Companies',
+          location: 'Hooksett NH',
+          sourceUrl: 'https://elmgrove.example',
+          website: 'https://elmgrove.example',
+          status: 'accepted',
+          confidence: 'high',
+          fitRationale: 'Hooksett NH',
+          risks: 'none',
+          suggestedContactRole: 'Owner',
+        },
+      ],
+      rejected: [],
+    };
+    const latest = {
+      workRequestId: 'f0ac74ac-16a6-4dba-b024-d3727b285a86',
+      candidates: [
+        {
+          companyName: 'Keyrenter New England',
+          location: 'Bedford NH',
+          sourceUrl: 'https://keyrenter.example',
+          website: 'https://keyrenter.example',
+          status: 'accepted',
+          confidence: 'high',
+          fitRationale: 'Bedford NH',
+          risks: 'none',
+          suggestedContactRole: 'Owner',
+        },
+        {
+          companyName: 'Capitol Property Partners',
+          location: 'Washington, DC, USA',
+          sourceUrl: 'https://capitolpp.example',
+          website: 'https://capitolpp.example',
+          status: 'review_required',
+          confidence: 'medium',
+          fitRationale: 'DC',
+          risks: 'outside',
+          suggestedContactRole: 'Owner',
+        },
+      ],
+      rejected: [],
+    };
+    const review = buildProspectBatchReview(latest, {
+      preserveFromBatch: prior,
+    });
+    assert.ok(
+      review.acceptedFirstPass.some((r) => r.companyName === 'Elm Grove Companies')
+    );
+    assert.ok(
+      review.acceptedFirstPass.some((r) => r.companyName === 'Keyrenter New England')
+    );
+    assert.ok(
+      !review.optionalExpansion.some((r) => /Washington|DC/i.test(r.location))
+    );
+  });
+});
