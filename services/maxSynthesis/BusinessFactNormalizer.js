@@ -59,6 +59,9 @@ const RAW_PROMPT_FRAGMENT_RES = Object.freeze([
   /for Small to mid-sized/,
   /differentiators for /i,
   /(?<!\.)\.\.(?!\.)/,
+  /\bCarry forward proof already noted\b/i,
+  /\bCompetitive edge is described as\b/i,
+  /\bThis is operator-stated differentiation\b/i,
 ]);
 
 function naturalList(items) {

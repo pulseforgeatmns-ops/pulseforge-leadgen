@@ -25,14 +25,26 @@ const {
   looksLikeOutreachStrategyPreviewRequest,
   looksLikeOutreachStrategyPreviewApproval,
   looksLikeOutreachCopyPlanRequest,
+  looksLikeOutreachCopyPlanApproval,
+  looksLikeOutreachDraftPreviewRequest,
+  looksLikeOutreachDraftPreviewApproval,
+  looksLikeOutreachLaunchGateRequest,
+  looksLikeOutreachLaunchGateApproval,
   hasActiveProspectBatchReview,
   hasActiveOutreachStrategyPreview,
   hasOutreachStrategyPreview,
   hasOutreachCopyPlan,
+  hasOutreachDraftPreview,
+  hasOutreachLaunchGate,
   canEmitOutreachStrategyPreview,
   canEmitOutreachCopyPlan,
+  canEmitOutreachDraftPreview,
+  canEmitOutreachLaunchGate,
   isProspectBatchReviewAlreadyApproved,
   isOutreachStrategyPreviewAlreadyApproved,
+  isOutreachCopyPlanAlreadyApproved,
+  isOutreachDraftPreviewAlreadyApproved,
+  isOutreachLaunchGateAlreadyApproved,
   hasCompletedScoutCandidateBatch,
   looksLikeApproval,
   looksLikeApprovalLead,
@@ -213,6 +225,10 @@ const CAMPAIGN_PLANNING_STATES = Object.freeze({
   OUTREACH_STRATEGY_PREVIEW: 'outreach_strategy_preview',
   OUTREACH_STRATEGY_PREVIEW_APPROVED: 'outreach_strategy_preview_approved',
   OUTREACH_COPY_PLAN: 'outreach_copy_plan',
+  OUTREACH_COPY_PLAN_APPROVED: 'outreach_copy_plan_approved',
+  OUTREACH_DRAFT_PREVIEW: 'outreach_draft_preview',
+  OUTREACH_DRAFT_PREVIEW_APPROVED: 'outreach_draft_preview_approved',
+  OUTREACH_LAUNCH_GATE: 'outreach_launch_gate',
   LIVE_SOURCING_APPROVED: 'live_sourcing_approved',
   LIVE_SOURCING_UNAVAILABLE: 'live_sourcing_unavailable',
   LIVE_SOURCING_GENERATED: 'live_sourcing_generated',
@@ -255,15 +271,51 @@ const OUTREACH_COPY_PLAN_SECTION_TITLES = Object.freeze({
 });
 const OUTREACH_STRATEGY_APPROVED_MESSAGE =
   'Outreach Strategy Preview approved. Here is the Outreach Copy Plan for review.';
+const OUTREACH_COPY_PLAN_APPROVED_MESSAGE =
+  'Outreach Copy Plan approved. Here is the Outreach Draft Preview for review.';
+const OUTREACH_DRAFT_PREVIEW_APPROVED_MESSAGE =
+  'Outreach Draft Preview approved. Here is the Outreach Launch Gate for explicit launch/export/CRM readiness.';
+const OUTREACH_DRAFT_PREVIEW_KIND = 'outreach_draft_preview';
+const OUTREACH_DRAFT_PREVIEW_TITLE = 'Outreach Draft Preview';
+const OUTREACH_DRAFT_PREVIEW_DISCLAIMER =
+  'Outreach Draft Preview only — draft copy for review. No sends, CRM writes, exports, or account changes. Launch requires a separate explicit gate.';
+const OUTREACH_DRAFT_PREVIEW_CLOSING_QUESTION =
+  'Does this Outreach Draft Preview look right to approve, or do you want to revise a specific section?';
+const OUTREACH_DRAFT_PREVIEW_SECTION_TITLES = Object.freeze({
+  subjectOptions: 'Subject line options',
+  firstTouchBody: 'First-touch draft',
+  personalizationByProspect: 'Personalization by Batch 1 prospect',
+  followUpSketch: 'Follow-up sketch (held until launch gate)',
+  approvalGate: 'Approval gate before launch',
+});
+const OUTREACH_LAUNCH_GATE_KIND = 'outreach_launch_gate';
+const OUTREACH_LAUNCH_GATE_TITLE = 'Outreach Launch Gate';
+const OUTREACH_LAUNCH_GATE_DISCLAIMER =
+  'Outreach Launch Gate only — readiness checkpoint. No sends, CRM writes, exports, or account changes execute automatically.';
+const OUTREACH_LAUNCH_GATE_CLOSING_QUESTION =
+  'Does this Outreach Launch Gate look right to approve for readiness, or hold before any launch/export/CRM action?';
 /** Stored OSP artifacts with these fragments must be regenerated, not shown. */
 const STALE_OUTREACH_STRATEGY_FRAGMENT_RES = Object.freeze([
   /for Small to mid-sized/,
   /in Start with/,
   /Keep Greater Manchester in scope/i,
+  /Carry forward proof already noted/i,
+  /Competitive edge is described as/i,
+  /This is operator-stated differentiation/i,
   /(?<!\.)\.\.(?!\.)/,
   /differentiators for /i,
   /who oversee offices, mixed-use/i,
   /keep the first test tight enough to learn quickly/i,
+]);
+/** Shared banned fragments for operator-facing repair across review artifacts. */
+const OPERATOR_BANNED_FRAGMENT_RES = Object.freeze([
+  /for Small to mid-sized/,
+  /in Start with/,
+  /Keep Greater Manchester in scope/i,
+  /Carry forward proof already noted/i,
+  /Competitive edge is described as/i,
+  /This is operator-stated differentiation/i,
+  /(?<!\.)\.\.(?!\.)/,
 ]);
 const DEFAULT_ANCHOR_VOICE =
   'Calm, professional, reliable, direct, and easy to work with — never pushy or hype-driven.';
@@ -4516,10 +4568,10 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
 
   const proofFraming = rejectRawOutreachLines([
     ctx.proofFromPrior
-      ? `Carry forward proof already noted: ${asEmbeddablePhrase(ctx.proofFromPrior) || 'approved Blueprint proof assets'}`
+      ? `Lead with tangible proof already available: ${asEmbeddablePhrase(ctx.proofFromPrior) || 'checklist discipline, response-time expectation, and walkthrough process'}.`
       : 'Lead with tangible proof of reliability (response-time promise, checklist discipline, references, before/after examples) once packaged.',
-    'Do not invent testimonials, pricing, or service claims beyond the approved Blueprint.',
-    'Hold final email/SMS/call scripts until after strategy approval.',
+    'Stay inside approved Blueprint claims — no invented testimonials, pricing, or service promises.',
+    'Hold final email/SMS/call scripts until after Outreach Copy Plan approval.',
   ]);
 
   const guardrails = [
@@ -5139,6 +5191,1064 @@ function produceOutreachCopyPlanResult(ctx, answers, slots, opts, leadIn) {
       (review && review.workRequestId) || strategy.workRequestId || null,
     outreachCopyGenerated: false,
     finalOutreachCopyGenerated: false,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+  };
+}
+
+/**
+ * Mark Outreach Copy Plan approved (immutable snapshot fields).
+ */
+function approveOutreachCopyPlan(plan, opts = {}) {
+  const prior = plan && typeof plan === 'object' ? plan : {};
+  const approvedAt =
+    opts.approvedAt || prior.approvedAt || new Date().toISOString();
+  return {
+    ...prior,
+    kind: OUTREACH_COPY_PLAN_KIND,
+    title: prior.title || OUTREACH_COPY_PLAN_TITLE,
+    status: 'approved',
+    approved: true,
+    copyPlanApproved: true,
+    approvedAt,
+    planningOnly: true,
+    reviewFirst: true,
+    finalOutreachCopyGenerated: false,
+    outreachCopyGenerated: false,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+    disclaimer: OUTREACH_COPY_PLAN_DISCLAIMER,
+  };
+}
+
+/**
+ * Flatten text for banned-fragment scanning across operator artifacts.
+ */
+function operatorArtifactTextBlob(artifact, formatter) {
+  if (!artifact || typeof artifact !== 'object') return '';
+  const parts = [];
+  for (const [key, value] of Object.entries(artifact)) {
+    if (value == null) continue;
+    if (typeof value === 'string') parts.push(value);
+    else if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === 'string') parts.push(item);
+        else if (item && typeof item === 'object') {
+          parts.push(
+            item.companyName || '',
+            item.personalizationNote || '',
+            item.body || '',
+            item.label || '',
+            item.line || ''
+          );
+        }
+      }
+    }
+  }
+  if (typeof formatter === 'function') {
+    try {
+      parts.push(formatter(artifact));
+    } catch (_err) {
+      // ignore format errors on partial stubs
+    }
+  }
+  return parts.filter(Boolean).join('\n');
+}
+
+function findOperatorBannedFragments(blob) {
+  const text = String(blob || '');
+  if (!text) return [];
+  const hits = [];
+  for (const re of OPERATOR_BANNED_FRAGMENT_RES) {
+    if (re.test(text)) hits.push(re.source);
+  }
+  for (const hit of findRawPromptFragments(text)) {
+    if (!hits.includes(hit)) hits.push(hit);
+  }
+  return hits;
+}
+
+function outreachCopyPlanLooksStale(plan) {
+  if (!hasOutreachCopyPlan(plan)) return false;
+  return (
+    findOperatorBannedFragments(
+      operatorArtifactTextBlob(plan, formatOutreachCopyPlanMessage)
+    ).length > 0
+  );
+}
+
+function repairOutreachCopyPlan(prior, approvedStrategy, approvedReview, context, opts = {}) {
+  if (!outreachCopyPlanLooksStale(prior)) return prior;
+  const repaired = buildOutreachCopyPlan(approvedStrategy, approvedReview, context, {
+    ...opts,
+    priorOutreachCopyPlan: prior,
+    reuseExisting: false,
+    forceRebuild: true,
+  });
+  return {
+    ...repaired,
+    status: prior.status === 'approved' ? 'approved' : 'draft',
+    repairedFromStale: true,
+    repairedAt: new Date().toISOString(),
+    priorGeneratedAt: prior.generatedAt || null,
+  };
+}
+
+/**
+ * Build Outreach Draft Preview after Copy Plan approval.
+ * Draft copy for review only — never sends, CRM writes, or exports.
+ */
+function buildOutreachDraftPreview(
+  approvedCopyPlan,
+  approvedStrategy,
+  approvedReview,
+  context,
+  opts = {}
+) {
+  const prior =
+    opts.priorOutreachDraftPreview &&
+    hasOutreachDraftPreview(opts.priorOutreachDraftPreview)
+      ? opts.priorOutreachDraftPreview
+      : null;
+  const priorIsStale = prior
+    ? findOperatorBannedFragments(
+        operatorArtifactTextBlob(prior, formatOutreachDraftPreviewMessage)
+      ).length > 0
+    : false;
+  if (prior && opts.reuseExisting !== false && !opts.forceRebuild && !priorIsStale) {
+    return {
+      ...prior,
+      kind: OUTREACH_DRAFT_PREVIEW_KIND,
+      title: prior.title || OUTREACH_DRAFT_PREVIEW_TITLE,
+      status: prior.status === 'approved' ? 'approved' : 'draft',
+      planningOnly: true,
+      reviewFirst: true,
+      sendsMade: false,
+      crmWritesMade: false,
+      exportMade: false,
+      accountChangesMade: false,
+      disclaimer: OUTREACH_DRAFT_PREVIEW_DISCLAIMER,
+    };
+  }
+
+  const ctx = context || {};
+  const plan = approvedCopyPlan || {};
+  const strategy = approvedStrategy || {};
+  const review = approvedReview || {};
+  const batch = review.approvedBatch || {};
+  const candidates =
+    batch.candidates || review.acceptedFirstPass || [];
+  const name = shortBusinessName(
+    plan.businessName ||
+      strategy.businessName ||
+      ctx.businessName ||
+      'the business'
+  );
+  const audience =
+    plan.outreachAudiencePhrase ||
+    strategy.outreachAudiencePhrase ||
+    'property managers';
+  const market =
+    plan.outreachMarketPhrase ||
+    strategy.outreachMarketPhrase ||
+    'Greater Manchester';
+  const cta =
+    plan.ctaToTest ||
+    plan.outreachCtaPhrase ||
+    strategy.outreachCtaPhrase ||
+    'a short discovery conversation about recurring commercial cleaning reliability';
+  const towns =
+    Array.isArray(plan.towns) && plan.towns.length
+      ? plan.towns
+      : Array.isArray(strategy.towns) && strategy.towns.length
+        ? strategy.towns
+        : Array.isArray(ctx.towns) && ctx.towns.length
+          ? ctx.towns
+          : [...DEFAULT_TOWNS];
+
+  const subjectOptions = rejectRawOutreachLines([
+    `Quick question about cleaning reliability in ${market}`,
+    `${name} — responsive commercial cleaning for property managers`,
+    `Worth a brief chat about recurring cleaning coverage?`,
+  ]).filter((line) => line && !looksLikeOutreachCopyPlanMetaLine(line));
+
+  const firstTouchBody = [
+    `Hi {{first_name}},`,
+    '',
+    `I work with ${audience} across ${formatTownChoiceList(towns)} who want reliable commercial cleaning without chasing vendors.`,
+    '',
+    `${name} focuses on clear response-time expectations, a simple cleaning checklist, and a professional walkthrough / estimate process.`,
+    '',
+    `Would you be open to ${cta}?`,
+    '',
+    `Best,`,
+    `{{sender_name}}`,
+    `${name}`,
+  ].join('\n');
+
+  const personalizationByProspect = candidates.map((c) => {
+    const company = c.companyName || c.company || 'Prospect';
+    const town =
+      c.town ||
+      c.city ||
+      (c.location && String(c.location).split(',')[0]) ||
+      null;
+    const role = c.jobTitle || c.role || c.contactTitle || null;
+    const notes = [];
+    if (town) notes.push(`Reference ${town} when it matches their public location.`);
+    if (role) notes.push(`Address the ${role} when a public decision-maker is clear.`);
+    notes.push(
+      'Use any visible portfolio or property-type cue only when it is publicly evident.'
+    );
+    notes.push(
+      'Lean on reliability, responsiveness, or recurring-service signals when present.'
+    );
+    return {
+      companyName: company,
+      town: town || null,
+      role: role || null,
+      personalizationNote: notes.join(' '),
+    };
+  });
+
+  const followUpSketch = rejectRawOutreachLines([
+    'Follow-up 1 (~3 business days): restate the same CTA with one fresh personalization detail.',
+    'Follow-up 2 (~7 business days): offer a clear close-the-loop option (reply / book / not now).',
+    'Hold all follow-up sends until after Outreach Launch Gate approval and an explicit launch action.',
+  ]);
+
+  const approvalGate = rejectRawOutreachLines([
+    'Operator must approve this Outreach Draft Preview before the Outreach Launch Gate.',
+    'No sends, CRM writes, exports, or account/DNS/GBP/social/tracking changes in this step.',
+    'Launch/export/CRM remains blocked until the explicit Outreach Launch Gate is approved and a separate execute action is taken.',
+  ]);
+
+  const includedNames = personalizationByProspect
+    .map((p) => p.companyName)
+    .filter(Boolean);
+
+  const operatorDigest = buildOperatorReviewDigest({
+    kind: 'outreach_draft_preview_digest',
+    title: OUTREACH_DRAFT_PREVIEW_TITLE,
+    recommendedDecision: `Approve draft first-touch copy for ${
+      includedNames.length || candidates.length
+    } Batch 1 cold prospects.`,
+    included: [
+      `${includedNames.length || candidates.length} first-touch email drafts (shared body + per-prospect personalization notes)`,
+      `${subjectOptions.length} subject line options`,
+      `CTA: ${cta}`,
+    ],
+    heldBack: [
+      'No live sends',
+      'No CRM writes or export',
+      'Follow-up sends held until Outreach Launch Gate',
+      'Cedar / Keyrenter / optional expansion / rejected candidates remain excluded',
+    ],
+    whyRecommended: [
+      'Copy Plan is approved — drafts stay inside Batch 1, approved voice, and proof points.',
+      'Personalization notes are town/role/portfolio cues only — no invented claims.',
+    ],
+    nextStepAfterApproval: OUTREACH_LAUNCH_GATE_TITLE,
+    primaryActions: [
+      { id: 'approve_draft_preview', label: 'Approve Draft Preview', style: 'primary' },
+      { id: 'revise_draft_section', label: 'Revise a section', style: 'secondary' },
+    ],
+    sectionOrder: [
+      'recommendedDecision',
+      'included',
+      'excluded',
+      'whyRecommended',
+      'nextStepAfterApproval',
+      'primaryActions',
+    ],
+    sectionTitles: {
+      excluded: 'Held back',
+    },
+    evidence: {
+      records: personalizationByProspect,
+      sections: [
+        { title: 'Subject options', lines: subjectOptions },
+        { title: 'First-touch body', lines: firstTouchBody.split('\n') },
+      ],
+    },
+    disclaimer: OUTREACH_DRAFT_PREVIEW_DISCLAIMER,
+  });
+
+  return {
+    kind: OUTREACH_DRAFT_PREVIEW_KIND,
+    title: OUTREACH_DRAFT_PREVIEW_TITLE,
+    status: 'draft',
+    businessName: name,
+    campaignObjective: plan.campaignObjective || strategy.campaignObjective || null,
+    basedOnCopyPlanStatus: plan.status || 'approved',
+    basedOnStrategyStatus: strategy.status || 'approved',
+    basedOnBatchStatus: review.status || 'batch_1_approved',
+    approvedCandidateCount:
+      batch.candidateCount != null ? batch.candidateCount : candidates.length,
+    batchProspects: includedNames,
+    subjectOptions,
+    firstTouchBody,
+    firstTouchDraft: { body: firstTouchBody, cta },
+    personalizationByProspect,
+    followUpSketch,
+    approvalGate,
+    towns,
+    outreachAudiencePhrase: audience,
+    outreachMarketPhrase: market,
+    ctaToTest: cta,
+    operatorDigest,
+    sectionTitles: { ...OUTREACH_DRAFT_PREVIEW_SECTION_TITLES },
+    closingQuestion: OUTREACH_DRAFT_PREVIEW_CLOSING_QUESTION,
+    recommendedNextStep:
+      'Approve this Outreach Draft Preview to advance to the Outreach Launch Gate, or name a section to revise. Sends, CRM writes, exports, and account changes remain blocked.',
+    summary:
+      'Review-first Outreach Draft Preview — draft copy only, not live send.',
+    planningOnly: true,
+    reviewFirst: true,
+    finalOutreachCopyGenerated: true,
+    outreachCopyGenerated: true,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+    disclaimer: OUTREACH_DRAFT_PREVIEW_DISCLAIMER,
+    workRequestId:
+      opts.workRequestId ||
+      plan.workRequestId ||
+      strategy.workRequestId ||
+      (review && review.workRequestId) ||
+      null,
+    blueprintId:
+      opts.blueprintId || plan.blueprintId || strategy.blueprintId || null,
+    blueprintVersion:
+      opts.blueprintVersion ||
+      plan.blueprintVersion ||
+      strategy.blueprintVersion ||
+      null,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function formatOutreachDraftPreviewMessage(preview) {
+  const p = preview || {};
+  const digest =
+    p.operatorDigest ||
+    null;
+  const lines = [];
+  if (digest) {
+    lines.push(
+      formatOperatorReviewArtifactMessage(digest, {
+        includeEvidence: false,
+        closingQuestion: null,
+      })
+    );
+    lines.push('');
+    lines.push(VIEW_EVIDENCE_LABEL);
+    lines.push('');
+  } else {
+    lines.push(p.title || OUTREACH_DRAFT_PREVIEW_TITLE, '');
+  }
+
+  const titles = p.sectionTitles || OUTREACH_DRAFT_PREVIEW_SECTION_TITLES;
+  lines.push(`1. ${titles.subjectOptions}`);
+  for (const item of p.subjectOptions || []) lines.push(`- ${item}`);
+  if (!(p.subjectOptions || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`2. ${titles.firstTouchBody}`);
+  lines.push(p.firstTouchBody || (p.firstTouchDraft && p.firstTouchDraft.body) || '—');
+  lines.push('');
+
+  lines.push(`3. ${titles.personalizationByProspect}`);
+  for (const row of p.personalizationByProspect || []) {
+    lines.push(
+      `- ${row.companyName}${row.town ? ` (${row.town})` : ''}: ${
+        row.personalizationNote || '—'
+      }`
+    );
+  }
+  if (!(p.personalizationByProspect || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`4. ${titles.followUpSketch}`);
+  for (const item of p.followUpSketch || []) lines.push(`- ${item}`);
+  if (!(p.followUpSketch || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(`5. ${titles.approvalGate}`);
+  for (const item of p.approvalGate || []) lines.push(`- ${item}`);
+  if (!(p.approvalGate || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(p.disclaimer || OUTREACH_DRAFT_PREVIEW_DISCLAIMER);
+  lines.push('');
+  lines.push(p.closingQuestion || OUTREACH_DRAFT_PREVIEW_CLOSING_QUESTION);
+  return lines.join('\n').trim();
+}
+
+function approveOutreachDraftPreview(preview, opts = {}) {
+  const prior = preview && typeof preview === 'object' ? preview : {};
+  const approvedAt =
+    opts.approvedAt || prior.approvedAt || new Date().toISOString();
+  return {
+    ...prior,
+    kind: OUTREACH_DRAFT_PREVIEW_KIND,
+    title: prior.title || OUTREACH_DRAFT_PREVIEW_TITLE,
+    status: 'approved',
+    approved: true,
+    draftPreviewApproved: true,
+    approvedAt,
+    planningOnly: true,
+    reviewFirst: true,
+    finalOutreachCopyGenerated: true,
+    outreachCopyGenerated: true,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+    disclaimer: OUTREACH_DRAFT_PREVIEW_DISCLAIMER,
+  };
+}
+
+/**
+ * Build Outreach Launch Gate after Draft Preview approval.
+ * Readiness only — never auto-executes send/export/CRM.
+ */
+function buildOutreachLaunchGate(
+  approvedDraft,
+  approvedCopyPlan,
+  approvedStrategy,
+  approvedReview,
+  context,
+  opts = {}
+) {
+  const prior =
+    opts.priorOutreachLaunchGate &&
+    hasOutreachLaunchGate(opts.priorOutreachLaunchGate)
+      ? opts.priorOutreachLaunchGate
+      : null;
+  if (prior && opts.reuseExisting !== false && !opts.forceRebuild) {
+    const stale =
+      findOperatorBannedFragments(
+        operatorArtifactTextBlob(prior, formatOutreachLaunchGateMessage)
+      ).length > 0;
+    if (!stale) {
+      return {
+        ...prior,
+        kind: OUTREACH_LAUNCH_GATE_KIND,
+        title: prior.title || OUTREACH_LAUNCH_GATE_TITLE,
+        status: prior.status === 'approved' ? 'approved' : 'draft',
+        planningOnly: true,
+        reviewFirst: true,
+        launched: false,
+        sendsMade: false,
+        crmWritesMade: false,
+        exportMade: false,
+        accountChangesMade: false,
+        disclaimer: OUTREACH_LAUNCH_GATE_DISCLAIMER,
+      };
+    }
+  }
+
+  const draft = approvedDraft || {};
+  const plan = approvedCopyPlan || {};
+  const strategy = approvedStrategy || {};
+  const review = approvedReview || {};
+  const batch = review.approvedBatch || {};
+  const count =
+    draft.approvedCandidateCount != null
+      ? draft.approvedCandidateCount
+      : (batch.candidates || review.acceptedFirstPass || []).length;
+  const name = shortBusinessName(
+    draft.businessName ||
+      plan.businessName ||
+      strategy.businessName ||
+      (context && context.businessName) ||
+      'the business'
+  );
+
+  const readinessChecklist = [
+    `Batch 1 cold list locked (${count} prospects) — Cedar, Keyrenter, optional expansion, and rejected accounts excluded.`,
+    'Outreach Strategy Preview approved.',
+    'Outreach Copy Plan approved.',
+    'Outreach Draft Preview approved.',
+    'Sender identity, reply-to, and tracking remain unchanged until an explicit execute action.',
+  ];
+
+  const blockedActions = [
+    'No sends or scheduled launches without an explicit execute action after this gate.',
+    'No CRM writes without an explicit execute action after this gate.',
+    'No export without an explicit execute action after this gate.',
+    'No account, DNS, GBP, social, or tracking changes.',
+  ];
+
+  const operatorDigest = buildOperatorReviewDigest({
+    kind: 'outreach_launch_gate_digest',
+    title: OUTREACH_LAUNCH_GATE_TITLE,
+    recommendedDecision:
+      'Hold launch until you explicitly approve readiness — then take a separate execute action for send, export, or CRM.',
+    included: [
+      `${name} Batch 1 draft copy ready for gated launch`,
+      `${count} cold prospects in scope`,
+      'Approved strategy + copy plan + draft preview behind this gate',
+    ],
+    heldBack: blockedActions,
+    whyRecommended: [
+      'Keeps launch/export/CRM behind an explicit final checkpoint.',
+      'Approval marks readiness only — it does not send, write CRM, or export.',
+    ],
+    nextStepAfterApproval:
+      'Explicit launch / export / CRM execute action (still blocked until you take it)',
+    primaryActions: [
+      {
+        id: 'approve_launch_gate',
+        label: 'Approve Launch Gate (readiness only)',
+        style: 'primary',
+      },
+      { id: 'hold_launch', label: 'Hold — do not approve yet', style: 'secondary' },
+    ],
+    sectionOrder: [
+      'recommendedDecision',
+      'included',
+      'excluded',
+      'whyRecommended',
+      'nextStepAfterApproval',
+      'primaryActions',
+    ],
+    sectionTitles: {
+      excluded: 'Still blocked',
+    },
+    evidence: {
+      sections: [
+        { title: 'Readiness checklist', lines: readinessChecklist },
+        { title: 'Blocked until explicit execute', lines: blockedActions },
+      ],
+    },
+    disclaimer: OUTREACH_LAUNCH_GATE_DISCLAIMER,
+  });
+
+  return {
+    kind: OUTREACH_LAUNCH_GATE_KIND,
+    title: OUTREACH_LAUNCH_GATE_TITLE,
+    status: 'draft',
+    businessName: name,
+    approvedCandidateCount: count,
+    readinessChecklist,
+    blockedActions,
+    operatorDigest,
+    closingQuestion: OUTREACH_LAUNCH_GATE_CLOSING_QUESTION,
+    recommendedNextStep:
+      'Approve this Outreach Launch Gate for readiness only, or hold. Even after approval, sends/CRM/export require a separate explicit execute action.',
+    summary:
+      'Explicit launch/export/CRM gate — readiness checkpoint only, not auto-execute.',
+    planningOnly: true,
+    reviewFirst: true,
+    launchReady: false,
+    launchGateApproved: false,
+    launched: false,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+    disclaimer: OUTREACH_LAUNCH_GATE_DISCLAIMER,
+    workRequestId:
+      opts.workRequestId ||
+      draft.workRequestId ||
+      plan.workRequestId ||
+      strategy.workRequestId ||
+      (review && review.workRequestId) ||
+      null,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function formatOutreachLaunchGateMessage(gate) {
+  const g = gate || {};
+  const lines = [];
+  if (g.operatorDigest) {
+    lines.push(
+      formatOperatorReviewArtifactMessage(g.operatorDigest, {
+        includeEvidence: false,
+        closingQuestion: null,
+      })
+    );
+    lines.push('');
+    lines.push(VIEW_EVIDENCE_LABEL);
+    lines.push('');
+  } else {
+    lines.push(g.title || OUTREACH_LAUNCH_GATE_TITLE, '');
+  }
+
+  lines.push('1. Readiness checklist');
+  for (const item of g.readinessChecklist || []) lines.push(`- ${item}`);
+  if (!(g.readinessChecklist || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push('2. Still blocked until explicit execute');
+  for (const item of g.blockedActions || []) lines.push(`- ${item}`);
+  if (!(g.blockedActions || []).length) lines.push('- —');
+  lines.push('');
+
+  lines.push(g.disclaimer || OUTREACH_LAUNCH_GATE_DISCLAIMER);
+  lines.push('');
+  lines.push(g.closingQuestion || OUTREACH_LAUNCH_GATE_CLOSING_QUESTION);
+  return lines.join('\n').trim();
+}
+
+function approveOutreachLaunchGate(gate, opts = {}) {
+  const prior = gate && typeof gate === 'object' ? gate : {};
+  const approvedAt =
+    opts.approvedAt || prior.approvedAt || new Date().toISOString();
+  return {
+    ...prior,
+    kind: OUTREACH_LAUNCH_GATE_KIND,
+    title: prior.title || OUTREACH_LAUNCH_GATE_TITLE,
+    status: 'approved',
+    approved: true,
+    launchGateApproved: true,
+    launchReady: true,
+    launched: false,
+    approvedAt,
+    planningOnly: true,
+    reviewFirst: true,
+    // Guardrails: approval = readiness only — never auto-execute.
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+    disclaimer: OUTREACH_LAUNCH_GATE_DISCLAIMER,
+  };
+}
+
+/**
+ * Approve Outreach Copy Plan and create/show Outreach Draft Preview.
+ */
+function produceOutreachCopyPlanApprovalResult(
+  ctx,
+  answers,
+  slots,
+  opts,
+  leadIn
+) {
+  const priorPlan = opts.priorOutreachCopyPlan || null;
+  const priorStrategy = opts.priorOutreachStrategyPreview || null;
+  const priorReview = opts.priorProspectBatchReview || null;
+  let review = priorReview;
+  if (!isProspectBatchReviewAlreadyApproved(review) && review) {
+    review = approveProspectBatchReviewBatch1(review);
+  }
+  let strategy = priorStrategy;
+  if (!hasOutreachStrategyPreview(strategy) && review) {
+    strategy = buildOutreachStrategyPreview(review, ctx, {
+      priorCriteriaPreview: opts.priorCriteriaPreview || null,
+      priorPreview: opts.priorPreview || null,
+      answers,
+    });
+  }
+  if (strategy && !isOutreachStrategyPreviewAlreadyApproved(strategy)) {
+    strategy = approveOutreachStrategyPreview(strategy);
+  }
+
+  let plan = priorPlan;
+  if (!hasOutreachCopyPlan(plan) && strategy) {
+    plan = buildOutreachCopyPlan(strategy, review, ctx, {
+      priorCriteriaPreview: opts.priorCriteriaPreview || null,
+      priorPreview: opts.priorPreview || null,
+      answers,
+    });
+  }
+  if (plan && outreachCopyPlanLooksStale(plan)) {
+    plan = repairOutreachCopyPlan(plan, strategy, review, ctx, {
+      priorCriteriaPreview: opts.priorCriteriaPreview || null,
+      answers,
+    });
+  }
+  plan = approveOutreachCopyPlan(plan || {}, {
+    approvedAt: opts.approvedAt || new Date().toISOString(),
+  });
+
+  return produceOutreachDraftPreviewResult(
+    ctx,
+    answers,
+    {
+      ...slots,
+      outreachStrategyPreviewApproved: true,
+      strategyApproved: true,
+      outreachCopyPlanGenerated: true,
+      outreachCopyPlanApproved: true,
+      copyPlanApproved: true,
+    },
+    {
+      ...opts,
+      priorProspectBatchReview: review,
+      priorOutreachStrategyPreview: strategy,
+      priorOutreachCopyPlan: plan,
+    },
+    leadIn || OUTREACH_COPY_PLAN_APPROVED_MESSAGE
+  );
+}
+
+/**
+ * Create or show Outreach Draft Preview after Copy Plan approval.
+ */
+function produceOutreachDraftPreviewResult(ctx, answers, slots, opts, leadIn) {
+  const priorReview = opts.priorProspectBatchReview || null;
+  let review = priorReview;
+  if (!isProspectBatchReviewAlreadyApproved(review) && review) {
+    review = approveProspectBatchReviewBatch1(review);
+  }
+
+  let strategy = opts.priorOutreachStrategyPreview || null;
+  if (!hasOutreachStrategyPreview(strategy) && review) {
+    strategy = buildOutreachStrategyPreview(review, ctx, {
+      priorCriteriaPreview: opts.priorCriteriaPreview || null,
+      priorPreview: opts.priorPreview || null,
+      answers,
+    });
+  }
+  if (strategy && !isOutreachStrategyPreviewAlreadyApproved(strategy)) {
+    strategy = approveOutreachStrategyPreview(strategy);
+  }
+
+  let plan = opts.priorOutreachCopyPlan || null;
+  if (!hasOutreachCopyPlan(plan)) {
+    if (!strategy) {
+      return {
+        message: [
+          leadIn || 'Outreach Draft Preview needs an approved Outreach Copy Plan.',
+          '',
+          'Approve the Outreach Copy Plan first.',
+          BATCH_1_APPROVED_DISCLAIMER,
+        ].join('\n'),
+        step: CAMPAIGN_PLANNING_STATES.OUTREACH_COPY_PLAN,
+        answers,
+        slots: { ...slots },
+        outreachCopyPlan: null,
+        outreachDraftPreview: null,
+        intent: 'outreach_draft_preview_missing_copy_plan',
+        planningState: CAMPAIGN_PLANNING_STATES.OUTREACH_COPY_PLAN,
+        currentAsk: OUTREACH_COPY_PLAN_CLOSING_QUESTION,
+        sendsMade: false,
+        crmWritesMade: false,
+        exportMade: false,
+        accountChangesMade: false,
+      };
+    }
+    plan = buildOutreachCopyPlan(strategy, review, ctx, {
+      priorCriteriaPreview: opts.priorCriteriaPreview || null,
+      priorPreview: opts.priorPreview || null,
+      answers,
+    });
+  }
+  if (plan && outreachCopyPlanLooksStale(plan)) {
+    plan = repairOutreachCopyPlan(plan, strategy, review, ctx, { answers });
+  }
+  if (!isOutreachCopyPlanAlreadyApproved(plan)) {
+    plan = approveOutreachCopyPlan(plan);
+  }
+
+  const existing = opts.priorOutreachDraftPreview || null;
+  const alreadyHave = hasOutreachDraftPreview(existing);
+  const outreachDraftPreview = buildOutreachDraftPreview(
+    plan,
+    strategy,
+    review,
+    ctx,
+    {
+      workRequestId: (review && review.workRequestId) || (plan && plan.workRequestId),
+      priorOutreachDraftPreview: existing,
+      reuseExisting: alreadyHave,
+      forceRebuild:
+        alreadyHave &&
+        findOperatorBannedFragments(
+          operatorArtifactTextBlob(existing, formatOutreachDraftPreviewMessage)
+        ).length > 0,
+    }
+  );
+
+  const intro = alreadyHave && !outreachDraftPreview.repairedFromStale
+    ? 'Outreach Draft Preview is already available — showing it for approval or revision. Not re-rendering the Outreach Copy Plan.'
+    : outreachDraftPreview.repairedFromStale
+      ? 'Updated the Outreach Draft Preview — repaired stale phrasing from an earlier draft. Showing it for approval or revision.'
+      : 'Creating the Outreach Draft Preview from the approved Copy Plan, Batch 1, and Blueprint.';
+
+  const message = [
+    leadIn || null,
+    intro,
+    '',
+    formatOutreachDraftPreviewMessage(outreachDraftPreview),
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return {
+    message,
+    step: CAMPAIGN_PLANNING_STATES.OUTREACH_DRAFT_PREVIEW,
+    answers,
+    slots: {
+      ...slots,
+      previewApproved: true,
+      criteriaApproved: true,
+      buildProposalApproved: true,
+      prospectBatchReviewApproved: true,
+      batch1Approved: true,
+      outreachStrategyPreviewApproved: true,
+      strategyApproved: true,
+      outreachCopyPlanGenerated: true,
+      outreachCopyPlanApproved: true,
+      copyPlanApproved: true,
+      outreachDraftPreviewGenerated: true,
+    },
+    prospectBatchReview: review,
+    outreachStrategyPreview: strategy,
+    outreachCopyPlan: plan,
+    outreachDraftPreview,
+    outreachLaunchGate: opts.priorOutreachLaunchGate || null,
+    intent: alreadyHave
+      ? 'show_outreach_draft_preview'
+      : leadIn && /approved/i.test(String(leadIn))
+        ? 'outreach_copy_plan_approved'
+        : 'produce_outreach_draft_preview',
+    copyPlanApproved: true,
+    strategyApproved: true,
+    batch1Approved: true,
+    planningState: CAMPAIGN_PLANNING_STATES.OUTREACH_DRAFT_PREVIEW,
+    currentAsk: OUTREACH_DRAFT_PREVIEW_CLOSING_QUESTION,
+    finalOutreachCopyGenerated: true,
+    outreachCopyGenerated: true,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+  };
+}
+
+/**
+ * Approve Outreach Draft Preview and create/show Launch Gate.
+ */
+function produceOutreachDraftPreviewApprovalResult(
+  ctx,
+  answers,
+  slots,
+  opts,
+  leadIn
+) {
+  const priorDraft = opts.priorOutreachDraftPreview || null;
+  let draft = priorDraft;
+  if (draft && !isOutreachDraftPreviewAlreadyApproved(draft)) {
+    draft = approveOutreachDraftPreview(draft);
+  }
+
+  // Ensure upstream approvals.
+  let plan = opts.priorOutreachCopyPlan || null;
+  if (plan && !isOutreachCopyPlanAlreadyApproved(plan)) {
+    plan = approveOutreachCopyPlan(plan);
+  }
+  let strategy = opts.priorOutreachStrategyPreview || null;
+  if (strategy && !isOutreachStrategyPreviewAlreadyApproved(strategy)) {
+    strategy = approveOutreachStrategyPreview(strategy);
+  }
+  let review = opts.priorProspectBatchReview || null;
+  if (review && !isProspectBatchReviewAlreadyApproved(review)) {
+    review = approveProspectBatchReviewBatch1(review);
+  }
+
+  if (!hasOutreachDraftPreview(draft)) {
+    const built = produceOutreachDraftPreviewResult(
+      ctx,
+      answers,
+      slots,
+      { ...opts, priorOutreachCopyPlan: plan, priorOutreachStrategyPreview: strategy, priorProspectBatchReview: review },
+      null
+    );
+    draft = approveOutreachDraftPreview(built.outreachDraftPreview);
+    plan = built.outreachCopyPlan;
+    strategy = built.outreachStrategyPreview;
+    review = built.prospectBatchReview;
+  } else {
+    draft = approveOutreachDraftPreview(draft);
+  }
+
+  return produceOutreachLaunchGateResult(
+    ctx,
+    answers,
+    {
+      ...slots,
+      outreachCopyPlanApproved: true,
+      copyPlanApproved: true,
+      outreachDraftPreviewGenerated: true,
+      outreachDraftPreviewApproved: true,
+      draftPreviewApproved: true,
+    },
+    {
+      ...opts,
+      priorProspectBatchReview: review,
+      priorOutreachStrategyPreview: strategy,
+      priorOutreachCopyPlan: plan,
+      priorOutreachDraftPreview: draft,
+    },
+    leadIn || OUTREACH_DRAFT_PREVIEW_APPROVED_MESSAGE
+  );
+}
+
+/**
+ * Create or show Outreach Launch Gate after Draft Preview approval.
+ */
+function produceOutreachLaunchGateResult(ctx, answers, slots, opts, leadIn) {
+  let review = opts.priorProspectBatchReview || null;
+  let strategy = opts.priorOutreachStrategyPreview || null;
+  let plan = opts.priorOutreachCopyPlan || null;
+  let draft = opts.priorOutreachDraftPreview || null;
+
+  if (!hasOutreachDraftPreview(draft)) {
+    if (!hasOutreachCopyPlan(plan)) {
+      return {
+        message: [
+          leadIn || 'Outreach Launch Gate needs an approved Outreach Draft Preview.',
+          '',
+          'Approve the Outreach Draft Preview first.',
+          BATCH_1_APPROVED_DISCLAIMER,
+        ].join('\n'),
+        step: CAMPAIGN_PLANNING_STATES.OUTREACH_DRAFT_PREVIEW,
+        answers,
+        slots: { ...slots },
+        outreachLaunchGate: null,
+        intent: 'outreach_launch_gate_missing_draft',
+        planningState: CAMPAIGN_PLANNING_STATES.OUTREACH_DRAFT_PREVIEW,
+        currentAsk: OUTREACH_DRAFT_PREVIEW_CLOSING_QUESTION,
+        sendsMade: false,
+        crmWritesMade: false,
+        exportMade: false,
+        accountChangesMade: false,
+      };
+    }
+    if (!isOutreachCopyPlanAlreadyApproved(plan)) {
+      plan = approveOutreachCopyPlan(plan);
+    }
+    draft = buildOutreachDraftPreview(plan, strategy, review, ctx, {
+      answers,
+    });
+  }
+  if (!isOutreachDraftPreviewAlreadyApproved(draft)) {
+    draft = approveOutreachDraftPreview(draft);
+  }
+
+  const existing = opts.priorOutreachLaunchGate || null;
+  const alreadyHave = hasOutreachLaunchGate(existing);
+  const outreachLaunchGate = buildOutreachLaunchGate(
+    draft,
+    plan,
+    strategy,
+    review,
+    ctx,
+    {
+      priorOutreachLaunchGate: existing,
+      reuseExisting: alreadyHave,
+    }
+  );
+
+  const intro = alreadyHave
+    ? 'Outreach Launch Gate is already available — showing it for readiness approval. Not re-rendering the Outreach Draft Preview.'
+    : 'Creating the Outreach Launch Gate from the approved Draft Preview. Launch/export/CRM still require an explicit execute action after this gate.';
+
+  const message = [
+    leadIn || null,
+    intro,
+    '',
+    formatOutreachLaunchGateMessage(outreachLaunchGate),
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return {
+    message,
+    step: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+    answers,
+    slots: {
+      ...slots,
+      outreachCopyPlanApproved: true,
+      copyPlanApproved: true,
+      outreachDraftPreviewGenerated: true,
+      outreachDraftPreviewApproved: true,
+      draftPreviewApproved: true,
+      outreachLaunchGateGenerated: true,
+    },
+    prospectBatchReview: review,
+    outreachStrategyPreview: strategy,
+    outreachCopyPlan: plan,
+    outreachDraftPreview: draft,
+    outreachLaunchGate,
+    intent: alreadyHave
+      ? 'show_outreach_launch_gate'
+      : leadIn && /approved/i.test(String(leadIn))
+        ? 'outreach_draft_preview_approved'
+        : 'produce_outreach_launch_gate',
+    draftPreviewApproved: true,
+    copyPlanApproved: true,
+    strategyApproved: true,
+    batch1Approved: true,
+    launchReady: false,
+    launched: false,
+    planningState: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+    currentAsk: OUTREACH_LAUNCH_GATE_CLOSING_QUESTION,
+    finalOutreachCopyGenerated: true,
+    outreachCopyGenerated: true,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+  };
+}
+
+/**
+ * Approve Launch Gate for readiness only — never auto-executes.
+ */
+function produceOutreachLaunchGateApprovalResult(
+  ctx,
+  answers,
+  slots,
+  opts,
+  leadIn
+) {
+  const result = produceOutreachLaunchGateResult(
+    ctx,
+    answers,
+    slots,
+    opts,
+    null
+  );
+  const gate = approveOutreachLaunchGate(result.outreachLaunchGate, {
+    approvedAt: opts.approvedAt || new Date().toISOString(),
+  });
+  const message = [
+    leadIn ||
+      'Outreach Launch Gate approved for readiness only. No sends, CRM writes, exports, or account changes executed.',
+    '',
+    formatOutreachLaunchGateMessage(gate),
+    '',
+    'Next: take an explicit launch / export / CRM execute action when ready. Until then everything remains blocked.',
+  ].join('\n');
+
+  return {
+    ...result,
+    message,
+    outreachLaunchGate: gate,
+    intent: 'outreach_launch_gate_approved',
+    launchGateApproved: true,
+    launchReady: true,
+    launched: false,
+    slots: {
+      ...result.slots,
+      outreachLaunchGateApproved: true,
+      launchGateApproved: true,
+      launchReady: true,
+    },
+    currentAsk:
+      'Launch Gate is approved for readiness. Say when you want an explicit launch, export, or CRM execute action — nothing runs automatically.',
     sendsMade: false,
     crmWritesMade: false,
     exportMade: false,
@@ -7377,8 +8487,8 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
     );
   }
 
-  // HARD GUARD — Outreach Strategy Preview approval / Outreach Copy Plan.
-  // Never re-render the strategy approval question after the operator approves.
+  // HARD GUARD — Review-artifact chain: Strategy / Copy Plan / Draft / Launch Gate.
+  // Generic rule: approve current → show-or-create next; never re-render approved.
   {
     const priorBatchReviewEarly =
       opts.priorProspectBatchReview || prior.prospectBatchReview || null;
@@ -7388,10 +8498,16 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       null;
     const priorCopyPlanEarly =
       opts.priorOutreachCopyPlan || prior.outreachCopyPlan || null;
+    const priorDraftEarly =
+      opts.priorOutreachDraftPreview || prior.outreachDraftPreview || null;
+    const priorLaunchGateEarly =
+      opts.priorOutreachLaunchGate || prior.outreachLaunchGate || null;
     const approvalOpts = {
       priorProspectBatchReview: priorBatchReviewEarly,
       priorOutreachStrategyPreview: priorOutreachEarly,
       priorOutreachCopyPlan: priorCopyPlanEarly,
+      priorOutreachDraftPreview: priorDraftEarly,
+      priorOutreachLaunchGate: priorLaunchGateEarly,
       step: prior.step,
       memory: opts.reasoningMemory || null,
       messageClass: opts.messageClass || null,
@@ -7454,7 +8570,80 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       priorProspectBatchReview: priorBatchReviewEarly,
       priorOutreachStrategyPreview: priorOutreachEarly,
       priorOutreachCopyPlan: priorCopyPlanEarly,
+      priorOutreachDraftPreview: priorDraftEarly,
+      priorOutreachLaunchGate: priorLaunchGateEarly,
     };
+
+    // Approve Launch Gate (readiness only).
+    if (
+      acquisitionEarly ===
+        PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_LAUNCH_GATE ||
+      looksLikeOutreachLaunchGateApproval(userMessage, approvalOpts)
+    ) {
+      const answersEarly = { ...(prior.answers || {}) };
+      const syncedEarly = syncAnswersFromSlots(answersEarly, {
+        ...sharedApprovedSlots,
+        outreachCopyPlanApproved: true,
+        copyPlanApproved: true,
+        outreachDraftPreviewApproved: true,
+        draftPreviewApproved: true,
+      });
+      return produceOutreachLaunchGateApprovalResult(
+        ctx,
+        syncedEarly,
+        {
+          ...sharedApprovedSlots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+        },
+        sharedReplyOpts,
+        null
+      );
+    }
+
+    // Approve Draft Preview → Launch Gate.
+    if (
+      acquisitionEarly ===
+        PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_DRAFT_PREVIEW ||
+      looksLikeOutreachDraftPreviewApproval(userMessage, approvalOpts)
+    ) {
+      const answersEarly = { ...(prior.answers || {}) };
+      const syncedEarly = syncAnswersFromSlots(answersEarly, {
+        ...sharedApprovedSlots,
+        outreachCopyPlanApproved: true,
+        copyPlanApproved: true,
+      });
+      return produceOutreachDraftPreviewApprovalResult(
+        ctx,
+        syncedEarly,
+        {
+          ...sharedApprovedSlots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+        },
+        sharedReplyOpts,
+        OUTREACH_DRAFT_PREVIEW_APPROVED_MESSAGE
+      );
+    }
+
+    // Approve Copy Plan → Draft Preview.
+    if (
+      acquisitionEarly ===
+        PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_COPY_PLAN ||
+      looksLikeOutreachCopyPlanApproval(userMessage, approvalOpts)
+    ) {
+      const answersEarly = { ...(prior.answers || {}) };
+      const syncedEarly = syncAnswersFromSlots(answersEarly, sharedApprovedSlots);
+      return produceOutreachCopyPlanApprovalResult(
+        ctx,
+        syncedEarly,
+        sharedApprovedSlots,
+        sharedReplyOpts,
+        OUTREACH_COPY_PLAN_APPROVED_MESSAGE
+      );
+    }
 
     // Approve strategy → Copy Plan (wins over re-showing strategy).
     if (
@@ -7473,12 +8662,80 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       );
     }
 
+    // Explicit create/show of Launch Gate after draft approval.
+    if (
+      acquisitionEarly ===
+        PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_LAUNCH_GATE ||
+      (looksLikeOutreachLaunchGateRequest(userMessage) &&
+        canEmitOutreachLaunchGate(approvalOpts)) ||
+      (canEmitOutreachLaunchGate(approvalOpts) &&
+        (prior.step === CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE ||
+          prior.step ===
+            CAMPAIGN_PLANNING_STATES.OUTREACH_DRAFT_PREVIEW_APPROVED) &&
+        !looksLikeOutreachDraftPreviewRequest(userMessage))
+    ) {
+      const answersEarly = { ...(prior.answers || {}) };
+      const syncedEarly = syncAnswersFromSlots(answersEarly, {
+        ...sharedApprovedSlots,
+        outreachCopyPlanApproved: true,
+        copyPlanApproved: true,
+        outreachDraftPreviewApproved: true,
+        draftPreviewApproved: true,
+      });
+      return produceOutreachLaunchGateResult(
+        ctx,
+        syncedEarly,
+        {
+          ...sharedApprovedSlots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+        },
+        sharedReplyOpts,
+        null
+      );
+    }
+
+    // Explicit create/show of Draft Preview after copy-plan approval.
+    if (
+      acquisitionEarly ===
+        PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_DRAFT_PREVIEW ||
+      (looksLikeOutreachDraftPreviewRequest(userMessage) &&
+        canEmitOutreachDraftPreview(approvalOpts)) ||
+      (canEmitOutreachDraftPreview(approvalOpts) &&
+        (prior.step === CAMPAIGN_PLANNING_STATES.OUTREACH_DRAFT_PREVIEW ||
+          prior.step === CAMPAIGN_PLANNING_STATES.OUTREACH_COPY_PLAN_APPROVED) &&
+        !looksLikeOutreachCopyPlanRequest(userMessage) &&
+        !looksLikeOutreachLaunchGateRequest(userMessage))
+    ) {
+      const answersEarly = { ...(prior.answers || {}) };
+      const syncedEarly = syncAnswersFromSlots(answersEarly, {
+        ...sharedApprovedSlots,
+        outreachCopyPlanApproved: true,
+        copyPlanApproved: true,
+      });
+      return produceOutreachDraftPreviewResult(
+        ctx,
+        syncedEarly,
+        {
+          ...sharedApprovedSlots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+        },
+        sharedReplyOpts,
+        null
+      );
+    }
+
     // Explicit create/show of Outreach Copy Plan after strategy approval.
     if (
       acquisitionEarly === PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_COPY_PLAN ||
       (looksLikeOutreachCopyPlanRequest(userMessage) &&
-        canEmitOutreachCopyPlan(approvalOpts)) ||
+        canEmitOutreachCopyPlan(approvalOpts) &&
+        !canEmitOutreachDraftPreview(approvalOpts)) ||
       (canEmitOutreachCopyPlan(approvalOpts) &&
+        !canEmitOutreachDraftPreview(approvalOpts) &&
         (prior.step === CAMPAIGN_PLANNING_STATES.OUTREACH_COPY_PLAN ||
           prior.step ===
             CAMPAIGN_PLANNING_STATES.OUTREACH_STRATEGY_PREVIEW_APPROVED) &&
@@ -7510,7 +8767,9 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
         !looksLikeProspectBatchReviewApproval(userMessage, approvalOpts) &&
         !looksLikeProspectBatchReviewCorrection(userMessage, approvalOpts) &&
         !looksLikeOutreachStrategyPreviewApproval(userMessage, approvalOpts) &&
-        !looksLikeOutreachCopyPlanRequest(userMessage))
+        !looksLikeOutreachCopyPlanRequest(userMessage) &&
+        !looksLikeOutreachDraftPreviewRequest(userMessage) &&
+        !looksLikeOutreachLaunchGateRequest(userMessage))
     ) {
       const answersEarly = { ...(prior.answers || {}) };
       const syncedEarly = syncAnswersFromSlots(answersEarly, {
@@ -8459,8 +9718,116 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
               null,
             priorOutreachCopyPlan:
               opts.priorOutreachCopyPlan || prior.outreachCopyPlan || null,
+            priorOutreachDraftPreview:
+              opts.priorOutreachDraftPreview || prior.outreachDraftPreview || null,
+            priorOutreachLaunchGate:
+              opts.priorOutreachLaunchGate || prior.outreachLaunchGate || null,
           },
           artifactAction.note || OUTREACH_STRATEGY_APPROVED_MESSAGE
+        );
+      }
+
+      if (
+        artifactAction.action === 'approve_outreach_copy_plan' ||
+        artifactAction.action === 'ack_outreach_copy_plan_approval'
+      ) {
+        return produceOutreachCopyPlanApprovalResult(
+          ctx,
+          syncedAnswers,
+          {
+            ...slots,
+            previewApproved: true,
+            criteriaApproved: true,
+            buildProposalApproved: true,
+            prospectBatchReviewApproved: true,
+            batch1Approved: true,
+            outreachStrategyPreviewApproved: true,
+            strategyApproved: true,
+            outreachCopyPlanApproved: true,
+            copyPlanApproved: true,
+          },
+          {
+            ...replyOpts,
+            userMessage,
+            priorProspectBatchReview:
+              opts.priorProspectBatchReview || prior.prospectBatchReview || null,
+            priorOutreachStrategyPreview:
+              opts.priorOutreachStrategyPreview ||
+              prior.outreachStrategyPreview ||
+              null,
+            priorOutreachCopyPlan:
+              opts.priorOutreachCopyPlan || prior.outreachCopyPlan || null,
+            priorOutreachDraftPreview:
+              opts.priorOutreachDraftPreview || prior.outreachDraftPreview || null,
+            priorOutreachLaunchGate:
+              opts.priorOutreachLaunchGate || prior.outreachLaunchGate || null,
+          },
+          artifactAction.note || OUTREACH_COPY_PLAN_APPROVED_MESSAGE
+        );
+      }
+
+      if (
+        artifactAction.action === 'approve_outreach_draft_preview' ||
+        artifactAction.action === 'ack_outreach_draft_preview_approval'
+      ) {
+        return produceOutreachDraftPreviewApprovalResult(
+          ctx,
+          syncedAnswers,
+          {
+            ...slots,
+            outreachCopyPlanApproved: true,
+            copyPlanApproved: true,
+            outreachDraftPreviewApproved: true,
+            draftPreviewApproved: true,
+          },
+          {
+            ...replyOpts,
+            userMessage,
+            priorProspectBatchReview:
+              opts.priorProspectBatchReview || prior.prospectBatchReview || null,
+            priorOutreachStrategyPreview:
+              opts.priorOutreachStrategyPreview ||
+              prior.outreachStrategyPreview ||
+              null,
+            priorOutreachCopyPlan:
+              opts.priorOutreachCopyPlan || prior.outreachCopyPlan || null,
+            priorOutreachDraftPreview:
+              opts.priorOutreachDraftPreview || prior.outreachDraftPreview || null,
+            priorOutreachLaunchGate:
+              opts.priorOutreachLaunchGate || prior.outreachLaunchGate || null,
+          },
+          artifactAction.note || OUTREACH_DRAFT_PREVIEW_APPROVED_MESSAGE
+        );
+      }
+
+      if (artifactAction.action === 'approve_outreach_launch_gate') {
+        return produceOutreachLaunchGateApprovalResult(
+          ctx,
+          syncedAnswers,
+          {
+            ...slots,
+            outreachDraftPreviewApproved: true,
+            draftPreviewApproved: true,
+            outreachLaunchGateApproved: true,
+            launchGateApproved: true,
+          },
+          {
+            ...replyOpts,
+            userMessage,
+            priorProspectBatchReview:
+              opts.priorProspectBatchReview || prior.prospectBatchReview || null,
+            priorOutreachStrategyPreview:
+              opts.priorOutreachStrategyPreview ||
+              prior.outreachStrategyPreview ||
+              null,
+            priorOutreachCopyPlan:
+              opts.priorOutreachCopyPlan || prior.outreachCopyPlan || null,
+            priorOutreachDraftPreview:
+              opts.priorOutreachDraftPreview || prior.outreachDraftPreview || null,
+            priorOutreachLaunchGate:
+              opts.priorOutreachLaunchGate || prior.outreachLaunchGate || null,
+          },
+          artifactAction.note || null
         );
       }
 
@@ -8507,6 +9874,72 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
               null,
             priorOutreachCopyPlan:
               opts.priorOutreachCopyPlan || prior.outreachCopyPlan || null,
+            priorOutreachDraftPreview:
+              opts.priorOutreachDraftPreview || prior.outreachDraftPreview || null,
+            priorOutreachLaunchGate:
+              opts.priorOutreachLaunchGate || prior.outreachLaunchGate || null,
+          },
+          artifactAction.note || null
+        );
+      }
+
+      if (artifactAction.action === 'emit_outreach_draft_preview') {
+        return produceOutreachDraftPreviewResult(
+          ctx,
+          syncedAnswers,
+          {
+            ...slots,
+            outreachStrategyPreviewApproved: true,
+            strategyApproved: true,
+            outreachCopyPlanApproved: true,
+            copyPlanApproved: true,
+          },
+          {
+            ...replyOpts,
+            userMessage,
+            priorProspectBatchReview:
+              opts.priorProspectBatchReview || prior.prospectBatchReview || null,
+            priorOutreachStrategyPreview:
+              opts.priorOutreachStrategyPreview ||
+              prior.outreachStrategyPreview ||
+              null,
+            priorOutreachCopyPlan:
+              opts.priorOutreachCopyPlan || prior.outreachCopyPlan || null,
+            priorOutreachDraftPreview:
+              opts.priorOutreachDraftPreview || prior.outreachDraftPreview || null,
+            priorOutreachLaunchGate:
+              opts.priorOutreachLaunchGate || prior.outreachLaunchGate || null,
+          },
+          artifactAction.note || null
+        );
+      }
+
+      if (artifactAction.action === 'emit_outreach_launch_gate') {
+        return produceOutreachLaunchGateResult(
+          ctx,
+          syncedAnswers,
+          {
+            ...slots,
+            outreachCopyPlanApproved: true,
+            copyPlanApproved: true,
+            outreachDraftPreviewApproved: true,
+            draftPreviewApproved: true,
+          },
+          {
+            ...replyOpts,
+            userMessage,
+            priorProspectBatchReview:
+              opts.priorProspectBatchReview || prior.prospectBatchReview || null,
+            priorOutreachStrategyPreview:
+              opts.priorOutreachStrategyPreview ||
+              prior.outreachStrategyPreview ||
+              null,
+            priorOutreachCopyPlan:
+              opts.priorOutreachCopyPlan || prior.outreachCopyPlan || null,
+            priorOutreachDraftPreview:
+              opts.priorOutreachDraftPreview || prior.outreachDraftPreview || null,
+            priorOutreachLaunchGate:
+              opts.priorOutreachLaunchGate || prior.outreachLaunchGate || null,
           },
           artifactAction.note || null
         );
@@ -9163,18 +10596,33 @@ module.exports = {
   produceOutreachStrategyPreviewResult,
   produceOutreachStrategyApprovalResult,
   produceOutreachCopyPlanResult,
+  produceOutreachCopyPlanApprovalResult,
+  produceOutreachDraftPreviewResult,
+  produceOutreachDraftPreviewApprovalResult,
+  produceOutreachLaunchGateResult,
+  produceOutreachLaunchGateApprovalResult,
   approveProspectBatchReviewBatch1,
   approveOutreachStrategyPreview,
+  approveOutreachCopyPlan,
+  approveOutreachDraftPreview,
+  approveOutreachLaunchGate,
   buildOutreachStrategyPreview,
   buildOutreachStrategyPreviewStub,
   buildOutreachCopyPlan,
+  buildOutreachDraftPreview,
+  buildOutreachLaunchGate,
   formatOutreachStrategyPreviewMessage,
   formatOutreachCopyPlanMessage,
+  formatOutreachDraftPreviewMessage,
+  formatOutreachLaunchGateMessage,
   formatProspectBatch1ApprovalMessage,
   outreachStrategyPreviewLooksStale,
   findStaleOutreachStrategyFragments,
   repairOutreachStrategyPreview,
+  outreachCopyPlanLooksStale,
+  repairOutreachCopyPlan,
   STALE_OUTREACH_STRATEGY_FRAGMENT_RES,
+  OPERATOR_BANNED_FRAGMENT_RES,
   buildProspectBatchReviewClosingQuestion,
   parseRelationshipOverridesFromMessage,
   applyRelationshipOverridesToBatch,
@@ -9194,6 +10642,16 @@ module.exports = {
   OUTREACH_COPY_PLAN_TITLE,
   OUTREACH_COPY_PLAN_DISCLAIMER,
   OUTREACH_COPY_PLAN_CLOSING_QUESTION,
+  OUTREACH_COPY_PLAN_APPROVED_MESSAGE,
+  OUTREACH_DRAFT_PREVIEW_KIND,
+  OUTREACH_DRAFT_PREVIEW_TITLE,
+  OUTREACH_DRAFT_PREVIEW_DISCLAIMER,
+  OUTREACH_DRAFT_PREVIEW_CLOSING_QUESTION,
+  OUTREACH_DRAFT_PREVIEW_APPROVED_MESSAGE,
+  OUTREACH_LAUNCH_GATE_KIND,
+  OUTREACH_LAUNCH_GATE_TITLE,
+  OUTREACH_LAUNCH_GATE_DISCLAIMER,
+  OUTREACH_LAUNCH_GATE_CLOSING_QUESTION,
   buildScoutHandoffBrief,
   formatScoutHandoffBriefMessage,
   produceScoutHandoffBriefResult,
