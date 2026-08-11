@@ -52,6 +52,8 @@ const PROSPECT_ACQUISITION_INTENTS = Object.freeze({
   HAND_BRIEF_TO_SCOUT: 'hand_brief_to_scout',
   EXECUTE_EXISTING_SCOUT_WORK_REQUEST: 'execute_existing_scout_work_request',
   EMIT_PROSPECT_BATCH_REVIEW: 'emit_prospect_batch_review',
+  /** Revise an active Prospect Batch Review (relationship overrides / corrections). */
+  CORRECT_PROSPECT_BATCH_REVIEW: 'correct_prospect_batch_review',
   PERFORM_LIVE_SOURCING: 'perform_live_sourcing',
 });
 
@@ -92,6 +94,13 @@ const PROSPECT_LIST_DRAFT_REQUEST_RE =
 /** Ask for Prospect Batch Review from a completed Scout result (not a new draft). */
 const PROSPECT_BATCH_REVIEW_REQUEST_RE =
   /\bprospect\s+batch\s+review\b|\breview\s+(?:the\s+)?(?:scout\s+)?(?:candidate\s+)?batch\b|\bscout\s+(?:candidate\s+)?(?:batch\s+)?review\b|\b(?:show|create|produce|format|emit)\b[\s\S]{0,80}\b(?:prospect\s+)?batch\s+review\b|\b(?:accepted|review\s+required|rejected)\s+candidates\b|\bfrom\s+the\s+latest\s+completed\s+scout\b/i;
+
+/**
+ * Operator correction against an active Prospect Batch Review
+ * (relationship overrides, remove-from-accepted, nurture reclassification).
+ */
+const PROSPECT_BATCH_REVIEW_CORRECTION_RE =
+  /\b(?:remove|drop|exclude|take\s+out)\b[\s\S]{0,80}\b(?:from\s+(?:the\s+)?(?:accepted|batch|review|candidates|first[- ]pass)|keyrenter)\b|\b(?:keyrenter|[\w&.\-]+)\b[\s\S]{0,100}\b(?:existing\s+relationship|not\s+a\s+cold\s+prospect|nurture(?:\s+account)?)\b|\b(?:keep|treat|mark|reclassify)\b[\s\S]{0,80}\b(?:as\s+(?:an\s+)?(?:existing[- ]relationship|nurture)|existing\s+relationship)\b|\bexisting[- ]relationship\b|\bnurture\s+account\b/i;
 
 const ARTIFACT_REQUEST_RE =
   /\b(?:show|view|see|open|pull\s+up|regenerate|revise|replay)\s+(?:me\s+)?(?:the\s+)?(?:criteria|preview|blueprint|build\s+proposal|proposal|list\s+draft|prospect\s+list)\b|\b(?:criteria\s+preview|build\s+proposal|campaign\s+preview|list\s+draft)\s+again\b/i;
@@ -330,6 +339,56 @@ function looksLikeProspectBatchReviewRequest(text) {
   return PROSPECT_BATCH_REVIEW_REQUEST_RE.test(s);
 }
 
+function hasActiveProspectBatchReview(opts = {}) {
+  const prior =
+    opts.priorProspectBatchReview || opts.prospectBatchReview || null;
+  if (
+    prior &&
+    (prior.kind === ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW || prior.title)
+  ) {
+    return true;
+  }
+  const step = String(opts.step || '');
+  if (
+    step === 'prospect_batch_review' ||
+    step === ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW
+  ) {
+    return true;
+  }
+  const memory = ensureReasoningMemory(
+    opts.state || { reasoningMemory: opts.memory || {} }
+  );
+  const generated = memory.generatedArtifacts || [];
+  const approved = memory.approvedArtifacts || [];
+  return (
+    generated.includes(ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW) ||
+    approved.includes(ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW) ||
+    memory.nextRecommendedArtifact === ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW
+  );
+}
+
+/**
+ * True when the operator is correcting an active Prospect Batch Review
+ * (e.g. remove Keyrenter / mark existing relationship) rather than
+ * requesting a new batch or falling back to Build Proposal ack.
+ */
+function looksLikeProspectBatchReviewCorrection(text, opts = {}) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (!hasActiveProspectBatchReview(opts)) return false;
+  if (PROSPECT_BATCH_REVIEW_CORRECTION_RE.test(s)) return true;
+  if (
+    opts.messageClass === MESSAGE_CLASSES.CORRECTION ||
+    opts.messageClass === MESSAGE_CLASSES.ADD_ON ||
+    opts.messageClass === MESSAGE_CLASSES.REFINEMENT_FEEDBACK
+  ) {
+    return /\b(?:keyrenter|accepted|candidate|batch\s+review|nurture|relationship|remove|exclude)\b/i.test(
+      s
+    );
+  }
+  return false;
+}
+
 function hasCompletedScoutCandidateBatch(batch) {
   if (!batch || typeof batch !== 'object') return false;
   const candidates = Array.isArray(batch.candidates) ? batch.candidates : [];
@@ -421,10 +480,13 @@ function looksLikeLiveSourcingApproval(text) {
  * live sourcing directly.
  * @returns {'execute_existing_scout_work_request'|'hand_brief_to_scout'|'create_scout_handoff_brief'|'perform_live_sourcing'|null}
  */
-function classifyProspectAcquisitionIntent(text) {
+function classifyProspectAcquisitionIntent(text, opts = {}) {
   const s = String(text || '');
   if (looksLikeExecuteExistingScoutWorkRequest(s)) {
     return PROSPECT_ACQUISITION_INTENTS.EXECUTE_EXISTING_SCOUT_WORK_REQUEST;
+  }
+  if (looksLikeProspectBatchReviewCorrection(s, opts)) {
+    return PROSPECT_ACQUISITION_INTENTS.CORRECT_PROSPECT_BATCH_REVIEW;
   }
   if (looksLikeProspectBatchReviewRequest(s)) {
     return PROSPECT_ACQUISITION_INTENTS.EMIT_PROSPECT_BATCH_REVIEW;
@@ -1093,22 +1155,67 @@ function resolveCampaignArtifactAction(opts = {}) {
   const priorBuild = opts.priorBuildProposal || null;
   const priorDraft =
     opts.priorProspectListDraft || opts.priorReviewableProspectListDraft || null;
+  const priorBatchReview =
+    opts.priorProspectBatchReview || opts.prospectBatchReview || null;
   const priorScoutBatch =
     opts.priorScoutCandidateBatch ||
     opts.scoutCandidateBatch ||
     (opts.priorScoutHandoff && opts.priorScoutHandoff.candidateBatch) ||
+    (priorBatchReview && priorBatchReview.scoutCandidateBatch) ||
     null;
   const scoutBatchReady = hasCompletedScoutCandidateBatch(priorScoutBatch);
   const scoutCompletedStep =
     opts.step === 'scout_handoff_completed' ||
     opts.step === 'scout_handoff_failed' ||
+    opts.step === 'prospect_batch_review' ||
     (opts.priorScoutHandoff &&
       (opts.priorScoutHandoff.status === 'completed' ||
         opts.priorScoutHandoff.status === 'failed_quality_gate' ||
         opts.priorScoutHandoff.scoutRan));
 
-  const acquisitionIntent = classifyProspectAcquisitionIntent(text);
+  const acquisitionIntent = classifyProspectAcquisitionIntent(text, {
+    priorProspectBatchReview: priorBatchReview,
+    step: opts.step,
+    memory,
+    messageClass,
+  });
   const executeWorkRequestId = extractWorkRequestIdFromMessage(text);
+
+  // HARD GUARD: correction against an active Prospect Batch Review.
+  // Never fall back to "Build proposal already approved…" / draft prompt.
+  const batchReviewCorrection =
+    acquisitionIntent ===
+      PROSPECT_ACQUISITION_INTENTS.CORRECT_PROSPECT_BATCH_REVIEW ||
+    looksLikeProspectBatchReviewCorrection(text, {
+      priorProspectBatchReview: priorBatchReview,
+      step: opts.step,
+      memory,
+      messageClass,
+      state: opts.state,
+    });
+
+  if (batchReviewCorrection) {
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW;
+    memory = markArtifactGenerated(
+      memory,
+      ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
+      'draft'
+    );
+    return {
+      action: 'emit_prospect_batch_review',
+      approveKind: null,
+      emitKind: ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
+      memory,
+      messageClass:
+        messageClass === MESSAGE_CLASSES.CORRECTION
+          ? MESSAGE_CLASSES.CORRECTION
+          : MESSAGE_CLASSES.ARTIFACT_REQUEST,
+      note:
+        'Revising the active Prospect Batch Review with operator relationship overrides. Max will not repeat the build proposal.',
+      planningState: 'prospect_batch_review',
+      relationshipCorrection: true,
+    };
+  }
 
   // HARD GUARD: completed Scout batch already exists — emit Prospect Batch Review.
   // Never ask to generate the first reviewable batch or re-emit the build proposal.
@@ -1529,7 +1636,22 @@ function resolveCampaignArtifactAction(opts = {}) {
   }
 
   // Criteria already shown — never silently re-emit unless explicit revise.
+  // If Prospect Batch Review is already active, hold on that artifact — never
+  // fall back to "Build proposal already approved".
   if (criteriaApproved) {
+    if (priorBatchReview || opts.step === 'prospect_batch_review') {
+      memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW;
+      return {
+        action: 'emit_prospect_batch_review',
+        approveKind: null,
+        emitKind: ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
+        memory,
+        messageClass,
+        note:
+          'Prospect Batch Review is active. Provide corrections (for example relationship overrides) or approve the accepted cold first-pass candidates.',
+        planningState: 'prospect_batch_review',
+      };
+    }
     if (buildShown || buildApproved) {
       memory.nextRecommendedArtifact =
         ARTIFACT_KINDS.REVIEWABLE_PROSPECT_LIST_DRAFT;
@@ -1895,6 +2017,8 @@ module.exports = {
   looksLikeNextPlanningRequest,
   looksLikeProspectListDraftRequest,
   looksLikeProspectBatchReviewRequest,
+  looksLikeProspectBatchReviewCorrection,
+  hasActiveProspectBatchReview,
   hasCompletedScoutCandidateBatch,
   looksLikeScoutHandoffBriefRequest,
   looksLikeHandBriefToScoutRequest,

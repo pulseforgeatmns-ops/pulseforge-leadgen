@@ -7061,6 +7061,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     (session.interview_state && session.interview_state.scoutWorkRequest) ||
     (priorScoutHandoff && priorScoutHandoff.workRequest) ||
     null;
+  const priorProspectBatchReview =
+    (session.interview_state && session.interview_state.prospectBatchReview) ||
+    null;
 
   // SPEC-090/091 — classify intent before workflow handling.
   let reasoningMemory = ensureReasoningMemory(session.interview_state || {});
@@ -7136,6 +7139,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     priorProspectListDraft,
     priorScoutCandidateBatch,
     priorScoutHandoff,
+    priorProspectBatchReview,
     step: campaignPlanning.step,
   });
   reasoningMemory = artifactAction.memory || reasoningMemory;
@@ -7151,6 +7155,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     priorScoutHandoff,
     priorScoutCandidateBatch,
     priorScoutWorkRequest,
+    priorProspectBatchReview,
     messageClass,
     artifactAction,
     reasoningMemory,
@@ -7181,6 +7186,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       scoutHandoff: priorScoutHandoff,
       scoutCandidateBatch: priorScoutCandidateBatch,
       scoutWorkRequest: priorScoutWorkRequest,
+      prospectBatchReview: priorProspectBatchReview,
     },
     context,
     campaignReplyOpts

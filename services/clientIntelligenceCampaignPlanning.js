@@ -20,6 +20,8 @@ const {
   isBannedCriteriaReplayQuestion,
   looksLikeProspectListDraftRequest,
   looksLikeProspectBatchReviewRequest,
+  looksLikeProspectBatchReviewCorrection,
+  hasActiveProspectBatchReview,
   hasCompletedScoutCandidateBatch,
   looksLikeScoutHandoffBriefRequest,
   looksLikeHandBriefToScoutRequest,
@@ -88,13 +90,37 @@ const PROSPECT_BATCH_REVIEW_KIND = 'prospect_batch_review';
 const PROSPECT_BATCH_REVIEW_TITLE = 'Prospect Batch Review';
 const PROSPECT_BATCH_REVIEW_DISCLAIMER =
   'Prospect Batch Review only — from the latest completed Scout result. No outreach copy, sends, CRM writes, exports, or account changes.';
+/** @deprecated Prefer buildProspectBatchReviewClosingQuestion(review) — never claim "8 primary-town candidates". */
 const PROSPECT_BATCH_REVIEW_CLOSING_QUESTION =
-  'Do you want to approve the 8 primary-town candidates only, or include Manchester NH expansion candidates to reach the first 15–25 account batch?';
+  'Do you want to approve the accepted cold first-pass candidates, include source-verification accounts after verification, and keep existing-relationship accounts in nurture?';
 const PROSPECT_BATCH_REVIEW_SECTION_TITLES = Object.freeze({
-  acceptedFirstPass: 'Accepted first-pass candidates',
+  acceptedFirstPass: 'Accepted cold first-pass candidates',
+  sourceVerificationRequired:
+    'Source-verification required primary-town candidates',
   optionalExpansion: 'Optional expansion candidates',
+  existingRelationship: 'Existing relationship / nurture',
   rejected: 'Rejected candidates',
 });
+
+/** Operator relationship classification — never treat as cold outreach. */
+const RELATIONSHIP_STATUS = Object.freeze({
+  EXISTING_RELATIONSHIP: 'existing_relationship',
+});
+
+/**
+ * Known / parseable existing-relationship patterns (Anchor NH property managers).
+ * Applied only when the operator provides a relationship override / correction,
+ * or when an override is already stored on the active Prospect Batch Review.
+ */
+const KNOWN_RELATIONSHIP_OVERRIDE_PATTERNS = Object.freeze([
+  {
+    matchRe: /\bkeyrenter\b/i,
+    companyName: 'Keyrenter New England Property Management',
+    relationship: RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
+    reason:
+      'Operator relationship override — existing_relationship / nurture, not a cold prospect. Do not include in campaign outreach.',
+  },
+]);
 
 const LIVE_SOURCING_BOUNDARY_MESSAGE =
   'I cannot perform live sourcing in this environment yet.';
@@ -2899,7 +2925,215 @@ function normalizeBatchReviewRow(row) {
     status: r.status || CANDIDATE_STATUS.REVIEW_REQUIRED,
     statusReason: r.statusReason || null,
     rejectionReason: r.rejectionReason || null,
+    relationship: r.relationship || null,
+    doNotOutreach: Boolean(r.doNotOutreach),
   };
+}
+
+function companyNameOf(row) {
+  return String((row && (row.companyName || row.company)) || '').trim();
+}
+
+function relationshipOverrideMatchesRow(row, override) {
+  if (!override || !row) return false;
+  const name = companyNameOf(row);
+  if (!name) return false;
+  if (override.matchRe && override.matchRe.test(name)) return true;
+  if (override.companyName) {
+    const needle = String(override.companyName).toLowerCase();
+    const hay = name.toLowerCase();
+    if (hay.includes(needle) || needle.includes(hay)) return true;
+    // Partial: "Keyrenter New England" vs "Keyrenter New England Property Management"
+    const short = needle.split(/\s+/).slice(0, 2).join(' ');
+    if (short.length >= 4 && hay.includes(short)) return true;
+  }
+  return false;
+}
+
+/**
+ * Parse operator relationship overrides from a correction message.
+ * Example: "Remove Keyrenter — existing relationship, not a cold prospect."
+ */
+function parseRelationshipOverridesFromMessage(text) {
+  const s = String(text || '');
+  if (!s.trim()) return [];
+  const out = [];
+  for (const known of KNOWN_RELATIONSHIP_OVERRIDE_PATTERNS) {
+    if (!known.matchRe.test(s)) continue;
+    const isExisting =
+      /\bexisting\s+relationship\b/i.test(s) ||
+      /\bnot\s+a\s+cold\s+prospect\b/i.test(s) ||
+      /\bnurture\b/i.test(s) ||
+      /\bremove\b/i.test(s) ||
+      /\bexclude\b/i.test(s) ||
+      /\bdrop\b/i.test(s) ||
+      /\bkeep\b[\s\S]{0,40}\bnurture\b/i.test(s);
+    if (!isExisting) continue;
+    out.push({
+      companyName: known.companyName,
+      matchRe: known.matchRe,
+      relationship: RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
+      reason: known.reason,
+      source: 'operator_message',
+    });
+  }
+  return out;
+}
+
+function mergeRelationshipOverrides(...lists) {
+  const byKey = new Map();
+  for (const list of lists) {
+    for (const o of list || []) {
+      if (!o) continue;
+      const key = String(o.companyName || o.matchRe || '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!key) continue;
+      byKey.set(key, {
+        companyName: o.companyName || null,
+        matchRe: o.matchRe || null,
+        relationship:
+          o.relationship || RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
+        reason: o.reason || 'Operator relationship override',
+        source: o.source || 'operator',
+      });
+    }
+  }
+  return [...byKey.values()];
+}
+
+/**
+ * Apply operator relationship overrides: move matching rows out of accepted /
+ * review_required into existing_relationship (nurture). Never cold outreach.
+ */
+function applyRelationshipOverridesToBatch(batch, overrides) {
+  const list = Array.isArray(overrides) ? overrides.filter(Boolean) : [];
+  if (!list.length) {
+    return {
+      batch: batch || { candidates: [], rejected: [], groups: {} },
+      existingRelationship: [],
+      appliedOverrides: [],
+    };
+  }
+
+  const src = batch || {};
+  const groups = src.groups || {
+    accepted: (src.candidates || []).filter((c) => c.status === 'accepted'),
+    review_required: (src.candidates || []).filter(
+      (c) => c.status === 'review_required'
+    ),
+    rejected: src.rejected || [],
+  };
+
+  const existingRelationship = [];
+  const appliedOverrides = [];
+  const moveIfMatch = (row) => {
+    for (const override of list) {
+      if (!relationshipOverrideMatchesRow(row, override)) continue;
+      const next = {
+        ...row,
+        status: RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
+        reviewStatus: RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
+        relationship: RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
+        doNotOutreach: true,
+        statusReason:
+          override.reason ||
+          'Operator relationship override — existing_relationship / nurture',
+        risks:
+          row.risks ||
+          'Existing relationship — nurture only; do not include in campaign outreach',
+      };
+      existingRelationship.push(next);
+      appliedOverrides.push({
+        companyName: companyNameOf(row),
+        relationship: RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
+        reason: override.reason,
+      });
+      return true;
+    }
+    return false;
+  };
+
+  const accepted = [];
+  for (const row of groups.accepted || []) {
+    if (!moveIfMatch(row)) accepted.push(row);
+  }
+  const reviewRequired = [];
+  for (const row of groups.review_required || []) {
+    if (!moveIfMatch(row)) reviewRequired.push(row);
+  }
+  // Also scan flat candidates if groups were incomplete.
+  for (const row of src.candidates || []) {
+    const name = companyNameOf(row);
+    if (
+      existingRelationship.some((e) => companyNameOf(e) === name) ||
+      accepted.some((e) => companyNameOf(e) === name) ||
+      reviewRequired.some((e) => companyNameOf(e) === name) ||
+      (groups.rejected || []).some((e) => companyNameOf(e) === name)
+    ) {
+      continue;
+    }
+    if (!moveIfMatch(row)) {
+      if (row.status === 'accepted') accepted.push(row);
+      else if (row.status === 'review_required') reviewRequired.push(row);
+    }
+  }
+
+  const rejected = groups.rejected || src.rejected || [];
+  const nextBatch = {
+    ...src,
+    candidates: accepted.concat(reviewRequired),
+    rejected,
+    groups: {
+      accepted,
+      review_required: reviewRequired,
+      rejected,
+      existing_relationship: existingRelationship,
+    },
+    acceptedCount: accepted.length,
+    reviewRequiredCount: reviewRequired.length,
+    rejectedCount: rejected.length,
+    existingRelationshipCount: existingRelationship.length,
+  };
+
+  return { batch: nextBatch, existingRelationship, appliedOverrides };
+}
+
+function buildProspectBatchReviewClosingQuestion(review) {
+  const acceptedCount = (review && review.acceptedFirstPass
+    ? review.acceptedFirstPass
+    : []
+  ).length;
+  const sourceRows =
+    (review && review.sourceVerificationRequired) || [];
+  const nurtureRows = (review && review.existingRelationship) || [];
+  const hasCedar = sourceRows.some((r) =>
+    /cedar\s+management/i.test(companyNameOf(r))
+  );
+  const hasKeyrenter = nurtureRows.some((r) =>
+    /\bkeyrenter\b/i.test(companyNameOf(r))
+  );
+
+  if (hasCedar && hasKeyrenter) {
+    return `Do you want to approve the ${acceptedCount} accepted cold first-pass candidates, include Cedar after source verification, and keep Keyrenter as an existing-relationship nurture account?`;
+  }
+  if (hasKeyrenter && sourceRows.length) {
+    return `Do you want to approve the ${acceptedCount} accepted cold first-pass candidates, include ${sourceRows.length} source-verification account${
+      sourceRows.length === 1 ? '' : 's'
+    } after verification, and keep Keyrenter as an existing-relationship nurture account?`;
+  }
+  if (hasKeyrenter) {
+    return `Do you want to approve the ${acceptedCount} accepted cold first-pass candidates and keep Keyrenter as an existing-relationship nurture account?`;
+  }
+  if (hasCedar) {
+    return `Do you want to approve the ${acceptedCount} accepted cold first-pass candidates and include Cedar after source verification?`;
+  }
+  const expansion = (review && review.optionalExpansion) || [];
+  if (expansion.length) {
+    return `Do you want to approve the ${acceptedCount} accepted cold first-pass candidates only, or include expansion candidates after review?`;
+  }
+  return `Do you want to approve the ${acceptedCount} accepted cold first-pass candidates?`;
 }
 
 function formatBatchReviewCandidateBlock(row, index) {
@@ -2917,12 +3151,19 @@ function formatBatchReviewCandidateBlock(row, index) {
     )}`,
     `   - Confidence: ${r.confidence}`,
     `   - Review status: ${r.reviewStatus}`,
-  ].join('\n');
+    r.relationship
+      ? `   - Relationship: ${r.relationship}`
+      : null,
+    r.doNotOutreach ? `   - Outreach: do not include in campaign outreach` : null,
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**
  * Build Prospect Batch Review from a completed Scout candidate batch.
  * Applies maps-only downgrade (Cedar Management Group → review_required / medium).
+ * Applies operator relationship overrides (Keyrenter → existing_relationship / nurture).
  * Hard-filters out-of-state rows from usable sections; can merge prior NH primaries.
  */
 function buildProspectBatchReview(batch, opts = {}) {
@@ -2931,7 +3172,25 @@ function buildProspectBatchReview(batch, opts = {}) {
     opts.preserveFromBatch || opts.priorCompletedScoutCandidateBatch || null
   );
   const downgraded = applyMapsOnlyDowngradeToBatch(preserved || {});
-  const groups = downgraded.groups || {
+
+  const messageOverrides = parseRelationshipOverridesFromMessage(
+    opts.userMessage || opts.operatorMessage || ''
+  );
+  const relationshipOverrides = mergeRelationshipOverrides(
+    opts.relationshipOverrides || [],
+    (opts.priorProspectBatchReview &&
+      opts.priorProspectBatchReview.relationshipOverrides) ||
+      [],
+    messageOverrides
+  );
+
+  const {
+    batch: overridden,
+    existingRelationship: existingFromOverride,
+    appliedOverrides,
+  } = applyRelationshipOverridesToBatch(downgraded, relationshipOverrides);
+
+  const groups = overridden.groups || {
     accepted: [],
     review_required: [],
     rejected: [],
@@ -2973,12 +3232,19 @@ function buildProspectBatchReview(batch, opts = {}) {
   }
 
   const accepted = nhAccepted.filter(isPrimaryTownCandidate);
-  // Optional expansion: Manchester / Derry / nearby review_required, plus
-  // primary-town rows downgraded to review_required (e.g. maps-only Cedar).
-  const optionalExpansion = nhReview.filter(
-    (row) => isExpansionTownCandidate(row) || isPrimaryTownCandidate(row)
-  );
+  // Primary-town review_required (e.g. maps-only Cedar) → source verification.
+  const sourceVerificationRequired = nhReview.filter(isPrimaryTownCandidate);
+  // Optional expansion: Manchester / Derry / nearby review_required only.
+  const optionalExpansion = nhReview.filter(isExpansionTownCandidate);
   const rejected = (groups.rejected || []).concat(outOfStateRejected);
+  const existingRelationship = (existingFromOverride || []).map((row) => ({
+    ...row,
+    status: RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
+    reviewStatus: RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
+    relationship: RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
+    doNotOutreach: true,
+  }));
+
   const workRequestId =
     opts.workRequestId ||
     (batch && batch.workRequestId) ||
@@ -2986,38 +3252,56 @@ function buildProspectBatchReview(batch, opts = {}) {
     null;
 
   const scoutCandidateBatch = {
-    ...downgraded,
+    ...overridden,
     candidates: nhAccepted.concat(nhReview),
     rejected,
     groups: {
       accepted: nhAccepted,
       review_required: nhReview,
       rejected,
+      existing_relationship: existingRelationship,
     },
     acceptedCount: nhAccepted.length,
     reviewRequiredCount: nhReview.length,
     rejectedCount: rejected.length,
+    existingRelationshipCount: existingRelationship.length,
   };
 
-  return {
+  // Preserve pre-override Scout batch so later corrections can re-apply overrides.
+  const sourceScoutCandidateBatch =
+    (opts.priorProspectBatchReview &&
+      opts.priorProspectBatchReview.sourceScoutCandidateBatch) ||
+    downgraded;
+
+  const review = {
     kind: PROSPECT_BATCH_REVIEW_KIND,
     title: PROSPECT_BATCH_REVIEW_TITLE,
     status: 'review_only',
     workRequestId,
     sectionTitles: { ...PROSPECT_BATCH_REVIEW_SECTION_TITLES },
     acceptedFirstPass: accepted.map(normalizeBatchReviewRow),
+    sourceVerificationRequired: sourceVerificationRequired.map(
+      normalizeBatchReviewRow
+    ),
     optionalExpansion: optionalExpansion.map(normalizeBatchReviewRow),
+    existingRelationship: existingRelationship.map(normalizeBatchReviewRow),
     rejected: rejected.map(normalizeBatchReviewRow),
     counts: {
       accepted: accepted.length,
-      reviewRequired: optionalExpansion.length,
+      sourceVerificationRequired: sourceVerificationRequired.length,
+      reviewRequired:
+        sourceVerificationRequired.length + optionalExpansion.length,
+      optionalExpansion: optionalExpansion.length,
+      existingRelationship: existingRelationship.length,
       rejected: rejected.length,
       scoutAccepted: nhAccepted.length,
       scoutReviewRequired: nhReview.length,
       scoutRejected: rejected.length,
     },
+    relationshipOverrides,
+    appliedOverrides,
+    sourceScoutCandidateBatch,
     scoutCandidateBatch,
-    closingQuestion: PROSPECT_BATCH_REVIEW_CLOSING_QUESTION,
     disclaimer: PROSPECT_BATCH_REVIEW_DISCLAIMER,
     reviewOnly: true,
     crmWritesMade: false,
@@ -3025,92 +3309,112 @@ function buildProspectBatchReview(batch, opts = {}) {
     accountChangesMade: false,
     exportMade: false,
   };
+  review.closingQuestion = buildProspectBatchReviewClosingQuestion(review);
+  return review;
 }
 
 function formatProspectBatchReviewMessage(review) {
   const p = review || {};
   const titles = p.sectionTitles || PROSPECT_BATCH_REVIEW_SECTION_TITLES;
   const lines = [p.title || PROSPECT_BATCH_REVIEW_TITLE, ''];
+  const counts = p.counts || {};
+
+  lines.push(
+    `Counts — Accepted cold first-pass: ${
+      counts.accepted != null
+        ? counts.accepted
+        : (p.acceptedFirstPass || []).length
+    } · Source-verification required: ${
+      counts.sourceVerificationRequired != null
+        ? counts.sourceVerificationRequired
+        : (p.sourceVerificationRequired || []).length
+    } · Existing relationship / nurture: ${
+      counts.existingRelationship != null
+        ? counts.existingRelationship
+        : (p.existingRelationship || []).length
+    } · Rejected: ${
+      counts.rejected != null ? counts.rejected : (p.rejected || []).length
+    }`
+  );
   if (p.workRequestId) {
     lines.push(`workRequestId: ${p.workRequestId}`);
-    lines.push(
-      `Scout counts — Accepted: ${
-        (p.counts && p.counts.scoutAccepted) != null
-          ? p.counts.scoutAccepted
-          : (p.acceptedFirstPass || []).length
-      } · Review required: ${
-        (p.counts && p.counts.scoutReviewRequired) != null
-          ? p.counts.scoutReviewRequired
-          : (p.optionalExpansion || []).length
-      } · Rejected: ${
-        (p.counts && p.counts.scoutRejected) != null
-          ? p.counts.scoutRejected
-          : (p.rejected || []).length
-      }`
-    );
-    lines.push('');
   }
-
-  lines.push(`## 1. ${titles.acceptedFirstPass}`);
-  lines.push(
-    'Primary-town candidates in Bedford NH, Hooksett NH, Londonderry NH, Auburn NH, or Goffstown NH.'
-  );
   lines.push('');
-  if ((p.acceptedFirstPass || []).length) {
-    (p.acceptedFirstPass || []).forEach((row, i) => {
-      lines.push(formatBatchReviewCandidateBlock(row, i + 1));
+
+  let sectionNum = 1;
+  const pushSection = (title, intro, rows, extraRowFormatter) => {
+    lines.push(`## ${sectionNum}. ${title}`);
+    sectionNum += 1;
+    if (intro) lines.push(intro);
+    lines.push('');
+    if ((rows || []).length) {
+      rows.forEach((row, i) => {
+        lines.push(formatBatchReviewCandidateBlock(row, i + 1));
+        if (typeof extraRowFormatter === 'function') {
+          const extra = extraRowFormatter(row);
+          if (extra) lines.push(extra);
+        }
+        lines.push('');
+      });
+    } else {
+      lines.push('_None._');
       lines.push('');
-    });
-  } else {
-    lines.push('_None._');
-    lines.push('');
-  }
+    }
+  };
 
-  lines.push(`## 2. ${titles.optionalExpansion}`);
-  lines.push(
-    'Manchester NH candidates, plus Derry/nearby or primary-town review_required rows (including maps-only / no-website downgrades), unless explicitly approved.'
+  pushSection(
+    titles.acceptedFirstPass,
+    'Primary-town cold prospects in Bedford NH, Hooksett NH, Londonderry NH, Auburn NH, or Goffstown NH — not existing relationships.',
+    p.acceptedFirstPass
   );
-  lines.push('');
+
+  pushSection(
+    titles.sourceVerificationRequired,
+    'Primary-town candidates that need source verification before outreach (for example maps-only / no company website).',
+    p.sourceVerificationRequired
+  );
+
   if ((p.optionalExpansion || []).length) {
-    (p.optionalExpansion || []).forEach((row, i) => {
-      lines.push(formatBatchReviewCandidateBlock(row, i + 1));
-      lines.push('');
-    });
-  } else {
-    lines.push('_None._');
-    lines.push('');
+    pushSection(
+      titles.optionalExpansion,
+      'Manchester NH / nearby expansion candidates unless explicitly approved.',
+      p.optionalExpansion
+    );
   }
 
-  lines.push(`## 3. ${titles.rejected}`);
-  lines.push(
-    'Large institutional / wrong segment / outside market candidates (audit only — not outreach-ready).'
+  pushSection(
+    titles.existingRelationship,
+    'Existing relationships — nurture only. Do not include in campaign outreach.',
+    p.existingRelationship
   );
-  lines.push('');
-  if ((p.rejected || []).length) {
-    (p.rejected || []).forEach((row, i) => {
-      lines.push(formatBatchReviewCandidateBlock(row, i + 1));
-      if (row.rejectionReason || row.statusReason) {
-        lines.push(
-          `   - Rejection reason: ${row.rejectionReason || row.statusReason}`
-        );
-      }
-      lines.push('');
-    });
-  } else {
-    lines.push('_None._');
-    lines.push('');
-  }
+
+  pushSection(
+    titles.rejected,
+    'Large institutional / wrong segment / outside market candidates (audit only — not outreach-ready).',
+    p.rejected,
+    (row) =>
+      row.rejectionReason || row.statusReason
+        ? `   - Rejection reason: ${row.rejectionReason || row.statusReason}`
+        : null
+  );
 
   lines.push(p.disclaimer || PROSPECT_BATCH_REVIEW_DISCLAIMER);
   lines.push('');
-  lines.push(p.closingQuestion || PROSPECT_BATCH_REVIEW_CLOSING_QUESTION);
+  lines.push(
+    p.closingQuestion ||
+      buildProspectBatchReviewClosingQuestion(p) ||
+      PROSPECT_BATCH_REVIEW_CLOSING_QUESTION
+  );
   return lines.join('\n').trim();
 }
 
 function produceProspectBatchReviewResult(ctx, answers, slots, opts, leadIn) {
+  const priorReview = opts.priorProspectBatchReview || null;
   const batch =
+    (priorReview && priorReview.sourceScoutCandidateBatch) ||
     opts.priorScoutCandidateBatch ||
     (opts.priorScoutHandoff && opts.priorScoutHandoff.candidateBatch) ||
+    (priorReview && priorReview.scoutCandidateBatch) ||
     null;
   const workRequestId =
     opts.workRequestId ||
@@ -3120,6 +3424,8 @@ function produceProspectBatchReviewResult(ctx, answers, slots, opts, leadIn) {
       opts.priorScoutHandoff.workRequest &&
       opts.priorScoutHandoff.workRequest.workRequestId) ||
     (batch && batch.workRequestId) ||
+    (opts.priorProspectBatchReview &&
+      opts.priorProspectBatchReview.workRequestId) ||
     null;
 
   if (!hasCompletedScoutCandidateBatch(batch)) {
@@ -3153,6 +3459,17 @@ function produceProspectBatchReviewResult(ctx, answers, slots, opts, leadIn) {
     };
   }
 
+  const messageOverrides = parseRelationshipOverridesFromMessage(
+    opts.userMessage || ''
+  );
+  const relationshipOverrides = mergeRelationshipOverrides(
+    opts.relationshipOverrides || [],
+    (opts.priorProspectBatchReview &&
+      opts.priorProspectBatchReview.relationshipOverrides) ||
+      [],
+    messageOverrides
+  );
+
   const review = buildProspectBatchReview(batch, {
     workRequestId,
     priorScoutWorkRequest: opts.priorScoutWorkRequest || null,
@@ -3160,6 +3477,9 @@ function produceProspectBatchReviewResult(ctx, answers, slots, opts, leadIn) {
       opts.preserveFromBatch ||
       opts.priorCompletedScoutCandidateBatch ||
       null,
+    relationshipOverrides,
+    userMessage: opts.userMessage || '',
+    priorProspectBatchReview: opts.priorProspectBatchReview || null,
   });
   const lines = [];
   if (leadIn) lines.push(leadIn, '');
@@ -3194,7 +3514,7 @@ function produceProspectBatchReviewResult(ctx, answers, slots, opts, leadIn) {
     buildProposalApproved: true,
     liveSourcingApproved: false,
     planningState: CAMPAIGN_PLANNING_STATES.PROSPECT_BATCH_REVIEW,
-    currentAsk: PROSPECT_BATCH_REVIEW_CLOSING_QUESTION,
+    currentAsk: review.closingQuestion || PROSPECT_BATCH_REVIEW_CLOSING_QUESTION,
     workRequestId,
   };
 }
@@ -5104,6 +5424,85 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
     );
   }
 
+  // HARD GUARD — correction against an active Prospect Batch Review.
+  // Never fall back to "Build proposal already approved".
+  {
+    const priorBatchReviewEarly =
+      opts.priorProspectBatchReview || prior.prospectBatchReview || null;
+    const correctionOpts = {
+      priorProspectBatchReview: priorBatchReviewEarly,
+      step: prior.step,
+      memory: opts.reasoningMemory || null,
+      messageClass: opts.messageClass || null,
+      state: opts.reasoningState || null,
+    };
+    if (
+      looksLikeProspectBatchReviewCorrection(userMessage, correctionOpts) ||
+      classifyProspectAcquisitionIntent(userMessage, correctionOpts) ===
+        PROSPECT_ACQUISITION_INTENTS.CORRECT_PROSPECT_BATCH_REVIEW
+    ) {
+      const answersEarly = { ...(prior.answers || {}) };
+      const syncedEarly = syncAnswersFromSlots(answersEarly, {
+        ...priorSlots,
+        previewGenerated: true,
+        previewApproved: true,
+        criteriaGenerated: true,
+        criteriaApproved: true,
+        buildProposalGenerated: true,
+        buildProposalApproved: true,
+      });
+      return produceProspectBatchReviewResult(
+        ctx,
+        syncedEarly,
+        {
+          ...priorSlots,
+          previewGenerated: true,
+          previewApproved: true,
+          criteriaGenerated: true,
+          criteriaApproved: true,
+          buildProposalGenerated: true,
+          buildProposalApproved: true,
+        },
+        {
+          ...opts,
+          userMessage,
+          priorPreview,
+          priorCriteriaPreview:
+            opts.priorCriteriaPreview ||
+            prior.prospectListCriteriaPreview ||
+            prior.criteriaPreview ||
+            null,
+          priorBuildProposal:
+            opts.priorBuildProposal ||
+            prior.prospectListBuildProposal ||
+            prior.buildProposal ||
+            null,
+          priorProspectListDraft:
+            opts.priorProspectListDraft ||
+            prior.prospectListDraft ||
+            prior.reviewableProspectListDraft ||
+            null,
+          priorScoutHandoffBrief:
+            opts.priorScoutHandoffBrief || prior.scoutHandoffBrief || null,
+          priorScoutHandoff:
+            opts.priorScoutHandoff ||
+            prior.scoutHandoff ||
+            (prior.scoutHandoffBrief && prior.scoutHandoffBrief.scoutHandoff) ||
+            null,
+          priorScoutCandidateBatch:
+            opts.priorScoutCandidateBatch ||
+            prior.scoutCandidateBatch ||
+            (prior.scoutHandoff && prior.scoutHandoff.candidateBatch) ||
+            null,
+          priorScoutWorkRequest:
+            opts.priorScoutWorkRequest || prior.scoutWorkRequest || null,
+          priorProspectBatchReview: priorBatchReviewEarly,
+        },
+        'Updated Prospect Batch Review with your relationship correction. No outreach copy, sends, CRM writes, or account changes.'
+      );
+    }
+  }
+
   // Hand brief to Scout — approve + queue work request (or clear not-wired boundary).
   if (
     looksLikeHandBriefToScoutRequest(userMessage) ||
@@ -5652,6 +6051,10 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
         prior.scoutHandoff ||
         (prior.scoutHandoffBrief && prior.scoutHandoffBrief.scoutHandoff) ||
         null;
+      const priorProspectBatchReviewForAction =
+        opts.priorProspectBatchReview ||
+        prior.prospectBatchReview ||
+        null;
       const artifactAction =
         opts.artifactAction ||
         resolveCampaignArtifactAction({
@@ -5663,6 +6066,7 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
           priorProspectListDraft: replyOpts.priorProspectListDraft,
           priorScoutCandidateBatch: priorScoutBatchForAction,
           priorScoutHandoff: priorScoutHandoffForAction,
+          priorProspectBatchReview: priorProspectBatchReviewForAction,
           step: prior.step || 'prospect_list_criteria_preview',
         });
 
@@ -5708,6 +6112,11 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
               null,
             priorScoutWorkRequest:
               opts.priorScoutWorkRequest || prior.scoutWorkRequest || null,
+            priorProspectBatchReview:
+              opts.priorProspectBatchReview ||
+              prior.prospectBatchReview ||
+              null,
+            relationshipOverrides: opts.relationshipOverrides || null,
           },
           artifactAction.note ||
             'Prospect Batch Review from the latest completed Scout result. No new batch will be generated.'
@@ -6280,6 +6689,11 @@ module.exports = {
   buildProspectBatchReview,
   formatProspectBatchReviewMessage,
   produceProspectBatchReviewResult,
+  buildProspectBatchReviewClosingQuestion,
+  parseRelationshipOverridesFromMessage,
+  applyRelationshipOverridesToBatch,
+  mergeRelationshipOverrides,
+  RELATIONSHIP_STATUS,
   buildScoutHandoffBrief,
   formatScoutHandoffBriefMessage,
   produceScoutHandoffBriefResult,
