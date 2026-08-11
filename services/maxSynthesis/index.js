@@ -19,6 +19,7 @@ const ConversationMemoryUpdater = require('./ConversationMemoryUpdater');
 const BusinessFactNormalizer = require('./BusinessFactNormalizer');
 const ArtifactSynthesisContext = require('./ArtifactSynthesisContext');
 const CampaignSynthesisContext = require('./CampaignSynthesisContext');
+const OperatorChatResponsiveness = require('./OperatorChatResponsiveness');
 
 module.exports = {
   // Classifier
@@ -87,4 +88,32 @@ module.exports = {
     CampaignSynthesisContext.findCampaignMemoryDraftConflicts,
   outreachDraftPreviewConflictsWithCampaignMemory:
     CampaignSynthesisContext.outreachDraftPreviewConflictsWithCampaignMemory,
+
+  // Operator chat responsiveness
+  RESPONSE_MODES: OperatorChatResponsiveness.RESPONSE_MODES,
+  PRIORITY_ORDER: OperatorChatResponsiveness.PRIORITY_ORDER,
+  emptyCampaignWorkingState:
+    OperatorChatResponsiveness.emptyCampaignWorkingState,
+  ensureCampaignWorkingState:
+    OperatorChatResponsiveness.ensureCampaignWorkingState,
+  looksLikeOperatorWorkflowRevision:
+    OperatorChatResponsiveness.looksLikeOperatorWorkflowRevision,
+  parseOperatorChatDirectives:
+    OperatorChatResponsiveness.parseOperatorChatDirectives,
+  applyOperatorDirectivesToWorkingState:
+    OperatorChatResponsiveness.applyOperatorDirectivesToWorkingState,
+  markDirectivesApplied: OperatorChatResponsiveness.markDirectivesApplied,
+  recordRejectedOutput: OperatorChatResponsiveness.recordRejectedOutput,
+  countRejectedFingerprint:
+    OperatorChatResponsiveness.countRejectedFingerprint,
+  selectResponseMode: OperatorChatResponsiveness.selectResponseMode,
+  draftOutputFingerprint: OperatorChatResponsiveness.draftOutputFingerprint,
+  validateOutreachDraftAgainstInstructions:
+    OperatorChatResponsiveness.validateOutreachDraftAgainstInstructions,
+  buildStaleSourceDiagnostic:
+    OperatorChatResponsiveness.buildStaleSourceDiagnostic,
+  buildFollowUpEmailDrafts:
+    OperatorChatResponsiveness.buildFollowUpEmailDrafts,
+  formatOperatorChatDraftResponse:
+    OperatorChatResponsiveness.formatOperatorChatDraftResponse,
 };

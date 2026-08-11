@@ -305,7 +305,9 @@ function expandSubjectPattern(pattern, businessName) {
 
 /**
  * Build subject line list from campaign learnings.
- * When a tested winner exists, return ONLY that pattern — never generic options.
+ * When a tested pattern exists, return ONLY that pattern — never generic options.
+ * When subject_keep_merge_tokens is set (or the pattern still contains {{...}}),
+ * keep merge tokens literal for draft preview (operator-preferred template form).
  */
 function resolveSubjectLines(campaignCtx) {
   const learnings = (campaignCtx && campaignCtx.learnings) || {};
@@ -319,12 +321,30 @@ function resolveSubjectLines(campaignCtx) {
     'the business';
 
   if (pattern) {
+    const keepMergeTokens =
+      learnings.subject_keep_merge_tokens === true ||
+      /\{\{\s*[\w]+\s*\}\}/.test(String(pattern));
+    const subject = keepMergeTokens
+      ? String(pattern).trim()
+      : expandSubjectPattern(pattern, name);
+    const claimWinner = learnings.claim_tested_winner !== false;
+    const performance =
+      claimWinner && !keepMergeTokens
+        ? learnings.tested_subject_line_performance || null
+        : null;
     return {
-      subjectOptions: [expandSubjectPattern(pattern, name)],
+      subjectOptions: [subject],
       usedTestedWinner: true,
+      keptMergeTokens: keepMergeTokens,
       testedPattern: pattern,
-      performance: learnings.tested_subject_line_performance || null,
-      sectionTitle: 'Subject line (tested winner)',
+      performance,
+      // Do not claim "tested winner" for merge-token templates or when
+      // operator explicitly disabled the claim.
+      sectionTitle:
+        claimWinner && !keepMergeTokens && performance
+          ? 'Subject line (tested winner)'
+          : 'Subject line',
+      claimTestedWinner: Boolean(claimWinner && !keepMergeTokens && performance),
     };
   }
 
@@ -340,9 +360,11 @@ function resolveSubjectLines(campaignCtx) {
       'Worth a brief chat about recurring cleaning coverage?',
     ],
     usedTestedWinner: false,
+    keptMergeTokens: false,
     testedPattern: null,
     performance: null,
     sectionTitle: 'Subject line options',
+    claimTestedWinner: false,
   };
 }
 
@@ -494,12 +516,18 @@ function findCampaignMemoryDraftConflicts(preview, campaignCtx) {
     : [];
 
   if (learnings.tested_subject_line_pattern) {
-    const expected = expandSubjectPattern(
-      learnings.tested_subject_line_pattern,
-      preview.businessName ||
-        (campaignCtx && campaignCtx.businessName) ||
-        'the business'
-    );
+    const pattern = learnings.tested_subject_line_pattern;
+    const keepMergeTokens =
+      learnings.subject_keep_merge_tokens === true ||
+      /\{\{\s*[\w]+\s*\}\}/.test(String(pattern));
+    const expected = keepMergeTokens
+      ? String(pattern).trim()
+      : expandSubjectPattern(
+          pattern,
+          preview.businessName ||
+            (campaignCtx && campaignCtx.businessName) ||
+            'the business'
+        );
     const hasWinner = subjects.some(
       (s) => String(s).trim().toLowerCase() === expected.toLowerCase()
     );
@@ -509,6 +537,27 @@ function findCampaignMemoryDraftConflicts(preview, campaignCtx) {
     );
     if (hasGeneric || subjects.length > 1) {
       hits.push('generic_subject_options_with_tested_winner');
+    }
+    // Expanded business-name subjects are stale when merge tokens were requested.
+    if (
+      keepMergeTokens &&
+      subjects.some((s) =>
+        /^Anchor\s*-\s*commercial cleaning$/i.test(String(s).trim())
+      )
+    ) {
+      hits.push('stale_expanded_subject');
+    }
+  }
+
+  if (
+    learnings.draft_follow_ups === true ||
+    learnings.follow_up_mode === 'drafted_emails'
+  ) {
+    const drafts = Array.isArray(preview.followUpDrafts)
+      ? preview.followUpDrafts
+      : [];
+    if (drafts.length < 2) {
+      hits.push('missing_follow_up_drafts');
     }
   }
 

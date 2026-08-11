@@ -7071,6 +7071,19 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
   const priorOutreachCopyPlan =
     (session.interview_state && session.interview_state.outreachCopyPlan) ||
     null;
+  const priorOutreachDraftPreview =
+    (session.interview_state && session.interview_state.outreachDraftPreview) ||
+    null;
+  const priorOutreachLaunchGate =
+    (session.interview_state && session.interview_state.outreachLaunchGate) ||
+    null;
+  const priorCampaignMemory =
+    (session.interview_state && session.interview_state.campaignMemory) ||
+    null;
+  const priorCampaignWorkingState =
+    (session.interview_state &&
+      session.interview_state.campaignWorkingState) ||
+    null;
 
   // SPEC-090/091 — classify intent before workflow handling.
   let reasoningMemory = ensureReasoningMemory(session.interview_state || {});
@@ -7186,6 +7199,10 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     priorProspectBatchReview,
     priorOutreachStrategyPreview: nextPriorOutreachStrategyPreview,
     priorOutreachCopyPlan,
+    priorOutreachDraftPreview,
+    priorOutreachLaunchGate,
+    campaignMemory: priorCampaignMemory,
+    campaignWorkingState: priorCampaignWorkingState,
     messageClass,
     artifactAction,
     reasoningMemory,
@@ -7219,6 +7236,10 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       prospectBatchReview: priorProspectBatchReview,
       outreachStrategyPreview: nextPriorOutreachStrategyPreview,
       outreachCopyPlan: priorOutreachCopyPlan,
+      outreachDraftPreview: priorOutreachDraftPreview,
+      outreachLaunchGate: priorOutreachLaunchGate,
+      campaignMemory: priorCampaignMemory,
+      campaignWorkingState: priorCampaignWorkingState,
     },
     context,
     campaignReplyOpts
@@ -7507,6 +7528,15 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
           }
         : session.interview_state && session.interview_state.campaignMemory
           ? { campaignMemory: session.interview_state.campaignMemory }
+          : {}),
+      ...(reply.campaignWorkingState
+        ? { campaignWorkingState: reply.campaignWorkingState }
+        : session.interview_state &&
+            session.interview_state.campaignWorkingState
+          ? {
+              campaignWorkingState:
+                session.interview_state.campaignWorkingState,
+            }
           : {}),
       reasoningMemory: (() => {
         let mem = reasoningMemory;
