@@ -7321,6 +7321,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
   const nextScoutWorkRequest = reply.scoutWorkRequest || null;
   const nextScoutCandidateBatch = reply.scoutCandidateBatch || null;
   const nextProspectBatchReview = reply.prospectBatchReview || null;
+  const nextOutreachStrategyPreview = reply.outreachStrategyPreview || null;
   const liveSourcingApproved = Boolean(
     reply.liveSourcingApproved ||
       (reply.slots && reply.slots.liveSourcingApproved) ||
@@ -7361,6 +7362,13 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       : {}),
     ...(nextScoutWorkRequest ? { scoutHandoffQueued: true } : {}),
     ...(liveSourcingApproved ? { liveSourcingApproved: true } : {}),
+    ...((reply.batch1Approved ||
+      reply.prospectBatchReviewApproved ||
+      (nextProspectBatchReview &&
+        (nextProspectBatchReview.batch1Approved ||
+          nextProspectBatchReview.status === 'batch_1_approved')))
+      ? { prospectBatchReviewApproved: true, batch1Approved: true }
+      : {}),
   };
   const nextPlanning = {
     ...campaignPlanning,
@@ -7412,6 +7420,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
         : {}),
       ...(nextProspectBatchReview
         ? { prospectBatchReview: nextProspectBatchReview }
+        : {}),
+      ...(nextOutreachStrategyPreview
+        ? { outreachStrategyPreview: nextOutreachStrategyPreview }
         : {}),
       reasoningMemory: (() => {
         let mem = reasoningMemory;
@@ -7477,6 +7488,25 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
             ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
             nextProspectBatchReview.status || 'draft'
           );
+          if (
+            nextProspectBatchReview.batch1Approved ||
+            nextProspectBatchReview.status === 'batch_1_approved' ||
+            nextProspectBatchReview.status === 'approved'
+          ) {
+            mem = markArtifactApproved(
+              mem,
+              ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW
+            );
+            if (ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW) {
+              mem = markArtifactGenerated(
+                mem,
+                ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW,
+                (nextOutreachStrategyPreview &&
+                  nextOutreachStrategyPreview.status) ||
+                  'pending'
+              );
+            }
+          }
         }
         if (liveSourcingApproved) {
           mem = markLiveSourcingApproved(mem);
@@ -7543,6 +7573,11 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       nextProspectBatchReview ||
       (session.interview_state &&
         session.interview_state.prospectBatchReview) ||
+      null,
+    outreachStrategyPreview:
+      nextOutreachStrategyPreview ||
+      (session.interview_state &&
+        session.interview_state.outreachStrategyPreview) ||
       null,
     liveProspectList:
       nextLiveProspectList ||

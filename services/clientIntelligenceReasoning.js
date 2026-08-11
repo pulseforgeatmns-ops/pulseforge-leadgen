@@ -38,6 +38,8 @@ const ARTIFACT_KINDS = Object.freeze({
   SCOUT_HANDOFF_BRIEF: 'scout_handoff_brief',
   /** Operator-facing review of a completed Scout candidate batch. */
   PROSPECT_BATCH_REVIEW: 'prospect_batch_review',
+  /** Review-first outreach strategy planning after Batch 1 approval. */
+  OUTREACH_STRATEGY_PREVIEW: 'outreach_strategy_preview',
 });
 
 /**
@@ -54,6 +56,8 @@ const PROSPECT_ACQUISITION_INTENTS = Object.freeze({
   EMIT_PROSPECT_BATCH_REVIEW: 'emit_prospect_batch_review',
   /** Revise an active Prospect Batch Review (relationship overrides / corrections). */
   CORRECT_PROSPECT_BATCH_REVIEW: 'correct_prospect_batch_review',
+  /** Approve Batch 1 (accepted cold first-pass) and advance. */
+  APPROVE_PROSPECT_BATCH_REVIEW: 'approve_prospect_batch_review',
   PERFORM_LIVE_SOURCING: 'perform_live_sourcing',
 });
 
@@ -101,6 +105,10 @@ const PROSPECT_BATCH_REVIEW_REQUEST_RE =
  */
 const PROSPECT_BATCH_REVIEW_CORRECTION_RE =
   /\b(?:remove|drop|exclude|take\s+out)\b[\s\S]{0,80}\b(?:from\s+(?:the\s+)?(?:accepted|batch|review|candidates|first[- ]pass)|keyrenter)\b|\b(?:keyrenter|[\w&.\-]+)\b[\s\S]{0,100}\b(?:existing\s+relationship|not\s+a\s+cold\s+prospect|nurture(?:\s+account)?)\b|\b(?:keep|treat|mark|reclassify)\b[\s\S]{0,80}\b(?:as\s+(?:an\s+)?(?:existing[- ]relationship|nurture)|existing\s+relationship)\b|\bexisting[- ]relationship\b|\bnurture\s+account\b/i;
+
+/** Approve accepted cold first-pass candidates as Batch 1 (or approve the active review). */
+const PROSPECT_BATCH_REVIEW_APPROVAL_RE =
+  /\bapprov(?:e|ed|ing)\b[\s\S]{0,160}\b(?:batch\s*1|accepted\s+cold\s+first[- ]pass|accepted\s+first[- ]pass|cold\s+first[- ]pass\s+candidates|(?:the\s+)?\d+\s+accepted(?:\s+cold)?(?:\s+first[- ]pass)?\s+candidates)\b|\bapprov(?:e|ed|ing)\b[\s\S]{0,100}\b(?:prospect\s+)?batch\s+review\b|\bbatch\s*1\b[\s\S]{0,40}\bapprov(?:e|ed|ing)\b/i;
 
 const ARTIFACT_REQUEST_RE =
   /\b(?:show|view|see|open|pull\s+up|regenerate|revise|replay)\s+(?:me\s+)?(?:the\s+)?(?:criteria|preview|blueprint|build\s+proposal|proposal|list\s+draft|prospect\s+list)\b|\b(?:criteria\s+preview|build\s+proposal|campaign\s+preview|list\s+draft)\s+again\b/i;
@@ -376,6 +384,8 @@ function looksLikeProspectBatchReviewCorrection(text, opts = {}) {
   const s = String(text || '').trim();
   if (!s) return false;
   if (!hasActiveProspectBatchReview(opts)) return false;
+  // Explicit Batch 1 / first-pass approval wins over nurture language in the same turn.
+  if (looksLikeProspectBatchReviewApproval(s, opts)) return false;
   if (PROSPECT_BATCH_REVIEW_CORRECTION_RE.test(s)) return true;
   if (
     opts.messageClass === MESSAGE_CLASSES.CORRECTION ||
@@ -386,6 +396,52 @@ function looksLikeProspectBatchReviewCorrection(text, opts = {}) {
       s
     );
   }
+  return false;
+}
+
+function isProspectBatchReviewAlreadyApproved(review) {
+  if (!review || typeof review !== 'object') return false;
+  return Boolean(
+    review.batch1Approved ||
+      review.status === 'batch_1_approved' ||
+      review.status === 'approved' ||
+      (review.approvedBatch && review.approvedBatch.status === 'approved')
+  );
+}
+
+/**
+ * True when the operator is approving Batch 1 / accepted cold first-pass
+ * candidates on an active Prospect Batch Review.
+ */
+function looksLikeProspectBatchReviewApproval(text, opts = {}) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  const active = hasActiveProspectBatchReview(opts);
+  if (!active) return false;
+
+  if (PROSPECT_BATCH_REVIEW_APPROVAL_RE.test(s)) return true;
+
+  // Pure approval ("Approved." / "LGTM") against an unapproved active review.
+  if (
+    (looksLikeApproval(s) ||
+      opts.messageClass === MESSAGE_CLASSES.APPROVAL) &&
+    !isProspectBatchReviewAlreadyApproved(
+      opts.priorProspectBatchReview || opts.prospectBatchReview
+    )
+  ) {
+    return true;
+  }
+
+  // "Approve …" lead plus first-pass / batch framing.
+  if (
+    looksLikeApprovalLead(s) &&
+    /\b(?:batch\s*1|first[- ]pass|accepted\s+cold|cold\s+candidates|prospect\s+batch\s+review)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+
   return false;
 }
 
@@ -484,6 +540,10 @@ function classifyProspectAcquisitionIntent(text, opts = {}) {
   const s = String(text || '');
   if (looksLikeExecuteExistingScoutWorkRequest(s)) {
     return PROSPECT_ACQUISITION_INTENTS.EXECUTE_EXISTING_SCOUT_WORK_REQUEST;
+  }
+  // Batch 1 approval before correction — approval turns may mention nurture/Cedar.
+  if (looksLikeProspectBatchReviewApproval(s, opts)) {
+    return PROSPECT_ACQUISITION_INTENTS.APPROVE_PROSPECT_BATCH_REVIEW;
   }
   if (looksLikeProspectBatchReviewCorrection(s, opts)) {
     return PROSPECT_ACQUISITION_INTENTS.CORRECT_PROSPECT_BATCH_REVIEW;
@@ -1181,6 +1241,42 @@ function resolveCampaignArtifactAction(opts = {}) {
   });
   const executeWorkRequestId = extractWorkRequestIdFromMessage(text);
 
+  // HARD GUARD: approve Batch 1 on an active Prospect Batch Review.
+  // Never re-render the same review / closing question.
+  const batchReviewApproval =
+    acquisitionIntent ===
+      PROSPECT_ACQUISITION_INTENTS.APPROVE_PROSPECT_BATCH_REVIEW ||
+    looksLikeProspectBatchReviewApproval(text, {
+      priorProspectBatchReview: priorBatchReview,
+      step: opts.step,
+      memory,
+      messageClass,
+      state: opts.state,
+    });
+
+  if (batchReviewApproval) {
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW
+    );
+    memory.nextRecommendedArtifact =
+      ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW;
+    return {
+      action: 'approve_prospect_batch_review',
+      approveKind: ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
+      emitKind: ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW,
+      memory,
+      messageClass:
+        messageClass === MESSAGE_CLASSES.APPROVAL ||
+        messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST
+          ? messageClass
+          : MESSAGE_CLASSES.APPROVAL,
+      note: 'Batch 1 approved. Next step: prepare outreach strategy preview.',
+      planningState: 'outreach_strategy_preview',
+      batch1Approved: true,
+    };
+  }
+
   // HARD GUARD: correction against an active Prospect Batch Review.
   // Never fall back to "Build proposal already approved…" / draft prompt.
   const batchReviewCorrection =
@@ -1636,19 +1732,37 @@ function resolveCampaignArtifactAction(opts = {}) {
   }
 
   // Criteria already shown — never silently re-emit unless explicit revise.
-  // If Prospect Batch Review is already active, hold on that artifact — never
-  // fall back to "Build proposal already approved".
+  // If Prospect Batch Review is already active, do not fall back to Build Proposal.
   if (criteriaApproved) {
     if (priorBatchReview || opts.step === 'prospect_batch_review') {
+      if (isProspectBatchReviewAlreadyApproved(priorBatchReview)) {
+        memory = markArtifactApproved(
+          memory,
+          ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW
+        );
+        memory.nextRecommendedArtifact =
+          ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW;
+        return {
+          action: 'ack_prospect_batch_approval',
+          approveKind: ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
+          emitKind: ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW,
+          memory,
+          messageClass,
+          note:
+            'Batch 1 approved. Next step: prepare outreach strategy preview.',
+          planningState: 'outreach_strategy_preview',
+          batch1Approved: true,
+        };
+      }
       memory.nextRecommendedArtifact = ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW;
       return {
-        action: 'emit_prospect_batch_review',
+        action: 'hold_prospect_batch_review',
         approveKind: null,
-        emitKind: ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
+        emitKind: null,
         memory,
         messageClass,
         note:
-          'Prospect Batch Review is active. Provide corrections (for example relationship overrides) or approve the accepted cold first-pass candidates.',
+          'Prospect Batch Review is ready. Approve the accepted cold first-pass candidates as Batch 1 to continue, or provide a relationship correction.',
         planningState: 'prospect_batch_review',
       };
     }
@@ -1712,6 +1826,8 @@ function humanArtifactLabel(kind) {
       return 'Reviewable Prospect List Draft';
     case ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW:
       return 'Prospect Batch Review';
+    case ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW:
+      return 'Outreach Strategy Preview';
     default:
       return kind || 'artifact';
   }
@@ -2018,7 +2134,9 @@ module.exports = {
   looksLikeProspectListDraftRequest,
   looksLikeProspectBatchReviewRequest,
   looksLikeProspectBatchReviewCorrection,
+  looksLikeProspectBatchReviewApproval,
   hasActiveProspectBatchReview,
+  isProspectBatchReviewAlreadyApproved,
   hasCompletedScoutCandidateBatch,
   looksLikeScoutHandoffBriefRequest,
   looksLikeHandBriefToScoutRequest,
