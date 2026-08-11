@@ -20,6 +20,11 @@ const {
   formatSuggestedContactRole,
   batchMeetsQualityThreshold,
   gateScoutCandidateRows,
+  selectBatchWithManchesterFill,
+  detectOutsideMarketRegion,
+  extractUsStateCode,
+  isNhLocation,
+  mergePreservedNhCandidatesFromPriorBatch,
 } = require('../services/scoutQualityGate');
 const {
   buildSearchQueries,
@@ -828,5 +833,294 @@ describe('scoutQualityGate — sourcing integration', () => {
     }
     assert.ok(result.candidateBatch.groups);
     assert.ok(Array.isArray(result.candidateBatch.groups.rejected));
+  });
+});
+
+describe('scoutQualityGate — NH state/region hard gate', () => {
+  it('rejects Washington DC / Arlington VA as outside_market_region (never review_required)', () => {
+    for (const hit of [
+      {
+        companyName: 'Capitol Property Partners',
+        address: '1600 Pennsylvania Ave NW, Washington, DC 20500, USA',
+        location: 'Washington, DC, USA',
+        website: 'https://capitolpp.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '202-555-0100',
+      },
+      {
+        companyName: 'Arlington Asset Managers',
+        address: '1100 Wilson Blvd, Arlington, VA 22209, USA',
+        location: 'Arlington, VA, USA',
+        website: 'https://arlingtonam.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '703-555-0100',
+      },
+      {
+        companyName: 'Boston Harbor PM',
+        address: '1 Harbor St, Boston, MA 02110, USA',
+        location: 'Boston, MA, USA',
+        website: 'https://bostonhpm.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+      },
+    ]) {
+      const region = detectOutsideMarketRegion(hit);
+      assert.equal(region.rejected, true);
+      assert.equal(region.reasonCode, REJECTION_REASON.OUTSIDE_MARKET_REGION);
+      assert.notEqual(region.state, 'NH');
+
+      const gate = evaluateScoutCandidate(hit, PM_WORK_REQUEST);
+      assert.equal(gate.status, CANDIDATE_STATUS.REJECTED);
+      assert.equal(gate.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_REGION);
+      assert.match(String(gate.statusReason || ''), /outside_market_region/i);
+      assert.notEqual(gate.status, CANDIDATE_STATUS.REVIEW_REQUIRED);
+      assert.notEqual(gate.status, CANDIDATE_STATUS.ACCEPTED);
+    }
+
+    assert.equal(extractUsStateCode('Washington, DC, USA'), 'DC');
+    assert.equal(extractUsStateCode('Arlington, VA 22209'), 'VA');
+    const dcGeo = isNhLocation({
+      address: 'Washington, DC, USA',
+      location: 'Washington, DC',
+    });
+    assert.equal(dcGeo.inNh, false);
+    assert.equal(dcGeo.state, 'DC');
+  });
+
+  it('accepts NH primary towns (Bedford / Hooksett / Londonderry / Auburn / Goffstown)', () => {
+    for (const town of PRIORITY_TOWNS_NH) {
+      const gate = evaluateScoutCandidate(
+        {
+          companyName: `${town} Property Management LLC`,
+          address: `12 Main St, ${town}, NH 03110`,
+          location: `${town} NH`,
+          website: `https://${town.toLowerCase()}pm.example`,
+          sourceUrl: `https://${town.toLowerCase()}pm.example`,
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0111',
+        },
+        PM_WORK_REQUEST
+      );
+      assert.equal(gate.status, CANDIDATE_STATUS.ACCEPTED, town);
+      assert.equal(gate.geo.inNh, true);
+      assert.equal(gate.geo.state, 'NH');
+      assert.equal(gate.geo.tier, 'priority');
+    }
+  });
+
+  it('keeps Manchester NH / Derry NH as review_required expansion when accepted < target', () => {
+    const rows = [
+      {
+        companyName: 'Bedford Property Management LLC',
+        sourceUrl: 'https://bedfordpm.example',
+        address: 'Bedford, NH 03110',
+        location: 'Bedford NH',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0101',
+      },
+      {
+        companyName: 'Mill City Property Management',
+        sourceUrl: 'https://millcitypm.example',
+        address: '100 Elm St, Manchester, NH',
+        location: 'Manchester NH',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0188',
+      },
+      {
+        companyName: 'Derry Commercial Properties',
+        sourceUrl: 'https://derrycp.example',
+        address: '10 Broadway, Derry, NH',
+        location: 'Derry NH',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0199',
+      },
+      {
+        companyName: 'Capitol Property Partners DC',
+        sourceUrl: 'https://capitolpp.example',
+        address: 'Washington, DC 20001, USA',
+        location: 'Washington, DC, USA',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+      },
+      {
+        companyName: 'Arlington Asset Managers',
+        sourceUrl: 'https://arlingtonam.example',
+        address: 'Arlington, VA 22209, USA',
+        location: 'Arlington, VA, USA',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+      },
+    ];
+
+    const gated = gateScoutCandidateRows(rows, {
+      ...PM_WORK_REQUEST,
+      targetCountMin: 15,
+      targetCountMax: 25,
+    });
+
+    assert.equal(gated.acceptedCount, 1);
+    assert.ok(
+      gated.groups.review_required.some((r) =>
+        /Mill City|Manchester/i.test(r.companyName + r.location)
+      )
+    );
+    assert.ok(
+      gated.groups.review_required.some((r) =>
+        /Derry/i.test(r.companyName + r.location)
+      )
+    );
+    assert.ok(
+      gated.groups.rejected.every(
+        (r) =>
+          !/priority towns filled the batch/i.test(String(r.statusReason || ''))
+      )
+    );
+    assert.ok(
+      gated.groups.rejected.some(
+        (r) =>
+          /Capitol|Arlington/i.test(r.companyName) &&
+          r.rejectionReason === REJECTION_REASON.OUTSIDE_MARKET_REGION
+      )
+    );
+    assert.ok(
+      !gated.groups.review_required.some((r) =>
+        /Washington|Arlington|DC|VA/i.test(String(r.location || ''))
+      )
+    );
+  });
+
+  it('does not reject Manchester with priority-filled message when accepted count is below target', () => {
+    const evaluated = [
+      {
+        companyName: 'Bedford PM',
+        location: 'Bedford NH',
+        status: CANDIDATE_STATUS.ACCEPTED,
+        geo: { tier: 'priority', inNh: true, state: 'NH', town: 'Bedford' },
+      },
+      {
+        companyName: 'Hooksett Review PM',
+        location: 'Hooksett NH',
+        status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+        geo: { tier: 'priority', inNh: true, state: 'NH', town: 'Hooksett' },
+      },
+      // Many review_required rows that previously filled batch.length >= targetMin
+      ...Array.from({ length: 20 }, (_, i) => ({
+        companyName: `Priority Review ${i}`,
+        location: 'Londonderry NH',
+        status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+        geo: { tier: 'priority', inNh: true, state: 'NH', town: 'Londonderry' },
+      })),
+      {
+        companyName: 'Mill City Property Management',
+        location: 'Manchester NH',
+        status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+        geo: { tier: 'nearby_fill', inNh: true, state: 'NH', town: 'Manchester' },
+      },
+      {
+        companyName: 'Derry Commercial Properties',
+        location: 'Derry NH',
+        status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+        geo: { tier: 'extended_review', inNh: true, state: 'NH', town: 'Derry' },
+      },
+    ];
+
+    const selected = selectBatchWithManchesterFill(evaluated, 25, 15);
+    assert.equal(selected.acceptedCount, 1);
+    assert.ok(
+      selected.candidates.some((r) => /Mill City|Manchester/i.test(r.companyName))
+    );
+    assert.ok(
+      !selected.rejected.some((r) =>
+        /priority towns filled the batch/i.test(String(r.statusReason || ''))
+      )
+    );
+  });
+
+  it('latest completed result does not discard prior valid NH candidates accidentally', () => {
+    const prior = {
+      workRequestId: 'f0ac74ac-16a6-4dba-b024-d3727b285a86',
+      candidates: [
+        {
+          companyName: 'Keyrenter New England',
+          location: 'Bedford NH',
+          sourceUrl: 'https://keyrenter.example',
+          status: CANDIDATE_STATUS.ACCEPTED,
+          geo: { inNh: true, state: 'NH', town: 'Bedford', tier: 'priority' },
+        },
+        {
+          companyName: 'Elm Grove Companies',
+          location: 'Hooksett NH',
+          sourceUrl: 'https://elmgrove.example',
+          status: CANDIDATE_STATUS.ACCEPTED,
+          geo: { inNh: true, state: 'NH', town: 'Hooksett', tier: 'priority' },
+        },
+        {
+          companyName: 'Mill City Property Management',
+          location: 'Manchester NH',
+          sourceUrl: 'https://millcity.example',
+          status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+          geo: { inNh: true, state: 'NH', town: 'Manchester', tier: 'nearby_fill' },
+        },
+      ],
+      rejected: [],
+    };
+    const latest = {
+      workRequestId: 'f0ac74ac-16a6-4dba-b024-d3727b285a86',
+      candidates: [
+        {
+          companyName: 'Keyrenter New England',
+          location: 'Bedford NH',
+          sourceUrl: 'https://keyrenter.example',
+          status: CANDIDATE_STATUS.ACCEPTED,
+          geo: { inNh: true, state: 'NH', town: 'Bedford', tier: 'priority' },
+        },
+        {
+          companyName: 'Capitol Property Partners',
+          location: 'Washington, DC, USA',
+          sourceUrl: 'https://capitolpp.example',
+          status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+          geo: { inNh: false, state: 'DC', town: null, tier: 'out_of_market' },
+        },
+      ],
+      rejected: [
+        {
+          companyName: 'Mill City Property Management',
+          location: 'Manchester NH',
+          sourceUrl: 'https://millcity.example',
+          status: CANDIDATE_STATUS.REJECTED,
+          statusReason:
+            'Manchester NH deferred — outside_primary_town_cluster (priority towns filled the batch)',
+          rejectionReason: REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER,
+        },
+      ],
+    };
+
+    const merged = mergePreservedNhCandidatesFromPriorBatch(latest, prior);
+    assert.ok(
+      merged.candidates.some((r) => r.companyName === 'Elm Grove Companies')
+    );
+    assert.ok(
+      merged.candidates.some((r) => r.companyName === 'Mill City Property Management')
+    );
+    assert.ok(
+      !merged.candidates.some((r) => /Washington|DC/i.test(String(r.location || '')))
+    );
+    assert.ok(
+      merged.rejected.some(
+        (r) =>
+          r.companyName === 'Capitol Property Partners' &&
+          (r.rejectionReason === REJECTION_REASON.OUTSIDE_MARKET_REGION ||
+            /outside_market_region/i.test(String(r.statusReason || '')))
+      )
+    );
+    assert.ok(
+      !merged.rejected.some((r) => r.companyName === 'Mill City Property Management')
+    );
   });
 });

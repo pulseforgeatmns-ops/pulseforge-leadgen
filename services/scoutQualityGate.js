@@ -80,12 +80,70 @@ const CANDIDATE_STATUS = Object.freeze({
 /** Machine rejection / risk reason codes (stable for tests + UI). */
 const REJECTION_REASON = Object.freeze({
   OUTSIDE_MARKET_COUNTRY: 'outside_market_country',
+  OUTSIDE_MARKET_REGION: 'outside_market_region',
   WRONG_SEGMENT_CLEANING_COMPETITOR: 'wrong_segment_cleaning_competitor',
   LARGE_INSTITUTIONAL_FIRM: 'large_institutional_firm',
   OUTSIDE_PRIMARY_TOWN_CLUSTER: 'outside_primary_town_cluster',
   OUTSIDE_NH_MARKET: 'outside_nh_market',
   WEAK_PROPERTY_MANAGEMENT_FIT: 'weak_property_management_fit',
 });
+
+/** US state name → code. Used to hard-reject non-NH regions before review_required. */
+const US_STATE_NAME_TO_CODE = Object.freeze({
+  alabama: 'AL',
+  alaska: 'AK',
+  arizona: 'AZ',
+  arkansas: 'AR',
+  california: 'CA',
+  colorado: 'CO',
+  connecticut: 'CT',
+  delaware: 'DE',
+  'district of columbia': 'DC',
+  florida: 'FL',
+  georgia: 'GA',
+  hawaii: 'HI',
+  idaho: 'ID',
+  illinois: 'IL',
+  indiana: 'IN',
+  iowa: 'IA',
+  kansas: 'KS',
+  kentucky: 'KY',
+  louisiana: 'LA',
+  maine: 'ME',
+  maryland: 'MD',
+  massachusetts: 'MA',
+  michigan: 'MI',
+  minnesota: 'MN',
+  mississippi: 'MS',
+  missouri: 'MO',
+  montana: 'MT',
+  nebraska: 'NE',
+  nevada: 'NV',
+  'new hampshire': 'NH',
+  'new jersey': 'NJ',
+  'new mexico': 'NM',
+  'new york': 'NY',
+  'north carolina': 'NC',
+  'north dakota': 'ND',
+  ohio: 'OH',
+  oklahoma: 'OK',
+  oregon: 'OR',
+  pennsylvania: 'PA',
+  'rhode island': 'RI',
+  'south carolina': 'SC',
+  'south dakota': 'SD',
+  tennessee: 'TN',
+  texas: 'TX',
+  utah: 'UT',
+  vermont: 'VT',
+  virginia: 'VA',
+  washington: 'WA',
+  'west virginia': 'WV',
+  wisconsin: 'WI',
+  wyoming: 'WY',
+});
+
+const US_STATE_CODES = new Set(Object.values(US_STATE_NAME_TO_CODE));
 
 const CONFIDENCE = Object.freeze({
   HIGH: 'high',
@@ -342,10 +400,128 @@ function candidateGeoEvidence(hit) {
   };
 }
 
-function hasUsOrNhAddressEvidence(text) {
-  return /\bNH\b|\bNew Hampshire\b|\bUSA\b|\bU\.S\.A\.?\b|\bUnited States\b/i.test(
+/** True when address text cites New Hampshire explicitly (not mere USA). */
+function hasNhStateEvidence(text) {
+  return /\bNew Hampshire\b|\bNH\b/i.test(String(text || ''));
+}
+
+/** True when address text cites USA / United States (country only — not NH). */
+function hasUsCountryEvidence(text) {
+  return /\bUSA\b|\bU\.S\.A\.?\b|\bUnited States(?:\s+of\s+America)?\b/i.test(
     String(text || '')
   );
+}
+
+/**
+ * US/NH country-or-state evidence for UK gate early-exit only.
+ * Does NOT prove New Hampshire market membership — use hasNhStateEvidence / extractUsStateCode.
+ */
+function hasUsOrNhAddressEvidence(text) {
+  return hasNhStateEvidence(text) || hasUsCountryEvidence(text);
+}
+
+/**
+ * Extract a US state/region code from candidate address text.
+ * Prefers explicit NH / DC patterns so "Washington, DC, USA" never becomes NH.
+ */
+function extractUsStateCode(text) {
+  const s = String(text || '').trim();
+  if (!s) return null;
+
+  if (
+    /\bDistrict of Columbia\b/i.test(s) ||
+    /\bWashington\s*,?\s*D\.?C\.?\b/i.test(s) ||
+    /,\s*DC\b/i.test(s) ||
+    /\bDC\s+\d{5}/i.test(s) ||
+    /\bD\.C\.\b/i.test(s)
+  ) {
+    return 'DC';
+  }
+
+  if (/\bNew Hampshire\b/i.test(s) || /,\s*NH\b/i.test(s) || /\bNH\s+\d{5}/i.test(s)) {
+    return 'NH';
+  }
+  // Bare "Town NH" / "Town, NH" without ZIP (common Maps short form).
+  if (/\bNH\b/i.test(s)) return 'NH';
+
+  const lower = s.toLowerCase();
+  const names = Object.keys(US_STATE_NAME_TO_CODE).sort(
+    (a, b) => b.length - a.length
+  );
+  for (const name of names) {
+    if (name === 'washington') {
+      if (/\bWashington\s+State\b/i.test(s) || /,\s*WA\b/i.test(s) || /\bWA\s+\d{5}/i.test(s)) {
+        return 'WA';
+      }
+      continue;
+    }
+    if (new RegExp(`\\b${name.replace(/\s+/g, '\\s+')}\\b`, 'i').test(lower)) {
+      return US_STATE_NAME_TO_CODE[name];
+    }
+  }
+
+  const commaCode = s.match(/,\s*([A-Za-z]{2})\b(?:\s+\d{5}(?:-\d{4})?)?/);
+  if (commaCode) {
+    const code = commaCode[1].toUpperCase();
+    if (US_STATE_CODES.has(code)) return code;
+  }
+  const zipCode = s.match(/\b([A-Za-z]{2})\s+\d{5}(?:-\d{4})?\b/);
+  if (zipCode) {
+    const code = zipCode[1].toUpperCase();
+    if (US_STATE_CODES.has(code)) return code;
+  }
+  const trail = s.match(
+    /\b([A-Za-z]{2})\s*,?\s*(?:USA|U\.S\.A\.?|United States(?:\s+of\s+America)?)?\s*$/i
+  );
+  if (trail) {
+    const code = trail[1].toUpperCase();
+    if (US_STATE_CODES.has(code)) return code;
+  }
+  return null;
+}
+
+/**
+ * Hard region gate: non-NH US states/regions (DC, VA, MA, …) are outside market.
+ * Must run before any review_required assignment.
+ */
+function detectOutsideMarketRegion(hit) {
+  const geo = candidateGeoEvidence(hit);
+  const hay = [geo.addressText, geo.combined, geo.country].filter(Boolean).join(' ');
+  if (!String(hay || '').trim()) {
+    return { rejected: false, reason: null, reasonCode: null, state: null };
+  }
+
+  const state = extractUsStateCode(hay);
+  const code = REJECTION_REASON.OUTSIDE_MARKET_REGION;
+
+  if (state === 'NH') {
+    return { rejected: false, reason: null, reasonCode: null, state: 'NH' };
+  }
+
+  if (state && state !== 'NH') {
+    return {
+      rejected: true,
+      reasonCode: code,
+      reason: `Outside New Hampshire market region (${state}) — outside_market_region`,
+      state,
+    };
+  }
+
+  // Explicit DC / VA phrasing without a clean state code parse.
+  if (
+    /\bArlington\b/i.test(hay) &&
+    /\bVA\b|Virginia/i.test(hay) &&
+    !hasNhStateEvidence(hay)
+  ) {
+    return {
+      rejected: true,
+      reasonCode: code,
+      reason: 'Outside New Hampshire market region (VA) — outside_market_region',
+      state: 'VA',
+    };
+  }
+
+  return { rejected: false, reason: null, reasonCode: null, state: null };
 }
 
 /** England as UK — never "New England". */
@@ -604,16 +780,29 @@ function detectUkOrNonUs(hit) {
 function isNhLocation(hit, market) {
   const geo = candidateGeoEvidence(hit);
   const loc = geo.addressText || geo.combined || '';
-  const hasState = hasUsOrNhAddressEvidence(loc) || hasUsOrNhAddressEvidence(geo.country);
+  const stateCode = extractUsStateCode(loc) || extractUsStateCode(geo.country);
+  const hasNh = stateCode === 'NH' || hasNhStateEvidence(loc);
   const town = matchTown(loc);
 
-  if (hasState) {
+  if (hasNh) {
     return {
       inNh: true,
       country: 'US',
       state: 'NH',
       town,
       tier: townTier(town || loc),
+    };
+  }
+
+  // Non-NH US state/region — not New Hampshire (even if USA/United States present).
+  if (stateCode && stateCode !== 'NH') {
+    return {
+      inNh: false,
+      town,
+      tier: 'out_of_market',
+      country: 'US',
+      state: stateCode,
+      outsideMarketRegion: true,
     };
   }
 
@@ -995,6 +1184,18 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
     });
   }
 
+  // Hard state/region gate BEFORE review_required — DC/VA/MA/etc. never usable.
+  const region = detectOutsideMarketRegion(hit);
+  if (region.rejected) {
+    return rejectResult(hit, workRequest, {
+      statusReason: region.reason,
+      rejectionReason:
+        region.reasonCode || REJECTION_REASON.OUTSIDE_MARKET_REGION,
+      exclusionRisk: true,
+      market,
+    });
+  }
+
   const cleaning = detectCleaningCompetitor(hit, workRequest);
   if (cleaning.rejected) {
     return rejectResult(hit, workRequest, {
@@ -1095,9 +1296,19 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
     !geo.missingStateToken &&
     (hit.location || hit.address || hit.formatted_address)
   ) {
+    const regionReject =
+      geo.outsideMarketRegion ||
+      (geo.state && geo.state !== 'NH') ||
+      Boolean(extractUsStateCode(geo.town ? `${geo.town} ${hit.location || hit.address || ''}` : (hit.location || hit.address || '')));
     return rejectResult(hit, workRequest, {
-      statusReason: 'Outside New Hampshire, USA market — outside_market_country',
-      rejectionReason: REJECTION_REASON.OUTSIDE_MARKET_COUNTRY,
+      statusReason: regionReject
+        ? `Outside New Hampshire market region${
+            geo.state && geo.state !== 'NH' ? ` (${geo.state})` : ''
+          } — outside_market_region`
+        : 'Outside New Hampshire, USA market — outside_market_country',
+      rejectionReason: regionReject
+        ? REJECTION_REASON.OUTSIDE_MARKET_REGION
+        : REJECTION_REASON.OUTSIDE_MARKET_COUNTRY,
       exclusionRisk: true,
       market,
       fitRationale: fit.rationale,
@@ -1450,8 +1661,9 @@ function rejectResult(hit, workRequest, extra = {}) {
 }
 
 /**
- * Prefer priority-town accepted rows; use Manchester NH review_required only to fill.
- * Concord/Derry/extended towns stay review_required and never become accepted.
+ * Prefer priority-town accepted rows; use Manchester/Derry NH review_required
+ * only when accepted primary-town count is still below target.
+ * Do NOT defer Manchester because review_required rows filled batch.length.
  */
 function selectBatchWithManchesterFill(evaluatedRows, targetMax = 25, targetMin = 15) {
   const acceptedPriority = [];
@@ -1495,29 +1707,16 @@ function selectBatchWithManchesterFill(evaluatedRows, targetMax = 25, targetMin 
 
   take(acceptedPriority);
   take(reviewPriority);
-  // Extended towns (Concord/Derry/etc.) only if still short and not filling before priority.
-  if (batch.length < targetMin) {
+
+  // Expansion fill is gated on accepted primary count — not total batch.length.
+  // review_required noise must not trigger "priority towns filled the batch".
+  const acceptedPrimaryMeetsTarget = acceptedPriority.length >= targetMin;
+
+  if (!acceptedPrimaryMeetsTarget) {
+    // Accepted primary towns below target → keep Manchester/Derry as expansion.
+    take(reviewManchester);
     take(reviewExtended);
     take(reviewOther);
-  } else {
-    for (const row of reviewExtended.concat(reviewOther)) {
-      rejected.push(
-        ensureRejectionReason({
-          ...row,
-          status: CANDIDATE_STATUS.REJECTED,
-          statusReason:
-            row.statusReason ||
-            `${REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER} — deferred from batch`,
-          rejectionReason: REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER,
-          reasonCode: REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER,
-        })
-      );
-    }
-  }
-
-  // Manchester fill only if batch still short.
-  if (batch.length < targetMin) {
-    take(reviewManchester);
   } else {
     for (const row of reviewManchester) {
       rejected.push(
@@ -1526,6 +1725,19 @@ function selectBatchWithManchesterFill(evaluatedRows, targetMax = 25, targetMin 
           status: CANDIDATE_STATUS.REJECTED,
           statusReason:
             'Manchester NH deferred — outside_primary_town_cluster (priority towns filled the batch)',
+          rejectionReason: REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER,
+          reasonCode: REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER,
+        })
+      );
+    }
+    for (const row of reviewExtended.concat(reviewOther)) {
+      rejected.push(
+        ensureRejectionReason({
+          ...row,
+          status: CANDIDATE_STATUS.REJECTED,
+          statusReason:
+            row.statusReason ||
+            `${REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER} — deferred from batch (accepted primary towns met target)`,
           rejectionReason: REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER,
           reasonCode: REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER,
         })
@@ -1697,6 +1909,191 @@ function gateScoutCandidateRows(rows, workRequest, opts = {}) {
   };
 }
 
+function candidateIdentityKey(row) {
+  const name = String(
+    (row && (row.companyName || row.company || row.name)) || ''
+  )
+    .trim()
+    .toLowerCase();
+  const url = String(
+    (row && (row.sourceUrl || row.website || row.url)) || ''
+  )
+    .trim()
+    .toLowerCase();
+  return `${name}||${url}`;
+}
+
+/**
+ * True when a candidate row is evidenced as New Hampshire (not DC/VA/etc.).
+ */
+function isNhMarketCandidateRow(row) {
+  if (!row) return false;
+  if (row.geo && row.geo.inNh === true && row.geo.state === 'NH') return true;
+  if (row.geo && row.geo.outsideMarketRegion) return false;
+  if (row.geo && row.geo.state && row.geo.state !== 'NH') return false;
+  const hay = [
+    row.location,
+    row.address,
+    row.formatted_address,
+    row.marketTown,
+    row.geo && row.geo.town,
+    row.geo && row.geo.state,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const state = extractUsStateCode(hay);
+  if (state && state !== 'NH') return false;
+  return hasNhStateEvidence(hay) || state === 'NH';
+}
+
+/**
+ * Preserve valid NH primary-town (and usable NH expansion) candidates from a
+ * prior completed Scout batch when a later result would otherwise drop them.
+ * Out-of-state rows are never preserved into usable lists.
+ * NH rows deferred only because "priority towns filled the batch" are restored
+ * when the prior batch still had them as accepted / review_required.
+ */
+function mergePreservedNhCandidatesFromPriorBatch(latestBatch, priorBatch) {
+  const latest =
+    latestBatch && typeof latestBatch === 'object' ? { ...latestBatch } : {};
+  const prior = priorBatch && typeof priorBatch === 'object' ? priorBatch : null;
+  if (!prior) {
+    // Still strip out-of-state from a lone latest batch.
+    return stripNonNhFromBatch(latest);
+  }
+
+  const latestCandidates = Array.isArray(latest.candidates)
+    ? latest.candidates.map((r) => ({ ...r }))
+    : [];
+  const latestRejected = Array.isArray(latest.rejected)
+    ? latest.rejected.map((r) => ({ ...r }))
+    : [];
+
+  const candidateKeys = new Set(
+    latestCandidates.map(candidateIdentityKey).filter((k) => k && k !== '||')
+  );
+
+  const priorRows = []
+    .concat(Array.isArray(prior.candidates) ? prior.candidates : [])
+    .concat(
+      prior.groups && Array.isArray(prior.groups.accepted)
+        ? prior.groups.accepted
+        : []
+    )
+    .concat(
+      prior.groups && Array.isArray(prior.groups.review_required)
+        ? prior.groups.review_required
+        : []
+    );
+
+  const restoredKeys = new Set();
+  for (const row of priorRows) {
+    if (!row || !isNhMarketCandidateRow(row)) continue;
+    if (
+      row.status !== CANDIDATE_STATUS.ACCEPTED &&
+      row.status !== CANDIDATE_STATUS.REVIEW_REQUIRED
+    ) {
+      continue;
+    }
+    const key = candidateIdentityKey(row);
+    if (!key || key === '||' || candidateKeys.has(key)) continue;
+    candidateKeys.add(key);
+    restoredKeys.add(key);
+    latestCandidates.push({
+      ...row,
+      status:
+        row.status === CANDIDATE_STATUS.ACCEPTED
+          ? CANDIDATE_STATUS.ACCEPTED
+          : CANDIDATE_STATUS.REVIEW_REQUIRED,
+      rejectionReason: null,
+    });
+  }
+
+  const usable = [];
+  const forcedRejected = [];
+  for (const row of latestCandidates) {
+    if (!isNhMarketCandidateRow(row)) {
+      forcedRejected.push(
+        ensureRejectionReason({
+          ...row,
+          status: CANDIDATE_STATUS.REJECTED,
+          statusReason:
+            row.statusReason ||
+            'Outside New Hampshire market region — outside_market_region',
+          rejectionReason:
+            row.rejectionReason || REJECTION_REASON.OUTSIDE_MARKET_REGION,
+          reasonCode: REJECTION_REASON.OUTSIDE_MARKET_REGION,
+        })
+      );
+      continue;
+    }
+    usable.push(row);
+  }
+
+  const allRejected = latestRejected
+    .filter((r) => {
+      const key = candidateIdentityKey(r);
+      // Drop rejection audit rows that we restored into usable candidates.
+      if (restoredKeys.has(key)) return false;
+      return true;
+    })
+    .concat(forcedRejected)
+    .map(ensureRejectionReason);
+  const groups = groupCandidatesByStatus(usable, allRejected.slice());
+  return {
+    ...latest,
+    candidates: usable,
+    rejected: groups.rejected,
+    groups,
+    acceptedCount: groups.accepted.length,
+    reviewRequiredCount: groups.review_required.length,
+    rejectedCount: groups.rejected.length,
+  };
+}
+
+function stripNonNhFromBatch(batch) {
+  if (!batch || typeof batch !== 'object') return batch;
+  const candidates = Array.isArray(batch.candidates)
+    ? batch.candidates.map((r) => ({ ...r }))
+    : [];
+  const rejected = Array.isArray(batch.rejected)
+    ? batch.rejected.map((r) => ({ ...r }))
+    : [];
+  const usable = [];
+  const forcedRejected = [];
+  for (const row of candidates) {
+    if (!isNhMarketCandidateRow(row)) {
+      forcedRejected.push(
+        ensureRejectionReason({
+          ...row,
+          status: CANDIDATE_STATUS.REJECTED,
+          statusReason:
+            row.statusReason ||
+            'Outside New Hampshire market region — outside_market_region',
+          rejectionReason:
+            row.rejectionReason || REJECTION_REASON.OUTSIDE_MARKET_REGION,
+          reasonCode: REJECTION_REASON.OUTSIDE_MARKET_REGION,
+        })
+      );
+      continue;
+    }
+    usable.push(row);
+  }
+  const groups = groupCandidatesByStatus(
+    usable,
+    rejected.concat(forcedRejected).slice()
+  );
+  return {
+    ...batch,
+    candidates: usable,
+    rejected: groups.rejected,
+    groups,
+    acceptedCount: groups.accepted.length,
+    reviewRequiredCount: groups.review_required.length,
+    rejectedCount: groups.rejected.length,
+  };
+}
+
 module.exports = {
   PRIORITY_TOWNS_NH,
   NEARBY_FILL_TOWNS_NH,
@@ -1711,6 +2108,7 @@ module.exports = {
   buildNhScopedSearchQueries,
   candidateGeoEvidence,
   detectUkOrNonUs,
+  detectOutsideMarketRegion,
   detectCleaningCompetitor,
   detectInstitutional,
   hasPropertyManagementFit,
@@ -1726,6 +2124,12 @@ module.exports = {
   countUsablePropertyManagerCandidates,
   batchMeetsQualityThreshold,
   isNhLocation,
+  hasNhStateEvidence,
+  hasUsCountryEvidence,
+  hasUsOrNhAddressEvidence,
+  extractUsStateCode,
+  isNhMarketCandidateRow,
+  mergePreservedNhCandidatesFromPriorBatch,
   extendedTownsExplicitlyAllowed,
   hasNonMapsCompanyWebsite,
   isMapsOnlyPublicSource,
