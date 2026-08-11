@@ -317,6 +317,22 @@ const OPERATOR_BANNED_FRAGMENT_RES = Object.freeze([
   /This is operator-stated differentiation/i,
   /(?<!\.)\.\.(?!\.)/,
 ]);
+/**
+ * Stored Outreach Copy Plan artifacts with these fragments must be regenerated
+ * before display. Operator-facing sections only — never reuse stale drafts.
+ */
+const STALE_OUTREACH_COPY_PLAN_FRAGMENT_RES = Object.freeze([
+  /prefer\s+Bedford,\s*Hooksett,\s*Londonderry,\s*Auburn/i,
+  /Carry forward proof already noted/i,
+  /Hold final email\/SMS\/call scripts/i,
+  /Competitive edge is described as/i,
+  /This is operator-stated differentiation/i,
+  /approved Batch 1 record/i,
+  /Differentiator to lean on/i,
+  /…/,
+  /,\s*\.\.\./,
+  /(?<!\.)\.\.(?!\.)/,
+]);
 const DEFAULT_ANCHOR_VOICE =
   'Calm, professional, reliable, direct, and easy to work with — never pushy or hype-driven.';
 const DEFAULT_ANCHOR_DIFFERENTIATORS = Object.freeze([
@@ -4310,6 +4326,20 @@ function looksLikeOutreachCopyPlanMetaLine(text) {
 }
 
 /**
+ * Operator-facing first-touch goal for Outreach Copy Plan section 2.
+ * No internal Batch-1-record / hold-scripts / meta strategy language.
+ */
+function buildOutreachCopyFirstTouchGoal(audiencePhrase) {
+  let audience = String(audiencePhrase || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (/property managers?/i.test(audience) || !audience) {
+    audience = 'property managers';
+  }
+  return `Open a low-pressure conversation with approved Batch 1 ${audience} about recurring cleaning support, with the goal of earning a short conversation, walkthrough, or estimate request.`;
+}
+
+/**
  * Operator-facing personalization inputs for Outreach Copy Plan section 4.
  * Full town list — no ellipses, no internal process language.
  */
@@ -4746,6 +4776,7 @@ function approveOutreachStrategyPreview(preview, opts = {}) {
  * Build Outreach Copy Plan from approved Blueprint, campaign objective,
  * Batch 1 cold prospects, approved Outreach Strategy Preview, and brand voice.
  * Planning only — never final outreach copy, sends, CRM writes, or exports.
+ * Stale stored artifacts with banned fragments are regenerated instead of reused.
  */
 function buildOutreachCopyPlan(approvedStrategy, approvedReview, context, opts = {}) {
   const prior =
@@ -4753,7 +4784,13 @@ function buildOutreachCopyPlan(approvedStrategy, approvedReview, context, opts =
     hasOutreachCopyPlan(opts.priorOutreachCopyPlan)
       ? opts.priorOutreachCopyPlan
       : null;
-  if (prior && opts.reuseExisting !== false && !opts.forceRebuild) {
+  const priorIsStale = prior ? outreachCopyPlanLooksStale(prior) : false;
+  if (
+    prior &&
+    opts.reuseExisting !== false &&
+    !opts.forceRebuild &&
+    !priorIsStale
+  ) {
     return {
       ...prior,
       kind: OUTREACH_COPY_PLAN_KIND,
@@ -4770,6 +4807,8 @@ function buildOutreachCopyPlan(approvedStrategy, approvedReview, context, opts =
       disclaimer: OUTREACH_COPY_PLAN_DISCLAIMER,
     };
   }
+
+  // Stale or forceRebuild: fall through and regenerate operator-facing sections.
 
   const ctx = context || {};
   const strategy = approvedStrategy || {};
@@ -4870,10 +4909,7 @@ function buildOutreachCopyPlan(approvedStrategy, approvedReview, context, opts =
     'Hold phone / SMS until after copy approval and an explicit launch gate.',
   ]);
 
-  const firstTouchGoal = [
-    `Open a low-pressure discovery conversation that tests whether ${audiencePhrase} in ${marketPhrase} will engage with ${name}'s ${anglePhrase}.`,
-    `Stay inside Batch 1 (${approvedBatchPhrase}) and the approved campaign objective — do not expand the list here.`,
-  ].join(' ');
+  const firstTouchGoal = buildOutreachCopyFirstTouchGoal(audiencePhrase);
 
   const ctaToTest =
     ctaPhrase ||
@@ -4901,7 +4937,7 @@ function buildOutreachCopyPlan(approvedStrategy, approvedReview, context, opts =
     'No sends, CRM writes, exports, or account/DNS/GBP/social/tracking changes.',
   ]);
 
-  return {
+  const built = {
     kind: OUTREACH_COPY_PLAN_KIND,
     title: OUTREACH_COPY_PLAN_TITLE,
     status: 'draft',
@@ -4962,6 +4998,16 @@ function buildOutreachCopyPlan(approvedStrategy, approvedReview, context, opts =
       null,
     generatedAt: new Date().toISOString(),
   };
+
+  if (priorIsStale || opts.forceRebuild) {
+    built.repairedFromStale = Boolean(priorIsStale);
+    if (priorIsStale) {
+      built.repairedAt = built.generatedAt;
+      built.priorGeneratedAt = prior.generatedAt || null;
+    }
+  }
+
+  return built;
 }
 
 function formatOutreachCopyPlanMessage(plan) {
@@ -5117,6 +5163,7 @@ function produceOutreachCopyPlanResult(ctx, answers, slots, opts, leadIn) {
 
   const existing = opts.priorOutreachCopyPlan || null;
   const alreadyHave = hasOutreachCopyPlan(existing);
+  const planWasStale = alreadyHave && outreachCopyPlanLooksStale(existing);
   const outreachCopyPlan = buildOutreachCopyPlan(strategy, review, ctx, {
     workRequestId: (review && review.workRequestId) || strategy.workRequestId,
     priorOutreachCopyPlan: existing,
@@ -5125,12 +5172,15 @@ function produceOutreachCopyPlanResult(ctx, answers, slots, opts, leadIn) {
     answers,
     blueprintId: opts.blueprintId,
     blueprintVersion: opts.blueprintVersion,
-    reuseExisting: alreadyHave,
+    reuseExisting: alreadyHave && !planWasStale,
+    forceRebuild: planWasStale,
   });
 
-  const intro = alreadyHave
-    ? 'Outreach Copy Plan is already available — showing it for approval or revision. Not re-rendering the Outreach Strategy Preview.'
-    : 'Creating the Outreach Copy Plan from the approved Blueprint, campaign objective, Batch 1 cold prospects, Outreach Strategy Preview, and brand voice/differentiators.';
+  const intro = planWasStale
+    ? 'Updated the Outreach Copy Plan — repaired stale phrasing from an earlier draft. Showing it for approval or revision. Not re-rendering the Outreach Strategy Preview.'
+    : alreadyHave
+      ? 'Outreach Copy Plan is already available — showing it for approval or revision. Not re-rendering the Outreach Strategy Preview.'
+      : 'Creating the Outreach Copy Plan from the approved Blueprint, campaign objective, Batch 1 cold prospects, Outreach Strategy Preview, and brand voice/differentiators.';
 
   const message = [
     leadIn || null,
@@ -5172,11 +5222,13 @@ function produceOutreachCopyPlanResult(ctx, answers, slots, opts, leadIn) {
     outreachStrategyPreview: strategy,
     outreachCopyPlan,
     liveProspectList: null,
-    intent: alreadyHave
-      ? 'show_outreach_copy_plan'
-      : leadIn && /approved/i.test(String(leadIn))
-        ? 'outreach_strategy_preview_approved'
-        : 'produce_outreach_copy_plan',
+    intent: planWasStale
+      ? 'repair_outreach_copy_plan'
+      : alreadyHave
+        ? 'show_outreach_copy_plan'
+        : leadIn && /approved/i.test(String(leadIn))
+          ? 'outreach_strategy_preview_approved'
+          : 'produce_outreach_copy_plan',
     previewApproved: true,
     criteriaApproved: true,
     buildProposalApproved: true,
@@ -5195,6 +5247,9 @@ function produceOutreachCopyPlanResult(ctx, answers, slots, opts, leadIn) {
     crmWritesMade: false,
     exportMade: false,
     accountChangesMade: false,
+    repairedFromStale: Boolean(
+      planWasStale || outreachCopyPlan.repairedFromStale
+    ),
   };
 }
 
@@ -5259,6 +5314,34 @@ function operatorArtifactTextBlob(artifact, formatter) {
   return parts.filter(Boolean).join('\n');
 }
 
+/**
+ * Flatten Outreach Copy Plan operator-facing text for stale-fragment scanning.
+ * Excludes internal metadata (e.g. approvedBatchPhrase) that is not rendered.
+ */
+function outreachCopyPlanTextBlob(plan) {
+  if (!plan || typeof plan !== 'object') return '';
+  const parts = [
+    plan.firstTouchGoal,
+    plan.ctaToTest,
+    plan.campaignObjective,
+    plan.summary,
+    plan.recommendedNextStep,
+    ...(Array.isArray(plan.channelSequence) ? plan.channelSequence : []),
+    ...(Array.isArray(plan.personalizationInputs)
+      ? plan.personalizationInputs
+      : []),
+    ...(Array.isArray(plan.proofPoints) ? plan.proofPoints : []),
+    ...(Array.isArray(plan.followUpTiming) ? plan.followUpTiming : []),
+    ...(Array.isArray(plan.approvalGate) ? plan.approvalGate : []),
+  ];
+  try {
+    parts.push(formatOutreachCopyPlanMessage(plan));
+  } catch (_err) {
+    // ignore format errors on partial stubs
+  }
+  return parts.filter(Boolean).join('\n');
+}
+
 function findOperatorBannedFragments(blob) {
   const text = String(blob || '');
   if (!text) return [];
@@ -5272,13 +5355,29 @@ function findOperatorBannedFragments(blob) {
   return hits;
 }
 
+/**
+ * Detect stored Outreach Copy Plan artifacts that still contain banned
+ * operator-facing fragments from earlier unpolished drafts.
+ */
+function findStaleOutreachCopyPlanFragments(plan) {
+  const blob = outreachCopyPlanTextBlob(plan);
+  if (!blob) return [];
+  const hits = [];
+  for (const re of STALE_OUTREACH_COPY_PLAN_FRAGMENT_RES) {
+    if (re.test(blob)) hits.push(re.source);
+  }
+  for (const hit of findOperatorBannedFragments(blob)) {
+    if (!hits.includes(hit)) hits.push(hit);
+  }
+  for (const re of OUTREACH_COPY_PLAN_META_RES) {
+    if (re.test(blob) && !hits.includes(re.source)) hits.push(re.source);
+  }
+  return hits;
+}
+
 function outreachCopyPlanLooksStale(plan) {
   if (!hasOutreachCopyPlan(plan)) return false;
-  return (
-    findOperatorBannedFragments(
-      operatorArtifactTextBlob(plan, formatOutreachCopyPlanMessage)
-    ).length > 0
-  );
+  return findStaleOutreachCopyPlanFragments(plan).length > 0;
 }
 
 function repairOutreachCopyPlan(prior, approvedStrategy, approvedReview, context, opts = {}) {
@@ -5291,10 +5390,29 @@ function repairOutreachCopyPlan(prior, approvedStrategy, approvedReview, context
   });
   return {
     ...repaired,
-    status: prior.status === 'approved' ? 'approved' : 'draft',
+    status: 'draft',
     repairedFromStale: true,
-    repairedAt: new Date().toISOString(),
-    priorGeneratedAt: prior.generatedAt || null,
+    repairedAt: repaired.repairedAt || new Date().toISOString(),
+    priorGeneratedAt: prior.generatedAt || repaired.priorGeneratedAt || null,
+    workRequestId:
+      repaired.workRequestId ||
+      prior.workRequestId ||
+      (approvedReview && approvedReview.workRequestId) ||
+      null,
+    blueprintId: repaired.blueprintId || prior.blueprintId || opts.blueprintId || null,
+    blueprintVersion:
+      repaired.blueprintVersion ||
+      prior.blueprintVersion ||
+      opts.blueprintVersion ||
+      null,
+    planningOnly: true,
+    reviewFirst: true,
+    finalOutreachCopyGenerated: false,
+    outreachCopyGenerated: false,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
   };
 }
 
@@ -10620,8 +10738,10 @@ module.exports = {
   findStaleOutreachStrategyFragments,
   repairOutreachStrategyPreview,
   outreachCopyPlanLooksStale,
+  findStaleOutreachCopyPlanFragments,
   repairOutreachCopyPlan,
   STALE_OUTREACH_STRATEGY_FRAGMENT_RES,
+  STALE_OUTREACH_COPY_PLAN_FRAGMENT_RES,
   OPERATOR_BANNED_FRAGMENT_RES,
   buildProspectBatchReviewClosingQuestion,
   parseRelationshipOverridesFromMessage,
