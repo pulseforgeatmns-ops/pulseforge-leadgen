@@ -83,15 +83,18 @@ describe('CampaignSynthesisContext unit', () => {
     );
   });
 
-  it('resolveSubjectLines returns only the tested winner when present', () => {
+  it('resolveSubjectLines keeps merge-token subject pattern literal', () => {
     const ctx = buildCampaignSynthesisContext({
       context: { businessName: 'Anchor Cleaning' },
     });
     const resolved = resolveSubjectLines(ctx);
     assert.equal(resolved.usedTestedWinner, true);
+    assert.equal(resolved.keptMergeTokens, true);
+    assert.equal(resolved.claimTestedWinner, false);
     assert.deepEqual(resolved.subjectOptions, [
-      'Anchor - commercial cleaning',
+      '{{business_name}} - commercial cleaning',
     ]);
+    assert.equal(resolved.sectionTitle, 'Subject line');
   });
 
   it('resolveSenderVoiceLine defaults to company voice + {{town}}', () => {

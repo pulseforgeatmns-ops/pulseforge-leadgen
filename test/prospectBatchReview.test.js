@@ -83,7 +83,13 @@ const {
   DEFAULT_OPERATOR_LEARNINGS,
   OPERATOR_BANNED_FRAGMENT_RES,
   STALE_OUTREACH_COPY_PLAN_FRAGMENT_RES,
+  produceOutreachDraftPreviewRevisionResult,
+  RESPONSE_MODES,
 } = require('../services/clientIntelligenceCampaignPlanning');
+const {
+  mergeOperatorLearnings,
+  draftOutputFingerprint,
+} = require('../services/maxSynthesis');
 const {
   splitDigestAndEvidence,
   EVIDENCE_COLLAPSED_NOTE,
@@ -3401,19 +3407,19 @@ describe('Campaign Memory — CampaignSynthesisContext', () => {
     return { review, ctx, strategy, plan };
   }
 
-  it('tested subject line overrides generic options', () => {
+  it('tested subject pattern keeps {{business_name}} merge token', () => {
     const { review, ctx, strategy, plan } = memoryFixtures();
     const draft = buildOutreachDraftPreview(plan, strategy, review, ctx, {});
     assert.equal(draft.usedTestedSubjectLine, true);
-    assert.deepEqual(draft.subjectOptions, ['Anchor - commercial cleaning']);
+    assert.equal(draft.keptMergeTokens, true);
+    assert.deepEqual(draft.subjectOptions, [
+      '{{business_name}} - commercial cleaning',
+    ]);
     assert.equal(
       draft.testedSubjectLinePattern,
       DEFAULT_OPERATOR_LEARNINGS.tested_subject_line_pattern
     );
-    assert.match(
-      draft.testedSubjectLinePerformance,
-      /56\.6% open rate vs 23\.9%/
-    );
+    assert.equal(draft.claimTestedWinner, false);
     assert.doesNotMatch(
       (draft.subjectOptions || []).join('\n'),
       /Quick question about cleaning reliability/i
@@ -3423,8 +3429,9 @@ describe('Campaign Memory — CampaignSynthesisContext', () => {
       /Worth a brief chat about recurring cleaning coverage/i
     );
     const msg = formatOutreachDraftPreviewMessage(draft);
-    assert.match(msg, /Subject line \(tested winner\)/);
-    assert.match(msg, /Anchor - commercial cleaning/);
+    assert.doesNotMatch(msg, /Subject line \(tested winner\)/);
+    assert.match(msg, /\{\{business_name\}\} - commercial cleaning/);
+    assert.doesNotMatch(msg, /Anchor - commercial cleaning/);
   });
 
   it('Keyrenter remains existing_relationship_nurture across later steps', () => {
@@ -3673,7 +3680,7 @@ describe('Campaign Memory — CampaignSynthesisContext', () => {
     );
     assert.equal(
       second.outreachDraftPreview.subjectOptions[0],
-      'Anchor - commercial cleaning'
+      '{{business_name}} - commercial cleaning'
     );
   });
 
@@ -3739,7 +3746,7 @@ describe('Campaign Memory — CampaignSynthesisContext', () => {
     assert.equal(repaired.repairedFromStale, true);
     assert.equal(repaired.usedTestedSubjectLine, true);
     assert.deepEqual(repaired.subjectOptions, [
-      'Anchor - commercial cleaning',
+      '{{business_name}} - commercial cleaning',
     ]);
     assert.match(repaired.firstTouchBody, /\{\{town\}\}/);
     assert.match(repaired.firstTouchBody, /Anchor helps/);
@@ -3786,12 +3793,281 @@ describe('Campaign Memory — CampaignSynthesisContext', () => {
     );
     assert.equal(reply.outreachDraftPreview.repairedFromStale, true);
     assert.match(reply.message, /repaired stale/i);
-    assert.match(reply.message, /Anchor - commercial cleaning/);
+    assert.match(reply.message, /\{\{business_name\}\} - commercial cleaning/);
+    assert.doesNotMatch(reply.message, /Anchor - commercial cleaning/);
     assert.match(reply.message, /\{\{town\}\}/);
     assert.doesNotMatch(reply.message, /\bI work with\b/);
     assert.equal(reply.sendsMade, false);
     assert.equal(reply.crmWritesMade, false);
     assert.equal(reply.exportMade, false);
     assert.equal(reply.accountChangesMade, false);
+  });
+});
+
+describe('Max Chat Responsiveness — Anchor Outreach Draft Preview', () => {
+  function anchorFixtures() {
+    const batch = withGroups(sampleKeyrenterCorrectionBatch());
+    const review = approveProspectBatchReviewBatch1(
+      buildProspectBatchReview(batch, {
+        userMessage:
+          'Remove Keyrenter New England Property Management from the accepted cold first-pass candidates — it is an existing relationship, not a cold prospect. Keep it as nurture.',
+        workRequestId: batch.workRequestId,
+      })
+    );
+    const ctx = {
+      businessName: 'Anchor Cleaning',
+      brandVoice:
+        'calm, professional, reliable, direct, and easy to work with',
+      competitiveAdvantages:
+        'Reliability and accountability. Responsive communication. Peace of mind for recurring commercial cleaning relationships.',
+      primarySegment: 'property managers',
+      targetMarket: 'Greater Manchester',
+      towns: [
+        'Bedford',
+        'Hooksett',
+        'Londonderry',
+        'Auburn',
+        'Goffstown',
+      ],
+    };
+    const strategy = approveOutreachStrategyPreview(
+      buildOutreachStrategyPreview(review, ctx, {
+        priorCriteriaPreview: {
+          kind: 'prospect_list_criteria_preview',
+          status: 'approved',
+          campaignObjective:
+            'Prove that Greater Manchester property managers will take a discovery conversation about recurring commercial cleaning.',
+        },
+      })
+    );
+    const plan = approveOutreachCopyPlan(
+      buildOutreachCopyPlan(strategy, review, ctx, {})
+    );
+    let memory = applyBatchReviewLearnings(ensureCampaignMemory({}), review);
+    memory = mergeOperatorLearnings(
+      memory,
+      {
+        tested_subject_line_pattern: '{{business_name}} - commercial cleaning',
+        subject_keep_merge_tokens: true,
+        claim_tested_winner: false,
+        personalization_rule: 'do not use street addresses by default',
+        copy_differentiator:
+          'reliability, responsiveness, accountability, fewer vendor-chasing headaches',
+      },
+      'campaign_setup'
+    );
+    return { review, ctx, strategy, plan, memory };
+  }
+
+  it('operator revision overrides stale draft and responds conversationally', () => {
+    const { review, ctx, strategy, plan, memory } = anchorFixtures();
+
+    // Stale stored draft — expanded subject, street addresses, sketches only.
+    const staleDraft = {
+      kind: 'outreach_draft_preview',
+      title: OUTREACH_DRAFT_PREVIEW_TITLE,
+      status: 'draft',
+      businessName: 'Anchor',
+      subjectOptions: ['Anchor - commercial cleaning'],
+      firstTouchBody: [
+        'Hi {{first_name}},',
+        '',
+        'I work with property managers across Bedford who want cleaning.',
+        '',
+        'Would you be open to a chat?',
+      ].join('\n'),
+      personalizationByProspect: [
+        {
+          companyName: 'Acme Property Group',
+          town: 'Bedford',
+          personalizationNote: 'Reference 12 North Street in Bedford.',
+        },
+      ],
+      batchProspects: ['Acme Property Group'],
+      followUpSketch: [
+        'Follow-up 1 (~3 business days): restate the same CTA with one fresh personalization detail.',
+        'Follow-up 2 (~7 business days): offer a clear close-the-loop option (reply / book / not now).',
+      ],
+      approvalGate: ['No sends'],
+      operatorDigest: {
+        kind: 'outreach_draft_preview_digest',
+        title: OUTREACH_DRAFT_PREVIEW_TITLE,
+        recommendedDecision: 'Approve',
+        primaryActions: [{ id: 'approve', label: 'Approve' }],
+      },
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    const reply = buildCampaignPlanningReply(
+      'Revise the Outreach Draft Preview. Use `{{business_name}} - commercial cleaning`; no street addresses; draft actual follow-ups; answer like an LLM/operator, not a workflow renderer.',
+      {
+        step: 'outreach_draft_preview',
+        slots: {
+          previewApproved: true,
+          criteriaApproved: true,
+          buildProposalApproved: true,
+          prospectBatchReviewApproved: true,
+          batch1Approved: true,
+          outreachStrategyPreviewApproved: true,
+          strategyApproved: true,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewGenerated: true,
+        },
+        prospectBatchReview: review,
+        outreachStrategyPreview: strategy,
+        outreachCopyPlan: plan,
+        outreachDraftPreview: staleDraft,
+        campaignMemory: memory,
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: plan,
+        priorOutreachDraftPreview: staleDraft,
+        campaignMemory: memory,
+        messageClass: 'refinement_feedback',
+      }
+    );
+
+    assert.equal(reply.intent, 'revise_outreach_draft_preview');
+    assert.equal(reply.responseMode, 'operator_chat_response');
+    assert.ok(reply.outreachDraftPreview);
+    assert.deepEqual(reply.outreachDraftPreview.subjectOptions, [
+      '{{business_name}} - commercial cleaning',
+    ]);
+    assert.match(reply.message, /\{\{business_name\}\} - commercial cleaning/);
+    assert.doesNotMatch(reply.message, /Anchor - commercial cleaning/);
+    assert.match(reply.message, /## First-touch email|# First-touch/i);
+    assert.match(reply.message, /## Follow-up 1|Follow-up 1/i);
+    assert.match(reply.message, /## Follow-up 2|Follow-up 2/i);
+    assert.ok(
+      Array.isArray(reply.outreachDraftPreview.followUpDrafts) &&
+        reply.outreachDraftPreview.followUpDrafts.length >= 2
+    );
+    assert.match(
+      reply.outreachDraftPreview.followUpDrafts[0].body,
+      /Hi \{\{first_name\}\}/
+    );
+    assert.match(
+      reply.outreachDraftPreview.followUpDrafts[1].body,
+      /Hi \{\{first_name\}\}/
+    );
+    assert.match(reply.outreachDraftPreview.firstTouchBody, /\{\{town\}\}/);
+    assert.match(reply.outreachDraftPreview.firstTouchBody, /Anchor helps/);
+    assert.match(
+      reply.outreachDraftPreview.firstTouchBody,
+      /reliab|respons|accountab|vendor/i
+    );
+    for (const row of reply.outreachDraftPreview.personalizationByProspect || []) {
+      assert.doesNotMatch(row.personalizationNote, /\d{1,6}\s+\w+\s+Street/i);
+    }
+    assert.doesNotMatch(reply.message, /View evidence/i);
+    assert.doesNotMatch(reply.message, /Primary actions/i);
+    assert.doesNotMatch(reply.message, /Recommended decision/i);
+    assert.doesNotMatch(reply.message, /tested winner/i);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.accountChangesMade, false);
+    assert.ok(reply.campaignMemory);
+    assert.equal(
+      reply.campaignMemory.operatorLearnings.tested_subject_line_pattern,
+      '{{business_name}} - commercial cleaning'
+    );
+    assert.equal(
+      reply.campaignMemory.operatorLearnings.draft_follow_ups,
+      true
+    );
+    assert.ok(reply.campaignWorkingState);
+    assert.match(
+      reply.campaignWorkingState.latestOperatorInstruction || '',
+      /Revise the Outreach Draft Preview/
+    );
+  });
+
+  it('repeated identical rejected output triggers stale source diagnostic', () => {
+    const { review, ctx, strategy, plan, memory } = anchorFixtures();
+    const staleDraft = {
+      kind: 'outreach_draft_preview',
+      title: OUTREACH_DRAFT_PREVIEW_TITLE,
+      status: 'draft',
+      subjectOptions: ['Anchor - commercial cleaning'],
+      firstTouchBody: 'stale',
+      personalizationByProspect: [],
+      followUpSketch: ['sketch only'],
+      approvalGate: ['No sends'],
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    const correction =
+      'Revise the Outreach Draft Preview. Use `{{business_name}} - commercial cleaning`; no street addresses; draft actual follow-ups; answer like an LLM/operator, not a workflow renderer.';
+
+    const first = buildCampaignPlanningReply(
+      correction,
+      {
+        step: 'outreach_draft_preview',
+        slots: {
+          batch1Approved: true,
+          outreachStrategyPreviewApproved: true,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewGenerated: true,
+        },
+        prospectBatchReview: review,
+        outreachStrategyPreview: strategy,
+        outreachCopyPlan: plan,
+        outreachDraftPreview: staleDraft,
+        campaignMemory: memory,
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: plan,
+        priorOutreachDraftPreview: staleDraft,
+        campaignMemory: memory,
+        messageClass: 'correction',
+      }
+    );
+
+    // Simulate a broken path that re-emits the same rejected fingerprint.
+    const rejectedFp = draftOutputFingerprint(staleDraft);
+    const working = {
+      ...(first.campaignWorkingState || {}),
+      rejectedOutputFingerprints: [rejectedFp],
+      latestOperatorInstruction: correction,
+      activeArtifactKind: 'outreach_draft_preview',
+    };
+
+    const second = produceOutreachDraftPreviewRevisionResult(
+      ctx,
+      {},
+      {
+        batch1Approved: true,
+        outreachCopyPlanApproved: true,
+        copyPlanApproved: true,
+      },
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: plan,
+        priorOutreachDraftPreview: staleDraft,
+        campaignMemory: first.campaignMemory || memory,
+        campaignWorkingState: working,
+      },
+      correction
+    );
+
+    assert.equal(second.intent, 'stale_source_diagnostic');
+    assert.equal(second.responseMode, 'stale_source_diagnostic');
+    assert.match(second.message, /Stale source diagnostic/i);
+    assert.match(second.message, /Campaign memory retrieved/i);
+    assert.match(second.message, /Latest operator instruction included/i);
+    assert.match(second.message, /Response mode selected/i);
+    assert.match(second.message, /Source that won/i);
+    assert.doesNotMatch(second.message, /## First-touch email/);
+    assert.equal(second.sendsMade, false);
   });
 });
