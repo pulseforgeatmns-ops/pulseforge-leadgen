@@ -7492,6 +7492,22 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
         ? { outreachStrategyPreview: nextOutreachStrategyPreview }
         : {}),
       ...(nextOutreachCopyPlan ? { outreachCopyPlan: nextOutreachCopyPlan } : {}),
+      ...(reply.outreachDraftPreview
+        ? { outreachDraftPreview: reply.outreachDraftPreview }
+        : {}),
+      ...(reply.outreachLaunchGate
+        ? { outreachLaunchGate: reply.outreachLaunchGate }
+        : {}),
+      ...(reply.campaignMemory ||
+      (reply.outreachDraftPreview && reply.outreachDraftPreview.campaignMemory)
+        ? {
+            campaignMemory:
+              reply.campaignMemory ||
+              reply.outreachDraftPreview.campaignMemory,
+          }
+        : session.interview_state && session.interview_state.campaignMemory
+          ? { campaignMemory: session.interview_state.campaignMemory }
+          : {}),
       reasoningMemory: (() => {
         let mem = reasoningMemory;
         if (nextPreview) {

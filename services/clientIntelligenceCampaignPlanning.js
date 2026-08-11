@@ -78,6 +78,13 @@ const {
 } = require('./operatorReviewDigest');
 const {
   buildArtifactSynthesisContext,
+  buildCampaignSynthesisContext,
+  ensureCampaignMemory,
+  applyBatchReviewLearnings,
+  mergeOperatorLearnings,
+  findCampaignMemoryDraftConflicts,
+  outreachDraftPreviewConflictsWithCampaignMemory,
+  rejectsStreetAddressPersonalization,
   shortBusinessName,
   containsRawPromptFragment,
   findRawPromptFragments,
@@ -85,6 +92,7 @@ const {
   normalizeObjectivePhrase,
   naturalList: synthesisNaturalList,
   DEFAULT_TOWNS: SYNTHESIS_DEFAULT_TOWNS,
+  DEFAULT_OPERATOR_LEARNINGS,
 } = require('./maxSynthesis');
 const {
   SCOUT_HANDOFF_KIND,
@@ -331,6 +339,20 @@ const STALE_OUTREACH_COPY_PLAN_FRAGMENT_RES = Object.freeze([
   /Differentiator to lean on/i,
   /…/,
   /,\s*\.\.\./,
+  /(?<!\.)\.\.(?!\.)/,
+]);
+/**
+ * Stored Outreach Draft Preview fragments that are always stale (town list /
+ * concrete street personalization / raw prompt stitching). Subject-line and
+ * voice conflicts are evaluated against CampaignSynthesisContext separately.
+ */
+const STALE_OUTREACH_DRAFT_FRAGMENT_RES = Object.freeze([
+  /across\s+Bedford,\s*Hooksett,\s*Londonderry,\s*Auburn/i,
+  /\b(?:use|reference|mention|include)\s+(?:the\s+)?(?:street|mailing|physical)\s+address\b/i,
+  /\b\d{1,6}\s+[A-Za-z0-9.'-]+\s+(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive)\b/i,
+  /for Small to mid-sized/,
+  /in Start with/,
+  /Carry forward proof already noted/i,
   /(?<!\.)\.\.(?!\.)/,
 ]);
 const DEFAULT_ANCHOR_VOICE =
@@ -4510,7 +4532,7 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
   const criteria = opts.priorCriteriaPreview || null;
   const campaignPreview = opts.priorPreview || null;
 
-  const synthesis = buildArtifactSynthesisContext({
+  const synthesis = buildCampaignSynthesisContext({
     context: ctx,
     normalizedFacts: opts.normalizedFacts || null,
     priorCriteriaPreview: criteria,
@@ -4518,6 +4540,14 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
     priorArtifact: priorIsStale ? null : prior,
     slots: opts.slots || {},
     answers,
+    approvedReview: review,
+    state: {
+      campaignMemory: opts.campaignMemory || null,
+      prospectBatchReview: review,
+      reasoningMemory: opts.reasoningMemory || null,
+    },
+    campaignMemory: opts.campaignMemory || null,
+    step: opts.step || CAMPAIGN_PLANNING_STATES.OUTREACH_STRATEGY_PREVIEW,
   });
   const { phrases, facts } = synthesis;
   const name = shortBusinessName(
@@ -4822,7 +4852,7 @@ function buildOutreachCopyPlan(approvedStrategy, approvedReview, context, opts =
   const criteria = opts.priorCriteriaPreview || null;
   const campaignPreview = opts.priorPreview || null;
 
-  const synthesis = buildArtifactSynthesisContext({
+  const synthesis = buildCampaignSynthesisContext({
     context: ctx,
     normalizedFacts: opts.normalizedFacts || null,
     priorCriteriaPreview: criteria,
@@ -4830,6 +4860,16 @@ function buildOutreachCopyPlan(approvedStrategy, approvedReview, context, opts =
     priorArtifact: strategy,
     slots: opts.slots || {},
     answers,
+    approvedReview: review,
+    approvedOutreachStrategy: strategy,
+    state: {
+      campaignMemory: opts.campaignMemory || null,
+      prospectBatchReview: review,
+      outreachStrategyPreview: strategy,
+      reasoningMemory: opts.reasoningMemory || null,
+    },
+    campaignMemory: opts.campaignMemory || null,
+    step: opts.step || CAMPAIGN_PLANNING_STATES.OUTREACH_COPY_PLAN,
   });
   const { phrases, facts } = synthesis;
   const name = shortBusinessName(
@@ -5417,8 +5457,180 @@ function repairOutreachCopyPlan(prior, approvedStrategy, approvedReview, context
 }
 
 /**
+ * Flatten Outreach Draft Preview text for stale-fragment / memory scanning.
+ * Operator-facing draft sections only — do not scan raw prior objective
+ * paragraphs (those may still carry instruction framing like "Prove that").
+ */
+function outreachDraftPreviewTextBlob(preview) {
+  if (!preview || typeof preview !== 'object') return '';
+  const parts = [
+    preview.firstTouchBody,
+    preview.summary,
+    ...(Array.isArray(preview.subjectOptions) ? preview.subjectOptions : []),
+    ...(Array.isArray(preview.followUpSketch) ? preview.followUpSketch : []),
+    ...(Array.isArray(preview.approvalGate) ? preview.approvalGate : []),
+    ...(Array.isArray(preview.personalizationByProspect)
+      ? preview.personalizationByProspect.map(
+          (r) =>
+            `${r.companyName || ''} ${r.town || ''} ${r.personalizationNote || ''}`
+        )
+      : []),
+    ...(Array.isArray(preview.batchProspects) ? preview.batchProspects : []),
+  ];
+  try {
+    parts.push(formatOutreachDraftPreviewMessage(preview));
+  } catch (_err) {
+    // ignore format errors on partial stubs
+  }
+  return parts.filter(Boolean).join('\n');
+}
+
+function findStaleOutreachDraftFragments(preview) {
+  const blob = outreachDraftPreviewTextBlob(preview);
+  if (!blob) return [];
+  const hits = [];
+  for (const re of STALE_OUTREACH_DRAFT_FRAGMENT_RES) {
+    if (re.test(blob)) hits.push(re.source);
+  }
+  for (const hit of findOperatorBannedFragments(blob)) {
+    if (!hits.includes(hit)) hits.push(hit);
+  }
+  return hits;
+}
+
+/**
+ * Build CampaignSynthesisContext for Growth/Campaign artifact renderers.
+ */
+function buildCampaignContextForRender(approvedReview, context, opts = {}) {
+  const ctx = context || {};
+  const review = approvedReview || opts.priorProspectBatchReview || null;
+  const strategy =
+    opts.approvedStrategy ||
+    opts.priorOutreachStrategyPreview ||
+    null;
+  const copyPlan =
+    opts.approvedCopyPlan ||
+    opts.priorOutreachCopyPlan ||
+    null;
+  let campaignMemory = ensureCampaignMemory({
+    campaignMemory: opts.campaignMemory || null,
+  });
+  if (review) {
+    campaignMemory = applyBatchReviewLearnings(campaignMemory, review);
+  }
+  if (opts.operatorLearnings) {
+    campaignMemory = mergeOperatorLearnings(
+      campaignMemory,
+      opts.operatorLearnings,
+      opts.learningSource || 'explicit'
+    );
+  }
+
+  return buildCampaignSynthesisContext({
+    context: ctx,
+    state: {
+      campaignMemory,
+      prospectBatchReview: review,
+      outreachStrategyPreview: strategy,
+      outreachCopyPlan: copyPlan,
+      reasoningMemory: opts.reasoningMemory || null,
+    },
+    campaignMemory,
+    approvedReview: review,
+    approvedOutreachStrategy: strategy,
+    approvedOutreachCopyPlan: copyPlan,
+    priorCriteriaPreview: opts.priorCriteriaPreview || null,
+    priorCampaignPreview: opts.priorPreview || null,
+    normalizedFacts: opts.normalizedFacts || null,
+    slots: opts.slots || {},
+    answers: opts.answers || {},
+    currentStep: opts.step || opts.currentStep || null,
+    step: opts.step || opts.currentStep || null,
+    reasoningMemory: opts.reasoningMemory || null,
+    senderIdentity: opts.senderIdentity || null,
+    operatorLearnings: opts.operatorLearnings || null,
+    blueprint: opts.blueprint || opts.approvedBlueprint || null,
+  });
+}
+
+function outreachDraftPreviewLooksStale(preview, campaignCtx = null) {
+  if (!hasOutreachDraftPreview(preview)) return false;
+  if (findStaleOutreachDraftFragments(preview).length > 0) return true;
+  if (
+    campaignCtx &&
+    outreachDraftPreviewConflictsWithCampaignMemory(preview, campaignCtx)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function repairOutreachDraftPreview(
+  prior,
+  approvedCopyPlan,
+  approvedStrategy,
+  approvedReview,
+  context,
+  opts = {}
+) {
+  const campaignCtx =
+    opts.campaignSynthesisContext ||
+    buildCampaignContextForRender(approvedReview, context, {
+      ...opts,
+      approvedStrategy,
+      approvedCopyPlan,
+    });
+  if (!outreachDraftPreviewLooksStale(prior, campaignCtx)) {
+    return prior;
+  }
+  const repaired = buildOutreachDraftPreview(
+    approvedCopyPlan,
+    approvedStrategy,
+    approvedReview,
+    context,
+    {
+      ...opts,
+      priorOutreachDraftPreview: prior,
+      reuseExisting: false,
+      forceRebuild: true,
+      campaignSynthesisContext: campaignCtx,
+      campaignMemory: campaignCtx.campaignMemory,
+    }
+  );
+  return {
+    ...repaired,
+    status: 'draft',
+    repairedFromStale: true,
+    repairedAt: new Date().toISOString(),
+    priorGeneratedAt: prior.generatedAt || null,
+    memoryConflicts: findCampaignMemoryDraftConflicts(prior, campaignCtx),
+    workRequestId:
+      repaired.workRequestId ||
+      prior.workRequestId ||
+      (approvedReview && approvedReview.workRequestId) ||
+      null,
+    blueprintId: repaired.blueprintId || prior.blueprintId || opts.blueprintId || null,
+    blueprintVersion:
+      repaired.blueprintVersion ||
+      prior.blueprintVersion ||
+      opts.blueprintVersion ||
+      null,
+    planningOnly: true,
+    reviewFirst: true,
+    finalOutreachCopyGenerated: true,
+    outreachCopyGenerated: true,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+  };
+}
+
+/**
  * Build Outreach Draft Preview after Copy Plan approval.
- * Draft copy for review only — never sends, CRM writes, or exports.
+ * Consumes CampaignSynthesisContext (approved facts + durable operator
+ * learnings) — never raw prior text alone. Draft copy for review only —
+ * never sends, CRM writes, or exports.
  */
 function buildOutreachDraftPreview(
   approvedCopyPlan,
@@ -5427,15 +5639,21 @@ function buildOutreachDraftPreview(
   context,
   opts = {}
 ) {
+  const campaignCtx =
+    opts.campaignSynthesisContext ||
+    buildCampaignContextForRender(approvedReview, context, {
+      ...opts,
+      approvedStrategy,
+      approvedCopyPlan,
+    });
+
   const prior =
     opts.priorOutreachDraftPreview &&
     hasOutreachDraftPreview(opts.priorOutreachDraftPreview)
       ? opts.priorOutreachDraftPreview
       : null;
   const priorIsStale = prior
-    ? findOperatorBannedFragments(
-        operatorArtifactTextBlob(prior, formatOutreachDraftPreviewMessage)
-      ).length > 0
+    ? outreachDraftPreviewLooksStale(prior, campaignCtx)
     : false;
   if (prior && opts.reuseExisting !== false && !opts.forceRebuild && !priorIsStale) {
     return {
@@ -5450,6 +5668,7 @@ function buildOutreachDraftPreview(
       exportMade: false,
       accountChangesMade: false,
       disclaimer: OUTREACH_DRAFT_PREVIEW_DISCLAIMER,
+      campaignMemory: campaignCtx.campaignMemory,
     };
   }
 
@@ -5458,10 +5677,14 @@ function buildOutreachDraftPreview(
   const strategy = approvedStrategy || {};
   const review = approvedReview || {};
   const batch = review.approvedBatch || {};
-  const candidates =
+  const rawCandidates =
     batch.candidates || review.acceptedFirstPass || [];
+  const { coldCandidates: candidates } =
+    campaignCtx.filterColdBatchCandidates(rawCandidates);
+
   const name = shortBusinessName(
-    plan.businessName ||
+    campaignCtx.businessName ||
+      plan.businessName ||
       strategy.businessName ||
       ctx.businessName ||
       'the business'
@@ -5469,10 +5692,12 @@ function buildOutreachDraftPreview(
   const audience =
     plan.outreachAudiencePhrase ||
     strategy.outreachAudiencePhrase ||
+    campaignCtx.phrase('targetSegmentPhrase') ||
     'property managers';
   const market =
     plan.outreachMarketPhrase ||
     strategy.outreachMarketPhrase ||
+    campaignCtx.phrase('marketBoundPhrase') ||
     'Greater Manchester';
   const cta =
     plan.ctaToTest ||
@@ -5488,16 +5713,16 @@ function buildOutreachDraftPreview(
           ? ctx.towns
           : [...DEFAULT_TOWNS];
 
-  const subjectOptions = rejectRawOutreachLines([
-    `Quick question about cleaning reliability in ${market}`,
-    `${name} — responsive commercial cleaning for property managers`,
-    `Worth a brief chat about recurring cleaning coverage?`,
-  ]).filter((line) => line && !looksLikeOutreachCopyPlanMetaLine(line));
+  const subjectResolution = campaignCtx.resolveSubjectLines();
+  const subjectOptions = rejectRawOutreachLines(
+    subjectResolution.subjectOptions
+  ).filter((line) => line && !looksLikeOutreachCopyPlanMetaLine(line));
 
+  const voiceLine = campaignCtx.resolveSenderVoiceLine(audience);
   const firstTouchBody = [
     `Hi {{first_name}},`,
     '',
-    `I work with ${audience} across ${formatTownChoiceList(towns)} who want reliable commercial cleaning without chasing vendors.`,
+    voiceLine.opener,
     '',
     `${name} focuses on clear response-time expectations, a simple cleaning checklist, and a professional walkthrough / estimate process.`,
     '',
@@ -5516,20 +5741,16 @@ function buildOutreachDraftPreview(
       (c.location && String(c.location).split(',')[0]) ||
       null;
     const role = c.jobTitle || c.role || c.contactTitle || null;
-    const notes = [];
-    if (town) notes.push(`Reference ${town} when it matches their public location.`);
-    if (role) notes.push(`Address the ${role} when a public decision-maker is clear.`);
-    notes.push(
-      'Use any visible portfolio or property-type cue only when it is publicly evident.'
-    );
-    notes.push(
-      'Lean on reliability, responsiveness, or recurring-service signals when present.'
-    );
+    let personalizationNote = campaignCtx.buildPersonalizationNote(c);
+    if (rejectsStreetAddressPersonalization(personalizationNote)) {
+      personalizationNote =
+        'Reference {{town}}, company, property type, portfolio cue, or public role signal only — never a street address by default.';
+    }
     return {
       companyName: company,
       town: town || null,
       role: role || null,
-      personalizationNote: notes.join(' '),
+      personalizationNote,
     };
   });
 
@@ -5549,6 +5770,20 @@ function buildOutreachDraftPreview(
     .map((p) => p.companyName)
     .filter(Boolean);
 
+  const subjectSectionLabel = subjectResolution.usedTestedWinner
+    ? subjectResolution.sectionTitle
+    : OUTREACH_DRAFT_PREVIEW_SECTION_TITLES.subjectOptions;
+
+  const whyRecommended = [
+    'Copy Plan is approved — drafts stay inside Batch 1, approved voice, and proof points.',
+    'Personalization notes are town/company/role/portfolio cues only — no street addresses by default.',
+  ];
+  if (subjectResolution.usedTestedWinner && subjectResolution.performance) {
+    whyRecommended.unshift(
+      `Subject line uses tested winner (${subjectResolution.performance}).`
+    );
+  }
+
   const operatorDigest = buildOperatorReviewDigest({
     kind: 'outreach_draft_preview_digest',
     title: OUTREACH_DRAFT_PREVIEW_TITLE,
@@ -5557,7 +5792,9 @@ function buildOutreachDraftPreview(
     } Batch 1 cold prospects.`,
     included: [
       `${includedNames.length || candidates.length} first-touch email drafts (shared body + per-prospect personalization notes)`,
-      `${subjectOptions.length} subject line options`,
+      subjectResolution.usedTestedWinner
+        ? `Subject line (tested winner): ${subjectOptions[0] || '—'}`
+        : `${subjectOptions.length} subject line options`,
       `CTA: ${cta}`,
     ],
     heldBack: [
@@ -5566,10 +5803,7 @@ function buildOutreachDraftPreview(
       'Follow-up sends held until Outreach Launch Gate',
       'Cedar / Keyrenter / optional expansion / rejected candidates remain excluded',
     ],
-    whyRecommended: [
-      'Copy Plan is approved — drafts stay inside Batch 1, approved voice, and proof points.',
-      'Personalization notes are town/role/portfolio cues only — no invented claims.',
-    ],
+    whyRecommended,
     nextStepAfterApproval: OUTREACH_LAUNCH_GATE_TITLE,
     primaryActions: [
       { id: 'approve_draft_preview', label: 'Approve Draft Preview', style: 'primary' },
@@ -5589,26 +5823,45 @@ function buildOutreachDraftPreview(
     evidence: {
       records: personalizationByProspect,
       sections: [
-        { title: 'Subject options', lines: subjectOptions },
+        { title: subjectSectionLabel, lines: subjectOptions },
         { title: 'First-touch body', lines: firstTouchBody.split('\n') },
       ],
     },
     disclaimer: OUTREACH_DRAFT_PREVIEW_DISCLAIMER,
   });
 
+  const sectionTitles = {
+    ...OUTREACH_DRAFT_PREVIEW_SECTION_TITLES,
+    subjectOptions: subjectSectionLabel,
+  };
+
   return {
     kind: OUTREACH_DRAFT_PREVIEW_KIND,
     title: OUTREACH_DRAFT_PREVIEW_TITLE,
     status: 'draft',
     businessName: name,
-    campaignObjective: plan.campaignObjective || strategy.campaignObjective || null,
+    campaignObjective:
+      campaignCtx.phrase('objectivePhrase') ||
+      (campaignCtx.approved && campaignCtx.approved.approvedCampaignObjective) ||
+      plan.campaignObjective ||
+      strategy.campaignObjective ||
+      null,
     basedOnCopyPlanStatus: plan.status || 'approved',
     basedOnStrategyStatus: strategy.status || 'approved',
     basedOnBatchStatus: review.status || 'batch_1_approved',
     approvedCandidateCount:
-      batch.candidateCount != null ? batch.candidateCount : candidates.length,
+      candidates.length != null ? candidates.length : includedNames.length,
     batchProspects: includedNames,
     subjectOptions,
+    usedTestedSubjectLine: Boolean(subjectResolution.usedTestedWinner),
+    testedSubjectLinePattern:
+      (campaignCtx.learnings &&
+        campaignCtx.learnings.tested_subject_line_pattern) ||
+      null,
+    testedSubjectLinePerformance:
+      (campaignCtx.learnings &&
+        campaignCtx.learnings.tested_subject_line_performance) ||
+      null,
     firstTouchBody,
     firstTouchDraft: { body: firstTouchBody, cta },
     personalizationByProspect,
@@ -5619,12 +5872,19 @@ function buildOutreachDraftPreview(
     outreachMarketPhrase: market,
     ctaToTest: cta,
     operatorDigest,
-    sectionTitles: { ...OUTREACH_DRAFT_PREVIEW_SECTION_TITLES },
+    sectionTitles,
     closingQuestion: OUTREACH_DRAFT_PREVIEW_CLOSING_QUESTION,
     recommendedNextStep:
       'Approve this Outreach Draft Preview to advance to the Outreach Launch Gate, or name a section to revise. Sends, CRM writes, exports, and account changes remain blocked.',
     summary:
       'Review-first Outreach Draft Preview — draft copy only, not live send.',
+    campaignMemory: campaignCtx.campaignMemory,
+    campaignLearnings: { ...campaignCtx.learnings },
+    workflowStep:
+      (campaignCtx.workflow && campaignCtx.workflow.currentStep) || null,
+    nextAllowedArtifact:
+      (campaignCtx.workflow && campaignCtx.workflow.nextAllowedArtifact) ||
+      null,
     planningOnly: true,
     reviewFirst: true,
     finalOutreachCopyGenerated: true,
@@ -6071,22 +6331,45 @@ function produceOutreachDraftPreviewResult(ctx, answers, slots, opts, leadIn) {
 
   const existing = opts.priorOutreachDraftPreview || null;
   const alreadyHave = hasOutreachDraftPreview(existing);
-  const outreachDraftPreview = buildOutreachDraftPreview(
-    plan,
-    strategy,
-    review,
-    ctx,
-    {
-      workRequestId: (review && review.workRequestId) || (plan && plan.workRequestId),
-      priorOutreachDraftPreview: existing,
-      reuseExisting: alreadyHave,
-      forceRebuild:
-        alreadyHave &&
-        findOperatorBannedFragments(
-          operatorArtifactTextBlob(existing, formatOutreachDraftPreviewMessage)
-        ).length > 0,
-    }
-  );
+  const campaignCtx = buildCampaignContextForRender(review, ctx, {
+    ...opts,
+    approvedStrategy: strategy,
+    approvedCopyPlan: plan,
+    answers,
+    step: CAMPAIGN_PLANNING_STATES.OUTREACH_DRAFT_PREVIEW,
+  });
+  let outreachDraftPreview;
+  if (alreadyHave && outreachDraftPreviewLooksStale(existing, campaignCtx)) {
+    outreachDraftPreview = repairOutreachDraftPreview(
+      existing,
+      plan,
+      strategy,
+      review,
+      ctx,
+      {
+        workRequestId: (review && review.workRequestId) || (plan && plan.workRequestId),
+        campaignSynthesisContext: campaignCtx,
+        campaignMemory: campaignCtx.campaignMemory,
+        answers,
+      }
+    );
+  } else {
+    outreachDraftPreview = buildOutreachDraftPreview(
+      plan,
+      strategy,
+      review,
+      ctx,
+      {
+        workRequestId: (review && review.workRequestId) || (plan && plan.workRequestId),
+        priorOutreachDraftPreview: existing,
+        reuseExisting: alreadyHave,
+        forceRebuild: false,
+        campaignSynthesisContext: campaignCtx,
+        campaignMemory: campaignCtx.campaignMemory,
+        answers,
+      }
+    );
+  }
 
   const intro = alreadyHave && !outreachDraftPreview.repairedFromStale
     ? 'Outreach Draft Preview is already available — showing it for approval or revision. Not re-rendering the Outreach Copy Plan.'
@@ -6126,8 +6409,11 @@ function produceOutreachDraftPreviewResult(ctx, answers, slots, opts, leadIn) {
     outreachCopyPlan: plan,
     outreachDraftPreview,
     outreachLaunchGate: opts.priorOutreachLaunchGate || null,
+    campaignMemory: campaignCtx.campaignMemory,
     intent: alreadyHave
-      ? 'show_outreach_draft_preview'
+      ? outreachDraftPreview.repairedFromStale
+        ? 'repair_outreach_draft_preview'
+        : 'show_outreach_draft_preview'
       : leadIn && /approved/i.test(String(leadIn))
         ? 'outreach_copy_plan_approved'
         : 'produce_outreach_draft_preview',
@@ -6489,6 +6775,10 @@ function produceProspectBatchReviewApprovalResult(
           (review.approvedBatch && review.approvedBatch.approvedAt))) ||
       new Date().toISOString(),
   });
+  const campaignMemory = applyBatchReviewLearnings(
+    ensureCampaignMemory({ campaignMemory: opts.campaignMemory || null }),
+    approvedReview
+  );
   const existingStrategy = opts.priorOutreachStrategyPreview || null;
   const strategyWasStale = outreachStrategyPreviewLooksStale(existingStrategy);
   const outreachStrategyPreview = buildOutreachStrategyPreview(
@@ -6504,6 +6794,7 @@ function produceProspectBatchReviewApprovalResult(
       blueprintVersion: opts.blueprintVersion,
       reuseExisting: Boolean(existingStrategy) && !strategyWasStale,
       forceRebuild: strategyWasStale,
+      campaignMemory,
     }
   );
 
@@ -6546,6 +6837,7 @@ function produceProspectBatchReviewApprovalResult(
       null,
     prospectBatchReview: approvedReview,
     outreachStrategyPreview,
+    campaignMemory,
     liveProspectList: null,
     intent: 'prospect_batch_1_approved',
     previewApproved: true,
@@ -8457,6 +8749,16 @@ function acknowledgeBuildProposalApproval(ctx, answers, slots, opts, note) {
 function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
   const prior = state || {};
   const ctx = context || prior.context || {};
+  // Durable campaign memory survives step transitions.
+  if (!opts.campaignMemory) {
+    opts = {
+      ...opts,
+      campaignMemory:
+        prior.campaignMemory ||
+        (prior.campaignPlanning && prior.campaignPlanning.campaignMemory) ||
+        null,
+    };
+  }
   const priorPreview =
     opts.priorPreview ||
     prior.firstCampaignPlanPreview ||
@@ -10740,8 +11042,13 @@ module.exports = {
   outreachCopyPlanLooksStale,
   findStaleOutreachCopyPlanFragments,
   repairOutreachCopyPlan,
+  outreachDraftPreviewLooksStale,
+  findStaleOutreachDraftFragments,
+  repairOutreachDraftPreview,
+  buildCampaignContextForRender,
   STALE_OUTREACH_STRATEGY_FRAGMENT_RES,
   STALE_OUTREACH_COPY_PLAN_FRAGMENT_RES,
+  STALE_OUTREACH_DRAFT_FRAGMENT_RES,
   OPERATOR_BANNED_FRAGMENT_RES,
   buildProspectBatchReviewClosingQuestion,
   parseRelationshipOverridesFromMessage,
@@ -10808,6 +11115,14 @@ module.exports = {
   stripFirstPersonArtifactLanguage,
   // Max Synthesis Layer re-exports for tests / callers
   buildArtifactSynthesisContext,
+  buildCampaignSynthesisContext,
+  ensureCampaignMemory,
+  applyBatchReviewLearnings,
+  mergeOperatorLearnings,
+  findCampaignMemoryDraftConflicts,
+  outreachDraftPreviewConflictsWithCampaignMemory,
+  rejectsStreetAddressPersonalization,
+  DEFAULT_OPERATOR_LEARNINGS,
   containsRawPromptFragment,
   findRawPromptFragments,
 };
