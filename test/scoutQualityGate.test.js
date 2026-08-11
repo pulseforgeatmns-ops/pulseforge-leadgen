@@ -89,6 +89,174 @@ describe('scoutQualityGate — market interpretation', () => {
   });
 });
 
+describe('scoutQualityGate — candidate-only geography evidence', () => {
+  it('does not reject Elm Grove Companies (Hooksett NH) as UK', () => {
+    const gate = evaluateScoutCandidate(
+      {
+        companyName: 'Elm Grove Companies',
+        address: '1 Industrial Park Dr, Hooksett, NH 03106, USA',
+        location: 'Hooksett, NH',
+        formatted_address: '1 Industrial Park Dr, Hooksett, NH 03106, USA',
+        website: 'https://elmgrovecompanies.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0100',
+        // Brief/plan pollution must be ignored for geography.
+        fitRationale:
+          'Are located in Bedford, Hooksett, Londonderry, Auburn, Goffstown, or nearby Greater Manchester markets',
+        snippet:
+          'Campaign objective: Keep Greater Manchester in scope for property managers',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.notEqual(gate.status, CANDIDATE_STATUS.REJECTED);
+    assert.notEqual(gate.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_COUNTRY);
+    assert.doesNotMatch(String(gate.statusReason || ''), /outside_market_country|UK/i);
+    assert.equal(gate.geo && gate.geo.town, 'Hooksett');
+    assert.equal(gate.geo && gate.geo.tier, 'priority');
+    assert.equal(gate.status, CANDIDATE_STATUS.ACCEPTED);
+  });
+
+  it('does not reject Keyrenter New England (Bedford NH) as UK', () => {
+    const gate = evaluateScoutCandidate(
+      {
+        companyName: 'Keyrenter New England',
+        address: '10 Bedford Center Rd, Bedford, NH 03110, USA',
+        location: 'Bedford, NH',
+        formatted_address: '10 Bedford Center Rd, Bedford, NH 03110, USA',
+        website: 'https://keyrenter.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0200',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.notEqual(gate.status, CANDIDATE_STATUS.REJECTED);
+    assert.notEqual(gate.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_COUNTRY);
+    assert.doesNotMatch(String(gate.statusReason || ''), /england|outside_market_country/i);
+    assert.equal(gate.geo && gate.geo.town, 'Bedford');
+    assert.equal(gate.status, CANDIDATE_STATUS.ACCEPTED);
+  });
+
+  it('rejects a UK Manchester M-postcode candidate', () => {
+    const gate = evaluateScoutCandidate(
+      {
+        companyName: 'Deansgate Property Management',
+        address: '12 Deansgate, Manchester M3 5EQ, UK',
+        location: 'Manchester M3 5EQ',
+        formatted_address: '12 Deansgate, Manchester M3 5EQ, United Kingdom',
+        website: 'https://deansgate-pm.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.equal(gate.status, CANDIDATE_STATUS.REJECTED);
+    assert.equal(gate.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_COUNTRY);
+    assert.match(gate.statusReason, /M-postcode|UK|outside_market_country/i);
+  });
+
+  it('ignores Greater Manchester when it appears only in brief/criteria text', () => {
+    const gate = evaluateScoutCandidate(
+      {
+        companyName: 'Londonderry Property Partners',
+        address: '55 Mammoth Rd, Londonderry, NH 03053',
+        location: 'Londonderry NH',
+        website: 'https://londonderrypp.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0333',
+        // Pollute non-geo fields with plan prose.
+        snippet: PM_WORK_REQUEST.marketBounds,
+        fitRationale: PM_WORK_REQUEST.inclusionCriteria[1],
+        campaignObjective: 'Keep Greater Manchester in scope',
+        marketBounds: PM_WORK_REQUEST.marketBounds,
+        targetSegment: 'Property managers near Greater Manchester',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.notEqual(gate.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_COUNTRY);
+    assert.notEqual(gate.status, CANDIDATE_STATUS.REJECTED);
+    assert.equal(gate.status, CANDIDATE_STATUS.ACCEPTED);
+    assert.match(gate.fitRationale, /Londonderry Property Partners|address\/location on source/i);
+    assert.doesNotMatch(gate.fitRationale, /Keep Greater Manchester in scope/i);
+  });
+
+  it('rejected count matches rejected audit rows', () => {
+    const gated = gateScoutCandidateRows(
+      [
+        {
+          companyName: 'Elm Grove Companies',
+          sourceUrl: 'https://elmgrove.example',
+          address: 'Hooksett, NH 03106, USA',
+          location: 'Hooksett NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0100',
+        },
+        {
+          companyName: 'Keyrenter New England',
+          sourceUrl: 'https://keyrenter.example',
+          address: 'Bedford, NH 03110, USA',
+          location: 'Bedford NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0200',
+        },
+        {
+          companyName: 'UK Manchester M-postcode PM',
+          sourceUrl: 'https://ukpm.example',
+          address: 'Manchester M1 1AE, England',
+          location: 'Manchester M1 1AE',
+        },
+        {
+          companyName: 'Sparkle Cleaning Company',
+          sourceUrl: 'https://sparkle.example',
+          address: 'Bedford NH',
+          location: 'Bedford NH',
+          placeTypes: ['cleaning_service'],
+        },
+        {
+          companyName: 'Manchester NH Property Co',
+          sourceUrl: 'https://manchesternhpm.example',
+          address: '100 Elm St, Manchester, NH',
+          location: 'Manchester NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0188',
+        },
+      ],
+      { ...PM_WORK_REQUEST, targetCountMin: 1, targetCountMax: 10 }
+    );
+
+    assert.equal(gated.acceptedCount, gated.groups.accepted.length);
+    assert.equal(gated.reviewRequiredCount, gated.groups.review_required.length);
+    assert.equal(gated.rejectedCount, gated.groups.rejected.length);
+    assert.equal(gated.rejected.length, gated.groups.rejected.length);
+    assert.ok(gated.rejectedCount >= 2);
+    assert.ok(
+      gated.rejected.some(
+        (r) => r.rejectionReason === REJECTION_REASON.OUTSIDE_MARKET_COUNTRY
+      )
+    );
+    assert.ok(
+      gated.rejected.some(
+        (r) =>
+          r.rejectionReason === REJECTION_REASON.WRONG_SEGMENT_CLEANING_COMPETITOR
+      )
+    );
+    assert.ok(
+      gated.candidates.every((c) => c.status !== CANDIDATE_STATUS.REJECTED)
+    );
+    assert.ok(
+      gated.candidates.some((c) => c.companyName === 'Elm Grove Companies')
+    );
+    assert.ok(
+      gated.candidates.some((c) => c.companyName === 'Keyrenter New England')
+    );
+  });
+});
+
 describe('scoutQualityGate — hard rejects', () => {
   it('rejects UK candidates with rejectionReason outside_market_country', () => {
     const gate = evaluateScoutCandidate(

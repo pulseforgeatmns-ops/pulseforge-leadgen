@@ -614,14 +614,17 @@ function gateAndSplitScoutCandidates(rows, workRequest, opts = {}) {
   const rejected = (gated.rejected || []).map((row, idx) =>
     normalizeScoutCandidate(row, idx)
   );
-  const groups = groupCandidatesByStatus(candidates, rejected);
+  const groups = groupCandidatesByStatus(candidates, rejected.slice());
   const threshold = batchMeetsQualityThreshold(candidates, workRequest, {
     targetMin: opts.targetMin || (workRequest && workRequest.targetCountMin),
   });
   return {
     candidates,
-    rejected,
+    rejected: groups.rejected,
     groups,
+    acceptedCount: (groups.accepted || []).length,
+    reviewRequiredCount: (groups.review_required || []).length,
+    rejectedCount: (groups.rejected || []).length,
     usableCount: threshold.usableCount,
     targetMin: threshold.targetMin,
     meetsQualityThreshold: threshold.ok,
@@ -630,9 +633,10 @@ function gateAndSplitScoutCandidates(rows, workRequest, opts = {}) {
 
 function buildCandidateBatch(handoff, candidates, opts = {}) {
   const createdAt = opts.createdAt || nowIso();
-  const rejected = Array.isArray(opts.rejected) ? opts.rejected : [];
+  const rejectedIn = Array.isArray(opts.rejected) ? opts.rejected : [];
   const groups =
-    opts.groups || groupCandidatesByStatus(candidates, rejected);
+    opts.groups || groupCandidatesByStatus(candidates, rejectedIn.slice());
+  const rejected = groups.rejected || [];
   return {
     kind: SCOUT_CANDIDATE_BATCH_KIND,
     handoffId: handoff.handoffId,
