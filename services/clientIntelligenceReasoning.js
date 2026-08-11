@@ -40,6 +40,8 @@ const ARTIFACT_KINDS = Object.freeze({
   PROSPECT_BATCH_REVIEW: 'prospect_batch_review',
   /** Review-first outreach strategy planning after Batch 1 approval. */
   OUTREACH_STRATEGY_PREVIEW: 'outreach_strategy_preview',
+  /** Review-first copy planning after Outreach Strategy Preview approval. */
+  OUTREACH_COPY_PLAN: 'outreach_copy_plan',
 });
 
 /**
@@ -60,6 +62,10 @@ const PROSPECT_ACQUISITION_INTENTS = Object.freeze({
   APPROVE_PROSPECT_BATCH_REVIEW: 'approve_prospect_batch_review',
   /** Create or show Outreach Strategy Preview after Batch 1 approval. */
   EMIT_OUTREACH_STRATEGY_PREVIEW: 'emit_outreach_strategy_preview',
+  /** Approve Outreach Strategy Preview and advance to Outreach Copy Plan. */
+  APPROVE_OUTREACH_STRATEGY_PREVIEW: 'approve_outreach_strategy_preview',
+  /** Create or show Outreach Copy Plan after strategy approval. */
+  EMIT_OUTREACH_COPY_PLAN: 'emit_outreach_copy_plan',
   PERFORM_LIVE_SOURCING: 'perform_live_sourcing',
 });
 
@@ -91,7 +97,7 @@ const APPROVAL_LEAD_RE =
   /^\s*(?:yes[,.]?\s+)?(?:looks?\s+good|lgtm|approved?|approve(?:\s+it)?|ship\s+it|go\s+ahead|proceed|sounds?\s+good|that\s+works|perfect|confirmed?|i\s+approve)\b/i;
 
 const NEXT_REQUEST_RE =
-  /\b(?:before\s+we\s+build(?:\s+anything)?|how\s+(?:would|will|do|should)\s+you\s+approach|tell\s+me\s+how\s+you\s+would|what'?s\s+next|what\s+is\s+next|next\s+step|approach\s+building|build(?:ing)?\s+(?:the\s+)?(?:first\s+)?(?:prospect\s+)?list|how\s+to\s+build|propose\s+(?:the\s+)?(?:build|approach)|planning\s+(?:the\s+)?build)\b/i;
+  /\b(?:before\s+we\s+build(?:\s+anything)?|how\s+(?:would|will|do|should)\s+you\s+approach|tell\s+me\s+how\s+you\s+would|what'?s\s+next|what\s+is\s+next|next\s+step|approach\s+building|build(?:ing)?\s+(?:the\s+)?(?:first\s+)?(?:prospect\s+)?list|how\s+to\s+build|propose\s+(?:the\s+)?(?:build|approach)|planning\s+(?:the\s+)?build|create\s+(?:the\s+)?outreach\s+copy\s+plan|outreach\s+copy\s+plan)\b/i;
 
 /** Explicit ask to generate the first reviewable prospect list batch/draft. */
 const PROSPECT_LIST_DRAFT_REQUEST_RE =
@@ -115,6 +121,14 @@ const PROSPECT_BATCH_REVIEW_APPROVAL_RE =
 /** Ask for / create / show Outreach Strategy Preview (post–Batch 1). */
 const OUTREACH_STRATEGY_PREVIEW_REQUEST_RE =
   /\boutreach\s+strategy\s+preview\b|\b(?:create|show|produce|prepare|build|emit|draft|open|pull\s+up)\b[\s\S]{0,100}\boutreach\s+strategy(?:\s+preview)?\b|\bprepare\s+(?:an?\s+)?outreach\s+strategy\b/i;
+
+/** Approve the active Outreach Strategy Preview (optionally with next-step ask). */
+const OUTREACH_STRATEGY_PREVIEW_APPROVAL_RE =
+  /\bapprov(?:e|ed|ing)\b[\s\S]{0,120}\boutreach\s+strategy(?:\s+preview)?\b|\boutreach\s+strategy(?:\s+preview)?\b[\s\S]{0,80}\bapprov(?:e|ed|ing)\b/i;
+
+/** Ask for / create / show Outreach Copy Plan (post–strategy approval). */
+const OUTREACH_COPY_PLAN_REQUEST_RE =
+  /\boutreach\s+copy\s+plan\b|\b(?:create|show|produce|prepare|build|emit|draft|open|pull\s+up)\b[\s\S]{0,100}\b(?:outreach\s+)?copy\s+plan\b|\bcopy\s+plan\b/i;
 
 const ARTIFACT_REQUEST_RE =
   /\b(?:show|view|see|open|pull\s+up|regenerate|revise|replay)\s+(?:me\s+)?(?:the\s+)?(?:criteria|preview|blueprint|build\s+proposal|proposal|list\s+draft|prospect\s+list)\b|\b(?:criteria\s+preview|build\s+proposal|campaign\s+preview|list\s+draft)\s+again\b/i;
@@ -356,7 +370,17 @@ function looksLikeProspectBatchReviewRequest(text) {
 function looksLikeOutreachStrategyPreviewRequest(text) {
   const s = String(text || '').trim();
   if (!s) return false;
+  // Approving the strategy (with optional next-step Copy Plan ask) is not a
+  // "show strategy again" request.
+  if (OUTREACH_STRATEGY_PREVIEW_APPROVAL_RE.test(s)) return false;
+  if (looksLikeOutreachCopyPlanRequest(s)) return false;
   return OUTREACH_STRATEGY_PREVIEW_REQUEST_RE.test(s);
+}
+
+function looksLikeOutreachCopyPlanRequest(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  return OUTREACH_COPY_PLAN_REQUEST_RE.test(s);
 }
 
 function hasOutreachStrategyPreview(preview) {
@@ -378,6 +402,107 @@ function hasOutreachStrategyPreview(preview) {
       preview.outreachApproach ||
       preview.approachSummary
   );
+}
+
+function hasOutreachCopyPlan(plan) {
+  if (!plan || typeof plan !== 'object') return false;
+  const hasBody = Boolean(
+    (Array.isArray(plan.channelSequence) && plan.channelSequence.length) ||
+      plan.firstTouchGoal ||
+      plan.ctaToTest ||
+      (Array.isArray(plan.personalizationInputs) &&
+        plan.personalizationInputs.length)
+  );
+  if (!hasBody) return false;
+  return Boolean(
+    plan.kind === ARTIFACT_KINDS.OUTREACH_COPY_PLAN ||
+      plan.title === 'Outreach Copy Plan' ||
+      plan.channelSequence ||
+      plan.firstTouchGoal
+  );
+}
+
+function isOutreachStrategyPreviewAlreadyApproved(preview) {
+  if (!preview || typeof preview !== 'object') return false;
+  return Boolean(
+    preview.status === 'approved' ||
+      preview.approved === true ||
+      preview.strategyApproved === true
+  );
+}
+
+function hasActiveOutreachStrategyPreview(opts = {}) {
+  const prior =
+    opts.priorOutreachStrategyPreview || opts.outreachStrategyPreview || null;
+  if (hasOutreachStrategyPreview(prior)) return true;
+  const step = String(opts.step || '').toLowerCase();
+  if (
+    step === 'outreach_strategy_preview' ||
+    step === ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW ||
+    step === 'outreach_strategy_preview_approved' ||
+    step === 'outreach_copy_plan'
+  ) {
+    return true;
+  }
+  const memory = ensureReasoningMemory({ reasoningMemory: opts.memory });
+  const generated = memory.generatedArtifacts || [];
+  const approved = memory.approvedArtifacts || [];
+  return (
+    generated.includes(ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW) ||
+    approved.includes(ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW) ||
+    memory.nextRecommendedArtifact === ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW ||
+    memory.nextRecommendedArtifact === ARTIFACT_KINDS.OUTREACH_COPY_PLAN
+  );
+}
+
+/**
+ * True when the operator is approving the active Outreach Strategy Preview
+ * (optionally asking for Outreach Copy Plan next).
+ */
+function looksLikeOutreachStrategyPreviewApproval(text, opts = {}) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (!hasActiveOutreachStrategyPreview(opts)) return false;
+  // Batch 1 / Prospect Batch Review approval language wins when the batch
+  // itself is not yet approved.
+  if (
+    looksLikeProspectBatchReviewApproval(s, opts) &&
+    !isProspectBatchReviewAlreadyApproved(
+      opts.priorProspectBatchReview || opts.prospectBatchReview
+    )
+  ) {
+    return false;
+  }
+
+  if (OUTREACH_STRATEGY_PREVIEW_APPROVAL_RE.test(s)) return true;
+
+  const strategy =
+    opts.priorOutreachStrategyPreview || opts.outreachStrategyPreview || null;
+  const alreadyApproved = isOutreachStrategyPreviewAlreadyApproved(strategy);
+
+  // Pure approval against an unapproved active strategy.
+  if (
+    (looksLikeApproval(s) ||
+      opts.messageClass === MESSAGE_CLASSES.APPROVAL ||
+      opts.messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST) &&
+    !alreadyApproved &&
+    hasOutreachStrategyPreview(strategy)
+  ) {
+    return true;
+  }
+
+  // Approval lead + copy-plan / next-step framing while strategy is active.
+  if (
+    looksLikeApprovalLead(s) &&
+    (looksLikeOutreachCopyPlanRequest(s) ||
+      looksLikeNextPlanningRequest(s) ||
+      /\boutreach\s+strategy(?:\s+preview)?\b/i.test(s)) &&
+    !alreadyApproved
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -404,6 +529,34 @@ function canEmitOutreachStrategyPreview(opts = {}) {
   const memory = ensureReasoningMemory({ reasoningMemory: opts.memory });
   const approved = memory.approvedArtifacts || [];
   return approved.includes(ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW);
+}
+
+/**
+ * Strategy is approved (or being approved) so Outreach Copy Plan can be
+ * created or shown.
+ */
+function canEmitOutreachCopyPlan(opts = {}) {
+  if (hasOutreachCopyPlan(opts.priorOutreachCopyPlan)) return true;
+  if (
+    isOutreachStrategyPreviewAlreadyApproved(opts.priorOutreachStrategyPreview)
+  ) {
+    return true;
+  }
+  const step = String(opts.step || '').toLowerCase();
+  if (
+    step === 'outreach_copy_plan' ||
+    step === ARTIFACT_KINDS.OUTREACH_COPY_PLAN ||
+    step === 'outreach_strategy_preview_approved'
+  ) {
+    return true;
+  }
+  const slots = opts.slots || {};
+  if (slots.outreachStrategyPreviewApproved || slots.strategyApproved) {
+    return true;
+  }
+  const memory = ensureReasoningMemory({ reasoningMemory: opts.memory });
+  const approved = memory.approvedArtifacts || [];
+  return approved.includes(ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW);
 }
 
 function hasActiveProspectBatchReview(opts = {}) {
@@ -607,6 +760,20 @@ function classifyProspectAcquisitionIntent(text, opts = {}) {
   if (looksLikeProspectBatchReviewCorrection(s, opts)) {
     return PROSPECT_ACQUISITION_INTENTS.CORRECT_PROSPECT_BATCH_REVIEW;
   }
+  // Approve Outreach Strategy Preview → advance to Outreach Copy Plan.
+  // Must win over re-emitting the strategy when the message also names it.
+  if (looksLikeOutreachStrategyPreviewApproval(s, opts)) {
+    return PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_STRATEGY_PREVIEW;
+  }
+  // Create/show Outreach Copy Plan after strategy approval.
+  if (
+    looksLikeOutreachCopyPlanRequest(s) &&
+    (canEmitOutreachCopyPlan(opts) ||
+      hasOutreachStrategyPreview(opts.priorOutreachStrategyPreview) ||
+      canEmitOutreachStrategyPreview(opts))
+  ) {
+    return PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_COPY_PLAN;
+  }
   // After Batch 1 approval, create/show Outreach Strategy Preview — never
   // re-ask the operator to request it, and never fall back to Batch Review.
   if (
@@ -618,6 +785,10 @@ function classifyProspectAcquisitionIntent(text, opts = {}) {
   if (looksLikeProspectBatchReviewRequest(s)) {
     // If Batch 1 is already approved, do not re-emit Prospect Batch Review.
     if (canEmitOutreachStrategyPreview(opts)) {
+      // If strategy is already approved (or copy plan exists), prefer copy plan.
+      if (canEmitOutreachCopyPlan(opts)) {
+        return PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_COPY_PLAN;
+      }
       return PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_STRATEGY_PREVIEW;
     }
     return PROSPECT_ACQUISITION_INTENTS.EMIT_PROSPECT_BATCH_REVIEW;
@@ -710,6 +881,18 @@ function inferApprovedArtifactsFromMessage(memory, text) {
     next = markArtifactApproved(
       next,
       ARTIFACT_KINDS.PROSPECT_LIST_BUILD_PROPOSAL
+    );
+  }
+  if (
+    /\boutreach\s+strategy(?:\s+preview)?\b[\s\S]{0,40}\bapproved\b/i.test(s) ||
+    /\bapproved\b[\s\S]{0,40}\boutreach\s+strategy(?:\s+preview)?\b/i.test(s) ||
+    /\bapprov(?:e|ed|ing)\b[\s\S]{0,80}\boutreach\s+strategy(?:\s+preview)?\b/i.test(
+      s
+    )
+  ) {
+    next = markArtifactApproved(
+      next,
+      ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW
     );
   }
   if (looksLikeLiveSourcingApproval(s)) {
@@ -1306,9 +1489,12 @@ function resolveCampaignArtifactAction(opts = {}) {
 
   const priorOutreachStrategy =
     opts.priorOutreachStrategyPreview || opts.outreachStrategyPreview || null;
+  const priorOutreachCopyPlan =
+    opts.priorOutreachCopyPlan || opts.outreachCopyPlan || null;
   const acquisitionIntent = classifyProspectAcquisitionIntent(text, {
     priorProspectBatchReview: priorBatchReview,
     priorOutreachStrategyPreview: priorOutreachStrategy,
+    priorOutreachCopyPlan,
     step: opts.step,
     memory,
     messageClass,
@@ -1358,6 +1544,112 @@ function resolveCampaignArtifactAction(opts = {}) {
     };
   }
 
+  // HARD GUARD: approve Outreach Strategy Preview → advance to Outreach Copy Plan.
+  // Never re-render the strategy approval question.
+  const strategyApproval =
+    acquisitionIntent ===
+      PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_STRATEGY_PREVIEW ||
+    looksLikeOutreachStrategyPreviewApproval(text, {
+      priorProspectBatchReview: priorBatchReview,
+      priorOutreachStrategyPreview: priorOutreachStrategy,
+      priorOutreachCopyPlan,
+      step: opts.step,
+      memory,
+      messageClass,
+      state: opts.state,
+    });
+
+  if (strategyApproval) {
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW
+    );
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW
+    );
+    const alreadyHavePlan = hasOutreachCopyPlan(priorOutreachCopyPlan);
+    memory = markArtifactGenerated(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_COPY_PLAN,
+      alreadyHavePlan ? priorOutreachCopyPlan.status || 'draft' : 'draft'
+    );
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.OUTREACH_COPY_PLAN;
+    return {
+      action: 'approve_outreach_strategy_preview',
+      approveKind: ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW,
+      emitKind: ARTIFACT_KINDS.OUTREACH_COPY_PLAN,
+      memory,
+      messageClass:
+        messageClass === MESSAGE_CLASSES.APPROVAL ||
+        messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST
+          ? messageClass
+          : MESSAGE_CLASSES.APPROVAL,
+      note: alreadyHavePlan
+        ? 'Outreach Strategy Preview approved. Showing the Outreach Copy Plan for approval or revision.'
+        : 'Outreach Strategy Preview approved. Creating the Outreach Copy Plan for review.',
+      planningState: 'outreach_copy_plan',
+      strategyApproved: true,
+      batch1Approved: true,
+    };
+  }
+
+  // HARD GUARD: create/show Outreach Copy Plan after strategy approval.
+  const wantsOutreachCopyPlan =
+    acquisitionIntent ===
+      PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_COPY_PLAN ||
+    (looksLikeOutreachCopyPlanRequest(text) &&
+      canEmitOutreachCopyPlan({
+        priorOutreachStrategyPreview: priorOutreachStrategy,
+        priorOutreachCopyPlan,
+        step: opts.step,
+        memory,
+        slots: opts.slots || null,
+      })) ||
+    (canEmitOutreachCopyPlan({
+      priorOutreachStrategyPreview: priorOutreachStrategy,
+      priorOutreachCopyPlan,
+      step: opts.step,
+      memory,
+      slots: opts.slots || null,
+    }) &&
+      (looksLikeNextPlanningRequest(text) ||
+        messageClass === MESSAGE_CLASSES.ARTIFACT_REQUEST ||
+        messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST ||
+        opts.step === 'outreach_copy_plan' ||
+        opts.step === 'outreach_strategy_preview_approved'));
+
+  if (wantsOutreachCopyPlan) {
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW
+    );
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW
+    );
+    const alreadyHavePlan = hasOutreachCopyPlan(priorOutreachCopyPlan);
+    memory = markArtifactGenerated(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_COPY_PLAN,
+      alreadyHavePlan ? priorOutreachCopyPlan.status || 'draft' : 'draft'
+    );
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.OUTREACH_COPY_PLAN;
+    return {
+      action: 'emit_outreach_copy_plan',
+      approveKind: ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW,
+      emitKind: ARTIFACT_KINDS.OUTREACH_COPY_PLAN,
+      memory,
+      messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
+      note: alreadyHavePlan
+        ? 'Outreach Copy Plan is ready — showing it for approval or revision.'
+        : 'Creating the Outreach Copy Plan from the approved strategy, Batch 1, and Blueprint.',
+      planningState: 'outreach_copy_plan',
+      strategyApproved: true,
+      batch1Approved: true,
+    };
+  }
+
   // HARD GUARD: correction against an active Prospect Batch Review.
   // Never fall back to "Build proposal already approved…" / draft prompt.
   const batchReviewCorrection =
@@ -1396,29 +1688,39 @@ function resolveCampaignArtifactAction(opts = {}) {
 
   // HARD GUARD: Batch 1 already approved — create or show Outreach Strategy Preview.
   // Never ask the operator to request it again; never re-render Prospect Batch Review.
+  // Do not re-emit strategy when it is already approved (Copy Plan path owns that).
+  const strategyAlreadyApproved =
+    isOutreachStrategyPreviewAlreadyApproved(priorOutreachStrategy) ||
+    (memory.approvedArtifacts || []).includes(
+      ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW
+    );
   const wantsOutreachStrategy =
-    acquisitionIntent ===
+    !strategyAlreadyApproved &&
+    (acquisitionIntent ===
       PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_STRATEGY_PREVIEW ||
-    (looksLikeOutreachStrategyPreviewRequest(text) &&
-      canEmitOutreachStrategyPreview({
+      (looksLikeOutreachStrategyPreviewRequest(text) &&
+        canEmitOutreachStrategyPreview({
+          priorProspectBatchReview: priorBatchReview,
+          priorOutreachStrategyPreview: priorOutreachStrategy,
+          step: opts.step,
+          memory,
+          slots: opts.slots || null,
+        })) ||
+      (canEmitOutreachStrategyPreview({
         priorProspectBatchReview: priorBatchReview,
         priorOutreachStrategyPreview: priorOutreachStrategy,
         step: opts.step,
         memory,
         slots: opts.slots || null,
-      })) ||
-    (canEmitOutreachStrategyPreview({
-      priorProspectBatchReview: priorBatchReview,
-      priorOutreachStrategyPreview: priorOutreachStrategy,
-      step: opts.step,
-      memory,
-      slots: opts.slots || null,
-    }) &&
-      (looksLikeNextPlanningRequest(text) ||
-        messageClass === MESSAGE_CLASSES.ARTIFACT_REQUEST ||
-        messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST ||
-        opts.step === 'outreach_strategy_preview' ||
-        opts.step === 'prospect_batch_1_approved'));
+      }) &&
+        (looksLikeNextPlanningRequest(text) ||
+          messageClass === MESSAGE_CLASSES.ARTIFACT_REQUEST ||
+          messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST ||
+          // Explicit show/create strategy while on the strategy step — not
+          // bare approvals (those advance to Copy Plan above).
+          (opts.step === 'outreach_strategy_preview' &&
+            looksLikeOutreachStrategyPreviewRequest(text)) ||
+          opts.step === 'prospect_batch_1_approved')));
 
   if (wantsOutreachStrategy) {
     memory = markArtifactApproved(
@@ -1872,6 +2174,8 @@ function resolveCampaignArtifactAction(opts = {}) {
       priorBatchReview ||
       opts.step === 'prospect_batch_review' ||
       opts.step === 'outreach_strategy_preview' ||
+      opts.step === 'outreach_strategy_preview_approved' ||
+      opts.step === 'outreach_copy_plan' ||
       opts.step === 'prospect_batch_1_approved'
     ) {
       if (isProspectBatchReviewAlreadyApproved(priorBatchReview)) {
@@ -1879,11 +2183,60 @@ function resolveCampaignArtifactAction(opts = {}) {
           memory,
           ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW
         );
-        const alreadyHave = hasOutreachStrategyPreview(priorOutreachStrategy);
+        const strategyReady = hasOutreachStrategyPreview(priorOutreachStrategy);
+        const strategyApproved =
+          isOutreachStrategyPreviewAlreadyApproved(priorOutreachStrategy) ||
+          (memory.approvedArtifacts || []).includes(
+            ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW
+          );
+        // Strategy already approved → hold/show Copy Plan path, never re-ask
+        // to approve the Outreach Strategy Preview.
+        if (strategyApproved || opts.step === 'outreach_copy_plan') {
+          const alreadyHavePlan = hasOutreachCopyPlan(priorOutreachCopyPlan);
+          memory = markArtifactGenerated(
+            memory,
+            ARTIFACT_KINDS.OUTREACH_COPY_PLAN,
+            alreadyHavePlan ? priorOutreachCopyPlan.status || 'draft' : 'draft'
+          );
+          memory.nextRecommendedArtifact = ARTIFACT_KINDS.OUTREACH_COPY_PLAN;
+          return {
+            action: 'emit_outreach_copy_plan',
+            approveKind: ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW,
+            emitKind: ARTIFACT_KINDS.OUTREACH_COPY_PLAN,
+            memory,
+            messageClass,
+            note: alreadyHavePlan
+              ? 'Outreach Copy Plan is ready — showing it for approval or revision.'
+              : 'Outreach Strategy Preview approved. Creating the Outreach Copy Plan for review.',
+            planningState: 'outreach_copy_plan',
+            strategyApproved: true,
+            batch1Approved: true,
+          };
+        }
+        if (strategyReady) {
+          memory = markArtifactGenerated(
+            memory,
+            ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW,
+            priorOutreachStrategy.status || 'draft'
+          );
+          memory.nextRecommendedArtifact =
+            ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW;
+          return {
+            action: 'hold_outreach_strategy_preview',
+            approveKind: null,
+            emitKind: null,
+            memory,
+            messageClass,
+            note:
+              'Outreach Strategy Preview is ready. Approve it to continue to the Outreach Copy Plan, or name a section to revise.',
+            planningState: 'outreach_strategy_preview',
+            batch1Approved: true,
+          };
+        }
         memory = markArtifactGenerated(
           memory,
           ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW,
-          alreadyHave ? priorOutreachStrategy.status || 'draft' : 'draft'
+          'draft'
         );
         memory.nextRecommendedArtifact =
           ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW;
@@ -1893,9 +2246,8 @@ function resolveCampaignArtifactAction(opts = {}) {
           emitKind: ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW,
           memory,
           messageClass,
-          note: alreadyHave
-            ? 'Outreach Strategy Preview is ready — showing it for approval or revision.'
-            : 'Batch 1 approved. Creating the Outreach Strategy Preview for review.',
+          note:
+            'Batch 1 approved. Creating the Outreach Strategy Preview for review.',
           planningState: 'outreach_strategy_preview',
           batch1Approved: true,
         };
@@ -1974,6 +2326,8 @@ function humanArtifactLabel(kind) {
       return 'Prospect Batch Review';
     case ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW:
       return 'Outreach Strategy Preview';
+    case ARTIFACT_KINDS.OUTREACH_COPY_PLAN:
+      return 'Outreach Copy Plan';
     default:
       return kind || 'artifact';
   }
@@ -2282,10 +2636,16 @@ module.exports = {
   looksLikeProspectBatchReviewCorrection,
   looksLikeProspectBatchReviewApproval,
   looksLikeOutreachStrategyPreviewRequest,
+  looksLikeOutreachStrategyPreviewApproval,
+  looksLikeOutreachCopyPlanRequest,
   hasActiveProspectBatchReview,
+  hasActiveOutreachStrategyPreview,
   hasOutreachStrategyPreview,
+  hasOutreachCopyPlan,
   canEmitOutreachStrategyPreview,
+  canEmitOutreachCopyPlan,
   isProspectBatchReviewAlreadyApproved,
+  isOutreachStrategyPreviewAlreadyApproved,
   hasCompletedScoutCandidateBatch,
   looksLikeScoutHandoffBriefRequest,
   looksLikeHandBriefToScoutRequest,

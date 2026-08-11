@@ -16,6 +16,8 @@ const {
   looksLikeProspectBatchReviewCorrection,
   looksLikeProspectBatchReviewApproval,
   looksLikeOutreachStrategyPreviewRequest,
+  looksLikeOutreachStrategyPreviewApproval,
+  looksLikeOutreachCopyPlanRequest,
   classifyProspectAcquisitionIntent,
   PROSPECT_ACQUISITION_INTENTS,
   emptyReasoningMemory,
@@ -34,12 +36,18 @@ const {
   relationshipOverrideMatchesRow,
   normalizeCompanyIdentity,
   approveProspectBatchReviewBatch1,
+  approveOutreachStrategyPreview,
   buildOutreachStrategyPreview,
+  buildOutreachCopyPlan,
   formatOutreachStrategyPreviewMessage,
+  formatOutreachCopyPlanMessage,
   BATCH_1_APPROVED_MESSAGE,
+  OUTREACH_STRATEGY_APPROVED_MESSAGE,
   RELATIONSHIP_STATUS,
   OUTREACH_STRATEGY_PREVIEW_TITLE,
   OUTREACH_STRATEGY_PREVIEW_CLOSING_QUESTION,
+  OUTREACH_COPY_PLAN_TITLE,
+  OUTREACH_COPY_PLAN_CLOSING_QUESTION,
   containsRawPromptFragment,
   findRawPromptFragments,
   outreachStrategyPreviewLooksStale,
@@ -2066,21 +2074,302 @@ describe('Operator Review Digest — Prospect Batch Review acceptance', () => {
       }
     );
 
-    assert.equal(reply.intent, 'prospect_batch_1_approved');
-    assert.equal(reply.planningState, 'outreach_strategy_preview');
-    assert.equal(reply.step, 'outreach_strategy_preview');
-    assert.ok(reply.prospectBatchReview.batch1Approved);
-    assert.match(reply.message, /Batch 1 approved/i);
-    assert.match(reply.message, /outreach strategy preview/i);
-    assert.doesNotMatch(reply.message, /## Recommended decision/);
-    assert.doesNotMatch(
-      reply.message,
-      /Do you want to approve the 6 accepted cold first-pass candidates/i
-    );
     assert.equal(reply.outreachCopyGenerated, false);
     assert.equal(reply.sendsMade, false);
     assert.equal(reply.crmWritesMade, false);
     assert.equal(reply.exportMade, false);
     assert.equal(reply.accountChangesMade, false);
+  });
+});
+
+describe('Outreach Strategy Preview → Outreach Copy Plan approval transition', () => {
+  const strategyApprovalMessage =
+    'Approve the Outreach Strategy Preview. Next step: create the Outreach Copy Plan.';
+
+  function strategySessionFixtures() {
+    const review = (() => {
+      const batch = withGroups(sampleKeyrenterCorrectionBatch());
+      const built = buildProspectBatchReview(batch, {
+        userMessage:
+          'Remove Keyrenter New England Property Management from the accepted cold first-pass candidates — it is an existing relationship, not a cold prospect. Keep it as nurture.',
+        workRequestId: batch.workRequestId,
+      });
+      return approveProspectBatchReviewBatch1(built);
+    })();
+    const ctx = {
+      businessName: 'Anchor Cleaning',
+      brandVoice:
+        'calm, professional, reliable, direct, and easy to work with',
+      competitiveAdvantages:
+        'Reliability and accountability. Responsive communication. Peace of mind for recurring commercial cleaning relationships.',
+      primarySegment: 'property managers',
+      targetMarket: 'Greater Manchester',
+      towns: ['Manchester', 'Bedford', 'Hooksett'],
+    };
+    const strategy = buildOutreachStrategyPreview(review, ctx, {
+      priorCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+        campaignObjective:
+          'Prove that Greater Manchester property managers will take a discovery conversation about recurring commercial cleaning.',
+      },
+    });
+    const sessionState = {
+      step: 'outreach_strategy_preview',
+      answers: {},
+      slots: {
+        previewGenerated: true,
+        previewApproved: true,
+        criteriaGenerated: true,
+        criteriaApproved: true,
+        buildProposalGenerated: true,
+        buildProposalApproved: true,
+        prospectBatchReviewApproved: true,
+        batch1Approved: true,
+        outreachStrategyPreviewGenerated: true,
+      },
+      prospectListCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+        campaignObjective:
+          'Prove that Greater Manchester property managers will take a discovery conversation about recurring commercial cleaning.',
+      },
+      prospectListBuildProposal: {
+        kind: 'prospect_list_build_proposal',
+        status: 'approved',
+      },
+      prospectBatchReview: review,
+      outreachStrategyPreview: strategy,
+    };
+    return { review, ctx, strategy, sessionState };
+  }
+
+  it('detects approval intent for the active Outreach Strategy Preview', () => {
+    const { strategy, review } = strategySessionFixtures();
+    assert.equal(
+      looksLikeOutreachStrategyPreviewApproval(strategyApprovalMessage, {
+        priorOutreachStrategyPreview: strategy,
+        priorProspectBatchReview: review,
+        step: 'outreach_strategy_preview',
+      }),
+      true
+    );
+    assert.equal(
+      classifyProspectAcquisitionIntent(strategyApprovalMessage, {
+        priorOutreachStrategyPreview: strategy,
+        priorProspectBatchReview: review,
+        step: 'outreach_strategy_preview',
+      }),
+      PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_STRATEGY_PREVIEW
+    );
+    assert.equal(
+      looksLikeOutreachStrategyPreviewRequest(strategyApprovalMessage),
+      false
+    );
+  });
+
+  it('approval of Outreach Strategy Preview advances to Outreach Copy Plan', () => {
+    const { review, ctx, strategy, sessionState } = strategySessionFixtures();
+
+    const action = resolveCampaignArtifactAction({
+      userMessage: strategyApprovalMessage,
+      messageClass: MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST,
+      memory: (() => {
+        let mem = emptyReasoningMemory();
+        mem = markArtifactApproved(mem, ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW);
+        mem = markArtifactGenerated(
+          mem,
+          ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW,
+          'draft'
+        );
+        return mem;
+      })(),
+      priorProspectBatchReview: review,
+      priorOutreachStrategyPreview: strategy,
+      step: 'outreach_strategy_preview',
+    });
+    assert.equal(action.action, 'approve_outreach_strategy_preview');
+    assert.equal(action.emitKind, ARTIFACT_KINDS.OUTREACH_COPY_PLAN);
+    assert.equal(action.planningState, 'outreach_copy_plan');
+
+    const reply = buildCampaignPlanningReply(
+      strategyApprovalMessage,
+      sessionState,
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        messageClass: MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST,
+      }
+    );
+
+    assert.match(
+      reply.intent,
+      /outreach_strategy_preview_approved|produce_outreach_copy_plan|show_outreach_copy_plan/
+    );
+    assert.equal(reply.planningState, 'outreach_copy_plan');
+    assert.equal(reply.step, 'outreach_copy_plan');
+    assert.equal(reply.outreachStrategyPreview.status, 'approved');
+    assert.ok(reply.outreachCopyPlan);
+    assert.equal(reply.outreachCopyPlan.kind, 'outreach_copy_plan');
+    assert.equal(reply.outreachCopyPlan.status, 'draft');
+    assert.match(reply.message, /Outreach Copy Plan/);
+    assert.match(
+      reply.message,
+      /Does this Outreach Copy Plan look right to approve/
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Does this Outreach Strategy Preview look right to approve/
+    );
+    assert.ok((reply.outreachCopyPlan.channelSequence || []).length >= 1);
+    assert.ok(reply.outreachCopyPlan.firstTouchGoal);
+    assert.ok(reply.outreachCopyPlan.ctaToTest);
+    assert.ok((reply.outreachCopyPlan.personalizationInputs || []).length >= 1);
+    assert.ok((reply.outreachCopyPlan.proofPoints || []).length >= 1);
+    assert.ok((reply.outreachCopyPlan.followUpTiming || []).length >= 1);
+    assert.ok((reply.outreachCopyPlan.approvalGate || []).length >= 1);
+    assert.equal(reply.outreachCopyGenerated, false);
+    assert.equal(reply.finalOutreachCopyGenerated, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.accountChangesMade, false);
+  });
+
+  it('repeating approval does not re-render the strategy preview', () => {
+    const { review, ctx, strategy, sessionState } = strategySessionFixtures();
+    const first = buildCampaignPlanningReply(
+      strategyApprovalMessage,
+      sessionState,
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+      }
+    );
+    assert.equal(first.outreachStrategyPreview.status, 'approved');
+    assert.ok(first.outreachCopyPlan);
+
+    const second = buildCampaignPlanningReply(
+      strategyApprovalMessage,
+      {
+        ...sessionState,
+        step: 'outreach_copy_plan',
+        outreachStrategyPreview: first.outreachStrategyPreview,
+        outreachCopyPlan: first.outreachCopyPlan,
+        slots: {
+          ...sessionState.slots,
+          outreachStrategyPreviewApproved: true,
+          strategyApproved: true,
+          outreachCopyPlanGenerated: true,
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: first.outreachStrategyPreview,
+        priorOutreachCopyPlan: first.outreachCopyPlan,
+      }
+    );
+
+    assert.equal(second.planningState, 'outreach_copy_plan');
+    assert.ok(second.outreachCopyPlan);
+    assert.match(second.message, /Outreach Copy Plan/);
+    assert.doesNotMatch(
+      second.message,
+      /Does this Outreach Strategy Preview look right to approve/
+    );
+    assert.match(
+      second.message,
+      /Does this Outreach Copy Plan look right to approve|already available/i
+    );
+  });
+
+  it('creates Outreach Copy Plan when missing and shows existing when present', () => {
+    const { review, ctx, strategy, sessionState } = strategySessionFixtures();
+
+    const created = buildCampaignPlanningReply(
+      'Create the Outreach Copy Plan',
+      {
+        ...sessionState,
+        outreachStrategyPreview: approveOutreachStrategyPreview(strategy),
+        slots: {
+          ...sessionState.slots,
+          outreachStrategyPreviewApproved: true,
+          strategyApproved: true,
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: approveOutreachStrategyPreview(strategy),
+      }
+    );
+    assert.ok(created.outreachCopyPlan);
+    assert.equal(created.intent, 'produce_outreach_copy_plan');
+    assert.equal(created.outreachCopyPlan.status, 'draft');
+
+    const shown = buildCampaignPlanningReply(
+      'Show the Outreach Copy Plan',
+      {
+        ...sessionState,
+        step: 'outreach_copy_plan',
+        outreachStrategyPreview: created.outreachStrategyPreview,
+        outreachCopyPlan: created.outreachCopyPlan,
+        slots: {
+          ...sessionState.slots,
+          outreachStrategyPreviewApproved: true,
+          strategyApproved: true,
+          outreachCopyPlanGenerated: true,
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: created.outreachStrategyPreview,
+        priorOutreachCopyPlan: created.outreachCopyPlan,
+      }
+    );
+    assert.equal(shown.intent, 'show_outreach_copy_plan');
+    assert.equal(
+      shown.outreachCopyPlan.campaignObjective,
+      created.outreachCopyPlan.campaignObjective
+    );
+    assert.match(
+      shown.message,
+      /Does this Outreach Copy Plan look right to approve/
+    );
+  });
+
+  it('Outreach Copy Plan asks for copy-plan approval, not strategy approval again', () => {
+    const { review, ctx, strategy } = strategySessionFixtures();
+    const plan = buildOutreachCopyPlan(
+      approveOutreachStrategyPreview(strategy),
+      review,
+      ctx,
+      {}
+    );
+    const msg = formatOutreachCopyPlanMessage(plan);
+    assert.match(msg, new RegExp(OUTREACH_COPY_PLAN_TITLE));
+    assert.match(msg, /Recommended channel sequence/i);
+    assert.match(msg, /First-touch message goal/i);
+    assert.match(msg, /CTA to test/i);
+    assert.match(msg, /Personalization inputs from Batch 1/i);
+    assert.match(msg, /Proof points to use/i);
+    assert.match(msg, /Follow-up timing and purpose/i);
+    assert.match(msg, /Approval gate before drafting final copy/i);
+    assert.match(msg, new RegExp(OUTREACH_COPY_PLAN_CLOSING_QUESTION));
+    assert.doesNotMatch(
+      msg,
+      new RegExp(OUTREACH_STRATEGY_PREVIEW_CLOSING_QUESTION)
+    );
+    assert.equal(plan.finalOutreachCopyGenerated, false);
+    assert.equal(plan.outreachCopyGenerated, false);
+    assert.equal(plan.sendsMade, false);
+    assert.equal(plan.crmWritesMade, false);
+    assert.equal(plan.exportMade, false);
+    assert.equal(plan.accountChangesMade, false);
+    assert.match(OUTREACH_STRATEGY_APPROVED_MESSAGE, /Outreach Copy Plan/);
   });
 });

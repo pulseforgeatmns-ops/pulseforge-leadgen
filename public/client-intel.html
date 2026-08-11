@@ -1153,6 +1153,7 @@
       scoutCandidateBatch: null,
       prospectBatchReview: null,
       outreachStrategyPreview: null,
+      outreachCopyPlan: null,
       growthPlan: null,
       workspaceTab: 'overview',
       isSample: false,
@@ -3428,6 +3429,7 @@
       state.scoutHandoff = null;
       state.prospectBatchReview = null;
       state.outreachStrategyPreview = null;
+      state.outreachCopyPlan = null;
       state.scoutWorkRequest = null;
       state.scoutCandidateBatch = null;
       state.growthInfrastructureReadinessReport = null;
@@ -3547,7 +3549,14 @@
           if (data && data.outreachStrategyPreview) {
             state.outreachStrategyPreview = data.outreachStrategyPreview;
           }
-          if (data && data.prospectBatchReview) {
+          if (data && data.outreachCopyPlan) {
+            state.outreachCopyPlan = data.outreachCopyPlan;
+          }
+          if (data && data.outreachCopyPlan) {
+            els.sidePanelTitle.textContent = 'Outreach Copy Plan';
+            els.sidePanelSub.textContent =
+              'Copy plan only — no final outreach copy, sends, or CRM writes';
+          } else if (data && data.prospectBatchReview) {
             els.sidePanel.innerHTML = renderProspectBatchReview(
               data.prospectBatchReview
             );
