@@ -15,6 +15,7 @@ const {
   looksLikeProspectBatchReviewRequest,
   looksLikeProspectBatchReviewCorrection,
   looksLikeProspectBatchReviewApproval,
+  looksLikeOutreachStrategyPreviewRequest,
   classifyProspectAcquisitionIntent,
   PROSPECT_ACQUISITION_INTENTS,
   emptyReasoningMemory,
@@ -33,9 +34,12 @@ const {
   relationshipOverrideMatchesRow,
   normalizeCompanyIdentity,
   approveProspectBatchReviewBatch1,
+  buildOutreachStrategyPreview,
+  formatOutreachStrategyPreviewMessage,
   BATCH_1_APPROVED_MESSAGE,
   RELATIONSHIP_STATUS,
   OUTREACH_STRATEGY_PREVIEW_TITLE,
+  OUTREACH_STRATEGY_PREVIEW_CLOSING_QUESTION,
 } = require('../services/clientIntelligenceCampaignPlanning');
 const {
   splitDigestAndEvidence,
@@ -1128,14 +1132,30 @@ describe('Prospect Batch Review — Batch 1 approval transition', () => {
     assert.equal(action.action, 'approve_prospect_batch_review');
     assert.equal(action.planningState, 'outreach_strategy_preview');
     assert.match(String(action.note || ''), /Batch 1 approved/i);
+    assert.match(String(action.note || ''), /Outreach Strategy Preview/i);
 
     const reply = buildCampaignPlanningReply(
       approvalMessage,
       approvedSessionState(review),
-      { businessName: 'Anchor Cleaning' },
+      {
+        businessName: 'Anchor Cleaning',
+        brandVoice:
+          'calm, professional, reliable, direct, and easy to work with',
+        competitiveAdvantages:
+          'Reliability and accountability. Responsive communication. Peace of mind for recurring cleaning relationships.',
+        primarySegment: 'property managers',
+        targetMarket: 'Greater Manchester',
+        towns: ['Manchester', 'Bedford', 'Hooksett'],
+      },
       {
         priorScoutCandidateBatch: withGroups(sampleKeyrenterCorrectionBatch()),
         priorProspectBatchReview: review,
+        priorCriteriaPreview: {
+          kind: 'prospect_list_criteria_preview',
+          status: 'approved',
+          campaignObjective:
+            'Prove that Greater Manchester property managers will take a discovery conversation about recurring commercial cleaning.',
+        },
         messageClass: MESSAGE_CLASSES.APPROVAL,
       }
     );
@@ -1146,10 +1166,27 @@ describe('Prospect Batch Review — Batch 1 approval transition', () => {
     assert.ok(reply.prospectBatchReview.batch1Approved);
     assert.equal(reply.prospectBatchReview.status, 'batch_1_approved');
     assert.match(reply.message, /Batch 1 approved/i);
-    assert.match(reply.message, /outreach strategy preview/i);
+    assert.match(reply.message, /Outreach Strategy Preview/);
     assert.ok(reply.message.includes(BATCH_1_APPROVED_MESSAGE));
+    assert.doesNotMatch(
+      reply.message,
+      /Next step:\s*prepare outreach strategy preview/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /ask me to (?:create|prepare|request).{0,40}outreach strategy/i
+    );
+    assert.match(
+      reply.message,
+      /Does this Outreach Strategy Preview look right to approve/
+    );
     assert.ok(reply.outreachStrategyPreview);
     assert.equal(reply.outreachStrategyPreview.kind, 'outreach_strategy_preview');
+    assert.equal(reply.outreachStrategyPreview.status, 'draft');
+    assert.ok(reply.outreachStrategyPreview.campaignObjective);
+    assert.ok(
+      (reply.outreachStrategyPreview.outreachApproach || []).length >= 2
+    );
     assert.equal(reply.outreachCopyGenerated, false);
     assert.equal(reply.sendsMade, false);
     assert.equal(reply.crmWritesMade, false);
@@ -1272,7 +1309,7 @@ describe('Prospect Batch Review — Batch 1 approval transition', () => {
       }
     );
     assert.equal(reply.planningState, 'outreach_strategy_preview');
-    assert.equal(reply.outreachStrategyPreview.status, 'pending');
+    assert.equal(reply.outreachStrategyPreview.status, 'draft');
     assert.equal(reply.outreachStrategyPreview.reviewFirst, true);
     assert.equal(reply.outreachStrategyPreview.planningOnly, true);
     assert.equal(reply.outreachStrategyPreview.outreachCopyGenerated, false);
@@ -1290,6 +1327,149 @@ describe('Prospect Batch Review — Batch 1 approval transition', () => {
       reply.message,
       /campaign is live|I (?:am )?sending|launching outreach now/i
     );
+  });
+
+  it('create Outreach Strategy Preview after Batch 1 creates or shows strategy, not a request prompt', () => {
+    const review = correctedReview();
+    const approved = approveProspectBatchReviewBatch1(review);
+    const createMsg = 'Create the Outreach Strategy Preview';
+
+    assert.equal(looksLikeOutreachStrategyPreviewRequest(createMsg), true);
+    assert.equal(
+      classifyProspectAcquisitionIntent(createMsg, {
+        priorProspectBatchReview: approved,
+        step: 'outreach_strategy_preview',
+      }),
+      PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_STRATEGY_PREVIEW
+    );
+
+    const created = buildCampaignPlanningReply(
+      createMsg,
+      {
+        ...approvedSessionState(approved),
+        step: 'outreach_strategy_preview',
+      },
+      {
+        businessName: 'Anchor Cleaning',
+        brandVoice: 'calm, professional, reliable',
+        competitiveAdvantages:
+          'Reliability and accountability for property managers.',
+        primarySegment: 'property managers',
+        targetMarket: 'Greater Manchester',
+      },
+      {
+        priorProspectBatchReview: approved,
+        priorScoutCandidateBatch: withGroups(sampleKeyrenterCorrectionBatch()),
+        priorCriteriaPreview: {
+          kind: 'prospect_list_criteria_preview',
+          status: 'approved',
+          campaignObjective:
+            'Prove property managers will book a walkthrough conversation.',
+        },
+      }
+    );
+
+    assert.equal(created.step, 'outreach_strategy_preview');
+    assert.equal(created.planningState, 'outreach_strategy_preview');
+    assert.match(
+      created.intent,
+      /outreach_strategy_preview|prospect_batch_1_approved/
+    );
+    assert.ok(created.outreachStrategyPreview);
+    assert.ok(created.outreachStrategyPreview.campaignObjective);
+    assert.match(created.message, /Outreach Strategy Preview/);
+    assert.match(
+      created.message,
+      /Does this Outreach Strategy Preview look right to approve|revise a specific section/i
+    );
+    assert.doesNotMatch(
+      created.message,
+      /Next step:\s*prepare outreach strategy preview/i
+    );
+    assert.doesNotMatch(
+      created.message,
+      /ask me to (?:create|prepare|request).{0,40}outreach strategy/i
+    );
+    assert.doesNotMatch(created.message, /## 1\. Accepted cold first-pass/i);
+    assert.doesNotMatch(
+      created.message,
+      /Do you want to approve the 6 accepted cold first-pass candidates/i
+    );
+    assert.equal(created.outreachCopyGenerated, false);
+    assert.equal(created.sendsMade, false);
+    assert.equal(created.crmWritesMade, false);
+    assert.equal(created.exportMade, false);
+    assert.equal(created.accountChangesMade, false);
+
+    const second = buildCampaignPlanningReply(
+      createMsg,
+      {
+        ...approvedSessionState(approved),
+        step: 'outreach_strategy_preview',
+        outreachStrategyPreview: created.outreachStrategyPreview,
+      },
+      { businessName: 'Anchor Cleaning' },
+      {
+        priorProspectBatchReview: approved,
+        priorOutreachStrategyPreview: created.outreachStrategyPreview,
+        priorScoutCandidateBatch: withGroups(sampleKeyrenterCorrectionBatch()),
+      }
+    );
+    assert.equal(second.intent, 'show_outreach_strategy_preview');
+    assert.equal(second.planningState, 'outreach_strategy_preview');
+    assert.match(second.message, /already available|for approval or revision/i);
+    assert.match(
+      second.message,
+      /Does this Outreach Strategy Preview look right to approve/
+    );
+    assert.doesNotMatch(
+      second.message,
+      /Creating the Outreach Strategy Preview from the approved Blueprint/i
+    );
+    assert.doesNotMatch(second.message, /## 1\. Accepted cold first-pass/i);
+    assert.equal(
+      second.outreachStrategyPreview.campaignObjective,
+      created.outreachStrategyPreview.campaignObjective
+    );
+  });
+
+  it('Outreach Strategy Preview carries Blueprint voice, objective, and Batch 1 prospects', () => {
+    const review = correctedReview();
+    const approved = approveProspectBatchReviewBatch1(review);
+    const strategy = buildOutreachStrategyPreview(
+      approved,
+      {
+        businessName: 'Anchor Cleaning',
+        brandVoice:
+          "Brand voice should read as calm, professional, reliable, and easy to work with. Tone guidance constrains later language without choosing channels or campaigns.",
+        competitiveAdvantages:
+          'Customers choose this business for reliability and accountability. Responsive communication. Peace of mind for recurring relationships.',
+        primarySegment: 'property managers',
+        targetMarket: 'Greater Manchester',
+        towns: ['Manchester', 'Bedford'],
+      },
+      {
+        priorCriteriaPreview: {
+          campaignObjective:
+            'Prove that Greater Manchester property managers will take a discovery conversation.',
+        },
+      }
+    );
+    assert.equal(strategy.kind, 'outreach_strategy_preview');
+    assert.equal(strategy.approvedCandidateCount, 6);
+    assert.match(strategy.campaignObjective, /discovery conversation/i);
+    assert.match(strategy.voiceTone, /calm|professional|reliable/i);
+    assert.ok(strategy.differentiators.length >= 1);
+    assert.ok(strategy.batchProspects.some((n) => /Elm Grove/i.test(n)));
+    assert.ok(!strategy.batchProspects.some((n) => /Keyrenter|Cedar/i.test(n)));
+    assert.equal(strategy.outreachCopyGenerated, false);
+
+    const msg = formatOutreachStrategyPreviewMessage(strategy);
+    assert.match(msg, /Outreach Strategy Preview/);
+    assert.match(msg, /Batch 1 scope/i);
+    assert.match(msg, /Voice & tone/i);
+    assert.match(msg, new RegExp(OUTREACH_STRATEGY_PREVIEW_CLOSING_QUESTION));
+    assert.doesNotMatch(msg, /Subject:|Hi \{|Dear /);
   });
 });
 
