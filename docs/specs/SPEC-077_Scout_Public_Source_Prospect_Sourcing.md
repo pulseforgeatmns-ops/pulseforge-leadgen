@@ -107,15 +107,17 @@ Scout public sourcing applies hard quality gates before a batch is reviewable:
 2. Every Places query includes `{town} NH` or `New Hampshire` and Text Search is biased with `region=us`
 3. Priority towns: Bedford, Hooksett, Londonderry, Auburn, Goffstown; Manchester NH is nearby/fill (`review_required`) unless needed to fill the batch
 4. Concord / Derry / other NH towns outside the cluster are `review_required` unless explicitly allowed — never `accepted`
-5. Hard-reject UK / non-US geography, including bare “Manchester” without an NH/USA token and UK place markers (Salford, Stockport, Deansgate, +44, `.co.uk`)
-6. Hard-reject cleaning / maid / housekeeping / janitorial / carpet-cleaning competitors when targeting property managers
-7. Hard-reject large institutional/national firms unless `allowInstitutional` is set on the work request
-8. `confidence=high` only when source URL + NH location + property-management fit + reachable contact signal are all present on a priority town and no exclusion risk remains
-9. Fit rationale must be source-specific (not copied inclusion/exclusion criteria)
-10. Contact roles are labeled `Suggested contact role: …` unless a verified named+title contact is present — never overclaim `Owner / decision-maker`
-11. Results are grouped as `accepted` / `review_required` / `rejected` with `rejectionReason` on rejected rows
-12. Injected `scoutSourcingFn` paths are re-gated — they cannot bypass quality rules
-13. Completed handoffs and CIE brief/UI replace draft-brief guardrail text with completed-result guardrails
+5. Hard-reject UK / non-US geography with `rejectionReason: outside_market_country` (bare “Manchester” without NH/USA token; UK markers; +44; `.co.uk`)
+6. Hard-reject cleaning / maid / housekeeping / janitorial / carpet-cleaning competitors with `rejectionReason: wrong_segment_cleaning_competitor`
+7. Hard-reject large institutional/national firms unless `allowInstitutional` is set — never `confidence=high`
+8. Manchester / Derry / Concord / other non-primary NH towns are `review_required` with `outside_primary_town_cluster` unless explicitly approved; only Bedford/Hooksett/Londonderry/Auburn/Goffstown + PM evidence may be `accepted`
+9. `confidence=high` only when source URL + primary NH town + property-management fit + reachable contact signal are all present and no exclusion risk remains
+10. Fit rationale must cite source-specific evidence (location, category/type, website/source, property-management relevance) — never copied inclusion/exclusion criteria
+11. Contact roles are labeled `Suggested contact role: …` unless a verified named+title contact is present — never overclaim `Owner / decision-maker`
+12. Results are grouped as Accepted / Review required / Rejected; rejected rows are audit-only and must not appear as usable review candidates
+13. If accepted/reviewable PM count is below `targetCountMin`, work-request status is `failed_quality_gate` (batch still returned for audit grouping)
+14. Injected `scoutSourcingFn` paths are re-gated — they cannot bypass quality rules
+15. After Scout execution (completed / failed / failed_quality_gate), CIE brief section 11 and UI drop draft handoff language such as “Creating this brief does not hand it to Scout”
 
 ## Acceptance
 

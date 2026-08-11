@@ -42,6 +42,7 @@ const {
   SCOUT_HANDOFF_STATUSES,
   SCOUT_HANDOFF_UI_STATUS,
   SCOUT_SOURCING_NOT_WIRED_MESSAGE,
+  COMPLETED_RESULT_GUARDRAILS,
   buildScoutHandoff,
   handBriefToScout,
   handBriefToScoutAsync,
@@ -2711,15 +2712,45 @@ function produceHandBriefToScoutResult(ctx, answers, slots, opts, leadIn) {
 function applyScoutExecutionResult(reply, result) {
   if (!reply || !result) return reply;
   const handoff = result.handoff || reply.scoutHandoff;
-  const completed =
+  const scoutRan = Boolean(
+    result.scoutRan ||
+      (handoff &&
+        (handoff.status === 'completed' ||
+          handoff.status === 'failed' ||
+          handoff.status === 'failed_quality_gate' ||
+          handoff.scoutRan))
+  );
+  const completed = Boolean(
     handoff &&
-    (handoff.status === 'completed' ||
-      handoff.status === 'failed' ||
-      Boolean(result.scoutRan));
-  const completedGuardrails =
-    (handoff && handoff.guardrails) ||
-    (result.candidateBatch && result.candidateBatch.guardrails) ||
-    null;
+      (handoff.status === 'completed' ||
+        handoff.status === 'failed' ||
+        handoff.status === 'failed_quality_gate' ||
+        scoutRan)
+  );
+  // Prefer executed-result guardrails — never keep draft "Creating this brief…" copy.
+  let completedGuardrails = null;
+  if (completed) {
+    const fromHandoff =
+      handoff && Array.isArray(handoff.guardrails) ? handoff.guardrails : null;
+    const handoffLooksDraft =
+      fromHandoff &&
+      fromHandoff.some((g) =>
+        /Creating this brief does not hand|when sourcing execution is wired|in this step/i.test(
+          String(g || '')
+        )
+      );
+    if (fromHandoff && fromHandoff.length && !handoffLooksDraft) {
+      completedGuardrails = [...fromHandoff];
+    } else if (
+      result.candidateBatch &&
+      Array.isArray(result.candidateBatch.guardrails) &&
+      result.candidateBatch.guardrails.length
+    ) {
+      completedGuardrails = [...result.candidateBatch.guardrails];
+    } else {
+      completedGuardrails = [...COMPLETED_RESULT_GUARDRAILS];
+    }
+  }
   const brief = reply.scoutHandoffBrief
     ? {
         ...reply.scoutHandoffBrief,
@@ -2727,7 +2758,7 @@ function applyScoutExecutionResult(reply, result) {
         scoutHandoff: handoff,
         status: handoff && handoff.status,
         uiStatus: handoff && handoff.uiStatus,
-        scoutRan: Boolean(result.scoutRan),
+        scoutRan,
         workRequestId: result.workRequest && result.workRequest.workRequestId,
         updatedAt: handoff && handoff.updatedAt,
         // Once Scout has run, drop draft-brief guardrail / review-gate language.
@@ -2737,10 +2768,12 @@ function applyScoutExecutionResult(reply, result) {
         reviewGate: completed
           ? 'Operator reviews Scout’s returned batch (accepted / review_required / rejected) before any Composer, CRM, export, or outreach use. Rejected and review_required rows are not outreach-ready.'
           : reply.scoutHandoffBrief.reviewGate,
-        recommendedNextStep: result.scoutRan
+        recommendedNextStep: scoutRan
           ? result.ok
             ? 'Review Scout candidates by status (accepted / review_required / rejected). Approve before Composer / CRM / export use. No outreach or CRM writes yet.'
-            : 'Scout sourcing failed — work request preserved. Review failure and retry or revise criteria.'
+            : handoff && handoff.status === 'failed_quality_gate'
+              ? 'Scout failed quality gate — usable accepted/reviewable property-manager count below minimum. Review rejected audit rows, revise criteria, and retry.'
+              : 'Scout sourcing failed — work request preserved. Review failure and retry or revise criteria.'
           : reply.scoutHandoffBrief.recommendedNextStep,
         disclaimer: completed
           ? 'Scout handoff results are review-only. No outreach copy, sends, CRM writes, or account changes have been made. Draft brief instructions no longer apply.'

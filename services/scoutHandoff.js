@@ -19,7 +19,9 @@ const {
 const {
   gateScoutCandidateRows,
   groupCandidatesByStatus,
+  batchMeetsQualityThreshold,
   CANDIDATE_STATUS,
+  REJECTION_REASON,
 } = require('./scoutQualityGate');
 const {
   defaultScoutWorkRequestStore,
@@ -36,6 +38,7 @@ const SCOUT_HANDOFF_STATUSES = Object.freeze({
   IN_PROGRESS: 'in_progress',
   COMPLETED: 'completed',
   FAILED: 'failed',
+  FAILED_QUALITY_GATE: 'failed_quality_gate',
   NEEDS_OPERATOR_REVIEW: 'needs_operator_review',
 });
 
@@ -48,6 +51,7 @@ const SCOUT_HANDOFF_UI_STATUS = Object.freeze({
   SCOUT_RESULTS_READY: 'Scout results ready',
   SCOUT_UNAVAILABLE: 'Scout unavailable / not wired',
   SCOUT_FAILED: 'Scout failed',
+  SCOUT_FAILED_QUALITY_GATE: 'Scout failed quality gate',
   NEEDS_OPERATOR_REVIEW: 'Needs operator review',
 });
 
@@ -81,9 +85,9 @@ const DEFAULT_EVIDENCE_REQUIREMENTS = Object.freeze([
 ]);
 
 const DEFAULT_CONFIDENCE_RULES = Object.freeze([
-  'High — source URL + in-market location + clear segment/subtype + reachable decision-maker signal',
-  'Medium — source URL + in-market location + segment fit, but thin contact or subtype evidence',
-  'Low / review_required — missing source URL, weak market match, or ambiguous fit; do not treat as ready',
+  'High — source URL + primary NH town + property-management fit + reachable contact signal',
+  'Medium — source URL + primary NH town + property-management fit, but thin contact evidence',
+  'Low / review_required — missing source URL, outside primary town cluster, or ambiguous fit; do not treat as ready',
 ]);
 
 const DEFAULT_GUARDRAILS = Object.freeze([
@@ -139,6 +143,8 @@ function uiStatusForHandoff(handoff) {
       return SCOUT_HANDOFF_UI_STATUS.SCOUT_RESULTS_READY;
     case SCOUT_HANDOFF_STATUSES.FAILED:
       return SCOUT_HANDOFF_UI_STATUS.SCOUT_FAILED;
+    case SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE:
+      return SCOUT_HANDOFF_UI_STATUS.SCOUT_FAILED_QUALITY_GATE;
     case SCOUT_HANDOFF_STATUSES.NEEDS_OPERATOR_REVIEW:
       return SCOUT_HANDOFF_UI_STATUS.NEEDS_OPERATOR_REVIEW;
     default:
@@ -274,10 +280,59 @@ function persistWorkRequestRecord(handoff, workRequest, opts = {}, extra = {}) {
   return record;
 }
 
+function formatCandidateGroupLines(groups) {
+  const lines = [];
+  const pushGroup = (label, rows) => {
+    if (!rows || !rows.length) return;
+    lines.push(`${label}:`);
+    for (const row of rows) {
+      lines.push(
+        `- ${row.companyName} | ${row.location || '—'} | ${row.sourceUrl || '—'} | ${
+          row.fitRationale || '—'
+        } | role: ${row.suggestedContactRole || '—'} | risks: ${
+          row.risks || '—'
+        } | confidence: ${row.confidence || '—'}${
+          row.statusReason ? ` | reason: ${row.statusReason}` : ''
+        }${
+          row.rejectionReason ? ` | rejectionReason: ${row.rejectionReason}` : ''
+        }`
+      );
+    }
+    lines.push('');
+  };
+  pushGroup('Accepted candidates', (groups && groups.accepted) || []);
+  pushGroup('Review required', (groups && groups.review_required) || []);
+  pushGroup('Rejected candidates', (groups && groups.rejected) || []);
+  return lines;
+}
+
 function finishWithCandidates(handoff, workRequest, candidates, opts = {}) {
   const rejected = Array.isArray(opts.rejected) ? opts.rejected : [];
   const groups =
     opts.groups || groupCandidatesByStatus(candidates, rejected);
+  const threshold =
+    opts.threshold ||
+    batchMeetsQualityThreshold(candidates, workRequest, {
+      targetMin: opts.targetMin || workRequest.targetCountMin,
+    });
+
+  // Below-minimum accepted/reviewable PM candidates → failed_quality_gate.
+  if (!threshold.ok) {
+    return finishWithFailure(handoff, workRequest, opts, {
+      error: 'failed_quality_gate',
+      status: SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE,
+      message: [
+        `Scout quality gate failed — usable accepted/reviewable property-manager candidates (${threshold.usableCount}) below minimum (${threshold.targetMin}).`,
+        'Rejected rows are audit-only and are not usable review candidates.',
+        'No fabricated placeholder rows were generated.',
+        'No outreach copy, sends, CRM writes, or account changes were made.',
+      ].join('\n'),
+      candidates,
+      rejected,
+      groups,
+    });
+  }
+
   const candidateBatch = buildCandidateBatch(handoff, candidates, {
     rejected,
     groups,
@@ -324,29 +379,9 @@ function finishWithCandidates(handoff, workRequest, candidates, opts = {}) {
       groups.review_required || []
     ).length} · Rejected: ${(groups.rejected || []).length}`,
     '',
+    ...formatCandidateGroupLines(groups),
+    'Guardrails:',
   ];
-  const pushGroup = (label, rows) => {
-    if (!rows.length) return;
-    lines.push(`${label}:`);
-    for (const row of rows) {
-      lines.push(
-        `- ${row.companyName} | ${row.location || '—'} | ${row.sourceUrl} | ${
-          row.fitRationale || '—'
-        } | role: ${row.suggestedContactRole || '—'} | risks: ${
-          row.risks || '—'
-        } | confidence: ${row.confidence}${
-          row.statusReason ? ` | reason: ${row.statusReason}` : ''
-        }${
-          row.rejectionReason ? ` | rejectionReason: ${row.rejectionReason}` : ''
-        }`
-      );
-    }
-    lines.push('');
-  };
-  pushGroup('Accepted', groups.accepted || []);
-  pushGroup('Review required', groups.review_required || []);
-  pushGroup('Rejected', groups.rejected || []);
-  lines.push('Guardrails:');
   for (const g of candidateBatch.guardrails) lines.push(`- ${g}`);
   lines.push('');
   lines.push(
@@ -371,54 +406,114 @@ function finishWithCandidates(handoff, workRequest, candidates, opts = {}) {
 
 function finishWithFailure(handoff, workRequest, opts = {}, detail = {}) {
   const updatedAt = nowIso();
+  const status =
+    detail.status ||
+    (detail.error === 'failed_quality_gate'
+      ? SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE
+      : SCOUT_HANDOFF_STATUSES.FAILED);
+  const completedGuardrails = [...COMPLETED_RESULT_GUARDRAILS];
+  const candidates = Array.isArray(detail.candidates) ? detail.candidates : [];
+  const rejected = Array.isArray(detail.rejected)
+    ? detail.rejected
+    : Array.isArray(opts.rejected)
+      ? opts.rejected
+      : [];
+  const groups =
+    detail.groups ||
+    opts.groups ||
+    (candidates.length || rejected.length
+      ? groupCandidatesByStatus(candidates, rejected)
+      : null);
+
+  let candidateBatch = null;
+  if (groups || candidates.length || rejected.length) {
+    candidateBatch = buildCandidateBatch(handoff, candidates, {
+      rejected,
+      groups: groups || groupCandidatesByStatus(candidates, rejected),
+      status: status === SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE
+        ? 'failed_quality_gate'
+        : 'failed',
+    });
+  }
+
   const nextWorkRequest = {
     ...workRequest,
-    status: SCOUT_HANDOFF_STATUSES.FAILED,
+    status,
     updatedAt,
     failedAt: updatedAt,
     failureReason: detail.error || detail.message || 'scout_sourcing_failed',
+    // Once Scout has run, drop draft-brief guardrail language.
+    guardrails: completedGuardrails,
   };
   const nextHandoff = {
     ...handoff,
-    status: SCOUT_HANDOFF_STATUSES.FAILED,
+    status,
     scoutRan: true,
     executionWired: true,
     sourcingUnavailable: false,
-    candidateBatch: null,
+    candidateBatch,
     workRequest: nextWorkRequest,
     workRequestId: nextWorkRequest.workRequestId,
     updatedAt,
     crmWritesMade: false,
     outreachCopyGenerated: false,
     accountChangesMade: false,
+    guardrails: completedGuardrails,
   };
   nextHandoff.uiStatus = uiStatusForHandoff(nextHandoff);
   persistWorkRequestRecord(nextHandoff, nextWorkRequest, opts, {
-    status: SCOUT_HANDOFF_STATUSES.FAILED,
-    candidateBatch: null,
+    status,
+    candidateBatch,
     failureReason: nextWorkRequest.failureReason,
   });
+
+  const detailMessage =
+    detail.message ||
+    'Scout ran against the approved handoff but returned no usable candidates with source URLs.';
+  const lines = [detailMessage];
+  if (!/No fabricated placeholder/i.test(detailMessage)) {
+    lines.push('No fabricated placeholder rows were generated.');
+  }
+  if (!/No outreach copy/i.test(detailMessage)) {
+    lines.push(
+      'No outreach copy, sends, CRM writes, or account changes were made.'
+    );
+  }
+  lines.push(
+    `Handoff status: ${nextHandoff.uiStatus}`,
+    `Work request ${nextWorkRequest.workRequestId} preserved for retry / operator review.`,
+    detail.error ? `Failure: ${detail.error}` : null,
+    ''
+  );
+
+  if (groups) {
+    lines.push(
+      `Accepted: ${(groups.accepted || []).length} · Review required: ${(
+        groups.review_required || []
+      ).length} · Rejected: ${(groups.rejected || []).length}`
+    );
+    lines.push('');
+    lines.push(...formatCandidateGroupLines(groups));
+  }
+
+  lines.push('Guardrails:');
+  for (const g of completedGuardrails) lines.push(`- ${g}`);
 
   return {
     ok: false,
     handoff: nextHandoff,
     workRequest: nextWorkRequest,
-    candidateBatch: null,
+    candidateBatch,
     scoutRan: true,
     sourcingUnavailable: false,
     executionWired: true,
-    intent: 'scout_sourcing_failed',
-    message: [
-      detail.message ||
-        'Scout ran against the approved handoff but returned no usable candidates with source URLs.',
-      'No fabricated placeholder rows were generated.',
-      'No outreach copy, sends, CRM writes, or account changes were made.',
-      `Handoff status: ${nextHandoff.uiStatus}`,
-      `Work request ${nextWorkRequest.workRequestId} preserved for retry / operator review.`,
-      detail.error ? `Failure: ${detail.error}` : null,
-    ]
-      .filter(Boolean)
-      .join('\n'),
+    intent:
+      status === SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE
+        ? 'scout_failed_quality_gate'
+        : 'scout_sourcing_failed',
+    message: lines.filter(Boolean).join('\n'),
+    groups: groups || null,
+    rejected,
   };
 }
 
@@ -426,21 +521,38 @@ function normalizeScoutCandidate(row, idx) {
   const r = row || {};
   const sourceUrl = r.sourceUrl || r.website || r.url || null;
   const roleRaw = r.suggestedContactRole || r.contactRole || null;
-  const verifiedPerson = Boolean(r.contactName && r.contactTitle);
+  const verifiedPerson = Boolean(
+    (r.contactName || r.verifiedContactName || r.decisionMakerName) &&
+      (r.contactTitle || r.verifiedContactTitle || r.jobTitle)
+  );
   let suggestedContactRole = roleRaw;
-  if (roleRaw && !/^suggested contact role:/i.test(String(roleRaw))) {
+  if (!roleRaw) {
+    suggestedContactRole = verifiedPerson
+      ? `${r.contactName || r.verifiedContactName || r.decisionMakerName} — ${
+          r.contactTitle || r.verifiedContactTitle || r.jobTitle
+        }`
+      : 'Suggested contact role: property / operations contact';
+  } else if (roleRaw && !/^suggested contact role:/i.test(String(roleRaw))) {
     suggestedContactRole = verifiedPerson
       ? String(roleRaw)
-      : `Suggested contact role: ${String(roleRaw).replace(
-          /^owner\s*\/\s*decision-?maker$/i,
-          'property / operations contact'
-        )}`;
+      : `Suggested contact role: ${String(roleRaw)
+          .replace(/^owner\s*\/\s*decision-?maker$/i, 'property / operations contact')
+          .replace(/\bdecision-?maker\b/i, 'contact')}`;
   } else if (
     roleRaw &&
     /suggested contact role:\s*owner\s*\/\s*decision-?maker/i.test(String(roleRaw)) &&
     !verifiedPerson
   ) {
     suggestedContactRole = 'Suggested contact role: property / operations contact';
+  } else if (
+    roleRaw &&
+    /\bdecision-?maker\b/i.test(String(roleRaw)) &&
+    !verifiedPerson
+  ) {
+    suggestedContactRole = String(roleRaw).replace(
+      /\bdecision-?maker\b/i,
+      'contact'
+    );
   }
   const status = r.status || 'review_required';
   const statusReason = r.statusReason || null;
@@ -451,6 +563,10 @@ function normalizeScoutCandidate(row, idx) {
     sourceUrl,
     website: r.website || sourceUrl || null,
     location: r.location || r.marketTown || r.address || null,
+    address: r.address || r.location || r.marketTown || null,
+    industry: r.industry || r.snippet || null,
+    placeTypes: r.placeTypes || r.types || [],
+    phone: r.phone || r.formatted_phone_number || null,
     marketTown: r.marketTown || r.location || null,
     segment: r.segment || null,
     subtype: r.subtype || r.segmentSubtype || null,
@@ -460,13 +576,16 @@ function normalizeScoutCandidate(row, idx) {
     confidence: r.confidence || 'review_required',
     status,
     statusReason,
+    reasonCode: r.reasonCode || null,
     rejectionReason:
       status === CANDIDATE_STATUS.REJECTED
-        ? r.rejectionReason || statusReason || 'Rejected'
+        ? r.rejectionReason || r.reasonCode || statusReason || 'Rejected'
         : r.rejectionReason || null,
     exclusionRisk: Boolean(r.exclusionRisk),
     geo: r.geo || null,
     signals: r.signals || null,
+    contactName: r.contactName || r.verifiedContactName || null,
+    contactTitle: r.contactTitle || r.verifiedContactTitle || r.jobTitle || null,
     reviewOnly: true,
     placeholder: false,
   };
@@ -489,14 +608,23 @@ function filterValidScoutCandidates(rows, workRequest = null, opts = {}) {
 
 function gateAndSplitScoutCandidates(rows, workRequest, opts = {}) {
   const gated = gateScoutCandidateRows(rows || [], workRequest || {}, opts);
+  const candidates = (gated.candidates || []).map((row, idx) =>
+    normalizeScoutCandidate(row, idx)
+  );
+  const rejected = (gated.rejected || []).map((row, idx) =>
+    normalizeScoutCandidate(row, idx)
+  );
+  const groups = groupCandidatesByStatus(candidates, rejected);
+  const threshold = batchMeetsQualityThreshold(candidates, workRequest, {
+    targetMin: opts.targetMin || (workRequest && workRequest.targetCountMin),
+  });
   return {
-    candidates: (gated.candidates || []).map((row, idx) =>
-      normalizeScoutCandidate(row, idx)
-    ),
-    rejected: (gated.rejected || []).map((row, idx) =>
-      normalizeScoutCandidate(row, idx)
-    ),
-    groups: gated.groups,
+    candidates,
+    rejected,
+    groups,
+    usableCount: threshold.usableCount,
+    targetMin: threshold.targetMin,
+    meetsQualityThreshold: threshold.ok,
   };
 }
 
@@ -509,7 +637,7 @@ function buildCandidateBatch(handoff, candidates, opts = {}) {
     kind: SCOUT_CANDIDATE_BATCH_KIND,
     handoffId: handoff.handoffId,
     workRequestId: handoff.workRequestId || (handoff.workRequest && handoff.workRequest.workRequestId) || null,
-    status: 'review_only',
+    status: opts.status || 'review_only',
     reviewOnly: true,
     resultsApproved: false,
     candidateCount: candidates.length,
@@ -568,6 +696,8 @@ function handBriefToScout(priorHandoffOrBrief, opts = {}) {
     sourcingUnavailable: !wired,
     boundaryMessage: wired ? null : SCOUT_SOURCING_NOT_WIRED_MESSAGE,
     createdAt: updatedAt,
+    targetCountMin: opts.targetCountMin,
+    targetCountMax: opts.targetCountMax,
   });
 
   handoff = {
@@ -660,8 +790,13 @@ function handBriefToScout(priorHandoffOrBrief, opts = {}) {
     const gated = gateAndSplitScoutCandidates(raw, workRequest, opts);
     if (!gated.candidates.length) {
       return finishWithFailure(handoff, workRequest, opts, {
+        error: 'failed_quality_gate',
+        status: SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE,
         message:
           'Scout ran against the approved handoff but returned no usable in-market candidates after quality gates.',
+        candidates: [],
+        rejected: gated.rejected,
+        groups: gated.groups,
       });
     }
 
@@ -669,6 +804,11 @@ function handBriefToScout(priorHandoffOrBrief, opts = {}) {
       ...opts,
       rejected: gated.rejected,
       groups: gated.groups,
+      threshold: {
+        ok: gated.meetsQualityThreshold,
+        usableCount: gated.usableCount,
+        targetMin: gated.targetMin,
+      },
     });
   }
 
@@ -887,8 +1027,13 @@ function queueOrExecuteExistingScoutWorkRequest(input = {}) {
     if (!gated.candidates.length) {
       return {
         ...finishWithFailure(handoff, workRequest, opts, {
+          error: 'failed_quality_gate',
+          status: SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE,
           message:
             'Scout ran against the preserved work request but returned no usable in-market candidates after quality gates.',
+          candidates: [],
+          rejected: gated.rejected,
+          groups: gated.groups,
         }),
         createdNewHandoff: false,
         shouldExecuteScoutSourcing: false,
@@ -899,6 +1044,11 @@ function queueOrExecuteExistingScoutWorkRequest(input = {}) {
         ...opts,
         rejected: gated.rejected,
         groups: gated.groups,
+        threshold: {
+          ok: gated.meetsQualityThreshold,
+          usableCount: gated.usableCount,
+          targetMin: gated.targetMin,
+        },
       }),
       createdNewHandoff: false,
       shouldExecuteScoutSourcing: false,
@@ -1061,14 +1211,24 @@ async function executeScoutWorkRequest(input = {}) {
     const gatedFn = gateAndSplitScoutCandidates(raw, workRequest, opts);
     if (!gatedFn.candidates.length) {
       return finishWithFailure(handoff, workRequest, opts, {
+        error: 'failed_quality_gate',
+        status: SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE,
         message:
           'Scout ran against the approved handoff but returned no usable in-market candidates after quality gates.',
+        candidates: [],
+        rejected: gatedFn.rejected,
+        groups: gatedFn.groups,
       });
     }
     return finishWithCandidates(handoff, workRequest, gatedFn.candidates, {
       ...opts,
       rejected: gatedFn.rejected,
       groups: gatedFn.groups,
+      threshold: {
+        ok: gatedFn.meetsQualityThreshold,
+        usableCount: gatedFn.usableCount,
+        targetMin: gatedFn.targetMin,
+      },
     });
   }
 
@@ -1079,13 +1239,26 @@ async function executeScoutWorkRequest(input = {}) {
   });
 
   if (!sourced.ok || !sourced.candidates.length) {
+    const earlyCandidates = Array.isArray(sourced.candidates)
+      ? sourced.candidates
+      : [];
+    const earlyRejected = Array.isArray(sourced.rejected) ? sourced.rejected : [];
+    const earlyGroups =
+      sourced.groups ||
+      groupCandidatesByStatus(earlyCandidates, earlyRejected);
     return finishWithFailure(handoff, workRequest, opts, {
-      error: sourced.error || 'no_usable_candidates',
+      error: sourced.error || 'failed_quality_gate',
+      status: SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE,
       message: [
-        'Scout public-source sourcing failed or returned no usable candidates with source URLs.',
+        sourced.error === 'failed_quality_gate'
+          ? 'Scout quality gate failed — usable accepted/reviewable property-manager candidates below minimum.'
+          : 'Scout public-source sourcing failed or returned no usable candidates with source URLs.',
         ...(sourced.warnings || []),
         'Work request preserved — no fabricated placeholders, CRM writes, or outreach.',
       ].join('\n'),
+      candidates: earlyCandidates,
+      rejected: earlyRejected,
+      groups: earlyGroups,
     });
   }
 
@@ -1097,9 +1270,13 @@ async function executeScoutWorkRequest(input = {}) {
   );
   if (!gated.candidates.length) {
     return finishWithFailure(handoff, workRequest, opts, {
-      error: 'candidates_failed_validation',
+      error: 'failed_quality_gate',
+      status: SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE,
       message:
         'Scout returned rows but none passed NH property-manager quality gates. Work request preserved.',
+      candidates: [],
+      rejected: gated.rejected,
+      groups: gated.groups,
     });
   }
 
@@ -1107,6 +1284,11 @@ async function executeScoutWorkRequest(input = {}) {
     ...opts,
     rejected: gated.rejected,
     groups: gated.groups,
+    threshold: {
+      ok: gated.meetsQualityThreshold,
+      usableCount: gated.usableCount,
+      targetMin: gated.targetMin,
+    },
   });
   if (sourced.warnings && sourced.warnings.length) {
     result.message = `${result.message}\n\nSourcing notes:\n- ${sourced.warnings.join(
@@ -1171,6 +1353,7 @@ module.exports = {
   DEFAULT_CONFIDENCE_RULES,
   DEFAULT_GUARDRAILS,
   COMPLETED_RESULT_GUARDRAILS,
+  REJECTION_REASON,
   buildScoutHandoff,
   buildScoutWorkRequest,
   buildCandidateBatch,

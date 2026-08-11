@@ -77,6 +77,16 @@ const CANDIDATE_STATUS = Object.freeze({
   REJECTED: 'rejected',
 });
 
+/** Machine rejection / risk reason codes (stable for tests + UI). */
+const REJECTION_REASON = Object.freeze({
+  OUTSIDE_MARKET_COUNTRY: 'outside_market_country',
+  WRONG_SEGMENT_CLEANING_COMPETITOR: 'wrong_segment_cleaning_competitor',
+  LARGE_INSTITUTIONAL_FIRM: 'large_institutional_firm',
+  OUTSIDE_PRIMARY_TOWN_CLUSTER: 'outside_primary_town_cluster',
+  OUTSIDE_NH_MARKET: 'outside_nh_market',
+  WEAK_PROPERTY_MANAGEMENT_FIT: 'weak_property_management_fit',
+});
+
 const CONFIDENCE = Object.freeze({
   HIGH: 'high',
   MEDIUM: 'medium',
@@ -189,6 +199,10 @@ const CLEANING_COMPETITOR_PATTERNS = Object.freeze([
   /\bservice\s*master\s*clean/i,
   /\bsparkle\s+clean/i,
   /\bmaid\s*brigade\b/i,
+  /\bhouse\s*clean(?:ing|ers?)?\b/i,
+  /\bbuilding\s+cleaning\b/i,
+  /\bpressure\s+washing\b/i,
+  /\bwindow\s+cleaning\b/i,
 ]);
 
 /** Place-types / industry tokens that mark cleaning competitors. */
@@ -199,6 +213,8 @@ const CLEANING_TYPE_TOKENS = Object.freeze([
   'janitorial',
   'carpet_cleaning',
   'carpet cleaning',
+  'laundry',
+  'cleaner',
 ]);
 
 const INSTITUTIONAL_PATTERNS = Object.freeze([
@@ -412,21 +428,33 @@ function detectUkOrNonUs(hit) {
   ).toLowerCase();
   const website = String((hit && (hit.website || hit.sourceUrl)) || '').toLowerCase();
   const phone = String(
-    (hit && (hit.phone || hit.formatted_phone_number)) || ''
+    (hit &&
+      (hit.phone || hit.formatted_phone_number || hit.international_phone_number)) ||
+      ''
   ).trim();
+  const code = REJECTION_REASON.OUTSIDE_MARKET_COUNTRY;
 
-  if (/\.co\.uk\b/i.test(website) || website.includes('.uk/')) {
-    return { rejected: true, reason: 'UK / non-US domain (.co.uk)' };
+  if (/\.co\.uk\b/i.test(website) || website.includes('.uk/') || /\.uk\b/i.test(website)) {
+    return {
+      rejected: true,
+      reasonCode: code,
+      reason: 'UK / non-US domain (.co.uk) — outside_market_country',
+    };
   }
   if (/^\+44\b|^0044\b/.test(phone)) {
-    return { rejected: true, reason: 'UK phone country code (+44) — not USA' };
+    return {
+      rejected: true,
+      reasonCode: code,
+      reason: 'UK phone country code (+44) — outside_market_country',
+    };
   }
   if (hit && hit.country) {
     const country = String(hit.country).trim().toLowerCase();
     if (country && !/^(us|usa|united states|united states of america)$/.test(country)) {
       return {
         rejected: true,
-        reason: `Non-US country (${hit.country}) — Anchor market is New Hampshire, USA`,
+        reasonCode: code,
+        reason: `Non-US country (${hit.country}) — outside_market_country`,
       };
     }
   }
@@ -435,7 +463,8 @@ function detectUkOrNonUs(hit) {
     if (hay.includes(marker)) {
       return {
         rejected: true,
-        reason: `UK geography detected (${marker.trim()}) — Anchor market is New Hampshire, USA`,
+        reasonCode: code,
+        reason: `UK geography detected (${marker.trim()}) — outside_market_country`,
       };
     }
   }
@@ -443,7 +472,8 @@ function detectUkOrNonUs(hit) {
     if (hay.includes(marker)) {
       return {
         rejected: true,
-        reason: `UK Greater Manchester place marker (${marker.trim()}) — not New Hampshire, USA`,
+        reasonCode: code,
+        reason: `UK Greater Manchester place marker (${marker.trim()}) — outside_market_country`,
       };
     }
   }
@@ -457,8 +487,9 @@ function detectUkOrNonUs(hit) {
     if (!otherPriorityNh) {
       return {
         rejected: true,
+        reasonCode: code,
         reason:
-          'Ambiguous Manchester without NH/USA token — rejected as UK / non-verified New Hampshire',
+          'Ambiguous Manchester without NH/USA token — outside_market_country',
       };
     }
   }
@@ -467,12 +498,13 @@ function detectUkOrNonUs(hit) {
     if (hay.includes(marker)) {
       return {
         rejected: true,
-        reason: `Non-US geography detected (${marker}) — Anchor market is New Hampshire, USA`,
+        reasonCode: code,
+        reason: `Non-US geography detected (${marker}) — outside_market_country`,
       };
     }
   }
 
-  return { rejected: false, reason: null };
+  return { rejected: false, reason: null, reasonCode: null };
 }
 
 function isNhLocation(hit, market) {
@@ -564,29 +596,33 @@ function detectCleaningCompetitor(hit, workRequest) {
   // (Anchor buys cleaning — PMs are prospects; cleaning cos are competitors).
   const targetingPm = /property\s*manager/.test(segment) || !segment;
   if (!targetingPm && /cleaning/.test(segment)) {
-    return { rejected: false, reason: null };
+    return { rejected: false, reason: null, reasonCode: null };
   }
 
   const name = String((hit && (hit.companyName || hit.name)) || '');
   const industry = String((hit && (hit.industry || hit.snippet)) || '');
+  const website = String((hit && (hit.website || hit.sourceUrl || hit.url)) || '');
+  const hay = hitHaystack(hit);
   const types = ((hit && hit.placeTypes) || []).map((t) => String(t).toLowerCase());
+  const code = REJECTION_REASON.WRONG_SEGMENT_CLEANING_COMPETITOR;
 
   // Clear PM / real-estate companies are not cleaning competitors even if a
   // directory blurb mentions "cleaning".
-  if (
+  const clearPmName =
     /\bproperty\s+management\b|\bproperty\s+manager\b|\breal\s+estate\s+management\b|\breal\s+estate\b/i.test(
       name
     ) &&
-    !/\bcleaning\b|\bmaid\b|\bjanitorial\b|\bhousekeeping\b|\bcleaners?\b/i.test(name)
-  ) {
-    return { rejected: false, reason: null };
+    !/\bcleaning\b|\bmaid\b|\bjanitorial\b|\bhousekeeping\b|\bcleaners?\b/i.test(name);
+  if (clearPmName) {
+    return { rejected: false, reason: null, reasonCode: null };
   }
 
   for (const token of CLEANING_TYPE_TOKENS) {
     if (types.some((t) => t.includes(token.replace(/\s+/g, '_')))) {
       return {
         rejected: true,
-        reason: `Cleaning competitor / service type (${token}) — target is property managers`,
+        reasonCode: code,
+        reason: `Cleaning competitor / service type (${token}) — wrong_segment_cleaning_competitor`,
       };
     }
   }
@@ -595,10 +631,26 @@ function detectCleaningCompetitor(hit, workRequest) {
     if (re.test(name) || re.test(industry)) {
       return {
         rejected: true,
+        reasonCode: code,
         reason:
-          'Cleaning service / maid / housekeeping / janitorial / carpet cleaning competitor — not a property-manager prospect',
+          'Cleaning service / maid / housekeeping / janitorial / carpet cleaning competitor — wrong_segment_cleaning_competitor',
       };
     }
+  }
+
+  // Website/domain signal only when there is no property-management token on the listing.
+  const hasPmSignal = PROPERTY_MANAGEMENT_TOKENS.some((t) => hay.includes(t));
+  if (
+    !hasPmSignal &&
+    (/maid|housekeep|janitor|carpet.?clean|clean(?:ing|ers?)/i.test(website) ||
+      CLEANING_COMPETITOR_PATTERNS.some((re) => re.test(website)))
+  ) {
+    return {
+      rejected: true,
+      reasonCode: code,
+      reason:
+        'Cleaning competitor website/domain signal — wrong_segment_cleaning_competitor',
+    };
   }
 
   // Name contains a standalone cleaning stem without PM signal.
@@ -608,12 +660,13 @@ function detectCleaningCompetitor(hit, workRequest) {
   ) {
     return {
       rejected: true,
+      reasonCode: code,
       reason:
-        'Cleaning competitor name signal — not a property-manager prospect',
+        'Cleaning competitor name signal — wrong_segment_cleaning_competitor',
     };
   }
 
-  return { rejected: false, reason: null };
+  return { rejected: false, reason: null, reasonCode: null };
 }
 
 function detectInstitutional(hit) {
@@ -623,13 +676,14 @@ function detectInstitutional(hit) {
     if (re.test(name) || re.test(hay)) {
       return {
         rejected: true,
+        reasonCode: REJECTION_REASON.LARGE_INSTITUTIONAL_FIRM,
         reason:
-          'Large institutional / national firm — rejected unless operator explicitly approves',
+          'Large institutional / national firm — large_institutional_firm (rejected unless operator explicitly approves)',
         matched: String(re),
       };
     }
   }
-  return { rejected: false, reason: null };
+  return { rejected: false, reason: null, reasonCode: null };
 }
 
 function hasPropertyManagementFit(hit, workRequest) {
@@ -702,6 +756,7 @@ function defaultRoleForSegment(workRequest) {
 
 /**
  * Fit rationale must cite source-specific evidence — not copy inclusion criteria.
+ * Always includes location, category/type, website/source, and PM relevance when present.
  */
 function buildSourceSpecificFitRationale(hit, workRequest, geo) {
   const company = String((hit && (hit.companyName || hit.name)) || 'Listing').trim();
@@ -709,7 +764,9 @@ function buildSourceSpecificFitRationale(hit, workRequest, geo) {
     (hit && (hit.location || hit.address || hit.formatted_address)) || ''
   ).trim();
   const types = ((hit && hit.placeTypes) || []).filter(Boolean);
+  const industry = String((hit && (hit.industry || hit.snippet)) || '').trim();
   const website = hit && (hit.website || hit.sourceUrl);
+  const pmFit = hasPropertyManagementFit(hit, workRequest);
   const parts = [];
 
   parts.push(`${company} sourced from public listing`);
@@ -719,17 +776,31 @@ function buildSourceSpecificFitRationale(hit, workRequest, geo) {
     parts.push('location not confirmed on source');
   }
   if (types.length) {
-    parts.push(`listing types: ${types.slice(0, 4).join(', ')}`);
+    parts.push(`listing category/type: ${types.slice(0, 4).join(', ')}`);
+  } else if (industry) {
+    parts.push(`listing category/type: ${industry.slice(0, 80)}`);
+  } else {
+    parts.push('listing category/type not present on source');
   }
   if (website) {
-    parts.push(`source URL: ${website}`);
+    parts.push(`website/source signal: ${website}`);
+  } else {
+    parts.push('website/source signal missing');
+  }
+  if (pmFit) {
+    const pmToken =
+      PROPERTY_MANAGEMENT_TOKENS.find((t) => hitHaystack(hit).includes(t)) ||
+      'property management';
+    parts.push(`property-management relevance on source: ${pmToken}`);
+  } else {
+    parts.push('property-management relevance not evidenced on source');
   }
   if (geo && geo.town) {
     parts.push(
       geo.tier === 'priority'
         ? `priority NH town match: ${geo.town}`
-        : geo.tier === 'nearby_fill'
-          ? `nearby NH fill town: ${geo.town} (review-required unless batch fill)`
+        : geo.tier === 'nearby_fill' || geo.tier === 'extended_review'
+          ? `${geo.town} NH outside_primary_town_cluster`
           : `town signal: ${geo.town}`
     );
   }
@@ -738,7 +809,7 @@ function buildSourceSpecificFitRationale(hit, workRequest, geo) {
   }
 
   const rationale = parts.join(' — ');
-  if (isGenericCriteriaCopy(rationale, workRequest) || parts.length < 2) {
+  if (isGenericCriteriaCopy(rationale, workRequest) || parts.length < 4) {
     return {
       ok: false,
       rationale,
@@ -829,6 +900,7 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
   if (uk.rejected) {
     return rejectResult(hit, workRequest, {
       statusReason: uk.reason,
+      rejectionReason: uk.reasonCode || REJECTION_REASON.OUTSIDE_MARKET_COUNTRY,
       exclusionRisk: true,
       market,
     });
@@ -838,6 +910,8 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
   if (cleaning.rejected) {
     return rejectResult(hit, workRequest, {
       statusReason: cleaning.reason,
+      rejectionReason:
+        cleaning.reasonCode || REJECTION_REASON.WRONG_SEGMENT_CLEANING_COMPETITOR,
       exclusionRisk: true,
       market,
     });
@@ -847,6 +921,8 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
   if (institutional.rejected && !operatorApprovedInstitutional(workRequest)) {
     return rejectResult(hit, workRequest, {
       statusReason: institutional.reason,
+      rejectionReason:
+        institutional.reasonCode || REJECTION_REASON.LARGE_INSTITUTIONAL_FIRM,
       exclusionRisk: true,
       market,
     });
@@ -858,26 +934,29 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
   const sourceUrl = Boolean(
     (hit && (hit.sourceUrl || hit.website || hit.url)) || opts.sourceUrl
   );
-  // Prefer source-built rationale; ignore generic criteria copies from upstream.
-  let fit = buildSourceSpecificFitRationale(hit, workRequest, geo);
-  if (hit && (hit.fitRationale || hit.fitReason || hit.rationale)) {
-    const provided = hit.fitRationale || hit.fitReason || hit.rationale;
-    if (!isGenericCriteriaCopy(provided, workRequest)) {
-      fit = { ok: true, rationale: String(provided), reason: null };
-    }
-  }
+  // Always rebuild source-specific rationale. Never reuse generic criteria copy
+  // from upstream as the fit rationale.
+  const fit = buildSourceSpecificFitRationale(hit, workRequest, geo);
   const role = formatSuggestedContactRole(workRequest, hit);
-  const targetingPm = /property\s*manager/i.test(
-    String((workRequest && (workRequest.targetSegment || workRequest.segment)) || '')
-  );
+  const targetingPm =
+    /property\s*manager/i.test(
+      String((workRequest && (workRequest.targetSegment || workRequest.segment)) || '')
+    ) ||
+    !(workRequest && (workRequest.targetSegment || workRequest.segment));
   const extendedAllowed = extendedTownsExplicitlyAllowed(workRequest);
+  const outsidePrimaryCluster =
+    geo.tier === 'nearby_fill' ||
+    geo.tier === 'extended_review' ||
+    geo.tier === 'other';
 
   const risks = [];
   let exclusionRisk = Boolean(
     institutional.rejected && operatorApprovedInstitutional(workRequest)
   );
   if (institutional.rejected && operatorApprovedInstitutional(workRequest)) {
-    risks.push('Institutional/national firm — included only because operator approved');
+    risks.push(
+      `large_institutional_firm — included only because operator approved (never high confidence)`
+    );
     exclusionRisk = true;
   }
   const exclusionCriteriaHit = softExclusionCriteriaMatch(hit, workRequest);
@@ -900,18 +979,17 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
   if (geo.missingStateToken) {
     risks.push('Town matched but NH/New Hampshire state token missing on listing');
   }
-  if (geo.tier === 'nearby_fill') {
+  if (outsidePrimaryCluster) {
     risks.push(
-      'Manchester NH is nearby/fill — review required unless needed to fill the batch'
-    );
-  }
-  if (geo.tier === 'extended_review') {
-    risks.push(
-      `${geo.town || 'Town'} NH is outside the approved priority cluster — review required unless explicitly allowed`
+      `${REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER} — ${
+        geo.town || 'town'
+      } NH is not in Bedford/Hooksett/Londonderry/Auburn/Goffstown unless explicitly approved`
     );
   }
   if (!pmFit) {
-    risks.push('Weak property-management fit signal on public source');
+    risks.push(
+      `${REJECTION_REASON.WEAK_PROPERTY_MANAGEMENT_FIT} — weak property-management fit signal on public source`
+    );
   }
   if (!contactSignal) {
     risks.push('No reachable contact signal (phone / named contact) on public listing');
@@ -930,7 +1008,8 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
     (hit.location || hit.address || hit.formatted_address)
   ) {
     return rejectResult(hit, workRequest, {
-      statusReason: 'Outside New Hampshire, USA market',
+      statusReason: 'Outside New Hampshire, USA market — outside_market_country',
+      rejectionReason: REJECTION_REASON.OUTSIDE_MARKET_COUNTRY,
       exclusionRisk: true,
       market,
       fitRationale: fit.rationale,
@@ -941,16 +1020,21 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
 
   // Missing NH/USA state token on a known town → never accepted.
   if (geo.missingStateToken && geo.town) {
+    const missingTokenRisks = risks.slice();
+    if (!missingTokenRisks.some((r) => r.includes(REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER))) {
+      missingTokenRisks.push(REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER);
+    }
     return {
       ...reviewResult(hit, workRequest, {
         statusReason: `${geo.town} listing missing NH/USA state token — verify New Hampshire, USA`,
         confidence: CONFIDENCE.REVIEW_REQUIRED,
         fitRationale: fit.rationale,
         suggestedContactRole: role,
-        risks,
+        risks: missingTokenRisks,
         exclusionRisk,
         geo,
         market,
+        reasonCode: REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER,
         signals: {
           sourceUrl,
           nhLocation: false,
@@ -983,7 +1067,8 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
     signals.reachableContactSignal &&
     !signals.exclusionRisk &&
     fit.ok &&
-    geo.tier === 'priority';
+    geo.tier === 'priority' &&
+    !institutional.rejected;
 
   if (highEligible) {
     confidence = CONFIDENCE.HIGH;
@@ -992,20 +1077,22 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
     signals.nhLocation &&
     signals.propertyManagementFit &&
     !signals.exclusionRisk &&
-    (geo.tier === 'priority' || geo.tier === 'nearby_fill')
+    geo.tier === 'priority' &&
+    !institutional.rejected
   ) {
     confidence = CONFIDENCE.MEDIUM;
   } else {
     confidence = CONFIDENCE.REVIEW_REQUIRED;
   }
 
-  // Any exclusion match must never be high confidence.
-  if (signals.exclusionRisk) {
+  // Institutional / exclusion matches must never be high confidence.
+  if (signals.exclusionRisk || institutional.rejected) {
     confidence = CONFIDENCE.REVIEW_REQUIRED;
   }
 
   let status = CANDIDATE_STATUS.ACCEPTED;
   let statusReason = 'Passes NH property-manager quality gates';
+  let reasonCode = null;
 
   if (!sourceUrl) {
     status = CANDIDATE_STATUS.REVIEW_REQUIRED;
@@ -1016,37 +1103,41 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
   } else if (targetingPm && !pmFit) {
     status = CANDIDATE_STATUS.REVIEW_REQUIRED;
     statusReason = 'Property-management fit not evidenced on source';
+    reasonCode = REJECTION_REASON.WEAK_PROPERTY_MANAGEMENT_FIT;
   } else if (!fit.ok) {
     status = CANDIDATE_STATUS.REVIEW_REQUIRED;
     statusReason = fit.reason || 'Source-specific fit rationale incomplete';
-  } else if (geo.tier === 'nearby_fill') {
+  } else if (geo.tier === 'nearby_fill' || geo.tier === 'extended_review' || geo.tier === 'other') {
     status = CANDIDATE_STATUS.REVIEW_REQUIRED;
-    statusReason =
-      'Manchester NH nearby/fill — review required unless needed to fill the batch';
-  } else if (geo.tier === 'extended_review') {
-    if (!extendedAllowed) {
-      status = CANDIDATE_STATUS.REVIEW_REQUIRED;
-      statusReason = `${geo.town} NH is outside approved town cluster (Bedford/Hooksett/Londonderry/Auburn/Goffstown) — review required unless explicitly allowed`;
+    reasonCode = REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER;
+    if (geo.tier === 'nearby_fill') {
+      statusReason = `Manchester NH outside_primary_town_cluster — review_required unless primary town approval exists`;
+    } else if (geo.tier === 'extended_review') {
+      statusReason = extendedAllowed
+        ? `${geo.town} NH outside_primary_town_cluster — explicitly allowed but still review_required (not a primary town)`
+        : `${geo.town} NH outside_primary_town_cluster — review_required unless explicitly approved`;
     } else {
-      status = CANDIDATE_STATUS.REVIEW_REQUIRED;
-      statusReason = `${geo.town} NH explicitly allowed but still review_required (not a priority town)`;
+      statusReason =
+        'Location outside_primary_town_cluster — review_required unless explicitly approved';
     }
-  } else if (geo.tier === 'other') {
-    status = CANDIDATE_STATUS.REVIEW_REQUIRED;
-    statusReason =
-      'Location outside approved priority town cluster — review required';
   } else if (!contactSignal) {
     status = CANDIDATE_STATUS.REVIEW_REQUIRED;
     statusReason = 'Reachable contact signal missing — review before outreach';
   } else if (exclusionRisk) {
     status = CANDIDATE_STATUS.REVIEW_REQUIRED;
-    statusReason = 'Exclusion risk present — operator review required';
+    statusReason = institutional.rejected
+      ? 'large_institutional_firm — operator review required (never high confidence)'
+      : 'Exclusion risk present — operator review required';
+    if (institutional.rejected) {
+      reasonCode = REJECTION_REASON.LARGE_INSTITUTIONAL_FIRM;
+    }
   } else if (geo.tier !== 'priority') {
     status = CANDIDATE_STATUS.REVIEW_REQUIRED;
-    statusReason = 'Not in priority NH town cluster';
+    statusReason = 'Not in priority NH town cluster — outside_primary_town_cluster';
+    reasonCode = REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER;
   }
 
-  // Accepted only for priority NH towns with full signals.
+  // Accepted only for primary NH towns with property-management evidence.
   if (
     status === CANDIDATE_STATUS.ACCEPTED &&
     !(
@@ -1055,23 +1146,30 @@ function evaluateScoutCandidate(hit, workRequest, opts = {}) {
       pmFit &&
       sourceUrl &&
       fit.ok &&
-      !exclusionRisk
+      !exclusionRisk &&
+      !institutional.rejected
     )
   ) {
     status = CANDIDATE_STATUS.REVIEW_REQUIRED;
-    statusReason = 'Does not meet accepted priority-town quality bar';
+    statusReason = 'Does not meet accepted primary-town property-manager quality bar';
+    if (outsidePrimaryCluster) {
+      reasonCode = REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER;
+    }
   }
+
+  const risksText = risks.length
+    ? risks.join('; ')
+    : 'Public-source only — verify contact before outreach';
 
   return {
     status,
     statusReason,
     rejectionReason: null,
+    reasonCode,
     confidence,
     fitRationale: fit.rationale,
     suggestedContactRole: role,
-    risks: risks.length
-      ? risks.join('; ')
-      : 'Public-source only — verify contact before outreach',
+    risks: risksText,
     exclusionRisk,
     geo,
     signals,
@@ -1123,19 +1221,21 @@ function softExclusionCriteriaMatch(hit, workRequest) {
 }
 
 function reviewResult(hit, workRequest, fields = {}) {
+  const risks = Array.isArray(fields.risks)
+    ? fields.risks.join('; ')
+    : fields.risks || fields.statusReason || 'Review required';
   return {
     status: CANDIDATE_STATUS.REVIEW_REQUIRED,
     statusReason: fields.statusReason || 'Review required',
     rejectionReason: null,
+    reasonCode: fields.reasonCode || null,
     confidence: fields.confidence || CONFIDENCE.REVIEW_REQUIRED,
     fitRationale:
       fields.fitRationale ||
       buildSourceSpecificFitRationale(hit, workRequest, fields.geo).rationale,
     suggestedContactRole:
       fields.suggestedContactRole || formatSuggestedContactRole(workRequest, hit),
-    risks: Array.isArray(fields.risks)
-      ? fields.risks.join('; ')
-      : fields.risks || fields.statusReason || 'Review required',
+    risks,
     exclusionRisk: Boolean(fields.exclusionRisk),
     geo: fields.geo || null,
     signals: fields.signals || null,
@@ -1151,17 +1251,27 @@ function rejectResult(hit, workRequest, extra = {}) {
     extra.fitRationale ||
     buildSourceSpecificFitRationale(hit, workRequest, geo).rationale;
   const reason = extra.statusReason || 'Rejected by Scout quality gate';
+  const rejectionReason =
+    extra.rejectionReason ||
+    extra.reasonCode ||
+    reason;
   return {
     status: CANDIDATE_STATUS.REJECTED,
     statusReason: reason,
-    rejectionReason: reason,
+    rejectionReason,
+    reasonCode:
+      extra.reasonCode ||
+      (typeof extra.rejectionReason === 'string' &&
+      /^[a-z][a-z0-9_]+$/.test(extra.rejectionReason)
+        ? extra.rejectionReason
+        : null),
     confidence: CONFIDENCE.REVIEW_REQUIRED,
     fitRationale: fit,
     suggestedContactRole:
       extra.suggestedContactRole || formatSuggestedContactRole(workRequest, hit),
     risks: Array.isArray(extra.risks)
       ? extra.risks.join('; ')
-      : reason,
+      : extra.risks || reason,
     exclusionRisk: extra.exclusionRisk !== false,
     geo,
     signals: {
@@ -1233,11 +1343,9 @@ function selectBatchWithManchesterFill(evaluatedRows, targetMax = 25, targetMin 
           status: CANDIDATE_STATUS.REJECTED,
           statusReason:
             row.statusReason ||
-            'Outside approved priority town cluster — deferred from batch',
-          rejectionReason:
-            row.rejectionReason ||
-            row.statusReason ||
-            'Outside approved priority town cluster — deferred from batch',
+            `${REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER} — deferred from batch`,
+          rejectionReason: REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER,
+          reasonCode: REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER,
         })
       );
     }
@@ -1253,9 +1361,9 @@ function selectBatchWithManchesterFill(evaluatedRows, targetMax = 25, targetMin 
           ...row,
           status: CANDIDATE_STATUS.REJECTED,
           statusReason:
-            'Manchester NH deferred — priority towns filled the batch (nearby/fill only)',
-          rejectionReason:
-            'Manchester NH deferred — priority towns filled the batch (nearby/fill only)',
+            'Manchester NH deferred — outside_primary_town_cluster (priority towns filled the batch)',
+          rejectionReason: REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER,
+          reasonCode: REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER,
         })
       );
     }
@@ -1265,6 +1373,12 @@ function selectBatchWithManchesterFill(evaluatedRows, targetMax = 25, targetMin 
     candidates: batch,
     rejected,
     groups: groupCandidatesByStatus(batch, rejected),
+    usableCount: batch.length,
+    acceptedCount: batch.filter((r) => r.status === CANDIDATE_STATUS.ACCEPTED)
+      .length,
+    reviewRequiredCount: batch.filter(
+      (r) => r.status === CANDIDATE_STATUS.REVIEW_REQUIRED
+    ).length,
   };
 }
 
@@ -1273,10 +1387,47 @@ function ensureRejectionReason(row) {
   if (row.status === CANDIDATE_STATUS.REJECTED) {
     return {
       ...row,
-      rejectionReason: row.rejectionReason || row.statusReason || 'Rejected',
+      rejectionReason:
+        row.rejectionReason ||
+        row.reasonCode ||
+        row.statusReason ||
+        'Rejected',
     };
   }
   return { ...row, rejectionReason: row.rejectionReason || null };
+}
+
+/**
+ * Count accepted + review_required candidates that may be reviewed.
+ * Rejected rows (UK, cleaning competitors, deferred out-of-cluster, etc.)
+ * never count toward the usable threshold.
+ */
+function countUsablePropertyManagerCandidates(candidates = [], workRequest = null) {
+  void workRequest;
+  let n = 0;
+  for (const row of candidates || []) {
+    if (!row || row.status === CANDIDATE_STATUS.REJECTED) continue;
+    if (
+      row.status === CANDIDATE_STATUS.ACCEPTED ||
+      row.status === CANDIDATE_STATUS.REVIEW_REQUIRED
+    ) {
+      n += 1;
+    }
+  }
+  return n;
+}
+
+function batchMeetsQualityThreshold(candidates, workRequest, opts = {}) {
+  const targetMin =
+    Number(opts.targetMin) ||
+    Number(workRequest && workRequest.targetCountMin) ||
+    15;
+  const usable = countUsablePropertyManagerCandidates(candidates, workRequest);
+  return {
+    ok: usable >= targetMin,
+    usableCount: usable,
+    targetMin,
+  };
 }
 
 function groupCandidatesByStatus(candidates = [], rejected = []) {
@@ -1316,6 +1467,10 @@ function gateScoutCandidateRows(rows, workRequest, opts = {}) {
       sourceUrl,
       website: row.website || sourceUrl,
       location: row.location || row.marketTown || row.address || null,
+      address: row.address || row.location || null,
+      industry: row.industry || row.snippet || null,
+      placeTypes: row.placeTypes || row.types || [],
+      phone: row.phone || row.formatted_phone_number || null,
     };
     const gate = evaluateScoutCandidate(hit, workRequest, opts);
     const merged = {
@@ -1324,6 +1479,10 @@ function gateScoutCandidateRows(rows, workRequest, opts = {}) {
       sourceUrl,
       website: hit.website,
       location: hit.location,
+      address: hit.address,
+      industry: hit.industry,
+      placeTypes: hit.placeTypes,
+      phone: hit.phone,
       marketTown: row.marketTown || (gate.geo && gate.geo.town) || hit.location,
       segment: row.segment || (workRequest && workRequest.targetSegment) || null,
       subtype: row.subtype || (workRequest && workRequest.targetSubtype) || null,
@@ -1333,9 +1492,10 @@ function gateScoutCandidateRows(rows, workRequest, opts = {}) {
       confidence: gate.confidence,
       status: gate.status,
       statusReason: gate.statusReason,
+      reasonCode: gate.reasonCode || null,
       rejectionReason:
         gate.status === CANDIDATE_STATUS.REJECTED
-          ? gate.rejectionReason || gate.statusReason
+          ? gate.rejectionReason || gate.reasonCode || gate.statusReason
           : null,
       exclusionRisk: Boolean(gate.exclusionRisk),
       signals: gate.signals || null,
@@ -1351,10 +1511,18 @@ function gateScoutCandidateRows(rows, workRequest, opts = {}) {
   const targetMin = Number(opts.targetMin) || Number(workRequest && workRequest.targetCountMin) || 15;
   const selected = selectBatchWithManchesterFill(evaluated, targetMax, targetMin);
   const allRejected = (selected.rejected || []).concat(rejected).map(ensureRejectionReason);
+  const candidates = selected.candidates;
+  const groups = groupCandidatesByStatus(candidates, allRejected);
+  const threshold = batchMeetsQualityThreshold(candidates, workRequest, {
+    targetMin,
+  });
   return {
-    candidates: selected.candidates,
+    candidates,
     rejected: allRejected,
-    groups: groupCandidatesByStatus(selected.candidates, allRejected),
+    groups,
+    usableCount: threshold.usableCount,
+    targetMin: threshold.targetMin,
+    meetsQualityThreshold: threshold.ok,
   };
 }
 
@@ -1366,6 +1534,7 @@ module.exports = {
   ALL_KNOWN_NH_TOWNS,
   CANDIDATE_STATUS,
   CONFIDENCE,
+  REJECTION_REASON,
   interpretAnchorMarket,
   buildNhScopedSearchQueries,
   detectUkOrNonUs,
@@ -1381,6 +1550,8 @@ module.exports = {
   selectBatchWithManchesterFill,
   groupCandidatesByStatus,
   gateScoutCandidateRows,
+  countUsablePropertyManagerCandidates,
+  batchMeetsQualityThreshold,
   isNhLocation,
   extendedTownsExplicitlyAllowed,
 };
