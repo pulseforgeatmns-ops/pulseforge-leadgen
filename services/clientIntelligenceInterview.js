@@ -7068,6 +7068,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     (session.interview_state &&
       session.interview_state.outreachStrategyPreview) ||
     null;
+  const priorOutreachCopyPlan =
+    (session.interview_state && session.interview_state.outreachCopyPlan) ||
+    null;
 
   // SPEC-090/091 — classify intent before workflow handling.
   let reasoningMemory = ensureReasoningMemory(session.interview_state || {});
@@ -7132,6 +7135,24 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       approvedAt: new Date().toISOString(),
     };
   }
+  let nextPriorOutreachStrategyPreview = priorOutreachStrategyPreview;
+  if (
+    nextPriorOutreachStrategyPreview &&
+    (reasoningMemory.approvedArtifacts || []).includes(
+      ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW
+    ) &&
+    nextPriorOutreachStrategyPreview.status !== 'approved'
+  ) {
+    nextPriorOutreachStrategyPreview = {
+      ...nextPriorOutreachStrategyPreview,
+      status: 'approved',
+      approved: true,
+      strategyApproved: true,
+      approvedAt:
+        nextPriorOutreachStrategyPreview.approvedAt ||
+        new Date().toISOString(),
+    };
+  }
   const messageClass = classifyReasoningMessage(text);
   reasoningMemory = markClassification(reasoningMemory, messageClass);
   const artifactAction = resolveCampaignArtifactAction({
@@ -7144,7 +7165,8 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     priorScoutCandidateBatch,
     priorScoutHandoff,
     priorProspectBatchReview,
-    priorOutreachStrategyPreview,
+    priorOutreachStrategyPreview: nextPriorOutreachStrategyPreview,
+    priorOutreachCopyPlan,
     step: campaignPlanning.step,
     slots: (campaignPlanning && campaignPlanning.slots) || null,
   });
@@ -7162,7 +7184,8 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
     priorScoutCandidateBatch,
     priorScoutWorkRequest,
     priorProspectBatchReview,
-    priorOutreachStrategyPreview,
+    priorOutreachStrategyPreview: nextPriorOutreachStrategyPreview,
+    priorOutreachCopyPlan,
     messageClass,
     artifactAction,
     reasoningMemory,
@@ -7194,7 +7217,8 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       scoutCandidateBatch: priorScoutCandidateBatch,
       scoutWorkRequest: priorScoutWorkRequest,
       prospectBatchReview: priorProspectBatchReview,
-      outreachStrategyPreview: priorOutreachStrategyPreview,
+      outreachStrategyPreview: nextPriorOutreachStrategyPreview,
+      outreachCopyPlan: priorOutreachCopyPlan,
     },
     context,
     campaignReplyOpts
@@ -7329,7 +7353,29 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
   const nextScoutWorkRequest = reply.scoutWorkRequest || null;
   const nextScoutCandidateBatch = reply.scoutCandidateBatch || null;
   const nextProspectBatchReview = reply.prospectBatchReview || null;
-  const nextOutreachStrategyPreview = reply.outreachStrategyPreview || null;
+  let nextOutreachStrategyPreview = reply.outreachStrategyPreview || null;
+  if (
+    nextOutreachStrategyPreview &&
+    (reply.outreachStrategyPreviewApproved ||
+      reply.strategyApproved ||
+      (reply.slots &&
+        (reply.slots.outreachStrategyPreviewApproved ||
+          reply.slots.strategyApproved)) ||
+      reply.intent === 'outreach_strategy_preview_approved' ||
+      reply.intent === 'produce_outreach_copy_plan' ||
+      reply.intent === 'show_outreach_copy_plan') &&
+    nextOutreachStrategyPreview.status !== 'approved'
+  ) {
+    nextOutreachStrategyPreview = {
+      ...nextOutreachStrategyPreview,
+      status: 'approved',
+      approved: true,
+      strategyApproved: true,
+      approvedAt:
+        nextOutreachStrategyPreview.approvedAt || new Date().toISOString(),
+    };
+  }
+  const nextOutreachCopyPlan = reply.outreachCopyPlan || null;
   const liveSourcingApproved = Boolean(
     reply.liveSourcingApproved ||
       (reply.slots && reply.slots.liveSourcingApproved) ||
@@ -7377,6 +7423,19 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
           nextProspectBatchReview.status === 'batch_1_approved')))
       ? { prospectBatchReviewApproved: true, batch1Approved: true }
       : {}),
+    ...(nextOutreachStrategyPreview
+      ? { outreachStrategyPreviewGenerated: true }
+      : {}),
+    ...((nextOutreachStrategyPreview &&
+      nextOutreachStrategyPreview.status === 'approved') ||
+    reply.strategyApproved ||
+    reply.outreachStrategyPreviewApproved
+      ? {
+          outreachStrategyPreviewApproved: true,
+          strategyApproved: true,
+        }
+      : {}),
+    ...(nextOutreachCopyPlan ? { outreachCopyPlanGenerated: true } : {}),
   };
   const nextPlanning = {
     ...campaignPlanning,
@@ -7432,6 +7491,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       ...(nextOutreachStrategyPreview
         ? { outreachStrategyPreview: nextOutreachStrategyPreview }
         : {}),
+      ...(nextOutreachCopyPlan ? { outreachCopyPlan: nextOutreachCopyPlan } : {}),
       reasoningMemory: (() => {
         let mem = reasoningMemory;
         if (nextPreview) {
@@ -7516,6 +7576,29 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
             }
           }
         }
+        if (nextOutreachStrategyPreview) {
+          mem = markArtifactGenerated(
+            mem,
+            ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW,
+            nextOutreachStrategyPreview.status || 'draft'
+          );
+          if (nextOutreachStrategyPreview.status === 'approved') {
+            mem = markArtifactApproved(
+              mem,
+              ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW
+            );
+          }
+        }
+        if (nextOutreachCopyPlan) {
+          mem = markArtifactGenerated(
+            mem,
+            ARTIFACT_KINDS.OUTREACH_COPY_PLAN,
+            nextOutreachCopyPlan.status || 'draft'
+          );
+          if (nextOutreachCopyPlan.status === 'approved') {
+            mem = markArtifactApproved(mem, ARTIFACT_KINDS.OUTREACH_COPY_PLAN);
+          }
+        }
         if (liveSourcingApproved) {
           mem = markLiveSourcingApproved(mem);
         }
@@ -7586,6 +7669,10 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
       nextOutreachStrategyPreview ||
       (session.interview_state &&
         session.interview_state.outreachStrategyPreview) ||
+      null,
+    outreachCopyPlan:
+      nextOutreachCopyPlan ||
+      (session.interview_state && session.interview_state.outreachCopyPlan) ||
       null,
     liveProspectList:
       nextLiveProspectList ||
