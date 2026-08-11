@@ -7,7 +7,8 @@
  * Campaign artifacts (and future Max conversations).
  *
  * Rules:
- * - Renderers consume ArtifactSynthesisContext phrases, not raw answers.
+ * - Renderers consume ArtifactSynthesisContext / CampaignSynthesisContext
+ *   phrases and durable operator learnings — not raw answers alone.
  * - Raw answers stay on evidence for citation only.
  * - Guardrails unchanged: no lists, outreach, CRM, or account changes
  *   without explicit approval.
@@ -17,6 +18,7 @@ const MessageIntentClassifier = require('./MessageIntentClassifier');
 const ConversationMemoryUpdater = require('./ConversationMemoryUpdater');
 const BusinessFactNormalizer = require('./BusinessFactNormalizer');
 const ArtifactSynthesisContext = require('./ArtifactSynthesisContext');
+const CampaignSynthesisContext = require('./CampaignSynthesisContext');
 
 module.exports = {
   // Classifier
@@ -61,4 +63,28 @@ module.exports = {
   buildArtifactSynthesisContext:
     ArtifactSynthesisContext.buildArtifactSynthesisContext,
   shortBusinessName: ArtifactSynthesisContext.shortBusinessName,
+
+  // Campaign Memory / CampaignSynthesisContext
+  DEFAULT_OPERATOR_LEARNINGS:
+    CampaignSynthesisContext.DEFAULT_OPERATOR_LEARNINGS,
+  emptyCampaignMemory: CampaignSynthesisContext.emptyCampaignMemory,
+  ensureCampaignMemory: CampaignSynthesisContext.ensureCampaignMemory,
+  upsertOperatorLearning: CampaignSynthesisContext.upsertOperatorLearning,
+  mergeOperatorLearnings: CampaignSynthesisContext.mergeOperatorLearnings,
+  applyBatchReviewLearnings:
+    CampaignSynthesisContext.applyBatchReviewLearnings,
+  buildCampaignSynthesisContext:
+    CampaignSynthesisContext.buildCampaignSynthesisContext,
+  resolveSubjectLines: CampaignSynthesisContext.resolveSubjectLines,
+  resolveSenderVoiceLine: CampaignSynthesisContext.resolveSenderVoiceLine,
+  buildPersonalizationNote:
+    CampaignSynthesisContext.buildPersonalizationNote,
+  filterColdBatchCandidates:
+    CampaignSynthesisContext.filterColdBatchCandidates,
+  rejectsStreetAddressPersonalization:
+    CampaignSynthesisContext.rejectsStreetAddressPersonalization,
+  findCampaignMemoryDraftConflicts:
+    CampaignSynthesisContext.findCampaignMemoryDraftConflicts,
+  outreachDraftPreviewConflictsWithCampaignMemory:
+    CampaignSynthesisContext.outreachDraftPreviewConflictsWithCampaignMemory,
 };

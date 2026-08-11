@@ -73,6 +73,14 @@ const {
   outreachCopyPlanLooksStale,
   findStaleOutreachCopyPlanFragments,
   repairOutreachCopyPlan,
+  outreachDraftPreviewLooksStale,
+  findStaleOutreachDraftFragments,
+  repairOutreachDraftPreview,
+  buildCampaignSynthesisContext,
+  ensureCampaignMemory,
+  applyBatchReviewLearnings,
+  rejectsStreetAddressPersonalization,
+  DEFAULT_OPERATOR_LEARNINGS,
   OPERATOR_BANNED_FRAGMENT_RES,
   STALE_OUTREACH_COPY_PLAN_FRAGMENT_RES,
 } = require('../services/clientIntelligenceCampaignPlanning');
@@ -3348,5 +3356,442 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.doesNotMatch(msg, /This is operator-stated differentiation/i);
     assert.doesNotMatch(msg, /for Small to mid-sized/);
     assert.doesNotMatch(msg, /Keep Greater Manchester in scope/i);
+  });
+});
+
+describe('Campaign Memory — CampaignSynthesisContext', () => {
+  function memoryFixtures() {
+    const batch = withGroups(sampleKeyrenterCorrectionBatch());
+    const review = approveProspectBatchReviewBatch1(
+      buildProspectBatchReview(batch, {
+        userMessage:
+          'Remove Keyrenter New England Property Management from the accepted cold first-pass candidates — it is an existing relationship, not a cold prospect. Keep it as nurture.',
+        workRequestId: batch.workRequestId,
+      })
+    );
+    const ctx = {
+      businessName: 'Anchor Cleaning',
+      brandVoice:
+        'calm, professional, reliable, direct, and easy to work with',
+      competitiveAdvantages:
+        'Reliability and accountability. Responsive communication. Peace of mind for recurring commercial cleaning relationships.',
+      primarySegment: 'property managers',
+      targetMarket: 'Greater Manchester',
+      towns: [
+        'Bedford',
+        'Hooksett',
+        'Londonderry',
+        'Auburn',
+        'Goffstown',
+      ],
+    };
+    const strategy = approveOutreachStrategyPreview(
+      buildOutreachStrategyPreview(review, ctx, {
+        priorCriteriaPreview: {
+          kind: 'prospect_list_criteria_preview',
+          status: 'approved',
+          campaignObjective:
+            'Prove that Greater Manchester property managers will take a discovery conversation about recurring commercial cleaning.',
+        },
+      })
+    );
+    const plan = approveOutreachCopyPlan(
+      buildOutreachCopyPlan(strategy, review, ctx, {})
+    );
+    return { review, ctx, strategy, plan };
+  }
+
+  it('tested subject line overrides generic options', () => {
+    const { review, ctx, strategy, plan } = memoryFixtures();
+    const draft = buildOutreachDraftPreview(plan, strategy, review, ctx, {});
+    assert.equal(draft.usedTestedSubjectLine, true);
+    assert.deepEqual(draft.subjectOptions, ['Anchor - commercial cleaning']);
+    assert.equal(
+      draft.testedSubjectLinePattern,
+      DEFAULT_OPERATOR_LEARNINGS.tested_subject_line_pattern
+    );
+    assert.match(
+      draft.testedSubjectLinePerformance,
+      /56\.6% open rate vs 23\.9%/
+    );
+    assert.doesNotMatch(
+      (draft.subjectOptions || []).join('\n'),
+      /Quick question about cleaning reliability/i
+    );
+    assert.doesNotMatch(
+      (draft.subjectOptions || []).join('\n'),
+      /Worth a brief chat about recurring cleaning coverage/i
+    );
+    const msg = formatOutreachDraftPreviewMessage(draft);
+    assert.match(msg, /Subject line \(tested winner\)/);
+    assert.match(msg, /Anchor - commercial cleaning/);
+  });
+
+  it('Keyrenter remains existing_relationship_nurture across later steps', () => {
+    const { review, ctx, strategy, plan } = memoryFixtures();
+    let memory = applyBatchReviewLearnings(ensureCampaignMemory({}), review);
+    assert.equal(
+      memory.operatorLearnings.keyrenter_status,
+      'existing_relationship_nurture'
+    );
+
+    const draft = buildOutreachDraftPreview(plan, strategy, review, ctx, {
+      campaignMemory: memory,
+      step: 'outreach_draft_preview',
+    });
+    memory = draft.campaignMemory;
+    assert.equal(
+      memory.operatorLearnings.keyrenter_status,
+      'existing_relationship_nurture'
+    );
+    assert.ok(
+      !(draft.batchProspects || []).some((n) => /Keyrenter/i.test(n))
+    );
+    assert.ok(
+      !(draft.personalizationByProspect || []).some((r) =>
+        /Keyrenter/i.test(r.companyName)
+      )
+    );
+
+    const gate = buildOutreachLaunchGate(
+      approveOutreachDraftPreview(draft),
+      plan,
+      strategy,
+      review,
+      ctx,
+      { campaignMemory: memory }
+    );
+    assert.ok(
+      !(gate.batchProspects || []).some((n) => /Keyrenter/i.test(n)) ||
+        /Keyrenter|existing.?relationship|nurture/i.test(
+          formatOutreachLaunchGateMessage(gate)
+        )
+    );
+    assert.equal(
+      (draft.campaignLearnings || {}).keyrenter_status,
+      'existing_relationship_nurture'
+    );
+  });
+
+  it('Cedar remains source_verification_required across later steps', () => {
+    const { review, ctx, strategy, plan } = memoryFixtures();
+    let memory = applyBatchReviewLearnings(ensureCampaignMemory({}), review);
+    assert.equal(
+      memory.operatorLearnings.cedar_status,
+      'source_verification_required'
+    );
+
+    const draft = buildOutreachDraftPreview(plan, strategy, review, ctx, {
+      campaignMemory: memory,
+    });
+    assert.equal(
+      draft.campaignMemory.operatorLearnings.cedar_status,
+      'source_verification_required'
+    );
+    assert.ok(!(draft.batchProspects || []).some((n) => /Cedar/i.test(n)));
+    assert.ok(
+      !(draft.personalizationByProspect || []).some((r) =>
+        /Cedar/i.test(r.companyName)
+      )
+    );
+
+    const synthesis = buildCampaignSynthesisContext({
+      context: ctx,
+      approvedReview: review,
+      approvedOutreachStrategy: strategy,
+      approvedOutreachCopyPlan: plan,
+      campaignMemory: draft.campaignMemory,
+      step: 'outreach_launch_gate',
+    });
+    assert.equal(
+      synthesis.learnings.cedar_status,
+      'source_verification_required'
+    );
+  });
+
+  it('street-address personalization is rejected by default', () => {
+    assert.equal(
+      rejectsStreetAddressPersonalization(
+        'Reference 123 Main Street when personalizing'
+      ),
+      true
+    );
+    assert.equal(
+      rejectsStreetAddressPersonalization(
+        'Reference {{town}} and a public portfolio cue'
+      ),
+      false
+    );
+
+    const { review, ctx, strategy, plan } = memoryFixtures();
+    const polluted = {
+      ...(review.approvedBatch.candidates[0] || {}),
+      companyName: 'Acme Property Group',
+      address: '45 Elm Street',
+      location: '45 Elm Street, Bedford NH',
+    };
+    const reviewWithStreet = {
+      ...review,
+      approvedBatch: {
+        ...review.approvedBatch,
+        candidates: [polluted, ...(review.approvedBatch.candidates || []).slice(1)],
+      },
+    };
+    const draft = buildOutreachDraftPreview(
+      plan,
+      strategy,
+      reviewWithStreet,
+      ctx,
+      {}
+    );
+    for (const row of draft.personalizationByProspect || []) {
+      assert.equal(
+        rejectsStreetAddressPersonalization(row.personalizationNote),
+        false,
+        row.personalizationNote
+      );
+      assert.doesNotMatch(row.personalizationNote, /\d{1,6}\s+\w+\s+Street/i);
+      assert.match(
+        row.personalizationNote,
+        /\{\{town\}\}|town|portfolio|role|company/i
+      );
+    }
+    assert.match(
+      draft.campaignLearnings.personalization_rule,
+      /do not use street addresses by default/i
+    );
+  });
+
+  it('Outreach Draft Preview uses {{town}}, not a full town list', () => {
+    const { review, ctx, strategy, plan } = memoryFixtures();
+    const draft = buildOutreachDraftPreview(plan, strategy, review, ctx, {});
+    assert.match(draft.firstTouchBody, /\{\{town\}\}/);
+    assert.doesNotMatch(
+      draft.firstTouchBody,
+      /Bedford,\s*Hooksett,\s*Londonderry,\s*Auburn/
+    );
+    assert.doesNotMatch(draft.firstTouchBody, /\bI work with\b/);
+    assert.match(draft.firstTouchBody, /Anchor helps/);
+    const msg = formatOutreachDraftPreviewMessage(draft);
+    assert.match(msg, /\{\{town\}\}/);
+    assert.doesNotMatch(
+      msg,
+      /across Bedford,\s*Hooksett,\s*Londonderry,\s*Auburn/
+    );
+  });
+
+  it('approved operator learnings survive step transitions', () => {
+    const { review, ctx, strategy, plan } = memoryFixtures();
+    const sessionState = {
+      step: 'outreach_copy_plan',
+      campaignMemory: applyBatchReviewLearnings(ensureCampaignMemory({}), review),
+      answers: {},
+      slots: {
+        previewGenerated: true,
+        previewApproved: true,
+        criteriaGenerated: true,
+        criteriaApproved: true,
+        buildProposalGenerated: true,
+        buildProposalApproved: true,
+        prospectBatchReviewApproved: true,
+        batch1Approved: true,
+        outreachStrategyPreviewGenerated: true,
+        outreachStrategyPreviewApproved: true,
+        strategyApproved: true,
+        outreachCopyPlanGenerated: true,
+      },
+      prospectListCriteriaPreview: {
+        kind: 'prospect_list_criteria_preview',
+        status: 'approved',
+        campaignObjective:
+          'Prove that Greater Manchester property managers will take a discovery conversation about recurring commercial cleaning.',
+      },
+      prospectBatchReview: review,
+      outreachStrategyPreview: strategy,
+      outreachCopyPlan: plan,
+    };
+
+    const reply = buildCampaignPlanningReply(
+      'Approve the Outreach Copy Plan. Next step: create the Outreach Draft Preview.',
+      sessionState,
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: plan,
+        campaignMemory: sessionState.campaignMemory,
+      }
+    );
+
+    assert.ok(reply.campaignMemory);
+    assert.equal(
+      reply.campaignMemory.operatorLearnings.keyrenter_status,
+      'existing_relationship_nurture'
+    );
+    assert.equal(
+      reply.campaignMemory.operatorLearnings.cedar_status,
+      'source_verification_required'
+    );
+    assert.equal(
+      reply.campaignMemory.operatorLearnings.tested_subject_line_pattern,
+      '{{business_name}} - commercial cleaning'
+    );
+    assert.equal(
+      reply.outreachDraftPreview.campaignMemory.operatorLearnings
+        .personalization_rule,
+      'do not use street addresses by default'
+    );
+
+    // Advance again — learnings must still be present.
+    const second = buildCampaignPlanningReply(
+      'Show the Outreach Draft Preview',
+      {
+        ...sessionState,
+        step: 'outreach_draft_preview',
+        campaignMemory: reply.campaignMemory,
+        outreachCopyPlan: reply.outreachCopyPlan,
+        outreachDraftPreview: reply.outreachDraftPreview,
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewGenerated: true,
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: reply.outreachCopyPlan,
+        priorOutreachDraftPreview: reply.outreachDraftPreview,
+        campaignMemory: reply.campaignMemory,
+      }
+    );
+    assert.equal(
+      second.campaignMemory.operatorLearnings.keyrenter_status,
+      'existing_relationship_nurture'
+    );
+    assert.equal(
+      second.outreachDraftPreview.subjectOptions[0],
+      'Anchor - commercial cleaning'
+    );
+  });
+
+  it('stale stored Outreach Draft Preview is repaired before rendering', () => {
+    const { review, ctx, strategy, plan } = memoryFixtures();
+    const campaignCtx = buildCampaignSynthesisContext({
+      context: ctx,
+      approvedReview: review,
+      approvedOutreachStrategy: strategy,
+      approvedOutreachCopyPlan: plan,
+    });
+
+    const stale = {
+      kind: 'outreach_draft_preview',
+      title: OUTREACH_DRAFT_PREVIEW_TITLE,
+      status: 'draft',
+      businessName: 'Anchor',
+      subjectOptions: [
+        'Quick question about cleaning reliability in Greater Manchester',
+        'Anchor — responsive commercial cleaning for property managers',
+        'Worth a brief chat about recurring cleaning coverage?',
+      ],
+      firstTouchBody: [
+        'Hi {{first_name}},',
+        '',
+        'I work with property managers across Bedford, Hooksett, Londonderry, Auburn, or Goffstown who want reliable commercial cleaning without chasing vendors.',
+        '',
+        'Would you be open to a short discovery conversation?',
+      ].join('\n'),
+      personalizationByProspect: [
+        {
+          companyName: 'Keyrenter New England Property Management',
+          town: 'Bedford',
+          personalizationNote:
+            'Reference 12 North Street and the Keyrenter office address.',
+        },
+        {
+          companyName: 'Cedar Management Group',
+          town: 'Hooksett',
+          personalizationNote: 'Use the Hooksett street address on the listing.',
+        },
+      ],
+      batchProspects: [
+        'Keyrenter New England Property Management',
+        'Cedar Management Group',
+      ],
+      followUpSketch: ['Hold follow-ups'],
+      approvalGate: ['No sends'],
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    assert.equal(outreachDraftPreviewLooksStale(stale, campaignCtx), true);
+    assert.ok(findStaleOutreachDraftFragments(stale).length >= 1);
+
+    const repaired = repairOutreachDraftPreview(
+      stale,
+      plan,
+      strategy,
+      review,
+      ctx,
+      { campaignSynthesisContext: campaignCtx }
+    );
+    assert.equal(repaired.repairedFromStale, true);
+    assert.equal(repaired.usedTestedSubjectLine, true);
+    assert.deepEqual(repaired.subjectOptions, [
+      'Anchor - commercial cleaning',
+    ]);
+    assert.match(repaired.firstTouchBody, /\{\{town\}\}/);
+    assert.match(repaired.firstTouchBody, /Anchor helps/);
+    assert.doesNotMatch(repaired.firstTouchBody, /\bI work with\b/);
+    assert.doesNotMatch(
+      repaired.firstTouchBody,
+      /Bedford,\s*Hooksett,\s*Londonderry/
+    );
+    assert.ok(
+      !(repaired.batchProspects || []).some((n) => /Keyrenter|Cedar/i.test(n))
+    );
+    for (const row of repaired.personalizationByProspect || []) {
+      assert.equal(
+        rejectsStreetAddressPersonalization(row.personalizationNote),
+        false
+      );
+    }
+
+    const reply = buildCampaignPlanningReply(
+      'Show the Outreach Draft Preview',
+      {
+        step: 'outreach_draft_preview',
+        slots: {
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewGenerated: true,
+          batch1Approved: true,
+          outreachStrategyPreviewApproved: true,
+        },
+        prospectBatchReview: review,
+        outreachStrategyPreview: strategy,
+        outreachCopyPlan: plan,
+        outreachDraftPreview: stale,
+        campaignMemory: campaignCtx.campaignMemory,
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: plan,
+        priorOutreachDraftPreview: stale,
+        campaignMemory: campaignCtx.campaignMemory,
+      }
+    );
+    assert.equal(reply.outreachDraftPreview.repairedFromStale, true);
+    assert.match(reply.message, /repaired stale/i);
+    assert.match(reply.message, /Anchor - commercial cleaning/);
+    assert.match(reply.message, /\{\{town\}\}/);
+    assert.doesNotMatch(reply.message, /\bI work with\b/);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.accountChangesMade, false);
   });
 });
