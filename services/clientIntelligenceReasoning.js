@@ -42,7 +42,24 @@ const ARTIFACT_KINDS = Object.freeze({
   OUTREACH_STRATEGY_PREVIEW: 'outreach_strategy_preview',
   /** Review-first copy planning after Outreach Strategy Preview approval. */
   OUTREACH_COPY_PLAN: 'outreach_copy_plan',
+  /** Draft outreach copy for review after Outreach Copy Plan approval. */
+  OUTREACH_DRAFT_PREVIEW: 'outreach_draft_preview',
+  /** Explicit launch/export/CRM gate after Outreach Draft Preview approval. */
+  OUTREACH_LAUNCH_GATE: 'outreach_launch_gate',
 });
+
+/**
+ * Ordered review-artifact chain for Growth campaign workflow.
+ * Approve current → advance to next (show if exists, create if missing).
+ * Never re-render an already-approved artifact for approval again.
+ */
+const REVIEW_ARTIFACT_CHAIN = Object.freeze([
+  ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
+  ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW,
+  ARTIFACT_KINDS.OUTREACH_COPY_PLAN,
+  ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+  ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE,
+]);
 
 /**
  * Prospect-acquisition artifact intents.
@@ -66,6 +83,16 @@ const PROSPECT_ACQUISITION_INTENTS = Object.freeze({
   APPROVE_OUTREACH_STRATEGY_PREVIEW: 'approve_outreach_strategy_preview',
   /** Create or show Outreach Copy Plan after strategy approval. */
   EMIT_OUTREACH_COPY_PLAN: 'emit_outreach_copy_plan',
+  /** Approve Outreach Copy Plan and advance to Outreach Draft Preview. */
+  APPROVE_OUTREACH_COPY_PLAN: 'approve_outreach_copy_plan',
+  /** Create or show Outreach Draft Preview after copy-plan approval. */
+  EMIT_OUTREACH_DRAFT_PREVIEW: 'emit_outreach_draft_preview',
+  /** Approve Outreach Draft Preview and advance to Launch Gate. */
+  APPROVE_OUTREACH_DRAFT_PREVIEW: 'approve_outreach_draft_preview',
+  /** Create or show Outreach Launch Gate after draft-preview approval. */
+  EMIT_OUTREACH_LAUNCH_GATE: 'emit_outreach_launch_gate',
+  /** Approve Outreach Launch Gate (readiness only — still no auto send/export/CRM). */
+  APPROVE_OUTREACH_LAUNCH_GATE: 'approve_outreach_launch_gate',
   PERFORM_LIVE_SOURCING: 'perform_live_sourcing',
 });
 
@@ -97,7 +124,7 @@ const APPROVAL_LEAD_RE =
   /^\s*(?:yes[,.]?\s+)?(?:looks?\s+good|lgtm|approved?|approve(?:\s+it)?|ship\s+it|go\s+ahead|proceed|sounds?\s+good|that\s+works|perfect|confirmed?|i\s+approve)\b/i;
 
 const NEXT_REQUEST_RE =
-  /\b(?:before\s+we\s+build(?:\s+anything)?|how\s+(?:would|will|do|should)\s+you\s+approach|tell\s+me\s+how\s+you\s+would|what'?s\s+next|what\s+is\s+next|next\s+step|approach\s+building|build(?:ing)?\s+(?:the\s+)?(?:first\s+)?(?:prospect\s+)?list|how\s+to\s+build|propose\s+(?:the\s+)?(?:build|approach)|planning\s+(?:the\s+)?build|create\s+(?:the\s+)?outreach\s+copy\s+plan|outreach\s+copy\s+plan)\b/i;
+  /\b(?:before\s+we\s+build(?:\s+anything)?|how\s+(?:would|will|do|should)\s+you\s+approach|tell\s+me\s+how\s+you\s+would|what'?s\s+next|what\s+is\s+next|next\s+step|approach\s+building|build(?:ing)?\s+(?:the\s+)?(?:first\s+)?(?:prospect\s+)?list|how\s+to\s+build|propose\s+(?:the\s+)?(?:build|approach)|planning\s+(?:the\s+)?build|create\s+(?:the\s+)?outreach\s+copy\s+plan|outreach\s+copy\s+plan|create\s+(?:the\s+)?outreach\s+draft\s+preview|outreach\s+draft\s+preview|launch\s+gate)\b/i;
 
 /** Explicit ask to generate the first reviewable prospect list batch/draft. */
 const PROSPECT_LIST_DRAFT_REQUEST_RE =
@@ -129,6 +156,44 @@ const OUTREACH_STRATEGY_PREVIEW_APPROVAL_RE =
 /** Ask for / create / show Outreach Copy Plan (post–strategy approval). */
 const OUTREACH_COPY_PLAN_REQUEST_RE =
   /\boutreach\s+copy\s+plan\b|\b(?:create|show|produce|prepare|build|emit|draft|open|pull\s+up)\b[\s\S]{0,100}\b(?:outreach\s+)?copy\s+plan\b|\bcopy\s+plan\b/i;
+
+/** Approve the active Outreach Copy Plan (optionally with next-step ask). */
+const OUTREACH_COPY_PLAN_APPROVAL_RE =
+  /\bapprov(?:e|ed|ing)\b[\s\S]{0,120}\boutreach\s+copy\s+plan\b|\boutreach\s+copy\s+plan\b[\s\S]{0,80}\bapprov(?:e|ed|ing)\b|\bapprov(?:e|ed|ing)\b[\s\S]{0,80}\bcopy\s+plan\b|\bcopy\s+plan\b[\s\S]{0,60}\bapprov(?:e|ed|ing)\b/i;
+
+/** Ask for / create / show Outreach Draft Preview (post–copy-plan approval). */
+const OUTREACH_DRAFT_PREVIEW_REQUEST_RE =
+  /\boutreach\s+draft\s+preview\b|\b(?:create|show|produce|prepare|build|emit|draft|open|pull\s+up)\b[\s\S]{0,100}\boutreach\s+draft(?:\s+preview)?\b|\bdraft\s+preview\b/i;
+
+/** Approve the active Outreach Draft Preview (optionally with next-step ask). */
+const OUTREACH_DRAFT_PREVIEW_APPROVAL_RE =
+  /\bapprov(?:e|ed|ing)\b[\s\S]{0,120}\boutreach\s+draft(?:\s+preview)?\b|\boutreach\s+draft(?:\s+preview)?\b[\s\S]{0,80}\bapprov(?:e|ed|ing)\b|\bapprov(?:e|ed|ing)\b[\s\S]{0,80}\bdraft\s+preview\b|\bdraft\s+preview\b[\s\S]{0,60}\bapprov(?:e|ed|ing)\b/i;
+
+/** Ask for / create / show Outreach Launch Gate (post–draft approval). */
+const OUTREACH_LAUNCH_GATE_REQUEST_RE =
+  /\boutreach\s+launch\s+gate\b|\blaunch\s*(?:\/\s*)?(?:export\s*(?:\/\s*)?)?(?:crm\s+)?gate\b|\b(?:create|show|produce|prepare|build|emit|open|pull\s+up)\b[\s\S]{0,100}\blaunch\s+gate\b|\bexplicit\s+launch\b/i;
+
+/** Approve the active Outreach Launch Gate (readiness — not auto-execute). */
+const OUTREACH_LAUNCH_GATE_APPROVAL_RE =
+  /\bapprov(?:e|ed|ing)\b[\s\S]{0,120}\b(?:outreach\s+)?launch\s+gate\b|\b(?:outreach\s+)?launch\s+gate\b[\s\S]{0,80}\bapprov(?:e|ed|ing)\b/i;
+
+/**
+ * Approval clause only — strip "Next step: create X" tails so approving A
+ * while asking to create B does not look like approving B.
+ */
+function approvalClauseOnly(text) {
+  return String(text || '')
+    .split(
+      /\b(?:next\s+step|what'?s\s+next|then\s+(?:create|show|produce|prepare|build)|after\s+(?:that|approval))\b/i
+    )[0]
+    .trim();
+}
+
+function approvalClauseMatches(text, approvalRe) {
+  const clause = approvalClauseOnly(text);
+  if (!clause) return false;
+  return approvalRe.test(clause);
+}
 
 const ARTIFACT_REQUEST_RE =
   /\b(?:show|view|see|open|pull\s+up|regenerate|revise|replay)\s+(?:me\s+)?(?:the\s+)?(?:criteria|preview|blueprint|build\s+proposal|proposal|list\s+draft|prospect\s+list)\b|\b(?:criteria\s+preview|build\s+proposal|campaign\s+preview|list\s+draft)\s+again\b/i;
@@ -372,15 +437,36 @@ function looksLikeOutreachStrategyPreviewRequest(text) {
   if (!s) return false;
   // Approving the strategy (with optional next-step Copy Plan ask) is not a
   // "show strategy again" request.
-  if (OUTREACH_STRATEGY_PREVIEW_APPROVAL_RE.test(s)) return false;
+  if (approvalClauseMatches(s, OUTREACH_STRATEGY_PREVIEW_APPROVAL_RE)) return false;
   if (looksLikeOutreachCopyPlanRequest(s)) return false;
+  if (looksLikeOutreachDraftPreviewRequest(s)) return false;
+  if (looksLikeOutreachLaunchGateRequest(s)) return false;
   return OUTREACH_STRATEGY_PREVIEW_REQUEST_RE.test(s);
 }
 
 function looksLikeOutreachCopyPlanRequest(text) {
   const s = String(text || '').trim();
   if (!s) return false;
+  // Approving the copy plan (with optional Draft Preview ask) is not a
+  // "show copy plan again" request.
+  if (approvalClauseMatches(s, OUTREACH_COPY_PLAN_APPROVAL_RE)) return false;
+  if (looksLikeOutreachDraftPreviewRequest(s)) return false;
   return OUTREACH_COPY_PLAN_REQUEST_RE.test(s);
+}
+
+function looksLikeOutreachDraftPreviewRequest(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (approvalClauseMatches(s, OUTREACH_DRAFT_PREVIEW_APPROVAL_RE)) return false;
+  if (looksLikeOutreachLaunchGateRequest(s)) return false;
+  return OUTREACH_DRAFT_PREVIEW_REQUEST_RE.test(s);
+}
+
+function looksLikeOutreachLaunchGateRequest(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (approvalClauseMatches(s, OUTREACH_LAUNCH_GATE_APPROVAL_RE)) return false;
+  return OUTREACH_LAUNCH_GATE_REQUEST_RE.test(s);
 }
 
 function hasOutreachStrategyPreview(preview) {
@@ -422,6 +508,40 @@ function hasOutreachCopyPlan(plan) {
   );
 }
 
+function hasOutreachDraftPreview(preview) {
+  if (!preview || typeof preview !== 'object') return false;
+  const hasBody = Boolean(
+    (Array.isArray(preview.subjectOptions) && preview.subjectOptions.length) ||
+      preview.firstTouchBody ||
+      (preview.firstTouchDraft && preview.firstTouchDraft.body) ||
+      (Array.isArray(preview.personalizationByProspect) &&
+        preview.personalizationByProspect.length)
+  );
+  if (!hasBody) return false;
+  return Boolean(
+    preview.kind === ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW ||
+      preview.title === 'Outreach Draft Preview' ||
+      preview.firstTouchBody ||
+      preview.subjectOptions
+  );
+}
+
+function hasOutreachLaunchGate(gate) {
+  if (!gate || typeof gate !== 'object') return false;
+  const hasBody = Boolean(
+    (Array.isArray(gate.readinessChecklist) &&
+      gate.readinessChecklist.length) ||
+      (Array.isArray(gate.blockedActions) && gate.blockedActions.length) ||
+      gate.summary
+  );
+  if (!hasBody) return false;
+  return Boolean(
+    gate.kind === ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE ||
+      gate.title === 'Outreach Launch Gate' ||
+      gate.readinessChecklist
+  );
+}
+
 function isOutreachStrategyPreviewAlreadyApproved(preview) {
   if (!preview || typeof preview !== 'object') return false;
   return Boolean(
@@ -429,6 +549,61 @@ function isOutreachStrategyPreviewAlreadyApproved(preview) {
       preview.approved === true ||
       preview.strategyApproved === true
   );
+}
+
+function isOutreachCopyPlanAlreadyApproved(plan) {
+  if (!plan || typeof plan !== 'object') return false;
+  return Boolean(
+    plan.status === 'approved' ||
+      plan.approved === true ||
+      plan.copyPlanApproved === true
+  );
+}
+
+function isOutreachDraftPreviewAlreadyApproved(preview) {
+  if (!preview || typeof preview !== 'object') return false;
+  return Boolean(
+    preview.status === 'approved' ||
+      preview.approved === true ||
+      preview.draftPreviewApproved === true
+  );
+}
+
+function isOutreachLaunchGateAlreadyApproved(gate) {
+  if (!gate || typeof gate !== 'object') return false;
+  return Boolean(
+    gate.status === 'approved' ||
+      gate.approved === true ||
+      gate.launchGateApproved === true ||
+      gate.launchReady === true
+  );
+}
+
+function nextReviewArtifactKind(kind) {
+  const idx = REVIEW_ARTIFACT_CHAIN.indexOf(kind);
+  if (idx < 0 || idx >= REVIEW_ARTIFACT_CHAIN.length - 1) return null;
+  return REVIEW_ARTIFACT_CHAIN[idx + 1];
+}
+
+function priorReviewArtifactKind(kind) {
+  const idx = REVIEW_ARTIFACT_CHAIN.indexOf(kind);
+  if (idx <= 0) return null;
+  return REVIEW_ARTIFACT_CHAIN[idx - 1];
+}
+
+/**
+ * Generic approve-current → advance-next memory update for the review chain.
+ * Idempotent when the current artifact is already approved.
+ */
+function markReviewArtifactApprovedAndAdvance(memory, approveKind, opts = {}) {
+  let next = markArtifactApproved(memory, approveKind);
+  const emitKind = opts.emitKind || nextReviewArtifactKind(approveKind);
+  if (emitKind) {
+    const existingStatus = opts.existingNextStatus || 'draft';
+    next = markArtifactGenerated(next, emitKind, existingStatus);
+    next.nextRecommendedArtifact = emitKind;
+  }
+  return { memory: next, emitKind };
 }
 
 function hasActiveOutreachStrategyPreview(opts = {}) {
@@ -440,7 +615,9 @@ function hasActiveOutreachStrategyPreview(opts = {}) {
     step === 'outreach_strategy_preview' ||
     step === ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW ||
     step === 'outreach_strategy_preview_approved' ||
-    step === 'outreach_copy_plan'
+    step === 'outreach_copy_plan' ||
+    step === 'outreach_draft_preview' ||
+    step === 'outreach_launch_gate'
   ) {
     return true;
   }
@@ -451,7 +628,58 @@ function hasActiveOutreachStrategyPreview(opts = {}) {
     generated.includes(ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW) ||
     approved.includes(ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW) ||
     memory.nextRecommendedArtifact === ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW ||
-    memory.nextRecommendedArtifact === ARTIFACT_KINDS.OUTREACH_COPY_PLAN
+    memory.nextRecommendedArtifact === ARTIFACT_KINDS.OUTREACH_COPY_PLAN ||
+    memory.nextRecommendedArtifact === ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW ||
+    memory.nextRecommendedArtifact === ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE
+  );
+}
+
+function hasActiveOutreachCopyPlan(opts = {}) {
+  const prior = opts.priorOutreachCopyPlan || opts.outreachCopyPlan || null;
+  if (hasOutreachCopyPlan(prior)) return true;
+  const step = String(opts.step || '').toLowerCase();
+  if (
+    step === 'outreach_copy_plan' ||
+    step === ARTIFACT_KINDS.OUTREACH_COPY_PLAN ||
+    step === 'outreach_copy_plan_approved' ||
+    step === 'outreach_draft_preview' ||
+    step === 'outreach_launch_gate'
+  ) {
+    return true;
+  }
+  const memory = ensureReasoningMemory({ reasoningMemory: opts.memory });
+  const generated = memory.generatedArtifacts || [];
+  const approved = memory.approvedArtifacts || [];
+  return (
+    generated.includes(ARTIFACT_KINDS.OUTREACH_COPY_PLAN) ||
+    approved.includes(ARTIFACT_KINDS.OUTREACH_COPY_PLAN) ||
+    memory.nextRecommendedArtifact === ARTIFACT_KINDS.OUTREACH_COPY_PLAN ||
+    memory.nextRecommendedArtifact === ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW ||
+    memory.nextRecommendedArtifact === ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE
+  );
+}
+
+function hasActiveOutreachDraftPreview(opts = {}) {
+  const prior =
+    opts.priorOutreachDraftPreview || opts.outreachDraftPreview || null;
+  if (hasOutreachDraftPreview(prior)) return true;
+  const step = String(opts.step || '').toLowerCase();
+  if (
+    step === 'outreach_draft_preview' ||
+    step === ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW ||
+    step === 'outreach_draft_preview_approved' ||
+    step === 'outreach_launch_gate'
+  ) {
+    return true;
+  }
+  const memory = ensureReasoningMemory({ reasoningMemory: opts.memory });
+  const generated = memory.generatedArtifacts || [];
+  const approved = memory.approvedArtifacts || [];
+  return (
+    generated.includes(ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW) ||
+    approved.includes(ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW) ||
+    memory.nextRecommendedArtifact === ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW ||
+    memory.nextRecommendedArtifact === ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE
   );
 }
 
@@ -473,8 +701,30 @@ function looksLikeOutreachStrategyPreviewApproval(text, opts = {}) {
   ) {
     return false;
   }
+  // Later-stage approvals win only when those artifacts are active AND the
+  // earlier artifact is already approved. "Approve Strategy. Next: create Copy
+  // Plan" must not look like Copy Plan approval.
+  if (
+    approvalClauseMatches(s, OUTREACH_COPY_PLAN_APPROVAL_RE) &&
+    hasActiveOutreachCopyPlan(opts) &&
+    isOutreachStrategyPreviewAlreadyApproved(
+      opts.priorOutreachStrategyPreview || opts.outreachStrategyPreview
+    )
+  ) {
+    return false;
+  }
+  if (
+    approvalClauseMatches(s, OUTREACH_DRAFT_PREVIEW_APPROVAL_RE) &&
+    hasActiveOutreachDraftPreview(opts) &&
+    isOutreachCopyPlanAlreadyApproved(
+      opts.priorOutreachCopyPlan || opts.outreachCopyPlan
+    )
+  ) {
+    return false;
+  }
+  if (approvalClauseMatches(s, OUTREACH_LAUNCH_GATE_APPROVAL_RE)) return false;
 
-  if (OUTREACH_STRATEGY_PREVIEW_APPROVAL_RE.test(s)) return true;
+  if (approvalClauseMatches(s, OUTREACH_STRATEGY_PREVIEW_APPROVAL_RE)) return true;
 
   const strategy =
     opts.priorOutreachStrategyPreview || opts.outreachStrategyPreview || null;
@@ -502,6 +752,150 @@ function looksLikeOutreachStrategyPreviewApproval(text, opts = {}) {
     return true;
   }
 
+  return false;
+}
+
+/**
+ * True when the operator is approving the active Outreach Copy Plan
+ * (optionally asking for Outreach Draft Preview next).
+ */
+function looksLikeOutreachCopyPlanApproval(text, opts = {}) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (!hasActiveOutreachCopyPlan(opts)) return false;
+  if (
+    looksLikeProspectBatchReviewApproval(s, opts) &&
+    !isProspectBatchReviewAlreadyApproved(
+      opts.priorProspectBatchReview || opts.prospectBatchReview
+    )
+  ) {
+    return false;
+  }
+  if (
+    approvalClauseMatches(s, OUTREACH_STRATEGY_PREVIEW_APPROVAL_RE) &&
+    !isOutreachStrategyPreviewAlreadyApproved(
+      opts.priorOutreachStrategyPreview || opts.outreachStrategyPreview
+    )
+  ) {
+    return false;
+  }
+  if (
+    approvalClauseMatches(s, OUTREACH_DRAFT_PREVIEW_APPROVAL_RE) &&
+    hasActiveOutreachDraftPreview(opts) &&
+    isOutreachCopyPlanAlreadyApproved(
+      opts.priorOutreachCopyPlan || opts.outreachCopyPlan
+    )
+  ) {
+    return false;
+  }
+  if (approvalClauseMatches(s, OUTREACH_LAUNCH_GATE_APPROVAL_RE)) return false;
+  if (approvalClauseMatches(s, OUTREACH_COPY_PLAN_APPROVAL_RE)) return true;
+
+  const plan = opts.priorOutreachCopyPlan || opts.outreachCopyPlan || null;
+  const alreadyApproved = isOutreachCopyPlanAlreadyApproved(plan);
+  if (
+    (looksLikeApproval(s) ||
+      opts.messageClass === MESSAGE_CLASSES.APPROVAL ||
+      opts.messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST) &&
+    !alreadyApproved &&
+    hasOutreachCopyPlan(plan) &&
+    !approvalClauseMatches(s, OUTREACH_STRATEGY_PREVIEW_APPROVAL_RE) &&
+    !approvalClauseMatches(s, OUTREACH_DRAFT_PREVIEW_APPROVAL_RE) &&
+    !approvalClauseMatches(s, OUTREACH_LAUNCH_GATE_APPROVAL_RE)
+  ) {
+    return true;
+  }
+  if (
+    looksLikeApprovalLead(s) &&
+    (looksLikeOutreachDraftPreviewRequest(s) ||
+      looksLikeNextPlanningRequest(s) ||
+      /\boutreach\s+copy\s+plan\b/i.test(s)) &&
+    !alreadyApproved &&
+    !approvalClauseMatches(s, OUTREACH_STRATEGY_PREVIEW_APPROVAL_RE)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * True when the operator is approving the active Outreach Draft Preview.
+ */
+function looksLikeOutreachDraftPreviewApproval(text, opts = {}) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (!hasActiveOutreachDraftPreview(opts)) return false;
+  if (
+    approvalClauseMatches(s, OUTREACH_COPY_PLAN_APPROVAL_RE) &&
+    !isOutreachCopyPlanAlreadyApproved(
+      opts.priorOutreachCopyPlan || opts.outreachCopyPlan
+    )
+  ) {
+    return false;
+  }
+  if (approvalClauseMatches(s, OUTREACH_LAUNCH_GATE_APPROVAL_RE)) return false;
+  if (approvalClauseMatches(s, OUTREACH_DRAFT_PREVIEW_APPROVAL_RE)) return true;
+
+  const draft =
+    opts.priorOutreachDraftPreview || opts.outreachDraftPreview || null;
+  const alreadyApproved = isOutreachDraftPreviewAlreadyApproved(draft);
+  if (
+    (looksLikeApproval(s) ||
+      opts.messageClass === MESSAGE_CLASSES.APPROVAL ||
+      opts.messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST) &&
+    !alreadyApproved &&
+    hasOutreachDraftPreview(draft) &&
+    !approvalClauseMatches(s, OUTREACH_COPY_PLAN_APPROVAL_RE) &&
+    !approvalClauseMatches(s, OUTREACH_STRATEGY_PREVIEW_APPROVAL_RE) &&
+    !approvalClauseMatches(s, OUTREACH_LAUNCH_GATE_APPROVAL_RE)
+  ) {
+    return true;
+  }
+  if (
+    looksLikeApprovalLead(s) &&
+    (looksLikeOutreachLaunchGateRequest(s) ||
+      looksLikeNextPlanningRequest(s) ||
+      /\boutreach\s+draft(?:\s+preview)?\b/i.test(s)) &&
+    !alreadyApproved &&
+    !approvalClauseMatches(s, OUTREACH_COPY_PLAN_APPROVAL_RE)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * True when the operator is approving the active Outreach Launch Gate.
+ */
+function looksLikeOutreachLaunchGateApproval(text, opts = {}) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  const prior = opts.priorOutreachLaunchGate || opts.outreachLaunchGate || null;
+  const step = String(opts.step || '').toLowerCase();
+  const active =
+    hasOutreachLaunchGate(prior) ||
+    step === 'outreach_launch_gate' ||
+    step === ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE;
+  if (!active) return false;
+  if (
+    approvalClauseMatches(s, OUTREACH_DRAFT_PREVIEW_APPROVAL_RE) &&
+    !isOutreachDraftPreviewAlreadyApproved(
+      opts.priorOutreachDraftPreview || opts.outreachDraftPreview
+    )
+  ) {
+    return false;
+  }
+  if (approvalClauseMatches(s, OUTREACH_LAUNCH_GATE_APPROVAL_RE)) return true;
+  const alreadyApproved = isOutreachLaunchGateAlreadyApproved(prior);
+  if (
+    (looksLikeApproval(s) ||
+      opts.messageClass === MESSAGE_CLASSES.APPROVAL ||
+      opts.messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST) &&
+    !alreadyApproved &&
+    hasOutreachLaunchGate(prior)
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -557,6 +951,55 @@ function canEmitOutreachCopyPlan(opts = {}) {
   const memory = ensureReasoningMemory({ reasoningMemory: opts.memory });
   const approved = memory.approvedArtifacts || [];
   return approved.includes(ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW);
+}
+
+/**
+ * Copy Plan is approved (or being approved) so Outreach Draft Preview can be
+ * created or shown.
+ */
+function canEmitOutreachDraftPreview(opts = {}) {
+  if (hasOutreachDraftPreview(opts.priorOutreachDraftPreview)) return true;
+  if (isOutreachCopyPlanAlreadyApproved(opts.priorOutreachCopyPlan)) {
+    return true;
+  }
+  const step = String(opts.step || '').toLowerCase();
+  if (
+    step === 'outreach_draft_preview' ||
+    step === ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW ||
+    step === 'outreach_copy_plan_approved'
+  ) {
+    return true;
+  }
+  const slots = opts.slots || {};
+  if (slots.outreachCopyPlanApproved || slots.copyPlanApproved) return true;
+  const memory = ensureReasoningMemory({ reasoningMemory: opts.memory });
+  const approved = memory.approvedArtifacts || [];
+  return approved.includes(ARTIFACT_KINDS.OUTREACH_COPY_PLAN);
+}
+
+/**
+ * Draft Preview is approved so Outreach Launch Gate can be created or shown.
+ */
+function canEmitOutreachLaunchGate(opts = {}) {
+  if (hasOutreachLaunchGate(opts.priorOutreachLaunchGate)) return true;
+  if (isOutreachDraftPreviewAlreadyApproved(opts.priorOutreachDraftPreview)) {
+    return true;
+  }
+  const step = String(opts.step || '').toLowerCase();
+  if (
+    step === 'outreach_launch_gate' ||
+    step === ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE ||
+    step === 'outreach_draft_preview_approved'
+  ) {
+    return true;
+  }
+  const slots = opts.slots || {};
+  if (slots.outreachDraftPreviewApproved || slots.draftPreviewApproved) {
+    return true;
+  }
+  const memory = ensureReasoningMemory({ reasoningMemory: opts.memory });
+  const approved = memory.approvedArtifacts || [];
+  return approved.includes(ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW);
 }
 
 function hasActiveProspectBatchReview(opts = {}) {
@@ -760,10 +1203,40 @@ function classifyProspectAcquisitionIntent(text, opts = {}) {
   if (looksLikeProspectBatchReviewCorrection(s, opts)) {
     return PROSPECT_ACQUISITION_INTENTS.CORRECT_PROSPECT_BATCH_REVIEW;
   }
+  // Approve Launch Gate (terminal readiness — still no auto execute).
+  if (looksLikeOutreachLaunchGateApproval(s, opts)) {
+    return PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_LAUNCH_GATE;
+  }
+  // Approve Outreach Draft Preview → advance to Launch Gate.
+  if (looksLikeOutreachDraftPreviewApproval(s, opts)) {
+    return PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_DRAFT_PREVIEW;
+  }
+  // Approve Outreach Copy Plan → advance to Outreach Draft Preview.
+  if (looksLikeOutreachCopyPlanApproval(s, opts)) {
+    return PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_COPY_PLAN;
+  }
   // Approve Outreach Strategy Preview → advance to Outreach Copy Plan.
   // Must win over re-emitting the strategy when the message also names it.
   if (looksLikeOutreachStrategyPreviewApproval(s, opts)) {
     return PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_STRATEGY_PREVIEW;
+  }
+  // Create/show Launch Gate after draft approval.
+  if (
+    looksLikeOutreachLaunchGateRequest(s) &&
+    (canEmitOutreachLaunchGate(opts) ||
+      hasOutreachDraftPreview(opts.priorOutreachDraftPreview) ||
+      canEmitOutreachDraftPreview(opts))
+  ) {
+    return PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_LAUNCH_GATE;
+  }
+  // Create/show Outreach Draft Preview after copy-plan approval.
+  if (
+    looksLikeOutreachDraftPreviewRequest(s) &&
+    (canEmitOutreachDraftPreview(opts) ||
+      hasOutreachCopyPlan(opts.priorOutreachCopyPlan) ||
+      canEmitOutreachCopyPlan(opts))
+  ) {
+    return PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_DRAFT_PREVIEW;
   }
   // Create/show Outreach Copy Plan after strategy approval.
   if (
@@ -772,6 +1245,10 @@ function classifyProspectAcquisitionIntent(text, opts = {}) {
       hasOutreachStrategyPreview(opts.priorOutreachStrategyPreview) ||
       canEmitOutreachStrategyPreview(opts))
   ) {
+    // If copy plan is already approved, prefer draft preview instead.
+    if (canEmitOutreachDraftPreview(opts)) {
+      return PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_DRAFT_PREVIEW;
+    }
     return PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_COPY_PLAN;
   }
   // After Batch 1 approval, create/show Outreach Strategy Preview — never
@@ -780,12 +1257,23 @@ function classifyProspectAcquisitionIntent(text, opts = {}) {
     looksLikeOutreachStrategyPreviewRequest(s) &&
     canEmitOutreachStrategyPreview(opts)
   ) {
+    if (canEmitOutreachDraftPreview(opts)) {
+      return PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_DRAFT_PREVIEW;
+    }
+    if (canEmitOutreachCopyPlan(opts)) {
+      return PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_COPY_PLAN;
+    }
     return PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_STRATEGY_PREVIEW;
   }
   if (looksLikeProspectBatchReviewRequest(s)) {
     // If Batch 1 is already approved, do not re-emit Prospect Batch Review.
     if (canEmitOutreachStrategyPreview(opts)) {
-      // If strategy is already approved (or copy plan exists), prefer copy plan.
+      if (canEmitOutreachLaunchGate(opts)) {
+        return PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_LAUNCH_GATE;
+      }
+      if (canEmitOutreachDraftPreview(opts)) {
+        return PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_DRAFT_PREVIEW;
+      }
       if (canEmitOutreachCopyPlan(opts)) {
         return PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_COPY_PLAN;
       }
@@ -1341,9 +1829,14 @@ function markArtifactApproved(memory, kind) {
   }
   next.lastArtifactType = k;
   next.lastArtifactStatus = 'approved';
-  const idx = ARTIFACT_ORDER.indexOf(k);
-  next.nextRecommendedArtifact =
-    idx >= 0 ? ARTIFACT_ORDER[idx + 1] || null : null;
+  const reviewNext = nextReviewArtifactKind(k);
+  if (reviewNext) {
+    next.nextRecommendedArtifact = reviewNext;
+  } else {
+    const idx = ARTIFACT_ORDER.indexOf(k);
+    next.nextRecommendedArtifact =
+      idx >= 0 ? ARTIFACT_ORDER[idx + 1] || null : null;
+  }
   return next;
 }
 
@@ -1491,10 +1984,16 @@ function resolveCampaignArtifactAction(opts = {}) {
     opts.priorOutreachStrategyPreview || opts.outreachStrategyPreview || null;
   const priorOutreachCopyPlan =
     opts.priorOutreachCopyPlan || opts.outreachCopyPlan || null;
+  const priorOutreachDraftPreview =
+    opts.priorOutreachDraftPreview || opts.outreachDraftPreview || null;
+  const priorOutreachLaunchGate =
+    opts.priorOutreachLaunchGate || opts.outreachLaunchGate || null;
   const acquisitionIntent = classifyProspectAcquisitionIntent(text, {
     priorProspectBatchReview: priorBatchReview,
     priorOutreachStrategyPreview: priorOutreachStrategy,
     priorOutreachCopyPlan,
+    priorOutreachDraftPreview,
+    priorOutreachLaunchGate,
     step: opts.step,
     memory,
     messageClass,
@@ -1516,17 +2015,11 @@ function resolveCampaignArtifactAction(opts = {}) {
     });
 
   if (batchReviewApproval) {
-    memory = markArtifactApproved(
+    const advanced = markReviewArtifactApprovedAndAdvance(
       memory,
       ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW
     );
-    memory = markArtifactGenerated(
-      memory,
-      ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW,
-      'draft'
-    );
-    memory.nextRecommendedArtifact =
-      ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW;
+    memory = advanced.memory;
     return {
       action: 'approve_prospect_batch_review',
       approveKind: ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW,
@@ -1544,8 +2037,161 @@ function resolveCampaignArtifactAction(opts = {}) {
     };
   }
 
+  // HARD GUARD: approve Launch Gate (terminal readiness — still no execute).
+  const launchGateApproval =
+    acquisitionIntent ===
+      PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_LAUNCH_GATE ||
+    looksLikeOutreachLaunchGateApproval(text, {
+      priorOutreachLaunchGate,
+      priorOutreachDraftPreview,
+      step: opts.step,
+      memory,
+      messageClass,
+      state: opts.state,
+    });
+
+  if (launchGateApproval) {
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE
+    );
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW
+    );
+    memory = markArtifactApproved(memory, ARTIFACT_KINDS.OUTREACH_COPY_PLAN);
+    memory.nextRecommendedArtifact = null;
+    return {
+      action: 'approve_outreach_launch_gate',
+      approveKind: ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE,
+      emitKind: null,
+      memory,
+      messageClass:
+        messageClass === MESSAGE_CLASSES.APPROVAL ||
+        messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST
+          ? messageClass
+          : MESSAGE_CLASSES.APPROVAL,
+      note:
+        'Outreach Launch Gate approved for readiness only. No sends, CRM writes, exports, or account changes execute automatically — an explicit launch/export/CRM action is still required.',
+      planningState: 'outreach_launch_gate',
+      launchGateApproved: true,
+      launchReady: true,
+      draftPreviewApproved: true,
+      copyPlanApproved: true,
+      strategyApproved: true,
+      batch1Approved: true,
+    };
+  }
+
+  // HARD GUARD: approve Outreach Draft Preview → advance to Launch Gate.
+  const draftPreviewApproval =
+    acquisitionIntent ===
+      PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_DRAFT_PREVIEW ||
+    looksLikeOutreachDraftPreviewApproval(text, {
+      priorProspectBatchReview: priorBatchReview,
+      priorOutreachStrategyPreview: priorOutreachStrategy,
+      priorOutreachCopyPlan,
+      priorOutreachDraftPreview,
+      priorOutreachLaunchGate,
+      step: opts.step,
+      memory,
+      messageClass,
+      state: opts.state,
+    });
+
+  if (draftPreviewApproval) {
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW
+    );
+    memory = markArtifactApproved(memory, ARTIFACT_KINDS.OUTREACH_COPY_PLAN);
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW
+    );
+    const alreadyHaveGate = hasOutreachLaunchGate(priorOutreachLaunchGate);
+    memory = markArtifactGenerated(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE,
+      alreadyHaveGate ? priorOutreachLaunchGate.status || 'draft' : 'draft'
+    );
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE;
+    return {
+      action: 'approve_outreach_draft_preview',
+      approveKind: ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+      emitKind: ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE,
+      memory,
+      messageClass:
+        messageClass === MESSAGE_CLASSES.APPROVAL ||
+        messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST
+          ? messageClass
+          : MESSAGE_CLASSES.APPROVAL,
+      note: alreadyHaveGate
+        ? 'Outreach Draft Preview approved. Showing the Outreach Launch Gate for explicit launch/export/CRM readiness.'
+        : 'Outreach Draft Preview approved. Creating the Outreach Launch Gate for explicit launch/export/CRM readiness.',
+      planningState: 'outreach_launch_gate',
+      draftPreviewApproved: true,
+      copyPlanApproved: true,
+      strategyApproved: true,
+      batch1Approved: true,
+    };
+  }
+
+  // HARD GUARD: approve Outreach Copy Plan → advance to Outreach Draft Preview.
+  const copyPlanApproval =
+    acquisitionIntent ===
+      PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_COPY_PLAN ||
+    looksLikeOutreachCopyPlanApproval(text, {
+      priorProspectBatchReview: priorBatchReview,
+      priorOutreachStrategyPreview: priorOutreachStrategy,
+      priorOutreachCopyPlan,
+      priorOutreachDraftPreview,
+      step: opts.step,
+      memory,
+      messageClass,
+      state: opts.state,
+    });
+
+  if (copyPlanApproval) {
+    memory = markArtifactApproved(memory, ARTIFACT_KINDS.OUTREACH_COPY_PLAN);
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW
+    );
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW
+    );
+    const alreadyHaveDraft = hasOutreachDraftPreview(priorOutreachDraftPreview);
+    memory = markArtifactGenerated(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+      alreadyHaveDraft ? priorOutreachDraftPreview.status || 'draft' : 'draft'
+    );
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW;
+    return {
+      action: 'approve_outreach_copy_plan',
+      approveKind: ARTIFACT_KINDS.OUTREACH_COPY_PLAN,
+      emitKind: ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+      memory,
+      messageClass:
+        messageClass === MESSAGE_CLASSES.APPROVAL ||
+        messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST
+          ? messageClass
+          : MESSAGE_CLASSES.APPROVAL,
+      note: alreadyHaveDraft
+        ? 'Outreach Copy Plan approved. Showing the Outreach Draft Preview for approval or revision.'
+        : 'Outreach Copy Plan approved. Creating the Outreach Draft Preview for review.',
+      planningState: 'outreach_draft_preview',
+      copyPlanApproved: true,
+      strategyApproved: true,
+      batch1Approved: true,
+    };
+  }
+
   // HARD GUARD: approve Outreach Strategy Preview → advance to Outreach Copy Plan.
   // Never re-render the strategy approval question.
+  // If copy plan is already approved, advance further (generic chain).
   const strategyApproval =
     acquisitionIntent ===
       PROSPECT_ACQUISITION_INTENTS.APPROVE_OUTREACH_STRATEGY_PREVIEW ||
@@ -1553,6 +2199,7 @@ function resolveCampaignArtifactAction(opts = {}) {
       priorProspectBatchReview: priorBatchReview,
       priorOutreachStrategyPreview: priorOutreachStrategy,
       priorOutreachCopyPlan,
+      priorOutreachDraftPreview,
       step: opts.step,
       memory,
       messageClass,
@@ -1568,6 +2215,46 @@ function resolveCampaignArtifactAction(opts = {}) {
       memory,
       ARTIFACT_KINDS.PROSPECT_BATCH_REVIEW
     );
+    // Already past copy plan → advance to draft (or show existing).
+    if (
+      isOutreachCopyPlanAlreadyApproved(priorOutreachCopyPlan) ||
+      canEmitOutreachDraftPreview({
+        priorOutreachCopyPlan,
+        priorOutreachDraftPreview,
+        step: opts.step,
+        memory,
+        slots: opts.slots || null,
+      })
+    ) {
+      const alreadyHaveDraft = hasOutreachDraftPreview(
+        priorOutreachDraftPreview
+      );
+      memory = markArtifactApproved(memory, ARTIFACT_KINDS.OUTREACH_COPY_PLAN);
+      memory = markArtifactGenerated(
+        memory,
+        ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+        alreadyHaveDraft ? priorOutreachDraftPreview.status || 'draft' : 'draft'
+      );
+      memory.nextRecommendedArtifact = ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW;
+      return {
+        action: 'approve_outreach_copy_plan',
+        approveKind: ARTIFACT_KINDS.OUTREACH_COPY_PLAN,
+        emitKind: ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+        memory,
+        messageClass:
+          messageClass === MESSAGE_CLASSES.APPROVAL ||
+          messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST
+            ? messageClass
+            : MESSAGE_CLASSES.APPROVAL,
+        note: alreadyHaveDraft
+          ? 'Outreach Copy Plan is already approved — showing the Outreach Draft Preview.'
+          : 'Outreach Copy Plan approved. Creating the Outreach Draft Preview for review.',
+        planningState: 'outreach_draft_preview',
+        copyPlanApproved: true,
+        strategyApproved: true,
+        batch1Approved: true,
+      };
+    }
     const alreadyHavePlan = hasOutreachCopyPlan(priorOutreachCopyPlan);
     memory = markArtifactGenerated(
       memory,
@@ -1594,7 +2281,116 @@ function resolveCampaignArtifactAction(opts = {}) {
     };
   }
 
+  // HARD GUARD: create/show Launch Gate after draft approval.
+  const wantsLaunchGate =
+    acquisitionIntent ===
+      PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_LAUNCH_GATE ||
+    (looksLikeOutreachLaunchGateRequest(text) &&
+      canEmitOutreachLaunchGate({
+        priorOutreachDraftPreview,
+        priorOutreachLaunchGate,
+        step: opts.step,
+        memory,
+        slots: opts.slots || null,
+      })) ||
+    (canEmitOutreachLaunchGate({
+      priorOutreachDraftPreview,
+      priorOutreachLaunchGate,
+      step: opts.step,
+      memory,
+      slots: opts.slots || null,
+    }) &&
+      (looksLikeNextPlanningRequest(text) ||
+        messageClass === MESSAGE_CLASSES.ARTIFACT_REQUEST ||
+        opts.step === 'outreach_launch_gate' ||
+        opts.step === 'outreach_draft_preview_approved'));
+
+  if (wantsLaunchGate) {
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW
+    );
+    memory = markArtifactApproved(memory, ARTIFACT_KINDS.OUTREACH_COPY_PLAN);
+    const alreadyHaveGate = hasOutreachLaunchGate(priorOutreachLaunchGate);
+    memory = markArtifactGenerated(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE,
+      alreadyHaveGate ? priorOutreachLaunchGate.status || 'draft' : 'draft'
+    );
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE;
+    return {
+      action: 'emit_outreach_launch_gate',
+      approveKind: ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+      emitKind: ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE,
+      memory,
+      messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
+      note: alreadyHaveGate
+        ? 'Outreach Launch Gate is ready — showing it for explicit launch/export/CRM readiness.'
+        : 'Creating the Outreach Launch Gate from the approved Outreach Draft Preview.',
+      planningState: 'outreach_launch_gate',
+      draftPreviewApproved: true,
+      copyPlanApproved: true,
+      strategyApproved: true,
+      batch1Approved: true,
+    };
+  }
+
+  // HARD GUARD: create/show Outreach Draft Preview after copy-plan approval.
+  const wantsDraftPreview =
+    acquisitionIntent ===
+      PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_DRAFT_PREVIEW ||
+    (looksLikeOutreachDraftPreviewRequest(text) &&
+      canEmitOutreachDraftPreview({
+        priorOutreachCopyPlan,
+        priorOutreachDraftPreview,
+        step: opts.step,
+        memory,
+        slots: opts.slots || null,
+      })) ||
+    (canEmitOutreachDraftPreview({
+      priorOutreachCopyPlan,
+      priorOutreachDraftPreview,
+      step: opts.step,
+      memory,
+      slots: opts.slots || null,
+    }) &&
+      (looksLikeNextPlanningRequest(text) ||
+        messageClass === MESSAGE_CLASSES.ARTIFACT_REQUEST ||
+        messageClass === MESSAGE_CLASSES.APPROVAL_PLUS_NEXT_REQUEST ||
+        opts.step === 'outreach_draft_preview' ||
+        opts.step === 'outreach_copy_plan_approved'));
+
+  if (wantsDraftPreview) {
+    memory = markArtifactApproved(memory, ARTIFACT_KINDS.OUTREACH_COPY_PLAN);
+    memory = markArtifactApproved(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW
+    );
+    const alreadyHaveDraft = hasOutreachDraftPreview(priorOutreachDraftPreview);
+    memory = markArtifactGenerated(
+      memory,
+      ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+      alreadyHaveDraft ? priorOutreachDraftPreview.status || 'draft' : 'draft'
+    );
+    memory.nextRecommendedArtifact = ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW;
+    return {
+      action: 'emit_outreach_draft_preview',
+      approveKind: ARTIFACT_KINDS.OUTREACH_COPY_PLAN,
+      emitKind: ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+      memory,
+      messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
+      note: alreadyHaveDraft
+        ? 'Outreach Draft Preview is ready — showing it for approval or revision.'
+        : 'Creating the Outreach Draft Preview from the approved Copy Plan, Batch 1, and Blueprint.',
+      planningState: 'outreach_draft_preview',
+      copyPlanApproved: true,
+      strategyApproved: true,
+      batch1Approved: true,
+    };
+  }
+
   // HARD GUARD: create/show Outreach Copy Plan after strategy approval.
+  // If copy plan is already approved, prefer draft preview instead.
   const wantsOutreachCopyPlan =
     acquisitionIntent ===
       PROSPECT_ACQUISITION_INTENTS.EMIT_OUTREACH_COPY_PLAN ||
@@ -1620,6 +2416,40 @@ function resolveCampaignArtifactAction(opts = {}) {
         opts.step === 'outreach_strategy_preview_approved'));
 
   if (wantsOutreachCopyPlan) {
+    if (
+      canEmitOutreachDraftPreview({
+        priorOutreachCopyPlan,
+        priorOutreachDraftPreview,
+        step: opts.step,
+        memory,
+        slots: opts.slots || null,
+      })
+    ) {
+      memory = markArtifactApproved(memory, ARTIFACT_KINDS.OUTREACH_COPY_PLAN);
+      const alreadyHaveDraft = hasOutreachDraftPreview(
+        priorOutreachDraftPreview
+      );
+      memory = markArtifactGenerated(
+        memory,
+        ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+        alreadyHaveDraft ? priorOutreachDraftPreview.status || 'draft' : 'draft'
+      );
+      memory.nextRecommendedArtifact = ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW;
+      return {
+        action: 'emit_outreach_draft_preview',
+        approveKind: ARTIFACT_KINDS.OUTREACH_COPY_PLAN,
+        emitKind: ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+        memory,
+        messageClass: MESSAGE_CLASSES.ARTIFACT_REQUEST,
+        note: alreadyHaveDraft
+          ? 'Outreach Draft Preview is ready — showing it for approval or revision.'
+          : 'Creating the Outreach Draft Preview from the approved Copy Plan, Batch 1, and Blueprint.',
+        planningState: 'outreach_draft_preview',
+        copyPlanApproved: true,
+        strategyApproved: true,
+        batch1Approved: true,
+      };
+    }
     memory = markArtifactApproved(
       memory,
       ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW
@@ -2176,6 +3006,10 @@ function resolveCampaignArtifactAction(opts = {}) {
       opts.step === 'outreach_strategy_preview' ||
       opts.step === 'outreach_strategy_preview_approved' ||
       opts.step === 'outreach_copy_plan' ||
+      opts.step === 'outreach_copy_plan_approved' ||
+      opts.step === 'outreach_draft_preview' ||
+      opts.step === 'outreach_draft_preview_approved' ||
+      opts.step === 'outreach_launch_gate' ||
       opts.step === 'prospect_batch_1_approved'
     ) {
       if (isProspectBatchReviewAlreadyApproved(priorBatchReview)) {
@@ -2189,6 +3023,88 @@ function resolveCampaignArtifactAction(opts = {}) {
           (memory.approvedArtifacts || []).includes(
             ARTIFACT_KINDS.OUTREACH_STRATEGY_PREVIEW
           );
+        const copyPlanApproved =
+          isOutreachCopyPlanAlreadyApproved(priorOutreachCopyPlan) ||
+          (memory.approvedArtifacts || []).includes(
+            ARTIFACT_KINDS.OUTREACH_COPY_PLAN
+          );
+        const draftApproved =
+          isOutreachDraftPreviewAlreadyApproved(priorOutreachDraftPreview) ||
+          (memory.approvedArtifacts || []).includes(
+            ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW
+          );
+
+        // Draft approved → Launch Gate path.
+        if (
+          draftApproved ||
+          opts.step === 'outreach_launch_gate' ||
+          opts.step === 'outreach_draft_preview_approved'
+        ) {
+          const alreadyHaveGate = hasOutreachLaunchGate(priorOutreachLaunchGate);
+          memory = markArtifactApproved(
+            memory,
+            ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW
+          );
+          memory = markArtifactGenerated(
+            memory,
+            ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE,
+            alreadyHaveGate ? priorOutreachLaunchGate.status || 'draft' : 'draft'
+          );
+          memory.nextRecommendedArtifact = ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE;
+          return {
+            action: 'emit_outreach_launch_gate',
+            approveKind: ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+            emitKind: ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE,
+            memory,
+            messageClass,
+            note: alreadyHaveGate
+              ? 'Outreach Launch Gate is ready — showing it for explicit launch/export/CRM readiness.'
+              : 'Outreach Draft Preview approved. Creating the Outreach Launch Gate for explicit launch/export/CRM readiness.',
+            planningState: 'outreach_launch_gate',
+            draftPreviewApproved: true,
+            copyPlanApproved: true,
+            strategyApproved: true,
+            batch1Approved: true,
+          };
+        }
+
+        // Copy plan approved → Draft Preview path.
+        if (
+          copyPlanApproved ||
+          opts.step === 'outreach_draft_preview' ||
+          opts.step === 'outreach_copy_plan_approved'
+        ) {
+          const alreadyHaveDraft = hasOutreachDraftPreview(
+            priorOutreachDraftPreview
+          );
+          memory = markArtifactApproved(
+            memory,
+            ARTIFACT_KINDS.OUTREACH_COPY_PLAN
+          );
+          memory = markArtifactGenerated(
+            memory,
+            ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+            alreadyHaveDraft
+              ? priorOutreachDraftPreview.status || 'draft'
+              : 'draft'
+          );
+          memory.nextRecommendedArtifact = ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW;
+          return {
+            action: 'emit_outreach_draft_preview',
+            approveKind: ARTIFACT_KINDS.OUTREACH_COPY_PLAN,
+            emitKind: ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW,
+            memory,
+            messageClass,
+            note: alreadyHaveDraft
+              ? 'Outreach Draft Preview is ready — showing it for approval or revision.'
+              : 'Outreach Copy Plan approved. Creating the Outreach Draft Preview for review.',
+            planningState: 'outreach_draft_preview',
+            copyPlanApproved: true,
+            strategyApproved: true,
+            batch1Approved: true,
+          };
+        }
+
         // Strategy already approved → hold/show Copy Plan path, never re-ask
         // to approve the Outreach Strategy Preview.
         if (strategyApproved || opts.step === 'outreach_copy_plan') {
@@ -2328,6 +3244,10 @@ function humanArtifactLabel(kind) {
       return 'Outreach Strategy Preview';
     case ARTIFACT_KINDS.OUTREACH_COPY_PLAN:
       return 'Outreach Copy Plan';
+    case ARTIFACT_KINDS.OUTREACH_DRAFT_PREVIEW:
+      return 'Outreach Draft Preview';
+    case ARTIFACT_KINDS.OUTREACH_LAUNCH_GATE:
+      return 'Outreach Launch Gate';
     default:
       return kind || 'artifact';
   }
@@ -2599,6 +3519,7 @@ module.exports = {
   MESSAGE_CLASSES,
   ARTIFACT_KINDS,
   ARTIFACT_ORDER,
+  REVIEW_ARTIFACT_CHAIN,
   ARTIFACT_REQUIRED_SECTIONS,
   PROSPECT_ACQUISITION_INTENTS,
   MIN_ARTIFACT_SECTION_CONFIDENCE,
@@ -2638,14 +3559,31 @@ module.exports = {
   looksLikeOutreachStrategyPreviewRequest,
   looksLikeOutreachStrategyPreviewApproval,
   looksLikeOutreachCopyPlanRequest,
+  looksLikeOutreachCopyPlanApproval,
+  looksLikeOutreachDraftPreviewRequest,
+  looksLikeOutreachDraftPreviewApproval,
+  looksLikeOutreachLaunchGateRequest,
+  looksLikeOutreachLaunchGateApproval,
   hasActiveProspectBatchReview,
   hasActiveOutreachStrategyPreview,
+  hasActiveOutreachCopyPlan,
+  hasActiveOutreachDraftPreview,
   hasOutreachStrategyPreview,
   hasOutreachCopyPlan,
+  hasOutreachDraftPreview,
+  hasOutreachLaunchGate,
   canEmitOutreachStrategyPreview,
   canEmitOutreachCopyPlan,
+  canEmitOutreachDraftPreview,
+  canEmitOutreachLaunchGate,
   isProspectBatchReviewAlreadyApproved,
   isOutreachStrategyPreviewAlreadyApproved,
+  isOutreachCopyPlanAlreadyApproved,
+  isOutreachDraftPreviewAlreadyApproved,
+  isOutreachLaunchGateAlreadyApproved,
+  nextReviewArtifactKind,
+  priorReviewArtifactKind,
+  markReviewArtifactApprovedAndAdvance,
   hasCompletedScoutCandidateBatch,
   looksLikeScoutHandoffBriefRequest,
   looksLikeHandBriefToScoutRequest,
