@@ -4219,6 +4219,74 @@ function rejectRawOutreachLines(lines) {
 }
 
 /**
+ * Full town list for operator-facing copy — never clipped with ellipses.
+ * "Bedford, Hooksett, Londonderry, Auburn, or Goffstown"
+ */
+function formatTownChoiceList(towns) {
+  const list = (Array.isArray(towns) ? towns : [])
+    .map((t) => String(t || '').trim())
+    .filter(Boolean);
+  const unique = [];
+  const seen = new Set();
+  for (const t of list) {
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(t);
+  }
+  const items = unique.length ? unique : [...DEFAULT_TOWNS];
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} or ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')}, or ${items[items.length - 1]}`;
+}
+
+/** Internal / meta phrasing that must not appear in operator-facing copy-plan sections. */
+const OUTREACH_COPY_PLAN_META_RES = Object.freeze([
+  /\bcarry forward proof already noted\b/i,
+  /\bhold final (?:email|sms|call)\b/i,
+  /\bcompetitive edge is described as\b/i,
+  /\boperator-stated\b/i,
+  /\buntil after strategy approval\b/i,
+  /\bdifferentiator to lean on\b/i,
+  /\bapproved Blueprint proof assets\b/i,
+  /\bdo not invent testimonials\b/i,
+]);
+
+function looksLikeOutreachCopyPlanMetaLine(text) {
+  const s = String(text || '');
+  return OUTREACH_COPY_PLAN_META_RES.some((re) => re.test(s));
+}
+
+/**
+ * Operator-facing personalization inputs for Outreach Copy Plan section 4.
+ * Full town list — no ellipses, no internal process language.
+ */
+function buildOutreachCopyPersonalizationInputs(towns) {
+  return [
+    `Prospect town: ${formatTownChoiceList(towns)}.`,
+    'Property type or portfolio cue when publicly visible.',
+    'Public role or decision-maker title when present.',
+    'Any visible signal that reliability, responsiveness, or recurring service may matter.',
+  ];
+}
+
+/**
+ * Operator-facing proof points for Outreach Copy Plan section 5.
+ * Never reuse strategy.proofFraming (that section carries planning/meta guardrails).
+ */
+function buildOutreachCopyProofPoints(businessName) {
+  const name = shortBusinessName(businessName || 'the business');
+  return [
+    'Simple commercial cleaning checklist.',
+    'Clear response-time expectation.',
+    'Clear service area.',
+    'Professional walkthrough / estimate process.',
+    'Before/after photos, references, or reviews if available.',
+    `${name}'s practical promise: reliable cleaning, responsive communication, and fewer vendor-chasing headaches.`,
+  ];
+}
+
+/**
  * Flatten Outreach Strategy Preview text for stale-fragment scanning.
  */
 function outreachStrategyPreviewTextBlob(preview) {
@@ -4759,26 +4827,15 @@ function buildOutreachCopyPlan(approvedStrategy, approvedReview, context, opts =
     ctaPhrase ||
     'A short discovery conversation about recurring commercial cleaning reliability.';
 
-  const personalizationInputs = rejectRawOutreachLines([
-    `Town / market signal from ${approvedBatchPhrase} (prefer ${towns.slice(0, 4).join(', ')}${towns.length > 4 ? ', …' : ''}).`,
-    'Property type or portfolio cue when publicly visible.',
-    'Public role / decision-maker title when present on the Batch 1 record.',
-    `Voice: ${voiceTone}`,
-  ]);
+  // Section 4–5 are operator-facing only: full town lists, no meta/guardrail language.
+  // Guardrails live exclusively in approvalGate (section 7).
+  const personalizationInputs = rejectRawOutreachLines(
+    buildOutreachCopyPersonalizationInputs(towns)
+  ).filter((line) => line && !looksLikeOutreachCopyPlanMetaLine(line));
 
   const proofPoints = rejectRawOutreachLines(
-    (Array.isArray(strategy.proofFraming) && strategy.proofFraming.length
-      ? strategy.proofFraming
-      : [
-          ctx.proofFromPrior
-            ? `Carry forward proof already noted: ${asEmbeddablePhrase(ctx.proofFromPrior) || 'approved Blueprint proof assets'}`
-            : 'Lead with tangible proof of reliability (response-time promise, checklist discipline, references, before/after examples) once packaged.',
-          'Do not invent testimonials, pricing, or service claims beyond the approved Blueprint.',
-        ]
-    ).concat(
-      differentiators.slice(0, 3).map((d) => `Differentiator to lean on: ${d}`)
-    )
-  );
+    buildOutreachCopyProofPoints(name)
+  ).filter((line) => line && !looksLikeOutreachCopyPlanMetaLine(line));
 
   const followUpTiming = rejectRawOutreachLines([
     'Follow-up 1 (about 3 business days): restate the same CTA with one fresh personalization detail — still draft-only until approved.',
