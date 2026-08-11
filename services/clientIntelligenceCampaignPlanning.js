@@ -116,11 +116,49 @@ const KNOWN_RELATIONSHIP_OVERRIDE_PATTERNS = Object.freeze([
   {
     matchRe: /\bkeyrenter\b/i,
     companyName: 'Keyrenter New England Property Management',
+    // Stable identity — never match generic "Property Management" rows.
+    domains: Object.freeze([
+      'keyrenternewengland.com',
+      'keyrenter.com',
+    ]),
+    domainRe: /(?:^|\.)keyrenter(?:newengland)?\.com\b/i,
     relationship: RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
     reason:
       'Operator relationship override — existing_relationship / nurture, not a cold prospect. Do not include in campaign outreach.',
   },
 ]);
+
+/** Tokens that never establish company identity by themselves. */
+const GENERIC_COMPANY_IDENTITY_TOKENS = Object.freeze([
+  'llc',
+  'inc',
+  'corp',
+  'ltd',
+  'co',
+  'company',
+  'group',
+  'partners',
+  'partner',
+  'associates',
+  'associate',
+  'property',
+  'properties',
+  'management',
+  'managers',
+  'manager',
+  'real',
+  'estate',
+  'residential',
+  'commercial',
+  'pm',
+  'the',
+  'and',
+  'of',
+  'nh',
+]);
+
+const GENERIC_COMPANY_PHRASE_RE =
+  /\b(?:property\s+management|property\s+managers?|real\s+estate(?:\s+management)?)\b/gi;
 
 const LIVE_SOURCING_BOUNDARY_MESSAGE =
   'I cannot perform live sourcing in this environment yet.';
@@ -2934,25 +2972,123 @@ function companyNameOf(row) {
   return String((row && (row.companyName || row.company)) || '').trim();
 }
 
+function candidateSourceUrl(row) {
+  return String(
+    (row && (row.sourceUrl || row.website || row.url || row.source_url)) || ''
+  ).trim();
+}
+
+function extractDomainFromUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  try {
+    const withProto = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const host = new URL(withProto).hostname.toLowerCase();
+    return host.replace(/^www\./, '');
+  } catch {
+    const m = raw.match(
+      /(?:https?:\/\/)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)/i
+    );
+    return m ? String(m[1]).toLowerCase().replace(/^www\./, '') : '';
+  }
+}
+
+/**
+ * Strip legal/generic industry phrasing so identity compares distinctive brands.
+ * "Property Management" → "" (no identity). "Keyrenter New England Property Management" → "keyrenter".
+ */
+function normalizeCompanyIdentity(name) {
+  let s = String(name || '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(GENERIC_COMPANY_PHRASE_RE, ' ');
+  const tokens = s
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .filter((t) => !GENERIC_COMPANY_IDENTITY_TOKENS.includes(t))
+    .filter((t) => t.length >= 3);
+  return tokens.join(' ').trim();
+}
+
+function domainsMatch(rowDomain, overrideDomain) {
+  const a = String(rowDomain || '')
+    .toLowerCase()
+    .replace(/^www\./, '');
+  const b = String(overrideDomain || '')
+    .toLowerCase()
+    .replace(/^www\./, '');
+  if (!a || !b) return false;
+  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+/**
+ * Match an operator relationship override by stable identity only:
+ * source URL/domain and/or normalized distinctive company name.
+ * Never promote generic "Property Management" via substring matching.
+ */
 function relationshipOverrideMatchesRow(row, override) {
   if (!override || !row) return false;
+
+  const rowUrl = candidateSourceUrl(row);
+  const rowDomain = extractDomainFromUrl(rowUrl);
+
+  // 1) Source URL / domain identity
+  const overrideDomains = Array.isArray(override.domains)
+    ? override.domains
+    : [];
+  if (
+    rowDomain &&
+    overrideDomains.some((d) => domainsMatch(rowDomain, d))
+  ) {
+    return true;
+  }
+  if (override.domainRe && rowUrl && override.domainRe.test(rowUrl)) {
+    return true;
+  }
+  if (override.domainRe && rowDomain && override.domainRe.test(rowDomain)) {
+    return true;
+  }
+
   const name = companyNameOf(row);
   if (!name) return false;
-  if (override.matchRe && override.matchRe.test(name)) return true;
-  if (override.companyName) {
-    const needle = String(override.companyName).toLowerCase();
-    const hay = name.toLowerCase();
-    if (hay.includes(needle) || needle.includes(hay)) return true;
-    // Partial: "Keyrenter New England" vs "Keyrenter New England Property Management"
-    const short = needle.split(/\s+/).slice(0, 2).join(' ');
-    if (short.length >= 4 && hay.includes(short)) return true;
+
+  // 2) Distinctive brand token on the company name (e.g. \bkeyrenter\b).
+  // Does NOT match bare "Property Management".
+  if (override.matchRe && override.matchRe.test(name)) {
+    return true;
   }
+
+  // 3) Normalized distinctive identity cores — never substring-match generics.
+  if (override.companyName) {
+    const needleCore = normalizeCompanyIdentity(override.companyName);
+    const hayCore = normalizeCompanyIdentity(name);
+    // Generic-only names (e.g. "Property Management") have empty cores.
+    if (!needleCore || !hayCore) return false;
+    if (needleCore === hayCore) return true;
+
+    const needleTokens = needleCore.split(/\s+/).filter(Boolean);
+    const hayTokens = hayCore.split(/\s+/).filter(Boolean);
+    if (!needleTokens.length || !hayTokens.length) return false;
+
+    // Candidate is a prefix/alias of the override brand (or vice versa),
+    // requiring every distinctive token of the shorter side to appear.
+    const shorter =
+      hayTokens.length <= needleTokens.length ? hayTokens : needleTokens;
+    const longerSet = new Set(
+      hayTokens.length <= needleTokens.length ? needleTokens : hayTokens
+    );
+    if (shorter.every((t) => longerSet.has(t))) return true;
+  }
+
   return false;
 }
 
 /**
  * Parse operator relationship overrides from a correction message.
  * Example: "Remove Keyrenter — existing relationship, not a cold prospect."
+ * Only explicit brand mentions become overrides — never generic industry phrases.
  */
 function parseRelationshipOverridesFromMessage(text) {
   const s = String(text || '');
@@ -2972,6 +3108,8 @@ function parseRelationshipOverridesFromMessage(text) {
     out.push({
       companyName: known.companyName,
       matchRe: known.matchRe,
+      domains: known.domains ? [...known.domains] : [],
+      domainRe: known.domainRe || null,
       relationship: RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
       reason: known.reason,
       source: 'operator_message',
@@ -2990,13 +3128,23 @@ function mergeRelationshipOverrides(...lists) {
         .replace(/\s+/g, ' ')
         .trim();
       if (!key) continue;
+      const prev = byKey.get(key) || {};
       byKey.set(key, {
-        companyName: o.companyName || null,
-        matchRe: o.matchRe || null,
+        companyName: o.companyName || prev.companyName || null,
+        matchRe: o.matchRe || prev.matchRe || null,
+        domains: [
+          ...new Set([
+            ...(Array.isArray(prev.domains) ? prev.domains : []),
+            ...(Array.isArray(o.domains) ? o.domains : []),
+          ]),
+        ],
+        domainRe: o.domainRe || prev.domainRe || null,
         relationship:
-          o.relationship || RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
-        reason: o.reason || 'Operator relationship override',
-        source: o.source || 'operator',
+          o.relationship ||
+          prev.relationship ||
+          RELATIONSHIP_STATUS.EXISTING_RELATIONSHIP,
+        reason: o.reason || prev.reason || 'Operator relationship override',
+        source: o.source || prev.source || 'operator',
       });
     }
   }
@@ -6693,6 +6841,9 @@ module.exports = {
   parseRelationshipOverridesFromMessage,
   applyRelationshipOverridesToBatch,
   mergeRelationshipOverrides,
+  relationshipOverrideMatchesRow,
+  normalizeCompanyIdentity,
+  extractDomainFromUrl,
   RELATIONSHIP_STATUS,
   buildScoutHandoffBrief,
   formatScoutHandoffBriefMessage,

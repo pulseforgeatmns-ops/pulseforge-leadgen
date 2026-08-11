@@ -28,6 +28,8 @@ const {
   buildProspectBatchReviewClosingQuestion,
   parseRelationshipOverridesFromMessage,
   applyRelationshipOverridesToBatch,
+  relationshipOverrideMatchesRow,
+  normalizeCompanyIdentity,
   RELATIONSHIP_STATUS,
 } = require('../services/clientIntelligenceCampaignPlanning');
 
@@ -218,10 +220,27 @@ function sampleKeyrenterCorrectionBatch() {
       statusReason: 'Passes NH property-manager quality gates',
     },
   ];
+  const reviewRequired = [
+    {
+      companyName: 'Property Management',
+      location: 'Manchester NH',
+      sourceUrl: 'http://www.realpropertynh.com/',
+      website: 'http://www.realpropertynh.com/',
+      fitRationale: 'Manchester NH property management listing',
+      risks:
+        'outside_primary_town_cluster — Manchester NH is not in Bedford/Hooksett/Londonderry/Auburn/Goffstown unless explicitly approved',
+      suggestedContactRole: 'Owner / property manager',
+      confidence: 'medium',
+      status: 'review_required',
+      statusReason:
+        'Manchester NH outside_primary_town_cluster — review_required unless primary town approval exists',
+      reasonCode: 'outside_primary_town_cluster',
+    },
+  ];
   return {
     workRequestId: 'f0ac74ac-16a6-4dba-b024-d3727b285a86',
     reviewOnly: true,
-    candidates: acceptedPrimaries,
+    candidates: acceptedPrimaries.concat(reviewRequired),
     rejected: [
       {
         companyName: 'Cushman & Wakefield',
@@ -239,7 +258,7 @@ function sampleKeyrenterCorrectionBatch() {
     ],
     groups: {
       accepted: acceptedPrimaries,
-      review_required: [],
+      review_required: reviewRequired,
       rejected: null,
     },
   };
@@ -874,5 +893,104 @@ describe('Prospect Batch Review — Keyrenter relationship override', () => {
     );
     assert.equal(existingRelationship.length, 1);
     assert.match(existingRelationship[0].companyName, /Keyrenter/i);
+  });
+
+  it('Keyrenter is the only existing_relationship record', () => {
+    const batch = withGroups(sampleKeyrenterCorrectionBatch());
+    const review = buildProspectBatchReview(batch, {
+      userMessage: correctionMessage,
+    });
+    assert.equal(review.existingRelationship.length, 1);
+    assert.equal(review.counts.existingRelationship, 1);
+    assert.match(
+      review.existingRelationship[0].companyName,
+      /Keyrenter New England Property Management/i
+    );
+    assert.ok(
+      !review.existingRelationship.some((r) =>
+        /^Property Management$/i.test(r.companyName)
+      )
+    );
+    assert.ok(
+      !review.existingRelationship.some((r) =>
+        /realpropertynh\.com/i.test(r.sourceUrl || '')
+      )
+    );
+  });
+
+  it('realpropertynh.com remains optional expansion / review_required', () => {
+    const batch = withGroups(sampleKeyrenterCorrectionBatch());
+    const review = buildProspectBatchReview(batch, {
+      userMessage: correctionMessage,
+    });
+    const realProp = review.optionalExpansion.find((r) =>
+      /realpropertynh\.com/i.test(String(r.sourceUrl || ''))
+    );
+    assert.ok(realProp, 'realpropertynh.com must stay in optional expansion');
+    assert.equal(realProp.reviewStatus, 'review_required');
+    assert.match(realProp.companyName, /^Property Management$/i);
+    assert.ok(
+      !review.existingRelationship.some((r) =>
+        /realpropertynh\.com/i.test(String(r.sourceUrl || ''))
+      )
+    );
+    assert.equal(review.counts.accepted, 6);
+    assert.equal(review.counts.sourceVerificationRequired, 1);
+    assert.equal(review.counts.existingRelationship, 1);
+    assert.equal(review.counts.rejected, 1);
+  });
+
+  it('Existing relationship count is 1', () => {
+    const batch = withGroups(sampleKeyrenterCorrectionBatch());
+    const review = buildProspectBatchReview(batch, {
+      userMessage: correctionMessage,
+    });
+    assert.equal(review.counts.existingRelationship, 1);
+    assert.equal(review.existingRelationship.length, 1);
+    const msg = formatProspectBatchReviewMessage(review);
+    assert.match(msg, /Existing relationship \/ nurture:\s*1/);
+  });
+
+  it('Generic “Property Management” is never promoted through substring matching', () => {
+    const override = parseRelationshipOverridesFromMessage(correctionMessage)[0];
+    assert.ok(override);
+    assert.equal(
+      relationshipOverrideMatchesRow(
+        {
+          companyName: 'Property Management',
+          sourceUrl: 'http://www.realpropertynh.com/',
+          website: 'http://www.realpropertynh.com/',
+          status: 'review_required',
+        },
+        override
+      ),
+      false
+    );
+    assert.equal(
+      relationshipOverrideMatchesRow(
+        {
+          companyName: 'Keyrenter New England Property Management',
+          sourceUrl: 'https://keyrenternewengland.com/auburn-property-management',
+          website: 'https://keyrenternewengland.com',
+          status: 'accepted',
+        },
+        override
+      ),
+      true
+    );
+    // Domain identity alone also matches Keyrenter.
+    assert.equal(
+      relationshipOverrideMatchesRow(
+        {
+          companyName: 'Keyrenter NE',
+          sourceUrl: 'https://www.keyrenternewengland.com/',
+          status: 'accepted',
+        },
+        override
+      ),
+      true
+    );
+    assert.equal(normalizeCompanyIdentity('Property Management'), '');
+    assert.match(normalizeCompanyIdentity('Keyrenter New England Property Management'), /keyrenter/i);
   });
 });
