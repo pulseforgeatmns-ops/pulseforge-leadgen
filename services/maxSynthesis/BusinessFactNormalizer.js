@@ -55,6 +55,9 @@ const RAW_PROMPT_FRAGMENT_RES = Object.freeze([
   /\bKeep Greater Manchester in scope\b/i,
   /\bkeep the first test tight enough to learn quickly\b/i,
   /\bin Start with\b/i,
+  // Capital-S bleed from raw criteria into "Lead with … for Small to mid-sized…"
+  /for Small to mid-sized/,
+  /differentiators for /i,
   /(?<!\.)\.\.(?!\.)/,
 ]);
 

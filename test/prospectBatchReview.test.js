@@ -42,6 +42,9 @@ const {
   OUTREACH_STRATEGY_PREVIEW_CLOSING_QUESTION,
   containsRawPromptFragment,
   findRawPromptFragments,
+  outreachStrategyPreviewLooksStale,
+  findStaleOutreachStrategyFragments,
+  repairOutreachStrategyPreview,
 } = require('../services/clientIntelligenceCampaignPlanning');
 const {
   splitDigestAndEvidence,
@@ -1561,6 +1564,163 @@ describe('Prospect Batch Review — Batch 1 approval transition', () => {
     assert.equal(strategy.crmWritesMade, false);
     assert.equal(strategy.exportMade, false);
     assert.equal(strategy.accountChangesMade, false);
+  });
+
+  it('repairs stale stored Outreach Strategy Preview before display', () => {
+    const review = correctedReview();
+    const approved = approveProspectBatchReviewBatch1(review);
+    const rawCriteria = {
+      targetSegment:
+        'Small to mid-sized local property managers in Greater Manchester who oversee offices, mixed-use buildings, small commercial properties, or multi-tenant spaces.',
+      marketBound:
+        'Start with Bedford, Hooksett, Londonderry, Auburn, and Goffstown. Keep Greater Manchester in scope, but keep the first test tight enough to learn quickly.',
+      campaignObjective:
+        'Prove that Greater Manchester property managers will take a discovery conversation.',
+      status: 'approved',
+    };
+    const anchorCtx = {
+      businessName: 'Anchor Cleaning',
+      brandVoice:
+        'Brand voice should read as calm, professional, reliable, and easy to work with.',
+      competitiveAdvantages:
+        'Customers choose this business for reliability and responsiveness.',
+      primarySegment: 'property managers',
+      targetMarket: 'Greater Manchester',
+      towns: ['Bedford', 'Hooksett', 'Londonderry', 'Auburn', 'Goffstown'],
+    };
+
+    const stale = {
+      kind: 'outreach_strategy_preview',
+      title: OUTREACH_STRATEGY_PREVIEW_TITLE,
+      status: 'draft',
+      campaignObjective: rawCriteria.campaignObjective,
+      batch1Scope: '6 approved cold first-pass prospects in Batch 1.',
+      voiceTone: 'Calm, professional, reliable.',
+      differentiators: ['Reliability and accountability'],
+      outreachApproach: [
+        "Lead with Anchor's reliability and responsiveness differentiators for Small to mid-sized local property managers in Greater Manchester who oversee offices, mixed-use buildings, small commercial properties, or multi-tenant spaces. in Start with Bedford, Hooksett, Londonderry, Auburn, and Goffstown. Keep Greater Manchester in scope, but keep the first test tight enough to learn quickly..",
+      ],
+      proofFraming: ['Hold final scripts until after strategy approval.'],
+      guardrails: [
+        'No final outreach copy in this step',
+        'No sends',
+        'No CRM writes',
+        'No export',
+        'No account, DNS, GBP, social, or tracking changes',
+      ],
+      generatedAt: '2026-08-11T04:00:00.000Z',
+      workRequestId: approved.workRequestId || 'wr-stale-osp',
+    };
+
+    assert.equal(outreachStrategyPreviewLooksStale(stale), true);
+    assert.ok(findStaleOutreachStrategyFragments(stale).length >= 1);
+
+    const repairedDirect = repairOutreachStrategyPreview(
+      stale,
+      approved,
+      anchorCtx,
+      { priorCriteriaPreview: rawCriteria }
+    );
+    assert.equal(repairedDirect.repairedFromStale, true);
+    assert.equal(outreachStrategyPreviewLooksStale(repairedDirect), false);
+    assert.equal(
+      repairedDirect.outreachApproach[0],
+      "Lead with Anchor's reliability and responsiveness for small to mid-sized property managers in Bedford, Hooksett, Londonderry, Auburn, and Goffstown."
+    );
+
+    const reply = buildCampaignPlanningReply(
+      'Show the Outreach Strategy Preview',
+      {
+        ...approvedSessionState(approved),
+        step: 'outreach_strategy_preview',
+        outreachStrategyPreview: stale,
+      },
+      anchorCtx,
+      {
+        priorProspectBatchReview: approved,
+        priorOutreachStrategyPreview: stale,
+        priorCriteriaPreview: rawCriteria,
+        priorScoutCandidateBatch: withGroups(sampleKeyrenterCorrectionBatch()),
+      }
+    );
+
+    assert.equal(reply.intent, 'repair_outreach_strategy_preview');
+    assert.equal(reply.planningState, 'outreach_strategy_preview');
+    assert.equal(reply.batch1Approved, true);
+    assert.equal(reply.prospectBatchReviewApproved, true);
+    assert.ok(reply.outreachStrategyPreview);
+    assert.equal(reply.outreachStrategyPreview.repairedFromStale, true);
+    assert.equal(outreachStrategyPreviewLooksStale(reply.outreachStrategyPreview), false);
+
+    assert.equal(
+      reply.outreachStrategyPreview.outreachApproach[0],
+      "Lead with Anchor's reliability and responsiveness for small to mid-sized property managers in Bedford, Hooksett, Londonderry, Auburn, and Goffstown."
+    );
+    assert.match(
+      reply.outreachStrategyPreview.outreachApproach[1],
+      /Personalize by town, property type, and any public role signal from the approved Batch 1 record/i
+    );
+    assert.match(
+      reply.outreachStrategyPreview.outreachApproach[2],
+      /Keep the first ask simple: a short conversation or walkthrough/i
+    );
+    assert.match(
+      reply.outreachStrategyPreview.outreachApproach[3],
+      /validation campaign, not a broad launch/i
+    );
+
+    assert.match(reply.message, /repaired stale|for approval or revision/i);
+    assert.match(
+      reply.message,
+      /Does this Outreach Strategy Preview look right to approve/
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /ask me to (?:create|prepare|request).{0,40}outreach strategy/i
+    );
+    assert.doesNotMatch(reply.message, /## 1\. Accepted cold first-pass/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Do you want to approve the 6 accepted cold first-pass candidates/i
+    );
+
+    const hits = findRawPromptFragments(reply.message);
+    assert.equal(
+      hits.length,
+      0,
+      `Repaired preview still has banned fragments: ${hits.join(', ')}\n---\n${reply.message}`
+    );
+    assert.doesNotMatch(reply.message, /for Small to mid-sized/);
+    assert.doesNotMatch(reply.message, /in Start with/);
+    assert.doesNotMatch(reply.message, /Keep Greater Manchester in scope/i);
+    assert.doesNotMatch(reply.message, /(?<!\.)\.\.(?!\.)/);
+    assert.doesNotMatch(reply.message, /differentiators for /i);
+
+    // Workflow state preserved: Cedar / Keyrenter / optional expansion / Batch 1.
+    assert.equal(reply.prospectBatchReview.batch1Approved, true);
+    assert.equal(reply.prospectBatchReview.status, 'batch_1_approved');
+    assert.ok(
+      (reply.prospectBatchReview.sourceVerificationRequired || []).some((r) =>
+        /cedar/i.test(String(r.companyName || ''))
+      )
+    );
+    assert.ok(
+      (reply.prospectBatchReview.existingRelationship || []).some((r) =>
+        /keyrenter/i.test(String(r.companyName || ''))
+      )
+    );
+    assert.ok((reply.prospectBatchReview.optionalExpansion || []).length >= 1);
+    assert.ok(
+      !(reply.prospectBatchReview.approvedBatch.candidates || []).some((c) =>
+        /cedar|keyrenter/i.test(String(c.companyName || ''))
+      )
+    );
+
+    assert.equal(reply.outreachCopyGenerated, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.accountChangesMade, false);
   });
 });
 

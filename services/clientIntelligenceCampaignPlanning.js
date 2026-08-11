@@ -230,6 +230,16 @@ const OUTREACH_STRATEGY_SECTION_TITLES = Object.freeze({
   guardrails: 'Guardrails',
   recommendedNextStep: 'Recommended next step',
 });
+/** Stored OSP artifacts with these fragments must be regenerated, not shown. */
+const STALE_OUTREACH_STRATEGY_FRAGMENT_RES = Object.freeze([
+  /for Small to mid-sized/,
+  /in Start with/,
+  /Keep Greater Manchester in scope/i,
+  /(?<!\.)\.\.(?!\.)/,
+  /differentiators for /i,
+  /who oversee offices, mixed-use/i,
+  /keep the first test tight enough to learn quickly/i,
+]);
 const DEFAULT_ANCHOR_VOICE =
   'Calm, professional, reliable, direct, and easy to work with — never pushy or hype-driven.';
 const DEFAULT_ANCHOR_DIFFERENTIATORS = Object.freeze([
@@ -4184,12 +4194,104 @@ function rejectRawOutreachLines(lines) {
 }
 
 /**
+ * Flatten Outreach Strategy Preview text for stale-fragment scanning.
+ */
+function outreachStrategyPreviewTextBlob(preview) {
+  if (!preview || typeof preview !== 'object') return '';
+  const parts = [
+    preview.campaignObjective,
+    preview.batch1Scope,
+    preview.positioningText,
+    preview.voiceTone,
+    preview.approachSummary,
+    preview.summary,
+    ...(Array.isArray(preview.differentiators) ? preview.differentiators : []),
+    ...(Array.isArray(preview.outreachApproach) ? preview.outreachApproach : []),
+    ...(Array.isArray(preview.proofFraming) ? preview.proofFraming : []),
+    preview.targetSegment,
+    preview.marketBound,
+    preview.outreachAudiencePhrase,
+    preview.outreachMarketPhrase,
+  ];
+  try {
+    parts.push(formatOutreachStrategyPreviewMessage(preview));
+  } catch (_err) {
+    // ignore format errors on partial stubs
+  }
+  return parts.filter(Boolean).join('\n');
+}
+
+/**
+ * Detect stored Outreach Strategy Preview artifacts that still contain banned
+ * raw-stitched criteria / market fragments from the pre-normalization renderer.
+ */
+function findStaleOutreachStrategyFragments(preview) {
+  const blob = outreachStrategyPreviewTextBlob(preview);
+  if (!blob) return [];
+  const hits = [];
+  for (const re of STALE_OUTREACH_STRATEGY_FRAGMENT_RES) {
+    if (re.test(blob)) hits.push(re.source);
+  }
+  for (const hit of findRawPromptFragments(blob)) {
+    if (!hits.includes(hit)) hits.push(hit);
+  }
+  return hits;
+}
+
+function outreachStrategyPreviewLooksStale(preview) {
+  if (!hasOutreachStrategyPreview(preview)) return false;
+  return findStaleOutreachStrategyFragments(preview).length > 0;
+}
+
+/**
+ * Rebuild a stale stored Outreach Strategy Preview using phrase-safe synthesis.
+ * Preserves Batch 1 / workflow identity fields; never writes CRM or sends.
+ */
+function repairOutreachStrategyPreview(prior, approvedReview, context, opts = {}) {
+  if (!outreachStrategyPreviewLooksStale(prior)) {
+    return prior;
+  }
+  const repaired = buildOutreachStrategyPreview(approvedReview, context, {
+    ...opts,
+    priorOutreachStrategyPreview: prior,
+    reuseExisting: false,
+    forceRebuild: true,
+  });
+  return {
+    ...repaired,
+    status: 'draft',
+    repairedFromStale: true,
+    repairedAt: new Date().toISOString(),
+    priorGeneratedAt: prior.generatedAt || null,
+    workRequestId:
+      repaired.workRequestId ||
+      prior.workRequestId ||
+      (approvedReview && approvedReview.workRequestId) ||
+      null,
+    blueprintId: repaired.blueprintId || prior.blueprintId || opts.blueprintId || null,
+    blueprintVersion:
+      repaired.blueprintVersion ||
+      prior.blueprintVersion ||
+      opts.blueprintVersion ||
+      null,
+    planningOnly: true,
+    reviewFirst: true,
+    outreachCopyGenerated: false,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+  };
+}
+
+/**
  * Build Outreach Strategy Preview from approved Blueprint, campaign objective,
  * Batch 1 cold prospects, and brand voice/differentiators.
  * Planning angles only — never final outreach copy.
  *
  * Section 5 (Outreach approach) uses Max Synthesis phrase-safe fields only —
  * never concatenates wrapper text with raw prior campaign/criteria answers.
+ * Stale stored artifacts with banned fragments are regenerated instead of reused.
  */
 function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
   const prior =
@@ -4197,7 +4299,13 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
     hasOutreachStrategyPreview(opts.priorOutreachStrategyPreview)
       ? opts.priorOutreachStrategyPreview
       : null;
-  if (prior && opts.reuseExisting !== false && !opts.forceRebuild) {
+  const priorIsStale = prior ? outreachStrategyPreviewLooksStale(prior) : false;
+  if (
+    prior &&
+    opts.reuseExisting !== false &&
+    !opts.forceRebuild &&
+    !priorIsStale
+  ) {
     return {
       ...prior,
       kind: OUTREACH_STRATEGY_PREVIEW_KIND,
@@ -4213,6 +4321,8 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
       disclaimer: OUTREACH_STRATEGY_PREVIEW_DISCLAIMER,
     };
   }
+
+  // Stale or forceRebuild: fall through and regenerate with phrase-safe synthesis.
 
   const ctx = context || {};
   const review = approvedReview || {};
@@ -4230,7 +4340,7 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
     normalizedFacts: opts.normalizedFacts || null,
     priorCriteriaPreview: criteria,
     priorCampaignPreview: campaignPreview,
-    priorArtifact: prior,
+    priorArtifact: priorIsStale ? null : prior,
     slots: opts.slots || {},
     answers,
   });
@@ -4242,12 +4352,17 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
   const differentiatorSource =
     ctx.competitiveAdvantages ||
     ctx.differentiators ||
-    (prior && prior.positioningText) ||
+    (prior && !priorIsStale && prior.positioningText) ||
     '';
   const differentiators = (() => {
     const fromBlueprint = splitDifferentiatorList(differentiatorSource);
     if (fromBlueprint.length) return fromBlueprint;
-    if (prior && Array.isArray(prior.differentiators) && prior.differentiators.length) {
+    if (
+      prior &&
+      Array.isArray(prior.differentiators) &&
+      prior.differentiators.length &&
+      !prior.differentiators.some((d) => containsRawPromptFragment(d))
+    ) {
       return prior.differentiators;
     }
     return [...DEFAULT_ANCHOR_DIFFERENTIATORS];
@@ -4331,7 +4446,7 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
     outreachCtaPhrase,
   });
 
-  return {
+  const built = {
     kind: OUTREACH_STRATEGY_PREVIEW_KIND,
     title: OUTREACH_STRATEGY_PREVIEW_TITLE,
     status: 'draft',
@@ -4375,11 +4490,29 @@ function buildOutreachStrategyPreview(approvedReview, context, opts = {}) {
     accountChangesMade: false,
     disclaimer: OUTREACH_STRATEGY_PREVIEW_DISCLAIMER,
     workRequestId:
-      opts.workRequestId || review.workRequestId || null,
-    blueprintId: opts.blueprintId || ctx.blueprintId || null,
-    blueprintVersion: opts.blueprintVersion || ctx.blueprintVersion || null,
+      opts.workRequestId ||
+      (review && review.workRequestId) ||
+      (prior && prior.workRequestId) ||
+      null,
+    blueprintId:
+      opts.blueprintId || ctx.blueprintId || (prior && prior.blueprintId) || null,
+    blueprintVersion:
+      opts.blueprintVersion ||
+      ctx.blueprintVersion ||
+      (prior && prior.blueprintVersion) ||
+      null,
     generatedAt: new Date().toISOString(),
   };
+
+  if (priorIsStale || opts.forceRebuild) {
+    built.repairedFromStale = Boolean(priorIsStale);
+    if (priorIsStale) {
+      built.repairedAt = built.generatedAt;
+      built.priorGeneratedAt = prior.generatedAt || null;
+    }
+  }
+
+  return built;
 }
 
 /** @deprecated Use buildOutreachStrategyPreview — kept for callers/tests. */
@@ -4554,6 +4687,7 @@ function produceProspectBatchReviewApprovalResult(
       new Date().toISOString(),
   });
   const existingStrategy = opts.priorOutreachStrategyPreview || null;
+  const strategyWasStale = outreachStrategyPreviewLooksStale(existingStrategy);
   const outreachStrategyPreview = buildOutreachStrategyPreview(
     approvedReview,
     ctx,
@@ -4565,7 +4699,8 @@ function produceProspectBatchReviewApprovalResult(
       answers,
       blueprintId: opts.blueprintId,
       blueprintVersion: opts.blueprintVersion,
-      reuseExisting: Boolean(existingStrategy),
+      reuseExisting: Boolean(existingStrategy) && !strategyWasStale,
+      forceRebuild: strategyWasStale,
     }
   );
 
@@ -4686,6 +4821,7 @@ function produceOutreachStrategyPreviewResult(
 
   const existing = opts.priorOutreachStrategyPreview || null;
   const alreadyHave = hasOutreachStrategyPreview(existing);
+  const strategyWasStale = alreadyHave && outreachStrategyPreviewLooksStale(existing);
   const outreachStrategyPreview = buildOutreachStrategyPreview(review, ctx, {
     workRequestId: review.workRequestId,
     priorOutreachStrategyPreview: existing,
@@ -4694,12 +4830,15 @@ function produceOutreachStrategyPreviewResult(
     answers,
     blueprintId: opts.blueprintId,
     blueprintVersion: opts.blueprintVersion,
-    reuseExisting: alreadyHave,
+    reuseExisting: alreadyHave && !strategyWasStale,
+    forceRebuild: strategyWasStale,
   });
 
-  const intro = alreadyHave
-    ? 'Outreach Strategy Preview is already available — showing it for approval or revision. Not re-rendering the Prospect Batch Review.'
-    : 'Creating the Outreach Strategy Preview from the approved Blueprint, campaign objective, Batch 1 cold prospects, and brand voice/differentiators.';
+  const intro = strategyWasStale
+    ? 'Updated the Outreach Strategy Preview — repaired stale phrasing from an earlier draft. Showing it for approval or revision. Not re-rendering the Prospect Batch Review.'
+    : alreadyHave
+      ? 'Outreach Strategy Preview is already available — showing it for approval or revision. Not re-rendering the Prospect Batch Review.'
+      : 'Creating the Outreach Strategy Preview from the approved Blueprint, campaign objective, Batch 1 cold prospects, and brand voice/differentiators.';
 
   const message = [
     leadIn || null,
@@ -4735,9 +4874,11 @@ function produceOutreachStrategyPreviewResult(
     prospectBatchReview: review,
     outreachStrategyPreview,
     liveProspectList: null,
-    intent: alreadyHave
-      ? 'show_outreach_strategy_preview'
-      : 'produce_outreach_strategy_preview',
+    intent: strategyWasStale
+      ? 'repair_outreach_strategy_preview'
+      : alreadyHave
+        ? 'show_outreach_strategy_preview'
+        : 'produce_outreach_strategy_preview',
     previewApproved: true,
     criteriaApproved: true,
     buildProposalApproved: true,
@@ -4752,6 +4893,7 @@ function produceOutreachStrategyPreviewResult(
     crmWritesMade: false,
     exportMade: false,
     accountChangesMade: false,
+    repairedFromStale: Boolean(strategyWasStale || outreachStrategyPreview.repairedFromStale),
   };
 }
 
@@ -8256,6 +8398,10 @@ module.exports = {
   buildOutreachStrategyPreviewStub,
   formatOutreachStrategyPreviewMessage,
   formatProspectBatch1ApprovalMessage,
+  outreachStrategyPreviewLooksStale,
+  findStaleOutreachStrategyFragments,
+  repairOutreachStrategyPreview,
+  STALE_OUTREACH_STRATEGY_FRAGMENT_RES,
   buildProspectBatchReviewClosingQuestion,
   parseRelationshipOverridesFromMessage,
   applyRelationshipOverridesToBatch,
