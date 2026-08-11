@@ -25,6 +25,7 @@ const {
 const {
   buildProspectBatchReview,
   formatProspectBatchReviewMessage,
+  formatProspectBatchReviewEvidenceMessage,
   buildCampaignPlanningReply,
   buildProspectBatchReviewClosingQuestion,
   parseRelationshipOverridesFromMessage,
@@ -34,7 +35,16 @@ const {
   approveProspectBatchReviewBatch1,
   BATCH_1_APPROVED_MESSAGE,
   RELATIONSHIP_STATUS,
+  OUTREACH_STRATEGY_PREVIEW_TITLE,
 } = require('../services/clientIntelligenceCampaignPlanning');
+const {
+  splitDigestAndEvidence,
+  EVIDENCE_COLLAPSED_NOTE,
+} = require('../services/operatorReviewDigest');
+const {
+  renderOperatorReviewDigest,
+  analyzeOperatorReviewHtml,
+} = require('../public/shared/operator-review-digest');
 
 function sampleCompletedBatch() {
   return {
@@ -451,18 +461,32 @@ describe('Prospect Batch Review — formatting', () => {
       review.optionalExpansion.some((r) => /Manchester/i.test(r.location))
     );
     assert.equal(review.rejected.length, 1);
+    assert.ok(review.operatorDigest);
 
     const msg = formatProspectBatchReviewMessage(review);
     assert.match(msg, /Prospect Batch Review/);
-    assert.match(msg, /Accepted cold first-pass candidates/);
-    assert.match(msg, /Source-verification required primary-town candidates/);
-    assert.match(msg, /Rejected candidates/);
-    assert.match(msg, /Cedar Management Group/);
-    assert.match(msg, /Keyrenter New England/);
+    assert.match(msg, /## Recommended decision/);
+    assert.match(msg, /Approve 2 cold prospects as Batch 1/);
+    assert.match(msg, /## What is included/);
+    assert.match(msg, /Elm Grove Companies/);
+    assert.match(msg, /## What is excluded \/ held back/);
+    assert.match(msg, /Held back: Cedar Management Group until source verification/);
+    assert.match(msg, /## Next step after approval/);
+    assert.match(msg, /Outreach Strategy Preview/);
+    assert.match(msg, /View evidence \(collapsed by default\)/);
+    // Full evidence dump is not the default operator view.
+    assert.doesNotMatch(msg, /## 1\. Accepted cold first-pass candidates/);
+    assert.doesNotMatch(msg, /Why it fits:/);
     assert.ok(msg.includes(review.closingQuestion));
     assert.doesNotMatch(msg, /8 primary-town candidates/i);
     assert.doesNotMatch(msg, /Ask me to generate the first reviewable/i);
     assert.doesNotMatch(msg, /Build proposal/i);
+
+    const evidence = formatProspectBatchReviewEvidenceMessage(review);
+    assert.match(evidence, /View evidence/);
+    assert.match(evidence, /Cedar Management Group/);
+    assert.match(evidence, /Source URL:/);
+    assert.match(evidence, /fit rationale/i);
   });
 
   it('buildCampaignPlanningReply emits Prospect Batch Review from session Scout batch', () => {
@@ -707,9 +731,11 @@ describe('Prospect Batch Review — Keyrenter relationship override', () => {
     );
     assert.equal(review.existingRelationship[0].doNotOutreach, true);
     const msg = formatProspectBatchReviewMessage(review);
-    assert.match(msg, /Existing relationship \/ nurture/i);
+    assert.match(msg, /Nurture only:\s*Keyrenter/i);
     assert.match(msg, /Keyrenter/);
-    assert.match(msg, /do not include in campaign outreach/i);
+    const evidence = formatProspectBatchReviewEvidenceMessage(review);
+    assert.match(evidence, /Existing relationship \/ nurture/i);
+    assert.match(evidence, /do not include in campaign outreach/i);
   });
 
   it('Cedar remains medium/review_required in source-verification', () => {
@@ -750,19 +776,23 @@ describe('Prospect Batch Review — Keyrenter relationship override', () => {
     );
 
     const msg = formatProspectBatchReviewMessage(review);
-    assert.match(
-      msg,
-      /Accepted cold first-pass:\s*6/
-    );
-    assert.match(msg, /Source-verification required:\s*1/);
-    assert.match(msg, /Existing relationship \/ nurture:\s*1/);
-    assert.match(msg, /Rejected:\s*1/);
+    assert.match(msg, /Approve 6 cold prospects as Batch 1/);
+    assert.match(msg, /Nurture only:\s*Keyrenter/i);
+    assert.match(msg, /Held back: Cedar.*until source verification/i);
+    assert.match(msg, /Excluded for now: optional Manchester expansion candidates/i);
+    assert.match(msg, /Rejected:\s*Cushman/i);
+    assert.match(msg, /View evidence \(collapsed by default\)/);
+    assert.doesNotMatch(msg, /## 1\. Accepted cold first-pass/i);
     assert.doesNotMatch(msg, /8 primary-town candidates/i);
     assert.equal(
       review.closingQuestion,
       'Do you want to approve the 6 accepted cold first-pass candidates, include Cedar after source verification, and keep Keyrenter as an existing-relationship nurture account?'
     );
     assert.ok(msg.includes(review.closingQuestion));
+    assert.equal(review.operatorDigest.meta.acceptedCount, 6);
+    assert.equal(review.operatorDigest.meta.sourceVerificationCount, 1);
+    assert.equal(review.operatorDigest.meta.nurtureCount, 1);
+    assert.equal(review.operatorDigest.meta.rejectedCount, 1);
   });
 
   it('Prospect Batch Review correction does not route backward to Build Proposal prompt', () => {
@@ -863,7 +893,7 @@ describe('Prospect Batch Review — Keyrenter relationship override', () => {
     assert.equal(reply.intent, 'prospect_batch_review');
     assert.ok(reply.prospectBatchReview);
     assert.match(reply.message, /Prospect Batch Review/);
-    assert.match(reply.message, /Existing relationship \/ nurture/i);
+    assert.match(reply.message, /Nurture only:\s*Keyrenter/i);
     assert.match(reply.message, /Keyrenter/);
     assert.doesNotMatch(
       reply.message,
@@ -951,7 +981,8 @@ describe('Prospect Batch Review — Keyrenter relationship override', () => {
     assert.equal(review.counts.existingRelationship, 1);
     assert.equal(review.existingRelationship.length, 1);
     const msg = formatProspectBatchReviewMessage(review);
-    assert.match(msg, /Existing relationship \/ nurture:\s*1/);
+    assert.match(msg, /Nurture only:\s*Keyrenter/i);
+    assert.equal(review.operatorDigest.meta.nurtureCount, 1);
   });
 
   it('Generic “Property Management” is never promoted through substring matching', () => {
@@ -1248,5 +1279,310 @@ describe('Prospect Batch Review — Batch 1 approval transition', () => {
       reply.message,
       /campaign is live|I (?:am )?sending|launching outreach now/i
     );
+  });
+});
+
+/** Fixture matching Operator Review Digest acceptance (Batch 1 names). */
+function sampleOperatorDigestBatch1() {
+  const cold = [
+    {
+      companyName: 'RPM Thrive',
+      location: 'Bedford NH',
+      sourceUrl: 'https://rpmthrive.example',
+      website: 'https://rpmthrive.example',
+      fitRationale: 'Bedford NH property management',
+      risks: 'Public-source only',
+      suggestedContactRole: 'Owner / property manager',
+      confidence: 'high',
+      status: 'accepted',
+      statusReason: 'Passes NH property-manager quality gates',
+    },
+    {
+      companyName: 'Elm Grove Companies',
+      location: 'Hooksett NH',
+      sourceUrl: 'https://www.elmgrovecompanies.com/contact',
+      website: 'https://www.elmgrovecompanies.com',
+      fitRationale: 'Hooksett NH property management',
+      risks: 'Public-source only',
+      suggestedContactRole: 'Owner / property manager',
+      confidence: 'high',
+      status: 'accepted',
+      statusReason: 'Passes NH property-manager quality gates',
+    },
+    {
+      companyName: 'RPM Premier Network',
+      location: 'Londonderry NH',
+      sourceUrl: 'https://rpmpremier.example',
+      website: 'https://rpmpremier.example',
+      fitRationale: 'Londonderry NH property management',
+      risks: 'Public-source only',
+      suggestedContactRole: 'Owner / property manager',
+      confidence: 'high',
+      status: 'accepted',
+      statusReason: 'Passes NH property-manager quality gates',
+    },
+    {
+      companyName: 'Northcity',
+      location: 'Auburn NH',
+      sourceUrl: 'https://northcity.example',
+      website: 'https://northcity.example',
+      fitRationale: 'Auburn NH property management',
+      risks: 'Public-source only',
+      suggestedContactRole: 'Owner / property manager',
+      confidence: 'high',
+      status: 'accepted',
+      statusReason: 'Passes NH property-manager quality gates',
+    },
+    {
+      companyName: 'The MEG Companies',
+      location: 'Goffstown NH',
+      sourceUrl: 'https://meg.example',
+      website: 'https://meg.example',
+      fitRationale: 'Goffstown NH property management',
+      risks: 'Public-source only',
+      suggestedContactRole: 'Owner / property manager',
+      confidence: 'high',
+      status: 'accepted',
+      statusReason: 'Passes NH property-manager quality gates',
+    },
+    {
+      companyName: 'Avise',
+      location: 'Bedford NH',
+      sourceUrl: 'https://avise.example',
+      website: 'https://avise.example',
+      fitRationale: 'Bedford NH property management',
+      risks: 'Public-source only',
+      suggestedContactRole: 'Owner / property manager',
+      confidence: 'high',
+      status: 'accepted',
+      statusReason: 'Passes NH property-manager quality gates',
+    },
+    {
+      companyName: 'Keyrenter New England Property Management',
+      location: 'Bedford NH',
+      sourceUrl: 'https://keyrenternewengland.com/auburn-property-management',
+      website: 'https://keyrenternewengland.com',
+      fitRationale: 'Bedford NH property management',
+      risks: 'Public-source only',
+      suggestedContactRole: 'Owner / property manager',
+      confidence: 'high',
+      status: 'accepted',
+      statusReason: 'Passes NH property-manager quality gates',
+    },
+    {
+      companyName: 'Cedar Management Group',
+      location: 'Hooksett NH',
+      sourceUrl:
+        'https://www.google.com/maps/place/Cedar+Management+Group/@43.08,-71.45,17z',
+      website:
+        'https://www.google.com/maps/place/Cedar+Management+Group/@43.08,-71.45,17z',
+      fitRationale: 'Hooksett NH listing — maps-only source',
+      risks: 'No company website on listing — using maps listing as source URL',
+      suggestedContactRole: 'Owner / property manager',
+      confidence: 'high',
+      status: 'accepted',
+      statusReason: 'Passes NH property-manager quality gates',
+    },
+  ];
+  const reviewRequired = [
+    {
+      companyName: 'Property Management',
+      location: 'Manchester NH',
+      sourceUrl: 'http://www.realpropertynh.com/',
+      website: 'http://www.realpropertynh.com/',
+      fitRationale: 'Manchester NH property management listing',
+      risks:
+        'outside_primary_town_cluster — Manchester NH is not in Bedford/Hooksett/Londonderry/Auburn/Goffstown unless explicitly approved',
+      suggestedContactRole: 'Owner / property manager',
+      confidence: 'medium',
+      status: 'review_required',
+      statusReason:
+        'Manchester NH outside_primary_town_cluster — review_required unless primary town approval exists',
+      reasonCode: 'outside_primary_town_cluster',
+    },
+  ];
+  return {
+    workRequestId: 'f0ac74ac-16a6-4dba-b024-d3727b285a86',
+    reviewOnly: true,
+    candidates: cold.concat(reviewRequired),
+    rejected: [
+      {
+        companyName: 'Cushman & Wakefield',
+        location: 'Boston MA',
+        sourceUrl: 'https://example.com/cushman',
+        website: 'https://example.com/cushman',
+        fitRationale: 'Large institutional firm',
+        risks: 'large_institutional_firm',
+        suggestedContactRole: 'Regional operations',
+        confidence: 'low',
+        status: 'rejected',
+        statusReason: 'large_institutional_firm — hard reject',
+        rejectionReason: 'large_institutional_firm',
+      },
+    ],
+    groups: {
+      accepted: cold,
+      review_required: reviewRequired,
+      rejected: null,
+    },
+  };
+}
+
+describe('Operator Review Digest — Prospect Batch Review acceptance', () => {
+  const correctionMessage =
+    'Remove Keyrenter New England Property Management from the accepted cold first-pass candidates — it is an existing relationship, not a cold prospect. Keep it as nurture.';
+  const approvalMessage =
+    'Approve the 6 accepted cold first-pass candidates as Batch 1. Leave Cedar for source verification and Keyrenter as existing-relationship nurture.';
+
+  function digestReview() {
+    return buildProspectBatchReview(withGroups(sampleOperatorDigestBatch1()), {
+      userMessage: correctionMessage,
+      workRequestId: 'f0ac74ac-16a6-4dba-b024-d3727b285a86',
+    });
+  }
+
+  it('digest uses correct counts and sections for Batch 1', () => {
+    const review = digestReview();
+    const digest = review.operatorDigest;
+    assert.equal(digest.recommendedDecision, 'Approve 6 cold prospects as Batch 1.');
+    assert.deepEqual(digest.included, [
+      'RPM Thrive',
+      'Elm Grove Companies',
+      'RPM Premier Network',
+      'Northcity',
+      'The MEG Companies',
+      'Avise',
+    ]);
+    assert.ok(
+      digest.excluded.some((line) =>
+        /Held back: Cedar.*until source verification/i.test(line)
+      )
+    );
+    assert.ok(digest.excluded.some((line) => /Nurture only: Keyrenter/i.test(line)));
+    assert.ok(
+      digest.excluded.some((line) =>
+        /Excluded for now: optional Manchester expansion candidates/i.test(line)
+      )
+    );
+    assert.ok(
+      digest.excluded.some((line) => /Rejected: Cushman\s*&\s*Wakefield/i.test(line))
+    );
+    assert.equal(digest.nextStepAfterApproval, OUTREACH_STRATEGY_PREVIEW_TITLE);
+    assert.equal(digest.nextStepAfterApproval, 'Outreach Strategy Preview');
+    assert.ok(digest.primaryActions.some((a) => a.id === 'approve_batch_1'));
+    assert.equal(digest.evidence.collapsedByDefault, true);
+  });
+
+  it('digest renders before evidence and evidence is collapsed by default', () => {
+    const review = digestReview();
+    const msg = formatProspectBatchReviewMessage(review);
+    const split = splitDigestAndEvidence(msg);
+    assert.match(split.digest, /## Recommended decision/);
+    assert.match(split.digest, /Approve 6 cold prospects as Batch 1/);
+    assert.ok(split.digest.includes(EVIDENCE_COLLAPSED_NOTE));
+    assert.equal(split.evidence, '');
+    assert.equal(split.evidenceCollapsed, true);
+    // Default message must not dump full sourced records.
+    assert.doesNotMatch(msg, /Source URL:/);
+    assert.doesNotMatch(msg, /Why it fits:/);
+    assert.doesNotMatch(msg, /## 1\. Accepted cold first-pass/);
+
+    const evidence = formatProspectBatchReviewEvidenceMessage(review);
+    assert.match(evidence, /View evidence/);
+    assert.match(evidence, /RPM Thrive/);
+    assert.match(evidence, /Source URL:/);
+    assert.match(evidence, /fit rationale/i);
+    assert.match(evidence, /Confidence:/);
+    assert.match(evidence, /Cedar Management Group/);
+    assert.match(evidence, /Cushman\s*&\s*Wakefield/);
+
+    const html = renderOperatorReviewDigest(review.operatorDigest, {
+      elementId: 'prospectBatchReview',
+      evidenceOpen: false,
+    });
+    const analysis = analyzeOperatorReviewHtml(html);
+    assert.equal(analysis.hasDigest, true);
+    assert.equal(analysis.hasEvidenceDrawer, true);
+    assert.equal(analysis.hasPrimaryActions, true);
+    assert.equal(analysis.digestBeforeEvidence, true);
+    assert.equal(analysis.actionsBeforeEvidence, true);
+    assert.equal(analysis.evidenceCollapsedByDefault, true);
+  });
+
+  it('approval buttons are visible without scrolling through full evidence', () => {
+    const review = digestReview();
+    const html = renderOperatorReviewDigest(
+      {
+        ...review.operatorDigest,
+        closingQuestion: review.closingQuestion,
+      },
+      { elementId: 'prospectBatchReview', evidenceOpen: false }
+    );
+    const analysis = analyzeOperatorReviewHtml(html);
+    assert.ok(analysis.actionsIndex >= 0);
+    assert.ok(analysis.evidenceIndex >= 0);
+    assert.ok(
+      analysis.actionsIndex < analysis.evidenceIndex,
+      'primary actions must appear before the evidence drawer'
+    );
+    assert.match(html, /data-ord-action="approve_batch_1"/);
+    assert.match(html, /Approve Batch 1/);
+    // Evidence body exists but drawer is not open by default.
+    assert.match(html, /data-role="view-evidence"/);
+    assert.doesNotMatch(
+      html,
+      /data-role="view-evidence"[^>]*\sopen\b/i
+    );
+  });
+
+  it('approval advances to next review-first step and does not re-ask Batch 1', () => {
+    const review = digestReview();
+    const reply = buildCampaignPlanningReply(
+      approvalMessage,
+      {
+        step: 'prospect_batch_review',
+        slots: {
+          previewGenerated: true,
+          previewApproved: true,
+          criteriaGenerated: true,
+          criteriaApproved: true,
+          buildProposalGenerated: true,
+          buildProposalApproved: true,
+        },
+        prospectListCriteriaPreview: {
+          kind: 'prospect_list_criteria_preview',
+          status: 'approved',
+        },
+        prospectListBuildProposal: {
+          kind: 'prospect_list_build_proposal',
+          status: 'approved',
+        },
+        scoutCandidateBatch: withGroups(sampleOperatorDigestBatch1()),
+        prospectBatchReview: review,
+      },
+      { businessName: 'Anchor Cleaning' },
+      {
+        priorScoutCandidateBatch: withGroups(sampleOperatorDigestBatch1()),
+        priorProspectBatchReview: review,
+        messageClass: MESSAGE_CLASSES.APPROVAL,
+      }
+    );
+
+    assert.equal(reply.intent, 'prospect_batch_1_approved');
+    assert.equal(reply.planningState, 'outreach_strategy_preview');
+    assert.equal(reply.step, 'outreach_strategy_preview');
+    assert.ok(reply.prospectBatchReview.batch1Approved);
+    assert.match(reply.message, /Batch 1 approved/i);
+    assert.match(reply.message, /outreach strategy preview/i);
+    assert.doesNotMatch(reply.message, /## Recommended decision/);
+    assert.doesNotMatch(
+      reply.message,
+      /Do you want to approve the 6 accepted cold first-pass candidates/i
+    );
+    assert.equal(reply.outreachCopyGenerated, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.accountChangesMade, false);
   });
 });

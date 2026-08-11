@@ -49,6 +49,12 @@ const {
   REJECTION_REASON,
 } = require('./scoutQualityGate');
 const {
+  buildOperatorReviewDigest,
+  formatOperatorReviewArtifactMessage,
+  formatOperatorReviewEvidenceMessage,
+  VIEW_EVIDENCE_LABEL,
+} = require('./operatorReviewDigest');
+const {
   buildArtifactSynthesisContext,
   shortBusinessName,
   containsRawPromptFragment,
@@ -3321,6 +3327,191 @@ function formatBatchReviewCandidateBlock(row, index) {
     .join('\n');
 }
 
+function shortCompanyLabel(row) {
+  const name = companyNameOf(row);
+  if (!name) return '—';
+  // Digest uses a short operator-facing label (drop trailing legal fluff when long).
+  return name
+    .replace(/\s+Property\s+Management(?:\s+Company)?$/i, '')
+    .replace(/\s+LLC\.?$/i, '')
+    .replace(/\s+Inc\.?$/i, '')
+    .trim() || name;
+}
+
+/**
+ * Build Operator Review Digest + collapsed evidence for Prospect Batch Review.
+ * Digest is the default operator view; full candidate dumps live under View evidence.
+ */
+function buildProspectBatchReviewOperatorDigest(review) {
+  const p = review || {};
+  const accepted = p.acceptedFirstPass || [];
+  const sourceVerification = p.sourceVerificationRequired || [];
+  const expansion = p.optionalExpansion || [];
+  const nurture = p.existingRelationship || [];
+  const rejected = p.rejected || [];
+  const acceptedCount = accepted.length;
+
+  const cedarRows = sourceVerification.filter((r) =>
+    /cedar/i.test(companyNameOf(r))
+  );
+  const otherSourceVerification = sourceVerification.filter(
+    (r) => !/cedar/i.test(companyNameOf(r))
+  );
+  const keyrenterRows = nurture.filter((r) =>
+    /\bkeyrenter\b/i.test(companyNameOf(r))
+  );
+  const otherNurture = nurture.filter(
+    (r) => !/\bkeyrenter\b/i.test(companyNameOf(r))
+  );
+
+  const excluded = [];
+  if (cedarRows.length) {
+    excluded.push(
+      `Held back: ${cedarRows.map(shortCompanyLabel).join(', ')} until source verification`
+    );
+  }
+  otherSourceVerification.forEach((r) => {
+    excluded.push(
+      `Held back: ${shortCompanyLabel(r)} until source verification`
+    );
+  });
+  if (keyrenterRows.length) {
+    excluded.push(
+      `Nurture only: ${keyrenterRows.map(shortCompanyLabel).join(', ')}`
+    );
+  }
+  otherNurture.forEach((r) => {
+    excluded.push(`Nurture only: ${shortCompanyLabel(r)}`);
+  });
+  if (expansion.length) {
+    excluded.push('Excluded for now: optional Manchester expansion candidates');
+  }
+  rejected.forEach((r) => {
+    excluded.push(`Rejected: ${shortCompanyLabel(r)}`);
+  });
+
+  const watchouts = [];
+  if (cedarRows.length || sourceVerification.length) {
+    watchouts.push(
+      'Source-verification accounts stay out of Batch 1 until verified'
+    );
+  }
+  if (nurture.length) {
+    watchouts.push(
+      'Existing-relationship accounts are nurture only — not cold outreach'
+    );
+  }
+  if (expansion.length) {
+    watchouts.push(
+      'Optional expansion (Manchester / nearby) stays excluded unless explicitly approved'
+    );
+  }
+  if (rejected.length) {
+    watchouts.push(
+      'Rejected candidates remain audit-only and are never outreach-ready'
+    );
+  }
+  if (!watchouts.length) {
+    watchouts.push('Review-first only — no outreach copy, sends, or CRM writes');
+  }
+
+  const why = [
+    `${acceptedCount} accepted cold first-pass primary-town candidate${
+      acceptedCount === 1 ? '' : 's'
+    } with public-source evidence`,
+    'Held, nurture, expansion, and rejected rows stay out of Batch 1',
+  ];
+
+  const evidenceSections = [
+    {
+      title: 'Accepted cold first-pass candidates',
+      intro:
+        'Primary-town cold prospects — full sourced records for inspection.',
+      records: accepted,
+    },
+    {
+      title: 'Source-verification required',
+      intro:
+        'Primary-town candidates that need source verification before outreach.',
+      records: sourceVerification,
+    },
+  ];
+  if (expansion.length) {
+    evidenceSections.push({
+      title: 'Optional expansion candidates',
+      intro: 'Manchester NH / nearby expansion — excluded unless approved.',
+      records: expansion,
+    });
+  }
+  evidenceSections.push({
+    title: 'Existing relationship / nurture',
+    intro: 'Nurture only — do not include in campaign outreach.',
+    records: nurture,
+  });
+  evidenceSections.push({
+    title: 'Rejected candidates',
+    intro:
+      'Large institutional / wrong segment / outside market (audit only).',
+    records: rejected,
+  });
+
+  const auditNotes = [
+    p.workRequestId ? `workRequestId: ${p.workRequestId}` : null,
+    `Counts — accepted ${acceptedCount}, source-verification ${sourceVerification.length}, nurture ${nurture.length}, expansion ${expansion.length}, rejected ${rejected.length}`,
+    PROSPECT_BATCH_REVIEW_DISCLAIMER,
+  ].filter(Boolean);
+
+  return buildOperatorReviewDigest({
+    kind: PROSPECT_BATCH_REVIEW_KIND,
+    title: PROSPECT_BATCH_REVIEW_TITLE,
+    recommendedDecision: `Approve ${acceptedCount} cold prospect${
+      acceptedCount === 1 ? '' : 's'
+    } as Batch 1.`,
+    whyRecommended: why,
+    included: accepted.map(shortCompanyLabel),
+    excluded,
+    keyWatchouts: watchouts,
+    nextStepAfterApproval: OUTREACH_STRATEGY_PREVIEW_TITLE,
+    primaryActions: [
+      {
+        id: 'approve_batch_1',
+        label: 'Approve Batch 1',
+        style: 'primary',
+        message: `Approve the ${acceptedCount} accepted cold first-pass candidates as Batch 1.`,
+      },
+      {
+        id: 'request_changes',
+        label: 'Request changes',
+        style: 'secondary',
+        message: null,
+      },
+      {
+        id: 'view_evidence',
+        label: VIEW_EVIDENCE_LABEL,
+        style: 'secondary',
+        message: null,
+      },
+    ],
+    evidence: {
+      collapsedByDefault: true,
+      label: VIEW_EVIDENCE_LABEL,
+      sections: evidenceSections,
+      rejectedOrHeld: sourceVerification.concat(nurture, expansion, rejected),
+      auditNotes,
+    },
+    disclaimer: p.disclaimer || PROSPECT_BATCH_REVIEW_DISCLAIMER,
+    meta: {
+      acceptedCount,
+      sourceVerificationCount: sourceVerification.length,
+      nurtureCount: nurture.length,
+      expansionCount: expansion.length,
+      rejectedCount: rejected.length,
+      workRequestId: p.workRequestId || null,
+    },
+    reviewOnly: true,
+  });
+}
+
 /**
  * Build Prospect Batch Review from a completed Scout candidate batch.
  * Applies maps-only downgrade (Cedar Management Group → review_required / medium).
@@ -3471,10 +3662,41 @@ function buildProspectBatchReview(batch, opts = {}) {
     exportMade: false,
   };
   review.closingQuestion = buildProspectBatchReviewClosingQuestion(review);
+  review.operatorDigest = buildProspectBatchReviewOperatorDigest(review);
+  review.operatorDigest.closingQuestion = review.closingQuestion;
   return review;
 }
 
-function formatProspectBatchReviewMessage(review) {
+/**
+ * Default operator message: digest first; full evidence collapsed / not dumped.
+ * Pass { includeEvidence: true } only when an operator explicitly expands evidence.
+ */
+function formatProspectBatchReviewMessage(review, opts = {}) {
+  const p = review || {};
+  const digest =
+    p.operatorDigest || buildProspectBatchReviewOperatorDigest(p);
+  const includeEvidence = opts.includeEvidence === true;
+  const closing =
+    p.closingQuestion ||
+    buildProspectBatchReviewClosingQuestion(p) ||
+    PROSPECT_BATCH_REVIEW_CLOSING_QUESTION;
+
+  return formatOperatorReviewArtifactMessage(digest, {
+    includeEvidence,
+    closingQuestion: closing,
+  });
+}
+
+/** Full evidence dump for View evidence (not the default operator view). */
+function formatProspectBatchReviewEvidenceMessage(review) {
+  const p = review || {};
+  const digest =
+    p.operatorDigest || buildProspectBatchReviewOperatorDigest(p);
+  return formatOperatorReviewEvidenceMessage(digest.evidence);
+}
+
+/** @deprecated Prefer formatProspectBatchReviewMessage — kept for callers that need section dumps. */
+function formatProspectBatchReviewEvidenceSectionsMessage(review) {
   const p = review || {};
   const titles = p.sectionTitles || PROSPECT_BATCH_REVIEW_SECTION_TITLES;
   const lines = [p.title || PROSPECT_BATCH_REVIEW_TITLE, ''];
@@ -3560,12 +3782,6 @@ function formatProspectBatchReviewMessage(review) {
   );
 
   lines.push(p.disclaimer || PROSPECT_BATCH_REVIEW_DISCLAIMER);
-  lines.push('');
-  lines.push(
-    p.closingQuestion ||
-      buildProspectBatchReviewClosingQuestion(p) ||
-      PROSPECT_BATCH_REVIEW_CLOSING_QUESTION
-  );
   return lines.join('\n').trim();
 }
 
@@ -7305,7 +7521,10 @@ module.exports = {
   buildReviewableProspectListDraft,
   formatReviewableProspectListDraftMessage,
   buildProspectBatchReview,
+  buildProspectBatchReviewOperatorDigest,
   formatProspectBatchReviewMessage,
+  formatProspectBatchReviewEvidenceMessage,
+  formatProspectBatchReviewEvidenceSectionsMessage,
   produceProspectBatchReviewResult,
   produceProspectBatchReviewApprovalResult,
   approveProspectBatchReviewBatch1,

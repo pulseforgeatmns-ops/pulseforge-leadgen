@@ -830,6 +830,75 @@
     }
     .previous-plans summary::-webkit-details-marker { display: none; }
     .previous-plans .session-list { margin-top: 0.65rem; }
+    .operator-review-digest .ord-digest {
+      display: grid;
+      gap: 0.35rem;
+    }
+    .operator-review-digest .ord-list {
+      margin: 0.15rem 0 0.55rem 1.1rem;
+      padding: 0;
+    }
+    .operator-review-digest .ord-list li { margin: 0.2rem 0; }
+    .operator-review-digest .ord-primary-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin: 0.85rem 0 0.75rem;
+    }
+    .operator-review-digest .ord-evidence-drawer {
+      margin-top: 0.65rem;
+      border-top: 1px solid var(--cie-border-soft);
+      padding-top: 0.65rem;
+    }
+    .operator-review-digest .ord-evidence-drawer > summary {
+      cursor: pointer;
+      color: var(--cie-muted);
+      font-size: 0.88rem;
+      font-weight: 600;
+      list-style: none;
+    }
+    .operator-review-digest .ord-evidence-drawer > summary::-webkit-details-marker {
+      display: none;
+    }
+    .operator-review-digest .ord-evidence-body {
+      margin-top: 0.75rem;
+      display: grid;
+      gap: 0.85rem;
+    }
+    .operator-review-digest .ord-evidence-record {
+      border: 1px solid var(--cie-border-soft);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .operator-review-digest .ord-evidence-record h5 {
+      margin: 0 0 0.45rem;
+      font-size: 0.92rem;
+    }
+    .operator-review-digest .ord-evidence-dl {
+      margin: 0;
+      display: grid;
+      gap: 0.35rem;
+    }
+    .operator-review-digest .ord-evidence-dl div {
+      display: grid;
+      grid-template-columns: 8.5rem 1fr;
+      gap: 0.4rem;
+      font-size: 0.82rem;
+    }
+    .operator-review-digest .ord-evidence-dl dt {
+      color: var(--cie-muted);
+      margin: 0;
+      font-weight: 500;
+    }
+    .operator-review-digest .ord-evidence-dl dd {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+    .operator-review-digest .ord-closing {
+      margin-top: 0.75rem;
+      font-weight: 500;
+    }
     .gw-left-section {
       position: static;
       margin: 0;
@@ -1020,9 +1089,12 @@
   <div class="error" id="errorBox" hidden></div>
 
   <script src="/shared/growth-workspace-panel.js"></script>
+  <script src="/shared/operator-review-digest.js"></script>
   <script>
     const GrowthWorkspacePanel =
       (typeof window !== 'undefined' && window.PulseforgeGrowthWorkspacePanel) || {};
+    const OperatorReviewDigest =
+      (typeof window !== 'undefined' && window.PulseforgeOperatorReviewDigest) || {};
 
     const SECTION_TITLES = {
       identity: 'Identity',
@@ -1079,6 +1151,8 @@
       scoutHandoff: null,
       scoutWorkRequest: null,
       scoutCandidateBatch: null,
+      prospectBatchReview: null,
+      outreachStrategyPreview: null,
       growthPlan: null,
       workspaceTab: 'overview',
       isSample: false,
@@ -2072,6 +2146,89 @@
       );
     }
 
+    function renderProspectBatchReview(review) {
+      if (!review) return '';
+      const digest =
+        review.operatorDigest ||
+        (OperatorReviewDigest.buildFromReview
+          ? OperatorReviewDigest.buildFromReview(review)
+          : null);
+      if (
+        digest &&
+        typeof OperatorReviewDigest.renderOperatorReviewDigest === 'function'
+      ) {
+        return OperatorReviewDigest.renderOperatorReviewDigest(
+          {
+            ...digest,
+            closingQuestion: review.closingQuestion || digest.closingQuestion,
+            disclaimer: review.disclaimer || digest.disclaimer,
+          },
+          {
+            elementId: 'prospectBatchReview',
+            kicker: review.title || 'Prospect Batch Review',
+            closingQuestion: review.closingQuestion || null,
+            evidenceOpen: false,
+            actionsDisabled: Boolean(review.batch1Approved),
+          }
+        );
+      }
+      // Fallback if shared renderer missing — still digest-first, no evidence dump.
+      const included = (review.acceptedFirstPass || [])
+        .map((r) => r.companyName || r.company)
+        .filter(Boolean);
+      return (
+        '<div class="growth-direction operator-review-digest" id="prospectBatchReview">' +
+          '<p class="growth-kicker">Prospect Batch Review</p>' +
+          '<p><strong>Recommended decision</strong></p>' +
+          '<p>Approve ' +
+          escapeHtml(String(included.length)) +
+          ' cold prospects as Batch 1.</p>' +
+          '<p><strong>What is included</strong></p>' +
+          renderListBlock(included, 'None included.') +
+          '<p><strong>Next step after approval</strong></p>' +
+          '<p>Outreach Strategy Preview</p>' +
+          '<p class="growth-disclaimer">' +
+          escapeHtml(
+            review.disclaimer ||
+              'Prospect Batch Review only — no outreach copy, sends, CRM writes, exports, or account changes.'
+          ) +
+          '</p>' +
+        '</div>'
+      );
+    }
+
+    function bindProspectBatchReviewActions(root) {
+      if (!root) return;
+      root.querySelectorAll('[data-ord-action]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const action = btn.getAttribute('data-ord-action');
+          if (action === 'view_evidence') {
+            const drawer = root.querySelector(
+              'details[data-role="view-evidence"]'
+            );
+            if (drawer) {
+              drawer.open = true;
+              drawer.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+            return;
+          }
+          if (action === 'request_changes') {
+            els.messageInput.value =
+              'I want to correct the Prospect Batch Review before approving Batch 1.';
+            els.messageInput.focus();
+            return;
+          }
+          if (action === 'approve_batch_1') {
+            const msg =
+              btn.getAttribute('data-ord-message') ||
+              'Approve the accepted cold first-pass candidates as Batch 1.';
+            els.messageInput.value = msg;
+            sendMessage();
+          }
+        });
+      });
+    }
+
     function renderCompletion(result) {
       const bp = (result && result.blueprint) || state.blueprint;
       const playbook = (result && result.playbook) || null;
@@ -2299,7 +2456,15 @@
         els.completeActions.hidden = true;
         setGrowthPreviewActionsVisible(false);
         if (els.growthWorkspaceActions) els.growthWorkspaceActions.hidden = true;
-        if (state.scoutHandoffBrief) {
+        if (state.prospectBatchReview) {
+          els.sidePanelTitle.textContent = 'Prospect Batch Review';
+          els.sidePanelSub.textContent =
+            'Operator digest first — full evidence under View evidence';
+          els.sidePanel.innerHTML = renderProspectBatchReview(
+            state.prospectBatchReview
+          );
+          bindProspectBatchReviewActions(els.sidePanel);
+        } else if (state.scoutHandoffBrief) {
           els.sidePanelTitle.textContent = 'Scout Handoff';
           els.sidePanelSub.textContent =
             state.scoutHandoffBrief.uiStatus ||
@@ -3261,6 +3426,8 @@
       state.prospectListBuildProposal = null;
       state.scoutHandoffBrief = null;
       state.scoutHandoff = null;
+      state.prospectBatchReview = null;
+      state.outreachStrategyPreview = null;
       state.scoutWorkRequest = null;
       state.scoutCandidateBatch = null;
       state.growthInfrastructureReadinessReport = null;
@@ -3374,7 +3541,23 @@
           if (data && data.scoutCandidateBatch) {
             state.scoutCandidateBatch = data.scoutCandidateBatch;
           }
-          if (data && data.scoutHandoffBrief) {
+          if (data && data.prospectBatchReview) {
+            state.prospectBatchReview = data.prospectBatchReview;
+          }
+          if (data && data.outreachStrategyPreview) {
+            state.outreachStrategyPreview = data.outreachStrategyPreview;
+          }
+          if (data && data.prospectBatchReview) {
+            els.sidePanel.innerHTML = renderProspectBatchReview(
+              data.prospectBatchReview
+            );
+            bindProspectBatchReviewActions(els.sidePanel);
+            els.sidePanelTitle.textContent = 'Prospect Batch Review';
+            els.sidePanelSub.textContent =
+              data.prospectBatchReview.batch1Approved
+                ? 'Batch 1 approved — next: Outreach Strategy Preview'
+                : 'Operator digest first — full evidence under View evidence';
+          } else if (data && data.scoutHandoffBrief) {
             els.sidePanel.innerHTML = renderScoutHandoffBrief(
               data.scoutHandoffBrief
             );
