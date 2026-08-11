@@ -168,4 +168,35 @@ describe('OperatorChatResponsiveness', () => {
       false
     );
   });
+
+  it('detects force-rebuild confirmation and does not treat it as soft revise', () => {
+    const {
+      looksLikeForceRebuildConfirmation,
+      RESPONSE_MODES,
+    } = require('../services/maxSynthesis/OperatorChatResponsiveness');
+    assert.equal(
+      looksLikeForceRebuildConfirmation(
+        'Yes, force-rebuild from operator instructions only.',
+        {
+          campaignWorkingState: {
+            awaitingForceRebuildConfirmation: true,
+            lastResponseMode: RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC,
+          },
+        }
+      ),
+      true
+    );
+    assert.equal(
+      looksLikeOperatorWorkflowRevision(
+        'Yes, force-rebuild from operator instructions only.',
+        {
+          step: 'outreach_draft_preview',
+          campaignWorkingState: {
+            awaitingForceRebuildConfirmation: true,
+          },
+        }
+      ),
+      false
+    );
+  });
 });

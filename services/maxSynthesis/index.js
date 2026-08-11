@@ -98,6 +98,8 @@ module.exports = {
     OperatorChatResponsiveness.ensureCampaignWorkingState,
   looksLikeOperatorWorkflowRevision:
     OperatorChatResponsiveness.looksLikeOperatorWorkflowRevision,
+  looksLikeForceRebuildConfirmation:
+    OperatorChatResponsiveness.looksLikeForceRebuildConfirmation,
   parseOperatorChatDirectives:
     OperatorChatResponsiveness.parseOperatorChatDirectives,
   applyOperatorDirectivesToWorkingState:
@@ -112,6 +114,12 @@ module.exports = {
     OperatorChatResponsiveness.validateOutreachDraftAgainstInstructions,
   buildStaleSourceDiagnostic:
     OperatorChatResponsiveness.buildStaleSourceDiagnostic,
+  identifyStaleInjectionSources:
+    OperatorChatResponsiveness.identifyStaleInjectionSources,
+  markAwaitingForceRebuild:
+    OperatorChatResponsiveness.markAwaitingForceRebuild,
+  markForceRebuildBypass: OperatorChatResponsiveness.markForceRebuildBypass,
+  clearForceRebuildBypass: OperatorChatResponsiveness.clearForceRebuildBypass,
   buildFollowUpEmailDrafts:
     OperatorChatResponsiveness.buildFollowUpEmailDrafts,
   formatOperatorChatDraftResponse:

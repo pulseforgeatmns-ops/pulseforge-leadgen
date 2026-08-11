@@ -98,6 +98,7 @@ const {
   emptyCampaignWorkingState,
   ensureCampaignWorkingState,
   looksLikeOperatorWorkflowRevision,
+  looksLikeForceRebuildConfirmation,
   parseOperatorChatDirectives,
   applyOperatorDirectivesToWorkingState,
   markDirectivesApplied,
@@ -107,6 +108,10 @@ const {
   draftOutputFingerprint,
   validateOutreachDraftAgainstInstructions,
   buildStaleSourceDiagnostic,
+  identifyStaleInjectionSources,
+  markAwaitingForceRebuild,
+  markForceRebuildBypass,
+  clearForceRebuildBypass,
   buildFollowUpEmailDrafts,
   formatOperatorChatDraftResponse,
 } = require('./maxSynthesis');
@@ -6430,9 +6435,13 @@ function produceOutreachDraftPreviewResult(ctx, answers, slots, opts, leadIn) {
     plan = approveOutreachCopyPlan(plan);
   }
 
-  const existing = opts.priorOutreachDraftPreview || null;
+  const existing =
+    opts.bypassStoredOutreachDraftPreview || opts.forceRebuild
+      ? null
+      : opts.priorOutreachDraftPreview || null;
   const alreadyHave = hasOutreachDraftPreview(existing);
-  const forceRebuild = opts.forceRebuild === true;
+  const forceRebuild =
+    opts.forceRebuild === true || opts.bypassStoredOutreachDraftPreview === true;
   const responseMode =
     opts.responseMode || RESPONSE_MODES.WORKFLOW_REVIEW_CARD;
   const campaignCtx = buildCampaignContextForRender(review, ctx, {
@@ -6645,6 +6654,23 @@ function produceOutreachDraftPreviewRevisionResult(
   opts,
   userMessage
 ) {
+  // Confirmed force-rebuild must mutate the execution path — never re-ask.
+  if (
+    looksLikeForceRebuildConfirmation(userMessage, {
+      campaignWorkingState: opts.campaignWorkingState || null,
+      awaitingForceRebuildConfirmation: opts.awaitingForceRebuildConfirmation,
+      lastResponseMode: opts.lastResponseMode,
+    })
+  ) {
+    return produceOutreachDraftPreviewForceRebuildResult(
+      ctx,
+      answers,
+      slots,
+      opts,
+      userMessage
+    );
+  }
+
   const parsed = parseOperatorChatDirectives(userMessage);
   let campaignMemory = ensureCampaignMemory({
     campaignMemory: opts.campaignMemory || null,
@@ -6676,13 +6702,36 @@ function produceOutreachDraftPreviewRevisionResult(
     activeArtifactKind: OUTREACH_DRAFT_PREVIEW_KIND,
   });
 
+  // If a prior diagnostic already set bypass, execute force-rebuild immediately.
+  if (workingState.bypassStoredOutreachDraftPreview) {
+    return produceOutreachDraftPreviewForceRebuildResult(
+      ctx,
+      answers,
+      slots,
+      {
+        ...opts,
+        campaignMemory,
+        campaignWorkingState: workingState,
+      },
+      userMessage
+    );
+  }
+
   const priorDraft = opts.priorOutreachDraftPreview || null;
   const fingerprintBefore = draftOutputFingerprint(priorDraft);
   const priorRejects = countRejectedFingerprint(workingState, fingerprintBefore);
 
   // If the same rejected fingerprint already appeared after a prior correction,
-  // stop drafting and run the stale-source diagnostic.
-  if (priorRejects >= 1 && parsed.hasDirectives) {
+  // stop drafting and run the stale-source diagnostic (once — await confirm).
+  if (
+    priorRejects >= 1 &&
+    (parsed.hasDirectives || workingState.awaitingForceRebuildConfirmation)
+  ) {
+    const injectionSources = identifyStaleInjectionSources(
+      priorDraft,
+      '',
+      campaignMemory.operatorLearnings
+    );
     const diagnostic = buildStaleSourceDiagnostic({
       campaignWorkingState: workingState,
       learnings: campaignMemory.operatorLearnings,
@@ -6697,15 +6746,11 @@ function produceOutreachDraftPreviewRevisionResult(
           detail: fingerprintBefore,
         },
       ],
+      injectionSources,
       staleReason:
         'operator correction did not change the regenerated draft fingerprint',
     });
-    workingState = {
-      ...workingState,
-      lastResponseMode: RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC,
-      lastStaleDiagnostic: diagnostic.diagnostic,
-      updatedAt: new Date().toISOString(),
-    };
+    workingState = markAwaitingForceRebuild(workingState, diagnostic.diagnostic);
     return {
       message: diagnostic.message,
       step: CAMPAIGN_PLANNING_STATES.OUTREACH_DRAFT_PREVIEW,
@@ -6714,6 +6759,8 @@ function produceOutreachDraftPreviewRevisionResult(
       prospectBatchReview: opts.priorProspectBatchReview || null,
       outreachStrategyPreview: opts.priorOutreachStrategyPreview || null,
       outreachCopyPlan: opts.priorOutreachCopyPlan || null,
+      // Do not re-surface the stale draft body in chat — keep artifact reference
+      // only for state continuity until force-rebuild clears it.
       outreachDraftPreview: priorDraft,
       campaignMemory,
       campaignWorkingState: workingState,
@@ -6730,6 +6777,7 @@ function produceOutreachDraftPreviewRevisionResult(
     };
   }
 
+  // Soft revision still force-rebuilds without reusing the stored card body.
   const rebuilt = produceOutreachDraftPreviewResult(
     ctx,
     answers,
@@ -6738,7 +6786,9 @@ function produceOutreachDraftPreviewRevisionResult(
       ...opts,
       campaignMemory,
       campaignWorkingState: workingState,
+      priorOutreachDraftPreview: null,
       forceRebuild: true,
+      bypassStoredOutreachDraftPreview: true,
       responseMode: RESPONSE_MODES.OPERATOR_CHAT_RESPONSE,
       draftFollowUps:
         Boolean(
@@ -6785,7 +6835,7 @@ function produceOutreachDraftPreviewRevisionResult(
 
   if (!validation.ok) {
     // One more forced rebuild bypassing stored artifact entirely.
-    const retry = produceOutreachDraftPreviewResult(
+    return produceOutreachDraftPreviewForceRebuildResult(
       ctx,
       answers,
       slots,
@@ -6793,85 +6843,15 @@ function produceOutreachDraftPreviewRevisionResult(
         ...opts,
         campaignMemory,
         campaignWorkingState: nextWorking,
-        priorOutreachDraftPreview: null,
-        forceRebuild: true,
-        responseMode: RESPONSE_MODES.OPERATOR_CHAT_RESPONSE,
-        draftFollowUps: true,
-        operatorLearnings: {
-          ...campaignMemory.operatorLearnings,
-          subject_keep_merge_tokens: true,
-          claim_tested_winner: false,
-          draft_follow_ups: true,
-          follow_up_mode: 'drafted_emails',
-          response_mode_preference: RESPONSE_MODES.OPERATOR_CHAT_RESPONSE,
-        },
         operatorChanges: parsed.changes,
-        operatorAcknowledgment:
-          'Rebuilt again after validation caught leftover stale fields.',
-        revisionIntent: true,
-        includeOperatorDigest: false,
-        _validationRetry: true,
+        _fromValidationFailure: true,
+        _validationFailures: validation.failures,
       },
-      null
+      userMessage
     );
-    const retryValidation = validateOutreachDraftAgainstInstructions(
-      retry.outreachDraftPreview,
-      {
-        learnings: {
-          ...campaignMemory.operatorLearnings,
-          draft_follow_ups: true,
-          subject_keep_merge_tokens: true,
-          claim_tested_winner: false,
-        },
-        responseMode: RESPONSE_MODES.OPERATOR_CHAT_RESPONSE,
-        message: retry.message,
-      }
-    );
-    if (!retryValidation.ok) {
-      nextWorking = recordRejectedOutput(
-        nextWorking,
-        draftOutputFingerprint(retry.outreachDraftPreview)
-      );
-      const rejectCount = countRejectedFingerprint(
-        nextWorking,
-        draftOutputFingerprint(retry.outreachDraftPreview)
-      );
-      if (rejectCount >= 1) {
-        const diagnostic = buildStaleSourceDiagnostic({
-          campaignWorkingState: nextWorking,
-          learnings: campaignMemory.operatorLearnings,
-          parsedDirectives: parsed,
-          responseMode: RESPONSE_MODES.OPERATOR_CHAT_RESPONSE,
-          activeArtifactKind: OUTREACH_DRAFT_PREVIEW_KIND,
-          storedArtifactPresent: Boolean(priorDraft),
-          winningSource: 'template_or_renderer_after_forced_rebuild',
-          validationFailures: retryValidation.failures,
-          staleReason: retryValidation.failures.map((f) => f.code).join(', '),
-        });
-        nextWorking.lastResponseMode = RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC;
-        nextWorking.lastStaleDiagnostic = diagnostic.diagnostic;
-        return {
-          ...retry,
-          message: diagnostic.message,
-          campaignMemory,
-          campaignWorkingState: nextWorking,
-          responseMode: RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC,
-          staleSourceDiagnostic: diagnostic.diagnostic,
-          intent: 'stale_source_diagnostic',
-          validation: retryValidation,
-        };
-      }
-    }
-    return {
-      ...retry,
-      campaignMemory: retry.campaignMemory || campaignMemory,
-      campaignWorkingState: nextWorking,
-      responseMode: RESPONSE_MODES.OPERATOR_CHAT_RESPONSE,
-      validation: retryValidation,
-      intent: 'revise_outreach_draft_preview',
-    };
   }
 
+  nextWorking = clearForceRebuildBypass(nextWorking);
   return {
     ...rebuilt,
     campaignMemory: rebuilt.campaignMemory || campaignMemory,
@@ -6879,6 +6859,224 @@ function produceOutreachDraftPreviewRevisionResult(
     responseMode: RESPONSE_MODES.OPERATOR_CHAT_RESPONSE,
     validation,
     intent: 'revise_outreach_draft_preview',
+  };
+}
+
+/**
+ * Confirmed force-rebuild from operator instructions only.
+ * Never retrieves, injects, renders, or reuses stored outreach_draft_preview.
+ * Never re-asks for force-rebuild confirmation.
+ */
+function produceOutreachDraftPreviewForceRebuildResult(
+  ctx,
+  answers,
+  slots,
+  opts,
+  userMessage
+) {
+  let campaignMemory = ensureCampaignMemory({
+    campaignMemory: opts.campaignMemory || null,
+  });
+  const workingPrior = ensureCampaignWorkingState({
+    campaignWorkingState: opts.campaignWorkingState || null,
+  });
+
+  // Re-apply the latest stored operator instruction (from the correction turn)
+  // plus any directives in this confirmation message.
+  const latestInstruction =
+    workingPrior.latestOperatorInstruction ||
+    (workingPrior.lastStaleDiagnostic &&
+      workingPrior.lastStaleDiagnostic.latestOperatorInstruction) ||
+    null;
+  const instructionText = [latestInstruction, userMessage]
+    .filter(Boolean)
+    .join('\n');
+  const parsedLatest = parseOperatorChatDirectives(instructionText || '');
+  const parsedConfirm = parseOperatorChatDirectives(userMessage || '');
+
+  campaignMemory = mergeOperatorLearnings(
+    campaignMemory,
+    {
+      subject_keep_merge_tokens: true,
+      claim_tested_winner: false,
+      draft_follow_ups: true,
+      follow_up_mode: 'drafted_emails',
+      personalization_rule: 'do not use street addresses by default',
+      personalization_preference:
+        'use town, company, property type, portfolio cue, or public role signal',
+      response_mode_preference: RESPONSE_MODES.OPERATOR_CHAT_RESPONSE,
+      tested_subject_line_pattern:
+        (campaignMemory.operatorLearnings &&
+          campaignMemory.operatorLearnings.tested_subject_line_pattern) ||
+        '{{business_name}} - commercial cleaning',
+      ...(parsedLatest.learnings || {}),
+      ...(parsedConfirm.learnings || {}),
+    },
+    'operator_chat_force_rebuild'
+  );
+
+  let workingState = markForceRebuildBypass(workingPrior);
+  workingState = applyOperatorDirectivesToWorkingState(
+    workingState,
+    {
+      ...parsedLatest,
+      rawText: latestInstruction || userMessage,
+      hasDirectives: true,
+      directives: [
+        ...(parsedLatest.directives || []),
+        ...(parsedConfirm.directives || []),
+        {
+          type: 'force_rebuild_bypass',
+          value: true,
+          source: 'operator_chat',
+        },
+      ],
+      changes: [
+        ...(parsedLatest.changes || []),
+        'force-rebuild from operator instructions only (stored draft bypassed)',
+      ],
+    },
+    { activeArtifactKind: OUTREACH_DRAFT_PREVIEW_KIND }
+  );
+  workingState.bypassStoredOutreachDraftPreview = true;
+  workingState.awaitingForceRebuildConfirmation = false;
+
+  const changes = [
+    'bypassed stored outreach_draft_preview',
+    'subject → {{business_name}} - commercial cleaning',
+    'no street addresses',
+    'drafted Follow-up 1 and Follow-up 2',
+    'operator chat response (not workflow card)',
+    ...(parsedLatest.changes || []).filter(
+      (c) => !/subject →|no street|follow-up|conversational/i.test(c)
+    ),
+  ];
+
+  const rebuilt = produceOutreachDraftPreviewResult(
+    ctx,
+    answers,
+    slots,
+    {
+      ...opts,
+      // Critical: do not retrieve / inject / reuse stored draft.
+      priorOutreachDraftPreview: null,
+      forceRebuild: true,
+      bypassStoredOutreachDraftPreview: true,
+      campaignMemory,
+      campaignWorkingState: workingState,
+      responseMode: RESPONSE_MODES.OPERATOR_CHAT_RESPONSE,
+      draftFollowUps: true,
+      operatorLearnings: campaignMemory.operatorLearnings,
+      operatorChanges: changes,
+      operatorAcknowledgment:
+        'Force-rebuild confirmed — rebuilt from operator instructions and Shared Campaign Memory only. Stored Outreach Draft Preview was not used.',
+      revisionIntent: true,
+      includeOperatorDigest: false,
+      _validationRetry: true,
+    },
+    null
+  );
+
+  const validation = validateOutreachDraftAgainstInstructions(
+    rebuilt.outreachDraftPreview,
+    {
+      learnings: {
+        ...campaignMemory.operatorLearnings,
+        subject_keep_merge_tokens: true,
+        claim_tested_winner: false,
+        draft_follow_ups: true,
+      },
+      responseMode: RESPONSE_MODES.OPERATOR_CHAT_RESPONSE,
+      message: rebuilt.message,
+    }
+  );
+
+  if (!validation.ok) {
+    const injectionSources = identifyStaleInjectionSources(
+      rebuilt.outreachDraftPreview,
+      rebuilt.message,
+      campaignMemory.operatorLearnings
+    );
+    const diagnostic = buildStaleSourceDiagnostic({
+      campaignWorkingState: workingState,
+      learnings: campaignMemory.operatorLearnings,
+      parsedDirectives: parsedLatest,
+      responseMode: RESPONSE_MODES.OPERATOR_CHAT_RESPONSE,
+      activeArtifactKind: OUTREACH_DRAFT_PREVIEW_KIND,
+      storedArtifactPresent: false,
+      winningSource: 'template_or_renderer_after_forced_rebuild',
+      validationFailures: validation.failures,
+      injectionSources,
+      staleReason: validation.failures.map((f) => f.code).join(', '),
+    });
+    // Fail closed — do NOT ask for confirmation again, and do NOT return stale draft.
+    workingState = {
+      ...workingState,
+      awaitingForceRebuildConfirmation: false,
+      bypassStoredOutreachDraftPreview: true,
+      lastResponseMode: RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC,
+      lastStaleDiagnostic: diagnostic.diagnostic,
+      updatedAt: new Date().toISOString(),
+    };
+    const failClosedLines = [
+      'Force-rebuild from operator instructions failed closed — stale fields were still injected after bypassing the stored outreach_draft_preview.',
+      '',
+      'Exact stale injection sources:',
+      ...(injectionSources.length
+        ? injectionSources.map(
+            (s) =>
+              `- ${s.source}.${s.field} (${s.reason}): ${JSON.stringify(s.value).slice(0, 120)}`
+          )
+        : validation.failures.map(
+            (f) => `- validation.${f.code}: ${f.detail || ''}`
+          )),
+      '',
+      'Stored outreach_draft_preview was not reused. Workflow card / evidence renderers were not selected.',
+      'I am not asking for another force-rebuild confirmation. Fix or bypass the named source above, then retry.',
+    ];
+    return {
+      message: failClosedLines.join('\n'),
+      step: CAMPAIGN_PLANNING_STATES.OUTREACH_DRAFT_PREVIEW,
+      answers,
+      slots: { ...slots },
+      prospectBatchReview: opts.priorProspectBatchReview || null,
+      outreachStrategyPreview: opts.priorOutreachStrategyPreview || null,
+      outreachCopyPlan: opts.priorOutreachCopyPlan || null,
+      outreachDraftPreview: null,
+      campaignMemory,
+      campaignWorkingState: workingState,
+      responseMode: RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC,
+      staleSourceDiagnostic: diagnostic.diagnostic,
+      validation,
+      intent: 'force_rebuild_failed_closed',
+      planningState: CAMPAIGN_PLANNING_STATES.OUTREACH_DRAFT_PREVIEW,
+      currentAsk:
+        'Name the stale source to remove, or retry after the named template/field is fixed.',
+      sendsMade: false,
+      crmWritesMade: false,
+      exportMade: false,
+      accountChangesMade: false,
+    };
+  }
+
+  workingState = clearForceRebuildBypass(workingState);
+  workingState.lastResponseMode = RESPONSE_MODES.OPERATOR_CHAT_RESPONSE;
+
+  return {
+    ...rebuilt,
+    outreachDraftPreview: {
+      ...rebuilt.outreachDraftPreview,
+      forceRebuiltFromOperatorInstructions: true,
+      bypassedStoredArtifact: true,
+      operatorDigest: null,
+      responseMode: RESPONSE_MODES.OPERATOR_CHAT_RESPONSE,
+    },
+    campaignMemory: rebuilt.campaignMemory || campaignMemory,
+    campaignWorkingState: workingState,
+    responseMode: RESPONSE_MODES.OPERATOR_CHAT_RESPONSE,
+    validation,
+    intent: 'force_rebuild_outreach_draft_preview',
+    currentAsk: OUTREACH_DRAFT_PREVIEW_CLOSING_QUESTION,
   };
 }
 
@@ -9589,6 +9787,58 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       );
     }
 
+    // Confirmed force-rebuild from operator instructions only.
+    // Must win over revision, silent re-show, and stored artifact reuse.
+    if (
+      looksLikeForceRebuildConfirmation(userMessage, {
+        campaignWorkingState:
+          opts.campaignWorkingState || prior.campaignWorkingState || null,
+        awaitingForceRebuildConfirmation:
+          (opts.campaignWorkingState &&
+            opts.campaignWorkingState.awaitingForceRebuildConfirmation) ||
+          (prior.campaignWorkingState &&
+            prior.campaignWorkingState.awaitingForceRebuildConfirmation) ||
+          false,
+        lastResponseMode:
+          (opts.campaignWorkingState &&
+            opts.campaignWorkingState.lastResponseMode) ||
+          (prior.campaignWorkingState &&
+            prior.campaignWorkingState.lastResponseMode) ||
+          null,
+      }) &&
+      (canEmitOutreachDraftPreview(approvalOpts) ||
+        hasOutreachDraftPreview(priorDraftEarly) ||
+        prior.step === CAMPAIGN_PLANNING_STATES.OUTREACH_DRAFT_PREVIEW ||
+        prior.step === CAMPAIGN_PLANNING_STATES.OUTREACH_COPY_PLAN_APPROVED ||
+        ((opts.campaignWorkingState || prior.campaignWorkingState || {})
+          .lastResponseMode === RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC))
+    ) {
+      const answersEarly = { ...(prior.answers || {}) };
+      const syncedEarly = syncAnswersFromSlots(answersEarly, {
+        ...sharedApprovedSlots,
+        outreachCopyPlanApproved: true,
+        copyPlanApproved: true,
+      });
+      return produceOutreachDraftPreviewForceRebuildResult(
+        ctx,
+        syncedEarly,
+        {
+          ...sharedApprovedSlots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+        },
+        {
+          ...sharedReplyOpts,
+          // Explicitly drop stored draft from the reply opts.
+          priorOutreachDraftPreview: null,
+          campaignMemory: opts.campaignMemory || prior.campaignMemory || null,
+          campaignWorkingState:
+            opts.campaignWorkingState || prior.campaignWorkingState || null,
+        },
+        userMessage
+      );
+    }
+
     // Operator chat revision of the active Outreach Draft Preview.
     // Must win over silent re-show / template reuse so corrections apply.
     if (
@@ -9639,6 +9889,10 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
           prior.step === CAMPAIGN_PLANNING_STATES.OUTREACH_COPY_PLAN_APPROVED) &&
         !looksLikeOutreachCopyPlanRequest(userMessage) &&
         !looksLikeOutreachLaunchGateRequest(userMessage) &&
+        !looksLikeForceRebuildConfirmation(userMessage, {
+          campaignWorkingState:
+            opts.campaignWorkingState || prior.campaignWorkingState || null,
+        }) &&
         !looksLikeOperatorWorkflowRevision(userMessage, {
           ...approvalOpts,
           priorOutreachDraftPreview: priorDraftEarly,
@@ -11536,6 +11790,7 @@ module.exports = {
   produceOutreachCopyPlanApprovalResult,
   produceOutreachDraftPreviewResult,
   produceOutreachDraftPreviewRevisionResult,
+  produceOutreachDraftPreviewForceRebuildResult,
   produceOutreachDraftPreviewApprovalResult,
   produceOutreachLaunchGateResult,
   produceOutreachLaunchGateApprovalResult,
@@ -11570,6 +11825,8 @@ module.exports = {
   validateOutreachDraftAgainstInstructions,
   RESPONSE_MODES,
   PRIORITY_ORDER,
+  looksLikeForceRebuildConfirmation,
+  identifyStaleInjectionSources,
   STALE_OUTREACH_STRATEGY_FRAGMENT_RES,
   STALE_OUTREACH_COPY_PLAN_FRAGMENT_RES,
   STALE_OUTREACH_DRAFT_FRAGMENT_RES,

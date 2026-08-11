@@ -51,6 +51,8 @@ function emptyCampaignWorkingState() {
     rejectedOutputFingerprints: [],
     lastResponseMode: null,
     lastStaleDiagnostic: null,
+    awaitingForceRebuildConfirmation: false,
+    bypassStoredOutreachDraftPreview: false,
     updatedAt: null,
   };
 }
@@ -83,6 +85,9 @@ function ensureCampaignWorkingState(state = {}) {
 function looksLikeOperatorWorkflowRevision(text, opts = {}) {
   const s = String(text || '').trim();
   if (!s) return false;
+
+  // Force-rebuild confirmation is its own path — do not treat as a soft revise.
+  if (looksLikeForceRebuildConfirmation(s, opts)) return false;
 
   const step = String(opts.step || opts.currentStep || '').toLowerCase();
   const onDraft =
@@ -122,6 +127,47 @@ function looksLikeOperatorWorkflowRevision(text, opts = {}) {
     onDraft &&
     /\b(?:fix|correct|change|update|rewrite|redo|rework)\b/i.test(s) &&
     /\b(?:subject|follow-?up|street|draft|preview|copy|wording|phrasing)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * True when the operator confirms force-rebuild from operator instructions
+ * only — after a stale-source diagnostic. Must mutate the execution path,
+ * never re-ask for confirmation.
+ */
+function looksLikeForceRebuildConfirmation(text, opts = {}) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+
+  const working = ensureCampaignWorkingState({
+    campaignWorkingState: opts.campaignWorkingState || null,
+  });
+  const awaiting =
+    working.awaitingForceRebuildConfirmation === true ||
+    working.lastResponseMode === RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC ||
+    opts.awaitingForceRebuildConfirmation === true ||
+    opts.lastResponseMode === RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC;
+
+  const explicitForce =
+    /\bforce[-\s]?rebuild\b/i.test(s) ||
+    /\bbypass(?:ing)?\s+(?:the\s+)?(?:stored\s+)?(?:artifact|draft|outreach_draft_preview)\b/i.test(
+      s
+    ) ||
+    /\bfrom\s+operator\s+instructions?\s+only\b/i.test(s) ||
+    /\boperator\s+instructions?\s+only\b/i.test(s);
+
+  if (explicitForce) return true;
+
+  // Short affirmations only count while awaiting force-rebuild confirmation.
+  if (
+    awaiting &&
+    /^(?:yes|y|yeah|yep|ok|okay|sure|do\s+it|proceed|confirm(?:ed)?|go\s+ahead|force\s+it)(?:[.!]|\s|$)/i.test(
       s
     )
   ) {
@@ -546,6 +592,7 @@ function buildStaleSourceDiagnostic(opts = {}) {
   const responseMode = opts.responseMode || null;
   const failures = opts.validationFailures || [];
   const winningSource = opts.winningSource || 'unknown';
+  const injectionSources = opts.injectionSources || [];
 
   const lines = [
     'Stopped regenerating — the same rejected Outreach Draft Preview pattern appeared again after your correction.',
@@ -573,9 +620,20 @@ function buildStaleSourceDiagnostic(opts = {}) {
     `- Why stale fields survived: ${(failures || [])
       .map((f) => f.code)
       .join(', ') || opts.staleReason || 'unknown'}`,
-    '',
-    'I will not produce another draft until this stale source is identified or bypassed. Confirm whether to force-rebuild from operator instructions only (bypassing the stored artifact / workflow card renderer).',
   ];
+
+  if (injectionSources.length) {
+    lines.push(
+      `- Exact stale injection sources: ${injectionSources
+        .map((s) => `${s.source}.${s.field}=${JSON.stringify(s.value).slice(0, 80)}`)
+        .join('; ')}`
+    );
+  }
+
+  lines.push(
+    '',
+    'I will not produce another draft until this stale source is identified or bypassed. Confirm whether to force-rebuild from operator instructions only (bypassing the stored artifact / workflow card renderer).'
+  );
 
   return {
     kind: 'stale_source_diagnostic',
@@ -595,14 +653,176 @@ function buildStaleSourceDiagnostic(opts = {}) {
       responseMode,
       winningSource,
       validationFailures: failures,
+      injectionSources,
       directivesParsed: parsed.directives || [],
       priorityOrder: PRIORITY_ORDER,
+      awaitingForceRebuildConfirmation: true,
     },
     sendsMade: false,
     crmWritesMade: false,
     exportMade: false,
     accountChangesMade: false,
   };
+}
+
+/**
+ * Name exact stale fields/sources in a draft or rendered message.
+ * Used for fail-closed diagnostics — never re-show the stale draft.
+ */
+function identifyStaleInjectionSources(preview, message, learnings = {}) {
+  const hits = [];
+  const p = preview || {};
+  const msg = String(message || '');
+  const subjects = Array.isArray(p.subjectOptions) ? p.subjectOptions : [];
+  const expected =
+    learnings.tested_subject_line_pattern ||
+    '{{business_name}} - commercial cleaning';
+
+  for (const s of subjects) {
+    if (/^Anchor\s*-\s*commercial cleaning$/i.test(String(s).trim())) {
+      hits.push({
+        source: 'stored_outreach_draft_preview',
+        field: 'subjectOptions',
+        value: s,
+        reason: 'stale_expanded_subject',
+      });
+    }
+    if (
+      String(s).trim().toLowerCase() !== expected.trim().toLowerCase() &&
+      learnings.subject_keep_merge_tokens !== false
+    ) {
+      hits.push({
+        source: 'stored_outreach_draft_preview',
+        field: 'subjectOptions',
+        value: s,
+        reason: 'subject_mismatch',
+      });
+    }
+  }
+
+  if (/Anchor\s*-\s*commercial cleaning/i.test(msg)) {
+    hits.push({
+      source: 'rendered_message',
+      field: 'message',
+      value: 'Anchor - commercial cleaning',
+      reason: 'stale_expanded_subject_in_message',
+    });
+  }
+
+  for (const row of p.personalizationByProspect || []) {
+    if (STREET_ADDRESS_RE.test(String(row.personalizationNote || ''))) {
+      hits.push({
+        source: 'stored_outreach_draft_preview',
+        field: `personalizationByProspect[${row.companyName || '?'}]`,
+        value: row.personalizationNote,
+        reason: 'street_address_personalization',
+      });
+    }
+  }
+  if (STREET_ADDRESS_RE.test(msg)) {
+    hits.push({
+      source: 'rendered_message',
+      field: 'message',
+      value: 'street_address_pattern',
+      reason: 'street_address_in_message',
+    });
+  }
+
+  if (
+    (!Array.isArray(p.followUpDrafts) || p.followUpDrafts.length < 2) &&
+    Array.isArray(p.followUpSketch) &&
+    p.followUpSketch.some((line) =>
+      /restate the same CTA|close-the-loop|sketch/i.test(String(line))
+    )
+  ) {
+    hits.push({
+      source: 'stored_outreach_draft_preview',
+      field: 'followUpSketch',
+      value: p.followUpSketch[0],
+      reason: 'follow_ups_still_sketches',
+    });
+  }
+
+  if (p.operatorDigest) {
+    hits.push({
+      source: 'workflow_card_renderer',
+      field: 'operatorDigest',
+      value: p.operatorDigest.kind || 'digest',
+      reason: 'workflow_card_present',
+    });
+  }
+  if (/\bView evidence\b/i.test(msg)) {
+    hits.push({
+      source: 'workflow_card_renderer',
+      field: 'message',
+      value: 'View evidence',
+      reason: 'evidence_boilerplate',
+    });
+  }
+  if (/\bPrimary actions\b/i.test(msg)) {
+    hits.push({
+      source: 'workflow_card_renderer',
+      field: 'message',
+      value: 'Primary actions',
+      reason: 'primary_actions_boilerplate',
+    });
+  }
+  if (
+    learnings.claim_tested_winner === false &&
+    /tested winner/i.test(msg)
+  ) {
+    hits.push({
+      source: 'template_or_section_title',
+      field: 'message',
+      value: 'tested winner',
+      reason: 'unsupported_tested_winner_claim',
+    });
+  }
+
+  return hits;
+}
+
+/**
+ * Mark working state as awaiting an explicit force-rebuild confirmation.
+ */
+function markAwaitingForceRebuild(workingState, diagnostic = null) {
+  const next = ensureCampaignWorkingState({
+    campaignWorkingState: workingState,
+  });
+  next.awaitingForceRebuildConfirmation = true;
+  next.bypassStoredOutreachDraftPreview = false;
+  next.lastResponseMode = RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC;
+  if (diagnostic) next.lastStaleDiagnostic = diagnostic;
+  next.updatedAt = nowIso();
+  return next;
+}
+
+/**
+ * Apply confirmed force-rebuild: bypass stored draft on the next generation.
+ */
+function markForceRebuildBypass(workingState) {
+  const next = ensureCampaignWorkingState({
+    campaignWorkingState: workingState,
+  });
+  next.awaitingForceRebuildConfirmation = false;
+  next.bypassStoredOutreachDraftPreview = true;
+  next.rejectedOutputFingerprints = [];
+  next.lastResponseMode = RESPONSE_MODES.OPERATOR_CHAT_RESPONSE;
+  next.updatedAt = nowIso();
+  return next;
+}
+
+/**
+ * Clear bypass flag after a successful operator-chat rebuild.
+ */
+function clearForceRebuildBypass(workingState) {
+  const next = ensureCampaignWorkingState({
+    campaignWorkingState: workingState,
+  });
+  next.bypassStoredOutreachDraftPreview = false;
+  next.awaitingForceRebuildConfirmation = false;
+  next.updatedAt = nowIso();
+  return next;
 }
 
 function buildFollowUpEmailDrafts(opts = {}) {
@@ -735,6 +955,7 @@ module.exports = {
   emptyCampaignWorkingState,
   ensureCampaignWorkingState,
   looksLikeOperatorWorkflowRevision,
+  looksLikeForceRebuildConfirmation,
   parseOperatorChatDirectives,
   applyOperatorDirectivesToWorkingState,
   markDirectivesApplied,
@@ -744,6 +965,10 @@ module.exports = {
   draftOutputFingerprint,
   validateOutreachDraftAgainstInstructions,
   buildStaleSourceDiagnostic,
+  identifyStaleInjectionSources,
+  markAwaitingForceRebuild,
+  markForceRebuildBypass,
+  clearForceRebuildBypass,
   buildFollowUpEmailDrafts,
   formatOperatorChatDraftResponse,
 };
