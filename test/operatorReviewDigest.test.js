@@ -153,4 +153,38 @@ describe('Operator Review Digest — shared pattern', () => {
     assert.match(msg, /## Next step after approval/);
     assert.match(msg, /## Primary actions/);
   });
+
+  it('supports Held back section title and custom section order', () => {
+    const digest = buildOperatorReviewDigest({
+      title: 'Prospect Batch Review',
+      recommendedDecision: 'Approve 6 cold prospects as Batch 1.',
+      included: ['Acme'],
+      heldBack: [
+        'Cedar Management Group — source verification required',
+        'Keyrenter New England Property Management — existing relationship / nurture only',
+      ],
+      whyRecommended: [
+        'This keeps Batch 1 focused on clean, net-new prospects in the approved priority towns.',
+      ],
+      nextStepAfterApproval: 'Outreach Strategy Preview',
+      sectionOrder: [
+        'recommendedDecision',
+        'included',
+        'excluded',
+        'whyRecommended',
+        'nextStepAfterApproval',
+      ],
+      sectionTitles: { excluded: 'Held back' },
+      primaryActions: [],
+    });
+    const msg = formatOperatorReviewDigestMessage(digest);
+    assert.match(msg, /## Held back/);
+    assert.doesNotMatch(msg, /## What is excluded \/ held back/);
+    assert.ok(
+      msg.indexOf('## What is included') < msg.indexOf('## Held back')
+    );
+    assert.ok(
+      msg.indexOf('## Held back') < msg.indexOf('## Why this is recommended')
+    );
+  });
 });

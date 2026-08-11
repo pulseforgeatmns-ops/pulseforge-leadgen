@@ -31,6 +31,16 @@ const DIGEST_SECTION_TITLES = Object.freeze({
   primaryActions: 'Primary actions',
 });
 
+/** Prospect Batch Review default digest order (held-back visibility before why). */
+const PROSPECT_BATCH_REVIEW_DIGEST_SECTION_ORDER = Object.freeze([
+  'recommendedDecision',
+  'included',
+  'excluded',
+  'whyRecommended',
+  'nextStepAfterApproval',
+  'primaryActions',
+]);
+
 const VIEW_EVIDENCE_LABEL = 'View evidence';
 const EVIDENCE_COLLAPSED_NOTE =
   'Full sourced records are available under View evidence (collapsed by default).';
@@ -43,9 +53,12 @@ const EVIDENCE_COLLAPSED_NOTE =
  * @param {string|string[]} [input.whyRecommended]
  * @param {string|string[]} [input.included]
  * @param {string|string[]} [input.excluded]
+ * @param {string|string[]} [input.heldBack] - alias for excluded (Held back section)
  * @param {string|string[]} [input.keyWatchouts]
  * @param {string} [input.nextStepAfterApproval]
  * @param {Array<{id?:string,label:string,style?:string}>|string[]} [input.primaryActions]
+ * @param {string[]} [input.sectionOrder]
+ * @param {object} [input.sectionTitles]
  * @param {object} [input.evidence]
  * @param {string} [input.disclaimer]
  * @param {object} [input.meta]
@@ -53,6 +66,18 @@ const EVIDENCE_COLLAPSED_NOTE =
 function buildOperatorReviewDigest(input = {}) {
   const primaryActions = normalizePrimaryActions(input.primaryActions);
   const evidence = normalizeEvidence(input.evidence);
+  const excluded = asLineList(
+    input.heldBack != null ? input.heldBack : input.excluded
+  );
+  const sectionTitles = {
+    ...DIGEST_SECTION_TITLES,
+    ...(input.sectionTitles && typeof input.sectionTitles === 'object'
+      ? input.sectionTitles
+      : {}),
+  };
+  const sectionOrder = Array.isArray(input.sectionOrder) && input.sectionOrder.length
+    ? input.sectionOrder.slice()
+    : DIGEST_SECTION_KEYS.slice();
 
   return {
     kind: input.kind || 'operator_review_digest',
@@ -61,10 +86,13 @@ function buildOperatorReviewDigest(input = {}) {
     recommendedDecision: asText(input.recommendedDecision),
     whyRecommended: asLineList(input.whyRecommended),
     included: asLineList(input.included),
-    excluded: asLineList(input.excluded),
+    excluded,
+    heldBack: excluded,
     keyWatchouts: asLineList(input.keyWatchouts),
     nextStepAfterApproval: asText(input.nextStepAfterApproval),
     primaryActions,
+    sectionOrder,
+    sectionTitles,
     evidence,
     evidenceCollapsedByDefault: true,
     viewEvidenceLabel: VIEW_EVIDENCE_LABEL,
@@ -175,58 +203,65 @@ function slugifyAction(label) {
  */
 function formatOperatorReviewDigestMessage(digest) {
   const d = digest || {};
+  const titles = {
+    ...DIGEST_SECTION_TITLES,
+    ...(d.sectionTitles || {}),
+  };
+  const order =
+    Array.isArray(d.sectionOrder) && d.sectionOrder.length
+      ? d.sectionOrder
+      : DIGEST_SECTION_KEYS;
+
   const lines = [];
   if (d.title) {
     lines.push(d.title);
     lines.push('');
   }
 
-  const pushSection = (key, bodyLines) => {
-    const title = DIGEST_SECTION_TITLES[key] || key;
+  const bulletize = (items) =>
+    (items || []).map((line) =>
+      line.startsWith('-') || line.startsWith('•') ? line : `- ${line}`
+    );
+
+  const bodyFor = (key) => {
+    switch (key) {
+      case 'recommendedDecision':
+        return d.recommendedDecision ? [d.recommendedDecision] : [];
+      case 'whyRecommended':
+        return d.whyRecommended || [];
+      case 'included':
+        return bulletize(d.included);
+      case 'excluded':
+        return bulletize(d.excluded || d.heldBack);
+      case 'keyWatchouts':
+        return bulletize(d.keyWatchouts);
+      case 'nextStepAfterApproval':
+        return d.nextStepAfterApproval ? [d.nextStepAfterApproval] : [];
+      case 'primaryActions':
+        return (d.primaryActions || []).map((a) => `- ${a.label || a}`);
+      default:
+        return [];
+    }
+  };
+
+  order.forEach((key) => {
+    const bodyLines = bodyFor(key);
+    // Skip empty optional sections (watchouts / actions) when omitted from content.
+    if (
+      !bodyLines.length &&
+      (key === 'keyWatchouts' || key === 'primaryActions')
+    ) {
+      return;
+    }
+    const title = titles[key] || key;
     lines.push(`## ${title}`);
-    if (!bodyLines || !bodyLines.length) {
+    if (!bodyLines.length) {
       lines.push('_None._');
     } else {
       bodyLines.forEach((line) => lines.push(line));
     }
     lines.push('');
-  };
-
-  pushSection('recommendedDecision', d.recommendedDecision ? [d.recommendedDecision] : []);
-  pushSection(
-    'whyRecommended',
-    (d.whyRecommended || []).map((line) =>
-      line.startsWith('-') || line.startsWith('•') ? line : `- ${line}`
-    )
-  );
-  pushSection(
-    'included',
-    (d.included || []).map((line) =>
-      line.startsWith('-') || line.startsWith('•') ? line : `- ${line}`
-    )
-  );
-  pushSection(
-    'excluded',
-    (d.excluded || []).map((line) =>
-      line.startsWith('-') || line.startsWith('•') ? line : `- ${line}`
-    )
-  );
-  pushSection(
-    'keyWatchouts',
-    (d.keyWatchouts || []).map((line) =>
-      line.startsWith('-') || line.startsWith('•') ? line : `- ${line}`
-    )
-  );
-  pushSection(
-    'nextStepAfterApproval',
-    d.nextStepAfterApproval ? [d.nextStepAfterApproval] : []
-  );
-
-  const actions = d.primaryActions || [];
-  pushSection(
-    'primaryActions',
-    actions.map((a) => `- ${a.label || a}`)
-  );
+  });
 
   lines.push(EVIDENCE_COLLAPSED_NOTE);
   if (d.disclaimer) {
@@ -392,6 +427,7 @@ function splitDigestAndEvidence(message) {
 module.exports = {
   DIGEST_SECTION_KEYS,
   DIGEST_SECTION_TITLES,
+  PROSPECT_BATCH_REVIEW_DIGEST_SECTION_ORDER,
   VIEW_EVIDENCE_LABEL,
   EVIDENCE_COLLAPSED_NOTE,
   buildOperatorReviewDigest,

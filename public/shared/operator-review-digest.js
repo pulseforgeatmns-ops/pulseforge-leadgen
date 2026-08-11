@@ -21,6 +21,15 @@
     primaryActions: 'Primary actions',
   });
 
+  const DEFAULT_SECTION_ORDER = Object.freeze([
+    'recommendedDecision',
+    'whyRecommended',
+    'included',
+    'excluded',
+    'keyWatchouts',
+    'nextStepAfterApproval',
+  ]);
+
   function escapeHtml(value) {
     return String(value == null ? '' : value)
       .replace(/&/g, '&amp;')
@@ -40,6 +49,82 @@
       list.map((item) => '<li>' + escapeHtml(item) + '</li>').join('') +
       '</ul>'
     );
+  }
+
+  function sectionBodyHtml(key, digest) {
+    const d = digest || {};
+    switch (key) {
+      case 'recommendedDecision':
+        return (
+          '<p data-ord-field="recommendedDecision">' +
+          escapeHtml(d.recommendedDecision || '—') +
+          '</p>'
+        );
+      case 'whyRecommended':
+        if ((d.whyRecommended || []).length === 1) {
+          return (
+            '<p data-ord-field="whyRecommended">' +
+            escapeHtml(d.whyRecommended[0]) +
+            '</p>'
+          );
+        }
+        return listHtml(d.whyRecommended, '—');
+      case 'included':
+        return listHtml(d.included, 'None included.');
+      case 'excluded':
+        return listHtml(d.excluded || d.heldBack, 'Nothing held back.');
+      case 'keyWatchouts':
+        return listHtml(d.keyWatchouts, 'No watchouts.');
+      case 'nextStepAfterApproval':
+        return (
+          '<p data-ord-field="nextStepAfterApproval">' +
+          escapeHtml(d.nextStepAfterApproval || '—') +
+          '</p>'
+        );
+      default:
+        return '';
+    }
+  }
+
+  function digestSectionsHtml(digest) {
+    const d = digest || {};
+    const titles = Object.assign({}, SECTION_TITLES, d.sectionTitles || {});
+    const order =
+      Array.isArray(d.sectionOrder) && d.sectionOrder.length
+        ? d.sectionOrder.filter((k) => k !== 'primaryActions')
+        : DEFAULT_SECTION_ORDER.slice();
+
+    let html = '<div class="ord-digest" data-role="operator-digest">';
+    order.forEach((key) => {
+      const items =
+        key === 'excluded'
+          ? d.excluded || d.heldBack
+          : key === 'whyRecommended'
+            ? d.whyRecommended
+            : key === 'included'
+              ? d.included
+              : key === 'keyWatchouts'
+                ? d.keyWatchouts
+                : null;
+      if (
+        (key === 'keyWatchouts' || key === 'excluded') &&
+        Array.isArray(items) &&
+        !items.length
+      ) {
+        // Still show Held back as empty for transparency when titled Held back?
+        // Show excluded/held back even when empty so operators see the section.
+        if (key === 'keyWatchouts') return;
+      }
+      html +=
+        '<p><strong data-ord-section="' +
+        escapeHtml(key) +
+        '">' +
+        escapeHtml(titles[key] || key) +
+        '</strong></p>' +
+        sectionBodyHtml(key, d);
+    });
+    html += '</div>';
+    return html;
   }
 
   function evidenceRecordHtml(row) {
@@ -211,37 +296,7 @@
     const kicker = options.kicker || d.title || 'Operator Review';
     const actionsBeforeEvidence = options.actionsBeforeEvidence !== false;
 
-    const digestBody =
-      '<div class="ord-digest" data-role="operator-digest">' +
-      '<p><strong>' +
-      escapeHtml(SECTION_TITLES.recommendedDecision) +
-      '</strong></p>' +
-      '<p data-ord-field="recommendedDecision">' +
-      escapeHtml(d.recommendedDecision || '—') +
-      '</p>' +
-      '<p><strong>' +
-      escapeHtml(SECTION_TITLES.whyRecommended) +
-      '</strong></p>' +
-      listHtml(d.whyRecommended, '—') +
-      '<p><strong>' +
-      escapeHtml(SECTION_TITLES.included) +
-      '</strong></p>' +
-      listHtml(d.included, 'None included.') +
-      '<p><strong>' +
-      escapeHtml(SECTION_TITLES.excluded) +
-      '</strong></p>' +
-      listHtml(d.excluded, 'Nothing held back.') +
-      '<p><strong>' +
-      escapeHtml(SECTION_TITLES.keyWatchouts) +
-      '</strong></p>' +
-      listHtml(d.keyWatchouts, 'No watchouts.') +
-      '<p><strong>' +
-      escapeHtml(SECTION_TITLES.nextStepAfterApproval) +
-      '</strong></p>' +
-      '<p data-ord-field="nextStepAfterApproval">' +
-      escapeHtml(d.nextStepAfterApproval || '—') +
-      '</p>' +
-      '</div>';
+    const digestBody = digestSectionsHtml(d);
 
     const actionsHtml = primaryActionsHtml(d.primaryActions, {
       disabled: options.actionsDisabled,
@@ -287,10 +342,14 @@
     const evidenceIdx = source.indexOf('data-role="view-evidence"');
     const actionsIdx = source.indexOf('data-role="primary-actions"');
     const evidenceOpen = /data-role="view-evidence"[^>]*\sopen\b/i.test(source);
+    const heldBackTitle =
+      /data-ord-section="excluded"[^>]*>\s*Held back\s*</i.test(source) ||
+      /<strong[^>]*>\s*Held back\s*<\/strong>/i.test(source);
     return {
       hasDigest: digestIdx >= 0,
       hasEvidenceDrawer: evidenceIdx >= 0,
       hasPrimaryActions: actionsIdx >= 0,
+      hasHeldBackSection: heldBackTitle,
       digestBeforeEvidence:
         digestIdx >= 0 && evidenceIdx >= 0 && digestIdx < evidenceIdx,
       actionsBeforeEvidence:
@@ -304,8 +363,10 @@
 
   return {
     SECTION_TITLES,
+    DEFAULT_SECTION_ORDER,
     escapeHtml,
     listHtml,
+    digestSectionsHtml,
     evidenceRecordHtml,
     evidenceDrawerHtml,
     primaryActionsHtml,
