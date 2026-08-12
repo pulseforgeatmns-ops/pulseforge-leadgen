@@ -20,6 +20,8 @@ const RESPONSE_MODES = Object.freeze({
   OPERATOR_CHAT_RESPONSE: 'operator_chat_response',
   OPERATOR_STATE_SUMMARY: 'operator_state_summary',
   STALE_SOURCE_DIAGNOSTIC: 'stale_source_diagnostic',
+  /** Explicit send/export/CRM/account confirmation — never auto-execute. */
+  EXECUTION_CONFIRMATION: 'execution_confirmation',
 });
 
 const PRIORITY_ORDER = Object.freeze([
@@ -369,8 +371,18 @@ function countRejectedFingerprint(workingState, fingerprint) {
 
 /**
  * Select Workflow Review Card vs Operator Chat Response.
+ * Prefer conversation-policy selection when available (post workflow/state).
  */
 function selectResponseMode(opts = {}) {
+  // Lazy require avoids circular init with ConversationalResponsePolicy.
+  let policySelect = null;
+  try {
+    policySelect =
+      require('./ConversationalResponsePolicy').selectResponseModeWithPolicy;
+  } catch (_err) {
+    policySelect = null;
+  }
+
   const parsed = opts.parsedDirectives || parseOperatorChatDirectives(opts.text);
   const learnings = opts.learnings || {};
   const messageClass = opts.messageClass || null;
@@ -385,6 +397,10 @@ function selectResponseMode(opts = {}) {
     return RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC;
   }
 
+  if (opts.executionPending === true || opts.isExecutionRequest === true) {
+    return RESPONSE_MODES.EXECUTION_CONFIRMATION;
+  }
+
   if (
     isRevision ||
     messageClass === 'correction' ||
@@ -394,21 +410,35 @@ function selectResponseMode(opts = {}) {
     return RESPONSE_MODES.OPERATOR_CHAT_RESPONSE;
   }
 
-  // Initial structured review gates keep the digest card.
-  if (
-    opts.isInitialReviewGate ||
-    opts.intent === 'produce_outreach_draft_preview' ||
-    opts.intent === 'outreach_copy_plan_approved'
-  ) {
-    return RESPONSE_MODES.WORKFLOW_REVIEW_CARD;
-  }
-
+  // Already-approved readiness must never re-open a formal review card.
   if (
     opts.intent === 'outreach_launch_gate_approved' ||
     opts.launchGateApproved === true ||
     opts.approvedReadinessOnly === true
   ) {
     return RESPONSE_MODES.OPERATOR_STATE_SUMMARY;
+  }
+
+  // Initial structured review gates keep the digest card.
+  if (
+    opts.isInitialReviewGate ||
+    opts.intent === 'produce_outreach_draft_preview' ||
+    opts.intent === 'outreach_copy_plan_approved' ||
+    opts.intent === 'produce_outreach_launch_gate' ||
+    opts.intent === 'show_outreach_launch_gate' ||
+    opts.intent === 'outreach_draft_preview_approved'
+  ) {
+    return RESPONSE_MODES.WORKFLOW_REVIEW_CARD;
+  }
+
+  if (typeof policySelect === 'function') {
+    const selected = policySelect({
+      ...opts,
+      parsedDirectives: parsed,
+      isRevision,
+      messageClass,
+    });
+    if (selected && selected.responseMode) return selected.responseMode;
   }
 
   return RESPONSE_MODES.WORKFLOW_REVIEW_CARD;
@@ -603,9 +633,7 @@ function buildStaleSourceDiagnostic(opts = {}) {
   const winningSource = opts.winningSource || 'unknown';
   const injectionSources = opts.injectionSources || [];
 
-  const lines = [
-    'Stopped regenerating — the same rejected Outreach Draft Preview pattern appeared again after your correction.',
-    '',
+  const technicalLines = [
     'Stale source diagnostic:',
     `- Campaign memory retrieved: subject_pattern=${JSON.stringify(
       learnings.tested_subject_line_pattern || null
@@ -632,22 +660,51 @@ function buildStaleSourceDiagnostic(opts = {}) {
   ];
 
   if (injectionSources.length) {
-    lines.push(
+    technicalLines.push(
       `- Exact stale injection sources: ${injectionSources
         .map((s) => `${s.source}.${s.field}=${JSON.stringify(s.value).slice(0, 80)}`)
         .join('; ')}`
     );
   }
 
-  lines.push(
-    '',
-    'I will not produce another draft until this stale source is identified or bypassed. Confirm whether to force-rebuild from operator instructions only (bypassing the stored artifact / workflow card renderer).'
-  );
+  // Conversational diagnostic: plain language first, technical detail second.
+  let message;
+  try {
+    const {
+      formatOperatorDiagnosticMessage,
+      CONVERSATION_MODES,
+    } = require('./ConversationalResponsePolicy');
+    const composed = formatOperatorDiagnosticMessage({
+      plainLanguage:
+        opts.plainLanguage ||
+        'I found the problem: campaign memory was correct, but the stored draft renderer was still winning.',
+      stopLine:
+        opts.stopLine ||
+        "I'm stopping before showing another stale draft.",
+      technicalDetail: technicalLines.join('\n'),
+      nextAction:
+        opts.nextAction ||
+        'Confirm whether to force-rebuild from operator instructions only (bypassing the stored artifact / workflow card renderer).',
+    });
+    message = composed.message;
+    void CONVERSATION_MODES;
+  } catch (_err) {
+    message = [
+      'I found the problem: campaign memory was correct, but the stored draft renderer was still winning.',
+      '',
+      "I'm stopping before showing another stale draft.",
+      '',
+      ...technicalLines,
+      '',
+      'Confirm whether to force-rebuild from operator instructions only (bypassing the stored artifact / workflow card renderer).',
+    ].join('\n');
+  }
 
   return {
     kind: 'stale_source_diagnostic',
-    message: lines.join('\n'),
+    message,
     responseMode: RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC,
+    conversationMode: 'operator_diagnostic',
     diagnostic: {
       campaignMemory: {
         tested_subject_line_pattern: learnings.tested_subject_line_pattern || null,
@@ -945,12 +1002,12 @@ function formatOperatorChatDraftResponse(preview, opts = {}) {
   lines.push('');
   lines.push(
     p.disclaimer ||
-      'Draft preview only — no sends, CRM writes, exports, or account changes.'
+      'Nothing external has happened. Sends, export, and CRM writes remain locked.'
   );
   lines.push('');
   lines.push(
     opts.closingQuestion ||
-      'Does this Outreach Draft Preview look right to approve, or do you want another revision?'
+      'Do you approve this Outreach Draft Preview, or do you want revisions?'
   );
 
   return lines.join('\n').trim();
