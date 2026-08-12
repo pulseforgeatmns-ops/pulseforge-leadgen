@@ -166,6 +166,17 @@ const READINESS_SUBSTEPS = Object.freeze({
     closingAsk:
       "Once you choose a path, I'll mark operational path as selected. Path selection is not execute approval.",
   }),
+  reply_monitoring_batch1: Object.freeze({
+    id: 'reply_monitoring_batch1',
+    label: 'reply monitoring / Batch 1 review process',
+    match:
+      /\breply\s+monitoring(?:\s*\/\s*|\s+)(?:Batch\s*1\s+)?review(?:\s+process)?\b|\breply\s+monitoring\b|\bBatch\s*1\s+review\b/i,
+    questions: Object.freeze([
+      'Who will monitor replies, how should responses be reviewed, and should broader rollout remain blocked until Batch 1 results are reviewed?',
+    ]),
+    closingAsk:
+      "Once you answer those, I'll mark reply monitoring / Batch 1 review as confirmed or note what still needs review.",
+  }),
 });
 
 const READINESS_SUBSTEP_SAFETY_LINE =
@@ -661,6 +672,8 @@ function looksLikeNonExecutionIntent(text) {
   }
   // Follow-up tracking answers are readiness confirmation — never execution.
   if (parseFollowUpTrackingFields(s).hasAny) return true;
+  // Reply monitoring / Batch 1 review answers are readiness — never execution.
+  if (parseReplyMonitoringBatchReviewFields(s).hasAny) return true;
   if (/\b(?:summarize|summarise)\b/i.test(s)) return true;
   if (
     /\bhelp\s+me\s+(?:decide|resolve|understand|review|choose)\b/i.test(s)
@@ -1249,6 +1262,7 @@ function normalizeReadinessItemId(id) {
   if (
     s === 'reply_monitoring' ||
     s === 'reply_monitoring_owner' ||
+    s === 'reply_monitoring_batch_review' ||
     s === 'broader_rollout_batch1'
   ) {
     return 'reply_monitoring_batch1';
@@ -1509,6 +1523,334 @@ function mergeFollowUpTrackingState(prior = {}, parsed = {}) {
   };
 }
 
+/**
+ * Canonical reply-monitoring owner display.
+ */
+function normalizeReplyMonitoringOwner(raw) {
+  const s = String(raw || '')
+    .trim()
+    .replace(/[.;,]+$/, '')
+    .trim();
+  return s || null;
+}
+
+/**
+ * Canonical response-review process label.
+ */
+function normalizeResponseReviewProcess(raw) {
+  const s = String(raw || '')
+    .trim()
+    .replace(/[.;,]+$/, '')
+    .trim();
+  if (!s) return null;
+  if (
+    /\breview(?:ed|s)?\s+manually\b/i.test(s) ||
+    /\bmanual(?:ly)?\s+(?:review|reviewed)\b/i.test(s)
+  ) {
+    return 'Responses reviewed manually before any follow-up or broader rollout decision';
+  }
+  return s;
+}
+
+/**
+ * Canonical positive-reply handling label.
+ */
+function normalizePositiveReplyHandling(raw) {
+  const s = String(raw || '')
+    .trim()
+    .replace(/[.;,]+$/, '')
+    .trim();
+  if (!s) return null;
+  if (
+    /\bconversation\b/i.test(s) ||
+    /\bwalkthrough\b/i.test(s) ||
+    /\bopportunit(?:y|ies)\b/i.test(s)
+  ) {
+    return 'Positive replies handled as conversation/walkthrough opportunities';
+  }
+  return s;
+}
+
+/**
+ * Canonical negative / not-now reply handling label.
+ */
+function normalizeNegativeReplyHandling(raw) {
+  const s = String(raw || '')
+    .trim()
+    .replace(/[.;,]+$/, '')
+    .trim();
+  if (!s) return null;
+  if (/\brespect(?:ed|s)?\b/i.test(s) || /\bnoted?\b/i.test(s)) {
+    return 'Negative or not-now replies respected and noted';
+  }
+  return s;
+}
+
+/**
+ * Parse reply monitoring / Batch 1 review fields from free text.
+ * Interprets answers relative to the active reply-monitoring substep —
+ * operator does not need to restate the readiness key.
+ * @returns {{
+ *   replyMonitoringOwner: string|null,
+ *   responseReviewProcess: string|null,
+ *   positiveReplyHandling: string|null,
+ *   negativeReplyHandling: string|null,
+ *   broaderRolloutBlocked: boolean|null,
+ *   batch1ReviewBeforeExpansion: boolean|null,
+ *   updatedFields: string[],
+ *   hasAny: boolean
+ * }}
+ */
+function parseReplyMonitoringBatchReviewFields(text) {
+  const s = String(text || '').trim();
+  const empty = {
+    replyMonitoringOwner: null,
+    responseReviewProcess: null,
+    positiveReplyHandling: null,
+    negativeReplyHandling: null,
+    broaderRolloutBlocked: null,
+    batch1ReviewBeforeExpansion: null,
+    updatedFields: [],
+    hasAny: false,
+  };
+  if (!s) return empty;
+
+  const updatedFields = [];
+  let replyMonitoringOwner = null;
+  let responseReviewProcess = null;
+  let positiveReplyHandling = null;
+  let negativeReplyHandling = null;
+  let broaderRolloutBlocked = null;
+  let batch1ReviewBeforeExpansion = null;
+
+  const ownerLabeled = s.match(
+    new RegExp(
+      READINESS_FIELD_LINE_PREFIX +
+        String.raw`(?:reply\s+)?monitoring\s+owner(?:\s*\/\s*process)?\s*[:\-–—]\s*([^\n]+)`,
+      'i'
+    )
+  );
+  const ownerPhrase = s.match(
+    /\b(?:who\s+will\s+monitor\s+replies|monitor(?:ing)?\s+owner)\b[\s\S]{0,40}?\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)+)\b/
+  );
+  if (ownerLabeled) {
+    replyMonitoringOwner = normalizeReplyMonitoringOwner(ownerLabeled[1]);
+  } else if (ownerPhrase) {
+    replyMonitoringOwner = normalizeReplyMonitoringOwner(ownerPhrase[1]);
+  } else if (
+    /\bJacob\s+Maynard\b/i.test(s) &&
+    /\b(?:monitor(?:ing)?|replies)\b/i.test(s)
+  ) {
+    replyMonitoringOwner = 'Jacob Maynard';
+  }
+  if (replyMonitoringOwner) updatedFields.push('reply_monitoring_owner');
+
+  if (
+    /\bresponses?\s+should\s+be\s+reviewed\s+manually\b/i.test(s) ||
+    /\breview(?:ed|s)?\s+manually\s+before\s+any\s+follow[- ]?up\b/i.test(s) ||
+    /\bmanual(?:ly)?\s+(?:review|reviewed)\b[\s\S]{0,80}\bbroader\s+rollout\b/i.test(
+      s
+    ) ||
+    new RegExp(
+      READINESS_FIELD_LINE_PREFIX +
+        String.raw`response(?:s)?\s+review(?:\s+process)?\s*[:\-–—]\s*([^\n]+)`,
+      'i'
+    ).test(s)
+  ) {
+    const labeled = s.match(
+      new RegExp(
+        READINESS_FIELD_LINE_PREFIX +
+          String.raw`response(?:s)?\s+review(?:\s+process)?\s*[:\-–—]\s*([^\n]+)`,
+        'i'
+      )
+    );
+    responseReviewProcess = normalizeResponseReviewProcess(
+      labeled ? labeled[1] : 'reviewed manually'
+    );
+    updatedFields.push('response_review_process');
+  }
+
+  if (
+    /\bpositive\s+replies?\b[\s\S]{0,120}\b(?:conversation|walkthrough|opportunit)/i.test(
+      s
+    ) ||
+    new RegExp(
+      READINESS_FIELD_LINE_PREFIX +
+        String.raw`positive\s+replies?(?:\s+handling)?\s*[:\-–—]\s*([^\n]+)`,
+      'i'
+    ).test(s)
+  ) {
+    const labeled = s.match(
+      new RegExp(
+        READINESS_FIELD_LINE_PREFIX +
+          String.raw`positive\s+replies?(?:\s+handling)?\s*[:\-–—]\s*([^\n]+)`,
+        'i'
+      )
+    );
+    positiveReplyHandling = normalizePositiveReplyHandling(
+      labeled
+        ? labeled[1]
+        : 'conversation/walkthrough opportunities'
+    );
+    updatedFields.push('positive_reply_handling');
+  }
+
+  if (
+    /\b(?:negative(?:\s+or\s+not[- ]?now)?|not[- ]?now)\s+replies?\b[\s\S]{0,120}\b(?:respect(?:ed|s)?|noted?)\b/i.test(
+      s
+    ) ||
+    new RegExp(
+      READINESS_FIELD_LINE_PREFIX +
+        String.raw`(?:negative(?:\s+or\s+not[- ]?now)?|not[- ]?now)\s+replies?(?:\s+handling)?\s*[:\-–—]\s*([^\n]+)`,
+      'i'
+    ).test(s)
+  ) {
+    const labeled = s.match(
+      new RegExp(
+        READINESS_FIELD_LINE_PREFIX +
+          String.raw`(?:negative(?:\s+or\s+not[- ]?now)?|not[- ]?now)\s+replies?(?:\s+handling)?\s*[:\-–—]\s*([^\n]+)`,
+        'i'
+      )
+    );
+    negativeReplyHandling = normalizeNegativeReplyHandling(
+      labeled ? labeled[1] : 'respected and noted'
+    );
+    updatedFields.push('negative_reply_handling');
+  }
+
+  if (
+    /\bbroader\s+rollout\s+remains?\s+blocked\b/i.test(s) ||
+    /\bbroader\s+rollout\b[\s\S]{0,80}\bblocked\s+until\s+Batch\s*1\b/i.test(
+      s
+    ) ||
+    /\bbroader\s+rollout\s+blocked\s*[:\-–—]\s*(?:yes|true|blocked)\b/i.test(s)
+  ) {
+    broaderRolloutBlocked = true;
+    updatedFields.push('broader_rollout_blocked');
+  } else if (
+    /\bbroader\s+rollout\s+(?:is\s+)?(?:not\s+blocked|unblocked|approved)\b/i.test(
+      s
+    ) ||
+    /\bbroader\s+rollout\s+blocked\s*[:\-–—]\s*(?:no|false)\b/i.test(s)
+  ) {
+    broaderRolloutBlocked = false;
+    updatedFields.push('broader_rollout_blocked');
+  }
+
+  if (
+    /\bBatch\s*1\s+results?\s+(?:should\s+be\s+)?reviewed\s+before\s+expanding\b/i.test(
+      s
+    ) ||
+    /\bbefore\s+expanding\s+to\s+Cedar\b/i.test(s) ||
+    /\bBatch\s*1\s+review\s+(?:required\s+)?before\s+expansion\b/i.test(s) ||
+    /\bany\s+new\s+prospect\s+segment\b/i.test(s)
+  ) {
+    batch1ReviewBeforeExpansion = true;
+    updatedFields.push('batch1_review_before_expansion');
+  } else if (
+    /\bBatch\s*1\s+review\s+(?:before\s+expansion\s+)?(?:not\s+required|optional)\b/i.test(
+      s
+    ) ||
+    /\bBatch\s*1\s+review\s+before\s+expansion\s*[:\-–—]\s*(?:no|false)\b/i.test(
+      s
+    )
+  ) {
+    batch1ReviewBeforeExpansion = false;
+    updatedFields.push('batch1_review_before_expansion');
+  }
+
+  return {
+    replyMonitoringOwner,
+    responseReviewProcess,
+    positiveReplyHandling,
+    negativeReplyHandling,
+    broaderRolloutBlocked,
+    batch1ReviewBeforeExpansion,
+    updatedFields: [...new Set(updatedFields)],
+    hasAny: updatedFields.length > 0,
+  };
+}
+
+/**
+ * Merge prior reply-monitoring / Batch 1 review slots with newly parsed fields.
+ */
+function mergeReplyMonitoringBatchReviewState(prior = {}, parsed = {}) {
+  const replyMonitoringOwner =
+    parsed.replyMonitoringOwner != null && parsed.replyMonitoringOwner !== ''
+      ? parsed.replyMonitoringOwner
+      : prior.replyMonitoringOwner || prior.monitoringOwner || null;
+  const responseReviewProcess =
+    parsed.responseReviewProcess != null && parsed.responseReviewProcess !== ''
+      ? parsed.responseReviewProcess
+      : prior.responseReviewProcess || null;
+  const positiveReplyHandling =
+    parsed.positiveReplyHandling != null && parsed.positiveReplyHandling !== ''
+      ? parsed.positiveReplyHandling
+      : prior.positiveReplyHandling || null;
+  const negativeReplyHandling =
+    parsed.negativeReplyHandling != null && parsed.negativeReplyHandling !== ''
+      ? parsed.negativeReplyHandling
+      : prior.negativeReplyHandling || null;
+  const broaderRolloutBlocked =
+    parsed.broaderRolloutBlocked != null
+      ? parsed.broaderRolloutBlocked
+      : prior.broaderRolloutBlocked != null
+        ? prior.broaderRolloutBlocked
+        : null;
+  const batch1ReviewBeforeExpansion =
+    parsed.batch1ReviewBeforeExpansion != null
+      ? parsed.batch1ReviewBeforeExpansion
+      : prior.batch1ReviewBeforeExpansion != null
+        ? prior.batch1ReviewBeforeExpansion
+        : null;
+  const confirmed = Boolean(
+    replyMonitoringOwner &&
+      responseReviewProcess &&
+      positiveReplyHandling &&
+      negativeReplyHandling &&
+      broaderRolloutBlocked !== null &&
+      batch1ReviewBeforeExpansion !== null
+  );
+  return {
+    replyMonitoringOwner,
+    responseReviewProcess,
+    positiveReplyHandling,
+    negativeReplyHandling,
+    broaderRolloutBlocked,
+    batch1ReviewBeforeExpansion,
+    replyMonitoringBatch1Confirmed: confirmed,
+    batch1ResultsReviewed: Boolean(
+      confirmed && broaderRolloutBlocked === true && batch1ReviewBeforeExpansion
+    ),
+    missing: [
+      !replyMonitoringOwner ? 'reply monitoring owner' : null,
+      !responseReviewProcess ? 'response review process' : null,
+      !positiveReplyHandling ? 'positive reply handling' : null,
+      !negativeReplyHandling ? 'negative/not-now reply handling' : null,
+      broaderRolloutBlocked === null
+        ? 'broader rollout blocked status'
+        : null,
+      batch1ReviewBeforeExpansion === null
+        ? 'Batch 1 review requirement before expansion'
+        : null,
+    ].filter(Boolean),
+  };
+}
+
+/**
+ * True when active readiness id is the reply-monitoring / Batch 1 substep.
+ */
+function isReplyMonitoringBatchReviewItemId(id) {
+  const n = normalizeReadinessItemId(id) || id;
+  return (
+    n === 'reply_monitoring_batch1' ||
+    n === 'reply_monitoring_batch_review' ||
+    n === 'reply_monitoring' ||
+    n === 'reply_monitoring_owner' ||
+    n === 'broader_rollout_batch1'
+  );
+}
+
 function resolveActiveReadinessItemId(opts = {}) {
   const raw =
     opts.activeReadinessItemId ||
@@ -1565,6 +1907,16 @@ function looksLikeReadinessFieldCorrection(text, opts = {}) {
     return true;
   }
 
+  // Reply monitoring / Batch 1 review answers inside the active substep.
+  const monitoringParsed = parseReplyMonitoringBatchReviewFields(s);
+  if (
+    monitoringParsed.hasAny &&
+    (isReplyMonitoringBatchReviewItemId(activeId) ||
+      monitoringParsed.updatedFields.length >= 3)
+  ) {
+    return true;
+  }
+
   // Selecting a checklist item is not a field correction.
   if (detectSelectedReadinessItem(s) && !parseSenderIdentityFields(s).hasAny) {
     // Allow "resolve sender identity" without fields to stay as substep selection.
@@ -1598,6 +1950,9 @@ function looksLikeReadinessFieldCorrection(text, opts = {}) {
   ) {
     if (followUpParsed.hasAny) return true;
   }
+  if (isReplyMonitoringBatchReviewItemId(activeId)) {
+    if (monitoringParsed.hasAny) return true;
+  }
 
   // Labeled sender block even without an active substep id (post-approval).
   // Support bullet prefixes ("- Sender name:") via parseSenderIdentityFields.
@@ -1610,13 +1965,24 @@ function looksLikeReadinessFieldCorrection(text, opts = {}) {
   }
 
   // Labeled reply-handling block (inbox / match / monitoring owner).
+  // Do not treat a reply-monitoring Batch 1 answer as reply-inbox handling.
   const replyFields = parseReplyHandlingFields(s);
+  const monitoringOnlyOwner =
+    replyFields.updatedFields.length === 1 &&
+    replyFields.updatedFields[0] === 'monitoring_owner' &&
+    monitoringParsed.hasAny;
   if (
-    replyFields.updatedFields.length >= 2 ||
-    (replyFields.replyInbox &&
-      replyFields.sameAsSender !== null &&
-      replyFields.monitoringOwner)
+    !monitoringOnlyOwner &&
+    (replyFields.updatedFields.length >= 2 ||
+      (replyFields.replyInbox &&
+        replyFields.sameAsSender !== null &&
+        replyFields.monitoringOwner))
   ) {
+    return true;
+  }
+
+  // Labeled reply-monitoring / Batch 1 review block.
+  if (monitoringParsed.updatedFields.length >= 3) {
     return true;
   }
 
@@ -1699,34 +2065,56 @@ function composeReadinessFieldCorrection(context = {}) {
       activeId === 'operational_path_selection',
   });
   const followUpParsed = parseFollowUpTrackingFields(text);
+  const monitoringParsed = parseReplyMonitoringBatchReviewFields(text);
+  const priorActiveId = normalizeReadinessItemId(activeId) || activeId;
 
-  // Infer item from fields when active id is missing / mismatched.
-  if (
+  // Prefer active-substep context. Only infer from fields when the active
+  // id is missing / clearly mismatched — never steal a monitoring answer
+  // into reply_handling just because "monitoring owner" is present.
+  if (isReplyMonitoringBatchReviewItemId(priorActiveId) && monitoringParsed.hasAny) {
+    activeId = 'reply_monitoring_batch1';
+  } else if (
+    monitoringParsed.hasAny &&
+    monitoringParsed.updatedFields.length >= 3 &&
+    !senderParsed.hasAny &&
+    !pathParsed.hasAny &&
+    !followUpParsed.hasAny
+  ) {
+    activeId = 'reply_monitoring_batch1';
+  } else if (
     followUpParsed.hasAny &&
     !senderParsed.hasAny &&
-    !replyParsed.hasAny &&
-    !pathParsed.hasAny
+    !pathParsed.hasAny &&
+    !monitoringParsed.hasAny &&
+    !(
+      replyParsed.hasAny &&
+      (replyParsed.replyInbox || replyParsed.sameAsSender !== null)
+    )
   ) {
     activeId = 'follow_up_tracking';
   } else if (
     pathParsed.hasAny &&
     !senderParsed.hasAny &&
     !replyParsed.hasAny &&
-    !followUpParsed.hasAny
+    !followUpParsed.hasAny &&
+    !monitoringParsed.hasAny
   ) {
     activeId = 'operational_path';
   } else if (
     senderParsed.hasAny &&
     !replyParsed.hasAny &&
     !pathParsed.hasAny &&
-    !followUpParsed.hasAny
+    !followUpParsed.hasAny &&
+    !monitoringParsed.hasAny
   ) {
     activeId = 'sender_identity';
   } else if (
     replyParsed.hasAny &&
     !senderParsed.hasAny &&
     !pathParsed.hasAny &&
-    !followUpParsed.hasAny
+    !followUpParsed.hasAny &&
+    !monitoringParsed.hasAny &&
+    !isReplyMonitoringBatchReviewItemId(priorActiveId)
   ) {
     activeId = 'reply_handling';
   }
@@ -1738,6 +2126,7 @@ function composeReadinessFieldCorrection(context = {}) {
   let replyHandlingState = null;
   let operationalPathState = null;
   let followUpTrackingState = null;
+  let replyMonitoringBatchReviewState = null;
   let nextItem = null;
   let itemConfirmed = false;
   const corrected = senderParsed.updatedFields.slice();
@@ -2109,6 +2498,140 @@ function composeReadinessFieldCorrection(context = {}) {
         lines.push(READINESS_SUBSTEP_SAFETY_LINE);
       }
     }
+  } else if (isReplyMonitoringBatchReviewItemId(activeId)) {
+    const priorMonitoring = {
+      replyMonitoringOwner:
+        slots.replyMonitoringOwner || context.replyMonitoringOwner || null,
+      monitoringOwner:
+        slots.replyMonitoringOwner || context.replyMonitoringOwner || null,
+      responseReviewProcess:
+        slots.responseReviewProcess || context.responseReviewProcess || null,
+      positiveReplyHandling:
+        slots.positiveReplyHandling || context.positiveReplyHandling || null,
+      negativeReplyHandling:
+        slots.negativeReplyHandling || context.negativeReplyHandling || null,
+      broaderRolloutBlocked:
+        slots.broaderRolloutBlocked != null
+          ? slots.broaderRolloutBlocked
+          : context.broaderRolloutBlocked != null
+            ? context.broaderRolloutBlocked
+            : null,
+      batch1ReviewBeforeExpansion:
+        slots.batch1ReviewBeforeExpansion != null
+          ? slots.batch1ReviewBeforeExpansion
+          : context.batch1ReviewBeforeExpansion != null
+            ? context.batch1ReviewBeforeExpansion
+            : null,
+    };
+    const monitoringState = mergeReplyMonitoringBatchReviewState(
+      priorMonitoring,
+      monitoringParsed
+    );
+    replyMonitoringBatchReviewState = monitoringState;
+    activeId = 'reply_monitoring_batch1';
+
+    if (monitoringState.replyMonitoringBatch1Confirmed) {
+      itemConfirmed = true;
+      const broaderLine = monitoringState.broaderRolloutBlocked
+        ? 'Broader rollout remains blocked until Batch 1 results are reviewed'
+        : 'Broader rollout is not blocked pending Batch 1 review';
+      const expansionLine = monitoringState.batch1ReviewBeforeExpansion
+        ? 'Batch 1 results reviewed before expanding to Cedar, optional Manchester candidates, or any new prospect segment'
+        : 'Batch 1 review is not required before expansion';
+
+      lines.push('Reply monitoring / Batch 1 review process is confirmed:');
+      lines.push(
+        `- Reply monitoring owner: ${monitoringState.replyMonitoringOwner}`
+      );
+      lines.push(`- ${monitoringState.responseReviewProcess}`);
+      lines.push(`- ${monitoringState.positiveReplyHandling}`);
+      lines.push(`- ${monitoringState.negativeReplyHandling}`);
+      lines.push(`- ${broaderLine}`);
+      lines.push(`- ${expansionLine}`);
+
+      nextItem = nextReadinessItemAfter('reply_monitoring_batch1', {
+        ...context,
+        slots: {
+          ...slots,
+          replyMonitoringOwner: monitoringState.replyMonitoringOwner,
+          responseReviewProcess: monitoringState.responseReviewProcess,
+          positiveReplyHandling: monitoringState.positiveReplyHandling,
+          negativeReplyHandling: monitoringState.negativeReplyHandling,
+          broaderRolloutBlocked: monitoringState.broaderRolloutBlocked,
+          batch1ReviewBeforeExpansion:
+            monitoringState.batch1ReviewBeforeExpansion,
+          replyMonitoringBatch1Confirmed: true,
+          batch1ResultsReviewed: monitoringState.batch1ResultsReviewed,
+          followUpTrackingConfirmed:
+            slots.followUpTrackingConfirmed === true ||
+            context.followUpTrackingConfirmed === true,
+          operationalPathChosen:
+            slots.operationalPathChosen === true ||
+            context.operationalPathChosen === true,
+          senderIdentityConfirmed:
+            slots.senderIdentityConfirmed === true ||
+            context.senderIdentityConfirmed === true,
+          replyInboxConfirmed:
+            slots.replyInboxConfirmed === true ||
+            slots.replyHandlingConfirmed === true ||
+            context.replyInboxConfirmed === true,
+        },
+        confirmedReadiness: {
+          ...(context.confirmedReadiness || {}),
+          reply_monitoring_batch1: true,
+          reply_monitoring_batch_review: true,
+          reply_monitoring_owner: true,
+          broader_rollout_batch1: monitoringState.batch1ResultsReviewed,
+        },
+      });
+
+      if (nextItem) {
+        const questions =
+          Array.isArray(nextItem.questions) && nextItem.questions.length
+            ? nextItem.questions
+            : nextItem.ask
+              ? [nextItem.ask]
+              : [];
+        lines.push('');
+        lines.push(`Next readiness item: ${nextItem.label}.`);
+        if (questions.length) {
+          lines.push('');
+          for (const q of questions) lines.push(q);
+        }
+        lines.push('');
+        lines.push(READINESS_SUBSTEP_SAFETY_LINE);
+      } else {
+        const pathLabel =
+          slots.operationalPathLabel ||
+          context.operationalPathLabel ||
+          'manual send export for operator review';
+        lines.push('');
+        lines.push('Readiness summary:');
+        lines.push('- Sender identity: confirmed');
+        lines.push('- Reply inbox / reply-to handling: confirmed');
+        lines.push(`- Operational path: ${pathLabel} selected`);
+        lines.push('- Follow-up tracking: confirmed');
+        lines.push('- Reply monitoring / Batch 1 review: confirmed');
+        lines.push('- Execution lock: active');
+        lines.push('');
+        lines.push(
+          'Next step remains explicit execute approval if the operator wants to prepare the manual-send export. Do not execute anything automatically.'
+        );
+      }
+    } else {
+      if (monitoringParsed.hasAny) {
+        lines.push('Updated reply monitoring / Batch 1 review details.');
+      } else {
+        lines.push('Recorded reply monitoring / Batch 1 review details.');
+      }
+      if (monitoringState.missing.length) {
+        lines.push('');
+        lines.push('Still needed for reply monitoring / Batch 1 review:');
+        for (const m of monitoringState.missing) lines.push(`- ${m}`);
+        lines.push('');
+        lines.push(READINESS_SUBSTEP_SAFETY_LINE);
+      }
+    }
   } else {
     lines.push('Updated the active readiness fields.');
   }
@@ -2129,6 +2652,7 @@ function composeReadinessFieldCorrection(context = {}) {
     replyHandling: replyHandlingState,
     operationalPath: operationalPathState,
     followUpTracking: followUpTrackingState,
+    replyMonitoringBatchReview: replyMonitoringBatchReviewState,
     itemConfirmed,
     correctedFields:
       activeId === 'reply_handling'
@@ -2138,7 +2662,9 @@ function composeReadinessFieldCorrection(context = {}) {
           ? pathParsed.updatedFields.slice()
           : activeId === 'follow_up_tracking'
             ? followUpParsed.updatedFields.slice()
-            : corrected,
+            : activeId === 'reply_monitoring_batch1'
+              ? monitoringParsed.updatedFields.slice()
+              : corrected,
     requiresExplicitApproval: false,
     executionPending: false,
     sendsMade: false,
@@ -2167,6 +2693,10 @@ function looksLikeExecutionRequest(text) {
   }
   // Follow-up tracking answers confirm readiness only — never execute.
   if (parseFollowUpTrackingFields(s).hasAny) {
+    return false;
+  }
+  // Reply monitoring / Batch 1 review answers confirm readiness only.
+  if (parseReplyMonitoringBatchReviewFields(s).hasAny) {
     return false;
   }
 
@@ -2649,6 +3179,35 @@ function isFollowUpTrackingValueLine(text) {
 }
 
 /**
+ * True when a checklist line is a provided reply-monitoring / Batch 1 field.
+ * Does NOT match unresolved gap phrasing such as
+ * "broader rollout remains blocked until Batch 1 results are reviewed"
+ * or "reply monitoring owner/process is not confirmed".
+ */
+function isReplyMonitoringBatchReviewValueLine(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  if (/\bis\s+not\s+confirmed\b/i.test(t)) return false;
+  if (/^reply\s+monitoring\s+owner\s*[:\-–—]\s*\S+/i.test(t)) return true;
+  if (/^responses?\s+reviewed\s+manually\b/i.test(t)) return true;
+  if (/^positive\s+replies?\s+handled\b/i.test(t)) return true;
+  if (/^(?:negative|not[- ]?now)\s+replies?\s+respected\b/i.test(t)) {
+    return true;
+  }
+  if (/^Batch\s*1\s+results?\s+reviewed\s+before\s+expanding\b/i.test(t)) {
+    return true;
+  }
+  if (
+    /^(?:response(?:s)?\s+review(?:\s+process)?|positive\s+replies?(?:\s+handling)?|(?:negative(?:\s+or\s+not[- ]?now)?|not[- ]?now)\s+replies?(?:\s+handling)?)\s*[:\-–—]\s*\S+/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * True when a line is an open readiness question (still unresolved).
  */
 function isOpenReadinessQuestionLine(text) {
@@ -2658,7 +3217,8 @@ function isOpenReadinessQuestionLine(text) {
     isSenderFieldValueLine(t) ||
     isReplyFieldValueLine(t) ||
     isOperationalPathValueLine(t) ||
-    isFollowUpTrackingValueLine(t)
+    isFollowUpTrackingValueLine(t) ||
+    isReplyMonitoringBatchReviewValueLine(t)
   ) {
     return false;
   }
@@ -2680,6 +3240,10 @@ function readinessConceptId(item) {
   }
   if (isFollowUpTrackingValueLine(s)) {
     return 'follow_up_tracking_process';
+  }
+  if (isReplyMonitoringBatchReviewValueLine(s)) {
+    if (/broader\s+rollout|Batch\s*1/i.test(s)) return 'broader_rollout_batch1';
+    return 'reply_monitoring_owner';
   }
   for (const concept of READINESS_CONCEPT_PATTERNS) {
     if (concept.match.test(s)) return concept.id;
@@ -2704,6 +3268,14 @@ function readinessConceptId(item) {
     /\bfollow[- ]?up\b/i.test(s)
   ) {
     return 'follow_up_tracking_process';
+  }
+  if (
+    isOpenReadinessQuestionLine(s) &&
+    /\b(?:monitor(?:ing)?\s+replies|broader\s+rollout|Batch\s*1\s+results?)\b/i.test(
+      s
+    )
+  ) {
+    return 'reply_monitoring_owner';
   }
   return `custom:${s.toLowerCase().slice(0, 80)}`;
 }
@@ -2827,6 +3399,41 @@ function resolveFollowUpTrackingFromContext(context = {}) {
 }
 
 /**
+ * Resolve reply monitoring / Batch 1 review fields from slots + latest message.
+ */
+function resolveReplyMonitoringBatchReviewFromContext(context = {}) {
+  const slots = context.slots || {};
+  const prior = {
+    replyMonitoringOwner:
+      slots.replyMonitoringOwner || context.replyMonitoringOwner || null,
+    monitoringOwner:
+      slots.replyMonitoringOwner || context.replyMonitoringOwner || null,
+    responseReviewProcess:
+      slots.responseReviewProcess || context.responseReviewProcess || null,
+    positiveReplyHandling:
+      slots.positiveReplyHandling || context.positiveReplyHandling || null,
+    negativeReplyHandling:
+      slots.negativeReplyHandling || context.negativeReplyHandling || null,
+    broaderRolloutBlocked:
+      slots.broaderRolloutBlocked != null
+        ? slots.broaderRolloutBlocked
+        : context.broaderRolloutBlocked != null
+          ? context.broaderRolloutBlocked
+          : null,
+    batch1ReviewBeforeExpansion:
+      slots.batch1ReviewBeforeExpansion != null
+        ? slots.batch1ReviewBeforeExpansion
+        : context.batch1ReviewBeforeExpansion != null
+          ? context.batch1ReviewBeforeExpansion
+          : null,
+  };
+  const parsed = parseReplyMonitoringBatchReviewFields(
+    context.operatorMessage || context.text || context.userMessage || ''
+  );
+  return mergeReplyMonitoringBatchReviewState(prior, parsed);
+}
+
+/**
  * Known readiness facts from gate / slots / campaign memory / latest message.
  * Missing facts stay unknown — never treat unknown as resolved.
  */
@@ -2847,6 +3454,8 @@ function knownReadinessState(context = {}) {
   const replyResolved = resolveReplyHandlingFromContext(context);
   const pathResolved = resolveOperationalPathFromContext(context);
   const followUpResolved = resolveFollowUpTrackingFromContext(context);
+  const monitoringResolved =
+    resolveReplyMonitoringBatchReviewFromContext(context);
   const replyConfirmed = Boolean(
     confirmed.reply_inbox_handling ||
       confirmed.replyInboxHandling ||
@@ -2874,7 +3483,8 @@ function knownReadinessState(context = {}) {
         confirmed.replyMonitoringOwner ||
         slots.replyMonitoringConfirmed ||
         context.replyMonitoringConfirmed ||
-        Boolean(replyResolved.replyMonitoringOwner)
+        Boolean(replyResolved.replyMonitoringOwner) ||
+        Boolean(monitoringResolved.replyMonitoringOwner)
     ),
     operationalPath: pathResolved,
     operationalPathChosen: Boolean(
@@ -2896,11 +3506,15 @@ function knownReadinessState(context = {}) {
         context.followUpTrackingConfirmed ||
         followUpResolved.followUpTrackingConfirmed
     ),
+    replyMonitoringBatchReview: monitoringResolved,
     replyMonitoringBatch1Confirmed: Boolean(
       confirmed.reply_monitoring_batch1 ||
+        confirmed.reply_monitoring_batch_review ||
         confirmed.replyMonitoringBatch1 ||
+        confirmed.replyMonitoringBatchReview ||
         slots.replyMonitoringBatch1Confirmed ||
-        context.replyMonitoringBatch1Confirmed
+        context.replyMonitoringBatch1Confirmed ||
+        monitoringResolved.replyMonitoringBatch1Confirmed
     ),
     trackingAccountApproved: Boolean(
       confirmed.tracking_account_settings ||
@@ -2912,7 +3526,8 @@ function knownReadinessState(context = {}) {
       confirmed.broader_rollout_batch1 ||
         confirmed.batch1ResultsReviewed ||
         slots.batch1ResultsReviewed ||
-        context.batch1ResultsReviewed
+        context.batch1ResultsReviewed ||
+        monitoringResolved.batch1ResultsReviewed
     ),
     inapplicable: {
       ...(summary.inapplicableReadiness || {}),
@@ -2984,16 +3599,28 @@ function evaluateReadinessItemAgainstState(item, context = {}) {
     };
   }
 
+  // Provided reply-monitoring / Batch 1 review field values are confirmed.
+  if (isReplyMonitoringBatchReviewValueLine(text)) {
+    return {
+      text,
+      status: 'confirmed',
+      reason: 'reply monitoring / Batch 1 review field present',
+      concept: readinessConceptId(text),
+      display: text,
+    };
+  }
+
   const confirmedByConcept = {
     sender_identity: state.senderIdentityConfirmed,
     reply_inbox_handling: state.replyInboxConfirmed,
     reply_handling_generic: state.replyInboxConfirmed,
     reply_monitoring_owner:
-      state.replyInboxConfirmed || state.replyMonitoringConfirmed,
+      state.replyMonitoringBatch1Confirmed || state.replyMonitoringConfirmed,
     operational_path: state.operationalPathChosen,
     follow_up_tracking_process: state.followUpTrackingConfirmed,
     tracking_account_settings: state.trackingAccountApproved,
-    broader_rollout_batch1: state.batch1ResultsReviewed,
+    broader_rollout_batch1:
+      state.batch1ResultsReviewed || state.replyMonitoringBatch1Confirmed,
   };
 
   if (confirmedByConcept[concept] === true) {
@@ -3887,13 +4514,16 @@ module.exports = {
   parseReplyHandlingFields,
   parseOperationalPathSelection,
   parseFollowUpTrackingFields,
+  parseReplyMonitoringBatchReviewFields,
   mergeSenderIdentityState,
   mergeReplyHandlingState,
   mergeOperationalPathState,
   mergeFollowUpTrackingState,
+  mergeReplyMonitoringBatchReviewState,
   normalizeOperationalPathChoice,
   normalizeReadinessItemId,
   resolveActiveReadinessItemId,
+  isReplyMonitoringBatchReviewItemId,
   nextReadinessItemAfter,
   looksLikeExecutionRequest,
   selectConversationMode,
@@ -3915,10 +4545,12 @@ module.exports = {
   isReplyFieldValueLine,
   isOperationalPathValueLine,
   isFollowUpTrackingValueLine,
+  isReplyMonitoringBatchReviewValueLine,
   resolveSenderIdentityFromContext,
   resolveReplyHandlingFromContext,
   resolveOperationalPathFromContext,
   resolveFollowUpTrackingFromContext,
+  resolveReplyMonitoringBatchReviewFromContext,
   formatApprovedLaunchGateConversational,
   formatOperatorDiagnosticMessage,
   applyConversationalPolicy,

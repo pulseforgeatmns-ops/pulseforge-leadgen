@@ -185,8 +185,18 @@ module.exports = {
     ConversationalResponsePolicy.isOperationalPathValueLine,
   isFollowUpTrackingValueLine:
     ConversationalResponsePolicy.isFollowUpTrackingValueLine,
+  isReplyMonitoringBatchReviewValueLine:
+    ConversationalResponsePolicy.isReplyMonitoringBatchReviewValueLine,
   resolveFollowUpTrackingFromContext:
     ConversationalResponsePolicy.resolveFollowUpTrackingFromContext,
+  resolveReplyMonitoringBatchReviewFromContext:
+    ConversationalResponsePolicy.resolveReplyMonitoringBatchReviewFromContext,
+  parseReplyMonitoringBatchReviewFields:
+    ConversationalResponsePolicy.parseReplyMonitoringBatchReviewFields,
+  mergeReplyMonitoringBatchReviewState:
+    ConversationalResponsePolicy.mergeReplyMonitoringBatchReviewState,
+  isReplyMonitoringBatchReviewItemId:
+    ConversationalResponsePolicy.isReplyMonitoringBatchReviewItemId,
   normalizeReadinessItemId:
     ConversationalResponsePolicy.normalizeReadinessItemId,
   composeExecutionConfirmation:

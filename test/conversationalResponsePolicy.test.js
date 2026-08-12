@@ -37,6 +37,7 @@ const {
   parseReplyHandlingFields,
   parseOperationalPathSelection,
   parseFollowUpTrackingFields,
+  parseReplyMonitoringBatchReviewFields,
   mergeSenderIdentityState,
   mergeReplyHandlingState,
   isSenderFieldValueLine,
@@ -914,6 +915,161 @@ describe('ConversationalResponsePolicy', () => {
     );
     assert.doesNotMatch(composed.message, /Exact action/i);
     assert.doesNotMatch(composed.message, /prepare a manual-send export/i);
+    assert.equal(looksLikeExecutionRequest(composed.message), false);
+  });
+
+  it('confirms reply monitoring / Batch 1 review from active-substep answers and summarizes readiness', () => {
+    const text = [
+      'Reply monitoring owner: Jacob Maynard',
+      'Responses should be reviewed manually before any follow-up or broader rollout decision',
+      'Positive replies should be handled as conversation/walkthrough opportunities',
+      'Negative or not-now replies should be respected and noted',
+      'Broader rollout remains blocked until Batch 1 results are reviewed',
+      'Batch 1 results should be reviewed before expanding to Cedar, optional Manchester candidates, or any new prospect segment',
+    ].join('\n');
+
+    assert.equal(
+      looksLikeReadinessFieldCorrection(text, {
+        activeReadinessItemId: 'reply_monitoring_batch_review',
+      }),
+      true
+    );
+    assert.equal(looksLikeExecutionRequest(text), false);
+    assert.equal(looksLikeOperatorReadinessCheck(text), false);
+
+    const parsed = parseReplyMonitoringBatchReviewFields(text);
+    assert.equal(parsed.hasAny, true);
+    assert.equal(parsed.replyMonitoringOwner, 'Jacob Maynard');
+    assert.equal(
+      parsed.responseReviewProcess,
+      'Responses reviewed manually before any follow-up or broader rollout decision'
+    );
+    assert.equal(
+      parsed.positiveReplyHandling,
+      'Positive replies handled as conversation/walkthrough opportunities'
+    );
+    assert.equal(
+      parsed.negativeReplyHandling,
+      'Negative or not-now replies respected and noted'
+    );
+    assert.equal(parsed.broaderRolloutBlocked, true);
+    assert.equal(parsed.batch1ReviewBeforeExpansion, true);
+
+    const mode = selectConversationMode({
+      text,
+      operatorMessage: text,
+      launchGateApproved: true,
+      activeReadinessItemId: 'reply_monitoring_batch_review',
+      slots: {
+        activeReadinessItemId: 'reply_monitoring_batch1',
+        senderIdentityConfirmed: true,
+        replyInboxConfirmed: true,
+        operationalPathChosen: true,
+        followUpTrackingConfirmed: true,
+      },
+    });
+    assert.equal(mode, CONVERSATION_MODES.READINESS_FIELD_CORRECTION);
+    assert.notEqual(mode, CONVERSATION_MODES.EXECUTION_CONFIRMATION);
+    assert.notEqual(mode, CONVERSATION_MODES.OPERATOR_READINESS_CHECK);
+    assert.notEqual(mode, CONVERSATION_MODES.READINESS_SUBSTEP);
+
+    const composed = composeReadinessFieldCorrection({
+      operatorMessage: text,
+      activeReadinessItemId: 'reply_monitoring_batch_review',
+      slots: {
+        activeReadinessItemId: 'reply_monitoring_batch_review',
+        senderIdentityConfirmed: true,
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        replyInboxConfirmed: true,
+        replyHandlingConfirmed: true,
+        replyInbox: 'jacob@goanchorcleaning.com',
+        replyToMatchesSender: true,
+        replyMonitoringOwner: 'Jacob Maynard',
+        operationalPathChosen: true,
+        operationalPathId: 'manual_send_export',
+        operationalPathLabel: 'manual send export for operator review',
+        followUpTrackingConfirmed: true,
+        followUpTrackingLocation: 'the manual-send export/review sheet',
+        followUp1Timing: 'about 3 business days after first touch',
+        followUp2Timing: 'about 7 business days after first touch',
+        followUpReviewFirstManual: true,
+        automaticFollowUpSendsApproved: false,
+      },
+    });
+
+    assert.equal(composed.responseMode, 'readiness_field_correction');
+    assert.equal(composed.itemConfirmed, true);
+    assert.equal(composed.requiresExplicitApproval, false);
+    assert.equal(composed.executionPending, false);
+    assert.equal(composed.exportMade, false);
+    assert.equal(composed.sendsMade, false);
+    assert.equal(composed.crmWritesMade, false);
+    assert.equal(composed.readinessItemId, 'reply_monitoring_batch1');
+    assert.equal(composed.nextReadinessItem, null);
+    assert.equal(composed.activeReadinessItemId, 'reply_monitoring_batch1');
+    assert.match(
+      composed.message,
+      /^Reply monitoring \/ Batch 1 review process is confirmed:/m
+    );
+    assert.match(
+      composed.message,
+      /- Reply monitoring owner: Jacob Maynard/i
+    );
+    assert.match(
+      composed.message,
+      /- Responses reviewed manually before any follow-up or broader rollout decision/i
+    );
+    assert.match(
+      composed.message,
+      /- Positive replies handled as conversation\/walkthrough opportunities/i
+    );
+    assert.match(
+      composed.message,
+      /- Negative or not-now replies respected and noted/i
+    );
+    assert.match(
+      composed.message,
+      /- Broader rollout remains blocked until Batch 1 results are reviewed/i
+    );
+    assert.match(
+      composed.message,
+      /- Batch 1 results reviewed before expanding to Cedar, optional Manchester candidates, or any new prospect segment/i
+    );
+    assert.match(composed.message, /Readiness summary:/i);
+    assert.match(composed.message, /- Sender identity: confirmed/i);
+    assert.match(
+      composed.message,
+      /- Reply inbox \/ reply-to handling: confirmed/i
+    );
+    assert.match(
+      composed.message,
+      /- Operational path: manual send export for operator review selected/i
+    );
+    assert.match(composed.message, /- Follow-up tracking: confirmed/i);
+    assert.match(
+      composed.message,
+      /- Reply monitoring \/ Batch 1 review: confirmed/i
+    );
+    assert.match(composed.message, /- Execution lock: active/i);
+    assert.match(
+      composed.message,
+      /Next step remains explicit execute approval if the operator wants to prepare the manual-send export/i
+    );
+    assert.match(
+      composed.message,
+      /Do not execute anything automatically/i
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /Who will monitor replies, how should responses be reviewed/i
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(composed.message, /Exact action/i);
     assert.equal(looksLikeExecutionRequest(composed.message), false);
   });
 
