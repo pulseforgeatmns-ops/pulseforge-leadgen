@@ -18,6 +18,7 @@ const {
   approvalLanguageForGate,
   looksLikeExecutionRequest,
   looksLikeNonExecutionIntent,
+  looksLikeCampaignReadySummary,
   looksLikeOperatorReadinessCheck,
   looksLikeLowSignalAmbiguousInput,
   looksLikeReadinessSubstepSelection,
@@ -26,6 +27,7 @@ const {
   assessConversationContext,
   applyConversationalPolicy,
   selectResponseMode,
+  composeCampaignReadySummary,
   composeOperatorReadinessCheck,
   composeReadinessSubstep,
   composeReadinessFieldCorrection,
@@ -1071,6 +1073,113 @@ describe('ConversationalResponsePolicy', () => {
     );
     assert.doesNotMatch(composed.message, /Exact action/i);
     assert.equal(looksLikeExecutionRequest(composed.message), false);
+  });
+
+  it('classifies final campaign-ready summary without collapsing to a substep', () => {
+    const text =
+      'Please provide a final Anchor Batch 1 campaign-ready summary for operator review. Include approved Batch 1 scope, confirmed sender identity, confirmed reply handling, selected operational path, confirmed follow-up tracking, confirmed reply monitoring / Batch 1 review, execution lock status, and what explicit execute action would be needed next.';
+
+    assert.equal(looksLikeCampaignReadySummary(text), true);
+    assert.equal(detectSelectedReadinessItem(text), null);
+    assert.equal(looksLikeReadinessSubstepSelection(text), false);
+    assert.equal(
+      looksLikeReadinessFieldCorrection(text, {
+        activeReadinessItemId: 'operational_path',
+      }),
+      false
+    );
+    assert.equal(looksLikeOperatorReadinessCheck(text), false);
+    assert.equal(looksLikeExecutionRequest(text), false);
+    assert.equal(
+      selectConversationMode({
+        operatorMessage: text,
+        gateAlreadyApproved: true,
+        slots: { activeReadinessItemId: 'operational_path' },
+      }),
+      CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY
+    );
+    assert.equal(
+      selectResponseMode({
+        text,
+        launchGateApproved: true,
+        activeReadinessItemId: 'operational_path',
+      }),
+      RESPONSE_MODES.CAMPAIGN_READY_SUMMARY
+    );
+  });
+
+  it('composes full campaign-ready summary from confirmed readiness state', () => {
+    const composed = composeCampaignReadySummary({
+      businessName: 'Anchor Cleaning',
+      batch1Scope: '6 approved cold first-pass prospects in Batch 1.',
+      slots: {
+        senderIdentityConfirmed: true,
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        replyInboxConfirmed: true,
+        replyHandlingConfirmed: true,
+        replyInbox: 'jacob@goanchorcleaning.com',
+        replyToMatchesSender: true,
+        replyMonitoringOwner: 'Jacob Maynard',
+        operationalPathChosen: true,
+        operationalPathId: 'manual_send_export',
+        operationalPathLabel: 'manual send export for operator review',
+        followUpTrackingConfirmed: true,
+        followUpTrackingLocation: 'the manual-send export/review sheet',
+        replyMonitoringBatch1Confirmed: true,
+        batch1ResultsReviewed: true,
+        broaderRolloutBlocked: true,
+      },
+    });
+
+    assert.equal(composed.mode, CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY);
+    assert.equal(composed.responseMode, 'campaign_ready_summary');
+    assert.equal(composed.executionPending, false);
+    assert.equal(composed.exportMade, false);
+    assert.equal(composed.sendsMade, false);
+    assert.equal(composed.executionLockActive, true);
+    assert.match(composed.message, /Anchor Cleaning Batch 1 campaign-ready summary/i);
+    assert.match(composed.message, /Batch 1 approved scope/i);
+    assert.match(composed.message, /Sender identity confirmed/i);
+    assert.match(composed.message, /Jacob Maynard/);
+    assert.match(composed.message, /jacob@goanchorcleaning\.com/);
+    assert.match(composed.message, /Jacob Maynard, Anchor Cleaning/);
+    assert.match(composed.message, /Reply handling confirmed/i);
+    assert.match(composed.message, /reply-to matches sender/i);
+    assert.match(composed.message, /Jacob Maynard monitors/i);
+    assert.match(composed.message, /Operational path selected/i);
+    assert.match(
+      composed.message,
+      /manual send export for operator review/i
+    );
+    assert.match(composed.message, /Follow-up tracking confirmed/i);
+    assert.match(
+      composed.message,
+      /Reply monitoring \/ Batch 1 review confirmed/i
+    );
+    assert.match(composed.message, /Execution lock:\s*active/i);
+    assert.match(
+      composed.message,
+      /Next possible execute action:\s*explicitly approve preparing the manual-send export for operator review/i
+    );
+    assert.match(composed.message, /Nothing has been executed/i);
+    assert.doesNotMatch(
+      composed.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(composed.message, /Exact action/i);
+    assert.doesNotMatch(
+      composed.message,
+      /Which readiness item should we resolve first/i
+    );
+    // Must not collapse to only the latest operational-path confirmation.
+    assert.ok(
+      composed.message.indexOf('Sender identity confirmed') >= 0 &&
+        composed.message.indexOf('Operational path selected') >= 0 &&
+        composed.message.indexOf('Reply monitoring / Batch 1 review confirmed') >=
+          0
+    );
   });
 
   it('classifies low-signal accidental input as clarification_needed', () => {

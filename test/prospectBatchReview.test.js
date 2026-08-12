@@ -4774,6 +4774,147 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.equal(reply.slots.batch1ReviewBeforeExpansion, true);
   });
 
+  it('final campaign-ready summary composes whole readiness state, not latest substep', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const reply = buildCampaignPlanningReply(
+      'Please provide a final Anchor Batch 1 campaign-ready summary for operator review. Include approved Batch 1 scope, confirmed sender identity, confirmed reply handling, selected operational path, confirmed follow-up tracking, confirmed reply monitoring / Batch 1 review, execution lock status, and what explicit execute action would be needed next.',
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        outreachStrategyPreview: strategy,
+        prospectBatchReview: review,
+        launchGateApproved: true,
+        // Stuck on latest substep — summary must still compose the whole state.
+        intent: 'readiness_field_correction',
+        readinessItemId: 'operational_path',
+        activeReadinessItemId: 'operational_path',
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+          activeReadinessItemId: 'operational_path',
+          senderIdentityConfirmed: true,
+          senderName: 'Jacob Maynard',
+          senderEmail: 'jacob@goanchorcleaning.com',
+          senderSignature: 'Jacob Maynard, Anchor Cleaning',
+          replyInboxConfirmed: true,
+          replyHandlingConfirmed: true,
+          replyInbox: 'jacob@goanchorcleaning.com',
+          replyToMatchesSender: true,
+          replyMonitoringOwner: 'Jacob Maynard',
+          operationalPathChosen: true,
+          operationalPathId: 'manual_send_export',
+          operationalPathLabel: 'manual send export for operator review',
+          followUpTrackingConfirmed: true,
+          followUpTrackingLocation: 'the manual-send export/review sheet',
+          followUp1Timing: 'about 3 business days after first touch',
+          followUp2Timing: 'about 7 business days after first touch',
+          followUpReviewFirstManual: true,
+          automaticFollowUpSendsApproved: false,
+          replyMonitoringBatch1Confirmed: true,
+          batch1ResultsReviewed: true,
+          responseReviewProcess:
+            'Responses reviewed manually before any follow-up or broader rollout decision',
+          positiveReplyHandling:
+            'Positive replies handled as conversation/walkthrough opportunities',
+          negativeReplyHandling:
+            'Negative or not-now replies respected and noted',
+          broaderRolloutBlocked: true,
+          batch1ReviewBeforeExpansion: true,
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'campaign_ready_summary');
+    assert.equal(reply.conversationMode, 'campaign_ready_summary');
+    assert.equal(reply.intent, 'campaign_ready_summary');
+    assert.equal(reply.executionPending, false);
+    assert.equal(reply.requiresExplicitApproval, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.accountChangesMade, false);
+    assert.notEqual(reply.responseMode, 'execution_confirmation');
+    assert.notEqual(reply.responseMode, 'readiness_substep');
+    assert.notEqual(reply.responseMode, 'readiness_field_correction');
+    assert.notEqual(reply.responseMode, 'operator_readiness_check');
+
+    assert.match(reply.message, /campaign-ready summary/i);
+    assert.match(reply.message, /Batch 1 approved scope/i);
+    assert.match(reply.message, /Sender identity confirmed/i);
+    assert.match(reply.message, /Jacob Maynard/);
+    assert.match(reply.message, /jacob@goanchorcleaning\.com/);
+    assert.match(reply.message, /Jacob Maynard, Anchor Cleaning/);
+    assert.match(reply.message, /Reply handling confirmed/i);
+    assert.match(reply.message, /reply-to matches sender/i);
+    assert.match(reply.message, /Jacob Maynard monitors/i);
+    assert.match(reply.message, /Operational path selected/i);
+    assert.match(
+      reply.message,
+      /manual send export for operator review/i
+    );
+    assert.match(reply.message, /Follow-up tracking confirmed/i);
+    assert.match(
+      reply.message,
+      /Reply monitoring \/ Batch 1 review confirmed/i
+    );
+    assert.match(reply.message, /Execution lock:\s*active/i);
+    assert.match(
+      reply.message,
+      /Next possible execute action:\s*explicitly approve preparing the manual-send export for operator review/i
+    );
+    assert.match(reply.message, /Nothing has been executed/i);
+    assert.doesNotMatch(
+      reply.message,
+      /^Operational path is selected:\s*\n- manual send export for operator review\s*\n\nThis is path selection only/m
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(reply.message, /Exact action/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Which readiness item should we resolve first/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Let's resolve reply monitoring/i
+    );
+  });
+
   it('operator-facing draft digest comes first without banned fragments', () => {
     const { review, ctx, strategy, plan } = chainFixtures();
     const draft = buildOutreachDraftPreview(

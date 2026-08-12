@@ -20,6 +20,8 @@ const RESPONSE_MODES = Object.freeze({
   OPERATOR_CHAT_RESPONSE: 'operator_chat_response',
   OPERATOR_STATE_SUMMARY: 'operator_state_summary',
   STALE_SOURCE_DIAGNOSTIC: 'stale_source_diagnostic',
+  /** Final full readiness state for operator review — never execute. */
+  CAMPAIGN_READY_SUMMARY: 'campaign_ready_summary',
   /** Summarize / resolve readiness gaps — never execute. */
   OPERATOR_READINESS_CHECK: 'operator_readiness_check',
   /** Operator selected one readiness item — stay in that substep. */
@@ -387,6 +389,7 @@ function selectResponseMode(opts = {}) {
   // Lazy require avoids circular init with ConversationalResponsePolicy.
   let policySelect = null;
   let looksLikeReadiness = null;
+  let looksLikeCampaignReady = null;
   let looksLikeNonExec = null;
   let looksLikeLowSignal = null;
   let looksLikeSubstep = null;
@@ -395,6 +398,7 @@ function selectResponseMode(opts = {}) {
     const policy = require('./ConversationalResponsePolicy');
     policySelect = policy.selectResponseModeWithPolicy;
     looksLikeReadiness = policy.looksLikeOperatorReadinessCheck;
+    looksLikeCampaignReady = policy.looksLikeCampaignReadySummary;
     looksLikeNonExec = policy.looksLikeNonExecutionIntent;
     looksLikeLowSignal = policy.looksLikeLowSignalAmbiguousInput;
     looksLikeSubstep = policy.looksLikeReadinessSubstepSelection;
@@ -440,6 +444,10 @@ function selectResponseMode(opts = {}) {
     typeof looksLikeReadiness === 'function' && text
       ? looksLikeReadiness(text)
       : false;
+  const campaignReadyFromText =
+    typeof looksLikeCampaignReady === 'function' && text
+      ? looksLikeCampaignReady(text)
+      : false;
   const nonExecFromText =
     typeof looksLikeNonExec === 'function' && text
       ? looksLikeNonExec(text)
@@ -451,6 +459,8 @@ function selectResponseMode(opts = {}) {
     opts.forceClarification === true ||
     messageClass === 'clarification_needed' ||
     (lowSignalFromText &&
+      !opts.forceCampaignReadySummary &&
+      !opts.isCampaignReadySummary &&
       !opts.forceReadinessCheck &&
       !opts.isReadinessCheck &&
       !opts.isReadinessSubstep &&
@@ -460,6 +470,15 @@ function selectResponseMode(opts = {}) {
       !isRevision)
   ) {
     return RESPONSE_MODES.CLARIFICATION_NEEDED;
+  }
+
+  // Final campaign-ready / full readiness summary — never collapse to one item.
+  if (
+    opts.isCampaignReadySummary === true ||
+    opts.forceCampaignReadySummary === true ||
+    campaignReadyFromText
+  ) {
+    return RESPONSE_MODES.CAMPAIGN_READY_SUMMARY;
   }
 
   // Field correction / substep update — never dump Launch Gate options.
@@ -488,7 +507,8 @@ function selectResponseMode(opts = {}) {
   if (
     (opts.executionPending === true || opts.isExecutionRequest === true) &&
     !nonExecFromText &&
-    !readinessFromText
+    !readinessFromText &&
+    !campaignReadyFromText
   ) {
     return RESPONSE_MODES.EXECUTION_CONFIRMATION;
   }

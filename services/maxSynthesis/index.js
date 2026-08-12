@@ -151,6 +151,8 @@ module.exports = {
     ConversationalResponsePolicy.looksLikeExecutionRequest,
   looksLikeNonExecutionIntent:
     ConversationalResponsePolicy.looksLikeNonExecutionIntent,
+  looksLikeCampaignReadySummary:
+    ConversationalResponsePolicy.looksLikeCampaignReadySummary,
   looksLikeOperatorReadinessCheck:
     ConversationalResponsePolicy.looksLikeOperatorReadinessCheck,
   looksLikeLowSignalAmbiguousInput:
@@ -201,6 +203,8 @@ module.exports = {
     ConversationalResponsePolicy.normalizeReadinessItemId,
   composeExecutionConfirmation:
     ConversationalResponsePolicy.composeExecutionConfirmation,
+  composeCampaignReadySummary:
+    ConversationalResponsePolicy.composeCampaignReadySummary,
   composeOperatorReadinessCheck:
     ConversationalResponsePolicy.composeOperatorReadinessCheck,
   composeReadinessSubstep:
@@ -217,6 +221,10 @@ module.exports = {
     ConversationalResponsePolicy.mergeOperatorReadinessChecklist,
   evaluateReadinessItemAgainstState:
     ConversationalResponsePolicy.evaluateReadinessItemAgainstState,
+  CAMPAIGN_READY_SUMMARY_SAFETY_LINE:
+    ConversationalResponsePolicy.CAMPAIGN_READY_SUMMARY_SAFETY_LINE,
+  CAMPAIGN_READY_SUMMARY_CLOSING:
+    ConversationalResponsePolicy.CAMPAIGN_READY_SUMMARY_CLOSING,
   DEFAULT_UNRESOLVED_READINESS_ITEMS:
     ConversationalResponsePolicy.DEFAULT_UNRESOLVED_READINESS_ITEMS,
   READINESS_CHECKLIST_CLOSING_ASK:

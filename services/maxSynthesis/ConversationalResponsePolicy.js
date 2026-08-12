@@ -11,16 +11,19 @@
  *   2. operator_revision_response — operator asked for copy/targeting/memory changes
  *   3. operator_diagnostic        — stale/conflict/missing/failed output
  *   4. formal_review_gate         — first-time gate for approval (card allowed)
- *   5. operator_readiness_check   — summarize / resolve remaining readiness gaps
- *   6. readiness_substep          — operator selected one readiness item; stay in it
- *   7. readiness_field_correction — field fill/correct inside an active substep
- *   8. execution_confirmation     — about to send/export/CRM/account action
- *   9. clarification_needed       — accidental / low-signal / ambiguous input
+ *   5. campaign_ready_summary     — final full readiness state for operator review
+ *   6. operator_readiness_check   — summarize / resolve remaining readiness gaps
+ *   7. readiness_substep          — operator selected one readiness item; stay in it
+ *   8. readiness_field_correction — field fill/correct inside an active substep
+ *   9. execution_confirmation     — about to send/export/CRM/account action
+ *  10. clarification_needed       — accidental / low-signal / ambiguous input
  *
  * Classification priority for post-approval turns:
  * low-signal ambiguous input → clarification_needed (never re-open full state
- * summary or options). Field correction / substep update inside an active
- * readiness item → readiness_field_correction (never dump Launch Gate
+ * summary or options). Final campaign-ready / full readiness summary asks →
+ * campaign_ready_summary (compose ALL confirmed items; never collapse to the
+ * latest substep; never execute). Field correction / substep update inside an
+ * active readiness item → readiness_field_correction (never dump Launch Gate
  * operational options). Selected readiness item → readiness_substep (never ask
  * "which readiness item" again). Then discussing options / resolving readiness
  * / selecting a path later ALWAYS beat bare mentions of export/CRM/queue.
@@ -38,6 +41,7 @@ const CONVERSATION_MODES = Object.freeze({
   OPERATOR_REVISION_RESPONSE: 'operator_revision_response',
   OPERATOR_DIAGNOSTIC: 'operator_diagnostic',
   FORMAL_REVIEW_GATE: 'formal_review_gate',
+  CAMPAIGN_READY_SUMMARY: 'campaign_ready_summary',
   OPERATOR_READINESS_CHECK: 'operator_readiness_check',
   READINESS_SUBSTEP: 'readiness_substep',
   READINESS_FIELD_CORRECTION: 'readiness_field_correction',
@@ -56,6 +60,8 @@ const CONVERSATION_MODE_TO_RESPONSE_MODE = Object.freeze({
     RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC,
   [CONVERSATION_MODES.FORMAL_REVIEW_GATE]:
     RESPONSE_MODES.WORKFLOW_REVIEW_CARD,
+  [CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY]:
+    RESPONSE_MODES.CAMPAIGN_READY_SUMMARY || 'campaign_ready_summary',
   [CONVERSATION_MODES.OPERATOR_READINESS_CHECK]:
     RESPONSE_MODES.OPERATOR_READINESS_CHECK || 'operator_readiness_check',
   [CONVERSATION_MODES.READINESS_SUBSTEP]:
@@ -79,6 +85,7 @@ const RESPONSE_MODE_TO_CONVERSATION_MODE = Object.freeze({
     CONVERSATION_MODES.OPERATOR_DIAGNOSTIC,
   [RESPONSE_MODES.WORKFLOW_REVIEW_CARD]:
     CONVERSATION_MODES.FORMAL_REVIEW_GATE,
+  campaign_ready_summary: CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY,
   operator_readiness_check: CONVERSATION_MODES.OPERATOR_READINESS_CHECK,
   readiness_substep: CONVERSATION_MODES.READINESS_SUBSTEP,
   readiness_field_correction: CONVERSATION_MODES.READINESS_FIELD_CORRECTION,
@@ -86,6 +93,12 @@ const RESPONSE_MODE_TO_CONVERSATION_MODE = Object.freeze({
   execution_confirmation: CONVERSATION_MODES.EXECUTION_CONFIRMATION,
   clarification_needed: CONVERSATION_MODES.CLARIFICATION_NEEDED,
 });
+
+const CAMPAIGN_READY_SUMMARY_SAFETY_LINE =
+  'Nothing has been executed. Readiness confirmation and path selection are not execute approval.';
+
+const CAMPAIGN_READY_SUMMARY_CLOSING =
+  'Do not execute anything until the operator explicitly approves the next execute action.';
 
 /**
  * Short tokens that are intentional operator answers — not accidental noise.
@@ -483,6 +496,7 @@ function assessConversationContext(input = {}) {
       slots: input.slots || null,
       priorFields: input.priorFields || null,
     });
+  const campaignReadyFromText = looksLikeCampaignReadySummary(operatorMessage);
   const readinessFromText = looksLikeOperatorReadinessCheck(operatorMessage);
   const nonExecutionFromText = looksLikeNonExecutionIntent(operatorMessage);
   const executionFromText = looksLikeExecutionRequest(operatorMessage);
@@ -495,6 +509,8 @@ function assessConversationContext(input = {}) {
       input.intent === 'clarification_needed' ||
       input.messageClass === 'clarification_needed' ||
       (lowSignalFromText &&
+        !input.forceCampaignReadySummary &&
+        !input.isCampaignReadySummary &&
         !input.forceReadinessCheck &&
         !input.isReadinessCheck &&
         !input.isReadinessSubstep &&
@@ -505,10 +521,22 @@ function assessConversationContext(input = {}) {
         !isDiagnostic)
   );
 
+  // Final campaign-ready / full readiness summary — compose ALL confirmed
+  // items. Beats field correction / substep so Max never collapses to the
+  // latest readiness item, and never becomes execution confirmation.
+  const isCampaignReadySummary = Boolean(
+    !isClarificationNeeded &&
+      (input.isCampaignReadySummary ||
+        input.forceCampaignReadySummary ||
+        input.intent === 'campaign_ready_summary' ||
+        campaignReadyFromText)
+  );
+
   // Field fill / correction inside an active readiness substep — never dump
   // Launch Gate operational options or ask which path to prepare.
   const isReadinessFieldCorrection = Boolean(
     !isClarificationNeeded &&
+      !isCampaignReadySummary &&
       (input.isReadinessFieldCorrection ||
         input.forceReadinessFieldCorrection ||
         input.intent === 'readiness_field_correction' ||
@@ -519,6 +547,7 @@ function assessConversationContext(input = {}) {
   // Operator already picked a readiness item — stay in that substep.
   const isReadinessSubstep = Boolean(
     !isClarificationNeeded &&
+      !isCampaignReadySummary &&
       !isReadinessFieldCorrection &&
       (input.isReadinessSubstep ||
         input.forceReadinessSubstep ||
@@ -530,6 +559,7 @@ function assessConversationContext(input = {}) {
   // operator message — bare option names must never force execute confirm.
   const isReadinessCheck = Boolean(
     !isClarificationNeeded &&
+      !isCampaignReadySummary &&
       !isReadinessFieldCorrection &&
       !isReadinessSubstep &&
       (input.isReadinessCheck ||
@@ -538,6 +568,7 @@ function assessConversationContext(input = {}) {
   );
   const isNonExecutionIntent = Boolean(
     isClarificationNeeded ||
+      isCampaignReadySummary ||
       isReadinessFieldCorrection ||
       isReadinessSubstep ||
       isReadinessCheck ||
@@ -546,6 +577,7 @@ function assessConversationContext(input = {}) {
   );
   const isExecutionRequest = Boolean(
     !isClarificationNeeded &&
+      !isCampaignReadySummary &&
       !isReadinessFieldCorrection &&
       !isReadinessSubstep &&
       !isNonExecutionIntent &&
@@ -559,21 +591,23 @@ function assessConversationContext(input = {}) {
       ? 'plain_language_problem_then_detail'
       : isClarificationNeeded
         ? 'clarify_ambiguous_input'
-        : isReadinessFieldCorrection
-          ? 'ack_field_update_then_next_readiness'
-          : isReadinessSubstep
-            ? 'selected_readiness_substep_questions'
-            : isReadinessCheck
-              ? 'unresolved_readiness_then_ask'
-              : isExecutionRequest
-                ? 'explicit_execute_confirm'
-                : stateChanged || gateAlreadyApproved
-                  ? 'state_then_next_options'
-                  : isRevision
-                    ? 'ack_change_artifact'
-                    : isFirstTimeReview
-                      ? 'formal_gate_card'
-                      : 'concise_operator_update';
+        : isCampaignReadySummary
+          ? 'full_campaign_ready_summary'
+          : isReadinessFieldCorrection
+            ? 'ack_field_update_then_next_readiness'
+            : isReadinessSubstep
+              ? 'selected_readiness_substep_questions'
+              : isReadinessCheck
+                ? 'unresolved_readiness_then_ask'
+                : isExecutionRequest
+                  ? 'explicit_execute_confirm'
+                  : stateChanged || gateAlreadyApproved
+                    ? 'state_then_next_options'
+                    : isRevision
+                      ? 'ack_change_artifact'
+                      : isFirstTimeReview
+                        ? 'formal_gate_card'
+                        : 'concise_operator_update';
 
   const mustBlock = isExecutionRequest
     ? FULL_SAFETY_LINES.slice()
@@ -593,6 +627,7 @@ function assessConversationContext(input = {}) {
     isDiagnostic,
     isFirstTimeReview,
     isClarificationNeeded,
+    isCampaignReadySummary,
     isReadinessFieldCorrection,
     isReadinessSubstep,
     selectedReadinessItem: selectedReadinessItem || null,
@@ -621,12 +656,13 @@ function looksLikeLowSignalAmbiguousInput(text) {
   if (KNOWN_SHORT_OPERATOR_INTENTS.has(lower)) return false;
 
   // Clear multi-word / named intents are never low-signal.
+  if (looksLikeCampaignReadySummary(s)) return false;
   if (looksLikeReadinessSubstepSelection(s)) return false;
   if (looksLikeReadinessFieldCorrection(s)) return false;
   if (looksLikeOperatorReadinessCheck(s)) return false;
   if (looksLikeExecutionRequest(s)) return false;
   if (
-    /\b(?:approve|approved|revise|revision|export|crm|sender|reply|hold\s+for|options?|summarize|summarise|unresolved|readiness|update|signature)\b/i.test(
+    /\b(?:approve|approved|revise|revision|export|crm|sender|reply|hold\s+for|options?|summarize|summarise|unresolved|readiness|update|signature|campaign[- ]?ready)\b/i.test(
       s
     )
   ) {
@@ -675,6 +711,7 @@ function looksLikeNonExecutionIntent(text) {
   // Reply monitoring / Batch 1 review answers are readiness — never execution.
   if (parseReplyMonitoringBatchReviewFields(s).hasAny) return true;
   if (/\b(?:summarize|summarise)\b/i.test(s)) return true;
+  if (looksLikeCampaignReadySummary(s)) return true;
   if (
     /\bhelp\s+me\s+(?:decide|resolve|understand|review|choose)\b/i.test(s)
   ) {
@@ -712,13 +749,78 @@ function looksLikeNonExecutionIntent(text) {
 }
 
 /**
+ * Operator wants the full final campaign-ready / readiness summary —
+ * not a single substep, not unresolved-only checklist, not execute.
+ */
+function looksLikeCampaignReadySummary(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+
+  const explicitCampaignReady =
+    /\bcampaign_ready_summary\b/i.test(s) ||
+    /\bcampaign[- ]?ready\s+summary\b/i.test(s) ||
+    /\bfinal\s+(?:\w+\s+){0,6}(?:campaign[- ]?ready|readiness)\s+summary\b/i.test(
+      s
+    ) ||
+    /\b(?:provide|give|compose|produce|show|send|draft)\b[\s\S]{0,100}\b(?:campaign[- ]?ready|final\s+readiness)\s+summary\b/i.test(
+      s
+    ) ||
+    /\b(?:full|complete|final)\s+readiness\s+summary\b/i.test(s) ||
+    /\b(?:summarize|summarise)\b[\s\S]{0,60}\b(?:whole|full|complete|entire)\s+readiness\b/i.test(
+      s
+    ) ||
+    (/\breadiness\s+state\b/i.test(s) &&
+      /\b(?:summarize|summarise|summary|whole|full|complete)\b/i.test(s));
+
+  // Unresolved / remaining-gap checklists stay operator_readiness_check
+  // unless the operator explicitly asked for a campaign-ready summary.
+  const unresolvedGapAsk =
+    /\b(?:still\s+)?unresolved\b/i.test(s) ||
+    /\bremaining\s+readiness\b/i.test(s) ||
+    /\bbefore\s+choosing\b/i.test(s) ||
+    /\bhelp\s+me\s+resolve\b[\s\S]{0,48}\b(?:remaining|unresolved|readiness)\b/i.test(
+      s
+    );
+  if (unresolvedGapAsk && !explicitCampaignReady) {
+    return false;
+  }
+
+  if (explicitCampaignReady) return true;
+
+  // Multi-concept summary requests (lists several readiness items to include).
+  const concepts = [
+    /\bsender\s+identity\b/i,
+    /\breply\s+handling\b|\breply\s+inbox\b|\breply(?:\s*[-/]\s*to)\b/i,
+    /\boperational\s+path\b/i,
+    /\bfollow[- ]?up\s+tracking\b/i,
+    /\breply\s+monitoring\b|\bBatch\s*1\s+review\b/i,
+    /\bexecution\s+lock\b/i,
+    /\bBatch\s*1\s+(?:scope|approved)\b|\bapproved\s+Batch\s*1\b/i,
+  ];
+  const hitCount = concepts.filter((re) => re.test(s)).length;
+  if (
+    hitCount >= 4 &&
+    /\b(?:summary|summarize|summarise|include|campaign[- ]?ready)\b/i.test(s) &&
+    !/\bnot\s+confirmed\b/i.test(s) &&
+    !/\bnot\s+chosen\b/i.test(s)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Operator wants unresolved readiness gaps summarized / resolved — not execute.
  * Does NOT match when the operator already selected a specific readiness item
- * (that is readiness_substep).
+ * (that is readiness_substep). Campaign-ready full summaries are separate.
  */
 function looksLikeOperatorReadinessCheck(text) {
   const s = String(text || '').trim();
   if (!s) return false;
+
+  // Full final summary is campaign_ready_summary, not unresolved checklist.
+  if (looksLikeCampaignReadySummary(s)) return false;
 
   // Specific item already chosen — not a checklist / "which item" turn.
   if (detectSelectedReadinessItem(s)) return false;
@@ -771,6 +873,9 @@ function detectSelectedReadinessItem(text) {
   const s = String(text || '').trim();
   if (!s) return null;
 
+  // Full campaign-ready / readiness-state summaries are not a single substep.
+  if (looksLikeCampaignReadySummary(s)) return null;
+
   // Checklist / summarize asks are not a single-item substep selection.
   if (
     /\b(?:summarize|summarise|list)\b/i.test(s) &&
@@ -789,8 +894,20 @@ function detectSelectedReadinessItem(text) {
   const bulletCount = (s.match(/^(?:[-*•–—]|\d+[.)])\s+\S/gm) || []).length;
   if (bulletCount >= 2) return null;
 
+  // Comma/and lists that mention several readiness concepts are summaries,
+  // not a single-item selection.
+  const conceptHits = [
+    /\bsender\s+identity\b/i,
+    /\breply\s+handling\b|\breply\s+inbox\b/i,
+    /\boperational\s+path\b/i,
+    /\bfollow[- ]?up\s+tracking\b/i,
+    /\breply\s+monitoring\b|\bBatch\s*1\s+review\b/i,
+  ].filter((re) => re.test(s)).length;
+  if (conceptHits >= 3) return null;
+
   for (const item of Object.values(READINESS_SUBSTEPS)) {
-    const labelSource = item.match.source;
+    // Wrap alternations so prefixes/suffixes apply to the whole label match.
+    const labelSource = `(?:${item.match.source})`;
 
     // "Resolve sender identity now" / "focus on reply handling"
     if (
@@ -1883,6 +2000,9 @@ function looksLikeReadinessFieldCorrection(text, opts = {}) {
   const s = String(text || '').trim();
   if (!s) return false;
 
+  // Final full readiness summaries are never field corrections.
+  if (looksLikeCampaignReadySummary(s)) return false;
+
   const activeId = resolveActiveReadinessItemId(opts);
   const allowBarePath =
     activeId === 'operational_path' ||
@@ -2769,6 +2889,10 @@ function selectConversationMode(input = {}) {
   if (assessment.isClarificationNeeded) {
     return CONVERSATION_MODES.CLARIFICATION_NEEDED;
   }
+  // Final campaign-ready summary beats substep / field correction collapse.
+  if (assessment.isCampaignReadySummary) {
+    return CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY;
+  }
   // Field correction / substep update beats Launch Gate operational options.
   if (assessment.isReadinessFieldCorrection) {
     return CONVERSATION_MODES.READINESS_FIELD_CORRECTION;
@@ -2825,6 +2949,8 @@ function composeConversationResponse(mode, context = {}) {
       return composeOperatorDiagnostic(context);
     case CONVERSATION_MODES.FORMAL_REVIEW_GATE:
       return composeFormalReviewGate(context);
+    case CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY:
+      return composeCampaignReadySummary(context);
     case CONVERSATION_MODES.OPERATOR_READINESS_CHECK:
       return composeOperatorReadinessCheck(context);
     case CONVERSATION_MODES.READINESS_SUBSTEP:
@@ -3843,6 +3969,258 @@ function unresolvedReadinessItems(context = {}) {
 }
 
 /**
+ * Resolve approved Batch 1 scope text from campaign artifacts / slots.
+ */
+function resolveBatch1ScopeFromContext(context = {}) {
+  if (context.batch1Scope) return String(context.batch1Scope).trim();
+  const slots = context.slots || {};
+  if (slots.batch1Scope) return String(slots.batch1Scope).trim();
+
+  const strategy =
+    context.outreachStrategyPreview ||
+    context.priorOutreachStrategyPreview ||
+    null;
+  if (strategy && strategy.batch1Scope) {
+    return String(strategy.batch1Scope).trim();
+  }
+
+  const review =
+    context.prospectBatchReview ||
+    context.priorProspectBatchReview ||
+    null;
+  const batch =
+    (review && review.approvedBatch) ||
+    context.approvedBatch ||
+    null;
+  if (batch) {
+    const candidates = Array.isArray(batch.candidates) ? batch.candidates : [];
+    const names = candidates
+      .map((c) => c && (c.companyName || c.company))
+      .filter(Boolean);
+    const count =
+      batch.candidateCount != null ? batch.candidateCount : candidates.length;
+    if (count || names.length) {
+      const parts = [
+        `${count || names.length} approved cold first-pass prospects in Batch 1.`,
+      ];
+      if (names.length) {
+        parts.push(
+          `Accounts: ${names.slice(0, 12).join('; ')}${
+            names.length > 12 ? `; +${names.length - 12} more` : ''
+          }.`
+        );
+      }
+      return parts.join(' ');
+    }
+  }
+
+  const gate = context.gate || context.outreachLaunchGate || {};
+  if (gate.batch1Scope) return String(gate.batch1Scope).trim();
+  if (
+    gate.approvedCandidateCount != null ||
+    (Array.isArray(gate.batchProspects) && gate.batchProspects.length)
+  ) {
+    const count =
+      gate.approvedCandidateCount != null
+        ? gate.approvedCandidateCount
+        : gate.batchProspects.length;
+    const names = Array.isArray(gate.batchProspects) ? gate.batchProspects : [];
+    return [
+      `${count} approved cold first-pass prospects in Batch 1.`,
+      names.length
+        ? `Accounts: ${names.slice(0, 12).join('; ')}.`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  return 'Approved Batch 1 cold first-pass prospects (scope already approved).';
+}
+
+/**
+ * Next explicit execute action for the selected operational path.
+ * Never auto-executes — language only.
+ */
+function nextExecuteActionForOperationalPath(pathId, pathLabel) {
+  const id = String(pathId || '').trim();
+  const label = String(pathLabel || '').trim();
+  if (
+    id === 'manual_send_export' ||
+    /manual[-\s]?send\s+export/i.test(label)
+  ) {
+    return 'explicitly approve preparing the manual-send export for operator review';
+  }
+  if (id === 'crm_drafts' || /\bcrm\s+drafts?\b/i.test(label)) {
+    return 'explicitly approve creating CRM drafts';
+  }
+  if (id === 'queued_sends_later' || /\bqueue(?:d)?\s+sends?/i.test(label)) {
+    return 'explicitly approve queuing sends later';
+  }
+  if (id === 'hold' || /\bhold(?:\s+with\s+no\s+action)?\b/i.test(label)) {
+    return 'hold with no action (no execute action required)';
+  }
+  return 'explicitly approve the next prepare/export/CRM action if desired';
+}
+
+/**
+ * Final campaign-ready summary — compose the WHOLE readiness state.
+ * Never collapses to the latest readiness item. Never executes.
+ */
+function composeCampaignReadySummary(context = {}) {
+  const state = knownReadinessState(context);
+  const slots = context.slots || {};
+  const businessName =
+    context.businessName ||
+    slots.businessName ||
+    (context.outreachStrategyPreview &&
+      context.outreachStrategyPreview.businessName) ||
+    (context.prospectBatchReview &&
+      context.prospectBatchReview.businessName) ||
+    'Anchor';
+  const batchLabel =
+    context.batchName ||
+    slots.batchName ||
+    (context.outreachStrategyPreview &&
+      context.outreachStrategyPreview.batchName) ||
+    'Batch 1';
+  const batch1Scope = resolveBatch1ScopeFromContext(context);
+
+  const pathLabel =
+    (state.operationalPath && state.operationalPath.operationalPathLabel) ||
+    slots.operationalPathLabel ||
+    context.operationalPathLabel ||
+    'manual send export for operator review';
+  const pathId =
+    (state.operationalPath && state.operationalPath.operationalPathId) ||
+    slots.operationalPathId ||
+    context.operationalPathId ||
+    null;
+  const nextExecute = nextExecuteActionForOperationalPath(pathId, pathLabel);
+
+  const sender = state.senderIdentity || {};
+  const reply = state.replyHandling || {};
+  const followUp = state.followUpTracking || {};
+  const monitoring = state.replyMonitoringBatchReview || {};
+
+  const lines = [];
+  lines.push(`${businessName} ${batchLabel} campaign-ready summary`);
+  lines.push('');
+
+  lines.push('Batch 1 approved scope:');
+  lines.push(`- ${batch1Scope}`);
+  lines.push('');
+
+  if (
+    state.senderIdentityConfirmed &&
+    sender.senderName &&
+    sender.senderEmail &&
+    sender.senderSignature
+  ) {
+    lines.push('Sender identity confirmed:');
+    lines.push(`- ${sender.senderName}`);
+    lines.push(`- ${sender.senderEmail}`);
+    lines.push(`- ${sender.senderSignature}`);
+  } else {
+    lines.push('Sender identity: not fully confirmed');
+  }
+  lines.push('');
+
+  if (
+    state.replyInboxConfirmed &&
+    reply.replyInbox &&
+    reply.replyToMatchesSender !== null &&
+    reply.replyMonitoringOwner
+  ) {
+    lines.push('Reply handling confirmed:');
+    lines.push(`- ${reply.replyInbox}`);
+    lines.push(
+      `- reply-to ${
+        reply.replyToMatchesSender ? 'matches sender' : 'does not match sender'
+      }`
+    );
+    lines.push(`- ${reply.replyMonitoringOwner} monitors`);
+  } else {
+    lines.push('Reply handling: not fully confirmed');
+  }
+  lines.push('');
+
+  if (state.operationalPathChosen && pathLabel) {
+    lines.push('Operational path selected:');
+    lines.push(`- ${pathLabel}`);
+  } else {
+    lines.push('Operational path: not selected');
+  }
+  lines.push('');
+
+  if (state.followUpTrackingConfirmed) {
+    lines.push('Follow-up tracking confirmed');
+    if (followUp.followUpTrackingLocation) {
+      lines.push(`- Status tracked in ${followUp.followUpTrackingLocation}`);
+    }
+  } else {
+    lines.push('Follow-up tracking: not confirmed');
+  }
+  lines.push('');
+
+  if (state.replyMonitoringBatch1Confirmed) {
+    lines.push('Reply monitoring / Batch 1 review confirmed');
+    if (monitoring.replyMonitoringOwner) {
+      lines.push(`- Reply monitoring owner: ${monitoring.replyMonitoringOwner}`);
+    }
+    if (monitoring.broaderRolloutBlocked) {
+      lines.push(
+        '- Broader rollout remains blocked until Batch 1 results are reviewed'
+      );
+    }
+  } else {
+    lines.push('Reply monitoring / Batch 1 review: not confirmed');
+  }
+  lines.push('');
+
+  lines.push('Execution lock: active');
+  lines.push('');
+  lines.push(`Next possible execute action: ${nextExecute}`);
+  lines.push('');
+  lines.push(
+    context.safetyLine ||
+      context.compactSafety ||
+      CAMPAIGN_READY_SUMMARY_SAFETY_LINE
+  );
+  lines.push('');
+  lines.push(
+    context.closingAsk ||
+      context.closingQuestion ||
+      CAMPAIGN_READY_SUMMARY_CLOSING
+  );
+
+  const message = lines.join('\n').trim();
+  return {
+    mode: CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY,
+    responseMode: toResponseMode(CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY),
+    message,
+    includeRendererSections: false,
+    includeExpandedSafety: false,
+    batch1Scope,
+    senderIdentityConfirmed: state.senderIdentityConfirmed === true,
+    replyInboxConfirmed: state.replyInboxConfirmed === true,
+    operationalPathChosen: state.operationalPathChosen === true,
+    operationalPathLabel: pathLabel,
+    followUpTrackingConfirmed: state.followUpTrackingConfirmed === true,
+    replyMonitoringBatch1Confirmed:
+      state.replyMonitoringBatch1Confirmed === true,
+    executionLockActive: true,
+    nextExecuteAction: nextExecute,
+    requiresExplicitApproval: false,
+    executionPending: false,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+  };
+}
+
+/**
  * Readiness check — list unresolved items only; never ask for execute approval.
  * Confirmed readiness is shown separately and never under "still unresolved".
  * After an item is completed, advance to the next unresolved item — do not
@@ -4387,6 +4765,11 @@ function applyConversationalPolicy(reply, context = {}) {
       reply.responseMode === 'operator_readiness_check' ||
       reply.conversationMode === 'operator_readiness_check' ||
       reply.intent === 'operator_readiness_check',
+    isCampaignReadySummary:
+      context.isCampaignReadySummary ||
+      reply.responseMode === 'campaign_ready_summary' ||
+      reply.conversationMode === 'campaign_ready_summary' ||
+      reply.intent === 'campaign_ready_summary',
     isReadinessSubstep:
       context.isReadinessSubstep ||
       reply.responseMode === 'readiness_substep' ||
@@ -4506,6 +4889,7 @@ module.exports = {
   assessConversationContext,
   looksLikeLowSignalAmbiguousInput,
   looksLikeNonExecutionIntent,
+  looksLikeCampaignReadySummary,
   looksLikeOperatorReadinessCheck,
   looksLikeReadinessSubstepSelection,
   detectSelectedReadinessItem,
@@ -4532,6 +4916,7 @@ module.exports = {
   composeOperatorRevisionResponse,
   composeOperatorDiagnostic,
   composeFormalReviewGate,
+  composeCampaignReadySummary,
   composeOperatorReadinessCheck,
   composeReadinessSubstep,
   composeReadinessFieldCorrection,
@@ -4555,6 +4940,10 @@ module.exports = {
   formatOperatorDiagnosticMessage,
   applyConversationalPolicy,
   selectResponseModeWithPolicy,
+  CAMPAIGN_READY_SUMMARY_SAFETY_LINE,
+  CAMPAIGN_READY_SUMMARY_CLOSING,
+  resolveBatch1ScopeFromContext,
+  nextExecuteActionForOperationalPath,
   normalizeNextPathPhrase,
   sanitizeApprovedStateLeadIn,
   dedupeOperatorStateUpdateMessage,
