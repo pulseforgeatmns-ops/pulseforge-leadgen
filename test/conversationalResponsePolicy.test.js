@@ -35,10 +35,12 @@ const {
   looksLikeReadinessFieldCorrection,
   parseSenderIdentityFields,
   parseReplyHandlingFields,
+  parseOperationalPathSelection,
   mergeSenderIdentityState,
   mergeReplyHandlingState,
   isSenderFieldValueLine,
   isReplyFieldValueLine,
+  isOperationalPathValueLine,
   READINESS_CHECKLIST_SAFETY_LINE,
   CLARIFICATION_NEEDED_ASK,
   READINESS_SUBSTEPS,
@@ -631,6 +633,149 @@ describe('ConversationalResponsePolicy', () => {
     );
     for (const item of check.unresolvedItems || []) {
       assert.equal(isReplyFieldValueLine(item), false);
+    }
+  });
+
+  it('selects readiness_field_correction for operational path selection', () => {
+    const text =
+      'Select operational path: manual send export for operator review. This is path selection only, not execute approval.';
+    assert.equal(looksLikeReadinessFieldCorrection(text), true);
+    assert.equal(looksLikeExecutionRequest(text), false);
+    assert.equal(looksLikeOperatorReadinessCheck(text), false);
+    assert.equal(looksLikeNonExecutionIntent(text), true);
+
+    const parsed = parseOperationalPathSelection(text);
+    assert.equal(parsed.hasAny, true);
+    assert.equal(parsed.pathId, 'manual_send_export');
+    assert.equal(parsed.pathLabel, 'manual send export for operator review');
+    assert.equal(parsed.isPathSelectionOnly, true);
+
+    const mode = selectConversationMode({
+      text,
+      operatorMessage: text,
+      launchGateApproved: true,
+      activeReadinessItemId: 'operational_path',
+      slots: {
+        activeReadinessItemId: 'operational_path',
+        senderIdentityConfirmed: true,
+        replyInboxConfirmed: true,
+      },
+    });
+    assert.equal(mode, CONVERSATION_MODES.READINESS_FIELD_CORRECTION);
+    assert.notEqual(mode, CONVERSATION_MODES.EXECUTION_CONFIRMATION);
+    assert.notEqual(mode, CONVERSATION_MODES.OPERATOR_READINESS_CHECK);
+  });
+
+  it('confirms operational path and advances to follow-up tracking without execute', () => {
+    const text =
+      'Select operational path: manual send export for operator review. This is path selection only, not execute approval.';
+
+    const composed = composeReadinessFieldCorrection({
+      operatorMessage: text,
+      activeReadinessItemId: 'operational_path',
+      slots: {
+        activeReadinessItemId: 'operational_path',
+        senderIdentityConfirmed: true,
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        replyInboxConfirmed: true,
+        replyHandlingConfirmed: true,
+        replyInbox: 'jacob@goanchorcleaning.com',
+        replyToMatchesSender: true,
+        replyMonitoringOwner: 'Jacob Maynard',
+      },
+    });
+
+    assert.equal(composed.responseMode, 'readiness_field_correction');
+    assert.equal(composed.itemConfirmed, true);
+    assert.equal(composed.requiresExplicitApproval, false);
+    assert.equal(composed.executionPending, false);
+    assert.equal(composed.exportMade, false);
+    assert.equal(composed.readinessItemId, 'operational_path');
+    assert.equal(composed.nextReadinessItem.id, 'follow_up_tracking');
+    assert.equal(
+      composed.operationalPath.operationalPathLabel,
+      'manual send export for operator review'
+    );
+    assert.match(composed.message, /^Operational path is selected:/m);
+    assert.match(
+      composed.message,
+      /- manual send export for operator review/i
+    );
+    assert.match(
+      composed.message,
+      /This is path selection only\. No export has been prepared\./i
+    );
+    assert.match(
+      composed.message,
+      /Next readiness item:\s*follow-up tracking process/i
+    );
+    assert.match(composed.message, /^Where should follow-up status be tracked\?/m);
+    assert.match(
+      composed.message,
+      /^Should Follow-up 1 be planned for about 3 business days after first touch\?/m
+    );
+    assert.match(
+      composed.message,
+      /^Should Follow-up 2 be planned for about 7 business days after first touch\?/m
+    );
+    assert.match(
+      composed.message,
+      /^Should all follow-ups remain review-first\/manual unless explicitly enabled later\?/m
+    );
+    assert.match(
+      composed.message,
+      /Nothing external has happened\. Sends, export, and CRM writes remain locked\./i
+    );
+    assert.doesNotMatch(composed.message, /Still unresolved before any export/i);
+    assert.doesNotMatch(
+      composed.message,
+      /Which readiness item should we resolve first/i
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(composed.message, /Exact action/i);
+    assert.equal(looksLikeExecutionRequest(composed.message), false);
+
+    // Misrouted readiness-check path must keep selected path confirmed.
+    const check = composeOperatorReadinessCheck({
+      operatorMessage: text,
+      unresolvedItems: [
+        'manual send export for operator review',
+        'where should follow-up status be tracked?',
+        'Should Follow-up 1 be planned for about 3 business days after first touch?',
+      ],
+      slots: {
+        senderIdentityConfirmed: true,
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        replyInboxConfirmed: true,
+        replyInbox: 'jacob@goanchorcleaning.com',
+        replyToMatchesSender: true,
+        replyMonitoringOwner: 'Jacob Maynard',
+      },
+    });
+    assert.match(check.message, /Operational path is selected/i);
+    assert.match(
+      check.message,
+      /manual send export for operator review/i
+    );
+    assert.match(
+      check.message,
+      /Next readiness item:\s*follow-up tracking process/i
+    );
+    assert.doesNotMatch(check.message, /Still unresolved before any export/i);
+    assert.doesNotMatch(
+      check.message,
+      /Which readiness item should we resolve first/i
+    );
+    for (const item of check.unresolvedItems || []) {
+      assert.equal(isOperationalPathValueLine(item), false);
+      assert.doesNotMatch(item, /manual send export for operator review/i);
     }
   });
 

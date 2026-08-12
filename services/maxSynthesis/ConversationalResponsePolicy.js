@@ -145,20 +145,67 @@ const READINESS_SUBSTEPS = Object.freeze({
   }),
   follow_up_tracking: Object.freeze({
     id: 'follow_up_tracking',
-    label: 'follow-up tracking',
-    match: /\bfollow[- ]?up\s+tracking\b/i,
+    label: 'follow-up tracking process',
+    match: /\bfollow[- ]?up\s+tracking(?:\s+process)?\b/i,
     questions: Object.freeze([
-      'Where should follow-ups be tracked (CRM, sheet, or elsewhere)?',
-      'Who owns updating follow-up status after each touch?',
-      'What counts as done vs needs another follow-up?',
+      'Where should follow-up status be tracked?',
+      'Should Follow-up 1 be planned for about 3 business days after first touch?',
+      'Should Follow-up 2 be planned for about 7 business days after first touch?',
+      'Should all follow-ups remain review-first/manual unless explicitly enabled later?',
     ]),
     closingAsk:
       "Once you answer those, I'll mark follow-up tracking as confirmed or note what still needs review.",
+  }),
+  operational_path: Object.freeze({
+    id: 'operational_path',
+    label: 'operational path selection',
+    match: /\boperational\s+path(?:\s+selection)?\b/i,
+    questions: Object.freeze([
+      'Do you want to prepare for manual send, CRM drafts, queued sends later, or hold with no action?',
+    ]),
+    closingAsk:
+      "Once you choose a path, I'll mark operational path as selected. Path selection is not execute approval.",
   }),
 });
 
 const READINESS_SUBSTEP_SAFETY_LINE =
   'Nothing external has happened. Sends, export, and CRM writes remain locked.';
+
+/**
+ * Canonical operational path choices. Selecting one confirms readiness only —
+ * never prepares export, CRM drafts, or queued sends.
+ */
+const OPERATIONAL_PATH_CHOICES = Object.freeze({
+  manual_send_export: Object.freeze({
+    id: 'manual_send_export',
+    label: 'manual send export for operator review',
+    match:
+      /\bmanual[-\s]?send\s+export(?:\s+for\s+(?:operator\s+)?review)?\b|\bprepare\s+(?:a\s+)?manual[-\s]?send\s+export\b/i,
+    selectionNote:
+      'This is path selection only. No export has been prepared.',
+  }),
+  crm_drafts: Object.freeze({
+    id: 'crm_drafts',
+    label: 'CRM drafts',
+    match: /\bcrm\s+drafts?\b/i,
+    selectionNote:
+      'This is path selection only. No CRM drafts have been prepared.',
+  }),
+  queued_sends_later: Object.freeze({
+    id: 'queued_sends_later',
+    label: 'queued sends later',
+    match: /\bqueue(?:d)?\s+sends?(?:\s+later)?\b/i,
+    selectionNote:
+      'This is path selection only. No sends have been queued.',
+  }),
+  hold: Object.freeze({
+    id: 'hold',
+    label: 'hold with no action',
+    match: /\bhold(?:\s+with\s+no\s+action)?\b|\bno\s+action\b/i,
+    selectionNote:
+      'This is path selection only. No action has been prepared.',
+  }),
+});
 
 /**
  * Next readiness item prompts after a substep is confirmed.
@@ -187,12 +234,13 @@ const READINESS_NEXT_ITEM_PROMPTS = Object.freeze({
   }),
   follow_up_tracking: Object.freeze({
     id: 'follow_up_tracking',
-    label: 'follow-up tracking',
-    ask: 'Where should follow-ups be tracked, and who owns updating status after each touch?',
+    label: 'follow-up tracking process',
+    ask: 'Where should follow-up status be tracked?',
     questions: Object.freeze([
-      'Where should follow-ups be tracked (CRM, sheet, or elsewhere)?',
-      'Who owns updating follow-up status after each touch?',
-      'What counts as done vs needs another follow-up?',
+      'Where should follow-up status be tracked?',
+      'Should Follow-up 1 be planned for about 3 business days after first touch?',
+      'Should Follow-up 2 be planned for about 7 business days after first touch?',
+      'Should all follow-ups remain review-first/manual unless explicitly enabled later?',
     ]),
   }),
 });
@@ -590,6 +638,16 @@ function looksLikeNonExecutionIntent(text) {
   if (/\bnot\s+yet\b/i.test(s)) return true;
   if (
     /\b(?:hold\s+for\s+now|hold\s+with\s+no\s+action|just\s+hold)\b/i.test(s)
+  ) {
+    return true;
+  }
+  // Path selection is readiness confirmation — never execution.
+  if (/\bpath\s+selection\s+only\b/i.test(s)) return true;
+  if (/\bnot\s+(?:an?\s+)?execute\s+approval\b/i.test(s)) return true;
+  if (
+    /\b(?:select(?:ed)?|choose|chose|pick(?:ed)?)\s+operational\s+path\b/i.test(
+      s
+    )
   ) {
     return true;
   }
@@ -1035,6 +1093,137 @@ function mergeSenderIdentityState(prior = {}, parsed = {}) {
   };
 }
 
+/**
+ * Normalize a free-text operational path phrase to a canonical choice.
+ * @returns {{ id: string, label: string, selectionNote: string }|null}
+ */
+function normalizeOperationalPathChoice(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  for (const choice of Object.values(OPERATIONAL_PATH_CHOICES)) {
+    if (choice.match.test(s)) {
+      return {
+        id: choice.id,
+        label: choice.label,
+        selectionNote: choice.selectionNote,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse operational path selection from free text.
+ * Path selection confirms readiness only — never execute approval.
+ * @param {string} text
+ * @param {{ allowBarePath?: boolean }} [opts]
+ * @returns {{
+ *   pathId: string|null,
+ *   pathLabel: string|null,
+ *   selectionNote: string|null,
+ *   isPathSelectionOnly: boolean,
+ *   updatedFields: string[],
+ *   hasAny: boolean
+ * }}
+ */
+function parseOperationalPathSelection(text, opts = {}) {
+  const s = String(text || '').trim();
+  const empty = {
+    pathId: null,
+    pathLabel: null,
+    selectionNote: null,
+    isPathSelectionOnly: false,
+    updatedFields: [],
+    hasAny: false,
+  };
+  if (!s) return empty;
+
+  const isPathSelectionOnly =
+    /\bpath\s+selection\s+only\b/i.test(s) ||
+    /\bnot\s+(?:an?\s+)?execute\s+approval\b/i.test(s) ||
+    /\bnot\s+execution\s+approval\b/i.test(s) ||
+    /\bselection\s+only[,.]?\s+not\s+execute\b/i.test(s);
+
+  const hasSelectFraming =
+    /\b(?:select(?:ed)?|choose|chose|pick(?:ed)?|set|confirm(?:ed)?)\s+operational\s+path(?:\s+selection)?\b/i.test(
+      s
+    ) ||
+    /\boperational\s+path(?:\s+selection)?\s*(?:is\s+)?[:\-–—]/i.test(s) ||
+    isPathSelectionOnly;
+
+  // "Select operational path: manual send export for operator review"
+  const labeled = s.match(
+    /\b(?:select(?:ed)?|choose|chose|pick(?:ed)?|set|confirm(?:ed)?)\s+operational\s+path(?:\s+selection)?\s*[:\-–—]\s*([^\n.]+)/i
+  );
+  // "operational path: …" / "operational path is …"
+  const bareLabeled = s.match(
+    /\boperational\s+path(?:\s+selection)?\s*(?:is\s+)?[:\-–—]\s*([^\n.]+)/i
+  );
+  const selectedChunk = labeled
+    ? labeled[1].trim()
+    : bareLabeled
+      ? bareLabeled[1].trim()
+      : null;
+
+  let choice = selectedChunk
+    ? normalizeOperationalPathChoice(selectedChunk)
+    : null;
+
+  // Explicit select/path-selection framing with a known path phrase in the message.
+  if (!choice && hasSelectFraming) {
+    choice = normalizeOperationalPathChoice(s);
+  }
+
+  // Inside an active operational-path substep, a bare known path phrase counts.
+  if (!choice && opts.allowBarePath) {
+    choice = normalizeOperationalPathChoice(s);
+  }
+
+  if (!choice) return { ...empty, isPathSelectionOnly };
+
+  return {
+    pathId: choice.id,
+    pathLabel: choice.label,
+    selectionNote: choice.selectionNote,
+    isPathSelectionOnly: true,
+    updatedFields: ['operational_path'],
+    hasAny: true,
+  };
+}
+
+/**
+ * Merge prior operational-path slots with newly parsed selection.
+ */
+function mergeOperationalPathState(prior = {}, parsed = {}) {
+  const pathId =
+    parsed.pathId ||
+    prior.operationalPathId ||
+    prior.pathId ||
+    null;
+  const pathLabel =
+    parsed.pathLabel ||
+    prior.operationalPathLabel ||
+    prior.pathLabel ||
+    (pathId &&
+      OPERATIONAL_PATH_CHOICES[pathId] &&
+      OPERATIONAL_PATH_CHOICES[pathId].label) ||
+    null;
+  const selectionNote =
+    parsed.selectionNote ||
+    (pathId &&
+      OPERATIONAL_PATH_CHOICES[pathId] &&
+      OPERATIONAL_PATH_CHOICES[pathId].selectionNote) ||
+    'This is path selection only. Nothing has been prepared or executed.';
+  const confirmed = Boolean(pathId && pathLabel);
+  return {
+    operationalPathId: pathId,
+    operationalPathLabel: pathLabel,
+    operationalPathChosen: confirmed,
+    selectionNote,
+    missing: confirmed ? [] : ['operational path choice'],
+  };
+}
+
 function resolveActiveReadinessItemId(opts = {}) {
   if (opts.activeReadinessItemId) return opts.activeReadinessItemId;
   if (opts.slots && opts.slots.activeReadinessItemId) {
@@ -1067,6 +1256,19 @@ function looksLikeReadinessFieldCorrection(text, opts = {}) {
   const s = String(text || '').trim();
   if (!s) return false;
 
+  const activeId = resolveActiveReadinessItemId(opts);
+  const allowBarePath =
+    activeId === 'operational_path' ||
+    activeId === 'operational_path_selection';
+
+  // Concrete operational path choice confirms readiness — never execute.
+  // Check before substep-selection short-circuit so
+  // "Select operational path: manual send export…" is treated as confirmation.
+  const pathParsed = parseOperationalPathSelection(s, { allowBarePath });
+  if (pathParsed.hasAny) {
+    return true;
+  }
+
   // Selecting a checklist item is not a field correction.
   if (detectSelectedReadinessItem(s) && !parseSenderIdentityFields(s).hasAny) {
     // Allow "resolve sender identity" without fields to stay as substep selection.
@@ -1088,7 +1290,6 @@ function looksLikeReadinessFieldCorrection(text, opts = {}) {
     return true;
   }
 
-  const activeId = resolveActiveReadinessItemId(opts);
   if (activeId === 'sender_identity' || activeId === 'sender') {
     if (parseSenderIdentityFields(s).hasAny) return true;
   }
@@ -1184,17 +1385,25 @@ function composeReadinessFieldCorrection(context = {}) {
   // state. Never drop previously provided fields unless replaced here.
   const senderParsed = parseSenderIdentityFields(text);
   const replyParsed = parseReplyHandlingFields(text);
+  const pathParsed = parseOperationalPathSelection(text, {
+    allowBarePath:
+      activeId === 'operational_path' ||
+      activeId === 'operational_path_selection',
+  });
 
   // Infer item from fields when active id is missing / mismatched.
-  if (senderParsed.hasAny && !replyParsed.hasAny) {
+  if (pathParsed.hasAny && !senderParsed.hasAny && !replyParsed.hasAny) {
+    activeId = 'operational_path';
+  } else if (senderParsed.hasAny && !replyParsed.hasAny && !pathParsed.hasAny) {
     activeId = 'sender_identity';
-  } else if (replyParsed.hasAny && !senderParsed.hasAny) {
+  } else if (replyParsed.hasAny && !senderParsed.hasAny && !pathParsed.hasAny) {
     activeId = 'reply_handling';
   }
 
   const lines = [];
   let senderState = mergeSenderIdentityState(priorFields, {});
   let replyHandlingState = null;
+  let operationalPathState = null;
   let nextItem = null;
   let itemConfirmed = false;
   const corrected = senderParsed.updatedFields.slice();
@@ -1389,6 +1598,74 @@ function composeReadinessFieldCorrection(context = {}) {
 
     // Expose reply state on the composed result via closure vars below.
     replyHandlingState = replyState;
+  } else if (
+    activeId === 'operational_path' ||
+    activeId === 'operational_path_selection'
+  ) {
+    const priorPath = {
+      operationalPathId:
+        slots.operationalPathId || context.operationalPathId || null,
+      operationalPathLabel:
+        slots.operationalPathLabel || context.operationalPathLabel || null,
+      pathId: slots.operationalPathId || context.operationalPathId || null,
+      pathLabel:
+        slots.operationalPathLabel || context.operationalPathLabel || null,
+    };
+    const pathState = mergeOperationalPathState(priorPath, pathParsed);
+    operationalPathState = pathState;
+
+    if (pathState.operationalPathChosen) {
+      itemConfirmed = true;
+      lines.push('Operational path is selected:');
+      lines.push(`- ${pathState.operationalPathLabel}`);
+      lines.push('');
+      lines.push(
+        pathState.selectionNote ||
+          'This is path selection only. Nothing has been prepared or executed.'
+      );
+
+      nextItem = nextReadinessItemAfter('operational_path', {
+        ...context,
+        slots: {
+          ...slots,
+          operationalPathChosen: true,
+          operationalPathId: pathState.operationalPathId,
+          operationalPathLabel: pathState.operationalPathLabel,
+        },
+        confirmedReadiness: {
+          ...(context.confirmedReadiness || {}),
+          operational_path: true,
+          operational_path_selection: true,
+        },
+      });
+      if (nextItem) {
+        const questions =
+          Array.isArray(nextItem.questions) && nextItem.questions.length
+            ? nextItem.questions
+            : nextItem.ask
+              ? [nextItem.ask]
+              : [];
+        lines.push('');
+        lines.push(`Next readiness item: ${nextItem.label}.`);
+        if (questions.length) {
+          lines.push('');
+          for (const q of questions) lines.push(q);
+        }
+        lines.push('');
+        lines.push(READINESS_SUBSTEP_SAFETY_LINE);
+      }
+    } else {
+      lines.push('Still needed for operational path selection:');
+      lines.push(
+        '- Choose manual send export, CRM drafts, queued sends later, or hold with no action'
+      );
+      lines.push('');
+      lines.push(
+        'This is path selection only — not execute approval.'
+      );
+      lines.push('');
+      lines.push(READINESS_SUBSTEP_SAFETY_LINE);
+    }
   } else {
     lines.push('Updated the active readiness fields.');
   }
@@ -1407,11 +1684,15 @@ function composeReadinessFieldCorrection(context = {}) {
     nextReadinessItem: nextItem,
     senderIdentity: senderState,
     replyHandling: replyHandlingState,
+    operationalPath: operationalPathState,
     itemConfirmed,
     correctedFields:
       activeId === 'reply_handling'
         ? replyParsed.updatedFields.slice()
-        : corrected,
+        : activeId === 'operational_path' ||
+            activeId === 'operational_path_selection'
+          ? pathParsed.updatedFields.slice()
+          : corrected,
     requiresExplicitApproval: false,
     executionPending: false,
     sendsMade: false,
@@ -1432,6 +1713,10 @@ function looksLikeExecutionRequest(text) {
 
   // Planning / readiness / deferral always wins over path-name mentions.
   if (looksLikeNonExecutionIntent(s) || looksLikeOperatorReadinessCheck(s)) {
+    return false;
+  }
+  // Path selection confirms readiness only — never execute confirmation.
+  if (parseOperationalPathSelection(s).hasAny) {
     return false;
   }
 
@@ -1775,7 +2060,7 @@ function extractOperatorReadinessChecklist(text) {
     if (!item || item.length < 8) return;
     // Skip instructional / selection lines that are not checklist items.
     if (
-      /^(?:before\s+choosing|please\s+summarize|help\s+me|still\s+unresolved|which\s+readiness|nothing\s+external|resolve\s+|i\s+already\s+selected|do\s+not\s+repeat)\b/i.test(
+      /^(?:before\s+choosing|please\s+summarize|help\s+me|still\s+unresolved|which\s+readiness|nothing\s+external|resolve\s+|i\s+already\s+selected|do\s+not\s+repeat|select(?:ed)?\s+operational\s+path|this\s+is\s+path\s+selection)\b/i.test(
         item
       )
     ) {
@@ -1784,6 +2069,7 @@ function extractOperatorReadinessChecklist(text) {
     // Confirmed/provided field values are not unresolved readiness gaps.
     if (isSenderFieldValueLine(item)) return;
     if (isReplyFieldValueLine(item)) return;
+    if (isOperationalPathValueLine(item)) return;
     const key = item.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
@@ -1856,12 +2142,50 @@ function isReplyFieldValueLine(text) {
 }
 
 /**
+ * True when a checklist line is a selected operational path value, not a gap.
+ * e.g. "manual send export for operator review"
+ */
+function isOperationalPathValueLine(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  if (/^operational\s+path(?:\s+selection)?\s*[:\-–—]\s*\S+/i.test(t)) {
+    return true;
+  }
+  if (
+    /^operational\s+path(?:\s+selection)?\s+is\s+(?:selected|chosen)\b/i.test(t)
+  ) {
+    return true;
+  }
+  // Bare known path labels (often extracted from a selection message).
+  for (const choice of Object.values(OPERATIONAL_PATH_CHOICES)) {
+    if (
+      new RegExp(
+        `^${choice.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+        'i'
+      ).test(t)
+    ) {
+      return true;
+    }
+    if (choice.match.test(t) && t.length <= choice.label.length + 24) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * True when a line is an open readiness question (still unresolved).
  */
 function isOpenReadinessQuestionLine(text) {
   const t = String(text || '').trim();
   if (!t) return false;
-  if (isSenderFieldValueLine(t) || isReplyFieldValueLine(t)) return false;
+  if (
+    isSenderFieldValueLine(t) ||
+    isReplyFieldValueLine(t) ||
+    isOperationalPathValueLine(t)
+  ) {
+    return false;
+  }
   if (/\?$/.test(t)) return true;
   return /^(?:what|who|should|where|how|do\s+you\s+want)\b/i.test(t);
 }
@@ -1874,6 +2198,9 @@ function readinessConceptId(item) {
   if (isReplyFieldValueLine(s)) {
     if (/monitoring\s+owner/i.test(s)) return 'reply_monitoring_owner';
     return 'reply_inbox_handling';
+  }
+  if (isOperationalPathValueLine(s)) {
+    return 'operational_path';
   }
   for (const concept of READINESS_CONCEPT_PATTERNS) {
     if (concept.match.test(s)) return concept.id;
@@ -1892,6 +2219,12 @@ function readinessConceptId(item) {
     )
   ) {
     return 'operational_path';
+  }
+  if (
+    isOpenReadinessQuestionLine(s) &&
+    /\bfollow[- ]?up\b/i.test(s)
+  ) {
+    return 'follow_up_tracking_process';
   }
   return `custom:${s.toLowerCase().slice(0, 80)}`;
 }
@@ -1947,6 +2280,35 @@ function resolveReplyHandlingFromContext(context = {}) {
 }
 
 /**
+ * Resolve operational path selection from slots + latest operator message.
+ */
+function resolveOperationalPathFromContext(context = {}) {
+  const slots = context.slots || {};
+  const prior = {
+    operationalPathId:
+      slots.operationalPathId || context.operationalPathId || null,
+    operationalPathLabel:
+      slots.operationalPathLabel || context.operationalPathLabel || null,
+    pathId: slots.operationalPathId || context.operationalPathId || null,
+    pathLabel:
+      slots.operationalPathLabel || context.operationalPathLabel || null,
+  };
+  const activeId =
+    context.activeReadinessItemId ||
+    slots.activeReadinessItemId ||
+    null;
+  const parsed = parseOperationalPathSelection(
+    context.operatorMessage || context.text || context.userMessage || '',
+    {
+      allowBarePath:
+        activeId === 'operational_path' ||
+        activeId === 'operational_path_selection',
+    }
+  );
+  return mergeOperationalPathState(prior, parsed);
+}
+
+/**
  * Known readiness facts from gate / slots / campaign memory / latest message.
  * Missing facts stay unknown — never treat unknown as resolved.
  */
@@ -1965,6 +2327,7 @@ function knownReadinessState(context = {}) {
   };
   const senderResolved = resolveSenderIdentityFromContext(context);
   const replyResolved = resolveReplyHandlingFromContext(context);
+  const pathResolved = resolveOperationalPathFromContext(context);
   const replyConfirmed = Boolean(
     confirmed.reply_inbox_handling ||
       confirmed.replyInboxHandling ||
@@ -1994,11 +2357,15 @@ function knownReadinessState(context = {}) {
         context.replyMonitoringConfirmed ||
         Boolean(replyResolved.replyMonitoringOwner)
     ),
+    operationalPath: pathResolved,
     operationalPathChosen: Boolean(
       confirmed.operational_path ||
+        confirmed.operational_path_selection ||
         confirmed.operationalPath ||
+        confirmed.operationalPathSelection ||
         slots.operationalPathChosen ||
-        context.operationalPathChosen
+        context.operationalPathChosen ||
+        pathResolved.operationalPathChosen
     ),
     followUpTrackingConfirmed: Boolean(
       confirmed.follow_up_tracking_process ||
@@ -2062,6 +2429,17 @@ function evaluateReadinessItemAgainstState(item, context = {}) {
       status: 'confirmed',
       reason: 'reply handling field present',
       concept: readinessConceptId(text),
+      display: text,
+    };
+  }
+
+  // Selected operational path values are confirmed facts, never unresolved gaps.
+  if (isOperationalPathValueLine(text)) {
+    return {
+      text,
+      status: 'confirmed',
+      reason: 'operational path selected',
+      concept: 'operational_path',
       display: text,
     };
   }
@@ -2187,6 +2565,21 @@ function mergeOperatorReadinessChecklist(context = {}) {
     usedConcepts.add('reply_monitoring_owner');
   }
 
+  // Confirmed operational path selection.
+  if (
+    state.operationalPathChosen &&
+    state.operationalPath &&
+    state.operationalPath.operationalPathLabel
+  ) {
+    confirmed.push({
+      concept: 'operational_path',
+      status: 'confirmed',
+      label: 'Operational path is selected',
+      fields: [state.operationalPath.operationalPathLabel],
+    });
+    usedConcepts.add('operational_path');
+  }
+
   for (const item of sourceItems) {
     const evaluated = evaluateReadinessItemAgainstState(item, context);
     evaluations.push(evaluated);
@@ -2197,7 +2590,8 @@ function mergeOperatorReadinessChecklist(context = {}) {
         evaluated.concept === 'sender_identity' ||
         evaluated.concept === 'reply_inbox_handling' ||
         evaluated.concept === 'reply_handling_generic' ||
-        evaluated.concept === 'reply_monitoring_owner'
+        evaluated.concept === 'reply_monitoring_owner' ||
+        evaluated.concept === 'operational_path'
       ) {
         continue;
       }
@@ -2228,7 +2622,13 @@ function mergeOperatorReadinessChecklist(context = {}) {
 
   // Drop confirmed field-value lines and default "not confirmed" wording.
   const unresolvedFiltered = unresolved.filter((item) => {
-    if (isSenderFieldValueLine(item) || isReplyFieldValueLine(item)) return false;
+    if (
+      isSenderFieldValueLine(item) ||
+      isReplyFieldValueLine(item) ||
+      isOperationalPathValueLine(item)
+    ) {
+      return false;
+    }
     if (
       state.senderIdentityConfirmed &&
       /\bsender\s+identity\s+is\s+not\s+confirmed\b/i.test(item)
@@ -2238,6 +2638,13 @@ function mergeOperatorReadinessChecklist(context = {}) {
     if (
       state.replyInboxConfirmed &&
       /\breply\s+handling\s+is\s+not\s+confirmed\b/i.test(item)
+    ) {
+      return false;
+    }
+    if (
+      state.operationalPathChosen &&
+      /\boperational\s+path\b/i.test(item) &&
+      /\b(?:not\s+chosen|is\s+not\s+confirmed|not\s+selected)\b/i.test(item)
     ) {
       return false;
     }
@@ -2255,6 +2662,7 @@ function mergeOperatorReadinessChecklist(context = {}) {
     replyInboxConfirmed: state.replyInboxConfirmed,
     replyHandling: state.replyHandling,
     operationalPathChosen: state.operationalPathChosen,
+    operationalPath: state.operationalPath,
   };
 }
 
@@ -2322,6 +2730,21 @@ function composeOperatorReadinessCheck(context = {}) {
     lines.push('');
   }
 
+  if (
+    merged.operationalPathChosen &&
+    merged.operationalPath &&
+    merged.operationalPath.operationalPathLabel
+  ) {
+    lines.push('Operational path is selected:');
+    lines.push(`- ${merged.operationalPath.operationalPathLabel}`);
+    lines.push('');
+    lines.push(
+      merged.operationalPath.selectionNote ||
+        'This is path selection only. Nothing has been prepared or executed.'
+    );
+    lines.push('');
+  }
+
   let nextItem = null;
   if (merged.senderIdentityConfirmed && !merged.replyInboxConfirmed) {
     nextItem = READINESS_NEXT_ITEM_PROMPTS.reply_handling;
@@ -2370,6 +2793,8 @@ function composeOperatorReadinessCheck(context = {}) {
     operatorSpecifiedChecklist: merged.operatorSpecified,
     senderIdentityConfirmed: merged.senderIdentityConfirmed === true,
     replyInboxConfirmed: merged.replyInboxConfirmed === true,
+    operationalPathChosen: merged.operationalPathChosen === true,
+    operationalPath: merged.operationalPath || null,
     nextReadinessItem: nextItem,
     requiresExplicitApproval: false,
     executionPending: false,
@@ -2863,6 +3288,7 @@ module.exports = {
   READINESS_SUBSTEPS,
   READINESS_SUBSTEP_SAFETY_LINE,
   READINESS_NEXT_ITEM_PROMPTS,
+  OPERATIONAL_PATH_CHOICES,
   toConversationMode,
   toResponseMode,
   containsRendererBoilerplate,
@@ -2878,8 +3304,11 @@ module.exports = {
   looksLikeReadinessFieldCorrection,
   parseSenderIdentityFields,
   parseReplyHandlingFields,
+  parseOperationalPathSelection,
   mergeSenderIdentityState,
   mergeReplyHandlingState,
+  mergeOperationalPathState,
+  normalizeOperationalPathChoice,
   resolveActiveReadinessItemId,
   nextReadinessItemAfter,
   looksLikeExecutionRequest,
@@ -2900,8 +3329,10 @@ module.exports = {
   unresolvedReadinessItems,
   isSenderFieldValueLine,
   isReplyFieldValueLine,
+  isOperationalPathValueLine,
   resolveSenderIdentityFromContext,
   resolveReplyHandlingFromContext,
+  resolveOperationalPathFromContext,
   formatApprovedLaunchGateConversational,
   formatOperatorDiagnosticMessage,
   applyConversationalPolicy,

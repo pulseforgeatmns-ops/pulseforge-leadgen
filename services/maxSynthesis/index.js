@@ -165,14 +165,20 @@ module.exports = {
     ConversationalResponsePolicy.parseSenderIdentityFields,
   parseReplyHandlingFields:
     ConversationalResponsePolicy.parseReplyHandlingFields,
+  parseOperationalPathSelection:
+    ConversationalResponsePolicy.parseOperationalPathSelection,
   mergeSenderIdentityState:
     ConversationalResponsePolicy.mergeSenderIdentityState,
   mergeReplyHandlingState:
     ConversationalResponsePolicy.mergeReplyHandlingState,
+  mergeOperationalPathState:
+    ConversationalResponsePolicy.mergeOperationalPathState,
   isSenderFieldValueLine:
     ConversationalResponsePolicy.isSenderFieldValueLine,
   isReplyFieldValueLine:
     ConversationalResponsePolicy.isReplyFieldValueLine,
+  isOperationalPathValueLine:
+    ConversationalResponsePolicy.isOperationalPathValueLine,
   composeExecutionConfirmation:
     ConversationalResponsePolicy.composeExecutionConfirmation,
   composeOperatorReadinessCheck:
