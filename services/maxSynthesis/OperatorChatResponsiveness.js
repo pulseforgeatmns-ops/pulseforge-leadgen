@@ -24,6 +24,8 @@ const RESPONSE_MODES = Object.freeze({
   OPERATOR_READINESS_CHECK: 'operator_readiness_check',
   /** Explicit send/export/CRM/account confirmation — never auto-execute. */
   EXECUTION_CONFIRMATION: 'execution_confirmation',
+  /** Accidental / low-signal / ambiguous operator input — ask lightly. */
+  CLARIFICATION_NEEDED: 'clarification_needed',
 });
 
 const PRIORITY_ORDER = Object.freeze([
@@ -380,11 +382,13 @@ function selectResponseMode(opts = {}) {
   let policySelect = null;
   let looksLikeReadiness = null;
   let looksLikeNonExec = null;
+  let looksLikeLowSignal = null;
   try {
     const policy = require('./ConversationalResponsePolicy');
     policySelect = policy.selectResponseModeWithPolicy;
     looksLikeReadiness = policy.looksLikeOperatorReadinessCheck;
     looksLikeNonExec = policy.looksLikeNonExecutionIntent;
+    looksLikeLowSignal = policy.looksLikeLowSignalAmbiguousInput;
   } catch (_err) {
     policySelect = null;
   }
@@ -404,6 +408,10 @@ function selectResponseMode(opts = {}) {
   }
 
   const text = opts.text || opts.operatorMessage || '';
+  const lowSignalFromText =
+    typeof looksLikeLowSignal === 'function' && text
+      ? looksLikeLowSignal(text)
+      : false;
   const readinessFromText =
     typeof looksLikeReadiness === 'function' && text
       ? looksLikeReadiness(text)
@@ -412,6 +420,21 @@ function selectResponseMode(opts = {}) {
     typeof looksLikeNonExec === 'function' && text
       ? looksLikeNonExec(text)
       : false;
+
+  // Accidental / low-signal input — clarify; do not re-open state summary.
+  if (
+    opts.isClarificationNeeded === true ||
+    opts.forceClarification === true ||
+    messageClass === 'clarification_needed' ||
+    (lowSignalFromText &&
+      !opts.forceReadinessCheck &&
+      !opts.isReadinessCheck &&
+      !opts.isExecutionRequest &&
+      !opts.executionPending &&
+      !isRevision)
+  ) {
+    return RESPONSE_MODES.CLARIFICATION_NEEDED;
+  }
 
   // Readiness / planning language beats execution flags derived from path names.
   if (opts.isReadinessCheck === true || readinessFromText) {

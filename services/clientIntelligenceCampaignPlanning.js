@@ -120,12 +120,15 @@ const {
   looksLikeExecutionRequest,
   looksLikeNonExecutionIntent,
   looksLikeOperatorReadinessCheck,
+  looksLikeLowSignalAmbiguousInput,
   composeExecutionConfirmation,
   composeOperatorReadinessCheck,
+  composeClarificationNeeded,
   unresolvedReadinessItems,
   DEFAULT_UNRESOLVED_READINESS_ITEMS,
   READINESS_CHECKLIST_CLOSING_ASK,
   READINESS_CHECKLIST_SAFETY_LINE,
+  CLARIFICATION_NEEDED_ASK,
 } = require('./maxSynthesis');
 const {
   SCOUT_HANDOFF_KIND,
@@ -7673,6 +7676,82 @@ function produceOperatorReadinessCheckResult(userMessage, prior = {}, opts = {})
   );
 }
 
+/**
+ * Accidental / low-signal operator input after Launch Gate approval.
+ * Ask lightly; preserve state; never re-render full options / execute ask.
+ */
+function produceClarificationNeededResult(userMessage, prior = {}, opts = {}) {
+  const gate = prior.outreachLaunchGate || opts.priorOutreachLaunchGate || null;
+  const slots = {
+    ...(prior.slots || {}),
+    ...(opts.slots || {}),
+  };
+  const approved =
+    isOutreachLaunchGateAlreadyApproved(gate) ||
+    prior.launchGateApproved === true ||
+    slots.launchGateApproved === true ||
+    opts.launchGateApproved === true;
+
+  if (approved) {
+    slots.launchGateApproved = true;
+    slots.launchReady = true;
+  }
+
+  const composed = composeClarificationNeeded({
+    operatorMessage: userMessage,
+    text: userMessage,
+    gateAlreadyApproved: approved,
+    launchGateApproved: approved,
+    stepHint: approved ? 'the readiness-check step' : undefined,
+    step: prior.step || CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+    clarificationAsk: CLARIFICATION_NEEDED_ASK,
+  });
+
+  return applyConversationalPolicy(
+    {
+      message: composed.message,
+      step:
+        prior.step ||
+        CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      answers: opts.answers || prior.answers || {},
+      slots,
+      outreachLaunchGate: gate,
+      outreachDraftPreview:
+        prior.outreachDraftPreview || opts.priorOutreachDraftPreview || null,
+      outreachCopyPlan:
+        prior.outreachCopyPlan || opts.priorOutreachCopyPlan || null,
+      outreachStrategyPreview:
+        prior.outreachStrategyPreview ||
+        opts.priorOutreachStrategyPreview ||
+        null,
+      prospectBatchReview:
+        prior.prospectBatchReview || opts.priorProspectBatchReview || null,
+      intent: 'clarification_needed',
+      planningState:
+        prior.planningState ||
+        CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      currentAsk: CLARIFICATION_NEEDED_ASK,
+      responseMode: RESPONSE_MODES.CLARIFICATION_NEEDED,
+      conversationMode: CONVERSATION_MODES.CLARIFICATION_NEEDED,
+      launchGateApproved: approved || prior.launchGateApproved === true,
+      launchReady: approved || prior.launchReady === true,
+      launched: false,
+      executionPending: false,
+      sendsMade: false,
+      crmWritesMade: false,
+      exportMade: false,
+      accountChangesMade: false,
+    },
+    {
+      isClarificationNeeded: true,
+      operatorMessage: userMessage,
+      gateAlreadyApproved: approved,
+      launchGateApproved: approved,
+      forceMode: CONVERSATION_MODES.CLARIFICATION_NEEDED,
+    }
+  );
+}
+
 function formatProspectBatch1ApprovalMessage(approvedReview, opts = {}) {
   const review = approvedReview || {};
   const count =
@@ -10057,6 +10136,29 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       );
     }
 
+    // Accidental / low-signal input after Launch Gate approval — clarify
+    // lightly; do not re-open state summary, readiness list, or execute ask.
+    if (
+      looksLikeLowSignalAmbiguousInput(userMessage) &&
+      (isOutreachLaunchGateAlreadyApproved(priorLaunchGateEarly) ||
+        prior.launchGateApproved === true ||
+        priorSlots.launchGateApproved === true ||
+        sharedApprovedSlots.launchGateApproved === true ||
+        prior.step === CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE)
+    ) {
+      return produceClarificationNeededResult(userMessage, prior, {
+        ...sharedReplyOpts,
+        priorOutreachLaunchGate: priorLaunchGateEarly,
+        answers: { ...(prior.answers || {}) },
+        slots: { ...sharedApprovedSlots },
+        launchGateApproved:
+          isOutreachLaunchGateAlreadyApproved(priorLaunchGateEarly) ||
+          prior.launchGateApproved === true ||
+          priorSlots.launchGateApproved === true ||
+          sharedApprovedSlots.launchGateApproved === true,
+      });
+    }
+
     // Readiness / planning after Launch Gate approval — never treat option
     // mentions ("before choosing export…") as execute confirmation.
     if (
@@ -12268,12 +12370,15 @@ module.exports = {
   OUTREACH_LAUNCH_GATE_OPERATOR_GUIDANCE,
   produceExecutionConfirmationResult,
   produceOperatorReadinessCheckResult,
+  produceClarificationNeededResult,
   CONVERSATION_MODES,
   formatApprovedLaunchGateConversational,
   applyConversationalPolicy,
   looksLikeExecutionRequest,
   looksLikeNonExecutionIntent,
   looksLikeOperatorReadinessCheck,
+  looksLikeLowSignalAmbiguousInput,
+  CLARIFICATION_NEEDED_ASK,
   buildScoutHandoffBrief,
   formatScoutHandoffBriefMessage,
   produceScoutHandoffBriefResult,

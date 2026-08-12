@@ -19,14 +19,17 @@ const {
   looksLikeExecutionRequest,
   looksLikeNonExecutionIntent,
   looksLikeOperatorReadinessCheck,
+  looksLikeLowSignalAmbiguousInput,
   compactSafetyLockLine,
   assessConversationContext,
   applyConversationalPolicy,
   selectResponseMode,
   composeOperatorReadinessCheck,
+  composeClarificationNeeded,
   extractOperatorReadinessChecklist,
   mergeOperatorReadinessChecklist,
   READINESS_CHECKLIST_SAFETY_LINE,
+  CLARIFICATION_NEEDED_ASK,
 } = require('../services/maxSynthesis');
 
 const SEVEN_ITEM_READINESS_CHECKLIST = [
@@ -143,6 +146,61 @@ describe('ConversationalResponsePolicy', () => {
       launchGateApproved: true,
     });
     assert.equal(mode, CONVERSATION_MODES.OPERATOR_READINESS_CHECK);
+  });
+
+  it('classifies low-signal accidental input as clarification_needed', () => {
+    const samples = ['v', 'k', '.', '?', 'x', 'zz'];
+    for (const text of samples) {
+      assert.equal(
+        looksLikeLowSignalAmbiguousInput(text),
+        true,
+        `expected low-signal for: ${text}`
+      );
+      const mode = selectConversationMode({
+        text,
+        operatorMessage: text,
+        launchGateApproved: true,
+      });
+      assert.equal(
+        mode,
+        CONVERSATION_MODES.CLARIFICATION_NEEDED,
+        `expected clarification_needed for: ${text}`
+      );
+      assert.notEqual(mode, CONVERSATION_MODES.OPERATOR_STATE_UPDATE);
+      assert.notEqual(mode, CONVERSATION_MODES.OPERATOR_READINESS_CHECK);
+      assert.notEqual(mode, CONVERSATION_MODES.EXECUTION_CONFIRMATION);
+    }
+
+    // Known short intents stay intentional.
+    assert.equal(looksLikeLowSignalAmbiguousInput('hold'), false);
+    assert.equal(looksLikeLowSignalAmbiguousInput('yes'), false);
+    assert.equal(looksLikeLowSignalAmbiguousInput('ok'), false);
+  });
+
+  it('composes clarification without full state summary or options block', () => {
+    const composed = composeClarificationNeeded({
+      operatorMessage: 'v',
+      launchGateApproved: true,
+    });
+    assert.equal(composed.mode, CONVERSATION_MODES.CLARIFICATION_NEEDED);
+    assert.equal(composed.responseMode, 'clarification_needed');
+    assert.match(composed.message, /Not sure what you meant by `v`/i);
+    assert.match(composed.message, /readiness-check step/i);
+    assert.match(
+      composed.message,
+      /sender identity, reply handling, follow-up tracking, or hold/i
+    );
+    assert.doesNotMatch(composed.message, /The next choice is operational/i);
+    assert.doesNotMatch(
+      composed.message,
+      /Which next path do you want to prepare/i
+    );
+    assert.doesNotMatch(composed.message, /Exact action/i);
+    assert.doesNotMatch(
+      composed.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.equal(composed.requiresExplicitApproval, false);
   });
 
   it('composes readiness check without execution confirmation structure', () => {
@@ -428,6 +486,13 @@ describe('ConversationalResponsePolicy', () => {
     assert.equal(
       selectResponseMode({ executionPending: true }),
       RESPONSE_MODES.EXECUTION_CONFIRMATION
+    );
+    assert.equal(
+      selectResponseMode({
+        text: 'v',
+        launchGateApproved: true,
+      }),
+      RESPONSE_MODES.CLARIFICATION_NEEDED
     );
   });
 });
