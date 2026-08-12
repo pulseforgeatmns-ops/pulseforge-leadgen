@@ -22,6 +22,8 @@ const RESPONSE_MODES = Object.freeze({
   STALE_SOURCE_DIAGNOSTIC: 'stale_source_diagnostic',
   /** Summarize / resolve readiness gaps — never execute. */
   OPERATOR_READINESS_CHECK: 'operator_readiness_check',
+  /** Operator selected one readiness item — stay in that substep. */
+  READINESS_SUBSTEP: 'readiness_substep',
   /** Explicit send/export/CRM/account confirmation — never auto-execute. */
   EXECUTION_CONFIRMATION: 'execution_confirmation',
   /** Accidental / low-signal / ambiguous operator input — ask lightly. */
@@ -383,12 +385,14 @@ function selectResponseMode(opts = {}) {
   let looksLikeReadiness = null;
   let looksLikeNonExec = null;
   let looksLikeLowSignal = null;
+  let looksLikeSubstep = null;
   try {
     const policy = require('./ConversationalResponsePolicy');
     policySelect = policy.selectResponseModeWithPolicy;
     looksLikeReadiness = policy.looksLikeOperatorReadinessCheck;
     looksLikeNonExec = policy.looksLikeNonExecutionIntent;
     looksLikeLowSignal = policy.looksLikeLowSignalAmbiguousInput;
+    looksLikeSubstep = policy.looksLikeReadinessSubstepSelection;
   } catch (_err) {
     policySelect = null;
   }
@@ -412,6 +416,10 @@ function selectResponseMode(opts = {}) {
     typeof looksLikeLowSignal === 'function' && text
       ? looksLikeLowSignal(text)
       : false;
+  const substepFromText =
+    typeof looksLikeSubstep === 'function' && text
+      ? looksLikeSubstep(text)
+      : false;
   const readinessFromText =
     typeof looksLikeReadiness === 'function' && text
       ? looksLikeReadiness(text)
@@ -429,11 +437,21 @@ function selectResponseMode(opts = {}) {
     (lowSignalFromText &&
       !opts.forceReadinessCheck &&
       !opts.isReadinessCheck &&
+      !opts.isReadinessSubstep &&
       !opts.isExecutionRequest &&
       !opts.executionPending &&
       !isRevision)
   ) {
     return RESPONSE_MODES.CLARIFICATION_NEEDED;
+  }
+
+  // Selected readiness item — stay in substep; never ask which item first.
+  if (
+    opts.isReadinessSubstep === true ||
+    opts.forceReadinessSubstep === true ||
+    substepFromText
+  ) {
+    return RESPONSE_MODES.READINESS_SUBSTEP;
   }
 
   // Readiness / planning language beats execution flags derived from path names.

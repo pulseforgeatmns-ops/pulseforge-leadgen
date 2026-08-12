@@ -20,16 +20,20 @@ const {
   looksLikeNonExecutionIntent,
   looksLikeOperatorReadinessCheck,
   looksLikeLowSignalAmbiguousInput,
+  looksLikeReadinessSubstepSelection,
+  detectSelectedReadinessItem,
   compactSafetyLockLine,
   assessConversationContext,
   applyConversationalPolicy,
   selectResponseMode,
   composeOperatorReadinessCheck,
+  composeReadinessSubstep,
   composeClarificationNeeded,
   extractOperatorReadinessChecklist,
   mergeOperatorReadinessChecklist,
   READINESS_CHECKLIST_SAFETY_LINE,
   CLARIFICATION_NEEDED_ASK,
+  READINESS_SUBSTEPS,
 } = require('../services/maxSynthesis');
 
 const SEVEN_ITEM_READINESS_CHECKLIST = [
@@ -139,6 +143,7 @@ describe('ConversationalResponsePolicy', () => {
     const text =
       'Before choosing export, CRM drafts, or queued sends, help me resolve the remaining readiness items. Please summarize only what is still unresolved.';
     assert.equal(looksLikeOperatorReadinessCheck(text), true);
+    assert.equal(looksLikeReadinessSubstepSelection(text), false);
     assert.equal(looksLikeExecutionRequest(text), false);
     const mode = selectConversationMode({
       text,
@@ -146,6 +151,50 @@ describe('ConversationalResponsePolicy', () => {
       launchGateApproved: true,
     });
     assert.equal(mode, CONVERSATION_MODES.OPERATOR_READINESS_CHECK);
+  });
+
+  it('selects readiness_substep when operator picks sender identity', () => {
+    const text =
+      'Resolve sender identity now. Do not repeat the full readiness checklist. I already selected the first readiness item: sender identity.';
+    assert.equal(looksLikeReadinessSubstepSelection(text), true);
+    assert.equal(looksLikeOperatorReadinessCheck(text), false);
+    assert.equal(detectSelectedReadinessItem(text).id, 'sender_identity');
+    const mode = selectConversationMode({
+      text,
+      operatorMessage: text,
+      launchGateApproved: true,
+    });
+    assert.equal(mode, CONVERSATION_MODES.READINESS_SUBSTEP);
+  });
+
+  it('composes sender-identity substep without which-item ask', () => {
+    const text = 'Resolve sender identity now.';
+    const composed = composeReadinessSubstep({
+      operatorMessage: text,
+      launchGateApproved: true,
+    });
+    assert.equal(composed.mode, CONVERSATION_MODES.READINESS_SUBSTEP);
+    assert.equal(composed.responseMode, 'readiness_substep');
+    assert.equal(composed.readinessItemId, 'sender_identity');
+    assert.match(composed.message, /What sender name should appear on the email/i);
+    assert.match(
+      composed.message,
+      /What sender email address should be used or reviewed/i
+    );
+    assert.match(
+      composed.message,
+      /Should the signature be from a person, the company, or both/i
+    );
+    assert.match(
+      composed.message,
+      /Once you answer those, I'll mark sender identity as confirmed or note what still needs review/i
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /Which readiness item should we resolve first/i
+    );
+    assert.doesNotMatch(composed.message, /Still unresolved before any export/i);
+    assert.match(composed.message, /Nothing external has happened/i);
   });
 
   it('classifies low-signal accidental input as clarification_needed', () => {

@@ -3745,6 +3745,88 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.equal(reply.accountChangesMade, false);
   });
 
+  it('resolving sender identity stays in readiness_substep without which-item ask', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const reply = buildCampaignPlanningReply(
+      'Resolve sender identity now. Do not repeat the full readiness checklist. I already selected the first readiness item: sender identity.',
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        launchGateApproved: true,
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'readiness_substep');
+    assert.equal(reply.conversationMode, 'readiness_substep');
+    assert.equal(reply.intent, 'readiness_substep');
+    assert.equal(reply.readinessItemId, 'sender_identity');
+    assert.match(reply.message, /What sender name should appear on the email/i);
+    assert.match(
+      reply.message,
+      /What sender email address should be used or reviewed/i
+    );
+    assert.match(
+      reply.message,
+      /Should the signature be from a person, the company, or both/i
+    );
+    assert.match(
+      reply.message,
+      /Once you answer those, I'll mark sender identity as confirmed or note what still needs review/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Which readiness item should we resolve first/i
+    );
+    assert.doesNotMatch(reply.message, /Still unresolved before any export/i);
+    assert.doesNotMatch(reply.message, /The next choice is operational/i);
+    assert.doesNotMatch(reply.message, /Exact action/i);
+    assert.equal(reply.launchGateApproved, true);
+    assert.equal(reply.launchReady, true);
+    assert.equal(reply.launched, false);
+    assert.equal(reply.executionPending, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.accountChangesMade, false);
+  });
+
   it('operator-facing draft digest comes first without banned fragments', () => {
     const { review, ctx, strategy, plan } = chainFixtures();
     const draft = buildOutreachDraftPreview(

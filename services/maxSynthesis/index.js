@@ -155,10 +155,16 @@ module.exports = {
     ConversationalResponsePolicy.looksLikeOperatorReadinessCheck,
   looksLikeLowSignalAmbiguousInput:
     ConversationalResponsePolicy.looksLikeLowSignalAmbiguousInput,
+  looksLikeReadinessSubstepSelection:
+    ConversationalResponsePolicy.looksLikeReadinessSubstepSelection,
+  detectSelectedReadinessItem:
+    ConversationalResponsePolicy.detectSelectedReadinessItem,
   composeExecutionConfirmation:
     ConversationalResponsePolicy.composeExecutionConfirmation,
   composeOperatorReadinessCheck:
     ConversationalResponsePolicy.composeOperatorReadinessCheck,
+  composeReadinessSubstep:
+    ConversationalResponsePolicy.composeReadinessSubstep,
   composeClarificationNeeded:
     ConversationalResponsePolicy.composeClarificationNeeded,
   unresolvedReadinessItems:
@@ -177,6 +183,9 @@ module.exports = {
     ConversationalResponsePolicy.READINESS_CHECKLIST_SAFETY_LINE,
   CLARIFICATION_NEEDED_ASK:
     ConversationalResponsePolicy.CLARIFICATION_NEEDED_ASK,
+  READINESS_SUBSTEPS: ConversationalResponsePolicy.READINESS_SUBSTEPS,
+  READINESS_SUBSTEP_SAFETY_LINE:
+    ConversationalResponsePolicy.READINESS_SUBSTEP_SAFETY_LINE,
   dedupeOperatorStateUpdateMessage:
     ConversationalResponsePolicy.dedupeOperatorStateUpdateMessage,
   sanitizeApprovedStateLeadIn:

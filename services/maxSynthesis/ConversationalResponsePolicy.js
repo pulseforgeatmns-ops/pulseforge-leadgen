@@ -12,13 +12,15 @@
  *   3. operator_diagnostic        — stale/conflict/missing/failed output
  *   4. formal_review_gate         — first-time gate for approval (card allowed)
  *   5. operator_readiness_check   — summarize / resolve remaining readiness gaps
- *   6. execution_confirmation     — about to send/export/CRM/account action
- *   7. clarification_needed       — accidental / low-signal / ambiguous input
+ *   6. readiness_substep          — operator selected one readiness item; stay in it
+ *   7. execution_confirmation     — about to send/export/CRM/account action
+ *   8. clarification_needed       — accidental / low-signal / ambiguous input
  *
  * Classification priority for post-approval turns:
  * low-signal ambiguous input → clarification_needed (never re-open full state
- * summary or options). Then discussing options / resolving readiness /
- * selecting a path later ALWAYS beat bare mentions of export/CRM/queue.
+ * summary or options). Selected readiness item → readiness_substep (never ask
+ * "which readiness item" again). Then discussing options / resolving readiness
+ * / selecting a path later ALWAYS beat bare mentions of export/CRM/queue.
  * Execution confirmation only when the operator clearly asks to take or
  * approve a concrete action.
  */
@@ -34,6 +36,7 @@ const CONVERSATION_MODES = Object.freeze({
   OPERATOR_DIAGNOSTIC: 'operator_diagnostic',
   FORMAL_REVIEW_GATE: 'formal_review_gate',
   OPERATOR_READINESS_CHECK: 'operator_readiness_check',
+  READINESS_SUBSTEP: 'readiness_substep',
   EXECUTION_CONFIRMATION: 'execution_confirmation',
   CLARIFICATION_NEEDED: 'clarification_needed',
 });
@@ -50,6 +53,8 @@ const CONVERSATION_MODE_TO_RESPONSE_MODE = Object.freeze({
     RESPONSE_MODES.WORKFLOW_REVIEW_CARD,
   [CONVERSATION_MODES.OPERATOR_READINESS_CHECK]:
     RESPONSE_MODES.OPERATOR_READINESS_CHECK || 'operator_readiness_check',
+  [CONVERSATION_MODES.READINESS_SUBSTEP]:
+    RESPONSE_MODES.READINESS_SUBSTEP || 'readiness_substep',
   [CONVERSATION_MODES.EXECUTION_CONFIRMATION]:
     RESPONSE_MODES.EXECUTION_CONFIRMATION || 'execution_confirmation',
   [CONVERSATION_MODES.CLARIFICATION_NEEDED]:
@@ -66,6 +71,7 @@ const RESPONSE_MODE_TO_CONVERSATION_MODE = Object.freeze({
   [RESPONSE_MODES.WORKFLOW_REVIEW_CARD]:
     CONVERSATION_MODES.FORMAL_REVIEW_GATE,
   operator_readiness_check: CONVERSATION_MODES.OPERATOR_READINESS_CHECK,
+  readiness_substep: CONVERSATION_MODES.READINESS_SUBSTEP,
   execution_confirmation: CONVERSATION_MODES.EXECUTION_CONFIRMATION,
   clarification_needed: CONVERSATION_MODES.CLARIFICATION_NEEDED,
 });
@@ -96,6 +102,52 @@ const KNOWN_SHORT_OPERATOR_INTENTS = Object.freeze(
 
 const CLARIFICATION_NEEDED_ASK =
   'Do you want to resolve sender identity, reply handling, follow-up tracking, or hold?';
+
+/**
+ * Per-item readiness substeps. Once the operator selects one, stay inside it —
+ * never re-ask "Which readiness item should we resolve first?"
+ */
+const READINESS_SUBSTEPS = Object.freeze({
+  sender_identity: Object.freeze({
+    id: 'sender_identity',
+    label: 'sender identity',
+    match: /\bsender\s+identity\b/i,
+    questions: Object.freeze([
+      'What sender name should appear on the email?',
+      'What sender email address should be used or reviewed?',
+      'Should the signature be from a person, the company, or both?',
+    ]),
+    closingAsk:
+      "Once you answer those, I'll mark sender identity as confirmed or note what still needs review.",
+  }),
+  reply_handling: Object.freeze({
+    id: 'reply_handling',
+    label: 'reply handling',
+    match: /\breply(?:\s+handling|\s+inbox|\s*[-/]\s*to)\b/i,
+    questions: Object.freeze([
+      'Which inbox should replies land in?',
+      'Who owns monitoring that inbox?',
+      'What should happen on a positive reply vs an unsubscribe?',
+    ]),
+    closingAsk:
+      "Once you answer those, I'll mark reply handling as confirmed or note what still needs review.",
+  }),
+  follow_up_tracking: Object.freeze({
+    id: 'follow_up_tracking',
+    label: 'follow-up tracking',
+    match: /\bfollow[- ]?up\s+tracking\b/i,
+    questions: Object.freeze([
+      'Where should follow-ups be tracked (CRM, sheet, or elsewhere)?',
+      'Who owns updating follow-up status after each touch?',
+      'What counts as done vs needs another follow-up?',
+    ]),
+    closingAsk:
+      "Once you answer those, I'll mark follow-up tracking as confirmed or note what still needs review.",
+  }),
+});
+
+const READINESS_SUBSTEP_SAFETY_LINE =
+  'Nothing external has happened. Sends, export, and CRM writes remain locked.';
 
 /** Default unresolved items after Launch Gate readiness-only approval. */
 const DEFAULT_UNRESOLVED_READINESS_ITEMS = Object.freeze([
@@ -301,6 +353,9 @@ function assessConversationContext(input = {}) {
   const lowSignalFromText =
     Boolean(operatorMessage) &&
     looksLikeLowSignalAmbiguousInput(operatorMessage);
+  const selectedReadinessItem =
+    input.selectedReadinessItem ||
+    detectSelectedReadinessItem(operatorMessage);
   const readinessFromText = looksLikeOperatorReadinessCheck(operatorMessage);
   const nonExecutionFromText = looksLikeNonExecutionIntent(operatorMessage);
   const executionFromText = looksLikeExecutionRequest(operatorMessage);
@@ -315,28 +370,41 @@ function assessConversationContext(input = {}) {
       (lowSignalFromText &&
         !input.forceReadinessCheck &&
         !input.isReadinessCheck &&
+        !input.isReadinessSubstep &&
         !input.isExecutionRequest &&
         !input.executionPending &&
         !isRevision &&
         !isDiagnostic)
   );
 
+  // Operator already picked a readiness item — stay in that substep.
+  const isReadinessSubstep = Boolean(
+    !isClarificationNeeded &&
+      (input.isReadinessSubstep ||
+        input.forceReadinessSubstep ||
+        input.intent === 'readiness_substep' ||
+        selectedReadinessItem)
+  );
+
   // Explicit flags still lose to clear readiness / planning language in the
   // operator message — bare option names must never force execute confirm.
   const isReadinessCheck = Boolean(
     !isClarificationNeeded &&
+      !isReadinessSubstep &&
       (input.isReadinessCheck ||
         input.forceReadinessCheck ||
         readinessFromText)
   );
   const isNonExecutionIntent = Boolean(
     isClarificationNeeded ||
+      isReadinessSubstep ||
       isReadinessCheck ||
       input.isNonExecutionIntent ||
       nonExecutionFromText
   );
   const isExecutionRequest = Boolean(
     !isClarificationNeeded &&
+      !isReadinessSubstep &&
       !isNonExecutionIntent &&
       (input.isExecutionRequest ||
         input.executionPending ||
@@ -348,17 +416,19 @@ function assessConversationContext(input = {}) {
       ? 'plain_language_problem_then_detail'
       : isClarificationNeeded
         ? 'clarify_ambiguous_input'
-        : isReadinessCheck
-          ? 'unresolved_readiness_then_ask'
-          : isExecutionRequest
-            ? 'explicit_execute_confirm'
-            : stateChanged || gateAlreadyApproved
-              ? 'state_then_next_options'
-              : isRevision
-                ? 'ack_change_artifact'
-                : isFirstTimeReview
-                  ? 'formal_gate_card'
-                  : 'concise_operator_update';
+        : isReadinessSubstep
+          ? 'selected_readiness_substep_questions'
+          : isReadinessCheck
+            ? 'unresolved_readiness_then_ask'
+            : isExecutionRequest
+              ? 'explicit_execute_confirm'
+              : stateChanged || gateAlreadyApproved
+                ? 'state_then_next_options'
+                : isRevision
+                  ? 'ack_change_artifact'
+                  : isFirstTimeReview
+                    ? 'formal_gate_card'
+                    : 'concise_operator_update';
 
   const mustBlock = isExecutionRequest
     ? FULL_SAFETY_LINES.slice()
@@ -378,6 +448,8 @@ function assessConversationContext(input = {}) {
     isDiagnostic,
     isFirstTimeReview,
     isClarificationNeeded,
+    isReadinessSubstep,
+    selectedReadinessItem: selectedReadinessItem || null,
     isReadinessCheck,
     isNonExecutionIntent,
     isExecutionRequest,
@@ -402,6 +474,7 @@ function looksLikeLowSignalAmbiguousInput(text) {
   if (KNOWN_SHORT_OPERATOR_INTENTS.has(lower)) return false;
 
   // Clear multi-word / named intents are never low-signal.
+  if (looksLikeReadinessSubstepSelection(s)) return false;
   if (looksLikeOperatorReadinessCheck(s)) return false;
   if (looksLikeExecutionRequest(s)) return false;
   if (
@@ -478,10 +551,15 @@ function looksLikeNonExecutionIntent(text) {
 
 /**
  * Operator wants unresolved readiness gaps summarized / resolved — not execute.
+ * Does NOT match when the operator already selected a specific readiness item
+ * (that is readiness_substep).
  */
 function looksLikeOperatorReadinessCheck(text) {
   const s = String(text || '').trim();
   if (!s) return false;
+
+  // Specific item already chosen — not a checklist / "which item" turn.
+  if (detectSelectedReadinessItem(s)) return false;
 
   if (/\bunresolved\b/i.test(s) && /\breadiness\b/i.test(s)) return true;
   if (/\bremaining\s+readiness\b/i.test(s)) return true;
@@ -507,12 +585,93 @@ function looksLikeOperatorReadinessCheck(text) {
   }
   if (
     /\blet'?s\s+talk\s+through\b/i.test(s) &&
-    /\b(?:sender|reply|readiness|identity)\b/i.test(s)
+    /\breadiness\b/i.test(s) &&
+    !/\b(?:sender|reply|follow[- ]?up)\b/i.test(s)
   ) {
     return true;
   }
 
   return false;
+}
+
+/**
+ * True when the operator selected a specific readiness item to resolve now.
+ */
+function looksLikeReadinessSubstepSelection(text) {
+  return Boolean(detectSelectedReadinessItem(text));
+}
+
+/**
+ * Detect which readiness item the operator selected, if any.
+ * @returns {object|null} READINESS_SUBSTEPS entry
+ */
+function detectSelectedReadinessItem(text) {
+  const s = String(text || '').trim();
+  if (!s) return null;
+
+  // Checklist / summarize asks are not a single-item substep selection.
+  if (
+    /\b(?:summarize|summarise|list)\b/i.test(s) &&
+    /\b(?:unresolved|remaining|readiness|gaps?|checklist)\b/i.test(s)
+  ) {
+    return null;
+  }
+  if (
+    /\bbefore\s+choosing\b/i.test(s) &&
+    /\b(?:still\s+unresolved|remaining\s+readiness)\b/i.test(s)
+  ) {
+    return null;
+  }
+
+  // Multiple explicit checklist bullets → checklist turn, not one substep.
+  const bulletCount = (s.match(/^(?:[-*•–—]|\d+[.)])\s+\S/gm) || []).length;
+  if (bulletCount >= 2) return null;
+
+  for (const item of Object.values(READINESS_SUBSTEPS)) {
+    const labelSource = item.match.source;
+
+    // "Resolve sender identity now" / "focus on reply handling"
+    if (
+      new RegExp(
+        String.raw`\b(?:resolve|confirm|focus\s+on|work\s+on|start(?:\s+with)?|choose|select|talk\s+through|let'?s\s+(?:do|resolve|confirm))\b[\s\S]{0,48}` +
+          labelSource,
+        'i'
+      ).test(s)
+    ) {
+      return item;
+    }
+
+    // "sender identity first/now/next"
+    if (
+      new RegExp(labelSource + String.raw`[\s\S]{0,24}\b(?:now|first|next)\b`, 'i').test(
+        s
+      )
+    ) {
+      return item;
+    }
+
+    // "I already selected … sender identity"
+    if (
+      /\b(?:already\s+selected|i\s+(?:already\s+)?(?:selected|chose|picked)|first\s+readiness\s+item)\b/i.test(
+        s
+      ) &&
+      item.match.test(s)
+    ) {
+      return item;
+    }
+
+    // Bare item label as the whole message.
+    if (
+      new RegExp(
+        `^${item.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+        'i'
+      ).test(s)
+    ) {
+      return item;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -598,6 +757,10 @@ function selectConversationMode(input = {}) {
   if (assessment.isClarificationNeeded) {
     return CONVERSATION_MODES.CLARIFICATION_NEEDED;
   }
+  // Selected readiness item beats checklist / "which item first?" ask.
+  if (assessment.isReadinessSubstep) {
+    return CONVERSATION_MODES.READINESS_SUBSTEP;
+  }
   // Readiness / planning before execution — never ask to approve execute
   // when the operator is still resolving gaps or discussing options.
   if (assessment.isReadinessCheck) {
@@ -648,6 +811,8 @@ function composeConversationResponse(mode, context = {}) {
       return composeFormalReviewGate(context);
     case CONVERSATION_MODES.OPERATOR_READINESS_CHECK:
       return composeOperatorReadinessCheck(context);
+    case CONVERSATION_MODES.READINESS_SUBSTEP:
+      return composeReadinessSubstep(context);
     case CONVERSATION_MODES.EXECUTION_CONFIRMATION:
       return composeExecutionConfirmation(context);
     case CONVERSATION_MODES.CLARIFICATION_NEEDED:
@@ -853,9 +1018,9 @@ function extractOperatorReadinessChecklist(text) {
       .replace(/[.;,\s]+$/g, '')
       .trim();
     if (!item || item.length < 8) return;
-    // Skip instructional lines that are not checklist items.
+    // Skip instructional / selection lines that are not checklist items.
     if (
-      /^(?:before\s+choosing|please\s+summarize|help\s+me|still\s+unresolved|which\s+readiness|nothing\s+external)\b/i.test(
+      /^(?:before\s+choosing|please\s+summarize|help\s+me|still\s+unresolved|which\s+readiness|nothing\s+external|resolve\s+|i\s+already\s+selected|do\s+not\s+repeat)\b/i.test(
         item
       )
     ) {
@@ -879,6 +1044,16 @@ function extractOperatorReadinessChecklist(text) {
   if (items.length) return items;
 
   // Fallback: "include: a; b; c" / "checklist: a, b, and c"
+  // Do not treat "readiness item: sender identity" selection language as a list.
+  if (
+    /\b(?:already\s+selected|i\s+(?:already\s+)?(?:selected|chose|picked)|resolve\s+)/i.test(
+      s
+    ) &&
+    detectSelectedReadinessItem(s)
+  ) {
+    return [];
+  }
+
   const includeMatch = s.match(
     /(?:include|checklist|unresolved(?:\s+items?)?|readiness(?:\s+items?)?)\s*[:\-]\s*([\s\S]+)$/i
   );
@@ -1124,6 +1299,60 @@ function composeOperatorReadinessCheck(context = {}) {
     includeExpandedSafety: false,
     unresolvedItems: items,
     operatorSpecifiedChecklist: merged.operatorSpecified,
+    requiresExplicitApproval: false,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+  };
+}
+
+/**
+ * Readiness substep — operator already selected an item.
+ * Ask only that item's detail questions; never re-ask which item to resolve.
+ */
+function composeReadinessSubstep(context = {}) {
+  const selected =
+    context.selectedReadinessItem ||
+    detectSelectedReadinessItem(
+      context.operatorMessage || context.text || context.userMessage || ''
+    ) ||
+    (context.readinessItemId && READINESS_SUBSTEPS[context.readinessItemId]) ||
+    READINESS_SUBSTEPS.sender_identity;
+
+  const questions = Array.isArray(context.questions) && context.questions.length
+    ? context.questions
+    : selected.questions || [];
+  const closingAsk =
+    context.closingAsk ||
+    context.closingQuestion ||
+    selected.closingAsk ||
+    `Once you answer those, I'll mark ${selected.label} as confirmed or note what still needs review.`;
+  const safetyLine =
+    context.safetyLine ||
+    context.compactSafety ||
+    READINESS_SUBSTEP_SAFETY_LINE;
+  const leadIn =
+    context.leadIn ||
+    `Let's resolve ${selected.label}. I won't repeat the full readiness checklist.`;
+
+  const lines = [leadIn, ''];
+  for (let i = 0; i < questions.length; i += 1) {
+    lines.push(`${i + 1}. ${questions[i]}`);
+  }
+  lines.push('', safetyLine, '', closingAsk);
+
+  const message = lines.join('\n').trim();
+  return {
+    mode: CONVERSATION_MODES.READINESS_SUBSTEP,
+    responseMode: toResponseMode(CONVERSATION_MODES.READINESS_SUBSTEP),
+    message,
+    includeRendererSections: false,
+    includeExpandedSafety: false,
+    selectedReadinessItem: selected,
+    readinessItemId: selected.id,
+    questions: questions.slice(),
+    closingAsk,
     requiresExplicitApproval: false,
     sendsMade: false,
     crmWritesMade: false,
@@ -1452,6 +1681,13 @@ function applyConversationalPolicy(reply, context = {}) {
       reply.responseMode === 'operator_readiness_check' ||
       reply.conversationMode === 'operator_readiness_check' ||
       reply.intent === 'operator_readiness_check',
+    isReadinessSubstep:
+      context.isReadinessSubstep ||
+      reply.responseMode === 'readiness_substep' ||
+      reply.conversationMode === 'readiness_substep' ||
+      reply.intent === 'readiness_substep',
+    selectedReadinessItem:
+      context.selectedReadinessItem || reply.selectedReadinessItem || null,
     isClarificationNeeded:
       context.isClarificationNeeded ||
       reply.responseMode === 'clarification_needed' ||
@@ -1536,6 +1772,8 @@ module.exports = {
   READINESS_CHECKLIST_SAFETY_LINE,
   CLARIFICATION_NEEDED_ASK,
   KNOWN_SHORT_OPERATOR_INTENTS,
+  READINESS_SUBSTEPS,
+  READINESS_SUBSTEP_SAFETY_LINE,
   toConversationMode,
   toResponseMode,
   containsRendererBoilerplate,
@@ -1546,6 +1784,8 @@ module.exports = {
   looksLikeLowSignalAmbiguousInput,
   looksLikeNonExecutionIntent,
   looksLikeOperatorReadinessCheck,
+  looksLikeReadinessSubstepSelection,
+  detectSelectedReadinessItem,
   looksLikeExecutionRequest,
   selectConversationMode,
   composeConversationResponse,
@@ -1554,6 +1794,7 @@ module.exports = {
   composeOperatorDiagnostic,
   composeFormalReviewGate,
   composeOperatorReadinessCheck,
+  composeReadinessSubstep,
   composeExecutionConfirmation,
   composeClarificationNeeded,
   extractOperatorReadinessChecklist,
