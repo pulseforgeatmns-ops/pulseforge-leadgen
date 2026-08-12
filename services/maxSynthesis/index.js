@@ -167,6 +167,8 @@ module.exports = {
     ConversationalResponsePolicy.parseReplyHandlingFields,
   mergeSenderIdentityState:
     ConversationalResponsePolicy.mergeSenderIdentityState,
+  isSenderFieldValueLine:
+    ConversationalResponsePolicy.isSenderFieldValueLine,
   composeExecutionConfirmation:
     ConversationalResponsePolicy.composeExecutionConfirmation,
   composeOperatorReadinessCheck:
