@@ -348,12 +348,15 @@ describe('ConversationalResponsePolicy', () => {
       composed.message,
       /Updated sender email to jacob@goanchorcleaning\.com/i
     );
-    assert.match(composed.message, /Sender identity is now confirmed/i);
-    assert.match(composed.message, /Jacob Maynard/);
-    assert.match(composed.message, /jacob@goanchorcleaning\.com/);
+    assert.match(composed.message, /Sender identity is confirmed/i);
+    assert.match(composed.message, /Sender name:\s*Jacob Maynard/i);
     assert.match(
       composed.message,
-      /signature:\s*Jacob Maynard, Anchor Cleaning/i
+      /Sender email address:\s*jacob@goanchorcleaning\.com/i
+    );
+    assert.match(
+      composed.message,
+      /Signature:\s*Jacob Maynard, Anchor Cleaning/i
     );
     assert.match(
       composed.message,
@@ -361,7 +364,7 @@ describe('ConversationalResponsePolicy', () => {
     );
     assert.match(
       composed.message,
-      /What reply inbox should receive responses, and should it be the same as the sender address\?/i
+      /What inbox should receive replies, and should reply-to match the sender address\?/i
     );
     assert.doesNotMatch(composed.message, /The next choice is operational/i);
     assert.doesNotMatch(composed.message, /prepare a manual-send export/i);
@@ -373,6 +376,73 @@ describe('ConversationalResponsePolicy', () => {
     assert.doesNotMatch(composed.message, /Exact action/i);
     assert.doesNotMatch(composed.message, /create CRM drafts/i);
     assert.doesNotMatch(composed.message, /queue sends/i);
+  });
+
+  it('merges all sender identity fields from a correction-plus-full-state message', () => {
+    const text = [
+      'Update sender email address to:',
+      'jacob@goanchorcleaning.com',
+      '',
+      'Sender identity should now be:',
+      '- Sender name: Jacob Maynard',
+      '- Sender email address: jacob@goanchorcleaning.com',
+      '- Signature: Jacob Maynard, Anchor Cleaning',
+    ].join('\n');
+
+    const parsed = parseSenderIdentityFields(text);
+    assert.equal(parsed.name, 'Jacob Maynard');
+    assert.equal(parsed.email, 'jacob@goanchorcleaning.com');
+    assert.equal(parsed.signature, 'Jacob Maynard, Anchor Cleaning');
+    assert.deepEqual(parsed.updatedFields.sort(), ['email', 'name', 'signature']);
+
+    const composed = composeReadinessFieldCorrection({
+      operatorMessage: text,
+      activeReadinessItemId: 'sender_identity',
+      slots: { activeReadinessItemId: 'sender_identity' },
+    });
+
+    assert.equal(composed.responseMode, 'readiness_field_correction');
+    assert.equal(composed.itemConfirmed, true);
+    assert.equal(composed.senderIdentity.senderName, 'Jacob Maynard');
+    assert.equal(
+      composed.senderIdentity.senderEmail,
+      'jacob@goanchorcleaning.com'
+    );
+    assert.equal(
+      composed.senderIdentity.senderSignature,
+      'Jacob Maynard, Anchor Cleaning'
+    );
+    assert.deepEqual(composed.senderIdentity.missing, []);
+    assert.match(composed.message, /^Updated sender identity\./m);
+    assert.match(composed.message, /Sender identity is confirmed/i);
+    assert.match(composed.message, /Sender name:\s*Jacob Maynard/i);
+    assert.match(
+      composed.message,
+      /Sender email address:\s*jacob@goanchorcleaning\.com/i
+    );
+    assert.match(
+      composed.message,
+      /Signature:\s*Jacob Maynard, Anchor Cleaning/i
+    );
+    assert.match(
+      composed.message,
+      /Next readiness item:\s*reply inbox \/ reply-to handling/i
+    );
+    assert.match(
+      composed.message,
+      /What inbox should receive replies, and should reply-to match the sender address\?/i
+    );
+    assert.doesNotMatch(composed.message, /Still needed for sender identity/i);
+    assert.doesNotMatch(
+      composed.message,
+      /Still needed for sender identity:[\s\S]*sender name/i
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /Still needed for sender identity:[\s\S]*signature/i
+    );
+    assert.doesNotMatch(composed.message, /prepare a manual-send export/i);
+    assert.doesNotMatch(composed.message, /Which next path do you want to prepare/i);
   });
 
   it('classifies low-signal accidental input as clarification_needed', () => {

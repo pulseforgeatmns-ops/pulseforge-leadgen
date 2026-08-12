@@ -168,7 +168,7 @@ const READINESS_NEXT_ITEM_PROMPTS = Object.freeze({
   reply_handling: Object.freeze({
     id: 'reply_handling',
     label: 'reply inbox / reply-to handling',
-    ask: 'What reply inbox should receive responses, and should it be the same as the sender address?',
+    ask: 'What inbox should receive replies, and should reply-to match the sender address?',
   }),
   follow_up_tracking: Object.freeze({
     id: 'follow_up_tracking',
@@ -746,8 +746,14 @@ function normalizeCapturedEmail(raw) {
     .replace(/\\+/g, '');
 }
 
+/** Optional list bullet / numbering before a labeled readiness field. */
+const READINESS_FIELD_LINE_PREFIX =
+  String.raw`(?:^|\n)\s*(?:[-*•–—]|\d+[.)])?\s*`;
+
 /**
  * Parse sender-identity fields from free text (fills or corrections).
+ * Applies ALL explicit fields present in the message — not only the first
+ * corrected field. Bullet lists and "Sender name:" labels are supported.
  * @returns {{ name: string|null, email: string|null, signature: string|null, updatedFields: string[], hasAny: boolean }}
  */
 function parseSenderIdentityFields(text) {
@@ -762,7 +768,11 @@ function parseSenderIdentityFields(text) {
   }
 
   const nameMatch = s.match(
-    /(?:^|\n)\s*(?:sender\s+)?name\s*[:\-–—]\s*([^\n]+)/i
+    new RegExp(
+      READINESS_FIELD_LINE_PREFIX +
+        String.raw`(?:sender\s+)?name\s*[:\-–—]\s*([^\n]+)`,
+      'i'
+    )
   );
   if (nameMatch) {
     name = nameMatch[1].trim().replace(/[.;,]+$/, '');
@@ -777,8 +787,14 @@ function parseSenderIdentityFields(text) {
     }
   }
 
+  // Prefer an explicit labeled email line (including bullets) when present,
+  // then fall back to "update … email to …" (value may be on the next line).
   const emailLabeled = s.match(
-    /(?:^|\n)\s*(?:sender\s+)?email(?:\s+address)?\s*[:\-–—]\s*([^\s\n,;]+@[^\s\n,;]+)/i
+    new RegExp(
+      READINESS_FIELD_LINE_PREFIX +
+        String.raw`(?:sender\s+)?email(?:\s+address)?\s*[:\-–—]\s*([^\s\n,;]+@[^\s\n,;]+)`,
+      'i'
+    )
   );
   const emailUpdate = s.match(
     /\b(?:update|change|correct|set|use|fix)\b[\s\S]{0,48}\b(?:sender\s+)?email(?:\s+address)?\b[\s\S]{0,24}\b(?:to|is|=|:)\s*([^\s\n,;]+@[^\s\n,;]+)/i
@@ -789,6 +805,9 @@ function parseSenderIdentityFields(text) {
   const emailOnly = s.match(
     /\b([A-Z0-9._%+\-]+(?:\\@|@)[A-Z0-9.\-]+\.[A-Z]{2,})\b/i
   );
+
+  // Collect every email mention; labeled + update both count as email updates.
+  // Prefer labeled "Sender email address:" when both appear (canonical block).
   if (emailLabeled) {
     email = normalizeCapturedEmail(emailLabeled[1]);
     updatedFields.push('email');
@@ -808,8 +827,25 @@ function parseSenderIdentityFields(text) {
     updatedFields.push('email');
   }
 
+  // If update-form and labeled-form both appear with different values, labeled
+  // already won above. If only update appeared, also accept a later labeled
+  // line that emailLabeled missed (already handled). When update appears AND
+  // a labeled line exists, ensure email is set from labeled — done above.
+  // Additionally: if update matched but labeled also exists with same pattern
+  // under a bullet that emailLabeled caught, prefer labeled (done).
+  if (emailUpdate && emailLabeled) {
+    email = normalizeCapturedEmail(emailLabeled[1]);
+    if (!updatedFields.includes('email')) updatedFields.push('email');
+  } else if (emailUpdate && !emailLabeled && email) {
+    // already set from update
+  }
+
   const sigMatch = s.match(
-    /(?:^|\n)\s*(?:sender\s+)?signature\s*[:\-–—]\s*([^\n]+)/i
+    new RegExp(
+      READINESS_FIELD_LINE_PREFIX +
+        String.raw`(?:sender\s+)?signature\s*[:\-–—]\s*([^\n]+)`,
+      'i'
+    )
   );
   if (sigMatch) {
     signature = sigMatch[1].trim().replace(/[.;,]+$/, '');
@@ -828,7 +864,7 @@ function parseSenderIdentityFields(text) {
     name,
     email,
     signature,
-    updatedFields,
+    updatedFields: [...new Set(updatedFields)],
     hasAny: updatedFields.length > 0,
   };
 }
@@ -847,7 +883,11 @@ function parseReplyHandlingFields(text) {
   }
 
   const inboxMatch = s.match(
-    /(?:^|\n)\s*(?:reply(?:\s*[-/]?\s*to)?(?:\s+inbox)?|reply\s+inbox)\s*[:\-–—]\s*([^\n]+)/i
+    new RegExp(
+      READINESS_FIELD_LINE_PREFIX +
+        String.raw`(?:reply(?:\s*[-/]?\s*to)?(?:\s+inbox)?|reply\s+inbox)\s*[:\-–—]\s*([^\n]+)`,
+      'i'
+    )
   );
   const inboxUpdate = s.match(
     /\b(?:update|change|correct|set|use)\b[\s\S]{0,40}\breply(?:\s*[-/]?\s*to)?(?:\s+(?:inbox|address|email))?\b[\s\S]{0,24}\b(?:to|is|=|:)\s*([^\n,;]+)/i
@@ -1046,6 +1086,8 @@ function composeReadinessFieldCorrection(context = {}) {
       activeReadinessItemId: context.activeReadinessItemId || slots.activeReadinessItemId,
     }) || 'sender_identity';
 
+  // Parse ALL explicit fields in the latest message, then merge into prior
+  // state. Never drop previously provided fields unless replaced here.
   const senderParsed = parseSenderIdentityFields(text);
   const replyParsed = parseReplyHandlingFields(text);
 
@@ -1060,47 +1102,37 @@ function composeReadinessFieldCorrection(context = {}) {
   let senderState = mergeSenderIdentityState(priorFields, {});
   let nextItem = null;
   let itemConfirmed = false;
-  const corrected = [];
+  const corrected = senderParsed.updatedFields.slice();
 
   if (activeId === 'sender_identity') {
     senderState = mergeSenderIdentityState(priorFields, senderParsed);
-    if (senderParsed.email) {
+    const multiFieldUpdate = senderParsed.updatedFields.length >= 2;
+    const fullIdentityBlock =
+      Boolean(senderParsed.name) &&
+      Boolean(senderParsed.email) &&
+      Boolean(senderParsed.signature);
+
+    if (multiFieldUpdate || fullIdentityBlock) {
+      lines.push('Updated sender identity.');
+    } else if (senderParsed.email) {
       lines.push(`Updated sender email to ${senderState.senderEmail}.`);
-      corrected.push('email');
     } else if (senderParsed.name) {
       lines.push(`Updated sender name to ${senderState.senderName}.`);
-      corrected.push('name');
     } else if (senderParsed.signature) {
       lines.push(`Updated signature to ${senderState.senderSignature}.`);
-      corrected.push('signature');
     } else if (senderParsed.hasAny) {
       lines.push('Updated sender identity fields.');
     } else {
       lines.push('Recorded sender identity details.');
     }
 
-    // Multi-field initial provision: prefer a single "recorded" ack when
-    // more than one field arrived and this was not a single-field update.
-    if (
-      senderParsed.updatedFields.length >= 2 &&
-      !/\b(?:update|change|correct)\b/i.test(String(text))
-    ) {
-      lines.length = 0;
-      lines.push('Recorded sender identity:');
-      if (senderState.senderName) lines.push(`- ${senderState.senderName}`);
-      if (senderState.senderEmail) lines.push(`- ${senderState.senderEmail}`);
-      if (senderState.senderSignature) {
-        lines.push(`- signature: ${senderState.senderSignature}`);
-      }
-    }
-
     if (senderState.senderIdentityConfirmed) {
       itemConfirmed = true;
       lines.push('');
-      lines.push('Sender identity is now confirmed:');
-      lines.push(`- ${senderState.senderName}`);
-      lines.push(`- ${senderState.senderEmail}`);
-      lines.push(`- signature: ${senderState.senderSignature}`);
+      lines.push('Sender identity is confirmed:');
+      lines.push(`- Sender name: ${senderState.senderName}`);
+      lines.push(`- Sender email address: ${senderState.senderEmail}`);
+      lines.push(`- Signature: ${senderState.senderSignature}`);
       nextItem = nextReadinessItemAfter('sender_identity', {
         ...context,
         slots: {
@@ -1176,7 +1208,7 @@ function composeReadinessFieldCorrection(context = {}) {
     nextReadinessItem: nextItem,
     senderIdentity: senderState,
     itemConfirmed,
-    correctedFields: corrected.length ? corrected : senderParsed.updatedFields,
+    correctedFields: corrected,
     requiresExplicitApproval: false,
     sendsMade: false,
     crmWritesMade: false,
