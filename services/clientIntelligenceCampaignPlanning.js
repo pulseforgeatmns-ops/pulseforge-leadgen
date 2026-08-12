@@ -124,6 +124,8 @@ const {
   composeOperatorReadinessCheck,
   unresolvedReadinessItems,
   DEFAULT_UNRESOLVED_READINESS_ITEMS,
+  READINESS_CHECKLIST_CLOSING_ASK,
+  READINESS_CHECKLIST_SAFETY_LINE,
 } = require('./maxSynthesis');
 const {
   SCOUT_HANDOFF_KIND,
@@ -7610,15 +7612,29 @@ function produceExecutionConfirmationResult(userMessage, prior = {}, opts = {}) 
 
 /**
  * Operator readiness check — summarize unresolved items only.
- * Does not prepare export, create CRM drafts, queue sends, or ask for execute.
+ * Preserves operator-specified checklist items; does not prepare export,
+ * create CRM drafts, queue sends, or ask for execute approval.
  */
 function produceOperatorReadinessCheckResult(userMessage, prior = {}, opts = {}) {
   const gate = prior.outreachLaunchGate || opts.priorOutreachLaunchGate || null;
+  const slots = {
+    ...(prior.slots || {}),
+    ...(opts.slots || {}),
+    launchGateApproved: true,
+    launchReady: true,
+  };
   const composed = composeOperatorReadinessCheck({
     gate,
     outreachLaunchGate: gate,
+    operatorMessage: userMessage,
+    text: userMessage,
     unresolvedItems: opts.unresolvedItems || null,
-    closingAsk: 'Which readiness item should we resolve first?',
+    slots,
+    campaignMemory: opts.campaignMemory || prior.campaignMemory || null,
+    confirmedReadiness: opts.confirmedReadiness || null,
+    inapplicableReadiness: opts.inapplicableReadiness || null,
+    closingAsk: READINESS_CHECKLIST_CLOSING_ASK,
+    safetyLine: READINESS_CHECKLIST_SAFETY_LINE,
   });
 
   return applyConversationalPolicy(
@@ -7628,22 +7644,18 @@ function produceOperatorReadinessCheckResult(userMessage, prior = {}, opts = {})
         prior.step ||
         CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
       answers: opts.answers || prior.answers || {},
-      slots: {
-        ...(prior.slots || {}),
-        ...(opts.slots || {}),
-        launchGateApproved: true,
-        launchReady: true,
-      },
+      slots,
       outreachLaunchGate: gate,
       outreachDraftPreview: prior.outreachDraftPreview || null,
       intent: 'operator_readiness_check',
       planningState:
         prior.planningState ||
         CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
-      currentAsk: 'Which readiness item should we resolve first?',
+      currentAsk: READINESS_CHECKLIST_CLOSING_ASK,
       responseMode: RESPONSE_MODES.OPERATOR_READINESS_CHECK,
       conversationMode: CONVERSATION_MODES.OPERATOR_READINESS_CHECK,
       unresolvedItems: composed.unresolvedItems,
+      operatorSpecifiedChecklist: composed.operatorSpecifiedChecklist,
       launchGateApproved: true,
       launchReady: true,
       launched: false,
