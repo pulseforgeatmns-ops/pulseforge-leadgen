@@ -7644,6 +7644,18 @@ function produceCampaignReadySummaryResult(userMessage, prior = {}, opts = {}) {
     launchGateApproved: true,
     launchReady: true,
   };
+  const recentAssistantMessages = []
+    .concat(opts.recentAssistantMessages || [])
+    .concat(prior.recentAssistantMessages || [])
+    .concat(
+      Array.isArray(prior.turns)
+        ? prior.turns
+            .filter((t) => t && (t.role === 'assistant' || t.speaker === 'assistant'))
+            .map((t) => t.message || t.content || t.text || '')
+        : []
+    )
+    .filter(Boolean);
+
   const composed = composeCampaignReadySummary({
     gate,
     outreachLaunchGate: gate,
@@ -7675,9 +7687,25 @@ function produceCampaignReadySummaryResult(userMessage, prior = {}, opts = {}) {
       opts.confirmedReadinessRecords ||
       slots.confirmedReadinessRecords ||
       null,
+    senderIdentity: prior.senderIdentity || opts.senderIdentity || null,
+    replyHandling: prior.replyHandling || opts.replyHandling || null,
+    recentAssistantMessages,
+    priorAssistantMessage:
+      opts.priorAssistantMessage ||
+      prior.priorAssistantMessage ||
+      (recentAssistantMessages.length
+        ? recentAssistantMessages[recentAssistantMessages.length - 1]
+        : null),
+    includeReadinessDiagnostics: opts.includeReadinessDiagnostics === true,
     safetyLine: CAMPAIGN_READY_SUMMARY_SAFETY_LINE,
     closingAsk: CAMPAIGN_READY_SUMMARY_CLOSING,
   });
+
+  const canonicalSender = (composed.confirmedReadinessRecords || {}).sender_identity || {};
+  const canonicalReply =
+    (composed.confirmedReadinessRecords || {}).reply_handling ||
+    (composed.confirmedReadinessRecords || {}).reply_inbox_handling ||
+    {};
 
   const nextSlots = {
     ...slots,
@@ -7685,6 +7713,28 @@ function produceCampaignReadySummaryResult(userMessage, prior = {}, opts = {}) {
       composed.confirmedReadinessRecords ||
       slots.confirmedReadinessRecords ||
       null,
+    // Re-canonicalize flat keys so later turns cannot lose them.
+    ...(canonicalSender.senderName
+      ? {
+          senderName: canonicalSender.senderName,
+          senderEmail: canonicalSender.senderEmail,
+          senderSignature: canonicalSender.senderSignature,
+          senderIdentityConfirmed: true,
+        }
+      : {}),
+    ...(canonicalReply.replyInbox
+      ? {
+          replyInbox: canonicalReply.replyInbox,
+          reply_inbox: canonicalReply.replyInbox,
+          replyToMatchesSender: canonicalReply.replyToMatchesSender,
+          reply_to_matches_sender: canonicalReply.replyToMatchesSender,
+          sameAsSender: canonicalReply.replyToMatchesSender,
+          replyMonitoringOwner: canonicalReply.replyMonitoringOwner,
+          reply_monitoring_owner: canonicalReply.replyMonitoringOwner,
+          replyInboxConfirmed: true,
+          replyHandlingConfirmed: true,
+        }
+      : {}),
   };
 
   return applyConversationalPolicy(
@@ -7719,6 +7769,7 @@ function produceCampaignReadySummaryResult(userMessage, prior = {}, opts = {}) {
       exportMade: false,
       accountChangesMade: false,
       confirmedReadinessRecords: composed.confirmedReadinessRecords || null,
+      readinessDiagnostics: composed.readinessDiagnostics || null,
     },
     {
       isCampaignReadySummary: true,
@@ -8037,6 +8088,16 @@ function produceReadinessFieldCorrectionResult(
 
   if (composed.itemConfirmed && composed.readinessItemId === 'sender_identity') {
     nextSlots.senderIdentityConfirmed = true;
+    if (sender.senderName && sender.senderEmail && sender.senderSignature) {
+      nextSlots.senderIdentityConfirmationText = [
+        'Sender identity is confirmed:',
+        `- Sender name: ${sender.senderName}`,
+        `- Sender email address: ${sender.senderEmail}`,
+        `- Signature: ${sender.senderSignature}`,
+      ].join('\n');
+      nextSlots.lastReadinessConfirmationText =
+        nextSlots.senderIdentityConfirmationText;
+    }
   }
   if (composed.itemConfirmed && composed.readinessItemId === 'reply_handling') {
     nextSlots.replyInboxConfirmed = true;
@@ -8055,6 +8116,22 @@ function produceReadinessFieldCorrectionResult(
       nextSlots.replyMonitoringOwner = reply.replyMonitoringOwner;
       nextSlots.reply_monitoring_owner = reply.replyMonitoringOwner;
       nextSlots.monitoringOwner = reply.replyMonitoringOwner;
+    }
+    if (
+      reply.replyInbox &&
+      reply.replyToMatchesSender != null &&
+      reply.replyMonitoringOwner
+    ) {
+      nextSlots.replyHandlingConfirmationText = [
+        'Reply inbox / reply-to handling is confirmed:',
+        `- Reply inbox: ${reply.replyInbox}`,
+        `- Reply-to matches sender address: ${
+          reply.replyToMatchesSender ? 'yes' : 'no'
+        }`,
+        `- Reply monitoring owner: ${reply.replyMonitoringOwner}`,
+      ].join('\n');
+      nextSlots.lastReadinessConfirmationText =
+        nextSlots.replyHandlingConfirmationText;
     }
   }
   if (

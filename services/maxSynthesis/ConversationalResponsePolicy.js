@@ -1113,15 +1113,16 @@ function parseReplyHandlingFields(text) {
   }
 
   // "Reply-to should match the sender address: yes"
+  // Also: "Reply-to matches sender address: yes" (confirmation copy)
   const matchLine = s.match(
     new RegExp(
       READINESS_FIELD_LINE_PREFIX +
-        String.raw`reply(?:\s*[-/]?\s*to)?\s+should\s+match(?:\s+the)?\s+sender(?:\s+address)?\s*[:\-–—]\s*([^\n]+)`,
+        String.raw`reply(?:\s*[-/]?\s*to)?\s+(?:should\s+)?match(?:es)?(?:\s+the)?\s+sender(?:\s+address)?\s*[:\-–—]\s*([^\n]+)`,
       'i'
     )
   );
   const matchYesNo = s.match(
-    /\breply(?:\s*[-/]?\s*to)?\b[\s\S]{0,40}\b(?:should\s+)?match(?:\s+the)?\s+sender\b[\s\S]{0,20}\b(yes|no|true|false)\b/i
+    /\breply(?:\s*[-/]?\s*to)?\b[\s\S]{0,40}\b(?:should\s+)?match(?:es)?(?:\s+the)?\s+sender\b[\s\S]{0,24}\b(yes|no|true|false)\b/i
   );
   if (matchLine) {
     const v = matchLine[1].trim().toLowerCase();
@@ -1284,6 +1285,376 @@ function replyHandlingFieldsComplete(fields = {}) {
 }
 
 /**
+ * Normalize sender-identity readiness fields from any stored alias shape.
+ * Canonical keys: senderName, senderEmail, senderSignature
+ */
+function normalizeSenderIdentityFields(source = {}) {
+  const s = source && typeof source === 'object' ? source : {};
+  const nameRaw = firstDefined(
+    s.senderName,
+    s.sender_name,
+    s.name,
+    s.sender
+  );
+  const emailRaw = firstDefined(
+    s.senderEmail,
+    s.sender_email,
+    s.email,
+    s.senderEmailAddress,
+    s.sender_email_address
+  );
+  const signatureRaw = firstDefined(
+    s.senderSignature,
+    s.sender_signature,
+    s.signature
+  );
+  const senderName = nameRaw ? String(nameRaw).trim().replace(/[.;,]+$/, '') : null;
+  const senderEmail = emailRaw ? normalizeCapturedEmail(String(emailRaw)) : null;
+  const senderSignature = signatureRaw
+    ? String(signatureRaw).trim().replace(/[.;,]+$/, '')
+    : null;
+  const confirmedFlag = Boolean(
+    s.senderIdentityConfirmed === true ||
+      s.sender_identity_confirmed === true ||
+      s.confirmed === true
+  );
+  const fieldsComplete = Boolean(senderName && senderEmail && senderSignature);
+  return {
+    senderName,
+    senderEmail,
+    senderSignature,
+    name: senderName,
+    email: senderEmail,
+    signature: senderSignature,
+    senderIdentityConfirmed: confirmedFlag || fieldsComplete,
+    fieldsComplete,
+    missing: [
+      !senderName ? 'sender name' : null,
+      !senderEmail ? 'sender email' : null,
+      !senderSignature ? 'signature' : null,
+    ].filter(Boolean),
+  };
+}
+
+function senderIdentityFieldsComplete(fields = {}) {
+  return normalizeSenderIdentityFields(fields).fieldsComplete === true;
+}
+
+/**
+ * Scrape confirmed sender / reply blocks from prior confirmation prose.
+ * Used when flat slots were dropped but confirmation text remains in history.
+ */
+function extractConfirmedSenderFromText(text) {
+  const s = String(text || '');
+  if (!/sender\s+identity\s+is\s+confirmed|sender\s+identity\s+confirmed/i.test(s)) {
+    return normalizeSenderIdentityFields({});
+  }
+  const parsed = parseSenderIdentityFields(s);
+  return normalizeSenderIdentityFields({
+    senderName: parsed.name,
+    senderEmail: parsed.email,
+    senderSignature: parsed.signature,
+    confirmed: Boolean(parsed.name && parsed.email && parsed.signature),
+  });
+}
+
+function extractConfirmedReplyFromText(text) {
+  const s = String(text || '');
+  if (
+    !/reply(?:\s+inbox)?(?:\s*\/\s*reply-?to)?(?:\s+handling)?\s+is\s+confirmed|reply\s+handling\s+confirmed/i.test(
+      s
+    )
+  ) {
+    return normalizeReplyHandlingFields({});
+  }
+  const parsed = parseReplyHandlingFields(s);
+  return normalizeReplyHandlingFields({
+    replyInbox: parsed.replyInbox,
+    replyToMatchesSender: parsed.sameAsSender,
+    replyMonitoringOwner: parsed.monitoringOwner,
+    confirmed: Boolean(
+      parsed.replyInbox &&
+        parsed.sameAsSender !== null &&
+        parsed.monitoringOwner
+    ),
+  });
+}
+
+function collectReadinessTextSources(context = {}) {
+  const slots = context.slots || {};
+  const chunks = [];
+  const push = (v) => {
+    if (v == null) return;
+    if (typeof v === 'string' && v.trim()) {
+      chunks.push(v);
+      return;
+    }
+    if (Array.isArray(v)) {
+      for (const item of v) push(item);
+      return;
+    }
+    if (typeof v === 'object') {
+      if (typeof v.message === 'string') chunks.push(v.message);
+      if (typeof v.content === 'string') chunks.push(v.content);
+      if (typeof v.text === 'string') chunks.push(v.text);
+    }
+  };
+  push(slots.senderIdentityConfirmationText);
+  push(slots.replyHandlingConfirmationText);
+  push(slots.lastReadinessConfirmationText);
+  push(context.senderIdentityConfirmationText);
+  push(context.replyHandlingConfirmationText);
+  push(context.priorAssistantMessage);
+  push(context.recentAssistantMessages);
+  push(context.priorMessages);
+  push(context.turns);
+  push(context.history);
+  return chunks.join('\n\n');
+}
+
+/**
+ * Canonical readiness state for campaign-ready summary and persistence.
+ * Aggregates slots, confirmed records, reply objects, and confirmation prose.
+ * Does NOT trust the current operator prompt alone.
+ */
+function getCanonicalReadinessState(context = {}) {
+  const slots = context.slots || {};
+  const records = getConfirmedReadinessRecords(context);
+  const senderRecord = senderRecordFromConfirmed(records) || {};
+  const replyRecord = replyRecordFromConfirmed(records) || {};
+  const textBlob = collectReadinessTextSources(context);
+  const scrapedSender = extractConfirmedSenderFromText(textBlob);
+  const scrapedReply = extractConfirmedReplyFromText(textBlob);
+
+  const sender = normalizeSenderIdentityFields({
+    ...scrapedSender,
+    ...senderRecord,
+    ...(context.senderIdentity && typeof context.senderIdentity === 'object'
+      ? context.senderIdentity
+      : {}),
+    ...(context.priorFields && typeof context.priorFields === 'object'
+      ? context.priorFields
+      : {}),
+    senderName: firstDefined(
+      slots.senderName,
+      slots.sender_name,
+      context.senderName,
+      context.sender_name,
+      senderRecord.senderName,
+      senderRecord.name,
+      scrapedSender.senderName
+    ),
+    senderEmail: firstDefined(
+      slots.senderEmail,
+      slots.sender_email,
+      context.senderEmail,
+      context.sender_email,
+      senderRecord.senderEmail,
+      senderRecord.email,
+      scrapedSender.senderEmail
+    ),
+    senderSignature: firstDefined(
+      slots.senderSignature,
+      slots.sender_signature,
+      context.senderSignature,
+      context.sender_signature,
+      senderRecord.senderSignature,
+      senderRecord.signature,
+      scrapedSender.senderSignature
+    ),
+    senderIdentityConfirmed:
+      slots.senderIdentityConfirmed === true ||
+      context.senderIdentityConfirmed === true ||
+      senderRecord.confirmed === true ||
+      scrapedSender.fieldsComplete === true,
+  });
+
+  const reply = normalizeReplyHandlingFields({
+    ...scrapedReply,
+    ...replyRecord,
+    ...(context.replyHandling && typeof context.replyHandling === 'object'
+      ? context.replyHandling
+      : {}),
+    // Pass full slots so aliases like reply_to / sameAsSender normalize.
+    ...slots,
+    replyInbox: firstDefined(
+      slots.replyInbox,
+      slots.reply_inbox,
+      context.replyInbox,
+      context.reply_inbox,
+      replyRecord.replyInbox,
+      replyRecord.reply_inbox,
+      scrapedReply.replyInbox
+    ),
+    replyToMatchesSender: firstDefined(
+      slots.replyToMatchesSender,
+      slots.reply_to_matches_sender,
+      slots.sameAsSender,
+      slots.same_as_sender,
+      // reply_to / replyTo may be yes/no when not an email address.
+      looksLikeEmailValue(slots.reply_to) ? null : slots.reply_to,
+      looksLikeEmailValue(slots.replyTo) ? null : slots.replyTo,
+      context.replyToMatchesSender,
+      context.reply_to_matches_sender,
+      replyRecord.replyToMatchesSender,
+      replyRecord.reply_to_matches_sender,
+      replyRecord.sameAsSender,
+      scrapedReply.replyToMatchesSender
+    ),
+    replyMonitoringOwner: firstDefined(
+      slots.replyMonitoringOwner,
+      slots.reply_monitoring_owner,
+      slots.monitoringOwner,
+      context.replyMonitoringOwner,
+      context.reply_monitoring_owner,
+      replyRecord.replyMonitoringOwner,
+      replyRecord.reply_monitoring_owner,
+      replyRecord.monitoringOwner,
+      scrapedReply.replyMonitoringOwner
+    ),
+    replyInboxConfirmed:
+      slots.replyInboxConfirmed === true ||
+      slots.replyHandlingConfirmed === true ||
+      context.replyInboxConfirmed === true ||
+      context.replyHandlingConfirmed === true ||
+      replyRecord.confirmed === true ||
+      scrapedReply.fieldsComplete === true,
+  });
+
+  const confirmedFlags = {
+    ...(context.confirmedReadiness || {}),
+    ...(slots.confirmedReadiness || {}),
+  };
+
+  const senderConfirmed = Boolean(
+    confirmedFlags.sender_identity ||
+      confirmedFlags.senderIdentity ||
+      sender.senderIdentityConfirmed ||
+      sender.fieldsComplete
+  );
+  const replyConfirmed = Boolean(
+    confirmedFlags.reply_inbox_handling ||
+      confirmedFlags.reply_handling ||
+      confirmedFlags.replyInboxHandling ||
+      confirmedFlags.replyHandling ||
+      reply.replyHandlingConfirmed ||
+      reply.fieldsComplete
+  );
+
+  const diagnostics = {
+    sender: {
+      confirmed: senderConfirmed,
+      fieldsComplete: sender.fieldsComplete,
+      present: {
+        senderName: Boolean(sender.senderName),
+        senderEmail: Boolean(sender.senderEmail),
+        senderSignature: Boolean(sender.senderSignature),
+      },
+      missing: sender.missing.slice(),
+      values: {
+        senderName: sender.senderName,
+        senderEmail: sender.senderEmail,
+        senderSignature: sender.senderSignature,
+      },
+      sources: {
+        slots: Boolean(slots.senderName || slots.senderEmail || slots.senderSignature),
+        records: Boolean(senderRecord && (senderRecord.senderName || senderRecord.senderEmail)),
+        scraped: scrapedSender.fieldsComplete === true,
+        flag: Boolean(
+          slots.senderIdentityConfirmed ||
+            confirmedFlags.sender_identity ||
+            confirmedFlags.senderIdentity
+        ),
+      },
+    },
+    reply: {
+      confirmed: replyConfirmed,
+      fieldsComplete: reply.fieldsComplete,
+      present: {
+        replyInbox: Boolean(reply.replyInbox),
+        replyToMatchesSender: reply.replyToMatchesSender !== null,
+        replyMonitoringOwner: Boolean(reply.replyMonitoringOwner),
+      },
+      missing: reply.missing.slice(),
+      values: {
+        replyInbox: reply.replyInbox,
+        replyToMatchesSender: reply.replyToMatchesSender,
+        replyMonitoringOwner: reply.replyMonitoringOwner,
+      },
+      sources: {
+        slots: Boolean(
+          slots.replyInbox ||
+            slots.reply_inbox ||
+            slots.replyToMatchesSender != null ||
+            slots.reply_to_matches_sender != null ||
+            slots.replyMonitoringOwner ||
+            slots.reply_monitoring_owner
+        ),
+        records: Boolean(
+          replyRecord &&
+            (replyRecord.replyInbox || replyRecord.replyMonitoringOwner)
+        ),
+        scraped: scrapedReply.fieldsComplete === true,
+        flag: Boolean(
+          slots.replyInboxConfirmed ||
+            slots.replyHandlingConfirmed ||
+            confirmedFlags.reply_inbox_handling ||
+            confirmedFlags.reply_handling
+        ),
+      },
+    },
+  };
+
+  // Structured records always use canonical keys.
+  const confirmedReadinessRecords = {
+    ...records,
+    ...(senderConfirmed && sender.fieldsComplete
+      ? {
+          sender_identity: {
+            confirmed: true,
+            senderName: sender.senderName,
+            senderEmail: sender.senderEmail,
+            senderSignature: sender.senderSignature,
+          },
+        }
+      : {}),
+    ...(replyConfirmed && reply.fieldsComplete
+      ? {
+          reply_handling: {
+            confirmed: true,
+            replyInbox: reply.replyInbox,
+            replyToMatchesSender: reply.replyToMatchesSender,
+            replyMonitoringOwner: reply.replyMonitoringOwner,
+            reply_inbox: reply.replyInbox,
+            reply_to_matches_sender: reply.replyToMatchesSender,
+            sameAsSender: reply.replyToMatchesSender,
+            reply_monitoring_owner: reply.replyMonitoringOwner,
+          },
+          reply_inbox_handling: {
+            confirmed: true,
+            replyInbox: reply.replyInbox,
+            replyToMatchesSender: reply.replyToMatchesSender,
+            replyMonitoringOwner: reply.replyMonitoringOwner,
+          },
+        }
+      : {}),
+  };
+
+  return {
+    senderIdentity: sender,
+    replyHandling: reply,
+    senderIdentityConfirmed: senderConfirmed && sender.fieldsComplete,
+    replyInboxConfirmed: replyConfirmed && reply.fieldsComplete,
+    replyHandlingConfirmed: replyConfirmed && reply.fieldsComplete,
+    // Incomplete only when fields are actually missing.
+    senderIdentityIncomplete: !(senderConfirmed && sender.fieldsComplete),
+    replyHandlingIncomplete: !(replyConfirmed && reply.fieldsComplete),
+    confirmedReadinessRecords,
+    diagnostics,
+  };
+}
+
+/**
  * Merge prior reply-handling slots with newly parsed fields.
  */
 function mergeReplyHandlingState(prior = {}, parsed = {}) {
@@ -1314,31 +1685,21 @@ function mergeReplyHandlingState(prior = {}, parsed = {}) {
  * Merge prior sender identity slots with newly parsed fields.
  */
 function mergeSenderIdentityState(prior = {}, parsed = {}) {
-  const name =
-    parsed.name != null && parsed.name !== ''
-      ? parsed.name
-      : prior.senderName || prior.name || null;
-  const emailRaw =
-    parsed.email != null && parsed.email !== ''
-      ? parsed.email
-      : prior.senderEmail || prior.email || null;
-  const email = emailRaw ? normalizeCapturedEmail(emailRaw) : null;
-  const signature =
-    parsed.signature != null && parsed.signature !== ''
-      ? parsed.signature
-      : prior.senderSignature || prior.signature || null;
-  const confirmed = Boolean(name && email && signature);
-  return {
-    senderName: name,
-    senderEmail: email,
-    senderSignature: signature,
-    senderIdentityConfirmed: confirmed,
-    missing: [
-      !name ? 'sender name' : null,
-      !email ? 'sender email' : null,
-      !signature ? 'signature' : null,
-    ].filter(Boolean),
-  };
+  const normalizedPrior = normalizeSenderIdentityFields(prior);
+  return normalizeSenderIdentityFields({
+    senderName:
+      parsed.name != null && parsed.name !== ''
+        ? parsed.name
+        : normalizedPrior.senderName,
+    senderEmail:
+      parsed.email != null && parsed.email !== ''
+        ? parsed.email
+        : normalizedPrior.senderEmail,
+    senderSignature:
+      parsed.signature != null && parsed.signature !== ''
+        ? parsed.signature
+        : normalizedPrior.senderSignature,
+  });
 }
 
 /**
@@ -3825,83 +4186,35 @@ function buildConfirmedReadinessRecords(context = {}, patch = {}) {
 }
 
 /**
- * Resolve sender identity fields from confirmed records + slots + latest message.
+ * Resolve sender identity fields from canonical records + slots + latest message.
+ * Never spreads the full context object (avoids null pollution).
  */
 function resolveSenderIdentityFromContext(context = {}) {
-  const slots = context.slots || {};
-  const record = senderRecordFromConfirmed(getConfirmedReadinessRecords(context)) || {};
-  const prior = {
-    senderName:
-      slots.senderName ||
-      context.senderName ||
-      record.senderName ||
-      record.name ||
-      (context.priorFields && context.priorFields.senderName) ||
-      null,
-    senderEmail:
-      slots.senderEmail ||
-      context.senderEmail ||
-      record.senderEmail ||
-      record.email ||
-      (context.priorFields && context.priorFields.senderEmail) ||
-      null,
-    senderSignature:
-      slots.senderSignature ||
-      context.senderSignature ||
-      record.senderSignature ||
-      record.signature ||
-      (context.priorFields && context.priorFields.senderSignature) ||
-      null,
-  };
+  const canonical = getCanonicalReadinessState({
+    ...context,
+    // Ignore current prompt scrape here; merge parsed prompt separately.
+    priorAssistantMessage: context.priorAssistantMessage,
+    recentAssistantMessages: context.recentAssistantMessages,
+  });
+  const prior = canonical.senderIdentity || {};
   const parsed = parseSenderIdentityFields(
     context.operatorMessage || context.text || context.userMessage || ''
   );
-  return mergeSenderIdentityState(prior, parsed);
+  // Prompt fragments only fill gaps — never wipe confirmed canonical values.
+  return mergeSenderIdentityState(prior, {
+    name: parsed.name,
+    email: parsed.email,
+    signature: parsed.signature,
+  });
 }
 
 /**
- * Resolve reply-handling fields from confirmed records + slots + latest message.
+ * Resolve reply-handling fields from canonical records + slots + latest message.
+ * Never spreads the full context object (avoids null / alias pollution).
  */
 function resolveReplyHandlingFromContext(context = {}) {
-  const slots = context.slots || {};
-  const record =
-    replyRecordFromConfirmed(getConfirmedReadinessRecords(context)) || {};
-  // Normalize aliases from slots, context, and confirmed records before merge.
-  const prior = normalizeReplyHandlingFields({
-    ...record,
-    ...context,
-    ...slots,
-    replyInbox:
-      slots.replyInbox ||
-      slots.reply_inbox ||
-      context.replyInbox ||
-      context.reply_inbox ||
-      record.replyInbox ||
-      record.reply_inbox ||
-      null,
-    replyToMatchesSender: firstDefined(
-      slots.replyToMatchesSender,
-      slots.reply_to_matches_sender,
-      slots.sameAsSender,
-      slots.same_as_sender,
-      context.replyToMatchesSender,
-      context.reply_to_matches_sender,
-      context.sameAsSender,
-      record.replyToMatchesSender,
-      record.reply_to_matches_sender,
-      record.sameAsSender
-    ),
-    replyMonitoringOwner:
-      slots.replyMonitoringOwner ||
-      slots.reply_monitoring_owner ||
-      slots.monitoringOwner ||
-      context.replyMonitoringOwner ||
-      context.reply_monitoring_owner ||
-      record.replyMonitoringOwner ||
-      record.reply_monitoring_owner ||
-      record.monitoringOwner ||
-      null,
-  });
+  const canonical = getCanonicalReadinessState(context);
+  const prior = canonical.replyHandling || {};
   const parsed = parseReplyHandlingFields(
     context.operatorMessage || context.text || context.userMessage || ''
   );
@@ -4736,11 +5049,27 @@ function normalizeCampaignReadyBullet(raw, fallback) {
 
 /**
  * Final campaign-ready summary — compose the WHOLE readiness state.
- * Retrieves confirmed readiness records (not only the latest prompt / substep).
- * Never collapses to the latest readiness item. Never executes.
+ * Reads from canonical readiness state (slots + confirmed records + confirmation
+ * snapshots), not only the latest prompt / substep. Never executes.
  */
 function composeCampaignReadySummary(context = {}) {
-  const state = knownReadinessState(context);
+  const canonical = getCanonicalReadinessState(context);
+  const state = knownReadinessState({
+    ...context,
+    slots: {
+      ...(context.slots || {}),
+      ...(canonical.senderIdentity || {}),
+      ...(canonical.replyHandling || {}),
+      senderIdentityConfirmed: canonical.senderIdentityConfirmed,
+      replyInboxConfirmed: canonical.replyInboxConfirmed,
+      replyHandlingConfirmed: canonical.replyHandlingConfirmed,
+      confirmedReadinessRecords: canonical.confirmedReadinessRecords,
+    },
+    confirmedReadinessRecords: canonical.confirmedReadinessRecords,
+    senderIdentityConfirmed: canonical.senderIdentityConfirmed,
+    replyInboxConfirmed: canonical.replyInboxConfirmed,
+    replyHandlingConfirmed: canonical.replyHandlingConfirmed,
+  });
   const slots = context.slots || {};
   const businessName =
     context.businessName ||
@@ -4771,27 +5100,20 @@ function composeCampaignReadySummary(context = {}) {
     null;
   const nextExecute = nextExecuteActionForOperationalPath(pathId, pathLabel);
 
-  const sender = state.senderIdentity || {};
-  const reply = state.replyHandling || {};
+  const sender = canonical.senderIdentity || {};
+  const reply = canonical.replyHandling || {};
   const followUp = state.followUpTracking || {};
   const monitoring = state.replyMonitoringBatchReview || {};
+  const diagnostics = canonical.diagnostics || {};
 
-  const senderFullyPresent = Boolean(
-    sender.senderName && sender.senderEmail && sender.senderSignature
-  );
-  const replyNormalized = normalizeReplyHandlingFields({
-    ...reply,
-    ...(state.confirmedReadinessRecords &&
-    state.confirmedReadinessRecords.reply_handling
-      ? state.confirmedReadinessRecords.reply_handling
-      : {}),
-    ...(state.confirmedReadinessRecords &&
-    state.confirmedReadinessRecords.reply_inbox_handling
-      ? state.confirmedReadinessRecords.reply_inbox_handling
-      : {}),
-    ...slots,
-  });
-  const replyFullyPresent = replyHandlingFieldsComplete(replyNormalized);
+  try {
+    console.info(
+      '[campaign_ready_summary] readiness diagnostics',
+      JSON.stringify(diagnostics)
+    );
+  } catch (_) {
+    /* ignore logging failures */
+  }
 
   const lines = [];
   lines.push(`${businessName} ${batchLabel} campaign-ready summary`);
@@ -4814,7 +5136,7 @@ function composeCampaignReadySummary(context = {}) {
   }
   lines.push('');
 
-  if (state.senderIdentityConfirmed && senderFullyPresent) {
+  if (canonical.senderIdentityConfirmed && senderIdentityFieldsComplete(sender)) {
     lines.push('Sender identity confirmed:');
     lines.push(`- ${sender.senderName}`);
     lines.push(`- ${sender.senderEmail}`);
@@ -4824,20 +5146,15 @@ function composeCampaignReadySummary(context = {}) {
   }
   lines.push('');
 
-  if (
-    (state.replyInboxConfirmed || replyNormalized.replyHandlingConfirmed) &&
-    replyFullyPresent
-  ) {
+  if (canonical.replyInboxConfirmed && replyHandlingFieldsComplete(reply)) {
     lines.push('Reply handling confirmed:');
-    lines.push(`- reply inbox: ${replyNormalized.replyInbox}`);
+    lines.push(`- reply inbox: ${reply.replyInbox}`);
     lines.push(
       `- reply-to matches sender: ${
-        replyNormalized.replyToMatchesSender ? 'yes' : 'no'
+        reply.replyToMatchesSender ? 'yes' : 'no'
       }`
     );
-    lines.push(
-      `- reply monitoring owner: ${replyNormalized.replyMonitoringOwner}`
-    );
+    lines.push(`- reply monitoring owner: ${reply.replyMonitoringOwner}`);
   } else {
     lines.push('Reply handling: not fully confirmed');
   }
@@ -4927,6 +5244,17 @@ function composeCampaignReadySummary(context = {}) {
       CAMPAIGN_READY_SUMMARY_CLOSING
   );
 
+  if (context.includeReadinessDiagnostics === true) {
+    lines.push('');
+    lines.push('Readiness diagnostics:');
+    lines.push(
+      `- sender: confirmed=${diagnostics.sender && diagnostics.sender.confirmed}; complete=${diagnostics.sender && diagnostics.sender.fieldsComplete}; missing=${((diagnostics.sender && diagnostics.sender.missing) || []).join('|') || 'none'}; sources=${JSON.stringify((diagnostics.sender && diagnostics.sender.sources) || {})}`
+    );
+    lines.push(
+      `- reply: confirmed=${diagnostics.reply && diagnostics.reply.confirmed}; complete=${diagnostics.reply && diagnostics.reply.fieldsComplete}; missing=${((diagnostics.reply && diagnostics.reply.missing) || []).join('|') || 'none'}; sources=${JSON.stringify((diagnostics.reply && diagnostics.reply.sources) || {})}`
+    );
+  }
+
   const message = dedupeOperatorStateUpdateMessage(lines.join('\n').trim());
   return {
     mode: CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY,
@@ -4935,8 +5263,8 @@ function composeCampaignReadySummary(context = {}) {
     includeRendererSections: false,
     includeExpandedSafety: false,
     batch1Scope,
-    senderIdentityConfirmed: state.senderIdentityConfirmed === true,
-    replyInboxConfirmed: state.replyInboxConfirmed === true,
+    senderIdentityConfirmed: canonical.senderIdentityConfirmed === true,
+    replyInboxConfirmed: canonical.replyInboxConfirmed === true,
     operationalPathChosen: state.operationalPathChosen === true,
     operationalPathLabel: pathLabel,
     followUpTrackingConfirmed: state.followUpTrackingConfirmed === true,
@@ -4944,7 +5272,8 @@ function composeCampaignReadySummary(context = {}) {
       state.replyMonitoringBatch1Confirmed === true,
     executionLockActive: true,
     nextExecuteAction: nextExecute,
-    confirmedReadinessRecords: state.confirmedReadinessRecords || {},
+    confirmedReadinessRecords: canonical.confirmedReadinessRecords || {},
+    readinessDiagnostics: diagnostics,
     requiresExplicitApproval: false,
     executionPending: false,
     sendsMade: false,
@@ -5660,8 +5989,13 @@ module.exports = {
   mergeSenderIdentityState,
   mergeReplyHandlingState,
   normalizeReplyHandlingFields,
+  normalizeSenderIdentityFields,
   coerceReplyToMatchesSender,
   replyHandlingFieldsComplete,
+  senderIdentityFieldsComplete,
+  getCanonicalReadinessState,
+  extractConfirmedSenderFromText,
+  extractConfirmedReplyFromText,
   mergeOperationalPathState,
   mergeFollowUpTrackingState,
   mergeReplyMonitoringBatchReviewState,
