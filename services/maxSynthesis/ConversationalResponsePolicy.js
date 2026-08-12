@@ -13,11 +13,14 @@
  *   4. formal_review_gate         — first-time gate for approval (card allowed)
  *   5. operator_readiness_check   — summarize / resolve remaining readiness gaps
  *   6. execution_confirmation     — about to send/export/CRM/account action
+ *   7. clarification_needed       — accidental / low-signal / ambiguous input
  *
  * Classification priority for post-approval turns:
- * discussing options / resolving readiness / selecting a path later
- * ALWAYS beat bare mentions of export/CRM/queue. Execution confirmation
- * only when the operator clearly asks to take or approve a concrete action.
+ * low-signal ambiguous input → clarification_needed (never re-open full state
+ * summary or options). Then discussing options / resolving readiness /
+ * selecting a path later ALWAYS beat bare mentions of export/CRM/queue.
+ * Execution confirmation only when the operator clearly asks to take or
+ * approve a concrete action.
  */
 
 const {
@@ -32,6 +35,7 @@ const CONVERSATION_MODES = Object.freeze({
   FORMAL_REVIEW_GATE: 'formal_review_gate',
   OPERATOR_READINESS_CHECK: 'operator_readiness_check',
   EXECUTION_CONFIRMATION: 'execution_confirmation',
+  CLARIFICATION_NEEDED: 'clarification_needed',
 });
 
 /** Wire/protocol responseMode values used on campaign replies. */
@@ -48,6 +52,8 @@ const CONVERSATION_MODE_TO_RESPONSE_MODE = Object.freeze({
     RESPONSE_MODES.OPERATOR_READINESS_CHECK || 'operator_readiness_check',
   [CONVERSATION_MODES.EXECUTION_CONFIRMATION]:
     RESPONSE_MODES.EXECUTION_CONFIRMATION || 'execution_confirmation',
+  [CONVERSATION_MODES.CLARIFICATION_NEEDED]:
+    RESPONSE_MODES.CLARIFICATION_NEEDED || 'clarification_needed',
 });
 
 const RESPONSE_MODE_TO_CONVERSATION_MODE = Object.freeze({
@@ -61,7 +67,35 @@ const RESPONSE_MODE_TO_CONVERSATION_MODE = Object.freeze({
     CONVERSATION_MODES.FORMAL_REVIEW_GATE,
   operator_readiness_check: CONVERSATION_MODES.OPERATOR_READINESS_CHECK,
   execution_confirmation: CONVERSATION_MODES.EXECUTION_CONFIRMATION,
+  clarification_needed: CONVERSATION_MODES.CLARIFICATION_NEEDED,
 });
+
+/**
+ * Short tokens that are intentional operator answers — not accidental noise.
+ * Single-letter approvals (y/n) stay here; random letters like `v` / `k` do not.
+ */
+const KNOWN_SHORT_OPERATOR_INTENTS = Object.freeze(
+  new Set([
+    'y',
+    'n',
+    'yes',
+    'no',
+    'ok',
+    'okay',
+    'hold',
+    'wait',
+    'stop',
+    'go',
+    'skip',
+    'pass',
+    'help',
+    'next',
+    'back',
+  ])
+);
+
+const CLARIFICATION_NEEDED_ASK =
+  'Do you want to resolve sender identity, reply handling, follow-up tracking, or hold?';
 
 /** Default unresolved items after Launch Gate readiness-only approval. */
 const DEFAULT_UNRESOLVED_READINESS_ITEMS = Object.freeze([
@@ -264,24 +298,46 @@ function assessConversationContext(input = {}) {
       input.intent === 'outreach_copy_plan_approved' ||
       input.intent === 'outreach_draft_preview_approved'
   );
+  const lowSignalFromText =
+    Boolean(operatorMessage) &&
+    looksLikeLowSignalAmbiguousInput(operatorMessage);
   const readinessFromText = looksLikeOperatorReadinessCheck(operatorMessage);
   const nonExecutionFromText = looksLikeNonExecutionIntent(operatorMessage);
   const executionFromText = looksLikeExecutionRequest(operatorMessage);
 
+  // Accidental / low-signal input must never be treated as readiness summary,
+  // execution, or a request to re-open the full approved-state options block.
+  const isClarificationNeeded = Boolean(
+    input.isClarificationNeeded ||
+      input.forceClarification ||
+      input.intent === 'clarification_needed' ||
+      input.messageClass === 'clarification_needed' ||
+      (lowSignalFromText &&
+        !input.forceReadinessCheck &&
+        !input.isReadinessCheck &&
+        !input.isExecutionRequest &&
+        !input.executionPending &&
+        !isRevision &&
+        !isDiagnostic)
+  );
+
   // Explicit flags still lose to clear readiness / planning language in the
   // operator message — bare option names must never force execute confirm.
   const isReadinessCheck = Boolean(
-    input.isReadinessCheck ||
-      input.forceReadinessCheck ||
-      readinessFromText
+    !isClarificationNeeded &&
+      (input.isReadinessCheck ||
+        input.forceReadinessCheck ||
+        readinessFromText)
   );
   const isNonExecutionIntent = Boolean(
-    isReadinessCheck ||
+    isClarificationNeeded ||
+      isReadinessCheck ||
       input.isNonExecutionIntent ||
       nonExecutionFromText
   );
   const isExecutionRequest = Boolean(
-    !isNonExecutionIntent &&
+    !isClarificationNeeded &&
+      !isNonExecutionIntent &&
       (input.isExecutionRequest ||
         input.executionPending ||
         executionFromText)
@@ -290,17 +346,19 @@ function assessConversationContext(input = {}) {
   const shortestUseful =
     isDiagnostic
       ? 'plain_language_problem_then_detail'
-      : isReadinessCheck
-        ? 'unresolved_readiness_then_ask'
-        : isExecutionRequest
-          ? 'explicit_execute_confirm'
-          : stateChanged || gateAlreadyApproved
-            ? 'state_then_next_options'
-            : isRevision
-              ? 'ack_change_artifact'
-              : isFirstTimeReview
-                ? 'formal_gate_card'
-                : 'concise_operator_update';
+      : isClarificationNeeded
+        ? 'clarify_ambiguous_input'
+        : isReadinessCheck
+          ? 'unresolved_readiness_then_ask'
+          : isExecutionRequest
+            ? 'explicit_execute_confirm'
+            : stateChanged || gateAlreadyApproved
+              ? 'state_then_next_options'
+              : isRevision
+                ? 'ack_change_artifact'
+                : isFirstTimeReview
+                  ? 'formal_gate_card'
+                  : 'concise_operator_update';
 
   const mustBlock = isExecutionRequest
     ? FULL_SAFETY_LINES.slice()
@@ -319,6 +377,7 @@ function assessConversationContext(input = {}) {
     isRevision,
     isDiagnostic,
     isFirstTimeReview,
+    isClarificationNeeded,
     isReadinessCheck,
     isNonExecutionIntent,
     isExecutionRequest,
@@ -327,6 +386,42 @@ function assessConversationContext(input = {}) {
     nextAsk: input.nextAsk || null,
     priorityOrder: PRIORITY_ORDER,
   };
+}
+
+/**
+ * Accidental / very short / ambiguous operator input with no clear intent.
+ * Examples: `v`, `k`, `.`, `?`, random single characters, punctuation-only,
+ * or tiny typo fragments. Must NOT classify as state summary, readiness
+ * check, or execution confirmation.
+ */
+function looksLikeLowSignalAmbiguousInput(text) {
+  const s = String(text || '').trim();
+  if (!s) return true;
+
+  const lower = s.toLowerCase();
+  if (KNOWN_SHORT_OPERATOR_INTENTS.has(lower)) return false;
+
+  // Clear multi-word / named intents are never low-signal.
+  if (looksLikeOperatorReadinessCheck(s)) return false;
+  if (looksLikeExecutionRequest(s)) return false;
+  if (
+    /\b(?:approve|approved|revise|revision|export|crm|sender|reply|hold\s+for|options?|summarize|summarise|unresolved|readiness)\b/i.test(
+      s
+    )
+  ) {
+    return false;
+  }
+
+  // Single character (letter, digit, or punctuation) — accidental keystroke.
+  if (s.length === 1) return true;
+
+  // Punctuation / symbol only (e.g. `...`, `???`, `!!`).
+  if (/^[^\p{L}\p{N}]+$/u.test(s) && s.length <= 8) return true;
+
+  // Very short alphanumeric fragment with no clear intent (partial typo).
+  if (s.length <= 2 && /^[a-zA-Z0-9]+$/.test(s)) return true;
+
+  return false;
 }
 
 /**
@@ -499,6 +594,10 @@ function selectConversationMode(input = {}) {
   if (assessment.isDiagnostic) {
     return CONVERSATION_MODES.OPERATOR_DIAGNOSTIC;
   }
+  // Accidental / low-signal beats state summary, readiness, and execution.
+  if (assessment.isClarificationNeeded) {
+    return CONVERSATION_MODES.CLARIFICATION_NEEDED;
+  }
   // Readiness / planning before execution — never ask to approve execute
   // when the operator is still resolving gaps or discussing options.
   if (assessment.isReadinessCheck) {
@@ -551,6 +650,8 @@ function composeConversationResponse(mode, context = {}) {
       return composeOperatorReadinessCheck(context);
     case CONVERSATION_MODES.EXECUTION_CONFIRMATION:
       return composeExecutionConfirmation(context);
+    case CONVERSATION_MODES.CLARIFICATION_NEEDED:
+      return composeClarificationNeeded(context);
     default:
       return composeOperatorStateUpdate(context);
   }
@@ -1077,6 +1178,50 @@ function composeExecutionConfirmation(context = {}) {
 }
 
 /**
+ * Light clarification for accidental / low-signal input.
+ * Preserves workflow state — never re-renders full Launch Gate summary,
+ * operational options block, or execute-approval ask.
+ */
+function composeClarificationNeeded(context = {}) {
+  const raw = String(
+    context.operatorMessage || context.text || context.userMessage || ''
+  ).trim();
+  const quoted = raw || '(empty message)';
+  const stepHint =
+    context.stepHint ||
+    (context.gateAlreadyApproved ||
+    context.launchGateApproved ||
+    context.approvedReadinessOnly
+      ? 'the readiness-check step'
+      : context.currentState ||
+        context.step ||
+        context.planningState ||
+        'the current step');
+  const ask =
+    context.clarificationAsk ||
+    context.closingAsk ||
+    context.closingQuestion ||
+    CLARIFICATION_NEEDED_ASK;
+
+  const message =
+    context.message ||
+    `Not sure what you meant by \`${quoted}\`. We're still at ${stepHint}. ${ask}`;
+
+  return {
+    mode: CONVERSATION_MODES.CLARIFICATION_NEEDED,
+    responseMode: toResponseMode(CONVERSATION_MODES.CLARIFICATION_NEEDED),
+    message: String(message).trim(),
+    includeRendererSections: false,
+    includeExpandedSafety: false,
+    requiresExplicitApproval: false,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+  };
+}
+
+/**
  * Canonical approved Launch Gate Operator State Update.
  * One acknowledgment, one safety/lock line, one options list, one ask.
  */
@@ -1307,6 +1452,11 @@ function applyConversationalPolicy(reply, context = {}) {
       reply.responseMode === 'operator_readiness_check' ||
       reply.conversationMode === 'operator_readiness_check' ||
       reply.intent === 'operator_readiness_check',
+    isClarificationNeeded:
+      context.isClarificationNeeded ||
+      reply.responseMode === 'clarification_needed' ||
+      reply.conversationMode === 'clarification_needed' ||
+      reply.intent === 'clarification_needed',
     isExecutionRequest:
       context.isExecutionRequest ||
       reply.responseMode === 'execution_confirmation',
@@ -1384,6 +1534,8 @@ module.exports = {
   DEFAULT_UNRESOLVED_READINESS_ITEMS,
   READINESS_CHECKLIST_CLOSING_ASK,
   READINESS_CHECKLIST_SAFETY_LINE,
+  CLARIFICATION_NEEDED_ASK,
+  KNOWN_SHORT_OPERATOR_INTENTS,
   toConversationMode,
   toResponseMode,
   containsRendererBoilerplate,
@@ -1391,6 +1543,7 @@ module.exports = {
   expandedSafetyBlock,
   approvalLanguageForGate,
   assessConversationContext,
+  looksLikeLowSignalAmbiguousInput,
   looksLikeNonExecutionIntent,
   looksLikeOperatorReadinessCheck,
   looksLikeExecutionRequest,
@@ -1402,6 +1555,7 @@ module.exports = {
   composeFormalReviewGate,
   composeOperatorReadinessCheck,
   composeExecutionConfirmation,
+  composeClarificationNeeded,
   extractOperatorReadinessChecklist,
   mergeOperatorReadinessChecklist,
   evaluateReadinessItemAgainstState,

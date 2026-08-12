@@ -3667,6 +3667,84 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.equal(reply.launched, false);
   });
 
+  it('low-signal input after Launch Gate approval asks clarification without options block', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const reply = buildCampaignPlanningReply(
+      'v',
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        launchGateApproved: true,
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'clarification_needed');
+    assert.equal(reply.conversationMode, 'clarification_needed');
+    assert.equal(reply.intent, 'clarification_needed');
+    assert.match(reply.message, /Not sure what you meant by `v`/i);
+    assert.match(reply.message, /readiness-check step/i);
+    assert.match(
+      reply.message,
+      /sender identity, reply handling, follow-up tracking, or hold/i
+    );
+    assert.doesNotMatch(reply.message, /The next choice is operational/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Which next path do you want to prepare/i
+    );
+    assert.doesNotMatch(reply.message, /1\.\s*prepare a manual-send export/i);
+    assert.doesNotMatch(reply.message, /Exact action/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.equal(reply.launchGateApproved, true);
+    assert.equal(reply.launchReady, true);
+    assert.equal(reply.launched, false);
+    assert.equal(reply.executionPending, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.accountChangesMade, false);
+  });
+
   it('operator-facing draft digest comes first without banned fragments', () => {
     const { review, ctx, strategy, plan } = chainFixtures();
     const draft = buildOutreachDraftPreview(
