@@ -7794,6 +7794,8 @@ function produceReadinessFieldCorrectionResult(
   const reply = composed.replyHandling || {};
   const operationalPath = composed.operationalPath || {};
   const followUpTracking = composed.followUpTracking || {};
+  const replyMonitoringBatchReview =
+    composed.replyMonitoringBatchReview || {};
   const nextSlots = {
     ...priorSlots,
     launchGateApproved: true,
@@ -7815,7 +7817,10 @@ function produceReadinessFieldCorrectionResult(
           ? priorSlots.replyToMatchesSender
           : null,
     replyMonitoringOwner:
-      reply.replyMonitoringOwner || priorSlots.replyMonitoringOwner || null,
+      replyMonitoringBatchReview.replyMonitoringOwner ||
+      reply.replyMonitoringOwner ||
+      priorSlots.replyMonitoringOwner ||
+      null,
     replyInboxConfirmed:
       reply.replyHandlingConfirmed === true ||
       priorSlots.replyInboxConfirmed === true,
@@ -7856,6 +7861,36 @@ function produceReadinessFieldCorrectionResult(
     followUpTrackingConfirmed:
       followUpTracking.followUpTrackingConfirmed === true ||
       priorSlots.followUpTrackingConfirmed === true,
+    responseReviewProcess:
+      replyMonitoringBatchReview.responseReviewProcess ||
+      priorSlots.responseReviewProcess ||
+      null,
+    positiveReplyHandling:
+      replyMonitoringBatchReview.positiveReplyHandling ||
+      priorSlots.positiveReplyHandling ||
+      null,
+    negativeReplyHandling:
+      replyMonitoringBatchReview.negativeReplyHandling ||
+      priorSlots.negativeReplyHandling ||
+      null,
+    broaderRolloutBlocked:
+      replyMonitoringBatchReview.broaderRolloutBlocked != null
+        ? replyMonitoringBatchReview.broaderRolloutBlocked
+        : priorSlots.broaderRolloutBlocked != null
+          ? priorSlots.broaderRolloutBlocked
+          : null,
+    batch1ReviewBeforeExpansion:
+      replyMonitoringBatchReview.batch1ReviewBeforeExpansion != null
+        ? replyMonitoringBatchReview.batch1ReviewBeforeExpansion
+        : priorSlots.batch1ReviewBeforeExpansion != null
+          ? priorSlots.batch1ReviewBeforeExpansion
+          : null,
+    replyMonitoringBatch1Confirmed:
+      replyMonitoringBatchReview.replyMonitoringBatch1Confirmed === true ||
+      priorSlots.replyMonitoringBatch1Confirmed === true,
+    batch1ResultsReviewed:
+      replyMonitoringBatchReview.batch1ResultsReviewed === true ||
+      priorSlots.batch1ResultsReviewed === true,
   };
 
   if (composed.itemConfirmed && composed.readinessItemId === 'sender_identity') {
@@ -7885,6 +7920,16 @@ function produceReadinessFieldCorrectionResult(
   ) {
     nextSlots.followUpTrackingConfirmed = true;
   }
+  if (
+    composed.itemConfirmed &&
+    (composed.readinessItemId === 'reply_monitoring_batch1' ||
+      composed.readinessItemId === 'reply_monitoring_batch_review')
+  ) {
+    nextSlots.replyMonitoringBatch1Confirmed = true;
+    if (replyMonitoringBatchReview.batch1ResultsReviewed === true) {
+      nextSlots.batch1ResultsReviewed = true;
+    }
+  }
 
   const missing =
     (sender.missing && sender.missing.length && sender.missing) ||
@@ -7895,6 +7940,9 @@ function produceReadinessFieldCorrectionResult(
     (followUpTracking.missing &&
       followUpTracking.missing.length &&
       followUpTracking.missing) ||
+    (replyMonitoringBatchReview.missing &&
+      replyMonitoringBatchReview.missing.length &&
+      replyMonitoringBatchReview.missing) ||
     null;
 
   const currentAsk = composed.nextReadinessItem
@@ -7932,6 +7980,9 @@ function produceReadinessFieldCorrectionResult(
       operationalPathChosen: nextSlots.operationalPathChosen === true,
       followUpTracking,
       followUpTrackingConfirmed: nextSlots.followUpTrackingConfirmed === true,
+      replyMonitoringBatchReview,
+      replyMonitoringBatch1Confirmed:
+        nextSlots.replyMonitoringBatch1Confirmed === true,
       launchGateApproved: true,
       launchReady: true,
       launched: false,

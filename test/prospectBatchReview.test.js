@@ -4620,6 +4620,160 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.equal(reply.activeReadinessItemId, 'reply_monitoring_batch1');
   });
 
+  it('confirms reply monitoring / Batch 1 review from active-substep answers without re-asking', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const reply = buildCampaignPlanningReply(
+      [
+        'Reply monitoring owner: Jacob Maynard',
+        'Responses should be reviewed manually before any follow-up or broader rollout decision',
+        'Positive replies should be handled as conversation/walkthrough opportunities',
+        'Negative or not-now replies should be respected and noted',
+        'Broader rollout remains blocked until Batch 1 results are reviewed',
+        'Batch 1 results should be reviewed before expanding to Cedar, optional Manchester candidates, or any new prospect segment',
+      ].join('\n'),
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        launchGateApproved: true,
+        intent: 'readiness_field_correction',
+        readinessItemId: 'reply_monitoring_batch1',
+        activeReadinessItemId: 'reply_monitoring_batch_review',
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+          activeReadinessItemId: 'reply_monitoring_batch_review',
+          senderIdentityConfirmed: true,
+          senderName: 'Jacob Maynard',
+          senderEmail: 'jacob@goanchorcleaning.com',
+          senderSignature: 'Jacob Maynard, Anchor Cleaning',
+          replyInboxConfirmed: true,
+          replyHandlingConfirmed: true,
+          replyInbox: 'jacob@goanchorcleaning.com',
+          replyToMatchesSender: true,
+          replyMonitoringOwner: 'Jacob Maynard',
+          operationalPathChosen: true,
+          operationalPathId: 'manual_send_export',
+          operationalPathLabel: 'manual send export for operator review',
+          followUpTrackingConfirmed: true,
+          followUpTrackingLocation: 'the manual-send export/review sheet',
+          followUp1Timing: 'about 3 business days after first touch',
+          followUp2Timing: 'about 7 business days after first touch',
+          followUpReviewFirstManual: true,
+          automaticFollowUpSendsApproved: false,
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'readiness_field_correction');
+    assert.equal(reply.replyMonitoringBatch1Confirmed, true);
+    assert.equal(reply.executionPending, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.notEqual(reply.responseMode, 'execution_confirmation');
+    assert.notEqual(reply.responseMode, 'operator_readiness_check');
+    assert.notEqual(reply.responseMode, 'readiness_substep');
+    assert.match(
+      reply.message,
+      /^Reply monitoring \/ Batch 1 review process is confirmed:/m
+    );
+    assert.match(
+      reply.message,
+      /- Reply monitoring owner: Jacob Maynard/i
+    );
+    assert.match(
+      reply.message,
+      /- Responses reviewed manually before any follow-up or broader rollout decision/i
+    );
+    assert.match(
+      reply.message,
+      /- Positive replies handled as conversation\/walkthrough opportunities/i
+    );
+    assert.match(
+      reply.message,
+      /- Negative or not-now replies respected and noted/i
+    );
+    assert.match(
+      reply.message,
+      /- Broader rollout remains blocked until Batch 1 results are reviewed/i
+    );
+    assert.match(
+      reply.message,
+      /- Batch 1 results reviewed before expanding to Cedar, optional Manchester candidates, or any new prospect segment/i
+    );
+    assert.match(reply.message, /Readiness summary:/i);
+    assert.match(reply.message, /- Sender identity: confirmed/i);
+    assert.match(
+      reply.message,
+      /- Reply inbox \/ reply-to handling: confirmed/i
+    );
+    assert.match(
+      reply.message,
+      /- Operational path: manual send export for operator review selected/i
+    );
+    assert.match(reply.message, /- Follow-up tracking: confirmed/i);
+    assert.match(
+      reply.message,
+      /- Reply monitoring \/ Batch 1 review: confirmed/i
+    );
+    assert.match(reply.message, /- Execution lock: active/i);
+    assert.match(
+      reply.message,
+      /Next step remains explicit execute approval if the operator wants to prepare the manual-send export/i
+    );
+    assert.match(
+      reply.message,
+      /Do not execute anything automatically/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Who will monitor replies, how should responses be reviewed/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(reply.message, /Exact action/i);
+    assert.equal(reply.slots.replyMonitoringBatch1Confirmed, true);
+    assert.equal(reply.slots.batch1ResultsReviewed, true);
+    assert.equal(reply.slots.replyMonitoringOwner, 'Jacob Maynard');
+    assert.equal(reply.slots.broaderRolloutBlocked, true);
+    assert.equal(reply.slots.batch1ReviewBeforeExpansion, true);
+  });
+
   it('operator-facing draft digest comes first without banned fragments', () => {
     const { review, ctx, strategy, plan } = chainFixtures();
     const draft = buildOutreachDraftPreview(
