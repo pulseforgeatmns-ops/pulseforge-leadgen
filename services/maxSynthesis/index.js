@@ -151,4 +151,8 @@ module.exports = {
     ConversationalResponsePolicy.looksLikeExecutionRequest,
   composeExecutionConfirmation:
     ConversationalResponsePolicy.composeExecutionConfirmation,
+  dedupeOperatorStateUpdateMessage:
+    ConversationalResponsePolicy.dedupeOperatorStateUpdateMessage,
+  sanitizeApprovedStateLeadIn:
+    ConversationalResponsePolicy.sanitizeApprovedStateLeadIn,
 };

@@ -345,58 +345,43 @@ function gateDisplayName(context = {}) {
 }
 
 function composeOperatorStateUpdate(context = {}) {
+  // Prefer the single canonical Launch Gate approved-state formatter when
+  // the gate is already approved / just approved — avoids stacked headers.
+  if (
+    context.gate ||
+    context.justApproved ||
+    context.gateAlreadyApproved ||
+    /launch\s*gate/i.test(String(context.gateName || context.title || ''))
+  ) {
+    return formatApprovedLaunchGateConversational(context.gate || {}, {
+      justApproved: context.justApproved === true,
+      gateAlreadyApproved: context.gateAlreadyApproved === true,
+      nextPaths: context.nextPaths,
+      operatorGuidance: context.operatorGuidance,
+      closingAsk: context.closingAsk || context.currentAsk,
+      // Never stack a leadIn that restates approval / safety.
+      leadIn: null,
+    });
+  }
+
   const gate = gateDisplayName(context);
-  const shortGate = /launch\s*gate/i.test(gate) ? 'Launch Gate' : gate;
-  const already = Boolean(
-    context.gateAlreadyApproved && !context.stateChanged && !context.justApproved
-  );
-  const nextPaths = context.nextPaths || DEFAULT_NEXT_PATHS;
-  const guidance =
-    context.operatorGuidance ||
-    "I'd keep this held until sender identity and reply handling are confirmed.";
-
-  const lines = [];
-
-  if (already && context.leadIn) {
-    lines.push(String(context.leadIn).trim());
+  const lines = [
+    `Here's where we are with ${gate}.`,
+    '',
+    compactSafetyLockLine({ short: context.safetyLine || context.compactSafety }),
+  ];
+  if (context.body || context.artifactMessage) {
     lines.push('');
+    lines.push(String(context.body || context.artifactMessage).trim());
   }
-
-  if (already) {
-    lines.push(`${shortGate} is approved for readiness only.`);
-  } else {
-    lines.push(`${shortGate} is now approved for readiness only.`);
-  }
-
-  lines.push('');
-  lines.push(
-    context.safetyLine ||
-      'Nothing external happened: no send, no export, no CRM write, and no account changes. The campaign is now campaign-ready, but execution is still locked.'
-  );
-  lines.push('');
-  lines.push('The next choice is operational:');
-  nextPaths.forEach((p, i) => {
-    lines.push(`${i + 1}. ${p}`);
-  });
-  lines.push('');
-  lines.push(guidance);
-
   if (context.closingAsk) {
     lines.push('');
     lines.push(context.closingAsk);
-  } else {
-    const lang = approvalLanguageForGate({
-      gateName: shortGate,
-      approved: true,
-    });
-    lines.push('');
-    lines.push(lang.ask);
   }
-
   return {
     mode: CONVERSATION_MODES.OPERATOR_STATE_UPDATE,
     responseMode: toResponseMode(CONVERSATION_MODES.OPERATOR_STATE_UPDATE),
-    message: lines.join('\n').trim(),
+    message: dedupeOperatorStateUpdateMessage(lines.join('\n').trim()),
     includeRendererSections: false,
     includeExpandedSafety: false,
   };
@@ -573,19 +558,12 @@ function composeExecutionConfirmation(context = {}) {
 }
 
 /**
- * Format an approved Launch Gate as an Operator State Update.
- * Replaces rigid “Confirmed not executed / Next options” renderer copy.
+ * Canonical approved Launch Gate Operator State Update.
+ * One acknowledgment, one safety/lock line, one options list, one ask.
  */
 function formatApprovedLaunchGateConversational(gate, opts = {}) {
   const g = gate || {};
   const summary = g.operatorStateSummary || {};
-  const justApproved = opts.justApproved === true;
-  const alreadyApproved =
-    opts.gateAlreadyApproved === true ||
-    (!justApproved &&
-      (g.launchGateApproved === true ||
-        g.status === 'approved_readiness_only' ||
-        g.approved === true));
 
   const nextPaths =
     opts.nextPaths ||
@@ -593,55 +571,148 @@ function formatApprovedLaunchGateConversational(gate, opts = {}) {
       ? summary.nextOptions.map(normalizeNextPathPhrase)
       : DEFAULT_NEXT_PATHS.slice());
 
-  const shortGate = 'Launch Gate';
-  const lines = [];
-
-  // Stable headline for clients/tests.
-  lines.push('Outreach Launch Gate: approved for readiness only.');
-  lines.push('');
-
-  if (opts.leadIn) {
-    lines.push(String(opts.leadIn).trim());
-    lines.push('');
-  }
-
-  if (justApproved) {
-    lines.push(`${shortGate} is now approved for readiness only.`);
-  } else {
-    lines.push(`${shortGate} is approved for readiness only.`);
-  }
-
-  lines.push('');
-  lines.push(
-    opts.safetyLine ||
-      'Nothing external happened: no send, no export, no CRM write, and no account changes. The campaign is now campaign-ready, but execution is still locked.'
-  );
-  lines.push('');
-  lines.push('The next choice is operational:');
-  nextPaths.forEach((p, i) => {
-    lines.push(`${i + 1}. ${p}`);
-  });
-  lines.push('');
-  lines.push(
+  const guidance =
     opts.operatorGuidance ||
-      "I'd keep this held until sender identity and reply handling are confirmed."
-  );
-  lines.push('');
-  lines.push(
+    "I'd keep this held until sender identity and reply handling are confirmed.";
+  const closingAsk =
     opts.closingAsk ||
-      opts.currentAsk ||
-      approvalLanguageForGate({ gateName: shortGate, approved: true }).ask
-  );
+    opts.currentAsk ||
+    approvalLanguageForGate({ gateName: 'Launch Gate', approved: true }).ask;
 
-  void alreadyApproved;
+  // Single canonical opening paragraph — never stack headline + leadIn + ack.
+  const opening =
+    opts.openingParagraph ||
+    'Outreach Launch Gate is approved for readiness only. Nothing external happened: no send, no export, no CRM write, and no account changes. Execution is still locked.';
+
+  const lines = [
+    opening,
+    '',
+    'The next choice is operational:',
+    ...nextPaths.map((p, i) => `${i + 1}. ${p}`),
+    '',
+    guidance,
+    '',
+    closingAsk,
+  ];
+
+  // Ignore duplicative leadIns (approval/safety restatements). Personality
+  // asides that do not restate status may still prepend once.
+  const leadIn = sanitizeApprovedStateLeadIn(opts.leadIn, opening);
+  const body = lines.join('\n').trim();
+  const message = dedupeOperatorStateUpdateMessage(
+    leadIn ? `${leadIn}\n\n${body}` : body
+  );
 
   return {
     mode: CONVERSATION_MODES.OPERATOR_STATE_UPDATE,
     responseMode: toResponseMode(CONVERSATION_MODES.OPERATOR_STATE_UPDATE),
-    message: lines.join('\n').trim(),
+    message,
     includeRendererSections: false,
     includeExpandedSafety: false,
   };
+}
+
+/**
+ * Drop leadIns that restate approval / safety / lock — those belong only in
+ * the canonical opening paragraph.
+ */
+function sanitizeApprovedStateLeadIn(leadIn, openingParagraph) {
+  const raw = String(leadIn || '').trim();
+  if (!raw) return null;
+  if (/approved for readiness only/i.test(raw)) return null;
+  if (/nothing external happened/i.test(raw)) return null;
+  if (/execution is still locked|execution lock/i.test(raw)) return null;
+  if (/campaign-ready/i.test(raw)) return null;
+  if (/showing the (?:current state|approved-state)|not the review card/i.test(raw)) {
+    return null;
+  }
+  // Exact duplicate of opening (or contained by it) — skip.
+  const open = String(openingParagraph || '');
+  if (open && (open.includes(raw) || raw.includes(open.slice(0, 40)))) {
+    return null;
+  }
+  return raw;
+}
+
+/**
+ * Dedupe pass for operator_state_update messages.
+ * Keeps first occurrence of status / safety / lock statements and collapses
+ * repeated blank lines.
+ */
+function dedupeOperatorStateUpdateMessage(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return raw;
+
+  const seen = {
+    approved: false,
+    nothingExternal: false,
+    executionLocked: false,
+    nextChoice: false,
+    guidance: false,
+    nextPathAsk: false,
+  };
+
+  const out = [];
+  const paragraphs = raw.split(/\n{2,}/);
+
+  for (const para of paragraphs) {
+    const p = String(para || '').trim();
+    if (!p) continue;
+
+    const isApprovedAck = /approved for readiness only/i.test(p);
+    const isNothingExternal = /nothing external happened/i.test(p);
+    const isExecutionLocked =
+      /execution is still locked|execution lock (?:still )?active/i.test(p);
+    const isNextChoice = /the next choice is operational/i.test(p);
+    const isGuidance =
+      /i'?d keep this held until sender identity/i.test(p);
+    const isNextPathAsk =
+      /which next path do you want to prepare/i.test(p);
+
+    // Merge status+safety+lock into one opening when they arrive as fragments.
+    if (
+      (isApprovedAck || isNothingExternal || isExecutionLocked) &&
+      !isNextChoice
+    ) {
+      if (seen.approved || seen.nothingExternal || seen.executionLocked) {
+        // Already emitted a combined/fragment opening — skip duplicates.
+        // Prefer keeping the richer first paragraph; skip thinner repeats.
+        continue;
+      }
+      seen.approved = true;
+      seen.nothingExternal = true;
+      seen.executionLocked = true;
+      out.push(
+        'Outreach Launch Gate is approved for readiness only. Nothing external happened: no send, no export, no CRM write, and no account changes. Execution is still locked.'
+      );
+      continue;
+    }
+
+    if (isNextChoice) {
+      if (seen.nextChoice) continue;
+      seen.nextChoice = true;
+      out.push(p);
+      continue;
+    }
+
+    if (isGuidance) {
+      if (seen.guidance) continue;
+      seen.guidance = true;
+      out.push(p);
+      continue;
+    }
+
+    if (isNextPathAsk) {
+      if (seen.nextPathAsk) continue;
+      seen.nextPathAsk = true;
+      out.push(p);
+      continue;
+    }
+
+    out.push(p);
+  }
+
+  return out.join('\n\n').trim();
 }
 
 function normalizeNextPathPhrase(item) {
@@ -741,6 +812,14 @@ function applyConversationalPolicy(reply, context = {}) {
     return next;
   }
 
+  // Operator state updates: enforce single acknowledgment / safety / lock.
+  if (
+    mode === CONVERSATION_MODES.OPERATOR_STATE_UPDATE &&
+    typeof next.message === 'string'
+  ) {
+    next.message = dedupeOperatorStateUpdateMessage(next.message);
+  }
+
   // Revision / diagnostic / execution: strip accidental renderer headings
   // when the mode forbids them and body was provided by workflow.
   if (
@@ -798,4 +877,6 @@ module.exports = {
   applyConversationalPolicy,
   selectResponseModeWithPolicy,
   normalizeNextPathPhrase,
+  sanitizeApprovedStateLeadIn,
+  dedupeOperatorStateUpdateMessage,
 };

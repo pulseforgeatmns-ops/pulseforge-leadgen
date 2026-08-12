@@ -331,7 +331,7 @@ const OUTREACH_LAUNCH_GATE_CLOSING_QUESTION =
 /** Canonical post-approval status — readiness only; execution remains locked. */
 const OUTREACH_LAUNCH_GATE_APPROVED_STATUS = 'approved_readiness_only';
 const OUTREACH_LAUNCH_GATE_APPROVED_HEADLINE =
-  'Outreach Launch Gate: approved for readiness only.';
+  'Outreach Launch Gate is approved for readiness only.';
 const OUTREACH_LAUNCH_GATE_APPROVED_ASK =
   'Which next path do you want to prepare, if any?';
 const OUTREACH_LAUNCH_GATE_NEXT_OPTIONS = Object.freeze([
@@ -6326,9 +6326,6 @@ function formatOutreachLaunchGateApprovedSummary(gate, opts = {}) {
     operatorGuidance:
       opts.operatorGuidance || OUTREACH_LAUNCH_GATE_OPERATOR_GUIDANCE,
     closingAsk: opts.closingAsk || OUTREACH_LAUNCH_GATE_APPROVED_ASK,
-    safetyLine:
-      opts.safetyLine ||
-      'Nothing external happened: no send, no export, no CRM write, and no account changes. The campaign is now campaign-ready, but execution is still locked.',
   });
   return composed.message;
 }
@@ -7318,11 +7315,8 @@ function produceOutreachLaunchGateResult(ctx, answers, slots, opts, leadIn) {
     const message = formatOutreachLaunchGateApprovedSummary(gate, {
       justApproved: false,
       gateAlreadyApproved: true,
-      leadIn:
-        leadIn ||
-        (alreadyApproved
-          ? 'Launch Gate is already approved for readiness only — showing the current state, not the review card.'
-          : null),
+      // Canonical composer owns the acknowledgment — no leadIn restatement.
+      leadIn: null,
     });
 
     return applyConversationalPolicy(
@@ -7448,9 +7442,8 @@ function produceOutreachLaunchGateApprovalResult(
     const message = formatOutreachLaunchGateApprovedSummary(gate, {
       justApproved: false,
       gateAlreadyApproved: true,
-      leadIn:
-        leadIn ||
-        'Launch Gate is already approved for readiness only. Nothing external happened.',
+      // Canonical composer owns the acknowledgment — no leadIn restatement.
+      leadIn: null,
     });
 
     return applyConversationalPolicy(
@@ -7502,7 +7495,11 @@ function produceOutreachLaunchGateApprovalResult(
   const message = formatOutreachLaunchGateApprovedSummary(gate, {
     justApproved: true,
     stateChanged: true,
-    leadIn: leadIn || 'Good, this is the right checkpoint.',
+    // Optional personality aside only — never restate approval/safety here.
+    leadIn:
+      leadIn && !/approved for readiness only|nothing external/i.test(leadIn)
+        ? leadIn
+        : null,
   });
 
   return applyConversationalPolicy(

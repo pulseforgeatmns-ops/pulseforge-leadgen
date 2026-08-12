@@ -70,6 +70,7 @@ Compact lock line on ordinary turns. Full expanded list only at formal gates or 
 ## Acceptance Criteria
 
 - [x] Approved Launch Gate uses Operator State Update (not review card)
+- [x] Approved-state responses use a single canonical acknowledgment (no stacked header/leadIn/summary)
 - [x] Revision turns avoid renderer boilerplate
 - [x] Diagnostics lead with plain language
 - [x] Formal review gate still allowed for first-time approval
