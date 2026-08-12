@@ -5086,6 +5086,90 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     );
   });
 
+  it('campaign-ready summary confirms reply handling from snake_case aliases', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const reply = buildCampaignPlanningReply(
+      'Please provide a final Anchor Batch 1 campaign-ready summary for operator review. Include confirmed reply handling.',
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        outreachStrategyPreview: strategy,
+        prospectBatchReview: review,
+        launchGateApproved: true,
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+          activeReadinessItemId: 'reply_monitoring_batch1',
+          senderIdentityConfirmed: true,
+          senderName: 'Jacob Maynard',
+          senderEmail: 'jacob@goanchorcleaning.com',
+          senderSignature: 'Jacob Maynard, Anchor Cleaning',
+          // Persisted under alternate names used by readiness substeps.
+          replyInboxConfirmed: true,
+          replyHandlingConfirmed: true,
+          reply_inbox: 'jacob@goanchorcleaning.com',
+          reply_to_matches_sender: true,
+          reply_monitoring_owner: 'Jacob Maynard',
+          operationalPathChosen: true,
+          operationalPathId: 'manual_send_export',
+          operationalPathLabel: 'manual send export for operator review',
+          followUpTrackingConfirmed: true,
+          followUpTrackingLocation: 'manual-send export/review sheet',
+          followUp1Timing: 'about 3 business days after first touch',
+          followUp2Timing: 'about 7 business days after first touch',
+          followUpReviewFirstManual: true,
+          automaticFollowUpSendsApproved: false,
+          replyMonitoringBatch1Confirmed: true,
+          broaderRolloutBlocked: true,
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'campaign_ready_summary');
+    assert.match(reply.message, /Reply handling confirmed:/);
+    assert.match(
+      reply.message,
+      /- reply inbox: jacob@goanchorcleaning\.com/
+    );
+    assert.match(reply.message, /- reply-to matches sender: yes/);
+    assert.match(
+      reply.message,
+      /- reply monitoring owner: Jacob Maynard/
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Reply handling: not fully confirmed/
+    );
+  });
+
   it('operator-facing draft digest comes first without banned fragments', () => {
     const { review, ctx, strategy, plan } = chainFixtures();
     const draft = buildOutreachDraftPreview(

@@ -1267,6 +1267,126 @@ describe('ConversationalResponsePolicy', () => {
     );
   });
 
+  it('normalizes reply-handling field aliases for campaign-ready summary', () => {
+    const {
+      normalizeReplyHandlingFields,
+      coerceReplyToMatchesSender,
+    } = require('../services/maxSynthesis');
+
+    assert.equal(coerceReplyToMatchesSender('yes'), true);
+    assert.equal(coerceReplyToMatchesSender('no'), false);
+    assert.equal(coerceReplyToMatchesSender(true), true);
+
+    const aliasSets = [
+      {
+        reply_inbox: 'jacob@goanchorcleaning.com',
+        reply_to_matches_sender: true,
+        reply_monitoring_owner: 'Jacob Maynard',
+      },
+      {
+        replyInbox: 'jacob@goanchorcleaning.com',
+        sameAsSender: 'yes',
+        monitoringOwner: 'Jacob Maynard',
+      },
+      {
+        reply_inbox: 'jacob@goanchorcleaning.com',
+        reply_to: 'yes',
+        replyMonitoringOwner: 'Jacob Maynard',
+      },
+      {
+        replyInbox: 'jacob@goanchorcleaning.com',
+        replyToMatchesSender: 'true',
+        reply_monitoring_owner: 'Jacob Maynard',
+      },
+    ];
+
+    for (const slots of aliasSets) {
+      const normalized = normalizeReplyHandlingFields(slots);
+      assert.equal(normalized.replyInbox, 'jacob@goanchorcleaning.com');
+      assert.equal(normalized.replyToMatchesSender, true);
+      assert.equal(normalized.replyMonitoringOwner, 'Jacob Maynard');
+      assert.equal(normalized.fieldsComplete, true);
+
+      const composed = composeCampaignReadySummary({
+        businessName: 'Anchor Cleaning',
+        operatorMessage:
+          'Please provide a final Anchor Batch 1 campaign-ready summary for operator review. Include confirmed reply handling.',
+        slots: {
+          ...slots,
+          replyInboxConfirmed: true,
+          replyHandlingConfirmed: true,
+          senderIdentityConfirmed: true,
+          senderName: 'Jacob Maynard',
+          senderEmail: 'jacob@goanchorcleaning.com',
+          senderSignature: 'Jacob Maynard, Anchor Cleaning',
+          operationalPathChosen: true,
+          operationalPathLabel: 'manual send export for operator review',
+          followUpTrackingConfirmed: true,
+          followUpTrackingLocation: 'manual-send export/review sheet',
+          replyMonitoringBatch1Confirmed: true,
+          broaderRolloutBlocked: true,
+        },
+      });
+
+      assert.match(
+        composed.message,
+        /Reply handling confirmed/i,
+        `expected confirmed for aliases ${JSON.stringify(slots)}`
+      );
+      assert.doesNotMatch(
+        composed.message,
+        /Reply handling: not fully confirmed/i
+      );
+      assert.match(
+        composed.message,
+        /reply inbox:\s*jacob@goanchorcleaning\.com/
+      );
+      assert.match(composed.message, /reply-to matches sender:\s*yes/);
+      assert.match(
+        composed.message,
+        /reply monitoring owner:\s*Jacob Maynard/
+      );
+    }
+  });
+
+  it('campaign-ready summary confirms reply handling from three required fields alone', () => {
+    const composed = composeCampaignReadySummary({
+      businessName: 'Anchor Cleaning',
+      slots: {
+        // No explicit confirmed flags — fields themselves are enough.
+        reply_inbox: 'jacob@goanchorcleaning.com',
+        reply_to_matches_sender: true,
+        reply_monitoring_owner: 'Jacob Maynard',
+        senderIdentityConfirmed: true,
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        operationalPathChosen: true,
+        operationalPathId: 'manual_send_export',
+        operationalPathLabel: 'manual send export for operator review',
+        followUpTrackingConfirmed: true,
+        followUpTrackingLocation: 'manual-send export/review sheet',
+        replyMonitoringBatch1Confirmed: true,
+        broaderRolloutBlocked: true,
+      },
+    });
+
+    assert.match(composed.message, /Reply handling confirmed:/);
+    assert.match(
+      composed.message,
+      /- reply inbox: jacob@goanchorcleaning\.com/
+    );
+    assert.match(composed.message, /- reply-to matches sender: yes/);
+    assert.match(
+      composed.message,
+      /- reply monitoring owner: Jacob Maynard/
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /Reply handling: not fully confirmed/
+    );
+  });
+
   it('dedupes a duplicated campaign-ready summary', () => {
     const {
       dedupeOperatorStateUpdateMessage,
