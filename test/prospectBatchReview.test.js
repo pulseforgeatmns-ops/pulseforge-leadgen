@@ -3797,6 +3797,8 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.equal(reply.conversationMode, 'readiness_substep');
     assert.equal(reply.intent, 'readiness_substep');
     assert.equal(reply.readinessItemId, 'sender_identity');
+    assert.notEqual(reply.responseMode, 'operator_readiness_check');
+    assert.notEqual(reply.responseMode, 'execution_confirmation');
     assert.match(reply.message, /What sender name should appear on the email/i);
     assert.match(
       reply.message,
@@ -3810,13 +3812,121 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
       reply.message,
       /Once you answer those, I'll mark sender identity as confirmed or note what still needs review/i
     );
+    assert.match(
+      reply.message,
+      /Nothing external has happened\. Sends, export, and CRM writes remain locked\./i
+    );
     assert.doesNotMatch(
       reply.message,
       /Which readiness item should we resolve first/i
     );
     assert.doesNotMatch(reply.message, /Still unresolved before any export/i);
+    assert.doesNotMatch(reply.message, /Sender identity is not confirmed/i);
+    assert.doesNotMatch(reply.message, /Reply handling is not confirmed/i);
     assert.doesNotMatch(reply.message, /The next choice is operational/i);
     assert.doesNotMatch(reply.message, /Exact action/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(reply.message, /prepare a manual-send export/i);
+    assert.doesNotMatch(reply.message, /create CRM drafts/i);
+    assert.doesNotMatch(reply.message, /queue sends/i);
+    assert.equal(reply.launchGateApproved, true);
+    assert.equal(reply.launchReady, true);
+    assert.equal(reply.launched, false);
+    assert.equal(reply.executionPending, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.accountChangesMade, false);
+  });
+
+  it('resolving reply handling stays in readiness_substep without execute ask', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const reply = buildCampaignPlanningReply(
+      'Resolve reply handling now. Do not repeat the full readiness checklist.',
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        launchGateApproved: true,
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'readiness_substep');
+    assert.equal(reply.conversationMode, 'readiness_substep');
+    assert.equal(reply.intent, 'readiness_substep');
+    assert.equal(reply.readinessItemId, 'reply_handling');
+    assert.notEqual(reply.responseMode, 'operator_readiness_check');
+    assert.notEqual(reply.responseMode, 'execution_confirmation');
+    assert.match(
+      reply.message,
+      /Which reply inbox \/ reply-to address should be used/i
+    );
+    assert.match(reply.message, /Who monitors replies/i);
+    assert.match(
+      reply.message,
+      /How should replies be handled before broader rollout/i
+    );
+    assert.match(
+      reply.message,
+      /Once you answer those, I'll mark reply handling as confirmed or note what still needs review/i
+    );
+    assert.match(
+      reply.message,
+      /Nothing external has happened\. Sends, export, and CRM writes remain locked\./i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Which readiness item should we resolve first/i
+    );
+    assert.doesNotMatch(reply.message, /Still unresolved before any export/i);
+    assert.doesNotMatch(reply.message, /What sender name should appear/i);
+    assert.doesNotMatch(reply.message, /Exact action/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(reply.message, /prepare a manual-send export/i);
+    assert.doesNotMatch(reply.message, /create CRM drafts/i);
+    assert.doesNotMatch(reply.message, /queue sends/i);
     assert.equal(reply.launchGateApproved, true);
     assert.equal(reply.launchReady, true);
     assert.equal(reply.launched, false);
