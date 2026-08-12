@@ -3937,6 +3937,111 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.equal(reply.accountChangesMade, false);
   });
 
+  it('sender email correction stays in readiness_field_correction, not Launch Gate options', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const reply = buildCampaignPlanningReply(
+      'update sender email address to jacob@goanchorcleaning.com',
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        launchGateApproved: true,
+        intent: 'readiness_substep',
+        readinessItemId: 'sender_identity',
+        activeReadinessItemId: 'sender_identity',
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+          activeReadinessItemId: 'sender_identity',
+          senderName: 'Jacob Maynard',
+          senderEmail: 'jacob\\@goanchorcleaning.com',
+          senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'readiness_field_correction');
+    assert.equal(reply.conversationMode, 'readiness_field_correction');
+    assert.equal(reply.intent, 'readiness_field_correction');
+    assert.notEqual(reply.responseMode, 'operator_state_summary');
+    assert.notEqual(reply.responseMode, 'execution_confirmation');
+    assert.notEqual(reply.responseMode, 'operator_readiness_check');
+    assert.equal(reply.senderIdentityConfirmed, true);
+    assert.equal(reply.slots.senderEmail, 'jacob@goanchorcleaning.com');
+    assert.equal(reply.slots.senderIdentityConfirmed, true);
+    assert.match(
+      reply.message,
+      /Updated sender email to jacob@goanchorcleaning\.com/i
+    );
+    assert.match(reply.message, /Sender identity is now confirmed/i);
+    assert.match(reply.message, /Jacob Maynard/);
+    assert.match(
+      reply.message,
+      /signature:\s*Jacob Maynard, Anchor Cleaning/i
+    );
+    assert.match(
+      reply.message,
+      /Next readiness item:\s*reply inbox \/ reply-to handling/i
+    );
+    assert.match(
+      reply.message,
+      /What reply inbox should receive responses, and should it be the same as the sender address\?/i
+    );
+    assert.doesNotMatch(reply.message, /The next choice is operational/i);
+    assert.doesNotMatch(reply.message, /prepare a manual-send export/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Which next path do you want to prepare/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(reply.message, /Exact action/i);
+    assert.doesNotMatch(reply.message, /create CRM drafts/i);
+    assert.doesNotMatch(reply.message, /queue sends/i);
+    assert.equal(reply.launchGateApproved, true);
+    assert.equal(reply.launchReady, true);
+    assert.equal(reply.launched, false);
+    assert.equal(reply.executionPending, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.accountChangesMade, false);
+  });
+
   it('operator-facing draft digest comes first without banned fragments', () => {
     const { review, ctx, strategy, plan } = chainFixtures();
     const draft = buildOutreachDraftPreview(

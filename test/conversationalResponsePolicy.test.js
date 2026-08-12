@@ -28,9 +28,13 @@ const {
   selectResponseMode,
   composeOperatorReadinessCheck,
   composeReadinessSubstep,
+  composeReadinessFieldCorrection,
   composeClarificationNeeded,
   extractOperatorReadinessChecklist,
   mergeOperatorReadinessChecklist,
+  looksLikeReadinessFieldCorrection,
+  parseSenderIdentityFields,
+  mergeSenderIdentityState,
   READINESS_CHECKLIST_SAFETY_LINE,
   CLARIFICATION_NEEDED_ASK,
   READINESS_SUBSTEPS,
@@ -276,6 +280,97 @@ describe('ConversationalResponsePolicy', () => {
       /Do you explicitly approve this execute action/i
     );
     assert.doesNotMatch(composed.message, /prepare a manual-send export/i);
+    assert.doesNotMatch(composed.message, /create CRM drafts/i);
+    assert.doesNotMatch(composed.message, /queue sends/i);
+  });
+
+  it('classifies sender email correction as readiness_field_correction', () => {
+    const text = 'update sender email address to jacob@goanchorcleaning.com';
+    assert.equal(
+      looksLikeReadinessFieldCorrection(text, {
+        activeReadinessItemId: 'sender_identity',
+      }),
+      true
+    );
+    assert.equal(looksLikeReadinessSubstepSelection(text), false);
+    assert.equal(looksLikeOperatorReadinessCheck(text), false);
+    assert.equal(looksLikeExecutionRequest(text), false);
+    assert.equal(looksLikeLowSignalAmbiguousInput(text), false);
+
+    const parsed = parseSenderIdentityFields(text);
+    assert.equal(parsed.email, 'jacob@goanchorcleaning.com');
+    assert.ok(parsed.updatedFields.includes('email'));
+
+    const mode = selectConversationMode({
+      text,
+      operatorMessage: text,
+      launchGateApproved: true,
+      activeReadinessItemId: 'sender_identity',
+      slots: {
+        activeReadinessItemId: 'sender_identity',
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+      },
+    });
+    assert.equal(mode, CONVERSATION_MODES.READINESS_FIELD_CORRECTION);
+    assert.notEqual(mode, CONVERSATION_MODES.OPERATOR_STATE_UPDATE);
+    assert.notEqual(mode, CONVERSATION_MODES.EXECUTION_CONFIRMATION);
+    assert.equal(
+      selectResponseMode({
+        text,
+        launchGateApproved: true,
+        activeReadinessItemId: 'sender_identity',
+        slots: { activeReadinessItemId: 'sender_identity' },
+      }),
+      RESPONSE_MODES.READINESS_FIELD_CORRECTION
+    );
+  });
+
+  it('composes sender email correction without Launch Gate options', () => {
+    const text = 'update sender email address to jacob@goanchorcleaning.com';
+    const composed = composeReadinessFieldCorrection({
+      operatorMessage: text,
+      activeReadinessItemId: 'sender_identity',
+      slots: {
+        activeReadinessItemId: 'sender_identity',
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob\\@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+      },
+    });
+
+    assert.equal(composed.mode, CONVERSATION_MODES.READINESS_FIELD_CORRECTION);
+    assert.equal(composed.responseMode, 'readiness_field_correction');
+    assert.equal(composed.requiresExplicitApproval, false);
+    assert.equal(composed.itemConfirmed, true);
+    assert.match(
+      composed.message,
+      /Updated sender email to jacob@goanchorcleaning\.com/i
+    );
+    assert.match(composed.message, /Sender identity is now confirmed/i);
+    assert.match(composed.message, /Jacob Maynard/);
+    assert.match(composed.message, /jacob@goanchorcleaning\.com/);
+    assert.match(
+      composed.message,
+      /signature:\s*Jacob Maynard, Anchor Cleaning/i
+    );
+    assert.match(
+      composed.message,
+      /Next readiness item:\s*reply inbox \/ reply-to handling/i
+    );
+    assert.match(
+      composed.message,
+      /What reply inbox should receive responses, and should it be the same as the sender address\?/i
+    );
+    assert.doesNotMatch(composed.message, /The next choice is operational/i);
+    assert.doesNotMatch(composed.message, /prepare a manual-send export/i);
+    assert.doesNotMatch(composed.message, /Which next path do you want to prepare/i);
+    assert.doesNotMatch(
+      composed.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(composed.message, /Exact action/i);
     assert.doesNotMatch(composed.message, /create CRM drafts/i);
     assert.doesNotMatch(composed.message, /queue sends/i);
   });

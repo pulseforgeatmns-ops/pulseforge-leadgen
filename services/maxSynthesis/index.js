@@ -159,12 +159,22 @@ module.exports = {
     ConversationalResponsePolicy.looksLikeReadinessSubstepSelection,
   detectSelectedReadinessItem:
     ConversationalResponsePolicy.detectSelectedReadinessItem,
+  looksLikeReadinessFieldCorrection:
+    ConversationalResponsePolicy.looksLikeReadinessFieldCorrection,
+  parseSenderIdentityFields:
+    ConversationalResponsePolicy.parseSenderIdentityFields,
+  parseReplyHandlingFields:
+    ConversationalResponsePolicy.parseReplyHandlingFields,
+  mergeSenderIdentityState:
+    ConversationalResponsePolicy.mergeSenderIdentityState,
   composeExecutionConfirmation:
     ConversationalResponsePolicy.composeExecutionConfirmation,
   composeOperatorReadinessCheck:
     ConversationalResponsePolicy.composeOperatorReadinessCheck,
   composeReadinessSubstep:
     ConversationalResponsePolicy.composeReadinessSubstep,
+  composeReadinessFieldCorrection:
+    ConversationalResponsePolicy.composeReadinessFieldCorrection,
   composeClarificationNeeded:
     ConversationalResponsePolicy.composeClarificationNeeded,
   unresolvedReadinessItems:
@@ -186,6 +196,8 @@ module.exports = {
   READINESS_SUBSTEPS: ConversationalResponsePolicy.READINESS_SUBSTEPS,
   READINESS_SUBSTEP_SAFETY_LINE:
     ConversationalResponsePolicy.READINESS_SUBSTEP_SAFETY_LINE,
+  READINESS_NEXT_ITEM_PROMPTS:
+    ConversationalResponsePolicy.READINESS_NEXT_ITEM_PROMPTS,
   dedupeOperatorStateUpdateMessage:
     ConversationalResponsePolicy.dedupeOperatorStateUpdateMessage,
   sanitizeApprovedStateLeadIn:

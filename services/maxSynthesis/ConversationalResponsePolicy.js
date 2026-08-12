@@ -13,12 +13,15 @@
  *   4. formal_review_gate         — first-time gate for approval (card allowed)
  *   5. operator_readiness_check   — summarize / resolve remaining readiness gaps
  *   6. readiness_substep          — operator selected one readiness item; stay in it
- *   7. execution_confirmation     — about to send/export/CRM/account action
- *   8. clarification_needed       — accidental / low-signal / ambiguous input
+ *   7. readiness_field_correction — field fill/correct inside an active substep
+ *   8. execution_confirmation     — about to send/export/CRM/account action
+ *   9. clarification_needed       — accidental / low-signal / ambiguous input
  *
  * Classification priority for post-approval turns:
  * low-signal ambiguous input → clarification_needed (never re-open full state
- * summary or options). Selected readiness item → readiness_substep (never ask
+ * summary or options). Field correction / substep update inside an active
+ * readiness item → readiness_field_correction (never dump Launch Gate
+ * operational options). Selected readiness item → readiness_substep (never ask
  * "which readiness item" again). Then discussing options / resolving readiness
  * / selecting a path later ALWAYS beat bare mentions of export/CRM/queue.
  * Execution confirmation only when the operator clearly asks to take or
@@ -37,6 +40,8 @@ const CONVERSATION_MODES = Object.freeze({
   FORMAL_REVIEW_GATE: 'formal_review_gate',
   OPERATOR_READINESS_CHECK: 'operator_readiness_check',
   READINESS_SUBSTEP: 'readiness_substep',
+  READINESS_FIELD_CORRECTION: 'readiness_field_correction',
+  READINESS_SUBSTEP_UPDATE: 'readiness_substep_update',
   EXECUTION_CONFIRMATION: 'execution_confirmation',
   CLARIFICATION_NEEDED: 'clarification_needed',
 });
@@ -55,6 +60,10 @@ const CONVERSATION_MODE_TO_RESPONSE_MODE = Object.freeze({
     RESPONSE_MODES.OPERATOR_READINESS_CHECK || 'operator_readiness_check',
   [CONVERSATION_MODES.READINESS_SUBSTEP]:
     RESPONSE_MODES.READINESS_SUBSTEP || 'readiness_substep',
+  [CONVERSATION_MODES.READINESS_FIELD_CORRECTION]:
+    RESPONSE_MODES.READINESS_FIELD_CORRECTION || 'readiness_field_correction',
+  [CONVERSATION_MODES.READINESS_SUBSTEP_UPDATE]:
+    RESPONSE_MODES.READINESS_FIELD_CORRECTION || 'readiness_field_correction',
   [CONVERSATION_MODES.EXECUTION_CONFIRMATION]:
     RESPONSE_MODES.EXECUTION_CONFIRMATION || 'execution_confirmation',
   [CONVERSATION_MODES.CLARIFICATION_NEEDED]:
@@ -72,6 +81,8 @@ const RESPONSE_MODE_TO_CONVERSATION_MODE = Object.freeze({
     CONVERSATION_MODES.FORMAL_REVIEW_GATE,
   operator_readiness_check: CONVERSATION_MODES.OPERATOR_READINESS_CHECK,
   readiness_substep: CONVERSATION_MODES.READINESS_SUBSTEP,
+  readiness_field_correction: CONVERSATION_MODES.READINESS_FIELD_CORRECTION,
+  readiness_substep_update: CONVERSATION_MODES.READINESS_FIELD_CORRECTION,
   execution_confirmation: CONVERSATION_MODES.EXECUTION_CONFIRMATION,
   clarification_needed: CONVERSATION_MODES.CLARIFICATION_NEEDED,
 });
@@ -148,6 +159,23 @@ const READINESS_SUBSTEPS = Object.freeze({
 
 const READINESS_SUBSTEP_SAFETY_LINE =
   'Nothing external has happened. Sends, export, and CRM writes remain locked.';
+
+/**
+ * Next readiness item prompts after a substep is confirmed.
+ * Labels match operator-facing language (not only internal ids).
+ */
+const READINESS_NEXT_ITEM_PROMPTS = Object.freeze({
+  reply_handling: Object.freeze({
+    id: 'reply_handling',
+    label: 'reply inbox / reply-to handling',
+    ask: 'What reply inbox should receive responses, and should it be the same as the sender address?',
+  }),
+  follow_up_tracking: Object.freeze({
+    id: 'follow_up_tracking',
+    label: 'follow-up tracking',
+    ask: 'Where should follow-ups be tracked, and who owns updating status after each touch?',
+  }),
+});
 
 /** Default unresolved items after Launch Gate readiness-only approval. */
 const DEFAULT_UNRESOLVED_READINESS_ITEMS = Object.freeze([
@@ -356,6 +384,18 @@ function assessConversationContext(input = {}) {
   const selectedReadinessItem =
     input.selectedReadinessItem ||
     detectSelectedReadinessItem(operatorMessage);
+  const activeReadinessItemId =
+    input.activeReadinessItemId ||
+    (input.slots && input.slots.activeReadinessItemId) ||
+    (selectedReadinessItem && selectedReadinessItem.id) ||
+    null;
+  const fieldCorrectionFromText =
+    Boolean(operatorMessage) &&
+    looksLikeReadinessFieldCorrection(operatorMessage, {
+      activeReadinessItemId,
+      slots: input.slots || null,
+      priorFields: input.priorFields || null,
+    });
   const readinessFromText = looksLikeOperatorReadinessCheck(operatorMessage);
   const nonExecutionFromText = looksLikeNonExecutionIntent(operatorMessage);
   const executionFromText = looksLikeExecutionRequest(operatorMessage);
@@ -371,15 +411,28 @@ function assessConversationContext(input = {}) {
         !input.forceReadinessCheck &&
         !input.isReadinessCheck &&
         !input.isReadinessSubstep &&
+        !input.isReadinessFieldCorrection &&
         !input.isExecutionRequest &&
         !input.executionPending &&
         !isRevision &&
         !isDiagnostic)
   );
 
+  // Field fill / correction inside an active readiness substep — never dump
+  // Launch Gate operational options or ask which path to prepare.
+  const isReadinessFieldCorrection = Boolean(
+    !isClarificationNeeded &&
+      (input.isReadinessFieldCorrection ||
+        input.forceReadinessFieldCorrection ||
+        input.intent === 'readiness_field_correction' ||
+        input.intent === 'readiness_substep_update' ||
+        fieldCorrectionFromText)
+  );
+
   // Operator already picked a readiness item — stay in that substep.
   const isReadinessSubstep = Boolean(
     !isClarificationNeeded &&
+      !isReadinessFieldCorrection &&
       (input.isReadinessSubstep ||
         input.forceReadinessSubstep ||
         input.intent === 'readiness_substep' ||
@@ -390,6 +443,7 @@ function assessConversationContext(input = {}) {
   // operator message — bare option names must never force execute confirm.
   const isReadinessCheck = Boolean(
     !isClarificationNeeded &&
+      !isReadinessFieldCorrection &&
       !isReadinessSubstep &&
       (input.isReadinessCheck ||
         input.forceReadinessCheck ||
@@ -397,6 +451,7 @@ function assessConversationContext(input = {}) {
   );
   const isNonExecutionIntent = Boolean(
     isClarificationNeeded ||
+      isReadinessFieldCorrection ||
       isReadinessSubstep ||
       isReadinessCheck ||
       input.isNonExecutionIntent ||
@@ -404,6 +459,7 @@ function assessConversationContext(input = {}) {
   );
   const isExecutionRequest = Boolean(
     !isClarificationNeeded &&
+      !isReadinessFieldCorrection &&
       !isReadinessSubstep &&
       !isNonExecutionIntent &&
       (input.isExecutionRequest ||
@@ -416,19 +472,21 @@ function assessConversationContext(input = {}) {
       ? 'plain_language_problem_then_detail'
       : isClarificationNeeded
         ? 'clarify_ambiguous_input'
-        : isReadinessSubstep
-          ? 'selected_readiness_substep_questions'
-          : isReadinessCheck
-            ? 'unresolved_readiness_then_ask'
-            : isExecutionRequest
-              ? 'explicit_execute_confirm'
-              : stateChanged || gateAlreadyApproved
-                ? 'state_then_next_options'
-                : isRevision
-                  ? 'ack_change_artifact'
-                  : isFirstTimeReview
-                    ? 'formal_gate_card'
-                    : 'concise_operator_update';
+        : isReadinessFieldCorrection
+          ? 'ack_field_update_then_next_readiness'
+          : isReadinessSubstep
+            ? 'selected_readiness_substep_questions'
+            : isReadinessCheck
+              ? 'unresolved_readiness_then_ask'
+              : isExecutionRequest
+                ? 'explicit_execute_confirm'
+                : stateChanged || gateAlreadyApproved
+                  ? 'state_then_next_options'
+                  : isRevision
+                    ? 'ack_change_artifact'
+                    : isFirstTimeReview
+                      ? 'formal_gate_card'
+                      : 'concise_operator_update';
 
   const mustBlock = isExecutionRequest
     ? FULL_SAFETY_LINES.slice()
@@ -448,8 +506,10 @@ function assessConversationContext(input = {}) {
     isDiagnostic,
     isFirstTimeReview,
     isClarificationNeeded,
+    isReadinessFieldCorrection,
     isReadinessSubstep,
     selectedReadinessItem: selectedReadinessItem || null,
+    activeReadinessItemId,
     isReadinessCheck,
     isNonExecutionIntent,
     isExecutionRequest,
@@ -475,10 +535,11 @@ function looksLikeLowSignalAmbiguousInput(text) {
 
   // Clear multi-word / named intents are never low-signal.
   if (looksLikeReadinessSubstepSelection(s)) return false;
+  if (looksLikeReadinessFieldCorrection(s)) return false;
   if (looksLikeOperatorReadinessCheck(s)) return false;
   if (looksLikeExecutionRequest(s)) return false;
   if (
-    /\b(?:approve|approved|revise|revision|export|crm|sender|reply|hold\s+for|options?|summarize|summarise|unresolved|readiness)\b/i.test(
+    /\b(?:approve|approved|revise|revision|export|crm|sender|reply|hold\s+for|options?|summarize|summarise|unresolved|readiness|update|signature)\b/i.test(
       s
     )
   ) {
@@ -675,6 +736,456 @@ function detectSelectedReadinessItem(text) {
 }
 
 /**
+ * Normalize an email captured from operator text (strip escapes / brackets).
+ */
+function normalizeCapturedEmail(raw) {
+  return String(raw || '')
+    .trim()
+    .replace(/^<|>$/g, '')
+    .replace(/\\@/g, '@')
+    .replace(/\\+/g, '');
+}
+
+/**
+ * Parse sender-identity fields from free text (fills or corrections).
+ * @returns {{ name: string|null, email: string|null, signature: string|null, updatedFields: string[], hasAny: boolean }}
+ */
+function parseSenderIdentityFields(text) {
+  const s = String(text || '').trim();
+  const updatedFields = [];
+  let name = null;
+  let email = null;
+  let signature = null;
+
+  if (!s) {
+    return { name, email, signature, updatedFields, hasAny: false };
+  }
+
+  const nameMatch = s.match(
+    /(?:^|\n)\s*(?:sender\s+)?name\s*[:\-–—]\s*([^\n]+)/i
+  );
+  if (nameMatch) {
+    name = nameMatch[1].trim().replace(/[.;,]+$/, '');
+    updatedFields.push('name');
+  } else {
+    const nameUpdate = s.match(
+      /\b(?:update|change|correct|set|use)\b[\s\S]{0,40}\b(?:sender\s+)?name\b[\s\S]{0,20}\b(?:to|is|=|:)\s*([^\n,;]+)/i
+    );
+    if (nameUpdate) {
+      name = nameUpdate[1].trim().replace(/[.;,]+$/, '');
+      updatedFields.push('name');
+    }
+  }
+
+  const emailLabeled = s.match(
+    /(?:^|\n)\s*(?:sender\s+)?email(?:\s+address)?\s*[:\-–—]\s*([^\s\n,;]+@[^\s\n,;]+)/i
+  );
+  const emailUpdate = s.match(
+    /\b(?:update|change|correct|set|use|fix)\b[\s\S]{0,48}\b(?:sender\s+)?email(?:\s+address)?\b[\s\S]{0,24}\b(?:to|is|=|:)\s*([^\s\n,;]+@[^\s\n,;]+)/i
+  );
+  const emailBare = s.match(
+    /\b(?:sender\s+)?email(?:\s+address)?\b[\s\S]{0,24}\b(?:to|is|=|:)\s*([^\s\n,;]+@[^\s\n,;]+)/i
+  );
+  const emailOnly = s.match(
+    /\b([A-Z0-9._%+\-]+(?:\\@|@)[A-Z0-9.\-]+\.[A-Z]{2,})\b/i
+  );
+  if (emailLabeled) {
+    email = normalizeCapturedEmail(emailLabeled[1]);
+    updatedFields.push('email');
+  } else if (emailUpdate) {
+    email = normalizeCapturedEmail(emailUpdate[1]);
+    updatedFields.push('email');
+  } else if (emailBare) {
+    email = normalizeCapturedEmail(emailBare[1]);
+    updatedFields.push('email');
+  } else if (
+    emailOnly &&
+    /\b(?:update|change|correct|set|use)\b[\s\S]{0,48}\b(?:sender\s+)?email/i.test(
+      s
+    )
+  ) {
+    email = normalizeCapturedEmail(emailOnly[1]);
+    updatedFields.push('email');
+  }
+
+  const sigMatch = s.match(
+    /(?:^|\n)\s*(?:sender\s+)?signature\s*[:\-–—]\s*([^\n]+)/i
+  );
+  if (sigMatch) {
+    signature = sigMatch[1].trim().replace(/[.;,]+$/, '');
+    updatedFields.push('signature');
+  } else {
+    const sigUpdate = s.match(
+      /\b(?:update|change|correct|set|use)\b[\s\S]{0,40}\bsignature\b[\s\S]{0,20}\b(?:to|is|=|:)\s*([^\n]+)/i
+    );
+    if (sigUpdate) {
+      signature = sigUpdate[1].trim().replace(/[.;,]+$/, '');
+      updatedFields.push('signature');
+    }
+  }
+
+  return {
+    name,
+    email,
+    signature,
+    updatedFields,
+    hasAny: updatedFields.length > 0,
+  };
+}
+
+/**
+ * Parse reply-handling fields from free text.
+ */
+function parseReplyHandlingFields(text) {
+  const s = String(text || '').trim();
+  const updatedFields = [];
+  let replyInbox = null;
+  let sameAsSender = null;
+
+  if (!s) {
+    return { replyInbox, sameAsSender, updatedFields, hasAny: false };
+  }
+
+  const inboxMatch = s.match(
+    /(?:^|\n)\s*(?:reply(?:\s*[-/]?\s*to)?(?:\s+inbox)?|reply\s+inbox)\s*[:\-–—]\s*([^\n]+)/i
+  );
+  const inboxUpdate = s.match(
+    /\b(?:update|change|correct|set|use)\b[\s\S]{0,40}\breply(?:\s*[-/]?\s*to)?(?:\s+(?:inbox|address|email))?\b[\s\S]{0,24}\b(?:to|is|=|:)\s*([^\n,;]+)/i
+  );
+  const emailOnly = s.match(
+    /\b([A-Z0-9._%+\-]+(?:\\@|@)[A-Z0-9.\-]+\.[A-Z]{2,})\b/i
+  );
+
+  if (inboxMatch) {
+    replyInbox = normalizeCapturedEmail(inboxMatch[1]);
+    updatedFields.push('reply_inbox');
+  } else if (inboxUpdate) {
+    replyInbox = normalizeCapturedEmail(inboxUpdate[1]);
+    updatedFields.push('reply_inbox');
+  } else if (
+    emailOnly &&
+    /\breply(?:\s*[-/]?\s*to)?(?:\s+(?:inbox|address|email))?\b/i.test(s)
+  ) {
+    replyInbox = normalizeCapturedEmail(emailOnly[1]);
+    updatedFields.push('reply_inbox');
+  }
+
+  if (/\bsame\s+as\s+(?:the\s+)?sender\b/i.test(s)) {
+    sameAsSender = true;
+    updatedFields.push('same_as_sender');
+  } else if (/\bdifferent\s+from\s+(?:the\s+)?sender\b/i.test(s)) {
+    sameAsSender = false;
+    updatedFields.push('same_as_sender');
+  }
+
+  return {
+    replyInbox,
+    sameAsSender,
+    updatedFields,
+    hasAny: updatedFields.length > 0,
+  };
+}
+
+/**
+ * Merge prior sender identity slots with newly parsed fields.
+ */
+function mergeSenderIdentityState(prior = {}, parsed = {}) {
+  const name =
+    parsed.name != null && parsed.name !== ''
+      ? parsed.name
+      : prior.senderName || prior.name || null;
+  const emailRaw =
+    parsed.email != null && parsed.email !== ''
+      ? parsed.email
+      : prior.senderEmail || prior.email || null;
+  const email = emailRaw ? normalizeCapturedEmail(emailRaw) : null;
+  const signature =
+    parsed.signature != null && parsed.signature !== ''
+      ? parsed.signature
+      : prior.senderSignature || prior.signature || null;
+  const confirmed = Boolean(name && email && signature);
+  return {
+    senderName: name,
+    senderEmail: email,
+    senderSignature: signature,
+    senderIdentityConfirmed: confirmed,
+    missing: [
+      !name ? 'sender name' : null,
+      !email ? 'sender email' : null,
+      !signature ? 'signature' : null,
+    ].filter(Boolean),
+  };
+}
+
+function resolveActiveReadinessItemId(opts = {}) {
+  if (opts.activeReadinessItemId) return opts.activeReadinessItemId;
+  if (opts.slots && opts.slots.activeReadinessItemId) {
+    return opts.slots.activeReadinessItemId;
+  }
+  if (opts.readinessItemId) return opts.readinessItemId;
+  if (opts.selectedReadinessItem && opts.selectedReadinessItem.id) {
+    return opts.selectedReadinessItem.id;
+  }
+  const priorIntent = String(opts.priorIntent || opts.intent || '');
+  if (
+    priorIntent === 'readiness_substep' ||
+    priorIntent === 'readiness_field_correction' ||
+    priorIntent === 'readiness_substep_update'
+  ) {
+    return (
+      (opts.slots && opts.slots.activeReadinessItemId) ||
+      opts.readinessItemId ||
+      null
+    );
+  }
+  return null;
+}
+
+/**
+ * True when the operator is correcting or filling a readiness field —
+ * including while already inside a readiness substep.
+ */
+function looksLikeReadinessFieldCorrection(text, opts = {}) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+
+  // Selecting a checklist item is not a field correction.
+  if (detectSelectedReadinessItem(s) && !parseSenderIdentityFields(s).hasAny) {
+    // Allow "resolve sender identity" without fields to stay as substep selection.
+    if (!/\b(?:update|change|correct|set)\b/i.test(s)) return false;
+  }
+
+  // Checklist / summarize asks are not field corrections.
+  if (looksLikeOperatorReadinessCheck(s) && !/\b(?:update|change|correct)\b/i.test(s)) {
+    return false;
+  }
+
+  // Explicit correction / update of a readiness field.
+  if (
+    /\b(?:update|change|correct|set|fix)\b/i.test(s) &&
+    /\b(?:sender\s+)?(?:email(?:\s+address)?|name|signature|reply(?:\s*[-/]?\s*to)?(?:\s+(?:inbox|address|email))?|inbox)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+
+  const activeId = resolveActiveReadinessItemId(opts);
+  if (activeId === 'sender_identity' || activeId === 'sender') {
+    if (parseSenderIdentityFields(s).hasAny) return true;
+  }
+  if (activeId === 'reply_handling' || activeId === 'reply_inbox_handling') {
+    if (parseReplyHandlingFields(s).hasAny) return true;
+  }
+
+  // Labeled sender block even without an active substep id (post-approval).
+  if (
+    /(?:^|\n)\s*(?:sender\s+)?(?:name|email(?:\s+address)?|signature)\s*[:\-–—]/im.test(
+      s
+    ) &&
+    (parseSenderIdentityFields(s).updatedFields.length >= 2 ||
+      (parseSenderIdentityFields(s).hasAny &&
+        /\b(?:sender\s+)?email(?:\s+address)?\b/i.test(s)))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Next unresolved readiness item after confirming `itemId`.
+ */
+function nextReadinessItemAfter(itemId, context = {}) {
+  const order = ['sender_identity', 'reply_handling', 'follow_up_tracking'];
+  const start = Math.max(0, order.indexOf(itemId));
+  const state = knownReadinessState(context);
+  const confirmed = {
+    sender_identity: state.senderIdentityConfirmed,
+    reply_handling: state.replyInboxConfirmed,
+    follow_up_tracking: state.followUpTrackingConfirmed,
+  };
+
+  for (let i = start + 1; i < order.length; i += 1) {
+    const id = order[i];
+    if (!confirmed[id]) {
+      return (
+        READINESS_NEXT_ITEM_PROMPTS[id] ||
+        (READINESS_SUBSTEPS[id]
+          ? {
+              id,
+              label: READINESS_SUBSTEPS[id].label,
+              ask: READINESS_SUBSTEPS[id].questions[0],
+            }
+          : { id, label: id, ask: `Let's resolve ${id}.` })
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * Compose acknowledgment for a readiness field correction / substep update.
+ * Never includes Launch Gate operational options or execute-approval asks.
+ */
+function composeReadinessFieldCorrection(context = {}) {
+  const text =
+    context.operatorMessage || context.text || context.userMessage || '';
+  const slots = { ...(context.slots || {}) };
+  const priorFields = {
+    senderName: slots.senderName || context.senderName || null,
+    senderEmail: slots.senderEmail || context.senderEmail || null,
+    senderSignature: slots.senderSignature || context.senderSignature || null,
+    ...(context.priorFields || {}),
+  };
+
+  let activeId =
+    resolveActiveReadinessItemId({
+      ...context,
+      slots,
+      activeReadinessItemId: context.activeReadinessItemId || slots.activeReadinessItemId,
+    }) || 'sender_identity';
+
+  const senderParsed = parseSenderIdentityFields(text);
+  const replyParsed = parseReplyHandlingFields(text);
+
+  // Infer item from fields when active id is missing / mismatched.
+  if (senderParsed.hasAny && !replyParsed.hasAny) {
+    activeId = 'sender_identity';
+  } else if (replyParsed.hasAny && !senderParsed.hasAny) {
+    activeId = 'reply_handling';
+  }
+
+  const lines = [];
+  let senderState = mergeSenderIdentityState(priorFields, {});
+  let nextItem = null;
+  let itemConfirmed = false;
+  const corrected = [];
+
+  if (activeId === 'sender_identity') {
+    senderState = mergeSenderIdentityState(priorFields, senderParsed);
+    if (senderParsed.email) {
+      lines.push(`Updated sender email to ${senderState.senderEmail}.`);
+      corrected.push('email');
+    } else if (senderParsed.name) {
+      lines.push(`Updated sender name to ${senderState.senderName}.`);
+      corrected.push('name');
+    } else if (senderParsed.signature) {
+      lines.push(`Updated signature to ${senderState.senderSignature}.`);
+      corrected.push('signature');
+    } else if (senderParsed.hasAny) {
+      lines.push('Updated sender identity fields.');
+    } else {
+      lines.push('Recorded sender identity details.');
+    }
+
+    // Multi-field initial provision: prefer a single "recorded" ack when
+    // more than one field arrived and this was not a single-field update.
+    if (
+      senderParsed.updatedFields.length >= 2 &&
+      !/\b(?:update|change|correct)\b/i.test(String(text))
+    ) {
+      lines.length = 0;
+      lines.push('Recorded sender identity:');
+      if (senderState.senderName) lines.push(`- ${senderState.senderName}`);
+      if (senderState.senderEmail) lines.push(`- ${senderState.senderEmail}`);
+      if (senderState.senderSignature) {
+        lines.push(`- signature: ${senderState.senderSignature}`);
+      }
+    }
+
+    if (senderState.senderIdentityConfirmed) {
+      itemConfirmed = true;
+      lines.push('');
+      lines.push('Sender identity is now confirmed:');
+      lines.push(`- ${senderState.senderName}`);
+      lines.push(`- ${senderState.senderEmail}`);
+      lines.push(`- signature: ${senderState.senderSignature}`);
+      nextItem = nextReadinessItemAfter('sender_identity', {
+        ...context,
+        slots: {
+          ...slots,
+          senderIdentityConfirmed: true,
+          senderName: senderState.senderName,
+          senderEmail: senderState.senderEmail,
+          senderSignature: senderState.senderSignature,
+        },
+        confirmedReadiness: {
+          ...(context.confirmedReadiness || {}),
+          sender_identity: true,
+        },
+      });
+      if (nextItem) {
+        lines.push('');
+        lines.push(
+          `Next readiness item: ${nextItem.label}. ${nextItem.ask}`
+        );
+      }
+    } else if (senderState.missing.length) {
+      lines.push('');
+      lines.push('Still needed for sender identity:');
+      for (const m of senderState.missing) lines.push(`- ${m}`);
+      lines.push('');
+      lines.push(READINESS_SUBSTEP_SAFETY_LINE);
+    }
+  } else if (activeId === 'reply_handling') {
+    const inbox =
+      replyParsed.replyInbox ||
+      slots.replyInbox ||
+      context.replyInbox ||
+      null;
+    if (replyParsed.replyInbox) {
+      lines.push(`Updated reply inbox to ${inbox}.`);
+    } else {
+      lines.push('Recorded reply-handling details.');
+    }
+    if (inbox) {
+      itemConfirmed = true;
+      nextItem = nextReadinessItemAfter('reply_handling', {
+        ...context,
+        slots: { ...slots, replyInboxConfirmed: true, replyInbox: inbox },
+        confirmedReadiness: {
+          ...(context.confirmedReadiness || {}),
+          reply_inbox_handling: true,
+        },
+      });
+      lines.push('');
+      lines.push('Reply handling is now confirmed.');
+      if (nextItem) {
+        lines.push('');
+        lines.push(
+          `Next readiness item: ${nextItem.label}. ${nextItem.ask}`
+        );
+      }
+    }
+  } else {
+    lines.push('Updated the active readiness fields.');
+  }
+
+  const message = lines.join('\n').trim();
+  const nextActiveId = itemConfirmed && nextItem ? nextItem.id : activeId;
+
+  return {
+    mode: CONVERSATION_MODES.READINESS_FIELD_CORRECTION,
+    responseMode: toResponseMode(CONVERSATION_MODES.READINESS_FIELD_CORRECTION),
+    message,
+    includeRendererSections: false,
+    includeExpandedSafety: false,
+    readinessItemId: activeId,
+    activeReadinessItemId: nextActiveId,
+    nextReadinessItem: nextItem,
+    senderIdentity: senderState,
+    itemConfirmed,
+    correctedFields: corrected.length ? corrected : senderParsed.updatedFields,
+    requiresExplicitApproval: false,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+  };
+}
+
+/**
  * True only when the operator clearly asks to take / approve a concrete
  * external or actionable step. Mentions of available next paths alone are not
  * enough — especially under "before choosing", "not yet", questions, etc.
@@ -757,6 +1268,10 @@ function selectConversationMode(input = {}) {
   if (assessment.isClarificationNeeded) {
     return CONVERSATION_MODES.CLARIFICATION_NEEDED;
   }
+  // Field correction / substep update beats Launch Gate operational options.
+  if (assessment.isReadinessFieldCorrection) {
+    return CONVERSATION_MODES.READINESS_FIELD_CORRECTION;
+  }
   // Selected readiness item beats checklist / "which item first?" ask.
   if (assessment.isReadinessSubstep) {
     return CONVERSATION_MODES.READINESS_SUBSTEP;
@@ -813,6 +1328,9 @@ function composeConversationResponse(mode, context = {}) {
       return composeOperatorReadinessCheck(context);
     case CONVERSATION_MODES.READINESS_SUBSTEP:
       return composeReadinessSubstep(context);
+    case CONVERSATION_MODES.READINESS_FIELD_CORRECTION:
+    case CONVERSATION_MODES.READINESS_SUBSTEP_UPDATE:
+      return composeReadinessFieldCorrection(context);
     case CONVERSATION_MODES.EXECUTION_CONFIRMATION:
       return composeExecutionConfirmation(context);
     case CONVERSATION_MODES.CLARIFICATION_NEEDED:
@@ -1686,8 +2204,23 @@ function applyConversationalPolicy(reply, context = {}) {
       reply.responseMode === 'readiness_substep' ||
       reply.conversationMode === 'readiness_substep' ||
       reply.intent === 'readiness_substep',
+    isReadinessFieldCorrection:
+      context.isReadinessFieldCorrection ||
+      reply.responseMode === 'readiness_field_correction' ||
+      reply.responseMode === 'readiness_substep_update' ||
+      reply.conversationMode === 'readiness_field_correction' ||
+      reply.conversationMode === 'readiness_substep_update' ||
+      reply.intent === 'readiness_field_correction' ||
+      reply.intent === 'readiness_substep_update',
     selectedReadinessItem:
       context.selectedReadinessItem || reply.selectedReadinessItem || null,
+    activeReadinessItemId:
+      context.activeReadinessItemId ||
+      reply.activeReadinessItemId ||
+      reply.readinessItemId ||
+      (reply.slots && reply.slots.activeReadinessItemId) ||
+      null,
+    slots: context.slots || reply.slots || null,
     isClarificationNeeded:
       context.isClarificationNeeded ||
       reply.responseMode === 'clarification_needed' ||
@@ -1774,6 +2307,7 @@ module.exports = {
   KNOWN_SHORT_OPERATOR_INTENTS,
   READINESS_SUBSTEPS,
   READINESS_SUBSTEP_SAFETY_LINE,
+  READINESS_NEXT_ITEM_PROMPTS,
   toConversationMode,
   toResponseMode,
   containsRendererBoilerplate,
@@ -1786,6 +2320,12 @@ module.exports = {
   looksLikeOperatorReadinessCheck,
   looksLikeReadinessSubstepSelection,
   detectSelectedReadinessItem,
+  looksLikeReadinessFieldCorrection,
+  parseSenderIdentityFields,
+  parseReplyHandlingFields,
+  mergeSenderIdentityState,
+  resolveActiveReadinessItemId,
+  nextReadinessItemAfter,
   looksLikeExecutionRequest,
   selectConversationMode,
   composeConversationResponse,
@@ -1795,6 +2335,7 @@ module.exports = {
   composeFormalReviewGate,
   composeOperatorReadinessCheck,
   composeReadinessSubstep,
+  composeReadinessFieldCorrection,
   composeExecutionConfirmation,
   composeClarificationNeeded,
   extractOperatorReadinessChecklist,

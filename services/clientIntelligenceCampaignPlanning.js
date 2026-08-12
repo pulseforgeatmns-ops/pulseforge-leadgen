@@ -123,9 +123,13 @@ const {
   looksLikeLowSignalAmbiguousInput,
   looksLikeReadinessSubstepSelection,
   detectSelectedReadinessItem,
+  looksLikeReadinessFieldCorrection,
+  parseSenderIdentityFields,
+  mergeSenderIdentityState,
   composeExecutionConfirmation,
   composeOperatorReadinessCheck,
   composeReadinessSubstep,
+  composeReadinessFieldCorrection,
   composeClarificationNeeded,
   unresolvedReadinessItems,
   DEFAULT_UNRESOLVED_READINESS_ITEMS,
@@ -7728,6 +7732,7 @@ function produceReadinessSubstepResult(userMessage, prior = {}, opts = {}) {
       conversationMode: CONVERSATION_MODES.READINESS_SUBSTEP,
       selectedReadinessItem: composed.selectedReadinessItem,
       readinessItemId: composed.readinessItemId,
+      activeReadinessItemId: composed.readinessItemId,
       launchGateApproved: true,
       launchReady: true,
       launched: false,
@@ -7742,6 +7747,116 @@ function produceReadinessSubstepResult(userMessage, prior = {}, opts = {}) {
       operatorMessage: userMessage,
       selectedReadinessItem: composed.selectedReadinessItem,
       forceMode: CONVERSATION_MODES.READINESS_SUBSTEP,
+    }
+  );
+}
+
+/**
+ * Field correction / fill inside an active readiness substep.
+ * Updates readiness state, acknowledges, and advances when complete.
+ * Never dumps Launch Gate operational options or asks for execute approval.
+ */
+function produceReadinessFieldCorrectionResult(
+  userMessage,
+  prior = {},
+  opts = {}
+) {
+  const gate = prior.outreachLaunchGate || opts.priorOutreachLaunchGate || null;
+  const priorSlots = {
+    ...(prior.slots || {}),
+    ...(opts.slots || {}),
+  };
+  const activeReadinessItemId =
+    opts.activeReadinessItemId ||
+    priorSlots.activeReadinessItemId ||
+    prior.activeReadinessItemId ||
+    prior.readinessItemId ||
+    'sender_identity';
+
+  const composed = composeReadinessFieldCorrection({
+    gate,
+    outreachLaunchGate: gate,
+    operatorMessage: userMessage,
+    text: userMessage,
+    activeReadinessItemId,
+    slots: priorSlots,
+    priorFields: {
+      senderName: priorSlots.senderName || opts.senderName || null,
+      senderEmail: priorSlots.senderEmail || opts.senderEmail || null,
+      senderSignature:
+        priorSlots.senderSignature || opts.senderSignature || null,
+    },
+    confirmedReadiness: opts.confirmedReadiness || null,
+    campaignMemory: opts.campaignMemory || prior.campaignMemory || null,
+  });
+
+  const sender = composed.senderIdentity || {};
+  const nextSlots = {
+    ...priorSlots,
+    launchGateApproved: true,
+    launchReady: true,
+    activeReadinessItemId:
+      composed.activeReadinessItemId || activeReadinessItemId,
+    senderName: sender.senderName || priorSlots.senderName || null,
+    senderEmail: sender.senderEmail || priorSlots.senderEmail || null,
+    senderSignature:
+      sender.senderSignature || priorSlots.senderSignature || null,
+    senderIdentityConfirmed:
+      sender.senderIdentityConfirmed === true ||
+      priorSlots.senderIdentityConfirmed === true,
+  };
+
+  if (composed.itemConfirmed && composed.readinessItemId === 'sender_identity') {
+    nextSlots.senderIdentityConfirmed = true;
+  }
+  if (composed.itemConfirmed && composed.readinessItemId === 'reply_handling') {
+    nextSlots.replyInboxConfirmed = true;
+  }
+
+  const currentAsk = composed.nextReadinessItem
+    ? composed.nextReadinessItem.ask
+    : sender.missing && sender.missing.length
+      ? `Still needed: ${sender.missing.join(', ')}`
+      : prior.currentAsk || null;
+
+  return applyConversationalPolicy(
+    {
+      message: composed.message,
+      step:
+        prior.step ||
+        CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      answers: opts.answers || prior.answers || {},
+      slots: nextSlots,
+      outreachLaunchGate: gate,
+      outreachDraftPreview: prior.outreachDraftPreview || null,
+      campaignMemory: opts.campaignMemory || prior.campaignMemory || null,
+      intent: 'readiness_field_correction',
+      planningState:
+        prior.planningState ||
+        CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      currentAsk,
+      responseMode: RESPONSE_MODES.READINESS_FIELD_CORRECTION,
+      conversationMode: CONVERSATION_MODES.READINESS_FIELD_CORRECTION,
+      readinessItemId: composed.readinessItemId,
+      activeReadinessItemId: nextSlots.activeReadinessItemId,
+      nextReadinessItem: composed.nextReadinessItem || null,
+      senderIdentity: sender,
+      senderIdentityConfirmed: nextSlots.senderIdentityConfirmed === true,
+      launchGateApproved: true,
+      launchReady: true,
+      launched: false,
+      executionPending: false,
+      sendsMade: false,
+      crmWritesMade: false,
+      exportMade: false,
+      accountChangesMade: false,
+    },
+    {
+      isReadinessFieldCorrection: true,
+      operatorMessage: userMessage,
+      activeReadinessItemId: nextSlots.activeReadinessItemId,
+      slots: nextSlots,
+      forceMode: CONVERSATION_MODES.READINESS_FIELD_CORRECTION,
     }
   );
 }
@@ -10229,6 +10344,48 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       });
     }
 
+    // Field correction / fill inside an active readiness substep — never
+    // fall through to Launch Gate operational options / path asks.
+    const activeReadinessItemIdEarly =
+      priorSlots.activeReadinessItemId ||
+      sharedApprovedSlots.activeReadinessItemId ||
+      prior.activeReadinessItemId ||
+      prior.readinessItemId ||
+      null;
+    if (
+      looksLikeReadinessFieldCorrection(userMessage, {
+        activeReadinessItemId: activeReadinessItemIdEarly,
+        slots: { ...priorSlots, ...sharedApprovedSlots },
+        priorIntent: prior.intent || null,
+      }) &&
+      (isOutreachLaunchGateAlreadyApproved(priorLaunchGateEarly) ||
+        prior.launchGateApproved === true ||
+        priorSlots.launchGateApproved === true ||
+        sharedApprovedSlots.launchGateApproved === true)
+    ) {
+      return produceReadinessFieldCorrectionResult(userMessage, prior, {
+        ...sharedReplyOpts,
+        priorOutreachLaunchGate: priorLaunchGateEarly,
+        answers: { ...(prior.answers || {}) },
+        slots: {
+          ...sharedApprovedSlots,
+          activeReadinessItemId: activeReadinessItemIdEarly,
+          senderName:
+            priorSlots.senderName || sharedApprovedSlots.senderName || null,
+          senderEmail:
+            priorSlots.senderEmail || sharedApprovedSlots.senderEmail || null,
+          senderSignature:
+            priorSlots.senderSignature ||
+            sharedApprovedSlots.senderSignature ||
+            null,
+          senderIdentityConfirmed:
+            priorSlots.senderIdentityConfirmed === true ||
+            sharedApprovedSlots.senderIdentityConfirmed === true,
+        },
+        activeReadinessItemId: activeReadinessItemIdEarly || 'sender_identity',
+      });
+    }
+
     // Selected readiness item — stay in that substep; never re-ask which item.
     if (
       looksLikeReadinessSubstepSelection(userMessage) &&
@@ -12457,6 +12614,7 @@ module.exports = {
   produceExecutionConfirmationResult,
   produceOperatorReadinessCheckResult,
   produceReadinessSubstepResult,
+  produceReadinessFieldCorrectionResult,
   produceClarificationNeededResult,
   CONVERSATION_MODES,
   formatApprovedLaunchGateConversational,
@@ -12467,6 +12625,9 @@ module.exports = {
   looksLikeLowSignalAmbiguousInput,
   looksLikeReadinessSubstepSelection,
   detectSelectedReadinessItem,
+  looksLikeReadinessFieldCorrection,
+  parseSenderIdentityFields,
+  mergeSenderIdentityState,
   CLARIFICATION_NEEDED_ASK,
   buildScoutHandoffBrief,
   formatScoutHandoffBriefMessage,
