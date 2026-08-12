@@ -168,12 +168,22 @@ const READINESS_NEXT_ITEM_PROMPTS = Object.freeze({
   reply_handling: Object.freeze({
     id: 'reply_handling',
     label: 'reply inbox / reply-to handling',
-    ask: 'What inbox should receive replies, and should reply-to match the sender address?',
+    ask: 'What inbox should receive replies?',
+    questions: Object.freeze([
+      'What inbox should receive replies?',
+      'Should reply-to match the sender address?',
+      'Who will monitor replies?',
+    ]),
   }),
   follow_up_tracking: Object.freeze({
     id: 'follow_up_tracking',
     label: 'follow-up tracking',
     ask: 'Where should follow-ups be tracked, and who owns updating status after each touch?',
+    questions: Object.freeze([
+      'Where should follow-ups be tracked (CRM, sheet, or elsewhere)?',
+      'Who owns updating follow-up status after each touch?',
+      'What counts as done vs needs another follow-up?',
+    ]),
   }),
 });
 
@@ -1005,13 +1015,11 @@ function looksLikeReadinessFieldCorrection(text, opts = {}) {
   }
 
   // Labeled sender block even without an active substep id (post-approval).
+  // Support bullet prefixes ("- Sender name:") via parseSenderIdentityFields.
+  const senderFields = parseSenderIdentityFields(s);
   if (
-    /(?:^|\n)\s*(?:sender\s+)?(?:name|email(?:\s+address)?|signature)\s*[:\-–—]/im.test(
-      s
-    ) &&
-    (parseSenderIdentityFields(s).updatedFields.length >= 2 ||
-      (parseSenderIdentityFields(s).hasAny &&
-        /\b(?:sender\s+)?email(?:\s+address)?\b/i.test(s)))
+    senderFields.updatedFields.length >= 2 ||
+    (senderFields.name && senderFields.email && senderFields.signature)
   ) {
     return true;
   }
@@ -1097,24 +1105,30 @@ function composeReadinessFieldCorrection(context = {}) {
       Boolean(senderParsed.name) &&
       Boolean(senderParsed.email) &&
       Boolean(senderParsed.signature);
-
-    if (multiFieldUpdate || fullIdentityBlock) {
-      lines.push('Updated sender identity.');
-    } else if (senderParsed.email) {
-      lines.push(`Updated sender email to ${senderState.senderEmail}.`);
-    } else if (senderParsed.name) {
-      lines.push(`Updated sender name to ${senderState.senderName}.`);
-    } else if (senderParsed.signature) {
-      lines.push(`Updated signature to ${senderState.senderSignature}.`);
-    } else if (senderParsed.hasAny) {
-      lines.push('Updated sender identity fields.');
-    } else {
-      lines.push('Recorded sender identity details.');
-    }
+    const narrowUpdateOnly =
+      senderParsed.updatedFields.length === 1 &&
+      /\b(?:update|change|correct)\b/i.test(String(text));
 
     if (senderState.senderIdentityConfirmed) {
       itemConfirmed = true;
-      lines.push('');
+      // Narrow single-field correction that completes identity still acks the field.
+      if (narrowUpdateOnly && senderParsed.email) {
+        lines.push(`Updated sender email to ${senderState.senderEmail}.`);
+        lines.push('');
+      } else if (narrowUpdateOnly && senderParsed.name) {
+        lines.push(`Updated sender name to ${senderState.senderName}.`);
+        lines.push('');
+      } else if (narrowUpdateOnly && senderParsed.signature) {
+        lines.push(`Updated signature to ${senderState.senderSignature}.`);
+        lines.push('');
+      } else if (
+        multiFieldUpdate &&
+        /\b(?:update|change|correct)\b/i.test(String(text))
+      ) {
+        lines.push('Updated sender identity.');
+        lines.push('');
+      }
+
       lines.push('Sender identity is confirmed:');
       lines.push(`- Sender name: ${senderState.senderName}`);
       lines.push(`- Sender email address: ${senderState.senderEmail}`);
@@ -1134,17 +1148,43 @@ function composeReadinessFieldCorrection(context = {}) {
         },
       });
       if (nextItem) {
+        const questions =
+          Array.isArray(nextItem.questions) && nextItem.questions.length
+            ? nextItem.questions
+            : nextItem.ask
+              ? [nextItem.ask]
+              : [];
         lines.push('');
-        lines.push(
-          `Next readiness item: ${nextItem.label}. ${nextItem.ask}`
-        );
+        lines.push(`Next readiness item: ${nextItem.label}.`);
+        if (questions.length) {
+          lines.push('');
+          for (const q of questions) lines.push(q);
+        }
+        lines.push('');
+        lines.push(READINESS_SUBSTEP_SAFETY_LINE);
       }
-    } else if (senderState.missing.length) {
-      lines.push('');
-      lines.push('Still needed for sender identity:');
-      for (const m of senderState.missing) lines.push(`- ${m}`);
-      lines.push('');
-      lines.push(READINESS_SUBSTEP_SAFETY_LINE);
+    } else {
+      if (multiFieldUpdate || fullIdentityBlock) {
+        lines.push('Updated sender identity.');
+      } else if (senderParsed.email) {
+        lines.push(`Updated sender email to ${senderState.senderEmail}.`);
+      } else if (senderParsed.name) {
+        lines.push(`Updated sender name to ${senderState.senderName}.`);
+      } else if (senderParsed.signature) {
+        lines.push(`Updated signature to ${senderState.senderSignature}.`);
+      } else if (senderParsed.hasAny) {
+        lines.push('Updated sender identity fields.');
+      } else {
+        lines.push('Recorded sender identity details.');
+      }
+
+      if (senderState.missing.length) {
+        lines.push('');
+        lines.push('Still needed for sender identity:');
+        for (const m of senderState.missing) lines.push(`- ${m}`);
+        lines.push('');
+        lines.push(READINESS_SUBSTEP_SAFETY_LINE);
+      }
     }
   } else if (activeId === 'reply_handling') {
     const inbox =
@@ -1538,6 +1578,7 @@ function composeFormalReviewGate(context = {}) {
 /**
  * Extract operator-specified readiness checklist items from free text.
  * Prefers bullet / numbered list lines; never invents items.
+ * Sender field VALUE lines ("Sender name: Jacob") are not gap items.
  */
 function extractOperatorReadinessChecklist(text) {
   const s = String(text || '');
@@ -1562,6 +1603,8 @@ function extractOperatorReadinessChecklist(text) {
     ) {
       return;
     }
+    // Confirmed/provided field values are not unresolved readiness gaps.
+    if (isSenderFieldValueLine(item)) return;
     const key = item.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
@@ -1604,16 +1647,74 @@ function extractOperatorReadinessChecklist(text) {
   return items;
 }
 
+/**
+ * True when a checklist line is a provided sender field value, not a gap.
+ * e.g. "Sender name: Jacob Maynard"
+ */
+function isSenderFieldValueLine(text) {
+  return /^(?:sender\s+)?(?:name|email(?:\s+address)?|signature)\s*[:\-–—]\s*\S+/i.test(
+    String(text || '').trim()
+  );
+}
+
+/**
+ * True when a line is an open readiness question (still unresolved).
+ */
+function isOpenReadinessQuestionLine(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  if (/\?$/.test(t)) return true;
+  return /^(?:what|who|should|where|how)\b/i.test(t);
+}
+
 function readinessConceptId(item) {
   const s = String(item || '');
+  if (isSenderFieldValueLine(s) || /\bsender\s+identity\b/i.test(s)) {
+    return 'sender_identity';
+  }
   for (const concept of READINESS_CONCEPT_PATTERNS) {
     if (concept.match.test(s)) return concept.id;
+  }
+  // Open reply questions belong to reply handling, not custom unresolved noise.
+  if (
+    isOpenReadinessQuestionLine(s) &&
+    /\b(?:inbox|reply-?to|monitor(?:ing)?\s+replies|replies)\b/i.test(s)
+  ) {
+    return 'reply_inbox_handling';
   }
   return `custom:${s.toLowerCase().slice(0, 80)}`;
 }
 
 /**
- * Known readiness facts from gate / slots / campaign memory.
+ * Resolve sender identity fields from slots + latest operator message.
+ */
+function resolveSenderIdentityFromContext(context = {}) {
+  const slots = context.slots || {};
+  const prior = {
+    senderName:
+      slots.senderName ||
+      context.senderName ||
+      (context.priorFields && context.priorFields.senderName) ||
+      null,
+    senderEmail:
+      slots.senderEmail ||
+      context.senderEmail ||
+      (context.priorFields && context.priorFields.senderEmail) ||
+      null,
+    senderSignature:
+      slots.senderSignature ||
+      context.senderSignature ||
+      (context.priorFields && context.priorFields.senderSignature) ||
+      null,
+  };
+  const parsed = parseSenderIdentityFields(
+    context.operatorMessage || context.text || context.userMessage || ''
+  );
+  return mergeSenderIdentityState(prior, parsed);
+}
+
+/**
+ * Known readiness facts from gate / slots / campaign memory / latest message.
  * Missing facts stay unknown — never treat unknown as resolved.
  */
 function knownReadinessState(context = {}) {
@@ -1629,14 +1730,17 @@ function knownReadinessState(context = {}) {
     ...(context.confirmedReadiness || {}),
     ...(memory.confirmed_readiness || {}),
   };
+  const senderResolved = resolveSenderIdentityFromContext(context);
 
   return {
     senderIdentityConfirmed: Boolean(
       confirmed.sender_identity ||
         confirmed.senderIdentity ||
         slots.senderIdentityConfirmed ||
-        context.senderIdentityConfirmed
+        context.senderIdentityConfirmed ||
+        senderResolved.senderIdentityConfirmed
     ),
+    senderIdentity: senderResolved,
     replyInboxConfirmed: Boolean(
       confirmed.reply_inbox_handling ||
         confirmed.replyInboxHandling ||
@@ -1699,6 +1803,27 @@ function evaluateReadinessItemAgainstState(item, context = {}) {
     };
   }
 
+  // Provided sender field values are confirmed facts, never unresolved gaps.
+  if (isSenderFieldValueLine(text) && state.senderIdentityConfirmed) {
+    return {
+      text,
+      status: 'confirmed',
+      reason: 'sender identity field present',
+      concept: 'sender_identity',
+      display: text,
+    };
+  }
+  if (isSenderFieldValueLine(text)) {
+    // Value present in the line itself — treat as confirmed field evidence.
+    return {
+      text,
+      status: 'confirmed',
+      reason: 'sender identity field present',
+      concept: 'sender_identity',
+      display: text,
+    };
+  }
+
   const confirmedByConcept = {
     sender_identity: state.senderIdentityConfirmed,
     reply_inbox_handling: state.replyInboxConfirmed,
@@ -1713,10 +1838,10 @@ function evaluateReadinessItemAgainstState(item, context = {}) {
   if (confirmedByConcept[concept] === true) {
     return {
       text,
-      status: 'resolved',
+      status: 'confirmed',
       reason: 'already confirmed in campaign state',
       concept,
-      display: `${text} — already confirmed in campaign state`,
+      display: text,
     };
   }
 
@@ -1732,8 +1857,8 @@ function evaluateReadinessItemAgainstState(item, context = {}) {
 
 /**
  * Merge operator checklist with known readiness state.
- * Operator-specified items win for wording and must not be collapsed into
- * the default template. Distinct concepts stay distinct.
+ * Separates confirmed vs unresolved. Operator wording preserved for gaps.
+ * Distinct concepts stay distinct.
  */
 function mergeOperatorReadinessChecklist(context = {}) {
   const explicit =
@@ -1767,26 +1892,87 @@ function mergeOperatorReadinessChecklist(context = {}) {
       ? fromSummary.map((item) => String(item).trim()).filter(Boolean)
       : DEFAULT_UNRESOLVED_READINESS_ITEMS.slice();
 
+  const state = knownReadinessState(context);
   const usedConcepts = new Set();
-  const merged = [];
+  const evaluations = [];
+  const unresolved = [];
+  const confirmed = [];
+
+  // Always surface confirmed sender identity from known state when present.
+  if (
+    state.senderIdentityConfirmed &&
+    state.senderIdentity &&
+    state.senderIdentity.senderName &&
+    state.senderIdentity.senderEmail &&
+    state.senderIdentity.senderSignature
+  ) {
+    confirmed.push({
+      concept: 'sender_identity',
+      status: 'confirmed',
+      label: 'Sender identity is confirmed',
+      fields: [
+        `Sender name: ${state.senderIdentity.senderName}`,
+        `Sender email address: ${state.senderIdentity.senderEmail}`,
+        `Signature: ${state.senderIdentity.senderSignature}`,
+      ],
+    });
+    usedConcepts.add('sender_identity');
+  }
 
   for (const item of sourceItems) {
     const evaluated = evaluateReadinessItemAgainstState(item, context);
-    // Preserve distinct concepts — never collapse reply-to vs monitoring, etc.
+    evaluations.push(evaluated);
+
+    if (evaluated.status === 'confirmed' || evaluated.status === 'resolved') {
+      // Sender values already represented in confirmed block above.
+      if (evaluated.concept === 'sender_identity') continue;
+      if (usedConcepts.has(evaluated.concept) && !evaluated.concept.startsWith('custom:')) {
+        continue;
+      }
+      usedConcepts.add(evaluated.concept);
+      confirmed.push(evaluated);
+      continue;
+    }
+
+    if (evaluated.status === 'inapplicable') {
+      if (usedConcepts.has(evaluated.concept) && !evaluated.concept.startsWith('custom:')) {
+        continue;
+      }
+      usedConcepts.add(evaluated.concept);
+      unresolved.push(evaluated.display);
+      continue;
+    }
+
+    // unresolved
     if (usedConcepts.has(evaluated.concept) && !evaluated.concept.startsWith('custom:')) {
-      // Same concept repeated with different wording: keep first (operator order).
       continue;
     }
     usedConcepts.add(evaluated.concept);
-    merged.push(evaluated.display);
+    unresolved.push(evaluated.display);
   }
 
+  // If sender identity is confirmed, never keep default "not confirmed" wording
+  // or provided field-value lines in the unresolved list.
+  const unresolvedFiltered = unresolved.filter((item) => {
+    if (isSenderFieldValueLine(item)) return false;
+    if (
+      state.senderIdentityConfirmed &&
+      /\bsender\s+identity\s+is\s+not\s+confirmed\b/i.test(item)
+    ) {
+      return false;
+    }
+    return true;
+  });
+
   return {
-    items: merged,
+    items: unresolvedFiltered,
+    unresolvedItems: unresolvedFiltered,
+    confirmedItems: confirmed,
     operatorSpecified: operatorItems.length > 0,
-    evaluations: sourceItems.map((item) =>
-      evaluateReadinessItemAgainstState(item, context)
-    ),
+    evaluations,
+    senderIdentityConfirmed: state.senderIdentityConfirmed,
+    senderIdentity: state.senderIdentity,
+    replyInboxConfirmed: state.replyInboxConfirmed,
   };
 }
 
@@ -1794,17 +1980,17 @@ function mergeOperatorReadinessChecklist(context = {}) {
  * Resolve unresolved readiness items from context / gate / operator message.
  */
 function unresolvedReadinessItems(context = {}) {
-  return mergeOperatorReadinessChecklist(context).items;
+  return mergeOperatorReadinessChecklist(context).unresolvedItems;
 }
 
 /**
  * Readiness check — list unresolved items only; never ask for execute approval.
- * Preserves operator-specified checklist items unless they conflict with known
- * state or safety rules.
+ * Confirmed readiness (e.g. sender identity) is shown separately and never
+ * under "still unresolved".
  */
 function composeOperatorReadinessCheck(context = {}) {
   const merged = mergeOperatorReadinessChecklist(context);
-  const items = merged.items;
+  const unresolved = merged.unresolvedItems || merged.items || [];
   const closingAsk =
     context.closingAsk ||
     context.closingQuestion ||
@@ -1815,16 +2001,70 @@ function composeOperatorReadinessCheck(context = {}) {
     context.compactSafety ||
     READINESS_CHECKLIST_SAFETY_LINE;
 
-  const lines = [
-    context.leadIn ||
-      'Still unresolved before any export, CRM drafts, or queued sends:',
-    '',
-    ...items.map((item) => `- ${item}`),
-    '',
-    safetyLine,
-    '',
-    closingAsk,
-  ];
+  const lines = [];
+
+  if (
+    merged.senderIdentityConfirmed &&
+    merged.senderIdentity &&
+    merged.senderIdentity.senderName &&
+    merged.senderIdentity.senderEmail &&
+    merged.senderIdentity.senderSignature
+  ) {
+    lines.push('Sender identity is confirmed:');
+    lines.push(`- Sender name: ${merged.senderIdentity.senderName}`);
+    lines.push(
+      `- Sender email address: ${merged.senderIdentity.senderEmail}`
+    );
+    lines.push(`- Signature: ${merged.senderIdentity.senderSignature}`);
+    lines.push('');
+  }
+
+  const nextItem =
+    merged.senderIdentityConfirmed && !merged.replyInboxConfirmed
+      ? READINESS_NEXT_ITEM_PROMPTS.reply_handling
+      : null;
+
+  if (nextItem && unresolved.length === 0) {
+    const questions = nextItem.questions || [nextItem.ask];
+    lines.push(`Next readiness item: ${nextItem.label}.`);
+    lines.push('');
+    for (const q of questions) lines.push(q);
+    lines.push('');
+    lines.push(safetyLine);
+  } else if (
+    nextItem &&
+    unresolved.length > 0 &&
+    unresolved.every(
+      (u) =>
+        readinessConceptId(u) === 'reply_inbox_handling' ||
+        readinessConceptId(u) === 'reply_handling_generic' ||
+        readinessConceptId(u) === 'reply_monitoring_owner' ||
+        isOpenReadinessQuestionLine(u)
+    )
+  ) {
+    const questions =
+      unresolved.length >= 2 ? unresolved : nextItem.questions || [nextItem.ask];
+    lines.push(`Next readiness item: ${nextItem.label}.`);
+    lines.push('');
+    for (const q of questions) lines.push(q);
+    lines.push('');
+    lines.push(safetyLine);
+  } else {
+    lines.push(
+      context.leadIn ||
+        'Still unresolved before any export, CRM drafts, or queued sends:'
+    );
+    lines.push('');
+    if (unresolved.length) {
+      for (const item of unresolved) lines.push(`- ${item}`);
+    } else {
+      lines.push('- (none)');
+    }
+    lines.push('');
+    lines.push(safetyLine);
+    lines.push('');
+    lines.push(closingAsk);
+  }
 
   const message = lines.join('\n').trim();
   return {
@@ -1833,8 +2073,10 @@ function composeOperatorReadinessCheck(context = {}) {
     message,
     includeRendererSections: false,
     includeExpandedSafety: false,
-    unresolvedItems: items,
+    unresolvedItems: unresolved,
+    confirmedItems: merged.confirmedItems,
     operatorSpecifiedChecklist: merged.operatorSpecified,
+    senderIdentityConfirmed: merged.senderIdentityConfirmed === true,
     requiresExplicitApproval: false,
     sendsMade: false,
     crmWritesMade: false,
@@ -2360,6 +2602,8 @@ module.exports = {
   mergeOperatorReadinessChecklist,
   evaluateReadinessItemAgainstState,
   unresolvedReadinessItems,
+  isSenderFieldValueLine,
+  resolveSenderIdentityFromContext,
   formatApprovedLaunchGateConversational,
   formatOperatorDiagnosticMessage,
   applyConversationalPolicy,

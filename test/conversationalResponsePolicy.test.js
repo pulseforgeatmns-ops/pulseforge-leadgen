@@ -35,6 +35,7 @@ const {
   looksLikeReadinessFieldCorrection,
   parseSenderIdentityFields,
   mergeSenderIdentityState,
+  isSenderFieldValueLine,
   READINESS_CHECKLIST_SAFETY_LINE,
   CLARIFICATION_NEEDED_ASK,
   READINESS_SUBSTEPS,
@@ -362,9 +363,15 @@ describe('ConversationalResponsePolicy', () => {
       composed.message,
       /Next readiness item:\s*reply inbox \/ reply-to handling/i
     );
+    assert.match(composed.message, /^What inbox should receive replies\?/m);
     assert.match(
       composed.message,
-      /What inbox should receive replies, and should reply-to match the sender address\?/i
+      /^Should reply-to match the sender address\?/m
+    );
+    assert.match(composed.message, /^Who will monitor replies\?/m);
+    assert.match(
+      composed.message,
+      /Nothing external has happened\. Sends, export, and CRM writes remain locked\./i
     );
     assert.doesNotMatch(composed.message, /The next choice is operational/i);
     assert.doesNotMatch(composed.message, /prepare a manual-send export/i);
@@ -413,7 +420,7 @@ describe('ConversationalResponsePolicy', () => {
       'Jacob Maynard, Anchor Cleaning'
     );
     assert.deepEqual(composed.senderIdentity.missing, []);
-    assert.match(composed.message, /^Updated sender identity\./m);
+    assert.match(composed.message, /Updated sender identity\./);
     assert.match(composed.message, /Sender identity is confirmed/i);
     assert.match(composed.message, /Sender name:\s*Jacob Maynard/i);
     assert.match(
@@ -428,10 +435,12 @@ describe('ConversationalResponsePolicy', () => {
       composed.message,
       /Next readiness item:\s*reply inbox \/ reply-to handling/i
     );
+    assert.match(composed.message, /^What inbox should receive replies\?/m);
     assert.match(
       composed.message,
-      /What inbox should receive replies, and should reply-to match the sender address\?/i
+      /^Should reply-to match the sender address\?/m
     );
+    assert.match(composed.message, /^Who will monitor replies\?/m);
     assert.doesNotMatch(composed.message, /Still needed for sender identity/i);
     assert.doesNotMatch(
       composed.message,
@@ -443,6 +452,74 @@ describe('ConversationalResponsePolicy', () => {
     );
     assert.doesNotMatch(composed.message, /prepare a manual-send export/i);
     assert.doesNotMatch(composed.message, /Which next path do you want to prepare/i);
+  });
+
+  it('confirms sender identity and does not list confirmed fields as unresolved', () => {
+    const text = [
+      '- Sender name: Jacob Maynard',
+      '- Sender email address: jacob@goanchorcleaning.com',
+      '- Signature: Jacob Maynard, Anchor Cleaning',
+    ].join('\n');
+
+    assert.equal(looksLikeReadinessFieldCorrection(text), true);
+    assert.equal(looksLikeOperatorReadinessCheck(text), false);
+    assert.deepEqual(extractOperatorReadinessChecklist(text), []);
+
+    const composed = composeReadinessFieldCorrection({
+      operatorMessage: text,
+      activeReadinessItemId: 'sender_identity',
+    });
+    assert.equal(composed.itemConfirmed, true);
+    assert.match(composed.message, /^Sender identity is confirmed:/m);
+    assert.match(composed.message, /Sender name:\s*Jacob Maynard/i);
+    assert.match(
+      composed.message,
+      /Sender email address:\s*jacob@goanchorcleaning\.com/i
+    );
+    assert.match(
+      composed.message,
+      /Signature:\s*Jacob Maynard, Anchor Cleaning/i
+    );
+    assert.match(
+      composed.message,
+      /Next readiness item:\s*reply inbox \/ reply-to handling/i
+    );
+    assert.match(composed.message, /^What inbox should receive replies\?/m);
+    assert.match(
+      composed.message,
+      /^Should reply-to match the sender address\?/m
+    );
+    assert.match(composed.message, /^Who will monitor replies\?/m);
+    assert.match(
+      composed.message,
+      /Nothing external has happened\. Sends, export, and CRM writes remain locked\./i
+    );
+    assert.doesNotMatch(composed.message, /Still unresolved before any export/i);
+    assert.doesNotMatch(composed.message, /Still needed for sender identity/i);
+
+    // Even if routed through readiness-check compose, confirmed fields stay out
+    // of the unresolved list.
+    const check = composeOperatorReadinessCheck({
+      operatorMessage: text,
+      unresolvedItems: [
+        'Sender name: Jacob Maynard',
+        'Sender email address: jacob@goanchorcleaning.com',
+        'Signature: Jacob Maynard, Anchor Cleaning',
+        'what inbox should receive replies?',
+        'should reply-to match the sender address?',
+        'who will monitor replies?',
+      ],
+    });
+    assert.match(check.message, /Sender identity is confirmed/i);
+    assert.doesNotMatch(check.message, /Still unresolved before any export/i);
+    for (const item of check.unresolvedItems || []) {
+      assert.equal(isSenderFieldValueLine(item), false);
+    }
+    assert.ok(
+      !(check.unresolvedItems || []).some((i) =>
+        /Sender name:\s*Jacob Maynard/i.test(i)
+      )
+    );
   });
 
   it('classifies low-signal accidental input as clarification_needed', () => {
@@ -557,19 +634,28 @@ describe('ConversationalResponsePolicy', () => {
     assert.doesNotMatch(composed.message, /Exact action/i);
   });
 
-  it('keeps confirmed operator items with an explicit reason instead of dropping them', () => {
+  it('keeps confirmed readiness out of the unresolved list', () => {
     const merged = mergeOperatorReadinessChecklist({
       unresolvedItems: [
         'sender identity is not confirmed',
         'reply monitoring owner/process is not confirmed',
       ],
       confirmedReadiness: { sender_identity: true },
+      slots: {
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        senderIdentityConfirmed: true,
+      },
     });
-    assert.equal(merged.items.length, 2);
-    assert.match(merged.items[0], /already confirmed/i);
-    assert.equal(
-      merged.items[1],
-      'reply monitoring owner/process is not confirmed'
+    assert.equal(merged.unresolvedItems.length, 1);
+    assert.match(merged.unresolvedItems[0], /reply monitoring/i);
+    assert.equal(merged.senderIdentityConfirmed, true);
+    assert.ok(
+      merged.confirmedItems.some((c) => c.concept === 'sender_identity')
+    );
+    assert.ok(
+      !merged.unresolvedItems.some((i) => /sender identity|Sender name:/i.test(i))
     );
   });
 
