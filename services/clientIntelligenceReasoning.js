@@ -571,8 +571,10 @@ function isOutreachDraftPreviewAlreadyApproved(preview) {
 
 function isOutreachLaunchGateAlreadyApproved(gate) {
   if (!gate || typeof gate !== 'object') return false;
+  const status = String(gate.status || '').toLowerCase();
   return Boolean(
-    gate.status === 'approved' ||
+    status === 'approved_readiness_only' ||
+      status === 'approved' ||
       gate.approved === true ||
       gate.launchGateApproved === true ||
       gate.launchReady === true
