@@ -20,6 +20,7 @@ const BusinessFactNormalizer = require('./BusinessFactNormalizer');
 const ArtifactSynthesisContext = require('./ArtifactSynthesisContext');
 const CampaignSynthesisContext = require('./CampaignSynthesisContext');
 const OperatorChatResponsiveness = require('./OperatorChatResponsiveness');
+const ConversationalResponsePolicy = require('./ConversationalResponsePolicy');
 
 module.exports = {
   // Classifier
@@ -124,4 +125,30 @@ module.exports = {
     OperatorChatResponsiveness.buildFollowUpEmailDrafts,
   formatOperatorChatDraftResponse:
     OperatorChatResponsiveness.formatOperatorChatDraftResponse,
+
+  // Conversational response policy (post workflow/state)
+  CONVERSATION_MODES: ConversationalResponsePolicy.CONVERSATION_MODES,
+  assessConversationContext:
+    ConversationalResponsePolicy.assessConversationContext,
+  selectConversationMode: ConversationalResponsePolicy.selectConversationMode,
+  composeConversationResponse:
+    ConversationalResponsePolicy.composeConversationResponse,
+  applyConversationalPolicy:
+    ConversationalResponsePolicy.applyConversationalPolicy,
+  selectResponseModeWithPolicy:
+    ConversationalResponsePolicy.selectResponseModeWithPolicy,
+  formatApprovedLaunchGateConversational:
+    ConversationalResponsePolicy.formatApprovedLaunchGateConversational,
+  formatOperatorDiagnosticMessage:
+    ConversationalResponsePolicy.formatOperatorDiagnosticMessage,
+  containsRendererBoilerplate:
+    ConversationalResponsePolicy.containsRendererBoilerplate,
+  compactSafetyLockLine: ConversationalResponsePolicy.compactSafetyLockLine,
+  expandedSafetyBlock: ConversationalResponsePolicy.expandedSafetyBlock,
+  approvalLanguageForGate:
+    ConversationalResponsePolicy.approvalLanguageForGate,
+  looksLikeExecutionRequest:
+    ConversationalResponsePolicy.looksLikeExecutionRequest,
+  composeExecutionConfirmation:
+    ConversationalResponsePolicy.composeExecutionConfirmation,
 };

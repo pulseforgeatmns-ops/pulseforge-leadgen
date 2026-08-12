@@ -114,6 +114,11 @@ const {
   clearForceRebuildBypass,
   buildFollowUpEmailDrafts,
   formatOperatorChatDraftResponse,
+  CONVERSATION_MODES,
+  applyConversationalPolicy,
+  formatApprovedLaunchGateConversational,
+  looksLikeExecutionRequest,
+  composeExecutionConfirmation,
 } = require('./maxSynthesis');
 const {
   SCOUT_HANDOFF_KIND,
@@ -328,13 +333,15 @@ const OUTREACH_LAUNCH_GATE_APPROVED_STATUS = 'approved_readiness_only';
 const OUTREACH_LAUNCH_GATE_APPROVED_HEADLINE =
   'Outreach Launch Gate: approved for readiness only.';
 const OUTREACH_LAUNCH_GATE_APPROVED_ASK =
-  'Choose a next option when ready — each still requires separate operator approval. Until then, hold with no action.';
+  'Which next path do you want to prepare, if any?';
 const OUTREACH_LAUNCH_GATE_NEXT_OPTIONS = Object.freeze([
-  'Prepare manual-send export for operator review',
-  'Create CRM drafts only if explicitly approved',
-  'Queue sends only if execution is intentionally enabled later',
-  'Hold with no action',
+  'prepare a manual-send export for review',
+  'create CRM drafts, if explicitly approved',
+  'queue sends later, if execution is intentionally enabled',
+  'hold with no action',
 ]);
+const OUTREACH_LAUNCH_GATE_OPERATOR_GUIDANCE =
+  "I'd keep this held until sender identity and reply handling are confirmed.";
 /** Stored OSP artifacts with these fragments must be regenerated, not shown. */
 const STALE_OUTREACH_STRATEGY_FRAGMENT_RES = Object.freeze([
   /for Small to mid-sized/,
@@ -6282,6 +6289,7 @@ function buildOutreachLaunchGateOperatorStateSummary(gate, opts = {}) {
   const g = gate || {};
   return {
     kind: 'operator_state_summary',
+    conversationMode: CONVERSATION_MODES.OPERATOR_STATE_UPDATE,
     title: g.title || OUTREACH_LAUNCH_GATE_TITLE,
     status: OUTREACH_LAUNCH_GATE_APPROVED_STATUS,
     headline: OUTREACH_LAUNCH_GATE_APPROVED_HEADLINE,
@@ -6296,42 +6304,33 @@ function buildOutreachLaunchGateOperatorStateSummary(gate, opts = {}) {
     ],
     nextOptions: [...OUTREACH_LAUNCH_GATE_NEXT_OPTIONS],
     nextOptionsRequireApproval: true,
-    reminder:
-      'Each next option requires separate explicit operator approval. Nothing executes from this summary.',
+    reminder: OUTREACH_LAUNCH_GATE_OPERATOR_GUIDANCE,
     includeEvidence: opts.includeEvidence === true,
   };
 }
 
 /**
- * Approved-state summary — never the pre-approval Launch Gate review card.
+ * Approved-state summary — conversational Operator State Update,
+ * never the pre-approval Launch Gate review card.
  */
 function formatOutreachLaunchGateApprovedSummary(gate, opts = {}) {
-  const summary =
-    (gate && gate.operatorStateSummary) ||
-    buildOutreachLaunchGateOperatorStateSummary(gate, opts);
-  const lines = [
-    summary.headline || OUTREACH_LAUNCH_GATE_APPROVED_HEADLINE,
-    '',
-    'Readiness-only status: approved. Execution lock still active.',
-    '',
-    'Confirmed not executed:',
-  ];
-  for (const item of summary.notExecuted || []) {
-    lines.push(`- ${item}`);
-  }
-  lines.push('');
-  lines.push(
-    'Next options (each requires separate operator approval):'
-  );
-  for (const item of summary.nextOptions || OUTREACH_LAUNCH_GATE_NEXT_OPTIONS) {
-    lines.push(`- ${item}`);
-  }
-  lines.push('');
-  lines.push(
-    summary.reminder ||
-      'Each next option requires separate explicit operator approval. Nothing executes from this summary.'
-  );
-  return lines.join('\n').trim();
+  const composed = formatApprovedLaunchGateConversational(gate, {
+    justApproved: opts.justApproved === true,
+    gateAlreadyApproved:
+      opts.gateAlreadyApproved === true ||
+      (opts.justApproved !== true &&
+        isOutreachLaunchGateAlreadyApproved(gate)),
+    stateChanged: opts.stateChanged === true || opts.justApproved === true,
+    leadIn: opts.leadIn || null,
+    nextPaths: OUTREACH_LAUNCH_GATE_NEXT_OPTIONS.slice(),
+    operatorGuidance:
+      opts.operatorGuidance || OUTREACH_LAUNCH_GATE_OPERATOR_GUIDANCE,
+    closingAsk: opts.closingAsk || OUTREACH_LAUNCH_GATE_APPROVED_ASK,
+    safetyLine:
+      opts.safetyLine ||
+      'Nothing external happened: no send, no export, no CRM write, and no account changes. The campaign is now campaign-ready, but execution is still locked.',
+  });
+  return composed.message;
 }
 
 function formatOutreachLaunchGateMessage(gate, opts = {}) {
@@ -7316,56 +7315,62 @@ function produceOutreachLaunchGateResult(ctx, answers, slots, opts, leadIn) {
       : approveOutreachLaunchGate(outreachLaunchGate, {
           approvedAt: opts.approvedAt || existing.approvedAt,
         });
-    const message = [
-      leadIn || null,
-      alreadyApproved
-        ? 'Outreach Launch Gate is already approved for readiness only — showing the approved-state summary. Not re-rendering the Launch Gate review card.'
-        : null,
-      '',
-      formatOutreachLaunchGateApprovedSummary(gate),
-    ]
-      .filter((line) => line != null && line !== '')
-      .join('\n');
+    const message = formatOutreachLaunchGateApprovedSummary(gate, {
+      justApproved: false,
+      gateAlreadyApproved: true,
+      leadIn:
+        leadIn ||
+        (alreadyApproved
+          ? 'Launch Gate is already approved for readiness only — showing the current state, not the review card.'
+          : null),
+    });
 
-    return {
-      message,
-      step: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
-      answers,
-      slots: {
-        ...slots,
-        outreachCopyPlanApproved: true,
-        copyPlanApproved: true,
-        outreachDraftPreviewGenerated: true,
-        outreachDraftPreviewApproved: true,
+    return applyConversationalPolicy(
+      {
+        message,
+        step: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+        answers,
+        slots: {
+          ...slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewGenerated: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+        },
+        prospectBatchReview: review,
+        outreachStrategyPreview: strategy,
+        outreachCopyPlan: plan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        intent: 'outreach_launch_gate_approved',
         draftPreviewApproved: true,
-        outreachLaunchGateGenerated: true,
-        outreachLaunchGateApproved: true,
+        copyPlanApproved: true,
+        strategyApproved: true,
+        batch1Approved: true,
         launchGateApproved: true,
         launchReady: true,
+        launched: false,
+        planningState: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+        currentAsk: OUTREACH_LAUNCH_GATE_APPROVED_ASK,
+        responseMode: RESPONSE_MODES.OPERATOR_STATE_SUMMARY,
+        conversationMode: CONVERSATION_MODES.OPERATOR_STATE_UPDATE,
+        finalOutreachCopyGenerated: true,
+        outreachCopyGenerated: true,
+        sendsMade: false,
+        crmWritesMade: false,
+        exportMade: false,
+        accountChangesMade: false,
       },
-      prospectBatchReview: review,
-      outreachStrategyPreview: strategy,
-      outreachCopyPlan: plan,
-      outreachDraftPreview: draft,
-      outreachLaunchGate: gate,
-      intent: 'outreach_launch_gate_approved',
-      draftPreviewApproved: true,
-      copyPlanApproved: true,
-      strategyApproved: true,
-      batch1Approved: true,
-      launchGateApproved: true,
-      launchReady: true,
-      launched: false,
-      planningState: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
-      currentAsk: OUTREACH_LAUNCH_GATE_APPROVED_ASK,
-      responseMode: RESPONSE_MODES.OPERATOR_STATE_SUMMARY,
-      finalOutreachCopyGenerated: true,
-      outreachCopyGenerated: true,
-      sendsMade: false,
-      crmWritesMade: false,
-      exportMade: false,
-      accountChangesMade: false,
-    };
+      {
+        gateAlreadyApproved: true,
+        forceMode: CONVERSATION_MODES.OPERATOR_STATE_UPDATE,
+      }
+    );
   }
 
   const intro = alreadyHave
@@ -7440,40 +7445,48 @@ function produceOutreachLaunchGateApprovalResult(
     const gate = approveOutreachLaunchGate(priorGate, {
       approvedAt: opts.approvedAt || priorGate.approvedAt,
     });
-    const message = [
-      leadIn ||
-        'Outreach Launch Gate is already approved for readiness only. No sends, CRM writes, exports, or account changes executed.',
-      '',
-      formatOutreachLaunchGateApprovedSummary(gate),
-    ].join('\n');
+    const message = formatOutreachLaunchGateApprovedSummary(gate, {
+      justApproved: false,
+      gateAlreadyApproved: true,
+      leadIn:
+        leadIn ||
+        'Launch Gate is already approved for readiness only. Nothing external happened.',
+    });
 
-    return {
-      message,
-      step: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
-      answers,
-      slots: {
-        ...slots,
-        outreachLaunchGateApproved: true,
+    return applyConversationalPolicy(
+      {
+        message,
+        step: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+        answers,
+        slots: {
+          ...slots,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+        },
+        outreachLaunchGate: gate,
+        prospectBatchReview: opts.priorProspectBatchReview || null,
+        outreachStrategyPreview: opts.priorOutreachStrategyPreview || null,
+        outreachCopyPlan: opts.priorOutreachCopyPlan || null,
+        outreachDraftPreview: opts.priorOutreachDraftPreview || null,
+        intent: 'outreach_launch_gate_approved',
         launchGateApproved: true,
         launchReady: true,
+        launched: false,
+        planningState: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+        currentAsk: OUTREACH_LAUNCH_GATE_APPROVED_ASK,
+        responseMode: RESPONSE_MODES.OPERATOR_STATE_SUMMARY,
+        conversationMode: CONVERSATION_MODES.OPERATOR_STATE_UPDATE,
+        sendsMade: false,
+        crmWritesMade: false,
+        exportMade: false,
+        accountChangesMade: false,
       },
-      outreachLaunchGate: gate,
-      prospectBatchReview: opts.priorProspectBatchReview || null,
-      outreachStrategyPreview: opts.priorOutreachStrategyPreview || null,
-      outreachCopyPlan: opts.priorOutreachCopyPlan || null,
-      outreachDraftPreview: opts.priorOutreachDraftPreview || null,
-      intent: 'outreach_launch_gate_approved',
-      launchGateApproved: true,
-      launchReady: true,
-      launched: false,
-      planningState: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
-      currentAsk: OUTREACH_LAUNCH_GATE_APPROVED_ASK,
-      responseMode: RESPONSE_MODES.OPERATOR_STATE_SUMMARY,
-      sendsMade: false,
-      crmWritesMade: false,
-      exportMade: false,
-      accountChangesMade: false,
-    };
+      {
+        gateAlreadyApproved: true,
+        forceMode: CONVERSATION_MODES.OPERATOR_STATE_UPDATE,
+      }
+    );
   }
 
   const result = produceOutreachLaunchGateResult(
@@ -7486,34 +7499,111 @@ function produceOutreachLaunchGateApprovalResult(
   const gate = approveOutreachLaunchGate(result.outreachLaunchGate, {
     approvedAt: opts.approvedAt || new Date().toISOString(),
   });
-  const message = [
-    leadIn ||
-      'Outreach Launch Gate approved for readiness only. No sends, CRM writes, exports, or account changes executed.',
-    '',
-    formatOutreachLaunchGateApprovedSummary(gate),
-  ].join('\n');
+  const message = formatOutreachLaunchGateApprovedSummary(gate, {
+    justApproved: true,
+    stateChanged: true,
+    leadIn: leadIn || 'Good, this is the right checkpoint.',
+  });
 
-  return {
-    ...result,
-    message,
-    outreachLaunchGate: gate,
-    intent: 'outreach_launch_gate_approved',
-    launchGateApproved: true,
-    launchReady: true,
-    launched: false,
-    slots: {
-      ...result.slots,
-      outreachLaunchGateApproved: true,
+  return applyConversationalPolicy(
+    {
+      ...result,
+      message,
+      outreachLaunchGate: gate,
+      intent: 'outreach_launch_gate_approved',
       launchGateApproved: true,
       launchReady: true,
+      launched: false,
+      slots: {
+        ...result.slots,
+        outreachLaunchGateApproved: true,
+        launchGateApproved: true,
+        launchReady: true,
+      },
+      currentAsk: OUTREACH_LAUNCH_GATE_APPROVED_ASK,
+      responseMode: RESPONSE_MODES.OPERATOR_STATE_SUMMARY,
+      conversationMode: CONVERSATION_MODES.OPERATOR_STATE_UPDATE,
+      sendsMade: false,
+      crmWritesMade: false,
+      exportMade: false,
+      accountChangesMade: false,
     },
-    currentAsk: OUTREACH_LAUNCH_GATE_APPROVED_ASK,
-    responseMode: RESPONSE_MODES.OPERATOR_STATE_SUMMARY,
-    sendsMade: false,
-    crmWritesMade: false,
-    exportMade: false,
-    accountChangesMade: false,
-  };
+    {
+      justApproved: true,
+      stateChanged: true,
+      forceMode: CONVERSATION_MODES.OPERATOR_STATE_UPDATE,
+    }
+  );
+}
+
+/**
+ * Execution Confirmation mode — explicit safety checkpoint only.
+ * Never sends, exports, or writes CRM from this reply.
+ */
+function produceExecutionConfirmationResult(userMessage, prior = {}, opts = {}) {
+  const text = String(userMessage || '');
+  let action = 'execute action';
+  if (/\bmanual-?send\s+export\b|\bexport\b/i.test(text)) {
+    action = 'prepare a manual-send export for operator review';
+  } else if (/\bcrm\b/i.test(text)) {
+    action = 'create CRM drafts';
+  } else if (/\bqueue\s+sends?\b|\bsend/i.test(text)) {
+    action = 'queue or send outreach';
+  }
+
+  const gate = prior.outreachLaunchGate || opts.priorOutreachLaunchGate || null;
+  const count =
+    (gate && gate.approvedCandidateCount) ||
+    (prior.outreachDraftPreview &&
+      prior.outreachDraftPreview.approvedCandidateCount) ||
+    'Batch 1 approved candidates';
+
+  const composed = composeExecutionConfirmation({
+    action,
+    recordsAffected: `${count} campaign records in the approved Batch 1 scope`,
+    sender: opts.sender || 'configured campaign sender (not yet confirmed)',
+    externalEffects:
+      'May create an export file, CRM drafts, or queued sends — irreversible once executed against external systems.',
+    holdGuidance:
+      "I'd hold until sender identity and reply handling are explicit. I'm not going to move anything externally without your explicit approval.",
+  });
+
+  return applyConversationalPolicy(
+    {
+      message: composed.message,
+      step:
+        prior.step ||
+        CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      answers: opts.answers || prior.answers || {},
+      slots: {
+        ...(prior.slots || {}),
+        ...(opts.slots || {}),
+        launchGateApproved: true,
+        launchReady: true,
+      },
+      outreachLaunchGate: gate,
+      outreachDraftPreview: prior.outreachDraftPreview || null,
+      intent: 'execution_confirmation',
+      planningState:
+        prior.planningState ||
+        CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      currentAsk: 'Do you explicitly approve this execute action?',
+      responseMode: RESPONSE_MODES.EXECUTION_CONFIRMATION,
+      conversationMode: CONVERSATION_MODES.EXECUTION_CONFIRMATION,
+      launchGateApproved: true,
+      launchReady: true,
+      launched: false,
+      executionPending: true,
+      sendsMade: false,
+      crmWritesMade: false,
+      exportMade: false,
+      accountChangesMade: false,
+    },
+    {
+      isExecutionRequest: true,
+      forceMode: CONVERSATION_MODES.EXECUTION_CONFIRMATION,
+    }
+  );
 }
 
 function formatProspectBatch1ApprovalMessage(approvedReview, opts = {}) {
@@ -9900,6 +9990,22 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       );
     }
 
+    // Execution path after readiness approval — confirm only, never auto-run.
+    if (
+      looksLikeExecutionRequest(userMessage) &&
+      (isOutreachLaunchGateAlreadyApproved(priorLaunchGateEarly) ||
+        prior.launchGateApproved === true ||
+        priorSlots.launchGateApproved === true ||
+        sharedApprovedSlots.launchGateApproved === true)
+    ) {
+      return produceExecutionConfirmationResult(userMessage, prior, {
+        ...sharedReplyOpts,
+        priorOutreachLaunchGate: priorLaunchGateEarly,
+        answers: { ...(prior.answers || {}) },
+        slots: { ...sharedApprovedSlots },
+      });
+    }
+
     // Approve Draft Preview → Launch Gate.
     if (
       acquisitionEarly ===
@@ -12073,6 +12179,12 @@ module.exports = {
   OUTREACH_LAUNCH_GATE_APPROVED_HEADLINE,
   OUTREACH_LAUNCH_GATE_APPROVED_ASK,
   OUTREACH_LAUNCH_GATE_NEXT_OPTIONS,
+  OUTREACH_LAUNCH_GATE_OPERATOR_GUIDANCE,
+  produceExecutionConfirmationResult,
+  CONVERSATION_MODES,
+  formatApprovedLaunchGateConversational,
+  applyConversationalPolicy,
+  looksLikeExecutionRequest,
   buildScoutHandoffBrief,
   formatScoutHandoffBriefMessage,
   produceScoutHandoffBriefResult,

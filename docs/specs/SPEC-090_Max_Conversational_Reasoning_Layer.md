@@ -125,5 +125,7 @@ Shared modules under `services/maxSynthesis/`:
 | `ConversationMemoryUpdater` | Routes add-ons/corrections/approvals into the right memory section |
 | `BusinessFactNormalizer` | Phrase-safe canonical fields (`targetSegmentPhrase`, `marketBoundPhrase`, …) |
 | `ArtifactSynthesisContext` | Renderers consume normalized phrases only; raw answers stay on `evidence` |
+| `OperatorChatResponsiveness` | Operator instruction priority + draft revision / stale-source diagnostics |
+| `ConversationalResponsePolicy` | Post-workflow response modes (see [SPEC-091](SPEC-091_Max_Conversational_Response_Policy.md)) |
 
 Growth Direction, Campaign Preview, Prospect Criteria, and Prospect List Build Proposal all attach `synthesisPhrases` from this path. Build Proposal approach copy embeds phrases — never raw prior artifact paragraphs.
