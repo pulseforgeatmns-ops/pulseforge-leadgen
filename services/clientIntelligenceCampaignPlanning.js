@@ -121,14 +121,18 @@ const {
   looksLikeNonExecutionIntent,
   looksLikeOperatorReadinessCheck,
   looksLikeLowSignalAmbiguousInput,
+  looksLikeReadinessSubstepSelection,
+  detectSelectedReadinessItem,
   composeExecutionConfirmation,
   composeOperatorReadinessCheck,
+  composeReadinessSubstep,
   composeClarificationNeeded,
   unresolvedReadinessItems,
   DEFAULT_UNRESOLVED_READINESS_ITEMS,
   READINESS_CHECKLIST_CLOSING_ASK,
   READINESS_CHECKLIST_SAFETY_LINE,
   CLARIFICATION_NEEDED_ASK,
+  READINESS_SUBSTEP_SAFETY_LINE,
 } = require('./maxSynthesis');
 const {
   SCOUT_HANDOFF_KIND,
@@ -7677,6 +7681,72 @@ function produceOperatorReadinessCheckResult(userMessage, prior = {}, opts = {})
 }
 
 /**
+ * Readiness substep — operator already selected a specific readiness item.
+ * Ask only that item's detail questions; do not re-ask which item first.
+ */
+function produceReadinessSubstepResult(userMessage, prior = {}, opts = {}) {
+  const gate = prior.outreachLaunchGate || opts.priorOutreachLaunchGate || null;
+  const slots = {
+    ...(prior.slots || {}),
+    ...(opts.slots || {}),
+    launchGateApproved: true,
+    launchReady: true,
+  };
+  const selected =
+    opts.selectedReadinessItem ||
+    detectSelectedReadinessItem(userMessage) ||
+    null;
+  const composed = composeReadinessSubstep({
+    gate,
+    outreachLaunchGate: gate,
+    operatorMessage: userMessage,
+    text: userMessage,
+    selectedReadinessItem: selected,
+    slots,
+    safetyLine: READINESS_SUBSTEP_SAFETY_LINE,
+  });
+
+  return applyConversationalPolicy(
+    {
+      message: composed.message,
+      step:
+        prior.step ||
+        CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      answers: opts.answers || prior.answers || {},
+      slots: {
+        ...slots,
+        activeReadinessItemId: composed.readinessItemId,
+      },
+      outreachLaunchGate: gate,
+      outreachDraftPreview: prior.outreachDraftPreview || null,
+      intent: 'readiness_substep',
+      planningState:
+        prior.planningState ||
+        CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      currentAsk: composed.closingAsk,
+      responseMode: RESPONSE_MODES.READINESS_SUBSTEP,
+      conversationMode: CONVERSATION_MODES.READINESS_SUBSTEP,
+      selectedReadinessItem: composed.selectedReadinessItem,
+      readinessItemId: composed.readinessItemId,
+      launchGateApproved: true,
+      launchReady: true,
+      launched: false,
+      executionPending: false,
+      sendsMade: false,
+      crmWritesMade: false,
+      exportMade: false,
+      accountChangesMade: false,
+    },
+    {
+      isReadinessSubstep: true,
+      operatorMessage: userMessage,
+      selectedReadinessItem: composed.selectedReadinessItem,
+      forceMode: CONVERSATION_MODES.READINESS_SUBSTEP,
+    }
+  );
+}
+
+/**
  * Accidental / low-signal operator input after Launch Gate approval.
  * Ask lightly; preserve state; never re-render full options / execute ask.
  */
@@ -10159,6 +10229,22 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       });
     }
 
+    // Selected readiness item — stay in that substep; never re-ask which item.
+    if (
+      looksLikeReadinessSubstepSelection(userMessage) &&
+      (isOutreachLaunchGateAlreadyApproved(priorLaunchGateEarly) ||
+        prior.launchGateApproved === true ||
+        priorSlots.launchGateApproved === true ||
+        sharedApprovedSlots.launchGateApproved === true)
+    ) {
+      return produceReadinessSubstepResult(userMessage, prior, {
+        ...sharedReplyOpts,
+        priorOutreachLaunchGate: priorLaunchGateEarly,
+        answers: { ...(prior.answers || {}) },
+        slots: { ...sharedApprovedSlots },
+      });
+    }
+
     // Readiness / planning after Launch Gate approval — never treat option
     // mentions ("before choosing export…") as execute confirmation.
     if (
@@ -12370,6 +12456,7 @@ module.exports = {
   OUTREACH_LAUNCH_GATE_OPERATOR_GUIDANCE,
   produceExecutionConfirmationResult,
   produceOperatorReadinessCheckResult,
+  produceReadinessSubstepResult,
   produceClarificationNeededResult,
   CONVERSATION_MODES,
   formatApprovedLaunchGateConversational,
@@ -12378,6 +12465,8 @@ module.exports = {
   looksLikeNonExecutionIntent,
   looksLikeOperatorReadinessCheck,
   looksLikeLowSignalAmbiguousInput,
+  looksLikeReadinessSubstepSelection,
+  detectSelectedReadinessItem,
   CLARIFICATION_NEEDED_ASK,
   buildScoutHandoffBrief,
   formatScoutHandoffBriefMessage,
