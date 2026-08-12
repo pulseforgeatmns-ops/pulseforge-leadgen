@@ -159,8 +159,18 @@ module.exports = {
     ConversationalResponsePolicy.composeOperatorReadinessCheck,
   unresolvedReadinessItems:
     ConversationalResponsePolicy.unresolvedReadinessItems,
+  extractOperatorReadinessChecklist:
+    ConversationalResponsePolicy.extractOperatorReadinessChecklist,
+  mergeOperatorReadinessChecklist:
+    ConversationalResponsePolicy.mergeOperatorReadinessChecklist,
+  evaluateReadinessItemAgainstState:
+    ConversationalResponsePolicy.evaluateReadinessItemAgainstState,
   DEFAULT_UNRESOLVED_READINESS_ITEMS:
     ConversationalResponsePolicy.DEFAULT_UNRESOLVED_READINESS_ITEMS,
+  READINESS_CHECKLIST_CLOSING_ASK:
+    ConversationalResponsePolicy.READINESS_CHECKLIST_CLOSING_ASK,
+  READINESS_CHECKLIST_SAFETY_LINE:
+    ConversationalResponsePolicy.READINESS_CHECKLIST_SAFETY_LINE,
   dedupeOperatorStateUpdateMessage:
     ConversationalResponsePolicy.dedupeOperatorStateUpdateMessage,
   sanitizeApprovedStateLeadIn:

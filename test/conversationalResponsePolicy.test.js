@@ -24,7 +24,26 @@ const {
   applyConversationalPolicy,
   selectResponseMode,
   composeOperatorReadinessCheck,
+  extractOperatorReadinessChecklist,
+  mergeOperatorReadinessChecklist,
+  READINESS_CHECKLIST_SAFETY_LINE,
 } = require('../services/maxSynthesis');
+
+const SEVEN_ITEM_READINESS_CHECKLIST = [
+  'sender identity is not confirmed',
+  'reply inbox / reply-to handling is not confirmed',
+  'operational path is not chosen yet: manual send vs CRM draft vs queued send',
+  'follow-up tracking process is not confirmed',
+  'reply monitoring owner/process is not confirmed',
+  'broader rollout remains blocked until Batch 1 results are reviewed',
+  'tracking / account settings remain unchanged unless explicitly approved later',
+];
+
+const SEVEN_ITEM_READINESS_MESSAGE = [
+  'Before choosing export, CRM drafts, or queued sends, help me resolve the remaining readiness items. Please summarize only what is still unresolved:',
+  '',
+  ...SEVEN_ITEM_READINESS_CHECKLIST.map((item) => `- ${item}`),
+].join('\n');
 
 describe('ConversationalResponsePolicy', () => {
   it('selects formal review gate for first-time launch gate', () => {
@@ -140,6 +159,77 @@ describe('ConversationalResponsePolicy', () => {
       /Do you explicitly approve this execute action/i
     );
     assert.equal(composed.requiresExplicitApproval, false);
+  });
+
+  it('preserves operator-specified seven-item readiness checklist', () => {
+    const extracted = extractOperatorReadinessChecklist(
+      SEVEN_ITEM_READINESS_MESSAGE
+    );
+    assert.equal(extracted.length, 7);
+    for (const item of SEVEN_ITEM_READINESS_CHECKLIST) {
+      assert.ok(
+        extracted.some((e) => e.toLowerCase() === item.toLowerCase()),
+        `missing extracted item: ${item}`
+      );
+    }
+
+    const composed = composeOperatorReadinessCheck({
+      operatorMessage: SEVEN_ITEM_READINESS_MESSAGE,
+    });
+    assert.equal(composed.operatorSpecifiedChecklist, true);
+    assert.equal(composed.unresolvedItems.length, 7);
+    for (const item of SEVEN_ITEM_READINESS_CHECKLIST) {
+      assert.match(
+        composed.message,
+        new RegExp(item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+      );
+    }
+    // Distinct concepts must not collapse.
+    assert.match(composed.message, /reply inbox \/ reply-to handling/i);
+    assert.match(composed.message, /reply monitoring owner\/process/i);
+    assert.match(composed.message, /operational path is not chosen yet/i);
+    assert.match(composed.message, /follow-up tracking process/i);
+    assert.match(composed.message, /broader rollout remains blocked/i);
+    assert.match(
+      composed.message,
+      /tracking \/ account settings remain unchanged unless explicitly approved later/i
+    );
+    assert.ok(composed.message.includes(READINESS_CHECKLIST_SAFETY_LINE));
+    assert.match(
+      composed.message,
+      /Which readiness item should we resolve first\?/
+    );
+    assert.doesNotMatch(composed.message, /Exact action/i);
+  });
+
+  it('keeps confirmed operator items with an explicit reason instead of dropping them', () => {
+    const merged = mergeOperatorReadinessChecklist({
+      unresolvedItems: [
+        'sender identity is not confirmed',
+        'reply monitoring owner/process is not confirmed',
+      ],
+      confirmedReadiness: { sender_identity: true },
+    });
+    assert.equal(merged.items.length, 2);
+    assert.match(merged.items[0], /already confirmed/i);
+    assert.equal(
+      merged.items[1],
+      'reply monitoring owner/process is not confirmed'
+    );
+  });
+
+  it('states why an inapplicable readiness item does not apply', () => {
+    const merged = mergeOperatorReadinessChecklist({
+      unresolvedItems: [
+        'broader rollout remains blocked until Batch 1 results are reviewed',
+      ],
+      inapplicableReadiness: {
+        broader_rollout_batch1: 'Batch 1 is intentionally paused by operator',
+      },
+    });
+    assert.equal(merged.items.length, 1);
+    assert.match(merged.items[0], /inapplicable/i);
+    assert.match(merged.items[0], /intentionally paused/i);
   });
 
   it('composes approved launch gate without renderer sections', () => {

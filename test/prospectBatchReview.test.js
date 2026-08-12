@@ -3565,6 +3565,108 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.equal(reply.executionPending, false);
   });
 
+  it('preserves operator seven-item readiness checklist without collapsing', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const sevenItems = [
+      'sender identity is not confirmed',
+      'reply inbox / reply-to handling is not confirmed',
+      'operational path is not chosen yet: manual send vs CRM draft vs queued send',
+      'follow-up tracking process is not confirmed',
+      'reply monitoring owner/process is not confirmed',
+      'broader rollout remains blocked until Batch 1 results are reviewed',
+      'tracking / account settings remain unchanged unless explicitly approved later',
+    ];
+    const operatorMessage = [
+      'Before choosing export, CRM drafts, or queued sends, help me resolve the remaining readiness items. Please summarize only what is still unresolved:',
+      '',
+      ...sevenItems.map((item) => `- ${item}`),
+    ].join('\n');
+
+    const reply = buildCampaignPlanningReply(
+      operatorMessage,
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        launchGateApproved: true,
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'operator_readiness_check');
+    assert.equal(reply.conversationMode, 'operator_readiness_check');
+    assert.equal(reply.intent, 'operator_readiness_check');
+    assert.equal(reply.operatorSpecifiedChecklist, true);
+    assert.equal((reply.unresolvedItems || []).length, 7);
+    for (const item of sevenItems) {
+      assert.match(
+        reply.message,
+        new RegExp(item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
+        `missing checklist item: ${item}`
+      );
+    }
+    assert.match(reply.message, /reply inbox \/ reply-to handling/i);
+    assert.match(reply.message, /reply monitoring owner\/process/i);
+    assert.match(reply.message, /operational path is not chosen yet/i);
+    assert.match(reply.message, /follow-up tracking process/i);
+    assert.match(reply.message, /broader rollout remains blocked/i);
+    assert.ok(
+      reply.message.includes(
+        'Nothing external has happened. Sends, export, and CRM writes remain locked.'
+      )
+    );
+    assert.match(
+      reply.message,
+      /Which readiness item should we resolve first\?/
+    );
+    assert.doesNotMatch(reply.message, /Exact action/i);
+    assert.doesNotMatch(reply.message, /Records affected/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.accountChangesMade, false);
+    assert.equal(reply.launched, false);
+  });
+
   it('operator-facing draft digest comes first without banned fragments', () => {
     const { review, ctx, strategy, plan } = chainFixtures();
     const draft = buildOutreachDraftPreview(

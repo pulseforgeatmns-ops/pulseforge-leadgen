@@ -70,6 +70,52 @@ const DEFAULT_UNRESOLVED_READINESS_ITEMS = Object.freeze([
   'Tracking / account settings remain unchanged until an explicit execute action',
 ]);
 
+/**
+ * Canonical readiness concepts — used only for known-state evaluation and
+ * dedupe. Distinct operator items must stay distinct (e.g. reply-to handling
+ * vs reply monitoring owner/process).
+ */
+const READINESS_CONCEPT_PATTERNS = Object.freeze([
+  {
+    id: 'sender_identity',
+    match: /\bsender\s+identity\b/i,
+  },
+  {
+    id: 'reply_inbox_handling',
+    match: /\breply(?:\s*[-/]\s*|\s+)(?:inbox|to)\b|\breply\s+inbox\b|\breply-?to\s+handling\b/i,
+  },
+  {
+    id: 'operational_path',
+    match: /\boperational\s+path\b|\bmanual\s+send\s+vs\b|\bnot\s+chosen\s+yet\b/i,
+  },
+  {
+    id: 'follow_up_tracking_process',
+    match: /\bfollow[- ]?up\s+tracking\s+process\b/i,
+  },
+  {
+    id: 'reply_monitoring_owner',
+    match: /\breply\s+monitoring\b|\bmonitoring\s+owner(?:\s*\/\s*process)?\b/i,
+  },
+  {
+    id: 'broader_rollout_batch1',
+    match: /\bbroader\s+rollout\b|\bBatch\s*1\s+results?\b/i,
+  },
+  {
+    id: 'tracking_account_settings',
+    match:
+      /\btracking\s*\/\s*account\s+settings\b|\baccount\s+settings\b(?!.*follow[- ]?up)/i,
+  },
+  {
+    id: 'reply_handling_generic',
+    match: /\breply\s+handling\b/i,
+  },
+]);
+
+const READINESS_CHECKLIST_CLOSING_ASK =
+  'Which readiness item should we resolve first?';
+const READINESS_CHECKLIST_SAFETY_LINE =
+  'Nothing external has happened. Sends, export, and CRM writes remain locked.';
+
 /** Sections that make Max sound like a workflow renderer — avoid outside formal gates. */
 const RENDERER_SECTION_PATTERNS = Object.freeze([
   /\bRecommended decision\b/i,
@@ -688,43 +734,274 @@ function composeFormalReviewGate(context = {}) {
 }
 
 /**
- * Resolve unresolved readiness items from context / gate / overrides.
+ * Extract operator-specified readiness checklist items from free text.
+ * Prefers bullet / numbered list lines; never invents items.
  */
-function unresolvedReadinessItems(context = {}) {
-  if (Array.isArray(context.unresolvedItems) && context.unresolvedItems.length) {
-    return context.unresolvedItems.map((item) => String(item).trim()).filter(Boolean);
+function extractOperatorReadinessChecklist(text) {
+  const s = String(text || '');
+  if (!s.trim()) return [];
+
+  const items = [];
+  const seen = new Set();
+
+  const pushItem = (raw) => {
+    let item = String(raw || '')
+      .replace(/^[\s•*\-–—]+/, '')
+      .replace(/^\d+[.)]\s*/, '')
+      .replace(/\s+/g, ' ')
+      .replace(/[.;,\s]+$/g, '')
+      .trim();
+    if (!item || item.length < 8) return;
+    // Skip instructional lines that are not checklist items.
+    if (
+      /^(?:before\s+choosing|please\s+summarize|help\s+me|still\s+unresolved|which\s+readiness|nothing\s+external)\b/i.test(
+        item
+      )
+    ) {
+      return;
+    }
+    const key = item.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push(item);
+  };
+
+  // Bullet / numbered lines anywhere in the message.
+  for (const line of s.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (/^(?:[-*•–—]|\d+[.)])\s+\S/.test(trimmed)) {
+      pushItem(trimmed);
+    }
   }
-  if (
-    Array.isArray(context.readinessGaps) &&
-    context.readinessGaps.length
-  ) {
-    return context.readinessGaps.map((item) => String(item).trim()).filter(Boolean);
+
+  if (items.length) return items;
+
+  // Fallback: "include: a; b; c" / "checklist: a, b, and c"
+  const includeMatch = s.match(
+    /(?:include|checklist|unresolved(?:\s+items?)?|readiness(?:\s+items?)?)\s*[:\-]\s*([\s\S]+)$/i
+  );
+  if (includeMatch) {
+    const chunk = includeMatch[1]
+      .split(/\n|(?:;|\s+and\s+|,\s*(?=[a-z]))/i)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    for (const part of chunk) pushItem(part);
   }
+
+  return items;
+}
+
+function readinessConceptId(item) {
+  const s = String(item || '');
+  for (const concept of READINESS_CONCEPT_PATTERNS) {
+    if (concept.match.test(s)) return concept.id;
+  }
+  return `custom:${s.toLowerCase().slice(0, 80)}`;
+}
+
+/**
+ * Known readiness facts from gate / slots / campaign memory.
+ * Missing facts stay unknown — never treat unknown as resolved.
+ */
+function knownReadinessState(context = {}) {
+  const gate = context.gate || context.outreachLaunchGate || {};
+  const slots = context.slots || {};
+  const summary = gate.operatorStateSummary || {};
+  const memory =
+    (context.campaignMemory && context.campaignMemory.operatorLearnings) ||
+    context.operatorLearnings ||
+    {};
+  const confirmed = {
+    ...(summary.confirmedReadiness || {}),
+    ...(context.confirmedReadiness || {}),
+    ...(memory.confirmed_readiness || {}),
+  };
+
+  return {
+    senderIdentityConfirmed: Boolean(
+      confirmed.sender_identity ||
+        confirmed.senderIdentity ||
+        slots.senderIdentityConfirmed ||
+        context.senderIdentityConfirmed
+    ),
+    replyInboxConfirmed: Boolean(
+      confirmed.reply_inbox_handling ||
+        confirmed.replyInboxHandling ||
+        slots.replyInboxConfirmed ||
+        context.replyInboxConfirmed
+    ),
+    replyMonitoringConfirmed: Boolean(
+      confirmed.reply_monitoring_owner ||
+        confirmed.replyMonitoringOwner ||
+        slots.replyMonitoringConfirmed ||
+        context.replyMonitoringConfirmed
+    ),
+    operationalPathChosen: Boolean(
+      confirmed.operational_path ||
+        confirmed.operationalPath ||
+        slots.operationalPathChosen ||
+        context.operationalPathChosen
+    ),
+    followUpTrackingConfirmed: Boolean(
+      confirmed.follow_up_tracking_process ||
+        confirmed.followUpTrackingProcess ||
+        slots.followUpTrackingConfirmed ||
+        context.followUpTrackingConfirmed
+    ),
+    trackingAccountApproved: Boolean(
+      confirmed.tracking_account_settings ||
+        confirmed.trackingAccountSettings ||
+        slots.trackingAccountApproved ||
+        context.trackingAccountApproved
+    ),
+    batch1ResultsReviewed: Boolean(
+      confirmed.broader_rollout_batch1 ||
+        confirmed.batch1ResultsReviewed ||
+        slots.batch1ResultsReviewed ||
+        context.batch1ResultsReviewed
+    ),
+    inapplicable: {
+      ...(summary.inapplicableReadiness || {}),
+      ...(context.inapplicableReadiness || {}),
+    },
+  };
+}
+
+function evaluateReadinessItemAgainstState(item, context = {}) {
+  const text = String(item || '').trim();
+  const concept = readinessConceptId(text);
+  const state = knownReadinessState(context);
+  const inapplicableReason =
+    state.inapplicable[concept] ||
+    state.inapplicable[text.toLowerCase()] ||
+    null;
+
+  if (inapplicableReason) {
+    return {
+      text,
+      status: 'inapplicable',
+      reason: String(inapplicableReason),
+      concept,
+      display: `${text} — inapplicable: ${inapplicableReason}`,
+    };
+  }
+
+  const confirmedByConcept = {
+    sender_identity: state.senderIdentityConfirmed,
+    reply_inbox_handling: state.replyInboxConfirmed,
+    reply_handling_generic: state.replyInboxConfirmed,
+    reply_monitoring_owner: state.replyMonitoringConfirmed,
+    operational_path: state.operationalPathChosen,
+    follow_up_tracking_process: state.followUpTrackingConfirmed,
+    tracking_account_settings: state.trackingAccountApproved,
+    broader_rollout_batch1: state.batch1ResultsReviewed,
+  };
+
+  if (confirmedByConcept[concept] === true) {
+    return {
+      text,
+      status: 'resolved',
+      reason: 'already confirmed in campaign state',
+      concept,
+      display: `${text} — already confirmed in campaign state`,
+    };
+  }
+
+  // Unknown or explicitly unresolved — keep operator wording; do not drop.
+  return {
+    text,
+    status: 'unresolved',
+    reason: null,
+    concept,
+    display: text,
+  };
+}
+
+/**
+ * Merge operator checklist with known readiness state.
+ * Operator-specified items win for wording and must not be collapsed into
+ * the default template. Distinct concepts stay distinct.
+ */
+function mergeOperatorReadinessChecklist(context = {}) {
+  const explicit =
+    (Array.isArray(context.unresolvedItems) && context.unresolvedItems) ||
+    (Array.isArray(context.readinessGaps) && context.readinessGaps) ||
+    null;
+
+  const fromMessage = extractOperatorReadinessChecklist(
+    context.operatorMessage || context.text || context.userMessage || ''
+  );
 
   const gate = context.gate || context.outreachLaunchGate || {};
   const summary = gate.operatorStateSummary || {};
   const fromSummary =
     (Array.isArray(summary.unresolvedItems) && summary.unresolvedItems) ||
     (Array.isArray(summary.readinessGaps) && summary.readinessGaps) ||
-    null;
-  if (fromSummary && fromSummary.length) {
-    return fromSummary.map((item) => String(item).trim()).filter(Boolean);
+    [];
+
+  const operatorItems = (explicit && explicit.length
+    ? explicit
+    : fromMessage.length
+      ? fromMessage
+      : []
+  )
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+
+  const sourceItems = operatorItems.length
+    ? operatorItems
+    : fromSummary.length
+      ? fromSummary.map((item) => String(item).trim()).filter(Boolean)
+      : DEFAULT_UNRESOLVED_READINESS_ITEMS.slice();
+
+  const usedConcepts = new Set();
+  const merged = [];
+
+  for (const item of sourceItems) {
+    const evaluated = evaluateReadinessItemAgainstState(item, context);
+    // Preserve distinct concepts — never collapse reply-to vs monitoring, etc.
+    if (usedConcepts.has(evaluated.concept) && !evaluated.concept.startsWith('custom:')) {
+      // Same concept repeated with different wording: keep first (operator order).
+      continue;
+    }
+    usedConcepts.add(evaluated.concept);
+    merged.push(evaluated.display);
   }
 
-  // Post readiness-only approval: list what still blocks a safe execute path.
-  return DEFAULT_UNRESOLVED_READINESS_ITEMS.slice();
+  return {
+    items: merged,
+    operatorSpecified: operatorItems.length > 0,
+    evaluations: sourceItems.map((item) =>
+      evaluateReadinessItemAgainstState(item, context)
+    ),
+  };
+}
+
+/**
+ * Resolve unresolved readiness items from context / gate / operator message.
+ */
+function unresolvedReadinessItems(context = {}) {
+  return mergeOperatorReadinessChecklist(context).items;
 }
 
 /**
  * Readiness check — list unresolved items only; never ask for execute approval.
+ * Preserves operator-specified checklist items unless they conflict with known
+ * state or safety rules.
  */
 function composeOperatorReadinessCheck(context = {}) {
-  const items = unresolvedReadinessItems(context);
+  const merged = mergeOperatorReadinessChecklist(context);
+  const items = merged.items;
   const closingAsk =
     context.closingAsk ||
     context.closingQuestion ||
     context.currentAsk ||
-    'Which readiness item should we resolve first?';
+    READINESS_CHECKLIST_CLOSING_ASK;
+  const safetyLine =
+    context.safetyLine ||
+    context.compactSafety ||
+    READINESS_CHECKLIST_SAFETY_LINE;
 
   const lines = [
     context.leadIn ||
@@ -732,8 +1009,7 @@ function composeOperatorReadinessCheck(context = {}) {
     '',
     ...items.map((item) => `- ${item}`),
     '',
-    context.safetyLine ||
-      compactSafetyLockLine({ short: context.compactSafety }),
+    safetyLine,
     '',
     closingAsk,
   ];
@@ -746,6 +1022,7 @@ function composeOperatorReadinessCheck(context = {}) {
     includeRendererSections: false,
     includeExpandedSafety: false,
     unresolvedItems: items,
+    operatorSpecifiedChecklist: merged.operatorSpecified,
     requiresExplicitApproval: false,
     sendsMade: false,
     crmWritesMade: false,
@@ -1105,6 +1382,8 @@ module.exports = {
   FULL_SAFETY_LINES,
   DEFAULT_NEXT_PATHS,
   DEFAULT_UNRESOLVED_READINESS_ITEMS,
+  READINESS_CHECKLIST_CLOSING_ASK,
+  READINESS_CHECKLIST_SAFETY_LINE,
   toConversationMode,
   toResponseMode,
   containsRendererBoilerplate,
@@ -1123,6 +1402,9 @@ module.exports = {
   composeFormalReviewGate,
   composeOperatorReadinessCheck,
   composeExecutionConfirmation,
+  extractOperatorReadinessChecklist,
+  mergeOperatorReadinessChecklist,
+  evaluateReadinessItemAgainstState,
   unresolvedReadinessItems,
   formatApprovedLaunchGateConversational,
   formatOperatorDiagnosticMessage,
