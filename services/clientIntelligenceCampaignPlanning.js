@@ -7916,24 +7916,59 @@ function produceReadinessFieldCorrectionResult(
     senderIdentityConfirmed:
       sender.senderIdentityConfirmed === true ||
       priorSlots.senderIdentityConfirmed === true,
-    replyInbox: reply.replyInbox || priorSlots.replyInbox || null,
+    replyInbox: reply.replyInbox || priorSlots.replyInbox || priorSlots.reply_inbox || null,
+    reply_inbox:
+      reply.replyInbox || priorSlots.replyInbox || priorSlots.reply_inbox || null,
     replyToMatchesSender:
       reply.replyToMatchesSender != null
         ? reply.replyToMatchesSender
         : priorSlots.replyToMatchesSender != null
           ? priorSlots.replyToMatchesSender
-          : null,
+          : priorSlots.reply_to_matches_sender != null
+            ? priorSlots.reply_to_matches_sender
+            : priorSlots.sameAsSender != null
+              ? priorSlots.sameAsSender
+              : null,
+    reply_to_matches_sender:
+      reply.replyToMatchesSender != null
+        ? reply.replyToMatchesSender
+        : priorSlots.replyToMatchesSender != null
+          ? priorSlots.replyToMatchesSender
+          : priorSlots.reply_to_matches_sender != null
+            ? priorSlots.reply_to_matches_sender
+            : priorSlots.sameAsSender != null
+              ? priorSlots.sameAsSender
+              : null,
+    sameAsSender:
+      reply.replyToMatchesSender != null
+        ? reply.replyToMatchesSender
+        : priorSlots.replyToMatchesSender != null
+          ? priorSlots.replyToMatchesSender
+          : priorSlots.sameAsSender != null
+            ? priorSlots.sameAsSender
+            : null,
     replyMonitoringOwner:
       replyMonitoringBatchReview.replyMonitoringOwner ||
       reply.replyMonitoringOwner ||
       priorSlots.replyMonitoringOwner ||
+      priorSlots.reply_monitoring_owner ||
+      priorSlots.monitoringOwner ||
+      null,
+    reply_monitoring_owner:
+      replyMonitoringBatchReview.replyMonitoringOwner ||
+      reply.replyMonitoringOwner ||
+      priorSlots.replyMonitoringOwner ||
+      priorSlots.reply_monitoring_owner ||
+      priorSlots.monitoringOwner ||
       null,
     replyInboxConfirmed:
       reply.replyHandlingConfirmed === true ||
-      priorSlots.replyInboxConfirmed === true,
+      priorSlots.replyInboxConfirmed === true ||
+      priorSlots.replyHandlingConfirmed === true,
     replyHandlingConfirmed:
       reply.replyHandlingConfirmed === true ||
-      priorSlots.replyHandlingConfirmed === true,
+      priorSlots.replyHandlingConfirmed === true ||
+      priorSlots.replyInboxConfirmed === true,
     operationalPathId:
       operationalPath.operationalPathId ||
       priorSlots.operationalPathId ||
@@ -8006,6 +8041,21 @@ function produceReadinessFieldCorrectionResult(
   if (composed.itemConfirmed && composed.readinessItemId === 'reply_handling') {
     nextSlots.replyInboxConfirmed = true;
     nextSlots.replyHandlingConfirmed = true;
+    // Canonicalize reply-handling fields (and aliases) at confirmation time.
+    if (reply.replyInbox) {
+      nextSlots.replyInbox = reply.replyInbox;
+      nextSlots.reply_inbox = reply.replyInbox;
+    }
+    if (reply.replyToMatchesSender != null) {
+      nextSlots.replyToMatchesSender = reply.replyToMatchesSender;
+      nextSlots.reply_to_matches_sender = reply.replyToMatchesSender;
+      nextSlots.sameAsSender = reply.replyToMatchesSender;
+    }
+    if (reply.replyMonitoringOwner) {
+      nextSlots.replyMonitoringOwner = reply.replyMonitoringOwner;
+      nextSlots.reply_monitoring_owner = reply.replyMonitoringOwner;
+      nextSlots.monitoringOwner = reply.replyMonitoringOwner;
+    }
   }
   if (
     composed.itemConfirmed &&

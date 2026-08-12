@@ -175,6 +175,12 @@ module.exports = {
     ConversationalResponsePolicy.mergeSenderIdentityState,
   mergeReplyHandlingState:
     ConversationalResponsePolicy.mergeReplyHandlingState,
+  normalizeReplyHandlingFields:
+    ConversationalResponsePolicy.normalizeReplyHandlingFields,
+  coerceReplyToMatchesSender:
+    ConversationalResponsePolicy.coerceReplyToMatchesSender,
+  replyHandlingFieldsComplete:
+    ConversationalResponsePolicy.replyHandlingFieldsComplete,
   mergeOperationalPathState:
     ConversationalResponsePolicy.mergeOperationalPathState,
   mergeFollowUpTrackingState:

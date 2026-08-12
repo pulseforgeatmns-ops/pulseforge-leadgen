@@ -1163,43 +1163,151 @@ function parseReplyHandlingFields(text) {
 }
 
 /**
+ * Coerce reply-to / same-as-sender values from boolean, yes/no, or match phrases.
+ * @returns {boolean|null}
+ */
+function coerceReplyToMatchesSender(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'boolean') return value;
+  const s = String(value).trim().toLowerCase();
+  if (!s) return null;
+  if (/^(?:yes|y|true|1|same|matches?)$/i.test(s)) return true;
+  if (/^(?:no|n|false|0|different|mismatch(?:es)?)$/i.test(s)) return false;
+  if (/\bmatch(?:es)?\s+(?:the\s+)?sender\b/i.test(s)) return true;
+  if (/\bdifferent\s+from\s+(?:the\s+)?sender\b/i.test(s)) return false;
+  return null;
+}
+
+function firstDefined(...values) {
+  for (const v of values) {
+    if (v !== undefined && v !== null && v !== '') return v;
+  }
+  return null;
+}
+
+function looksLikeEmailValue(value) {
+  return typeof value === 'string' && /@/.test(value);
+}
+
+/**
+ * Normalize reply-handling readiness fields from any stored alias shape.
+ * Canonical keys:
+ *   replyInbox, replyToMatchesSender, replyMonitoringOwner
+ *
+ * Accepts aliases such as:
+ *   reply_inbox, replyTo, reply_to, reply_to_matches_sender, sameAsSender,
+ *   reply_monitoring_owner, monitoringOwner
+ */
+function normalizeReplyHandlingFields(source = {}) {
+  const s = source && typeof source === 'object' ? source : {};
+
+  let replyInboxRaw = firstDefined(
+    s.replyInbox,
+    s.reply_inbox,
+    s.replyInboxAddress,
+    s.reply_inbox_address,
+    s.inbox
+  );
+
+  const replyToRaw = firstDefined(s.replyTo, s.reply_to);
+  // replyTo / reply_to may be an inbox address OR a match yes/no flag.
+  if (!replyInboxRaw && looksLikeEmailValue(replyToRaw)) {
+    replyInboxRaw = replyToRaw;
+  }
+
+  const replyInbox = replyInboxRaw
+    ? normalizeCapturedEmail(String(replyInboxRaw))
+    : null;
+
+  let replyToMatchesSender = coerceReplyToMatchesSender(
+    firstDefined(
+      s.replyToMatchesSender,
+      s.reply_to_matches_sender,
+      s.sameAsSender,
+      s.same_as_sender,
+      s.replyToMatch,
+      s.reply_to_match,
+      s.replyToMatches,
+      s.reply_to_matches
+    )
+  );
+  if (
+    replyToMatchesSender === null &&
+    replyToRaw != null &&
+    !looksLikeEmailValue(replyToRaw)
+  ) {
+    replyToMatchesSender = coerceReplyToMatchesSender(replyToRaw);
+  }
+
+  const replyMonitoringOwnerRaw = firstDefined(
+    s.replyMonitoringOwner,
+    s.reply_monitoring_owner,
+    s.monitoringOwner,
+    s.monitoring_owner,
+    s.owner
+  );
+  const replyMonitoringOwner = replyMonitoringOwnerRaw
+    ? String(replyMonitoringOwnerRaw).trim().replace(/[.;,]+$/, '')
+    : null;
+
+  const confirmedFlag = Boolean(
+    s.replyInboxConfirmed === true ||
+      s.replyHandlingConfirmed === true ||
+      s.reply_inbox_confirmed === true ||
+      s.reply_handling_confirmed === true ||
+      s.confirmed === true
+  );
+  const fieldsComplete = Boolean(
+    replyInbox && replyToMatchesSender !== null && replyMonitoringOwner
+  );
+
+  return {
+    replyInbox,
+    replyToMatchesSender,
+    replyMonitoringOwner,
+    sameAsSender: replyToMatchesSender,
+    monitoringOwner: replyMonitoringOwner,
+    replyInboxConfirmed: confirmedFlag || fieldsComplete,
+    replyHandlingConfirmed: confirmedFlag || fieldsComplete,
+    fieldsComplete,
+    missing: [
+      !replyInbox ? 'reply inbox' : null,
+      replyToMatchesSender === null ? 'reply-to match sender' : null,
+      !replyMonitoringOwner ? 'reply monitoring owner' : null,
+    ].filter(Boolean),
+  };
+}
+
+function replyHandlingFieldsComplete(fields = {}) {
+  const n = normalizeReplyHandlingFields(fields);
+  return n.fieldsComplete === true;
+}
+
+/**
  * Merge prior reply-handling slots with newly parsed fields.
  */
 function mergeReplyHandlingState(prior = {}, parsed = {}) {
+  const normalizedPrior = normalizeReplyHandlingFields(prior);
   const replyInboxRaw =
     parsed.replyInbox != null && parsed.replyInbox !== ''
       ? parsed.replyInbox
-      : prior.replyInbox || prior.reply_inbox || null;
+      : normalizedPrior.replyInbox;
   const replyInbox = replyInboxRaw
     ? normalizeCapturedEmail(replyInboxRaw)
     : null;
   const sameAsSender =
     parsed.sameAsSender != null
-      ? parsed.sameAsSender
-      : prior.replyToMatchesSender != null
-        ? prior.replyToMatchesSender
-        : prior.sameAsSender != null
-          ? prior.sameAsSender
-          : null;
+      ? coerceReplyToMatchesSender(parsed.sameAsSender)
+      : normalizedPrior.replyToMatchesSender;
   const monitoringOwner =
     parsed.monitoringOwner != null && parsed.monitoringOwner !== ''
-      ? parsed.monitoringOwner
-      : prior.replyMonitoringOwner || prior.monitoringOwner || null;
-  const confirmed = Boolean(
-    replyInbox && sameAsSender !== null && monitoringOwner
-  );
-  return {
+      ? String(parsed.monitoringOwner).trim().replace(/[.;,]+$/, '')
+      : normalizedPrior.replyMonitoringOwner;
+  return normalizeReplyHandlingFields({
     replyInbox,
     replyToMatchesSender: sameAsSender,
     replyMonitoringOwner: monitoringOwner,
-    replyInboxConfirmed: confirmed,
-    replyHandlingConfirmed: confirmed,
-    missing: [
-      !replyInbox ? 'reply inbox' : null,
-      sameAsSender === null ? 'reply-to match sender' : null,
-      !monitoringOwner ? 'reply monitoring owner' : null,
-    ].filter(Boolean),
-  };
+  });
 }
 
 /**
@@ -2340,7 +2448,9 @@ function composeReadinessFieldCorrection(context = {}) {
       }
     }
   } else if (activeId === 'reply_handling') {
-    const priorReply = {
+    const priorReply = normalizeReplyHandlingFields({
+      ...(context.priorFields || {}),
+      ...slots,
       replyInbox: slots.replyInbox || context.replyInbox || null,
       replyToMatchesSender:
         slots.replyToMatchesSender != null
@@ -2352,7 +2462,7 @@ function composeReadinessFieldCorrection(context = {}) {
         slots.replyMonitoringOwner ||
         context.replyMonitoringOwner ||
         null,
-    };
+    });
     const replyState = mergeReplyHandlingState(priorReply, replyParsed);
     const multiFieldUpdate = replyParsed.updatedFields.length >= 2;
     const fullReplyBlock =
@@ -3516,34 +3626,28 @@ function buildConfirmedReadinessRecords(context = {}, patch = {}) {
     }
   }
 
-  const replyInbox =
-    patch.replyInbox ||
-    slots.replyInbox ||
-    context.replyInbox ||
-    (prior.reply_handling && prior.reply_handling.replyInbox) ||
-    null;
-  const replyToMatchesSender =
-    patch.replyToMatchesSender != null
-      ? patch.replyToMatchesSender
-      : slots.replyToMatchesSender != null
-        ? slots.replyToMatchesSender
-        : context.replyToMatchesSender != null
-          ? context.replyToMatchesSender
-          : prior.reply_handling &&
-              prior.reply_handling.replyToMatchesSender != null
-            ? prior.reply_handling.replyToMatchesSender
-            : null;
-  const replyMonitoringOwner =
-    patch.replyMonitoringOwner ||
-    slots.replyMonitoringOwner ||
-    context.replyMonitoringOwner ||
-    (prior.reply_handling && prior.reply_handling.replyMonitoringOwner) ||
-    null;
+  const replyNormalized = normalizeReplyHandlingFields({
+    ...((prior.reply_handling && typeof prior.reply_handling === 'object'
+      ? prior.reply_handling
+      : null) ||
+      (prior.reply_inbox_handling &&
+      typeof prior.reply_inbox_handling === 'object'
+        ? prior.reply_inbox_handling
+        : null) ||
+      {}),
+    ...slots,
+    ...context,
+    ...patch,
+  });
+  const replyInbox = replyNormalized.replyInbox;
+  const replyToMatchesSender = replyNormalized.replyToMatchesSender;
+  const replyMonitoringOwner = replyNormalized.replyMonitoringOwner;
   if (
     patch.replyInboxConfirmed === true ||
     patch.replyHandlingConfirmed === true ||
     slots.replyInboxConfirmed === true ||
     slots.replyHandlingConfirmed === true ||
+    replyNormalized.replyHandlingConfirmed === true ||
     (replyInbox && replyToMatchesSender !== null && replyMonitoringOwner)
   ) {
     if (replyInbox && replyToMatchesSender !== null && replyMonitoringOwner) {
@@ -3552,6 +3656,12 @@ function buildConfirmedReadinessRecords(context = {}, patch = {}) {
         replyInbox,
         replyToMatchesSender,
         replyMonitoringOwner,
+        // Persist common aliases so later readers cannot miss them.
+        reply_inbox: replyInbox,
+        reply_to_matches_sender: replyToMatchesSender,
+        sameAsSender: replyToMatchesSender,
+        reply_monitoring_owner: replyMonitoringOwner,
+        monitoringOwner: replyMonitoringOwner,
       };
       next.reply_inbox_handling = next.reply_handling;
     }
@@ -3754,24 +3864,44 @@ function resolveSenderIdentityFromContext(context = {}) {
  */
 function resolveReplyHandlingFromContext(context = {}) {
   const slots = context.slots || {};
-  const record = replyRecordFromConfirmed(getConfirmedReadinessRecords(context)) || {};
-  const prior = {
+  const record =
+    replyRecordFromConfirmed(getConfirmedReadinessRecords(context)) || {};
+  // Normalize aliases from slots, context, and confirmed records before merge.
+  const prior = normalizeReplyHandlingFields({
+    ...record,
+    ...context,
+    ...slots,
     replyInbox:
-      slots.replyInbox || context.replyInbox || record.replyInbox || null,
-    replyToMatchesSender:
-      slots.replyToMatchesSender != null
-        ? slots.replyToMatchesSender
-        : context.replyToMatchesSender != null
-          ? context.replyToMatchesSender
-          : record.replyToMatchesSender != null
-            ? record.replyToMatchesSender
-            : null,
+      slots.replyInbox ||
+      slots.reply_inbox ||
+      context.replyInbox ||
+      context.reply_inbox ||
+      record.replyInbox ||
+      record.reply_inbox ||
+      null,
+    replyToMatchesSender: firstDefined(
+      slots.replyToMatchesSender,
+      slots.reply_to_matches_sender,
+      slots.sameAsSender,
+      slots.same_as_sender,
+      context.replyToMatchesSender,
+      context.reply_to_matches_sender,
+      context.sameAsSender,
+      record.replyToMatchesSender,
+      record.reply_to_matches_sender,
+      record.sameAsSender
+    ),
     replyMonitoringOwner:
       slots.replyMonitoringOwner ||
+      slots.reply_monitoring_owner ||
+      slots.monitoringOwner ||
       context.replyMonitoringOwner ||
+      context.reply_monitoring_owner ||
       record.replyMonitoringOwner ||
+      record.reply_monitoring_owner ||
+      record.monitoringOwner ||
       null,
-  };
+  });
   const parsed = parseReplyHandlingFields(
     context.operatorMessage || context.text || context.userMessage || ''
   );
@@ -3973,12 +4103,15 @@ function knownReadinessState(context = {}) {
   const replyConfirmed = Boolean(
     confirmed.reply_inbox_handling ||
       confirmed.replyInboxHandling ||
+      confirmed.reply_handling ||
+      confirmed.replyHandling ||
       (replyRecord && replyRecord.confirmed) ||
       slots.replyInboxConfirmed ||
       slots.replyHandlingConfirmed ||
       context.replyInboxConfirmed ||
       context.replyHandlingConfirmed ||
-      replyResolved.replyHandlingConfirmed
+      replyResolved.replyHandlingConfirmed ||
+      replyResolved.fieldsComplete
   );
 
   return {
@@ -4646,11 +4779,19 @@ function composeCampaignReadySummary(context = {}) {
   const senderFullyPresent = Boolean(
     sender.senderName && sender.senderEmail && sender.senderSignature
   );
-  const replyFullyPresent = Boolean(
-    reply.replyInbox &&
-      reply.replyToMatchesSender !== null &&
-      reply.replyMonitoringOwner
-  );
+  const replyNormalized = normalizeReplyHandlingFields({
+    ...reply,
+    ...(state.confirmedReadinessRecords &&
+    state.confirmedReadinessRecords.reply_handling
+      ? state.confirmedReadinessRecords.reply_handling
+      : {}),
+    ...(state.confirmedReadinessRecords &&
+    state.confirmedReadinessRecords.reply_inbox_handling
+      ? state.confirmedReadinessRecords.reply_inbox_handling
+      : {}),
+    ...slots,
+  });
+  const replyFullyPresent = replyHandlingFieldsComplete(replyNormalized);
 
   const lines = [];
   lines.push(`${businessName} ${batchLabel} campaign-ready summary`);
@@ -4683,15 +4824,20 @@ function composeCampaignReadySummary(context = {}) {
   }
   lines.push('');
 
-  if (state.replyInboxConfirmed && replyFullyPresent) {
+  if (
+    (state.replyInboxConfirmed || replyNormalized.replyHandlingConfirmed) &&
+    replyFullyPresent
+  ) {
     lines.push('Reply handling confirmed:');
-    lines.push(`- reply inbox: ${reply.replyInbox}`);
+    lines.push(`- reply inbox: ${replyNormalized.replyInbox}`);
     lines.push(
       `- reply-to matches sender: ${
-        reply.replyToMatchesSender ? 'yes' : 'no'
+        replyNormalized.replyToMatchesSender ? 'yes' : 'no'
       }`
     );
-    lines.push(`- reply monitoring owner: ${reply.replyMonitoringOwner}`);
+    lines.push(
+      `- reply monitoring owner: ${replyNormalized.replyMonitoringOwner}`
+    );
   } else {
     lines.push('Reply handling: not fully confirmed');
   }
@@ -5513,6 +5659,9 @@ module.exports = {
   parseReplyMonitoringBatchReviewFields,
   mergeSenderIdentityState,
   mergeReplyHandlingState,
+  normalizeReplyHandlingFields,
+  coerceReplyToMatchesSender,
+  replyHandlingFieldsComplete,
   mergeOperationalPathState,
   mergeFollowUpTrackingState,
   mergeReplyMonitoringBatchReviewState,
