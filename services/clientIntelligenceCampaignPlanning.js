@@ -7792,6 +7792,7 @@ function produceReadinessFieldCorrectionResult(
 
   const sender = composed.senderIdentity || {};
   const reply = composed.replyHandling || {};
+  const operationalPath = composed.operationalPath || {};
   const nextSlots = {
     ...priorSlots,
     launchGateApproved: true,
@@ -7820,6 +7821,17 @@ function produceReadinessFieldCorrectionResult(
     replyHandlingConfirmed:
       reply.replyHandlingConfirmed === true ||
       priorSlots.replyHandlingConfirmed === true,
+    operationalPathId:
+      operationalPath.operationalPathId ||
+      priorSlots.operationalPathId ||
+      null,
+    operationalPathLabel:
+      operationalPath.operationalPathLabel ||
+      priorSlots.operationalPathLabel ||
+      null,
+    operationalPathChosen:
+      operationalPath.operationalPathChosen === true ||
+      priorSlots.operationalPathChosen === true,
   };
 
   if (composed.itemConfirmed && composed.readinessItemId === 'sender_identity') {
@@ -7829,10 +7841,26 @@ function produceReadinessFieldCorrectionResult(
     nextSlots.replyInboxConfirmed = true;
     nextSlots.replyHandlingConfirmed = true;
   }
+  if (
+    composed.itemConfirmed &&
+    (composed.readinessItemId === 'operational_path' ||
+      composed.readinessItemId === 'operational_path_selection')
+  ) {
+    nextSlots.operationalPathChosen = true;
+    if (operationalPath.operationalPathId) {
+      nextSlots.operationalPathId = operationalPath.operationalPathId;
+    }
+    if (operationalPath.operationalPathLabel) {
+      nextSlots.operationalPathLabel = operationalPath.operationalPathLabel;
+    }
+  }
 
   const missing =
     (sender.missing && sender.missing.length && sender.missing) ||
     (reply.missing && reply.missing.length && reply.missing) ||
+    (operationalPath.missing &&
+      operationalPath.missing.length &&
+      operationalPath.missing) ||
     null;
 
   const currentAsk = composed.nextReadinessItem
@@ -7866,6 +7894,8 @@ function produceReadinessFieldCorrectionResult(
       senderIdentityConfirmed: nextSlots.senderIdentityConfirmed === true,
       replyHandling: reply,
       replyInboxConfirmed: nextSlots.replyInboxConfirmed === true,
+      operationalPath,
+      operationalPathChosen: nextSlots.operationalPathChosen === true,
       launchGateApproved: true,
       launchReady: true,
       launched: false,

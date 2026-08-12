@@ -4350,6 +4350,131 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.equal(reply.slots.replyMonitoringOwner, 'Jacob Maynard');
   });
 
+  it('operational path selection confirms readiness and advances to follow-up tracking', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const reply = buildCampaignPlanningReply(
+      [
+        'Select operational path: manual send export for operator review.',
+        'This is path selection only, not execute approval.',
+      ].join(' '),
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        launchGateApproved: true,
+        intent: 'readiness_field_correction',
+        readinessItemId: 'operational_path',
+        activeReadinessItemId: 'operational_path',
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+          activeReadinessItemId: 'operational_path',
+          senderIdentityConfirmed: true,
+          senderName: 'Jacob Maynard',
+          senderEmail: 'jacob@goanchorcleaning.com',
+          senderSignature: 'Jacob Maynard, Anchor Cleaning',
+          replyInboxConfirmed: true,
+          replyHandlingConfirmed: true,
+          replyInbox: 'jacob@goanchorcleaning.com',
+          replyToMatchesSender: true,
+          replyMonitoringOwner: 'Jacob Maynard',
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'readiness_field_correction');
+    assert.equal(reply.operationalPathChosen, true);
+    assert.equal(reply.executionPending, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.notEqual(reply.responseMode, 'execution_confirmation');
+    assert.notEqual(reply.responseMode, 'operator_readiness_check');
+    assert.notEqual(reply.responseMode, 'operator_state_summary');
+    assert.match(reply.message, /^Operational path is selected:/m);
+    assert.match(
+      reply.message,
+      /- manual send export for operator review/i
+    );
+    assert.match(
+      reply.message,
+      /This is path selection only\. No export has been prepared\./i
+    );
+    assert.match(
+      reply.message,
+      /Next readiness item:\s*follow-up tracking process/i
+    );
+    assert.match(
+      reply.message,
+      /^Where should follow-up status be tracked\?/m
+    );
+    assert.match(
+      reply.message,
+      /^Should Follow-up 1 be planned for about 3 business days after first touch\?/m
+    );
+    assert.match(
+      reply.message,
+      /^Should Follow-up 2 be planned for about 7 business days after first touch\?/m
+    );
+    assert.match(
+      reply.message,
+      /^Should all follow-ups remain review-first\/manual unless explicitly enabled later\?/m
+    );
+    assert.match(
+      reply.message,
+      /Nothing external has happened\. Sends, export, and CRM writes remain locked\./i
+    );
+    assert.doesNotMatch(reply.message, /Still unresolved before any export/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Which readiness item should we resolve first/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(reply.message, /Exact action/i);
+    assert.equal(reply.slots.operationalPathChosen, true);
+    assert.equal(reply.slots.operationalPathId, 'manual_send_export');
+    assert.equal(
+      reply.slots.operationalPathLabel,
+      'manual send export for operator review'
+    );
+    assert.equal(reply.activeReadinessItemId, 'follow_up_tracking');
+  });
+
   it('operator-facing draft digest comes first without banned fragments', () => {
     const { review, ctx, strategy, plan } = chainFixtures();
     const draft = buildOutreachDraftPreview(
