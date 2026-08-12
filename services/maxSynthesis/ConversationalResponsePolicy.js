@@ -243,6 +243,14 @@ const READINESS_NEXT_ITEM_PROMPTS = Object.freeze({
       'Should all follow-ups remain review-first/manual unless explicitly enabled later?',
     ]),
   }),
+  reply_monitoring_batch1: Object.freeze({
+    id: 'reply_monitoring_batch1',
+    label: 'reply monitoring / Batch 1 review process',
+    ask: 'Who will monitor replies, how should responses be reviewed, and should broader rollout remain blocked until Batch 1 results are reviewed?',
+    questions: Object.freeze([
+      'Who will monitor replies, how should responses be reviewed, and should broader rollout remain blocked until Batch 1 results are reviewed?',
+    ]),
+  }),
 });
 
 /** Default unresolved items after Launch Gate readiness-only approval. */
@@ -651,6 +659,8 @@ function looksLikeNonExecutionIntent(text) {
   ) {
     return true;
   }
+  // Follow-up tracking answers are readiness confirmation — never execution.
+  if (parseFollowUpTrackingFields(s).hasAny) return true;
   if (/\b(?:summarize|summarise)\b/i.test(s)) return true;
   if (
     /\bhelp\s+me\s+(?:decide|resolve|understand|review|choose)\b/i.test(s)
@@ -1224,25 +1234,300 @@ function mergeOperationalPathState(prior = {}, parsed = {}) {
   };
 }
 
+/**
+ * Normalize readiness item ids so concept keys and substep ids align.
+ * Operator answers are interpreted relative to the active substep — they do
+ * not need to restate the internal key.
+ */
+function normalizeReadinessItemId(id) {
+  const s = String(id || '').trim();
+  if (!s) return null;
+  if (s === 'follow_up_tracking_process') return 'follow_up_tracking';
+  if (s === 'operational_path_selection') return 'operational_path';
+  if (s === 'reply_inbox_handling') return 'reply_handling';
+  if (s === 'sender') return 'sender_identity';
+  if (
+    s === 'reply_monitoring' ||
+    s === 'reply_monitoring_owner' ||
+    s === 'broader_rollout_batch1'
+  ) {
+    return 'reply_monitoring_batch1';
+  }
+  return s;
+}
+
+/**
+ * Canonical display for follow-up tracking location.
+ */
+function normalizeFollowUpTrackingLocation(raw) {
+  let s = String(raw || '')
+    .trim()
+    .replace(/[.;,]+$/, '')
+    .replace(/\s+for\s+now\b/i, '')
+    .trim();
+  if (!s) return null;
+  if (
+    /manual[- ]?send\s+export(?:\s*\/\s*|\s+|\/)review\s+sheet/i.test(s)
+  ) {
+    return 'the manual-send export/review sheet';
+  }
+  if (/^the\s+/i.test(s) === false && /\bsheet\b/i.test(s)) {
+    s = `the ${s}`;
+  }
+  return s;
+}
+
+/**
+ * Canonical Follow-up 1 / 2 timing labels.
+ */
+function normalizeFollowUpTiming(raw, which) {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  const daysMatch = s.match(/\b(\d+)\s+business\s+days?\b/i);
+  if (daysMatch) {
+    const n = Number(daysMatch[1]);
+    if (which === 1 && n === 3) {
+      return 'about 3 business days after first touch';
+    }
+    if (which === 2 && n === 7) {
+      return 'about 7 business days after first touch';
+    }
+    return `about ${n} business days after first touch`;
+  }
+  if (which === 1 && /\byes\b/i.test(s)) {
+    return 'about 3 business days after first touch';
+  }
+  if (which === 2 && /\byes\b/i.test(s)) {
+    return 'about 7 business days after first touch';
+  }
+  return s.replace(/[.;,]+$/, '').trim() || null;
+}
+
+/**
+ * Parse follow-up tracking fields from free text (fills or corrections).
+ * Interprets answers relative to the active follow-up tracking substep —
+ * operator does not need to restate the readiness key.
+ * @returns {{
+ *   trackingLocation: string|null,
+ *   followUp1Timing: string|null,
+ *   followUp2Timing: string|null,
+ *   reviewFirstManual: boolean|null,
+ *   automaticFollowUpSendsApproved: boolean|null,
+ *   updatedFields: string[],
+ *   hasAny: boolean
+ * }}
+ */
+function parseFollowUpTrackingFields(text) {
+  const s = String(text || '').trim();
+  const empty = {
+    trackingLocation: null,
+    followUp1Timing: null,
+    followUp2Timing: null,
+    reviewFirstManual: null,
+    automaticFollowUpSendsApproved: null,
+    updatedFields: [],
+    hasAny: false,
+  };
+  if (!s) return empty;
+
+  const updatedFields = [];
+  let trackingLocation = null;
+  let followUp1Timing = null;
+  let followUp2Timing = null;
+  let reviewFirstManual = null;
+  let automaticFollowUpSendsApproved = null;
+
+  const locationLabeled = s.match(
+    new RegExp(
+      READINESS_FIELD_LINE_PREFIX +
+        String.raw`(?:follow[- ]?up\s+)?(?:status\s+)?(?:tracked\s+in|tracking\s+location|track(?:ed|ing)?\s+(?:status\s+)?(?:in|location))\s*[:\-–—]\s*([^\n]+)`,
+      'i'
+    )
+  );
+  const locationPhrase = s.match(
+    /\b(?:follow[- ]?up\s+status\s+)?(?:should\s+be\s+)?tracked\s+in\s+([^\n.]+)/i
+  );
+  if (locationLabeled) {
+    trackingLocation = normalizeFollowUpTrackingLocation(locationLabeled[1]);
+  } else if (locationPhrase) {
+    trackingLocation = normalizeFollowUpTrackingLocation(locationPhrase[1]);
+  } else if (
+    /manual[- ]?send\s+export(?:\s*\/\s*|\s+|\/)review\s+sheet/i.test(s)
+  ) {
+    trackingLocation = normalizeFollowUpTrackingLocation(
+      'manual-send export/review sheet'
+    );
+  }
+  if (trackingLocation) updatedFields.push('tracking_location');
+
+  const fu1Labeled = s.match(
+    new RegExp(
+      READINESS_FIELD_LINE_PREFIX +
+        String.raw`follow[- ]?up\s*1\s*(?:timing|planned)?\s*[:\-–—]\s*([^\n]+)`,
+      'i'
+    )
+  );
+  const fu1Phrase = s.match(
+    /\bfollow[- ]?up\s*1\b[\s\S]{0,120}?\b((?:about\s+)?\d+\s+business\s+days?\s+after\s+first\s+touch)\b/i
+  );
+  const fu1Bare = s.match(
+    /\b(?:about\s+)?3\s+business\s+days?\s+after\s+first\s+touch\b/i
+  );
+  if (fu1Labeled) {
+    followUp1Timing = normalizeFollowUpTiming(fu1Labeled[1], 1);
+  } else if (fu1Phrase) {
+    followUp1Timing = normalizeFollowUpTiming(fu1Phrase[1], 1);
+  } else if (fu1Bare) {
+    followUp1Timing = normalizeFollowUpTiming(fu1Bare[0], 1);
+  }
+  if (followUp1Timing) updatedFields.push('follow_up_1_timing');
+
+  const fu2Labeled = s.match(
+    new RegExp(
+      READINESS_FIELD_LINE_PREFIX +
+        String.raw`follow[- ]?up\s*2\s*(?:timing|planned)?\s*[:\-–—]\s*([^\n]+)`,
+      'i'
+    )
+  );
+  const fu2Phrase = s.match(
+    /\bfollow[- ]?up\s*2\b[\s\S]{0,120}?\b((?:about\s+)?\d+\s+business\s+days?\s+after\s+first\s+touch)\b/i
+  );
+  const fu2Bare = s.match(
+    /\b(?:about\s+)?7\s+business\s+days?\s+after\s+first\s+touch\b/i
+  );
+  if (fu2Labeled) {
+    followUp2Timing = normalizeFollowUpTiming(fu2Labeled[1], 2);
+  } else if (fu2Phrase) {
+    followUp2Timing = normalizeFollowUpTiming(fu2Phrase[1], 2);
+  } else if (fu2Bare) {
+    followUp2Timing = normalizeFollowUpTiming(fu2Bare[0], 2);
+  }
+  if (followUp2Timing) updatedFields.push('follow_up_2_timing');
+
+  if (
+    /\breview[- ]?first(?:\s*\/\s*|\s+|\/)manual\b/i.test(s) ||
+    /\bremain\s+review[- ]?first\b/i.test(s) ||
+    /\bunless\s+explicitly\s+enabled\s+later\b/i.test(s)
+  ) {
+    reviewFirstManual = true;
+    updatedFields.push('review_first_manual');
+  } else if (
+    /\b(?:do\s+not|don't)\s+remain\s+review[- ]?first\b/i.test(s) ||
+    /\breview[- ]?first(?:\s*\/\s*|\s+|\/)manual\s*[:\-–—]\s*(?:no|false)\b/i.test(
+      s
+    )
+  ) {
+    reviewFirstManual = false;
+    updatedFields.push('review_first_manual');
+  }
+
+  if (
+    /\bno\s+automatic\s+follow[- ]?up\s+sends?\s+(?:are\s+)?approved\b/i.test(
+      s
+    ) ||
+    /\bautomatic\s+follow[- ]?up\s+sends?\s+(?:are\s+)?not\s+approved\b/i.test(
+      s
+    ) ||
+    /\b(?:do\s+not|don't)\s+approve\s+automatic\s+follow[- ]?up\b/i.test(s)
+  ) {
+    automaticFollowUpSendsApproved = false;
+    updatedFields.push('automatic_follow_up_sends');
+  } else if (
+    /\bautomatic\s+follow[- ]?up\s+sends?\s+(?:are\s+)?approved\b/i.test(s) ||
+    /\bapprove(?:d)?\s+automatic\s+follow[- ]?up\s+sends?\b/i.test(s)
+  ) {
+    automaticFollowUpSendsApproved = true;
+    updatedFields.push('automatic_follow_up_sends');
+  }
+
+  return {
+    trackingLocation,
+    followUp1Timing,
+    followUp2Timing,
+    reviewFirstManual,
+    automaticFollowUpSendsApproved,
+    updatedFields: [...new Set(updatedFields)],
+    hasAny: updatedFields.length > 0,
+  };
+}
+
+/**
+ * Merge prior follow-up tracking slots with newly parsed fields.
+ */
+function mergeFollowUpTrackingState(prior = {}, parsed = {}) {
+  const trackingLocation =
+    parsed.trackingLocation != null && parsed.trackingLocation !== ''
+      ? parsed.trackingLocation
+      : prior.followUpTrackingLocation ||
+        prior.trackingLocation ||
+        null;
+  const followUp1Timing =
+    parsed.followUp1Timing != null && parsed.followUp1Timing !== ''
+      ? parsed.followUp1Timing
+      : prior.followUp1Timing || null;
+  const followUp2Timing =
+    parsed.followUp2Timing != null && parsed.followUp2Timing !== ''
+      ? parsed.followUp2Timing
+      : prior.followUp2Timing || null;
+  const reviewFirstManual =
+    parsed.reviewFirstManual != null
+      ? parsed.reviewFirstManual
+      : prior.followUpReviewFirstManual != null
+        ? prior.followUpReviewFirstManual
+        : prior.reviewFirstManual != null
+          ? prior.reviewFirstManual
+          : null;
+  const automaticFollowUpSendsApproved =
+    parsed.automaticFollowUpSendsApproved != null
+      ? parsed.automaticFollowUpSendsApproved
+      : prior.automaticFollowUpSendsApproved != null
+        ? prior.automaticFollowUpSendsApproved
+        : null;
+  const confirmed = Boolean(
+    trackingLocation &&
+      followUp1Timing &&
+      followUp2Timing &&
+      reviewFirstManual !== null &&
+      automaticFollowUpSendsApproved !== null
+  );
+  return {
+    followUpTrackingLocation: trackingLocation,
+    followUp1Timing,
+    followUp2Timing,
+    followUpReviewFirstManual: reviewFirstManual,
+    automaticFollowUpSendsApproved,
+    followUpTrackingConfirmed: confirmed,
+    missing: [
+      !trackingLocation ? 'tracking location' : null,
+      !followUp1Timing ? 'Follow-up 1 timing' : null,
+      !followUp2Timing ? 'Follow-up 2 timing' : null,
+      reviewFirstManual === null ? 'review-first/manual status' : null,
+      automaticFollowUpSendsApproved === null
+        ? 'automatic follow-up send approval'
+        : null,
+    ].filter(Boolean),
+  };
+}
+
 function resolveActiveReadinessItemId(opts = {}) {
-  if (opts.activeReadinessItemId) return opts.activeReadinessItemId;
-  if (opts.slots && opts.slots.activeReadinessItemId) {
-    return opts.slots.activeReadinessItemId;
-  }
-  if (opts.readinessItemId) return opts.readinessItemId;
-  if (opts.selectedReadinessItem && opts.selectedReadinessItem.id) {
-    return opts.selectedReadinessItem.id;
-  }
+  const raw =
+    opts.activeReadinessItemId ||
+    (opts.slots && opts.slots.activeReadinessItemId) ||
+    opts.readinessItemId ||
+    (opts.selectedReadinessItem && opts.selectedReadinessItem.id) ||
+    null;
+  if (raw) return normalizeReadinessItemId(raw);
+
   const priorIntent = String(opts.priorIntent || opts.intent || '');
   if (
     priorIntent === 'readiness_substep' ||
     priorIntent === 'readiness_field_correction' ||
     priorIntent === 'readiness_substep_update'
   ) {
-    return (
+    return normalizeReadinessItemId(
       (opts.slots && opts.slots.activeReadinessItemId) ||
-      opts.readinessItemId ||
-      null
+        opts.readinessItemId ||
+        null
     );
   }
   return null;
@@ -1269,6 +1554,17 @@ function looksLikeReadinessFieldCorrection(text, opts = {}) {
     return true;
   }
 
+  // Follow-up tracking answers inside the active substep (or a full answer block).
+  const followUpParsed = parseFollowUpTrackingFields(s);
+  if (
+    followUpParsed.hasAny &&
+    (activeId === 'follow_up_tracking' ||
+      activeId === 'follow_up_tracking_process' ||
+      followUpParsed.updatedFields.length >= 3)
+  ) {
+    return true;
+  }
+
   // Selecting a checklist item is not a field correction.
   if (detectSelectedReadinessItem(s) && !parseSenderIdentityFields(s).hasAny) {
     // Allow "resolve sender identity" without fields to stay as substep selection.
@@ -1283,7 +1579,7 @@ function looksLikeReadinessFieldCorrection(text, opts = {}) {
   // Explicit correction / update of a readiness field.
   if (
     /\b(?:update|change|correct|set|fix)\b/i.test(s) &&
-    /\b(?:sender\s+)?(?:email(?:\s+address)?|name|signature|reply(?:\s*[-/]?\s*to)?(?:\s+(?:inbox|address|email))?|inbox)\b/i.test(
+    /\b(?:sender\s+)?(?:email(?:\s+address)?|name|signature|reply(?:\s*[-/]?\s*to)?(?:\s+(?:inbox|address|email))?|inbox|follow[- ]?up)\b/i.test(
       s
     )
   ) {
@@ -1295,6 +1591,12 @@ function looksLikeReadinessFieldCorrection(text, opts = {}) {
   }
   if (activeId === 'reply_handling' || activeId === 'reply_inbox_handling') {
     if (parseReplyHandlingFields(s).hasAny) return true;
+  }
+  if (
+    activeId === 'follow_up_tracking' ||
+    activeId === 'follow_up_tracking_process'
+  ) {
+    if (followUpParsed.hasAny) return true;
   }
 
   // Labeled sender block even without an active substep id (post-approval).
@@ -1330,14 +1632,20 @@ function nextReadinessItemAfter(itemId, context = {}) {
     'reply_handling',
     'operational_path',
     'follow_up_tracking',
+    'reply_monitoring_batch1',
   ];
-  const start = Math.max(0, order.indexOf(itemId));
+  const normalizedId = normalizeReadinessItemId(itemId) || itemId;
+  const start = Math.max(0, order.indexOf(normalizedId));
   const state = knownReadinessState(context);
   const confirmed = {
     sender_identity: state.senderIdentityConfirmed,
     reply_handling: state.replyInboxConfirmed,
     operational_path: state.operationalPathChosen,
     follow_up_tracking: state.followUpTrackingConfirmed,
+    reply_monitoring_batch1: Boolean(
+      state.replyMonitoringBatch1Confirmed ||
+        (state.replyMonitoringConfirmed && state.batch1ResultsReviewed)
+    ),
   };
 
   for (let i = start + 1; i < order.length; i += 1) {
@@ -1390,20 +1698,46 @@ function composeReadinessFieldCorrection(context = {}) {
       activeId === 'operational_path' ||
       activeId === 'operational_path_selection',
   });
+  const followUpParsed = parseFollowUpTrackingFields(text);
 
   // Infer item from fields when active id is missing / mismatched.
-  if (pathParsed.hasAny && !senderParsed.hasAny && !replyParsed.hasAny) {
+  if (
+    followUpParsed.hasAny &&
+    !senderParsed.hasAny &&
+    !replyParsed.hasAny &&
+    !pathParsed.hasAny
+  ) {
+    activeId = 'follow_up_tracking';
+  } else if (
+    pathParsed.hasAny &&
+    !senderParsed.hasAny &&
+    !replyParsed.hasAny &&
+    !followUpParsed.hasAny
+  ) {
     activeId = 'operational_path';
-  } else if (senderParsed.hasAny && !replyParsed.hasAny && !pathParsed.hasAny) {
+  } else if (
+    senderParsed.hasAny &&
+    !replyParsed.hasAny &&
+    !pathParsed.hasAny &&
+    !followUpParsed.hasAny
+  ) {
     activeId = 'sender_identity';
-  } else if (replyParsed.hasAny && !senderParsed.hasAny && !pathParsed.hasAny) {
+  } else if (
+    replyParsed.hasAny &&
+    !senderParsed.hasAny &&
+    !pathParsed.hasAny &&
+    !followUpParsed.hasAny
+  ) {
     activeId = 'reply_handling';
   }
+
+  activeId = normalizeReadinessItemId(activeId) || activeId;
 
   const lines = [];
   let senderState = mergeSenderIdentityState(priorFields, {});
   let replyHandlingState = null;
   let operationalPathState = null;
+  let followUpTrackingState = null;
   let nextItem = null;
   let itemConfirmed = false;
   const corrected = senderParsed.updatedFields.slice();
@@ -1666,6 +2000,115 @@ function composeReadinessFieldCorrection(context = {}) {
       lines.push('');
       lines.push(READINESS_SUBSTEP_SAFETY_LINE);
     }
+  } else if (
+    activeId === 'follow_up_tracking' ||
+    activeId === 'follow_up_tracking_process'
+  ) {
+    const priorFollowUp = {
+      followUpTrackingLocation:
+        slots.followUpTrackingLocation ||
+        context.followUpTrackingLocation ||
+        null,
+      trackingLocation:
+        slots.followUpTrackingLocation ||
+        context.followUpTrackingLocation ||
+        null,
+      followUp1Timing: slots.followUp1Timing || context.followUp1Timing || null,
+      followUp2Timing: slots.followUp2Timing || context.followUp2Timing || null,
+      followUpReviewFirstManual:
+        slots.followUpReviewFirstManual != null
+          ? slots.followUpReviewFirstManual
+          : context.followUpReviewFirstManual != null
+            ? context.followUpReviewFirstManual
+            : null,
+      reviewFirstManual:
+        slots.followUpReviewFirstManual != null
+          ? slots.followUpReviewFirstManual
+          : context.followUpReviewFirstManual != null
+            ? context.followUpReviewFirstManual
+            : null,
+      automaticFollowUpSendsApproved:
+        slots.automaticFollowUpSendsApproved != null
+          ? slots.automaticFollowUpSendsApproved
+          : context.automaticFollowUpSendsApproved != null
+            ? context.automaticFollowUpSendsApproved
+            : null,
+    };
+    const followUpState = mergeFollowUpTrackingState(
+      priorFollowUp,
+      followUpParsed
+    );
+    followUpTrackingState = followUpState;
+    activeId = 'follow_up_tracking';
+
+    if (followUpState.followUpTrackingConfirmed) {
+      itemConfirmed = true;
+      const reviewFirstLine = followUpState.followUpReviewFirstManual
+        ? 'Follow-ups remain review-first/manual unless explicitly enabled later'
+        : 'Follow-ups are not held to review-first/manual';
+      const autoSendLine = followUpState.automaticFollowUpSendsApproved
+        ? 'Automatic follow-up sends are approved'
+        : 'No automatic follow-up sends are approved';
+
+      lines.push('Follow-up tracking process is confirmed:');
+      lines.push(`- Status tracked in ${followUpState.followUpTrackingLocation}`);
+      lines.push(
+        `- Follow-up 1 planned for ${followUpState.followUp1Timing}`
+      );
+      lines.push(
+        `- Follow-up 2 planned for ${followUpState.followUp2Timing}`
+      );
+      lines.push(`- ${reviewFirstLine}`);
+      lines.push(`- ${autoSendLine}`);
+
+      nextItem = nextReadinessItemAfter('follow_up_tracking', {
+        ...context,
+        slots: {
+          ...slots,
+          followUpTrackingConfirmed: true,
+          followUpTrackingLocation: followUpState.followUpTrackingLocation,
+          followUp1Timing: followUpState.followUp1Timing,
+          followUp2Timing: followUpState.followUp2Timing,
+          followUpReviewFirstManual: followUpState.followUpReviewFirstManual,
+          automaticFollowUpSendsApproved:
+            followUpState.automaticFollowUpSendsApproved,
+        },
+        confirmedReadiness: {
+          ...(context.confirmedReadiness || {}),
+          follow_up_tracking_process: true,
+          follow_up_tracking: true,
+        },
+      });
+      if (nextItem) {
+        const questions =
+          Array.isArray(nextItem.questions) && nextItem.questions.length
+            ? nextItem.questions
+            : nextItem.ask
+              ? [nextItem.ask]
+              : [];
+        lines.push('');
+        lines.push(`Next readiness item: ${nextItem.label}.`);
+        if (questions.length) {
+          lines.push('');
+          for (const q of questions) lines.push(q);
+        }
+        lines.push('');
+        lines.push(READINESS_SUBSTEP_SAFETY_LINE);
+      }
+    } else {
+      if (followUpParsed.hasAny) {
+        lines.push('Updated follow-up tracking details.');
+      } else {
+        lines.push('Recorded follow-up tracking details.');
+      }
+      if (followUpState.missing.length) {
+        lines.push('');
+        lines.push('Still needed for follow-up tracking process:');
+        for (const m of followUpState.missing) lines.push(`- ${m}`);
+        lines.push('');
+        lines.push(READINESS_SUBSTEP_SAFETY_LINE);
+      }
+    }
   } else {
     lines.push('Updated the active readiness fields.');
   }
@@ -1685,6 +2128,7 @@ function composeReadinessFieldCorrection(context = {}) {
     senderIdentity: senderState,
     replyHandling: replyHandlingState,
     operationalPath: operationalPathState,
+    followUpTracking: followUpTrackingState,
     itemConfirmed,
     correctedFields:
       activeId === 'reply_handling'
@@ -1692,7 +2136,9 @@ function composeReadinessFieldCorrection(context = {}) {
         : activeId === 'operational_path' ||
             activeId === 'operational_path_selection'
           ? pathParsed.updatedFields.slice()
-          : corrected,
+          : activeId === 'follow_up_tracking'
+            ? followUpParsed.updatedFields.slice()
+            : corrected,
     requiresExplicitApproval: false,
     executionPending: false,
     sendsMade: false,
@@ -1717,6 +2163,10 @@ function looksLikeExecutionRequest(text) {
   }
   // Path selection confirms readiness only — never execute confirmation.
   if (parseOperationalPathSelection(s).hasAny) {
+    return false;
+  }
+  // Follow-up tracking answers confirm readiness only — never execute.
+  if (parseFollowUpTrackingFields(s).hasAny) {
     return false;
   }
 
@@ -2174,6 +2624,31 @@ function isOperationalPathValueLine(text) {
 }
 
 /**
+ * True when a checklist line is a provided follow-up tracking field value.
+ */
+function isFollowUpTrackingValueLine(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  if (/^status\s+tracked\s+in\b/i.test(t)) return true;
+  if (/^follow[- ]?up\s*[12]\s+planned\s+for\b/i.test(t)) return true;
+  if (/^follow[- ]?ups?\s+remain\s+review[- ]?first\b/i.test(t)) return true;
+  if (/^no\s+automatic\s+follow[- ]?up\s+sends?\b/i.test(t)) return true;
+  if (
+    /^(?:follow[- ]?up\s+)?(?:tracking\s+location|status)\s*[:\-–—]\s*\S+/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  if (
+    /^follow[- ]?up\s*[12]\s*(?:timing|planned)?\s*[:\-–—]\s*\S+/i.test(t)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * True when a line is an open readiness question (still unresolved).
  */
 function isOpenReadinessQuestionLine(text) {
@@ -2182,7 +2657,8 @@ function isOpenReadinessQuestionLine(text) {
   if (
     isSenderFieldValueLine(t) ||
     isReplyFieldValueLine(t) ||
-    isOperationalPathValueLine(t)
+    isOperationalPathValueLine(t) ||
+    isFollowUpTrackingValueLine(t)
   ) {
     return false;
   }
@@ -2201,6 +2677,9 @@ function readinessConceptId(item) {
   }
   if (isOperationalPathValueLine(s)) {
     return 'operational_path';
+  }
+  if (isFollowUpTrackingValueLine(s)) {
+    return 'follow_up_tracking_process';
   }
   for (const concept of READINESS_CONCEPT_PATTERNS) {
     if (concept.match.test(s)) return concept.id;
@@ -2294,18 +2773,57 @@ function resolveOperationalPathFromContext(context = {}) {
       slots.operationalPathLabel || context.operationalPathLabel || null,
   };
   const activeId =
-    context.activeReadinessItemId ||
-    slots.activeReadinessItemId ||
-    null;
+    normalizeReadinessItemId(
+      context.activeReadinessItemId || slots.activeReadinessItemId || null
+    ) || null;
   const parsed = parseOperationalPathSelection(
     context.operatorMessage || context.text || context.userMessage || '',
     {
-      allowBarePath:
-        activeId === 'operational_path' ||
-        activeId === 'operational_path_selection',
+      allowBarePath: activeId === 'operational_path',
     }
   );
   return mergeOperationalPathState(prior, parsed);
+}
+
+/**
+ * Resolve follow-up tracking fields from slots + latest operator message.
+ */
+function resolveFollowUpTrackingFromContext(context = {}) {
+  const slots = context.slots || {};
+  const prior = {
+    followUpTrackingLocation:
+      slots.followUpTrackingLocation ||
+      context.followUpTrackingLocation ||
+      null,
+    trackingLocation:
+      slots.followUpTrackingLocation ||
+      context.followUpTrackingLocation ||
+      null,
+    followUp1Timing: slots.followUp1Timing || context.followUp1Timing || null,
+    followUp2Timing: slots.followUp2Timing || context.followUp2Timing || null,
+    followUpReviewFirstManual:
+      slots.followUpReviewFirstManual != null
+        ? slots.followUpReviewFirstManual
+        : context.followUpReviewFirstManual != null
+          ? context.followUpReviewFirstManual
+          : null,
+    reviewFirstManual:
+      slots.followUpReviewFirstManual != null
+        ? slots.followUpReviewFirstManual
+        : context.followUpReviewFirstManual != null
+          ? context.followUpReviewFirstManual
+          : null,
+    automaticFollowUpSendsApproved:
+      slots.automaticFollowUpSendsApproved != null
+        ? slots.automaticFollowUpSendsApproved
+        : context.automaticFollowUpSendsApproved != null
+          ? context.automaticFollowUpSendsApproved
+          : null,
+  };
+  const parsed = parseFollowUpTrackingFields(
+    context.operatorMessage || context.text || context.userMessage || ''
+  );
+  return mergeFollowUpTrackingState(prior, parsed);
 }
 
 /**
@@ -2328,6 +2846,7 @@ function knownReadinessState(context = {}) {
   const senderResolved = resolveSenderIdentityFromContext(context);
   const replyResolved = resolveReplyHandlingFromContext(context);
   const pathResolved = resolveOperationalPathFromContext(context);
+  const followUpResolved = resolveFollowUpTrackingFromContext(context);
   const replyConfirmed = Boolean(
     confirmed.reply_inbox_handling ||
       confirmed.replyInboxHandling ||
@@ -2367,11 +2886,21 @@ function knownReadinessState(context = {}) {
         context.operationalPathChosen ||
         pathResolved.operationalPathChosen
     ),
+    followUpTracking: followUpResolved,
     followUpTrackingConfirmed: Boolean(
       confirmed.follow_up_tracking_process ||
+        confirmed.follow_up_tracking ||
         confirmed.followUpTrackingProcess ||
+        confirmed.followUpTracking ||
         slots.followUpTrackingConfirmed ||
-        context.followUpTrackingConfirmed
+        context.followUpTrackingConfirmed ||
+        followUpResolved.followUpTrackingConfirmed
+    ),
+    replyMonitoringBatch1Confirmed: Boolean(
+      confirmed.reply_monitoring_batch1 ||
+        confirmed.replyMonitoringBatch1 ||
+        slots.replyMonitoringBatch1Confirmed ||
+        context.replyMonitoringBatch1Confirmed
     ),
     trackingAccountApproved: Boolean(
       confirmed.tracking_account_settings ||
@@ -2440,6 +2969,17 @@ function evaluateReadinessItemAgainstState(item, context = {}) {
       status: 'confirmed',
       reason: 'operational path selected',
       concept: 'operational_path',
+      display: text,
+    };
+  }
+
+  // Provided follow-up tracking field values are confirmed facts.
+  if (isFollowUpTrackingValueLine(text)) {
+    return {
+      text,
+      status: 'confirmed',
+      reason: 'follow-up tracking field present',
+      concept: 'follow_up_tracking_process',
       display: text,
     };
   }
@@ -2663,6 +3203,8 @@ function mergeOperatorReadinessChecklist(context = {}) {
     replyHandling: state.replyHandling,
     operationalPathChosen: state.operationalPathChosen,
     operationalPath: state.operationalPath,
+    followUpTrackingConfirmed: state.followUpTrackingConfirmed,
+    followUpTracking: state.followUpTracking,
   };
 }
 
@@ -2745,6 +3287,34 @@ function composeOperatorReadinessCheck(context = {}) {
     lines.push('');
   }
 
+  const readinessState = knownReadinessState(context);
+  if (
+    readinessState.followUpTrackingConfirmed &&
+    readinessState.followUpTracking &&
+    readinessState.followUpTracking.followUpTrackingLocation
+  ) {
+    const fu = readinessState.followUpTracking;
+    lines.push('Follow-up tracking process is confirmed:');
+    lines.push(`- Status tracked in ${fu.followUpTrackingLocation}`);
+    lines.push(`- Follow-up 1 planned for ${fu.followUp1Timing}`);
+    lines.push(`- Follow-up 2 planned for ${fu.followUp2Timing}`);
+    lines.push(
+      `- ${
+        fu.followUpReviewFirstManual
+          ? 'Follow-ups remain review-first/manual unless explicitly enabled later'
+          : 'Follow-ups are not held to review-first/manual'
+      }`
+    );
+    lines.push(
+      `- ${
+        fu.automaticFollowUpSendsApproved
+          ? 'Automatic follow-up sends are approved'
+          : 'No automatic follow-up sends are approved'
+      }`
+    );
+    lines.push('');
+  }
+
   let nextItem = null;
   if (merged.senderIdentityConfirmed && !merged.replyInboxConfirmed) {
     nextItem = READINESS_NEXT_ITEM_PROMPTS.reply_handling;
@@ -2752,9 +3322,14 @@ function composeOperatorReadinessCheck(context = {}) {
     nextItem = READINESS_NEXT_ITEM_PROMPTS.operational_path;
   } else if (
     merged.operationalPathChosen &&
-    !knownReadinessState(context).followUpTrackingConfirmed
+    !readinessState.followUpTrackingConfirmed
   ) {
     nextItem = READINESS_NEXT_ITEM_PROMPTS.follow_up_tracking;
+  } else if (
+    readinessState.followUpTrackingConfirmed &&
+    !readinessState.replyMonitoringBatch1Confirmed
+  ) {
+    nextItem = READINESS_NEXT_ITEM_PROMPTS.reply_monitoring_batch1;
   }
 
   if (nextItem) {
@@ -2795,6 +3370,8 @@ function composeOperatorReadinessCheck(context = {}) {
     replyInboxConfirmed: merged.replyInboxConfirmed === true,
     operationalPathChosen: merged.operationalPathChosen === true,
     operationalPath: merged.operationalPath || null,
+    followUpTrackingConfirmed: readinessState.followUpTrackingConfirmed === true,
+    followUpTracking: readinessState.followUpTracking || null,
     nextReadinessItem: nextItem,
     requiresExplicitApproval: false,
     executionPending: false,
@@ -2810,12 +3387,16 @@ function composeOperatorReadinessCheck(context = {}) {
  * Ask only that item's detail questions; never re-ask which item to resolve.
  */
 function composeReadinessSubstep(context = {}) {
+  const readinessItemId =
+    normalizeReadinessItemId(context.readinessItemId) ||
+    context.readinessItemId ||
+    null;
   const selected =
     context.selectedReadinessItem ||
     detectSelectedReadinessItem(
       context.operatorMessage || context.text || context.userMessage || ''
     ) ||
-    (context.readinessItemId && READINESS_SUBSTEPS[context.readinessItemId]) ||
+    (readinessItemId && READINESS_SUBSTEPS[readinessItemId]) ||
     READINESS_SUBSTEPS.sender_identity;
 
   const questions = Array.isArray(context.questions) && context.questions.length
@@ -3305,10 +3886,13 @@ module.exports = {
   parseSenderIdentityFields,
   parseReplyHandlingFields,
   parseOperationalPathSelection,
+  parseFollowUpTrackingFields,
   mergeSenderIdentityState,
   mergeReplyHandlingState,
   mergeOperationalPathState,
+  mergeFollowUpTrackingState,
   normalizeOperationalPathChoice,
+  normalizeReadinessItemId,
   resolveActiveReadinessItemId,
   nextReadinessItemAfter,
   looksLikeExecutionRequest,
@@ -3330,9 +3914,11 @@ module.exports = {
   isSenderFieldValueLine,
   isReplyFieldValueLine,
   isOperationalPathValueLine,
+  isFollowUpTrackingValueLine,
   resolveSenderIdentityFromContext,
   resolveReplyHandlingFromContext,
   resolveOperationalPathFromContext,
+  resolveFollowUpTrackingFromContext,
   formatApprovedLaunchGateConversational,
   formatOperatorDiagnosticMessage,
   applyConversationalPolicy,

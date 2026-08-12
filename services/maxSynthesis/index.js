@@ -167,18 +167,28 @@ module.exports = {
     ConversationalResponsePolicy.parseReplyHandlingFields,
   parseOperationalPathSelection:
     ConversationalResponsePolicy.parseOperationalPathSelection,
+  parseFollowUpTrackingFields:
+    ConversationalResponsePolicy.parseFollowUpTrackingFields,
   mergeSenderIdentityState:
     ConversationalResponsePolicy.mergeSenderIdentityState,
   mergeReplyHandlingState:
     ConversationalResponsePolicy.mergeReplyHandlingState,
   mergeOperationalPathState:
     ConversationalResponsePolicy.mergeOperationalPathState,
+  mergeFollowUpTrackingState:
+    ConversationalResponsePolicy.mergeFollowUpTrackingState,
   isSenderFieldValueLine:
     ConversationalResponsePolicy.isSenderFieldValueLine,
   isReplyFieldValueLine:
     ConversationalResponsePolicy.isReplyFieldValueLine,
   isOperationalPathValueLine:
     ConversationalResponsePolicy.isOperationalPathValueLine,
+  isFollowUpTrackingValueLine:
+    ConversationalResponsePolicy.isFollowUpTrackingValueLine,
+  resolveFollowUpTrackingFromContext:
+    ConversationalResponsePolicy.resolveFollowUpTrackingFromContext,
+  normalizeReadinessItemId:
+    ConversationalResponsePolicy.normalizeReadinessItemId,
   composeExecutionConfirmation:
     ConversationalResponsePolicy.composeExecutionConfirmation,
   composeOperatorReadinessCheck:

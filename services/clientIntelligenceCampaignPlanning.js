@@ -7793,6 +7793,7 @@ function produceReadinessFieldCorrectionResult(
   const sender = composed.senderIdentity || {};
   const reply = composed.replyHandling || {};
   const operationalPath = composed.operationalPath || {};
+  const followUpTracking = composed.followUpTracking || {};
   const nextSlots = {
     ...priorSlots,
     launchGateApproved: true,
@@ -7832,6 +7833,29 @@ function produceReadinessFieldCorrectionResult(
     operationalPathChosen:
       operationalPath.operationalPathChosen === true ||
       priorSlots.operationalPathChosen === true,
+    followUpTrackingLocation:
+      followUpTracking.followUpTrackingLocation ||
+      priorSlots.followUpTrackingLocation ||
+      null,
+    followUp1Timing:
+      followUpTracking.followUp1Timing || priorSlots.followUp1Timing || null,
+    followUp2Timing:
+      followUpTracking.followUp2Timing || priorSlots.followUp2Timing || null,
+    followUpReviewFirstManual:
+      followUpTracking.followUpReviewFirstManual != null
+        ? followUpTracking.followUpReviewFirstManual
+        : priorSlots.followUpReviewFirstManual != null
+          ? priorSlots.followUpReviewFirstManual
+          : null,
+    automaticFollowUpSendsApproved:
+      followUpTracking.automaticFollowUpSendsApproved != null
+        ? followUpTracking.automaticFollowUpSendsApproved
+        : priorSlots.automaticFollowUpSendsApproved != null
+          ? priorSlots.automaticFollowUpSendsApproved
+          : null,
+    followUpTrackingConfirmed:
+      followUpTracking.followUpTrackingConfirmed === true ||
+      priorSlots.followUpTrackingConfirmed === true,
   };
 
   if (composed.itemConfirmed && composed.readinessItemId === 'sender_identity') {
@@ -7854,6 +7878,13 @@ function produceReadinessFieldCorrectionResult(
       nextSlots.operationalPathLabel = operationalPath.operationalPathLabel;
     }
   }
+  if (
+    composed.itemConfirmed &&
+    (composed.readinessItemId === 'follow_up_tracking' ||
+      composed.readinessItemId === 'follow_up_tracking_process')
+  ) {
+    nextSlots.followUpTrackingConfirmed = true;
+  }
 
   const missing =
     (sender.missing && sender.missing.length && sender.missing) ||
@@ -7861,6 +7892,9 @@ function produceReadinessFieldCorrectionResult(
     (operationalPath.missing &&
       operationalPath.missing.length &&
       operationalPath.missing) ||
+    (followUpTracking.missing &&
+      followUpTracking.missing.length &&
+      followUpTracking.missing) ||
     null;
 
   const currentAsk = composed.nextReadinessItem
@@ -7896,6 +7930,8 @@ function produceReadinessFieldCorrectionResult(
       replyInboxConfirmed: nextSlots.replyInboxConfirmed === true,
       operationalPath,
       operationalPathChosen: nextSlots.operationalPathChosen === true,
+      followUpTracking,
+      followUpTrackingConfirmed: nextSlots.followUpTrackingConfirmed === true,
       launchGateApproved: true,
       launchReady: true,
       launched: false,

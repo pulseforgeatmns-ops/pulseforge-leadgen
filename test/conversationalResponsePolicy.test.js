@@ -36,6 +36,7 @@ const {
   parseSenderIdentityFields,
   parseReplyHandlingFields,
   parseOperationalPathSelection,
+  parseFollowUpTrackingFields,
   mergeSenderIdentityState,
   mergeReplyHandlingState,
   isSenderFieldValueLine,
@@ -777,6 +778,143 @@ describe('ConversationalResponsePolicy', () => {
       assert.equal(isOperationalPathValueLine(item), false);
       assert.doesNotMatch(item, /manual send export for operator review/i);
     }
+  });
+
+  it('confirms follow-up tracking from active-substep answers and advances to reply monitoring', () => {
+    const text = [
+      'Follow-up status should be tracked in the manual-send export/review sheet for now.',
+      'Follow-up 1 should be planned for about 3 business days after first touch.',
+      'Follow-up 2 should be planned for about 7 business days after first touch.',
+      'All follow-ups remain review-first/manual unless explicitly enabled later.',
+      'No automatic follow-up sends are approved.',
+    ].join(' ');
+
+    assert.equal(
+      looksLikeReadinessFieldCorrection(text, {
+        activeReadinessItemId: 'follow_up_tracking_process',
+      }),
+      true
+    );
+    assert.equal(looksLikeExecutionRequest(text), false);
+    assert.equal(looksLikeOperatorReadinessCheck(text), false);
+
+    const parsed = parseFollowUpTrackingFields(text);
+    assert.equal(parsed.hasAny, true);
+    assert.equal(
+      parsed.trackingLocation,
+      'the manual-send export/review sheet'
+    );
+    assert.equal(
+      parsed.followUp1Timing,
+      'about 3 business days after first touch'
+    );
+    assert.equal(
+      parsed.followUp2Timing,
+      'about 7 business days after first touch'
+    );
+    assert.equal(parsed.reviewFirstManual, true);
+    assert.equal(parsed.automaticFollowUpSendsApproved, false);
+
+    const mode = selectConversationMode({
+      text,
+      operatorMessage: text,
+      launchGateApproved: true,
+      activeReadinessItemId: 'follow_up_tracking_process',
+      slots: {
+        activeReadinessItemId: 'follow_up_tracking_process',
+        senderIdentityConfirmed: true,
+        replyInboxConfirmed: true,
+        operationalPathChosen: true,
+      },
+    });
+    assert.equal(mode, CONVERSATION_MODES.READINESS_FIELD_CORRECTION);
+    assert.notEqual(mode, CONVERSATION_MODES.EXECUTION_CONFIRMATION);
+    assert.notEqual(mode, CONVERSATION_MODES.OPERATOR_READINESS_CHECK);
+    assert.notEqual(mode, CONVERSATION_MODES.READINESS_SUBSTEP);
+
+    const composed = composeReadinessFieldCorrection({
+      operatorMessage: text,
+      activeReadinessItemId: 'follow_up_tracking_process',
+      slots: {
+        activeReadinessItemId: 'follow_up_tracking_process',
+        senderIdentityConfirmed: true,
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        replyInboxConfirmed: true,
+        replyHandlingConfirmed: true,
+        replyInbox: 'jacob@goanchorcleaning.com',
+        replyToMatchesSender: true,
+        replyMonitoringOwner: 'Jacob Maynard',
+        operationalPathChosen: true,
+        operationalPathId: 'manual_send_export',
+        operationalPathLabel: 'manual send export for operator review',
+      },
+    });
+
+    assert.equal(composed.responseMode, 'readiness_field_correction');
+    assert.equal(composed.itemConfirmed, true);
+    assert.equal(composed.requiresExplicitApproval, false);
+    assert.equal(composed.executionPending, false);
+    assert.equal(composed.exportMade, false);
+    assert.equal(composed.sendsMade, false);
+    assert.equal(composed.crmWritesMade, false);
+    assert.equal(composed.readinessItemId, 'follow_up_tracking');
+    assert.equal(
+      composed.nextReadinessItem.id,
+      'reply_monitoring_batch1'
+    );
+    assert.equal(
+      composed.activeReadinessItemId,
+      'reply_monitoring_batch1'
+    );
+    assert.match(
+      composed.message,
+      /^Follow-up tracking process is confirmed:/m
+    );
+    assert.match(
+      composed.message,
+      /- Status tracked in the manual-send export\/review sheet/i
+    );
+    assert.match(
+      composed.message,
+      /- Follow-up 1 planned for about 3 business days after first touch/i
+    );
+    assert.match(
+      composed.message,
+      /- Follow-up 2 planned for about 7 business days after first touch/i
+    );
+    assert.match(
+      composed.message,
+      /- Follow-ups remain review-first\/manual unless explicitly enabled later/i
+    );
+    assert.match(
+      composed.message,
+      /- No automatic follow-up sends are approved/i
+    );
+    assert.match(
+      composed.message,
+      /Next readiness item:\s*reply monitoring \/ Batch 1 review process/i
+    );
+    assert.match(
+      composed.message,
+      /Who will monitor replies, how should responses be reviewed, and should broader rollout remain blocked until Batch 1 results are reviewed\?/i
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /Where should follow-up status be tracked\?/i
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /Should Follow-up 1 be planned/i
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(composed.message, /Exact action/i);
+    assert.doesNotMatch(composed.message, /prepare a manual-send export/i);
+    assert.equal(looksLikeExecutionRequest(composed.message), false);
   });
 
   it('classifies low-signal accidental input as clarification_needed', () => {
