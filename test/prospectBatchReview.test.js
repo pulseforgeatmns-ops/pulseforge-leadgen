@@ -3288,16 +3288,34 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.equal(reply.exportMade, false);
     assert.equal(reply.accountChangesMade, false);
     assert.match(reply.message, /readiness only|explicit/i);
-    assert.match(
+    assert.equal(
       reply.message,
-      /Outreach Launch Gate: approved for readiness only\./
+      [
+        'Outreach Launch Gate is approved for readiness only. Nothing external happened: no send, no export, no CRM write, and no account changes. Execution is still locked.',
+        '',
+        'The next choice is operational:',
+        '1. prepare a manual-send export for review',
+        '2. create CRM drafts, if explicitly approved',
+        '3. queue sends later, if execution is intentionally enabled',
+        '4. hold with no action',
+        '',
+        "I'd keep this held until sender identity and reply handling are confirmed.",
+        '',
+        'Which next path do you want to prepare, if any?',
+      ].join('\n')
     );
-    assert.match(reply.message, /Launch Gate is now approved for readiness only/i);
-    assert.match(reply.message, /campaign-ready/i);
-    assert.match(reply.message, /execution is still locked/i);
-    assert.match(reply.message, /next choice is operational/i);
-    assert.match(reply.message, /manual-send export/i);
-    assert.match(reply.message, /Which next path do you want to prepare/i);
+    assert.equal(
+      (reply.message.match(/approved for readiness only/gi) || []).length,
+      1
+    );
+    assert.equal(
+      (reply.message.match(/nothing external happened/gi) || []).length,
+      1
+    );
+    assert.equal(
+      (reply.message.match(/execution is still locked/gi) || []).length,
+      1
+    );
     assert.doesNotMatch(reply.message, /Approve Launch Gate/i);
     assert.doesNotMatch(reply.message, /Hold — do not approve yet/i);
     assert.doesNotMatch(reply.message, /Does this look right to approve/i);
@@ -3305,6 +3323,7 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.doesNotMatch(reply.message, /Recommended decision/i);
     assert.doesNotMatch(reply.message, /View evidence/i);
     assert.doesNotMatch(reply.message, /Confirmed not executed/i);
+    assert.doesNotMatch(reply.message, /already approved/i);
     assert.equal(reply.responseMode, 'operator_state_summary');
     assert.equal(reply.conversationMode, 'operator_state_update');
     assert.equal(reply.outreachLaunchGate.operatorDigest, null);
@@ -3367,20 +3386,34 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
       reply.outreachLaunchGate.status,
       OUTREACH_LAUNCH_GATE_APPROVED_STATUS
     );
-    assert.match(
+    assert.equal(
       reply.message,
-      /Outreach Launch Gate: approved for readiness only\./
+      [
+        'Outreach Launch Gate is approved for readiness only. Nothing external happened: no send, no export, no CRM write, and no account changes. Execution is still locked.',
+        '',
+        'The next choice is operational:',
+        '1. prepare a manual-send export for review',
+        '2. create CRM drafts, if explicitly approved',
+        '3. queue sends later, if execution is intentionally enabled',
+        '4. hold with no action',
+        '',
+        "I'd keep this held until sender identity and reply handling are confirmed.",
+        '',
+        'Which next path do you want to prepare, if any?',
+      ].join('\n')
     );
-    assert.match(reply.message, /Launch Gate is approved for readiness only/i);
-    assert.match(reply.message, /execution is still locked/i);
-    assert.match(reply.message, /no send/i);
-    assert.match(reply.message, /no export/i);
-    assert.match(reply.message, /no CRM write/i);
-    assert.match(reply.message, /manual-send export/i);
-    assert.match(reply.message, /CRM drafts/i);
-    assert.match(reply.message, /queue sends/i);
-    assert.match(reply.message, /hold with no action/i);
-    assert.match(reply.message, /Which next path do you want to prepare/i);
+    assert.equal(
+      (reply.message.match(/approved for readiness only/gi) || []).length,
+      1
+    );
+    assert.equal(
+      (reply.message.match(/nothing external happened/gi) || []).length,
+      1
+    );
+    assert.equal(
+      (reply.message.match(/execution is still locked/gi) || []).length,
+      1
+    );
     assert.doesNotMatch(reply.message, /Approve Launch Gate/i);
     assert.doesNotMatch(reply.message, /Hold — do not approve yet/i);
     assert.doesNotMatch(reply.message, /Does this look right to approve/i);
@@ -3389,6 +3422,7 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.doesNotMatch(reply.message, /View evidence/i);
     assert.doesNotMatch(reply.message, /Confirmed not executed/i);
     assert.doesNotMatch(reply.message, /Readiness-only status: approved/i);
+    assert.doesNotMatch(reply.message, /already approved/i);
     assert.equal(reply.sendsMade, false);
     assert.equal(reply.crmWritesMade, false);
     assert.equal(reply.exportMade, false);

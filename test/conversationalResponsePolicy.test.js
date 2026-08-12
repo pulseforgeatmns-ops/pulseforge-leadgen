@@ -76,19 +76,95 @@ describe('ConversationalResponsePolicy', () => {
       { justApproved: true }
     );
     assert.equal(composed.mode, CONVERSATION_MODES.OPERATOR_STATE_UPDATE);
-    assert.match(
+    assert.equal(
       composed.message,
-      /Outreach Launch Gate: approved for readiness only\./
+      [
+        'Outreach Launch Gate is approved for readiness only. Nothing external happened: no send, no export, no CRM write, and no account changes. Execution is still locked.',
+        '',
+        'The next choice is operational:',
+        '1. prepare a manual-send export for review',
+        '2. create CRM drafts, if explicitly approved',
+        '3. queue sends later, if execution is intentionally enabled',
+        '4. hold with no action',
+        '',
+        "I'd keep this held until sender identity and reply handling are confirmed.",
+        '',
+        'Which next path do you want to prepare, if any?',
+      ].join('\n')
     );
-    assert.match(composed.message, /Launch Gate is now approved for readiness only/);
-    assert.match(composed.message, /campaign-ready/);
-    assert.match(composed.message, /next choice is operational/);
-    assert.match(composed.message, /1\. prepare a manual-send export/);
-    assert.match(composed.message, /I'd keep this held/);
     assert.equal(containsRendererBoilerplate(composed.message), false);
     assert.doesNotMatch(composed.message, /Recommended decision/i);
     assert.doesNotMatch(composed.message, /Primary actions/i);
     assert.doesNotMatch(composed.message, /Does this look right to approve/i);
+  });
+
+  it('dedupes stacked approved-state acknowledgments', () => {
+    const {
+      dedupeOperatorStateUpdateMessage,
+    } = require('../services/maxSynthesis');
+    const stacked = [
+      'Outreach Launch Gate: approved for readiness only.',
+      '',
+      'Launch Gate is already approved for readiness only. Nothing external happened.',
+      '',
+      'Launch Gate is approved for readiness only.',
+      '',
+      'Nothing external happened: no send, no export, no CRM write, and no account changes. The campaign is now campaign-ready, but execution is still locked.',
+      '',
+      'The next choice is operational:',
+      '1. prepare a manual-send export for review',
+      '2. create CRM drafts, if explicitly approved',
+      '3. queue sends later, if execution is intentionally enabled',
+      '4. hold with no action',
+      '',
+      "I'd keep this held until sender identity and reply handling are confirmed.",
+      '',
+      'Which next path do you want to prepare, if any?',
+    ].join('\n');
+    const cleaned = dedupeOperatorStateUpdateMessage(stacked);
+    assert.equal(
+      (cleaned.match(/approved for readiness only/gi) || []).length,
+      1
+    );
+    assert.equal(
+      (cleaned.match(/nothing external happened/gi) || []).length,
+      1
+    );
+    assert.equal(
+      (cleaned.match(/execution is still locked/gi) || []).length,
+      1
+    );
+    assert.equal(
+      (cleaned.match(/The next choice is operational/g) || []).length,
+      1
+    );
+    assert.equal(
+      (cleaned.match(/Which next path do you want to prepare/g) || []).length,
+      1
+    );
+    assert.match(
+      cleaned,
+      /^Outreach Launch Gate is approved for readiness only\. Nothing external happened:/
+    );
+  });
+
+  it('drops duplicative approved-state leadIns', () => {
+    const composed = formatApprovedLaunchGateConversational(
+      { status: 'approved_readiness_only', launchGateApproved: true },
+      {
+        leadIn:
+          'Launch Gate is already approved for readiness only. Nothing external happened.',
+      }
+    );
+    assert.equal(
+      (composed.message.match(/approved for readiness only/gi) || []).length,
+      1
+    );
+    assert.equal(
+      (composed.message.match(/nothing external happened/gi) || []).length,
+      1
+    );
+    assert.doesNotMatch(composed.message, /already approved/i);
   });
 
   it('uses state-aware approval language', () => {
@@ -156,7 +232,8 @@ describe('ConversationalResponsePolicy', () => {
   it('applyConversationalPolicy tags replies with conversationMode', () => {
     const next = applyConversationalPolicy(
       {
-        message: 'Outreach Launch Gate: approved for readiness only.',
+        message:
+          'Outreach Launch Gate is approved for readiness only. Nothing external happened: no send, no export, no CRM write, and no account changes. Execution is still locked.',
         responseMode: RESPONSE_MODES.OPERATOR_STATE_SUMMARY,
         launchGateApproved: true,
         intent: 'outreach_launch_gate_approved',
