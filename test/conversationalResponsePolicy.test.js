@@ -1267,6 +1267,106 @@ describe('ConversationalResponsePolicy', () => {
     );
   });
 
+  it('reads operational path from canonical readiness, not stale CRM drafts', () => {
+    const {
+      normalizeOperationalPathChoice,
+      looksLikeOperationalPathOptionList,
+      getCanonicalReadinessState,
+    } = require('../services/maxSynthesis');
+
+    const optionList =
+      'Do you want to prepare for manual send, CRM drafts, queued sends later, or hold with no action?';
+    assert.equal(looksLikeOperationalPathOptionList(optionList), true);
+    assert.equal(normalizeOperationalPathChoice(optionList), null);
+    assert.equal(
+      parseOperationalPathSelection(optionList, { allowBarePath: true }).pathId,
+      null
+    );
+    assert.equal(
+      normalizeOperationalPathChoice('manual_send_export_for_operator_review')
+        .id,
+      'manual_send_export'
+    );
+
+    const summaryAsk =
+      'Please provide a final Anchor Batch 1 campaign-ready summary for operator review. Include approved Batch 1 scope, confirmed sender identity, confirmed reply handling, selected operational path, confirmed follow-up tracking, confirmed reply monitoring / Batch 1 review, execution lock status, and what explicit execute action would be needed next.';
+
+    const canonical = getCanonicalReadinessState({
+      confirmedReadiness: {
+        operational_path_selection: 'manual_send_export_for_operator_review',
+      },
+      slots: {
+        operationalPathChosen: true,
+        operationalPathId: 'crm_drafts',
+        operationalPathLabel: 'CRM drafts',
+        activeReadinessItemId: 'operational_path',
+      },
+      confirmedReadinessRecords: {
+        operational_path: {
+          confirmed: true,
+          operationalPathId: 'manual_send_export',
+          operationalPathLabel: 'manual send export for operator review',
+        },
+      },
+    });
+    assert.equal(canonical.operationalPath.operationalPathId, 'manual_send_export');
+    assert.equal(
+      canonical.operationalPath.operationalPathLabel,
+      'manual send export for operator review'
+    );
+    assert.equal(canonical.operationalPathChosen, true);
+
+    const composed = composeCampaignReadySummary({
+      businessName: 'Anchor Cleaning',
+      operatorMessage: summaryAsk,
+      slots: {
+        operationalPathChosen: true,
+        operationalPathId: 'crm_drafts',
+        operationalPathLabel: 'CRM drafts',
+        activeReadinessItemId: 'operational_path',
+        senderIdentityConfirmed: true,
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        replyInboxConfirmed: true,
+        replyHandlingConfirmed: true,
+        replyInbox: 'jacob@goanchorcleaning.com',
+        replyToMatchesSender: true,
+        replyMonitoringOwner: 'Jacob Maynard',
+        followUpTrackingConfirmed: true,
+        followUpTrackingLocation: 'manual-send export/review sheet',
+        replyMonitoringBatch1Confirmed: true,
+        broaderRolloutBlocked: true,
+      },
+      confirmedReadiness: {
+        operational_path: true,
+        operational_path_selection: 'manual_send_export_for_operator_review',
+      },
+      confirmedReadinessRecords: {
+        operational_path: {
+          confirmed: true,
+          operationalPathId: 'manual_send_export',
+          operationalPathLabel: 'manual send export for operator review',
+        },
+      },
+    });
+
+    assert.match(
+      composed.message,
+      /Operational path selected:\s*\n- manual send export for operator review/i
+    );
+    assert.match(
+      composed.message,
+      /Next possible execute action:\s*\n- explicitly approve preparing the manual-send export for operator review/i
+    );
+    assert.doesNotMatch(composed.message, /CRM drafts/i);
+    assert.equal(composed.operationalPathId, 'manual_send_export');
+    assert.equal(
+      composed.operationalPathLabel,
+      'manual send export for operator review'
+    );
+  });
+
   it('normalizes reply-handling field aliases for campaign-ready summary', () => {
     const {
       normalizeReplyHandlingFields,

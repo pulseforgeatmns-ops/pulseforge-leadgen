@@ -1541,6 +1541,68 @@ function getCanonicalReadinessState(context = {}) {
       reply.fieldsComplete
   );
 
+  // Operational path: confirmed records / canonical selection values win over
+  // flat slots (stale CRM drafts must not override manual send export).
+  // Never infer from the current operator prompt or next-action templates.
+  const pathRecord = operationalPathRecordFromConfirmed(records) || {};
+  const pathSelectionRaw = firstDefined(
+    pathRecord.operationalPathId,
+    pathRecord.pathId,
+    pathRecord.operationalPathLabel,
+    pathRecord.pathLabel,
+    typeof confirmedFlags.operational_path_selection === 'string'
+      ? confirmedFlags.operational_path_selection
+      : null,
+    typeof confirmedFlags.operational_path === 'string'
+      ? confirmedFlags.operational_path
+      : null,
+    typeof slots.operational_path_selection === 'string'
+      ? slots.operational_path_selection
+      : null,
+    typeof context.operational_path_selection === 'string'
+      ? context.operational_path_selection
+      : null,
+    slots.operationalPathId,
+    context.operationalPathId,
+    slots.operationalPathLabel,
+    context.operationalPathLabel
+  );
+  const pathChoice = normalizeOperationalPathChoice(pathSelectionRaw);
+  const operationalPath = {
+    operationalPathId: pathChoice ? pathChoice.id : null,
+    operationalPathLabel: pathChoice
+      ? pathChoice.label
+      : firstDefined(
+          pathRecord.operationalPathLabel,
+          slots.operationalPathLabel,
+          context.operationalPathLabel
+        ) || null,
+    selectionNote: pathChoice
+      ? pathChoice.selectionNote
+      : pathRecord.selectionNote || null,
+    operationalPathChosen: false,
+    missing: [],
+  };
+  const pathFlagConfirmed = Boolean(
+    confirmedFlags.operational_path === true ||
+      confirmedFlags.operational_path_selection === true ||
+      confirmedFlags.operationalPath === true ||
+      confirmedFlags.operationalPathSelection === true ||
+      (typeof confirmedFlags.operational_path_selection === 'string' &&
+        confirmedFlags.operational_path_selection) ||
+      (typeof confirmedFlags.operational_path === 'string' &&
+        confirmedFlags.operational_path) ||
+      pathRecord.confirmed === true ||
+      slots.operationalPathChosen === true ||
+      context.operationalPathChosen === true
+  );
+  operationalPath.operationalPathChosen = Boolean(
+    operationalPath.operationalPathId && operationalPath.operationalPathLabel
+  );
+  if (!operationalPath.operationalPathChosen) {
+    operationalPath.missing = ['operational path choice'];
+  }
+
   const diagnostics = {
     sender: {
       confirmed: senderConfirmed,
@@ -1638,11 +1700,34 @@ function getCanonicalReadinessState(context = {}) {
           },
         }
       : {}),
+    ...(operationalPath.operationalPathChosen
+      ? {
+          operational_path: {
+            confirmed: true,
+            operationalPathId: operationalPath.operationalPathId,
+            operationalPathLabel: operationalPath.operationalPathLabel,
+            selectionNote: operationalPath.selectionNote,
+          },
+          operational_path_selection: {
+            confirmed: true,
+            operationalPathId: operationalPath.operationalPathId,
+            operationalPathLabel: operationalPath.operationalPathLabel,
+            selectionNote: operationalPath.selectionNote,
+            // Preserve alias form used by operators / acceptance tests.
+            value:
+              operationalPath.operationalPathId === 'manual_send_export'
+                ? 'manual_send_export_for_operator_review'
+                : operationalPath.operationalPathId,
+          },
+        }
+      : {}),
   };
 
   return {
     senderIdentity: sender,
     replyHandling: reply,
+    operationalPath,
+    operationalPathChosen: operationalPath.operationalPathChosen === true,
     senderIdentityConfirmed: senderConfirmed && sender.fieldsComplete,
     replyInboxConfirmed: replyConfirmed && reply.fieldsComplete,
     replyHandlingConfirmed: replyConfirmed && reply.fieldsComplete,
@@ -1650,7 +1735,28 @@ function getCanonicalReadinessState(context = {}) {
     senderIdentityIncomplete: !(senderConfirmed && sender.fieldsComplete),
     replyHandlingIncomplete: !(replyConfirmed && reply.fieldsComplete),
     confirmedReadinessRecords,
-    diagnostics,
+    diagnostics: {
+      ...diagnostics,
+      operationalPath: {
+        confirmed: operationalPath.operationalPathChosen === true,
+        present: {
+          operationalPathId: Boolean(operationalPath.operationalPathId),
+          operationalPathLabel: Boolean(operationalPath.operationalPathLabel),
+        },
+        values: {
+          operationalPathId: operationalPath.operationalPathId,
+          operationalPathLabel: operationalPath.operationalPathLabel,
+        },
+        sources: {
+          records: Boolean(
+            pathRecord &&
+              (pathRecord.operationalPathId || pathRecord.operationalPathLabel)
+          ),
+          slots: Boolean(slots.operationalPathId || slots.operationalPathLabel),
+          flag: pathFlagConfirmed,
+        },
+      },
+    },
   };
 }
 
@@ -1702,28 +1808,100 @@ function mergeSenderIdentityState(prior = {}, parsed = {}) {
   });
 }
 
+/** Aliases that normalize onto OPERATIONAL_PATH_CHOICES ids. */
+const OPERATIONAL_PATH_ID_ALIASES = Object.freeze({
+  manual_send_export: 'manual_send_export',
+  manual_send_export_for_operator_review: 'manual_send_export',
+  'manual send export for operator review': 'manual_send_export',
+  crm_drafts: 'crm_drafts',
+  'crm drafts': 'crm_drafts',
+  queued_sends_later: 'queued_sends_later',
+  'queued sends later': 'queued_sends_later',
+  hold: 'hold',
+  hold_with_no_action: 'hold',
+  'hold with no action': 'hold',
+});
+
 /**
- * Normalize a free-text operational path phrase to a canonical choice.
+ * True when text lists multiple operational-path options (prompt / menu),
+ * not a single selected path.
+ */
+function looksLikeOperationalPathOptionList(text) {
+  const lower = String(text || '').toLowerCase();
+  if (!lower) return false;
+  const markers = [
+    /\bmanual[-\s]?send(?:\s+export)?\b/,
+    /\bcrm\s+drafts?\b/,
+    /\bqueue(?:d)?\s+sends?(?:\s+later)?\b/,
+    /\bhold(?:\s+with\s+no\s+action)?\b|\bno\s+action\b/,
+  ];
+  const hitCount = markers.filter((re) => re.test(lower)).length;
+  if (hitCount >= 2) return true;
+  return (
+    hitCount >= 1 &&
+    /\b(or|\/)\b/.test(lower) &&
+    (/\bdo you want\b/.test(lower) ||
+      /\bprepare for\b/.test(lower) ||
+      /\bwhich\b/.test(lower))
+  );
+}
+
+function operationalPathChoicePayload(choice) {
+  if (!choice) return null;
+  return {
+    id: choice.id,
+    label: choice.label,
+    selectionNote: choice.selectionNote,
+  };
+}
+
+/**
+ * Normalize a free-text operational path phrase / id to a canonical choice.
+ * Prefers exact id/alias/label, then longest specific match.
+ * Never treats multi-option prompts as a selection; never defaults to CRM drafts.
  * @returns {{ id: string, label: string, selectionNote: string }|null}
  */
 function normalizeOperationalPathChoice(raw) {
   const s = String(raw || '').trim();
   if (!s) return null;
+  const lower = s.toLowerCase();
+  const compact = lower.replace(/[\s-]+/g, '_');
+
+  const aliasId =
+    OPERATIONAL_PATH_ID_ALIASES[lower] ||
+    OPERATIONAL_PATH_ID_ALIASES[compact] ||
+    null;
+  if (aliasId && OPERATIONAL_PATH_CHOICES[aliasId]) {
+    return operationalPathChoicePayload(OPERATIONAL_PATH_CHOICES[aliasId]);
+  }
+
   for (const choice of Object.values(OPERATIONAL_PATH_CHOICES)) {
-    if (choice.match.test(s)) {
-      return {
-        id: choice.id,
-        label: choice.label,
-        selectionNote: choice.selectionNote,
-      };
+    if (String(choice.label || '').toLowerCase() === lower) {
+      return operationalPathChoicePayload(choice);
     }
   }
-  return null;
+
+  // Multi-option menus must not collapse onto a shorter false positive (CRM).
+  if (looksLikeOperationalPathOptionList(s)) return null;
+
+  const ranked = Object.values(OPERATIONAL_PATH_CHOICES)
+    .map((choice) => {
+      const label = String(choice.label || '').toLowerCase();
+      let score = 0;
+      if (label && lower.includes(label)) score = Math.max(score, label.length + 20);
+      if (choice.match.test(s)) score = Math.max(score, String(choice.id).length + 5);
+      return { choice, score };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return ranked[0] ? operationalPathChoicePayload(ranked[0].choice) : null;
 }
 
 /**
  * Parse operational path selection from free text.
  * Path selection confirms readiness only — never execute approval.
+ * Does not infer path from next-action templates or multi-option prompts.
  * @param {string} text
  * @param {{ allowBarePath?: boolean }} [opts]
  * @returns {{
@@ -1753,6 +1931,17 @@ function parseOperationalPathSelection(text, opts = {}) {
     /\bnot\s+execution\s+approval\b/i.test(s) ||
     /\bselection\s+only[,.]?\s+not\s+execute\b/i.test(s);
 
+  // Campaign-ready summary asks mention "selected operational path" as a
+  // section to include — that framing is not itself a path selection.
+  if (looksLikeCampaignReadySummary(s)) {
+    return { ...empty, isPathSelectionOnly };
+  }
+
+  // Multi-option prompts are never a selection.
+  if (looksLikeOperationalPathOptionList(s)) {
+    return { ...empty, isPathSelectionOnly };
+  }
+
   const hasSelectFraming =
     /\b(?:select(?:ed)?|choose|chose|pick(?:ed)?|set|confirm(?:ed)?)\s+operational\s+path(?:\s+selection)?\b/i.test(
       s
@@ -1779,6 +1968,7 @@ function parseOperationalPathSelection(text, opts = {}) {
     : null;
 
   // Explicit select/path-selection framing with a known path phrase in the message.
+  // Prefer longest match; never use option-list inference.
   if (!choice && hasSelectFraming) {
     choice = normalizeOperationalPathChoice(s);
   }
@@ -1802,22 +1992,30 @@ function parseOperationalPathSelection(text, opts = {}) {
 
 /**
  * Merge prior operational-path slots with newly parsed selection.
+ * Confirmed prior path wins over empty/ambiguous parses. Never default to CRM.
  */
 function mergeOperationalPathState(prior = {}, parsed = {}) {
-  const pathId =
-    parsed.pathId ||
-    prior.operationalPathId ||
-    prior.pathId ||
-    null;
+  const priorChoice = normalizeOperationalPathChoice(
+    prior.operationalPathId || prior.pathId || prior.operationalPathLabel || prior.pathLabel || null
+  );
+  const parsedChoice = parsed.pathId
+    ? normalizeOperationalPathChoice(parsed.pathId) ||
+      (parsed.pathLabel ? normalizeOperationalPathChoice(parsed.pathLabel) : null)
+    : parsed.pathLabel
+      ? normalizeOperationalPathChoice(parsed.pathLabel)
+      : null;
+
+  // Confirmed prior wins when parse is empty; explicit parse updates the path.
+  const choice = parsedChoice || priorChoice || null;
+  const pathId = choice ? choice.id : null;
   const pathLabel =
+    (choice && choice.label) ||
     parsed.pathLabel ||
     prior.operationalPathLabel ||
     prior.pathLabel ||
-    (pathId &&
-      OPERATIONAL_PATH_CHOICES[pathId] &&
-      OPERATIONAL_PATH_CHOICES[pathId].label) ||
     null;
   const selectionNote =
+    (choice && choice.selectionNote) ||
     parsed.selectionNote ||
     (pathId &&
       OPERATIONAL_PATH_CHOICES[pathId] &&
@@ -3917,12 +4115,49 @@ function replyRecordFromConfirmed(records = {}) {
 }
 
 function operationalPathRecordFromConfirmed(records = {}) {
-  return (
+  const raw =
     records.operational_path ||
     records.operational_path_selection ||
     records.operationalPath ||
-    null
+    records.operationalPathSelection ||
+    null;
+  if (!raw) return null;
+  // Allow a bare id/alias string as the confirmed selection value.
+  if (typeof raw === 'string') {
+    const choice = normalizeOperationalPathChoice(raw);
+    if (!choice) return { confirmed: true, operationalPathId: raw };
+    return {
+      confirmed: true,
+      operationalPathId: choice.id,
+      operationalPathLabel: choice.label,
+      selectionNote: choice.selectionNote,
+    };
+  }
+  if (typeof raw !== 'object') return null;
+  const choice = normalizeOperationalPathChoice(
+    raw.operationalPathId ||
+      raw.pathId ||
+      raw.operational_path_selection ||
+      raw.operationalPathLabel ||
+      raw.pathLabel ||
+      null
   );
+  return {
+    ...raw,
+    confirmed: raw.confirmed !== false,
+    operationalPathId:
+      (choice && choice.id) ||
+      raw.operationalPathId ||
+      raw.pathId ||
+      null,
+    operationalPathLabel:
+      (choice && choice.label) ||
+      raw.operationalPathLabel ||
+      raw.pathLabel ||
+      null,
+    selectionNote:
+      (choice && choice.selectionNote) || raw.selectionNote || null,
+  };
 }
 
 function followUpRecordFromConfirmed(records = {}) {
@@ -4029,16 +4264,23 @@ function buildConfirmedReadinessRecords(context = {}, patch = {}) {
   }
 
   const operationalPathId =
-    patch.operationalPathId ||
-    slots.operationalPathId ||
-    context.operationalPathId ||
-    (prior.operational_path && prior.operational_path.operationalPathId) ||
-    null;
+    normalizeOperationalPathChoice(
+      patch.operationalPathId ||
+        (prior.operational_path && prior.operational_path.operationalPathId) ||
+        (prior.operational_path_selection &&
+          prior.operational_path_selection.operationalPathId) ||
+        slots.operationalPathId ||
+        context.operationalPathId ||
+        null
+    )?.id || null;
   const operationalPathLabel =
+    (operationalPathId &&
+      OPERATIONAL_PATH_CHOICES[operationalPathId] &&
+      OPERATIONAL_PATH_CHOICES[operationalPathId].label) ||
     patch.operationalPathLabel ||
+    (prior.operational_path && prior.operational_path.operationalPathLabel) ||
     slots.operationalPathLabel ||
     context.operationalPathLabel ||
-    (prior.operational_path && prior.operational_path.operationalPathLabel) ||
     null;
   if (
     patch.operationalPathChosen === true ||
@@ -4223,44 +4465,68 @@ function resolveReplyHandlingFromContext(context = {}) {
 
 /**
  * Resolve operational path selection from confirmed records + slots + message.
+ * Confirmed canonical path wins over stale flat slots. Never defaults to CRM.
+ * Campaign-ready summary asks and multi-option prompts are not path selections.
  */
 function resolveOperationalPathFromContext(context = {}) {
   const slots = context.slots || {};
+  const canonical = getCanonicalReadinessState(context);
+  const canonicalPath = canonical.operationalPath || {};
   const record =
     operationalPathRecordFromConfirmed(getConfirmedReadinessRecords(context)) ||
     {};
+  // Prefer canonical / confirmed record over flat slots (stale CRM drafts).
   const prior = {
     operationalPathId:
+      canonicalPath.operationalPathId ||
+      record.operationalPathId ||
       slots.operationalPathId ||
       context.operationalPathId ||
-      record.operationalPathId ||
       null,
     operationalPathLabel:
+      canonicalPath.operationalPathLabel ||
+      record.operationalPathLabel ||
       slots.operationalPathLabel ||
       context.operationalPathLabel ||
-      record.operationalPathLabel ||
       null,
     pathId:
+      canonicalPath.operationalPathId ||
+      record.operationalPathId ||
       slots.operationalPathId ||
       context.operationalPathId ||
-      record.operationalPathId ||
       null,
     pathLabel:
+      canonicalPath.operationalPathLabel ||
+      record.operationalPathLabel ||
       slots.operationalPathLabel ||
       context.operationalPathLabel ||
-      record.operationalPathLabel ||
       null,
   };
+  const message =
+    context.operatorMessage || context.text || context.userMessage || '';
+  // Summary asks must not re-parse path from "selected operational path" prose
+  // or from leftover option-list text.
+  if (looksLikeCampaignReadySummary(message)) {
+    return mergeOperationalPathState(prior, {});
+  }
   const activeId =
     normalizeReadinessItemId(
       context.activeReadinessItemId || slots.activeReadinessItemId || null
     ) || null;
-  const parsed = parseOperationalPathSelection(
-    context.operatorMessage || context.text || context.userMessage || '',
-    {
-      allowBarePath: activeId === 'operational_path',
-    }
-  );
+  const parsed = parseOperationalPathSelection(message, {
+    allowBarePath: activeId === 'operational_path',
+  });
+  // If a confirmed canonical path already exists, do not let an ambiguous
+  // parse (e.g. option-list residue) override it.
+  if (
+    prior.operationalPathId &&
+    parsed.hasAny &&
+    parsed.pathId &&
+    parsed.pathId !== prior.operationalPathId &&
+    (canonical.operationalPathChosen || record.confirmed)
+  ) {
+    return mergeOperationalPathState(prior, {});
+  }
   return mergeOperationalPathState(prior, parsed);
 }
 
@@ -5054,12 +5320,21 @@ function normalizeCampaignReadyBullet(raw, fallback) {
  */
 function composeCampaignReadySummary(context = {}) {
   const canonical = getCanonicalReadinessState(context);
+  const canonicalPath = canonical.operationalPath || {};
   const state = knownReadinessState({
     ...context,
     slots: {
       ...(context.slots || {}),
       ...(canonical.senderIdentity || {}),
       ...(canonical.replyHandling || {}),
+      // Inject canonical path so stale CRM slots cannot win.
+      ...(canonicalPath.operationalPathId
+        ? {
+            operationalPathId: canonicalPath.operationalPathId,
+            operationalPathLabel: canonicalPath.operationalPathLabel,
+            operationalPathChosen: canonical.operationalPathChosen === true,
+          }
+        : {}),
       senderIdentityConfirmed: canonical.senderIdentityConfirmed,
       replyInboxConfirmed: canonical.replyInboxConfirmed,
       replyHandlingConfirmed: canonical.replyHandlingConfirmed,
@@ -5069,6 +5344,9 @@ function composeCampaignReadySummary(context = {}) {
     senderIdentityConfirmed: canonical.senderIdentityConfirmed,
     replyInboxConfirmed: canonical.replyInboxConfirmed,
     replyHandlingConfirmed: canonical.replyHandlingConfirmed,
+    operationalPathId: canonicalPath.operationalPathId || null,
+    operationalPathLabel: canonicalPath.operationalPathLabel || null,
+    operationalPathChosen: canonical.operationalPathChosen === true,
   });
   const slots = context.slots || {};
   const businessName =
@@ -5088,16 +5366,19 @@ function composeCampaignReadySummary(context = {}) {
   const batch1Scope = resolveBatch1ScopeFromContext(context);
   const scopeDetails = resolveBatch1ScopeDetailsFromContext(context);
 
-  const pathLabel =
-    (state.operationalPath && state.operationalPath.operationalPathLabel) ||
-    slots.operationalPathLabel ||
-    context.operationalPathLabel ||
-    'manual send export for operator review';
+  // Read operational path ONLY from canonical readiness — never from
+  // next-action templates, option-list prompts, or stale CRM defaults.
   const pathId =
+    canonicalPath.operationalPathId ||
     (state.operationalPath && state.operationalPath.operationalPathId) ||
-    slots.operationalPathId ||
-    context.operationalPathId ||
     null;
+  const pathLabel =
+    canonicalPath.operationalPathLabel ||
+    (state.operationalPath && state.operationalPath.operationalPathLabel) ||
+    null;
+  const pathChosen =
+    canonical.operationalPathChosen === true ||
+    (state.operationalPathChosen === true && Boolean(pathLabel));
   const nextExecute = nextExecuteActionForOperationalPath(pathId, pathLabel);
 
   const sender = canonical.senderIdentity || {};
@@ -5160,7 +5441,7 @@ function composeCampaignReadySummary(context = {}) {
   }
   lines.push('');
 
-  if (state.operationalPathChosen && pathLabel) {
+  if (pathChosen && pathLabel) {
     lines.push('Operational path selected:');
     lines.push(`- ${pathLabel}`);
   } else {
@@ -5265,8 +5546,9 @@ function composeCampaignReadySummary(context = {}) {
     batch1Scope,
     senderIdentityConfirmed: canonical.senderIdentityConfirmed === true,
     replyInboxConfirmed: canonical.replyInboxConfirmed === true,
-    operationalPathChosen: state.operationalPathChosen === true,
+    operationalPathChosen: pathChosen === true,
     operationalPathLabel: pathLabel,
+    operationalPathId: pathId,
     followUpTrackingConfirmed: state.followUpTrackingConfirmed === true,
     replyMonitoringBatch1Confirmed:
       state.replyMonitoringBatch1Confirmed === true,
@@ -5967,6 +6249,8 @@ module.exports = {
   READINESS_SUBSTEP_SAFETY_LINE,
   READINESS_NEXT_ITEM_PROMPTS,
   OPERATIONAL_PATH_CHOICES,
+  OPERATIONAL_PATH_ID_ALIASES,
+  looksLikeOperationalPathOptionList,
   toConversationMode,
   toResponseMode,
   containsRendererBoilerplate,

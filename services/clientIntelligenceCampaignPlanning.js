@@ -7706,6 +7706,10 @@ function produceCampaignReadySummaryResult(userMessage, prior = {}, opts = {}) {
     (composed.confirmedReadinessRecords || {}).reply_handling ||
     (composed.confirmedReadinessRecords || {}).reply_inbox_handling ||
     {};
+  const canonicalPath =
+    (composed.confirmedReadinessRecords || {}).operational_path ||
+    (composed.confirmedReadinessRecords || {}).operational_path_selection ||
+    {};
 
   const nextSlots = {
     ...slots,
@@ -7733,6 +7737,20 @@ function produceCampaignReadySummaryResult(userMessage, prior = {}, opts = {}) {
           reply_monitoring_owner: canonicalReply.replyMonitoringOwner,
           replyInboxConfirmed: true,
           replyHandlingConfirmed: true,
+        }
+      : {}),
+    ...(canonicalPath.operationalPathId || composed.operationalPathId
+      ? {
+          operationalPathId:
+            canonicalPath.operationalPathId || composed.operationalPathId,
+          operationalPathLabel:
+            canonicalPath.operationalPathLabel || composed.operationalPathLabel,
+          operationalPathChosen: true,
+          operational_path_selection:
+            (canonicalPath.operationalPathId || composed.operationalPathId) ===
+            'manual_send_export'
+              ? 'manual_send_export_for_operator_review'
+              : canonicalPath.operationalPathId || composed.operationalPathId,
         }
       : {}),
   };
