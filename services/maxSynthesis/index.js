@@ -149,8 +149,18 @@ module.exports = {
     ConversationalResponsePolicy.approvalLanguageForGate,
   looksLikeExecutionRequest:
     ConversationalResponsePolicy.looksLikeExecutionRequest,
+  looksLikeNonExecutionIntent:
+    ConversationalResponsePolicy.looksLikeNonExecutionIntent,
+  looksLikeOperatorReadinessCheck:
+    ConversationalResponsePolicy.looksLikeOperatorReadinessCheck,
   composeExecutionConfirmation:
     ConversationalResponsePolicy.composeExecutionConfirmation,
+  composeOperatorReadinessCheck:
+    ConversationalResponsePolicy.composeOperatorReadinessCheck,
+  unresolvedReadinessItems:
+    ConversationalResponsePolicy.unresolvedReadinessItems,
+  DEFAULT_UNRESOLVED_READINESS_ITEMS:
+    ConversationalResponsePolicy.DEFAULT_UNRESOLVED_READINESS_ITEMS,
   dedupeOperatorStateUpdateMessage:
     ConversationalResponsePolicy.dedupeOperatorStateUpdateMessage,
   sanitizeApprovedStateLeadIn:

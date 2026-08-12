@@ -11,7 +11,13 @@
  *   2. operator_revision_response — operator asked for copy/targeting/memory changes
  *   3. operator_diagnostic        — stale/conflict/missing/failed output
  *   4. formal_review_gate         — first-time gate for approval (card allowed)
- *   5. execution_confirmation     — about to send/export/CRM/account action
+ *   5. operator_readiness_check   — summarize / resolve remaining readiness gaps
+ *   6. execution_confirmation     — about to send/export/CRM/account action
+ *
+ * Classification priority for post-approval turns:
+ * discussing options / resolving readiness / selecting a path later
+ * ALWAYS beat bare mentions of export/CRM/queue. Execution confirmation
+ * only when the operator clearly asks to take or approve a concrete action.
  */
 
 const {
@@ -24,6 +30,7 @@ const CONVERSATION_MODES = Object.freeze({
   OPERATOR_REVISION_RESPONSE: 'operator_revision_response',
   OPERATOR_DIAGNOSTIC: 'operator_diagnostic',
   FORMAL_REVIEW_GATE: 'formal_review_gate',
+  OPERATOR_READINESS_CHECK: 'operator_readiness_check',
   EXECUTION_CONFIRMATION: 'execution_confirmation',
 });
 
@@ -37,6 +44,8 @@ const CONVERSATION_MODE_TO_RESPONSE_MODE = Object.freeze({
     RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC,
   [CONVERSATION_MODES.FORMAL_REVIEW_GATE]:
     RESPONSE_MODES.WORKFLOW_REVIEW_CARD,
+  [CONVERSATION_MODES.OPERATOR_READINESS_CHECK]:
+    RESPONSE_MODES.OPERATOR_READINESS_CHECK || 'operator_readiness_check',
   [CONVERSATION_MODES.EXECUTION_CONFIRMATION]:
     RESPONSE_MODES.EXECUTION_CONFIRMATION || 'execution_confirmation',
 });
@@ -50,8 +59,16 @@ const RESPONSE_MODE_TO_CONVERSATION_MODE = Object.freeze({
     CONVERSATION_MODES.OPERATOR_DIAGNOSTIC,
   [RESPONSE_MODES.WORKFLOW_REVIEW_CARD]:
     CONVERSATION_MODES.FORMAL_REVIEW_GATE,
+  operator_readiness_check: CONVERSATION_MODES.OPERATOR_READINESS_CHECK,
   execution_confirmation: CONVERSATION_MODES.EXECUTION_CONFIRMATION,
 });
+
+/** Default unresolved items after Launch Gate readiness-only approval. */
+const DEFAULT_UNRESOLVED_READINESS_ITEMS = Object.freeze([
+  'Sender identity is not confirmed',
+  'Reply handling is not confirmed',
+  'Tracking / account settings remain unchanged until an explicit execute action',
+]);
 
 /** Sections that make Max sound like a workflow renderer — avoid outside formal gates. */
 const RENDERER_SECTION_PATTERNS = Object.freeze([
@@ -201,24 +218,43 @@ function assessConversationContext(input = {}) {
       input.intent === 'outreach_copy_plan_approved' ||
       input.intent === 'outreach_draft_preview_approved'
   );
+  const readinessFromText = looksLikeOperatorReadinessCheck(operatorMessage);
+  const nonExecutionFromText = looksLikeNonExecutionIntent(operatorMessage);
+  const executionFromText = looksLikeExecutionRequest(operatorMessage);
+
+  // Explicit flags still lose to clear readiness / planning language in the
+  // operator message — bare option names must never force execute confirm.
+  const isReadinessCheck = Boolean(
+    input.isReadinessCheck ||
+      input.forceReadinessCheck ||
+      readinessFromText
+  );
+  const isNonExecutionIntent = Boolean(
+    isReadinessCheck ||
+      input.isNonExecutionIntent ||
+      nonExecutionFromText
+  );
   const isExecutionRequest = Boolean(
-    input.isExecutionRequest ||
-      input.executionPending ||
-      looksLikeExecutionRequest(operatorMessage)
+    !isNonExecutionIntent &&
+      (input.isExecutionRequest ||
+        input.executionPending ||
+        executionFromText)
   );
 
   const shortestUseful =
     isDiagnostic
       ? 'plain_language_problem_then_detail'
-      : stateChanged || gateAlreadyApproved
-        ? 'state_then_next_options'
-        : isRevision
-          ? 'ack_change_artifact'
-          : isExecutionRequest
-            ? 'explicit_execute_confirm'
-            : isFirstTimeReview
-              ? 'formal_gate_card'
-              : 'concise_operator_update';
+      : isReadinessCheck
+        ? 'unresolved_readiness_then_ask'
+        : isExecutionRequest
+          ? 'explicit_execute_confirm'
+          : stateChanged || gateAlreadyApproved
+            ? 'state_then_next_options'
+            : isRevision
+              ? 'ack_change_artifact'
+              : isFirstTimeReview
+                ? 'formal_gate_card'
+                : 'concise_operator_update';
 
   const mustBlock = isExecutionRequest
     ? FULL_SAFETY_LINES.slice()
@@ -237,6 +273,8 @@ function assessConversationContext(input = {}) {
     isRevision,
     isDiagnostic,
     isFirstTimeReview,
+    isReadinessCheck,
+    isNonExecutionIntent,
     isExecutionRequest,
     shortestUseful,
     mustBlock,
@@ -245,9 +283,111 @@ function assessConversationContext(input = {}) {
   };
 }
 
+/**
+ * Planning / deferral / question language that must NOT become execution.
+ * Takes priority over bare mentions of export / CRM / queued sends.
+ */
+function looksLikeNonExecutionIntent(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+
+  if (/\bbefore\s+choosing\b/i.test(s)) return true;
+  if (/\bnot\s+yet\b/i.test(s)) return true;
+  if (
+    /\b(?:hold\s+for\s+now|hold\s+with\s+no\s+action|just\s+hold)\b/i.test(s)
+  ) {
+    return true;
+  }
+  if (/\b(?:summarize|summarise)\b/i.test(s)) return true;
+  if (
+    /\bhelp\s+me\s+(?:decide|resolve|understand|review|choose)\b/i.test(s)
+  ) {
+    return true;
+  }
+  if (/\b(?:let'?s\s+)?(?:talk\s+through|discuss)\b/i.test(s)) return true;
+  if (/\bwhat(?:'s|\s+is)\s+still\s+unresolved\b/i.test(s)) return true;
+  if (/\bwhat(?:'s|\s+is)\s+the\s+safest\s+next\b/i.test(s)) return true;
+  if (/\bwhat\s+would\b[\s\S]{0,80}\binvolve\b/i.test(s)) return true;
+  if (
+    /\bi'?d\s+probably\b/i.test(s) &&
+    /\b(?:but\s+)?not\s+yet\b/i.test(s)
+  ) {
+    return true;
+  }
+  if (
+    /\b(?:review|discuss|decide\s+between)\b/i.test(s) &&
+    /\b(?:export|crm|queued?\s+sends?|next\s+(?:path|option|move)s?)\b/i.test(
+      s
+    ) &&
+    !/\b(?:prepare|create|queue|approve|execute|go\s+ahead)\b/i.test(s)
+  ) {
+    return true;
+  }
+
+  // Pure questions without an execute imperative stay conversational.
+  if (
+    /\?/.test(s) &&
+    !/\b(?:approve|execute|prepare|create|queue|go\s+ahead)\b/i.test(s)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Operator wants unresolved readiness gaps summarized / resolved — not execute.
+ */
+function looksLikeOperatorReadinessCheck(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+
+  if (/\bunresolved\b/i.test(s) && /\breadiness\b/i.test(s)) return true;
+  if (/\bremaining\s+readiness\b/i.test(s)) return true;
+  if (/\breadiness\s+(?:items?|gaps?|checklist)\b/i.test(s)) return true;
+  if (
+    /\b(?:summarize|summarise|resolve|list)\b/i.test(s) &&
+    /\b(?:unresolved|remaining|readiness|gaps?)\b/i.test(s)
+  ) {
+    return true;
+  }
+  if (
+    /\bbefore\s+choosing\b/i.test(s) &&
+    /\b(?:readiness|unresolved|export|crm|queued?\s+sends?)\b/i.test(s)
+  ) {
+    return true;
+  }
+  if (/\bwhat(?:'s|\s+is)\s+still\s+unresolved\b/i.test(s)) return true;
+  if (
+    /\bhelp\s+me\s+resolve\b/i.test(s) &&
+    /\b(?:readiness|remaining|unresolved)\b/i.test(s)
+  ) {
+    return true;
+  }
+  if (
+    /\blet'?s\s+talk\s+through\b/i.test(s) &&
+    /\b(?:sender|reply|readiness|identity)\b/i.test(s)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * True only when the operator clearly asks to take / approve a concrete
+ * external or actionable step. Mentions of available next paths alone are not
+ * enough — especially under "before choosing", "not yet", questions, etc.
+ */
 function looksLikeExecutionRequest(text) {
   const s = String(text || '').trim();
   if (!s) return false;
+
+  // Planning / readiness / deferral always wins over path-name mentions.
+  if (looksLikeNonExecutionIntent(s) || looksLikeOperatorReadinessCheck(s)) {
+    return false;
+  }
+
   if (
     /\b(?:send|sends|sending)\b[\s\S]{0,40}\b(?:now|batch|emails?|campaign)\b/i.test(
       s
@@ -256,20 +396,48 @@ function looksLikeExecutionRequest(text) {
     return true;
   }
   if (
-    /\b(?:export|crm\s+write|write\s+to\s+crm|create\s+crm\s+drafts?|queue\s+sends?|schedule\s+(?:the\s+)?(?:send|launch)|execute\s+(?:send|export|crm|launch))\b/i.test(
+    /\b(?:prepare|create|generate|build|make)\s+(?:(?:a|an|the)\s+)?(?:manual-?send\s+)?export\b/i.test(
       s
     )
   ) {
     return true;
   }
   if (
-    /\bapprove\s+(?:the\s+)?(?:send|export|crm|execute|launch\s+execute)\b/i.test(
+    /\b(?:create|prepare|generate)\s+(?:(?:the|some)\s+)?crm\s+drafts?\b/i.test(
       s
     )
   ) {
     return true;
   }
-  if (/\bprepare\s+(?:a\s+)?manual-?send\s+export\b/i.test(s)) {
+  if (
+    /\b(?:queue|schedule)\s+(?:(?:the|those|a)\s+)?(?:sends?|launch)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(?:approve|execute)\s+(?:(?:the|this|a)\s+)?(?:send|export|crm|execute|manual-?send|launch)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\bgo\s+ahead\s+and\s+(?:create|prepare|export|queue|send|execute)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\byes[,.]?\s+(?:execute|approve|prepare|create|queue|export|send)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/\bwrite\s+to\s+crm\b|\bcrm\s+write\b/i.test(s)) {
     return true;
   }
   return false;
@@ -284,6 +452,11 @@ function selectConversationMode(input = {}) {
 
   if (assessment.isDiagnostic) {
     return CONVERSATION_MODES.OPERATOR_DIAGNOSTIC;
+  }
+  // Readiness / planning before execution — never ask to approve execute
+  // when the operator is still resolving gaps or discussing options.
+  if (assessment.isReadinessCheck) {
+    return CONVERSATION_MODES.OPERATOR_READINESS_CHECK;
   }
   if (assessment.isExecutionRequest) {
     return CONVERSATION_MODES.EXECUTION_CONFIRMATION;
@@ -328,6 +501,8 @@ function composeConversationResponse(mode, context = {}) {
       return composeOperatorDiagnostic(context);
     case CONVERSATION_MODES.FORMAL_REVIEW_GATE:
       return composeFormalReviewGate(context);
+    case CONVERSATION_MODES.OPERATOR_READINESS_CHECK:
+      return composeOperatorReadinessCheck(context);
     case CONVERSATION_MODES.EXECUTION_CONFIRMATION:
       return composeExecutionConfirmation(context);
     default:
@@ -509,6 +684,73 @@ function composeFormalReviewGate(context = {}) {
     message: lines.join('\n').trim(),
     includeRendererSections: true,
     includeExpandedSafety: true,
+  };
+}
+
+/**
+ * Resolve unresolved readiness items from context / gate / overrides.
+ */
+function unresolvedReadinessItems(context = {}) {
+  if (Array.isArray(context.unresolvedItems) && context.unresolvedItems.length) {
+    return context.unresolvedItems.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (
+    Array.isArray(context.readinessGaps) &&
+    context.readinessGaps.length
+  ) {
+    return context.readinessGaps.map((item) => String(item).trim()).filter(Boolean);
+  }
+
+  const gate = context.gate || context.outreachLaunchGate || {};
+  const summary = gate.operatorStateSummary || {};
+  const fromSummary =
+    (Array.isArray(summary.unresolvedItems) && summary.unresolvedItems) ||
+    (Array.isArray(summary.readinessGaps) && summary.readinessGaps) ||
+    null;
+  if (fromSummary && fromSummary.length) {
+    return fromSummary.map((item) => String(item).trim()).filter(Boolean);
+  }
+
+  // Post readiness-only approval: list what still blocks a safe execute path.
+  return DEFAULT_UNRESOLVED_READINESS_ITEMS.slice();
+}
+
+/**
+ * Readiness check — list unresolved items only; never ask for execute approval.
+ */
+function composeOperatorReadinessCheck(context = {}) {
+  const items = unresolvedReadinessItems(context);
+  const closingAsk =
+    context.closingAsk ||
+    context.closingQuestion ||
+    context.currentAsk ||
+    'Which readiness item should we resolve first?';
+
+  const lines = [
+    context.leadIn ||
+      'Still unresolved before any export, CRM drafts, or queued sends:',
+    '',
+    ...items.map((item) => `- ${item}`),
+    '',
+    context.safetyLine ||
+      compactSafetyLockLine({ short: context.compactSafety }),
+    '',
+    closingAsk,
+  ];
+
+  const message = lines.join('\n').trim();
+  return {
+    mode: CONVERSATION_MODES.OPERATOR_READINESS_CHECK,
+    responseMode: toResponseMode(CONVERSATION_MODES.OPERATOR_READINESS_CHECK),
+    message,
+    includeRendererSections: false,
+    includeExpandedSafety: false,
+    unresolvedItems: items,
+    requiresExplicitApproval: false,
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
   };
 }
 
@@ -783,6 +1025,11 @@ function applyConversationalPolicy(reply, context = {}) {
     isInitialReviewGate:
       context.isInitialReviewGate ||
       reply.responseMode === RESPONSE_MODES.WORKFLOW_REVIEW_CARD,
+    isReadinessCheck:
+      context.isReadinessCheck ||
+      reply.responseMode === 'operator_readiness_check' ||
+      reply.conversationMode === 'operator_readiness_check' ||
+      reply.intent === 'operator_readiness_check',
     isExecutionRequest:
       context.isExecutionRequest ||
       reply.responseMode === 'execution_confirmation',
@@ -857,6 +1104,7 @@ module.exports = {
   RENDERER_SECTION_PATTERNS,
   FULL_SAFETY_LINES,
   DEFAULT_NEXT_PATHS,
+  DEFAULT_UNRESOLVED_READINESS_ITEMS,
   toConversationMode,
   toResponseMode,
   containsRendererBoilerplate,
@@ -864,6 +1112,8 @@ module.exports = {
   expandedSafetyBlock,
   approvalLanguageForGate,
   assessConversationContext,
+  looksLikeNonExecutionIntent,
+  looksLikeOperatorReadinessCheck,
   looksLikeExecutionRequest,
   selectConversationMode,
   composeConversationResponse,
@@ -871,7 +1121,9 @@ module.exports = {
   composeOperatorRevisionResponse,
   composeOperatorDiagnostic,
   composeFormalReviewGate,
+  composeOperatorReadinessCheck,
   composeExecutionConfirmation,
+  unresolvedReadinessItems,
   formatApprovedLaunchGateConversational,
   formatOperatorDiagnosticMessage,
   applyConversationalPolicy,
