@@ -4475,6 +4475,151 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.equal(reply.activeReadinessItemId, 'follow_up_tracking');
   });
 
+  it('follow-up tracking answers confirm substep and advance to reply monitoring without execute', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const reply = buildCampaignPlanningReply(
+      [
+        'Follow-up status should be tracked in the manual-send export/review sheet for now.',
+        'Follow-up 1 should be planned for about 3 business days after first touch.',
+        'Follow-up 2 should be planned for about 7 business days after first touch.',
+        'All follow-ups remain review-first/manual unless explicitly enabled later.',
+        'No automatic follow-up sends are approved.',
+      ].join(' '),
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        launchGateApproved: true,
+        intent: 'readiness_field_correction',
+        readinessItemId: 'follow_up_tracking',
+        activeReadinessItemId: 'follow_up_tracking_process',
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+          activeReadinessItemId: 'follow_up_tracking_process',
+          senderIdentityConfirmed: true,
+          senderName: 'Jacob Maynard',
+          senderEmail: 'jacob@goanchorcleaning.com',
+          senderSignature: 'Jacob Maynard, Anchor Cleaning',
+          replyInboxConfirmed: true,
+          replyHandlingConfirmed: true,
+          replyInbox: 'jacob@goanchorcleaning.com',
+          replyToMatchesSender: true,
+          replyMonitoringOwner: 'Jacob Maynard',
+          operationalPathChosen: true,
+          operationalPathId: 'manual_send_export',
+          operationalPathLabel: 'manual send export for operator review',
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'readiness_field_correction');
+    assert.equal(reply.followUpTrackingConfirmed, true);
+    assert.equal(reply.executionPending, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.notEqual(reply.responseMode, 'execution_confirmation');
+    assert.notEqual(reply.responseMode, 'operator_readiness_check');
+    assert.notEqual(reply.responseMode, 'readiness_substep');
+    assert.match(
+      reply.message,
+      /^Follow-up tracking process is confirmed:/m
+    );
+    assert.match(
+      reply.message,
+      /- Status tracked in the manual-send export\/review sheet/i
+    );
+    assert.match(
+      reply.message,
+      /- Follow-up 1 planned for about 3 business days after first touch/i
+    );
+    assert.match(
+      reply.message,
+      /- Follow-up 2 planned for about 7 business days after first touch/i
+    );
+    assert.match(
+      reply.message,
+      /- Follow-ups remain review-first\/manual unless explicitly enabled later/i
+    );
+    assert.match(
+      reply.message,
+      /- No automatic follow-up sends are approved/i
+    );
+    assert.match(
+      reply.message,
+      /Next readiness item:\s*reply monitoring \/ Batch 1 review process/i
+    );
+    assert.match(
+      reply.message,
+      /Who will monitor replies, how should responses be reviewed, and should broader rollout remain blocked until Batch 1 results are reviewed\?/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Where should follow-up status be tracked\?/i
+    );
+    assert.doesNotMatch(reply.message, /Should Follow-up 1 be planned/i);
+    assert.doesNotMatch(reply.message, /Should Follow-up 2 be planned/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Should all follow-ups remain review-first/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(reply.message, /Exact action/i);
+    assert.doesNotMatch(reply.message, /prepare a manual-send export/i);
+    assert.equal(reply.slots.followUpTrackingConfirmed, true);
+    assert.equal(
+      reply.slots.followUpTrackingLocation,
+      'the manual-send export/review sheet'
+    );
+    assert.equal(
+      reply.slots.followUp1Timing,
+      'about 3 business days after first touch'
+    );
+    assert.equal(
+      reply.slots.followUp2Timing,
+      'about 7 business days after first touch'
+    );
+    assert.equal(reply.slots.followUpReviewFirstManual, true);
+    assert.equal(reply.slots.automaticFollowUpSendsApproved, false);
+    assert.equal(reply.activeReadinessItemId, 'reply_monitoring_batch1');
+  });
+
   it('operator-facing draft digest comes first without banned fragments', () => {
     const { review, ctx, strategy, plan } = chainFixtures();
     const draft = buildOutreachDraftPreview(
