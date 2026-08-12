@@ -118,7 +118,12 @@ const {
   applyConversationalPolicy,
   formatApprovedLaunchGateConversational,
   looksLikeExecutionRequest,
+  looksLikeNonExecutionIntent,
+  looksLikeOperatorReadinessCheck,
   composeExecutionConfirmation,
+  composeOperatorReadinessCheck,
+  unresolvedReadinessItems,
+  DEFAULT_UNRESOLVED_READINESS_ITEMS,
 } = require('./maxSynthesis');
 const {
   SCOUT_HANDOFF_KIND,
@@ -7603,6 +7608,59 @@ function produceExecutionConfirmationResult(userMessage, prior = {}, opts = {}) 
   );
 }
 
+/**
+ * Operator readiness check — summarize unresolved items only.
+ * Does not prepare export, create CRM drafts, queue sends, or ask for execute.
+ */
+function produceOperatorReadinessCheckResult(userMessage, prior = {}, opts = {}) {
+  const gate = prior.outreachLaunchGate || opts.priorOutreachLaunchGate || null;
+  const composed = composeOperatorReadinessCheck({
+    gate,
+    outreachLaunchGate: gate,
+    unresolvedItems: opts.unresolvedItems || null,
+    closingAsk: 'Which readiness item should we resolve first?',
+  });
+
+  return applyConversationalPolicy(
+    {
+      message: composed.message,
+      step:
+        prior.step ||
+        CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      answers: opts.answers || prior.answers || {},
+      slots: {
+        ...(prior.slots || {}),
+        ...(opts.slots || {}),
+        launchGateApproved: true,
+        launchReady: true,
+      },
+      outreachLaunchGate: gate,
+      outreachDraftPreview: prior.outreachDraftPreview || null,
+      intent: 'operator_readiness_check',
+      planningState:
+        prior.planningState ||
+        CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      currentAsk: 'Which readiness item should we resolve first?',
+      responseMode: RESPONSE_MODES.OPERATOR_READINESS_CHECK,
+      conversationMode: CONVERSATION_MODES.OPERATOR_READINESS_CHECK,
+      unresolvedItems: composed.unresolvedItems,
+      launchGateApproved: true,
+      launchReady: true,
+      launched: false,
+      executionPending: false,
+      sendsMade: false,
+      crmWritesMade: false,
+      exportMade: false,
+      accountChangesMade: false,
+    },
+    {
+      isReadinessCheck: true,
+      operatorMessage: userMessage,
+      forceMode: CONVERSATION_MODES.OPERATOR_READINESS_CHECK,
+    }
+  );
+}
+
 function formatProspectBatch1ApprovalMessage(approvedReview, opts = {}) {
   const review = approvedReview || {};
   const count =
@@ -9987,9 +10045,28 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       );
     }
 
+    // Readiness / planning after Launch Gate approval — never treat option
+    // mentions ("before choosing export…") as execute confirmation.
+    if (
+      looksLikeOperatorReadinessCheck(userMessage) &&
+      (isOutreachLaunchGateAlreadyApproved(priorLaunchGateEarly) ||
+        prior.launchGateApproved === true ||
+        priorSlots.launchGateApproved === true ||
+        sharedApprovedSlots.launchGateApproved === true)
+    ) {
+      return produceOperatorReadinessCheckResult(userMessage, prior, {
+        ...sharedReplyOpts,
+        priorOutreachLaunchGate: priorLaunchGateEarly,
+        answers: { ...(prior.answers || {}) },
+        slots: { ...sharedApprovedSlots },
+      });
+    }
+
     // Execution path after readiness approval — confirm only, never auto-run.
+    // Only when the operator clearly asks to take/approve a concrete action.
     if (
       looksLikeExecutionRequest(userMessage) &&
+      !looksLikeNonExecutionIntent(userMessage) &&
       (isOutreachLaunchGateAlreadyApproved(priorLaunchGateEarly) ||
         prior.launchGateApproved === true ||
         priorSlots.launchGateApproved === true ||
@@ -12178,10 +12255,13 @@ module.exports = {
   OUTREACH_LAUNCH_GATE_NEXT_OPTIONS,
   OUTREACH_LAUNCH_GATE_OPERATOR_GUIDANCE,
   produceExecutionConfirmationResult,
+  produceOperatorReadinessCheckResult,
   CONVERSATION_MODES,
   formatApprovedLaunchGateConversational,
   applyConversationalPolicy,
   looksLikeExecutionRequest,
+  looksLikeNonExecutionIntent,
+  looksLikeOperatorReadinessCheck,
   buildScoutHandoffBrief,
   formatScoutHandoffBriefMessage,
   produceScoutHandoffBriefResult,

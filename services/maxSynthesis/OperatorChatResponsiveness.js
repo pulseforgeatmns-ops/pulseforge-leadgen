@@ -20,6 +20,8 @@ const RESPONSE_MODES = Object.freeze({
   OPERATOR_CHAT_RESPONSE: 'operator_chat_response',
   OPERATOR_STATE_SUMMARY: 'operator_state_summary',
   STALE_SOURCE_DIAGNOSTIC: 'stale_source_diagnostic',
+  /** Summarize / resolve readiness gaps — never execute. */
+  OPERATOR_READINESS_CHECK: 'operator_readiness_check',
   /** Explicit send/export/CRM/account confirmation — never auto-execute. */
   EXECUTION_CONFIRMATION: 'execution_confirmation',
 });
@@ -376,9 +378,13 @@ function countRejectedFingerprint(workingState, fingerprint) {
 function selectResponseMode(opts = {}) {
   // Lazy require avoids circular init with ConversationalResponsePolicy.
   let policySelect = null;
+  let looksLikeReadiness = null;
+  let looksLikeNonExec = null;
   try {
-    policySelect =
-      require('./ConversationalResponsePolicy').selectResponseModeWithPolicy;
+    const policy = require('./ConversationalResponsePolicy');
+    policySelect = policy.selectResponseModeWithPolicy;
+    looksLikeReadiness = policy.looksLikeOperatorReadinessCheck;
+    looksLikeNonExec = policy.looksLikeNonExecutionIntent;
   } catch (_err) {
     policySelect = null;
   }
@@ -397,7 +403,26 @@ function selectResponseMode(opts = {}) {
     return RESPONSE_MODES.STALE_SOURCE_DIAGNOSTIC;
   }
 
-  if (opts.executionPending === true || opts.isExecutionRequest === true) {
+  const text = opts.text || opts.operatorMessage || '';
+  const readinessFromText =
+    typeof looksLikeReadiness === 'function' && text
+      ? looksLikeReadiness(text)
+      : false;
+  const nonExecFromText =
+    typeof looksLikeNonExec === 'function' && text
+      ? looksLikeNonExec(text)
+      : false;
+
+  // Readiness / planning language beats execution flags derived from path names.
+  if (opts.isReadinessCheck === true || readinessFromText) {
+    return RESPONSE_MODES.OPERATOR_READINESS_CHECK;
+  }
+
+  if (
+    (opts.executionPending === true || opts.isExecutionRequest === true) &&
+    !nonExecFromText &&
+    !readinessFromText
+  ) {
     return RESPONSE_MODES.EXECUTION_CONFIRMATION;
   }
 

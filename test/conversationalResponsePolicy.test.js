@@ -17,10 +17,13 @@ const {
   containsRendererBoilerplate,
   approvalLanguageForGate,
   looksLikeExecutionRequest,
+  looksLikeNonExecutionIntent,
+  looksLikeOperatorReadinessCheck,
   compactSafetyLockLine,
   assessConversationContext,
   applyConversationalPolicy,
   selectResponseMode,
+  composeOperatorReadinessCheck,
 } = require('../services/maxSynthesis');
 
 describe('ConversationalResponsePolicy', () => {
@@ -64,6 +67,79 @@ describe('ConversationalResponsePolicy', () => {
       isExecutionRequest: true,
     });
     assert.equal(mode, CONVERSATION_MODES.EXECUTION_CONFIRMATION);
+  });
+
+  it('does not treat readiness / planning language as execution', () => {
+    const negatives = [
+      "What's still unresolved?",
+      'Help me decide between export and CRM drafts.',
+      'Before choosing, summarize readiness gaps.',
+      'What would manual-send export involve?',
+      "Let's talk through sender identity first.",
+      "I'd probably do manual export, but not yet.",
+      "What's the safest next move?",
+      'Hold for now.',
+      'Before choosing export, CRM drafts, or queued sends, help me resolve the remaining readiness items. Please summarize only what is still unresolved.',
+    ];
+    for (const text of negatives) {
+      assert.equal(
+        looksLikeExecutionRequest(text),
+        false,
+        `expected non-execution for: ${text}`
+      );
+      assert.equal(
+        looksLikeNonExecutionIntent(text) ||
+          looksLikeOperatorReadinessCheck(text),
+        true,
+        `expected planning/readiness for: ${text}`
+      );
+    }
+
+    const positives = [
+      'Prepare the manual-send export.',
+      'Create the CRM drafts.',
+      'Queue the sends.',
+      'Approve export.',
+      'Yes, execute the manual-send export.',
+      'Go ahead and create the export file.',
+      'Prepare a manual-send export for review',
+    ];
+    for (const text of positives) {
+      assert.equal(
+        looksLikeExecutionRequest(text),
+        true,
+        `expected execution for: ${text}`
+      );
+    }
+  });
+
+  it('selects operator_readiness_check for unresolved readiness asks', () => {
+    const text =
+      'Before choosing export, CRM drafts, or queued sends, help me resolve the remaining readiness items. Please summarize only what is still unresolved.';
+    assert.equal(looksLikeOperatorReadinessCheck(text), true);
+    assert.equal(looksLikeExecutionRequest(text), false);
+    const mode = selectConversationMode({
+      text,
+      operatorMessage: text,
+      launchGateApproved: true,
+    });
+    assert.equal(mode, CONVERSATION_MODES.OPERATOR_READINESS_CHECK);
+  });
+
+  it('composes readiness check without execution confirmation structure', () => {
+    const composed = composeOperatorReadinessCheck({});
+    assert.equal(composed.mode, CONVERSATION_MODES.OPERATOR_READINESS_CHECK);
+    assert.match(composed.message, /Still unresolved/i);
+    assert.match(composed.message, /Sender identity/i);
+    assert.match(composed.message, /Reply handling/i);
+    assert.match(composed.message, /Which readiness item should we resolve first/i);
+    assert.doesNotMatch(composed.message, /Exact action/i);
+    assert.doesNotMatch(composed.message, /Records affected/i);
+    assert.doesNotMatch(
+      composed.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.equal(composed.requiresExplicitApproval, false);
   });
 
   it('composes approved launch gate without renderer sections', () => {

@@ -3493,6 +3493,78 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.doesNotMatch(reply.message, /Primary actions/i);
   });
 
+  it('post-approval readiness ask is operator_readiness_check, not execution', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const reply = buildCampaignPlanningReply(
+      'Before choosing export, CRM drafts, or queued sends, help me resolve the remaining readiness items. Please summarize only what is still unresolved.',
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        launchGateApproved: true,
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'operator_readiness_check');
+    assert.equal(reply.conversationMode, 'operator_readiness_check');
+    assert.equal(reply.intent, 'operator_readiness_check');
+    assert.match(reply.message, /Still unresolved/i);
+    assert.match(reply.message, /Sender identity/i);
+    assert.match(reply.message, /Reply handling/i);
+    assert.match(
+      reply.message,
+      /Which readiness item should we resolve first/i
+    );
+    assert.doesNotMatch(reply.message, /Exact action/i);
+    assert.doesNotMatch(reply.message, /Records affected/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.accountChangesMade, false);
+    assert.equal(reply.launched, false);
+    assert.equal(reply.executionPending, false);
+  });
+
   it('operator-facing draft digest comes first without banned fragments', () => {
     const { review, ctx, strategy, plan } = chainFixtures();
     const draft = buildOutreachDraftPreview(
