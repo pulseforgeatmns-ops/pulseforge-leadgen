@@ -169,6 +169,14 @@ module.exports = {
     ConversationalResponsePolicy.parseReplyHandlingFields,
   parseOperationalPathSelection:
     ConversationalResponsePolicy.parseOperationalPathSelection,
+  normalizeOperationalPathChoice:
+    ConversationalResponsePolicy.normalizeOperationalPathChoice,
+  looksLikeOperationalPathOptionList:
+    ConversationalResponsePolicy.looksLikeOperationalPathOptionList,
+  OPERATIONAL_PATH_CHOICES:
+    ConversationalResponsePolicy.OPERATIONAL_PATH_CHOICES,
+  OPERATIONAL_PATH_ID_ALIASES:
+    ConversationalResponsePolicy.OPERATIONAL_PATH_ID_ALIASES,
   parseFollowUpTrackingFields:
     ConversationalResponsePolicy.parseFollowUpTrackingFields,
   mergeSenderIdentityState:
