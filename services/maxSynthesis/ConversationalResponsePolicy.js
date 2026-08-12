@@ -3407,24 +3407,339 @@ function readinessConceptId(item) {
 }
 
 /**
- * Resolve sender identity fields from slots + latest operator message.
+ * Confirmed readiness field records (durable across substeps / summary asks).
+ * Prefer these over the latest prompt fragment alone.
+ */
+function getConfirmedReadinessRecords(context = {}) {
+  const slots = context.slots || {};
+  const gate = context.gate || context.outreachLaunchGate || {};
+  const summary = gate.operatorStateSummary || {};
+  const memory =
+    (context.campaignMemory && context.campaignMemory.operatorLearnings) ||
+    context.operatorLearnings ||
+    {};
+  return {
+    ...(memory.confirmed_readiness_records || {}),
+    ...(summary.confirmedReadinessRecords || {}),
+    ...(context.confirmedReadinessRecords || {}),
+    ...(slots.confirmedReadinessRecords || {}),
+  };
+}
+
+function senderRecordFromConfirmed(records = {}) {
+  return (
+    records.sender_identity ||
+    records.senderIdentity ||
+    records.sender_identity_fields ||
+    null
+  );
+}
+
+function replyRecordFromConfirmed(records = {}) {
+  return (
+    records.reply_handling ||
+    records.reply_inbox_handling ||
+    records.replyHandling ||
+    records.replyInboxHandling ||
+    null
+  );
+}
+
+function operationalPathRecordFromConfirmed(records = {}) {
+  return (
+    records.operational_path ||
+    records.operational_path_selection ||
+    records.operationalPath ||
+    null
+  );
+}
+
+function followUpRecordFromConfirmed(records = {}) {
+  return (
+    records.follow_up_tracking ||
+    records.follow_up_tracking_process ||
+    records.followUpTracking ||
+    null
+  );
+}
+
+function monitoringRecordFromConfirmed(records = {}) {
+  return (
+    records.reply_monitoring_batch1 ||
+    records.reply_monitoring_batch_review ||
+    records.replyMonitoringBatch1 ||
+    records.replyMonitoringBatchReview ||
+    null
+  );
+}
+
+/**
+ * Build / merge structured confirmed readiness records from known field values.
+ * Used when an item is confirmed so later summary asks can retrieve them.
+ */
+function buildConfirmedReadinessRecords(context = {}, patch = {}) {
+  const prior = getConfirmedReadinessRecords(context);
+  const slots = context.slots || {};
+  const next = { ...prior };
+
+  const senderName =
+    patch.senderName ||
+    slots.senderName ||
+    context.senderName ||
+    (prior.sender_identity && prior.sender_identity.senderName) ||
+    null;
+  const senderEmail =
+    patch.senderEmail ||
+    slots.senderEmail ||
+    context.senderEmail ||
+    (prior.sender_identity && prior.sender_identity.senderEmail) ||
+    null;
+  const senderSignature =
+    patch.senderSignature ||
+    slots.senderSignature ||
+    context.senderSignature ||
+    (prior.sender_identity && prior.sender_identity.senderSignature) ||
+    null;
+  if (
+    patch.senderIdentityConfirmed === true ||
+    slots.senderIdentityConfirmed === true ||
+    context.senderIdentityConfirmed === true ||
+    (senderName && senderEmail && senderSignature)
+  ) {
+    if (senderName && senderEmail && senderSignature) {
+      next.sender_identity = {
+        confirmed: true,
+        senderName,
+        senderEmail,
+        senderSignature,
+      };
+    }
+  }
+
+  const replyInbox =
+    patch.replyInbox ||
+    slots.replyInbox ||
+    context.replyInbox ||
+    (prior.reply_handling && prior.reply_handling.replyInbox) ||
+    null;
+  const replyToMatchesSender =
+    patch.replyToMatchesSender != null
+      ? patch.replyToMatchesSender
+      : slots.replyToMatchesSender != null
+        ? slots.replyToMatchesSender
+        : context.replyToMatchesSender != null
+          ? context.replyToMatchesSender
+          : prior.reply_handling &&
+              prior.reply_handling.replyToMatchesSender != null
+            ? prior.reply_handling.replyToMatchesSender
+            : null;
+  const replyMonitoringOwner =
+    patch.replyMonitoringOwner ||
+    slots.replyMonitoringOwner ||
+    context.replyMonitoringOwner ||
+    (prior.reply_handling && prior.reply_handling.replyMonitoringOwner) ||
+    null;
+  if (
+    patch.replyInboxConfirmed === true ||
+    patch.replyHandlingConfirmed === true ||
+    slots.replyInboxConfirmed === true ||
+    slots.replyHandlingConfirmed === true ||
+    (replyInbox && replyToMatchesSender !== null && replyMonitoringOwner)
+  ) {
+    if (replyInbox && replyToMatchesSender !== null && replyMonitoringOwner) {
+      next.reply_handling = {
+        confirmed: true,
+        replyInbox,
+        replyToMatchesSender,
+        replyMonitoringOwner,
+      };
+      next.reply_inbox_handling = next.reply_handling;
+    }
+  }
+
+  const operationalPathId =
+    patch.operationalPathId ||
+    slots.operationalPathId ||
+    context.operationalPathId ||
+    (prior.operational_path && prior.operational_path.operationalPathId) ||
+    null;
+  const operationalPathLabel =
+    patch.operationalPathLabel ||
+    slots.operationalPathLabel ||
+    context.operationalPathLabel ||
+    (prior.operational_path && prior.operational_path.operationalPathLabel) ||
+    null;
+  if (
+    patch.operationalPathChosen === true ||
+    slots.operationalPathChosen === true ||
+    operationalPathLabel
+  ) {
+    if (operationalPathLabel) {
+      next.operational_path = {
+        confirmed: true,
+        operationalPathId,
+        operationalPathLabel,
+      };
+    }
+  }
+
+  const followUpTrackingLocation =
+    patch.followUpTrackingLocation ||
+    slots.followUpTrackingLocation ||
+    context.followUpTrackingLocation ||
+    (prior.follow_up_tracking &&
+      prior.follow_up_tracking.followUpTrackingLocation) ||
+    null;
+  const followUp1Timing =
+    patch.followUp1Timing ||
+    slots.followUp1Timing ||
+    context.followUp1Timing ||
+    (prior.follow_up_tracking && prior.follow_up_tracking.followUp1Timing) ||
+    null;
+  const followUp2Timing =
+    patch.followUp2Timing ||
+    slots.followUp2Timing ||
+    context.followUp2Timing ||
+    (prior.follow_up_tracking && prior.follow_up_tracking.followUp2Timing) ||
+    null;
+  const followUpReviewFirstManual =
+    patch.followUpReviewFirstManual != null
+      ? patch.followUpReviewFirstManual
+      : slots.followUpReviewFirstManual != null
+        ? slots.followUpReviewFirstManual
+        : context.followUpReviewFirstManual != null
+          ? context.followUpReviewFirstManual
+          : prior.follow_up_tracking &&
+              prior.follow_up_tracking.followUpReviewFirstManual != null
+            ? prior.follow_up_tracking.followUpReviewFirstManual
+            : null;
+  const automaticFollowUpSendsApproved =
+    patch.automaticFollowUpSendsApproved != null
+      ? patch.automaticFollowUpSendsApproved
+      : slots.automaticFollowUpSendsApproved != null
+        ? slots.automaticFollowUpSendsApproved
+        : context.automaticFollowUpSendsApproved != null
+          ? context.automaticFollowUpSendsApproved
+          : prior.follow_up_tracking &&
+              prior.follow_up_tracking.automaticFollowUpSendsApproved != null
+            ? prior.follow_up_tracking.automaticFollowUpSendsApproved
+            : null;
+  if (
+    patch.followUpTrackingConfirmed === true ||
+    slots.followUpTrackingConfirmed === true ||
+    followUpTrackingLocation
+  ) {
+    if (followUpTrackingLocation) {
+      next.follow_up_tracking = {
+        confirmed: true,
+        followUpTrackingLocation,
+        followUp1Timing,
+        followUp2Timing,
+        followUpReviewFirstManual,
+        automaticFollowUpSendsApproved,
+      };
+      next.follow_up_tracking_process = next.follow_up_tracking;
+    }
+  }
+
+  const responseReviewProcess =
+    patch.responseReviewProcess ||
+    slots.responseReviewProcess ||
+    context.responseReviewProcess ||
+    (prior.reply_monitoring_batch1 &&
+      prior.reply_monitoring_batch1.responseReviewProcess) ||
+    null;
+  const positiveReplyHandling =
+    patch.positiveReplyHandling ||
+    slots.positiveReplyHandling ||
+    context.positiveReplyHandling ||
+    (prior.reply_monitoring_batch1 &&
+      prior.reply_monitoring_batch1.positiveReplyHandling) ||
+    null;
+  const negativeReplyHandling =
+    patch.negativeReplyHandling ||
+    slots.negativeReplyHandling ||
+    context.negativeReplyHandling ||
+    (prior.reply_monitoring_batch1 &&
+      prior.reply_monitoring_batch1.negativeReplyHandling) ||
+    null;
+  const broaderRolloutBlocked =
+    patch.broaderRolloutBlocked != null
+      ? patch.broaderRolloutBlocked
+      : slots.broaderRolloutBlocked != null
+        ? slots.broaderRolloutBlocked
+        : context.broaderRolloutBlocked != null
+          ? context.broaderRolloutBlocked
+          : prior.reply_monitoring_batch1 &&
+              prior.reply_monitoring_batch1.broaderRolloutBlocked != null
+            ? prior.reply_monitoring_batch1.broaderRolloutBlocked
+            : null;
+  const batch1ReviewBeforeExpansion =
+    patch.batch1ReviewBeforeExpansion != null
+      ? patch.batch1ReviewBeforeExpansion
+      : slots.batch1ReviewBeforeExpansion != null
+        ? slots.batch1ReviewBeforeExpansion
+        : context.batch1ReviewBeforeExpansion != null
+          ? context.batch1ReviewBeforeExpansion
+          : prior.reply_monitoring_batch1 &&
+              prior.reply_monitoring_batch1.batch1ReviewBeforeExpansion != null
+            ? prior.reply_monitoring_batch1.batch1ReviewBeforeExpansion
+            : null;
+  const monitoringOwner =
+    patch.replyMonitoringOwner ||
+    slots.replyMonitoringOwner ||
+    context.replyMonitoringOwner ||
+    replyMonitoringOwner ||
+    (prior.reply_monitoring_batch1 &&
+      prior.reply_monitoring_batch1.replyMonitoringOwner) ||
+    null;
+  if (
+    patch.replyMonitoringBatch1Confirmed === true ||
+    slots.replyMonitoringBatch1Confirmed === true ||
+    responseReviewProcess ||
+    broaderRolloutBlocked === true
+  ) {
+    next.reply_monitoring_batch1 = {
+      confirmed: true,
+      replyMonitoringOwner: monitoringOwner,
+      responseReviewProcess,
+      positiveReplyHandling,
+      negativeReplyHandling,
+      broaderRolloutBlocked,
+      batch1ReviewBeforeExpansion,
+    };
+    next.reply_monitoring_batch_review = next.reply_monitoring_batch1;
+  }
+
+  return { ...next, ...patch.records };
+}
+
+/**
+ * Resolve sender identity fields from confirmed records + slots + latest message.
  */
 function resolveSenderIdentityFromContext(context = {}) {
   const slots = context.slots || {};
+  const record = senderRecordFromConfirmed(getConfirmedReadinessRecords(context)) || {};
   const prior = {
     senderName:
       slots.senderName ||
       context.senderName ||
+      record.senderName ||
+      record.name ||
       (context.priorFields && context.priorFields.senderName) ||
       null,
     senderEmail:
       slots.senderEmail ||
       context.senderEmail ||
+      record.senderEmail ||
+      record.email ||
       (context.priorFields && context.priorFields.senderEmail) ||
       null,
     senderSignature:
       slots.senderSignature ||
       context.senderSignature ||
+      record.senderSignature ||
+      record.signature ||
       (context.priorFields && context.priorFields.senderSignature) ||
       null,
   };
@@ -3435,20 +3750,27 @@ function resolveSenderIdentityFromContext(context = {}) {
 }
 
 /**
- * Resolve reply-handling fields from slots + latest operator message.
+ * Resolve reply-handling fields from confirmed records + slots + latest message.
  */
 function resolveReplyHandlingFromContext(context = {}) {
   const slots = context.slots || {};
+  const record = replyRecordFromConfirmed(getConfirmedReadinessRecords(context)) || {};
   const prior = {
-    replyInbox: slots.replyInbox || context.replyInbox || null,
+    replyInbox:
+      slots.replyInbox || context.replyInbox || record.replyInbox || null,
     replyToMatchesSender:
       slots.replyToMatchesSender != null
         ? slots.replyToMatchesSender
         : context.replyToMatchesSender != null
           ? context.replyToMatchesSender
-          : null,
+          : record.replyToMatchesSender != null
+            ? record.replyToMatchesSender
+            : null,
     replyMonitoringOwner:
-      slots.replyMonitoringOwner || context.replyMonitoringOwner || null,
+      slots.replyMonitoringOwner ||
+      context.replyMonitoringOwner ||
+      record.replyMonitoringOwner ||
+      null,
   };
   const parsed = parseReplyHandlingFields(
     context.operatorMessage || context.text || context.userMessage || ''
@@ -3457,18 +3779,34 @@ function resolveReplyHandlingFromContext(context = {}) {
 }
 
 /**
- * Resolve operational path selection from slots + latest operator message.
+ * Resolve operational path selection from confirmed records + slots + message.
  */
 function resolveOperationalPathFromContext(context = {}) {
   const slots = context.slots || {};
+  const record =
+    operationalPathRecordFromConfirmed(getConfirmedReadinessRecords(context)) ||
+    {};
   const prior = {
     operationalPathId:
-      slots.operationalPathId || context.operationalPathId || null,
+      slots.operationalPathId ||
+      context.operationalPathId ||
+      record.operationalPathId ||
+      null,
     operationalPathLabel:
-      slots.operationalPathLabel || context.operationalPathLabel || null,
-    pathId: slots.operationalPathId || context.operationalPathId || null,
+      slots.operationalPathLabel ||
+      context.operationalPathLabel ||
+      record.operationalPathLabel ||
+      null,
+    pathId:
+      slots.operationalPathId ||
+      context.operationalPathId ||
+      record.operationalPathId ||
+      null,
     pathLabel:
-      slots.operationalPathLabel || context.operationalPathLabel || null,
+      slots.operationalPathLabel ||
+      context.operationalPathLabel ||
+      record.operationalPathLabel ||
+      null,
   };
   const activeId =
     normalizeReadinessItemId(
@@ -3484,39 +3822,57 @@ function resolveOperationalPathFromContext(context = {}) {
 }
 
 /**
- * Resolve follow-up tracking fields from slots + latest operator message.
+ * Resolve follow-up tracking fields from confirmed records + slots + message.
  */
 function resolveFollowUpTrackingFromContext(context = {}) {
   const slots = context.slots || {};
+  const record =
+    followUpRecordFromConfirmed(getConfirmedReadinessRecords(context)) || {};
   const prior = {
     followUpTrackingLocation:
       slots.followUpTrackingLocation ||
       context.followUpTrackingLocation ||
+      record.followUpTrackingLocation ||
       null,
     trackingLocation:
       slots.followUpTrackingLocation ||
       context.followUpTrackingLocation ||
+      record.followUpTrackingLocation ||
       null,
-    followUp1Timing: slots.followUp1Timing || context.followUp1Timing || null,
-    followUp2Timing: slots.followUp2Timing || context.followUp2Timing || null,
+    followUp1Timing:
+      slots.followUp1Timing ||
+      context.followUp1Timing ||
+      record.followUp1Timing ||
+      null,
+    followUp2Timing:
+      slots.followUp2Timing ||
+      context.followUp2Timing ||
+      record.followUp2Timing ||
+      null,
     followUpReviewFirstManual:
       slots.followUpReviewFirstManual != null
         ? slots.followUpReviewFirstManual
         : context.followUpReviewFirstManual != null
           ? context.followUpReviewFirstManual
-          : null,
+          : record.followUpReviewFirstManual != null
+            ? record.followUpReviewFirstManual
+            : null,
     reviewFirstManual:
       slots.followUpReviewFirstManual != null
         ? slots.followUpReviewFirstManual
         : context.followUpReviewFirstManual != null
           ? context.followUpReviewFirstManual
-          : null,
+          : record.followUpReviewFirstManual != null
+            ? record.followUpReviewFirstManual
+            : null,
     automaticFollowUpSendsApproved:
       slots.automaticFollowUpSendsApproved != null
         ? slots.automaticFollowUpSendsApproved
         : context.automaticFollowUpSendsApproved != null
           ? context.automaticFollowUpSendsApproved
-          : null,
+          : record.automaticFollowUpSendsApproved != null
+            ? record.automaticFollowUpSendsApproved
+            : null,
   };
   const parsed = parseFollowUpTrackingFields(
     context.operatorMessage || context.text || context.userMessage || ''
@@ -3525,33 +3881,58 @@ function resolveFollowUpTrackingFromContext(context = {}) {
 }
 
 /**
- * Resolve reply monitoring / Batch 1 review fields from slots + latest message.
+ * Resolve reply monitoring / Batch 1 review from confirmed records + slots.
  */
 function resolveReplyMonitoringBatchReviewFromContext(context = {}) {
   const slots = context.slots || {};
+  const record =
+    monitoringRecordFromConfirmed(getConfirmedReadinessRecords(context)) || {};
+  const replyRecord =
+    replyRecordFromConfirmed(getConfirmedReadinessRecords(context)) || {};
   const prior = {
     replyMonitoringOwner:
-      slots.replyMonitoringOwner || context.replyMonitoringOwner || null,
+      slots.replyMonitoringOwner ||
+      context.replyMonitoringOwner ||
+      record.replyMonitoringOwner ||
+      replyRecord.replyMonitoringOwner ||
+      null,
     monitoringOwner:
-      slots.replyMonitoringOwner || context.replyMonitoringOwner || null,
+      slots.replyMonitoringOwner ||
+      context.replyMonitoringOwner ||
+      record.replyMonitoringOwner ||
+      replyRecord.replyMonitoringOwner ||
+      null,
     responseReviewProcess:
-      slots.responseReviewProcess || context.responseReviewProcess || null,
+      slots.responseReviewProcess ||
+      context.responseReviewProcess ||
+      record.responseReviewProcess ||
+      null,
     positiveReplyHandling:
-      slots.positiveReplyHandling || context.positiveReplyHandling || null,
+      slots.positiveReplyHandling ||
+      context.positiveReplyHandling ||
+      record.positiveReplyHandling ||
+      null,
     negativeReplyHandling:
-      slots.negativeReplyHandling || context.negativeReplyHandling || null,
+      slots.negativeReplyHandling ||
+      context.negativeReplyHandling ||
+      record.negativeReplyHandling ||
+      null,
     broaderRolloutBlocked:
       slots.broaderRolloutBlocked != null
         ? slots.broaderRolloutBlocked
         : context.broaderRolloutBlocked != null
           ? context.broaderRolloutBlocked
-          : null,
+          : record.broaderRolloutBlocked != null
+            ? record.broaderRolloutBlocked
+            : null,
     batch1ReviewBeforeExpansion:
       slots.batch1ReviewBeforeExpansion != null
         ? slots.batch1ReviewBeforeExpansion
         : context.batch1ReviewBeforeExpansion != null
           ? context.batch1ReviewBeforeExpansion
-          : null,
+          : record.batch1ReviewBeforeExpansion != null
+            ? record.batch1ReviewBeforeExpansion
+            : null,
   };
   const parsed = parseReplyMonitoringBatchReviewFields(
     context.operatorMessage || context.text || context.userMessage || ''
@@ -3571,11 +3952,18 @@ function knownReadinessState(context = {}) {
     (context.campaignMemory && context.campaignMemory.operatorLearnings) ||
     context.operatorLearnings ||
     {};
+  const records = getConfirmedReadinessRecords(context);
   const confirmed = {
     ...(summary.confirmedReadiness || {}),
     ...(context.confirmedReadiness || {}),
+    ...(slots.confirmedReadiness || {}),
     ...(memory.confirmed_readiness || {}),
   };
+  const senderRecord = senderRecordFromConfirmed(records);
+  const replyRecord = replyRecordFromConfirmed(records);
+  const pathRecord = operationalPathRecordFromConfirmed(records);
+  const followUpRecord = followUpRecordFromConfirmed(records);
+  const monitoringRecord = monitoringRecordFromConfirmed(records);
   const senderResolved = resolveSenderIdentityFromContext(context);
   const replyResolved = resolveReplyHandlingFromContext(context);
   const pathResolved = resolveOperationalPathFromContext(context);
@@ -3585,6 +3973,7 @@ function knownReadinessState(context = {}) {
   const replyConfirmed = Boolean(
     confirmed.reply_inbox_handling ||
       confirmed.replyInboxHandling ||
+      (replyRecord && replyRecord.confirmed) ||
       slots.replyInboxConfirmed ||
       slots.replyHandlingConfirmed ||
       context.replyInboxConfirmed ||
@@ -3596,6 +3985,7 @@ function knownReadinessState(context = {}) {
     senderIdentityConfirmed: Boolean(
       confirmed.sender_identity ||
         confirmed.senderIdentity ||
+        (senderRecord && senderRecord.confirmed) ||
         slots.senderIdentityConfirmed ||
         context.senderIdentityConfirmed ||
         senderResolved.senderIdentityConfirmed
@@ -3618,6 +4008,7 @@ function knownReadinessState(context = {}) {
         confirmed.operational_path_selection ||
         confirmed.operationalPath ||
         confirmed.operationalPathSelection ||
+        (pathRecord && pathRecord.confirmed) ||
         slots.operationalPathChosen ||
         context.operationalPathChosen ||
         pathResolved.operationalPathChosen
@@ -3628,6 +4019,7 @@ function knownReadinessState(context = {}) {
         confirmed.follow_up_tracking ||
         confirmed.followUpTrackingProcess ||
         confirmed.followUpTracking ||
+        (followUpRecord && followUpRecord.confirmed) ||
         slots.followUpTrackingConfirmed ||
         context.followUpTrackingConfirmed ||
         followUpResolved.followUpTrackingConfirmed
@@ -3638,10 +4030,12 @@ function knownReadinessState(context = {}) {
         confirmed.reply_monitoring_batch_review ||
         confirmed.replyMonitoringBatch1 ||
         confirmed.replyMonitoringBatchReview ||
+        (monitoringRecord && monitoringRecord.confirmed) ||
         slots.replyMonitoringBatch1Confirmed ||
         context.replyMonitoringBatch1Confirmed ||
         monitoringResolved.replyMonitoringBatch1Confirmed
     ),
+    confirmedReadinessRecords: records,
     trackingAccountApproved: Boolean(
       confirmed.tracking_account_settings ||
         confirmed.trackingAccountSettings ||
@@ -3969,12 +4363,127 @@ function unresolvedReadinessItems(context = {}) {
 }
 
 /**
+ * Resolve approved Batch 1 scope details (approved names + exclusions).
+ */
+function resolveBatch1ScopeDetailsFromContext(context = {}) {
+  const slots = context.slots || {};
+  const strategy =
+    context.outreachStrategyPreview ||
+    context.priorOutreachStrategyPreview ||
+    null;
+  const review =
+    context.prospectBatchReview ||
+    context.priorProspectBatchReview ||
+    null;
+  const batch =
+    (review && review.approvedBatch) ||
+    context.approvedBatch ||
+    null;
+
+  let approved = [];
+  if (Array.isArray(context.batch1ApprovedNames)) {
+    approved = context.batch1ApprovedNames.slice();
+  } else if (Array.isArray(slots.batch1ApprovedNames)) {
+    approved = slots.batch1ApprovedNames.slice();
+  } else if (batch) {
+    const candidates = Array.isArray(batch.candidates) ? batch.candidates : [];
+    approved = candidates
+      .map((c) => (typeof c === 'string' ? c : c && (c.companyName || c.company)))
+      .filter(Boolean);
+  }
+
+  const shortName = (name) => {
+    const s = String(name || '').trim();
+    if (!s) return s;
+    if (/^Cedar\b/i.test(s)) return 'Cedar';
+    if (/^Keyrenter\b/i.test(s)) return 'Keyrenter';
+    if (/Cushman/i.test(s) && /Wakefield/i.test(s)) return 'Cushman & Wakefield';
+    return s;
+  };
+
+  const excluded = [];
+  const pushExcluded = (items, reason) => {
+    for (const item of items || []) {
+      const name =
+        typeof item === 'string'
+          ? item
+          : item && (item.companyName || item.company || item.name);
+      if (!name) continue;
+      excluded.push(`${shortName(name)}: ${reason}`);
+    }
+  };
+
+  if (batch) {
+    pushExcluded(
+      batch.excludedSourceVerification,
+      'source verification required'
+    );
+    pushExcluded(
+      batch.excludedExistingRelationship,
+      'existing relationship / nurture'
+    );
+    if (
+      Array.isArray(batch.excludedOptionalExpansion) &&
+      batch.excludedOptionalExpansion.length
+    ) {
+      excluded.push('optional Manchester candidates: excluded');
+    }
+    pushExcluded(batch.excludedRejected, 'rejected as too institutional');
+  } else if (review) {
+    pushExcluded(
+      review.sourceVerificationRequired,
+      'source verification required'
+    );
+    pushExcluded(
+      review.existingRelationship,
+      'existing relationship / nurture'
+    );
+    if (
+      Array.isArray(review.optionalExpansion) &&
+      review.optionalExpansion.length
+    ) {
+      excluded.push('optional Manchester candidates: excluded');
+    }
+    for (const item of review.rejected || []) {
+      const name = item && (item.companyName || item.company);
+      const reason =
+        (item && (item.statusReason || item.reason)) ||
+        'rejected as too institutional';
+      if (!name) continue;
+      if (/institutional/i.test(reason)) {
+        excluded.push(`${shortName(name)}: rejected as too institutional`);
+      } else {
+        excluded.push(`${shortName(name)}: ${reason}`);
+      }
+    }
+  }
+
+  if (!excluded.length && Array.isArray(context.batch1ExcludedLines)) {
+    excluded.push(...context.batch1ExcludedLines);
+  }
+  if (!excluded.length && Array.isArray(slots.batch1ExcludedLines)) {
+    excluded.push(...slots.batch1ExcludedLines);
+  }
+
+  if (!approved.length && strategy && strategy.approvedBatchPhrase) {
+    // Fall back later via text scope.
+  }
+
+  return { approved, excluded };
+}
+
+/**
  * Resolve approved Batch 1 scope text from campaign artifacts / slots.
  */
 function resolveBatch1ScopeFromContext(context = {}) {
   if (context.batch1Scope) return String(context.batch1Scope).trim();
   const slots = context.slots || {};
   if (slots.batch1Scope) return String(slots.batch1Scope).trim();
+
+  const details = resolveBatch1ScopeDetailsFromContext(context);
+  if (details.approved.length) {
+    return details.approved.join('; ');
+  }
 
   const strategy =
     context.outreachStrategyPreview ||
@@ -4063,8 +4572,38 @@ function nextExecuteActionForOperationalPath(pathId, pathLabel) {
   return 'explicitly approve the next prepare/export/CRM action if desired';
 }
 
+function normalizeTrackingLocationLabel(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return s;
+  s = s.replace(/^the\s+/i, '');
+  return s;
+}
+
+function normalizeMonitoringProcessLine(raw, fallback) {
+  const s = String(raw || '').trim();
+  if (!s) return fallback;
+  // Prefer concise expected phrasing when the stored process is verbose.
+  if (/manual(?:ly)?/i.test(s) && /review/i.test(s)) {
+    return 'replies reviewed manually before follow-up or broader rollout';
+  }
+  return s.replace(/^Responses?\s+/i, 'replies ').replace(/\.$/, '');
+}
+
+function normalizeCampaignReadyBullet(raw, fallback) {
+  let s = String(raw || fallback || '').trim().replace(/\.$/, '');
+  if (!s) return fallback;
+  if (/positive\s+replies/i.test(s)) {
+    return 'positive replies handled as conversation/walkthrough opportunities';
+  }
+  if (/negative|not-?now/i.test(s)) {
+    return 'negative or not-now replies respected and noted';
+  }
+  return s.charAt(0).toLowerCase() + s.slice(1);
+}
+
 /**
  * Final campaign-ready summary — compose the WHOLE readiness state.
+ * Retrieves confirmed readiness records (not only the latest prompt / substep).
  * Never collapses to the latest readiness item. Never executes.
  */
 function composeCampaignReadySummary(context = {}) {
@@ -4085,6 +4624,7 @@ function composeCampaignReadySummary(context = {}) {
       context.outreachStrategyPreview.batchName) ||
     'Batch 1';
   const batch1Scope = resolveBatch1ScopeFromContext(context);
+  const scopeDetails = resolveBatch1ScopeDetailsFromContext(context);
 
   const pathLabel =
     (state.operationalPath && state.operationalPath.operationalPathLabel) ||
@@ -4103,43 +4643,55 @@ function composeCampaignReadySummary(context = {}) {
   const followUp = state.followUpTracking || {};
   const monitoring = state.replyMonitoringBatchReview || {};
 
+  const senderFullyPresent = Boolean(
+    sender.senderName && sender.senderEmail && sender.senderSignature
+  );
+  const replyFullyPresent = Boolean(
+    reply.replyInbox &&
+      reply.replyToMatchesSender !== null &&
+      reply.replyMonitoringOwner
+  );
+
   const lines = [];
   lines.push(`${businessName} ${batchLabel} campaign-ready summary`);
   lines.push('');
 
   lines.push('Batch 1 approved scope:');
-  lines.push(`- ${batch1Scope}`);
+  if (scopeDetails.approved.length) {
+    for (const name of scopeDetails.approved) {
+      lines.push(`- ${name}`);
+    }
+  } else {
+    lines.push(`- ${batch1Scope}`);
+  }
+  if (scopeDetails.excluded.length) {
+    lines.push('');
+    lines.push('Excluded:');
+    for (const row of scopeDetails.excluded) {
+      lines.push(`- ${row}`);
+    }
+  }
   lines.push('');
 
-  if (
-    state.senderIdentityConfirmed &&
-    sender.senderName &&
-    sender.senderEmail &&
-    sender.senderSignature
-  ) {
+  if (state.senderIdentityConfirmed && senderFullyPresent) {
     lines.push('Sender identity confirmed:');
     lines.push(`- ${sender.senderName}`);
     lines.push(`- ${sender.senderEmail}`);
-    lines.push(`- ${sender.senderSignature}`);
+    lines.push(`- signature: ${sender.senderSignature}`);
   } else {
     lines.push('Sender identity: not fully confirmed');
   }
   lines.push('');
 
-  if (
-    state.replyInboxConfirmed &&
-    reply.replyInbox &&
-    reply.replyToMatchesSender !== null &&
-    reply.replyMonitoringOwner
-  ) {
+  if (state.replyInboxConfirmed && replyFullyPresent) {
     lines.push('Reply handling confirmed:');
-    lines.push(`- ${reply.replyInbox}`);
+    lines.push(`- reply inbox: ${reply.replyInbox}`);
     lines.push(
-      `- reply-to ${
-        reply.replyToMatchesSender ? 'matches sender' : 'does not match sender'
+      `- reply-to matches sender: ${
+        reply.replyToMatchesSender ? 'yes' : 'no'
       }`
     );
-    lines.push(`- ${reply.replyMonitoringOwner} monitors`);
+    lines.push(`- reply monitoring owner: ${reply.replyMonitoringOwner}`);
   } else {
     lines.push('Reply handling: not fully confirmed');
   }
@@ -4154,9 +4706,24 @@ function composeCampaignReadySummary(context = {}) {
   lines.push('');
 
   if (state.followUpTrackingConfirmed) {
-    lines.push('Follow-up tracking confirmed');
-    if (followUp.followUpTrackingLocation) {
-      lines.push(`- Status tracked in ${followUp.followUpTrackingLocation}`);
+    lines.push('Follow-up tracking confirmed:');
+    const location = normalizeTrackingLocationLabel(
+      followUp.followUpTrackingLocation
+    );
+    if (location) {
+      lines.push(`- status tracked in ${location}`);
+    }
+    if (followUp.followUp1Timing) {
+      lines.push(`- Follow-up 1: ${followUp.followUp1Timing}`);
+    }
+    if (followUp.followUp2Timing) {
+      lines.push(`- Follow-up 2: ${followUp.followUp2Timing}`);
+    }
+    if (followUp.followUpReviewFirstManual !== false) {
+      lines.push('- follow-ups remain review-first/manual');
+    }
+    if (followUp.automaticFollowUpSendsApproved !== true) {
+      lines.push('- no automatic follow-up sends approved');
     }
   } else {
     lines.push('Follow-up tracking: not confirmed');
@@ -4164,13 +4731,28 @@ function composeCampaignReadySummary(context = {}) {
   lines.push('');
 
   if (state.replyMonitoringBatch1Confirmed) {
-    lines.push('Reply monitoring / Batch 1 review confirmed');
-    if (monitoring.replyMonitoringOwner) {
-      lines.push(`- Reply monitoring owner: ${monitoring.replyMonitoringOwner}`);
-    }
-    if (monitoring.broaderRolloutBlocked) {
+    lines.push('Reply monitoring / Batch 1 review confirmed:');
+    lines.push(
+      `- ${normalizeMonitoringProcessLine(
+        monitoring.responseReviewProcess,
+        'replies reviewed manually before follow-up or broader rollout'
+      )}`
+    );
+    lines.push(
+      `- ${normalizeCampaignReadyBullet(
+        monitoring.positiveReplyHandling,
+        'positive replies handled as conversation/walkthrough opportunities'
+      )}`
+    );
+    lines.push(
+      `- ${normalizeCampaignReadyBullet(
+        monitoring.negativeReplyHandling,
+        'negative or not-now replies respected and noted'
+      )}`
+    );
+    if (monitoring.broaderRolloutBlocked !== false) {
       lines.push(
-        '- Broader rollout remains blocked until Batch 1 results are reviewed'
+        '- broader rollout blocked until Batch 1 results are reviewed'
       );
     }
   } else {
@@ -4178,9 +4760,14 @@ function composeCampaignReadySummary(context = {}) {
   }
   lines.push('');
 
-  lines.push('Execution lock: active');
+  lines.push('Execution lock:');
+  lines.push('- active');
+  lines.push(
+    '- nothing has been sent, exported, written to CRM, queued, or changed in accounts/settings'
+  );
   lines.push('');
-  lines.push(`Next possible execute action: ${nextExecute}`);
+  lines.push('Next possible execute action:');
+  lines.push(`- ${nextExecute}`);
   lines.push('');
   lines.push(
     context.safetyLine ||
@@ -4194,7 +4781,7 @@ function composeCampaignReadySummary(context = {}) {
       CAMPAIGN_READY_SUMMARY_CLOSING
   );
 
-  const message = lines.join('\n').trim();
+  const message = dedupeOperatorStateUpdateMessage(lines.join('\n').trim());
   return {
     mode: CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY,
     responseMode: toResponseMode(CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY),
@@ -4211,6 +4798,7 @@ function composeCampaignReadySummary(context = {}) {
       state.replyMonitoringBatch1Confirmed === true,
     executionLockActive: true,
     nextExecuteAction: nextExecute,
+    confirmedReadinessRecords: state.confirmedReadinessRecords || {},
     requiresExplicitApproval: false,
     executionPending: false,
     sendsMade: false,
@@ -4612,13 +5200,24 @@ function sanitizeApprovedStateLeadIn(leadIn, openingParagraph) {
 }
 
 /**
- * Dedupe pass for operator_state_update messages.
- * Keeps first occurrence of status / safety / lock statements and collapses
- * repeated blank lines.
+ * Dedupe pass for operator_state_update and campaign_ready_summary messages.
+ * Keeps first occurrence of status / safety / lock statements, collapses
+ * repeated blank lines, and drops a duplicated full campaign-ready summary.
  */
 function dedupeOperatorStateUpdateMessage(text) {
-  const raw = String(text || '').trim();
+  let raw = String(text || '').trim();
   if (!raw) return raw;
+
+  // Collapse an entire duplicated campaign-ready summary (title appears twice).
+  const titleMatch = raw.match(/^(.+\bcampaign-ready summary)\s*$/im);
+  if (titleMatch) {
+    const title = titleMatch[1];
+    const firstIdx = raw.indexOf(title);
+    const secondIdx = raw.indexOf(title, firstIdx + title.length);
+    if (secondIdx > firstIdx) {
+      raw = raw.slice(firstIdx, secondIdx).trim();
+    }
+  }
 
   const seen = {
     approved: false,
@@ -4627,6 +5226,7 @@ function dedupeOperatorStateUpdateMessage(text) {
     nextChoice: false,
     guidance: false,
     nextPathAsk: false,
+    campaignReadySummary: false,
   };
 
   const out = [];
@@ -4635,6 +5235,17 @@ function dedupeOperatorStateUpdateMessage(text) {
   for (const para of paragraphs) {
     const p = String(para || '').trim();
     if (!p) continue;
+
+    const isCampaignReadyTitle = /\bcampaign-ready summary\b/i.test(p);
+    if (isCampaignReadyTitle) {
+      if (seen.campaignReadySummary) {
+        // Drop the rest of a duplicated campaign-ready summary.
+        break;
+      }
+      seen.campaignReadySummary = true;
+      out.push(p);
+      continue;
+    }
 
     const isApprovedAck = /approved for readiness only/i.test(p);
     const isNothingExternal = /nothing external happened/i.test(p);
@@ -4826,9 +5437,10 @@ function applyConversationalPolicy(reply, context = {}) {
     return next;
   }
 
-  // Operator state updates: enforce single acknowledgment / safety / lock.
+  // Operator state updates + campaign-ready summaries: enforce dedupe.
   if (
-    mode === CONVERSATION_MODES.OPERATOR_STATE_UPDATE &&
+    (mode === CONVERSATION_MODES.OPERATOR_STATE_UPDATE ||
+      mode === CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY) &&
     typeof next.message === 'string'
   ) {
     next.message = dedupeOperatorStateUpdateMessage(next.message);
@@ -4943,8 +5555,11 @@ module.exports = {
   CAMPAIGN_READY_SUMMARY_SAFETY_LINE,
   CAMPAIGN_READY_SUMMARY_CLOSING,
   resolveBatch1ScopeFromContext,
+  resolveBatch1ScopeDetailsFromContext,
   nextExecuteActionForOperationalPath,
   normalizeNextPathPhrase,
   sanitizeApprovedStateLeadIn,
   dedupeOperatorStateUpdateMessage,
+  getConfirmedReadinessRecords,
+  buildConfirmedReadinessRecords,
 };

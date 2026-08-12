@@ -134,6 +134,7 @@ const {
   composeReadinessFieldCorrection,
   composeClarificationNeeded,
   unresolvedReadinessItems,
+  buildConfirmedReadinessRecords,
   DEFAULT_UNRESOLVED_READINESS_ITEMS,
   READINESS_CHECKLIST_CLOSING_ASK,
   READINESS_CHECKLIST_SAFETY_LINE,
@@ -7666,10 +7667,25 @@ function produceCampaignReadySummaryResult(userMessage, prior = {}, opts = {}) {
     outreachStrategyPreview: strategy,
     priorOutreachStrategyPreview: strategy,
     campaignMemory: opts.campaignMemory || prior.campaignMemory || null,
-    confirmedReadiness: opts.confirmedReadiness || null,
+    confirmedReadiness:
+      opts.confirmedReadiness ||
+      slots.confirmedReadiness ||
+      null,
+    confirmedReadinessRecords:
+      opts.confirmedReadinessRecords ||
+      slots.confirmedReadinessRecords ||
+      null,
     safetyLine: CAMPAIGN_READY_SUMMARY_SAFETY_LINE,
     closingAsk: CAMPAIGN_READY_SUMMARY_CLOSING,
   });
+
+  const nextSlots = {
+    ...slots,
+    confirmedReadinessRecords:
+      composed.confirmedReadinessRecords ||
+      slots.confirmedReadinessRecords ||
+      null,
+  };
 
   return applyConversationalPolicy(
     {
@@ -7678,7 +7694,7 @@ function produceCampaignReadySummaryResult(userMessage, prior = {}, opts = {}) {
         prior.step ||
         CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
       answers: opts.answers || prior.answers || {},
-      slots,
+      slots: nextSlots,
       outreachLaunchGate: gate,
       prospectBatchReview: review,
       outreachStrategyPreview: strategy,
@@ -7702,6 +7718,7 @@ function produceCampaignReadySummaryResult(userMessage, prior = {}, opts = {}) {
       crmWritesMade: false,
       exportMade: false,
       accountChangesMade: false,
+      confirmedReadinessRecords: composed.confirmedReadinessRecords || null,
     },
     {
       isCampaignReadySummary: true,
@@ -8020,6 +8037,64 @@ function produceReadinessFieldCorrectionResult(
       nextSlots.batch1ResultsReviewed = true;
     }
   }
+
+  nextSlots.confirmedReadinessRecords = buildConfirmedReadinessRecords(
+    {
+      slots: nextSlots,
+      confirmedReadinessRecords:
+        priorSlots.confirmedReadinessRecords ||
+        opts.confirmedReadinessRecords ||
+        null,
+      confirmedReadiness:
+        opts.confirmedReadiness || priorSlots.confirmedReadiness || null,
+    },
+    {
+      senderIdentityConfirmed: nextSlots.senderIdentityConfirmed === true,
+      replyInboxConfirmed: nextSlots.replyInboxConfirmed === true,
+      replyHandlingConfirmed: nextSlots.replyHandlingConfirmed === true,
+      operationalPathChosen: nextSlots.operationalPathChosen === true,
+      followUpTrackingConfirmed: nextSlots.followUpTrackingConfirmed === true,
+      replyMonitoringBatch1Confirmed:
+        nextSlots.replyMonitoringBatch1Confirmed === true,
+      senderName: nextSlots.senderName,
+      senderEmail: nextSlots.senderEmail,
+      senderSignature: nextSlots.senderSignature,
+      replyInbox: nextSlots.replyInbox,
+      replyToMatchesSender: nextSlots.replyToMatchesSender,
+      replyMonitoringOwner: nextSlots.replyMonitoringOwner,
+      operationalPathId: nextSlots.operationalPathId,
+      operationalPathLabel: nextSlots.operationalPathLabel,
+      followUpTrackingLocation: nextSlots.followUpTrackingLocation,
+      followUp1Timing: nextSlots.followUp1Timing,
+      followUp2Timing: nextSlots.followUp2Timing,
+      followUpReviewFirstManual: nextSlots.followUpReviewFirstManual,
+      automaticFollowUpSendsApproved:
+        nextSlots.automaticFollowUpSendsApproved,
+      responseReviewProcess: nextSlots.responseReviewProcess,
+      positiveReplyHandling: nextSlots.positiveReplyHandling,
+      negativeReplyHandling: nextSlots.negativeReplyHandling,
+      broaderRolloutBlocked: nextSlots.broaderRolloutBlocked,
+      batch1ReviewBeforeExpansion: nextSlots.batch1ReviewBeforeExpansion,
+    }
+  );
+  nextSlots.confirmedReadiness = {
+    ...(priorSlots.confirmedReadiness || {}),
+    ...(opts.confirmedReadiness || {}),
+    ...(nextSlots.senderIdentityConfirmed ? { sender_identity: true } : {}),
+    ...(nextSlots.replyInboxConfirmed
+      ? { reply_inbox_handling: true, reply_handling: true }
+      : {}),
+    ...(nextSlots.operationalPathChosen ? { operational_path: true } : {}),
+    ...(nextSlots.followUpTrackingConfirmed
+      ? { follow_up_tracking: true, follow_up_tracking_process: true }
+      : {}),
+    ...(nextSlots.replyMonitoringBatch1Confirmed
+      ? {
+          reply_monitoring_batch1: true,
+          reply_monitoring_batch_review: true,
+        }
+      : {}),
+  };
 
   const missing =
     (sender.missing && sender.missing.length && sender.missing) ||
