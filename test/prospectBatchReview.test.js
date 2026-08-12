@@ -4252,6 +4252,104 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     );
   });
 
+  it('full reply handling confirms item and advances to operational path without execute', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const reply = buildCampaignPlanningReply(
+      [
+        '- Reply inbox: jacob@goanchorcleaning.com',
+        '- Reply-to should match the sender address: yes',
+        '- Reply monitoring owner: Jacob Maynard',
+      ].join('\n'),
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        launchGateApproved: true,
+        intent: 'readiness_field_correction',
+        readinessItemId: 'reply_handling',
+        activeReadinessItemId: 'reply_handling',
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+          activeReadinessItemId: 'reply_handling',
+          senderIdentityConfirmed: true,
+          senderName: 'Jacob Maynard',
+          senderEmail: 'jacob@goanchorcleaning.com',
+          senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'readiness_field_correction');
+    assert.equal(reply.replyInboxConfirmed, true);
+    assert.equal(reply.executionPending, false);
+    assert.notEqual(reply.responseMode, 'execution_confirmation');
+    assert.notEqual(reply.responseMode, 'operator_state_summary');
+    assert.match(
+      reply.message,
+      /^Reply inbox \/ reply-to handling is confirmed:/m
+    );
+    assert.match(
+      reply.message,
+      /Reply inbox:\s*jacob@goanchorcleaning\.com/i
+    );
+    assert.match(reply.message, /Reply-to matches sender address:\s*yes/i);
+    assert.match(reply.message, /Reply monitoring owner:\s*Jacob Maynard/i);
+    assert.match(
+      reply.message,
+      /Next readiness item:\s*operational path selection/i
+    );
+    assert.match(
+      reply.message,
+      /Do you want to prepare for manual send, CRM drafts, queued sends later, or hold with no action\?/i
+    );
+    assert.doesNotMatch(reply.message, /Still unresolved before any export/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Which readiness item should we resolve first/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(reply.message, /Exact action/i);
+    assert.equal(reply.slots.replyInbox, 'jacob@goanchorcleaning.com');
+    assert.equal(reply.slots.replyToMatchesSender, true);
+    assert.equal(reply.slots.replyMonitoringOwner, 'Jacob Maynard');
+  });
+
   it('operator-facing draft digest comes first without banned fragments', () => {
     const { review, ctx, strategy, plan } = chainFixtures();
     const draft = buildOutreachDraftPreview(

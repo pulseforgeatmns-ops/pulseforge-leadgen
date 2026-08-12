@@ -7791,6 +7791,7 @@ function produceReadinessFieldCorrectionResult(
   });
 
   const sender = composed.senderIdentity || {};
+  const reply = composed.replyHandling || {};
   const nextSlots = {
     ...priorSlots,
     launchGateApproved: true,
@@ -7804,6 +7805,21 @@ function produceReadinessFieldCorrectionResult(
     senderIdentityConfirmed:
       sender.senderIdentityConfirmed === true ||
       priorSlots.senderIdentityConfirmed === true,
+    replyInbox: reply.replyInbox || priorSlots.replyInbox || null,
+    replyToMatchesSender:
+      reply.replyToMatchesSender != null
+        ? reply.replyToMatchesSender
+        : priorSlots.replyToMatchesSender != null
+          ? priorSlots.replyToMatchesSender
+          : null,
+    replyMonitoringOwner:
+      reply.replyMonitoringOwner || priorSlots.replyMonitoringOwner || null,
+    replyInboxConfirmed:
+      reply.replyHandlingConfirmed === true ||
+      priorSlots.replyInboxConfirmed === true,
+    replyHandlingConfirmed:
+      reply.replyHandlingConfirmed === true ||
+      priorSlots.replyHandlingConfirmed === true,
   };
 
   if (composed.itemConfirmed && composed.readinessItemId === 'sender_identity') {
@@ -7811,12 +7827,18 @@ function produceReadinessFieldCorrectionResult(
   }
   if (composed.itemConfirmed && composed.readinessItemId === 'reply_handling') {
     nextSlots.replyInboxConfirmed = true;
+    nextSlots.replyHandlingConfirmed = true;
   }
+
+  const missing =
+    (sender.missing && sender.missing.length && sender.missing) ||
+    (reply.missing && reply.missing.length && reply.missing) ||
+    null;
 
   const currentAsk = composed.nextReadinessItem
     ? composed.nextReadinessItem.ask
-    : sender.missing && sender.missing.length
-      ? `Still needed: ${sender.missing.join(', ')}`
+    : missing
+      ? `Still needed: ${missing.join(', ')}`
       : prior.currentAsk || null;
 
   return applyConversationalPolicy(
@@ -7842,6 +7864,8 @@ function produceReadinessFieldCorrectionResult(
       nextReadinessItem: composed.nextReadinessItem || null,
       senderIdentity: sender,
       senderIdentityConfirmed: nextSlots.senderIdentityConfirmed === true,
+      replyHandling: reply,
+      replyInboxConfirmed: nextSlots.replyInboxConfirmed === true,
       launchGateApproved: true,
       launchReady: true,
       launched: false,

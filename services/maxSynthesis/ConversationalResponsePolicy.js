@@ -175,6 +175,16 @@ const READINESS_NEXT_ITEM_PROMPTS = Object.freeze({
       'Who will monitor replies?',
     ]),
   }),
+  operational_path: Object.freeze({
+    id: 'operational_path',
+    label: 'operational path selection',
+    ask: 'Do you want to prepare for manual send, CRM drafts, queued sends later, or hold with no action?',
+    questions: Object.freeze([
+      'Do you want to prepare for manual send, CRM drafts, queued sends later, or hold with no action?',
+    ]),
+    /** Path selection only — never execution confirmation. */
+    isExecution: false,
+  }),
   follow_up_tracking: Object.freeze({
     id: 'follow_up_tracking',
     label: 'follow-up tracking',
@@ -867,46 +877,65 @@ function parseSenderIdentityFields(text) {
 
 /**
  * Parse reply-handling fields from free text.
+ * Captures reply inbox, reply-to match (yes/no), and monitoring owner.
  */
 function parseReplyHandlingFields(text) {
   const s = String(text || '').trim();
   const updatedFields = [];
   let replyInbox = null;
   let sameAsSender = null;
+  let monitoringOwner = null;
 
   if (!s) {
-    return { replyInbox, sameAsSender, updatedFields, hasAny: false };
+    return {
+      replyInbox,
+      sameAsSender,
+      monitoringOwner,
+      updatedFields,
+      hasAny: false,
+    };
   }
 
   const inboxMatch = s.match(
     new RegExp(
       READINESS_FIELD_LINE_PREFIX +
-        String.raw`(?:reply(?:\s*[-/]?\s*to)?(?:\s+inbox)?|reply\s+inbox)\s*[:\-–—]\s*([^\n]+)`,
+        String.raw`reply\s+inbox\s*[:\-–—]\s*([^\n]+)`,
       'i'
     )
   );
   const inboxUpdate = s.match(
-    /\b(?:update|change|correct|set|use)\b[\s\S]{0,40}\breply(?:\s*[-/]?\s*to)?(?:\s+(?:inbox|address|email))?\b[\s\S]{0,24}\b(?:to|is|=|:)\s*([^\n,;]+)/i
+    /\b(?:update|change|correct|set|use)\b[\s\S]{0,40}\breply\s+inbox\b[\s\S]{0,24}\b(?:to|is|=|:)\s*([^\n,;]+)/i
   );
-  const emailOnly = s.match(
-    /\b([A-Z0-9._%+\-]+(?:\\@|@)[A-Z0-9.\-]+\.[A-Z]{2,})\b/i
-  );
-
   if (inboxMatch) {
     replyInbox = normalizeCapturedEmail(inboxMatch[1]);
     updatedFields.push('reply_inbox');
   } else if (inboxUpdate) {
     replyInbox = normalizeCapturedEmail(inboxUpdate[1]);
     updatedFields.push('reply_inbox');
-  } else if (
-    emailOnly &&
-    /\breply(?:\s*[-/]?\s*to)?(?:\s+(?:inbox|address|email))?\b/i.test(s)
-  ) {
-    replyInbox = normalizeCapturedEmail(emailOnly[1]);
-    updatedFields.push('reply_inbox');
   }
 
-  if (/\bsame\s+as\s+(?:the\s+)?sender\b/i.test(s)) {
+  // "Reply-to should match the sender address: yes"
+  const matchLine = s.match(
+    new RegExp(
+      READINESS_FIELD_LINE_PREFIX +
+        String.raw`reply(?:\s*[-/]?\s*to)?\s+should\s+match(?:\s+the)?\s+sender(?:\s+address)?\s*[:\-–—]\s*([^\n]+)`,
+      'i'
+    )
+  );
+  const matchYesNo = s.match(
+    /\breply(?:\s*[-/]?\s*to)?\b[\s\S]{0,40}\b(?:should\s+)?match(?:\s+the)?\s+sender\b[\s\S]{0,20}\b(yes|no|true|false)\b/i
+  );
+  if (matchLine) {
+    const v = matchLine[1].trim().toLowerCase();
+    if (/^(?:yes|y|true|same)\b/i.test(v)) sameAsSender = true;
+    else if (/^(?:no|n|false|different)\b/i.test(v)) sameAsSender = false;
+    else if (/\byes\b/i.test(v)) sameAsSender = true;
+    else if (/\bno\b/i.test(v)) sameAsSender = false;
+    if (sameAsSender !== null) updatedFields.push('same_as_sender');
+  } else if (matchYesNo) {
+    sameAsSender = /^(?:yes|y|true)$/i.test(matchYesNo[1]);
+    updatedFields.push('same_as_sender');
+  } else if (/\bsame\s+as\s+(?:the\s+)?sender\b/i.test(s)) {
     sameAsSender = true;
     updatedFields.push('same_as_sender');
   } else if (/\bdifferent\s+from\s+(?:the\s+)?sender\b/i.test(s)) {
@@ -914,11 +943,64 @@ function parseReplyHandlingFields(text) {
     updatedFields.push('same_as_sender');
   }
 
+  const ownerMatch = s.match(
+    new RegExp(
+      READINESS_FIELD_LINE_PREFIX +
+        String.raw`(?:reply\s+)?monitoring\s+owner(?:\s*\/\s*process)?\s*[:\-–—]\s*([^\n]+)`,
+      'i'
+    )
+  );
+  if (ownerMatch) {
+    monitoringOwner = ownerMatch[1].trim().replace(/[.;,]+$/, '');
+    updatedFields.push('monitoring_owner');
+  }
+
   return {
     replyInbox,
     sameAsSender,
-    updatedFields,
+    monitoringOwner,
+    updatedFields: [...new Set(updatedFields)],
     hasAny: updatedFields.length > 0,
+  };
+}
+
+/**
+ * Merge prior reply-handling slots with newly parsed fields.
+ */
+function mergeReplyHandlingState(prior = {}, parsed = {}) {
+  const replyInboxRaw =
+    parsed.replyInbox != null && parsed.replyInbox !== ''
+      ? parsed.replyInbox
+      : prior.replyInbox || prior.reply_inbox || null;
+  const replyInbox = replyInboxRaw
+    ? normalizeCapturedEmail(replyInboxRaw)
+    : null;
+  const sameAsSender =
+    parsed.sameAsSender != null
+      ? parsed.sameAsSender
+      : prior.replyToMatchesSender != null
+        ? prior.replyToMatchesSender
+        : prior.sameAsSender != null
+          ? prior.sameAsSender
+          : null;
+  const monitoringOwner =
+    parsed.monitoringOwner != null && parsed.monitoringOwner !== ''
+      ? parsed.monitoringOwner
+      : prior.replyMonitoringOwner || prior.monitoringOwner || null;
+  const confirmed = Boolean(
+    replyInbox && sameAsSender !== null && monitoringOwner
+  );
+  return {
+    replyInbox,
+    replyToMatchesSender: sameAsSender,
+    replyMonitoringOwner: monitoringOwner,
+    replyInboxConfirmed: confirmed,
+    replyHandlingConfirmed: confirmed,
+    missing: [
+      !replyInbox ? 'reply inbox' : null,
+      sameAsSender === null ? 'reply-to match sender' : null,
+      !monitoringOwner ? 'reply monitoring owner' : null,
+    ].filter(Boolean),
   };
 }
 
@@ -1024,6 +1106,17 @@ function looksLikeReadinessFieldCorrection(text, opts = {}) {
     return true;
   }
 
+  // Labeled reply-handling block (inbox / match / monitoring owner).
+  const replyFields = parseReplyHandlingFields(s);
+  if (
+    replyFields.updatedFields.length >= 2 ||
+    (replyFields.replyInbox &&
+      replyFields.sameAsSender !== null &&
+      replyFields.monitoringOwner)
+  ) {
+    return true;
+  }
+
   return false;
 }
 
@@ -1031,12 +1124,18 @@ function looksLikeReadinessFieldCorrection(text, opts = {}) {
  * Next unresolved readiness item after confirming `itemId`.
  */
 function nextReadinessItemAfter(itemId, context = {}) {
-  const order = ['sender_identity', 'reply_handling', 'follow_up_tracking'];
+  const order = [
+    'sender_identity',
+    'reply_handling',
+    'operational_path',
+    'follow_up_tracking',
+  ];
   const start = Math.max(0, order.indexOf(itemId));
   const state = knownReadinessState(context);
   const confirmed = {
     sender_identity: state.senderIdentityConfirmed,
     reply_handling: state.replyInboxConfirmed,
+    operational_path: state.operationalPathChosen,
     follow_up_tracking: state.followUpTrackingConfirmed,
   };
 
@@ -1050,6 +1149,7 @@ function nextReadinessItemAfter(itemId, context = {}) {
               id,
               label: READINESS_SUBSTEPS[id].label,
               ask: READINESS_SUBSTEPS[id].questions[0],
+              questions: READINESS_SUBSTEPS[id].questions,
             }
           : { id, label: id, ask: `Let's resolve ${id}.` })
       );
@@ -1094,6 +1194,7 @@ function composeReadinessFieldCorrection(context = {}) {
 
   const lines = [];
   let senderState = mergeSenderIdentityState(priorFields, {});
+  let replyHandlingState = null;
   let nextItem = null;
   let itemConfirmed = false;
   const corrected = senderParsed.updatedFields.slice();
@@ -1187,35 +1288,107 @@ function composeReadinessFieldCorrection(context = {}) {
       }
     }
   } else if (activeId === 'reply_handling') {
-    const inbox =
-      replyParsed.replyInbox ||
-      slots.replyInbox ||
-      context.replyInbox ||
-      null;
-    if (replyParsed.replyInbox) {
-      lines.push(`Updated reply inbox to ${inbox}.`);
-    } else {
-      lines.push('Recorded reply-handling details.');
-    }
-    if (inbox) {
+    const priorReply = {
+      replyInbox: slots.replyInbox || context.replyInbox || null,
+      replyToMatchesSender:
+        slots.replyToMatchesSender != null
+          ? slots.replyToMatchesSender
+          : context.replyToMatchesSender != null
+            ? context.replyToMatchesSender
+            : null,
+      replyMonitoringOwner:
+        slots.replyMonitoringOwner ||
+        context.replyMonitoringOwner ||
+        null,
+    };
+    const replyState = mergeReplyHandlingState(priorReply, replyParsed);
+    const multiFieldUpdate = replyParsed.updatedFields.length >= 2;
+    const fullReplyBlock =
+      Boolean(replyParsed.replyInbox) &&
+      replyParsed.sameAsSender !== null &&
+      Boolean(replyParsed.monitoringOwner);
+    const narrowUpdateOnly =
+      replyParsed.updatedFields.length === 1 &&
+      /\b(?:update|change|correct)\b/i.test(String(text));
+
+    if (replyState.replyHandlingConfirmed) {
       itemConfirmed = true;
+      if (narrowUpdateOnly && replyParsed.replyInbox) {
+        lines.push(`Updated reply inbox to ${replyState.replyInbox}.`);
+        lines.push('');
+      } else if (
+        multiFieldUpdate &&
+        /\b(?:update|change|correct)\b/i.test(String(text))
+      ) {
+        lines.push('Updated reply handling.');
+        lines.push('');
+      }
+
+      lines.push('Reply inbox / reply-to handling is confirmed:');
+      lines.push(`- Reply inbox: ${replyState.replyInbox}`);
+      lines.push(
+        `- Reply-to matches sender address: ${
+          replyState.replyToMatchesSender ? 'yes' : 'no'
+        }`
+      );
+      lines.push(
+        `- Reply monitoring owner: ${replyState.replyMonitoringOwner}`
+      );
+
       nextItem = nextReadinessItemAfter('reply_handling', {
         ...context,
-        slots: { ...slots, replyInboxConfirmed: true, replyInbox: inbox },
+        slots: {
+          ...slots,
+          replyInboxConfirmed: true,
+          replyHandlingConfirmed: true,
+          replyInbox: replyState.replyInbox,
+          replyToMatchesSender: replyState.replyToMatchesSender,
+          replyMonitoringOwner: replyState.replyMonitoringOwner,
+        },
         confirmedReadiness: {
           ...(context.confirmedReadiness || {}),
           reply_inbox_handling: true,
+          reply_monitoring_owner: true,
         },
       });
-      lines.push('');
-      lines.push('Reply handling is now confirmed.');
       if (nextItem) {
+        const questions =
+          Array.isArray(nextItem.questions) && nextItem.questions.length
+            ? nextItem.questions
+            : nextItem.ask
+              ? [nextItem.ask]
+              : [];
         lines.push('');
-        lines.push(
-          `Next readiness item: ${nextItem.label}. ${nextItem.ask}`
-        );
+        lines.push(`Next readiness item: ${nextItem.label}.`);
+        if (questions.length) {
+          lines.push('');
+          for (const q of questions) lines.push(q);
+        }
+        // Path selection is readiness-only — never execution confirmation.
+        lines.push('');
+        lines.push(READINESS_SUBSTEP_SAFETY_LINE);
+      }
+    } else {
+      if (multiFieldUpdate || fullReplyBlock) {
+        lines.push('Updated reply handling.');
+      } else if (replyParsed.replyInbox) {
+        lines.push(`Updated reply inbox to ${replyState.replyInbox}.`);
+      } else if (replyParsed.hasAny) {
+        lines.push('Updated reply-handling details.');
+      } else {
+        lines.push('Recorded reply-handling details.');
+      }
+      if (replyState.missing.length) {
+        lines.push('');
+        lines.push('Still needed for reply handling:');
+        for (const m of replyState.missing) lines.push(`- ${m}`);
+        lines.push('');
+        lines.push(READINESS_SUBSTEP_SAFETY_LINE);
       }
     }
+
+    // Expose reply state on the composed result via closure vars below.
+    replyHandlingState = replyState;
   } else {
     lines.push('Updated the active readiness fields.');
   }
@@ -1233,9 +1406,14 @@ function composeReadinessFieldCorrection(context = {}) {
     activeReadinessItemId: nextActiveId,
     nextReadinessItem: nextItem,
     senderIdentity: senderState,
+    replyHandling: replyHandlingState,
     itemConfirmed,
-    correctedFields: corrected,
+    correctedFields:
+      activeId === 'reply_handling'
+        ? replyParsed.updatedFields.slice()
+        : corrected,
     requiresExplicitApproval: false,
+    executionPending: false,
     sendsMade: false,
     crmWritesMade: false,
     exportMade: false,
@@ -1605,6 +1783,7 @@ function extractOperatorReadinessChecklist(text) {
     }
     // Confirmed/provided field values are not unresolved readiness gaps.
     if (isSenderFieldValueLine(item)) return;
+    if (isReplyFieldValueLine(item)) return;
     const key = item.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
@@ -1658,19 +1837,43 @@ function isSenderFieldValueLine(text) {
 }
 
 /**
+ * True when a checklist line is a provided reply-handling field value.
+ * e.g. "Reply inbox: …", "Reply-to should match the sender address: yes"
+ */
+function isReplyFieldValueLine(text) {
+  const t = String(text || '').trim();
+  if (
+    /^reply\s+inbox\s*[:\-–—]\s*\S+/i.test(t) ||
+    /^reply(?:\s*[-/]?\s*to)?\s+should\s+match\b[\s\S]*[:\-–—]\s*\S+/i.test(t) ||
+    /^(?:reply\s+)?monitoring\s+owner(?:\s*\/\s*process)?\s*[:\-–—]\s*\S+/i.test(
+      t
+    ) ||
+    /^reply-?to\s+matches\s+sender(?:\s+address)?\s*[:\-–—]\s*\S+/i.test(t)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * True when a line is an open readiness question (still unresolved).
  */
 function isOpenReadinessQuestionLine(text) {
   const t = String(text || '').trim();
   if (!t) return false;
+  if (isSenderFieldValueLine(t) || isReplyFieldValueLine(t)) return false;
   if (/\?$/.test(t)) return true;
-  return /^(?:what|who|should|where|how)\b/i.test(t);
+  return /^(?:what|who|should|where|how|do\s+you\s+want)\b/i.test(t);
 }
 
 function readinessConceptId(item) {
   const s = String(item || '');
   if (isSenderFieldValueLine(s) || /\bsender\s+identity\b/i.test(s)) {
     return 'sender_identity';
+  }
+  if (isReplyFieldValueLine(s)) {
+    if (/monitoring\s+owner/i.test(s)) return 'reply_monitoring_owner';
+    return 'reply_inbox_handling';
   }
   for (const concept of READINESS_CONCEPT_PATTERNS) {
     if (concept.match.test(s)) return concept.id;
@@ -1681,6 +1884,14 @@ function readinessConceptId(item) {
     /\b(?:inbox|reply-?to|monitor(?:ing)?\s+replies|replies)\b/i.test(s)
   ) {
     return 'reply_inbox_handling';
+  }
+  if (
+    isOpenReadinessQuestionLine(s) &&
+    /\b(?:manual\s+send|crm\s+drafts|queued\s+sends|hold\s+with\s+no\s+action|operational\s+path)\b/i.test(
+      s
+    )
+  ) {
+    return 'operational_path';
   }
   return `custom:${s.toLowerCase().slice(0, 80)}`;
 }
@@ -1714,6 +1925,28 @@ function resolveSenderIdentityFromContext(context = {}) {
 }
 
 /**
+ * Resolve reply-handling fields from slots + latest operator message.
+ */
+function resolveReplyHandlingFromContext(context = {}) {
+  const slots = context.slots || {};
+  const prior = {
+    replyInbox: slots.replyInbox || context.replyInbox || null,
+    replyToMatchesSender:
+      slots.replyToMatchesSender != null
+        ? slots.replyToMatchesSender
+        : context.replyToMatchesSender != null
+          ? context.replyToMatchesSender
+          : null,
+    replyMonitoringOwner:
+      slots.replyMonitoringOwner || context.replyMonitoringOwner || null,
+  };
+  const parsed = parseReplyHandlingFields(
+    context.operatorMessage || context.text || context.userMessage || ''
+  );
+  return mergeReplyHandlingState(prior, parsed);
+}
+
+/**
  * Known readiness facts from gate / slots / campaign memory / latest message.
  * Missing facts stay unknown — never treat unknown as resolved.
  */
@@ -1731,6 +1964,16 @@ function knownReadinessState(context = {}) {
     ...(memory.confirmed_readiness || {}),
   };
   const senderResolved = resolveSenderIdentityFromContext(context);
+  const replyResolved = resolveReplyHandlingFromContext(context);
+  const replyConfirmed = Boolean(
+    confirmed.reply_inbox_handling ||
+      confirmed.replyInboxHandling ||
+      slots.replyInboxConfirmed ||
+      slots.replyHandlingConfirmed ||
+      context.replyInboxConfirmed ||
+      context.replyHandlingConfirmed ||
+      replyResolved.replyHandlingConfirmed
+  );
 
   return {
     senderIdentityConfirmed: Boolean(
@@ -1741,17 +1984,15 @@ function knownReadinessState(context = {}) {
         senderResolved.senderIdentityConfirmed
     ),
     senderIdentity: senderResolved,
-    replyInboxConfirmed: Boolean(
-      confirmed.reply_inbox_handling ||
-        confirmed.replyInboxHandling ||
-        slots.replyInboxConfirmed ||
-        context.replyInboxConfirmed
-    ),
+    replyHandling: replyResolved,
+    replyInboxConfirmed: replyConfirmed,
     replyMonitoringConfirmed: Boolean(
-      confirmed.reply_monitoring_owner ||
+      replyConfirmed ||
+        confirmed.reply_monitoring_owner ||
         confirmed.replyMonitoringOwner ||
         slots.replyMonitoringConfirmed ||
-        context.replyMonitoringConfirmed
+        context.replyMonitoringConfirmed ||
+        Boolean(replyResolved.replyMonitoringOwner)
     ),
     operationalPathChosen: Boolean(
       confirmed.operational_path ||
@@ -1804,17 +2045,7 @@ function evaluateReadinessItemAgainstState(item, context = {}) {
   }
 
   // Provided sender field values are confirmed facts, never unresolved gaps.
-  if (isSenderFieldValueLine(text) && state.senderIdentityConfirmed) {
-    return {
-      text,
-      status: 'confirmed',
-      reason: 'sender identity field present',
-      concept: 'sender_identity',
-      display: text,
-    };
-  }
   if (isSenderFieldValueLine(text)) {
-    // Value present in the line itself — treat as confirmed field evidence.
     return {
       text,
       status: 'confirmed',
@@ -1824,11 +2055,23 @@ function evaluateReadinessItemAgainstState(item, context = {}) {
     };
   }
 
+  // Provided reply-handling field values are confirmed facts.
+  if (isReplyFieldValueLine(text)) {
+    return {
+      text,
+      status: 'confirmed',
+      reason: 'reply handling field present',
+      concept: readinessConceptId(text),
+      display: text,
+    };
+  }
+
   const confirmedByConcept = {
     sender_identity: state.senderIdentityConfirmed,
     reply_inbox_handling: state.replyInboxConfirmed,
     reply_handling_generic: state.replyInboxConfirmed,
-    reply_monitoring_owner: state.replyMonitoringConfirmed,
+    reply_monitoring_owner:
+      state.replyInboxConfirmed || state.replyMonitoringConfirmed,
     operational_path: state.operationalPathChosen,
     follow_up_tracking_process: state.followUpTrackingConfirmed,
     tracking_account_settings: state.trackingAccountApproved,
@@ -1919,13 +2162,45 @@ function mergeOperatorReadinessChecklist(context = {}) {
     usedConcepts.add('sender_identity');
   }
 
+  // Confirmed reply handling block.
+  if (
+    state.replyInboxConfirmed &&
+    state.replyHandling &&
+    state.replyHandling.replyInbox &&
+    state.replyHandling.replyToMatchesSender !== null &&
+    state.replyHandling.replyMonitoringOwner
+  ) {
+    confirmed.push({
+      concept: 'reply_inbox_handling',
+      status: 'confirmed',
+      label: 'Reply inbox / reply-to handling is confirmed',
+      fields: [
+        `Reply inbox: ${state.replyHandling.replyInbox}`,
+        `Reply-to matches sender address: ${
+          state.replyHandling.replyToMatchesSender ? 'yes' : 'no'
+        }`,
+        `Reply monitoring owner: ${state.replyHandling.replyMonitoringOwner}`,
+      ],
+    });
+    usedConcepts.add('reply_inbox_handling');
+    usedConcepts.add('reply_handling_generic');
+    usedConcepts.add('reply_monitoring_owner');
+  }
+
   for (const item of sourceItems) {
     const evaluated = evaluateReadinessItemAgainstState(item, context);
     evaluations.push(evaluated);
 
     if (evaluated.status === 'confirmed' || evaluated.status === 'resolved') {
-      // Sender values already represented in confirmed block above.
-      if (evaluated.concept === 'sender_identity') continue;
+      // Field values already represented in confirmed blocks above.
+      if (
+        evaluated.concept === 'sender_identity' ||
+        evaluated.concept === 'reply_inbox_handling' ||
+        evaluated.concept === 'reply_handling_generic' ||
+        evaluated.concept === 'reply_monitoring_owner'
+      ) {
+        continue;
+      }
       if (usedConcepts.has(evaluated.concept) && !evaluated.concept.startsWith('custom:')) {
         continue;
       }
@@ -1951,13 +2226,18 @@ function mergeOperatorReadinessChecklist(context = {}) {
     unresolved.push(evaluated.display);
   }
 
-  // If sender identity is confirmed, never keep default "not confirmed" wording
-  // or provided field-value lines in the unresolved list.
+  // Drop confirmed field-value lines and default "not confirmed" wording.
   const unresolvedFiltered = unresolved.filter((item) => {
-    if (isSenderFieldValueLine(item)) return false;
+    if (isSenderFieldValueLine(item) || isReplyFieldValueLine(item)) return false;
     if (
       state.senderIdentityConfirmed &&
       /\bsender\s+identity\s+is\s+not\s+confirmed\b/i.test(item)
+    ) {
+      return false;
+    }
+    if (
+      state.replyInboxConfirmed &&
+      /\breply\s+handling\s+is\s+not\s+confirmed\b/i.test(item)
     ) {
       return false;
     }
@@ -1973,6 +2253,8 @@ function mergeOperatorReadinessChecklist(context = {}) {
     senderIdentityConfirmed: state.senderIdentityConfirmed,
     senderIdentity: state.senderIdentity,
     replyInboxConfirmed: state.replyInboxConfirmed,
+    replyHandling: state.replyHandling,
+    operationalPathChosen: state.operationalPathChosen,
   };
 }
 
@@ -1985,8 +2267,9 @@ function unresolvedReadinessItems(context = {}) {
 
 /**
  * Readiness check — list unresolved items only; never ask for execute approval.
- * Confirmed readiness (e.g. sender identity) is shown separately and never
- * under "still unresolved".
+ * Confirmed readiness is shown separately and never under "still unresolved".
+ * After an item is completed, advance to the next unresolved item — do not
+ * re-ask "Which readiness item should we resolve first?"
  */
 function composeOperatorReadinessCheck(context = {}) {
   const merged = mergeOperatorReadinessChecklist(context);
@@ -2019,51 +2302,60 @@ function composeOperatorReadinessCheck(context = {}) {
     lines.push('');
   }
 
-  const nextItem =
-    merged.senderIdentityConfirmed && !merged.replyInboxConfirmed
-      ? READINESS_NEXT_ITEM_PROMPTS.reply_handling
-      : null;
+  if (
+    merged.replyInboxConfirmed &&
+    merged.replyHandling &&
+    merged.replyHandling.replyInbox &&
+    merged.replyHandling.replyToMatchesSender !== null &&
+    merged.replyHandling.replyMonitoringOwner
+  ) {
+    lines.push('Reply inbox / reply-to handling is confirmed:');
+    lines.push(`- Reply inbox: ${merged.replyHandling.replyInbox}`);
+    lines.push(
+      `- Reply-to matches sender address: ${
+        merged.replyHandling.replyToMatchesSender ? 'yes' : 'no'
+      }`
+    );
+    lines.push(
+      `- Reply monitoring owner: ${merged.replyHandling.replyMonitoringOwner}`
+    );
+    lines.push('');
+  }
 
-  if (nextItem && unresolved.length === 0) {
+  let nextItem = null;
+  if (merged.senderIdentityConfirmed && !merged.replyInboxConfirmed) {
+    nextItem = READINESS_NEXT_ITEM_PROMPTS.reply_handling;
+  } else if (merged.replyInboxConfirmed && !merged.operationalPathChosen) {
+    nextItem = READINESS_NEXT_ITEM_PROMPTS.operational_path;
+  } else if (
+    merged.operationalPathChosen &&
+    !knownReadinessState(context).followUpTrackingConfirmed
+  ) {
+    nextItem = READINESS_NEXT_ITEM_PROMPTS.follow_up_tracking;
+  }
+
+  if (nextItem) {
     const questions = nextItem.questions || [nextItem.ask];
     lines.push(`Next readiness item: ${nextItem.label}.`);
     lines.push('');
     for (const q of questions) lines.push(q);
     lines.push('');
     lines.push(safetyLine);
-  } else if (
-    nextItem &&
-    unresolved.length > 0 &&
-    unresolved.every(
-      (u) =>
-        readinessConceptId(u) === 'reply_inbox_handling' ||
-        readinessConceptId(u) === 'reply_handling_generic' ||
-        readinessConceptId(u) === 'reply_monitoring_owner' ||
-        isOpenReadinessQuestionLine(u)
-    )
-  ) {
-    const questions =
-      unresolved.length >= 2 ? unresolved : nextItem.questions || [nextItem.ask];
-    lines.push(`Next readiness item: ${nextItem.label}.`);
-    lines.push('');
-    for (const q of questions) lines.push(q);
-    lines.push('');
-    lines.push(safetyLine);
-  } else {
+  } else if (unresolved.length) {
     lines.push(
       context.leadIn ||
         'Still unresolved before any export, CRM drafts, or queued sends:'
     );
     lines.push('');
-    if (unresolved.length) {
-      for (const item of unresolved) lines.push(`- ${item}`);
-    } else {
-      lines.push('- (none)');
-    }
+    for (const item of unresolved) lines.push(`- ${item}`);
     lines.push('');
     lines.push(safetyLine);
     lines.push('');
     lines.push(closingAsk);
+  } else {
+    lines.push('Readiness items are confirmed for now.');
+    lines.push('');
+    lines.push(safetyLine);
   }
 
   const message = lines.join('\n').trim();
@@ -2077,7 +2369,10 @@ function composeOperatorReadinessCheck(context = {}) {
     confirmedItems: merged.confirmedItems,
     operatorSpecifiedChecklist: merged.operatorSpecified,
     senderIdentityConfirmed: merged.senderIdentityConfirmed === true,
+    replyInboxConfirmed: merged.replyInboxConfirmed === true,
+    nextReadinessItem: nextItem,
     requiresExplicitApproval: false,
+    executionPending: false,
     sendsMade: false,
     crmWritesMade: false,
     exportMade: false,
@@ -2584,6 +2879,7 @@ module.exports = {
   parseSenderIdentityFields,
   parseReplyHandlingFields,
   mergeSenderIdentityState,
+  mergeReplyHandlingState,
   resolveActiveReadinessItemId,
   nextReadinessItemAfter,
   looksLikeExecutionRequest,
@@ -2603,7 +2899,9 @@ module.exports = {
   evaluateReadinessItemAgainstState,
   unresolvedReadinessItems,
   isSenderFieldValueLine,
+  isReplyFieldValueLine,
   resolveSenderIdentityFromContext,
+  resolveReplyHandlingFromContext,
   formatApprovedLaunchGateConversational,
   formatOperatorDiagnosticMessage,
   applyConversationalPolicy,
