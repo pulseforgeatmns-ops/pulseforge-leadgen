@@ -125,9 +125,9 @@ const READINESS_SUBSTEPS = Object.freeze({
     label: 'reply handling',
     match: /\breply(?:\s+handling|\s+inbox|\s*[-/]\s*to)\b/i,
     questions: Object.freeze([
-      'Which inbox should replies land in?',
-      'Who owns monitoring that inbox?',
-      'What should happen on a positive reply vs an unsubscribe?',
+      'Which reply inbox / reply-to address should be used?',
+      'Who monitors replies?',
+      'How should replies be handled before broader rollout?',
     ]),
     closingAsk:
       "Once you answer those, I'll mark reply handling as confirmed or note what still needs review.",

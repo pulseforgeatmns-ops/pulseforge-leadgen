@@ -158,6 +158,7 @@ describe('ConversationalResponsePolicy', () => {
       'Resolve sender identity now. Do not repeat the full readiness checklist. I already selected the first readiness item: sender identity.';
     assert.equal(looksLikeReadinessSubstepSelection(text), true);
     assert.equal(looksLikeOperatorReadinessCheck(text), false);
+    assert.equal(looksLikeExecutionRequest(text), false);
     assert.equal(detectSelectedReadinessItem(text).id, 'sender_identity');
     const mode = selectConversationMode({
       text,
@@ -165,6 +166,12 @@ describe('ConversationalResponsePolicy', () => {
       launchGateApproved: true,
     });
     assert.equal(mode, CONVERSATION_MODES.READINESS_SUBSTEP);
+    assert.notEqual(mode, CONVERSATION_MODES.OPERATOR_READINESS_CHECK);
+    assert.notEqual(mode, CONVERSATION_MODES.EXECUTION_CONFIRMATION);
+    assert.equal(
+      selectResponseMode({ text, launchGateApproved: true }),
+      RESPONSE_MODES.READINESS_SUBSTEP
+    );
   });
 
   it('composes sender-identity substep without which-item ask', () => {
@@ -176,6 +183,7 @@ describe('ConversationalResponsePolicy', () => {
     assert.equal(composed.mode, CONVERSATION_MODES.READINESS_SUBSTEP);
     assert.equal(composed.responseMode, 'readiness_substep');
     assert.equal(composed.readinessItemId, 'sender_identity');
+    assert.equal(composed.requiresExplicitApproval, false);
     assert.match(composed.message, /What sender name should appear on the email/i);
     assert.match(
       composed.message,
@@ -189,12 +197,87 @@ describe('ConversationalResponsePolicy', () => {
       composed.message,
       /Once you answer those, I'll mark sender identity as confirmed or note what still needs review/i
     );
+    assert.match(
+      composed.message,
+      /Nothing external has happened\. Sends, export, and CRM writes remain locked\./i
+    );
     assert.doesNotMatch(
       composed.message,
       /Which readiness item should we resolve first/i
     );
     assert.doesNotMatch(composed.message, /Still unresolved before any export/i);
-    assert.match(composed.message, /Nothing external has happened/i);
+    assert.doesNotMatch(composed.message, /Sender identity is not confirmed/i);
+    assert.doesNotMatch(composed.message, /Reply handling is not confirmed/i);
+    assert.doesNotMatch(composed.message, /Exact action/i);
+    assert.doesNotMatch(
+      composed.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(composed.message, /The next choice is operational/i);
+  });
+
+  it('selects readiness_substep when operator picks reply handling', () => {
+    const text =
+      'Resolve reply handling now. Do not repeat the full readiness checklist.';
+    assert.equal(looksLikeReadinessSubstepSelection(text), true);
+    assert.equal(looksLikeOperatorReadinessCheck(text), false);
+    assert.equal(looksLikeExecutionRequest(text), false);
+    assert.equal(detectSelectedReadinessItem(text).id, 'reply_handling');
+    const mode = selectConversationMode({
+      text,
+      operatorMessage: text,
+      launchGateApproved: true,
+    });
+    assert.equal(mode, CONVERSATION_MODES.READINESS_SUBSTEP);
+    assert.notEqual(mode, CONVERSATION_MODES.OPERATOR_READINESS_CHECK);
+    assert.notEqual(mode, CONVERSATION_MODES.EXECUTION_CONFIRMATION);
+    assert.equal(
+      selectResponseMode({ text, launchGateApproved: true }),
+      RESPONSE_MODES.READINESS_SUBSTEP
+    );
+  });
+
+  it('composes reply-handling substep without which-item or execute ask', () => {
+    const text = 'Resolve reply handling now.';
+    const composed = composeReadinessSubstep({
+      operatorMessage: text,
+      launchGateApproved: true,
+    });
+    assert.equal(composed.mode, CONVERSATION_MODES.READINESS_SUBSTEP);
+    assert.equal(composed.responseMode, 'readiness_substep');
+    assert.equal(composed.readinessItemId, 'reply_handling');
+    assert.equal(composed.requiresExplicitApproval, false);
+    assert.match(
+      composed.message,
+      /Which reply inbox \/ reply-to address should be used/i
+    );
+    assert.match(composed.message, /Who monitors replies/i);
+    assert.match(
+      composed.message,
+      /How should replies be handled before broader rollout/i
+    );
+    assert.match(
+      composed.message,
+      /Once you answer those, I'll mark reply handling as confirmed or note what still needs review/i
+    );
+    assert.match(
+      composed.message,
+      /Nothing external has happened\. Sends, export, and CRM writes remain locked\./i
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /Which readiness item should we resolve first/i
+    );
+    assert.doesNotMatch(composed.message, /Still unresolved before any export/i);
+    assert.doesNotMatch(composed.message, /What sender name should appear/i);
+    assert.doesNotMatch(composed.message, /Exact action/i);
+    assert.doesNotMatch(
+      composed.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(composed.message, /prepare a manual-send export/i);
+    assert.doesNotMatch(composed.message, /create CRM drafts/i);
+    assert.doesNotMatch(composed.message, /queue sends/i);
   });
 
   it('classifies low-signal accidental input as clarification_needed', () => {
