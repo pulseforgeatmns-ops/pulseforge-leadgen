@@ -215,6 +215,10 @@ module.exports = {
     ConversationalResponsePolicy.composeClarificationNeeded,
   unresolvedReadinessItems:
     ConversationalResponsePolicy.unresolvedReadinessItems,
+  buildConfirmedReadinessRecords:
+    ConversationalResponsePolicy.buildConfirmedReadinessRecords,
+  getConfirmedReadinessRecords:
+    ConversationalResponsePolicy.getConfirmedReadinessRecords,
   extractOperatorReadinessChecklist:
     ConversationalResponsePolicy.extractOperatorReadinessChecklist,
   mergeOperatorReadinessChecklist:

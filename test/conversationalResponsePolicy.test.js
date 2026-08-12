@@ -1127,6 +1127,10 @@ describe('ConversationalResponsePolicy', () => {
         operationalPathLabel: 'manual send export for operator review',
         followUpTrackingConfirmed: true,
         followUpTrackingLocation: 'the manual-send export/review sheet',
+        followUp1Timing: 'about 3 business days after first touch',
+        followUp2Timing: 'about 7 business days after first touch',
+        followUpReviewFirstManual: true,
+        automaticFollowUpSendsApproved: false,
         replyMonitoringBatch1Confirmed: true,
         batch1ResultsReviewed: true,
         broaderRolloutBlocked: true,
@@ -1144,10 +1148,10 @@ describe('ConversationalResponsePolicy', () => {
     assert.match(composed.message, /Sender identity confirmed/i);
     assert.match(composed.message, /Jacob Maynard/);
     assert.match(composed.message, /jacob@goanchorcleaning\.com/);
-    assert.match(composed.message, /Jacob Maynard, Anchor Cleaning/);
+    assert.match(composed.message, /signature:\s*Jacob Maynard, Anchor Cleaning/);
     assert.match(composed.message, /Reply handling confirmed/i);
-    assert.match(composed.message, /reply-to matches sender/i);
-    assert.match(composed.message, /Jacob Maynard monitors/i);
+    assert.match(composed.message, /reply-to matches sender:\s*yes/i);
+    assert.match(composed.message, /reply monitoring owner:\s*Jacob Maynard/i);
     assert.match(composed.message, /Operational path selected/i);
     assert.match(
       composed.message,
@@ -1158,10 +1162,11 @@ describe('ConversationalResponsePolicy', () => {
       composed.message,
       /Reply monitoring \/ Batch 1 review confirmed/i
     );
-    assert.match(composed.message, /Execution lock:\s*active/i);
+    assert.match(composed.message, /Execution lock:/i);
+    assert.match(composed.message, /- active/);
     assert.match(
       composed.message,
-      /Next possible execute action:\s*explicitly approve preparing the manual-send export for operator review/i
+      /Next possible execute action:\s*\n- explicitly approve preparing the manual-send export for operator review/i
     );
     assert.match(composed.message, /Nothing has been executed/i);
     assert.doesNotMatch(
@@ -1179,6 +1184,139 @@ describe('ConversationalResponsePolicy', () => {
         composed.message.indexOf('Operational path selected') >= 0 &&
         composed.message.indexOf('Reply monitoring / Batch 1 review confirmed') >=
           0
+    );
+    // Emit the summary title once.
+    assert.equal(
+      (composed.message.match(/campaign-ready summary/gi) || []).length,
+      1
+    );
+  });
+
+  it('retrieves campaign-ready fields from confirmed readiness records', () => {
+    const composed = composeCampaignReadySummary({
+      businessName: 'Anchor Cleaning',
+      confirmedReadiness: {
+        sender_identity: true,
+        reply_inbox_handling: true,
+        operational_path: true,
+        follow_up_tracking: true,
+        reply_monitoring_batch1: true,
+      },
+      confirmedReadinessRecords: {
+        sender_identity: {
+          confirmed: true,
+          senderName: 'Jacob Maynard',
+          senderEmail: 'jacob@goanchorcleaning.com',
+          senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        },
+        reply_handling: {
+          confirmed: true,
+          replyInbox: 'jacob@goanchorcleaning.com',
+          replyToMatchesSender: true,
+          replyMonitoringOwner: 'Jacob Maynard',
+        },
+        operational_path: {
+          confirmed: true,
+          operationalPathId: 'manual_send_export',
+          operationalPathLabel: 'manual send export for operator review',
+        },
+        follow_up_tracking: {
+          confirmed: true,
+          followUpTrackingLocation: 'manual-send export/review sheet',
+          followUp1Timing: 'about 3 business days after first touch',
+          followUp2Timing: 'about 7 business days after first touch',
+          followUpReviewFirstManual: true,
+          automaticFollowUpSendsApproved: false,
+        },
+        reply_monitoring_batch1: {
+          confirmed: true,
+          responseReviewProcess:
+            'replies reviewed manually before follow-up or broader rollout',
+          positiveReplyHandling:
+            'positive replies handled as conversation/walkthrough opportunities',
+          negativeReplyHandling:
+            'negative or not-now replies respected and noted',
+          broaderRolloutBlocked: true,
+        },
+      },
+      // Latest substep only — must not downgrade earlier confirmed items.
+      slots: {
+        activeReadinessItemId: 'operational_path',
+      },
+      operatorMessage:
+        'Please provide a final Anchor Batch 1 campaign-ready summary for operator review.',
+    });
+
+    assert.match(composed.message, /Sender identity confirmed/i);
+    assert.doesNotMatch(
+      composed.message,
+      /Sender identity: not fully confirmed/i
+    );
+    assert.match(composed.message, /Reply handling confirmed/i);
+    assert.doesNotMatch(
+      composed.message,
+      /Reply handling: not fully confirmed/i
+    );
+    assert.match(composed.message, /signature:\s*Jacob Maynard, Anchor Cleaning/);
+    assert.match(composed.message, /reply inbox:\s*jacob@goanchorcleaning\.com/);
+    assert.match(composed.message, /reply monitoring owner:\s*Jacob Maynard/);
+    assert.match(composed.message, /Follow-up tracking confirmed/i);
+    assert.match(
+      composed.message,
+      /Reply monitoring \/ Batch 1 review confirmed/i
+    );
+  });
+
+  it('dedupes a duplicated campaign-ready summary', () => {
+    const {
+      dedupeOperatorStateUpdateMessage,
+      composeCampaignReadySummary,
+    } = require('../services/maxSynthesis');
+    const once = composeCampaignReadySummary({
+      businessName: 'Anchor Cleaning',
+      slots: {
+        senderIdentityConfirmed: true,
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        replyInboxConfirmed: true,
+        replyInbox: 'jacob@goanchorcleaning.com',
+        replyToMatchesSender: true,
+        replyMonitoringOwner: 'Jacob Maynard',
+        operationalPathChosen: true,
+        operationalPathId: 'manual_send_export',
+        operationalPathLabel: 'manual send export for operator review',
+        followUpTrackingConfirmed: true,
+        followUpTrackingLocation: 'manual-send export/review sheet',
+        replyMonitoringBatch1Confirmed: true,
+        broaderRolloutBlocked: true,
+      },
+    }).message;
+    const stacked = `${once}\n\n${once}`;
+    const cleaned = dedupeOperatorStateUpdateMessage(stacked);
+    assert.equal(
+      (cleaned.match(/campaign-ready summary/gi) || []).length,
+      1
+    );
+    assert.equal(
+      (cleaned.match(/Sender identity confirmed/gi) || []).length,
+      1
+    );
+    assert.equal(
+      (cleaned.match(/Reply handling confirmed/gi) || []).length,
+      1
+    );
+    const policy = applyConversationalPolicy(
+      {
+        message: stacked,
+        responseMode: 'campaign_ready_summary',
+        intent: 'campaign_ready_summary',
+      },
+      { isCampaignReadySummary: true, forceMode: CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY }
+    );
+    assert.equal(
+      (policy.message.match(/campaign-ready summary/gi) || []).length,
+      1
     );
   });
 

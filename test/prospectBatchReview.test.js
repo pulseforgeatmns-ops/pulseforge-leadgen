@@ -4873,13 +4873,23 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
 
     assert.match(reply.message, /campaign-ready summary/i);
     assert.match(reply.message, /Batch 1 approved scope/i);
+    assert.match(reply.message, /Elm Grove Companies/);
+    assert.match(reply.message, /Hooksett Home Stewards/);
+    assert.match(reply.message, /Excluded:/i);
+    assert.match(reply.message, /Cedar: source verification required/i);
+    assert.match(reply.message, /Keyrenter: existing relationship \/ nurture/i);
+    assert.match(reply.message, /optional Manchester candidates: excluded/i);
+    assert.match(
+      reply.message,
+      /Cushman & Wakefield: rejected as too institutional/i
+    );
     assert.match(reply.message, /Sender identity confirmed/i);
     assert.match(reply.message, /Jacob Maynard/);
     assert.match(reply.message, /jacob@goanchorcleaning\.com/);
-    assert.match(reply.message, /Jacob Maynard, Anchor Cleaning/);
+    assert.match(reply.message, /signature:\s*Jacob Maynard, Anchor Cleaning/);
     assert.match(reply.message, /Reply handling confirmed/i);
-    assert.match(reply.message, /reply-to matches sender/i);
-    assert.match(reply.message, /Jacob Maynard monitors/i);
+    assert.match(reply.message, /reply-to matches sender:\s*yes/i);
+    assert.match(reply.message, /reply monitoring owner:\s*Jacob Maynard/i);
     assert.match(reply.message, /Operational path selected/i);
     assert.match(
       reply.message,
@@ -4888,14 +4898,65 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.match(reply.message, /Follow-up tracking confirmed/i);
     assert.match(
       reply.message,
-      /Reply monitoring \/ Batch 1 review confirmed/i
+      /status tracked in manual-send export\/review sheet/i
     );
-    assert.match(reply.message, /Execution lock:\s*active/i);
     assert.match(
       reply.message,
-      /Next possible execute action:\s*explicitly approve preparing the manual-send export for operator review/i
+      /Follow-up 1:\s*about 3 business days after first touch/i
+    );
+    assert.match(
+      reply.message,
+      /Follow-up 2:\s*about 7 business days after first touch/i
+    );
+    assert.match(reply.message, /follow-ups remain review-first\/manual/i);
+    assert.match(reply.message, /no automatic follow-up sends approved/i);
+    assert.match(
+      reply.message,
+      /Reply monitoring \/ Batch 1 review confirmed/i
+    );
+    assert.match(
+      reply.message,
+      /replies reviewed manually before follow-up or broader rollout/i
+    );
+    assert.match(
+      reply.message,
+      /positive replies handled as conversation\/walkthrough opportunities/i
+    );
+    assert.match(
+      reply.message,
+      /negative or not-now replies respected and noted/i
+    );
+    assert.match(
+      reply.message,
+      /broader rollout blocked until Batch 1 results are reviewed/i
+    );
+    assert.match(reply.message, /Execution lock:/i);
+    assert.match(reply.message, /- active/);
+    assert.match(
+      reply.message,
+      /nothing has been sent, exported, written to CRM, queued, or changed in accounts\/settings/i
+    );
+    assert.match(
+      reply.message,
+      /Next possible execute action:\s*\n- explicitly approve preparing the manual-send export for operator review/i
     );
     assert.match(reply.message, /Nothing has been executed/i);
+    assert.equal(
+      (reply.message.match(/campaign-ready summary/gi) || []).length,
+      1
+    );
+    assert.equal(
+      (reply.message.match(/Sender identity confirmed/gi) || []).length,
+      1
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Sender identity: not fully confirmed/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Reply handling: not fully confirmed/i
+    );
     assert.doesNotMatch(
       reply.message,
       /^Operational path is selected:\s*\n- manual send export for operator review\s*\n\nThis is path selection only/m
@@ -4912,6 +4973,116 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.doesNotMatch(
       reply.message,
       /Let's resolve reply monitoring/i
+    );
+  });
+
+  it('campaign-ready summary uses confirmed readiness records when slots omit fields', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const reply = buildCampaignPlanningReply(
+      'Please provide a final Anchor Batch 1 campaign-ready summary for operator review.',
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        outreachStrategyPreview: strategy,
+        prospectBatchReview: review,
+        launchGateApproved: true,
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+          activeReadinessItemId: 'operational_path',
+          // Confirmed flags only — field values live in confirmed records.
+          senderIdentityConfirmed: true,
+          replyInboxConfirmed: true,
+          replyHandlingConfirmed: true,
+          operationalPathChosen: true,
+          operationalPathId: 'manual_send_export',
+          operationalPathLabel: 'manual send export for operator review',
+          followUpTrackingConfirmed: true,
+          replyMonitoringBatch1Confirmed: true,
+          confirmedReadiness: {
+            sender_identity: true,
+            reply_inbox_handling: true,
+            operational_path: true,
+            follow_up_tracking: true,
+            reply_monitoring_batch1: true,
+          },
+          confirmedReadinessRecords: {
+            sender_identity: {
+              confirmed: true,
+              senderName: 'Jacob Maynard',
+              senderEmail: 'jacob@goanchorcleaning.com',
+              senderSignature: 'Jacob Maynard, Anchor Cleaning',
+            },
+            reply_handling: {
+              confirmed: true,
+              replyInbox: 'jacob@goanchorcleaning.com',
+              replyToMatchesSender: true,
+              replyMonitoringOwner: 'Jacob Maynard',
+            },
+            follow_up_tracking: {
+              confirmed: true,
+              followUpTrackingLocation: 'manual-send export/review sheet',
+              followUp1Timing: 'about 3 business days after first touch',
+              followUp2Timing: 'about 7 business days after first touch',
+              followUpReviewFirstManual: true,
+              automaticFollowUpSendsApproved: false,
+            },
+            reply_monitoring_batch1: {
+              confirmed: true,
+              broaderRolloutBlocked: true,
+            },
+          },
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'campaign_ready_summary');
+    assert.match(reply.message, /Sender identity confirmed/i);
+    assert.match(reply.message, /Reply handling confirmed/i);
+    assert.doesNotMatch(
+      reply.message,
+      /Sender identity: not fully confirmed/i
+    );
+    assert.doesNotMatch(
+      reply.message,
+      /Reply handling: not fully confirmed/i
+    );
+    assert.equal(
+      (reply.message.match(/campaign-ready summary/gi) || []).length,
+      1
     );
   });
 
