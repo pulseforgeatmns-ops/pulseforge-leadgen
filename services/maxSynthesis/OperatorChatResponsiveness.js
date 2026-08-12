@@ -24,6 +24,10 @@ const RESPONSE_MODES = Object.freeze({
   OPERATOR_READINESS_CHECK: 'operator_readiness_check',
   /** Operator selected one readiness item — stay in that substep. */
   READINESS_SUBSTEP: 'readiness_substep',
+  /** Operator corrects / fills a field inside an active readiness substep. */
+  READINESS_FIELD_CORRECTION: 'readiness_field_correction',
+  /** Alias — same wire behavior as readiness_field_correction. */
+  READINESS_SUBSTEP_UPDATE: 'readiness_substep_update',
   /** Explicit send/export/CRM/account confirmation — never auto-execute. */
   EXECUTION_CONFIRMATION: 'execution_confirmation',
   /** Accidental / low-signal / ambiguous operator input — ask lightly. */
@@ -386,6 +390,7 @@ function selectResponseMode(opts = {}) {
   let looksLikeNonExec = null;
   let looksLikeLowSignal = null;
   let looksLikeSubstep = null;
+  let looksLikeFieldCorrection = null;
   try {
     const policy = require('./ConversationalResponsePolicy');
     policySelect = policy.selectResponseModeWithPolicy;
@@ -393,6 +398,7 @@ function selectResponseMode(opts = {}) {
     looksLikeNonExec = policy.looksLikeNonExecutionIntent;
     looksLikeLowSignal = policy.looksLikeLowSignalAmbiguousInput;
     looksLikeSubstep = policy.looksLikeReadinessSubstepSelection;
+    looksLikeFieldCorrection = policy.looksLikeReadinessFieldCorrection;
   } catch (_err) {
     policySelect = null;
   }
@@ -416,6 +422,16 @@ function selectResponseMode(opts = {}) {
     typeof looksLikeLowSignal === 'function' && text
       ? looksLikeLowSignal(text)
       : false;
+  const fieldCorrectionFromText =
+    typeof looksLikeFieldCorrection === 'function' && text
+      ? looksLikeFieldCorrection(text, {
+          activeReadinessItemId:
+            opts.activeReadinessItemId ||
+            (opts.slots && opts.slots.activeReadinessItemId) ||
+            null,
+          slots: opts.slots || null,
+        })
+      : false;
   const substepFromText =
     typeof looksLikeSubstep === 'function' && text
       ? looksLikeSubstep(text)
@@ -438,11 +454,21 @@ function selectResponseMode(opts = {}) {
       !opts.forceReadinessCheck &&
       !opts.isReadinessCheck &&
       !opts.isReadinessSubstep &&
+      !opts.isReadinessFieldCorrection &&
       !opts.isExecutionRequest &&
       !opts.executionPending &&
       !isRevision)
   ) {
     return RESPONSE_MODES.CLARIFICATION_NEEDED;
+  }
+
+  // Field correction / substep update — never dump Launch Gate options.
+  if (
+    opts.isReadinessFieldCorrection === true ||
+    opts.forceReadinessFieldCorrection === true ||
+    fieldCorrectionFromText
+  ) {
+    return RESPONSE_MODES.READINESS_FIELD_CORRECTION;
   }
 
   // Selected readiness item — stay in substep; never ask which item first.
