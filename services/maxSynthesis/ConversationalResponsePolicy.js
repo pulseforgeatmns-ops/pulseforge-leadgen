@@ -806,8 +806,7 @@ function parseSenderIdentityFields(text) {
     /\b([A-Z0-9._%+\-]+(?:\\@|@)[A-Z0-9.\-]+\.[A-Z]{2,})\b/i
   );
 
-  // Collect every email mention; labeled + update both count as email updates.
-  // Prefer labeled "Sender email address:" when both appear (canonical block).
+  // Labeled block wins over update-form when both appear in the same message.
   if (emailLabeled) {
     email = normalizeCapturedEmail(emailLabeled[1]);
     updatedFields.push('email');
@@ -825,19 +824,6 @@ function parseSenderIdentityFields(text) {
   ) {
     email = normalizeCapturedEmail(emailOnly[1]);
     updatedFields.push('email');
-  }
-
-  // If update-form and labeled-form both appear with different values, labeled
-  // already won above. If only update appeared, also accept a later labeled
-  // line that emailLabeled missed (already handled). When update appears AND
-  // a labeled line exists, ensure email is set from labeled — done above.
-  // Additionally: if update matched but labeled also exists with same pattern
-  // under a bullet that emailLabeled caught, prefer labeled (done).
-  if (emailUpdate && emailLabeled) {
-    email = normalizeCapturedEmail(emailLabeled[1]);
-    if (!updatedFields.includes('email')) updatedFields.push('email');
-  } else if (emailUpdate && !emailLabeled && email) {
-    // already set from update
   }
 
   const sigMatch = s.match(
