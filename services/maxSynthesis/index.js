@@ -177,10 +177,20 @@ module.exports = {
     ConversationalResponsePolicy.mergeReplyHandlingState,
   normalizeReplyHandlingFields:
     ConversationalResponsePolicy.normalizeReplyHandlingFields,
+  normalizeSenderIdentityFields:
+    ConversationalResponsePolicy.normalizeSenderIdentityFields,
   coerceReplyToMatchesSender:
     ConversationalResponsePolicy.coerceReplyToMatchesSender,
   replyHandlingFieldsComplete:
     ConversationalResponsePolicy.replyHandlingFieldsComplete,
+  senderIdentityFieldsComplete:
+    ConversationalResponsePolicy.senderIdentityFieldsComplete,
+  getCanonicalReadinessState:
+    ConversationalResponsePolicy.getCanonicalReadinessState,
+  extractConfirmedSenderFromText:
+    ConversationalResponsePolicy.extractConfirmedSenderFromText,
+  extractConfirmedReplyFromText:
+    ConversationalResponsePolicy.extractConfirmedReplyFromText,
   mergeOperationalPathState:
     ConversationalResponsePolicy.mergeOperationalPathState,
   mergeFollowUpTrackingState:

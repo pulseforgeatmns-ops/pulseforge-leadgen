@@ -1387,6 +1387,120 @@ describe('ConversationalResponsePolicy', () => {
     );
   });
 
+  it('canonical readiness recovers sender+reply from confirmation snapshots', () => {
+    const {
+      getCanonicalReadinessState,
+      extractConfirmedReplyFromText,
+    } = require('../services/maxSynthesis');
+
+    const confirmSender = [
+      'Sender identity is confirmed:',
+      '- Sender name: Jacob Maynard',
+      '- Sender email address: jacob@goanchorcleaning.com',
+      '- Signature: Jacob Maynard, Anchor Cleaning',
+    ].join('\n');
+    const confirmReply = [
+      'Reply inbox / reply-to handling is confirmed:',
+      '- Reply inbox: jacob@goanchorcleaning.com',
+      '- Reply-to matches sender address: yes',
+      '- Reply monitoring owner: Jacob Maynard',
+    ].join('\n');
+
+    const scraped = extractConfirmedReplyFromText(confirmReply);
+    assert.equal(scraped.replyToMatchesSender, true);
+    assert.equal(scraped.fieldsComplete, true);
+
+    const composed = composeCampaignReadySummary({
+      businessName: 'Anchor Cleaning',
+      operatorMessage:
+        'Please provide a final Anchor Batch 1 campaign-ready summary for operator review. Include confirmed sender identity and confirmed reply handling.',
+      // Flat field values intentionally missing — only flags + snapshots.
+      slots: {
+        senderIdentityConfirmed: true,
+        replyInboxConfirmed: true,
+        replyHandlingConfirmed: true,
+        senderIdentityConfirmationText: confirmSender,
+        replyHandlingConfirmationText: confirmReply,
+        operationalPathChosen: true,
+        operationalPathLabel: 'manual send export for operator review',
+        followUpTrackingConfirmed: true,
+        followUpTrackingLocation: 'manual-send export/review sheet',
+        replyMonitoringBatch1Confirmed: true,
+        broaderRolloutBlocked: true,
+      },
+    });
+
+    assert.match(composed.message, /Sender identity confirmed:/);
+    assert.match(composed.message, /Reply handling confirmed:/);
+    assert.doesNotMatch(
+      composed.message,
+      /Sender identity: not fully confirmed/
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /Reply handling: not fully confirmed/
+    );
+    assert.match(composed.message, /signature:\s*Jacob Maynard, Anchor Cleaning/);
+    assert.match(
+      composed.message,
+      /reply inbox:\s*jacob@goanchorcleaning\.com/
+    );
+    assert.match(composed.message, /reply-to matches sender:\s*yes/);
+    assert.match(
+      composed.message,
+      /reply monitoring owner:\s*Jacob Maynard/
+    );
+    assert.equal(composed.readinessDiagnostics.sender.fieldsComplete, true);
+    assert.equal(composed.readinessDiagnostics.reply.fieldsComplete, true);
+    assert.equal(composed.readinessDiagnostics.sender.sources.scraped, true);
+    assert.equal(composed.readinessDiagnostics.reply.sources.scraped, true);
+
+    const canonical = getCanonicalReadinessState({
+      slots: {
+        senderIdentityConfirmed: true,
+        replyInboxConfirmed: true,
+        senderIdentityConfirmationText: confirmSender,
+        replyHandlingConfirmationText: confirmReply,
+      },
+    });
+    assert.equal(canonical.senderIdentityConfirmed, true);
+    assert.equal(canonical.replyInboxConfirmed, true);
+  });
+
+  it('does not let null context fields wipe confirmed slot readiness', () => {
+    const composed = composeCampaignReadySummary({
+      businessName: 'Anchor Cleaning',
+      operatorMessage: 'final campaign-ready summary',
+      senderName: null,
+      senderEmail: null,
+      senderSignature: null,
+      replyInbox: null,
+      replyToMatchesSender: null,
+      replyMonitoringOwner: null,
+      owner: null,
+      slots: {
+        senderIdentityConfirmed: true,
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        replyInboxConfirmed: true,
+        replyHandlingConfirmed: true,
+        replyInbox: 'jacob@goanchorcleaning.com',
+        replyToMatchesSender: true,
+        replyMonitoringOwner: 'Jacob Maynard',
+        operationalPathChosen: true,
+        operationalPathLabel: 'manual send export for operator review',
+        followUpTrackingConfirmed: true,
+        followUpTrackingLocation: 'manual-send export/review sheet',
+        replyMonitoringBatch1Confirmed: true,
+        broaderRolloutBlocked: true,
+      },
+    });
+    assert.match(composed.message, /Sender identity confirmed:/);
+    assert.match(composed.message, /Reply handling confirmed:/);
+    assert.doesNotMatch(composed.message, /not fully confirmed/);
+  });
+
   it('dedupes a duplicated campaign-ready summary', () => {
     const {
       dedupeOperatorStateUpdateMessage,
