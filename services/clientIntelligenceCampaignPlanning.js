@@ -119,6 +119,7 @@ const {
   formatApprovedLaunchGateConversational,
   looksLikeExecutionRequest,
   looksLikeNonExecutionIntent,
+  looksLikeCampaignReadySummary,
   looksLikeOperatorReadinessCheck,
   looksLikeLowSignalAmbiguousInput,
   looksLikeReadinessSubstepSelection,
@@ -127,6 +128,7 @@ const {
   parseSenderIdentityFields,
   mergeSenderIdentityState,
   composeExecutionConfirmation,
+  composeCampaignReadySummary,
   composeOperatorReadinessCheck,
   composeReadinessSubstep,
   composeReadinessFieldCorrection,
@@ -137,6 +139,8 @@ const {
   READINESS_CHECKLIST_SAFETY_LINE,
   CLARIFICATION_NEEDED_ASK,
   READINESS_SUBSTEP_SAFETY_LINE,
+  CAMPAIGN_READY_SUMMARY_SAFETY_LINE,
+  CAMPAIGN_READY_SUMMARY_CLOSING,
 } = require('./maxSynthesis');
 const {
   SCOUT_HANDOFF_KIND,
@@ -7622,6 +7626,92 @@ function produceExecutionConfirmationResult(userMessage, prior = {}, opts = {}) 
 }
 
 /**
+ * Final campaign-ready / full readiness summary for operator review.
+ * Collects ALL confirmed readiness items + Batch 1 scope + execution lock +
+ * next explicit execute action. Never collapses to the latest substep.
+ * Never triggers execution confirmation or executes anything.
+ */
+function produceCampaignReadySummaryResult(userMessage, prior = {}, opts = {}) {
+  const gate = prior.outreachLaunchGate || opts.priorOutreachLaunchGate || null;
+  const review =
+    opts.priorProspectBatchReview || prior.prospectBatchReview || null;
+  const strategy =
+    opts.priorOutreachStrategyPreview || prior.outreachStrategyPreview || null;
+  const slots = {
+    ...(prior.slots || {}),
+    ...(opts.slots || {}),
+    launchGateApproved: true,
+    launchReady: true,
+  };
+  const composed = composeCampaignReadySummary({
+    gate,
+    outreachLaunchGate: gate,
+    operatorMessage: userMessage,
+    text: userMessage,
+    slots,
+    businessName:
+      opts.businessName ||
+      (opts.ctx && opts.ctx.businessName) ||
+      prior.businessName ||
+      (strategy && strategy.businessName) ||
+      'Anchor Cleaning',
+    batchName:
+      opts.batchName ||
+      (strategy && strategy.batchName) ||
+      (review && review.batchName) ||
+      'Batch 1',
+    batch1Scope: opts.batch1Scope || null,
+    prospectBatchReview: review,
+    priorProspectBatchReview: review,
+    outreachStrategyPreview: strategy,
+    priorOutreachStrategyPreview: strategy,
+    campaignMemory: opts.campaignMemory || prior.campaignMemory || null,
+    confirmedReadiness: opts.confirmedReadiness || null,
+    safetyLine: CAMPAIGN_READY_SUMMARY_SAFETY_LINE,
+    closingAsk: CAMPAIGN_READY_SUMMARY_CLOSING,
+  });
+
+  return applyConversationalPolicy(
+    {
+      message: composed.message,
+      step:
+        prior.step ||
+        CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      answers: opts.answers || prior.answers || {},
+      slots,
+      outreachLaunchGate: gate,
+      prospectBatchReview: review,
+      outreachStrategyPreview: strategy,
+      outreachDraftPreview: prior.outreachDraftPreview || null,
+      intent: 'campaign_ready_summary',
+      planningState:
+        prior.planningState ||
+        CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      currentAsk: CAMPAIGN_READY_SUMMARY_CLOSING,
+      responseMode: RESPONSE_MODES.CAMPAIGN_READY_SUMMARY,
+      conversationMode: CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY,
+      batch1Scope: composed.batch1Scope,
+      nextExecuteAction: composed.nextExecuteAction,
+      executionLockActive: true,
+      launchGateApproved: true,
+      launchReady: true,
+      launched: false,
+      executionPending: false,
+      requiresExplicitApproval: false,
+      sendsMade: false,
+      crmWritesMade: false,
+      exportMade: false,
+      accountChangesMade: false,
+    },
+    {
+      isCampaignReadySummary: true,
+      operatorMessage: userMessage,
+      forceMode: CONVERSATION_MODES.CAMPAIGN_READY_SUMMARY,
+    }
+  );
+}
+
+/**
  * Operator readiness check — summarize unresolved items only.
  * Preserves operator-specified checklist items; does not prepare export,
  * create CRM drafts, queue sends, or ask for execute approval.
@@ -10485,6 +10575,36 @@ function buildCampaignPlanningReply(userMessage, state, context, opts = {}) {
       });
     }
 
+    // Final campaign-ready / full readiness summary — compose ALL confirmed
+    // items. Beats field correction / substep so Max never collapses to the
+    // latest readiness item, and never becomes execution confirmation.
+    if (
+      looksLikeCampaignReadySummary(userMessage) &&
+      (isOutreachLaunchGateAlreadyApproved(priorLaunchGateEarly) ||
+        prior.launchGateApproved === true ||
+        priorSlots.launchGateApproved === true ||
+        sharedApprovedSlots.launchGateApproved === true)
+    ) {
+      return produceCampaignReadySummaryResult(userMessage, prior, {
+        ...sharedReplyOpts,
+        priorOutreachLaunchGate: priorLaunchGateEarly,
+        priorProspectBatchReview:
+          sharedReplyOpts.priorProspectBatchReview ||
+          prior.prospectBatchReview ||
+          null,
+        priorOutreachStrategyPreview:
+          sharedReplyOpts.priorOutreachStrategyPreview ||
+          prior.outreachStrategyPreview ||
+          null,
+        answers: { ...(prior.answers || {}) },
+        slots: { ...sharedApprovedSlots },
+        businessName:
+          (sharedReplyOpts.ctx && sharedReplyOpts.ctx.businessName) ||
+          prior.businessName ||
+          'Anchor Cleaning',
+      });
+    }
+
     // Field correction / fill inside an active readiness substep — never
     // fall through to Launch Gate operational options / path asks.
     const activeReadinessItemIdEarly =
@@ -12753,6 +12873,7 @@ module.exports = {
   OUTREACH_LAUNCH_GATE_NEXT_OPTIONS,
   OUTREACH_LAUNCH_GATE_OPERATOR_GUIDANCE,
   produceExecutionConfirmationResult,
+  produceCampaignReadySummaryResult,
   produceOperatorReadinessCheckResult,
   produceReadinessSubstepResult,
   produceReadinessFieldCorrectionResult,
@@ -12762,6 +12883,7 @@ module.exports = {
   applyConversationalPolicy,
   looksLikeExecutionRequest,
   looksLikeNonExecutionIntent,
+  looksLikeCampaignReadySummary,
   looksLikeOperatorReadinessCheck,
   looksLikeLowSignalAmbiguousInput,
   looksLikeReadinessSubstepSelection,
