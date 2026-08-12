@@ -34,8 +34,11 @@ const {
   mergeOperatorReadinessChecklist,
   looksLikeReadinessFieldCorrection,
   parseSenderIdentityFields,
+  parseReplyHandlingFields,
   mergeSenderIdentityState,
+  mergeReplyHandlingState,
   isSenderFieldValueLine,
+  isReplyFieldValueLine,
   READINESS_CHECKLIST_SAFETY_LINE,
   CLARIFICATION_NEEDED_ASK,
   READINESS_SUBSTEPS,
@@ -520,6 +523,115 @@ describe('ConversationalResponsePolicy', () => {
         /Sender name:\s*Jacob Maynard/i.test(i)
       )
     );
+  });
+
+  it('confirms reply handling and advances to operational path without execute', () => {
+    const text = [
+      '- Reply inbox: jacob@goanchorcleaning.com',
+      '- Reply-to should match the sender address: yes',
+      '- Reply monitoring owner: Jacob Maynard',
+    ].join('\n');
+
+    assert.equal(looksLikeReadinessFieldCorrection(text), true);
+    assert.equal(looksLikeOperatorReadinessCheck(text), false);
+    assert.equal(looksLikeExecutionRequest(text), false);
+    assert.deepEqual(extractOperatorReadinessChecklist(text), []);
+
+    const parsed = parseReplyHandlingFields(text);
+    assert.equal(parsed.replyInbox, 'jacob@goanchorcleaning.com');
+    assert.equal(parsed.sameAsSender, true);
+    assert.equal(parsed.monitoringOwner, 'Jacob Maynard');
+    assert.ok(parsed.updatedFields.includes('same_as_sender'));
+
+    const composed = composeReadinessFieldCorrection({
+      operatorMessage: text,
+      activeReadinessItemId: 'reply_handling',
+      slots: {
+        activeReadinessItemId: 'reply_handling',
+        senderIdentityConfirmed: true,
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+      },
+    });
+
+    assert.equal(composed.responseMode, 'readiness_field_correction');
+    assert.equal(composed.itemConfirmed, true);
+    assert.equal(composed.requiresExplicitApproval, false);
+    assert.equal(composed.executionPending, false);
+    assert.equal(composed.nextReadinessItem.id, 'operational_path');
+    assert.match(
+      composed.message,
+      /^Reply inbox \/ reply-to handling is confirmed:/m
+    );
+    assert.match(
+      composed.message,
+      /Reply inbox:\s*jacob@goanchorcleaning\.com/i
+    );
+    assert.match(
+      composed.message,
+      /Reply-to matches sender address:\s*yes/i
+    );
+    assert.match(
+      composed.message,
+      /Reply monitoring owner:\s*Jacob Maynard/i
+    );
+    assert.match(
+      composed.message,
+      /Next readiness item:\s*operational path selection/i
+    );
+    assert.match(
+      composed.message,
+      /Do you want to prepare for manual send, CRM drafts, queued sends later, or hold with no action\?/i
+    );
+    assert.match(
+      composed.message,
+      /Nothing external has happened\. Sends, export, and CRM writes remain locked\./i
+    );
+    assert.doesNotMatch(composed.message, /Still unresolved before any export/i);
+    assert.doesNotMatch(
+      composed.message,
+      /Which readiness item should we resolve first/i
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /Do you explicitly approve this execute action/i
+    );
+    assert.doesNotMatch(composed.message, /Exact action/i);
+    assert.equal(looksLikeExecutionRequest(composed.message), false);
+
+    // Misrouted readiness-check path must also keep reply values confirmed.
+    const check = composeOperatorReadinessCheck({
+      operatorMessage: text,
+      unresolvedItems: [
+        'Reply inbox: jacob@goanchorcleaning.com',
+        'Reply-to should match the sender address: yes',
+        'Reply monitoring owner: Jacob Maynard',
+      ],
+      slots: {
+        senderIdentityConfirmed: true,
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+      },
+    });
+    assert.match(
+      check.message,
+      /Reply inbox \/ reply-to handling is confirmed/i
+    );
+    assert.match(check.message, /Reply-to matches sender address:\s*yes/i);
+    assert.match(
+      check.message,
+      /Next readiness item:\s*operational path selection/i
+    );
+    assert.doesNotMatch(check.message, /Still unresolved before any export/i);
+    assert.doesNotMatch(
+      check.message,
+      /Which readiness item should we resolve first/i
+    );
+    for (const item of check.unresolvedItems || []) {
+      assert.equal(isReplyFieldValueLine(item), false);
+    }
   });
 
   it('classifies low-signal accidental input as clarification_needed', () => {
