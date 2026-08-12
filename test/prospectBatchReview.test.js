@@ -45,6 +45,7 @@ const {
   approveOutreachStrategyPreview,
   approveOutreachCopyPlan,
   approveOutreachDraftPreview,
+  approveOutreachLaunchGate,
   buildOutreachStrategyPreview,
   buildOutreachCopyPlan,
   buildOutreachDraftPreview,
@@ -65,6 +66,7 @@ const {
   OUTREACH_DRAFT_PREVIEW_CLOSING_QUESTION,
   OUTREACH_LAUNCH_GATE_TITLE,
   OUTREACH_LAUNCH_GATE_CLOSING_QUESTION,
+  OUTREACH_LAUNCH_GATE_APPROVED_STATUS,
   containsRawPromptFragment,
   findRawPromptFragments,
   outreachStrategyPreviewLooksStale,
@@ -3275,7 +3277,10 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
       }
     );
 
-    assert.equal(reply.outreachLaunchGate.status, 'approved');
+    assert.equal(
+      reply.outreachLaunchGate.status,
+      OUTREACH_LAUNCH_GATE_APPROVED_STATUS
+    );
     assert.equal(reply.launchReady, true);
     assert.equal(reply.launched, false);
     assert.equal(reply.sendsMade, false);
@@ -3283,6 +3288,102 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.equal(reply.exportMade, false);
     assert.equal(reply.accountChangesMade, false);
     assert.match(reply.message, /readiness only|explicit/i);
+    assert.match(
+      reply.message,
+      /Outreach Launch Gate: approved for readiness only\./
+    );
+    assert.doesNotMatch(reply.message, /Approve Launch Gate/i);
+    assert.doesNotMatch(reply.message, /Hold — do not approve yet/i);
+    assert.doesNotMatch(reply.message, /Does this look right to approve/i);
+    assert.doesNotMatch(reply.message, /Primary actions/i);
+    assert.doesNotMatch(reply.message, /Recommended decision/i);
+    assert.doesNotMatch(reply.message, /View evidence/i);
+    assert.equal(reply.responseMode, 'operator_state_summary');
+    assert.equal(reply.outreachLaunchGate.operatorDigest, null);
+    assert.ok(reply.outreachLaunchGate.operatorStateSummary);
+    assert.equal(
+      reply.outreachLaunchGate.operatorStateSummary.kind,
+      'operator_state_summary'
+    );
+  });
+
+  it('approved Launch Gate does not re-render the review card', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+    assert.equal(gate.status, OUTREACH_LAUNCH_GATE_APPROVED_STATUS);
+
+    const reply = buildCampaignPlanningReply(
+      'Show the Outreach Launch Gate',
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(
+      reply.outreachLaunchGate.status,
+      OUTREACH_LAUNCH_GATE_APPROVED_STATUS
+    );
+    assert.match(
+      reply.message,
+      /Outreach Launch Gate: approved for readiness only\./
+    );
+    assert.match(reply.message, /Execution lock still active/i);
+    assert.match(reply.message, /No send executed/i);
+    assert.match(reply.message, /No export executed/i);
+    assert.match(reply.message, /No CRM write executed/i);
+    assert.match(reply.message, /manual-send export/i);
+    assert.match(reply.message, /CRM drafts/i);
+    assert.match(reply.message, /Queue sends/i);
+    assert.match(reply.message, /Hold with no action/i);
+    assert.match(reply.message, /requires separate (explicit )?operator approval/i);
+    assert.doesNotMatch(reply.message, /Approve Launch Gate/i);
+    assert.doesNotMatch(reply.message, /Hold — do not approve yet/i);
+    assert.doesNotMatch(reply.message, /Does this look right to approve/i);
+    assert.doesNotMatch(reply.message, /Primary actions/i);
+    assert.doesNotMatch(reply.message, /Recommended decision/i);
+    assert.doesNotMatch(reply.message, /View evidence/i);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.accountChangesMade, false);
+    assert.equal(reply.launched, false);
+    assert.equal(reply.responseMode, 'operator_state_summary');
   });
 
   it('operator-facing draft digest comes first without banned fragments', () => {

@@ -18,6 +18,7 @@
 const RESPONSE_MODES = Object.freeze({
   WORKFLOW_REVIEW_CARD: 'workflow_review_card',
   OPERATOR_CHAT_RESPONSE: 'operator_chat_response',
+  OPERATOR_STATE_SUMMARY: 'operator_state_summary',
   STALE_SOURCE_DIAGNOSTIC: 'stale_source_diagnostic',
 });
 
@@ -400,6 +401,14 @@ function selectResponseMode(opts = {}) {
     opts.intent === 'outreach_copy_plan_approved'
   ) {
     return RESPONSE_MODES.WORKFLOW_REVIEW_CARD;
+  }
+
+  if (
+    opts.intent === 'outreach_launch_gate_approved' ||
+    opts.launchGateApproved === true ||
+    opts.approvedReadinessOnly === true
+  ) {
+    return RESPONSE_MODES.OPERATOR_STATE_SUMMARY;
   }
 
   return RESPONSE_MODES.WORKFLOW_REVIEW_CARD;

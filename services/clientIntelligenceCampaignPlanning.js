@@ -323,6 +323,18 @@ const OUTREACH_LAUNCH_GATE_DISCLAIMER =
   'Outreach Launch Gate only — readiness checkpoint. No sends, CRM writes, exports, or account changes execute automatically.';
 const OUTREACH_LAUNCH_GATE_CLOSING_QUESTION =
   'Does this Outreach Launch Gate look right to approve for readiness, or hold before any launch/export/CRM action?';
+/** Canonical post-approval status — readiness only; execution remains locked. */
+const OUTREACH_LAUNCH_GATE_APPROVED_STATUS = 'approved_readiness_only';
+const OUTREACH_LAUNCH_GATE_APPROVED_HEADLINE =
+  'Outreach Launch Gate: approved for readiness only.';
+const OUTREACH_LAUNCH_GATE_APPROVED_ASK =
+  'Choose a next option when ready — each still requires separate operator approval. Until then, hold with no action.';
+const OUTREACH_LAUNCH_GATE_NEXT_OPTIONS = Object.freeze([
+  'Prepare manual-send export for operator review',
+  'Create CRM drafts only if explicitly approved',
+  'Queue sends only if execution is intentionally enabled later',
+  'Hold with no action',
+]);
 /** Stored OSP artifacts with these fragments must be regenerated, not shown. */
 const STALE_OUTREACH_STRATEGY_FRAGMENT_RES = Object.freeze([
   /for Small to mid-sized/,
@@ -6116,7 +6128,9 @@ function buildOutreachLaunchGate(
       ? opts.priorOutreachLaunchGate
       : null;
   if (prior && opts.reuseExisting !== false && !opts.forceRebuild) {
+    const alreadyApproved = isOutreachLaunchGateAlreadyApproved(prior);
     const stale =
+      !alreadyApproved &&
       findOperatorBannedFragments(
         operatorArtifactTextBlob(prior, formatOutreachLaunchGateMessage)
       ).length > 0;
@@ -6125,15 +6139,29 @@ function buildOutreachLaunchGate(
         ...prior,
         kind: OUTREACH_LAUNCH_GATE_KIND,
         title: prior.title || OUTREACH_LAUNCH_GATE_TITLE,
-        status: prior.status === 'approved' ? 'approved' : 'draft',
+        status: alreadyApproved
+          ? OUTREACH_LAUNCH_GATE_APPROVED_STATUS
+          : 'draft',
+        approved: alreadyApproved || prior.approved === true,
+        launchGateApproved: alreadyApproved || prior.launchGateApproved === true,
+        launchReady: alreadyApproved || prior.launchReady === true,
         planningOnly: true,
-        reviewFirst: true,
+        reviewFirst: !alreadyApproved,
         launched: false,
         sendsMade: false,
         crmWritesMade: false,
         exportMade: false,
         accountChangesMade: false,
         disclaimer: OUTREACH_LAUNCH_GATE_DISCLAIMER,
+        ...(alreadyApproved
+          ? {
+              operatorDigest: null,
+              operatorStateSummary: buildOutreachLaunchGateOperatorStateSummary(
+                prior
+              ),
+              closingQuestion: null,
+            }
+          : {}),
       };
     }
   }
@@ -6250,8 +6278,68 @@ function buildOutreachLaunchGate(
   };
 }
 
-function formatOutreachLaunchGateMessage(gate) {
+function buildOutreachLaunchGateOperatorStateSummary(gate, opts = {}) {
   const g = gate || {};
+  return {
+    kind: 'operator_state_summary',
+    title: g.title || OUTREACH_LAUNCH_GATE_TITLE,
+    status: OUTREACH_LAUNCH_GATE_APPROVED_STATUS,
+    headline: OUTREACH_LAUNCH_GATE_APPROVED_HEADLINE,
+    readinessOnly: true,
+    executionLockActive: true,
+    notExecuted: [
+      'No send executed',
+      'No export executed',
+      'No CRM write executed',
+      'No scheduled launch executed',
+      'No account, DNS, GBP, social, or tracking changes executed',
+    ],
+    nextOptions: [...OUTREACH_LAUNCH_GATE_NEXT_OPTIONS],
+    nextOptionsRequireApproval: true,
+    reminder:
+      'Each next option requires separate explicit operator approval. Nothing executes from this summary.',
+    includeEvidence: opts.includeEvidence === true,
+  };
+}
+
+/**
+ * Approved-state summary — never the pre-approval Launch Gate review card.
+ */
+function formatOutreachLaunchGateApprovedSummary(gate, opts = {}) {
+  const summary =
+    (gate && gate.operatorStateSummary) ||
+    buildOutreachLaunchGateOperatorStateSummary(gate, opts);
+  const lines = [
+    summary.headline || OUTREACH_LAUNCH_GATE_APPROVED_HEADLINE,
+    '',
+    'Readiness-only status: approved. Execution lock still active.',
+    '',
+    'Confirmed not executed:',
+  ];
+  for (const item of summary.notExecuted || []) {
+    lines.push(`- ${item}`);
+  }
+  lines.push('');
+  lines.push(
+    'Next options (each requires separate operator approval):'
+  );
+  for (const item of summary.nextOptions || OUTREACH_LAUNCH_GATE_NEXT_OPTIONS) {
+    lines.push(`- ${item}`);
+  }
+  lines.push('');
+  lines.push(
+    summary.reminder ||
+      'Each next option requires separate explicit operator approval. Nothing executes from this summary.'
+  );
+  return lines.join('\n').trim();
+}
+
+function formatOutreachLaunchGateMessage(gate, opts = {}) {
+  const g = gate || {};
+  if (isOutreachLaunchGateAlreadyApproved(g)) {
+    return formatOutreachLaunchGateApprovedSummary(g, opts);
+  }
+
   const lines = [];
   if (g.operatorDigest) {
     lines.push(
@@ -6287,18 +6375,26 @@ function approveOutreachLaunchGate(gate, opts = {}) {
   const prior = gate && typeof gate === 'object' ? gate : {};
   const approvedAt =
     opts.approvedAt || prior.approvedAt || new Date().toISOString();
+  const operatorStateSummary = buildOutreachLaunchGateOperatorStateSummary(
+    prior,
+    opts
+  );
   return {
     ...prior,
     kind: OUTREACH_LAUNCH_GATE_KIND,
     title: prior.title || OUTREACH_LAUNCH_GATE_TITLE,
-    status: 'approved',
+    status: OUTREACH_LAUNCH_GATE_APPROVED_STATUS,
     approved: true,
     launchGateApproved: true,
     launchReady: true,
     launched: false,
     approvedAt,
     planningOnly: true,
-    reviewFirst: true,
+    reviewFirst: false,
+    // Suppress pre-approval workflow card payload after approval.
+    operatorDigest: null,
+    closingQuestion: null,
+    operatorStateSummary,
     // Guardrails: approval = readiness only — never auto-execute.
     sendsMade: false,
     crmWritesMade: false,
@@ -7192,6 +7288,7 @@ function produceOutreachLaunchGateResult(ctx, answers, slots, opts, leadIn) {
 
   const existing = opts.priorOutreachLaunchGate || null;
   const alreadyHave = hasOutreachLaunchGate(existing);
+  const alreadyApproved = isOutreachLaunchGateAlreadyApproved(existing);
   const outreachLaunchGate = buildOutreachLaunchGate(
     draft,
     plan,
@@ -7203,6 +7300,73 @@ function produceOutreachLaunchGateResult(ctx, answers, slots, opts, leadIn) {
       reuseExisting: alreadyHave,
     }
   );
+
+  // Approved gates must never re-render the pre-approval review card.
+  if (alreadyApproved || isOutreachLaunchGateAlreadyApproved(outreachLaunchGate)) {
+    const gate = isOutreachLaunchGateAlreadyApproved(outreachLaunchGate)
+      ? {
+          ...outreachLaunchGate,
+          status: OUTREACH_LAUNCH_GATE_APPROVED_STATUS,
+          operatorDigest: null,
+          closingQuestion: null,
+          operatorStateSummary:
+            outreachLaunchGate.operatorStateSummary ||
+            buildOutreachLaunchGateOperatorStateSummary(outreachLaunchGate),
+        }
+      : approveOutreachLaunchGate(outreachLaunchGate, {
+          approvedAt: opts.approvedAt || existing.approvedAt,
+        });
+    const message = [
+      leadIn || null,
+      alreadyApproved
+        ? 'Outreach Launch Gate is already approved for readiness only — showing the approved-state summary. Not re-rendering the Launch Gate review card.'
+        : null,
+      '',
+      formatOutreachLaunchGateApprovedSummary(gate),
+    ]
+      .filter((line) => line != null && line !== '')
+      .join('\n');
+
+    return {
+      message,
+      step: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      answers,
+      slots: {
+        ...slots,
+        outreachCopyPlanApproved: true,
+        copyPlanApproved: true,
+        outreachDraftPreviewGenerated: true,
+        outreachDraftPreviewApproved: true,
+        draftPreviewApproved: true,
+        outreachLaunchGateGenerated: true,
+        outreachLaunchGateApproved: true,
+        launchGateApproved: true,
+        launchReady: true,
+      },
+      prospectBatchReview: review,
+      outreachStrategyPreview: strategy,
+      outreachCopyPlan: plan,
+      outreachDraftPreview: draft,
+      outreachLaunchGate: gate,
+      intent: 'outreach_launch_gate_approved',
+      draftPreviewApproved: true,
+      copyPlanApproved: true,
+      strategyApproved: true,
+      batch1Approved: true,
+      launchGateApproved: true,
+      launchReady: true,
+      launched: false,
+      planningState: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      currentAsk: OUTREACH_LAUNCH_GATE_APPROVED_ASK,
+      responseMode: RESPONSE_MODES.OPERATOR_STATE_SUMMARY,
+      finalOutreachCopyGenerated: true,
+      outreachCopyGenerated: true,
+      sendsMade: false,
+      crmWritesMade: false,
+      exportMade: false,
+      accountChangesMade: false,
+    };
+  }
 
   const intro = alreadyHave
     ? 'Outreach Launch Gate is already available — showing it for readiness approval. Not re-rendering the Outreach Draft Preview.'
@@ -7248,6 +7412,7 @@ function produceOutreachLaunchGateResult(ctx, answers, slots, opts, leadIn) {
     launched: false,
     planningState: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
     currentAsk: OUTREACH_LAUNCH_GATE_CLOSING_QUESTION,
+    responseMode: RESPONSE_MODES.WORKFLOW_REVIEW_CARD,
     finalOutreachCopyGenerated: true,
     outreachCopyGenerated: true,
     sendsMade: false,
@@ -7267,6 +7432,50 @@ function produceOutreachLaunchGateApprovalResult(
   opts,
   leadIn
 ) {
+  const priorGate = opts.priorOutreachLaunchGate || null;
+  const alreadyApproved = isOutreachLaunchGateAlreadyApproved(priorGate);
+
+  // Idempotent: already-approved gate → approved-state summary only.
+  if (alreadyApproved) {
+    const gate = approveOutreachLaunchGate(priorGate, {
+      approvedAt: opts.approvedAt || priorGate.approvedAt,
+    });
+    const message = [
+      leadIn ||
+        'Outreach Launch Gate is already approved for readiness only. No sends, CRM writes, exports, or account changes executed.',
+      '',
+      formatOutreachLaunchGateApprovedSummary(gate),
+    ].join('\n');
+
+    return {
+      message,
+      step: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      answers,
+      slots: {
+        ...slots,
+        outreachLaunchGateApproved: true,
+        launchGateApproved: true,
+        launchReady: true,
+      },
+      outreachLaunchGate: gate,
+      prospectBatchReview: opts.priorProspectBatchReview || null,
+      outreachStrategyPreview: opts.priorOutreachStrategyPreview || null,
+      outreachCopyPlan: opts.priorOutreachCopyPlan || null,
+      outreachDraftPreview: opts.priorOutreachDraftPreview || null,
+      intent: 'outreach_launch_gate_approved',
+      launchGateApproved: true,
+      launchReady: true,
+      launched: false,
+      planningState: CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
+      currentAsk: OUTREACH_LAUNCH_GATE_APPROVED_ASK,
+      responseMode: RESPONSE_MODES.OPERATOR_STATE_SUMMARY,
+      sendsMade: false,
+      crmWritesMade: false,
+      exportMade: false,
+      accountChangesMade: false,
+    };
+  }
+
   const result = produceOutreachLaunchGateResult(
     ctx,
     answers,
@@ -7281,9 +7490,7 @@ function produceOutreachLaunchGateApprovalResult(
     leadIn ||
       'Outreach Launch Gate approved for readiness only. No sends, CRM writes, exports, or account changes executed.',
     '',
-    formatOutreachLaunchGateMessage(gate),
-    '',
-    'Next: take an explicit launch / export / CRM execute action when ready. Until then everything remains blocked.',
+    formatOutreachLaunchGateApprovedSummary(gate),
   ].join('\n');
 
   return {
@@ -7300,8 +7507,8 @@ function produceOutreachLaunchGateApprovalResult(
       launchGateApproved: true,
       launchReady: true,
     },
-    currentAsk:
-      'Launch Gate is approved for readiness. Say when you want an explicit launch, export, or CRM execute action — nothing runs automatically.',
+    currentAsk: OUTREACH_LAUNCH_GATE_APPROVED_ASK,
+    responseMode: RESPONSE_MODES.OPERATOR_STATE_SUMMARY,
     sendsMade: false,
     crmWritesMade: false,
     exportMade: false,
@@ -11808,6 +12015,8 @@ module.exports = {
   formatOutreachCopyPlanMessage,
   formatOutreachDraftPreviewMessage,
   formatOutreachLaunchGateMessage,
+  formatOutreachLaunchGateApprovedSummary,
+  buildOutreachLaunchGateOperatorStateSummary,
   formatProspectBatch1ApprovalMessage,
   outreachStrategyPreviewLooksStale,
   findStaleOutreachStrategyFragments,
@@ -11860,6 +12069,10 @@ module.exports = {
   OUTREACH_LAUNCH_GATE_TITLE,
   OUTREACH_LAUNCH_GATE_DISCLAIMER,
   OUTREACH_LAUNCH_GATE_CLOSING_QUESTION,
+  OUTREACH_LAUNCH_GATE_APPROVED_STATUS,
+  OUTREACH_LAUNCH_GATE_APPROVED_HEADLINE,
+  OUTREACH_LAUNCH_GATE_APPROVED_ASK,
+  OUTREACH_LAUNCH_GATE_NEXT_OPTIONS,
   buildScoutHandoffBrief,
   formatScoutHandoffBriefMessage,
   produceScoutHandoffBriefResult,
