@@ -8,7 +8,7 @@
 | **Owner** | Pulseforge |
 | **Created** | 2026-08-13 |
 
-> **Numbering note:** The product brief titled this work “SPEC-085”. Repository SPEC-085 is already [Executive Business Brief](SPEC-085_Executive_Business_Brief.md), so this work is numbered **SPEC-092**. The follow-on learning loop (brief “SPEC-086”) remains deferred as a future Paige Outcome Learning Loop — not [SPEC-086 Growth Conversation](SPEC-086_Growth_Conversation.md).
+> **Numbering note:** The product brief titled this work “SPEC-085”. Repository SPEC-085 is already [Executive Business Brief](SPEC-085_Executive_Business_Brief.md), so this work is numbered **SPEC-092**. The follow-on learning loop is [SPEC-093 Paige Outcome Learning Loop](SPEC-093_Paige_Outcome_Learning_Loop.md) — not [SPEC-086 Growth Conversation](SPEC-086_Growth_Conversation.md).
 
 ## Objective
 
@@ -50,7 +50,7 @@ Pulseforge creates content through Paige but has no durable feedback loop connec
 - Autonomous content strategy or publishing
 - New Paige agent or analytics dashboard product
 - Cross-platform social management
-- Content recommendations (future Paige Outcome Learning Loop)
+- Content recommendations ([SPEC-093 Paige Outcome Learning Loop](SPEC-093_Paige_Outcome_Learning_Loop.md))
 
 ## Dependencies
 
@@ -125,9 +125,8 @@ Forward SQL + rollback SQL. Additive. Apply on Railway before production capture
 
 ## Future Work
 
-- Paige Outcome Learning Loop (evidence-based recommendations; operator-controlled)
 - Optional Postgres integration suite behind env flag
 - Dashboard deep-link from Content Performance section
 - Structured Evidence Laboratory attachment UX
 
-**SPEC-092 records reality. Future learning specs reason over it.**
+**SPEC-092 records reality. [SPEC-093](SPEC-093_Paige_Outcome_Learning_Loop.md) reasons over it.**

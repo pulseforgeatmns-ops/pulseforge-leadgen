@@ -277,6 +277,27 @@
       </div>
       <div class="status" id="saveStatus"></div>
     </div>
+
+    <div class="panel">
+      <h2>Content learnings</h2>
+      <p class="hint">SPEC-093 — evaluate SPEC-092 outcomes into evidence-backed learnings. Manual trigger only. No universal score.</p>
+      <div class="row-actions">
+        <button type="button" id="btnEvaluate">Evaluate outcomes</button>
+        <button type="button" class="secondary" id="btnRefreshLearnings">Refresh learnings</button>
+      </div>
+      <div class="status" id="learnStatus"></div>
+      <div id="learningList" class="chip-list"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Paige recommends</h2>
+      <p class="hint">Advisor only — operator decides. Recommendations propose the next experiment, not a clone.</p>
+      <div class="row-actions">
+        <button type="button" id="btnRecommend">Ask Paige for next recommendation</button>
+      </div>
+      <div class="status" id="recStatus"></div>
+      <pre id="recOut" class="ref" style="white-space:pre-wrap;display:none"></pre>
+    </div>
   </main>
 
   <script>
@@ -526,6 +547,100 @@
         setStatus($('saveStatus'), `Saved ${savedO} outcomes, ${savedS} signals`, true);
       } catch (err) {
         setStatus($('saveStatus'), err.message, false);
+      }
+    };
+
+    function renderLearnings(items) {
+      const host = $('learningList');
+      host.innerHTML = '';
+      if (!items || !items.length) {
+        host.innerHTML = '<p class="hint">No learnings yet. Evaluate a publication with outcomes first.</p>';
+        return;
+      }
+      for (const l of items) {
+        const el = document.createElement('div');
+        el.className = 'chip';
+        el.innerHTML =
+          `<strong>${escapeHtml(l.status)}</strong> · ${escapeHtml(l.learningType)}<br/>` +
+          `${escapeHtml(l.statement)}<br/>` +
+          `<span class="hint">Observation confidence: ${l.observationConfidence} · Generalization: ${l.generalizationConfidence} · Supported by ${l.sampleSize} publication(s)</span>`;
+        host.appendChild(el);
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    async function refreshLearnings() {
+      const clientId = Number($('clientId').value);
+      const data = await api('GET', `/api/content-learnings?client_id=${clientId}&limit=20`);
+      renderLearnings(data.items || []);
+      return data;
+    }
+
+    $('btnEvaluate').onclick = async () => {
+      try {
+        const id = $('publicationId').value.trim() || activePublicationId;
+        if (!id) throw new Error('publication id required');
+        const clientId = Number($('clientId').value);
+        const result = await api(
+          'POST',
+          `/api/content-learning/evaluate/${encodeURIComponent(id)}`,
+          { clientId }
+        );
+        setStatus(
+          $('learnStatus'),
+          `Evaluated · ${result.learnings.length} learning(s) · observation ${result.assessment.confidenceLabel.observation} / generalization ${result.assessment.confidenceLabel.generalization}`,
+          true
+        );
+        await refreshLearnings();
+      } catch (err) {
+        setStatus($('learnStatus'), err.message, false);
+      }
+    };
+
+    $('btnRefreshLearnings').onclick = async () => {
+      try {
+        await refreshLearnings();
+        setStatus($('learnStatus'), 'Learnings refreshed', true);
+      } catch (err) {
+        setStatus($('learnStatus'), err.message, false);
+      }
+    };
+
+    $('btnRecommend').onclick = async () => {
+      try {
+        const clientId = Number($('clientId').value);
+        const objective = $('objective').value || 'category_creation';
+        const rec = await api('POST', '/api/paige/content-recommendation', {
+          clientId,
+          objective: 'Build qualified attention and category understanding before the public Max reveal.',
+          learningObjective: objective,
+          channel: $('channel').value || 'linkedin',
+        });
+        const out = $('recOut');
+        out.style.display = 'block';
+        out.textContent = [
+          `Direction: ${rec.recommended_direction}`,
+          `Why: ${rec.reason}`,
+          `Confidence: ${rec.confidence}`,
+          `Uncertainties: ${(rec.uncertainties || []).join(' | ')}`,
+          `Experiment hypothesis: ${rec.experiment?.hypothesis || '—'}`,
+          `Preserve: ${(rec.experiment?.preserve || []).join(', ')}`,
+          `Vary: ${(rec.experiment?.vary || []).join(', ')}`,
+          `Expected: ${(rec.experiment?.expected_signal || []).join('; ')}`,
+          `Failure: ${(rec.experiment?.failure_signal || []).join('; ')}`,
+          `Evidence: learnings ${(rec.supporting_learning_ids || []).join(', ') || '—'} · publications ${(rec.supporting_publication_ids || []).join(', ') || '—'}`,
+          `Autonomous publish: ${rec.autonomousPublish} · Operator authority: ${rec.operatorAuthority}`,
+        ].join('\n');
+        setStatus($('recStatus'), 'Recommendation ready — operator decides next step', true);
+      } catch (err) {
+        setStatus($('recStatus'), err.message, false);
       }
     };
 

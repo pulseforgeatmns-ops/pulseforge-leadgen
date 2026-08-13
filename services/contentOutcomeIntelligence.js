@@ -1039,7 +1039,7 @@ async function getRecentContentOutcomes(tenantIdOrClientId, limit = 5, opts = {}
 }
 
 /**
- * Deterministic aggregates only — no recommendations (SPEC-086 territory).
+ * Deterministic aggregates only — recommendations live in SPEC-093.
  */
 async function compareContentOutcomes(filter = {}, opts = {}) {
   const items = await listContentOutcomes(filter, opts);
