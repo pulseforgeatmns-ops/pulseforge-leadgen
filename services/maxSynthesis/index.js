@@ -227,6 +227,18 @@ module.exports = {
     ConversationalResponsePolicy.normalizeReadinessItemId,
   composeExecutionConfirmation:
     ConversationalResponsePolicy.composeExecutionConfirmation,
+  composeManualSendExportFieldConfirmation:
+    ConversationalResponsePolicy.composeManualSendExportFieldConfirmation,
+  looksLikeExportFieldConfirmationRequest:
+    ConversationalResponsePolicy.looksLikeExportFieldConfirmationRequest,
+  resolveExecuteActionFromContext:
+    ConversationalResponsePolicy.resolveExecuteActionFromContext,
+  MANUAL_SEND_EXPORT_REVIEW_FIELDS:
+    ConversationalResponsePolicy.MANUAL_SEND_EXPORT_REVIEW_FIELDS,
+  MANUAL_SEND_EXPORT_ACTION:
+    ConversationalResponsePolicy.MANUAL_SEND_EXPORT_ACTION,
+  MANUAL_SEND_EXPORT_ACTION_ID:
+    ConversationalResponsePolicy.MANUAL_SEND_EXPORT_ACTION_ID,
   composeCampaignReadySummary:
     ConversationalResponsePolicy.composeCampaignReadySummary,
   composeOperatorReadinessCheck:

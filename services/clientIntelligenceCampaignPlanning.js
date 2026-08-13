@@ -133,6 +133,9 @@ const {
   composeReadinessSubstep,
   composeReadinessFieldCorrection,
   composeClarificationNeeded,
+  looksLikeExportFieldConfirmationRequest,
+  MANUAL_SEND_EXPORT_ACTION_ID,
+  MANUAL_SEND_EXPORT_REVIEW_FIELDS,
   unresolvedReadinessItems,
   buildConfirmedReadinessRecords,
   DEFAULT_UNRESOLVED_READINESS_ITEMS,
@@ -7559,16 +7562,27 @@ function produceOutreachLaunchGateApprovalResult(
 /**
  * Execution Confirmation mode — explicit safety checkpoint only.
  * Never sends, exports, or writes CRM from this reply.
+ *
+ * For prepare_manual_send_export_for_operator_review:
+ * - sender/reply come from confirmed readiness (not "not yet confirmed")
+ * - external effect is export/review sheet only (CRM drafts / queued sends
+ *   are disallowed, not possible effects)
+ * - if the operator asks to confirm fields first, list fields then ask for
+ *   final explicit approval to create the sheet
  */
 function produceExecutionConfirmationResult(userMessage, prior = {}, opts = {}) {
   const text = String(userMessage || '');
   let action = 'execute action';
-  if (/\bmanual-?send\s+export\b|\bexport\b/i.test(text)) {
+  let actionId = null;
+  if (/\bmanual-?send\s+export\b|\bexport\/review\s+sheet\b|\bexport\b/i.test(text)) {
     action = 'prepare a manual-send export for operator review';
+    actionId = 'prepare_manual_send_export_for_operator_review';
   } else if (/\bcrm\b/i.test(text)) {
     action = 'create CRM drafts';
+    actionId = 'create_crm_drafts';
   } else if (/\bqueue\s+sends?\b|\bsend/i.test(text)) {
     action = 'queue or send outreach';
+    actionId = 'queue_or_send_outreach';
   }
 
   const gate = prior.outreachLaunchGate || opts.priorOutreachLaunchGate || null;
@@ -7578,15 +7592,52 @@ function produceExecutionConfirmationResult(userMessage, prior = {}, opts = {}) 
       prior.outreachDraftPreview.approvedCandidateCount) ||
     'Batch 1 approved candidates';
 
-  const composed = composeExecutionConfirmation({
+  const slots = {
+    ...(prior.slots || {}),
+    ...(opts.slots || {}),
+    launchGateApproved: true,
+    launchReady: true,
+  };
+
+  const confirmFieldsFirst =
+    opts.confirmFieldsFirst === true ||
+    looksLikeExportFieldConfirmationRequest(text);
+
+  const composeOpts = {
     action,
+    executeActionId: actionId,
+    actionId,
+    operatorMessage: text,
+    text,
+    userMessage: text,
     recordsAffected: `${count} campaign records in the approved Batch 1 scope`,
-    sender: opts.sender || 'configured campaign sender (not yet confirmed)',
-    externalEffects:
-      'May create an export file, CRM drafts, or queued sends — irreversible once executed against external systems.',
-    holdGuidance:
-      "I'd hold until sender identity and reply handling are explicit. I'm not going to move anything externally without your explicit approval.",
-  });
+    slots,
+    confirmedReadiness: opts.confirmedReadiness || prior.confirmedReadiness,
+    confirmedReadinessRecords:
+      opts.confirmedReadinessRecords || prior.confirmedReadinessRecords,
+    recentAssistantMessages:
+      opts.recentAssistantMessages || prior.recentAssistantMessages || [],
+    confirmFieldsFirst,
+  };
+
+  // Only pass an explicit sender override when the caller supplied one —
+  // never default to "not yet confirmed" when readiness slots already confirm it.
+  if (opts.sender) composeOpts.sender = opts.sender;
+  if (opts.account) composeOpts.account = opts.account;
+  if (opts.externalEffects) composeOpts.externalEffects = opts.externalEffects;
+  if (opts.holdGuidance) composeOpts.holdGuidance = opts.holdGuidance;
+  if (opts.exportFields) composeOpts.exportFields = opts.exportFields;
+
+  // Generic CRM/queue effects must never be implied for manual-send export.
+  // Leave externalEffects unset so composeExecutionConfirmation uses the
+  // export-only wording (and explicit "not allowed" list).
+
+  const composed = composeExecutionConfirmation(composeOpts);
+
+  const closingAsk =
+    actionId === MANUAL_SEND_EXPORT_ACTION_ID
+      ? 'Do you explicitly approve creating the manual-send export/review sheet now?'
+      : 'Do you explicitly approve this execute action?';
 
   return applyConversationalPolicy(
     {
@@ -7595,25 +7646,23 @@ function produceExecutionConfirmationResult(userMessage, prior = {}, opts = {}) 
         prior.step ||
         CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
       answers: opts.answers || prior.answers || {},
-      slots: {
-        ...(prior.slots || {}),
-        ...(opts.slots || {}),
-        launchGateApproved: true,
-        launchReady: true,
-      },
+      slots,
       outreachLaunchGate: gate,
       outreachDraftPreview: prior.outreachDraftPreview || null,
       intent: 'execution_confirmation',
       planningState:
         prior.planningState ||
         CAMPAIGN_PLANNING_STATES.OUTREACH_LAUNCH_GATE,
-      currentAsk: 'Do you explicitly approve this execute action?',
+      currentAsk: closingAsk,
       responseMode: RESPONSE_MODES.EXECUTION_CONFIRMATION,
       conversationMode: CONVERSATION_MODES.EXECUTION_CONFIRMATION,
       launchGateApproved: true,
       launchReady: true,
       launched: false,
       executionPending: true,
+      executeActionId: actionId || composed.executeActionId || null,
+      confirmFieldsFirst: Boolean(composed.confirmFieldsFirst),
+      requiresExplicitApproval: true,
       sendsMade: false,
       crmWritesMade: false,
       exportMade: false,

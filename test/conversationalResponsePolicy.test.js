@@ -32,6 +32,7 @@ const {
   composeReadinessSubstep,
   composeReadinessFieldCorrection,
   composeClarificationNeeded,
+  composeExecutionConfirmation,
   extractOperatorReadinessChecklist,
   mergeOperatorReadinessChecklist,
   looksLikeReadinessFieldCorrection,
@@ -1947,9 +1948,138 @@ describe('ConversationalResponsePolicy', () => {
     assert.match(composed.message, /Exact action/);
     assert.match(composed.message, /Records affected/);
     assert.match(composed.message, /Sender \/ account/);
-    assert.match(composed.message, /explicitly approve this execute action/i);
+    assert.match(
+      composed.message,
+      /explicitly approve creating the manual-send export\/review sheet now/i
+    );
+    assert.match(
+      composed.message,
+      /Preparing the manual-send export\/review sheet only/i
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /May create an export file, CRM drafts, or queued sends/i
+    );
     assert.equal(composed.requiresExplicitApproval, true);
     assert.equal(composed.sendsMade, false);
+  });
+
+  it('manual-send export confirmation reads confirmed sender/reply and limits effects', () => {
+    const composed = composeExecutionConfirmation({
+      action: 'prepare a manual-send export for operator review',
+      executeActionId: 'prepare_manual_send_export_for_operator_review',
+      recordsAffected: '6 campaign records in the approved Batch 1 scope',
+      slots: {
+        senderIdentityConfirmed: true,
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        replyInboxConfirmed: true,
+        replyHandlingConfirmed: true,
+        replyInbox: 'jacob@goanchorcleaning.com',
+        replyToMatchesSender: true,
+        replyMonitoringOwner: 'Jacob Maynard',
+        operationalPathId: 'manual_send_export',
+        operationalPathLabel: 'manual send export for operator review',
+      },
+    });
+
+    assert.match(
+      composed.message,
+      /Sender \/ account:\s*Jacob Maynard <jacob@goanchorcleaning\.com>/
+    );
+    assert.doesNotMatch(composed.message, /not yet confirmed/i);
+    assert.match(composed.message, /replies go to jacob@goanchorcleaning\.com/);
+    assert.match(composed.message, /reply-to matches sender/);
+    assert.match(
+      composed.message,
+      /Preparing the manual-send export\/review sheet only/i
+    );
+    assert.match(
+      composed.message,
+      /Not allowed:.*CRM drafts.*queued sends/i
+    );
+    assert.doesNotMatch(
+      composed.message,
+      /May create an export file, CRM drafts, or queued sends/i
+    );
+    assert.equal(composed.exportMade, false);
+    assert.equal(composed.sendsMade, false);
+    assert.equal(composed.crmWritesMade, false);
+  });
+
+  it('lists export fields before final approval when operator asks to confirm fields first', () => {
+    const composed = composeExecutionConfirmation({
+      operatorMessage:
+        'I explicitly approve the next execute action: prepare the manual-send export for operator review. Before preparing it, confirm the exact fields that will be included in the export/review sheet.',
+      action: 'prepare a manual-send export for operator review',
+      executeActionId: 'prepare_manual_send_export_for_operator_review',
+      slots: {
+        senderIdentityConfirmed: true,
+        senderName: 'Jacob Maynard',
+        senderEmail: 'jacob@goanchorcleaning.com',
+        senderSignature: 'Jacob Maynard, Anchor Cleaning',
+        replyInboxConfirmed: true,
+        replyHandlingConfirmed: true,
+        replyInbox: 'jacob@goanchorcleaning.com',
+        replyToMatchesSender: true,
+        replyMonitoringOwner: 'Jacob Maynard',
+      },
+    });
+
+    assert.equal(composed.confirmFieldsFirst, true);
+    assert.match(
+      composed.message,
+      /Before I prepare the manual-send export, here are the fields I would include:/i
+    );
+    assert.match(composed.message, /- business name/);
+    assert.match(composed.message, /- contact name, if available/);
+    assert.match(composed.message, /- contact role, if available/);
+    assert.match(composed.message, /- email address/);
+    assert.match(composed.message, /- town/);
+    assert.match(composed.message, /- approved subject/);
+    assert.match(composed.message, /- first-touch email/);
+    assert.match(composed.message, /- Follow-up 1/);
+    assert.match(composed.message, /- Follow-up 2/);
+    assert.match(composed.message, /- personalization notes/);
+    assert.match(composed.message, /- status/);
+    assert.match(composed.message, /- follow-up due dates/);
+    assert.match(composed.message, /- reply status/);
+    assert.match(composed.message, /- owner/);
+    assert.match(
+      composed.message,
+      /Sender:\s*\n- Jacob Maynard <jacob@goanchorcleaning\.com>/
+    );
+    assert.match(
+      composed.message,
+      /Reply handling:\s*\n- replies go to jacob@goanchorcleaning\.com\s*\n- reply-to matches sender/
+    );
+    assert.match(
+      composed.message,
+      /This action would only prepare the manual-send export\/review sheet/
+    );
+    assert.match(
+      composed.message,
+      /would not send emails, create CRM drafts, queue sends, write to CRM, or change accounts\/settings/i
+    );
+    assert.match(
+      composed.message,
+      /Do you explicitly approve creating the manual-send export\/review sheet now\?/i
+    );
+    // Must not ask for execute approval before listing fields / with stale wording.
+    assert.doesNotMatch(composed.message, /not yet confirmed/i);
+    assert.doesNotMatch(
+      composed.message,
+      /May create an export file, CRM drafts, or queued sends/i
+    );
+    assert.ok(
+      composed.message.indexOf('here are the fields I would include') <
+        composed.message.indexOf(
+          'Do you explicitly approve creating the manual-send export'
+        )
+    );
+    assert.equal(composed.exportMade, false);
+    assert.equal(composed.requiresExplicitApproval, true);
   });
 
   it('compact safety avoids full boilerplate list', () => {
