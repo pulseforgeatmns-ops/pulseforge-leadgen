@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Record Content Outcome — Pulseforge</title>
+  <style>
+    :root {
+      --bg: #10151c;
+      --panel: #18222d;
+      --text: #e8eef4;
+      --muted: #8fa0b3;
+      --accent: #4aa3f0;
+      --border: #2b3847;
+      --ok: #3ecf8e;
+      --err: #f07178;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(900px 500px at 0% 0%, #1b334f 0%, transparent 55%),
+        radial-gradient(700px 400px at 100% 10%, #17312c 0%, transparent 50%),
+        var(--bg);
+      min-height: 100vh;
+      padding: 1.5rem;
+    }
+    h1 {
+      font-family: "IBM Plex Serif", Georgia, serif;
+      font-weight: 500;
+      margin: 0 0 0.25rem;
+    }
+    .sub { color: var(--muted); margin-bottom: 1.25rem; max-width: 42rem; }
+    form {
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      max-width: 44rem;
+      display: grid;
+      gap: 0.85rem;
+    }
+    label { display: grid; gap: 0.3rem; font-size: 0.9rem; color: var(--muted); }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      background: #0d131a;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 0.55rem 0.65rem;
+      font: inherit;
+    }
+    textarea { min-height: 4.5rem; resize: vertical; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
+    .section-title {
+      margin-top: 0.4rem;
+      font-size: 0.8rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 0.65rem 0.95rem;
+      font: inherit;
+      cursor: pointer;
+      background: var(--accent);
+      color: #041018;
+      font-weight: 600;
+    }
+    button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    #status { margin-top: 1rem; color: var(--muted); white-space: pre-wrap; max-width: 44rem; }
+    #status.ok { color: var(--ok); }
+    #status.err { color: var(--err); }
+    .hint { font-size: 0.8rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <h1>Record Content Outcome</h1>
+  <p class="sub">Fast manual capture for Paige publications. Partial entry is fine. Snapshots are immutable — add another later.</p>
+
+  <form id="capture">
+    <div class="section-title">Publication</div>
+    <div class="row">
+      <label>Publication id (existing)
+        <input name="publication_id" placeholder="Leave blank to create" />
+      </label>
+      <label>Paige artifact id
+        <input name="content_artifact_id" placeholder="pending_comments.id" />
+      </label>
+    </div>
+    <div class="row">
+      <label>Channel
+        <select name="channel">
+          <option value="linkedin">linkedin</option>
+          <option value="facebook">facebook</option>
+          <option value="gbp">gbp</option>
+          <option value="blog">blog</option>
+          <option value="other">other</option>
+        </select>
+      </label>
+      <label>Published at
+        <input name="published_at" type="datetime-local" />
+      </label>
+    </div>
+    <div class="row">
+      <label>Objective
+        <select name="objective">
+          <option value="">—</option>
+          <option>awareness</option>
+          <option>category_creation</option>
+          <option>audience_growth</option>
+          <option>engagement</option>
+          <option>thought_leadership</option>
+          <option>lead_generation</option>
+          <option>partnership_generation</option>
+          <option>launch_runway</option>
+        </select>
+      </label>
+      <label>Topic
+        <input name="topic" />
+      </label>
+    </div>
+    <div class="row">
+      <label>Format
+        <input name="format" placeholder="text / carousel / story" />
+      </label>
+      <label>Intended audience (comma-separated)
+        <input name="intended_audience" placeholder="builders, SMB operators" />
+      </label>
+    </div>
+    <label>External URL
+      <input name="external_url" />
+    </label>
+    <label>Thesis
+      <textarea name="thesis" placeholder="What this post argued"></textarea>
+    </label>
+
+    <div class="section-title">Performance snapshot</div>
+    <p class="hint">All metrics optional. Observed time defaults to now.</p>
+    <label>Observed at
+      <input name="observed_at" type="datetime-local" />
+    </label>
+    <div class="row">
+      <label>Impressions <input name="impressions" type="number" min="0" /></label>
+      <label>Reactions <input name="reactions" type="number" min="0" /></label>
+    </div>
+    <div class="row">
+      <label>Comments <input name="comments" type="number" min="0" /></label>
+      <label>Reposts <input name="reposts" type="number" min="0" /></label>
+    </div>
+    <div class="row">
+      <label>Followers gained <input name="followers_gained" type="number" min="0" /></label>
+      <label>Profile views <input name="profile_views_attributed" type="number" min="0" /></label>
+    </div>
+
+    <div class="section-title">Business outcome (optional)</div>
+    <div class="row">
+      <label>Outcome type
+        <select name="outcome_type">
+          <option value="">—</option>
+          <option>qualified_dm</option>
+          <option>prospect_conversation</option>
+          <option>partner_conversation</option>
+          <option>builder_connection</option>
+          <option>demo_interest</option>
+          <option>meeting_booked</option>
+          <option>pilot_interest</option>
+          <option>customer_opportunity</option>
+          <option>other</option>
+        </select>
+      </label>
+      <label>Attribution
+        <select name="attribution">
+          <option value="unknown">unknown</option>
+          <option>direct</option>
+          <option>likely</option>
+          <option>possible</option>
+        </select>
+      </label>
+    </div>
+    <label>Outcome description
+      <textarea name="outcome_description"></textarea>
+    </label>
+    <div class="row">
+      <label>Person id <input name="person_id" /></label>
+      <label>Company id <input name="company_id" /></label>
+    </div>
+    <label>Evidence id <input name="evidence_id" /></label>
+
+    <div class="section-title">Qualitative signal (optional)</div>
+    <div class="row">
+      <label>Signal type
+        <select name="signal_type">
+          <option value="">—</option>
+          <option>message_resonance</option>
+          <option>audience_signal</option>
+          <option>objection</option>
+          <option>question</option>
+          <option>language_adoption</option>
+          <option>partnership_signal</option>
+          <option>buyer_signal</option>
+          <option>technical_interest</option>
+          <option>unexpected_response</option>
+          <option>other</option>
+        </select>
+      </label>
+      <label>Audience type <input name="audience_type" /></label>
+    </div>
+    <label>Signal description
+      <textarea name="signal_description"></textarea>
+    </label>
+
+    <div class="actions">
+      <button type="submit">Save</button>
+      <button type="button" class="secondary" id="loadRecent">Load recent</button>
+    </div>
+  </form>
+  <div id="status"></div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const form = document.getElementById('capture');
+
+    function val(name) {
+      const el = form.elements.namedItem(name);
+      return el && el.value != null ? String(el.value).trim() : '';
+    }
+
+    function numOrNull(name) {
+      const v = val(name);
+      if (!v) return null;
+      return Number(v);
+    }
+
+    function localToIso(local) {
+      if (!local) return null;
+      const d = new Date(local);
+      return Number.isNaN(d.getTime()) ? null : d.toISOString();
+    }
+
+    function setStatus(msg, kind) {
+      statusEl.textContent = msg;
+      statusEl.className = kind || '';
+    }
+
+    async function api(method, url, body) {
+      const res = await fetch(url, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+        credentials: 'same-origin',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.message || data.error || res.statusText);
+      }
+      return data;
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      setStatus('Saving…');
+      try {
+        let publicationId = val('publication_id');
+        if (!publicationId) {
+          const artifact = val('content_artifact_id');
+          if (!artifact) throw new Error('Provide publication id or Paige artifact id');
+          const pub = await api('POST', '/api/content-publications', {
+            content_artifact_id: artifact,
+            channel: val('channel') || 'linkedin',
+            published_at: localToIso(val('published_at')) || new Date().toISOString(),
+            objective: val('objective') || null,
+            topic: val('topic') || null,
+            thesis: val('thesis') || null,
+            format: val('format') || null,
+            intended_audience: val('intended_audience'),
+            external_url: val('external_url') || null,
+          });
+          publicationId = pub.id;
+          form.elements.namedItem('publication_id').value = publicationId;
+        }
+
+        const hasMetrics = [
+          'impressions', 'reactions', 'comments', 'reposts',
+          'followers_gained', 'profile_views_attributed',
+        ].some((k) => val(k));
+        if (hasMetrics || val('observed_at')) {
+          await api('POST', `/api/content-publications/${publicationId}/performance`, {
+            observed_at: localToIso(val('observed_at')) || new Date().toISOString(),
+            impressions: numOrNull('impressions'),
+            reactions: numOrNull('reactions'),
+            comments: numOrNull('comments'),
+            reposts: numOrNull('reposts'),
+            followers_gained: numOrNull('followers_gained'),
+            profile_views_attributed: numOrNull('profile_views_attributed'),
+          });
+        }
+
+        if (val('outcome_type')) {
+          await api('POST', `/api/content-publications/${publicationId}/outcomes`, {
+            outcome_type: val('outcome_type'),
+            attribution: val('attribution') || 'unknown',
+            description: val('outcome_description') || null,
+            person_id: val('person_id') || null,
+            company_id: val('company_id') || null,
+            evidence_id: val('evidence_id') || null,
+          });
+        }
+
+        if (val('signal_type') && val('signal_description')) {
+          await api('POST', `/api/content-publications/${publicationId}/signals`, {
+            signal_type: val('signal_type'),
+            description: val('signal_description'),
+            audience_type: val('audience_type') || null,
+            evidence_id: val('evidence_id') || null,
+          });
+        }
+
+        const full = await api('GET', `/api/content-publications/${publicationId}/outcomes`);
+        setStatus(
+          `Saved publication ${publicationId}\n` +
+          `snapshots=${full.performanceSnapshots.length} ` +
+          `outcomes=${full.businessOutcomes.length} ` +
+          `signals=${full.qualitativeSignals.length}`,
+          'ok'
+        );
+      } catch (err) {
+        setStatus(err.message || String(err), 'err');
+      }
+    });
+
+    document.getElementById('loadRecent').addEventListener('click', async () => {
+      try {
+        const data = await api('GET', '/api/content-outcomes?limit=5');
+        const lines = (data.items || []).map((item) => {
+          const p = item.publication;
+          return `${p.id} · ${p.topic || p.objective || p.channel} · ${p.published_at}`;
+        });
+        setStatus(lines.length ? lines.join('\n') : 'No publications yet');
+      } catch (err) {
+        setStatus(err.message || String(err), 'err');
+      }
+    });
+  </script>
+</body>
+</html>

@@ -47,6 +47,7 @@ const { startMiraDigestScheduler } = require('./miraDigestAgent');
 const { startWarmRoutingScheduler } = require('./warmRoutingAgent');
 const { startAnchorUnenrichedEnrichmentScheduler } = require('./scoutUnenrichedEnrichmentAgent');
 const { ensureEmmettAutosendSchema } = require('./utils/emmettAutosend');
+const { ensureContentOutcomeSchema } = require('./services/contentOutcomeIntelligence');
 const stripeWebhookRouter = require('./routes/stripeWebhook');
 
 const app  = express();
@@ -67,6 +68,7 @@ ensureScoutLockTable().catch(err => console.error('[scoutLock] init error:', err
 ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init error:', err.message));
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
 ensureLifecycleSchema(pool).catch(err => console.error('[lifecycle] init error:', err.message));
+ensureContentOutcomeSchema().catch(err => console.error('[contentOutcome] init error:', err.message));
 startMiraTranscriptionWorker();
 startMiraClassifierWorker();
 startMiraRouterWorker();
@@ -186,6 +188,7 @@ app.use('/', require('./routes/intelligence'));
 app.use('/', require('./routes/liveIntelligence'));
 app.use('/', require('./routes/operatorIntelligence'));
 app.use('/', require('./routes/outcomeIntelligence'));
+app.use('/', require('./routes/contentOutcomeIntelligence'));
 app.use('/', require('./routes/knowledgeAdmin'));
 app.use('/', require('./routes/marketIntelligence'));
 app.use('/', require('./routes/relationshipIntelligence'));
