@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Max Durable Operator Objectives & Pre-Routing Context Resolution ([SPEC-095](docs/specs/SPEC-095_Max_Durable_Operator_Objectives.md))
+  - Durable `operator_objectives` (operator/client scope) outside SessionStore
+  - Pre-routing retrieval + deterministic reference resolution (fail closed on ambiguity)
+  - Status questions about resolved objectives no longer create Missions
+  - SPEC-094 Paige delegation receives recovered objective context across fresh sessions
+  - Public Max Launch production seed; migration `migrations/2026-08-13-operator-objectives.sql`
 - Max → Paige Campaign Content Delegation ([SPEC-094](docs/specs/SPEC-094_Max_to_Paige_Campaign_Content_Delegation.md))
   - Thin Max adapter (`services/maxPaigeCampaignDelegation.js`) calls SPEC-093 `generateContentRecommendation()`
   - Workspace routing hook for launch runway / LinkedIn / thought leadership / ask Paige when campaign context exists

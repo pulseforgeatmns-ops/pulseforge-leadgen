@@ -86,6 +86,8 @@ const MISSION_EXECUTION_CATEGORIES = new Set([
  * @param {string} text
  * @param {object} [opts]
  * @param {string|null} [opts.previousDomain]
+ * @param {object|null} [opts.resolvedObjective] - SPEC-095 recovered objective
+ * @param {boolean} [opts.suppressMissionForObjective] - SPEC-095 status/content about existing objective
  * @returns {DomainDecision}
  */
 function selectExecutionDomain(text, opts = {}) {
@@ -100,6 +102,21 @@ function selectExecutionDomain(text, opts = {}) {
       routeKind: ROUTE_KINDS.INTELLIGENCE,
       reason: 'empty',
       confidence: 0,
+      previousDomain,
+    });
+  }
+
+  // SPEC-095 — when a resolved durable objective makes this a status/content
+  // turn, do not enter Mission Engine. Not a phrase patch: requires prior
+  // objective retrieval + reference resolution + suppress flag.
+  if (opts.suppressMissionForObjective && opts.resolvedObjective) {
+    return finalizeDomain({
+      domain: EXECUTION_DOMAINS.WORKSPACE,
+      missionIntent: null,
+      missionType: null,
+      routeKind: ROUTE_KINDS.INTELLIGENCE,
+      reason: 'resolved_operator_objective',
+      confidence: 0.95,
       previousDomain,
     });
   }

@@ -17,6 +17,10 @@ const {
   maybeHandlePaigeCampaignContentDelegation,
 } = require('./PaigeCampaignDelegationContext');
 const {
+  maybeHandleOperatorObjectiveTurn,
+  synthesizeObjectivePaigeResponse,
+} = require('./OperatorObjectiveContext');
+const {
   composeMissionResponse,
   composeActiveMissionResponse,
 } = require('./MissionResponse');
@@ -108,13 +112,17 @@ const { detectOperatorProspectListInMessage } = OperatorArtifactInjection;
  *
  * Execution flow (operator intent owns the subsystem):
  *   Operator Input
- *   → Intent Understanding (via selectExecutionDomain)
+ *   → Resolve tenant/operator/client
+ *   → Retrieve active objectives (SPEC-095)
+ *   → Reference resolution
+ *   → Intent Understanding in context (via selectExecutionDomain)
  *   → Select Execution Domain
  *   → Select/Attach Context
  *   → Execute (Mission Engine | domain-owned intelligence)
  *
  * Active conversation never selects the execution domain.
  * Active Mission Resolver still runs inside the Mission domain (ADR-025).
+ * Durable objectives are Pulseforge state — not provider/LLM memory.
  */
 class WorkspaceEngine {
   /**
@@ -129,6 +137,8 @@ class WorkspaceEngine {
    * @param {object} [options.marketIntelligenceService] - SPEC-066 read-only adapter dependency
    * @param {object} [options.paigeCampaignDelegationService] - SPEC-094 Paige delegation
    * @param {object} [options.paigeLearningOpts] - SPEC-094 contentLearning store opts (tests)
+   * @param {object} [options.operatorObjectiveService] - SPEC-095 objective service
+   * @param {object} [options.operatorObjectiveOpts] - SPEC-095 store opts (tests)
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
@@ -152,6 +162,8 @@ class WorkspaceEngine {
     this._paigeCampaignDelegationService =
       options.paigeCampaignDelegationService || null;
     this._paigeLearningOpts = options.paigeLearningOpts || null;
+    this._operatorObjectiveService = options.operatorObjectiveService || null;
+    this._operatorObjectiveOpts = options.operatorObjectiveOpts || null;
   }
 
   /** @returns {SessionStore} */
@@ -322,8 +334,99 @@ class WorkspaceEngine {
       };
     }
 
+    // SPEC-095 — durable operator objectives before intent routing.
+    // Persist → Retrieve → Resolve → Interpret → Route.
+    // Never invents objectives; never starts Missions from status references.
+    const objectiveTurn = await maybeHandleOperatorObjectiveTurn({
+      question,
+      session,
+      context: rawContext || session.context,
+      objectiveService: this._operatorObjectiveService || undefined,
+      objectiveOpts: this._operatorObjectiveOpts || undefined,
+    });
+    if (objectiveTurn && objectiveTurn.handled) {
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'workspace';
+        if (objectiveTurn.resolvedObjective) {
+          session.context.resolvedObjective = objectiveTurn.resolvedObjective;
+          session.context.objective =
+            objectiveTurn.resolvedObjective.objectiveText ||
+            session.context.objective;
+          session.context.objectiveId = objectiveTurn.resolvedObjective.id;
+        }
+        if (objectiveTurn.activeObjectives) {
+          session.context.activeObjectives = objectiveTurn.activeObjectives;
+        }
+        session.context.objectiveResolution =
+          objectiveTurn.objectiveResolution || null;
+      }
+
+      const structuredObj = objectiveTurn.structured;
+      const routeObj = {
+        kind: ROUTE_KINDS.INTELLIGENCE,
+        missionType: null,
+        reason: objectiveTurn.reason,
+        missionIntent: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      };
+      const presentedObj = await this._presentation.present(structuredObj);
+      const proseObj = presentedObj.prose || objectiveTurn.prose;
+
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseObj,
+        structured: structuredObj,
+      });
+
+      return {
+        sessionId: session.id,
+        prose: proseObj,
+        structured: structuredObj,
+        metadata: presentedObj.metadata,
+        suggestions: resolveResultSuggestions({
+          structured: structuredObj,
+          session,
+          question,
+        }),
+        recommendedActions: structuredObj.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedObj.presentation,
+        route: routeObj.kind,
+        mission: null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        resolvedObjective: objectiveTurn.resolvedObjective || null,
+        activeObjectives: objectiveTurn.activeObjectives || [],
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: objectiveTurn.reason,
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: objectiveTurn.reason,
+          missionType: null,
+          missionId: null,
+        },
+      };
+    }
+
+    const suppressMissionForObjective = Boolean(
+      objectiveTurn && objectiveTurn.suppressMission
+    );
+
     // SPEC-094 — Max → Paige campaign content delegation (read-only advisory).
     // Runs before mission create so launch/content asks stay conversational.
+    // SPEC-095: recovered objective context is already on session.context.
     const paigeDelegation = await maybeHandlePaigeCampaignContentDelegation({
       question,
       session,
@@ -340,6 +443,17 @@ class WorkspaceEngine {
       }
 
       const structuredPaige = paigeDelegation.structured;
+      // SPEC-095 — present Paige inside recovered objective when available.
+      const resolvedForSynth =
+        (session.context && session.context.resolvedObjective) ||
+        (objectiveTurn && objectiveTurn.resolvedObjective) ||
+        null;
+      if (resolvedForSynth && structuredPaige && structuredPaige.answer) {
+        structuredPaige.answer = synthesizeObjectivePaigeResponse(
+          resolvedForSynth,
+          structuredPaige.answer
+        );
+      }
       const routePaige = {
         kind: ROUTE_KINDS.INTELLIGENCE,
         missionType: null,
@@ -376,6 +490,7 @@ class WorkspaceEngine {
         resolution: null,
         executionDomain: EXECUTION_DOMAINS.WORKSPACE,
         paigeRecommendation: paigeDelegation.recommendation,
+        resolvedObjective: resolvedForSynth,
         domainDecision: {
           domain: EXECUTION_DOMAINS.WORKSPACE,
           reason: paigeDelegation.reason,
@@ -396,8 +511,14 @@ class WorkspaceEngine {
     }
 
     // 1–2) Intent Understanding → Select Execution Domain (ignore active convo)
+    // SPEC-095: pass resolved objective so status references do not become Missions.
     const domainDecision = selectExecutionDomain(question, {
       previousDomain: session.executionDomain || null,
+      resolvedObjective:
+        (session.context && session.context.resolvedObjective) ||
+        (objectiveTurn && objectiveTurn.resolvedObjective) ||
+        null,
+      suppressMissionForObjective,
     });
 
     let structured;

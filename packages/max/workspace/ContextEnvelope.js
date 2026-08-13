@@ -73,8 +73,9 @@ function normalizeContext(raw) {
     normalized.activeWorkContext = raw.activeWorkContext;
   }
 
-  // SPEC-094 — preserve durable campaign/objective context for Paige delegation.
+  // SPEC-094 / SPEC-095 — preserve durable campaign/objective context.
   // Never invent these; only pass through when the caller supplied them.
+  // ContextEnvelope remains a carrier — no SQL/data access here.
   const passthroughKeys = [
     'campaignId',
     'campaign_id',
@@ -85,6 +86,8 @@ function normalizeContext(raw) {
     'clientId',
     'client_id',
     'objective',
+    'objectiveId',
+    'objective_id',
     'learningObjective',
     'learning_objective',
     'topic',
@@ -99,6 +102,9 @@ function normalizeContext(raw) {
     'outreachStrategyPreview',
     'outreach_strategy_preview',
     'mission',
+    'activeObjectives',
+    'resolvedObjective',
+    'objectiveResolution',
   ];
   for (const key of passthroughKeys) {
     if (raw[key] !== undefined) {

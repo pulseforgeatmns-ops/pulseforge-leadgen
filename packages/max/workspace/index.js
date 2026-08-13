@@ -55,11 +55,19 @@ const {
 const {
   maybeHandlePaigeCampaignContentDelegation,
 } = require('./PaigeCampaignDelegationContext');
+const {
+  maybeHandleOperatorObjectiveTurn,
+  attachActiveObjectiveContext,
+  synthesizeObjectivePaigeResponse,
+} = require('./OperatorObjectiveContext');
 
 module.exports = {
   getProspectOperatingBrief,
   getServiceModeOperatorLoop,
   maybeHandlePaigeCampaignContentDelegation,
+  maybeHandleOperatorObjectiveTurn,
+  attachActiveObjectiveContext,
+  synthesizeObjectivePaigeResponse,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,
